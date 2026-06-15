@@ -164,12 +164,9 @@ pub async fn perform_transfer_with_progress_outcome_async(
         Ok(()) => {}
         Err(err) => {
             if let Some(backup) = plan.overwritten_backup.as_ref() {
-                let destination = plan.destination.clone();
-                let backup = backup.clone();
-                blocking_string(move || restore_overwrite_backup(&destination, &backup)).await?;
+                restore_overwrite_backup_async(&plan.destination, backup).await?;
             } else if err.kind() == io::ErrorKind::Interrupted {
-                let destination = plan.destination.clone();
-                let _ = blocking_io(move || remove_path(&destination)).await;
+                let _ = remove_path_async(&plan.destination).await;
             }
             return Err(err.to_string());
         }
@@ -187,39 +184,42 @@ async fn prepare_transfer_async(
     target_dir: PathBuf,
     conflict_policy: String,
 ) -> Result<TransferPlan, String> {
-    blocking_string(move || {
-        if !path_exists(&source) {
-            return Err("source no longer exists".to_string());
-        }
-        if !target_dir.is_dir() {
-            return Err("target is not a folder".to_string());
-        }
-        if let Some(relation) = transfer_target_relation(&source, &target_dir) {
-            return Err(transfer_target_relation_error(relation).to_string());
-        }
+    if !path_exists_async(&source).await {
+        return Err("source no longer exists".to_string());
+    }
+    if !metadata_async(&target_dir)
+        .await
+        .map(|metadata| metadata.is_dir())
+        .unwrap_or(false)
+    {
+        return Err("target is not a folder".to_string());
+    }
+    if let Some(relation) = transfer_target_relation_async(&source, &target_dir).await {
+        return Err(transfer_target_relation_error(relation).to_string());
+    }
 
-        let file_name = source
-            .file_name()
-            .ok_or_else(|| "source has no file name".to_string())?
-            .to_os_string();
-        let destination = transfer_destination(&source, &target_dir, &file_name, &conflict_policy)?;
+    let file_name = source
+        .file_name()
+        .ok_or_else(|| "source has no file name".to_string())?
+        .to_os_string();
+    let destination =
+        transfer_destination_async(&source, &target_dir, &file_name, &conflict_policy).await?;
 
-        if !matches!(operation.as_str(), "move" | "copy" | "link") {
-            return Err(format!("unknown operation: {operation}"));
-        }
+    if !matches!(operation.as_str(), "move" | "copy" | "link") {
+        return Err(format!("unknown operation: {operation}"));
+    }
 
-        let overwritten_backup = if conflict_policy == "overwrite" && path_exists(&destination) {
-            Some(backup_existing_destination(&destination)?)
+    let overwritten_backup =
+        if conflict_policy == "overwrite" && path_exists_async(&destination).await {
+            Some(backup_existing_destination_async(&destination).await?)
         } else {
             None
         };
 
-        Ok(TransferPlan {
-            destination,
-            overwritten_backup,
-        })
+    Ok(TransferPlan {
+        destination,
+        overwritten_backup,
     })
-    .await
 }
 
 pub fn base_destination(source: &Path, target_dir: &Path) -> Result<PathBuf, String> {
@@ -237,6 +237,19 @@ pub fn transfer_target_relation(
         return Some(TransferTargetRelation::Same);
     }
     if target_is_source_descendant(source, target_dir) {
+        return Some(TransferTargetRelation::Descendant);
+    }
+    None
+}
+
+async fn transfer_target_relation_async(
+    source: &Path,
+    target_dir: &Path,
+) -> Option<TransferTargetRelation> {
+    if source == target_dir || canonical_paths_equal_async(source, target_dir).await {
+        return Some(TransferTargetRelation::Same);
+    }
+    if target_is_source_descendant_async(source, target_dir).await {
         return Some(TransferTargetRelation::Descendant);
     }
     None
@@ -263,6 +276,16 @@ fn canonical_paths_equal(source: &Path, target_dir: &Path) -> bool {
     source == target_dir
 }
 
+async fn canonical_paths_equal_async(source: &Path, target_dir: &Path) -> bool {
+    let Ok(source) = tokio::fs::canonicalize(source).await else {
+        return false;
+    };
+    let Ok(target_dir) = tokio::fs::canonicalize(target_dir).await else {
+        return false;
+    };
+    source == target_dir
+}
+
 fn target_is_source_descendant(source: &Path, target_dir: &Path) -> bool {
     if target_dir.starts_with(source) {
         return true;
@@ -272,6 +295,20 @@ fn target_is_source_descendant(source: &Path, target_dir: &Path) -> bool {
         return false;
     };
     let Ok(target_dir) = target_dir.canonicalize() else {
+        return false;
+    };
+    target_dir.starts_with(source)
+}
+
+async fn target_is_source_descendant_async(source: &Path, target_dir: &Path) -> bool {
+    if target_dir.starts_with(source) {
+        return true;
+    }
+
+    let Ok(source) = tokio::fs::canonicalize(source).await else {
+        return false;
+    };
+    let Ok(target_dir) = tokio::fs::canonicalize(target_dir).await else {
         return false;
     };
     target_dir.starts_with(source)
@@ -1392,71 +1429,191 @@ where
         .map_err(|err| io::Error::other(err.to_string()))?
 }
 
-async fn blocking_string<T>(
-    task: impl FnOnce() -> Result<T, String> + Send + 'static,
-) -> Result<T, String>
-where
-    T: Send + 'static,
-{
-    run_operation_blocking(task)
-        .await
-        .map_err(|err| err.to_string())?
-}
-
 async fn copy_path_preflight_async(source: &Path, destination: &Path) -> io::Result<(bool, u64)> {
-    let source = source.to_path_buf();
-    let destination = destination.to_path_buf();
-    blocking_io(move || {
-        Ok((
-            fs::symlink_metadata(&destination).is_ok(),
-            path_size(&source)?,
-        ))
+    Ok((
+        symlink_metadata_async(destination).await.is_ok(),
+        path_size_async(source).await?,
+    ))
+}
+
+fn path_size_async<'a>(
+    path: &'a Path,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = io::Result<u64>> + 'a>> {
+    Box::pin(async move {
+        let metadata = symlink_metadata_async(path).await?;
+        if metadata.is_dir() && !metadata.file_type().is_symlink() {
+            let mut total: u64 = 0;
+            for (entry_path, _) in read_dir_entries_async(path).await? {
+                total = total.saturating_add(path_size_async(&entry_path).await?);
+            }
+            Ok(total)
+        } else {
+            Ok(metadata.len())
+        }
     })
-    .await
 }
 
-async fn path_size_async(path: &Path) -> io::Result<u64> {
-    let path = path.to_path_buf();
-    blocking_io(move || path_size(&path)).await
+async fn symlink_metadata_async(path: &Path) -> io::Result<compio::fs::Metadata> {
+    compio::fs::symlink_metadata(path).await
 }
 
-async fn symlink_metadata_async(path: &Path) -> io::Result<fs::Metadata> {
-    let path = path.to_path_buf();
-    blocking_io(move || fs::symlink_metadata(path)).await
-}
-
-#[cfg(not(unix))]
-async fn metadata_async(path: &Path) -> io::Result<fs::Metadata> {
-    let path = path.to_path_buf();
-    blocking_io(move || fs::metadata(path)).await
+async fn metadata_async(path: &Path) -> io::Result<compio::fs::Metadata> {
+    compio::fs::metadata(path).await
 }
 
 async fn read_link_async(path: &Path) -> io::Result<PathBuf> {
-    let path = path.to_path_buf();
-    blocking_io(move || fs::read_link(path)).await
+    tokio::fs::read_link(path).await
 }
 
 async fn read_dir_entries_async(path: &Path) -> io::Result<Vec<(PathBuf, OsString)>> {
-    let path = path.to_path_buf();
-    blocking_io(move || {
-        let mut entries = Vec::new();
-        for entry in fs::read_dir(path)? {
-            let entry = entry?;
-            entries.push((entry.path(), entry.file_name()));
-        }
-        Ok(entries)
-    })
-    .await
+    let mut entries = Vec::new();
+    let mut dir = tokio::fs::read_dir(path).await?;
+    while let Some(entry) = dir.next_entry().await? {
+        entries.push((entry.path(), entry.file_name()));
+    }
+    Ok(entries)
 }
 
 async fn remove_path_async(path: &Path) -> io::Result<()> {
-    let path = path.to_path_buf();
-    blocking_io(move || remove_path(&path)).await
+    let metadata = symlink_metadata_async(path).await?;
+    if metadata.is_dir() && !metadata.file_type().is_symlink() {
+        remove_dir_all_async(path).await
+    } else {
+        compio::fs::remove_file(path).await
+    }
 }
 
 async fn remove_path_if_present_async(path: &Path) -> io::Result<()> {
-    let path = path.to_path_buf();
-    blocking_io(move || remove_path_if_present(&path)).await
+    match symlink_metadata_async(path).await {
+        Ok(_) => remove_path_async(path).await,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err),
+    }
+}
+
+fn remove_dir_all_async<'a>(
+    path: &'a Path,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = io::Result<()>> + 'a>> {
+    Box::pin(async move {
+        for (entry_path, _) in read_dir_entries_async(path).await? {
+            remove_path_async(&entry_path).await?;
+        }
+        compio::fs::remove_dir(path).await
+    })
+}
+
+async fn path_exists_async(path: &Path) -> bool {
+    symlink_metadata_async(path).await.is_ok()
+}
+
+async fn transfer_destination_async(
+    source: &Path,
+    target_dir: &Path,
+    file_name: &std::ffi::OsStr,
+    conflict_policy: &str,
+) -> Result<PathBuf, String> {
+    if let Some(name) = conflict_policy.strip_prefix("rename:") {
+        return renamed_destination_async(target_dir, name).await;
+    }
+
+    let base = target_dir.join(file_name);
+    match conflict_policy {
+        "keep-both" => Ok(unique_destination_async(target_dir, file_name).await),
+        "overwrite" => {
+            if base == source {
+                return Err("cannot overwrite an item with itself".to_string());
+            }
+            Ok(base)
+        }
+        _ => Err(format!("unknown conflict policy: {conflict_policy}")),
+    }
+}
+
+async fn renamed_destination_async(target_dir: &Path, name: &str) -> Result<PathBuf, String> {
+    if !metadata_async(target_dir)
+        .await
+        .map(|metadata| metadata.is_dir())
+        .unwrap_or(false)
+    {
+        return Err("target is not a folder".to_string());
+    }
+    let name = sanitize_child_name(name)?;
+    let destination = target_dir.join(name);
+    if path_exists_async(&destination).await {
+        return Err("an item with that name already exists".to_string());
+    }
+    Ok(destination)
+}
+
+async fn unique_destination_async(target_dir: &Path, file_name: &std::ffi::OsStr) -> PathBuf {
+    let initial = target_dir.join(file_name);
+    if !path_exists_async(&initial).await {
+        return initial;
+    }
+
+    let source_name = Path::new(file_name);
+    let stem = source_name
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("item");
+    let extension = source_name
+        .extension()
+        .and_then(|extension| extension.to_str());
+
+    for index in 1.. {
+        let suffix = if index == 1 {
+            "copy".to_string()
+        } else {
+            format!("copy {index}")
+        };
+        let candidate_name = match extension {
+            Some(extension) if !extension.is_empty() => format!("{stem} {suffix}.{extension}"),
+            _ => format!("{stem} {suffix}"),
+        };
+        let candidate = target_dir.join(candidate_name);
+        if !path_exists_async(&candidate).await {
+            return candidate;
+        }
+    }
+
+    unreachable!("unbounded destination search should always return")
+}
+
+async fn backup_existing_destination_async(destination: &Path) -> Result<PathBuf, String> {
+    let backup = overwrite_backup_path_async(destination).await?;
+    compio::fs::rename(destination, &backup)
+        .await
+        .map_err(|err| err.to_string())?;
+    Ok(backup)
+}
+
+async fn restore_overwrite_backup_async(destination: &Path, backup: &Path) -> Result<(), String> {
+    if path_exists_async(destination).await {
+        remove_path_async(destination)
+            .await
+            .map_err(|err| err.to_string())?;
+    }
+    compio::fs::rename(backup, destination)
+        .await
+        .map_err(|err| err.to_string())
+}
+
+async fn overwrite_backup_path_async(destination: &Path) -> Result<PathBuf, String> {
+    let parent = destination
+        .parent()
+        .ok_or_else(|| "overwrite target has no parent folder".to_string())?;
+    let name = destination
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("item");
+    let pid = std::process::id();
+    for index in 0.. {
+        let candidate = parent.join(format!(".{name}.fika-overwrite-backup-{pid}-{index}"));
+        if !path_exists_async(&candidate).await {
+            return Ok(candidate);
+        }
+    }
+    unreachable!("unbounded overwrite backup search should always return")
 }
 
 fn path_size(path: &Path) -> io::Result<u64> {

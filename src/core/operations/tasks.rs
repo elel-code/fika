@@ -905,6 +905,53 @@ mod tests {
     }
 
     #[test]
+    fn transfer_paths_result_async_copies_directory_recursively() {
+        let temp = test_dir("transfer-async-recursive");
+        let source_dir = temp.join("source");
+        let target_dir = temp.join("target");
+        std::fs::create_dir_all(source_dir.join("nested")).unwrap();
+        std::fs::create_dir_all(&target_dir).unwrap();
+        std::fs::write(source_dir.join("root.txt"), b"root").unwrap();
+        std::fs::write(source_dir.join("nested").join("child.txt"), b"child").unwrap();
+        let controller = OperationController::new();
+
+        let result =
+            futures_lite::future::block_on(crate::core::operation_runtime::run_operation_task({
+                let target_dir = target_dir.clone();
+                let source_dir = source_dir.clone();
+                let controller = controller.clone();
+                move || async move {
+                    transfer_paths_result_async(
+                        PaneId(22),
+                        target_dir,
+                        FileTransferMode::Copy,
+                        vec![source_dir],
+                        "Copy",
+                        false,
+                        Some(controller),
+                    )
+                    .await
+                }
+            }))
+            .unwrap();
+
+        assert_eq!(result.success_count, 1);
+        assert_eq!(
+            std::fs::read_to_string(target_dir.join("source").join("root.txt")).unwrap(),
+            "root"
+        );
+        assert_eq!(
+            std::fs::read_to_string(target_dir.join("source").join("nested").join("child.txt"))
+                .unwrap(),
+            "child"
+        );
+        let progress = controller.progress();
+        assert_eq!(progress.bytes_total, 9);
+        assert_eq!(progress.bytes_done, 9);
+        let _ = std::fs::remove_dir_all(temp);
+    }
+
+    #[test]
     fn transfer_paths_result_honors_cancel_flag_before_transfer() {
         let temp = test_dir("transfer-cancel");
         let source_dir = temp.join("source");
