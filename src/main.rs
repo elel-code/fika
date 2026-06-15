@@ -1683,8 +1683,12 @@ impl FikaApp {
             move |this: gpui::WeakEntity<FikaApp>, cx: &mut gpui::AsyncApp| {
                 let mut cx = cx.clone();
                 async move {
-                    let result =
-                        perform_device_place_operation(pane_id, device_id, label, operation).await;
+                    let result = cx
+                        .background_spawn(async move {
+                            perform_device_place_operation(pane_id, device_id, label, operation)
+                                .await
+                        })
+                        .await;
                     let _ = this.update(&mut cx, |app, cx| {
                         app.finish_device_place_operation(result, cx);
                         cx.notify();
