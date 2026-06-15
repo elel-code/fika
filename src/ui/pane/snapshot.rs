@@ -5,8 +5,6 @@ use crate::ui::status_bar::StatusBarSnapshot;
 use fika_core::{BreadcrumbSegment, PaneId, ViewRect, ViewState};
 use gpui::ScrollHandle;
 
-use super::toolbar::PaneToolbarSnapshot;
-
 #[derive(Clone, Debug)]
 pub(crate) struct PaneSnapshot {
     pub(crate) id: PaneId,
@@ -14,7 +12,6 @@ pub(crate) struct PaneSnapshot {
     pub(crate) breadcrumbs: Vec<BreadcrumbSegment>,
     pub(crate) location_draft: Option<LocationDraftSnapshot>,
     pub(crate) filter_bar: Option<FilterBarSnapshot>,
-    pub(crate) toolbar: PaneToolbarSnapshot,
     pub(crate) status_bar: StatusBarSnapshot,
     pub(crate) file_grid: FileGridSnapshot,
     pub(crate) trash_view: bool,

@@ -67,7 +67,7 @@ Pane-scoped navigation、selection、zoom、filter、clipboard、undo、inline r
 多选 metadata rows。Pane-local plain-text/glob filter、case-sensitive toggle、match count、filtered model cache。
 
 ### KDE 集成
-Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark --add`/`--batch`）。Service menu 二级子菜单。
+Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark --add --changetofirstpath --autofilename zip`/`--batch`）。Service menu 二级子菜单。
 
 ## Remaining Work
 

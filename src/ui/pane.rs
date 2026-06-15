@@ -10,11 +10,11 @@ pub(crate) use splitter::{
     pane_row_width_from_child_bounds, pane_splitter, pane_width_available, split_ratio_eq,
     width_value_eq,
 };
-pub(crate) use toolbar::{close_pane_button, pane_toolbar_snapshot, split_pane_button};
+pub(crate) use toolbar::{close_pane_button, filter_pane_button, split_pane_button};
 pub(crate) use toolbar::{pane_close_icon_snapshot, pane_split_icon_snapshot};
 
 use crate::FikaApp;
-use fika_core::BreadcrumbSegment;
+use fika_core::{BreadcrumbSegment, NameFilterMode};
 use gpui::prelude::*;
 use gpui::{
     Bounds, Context, Div, ExternalPaths, MouseButton, NavigationDirection, ParentElement, Pixels,
@@ -29,7 +29,6 @@ use super::file_grid::{FileGridMode, FileGridProps, ItemDrag, file_grid};
 use super::filter_bar::{FILTER_BAR_HEIGHT, FilterBarSnapshot};
 use super::location_bar::LocationDraftSnapshot;
 use super::status_bar::status_bar;
-use toolbar::pane_toolbar_buttons;
 
 pub(crate) struct PaneProps {
     pub snapshot: PaneSnapshot,
@@ -51,7 +50,6 @@ pub(crate) fn pane_view(
         breadcrumbs,
         location_draft,
         filter_bar,
-        toolbar,
         status_bar: status_bar_snapshot,
         file_grid: file_grid_snapshot,
         trash_view,
@@ -126,8 +124,7 @@ pub(crate) fn pane_view(
                     location_draft,
                     focused,
                     cx,
-                ))
-                .child(pane_toolbar_buttons(pane_id, toolbar, cx)),
+                )),
         )
         .when_some(filter_bar, |pane, filter| {
             pane.child(filter_bar_view(pane_id, filter, cx))
@@ -153,14 +150,11 @@ fn filter_bar_view(
     filter: FilterBarSnapshot,
     cx: &mut Context<FikaApp>,
 ) -> Stateful<Div> {
-    let mode_label = match filter.mode {
-        fika_core::NameFilterMode::PlainText => "Plain",
-        fika_core::NameFilterMode::Glob => "Glob",
-    };
-    let case_label = if filter.case_sensitive { "Aa" } else { "aa" };
+    let mode = filter.mode;
+    let case_sensitive = filter.case_sensitive;
     let query_empty = filter.query.is_empty();
+    let match_count_label = filter_match_count_label(query_empty, filter.match_count);
     let query = filter.query;
-    let match_count = filter.match_count;
 
     div()
         .id(format!("filter-bar-{}", pane_id.0))
@@ -228,7 +222,7 @@ fn filter_bar_view(
                                     rgb(0x111827)
                                 })
                                 .child(if query_empty {
-                                    "Filter".to_string()
+                                    "Filter...".to_string()
                                 } else {
                                     query
                                 }),
@@ -240,19 +234,14 @@ fn filter_bar_view(
                         }),
                 ),
         )
+        .child(filter_mode_control(pane_id, mode, cx))
         .child(
-            filter_button(format!("filter-mode-{}", pane_id.0), mode_label).on_click(cx.listener(
-                move |this, event: &gpui::ClickEvent, _window, cx| {
-                    if event.standard_click() {
-                        this.toggle_filter_mode(pane_id);
-                        cx.stop_propagation();
-                        cx.notify();
-                    }
-                },
-            )),
-        )
-        .child(
-            filter_button(format!("filter-case-{}", pane_id.0), case_label).on_click(cx.listener(
+            filter_button(
+                format!("filter-case-{}", pane_id.0),
+                "Match Case",
+                case_sensitive,
+            )
+            .on_click(cx.listener(
                 move |this, event: &gpui::ClickEvent, _window, cx| {
                     if event.standard_click() {
                         this.toggle_filter_case_sensitive(pane_id);
@@ -264,37 +253,112 @@ fn filter_bar_view(
         )
         .child(
             div()
-                .w(px(72.0))
+                .w(px(82.0))
                 .truncate()
                 .text_xs()
                 .text_color(rgb(0x59636e))
-                .child(format!("{match_count} match")),
+                .child(match_count_label),
         )
         .child(
-            filter_button(format!("filter-close-{}", pane_id.0), "Close").on_click(cx.listener(
-                move |this, event: &gpui::ClickEvent, _window, cx| {
+            filter_button(format!("filter-close-{}", pane_id.0), "Hide", false).on_click(
+                cx.listener(move |this, event: &gpui::ClickEvent, _window, cx| {
                     if event.standard_click() {
                         this.close_filter_bar(pane_id);
                         cx.stop_propagation();
                         cx.notify();
                     }
-                },
-            )),
+                }),
+            ),
         )
 }
 
-fn filter_button(id: String, label: &'static str) -> Stateful<Div> {
+fn filter_mode_control(
+    pane_id: fika_core::PaneId,
+    active_mode: NameFilterMode,
+    cx: &mut Context<FikaApp>,
+) -> Stateful<Div> {
+    div()
+        .id(format!("filter-mode-{}", pane_id.0))
+        .h(px(26.0))
+        .flex_none()
+        .flex()
+        .items_center()
+        .gap_1()
+        .rounded_md()
+        .border_1()
+        .border_color(rgb(0xd5d9df))
+        .bg(rgb(0xe8eef7))
+        .child(filter_mode_button(
+            pane_id,
+            NameFilterMode::PlainText,
+            "Plain Text",
+            active_mode == NameFilterMode::PlainText,
+            cx,
+        ))
+        .child(filter_mode_button(
+            pane_id,
+            NameFilterMode::Glob,
+            "Glob Pattern",
+            active_mode == NameFilterMode::Glob,
+            cx,
+        ))
+}
+
+fn filter_mode_button(
+    pane_id: fika_core::PaneId,
+    mode: NameFilterMode,
+    label: &'static str,
+    active: bool,
+    cx: &mut Context<FikaApp>,
+) -> Stateful<Div> {
+    filter_button(
+        format!("filter-mode-{}-{:?}", pane_id.0, mode),
+        label,
+        active,
+    )
+    .on_click(
+        cx.listener(move |this, event: &gpui::ClickEvent, _window, cx| {
+            if event.standard_click() {
+                this.set_filter_mode(pane_id, mode);
+                cx.stop_propagation();
+                cx.notify();
+            }
+        }),
+    )
+}
+
+fn filter_button(id: String, label: &'static str, active: bool) -> Stateful<Div> {
     div()
         .id(id)
         .h(px(26.0))
         .px_2()
+        .flex_none()
+        .flex()
+        .items_center()
         .rounded_md()
+        .border_1()
+        .border_color(if active { rgb(0x2f6fed) } else { rgb(0xd5d9df) })
         .text_xs()
-        .text_color(rgb(0x1f2937))
-        .bg(rgb(0xe8eef7))
+        .text_color(if active { rgb(0x1f4fbf) } else { rgb(0x1f2937) })
+        .bg(if active {
+            rgb(0xffffff)
+        } else {
+            rgba(0x00000000)
+        })
         .hover(|button| button.bg(rgb(0xdbe7fb)))
         .cursor_pointer()
         .child(label)
+}
+
+fn filter_match_count_label(query_empty: bool, match_count: usize) -> String {
+    if query_empty {
+        return "All items".to_string();
+    }
+    match match_count {
+        0 => "No matches".to_string(),
+        1 => "1 match".to_string(),
+        count => format!("{count} matches"),
+    }
 }
 
 fn filter_input_caret() -> Div {
@@ -700,5 +764,13 @@ mod tests {
     fn location_scroll_for_caret_uses_narrow_safe_padding() {
         assert_eq!(location_scroll_for_caret(50.0, 100.0, 4.0, 0.0), 48.0);
         assert_eq!(location_scroll_for_caret(0.0, 100.0, 1.0, 80.0), 0.0);
+    }
+
+    #[test]
+    fn filter_match_count_label_is_readable() {
+        assert_eq!(filter_match_count_label(true, 42), "All items");
+        assert_eq!(filter_match_count_label(false, 0), "No matches");
+        assert_eq!(filter_match_count_label(false, 1), "1 match");
+        assert_eq!(filter_match_count_label(false, 2), "2 matches");
     }
 }

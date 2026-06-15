@@ -88,12 +88,21 @@ pub(crate) fn place_drag_insert_index_for_zone(
     target_index: usize,
     zone: PlaceDropZone,
 ) -> Option<usize> {
-    match zone {
-        PlaceDropZone::InsertBefore => Some(target_index),
-        PlaceDropZone::InsertAfter => Some(target_index + 1),
-        PlaceDropZone::OnPlace if source_index < target_index => Some(target_index + 1),
-        PlaceDropZone::OnPlace if source_index > target_index => Some(target_index),
-        PlaceDropZone::OnPlace => None,
+    let insert_index = match zone {
+        PlaceDropZone::InsertBefore => target_index,
+        PlaceDropZone::InsertAfter => target_index.saturating_add(1),
+        PlaceDropZone::OnPlace if source_index < target_index => target_index.saturating_add(1),
+        PlaceDropZone::OnPlace if source_index > target_index => target_index,
+        PlaceDropZone::OnPlace => return None,
+    };
+    place_drag_insert_index(source_index, insert_index)
+}
+
+pub(crate) fn place_drag_insert_index(source_index: usize, insert_index: usize) -> Option<usize> {
+    if insert_index == source_index || insert_index == source_index.saturating_add(1) {
+        None
+    } else {
+        Some(insert_index)
     }
 }
 
@@ -235,6 +244,25 @@ mod tests {
             place_drag_insert_index_for_zone(2, 2, PlaceDropZone::OnPlace),
             None
         );
+    }
+
+    #[test]
+    fn place_drag_insert_index_rejects_noop_insert_positions() {
+        assert_eq!(
+            place_drag_insert_index_for_zone(0, 0, PlaceDropZone::InsertBefore),
+            None
+        );
+        assert_eq!(
+            place_drag_insert_index_for_zone(0, 0, PlaceDropZone::InsertAfter),
+            None
+        );
+        assert_eq!(
+            place_drag_insert_index_for_zone(1, 0, PlaceDropZone::InsertAfter),
+            None
+        );
+        assert_eq!(place_drag_insert_index(2, 2), None);
+        assert_eq!(place_drag_insert_index(2, 3), None);
+        assert_eq!(place_drag_insert_index(2, 4), Some(4));
     }
 
     #[test]

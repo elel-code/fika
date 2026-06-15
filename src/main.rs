@@ -2,14 +2,15 @@ mod cli;
 mod ui;
 
 use cli::{Args, Mode};
+use fika_core::Operation;
 #[cfg(test)]
 use fika_core::SystemdLaunchResult;
 use fika_core::{
     CreateItemResult, FileTransferMode, RenameItemResult, TransferTaskResult, TrashSelectionResult,
     TrashViewOperation, TrashViewOperationResult, UndoTaskResult, action_status,
-    create_item_result_async, created_item_label, rename_item_result_async,
-    run_operation_task, run_registered_operation, transfer_paths_result_async,
-    trash_selection_result_async, trash_view_operation_result_async, undo_record_result_async,
+    create_item_result_async, created_item_label, rename_item_result_async, run_operation_task,
+    run_registered_operation, transfer_paths_result_async, trash_selection_result_async,
+    trash_view_operation_result_async, undo_record_result_async,
 };
 use fika_core::{
     CreateUndoItem, CreatedItemKind, DeviceInfo, DeviceMonitorMessage, DevicePlaceOperation,
@@ -23,7 +24,6 @@ use fika_core::{
     perform_device_place_operation, resolve_location_input, thumbnail_probe_results_for_requests,
     update_loading_state_for_event,
 };
-use fika_core::Operation;
 use fika_core::{
     DesktopLaunchPlan, LauncherError, MimeApplication, MimeApplicationCache, NewWindowLaunchResult,
     OpenWithLaunchResult, ServiceMenuLaunchResult, ServiceMenuTarget, ark_compress_launch_plan,
@@ -80,15 +80,15 @@ use ui::drag_drop::{
 };
 use ui::file_grid::{
     CompactColumnWidthCache, ContentItemHit, ItemDrag, PaneLayoutProjection,
-    PaneLayoutProjectionInput, PaneViewportGeometry, RawFileGridSnapshot,
-    RawFileGridSnapshotInput, VisibleItemSlotPool, compact_text_width, compact_text_width_for_name,
-    content_item_hit_at_point,
-    deferred_thumbnail_candidates_for_model, model_indexes_intersecting_visual_rect,
-    pane_layout_projection, raw_file_grid_snapshot, rename_editor_required_text_width,
+    PaneLayoutProjectionInput, PaneViewportGeometry, RawFileGridSnapshot, RawFileGridSnapshotInput,
+    VisibleItemSlotPool, compact_text_width, compact_text_width_for_name,
+    content_item_hit_at_point, deferred_thumbnail_candidates_for_model,
+    model_indexes_intersecting_visual_rect, pane_layout_projection, raw_file_grid_snapshot,
+    rename_editor_required_text_width,
 };
 use ui::filter_bar::{
     FILTER_BAR_HEIGHT, FilterBarSnapshot, FilteredModelCacheEntry, PaneFilterState,
-    cached_filtered_model_for_pane,
+    cached_filtered_model_for_pane, filter_toggle_snapshot,
 };
 use ui::icons::{FileIconCache, FileIconSnapshot};
 use ui::item_view::{ITEM_VIEW_SCROLLBAR_RESERVED_EXTENT, ItemViewScrollState};
@@ -96,8 +96,8 @@ use ui::location_bar::{LocationDraft, LocationEditMetrics};
 use ui::pane::{
     MIN_PANE_WIDTH, PANE_SPLITTER_WIDTH, PaneSnapshot, PaneSplitterDrag, normalize_pane_ratios,
     pane_close_icon_snapshot, pane_row_width_from_child_bounds, pane_split_icon_snapshot,
-    pane_splitter, pane_toolbar_snapshot, pane_width_available, sort_order_label, sort_role_label,
-    split_ratio_eq, width_value_eq,
+    pane_splitter, pane_width_available, sort_order_label, sort_role_label, split_ratio_eq,
+    width_value_eq,
 };
 use ui::place_draft::{
     PlaceDraft, PlaceDraftField, PlaceDraftInputResult, apply_place_input_action,
@@ -126,16 +126,14 @@ use ui::shortcuts::{
     location_input_action, pane_shortcut, place_input_action, rename_input_action,
     zoom_change_for_wheel_delta,
 };
+use ui::status_bar::progress_percent;
 use ui::status_bar::{
     OperationProgressSnapshot, SpaceInfoCache, SpaceInfoSnapshot, StatusBarSnapshot,
     StatusSummaryCacheEntry, StatusSummaryCacheKey, filesystem_space_info, progress_delay_elapsed,
     status_summary_for_model, status_summary_for_model_indexes,
 };
-use ui::status_bar::progress_percent;
 #[cfg(test)]
-use ui::status_bar::{
-    PROGRESS_DISPLAY_DELAY, parse_df_space_output, space_info_snapshot,
-};
+use ui::status_bar::{PROGRESS_DISPLAY_DELAY, parse_df_space_output, space_info_snapshot};
 use ui::trash_conflict::{TrashConflictDialogState, trash_conflict_dialog_overlay};
 
 const DROP_TARGET_LEASE_TIMEOUT: Duration = Duration::from_millis(3000);
@@ -632,19 +630,18 @@ impl FikaApp {
         self.set_pane_status(pane_id, message);
     }
 
-    pub(crate) fn toggle_filter_mode(&mut self, pane_id: PaneId) {
+    pub(crate) fn set_filter_mode(&mut self, pane_id: PaneId, mode: fika_core::NameFilterMode) {
         self.set_filter_bar_visible(pane_id, true);
         let filter = self.pane_filters.entry(pane_id).or_default();
         filter.focused = true;
-        filter.mode = match filter.mode {
-            fika_core::NameFilterMode::PlainText => fika_core::NameFilterMode::Glob,
-            fika_core::NameFilterMode::Glob => fika_core::NameFilterMode::PlainText,
-        };
-        let mode = filter.mode;
+        if filter.mode == mode {
+            return;
+        }
+        filter.mode = mode;
         self.invalidate_filter_projection(pane_id);
         let message = match mode {
             fika_core::NameFilterMode::PlainText => "Plain text filter",
-            fika_core::NameFilterMode::Glob => "Glob filter",
+            fika_core::NameFilterMode::Glob => "Glob pattern filter",
         };
         self.set_pane_status(pane_id, message);
     }
@@ -924,7 +921,6 @@ impl FikaApp {
     fn snapshots(&mut self, cx: &mut Context<Self>) -> Vec<PaneSnapshot> {
         let focused_pane = self.panes.focused();
         let pane_ids = self.panes.pane_ids().to_vec();
-        let pane_count = pane_ids.len();
         pane_ids
             .into_iter()
             .filter_map(|pane_id| {
@@ -1051,15 +1047,12 @@ impl FikaApp {
                     )
                 });
                 let status_bar = self.status_bar_snapshot_for_pane(pane_id, cx);
-                let toolbar =
-                    pane_toolbar_snapshot(&mut self.file_icons, filter_bar.is_some(), pane_count);
                 Some(PaneSnapshot {
                     id: pane_id,
                     split_ratio,
                     breadcrumbs,
                     location_draft,
                     filter_bar,
-                    toolbar,
                     status_bar,
                     file_grid,
                     trash_view,
@@ -1325,7 +1318,10 @@ impl FikaApp {
             label: operation.operation.progress_label(),
             bytes_done: operation.progress.bytes_done,
             bytes_total: operation.progress.bytes_total,
-            percent: progress_percent(operation.progress.bytes_done, operation.progress.bytes_total),
+            percent: progress_percent(
+                operation.progress.bytes_done,
+                operation.progress.bytes_total,
+            ),
             cancellable: operation.operation.cancellable(),
         })
     }
@@ -1462,13 +1458,9 @@ impl FikaApp {
     }
 
     pub(crate) fn cancel_operation_or_loading(&mut self, pane_id: PaneId) {
-        let Some(operation) = self
-            .operation_snapshots()
-            .into_iter()
-            .find(|operation| {
-                operation.operation.pane_id() == pane_id && operation.operation.cancellable()
-            })
-        else {
+        let Some(operation) = self.operation_snapshots().into_iter().find(|operation| {
+            operation.operation.pane_id() == pane_id && operation.operation.cancellable()
+        }) else {
             self.cancel_loading(pane_id);
             return;
         };
@@ -1976,7 +1968,9 @@ impl FikaApp {
         operation: DevicePlaceOperation,
         cx: &mut Context<Self>,
     ) {
-        let Some(task_id) = self.begin_pane_operation(pane_id, operation.in_progress_message(&label)) else {
+        let Some(task_id) =
+            self.begin_pane_operation(pane_id, operation.in_progress_message(&label))
+        else {
             return;
         };
         cx.spawn(
@@ -2265,14 +2259,20 @@ impl FikaApp {
         cx: &mut Context<Self>,
     ) -> bool {
         let Some(mime_type) = self.mime_type_for_pane_path(pane_id, &path) else {
-            self.set_pane_status(pane_id, format!("No application found for {}", path.display()));
+            self.set_pane_status(
+                pane_id,
+                format!("No application found for {}", path.display()),
+            );
             return true;
         };
         let applications = self.mime_applications.applications_for_mime(&mime_type);
         let Some(desktop_id) =
             default_open_with_application_id(&applications).map(ToOwned::to_owned)
         else {
-            self.set_pane_status(pane_id, format!("No application found for {}", path.display()));
+            self.set_pane_status(
+                pane_id,
+                format!("No application found for {}", path.display()),
+            );
             return true;
         };
         self.open_with_application(pane_id, &desktop_id, path, cx);
@@ -4259,9 +4259,7 @@ impl FikaApp {
         if self.chooser.is_some() {
             return;
         }
-        let Some(task_id) =
-            self.begin_operation(Operation::Create { pane_id, kind })
-        else {
+        let Some(task_id) = self.begin_operation(Operation::Create { pane_id, kind }) else {
             return;
         };
         cx.spawn(
@@ -4495,31 +4493,32 @@ impl FikaApp {
                     };
                     let fallback_label = clipboard.action_label();
                     let fallback_clear_clipboard = clipboard.mode == ClipboardMode::Cut;
-                    let result = match run_registered_operation(task_id, move |controller| async move {
-                        paste_clipboard_result_async(
-                            pane_id,
-                            target_dir,
-                            clipboard,
-                            Some(controller),
-                        )
+                    let result =
+                        match run_registered_operation(task_id, move |controller| async move {
+                            paste_clipboard_result_async(
+                                pane_id,
+                                target_dir,
+                                clipboard,
+                                Some(controller),
+                            )
+                            .await
+                        })
                         .await
-                    })
-                    .await
-                    {
-                        Ok(result) => result,
-                        Err(_) => TransferTaskResult {
-                            pane_id,
-                            mode: fallback_mode,
-                            label: fallback_label,
-                            clear_clipboard: fallback_clear_clipboard,
-                            success_count: 0,
-                            failure_count: 1,
-                            affected_dirs: Vec::new(),
-                            refresh_dirs: vec![fallback_target],
-                            undo_items: Vec::new(),
-                            created_items: Vec::new(),
-                        },
-                    };
+                        {
+                            Ok(result) => result,
+                            Err(_) => TransferTaskResult {
+                                pane_id,
+                                mode: fallback_mode,
+                                label: fallback_label,
+                                clear_clipboard: fallback_clear_clipboard,
+                                success_count: 0,
+                                failure_count: 1,
+                                affected_dirs: Vec::new(),
+                                refresh_dirs: vec![fallback_target],
+                                undo_items: Vec::new(),
+                                created_items: Vec::new(),
+                            },
+                        };
                     let _ = this.update(&mut cx, |app, cx| {
                         app.finish_transfer(task_id, result);
                         cx.notify();
@@ -5299,18 +5298,17 @@ impl FikaApp {
                 let mut cx = cx.clone();
                 async move {
                     let paths_len = selected_paths.len();
-                    let result =
-                        run_operation_task(move || async move {
-                            trash_selection_result_async(pane_id, selected_paths).await
-                        })
-                        .await
-                        .unwrap_or_else(|_| TrashSelectionResult {
-                            pane_id,
-                            success_count: 0,
-                            failure_count: paths_len,
-                            affected_dirs: Vec::new(),
-                            undo_items: Vec::new(),
-                        });
+                    let result = run_operation_task(move || async move {
+                        trash_selection_result_async(pane_id, selected_paths).await
+                    })
+                    .await
+                    .unwrap_or_else(|_| TrashSelectionResult {
+                        pane_id,
+                        success_count: 0,
+                        failure_count: paths_len,
+                        affected_dirs: Vec::new(),
+                        undo_items: Vec::new(),
+                    });
                     let _ = this.update(&mut cx, |app, cx| {
                         app.finish_trash_selection(task_id, result);
                         cx.notify();
@@ -5418,7 +5416,9 @@ impl FikaApp {
         paths: Vec<PathBuf>,
         cx: &mut Context<Self>,
     ) {
-        let Some(task_id) = self.begin_pane_operation(pane_id, operation.progress_label(paths.len())) else {
+        let Some(task_id) =
+            self.begin_pane_operation(pane_id, operation.progress_label(paths.len()))
+        else {
             return;
         };
         cx.spawn(
@@ -5426,19 +5426,18 @@ impl FikaApp {
                 let mut cx = cx.clone();
                 async move {
                     let paths_len = paths.len();
-                    let result =
-                        run_operation_task(move || async move {
-                            trash_view_operation_result_async(pane_id, operation, paths).await
-                        })
-                        .await
-                        .unwrap_or_else(|_| TrashViewOperationResult {
-                            pane_id,
-                            operation,
-                            success_count: 0,
-                            failure_count: paths_len,
-                            affected_dirs: Vec::new(),
-                            restore_conflicts: Vec::new(),
-                        });
+                    let result = run_operation_task(move || async move {
+                        trash_view_operation_result_async(pane_id, operation, paths).await
+                    })
+                    .await
+                    .unwrap_or_else(|_| TrashViewOperationResult {
+                        pane_id,
+                        operation,
+                        success_count: 0,
+                        failure_count: paths_len,
+                        affected_dirs: Vec::new(),
+                        restore_conflicts: Vec::new(),
+                    });
                     let _ = this.update(&mut cx, |app, cx| {
                         app.finish_trash_view_operation(task_id, result);
                         cx.notify();
@@ -5498,7 +5497,8 @@ impl FikaApp {
             }
         }
 
-        let Some(task_id) = self.begin_pane_operation(pane_id, format!("Undoing {}", record.label)) else {
+        let Some(task_id) = self.begin_pane_operation(pane_id, format!("Undoing {}", record.label))
+        else {
             return;
         };
         cx.spawn(
@@ -5506,15 +5506,14 @@ impl FikaApp {
                 let mut cx = cx.clone();
                 async move {
                     let fallback_record = record.clone();
-                    let result =
-                        run_operation_task(move || async move {
-                            undo_record_result_async(record).await
-                        })
-                        .await
-                        .unwrap_or_else(|err| UndoTaskResult {
-                            record: fallback_record,
-                            result: Err(err.to_string()),
-                        });
+                    let result = run_operation_task(move || async move {
+                        undo_record_result_async(record).await
+                    })
+                    .await
+                    .unwrap_or_else(|err| UndoTaskResult {
+                        record: fallback_record,
+                        result: Err(err.to_string()),
+                    });
                     let _ = this.update(&mut cx, |app, cx| {
                         app.finish_undo(task_id, pane_id, result);
                         cx.notify();
@@ -5606,7 +5605,8 @@ impl FikaApp {
         let open_with_apps = if trash_view {
             Vec::new()
         } else {
-            self.mime_applications.applications_for_mime("inode/directory")
+            self.mime_applications
+                .applications_for_mime("inode/directory")
         };
         let service_actions = if trash_view {
             Vec::new()
@@ -6261,14 +6261,8 @@ impl FikaApp {
                     path, mime_type, ..
                 },
             ) => self.show_application_chooser(menu.pane_id, path, mime_type),
-            (
-                ContextMenuAction::OtherApplication,
-                ContextMenuTarget::Blank { path, .. },
-            ) => self.show_application_chooser(
-                menu.pane_id,
-                path,
-                Some(Arc::from("inode/directory")),
-            ),
+            (ContextMenuAction::OtherApplication, ContextMenuTarget::Blank { path, .. }) => self
+                .show_application_chooser(menu.pane_id, path, Some(Arc::from("inode/directory"))),
             (
                 ContextMenuAction::RunServiceMenuAction { action_id },
                 ContextMenuTarget::Item {
@@ -7345,6 +7339,17 @@ impl Render for FikaApp {
             .collect::<Vec<_>>();
         let focused_pane = self.panes.focused();
         let pane_count = pane_ids.len();
+        let focused_filter_active = focused_pane.is_some_and(|pane_id| {
+            self.pane_filters
+                .get(&pane_id)
+                .is_some_and(|filter| filter.visible)
+        });
+        let focused_filter_toggle = focused_pane.map(|pane_id| {
+            (
+                pane_id,
+                filter_toggle_snapshot(&mut self.file_icons, focused_filter_active),
+            )
+        });
         let split_icon = pane_split_icon_snapshot(&mut self.file_icons);
         let close_icon = pane_close_icon_snapshot(&mut self.file_icons);
         let mut pane_elements = Vec::with_capacity(pane_ids.len().saturating_mul(2));
@@ -7407,13 +7412,14 @@ impl Render for FikaApp {
                         ),
                     )
                     .child(div().flex_1())
-                    .when_some(focused_pane, |bar, pane_id| {
+                    .when_some(focused_filter_toggle, |bar, (pane_id, filter_toggle)| {
                         bar.child(
                             div()
                                 .id("app-pane-toolbar")
                                 .flex()
                                 .items_center()
                                 .gap_1()
+                                .child(ui::pane::filter_pane_button(pane_id, filter_toggle, cx))
                                 .child(ui::pane::split_pane_button(
                                     pane_id,
                                     split_icon,
@@ -8595,8 +8601,14 @@ mod tests {
             },
         ];
 
-        assert_eq!(default_open_with_application_id(&apps), Some("default.desktop"));
-        assert_eq!(default_open_with_application_id(&apps[..1]), Some("first.desktop"));
+        assert_eq!(
+            default_open_with_application_id(&apps),
+            Some("default.desktop")
+        );
+        assert_eq!(
+            default_open_with_application_id(&apps[..1]),
+            Some("first.desktop")
+        );
         assert_eq!(default_open_with_application_id(&[]), None);
     }
 
@@ -12026,12 +12038,16 @@ text/plain=viewer.desktop;\n",
         app.cancel_background_operation(second_task);
 
         if let Ok(runtime) = OperationRuntime::shared() {
-            assert!(!runtime
-                .operation_controller(first_task)
-                .is_some_and(|c| c.is_cancelled()));
-            assert!(runtime
-                .operation_controller(second_task)
-                .is_some_and(|c| c.is_cancelled()));
+            assert!(
+                !runtime
+                    .operation_controller(first_task)
+                    .is_some_and(|c| c.is_cancelled())
+            );
+            assert!(
+                runtime
+                    .operation_controller(second_task)
+                    .is_some_and(|c| c.is_cancelled())
+            );
         }
     }
 
@@ -12572,6 +12588,24 @@ text/plain=viewer.desktop;\n",
         assert!(!second_filter.focused);
         assert!(second_filter.query.is_empty());
         assert!(app.filtered_models.get(&second).is_none());
+    }
+
+    #[test]
+    fn filter_mode_button_sets_requested_mode() {
+        let mut app = test_app_with_entries("/tmp/fika-filter-mode-button", &["alpha.rs"]);
+        let pane_id = app.panes.focused().unwrap();
+
+        app.set_filter_mode(pane_id, fika_core::NameFilterMode::PlainText);
+        let filter = app.pane_filters.get(&pane_id).unwrap();
+        assert!(filter.visible);
+        assert!(filter.focused);
+        assert_eq!(filter.mode, fika_core::NameFilterMode::PlainText);
+
+        app.set_filter_mode(pane_id, fika_core::NameFilterMode::Glob);
+        assert_eq!(
+            app.pane_filters.get(&pane_id).map(|filter| filter.mode),
+            Some(fika_core::NameFilterMode::Glob)
+        );
     }
 
     #[test]

@@ -10,7 +10,7 @@ use crate::ui::drag_drop::{
 };
 use crate::ui::file_grid::ItemDrag;
 
-use super::super::super::drag::PlaceDrag;
+use super::super::super::drag::{PlaceDrag, place_drag_insert_index};
 
 fn handle_section_path_list_drag_move(
     app: &mut FikaApp,
@@ -83,24 +83,23 @@ pub(super) fn install_section_dnd(
                     return;
                 }
                 let drag = event.drag(cx);
-                let changed = if drag.movable() {
-                    this.set_place_drag_drop_target_for_insert(insert_index)
-                } else {
-                    false
+                let target_index = drag
+                    .movable()
+                    .then(|| place_drag_insert_index(drag.source_index(), insert_index))
+                    .flatten();
+                let changed = match target_index {
+                    Some(index) => this.set_place_drag_drop_target_for_insert(index),
+                    None => this.clear_drag_drop_targets(),
                 };
-                if drag.movable() {
+                if target_index.is_some() {
                     refresh_active_drag_cursor_for_transfer_mode(
                         FileTransferMode::Move,
                         window,
                         cx,
                     );
                     this.refresh_drop_target_lease(cx);
-                } else if contains {
-                    let cleared = this.clear_drag_drop_targets();
+                } else {
                     refresh_active_drag_cursor_not_allowed(window, cx);
-                    if cleared {
-                        cx.notify();
-                    }
                 }
                 if changed {
                     cx.notify();
@@ -109,7 +108,11 @@ pub(super) fn install_section_dnd(
             },
         ))
         .on_drop::<PlaceDrag>(cx.listener(move |this, drag: &PlaceDrag, _window, cx| {
-            this.drop_place_drag_to_place_insert(drag.source_index(), insert_index);
+            if drag.movable()
+                && place_drag_insert_index(drag.source_index(), insert_index).is_some()
+            {
+                this.drop_place_drag_to_place_insert(drag.source_index(), insert_index);
+            }
             cx.stop_propagation();
             cx.notify();
         }))

@@ -75,9 +75,9 @@ extraction, Ark command-line execution, or a Rust fallback.
   types first and falls back to common archive extensions.
 - Item and multi-selection context menus now expose a built-in `Compress...`
   fallback only when no matching service-menu Compress action exists. The
-  fallback builds an `ark --add ...` `DesktopLaunchPlan` and executes through
-  the same systemd user transient unit launcher as Open With and service-menu
-  actions.
+  fallback builds an `ark --add --changetofirstpath --autofilename zip ...`
+  `DesktopLaunchPlan` and executes through the same systemd user transient unit
+  launcher as Open With and service-menu actions.
 - Single archive file context menus now expose built-in `Extract Here` and
   `Extract To...` fallbacks only when no matching service-menu Extract action
   exists. `Extract Here` builds `ark --batch --destination <archive-parent>
@@ -143,8 +143,8 @@ extraction, Ark command-line execution, or a Rust fallback.
 
 - Service-menu matching keeps Ark actions visible for single file, directory,
   blank directory, and multi-selection targets.
-- Built-in fallback Compress appears only when no matching service action exists.
-  [covered]
+- Built-in fallback Compress appears only when no matching service action exists
+  and passes Ark an automatic archive suffix. [covered]
 - Archive classifier detects common formats and ignores unrelated extensions.
   [covered]
 - Extract fallback appears for a single archive and does not appear for normal

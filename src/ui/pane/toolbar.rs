@@ -1,24 +1,9 @@
 use crate::FikaApp;
-use crate::ui::filter_bar::{FilterToggleSnapshot, filter_toggle_snapshot};
+use crate::ui::filter_bar::FilterToggleSnapshot;
 use crate::ui::icons::{FileIconCache, FileIconSnapshot, cached_icon_or_fallback};
 use fika_core::PaneId;
 use gpui::prelude::*;
 use gpui::{Context, Div, MouseButton, ParentElement, Stateful, Styled, div, px, rgb};
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct PaneToolbarSnapshot {
-    pub(crate) filter_toggle: FilterToggleSnapshot,
-}
-
-pub(crate) fn pane_toolbar_snapshot(
-    cache: &mut FileIconCache,
-    filter_active: bool,
-    _pane_count: usize,
-) -> PaneToolbarSnapshot {
-    PaneToolbarSnapshot {
-        filter_toggle: filter_toggle_snapshot(cache, filter_active),
-    }
-}
 
 pub(crate) fn pane_split_icon_snapshot(cache: &mut FileIconCache) -> FileIconSnapshot {
     cache.named_icon(
@@ -46,21 +31,7 @@ pub(crate) fn pane_close_icon_snapshot(cache: &mut FileIconCache) -> FileIconSna
     )
 }
 
-pub(super) fn pane_toolbar_buttons(
-    pane_id: PaneId,
-    toolbar: PaneToolbarSnapshot,
-    cx: &mut Context<FikaApp>,
-) -> Stateful<Div> {
-    div()
-        .id(format!("pane-toolbar-{}", pane_id.0))
-        .flex()
-        .items_center()
-        .gap_1()
-        .flex_none()
-        .child(filter_toggle_button(pane_id, toolbar.filter_toggle, cx))
-}
-
-fn filter_toggle_button(
+pub(crate) fn filter_pane_button(
     pane_id: PaneId,
     toggle: FilterToggleSnapshot,
     cx: &mut Context<FikaApp>,
@@ -201,20 +172,4 @@ fn toolbar_icon_fallback_label(label: &'static str, enabled: bool) -> gpui::AnyE
         })
         .child(label)
         .into_any_element()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn pane_toolbar_snapshot_tracks_filter_state() {
-        let mut cache = FileIconCache::default();
-
-        let single = pane_toolbar_snapshot(&mut cache, false, 1);
-        assert!(!single.filter_toggle.active);
-
-        let split = pane_toolbar_snapshot(&mut cache, true, 2);
-        assert!(split.filter_toggle.active);
-    }
 }

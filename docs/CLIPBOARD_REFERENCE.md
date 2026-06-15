@@ -44,6 +44,9 @@ GPUI's public clipboard API.
     clipboard items.
   - Drag-and-drop data offers accept `text/uri-list` and convert received paths
     into GPUI `ExternalPaths`.
+- `gpui_linux/src/linux/x11/clipboard.rs`
+  - Normal clipboard reads prefer image/text targets and do not request the
+    `text/uri-list` target as a file-list `ExternalPaths` entry.
 
 ## Fika Mapping
 
@@ -67,14 +70,32 @@ GPUI's public clipboard API.
 - Paste result handling records transfer undo for copied/moved files and create
   undo for pasted text files.
 
+## Known Dolphin/KDE Clipboard Limitation
+
+- Dolphin/KDE file copy publishes the selected URLs as clipboard MIME data,
+  including `text/uri-list`, and keeps cut/copy state in KDE-specific MIME
+  metadata.
+- Current GPUI Linux clipboard reads do not expose clipboard target lists or
+  convert `text/uri-list` clipboard data into `ClipboardEntry::ExternalPaths`
+  on the normal paste path.
+- When a Dolphin file-copy offer also exposes a plain text target, GPUI can
+  return that text to Fika. Fika then treats it as ordinary text paste and
+  creates `Pasted Text.txt` because it cannot see the hidden file-list MIME
+  target.
+- Fixing this correctly requires GPUI Linux backend work: read `text/uri-list`
+  before generic text for clipboard paste, convert file URLs to
+  `ExternalPaths`, and expose enough metadata to preserve KDE cut/copy state.
+  Fika should not patch the vendored GPUI checkout in-tree; keep this as an
+  upstream/backend task unless a local GPUI fork is intentionally adopted.
+
 ## Remaining Protocol Work
 
 - GPUI's current public clipboard API does not let Fika explicitly publish a
   multi-entry Wayland data source with both `text/uri-list` and `text/plain`
   from app code.
-- GPUI's Wayland clipboard read path currently reads allowed text MIME types;
-  a peer that offers only `text/uri-list` as clipboard data may still need
-  backend support before Fika can import it directly.
+- GPUI's Linux clipboard read path currently reads image/text MIME types before
+  file-list MIME types; peers that offer `text/uri-list` need backend support
+  before Fika can import them directly as file transfers.
 - Drag-and-drop path-list offers now arrive as GPUI `ExternalPaths` and are
   wired into Fika's pane file operation pipeline. Arbitrary non-path or
   multi-MIME drag offers still need backend exposure before they can be unified

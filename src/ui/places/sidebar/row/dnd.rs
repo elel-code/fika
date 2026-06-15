@@ -11,7 +11,8 @@ use crate::ui::drag_drop::{
 use crate::ui::file_grid::ItemDrag;
 
 use super::super::super::drag::{
-    PlaceDrag, PlaceDropZone, place_drag_insert_index_for_zone, place_drop_zone,
+    PlaceDrag, PlaceDropZone, place_drag_insert_index, place_drag_insert_index_for_zone,
+    place_drop_zone,
 };
 
 pub(super) struct PlaceRowDndConfig {
@@ -34,8 +35,13 @@ fn place_drag_row_insert_index(
     if !movable {
         return None;
     }
-    place_drag_insert_index_for_zone(source_index, insert_before_index, drop_zone)
-        .or_else(|| matches!(drop_zone, PlaceDropZone::InsertAfter).then_some(insert_after_index))
+    match drop_zone {
+        PlaceDropZone::InsertBefore => place_drag_insert_index(source_index, insert_before_index),
+        PlaceDropZone::InsertAfter => place_drag_insert_index(source_index, insert_after_index),
+        PlaceDropZone::OnPlace => {
+            place_drag_insert_index_for_zone(source_index, insert_before_index, drop_zone)
+        }
+    }
 }
 
 fn handle_place_row_path_list_drag_move(
@@ -249,6 +255,22 @@ mod tests {
         assert_eq!(
             place_drag_row_insert_index(true, 2, PlaceDropZone::InsertBefore, 1, 2),
             Some(1)
+        );
+    }
+
+    #[test]
+    fn movable_place_drag_rejects_noop_row_edges() {
+        assert_eq!(
+            place_drag_row_insert_index(true, 0, PlaceDropZone::InsertBefore, 0, 1),
+            None
+        );
+        assert_eq!(
+            place_drag_row_insert_index(true, 0, PlaceDropZone::InsertAfter, 0, 1),
+            None
+        );
+        assert_eq!(
+            place_drag_row_insert_index(true, 1, PlaceDropZone::InsertAfter, 0, 1),
+            None
         );
     }
 

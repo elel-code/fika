@@ -13,7 +13,9 @@ pub fn ark_compress_launch_plan(paths: &[PathBuf]) -> Result<DesktopLaunchPlan, 
         app_name: "Ark: Compress".to_string(),
         commands: vec![DesktopLaunchCommand {
             program: "ark".to_string(),
-            args: std::iter::once("--add".to_string())
+            args: ["--add", "--changetofirstpath", "--autofilename", "zip"]
+                .into_iter()
+                .map(str::to_string)
                 .chain(paths.iter().map(|path| path.display().to_string()))
                 .collect(),
         }],
@@ -82,6 +84,9 @@ mod tests {
             plan.commands[0].args,
             vec![
                 "--add",
+                "--changetofirstpath",
+                "--autofilename",
+                "zip",
                 "/tmp/fika-ark-compress/note.txt",
                 "/tmp/fika-ark-compress/todo.txt"
             ]
