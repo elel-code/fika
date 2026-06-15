@@ -1,4 +1,5 @@
 pub(crate) mod application_chooser;
+pub(crate) mod background_tasks;
 pub(crate) mod chooser;
 pub(crate) mod clipboard;
 pub(crate) mod context_menu;

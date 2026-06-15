@@ -8,9 +8,11 @@ mod tasks;
 pub use tasks::{
     CreateItemResult, FileTransferMode, RenameItemResult, TransferTaskResult, TrashSelectionResult,
     TrashViewOperation, TrashViewOperationResult, UndoTaskResult, action_status,
-    create_item_result, created_item_label, default_created_item_name, parent_dirs,
-    paste_text_result, push_unique_path, rename_item_result, transfer_paths_result,
-    trash_selection_result, trash_view_operation_result, undo_record_result,
+    create_item_result, create_item_result_async, created_item_label, default_created_item_name,
+    parent_dirs, paste_text_result, paste_text_result_async, push_unique_path, rename_item_result,
+    rename_item_result_async, transfer_paths_result, transfer_paths_result_async,
+    trash_selection_result, trash_selection_result_async, trash_view_operation_result,
+    trash_view_operation_result_async, undo_record_result, undo_record_result_async,
 };
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]

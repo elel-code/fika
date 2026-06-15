@@ -4,7 +4,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use fika_core::{PaneId, file_ops};
+use fika_core::file_ops;
 
 #[derive(Clone, Debug)]
 pub(crate) struct StatusBarSnapshot {
@@ -15,7 +15,7 @@ pub(crate) struct StatusBarSnapshot {
     pub(crate) zoom_icon_size: f32,
     pub(crate) zoom_min: i32,
     pub(crate) zoom_max: i32,
-    pub(crate) operation_pending: bool,
+    pub(crate) loading_pending: bool,
     pub(crate) operation_progress: Option<OperationProgressSnapshot>,
 }
 
@@ -105,7 +105,6 @@ pub(crate) struct StatusSummaryCacheEntry {
 
 #[derive(Clone, Debug)]
 pub(crate) struct OperationProgressHandle {
-    pub(crate) pane_id: PaneId,
     pub(crate) label: String,
     pub(crate) progress: Arc<Mutex<file_ops::TransferProgress>>,
     pub(crate) cancel: Option<Arc<AtomicBool>>,

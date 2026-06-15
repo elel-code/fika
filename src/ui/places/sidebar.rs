@@ -9,6 +9,7 @@ use gpui::{
     canvas, div, fill, point, px, rgb, rgba, size,
 };
 
+use crate::ui::background_tasks::{BackgroundTasksSnapshot, background_tasks_panel};
 use crate::ui::file_grid::ItemDrag;
 
 use super::drag::PlaceDrag;
@@ -23,6 +24,7 @@ const PLACES_SCROLLBAR_MIN_THUMB_HEIGHT: f32 = 24.0;
 
 pub(crate) fn places_sidebar(
     places: Vec<PlaceSnapshot>,
+    background_tasks: Option<BackgroundTasksSnapshot>,
     window: &mut Window,
     cx: &mut Context<FikaApp>,
 ) -> Stateful<Div> {
@@ -151,6 +153,9 @@ pub(crate) fn places_sidebar(
                 )
                 .child(places_sidebar_scrollbar(state)),
         )
+        .when_some(background_tasks, |sidebar, tasks| {
+            sidebar.child(background_tasks_panel(tasks, cx))
+        })
 }
 
 fn clear_places_drop_target_after_sidebar_leave(

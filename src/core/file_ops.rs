@@ -1,9 +1,14 @@
+use crate::core::operation_runtime::run_operation_blocking;
+use std::ffi::OsString;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+use compio::buf::{BufResult, IntoInner};
+use compio::io::{AsyncReadAt, AsyncWriteAtExt};
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct TransferProgress {
@@ -15,6 +20,11 @@ pub struct TransferProgress {
 pub struct TransferOutcome {
     pub destination: PathBuf,
     pub overwritten_backup: Option<PathBuf>,
+}
+
+struct TransferPlan {
+    destination: PathBuf,
+    overwritten_backup: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -110,6 +120,91 @@ pub fn perform_transfer_with_progress_outcome(
         destination,
         overwritten_backup: overwrite_backup,
     })
+}
+
+pub async fn perform_transfer_with_progress_outcome_async(
+    operation: &str,
+    source: &Path,
+    target_dir: &Path,
+    conflict_policy: &str,
+    cancel: Option<Arc<AtomicBool>>,
+    mut progress: impl FnMut(TransferProgress),
+) -> Result<TransferOutcome, String> {
+    let plan = prepare_transfer_async(
+        operation.to_string(),
+        source.to_path_buf(),
+        target_dir.to_path_buf(),
+        conflict_policy.to_string(),
+    )
+    .await?;
+
+    let result = match operation {
+        "move" => move_path_async(source, &plan.destination, cancel.as_ref(), &mut progress).await,
+        "copy" => copy_path_async(source, &plan.destination, cancel.as_ref(), &mut progress).await,
+        "link" => link_path_async(source, &plan.destination).await,
+        _ => unreachable!("operation was validated before dispatch"),
+    };
+
+    match result {
+        Ok(()) => {}
+        Err(err) => {
+            if let Some(backup) = plan.overwritten_backup.as_ref() {
+                let destination = plan.destination.clone();
+                let backup = backup.clone();
+                blocking_string(move || restore_overwrite_backup(&destination, &backup)).await?;
+            } else if err.kind() == io::ErrorKind::Interrupted {
+                let destination = plan.destination.clone();
+                let _ = blocking_io(move || remove_path(&destination)).await;
+            }
+            return Err(err.to_string());
+        }
+    }
+
+    Ok(TransferOutcome {
+        destination: plan.destination,
+        overwritten_backup: plan.overwritten_backup,
+    })
+}
+
+async fn prepare_transfer_async(
+    operation: String,
+    source: PathBuf,
+    target_dir: PathBuf,
+    conflict_policy: String,
+) -> Result<TransferPlan, String> {
+    blocking_string(move || {
+        if !path_exists(&source) {
+            return Err("source no longer exists".to_string());
+        }
+        if !target_dir.is_dir() {
+            return Err("target is not a folder".to_string());
+        }
+        if let Some(relation) = transfer_target_relation(&source, &target_dir) {
+            return Err(transfer_target_relation_error(relation).to_string());
+        }
+
+        let file_name = source
+            .file_name()
+            .ok_or_else(|| "source has no file name".to_string())?
+            .to_os_string();
+        let destination = transfer_destination(&source, &target_dir, &file_name, &conflict_policy)?;
+
+        if !matches!(operation.as_str(), "move" | "copy" | "link") {
+            return Err(format!("unknown operation: {operation}"));
+        }
+
+        let overwritten_backup = if conflict_policy == "overwrite" && path_exists(&destination) {
+            Some(backup_existing_destination(&destination)?)
+        } else {
+            None
+        };
+
+        Ok(TransferPlan {
+            destination,
+            overwritten_backup,
+        })
+    })
+    .await
 }
 
 pub fn base_destination(source: &Path, target_dir: &Path) -> Result<PathBuf, String> {
@@ -894,6 +989,224 @@ fn copy_file(
     Ok(())
 }
 
+async fn move_path_async(
+    source: &Path,
+    destination: &Path,
+    cancel: Option<&Arc<AtomicBool>>,
+    progress: &mut impl FnMut(TransferProgress),
+) -> io::Result<()> {
+    ensure_not_cancelled(cancel)?;
+    let bytes_total = path_size_async(source).await.unwrap_or_default();
+    match compio::fs::rename(source, destination).await {
+        Ok(()) => {
+            progress(TransferProgress {
+                bytes_done: bytes_total,
+                bytes_total,
+            });
+            Ok(())
+        }
+        Err(err) if err.raw_os_error() == Some(18) => {
+            let result = copy_path_async(source, destination, cancel, progress).await;
+            if let Err(err) = &result
+                && err.kind() == io::ErrorKind::Interrupted
+            {
+                let _ = remove_path_async(destination).await;
+            }
+            result?;
+            ensure_not_cancelled(cancel)?;
+            if let Err(err) = remove_path_async(source).await {
+                let _ = remove_path_async(destination).await;
+                Err(err)
+            } else {
+                Ok(())
+            }
+        }
+        Err(err) => Err(err),
+    }
+}
+
+async fn copy_path_async(
+    source: &Path,
+    destination: &Path,
+    cancel: Option<&Arc<AtomicBool>>,
+    progress: &mut impl FnMut(TransferProgress),
+) -> io::Result<()> {
+    ensure_not_cancelled(cancel)?;
+    let (destination_preexisting, bytes_total) =
+        copy_path_preflight_async(source, destination).await?;
+    let mut bytes_done = 0;
+    let result = copy_path_inner_async(
+        source,
+        destination,
+        cancel,
+        &mut bytes_done,
+        bytes_total,
+        progress,
+    )
+    .await;
+
+    if result.is_err() && !destination_preexisting {
+        let _ = remove_path_if_present_async(destination).await;
+    }
+
+    result
+}
+
+fn copy_path_inner_async<'a, P>(
+    source: &'a Path,
+    destination: &'a Path,
+    cancel: Option<&'a Arc<AtomicBool>>,
+    bytes_done: &'a mut u64,
+    bytes_total: u64,
+    progress: &'a mut P,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = io::Result<()>> + 'a>>
+where
+    P: FnMut(TransferProgress) + 'a,
+{
+    Box::pin(async move {
+        let metadata = symlink_metadata_async(source).await?;
+        if metadata.file_type().is_symlink() {
+            copy_symlink_async(
+                source,
+                destination,
+                cancel,
+                bytes_done,
+                bytes_total,
+                metadata.len(),
+                progress,
+            )
+            .await
+        } else if metadata.is_dir() {
+            copy_directory_async(
+                source,
+                destination,
+                cancel,
+                bytes_done,
+                bytes_total,
+                progress,
+            )
+            .await
+        } else {
+            copy_file_async(
+                source,
+                destination,
+                cancel,
+                bytes_done,
+                bytes_total,
+                progress,
+            )
+            .await
+        }
+    })
+}
+
+async fn copy_symlink_async(
+    source: &Path,
+    destination: &Path,
+    cancel: Option<&Arc<AtomicBool>>,
+    bytes_done: &mut u64,
+    bytes_total: u64,
+    link_size: u64,
+    progress: &mut impl FnMut(TransferProgress),
+) -> io::Result<()> {
+    ensure_not_cancelled(cancel)?;
+    let target = read_link_async(source).await?;
+
+    #[cfg(unix)]
+    {
+        compio::fs::symlink(&target, destination).await?;
+    }
+
+    #[cfg(not(unix))]
+    {
+        let metadata = metadata_async(source).await?;
+        if metadata.is_dir() {
+            compio::fs::symlink_dir(&target, destination).await?;
+        } else {
+            compio::fs::symlink_file(&target, destination).await?;
+        }
+    }
+
+    *bytes_done = bytes_done.saturating_add(link_size).min(bytes_total);
+    progress(TransferProgress {
+        bytes_done: *bytes_done,
+        bytes_total,
+    });
+    Ok(())
+}
+
+async fn copy_directory_async(
+    source: &Path,
+    destination: &Path,
+    cancel: Option<&Arc<AtomicBool>>,
+    bytes_done: &mut u64,
+    bytes_total: u64,
+    progress: &mut impl FnMut(TransferProgress),
+) -> io::Result<()> {
+    compio::fs::create_dir(destination).await?;
+    if let Ok(metadata) = compio::fs::metadata(source).await {
+        let _ = compio::fs::set_permissions(destination, metadata.permissions()).await;
+    }
+
+    for (source_path, file_name) in read_dir_entries_async(source).await? {
+        ensure_not_cancelled(cancel)?;
+        let destination_path = destination.join(file_name);
+        copy_path_inner_async(
+            &source_path,
+            &destination_path,
+            cancel,
+            bytes_done,
+            bytes_total,
+            progress,
+        )
+        .await?;
+    }
+
+    Ok(())
+}
+
+async fn copy_file_async(
+    source: &Path,
+    destination: &Path,
+    cancel: Option<&Arc<AtomicBool>>,
+    bytes_done: &mut u64,
+    bytes_total: u64,
+    progress: &mut impl FnMut(TransferProgress),
+) -> io::Result<()> {
+    let from_file = compio::fs::File::open(source).await?;
+    let mut to_file = compio::fs::File::create(destination).await?;
+    if let Ok(metadata) = compio::fs::metadata(source).await {
+        let _ = to_file.set_permissions(metadata.permissions()).await;
+    }
+
+    let mut buffer = vec![0_u8; 64 * 1024];
+    let mut position = 0_u64;
+
+    loop {
+        ensure_not_cancelled(cancel)?;
+        let BufResult(read_result, read_buffer) = from_file.read_at(buffer, position).await;
+        let read = read_result?;
+        if read == 0 {
+            break;
+        }
+        let BufResult(write_result, write_buffer) = to_file
+            .write_all_at(compio::buf::IoBuf::slice(read_buffer, ..read), position)
+            .await;
+        buffer = write_buffer.into_inner();
+        write_result?;
+        *bytes_done = bytes_done.saturating_add(read as u64);
+        position = position.saturating_add(read as u64);
+        progress(TransferProgress {
+            bytes_done: *bytes_done,
+            bytes_total,
+        });
+    }
+
+    let _ = from_file.close().await;
+    let _ = to_file.close().await;
+    Ok(())
+}
+
 fn link_path(source: &Path, destination: &Path) -> io::Result<()> {
     #[cfg(unix)]
     {
@@ -909,6 +1222,95 @@ fn link_path(source: &Path, destination: &Path) -> io::Result<()> {
             std::os::windows::fs::symlink_file(source, destination)
         }
     }
+}
+
+async fn link_path_async(source: &Path, destination: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        compio::fs::symlink(source, destination).await
+    }
+
+    #[cfg(not(unix))]
+    {
+        let metadata = metadata_async(source).await?;
+        if metadata.is_dir() {
+            compio::fs::symlink_dir(source, destination).await
+        } else {
+            compio::fs::symlink_file(source, destination).await
+        }
+    }
+}
+
+async fn blocking_io<T>(task: impl FnOnce() -> io::Result<T> + Send + 'static) -> io::Result<T>
+where
+    T: Send + 'static,
+{
+    run_operation_blocking(task).await
+}
+
+async fn blocking_string<T>(
+    task: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String>
+where
+    T: Send + 'static,
+{
+    run_operation_blocking(task).await
+}
+
+async fn copy_path_preflight_async(source: &Path, destination: &Path) -> io::Result<(bool, u64)> {
+    let source = source.to_path_buf();
+    let destination = destination.to_path_buf();
+    blocking_io(move || {
+        Ok((
+            fs::symlink_metadata(&destination).is_ok(),
+            path_size(&source)?,
+        ))
+    })
+    .await
+}
+
+async fn path_size_async(path: &Path) -> io::Result<u64> {
+    let path = path.to_path_buf();
+    blocking_io(move || path_size(&path)).await
+}
+
+async fn symlink_metadata_async(path: &Path) -> io::Result<fs::Metadata> {
+    let path = path.to_path_buf();
+    blocking_io(move || fs::symlink_metadata(path)).await
+}
+
+#[cfg(not(unix))]
+async fn metadata_async(path: &Path) -> io::Result<fs::Metadata> {
+    let path = path.to_path_buf();
+    blocking_io(move || fs::metadata(path)).await
+}
+
+async fn read_link_async(path: &Path) -> io::Result<PathBuf> {
+    let path = path.to_path_buf();
+    blocking_io(move || fs::read_link(path)).await
+}
+
+async fn read_dir_entries_async(path: &Path) -> io::Result<Vec<(PathBuf, OsString)>> {
+    let path = path.to_path_buf();
+    blocking_io(move || {
+        let mut entries = Vec::new();
+        for entry in fs::read_dir(path)? {
+            let entry = entry?;
+            entries.push((entry.path(), entry.file_name()));
+        }
+        Ok(entries)
+    })
+    .await
+}
+
+async fn remove_path_async(path: &Path) -> io::Result<()> {
+    let path = path.to_path_buf();
+    blocking_io(move || remove_path(&path)).await
+}
+
+async fn remove_path_if_present_async(path: &Path) -> io::Result<()> {
+    let path = path.to_path_buf();
+    blocking_io(move || remove_path_if_present(&path)).await
 }
 
 fn path_size(path: &Path) -> io::Result<u64> {

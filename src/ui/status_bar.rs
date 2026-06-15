@@ -44,7 +44,7 @@ pub(crate) fn status_bar(
         zoom_icon_size,
         zoom_min,
         zoom_max,
-        operation_pending,
+        loading_pending,
         operation_progress,
     } = snapshot;
     let status_text = if message == "Ready" {
@@ -95,7 +95,7 @@ pub(crate) fn status_bar(
                         bar.child(operation_progress_view(pane_id, progress, cx))
                     })
                 })
-                .when(show_progress && operation_pending && !has_progress, |bar| {
+                .when(show_progress && loading_pending && !has_progress, |bar| {
                     bar.child(operation_busy_view(pane_id))
                 })
                 .when(show_zoom, |bar| {

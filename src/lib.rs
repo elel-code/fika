@@ -72,14 +72,17 @@ pub use core::network::{
     is_supported_network_scheme, network_root_location, network_root_path, normalize_network_uri,
     parse_network_location, supported_network_schemes,
 };
+pub use core::operation_runtime::{OperationRuntime, run_operation_task};
 pub use core::operations::{
     AffectedDirectoryRefresh, CreateItemResult, CreateUndoItem, CreatedItemKind, FileTransferMode,
     OperationQueue, RenameItemResult, RenameUndoItem, TransferTaskResult, TransferUndoItem,
     TrashSelectionResult, TrashUndoItem, TrashViewOperation, TrashViewOperationResult, UndoPayload,
-    UndoRecord, UndoSerial, UndoTaskResult, action_status, create_item_result, created_item_label,
-    default_created_item_name, parent_dirs, paste_text_result, push_unique_path,
-    rename_item_result, transfer_paths_result, trash_selection_result, trash_view_operation_result,
-    undo_record_result,
+    UndoRecord, UndoSerial, UndoTaskResult, action_status, create_item_result,
+    create_item_result_async, created_item_label, default_created_item_name, parent_dirs,
+    paste_text_result, paste_text_result_async, push_unique_path, rename_item_result,
+    rename_item_result_async, transfer_paths_result, transfer_paths_result_async,
+    trash_selection_result, trash_selection_result_async, trash_view_operation_result,
+    trash_view_operation_result_async, undo_record_result, undo_record_result_async,
 };
 pub use core::pane::{
     DEFAULT_ZOOM_LEVEL, Generation, MAX_ZOOM_LEVEL, MIN_ZOOM_LEVEL, PaneController,

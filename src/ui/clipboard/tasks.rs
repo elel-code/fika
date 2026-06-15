@@ -2,10 +2,15 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
-use fika_core::{PaneId, TransferTaskResult, file_ops, paste_text_result, transfer_paths_result};
+use fika_core::{
+    PaneId, TransferTaskResult, file_ops, paste_text_result_async, transfer_paths_result_async,
+};
+#[cfg(test)]
+use fika_core::{paste_text_result, transfer_paths_result};
 
 use super::state::{ClipboardMode, ClipboardState};
 
+#[cfg(test)]
 pub(crate) fn paste_clipboard_result(
     pane_id: PaneId,
     target_dir: PathBuf,
@@ -29,6 +34,32 @@ pub(crate) fn paste_clipboard_result(
         cancel,
         progress,
     )
+}
+
+pub(crate) async fn paste_clipboard_result_async(
+    pane_id: PaneId,
+    target_dir: PathBuf,
+    clipboard: ClipboardState,
+    cancel: Option<Arc<AtomicBool>>,
+    progress: Option<Arc<Mutex<file_ops::TransferProgress>>>,
+) -> TransferTaskResult {
+    let clipboard_mode = clipboard.mode;
+    let label = clipboard.action_label();
+    if let Some(text) = clipboard.text {
+        return paste_text_result_async(pane_id, target_dir, text).await;
+    }
+
+    transfer_paths_result_async(
+        pane_id,
+        target_dir,
+        clipboard_mode.transfer_mode(),
+        clipboard.paths,
+        label,
+        clipboard_mode == ClipboardMode::Cut,
+        cancel,
+        progress,
+    )
+    .await
 }
 
 #[cfg(test)]

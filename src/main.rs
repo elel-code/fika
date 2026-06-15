@@ -7,8 +7,9 @@ use fika_core::SystemdLaunchResult;
 use fika_core::{
     CreateItemResult, FileTransferMode, RenameItemResult, TransferTaskResult, TrashSelectionResult,
     TrashViewOperation, TrashViewOperationResult, UndoTaskResult, action_status,
-    create_item_result, created_item_label, rename_item_result, transfer_paths_result,
-    trash_selection_result, trash_view_operation_result, undo_record_result,
+    create_item_result_async, created_item_label, rename_item_result_async, run_operation_task,
+    transfer_paths_result_async, trash_selection_result_async, trash_view_operation_result_async,
+    undo_record_result_async,
 };
 use fika_core::{
     CreateUndoItem, CreatedItemKind, DeviceInfo, DeviceMonitorMessage, DevicePlaceOperation,
@@ -38,7 +39,7 @@ use gpui::{
     ScrollDelta, ScrollHandle, ScrollStrategy, Styled, Window, WindowBounds, WindowOptions, div,
     px, rgb, size,
 };
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::env;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -48,9 +49,13 @@ use ui::application_chooser::{
     ApplicationChooserState, application_chooser_filtered_applications,
     application_chooser_overlay, dedup_application_chooser_applications,
 };
+use ui::background_tasks::{
+    BackgroundTaskHistorySnapshot, BackgroundTaskId, BackgroundTaskSnapshot, BackgroundTaskState,
+    BackgroundTasksSnapshot,
+};
 use ui::chooser::{ChooserState, selected_choice_rows};
 use ui::clipboard::{
-    ClipboardMode, ClipboardState, paste_clipboard_result, primary_paste_clipboard_state,
+    ClipboardMode, ClipboardState, paste_clipboard_result_async, primary_paste_clipboard_state,
     standard_paste_clipboard_state,
 };
 #[cfg(test)]
@@ -136,6 +141,7 @@ const DEVICE_MONITOR_RETRY_INTERVAL: Duration = Duration::from_secs(60);
 const DEBUG_CACHE_ENV: &str = "FIKA_DEBUG_CACHE";
 const DEBUG_NAV_ENV: &str = "FIKA_DEBUG_NAV";
 const PERF_ITEM_VIEW_ENV: &str = "FIKA_PERF_ITEM_VIEW";
+const BACKGROUND_TASK_HISTORY_LIMIT: usize = 8;
 
 fn env_flag_is_truthy(value: &str) -> bool {
     matches!(
@@ -201,6 +207,21 @@ fn view_mode_status(view_mode: ViewMode) -> &'static str {
     }
 }
 
+fn background_task_state_for_message(message: &str) -> BackgroundTaskState {
+    let message = message.trim().to_ascii_lowercase();
+    if message.starts_with("cannot ")
+        || message.contains(" failed")
+        || message.contains("failed ")
+        || message.contains("cancelled")
+        || message.contains("canceled")
+        || message.contains(" stale")
+    {
+        BackgroundTaskState::Failed
+    } else {
+        BackgroundTaskState::Complete
+    }
+}
+
 fn wheel_scroll_delta_for_view_mode(view_mode: ViewMode, delta: ScrollDelta) -> (f32, f32) {
     let delta = delta.pixel_delta(px(20.0));
     let x = delta.x.as_f32();
@@ -236,6 +257,20 @@ struct PendingRubberBand {
 enum PaneLoadingScrollPolicy {
     Reset,
     Preserve,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct BackgroundTaskHistoryRecord {
+    title: String,
+    detail: String,
+    state: BackgroundTaskState,
+}
+
+#[derive(Clone, Debug)]
+struct ActiveBackgroundTaskRecord {
+    pane_id: PaneId,
+    message: String,
+    progress: Option<OperationProgressHandle>,
 }
 
 const RUBBER_BAND_START_DRAG_DISTANCE: f32 = 6.0;
@@ -293,9 +328,10 @@ pub(crate) struct FikaApp {
     trash_conflict_dialog: Option<TrashConflictDialogState>,
     application_chooser: Option<ApplicationChooserState>,
     pane_statuses: HashMap<PaneId, String>,
-    operation_pending: bool,
-    operation_pane: Option<PaneId>,
-    operation_progress: Option<OperationProgressHandle>,
+    next_background_task_id: u64,
+    active_background_tasks: BTreeMap<BackgroundTaskId, ActiveBackgroundTaskRecord>,
+    background_tasks_expanded: bool,
+    background_task_history: VecDeque<BackgroundTaskHistoryRecord>,
 }
 
 impl FikaApp {
@@ -373,9 +409,10 @@ impl FikaApp {
             trash_conflict_dialog: None,
             application_chooser: None,
             pane_statuses: HashMap::new(),
-            operation_pending: false,
-            operation_pane: None,
-            operation_progress: None,
+            next_background_task_id: 0,
+            active_background_tasks: BTreeMap::new(),
+            background_tasks_expanded: false,
+            background_task_history: VecDeque::new(),
         };
         app.replace_removable_device_places(&initial_devices);
         app._keystroke_subscription = Some(cx.observe_keystrokes(|this, event, _window, cx| {
@@ -402,7 +439,10 @@ impl FikaApp {
                                 if app.drain_watchers()
                                     | app.drain_trash_monitor()
                                     | app.drain_device_monitor_messages()
-                                    | app.operation_progress.is_some()
+                                    | app
+                                        .active_background_tasks
+                                        .values()
+                                        .any(|task| task.progress.is_some())
                                     | !app.loading_panes.is_empty()
                                 {
                                     cx.notify();
@@ -1057,7 +1097,7 @@ impl FikaApp {
     ) -> StatusBarSnapshot {
         let now = Instant::now();
         let message = self.status_message_for_pane(pane_id);
-        let operation_pending = self.operation_pane == Some(pane_id) && self.operation_pending;
+        let loading_pending = self.loading_panes.contains_key(&pane_id);
         let Some((path, zoom_level, zoom_icon_size)) = self.panes.pane(pane_id).map(|pane| {
             (
                 pane.current_dir.clone(),
@@ -1073,15 +1113,12 @@ impl FikaApp {
                 zoom_icon_size: fika_core::icon_size_for_zoom_level(fika_core::DEFAULT_ZOOM_LEVEL),
                 zoom_min: fika_core::MIN_ZOOM_LEVEL,
                 zoom_max: fika_core::MAX_ZOOM_LEVEL,
-                operation_pending,
-                operation_progress: self.operation_progress_snapshot_for_pane(pane_id, now),
+                loading_pending,
+                operation_progress: self.loading_progress_snapshot(pane_id, now),
             };
         };
 
         self.request_space_info_if_needed(path.clone(), cx);
-        let operation_progress = self
-            .operation_progress_snapshot_for_pane(pane_id, now)
-            .or_else(|| self.loading_progress_snapshot(pane_id, now));
         let item_summary = self
             .loading_panes
             .get(&pane_id)
@@ -1096,8 +1133,8 @@ impl FikaApp {
             zoom_icon_size,
             zoom_min: fika_core::MIN_ZOOM_LEVEL,
             zoom_max: fika_core::MAX_ZOOM_LEVEL,
-            operation_pending,
-            operation_progress,
+            loading_pending,
+            operation_progress: self.loading_progress_snapshot(pane_id, now),
         }
     }
 
@@ -1113,27 +1150,145 @@ impl FikaApp {
         self.pane_statuses.insert(pane_id, message.into());
     }
 
-    fn begin_pane_operation(&mut self, pane_id: PaneId, message: impl Into<String>) {
-        self.operation_pending = true;
-        self.operation_pane = Some(pane_id);
+    fn begin_pane_operation(
+        &mut self,
+        pane_id: PaneId,
+        message: impl Into<String>,
+    ) -> BackgroundTaskId {
+        let task_id = BackgroundTaskId(self.next_background_task_id);
+        self.next_background_task_id = self.next_background_task_id.saturating_add(1);
+        self.active_background_tasks.insert(
+            task_id,
+            ActiveBackgroundTaskRecord {
+                pane_id,
+                message: message.into(),
+                progress: None,
+            },
+        );
+        task_id
+    }
+
+    fn finish_pane_operation(
+        &mut self,
+        task_id: BackgroundTaskId,
+        pane_id: PaneId,
+        message: impl Into<String>,
+    ) {
+        let message = message.into();
+        self.record_background_task_result(task_id, &message);
         self.set_pane_status(pane_id, message);
     }
 
-    fn finish_pane_operation(&mut self, pane_id: PaneId, message: impl Into<String>) {
-        self.operation_pending = false;
-        self.operation_pane = None;
-        self.set_pane_status(pane_id, message);
+    fn background_tasks_snapshot(&self, now: Instant) -> Option<BackgroundTasksSnapshot> {
+        let active = self.background_task_snapshots(now);
+        let history = self
+            .background_task_history
+            .iter()
+            .map(|record| BackgroundTaskHistorySnapshot {
+                title: record.title.clone(),
+                detail: record.detail.clone(),
+                state: record.state,
+            })
+            .collect::<Vec<_>>();
+        if active.is_empty() && history.is_empty() {
+            return None;
+        }
+        Some(BackgroundTasksSnapshot {
+            active,
+            history,
+            expanded: self.background_tasks_expanded,
+        })
     }
 
+    fn background_task_snapshots(&self, now: Instant) -> Vec<BackgroundTaskSnapshot> {
+        self.active_background_tasks
+            .iter()
+            .map(|(id, task)| self.background_task_snapshot(*id, task, now))
+            .collect()
+    }
+
+    fn background_task_snapshot(
+        &self,
+        id: BackgroundTaskId,
+        task: &ActiveBackgroundTaskRecord,
+        now: Instant,
+    ) -> BackgroundTaskSnapshot {
+        let progress = task
+            .progress
+            .as_ref()
+            .and_then(|progress| progress.snapshot(now));
+        let percent = progress.as_ref().and_then(|progress| progress.percent);
+        let title = progress
+            .as_ref()
+            .map(|progress| progress.label.clone())
+            .unwrap_or_else(|| task.message.clone());
+        let detail = match percent {
+            Some(percent) => format!("{percent}% complete"),
+            None if task.progress.is_some() => "Preparing".to_string(),
+            None => "Working".to_string(),
+        };
+        BackgroundTaskSnapshot {
+            id,
+            pane_id: task.pane_id,
+            title,
+            detail,
+            percent,
+            cancellable: task
+                .progress
+                .as_ref()
+                .is_some_and(|progress| progress.cancel.is_some()),
+        }
+    }
+
+    fn record_background_task_result(&mut self, task_id: BackgroundTaskId, message: &str) {
+        let title = self
+            .active_background_tasks
+            .remove(&task_id)
+            .map(|task| {
+                task.progress
+                    .map(|progress| progress.label)
+                    .unwrap_or(task.message)
+            })
+            .unwrap_or_else(|| message.to_string());
+        self.background_task_history
+            .push_front(BackgroundTaskHistoryRecord {
+                title,
+                detail: message.to_string(),
+                state: background_task_state_for_message(message),
+            });
+        while self.background_task_history.len() > BACKGROUND_TASK_HISTORY_LIMIT {
+            self.background_task_history.pop_back();
+        }
+    }
+
+    pub(crate) fn toggle_background_tasks_details(&mut self) {
+        self.background_tasks_expanded = !self.background_tasks_expanded;
+    }
+
+    pub(crate) fn clear_background_task_history(&mut self) {
+        self.background_task_history.clear();
+        if self.active_background_tasks.is_empty() {
+            self.background_tasks_expanded = false;
+        }
+    }
+
+    fn has_active_background_task_for_pane(&self, pane_id: PaneId) -> bool {
+        self.active_background_tasks
+            .values()
+            .any(|task| task.pane_id == pane_id)
+    }
+
+    #[cfg(test)]
     fn operation_progress_snapshot_for_pane(
         &self,
         pane_id: PaneId,
         now: Instant,
     ) -> Option<OperationProgressSnapshot> {
-        self.operation_progress
-            .as_ref()
-            .filter(|progress| progress.pane_id == pane_id)
-            .and_then(|progress| progress.snapshot(now))
+        self.active_background_tasks
+            .values()
+            .filter(|task| task.pane_id == pane_id)
+            .filter_map(|task| task.progress.as_ref())
+            .find_map(|progress| progress.snapshot(now))
     }
 
     fn loading_progress_snapshot(
@@ -1154,35 +1309,45 @@ impl FikaApp {
 
     fn start_transfer_progress(
         &mut self,
-        pane_id: PaneId,
+        task_id: BackgroundTaskId,
         label: String,
     ) -> (Arc<AtomicBool>, Arc<Mutex<file_ops::TransferProgress>>) {
         let cancel = Arc::new(AtomicBool::new(false));
         let progress = Arc::new(Mutex::new(file_ops::TransferProgress::default()));
-        self.operation_progress = Some(OperationProgressHandle {
-            pane_id,
-            label,
-            progress: Arc::clone(&progress),
-            cancel: Some(Arc::clone(&cancel)),
-            started_at: Instant::now(),
-        });
+        if let Some(task) = self.active_background_tasks.get_mut(&task_id) {
+            task.progress = Some(OperationProgressHandle {
+                label,
+                progress: Arc::clone(&progress),
+                cancel: Some(Arc::clone(&cancel)),
+                started_at: Instant::now(),
+            });
+        }
         (cancel, progress)
     }
 
-    fn clear_operation_progress(&mut self) {
-        self.operation_progress = None;
-    }
-
     pub(crate) fn cancel_operation_or_loading(&mut self, pane_id: PaneId) {
-        if let Some(progress) = &self.operation_progress
-            && progress.pane_id == pane_id
+        if let Some((_task_id, task)) = self
+            .active_background_tasks
+            .iter_mut()
+            .find(|(_task_id, task)| task.pane_id == pane_id)
+            && let Some(progress) = &task.progress
             && let Some(cancel) = &progress.cancel
         {
             cancel.store(true, Ordering::Relaxed);
-            self.set_pane_status(pane_id, format!("Cancelling {}", progress.label));
+            task.message = format!("Cancelling {}", progress.label);
             return;
         }
         self.cancel_loading(pane_id);
+    }
+
+    pub(crate) fn cancel_background_operation(&mut self, task_id: BackgroundTaskId) {
+        if let Some(task) = self.active_background_tasks.get_mut(&task_id)
+            && let Some(progress) = &task.progress
+            && let Some(cancel) = &progress.cancel
+        {
+            cancel.store(true, Ordering::Relaxed);
+            task.message = format!("Cancelling {}", progress.label);
+        }
     }
 
     pub(crate) fn cancel_loading(&mut self, pane_id: PaneId) {
@@ -1674,11 +1839,7 @@ impl FikaApp {
         operation: DevicePlaceOperation,
         cx: &mut Context<Self>,
     ) {
-        if self.operation_pending {
-            self.set_pane_status(pane_id, "File operation already running");
-            return;
-        }
-        self.begin_pane_operation(pane_id, operation.in_progress_message(&label));
+        let task_id = self.begin_pane_operation(pane_id, operation.in_progress_message(&label));
         cx.spawn(
             move |this: gpui::WeakEntity<FikaApp>, cx: &mut gpui::AsyncApp| {
                 let mut cx = cx.clone();
@@ -1690,7 +1851,7 @@ impl FikaApp {
                         })
                         .await;
                     let _ = this.update(&mut cx, |app, cx| {
-                        app.finish_device_place_operation(result, cx);
+                        app.finish_device_place_operation(task_id, result, cx);
                         cx.notify();
                     });
                 }
@@ -1701,12 +1862,14 @@ impl FikaApp {
 
     fn finish_device_place_operation(
         &mut self,
+        task_id: BackgroundTaskId,
         result: DevicePlaceOperationResult,
         cx: &mut Context<Self>,
     ) {
         match result.result {
             Ok(Some(mount_point)) => {
                 self.finish_pane_operation(
+                    task_id,
                     result.pane_id,
                     result.operation.success_message(&result.label),
                 );
@@ -1715,12 +1878,14 @@ impl FikaApp {
             }
             Ok(None) => {
                 self.finish_pane_operation(
+                    task_id,
                     result.pane_id,
                     result.operation.success_message(&result.label),
                 );
                 self.request_device_snapshot_refresh(cx);
             }
             Err(error) => self.finish_pane_operation(
+                task_id,
                 result.pane_id,
                 result.operation.error_message(&result.label, &error),
             ),
@@ -3563,10 +3728,6 @@ impl FikaApp {
         if self.chooser.is_some() {
             return;
         }
-        if self.operation_pending {
-            self.set_pane_status(pane_id, "File operation already running");
-            return;
-        }
         let selected_paths = self.panes.selected_paths(pane_id).unwrap_or_default();
         let [original_path] = selected_paths.as_slice() else {
             self.set_pane_status(pane_id, "Select one item to rename");
@@ -3750,7 +3911,7 @@ impl FikaApp {
             self.clear_pending_rename_next_for_pane(pane_id);
             return;
         }
-        if !self.operation_pending {
+        if !self.has_active_background_task_for_pane(pane_id) {
             self.start_pending_rename_next_for_pane(pane_id);
         }
     }
@@ -3767,10 +3928,6 @@ impl FikaApp {
         else {
             return;
         };
-        if self.operation_pending {
-            self.set_pane_status(draft_pane_id, "File operation already running");
-            return;
-        }
         if new_name.is_empty() {
             self.set_rename_draft_error(draft_pane_id, "Name cannot be empty");
             return;
@@ -3798,7 +3955,7 @@ impl FikaApp {
         let Some(draft) = self.rename_draft.take() else {
             return;
         };
-        self.begin_pane_operation(
+        let task_id = self.begin_pane_operation(
             draft.pane_id,
             format!("Renaming {}", draft.original_path.display()),
         );
@@ -3806,13 +3963,12 @@ impl FikaApp {
             move |this: gpui::WeakEntity<FikaApp>, cx: &mut gpui::AsyncApp| {
                 let mut cx = cx.clone();
                 async move {
-                    let result = cx
-                        .background_spawn(async move {
-                            rename_item_result(draft.pane_id, draft.original_path, new_name)
-                        })
-                        .await;
+                    let result = run_operation_task(move || async move {
+                        rename_item_result_async(draft.pane_id, draft.original_path, new_name).await
+                    })
+                    .await;
                     let _ = this.update(&mut cx, |app, cx| {
-                        app.finish_rename_item(result);
+                        app.finish_rename_item(task_id, result);
                         cx.notify();
                     });
                 }
@@ -3870,7 +4026,7 @@ impl FikaApp {
         }
     }
 
-    fn finish_rename_item(&mut self, result: RenameItemResult) {
+    fn finish_rename_item(&mut self, task_id: BackgroundTaskId, result: RenameItemResult) {
         match result.result {
             Ok(renamed_path) => {
                 self.operations.register_undo_with_payload(
@@ -3886,6 +4042,7 @@ impl FikaApp {
                 self.refresh_affected_dirs(&result.affected_dirs);
                 let _ = self.panes.select_only(result.pane_id, renamed_path.clone());
                 self.finish_pane_operation(
+                    task_id,
                     result.pane_id,
                     format!("Renamed to {}", renamed_path.display()),
                 );
@@ -3894,6 +4051,7 @@ impl FikaApp {
             Err(err) => {
                 self.clear_pending_rename_next_for_pane(result.pane_id);
                 self.finish_pane_operation(
+                    task_id,
                     result.pane_id,
                     format!("Cannot rename {}: {err}", result.original_path.display()),
                 );
@@ -3908,10 +4066,6 @@ impl FikaApp {
         cx: &mut Context<Self>,
     ) {
         if self.chooser.is_some() {
-            return;
-        }
-        if self.operation_pending {
-            self.set_pane_status(pane_id, "File operation already running");
             return;
         }
         let Some(parent_dir) = self
@@ -3935,11 +4089,7 @@ impl FikaApp {
         if self.chooser.is_some() {
             return;
         }
-        if self.operation_pending {
-            self.set_pane_status(pane_id, "File operation already running");
-            return;
-        }
-        self.begin_pane_operation(
+        let task_id = self.begin_pane_operation(
             pane_id,
             format!("Creating {}", created_item_label(kind).to_ascii_lowercase()),
         );
@@ -3947,13 +4097,12 @@ impl FikaApp {
             move |this: gpui::WeakEntity<FikaApp>, cx: &mut gpui::AsyncApp| {
                 let mut cx = cx.clone();
                 async move {
-                    let result = cx
-                        .background_spawn(
-                            async move { create_item_result(pane_id, parent_dir, kind) },
-                        )
-                        .await;
+                    let result = run_operation_task(move || async move {
+                        create_item_result_async(pane_id, parent_dir, kind).await
+                    })
+                    .await;
                     let _ = this.update(&mut cx, |app, cx| {
-                        app.finish_create_item(result);
+                        app.finish_create_item(task_id, result);
                         cx.notify();
                     });
                 }
@@ -3962,7 +4111,7 @@ impl FikaApp {
         .detach();
     }
 
-    fn finish_create_item(&mut self, result: CreateItemResult) {
+    fn finish_create_item(&mut self, task_id: BackgroundTaskId, result: CreateItemResult) {
         match result.result {
             Ok(path) => {
                 self.operations.register_undo_with_payload(
@@ -3977,10 +4126,15 @@ impl FikaApp {
                 );
                 self.refresh_affected_dirs(&result.affected_dirs);
                 let _ = self.panes.select_only(result.pane_id, path.clone());
-                self.finish_pane_operation(result.pane_id, format!("Created {}", path.display()));
+                self.finish_pane_operation(
+                    task_id,
+                    result.pane_id,
+                    format!("Created {}", path.display()),
+                );
             }
             Err(err) => {
                 self.finish_pane_operation(
+                    task_id,
                     result.pane_id,
                     format!(
                         "Cannot create {}: {err}",
@@ -4094,10 +4248,6 @@ impl FikaApp {
         if self.chooser.is_some() {
             return;
         }
-        if self.operation_pending {
-            self.set_pane_status(pane_id, "File operation already running");
-            return;
-        }
         let Some(clipboard) = self.import_primary_selection(cx) else {
             self.set_pane_status(pane_id, "Nothing to paste from primary selection");
             return;
@@ -4112,10 +4262,6 @@ impl FikaApp {
         cx: &mut Context<Self>,
     ) {
         if self.chooser.is_some() {
-            return;
-        }
-        if self.operation_pending {
-            self.set_pane_status(pane_id, "File operation already running");
             return;
         }
         self.import_system_clipboard(cx);
@@ -4142,25 +4288,25 @@ impl FikaApp {
         }
 
         let progress_label = clipboard.progress_label();
-        self.begin_pane_operation(pane_id, progress_label.clone());
-        let (cancel, progress) = self.start_transfer_progress(pane_id, progress_label);
+        let task_id = self.begin_pane_operation(pane_id, progress_label.clone());
+        let (cancel, progress) = self.start_transfer_progress(task_id, progress_label);
         cx.spawn(
             move |this: gpui::WeakEntity<FikaApp>, cx: &mut gpui::AsyncApp| {
                 let mut cx = cx.clone();
                 async move {
-                    let result = cx
-                        .background_spawn(async move {
-                            paste_clipboard_result(
-                                pane_id,
-                                target_dir,
-                                clipboard,
-                                Some(cancel),
-                                Some(progress),
-                            )
-                        })
-                        .await;
+                    let result = run_operation_task(move || async move {
+                        paste_clipboard_result_async(
+                            pane_id,
+                            target_dir,
+                            clipboard,
+                            Some(cancel),
+                            Some(progress),
+                        )
+                        .await
+                    })
+                    .await;
                     let _ = this.update(&mut cx, |app, cx| {
-                        app.finish_transfer(result);
+                        app.finish_transfer(task_id, result);
                         cx.notify();
                     });
                 }
@@ -4360,11 +4506,6 @@ impl FikaApp {
             self.clear_drag_drop_targets();
             return;
         }
-        if self.operation_pending {
-            self.clear_drag_drop_targets();
-            self.set_pane_status(status_pane, "File operation already running");
-            return;
-        }
         if let Some(reason) = item_drop_reject_reason(&paths, &target_dir) {
             self.clear_drag_drop_targets();
             self.set_pane_status(status_pane, reason);
@@ -4536,13 +4677,6 @@ impl FikaApp {
         self.dismiss_context_menu();
         self.finish_rubber_band(status_pane);
 
-        if self.operation_pending {
-            self.clear_item_drag(&payload);
-            self.clear_drag_drop_targets();
-            self.set_pane_status(status_pane, "File operation already running");
-            return;
-        }
-
         let Some(paths) = self.take_active_item_drag_paths_for_drop(&payload, status_pane) else {
             return;
         };
@@ -4694,12 +4828,6 @@ impl FikaApp {
             self.clear_place_drop_target();
             return;
         }
-        if self.operation_pending {
-            self.clear_item_drag(&payload);
-            self.clear_drag_drop_targets();
-            self.set_pane_status(target_pane, "File operation already running");
-            return;
-        }
         let Some(paths) = self.take_active_item_drag_paths_for_drop(&payload, target_pane) else {
             return;
         };
@@ -4725,11 +4853,6 @@ impl FikaApp {
         if self.chooser.is_some() {
             self.clear_item_drop_target();
             self.clear_place_drop_target();
-            return;
-        }
-        if self.operation_pending {
-            self.clear_drag_drop_targets();
-            self.set_pane_status(target_pane, "File operation already running");
             return;
         }
         self.clear_place_drop_target();
@@ -4761,13 +4884,6 @@ impl FikaApp {
         self.panes.focus(target_pane);
         self.finish_rubber_band(target_pane);
         self.dismiss_context_menu();
-
-        if self.operation_pending {
-            self.clear_item_drag(&payload);
-            self.clear_drag_drop_targets();
-            self.set_pane_status(target_pane, "File operation already running");
-            return;
-        }
 
         let Some(paths) = self.take_active_item_drag_paths_for_drop(&payload, target_pane) else {
             return;
@@ -4818,10 +4934,6 @@ impl FikaApp {
         if self.chooser.is_some() {
             return;
         }
-        if self.operation_pending {
-            self.set_pane_status(pane_id, "File operation already running");
-            return;
-        }
         if let Some(reason) = item_drop_reject_reason(&paths, &target_dir) {
             self.set_pane_status(pane_id, reason);
             return;
@@ -4849,28 +4961,28 @@ impl FikaApp {
         }
 
         let progress_label = mode.progress_label(paths.len());
-        self.begin_pane_operation(pane_id, progress_label.clone());
-        let (cancel, progress) = self.start_transfer_progress(pane_id, progress_label);
+        let task_id = self.begin_pane_operation(pane_id, progress_label.clone());
+        let (cancel, progress) = self.start_transfer_progress(task_id, progress_label);
         cx.spawn(
             move |this: gpui::WeakEntity<FikaApp>, cx: &mut gpui::AsyncApp| {
                 let mut cx = cx.clone();
                 async move {
-                    let result = cx
-                        .background_spawn(async move {
-                            transfer_paths_result(
-                                pane_id,
-                                target_dir,
-                                mode,
-                                paths,
-                                mode.label(),
-                                false,
-                                Some(cancel),
-                                Some(progress),
-                            )
-                        })
-                        .await;
+                    let result = run_operation_task(move || async move {
+                        transfer_paths_result_async(
+                            pane_id,
+                            target_dir,
+                            mode,
+                            paths,
+                            mode.label(),
+                            false,
+                            Some(cancel),
+                            Some(progress),
+                        )
+                        .await
+                    })
+                    .await;
                     let _ = this.update(&mut cx, |app, cx| {
-                        app.finish_transfer(result);
+                        app.finish_transfer(task_id, result);
                         cx.notify();
                     });
                 }
@@ -4879,8 +4991,7 @@ impl FikaApp {
         .detach();
     }
 
-    fn finish_transfer(&mut self, result: TransferTaskResult) {
-        self.clear_operation_progress();
+    fn finish_transfer(&mut self, task_id: BackgroundTaskId, result: TransferTaskResult) {
         let TransferTaskResult {
             pane_id,
             mode,
@@ -4928,6 +5039,7 @@ impl FikaApp {
         }
 
         self.finish_pane_operation(
+            task_id,
             pane_id,
             action_status(&format!("{label} complete"), success_count, failure_count),
         );
@@ -4937,17 +5049,13 @@ impl FikaApp {
         if self.chooser.is_some() {
             return;
         }
-        if self.operation_pending {
-            self.set_pane_status(pane_id, "File operation already running");
-            return;
-        }
         let selected_paths = self.panes.selected_paths(pane_id).unwrap_or_default();
         if selected_paths.is_empty() {
             self.set_pane_status(pane_id, "No selection to trash");
             return;
         }
 
-        self.begin_pane_operation(
+        let task_id = self.begin_pane_operation(
             pane_id,
             format!("Moving {} item(s) to trash", selected_paths.len()),
         );
@@ -4955,13 +5063,12 @@ impl FikaApp {
             move |this: gpui::WeakEntity<FikaApp>, cx: &mut gpui::AsyncApp| {
                 let mut cx = cx.clone();
                 async move {
-                    let result = cx
-                        .background_spawn(
-                            async move { trash_selection_result(pane_id, selected_paths) },
-                        )
-                        .await;
+                    let result = run_operation_task(move || async move {
+                        trash_selection_result_async(pane_id, selected_paths).await
+                    })
+                    .await;
                     let _ = this.update(&mut cx, |app, cx| {
-                        app.finish_trash_selection(result);
+                        app.finish_trash_selection(task_id, result);
                         cx.notify();
                     });
                 }
@@ -4970,7 +5077,7 @@ impl FikaApp {
         .detach();
     }
 
-    fn finish_trash_selection(&mut self, result: TrashSelectionResult) {
+    fn finish_trash_selection(&mut self, task_id: BackgroundTaskId, result: TrashSelectionResult) {
         if result.success_count > 0 {
             self.operations.register_undo_with_payload(
                 "Move to Trash".to_string(),
@@ -4985,6 +5092,7 @@ impl FikaApp {
         }
 
         self.finish_pane_operation(
+            task_id,
             result.pane_id,
             action_status("Moved to trash", result.success_count, result.failure_count),
         );
@@ -5020,10 +5128,6 @@ impl FikaApp {
         if self.chooser.is_some() {
             return;
         }
-        if self.operation_pending {
-            self.set_pane_status(pane_id, "File operation already running");
-            return;
-        }
         if !self.trash_view_state(pane_id).0 {
             self.set_pane_status(pane_id, "Trash action is only available in Trash");
             return;
@@ -5038,10 +5142,6 @@ impl FikaApp {
 
     fn empty_trash(&mut self, pane_id: PaneId, cx: &mut Context<Self>) {
         if self.chooser.is_some() {
-            return;
-        }
-        if self.operation_pending {
-            self.set_pane_status(pane_id, "File operation already running");
             return;
         }
         let (trash_view, trash_has_items) = self.trash_view_state(pane_id);
@@ -5060,10 +5160,6 @@ impl FikaApp {
         if self.chooser.is_some() {
             return;
         }
-        if self.operation_pending {
-            self.set_pane_status(pane_id, "File operation already running");
-            return;
-        }
         if !self.trash_has_items {
             self.set_pane_status(pane_id, "Trash is empty");
             return;
@@ -5078,18 +5174,17 @@ impl FikaApp {
         paths: Vec<PathBuf>,
         cx: &mut Context<Self>,
     ) {
-        self.begin_pane_operation(pane_id, operation.progress_label(paths.len()));
+        let task_id = self.begin_pane_operation(pane_id, operation.progress_label(paths.len()));
         cx.spawn(
             move |this: gpui::WeakEntity<FikaApp>, cx: &mut gpui::AsyncApp| {
                 let mut cx = cx.clone();
                 async move {
-                    let result = cx
-                        .background_spawn(async move {
-                            trash_view_operation_result(pane_id, operation, paths)
-                        })
-                        .await;
+                    let result = run_operation_task(move || async move {
+                        trash_view_operation_result_async(pane_id, operation, paths).await
+                    })
+                    .await;
                     let _ = this.update(&mut cx, |app, cx| {
-                        app.finish_trash_view_operation(result);
+                        app.finish_trash_view_operation(task_id, result);
                         cx.notify();
                     });
                 }
@@ -5098,7 +5193,11 @@ impl FikaApp {
         .detach();
     }
 
-    fn finish_trash_view_operation(&mut self, result: TrashViewOperationResult) {
+    fn finish_trash_view_operation(
+        &mut self,
+        task_id: BackgroundTaskId,
+        result: TrashViewOperationResult,
+    ) {
         if result.success_count > 0 {
             self.refresh_affected_dirs(&result.affected_dirs);
             self.rubber_band_selection_panes.remove(&result.pane_id);
@@ -5113,6 +5212,7 @@ impl FikaApp {
         }
         let failure_count = result.failure_count + restore_conflict_count;
         self.finish_pane_operation(
+            task_id,
             result.pane_id,
             action_status(
                 result.operation.completed_label(),
@@ -5124,10 +5224,6 @@ impl FikaApp {
 
     fn undo_latest(&mut self, pane_id: PaneId, cx: &mut Context<Self>) {
         if self.chooser.is_some() {
-            return;
-        }
-        if self.operation_pending {
-            self.set_pane_status(pane_id, "File operation already running");
             return;
         }
         let Some(record) = self.operations.latest_undo().cloned() else {
@@ -5146,16 +5242,17 @@ impl FikaApp {
             }
         }
 
-        self.begin_pane_operation(pane_id, format!("Undoing {}", record.label));
+        let task_id = self.begin_pane_operation(pane_id, format!("Undoing {}", record.label));
         cx.spawn(
             move |this: gpui::WeakEntity<FikaApp>, cx: &mut gpui::AsyncApp| {
                 let mut cx = cx.clone();
                 async move {
-                    let result = cx
-                        .background_spawn(async move { undo_record_result(record) })
-                        .await;
+                    let result = run_operation_task(move || async move {
+                        undo_record_result_async(record).await
+                    })
+                    .await;
                     let _ = this.update(&mut cx, |app, cx| {
-                        app.finish_undo(pane_id, result);
+                        app.finish_undo(task_id, pane_id, result);
                         cx.notify();
                     });
                 }
@@ -5164,7 +5261,7 @@ impl FikaApp {
         .detach();
     }
 
-    fn finish_undo(&mut self, pane_id: PaneId, result: UndoTaskResult) {
+    fn finish_undo(&mut self, task_id: BackgroundTaskId, pane_id: PaneId, result: UndoTaskResult) {
         match result.result {
             Ok(message) => {
                 if self
@@ -5172,17 +5269,19 @@ impl FikaApp {
                     .take_latest_undo(result.record.serial)
                     .is_none()
                 {
-                    self.finish_pane_operation(pane_id, "Undo result is stale");
+                    self.finish_pane_operation(task_id, pane_id, "Undo result is stale");
                     return;
                 }
                 self.refresh_affected_dirs(&result.record.affected_dirs);
                 self.finish_pane_operation(
+                    task_id,
                     pane_id,
                     format!("Undid {}: {message}", result.record.label),
                 );
             }
             Err(err) => {
                 self.finish_pane_operation(
+                    task_id,
                     pane_id,
                     format!("Cannot undo {}: {err}", result.record.label),
                 );
@@ -5532,10 +5631,6 @@ impl FikaApp {
     ) {
         if conflicts.is_empty() {
             self.dismiss_trash_conflict_dialog();
-            return;
-        }
-        if self.operation_pending {
-            self.set_pane_status(pane_id, "File operation already running");
             return;
         }
         if self.panes.pane(pane_id).is_none() {
@@ -6270,10 +6365,6 @@ impl FikaApp {
     }
 
     fn open_path_in_new_window(&mut self, pane_id: PaneId, path: PathBuf, cx: &mut Context<Self>) {
-        if self.operation_pending {
-            self.set_pane_status(pane_id, "File operation already running");
-            return;
-        }
         let plan = match self.new_window_launch_plan(&path) {
             Ok(plan) => plan,
             Err(err) => {
@@ -6281,7 +6372,7 @@ impl FikaApp {
                 return;
             }
         };
-        self.begin_pane_operation(
+        let task_id = self.begin_pane_operation(
             pane_id,
             format!("Opening new window for {}", path.display()),
         );
@@ -6291,11 +6382,14 @@ impl FikaApp {
                 async move {
                     let result = launch_with_systemd_user(plan).await;
                     let _ = this.update(&mut cx, |app, cx| {
-                        app.finish_open_in_new_window(NewWindowLaunchResult {
-                            pane_id,
-                            path,
-                            result,
-                        });
+                        app.finish_open_in_new_window(
+                            task_id,
+                            NewWindowLaunchResult {
+                                pane_id,
+                                path,
+                                result,
+                            },
+                        );
                         cx.notify();
                     });
                 }
@@ -6311,10 +6405,6 @@ impl FikaApp {
         path: PathBuf,
         cx: &mut Context<Self>,
     ) {
-        if self.operation_pending {
-            self.set_pane_status(pane_id, "File operation already running");
-            return;
-        }
         let plan = match self.open_with_launch_plan(desktop_id, &path) {
             Ok(plan) => plan,
             Err(message) => {
@@ -6324,7 +6414,7 @@ impl FikaApp {
         };
         let app_name = plan.app_name.clone();
         let _ = self.panes.select_only(pane_id, path.clone());
-        self.begin_pane_operation(
+        let task_id = self.begin_pane_operation(
             pane_id,
             format!("Opening {} with {}", path.display(), app_name),
         );
@@ -6334,12 +6424,15 @@ impl FikaApp {
                 async move {
                     let result = launch_with_systemd_user(plan).await;
                     let _ = this.update(&mut cx, |app, cx| {
-                        app.finish_open_with_application(OpenWithLaunchResult {
-                            pane_id,
-                            path,
-                            app_name,
-                            result,
-                        });
+                        app.finish_open_with_application(
+                            task_id,
+                            OpenWithLaunchResult {
+                                pane_id,
+                                path,
+                                app_name,
+                                result,
+                            },
+                        );
                         cx.notify();
                     });
                 }
@@ -6365,10 +6458,6 @@ impl FikaApp {
         paths: Vec<PathBuf>,
         cx: &mut Context<Self>,
     ) {
-        if self.operation_pending {
-            self.set_pane_status(pane_id, "File operation already running");
-            return;
-        }
         if paths.is_empty() {
             self.set_pane_status(pane_id, "No item selected");
             return;
@@ -6382,7 +6471,7 @@ impl FikaApp {
         };
         let app_name = plan.app_name.clone();
         let target_label = service_menu_target_label(&paths);
-        self.begin_pane_operation(
+        let task_id = self.begin_pane_operation(
             pane_id,
             format!("Running {} for {}", app_name, target_label),
         );
@@ -6392,12 +6481,15 @@ impl FikaApp {
                 async move {
                     let result = launch_with_systemd_user(plan).await;
                     let _ = this.update(&mut cx, |app, cx| {
-                        app.finish_service_menu_action(ServiceMenuLaunchResult {
-                            pane_id,
-                            target_label,
-                            app_name,
-                            result,
-                        });
+                        app.finish_service_menu_action(
+                            task_id,
+                            ServiceMenuLaunchResult {
+                                pane_id,
+                                target_label,
+                                app_name,
+                                result,
+                            },
+                        );
                         cx.notify();
                     });
                 }
@@ -6412,10 +6504,6 @@ impl FikaApp {
         paths: Vec<PathBuf>,
         cx: &mut Context<Self>,
     ) {
-        if self.operation_pending {
-            self.set_pane_status(pane_id, "File operation already running");
-            return;
-        }
         let plan = match ark_compress_launch_plan(&paths) {
             Ok(plan) => plan,
             Err(message) => {
@@ -6425,7 +6513,7 @@ impl FikaApp {
         };
         let app_name = plan.app_name.clone();
         let target_label = service_menu_target_label(&paths);
-        self.begin_pane_operation(
+        let task_id = self.begin_pane_operation(
             pane_id,
             format!("Running {} for {}", app_name, target_label),
         );
@@ -6435,12 +6523,15 @@ impl FikaApp {
                 async move {
                     let result = launch_with_systemd_user(plan).await;
                     let _ = this.update(&mut cx, |app, cx| {
-                        app.finish_service_menu_action(ServiceMenuLaunchResult {
-                            pane_id,
-                            target_label,
-                            app_name,
-                            result,
-                        });
+                        app.finish_service_menu_action(
+                            task_id,
+                            ServiceMenuLaunchResult {
+                                pane_id,
+                                target_label,
+                                app_name,
+                                result,
+                            },
+                        );
                         cx.notify();
                     });
                 }
@@ -6474,10 +6565,6 @@ impl FikaApp {
         dialog: bool,
         cx: &mut Context<Self>,
     ) {
-        if self.operation_pending {
-            self.set_pane_status(pane_id, "File operation already running");
-            return;
-        }
         let plan = match if dialog {
             ark_extract_to_launch_plan(&archive)
         } else {
@@ -6491,7 +6578,7 @@ impl FikaApp {
         };
         let app_name = plan.app_name.clone();
         let target_label = archive.display().to_string();
-        self.begin_pane_operation(
+        let task_id = self.begin_pane_operation(
             pane_id,
             format!("Running {} for {}", app_name, target_label),
         );
@@ -6501,12 +6588,15 @@ impl FikaApp {
                 async move {
                     let result = launch_with_systemd_user(plan).await;
                     let _ = this.update(&mut cx, |app, cx| {
-                        app.finish_service_menu_action(ServiceMenuLaunchResult {
-                            pane_id,
-                            target_label,
-                            app_name,
-                            result,
-                        });
+                        app.finish_service_menu_action(
+                            task_id,
+                            ServiceMenuLaunchResult {
+                                pane_id,
+                                target_label,
+                                app_name,
+                                result,
+                            },
+                        );
                         cx.notify();
                     });
                 }
@@ -6515,16 +6605,28 @@ impl FikaApp {
         .detach();
     }
 
-    fn finish_open_with_application(&mut self, result: OpenWithLaunchResult) {
-        self.finish_pane_operation(result.pane_id, result.status_message());
+    fn finish_open_with_application(
+        &mut self,
+        task_id: BackgroundTaskId,
+        result: OpenWithLaunchResult,
+    ) {
+        self.finish_pane_operation(task_id, result.pane_id, result.status_message());
     }
 
-    fn finish_open_in_new_window(&mut self, result: NewWindowLaunchResult) {
-        self.finish_pane_operation(result.pane_id, result.status_message());
+    fn finish_open_in_new_window(
+        &mut self,
+        task_id: BackgroundTaskId,
+        result: NewWindowLaunchResult,
+    ) {
+        self.finish_pane_operation(task_id, result.pane_id, result.status_message());
     }
 
-    fn finish_service_menu_action(&mut self, result: ServiceMenuLaunchResult) {
-        self.finish_pane_operation(result.pane_id, result.status_message());
+    fn finish_service_menu_action(
+        &mut self,
+        task_id: BackgroundTaskId,
+        result: ServiceMenuLaunchResult,
+    ) {
+        self.finish_pane_operation(task_id, result.pane_id, result.status_message());
     }
 
     fn handle_keystroke(&mut self, event: &gpui::KeystrokeEvent, cx: &mut Context<Self>) -> bool {
@@ -6891,6 +6993,7 @@ impl Render for FikaApp {
         window.set_window_title(title);
         let viewport_size = window.viewport_size();
         let places = self.place_snapshots();
+        let background_tasks = self.background_tasks_snapshot(Instant::now());
         let snapshots = self.snapshots(cx);
         let file_grid_mode =
             self.chooser
@@ -7019,7 +7122,12 @@ impl Render for FikaApp {
                     .flex_1()
                     .min_w_0()
                     .overflow_hidden()
-                    .child(ui::places::places_sidebar(places, window, cx))
+                    .child(ui::places::places_sidebar(
+                        places,
+                        background_tasks,
+                        window,
+                        cx,
+                    ))
                     .child(
                         div()
                             .flex()
@@ -9018,43 +9126,49 @@ text/plain=viewer.desktop;\n",
     fn open_with_application_finish_reports_systemd_result_to_pane() {
         let mut app = test_app_with_entries("/tmp/fika-open-with-finish", &["note.txt"]);
         let pane_id = app.panes.focused().unwrap();
-        app.begin_pane_operation(pane_id, "Opening");
+        let task_id = app.begin_pane_operation(pane_id, "Opening");
 
-        app.finish_open_with_application(OpenWithLaunchResult {
-            pane_id,
-            path: PathBuf::from("/tmp/fika-open-with-finish/note.txt"),
-            app_name: "Viewer".to_string(),
-            result: Ok(SystemdLaunchResult {
-                units: vec!["fika-open-with-viewer-0.service".to_string()],
-            }),
-        });
+        app.finish_open_with_application(
+            task_id,
+            OpenWithLaunchResult {
+                pane_id,
+                path: PathBuf::from("/tmp/fika-open-with-finish/note.txt"),
+                app_name: "Viewer".to_string(),
+                result: Ok(SystemdLaunchResult {
+                    units: vec!["fika-open-with-viewer-0.service".to_string()],
+                }),
+            },
+        );
 
         assert_eq!(
             app.status_message_for_pane(pane_id),
             "Opened /tmp/fika-open-with-finish/note.txt with Viewer via 1 systemd unit(s)"
         );
-        assert!(!app.operation_pending);
+        assert!(app.active_background_tasks.is_empty());
     }
 
     #[test]
     fn open_in_new_window_finish_reports_systemd_result_to_pane() {
         let mut app = test_app_with_entries("/tmp/fika-new-window-finish", &[]);
         let pane_id = app.panes.focused().unwrap();
-        app.begin_pane_operation(pane_id, "Opening new window");
+        let task_id = app.begin_pane_operation(pane_id, "Opening new window");
 
-        app.finish_open_in_new_window(NewWindowLaunchResult {
-            pane_id,
-            path: PathBuf::from("/tmp/fika-new-window-finish"),
-            result: Ok(SystemdLaunchResult {
-                units: vec!["fika-open-with-fika-new-window-0.service".to_string()],
-            }),
-        });
+        app.finish_open_in_new_window(
+            task_id,
+            NewWindowLaunchResult {
+                pane_id,
+                path: PathBuf::from("/tmp/fika-new-window-finish"),
+                result: Ok(SystemdLaunchResult {
+                    units: vec!["fika-open-with-fika-new-window-0.service".to_string()],
+                }),
+            },
+        );
 
         assert_eq!(
             app.status_message_for_pane(pane_id),
             "Opened /tmp/fika-new-window-finish in new window via 1 systemd unit(s)"
         );
-        assert!(!app.operation_pending);
+        assert!(app.active_background_tasks.is_empty());
     }
 
     #[test]
@@ -11103,17 +11217,21 @@ text/plain=viewer.desktop;\n",
             original_path: PathBuf::from("/tmp/fika-original.txt"),
             trash_path: PathBuf::from("/tmp/fika-trash/files/fika-original.txt"),
         };
+        let task_id = app.begin_pane_operation(pane_id, "Restoring from trash");
 
-        app.finish_trash_view_operation(TrashViewOperationResult {
-            pane_id,
-            operation: TrashViewOperation::Restore {
-                conflict_policy: file_ops::TrashRestoreConflictPolicy::Skip,
+        app.finish_trash_view_operation(
+            task_id,
+            TrashViewOperationResult {
+                pane_id,
+                operation: TrashViewOperation::Restore {
+                    conflict_policy: file_ops::TrashRestoreConflictPolicy::Skip,
+                },
+                success_count: 0,
+                failure_count: 0,
+                affected_dirs: Vec::new(),
+                restore_conflicts: vec![conflict.clone()],
             },
-            success_count: 0,
-            failure_count: 0,
-            affected_dirs: Vec::new(),
-            restore_conflicts: vec![conflict.clone()],
-        });
+        );
 
         let dialog = app.trash_conflict_dialog.as_ref().unwrap();
         assert_eq!(dialog.pane_id, pane_id);
@@ -11357,27 +11475,141 @@ text/plain=viewer.desktop;\n",
         let first = app.panes.focused().unwrap();
         let second = app.panes.split(first).unwrap();
 
-        app.begin_pane_operation(first, "Copying");
-        let (_cancel, progress) = app.start_transfer_progress(first, "Copy".to_string());
+        let task_id = app.begin_pane_operation(first, "Copying");
+        let (_cancel, progress) = app.start_transfer_progress(task_id, "Copy".to_string());
         {
             let mut progress = progress.lock().unwrap();
             progress.bytes_done = 40;
             progress.bytes_total = 100;
         }
-        let now = app.operation_progress.as_ref().unwrap().started_at + PROGRESS_DISPLAY_DELAY;
+        let now = app.active_background_tasks[&task_id]
+            .progress
+            .as_ref()
+            .unwrap()
+            .started_at
+            + PROGRESS_DISPLAY_DELAY;
 
         let snapshot = app
             .operation_progress_snapshot_for_pane(first, now)
             .unwrap();
+        let task = app
+            .background_task_snapshots(now)
+            .into_iter()
+            .next()
+            .unwrap();
 
-        assert_eq!(app.status_message_for_pane(first), "Copying");
+        assert_eq!(app.status_message_for_pane(first), "Ready");
         assert_eq!(snapshot.label, "Copy");
         assert_eq!(snapshot.percent, Some(40));
         assert!(snapshot.cancellable);
+        assert_eq!(task.title, "Copy");
+        assert_eq!(task.percent, Some(40));
+        assert!(task.cancellable);
         assert!(
             app.operation_progress_snapshot_for_pane(second, now)
                 .is_none()
         );
+    }
+
+    #[test]
+    fn background_tasks_snapshot_lists_multiple_active_tasks_by_id() {
+        let mut app = test_app_with_entries("/tmp/fika-background-task-multi", &["one.txt"]);
+        let first = app.panes.focused().unwrap();
+        let second = app.panes.split(first).unwrap();
+
+        let first_task = app.begin_pane_operation(first, "Copying 1 item(s)");
+        let second_task = app.begin_pane_operation(second, "Moving 2 item(s)");
+
+        let snapshot = app.background_tasks_snapshot(Instant::now()).unwrap();
+        assert_eq!(snapshot.active.len(), 2);
+        assert_eq!(snapshot.active[0].id, first_task);
+        assert_eq!(snapshot.active[0].pane_id, first);
+        assert_eq!(snapshot.active[0].title, "Copying 1 item(s)");
+        assert_eq!(snapshot.active[1].id, second_task);
+        assert_eq!(snapshot.active[1].pane_id, second);
+        assert_eq!(snapshot.active[1].title, "Moving 2 item(s)");
+
+        app.finish_pane_operation(first_task, first, "Copied: 1 item(s)");
+        let snapshot = app.background_tasks_snapshot(Instant::now()).unwrap();
+        assert_eq!(snapshot.active.len(), 1);
+        assert_eq!(snapshot.active[0].id, second_task);
+        assert_eq!(snapshot.history.len(), 1);
+        assert_eq!(snapshot.history[0].title, "Copying 1 item(s)");
+    }
+
+    #[test]
+    fn background_task_cancel_targets_only_selected_task() {
+        let mut app = test_app_with_entries("/tmp/fika-background-task-cancel", &["one.txt"]);
+        let pane_id = app.panes.focused().unwrap();
+
+        let first_task = app.begin_pane_operation(pane_id, "Copying 1 item(s)");
+        let second_task = app.begin_pane_operation(pane_id, "Moving 2 item(s)");
+        let (first_cancel, _first_progress) =
+            app.start_transfer_progress(first_task, "Copying 1 item(s)".to_string());
+        let (second_cancel, _second_progress) =
+            app.start_transfer_progress(second_task, "Moving 2 item(s)".to_string());
+
+        app.cancel_background_operation(second_task);
+
+        assert!(!first_cancel.load(Ordering::Relaxed));
+        assert!(second_cancel.load(Ordering::Relaxed));
+        assert_eq!(
+            app.active_background_tasks[&second_task].message,
+            "Cancelling Moving 2 item(s)"
+        );
+    }
+
+    #[test]
+    fn finished_background_tasks_enter_sidebar_history() {
+        let mut app = test_app_with_entries("/tmp/fika-background-task-history", &["one.txt"]);
+        let pane_id = app.panes.focused().unwrap();
+
+        let task_id = app.begin_pane_operation(pane_id, "Copying 1 item(s)");
+        app.finish_pane_operation(task_id, pane_id, "Copied: 1 item(s)");
+
+        let snapshot = app.background_tasks_snapshot(Instant::now()).unwrap();
+        assert!(snapshot.active.is_empty());
+        assert!(!snapshot.expanded);
+        assert_eq!(snapshot.history.len(), 1);
+        assert_eq!(snapshot.history[0].title, "Copying 1 item(s)");
+        assert_eq!(snapshot.history[0].detail, "Copied: 1 item(s)");
+        assert_eq!(snapshot.history[0].state, BackgroundTaskState::Complete);
+
+        app.toggle_background_tasks_details();
+        assert!(
+            app.background_tasks_snapshot(Instant::now())
+                .unwrap()
+                .expanded
+        );
+
+        app.clear_background_task_history();
+        assert!(app.background_tasks_snapshot(Instant::now()).is_none());
+        assert!(!app.background_tasks_expanded);
+    }
+
+    #[test]
+    fn background_task_history_marks_failures_and_caps_recent_items() {
+        let mut app = test_app_with_entries("/tmp/fika-background-task-history-cap", &["one.txt"]);
+        let pane_id = app.panes.focused().unwrap();
+
+        let task_id = app.begin_pane_operation(pane_id, "Copying broken item");
+        app.finish_pane_operation(task_id, pane_id, "Copy failed for 1 item(s)");
+        assert_eq!(
+            app.background_task_history[0].state,
+            BackgroundTaskState::Failed
+        );
+
+        for index in 0..(BACKGROUND_TASK_HISTORY_LIMIT + 2) {
+            let task_id = app.begin_pane_operation(pane_id, format!("Task {index}"));
+            app.finish_pane_operation(task_id, pane_id, format!("Task {index}: done"));
+        }
+
+        assert_eq!(
+            app.background_task_history.len(),
+            BACKGROUND_TASK_HISTORY_LIMIT
+        );
+        assert_eq!(app.background_task_history[0].title, "Task 9");
+        assert_eq!(app.background_task_history[7].title, "Task 2");
     }
 
     #[test]
@@ -13554,9 +13786,10 @@ text/plain=viewer.desktop;\n",
             trash_conflict_dialog: None,
             application_chooser: None,
             pane_statuses: HashMap::new(),
-            operation_pending: false,
-            operation_pane: None,
-            operation_progress: None,
+            next_background_task_id: 0,
+            active_background_tasks: BTreeMap::new(),
+            background_tasks_expanded: false,
+            background_task_history: VecDeque::new(),
         }
     }
 

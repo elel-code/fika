@@ -2,6 +2,7 @@ use super::{
     CreateUndoItem, CreatedItemKind, TransferUndoItem, TrashUndoItem, UndoPayload, UndoRecord,
 };
 use crate::core::file_ops;
+use crate::core::operation_runtime::run_operation_blocking;
 use crate::core::pane::PaneId;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -146,6 +147,14 @@ pub fn rename_item_result(
     }
 }
 
+pub async fn rename_item_result_async(
+    pane_id: PaneId,
+    original_path: PathBuf,
+    new_name: String,
+) -> RenameItemResult {
+    run_operation_blocking(move || rename_item_result(pane_id, original_path, new_name)).await
+}
+
 pub fn create_item_result(
     pane_id: PaneId,
     parent_dir: PathBuf,
@@ -165,6 +174,14 @@ pub fn create_item_result(
         affected_dirs: vec![parent_dir],
         result,
     }
+}
+
+pub async fn create_item_result_async(
+    pane_id: PaneId,
+    parent_dir: PathBuf,
+    kind: CreatedItemKind,
+) -> CreateItemResult {
+    run_operation_blocking(move || create_item_result(pane_id, parent_dir, kind)).await
 }
 
 pub fn default_created_item_name(kind: CreatedItemKind) -> &'static str {
@@ -214,6 +231,14 @@ pub fn paste_text_result(pane_id: PaneId, target_dir: PathBuf, text: &str) -> Tr
         undo_items: Vec::new(),
         created_items,
     }
+}
+
+pub async fn paste_text_result_async(
+    pane_id: PaneId,
+    target_dir: PathBuf,
+    text: String,
+) -> TransferTaskResult {
+    run_operation_blocking(move || paste_text_result(pane_id, target_dir, &text)).await
 }
 
 pub fn transfer_paths_result(
@@ -296,6 +321,88 @@ pub fn transfer_paths_result(
     }
 }
 
+pub async fn transfer_paths_result_async(
+    pane_id: PaneId,
+    target_dir: PathBuf,
+    mode: FileTransferMode,
+    paths: Vec<PathBuf>,
+    label: &'static str,
+    clear_clipboard: bool,
+    cancel: Option<Arc<AtomicBool>>,
+    progress: Option<Arc<Mutex<file_ops::TransferProgress>>>,
+) -> TransferTaskResult {
+    let operation = mode.operation();
+    let mut success_count = 0;
+    let mut failure_count = 0;
+    let mut affected_dirs = Vec::new();
+    let mut refresh_dirs = Vec::new();
+    let mut undo_items = Vec::new();
+
+    for source in paths {
+        if cancel
+            .as_ref()
+            .is_some_and(|cancel| cancel.load(Ordering::Relaxed))
+        {
+            failure_count += 1;
+            continue;
+        }
+        let progress = progress.clone();
+        match file_ops::perform_transfer_with_progress_outcome_async(
+            operation,
+            &source,
+            &target_dir,
+            "keep-both",
+            cancel.clone(),
+            move |transfer_progress| {
+                if let Some(progress) = &progress
+                    && let Ok(mut progress) = progress.lock()
+                {
+                    *progress = transfer_progress;
+                }
+            },
+        )
+        .await
+        {
+            Ok(outcome) => {
+                success_count += 1;
+                push_unique_path(&mut affected_dirs, target_dir.clone());
+                push_unique_path(&mut refresh_dirs, target_dir.clone());
+                if mode == FileTransferMode::Move
+                    && let Some(parent) = source
+                        .parent()
+                        .filter(|parent| !parent.as_os_str().is_empty())
+                {
+                    push_unique_path(&mut affected_dirs, parent.to_path_buf());
+                    push_unique_path(&mut refresh_dirs, parent.to_path_buf());
+                }
+                undo_items.push(TransferUndoItem {
+                    operation: operation.to_string(),
+                    original_source: source,
+                    destination: outcome.destination,
+                    overwritten_backup: outcome.overwritten_backup,
+                });
+            }
+            Err(_) => {
+                failure_count += 1;
+                push_unique_path(&mut refresh_dirs, target_dir.clone());
+            }
+        }
+    }
+
+    TransferTaskResult {
+        pane_id,
+        mode,
+        label,
+        clear_clipboard,
+        success_count,
+        failure_count,
+        affected_dirs,
+        refresh_dirs,
+        undo_items,
+        created_items: Vec::new(),
+    }
+}
+
 pub fn trash_selection_result(
     pane_id: PaneId,
     selected_paths: Vec<PathBuf>,
@@ -328,6 +435,13 @@ pub fn trash_selection_result(
         affected_dirs,
         undo_items,
     }
+}
+
+pub async fn trash_selection_result_async(
+    pane_id: PaneId,
+    selected_paths: Vec<PathBuf>,
+) -> TrashSelectionResult {
+    run_operation_blocking(move || trash_selection_result(pane_id, selected_paths)).await
 }
 
 pub fn trash_view_operation_result(
@@ -369,6 +483,14 @@ pub fn trash_view_operation_result(
         affected_dirs,
         restore_conflicts,
     }
+}
+
+pub async fn trash_view_operation_result_async(
+    pane_id: PaneId,
+    operation: TrashViewOperation,
+    paths: Vec<PathBuf>,
+) -> TrashViewOperationResult {
+    run_operation_blocking(move || trash_view_operation_result(pane_id, operation, paths)).await
 }
 
 pub fn undo_record_result(record: UndoRecord) -> UndoTaskResult {
@@ -437,6 +559,10 @@ pub fn undo_record_result(record: UndoRecord) -> UndoTaskResult {
         UndoPayload::None => Err(format!("no undo action for {}", record.label)),
     };
     UndoTaskResult { record, result }
+}
+
+pub async fn undo_record_result_async(record: UndoRecord) -> UndoTaskResult {
+    run_operation_blocking(move || undo_record_result(record)).await
 }
 
 pub fn parent_dirs(paths: impl IntoIterator<Item = PathBuf>) -> Vec<PathBuf> {
@@ -691,6 +817,48 @@ mod tests {
         let progress = *progress.lock().unwrap();
         assert_eq!(progress.bytes_total, 32 * 1024);
         assert_eq!(progress.bytes_done, 32 * 1024);
+        let _ = std::fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn transfer_paths_result_async_copies_item_with_compio_progress() {
+        let temp = test_dir("transfer-async-progress");
+        let source_dir = temp.join("source");
+        let target_dir = temp.join("target");
+        std::fs::create_dir_all(&source_dir).unwrap();
+        std::fs::create_dir_all(&target_dir).unwrap();
+        let source = source_dir.join("note.bin");
+        std::fs::write(&source, vec![7_u8; 96 * 1024]).unwrap();
+        let progress = Arc::new(Mutex::new(file_ops::TransferProgress::default()));
+
+        let result =
+            futures_lite::future::block_on(crate::core::operation_runtime::run_operation_task({
+                let target_dir = target_dir.clone();
+                let source = source.clone();
+                let progress = Arc::clone(&progress);
+                move || async move {
+                    transfer_paths_result_async(
+                        PaneId(21),
+                        target_dir,
+                        FileTransferMode::Copy,
+                        vec![source],
+                        "Copy",
+                        false,
+                        None,
+                        Some(progress),
+                    )
+                    .await
+                }
+            }));
+
+        assert_eq!(result.success_count, 1);
+        assert_eq!(
+            std::fs::read(target_dir.join("note.bin")).unwrap(),
+            vec![7_u8; 96 * 1024]
+        );
+        let progress = *progress.lock().unwrap();
+        assert_eq!(progress.bytes_total, 96 * 1024);
+        assert_eq!(progress.bytes_done, 96 * 1024);
         let _ = std::fs::remove_dir_all(temp);
     }
 
