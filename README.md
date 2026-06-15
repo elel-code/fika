@@ -38,6 +38,8 @@ The current cutover build contains:
 - Location resolution: `~` expansion, absolute/relative paths, breadcrumb
   segments, filesystem tab-completion.
 - MIME type detection via shared-mime-info globs, suffixes, and magic bytes.
+  File icons resolved via Dolphin-aligned extension-based fallback chain
+  (`text-x-{ext}` → `text-x-generic` → `unknown`) for no-flicker first frame.
 - Application launcher: `.desktop` parser, `mimeapps.list` Default/Added/Removed
   associations, `XDG_DATA_DIRS` application cache, systemd user transient unit
   launch.
@@ -52,7 +54,8 @@ The current cutover build contains:
 - Trash: `$XDG_DATA_HOME/Trash` metadata read, restore, delete-permanently,
   empty, sort by deletion time.
 - Thumbnails: freedesktop thumbnail URI, cache key, cache hit, failure marker,
-  `EntryData` path role.
+  `EntryData` path role. Synchronous freedesktop cache probe for first-frame
+  display; Dolphin-style visible-first scheduling with read-ahead.
 - GIO/GVfs device discovery: mount/volume monitor snapshots, removable devices
   section, mount/unmount/eject operations.
 - Network/GVfs remote filesystem classification and Places Network root.
@@ -60,7 +63,10 @@ The current cutover build contains:
   owned proxy creation, structured `BusError`.
 - COSMIC-style operation runtime: a Tokio multi-thread context plus a dedicated
   Compio operation thread, bounded task submission, and Compio blocking
-  fallback for synchronous file-operation pieces.
+  fallback for synchronous file-operation pieces. `OperationId` identity,
+  `Operation` enum (Transfer/Trash/Rename/Create/Undo), `OperationController`
+  with cancel/pause/progress, and `BTreeMap<OperationId, OperationHandle>`
+  runtime-level tracking.
 
 ### UI (GPUI)
 
@@ -357,6 +363,7 @@ FileChooser backend, opt in through `xdg-desktop-portal` configuration. See
 - [docs/STATUS_BAR_REFERENCE.md](docs/STATUS_BAR_REFERENCE.md) — Dolphin `DolphinStatusBar` info display and zoom slider.
 - [docs/SMOOTH_SCROLL_REFERENCE.md](docs/SMOOTH_SCROLL_REFERENCE.md) — Dolphin `QScroller` smooth/kinetic scrolling.
 - [docs/SEARCH_REFERENCE.md](docs/SEARCH_REFERENCE.md) — Dolphin search box and KIO search integration.
+- [docs/ICON_THUMBNAIL_PERFORMANCE_ANALYSIS.md](docs/ICON_THUMBNAIL_PERFORMANCE_ANALYSIS.md) — Icon/thumbnail loading performance analysis and Dolphin alignment.
 
 ### Interaction Reference
 

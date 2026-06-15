@@ -111,15 +111,15 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
 
 ### 双运行时对齐（COSMIC Files）
 
-Fika 的 `operation_runtime.rs` 在 Tokio+Compio 线程边界层面对齐 COSMIC Files，
-但在操作抽象层差距很大。详见 `docs/OPERATION_RUNTIME_REFERENCE.md`。
+Fika 的 `operation_runtime.rs` 在 Tokio+Compio 线程边界层面对齐 COSMIC Files。
+详见 `docs/OPERATION_RUNTIME_REFERENCE.md`。
 
 - [ ] **Phase 1.1** — 启用 `io-uring`：`Cargo.toml` 中 `compio` features 从 `polling` 切换到 `io-uring`。
-- [ ] **Phase 1.2** — 引入 `OperationId(u64)`：`submit()` 返回 operation id，runtime 层获得操作级身份。
+- [x] **Phase 1.2** — 引入 `OperationId(u64)`：`submit()` 返回 operation id，runtime 层获得操作级身份。（`src/core/operation_runtime.rs:18`）
 - [ ] **Phase 1.3** — 非 panic 错误路径：替换 `.expect()` 为 `Result` 传播，runtime shutdown 可被 GPUI 层优雅处理。
-- [ ] **Phase 2.1** — 定义 `Operation` enum：统一 Transfer/Trash/Rename/Create/Undo/TrashView 提交路径。
-- [ ] **Phase 2.2** — 添加 `OperationController`：统一的 cancel/progress/pause 状态，替换 `AtomicBool` + `Arc<Mutex<TransferProgress>>`。
-- [ ] **Phase 2.3** — Runtime 级操作跟踪：`BTreeMap<OperationId, (Operation, OperationController)>` 移入 `OperationRuntime`，GPUI 层只查询不自行维护 `active_background_tasks`。
+- [x] **Phase 2.1** — 定义 `Operation` enum：统一 Transfer/Trash/Rename/Create/Undo/TrashView/External 提交路径。（`src/core/operations.rs:39-73`）
+- [x] **Phase 2.2** — 添加 `OperationController`：统一的 cancel/progress/pause 状态，替换 `AtomicBool` + `Arc<Mutex<TransferProgress>>`。（`src/core/operation_runtime.rs:48-105`）
+- [x] **Phase 2.3** — Runtime 级操作跟踪：`BTreeMap<OperationId, OperationHandle>` 移入 `OperationRuntime`，GPUI 层只查询不自行维护 `active_background_tasks`。（`src/core/operation_runtime.rs:139`）
 - [ ] **Phase 3.1** — 递归复制模块：`src/core/operations/recursive.rs` 使用 Compio async API 做目录遍历和文件复制。
 - [ ] **Phase 3.2** — GIO fallback：GVfs 远程文件通过 `spawn_blocking` 路由 GIO `File::copy()`。
 
