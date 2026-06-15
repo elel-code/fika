@@ -50,6 +50,7 @@ pub(crate) struct DetailsColumn {
 #[derive(Clone, Debug)]
 pub(crate) struct DetailsItemSnapshot {
     pub(crate) row_index: usize,
+    pub(crate) item_id: fika_core::ItemId,
     pub(crate) path: PathBuf,
     pub(crate) is_dir: bool,
     pub(crate) name: Arc<str>,

@@ -14,6 +14,21 @@ use super::super::style::{
     place_row_hover_background,
 };
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PlaceRowHighlight {
+    active: bool,
+    drop_target: bool,
+    hover_enabled: bool,
+}
+
+fn place_row_highlight(active: bool, drop_target: bool, insert_target: bool) -> PlaceRowHighlight {
+    PlaceRowHighlight {
+        active: active && !insert_target,
+        drop_target: drop_target && !insert_target,
+        hover_enabled: !insert_target,
+    }
+}
+
 pub(super) fn place_row(
     visible_index: usize,
     place: PlaceSnapshot,
@@ -31,8 +46,10 @@ pub(super) fn place_row(
     let context_place = place.clone();
     let insert_before_index = place.index;
     let insert_after_index = place.index + 1;
-    let row_drop_target = place.drop_target;
-    let active = place.active;
+    let insert_target = place.insert_before || place.insert_after;
+    let highlight = place_row_highlight(place.active, place.drop_target, insert_target);
+    let row_drop_target = highlight.drop_target;
+    let active = highlight.active;
     let mounted = place.mounted;
     let device = place.device;
     let network = place.network;
@@ -48,7 +65,9 @@ pub(super) fn place_row(
         .border_1()
         .border_color(place_row_border_color(active, row_drop_target))
         .bg(place_row_background(active, row_drop_target))
-        .hover(move |row| row.bg(place_row_hover_background(active, row_drop_target)))
+        .when(highlight.hover_enabled, |row| {
+            row.hover(move |row| row.bg(place_row_hover_background(active, row_drop_target)))
+        })
         .when(mounted || device || network, |row| row.cursor_pointer())
         .on_drag(place_drag, |drag, _, _, cx| {
             cx.new(|_| PlaceDragPreview::from_drag(drag))
@@ -129,4 +148,29 @@ pub(super) fn place_row(
                 PlaceInsertIndicatorEdge::After,
             ))
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn place_row_insert_target_suppresses_ordinary_row_highlight() {
+        assert_eq!(
+            place_row_highlight(true, true, true),
+            PlaceRowHighlight {
+                active: false,
+                drop_target: false,
+                hover_enabled: false,
+            }
+        );
+        assert_eq!(
+            place_row_highlight(true, true, false),
+            PlaceRowHighlight {
+                active: true,
+                drop_target: true,
+                hover_enabled: true,
+            }
+        );
+    }
 }

@@ -80,6 +80,7 @@ pub(crate) fn required_text_width_for_entry(
 #[derive(Clone, Debug)]
 pub(crate) struct VisibleItemSnapshot {
     pub(crate) slot_id: u64,
+    pub(crate) item_id: ItemId,
     pub(crate) layout: fika_core::ItemLayout,
     pub(crate) path: PathBuf,
     pub(crate) is_dir: bool,
@@ -394,6 +395,7 @@ impl RawFileGridSnapshot {
                         });
                         Some(VisibleItemSnapshot {
                             slot_id: item.slot_id,
+                            item_id: item.item_id,
                             layout: item.layout,
                             path: item.path,
                             is_dir: item.is_dir,
@@ -429,6 +431,7 @@ impl RawFileGridSnapshot {
                         });
                         Some(VisibleItemSnapshot {
                             slot_id: item.slot_id,
+                            item_id: item.item_id,
                             layout: item.layout,
                             path: item.path,
                             is_dir: item.is_dir,
@@ -465,6 +468,7 @@ impl RawFileGridSnapshot {
                         });
                         DetailsItemSnapshot {
                             row_index: item.row_index,
+                            item_id: item.item_id,
                             path: item.path,
                             is_dir: item.is_dir,
                             name: item.name,
@@ -1015,6 +1019,69 @@ mod tests {
     }
 
     #[test]
+    fn raw_file_grid_snapshot_marks_directory_drop_target_visible_item_in_all_modes() {
+        let directory = PathBuf::from("/tmp/fika-directory-drop-target-projection");
+        let entries = Arc::new(vec![
+            test_directory_entry("target"),
+            test_entry("source.txt", Some("text/plain"), true, Some(10)),
+        ]);
+        let mut model = DirectoryModel::for_directory(directory.clone());
+        model.replace_listing(directory.clone(), entries);
+        let pane_id = PaneId(3);
+        let target_path = directory.join("target");
+        let target = ItemDropTarget::Directory {
+            pane_id,
+            path: target_path.clone(),
+        };
+
+        for view_mode in [ViewMode::Icons, ViewMode::Compact, ViewMode::Details] {
+            let mut compact_column_widths = CompactColumnWidthCache::default();
+            let snapshot = raw_file_grid_snapshot(RawFileGridSnapshotInput {
+                pane_id,
+                model: &model,
+                selection: &SelectionState::default(),
+                view: &ViewState {
+                    view_mode,
+                    ..ViewState::default()
+                },
+                filtered: None,
+                source_revision: 0,
+                rename_draft: None,
+                item_drop_target: Some(&target),
+                compact_column_widths: &mut compact_column_widths,
+            });
+
+            match snapshot {
+                RawFileGridSnapshot::Icons { items, .. }
+                | RawFileGridSnapshot::Compact { items, .. } => {
+                    let target_item = items
+                        .iter()
+                        .find(|item| item.path == target_path)
+                        .expect("target directory item should be visible");
+                    let source_item = items
+                        .iter()
+                        .find(|item| item.path == directory.join("source.txt"))
+                        .expect("source file item should be visible");
+                    assert!(target_item.drop_target, "{view_mode:?}");
+                    assert!(!source_item.drop_target, "{view_mode:?}");
+                }
+                RawFileGridSnapshot::Details { items, .. } => {
+                    let target_item = items
+                        .iter()
+                        .find(|item| item.path == target_path)
+                        .expect("target directory row should be visible");
+                    let source_item = items
+                        .iter()
+                        .find(|item| item.path == directory.join("source.txt"))
+                        .expect("source file row should be visible");
+                    assert!(target_item.drop_target, "{view_mode:?}");
+                    assert!(!source_item.drop_target, "{view_mode:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn raw_file_grid_snapshot_assigns_slots_before_final_conversion() {
         let mut raw_file_grid = RawFileGridSnapshot::Icons {
             layout: IconsLayout::new(2, fika_core::IconsLayoutOptions::default()),
@@ -1227,6 +1294,21 @@ mod tests {
             trash_original_path: None,
             trash_deletion_time: None,
             is_dir: false,
+        })
+    }
+
+    fn test_directory_entry(name: &str) -> fika_core::Entry {
+        fika_core::Entry::new(fika_core::EntryData {
+            name: Arc::from(name),
+            name_width_units: name.chars().count() as u16,
+            size_bytes: 0,
+            modified_secs: Some(42),
+            metadata_complete: true,
+            mime_type: None,
+            mime_magic_checked: true,
+            trash_original_path: None,
+            trash_deletion_time: None,
+            is_dir: true,
         })
     }
 

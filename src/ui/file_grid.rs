@@ -20,8 +20,8 @@ pub(crate) use snapshot::{
 
 use crate::FikaApp;
 use fika_core::{
-    CompactLayout, CompactLayoutOptions, IconsLayout, IconsLayoutOptions, ItemLayout, PaneId,
-    ViewRect, ViewState, normalize_viewport_extent,
+    CompactLayout, CompactLayoutOptions, IconsLayout, IconsLayoutOptions, ItemId, ItemLayout,
+    PaneId, ViewRect, ViewState, normalize_viewport_extent,
 };
 use gpui::prelude::*;
 use gpui::{
@@ -113,13 +113,16 @@ struct DragPreview {
     icon: FileIconSnapshot,
     label: String,
     count: usize,
-    cursor_offset_x: f32,
-    cursor_offset_y: f32,
+    content_origin_x: f32,
+    content_origin_y: f32,
 }
 
-const DRAG_PREVIEW_CURSOR_GAP: f32 = 10.0;
 const DRAG_PREVIEW_MIN_WIDTH: f32 = 220.0;
 const DRAG_PREVIEW_MIN_HEIGHT: f32 = 36.0;
+
+fn item_interaction_id(prefix: &str, pane_id: PaneId, item_id: ItemId) -> String {
+    format!("{prefix}-{}-{}", pane_id.0, item_id.0)
+}
 
 fn handle_file_grid_item_drag_move(
     app: &mut FikaApp,
@@ -693,6 +696,7 @@ fn details_row(
     let top = metrics.header_height + item.row_index as f32 * metrics.row_height;
     let selected = item.selected;
     let drop_target = item.drop_target;
+    let item_id = item.item_id;
     let path_for_mouse_down = item.path.clone();
     let path_for_menu = item.path.clone();
     let path_for_drag = item.path.clone();
@@ -712,7 +716,7 @@ fn details_row(
     let app = cx.weak_entity();
 
     div()
-        .id(format!("details-row-{}-{}", pane_id.0, item.row_index))
+        .id(item_interaction_id("details-row", pane_id, item_id))
         .absolute()
         .left_0()
         .top(px(top))
@@ -782,13 +786,13 @@ fn details_row(
             let _ = app.update(cx, |this, _cx| {
                 this.begin_item_drag(drag.payload());
             });
-            let (cursor_offset_x, cursor_offset_y) = drag_preview_cursor_offset(cursor_offset);
+            let (content_origin_x, content_origin_y) = drag_preview_content_origin(cursor_offset);
             cx.new(|_| DragPreview {
                 icon: drag.icon.clone(),
                 label: drag_preview_label(drag.name.as_ref(), drag.selected, drag.selection_count),
                 count: drag.selection_count,
-                cursor_offset_x,
-                cursor_offset_y,
+                content_origin_x,
+                content_origin_y,
             })
         })
         .on_drop::<ItemDrag>(cx.listener(move |this, drag: &ItemDrag, window, cx| {
@@ -802,6 +806,7 @@ fn details_row(
         .on_drop::<PlaceDrag>(cx.listener(move |this, drag: &PlaceDrag, window, cx| {
             handle_file_grid_place_drop(this, pane_id, drag, window, cx);
         }))
+        .when(is_dir_for_drop, directory_drag_over_styles)
         .when(is_dir_for_drop, |row| {
             let target_dir_for_primary_paste = target_dir_for_drop.clone();
             row.on_mouse_down(
@@ -1025,7 +1030,7 @@ fn item_tile(
     cx: &mut Context<FikaApp>,
 ) -> Stateful<Div> {
     let id = format!("item-slot-{}-{}", pane_id.0, item.slot_id);
-    let visual_id = format!("item-core-{}-{}", pane_id.0, item.slot_id);
+    let visual_id = item_interaction_id("item-core", pane_id, item.item_id);
     let renaming = item.draft_name.is_some();
     let display_name = item
         .draft_name
@@ -1130,8 +1135,8 @@ fn item_tile(
                     let _ = app.update(cx, |this, _cx| {
                         this.begin_item_drag(drag.payload());
                     });
-                    let (cursor_offset_x, cursor_offset_y) =
-                        drag_preview_cursor_offset(cursor_offset);
+                    let (content_origin_x, content_origin_y) =
+                        drag_preview_content_origin(cursor_offset);
                     cx.new(|_| DragPreview {
                         icon: drag.icon.clone(),
                         label: drag_preview_label(
@@ -1140,8 +1145,8 @@ fn item_tile(
                             drag.selection_count,
                         ),
                         count: drag.selection_count,
-                        cursor_offset_x,
-                        cursor_offset_y,
+                        content_origin_x,
+                        content_origin_y,
                     })
                 })
                 .on_drop::<ItemDrag>(cx.listener(move |this, drag: &ItemDrag, window, cx| {
@@ -1155,6 +1160,7 @@ fn item_tile(
                 .on_drop::<PlaceDrag>(cx.listener(move |this, drag: &PlaceDrag, window, cx| {
                     handle_file_grid_place_drop(this, pane_id, drag, window, cx);
                 }))
+                .when(is_dir_for_drop, directory_drag_over_styles)
                 .when(is_dir_for_drop, |tile| {
                     let target_dir_for_primary_paste = target_dir_for_drop.clone();
                     tile.on_mouse_down(
@@ -1212,6 +1218,12 @@ fn item_tile_hover_background(selected: bool, drop_target: bool) -> Rgba {
 
 fn drop_target_item_background() -> Rgba {
     rgba(0xf59e0b4a)
+}
+
+fn directory_drag_over_styles(item: Stateful<Div>) -> Stateful<Div> {
+    item.drag_over::<ItemDrag>(|style, _, _, _| style.bg(drop_target_item_background()))
+        .drag_over::<ExternalPaths>(|style, _, _, _| style.bg(drop_target_item_background()))
+        .drag_over::<PlaceDrag>(|style, _, _, _| style.bg(drop_target_item_background()))
 }
 
 fn icon_view(item: &VisibleItemSnapshot, layout: ItemLayout) -> Div {
@@ -1519,8 +1531,8 @@ fn clamp_text_boundary(text: &str, index: usize) -> usize {
 
 impl Render for DragPreview {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        let left = self.cursor_offset_x + DRAG_PREVIEW_CURSOR_GAP;
-        let top = self.cursor_offset_y + DRAG_PREVIEW_CURSOR_GAP;
+        let left = self.content_origin_x;
+        let top = self.content_origin_y;
         let icon = self.icon.clone();
         let show_count = self.count > 1;
         let count = self.count;
@@ -1578,8 +1590,8 @@ impl Render for DragPreview {
     }
 }
 
-fn drag_preview_cursor_offset(offset: gpui::Point<gpui::Pixels>) -> (f32, f32) {
-    (offset.x.as_f32().max(0.0), offset.y.as_f32().max(0.0))
+fn drag_preview_content_origin(_offset: gpui::Point<gpui::Pixels>) -> (f32, f32) {
+    (0.0, 0.0)
 }
 
 fn drag_preview_label(name: &str, selected: bool, selection_count: usize) -> String {
@@ -1593,12 +1605,12 @@ fn drag_preview_label(name: &str, selected: bool, selection_count: usize) -> Str
 #[cfg(test)]
 mod tests {
     use super::{
-        FileGridMode, drag_preview_cursor_offset, drag_preview_label,
+        FileGridMode, drag_preview_content_origin, drag_preview_label, item_interaction_id,
         item_mouse_down_opens_directory, measured_viewport_for_scrollbar_axis,
         normalized_text_range, rename_text_layout,
     };
     use crate::ui::item_view::ItemViewScrollbarAxis;
-    use fika_core::{CompactLayout, CompactLayoutOptions};
+    use fika_core::{CompactLayout, CompactLayoutOptions, ItemId, PaneId};
     use gpui::{Bounds, point, px, size};
 
     #[test]
@@ -1609,14 +1621,26 @@ mod tests {
     }
 
     #[test]
-    fn drag_preview_keeps_label_anchored_to_cursor_offset() {
+    fn drag_preview_does_not_apply_gpui_cursor_offset_twice() {
         assert_eq!(
-            drag_preview_cursor_offset(point(px(48.0), px(12.0))),
-            (48.0, 12.0)
+            drag_preview_content_origin(point(px(48.0), px(12.0))),
+            (0.0, 0.0)
         );
         assert_eq!(
-            drag_preview_cursor_offset(point(px(-4.0), px(-2.0))),
+            drag_preview_content_origin(point(px(-4.0), px(-2.0))),
             (0.0, 0.0)
+        );
+    }
+
+    #[test]
+    fn item_interaction_id_is_keyed_by_item_identity_not_virtual_slot() {
+        assert_eq!(
+            item_interaction_id("item-core", PaneId(2), ItemId(7)),
+            "item-core-2-7"
+        );
+        assert_ne!(
+            item_interaction_id("item-core", PaneId(2), ItemId(7)),
+            item_interaction_id("item-core", PaneId(2), ItemId(8))
         );
     }
 

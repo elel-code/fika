@@ -54,11 +54,9 @@ pub(crate) fn place_snapshots_for(
                 device_ejectable: place.device_ejectable,
                 device_can_power_off: place.device_can_power_off,
                 active: active_index == Some(index),
-                drop_target: insert_before
-                    || insert_after
-                    || (mounted
-                        && !network
-                        && place_drop_target_matches_place(place_drop_target, &place.path)),
+                drop_target: mounted
+                    && !network
+                    && place_drop_target_matches_place(place_drop_target, &place.path),
                 insert_before,
                 insert_after,
                 trash_place,
@@ -125,7 +123,7 @@ mod tests {
     }
 
     #[test]
-    fn place_snapshots_highlight_row_for_insert_target() {
+    fn place_snapshots_keep_insert_indicator_separate_from_row_drop_target() {
         let home = PathBuf::from("/tmp/fika-places-insert-home");
         let docs = home.join("Documents");
         let places = vec![
@@ -146,7 +144,7 @@ mod tests {
 
         assert!(!snapshots[0].drop_target);
         assert!(snapshots[1].insert_before);
-        assert!(snapshots[1].drop_target);
+        assert!(!snapshots[1].drop_target);
     }
 
     #[test]
