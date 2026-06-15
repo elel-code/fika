@@ -102,6 +102,7 @@ pub(crate) struct StatusSummaryCacheEntry {
 }
 
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub(crate) struct OperationProgressHandle {
     pub(crate) label: String,
     pub(crate) controller: OperationController,
@@ -110,6 +111,7 @@ pub(crate) struct OperationProgressHandle {
 }
 
 impl OperationProgressHandle {
+    #[allow(dead_code)]
     pub(crate) fn snapshot(&self, now: Instant) -> Option<OperationProgressSnapshot> {
         if !progress_delay_elapsed(self.started_at, now) {
             return None;

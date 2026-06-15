@@ -125,6 +125,7 @@ impl ClipboardState {
         Self::text(text)
     }
 
+    #[allow(dead_code)]
     fn item_count(&self) -> usize {
         if self.text.is_some() {
             1
@@ -141,6 +142,7 @@ impl ClipboardState {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn progress_label(&self) -> String {
         if self.text.is_some() {
             "Pasting text".to_string()

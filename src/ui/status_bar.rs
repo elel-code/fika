@@ -5,13 +5,13 @@ mod summary;
 mod zoom;
 
 pub(crate) use state::{
-    OperationProgressHandle, OperationProgressSnapshot, SpaceInfoCache, SpaceInfoSnapshot,
+    OperationProgressSnapshot, SpaceInfoCache, SpaceInfoSnapshot,
     StatusBarSnapshot, StatusSummaryCacheEntry, StatusSummaryCacheKey, filesystem_space_info,
-    progress_delay_elapsed,
+    progress_delay_elapsed, progress_percent,
 };
 #[cfg(test)]
 pub(crate) use state::{
-    PROGRESS_DISPLAY_DELAY, parse_df_space_output, progress_percent, space_info_snapshot,
+    PROGRESS_DISPLAY_DELAY, parse_df_space_output, space_info_snapshot,
 };
 pub(crate) use summary::{status_summary_for_model, status_summary_for_model_indexes};
 #[cfg(test)]
