@@ -427,12 +427,25 @@ impl FikaApp {
                             .await;
                         if this
                             .update(&mut cx, |app, cx| {
-                                if app.drain_watchers()
-                                    | app.drain_trash_monitor()
-                                    | app.drain_device_monitor_messages()
-                                    | !app.operation_snapshots().is_empty()
-                                    | !app.loading_panes.is_empty()
+                                let mut changed = false;
+                                if app.drain_watchers() {
+                                    changed = true;
+                                }
+                                if app.drain_trash_monitor() {
+                                    changed = true;
+                                }
+                                if app.drain_device_monitor_messages() {
+                                    changed = true;
+                                }
+                                if app.drain_background_listing_results() {
+                                    changed = true;
+                                }
+                                if !app.operation_snapshots().is_empty()
+                                    || !app.loading_panes.is_empty()
                                 {
+                                    changed = true;
+                                }
+                                if changed {
                                     cx.notify();
                                 }
                                 app.maybe_start_device_monitor(cx);
