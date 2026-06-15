@@ -8,7 +8,7 @@ use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::process::{self, Command};
+use std::process::{self, Command, ExitStatus, Stdio};
 use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -646,10 +646,7 @@ pub fn generate_thumbnail_with_external_thumbnailer_registry(
     let mut attempted = false;
     for command in commands {
         let _ = fs::remove_file(&temp_path);
-        match Command::new(command.program())
-            .args(command.args())
-            .status()
-        {
+        match run_external_thumbnailer_command(&command) {
             Ok(status) => {
                 attempted = true;
                 if !status.success() || !temp_path.is_file() {
@@ -675,6 +672,16 @@ pub fn generate_thumbnail_with_external_thumbnailer_registry(
         record_thumbnail_failure(root, request.uri(), request.modified_secs())?;
     }
     Ok(None)
+}
+
+fn run_external_thumbnailer_command(
+    command: &ExternalThumbnailerCommand,
+) -> io::Result<ExitStatus> {
+    Command::new(command.program())
+        .args(command.args())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
 }
 
 pub fn external_thumbnailer_commands_for_path(
@@ -1686,6 +1693,67 @@ mod tests {
         let metadata = thumbnail_metadata(&expected).unwrap();
         assert_eq!(metadata.uri.as_deref(), Some(request.uri()));
         assert_eq!(metadata.mtime, Some(42));
+        assert!(!thumbnail_failure_is_cached(
+            &root,
+            request.uri(),
+            request.modified_secs()
+        ));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn external_thumbnailer_runs_with_suppressed_stdio() {
+        let root = temp_root("external-stdio");
+        fs::create_dir_all(&root).unwrap();
+        let source = root.join("source.png");
+        let fixture = root.join("fixture.png");
+        let script = root.join("thumbnailer.sh");
+        let thumbnailer_dir = root.join("thumbnailers");
+        fs::write(&source, b"source").unwrap();
+        fs::write(&fixture, test_thumbnail_png_without_metadata()).unwrap();
+        write_executable_script(
+            &script,
+            format!(
+                "#!/bin/sh\n\
+                 [ \"$(readlink /proc/$$/fd/1)\" = /dev/null ] || exit 11\n\
+                 [ \"$(readlink /proc/$$/fd/2)\" = /dev/null ] || exit 12\n\
+                 echo hidden stdout\n\
+                 echo hidden stderr >&2\n\
+                 /bin/cp {} \"$2\"\n",
+                sh_quote_path(&fixture)
+            ),
+        );
+        fs::create_dir_all(&thumbnailer_dir).unwrap();
+        fs::write(
+            thumbnailer_dir.join("fika.thumbnailer"),
+            format!(
+                "[Thumbnailer Entry]\nExec={} %i %o\nMimeType=image/png;\n",
+                exec_quote_path(&script)
+            ),
+        )
+        .unwrap();
+        let registry = ThumbnailerRegistry::load_from_dirs([thumbnailer_dir]);
+        let request = ThumbnailRequest::from_entry_metadata_with_mime(
+            PaneId(1),
+            Generation(1),
+            ItemId(1),
+            source,
+            42,
+            Some("image/png".to_string()),
+            ThumbnailRequestPriority::Visible,
+        )
+        .unwrap();
+
+        let hit = generate_thumbnail_with_external_thumbnailer_registry(&root, &request, &registry)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            hit.path(),
+            thumbnail_cache_path(&root, ThumbnailSize::Normal, request.uri()).as_path()
+        );
         assert!(!thumbnail_failure_is_cached(
             &root,
             request.uri(),

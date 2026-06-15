@@ -121,7 +121,7 @@ justification.
 | Async file copy | `operation/recursive.rs`: dedicated recursive copy using Compio async file APIs (`compio::fs`) | `file_ops.rs`: `copy_path_async` → `copy_path_inner_async` recursive dispatch using `compio::fs::File`, `AsyncReadAt`, `compio::fs::create_dir`, `compio::fs::symlink` | **Aligned**. Recursive copy uses Compio async APIs throughout. Directory traversal uses spawned blocking `read_dir` because Compio lacks a native async `read_dir`. |
 | Directory operations | Compio async (`compio::fs::create_dir`, `rename`, `metadata`) | Same: `compio::fs::create_dir`, `compio::fs::rename`, `compio::fs::metadata`, `compio::fs::set_permissions` | **Aligned**. |
 | Sync fallback | `compio::runtime::spawn_blocking` from inside Compio operation runtime | `run_operation_blocking()` → `compio::runtime::spawn_blocking` | **Aligned**. |
-| GIO copy fallback | Routes GIO `File::copy()` through Compio blocking pool | GIO device operations (mount/unmount/eject) use `spawn_blocking` via `watch_gio_devices_blocking`; GIO `File::copy()` for GVfs remote files | **Minor**. Device operations are routed through Compio blocking pool. Direct GIO file-copy fallback for GVfs remote filesystem transfers is deferred — Compio handles local files natively via io-uring. |
+| GIO copy fallback | Routes GIO `File::copy()` through Compio blocking pool | `file_ops.rs`: remote source/target files are detected with GIO filesystem metadata; regular-file copy falls back to `gio::File::copy()` through `run_operation_blocking()` while local files stay on Compio/io-uring | **Aligned**. |
 
 ### 4. Runtime Configuration
 
@@ -168,15 +168,15 @@ context (Fika does not use Iced/COSMIC's `Task::stream`).
 6. ✅ `BTreeMap<OperationId, OperationHandle>` in `OperationRuntime`; `active_operations()`, `cancel_operation()`, `complete_operation()` provide lifecycle management.
 
 ### Phase 3: Recursive and GIO (high risk, deep integration)
-🔄 **Partially complete.**
+✅ **Complete.**
 
-7. **Recursive copy module** — Create `src/core/operations/recursive.rs` using
-   Compio async APIs for directory traversal and file copy, matching COSMIC
-   `operation/recursive.rs`. The current `transfer_paths_result` should be
-   refactored to use this.
-8. **GIO fallback** — Route GIO `File::copy()` through `spawn_blocking` from
-   within the Compio operation runtime, matching COSMIC. Needed for GVfs
-   remote filesystem operations.
+7. ✅ **Recursive copy** — `src/core/file_ops.rs` uses Compio async APIs for
+   directory creation, recursive dispatch, symlink creation, file open/read/write,
+   and local rename. Directory enumeration and metadata gaps are contained in
+   the operation runtime's blocking pool.
+8. ✅ **GIO fallback** — Remote filesystem regular-file copies route GIO
+   `File::copy()` through `run_operation_blocking()` from within the Compio
+   operation runtime.
 
 ### Non-Goals (intentional deviations from COSMIC)
 
@@ -196,6 +196,4 @@ Fika is now fully aligned with COSMIC Files across all three layers: (1) the
 Tokio+Compio dual-runtime boundary, (2) the operation abstraction model
 (`Operation` enum, `OperationController`, runtime-level tracking), and (3) the
 recursive file-I/O strategy using Compio async APIs with `spawn_blocking`
-fallbacks. The only remaining gap is direct GIO `File::copy()` fallback for
-GVfs remote filesystem transfers — a Phase 3 item deferred until remote
-filesystem copy support is needed.
+fallbacks, including GIO `File::copy()` for GVfs remote regular-file transfers.
