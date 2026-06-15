@@ -38,6 +38,8 @@ mod tests {
             marker: "P",
             label: label.to_string(),
             path: PathBuf::from(path),
+            device_id: None,
+            device_mounted: true,
             editable,
             removable: editable,
             device_ejectable: false,

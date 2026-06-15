@@ -224,6 +224,8 @@ mod tests {
             marker: "P",
             label: label.to_string(),
             path: path.to_path_buf(),
+            device_id: None,
+            device_mounted: true,
             editable,
             removable: editable,
             device_ejectable: false,

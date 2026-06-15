@@ -16,6 +16,8 @@ pub(crate) struct PlaceEntry {
     pub(crate) marker: &'static str,
     pub(crate) label: String,
     pub(crate) path: PathBuf,
+    pub(crate) device_id: Option<String>,
+    pub(crate) device_mounted: bool,
     pub(crate) editable: bool,
     pub(crate) removable: bool,
     pub(crate) device_ejectable: bool,
@@ -27,10 +29,7 @@ pub(crate) fn build_places(user_places_path: &Path) -> Vec<PlaceEntry> {
 }
 
 pub(crate) async fn read_live_device_snapshot() -> Vec<DeviceInfo> {
-    match fika_core::read_udisks2_devices().await {
-        Ok(devices) => devices,
-        Err(_) => fika_core::read_mountinfo_devices().unwrap_or_default(),
-    }
+    fika_core::read_devices().await.unwrap_or_default()
 }
 
 pub(crate) fn build_places_with_devices(
@@ -91,7 +90,7 @@ pub(crate) fn removable_device_place_entries(
             let path = device
                 .mount_point
                 .clone()
-                .unwrap_or_else(|| device.device_path.clone());
+                .unwrap_or_else(|| PathBuf::from(&device.id));
             if !seen_paths.insert(path.clone()) {
                 return None;
             }
@@ -105,6 +104,8 @@ pub(crate) fn removable_device_place_entries(
                 marker: "D",
                 label,
                 path,
+                device_id: Some(device.id.clone()),
+                device_mounted: device.mounted,
                 editable: false,
                 removable: false,
                 device_ejectable: device.ejectable,
@@ -147,6 +148,8 @@ fn push_place(
         marker,
         label: label.to_string(),
         path,
+        device_id: None,
+        device_mounted: true,
         editable: false,
         removable: false,
         device_ejectable: false,
@@ -163,6 +166,8 @@ pub(crate) fn push_user_place(places: &mut Vec<PlaceEntry>, label: String, path:
         marker: "B",
         label,
         path,
+        device_id: None,
+        device_mounted: true,
         editable: true,
         removable: true,
         device_ejectable: false,
@@ -323,7 +328,7 @@ pub(crate) fn active_place_index(places: &[PlaceEntry], current_dir: &Path) -> O
 
 pub(crate) fn place_is_mounted(place: &PlaceEntry) -> bool {
     !place_is_network_root(place)
-        && (place.group != REMOVABLE_DEVICES_GROUP || !place.path.starts_with("/dev"))
+        && (place.group != REMOVABLE_DEVICES_GROUP || place.device_mounted)
 }
 
 pub(crate) fn place_is_network_root(place: &PlaceEntry) -> bool {

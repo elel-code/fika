@@ -26,6 +26,7 @@ pub(crate) struct PlaceSnapshot {
     pub(crate) icon: FileIconSnapshot,
     pub(crate) label: String,
     pub(crate) path: PathBuf,
+    pub(crate) device_id: Option<String>,
     pub(crate) mounted: bool,
     pub(crate) device: bool,
     pub(crate) network: bool,

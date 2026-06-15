@@ -8,6 +8,8 @@ pub(super) fn user_place_entry(label: String, path: PathBuf) -> PlaceEntry {
         marker: "B",
         label,
         path,
+        device_id: None,
+        device_mounted: true,
         editable: true,
         removable: true,
         device_ejectable: false,

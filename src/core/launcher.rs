@@ -998,10 +998,8 @@ pub fn exec_to_launch_commands(
                 args.extend(paths.iter().map(|path| path.display().to_string()));
             }
             _ => {
-                if let Some(argument) =
-                    expand_exec_token(&token, app_name, desktop_file, paths.first())
-                {
-                    if token.contains("%f") || token.contains("%u") {
+                if let Some(argument) = expand_exec_token(&token, app_name, desktop_file, paths) {
+                    if exec_token_contains_file_code(&token) {
                         file_code_used = true;
                     }
                     args.push(argument);
@@ -1869,11 +1867,11 @@ fn exec_supports_multiple_paths(exec: &str) -> bool {
     split_exec_line(exec).is_some_and(|tokens| {
         tokens
             .iter()
-            .any(|token| exec_token_contains_multi_file_code(token))
+            .any(|token| matches!(token.as_str(), "%F" | "%U"))
     })
 }
 
-fn exec_token_contains_multi_file_code(token: &str) -> bool {
+fn exec_token_contains_file_code(token: &str) -> bool {
     let mut chars = token.chars();
     while let Some(ch) = chars.next() {
         if ch != '%' {
@@ -1881,7 +1879,7 @@ fn exec_token_contains_multi_file_code(token: &str) -> bool {
         }
         match chars.next() {
             Some('%') => {}
-            Some('F' | 'U') => return true,
+            Some('f' | 'F' | 'u' | 'U') => return true,
             Some(_) | None => {}
         }
     }
@@ -2000,7 +1998,7 @@ fn expand_exec_token(
     token: &str,
     app_name: &str,
     desktop_file: &Path,
-    path: Option<&PathBuf>,
+    paths: &[PathBuf],
 ) -> Option<String> {
     let mut out = String::with_capacity(token.len());
     let mut chars = token.chars();
@@ -2014,10 +2012,16 @@ fn expand_exec_token(
             Some('c') => out.push_str(app_name),
             Some('k') => out.push_str(&desktop_file.display().to_string()),
             Some('f') | Some('u') => {
-                let path = path?;
+                let path = paths.first()?;
                 out.push_str(&path.display().to_string());
             }
-            Some('F') | Some('U') => return None,
+            Some('F') | Some('U') => {
+                let path = paths.first()?;
+                if paths.len() > 1 {
+                    return None;
+                }
+                out.push_str(&path.display().to_string());
+            }
             Some('i') | Some('d') | Some('D') | Some('n') | Some('N') | Some('v') | Some('m') => {}
             Some(_) | None => {}
         }
@@ -2832,6 +2836,35 @@ text/plain=viewer.desktop;\n",
                 "/tmp/file.txt"
             ]
         );
+    }
+
+    #[test]
+    fn exec_embedded_multi_file_code_expands_single_path() {
+        let command = exec_to_launch_commands(
+            "ghostty +new-window --working-directory=%F",
+            "Ghostty",
+            Path::new("/apps/com.mitchellh.ghostty.desktop"),
+            &[PathBuf::from("/tmp/fika service target")],
+        )
+        .unwrap()
+        .remove(0);
+
+        assert_eq!(command.program, "ghostty");
+        assert_eq!(
+            command.args,
+            vec![
+                "+new-window",
+                "--working-directory=/tmp/fika service target"
+            ]
+        );
+    }
+
+    #[test]
+    fn embedded_multi_file_code_does_not_advertise_multi_path_support() {
+        assert!(exec_supports_multiple_paths("ark --add %F"));
+        assert!(!exec_supports_multiple_paths(
+            "ghostty +new-window --working-directory=%F"
+        ));
     }
 
     #[test]

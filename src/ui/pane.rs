@@ -609,7 +609,7 @@ fn breadcrumb_segment(
                                 .is_none()
                             {
                                 refresh_active_drag_cursor_for_drop_menu(window, cx);
-                                this.schedule_drop_target_stale_clear(cx);
+                                this.refresh_drop_target_lease(cx);
                             } else {
                                 refresh_active_drag_cursor_not_allowed(window, cx);
                             }
@@ -641,7 +641,7 @@ fn breadcrumb_segment(
                                 .is_none()
                             {
                                 refresh_active_drag_cursor_for_drop_menu(window, cx);
-                                this.schedule_drop_target_stale_clear(cx);
+                                this.refresh_drop_target_lease(cx);
                             } else {
                                 refresh_active_drag_cursor_not_allowed(window, cx);
                             }

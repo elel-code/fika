@@ -51,16 +51,25 @@ impl PlaceDrag {
 pub(crate) struct PlaceDragPreview {
     label: Arc<str>,
     icon: FileIconSnapshot,
+    content_origin_x: f32,
+    content_origin_y: f32,
 }
 
 impl PlaceDragPreview {
-    pub(crate) fn from_drag(drag: &PlaceDrag) -> Self {
+    pub(crate) fn from_drag(drag: &PlaceDrag, cursor_offset: gpui::Point<gpui::Pixels>) -> Self {
+        let (content_origin_x, content_origin_y) = place_drag_preview_content_origin(cursor_offset);
         Self {
             label: drag.label.clone(),
             icon: drag.icon.clone(),
+            content_origin_x,
+            content_origin_y,
         }
     }
 }
+
+const PLACE_DRAG_PREVIEW_MIN_WIDTH: f32 = 220.0;
+const PLACE_DRAG_PREVIEW_MIN_HEIGHT: f32 = 36.0;
+const PLACE_DRAG_PREVIEW_CURSOR_GAP: f32 = 8.0;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PlaceDropZone {
@@ -89,7 +98,7 @@ pub(crate) fn place_drag_insert_index_for_zone(
 }
 
 fn place_drop_zone_for_y(local_y: f32, height: f32) -> PlaceDropZone {
-    let edge = (height * 0.28).clamp(4.0, 10.0);
+    let edge = (height * 0.18).clamp(4.0, 6.0);
     if local_y <= edge {
         PlaceDropZone::InsertBefore
     } else if local_y >= height - edge {
@@ -99,35 +108,53 @@ fn place_drop_zone_for_y(local_y: f32, height: f32) -> PlaceDropZone {
     }
 }
 
+fn place_drag_preview_content_origin(offset: gpui::Point<gpui::Pixels>) -> (f32, f32) {
+    (
+        (offset.x.as_f32() + PLACE_DRAG_PREVIEW_CURSOR_GAP).max(0.0),
+        (offset.y.as_f32() + PLACE_DRAG_PREVIEW_CURSOR_GAP).max(0.0),
+    )
+}
+
 impl Render for PlaceDragPreview {
     fn render(&mut self, _window: &mut gpui::Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        let left = self.content_origin_x;
+        let top = self.content_origin_y;
         let icon = self.icon.clone();
         div()
-            .px_2()
-            .h(px(36.0))
-            .rounded_md()
-            .border_1()
-            .border_color(rgb(0x94a3b8))
-            .bg(rgb(0xffffff))
-            .shadow_md()
-            .flex()
-            .items_center()
-            .gap_2()
-            .text_sm()
-            .text_color(rgb(0x1f2937))
+            .relative()
+            .w(px(left + PLACE_DRAG_PREVIEW_MIN_WIDTH))
+            .h(px(top + PLACE_DRAG_PREVIEW_MIN_HEIGHT + 6.0))
             .child(
                 div()
-                    .w(px(26.0))
-                    .h(px(26.0))
-                    .rounded_sm()
-                    .overflow_hidden()
-                    .child(place_drag_icon_or_fallback(icon)),
-            )
-            .child(
-                div()
-                    .max_w(px(170.0))
-                    .truncate()
-                    .child(self.label.as_ref().to_string()),
+                    .absolute()
+                    .left(px(left))
+                    .top(px(top))
+                    .px_2()
+                    .h(px(PLACE_DRAG_PREVIEW_MIN_HEIGHT))
+                    .rounded_md()
+                    .border_1()
+                    .border_color(rgb(0x94a3b8))
+                    .bg(rgb(0xffffff))
+                    .shadow_md()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .text_sm()
+                    .text_color(rgb(0x1f2937))
+                    .child(
+                        div()
+                            .w(px(26.0))
+                            .h(px(26.0))
+                            .rounded_sm()
+                            .overflow_hidden()
+                            .child(place_drag_icon_or_fallback(icon)),
+                    )
+                    .child(
+                        div()
+                            .max_w(px(170.0))
+                            .truncate()
+                            .child(self.label.as_ref().to_string()),
+                    ),
             )
     }
 }
@@ -164,13 +191,25 @@ mod tests {
             PlaceDropZone::InsertBefore
         );
         assert_eq!(
-            place_drop_zone_for_y(7.0, 28.0),
+            place_drop_zone_for_y(5.0, 28.0),
             PlaceDropZone::InsertBefore
         );
-        assert_eq!(place_drop_zone_for_y(8.0, 28.0), PlaceDropZone::OnPlace);
+        assert_eq!(place_drop_zone_for_y(6.0, 28.0), PlaceDropZone::OnPlace);
         assert_eq!(
-            place_drop_zone_for_y(21.0, 28.0),
+            place_drop_zone_for_y(23.0, 28.0),
             PlaceDropZone::InsertAfter
+        );
+    }
+
+    #[test]
+    fn place_drag_preview_compensates_for_row_cursor_offset() {
+        assert_eq!(
+            place_drag_preview_content_origin(gpui::point(gpui::px(48.0), gpui::px(12.0))),
+            (56.0, 20.0)
+        );
+        assert_eq!(
+            place_drag_preview_content_origin(gpui::point(gpui::px(-12.0), gpui::px(-4.0))),
+            (0.0, 4.0)
         );
     }
 

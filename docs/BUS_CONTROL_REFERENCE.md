@@ -52,10 +52,10 @@ helper, devices, Ark DnD, and future FileManager1 integration.
     `ShowItemProperties` methods.
   - Dispatches incoming URI requests into the main `cosmic-files` executable.
 - `../cosmic-files/src/mounter/`
-  - The mounter architecture is the relevant Rust-side reference for UDisks2
-    discovery and action routing. Device discovery should use system bus
-    ObjectManager/Properties interfaces, then project backend-neutral devices
-    into the UI.
+  - The mounter architecture is the relevant Rust-side reference for device
+    discovery and action routing. COSMIC Files consumes GIO/GVfs mounter items
+    instead of parsing backend-specific block-device objects in the application
+    layer.
 
 ## Current Fika State
 
@@ -80,7 +80,8 @@ helper, devices, Ark DnD, and future FileManager1 integration.
     shared D-Bus/systemd paths do not panic when the caller thread has no Tokio
     reactor.
   - `BusController::proxy()` returns an owned zbus proxy and keeps connection
-    ownership/proxy creation out of launcher, Ark, and UDisks2 feature modules.
+    ownership/proxy creation out of launcher, Ark, and privileged-operation
+    modules.
 - `src/core/launcher.rs`
   - `launch_with_systemd_user()` now uses `BusController::shared()` for the
     session bus, builds an `org.freedesktop.systemd1.Manager` proxy, then calls
@@ -117,19 +118,9 @@ helper, devices, Ark DnD, and future FileManager1 integration.
     shared session bus helper. GPUI/backend multi-MIME external offer routing is
     still pending.
 - `src/core/devices.rs`
-  - Reads the initial UDisks2 object tree through the shared system bus helper:
-    `org.freedesktop.DBus.ObjectManager.GetManagedObjects()` on
-    `org.freedesktop.UDisks2`.
-  - Converts UDisks2 Block/Drive/Filesystem properties into a core snapshot and
-    merges it with `/proc/self/mountinfo`.
-  - `Udisks2MonitorState` can apply ObjectManager `InterfacesAdded` /
-    `InterfacesRemoved` and Properties `PropertiesChanged` payloads to the raw
-    UDisks2 object map, then emit `DeviceEvent` diffs from the rederived
-    snapshot.
-  - `watch_udisks2_devices()` uses the shared system bus connection with a zbus
-    `MessageStream` match on `/org/freedesktop/UDisks2` path namespace, converts
-    ObjectManager/Properties signal messages into `Udisks2Signal`, and publishes
-    `DeviceMonitorMessage` snapshots/events over a core channel boundary.
+  - Devices no longer use Fika's zbus bus helper directly. The primary backend
+    is GIO/GVfs `VolumeMonitor`, which owns its own desktop storage integration
+    layer and publishes backend-neutral `DeviceMonitorMessage` snapshots to UI.
 - `src/main.rs`
   - UI actions call launcher/privilege helpers but should not create or own
     D-Bus connections directly.
@@ -162,13 +153,10 @@ The shared `src/core/bus.rs` layer should own the cross-feature D-Bus boundary:
     helper without entangling binaries
   - Ark DnD `extractSelectedFilesTo(destination)`
   - future FileManager1 session service
-  - future UDisks2 system bus discovery/mount/eject calls
   - future KDirNotify emit/listen helpers
-- Device discovery should subscribe to system bus
-  `org.freedesktop.DBus.ObjectManager.InterfacesAdded`,
-  `InterfacesRemoved`, and
-  `org.freedesktop.DBus.Properties.PropertiesChanged` for UDisks2, then feed a
-  core devices model rather than mutating Places UI state directly.
+- Device discovery is intentionally outside this zbus helper now that the main
+  backend is GIO/GVfs. It still feeds a core devices model rather than mutating
+  Places UI state directly.
 - FileManager1 should be a session bus service boundary separate from the GPUI
   window object. Incoming URIs should validate and normalize before routing to
   pane/window actions.
@@ -196,16 +184,13 @@ Remaining:
    path.
 2. Move the remaining privileged-helper blocking user-unit watcher connection
    path where practical, or document it as a blocking service-side exception.
-3. Add UDisks2 discovery on top of the system bus helper and keep device
-   projection UI-neutral.
-4. Add FileManager1 registration after the core router can safely dispatch
+3. Add FileManager1 registration after the core router can safely dispatch
    incoming URI requests to an app/window action queue.
 
 ## Constraints
 
 - Local file browsing must continue when the session bus is unavailable.
-- System bus failures must degrade devices/privileged operations, not pane
-  rendering.
+- System bus failures must degrade privileged operations, not pane rendering.
 - Long-running or blocking D-Bus operations must not run on the GPUI render
   path.
 - Bus subscriptions must route results through stable pane/window/action

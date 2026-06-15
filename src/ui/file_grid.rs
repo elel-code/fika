@@ -32,7 +32,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use super::drag_drop::{
-    FileTransferMode, ItemDragPayload, item_drop_reject_reason,
+    FileTransferMode, ItemDragPayload, PathListDropTargetKind, PathListDropTargetUpdate,
     refresh_active_drag_cursor_for_drop_menu, refresh_active_drag_cursor_for_transfer_mode,
     refresh_active_drag_cursor_not_allowed,
 };
@@ -135,29 +135,15 @@ fn handle_file_grid_item_drag_move(
     let contains = event.bounds.contains(&event.event.position);
     let payload = event.drag(cx).payload();
     let source_paths = app.item_drag_source_paths(&payload);
-    let changed = if contains {
-        app.set_dragged_paths_drop_target_from_window_position(
-            pane_id,
-            event.event.position,
-            &source_paths,
-        )
-    } else {
-        app.clear_item_drop_target_for_pane(pane_id)
-    };
-    if contains {
-        if dragged_paths_hover_accepts_drop(app, pane_id, event.event.position, &source_paths) {
-            refresh_active_drag_cursor_for_drop_menu(window, cx);
-            app.schedule_drop_target_stale_clear(cx);
-        } else {
-            refresh_active_drag_cursor_not_allowed(window, cx);
-        }
-    }
-    if changed {
-        cx.notify();
-    }
-    if contains {
-        cx.stop_propagation();
-    }
+    handle_file_grid_path_list_drag_move(
+        app,
+        pane_id,
+        contains,
+        event.event.position,
+        &source_paths,
+        window,
+        cx,
+    );
 }
 
 fn handle_file_grid_external_drag_move(
@@ -169,24 +155,43 @@ fn handle_file_grid_external_drag_move(
 ) {
     let contains = event.bounds.contains(&event.event.position);
     let source_paths = app.external_drag_source_paths(event.drag(cx).paths());
-    let changed = if contains {
-        app.set_dragged_paths_drop_target_from_window_position(
-            pane_id,
-            event.event.position,
-            &source_paths,
-        )
+    handle_file_grid_path_list_drag_move(
+        app,
+        pane_id,
+        contains,
+        event.event.position,
+        &source_paths,
+        window,
+        cx,
+    );
+}
+
+fn handle_file_grid_path_list_drag_move(
+    app: &mut FikaApp,
+    pane_id: PaneId,
+    contains: bool,
+    position: gpui::Point<gpui::Pixels>,
+    source_paths: &[PathBuf],
+    window: &mut Window,
+    cx: &mut Context<FikaApp>,
+) {
+    let update = if contains {
+        app.update_dragged_paths_drop_target_from_window_position(pane_id, position, source_paths)
     } else {
-        app.clear_item_drop_target_for_pane(pane_id)
+        PathListDropTargetUpdate {
+            changed: app.clear_item_drop_target_for_pane(pane_id),
+            kind: None,
+        }
     };
     if contains {
-        if dragged_paths_hover_accepts_drop(app, pane_id, event.event.position, &source_paths) {
+        if update.accepted() {
             refresh_active_drag_cursor_for_drop_menu(window, cx);
-            app.schedule_drop_target_stale_clear(cx);
+            app.refresh_drop_target_lease(cx);
         } else {
             refresh_active_drag_cursor_not_allowed(window, cx);
         }
     }
-    if changed {
+    if update.changed {
         cx.notify();
     }
     if contains {
@@ -204,45 +209,34 @@ fn handle_file_grid_place_drag_move(
     let contains = event.bounds.contains(&event.event.position);
     let source_path = event.drag(cx).path();
     let source_paths = std::slice::from_ref(&source_path);
-    let target = contains.then(|| {
-        app.item_at_window_position(pane_id, event.event.position)
-            .map(|hit| (hit.path, hit.is_dir))
-    });
-    let target_is_directory = target
-        .as_ref()
-        .and_then(|target| target.as_ref())
-        .is_some_and(|(_, is_dir)| *is_dir);
-    let target_accepts_drop = target
-        .as_ref()
-        .and_then(|target| target.as_ref())
-        .is_some_and(|(path, is_dir)| {
-            *is_dir && item_drop_reject_reason(source_paths, path).is_none()
-        });
-    let position_accepts_drop = contains
-        && app.dragged_paths_can_drop_to_position(pane_id, event.event.position, source_paths);
-    let changed = if contains {
-        app.set_dragged_paths_drop_target_from_window_position(
+    let update = if contains {
+        app.update_dragged_paths_drop_target_from_window_position(
             pane_id,
             event.event.position,
             source_paths,
         )
     } else {
-        app.clear_item_drop_target_for_pane(pane_id)
+        PathListDropTargetUpdate {
+            changed: app.clear_item_drop_target_for_pane(pane_id),
+            kind: None,
+        }
     };
     if contains {
-        if target_accepts_drop {
-            refresh_active_drag_cursor_for_drop_menu(window, cx);
-            app.schedule_drop_target_stale_clear(cx);
-        } else if target_is_directory {
-            refresh_active_drag_cursor_not_allowed(window, cx);
-        } else if position_accepts_drop {
-            refresh_active_drag_cursor_for_transfer_mode(FileTransferMode::Move, window, cx);
-            app.schedule_drop_target_stale_clear(cx);
-        } else {
-            refresh_active_drag_cursor_not_allowed(window, cx);
+        match update.kind {
+            Some(PathListDropTargetKind::Directory) => {
+                refresh_active_drag_cursor_for_drop_menu(window, cx);
+                app.refresh_drop_target_lease(cx);
+            }
+            Some(PathListDropTargetKind::Pane) => {
+                refresh_active_drag_cursor_for_transfer_mode(FileTransferMode::Move, window, cx);
+                app.refresh_drop_target_lease(cx);
+            }
+            None => {
+                refresh_active_drag_cursor_not_allowed(window, cx);
+            }
         }
     }
-    if changed {
+    if update.changed {
         cx.notify();
     }
     if contains {
@@ -293,15 +287,6 @@ fn handle_file_grid_place_drop(
     app.drop_place_drag_to_position_in_pane(pane_id, drag.path(), position, cx);
     cx.stop_propagation();
     cx.notify();
-}
-
-fn dragged_paths_hover_accepts_drop(
-    app: &mut FikaApp,
-    pane_id: PaneId,
-    position: gpui::Point<gpui::Pixels>,
-    source_paths: &[PathBuf],
-) -> bool {
-    app.dragged_paths_can_drop_to_position(pane_id, position, source_paths)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

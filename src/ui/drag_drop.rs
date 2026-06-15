@@ -1,12 +1,14 @@
 mod state;
 
 pub(crate) use fika_core::FileTransferMode;
+#[cfg(test)]
+pub(crate) use state::place_drop_target_matches_insert;
 pub(crate) use state::{
     ActiveItemDrag, DragExportPayload, DropTargetState, ItemDragPayload, ItemDropTarget,
-    PlaceDropTarget, drag_cursor_style_for_transfer_mode, item_drag_export_payload,
-    item_drag_paths, item_drop_reject_reason, item_drop_target_matches_directory,
-    item_drop_target_matches_pane, normalized_drag_paths, place_drag_export_payload,
-    place_drop_target_matches_insert, place_drop_target_matches_place,
+    PathListDropTarget, PathListDropTargetKind, PathListDropTargetUpdate, PlaceDropTarget,
+    drag_cursor_style_for_transfer_mode, item_drag_export_payload, item_drag_paths,
+    item_drop_reject_reason, item_drop_target_matches_directory, item_drop_target_matches_pane,
+    normalized_drag_paths, place_drag_export_payload, place_drop_target_matches_place,
 };
 
 use crate::FikaApp;

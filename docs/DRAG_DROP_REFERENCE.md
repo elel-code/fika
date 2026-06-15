@@ -92,8 +92,9 @@ model, and file operations are launched only after a drop target is resolved.
   transfer modes, item/place drag payloads, drop target state and target helper
   queries.
 - Dolphin `PlacesPanel::slotUrlsDropped()` -> Fika Places drop distinguishes
-  drop-on-place file operations from drop-between-place bookmark insertion and
-  internal bookmark reorder.
+  path-list drop-on-place file operations from drop-between-place bookmark
+  insertion, while internal `PlaceDrag` in the Places sidebar is restricted to
+  insert/reorder targets.
 
 ## Current Fika State
 
@@ -116,7 +117,7 @@ model, and file operations are launched only after a drop target is resolved.
   drag-move event reports the pointer outside their bounds. This mirrors
   Dolphin's `dragLeaveEvent()` cleanup at the target level and prevents old
   pane tint, directory highlight or Places insertion lines from waiting for the
-  stale timer when the pointer has already moved elsewhere.
+  lease timeout when the pointer has already moved elsewhere.
 - Pane, directory item, breadcrumb segment and Places row drop targets resolve
   the destination first, then show a DropOperation context menu. The final file
   operation comes from the menu action (`Copy`, `Move` or `Link`); hover cursor
@@ -148,7 +149,7 @@ model, and file operations are launched only after a drop target is resolved.
   drop-target styling while hovered, and Places insertion uses a separate line
   indicator. This visual state is separate from selection, hover and active
   place state; the operation itself is still selected from the drop menu.
-- Drop target stale timeout remains as a fallback for drag cancellation or
+- Drop target lease timeout remains as a fallback for drag cancellation or
   platform/backend paths that stop producing drag-move events; it is no longer
   the primary cleanup path for ordinary target leave/target switch.
 - Ark drag-extract MIME parsing exists in core as
@@ -161,10 +162,14 @@ model, and file operations are launched only after a drop target is resolved.
   `org.kde.ark.DndExtract.extractSelectedFilesTo(destination)` through the
   shared session bus helper. The UI/backend still needs a multi-MIME external
   offer path before this executor can be reached from a real Ark drag.
-- Internal `PlaceDrag` can reorder editable/removable user bookmarks by dropping
-  on a Places insertion line. Reorder targets are clamped to the persisted user
-  bookmark block, built-in Home/Trash/Root and future device places are refused,
-  and successful moves are written back to `user-places.xbel`.
+- Internal `PlaceDrag` can reorder primary Places entries, including active and
+  built-in Home/Trash-style entries, by dropping on a Places insertion line or
+  over another primary row. It does not trigger drop-on-place file operations
+  inside the Places sidebar. Reorder targets are clamped to the primary Places
+  block before grouped sections such as Network or removable devices. The
+  persisted XBEL projection still writes only editable/removable user bookmarks
+  to Fika's own `fika/places.xbel`, so dynamic/grouped entries do not leak into
+  the saved Places file.
 - External Wayland/X11 drag MIME publication is not complete yet. GPUI's current
   app-level drag value is sufficient for internal drop targets and GPUI
   `ExternalPaths` is sufficient for ordinary path-list drops into Fika. Fika now

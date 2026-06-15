@@ -515,10 +515,10 @@ mod tests {
     fn bus_error_display_includes_target_context() {
         let target = BusCallTarget::new(
             BusKind::System,
-            "org.freedesktop.UDisks2",
-            "/org/freedesktop/UDisks2",
-            "org.freedesktop.DBus.ObjectManager",
-            "GetManagedObjects",
+            "org.freedesktop.login1",
+            "/org/freedesktop/login1",
+            "org.freedesktop.login1.Manager",
+            "ListSessions",
         )
         .unwrap();
 
@@ -528,7 +528,7 @@ mod tests {
         };
 
         assert!(error.to_string().contains("system bus"));
-        assert!(error.to_string().contains("GetManagedObjects"));
+        assert!(error.to_string().contains("ListSessions"));
     }
 
     #[test]

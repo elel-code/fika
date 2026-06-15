@@ -244,18 +244,21 @@ item-vs-blank event boundaries, and later submenu behavior.
     Pane, Open in New Window, Empty Trash, Hide, Copy Location, and Properties.
     Place and section hiding are view state only: they filter the sidebar
     snapshot without deleting
-    `PlaceEntry` values or rewriting `user-places.xbel`. User bookmarks are
+    `PlaceEntry` values or rewriting Fika's Places file. User bookmarks are
     persisted through
-    `src/core/places.rs` using a KDE/Dolphin-style `user-places.xbel` bookmark
-    file under `$XDG_DATA_HOME` with `~/.local/share` fallback; built-in paths
-    keep priority over persisted bookmarks. Places rows render theme-resolved
+    `src/core/places.rs` using an XBEL bookmark file at
+    `$XDG_DATA_HOME/fika/places.xbel` with `~/.local/share/fika/places.xbel`
+    fallback; Fika does not read or write Dolphin's top-level
+    `user-places.xbel`. Built-in paths keep priority over persisted bookmarks.
+    Places rows render theme-resolved
     semantic icons (`user-home`, `folder-download`, `user-trash`,
     `drive-harddisk`, and related fallbacks) in a fixed icon slot; when no
     theme icon exists, the fallback is a small drawn place glyph rather than a
     repeated text marker such as `H`, `Doc`, or `Down`.
   - Device Places context menus map Dolphin `KFilePlacesModel`/Solid teardown to
-    Fika's UDisks2-backed place model. `ContextMenuTarget::Place` carries
-    `device`, `mounted`, `ejectable`, and `can_power_off`; unmounted device rows
+    Fika's GIO/GVfs-backed place model. `ContextMenuTarget::Place` carries
+    `device_id`, `device`, `mounted`, `ejectable`, and `can_power_off`;
+    unmounted device rows
     disable Open/Open in New Pane/Open in New Window and expose Mount, while
     mounted device rows expose Unmount plus Eject and Safely Remove only when
     the core device snapshot reports those capabilities. The rows resolve
@@ -264,17 +267,18 @@ item-vs-blank event boundaries, and later submenu behavior.
   - `run_context_menu_action()` routes Mount/Unmount/Eject/Safely Remove through
     `run_device_place_operation()` with `DevicePlaceOperation::{Mount, Unmount,
     Eject, SafelyRemove}`. The operation layer lives under
-    `src/core/devices.rs` and re-resolves UDisks2 object paths at execution
+    `src/core/devices.rs` and re-resolves the GIO mount/volume at execution
     time, matching Dolphin's practice of asking the Places model/Solid for the
-    current device behind the clicked index rather than treating `/dev/*` paths
-    as navigable directories.
+    current device behind the clicked index rather than treating backend ids as
+    navigable directories.
   - Places drag/drop context behavior is kept separate from context-menu
     opening. `src/ui/places/sidebar/row/dnd.rs` mirrors Dolphin
     `PlacesPanel::dragMoveEvent()`: external file drags onto mounted writable
     place rows update the active drop action and show a row highlight, drags
     onto unmounted/non-droppable rows clear the previous target and switch to a
-    not-allowed cursor, and internal `PlaceDrag` remains accepted for bookmark
-    reorder even when the row itself is not a file-transfer destination.
+    not-allowed cursor, and internal `PlaceDrag` remains accepted only for
+    bookmark reorder even when the row itself is not a file-transfer
+    destination.
     `src/ui/places/sidebar/section/dnd.rs` handles section-boundary insert
     targets, and `src/ui/places/drag.rs` owns the row-edge vs row-middle drop
     zone calculation. Drop execution then reuses the same core transfer path as

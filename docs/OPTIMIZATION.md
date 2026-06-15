@@ -803,16 +803,12 @@ private property <bool> file-operation-shortcuts-blocked:
 
 ### S4 — Devices mounter item 合并入口
 
-**问题**：Devices 发现路径已经同时包含 mountinfo/root-scan 和 UDisks2，但合并逻辑直接围绕 Slint `DeviceEntry` 运行。这样会把“后端来源/能力”和“侧栏投影字段”绑在一起，后续如果加入 GVfs/network 类后端，容易复制一套合并与诊断统计逻辑。
+**状态**：该优化项属于旧 Slint 块设备路线，已经被当前 GPUI GIO/GVfs
+cutover 取代。
 
-**涉及代码**：
-- `src/fs/devices.rs` — mountinfo/root-scan、UDisks2 discovery、duplicate merge、diagnostics stats
-
-**实际实现**（✅ 已完成）：mountinfo/root-scan 和 UDisks2 discovery 现在先生成 backend-tagged `MounterDevice`，在内部 mounter item 层完成去重、能力合并、kind 升级和 merge stats 统计，最后再投影成现有 Slint `DeviceEntry`。本地可移动设备操作仍走 UDisks2 system bus；UI model 字段不变。
-
-**收益**：把后端发现/合并路径和 sidebar Slint model 投影分开，后续 GVfs/network 后端可以接入同一个 merge/statistics/projection 路径，而不是重新实现一套 Devices sidebar 合并逻辑。
-
-**验证**：`mounter_device_merge_keeps_backend_semantics_before_sidebar_projection` 覆盖内部 mounter item 合并；现有 `devices` 测试继续覆盖 UDisks2 parsing、mountinfo fallback、diagnostics 和 sidebar status projection。
+当前 `src/core/devices.rs` 直接以 GIO `VolumeMonitor` 为设备后端，Places
+投影消费 `DeviceInfo` 的 opaque device id、mount state 和 capability，不再维护
+旧 fallback/source 合并层。
 
 ---
 

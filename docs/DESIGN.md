@@ -22,7 +22,7 @@
 
 1. Dolphin source execution flow (`../dolphin`).
 2. Linux desktop specifications and services used by Dolphin-like behavior:
-   XDG trash, freedesktop thumbnails, MIME apps, service menus, UDisks2, Polkit.
+   XDG trash, freedesktop thumbnails, MIME apps, service menus, GIO/GVfs, Polkit.
 3. Existing `fika-core` modules when they preserve the Dolphin-style flow.
 4. GPUI idioms for entity, view, state, and input composition.
 
@@ -54,7 +54,7 @@ src/
     privilege.rs                 Privileged operation API surface
     thumbnails.rs                Freedesktop thumbnail URI and cache keys
     view.rs                      Compact layout, viewport math, visible range
-    devices.rs                   UDisks2 device discovery (entry point)
+    devices.rs                   GIO/GVfs device discovery (entry point)
     devices/
       actions.rs                 Mount/unmount/eject/safely-remove operations
     launcher/
@@ -292,12 +292,11 @@ or the non-I/O fallback marker.
 
 ### Devices
 
-`src/core/devices.rs` subscribes to UDisks2 signals (`InterfacesAdded`,
-`InterfacesRemoved`, `PropertiesChanged`) via the unified bus layer and
-maintains mount-info snapshots. `src/core/devices/actions.rs` provides
-mount/unmount/eject/safely-remove async operation dispatch with progress,
-success, and error messaging. Removable devices are projected into a dynamic
-"Removable Devices" section in Places, isolated from user bookmark persistence.
+`src/core/devices.rs` uses GIO/GVfs `VolumeMonitor` as the device backend and
+subscribes to mount/volume add, remove, and change signals. `src/core/devices/actions.rs`
+provides mount/unmount/eject async operation dispatch with progress, success,
+and error messaging. Removable devices are projected into a dynamic "Removable
+Devices" section in Places, isolated from user bookmark persistence.
 
 ### Network
 
@@ -314,8 +313,8 @@ populated from active remote mounts.
   method-call timeout/retry (3 attempts)
 - Structured `BusError` with service name, method name, and error details
 - Owned proxy creation for session and system bus
-- Routing for UDisks2 signals, systemd transient units, Portal registration,
-  privileged-helper operations, and Ark DnD extraction
+- Routing for systemd transient units, Portal registration, privileged-helper
+  operations, and Ark DnD extraction
 
 ### Async Runtime Architecture
 
@@ -438,12 +437,13 @@ Per-pane status bar showing:
 
 Sections: Home, XDG user dirs, Trash, Removable Devices, Root, Network.
 
-- User bookmarks persist to `user-places.xbel`.
-- Device sections are dynamically populated from UDisks2 signals.
+- User bookmarks persist to Fika's own `$XDG_DATA_HOME/fika/places.xbel`.
+- Device sections are dynamically populated from GIO/GVfs volume-monitor signals.
 - Right-click context menu supports Open, Open in New Pane, Add/Edit/Remove
   bookmark, Copy Location, Properties, and Empty Trash.
-- Drag-and-drop: dragging from Places to pane navigates; dragging to Places
-  inserts bookmarks or performs file operations.
+- Drag-and-drop: dragging from Places to pane navigates; dragging path lists to
+  Places inserts bookmarks or performs file operations; dragging Places inside
+  the sidebar only reorders Places entries.
 
 #### Context Menu (`src/ui/context_menu.rs`)
 

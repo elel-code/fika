@@ -90,7 +90,7 @@
 | application launch / `KProcessRunner` | `src/core/launcher.rs` (systemd transient units) |
 | clipboard (`KIO::paste`) | `src/core/clipboard.rs` → `src/ui/clipboard.rs` |
 | `KFileItemModelRolesUpdater` (thumbnail) | `src/core/thumbnails.rs` |
-| UDisks2 / `Solid::Device` | `src/core/devices.rs` → `src/ui/places.rs` |
+| GIO/GVfs devices / `Solid::Device` | `src/core/devices.rs` → `src/ui/places.rs` |
 | Network / `KFilePlacesModel` remote | `src/core/network.rs` → `src/ui/places.rs` |
 | D-Bus / `KDirNotify` / `FileManager1` | `src/core/bus.rs` |
 | inline rename (`DolphinView::renameSelectedItems`) | `src/ui/rename.rs` |
@@ -157,7 +157,7 @@ Before adding a new UI feature:
 
 ### System Integration Reference
 - [MIME_LAUNCHER_REFERENCE.md](MIME_LAUNCHER_REFERENCE.md) — MIME detection and application launching
-- [DEVICES_REFERENCE.md](DEVICES_REFERENCE.md) — UDisks2 device discovery and mount operations
+- [DEVICES_REFERENCE.md](DEVICES_REFERENCE.md) — GIO/GVfs device discovery and mount operations
 - [TRASH_REFERENCE.md](TRASH_REFERENCE.md) — XDG Trash spec and Dolphin implementation
 - [THUMBNAIL_REFERENCE.md](THUMBNAIL_REFERENCE.md) — Freedesktop thumbnail specification
 - [NETWORK_REFERENCE.md](NETWORK_REFERENCE.md) — GVfs remote filesystem classification

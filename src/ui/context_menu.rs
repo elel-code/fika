@@ -69,7 +69,9 @@ pub(crate) enum ContextMenuTarget {
         load_target_dir: bool,
     },
     Place {
+        label: String,
         path: PathBuf,
+        device_id: Option<String>,
         mounted: bool,
         device: bool,
         device_ejectable: bool,

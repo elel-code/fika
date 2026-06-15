@@ -106,6 +106,8 @@ mod tests {
             marker: "P",
             label: label.to_string(),
             path: PathBuf::from(path),
+            device_id: None,
+            device_mounted: true,
             editable,
             removable: editable,
             device_ejectable: false,
@@ -115,12 +117,14 @@ mod tests {
 
     fn test_device(path: &str, label: &str, removable: bool) -> DeviceInfo {
         DeviceInfo {
-            device_path: PathBuf::from(format!("/dev/{label}")),
+            id: format!("gio:test:{label}"),
             mount_point: Some(PathBuf::from(path)),
+            uri: Some(format!("file://{path}")),
             filesystem_type: Some("exfat".to_string()),
             label: Some(label.to_string()),
             capacity_bytes: Some(1024),
             removable,
+            mounted: true,
             ejectable: false,
             can_power_off: false,
         }

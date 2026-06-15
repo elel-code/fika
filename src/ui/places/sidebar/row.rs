@@ -29,6 +29,10 @@ fn place_row_highlight(active: bool, drop_target: bool, insert_target: bool) -> 
     }
 }
 
+fn place_row_drag_is_movable(place: &PlaceSnapshot) -> bool {
+    place.group.is_empty()
+}
+
 pub(super) fn place_row(
     visible_index: usize,
     place: PlaceSnapshot,
@@ -41,7 +45,7 @@ pub(super) fn place_row(
         place.label.as_str(),
         place.icon.clone(),
         place.index,
-        place.editable && place.removable,
+        place_row_drag_is_movable(&place),
     );
     let context_place = place.clone();
     let insert_before_index = place.index;
@@ -53,6 +57,8 @@ pub(super) fn place_row(
     let mounted = place.mounted;
     let device = place.device;
     let network = place.network;
+    let device_id = place.device_id.clone();
+    let label = place.label.clone();
 
     let row = div()
         .id(row_id)
@@ -69,11 +75,19 @@ pub(super) fn place_row(
             row.hover(move |row| row.bg(place_row_hover_background(active, row_drop_target)))
         })
         .when(mounted || device || network, |row| row.cursor_pointer())
-        .on_drag(place_drag, |drag, _, _, cx| {
-            cx.new(|_| PlaceDragPreview::from_drag(drag))
+        .on_drag(place_drag, |drag, cursor_offset, _, cx| {
+            cx.new(|_| PlaceDragPreview::from_drag(drag, cursor_offset))
         })
         .on_click(cx.listener(move |this, _event, _window, cx| {
-            this.activate_place(path.clone(), mounted, device, network, cx);
+            this.activate_place(
+                path.clone(),
+                device_id.clone(),
+                label.clone(),
+                mounted,
+                device,
+                network,
+                cx,
+            );
             cx.stop_propagation();
             cx.notify();
         }))
@@ -153,6 +167,7 @@ pub(super) fn place_row(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui::icons::FileIconSnapshot;
 
     #[test]
     fn place_row_insert_target_suppresses_ordinary_row_highlight() {
@@ -172,5 +187,49 @@ mod tests {
                 hover_enabled: true,
             }
         );
+    }
+
+    #[test]
+    fn place_row_drag_reorder_allows_primary_place_sources() {
+        let mut place = PlaceSnapshot {
+            index: 0,
+            group: "",
+            icon: FileIconSnapshot {
+                icon_name: "folder".into(),
+                path: None,
+                fallback_marker: "F".into(),
+                fallback_fg: 0x1f4fbf,
+                fallback_bg: 0xeaf1ff,
+            },
+            label: "Work".to_string(),
+            path: "/tmp/work".into(),
+            device_id: None,
+            mounted: true,
+            device: false,
+            network: false,
+            device_ejectable: false,
+            device_can_power_off: false,
+            active: false,
+            drop_target: false,
+            insert_before: false,
+            insert_after: false,
+            trash_place: false,
+            trash_has_items: false,
+            editable: true,
+            removable: true,
+        };
+
+        assert!(place_row_drag_is_movable(&place));
+
+        place.active = true;
+        assert!(place_row_drag_is_movable(&place));
+
+        place.active = false;
+        place.editable = false;
+        place.removable = false;
+        assert!(place_row_drag_is_movable(&place));
+
+        place.group = "Network";
+        assert!(!place_row_drag_is_movable(&place));
     }
 }

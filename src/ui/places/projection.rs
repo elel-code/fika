@@ -3,9 +3,7 @@ use std::path::{Path, PathBuf};
 
 use fika_core::file_ops;
 
-use crate::ui::drag_drop::{
-    PlaceDropTarget, place_drop_target_matches_insert, place_drop_target_matches_place,
-};
+use crate::ui::drag_drop::{PlaceDropTarget, place_drop_target_matches_place};
 use crate::ui::icons::FileIconCache;
 
 use super::model::{
@@ -13,6 +11,12 @@ use super::model::{
     place_is_mounted, place_is_network_root,
 };
 use super::{PlaceEntry, PlaceSnapshot};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PlaceInsertIndicatorProjection {
+    Before(usize),
+    After(usize),
+}
 
 pub(crate) fn place_snapshots_for(
     places: &[PlaceEntry],
@@ -24,7 +28,7 @@ pub(crate) fn place_snapshots_for(
     file_icons: &mut FileIconCache,
 ) -> Vec<PlaceSnapshot> {
     let active_index = current_dir.and_then(|path| active_place_index(places, path));
-    let last_index = places.len().saturating_sub(1);
+    let insert_indicator = place_insert_indicator_projection(places, place_drop_target);
 
     places
         .iter()
@@ -39,15 +43,17 @@ pub(crate) fn place_snapshots_for(
             let device = place.group == REMOVABLE_DEVICES_GROUP;
             let place_icon = place_icon_for(place, trash_place);
             let icon = place_icon_snapshot(file_icons, place_icon);
-            let insert_before = place_drop_target_matches_insert(place_drop_target, index);
-            let insert_after = index == last_index
-                && place_drop_target_matches_insert(place_drop_target, places.len());
+            let insert_before =
+                insert_indicator == Some(PlaceInsertIndicatorProjection::Before(index));
+            let insert_after =
+                insert_indicator == Some(PlaceInsertIndicatorProjection::After(index));
             PlaceSnapshot {
                 index,
                 group: place.group,
                 icon,
                 label: place.label.clone(),
                 path: place.path.clone(),
+                device_id: place.device_id.clone(),
                 mounted,
                 device,
                 network,
@@ -68,6 +74,29 @@ pub(crate) fn place_snapshots_for(
         .collect()
 }
 
+fn place_insert_indicator_projection(
+    places: &[PlaceEntry],
+    place_drop_target: Option<&PlaceDropTarget>,
+) -> Option<PlaceInsertIndicatorProjection> {
+    let Some(PlaceDropTarget::Insert { index }) = place_drop_target else {
+        return None;
+    };
+    let index = *index;
+    if places.is_empty() {
+        return None;
+    }
+    if index < places.len() && places[index].group.is_empty() {
+        return Some(PlaceInsertIndicatorProjection::Before(index));
+    }
+    if index > 0 && index <= places.len() && places[index - 1].group.is_empty() {
+        return Some(PlaceInsertIndicatorProjection::After(index - 1));
+    }
+    if index < places.len() {
+        return Some(PlaceInsertIndicatorProjection::Before(index));
+    }
+    Some(PlaceInsertIndicatorProjection::After(places.len() - 1))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -85,6 +114,8 @@ mod tests {
                 marker: "D",
                 label: "USB".to_string(),
                 path: device.clone(),
+                device_id: Some("gio:test:usb".to_string()),
+                device_mounted: true,
                 editable: false,
                 removable: false,
                 device_ejectable: true,
@@ -148,6 +179,32 @@ mod tests {
     }
 
     #[test]
+    fn place_insert_at_user_block_end_renders_after_last_user_place() {
+        let home = PathBuf::from("/tmp/fika-places-insert-end-home");
+        let docs = home.join("Documents");
+        let network = fika_core::network_root_path();
+        let places = vec![
+            place("", "Home", home.clone(), false),
+            place("", "Documents", docs.clone(), true),
+            place("Network", "Network", network.clone(), false),
+        ];
+        let mut icons = FileIconCache::default();
+
+        let snapshots = place_snapshots_for(
+            &places,
+            Some(&home),
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            Some(&PlaceDropTarget::Insert { index: 2 }),
+            false,
+            &mut icons,
+        );
+
+        assert!(snapshots[1].insert_after);
+        assert!(!snapshots[2].insert_before);
+    }
+
+    #[test]
     fn trash_snapshot_uses_app_owned_emptiness_state() {
         let trash = file_ops::trash_files_dir();
         let places = vec![place("", "Trash", trash, false)];
@@ -184,6 +241,8 @@ mod tests {
             marker: "P",
             label: label.to_string(),
             path,
+            device_id: None,
+            device_mounted: true,
             editable,
             removable: editable,
             device_ejectable: false,

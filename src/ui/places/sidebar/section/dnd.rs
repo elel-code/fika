@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use crate::FikaApp;
 use gpui::prelude::*;
 use gpui::{Context, Div, ExternalPaths, Stateful};
@@ -9,6 +11,29 @@ use crate::ui::drag_drop::{
 use crate::ui::file_grid::ItemDrag;
 
 use super::super::super::drag::PlaceDrag;
+
+fn handle_section_path_list_drag_move(
+    app: &mut FikaApp,
+    source_paths: &[PathBuf],
+    insert_index: usize,
+    window: &mut gpui::Window,
+    cx: &mut Context<FikaApp>,
+) {
+    let changed = if app.dragged_paths_can_add_place(source_paths) {
+        let changed = app.set_place_drag_drop_target_for_insert(insert_index);
+        refresh_active_drag_cursor_for_transfer_mode(FileTransferMode::Copy, window, cx);
+        app.refresh_drop_target_lease(cx);
+        changed
+    } else {
+        let changed = app.clear_drag_drop_targets();
+        refresh_active_drag_cursor_not_allowed(window, cx);
+        changed
+    };
+    if changed {
+        cx.notify();
+    }
+    cx.stop_propagation();
+}
 
 pub(super) fn install_section_dnd(
     heading: Stateful<Div>,
@@ -23,24 +48,7 @@ pub(super) fn install_section_dnd(
                     return;
                 }
                 let source_paths = this.item_drag_source_paths(&event.drag(cx).payload());
-                let changed = if this.dragged_paths_can_add_place(&source_paths) {
-                    let changed = this.set_place_drag_drop_target_for_insert(insert_index);
-                    refresh_active_drag_cursor_for_transfer_mode(
-                        FileTransferMode::Copy,
-                        window,
-                        cx,
-                    );
-                    this.schedule_drop_target_stale_clear(cx);
-                    changed
-                } else {
-                    let changed = this.clear_drag_drop_targets();
-                    refresh_active_drag_cursor_not_allowed(window, cx);
-                    changed
-                };
-                if changed {
-                    cx.notify();
-                }
-                cx.stop_propagation();
+                handle_section_path_list_drag_move(this, &source_paths, insert_index, window, cx);
             },
         ))
         .on_drag_move::<ExternalPaths>(cx.listener(
@@ -50,24 +58,7 @@ pub(super) fn install_section_dnd(
                     return;
                 }
                 let source_paths = this.external_drag_source_paths(event.drag(cx).paths());
-                let changed = if this.dragged_paths_can_add_place(&source_paths) {
-                    let changed = this.set_place_drag_drop_target_for_insert(insert_index);
-                    refresh_active_drag_cursor_for_transfer_mode(
-                        FileTransferMode::Copy,
-                        window,
-                        cx,
-                    );
-                    this.schedule_drop_target_stale_clear(cx);
-                    changed
-                } else {
-                    let changed = this.clear_drag_drop_targets();
-                    refresh_active_drag_cursor_not_allowed(window, cx);
-                    changed
-                };
-                if changed {
-                    cx.notify();
-                }
-                cx.stop_propagation();
+                handle_section_path_list_drag_move(this, &source_paths, insert_index, window, cx);
             },
         ))
         .on_drop::<ItemDrag>(cx.listener(move |this, drag: &ItemDrag, _window, cx| {
@@ -103,7 +94,7 @@ pub(super) fn install_section_dnd(
                         window,
                         cx,
                     );
-                    this.schedule_drop_target_stale_clear(cx);
+                    this.refresh_drop_target_lease(cx);
                 } else if contains {
                     let cleared = this.clear_drag_drop_targets();
                     refresh_active_drag_cursor_not_allowed(window, cx);

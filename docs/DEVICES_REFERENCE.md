@@ -1,7 +1,7 @@
 # Devices Reference
 
 This document records the source references for Fika's device discovery,
-mount-state model, and future Places sidebar integration.
+mount-state model, and Places sidebar integration.
 
 ## Dolphin Sources
 
@@ -9,23 +9,16 @@ mount-state model, and future Places sidebar integration.
   - Dolphin's Places model subclasses `KFilePlacesModel`.
   - Device entries, groups, icons, mount state, and hidden rows are provided by
     KDE Frameworks and Solid rather than by Dolphin's view code.
-  - The model also advertises Ark drag-extract MIME types, but Ark drops are
-    handled by the Places panel instead of ordinary place reordering.
-- `../dolphin/src/panels/places/placespanel.cpp`
-  - `PlacesPanel` is a `KFilePlacesView` bound to the singleton
-    `DolphinPlacesModel`.
-  - It connects `rowsInserted` and `rowsAboutToBeRemoved` to attach and detach
-    Solid device signals as devices appear and disappear.
   - `deviceForIndex()` is used to find a Solid device for context menu and
     teardown actions.
   - `StorageAccess::teardownRequested` is forwarded to Dolphin's higher-level
     storage teardown flow so user-visible unmount/eject operations remain
     asynchronous.
+- `../dolphin/src/panels/places/placespanel.cpp`
+  - `PlacesPanel` is a `KFilePlacesView` bound to the singleton
+    `DolphinPlacesModel`.
   - Drag move rejects non-writable place URLs for external drags while still
     allowing internal place reordering.
-- `../dolphin/src/statusbar/mountpointobserver.cpp`
-  - Free-space display is queried from the active mount point through KIO and
-    is decoupled from Places rendering.
 
 ## Cosmic Files Sources
 
@@ -40,93 +33,60 @@ mount-state model, and future Places sidebar integration.
   - Connects `mount_added`, `mount_removed`, `mount_changed`,
     `volume_added`, `volume_removed`, and `volume_changed` to a single changed
     event so the UI can rescan the model.
-  - Mount/unmount operations are asynchronous and report results back through
-    mounter events.
+  - Mount/unmount/eject operations are delegated to GIO `Volume`/`Mount`
+    methods instead of parsing backend-specific block-device objects in the
+    application layer.
 
 ## Fika Mapping
 
 - `src/core/devices.rs`
-  - Defines `MountInfoEntry`, `DeviceInfo`, and `DeviceEvent`.
-  - Parses `/proc/self/mountinfo` through `parse_mountinfo()` and
-    `devices_from_mountinfo()`.
-  - Decodes Linux mountinfo octal escapes such as `\040` before constructing
+  - Uses `gio::VolumeMonitor` as the primary and only device backend.
+  - Emits `DeviceInfo` snapshots with a stable opaque GIO device id, optional
+    local mount point, URI, label, filesystem type, optional capacity, mounted
+    state, and eject capability.
+  - Builds mounted rows from non-shadowed `gio::Mount` objects and unmounted
+    rows from `gio::Volume` objects that do not already have a mount.
+  - Skips remote mounts that have no local path because the current Fika pane
+    model is still path-based. Remote/network browsing remains a separate
+    backend.
+  - Subscribes to GIO mount and volume change signals in `watch_devices()` and
+    publishes fresh `DeviceMonitorMessage::Snapshot` values through the core
+    channel boundary.
+  - Resolves mount/unmount/eject operations by the opaque GIO device id at
+    execution time. UI code does not pass `/dev/*` paths or backend object
     paths.
-  - Filters pseudo filesystems and loop/squashfs-style system images from the
-    device list.
-  - Emits a backend-neutral `DeviceInfo` with device path, mount point,
-    filesystem type, best-effort label, optional capacity, and best-effort
-    removable flag.
-  - Marks mounts under `/media`, `/run/media`, `/mnt`, or `/Volumes` as
-    removable until UDisks2 provides authoritative metadata.
-  - Reads the initial UDisks2 ObjectManager snapshot from the shared system
-    bus through `read_udisks2_snapshot_with_bus()`.
-  - Parses `org.freedesktop.UDisks2.Block`, `.Drive`, and `.Filesystem`
-    properties into `Udisks2Snapshot`, then merges block/drive metadata with
-    mountinfo mount points.
-  - Uses UDisks2 labels, filesystem type, size, removable, ejectable, and
-    `CanPowerOff` metadata when present, while keeping mountinfo as a fallback
-    for mounted devices.
-  - Treats `Block.HintIgnore=true` as authoritative, so ignored UDisks2
-    devices are not reintroduced by mountinfo fallback.
-  - Provides `device_events_between()` to convert old/new `DeviceInfo`
-    snapshots into deterministic Added/Removed/Changed events.
-  - Adds `Udisks2MonitorState` and `Udisks2Signal` so core can apply
-    ObjectManager `InterfacesAdded`/`InterfacesRemoved` and Properties
-    `PropertiesChanged` payloads to the raw UDisks2 object map, rederive the
-    snapshot, and emit deterministic `DeviceEvent` diffs without exposing
-    D-Bus payload structure to Places UI code.
-  - `watch_udisks2_devices()` subscribes to the system bus with a
-    `path_namespace=/org/freedesktop/UDisks2` zbus `MessageStream`, converts
-    ObjectManager and Properties signals with `udisks2_signal_from_message()`,
-    re-reads mountinfo for each accepted signal, and publishes
-    `DeviceMonitorMessage::{Snapshot,Events}` through a core channel boundary.
-  - `Udisks2DeviceActionTarget` is resolved at operation time from the current
-    UDisks2 ObjectManager snapshot plus mountinfo. Fika keeps the block object
-    path for `Filesystem.Mount()` / `Filesystem.Unmount()` and the drive object
-    path for `Drive.Eject()` / `Drive.PowerOff()` out of the UI layer, together
-    with `Ejectable` and `CanPowerOff` capability flags.
-  - `mount_udisks2_device()`, `unmount_udisks2_device()`, and
-    `eject_udisks2_device()` call UDisks2 through the shared system bus with
-    empty `a{sv}` options. `safely_remove_udisks2_device()` optionally unmounts
-    the filesystem and then calls `Drive.PowerOff(a{sv})`. These APIs return
-    structured errors for missing devices, unmounted filesystem targets, missing
-    drive objects, and unsupported eject/power-off capabilities.
-- `src/main.rs`
+  - `mount_device()` calls `Volume::mount()` and returns the local mount point.
+    `unmount_device()` calls `Mount::unmount_with_operation()` when available
+    and falls back to `Mount::eject_with_operation()` for eject-only mounts.
+    `eject_device()` calls the matching GIO eject method on `Mount` or `Volume`.
+- `src/ui/places/model.rs`
   - Places has static built-ins, persisted user bookmarks, a dynamic
     "Removable Devices" section for removable `DeviceInfo` rows, and a static
     Root entry under Devices.
-  - Startup reads `/proc/self/mountinfo` and projects mounted removable devices
-    into Places without writing them to `user-places.xbel`.
-  - A low-frequency background refresh reads a fresh UDisks2 snapshot through
-    `read_udisks2_devices()` and falls back to mountinfo if the system bus is
-    unavailable. The result is applied through the same dynamic Places
-    replacement path and never writes removable devices into `user-places.xbel`.
-  - Startup also starts a live UDisks2 device monitor. The GPUI background loop
-    drains `DeviceMonitorMessage` snapshots/events and applies them through
-    `finish_device_refresh()` / `replace_removable_device_places()`. While the
-    live monitor is active, the low-frequency snapshot refresh is paused; if the
-    monitor cannot run, the snapshot refresh remains the fallback.
+  - Device rows carry `device_id` and `device_mounted` separately from their
+    display/navigation path. Unmounted rows use the opaque id only as a
+    non-navigable placeholder path.
   - `replace_removable_device_places()` replaces only the dynamic removable
     device section, keeps user bookmarks before grouped sections, skips paths
     already covered by built-ins/user bookmarks, and gives device rows a drive
     icon instead of bookmark/folder styling.
-  - Unmounted removable devices are preserved as grey device rows using their
-    block device path as a non-navigable placeholder. Click runs the UDisks2
-    mount action and navigates to the returned mount point; row-middle drop and
-    Open/Open in New Pane/Open in New Window context actions remain disabled so
-    `/dev/*` is never treated as a directory.
-  - Device rows add Dolphin/Solid-style actions to the Places context menu:
-    unmounted rows show Mount plus capability-gated Eject/Safely Remove, and
-    mounted rows show Unmount plus capability-gated Eject/Safely Remove.
-    Successful operations force a device snapshot refresh in addition to
-    relying on the live UDisks2 monitor.
-- `src/core/bus.rs`
-  - UDisks2 ObjectManager and Properties signal streams use the shared
-    system-bus controller.
+  - Click on a mounted device opens its local mount point. Click on an unmounted
+    device calls the GIO mount operation and navigates to the returned mount
+    point.
+- `src/main.rs`
+  - Startup reads `read_gio_devices()` and starts the live `watch_devices()`
+    monitor.
+  - Successful device operations force a fresh device snapshot refresh in
+    addition to relying on GIO monitor signals.
+  - Device context menu actions pass the GIO `device_id` and user-visible label
+    into `perform_device_place_operation()`.
 
 ## Remaining Work
 
-- Verify mount/unmount/eject/power-off against real removable devices and
-  Polkit prompts, including failures and user cancellation paths.
-- Continue refining Solid parity for multi-partition drives and teardown flows
-  such as "Safely Remove" when sibling filesystems are mounted.
+- Verify mount/unmount/eject against real removable devices, including Polkit
+  prompts, user cancellation, and failure paths.
+- Add a path-independent network/GVfs browsing model before exposing remote
+  mounts without local paths in Places.
+  - Revisit "Safely Remove" once a backend-neutral drive-level teardown model is
+  introduced; the current GIO path exposes eject but not a separate power-off
+  capability.

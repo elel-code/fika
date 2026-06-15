@@ -63,9 +63,9 @@ use ui::context_menu::{
     ContextMenuSubmenu, ContextMenuTarget, context_menu_icon_snapshots, context_menu_overlay,
 };
 use ui::drag_drop::{
-    ActiveItemDrag, DropTargetState, ItemDragPayload, ItemDropTarget, PlaceDropTarget,
-    item_drag_export_payload, item_drag_paths, item_drop_reject_reason,
-    item_drop_target_matches_pane, normalized_drag_paths,
+    ActiveItemDrag, DropTargetState, ItemDragPayload, ItemDropTarget, PathListDropTarget,
+    PathListDropTargetKind, PathListDropTargetUpdate, PlaceDropTarget, item_drag_export_payload,
+    item_drag_paths, item_drop_reject_reason, item_drop_target_matches_pane, normalized_drag_paths,
 };
 #[cfg(test)]
 use ui::drag_drop::{
@@ -130,7 +130,7 @@ use ui::status_bar::{
 };
 use ui::trash_conflict::{TrashConflictDialogState, trash_conflict_dialog_overlay};
 
-const DROP_TARGET_STALE_TIMEOUT: Duration = Duration::from_millis(3000);
+const DROP_TARGET_LEASE_TIMEOUT: Duration = Duration::from_millis(3000);
 const DEVICE_REFRESH_INTERVAL: Duration = Duration::from_secs(10);
 const DEVICE_MONITOR_RETRY_INTERVAL: Duration = Duration::from_secs(60);
 const DEBUG_CACHE_ENV: &str = "FIKA_DEBUG_CACHE";
@@ -274,7 +274,7 @@ pub(crate) struct FikaApp {
     clipboard: Option<ClipboardState>,
     active_item_drag: Option<ActiveItemDrag>,
     drop_targets: DropTargetState,
-    drop_target_stale_timer_running: bool,
+    drop_target_lease_timer_running: bool,
     rename_draft: Option<RenameDraft>,
     rename_next_after_operation: Option<(PaneId, PathBuf)>,
     location_draft: Option<LocationDraft>,
@@ -317,7 +317,7 @@ impl FikaApp {
             choices: args.chooser_choices.clone(),
             return_choices: args.chooser_return_choices,
         });
-        let initial_devices = fika_core::read_mountinfo_devices().unwrap_or_default();
+        let initial_devices = fika_core::read_gio_devices().unwrap_or_default();
         let trash_monitor = TrashEmptinessMonitor::new();
         let (listing_results_tx, listing_results_rx) = mpsc::channel();
         let mut app = Self {
@@ -354,7 +354,7 @@ impl FikaApp {
             clipboard: None,
             active_item_drag: None,
             drop_targets: DropTargetState::default(),
-            drop_target_stale_timer_running: false,
+            drop_target_lease_timer_running: false,
             rename_draft: None,
             rename_next_after_operation: None,
             location_draft: None,
@@ -1431,9 +1431,7 @@ impl FikaApp {
                 let mut cx = cx.clone();
                 async move {
                     let result = cx
-                        .background_spawn(
-                            async move { fika_core::watch_udisks2_devices(sender).await },
-                        )
+                        .background_spawn(async move { fika_core::watch_devices(sender).await })
                         .await;
                     let _ = this.update(&mut cx, |app, _| {
                         app.device_monitor_active = false;
@@ -1641,6 +1639,8 @@ impl FikaApp {
     pub(crate) fn activate_place(
         &mut self,
         path: PathBuf,
+        device_id: Option<String>,
+        label: String,
         mounted: bool,
         device: bool,
         network: bool,
@@ -1655,15 +1655,22 @@ impl FikaApp {
         }
         if mounted {
             self.open_place(path);
-        } else if device {
-            self.run_device_place_operation(pane_id, path, DevicePlaceOperation::Mount, cx);
+        } else if device && let Some(device_id) = device_id {
+            self.run_device_place_operation(
+                pane_id,
+                device_id,
+                label,
+                DevicePlaceOperation::Mount,
+                cx,
+            );
         }
     }
 
     fn run_device_place_operation(
         &mut self,
         pane_id: PaneId,
-        path: PathBuf,
+        device_id: String,
+        label: String,
         operation: DevicePlaceOperation,
         cx: &mut Context<Self>,
     ) {
@@ -1671,12 +1678,13 @@ impl FikaApp {
             self.set_pane_status(pane_id, "File operation already running");
             return;
         }
-        self.begin_pane_operation(pane_id, operation.in_progress_message(&path));
+        self.begin_pane_operation(pane_id, operation.in_progress_message(&label));
         cx.spawn(
             move |this: gpui::WeakEntity<FikaApp>, cx: &mut gpui::AsyncApp| {
                 let mut cx = cx.clone();
                 async move {
-                    let result = perform_device_place_operation(pane_id, path, operation).await;
+                    let result =
+                        perform_device_place_operation(pane_id, device_id, label, operation).await;
                     let _ = this.update(&mut cx, |app, cx| {
                         app.finish_device_place_operation(result, cx);
                         cx.notify();
@@ -1696,7 +1704,7 @@ impl FikaApp {
             Ok(Some(mount_point)) => {
                 self.finish_pane_operation(
                     result.pane_id,
-                    format!("Mounted {}", result.path.display()),
+                    result.operation.success_message(&result.label),
                 );
                 self.request_device_snapshot_refresh(cx);
                 self.load_pane(result.pane_id, mount_point);
@@ -1704,13 +1712,13 @@ impl FikaApp {
             Ok(None) => {
                 self.finish_pane_operation(
                     result.pane_id,
-                    result.operation.success_message(&result.path),
+                    result.operation.success_message(&result.label),
                 );
                 self.request_device_snapshot_refresh(cx);
             }
             Err(error) => self.finish_pane_operation(
                 result.pane_id,
-                result.operation.error_message(&result.path, &error),
+                result.operation.error_message(&result.label, &error),
             ),
         }
     }
@@ -1734,9 +1742,14 @@ impl FikaApp {
         position: gpui::Point<gpui::Pixels>,
         cx: &mut Context<Self>,
     ) {
-        match self.item_at_window_position(target_pane, position) {
-            Some(hit) if hit.is_dir => {
-                let target_dir = hit.path;
+        let Some(target) =
+            self.path_list_drop_target_candidate_from_window_position(target_pane, position)
+        else {
+            return;
+        };
+        match target.kind() {
+            PathListDropTargetKind::Directory => {
+                let target_dir = target.target_dir().to_path_buf();
                 let _ = self.set_dragged_paths_drop_target_for_directory(
                     target_pane,
                     std::slice::from_ref(&source_path),
@@ -1751,8 +1764,8 @@ impl FikaApp {
                     cx,
                 );
             }
-            _ => {
-                let _ = self.set_item_drag_drop_target_for_pane(target_pane);
+            PathListDropTargetKind::Pane => {
+                let _ = self.set_path_list_drop_target(target);
                 self.drop_place_drag_to_pane(target_pane, source_path);
             }
         }
@@ -1788,20 +1801,19 @@ impl FikaApp {
     pub(crate) fn drop_place_drag_to_current_place_target(
         &mut self,
         source_index: usize,
-        fallback_index: usize,
         position: gpui::Point<gpui::Pixels>,
         cx: &mut Context<Self>,
-    ) {
+    ) -> bool {
         match self.drop_targets.place().cloned() {
             Some(PlaceDropTarget::Insert { index }) => {
                 self.drop_place_drag_to_place_insert(source_index, index);
+                true
             }
             Some(PlaceDropTarget::Place { path }) => {
                 self.drop_place_drag_to_place(source_index, path, position, cx);
+                true
             }
-            None => {
-                self.drop_place_drag_to_place_insert(source_index, fallback_index);
-            }
+            None => false,
         }
     }
 
@@ -1864,7 +1876,9 @@ impl FikaApp {
         self.set_context_menu(ContextMenuState {
             pane_id,
             target: ContextMenuTarget::Place {
+                label: place.label,
                 path: place.path,
+                device_id: place.device_id,
                 mounted: place.mounted,
                 device: place.device,
                 device_ejectable: place.device_ejectable,
@@ -2993,58 +3007,64 @@ impl FikaApp {
         self.item_at_content_point(pane_id, point)
     }
 
-    pub(crate) fn dragged_paths_can_drop_to_position(
+    fn dragged_paths_drop_target_from_window_position(
         &mut self,
         pane_id: PaneId,
         position: gpui::Point<gpui::Pixels>,
         source_paths: &[PathBuf],
-    ) -> bool {
-        self.drop_target_directory_at_window_position(pane_id, position)
-            .is_some_and(|target_dir| item_drop_reject_reason(source_paths, &target_dir).is_none())
-    }
-
-    fn drop_target_directory_at_window_position(
-        &mut self,
-        pane_id: PaneId,
-        position: gpui::Point<gpui::Pixels>,
-    ) -> Option<PathBuf> {
-        match self.item_at_window_position(pane_id, position) {
-            Some(hit) if hit.is_dir => Some(hit.path),
-            _ => self
-                .panes
-                .pane(pane_id)
-                .map(|pane| pane.current_dir.clone()),
-        }
-    }
-
-    pub(crate) fn set_dragged_paths_drop_target_from_window_position(
-        &mut self,
-        pane_id: PaneId,
-        position: gpui::Point<gpui::Pixels>,
-        source_paths: &[PathBuf],
-    ) -> bool {
+    ) -> Option<PathListDropTarget> {
         let source_paths = normalized_drag_paths(source_paths.to_vec());
         if source_paths.is_empty() {
-            return self.clear_drag_drop_targets();
+            return None;
         }
+        let target =
+            self.path_list_drop_target_candidate_from_window_position(pane_id, position)?;
+        if item_drop_reject_reason(&source_paths, target.target_dir()).is_some() {
+            return None;
+        }
+        Some(target)
+    }
+
+    fn path_list_drop_target_candidate_from_window_position(
+        &mut self,
+        pane_id: PaneId,
+        position: gpui::Point<gpui::Pixels>,
+    ) -> Option<PathListDropTarget> {
         match self.item_at_window_position(pane_id, position) {
-            Some(hit) if hit.is_dir => {
-                self.set_dragged_paths_drop_target_for_directory(pane_id, &source_paths, hit.path)
-            }
+            Some(hit) if hit.is_dir => Some(PathListDropTarget::directory(pane_id, hit.path)),
             _ => {
-                let Some(target_dir) = self
+                let target_dir = self
                     .panes
                     .pane(pane_id)
-                    .map(|pane| pane.current_dir.clone())
-                else {
-                    return self.clear_drag_drop_targets();
-                };
-                if item_drop_reject_reason(&source_paths, &target_dir).is_some() {
-                    return self.clear_drag_drop_targets();
-                }
-                self.set_item_drag_drop_target_for_pane(pane_id)
+                    .map(|pane| pane.current_dir.clone())?;
+                Some(PathListDropTarget::pane(pane_id, target_dir))
             }
         }
+    }
+
+    pub(crate) fn update_dragged_paths_drop_target_from_window_position(
+        &mut self,
+        pane_id: PaneId,
+        position: gpui::Point<gpui::Pixels>,
+        source_paths: &[PathBuf],
+    ) -> PathListDropTargetUpdate {
+        let Some(target) =
+            self.dragged_paths_drop_target_from_window_position(pane_id, position, source_paths)
+        else {
+            return PathListDropTargetUpdate {
+                changed: self.clear_drag_drop_targets(),
+                kind: None,
+            };
+        };
+        let kind = target.kind();
+        PathListDropTargetUpdate {
+            changed: self.set_path_list_drop_target(target),
+            kind: Some(kind),
+        }
+    }
+
+    fn set_path_list_drop_target(&mut self, target: PathListDropTarget) -> bool {
+        self.drop_targets.set_item(target.into_item_target())
     }
 
     fn start_rubber_band(&mut self, pane_id: PaneId, start: ViewPoint) {
@@ -4196,19 +4216,6 @@ impl FikaApp {
         }
     }
 
-    pub(crate) fn set_item_drag_drop_target_for_pane(&mut self, pane_id: PaneId) -> bool {
-        self.drop_targets.set_item(ItemDropTarget::Pane { pane_id })
-    }
-
-    fn set_item_drop_target_for_directory_unchecked(
-        &mut self,
-        pane_id: PaneId,
-        path: PathBuf,
-    ) -> bool {
-        self.drop_targets
-            .set_item(ItemDropTarget::Directory { pane_id, path })
-    }
-
     pub(crate) fn set_dragged_paths_drop_target_for_directory(
         &mut self,
         pane_id: PaneId,
@@ -4218,7 +4225,7 @@ impl FikaApp {
         if item_drop_reject_reason(source_paths, &target_dir).is_some() {
             return self.clear_drag_drop_targets();
         }
-        self.set_item_drop_target_for_directory_unchecked(pane_id, target_dir)
+        self.set_path_list_drop_target(PathListDropTarget::directory(pane_id, target_dir))
     }
 
     fn clear_item_drop_target(&mut self) -> bool {
@@ -4269,29 +4276,29 @@ impl FikaApp {
         self.drop_targets.clear_all()
     }
 
-    pub(crate) fn schedule_drop_target_stale_clear(&mut self, cx: &mut Context<Self>) {
-        if self.drop_target_stale_timer_running || !self.drop_targets.has_target() {
+    pub(crate) fn refresh_drop_target_lease(&mut self, cx: &mut Context<Self>) {
+        if self.drop_target_lease_timer_running || !self.drop_targets.has_target() {
             return;
         }
-        self.drop_target_stale_timer_running = true;
+        self.drop_target_lease_timer_running = true;
         cx.spawn(
             move |this: gpui::WeakEntity<FikaApp>, cx: &mut gpui::AsyncApp| {
                 let mut cx = cx.clone();
                 async move {
                     loop {
                         let Ok(generation) =
-                            this.update(&mut cx, |app, _cx| app.drop_targets.stale_generation())
+                            this.update(&mut cx, |app, _cx| app.drop_targets.lease_generation())
                         else {
                             break;
                         };
                         cx.background_executor()
-                            .timer(DROP_TARGET_STALE_TIMEOUT)
+                            .timer(DROP_TARGET_LEASE_TIMEOUT)
                             .await;
                         let Ok(keep_running) = this.update(&mut cx, |app, cx| {
-                            if app.drop_targets.stale_generation() == generation {
+                            if app.drop_targets.lease_generation() == generation {
                                 let changed =
-                                    app.clear_stale_drop_targets_for_generation(generation);
-                                app.drop_target_stale_timer_running = false;
+                                    app.clear_drop_targets_for_lease_generation(generation);
+                                app.drop_target_lease_timer_running = false;
                                 if changed {
                                     cx.notify();
                                 }
@@ -4299,7 +4306,7 @@ impl FikaApp {
                             } else if app.drop_targets.has_target() {
                                 true
                             } else {
-                                app.drop_target_stale_timer_running = false;
+                                app.drop_target_lease_timer_running = false;
                                 false
                             }
                         }) else {
@@ -4315,8 +4322,8 @@ impl FikaApp {
         .detach();
     }
 
-    fn clear_stale_drop_targets_for_generation(&mut self, generation: u64) -> bool {
-        self.drop_targets.clear_stale_for_generation(generation)
+    fn clear_drop_targets_for_lease_generation(&mut self, generation: u64) -> bool {
+        self.drop_targets.clear_for_lease_generation(generation)
     }
 
     fn take_active_item_drag_paths_for_drop(
@@ -4388,9 +4395,15 @@ impl FikaApp {
         cx: &mut Context<Self>,
     ) {
         let source_paths = self.item_drag_source_paths(&payload);
-        match self.item_at_window_position(target_pane, position) {
-            Some(hit) if hit.is_dir => {
-                let target_dir = hit.path;
+        let Some(target) =
+            self.path_list_drop_target_candidate_from_window_position(target_pane, position)
+        else {
+            return;
+        };
+        let kind = target.kind();
+        let target_dir = target.target_dir().to_path_buf();
+        match kind {
+            PathListDropTargetKind::Directory => {
                 let _ = self.set_dragged_paths_drop_target_for_directory(
                     target_pane,
                     &source_paths,
@@ -4405,8 +4418,8 @@ impl FikaApp {
                     cx,
                 );
             }
-            _ => {
-                let _ = self.set_item_drag_drop_target_for_pane(target_pane);
+            PathListDropTargetKind::Pane => {
+                let _ = self.set_path_list_drop_target(target);
                 self.drop_item_drag_to_pane(target_pane, payload, position, cx);
             }
         }
@@ -4437,9 +4450,15 @@ impl FikaApp {
         cx: &mut Context<Self>,
     ) {
         let paths = normalized_drag_paths(paths);
-        match self.item_at_window_position(target_pane, position) {
-            Some(hit) if hit.is_dir => {
-                let target_dir = hit.path;
+        let Some(target) =
+            self.path_list_drop_target_candidate_from_window_position(target_pane, position)
+        else {
+            return;
+        };
+        let kind = target.kind();
+        let target_dir = target.target_dir().to_path_buf();
+        match kind {
+            PathListDropTargetKind::Directory => {
                 let _ = self.set_dragged_paths_drop_target_for_directory(
                     target_pane,
                     &paths,
@@ -4454,8 +4473,8 @@ impl FikaApp {
                     cx,
                 );
             }
-            _ => {
-                let _ = self.set_item_drag_drop_target_for_pane(target_pane);
+            PathListDropTargetKind::Pane => {
+                let _ = self.set_path_list_drop_target(target);
                 self.drop_external_paths_to_pane(target_pane, paths, position, cx);
             }
         }
@@ -5953,38 +5972,60 @@ impl FikaApp {
             (
                 ContextMenuAction::MountDevice,
                 ContextMenuTarget::Place {
-                    path, device: true, ..
-                },
-            ) => {
-                self.run_device_place_operation(menu.pane_id, path, DevicePlaceOperation::Mount, cx)
-            }
-            (
-                ContextMenuAction::UnmountDevice,
-                ContextMenuTarget::Place {
-                    path, device: true, ..
+                    device_id: Some(device_id),
+                    label,
+                    device: true,
+                    ..
                 },
             ) => self.run_device_place_operation(
                 menu.pane_id,
-                path,
+                device_id,
+                label,
+                DevicePlaceOperation::Mount,
+                cx,
+            ),
+            (
+                ContextMenuAction::UnmountDevice,
+                ContextMenuTarget::Place {
+                    device_id: Some(device_id),
+                    label,
+                    device: true,
+                    ..
+                },
+            ) => self.run_device_place_operation(
+                menu.pane_id,
+                device_id,
+                label,
                 DevicePlaceOperation::Unmount,
                 cx,
             ),
             (
                 ContextMenuAction::EjectDevice,
                 ContextMenuTarget::Place {
-                    path, device: true, ..
-                },
-            ) => {
-                self.run_device_place_operation(menu.pane_id, path, DevicePlaceOperation::Eject, cx)
-            }
-            (
-                ContextMenuAction::SafelyRemoveDevice,
-                ContextMenuTarget::Place {
-                    path, device: true, ..
+                    device_id: Some(device_id),
+                    label,
+                    device: true,
+                    ..
                 },
             ) => self.run_device_place_operation(
                 menu.pane_id,
-                path,
+                device_id,
+                label,
+                DevicePlaceOperation::Eject,
+                cx,
+            ),
+            (
+                ContextMenuAction::SafelyRemoveDevice,
+                ContextMenuTarget::Place {
+                    device_id: Some(device_id),
+                    label,
+                    device: true,
+                    ..
+                },
+            ) => self.run_device_place_operation(
+                menu.pane_id,
+                device_id,
+                label,
                 DevicePlaceOperation::SafelyRemove,
                 cx,
             ),
@@ -7112,6 +7153,10 @@ mod tests {
     use super::*;
     use fika_core::ServiceMenuPriority;
 
+    fn set_test_item_drop_target_for_pane(app: &mut FikaApp, pane_id: PaneId) -> bool {
+        app.drop_targets.set_item(ItemDropTarget::Pane { pane_id })
+    }
+
     #[test]
     fn app_env_flag_truthy_values_are_explicit() {
         assert!(env_flag_is_truthy("1"));
@@ -7157,6 +7202,8 @@ mod tests {
                 marker: "/",
                 label: "Root".to_string(),
                 path: PathBuf::from("/"),
+                device_id: None,
+                device_mounted: true,
                 editable: false,
                 removable: false,
                 device_ejectable: false,
@@ -7167,6 +7214,8 @@ mod tests {
                 marker: "H",
                 label: "Home".to_string(),
                 path: PathBuf::from("/home/yk"),
+                device_id: None,
+                device_mounted: true,
                 editable: false,
                 removable: false,
                 device_ejectable: false,
@@ -7177,6 +7226,8 @@ mod tests {
                 marker: "Down",
                 label: "Downloads".to_string(),
                 path: PathBuf::from("/home/yk/Downloads"),
+                device_id: None,
+                device_mounted: true,
                 editable: false,
                 removable: false,
                 device_ejectable: false,
@@ -7797,6 +7848,8 @@ mod tests {
     #[test]
     fn places_user_bookmark_context_menu_enables_edit_and_remove() {
         let target = ContextMenuTarget::Place {
+            label: "Place".to_string(),
+            device_id: None,
             path: PathBuf::from("/tmp/fika-user-place"),
             mounted: true,
             device: false,
@@ -7830,7 +7883,9 @@ mod tests {
     #[test]
     fn unmounted_device_place_context_menu_disables_open_actions() {
         let target = ContextMenuTarget::Place {
-            path: PathBuf::from("/dev/sdz1"),
+            label: "USB".to_string(),
+            device_id: Some("gio:test:usb".to_string()),
+            path: PathBuf::from("gio:test:usb"),
             mounted: false,
             device: true,
             trash_place: false,
@@ -7864,6 +7919,8 @@ mod tests {
     #[test]
     fn mounted_device_place_context_menu_offers_unmount_and_eject() {
         let target = ContextMenuTarget::Place {
+            label: "USB".to_string(),
+            device_id: Some("gio:test:usb".to_string()),
             path: PathBuf::from("/run/media/yk/USB"),
             mounted: true,
             device: true,
@@ -7899,6 +7956,8 @@ mod tests {
     #[test]
     fn device_place_context_menu_offers_safely_remove_when_power_off_supported() {
         let target = ContextMenuTarget::Place {
+            label: "USB".to_string(),
+            device_id: Some("gio:test:usb".to_string()),
             path: PathBuf::from("/run/media/yk/USB"),
             mounted: true,
             device: true,
@@ -9136,7 +9195,7 @@ text/plain=viewer.desktop;\n",
         let root = test_dir("places-load");
         let bookmark = root.join("bookmark");
         std::fs::create_dir_all(&bookmark).unwrap();
-        let path = root.join("user-places.xbel");
+        let path = root.join("places.xbel");
         fika_core::save_user_places(
             &path,
             &[
@@ -9172,7 +9231,7 @@ text/plain=viewer.desktop;\n",
         let root = test_dir("places-network-root");
         let bookmark = root.join("bookmark");
         std::fs::create_dir_all(&bookmark).unwrap();
-        let path = root.join("user-places.xbel");
+        let path = root.join("places.xbel");
         fika_core::save_user_places(
             &path,
             &[
@@ -9218,12 +9277,14 @@ text/plain=viewer.desktop;\n",
 
     fn test_device(path: &str, label: &str, removable: bool) -> DeviceInfo {
         DeviceInfo {
-            device_path: PathBuf::from(format!("/dev/{label}")),
+            id: format!("gio:test:{label}"),
             mount_point: Some(PathBuf::from(path)),
+            uri: Some(format!("file://{path}")),
             filesystem_type: Some("exfat".to_string()),
             label: Some(label.to_string()),
             capacity_bytes: Some(1024),
             removable,
+            mounted: true,
             ejectable: false,
             can_power_off: false,
         }
@@ -9234,7 +9295,7 @@ text/plain=viewer.desktop;\n",
         let root = test_dir("places-devices");
         let bookmark = root.join("bookmark");
         std::fs::create_dir_all(&bookmark).unwrap();
-        let path = root.join("user-places.xbel");
+        let path = root.join("places.xbel");
         fika_core::save_user_places(
             &path,
             &[UserPlace::new("Bookmark".to_string(), bookmark.clone())],
@@ -9245,12 +9306,14 @@ text/plain=viewer.desktop;\n",
             test_device("/run/media/yk/Alpha", "Alpha", true),
             test_device("/run/media/yk/Internal", "Internal", false),
             DeviceInfo {
-                device_path: PathBuf::from("/dev/sdz1"),
+                id: "gio:test:unmounted".to_string(),
                 mount_point: None,
+                uri: None,
                 filesystem_type: Some("exfat".to_string()),
                 label: Some("Unmounted".to_string()),
                 capacity_bytes: Some(1024),
                 removable: true,
+                mounted: false,
                 ejectable: true,
                 can_power_off: true,
             },
@@ -9302,7 +9365,7 @@ text/plain=viewer.desktop;\n",
                         place.device_can_power_off,
                     )
                 }),
-            Some((PathBuf::from("/dev/sdz1"), false, true, true))
+            Some((PathBuf::from("gio:test:unmounted"), false, true, true))
         );
         let alpha_index = places
             .iter()
@@ -9329,6 +9392,8 @@ text/plain=viewer.desktop;\n",
                 marker: "H",
                 label: "Home".to_string(),
                 path: current.clone(),
+                device_id: None,
+                device_mounted: true,
                 editable: false,
                 removable: false,
                 device_ejectable: false,
@@ -9339,6 +9404,8 @@ text/plain=viewer.desktop;\n",
                 marker: "B",
                 label: "User".to_string(),
                 path: user.clone(),
+                device_id: None,
+                device_mounted: true,
                 editable: true,
                 removable: true,
                 device_ejectable: false,
@@ -9349,6 +9416,8 @@ text/plain=viewer.desktop;\n",
                 marker: "/",
                 label: "Root".to_string(),
                 path: PathBuf::from("/"),
+                device_id: None,
+                device_mounted: true,
                 editable: false,
                 removable: false,
                 device_ejectable: false,
@@ -9409,6 +9478,8 @@ text/plain=viewer.desktop;\n",
             marker: "/",
             label: "Root".to_string(),
             path: PathBuf::from("/"),
+            device_id: None,
+            device_mounted: true,
             editable: false,
             removable: false,
             device_ejectable: false,
@@ -9445,6 +9516,8 @@ text/plain=viewer.desktop;\n",
             marker: "/",
             label: "Root".to_string(),
             path: PathBuf::from("/"),
+            device_id: None,
+            device_mounted: true,
             editable: false,
             removable: false,
             device_ejectable: false,
@@ -9487,6 +9560,8 @@ text/plain=viewer.desktop;\n",
             marker: "Tr",
             label: "Trash".to_string(),
             path: file_ops::trash_files_dir(),
+            device_id: None,
+            device_mounted: true,
             editable: false,
             removable: false,
             device_ejectable: false,
@@ -9600,6 +9675,8 @@ text/plain=viewer.desktop;\n",
                 marker: "H",
                 label: "Home".to_string(),
                 path: current.clone(),
+                device_id: None,
+                device_mounted: true,
                 editable: false,
                 removable: false,
                 device_ejectable: false,
@@ -9610,6 +9687,8 @@ text/plain=viewer.desktop;\n",
                 marker: "B",
                 label: "User".to_string(),
                 path: user.clone(),
+                device_id: None,
+                device_mounted: true,
                 editable: true,
                 removable: true,
                 device_ejectable: false,
@@ -9620,6 +9699,8 @@ text/plain=viewer.desktop;\n",
                 marker: "/",
                 label: "Root".to_string(),
                 path: PathBuf::from("/"),
+                device_id: None,
+                device_mounted: true,
                 editable: false,
                 removable: false,
                 device_ejectable: false,
@@ -9681,6 +9762,8 @@ text/plain=viewer.desktop;\n",
                 marker: "H",
                 label: "Home".to_string(),
                 path: current.clone(),
+                device_id: None,
+                device_mounted: true,
                 editable: false,
                 removable: false,
                 device_ejectable: false,
@@ -9691,6 +9774,8 @@ text/plain=viewer.desktop;\n",
                 marker: "B",
                 label: "User".to_string(),
                 path: user.clone(),
+                device_id: None,
+                device_mounted: true,
                 editable: true,
                 removable: true,
                 device_ejectable: false,
@@ -9743,6 +9828,8 @@ text/plain=viewer.desktop;\n",
             marker: "H",
             label: "Home".to_string(),
             path: current,
+            device_id: None,
+            device_mounted: true,
             editable: false,
             removable: false,
             device_ejectable: false,
@@ -9777,6 +9864,8 @@ text/plain=viewer.desktop;\n",
                 marker: "H",
                 label: "Home".to_string(),
                 path: home_dir(),
+                device_id: None,
+                device_mounted: true,
                 editable: false,
                 removable: false,
                 device_ejectable: false,
@@ -9787,6 +9876,8 @@ text/plain=viewer.desktop;\n",
                 marker: "/",
                 label: "Root".to_string(),
                 path: PathBuf::from("/"),
+                device_id: None,
+                device_mounted: true,
                 editable: false,
                 removable: false,
                 device_ejectable: false,
@@ -9843,6 +9934,8 @@ text/plain=viewer.desktop;\n",
                 marker: "H",
                 label: "Home".to_string(),
                 path: current.clone(),
+                device_id: None,
+                device_mounted: true,
                 editable: false,
                 removable: false,
                 device_ejectable: false,
@@ -9853,6 +9946,8 @@ text/plain=viewer.desktop;\n",
                 marker: "B",
                 label: "User".to_string(),
                 path: user.clone(),
+                device_id: None,
+                device_mounted: true,
                 editable: true,
                 removable: true,
                 device_ejectable: false,
@@ -9863,6 +9958,8 @@ text/plain=viewer.desktop;\n",
                 marker: "/",
                 label: "Root".to_string(),
                 path: PathBuf::from("/"),
+                device_id: None,
+                device_mounted: true,
                 editable: false,
                 removable: false,
                 device_ejectable: false,
@@ -9870,7 +9967,7 @@ text/plain=viewer.desktop;\n",
             },
         ];
 
-        assert!(app.set_item_drag_drop_target_for_pane(pane_id));
+        assert!(set_test_item_drop_target_for_pane(&mut app, pane_id));
         assert!(app.set_place_drag_drop_target_for_path(user.clone()));
         assert!(app.drop_targets.item().is_none());
         assert!(place_drop_target_matches_place(
@@ -9914,7 +10011,7 @@ text/plain=viewer.desktop;\n",
             0
         ));
 
-        assert!(app.set_item_drag_drop_target_for_pane(pane_id));
+        assert!(set_test_item_drop_target_for_pane(&mut app, pane_id));
         assert!(app.drop_targets.place().is_none());
         assert!(item_drop_target_matches_pane(
             app.drop_targets.item(),
@@ -9925,26 +10022,26 @@ text/plain=viewer.desktop;\n",
     }
 
     #[test]
-    fn drop_target_stale_generation_clears_only_current_target() {
-        let current = test_dir("drop-target-stale-current");
-        let target = test_dir("drop-target-stale-target");
+    fn drop_target_lease_generation_clears_only_current_target() {
+        let current = test_dir("drop-target-lease-current");
+        let target = test_dir("drop-target-lease-target");
         std::fs::create_dir_all(&current).unwrap();
         std::fs::create_dir_all(&target).unwrap();
         let current_arg = current.display().to_string();
         let mut app = test_app_with_entries(&current_arg, &[]);
         let pane_id = app.panes.focused().unwrap();
 
-        assert!(app.set_item_drag_drop_target_for_pane(pane_id));
-        let stale_generation = app.drop_targets.stale_generation();
+        assert!(set_test_item_drop_target_for_pane(&mut app, pane_id));
+        let old_generation = app.drop_targets.lease_generation();
         assert!(app.set_place_drag_drop_target_for_path(target.clone()));
-        assert!(!app.clear_stale_drop_targets_for_generation(stale_generation));
+        assert!(!app.clear_drop_targets_for_lease_generation(old_generation));
         assert!(place_drop_target_matches_place(
             app.drop_targets.place(),
             &target
         ));
 
-        let current_generation = app.drop_targets.stale_generation();
-        assert!(app.clear_stale_drop_targets_for_generation(current_generation));
+        let current_generation = app.drop_targets.lease_generation();
+        assert!(app.clear_drop_targets_for_lease_generation(current_generation));
         assert!(app.drop_targets.item().is_none());
         assert!(app.drop_targets.place().is_none());
 
@@ -9953,18 +10050,18 @@ text/plain=viewer.desktop;\n",
     }
 
     #[test]
-    fn repeated_drop_target_refresh_extends_stale_generation() {
+    fn repeated_drop_target_refresh_extends_lease_generation() {
         let current = test_dir("drop-target-refresh-current");
         std::fs::create_dir_all(&current).unwrap();
         let current_arg = current.display().to_string();
         let mut app = test_app_with_entries(&current_arg, &[]);
         let pane_id = app.panes.focused().unwrap();
 
-        assert!(app.set_item_drag_drop_target_for_pane(pane_id));
-        let first_generation = app.drop_targets.stale_generation();
-        assert!(!app.set_item_drag_drop_target_for_pane(pane_id));
-        assert!(app.drop_targets.stale_generation() > first_generation);
-        assert!(!app.clear_stale_drop_targets_for_generation(first_generation));
+        assert!(set_test_item_drop_target_for_pane(&mut app, pane_id));
+        let first_generation = app.drop_targets.lease_generation();
+        assert!(!set_test_item_drop_target_for_pane(&mut app, pane_id));
+        assert!(app.drop_targets.lease_generation() > first_generation);
+        assert!(!app.clear_drop_targets_for_lease_generation(first_generation));
         assert!(item_drop_target_matches_pane(
             app.drop_targets.item(),
             pane_id
@@ -9990,6 +10087,8 @@ text/plain=viewer.desktop;\n",
                 marker: "H",
                 label: "Home".to_string(),
                 path: current.clone(),
+                device_id: None,
+                device_mounted: true,
                 editable: false,
                 removable: false,
                 device_ejectable: false,
@@ -10000,6 +10099,8 @@ text/plain=viewer.desktop;\n",
                 marker: "B",
                 label: "Existing".to_string(),
                 path: existing.clone(),
+                device_id: None,
+                device_mounted: true,
                 editable: true,
                 removable: true,
                 device_ejectable: false,
@@ -10010,6 +10111,8 @@ text/plain=viewer.desktop;\n",
                 marker: "/",
                 label: "Root".to_string(),
                 path: PathBuf::from("/"),
+                device_id: None,
+                device_mounted: true,
                 editable: false,
                 removable: false,
                 device_ejectable: false,
@@ -10101,6 +10204,8 @@ text/plain=viewer.desktop;\n",
                 marker: "H",
                 label: "Home".to_string(),
                 path: current.clone(),
+                device_id: None,
+                device_mounted: true,
                 editable: false,
                 removable: false,
                 device_ejectable: false,
@@ -10111,6 +10216,8 @@ text/plain=viewer.desktop;\n",
                 marker: "B",
                 label: "Alpha".to_string(),
                 path: alpha.clone(),
+                device_id: None,
+                device_mounted: true,
                 editable: true,
                 removable: true,
                 device_ejectable: false,
@@ -10121,6 +10228,8 @@ text/plain=viewer.desktop;\n",
                 marker: "B",
                 label: "Beta".to_string(),
                 path: beta.clone(),
+                device_id: None,
+                device_mounted: true,
                 editable: true,
                 removable: true,
                 device_ejectable: false,
@@ -10131,6 +10240,8 @@ text/plain=viewer.desktop;\n",
                 marker: "/",
                 label: "Root".to_string(),
                 path: PathBuf::from("/"),
+                device_id: None,
+                device_mounted: true,
                 editable: false,
                 removable: false,
                 device_ejectable: false,
@@ -10175,8 +10286,8 @@ text/plain=viewer.desktop;\n",
     }
 
     #[test]
-    fn place_drag_reorder_refuses_builtin_places() {
-        let current = test_dir("place-reorder-refuse-current");
+    fn place_drag_reorder_allows_active_and_builtin_primary_places() {
+        let current = test_dir("place-reorder-active-current");
         let user = test_dir("place-reorder-refuse-user");
         std::fs::create_dir_all(&current).unwrap();
         std::fs::create_dir_all(&user).unwrap();
@@ -10189,6 +10300,8 @@ text/plain=viewer.desktop;\n",
                 marker: "H",
                 label: "Home".to_string(),
                 path: current.clone(),
+                device_id: None,
+                device_mounted: true,
                 editable: false,
                 removable: false,
                 device_ejectable: false,
@@ -10199,8 +10312,22 @@ text/plain=viewer.desktop;\n",
                 marker: "B",
                 label: "User".to_string(),
                 path: user.clone(),
+                device_id: None,
+                device_mounted: true,
                 editable: true,
                 removable: true,
+                device_ejectable: false,
+                device_can_power_off: false,
+            },
+            PlaceEntry {
+                group: "Network",
+                marker: "Net",
+                label: "Network".to_string(),
+                path: network_root_path(),
+                device_id: None,
+                device_mounted: true,
+                editable: false,
+                removable: false,
                 device_ejectable: false,
                 device_can_power_off: false,
             },
@@ -10214,16 +10341,27 @@ text/plain=viewer.desktop;\n",
                 .iter()
                 .map(|place| place.label.as_str())
                 .collect::<Vec<_>>(),
-            vec!["Home", "User"]
+            vec!["User", "Home", "Network"]
         );
         assert!(app.drop_targets.place().is_none());
-        assert_eq!(
-            app.status_message_for_pane(pane_id),
-            "Place cannot be moved"
-        );
+        assert_eq!(app.status_message_for_pane(pane_id), "Moved place Home");
         assert_eq!(
             fika_core::load_user_places(&app.user_places_path),
             Ok(vec![UserPlace::new("User".to_string(), user.clone())])
+        );
+
+        app.drop_place_drag_to_place_insert(2, 0);
+
+        assert_eq!(
+            app.places
+                .iter()
+                .map(|place| place.label.as_str())
+                .collect::<Vec<_>>(),
+            vec!["User", "Home", "Network"]
+        );
+        assert_eq!(
+            app.status_message_for_pane(pane_id),
+            "Place cannot be moved"
         );
 
         let _ = std::fs::remove_dir_all(current);
@@ -10245,7 +10383,7 @@ text/plain=viewer.desktop;\n",
         let second = app.panes.split(first).unwrap();
         app.split_pane_ratio(first, second);
         app.load_pane(second, second_dir.clone());
-        assert!(app.set_item_drag_drop_target_for_pane(first));
+        assert!(set_test_item_drop_target_for_pane(&mut app, first));
         assert!(app.set_place_drag_drop_target_for_insert(0));
 
         app.drop_place_drag_to_pane(second, place_dir.clone());
@@ -10286,6 +10424,8 @@ text/plain=viewer.desktop;\n",
                 marker: "B",
                 label: "Original".to_string(),
                 path: original.clone(),
+                device_id: None,
+                device_mounted: true,
                 editable: true,
                 removable: true,
                 device_ejectable: false,
@@ -10296,6 +10436,8 @@ text/plain=viewer.desktop;\n",
                 marker: "B",
                 label: "Duplicate".to_string(),
                 path: duplicate.clone(),
+                device_id: None,
+                device_mounted: true,
                 editable: true,
                 removable: true,
                 device_ejectable: false,
@@ -10353,6 +10495,8 @@ text/plain=viewer.desktop;\n",
                 marker: "H",
                 label: "Home".to_string(),
                 path: current.clone(),
+                device_id: None,
+                device_mounted: true,
                 editable: false,
                 removable: false,
                 device_ejectable: false,
@@ -10363,6 +10507,8 @@ text/plain=viewer.desktop;\n",
                 marker: "B",
                 label: "User".to_string(),
                 path: user.clone(),
+                device_id: None,
+                device_mounted: true,
                 editable: true,
                 removable: true,
                 device_ejectable: false,
@@ -12007,7 +12153,7 @@ text/plain=viewer.desktop;\n",
         let mut app = test_app_with_entries(temp.to_str().unwrap(), &[]);
         let pane_id = app.panes.focused().unwrap();
 
-        assert!(app.set_item_drag_drop_target_for_pane(pane_id));
+        assert!(set_test_item_drop_target_for_pane(&mut app, pane_id));
         assert!(item_drop_target_matches_pane(
             app.drop_targets.item(),
             pane_id
@@ -12017,7 +12163,7 @@ text/plain=viewer.desktop;\n",
             pane_id,
             &target_dir
         ));
-        assert!(!app.set_item_drag_drop_target_for_pane(pane_id));
+        assert!(!set_test_item_drop_target_for_pane(&mut app, pane_id));
 
         assert!(app.set_dragged_paths_drop_target_for_directory(
             pane_id,
@@ -12052,15 +12198,15 @@ text/plain=viewer.desktop;\n",
         let mut app = test_app_with_entries(temp.to_str().unwrap(), &[]);
         let pane_id = app.panes.focused().unwrap();
 
-        assert!(app.set_item_drag_drop_target_for_pane(pane_id));
-        let pane_generation = app.drop_targets.stale_generation();
+        assert!(set_test_item_drop_target_for_pane(&mut app, pane_id));
+        let pane_generation = app.drop_targets.lease_generation();
         assert!(!app.clear_item_drop_target_for_pane(PaneId(999)));
         assert!(item_drop_target_matches_pane(
             app.drop_targets.item(),
             pane_id
         ));
         assert!(app.clear_item_drop_target_for_pane(pane_id));
-        assert!(app.drop_targets.stale_generation() > pane_generation);
+        assert!(app.drop_targets.lease_generation() > pane_generation);
         assert!(app.drop_targets.item().is_none());
 
         assert!(app.set_dragged_paths_drop_target_for_directory(
@@ -12068,7 +12214,7 @@ text/plain=viewer.desktop;\n",
             std::slice::from_ref(&source),
             first_dir.clone()
         ));
-        let directory_generation = app.drop_targets.stale_generation();
+        let directory_generation = app.drop_targets.lease_generation();
         assert!(!app.clear_item_drop_target_for_directory(pane_id, &second_dir));
         assert!(!app.clear_item_drop_target_for_directory(PaneId(999), &first_dir));
         assert!(item_drop_target_matches_directory(
@@ -12077,7 +12223,7 @@ text/plain=viewer.desktop;\n",
             &first_dir
         ));
         assert!(app.clear_item_drop_target_for_directory(pane_id, &first_dir));
-        assert!(app.drop_targets.stale_generation() > directory_generation);
+        assert!(app.drop_targets.lease_generation() > directory_generation);
         assert!(app.drop_targets.item().is_none());
 
         let _ = std::fs::remove_dir_all(temp);
@@ -12094,7 +12240,7 @@ text/plain=viewer.desktop;\n",
         let pane_id = app.panes.focused().unwrap();
         let source_paths = vec![source_dir.clone()];
 
-        assert!(app.set_item_drag_drop_target_for_pane(pane_id));
+        assert!(set_test_item_drop_target_for_pane(&mut app, pane_id));
         assert!(item_drop_reject_reason(&source_paths, &source_dir).is_some());
         assert!(app.set_dragged_paths_drop_target_for_directory(
             pane_id,
@@ -12124,11 +12270,12 @@ text/plain=viewer.desktop;\n",
         let mut app = test_app_with_entries(current.to_str().unwrap(), &[]);
         let pane_id = app.panes.focused().unwrap();
 
-        assert!(!app.set_dragged_paths_drop_target_from_window_position(
+        let update = app.update_dragged_paths_drop_target_from_window_position(
             pane_id,
             gpui::point(px(24.0), px(24.0)),
-            std::slice::from_ref(&current)
-        ));
+            std::slice::from_ref(&current),
+        );
+        assert!(!update.accepted());
         assert!(app.drop_targets.item().is_none());
 
         let _ = std::fs::remove_dir_all(current);
@@ -12173,6 +12320,8 @@ text/plain=viewer.desktop;\n",
             marker: "F",
             label: "Folder".to_string(),
             path: folder.clone(),
+            device_id: None,
+            device_mounted: true,
             editable: true,
             removable: true,
             device_ejectable: false,
@@ -12220,16 +12369,31 @@ text/plain=viewer.desktop;\n",
         let layout = app.layout_projection_for_pane(pane_id).unwrap().layout;
         let item = layout.item_with_required_text_width(0, None).unwrap();
         let view = app.panes.pane(pane_id).unwrap().view.clone();
+        let blank_position = gpui::point(px(100.0 + 280.0), px(50.0 + 180.0));
+        let update = app.update_dragged_paths_drop_target_from_window_position(
+            pane_id,
+            blank_position,
+            std::slice::from_ref(&source_file),
+        );
+        assert_eq!(update.kind, Some(PathListDropTargetKind::Pane));
+        assert!(item_drop_target_matches_pane(
+            app.drop_targets.item(),
+            pane_id
+        ));
+
+        assert!(app.clear_drag_drop_targets());
+
         let position = gpui::point(
             px(100.0 + item.visual_rect.x - view.scroll_x + 8.0),
             px(50.0 + item.visual_rect.y - view.scroll_y + 8.0),
         );
 
-        assert!(app.set_dragged_paths_drop_target_from_window_position(
+        let update = app.update_dragged_paths_drop_target_from_window_position(
             pane_id,
             position,
-            std::slice::from_ref(&source_file)
-        ));
+            std::slice::from_ref(&source_file),
+        );
+        assert_eq!(update.kind, Some(PathListDropTargetKind::Directory));
         assert!(item_drop_target_matches_directory(
             app.drop_targets.item(),
             pane_id,
@@ -12237,11 +12401,12 @@ text/plain=viewer.desktop;\n",
         ));
 
         assert!(app.clear_drag_drop_targets());
-        assert!(app.set_dragged_paths_drop_target_from_window_position(
+        let update = app.update_dragged_paths_drop_target_from_window_position(
             pane_id,
             position,
-            std::slice::from_ref(&place_source)
-        ));
+            std::slice::from_ref(&place_source),
+        );
+        assert_eq!(update.kind, Some(PathListDropTargetKind::Directory));
         assert!(item_drop_target_matches_directory(
             app.drop_targets.item(),
             pane_id,
@@ -13301,7 +13466,7 @@ text/plain=viewer.desktop;\n",
             trash_monitor: TrashEmptinessMonitor::from_known_state(false),
             hidden_places: BTreeSet::new(),
             hidden_place_sections: BTreeSet::new(),
-            user_places_path: test_dir("user-places").join("user-places.xbel"),
+            user_places_path: test_dir("user-places").join("places.xbel"),
             device_refresh_pending: false,
             next_device_refresh_at: Instant::now(),
             device_monitor_rx: None,
@@ -13328,7 +13493,7 @@ text/plain=viewer.desktop;\n",
             clipboard: None,
             active_item_drag: None,
             drop_targets: DropTargetState::default(),
-            drop_target_stale_timer_running: false,
+            drop_target_lease_timer_running: false,
             rename_draft: None,
             rename_next_after_operation: None,
             location_draft: None,
@@ -13458,7 +13623,9 @@ text/plain=viewer.desktop;\n",
         trash_has_items: bool,
     ) -> ContextMenuTarget {
         ContextMenuTarget::Place {
+            label: "Place".to_string(),
             path,
+            device_id: None,
             mounted: true,
             device: false,
             trash_place,

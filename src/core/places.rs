@@ -2,7 +2,8 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const USER_PLACES_FILE_NAME: &str = "user-places.xbel";
+const FIKA_DATA_DIR_NAME: &str = "fika";
+const USER_PLACES_FILE_NAME: &str = "places.xbel";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct UserPlace {
@@ -17,10 +18,16 @@ impl UserPlace {
 }
 
 pub fn default_user_places_path() -> PathBuf {
-    env::var_os("XDG_DATA_HOME")
+    let data_home = env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)
         .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share")))
-        .unwrap_or_else(|| PathBuf::from("/tmp"))
+        .unwrap_or_else(|| PathBuf::from("/tmp"));
+    user_places_path_for_data_home(data_home)
+}
+
+fn user_places_path_for_data_home(data_home: PathBuf) -> PathBuf {
+    data_home
+        .join(FIKA_DATA_DIR_NAME)
         .join(USER_PLACES_FILE_NAME)
 }
 
@@ -276,7 +283,7 @@ mod tests {
     #[test]
     fn save_user_places_creates_parent_and_loads_again() {
         let root = test_dir("places-xbel");
-        let path = root.join("nested/user-places.xbel");
+        let path = root.join("nested/places.xbel");
         let places = vec![UserPlace::new(
             "Bookmark".to_string(),
             PathBuf::from("/tmp/bookmark"),
@@ -286,6 +293,14 @@ mod tests {
 
         assert_eq!(load_user_places(&path), Ok(places));
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn default_user_places_path_is_fika_scoped() {
+        assert_eq!(
+            user_places_path_for_data_home(PathBuf::from("/xdg/data")),
+            PathBuf::from("/xdg/data/fika/places.xbel")
+        );
     }
 
     fn test_dir(name: &str) -> PathBuf {

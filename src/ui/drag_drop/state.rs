@@ -45,6 +45,64 @@ pub(crate) enum ItemDropTarget {
     Directory { pane_id: PaneId, path: PathBuf },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PathListDropTargetKind {
+    Pane,
+    Directory,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PathListDropTarget {
+    kind: PathListDropTargetKind,
+    item_target: ItemDropTarget,
+    target_dir: PathBuf,
+}
+
+impl PathListDropTarget {
+    pub(crate) fn pane(pane_id: PaneId, target_dir: PathBuf) -> Self {
+        Self {
+            kind: PathListDropTargetKind::Pane,
+            item_target: ItemDropTarget::Pane { pane_id },
+            target_dir,
+        }
+    }
+
+    pub(crate) fn directory(pane_id: PaneId, target_dir: PathBuf) -> Self {
+        Self {
+            kind: PathListDropTargetKind::Directory,
+            item_target: ItemDropTarget::Directory {
+                pane_id,
+                path: target_dir.clone(),
+            },
+            target_dir,
+        }
+    }
+
+    pub(crate) fn kind(&self) -> PathListDropTargetKind {
+        self.kind
+    }
+
+    pub(crate) fn target_dir(&self) -> &Path {
+        &self.target_dir
+    }
+
+    pub(crate) fn into_item_target(self) -> ItemDropTarget {
+        self.item_target
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PathListDropTargetUpdate {
+    pub(crate) changed: bool,
+    pub(crate) kind: Option<PathListDropTargetKind>,
+}
+
+impl PathListDropTargetUpdate {
+    pub(crate) fn accepted(self) -> bool {
+        self.kind.is_some()
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum PlaceDropTarget {
     Place { path: PathBuf },
@@ -55,7 +113,7 @@ pub(crate) enum PlaceDropTarget {
 pub(crate) struct DropTargetState {
     item: Option<ItemDropTarget>,
     place: Option<PlaceDropTarget>,
-    stale_generation: u64,
+    lease_generation: u64,
 }
 
 impl DropTargetState {
@@ -67,8 +125,8 @@ impl DropTargetState {
         self.place.as_ref()
     }
 
-    pub(crate) fn stale_generation(&self) -> u64 {
-        self.stale_generation
+    pub(crate) fn lease_generation(&self) -> u64 {
+        self.lease_generation
     }
 
     pub(crate) fn has_target(&self) -> bool {
@@ -83,24 +141,24 @@ impl DropTargetState {
     pub(crate) fn set_item(&mut self, target: ItemDropTarget) -> bool {
         let target = Some(target);
         if self.item == target && self.place.is_none() {
-            self.touch_stale_generation();
+            self.refresh_lease_generation();
             return false;
         }
         self.item = target;
         self.place = None;
-        self.touch_stale_generation();
+        self.refresh_lease_generation();
         true
     }
 
     pub(crate) fn set_place(&mut self, target: PlaceDropTarget) -> bool {
         let target = Some(target);
         if self.place == target && self.item.is_none() {
-            self.touch_stale_generation();
+            self.refresh_lease_generation();
             return false;
         }
         self.place = target;
         self.item = None;
-        self.touch_stale_generation();
+        self.refresh_lease_generation();
         true
     }
 
@@ -108,7 +166,7 @@ impl DropTargetState {
         let had_target = self.item.is_some();
         self.item = None;
         if had_target {
-            self.touch_stale_generation();
+            self.refresh_lease_generation();
         }
         had_target
     }
@@ -146,7 +204,7 @@ impl DropTargetState {
         let had_target = self.place.is_some();
         self.place = None;
         if had_target {
-            self.touch_stale_generation();
+            self.refresh_lease_generation();
         }
         had_target
     }
@@ -156,20 +214,20 @@ impl DropTargetState {
         self.item = None;
         self.place = None;
         if had_target {
-            self.touch_stale_generation();
+            self.refresh_lease_generation();
         }
         had_target
     }
 
-    pub(crate) fn clear_stale_for_generation(&mut self, generation: u64) -> bool {
-        if self.stale_generation != generation {
+    pub(crate) fn clear_for_lease_generation(&mut self, generation: u64) -> bool {
+        if self.lease_generation != generation {
             return false;
         }
         self.clear_all()
     }
 
-    fn touch_stale_generation(&mut self) {
-        self.stale_generation = self.stale_generation.wrapping_add(1);
+    fn refresh_lease_generation(&mut self) {
+        self.lease_generation = self.lease_generation.wrapping_add(1);
     }
 }
 
@@ -295,6 +353,7 @@ pub(crate) fn place_drop_target_matches_place(
     }
 }
 
+#[cfg(test)]
 pub(crate) fn place_drop_target_matches_insert(
     target: Option<&PlaceDropTarget>,
     index: usize,
@@ -428,17 +487,17 @@ mod tests {
         let mut state = DropTargetState::default();
 
         assert!(state.set_item(ItemDropTarget::Pane { pane_id: pane }));
-        let first_generation = state.stale_generation();
+        let first_generation = state.lease_generation();
         assert!(item_drop_target_matches_pane(state.item(), pane));
 
         assert!(!state.set_item(ItemDropTarget::Pane { pane_id: pane }));
-        assert!(state.stale_generation() > first_generation);
-        let refreshed_generation = state.stale_generation();
+        assert!(state.lease_generation() > first_generation);
+        let refreshed_generation = state.lease_generation();
 
         assert!(state.set_place(PlaceDropTarget::Place { path: path.clone() }));
         assert!(state.item().is_none());
         assert!(place_drop_target_matches_place(state.place(), &path));
-        assert!(state.stale_generation() > refreshed_generation);
+        assert!(state.lease_generation() > refreshed_generation);
     }
 
     #[test]
@@ -453,7 +512,7 @@ mod tests {
             pane_id: pane,
             path: path.clone(),
         }));
-        let generation = state.stale_generation();
+        let generation = state.lease_generation();
 
         assert!(!state.clear_item_for_directory(pane, &other_path));
         assert!(!state.clear_item_for_directory(other_pane, &path));
@@ -462,29 +521,29 @@ mod tests {
             pane,
             &path
         ));
-        assert_eq!(state.stale_generation(), generation);
+        assert_eq!(state.lease_generation(), generation);
 
         assert!(state.clear_item_for_directory(pane, &path));
         assert!(state.item().is_none());
-        assert!(state.stale_generation() > generation);
+        assert!(state.lease_generation() > generation);
     }
 
     #[test]
-    fn drop_target_state_stale_generation_only_clears_current_target() {
+    fn drop_target_state_lease_generation_only_clears_current_target() {
         let pane = PaneId(1);
         let path = PathBuf::from("/tmp/fika-drop-target-state/place");
         let mut state = DropTargetState::default();
 
         assert!(state.set_item(ItemDropTarget::Pane { pane_id: pane }));
-        let stale_generation = state.stale_generation();
+        let old_generation = state.lease_generation();
 
         assert!(state.set_place(PlaceDropTarget::Place { path: path.clone() }));
-        assert!(!state.clear_stale_for_generation(stale_generation));
+        assert!(!state.clear_for_lease_generation(old_generation));
         assert!(place_drop_target_matches_place(state.place(), &path));
 
-        let current_generation = state.stale_generation();
-        assert!(state.clear_stale_for_generation(current_generation));
+        let current_generation = state.lease_generation();
+        assert!(state.clear_for_lease_generation(current_generation));
         assert!(!state.has_target());
-        assert!(state.stale_generation() > current_generation);
+        assert!(state.lease_generation() > current_generation);
     }
 }

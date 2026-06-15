@@ -139,7 +139,7 @@ GIO/GVfs-backed network discovery, authentication, mounting, and scanning.
   - Adds a Network root equivalent to Dolphin `remote:/` and cosmic-files
     `network:///`. It is represented by the canonical `network:///` pseudo path,
     uses `folder-remote` icon candidates, is not persisted to
-    `user-places.xbel`, and is not treated as a local mounted directory until a
+    Fika's Places file, and is not treated as a local mounted directory until a
     network backend is attached.
   - Show saved network bookmarks and discovered mounted network locations as
     locations, not as duplicated text-only hints.

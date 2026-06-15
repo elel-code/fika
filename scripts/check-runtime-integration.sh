@@ -370,12 +370,12 @@ print_runtime_context() {
     echo "  systemd user: $(systemctl_user_probe)"
     echo "  xdp service:  $(systemctl_user_service_probe xdg-desktop-portal.service)"
     echo "  polkit agent: $(polkit_agent_probe)"
-    echo "  udisks2:      $(systemctl_system_service_probe udisks2.service)"
+    echo "  gvfs monitor: $(systemctl_user_service_probe gvfs-udisks2-volume-monitor.service)"
     echo "  tool dbus-send: $(command_probe dbus-send --version)"
     echo "  tool busctl:    $(command_probe busctl --version)"
     echo "  tool gdbus:     $(command_probe gdbus --version)"
     echo "  tool pkaction:  $(command_probe pkaction --version)"
-    echo "  tool udisksctl: $(command_probe udisksctl --version)"
+    echo "  tool gio:       $(command_probe gio --version)"
     echo
 }
 
@@ -558,38 +558,25 @@ activate_system_helper() {
 }
 
 check_devices_runtime() {
-    local udisks_name="org.freedesktop.UDisks2"
     echo "Checking Devices runtime"
 
-    if dbus_name_has_owner system "$udisks_name"; then
-        ok "$udisks_name currently owns a system-bus name"
-    elif dbus_optional_activatable_contains system "$udisks_name"; then
-        ok "$udisks_name is activatable on the system bus"
-    else
-        warn "$udisks_name is not owned or activatable; mounted-path fallback may still work, but mount/unmount/eject cannot use UDisks2"
-        echo
-        return
-    fi
-
-    if ! command -v dbus-send >/dev/null 2>&1; then
-        warn "dbus-send is not available; cannot query UDisks2 ObjectManager"
+    if ! command -v gio >/dev/null 2>&1; then
+        warn "gio is not available; cannot query GIO/GVfs mounts and volumes"
         echo
         return
     fi
 
     local output
-    if output="$(dbus-send --system --dest="$udisks_name" --print-reply \
-        /org/freedesktop/UDisks2 org.freedesktop.DBus.ObjectManager.GetManagedObjects 2>&1)"; then
-        local blocks drives filesystems
-        blocks="$(grep -Fc 'string "org.freedesktop.UDisks2.Block"' <<<"$output")"
-        drives="$(grep -Fc 'string "org.freedesktop.UDisks2.Drive"' <<<"$output")"
-        filesystems="$(grep -Fc 'string "org.freedesktop.UDisks2.Filesystem"' <<<"$output")"
-        ok "UDisks2 ObjectManager returned $blocks Block, $drives Drive, and $filesystems Filesystem interface(s)"
-        if [[ "$blocks" -eq 0 || "$drives" -eq 0 ]]; then
-            warn "UDisks2 responded but exposed few storage objects; test with real removable media before closing Devices validation"
+    if output="$(gio mount -l 2>&1)"; then
+        local mounts volumes
+        mounts="$(grep -Ec '^(Mount|Drive)\(' <<<"$output" || true)"
+        volumes="$(grep -Ec '^Volume\(' <<<"$output" || true)"
+        ok "GIO mount monitor returned $mounts mounted/drive row(s) and $volumes volume row(s)"
+        if [[ "$mounts" -eq 0 && "$volumes" -eq 0 ]]; then
+            warn "GIO responded but exposed no storage rows; test with real removable media before closing Devices validation"
         fi
     else
-        warn "cannot query UDisks2 ObjectManager: $output"
+        warn "cannot query GIO/GVfs mounts: $output"
     fi
 
     echo
@@ -730,7 +717,7 @@ print_live_validation_notes() {
     echo "  - Keep this output with the distro name, desktop, session type, and package version."
     echo "  - Re-run with --activate-system-helper when validating packaged system-bus activation."
     echo "  - Portal backend metadata is independent from FileChooser selection; use portals.conf to opt in to fika for XDP FileChooser validation."
-    echo "  - Test with real removable media before closing UDisks2 mount/unmount/eject validation."
+    echo "  - Test with real removable media before closing GIO/GVfs mount/unmount/eject validation."
     echo
 }
 

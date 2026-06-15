@@ -53,8 +53,8 @@ The current cutover build contains:
   empty, sort by deletion time.
 - Thumbnails: freedesktop thumbnail URI, cache key, cache hit, failure marker,
   `EntryData` path role.
-- UDisks2 device discovery: added/removed/changed signal parsing, mount-info
-  snapshots, removable devices section.
+- GIO/GVfs device discovery: mount/volume monitor snapshots, removable devices
+  section, mount/unmount/eject operations.
 - Network/GVfs remote filesystem classification and Places Network root.
 - D-Bus bus controller: session/system connection cache, timeout/retry helpers,
   owned proxy creation, structured `BusError`.
@@ -122,7 +122,7 @@ src/
   core/bus.rs                    D-Bus session/system bus controller
   core/cache.rs                  Directory entry cache (LRU, per-pane)
   core/clipboard.rs              URI-list encode/decode and GPUI round-trip
-  core/devices.rs                UDisks2 device discovery entry point
+  core/devices.rs                GIO/GVfs device discovery entry point
   core/devices/actions.rs        Mount/unmount/eject/safely-remove ops
   core/directory.rs              Directory lister and watcher events
   core/entries.rs                File entry metadata and sorting
@@ -201,7 +201,7 @@ from `src/lib.rs` (via `src/core.rs`) and builds the `fika`,
 Prerequisites:
 
 - Rust with the 2024 edition toolchain.
-- Linux desktop development libraries needed by GPUI and zbus.
+- Linux desktop development libraries needed by GPUI, GIO/GVfs, and zbus.
 - Network access the first time Cargo fetches the Zed repository dependencies.
 
 Build and run:
@@ -293,11 +293,11 @@ FileChooser backend, opt in through `xdg-desktop-portal` configuration. See
 ### System Integration Reference
 
 - [docs/MIME_LAUNCHER_REFERENCE.md](docs/MIME_LAUNCHER_REFERENCE.md) — MIME detection, application launching, systemd.
-- [docs/DEVICES_REFERENCE.md](docs/DEVICES_REFERENCE.md) — UDisks2 device discovery, mount/unmount/eject.
+- [docs/DEVICES_REFERENCE.md](docs/DEVICES_REFERENCE.md) — GIO/GVfs device discovery, mount/unmount/eject.
 - [docs/TRASH_REFERENCE.md](docs/TRASH_REFERENCE.md) — XDG Trash spec and Dolphin trash implementation.
 - [docs/THUMBNAIL_REFERENCE.md](docs/THUMBNAIL_REFERENCE.md) — Freedesktop thumbnail spec and pipeline.
 - [docs/NETWORK_REFERENCE.md](docs/NETWORK_REFERENCE.md) — GVfs remote filesystem classification and mounts.
-- [docs/BUS_CONTROL_REFERENCE.md](docs/BUS_CONTROL_REFERENCE.md) — D-Bus bus control, zbus connections, UDisks2/systemd/Portal routing.
+- [docs/BUS_CONTROL_REFERENCE.md](docs/BUS_CONTROL_REFERENCE.md) — D-Bus bus control, zbus connections, systemd/Portal routing.
 - [docs/ARK_REFERENCE.md](docs/ARK_REFERENCE.md) — Ark/kerfuffle archive integration and D-Bus interface.
 
 ## License

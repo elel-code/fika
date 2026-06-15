@@ -34,7 +34,7 @@ pub(crate) fn move_user_place_to_insert_index(
     let Some(source) = places.get(source_index) else {
         return MoveUserPlaceResult::NotMovable;
     };
-    if !(source.editable && source.removable) {
+    if !source.group.is_empty() {
         return MoveUserPlaceResult::NotMovable;
     }
 
@@ -124,7 +124,7 @@ mod tests {
     }
 
     #[test]
-    fn move_user_place_reorders_only_movable_bookmarks() {
+    fn move_user_place_reorders_primary_places() {
         let mut places = vec![
             place("", "Home", "/home/yk", false),
             place("", "Alpha", "/home/yk/Alpha", true),
@@ -147,6 +147,19 @@ mod tests {
         );
         assert_eq!(
             move_user_place_to_insert_index(&mut places, 0, 3),
+            MoveUserPlaceResult::Moved {
+                label: "Home".to_string()
+            }
+        );
+        assert_eq!(
+            places
+                .iter()
+                .map(|place| place.label.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Beta", "Alpha", "Home", "Root"]
+        );
+        assert_eq!(
+            move_user_place_to_insert_index(&mut places, 3, 0),
             MoveUserPlaceResult::NotMovable
         );
         assert_eq!(
@@ -188,6 +201,8 @@ mod tests {
             marker: "P",
             label: label.to_string(),
             path: PathBuf::from(path),
+            device_id: None,
+            device_mounted: true,
             editable,
             removable: editable,
             device_ejectable: false,

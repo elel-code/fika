@@ -46,8 +46,8 @@ GPUI 依赖来自 Zed 官方仓库：`https://github.com/zed-industries/zed`。m
   按删除时间排序。
 - 缩略图：freedesktop 缩略图 URI，缓存键，缓存命中，失败标记，
   `EntryData` path role。
-- UDisks2 设备发现：添加/移除/变更信号解析，mount-info 快照，
-  Removable Devices 动态 section。
+- GIO/GVfs 设备发现：mount/volume monitor 快照、Removable Devices 动态
+  section、mount/unmount/eject 操作。
 - Network/GVfs 远程文件系统分类和 Places Network root。
 - D-Bus bus controller：session/system 连接缓存，超时重试 helper，
   owned proxy 创建，结构化 `BusError`。
@@ -109,7 +109,7 @@ src/
   core/bus.rs                    D-Bus session/system 总线控制器
   core/cache.rs                  目录条目缓存（LRU，按 pane）
   core/clipboard.rs              URI-list 编解码和 GPUI 往返
-  core/devices.rs                UDisks2 设备发现入口
+  core/devices.rs                GIO/GVfs 设备发现入口
   core/devices/actions.rs        Mount/unmount/eject/safely-remove 操作
   core/directory.rs              目录 lister 和 watcher 事件
   core/entries.rs                文件条目 metadata 和排序
@@ -187,7 +187,7 @@ src/
 前置条件：
 
 - 支持 Rust 2024 edition 的工具链。
-- GPUI 和 zbus 所需的 Linux 桌面开发库。
+- GPUI、GIO/GVfs 和 zbus 所需的 Linux 桌面开发库。
 - Cargo 首次获取 Zed 仓库依赖时需要网络访问。
 
 构建和运行：
@@ -278,11 +278,11 @@ scripts/check-runtime-integration.sh
 ### 系统集成参考
 
 - [docs/MIME_LAUNCHER_REFERENCE.md](docs/MIME_LAUNCHER_REFERENCE.md) — MIME 检测、应用启动、systemd。
-- [docs/DEVICES_REFERENCE.md](docs/DEVICES_REFERENCE.md) — UDisks2 设备发现、mount/unmount/eject。
+- [docs/DEVICES_REFERENCE.md](docs/DEVICES_REFERENCE.md) — GIO/GVfs 设备发现、mount/unmount/eject。
 - [docs/TRASH_REFERENCE.md](docs/TRASH_REFERENCE.md) — XDG Trash 规范和 Dolphin 回收站实现。
 - [docs/THUMBNAIL_REFERENCE.md](docs/THUMBNAIL_REFERENCE.md) — Freedesktop 缩略图规范和管线。
 - [docs/NETWORK_REFERENCE.md](docs/NETWORK_REFERENCE.md) — GVfs 远程文件系统分类和挂载。
-- [docs/BUS_CONTROL_REFERENCE.md](docs/BUS_CONTROL_REFERENCE.md) — D-Bus 总线控制、zbus 连接、UDisks2/systemd/Portal 路由。
+- [docs/BUS_CONTROL_REFERENCE.md](docs/BUS_CONTROL_REFERENCE.md) — D-Bus 总线控制、zbus 连接、systemd/Portal 路由。
 - [docs/ARK_REFERENCE.md](docs/ARK_REFERENCE.md) — Ark/kerfuffle 压缩文件集成和 D-Bus 接口。
 
 ## 许可证
