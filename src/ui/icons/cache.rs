@@ -342,17 +342,20 @@ fn file_icon_profile(kind: &FileIconKind, mime: &fika_core::MimeDatabase) -> Fil
                 bg,
             )
         }
-        FileIconKind::PreliminaryFile { extension } => (
-            vec!["unknown".to_string()],
-            Vec::new(),
-            extension
+        FileIconKind::PreliminaryFile { extension } => {
+            let marker = extension
                 .as_deref()
                 .filter(|extension| extension.len() <= 4)
                 .map(str::to_ascii_uppercase)
-                .unwrap_or_else(|| "FILE".to_string()),
-            0x374151,
-            0xf3f4f6,
-        ),
+                .unwrap_or_else(|| "TXT".to_string());
+            (
+                preliminary_file_icon_candidates(extension.as_deref(), mime),
+                Vec::new(),
+                marker,
+                0x374151,
+                0xf3f4f6,
+            )
+        }
         FileIconKind::File { extension } => {
             let marker = file_marker("application/octet-stream", extension.as_deref());
             let (fg, bg) = file_fallback_colors("application/octet-stream", extension.as_deref());
@@ -405,6 +408,25 @@ fn fallback_file_icon_candidates(extension: Option<&str>) -> Vec<String> {
         push_icon_candidate(&mut candidates, format!("application-x-{extension}"));
     }
     push_icon_candidate(&mut candidates, "application-octet-stream");
+    candidates
+}
+
+fn preliminary_file_icon_candidates(
+    extension: Option<&str>,
+    mime: &fika_core::MimeDatabase,
+) -> Vec<String> {
+    let mut candidates = Vec::new();
+    if let Some(extension) = extension.filter(|extension| !extension.is_empty()) {
+        if let Some(mime_name) = mime.mime_for_extension(extension) {
+            for icon_name in mime_theme_icon_candidates(mime_name, Some(extension)) {
+                push_icon_candidate(&mut candidates, icon_name);
+            }
+        }
+        push_icon_candidate(&mut candidates, format!("text-x-{extension}"));
+        push_icon_candidate(&mut candidates, format!("application-x-{extension}"));
+    }
+    push_icon_candidate(&mut candidates, "text-x-generic");
+    push_icon_candidate(&mut candidates, "unknown");
     candidates
 }
 
@@ -837,6 +859,40 @@ mod tests {
     }
 
     #[test]
+    fn preliminary_file_icon_candidates_use_text_fallback_before_unknown() {
+        let mut extension_mime = HashMap::new();
+        extension_mime.insert("rs".to_string(), "text/rust".to_string());
+        let mime =
+            fika_core::MimeDatabase::from_maps(extension_mime, HashMap::new(), HashMap::new());
+
+        let rust = file_icon_profile(
+            &FileIconKind::PreliminaryFile {
+                extension: Some("rs".to_string()),
+            },
+            &mime,
+        );
+        let extensionless =
+            file_icon_profile(&FileIconKind::PreliminaryFile { extension: None }, &mime);
+
+        assert_eq!(
+            rust.icon_candidates,
+            &[
+                "text-rust".to_string(),
+                "text-x-rust".to_string(),
+                "text-x-rs".to_string(),
+                "application-x-rs".to_string(),
+                "text-x-generic".to_string(),
+                "unknown".to_string()
+            ]
+        );
+        assert_eq!(
+            extensionless.icon_candidates,
+            &["text-x-generic".to_string(), "unknown".to_string()]
+        );
+        assert_eq!(extensionless.marker, "TXT");
+    }
+
+    #[test]
     fn preferred_icon_size_dirs_prioritize_nearest_size() {
         let dirs = preferred_icon_size_dirs(40);
 
@@ -997,9 +1053,14 @@ gtk-icon-theme-name=breeze\n"
     }
 
     #[test]
-    fn pending_generic_binary_uses_preliminary_unknown_icon() {
+    fn pending_generic_binary_uses_preliminary_text_icon() {
         let root = test_dir("pending-generic-binary-icon");
         std::fs::create_dir_all(root.join("theme/48x48/mimetypes")).unwrap();
+        std::fs::write(
+            root.join("theme/48x48/mimetypes/text-x-generic.svg"),
+            test_svg(),
+        )
+        .unwrap();
         std::fs::write(root.join("theme/48x48/mimetypes/unknown.svg"), test_svg()).unwrap();
         std::fs::write(
             root.join("theme/48x48/mimetypes/application-octet-stream.svg"),
@@ -1038,7 +1099,7 @@ gtk-icon-theme-name=breeze\n"
             48.0,
         );
 
-        assert_eq!(pending.icon_name.as_ref(), "unknown");
+        assert_eq!(pending.icon_name.as_ref(), "text-x-generic");
         assert_ne!(pending.icon_name, resolved_binary.icon_name);
         assert_eq!(
             resolved_binary.icon_name.as_ref(),

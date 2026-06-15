@@ -1,6 +1,6 @@
 use std::ops::Range;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use super::details::{
     DetailsItemSnapshot, DetailsLayoutMetrics, details_deletion_time_label, details_layout_metrics,
@@ -20,8 +20,8 @@ use crate::ui::rename::RenameDraft;
 use fika_core::{
     CompactLayout, DirectoryModel, FilteredModel, Generation, IconsLayout, ItemId, ItemLayout,
     MetadataRoleCandidate, MetadataRoleScheduler, PaneId, SelectionState, ThumbnailCandidate,
-    ThumbnailRequestPriority, ThumbnailScheduler, ViewMode, ViewState,
-    mime_magic_resolution_required, thumbnail_read_ahead_indexes,
+    ThumbnailRequestPriority, ThumbnailScheduler, ViewMode, ViewState, cached_thumbnail_for_path,
+    default_thumbnail_cache_root, mime_magic_resolution_required, thumbnail_read_ahead_indexes,
     thumbnail_request_may_have_preview,
 };
 
@@ -31,6 +31,38 @@ pub(crate) fn visible_item_thumbnail_path(entry: &fika_core::ModelEntry) -> Opti
     } else {
         entry.thumbnail_path.clone()
     }
+}
+
+fn visible_or_cached_item_thumbnail_path(
+    entry: &fika_core::ModelEntry,
+    path: &Path,
+    cache_root: &Path,
+) -> Option<PathBuf> {
+    visible_item_thumbnail_path(entry).or_else(|| {
+        if entry.is_dir
+            || entry.thumbnail_failed
+            || !entry.effective_metadata_complete()
+            || entry.metadata_refresh_pending
+            || !thumbnail_request_may_have_preview(
+                path,
+                entry.effective_mime_type().map(Arc::as_ref),
+            )
+            || mime_magic_resolution_required(
+                entry.is_dir,
+                entry.effective_size_bytes(),
+                entry.effective_mime_type().map(Arc::as_ref),
+                entry.effective_mime_magic_checked(),
+            )
+        {
+            return None;
+        }
+        cached_thumbnail_for_path(cache_root, path).map(|hit| hit.path().to_path_buf())
+    })
+}
+
+fn visible_thumbnail_cache_root() -> &'static Path {
+    static ROOT: OnceLock<PathBuf> = OnceLock::new();
+    ROOT.get_or_init(default_thumbnail_cache_root).as_path()
 }
 
 #[derive(Clone, Debug)]
@@ -577,6 +609,8 @@ fn raw_visible_item_snapshot(
 ) -> RawVisibleItemSnapshot {
     let selected = selection.is_selected(entry.id);
     let drop_target = item_drop_target_matches_directory(item_drop_target, pane_id, &path);
+    let thumbnail_path =
+        visible_or_cached_item_thumbnail_path(entry, &path, visible_thumbnail_cache_root());
     RawVisibleItemSnapshot {
         slot_id: 0,
         layout,
@@ -584,7 +618,7 @@ fn raw_visible_item_snapshot(
         path,
         is_dir: entry.is_dir,
         name: entry.name.clone(),
-        thumbnail_path: visible_item_thumbnail_path(entry),
+        thumbnail_path,
         thumbnail_failed: entry.thumbnail_failed,
         modified_secs: entry.effective_modified_secs(),
         size_bytes: entry.effective_size_bytes(),
@@ -759,6 +793,53 @@ mod tests {
 
         assert_eq!(visible_item_thumbnail_path(&file), Some(thumbnail));
         assert_eq!(visible_item_thumbnail_path(&dir), None);
+    }
+
+    #[test]
+    fn visible_or_cached_item_thumbnail_path_uses_freedesktop_cache_hit() {
+        let source_root = test_temp_dir("thumbnail-source");
+        let cache_root = test_temp_dir("thumbnail-cache");
+        std::fs::create_dir_all(&source_root).unwrap();
+        let source = source_root.join("photo.png");
+        std::fs::write(&source, b"source image").unwrap();
+        let modified_secs = std::fs::metadata(&source)
+            .unwrap()
+            .modified()
+            .unwrap()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let uri = fika_core::thumbnail_uri_for_path(&source).unwrap();
+        let thumbnail =
+            fika_core::thumbnail_cache_path(&cache_root, fika_core::ThumbnailSize::Normal, &uri);
+        std::fs::create_dir_all(thumbnail.parent().unwrap()).unwrap();
+        std::fs::write(&thumbnail, test_thumbnail_png(&uri, modified_secs)).unwrap();
+        let entry = fika_core::ModelEntry {
+            id: fika_core::ItemId(1),
+            metadata_role: None,
+            metadata_refresh_pending: false,
+            thumbnail_path: None,
+            thumbnail_failed: false,
+            entry: fika_core::Entry::new(fika_core::EntryData {
+                name: Arc::from("photo.png"),
+                name_width_units: 9,
+                size_bytes: 12,
+                modified_secs: Some(modified_secs),
+                metadata_complete: true,
+                mime_type: Some(Arc::from("image/png")),
+                mime_magic_checked: true,
+                trash_original_path: None,
+                trash_deletion_time: None,
+                is_dir: false,
+            }),
+        };
+
+        assert_eq!(
+            visible_or_cached_item_thumbnail_path(&entry, &source, &cache_root).as_deref(),
+            Some(thumbnail.as_path())
+        );
+        let _ = std::fs::remove_dir_all(source_root);
+        let _ = std::fs::remove_dir_all(cache_root);
     }
 
     #[test]
@@ -1174,5 +1255,45 @@ mod tests {
             icon_rect: rect,
             text_rect: rect,
         }
+    }
+
+    fn test_temp_dir(name: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "fika-snapshot-{name}-{}-{nanos}",
+            std::process::id()
+        ))
+    }
+
+    fn test_thumbnail_png(uri: &str, modified_secs: u64) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend(b"\x89PNG\r\n\x1a\n");
+        bytes.extend(test_png_text_chunk("Thumb::URI", uri));
+        bytes.extend(test_png_text_chunk(
+            "Thumb::MTime",
+            &modified_secs.to_string(),
+        ));
+        bytes.extend(test_png_chunk(b"IEND", &[]));
+        bytes
+    }
+
+    fn test_png_text_chunk(key: &str, value: &str) -> Vec<u8> {
+        let mut data = Vec::new();
+        data.extend(key.as_bytes());
+        data.push(0);
+        data.extend(value.as_bytes());
+        test_png_chunk(b"tEXt", &data)
+    }
+
+    fn test_png_chunk(chunk_type: &[u8; 4], data: &[u8]) -> Vec<u8> {
+        let mut chunk = Vec::new();
+        chunk.extend((data.len() as u32).to_be_bytes());
+        chunk.extend(chunk_type);
+        chunk.extend(data);
+        chunk.extend([0, 0, 0, 0]);
+        chunk
     }
 }
