@@ -249,6 +249,19 @@ fn rubber_band_drag_distance_reached(start: ViewPoint, current: ViewPoint) -> bo
     (start.x - current.x).abs() + (start.y - current.y).abs() >= RUBBER_BAND_START_DRAG_DISTANCE
 }
 
+fn pane_loading_status_matches_path(message: &str, path: &Path) -> bool {
+    let display_path = path.display().to_string();
+    message == format!("Loading {display_path}") || message == format!("Reloading {display_path}")
+}
+
+fn default_open_with_application_id(applications: &[MimeApplication]) -> Option<&str> {
+    applications
+        .iter()
+        .find(|application| application.is_default)
+        .or_else(|| applications.first())
+        .map(|application| application.id.as_str())
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct PendingRubberBand {
     pane_id: PaneId,
@@ -1149,6 +1162,69 @@ impl FikaApp {
 
     fn set_pane_status(&mut self, pane_id: PaneId, message: impl Into<String>) {
         self.pane_statuses.insert(pane_id, message.into());
+    }
+
+    fn clear_loading_status_for_path(&mut self, pane_id: PaneId, path: &Path) {
+        if self
+            .pane_statuses
+            .get(&pane_id)
+            .is_some_and(|message| pane_loading_status_matches_path(message, path))
+        {
+            self.pane_statuses.remove(&pane_id);
+        }
+    }
+
+    fn event_finishes_current_loading(&self, event: &DirectoryListerEvent) -> bool {
+        if !matches!(
+            event,
+            DirectoryListerEvent::ListingCompleted { .. }
+                | DirectoryListerEvent::CurrentDirectoryRemoved { .. }
+                | DirectoryListerEvent::Error { .. }
+        ) {
+            return false;
+        }
+
+        self.loading_panes
+            .get(&event.pane_id())
+            .is_some_and(|loading| {
+                loading.key.generation == event.generation()
+                    && loading.key.request_serial == event.request_serial()
+            })
+    }
+
+    fn finish_current_loading_status(
+        &mut self,
+        event: &DirectoryListerEvent,
+        finishes_current_loading: bool,
+    ) {
+        if !finishes_current_loading {
+            return;
+        }
+
+        match event {
+            DirectoryListerEvent::ListingCompleted { pane_id, path, .. }
+            | DirectoryListerEvent::CurrentDirectoryRemoved { pane_id, path, .. } => {
+                self.clear_loading_status_for_path(*pane_id, path);
+            }
+            DirectoryListerEvent::Error {
+                pane_id,
+                path,
+                message,
+                ..
+            } => {
+                if self
+                    .pane_statuses
+                    .get(pane_id)
+                    .is_some_and(|status| pane_loading_status_matches_path(status, path))
+                {
+                    self.set_pane_status(
+                        *pane_id,
+                        format!("Cannot load {}: {message}", path.display()),
+                    );
+                }
+            }
+            _ => {}
+        }
     }
 
     fn begin_pane_operation(
@@ -2124,6 +2200,27 @@ impl FikaApp {
         true
     }
 
+    pub(crate) fn open_default_application_for_item(
+        &mut self,
+        pane_id: PaneId,
+        path: PathBuf,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(mime_type) = self.mime_type_for_pane_path(pane_id, &path) else {
+            self.set_pane_status(pane_id, format!("No application found for {}", path.display()));
+            return true;
+        };
+        let applications = self.mime_applications.applications_for_mime(&mime_type);
+        let Some(desktop_id) =
+            default_open_with_application_id(&applications).map(ToOwned::to_owned)
+        else {
+            self.set_pane_status(pane_id, format!("No application found for {}", path.display()));
+            return true;
+        };
+        self.open_with_application(pane_id, &desktop_id, path, cx);
+        true
+    }
+
     pub(crate) fn item_path_is_directory(
         &self,
         pane_id: PaneId,
@@ -2156,10 +2253,10 @@ impl FikaApp {
             self.clear_filter_query_for_url_change(pane_id);
         }
         let cached_events = self.schedule_listing(&event);
+        self.set_pane_status(pane_id, format!("Loading {}", path.display()));
         self.apply_event_with_previous_summary(event, previous_summary);
         self.apply_cached_listing_events(cached_events);
         self.start_watcher(pane_id);
-        self.set_pane_status(pane_id, format!("Loading {}", path.display()));
     }
 
     fn reload_pane(&mut self, pane_id: PaneId) {
@@ -2167,18 +2264,13 @@ impl FikaApp {
         let Some(event) = self.panes.reload(pane_id) else {
             return;
         };
+        let path = event.path().to_path_buf();
         self.begin_pane_loading_transition(pane_id, PaneLoadingScrollPolicy::Preserve);
         let cached_events = self.schedule_listing(&event);
+        self.set_pane_status(pane_id, format!("Reloading {}", path.display()));
         self.apply_event_with_previous_summary(event, previous_summary);
         self.apply_cached_listing_events(cached_events);
         self.start_watcher(pane_id);
-        if let Some(path) = self
-            .panes
-            .pane(pane_id)
-            .map(|pane| pane.current_dir.clone())
-        {
-            self.set_pane_status(pane_id, format!("Reloading {}", path.display()));
-        }
     }
 
     fn go_back(&mut self, pane_id: PaneId) {
@@ -2190,10 +2282,10 @@ impl FikaApp {
         self.clear_filter_query_for_url_change(pane_id);
         let path = event.path().to_path_buf();
         let cached_events = self.schedule_listing(&event);
+        self.set_pane_status(pane_id, format!("Loading {}", path.display()));
         self.apply_event_with_previous_summary(event, previous_summary);
         self.apply_cached_listing_events(cached_events);
         self.start_watcher(pane_id);
-        self.set_pane_status(pane_id, format!("Loading {}", path.display()));
     }
 
     fn go_forward(&mut self, pane_id: PaneId) {
@@ -2205,10 +2297,10 @@ impl FikaApp {
         self.clear_filter_query_for_url_change(pane_id);
         let path = event.path().to_path_buf();
         let cached_events = self.schedule_listing(&event);
+        self.set_pane_status(pane_id, format!("Loading {}", path.display()));
         self.apply_event_with_previous_summary(event, previous_summary);
         self.apply_cached_listing_events(cached_events);
         self.start_watcher(pane_id);
-        self.set_pane_status(pane_id, format!("Loading {}", path.display()));
     }
 
     fn go_parent(&mut self, pane_id: PaneId) {
@@ -5448,6 +5540,16 @@ impl FikaApp {
 
     fn show_blank_context_menu(&mut self, pane_id: PaneId, position: ViewPoint) {
         let (trash_view, trash_has_items) = self.trash_view_state(pane_id);
+        let path = self
+            .panes
+            .pane(pane_id)
+            .map(|pane| pane.current_dir.clone())
+            .unwrap_or_else(|| PathBuf::from("/"));
+        let open_with_apps = if trash_view {
+            Vec::new()
+        } else {
+            self.mime_applications.applications_for_mime("inode/directory")
+        };
         let service_actions = if trash_view {
             Vec::new()
         } else {
@@ -5457,8 +5559,10 @@ impl FikaApp {
         self.set_context_menu(ContextMenuState {
             pane_id,
             target: ContextMenuTarget::Blank {
+                path,
                 trash_view,
                 trash_has_items,
+                open_with_apps,
                 service_actions,
             },
             position,
@@ -6090,11 +6194,23 @@ impl FikaApp {
                 ContextMenuTarget::Item { path, .. },
             ) => self.open_with_application(menu.pane_id, &desktop_id, path, cx),
             (
+                ContextMenuAction::OpenWithApplication { desktop_id },
+                ContextMenuTarget::Blank { path, .. },
+            ) => self.open_with_application(menu.pane_id, &desktop_id, path, cx),
+            (
                 ContextMenuAction::OtherApplication,
                 ContextMenuTarget::Item {
                     path, mime_type, ..
                 },
             ) => self.show_application_chooser(menu.pane_id, path, mime_type),
+            (
+                ContextMenuAction::OtherApplication,
+                ContextMenuTarget::Blank { path, .. },
+            ) => self.show_application_chooser(
+                menu.pane_id,
+                path,
+                Some(Arc::from("inode/directory")),
+            ),
             (
                 ContextMenuAction::RunServiceMenuAction { action_id },
                 ContextMenuTarget::Item {
@@ -6529,7 +6645,13 @@ impl FikaApp {
             }
         };
         let app_name = plan.app_name.clone();
-        let _ = self.panes.select_only(pane_id, path.clone());
+        if self
+            .panes
+            .pane(pane_id)
+            .is_some_and(|pane| pane.model.index_of_path(&path).is_some())
+        {
+            let _ = self.panes.select_only(pane_id, path.clone());
+        }
         let Some(task_id) = self.begin_pane_operation(
             pane_id,
             format!("Opening {} with {}", path.display(), app_name),
@@ -6882,7 +7004,9 @@ impl FikaApp {
         event: DirectoryListerEvent,
         previous_summary: Option<String>,
     ) {
+        let finishes_current_loading = self.event_finishes_current_loading(&event);
         self.update_loading_state(&event, previous_summary);
+        self.finish_current_loading_status(&event, finishes_current_loading);
         if let DirectoryListerEvent::CurrentDirectoryRemoved { pane_id, path, .. } = &event {
             self.listing_worker.remove_cached_directory(path);
             self.log_listing_cache_debug(&format!("current-directory-removed {}", path.display()));
@@ -7087,6 +7211,15 @@ impl FikaApp {
         // pending requests, any remaining loading_panes entries are orphans from
         // superseded listing requests whose completion events were discarded.
         if !changed && !self.loading_panes.is_empty() && self.listing_worker.pending_count() == 0 {
+            for pane_id in self.loading_panes.keys().copied().collect::<Vec<_>>() {
+                if let Some(path) = self
+                    .panes
+                    .pane(pane_id)
+                    .map(|pane| pane.current_dir.clone())
+                {
+                    self.clear_loading_status_for_path(pane_id, &path);
+                }
+            }
             self.loading_panes.clear();
             changed = true;
         }
@@ -7584,6 +7717,40 @@ mod tests {
     }
 
     #[test]
+    fn context_menu_actions_offer_open_with_submenu_for_current_directory() {
+        let mut blank = context_blank_target();
+        if let ContextMenuTarget::Blank { open_with_apps, .. } = &mut blank {
+            open_with_apps.push(MimeApplication {
+                id: "files.desktop".to_string(),
+                desktop_file: PathBuf::from("/apps/files.desktop"),
+                name: "Files".to_string(),
+                exec: "files %f".to_string(),
+                icon: Some("system-file-manager".to_string()),
+                is_default: true,
+            });
+        }
+
+        let actions = context_menu_actions(&blank, false);
+        assert!(actions.iter().any(|item| {
+            item.action == ContextMenuAction::OpenWithSubmenu
+                && item.submenu == Some(ContextMenuSubmenu::OpenWith)
+        }));
+
+        let submenu = context_submenu_actions(ContextMenuSubmenu::OpenWith, &blank);
+        assert_eq!(
+            submenu.first().map(|item| &item.action),
+            Some(&ContextMenuAction::OpenWithApplication {
+                desktop_id: "files.desktop".to_string()
+            })
+        );
+        assert!(
+            submenu
+                .iter()
+                .any(|item| item.action == ContextMenuAction::OtherApplication && item.enabled)
+        );
+    }
+
+    #[test]
     fn blank_context_menu_requires_viewport_geometry_and_keeps_directory_service_actions() {
         let mut app = test_app_with_entries("/tmp/fika-blank-menu-service", &["alpha.txt"]);
         let pane_id = app.panes.focused().unwrap();
@@ -7671,6 +7838,7 @@ mod tests {
             vec![
                 (ContextMenuAction::CreateNewSubmenu, false),
                 (ContextMenuAction::Paste, true),
+                (ContextMenuAction::OpenWithSubmenu, false),
                 (ContextMenuAction::SortBySubmenu, true),
                 (ContextMenuAction::ViewModeSubmenu, false),
                 (ContextMenuAction::SelectAll, true),
@@ -8346,6 +8514,32 @@ mod tests {
                 .iter()
                 .any(|item| item.action == ContextMenuAction::OtherApplication && item.enabled)
         );
+    }
+
+    #[test]
+    fn default_open_with_application_prefers_marked_default() {
+        let apps = vec![
+            MimeApplication {
+                id: "first.desktop".to_string(),
+                desktop_file: PathBuf::from("/apps/first.desktop"),
+                name: "First".to_string(),
+                exec: "first %f".to_string(),
+                icon: None,
+                is_default: false,
+            },
+            MimeApplication {
+                id: "default.desktop".to_string(),
+                desktop_file: PathBuf::from("/apps/default.desktop"),
+                name: "Default".to_string(),
+                exec: "default %f".to_string(),
+                icon: None,
+                is_default: true,
+            },
+        ];
+
+        assert_eq!(default_open_with_application_id(&apps), Some("default.desktop"));
+        assert_eq!(default_open_with_application_id(&apps[..1]), Some("first.desktop"));
+        assert_eq!(default_open_with_application_id(&[]), None);
     }
 
     #[test]
@@ -9327,8 +9521,10 @@ text/plain=viewer.desktop;\n",
     #[test]
     fn context_menu_actions_use_trash_view_actions() {
         let blank = ContextMenuTarget::Blank {
+            path: PathBuf::from("/tmp/fika-trash"),
             trash_view: true,
             trash_has_items: false,
+            open_with_apps: Vec::new(),
             service_actions: Vec::new(),
         };
         let blank_actions = context_menu_actions(&blank, false);
@@ -11340,6 +11536,82 @@ text/plain=viewer.desktop;\n",
 
         assert_eq!(app.status_message_for_pane(first), "First pane");
         assert_eq!(app.status_message_for_pane(second), "Second pane");
+    }
+
+    #[test]
+    fn cached_load_clears_transient_loading_status() {
+        let initial = test_dir("status-cached-initial");
+        let cached = test_dir("status-cached-target");
+        std::fs::create_dir_all(&initial).unwrap();
+        std::fs::create_dir_all(&cached).unwrap();
+        let mut app = test_app_with_entries(initial.to_str().unwrap(), &["old.txt"]);
+        let pane_id = app.panes.focused().unwrap();
+
+        assert!(
+            app.listing_worker
+                .cache_listing_snapshot(&cached, test_entries(&["cached.txt"]))
+        );
+
+        app.load_pane(pane_id, cached.clone());
+
+        assert!(!app.loading_panes.contains_key(&pane_id));
+        assert_eq!(app.status_message_for_pane(pane_id), "Ready");
+
+        let _ = std::fs::remove_dir_all(initial);
+        let _ = std::fs::remove_dir_all(cached);
+    }
+
+    #[test]
+    fn loading_completion_preserves_overridden_status() {
+        let initial = test_dir("status-loading-initial");
+        let target = test_dir("status-loading-target");
+        std::fs::create_dir_all(&initial).unwrap();
+        std::fs::create_dir_all(&target).unwrap();
+        let mut app = test_app_with_entries(initial.to_str().unwrap(), &["old.txt"]);
+        let pane_id = app.panes.focused().unwrap();
+
+        app.load_pane(pane_id, target.clone());
+        let loading = app.loading_panes.get(&pane_id).unwrap().clone();
+        app.set_pane_status(pane_id, "1 selected");
+        app.apply_event(DirectoryListerEvent::ListingCompleted {
+            pane_id,
+            generation: loading.key.generation,
+            request_serial: loading.key.request_serial,
+            path: target.clone(),
+        });
+
+        assert!(!app.loading_panes.contains_key(&pane_id));
+        assert_eq!(app.status_message_for_pane(pane_id), "1 selected");
+
+        let _ = std::fs::remove_dir_all(initial);
+        let _ = std::fs::remove_dir_all(target);
+    }
+
+    #[test]
+    fn orphan_loading_cleanup_clears_transient_status() {
+        let initial = test_dir("status-orphan-initial");
+        let target = test_dir("status-orphan-target");
+        std::fs::create_dir_all(&initial).unwrap();
+        std::fs::create_dir_all(&target).unwrap();
+        let mut app = test_app_with_entries(initial.to_str().unwrap(), &["old.txt"]);
+        let pane_id = app.panes.focused().unwrap();
+
+        app.load_pane(pane_id, target.clone());
+        app.listing_worker.cancel_pane(pane_id);
+
+        assert!(app.loading_panes.contains_key(&pane_id));
+        assert_eq!(
+            app.status_message_for_pane(pane_id),
+            format!("Loading {}", target.display())
+        );
+
+        assert!(app.drain_background_listing_results());
+
+        assert!(!app.loading_panes.contains_key(&pane_id));
+        assert_eq!(app.status_message_for_pane(pane_id), "Ready");
+
+        let _ = std::fs::remove_dir_all(initial);
+        let _ = std::fs::remove_dir_all(target);
     }
 
     #[test]
@@ -14029,8 +14301,10 @@ text/plain=viewer.desktop;\n",
 
     fn context_blank_target() -> ContextMenuTarget {
         ContextMenuTarget::Blank {
+            path: PathBuf::from("/tmp/fika-blank"),
             trash_view: false,
             trash_has_items: false,
+            open_with_apps: Vec::new(),
             service_actions: Vec::new(),
         }
     }

@@ -763,6 +763,7 @@ fn details_row(
                     is_dir_for_click,
                     mode,
                     event,
+                    cx,
                 ) {
                     cx.notify();
                 }
@@ -971,6 +972,7 @@ fn handle_item_mouse_down(
     is_dir: bool,
     mode: FileGridMode,
     event: &gpui::MouseDownEvent,
+    cx: &mut Context<FikaApp>,
 ) -> bool {
     app.dismiss_context_menu();
     app.panes.focus(pane_id);
@@ -983,6 +985,8 @@ fn handle_item_mouse_down(
         FileGridMode::Manager => {
             if double_click && is_dir {
                 app.open_directory_from_item(pane_id, path, true);
+            } else if double_click {
+                app.open_default_application_for_item(pane_id, path, cx);
             } else if !double_click {
                 if extend {
                     app.select_range_to(pane_id, path);
@@ -1107,6 +1111,7 @@ fn item_tile(
                             is_dir_for_click,
                             mode,
                             event,
+                            cx,
                         ) {
                             cx.notify();
                         }

@@ -53,8 +53,10 @@ pub(crate) struct ContextMenuState {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum ContextMenuTarget {
     Blank {
+        path: PathBuf,
         trash_view: bool,
         trash_has_items: bool,
+        open_with_apps: Vec<MimeApplication>,
         service_actions: Vec<ServiceMenuAction>,
     },
     PlacesBlank {

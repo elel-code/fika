@@ -74,6 +74,11 @@ pub(crate) fn context_menu_actions(
                     "Paste",
                     clipboard_available,
                 )),
+                context_menu_submenu_item(
+                    ContextMenuAction::OpenWithSubmenu,
+                    "Open With",
+                    ContextMenuSubmenu::OpenWith,
+                ),
             ];
             let service_root_actions =
                 context_menu_group_items(service_menu_root_actions(service_actions));
@@ -397,7 +402,8 @@ pub(crate) fn context_submenu_actions(
             _ => Vec::new(),
         },
         ContextMenuSubmenu::OpenWith => match target {
-            ContextMenuTarget::Item { open_with_apps, .. } => {
+            ContextMenuTarget::Blank { open_with_apps, .. }
+            | ContextMenuTarget::Item { open_with_apps, .. } => {
                 open_with_menu_actions(open_with_apps)
             }
             _ => Vec::new(),

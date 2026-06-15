@@ -275,7 +275,11 @@ impl DirectoryLister {
         let mut deltas = Vec::new();
         while let Ok(event) = rx.try_recv() {
             match event {
-                Ok(event) => deltas.push(WatcherDelta::from_notify_event(&self.path, event)),
+                Ok(event) => {
+                    if let Some(delta) = WatcherDelta::from_notify_event(&self.path, event) {
+                        deltas.push(delta);
+                    }
+                }
                 Err(err) => errors.push(err.to_string()),
             }
         }
@@ -678,8 +682,9 @@ pub enum WatcherDeltaKind {
 }
 
 impl WatcherDelta {
-    pub fn from_notify_event(root: &Path, event: Event) -> Self {
+    pub fn from_notify_event(root: &Path, event: Event) -> Option<Self> {
         let kind = match event.kind {
+            EventKind::Access(_) | EventKind::Other => return None,
             EventKind::Create(
                 CreateKind::Any | CreateKind::File | CreateKind::Folder | CreateKind::Other,
             ) => WatcherDeltaKind::Create,
@@ -702,8 +707,17 @@ impl WatcherDelta {
             .paths
             .into_iter()
             .filter(|path| path == root || path.parent() == Some(root))
-            .collect();
-        Self { kind, paths }
+            .collect::<Vec<_>>();
+        if paths.is_empty() {
+            return None;
+        }
+        if paths.len() == 1
+            && paths[0] == root
+            && matches!(kind, WatcherDeltaKind::Create | WatcherDeltaKind::Modify)
+        {
+            return None;
+        }
+        Some(Self { kind, paths })
     }
 }
 
@@ -1045,6 +1059,42 @@ mod tests {
             classify_watcher_delta(root, delta),
             ClassifiedWatcherDelta::ItemsRefreshed(vec![path])
         );
+    }
+
+    #[test]
+    fn watcher_access_notify_events_are_ignored() {
+        let root = Path::new("/tmp/root");
+        let event = Event {
+            kind: EventKind::Access(notify::event::AccessKind::Read),
+            paths: vec![root.join("shadow")],
+            attrs: Default::default(),
+        };
+
+        assert_eq!(WatcherDelta::from_notify_event(root, event), None);
+    }
+
+    #[test]
+    fn watcher_notify_events_without_relevant_paths_are_ignored() {
+        let root = Path::new("/tmp/root");
+        let event = Event {
+            kind: EventKind::Any,
+            paths: vec![PathBuf::from("/tmp/other/changed.txt")],
+            attrs: Default::default(),
+        };
+
+        assert_eq!(WatcherDelta::from_notify_event(root, event), None);
+    }
+
+    #[test]
+    fn watcher_root_metadata_notify_events_are_ignored() {
+        let root = Path::new("/tmp/root");
+        let event = Event {
+            kind: EventKind::Modify(ModifyKind::Metadata(notify::event::MetadataKind::Any)),
+            paths: vec![root.to_path_buf()],
+            attrs: Default::default(),
+        };
+
+        assert_eq!(WatcherDelta::from_notify_event(root, event), None);
     }
 
     #[test]
