@@ -11,6 +11,9 @@ use crate::ui::icons::FileIconSnapshot;
 pub(crate) const DETAILS_HEADER_HEIGHT: f32 = 28.0;
 pub(crate) const DETAILS_ROW_HEIGHT: f32 = 28.0;
 pub(crate) const DETAILS_ICON_SIZE: f32 = 18.0;
+pub(crate) const DETAILS_NAME_COLUMN_MIN_WIDTH: f32 = 260.0;
+pub(crate) const DETAILS_NAME_CELL_HORIZONTAL_PADDING: f32 = 16.0;
+pub(crate) const DETAILS_NAME_CELL_GAP: f32 = 8.0;
 const DETAILS_ICON_SCALE: f32 = DETAILS_ICON_SIZE / 48.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -64,11 +67,21 @@ pub(crate) struct DetailsItemSnapshot {
     pub(crate) deletion_time_label: String,
 }
 
-pub(crate) fn details_columns(trash_view: bool) -> Vec<DetailsColumn> {
+pub(crate) fn details_name_column_width(text_width: f32, metrics: DetailsLayoutMetrics) -> f32 {
+    (DETAILS_NAME_CELL_HORIZONTAL_PADDING
+        + metrics.icon_size
+        + DETAILS_NAME_CELL_GAP
+        + text_width.max(0.0)
+        + 8.0)
+        .ceil()
+        .max(DETAILS_NAME_COLUMN_MIN_WIDTH)
+}
+
+pub(crate) fn details_columns(trash_view: bool, name_width: f32) -> Vec<DetailsColumn> {
     let mut columns = vec![
         DetailsColumn {
             title: "Name",
-            width: 260.0,
+            width: name_width.max(DETAILS_NAME_COLUMN_MIN_WIDTH),
             kind: DetailsColumnKind::Name,
         },
         DetailsColumn {
@@ -99,8 +112,8 @@ pub(crate) fn details_columns(trash_view: bool) -> Vec<DetailsColumn> {
     columns
 }
 
-pub(crate) fn details_content_width(trash_view: bool) -> f32 {
-    details_columns(trash_view)
+pub(crate) fn details_content_width(trash_view: bool, name_width: f32) -> f32 {
+    details_columns(trash_view, name_width)
         .iter()
         .map(|column| column.width)
         .sum()
@@ -178,7 +191,7 @@ mod tests {
 
     #[test]
     fn trash_details_columns_include_original_path_and_deletion_time() {
-        let columns = details_columns(true)
+        let columns = details_columns(true, DETAILS_NAME_COLUMN_MIN_WIDTH)
             .into_iter()
             .map(|column| (column.title, column.kind))
             .collect::<Vec<_>>();
@@ -193,6 +206,17 @@ mod tests {
                 ("Deletion Time", DetailsColumnKind::DeletionTime),
             ]
         );
+    }
+
+    #[test]
+    fn details_name_column_width_expands_for_long_names() {
+        let metrics = details_layout_metrics(48.0);
+
+        assert_eq!(
+            details_name_column_width(24.0, metrics),
+            DETAILS_NAME_COLUMN_MIN_WIDTH
+        );
+        assert!(details_name_column_width(420.0, metrics) > DETAILS_NAME_COLUMN_MIN_WIDTH);
     }
 
     #[test]

@@ -89,8 +89,10 @@ extraction, Ark command-line execution, or a Rust fallback.
   validated `ArkDndExtractPayload` containing the remote D-Bus service and
   object path. It also builds an `ArkDndExtractRequest` and can execute
   `extractSelectedFilesTo(destination)` through the shared session bus helper.
-  Fika does not yet receive arbitrary external MIME offers through the GPUI
-  backend or provide archive virtual-directory browsing.
+  Fika now handles ordinary external path-list drops through GPUI
+  `ExternalPaths`, but it still does not receive arbitrary multi-MIME external
+  offers through the GPUI backend, so Ark drag-extract offers cannot reach this
+  executor yet. Archive virtual-directory browsing is also not implemented.
 
 ## Fika Implementation Plan
 
@@ -126,10 +128,11 @@ extraction, Ark command-line execution, or a Rust fallback.
    - Extend external drop parsing to recognize Ark's two MIME values. [core
      parser done]
    - Store `remote_service`, `remote_path`, and destination directory in a core
-     request. [core request/executor done; GPUI MIME offer wiring pending]
+     request. [core request/executor done; GPUI/backend multi-MIME offer
+     routing pending]
    - Execute `org.kde.ark.DndExtract.extractSelectedFilesTo(destination)` on the
-     shared session bus helper. [core executor done; UI status/drop-target
-     plumbing pending]
+     shared session bus helper. [core executor done; GPUI/backend multi-MIME
+     offer routing pending]
 
 6. Defer archive virtual-directory browsing.
    - Archive browsing needs a virtual `DirectoryLister` source, operation
@@ -154,8 +157,8 @@ extraction, Ark command-line execution, or a Rust fallback.
 
 ## Remaining Work
 
-- Wire Ark DnD MIME offers from the GPUI/backend drag data path into the core
-  parser/executor.
+- Wire Ark multi-MIME DnD offers from the GPUI/backend drag data path into the
+  core parser/executor.
 - Add Rust fallback archive work for systems without Ark, if required beyond the
   current Ark command-line fallback.
 - Design archive virtual-directory browsing separately.

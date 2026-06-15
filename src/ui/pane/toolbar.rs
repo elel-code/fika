@@ -8,42 +8,42 @@ use gpui::{Context, Div, MouseButton, ParentElement, Stateful, Styled, div, px, 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PaneToolbarSnapshot {
     pub(crate) filter_toggle: FilterToggleSnapshot,
-    pub(crate) split_icon: FileIconSnapshot,
-    pub(crate) close_icon: FileIconSnapshot,
-    pub(crate) split_enabled: bool,
-    pub(crate) close_enabled: bool,
 }
 
 pub(crate) fn pane_toolbar_snapshot(
     cache: &mut FileIconCache,
     filter_active: bool,
-    pane_count: usize,
+    _pane_count: usize,
 ) -> PaneToolbarSnapshot {
     PaneToolbarSnapshot {
         filter_toggle: filter_toggle_snapshot(cache, filter_active),
-        split_icon: cache.named_icon(
-            "pane-split",
-            &[
-                "view-split-left-right",
-                "view-split-left-right-symbolic",
-                "view-restore",
-            ],
-            "Split",
-            0x1f4fbf,
-            0xeaf1ff,
-            18.0,
-        ),
-        close_icon: cache.named_icon(
-            "pane-close",
-            &["window-close", "dialog-close", "edit-delete"],
-            "Close",
-            0x475569,
-            0xf1f5f9,
-            18.0,
-        ),
-        split_enabled: pane_count == 1,
-        close_enabled: pane_count > 1,
     }
+}
+
+pub(crate) fn pane_split_icon_snapshot(cache: &mut FileIconCache) -> FileIconSnapshot {
+    cache.named_icon(
+        "pane-split",
+        &[
+            "view-split-left-right",
+            "view-split-left-right-symbolic",
+            "view-restore",
+        ],
+        "Split",
+        0x1f4fbf,
+        0xeaf1ff,
+        18.0,
+    )
+}
+
+pub(crate) fn pane_close_icon_snapshot(cache: &mut FileIconCache) -> FileIconSnapshot {
+    cache.named_icon(
+        "pane-close",
+        &["window-close", "dialog-close", "edit-delete"],
+        "Close",
+        0x475569,
+        0xf1f5f9,
+        18.0,
+    )
 }
 
 pub(super) fn pane_toolbar_buttons(
@@ -58,18 +58,6 @@ pub(super) fn pane_toolbar_buttons(
         .gap_1()
         .flex_none()
         .child(filter_toggle_button(pane_id, toolbar.filter_toggle, cx))
-        .child(split_pane_button(
-            pane_id,
-            toolbar.split_icon,
-            toolbar.split_enabled,
-            cx,
-        ))
-        .child(close_pane_button(
-            pane_id,
-            toolbar.close_icon,
-            toolbar.close_enabled,
-            cx,
-        ))
 }
 
 fn filter_toggle_button(
@@ -97,7 +85,7 @@ fn filter_toggle_button(
     )
 }
 
-fn split_pane_button(
+pub(crate) fn split_pane_button(
     pane_id: PaneId,
     icon: FileIconSnapshot,
     enabled: bool,
@@ -123,7 +111,7 @@ fn split_pane_button(
     })
 }
 
-fn close_pane_button(
+pub(crate) fn close_pane_button(
     pane_id: PaneId,
     icon: FileIconSnapshot,
     enabled: bool,
@@ -220,24 +208,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn pane_toolbar_snapshot_tracks_split_and_close_availability() {
+    fn pane_toolbar_snapshot_tracks_filter_state() {
         let mut cache = FileIconCache::default();
 
         let single = pane_toolbar_snapshot(&mut cache, false, 1);
-        assert!(single.split_enabled);
-        assert!(!single.close_enabled);
-        assert!(matches!(
-            single.split_icon.icon_name.as_ref(),
-            "view-split-left-right" | "view-split-left-right-symbolic" | "view-restore"
-        ));
+        assert!(!single.filter_toggle.active);
 
         let split = pane_toolbar_snapshot(&mut cache, true, 2);
-        assert!(!split.split_enabled);
-        assert!(split.close_enabled);
         assert!(split.filter_toggle.active);
-        assert!(matches!(
-            split.close_icon.icon_name.as_ref(),
-            "window-close" | "dialog-close" | "edit-delete"
-        ));
     }
 }

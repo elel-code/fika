@@ -4,16 +4,16 @@ use std::sync::Arc;
 
 use super::details::{
     DetailsItemSnapshot, DetailsLayoutMetrics, details_deletion_time_label, details_layout_metrics,
-    details_modified_label, details_original_path_label, details_size_label,
-    details_visible_row_range,
+    details_modified_label, details_name_column_width, details_original_path_label,
+    details_size_label, details_visible_row_range,
 };
 use super::layout::{
-    CompactColumnWidthCache, CompactTextWidthOverride,
-    compact_layout_for_filtered_model_with_text_override,
-    compact_layout_for_model_with_text_override, compact_text_width, compact_text_width_for_name,
-    model_index_for_layout_index,
+    CompactColumnWidthCache, compact_layout_for_filtered_model_with_text_override,
+    compact_layout_for_model_with_text_override, entry_name_text_width,
+    icons_layout_options_for_model, model_index_for_layout_index, rename_text_override_for_model,
+    required_text_width_for_entry,
 };
-use super::{FileGridSnapshot, VisibleItemSlotPool, icons_layout_options};
+use super::{FileGridSnapshot, VisibleItemSlotPool};
 use crate::ui::drag_drop::{ItemDropTarget, item_drop_target_matches_directory};
 use crate::ui::icons::FileIconSnapshot;
 use crate::ui::rename::RenameDraft;
@@ -53,28 +53,6 @@ pub(crate) fn visible_item_thumbnail_path(entry: &fika_core::ModelEntry) -> Opti
     } else {
         entry.thumbnail_path.clone()
     }
-}
-
-pub(crate) fn rename_text_override_for_model(
-    model: &DirectoryModel,
-    draft: Option<&RenameDraft>,
-) -> Option<CompactTextWidthOverride> {
-    let draft = draft?;
-    let model_index = model.index_of_path(&draft.original_path)?;
-    Some(CompactTextWidthOverride {
-        model_index,
-        text_width: compact_text_width_for_name(&draft.draft_name),
-    })
-}
-
-pub(crate) fn required_text_width_for_entry(
-    entry: &fika_core::EntryData,
-    draft: Option<&RenameDraft>,
-) -> f32 {
-    let base_width = compact_text_width(entry.name_width_units);
-    draft
-        .map(|draft| base_width.max(compact_text_width_for_name(&draft.draft_name)))
-        .unwrap_or(base_width)
 }
 
 #[derive(Clone, Debug)]
@@ -175,6 +153,7 @@ pub(crate) enum RawFileGridSnapshot {
         items: Vec<RawDetailsItemSnapshot>,
         row_count: usize,
         metrics: DetailsLayoutMetrics,
+        name_column_width: f32,
     },
 }
 
@@ -257,7 +236,17 @@ pub(crate) fn raw_file_grid_snapshot(input: RawFileGridSnapshotInput<'_>) -> Raw
             RawFileGridSnapshot::Compact { layout, items }
         }
         ViewMode::Icons => {
-            let layout = IconsLayout::new(item_count, icons_layout_options(view, 0.0));
+            let layout = IconsLayout::new(
+                item_count,
+                icons_layout_options_for_model(
+                    model,
+                    filtered,
+                    item_count,
+                    view,
+                    rename_draft,
+                    0.0,
+                ),
+            );
             let items = layout
                 .visible_items()
                 .filter_map(|visible_item| {
@@ -286,6 +275,10 @@ pub(crate) fn raw_file_grid_snapshot(input: RawFileGridSnapshotInput<'_>) -> Raw
         ViewMode::Details => {
             let row_count = item_count;
             let metrics = details_layout_metrics(view.icon_size());
+            let name_column_width = details_name_column_width(
+                max_details_name_text_width(model, filtered, row_count),
+                metrics,
+            );
             let items =
                 details_visible_row_range(row_count, view.viewport_height, view.scroll_y, metrics)
                     .filter_map(|row_index| {
@@ -318,9 +311,25 @@ pub(crate) fn raw_file_grid_snapshot(input: RawFileGridSnapshotInput<'_>) -> Raw
                 items,
                 row_count,
                 metrics,
+                name_column_width,
             }
         }
     }
+}
+
+fn max_details_name_text_width(
+    model: &DirectoryModel,
+    filtered: Option<&FilteredModel>,
+    row_count: usize,
+) -> f32 {
+    (0..row_count)
+        .filter_map(|layout_index| {
+            let model_index = model_index_for_layout_index(filtered, layout_index)?;
+            model
+                .get(model_index)
+                .map(|entry| entry_name_text_width(entry))
+        })
+        .fold(0.0, f32::max)
 }
 
 impl RawFileGridSnapshot {
@@ -496,6 +505,7 @@ impl RawFileGridSnapshot {
                 items,
                 row_count,
                 metrics,
+                name_column_width,
             } => {
                 let items = items
                     .into_iter()
@@ -528,6 +538,7 @@ impl RawFileGridSnapshot {
                     items,
                     row_count,
                     metrics,
+                    name_column_width,
                 }
             }
         }
@@ -1033,6 +1044,7 @@ mod tests {
             items: Vec::new(),
             row_count: 0,
             metrics: details_layout_metrics(48.0),
+            name_column_width: details_name_column_width(0.0, details_layout_metrics(48.0)),
         };
 
         raw_file_grid.assign_visible_item_slots(&mut slots);

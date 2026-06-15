@@ -1,6 +1,8 @@
-use fika_core::{CompactColumnMetrics, CompactLayout, CompactLayoutOptions};
+use crate::ui::rename::RenameDraft;
 
-const AVERAGE_COMPACT_CHAR_WIDTH: f32 = 7.0;
+use fika_core::{CompactColumnMetrics, CompactLayout, CompactLayoutOptions, IconsLayoutOptions};
+
+const AVERAGE_COMPACT_CHAR_WIDTH: f32 = 8.5;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct CompactColumnWidthCacheKey {
@@ -173,8 +175,8 @@ fn required_compact_item_width(
     options: CompactLayoutOptions,
     text_override_width: Option<f32>,
 ) -> f32 {
-    let text_width = compact_text_width(entry.name_width_units)
-        .max(text_override_width.unwrap_or_default().max(0.0));
+    let text_width =
+        entry_name_text_width(entry).max(text_override_width.unwrap_or_default().max(0.0));
     options.padding * 4.0 + options.icon_size + text_width
 }
 
@@ -183,9 +185,58 @@ pub(crate) fn compact_text_width(name_width_units: u16) -> f32 {
 }
 
 pub(crate) fn compact_text_width_for_name(name: &str) -> f32 {
-    compact_text_width(compact_name_width_units(name))
+    name.chars().map(estimated_name_char_width).sum()
 }
 
+fn estimated_name_char_width(ch: char) -> f32 {
+    match ch {
+        'i' | 'l' | 'I' | '!' | '.' | ',' | ':' | ';' | '\'' | '`' | '|' => 4.0,
+        ' ' | '-' | '_' => 5.0,
+        'm' | 'w' | 'M' | 'W' | '@' | '%' | '#' => 11.0,
+        'A'..='Z' => 9.0,
+        '0'..='9' => 8.0,
+        ch if ch.is_ascii() => 7.5,
+        _ => 14.0,
+    }
+}
+
+pub(crate) fn item_name_text_height_for_name(name: &str, available_text_width: f32) -> f32 {
+    item_name_text_height_for_width(compact_text_width_for_name(name), available_text_width)
+}
+
+pub(crate) fn item_name_text_height_for_width(text_width: f32, available_text_width: f32) -> f32 {
+    let available_text_width = available_text_width.max(1.0);
+    let line_count = (text_width.max(1.0) / available_text_width).ceil().max(1.0);
+    line_count * super::ITEM_NAME_LINE_HEIGHT
+}
+
+pub(crate) fn entry_name_text_width(entry: &fika_core::EntryData) -> f32 {
+    compact_text_width_for_name(&entry.name).max(compact_text_width(entry.name_width_units))
+}
+
+pub(crate) fn required_text_width_for_entry(
+    entry: &fika_core::EntryData,
+    draft: Option<&RenameDraft>,
+) -> f32 {
+    let base_width = entry_name_text_width(entry);
+    draft
+        .map(|draft| base_width.max(compact_text_width_for_name(&draft.draft_name)))
+        .unwrap_or(base_width)
+}
+
+pub(crate) fn rename_text_override_for_model(
+    model: &fika_core::DirectoryModel,
+    draft: Option<&RenameDraft>,
+) -> Option<CompactTextWidthOverride> {
+    let draft = draft?;
+    let model_index = model.index_of_path(&draft.original_path)?;
+    Some(CompactTextWidthOverride {
+        model_index,
+        text_width: compact_text_width_for_name(&draft.draft_name),
+    })
+}
+
+#[cfg(test)]
 fn compact_name_width_units(name: &str) -> u16 {
     name.chars()
         .map(|ch| if ch.is_ascii() { 1u32 } else { 2u32 })
@@ -238,7 +289,8 @@ fn compact_layout_for_model_view(
     text_override: Option<CompactTextWidthOverride>,
 ) -> CompactLayout {
     let item_count = filtered.map_or_else(|| model.len(), fika_core::FilteredModel::len);
-    let options = super::compact_layout_options(view, 0.0);
+    let options =
+        compact_layout_options_for_model_view(model, filtered, item_count, view, text_override);
     let rows_per_column = CompactLayout::rows_per_column_for_options(options);
     let metrics = match filtered {
         Some(filtered) => cache.metrics_for_filtered_model(
@@ -257,6 +309,92 @@ fn compact_layout_for_model_view(
         ),
     };
     CompactLayout::new_with_column_metrics(item_count, options, metrics)
+}
+
+pub(crate) fn icons_layout_options_for_model(
+    model: &fika_core::DirectoryModel,
+    filtered: Option<&fika_core::FilteredModel>,
+    item_count: usize,
+    view: &fika_core::ViewState,
+    rename_draft: Option<&RenameDraft>,
+    reserved_bottom: f32,
+) -> IconsLayoutOptions {
+    let text_override = rename_text_override_for_model(model, rename_draft);
+    let mut options = super::icons_layout_options(view, reserved_bottom);
+    let available_text_width = icon_name_available_width(options);
+    let name_height = max_item_name_text_height_for_model(
+        model,
+        filtered,
+        item_count,
+        text_override,
+        available_text_width,
+    );
+    options.text_height = options.text_height.max(name_height);
+    options.item_height =
+        options.padding * 3.0 + options.icon_size + options.gap + options.text_height;
+    options
+}
+
+fn compact_layout_options_for_model_view(
+    model: &fika_core::DirectoryModel,
+    filtered: Option<&fika_core::FilteredModel>,
+    item_count: usize,
+    view: &fika_core::ViewState,
+    text_override: Option<CompactTextWidthOverride>,
+) -> CompactLayoutOptions {
+    let mut options = super::compact_layout_options(view, 0.0);
+    let available_text_width = compact_base_name_available_width(options);
+    let name_height = max_item_name_text_height_for_model(
+        model,
+        filtered,
+        item_count,
+        text_override,
+        available_text_width,
+    );
+    options.text_height = options
+        .text_height
+        .max(name_height + super::ITEM_HELPER_LABEL_HEIGHT);
+    options.item_height =
+        (options.icon_size + 32.0).max(options.text_height + options.padding * 2.0);
+    options
+}
+
+fn max_item_name_text_height_for_model(
+    model: &fika_core::DirectoryModel,
+    filtered: Option<&fika_core::FilteredModel>,
+    item_count: usize,
+    text_override: Option<CompactTextWidthOverride>,
+    available_text_width: f32,
+) -> f32 {
+    max_required_text_width_for_model(model, filtered, item_count, text_override)
+        .map(|width| item_name_text_height_for_width(width, available_text_width))
+        .unwrap_or(super::ITEM_NAME_LINE_HEIGHT)
+}
+
+fn max_required_text_width_for_model(
+    model: &fika_core::DirectoryModel,
+    filtered: Option<&fika_core::FilteredModel>,
+    item_count: usize,
+    text_override: Option<CompactTextWidthOverride>,
+) -> Option<f32> {
+    (0..item_count)
+        .filter_map(|layout_index| {
+            let model_index = model_index_for_layout_index(filtered, layout_index)?;
+            let entry = model.get(model_index)?;
+            let override_text_width = text_override
+                .filter(|override_| override_.model_index == model_index)
+                .map(|override_| override_.text_width);
+            Some(entry_name_text_width(entry).max(override_text_width.unwrap_or_default()))
+        })
+        .reduce(f32::max)
+}
+
+fn icon_name_available_width(options: IconsLayoutOptions) -> f32 {
+    (options.item_width - options.padding * 2.0).max(1.0)
+}
+
+fn compact_base_name_available_width(options: CompactLayoutOptions) -> f32 {
+    (options.item_width - options.padding * 2.0 - options.icon_size - options.gap).max(1.0)
 }
 
 #[cfg(test)]
@@ -282,8 +420,48 @@ mod tests {
     }
 
     #[test]
-    fn compact_text_width_for_name_counts_non_ascii_as_double_width() {
-        assert_eq!(compact_text_width_for_name("a目"), compact_text_width(3));
+    fn compact_text_width_for_name_uses_conservative_character_estimates() {
+        assert!(compact_text_width_for_name("目") > compact_text_width_for_name("a"));
+        assert!(compact_text_width_for_name("WWW") > compact_text_width(3));
+        assert!(compact_text_width_for_name("iii") < compact_text_width(3));
+    }
+
+    #[test]
+    fn icons_layout_options_expand_text_height_for_wrapped_long_names() {
+        let long_name = "Very Long Desktop Launcher Name.desktop";
+        let mut model = DirectoryModel::for_directory(PathBuf::from("/tmp"));
+        model.replace_listing(PathBuf::from("/tmp"), Arc::new(vec![test_entry(long_name)]));
+        let view = ViewState {
+            viewport_width: 160.0,
+            viewport_height: 200.0,
+            ..ViewState::default()
+        };
+        let base_options = crate::ui::file_grid::icons_layout_options(&view, 0.0);
+
+        let options = icons_layout_options_for_model(&model, None, model.len(), &view, None, 0.0);
+
+        assert!(options.text_height > base_options.text_height);
+        assert!(options.item_height > base_options.item_height);
+    }
+
+    #[test]
+    fn compact_layout_expands_text_height_for_wrapped_long_names() {
+        let long_name = "Very Long Desktop Launcher Name.desktop";
+        let mut model = DirectoryModel::for_directory(PathBuf::from("/tmp"));
+        model.replace_listing(PathBuf::from("/tmp"), Arc::new(vec![test_entry(long_name)]));
+        let view = ViewState {
+            viewport_width: 220.0,
+            viewport_height: 200.0,
+            ..ViewState::default()
+        };
+        let base_options = crate::ui::file_grid::compact_layout_options(&view, 0.0);
+        let mut cache = CompactColumnWidthCache::default();
+
+        let layout = compact_layout_for_model_with_text_override(&mut cache, &model, &view, None);
+        let item = layout.item(0).unwrap();
+
+        assert!(item.text_rect.height > base_options.text_height);
+        assert!(item.item_rect.height > base_options.item_height);
     }
 
     #[test]

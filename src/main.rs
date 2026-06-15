@@ -65,7 +65,7 @@ use ui::context_menu::{
 use ui::drag_drop::{
     ActiveItemDrag, DropTargetState, ItemDragPayload, ItemDropTarget, PlaceDropTarget,
     item_drag_export_payload, item_drag_paths, item_drop_reject_reason,
-    item_drop_target_matches_pane,
+    item_drop_target_matches_pane, normalized_drag_paths,
 };
 #[cfg(test)]
 use ui::drag_drop::{
@@ -80,15 +80,17 @@ use ui::file_grid::{
     pane_layout_projection, raw_file_grid_snapshot,
 };
 use ui::filter_bar::{
-    FilterBarSnapshot, FilteredModelCacheEntry, PaneFilterState, cached_filtered_model_for_pane,
+    FILTER_BAR_HEIGHT, FilterBarSnapshot, FilteredModelCacheEntry, PaneFilterState,
+    cached_filtered_model_for_pane,
 };
 use ui::icons::{FileIconCache, FileIconSnapshot};
 use ui::item_view::{ITEM_VIEW_SCROLLBAR_RESERVED_EXTENT, ItemViewScrollState};
 use ui::location_bar::{LocationDraft, LocationEditMetrics};
 use ui::pane::{
     MIN_PANE_WIDTH, PANE_SPLITTER_WIDTH, PaneSnapshot, PaneSplitterDrag, normalize_pane_ratios,
-    pane_row_width_from_child_bounds, pane_splitter, pane_toolbar_snapshot, pane_width_available,
-    sort_order_label, sort_role_label, split_ratio_eq, width_value_eq,
+    pane_close_icon_snapshot, pane_row_width_from_child_bounds, pane_split_icon_snapshot,
+    pane_splitter, pane_toolbar_snapshot, pane_width_available, sort_order_label, sort_role_label,
+    split_ratio_eq, width_value_eq,
 };
 use ui::place_draft::{
     PlaceDraft, PlaceDraftField, PlaceDraftInputResult, apply_place_input_action,
@@ -272,7 +274,6 @@ pub(crate) struct FikaApp {
     clipboard: Option<ClipboardState>,
     active_item_drag: Option<ActiveItemDrag>,
     drop_targets: DropTargetState,
-    drop_menu_position: Option<ViewPoint>,
     drop_target_stale_timer_running: bool,
     rename_draft: Option<RenameDraft>,
     rename_next_after_operation: Option<(PaneId, PathBuf)>,
@@ -353,7 +354,6 @@ impl FikaApp {
             clipboard: None,
             active_item_drag: None,
             drop_targets: DropTargetState::default(),
-            drop_menu_position: None,
             drop_target_stale_timer_running: false,
             rename_draft: None,
             rename_next_after_operation: None,
@@ -453,13 +453,52 @@ impl FikaApp {
         })
     }
 
+    fn set_filter_bar_visible(&mut self, pane_id: PaneId, visible: bool) -> bool {
+        let was_visible = self
+            .pane_filters
+            .get(&pane_id)
+            .is_some_and(|filter| filter.visible);
+        if was_visible == visible {
+            return false;
+        }
+        if visible {
+            self.pane_filters.entry(pane_id).or_default().visible = true;
+        } else if let Some(filter) = self.pane_filters.get_mut(&pane_id) {
+            filter.visible = false;
+        } else {
+            return false;
+        }
+        self.prime_pane_viewport_for_filter_bar_change(pane_id, visible);
+        true
+    }
+
+    fn prime_pane_viewport_for_filter_bar_change(&mut self, pane_id: PaneId, visible: bool) {
+        let Some(pane) = self.panes.pane_mut(pane_id) else {
+            return;
+        };
+        let delta = if visible {
+            -FILTER_BAR_HEIGHT
+        } else {
+            FILTER_BAR_HEIGHT
+        };
+        pane.view.viewport_height =
+            fika_core::normalize_viewport_extent(pane.view.viewport_height + delta);
+        let scroll_x = pane.view.scroll_x;
+        let scroll_y = pane.view.scroll_y;
+
+        self.item_view_authoritative_scroll.insert(pane_id, 2);
+        let _ = self
+            .item_view_scroll
+            .sync_handle_to_view(pane_id, scroll_x, scroll_y);
+    }
+
     pub(crate) fn show_filter_bar(&mut self, pane_id: PaneId) {
         self.panes.focus(pane_id);
         self.dismiss_context_menu();
         self.clear_rename_draft_for_pane(pane_id);
         self.clear_location_draft_for_pane(pane_id);
+        self.set_filter_bar_visible(pane_id, true);
         let filter = self.pane_filters.entry(pane_id).or_default();
-        filter.visible = true;
         filter.focused = true;
         self.set_pane_status(pane_id, "Filter");
     }
@@ -500,18 +539,18 @@ impl FikaApp {
     }
 
     pub(crate) fn close_filter_bar(&mut self, pane_id: PaneId) {
+        self.set_filter_bar_visible(pane_id, false);
         if let Some(filter) = self.pane_filters.get_mut(&pane_id) {
-            filter.visible = false;
             filter.focused = false;
             filter.query.clear();
         }
-        self.invalidate_filter_projection(pane_id);
+        self.invalidate_filter_projection_preserving_scroll(pane_id);
         self.set_pane_status(pane_id, "Filter closed");
     }
 
     fn set_filter_query(&mut self, pane_id: PaneId, query: String) {
+        self.set_filter_bar_visible(pane_id, true);
         let filter = self.pane_filters.entry(pane_id).or_default();
-        filter.visible = true;
         filter.focused = true;
         if filter.query == query {
             return;
@@ -522,8 +561,8 @@ impl FikaApp {
     }
 
     pub(crate) fn toggle_filter_case_sensitive(&mut self, pane_id: PaneId) {
+        self.set_filter_bar_visible(pane_id, true);
         let filter = self.pane_filters.entry(pane_id).or_default();
-        filter.visible = true;
         filter.focused = true;
         filter.case_sensitive = !filter.case_sensitive;
         let enabled = filter.case_sensitive;
@@ -537,8 +576,8 @@ impl FikaApp {
     }
 
     pub(crate) fn toggle_filter_mode(&mut self, pane_id: PaneId) {
+        self.set_filter_bar_visible(pane_id, true);
         let filter = self.pane_filters.entry(pane_id).or_default();
-        filter.visible = true;
         filter.focused = true;
         filter.mode = match filter.mode {
             fika_core::NameFilterMode::PlainText => fika_core::NameFilterMode::Glob,
@@ -557,7 +596,7 @@ impl FikaApp {
         if let Some(filter) = self.pane_filters.get_mut(&pane_id) {
             filter.query.clear();
         }
-        self.invalidate_filter_projection(pane_id);
+        self.invalidate_filter_projection_preserving_scroll(pane_id);
     }
 
     fn clear_filter_query_for_url_change(&mut self, pane_id: PaneId) {
@@ -575,6 +614,10 @@ impl FikaApp {
 
     fn invalidate_filter_projection(&mut self, pane_id: PaneId) {
         self.invalidate_pane_layout_projection(pane_id, true);
+    }
+
+    fn invalidate_filter_projection_preserving_scroll(&mut self, pane_id: PaneId) {
+        self.invalidate_pane_layout_projection(pane_id, false);
     }
 
     fn invalidate_pane_layout_projection(&mut self, pane_id: PaneId, reset_scroll: bool) {
@@ -1732,28 +1775,14 @@ impl FikaApp {
         self.panes.focus(target_pane);
         self.finish_rubber_band(target_pane);
         self.dismiss_context_menu();
-
-        if self.operation_pending {
-            self.clear_drag_drop_targets();
-            self.set_pane_status(target_pane, "File operation already running");
-            return;
-        }
-        if let Some(reason) =
-            item_drop_reject_reason(std::slice::from_ref(&source_path), &target_dir)
-        {
-            self.clear_drag_drop_targets();
-            self.set_pane_status(target_pane, reason);
-            return;
-        }
-
-        self.show_drop_operation_menu(
+        self.show_path_drop_operation_menu_for_paths(
             target_pane,
             target_dir,
             vec![source_path],
             load_target_dir,
             position,
+            cx,
         );
-        cx.notify();
     }
 
     pub(crate) fn drop_place_drag_to_current_place_target(
@@ -1761,13 +1790,14 @@ impl FikaApp {
         source_index: usize,
         fallback_index: usize,
         position: gpui::Point<gpui::Pixels>,
+        cx: &mut Context<Self>,
     ) {
         match self.drop_targets.place().cloned() {
             Some(PlaceDropTarget::Insert { index }) => {
                 self.drop_place_drag_to_place_insert(source_index, index);
             }
             Some(PlaceDropTarget::Place { path }) => {
-                self.drop_place_drag_to_place(source_index, path, position);
+                self.drop_place_drag_to_place(source_index, path, position, cx);
             }
             None => {
                 self.drop_place_drag_to_place_insert(source_index, fallback_index);
@@ -1780,6 +1810,7 @@ impl FikaApp {
         source_index: usize,
         target_dir: PathBuf,
         position: gpui::Point<gpui::Pixels>,
+        cx: &mut Context<Self>,
     ) {
         let Some(status_pane) = self.panes.focused() else {
             self.clear_place_drop_target();
@@ -1800,21 +1831,14 @@ impl FikaApp {
         };
         self.dismiss_context_menu();
         self.finish_rubber_band(status_pane);
-
-        if self.operation_pending {
-            self.clear_drag_drop_targets();
-            self.set_pane_status(status_pane, "File operation already running");
-            return;
-        }
-        if let Some(reason) =
-            item_drop_reject_reason(std::slice::from_ref(&source_path), &target_dir)
-        {
-            self.clear_drag_drop_targets();
-            self.set_pane_status(status_pane, reason);
-            return;
-        }
-
-        self.show_drop_operation_menu(status_pane, target_dir, vec![source_path], false, position);
+        self.show_path_drop_operation_menu_for_paths(
+            status_pane,
+            target_dir,
+            vec![source_path],
+            false,
+            position,
+            cx,
+        );
     }
 
     pub(crate) fn drop_place_drag_to_place_insert(&mut self, source_index: usize, index: usize) {
@@ -2079,7 +2103,6 @@ impl FikaApp {
         {
             self.active_item_drag = None;
             self.drop_targets.clear_without_touch();
-            self.drop_menu_position = None;
         }
         if self.drop_targets.item().is_some_and(|target| match target {
             ItemDropTarget::Pane {
@@ -2092,9 +2115,6 @@ impl FikaApp {
             } => *target_pane == pane_id,
         }) {
             self.drop_targets.clear_item();
-            if !self.drop_targets.has_target() {
-                self.drop_menu_position = None;
-            }
         }
         if self
             .rubber_band
@@ -2141,7 +2161,6 @@ impl FikaApp {
         {
             self.active_item_drag = None;
             self.drop_targets.clear_without_touch();
-            self.drop_menu_position = None;
         }
         if self.drop_targets.item().is_some_and(|target| match target {
             ItemDropTarget::Pane {
@@ -2154,9 +2173,6 @@ impl FikaApp {
             } => *target_pane == pane_id,
         }) {
             self.drop_targets.clear_item();
-            if !self.drop_targets.has_target() {
-                self.drop_menu_position = None;
-            }
         }
         if self
             .rubber_band
@@ -2977,17 +2993,27 @@ impl FikaApp {
         self.item_at_content_point(pane_id, point)
     }
 
-    pub(crate) fn set_item_drag_drop_target_from_window_position(
+    pub(crate) fn dragged_paths_can_drop_to_position(
         &mut self,
         pane_id: PaneId,
         position: gpui::Point<gpui::Pixels>,
+        source_paths: &[PathBuf],
     ) -> bool {
-        self.set_drop_menu_position(position);
+        self.drop_target_directory_at_window_position(pane_id, position)
+            .is_some_and(|target_dir| item_drop_reject_reason(source_paths, &target_dir).is_none())
+    }
+
+    fn drop_target_directory_at_window_position(
+        &mut self,
+        pane_id: PaneId,
+        position: gpui::Point<gpui::Pixels>,
+    ) -> Option<PathBuf> {
         match self.item_at_window_position(pane_id, position) {
-            Some(hit) if hit.is_dir => {
-                self.set_item_drag_drop_target_for_directory(pane_id, hit.path)
-            }
-            _ => self.set_item_drag_drop_target_for_pane(pane_id),
+            Some(hit) if hit.is_dir => Some(hit.path),
+            _ => self
+                .panes
+                .pane(pane_id)
+                .map(|pane| pane.current_dir.clone()),
         }
     }
 
@@ -2997,12 +3023,27 @@ impl FikaApp {
         position: gpui::Point<gpui::Pixels>,
         source_paths: &[PathBuf],
     ) -> bool {
-        self.set_drop_menu_position(position);
+        let source_paths = normalized_drag_paths(source_paths.to_vec());
+        if source_paths.is_empty() {
+            return self.clear_drag_drop_targets();
+        }
         match self.item_at_window_position(pane_id, position) {
             Some(hit) if hit.is_dir => {
-                self.set_dragged_paths_drop_target_for_directory(pane_id, source_paths, hit.path)
+                self.set_dragged_paths_drop_target_for_directory(pane_id, &source_paths, hit.path)
             }
-            _ => self.set_item_drag_drop_target_for_pane(pane_id),
+            _ => {
+                let Some(target_dir) = self
+                    .panes
+                    .pane(pane_id)
+                    .map(|pane| pane.current_dir.clone())
+                else {
+                    return self.clear_drag_drop_targets();
+                };
+                if item_drop_reject_reason(&source_paths, &target_dir).is_some() {
+                    return self.clear_drag_drop_targets();
+                }
+                self.set_item_drag_drop_target_for_pane(pane_id)
+            }
         }
     }
 
@@ -4104,7 +4145,7 @@ impl FikaApp {
     }
 
     pub(crate) fn begin_item_drag(&mut self, payload: ItemDragPayload) {
-        let paths = item_drag_paths(&self.panes, &payload);
+        let paths = normalized_drag_paths(item_drag_paths(&self.panes, &payload));
         let export = item_drag_export_payload(&self.panes, &payload);
         self.active_item_drag = Some(ActiveItemDrag {
             payload,
@@ -4112,7 +4153,6 @@ impl FikaApp {
             export,
         });
         self.drop_targets.clear_without_touch();
-        self.drop_menu_position = None;
     }
 
     fn active_item_drag_paths(&self, payload: &ItemDragPayload) -> Option<Vec<PathBuf>> {
@@ -4124,7 +4164,19 @@ impl FikaApp {
 
     pub(crate) fn item_drag_source_paths(&self, payload: &ItemDragPayload) -> Vec<PathBuf> {
         self.active_item_drag_paths(payload)
-            .unwrap_or_else(|| item_drag_paths(&self.panes, payload))
+            .unwrap_or_else(|| normalized_drag_paths(item_drag_paths(&self.panes, payload)))
+    }
+
+    pub(crate) fn external_drag_source_paths(&self, paths: &[PathBuf]) -> Vec<PathBuf> {
+        normalized_drag_paths(paths.to_vec())
+    }
+
+    pub(crate) fn dragged_paths_can_add_place(&self, paths: &[PathBuf]) -> bool {
+        let paths = normalized_drag_paths(paths.to_vec());
+        let [path] = paths.as_slice() else {
+            return false;
+        };
+        path.is_dir() && !self.places.iter().any(|place| place.path == *path)
     }
 
     fn clear_item_drag(&mut self, payload: &ItemDragPayload) {
@@ -4137,10 +4189,6 @@ impl FikaApp {
         }
     }
 
-    pub(crate) fn set_drop_menu_position(&mut self, position: gpui::Point<gpui::Pixels>) {
-        self.drop_menu_position = Some(Self::window_position_to_view_point(position));
-    }
-
     fn window_position_to_view_point(position: gpui::Point<gpui::Pixels>) -> ViewPoint {
         ViewPoint {
             x: position.x.as_f32(),
@@ -4150,17 +4198,6 @@ impl FikaApp {
 
     pub(crate) fn set_item_drag_drop_target_for_pane(&mut self, pane_id: PaneId) -> bool {
         self.drop_targets.set_item(ItemDropTarget::Pane { pane_id })
-    }
-
-    pub(crate) fn set_item_drag_drop_target_for_directory(
-        &mut self,
-        pane_id: PaneId,
-        path: PathBuf,
-    ) -> bool {
-        if !self.item_drag_can_drop_to_directory(&path) {
-            return self.clear_drag_drop_targets();
-        }
-        self.set_item_drop_target_for_directory_unchecked(pane_id, path)
     }
 
     fn set_item_drop_target_for_directory_unchecked(
@@ -4184,26 +4221,12 @@ impl FikaApp {
         self.set_item_drop_target_for_directory_unchecked(pane_id, target_dir)
     }
 
-    pub(crate) fn item_drag_can_drop_to_directory(&self, target_dir: &Path) -> bool {
-        self.active_item_drag
-            .as_ref()
-            .is_none_or(|drag| item_drop_reject_reason(&drag.paths, target_dir).is_none())
-    }
-
     fn clear_item_drop_target(&mut self) -> bool {
-        let changed = self.drop_targets.clear_item();
-        if !self.drop_targets.has_target() {
-            self.drop_menu_position = None;
-        }
-        changed
+        self.drop_targets.clear_item()
     }
 
     pub(crate) fn clear_item_drop_target_for_pane(&mut self, pane_id: PaneId) -> bool {
-        let changed = self.drop_targets.clear_item_for_pane(pane_id);
-        if !self.drop_targets.has_target() {
-            self.drop_menu_position = None;
-        }
-        changed
+        self.drop_targets.clear_item_for_pane(pane_id)
     }
 
     pub(crate) fn clear_item_drop_target_for_directory(
@@ -4211,11 +4234,7 @@ impl FikaApp {
         pane_id: PaneId,
         path: &Path,
     ) -> bool {
-        let changed = self.drop_targets.clear_item_for_directory(pane_id, path);
-        if !self.drop_targets.has_target() {
-            self.drop_menu_position = None;
-        }
-        changed
+        self.drop_targets.clear_item_for_directory(pane_id, path)
     }
 
     pub(crate) fn set_place_drag_drop_target_for_path(&mut self, path: PathBuf) -> bool {
@@ -4228,16 +4247,25 @@ impl FikaApp {
             .set_place(PlaceDropTarget::Insert { index })
     }
 
+    pub(crate) fn current_place_drop_target_is_insert(&self) -> bool {
+        matches!(
+            self.drop_targets.place(),
+            Some(PlaceDropTarget::Insert { .. })
+        )
+    }
+
+    pub(crate) fn current_place_drop_target_matches_path(&self, path: &Path) -> bool {
+        matches!(
+            self.drop_targets.place(),
+            Some(PlaceDropTarget::Place { path: target_path }) if target_path == path
+        )
+    }
+
     pub(crate) fn clear_place_drop_target(&mut self) -> bool {
-        let changed = self.drop_targets.clear_place();
-        if !self.drop_targets.has_target() {
-            self.drop_menu_position = None;
-        }
-        changed
+        self.drop_targets.clear_place()
     }
 
     pub(crate) fn clear_drag_drop_targets(&mut self) -> bool {
-        self.drop_menu_position = None;
         self.drop_targets.clear_all()
     }
 
@@ -4289,6 +4317,50 @@ impl FikaApp {
 
     fn clear_stale_drop_targets_for_generation(&mut self, generation: u64) -> bool {
         self.drop_targets.clear_stale_for_generation(generation)
+    }
+
+    fn take_active_item_drag_paths_for_drop(
+        &mut self,
+        payload: &ItemDragPayload,
+        status_pane: PaneId,
+    ) -> Option<Vec<PathBuf>> {
+        let Some(paths) = self.active_item_drag_paths(payload) else {
+            self.clear_item_drag(payload);
+            self.clear_drag_drop_targets();
+            self.set_pane_status(status_pane, "No active item drag");
+            return None;
+        };
+        self.clear_item_drag(payload);
+        Some(paths)
+    }
+
+    fn show_path_drop_operation_menu_for_paths(
+        &mut self,
+        status_pane: PaneId,
+        target_dir: PathBuf,
+        paths: Vec<PathBuf>,
+        load_target_dir: bool,
+        position: gpui::Point<gpui::Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        let paths = normalized_drag_paths(paths);
+        if self.chooser.is_some() {
+            self.clear_drag_drop_targets();
+            return;
+        }
+        if self.operation_pending {
+            self.clear_drag_drop_targets();
+            self.set_pane_status(status_pane, "File operation already running");
+            return;
+        }
+        if let Some(reason) = item_drop_reject_reason(&paths, &target_dir) {
+            self.clear_drag_drop_targets();
+            self.set_pane_status(status_pane, reason);
+            return;
+        }
+
+        self.show_drop_operation_menu(status_pane, target_dir, paths, load_target_dir, position);
+        cx.notify();
     }
 
     pub(crate) fn drop_item_drag_to_pane(
@@ -4364,6 +4436,7 @@ impl FikaApp {
         position: gpui::Point<gpui::Pixels>,
         cx: &mut Context<Self>,
     ) {
+        let paths = normalized_drag_paths(paths);
         match self.item_at_window_position(target_pane, position) {
             Some(hit) if hit.is_dir => {
                 let target_dir = hit.path;
@@ -4405,20 +4478,14 @@ impl FikaApp {
         self.panes.focus(target_pane);
         self.finish_rubber_band(target_pane);
         self.dismiss_context_menu();
-
-        if self.operation_pending {
-            self.clear_drag_drop_targets();
-            self.set_pane_status(target_pane, "File operation already running");
-            return;
-        }
-        if let Some(reason) = item_drop_reject_reason(&paths, &target_dir) {
-            self.clear_drag_drop_targets();
-            self.set_pane_status(target_pane, reason);
-            return;
-        }
-
-        self.show_drop_operation_menu(target_pane, target_dir, paths, load_target_dir, position);
-        cx.notify();
+        self.show_path_drop_operation_menu_for_paths(
+            target_pane,
+            target_dir,
+            paths,
+            load_target_dir,
+            position,
+            cx,
+        );
     }
 
     pub(crate) fn drop_item_drag_to_place(
@@ -4452,21 +4519,17 @@ impl FikaApp {
             return;
         }
 
-        let Some(paths) = self.active_item_drag_paths(&payload) else {
-            self.clear_item_drag(&payload);
-            self.clear_drag_drop_targets();
-            self.set_pane_status(status_pane, "No active item drag");
+        let Some(paths) = self.take_active_item_drag_paths_for_drop(&payload, status_pane) else {
             return;
         };
-        self.clear_item_drag(&payload);
-        if let Some(reason) = item_drop_reject_reason(&paths, &target_dir) {
-            self.clear_drag_drop_targets();
-            self.set_pane_status(status_pane, reason);
-            return;
-        }
-
-        self.show_drop_operation_menu(status_pane, target_dir, paths, false, position);
-        cx.notify();
+        self.show_path_drop_operation_menu_for_paths(
+            status_pane,
+            target_dir,
+            paths,
+            false,
+            position,
+            cx,
+        );
     }
 
     pub(crate) fn drop_external_paths_to_place(
@@ -4486,20 +4549,14 @@ impl FikaApp {
         }
         self.dismiss_context_menu();
         self.finish_rubber_band(status_pane);
-
-        if self.operation_pending {
-            self.clear_drag_drop_targets();
-            self.set_pane_status(status_pane, "File operation already running");
-            return;
-        }
-        if let Some(reason) = item_drop_reject_reason(&paths, &target_dir) {
-            self.clear_drag_drop_targets();
-            self.set_pane_status(status_pane, reason);
-            return;
-        }
-
-        self.show_drop_operation_menu(status_pane, target_dir, paths, false, position);
-        cx.notify();
+        self.show_path_drop_operation_menu_for_paths(
+            status_pane,
+            target_dir,
+            paths,
+            false,
+            position,
+            cx,
+        );
     }
 
     pub(crate) fn drop_item_drag_to_current_place_target(
@@ -4531,6 +4588,7 @@ impl FikaApp {
         position: gpui::Point<gpui::Pixels>,
         cx: &mut Context<Self>,
     ) {
+        let paths = normalized_drag_paths(paths);
         match self
             .drop_targets
             .place()
@@ -4583,6 +4641,7 @@ impl FikaApp {
         paths: Vec<PathBuf>,
         index: usize,
     ) {
+        let paths = normalized_drag_paths(paths);
         let Some(status_pane) = self.panes.focused() else {
             self.clear_place_drop_target();
             return;
@@ -4617,22 +4676,18 @@ impl FikaApp {
             self.set_pane_status(target_pane, "File operation already running");
             return;
         }
-        let Some(paths) = self.active_item_drag_paths(&payload) else {
-            self.clear_item_drag(&payload);
-            self.clear_drag_drop_targets();
-            self.set_pane_status(target_pane, "No active item drag");
+        let Some(paths) = self.take_active_item_drag_paths_for_drop(&payload, target_pane) else {
             return;
         };
-        self.clear_item_drag(&payload);
         self.clear_place_drop_target();
-        if let Some(reason) = item_drop_reject_reason(&paths, &target_dir) {
-            self.clear_drag_drop_targets();
-            self.set_pane_status(target_pane, reason);
-            return;
-        }
-
-        self.show_drop_operation_menu(target_pane, target_dir, paths, true, position);
-        cx.notify();
+        self.show_path_drop_operation_menu_for_paths(
+            target_pane,
+            target_dir,
+            paths,
+            true,
+            position,
+            cx,
+        );
     }
 
     pub(crate) fn drop_external_paths_to_location(
@@ -4654,14 +4709,14 @@ impl FikaApp {
             return;
         }
         self.clear_place_drop_target();
-        if let Some(reason) = item_drop_reject_reason(&paths, &target_dir) {
-            self.clear_drag_drop_targets();
-            self.set_pane_status(target_pane, reason);
-            return;
-        }
-
-        self.show_drop_operation_menu(target_pane, target_dir, paths, true, position);
-        cx.notify();
+        self.show_path_drop_operation_menu_for_paths(
+            target_pane,
+            target_dir,
+            paths,
+            true,
+            position,
+            cx,
+        );
     }
 
     pub(crate) fn drop_item_drag_to_directory(
@@ -4690,27 +4745,18 @@ impl FikaApp {
             return;
         }
 
-        let Some(paths) = self.active_item_drag_paths(&payload) else {
-            self.clear_item_drag(&payload);
-            self.clear_drag_drop_targets();
-            self.set_pane_status(target_pane, "No active item drag");
+        let Some(paths) = self.take_active_item_drag_paths_for_drop(&payload, target_pane) else {
             return;
         };
-        self.clear_item_drag(&payload);
         self.clear_place_drop_target();
-        if paths.is_empty() {
-            self.clear_drag_drop_targets();
-            self.set_pane_status(target_pane, "No dragged items");
-            return;
-        }
-        if let Some(reason) = item_drop_reject_reason(&paths, &target_dir) {
-            self.clear_drag_drop_targets();
-            self.set_pane_status(target_pane, reason);
-            return;
-        }
-
-        self.show_drop_operation_menu(target_pane, target_dir, paths, load_target_dir, position);
-        cx.notify();
+        self.show_path_drop_operation_menu_for_paths(
+            target_pane,
+            target_dir,
+            paths,
+            load_target_dir,
+            position,
+            cx,
+        );
     }
 
     fn show_drop_operation_menu(
@@ -4722,7 +4768,6 @@ impl FikaApp {
         position: gpui::Point<gpui::Pixels>,
     ) {
         let position = Self::window_position_to_view_point(position);
-        self.drop_menu_position = None;
         self.set_context_menu(ContextMenuState {
             pane_id,
             target: ContextMenuTarget::DropOperation {
@@ -6827,6 +6872,10 @@ impl Render for FikaApp {
             .iter()
             .map(|snapshot| snapshot.id)
             .collect::<Vec<_>>();
+        let focused_pane = self.panes.focused();
+        let pane_count = pane_ids.len();
+        let split_icon = pane_split_icon_snapshot(&mut self.file_icons);
+        let close_icon = pane_close_icon_snapshot(&mut self.file_icons);
         let mut pane_elements = Vec::with_capacity(pane_ids.len().saturating_mul(2));
         for (index, snapshot) in snapshots.into_iter().enumerate() {
             let left = snapshot.id;
@@ -6886,6 +6935,28 @@ impl Render for FikaApp {
                                 .unwrap_or_else(|| "GPUI directory shell".to_string()),
                         ),
                     )
+                    .child(div().flex_1())
+                    .when_some(focused_pane, |bar, pane_id| {
+                        bar.child(
+                            div()
+                                .id("app-pane-toolbar")
+                                .flex()
+                                .items_center()
+                                .gap_1()
+                                .child(ui::pane::split_pane_button(
+                                    pane_id,
+                                    split_icon,
+                                    pane_count == 1,
+                                    cx,
+                                ))
+                                .child(ui::pane::close_pane_button(
+                                    pane_id,
+                                    close_icon,
+                                    pane_count > 1,
+                                    cx,
+                                )),
+                        )
+                    })
                     .when(self.chooser.is_some(), |bar| {
                         bar.child(ui::controls::toolbar_button("choose", "Choose").on_click(
                             cx.listener(move |this, _event, _window, cx| {
@@ -11603,6 +11674,42 @@ text/plain=viewer.desktop;\n",
     }
 
     #[test]
+    fn filter_bar_visibility_primes_pane_viewport_height() {
+        let mut app = test_app_with_entries("/tmp/fika-filter-viewport", &["alpha.rs"]);
+        let pane_id = app.panes.focused().unwrap();
+        {
+            let pane = app.panes.pane_mut(pane_id).unwrap();
+            pane.view.viewport_height = 360.0;
+            pane.view.scroll_y = 120.0;
+            pane.view.max_scroll_y = 480.0;
+        }
+
+        app.show_filter_bar(pane_id);
+
+        assert_eq!(
+            app.panes.pane(pane_id).unwrap().view.viewport_height,
+            360.0 - FILTER_BAR_HEIGHT
+        );
+
+        app.show_filter_bar(pane_id);
+
+        assert_eq!(
+            app.panes.pane(pane_id).unwrap().view.viewport_height,
+            360.0 - FILTER_BAR_HEIGHT
+        );
+
+        app.close_filter_bar(pane_id);
+
+        assert_eq!(app.panes.pane(pane_id).unwrap().view.viewport_height, 360.0);
+        assert_eq!(app.panes.pane(pane_id).unwrap().view.scroll_y, 120.0);
+
+        app.close_filter_bar(pane_id);
+
+        assert_eq!(app.panes.pane(pane_id).unwrap().view.viewport_height, 360.0);
+        assert_eq!(app.panes.pane(pane_id).unwrap().view.scroll_y, 120.0);
+    }
+
+    #[test]
     fn pane_toolbar_split_and_close_buttons_follow_availability_rules() {
         let mut app = test_app_with_entries("/tmp/fika-pane-toolbar", &["alpha.rs", "beta.txt"]);
         let first = app.panes.focused().unwrap();
@@ -11894,7 +12001,9 @@ text/plain=viewer.desktop;\n",
     fn item_drop_target_tracks_pane_directory_and_lifecycle_clear() {
         let temp = test_dir("item-drop-target");
         let target_dir = temp.join("target");
+        let source = temp.join("source.txt");
         std::fs::create_dir_all(&target_dir).unwrap();
+        std::fs::write(&source, "source").unwrap();
         let mut app = test_app_with_entries(temp.to_str().unwrap(), &[]);
         let pane_id = app.panes.focused().unwrap();
 
@@ -11910,7 +12019,11 @@ text/plain=viewer.desktop;\n",
         ));
         assert!(!app.set_item_drag_drop_target_for_pane(pane_id));
 
-        assert!(app.set_item_drag_drop_target_for_directory(pane_id, target_dir.clone()));
+        assert!(app.set_dragged_paths_drop_target_for_directory(
+            pane_id,
+            std::slice::from_ref(&source),
+            target_dir.clone()
+        ));
         assert!(!item_drop_target_matches_pane(
             app.drop_targets.item(),
             pane_id
@@ -11932,8 +12045,10 @@ text/plain=viewer.desktop;\n",
         let temp = test_dir("item-drop-target-leave-clear");
         let first_dir = temp.join("first");
         let second_dir = temp.join("second");
+        let source = temp.join("source.txt");
         std::fs::create_dir_all(&first_dir).unwrap();
         std::fs::create_dir_all(&second_dir).unwrap();
+        std::fs::write(&source, "source").unwrap();
         let mut app = test_app_with_entries(temp.to_str().unwrap(), &[]);
         let pane_id = app.panes.focused().unwrap();
 
@@ -11948,7 +12063,11 @@ text/plain=viewer.desktop;\n",
         assert!(app.drop_targets.stale_generation() > pane_generation);
         assert!(app.drop_targets.item().is_none());
 
-        assert!(app.set_item_drag_drop_target_for_directory(pane_id, first_dir.clone()));
+        assert!(app.set_dragged_paths_drop_target_for_directory(
+            pane_id,
+            std::slice::from_ref(&source),
+            first_dir.clone()
+        ));
         let directory_generation = app.drop_targets.stale_generation();
         assert!(!app.clear_item_drop_target_for_directory(pane_id, &second_dir));
         assert!(!app.clear_item_drop_target_for_directory(PaneId(999), &first_dir));
@@ -11973,20 +12092,23 @@ text/plain=viewer.desktop;\n",
         std::fs::create_dir_all(&target_dir).unwrap();
         let mut app = test_app_with_entries(temp.to_str().unwrap(), &[]);
         let pane_id = app.panes.focused().unwrap();
-        let payload = ItemDragPayload {
-            source_pane: pane_id,
-            source_path: source_dir.clone(),
-            source_selected: false,
-        };
+        let source_paths = vec![source_dir.clone()];
 
-        app.begin_item_drag(payload);
         assert!(app.set_item_drag_drop_target_for_pane(pane_id));
-        assert!(!app.item_drag_can_drop_to_directory(&source_dir));
-        assert!(app.set_item_drag_drop_target_for_directory(pane_id, source_dir.clone()));
+        assert!(item_drop_reject_reason(&source_paths, &source_dir).is_some());
+        assert!(app.set_dragged_paths_drop_target_for_directory(
+            pane_id,
+            &source_paths,
+            source_dir.clone()
+        ));
         assert!(app.drop_targets.item().is_none());
 
-        assert!(app.item_drag_can_drop_to_directory(&target_dir));
-        assert!(app.set_item_drag_drop_target_for_directory(pane_id, target_dir.clone()));
+        assert!(item_drop_reject_reason(&source_paths, &target_dir).is_none());
+        assert!(app.set_dragged_paths_drop_target_for_directory(
+            pane_id,
+            &source_paths,
+            target_dir.clone()
+        ));
         assert!(item_drop_target_matches_directory(
             app.drop_targets.item(),
             pane_id,
@@ -11996,7 +12118,78 @@ text/plain=viewer.desktop;\n",
     }
 
     #[test]
-    fn window_drop_target_from_position_uses_directory_item_and_menu_position() {
+    fn dragged_paths_drop_target_rejects_current_directory_blank_target() {
+        let current = test_dir("drop-current-directory-blank");
+        std::fs::create_dir_all(&current).unwrap();
+        let mut app = test_app_with_entries(current.to_str().unwrap(), &[]);
+        let pane_id = app.panes.focused().unwrap();
+
+        assert!(!app.set_dragged_paths_drop_target_from_window_position(
+            pane_id,
+            gpui::point(px(24.0), px(24.0)),
+            std::slice::from_ref(&current)
+        ));
+        assert!(app.drop_targets.item().is_none());
+
+        let _ = std::fs::remove_dir_all(current);
+    }
+
+    #[test]
+    fn external_drag_source_paths_are_normalized_for_drop() {
+        let temp = test_dir("external-drag-normalized");
+        let parent = temp.join("parent");
+        let child = parent.join("child.txt");
+        let sibling = temp.join("sibling");
+        std::fs::create_dir_all(&parent).unwrap();
+        std::fs::write(&child, "child").unwrap();
+        std::fs::write(&sibling, "sibling").unwrap();
+        let app = test_app_with_entries(temp.to_str().unwrap(), &[]);
+
+        assert_eq!(
+            app.external_drag_source_paths(&[
+                child.clone(),
+                parent.clone(),
+                child,
+                sibling.clone(),
+                sibling.clone(),
+            ]),
+            vec![parent, sibling]
+        );
+
+        let _ = std::fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn dragged_paths_can_add_place_requires_one_new_directory() {
+        let current = test_dir("place-add-current");
+        let folder = test_dir("place-add-folder");
+        std::fs::create_dir_all(&current).unwrap();
+        std::fs::create_dir_all(&folder).unwrap();
+        let file = current.join("note.txt");
+        std::fs::write(&file, "note").unwrap();
+        let mut app = test_app_with_entries(current.to_str().unwrap(), &[]);
+        app.places = vec![PlaceEntry {
+            group: "",
+            marker: "F",
+            label: "Folder".to_string(),
+            path: folder.clone(),
+            editable: true,
+            removable: true,
+            device_ejectable: false,
+            device_can_power_off: false,
+        }];
+
+        assert!(!app.dragged_paths_can_add_place(std::slice::from_ref(&file)));
+        assert!(!app.dragged_paths_can_add_place(&[folder.clone(), current.clone()]));
+        assert!(!app.dragged_paths_can_add_place(std::slice::from_ref(&folder)));
+        assert!(app.dragged_paths_can_add_place(std::slice::from_ref(&current)));
+
+        let _ = std::fs::remove_dir_all(current);
+        let _ = std::fs::remove_dir_all(folder);
+    }
+
+    #[test]
+    fn window_drop_target_from_position_uses_directory_item() {
         let temp = test_dir("window-drop-target-directory");
         let target_dir = temp.join("target");
         let place_source = temp.join("place-source");
@@ -12032,24 +12225,16 @@ text/plain=viewer.desktop;\n",
             px(50.0 + item.visual_rect.y - view.scroll_y + 8.0),
         );
 
-        app.begin_item_drag(ItemDragPayload {
-            source_pane: pane_id,
-            source_path: source_file.clone(),
-            source_selected: false,
-        });
-        assert!(app.set_item_drag_drop_target_from_window_position(pane_id, position));
+        assert!(app.set_dragged_paths_drop_target_from_window_position(
+            pane_id,
+            position,
+            std::slice::from_ref(&source_file)
+        ));
         assert!(item_drop_target_matches_directory(
             app.drop_targets.item(),
             pane_id,
             &target_dir
         ));
-        assert_eq!(
-            app.drop_menu_position,
-            Some(ViewPoint {
-                x: position.x.as_f32(),
-                y: position.y.as_f32(),
-            })
-        );
 
         assert!(app.clear_drag_drop_targets());
         assert!(app.set_dragged_paths_drop_target_from_window_position(
@@ -12062,13 +12247,6 @@ text/plain=viewer.desktop;\n",
             pane_id,
             &target_dir
         ));
-        assert_eq!(
-            app.drop_menu_position,
-            Some(ViewPoint {
-                x: position.x.as_f32(),
-                y: position.y.as_f32(),
-            })
-        );
 
         let _ = std::fs::remove_dir_all(temp);
     }
@@ -12083,10 +12261,12 @@ text/plain=viewer.desktop;\n",
         let mut app = test_app_with_entries(temp.to_str().unwrap(), &[]);
         let pane_id = app.panes.focused().unwrap();
         let position = gpui::point(px(120.0), px(64.0));
-        let stale_position = gpui::point(px(0.0), px(0.0));
 
-        assert!(app.set_item_drag_drop_target_for_directory(pane_id, target_dir.clone()));
-        app.set_drop_menu_position(stale_position);
+        assert!(app.set_dragged_paths_drop_target_for_directory(
+            pane_id,
+            std::slice::from_ref(&source),
+            target_dir.clone()
+        ));
         app.show_drop_operation_menu(
             pane_id,
             target_dir.clone(),
@@ -12109,7 +12289,6 @@ text/plain=viewer.desktop;\n",
                 y: position.y.as_f32(),
             }
         );
-        assert_eq!(app.drop_menu_position, None);
         assert_eq!(
             menu.target,
             ContextMenuTarget::DropOperation {
@@ -13149,7 +13328,6 @@ text/plain=viewer.desktop;\n",
             clipboard: None,
             active_item_drag: None,
             drop_targets: DropTargetState::default(),
-            drop_menu_position: None,
             drop_target_stale_timer_running: false,
             rename_draft: None,
             rename_next_after_operation: None,

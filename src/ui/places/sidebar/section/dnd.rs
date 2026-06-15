@@ -22,9 +22,21 @@ pub(super) fn install_section_dnd(
                 if !contains {
                     return;
                 }
-                let changed = this.set_place_drag_drop_target_for_insert(insert_index);
-                refresh_active_drag_cursor_for_transfer_mode(FileTransferMode::Copy, window, cx);
-                this.schedule_drop_target_stale_clear(cx);
+                let source_paths = this.item_drag_source_paths(&event.drag(cx).payload());
+                let changed = if this.dragged_paths_can_add_place(&source_paths) {
+                    let changed = this.set_place_drag_drop_target_for_insert(insert_index);
+                    refresh_active_drag_cursor_for_transfer_mode(
+                        FileTransferMode::Copy,
+                        window,
+                        cx,
+                    );
+                    this.schedule_drop_target_stale_clear(cx);
+                    changed
+                } else {
+                    let changed = this.clear_drag_drop_targets();
+                    refresh_active_drag_cursor_not_allowed(window, cx);
+                    changed
+                };
                 if changed {
                     cx.notify();
                 }
@@ -37,9 +49,21 @@ pub(super) fn install_section_dnd(
                 if !contains {
                     return;
                 }
-                let changed = this.set_place_drag_drop_target_for_insert(insert_index);
-                refresh_active_drag_cursor_for_transfer_mode(FileTransferMode::Copy, window, cx);
-                this.schedule_drop_target_stale_clear(cx);
+                let source_paths = this.external_drag_source_paths(event.drag(cx).paths());
+                let changed = if this.dragged_paths_can_add_place(&source_paths) {
+                    let changed = this.set_place_drag_drop_target_for_insert(insert_index);
+                    refresh_active_drag_cursor_for_transfer_mode(
+                        FileTransferMode::Copy,
+                        window,
+                        cx,
+                    );
+                    this.schedule_drop_target_stale_clear(cx);
+                    changed
+                } else {
+                    let changed = this.clear_drag_drop_targets();
+                    refresh_active_drag_cursor_not_allowed(window, cx);
+                    changed
+                };
                 if changed {
                     cx.notify();
                 }

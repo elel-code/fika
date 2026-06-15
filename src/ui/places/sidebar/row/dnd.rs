@@ -5,7 +5,7 @@ use gpui::prelude::*;
 use gpui::{Context, Div, ExternalPaths, Stateful};
 
 use crate::ui::drag_drop::{
-    FileTransferMode, refresh_active_drag_cursor_for_drop_menu,
+    FileTransferMode, item_drop_reject_reason, refresh_active_drag_cursor_for_drop_menu,
     refresh_active_drag_cursor_for_transfer_mode, refresh_active_drag_cursor_not_allowed,
 };
 use crate::ui::file_grid::ItemDrag;
@@ -47,35 +47,40 @@ pub(super) fn install_place_row_dnd(
             if !event.bounds.contains(&event.event.position) {
                 return;
             }
+            let source_paths = this.item_drag_source_paths(&event.drag(cx).payload());
             let drop_zone = place_drop_zone(event);
-            let cursor_mode = match drop_zone {
-                PlaceDropZone::InsertBefore | PlaceDropZone::InsertAfter => {
-                    Some(FileTransferMode::Copy)
-                }
-                PlaceDropZone::OnPlace if mounted => None,
-                PlaceDropZone::OnPlace => None,
-            };
+            let accepts_insert = this.dragged_paths_can_add_place(&source_paths);
+            let accepts_place =
+                mounted && item_drop_reject_reason(&source_paths, &path_for_item_target).is_none();
             let changed = match drop_zone {
-                PlaceDropZone::InsertBefore => {
+                PlaceDropZone::InsertBefore if accepts_insert => {
                     this.set_place_drag_drop_target_for_insert(insert_before_index)
                 }
-                PlaceDropZone::InsertAfter => {
+                PlaceDropZone::InsertAfter if accepts_insert => {
                     this.set_place_drag_drop_target_for_insert(insert_after_index)
                 }
-                PlaceDropZone::OnPlace if mounted => {
-                    this.set_drop_menu_position(event.event.position);
+                PlaceDropZone::InsertBefore | PlaceDropZone::InsertAfter => {
+                    this.clear_drag_drop_targets()
+                }
+                PlaceDropZone::OnPlace if accepts_place => {
                     this.set_place_drag_drop_target_for_path(path_for_item_target.clone())
                 }
                 PlaceDropZone::OnPlace => this.clear_drag_drop_targets(),
             };
-            if let Some(cursor_mode) = cursor_mode {
-                refresh_active_drag_cursor_for_transfer_mode(cursor_mode, window, cx);
-            } else if mounted && matches!(drop_zone, PlaceDropZone::OnPlace) {
+            if accepts_insert
+                && matches!(
+                    drop_zone,
+                    PlaceDropZone::InsertBefore | PlaceDropZone::InsertAfter
+                )
+            {
+                refresh_active_drag_cursor_for_transfer_mode(FileTransferMode::Copy, window, cx);
+                this.schedule_drop_target_stale_clear(cx);
+            } else if accepts_place && matches!(drop_zone, PlaceDropZone::OnPlace) {
                 refresh_active_drag_cursor_for_drop_menu(window, cx);
+                this.schedule_drop_target_stale_clear(cx);
             } else {
                 refresh_active_drag_cursor_not_allowed(window, cx);
             }
-            this.schedule_drop_target_stale_clear(cx);
             if changed {
                 cx.notify();
             }
@@ -87,35 +92,40 @@ pub(super) fn install_place_row_dnd(
             if !event.bounds.contains(&event.event.position) {
                 return;
             }
+            let source_paths = this.external_drag_source_paths(event.drag(cx).paths());
             let drop_zone = place_drop_zone(event);
-            let cursor_mode = match drop_zone {
-                PlaceDropZone::InsertBefore | PlaceDropZone::InsertAfter => {
-                    Some(FileTransferMode::Copy)
-                }
-                PlaceDropZone::OnPlace if mounted => None,
-                PlaceDropZone::OnPlace => None,
-            };
+            let accepts_insert = this.dragged_paths_can_add_place(&source_paths);
+            let accepts_place = mounted
+                && item_drop_reject_reason(&source_paths, &path_for_external_move_target).is_none();
             let changed = match drop_zone {
-                PlaceDropZone::InsertBefore => {
+                PlaceDropZone::InsertBefore if accepts_insert => {
                     this.set_place_drag_drop_target_for_insert(insert_before_index)
                 }
-                PlaceDropZone::InsertAfter => {
+                PlaceDropZone::InsertAfter if accepts_insert => {
                     this.set_place_drag_drop_target_for_insert(insert_after_index)
                 }
-                PlaceDropZone::OnPlace if mounted => {
-                    this.set_drop_menu_position(event.event.position);
+                PlaceDropZone::InsertBefore | PlaceDropZone::InsertAfter => {
+                    this.clear_drag_drop_targets()
+                }
+                PlaceDropZone::OnPlace if accepts_place => {
                     this.set_place_drag_drop_target_for_path(path_for_external_move_target.clone())
                 }
                 PlaceDropZone::OnPlace => this.clear_drag_drop_targets(),
             };
-            if let Some(cursor_mode) = cursor_mode {
-                refresh_active_drag_cursor_for_transfer_mode(cursor_mode, window, cx);
-            } else if mounted && matches!(drop_zone, PlaceDropZone::OnPlace) {
+            if accepts_insert
+                && matches!(
+                    drop_zone,
+                    PlaceDropZone::InsertBefore | PlaceDropZone::InsertAfter
+                )
+            {
+                refresh_active_drag_cursor_for_transfer_mode(FileTransferMode::Copy, window, cx);
+                this.schedule_drop_target_stale_clear(cx);
+            } else if accepts_place && matches!(drop_zone, PlaceDropZone::OnPlace) {
                 refresh_active_drag_cursor_for_drop_menu(window, cx);
+                this.schedule_drop_target_stale_clear(cx);
             } else {
                 refresh_active_drag_cursor_not_allowed(window, cx);
             }
-            this.schedule_drop_target_stale_clear(cx);
             if changed {
                 cx.notify();
             }
@@ -128,7 +138,14 @@ pub(super) fn install_place_row_dnd(
                 return;
             }
             let drag = event.drag(cx);
+            let source_path = drag.path();
             let drop_zone = place_drop_zone(event);
+            let accepts_place = mounted
+                && item_drop_reject_reason(
+                    std::slice::from_ref(&source_path),
+                    &path_for_place_drag_leave,
+                )
+                .is_none();
             let changed = match drop_zone {
                 PlaceDropZone::InsertBefore | PlaceDropZone::InsertAfter if drag.movable() => {
                     let insert_index = place_drag_insert_index_for_zone(
@@ -140,15 +157,13 @@ pub(super) fn install_place_row_dnd(
                     this.set_place_drag_drop_target_for_insert(insert_index)
                 }
                 PlaceDropZone::InsertBefore | PlaceDropZone::InsertAfter => {
-                    if mounted {
-                        this.set_drop_menu_position(event.event.position);
+                    if accepts_place {
                         this.set_place_drag_drop_target_for_path(path_for_place_drag_leave.clone())
                     } else {
                         this.clear_drag_drop_targets()
                     }
                 }
-                PlaceDropZone::OnPlace if mounted => {
-                    this.set_drop_menu_position(event.event.position);
+                PlaceDropZone::OnPlace if accepts_place => {
                     this.set_place_drag_drop_target_for_path(path_for_place_drag_leave.clone())
                 }
                 PlaceDropZone::OnPlace => this.clear_drag_drop_targets(),
@@ -160,7 +175,7 @@ pub(super) fn install_place_row_dnd(
             {
                 refresh_active_drag_cursor_for_transfer_mode(FileTransferMode::Move, window, cx);
                 this.schedule_drop_target_stale_clear(cx);
-            } else if mounted {
+            } else if accepts_place {
                 refresh_active_drag_cursor_for_drop_menu(window, cx);
                 this.schedule_drop_target_stale_clear(cx);
             } else {
@@ -173,9 +188,10 @@ pub(super) fn install_place_row_dnd(
         },
     ))
     .on_drop::<ItemDrag>(cx.listener(move |this, drag: &ItemDrag, window, cx| {
-        if mounted {
+        if this.current_place_drop_target_is_insert()
+            || this.current_place_drop_target_matches_path(&path_for_internal_drop)
+        {
             let position = window.mouse_position();
-            this.set_drop_menu_position(position);
             this.drop_item_drag_to_current_place_target(
                 drag.payload(),
                 path_for_internal_drop.clone(),
@@ -188,9 +204,10 @@ pub(super) fn install_place_row_dnd(
     }))
     .on_drop::<ExternalPaths>(cx.listener(
         move |this, external_paths: &ExternalPaths, window, cx| {
-            if mounted {
+            if this.current_place_drop_target_is_insert()
+                || this.current_place_drop_target_matches_path(&path_for_external_drop)
+            {
                 let position = window.mouse_position();
-                this.set_drop_menu_position(position);
                 this.drop_external_paths_to_current_place_target(
                     external_paths.paths().to_vec(),
                     path_for_external_drop.clone(),
@@ -204,11 +221,11 @@ pub(super) fn install_place_row_dnd(
     ))
     .on_drop::<PlaceDrag>(cx.listener(move |this, drag: &PlaceDrag, window, cx| {
         let position = window.mouse_position();
-        this.set_drop_menu_position(position);
         this.drop_place_drag_to_current_place_target(
             drag.source_index(),
             insert_after_index,
             position,
+            cx,
         );
         cx.stop_propagation();
         cx.notify();

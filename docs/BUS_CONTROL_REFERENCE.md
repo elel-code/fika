@@ -114,8 +114,8 @@ helper, devices, Ark DnD, and future FileManager1 integration.
     object path.
   - Builds `ArkDndExtractRequest` and executes
     `org.kde.ark.DndExtract.extractSelectedFilesTo(destination)` through the
-    shared session bus helper. GPUI/backend external MIME offer routing is still
-    pending.
+    shared session bus helper. GPUI/backend multi-MIME external offer routing is
+    still pending.
 - `src/core/devices.rs`
   - Reads the initial UDisks2 object tree through the shared system bus helper:
     `org.freedesktop.DBus.ObjectManager.GetManagedObjects()` on
@@ -191,8 +191,9 @@ Completed:
 
 Remaining:
 
-1. Wire GPUI/backend external drag data offers carrying Ark MIME values into
-   the core Ark DnD executor instead of the ordinary file copy/move/link path.
+1. Wire GPUI/backend multi-MIME external drag offers carrying Ark MIME values
+   into the core Ark DnD executor instead of the ordinary file copy/move/link
+   path.
 2. Move the remaining privileged-helper blocking user-unit watcher connection
    path where practical, or document it as a blocking service-side exception.
 3. Add UDisks2 discovery on top of the system bus helper and keep device

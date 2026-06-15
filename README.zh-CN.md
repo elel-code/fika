@@ -79,8 +79,8 @@ GPUI 依赖来自 Zed 官方仓库：`https://github.com/zed-industries/zed`。m
 - Open With "Other Application…" 选择器：`uniform_list` 虚拟列表，
   可见图标范围，Set Default 写回 `mimeapps.list`。
 - 拖放：item/place drag source，directory/item/blank/pane drop target，
-  `.desktop` 应用 DnD，modifier 切换模式，Copy/Move/Link 颜色区分，
-  Places bookmark 插入和重排。
+  `.desktop` 应用 DnD，通过 GPUI `ExternalPaths` 接收外部文件拖入，
+  Copy/Move/Link drop menu 和 hover 反馈，Places bookmark 插入和重排。
 - Inline rename：pane-local draft 状态，文本输入，Enter/Escape 提交/取消。
 - Properties 对话框：单路径和多选 metadata 行。
 - 剪贴板交互：内部 Copy/Cut/Paste 含进度条和 undo；中键 primary-selection
@@ -142,7 +142,7 @@ src/
   ui/context_menu.rs             右键菜单 target/action/icon model
   ui/controls.rs                 共享 UI 控件 helper
   ui/drag_drop.rs                拖放 UI 入口
-  ui/drag_drop/state.rs          DnD 状态、modifier 切换、target 匹配
+  ui/drag_drop/state.rs          DnD 状态、路径归一化、target 匹配
   ui/file_grid.rs                文件网格 UI 入口
   ui/file_grid/layout.rs         Compact 列宽缓存和布局组装
   ui/file_grid/slots.rs          可见条目 slot pool（回收 ID）

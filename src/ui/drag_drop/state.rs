@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use fika_core::{
     FileClipboardRole, FileTransferMode, PaneController, PaneId, encode_file_clipboard_text,
+    file_ops,
 };
 
 pub(crate) const TEXT_URI_LIST_MIME: &str = "text/uri-list";
@@ -202,7 +203,7 @@ pub(crate) fn place_drag_export_payload(path: &Path) -> Option<DragExportPayload
 }
 
 pub(crate) fn drag_export_payload_for_paths(paths: Vec<PathBuf>) -> Option<DragExportPayload> {
-    let paths = drag_export_paths(paths);
+    let paths = normalized_drag_paths(paths);
     if paths.is_empty() {
         return None;
     }
@@ -231,7 +232,31 @@ pub(crate) fn item_drop_reject_reason(paths: &[PathBuf], target_dir: &Path) -> O
     if paths.iter().any(|path| same_drop_url(path, target_dir)) {
         return Some("Cannot drop an item onto itself".to_string());
     }
+    if paths
+        .iter()
+        .any(|path| file_ops::target_is_source_or_descendant(path, target_dir))
+    {
+        return Some("Cannot drop a folder into itself".to_string());
+    }
     None
+}
+
+pub(crate) fn normalized_drag_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut exported = Vec::<PathBuf>::new();
+    for path in paths {
+        if exported.iter().any(|existing| path == *existing) {
+            continue;
+        }
+        if exported
+            .iter()
+            .any(|existing| path_is_child_of(&path, existing))
+        {
+            continue;
+        }
+        exported.retain(|existing| !path_is_child_of(existing, &path));
+        exported.push(path);
+    }
+    exported
 }
 
 pub(crate) fn item_drop_target_matches_pane(
@@ -287,24 +312,6 @@ fn same_drop_url(path: &Path, target_dir: &Path) -> bool {
     }
 }
 
-fn drag_export_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
-    let mut exported = Vec::<PathBuf>::new();
-    for path in paths {
-        if exported.iter().any(|existing| path == *existing) {
-            continue;
-        }
-        if exported
-            .iter()
-            .any(|existing| path_is_child_of(&path, existing))
-        {
-            continue;
-        }
-        exported.retain(|existing| !path_is_child_of(existing, &path));
-        exported.push(path);
-    }
-    exported
-}
-
 fn path_is_child_of(path: &Path, parent: &Path) -> bool {
     path != parent && path.starts_with(parent)
 }
@@ -313,8 +320,8 @@ fn path_is_child_of(path: &Path, parent: &Path) -> bool {
 mod tests {
     use super::{
         DropTargetState, ItemDropTarget, PlaceDropTarget, drag_export_payload_for_paths,
-        item_drop_target_matches_directory, item_drop_target_matches_pane,
-        place_drag_export_payload, place_drop_target_matches_place,
+        item_drop_reject_reason, item_drop_target_matches_directory, item_drop_target_matches_pane,
+        normalized_drag_paths, place_drag_export_payload, place_drop_target_matches_place,
     };
     use fika_core::PaneId;
     use std::path::PathBuf;
@@ -351,6 +358,45 @@ mod tests {
             payload.paths,
             vec![PathBuf::from("/tmp/parent"), PathBuf::from("/tmp/sibling")]
         );
+    }
+
+    #[test]
+    fn normalized_drag_paths_prunes_duplicates_and_children() {
+        assert_eq!(
+            normalized_drag_paths(vec![
+                PathBuf::from("/tmp/parent/child.txt"),
+                PathBuf::from("/tmp/parent"),
+                PathBuf::from("/tmp/parent/other.txt"),
+                PathBuf::from("/tmp/sibling"),
+                PathBuf::from("/tmp/sibling"),
+            ]),
+            vec![PathBuf::from("/tmp/parent"), PathBuf::from("/tmp/sibling")]
+        );
+    }
+
+    #[test]
+    fn item_drop_rejects_descendant_directory_targets() {
+        let root = std::env::temp_dir().join(format!(
+            "fika-drop-descendant-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let source = root.join("source");
+        let child = source.join("child");
+        let sibling = root.join("sibling");
+        std::fs::create_dir_all(&child).unwrap();
+        std::fs::create_dir_all(&sibling).unwrap();
+
+        assert_eq!(
+            item_drop_reject_reason(std::slice::from_ref(&source), &child),
+            Some("Cannot drop a folder into itself".to_string())
+        );
+        assert_eq!(item_drop_reject_reason(&[source], &sibling), None);
+
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

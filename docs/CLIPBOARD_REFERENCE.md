@@ -75,5 +75,7 @@ GPUI's public clipboard API.
 - GPUI's Wayland clipboard read path currently reads allowed text MIME types;
   a peer that offers only `text/uri-list` as clipboard data may still need
   backend support before Fika can import it directly.
-- Drag-and-drop data offers are still separate from Fika's pane file operation
-  pipeline and need to be unified with the same `FileClipboardPayload` model.
+- Drag-and-drop path-list offers now arrive as GPUI `ExternalPaths` and are
+  wired into Fika's pane file operation pipeline. Arbitrary non-path or
+  multi-MIME drag offers still need backend exposure before they can be unified
+  with the same `FileClipboardPayload` model.

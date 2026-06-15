@@ -10,7 +10,8 @@ pub(crate) use splitter::{
     pane_row_width_from_child_bounds, pane_splitter, pane_width_available, split_ratio_eq,
     width_value_eq,
 };
-pub(crate) use toolbar::pane_toolbar_snapshot;
+pub(crate) use toolbar::{close_pane_button, pane_toolbar_snapshot, split_pane_button};
+pub(crate) use toolbar::{pane_close_icon_snapshot, pane_split_icon_snapshot};
 
 use crate::FikaApp;
 use fika_core::BreadcrumbSegment;
@@ -20,9 +21,12 @@ use gpui::{
     SharedString, Stateful, Styled, TextRun, Window, canvas, div, fill, point, px, rgb, rgba, size,
 };
 
-use super::drag_drop::refresh_active_drag_cursor_for_drop_menu;
+use super::drag_drop::{
+    item_drop_reject_reason, refresh_active_drag_cursor_for_drop_menu,
+    refresh_active_drag_cursor_not_allowed,
+};
 use super::file_grid::{FileGridMode, FileGridProps, ItemDrag, file_grid};
-use super::filter_bar::FilterBarSnapshot;
+use super::filter_bar::{FILTER_BAR_HEIGHT, FilterBarSnapshot};
 use super::location_bar::LocationDraftSnapshot;
 use super::status_bar::status_bar;
 use toolbar::pane_toolbar_buttons;
@@ -163,6 +167,7 @@ fn filter_bar_view(
         .flex()
         .items_center()
         .gap_2()
+        .h(px(FILTER_BAR_HEIGHT))
         .px_2()
         .py_1()
         .border_b_1()
@@ -586,10 +591,11 @@ fn breadcrumb_segment(
                 .on_drag_move::<ItemDrag>(cx.listener(
                     move |this, event: &gpui::DragMoveEvent<ItemDrag>, window, cx| {
                         let contains = event.bounds.contains(&event.event.position);
+                        let source_paths = this.item_drag_source_paths(&event.drag(cx).payload());
                         let changed = if contains {
-                            this.set_drop_menu_position(event.event.position);
-                            this.set_item_drag_drop_target_for_directory(
+                            this.set_dragged_paths_drop_target_for_directory(
                                 pane_id,
+                                &source_paths,
                                 path_for_internal_move.clone(),
                             )
                         } else {
@@ -599,8 +605,14 @@ fn breadcrumb_segment(
                             )
                         };
                         if contains {
-                            refresh_active_drag_cursor_for_drop_menu(window, cx);
-                            this.schedule_drop_target_stale_clear(cx);
+                            if item_drop_reject_reason(&source_paths, &path_for_internal_move)
+                                .is_none()
+                            {
+                                refresh_active_drag_cursor_for_drop_menu(window, cx);
+                                this.schedule_drop_target_stale_clear(cx);
+                            } else {
+                                refresh_active_drag_cursor_not_allowed(window, cx);
+                            }
                         }
                         if changed {
                             cx.notify();
@@ -611,10 +623,11 @@ fn breadcrumb_segment(
                 .on_drag_move::<ExternalPaths>(cx.listener(
                     move |this, event: &gpui::DragMoveEvent<ExternalPaths>, window, cx| {
                         let contains = event.bounds.contains(&event.event.position);
+                        let source_paths = this.external_drag_source_paths(event.drag(cx).paths());
                         let changed = if contains {
-                            this.set_drop_menu_position(event.event.position);
-                            this.set_item_drag_drop_target_for_directory(
+                            this.set_dragged_paths_drop_target_for_directory(
                                 pane_id,
+                                &source_paths,
                                 path_for_external_move.clone(),
                             )
                         } else {
@@ -624,8 +637,14 @@ fn breadcrumb_segment(
                             )
                         };
                         if contains {
-                            refresh_active_drag_cursor_for_drop_menu(window, cx);
-                            this.schedule_drop_target_stale_clear(cx);
+                            if item_drop_reject_reason(&source_paths, &path_for_external_move)
+                                .is_none()
+                            {
+                                refresh_active_drag_cursor_for_drop_menu(window, cx);
+                                this.schedule_drop_target_stale_clear(cx);
+                            } else {
+                                refresh_active_drag_cursor_not_allowed(window, cx);
+                            }
                         }
                         if changed {
                             cx.notify();

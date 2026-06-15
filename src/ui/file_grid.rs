@@ -75,6 +75,7 @@ pub(crate) enum FileGridSnapshot {
         items: Vec<DetailsItemSnapshot>,
         row_count: usize,
         metrics: DetailsLayoutMetrics,
+        name_column_width: f32,
     },
 }
 
@@ -167,14 +168,23 @@ fn handle_file_grid_external_drag_move(
     cx: &mut Context<FikaApp>,
 ) {
     let contains = event.bounds.contains(&event.event.position);
+    let source_paths = app.external_drag_source_paths(event.drag(cx).paths());
     let changed = if contains {
-        app.set_item_drag_drop_target_from_window_position(pane_id, event.event.position)
+        app.set_dragged_paths_drop_target_from_window_position(
+            pane_id,
+            event.event.position,
+            &source_paths,
+        )
     } else {
         app.clear_item_drop_target_for_pane(pane_id)
     };
     if contains {
-        refresh_active_drag_cursor_for_drop_menu(window, cx);
-        app.schedule_drop_target_stale_clear(cx);
+        if dragged_paths_hover_accepts_drop(app, pane_id, event.event.position, &source_paths) {
+            refresh_active_drag_cursor_for_drop_menu(window, cx);
+            app.schedule_drop_target_stale_clear(cx);
+        } else {
+            refresh_active_drag_cursor_not_allowed(window, cx);
+        }
     }
     if changed {
         cx.notify();
@@ -193,6 +203,7 @@ fn handle_file_grid_place_drag_move(
 ) {
     let contains = event.bounds.contains(&event.event.position);
     let source_path = event.drag(cx).path();
+    let source_paths = std::slice::from_ref(&source_path);
     let target = contains.then(|| {
         app.item_at_window_position(pane_id, event.event.position)
             .map(|hit| (hit.path, hit.is_dir))
@@ -205,13 +216,15 @@ fn handle_file_grid_place_drag_move(
         .as_ref()
         .and_then(|target| target.as_ref())
         .is_some_and(|(path, is_dir)| {
-            *is_dir && item_drop_reject_reason(std::slice::from_ref(&source_path), path).is_none()
+            *is_dir && item_drop_reject_reason(source_paths, path).is_none()
         });
+    let position_accepts_drop = contains
+        && app.dragged_paths_can_drop_to_position(pane_id, event.event.position, source_paths);
     let changed = if contains {
         app.set_dragged_paths_drop_target_from_window_position(
             pane_id,
             event.event.position,
-            std::slice::from_ref(&source_path),
+            source_paths,
         )
     } else {
         app.clear_item_drop_target_for_pane(pane_id)
@@ -222,9 +235,11 @@ fn handle_file_grid_place_drag_move(
             app.schedule_drop_target_stale_clear(cx);
         } else if target_is_directory {
             refresh_active_drag_cursor_not_allowed(window, cx);
-        } else {
+        } else if position_accepts_drop {
             refresh_active_drag_cursor_for_transfer_mode(FileTransferMode::Move, window, cx);
             app.schedule_drop_target_stale_clear(cx);
+        } else {
+            refresh_active_drag_cursor_not_allowed(window, cx);
         }
     }
     if changed {
@@ -286,8 +301,7 @@ fn dragged_paths_hover_accepts_drop(
     position: gpui::Point<gpui::Pixels>,
     source_paths: &[PathBuf],
 ) -> bool {
-    app.item_at_window_position(pane_id, position)
-        .is_none_or(|hit| !hit.is_dir || item_drop_reject_reason(source_paths, &hit.path).is_none())
+    app.dragged_paths_can_drop_to_position(pane_id, position, source_paths)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -297,6 +311,9 @@ struct RenameTextLayout {
 }
 
 const RENAME_NAME_HEIGHT: f32 = 20.0;
+pub(crate) const ITEM_NAME_LINE_HEIGHT: f32 = 18.0;
+pub(crate) const ITEM_HELPER_LABEL_HEIGHT: f32 = 20.0;
+const DEFAULT_TILE_TEXT_HEIGHT: f32 = 40.0;
 
 pub(crate) fn file_grid(
     props: FileGridProps,
@@ -349,8 +366,9 @@ pub(crate) fn file_grid(
             items,
             row_count,
             metrics,
+            name_column_width,
         } => {
-            let content_width = details_content_width(trash_view).max(1.0);
+            let content_width = details_content_width(trash_view, name_column_width).max(1.0);
             let content_height = details_content_height(row_count, metrics).max(1.0);
             let viewport =
                 file_grid_viewport_shell(pane_id, drop_target, mode, cx).child(details_table(
@@ -361,6 +379,7 @@ pub(crate) fn file_grid(
                     content_width,
                     content_height,
                     metrics,
+                    name_column_width,
                     mode,
                     cx,
                 ));
@@ -620,10 +639,11 @@ fn details_table(
     content_width: f32,
     content_height: f32,
     metrics: DetailsLayoutMetrics,
+    name_column_width: f32,
     mode: FileGridMode,
     cx: &mut Context<FikaApp>,
 ) -> Div {
-    let columns = details_columns(trash_view);
+    let columns = details_columns(trash_view, name_column_width);
     div()
         .relative()
         .w(px(content_width))
@@ -894,7 +914,7 @@ fn details_name_cell(
                 } else {
                     rgb(0x1f2937)
                 })
-                .truncate()
+                .whitespace_nowrap()
                 .child(item.name.to_string()),
         )
         .into_any_element()
@@ -1295,7 +1315,11 @@ fn text_view(
 ) -> Div {
     let visual = layout.visual_rect;
     let text = layout.text_rect;
-    let rename_layout = rename_text_layout(text.height);
+    let rename_layout = if !renaming {
+        display_text_layout(display_name, text.width, text.height, text_alignment)
+    } else {
+        rename_text_layout(text.height)
+    };
     let helper_text = rename_error.or(rename_warning).unwrap_or(detail_label);
     let helper_color = if rename_error.is_some() {
         rgb(0xdc2626)
@@ -1320,6 +1344,10 @@ fn text_view(
         .flex()
         .flex_col()
         .overflow_hidden()
+        .when(
+            !renaming && matches!(text_alignment, ItemTileTextAlignment::Start),
+            |view| view.justify_center(),
+        )
         .child(if renaming {
             rename_editor_view(
                 pane_id,
@@ -1372,7 +1400,9 @@ fn item_name_label_view(display_name: &str, selected: bool, height: f32) -> Div 
                 .max_w_full()
                 .min_w_0()
                 .text_sm()
-                .truncate()
+                .line_height(px(ITEM_NAME_LINE_HEIGHT))
+                .text_center()
+                .whitespace_normal()
                 .text_color(text_color)
                 .child(display_name.to_string()),
         )
@@ -1470,13 +1500,14 @@ fn rename_name_view(
         .min_w_0()
         .overflow_hidden()
         .text_sm()
-        .truncate()
+        .line_height(px(ITEM_NAME_LINE_HEIGHT))
         .text_color(text_color)
         .when(renaming, |name| name.cursor_text());
     if !renaming {
-        return base.child(display_name.to_string());
+        return base.whitespace_normal().child(display_name.to_string());
     }
 
+    let base = base.whitespace_nowrap();
     if let Some((start, end)) = normalized_text_range(display_name, rename_selection) {
         return base
             .flex()
@@ -1509,6 +1540,33 @@ fn rename_text_layout(text_height: f32) -> RenameTextLayout {
     RenameTextLayout {
         name_height,
         helper_height: (text_height - name_height).max(0.0),
+    }
+}
+
+fn display_text_layout(
+    display_name: &str,
+    text_width: f32,
+    text_height: f32,
+    text_alignment: ItemTileTextAlignment,
+) -> RenameTextLayout {
+    let text_height = text_height.max(0.0);
+    if matches!(text_alignment, ItemTileTextAlignment::Center) {
+        return RenameTextLayout {
+            name_height: text_height,
+            helper_height: 0.0,
+        };
+    }
+
+    let required_name_height =
+        layout::item_name_text_height_for_name(display_name, text_width).min(text_height);
+    let helper_height = if required_name_height + ITEM_HELPER_LABEL_HEIGHT <= text_height {
+        ITEM_HELPER_LABEL_HEIGHT
+    } else {
+        0.0
+    };
+    RenameTextLayout {
+        name_height: required_name_height,
+        helper_height,
     }
 }
 
@@ -1747,7 +1805,7 @@ pub(crate) fn compact_layout_options(
     let icon_size = view.icon_size();
     let padding = 8.0;
     let gap = 8.0;
-    let text_height = 40.0;
+    let text_height = DEFAULT_TILE_TEXT_HEIGHT;
     CompactLayoutOptions {
         viewport_width: view.viewport_width.max(1.0),
         viewport_height: view.viewport_height.max(1.0),
@@ -1768,7 +1826,7 @@ pub(crate) fn icons_layout_options(view: &ViewState, reserved_bottom: f32) -> Ic
     let icon_size = view.icon_size();
     let padding = 8.0;
     let gap = 8.0;
-    let text_height = 40.0;
+    let text_height = DEFAULT_TILE_TEXT_HEIGHT;
     let item_width = (icon_size * 2.25).max(128.0);
     IconsLayoutOptions {
         viewport_width: view.viewport_width.max(1.0),

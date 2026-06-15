@@ -7,13 +7,15 @@ use fika_core::{
 
 use crate::ui::rename::RenameDraft;
 
-use super::details::{DetailsLayoutMetrics, details_content_width, details_layout_metrics};
-use super::icons_layout_options;
+use super::details::{
+    DetailsLayoutMetrics, details_content_width, details_layout_metrics, details_name_column_width,
+};
 use super::layout::{
     CompactColumnWidthCache, compact_layout_for_filtered_model_with_text_override,
-    compact_layout_for_model_with_text_override, model_index_for_layout_index,
+    compact_layout_for_model_with_text_override, entry_name_text_width,
+    icons_layout_options_for_model, model_index_for_layout_index, rename_text_override_for_model,
+    required_text_width_for_entry,
 };
-use super::snapshot::{rename_text_override_for_model, required_text_width_for_entry};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ContentItemHit {
@@ -70,7 +72,7 @@ pub(crate) fn pane_layout_projection(input: PaneLayoutProjectionInput<'_>) -> Pa
     let layout = match view.view_mode {
         ViewMode::Icons => PaneLayout::Icons(IconsLayout::new(
             item_count,
-            icons_layout_options(view, 0.0),
+            icons_layout_options_for_model(model, filtered, item_count, view, rename_draft, 0.0),
         )),
         ViewMode::Compact => {
             let rename_text_override = rename_text_override_for_model(model, rename_draft);
@@ -93,11 +95,32 @@ pub(crate) fn pane_layout_projection(input: PaneLayoutProjectionInput<'_>) -> Pa
         }
         ViewMode::Details => PaneLayout::Details {
             row_count: item_count,
-            content_width: details_content_width(trash_view).max(1.0),
+            content_width: details_content_width(
+                trash_view,
+                details_projection_name_column_width(model, filtered, item_count, view),
+            )
+            .max(1.0),
             metrics: details_layout_metrics(view.icon_size()),
         },
     };
     PaneLayoutProjection::new(layout, filtered.cloned())
+}
+
+fn details_projection_name_column_width(
+    model: &DirectoryModel,
+    filtered: Option<&FilteredModel>,
+    item_count: usize,
+    view: &ViewState,
+) -> f32 {
+    let text_width = (0..item_count)
+        .filter_map(|layout_index| {
+            let model_index = model_index_for_layout_index(filtered, layout_index)?;
+            model
+                .get(model_index)
+                .map(|entry| entry_name_text_width(entry))
+        })
+        .fold(0.0, f32::max);
+    details_name_column_width(text_width, details_layout_metrics(view.icon_size()))
 }
 
 pub(crate) fn content_item_hit_at_point(
@@ -411,7 +434,14 @@ mod tests {
             panic!("expected details projection");
         };
         assert_eq!(row_count, 1);
-        assert_eq!(content_width, details_content_width(true).max(1.0));
+        assert_eq!(
+            content_width,
+            details_content_width(
+                true,
+                details_projection_name_column_width(&model, Some(&filtered), 1, &view),
+            )
+            .max(1.0)
+        );
         assert_eq!(metrics, details_layout_metrics(view.icon_size()));
     }
 

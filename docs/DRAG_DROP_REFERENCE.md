@@ -79,10 +79,10 @@ model, and file operations are launched only after a drop target is resolved.
   built from `PaneController::selected_paths()` for selected item drags, prunes
   child paths when a parent directory is already exported, and encodes
   `text/uri-list` through the same URI-list path used by clipboard operations.
-- Dolphin `DragAndDropHelper::supportsDropping()` -> future Fika drop target
-  checks should accept current directory blank space, writable directories,
-  desktop files and local executables, and reject no-op drops onto their own
-  source directory.
+- Dolphin `DragAndDropHelper::supportsDropping()` -> Fika drop target checks
+  accept current directory blank space, directory items, breadcrumb segments and
+  Places rows when their resolved directory is valid, and reject no-op drops
+  onto their own source directory or descendant directory.
 - Dolphin `KItemListView::showDropIndicator()` -> Fika pane drop target keeps
   directory-hover highlight separate from insertion indicators and from normal
   selection highlight. GPUI `on_drag_move` handlers must check their own bounds:
@@ -91,9 +91,9 @@ model, and file operations are launched only after a drop target is resolved.
   entry and `src/ui/drag_drop/state.rs` as the directory-style child module for
   transfer modes, item/place drag payloads, drop target state and target helper
   queries.
-- Dolphin `PlacesPanel::slotUrlsDropped()` -> future Fika Places drop should
-  distinguish drop-on-place file operations from drop-between-place bookmark
-  insertion.
+- Dolphin `PlacesPanel::slotUrlsDropped()` -> Fika Places drop distinguishes
+  drop-on-place file operations from drop-between-place bookmark insertion and
+  internal bookmark reorder.
 
 ## Current Fika State
 
@@ -117,24 +117,37 @@ model, and file operations are launched only after a drop target is resolved.
   Dolphin's `dragLeaveEvent()` cleanup at the target level and prevents old
   pane tint, directory highlight or Places insertion lines from waiting for the
   stale timer when the pointer has already moved elsewhere.
-- Pane, directory item and Places row drop targets carry the current
-  `FileTransferMode`, recomputed from `Window::modifiers()` on every drag move
-  and again on drop. No modifier or secondary/Ctrl means Copy, Shift means Move,
-  and Shift+secondary/Ctrl or Alt means Link. This applies to internal item
-  drags and GPUI `ExternalPaths` drags.
+- Pane, directory item, breadcrumb segment and Places row drop targets resolve
+  the destination first, then show a DropOperation context menu. The final file
+  operation comes from the menu action (`Copy`, `Move` or `Link`); hover cursor
+  feedback distinguishes valid drop-menu targets, bookmark insert/reorder
+  targets, and invalid targets while a drag is moving.
 - `src/ui/drag_drop.rs` now owns the DnD UI module boundary, while
   `src/ui/drag_drop/state.rs` owns `FileTransferMode`, `ItemDragPayload`,
   `ActiveItemDrag`, `DragExportPayload`, `ItemDropTarget`, `PlaceDropTarget`,
-  modifier-to-mode mapping, cursor style mapping, no-op drop rejection and drop
-  target matching helpers. `main.rs` still performs the app-level operation
-  routing after a target is resolved.
+  path normalization, cursor style mapping, no-op drop rejection and drop target
+  matching helpers. `main.rs` still performs the app-level operation routing
+  after a target is resolved.
+- Internal item drags and GPUI `ExternalPaths` drags normalize source path lists
+  at ingress. Duplicate paths are removed and child paths are pruned when their
+  parent directory is already present, matching the export payload path pruning.
+- Item drop validation is shared by internal and external path-list drops. It
+  rejects empty source lists, non-directory targets, dropping a source onto
+  itself, and dropping a directory into itself or one of its descendants before
+  a hover target is advertised or a final drop operation menu is shown.
 - Item drags now carry a prepared external export payload alongside the internal
   GPUI drag value. The payload contains the resolved path list, `text/uri-list`
   and `text/plain` data. Places drags prepare the same payload only when the
   place path exists and is a directory.
-- Directory item, pane background and Places row drop targets use action-specific
-  colors while hovered: green for Copy, amber for Move, and purple for Link.
-  This visual state is separate from selection, hover and active place state.
+- GPUI `ExternalPaths` drops are wired through the same target resolution path
+  for file-grid blank space, directory items, breadcrumb segments, Places rows
+  and Places insertion lines. Places insertion accepts only one new existing
+  directory, while drop-on-place targets still require the place to resolve to a
+  valid mounted directory.
+- Directory item, pane background and Places row drop targets use dedicated
+  drop-target styling while hovered, and Places insertion uses a separate line
+  indicator. This visual state is separate from selection, hover and active
+  place state; the operation itself is still selected from the drop menu.
 - Drop target stale timeout remains as a fallback for drag cancellation or
   platform/backend paths that stop producing drag-move events; it is no longer
   the primary cleanup path for ordinary target leave/target switch.
@@ -153,15 +166,17 @@ model, and file operations are launched only after a drop target is resolved.
   bookmark block, built-in Home/Trash/Root and future device places are refused,
   and successful moves are written back to `user-places.xbel`.
 - External Wayland/X11 drag MIME publication is not complete yet. GPUI's current
-  app-level drag value is sufficient for internal drop targets, and Fika now
+  app-level drag value is sufficient for internal drop targets and GPUI
+  `ExternalPaths` is sufficient for ordinary path-list drops into Fika. Fika now
   prepares the exact `text/uri-list` + `text/plain` payload required for
-  publication, but system MIME data still needs a backend path capable of
+  dragging out, but system MIME data still needs a backend path capable of
   publishing that payload to other applications.
 
 ## Remaining Work
 
-- Complete external item and blank viewport drop targets for backend MIME data
-  offers that do not yet arrive as GPUI `ExternalPaths`.
+- Add a backend path for arbitrary external MIME offers beyond GPUI
+  `ExternalPaths`, including multi-MIME offers that cannot be represented as a
+  plain file path list.
 - Wire `DragExportPayload` into the future GPUI/backend drag-source MIME
   publication API.
 - Feed Ark DnD service/path MIME offers into the core parser/executor instead

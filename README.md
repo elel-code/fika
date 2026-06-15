@@ -87,8 +87,9 @@ The current cutover build contains:
 - Open With "Other Application…" chooser: `uniform_list` virtual list, visible
   icon range, Set Default write-back to `mimeapps.list`.
 - Drag and drop: item/place drag source, directory/item/blank/pane drop target,
-  `.desktop` application DnD, modifier-to-mode switching, Copy/Move/Link color
-  coding, Places bookmark insertion and reorder.
+  `.desktop` application DnD, external file drops via GPUI `ExternalPaths`,
+  Copy/Move/Link drop menu with hover feedback, Places bookmark insertion and
+  reorder.
 - Inline rename: pane-local draft state, text input, Enter/Escape
   commit/cancel.
 - Properties dialog: single-path and multi-select metadata rows.
@@ -154,7 +155,7 @@ src/
   ui/context_menu.rs             Context menu target, action, icon model
   ui/controls.rs                 Shared UI control helpers
   ui/drag_drop.rs                Drag-drop UI entry point
-  ui/drag_drop/state.rs          DnD state, modifier-to-mode, target matching
+  ui/drag_drop/state.rs          DnD state, path normalization, target matching
   ui/file_grid.rs                File grid UI entry point
   ui/file_grid/layout.rs         Compact column-width cache and layout assembly
   ui/file_grid/slots.rs          Visible-item slot pool (recycled IDs)
