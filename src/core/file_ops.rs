@@ -8,7 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use compio::buf::{BufResult, IntoInner};
 use compio::io::{AsyncReadAt, AsyncWriteAtExt};
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TransferProgress {
     pub bytes_done: u64,
     pub bytes_total: u64,
