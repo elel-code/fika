@@ -274,7 +274,7 @@ impl ListingWorkerState {
         if published && let Some(entries) = listing_refreshed_entries(events) {
             self.cache.insert_fresh(&batch.path, entries);
         }
-        if published && let Some(notifier) = &self.result_notifier {
+        if let Some(notifier) = &self.result_notifier {
             let _ = notifier.send(());
         }
         published

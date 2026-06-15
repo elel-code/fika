@@ -7083,6 +7083,13 @@ impl FikaApp {
                 changed = true;
             }
         }
+        // Clean up stale loading_panes entries: if the listing worker has no
+        // pending requests, any remaining loading_panes entries are orphans from
+        // superseded listing requests whose completion events were discarded.
+        if !changed && !self.loading_panes.is_empty() && self.listing_worker.pending_count() == 0 {
+            self.loading_panes.clear();
+            changed = true;
+        }
         changed
     }
 
