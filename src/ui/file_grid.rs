@@ -1363,10 +1363,13 @@ fn text_view(
                         .h(px(rename_layout.name_height))
                         .into_any_element()
                 }
-                ItemTileTextAlignment::Center => {
-                    item_name_label_view(display_name, selected, rename_layout.name_height)
-                        .into_any_element()
-                }
+                ItemTileTextAlignment::Center => item_name_label_view(
+                    display_name,
+                    selected,
+                    text.width,
+                    rename_layout.name_height,
+                )
+                .into_any_element(),
             }
         })
         .child(item_helper_label_view(
@@ -1377,13 +1380,14 @@ fn text_view(
         ))
 }
 
-fn item_name_label_view(display_name: &str, selected: bool, height: f32) -> Div {
+fn item_name_label_view(display_name: &str, selected: bool, width: f32, height: f32) -> Div {
     let text_color = if selected {
         rgb(0x0f172a)
     } else {
         rgb(0x24292f)
     };
     let max_lines = (height / ITEM_NAME_LINE_HEIGHT).round().max(1.0) as usize;
+    let display_name = layout::dolphin_icon_display_name(display_name, width, max_lines);
     div()
         .h(px(height))
         .w_full()
@@ -1402,9 +1406,8 @@ fn item_name_label_view(display_name: &str, selected: bool, height: f32) -> Div 
                 .text_center()
                 .whitespace_normal()
                 .line_clamp(max_lines)
-                .text_ellipsis()
                 .text_color(text_color)
-                .child(display_name.to_string()),
+                .child(display_name),
         )
 }
 

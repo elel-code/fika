@@ -3,8 +3,10 @@ use crate::ui::rename::{RENAME_TEXT_INSET_X, RenameDraft};
 use fika_core::{
     CompactColumnMetrics, CompactLayout, CompactLayoutOptions, IconsLayout, IconsLayoutOptions,
 };
+use std::ops::Range;
 
 const AVERAGE_COMPACT_CHAR_WIDTH: f32 = 8.5;
+const DOLPHIN_TEXT_ELLIPSIS: char = '\u{2026}';
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct CompactColumnWidthCacheKey {
@@ -198,6 +200,7 @@ fn estimated_name_char_width(ch: char) -> f32 {
     match ch {
         'i' | 'l' | 'I' | '!' | '.' | ',' | ':' | ';' | '\'' | '`' | '|' => 4.0,
         ' ' | '-' | '_' => 5.0,
+        '\u{2026}' => 8.0,
         'm' | 'w' | 'M' | 'W' | '@' | '%' | '#' => 11.0,
         'A'..='Z' => 9.0,
         '0'..='9' => 8.0,
@@ -222,63 +225,175 @@ fn capped_icon_item_name_text_height(text_height: f32) -> f32 {
     text_height.max(min_height).min(max_height)
 }
 
-fn wrapped_item_name_line_count(name: &str, available_text_width: f32) -> usize {
-    let available_text_width = available_text_width.max(1.0);
-    let mut line_count = 1usize;
-    let mut line_width = 0.0f32;
-    let mut last_wrap_candidate_width = None;
-    let mut first_non_whitespace_seen = false;
-    let mut previous = '\0';
+pub(crate) fn dolphin_icon_display_name(
+    name: &str,
+    available_text_width: f32,
+    max_lines: usize,
+) -> String {
+    let max_lines = max_lines.max(1);
+    let lines = wrapped_item_name_line_ranges(name, available_text_width);
+    if lines.len() <= max_lines {
+        return name.to_string();
+    }
 
-    for ch in name.chars() {
+    let last_line_start = lines[max_lines - 1].start;
+    let last_line = &name[last_line_start..];
+    format!(
+        "{}{}",
+        &name[..last_line_start],
+        elide_middle_to_width(last_line, available_text_width)
+    )
+}
+
+fn wrapped_item_name_line_count(name: &str, available_text_width: f32) -> usize {
+    wrapped_item_name_line_ranges(name, available_text_width).len()
+}
+
+fn wrapped_item_name_line_ranges(name: &str, available_text_width: f32) -> Vec<Range<usize>> {
+    let available_text_width = available_text_width.max(1.0);
+    if name.is_empty() {
+        return vec![0..0];
+    }
+
+    let mut lines = Vec::new();
+    let mut line_start = 0usize;
+    let mut line_width = 0.0f32;
+    let mut last_wrap_candidate = None;
+    let mut chars = name.char_indices().peekable();
+
+    while let Some((byte_index, ch)) = chars.next() {
+        let next_byte = chars.peek().map(|(index, _)| *index).unwrap_or(name.len());
         if ch == '\n' {
-            line_count += 1;
+            push_wrapped_line(&mut lines, name, line_start, byte_index);
+            line_start = next_byte;
             line_width = 0.0;
-            last_wrap_candidate_width = None;
-            first_non_whitespace_seen = false;
-            previous = '\0';
+            last_wrap_candidate = None;
             continue;
         }
 
-        if is_estimated_word_char(ch) {
-            if previous == ' ' && first_non_whitespace_seen {
-                last_wrap_candidate_width = Some(line_width);
-            }
-        } else if ch != ' ' && first_non_whitespace_seen {
-            last_wrap_candidate_width = Some(line_width);
-        }
-
-        if ch != ' ' && !first_non_whitespace_seen {
-            first_non_whitespace_seen = true;
-        }
-
         let char_width = estimated_name_char_width(ch);
-        let next_width = line_width + char_width;
-        if next_width > available_text_width && line_width > 0.0 {
-            line_count += 1;
-            line_width = last_wrap_candidate_width
-                .take()
-                .filter(|candidate_width| *candidate_width > 0.0)
-                .map_or(char_width, |candidate_width| {
-                    (next_width - candidate_width).max(char_width)
-                });
-            if line_width > available_text_width {
-                let occupied_lines = (line_width / available_text_width).ceil().max(1.0) as usize;
-                line_count += occupied_lines.saturating_sub(1);
-                line_width -= available_text_width * occupied_lines.saturating_sub(1) as f32;
-            }
-            first_non_whitespace_seen = ch != ' ';
-        } else {
-            line_width = next_width;
+        if line_width + char_width > available_text_width && line_width > 0.0 {
+            let break_byte = last_wrap_candidate
+                .filter(|candidate| *candidate > line_start && *candidate <= byte_index)
+                .unwrap_or(byte_index);
+            push_wrapped_line(&mut lines, name, line_start, break_byte);
+            line_start = skip_leading_whitespace(name, break_byte);
+            line_width = estimated_text_width(&name[line_start..byte_index]);
+            last_wrap_candidate = last_wrap_candidate.filter(|candidate| *candidate > line_start);
         }
-        previous = ch;
+
+        line_width += char_width;
+        if is_estimated_wrap_candidate(ch) {
+            last_wrap_candidate = Some(next_byte);
+        }
     }
 
-    line_count
+    if line_start <= name.len() {
+        push_wrapped_line(&mut lines, name, line_start, name.len());
+    }
+
+    if lines.is_empty() {
+        lines.push(0..0);
+    }
+    lines
 }
 
-fn is_estimated_word_char(ch: char) -> bool {
-    ch.is_ascii_alphanumeric() || matches!(ch, '\u{00C0}'..='\u{024F}')
+fn push_wrapped_line(
+    lines: &mut Vec<Range<usize>>,
+    name: &str,
+    line_start: usize,
+    line_end: usize,
+) {
+    lines.push(line_start..trim_trailing_whitespace(name, line_start, line_end));
+}
+
+fn trim_trailing_whitespace(name: &str, line_start: usize, mut line_end: usize) -> usize {
+    while line_end > line_start {
+        let Some((previous_index, previous)) = name[..line_end].char_indices().next_back() else {
+            break;
+        };
+        if !previous.is_whitespace() {
+            break;
+        }
+        line_end = previous_index;
+    }
+    line_end
+}
+
+fn skip_leading_whitespace(name: &str, mut index: usize) -> usize {
+    while index < name.len() {
+        let Some(ch) = name[index..].chars().next() else {
+            break;
+        };
+        if !ch.is_whitespace() {
+            break;
+        }
+        index += ch.len_utf8();
+    }
+    index
+}
+
+fn estimated_text_width(text: &str) -> f32 {
+    text.chars().map(estimated_name_char_width).sum()
+}
+
+fn is_estimated_wrap_candidate(ch: char) -> bool {
+    ch.is_whitespace() || !(ch.is_ascii_alphanumeric() || matches!(ch, '\u{00C0}'..='\u{024F}'))
+}
+
+fn elide_middle_to_width(text: &str, max_width: f32) -> String {
+    let max_width = max_width.max(1.0);
+    if estimated_text_width(text) <= max_width {
+        return text.to_string();
+    }
+
+    let ellipsis_width = estimated_name_char_width(DOLPHIN_TEXT_ELLIPSIS);
+    if ellipsis_width >= max_width {
+        return DOLPHIN_TEXT_ELLIPSIS.to_string();
+    }
+
+    let budget = max_width - ellipsis_width;
+    let spans = text
+        .char_indices()
+        .map(|(start, ch)| (start, start + ch.len_utf8(), estimated_name_char_width(ch)))
+        .collect::<Vec<_>>();
+    let mut left = 0usize;
+    let mut right = spans.len();
+    let mut left_width = 0.0f32;
+    let mut right_width = 0.0f32;
+
+    while left < right {
+        if left_width <= right_width {
+            let width = spans[left].2;
+            if left_width + right_width + width > budget {
+                break;
+            }
+            left_width += width;
+            left += 1;
+        } else {
+            let width = spans[right - 1].2;
+            if left_width + right_width + width > budget {
+                break;
+            }
+            right -= 1;
+            right_width += width;
+        }
+    }
+
+    let prefix_end = spans
+        .get(left.saturating_sub(1))
+        .map(|(_, end, _)| *end)
+        .unwrap_or(0);
+    let suffix_start = spans
+        .get(right)
+        .map(|(start, _, _)| *start)
+        .unwrap_or(text.len());
+    format!(
+        "{}{}{}",
+        &text[..prefix_end],
+        DOLPHIN_TEXT_ELLIPSIS,
+        &text[suffix_start..]
+    )
 }
 
 pub(crate) fn entry_name_text_width(entry: &fika_core::EntryData) -> f32 {
@@ -518,7 +633,7 @@ mod tests {
 
     #[test]
     fn icons_layout_uses_dolphin_item_height_hints_for_wrapped_names() {
-        let long_name = "Very Long Desktop Launcher Name.desktop";
+        let long_name = "elzykosuda227446+breuyev@hotmail.cpa.2026-06-22.json";
         let mut model = DirectoryModel::for_directory(PathBuf::from("/tmp"));
         model.replace_listing(
             PathBuf::from("/tmp"),
@@ -550,6 +665,16 @@ mod tests {
             layout.item(2).unwrap().item_rect.y,
             base_options.gap + base_options.item_height + base_options.gap
         );
+    }
+
+    #[test]
+    fn dolphin_icon_display_name_elides_last_line_without_ascii_dots() {
+        let name = "elzykosuda227446+breuyev@hotmail.cpa.2026-06-22.json";
+        let display_name = dolphin_icon_display_name(name, 92.0, 3);
+
+        assert!(display_name.contains(DOLPHIN_TEXT_ELLIPSIS));
+        assert!(!display_name.contains("..."));
+        assert!(wrapped_item_name_line_count(&display_name, 92.0) <= 3);
     }
 
     #[test]
