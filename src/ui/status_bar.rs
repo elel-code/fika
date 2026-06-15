@@ -5,14 +5,12 @@ mod summary;
 mod zoom;
 
 pub(crate) use state::{
-    OperationProgressSnapshot, SpaceInfoCache, SpaceInfoSnapshot,
-    StatusBarSnapshot, StatusSummaryCacheEntry, StatusSummaryCacheKey, filesystem_space_info,
-    progress_delay_elapsed, progress_percent,
+    OperationProgressSnapshot, SpaceInfoCache, SpaceInfoSnapshot, StatusBarSnapshot,
+    StatusSummaryCacheEntry, StatusSummaryCacheKey, filesystem_space_info, progress_delay_elapsed,
+    progress_percent,
 };
 #[cfg(test)]
-pub(crate) use state::{
-    PROGRESS_DISPLAY_DELAY, parse_df_space_output, space_info_snapshot,
-};
+pub(crate) use state::{PROGRESS_DISPLAY_DELAY, parse_df_space_output, space_info_snapshot};
 pub(crate) use summary::{status_summary_for_model, status_summary_for_model_indexes};
 #[cfg(test)]
 pub(crate) use zoom::zoom_level_for_track_x;
@@ -29,6 +27,7 @@ use zoom::zoom_control;
 const STATUS_PROGRESS_MIN_WIDTH: f32 = 320.0;
 const STATUS_ZOOM_MIN_WIDTH: f32 = 520.0;
 const STATUS_SPACE_MIN_WIDTH: f32 = 720.0;
+const STATUS_SECTION_VISIBILITY_SLOP: f32 = 24.0;
 
 pub(crate) fn status_bar(
     pane_id: PaneId,
@@ -55,8 +54,8 @@ pub(crate) fn status_bar(
     let has_progress = operation_progress.is_some();
     let visible_width = visible_width.max(0.0).floor();
     let show_progress = visible_width >= STATUS_PROGRESS_MIN_WIDTH;
-    let show_zoom = visible_width >= STATUS_ZOOM_MIN_WIDTH;
-    let show_space = visible_width >= STATUS_SPACE_MIN_WIDTH;
+    let show_zoom = status_width_allows_section(visible_width, STATUS_ZOOM_MIN_WIDTH);
+    let show_space = status_width_allows_section(visible_width, STATUS_SPACE_MIN_WIDTH);
 
     div()
         .id(format!("status-bar-{}", pane_id.0))
@@ -128,4 +127,29 @@ pub(super) fn fixed_status_text(width: f32, text: impl Into<String>) -> Div {
         .flex_shrink_1()
         .truncate()
         .child(text.into())
+}
+
+fn status_width_allows_section(visible_width: f32, min_width: f32) -> bool {
+    visible_width + STATUS_SECTION_VISIBILITY_SLOP >= min_width
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn status_width_allows_small_measurement_slop_for_right_sections() {
+        assert!(status_width_allows_section(
+            STATUS_ZOOM_MIN_WIDTH,
+            STATUS_ZOOM_MIN_WIDTH
+        ));
+        assert!(status_width_allows_section(
+            STATUS_ZOOM_MIN_WIDTH - STATUS_SECTION_VISIBILITY_SLOP,
+            STATUS_ZOOM_MIN_WIDTH
+        ));
+        assert!(!status_width_allows_section(
+            STATUS_ZOOM_MIN_WIDTH - STATUS_SECTION_VISIBILITY_SLOP - 1.0,
+            STATUS_ZOOM_MIN_WIDTH
+        ));
+    }
 }

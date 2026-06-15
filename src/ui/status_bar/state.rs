@@ -66,7 +66,6 @@ impl SpaceInfoCache {
 
     pub(crate) fn start_request(&mut self, path: PathBuf, now: Instant) {
         self.path = Some(path);
-        self.snapshot = None;
         self.request_in_flight = true;
         self.last_requested = Some(now);
     }
@@ -180,4 +179,29 @@ pub(crate) fn space_info_snapshot(total: u64, available: u64) -> Option<SpaceInf
         ),
         used_percent,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn space_info_cache_keeps_previous_snapshot_while_new_path_loads() {
+        let mut cache = SpaceInfoCache::default();
+        let first_path = PathBuf::from("/tmp/fika-space-first");
+        let second_path = PathBuf::from("/tmp/fika-space-second");
+        let snapshot = SpaceInfoSnapshot {
+            free_label: "1.0 KB free".to_string(),
+            detail_label: "1.0 KB free out of 4.0 KB (75% used)".to_string(),
+            used_percent: 75,
+        };
+        let now = Instant::now();
+
+        cache.start_request(first_path.clone(), now);
+        assert!(cache.finish_request(&first_path, Some(snapshot.clone())));
+
+        cache.start_request(second_path.clone(), now + Duration::from_secs(1));
+
+        assert_eq!(cache.snapshot_for(&second_path), Some(snapshot));
+    }
 }
