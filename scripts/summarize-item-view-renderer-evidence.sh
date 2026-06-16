@@ -42,5 +42,6 @@ Renderer decision follow-up:
 - Compact/Icons base visuals: keep or revisit custom paint using static visual and custom paint maxima above.
 - Compact/Icons image layer: keep or revisit custom paint using item image and custom paint maxima above.
 - Details visual layer: keep or revisit custom paint using details visual and shape-cache channels above.
+- Renderer surface counts: compare renderer_policy_frames against docs/ITEM_VIEW_RENDERER_DECISIONS.md.
 - Drag-start shells: do not remove based on perf logs alone; the GPUI drag-start API gate still applies.
 EOF

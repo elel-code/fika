@@ -25,6 +25,9 @@ Options:
   --require-interaction
       Fail if [fika item-interaction] hitbox timing is missing.
 
+  --require-renderer-policy
+      Fail if [fika renderer-policy] surface-count logs are missing.
+
   --require-modes A,B,C
       Fail if any comma-separated view mode is absent from parsed perf logs.
 
@@ -52,6 +55,7 @@ require_steady=false
 require_details=false
 require_static_visual=false
 require_interaction=false
+require_renderer_policy=false
 required_modes=""
 required_static_modes=""
 steady_total_us=""
@@ -86,6 +90,9 @@ while [[ $# -gt 0 ]]; do
             ;;
         --require-interaction)
             require_interaction=true
+            ;;
+        --require-renderer-policy)
+            require_renderer_policy=true
             ;;
         --require-modes)
             if [[ $# -lt 2 || "$2" == --* ]]; then
@@ -216,6 +223,7 @@ awk \
     -v require_details="$require_details" \
     -v require_static_visual="$require_static_visual" \
     -v require_interaction="$require_interaction" \
+    -v require_renderer_policy="$require_renderer_policy" \
     -v required_modes="$required_modes" \
     -v required_static_modes="$required_static_modes" \
     -v steady_total_limit="$steady_total_us" \
@@ -380,6 +388,17 @@ BEGIN {
     max_assign(single_max, "interaction_paint_count", field("paint_count") + 0)
 }
 
+/^\[fika renderer-policy\]/ {
+    renderer_policy_count++
+    note_mode(field("mode"))
+    max_assign(single_max, "renderer_policy_items", field("items") + 0)
+    max_assign(single_max, "renderer_policy_visual_layer", field("visual_layer") + 0)
+    max_assign(single_max, "renderer_policy_image_layer", field("image_layer") + 0)
+    max_assign(single_max, "renderer_policy_retained_interaction", field("retained_interaction") + 0)
+    max_assign(single_max, "renderer_policy_gpui_drag_shell", field("gpui_drag_shell") + 0)
+    max_assign(single_max, "renderer_policy_rename_overlay", field("rename_overlay") + 0)
+}
+
 END {
     print "Item view perf summary"
     print "  item_view_frames: " item_view_count
@@ -414,6 +433,13 @@ END {
     print "  interaction_frames: " (item_interaction_count + 0) \
         " max_prepaint_count=" (("interaction_prepaint_count" in single_max) ? single_max["interaction_prepaint_count"] : 0) \
         " max_paint_count=" (("interaction_paint_count" in single_max) ? single_max["interaction_paint_count"] : 0)
+    print "  renderer_policy_frames: " (renderer_policy_count + 0) \
+        " max_items=" (("renderer_policy_items" in single_max) ? single_max["renderer_policy_items"] : 0) \
+        " max_visual_layer=" (("renderer_policy_visual_layer" in single_max) ? single_max["renderer_policy_visual_layer"] : 0) \
+        " max_image_layer=" (("renderer_policy_image_layer" in single_max) ? single_max["renderer_policy_image_layer"] : 0) \
+        " max_retained_interaction=" (("renderer_policy_retained_interaction" in single_max) ? single_max["renderer_policy_retained_interaction"] : 0) \
+        " max_gpui_drag_shell=" (("renderer_policy_gpui_drag_shell" in single_max) ? single_max["renderer_policy_gpui_drag_shell"] : 0) \
+        " max_rename_overlay=" (("renderer_policy_rename_overlay" in single_max) ? single_max["renderer_policy_rename_overlay"] : 0)
 
     if (item_view_count == 0) {
         fail("missing [fika item-view] lines")
@@ -437,6 +463,9 @@ END {
     }
     if (require_interaction == "true" && item_interaction_count == 0) {
         fail("missing [fika item-interaction] lines")
+    }
+    if (require_renderer_policy == "true" && renderer_policy_count == 0) {
+        fail("missing [fika renderer-policy] lines")
     }
     for (mode in required_mode) {
         if (!(mode in modes)) {

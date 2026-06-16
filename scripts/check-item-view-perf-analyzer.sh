@@ -28,6 +28,9 @@ cat > "$tmpdir/complete.log" <<'EOF'
 [fika details-visual] pane=1 mode=Details prepaint_count=48 prepaint=120us paint_count=48 paint=130us
 [fika details-shape-cache] pane=1 mode=Details hits=20 misses=2 evicted=0 entries=22
 [fika item-interaction] pane=1 mode=Details prepaint_count=48 prepaint=60us paint_count=48 paint=50us
+[fika renderer-policy] pane=1 mode=Compact items=48 visual_layer=48 image_layer=8 retained_interaction=48 gpui_drag_shell=48 rename_overlay=0
+[fika renderer-policy] pane=1 mode=Icons items=48 visual_layer=48 image_layer=8 retained_interaction=48 gpui_drag_shell=48 rename_overlay=0
+[fika renderer-policy] pane=1 mode=Details items=48 visual_layer=48 image_layer=0 retained_interaction=48 gpui_drag_shell=48 rename_overlay=0
 EOF
 
 "$analyzer" \
@@ -36,6 +39,7 @@ EOF
     --require-static-visual \
     --require-static-modes Compact,Icons \
     --require-interaction \
+    --require-renderer-policy \
     --require-modes Compact,Icons,Details \
     --steady-total-us 1000 \
     --file-grid-build-us 3000 \
@@ -53,6 +57,10 @@ if [[ "$evidence" != *"## Item View Renderer Evidence"* ]]; then
 fi
 if [[ "$evidence" != *"custom_paint_frames"* ]]; then
     echo "expected renderer evidence to include analyzer summary" >&2
+    exit 1
+fi
+if [[ "$evidence" != *"renderer_policy_frames"* ]]; then
+    echo "expected renderer evidence to include renderer policy summary" >&2
     exit 1
 fi
 

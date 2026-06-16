@@ -81,14 +81,17 @@ Expected log properties:
   attributable.
 - `[fika item-interaction]` hitbox count should match the visible retained
   interaction items for Compact/Icons and Details.
+- `[fika renderer-policy]` should show how many visible surfaces are using the
+  visual layer, image layer, retained interaction layer, GPUI drag-start shell,
+  and rename overlay for the exercised mode.
 
 Use `scripts/analyze-item-view-perf.sh` as the first pass. It summarizes
 item-view phases, file-grid build maxima, Compact/Icons static custom visual
 activity, image paint activity when the directory exercises image-backed icons
 or thumbnails, aggregate custom paint maxima, Details visual/shape-cache
-activity, and retained interaction hitbox activity. Human review is still
-required for whether the exercised mode switches, resizes, fullscreen toggles,
-and DnD actions match this checklist.
+activity, retained interaction hitbox activity, and renderer-policy surface
+counts. Human review is still required for whether the exercised mode switches,
+resizes, fullscreen toggles, and DnD actions match this checklist.
 
 After a passing runtime review, update
 `docs/ITEM_VIEW_RENDERER_DECISIONS.md` with the evidence for any surface whose

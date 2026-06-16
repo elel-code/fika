@@ -43,6 +43,10 @@ scripts/summarize-item-view-renderer-evidence.sh /tmp/fika-item-view.log
 Human review still needs to confirm the DnD and rename checklist in
 `docs/ITEM_VIEW_RUNTIME_SMOKE.md`.
 
+The `[fika renderer-policy]` summary is the runtime check that the current frame
+is still following this table's surface choices. It should be reviewed before
+removing a GPUI shell or reverting a custom-painted surface.
+
 ## Next Renderer Decisions
 
 1. Keep the remaining drag-start shells until the GPUI API boundary changes.

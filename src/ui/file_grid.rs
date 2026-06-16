@@ -1007,153 +1007,165 @@ pub(crate) fn file_grid(
     let scrollbar_axis = scrollbar_axis_for_snapshot(&snapshot);
     let view_mode = view_mode_for_snapshot(&snapshot);
 
-    let (content_width, content_height, visible_count, viewport) = match snapshot {
-        FileGridRenderSnapshot::Icons {
-            layout: icons_layout,
-            items,
-        } => {
-            let content_size = icons_layout.content_size();
-            let visible_count = items.len();
-            let static_visual_layer = static_item_visual_layer_view(
-                pane_id,
-                &items,
-                content_size.width,
-                content_size.height,
-                ItemTileTextAlignment::Center,
-                app.clone(),
-            );
-            let image_layer = item_image_layer_view(
-                pane_id,
-                &items,
-                content_size.width,
-                content_size.height,
-                app.clone(),
-            );
-            let interaction_layer = item_interaction_layer_view(
-                pane_id,
-                &items,
-                content_size.width,
-                content_size.height,
-                app.clone(),
-            );
-            let content = div()
-                .relative()
-                .w(px(content_size.width))
-                .h(px(content_size.height));
-            let content = if let Some(layer) = static_visual_layer {
-                content.child(layer)
-            } else {
-                content
-            };
-            let content = if let Some(layer) = image_layer {
-                content.child(layer)
-            } else {
-                content
-            };
-            let content = if let Some(layer) = interaction_layer {
-                content.child(layer)
-            } else {
-                content
-            };
-            let viewport = file_grid_viewport_shell(pane_id, drop_target, mode, cx).child(
-                content.children(items.into_iter().map(|item| {
-                    item_tile(
+    let (content_width, content_height, visible_count, renderer_policy_stats, viewport) =
+        match snapshot {
+            FileGridRenderSnapshot::Icons {
+                layout: icons_layout,
+                items,
+            } => {
+                let content_size = icons_layout.content_size();
+                let visible_count = items.len();
+                let renderer_policy_stats = item_renderer_policy_stats(&items);
+                let static_visual_layer = static_item_visual_layer_view(
+                    pane_id,
+                    &items,
+                    content_size.width,
+                    content_size.height,
+                    ItemTileTextAlignment::Center,
+                    app.clone(),
+                );
+                let image_layer = item_image_layer_view(
+                    pane_id,
+                    &items,
+                    content_size.width,
+                    content_size.height,
+                    app.clone(),
+                );
+                let interaction_layer = item_interaction_layer_view(
+                    pane_id,
+                    &items,
+                    content_size.width,
+                    content_size.height,
+                    app.clone(),
+                );
+                let content = div()
+                    .relative()
+                    .w(px(content_size.width))
+                    .h(px(content_size.height));
+                let content = if let Some(layer) = static_visual_layer {
+                    content.child(layer)
+                } else {
+                    content
+                };
+                let content = if let Some(layer) = image_layer {
+                    content.child(layer)
+                } else {
+                    content
+                };
+                let content = if let Some(layer) = interaction_layer {
+                    content.child(layer)
+                } else {
+                    content
+                };
+                let viewport = file_grid_viewport_shell(pane_id, drop_target, mode, cx).child(
+                    content.children(items.into_iter().map(|item| {
+                        item_tile(
+                            pane_id,
+                            item,
+                            ItemTileTextAlignment::Center,
+                            app.clone(),
+                            cx,
+                        )
+                    })),
+                );
+                (
+                    content_size.width,
+                    content_size.height,
+                    visible_count,
+                    renderer_policy_stats,
+                    viewport,
+                )
+            }
+            FileGridRenderSnapshot::Compact { layout, items } => {
+                let content_size = layout.content_size();
+                let visible_count = items.len();
+                let renderer_policy_stats = item_renderer_policy_stats(&items);
+                let static_visual_layer = static_item_visual_layer_view(
+                    pane_id,
+                    &items,
+                    content_size.width,
+                    content_size.height,
+                    ItemTileTextAlignment::Start,
+                    app.clone(),
+                );
+                let image_layer = item_image_layer_view(
+                    pane_id,
+                    &items,
+                    content_size.width,
+                    content_size.height,
+                    app.clone(),
+                );
+                let interaction_layer = item_interaction_layer_view(
+                    pane_id,
+                    &items,
+                    content_size.width,
+                    content_size.height,
+                    app.clone(),
+                );
+                let content = div()
+                    .relative()
+                    .w(px(content_size.width))
+                    .h(px(content_size.height));
+                let content = if let Some(layer) = static_visual_layer {
+                    content.child(layer)
+                } else {
+                    content
+                };
+                let content = if let Some(layer) = image_layer {
+                    content.child(layer)
+                } else {
+                    content
+                };
+                let content = if let Some(layer) = interaction_layer {
+                    content.child(layer)
+                } else {
+                    content
+                };
+                let viewport = file_grid_viewport_shell(pane_id, drop_target, mode, cx).child(
+                    content.children(items.into_iter().map(|item| {
+                        item_tile(pane_id, item, ItemTileTextAlignment::Start, app.clone(), cx)
+                    })),
+                );
+                (
+                    content_size.width,
+                    content_size.height,
+                    visible_count,
+                    renderer_policy_stats,
+                    viewport,
+                )
+            }
+            FileGridRenderSnapshot::Details {
+                items,
+                row_count,
+                metrics,
+                name_column_width,
+            } => {
+                let content_width = details_content_width(trash_view, name_column_width).max(1.0);
+                let content_height = details_content_height(row_count, metrics).max(1.0);
+                let visible_count = items.len();
+                let renderer_policy_stats = details_renderer_policy_stats(&items);
+                let viewport =
+                    file_grid_viewport_shell(pane_id, drop_target, mode, cx).child(details_table(
                         pane_id,
-                        item,
-                        ItemTileTextAlignment::Center,
+                        items,
+                        row_count,
+                        trash_view,
+                        content_width,
+                        content_height,
+                        metrics,
+                        name_column_width,
                         app.clone(),
                         cx,
-                    )
-                })),
-            );
-            (
-                content_size.width,
-                content_size.height,
-                visible_count,
-                viewport,
-            )
-        }
-        FileGridRenderSnapshot::Compact { layout, items } => {
-            let content_size = layout.content_size();
-            let visible_count = items.len();
-            let static_visual_layer = static_item_visual_layer_view(
-                pane_id,
-                &items,
-                content_size.width,
-                content_size.height,
-                ItemTileTextAlignment::Start,
-                app.clone(),
-            );
-            let image_layer = item_image_layer_view(
-                pane_id,
-                &items,
-                content_size.width,
-                content_size.height,
-                app.clone(),
-            );
-            let interaction_layer = item_interaction_layer_view(
-                pane_id,
-                &items,
-                content_size.width,
-                content_size.height,
-                app.clone(),
-            );
-            let content = div()
-                .relative()
-                .w(px(content_size.width))
-                .h(px(content_size.height));
-            let content = if let Some(layer) = static_visual_layer {
-                content.child(layer)
-            } else {
-                content
-            };
-            let content = if let Some(layer) = image_layer {
-                content.child(layer)
-            } else {
-                content
-            };
-            let content = if let Some(layer) = interaction_layer {
-                content.child(layer)
-            } else {
-                content
-            };
-            let viewport = file_grid_viewport_shell(pane_id, drop_target, mode, cx).child(
-                content.children(items.into_iter().map(|item| {
-                    item_tile(pane_id, item, ItemTileTextAlignment::Start, app.clone(), cx)
-                })),
-            );
-            (
-                content_size.width,
-                content_size.height,
-                visible_count,
-                viewport,
-            )
-        }
-        FileGridRenderSnapshot::Details {
-            items,
-            row_count,
-            metrics,
-            name_column_width,
-        } => {
-            let content_width = details_content_width(trash_view, name_column_width).max(1.0);
-            let content_height = details_content_height(row_count, metrics).max(1.0);
-            let visible_count = items.len();
-            let viewport =
-                file_grid_viewport_shell(pane_id, drop_target, mode, cx).child(details_table(
-                    pane_id,
-                    items,
-                    row_count,
-                    trash_view,
+                    ));
+                (
                     content_width,
                     content_height,
-                    metrics,
-                    name_column_width,
-                    app.clone(),
-                    cx,
-                ));
-            (content_width, content_height, visible_count, viewport)
-        }
-    };
+                    visible_count,
+                    renderer_policy_stats,
+                    viewport,
+                )
+            }
+        };
 
     let root = div()
         .image_cache(retain_all(("file-grid-image-cache", pane_id.0)))
@@ -1309,6 +1321,17 @@ pub(crate) fn file_grid(
             cx,
         ));
     if let Some(started) = build_started {
+        eprintln!(
+            "[fika renderer-policy] pane={} mode={:?} items={} visual_layer={} image_layer={} retained_interaction={} gpui_drag_shell={} rename_overlay={}",
+            pane_id.0,
+            view_mode,
+            renderer_policy_stats.items,
+            renderer_policy_stats.visual_layer,
+            renderer_policy_stats.image_layer,
+            renderer_policy_stats.retained_interaction,
+            renderer_policy_stats.gpui_drag_shell,
+            renderer_policy_stats.rename_overlay,
+        );
         eprintln!(
             "[fika file-grid] pane={} mode={:?} visible={} content={}x{} build={}us",
             pane_id.0,
@@ -2481,6 +2504,65 @@ fn details_row_renderer_policy(_item: &DetailsPaintSnapshot) -> DetailsRowRender
         interaction: DetailsRowInteractionRenderer::RetainedLayer,
         drag_start: DetailsRowDragStartRenderer::GpuiShell,
     }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct RendererPolicyStats {
+    items: usize,
+    visual_layer: usize,
+    image_layer: usize,
+    retained_interaction: usize,
+    gpui_drag_shell: usize,
+    rename_overlay: usize,
+}
+
+fn item_renderer_policy_stats(items: &[ItemPaintSnapshot]) -> RendererPolicyStats {
+    let mut stats = RendererPolicyStats {
+        items: items.len(),
+        ..RendererPolicyStats::default()
+    };
+    for item in items {
+        let policy = item_renderer_policy(item.content.as_ref());
+        if matches!(policy.base_visual, ItemBaseVisualRenderer::ContentLayer) {
+            stats.visual_layer += 1;
+        }
+        if matches!(policy.image, ItemImageRenderer::ContentLayer) {
+            stats.image_layer += 1;
+        }
+        if matches!(policy.interaction, ItemInteractionRenderer::RetainedLayer) {
+            stats.retained_interaction += 1;
+        }
+        if matches!(policy.drag_start, ItemDragStartRenderer::GpuiShell) {
+            stats.gpui_drag_shell += 1;
+        }
+        if matches!(policy.rename_editor, ItemRenameEditorRenderer::GpuiOverlay) {
+            stats.rename_overlay += 1;
+        }
+    }
+    stats
+}
+
+fn details_renderer_policy_stats(items: &[DetailsPaintSnapshot]) -> RendererPolicyStats {
+    let mut stats = RendererPolicyStats {
+        items: items.len(),
+        ..RendererPolicyStats::default()
+    };
+    for item in items {
+        let policy = details_row_renderer_policy(item);
+        if matches!(policy.visual, DetailsRowVisualRenderer::ContentLayer) {
+            stats.visual_layer += 1;
+        }
+        if matches!(
+            policy.interaction,
+            DetailsRowInteractionRenderer::RetainedLayer
+        ) {
+            stats.retained_interaction += 1;
+        }
+        if matches!(policy.drag_start, DetailsRowDragStartRenderer::GpuiShell) {
+            stats.gpui_drag_shell += 1;
+        }
+    }
+    stats
 }
 
 fn details_row_background(
@@ -4385,17 +4467,17 @@ mod tests {
         DetailsRowVisualRenderer, DetailsTextShapeCacheKey, FileGridMode, FileGridRenderSnapshot,
         FileGridSnapshot, ItemBaseVisualRenderer, ItemDragStartRenderer, ItemImageRenderer,
         ItemInteractionRenderer, ItemPaintContent, ItemPaintSlotCache, ItemRenameEditorRenderer,
-        ItemRendererPolicy, ItemTileTextAlignment, StaticItemLabelTextKey,
+        ItemRendererPolicy, ItemTileTextAlignment, RendererPolicyStats, StaticItemLabelTextKey,
         StaticItemTextShapeCacheKey, VisibleItemSnapshot, details_columns,
-        details_interaction_layer_items, details_row_renderer_policy,
-        details_visual_layer_element_id, details_visual_layer_items, display_text_layout,
-        drag_preview_label, item_identity_element_id, item_image_element_id,
+        details_interaction_layer_items, details_renderer_policy_stats,
+        details_row_renderer_policy, details_visual_layer_element_id, details_visual_layer_items,
+        display_text_layout, drag_preview_label, item_identity_element_id, item_image_element_id,
         item_image_layer_item_source_path, item_image_layer_items,
         item_image_load_failure_paints_fallback, item_image_paint_layer_element_id,
         item_interaction_hitbox_bounds, item_interaction_layer_element_id,
         item_interaction_layer_items, item_mouse_down_opens_directory, item_renderer_policy,
-        measured_viewport_for_scrollbar_axis, normalized_text_range, rename_text_layout,
-        static_item_visual_layer_element_id, static_item_visual_layer_items,
+        item_renderer_policy_stats, measured_viewport_for_scrollbar_axis, normalized_text_range,
+        rename_text_layout, static_item_visual_layer_element_id, static_item_visual_layer_items,
         viewport_bounds_update_requires_notify,
     };
     use crate::ui::drag_drop::drag_preview_content_origin_for_cursor_offset;
@@ -4537,6 +4619,7 @@ mod tests {
             .iter()
             .map(|item| item_renderer_policy(item.content.as_ref()))
             .collect::<Vec<_>>();
+        let renderer_stats = item_renderer_policy_stats(&items);
 
         assert_eq!(
             policies,
@@ -4577,6 +4660,17 @@ mod tests {
                     rename_editor: ItemRenameEditorRenderer::GpuiOverlay,
                 },
             ]
+        );
+        assert_eq!(
+            renderer_stats,
+            RendererPolicyStats {
+                items: 5,
+                visual_layer: 5,
+                image_layer: 3,
+                retained_interaction: 3,
+                gpui_drag_shell: 5,
+                rename_overlay: 2,
+            }
         );
 
         assert_eq!(
@@ -5028,6 +5122,7 @@ mod tests {
         let columns = details_columns(false, 260.0);
         let visual_items = details_visual_layer_items(&items, &columns);
         let policy = details_row_renderer_policy(&items[0]);
+        let renderer_stats = details_renderer_policy_stats(&items);
 
         assert_eq!(
             policy,
@@ -5035,6 +5130,17 @@ mod tests {
                 visual: DetailsRowVisualRenderer::ContentLayer,
                 interaction: DetailsRowInteractionRenderer::RetainedLayer,
                 drag_start: DetailsRowDragStartRenderer::GpuiShell,
+            }
+        );
+        assert_eq!(
+            renderer_stats,
+            RendererPolicyStats {
+                items: 1,
+                visual_layer: 1,
+                image_layer: 0,
+                retained_interaction: 1,
+                gpui_drag_shell: 1,
+                rename_overlay: 0,
             }
         );
 
