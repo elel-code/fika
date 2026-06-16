@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -40,7 +41,6 @@ pub(crate) struct VisibleItemSnapshot {
     pub(crate) item_id: ItemId,
     pub(crate) layout: fika_core::ItemLayout,
     pub(crate) path: PathBuf,
-    pub(crate) is_dir: bool,
     pub(crate) name: Arc<str>,
     pub(crate) thumbnail_path: Option<PathBuf>,
     pub(crate) icon: FileIconSnapshot,
@@ -53,6 +53,108 @@ pub(crate) struct VisibleItemSnapshot {
     pub(crate) draft_selection: Option<(usize, usize)>,
     pub(crate) draft_error: Option<String>,
     pub(crate) draft_warning: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct VisibleItemSnapshotCacheKey {
+    path: PathBuf,
+    is_dir: bool,
+    name: Arc<str>,
+    thumbnail_path: Option<PathBuf>,
+    mime_type: Option<Arc<str>>,
+    mime_magic_checked: bool,
+    icon_size_px: u16,
+    text_width_bits: u32,
+    text_height_bits: u32,
+}
+
+#[derive(Clone, Debug)]
+struct VisibleItemSnapshotCacheEntry {
+    key: VisibleItemSnapshotCacheKey,
+    path: PathBuf,
+    name: Arc<str>,
+    thumbnail_path: Option<PathBuf>,
+    icon: FileIconSnapshot,
+    icon_name_lines: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct VisibleItemSnapshotCache {
+    entries: HashMap<ItemId, VisibleItemSnapshotCacheEntry>,
+}
+
+impl VisibleItemSnapshotCache {
+    fn retain_visible(&mut self, item_ids: impl IntoIterator<Item = ItemId>) {
+        let visible = item_ids.into_iter().collect::<HashSet<_>>();
+        self.entries.retain(|item_id, _| visible.contains(item_id));
+    }
+
+    fn content_for_raw_item<F>(
+        &mut self,
+        item: &RawVisibleItemSnapshot,
+        cache_text_lines: bool,
+        icon_for_item: &mut F,
+    ) -> VisibleItemSnapshotCacheEntry
+    where
+        F: for<'a> FnMut(FileGridIconRequest<'a>) -> FileIconSnapshot,
+    {
+        let key = visible_item_snapshot_cache_key(item, cache_text_lines);
+        if let Some(entry) = self
+            .entries
+            .get(&item.item_id)
+            .filter(|entry| entry.key == key)
+        {
+            return entry.clone();
+        }
+
+        let icon = icon_for_item(FileGridIconRequest {
+            path: &item.path,
+            is_dir: item.is_dir,
+            mime_type: item.mime_type.clone(),
+            mime_magic_checked: item.mime_magic_checked,
+            icon_size: item.layout.icon_rect.width,
+        });
+        let icon_name_lines = cache_text_lines
+            .then(|| {
+                icon_name_display_lines(
+                    &item.name,
+                    icon_name_layout_width(item.layout.text_rect.width),
+                    icon_name_max_lines(item.layout.text_rect.height),
+                )
+            })
+            .unwrap_or_default();
+        let entry = VisibleItemSnapshotCacheEntry {
+            key,
+            path: item.path.clone(),
+            name: item.name.clone(),
+            thumbnail_path: item.thumbnail_path.clone(),
+            icon,
+            icon_name_lines,
+        };
+        self.entries.insert(item.item_id, entry.clone());
+        entry
+    }
+}
+
+fn visible_item_snapshot_cache_key(
+    item: &RawVisibleItemSnapshot,
+    cache_text_lines: bool,
+) -> VisibleItemSnapshotCacheKey {
+    VisibleItemSnapshotCacheKey {
+        path: item.path.clone(),
+        is_dir: item.is_dir,
+        name: item.name.clone(),
+        thumbnail_path: item.thumbnail_path.clone(),
+        mime_type: item.mime_type.clone(),
+        mime_magic_checked: item.mime_magic_checked,
+        icon_size_px: item.layout.icon_rect.width.round().clamp(16.0, 256.0) as u16,
+        text_width_bits: cache_text_lines
+            .then(|| icon_name_layout_width(item.layout.text_rect.width).to_bits())
+            .unwrap_or_default(),
+        text_height_bits: cache_text_lines
+            .then(|| item.layout.text_rect.height.to_bits())
+            .unwrap_or_default(),
+    }
 }
 
 const ICON_NAME_HORIZONTAL_SAFE_INSET: f32 = 6.0;
@@ -369,6 +471,7 @@ impl RawFileGridSnapshot {
     pub(crate) fn into_file_grid_snapshot<F>(
         self,
         selection_count: usize,
+        visible_item_cache: &mut VisibleItemSnapshotCache,
         mut icon_for_item: F,
     ) -> FileGridSnapshot
     where
@@ -376,29 +479,27 @@ impl RawFileGridSnapshot {
     {
         match self {
             Self::Compact { layout, items } => {
+                visible_item_cache.retain_visible(items.iter().map(|item| item.item_id));
                 let items = items
                     .into_iter()
                     .filter_map(|item| {
                         if item.slot_id == 0 {
                             return None;
                         }
-                        let icon = icon_for_item(FileGridIconRequest {
-                            path: &item.path,
-                            is_dir: item.is_dir,
-                            mime_type: item.mime_type.clone(),
-                            mime_magic_checked: item.mime_magic_checked,
-                            icon_size: item.layout.icon_rect.width,
-                        });
+                        let content = visible_item_cache.content_for_raw_item(
+                            &item,
+                            false,
+                            &mut icon_for_item,
+                        );
                         Some(VisibleItemSnapshot {
                             slot_id: item.slot_id,
                             item_id: item.item_id,
                             layout: item.layout,
-                            path: item.path,
-                            is_dir: item.is_dir,
-                            name: item.name,
-                            thumbnail_path: item.thumbnail_path,
-                            icon,
-                            icon_name_lines: Vec::new(),
+                            path: content.path,
+                            name: content.name,
+                            thumbnail_path: content.thumbnail_path,
+                            icon: content.icon,
+                            icon_name_lines: content.icon_name_lines,
                             selected: item.selected,
                             selection_count,
                             drop_target: item.drop_target,
@@ -413,34 +514,27 @@ impl RawFileGridSnapshot {
                 FileGridSnapshot::Compact { layout, items }
             }
             Self::Icons { layout, items } => {
+                visible_item_cache.retain_visible(items.iter().map(|item| item.item_id));
                 let items = items
                     .into_iter()
                     .filter_map(|item| {
                         if item.slot_id == 0 {
                             return None;
                         }
-                        let icon = icon_for_item(FileGridIconRequest {
-                            path: &item.path,
-                            is_dir: item.is_dir,
-                            mime_type: item.mime_type.clone(),
-                            mime_magic_checked: item.mime_magic_checked,
-                            icon_size: item.layout.icon_rect.width,
-                        });
-                        let icon_name_lines = icon_name_display_lines(
-                            &item.name,
-                            icon_name_layout_width(item.layout.text_rect.width),
-                            icon_name_max_lines(item.layout.text_rect.height),
+                        let content = visible_item_cache.content_for_raw_item(
+                            &item,
+                            true,
+                            &mut icon_for_item,
                         );
                         Some(VisibleItemSnapshot {
                             slot_id: item.slot_id,
                             item_id: item.item_id,
                             layout: item.layout,
-                            path: item.path,
-                            is_dir: item.is_dir,
-                            name: item.name,
-                            thumbnail_path: item.thumbnail_path,
-                            icon,
-                            icon_name_lines,
+                            path: content.path,
+                            name: content.name,
+                            thumbnail_path: content.thumbnail_path,
+                            icon: content.icon,
+                            icon_name_lines: content.icon_name_lines,
                             selected: item.selected,
                             selection_count,
                             drop_target: item.drop_target,
@@ -948,7 +1042,8 @@ mod tests {
 
         let mut requests = Vec::new();
         let icon = test_icon_snapshot();
-        let snapshot = raw_file_grid.into_file_grid_snapshot(2, |request| {
+        let mut cache = VisibleItemSnapshotCache::default();
+        let snapshot = raw_file_grid.into_file_grid_snapshot(2, &mut cache, |request| {
             requests.push((request.path.to_path_buf(), request.icon_size));
             icon.clone()
         });
@@ -972,8 +1067,9 @@ mod tests {
         let mut slots = VisibleItemSlotPool::default();
         raw_file_grid.assign_visible_item_slots(&mut slots);
         let icon = test_icon_snapshot();
+        let mut cache = VisibleItemSnapshotCache::default();
 
-        let snapshot = raw_file_grid.into_file_grid_snapshot(1, |_| icon.clone());
+        let snapshot = raw_file_grid.into_file_grid_snapshot(1, &mut cache, |_| icon.clone());
 
         let FileGridSnapshot::Icons { items, .. } = snapshot else {
             panic!("expected icons snapshot");
@@ -990,6 +1086,49 @@ mod tests {
                 .last()
                 .is_some_and(|line| line.contains('\u{2026}'))
         );
+    }
+
+    #[test]
+    fn icon_item_snapshot_cache_reuses_content_across_layout_only_resize() {
+        let mut slots = VisibleItemSlotPool::default();
+        let mut cache = VisibleItemSnapshotCache::default();
+        let icon = test_icon_snapshot();
+        let mut icon_requests = 0;
+
+        let mut first_raw = RawFileGridSnapshot::Icons {
+            layout: IconsLayout::new(1, fika_core::IconsLayoutOptions::default()),
+            items: vec![test_raw_visible_item(1, "alpha.txt", 0)],
+        };
+        first_raw.assign_visible_item_slots(&mut slots);
+        let first = first_raw.into_file_grid_snapshot(1, &mut cache, |_| {
+            icon_requests += 1;
+            icon.clone()
+        });
+        let FileGridSnapshot::Icons { items: first, .. } = first else {
+            panic!("expected icons snapshot");
+        };
+
+        let mut second_item = test_raw_visible_item(1, "alpha.txt", 0);
+        second_item.layout.item_rect.x = 24.0;
+        second_item.layout.visual_rect.x = 24.0;
+        second_item.layout.icon_rect.x = 24.0;
+        second_item.layout.text_rect.x = 24.0;
+        let mut second_raw = RawFileGridSnapshot::Icons {
+            layout: IconsLayout::new(1, fika_core::IconsLayoutOptions::default()),
+            items: vec![second_item],
+        };
+        second_raw.assign_visible_item_slots(&mut slots);
+        let second = second_raw.into_file_grid_snapshot(1, &mut cache, |_| {
+            icon_requests += 1;
+            icon.clone()
+        });
+        let FileGridSnapshot::Icons { items: second, .. } = second else {
+            panic!("expected icons snapshot");
+        };
+
+        assert_eq!(icon_requests, 1);
+        assert_eq!(first[0].icon_name_lines, second[0].icon_name_lines);
+        assert_eq!(second[0].layout.item_rect.x, 24.0);
     }
 
     #[test]

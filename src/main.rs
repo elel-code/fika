@@ -84,7 +84,7 @@ use ui::drag_drop::{
 use ui::file_grid::{
     CompactColumnWidthCache, ContentItemHit, ItemDrag, PaneLayoutProjection,
     PaneLayoutProjectionInput, PaneViewportGeometry, RawFileGridSnapshot, RawFileGridSnapshotInput,
-    VisibleItemSlotPool, compact_text_width, compact_text_width_for_name,
+    VisibleItemSlotPool, VisibleItemSnapshotCache, compact_text_width, compact_text_width_for_name,
     content_item_hit_at_point, deferred_thumbnail_candidates_for_model,
     model_indexes_intersecting_visual_rect, pane_layout_projection, raw_file_grid_snapshot,
     rename_editor_required_text_width,
@@ -163,9 +163,11 @@ fn env_flag_enabled(name: &str) -> bool {
 }
 
 fn listing_cache_debug_enabled() -> bool {
-    env_flag_enabled(DEBUG_CACHE_ENV)
-        || env_flag_enabled(DEBUG_NAV_ENV)
-        || env_flag_enabled(PERF_ITEM_VIEW_ENV)
+    env_flag_enabled(DEBUG_CACHE_ENV) || env_flag_enabled(DEBUG_NAV_ENV)
+}
+
+pub(crate) fn item_view_perf_enabled() -> bool {
+    env_flag_enabled(PERF_ITEM_VIEW_ENV)
 }
 
 fn listing_cache_debug_summary(
@@ -414,8 +416,11 @@ pub(crate) struct FikaApp {
     visible_work_keys: HashMap<PaneId, PaneVisibleWorkKey>,
     pane_viewport_geometries: HashMap<PaneId, PaneViewportGeometry>,
     pane_split_ratios: HashMap<PaneId, f32>,
+    pane_resize_notify_pending: bool,
+    last_render_viewport_size: Option<(f32, f32)>,
     pane_row_width: f32,
     visible_item_slots: HashMap<PaneId, VisibleItemSlotPool>,
+    visible_item_snapshot_caches: HashMap<PaneId, VisibleItemSnapshotCache>,
     compact_column_widths: HashMap<PaneId, CompactColumnWidthCache>,
     pane_filters: HashMap<PaneId, PaneFilterState>,
     filtered_models: HashMap<PaneId, FilteredModelCacheEntry>,
@@ -496,8 +501,11 @@ impl FikaApp {
             visible_work_keys: HashMap::new(),
             pane_viewport_geometries: HashMap::new(),
             pane_split_ratios: HashMap::new(),
+            pane_resize_notify_pending: false,
+            last_render_viewport_size: None,
             pane_row_width: 0.0,
             visible_item_slots: HashMap::new(),
+            visible_item_snapshot_caches: HashMap::new(),
             compact_column_widths: HashMap::new(),
             pane_filters: HashMap::new(),
             filtered_models: HashMap::new(),
@@ -778,6 +786,7 @@ impl FikaApp {
 
     fn invalidate_pane_layout_projection(&mut self, pane_id: PaneId, reset_scroll: bool) {
         self.visible_item_slots.remove(&pane_id);
+        self.visible_item_snapshot_caches.remove(&pane_id);
         self.compact_column_widths.remove(&pane_id);
         self.filtered_models.remove(&pane_id);
         self.status_summaries.remove(&pane_id);
@@ -1024,9 +1033,11 @@ impl FikaApp {
     fn snapshots(&mut self, cx: &mut Context<Self>) -> Vec<PaneSnapshot> {
         let focused_pane = self.panes.focused();
         let pane_ids = self.panes.pane_ids().to_vec();
+        let perf_enabled = item_view_perf_enabled();
         pane_ids
             .into_iter()
             .filter_map(|pane_id| {
+                let pane_started = perf_enabled.then(Instant::now);
                 self.sync_pane_view_from_item_view_scroll_handle(pane_id);
                 let scroll_handle = self.item_view_scroll_handle_for_pane(pane_id);
                 let filtered_model = self.filtered_model_for_pane(pane_id);
@@ -1074,6 +1085,7 @@ impl FikaApp {
                 };
                 let filtered = filtered_model.as_ref().map(|(model, _)| model);
                 let source_revision = filtered_model.as_ref().map_or(0, |(_, revision)| *revision);
+                let raw_started = perf_enabled.then(Instant::now);
                 let raw_file_grid = self.raw_file_grid_snapshot_for_pane(
                     pane_id,
                     &view,
@@ -1082,6 +1094,11 @@ impl FikaApp {
                     rename_draft.as_ref(),
                     item_drop_target.as_ref(),
                 )?;
+                let raw_elapsed = raw_started.map(|started| started.elapsed());
+                let visible_count = raw_file_grid
+                    .visible_work_range_and_count()
+                    .map(|(_, count)| count)
+                    .unwrap_or_default();
                 let item_count = {
                     let pane = self.panes.pane(pane_id)?;
                     filtered_model
@@ -1089,6 +1106,7 @@ impl FikaApp {
                         .map_or_else(|| pane.model.len(), |(filtered, _)| filtered.len())
                 };
                 let filtered = filtered_model.as_ref().map(|(model, _)| model);
+                let queue_started = perf_enabled.then(Instant::now);
                 let (metadata_role_queued, thumbnail_probe_queued) = self
                     .queue_visible_model_work_for_raw_grid(
                         pane_id,
@@ -1100,6 +1118,7 @@ impl FikaApp {
                         &raw_file_grid,
                         filtered,
                     )?;
+                let queue_elapsed = queue_started.map(|started| started.elapsed());
                 let rubber_band = rubber_band_state
                     .and_then(|band| (band.pane_id == pane_id).then(|| band.viewport_rect(&view)));
                 let filter_bar = self.filter_bar_snapshot(pane_id, focused_pane, item_count);
@@ -1112,16 +1131,41 @@ impl FikaApp {
                 let mut raw_file_grid = raw_file_grid;
                 raw_file_grid
                     .assign_visible_item_slots(self.visible_item_slots.entry(pane_id).or_default());
-                let file_grid = raw_file_grid.into_file_grid_snapshot(selection_count, |request| {
-                    self.icon_snapshot_for_model_item(
-                        request.path,
-                        request.is_dir,
-                        request.mime_type.clone(),
-                        request.mime_magic_checked,
-                        request.icon_size,
-                    )
-                });
+                let convert_started = perf_enabled.then(Instant::now);
+                let mut visible_item_cache = self
+                    .visible_item_snapshot_caches
+                    .remove(&pane_id)
+                    .unwrap_or_default();
+                let file_grid = raw_file_grid.into_file_grid_snapshot(
+                    selection_count,
+                    &mut visible_item_cache,
+                    |request| {
+                        self.icon_snapshot_for_model_item(
+                            request.path,
+                            request.is_dir,
+                            request.mime_type.clone(),
+                            request.mime_magic_checked,
+                            request.icon_size,
+                        )
+                    },
+                );
+                self.visible_item_snapshot_caches
+                    .insert(pane_id, visible_item_cache);
+                let convert_elapsed = convert_started.map(|started| started.elapsed());
                 let status_bar = self.status_bar_snapshot_for_pane(pane_id, cx);
+                if let Some(pane_started) = pane_started {
+                    eprintln!(
+                        "[fika item-view] pane={} mode={:?} items={} visible={} raw={}us queue={}us convert={}us total={}us",
+                        pane_id.0,
+                        view.view_mode,
+                        item_count,
+                        visible_count,
+                        raw_elapsed.map_or(0, |elapsed| elapsed.as_micros()),
+                        queue_elapsed.map_or(0, |elapsed| elapsed.as_micros()),
+                        convert_elapsed.map_or(0, |elapsed| elapsed.as_micros()),
+                        pane_started.elapsed().as_micros(),
+                    );
+                }
                 Some(PaneSnapshot {
                     id: pane_id,
                     split_ratio,
@@ -2674,6 +2718,7 @@ impl FikaApp {
 
     fn clear_pane_content_state(&mut self, pane_id: PaneId) {
         self.visible_item_slots.remove(&pane_id);
+        self.visible_item_snapshot_caches.remove(&pane_id);
         self.compact_column_widths.remove(&pane_id);
         self.status_summaries.remove(&pane_id);
         self.filtered_models.remove(&pane_id);
@@ -3109,6 +3154,7 @@ impl FikaApp {
         };
         self.prime_pane_viewport_for_view_mode_axis_change(pane_id, previous_mode, view_mode);
         self.reset_item_view_scroll_for_pane(pane_id);
+        self.visible_item_snapshot_caches.remove(&pane_id);
         self.compact_column_widths.remove(&pane_id);
         self.set_pane_status(pane_id, view_mode_status(view.view_mode));
     }
@@ -3248,6 +3294,62 @@ impl FikaApp {
         ))
     }
 
+    fn prime_pane_viewports_for_window_resize(
+        &mut self,
+        viewport_width: f32,
+        viewport_height: f32,
+    ) {
+        let viewport_width = fika_core::normalize_viewport_extent(viewport_width);
+        let viewport_height = fika_core::normalize_viewport_extent(viewport_height);
+        let previous = self
+            .last_render_viewport_size
+            .replace((viewport_width, viewport_height));
+        let Some((previous_width, previous_height)) = previous else {
+            return;
+        };
+
+        let delta_width = viewport_width - previous_width;
+        let delta_height = viewport_height - previous_height;
+        let width_changed = !width_value_eq(delta_width, 0.0);
+        let height_changed = !width_value_eq(delta_height, 0.0);
+        if !width_changed && !height_changed {
+            return;
+        }
+
+        if width_changed && self.pane_row_width > 0.0 {
+            self.pane_row_width =
+                fika_core::normalize_viewport_extent((self.pane_row_width + delta_width).max(1.0));
+        }
+
+        if height_changed {
+            for pane_id in self.panes.pane_ids().to_vec() {
+                if let Some(pane) = self.panes.pane_mut(pane_id) {
+                    pane.view.viewport_height = fika_core::normalize_viewport_extent(
+                        pane.view.viewport_height + delta_height,
+                    );
+                }
+            }
+        }
+
+        if width_changed {
+            let projected_widths = self
+                .panes
+                .pane_ids()
+                .iter()
+                .filter_map(|pane_id| {
+                    let view_mode = self.panes.pane(*pane_id)?.view.view_mode;
+                    self.projected_item_viewport_width(*pane_id, view_mode)
+                        .map(|width| (*pane_id, width))
+                })
+                .collect::<Vec<_>>();
+            for (pane_id, viewport_width) in projected_widths {
+                if let Some(pane) = self.panes.pane_mut(pane_id) {
+                    pane.view.viewport_width = viewport_width;
+                }
+            }
+        }
+    }
+
     fn normalized_pane_ratios_for_ids(&self, pane_ids: &[PaneId]) -> Vec<f32> {
         if pane_ids.is_empty() {
             return Vec::new();
@@ -3376,6 +3478,17 @@ impl FikaApp {
         ratios[left_index + 1] = right_ratio;
         self.store_pane_ratios(&pane_ids, ratios);
         true
+    }
+
+    fn request_pane_resize_notify(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.pane_resize_notify_pending {
+            return;
+        }
+        self.pane_resize_notify_pending = true;
+        cx.on_next_frame(window, |this, _window, cx| {
+            this.pane_resize_notify_pending = false;
+            cx.notify();
+        });
     }
 
     fn set_pane_viewport_bounds(
@@ -6139,7 +6252,7 @@ impl FikaApp {
         });
     }
 
-    fn show_item_context_menu(
+    pub(crate) fn show_item_context_menu(
         &mut self,
         pane_id: PaneId,
         path: PathBuf,
@@ -7894,8 +8007,11 @@ impl FikaApp {
     }
 
     fn schedule_listings<'a>(&self, events: impl IntoIterator<Item = &'a DirectoryListerEvent>) {
-        self.listing_worker
-            .schedule_all(listing_requests_from_events(events));
+        let requests = listing_requests_from_events(events);
+        if requests.is_empty() {
+            return;
+        }
+        self.listing_worker.schedule_all(requests);
         self.log_listing_cache_debug("batch-scheduled");
     }
 
@@ -7955,6 +8071,8 @@ impl FikaApp {
 
 impl Render for FikaApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let perf_enabled = item_view_perf_enabled();
+        let render_started = perf_enabled.then(Instant::now);
         let title = self
             .chooser
             .as_ref()
@@ -7962,9 +8080,19 @@ impl Render for FikaApp {
             .unwrap_or("Fika");
         window.set_window_title(title);
         let viewport_size = window.viewport_size();
+        self.prime_pane_viewports_for_window_resize(
+            viewport_size.width.as_f32(),
+            viewport_size.height.as_f32(),
+        );
+        let places_started = perf_enabled.then(Instant::now);
         let places = self.place_snapshots();
+        let places_elapsed = places_started.map(|started| started.elapsed());
+        let background_tasks_started = perf_enabled.then(Instant::now);
         let background_tasks = self.background_tasks_snapshot(Instant::now());
+        let background_tasks_elapsed = background_tasks_started.map(|started| started.elapsed());
+        let snapshots_started = perf_enabled.then(Instant::now);
         let snapshots = self.snapshots(cx);
+        let snapshots_elapsed = snapshots_started.map(|started| started.elapsed());
         let file_grid_mode =
             self.chooser
                 .as_ref()
@@ -7997,6 +8125,7 @@ impl Render for FikaApp {
             .map(|chooser| chooser.accept_label.clone());
         let split_icon = pane_split_icon_snapshot(&mut self.file_icons);
         let close_icon = pane_close_icon_snapshot(&mut self.file_icons);
+        let pane_elements_started = perf_enabled.then(Instant::now);
         let mut pane_elements = Vec::with_capacity(pane_ids.len().saturating_mul(2));
         for (index, snapshot) in snapshots.into_iter().enumerate() {
             let left = snapshot.id;
@@ -8012,6 +8141,7 @@ impl Render for FikaApp {
                 pane_elements.push(pane_splitter(left, right, cx));
             }
         }
+        let pane_elements_elapsed = pane_elements_started.map(|started| started.elapsed());
         let context_menu = self.context_menu.clone();
         let properties_dialog = self.properties_dialog.clone();
         let trash_conflict_dialog = self.trash_conflict_dialog.clone();
@@ -8027,7 +8157,8 @@ impl Render for FikaApp {
             })
             .unwrap_or_default();
         let app = cx.weak_entity();
-        div()
+        let root_started = perf_enabled.then(Instant::now);
+        let root = div()
             .relative()
             .size_full()
             .flex()
@@ -8091,15 +8222,26 @@ impl Render for FikaApp {
                             .child(
                                 div()
                                     .on_children_prepainted(move |bounds, _window, cx| {
+                                        let pane_row_started = perf_enabled.then(Instant::now);
                                         let Some(width) = pane_row_width_from_child_bounds(&bounds)
                                         else {
                                             return;
                                         };
+                                        let mut changed = false;
                                         let _ = app.update(cx, |this, cx| {
                                             if this.set_pane_row_width(width) {
+                                                changed = true;
                                                 cx.notify();
                                             }
                                         });
+                                        if let Some(started) = pane_row_started {
+                                            eprintln!(
+                                                "[fika pane-row] width={} changed={} total={}us",
+                                                width,
+                                                changed,
+                                                started.elapsed().as_micros(),
+                                            );
+                                        }
                                     })
                                     .id("pane-row")
                                     .flex()
@@ -8147,7 +8289,7 @@ impl Render for FikaApp {
                                     .on_drag_move::<PaneSplitterDrag>(cx.listener(
                                         move |this,
                                               event: &gpui::DragMoveEvent<PaneSplitterDrag>,
-                                              _window,
+                                              window,
                                               cx| {
                                             let drag = *event.drag(cx);
                                             if this.resize_pane_pair_from_row_drag(
@@ -8157,13 +8299,14 @@ impl Render for FikaApp {
                                                 event.bounds.origin.x.as_f32(),
                                                 event.bounds.size.width.as_f32(),
                                             ) {
-                                                cx.notify();
+                                                this.request_pane_resize_notify(window, cx);
                                             }
                                             cx.stop_propagation();
                                         },
                                     ))
                                     .on_drop::<PaneSplitterDrag>(cx.listener(
-                                        |_this, _drag: &PaneSplitterDrag, _window, cx| {
+                                        |this, _drag: &PaneSplitterDrag, _window, cx| {
+                                            this.pane_resize_notify_pending = false;
                                             cx.notify();
                                             cx.stop_propagation();
                                         },
@@ -8199,7 +8342,22 @@ impl Render for FikaApp {
             })
             .when_some(background_task_detail_dialog, |root, dialog| {
                 root.child(background_task_detail_dialog_overlay(dialog, cx))
-            })
+            });
+        if let Some(started) = render_started {
+            eprintln!(
+                "[fika render] panes={} viewport={}x{} places={}us tasks={}us snapshots={}us pane_elements={}us root={}us total={}us",
+                pane_count,
+                viewport_size.width.as_f32(),
+                viewport_size.height.as_f32(),
+                places_elapsed.map_or(0, |elapsed| elapsed.as_micros()),
+                background_tasks_elapsed.map_or(0, |elapsed| elapsed.as_micros()),
+                snapshots_elapsed.map_or(0, |elapsed| elapsed.as_micros()),
+                pane_elements_elapsed.map_or(0, |elapsed| elapsed.as_micros()),
+                root_started.map_or(0, |started| started.elapsed().as_micros()),
+                started.elapsed().as_micros(),
+            );
+        }
+        root
     }
 }
 
@@ -12200,6 +12358,30 @@ text/plain=viewer.desktop;\n",
     }
 
     #[test]
+    fn window_resize_primes_icon_viewport_before_prepaint_bounds_arrive() {
+        let mut app = test_app_with_entries("/tmp/fika-window-resize-prime", &[]);
+        let pane_id = app.panes.focused().unwrap();
+        {
+            let pane = app.panes.pane_mut(pane_id).unwrap();
+            pane.view.view_mode = ViewMode::Icons;
+            pane.view.viewport_width = 604.0;
+            pane.view.viewport_height = 360.0;
+        }
+        assert!(app.set_pane_row_width(620.0));
+
+        app.prime_pane_viewports_for_window_resize(1024.0, 768.0);
+        assert_eq!(app.pane_row_width, 620.0);
+        assert_eq!(app.panes.pane(pane_id).unwrap().view.viewport_width, 604.0);
+        assert_eq!(app.panes.pane(pane_id).unwrap().view.viewport_height, 360.0);
+
+        app.prime_pane_viewports_for_window_resize(1224.0, 918.0);
+
+        assert_eq!(app.pane_row_width, 820.0);
+        assert_eq!(app.panes.pane(pane_id).unwrap().view.viewport_width, 804.0);
+        assert_eq!(app.panes.pane(pane_id).unwrap().view.viewport_height, 510.0);
+    }
+
+    #[test]
     fn pane_row_width_is_derived_from_actual_child_bounds() {
         let bounds = vec![
             Bounds::new(gpui::point(px(18.0), px(0.0)), size(px(120.0), px(10.0))),
@@ -12452,6 +12634,26 @@ text/plain=viewer.desktop;\n",
             pane.model.path_for_index(0),
             Some(PathBuf::from("/tmp/fika-load-new/new.txt"))
         );
+    }
+
+    #[test]
+    fn schedule_listings_ignores_empty_and_non_loading_batches() {
+        let app = test_app_with_entries("/tmp/fika-empty-batch", &["old.txt"]);
+        let pane_id = app.panes.focused().unwrap();
+        let pane = app.panes.pane(pane_id).unwrap();
+
+        let no_events: Vec<DirectoryListerEvent> = Vec::new();
+        app.schedule_listings(no_events.iter());
+        assert_eq!(app.listing_worker.pending_count(), 0);
+
+        let non_loading_events = vec![DirectoryListerEvent::ListingCompleted {
+            pane_id,
+            generation: pane.generation,
+            request_serial: fika_core::RequestSerial(0),
+            path: pane.current_dir.clone(),
+        }];
+        app.schedule_listings(non_loading_events.iter());
+        assert_eq!(app.listing_worker.pending_count(), 0);
     }
 
     #[test]
@@ -15390,8 +15592,11 @@ text/plain=viewer.desktop;\n",
             visible_work_keys: HashMap::new(),
             pane_viewport_geometries: HashMap::new(),
             pane_split_ratios: HashMap::new(),
+            pane_resize_notify_pending: false,
+            last_render_viewport_size: None,
             pane_row_width: 0.0,
             visible_item_slots: HashMap::new(),
+            visible_item_snapshot_caches: HashMap::new(),
             compact_column_widths: HashMap::new(),
             pane_filters: HashMap::new(),
             filtered_models: HashMap::new(),

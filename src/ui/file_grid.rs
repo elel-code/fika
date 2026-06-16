@@ -17,7 +17,7 @@ pub(crate) use projection::{
 };
 pub(crate) use slots::VisibleItemSlotPool;
 pub(crate) use snapshot::{
-    RawFileGridSnapshot, RawFileGridSnapshotInput, VisibleItemSnapshot,
+    RawFileGridSnapshot, RawFileGridSnapshotInput, VisibleItemSnapshot, VisibleItemSnapshotCache,
     deferred_thumbnail_candidates_for_model, raw_file_grid_snapshot,
 };
 
@@ -316,6 +316,8 @@ pub(crate) fn file_grid(
     window: &mut Window,
     cx: &mut Context<FikaApp>,
 ) -> Stateful<Div> {
+    let perf_enabled = crate::item_view_perf_enabled();
+    let build_started = perf_enabled.then(std::time::Instant::now);
     let FileGridProps {
         pane_id,
         snapshot,
@@ -329,63 +331,78 @@ pub(crate) fn file_grid(
     let scrollbar_axis = scrollbar_axis_for_snapshot(&snapshot);
     let view_mode = view_mode_for_snapshot(&snapshot);
 
-    let (content_width, content_height, viewport) = match snapshot {
-        FileGridSnapshot::Icons {
-            layout: icons_layout,
-            items,
-        } => {
-            let content_size = icons_layout.content_size();
-            let viewport = file_grid_viewport_shell(pane_id, drop_target, mode, cx).child(
-                div()
-                    .relative()
-                    .w(px(content_size.width))
-                    .h(px(content_size.height))
-                    .children(items.into_iter().map(|item| {
-                        item_tile(pane_id, item, mode, ItemTileTextAlignment::Center, cx)
-                    })),
-            );
-            (content_size.width, content_size.height, viewport)
-        }
-        FileGridSnapshot::Compact { layout, items } => {
-            let content_size = layout.content_size();
-            let viewport = file_grid_viewport_shell(pane_id, drop_target, mode, cx).child(
-                div()
-                    .relative()
-                    .w(px(content_size.width))
-                    .h(px(content_size.height))
-                    .children(items.into_iter().map(|item| {
-                        item_tile(pane_id, item, mode, ItemTileTextAlignment::Start, cx)
-                    })),
-            );
-            (content_size.width, content_size.height, viewport)
-        }
-        FileGridSnapshot::Details {
-            items,
-            row_count,
-            metrics,
-            name_column_width,
-        } => {
-            let content_width = details_content_width(trash_view, name_column_width).max(1.0);
-            let content_height = details_content_height(row_count, metrics).max(1.0);
-            let viewport =
-                file_grid_viewport_shell(pane_id, drop_target, mode, cx).child(details_table(
-                    pane_id,
-                    items,
-                    row_count,
-                    trash_view,
-                    content_width,
-                    content_height,
-                    metrics,
-                    name_column_width,
-                    mode,
-                    cx,
-                ));
-            (content_width, content_height, viewport)
-        }
-    };
+    let (content_width, content_height, visible_count, viewport) =
+        match snapshot {
+            FileGridSnapshot::Icons {
+                layout: icons_layout,
+                items,
+            } => {
+                let content_size = icons_layout.content_size();
+                let visible_count = items.len();
+                let viewport = file_grid_viewport_shell(pane_id, drop_target, mode, cx).child(
+                    div()
+                        .relative()
+                        .w(px(content_size.width))
+                        .h(px(content_size.height))
+                        .children(items.into_iter().map(|item| {
+                            item_tile(pane_id, item, ItemTileTextAlignment::Center, cx)
+                        })),
+                );
+                (
+                    content_size.width,
+                    content_size.height,
+                    visible_count,
+                    viewport,
+                )
+            }
+            FileGridSnapshot::Compact { layout, items } => {
+                let content_size = layout.content_size();
+                let visible_count = items.len();
+                let viewport = file_grid_viewport_shell(pane_id, drop_target, mode, cx).child(
+                    div()
+                        .relative()
+                        .w(px(content_size.width))
+                        .h(px(content_size.height))
+                        .children(items.into_iter().map(|item| {
+                            item_tile(pane_id, item, ItemTileTextAlignment::Start, cx)
+                        })),
+                );
+                (
+                    content_size.width,
+                    content_size.height,
+                    visible_count,
+                    viewport,
+                )
+            }
+            FileGridSnapshot::Details {
+                items,
+                row_count,
+                metrics,
+                name_column_width,
+            } => {
+                let content_width = details_content_width(trash_view, name_column_width).max(1.0);
+                let content_height = details_content_height(row_count, metrics).max(1.0);
+                let visible_count = items.len();
+                let viewport =
+                    file_grid_viewport_shell(pane_id, drop_target, mode, cx).child(details_table(
+                        pane_id,
+                        items,
+                        row_count,
+                        trash_view,
+                        content_width,
+                        content_height,
+                        metrics,
+                        name_column_width,
+                        mode,
+                        cx,
+                    ));
+                (content_width, content_height, visible_count, viewport)
+            }
+        };
 
-    div()
+    let root = div()
         .on_children_prepainted(move |bounds, _window, cx| {
+            let prepaint_started = perf_enabled.then(std::time::Instant::now);
             let Some(bounds) = bounds.first() else {
                 return;
             };
@@ -395,10 +412,12 @@ pub(crate) fn file_grid(
                 content_height,
                 scrollbar_axis,
             );
+            let mut bounds_changed = false;
+            let mut notify_requested = false;
             let _ = app.update(cx, |this, cx| {
                 let previous_view = this.panes.pane(pane_id).map(|pane| pane.view.clone());
                 this.set_pane_viewport_geometry(pane_id, measured.rect);
-                let bounds_changed = this.set_pane_viewport_bounds(
+                bounds_changed = this.set_pane_viewport_bounds(
                     pane_id,
                     measured.rect.width,
                     measured.rect.height,
@@ -415,9 +434,24 @@ pub(crate) fn file_grid(
                         measured.rect,
                     )
                 {
+                    notify_requested = true;
                     cx.notify();
                 }
             });
+            if let Some(started) = prepaint_started {
+                eprintln!(
+                    "[fika viewport] pane={} mode={:?} measured={}x{} content={}x{} changed={} notify={} total={}us",
+                    pane_id.0,
+                    view_mode,
+                    measured.rect.width,
+                    measured.rect.height,
+                    content_width,
+                    content_height,
+                    bounds_changed,
+                    notify_requested,
+                    started.elapsed().as_micros(),
+                );
+            }
         })
         .id(format!("items-{}", pane_id.0))
         .relative()
@@ -437,7 +471,19 @@ pub(crate) fn file_grid(
             viewport,
             window,
             cx,
-        ))
+        ));
+    if let Some(started) = build_started {
+        eprintln!(
+            "[fika file-grid] pane={} mode={:?} visible={} content={}x{} build={}us",
+            pane_id.0,
+            view_mode,
+            visible_count,
+            content_width,
+            content_height,
+            started.elapsed().as_micros(),
+        );
+    }
+    root
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -568,6 +614,15 @@ fn file_grid_viewport_shell(
         .on_mouse_down(
             MouseButton::Left,
             cx.listener(move |this, event: &gpui::MouseDownEvent, _window, cx| {
+                if let Some(hit) = this.item_at_window_position(pane_id, event.position) {
+                    if handle_item_mouse_down(this, pane_id, hit.path, hit.is_dir, mode, event, cx)
+                    {
+                        cx.notify();
+                    }
+                    cx.stop_propagation();
+                    return;
+                }
+
                 let pressed = this.press_rubber_band_from_window_if_blank(pane_id, event.position);
                 cx.stop_propagation();
                 if pressed {
@@ -602,17 +657,31 @@ fn file_grid_viewport_shell(
         .on_mouse_down(
             MouseButton::Right,
             cx.listener(move |this, event: &gpui::MouseDownEvent, _window, cx| {
-                let _shown = this.show_blank_context_menu_if_blank(pane_id, event.position);
+                let shown = if let Some(hit) = this.item_at_window_position(pane_id, event.position)
+                {
+                    this.show_item_context_menu(pane_id, hit.path, hit.is_dir, event.position)
+                } else {
+                    this.show_blank_context_menu_if_blank(pane_id, event.position)
+                };
                 cx.stop_propagation();
-                cx.notify();
+                if shown {
+                    cx.notify();
+                }
             }),
         )
         .on_mouse_down(
             MouseButton::Middle,
             cx.listener(move |this, event: &gpui::MouseDownEvent, _window, cx| {
-                if matches!(mode, FileGridMode::Manager)
-                    && this.paste_primary_into_pane_if_blank(pane_id, event.position, cx)
-                {
+                if !matches!(mode, FileGridMode::Manager) {
+                    return;
+                }
+                if let Some(hit) = this.item_at_window_position(pane_id, event.position) {
+                    if hit.is_dir {
+                        this.paste_primary_into_directory(pane_id, hit.path, cx);
+                        cx.stop_propagation();
+                        cx.notify();
+                    }
+                } else if this.paste_primary_into_pane_if_blank(pane_id, event.position, cx) {
                     cx.stop_propagation();
                     cx.notify();
                 }
@@ -1090,7 +1159,6 @@ fn item_mouse_down_opens_directory(is_dir: bool, _mode: FileGridMode, click_coun
 fn item_tile(
     pane_id: PaneId,
     item: VisibleItemSnapshot,
-    mode: FileGridMode,
     text_alignment: ItemTileTextAlignment,
     cx: &mut Context<FikaApp>,
 ) -> Stateful<Div> {
@@ -1103,13 +1171,7 @@ fn item_tile(
         .unwrap_or_else(|| item.name.to_string());
     let item_rect = item.layout.item_rect;
     let visual = item.layout.visual_rect;
-    let path_for_mouse_down = item.path.clone();
-    let path_for_menu = item.path.clone();
     let path_for_drag = item.path.clone();
-    let target_dir_for_drop = item.path.clone();
-    let is_dir_for_click = item.is_dir;
-    let is_dir_for_menu = item.is_dir;
-    let is_dir_for_drop = item.is_dir;
     let selected = item.selected;
     let drop_target = item.drop_target;
     let drag_value = ItemDrag {
@@ -1139,63 +1201,8 @@ fn item_tile(
                 .h(px(visual.height))
                 .rounded_md()
                 .bg(item_tile_background(selected, drop_target))
-                .block_mouse_except_scroll()
                 .cursor_pointer()
                 .hover(move |tile| tile.bg(item_tile_hover_background(selected, drop_target)))
-                .on_scroll_wheel(cx.listener(
-                    move |this, event: &gpui::ScrollWheelEvent, _window, cx| {
-                        handle_file_grid_wheel(this, pane_id, event, cx);
-                    },
-                ))
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |this, event: &gpui::MouseDownEvent, _window, cx| {
-                        if handle_item_mouse_down(
-                            this,
-                            pane_id,
-                            path_for_mouse_down.clone(),
-                            is_dir_for_click,
-                            mode,
-                            event,
-                            cx,
-                        ) {
-                            cx.notify();
-                        }
-                    }),
-                )
-                .on_mouse_down(
-                    MouseButton::Right,
-                    cx.listener(move |this, event: &gpui::MouseDownEvent, _window, cx| {
-                        this.show_item_context_menu(
-                            pane_id,
-                            path_for_menu.clone(),
-                            is_dir_for_menu,
-                            event.position,
-                        );
-                        cx.stop_propagation();
-                        cx.notify();
-                    }),
-                )
-                .on_mouse_down(
-                    MouseButton::Navigate(NavigationDirection::Back),
-                    cx.listener(move |this, _event: &gpui::MouseDownEvent, _window, cx| {
-                        handle_pane_navigation_mouse_down(this, pane_id, NavigationDirection::Back);
-                        cx.stop_propagation();
-                        cx.notify();
-                    }),
-                )
-                .on_mouse_down(
-                    MouseButton::Navigate(NavigationDirection::Forward),
-                    cx.listener(move |this, _event: &gpui::MouseDownEvent, _window, cx| {
-                        handle_pane_navigation_mouse_down(
-                            this,
-                            pane_id,
-                            NavigationDirection::Forward,
-                        );
-                        cx.stop_propagation();
-                        cx.notify();
-                    }),
-                )
                 .on_drag(drag_value, move |drag, cursor_offset, _, cx| {
                     let _ = app.update(cx, |this, _cx| {
                         this.begin_item_drag(drag.payload());
@@ -1213,35 +1220,6 @@ fn item_tile(
                         content_origin_x,
                         content_origin_y,
                     })
-                })
-                .on_drop::<ItemDrag>(cx.listener(move |this, drag: &ItemDrag, window, cx| {
-                    handle_file_grid_item_drop(this, pane_id, drag, window, cx);
-                }))
-                .on_drop::<ExternalPaths>(cx.listener(
-                    move |this, external_paths: &ExternalPaths, window, cx| {
-                        handle_file_grid_external_drop(this, pane_id, external_paths, window, cx);
-                    },
-                ))
-                .on_drop::<PlaceDrag>(cx.listener(move |this, drag: &PlaceDrag, window, cx| {
-                    handle_file_grid_place_drop(this, pane_id, drag, window, cx);
-                }))
-                .when(is_dir_for_drop, directory_drag_over_styles)
-                .when(is_dir_for_drop, |tile| {
-                    let target_dir_for_primary_paste = target_dir_for_drop.clone();
-                    tile.on_mouse_down(
-                        MouseButton::Middle,
-                        cx.listener(move |this, _event: &gpui::MouseDownEvent, _window, cx| {
-                            if matches!(mode, FileGridMode::Manager) {
-                                this.paste_primary_into_directory(
-                                    pane_id,
-                                    target_dir_for_primary_paste.clone(),
-                                    cx,
-                                );
-                                cx.stop_propagation();
-                                cx.notify();
-                            }
-                        }),
-                    )
                 })
                 .child(icon_view(&item, item.layout))
                 .child(text_view(
