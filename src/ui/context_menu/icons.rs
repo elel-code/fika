@@ -183,6 +183,13 @@ fn context_menu_theme_icon_candidates(icon: &ContextMenuIcon) -> (String, Vec<St
                 .map(str::to_string)
                 .collect(),
         ),
+        ContextMenuIcon::Administrator => (
+            "context-administrator".to_string(),
+            ["dialog-password", "security-high", "changes-prevent"]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+        ),
     }
 }
 
@@ -290,6 +297,7 @@ fn context_menu_icon_style(icon: &ContextMenuIcon, enabled: bool) -> (&'static s
         ContextMenuIcon::Select => ("A", 0x1f4fbf, 0xeaf1ff),
         ContextMenuIcon::Refresh => ("R", 0x0f766e, 0xe6fffb),
         ContextMenuIcon::Place => ("P", 0x0f766e, 0xe6fffb),
+        ContextMenuIcon::Administrator => ("#", 0x6d28d9, 0xf2edff),
     };
     if enabled {
         (marker, fg, bg)

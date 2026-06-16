@@ -43,7 +43,7 @@ enum ServiceMode {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) enum PrivilegedCommand {
+pub enum PrivilegedCommand {
     CreateFolder {
         parent: PathBuf,
         name: String,
@@ -67,10 +67,10 @@ pub(crate) enum PrivilegedCommand {
 }
 
 #[derive(Debug)]
-pub(crate) struct PrivilegedOperationResult {
-    pub(crate) label: String,
-    pub(crate) affected_dirs: Vec<PathBuf>,
-    pub(crate) result: Result<String, String>,
+pub struct PrivilegedOperationResult {
+    pub label: String,
+    pub affected_dirs: Vec<PathBuf>,
+    pub result: Result<String, String>,
 }
 
 #[derive(Clone, Debug)]
@@ -82,7 +82,7 @@ pub(crate) struct ExternalEditSession {
 }
 
 impl PrivilegedCommand {
-    pub(crate) fn label(&self) -> &'static str {
+    pub fn label(&self) -> &'static str {
         match self {
             Self::CreateFolder { .. } => "Create folder",
             Self::CreateFile { .. } => "Create file",
@@ -97,7 +97,7 @@ impl PrivilegedCommand {
         }
     }
 
-    pub(crate) fn summary(&self) -> String {
+    pub fn summary(&self) -> String {
         match self {
             Self::CreateFolder { parent, name } => {
                 format!("Create '{name}' in {}", parent.display())
@@ -128,7 +128,7 @@ impl PrivilegedCommand {
         }
     }
 
-    pub(crate) fn affected_dirs(&self) -> Vec<PathBuf> {
+    pub fn affected_dirs(&self) -> Vec<PathBuf> {
         let mut dirs = Vec::new();
         match self {
             Self::CreateFolder { parent, .. } | Self::CreateFile { parent, .. } => {
@@ -158,7 +158,7 @@ impl PrivilegedCommand {
         dirs
     }
 
-    fn validate_local_paths(&self) -> Result<(), String> {
+    pub fn validate_local_paths(&self) -> Result<(), String> {
         match self {
             Self::CreateFolder { parent, .. } | Self::CreateFile { parent, .. } => {
                 ensure_privileged_local_path(parent)
@@ -243,7 +243,7 @@ pub(crate) fn is_permission_error(error: &str) -> bool {
         || error.contains("os error 1")
 }
 
-pub(crate) async fn run_via_dbus(command: PrivilegedCommand) -> PrivilegedOperationResult {
+pub async fn run_via_dbus(command: PrivilegedCommand) -> PrivilegedOperationResult {
     let label = command.label().to_string();
     let affected_dirs = command.affected_dirs();
     let result = match command.validate_local_paths() {

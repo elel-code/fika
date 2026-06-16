@@ -71,6 +71,7 @@ pub enum Operation {
     External {
         pane_id: PaneId,
         title: String,
+        detail: Option<String>,
         cancellable: bool,
     },
 }
@@ -120,6 +121,13 @@ impl Operation {
             Self::Transfer { label, .. } => label.clone(),
             Self::PasteText { .. } => "Paste".to_string(),
             _ => self.title(),
+        }
+    }
+
+    pub fn detail(&self) -> Option<&str> {
+        match self {
+            Self::External { detail, .. } => detail.as_deref(),
+            _ => None,
         }
     }
 

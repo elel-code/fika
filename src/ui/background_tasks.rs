@@ -1,7 +1,7 @@
 use crate::FikaApp;
 use fika_core::{OperationId, PaneId};
 use gpui::prelude::*;
-use gpui::{Context, Div, ParentElement, Stateful, Styled, div, px, rgb};
+use gpui::{Context, Div, MouseButton, ParentElement, Stateful, Styled, div, px, rgb, rgba};
 
 pub(crate) type BackgroundTaskId = OperationId;
 
@@ -35,6 +35,13 @@ pub(crate) enum BackgroundTaskState {
     Failed,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct BackgroundTaskDetailDialog {
+    pub(crate) title: String,
+    pub(crate) detail: String,
+    pub(crate) state: Option<BackgroundTaskState>,
+}
+
 pub(crate) fn background_tasks_panel(
     snapshot: BackgroundTasksSnapshot,
     cx: &mut Context<FikaApp>,
@@ -64,7 +71,13 @@ pub(crate) fn background_tasks_panel(
         .p_2()
         .border_t_1()
         .border_color(rgb(0xd5d9df))
-        .child(summary_header(title, task_id, cx))
+        .child(summary_header(
+            title.clone(),
+            detail.clone(),
+            None,
+            task_id,
+            cx,
+        ))
         .when(has_active, |panel| panel.child(progress_bar(percent)))
         .child(task_detail_text(detail))
         .child(
@@ -117,8 +130,144 @@ pub(crate) fn background_tasks_panel(
         .when(expanded, |panel| {
             panel
                 .children(active.into_iter().map(|task| active_row(task, cx)))
-                .children(history.into_iter().map(history_row))
+                .children(history.into_iter().map(|task| history_row(task, cx)))
         })
+}
+
+pub(crate) fn background_task_detail_dialog_overlay(
+    dialog: BackgroundTaskDetailDialog,
+    cx: &mut Context<FikaApp>,
+) -> Stateful<Div> {
+    let state = dialog.state;
+    let lines = dialog
+        .detail
+        .lines()
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    div()
+        .id("background-task-detail-layer")
+        .absolute()
+        .inset_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .occlude()
+        .bg(rgba(0x00000066))
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|this, _event: &gpui::MouseDownEvent, _window, cx| {
+                this.dismiss_background_task_detail_dialog();
+                cx.stop_propagation();
+                cx.notify();
+            }),
+        )
+        .on_mouse_down(MouseButton::Right, |_event, _window, cx| {
+            cx.stop_propagation();
+        })
+        .on_scroll_wheel(|_event, _window, cx| {
+            cx.stop_propagation();
+        })
+        .child(
+            div()
+                .id("background-task-detail-dialog")
+                .w(px(560.0))
+                .max_w_full()
+                .max_h(px(520.0))
+                .flex()
+                .flex_col()
+                .rounded_md()
+                .border_1()
+                .border_color(rgb(0xc8ced6))
+                .bg(rgb(0xffffff))
+                .shadow_md()
+                .occlude()
+                .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
+                    cx.stop_propagation();
+                })
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .px_4()
+                        .py_3()
+                        .border_b_1()
+                        .border_color(rgb(0xd5d9df))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .text_color(rgb(0x1f2328))
+                                .child(dialog.title),
+                        )
+                        .when_some(state, |row, state| {
+                            row.child(
+                                div()
+                                    .text_xs()
+                                    .text_color(match state {
+                                        BackgroundTaskState::Complete => rgb(0x276749),
+                                        BackgroundTaskState::Failed => rgb(0x9b1c1c),
+                                    })
+                                    .child(match state {
+                                        BackgroundTaskState::Complete => "Complete",
+                                        BackgroundTaskState::Failed => "Failed",
+                                    }),
+                            )
+                        }),
+                )
+                .child(
+                    div()
+                        .id("background-task-detail-body")
+                        .flex_1()
+                        .min_h_0()
+                        .overflow_y_scroll()
+                        .px_4()
+                        .py_3()
+                        .text_sm()
+                        .text_color(rgb(0x374151))
+                        .children(lines.into_iter().map(|line| {
+                            div().min_w_0().pb_1().child(if line.is_empty() {
+                                " ".to_string()
+                            } else {
+                                line
+                            })
+                        })),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .justify_end()
+                        .px_4()
+                        .py_3()
+                        .border_t_1()
+                        .border_color(rgb(0xd5d9df))
+                        .child(
+                            div()
+                                .id("background-task-detail-close")
+                                .px_3()
+                                .py_1()
+                                .rounded_md()
+                                .border_1()
+                                .border_color(rgb(0xc8ced6))
+                                .text_sm()
+                                .cursor_pointer()
+                                .hover(|button| button.bg(rgb(0xeaf1ff)))
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(
+                                        |this, _event: &gpui::MouseDownEvent, _window, cx| {
+                                            this.dismiss_background_task_detail_dialog();
+                                            cx.stop_propagation();
+                                            cx.notify();
+                                        },
+                                    ),
+                                )
+                                .child("Close"),
+                        ),
+                ),
+        )
 }
 
 fn background_tasks_summary(
@@ -157,9 +306,13 @@ fn background_task_history_summary_labels(
 
 fn summary_header(
     title: String,
+    detail: String,
+    state: Option<BackgroundTaskState>,
     task_id: Option<BackgroundTaskId>,
     cx: &mut Context<FikaApp>,
 ) -> Div {
+    let detail_title = title.clone();
+    let detail_body = detail.clone();
     div()
         .flex()
         .items_center()
@@ -174,6 +327,32 @@ fn summary_header(
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(rgb(0x24292f))
                 .child(title),
+        )
+        .child(
+            div()
+                .id("background-task-view")
+                .flex_none()
+                .px_2()
+                .py_1()
+                .rounded_md()
+                .text_xs()
+                .text_color(rgb(0x2f6fed))
+                .hover(|button| button.bg(rgb(0xeaf1ff)))
+                .cursor_pointer()
+                .on_click(
+                    cx.listener(move |this, event: &gpui::ClickEvent, _window, cx| {
+                        if event.standard_click() {
+                            this.show_background_task_detail_dialog(
+                                detail_title.clone(),
+                                detail_body.clone(),
+                                state,
+                            );
+                            cx.stop_propagation();
+                            cx.notify();
+                        }
+                    }),
+                )
+                .child("View"),
         )
         .when_some(task_id, |row, task_id| {
             row.child(
@@ -233,11 +412,12 @@ fn task_detail_text(text: String) -> Div {
         .child(text)
 }
 
-fn history_row(snapshot: BackgroundTaskHistorySnapshot) -> Div {
+fn history_row(snapshot: BackgroundTaskHistorySnapshot, cx: &mut Context<FikaApp>) -> Div {
     let color = match snapshot.state {
         BackgroundTaskState::Complete => rgb(0x276749),
         BackgroundTaskState::Failed => rgb(0x9b1c1c),
     };
+    let state = snapshot.state;
     div()
         .flex()
         .flex_col()
@@ -247,12 +427,14 @@ fn history_row(snapshot: BackgroundTaskHistorySnapshot) -> Div {
         .border_t_1()
         .border_color(rgb(0xe2e6ec))
         .child(
-            div()
-                .min_w_0()
-                .truncate()
-                .text_xs()
-                .text_color(color)
-                .child(snapshot.title),
+            summary_header(
+                snapshot.title,
+                snapshot.detail.clone(),
+                Some(state),
+                None,
+                cx,
+            )
+            .text_color(color),
         )
         .child(task_detail_text(snapshot.detail))
 }
@@ -280,7 +462,35 @@ fn active_row(snapshot: BackgroundTaskSnapshot, cx: &mut Context<FikaApp>) -> Di
                         .truncate()
                         .text_xs()
                         .text_color(rgb(0x2f6fed))
-                        .child(snapshot.title),
+                        .child(snapshot.title.clone()),
+                )
+                .child(
+                    div()
+                        .id(format!("background-task-view-{}", snapshot.id.0))
+                        .flex_none()
+                        .px_2()
+                        .py_1()
+                        .rounded_md()
+                        .text_xs()
+                        .text_color(rgb(0x2f6fed))
+                        .hover(|button| button.bg(rgb(0xeaf1ff)))
+                        .cursor_pointer()
+                        .on_click({
+                            let title = snapshot.title.clone();
+                            let detail = snapshot.detail.clone();
+                            cx.listener(move |this, event: &gpui::ClickEvent, _window, cx| {
+                                if event.standard_click() {
+                                    this.show_background_task_detail_dialog(
+                                        title.clone(),
+                                        detail.clone(),
+                                        None,
+                                    );
+                                    cx.stop_propagation();
+                                    cx.notify();
+                                }
+                            })
+                        })
+                        .child("View"),
                 )
                 .when_some(stop_id, |row, task_id| {
                     row.child(

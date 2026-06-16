@@ -6,11 +6,12 @@ use fika_core::Operation;
 #[cfg(test)]
 use fika_core::SystemdLaunchResult;
 use fika_core::{
-    CreateItemResult, FileTransferMode, RenameItemResult, TransferTaskResult, TrashSelectionResult,
-    TrashViewOperation, TrashViewOperationResult, UndoTaskResult, action_status,
-    create_item_result_async, created_item_label, rename_item_result_async, run_operation_task,
-    run_registered_operation, transfer_paths_result_async, trash_selection_result_async,
-    trash_view_operation_result_async, undo_record_result_async,
+    CreateItemResult, FileTransferMode, PrivilegedCommand, PrivilegedOperationResult,
+    RenameItemResult, TransferTaskResult, TrashSelectionResult, TrashViewOperation,
+    TrashViewOperationResult, UndoTaskResult, action_status, create_item_result_async,
+    created_item_label, default_created_item_name, rename_item_result_async, run_operation_task,
+    run_registered_operation, run_via_dbus, transfer_paths_result_async,
+    trash_selection_result_async, trash_view_operation_result_async, undo_record_result_async,
 };
 use fika_core::{
     CreateUndoItem, CreatedItemKind, DeviceInfo, DeviceMonitorMessage, DevicePlaceOperation,
@@ -51,8 +52,9 @@ use ui::application_chooser::{
     application_chooser_overlay, dedup_application_chooser_applications,
 };
 use ui::background_tasks::{
-    BackgroundTaskHistorySnapshot, BackgroundTaskId, BackgroundTaskSnapshot, BackgroundTaskState,
-    BackgroundTasksSnapshot,
+    BackgroundTaskDetailDialog, BackgroundTaskHistorySnapshot, BackgroundTaskId,
+    BackgroundTaskSnapshot, BackgroundTaskState, BackgroundTasksSnapshot,
+    background_task_detail_dialog_overlay,
 };
 use ui::chooser::{ChooserState, selected_choice_rows};
 use ui::clipboard::{
@@ -286,6 +288,67 @@ struct BackgroundTaskHistoryRecord {
     state: BackgroundTaskState,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PrivilegedTaskResult {
+    pane_id: PaneId,
+    title: String,
+    success_count: usize,
+    failure_count: usize,
+    affected_dirs: Vec<PathBuf>,
+    clear_clipboard: bool,
+    detail: String,
+}
+
+async fn privileged_task_result_for_commands(
+    pane_id: PaneId,
+    title: String,
+    commands: Vec<PrivilegedCommand>,
+    clear_clipboard: bool,
+) -> PrivilegedTaskResult {
+    let mut success_count = 0;
+    let mut failure_count = 0;
+    let mut affected_dirs = Vec::new();
+    let mut detail_lines = vec![format!("{title}")];
+
+    for command in commands {
+        let summary = command.summary();
+        let PrivilegedOperationResult {
+            affected_dirs: result_dirs,
+            result,
+            ..
+        } = run_via_dbus(command).await;
+        match result {
+            Ok(message) => {
+                success_count += 1;
+                detail_lines.push(format!("OK: {summary}"));
+                if !message.trim().is_empty() {
+                    detail_lines.push(format!("  {message}"));
+                }
+                for dir in result_dirs {
+                    if !affected_dirs.iter().any(|existing| existing == &dir) {
+                        affected_dirs.push(dir);
+                    }
+                }
+            }
+            Err(error) => {
+                failure_count += 1;
+                detail_lines.push(format!("Failed: {summary}"));
+                detail_lines.push(format!("  {error}"));
+            }
+        }
+    }
+
+    PrivilegedTaskResult {
+        pane_id,
+        title,
+        success_count,
+        failure_count,
+        affected_dirs,
+        clear_clipboard,
+        detail: detail_lines.join("\n"),
+    }
+}
+
 const RUBBER_BAND_START_DRAG_DISTANCE: f32 = 6.0;
 
 pub(crate) struct FikaApp {
@@ -344,6 +407,7 @@ pub(crate) struct FikaApp {
     pane_statuses: HashMap<PaneId, String>,
     background_tasks_expanded: bool,
     background_task_history: VecDeque<BackgroundTaskHistoryRecord>,
+    background_task_detail_dialog: Option<BackgroundTaskDetailDialog>,
 }
 
 impl FikaApp {
@@ -424,6 +488,7 @@ impl FikaApp {
             pane_statuses: HashMap::new(),
             background_tasks_expanded: false,
             background_task_history: VecDeque::new(),
+            background_task_detail_dialog: None,
         };
         app.replace_removable_device_places(&initial_devices);
         app._keystroke_subscription = Some(cx.observe_keystrokes(|this, event, _window, cx| {
@@ -1305,6 +1370,21 @@ impl FikaApp {
         self.begin_operation(Operation::External {
             pane_id,
             title: message.into(),
+            detail: None,
+            cancellable: false,
+        })
+    }
+
+    fn begin_privileged_operation(
+        &mut self,
+        pane_id: PaneId,
+        title: impl Into<String>,
+        detail: impl Into<String>,
+    ) -> Option<BackgroundTaskId> {
+        self.begin_operation(Operation::External {
+            pane_id,
+            title: title.into(),
+            detail: Some(detail.into()),
             cancellable: false,
         })
     }
@@ -1361,6 +1441,7 @@ impl FikaApp {
         };
         let detail = match percent {
             Some(percent) => format!("{percent}% complete"),
+            None if let Some(detail) = operation.operation.detail() => detail.to_string(),
             None if progress.is_some() => "Working".to_string(),
             None if operation.operation.cancellable() => "Preparing".to_string(),
             None => "Working".to_string(),
@@ -1382,8 +1463,119 @@ impl FikaApp {
         message: impl Into<String>,
     ) {
         let message = message.into();
-        self.record_background_task_result(task_id, &message);
+        self.record_background_task_result(task_id, &message, &message);
         self.set_pane_status(pane_id, message);
+    }
+
+    fn finish_pane_operation_with_detail(
+        &mut self,
+        task_id: BackgroundTaskId,
+        pane_id: PaneId,
+        message: impl Into<String>,
+        detail: impl Into<String>,
+    ) {
+        let message = message.into();
+        let detail = detail.into();
+        self.record_background_task_result(task_id, &message, &detail);
+        self.set_pane_status(pane_id, message);
+    }
+
+    fn finish_privileged_task(&mut self, task_id: BackgroundTaskId, result: PrivilegedTaskResult) {
+        if !result.affected_dirs.is_empty() {
+            self.refresh_affected_dirs(&result.affected_dirs);
+        }
+        if result.clear_clipboard && result.failure_count == 0 && result.success_count > 0 {
+            self.clipboard = None;
+            self.rubber_band_selection_panes.remove(&result.pane_id);
+            let _ = self.panes.clear_selection(result.pane_id);
+        }
+        let status = match (result.success_count, result.failure_count) {
+            (0, 0) => format!("{}: no changes", result.title),
+            (_, 0) => format!("{}: {} operation(s)", result.title, result.success_count),
+            (0, _) => format!(
+                "{} failed for {} operation(s)",
+                result.title, result.failure_count
+            ),
+            (_, _) => format!(
+                "{}: {} operation(s), {} failed",
+                result.title, result.success_count, result.failure_count
+            ),
+        };
+        self.finish_pane_operation_with_detail(task_id, result.pane_id, status, result.detail);
+    }
+
+    fn run_privileged_commands(
+        &mut self,
+        pane_id: PaneId,
+        title: impl Into<String>,
+        commands: Vec<PrivilegedCommand>,
+        clear_clipboard: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if commands.is_empty() {
+            self.set_pane_status(pane_id, "No administrator operation to run");
+            return;
+        }
+        for command in &commands {
+            if let Err(err) = command.validate_local_paths() {
+                self.set_pane_status(pane_id, err);
+                return;
+            }
+        }
+
+        let title = title.into();
+        let summaries = commands
+            .iter()
+            .map(PrivilegedCommand::summary)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let detail = format!("Waiting for administrator authorization.\n{summaries}");
+        let Some(task_id) = self.begin_privileged_operation(pane_id, title.clone(), detail) else {
+            return;
+        };
+        self.set_pane_status(
+            pane_id,
+            format!("Waiting for administrator authorization: {title}"),
+        );
+
+        cx.spawn(
+            move |this: gpui::WeakEntity<FikaApp>, cx: &mut gpui::AsyncApp| {
+                let mut cx = cx.clone();
+                async move {
+                    let fallback_title = title.clone();
+                    let result =
+                        match run_registered_operation(task_id, move |_controller| async move {
+                            privileged_task_result_for_commands(
+                                pane_id,
+                                title,
+                                commands,
+                                clear_clipboard,
+                            )
+                            .await
+                        })
+                        .await
+                        {
+                            Ok(result) => result,
+                            Err(err) => PrivilegedTaskResult {
+                                pane_id,
+                                title: fallback_title.clone(),
+                                success_count: 0,
+                                failure_count: 1,
+                                affected_dirs: Vec::new(),
+                                clear_clipboard: false,
+                                detail: format!(
+                                    "{fallback_title}\nCould not start administrator task: {err}"
+                                ),
+                            },
+                        };
+                    let _ = this.update(&mut cx, |app, cx| {
+                        app.finish_privileged_task(task_id, result);
+                        cx.notify();
+                    });
+                }
+            },
+        )
+        .detach();
     }
 
     fn background_tasks_snapshot(&self, now: Instant) -> Option<BackgroundTasksSnapshot> {
@@ -1414,7 +1606,12 @@ impl FikaApp {
             .collect()
     }
 
-    fn record_background_task_result(&mut self, task_id: BackgroundTaskId, message: &str) {
+    fn record_background_task_result(
+        &mut self,
+        task_id: BackgroundTaskId,
+        message: &str,
+        detail: &str,
+    ) {
         let title = OperationRuntime::shared()
             .ok()
             .and_then(|runtime| runtime.complete_operation(task_id))
@@ -1423,7 +1620,7 @@ impl FikaApp {
         self.background_task_history
             .push_front(BackgroundTaskHistoryRecord {
                 title,
-                detail: message.to_string(),
+                detail: detail.to_string(),
                 state: background_task_state_for_message(message),
             });
         while self.background_task_history.len() > BACKGROUND_TASK_HISTORY_LIMIT {
@@ -1440,6 +1637,23 @@ impl FikaApp {
         if self.operation_snapshots().is_empty() {
             self.background_tasks_expanded = false;
         }
+    }
+
+    pub(crate) fn show_background_task_detail_dialog(
+        &mut self,
+        title: String,
+        detail: String,
+        state: Option<BackgroundTaskState>,
+    ) {
+        self.background_task_detail_dialog = Some(BackgroundTaskDetailDialog {
+            title,
+            detail,
+            state,
+        });
+    }
+
+    pub(crate) fn dismiss_background_task_detail_dialog(&mut self) {
+        self.background_task_detail_dialog = None;
     }
 
     fn has_active_background_task_for_pane(&self, pane_id: PaneId) -> bool {
@@ -3972,6 +4186,41 @@ impl FikaApp {
         self.set_pane_status(pane_id, format!("Renaming {name}"));
     }
 
+    fn start_rename_as_administrator_in_pane(&mut self, pane_id: PaneId) {
+        if self.chooser.is_some() {
+            return;
+        }
+        let selected_paths = self.panes.selected_paths(pane_id).unwrap_or_default();
+        let [original_path] = selected_paths.as_slice() else {
+            self.set_pane_status(pane_id, "Select one item to rename as administrator");
+            return;
+        };
+        if is_network_path(original_path) {
+            self.set_pane_status(
+                pane_id,
+                "Remote rename is not available with administrator privileges",
+            );
+            return;
+        }
+        let Some(name) = original_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.is_empty())
+        else {
+            self.set_pane_status(pane_id, "Selected item cannot be renamed");
+            return;
+        };
+
+        self.clear_location_draft_for_pane(pane_id);
+        self.clear_place_draft_for_pane(pane_id);
+        self.rename_draft = Some(RenameDraft::new_privileged(
+            pane_id,
+            original_path.clone(),
+            name.to_string(),
+        ));
+        self.set_pane_status(pane_id, format!("Renaming {name} as administrator"));
+    }
+
     pub(crate) fn set_rename_caret_from_window_position(
         &mut self,
         pane_id: PaneId,
@@ -4181,6 +4430,20 @@ impl FikaApp {
         };
         let pane_id = draft.pane_id;
         let original_path = draft.original_path.clone();
+        if draft.privileged {
+            self.clear_pending_rename_next_for_pane(pane_id);
+            self.run_privileged_commands(
+                pane_id,
+                "Administrator: Rename",
+                vec![PrivilegedCommand::Rename {
+                    path: original_path,
+                    new_name,
+                }],
+                false,
+                cx,
+            );
+            return;
+        }
         let Some(task_id) = self.begin_operation(Operation::Rename {
             pane_id,
             path: original_path.clone(),
@@ -4364,6 +4627,43 @@ impl FikaApp {
         .detach();
     }
 
+    fn create_item_in_directory_as_administrator(
+        &mut self,
+        pane_id: PaneId,
+        parent_dir: PathBuf,
+        kind: CreatedItemKind,
+        cx: &mut Context<Self>,
+    ) {
+        if self.chooser.is_some() {
+            return;
+        }
+        if is_network_path(&parent_dir) {
+            self.set_pane_status(
+                pane_id,
+                "Remote item creation is not available with administrator privileges",
+            );
+            return;
+        }
+        let name = default_created_item_name(kind).to_string();
+        let command = match kind {
+            CreatedItemKind::Folder => PrivilegedCommand::CreateFolder {
+                parent: parent_dir,
+                name,
+            },
+            CreatedItemKind::File => PrivilegedCommand::CreateFile {
+                parent: parent_dir,
+                name,
+            },
+        };
+        self.run_privileged_commands(
+            pane_id,
+            format!("Administrator: Create {}", created_item_label(kind)),
+            vec![command],
+            false,
+            cx,
+        );
+    }
+
     fn finish_create_item(&mut self, task_id: BackgroundTaskId, result: CreateItemResult) {
         match result.result {
             Ok(path) => {
@@ -4527,6 +4827,63 @@ impl FikaApp {
             return;
         };
         self.start_clipboard_transfer(pane_id, target_dir, clipboard, cx);
+    }
+
+    fn paste_into_directory_as_administrator(
+        &mut self,
+        pane_id: PaneId,
+        target_dir: PathBuf,
+        cx: &mut Context<Self>,
+    ) {
+        if self.chooser.is_some() {
+            return;
+        }
+        self.import_system_clipboard(cx);
+        let Some(clipboard) = self.clipboard.clone() else {
+            self.set_pane_status(pane_id, "Nothing to paste as administrator");
+            return;
+        };
+        if clipboard.text.is_some() {
+            self.set_pane_status(
+                pane_id,
+                "Pasting text as administrator is not available yet",
+            );
+            return;
+        }
+        if is_network_path(&target_dir) || clipboard.paths.iter().any(|path| is_network_path(path))
+        {
+            self.set_pane_status(
+                pane_id,
+                "Remote paste is not available with administrator privileges",
+            );
+            return;
+        }
+        if !target_dir.is_dir() {
+            self.set_pane_status(
+                pane_id,
+                format!("Cannot paste into {}", target_dir.display()),
+            );
+            return;
+        }
+        let mode = clipboard.mode.transfer_mode();
+        let operation = mode.operation().to_string();
+        let commands = clipboard
+            .paths
+            .iter()
+            .cloned()
+            .map(|source| PrivilegedCommand::Transfer {
+                operation: operation.clone(),
+                source,
+                target_dir: target_dir.clone(),
+            })
+            .collect::<Vec<_>>();
+        self.run_privileged_commands(
+            pane_id,
+            format!("Administrator: {}", clipboard.action_label()),
+            commands,
+            clipboard.mode == ClipboardMode::Cut,
+            cx,
+        );
     }
 
     fn start_clipboard_transfer(
@@ -5407,6 +5764,33 @@ impl FikaApp {
             },
         )
         .detach();
+    }
+
+    fn trash_selection_as_administrator(&mut self, pane_id: PaneId, cx: &mut Context<Self>) {
+        if self.chooser.is_some() {
+            return;
+        }
+        let selected_paths = self.panes.selected_paths(pane_id).unwrap_or_default();
+        if selected_paths.is_empty() {
+            self.set_pane_status(pane_id, "No selection to trash as administrator");
+            return;
+        }
+        if selected_paths.iter().any(|path| is_network_path(path)) {
+            self.set_pane_status(
+                pane_id,
+                "Remote trash is not available with administrator privileges",
+            );
+            return;
+        }
+        self.run_privileged_commands(
+            pane_id,
+            "Administrator: Move to Trash",
+            vec![PrivilegedCommand::Trash {
+                paths: selected_paths,
+            }],
+            false,
+            cx,
+        );
     }
 
     fn finish_trash_selection(&mut self, task_id: BackgroundTaskId, result: TrashSelectionResult) {
@@ -6568,6 +6952,10 @@ impl FikaApp {
                 self.select_only(menu.pane_id, path);
                 self.start_rename_in_pane(menu.pane_id);
             }
+            (ContextMenuAction::RenameAsAdministrator, ContextMenuTarget::Item { path, .. }) => {
+                self.select_only(menu.pane_id, path);
+                self.start_rename_as_administrator_in_pane(menu.pane_id);
+            }
             (ContextMenuAction::Copy, ContextMenuTarget::Item { .. })
             | (ContextMenuAction::Copy, ContextMenuTarget::Blank { .. }) => {
                 self.store_selection_for_transfer(menu.pane_id, ClipboardMode::Copy, cx)
@@ -6589,6 +6977,10 @@ impl FikaApp {
             (ContextMenuAction::Trash, ContextMenuTarget::Item { .. })
             | (ContextMenuAction::Trash, ContextMenuTarget::Blank { .. }) => {
                 self.trash_selection(menu.pane_id, cx)
+            }
+            (ContextMenuAction::TrashAsAdministrator, ContextMenuTarget::Item { .. })
+            | (ContextMenuAction::TrashAsAdministrator, ContextMenuTarget::Blank { .. }) => {
+                self.trash_selection_as_administrator(menu.pane_id, cx)
             }
             (ContextMenuAction::RestoreFromTrash, ContextMenuTarget::Item { .. }) => {
                 self.restore_trash_selection(menu.pane_id, cx)
@@ -6620,6 +7012,28 @@ impl FikaApp {
                     path, is_dir: true, ..
                 },
             ) => self.create_item_in_directory(menu.pane_id, path, CreatedItemKind::File, cx),
+            (
+                ContextMenuAction::CreateFolderAsAdministrator,
+                ContextMenuTarget::Item {
+                    path, is_dir: true, ..
+                },
+            ) => self.create_item_in_directory_as_administrator(
+                menu.pane_id,
+                path,
+                CreatedItemKind::Folder,
+                cx,
+            ),
+            (
+                ContextMenuAction::CreateFileAsAdministrator,
+                ContextMenuTarget::Item {
+                    path, is_dir: true, ..
+                },
+            ) => self.create_item_in_directory_as_administrator(
+                menu.pane_id,
+                path,
+                CreatedItemKind::File,
+                cx,
+            ),
             (ContextMenuAction::CreateFolder, ContextMenuTarget::Blank { .. }) => {
                 self.create_item_in_pane(menu.pane_id, CreatedItemKind::Folder, cx)
             }
@@ -6627,10 +7041,34 @@ impl FikaApp {
                 self.create_item_in_pane(menu.pane_id, CreatedItemKind::File, cx)
             }
             (
-                ContextMenuAction::CreateFolder | ContextMenuAction::CreateFile,
+                ContextMenuAction::CreateFolderAsAdministrator,
+                ContextMenuTarget::Blank { path, .. },
+            ) => self.create_item_in_directory_as_administrator(
+                menu.pane_id,
+                path,
+                CreatedItemKind::Folder,
+                cx,
+            ),
+            (
+                ContextMenuAction::CreateFileAsAdministrator,
+                ContextMenuTarget::Blank { path, .. },
+            ) => self.create_item_in_directory_as_administrator(
+                menu.pane_id,
+                path,
+                CreatedItemKind::File,
+                cx,
+            ),
+            (
+                ContextMenuAction::CreateFolder
+                | ContextMenuAction::CreateFile
+                | ContextMenuAction::CreateFolderAsAdministrator
+                | ContextMenuAction::CreateFileAsAdministrator,
                 ContextMenuTarget::Place { .. },
             )
-            | (ContextMenuAction::Paste, ContextMenuTarget::Place { .. })
+            | (
+                ContextMenuAction::Paste | ContextMenuAction::PasteAsAdministrator,
+                ContextMenuTarget::Place { .. },
+            )
             | (ContextMenuAction::SelectAll, ContextMenuTarget::Place { .. })
             | (ContextMenuAction::Refresh, ContextMenuTarget::Place { .. }) => {}
             (
@@ -6639,6 +7077,15 @@ impl FikaApp {
                     path, is_dir: true, ..
                 },
             ) => self.paste_into_directory(menu.pane_id, path, cx),
+            (
+                ContextMenuAction::PasteAsAdministrator,
+                ContextMenuTarget::Item {
+                    path, is_dir: true, ..
+                },
+            ) => self.paste_into_directory_as_administrator(menu.pane_id, path, cx),
+            (ContextMenuAction::PasteAsAdministrator, ContextMenuTarget::Blank { path, .. }) => {
+                self.paste_into_directory_as_administrator(menu.pane_id, path, cx)
+            }
             (ContextMenuAction::Paste, _) => self.paste_into_pane(menu.pane_id, cx),
             (ContextMenuAction::SelectAll, _) => self.select_all(menu.pane_id),
             (ContextMenuAction::Refresh, _) => self.reload_pane(menu.pane_id),
@@ -6692,6 +7139,8 @@ impl FikaApp {
                 ContextMenuAction::CreateNewSubmenu
                 | ContextMenuAction::CreateFolder
                 | ContextMenuAction::CreateFile
+                | ContextMenuAction::CreateFolderAsAdministrator
+                | ContextMenuAction::CreateFileAsAdministrator
                 | ContextMenuAction::SortBySubmenu
                 | ContextMenuAction::OpenWithSubmenu
                 | ContextMenuAction::ServiceMenuSubmenu
@@ -6704,10 +7153,13 @@ impl FikaApp {
             | (ContextMenuAction::Copy, ContextMenuTarget::Place { .. })
             | (ContextMenuAction::Cut, ContextMenuTarget::Place { .. })
             | (ContextMenuAction::Trash, ContextMenuTarget::Place { .. })
+            | (ContextMenuAction::TrashAsAdministrator, ContextMenuTarget::Place { .. })
             | (ContextMenuAction::Copy, ContextMenuTarget::PlacesBlank { .. })
             | (ContextMenuAction::Cut, ContextMenuTarget::PlacesBlank { .. })
             | (ContextMenuAction::Trash, ContextMenuTarget::PlacesBlank { .. })
+            | (ContextMenuAction::TrashAsAdministrator, ContextMenuTarget::PlacesBlank { .. })
             | (ContextMenuAction::Rename, ContextMenuTarget::PlacesBlank { .. })
+            | (ContextMenuAction::RenameAsAdministrator, ContextMenuTarget::PlacesBlank { .. })
             | (ContextMenuAction::Open, ContextMenuTarget::PlacesBlank { .. })
             | (ContextMenuAction::OpenInNewPane, ContextMenuTarget::PlacesBlank { .. })
             | (ContextMenuAction::OpenInNewWindow, ContextMenuTarget::PlacesBlank { .. })
@@ -6715,7 +7167,9 @@ impl FikaApp {
             | (ContextMenuAction::Copy, ContextMenuTarget::PlaceSection { .. })
             | (ContextMenuAction::Cut, ContextMenuTarget::PlaceSection { .. })
             | (ContextMenuAction::Trash, ContextMenuTarget::PlaceSection { .. })
+            | (ContextMenuAction::TrashAsAdministrator, ContextMenuTarget::PlaceSection { .. })
             | (ContextMenuAction::Rename, ContextMenuTarget::PlaceSection { .. })
+            | (ContextMenuAction::RenameAsAdministrator, ContextMenuTarget::PlaceSection { .. })
             | (ContextMenuAction::Open, ContextMenuTarget::PlaceSection { .. })
             | (ContextMenuAction::OpenInNewPane, ContextMenuTarget::PlaceSection { .. })
             | (ContextMenuAction::OpenInNewWindow, ContextMenuTarget::PlaceSection { .. })
@@ -6730,6 +7184,9 @@ impl FikaApp {
             | (ContextMenuAction::ShowHiddenPlaces, _)
             | (ContextMenuAction::Rename, ContextMenuTarget::Blank { .. })
             | (ContextMenuAction::Rename, ContextMenuTarget::Place { .. })
+            | (ContextMenuAction::RenameAsAdministrator, ContextMenuTarget::Blank { .. })
+            | (ContextMenuAction::RenameAsAdministrator, ContextMenuTarget::Place { .. })
+            | (ContextMenuAction::PasteAsAdministrator, _)
             | (ContextMenuAction::RestoreFromTrash, _)
             | (ContextMenuAction::DeletePermanently, _)
             | (ContextMenuAction::EmptyTrash, _)
@@ -7053,6 +7510,12 @@ impl FikaApp {
     }
 
     fn handle_keystroke(&mut self, event: &gpui::KeystrokeEvent, cx: &mut Context<Self>) -> bool {
+        if event.keystroke.key.eq_ignore_ascii_case("escape")
+            && self.background_task_detail_dialog.is_some()
+        {
+            self.dismiss_background_task_detail_dialog();
+            return true;
+        }
         if event.keystroke.key.eq_ignore_ascii_case("escape") && self.properties_dialog.is_some() {
             self.dismiss_properties_dialog();
             return true;
@@ -7527,6 +7990,7 @@ impl Render for FikaApp {
         let application_chooser = self.application_chooser.clone();
         let place_draft = self.place_draft.clone();
         let network_auth_draft = self.network_auth_draft.clone();
+        let background_task_detail_dialog = self.background_task_detail_dialog.clone();
         let clipboard_available = self.clipboard.is_some();
         let context_menu_icons = context_menu
             .as_ref()
@@ -7728,6 +8192,9 @@ impl Render for FikaApp {
             .when_some(network_auth_draft, |root, draft| {
                 root.child(network_auth_overlay(draft, cx))
             })
+            .when_some(background_task_detail_dialog, |root, dialog| {
+                root.child(background_task_detail_dialog_overlay(dialog, cx))
+            })
     }
 }
 
@@ -7854,9 +8321,23 @@ mod tests {
             Some(false)
         );
         assert_eq!(
+            without_clipboard
+                .iter()
+                .find(|item| item.action == ContextMenuAction::PasteAsAdministrator)
+                .map(|item| item.enabled),
+            Some(false)
+        );
+        assert_eq!(
             with_clipboard
                 .iter()
                 .find(|item| item.action == ContextMenuAction::Paste)
+                .map(|item| item.enabled),
+            Some(true)
+        );
+        assert_eq!(
+            with_clipboard
+                .iter()
+                .find(|item| item.action == ContextMenuAction::PasteAsAdministrator)
                 .map(|item| item.enabled),
             Some(true)
         );
@@ -8060,6 +8541,7 @@ mod tests {
             vec![
                 (ContextMenuAction::CreateNewSubmenu, false),
                 (ContextMenuAction::Paste, true),
+                (ContextMenuAction::PasteAsAdministrator, false),
                 (ContextMenuAction::OpenWithSubmenu, false),
                 (ContextMenuAction::SortBySubmenu, true),
                 (ContextMenuAction::ViewModeSubmenu, false),
@@ -8120,6 +8602,16 @@ mod tests {
                     ContextMenuAction::CreateFile,
                     "Text File".to_string(),
                     Some(ContextMenuIcon::NewFile),
+                ),
+                (
+                    ContextMenuAction::CreateFolderAsAdministrator,
+                    "Folder as Administrator".to_string(),
+                    Some(ContextMenuIcon::Administrator),
+                ),
+                (
+                    ContextMenuAction::CreateFileAsAdministrator,
+                    "Text File as Administrator".to_string(),
+                    Some(ContextMenuIcon::Administrator),
                 ),
             ]
         );
@@ -8431,6 +8923,30 @@ mod tests {
             None
         );
         assert!(app.context_submenu_hide_generation > generation);
+    }
+
+    #[test]
+    fn context_menu_actions_do_not_offer_administrator_actions_for_network_items() {
+        let admin_actions = [
+            ContextMenuAction::RenameAsAdministrator,
+            ContextMenuAction::TrashAsAdministrator,
+            ContextMenuAction::CreateFolderAsAdministrator,
+            ContextMenuAction::CreateFileAsAdministrator,
+            ContextMenuAction::PasteAsAdministrator,
+        ];
+
+        for target in [
+            context_item_target("smb://server/share/folder", true, 1),
+            context_item_target("smb://server/share/readme.txt", false, 1),
+            context_item_target("smb://server/share/readme.txt", false, 2),
+        ] {
+            let actions = context_menu_actions(&target, true);
+            assert!(
+                admin_actions
+                    .iter()
+                    .all(|admin_action| !actions.iter().any(|item| item.action == *admin_action))
+            );
+        }
     }
 
     #[test]
@@ -8997,6 +9513,7 @@ mod tests {
                     None
                 ),
                 (ContextMenuAction::Trash, None),
+                (ContextMenuAction::TrashAsAdministrator, None),
                 (ContextMenuAction::Properties, None),
             ]
         );
@@ -9187,9 +9704,12 @@ mod tests {
                 (ContextMenuAction::Copy, false),
                 (ContextMenuAction::CopyLocation, false),
                 (ContextMenuAction::Paste, false),
+                (ContextMenuAction::PasteAsAdministrator, false),
                 (ContextMenuAction::CompressWithArk, true),
                 (ContextMenuAction::Rename, true),
+                (ContextMenuAction::RenameAsAdministrator, false),
                 (ContextMenuAction::Trash, false),
+                (ContextMenuAction::TrashAsAdministrator, false),
                 (ContextMenuAction::Properties, true),
             ]
         );
@@ -9348,10 +9868,22 @@ mod tests {
                 .map(|item| item.enabled),
             Some(true)
         );
+        assert_eq!(
+            context_menu_actions(&dir_target, true)
+                .iter()
+                .find(|item| item.action == ContextMenuAction::PasteAsAdministrator)
+                .map(|item| item.enabled),
+            Some(true)
+        );
         assert!(
             !context_menu_actions(&file_target, true)
                 .iter()
                 .any(|item| item.action == ContextMenuAction::Paste)
+        );
+        assert!(
+            !context_menu_actions(&file_target, true)
+                .iter()
+                .any(|item| item.action == ContextMenuAction::PasteAsAdministrator)
         );
     }
 
@@ -9741,6 +10273,7 @@ text/plain=viewer.desktop;\n",
                 ContextMenuAction::Copy,
                 ContextMenuAction::CompressWithArk,
                 ContextMenuAction::Trash,
+                ContextMenuAction::TrashAsAdministrator,
                 ContextMenuAction::Properties
             ]
         );
@@ -12339,7 +12872,7 @@ text/plain=viewer.desktop;\n",
         let task = app
             .background_task_snapshots(now)
             .into_iter()
-            .next()
+            .find(|snapshot| snapshot.id == task_id)
             .unwrap();
 
         assert_eq!(app.status_message_for_pane(first), "Ready");
@@ -12353,6 +12886,7 @@ text/plain=viewer.desktop;\n",
             app.operation_progress_snapshot_for_pane(second, now)
                 .is_none()
         );
+        app.finish_pane_operation(task_id, first, "Copied: 1 item(s)");
     }
 
     #[test]
@@ -12369,20 +12903,28 @@ text/plain=viewer.desktop;\n",
         };
 
         let snapshot = app.background_tasks_snapshot(Instant::now()).unwrap();
-        assert_eq!(snapshot.active.len(), 2);
-        assert_eq!(snapshot.active[0].id, first_task);
-        assert_eq!(snapshot.active[0].pane_id, first);
-        assert_eq!(snapshot.active[0].title, "Copying 1 item(s)");
-        assert_eq!(snapshot.active[1].id, second_task);
-        assert_eq!(snapshot.active[1].pane_id, second);
-        assert_eq!(snapshot.active[1].title, "Moving 2 item(s)");
+        let first_snapshot = snapshot
+            .active
+            .iter()
+            .find(|task| task.id == first_task)
+            .unwrap();
+        assert_eq!(first_snapshot.pane_id, first);
+        assert_eq!(first_snapshot.title, "Copying 1 item(s)");
+        let second_snapshot = snapshot
+            .active
+            .iter()
+            .find(|task| task.id == second_task)
+            .unwrap();
+        assert_eq!(second_snapshot.pane_id, second);
+        assert_eq!(second_snapshot.title, "Moving 2 item(s)");
 
         app.finish_pane_operation(first_task, first, "Copied: 1 item(s)");
         let snapshot = app.background_tasks_snapshot(Instant::now()).unwrap();
-        assert_eq!(snapshot.active.len(), 1);
-        assert_eq!(snapshot.active[0].id, second_task);
+        assert!(!snapshot.active.iter().any(|task| task.id == first_task));
+        assert!(snapshot.active.iter().any(|task| task.id == second_task));
         assert_eq!(snapshot.history.len(), 1);
         assert_eq!(snapshot.history[0].title, "Copying 1 item(s)");
+        app.finish_pane_operation(second_task, second, "Moved: 2 item(s)");
     }
 
     #[test]
@@ -12410,6 +12952,8 @@ text/plain=viewer.desktop;\n",
                     .operation_controller(second_task)
                     .is_some_and(|c| c.is_cancelled())
             );
+            runtime.complete_operation(first_task);
+            runtime.complete_operation(second_task);
         }
     }
 
@@ -12438,8 +12982,68 @@ text/plain=viewer.desktop;\n",
         );
 
         app.clear_background_task_history();
-        assert!(app.background_tasks_snapshot(Instant::now()).is_none());
-        assert!(!app.background_tasks_expanded);
+        assert!(app.background_task_history.is_empty());
+        if app.operation_snapshots().is_empty() {
+            assert!(app.background_tasks_snapshot(Instant::now()).is_none());
+            assert!(!app.background_tasks_expanded);
+        }
+    }
+
+    #[test]
+    fn external_background_tasks_surface_full_detail() {
+        let mut app = test_app_with_entries("/tmp/fika-background-task-detail", &["one.txt"]);
+        let pane_id = app.panes.focused().unwrap();
+        let detail = "Waiting for administrator authorization.\nCreate folder /tmp/fika-admin";
+
+        let Some(task_id) =
+            app.begin_privileged_operation(pane_id, "Administrator: Create Folder", detail)
+        else {
+            panic!("no task");
+        };
+
+        let active = app
+            .background_task_snapshots(Instant::now())
+            .into_iter()
+            .find(|snapshot| snapshot.id == task_id)
+            .unwrap();
+        assert_eq!(active.title, "Administrator: Create Folder");
+        assert_eq!(active.detail, detail);
+
+        let final_detail =
+            "Administrator: Create Folder\nOK: create folder /tmp/fika-admin/New Folder";
+        app.finish_pane_operation_with_detail(
+            task_id,
+            pane_id,
+            "Administrator: Create Folder: 1 operation(s)",
+            final_detail,
+        );
+
+        let history = app
+            .background_tasks_snapshot(Instant::now())
+            .unwrap()
+            .history;
+        assert_eq!(history[0].title, "Administrator: Create Folder");
+        assert_eq!(history[0].detail, final_detail);
+        assert_eq!(history[0].state, BackgroundTaskState::Complete);
+    }
+
+    #[test]
+    fn background_task_detail_dialog_tracks_selected_task_detail() {
+        let mut app = test_app_with_entries("/tmp/fika-background-task-dialog", &[]);
+
+        app.show_background_task_detail_dialog(
+            "Administrator: Rename".to_string(),
+            "Failed: rename /root/a to b\n  Permission denied".to_string(),
+            Some(BackgroundTaskState::Failed),
+        );
+
+        let dialog = app.background_task_detail_dialog.as_ref().unwrap();
+        assert_eq!(dialog.title, "Administrator: Rename");
+        assert!(dialog.detail.contains("Permission denied"));
+        assert_eq!(dialog.state, Some(BackgroundTaskState::Failed));
+
+        app.dismiss_background_task_detail_dialog();
+        assert!(app.background_task_detail_dialog.is_none());
     }
 
     #[test]
@@ -12580,6 +13184,28 @@ text/plain=viewer.desktop;\n",
         assert_eq!(draft.caret, "beta".len());
         assert_eq!(draft.selection, Some((0, "beta".len())));
         assert!(draft.error.is_none());
+    }
+
+    #[test]
+    fn start_rename_as_administrator_creates_privileged_draft() {
+        let mut app = test_app_with_entries("/tmp/fika-rename-admin", &["alpha.txt"]);
+        let pane_id = app.panes.focused().unwrap();
+        app.select_only(pane_id, PathBuf::from("/tmp/fika-rename-admin/alpha.txt"));
+
+        app.start_rename_as_administrator_in_pane(pane_id);
+
+        let draft = app.rename_draft.as_ref().unwrap();
+        assert_eq!(draft.pane_id, pane_id);
+        assert_eq!(
+            draft.original_path,
+            PathBuf::from("/tmp/fika-rename-admin/alpha.txt")
+        );
+        assert_eq!(draft.draft_name, "alpha.txt");
+        assert!(draft.privileged);
+        assert_eq!(
+            app.status_message_for_pane(pane_id),
+            "Renaming alpha.txt as administrator"
+        );
     }
 
     #[test]
@@ -14731,6 +15357,7 @@ text/plain=viewer.desktop;\n",
             pane_statuses: HashMap::new(),
             background_tasks_expanded: false,
             background_task_history: VecDeque::new(),
+            background_task_detail_dialog: None,
         }
     }
 

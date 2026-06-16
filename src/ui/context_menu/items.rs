@@ -118,6 +118,11 @@ fn context_menu_icon_for_action(action: &ContextMenuAction) -> Option<ContextMen
         | ContextMenuAction::ViewIcons
         | ContextMenuAction::ViewDetails => Some(ContextMenuIcon::View),
         ContextMenuAction::Rename => Some(ContextMenuIcon::Rename),
+        ContextMenuAction::RenameAsAdministrator
+        | ContextMenuAction::TrashAsAdministrator
+        | ContextMenuAction::CreateFolderAsAdministrator
+        | ContextMenuAction::CreateFileAsAdministrator
+        | ContextMenuAction::PasteAsAdministrator => Some(ContextMenuIcon::Administrator),
         ContextMenuAction::Copy | ContextMenuAction::DropCopy => Some(ContextMenuIcon::Copy),
         ContextMenuAction::CopyLocation => Some(ContextMenuIcon::Location),
         ContextMenuAction::Cut | ContextMenuAction::DropMove => Some(ContextMenuIcon::Cut),

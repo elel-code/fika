@@ -99,7 +99,9 @@ pub use core::places::{
     UserPlace, default_user_places_path, load_user_places, parse_user_places_xbel,
     save_user_places, user_places_xbel,
 };
-pub use core::privilege::{HelperBus, run_dbus_service};
+pub use core::privilege::{
+    HelperBus, PrivilegedCommand, PrivilegedOperationResult, run_dbus_service, run_via_dbus,
+};
 pub use core::thumbnails::{
     ExternalThumbnailerCommand, ThumbnailCacheHit, ThumbnailCachePaths, ThumbnailCandidate,
     ThumbnailMetadata, ThumbnailProbeBatch, ThumbnailProbeCancelHandle, ThumbnailProbeResult,

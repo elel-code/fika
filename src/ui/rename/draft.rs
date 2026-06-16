@@ -12,6 +12,7 @@ pub(crate) struct RenameDraft {
     pub(crate) caret: usize,
     pub(crate) selection: Option<(usize, usize)>,
     pub(crate) error: Option<String>,
+    pub(crate) privileged: bool,
 }
 
 impl RenameDraft {
@@ -25,7 +26,18 @@ impl RenameDraft {
                 .then_some((selection_start, selection_end)),
             draft_name,
             error: None,
+            privileged: false,
         }
+    }
+
+    pub(crate) fn new_privileged(
+        pane_id: PaneId,
+        original_path: PathBuf,
+        draft_name: String,
+    ) -> Self {
+        let mut draft = Self::new(pane_id, original_path, draft_name);
+        draft.privileged = true;
+        draft
     }
 
     pub(crate) fn extension_warning(&self, is_dir: bool) -> Option<String> {

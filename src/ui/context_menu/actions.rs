@@ -105,6 +105,11 @@ pub(crate) fn context_menu_actions(
                     "Paste",
                     clipboard_available,
                 )),
+                context_menu_item_enabled(
+                    ContextMenuAction::PasteAsAdministrator,
+                    "Paste as Administrator",
+                    clipboard_available,
+                ),
                 context_menu_submenu_item(
                     ContextMenuAction::OpenWithSubmenu,
                     "Open With",
@@ -287,6 +292,7 @@ pub(crate) fn context_menu_actions(
             )),
         ],
         ContextMenuTarget::Item {
+            path,
             selection_count,
             service_actions,
             ..
@@ -321,6 +327,12 @@ pub(crate) fn context_menu_actions(
                 ContextMenuAction::Trash,
                 "Move to Trash",
             )));
+            if !is_network_path(path) {
+                actions.push(context_menu_item(
+                    ContextMenuAction::TrashAsAdministrator,
+                    "Move to Trash as Administrator",
+                ));
+            }
             actions.push(context_menu_separator_before(context_menu_item(
                 ContextMenuAction::Properties,
                 "Properties",
@@ -405,6 +417,11 @@ pub(crate) fn context_menu_actions(
                     "Paste",
                     clipboard_available,
                 ));
+                actions.push(context_menu_item_enabled(
+                    ContextMenuAction::PasteAsAdministrator,
+                    "Paste as Administrator",
+                    clipboard_available,
+                ));
             }
             let service_root_actions =
                 context_menu_group_items(service_menu_root_actions(service_actions));
@@ -444,7 +461,15 @@ pub(crate) fn context_menu_actions(
                     ContextMenuAction::Rename,
                     "Rename",
                 )),
+                context_menu_item(
+                    ContextMenuAction::RenameAsAdministrator,
+                    "Rename as Administrator",
+                ),
                 context_menu_item(ContextMenuAction::Trash, "Move to Trash"),
+                context_menu_item(
+                    ContextMenuAction::TrashAsAdministrator,
+                    "Move to Trash as Administrator",
+                ),
                 context_menu_separator_before(context_menu_item(
                     ContextMenuAction::Properties,
                     "Properties",
@@ -471,6 +496,14 @@ pub(crate) fn context_submenu_actions(
             } => vec![
                 context_menu_item(ContextMenuAction::CreateFolder, "Folder"),
                 context_menu_item(ContextMenuAction::CreateFile, "Text File"),
+                context_menu_separator_before(context_menu_item(
+                    ContextMenuAction::CreateFolderAsAdministrator,
+                    "Folder as Administrator",
+                )),
+                context_menu_item(
+                    ContextMenuAction::CreateFileAsAdministrator,
+                    "Text File as Administrator",
+                ),
             ],
             _ => Vec::new(),
         },

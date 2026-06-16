@@ -373,6 +373,7 @@ mod tests {
         let handle = runtime.register_operation(Operation::External {
             pane_id: PaneId(9),
             title: "Working".to_string(),
+            detail: None,
             cancellable: true,
         });
 
