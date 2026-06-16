@@ -28,10 +28,12 @@ use fika_core::{
 };
 use gpui::prelude::*;
 use gpui::{
-    Context, Div, Empty, ExternalPaths, MouseButton, NavigationDirection, ParentElement, Render,
-    Rgba, ScrollHandle, SharedString, Stateful, Styled, WeakEntity, Window, div, img, px, rgb,
-    rgba,
+    App, Bounds, Context, Div, Empty, ExternalPaths, Font, FontWeight, MouseButton,
+    NavigationDirection, ParentElement, Pixels, Render, Rgba, ScrollHandle, SharedString, Stateful,
+    Styled, TextAlign, TextRun, WeakEntity, Window, canvas, div, fill, img, point, px, rgb, rgba,
+    size,
 };
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -83,10 +85,314 @@ pub(crate) enum FileGridSnapshot {
     },
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 enum ItemTileTextAlignment {
     Start,
     Center,
+}
+
+struct StaticItemVisualPaintState {
+    layout: ItemLayout,
+    marker_line_height: Pixels,
+    shapes: Arc<StaticItemTextShapes>,
+    label_line_height: Pixels,
+    fallback_bg: u32,
+}
+
+struct StaticItemTextShapes {
+    marker_line: gpui::ShapedLine,
+    label: StaticItemLabelPaintState,
+}
+
+enum StaticItemLabelPaintState {
+    Start {
+        lines: Arc<[gpui::WrappedLine]>,
+        height: f32,
+    },
+    Center {
+        lines: Arc<[gpui::ShapedLine]>,
+    },
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct StaticItemTextShapeCacheKey {
+    item_id: ItemId,
+    text_alignment: ItemTileTextAlignment,
+    text_font: Font,
+    marker_font: Font,
+    text_font_size_bits: u32,
+    marker_font_size_bits: u32,
+    label_line_height_bits: u32,
+    marker_line_height_bits: u32,
+    text_width_bits: u32,
+    text_height_bits: u32,
+    scale_factor_bits: u32,
+    text_color: u32,
+    fallback_fg: u32,
+    fallback_marker: SharedString,
+    label: StaticItemLabelTextKey,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+enum StaticItemLabelTextKey {
+    Start(SharedString),
+    Center(Vec<SharedString>),
+}
+
+#[derive(Clone, Debug)]
+struct StaticItemTextShapeStyle {
+    text_font: Font,
+    marker_font: Font,
+    text_font_size: Pixels,
+    marker_font_size: Pixels,
+    label_line_height: Pixels,
+    marker_line_height: Pixels,
+    text_color: u32,
+    fallback_fg: u32,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct StaticItemTextShapeCacheStats {
+    hits: usize,
+    misses: usize,
+    evicted: usize,
+    entries: usize,
+}
+
+impl StaticItemTextShapeCacheStats {
+    fn has_activity(self) -> bool {
+        self.hits > 0 || self.misses > 0 || self.evicted > 0
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct StaticItemTextShapeCache {
+    entries: HashMap<StaticItemTextShapeCacheKey, Arc<StaticItemTextShapes>>,
+    stats: StaticItemTextShapeCacheStats,
+}
+
+impl StaticItemTextShapeCache {
+    const MAX_ENTRIES: usize = 2048;
+
+    fn shape_for(
+        &mut self,
+        key: &StaticItemTextShapeCacheKey,
+        style: &StaticItemTextShapeStyle,
+        window: &mut Window,
+    ) -> Arc<StaticItemTextShapes> {
+        if let Some(shapes) = self.entries.get(key) {
+            self.stats.hits += 1;
+            return shapes.clone();
+        }
+
+        self.stats.misses += 1;
+        if self.entries.len() >= Self::MAX_ENTRIES {
+            self.stats.evicted += self.entries.len();
+            self.entries.clear();
+        }
+
+        let shapes = Arc::new(shape_static_item_text(key, style, window));
+        self.entries.insert(key.clone(), shapes.clone());
+        shapes
+    }
+
+    fn take_stats(&mut self) -> StaticItemTextShapeCacheStats {
+        let mut stats = std::mem::take(&mut self.stats);
+        stats.entries = self.entries.len();
+        stats
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct ItemPaintSlotStats {
+    pub(crate) inserted: usize,
+    pub(crate) content_changed: usize,
+    pub(crate) geometry_changed: usize,
+    pub(crate) visual_changed: usize,
+    pub(crate) unchanged: usize,
+    pub(crate) removed: usize,
+    pub(crate) entries: usize,
+}
+
+impl ItemPaintSlotStats {
+    pub(crate) fn has_activity(self) -> bool {
+        self.inserted > 0
+            || self.content_changed > 0
+            || self.geometry_changed > 0
+            || self.visual_changed > 0
+            || self.unchanged > 0
+            || self.removed > 0
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct ItemPaintSlotCache {
+    slots: HashMap<u64, ItemPaintSlot>,
+    visible_epoch: u64,
+}
+
+impl ItemPaintSlotCache {
+    pub(crate) fn project_file_grid_snapshot(
+        &mut self,
+        snapshot: &FileGridSnapshot,
+    ) -> ItemPaintSlotStats {
+        match snapshot {
+            FileGridSnapshot::Compact { items, .. } | FileGridSnapshot::Icons { items, .. } => {
+                self.project_visible_items(items)
+            }
+            FileGridSnapshot::Details { .. } => self.project_visible_items(&[]),
+        }
+    }
+
+    fn project_visible_items(&mut self, items: &[VisibleItemSnapshot]) -> ItemPaintSlotStats {
+        self.visible_epoch = self.visible_epoch.wrapping_add(1).max(1);
+        let mut stats = ItemPaintSlotStats::default();
+        for item in items {
+            let next = ItemPaintSlot::from_item(item, self.visible_epoch);
+            match self.slots.get_mut(&item.slot_id) {
+                Some(slot) => {
+                    if slot.content != next.content {
+                        stats.content_changed += 1;
+                    } else if slot.geometry != next.geometry {
+                        stats.geometry_changed += 1;
+                    } else if slot.visual != next.visual {
+                        stats.visual_changed += 1;
+                    } else {
+                        stats.unchanged += 1;
+                    }
+                    *slot = next;
+                }
+                None => {
+                    stats.inserted += 1;
+                    self.slots.insert(item.slot_id, next);
+                }
+            }
+        }
+
+        let visible_epoch = self.visible_epoch;
+        let before_retain = self.slots.len();
+        self.slots
+            .retain(|_, slot| slot.visible_epoch == visible_epoch);
+        stats.removed = before_retain.saturating_sub(self.slots.len());
+        stats.entries = self.slots.len();
+        stats
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ItemPaintSlot {
+    item_id: ItemId,
+    geometry: ItemPaintGeometry,
+    content: ItemPaintContentKey,
+    visual: ItemPaintVisualState,
+    visible_epoch: u64,
+}
+
+impl ItemPaintSlot {
+    fn from_item(item: &VisibleItemSnapshot, visible_epoch: u64) -> Self {
+        Self {
+            item_id: item.item_id,
+            geometry: ItemPaintGeometry::from_layout(item.layout),
+            content: ItemPaintContentKey::from_item(item),
+            visual: ItemPaintVisualState::from_item(item),
+            visible_epoch,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ItemPaintGeometry {
+    item_x: u32,
+    item_y: u32,
+    item_width: u32,
+    item_height: u32,
+    visual_x: u32,
+    visual_y: u32,
+    visual_width: u32,
+    visual_height: u32,
+    icon_x: u32,
+    icon_y: u32,
+    icon_width: u32,
+    icon_height: u32,
+    text_x: u32,
+    text_y: u32,
+    text_width: u32,
+    text_height: u32,
+}
+
+impl ItemPaintGeometry {
+    fn from_layout(layout: ItemLayout) -> Self {
+        let item = layout.item_rect;
+        let visual = layout.visual_rect;
+        let icon = layout.icon_rect;
+        let text = layout.text_rect;
+        Self {
+            item_x: item.x.to_bits(),
+            item_y: item.y.to_bits(),
+            item_width: item.width.to_bits(),
+            item_height: item.height.to_bits(),
+            visual_x: visual.x.to_bits(),
+            visual_y: visual.y.to_bits(),
+            visual_width: visual.width.to_bits(),
+            visual_height: visual.height.to_bits(),
+            icon_x: icon.x.to_bits(),
+            icon_y: icon.y.to_bits(),
+            icon_width: icon.width.to_bits(),
+            icon_height: icon.height.to_bits(),
+            text_x: text.x.to_bits(),
+            text_y: text.y.to_bits(),
+            text_width: text.width.to_bits(),
+            text_height: text.height.to_bits(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ItemPaintContentKey {
+    item_id: ItemId,
+    display_name: SharedString,
+    thumbnail_path: Option<Arc<Path>>,
+    icon: FileIconSnapshot,
+    fallback_marker: SharedString,
+    icon_name_lines: Arc<[SharedString]>,
+    draft_name: Option<String>,
+    draft_caret: Option<usize>,
+    draft_selection: Option<(usize, usize)>,
+    draft_error: Option<String>,
+    draft_warning: Option<String>,
+}
+
+impl ItemPaintContentKey {
+    fn from_item(item: &VisibleItemSnapshot) -> Self {
+        Self {
+            item_id: item.item_id,
+            display_name: item.display_name.clone(),
+            thumbnail_path: item.thumbnail_path.clone(),
+            icon: item.icon.clone(),
+            fallback_marker: item.fallback_marker.clone(),
+            icon_name_lines: item.icon_name_lines.clone(),
+            draft_name: item.draft_name.clone(),
+            draft_caret: item.draft_caret,
+            draft_selection: item.draft_selection,
+            draft_error: item.draft_error.clone(),
+            draft_warning: item.draft_warning.clone(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ItemPaintVisualState {
+    selected: bool,
+    drop_target: bool,
+}
+
+impl ItemPaintVisualState {
+    fn from_item(item: &VisibleItemSnapshot) -> Self {
+        Self {
+            selected: item.selected,
+            drop_target: item.drop_target,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -421,6 +727,7 @@ pub(crate) fn file_grid(
             );
             let mut bounds_changed = false;
             let mut notify_requested = false;
+            let mut shape_cache_stats = StaticItemTextShapeCacheStats::default();
             let _ = app.update(cx, |this, cx| {
                 let previous_view = this.panes.pane(pane_id).map(|pane| pane.view.clone());
                 this.set_pane_viewport_geometry(pane_id, measured.rect);
@@ -444,6 +751,9 @@ pub(crate) fn file_grid(
                     notify_requested = true;
                     cx.notify();
                 }
+                if perf_enabled {
+                    shape_cache_stats = this.take_static_item_text_shape_cache_stats(pane_id);
+                }
             });
             if let Some(started) = prepaint_started {
                 eprintln!(
@@ -458,6 +768,17 @@ pub(crate) fn file_grid(
                     notify_requested,
                     started.elapsed().as_micros(),
                 );
+                if shape_cache_stats.has_activity() {
+                    eprintln!(
+                        "[fika item-shape-cache] pane={} mode={:?} hits={} misses={} evicted={} entries={}",
+                        pane_id.0,
+                        view_mode,
+                        shape_cache_stats.hits,
+                        shape_cache_stats.misses,
+                        shape_cache_stats.evicted,
+                        shape_cache_stats.entries,
+                    );
+                }
             }
         })
         .id(format!("items-{}", pane_id.0))
@@ -491,6 +812,18 @@ pub(crate) fn file_grid(
         );
     }
     root
+}
+
+impl FikaApp {
+    fn take_static_item_text_shape_cache_stats(
+        &mut self,
+        pane_id: PaneId,
+    ) -> StaticItemTextShapeCacheStats {
+        self.static_item_text_shape_caches
+            .get_mut(&pane_id)
+            .map(StaticItemTextShapeCache::take_stats)
+            .unwrap_or_default()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1177,30 +1510,9 @@ fn item_tile(
     let visual = item.layout.visual_rect;
     let selected = item.selected;
     let drop_target = item.drop_target;
-    let text = if let Some(draft_name) = item.draft_name.as_deref() {
-        rename_text_view(
-            pane_id,
-            SharedString::from(draft_name),
-            item.layout,
-            text_alignment,
-            selected,
-            item.draft_caret,
-            item.draft_selection,
-            item.draft_error.as_deref(),
-            item.draft_warning.as_deref(),
-            cx,
-        )
-        .into_any_element()
-    } else {
-        static_text_view(
-            item.display_name.clone(),
-            &item.icon_name_lines,
-            item.layout,
-            text_alignment,
-            selected,
-        )
-        .into_any_element()
-    };
+    let use_static_visual_paint =
+        item.draft_name.is_none() && item.thumbnail_path.is_none() && item.icon.path.is_none();
+    let drag_app = app.clone();
     let drag_value = ItemDrag {
         pane_id,
         path: item.drag_path.clone(),
@@ -1210,6 +1522,73 @@ fn item_tile(
         selection_count: item.selection_count,
     };
 
+    // Temporary migration boundary: this Div remains the interaction shell while
+    // static fallback item visuals move toward retained custom painting.
+    let core = div()
+        .id(item_identity_element_id("item-core", item.item_id))
+        .absolute()
+        .left(px(visual.x - item_rect.x))
+        .top(px(visual.y - item_rect.y))
+        .w(px(visual.width))
+        .h(px(visual.height))
+        .rounded_md()
+        .bg(item_tile_background(selected, drop_target))
+        .cursor_pointer()
+        .hover(move |tile| tile.bg(item_tile_hover_background(selected, drop_target)))
+        .on_drag(drag_value, move |drag, cursor_offset, _, cx| {
+            let _ = drag_app.update(cx, |this, _cx| {
+                this.begin_item_drag(drag.payload());
+            });
+            let (content_origin_x, content_origin_y) = drag_preview_content_origin(cursor_offset);
+            cx.new(|_| DragPreview {
+                icon: drag.icon.clone(),
+                label: drag_preview_label(drag.name.as_ref(), drag.selected, drag.selection_count),
+                count: drag.selection_count,
+                content_origin_x,
+                content_origin_y,
+            })
+        });
+    let core = if use_static_visual_paint {
+        core.child(static_item_visual_view(
+            pane_id,
+            item.item_id,
+            item.display_name.clone(),
+            item.icon_name_lines.clone(),
+            item.icon.clone(),
+            item.fallback_marker.clone(),
+            item.layout,
+            text_alignment,
+            selected,
+            app,
+        ))
+    } else {
+        let text = if let Some(draft_name) = item.draft_name.as_deref() {
+            rename_text_view(
+                pane_id,
+                SharedString::from(draft_name),
+                item.layout,
+                text_alignment,
+                selected,
+                item.draft_caret,
+                item.draft_selection,
+                item.draft_error.as_deref(),
+                item.draft_warning.as_deref(),
+                cx,
+            )
+            .into_any_element()
+        } else {
+            static_text_view(
+                item.display_name.clone(),
+                &item.icon_name_lines,
+                item.layout,
+                text_alignment,
+                selected,
+            )
+            .into_any_element()
+        };
+        core.child(icon_view(&item, item.layout)).child(text)
+    };
+
     div()
         .id(("item-slot", item.slot_id))
         .absolute()
@@ -1217,39 +1596,7 @@ fn item_tile(
         .top(px(item_rect.y))
         .w(px(item_rect.width))
         .h(px(item_rect.height))
-        .child(
-            div()
-                .id(item_identity_element_id("item-core", item.item_id))
-                .absolute()
-                .left(px(visual.x - item_rect.x))
-                .top(px(visual.y - item_rect.y))
-                .w(px(visual.width))
-                .h(px(visual.height))
-                .rounded_md()
-                .bg(item_tile_background(selected, drop_target))
-                .cursor_pointer()
-                .hover(move |tile| tile.bg(item_tile_hover_background(selected, drop_target)))
-                .on_drag(drag_value, move |drag, cursor_offset, _, cx| {
-                    let _ = app.update(cx, |this, _cx| {
-                        this.begin_item_drag(drag.payload());
-                    });
-                    let (content_origin_x, content_origin_y) =
-                        drag_preview_content_origin(cursor_offset);
-                    cx.new(|_| DragPreview {
-                        icon: drag.icon.clone(),
-                        label: drag_preview_label(
-                            drag.name.as_ref(),
-                            drag.selected,
-                            drag.selection_count,
-                        ),
-                        count: drag.selection_count,
-                        content_origin_x,
-                        content_origin_y,
-                    })
-                })
-                .child(icon_view(&item, item.layout))
-                .child(text),
-        )
+        .child(core)
 }
 
 fn item_tile_background(selected: bool, drop_target: bool) -> Rgba {
@@ -1280,6 +1627,337 @@ fn directory_drag_over_styles(item: Stateful<Div>) -> Stateful<Div> {
     item.drag_over::<ItemDrag>(|style, _, _, _| style.bg(drop_target_item_background()))
         .drag_over::<ExternalPaths>(|style, _, _, _| style.bg(drop_target_item_background()))
         .drag_over::<PlaceDrag>(|style, _, _, _| style.bg(drop_target_item_background()))
+}
+
+fn static_item_visual_view(
+    pane_id: PaneId,
+    item_id: ItemId,
+    display_name: SharedString,
+    icon_name_lines: Arc<[SharedString]>,
+    icon: FileIconSnapshot,
+    fallback_marker: SharedString,
+    layout: ItemLayout,
+    text_alignment: ItemTileTextAlignment,
+    selected: bool,
+    app: WeakEntity<FikaApp>,
+) -> impl IntoElement {
+    canvas(
+        move |_bounds, window, cx| {
+            static_item_visual_prepaint(
+                pane_id,
+                item_id,
+                display_name,
+                icon_name_lines,
+                icon,
+                fallback_marker,
+                layout,
+                text_alignment,
+                selected,
+                app,
+                window,
+                cx,
+            )
+        },
+        static_item_visual_paint,
+    )
+    .absolute()
+    .left_0()
+    .top_0()
+    .size_full()
+}
+
+fn static_item_visual_prepaint(
+    pane_id: PaneId,
+    item_id: ItemId,
+    display_name: SharedString,
+    icon_name_lines: Arc<[SharedString]>,
+    icon: FileIconSnapshot,
+    fallback_marker: SharedString,
+    layout: ItemLayout,
+    text_alignment: ItemTileTextAlignment,
+    selected: bool,
+    app: WeakEntity<FikaApp>,
+    window: &mut Window,
+    cx: &mut App,
+) -> StaticItemVisualPaintState {
+    let style = static_item_text_shape_style(layout, selected, &icon, window);
+    let key = static_item_text_shape_cache_key(
+        item_id,
+        display_name,
+        icon_name_lines,
+        fallback_marker,
+        &icon,
+        layout,
+        text_alignment,
+        &style,
+        window,
+    );
+    let shapes = app
+        .update(cx, |this, _cx| {
+            this.static_item_text_shape_caches
+                .entry(pane_id)
+                .or_default()
+                .shape_for(&key, &style, window)
+        })
+        .ok()
+        .unwrap_or_else(|| Arc::new(shape_static_item_text(&key, &style, window)));
+    StaticItemVisualPaintState {
+        layout,
+        marker_line_height: style.marker_line_height,
+        shapes,
+        label_line_height: style.label_line_height,
+        fallback_bg: icon.fallback_bg,
+    }
+}
+
+fn static_item_text_shape_style(
+    layout: ItemLayout,
+    selected: bool,
+    icon: &FileIconSnapshot,
+    window: &Window,
+) -> StaticItemTextShapeStyle {
+    let text_style = window.text_style();
+    let text_font = text_style.font();
+    let mut marker_font = text_style.font();
+    marker_font.weight = FontWeight::SEMIBOLD;
+    StaticItemTextShapeStyle {
+        text_font,
+        marker_font,
+        text_font_size: px(window.rem_size().as_f32() * 0.875),
+        marker_font_size: px(window.rem_size().as_f32() * 0.75),
+        label_line_height: px(ITEM_NAME_LINE_HEIGHT),
+        marker_line_height: px(layout.icon_rect.height.min(ITEM_NAME_LINE_HEIGHT).max(1.0)),
+        text_color: if selected { 0x0f172a } else { 0x24292f },
+        fallback_fg: icon.fallback_fg,
+    }
+}
+
+fn static_item_text_shape_cache_key(
+    item_id: ItemId,
+    display_name: SharedString,
+    icon_name_lines: Arc<[SharedString]>,
+    fallback_marker: SharedString,
+    icon: &FileIconSnapshot,
+    layout: ItemLayout,
+    text_alignment: ItemTileTextAlignment,
+    style: &StaticItemTextShapeStyle,
+    window: &Window,
+) -> StaticItemTextShapeCacheKey {
+    let max_lines = (layout.text_rect.height / ITEM_NAME_LINE_HEIGHT)
+        .round()
+        .max(1.0) as usize;
+    let label = match text_alignment {
+        ItemTileTextAlignment::Start => StaticItemLabelTextKey::Start(display_name),
+        ItemTileTextAlignment::Center => {
+            let lines = if icon_name_lines.is_empty() {
+                vec![display_name]
+            } else {
+                icon_name_lines.iter().take(max_lines).cloned().collect()
+            };
+            StaticItemLabelTextKey::Center(lines)
+        }
+    };
+    StaticItemTextShapeCacheKey {
+        item_id,
+        text_alignment,
+        text_font: style.text_font.clone(),
+        marker_font: style.marker_font.clone(),
+        text_font_size_bits: style.text_font_size.as_f32().to_bits(),
+        marker_font_size_bits: style.marker_font_size.as_f32().to_bits(),
+        label_line_height_bits: style.label_line_height.as_f32().to_bits(),
+        marker_line_height_bits: style.marker_line_height.as_f32().to_bits(),
+        text_width_bits: layout.text_rect.width.to_bits(),
+        text_height_bits: layout.text_rect.height.to_bits(),
+        scale_factor_bits: window.scale_factor().to_bits(),
+        text_color: style.text_color,
+        fallback_fg: icon.fallback_fg,
+        fallback_marker,
+        label,
+    }
+}
+
+fn shape_static_item_text(
+    key: &StaticItemTextShapeCacheKey,
+    style: &StaticItemTextShapeStyle,
+    window: &mut Window,
+) -> StaticItemTextShapes {
+    let fallback_marker = static_paint_single_line_text(key.fallback_marker.clone());
+    let marker_run = TextRun {
+        len: fallback_marker.len(),
+        font: style.marker_font.clone(),
+        color: rgb(style.fallback_fg).into(),
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    let marker_line = window.text_system().shape_line(
+        fallback_marker,
+        style.marker_font_size,
+        &[marker_run],
+        None,
+    );
+    let label = match &key.label {
+        StaticItemLabelTextKey::Start(display_name) => {
+            let run = TextRun {
+                len: display_name.len(),
+                font: style.text_font.clone(),
+                color: rgb(style.text_color).into(),
+                background_color: None,
+                underline: None,
+                strikethrough: None,
+            };
+            let lines = window
+                .text_system()
+                .shape_text(
+                    display_name.clone(),
+                    style.text_font_size,
+                    &[run],
+                    Some(px(f32::from_bits(key.text_width_bits).max(1.0))),
+                    Some(
+                        (f32::from_bits(key.text_height_bits) / ITEM_NAME_LINE_HEIGHT)
+                            .round()
+                            .max(1.0) as usize,
+                    ),
+                )
+                .map(|lines| lines.into_iter().collect::<Vec<_>>())
+                .unwrap_or_default();
+            let height = static_paint_wrapped_lines_height(
+                &lines,
+                style.label_line_height,
+                f32::from_bits(key.text_height_bits),
+            );
+            StaticItemLabelPaintState::Start {
+                lines: lines.into(),
+                height,
+            }
+        }
+        StaticItemLabelTextKey::Center(label_texts) => {
+            let lines = label_texts
+                .iter()
+                .cloned()
+                .map(static_paint_single_line_text)
+                .map(|line| {
+                    let run = TextRun {
+                        len: line.len(),
+                        font: style.text_font.clone(),
+                        color: rgb(style.text_color).into(),
+                        background_color: None,
+                        underline: None,
+                        strikethrough: None,
+                    };
+                    window
+                        .text_system()
+                        .shape_line(line, style.text_font_size, &[run], None)
+                })
+                .collect::<Vec<_>>();
+            StaticItemLabelPaintState::Center {
+                lines: lines.into(),
+            }
+        }
+    };
+    StaticItemTextShapes { marker_line, label }
+}
+
+fn static_item_visual_paint(
+    bounds: Bounds<Pixels>,
+    state: StaticItemVisualPaintState,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let icon_bounds =
+        static_item_local_bounds(bounds, state.layout.visual_rect, state.layout.icon_rect);
+    window.paint_quad(fill(icon_bounds, rgb(state.fallback_bg)).corner_radii(px(6.0)));
+    let marker_origin = point(
+        icon_bounds.origin.x,
+        icon_bounds.origin.y
+            + ((icon_bounds.size.height - state.marker_line_height).max(px(0.0)) / 2.0),
+    );
+    state
+        .shapes
+        .marker_line
+        .paint(
+            marker_origin,
+            state.marker_line_height,
+            TextAlign::Center,
+            Some(icon_bounds.size.width),
+            window,
+            cx,
+        )
+        .ok();
+
+    let text_bounds =
+        static_item_local_bounds(bounds, state.layout.visual_rect, state.layout.text_rect);
+    window.paint_layer(text_bounds, |window| match &state.shapes.label {
+        StaticItemLabelPaintState::Start { lines, height } => {
+            let y_offset = ((text_bounds.size.height.as_f32() - *height).max(0.0) * 0.5).floor();
+            let mut y = text_bounds.origin.y + px(y_offset);
+            for line in lines.iter() {
+                let line_height = line.size(state.label_line_height).height;
+                line.paint(
+                    point(text_bounds.origin.x, y),
+                    state.label_line_height,
+                    TextAlign::Left,
+                    Some(text_bounds),
+                    window,
+                    cx,
+                )
+                .ok();
+                y += line_height;
+            }
+        }
+        StaticItemLabelPaintState::Center { lines } => {
+            let height =
+                (lines.len() as f32 * ITEM_NAME_LINE_HEIGHT).min(text_bounds.size.height.as_f32());
+            let mut y = text_bounds.origin.y
+                + px(((text_bounds.size.height.as_f32() - height).max(0.0) * 0.5).floor());
+            for line in lines.iter() {
+                line.paint(
+                    point(text_bounds.origin.x, y),
+                    state.label_line_height,
+                    TextAlign::Center,
+                    Some(text_bounds.size.width),
+                    window,
+                    cx,
+                )
+                .ok();
+                y += state.label_line_height;
+            }
+        }
+    });
+}
+
+fn static_item_local_bounds(
+    base: Bounds<Pixels>,
+    visual_rect: ViewRect,
+    rect: ViewRect,
+) -> Bounds<Pixels> {
+    Bounds::new(
+        point(
+            base.origin.x + px(rect.x - visual_rect.x),
+            base.origin.y + px(rect.y - visual_rect.y),
+        ),
+        size(px(rect.width.max(1.0)), px(rect.height.max(1.0))),
+    )
+}
+
+fn static_paint_single_line_text(text: SharedString) -> SharedString {
+    if text.as_ref().contains('\n') {
+        SharedString::from(text.as_ref().replace('\n', " "))
+    } else {
+        text
+    }
+}
+
+fn static_paint_wrapped_lines_height(
+    lines: &[gpui::WrappedLine],
+    line_height: Pixels,
+    max_height: f32,
+) -> f32 {
+    lines
+        .iter()
+        .map(|line| line.size(line_height).height.as_f32())
+        .sum::<f32>()
+        .min(max_height)
 }
 
 fn icon_view(item: &VisibleItemSnapshot, layout: ItemLayout) -> Div {
@@ -1744,14 +2422,21 @@ fn drag_preview_label(name: &str, selected: bool, selection_count: usize) -> Str
 #[cfg(test)]
 mod tests {
     use super::{
-        FileGridMode, ItemTileTextAlignment, display_text_layout, drag_preview_content_origin,
-        drag_preview_label, item_identity_element_id, item_mouse_down_opens_directory,
+        FileGridMode, FileGridSnapshot, ItemPaintSlotCache, ItemTileTextAlignment,
+        VisibleItemSnapshot, display_text_layout, drag_preview_content_origin, drag_preview_label,
+        item_identity_element_id, item_mouse_down_opens_directory,
         measured_viewport_for_scrollbar_axis, normalized_text_range, rename_text_layout,
         viewport_bounds_update_requires_notify,
     };
+    use crate::ui::icons::FileIconSnapshot;
     use crate::ui::item_view::ItemViewScrollbarAxis;
-    use fika_core::{CompactLayout, CompactLayoutOptions, ItemId, ViewRect, ViewState};
-    use gpui::{Bounds, point, px, size};
+    use fika_core::{
+        CompactLayout, CompactLayoutOptions, IconsLayout, IconsLayoutOptions, ItemId, ItemLayout,
+        ViewRect, ViewState,
+    };
+    use gpui::{Bounds, SharedString, point, px, size};
+    use std::path::Path;
+    use std::sync::Arc;
 
     #[test]
     fn drag_preview_uses_selection_count_only_for_selected_items() {
@@ -1782,6 +2467,117 @@ mod tests {
             item_identity_element_id("item-core", ItemId(7)),
             item_identity_element_id("item-core", ItemId(8))
         );
+    }
+
+    #[test]
+    fn item_paint_slot_cache_separates_content_geometry_and_visual_changes() {
+        let mut cache = ItemPaintSlotCache::default();
+        let base = test_visible_item(1, ItemId(7), "alpha.txt", test_item_layout(0.0), false);
+
+        let stats = cache.project_file_grid_snapshot(&icons_snapshot(vec![base.clone()]));
+        assert_eq!(stats.inserted, 1);
+        assert_eq!(stats.entries, 1);
+
+        let stats = cache.project_file_grid_snapshot(&icons_snapshot(vec![base.clone()]));
+        assert_eq!(stats.unchanged, 1);
+        assert_eq!(stats.entries, 1);
+
+        let mut moved = base.clone();
+        moved.layout = test_item_layout(18.0);
+        let stats = cache.project_file_grid_snapshot(&icons_snapshot(vec![moved.clone()]));
+        assert_eq!(stats.geometry_changed, 1);
+        assert_eq!(stats.entries, 1);
+
+        let mut selected = moved.clone();
+        selected.selected = true;
+        let stats = cache.project_file_grid_snapshot(&icons_snapshot(vec![selected.clone()]));
+        assert_eq!(stats.visual_changed, 1);
+        assert_eq!(stats.entries, 1);
+
+        let mut renamed = selected.clone();
+        renamed.display_name = SharedString::from("beta.txt");
+        renamed.icon_name_lines = vec![SharedString::from("beta.txt")].into();
+        let stats = cache.project_file_grid_snapshot(&icons_snapshot(vec![renamed]));
+        assert_eq!(stats.content_changed, 1);
+        assert_eq!(stats.entries, 1);
+
+        let stats = cache.project_file_grid_snapshot(&icons_snapshot(Vec::new()));
+        assert_eq!(stats.removed, 1);
+        assert_eq!(stats.entries, 0);
+    }
+
+    fn icons_snapshot(items: Vec<VisibleItemSnapshot>) -> FileGridSnapshot {
+        FileGridSnapshot::Icons {
+            layout: IconsLayout::new(items.len(), IconsLayoutOptions::default()),
+            items,
+        }
+    }
+
+    fn test_visible_item(
+        slot_id: u64,
+        item_id: ItemId,
+        name: &str,
+        layout: ItemLayout,
+        selected: bool,
+    ) -> VisibleItemSnapshot {
+        VisibleItemSnapshot {
+            slot_id,
+            item_id,
+            layout,
+            name: Arc::from(name),
+            display_name: SharedString::from(name),
+            thumbnail_path: None,
+            icon: FileIconSnapshot {
+                icon_name: Arc::from("text-x-generic"),
+                path: None,
+                fallback_marker: Arc::from("TXT"),
+                fallback_fg: 0xffffff,
+                fallback_bg: 0x2563eb,
+            },
+            fallback_marker: SharedString::from("TXT"),
+            icon_name_lines: vec![SharedString::from(name)].into(),
+            drag_path: Arc::from(Path::new("/tmp/alpha.txt")),
+            selected,
+            selection_count: if selected { 1 } else { 0 },
+            drop_target: false,
+            draft_name: None,
+            draft_caret: None,
+            draft_selection: None,
+            draft_error: None,
+            draft_warning: None,
+        }
+    }
+
+    fn test_item_layout(x: f32) -> ItemLayout {
+        ItemLayout {
+            model_index: 0,
+            column: 0,
+            row: 0,
+            item_rect: ViewRect {
+                x,
+                y: 0.0,
+                width: 96.0,
+                height: 84.0,
+            },
+            visual_rect: ViewRect {
+                x,
+                y: 0.0,
+                width: 96.0,
+                height: 84.0,
+            },
+            icon_rect: ViewRect {
+                x: x + 24.0,
+                y: 2.0,
+                width: 48.0,
+                height: 48.0,
+            },
+            text_rect: ViewRect {
+                x: x + 4.0,
+                y: 54.0,
+                width: 88.0,
+                height: 30.0,
+            },
+        }
     }
 
     #[test]

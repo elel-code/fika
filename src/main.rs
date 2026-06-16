@@ -82,12 +82,12 @@ use ui::drag_drop::{
     place_drop_target_matches_insert, place_drop_target_matches_place,
 };
 use ui::file_grid::{
-    CompactColumnWidthCache, ContentItemHit, ItemDrag, PaneLayoutProjection,
+    CompactColumnWidthCache, ContentItemHit, ItemDrag, ItemPaintSlotCache, PaneLayoutProjection,
     PaneLayoutProjectionInput, PaneViewportGeometry, RawFileGridSnapshot, RawFileGridSnapshotInput,
-    VisibleItemSlotPool, VisibleItemSnapshotCache, compact_text_width, compact_text_width_for_name,
-    content_item_hit_at_point, deferred_thumbnail_candidates_for_model,
-    model_indexes_intersecting_visual_rect, pane_layout_projection, raw_file_grid_snapshot,
-    rename_editor_required_text_width,
+    StaticItemTextShapeCache, VisibleItemSlotPool, VisibleItemSnapshotCache, compact_text_width,
+    compact_text_width_for_name, content_item_hit_at_point,
+    deferred_thumbnail_candidates_for_model, model_indexes_intersecting_visual_rect,
+    pane_layout_projection, raw_file_grid_snapshot, rename_editor_required_text_width,
 };
 use ui::filter_bar::{
     FILTER_BAR_HEIGHT, FilterBarSnapshot, FilteredModelCacheEntry, PaneFilterState,
@@ -420,7 +420,9 @@ pub(crate) struct FikaApp {
     last_render_viewport_size: Option<(f32, f32)>,
     pane_row_width: f32,
     visible_item_slots: HashMap<PaneId, VisibleItemSlotPool>,
+    item_paint_slots: HashMap<PaneId, ItemPaintSlotCache>,
     visible_item_snapshot_caches: HashMap<PaneId, VisibleItemSnapshotCache>,
+    static_item_text_shape_caches: HashMap<PaneId, StaticItemTextShapeCache>,
     compact_column_widths: HashMap<PaneId, CompactColumnWidthCache>,
     pane_filters: HashMap<PaneId, PaneFilterState>,
     filtered_models: HashMap<PaneId, FilteredModelCacheEntry>,
@@ -505,7 +507,9 @@ impl FikaApp {
             last_render_viewport_size: None,
             pane_row_width: 0.0,
             visible_item_slots: HashMap::new(),
+            item_paint_slots: HashMap::new(),
             visible_item_snapshot_caches: HashMap::new(),
+            static_item_text_shape_caches: HashMap::new(),
             compact_column_widths: HashMap::new(),
             pane_filters: HashMap::new(),
             filtered_models: HashMap::new(),
@@ -786,7 +790,9 @@ impl FikaApp {
 
     fn invalidate_pane_layout_projection(&mut self, pane_id: PaneId, reset_scroll: bool) {
         self.visible_item_slots.remove(&pane_id);
+        self.item_paint_slots.remove(&pane_id);
         self.visible_item_snapshot_caches.remove(&pane_id);
+        self.static_item_text_shape_caches.remove(&pane_id);
         self.compact_column_widths.remove(&pane_id);
         self.filtered_models.remove(&pane_id);
         self.status_summaries.remove(&pane_id);
@@ -1151,6 +1157,11 @@ impl FikaApp {
                 );
                 self.visible_item_snapshot_caches
                     .insert(pane_id, visible_item_cache);
+                let item_paint_slot_stats = self
+                    .item_paint_slots
+                    .entry(pane_id)
+                    .or_default()
+                    .project_file_grid_snapshot(&file_grid);
                 let convert_elapsed = convert_started.map(|started| started.elapsed());
                 let status_bar = self.status_bar_snapshot_for_pane(pane_id, cx);
                 if let Some(pane_started) = pane_started {
@@ -1165,6 +1176,20 @@ impl FikaApp {
                         convert_elapsed.map_or(0, |elapsed| elapsed.as_micros()),
                         pane_started.elapsed().as_micros(),
                     );
+                    if item_paint_slot_stats.has_activity() {
+                        eprintln!(
+                            "[fika item-paint-slots] pane={} mode={:?} inserted={} content={} geometry={} visual={} unchanged={} removed={} entries={}",
+                            pane_id.0,
+                            view.view_mode,
+                            item_paint_slot_stats.inserted,
+                            item_paint_slot_stats.content_changed,
+                            item_paint_slot_stats.geometry_changed,
+                            item_paint_slot_stats.visual_changed,
+                            item_paint_slot_stats.unchanged,
+                            item_paint_slot_stats.removed,
+                            item_paint_slot_stats.entries,
+                        );
+                    }
                 }
                 Some(PaneSnapshot {
                     id: pane_id,
@@ -2718,7 +2743,9 @@ impl FikaApp {
 
     fn clear_pane_content_state(&mut self, pane_id: PaneId) {
         self.visible_item_slots.remove(&pane_id);
+        self.item_paint_slots.remove(&pane_id);
         self.visible_item_snapshot_caches.remove(&pane_id);
+        self.static_item_text_shape_caches.remove(&pane_id);
         self.compact_column_widths.remove(&pane_id);
         self.status_summaries.remove(&pane_id);
         self.filtered_models.remove(&pane_id);
@@ -3154,7 +3181,9 @@ impl FikaApp {
         };
         self.prime_pane_viewport_for_view_mode_axis_change(pane_id, previous_mode, view_mode);
         self.reset_item_view_scroll_for_pane(pane_id);
+        self.item_paint_slots.remove(&pane_id);
         self.visible_item_snapshot_caches.remove(&pane_id);
+        self.static_item_text_shape_caches.remove(&pane_id);
         self.compact_column_widths.remove(&pane_id);
         self.set_pane_status(pane_id, view_mode_status(view.view_mode));
     }
@@ -15646,7 +15675,9 @@ text/plain=viewer.desktop;\n",
             last_render_viewport_size: None,
             pane_row_width: 0.0,
             visible_item_slots: HashMap::new(),
+            item_paint_slots: HashMap::new(),
             visible_item_snapshot_caches: HashMap::new(),
+            static_item_text_shape_caches: HashMap::new(),
             compact_column_widths: HashMap::new(),
             pane_filters: HashMap::new(),
             filtered_models: HashMap::new(),

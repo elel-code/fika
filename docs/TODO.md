@@ -71,6 +71,19 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
 
 ## Remaining Work
 
+### Item View 自绘 / Dolphin retained item 对齐
+
+详细设计和迁移任务见：
+
+- `docs/ITEM_VIEW_CUSTOM_PAINT_DESIGN.md`
+- `docs/ITEM_VIEW_CUSTOM_PAINT_TODO.md`
+
+- [~] Phase 1：非重命名、非缩略图 item 的静态视觉转向自绘，保留当前交互 shell。
+- [~] Phase 2：静态文本 shaping cache，resize 时复用已成形文本。
+- [~] Phase 3：显式 retained paint slot state，区分 geometry-only 和 content changes。
+- [ ] Phase 4：缩略图/图片绘制边界收敛到 retained image path。
+- [ ] Phase 5：必要时从 `canvas` spike 升级到 dedicated GPUI custom element。
+
 ### GPUI Backend / External MIME Drag (阻塞)
 - [~] 外部 MIME 拖出：`DragExportPayload`（`text/uri-list` + `text/plain`）已构造，但 GPUI/Wayland backend 尚未提供从 app 内部 drag source 向外部应用发布 MIME 的 API。待 backend 支持后接入。
 - [~] 外部 MIME 拖入：Ark service/path MIME（`application/x-kde-ark-dndextract-service/path`）已就绪 core parser 和 executor，但 GPUI/backend 多 MIME data offer API 仍待支持。当前普通文件路径拖入通过 `ExternalPaths` 工作。
