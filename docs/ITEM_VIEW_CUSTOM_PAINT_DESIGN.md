@@ -233,6 +233,26 @@ Acceptance:
 - image and rename items continue to use their existing paths
 - tests prove only fallback static items enter the layer
 
+### Phase 7: Non-Rename Base Visual and Image Layer
+
+Move all non-renaming Compact and Icons base visuals into content-level layers:
+
+- the custom visual layer paints every non-renaming item's background and text
+- fallback icon marker painting remains in the visual layer only for items
+  without thumbnail or theme-icon paths
+- thumbnail and theme-icon `img()` elements live in one content-level image layer
+  keyed by retained visual slot id
+- each non-renaming item slot remains a transparent interaction/drag shell
+- rename items keep the current child subtree and editor behavior
+
+Acceptance:
+
+- non-renaming thumbnail/theme-icon items no longer build per-item text/background
+  child trees
+- image rendering is separated from base item visual painting
+- fallback marker shaping is skipped for image-backed items
+- tests prove visual-layer and image-layer membership stay split correctly
+
 ## Invariants
 
 - Click/menu/drop behavior continues to use Rust hit testing.

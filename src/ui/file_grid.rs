@@ -117,6 +117,7 @@ struct StaticItemVisualPaintState {
     shapes: Arc<StaticItemTextShapes>,
     label_line_height: Pixels,
     background: Rgba,
+    paint_fallback_icon: bool,
     fallback_bg: u32,
 }
 
@@ -145,7 +146,7 @@ impl StaticItemVisualPerfStats {
 }
 
 struct StaticItemTextShapes {
-    marker_line: gpui::ShapedLine,
+    marker_line: Option<gpui::ShapedLine>,
     label: StaticItemLabelPaintState,
 }
 
@@ -163,6 +164,7 @@ enum StaticItemLabelPaintState {
 struct StaticItemTextShapeCacheKey {
     item_id: ItemId,
     text_alignment: ItemTileTextAlignment,
+    paint_fallback_icon: bool,
     text_font: Font,
     marker_font: Font,
     text_font_size_bits: u32,
@@ -779,11 +781,18 @@ pub(crate) fn file_grid(
                 ItemTileTextAlignment::Center,
                 app.clone(),
             );
+            let image_layer =
+                item_image_layer_view(&items, content_size.width, content_size.height);
             let content = div()
                 .relative()
                 .w(px(content_size.width))
                 .h(px(content_size.height));
             let content = if let Some(layer) = static_visual_layer {
+                content.child(layer)
+            } else {
+                content
+            };
+            let content = if let Some(layer) = image_layer {
                 content.child(layer)
             } else {
                 content
@@ -817,11 +826,18 @@ pub(crate) fn file_grid(
                 ItemTileTextAlignment::Start,
                 app.clone(),
             );
+            let image_layer =
+                item_image_layer_view(&items, content_size.width, content_size.height);
             let content = div()
                 .relative()
                 .w(px(content_size.width))
                 .h(px(content_size.height));
             let content = if let Some(layer) = static_visual_layer {
+                content.child(layer)
+            } else {
+                content
+            };
+            let content = if let Some(layer) = image_layer {
                 content.child(layer)
             } else {
                 content
@@ -1709,7 +1725,7 @@ fn item_tile(
     let selection_count = item.visual.selection_count;
     let hovered = item.visual.hovered;
     let drop_target = item.visual.drop_target;
-    let use_static_visual_paint = item_uses_static_visual_paint(content);
+    let use_layer_visual_paint = item_uses_layer_visual_paint(content);
     let drag_app = app.clone();
     let drag_value = ItemDrag {
         pane_id,
@@ -1719,14 +1735,14 @@ fn item_tile(
         selected,
         selection_count,
     };
-    let shell_background = if use_static_visual_paint {
+    let shell_background = if use_layer_visual_paint {
         rgba(0x00000000)
     } else {
         item_tile_background(selected, drop_target, hovered)
     };
 
     // Temporary migration boundary: this Div remains the interaction shell while
-    // static fallback item visuals move toward retained custom painting.
+    // non-rename item visuals move toward retained custom painting.
     let core = div()
         .id(item_identity_element_id("item-core", item_id))
         .absolute()
@@ -1760,7 +1776,7 @@ fn item_tile(
                 content_origin_y,
             })
         });
-    let core = if use_static_visual_paint {
+    let core = if use_layer_visual_paint {
         core
     } else {
         let text = if let Some(draft_name) = content.draft_name.as_deref() {
@@ -1801,8 +1817,12 @@ fn item_tile(
         .child(core)
 }
 
-fn item_uses_static_visual_paint(content: &ItemPaintContent) -> bool {
-    content.draft_name.is_none() && content.thumbnail_path.is_none() && content.icon.path.is_none()
+fn item_uses_layer_visual_paint(content: &ItemPaintContent) -> bool {
+    content.draft_name.is_none()
+}
+
+fn item_paints_fallback_icon(content: &ItemPaintContent) -> bool {
+    content.thumbnail_path.is_none() && content.icon.path.is_none()
 }
 
 fn item_tile_background(selected: bool, drop_target: bool, hovered: bool) -> Rgba {
@@ -1871,7 +1891,7 @@ fn static_item_visual_layer_items(
         .iter()
         .filter_map(|item| {
             let content = item.content.as_ref();
-            item_uses_static_visual_paint(content).then(|| StaticItemVisualLayerItem {
+            item_uses_layer_visual_paint(content).then(|| StaticItemVisualLayerItem {
                 item_id: item.item_id,
                 display_name: content.display_name.clone(),
                 icon_name_lines: content.icon_name_lines.clone(),
@@ -1882,6 +1902,7 @@ fn static_item_visual_layer_items(
                 selected: item.visual.selected,
                 hovered: item.visual.hovered,
                 drop_target: item.visual.drop_target,
+                paint_fallback_icon: item_paints_fallback_icon(content),
             })
         })
         .collect()
@@ -1898,6 +1919,7 @@ struct StaticItemVisualLayerItem {
     selected: bool,
     hovered: bool,
     drop_target: bool,
+    paint_fallback_icon: bool,
 }
 
 struct StaticItemVisualLayerElement {
@@ -1968,6 +1990,7 @@ impl Element for StaticItemVisualLayerElement {
                     item.selected,
                     item.hovered,
                     item.drop_target,
+                    item.paint_fallback_icon,
                     self.app.clone(),
                     window,
                     cx,
@@ -2024,6 +2047,83 @@ impl Styled for StaticItemVisualLayerElement {
     }
 }
 
+fn item_image_layer_view(items: &[ItemPaintSnapshot], width: f32, height: f32) -> Option<Div> {
+    let items = item_image_layer_items(items);
+    (!items.is_empty()).then(|| {
+        div()
+            .absolute()
+            .left_0()
+            .top_0()
+            .w(px(width.max(1.0)))
+            .h(px(height.max(1.0)))
+            .children(items.into_iter().map(item_image_layer_item_view))
+    })
+}
+
+fn item_image_layer_items(items: &[ItemPaintSnapshot]) -> Vec<ItemImageLayerItem> {
+    items
+        .iter()
+        .filter_map(|item| {
+            let content = item.content.as_ref();
+            if !item_uses_layer_visual_paint(content)
+                || (content.thumbnail_path.is_none() && content.icon.path.is_none())
+            {
+                return None;
+            }
+            Some(ItemImageLayerItem {
+                slot_id: item.slot_id,
+                item_id: item.item_id,
+                layout: item.layout,
+                thumbnail_path: content.thumbnail_path.clone(),
+                icon: content.icon.clone(),
+                fallback_marker: content.fallback_marker.clone(),
+            })
+        })
+        .collect()
+}
+
+struct ItemImageLayerItem {
+    slot_id: u64,
+    item_id: ItemId,
+    layout: ItemLayout,
+    thumbnail_path: Option<Arc<Path>>,
+    icon: FileIconSnapshot,
+    fallback_marker: SharedString,
+}
+
+fn item_image_layer_item_view(item: ItemImageLayerItem) -> Stateful<Div> {
+    let icon = item.layout.icon_rect;
+    let icon_left = icon.x.round();
+    let icon_top = icon.y.round();
+    let icon_width = icon.width.round().max(1.0);
+    let icon_height = icon.height.round().max(1.0);
+    let icon_container = div()
+        .id(("item-image-layer-item", item.item_id.0))
+        .absolute()
+        .left(px(icon_left))
+        .top(px(icon_top))
+        .w(px(icon_width))
+        .h(px(icon_height))
+        .flex()
+        .items_center()
+        .justify_center();
+
+    match item.thumbnail_path {
+        Some(path) => icon_container.child(
+            div().size_full().rounded_md().overflow_hidden().child(
+                img(path)
+                    .id(item_image_element_id(item.slot_id))
+                    .size_full(),
+            ),
+        ),
+        None => icon_container.child(item_image_or_fallback(
+            item.slot_id,
+            item.icon,
+            item.fallback_marker,
+        )),
+    }
+}
+
 fn static_item_visual_prepaint(
     pane_id: PaneId,
     item_id: ItemId,
@@ -2036,6 +2136,7 @@ fn static_item_visual_prepaint(
     selected: bool,
     hovered: bool,
     drop_target: bool,
+    paint_fallback_icon: bool,
     app: WeakEntity<FikaApp>,
     window: &mut Window,
     cx: &mut App,
@@ -2046,6 +2147,7 @@ fn static_item_visual_prepaint(
         display_name,
         icon_name_lines,
         fallback_marker,
+        paint_fallback_icon,
         &icon,
         layout,
         text_alignment,
@@ -2067,6 +2169,7 @@ fn static_item_visual_prepaint(
         shapes,
         label_line_height: style.label_line_height,
         background: item_tile_background(selected, drop_target, hovered),
+        paint_fallback_icon,
         fallback_bg: icon.fallback_bg,
     }
 }
@@ -2098,6 +2201,7 @@ fn static_item_text_shape_cache_key(
     display_name: SharedString,
     icon_name_lines: Arc<[SharedString]>,
     fallback_marker: SharedString,
+    paint_fallback_icon: bool,
     icon: &FileIconSnapshot,
     layout: ItemLayout,
     text_alignment: ItemTileTextAlignment,
@@ -2121,6 +2225,7 @@ fn static_item_text_shape_cache_key(
     StaticItemTextShapeCacheKey {
         item_id,
         text_alignment,
+        paint_fallback_icon,
         text_font: style.text_font.clone(),
         marker_font: style.marker_font.clone(),
         text_font_size_bits: style.text_font_size.as_f32().to_bits(),
@@ -2131,8 +2236,16 @@ fn static_item_text_shape_cache_key(
         text_height_bits: layout.text_rect.height.to_bits(),
         scale_factor_bits: window.scale_factor().to_bits(),
         text_color: style.text_color,
-        fallback_fg: icon.fallback_fg,
-        fallback_marker,
+        fallback_fg: if paint_fallback_icon {
+            icon.fallback_fg
+        } else {
+            0
+        },
+        fallback_marker: if paint_fallback_icon {
+            fallback_marker
+        } else {
+            SharedString::from("")
+        },
         label,
     }
 }
@@ -2142,21 +2255,23 @@ fn shape_static_item_text(
     style: &StaticItemTextShapeStyle,
     window: &mut Window,
 ) -> StaticItemTextShapes {
-    let fallback_marker = static_paint_single_line_text(key.fallback_marker.clone());
-    let marker_run = TextRun {
-        len: fallback_marker.len(),
-        font: style.marker_font.clone(),
-        color: rgb(style.fallback_fg).into(),
-        background_color: None,
-        underline: None,
-        strikethrough: None,
-    };
-    let marker_line = window.text_system().shape_line(
-        fallback_marker,
-        style.marker_font_size,
-        &[marker_run],
-        None,
-    );
+    let marker_line = key.paint_fallback_icon.then(|| {
+        let fallback_marker = static_paint_single_line_text(key.fallback_marker.clone());
+        let marker_run = TextRun {
+            len: fallback_marker.len(),
+            font: style.marker_font.clone(),
+            color: rgb(style.fallback_fg).into(),
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        window.text_system().shape_line(
+            fallback_marker,
+            style.marker_font_size,
+            &[marker_run],
+            None,
+        )
+    });
     let label = match &key.label {
         StaticItemLabelTextKey::Start(display_name) => {
             let run = TextRun {
@@ -2228,24 +2343,26 @@ fn static_item_visual_paint(
     window.paint_quad(fill(bounds, state.background).corner_radii(px(6.0)));
     let icon_bounds =
         static_item_local_bounds(bounds, state.layout.visual_rect, state.layout.icon_rect);
-    window.paint_quad(fill(icon_bounds, rgb(state.fallback_bg)).corner_radii(px(6.0)));
-    let marker_origin = point(
-        icon_bounds.origin.x,
-        icon_bounds.origin.y
-            + ((icon_bounds.size.height - state.marker_line_height).max(px(0.0)) / 2.0),
-    );
-    state
-        .shapes
-        .marker_line
-        .paint(
-            marker_origin,
-            state.marker_line_height,
-            TextAlign::Center,
-            Some(icon_bounds.size.width),
-            window,
-            cx,
-        )
-        .ok();
+    if state.paint_fallback_icon {
+        window.paint_quad(fill(icon_bounds, rgb(state.fallback_bg)).corner_radii(px(6.0)));
+        let marker_origin = point(
+            icon_bounds.origin.x,
+            icon_bounds.origin.y
+                + ((icon_bounds.size.height - state.marker_line_height).max(px(0.0)) / 2.0),
+        );
+        if let Some(marker_line) = &state.shapes.marker_line {
+            marker_line
+                .paint(
+                    marker_origin,
+                    state.marker_line_height,
+                    TextAlign::Center,
+                    Some(icon_bounds.size.width),
+                    window,
+                    cx,
+                )
+                .ok();
+        }
+    }
 
     let text_bounds =
         static_item_local_bounds(bounds, state.layout.visual_rect, state.layout.text_rect);
@@ -2810,7 +2927,7 @@ mod tests {
         FileGridMode, FileGridRenderSnapshot, FileGridSnapshot, ItemPaintContent,
         ItemPaintSlotCache, ItemTileTextAlignment, VisibleItemSnapshot, display_text_layout,
         drag_preview_content_origin, drag_preview_label, item_identity_element_id,
-        item_image_element_id, item_mouse_down_opens_directory,
+        item_image_element_id, item_image_layer_items, item_mouse_down_opens_directory,
         measured_viewport_for_scrollbar_axis, normalized_text_range, rename_text_layout,
         static_item_visual_layer_element_id, static_item_visual_layer_items,
         viewport_bounds_update_requires_notify,
@@ -2879,7 +2996,7 @@ mod tests {
     }
 
     #[test]
-    fn static_item_visual_layer_keeps_only_fallback_static_items() {
+    fn content_layers_split_base_visuals_from_image_visuals() {
         let mut cache = ItemPaintSlotCache::default();
         let static_item =
             test_visible_item(1, ItemId(7), "alpha.txt", test_item_layout(0.0), false);
@@ -2905,10 +3022,23 @@ mod tests {
         let FileGridRenderSnapshot::Icons { items, .. } = projection.snapshot else {
             panic!("expected icons snapshot");
         };
-        let layer_items = static_item_visual_layer_items(&items, ItemTileTextAlignment::Center);
+        let visual_items = static_item_visual_layer_items(&items, ItemTileTextAlignment::Center);
+        let image_items = item_image_layer_items(&items);
 
-        assert_eq!(layer_items.len(), 1);
-        assert_eq!(layer_items[0].item_id, ItemId(7));
+        assert_eq!(
+            visual_items
+                .iter()
+                .map(|item| (item.item_id, item.paint_fallback_icon))
+                .collect::<Vec<_>>(),
+            vec![(ItemId(7), true), (ItemId(8), false), (ItemId(9), false)]
+        );
+        assert_eq!(
+            image_items
+                .iter()
+                .map(|item| item.item_id)
+                .collect::<Vec<_>>(),
+            vec![ItemId(8), ItemId(9)]
+        );
     }
 
     #[test]

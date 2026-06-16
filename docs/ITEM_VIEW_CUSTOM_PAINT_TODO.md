@@ -72,6 +72,21 @@ This is the active task board for the GPUI item view custom-paint migration.
 - [ ] Revisit whether thumbnail/theme-icon retained image items can join a
   Fika-owned viewport painter after render-image cache ownership exists.
 
+## P7: Non-Rename Base Visual and Image Layer
+
+- [x] Include every non-renaming Compact/Icons item in the content-level base
+  visual layer.
+- [x] Paint fallback icon markers only for items without thumbnail/theme-icon
+  paths.
+- [x] Move thumbnail/theme-icon `img()` elements into a content-level image
+  layer keyed by retained visual slot id.
+- [x] Keep non-renaming item shells transparent and interaction-only.
+- [x] Keep rename items on the current child subtree.
+- [x] Skip fallback marker shaping and cache-key fragmentation for image-backed
+  items.
+- [ ] Revisit direct `Window::paint_image` after Fika owns render-image decode
+  and invalidation.
+
 ## Acceptance Gates
 
 - [ ] No behavior regression in rename, selection, context menu, item DnD,
@@ -80,4 +95,4 @@ This is the active task board for the GPUI item view custom-paint migration.
 - [ ] Perf logs show resize steady path stays sub-millisecond for item snapshot
   conversion and no new large `file-grid build` regression.
 - [ ] Cold mode switch cost is tracked separately from resize cost.
-- [ ] Custom paint path is used by static Compact and Icons items.
+- [ ] Custom paint path is used by non-renaming Compact and Icons base visuals.
