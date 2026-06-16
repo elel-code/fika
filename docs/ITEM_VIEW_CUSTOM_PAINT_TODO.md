@@ -205,6 +205,8 @@ This is the active task board for the GPUI item view custom-paint migration.
 - [x] Emit `[fika renderer-policy]` logs so runtime perf evidence includes the
   actual surface-count distribution for custom paint, retained interaction, and
   GPUI shell boundaries.
+- [x] Require renderer-policy log coverage for Compact, Icons, and Details in
+  the standard runtime perf gate.
 
 ## Acceptance Gates
 

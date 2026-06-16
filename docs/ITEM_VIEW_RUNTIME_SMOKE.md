@@ -81,9 +81,10 @@ Expected log properties:
   attributable.
 - `[fika item-interaction]` hitbox count should match the visible retained
   interaction items for Compact/Icons and Details.
-- `[fika renderer-policy]` should show how many visible surfaces are using the
-  visual layer, image layer, retained interaction layer, GPUI drag-start shell,
-  and rename overlay for the exercised mode.
+- `[fika renderer-policy]` should appear for Compact, Icons, and Details and
+  show how many visible surfaces are using the visual layer, image layer,
+  retained interaction layer, GPUI drag-start shell, and rename overlay for
+  each exercised mode.
 
 Use `scripts/analyze-item-view-perf.sh` as the first pass. It summarizes
 item-view phases, file-grid build maxima, Compact/Icons static custom visual

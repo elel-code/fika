@@ -29,6 +29,7 @@ root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
     --require-static-modes Compact,Icons \
     --require-interaction \
     --require-renderer-policy \
+    --require-renderer-policy-modes Compact,Icons,Details \
     --require-modes Compact,Icons,Details \
     --steady-total-us 1000 \
     --file-grid-build-us 3000 \

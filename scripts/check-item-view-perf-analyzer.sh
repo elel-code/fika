@@ -40,6 +40,7 @@ EOF
     --require-static-modes Compact,Icons \
     --require-interaction \
     --require-renderer-policy \
+    --require-renderer-policy-modes Compact,Icons,Details \
     --require-modes Compact,Icons,Details \
     --steady-total-us 1000 \
     --file-grid-build-us 3000 \
@@ -86,6 +87,19 @@ EOF
 
 if "$analyzer" --require-static-modes Compact,Icons "$tmpdir/missing-static-mode.log" >/dev/null 2>&1; then
     echo "expected missing required static visual mode to fail" >&2
+    exit 1
+fi
+
+cat > "$tmpdir/missing-renderer-policy-mode.log" <<'EOF'
+[fika item-view] pane=1 mode=Compact phase=steady items=48 visible=32 raw=50us queue=1us convert=40us total=120us
+[fika item-view] pane=1 mode=Icons phase=steady items=48 visible=40 raw=45us queue=1us convert=35us total=110us
+[fika item-view] pane=1 mode=Details phase=steady items=48 visible=30 raw=42us queue=1us convert=32us total=105us
+[fika renderer-policy] pane=1 mode=Compact items=48 visual_layer=48 image_layer=8 retained_interaction=48 gpui_drag_shell=48 rename_overlay=0
+[fika renderer-policy] pane=1 mode=Icons items=48 visual_layer=48 image_layer=8 retained_interaction=48 gpui_drag_shell=48 rename_overlay=0
+EOF
+
+if "$analyzer" --require-renderer-policy-modes Compact,Icons,Details "$tmpdir/missing-renderer-policy-mode.log" >/dev/null 2>&1; then
+    echo "expected missing required renderer-policy mode to fail" >&2
     exit 1
 fi
 

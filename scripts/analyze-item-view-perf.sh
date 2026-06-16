@@ -28,6 +28,9 @@ Options:
   --require-renderer-policy
       Fail if [fika renderer-policy] surface-count logs are missing.
 
+  --require-renderer-policy-modes A,B,C
+      Fail if any comma-separated view mode is absent from renderer-policy logs.
+
   --require-modes A,B,C
       Fail if any comma-separated view mode is absent from parsed perf logs.
 
@@ -58,6 +61,7 @@ require_interaction=false
 require_renderer_policy=false
 required_modes=""
 required_static_modes=""
+required_renderer_policy_modes=""
 steady_total_us=""
 file_grid_build_us=""
 static_visual_paint_us=""
@@ -93,6 +97,18 @@ while [[ $# -gt 0 ]]; do
             ;;
         --require-renderer-policy)
             require_renderer_policy=true
+            ;;
+        --require-renderer-policy-modes)
+            if [[ $# -lt 2 || "$2" == --* ]]; then
+                echo "--require-renderer-policy-modes requires a comma-separated value" >&2
+                usage >&2
+                exit 2
+            fi
+            required_renderer_policy_modes="$2"
+            shift
+            ;;
+        --require-renderer-policy-modes=*)
+            required_renderer_policy_modes="${1#--require-renderer-policy-modes=}"
             ;;
         --require-modes)
             if [[ $# -lt 2 || "$2" == --* ]]; then
@@ -226,6 +242,7 @@ awk \
     -v require_renderer_policy="$require_renderer_policy" \
     -v required_modes="$required_modes" \
     -v required_static_modes="$required_static_modes" \
+    -v required_renderer_policy_modes="$required_renderer_policy_modes" \
     -v steady_total_limit="$steady_total_us" \
     -v file_grid_build_limit="$file_grid_build_us" \
     -v static_visual_paint_limit="$static_visual_paint_us" \
@@ -299,6 +316,7 @@ function parse_required_list(list, target, label,    count, i, value) {
 BEGIN {
     parse_required_list(required_modes, required_mode, "--require-modes")
     parse_required_list(required_static_modes, required_static_mode, "--require-static-modes")
+    parse_required_list(required_renderer_policy_modes, required_renderer_policy_mode, "--require-renderer-policy-modes")
 }
 
 /^\[fika item-view\]/ {
@@ -390,7 +408,11 @@ BEGIN {
 
 /^\[fika renderer-policy\]/ {
     renderer_policy_count++
-    note_mode(field("mode"))
+    mode = field("mode")
+    note_mode(mode)
+    if (mode != "") {
+        renderer_policy_modes[mode] = 1
+    }
     max_assign(single_max, "renderer_policy_items", field("items") + 0)
     max_assign(single_max, "renderer_policy_visual_layer", field("visual_layer") + 0)
     max_assign(single_max, "renderer_policy_image_layer", field("image_layer") + 0)
@@ -466,6 +488,11 @@ END {
     }
     if (require_renderer_policy == "true" && renderer_policy_count == 0) {
         fail("missing [fika renderer-policy] lines")
+    }
+    for (mode in required_renderer_policy_mode) {
+        if (!(mode in renderer_policy_modes)) {
+            fail("missing required renderer-policy mode " mode)
+        }
     }
     for (mode in required_mode) {
         if (!(mode in modes)) {
