@@ -83,6 +83,7 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
 - [x] Phase 3：显式 retained paint slot state，区分 geometry-only/content/visual changes。
 - [x] Phase 4：缩略图/图片绘制边界收敛到 retained image path。
 - [x] Phase 5：从 `canvas` spike 升级到 dedicated GPUI custom element。
+- [x] Phase 6：静态 fallback Compact/Icons item 上提到 content-level 自绘 layer，item shell 仅保留交互。
 
 ### GPUI Backend / External MIME Drag (阻塞)
 - [~] 外部 MIME 拖出：`DragExportPayload`（`text/uri-list` + `text/plain`）已构造，但 GPUI/Wayland backend 尚未提供从 app 内部 drag source 向外部应用发布 MIME 的 API。待 backend 支持后接入。

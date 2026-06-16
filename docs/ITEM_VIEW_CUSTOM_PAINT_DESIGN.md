@@ -201,16 +201,37 @@ Replace `canvas` spike with a dedicated custom GPUI element if needed:
 
 Current boundary:
 
-- static fallback visuals use `StaticItemVisualElement` instead of `gpui::canvas`
-- the element owns prepaint/paint state and reports pane-local aggregate timing
-- item interaction still remains on the outer shell while the painter boundary is
-  migrated
+- static fallback visuals use `StaticItemVisualLayerElement` instead of
+  `gpui::canvas`
+- the layer owns prepaint/paint state and reports pane-local aggregate timing
+- item interaction still remains on the outer shell while the painter boundary
+  is migrated
 
 Acceptance:
 
 - no normal static item child tree except the interaction shell
 - custom element owns all static item painting
 - tests cover geometry math and cache invalidation
+
+### Phase 6: Pane-Level Static Visual Layer
+
+Hoist static fallback item painting from per-item elements to one content-level
+layer for Compact and Icons:
+
+- build a filtered static paint list from retained `ItemPaintSnapshot` values
+- paint all non-renaming, non-thumbnail, non-theme-icon fallback items in one
+  custom element
+- keep each item slot as a transparent interaction and drag shell
+- keep thumbnail, theme-icon, and rename paths as specialized child paths
+
+Acceptance:
+
+- static fallback Compact and Icons visuals no longer allocate one custom
+  element per item
+- selection/hover/drop visual changes are projected through retained item paint
+  state into the layer
+- image and rename items continue to use their existing paths
+- tests prove only fallback static items enter the layer
 
 ## Invariants
 

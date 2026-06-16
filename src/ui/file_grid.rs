@@ -112,8 +112,6 @@ enum ItemTileTextAlignment {
 }
 
 struct StaticItemVisualPaintState {
-    pane_id: PaneId,
-    app: WeakEntity<FikaApp>,
     layout: ItemLayout,
     marker_line_height: Pixels,
     shapes: Arc<StaticItemTextShapes>,
@@ -135,13 +133,13 @@ impl StaticItemVisualPerfStats {
         self.prepaint_count > 0 || self.paint_count > 0
     }
 
-    fn record_prepaint(&mut self, elapsed: Duration) {
-        self.prepaint_count += 1;
+    fn record_prepaint(&mut self, elapsed: Duration, count: usize) {
+        self.prepaint_count += count;
         self.prepaint_us += elapsed.as_micros();
     }
 
-    fn record_paint(&mut self, elapsed: Duration) {
-        self.paint_count += 1;
+    fn record_paint(&mut self, elapsed: Duration, count: usize) {
+        self.paint_count += count;
         self.paint_us += elapsed.as_micros();
     }
 }
@@ -559,8 +557,8 @@ fn item_image_element_id(slot_id: u64) -> (&'static str, u64) {
     ("item-image", slot_id)
 }
 
-fn static_item_visual_element_id(item_id: ItemId) -> (&'static str, u64) {
-    ("static-item-visual", item_id.0)
+fn static_item_visual_layer_element_id(pane_id: PaneId) -> (&'static str, u64) {
+    ("static-item-visual-layer", pane_id.0)
 }
 
 fn handle_file_grid_item_drag_move(
@@ -773,20 +771,33 @@ pub(crate) fn file_grid(
         } => {
             let content_size = icons_layout.content_size();
             let visible_count = items.len();
+            let static_visual_layer = static_item_visual_layer_view(
+                pane_id,
+                &items,
+                content_size.width,
+                content_size.height,
+                ItemTileTextAlignment::Center,
+                app.clone(),
+            );
+            let content = div()
+                .relative()
+                .w(px(content_size.width))
+                .h(px(content_size.height));
+            let content = if let Some(layer) = static_visual_layer {
+                content.child(layer)
+            } else {
+                content
+            };
             let viewport = file_grid_viewport_shell(pane_id, drop_target, mode, cx).child(
-                div()
-                    .relative()
-                    .w(px(content_size.width))
-                    .h(px(content_size.height))
-                    .children(items.into_iter().map(|item| {
-                        item_tile(
-                            pane_id,
-                            item,
-                            ItemTileTextAlignment::Center,
-                            app.clone(),
-                            cx,
-                        )
-                    })),
+                content.children(items.into_iter().map(|item| {
+                    item_tile(
+                        pane_id,
+                        item,
+                        ItemTileTextAlignment::Center,
+                        app.clone(),
+                        cx,
+                    )
+                })),
             );
             (
                 content_size.width,
@@ -798,14 +809,27 @@ pub(crate) fn file_grid(
         FileGridRenderSnapshot::Compact { layout, items } => {
             let content_size = layout.content_size();
             let visible_count = items.len();
+            let static_visual_layer = static_item_visual_layer_view(
+                pane_id,
+                &items,
+                content_size.width,
+                content_size.height,
+                ItemTileTextAlignment::Start,
+                app.clone(),
+            );
+            let content = div()
+                .relative()
+                .w(px(content_size.width))
+                .h(px(content_size.height));
+            let content = if let Some(layer) = static_visual_layer {
+                content.child(layer)
+            } else {
+                content
+            };
             let viewport = file_grid_viewport_shell(pane_id, drop_target, mode, cx).child(
-                div()
-                    .relative()
-                    .w(px(content_size.width))
-                    .h(px(content_size.height))
-                    .children(items.into_iter().map(|item| {
-                        item_tile(pane_id, item, ItemTileTextAlignment::Start, app.clone(), cx)
-                    })),
+                content.children(items.into_iter().map(|item| {
+                    item_tile(pane_id, item, ItemTileTextAlignment::Start, app.clone(), cx)
+                })),
             );
             (
                 content_size.width,
@@ -972,18 +996,28 @@ impl FikaApp {
             .unwrap_or_default()
     }
 
-    fn record_static_item_visual_prepaint(&mut self, pane_id: PaneId, elapsed: Duration) {
+    fn record_static_item_visual_prepaint(
+        &mut self,
+        pane_id: PaneId,
+        elapsed: Duration,
+        count: usize,
+    ) {
         self.static_item_visual_perf_stats
             .entry(pane_id)
             .or_default()
-            .record_prepaint(elapsed);
+            .record_prepaint(elapsed, count);
     }
 
-    fn record_static_item_visual_paint(&mut self, pane_id: PaneId, elapsed: Duration) {
+    fn record_static_item_visual_paint(
+        &mut self,
+        pane_id: PaneId,
+        elapsed: Duration,
+        count: usize,
+    ) {
         self.static_item_visual_perf_stats
             .entry(pane_id)
             .or_default()
-            .record_paint(elapsed);
+            .record_paint(elapsed, count);
     }
 }
 
@@ -1675,9 +1709,7 @@ fn item_tile(
     let selection_count = item.visual.selection_count;
     let hovered = item.visual.hovered;
     let drop_target = item.visual.drop_target;
-    let use_static_visual_paint = content.draft_name.is_none()
-        && content.thumbnail_path.is_none()
-        && content.icon.path.is_none();
+    let use_static_visual_paint = item_uses_static_visual_paint(content);
     let drag_app = app.clone();
     let drag_value = ItemDrag {
         pane_id,
@@ -1729,20 +1761,7 @@ fn item_tile(
             })
         });
     let core = if use_static_visual_paint {
-        core.child(static_item_visual_view(
-            pane_id,
-            item_id,
-            content.display_name.clone(),
-            content.icon_name_lines.clone(),
-            content.icon.clone(),
-            content.fallback_marker.clone(),
-            item.layout,
-            text_alignment,
-            selected,
-            hovered,
-            drop_target,
-            app,
-        ))
+        core
     } else {
         let text = if let Some(draft_name) = content.draft_name.as_deref() {
             rename_text_view(
@@ -1782,6 +1801,10 @@ fn item_tile(
         .child(core)
 }
 
+fn item_uses_static_visual_paint(content: &ItemPaintContent) -> bool {
+    content.draft_name.is_none() && content.thumbnail_path.is_none() && content.icon.path.is_none()
+}
+
 fn item_tile_background(selected: bool, drop_target: bool, hovered: bool) -> Rgba {
     if drop_target {
         drop_target_item_background()
@@ -1816,43 +1839,55 @@ fn directory_drag_over_styles(item: Stateful<Div>) -> Stateful<Div> {
         .drag_over::<PlaceDrag>(|style, _, _, _| style.bg(drop_target_item_background()))
 }
 
-fn static_item_visual_view(
+fn static_item_visual_layer_view(
     pane_id: PaneId,
-    item_id: ItemId,
-    display_name: SharedString,
-    icon_name_lines: Arc<[SharedString]>,
-    icon: FileIconSnapshot,
-    fallback_marker: SharedString,
-    layout: ItemLayout,
+    items: &[ItemPaintSnapshot],
+    width: f32,
+    height: f32,
     text_alignment: ItemTileTextAlignment,
-    selected: bool,
-    hovered: bool,
-    drop_target: bool,
     app: WeakEntity<FikaApp>,
-) -> impl IntoElement {
-    StaticItemVisualElement {
-        pane_id,
-        item_id,
-        display_name,
-        icon_name_lines,
-        icon,
-        fallback_marker,
-        layout,
-        text_alignment,
-        selected,
-        hovered,
-        drop_target,
-        app,
-        style: StyleRefinement::default(),
-    }
-    .absolute()
-    .left_0()
-    .top_0()
-    .size_full()
+) -> Option<StaticItemVisualLayerElement> {
+    let items = static_item_visual_layer_items(items, text_alignment);
+    (!items.is_empty()).then(|| {
+        StaticItemVisualLayerElement {
+            pane_id,
+            app,
+            items,
+            style: StyleRefinement::default(),
+        }
+        .absolute()
+        .left_0()
+        .top_0()
+        .w(px(width.max(1.0)))
+        .h(px(height.max(1.0)))
+    })
 }
 
-struct StaticItemVisualElement {
-    pane_id: PaneId,
+fn static_item_visual_layer_items(
+    items: &[ItemPaintSnapshot],
+    text_alignment: ItemTileTextAlignment,
+) -> Vec<StaticItemVisualLayerItem> {
+    items
+        .iter()
+        .filter_map(|item| {
+            let content = item.content.as_ref();
+            item_uses_static_visual_paint(content).then(|| StaticItemVisualLayerItem {
+                item_id: item.item_id,
+                display_name: content.display_name.clone(),
+                icon_name_lines: content.icon_name_lines.clone(),
+                icon: content.icon.clone(),
+                fallback_marker: content.fallback_marker.clone(),
+                layout: item.layout,
+                text_alignment,
+                selected: item.visual.selected,
+                hovered: item.visual.hovered,
+                drop_target: item.visual.drop_target,
+            })
+        })
+        .collect()
+}
+
+struct StaticItemVisualLayerItem {
     item_id: ItemId,
     display_name: SharedString,
     icon_name_lines: Arc<[SharedString]>,
@@ -1863,11 +1898,16 @@ struct StaticItemVisualElement {
     selected: bool,
     hovered: bool,
     drop_target: bool,
+}
+
+struct StaticItemVisualLayerElement {
+    pane_id: PaneId,
     app: WeakEntity<FikaApp>,
+    items: Vec<StaticItemVisualLayerItem>,
     style: StyleRefinement,
 }
 
-impl IntoElement for StaticItemVisualElement {
+impl IntoElement for StaticItemVisualLayerElement {
     type Element = Self;
 
     fn into_element(self) -> Self::Element {
@@ -1875,12 +1915,14 @@ impl IntoElement for StaticItemVisualElement {
     }
 }
 
-impl Element for StaticItemVisualElement {
+impl Element for StaticItemVisualLayerElement {
     type RequestLayoutState = Style;
-    type PrepaintState = StaticItemVisualPaintState;
+    type PrepaintState = Vec<StaticItemVisualPaintState>;
 
     fn id(&self) -> Option<ElementId> {
-        Some(ElementId::from(static_item_visual_element_id(self.item_id)))
+        Some(ElementId::from(static_item_visual_layer_element_id(
+            self.pane_id,
+        )))
     }
 
     fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
@@ -1909,22 +1951,37 @@ impl Element for StaticItemVisualElement {
         window: &mut Window,
         cx: &mut App,
     ) -> Self::PrepaintState {
-        static_item_visual_prepaint(
-            self.pane_id,
-            self.item_id,
-            self.display_name.clone(),
-            self.icon_name_lines.clone(),
-            self.icon.clone(),
-            self.fallback_marker.clone(),
-            self.layout,
-            self.text_alignment,
-            self.selected,
-            self.hovered,
-            self.drop_target,
-            self.app.clone(),
-            window,
-            cx,
-        )
+        let perf_started = crate::item_view_perf_enabled().then(std::time::Instant::now);
+        let states = self
+            .items
+            .iter()
+            .map(|item| {
+                static_item_visual_prepaint(
+                    self.pane_id,
+                    item.item_id,
+                    item.display_name.clone(),
+                    item.icon_name_lines.clone(),
+                    item.icon.clone(),
+                    item.fallback_marker.clone(),
+                    item.layout,
+                    item.text_alignment,
+                    item.selected,
+                    item.hovered,
+                    item.drop_target,
+                    self.app.clone(),
+                    window,
+                    cx,
+                )
+            })
+            .collect::<Vec<_>>();
+        if let Some(started) = perf_started {
+            let elapsed = started.elapsed();
+            let count = states.len();
+            let _ = self.app.update(cx, |this, _cx| {
+                this.record_static_item_visual_prepaint(self.pane_id, elapsed, count);
+            });
+        }
+        states
     }
 
     fn paint(
@@ -1937,13 +1994,31 @@ impl Element for StaticItemVisualElement {
         window: &mut Window,
         cx: &mut App,
     ) {
+        let perf_started = crate::item_view_perf_enabled().then(std::time::Instant::now);
+        let count = prepaint.len();
         request_layout.paint(bounds, window, cx, |window, cx| {
-            static_item_visual_paint(bounds, prepaint, window, cx);
+            for state in prepaint.iter() {
+                let visual = state.layout.visual_rect;
+                let item_bounds = Bounds::new(
+                    point(
+                        bounds.origin.x + px(visual.x),
+                        bounds.origin.y + px(visual.y),
+                    ),
+                    size(px(visual.width.max(1.0)), px(visual.height.max(1.0))),
+                );
+                static_item_visual_paint(item_bounds, state, window, cx);
+            }
         });
+        if let Some(started) = perf_started {
+            let elapsed = started.elapsed();
+            let _ = self.app.update(cx, |this, _cx| {
+                this.record_static_item_visual_paint(self.pane_id, elapsed, count);
+            });
+        }
     }
 }
 
-impl Styled for StaticItemVisualElement {
+impl Styled for StaticItemVisualLayerElement {
     fn style(&mut self) -> &mut StyleRefinement {
         &mut self.style
     }
@@ -1965,7 +2040,6 @@ fn static_item_visual_prepaint(
     window: &mut Window,
     cx: &mut App,
 ) -> StaticItemVisualPaintState {
-    let perf_started = crate::item_view_perf_enabled().then(std::time::Instant::now);
     let style = static_item_text_shape_style(layout, selected, &icon, window);
     let key = static_item_text_shape_cache_key(
         item_id,
@@ -1987,23 +2061,14 @@ fn static_item_visual_prepaint(
         })
         .ok()
         .unwrap_or_else(|| Arc::new(shape_static_item_text(&key, &style, window)));
-    let state = StaticItemVisualPaintState {
-        pane_id,
-        app: app.clone(),
+    StaticItemVisualPaintState {
         layout,
         marker_line_height: style.marker_line_height,
         shapes,
         label_line_height: style.label_line_height,
         background: item_tile_background(selected, drop_target, hovered),
         fallback_bg: icon.fallback_bg,
-    };
-    if let Some(started) = perf_started {
-        let elapsed = started.elapsed();
-        let _ = app.update(cx, |this, _cx| {
-            this.record_static_item_visual_prepaint(pane_id, elapsed);
-        });
     }
-    state
 }
 
 fn static_item_text_shape_style(
@@ -2160,7 +2225,6 @@ fn static_item_visual_paint(
     window: &mut Window,
     cx: &mut App,
 ) {
-    let perf_started = crate::item_view_perf_enabled().then(std::time::Instant::now);
     window.paint_quad(fill(bounds, state.background).corner_radii(px(6.0)));
     let icon_bounds =
         static_item_local_bounds(bounds, state.layout.visual_rect, state.layout.icon_rect);
@@ -2222,12 +2286,6 @@ fn static_item_visual_paint(
             }
         }
     });
-    if let Some(started) = perf_started {
-        let elapsed = started.elapsed();
-        let _ = state.app.update(cx, |this, _cx| {
-            this.record_static_item_visual_paint(state.pane_id, elapsed);
-        });
-    }
 }
 
 fn static_item_local_bounds(
@@ -2754,7 +2812,8 @@ mod tests {
         drag_preview_content_origin, drag_preview_label, item_identity_element_id,
         item_image_element_id, item_mouse_down_opens_directory,
         measured_viewport_for_scrollbar_axis, normalized_text_range, rename_text_layout,
-        static_item_visual_element_id, viewport_bounds_update_requires_notify,
+        static_item_visual_layer_element_id, static_item_visual_layer_items,
+        viewport_bounds_update_requires_notify,
     };
     use crate::ui::icons::FileIconSnapshot;
     use crate::ui::item_view::ItemViewScrollbarAxis;
@@ -2808,15 +2867,48 @@ mod tests {
     }
 
     #[test]
-    fn static_item_visual_id_is_keyed_by_item_identity() {
+    fn static_item_visual_layer_id_is_keyed_by_pane_identity() {
         assert_eq!(
-            static_item_visual_element_id(ItemId(7)),
-            ("static-item-visual", 7)
+            static_item_visual_layer_element_id(fika_core::PaneId(7)),
+            ("static-item-visual-layer", 7)
         );
         assert_ne!(
-            static_item_visual_element_id(ItemId(7)),
-            static_item_visual_element_id(ItemId(8))
+            static_item_visual_layer_element_id(fika_core::PaneId(7)),
+            static_item_visual_layer_element_id(fika_core::PaneId(8))
         );
+    }
+
+    #[test]
+    fn static_item_visual_layer_keeps_only_fallback_static_items() {
+        let mut cache = ItemPaintSlotCache::default();
+        let static_item =
+            test_visible_item(1, ItemId(7), "alpha.txt", test_item_layout(0.0), false);
+        let mut thumbnail_item =
+            test_visible_item(2, ItemId(8), "photo.png", test_item_layout(96.0), false);
+        thumbnail_item.thumbnail_path = Some(Arc::from(Path::new("/tmp/photo.png")));
+        let mut theme_icon_item =
+            test_visible_item(3, ItemId(9), "app.desktop", test_item_layout(192.0), false);
+        theme_icon_item.icon.path = Some(Arc::from(Path::new("/tmp/app.svg")));
+        let mut rename_item =
+            test_visible_item(4, ItemId(10), "draft.txt", test_item_layout(288.0), false);
+        rename_item.draft_name = Some("draft-2.txt".to_string());
+
+        let projection = cache.project_file_grid_snapshot(
+            icons_snapshot(vec![
+                static_item,
+                thumbnail_item,
+                theme_icon_item,
+                rename_item,
+            ]),
+            None,
+        );
+        let FileGridRenderSnapshot::Icons { items, .. } = projection.snapshot else {
+            panic!("expected icons snapshot");
+        };
+        let layer_items = static_item_visual_layer_items(&items, ItemTileTextAlignment::Center);
+
+        assert_eq!(layer_items.len(), 1);
+        assert_eq!(layer_items[0].item_id, ItemId(7));
     }
 
     #[test]

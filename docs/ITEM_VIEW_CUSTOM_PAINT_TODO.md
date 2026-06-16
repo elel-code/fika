@@ -60,6 +60,18 @@ This is the active task board for the GPUI item view custom-paint migration.
 - [x] Move paint timing instrumentation into the custom element.
 - [x] Add tests around geometry and content-key invalidation.
 
+## P6: Pane-Level Static Visual Layer
+
+- [x] Paint static fallback Compact and Icons visuals through one content-level
+  custom layer.
+- [x] Keep item slots as transparent interaction shells for static fallback
+  items.
+- [x] Keep thumbnail, theme-icon, and rename items on their specialized child
+  paths.
+- [x] Add tests proving only fallback static items enter the layer.
+- [ ] Revisit whether thumbnail/theme-icon retained image items can join a
+  Fika-owned viewport painter after render-image cache ownership exists.
+
 ## Acceptance Gates
 
 - [ ] No behavior regression in rename, selection, context menu, item DnD,
