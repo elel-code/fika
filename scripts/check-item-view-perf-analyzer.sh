@@ -3,6 +3,7 @@ set -euo pipefail
 
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 analyzer="$root_dir/scripts/analyze-item-view-perf.sh"
+runtime_gate="$root_dir/scripts/check-item-view-runtime-log.sh"
 tmpdir="$(mktemp -d)"
 cleanup() {
     rm -rf "$tmpdir"
@@ -10,6 +11,7 @@ cleanup() {
 trap cleanup EXIT
 
 bash -n "$analyzer"
+bash -n "$runtime_gate"
 
 cat > "$tmpdir/complete.log" <<'EOF'
 [fika item-view] pane=1 mode=Compact phase=steady items=48 visible=32 raw=50us queue=1us convert=40us total=120us
@@ -40,6 +42,8 @@ EOF
     --custom-paint-us 1000 \
     "$tmpdir/complete.log" >/dev/null
 
+"$runtime_gate" "$tmpdir/complete.log" >/dev/null
+
 cat > "$tmpdir/missing-channels.log" <<'EOF'
 [fika item-view] pane=1 mode=Compact phase=steady items=48 visible=32 raw=50us queue=1us convert=40us total=120us
 EOF
@@ -67,6 +71,11 @@ fi
 
 if "$analyzer" --require-modes Compact,Icons,Details "$tmpdir/missing-channels.log" >/dev/null 2>&1; then
     echo "expected missing required modes to fail" >&2
+    exit 1
+fi
+
+if "$runtime_gate" "$tmpdir/missing-channels.log" >/dev/null 2>&1; then
+    echo "expected runtime log gate to fail missing channels" >&2
     exit 1
 fi
 
