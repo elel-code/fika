@@ -1666,14 +1666,21 @@ fn details_table(
         &columns,
         content_width,
         content_height,
-        app,
+        app.clone(),
     );
+    let interaction_layer =
+        details_interaction_layer_view(pane_id, &items, content_width, content_height, app.clone());
     let table = div()
         .relative()
         .w(px(content_width))
         .h(px(content_height))
         .child(details_header(&columns, content_width, metrics));
     let table = if let Some(layer) = visual_layer {
+        table.child(layer)
+    } else {
+        table
+    };
+    let table = if let Some(layer) = interaction_layer {
         table.child(layer)
     } else {
         table
@@ -2356,17 +2363,6 @@ fn details_row(
         .items_center()
         .bg(rgba(0x00000000))
         .block_mouse_except_scroll()
-        .cursor_pointer()
-        .on_hover(cx.listener(move |this, hovered: &bool, _window, cx| {
-            let changed = if *hovered {
-                this.set_hovered_item(pane_id, item_id)
-            } else {
-                this.clear_hovered_item(pane_id, item_id)
-            };
-            if changed {
-                cx.notify();
-            }
-        }))
         .on_scroll_wheel(
             cx.listener(move |this, event: &gpui::ScrollWheelEvent, _window, cx| {
                 handle_file_grid_wheel(this, pane_id, event, cx);
@@ -3222,6 +3218,47 @@ fn item_image_layer_icon_bounds(
             px(icon_rect.height.round().max(1.0)),
         ),
     )
+}
+
+fn details_interaction_layer_view(
+    pane_id: PaneId,
+    items: &[DetailsPaintSnapshot],
+    width: f32,
+    height: f32,
+    app: WeakEntity<FikaApp>,
+) -> Option<ItemInteractionLayerElement> {
+    let items = details_interaction_layer_items(items, width);
+    (!items.is_empty()).then(|| {
+        ItemInteractionLayerElement {
+            pane_id,
+            app,
+            items,
+            style: StyleRefinement::default(),
+        }
+        .absolute()
+        .left_0()
+        .top_0()
+        .w(px(width.max(1.0)))
+        .h(px(height.max(1.0)))
+    })
+}
+
+fn details_interaction_layer_items(
+    items: &[DetailsPaintSnapshot],
+    width: f32,
+) -> Vec<ItemInteractionLayerItem> {
+    items
+        .iter()
+        .map(|item| ItemInteractionLayerItem {
+            item_id: item.item_id,
+            visual_rect: ViewRect {
+                x: 0.0,
+                y: f32::from_bits(item.geometry.row_top),
+                width: width.max(1.0),
+                height: f32::from_bits(item.geometry.row_height).max(1.0),
+            },
+        })
+        .collect()
 }
 
 fn item_interaction_layer_view(
@@ -4229,15 +4266,15 @@ mod tests {
         DetailsTextShapeCacheKey, FileGridMode, FileGridRenderSnapshot, FileGridSnapshot,
         ItemPaintContent, ItemPaintSlotCache, ItemTileTextAlignment, StaticItemLabelTextKey,
         StaticItemTextShapeCacheKey, VisibleItemSnapshot, details_columns,
-        details_visual_layer_element_id, details_visual_layer_items, display_text_layout,
-        drag_preview_label, item_identity_element_id, item_image_element_id,
-        item_image_layer_item_source_path, item_image_layer_items,
-        item_image_load_failure_paints_fallback, item_image_paint_layer_element_id,
-        item_interaction_hitbox_bounds, item_interaction_layer_element_id,
-        item_interaction_layer_items, item_mouse_down_opens_directory,
-        measured_viewport_for_scrollbar_axis, normalized_text_range, rename_text_layout,
-        static_item_visual_layer_element_id, static_item_visual_layer_items,
-        viewport_bounds_update_requires_notify,
+        details_interaction_layer_items, details_visual_layer_element_id,
+        details_visual_layer_items, display_text_layout, drag_preview_label,
+        item_identity_element_id, item_image_element_id, item_image_layer_item_source_path,
+        item_image_layer_items, item_image_load_failure_paints_fallback,
+        item_image_paint_layer_element_id, item_interaction_hitbox_bounds,
+        item_interaction_layer_element_id, item_interaction_layer_items,
+        item_mouse_down_opens_directory, measured_viewport_for_scrollbar_axis,
+        normalized_text_range, rename_text_layout, static_item_visual_layer_element_id,
+        static_item_visual_layer_items, viewport_bounds_update_requires_notify,
     };
     use crate::ui::drag_drop::drag_preview_content_origin_for_cursor_offset;
     use crate::ui::icons::FileIconSnapshot;
@@ -4852,6 +4889,56 @@ mod tests {
             }
             _ => panic!("expected modified text cell"),
         }
+    }
+
+    #[test]
+    fn details_interaction_layer_items_use_retained_row_geometry() {
+        let mut cache = ItemPaintSlotCache::default();
+        let metrics = test_details_metrics();
+        let projection = cache.project_file_grid_snapshot(
+            details_snapshot(
+                vec![
+                    test_details_item(0, ItemId(7), "alpha.txt"),
+                    test_details_item(2, ItemId(9), "gamma.txt"),
+                ],
+                metrics,
+                260.0,
+            ),
+            None,
+        );
+        let FileGridRenderSnapshot::Details { items, .. } = projection.snapshot else {
+            panic!("expected details render snapshot");
+        };
+
+        let interaction_items = details_interaction_layer_items(&items, 320.0);
+
+        assert_eq!(
+            interaction_items
+                .iter()
+                .map(|item| item.item_id)
+                .collect::<Vec<_>>(),
+            vec![ItemId(7), ItemId(9)]
+        );
+        assert_eq!(
+            interaction_items
+                .iter()
+                .map(|item| item.visual_rect)
+                .collect::<Vec<_>>(),
+            vec![
+                ViewRect {
+                    x: 0.0,
+                    y: metrics.header_height,
+                    width: 320.0,
+                    height: metrics.row_height,
+                },
+                ViewRect {
+                    x: 0.0,
+                    y: metrics.header_height + metrics.row_height * 2.0,
+                    width: 320.0,
+                    height: metrics.row_height,
+                },
+            ]
+        );
     }
 
     #[test]
