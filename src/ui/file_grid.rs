@@ -99,7 +99,7 @@ pub(crate) enum FileGridRenderSnapshot {
         items: Vec<ItemPaintSnapshot>,
     },
     Details {
-        items: Vec<DetailsItemSnapshot>,
+        items: Vec<DetailsPaintSnapshot>,
         row_count: usize,
         metrics: DetailsLayoutMetrics,
         name_column_width: f32,
@@ -279,6 +279,7 @@ impl ItemPaintSlotStats {
 #[derive(Default)]
 pub(crate) struct ItemPaintSlotCache {
     slots: HashMap<u64, ItemPaintSlot>,
+    details_slots: HashMap<ItemId, DetailsPaintSlot>,
     visible_epoch: u64,
 }
 
@@ -295,14 +296,18 @@ impl ItemPaintSlotCache {
     ) -> ItemPaintSlotProjection {
         match snapshot {
             FileGridSnapshot::Compact { layout, items } => {
-                let (stats, items) = self.project_visible_items(items, hovered_item);
+                let (mut stats, items) = self.project_visible_items(items, hovered_item);
+                self.clear_details_items(&mut stats);
+                self.finish_stats(&mut stats);
                 ItemPaintSlotProjection {
                     stats,
                     snapshot: FileGridRenderSnapshot::Compact { layout, items },
                 }
             }
             FileGridSnapshot::Icons { layout, items } => {
-                let (stats, items) = self.project_visible_items(items, hovered_item);
+                let (mut stats, items) = self.project_visible_items(items, hovered_item);
+                self.clear_details_items(&mut stats);
+                self.finish_stats(&mut stats);
                 ItemPaintSlotProjection {
                     stats,
                     snapshot: FileGridRenderSnapshot::Icons { layout, items },
@@ -314,7 +319,10 @@ impl ItemPaintSlotCache {
                 metrics,
                 name_column_width,
             } => {
-                let (stats, _) = self.project_visible_items(Vec::new(), None);
+                let (mut stats, _) = self.project_visible_items(Vec::new(), None);
+                let items =
+                    self.project_details_items(items, metrics, name_column_width, &mut stats);
+                self.finish_stats(&mut stats);
                 ItemPaintSlotProjection {
                     stats,
                     snapshot: FileGridRenderSnapshot::Details {
@@ -326,6 +334,10 @@ impl ItemPaintSlotCache {
                 }
             }
         }
+    }
+
+    fn finish_stats(&self, stats: &mut ItemPaintSlotStats) {
+        stats.entries = self.slots.len() + self.details_slots.len();
     }
 
     fn project_visible_items(
@@ -382,6 +394,66 @@ impl ItemPaintSlotCache {
         stats.removed = before_retain.saturating_sub(self.slots.len());
         stats.entries = self.slots.len();
         (stats, snapshots)
+    }
+
+    fn clear_details_items(&mut self, stats: &mut ItemPaintSlotStats) {
+        stats.removed += self.details_slots.len();
+        self.details_slots.clear();
+    }
+
+    fn project_details_items(
+        &mut self,
+        items: Vec<DetailsItemSnapshot>,
+        metrics: DetailsLayoutMetrics,
+        name_column_width: f32,
+        stats: &mut ItemPaintSlotStats,
+    ) -> Vec<DetailsPaintSnapshot> {
+        self.visible_epoch = self.visible_epoch.wrapping_add(1).max(1);
+        let mut snapshots = Vec::with_capacity(items.len());
+        for item in items {
+            let item_id = item.item_id;
+            let geometry = DetailsPaintGeometry::from_item(&item, metrics, name_column_width);
+            let next_content = DetailsPaintContent::from_item(&item);
+            let visual = DetailsPaintVisualState::from_item(&item);
+            match self.details_slots.get_mut(&item_id) {
+                Some(slot) => {
+                    if slot.content.as_ref() != &next_content {
+                        stats.content_changed += 1;
+                        slot.content = Arc::new(next_content);
+                    } else if slot.geometry != geometry {
+                        stats.geometry_changed += 1;
+                    } else if slot.visual != visual {
+                        stats.visual_changed += 1;
+                    } else {
+                        stats.unchanged += 1;
+                    }
+                    slot.row_index = item.row_index;
+                    slot.geometry = geometry;
+                    slot.visual = visual;
+                    slot.visible_epoch = self.visible_epoch;
+                    snapshots.push(slot.snapshot(item_id));
+                }
+                None => {
+                    stats.inserted += 1;
+                    let slot = DetailsPaintSlot {
+                        row_index: item.row_index,
+                        geometry,
+                        content: Arc::new(next_content),
+                        visual,
+                        visible_epoch: self.visible_epoch,
+                    };
+                    snapshots.push(slot.snapshot(item_id));
+                    self.details_slots.insert(item_id, slot);
+                }
+            }
+        }
+
+        let visible_epoch = self.visible_epoch;
+        let before_retain = self.details_slots.len();
+        self.details_slots
+            .retain(|_, slot| slot.visible_epoch == visible_epoch);
+        stats.removed += before_retain.saturating_sub(self.details_slots.len());
+        snapshots
     }
 }
 
@@ -495,6 +567,103 @@ impl ItemPaintContent {
             draft_selection: item.draft_selection,
             draft_error: item.draft_error.clone(),
             draft_warning: item.draft_warning.clone(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct DetailsPaintSlot {
+    row_index: usize,
+    geometry: DetailsPaintGeometry,
+    content: Arc<DetailsPaintContent>,
+    visual: DetailsPaintVisualState,
+    visible_epoch: u64,
+}
+
+impl DetailsPaintSlot {
+    fn snapshot(&self, item_id: ItemId) -> DetailsPaintSnapshot {
+        DetailsPaintSnapshot {
+            item_id,
+            row_index: self.row_index,
+            geometry: self.geometry,
+            content: self.content.clone(),
+            visual: self.visual,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct DetailsPaintSnapshot {
+    item_id: ItemId,
+    row_index: usize,
+    geometry: DetailsPaintGeometry,
+    content: Arc<DetailsPaintContent>,
+    visual: DetailsPaintVisualState,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DetailsPaintGeometry {
+    row_top: u32,
+    row_height: u32,
+    icon_size: u32,
+    name_column_width: u32,
+}
+
+impl DetailsPaintGeometry {
+    fn from_item(
+        item: &DetailsItemSnapshot,
+        metrics: DetailsLayoutMetrics,
+        name_column_width: f32,
+    ) -> Self {
+        Self {
+            row_top: (metrics.header_height + item.row_index as f32 * metrics.row_height).to_bits(),
+            row_height: metrics.row_height.to_bits(),
+            icon_size: metrics.icon_size.to_bits(),
+            name_column_width: name_column_width.to_bits(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct DetailsPaintContent {
+    path: Arc<Path>,
+    is_dir: bool,
+    name: Arc<str>,
+    icon: FileIconSnapshot,
+    size_label: String,
+    modified_label: String,
+    original_path_label: String,
+    deletion_time_label: String,
+}
+
+impl DetailsPaintContent {
+    fn from_item(item: &DetailsItemSnapshot) -> Self {
+        Self {
+            path: Arc::from(item.path.as_path()),
+            is_dir: item.is_dir,
+            name: item.name.clone(),
+            icon: item.icon.clone(),
+            size_label: item.size_label.clone(),
+            modified_label: item.modified_label.clone(),
+            original_path_label: item.original_path_label.clone(),
+            deletion_time_label: item.deletion_time_label.clone(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DetailsPaintVisualState {
+    selected: bool,
+    selection_count: usize,
+    drop_target: bool,
+}
+
+impl DetailsPaintVisualState {
+    fn from_item(item: &DetailsItemSnapshot) -> Self {
+        Self {
+            selected: item.selected,
+            selection_count: item.selection_count,
+            drop_target: item.drop_target,
         }
     }
 }
@@ -1368,7 +1537,7 @@ fn file_grid_viewport_shell(
 
 fn details_table(
     pane_id: PaneId,
-    items: Vec<DetailsItemSnapshot>,
+    items: Vec<DetailsPaintSnapshot>,
     row_count: usize,
     trash_view: bool,
     content_width: f32,
@@ -1387,7 +1556,7 @@ fn details_table(
         .children(
             items
                 .into_iter()
-                .map(|item| details_row(pane_id, item, &columns, content_width, metrics, mode, cx)),
+                .map(|item| details_row(pane_id, item, &columns, content_width, mode, cx)),
         )
         .when(row_count == 0, |table| {
             table.child(
@@ -1441,32 +1610,34 @@ fn details_header(
 
 fn details_row(
     pane_id: PaneId,
-    item: DetailsItemSnapshot,
+    item: DetailsPaintSnapshot,
     columns: &[DetailsColumn],
     content_width: f32,
-    metrics: DetailsLayoutMetrics,
     mode: FileGridMode,
     cx: &mut Context<FikaApp>,
 ) -> Stateful<Div> {
-    let top = metrics.header_height + item.row_index as f32 * metrics.row_height;
-    let selected = item.selected;
-    let drop_target = item.drop_target;
+    let top = f32::from_bits(item.geometry.row_top);
+    let row_height = f32::from_bits(item.geometry.row_height);
+    let content = item.content.as_ref();
+    let selected = item.visual.selected;
+    let selection_count = item.visual.selection_count;
+    let drop_target = item.visual.drop_target;
     let item_id = item.item_id;
-    let path_for_mouse_down = item.path.clone();
-    let path_for_menu = item.path.clone();
-    let path_for_drag = Arc::<Path>::from(item.path.as_path());
-    let target_dir_for_drop = item.path.clone();
-    let is_dir_for_click = item.is_dir;
-    let is_dir_for_menu = item.is_dir;
-    let is_dir_for_drop = item.is_dir;
+    let path_for_mouse_down = content.path.as_ref().to_path_buf();
+    let path_for_menu = content.path.as_ref().to_path_buf();
+    let path_for_drag = content.path.clone();
+    let target_dir_for_drop = content.path.as_ref().to_path_buf();
+    let is_dir_for_click = content.is_dir;
+    let is_dir_for_menu = content.is_dir;
+    let is_dir_for_drop = content.is_dir;
 
     let drag_value = ItemDrag {
         pane_id,
         path: path_for_drag,
-        name: item.name.clone(),
-        icon: item.icon.clone(),
+        name: content.name.clone(),
+        icon: content.icon.clone(),
         selected,
-        selection_count: item.selection_count,
+        selection_count,
     };
     let app = cx.weak_entity();
 
@@ -1476,7 +1647,7 @@ fn details_row(
         .left_0()
         .top(px(top))
         .w(px(content_width))
-        .h(px(metrics.row_height))
+        .h(px(row_height))
         .flex()
         .items_center()
         .bg(details_row_background(
@@ -1583,7 +1754,7 @@ fn details_row(
         .children(
             columns
                 .iter()
-                .map(|column| details_cell(&item, *column, selected, metrics)),
+                .map(|column| details_cell(&item, *column, selected)),
         )
 }
 
@@ -1600,31 +1771,29 @@ fn details_row_background(selected: bool, drop_target: bool, row_index: usize) -
 }
 
 fn details_cell(
-    item: &DetailsItemSnapshot,
+    item: &DetailsPaintSnapshot,
     column: DetailsColumn,
     selected: bool,
-    metrics: DetailsLayoutMetrics,
 ) -> gpui::AnyElement {
     match column.kind {
-        DetailsColumnKind::Name => details_name_cell(item, column.width, selected, metrics),
-        DetailsColumnKind::Size => details_text_cell(column.width, item.size_label.clone()),
-        DetailsColumnKind::Modified => details_text_cell(column.width, item.modified_label.clone()),
+        DetailsColumnKind::Name => details_name_cell(item, column.width, selected),
+        DetailsColumnKind::Size => details_text_cell(column.width, item.content.size_label.clone()),
+        DetailsColumnKind::Modified => {
+            details_text_cell(column.width, item.content.modified_label.clone())
+        }
         DetailsColumnKind::OriginalPath => {
-            details_text_cell(column.width, item.original_path_label.clone())
+            details_text_cell(column.width, item.content.original_path_label.clone())
         }
         DetailsColumnKind::DeletionTime => {
-            details_text_cell(column.width, item.deletion_time_label.clone())
+            details_text_cell(column.width, item.content.deletion_time_label.clone())
         }
     }
 }
 
-fn details_name_cell(
-    item: &DetailsItemSnapshot,
-    width: f32,
-    selected: bool,
-    metrics: DetailsLayoutMetrics,
-) -> gpui::AnyElement {
-    let icon = item.icon.clone();
+fn details_name_cell(item: &DetailsPaintSnapshot, width: f32, selected: bool) -> gpui::AnyElement {
+    let icon = item.content.icon.clone();
+    let width = width.max(f32::from_bits(item.geometry.name_column_width));
+    let icon_size = f32::from_bits(item.geometry.icon_size);
     div()
         .w(px(width))
         .h_full()
@@ -1635,8 +1804,8 @@ fn details_name_cell(
         .gap_2()
         .child(
             div()
-                .w(px(metrics.icon_size))
-                .h(px(metrics.icon_size))
+                .w(px(icon_size))
+                .h(px(icon_size))
                 .rounded_sm()
                 .overflow_hidden()
                 .child({
@@ -1655,7 +1824,7 @@ fn details_name_cell(
                     rgb(0x1f2937)
                 })
                 .whitespace_nowrap()
-                .child(item.name.to_string()),
+                .child(item.content.name.to_string()),
         )
         .into_any_element()
 }
@@ -3407,16 +3576,16 @@ fn drag_preview_label(name: &str, selected: bool, selection_count: usize) -> Str
 #[cfg(test)]
 mod tests {
     use super::{
-        FileGridMode, FileGridRenderSnapshot, FileGridSnapshot, ItemPaintContent,
-        ItemPaintSlotCache, ItemTileTextAlignment, VisibleItemSnapshot, display_text_layout,
-        drag_preview_label, item_identity_element_id, item_image_element_id,
-        item_image_layer_item_source_path, item_image_layer_items,
-        item_image_load_failure_paints_fallback, item_image_paint_layer_element_id,
-        item_interaction_hitbox_bounds, item_interaction_layer_element_id,
-        item_interaction_layer_items, item_mouse_down_opens_directory,
-        measured_viewport_for_scrollbar_axis, normalized_text_range, rename_text_layout,
-        static_item_visual_layer_element_id, static_item_visual_layer_items,
-        viewport_bounds_update_requires_notify,
+        DetailsItemSnapshot, DetailsLayoutMetrics, DetailsPaintContent, FileGridMode,
+        FileGridRenderSnapshot, FileGridSnapshot, ItemPaintContent, ItemPaintSlotCache,
+        ItemTileTextAlignment, VisibleItemSnapshot, display_text_layout, drag_preview_label,
+        item_identity_element_id, item_image_element_id, item_image_layer_item_source_path,
+        item_image_layer_items, item_image_load_failure_paints_fallback,
+        item_image_paint_layer_element_id, item_interaction_hitbox_bounds,
+        item_interaction_layer_element_id, item_interaction_layer_items,
+        item_mouse_down_opens_directory, measured_viewport_for_scrollbar_axis,
+        normalized_text_range, rename_text_layout, static_item_visual_layer_element_id,
+        static_item_visual_layer_items, viewport_bounds_update_requires_notify,
     };
     use crate::ui::drag_drop::drag_preview_content_origin_for_cursor_offset;
     use crate::ui::icons::FileIconSnapshot;
@@ -3729,6 +3898,154 @@ mod tests {
         );
     }
 
+    #[test]
+    fn details_rows_project_into_retained_paint_slots() {
+        let mut cache = ItemPaintSlotCache::default();
+        let metrics = test_details_metrics();
+        let alpha = test_details_item(0, ItemId(7), "alpha.txt");
+        let beta = test_details_item(1, ItemId(8), "beta.txt");
+
+        let projection = cache.project_file_grid_snapshot(
+            details_snapshot(vec![alpha.clone(), beta.clone()], metrics, 260.0),
+            None,
+        );
+        assert_eq!(projection.stats.inserted, 2);
+        assert_eq!(projection.stats.entries, 2);
+        let FileGridRenderSnapshot::Details { items, .. } = &projection.snapshot else {
+            panic!("expected details render snapshot");
+        };
+        assert_eq!(
+            items
+                .iter()
+                .map(|item| (item.item_id, item.row_index))
+                .collect::<Vec<_>>(),
+            vec![(ItemId(7), 0), (ItemId(8), 1)]
+        );
+        let alpha_content = items[0].content.clone();
+
+        let resized_metrics = DetailsLayoutMetrics {
+            row_height: metrics.row_height + 4.0,
+            ..metrics
+        };
+        let projection = cache.project_file_grid_snapshot(
+            details_snapshot(vec![alpha, beta], resized_metrics, 320.0),
+            None,
+        );
+        assert_eq!(projection.stats.geometry_changed, 2);
+        assert_eq!(projection.stats.entries, 2);
+        assert!(Arc::ptr_eq(
+            &alpha_content,
+            &first_details_paint_content(&projection.snapshot)
+        ));
+    }
+
+    #[test]
+    fn details_selection_and_drop_target_are_visual_changes() {
+        let mut cache = ItemPaintSlotCache::default();
+        let metrics = test_details_metrics();
+        let base = test_details_item(0, ItemId(7), "alpha.txt");
+
+        let projection = cache
+            .project_file_grid_snapshot(details_snapshot(vec![base.clone()], metrics, 260.0), None);
+        let first_content = first_details_paint_content(&projection.snapshot);
+
+        let mut selected = base.clone();
+        selected.selected = true;
+        selected.selection_count = 3;
+        let projection = cache.project_file_grid_snapshot(
+            details_snapshot(vec![selected.clone()], metrics, 260.0),
+            None,
+        );
+        assert_eq!(projection.stats.visual_changed, 1);
+        assert_eq!(projection.stats.entries, 1);
+        assert!(Arc::ptr_eq(
+            &first_content,
+            &first_details_paint_content(&projection.snapshot)
+        ));
+
+        let mut drop_target = selected;
+        drop_target.drop_target = true;
+        let projection = cache
+            .project_file_grid_snapshot(details_snapshot(vec![drop_target], metrics, 260.0), None);
+        assert_eq!(projection.stats.visual_changed, 1);
+        assert_eq!(projection.stats.entries, 1);
+        assert!(Arc::ptr_eq(
+            &first_content,
+            &first_details_paint_content(&projection.snapshot)
+        ));
+    }
+
+    #[test]
+    fn details_content_changes_replace_retained_content() {
+        let mut cache = ItemPaintSlotCache::default();
+        let metrics = test_details_metrics();
+        let base = test_details_item(0, ItemId(7), "alpha.txt");
+
+        let projection = cache
+            .project_file_grid_snapshot(details_snapshot(vec![base.clone()], metrics, 260.0), None);
+        let first_content = first_details_paint_content(&projection.snapshot);
+
+        let mut renamed = base.clone();
+        renamed.name = Arc::from("beta.txt");
+        let projection = cache.project_file_grid_snapshot(
+            details_snapshot(vec![renamed.clone()], metrics, 260.0),
+            None,
+        );
+        assert_eq!(projection.stats.content_changed, 1);
+        let renamed_content = first_details_paint_content(&projection.snapshot);
+        assert!(!Arc::ptr_eq(&first_content, &renamed_content));
+
+        let mut relabeled = renamed.clone();
+        relabeled.size_label = "42 B".to_string();
+        let projection = cache.project_file_grid_snapshot(
+            details_snapshot(vec![relabeled.clone()], metrics, 260.0),
+            None,
+        );
+        assert_eq!(projection.stats.content_changed, 1);
+        let relabeled_content = first_details_paint_content(&projection.snapshot);
+        assert!(!Arc::ptr_eq(&renamed_content, &relabeled_content));
+
+        let mut icon_changed = relabeled;
+        icon_changed.icon.fallback_marker = Arc::from("BIN");
+        let projection = cache
+            .project_file_grid_snapshot(details_snapshot(vec![icon_changed], metrics, 260.0), None);
+        assert_eq!(projection.stats.content_changed, 1);
+        assert!(!Arc::ptr_eq(
+            &relabeled_content,
+            &first_details_paint_content(&projection.snapshot)
+        ));
+    }
+
+    #[test]
+    fn switching_from_details_clears_retained_details_slots() {
+        let mut cache = ItemPaintSlotCache::default();
+        let metrics = test_details_metrics();
+        let alpha = test_details_item(0, ItemId(7), "alpha.txt");
+        let beta = test_details_item(1, ItemId(8), "beta.txt");
+
+        let stats = cache
+            .project_file_grid_snapshot(details_snapshot(vec![alpha, beta], metrics, 260.0), None)
+            .stats;
+        assert_eq!(stats.inserted, 2);
+        assert_eq!(stats.entries, 2);
+
+        let icon_item = test_visible_item(1, ItemId(9), "gamma.txt", test_item_layout(0.0), false);
+        let stats = cache
+            .project_file_grid_snapshot(icons_snapshot(vec![icon_item]), None)
+            .stats;
+        assert_eq!(stats.inserted, 1);
+        assert_eq!(stats.removed, 2);
+        assert_eq!(stats.entries, 1);
+
+        let details_item = test_details_item(0, ItemId(10), "delta.txt");
+        let stats = cache
+            .project_file_grid_snapshot(details_snapshot(vec![details_item], metrics, 260.0), None)
+            .stats;
+        assert_eq!(stats.inserted, 1);
+        assert_eq!(stats.removed, 1);
+        assert_eq!(stats.entries, 1);
+    }
+
     fn icons_snapshot(items: Vec<VisibleItemSnapshot>) -> FileGridSnapshot {
         FileGridSnapshot::Icons {
             layout: IconsLayout::new(items.len(), IconsLayoutOptions::default()),
@@ -3736,9 +4053,29 @@ mod tests {
         }
     }
 
+    fn details_snapshot(
+        items: Vec<DetailsItemSnapshot>,
+        metrics: DetailsLayoutMetrics,
+        name_column_width: f32,
+    ) -> FileGridSnapshot {
+        FileGridSnapshot::Details {
+            row_count: items.len(),
+            items,
+            metrics,
+            name_column_width,
+        }
+    }
+
     fn first_icon_paint_content(snapshot: &FileGridRenderSnapshot) -> Arc<ItemPaintContent> {
         let FileGridRenderSnapshot::Icons { items, .. } = snapshot else {
             panic!("expected icons render snapshot");
+        };
+        items[0].content.clone()
+    }
+
+    fn first_details_paint_content(snapshot: &FileGridRenderSnapshot) -> Arc<DetailsPaintContent> {
+        let FileGridRenderSnapshot::Details { items, .. } = snapshot else {
+            panic!("expected details render snapshot");
         };
         items[0].content.clone()
     }
@@ -3807,6 +4144,38 @@ mod tests {
                 width: 88.0,
                 height: 30.0,
             },
+        }
+    }
+
+    fn test_details_metrics() -> DetailsLayoutMetrics {
+        DetailsLayoutMetrics {
+            header_height: 28.0,
+            row_height: 22.0,
+            icon_size: 18.0,
+        }
+    }
+
+    fn test_details_item(row_index: usize, item_id: ItemId, name: &str) -> DetailsItemSnapshot {
+        DetailsItemSnapshot {
+            row_index,
+            item_id,
+            path: PathBuf::from(format!("/tmp/{name}")),
+            is_dir: false,
+            name: Arc::from(name),
+            icon: FileIconSnapshot {
+                icon_name: Arc::from("text-x-generic"),
+                path: None,
+                fallback_marker: Arc::from("TXT"),
+                fallback_fg: 0xffffff,
+                fallback_bg: 0x2563eb,
+            },
+            selected: false,
+            selection_count: 0,
+            drop_target: false,
+            size_label: "-".to_string(),
+            modified_label: "-".to_string(),
+            original_path_label: "-".to_string(),
+            deletion_time_label: "-".to_string(),
         }
     }
 
