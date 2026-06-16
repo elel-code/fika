@@ -124,6 +124,7 @@ struct DragPreview {
 
 const DRAG_PREVIEW_MIN_WIDTH: f32 = 220.0;
 const DRAG_PREVIEW_MIN_HEIGHT: f32 = 36.0;
+const DRAG_PREVIEW_CURSOR_GAP: f32 = 8.0;
 
 fn item_identity_element_id(prefix: &'static str, item_id: ItemId) -> (&'static str, u64) {
     (prefix, item_id.0)
@@ -1725,8 +1726,11 @@ impl Render for DragPreview {
     }
 }
 
-fn drag_preview_content_origin(_offset: gpui::Point<gpui::Pixels>) -> (f32, f32) {
-    (0.0, 0.0)
+fn drag_preview_content_origin(offset: gpui::Point<gpui::Pixels>) -> (f32, f32) {
+    (
+        (offset.x.as_f32() + DRAG_PREVIEW_CURSOR_GAP).max(0.0),
+        (offset.y.as_f32() + DRAG_PREVIEW_CURSOR_GAP).max(0.0),
+    )
 }
 
 fn drag_preview_label(name: &str, selected: bool, selection_count: usize) -> String {
@@ -1757,14 +1761,14 @@ mod tests {
     }
 
     #[test]
-    fn drag_preview_does_not_apply_gpui_cursor_offset_twice() {
+    fn drag_preview_stays_near_cursor_independent_of_item_offset() {
         assert_eq!(
             drag_preview_content_origin(point(px(48.0), px(12.0))),
-            (0.0, 0.0)
+            (56.0, 20.0)
         );
         assert_eq!(
             drag_preview_content_origin(point(px(-4.0), px(-2.0))),
-            (0.0, 0.0)
+            (4.0, 6.0)
         );
     }
 

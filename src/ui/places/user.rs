@@ -10,5 +10,5 @@ pub(crate) use edit::commit_user_place_draft;
 pub(crate) use ordering::{
     MoveUserPlaceResult, move_user_place_to_insert_index, user_place_insert_index,
 };
-pub(crate) use persistence::user_places;
+pub(crate) use persistence::{primary_place_order, user_places};
 pub(crate) use removal::remove_user_place;

@@ -96,8 +96,9 @@ pub use core::pane::{
     normalize_viewport_extent,
 };
 pub use core::places::{
-    UserPlace, default_user_places_path, load_user_places, parse_user_places_xbel,
-    save_user_places, user_places_xbel,
+    UserPlace, default_user_places_path, load_place_order, load_user_places, parse_place_order_xml,
+    parse_user_places_xbel, place_order_path_for_user_places_path, place_order_xml,
+    save_place_order, save_user_places, user_places_xbel,
 };
 pub use core::privilege::{
     HelperBus, PrivilegedCommand, PrivilegedOperationResult, run_dbus_service, run_via_dbus,

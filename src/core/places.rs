@@ -6,6 +6,7 @@ use super::network::{network_uri_from_path, normalize_network_uri};
 
 const FIKA_DATA_DIR_NAME: &str = "fika";
 const USER_PLACES_FILE_NAME: &str = "places.xbel";
+const PLACE_ORDER_FILE_NAME: &str = "places-order.xml";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct UserPlace {
@@ -33,6 +34,14 @@ fn user_places_path_for_data_home(data_home: PathBuf) -> PathBuf {
         .join(USER_PLACES_FILE_NAME)
 }
 
+pub fn place_order_path_for_user_places_path(user_places_path: &Path) -> PathBuf {
+    user_places_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+        .join(PLACE_ORDER_FILE_NAME)
+}
+
 pub fn load_user_places(path: &Path) -> Result<Vec<UserPlace>, String> {
     let contents = match fs::read_to_string(path) {
         Ok(contents) => contents,
@@ -48,19 +57,41 @@ pub fn load_user_places(path: &Path) -> Result<Vec<UserPlace>, String> {
 }
 
 pub fn save_user_places(path: &Path, places: &[UserPlace]) -> Result<(), String> {
+    write_parented_file(path, user_places_xbel(places), "user places")
+}
+
+pub fn load_place_order(path: &Path) -> Result<Vec<PathBuf>, String> {
+    let contents = match fs::read_to_string(path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => {
+            return Err(format!(
+                "failed to read places order {}: {error}",
+                path.display()
+            ));
+        }
+    };
+    parse_place_order_xml(&contents)
+}
+
+pub fn save_place_order(path: &Path, order: &[PathBuf]) -> Result<(), String> {
+    write_parented_file(path, place_order_xml(order), "places order")
+}
+
+fn write_parented_file(path: &Path, contents: String, label: &str) -> Result<(), String> {
     if let Some(parent) = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
     {
         fs::create_dir_all(parent).map_err(|error| {
             format!(
-                "failed to create user places directory {}: {error}",
+                "failed to create {label} directory {}: {error}",
                 parent.display()
             )
         })?;
     }
-    fs::write(path, user_places_xbel(places))
-        .map_err(|error| format!("failed to write user places {}: {error}", path.display()))
+    fs::write(path, contents)
+        .map_err(|error| format!("failed to write {label} {}: {error}", path.display()))
 }
 
 pub fn parse_user_places_xbel(contents: &str) -> Result<Vec<UserPlace>, String> {
@@ -115,6 +146,44 @@ pub fn user_places_xbel(places: &[UserPlace]) -> String {
         output.push_str("  </bookmark>\n");
     }
     output.push_str("</xbel>\n");
+    output
+}
+
+pub fn parse_place_order_xml(contents: &str) -> Result<Vec<PathBuf>, String> {
+    let mut order = Vec::new();
+    let mut rest = contents;
+
+    while let Some(place_start) = rest.find("<place") {
+        rest = &rest[place_start..];
+        let Some(tag_end) = rest.find('>') else {
+            return Err("places order place tag is not closed".to_string());
+        };
+        let tag = &rest[..=tag_end];
+        rest = &rest[tag_end + 1..];
+
+        let Some(href) = xml_attribute(tag, "href") else {
+            continue;
+        };
+        let Some(path) = place_href_to_path(&href) else {
+            continue;
+        };
+        order.push(path);
+    }
+
+    Ok(order)
+}
+
+pub fn place_order_xml(order: &[PathBuf]) -> String {
+    let mut output = String::from(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+         <places-order version=\"1\">\n",
+    );
+    for path in order {
+        output.push_str("  <place href=\"");
+        output.push_str(&escape_xml_attr(&path_to_place_href(path)));
+        output.push_str("\" />\n");
+    }
+    output.push_str("</places-order>\n");
     output
 }
 
@@ -286,6 +355,32 @@ mod tests {
     }
 
     #[test]
+    fn place_order_xml_round_trips_file_and_network_paths() {
+        let order = vec![
+            PathBuf::from("/tmp/a b"),
+            PathBuf::from("smb://server/Share%20Name/"),
+        ];
+
+        let xml = place_order_xml(&order);
+
+        assert!(xml.contains("file:///tmp/a%20b"));
+        assert!(xml.contains("href=\"smb://server/Share%20Name/\""));
+        assert_eq!(parse_place_order_xml(&xml), Ok(order));
+    }
+
+    #[test]
+    fn save_place_order_creates_parent_and_loads_again() {
+        let root = test_dir("places-order");
+        let path = root.join("nested/places-order.xml");
+        let order = vec![PathBuf::from("/tmp/home"), PathBuf::from("/tmp/projects")];
+
+        save_place_order(&path, &order).unwrap();
+
+        assert_eq!(load_place_order(&path), Ok(order));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn parse_user_places_xbel_ignores_non_file_and_missing_titles() {
         let xbel = r#"
             <xbel version="1.0">
@@ -321,9 +416,14 @@ mod tests {
 
     #[test]
     fn default_user_places_path_is_fika_scoped() {
+        let user_places_path = user_places_path_for_data_home(PathBuf::from("/xdg/data"));
         assert_eq!(
-            user_places_path_for_data_home(PathBuf::from("/xdg/data")),
+            user_places_path,
             PathBuf::from("/xdg/data/fika/places.xbel")
+        );
+        assert_eq!(
+            place_order_path_for_user_places_path(&user_places_path),
+            PathBuf::from("/xdg/data/fika/places-order.xml")
         );
     }
 

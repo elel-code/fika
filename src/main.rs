@@ -4107,7 +4107,13 @@ impl FikaApp {
     }
 
     fn save_user_places(&self) -> Result<(), String> {
-        fika_core::save_user_places(&self.user_places_path, &self.user_places())
+        fika_core::save_user_places(&self.user_places_path, &self.user_places())?;
+        let place_order_path =
+            fika_core::place_order_path_for_user_places_path(&self.user_places_path);
+        fika_core::save_place_order(
+            &place_order_path,
+            &ui::places::primary_place_order(&self.places),
+        )
     }
 
     pub(crate) fn update_location_edit_metrics(
@@ -10599,6 +10605,38 @@ text/plain=viewer.desktop;\n",
     }
 
     #[test]
+    fn build_places_applies_persistent_primary_place_order() {
+        let root = test_dir("places-order-load");
+        let bookmark = root.join("bookmark");
+        std::fs::create_dir_all(&bookmark).unwrap();
+        let path = root.join("places.xbel");
+        fika_core::save_user_places(
+            &path,
+            &[UserPlace::new("Bookmark".to_string(), bookmark.clone())],
+        )
+        .unwrap();
+        let order_path = fika_core::place_order_path_for_user_places_path(&path);
+        fika_core::save_place_order(&order_path, &[bookmark.clone(), home_dir()]).unwrap();
+
+        let places = build_places(&path);
+        let bookmark_index = places
+            .iter()
+            .position(|place| place.path == bookmark)
+            .expect("persistent bookmark should be loaded");
+        let home_index = places
+            .iter()
+            .position(|place| place.path == home_dir())
+            .expect("home place should exist");
+
+        assert!(bookmark_index < home_index);
+        assert_eq!(places[bookmark_index].group, "");
+        assert_eq!(places[bookmark_index].label, "Bookmark");
+        assert_eq!(places[home_index].label, "Home");
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn build_places_adds_network_root_before_devices_without_persisting() {
         let root = test_dir("places-network-root");
         let bookmark = root.join("bookmark");
@@ -11734,6 +11772,12 @@ text/plain=viewer.desktop;\n",
                 UserPlace::new("Alpha".to_string(), alpha.clone()),
             ])
         );
+        assert_eq!(
+            fika_core::load_place_order(&fika_core::place_order_path_for_user_places_path(
+                &app.user_places_path
+            )),
+            Ok(vec![current.clone(), beta.clone(), alpha.clone()])
+        );
 
         app.drop_place_drag_to_place_insert(2, app.places.len());
 
@@ -11814,6 +11858,12 @@ text/plain=viewer.desktop;\n",
         assert_eq!(
             fika_core::load_user_places(&app.user_places_path),
             Ok(vec![UserPlace::new("User".to_string(), user.clone())])
+        );
+        assert_eq!(
+            fika_core::load_place_order(&fika_core::place_order_path_for_user_places_path(
+                &app.user_places_path
+            )),
+            Ok(vec![user.clone(), current.clone()])
         );
 
         app.drop_place_drag_to_place_insert(2, 0);

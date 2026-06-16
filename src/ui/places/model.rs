@@ -64,6 +64,9 @@ pub(crate) fn build_places_with_devices(
             }
         }
     }
+    let place_order_path = fika_core::place_order_path_for_user_places_path(user_places_path);
+    let place_order = fika_core::load_place_order(&place_order_path).unwrap_or_default();
+    apply_primary_place_order(&mut places, &place_order);
     push_place(
         &mut places,
         NETWORK_GROUP,
@@ -77,6 +80,30 @@ pub(crate) fn build_places_with_devices(
     append_removable_device_places(&mut places, devices);
     push_place(&mut places, DEVICES_GROUP, "/", "Root", PathBuf::from("/"));
     places
+}
+
+fn apply_primary_place_order(places: &mut Vec<PlaceEntry>, order: &[PathBuf]) {
+    if order.is_empty() {
+        return;
+    }
+
+    let first_grouped = places
+        .iter()
+        .position(|place| !place.group.is_empty())
+        .unwrap_or(places.len());
+    let mut primary_places = places.drain(..first_grouped).collect::<Vec<_>>();
+    let mut ordered_places = Vec::with_capacity(primary_places.len());
+
+    for path in order {
+        if let Some(index) = primary_places
+            .iter()
+            .position(|place| place.path.as_path() == path.as_path())
+        {
+            ordered_places.push(primary_places.remove(index));
+        }
+    }
+    ordered_places.append(&mut primary_places);
+    places.splice(0..0, ordered_places);
 }
 
 fn append_removable_device_places(places: &mut Vec<PlaceEntry>, devices: &[DeviceInfo]) {

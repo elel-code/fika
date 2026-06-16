@@ -1,4 +1,5 @@
 use fika_core::UserPlace;
+use std::path::PathBuf;
 
 use super::super::PlaceEntry;
 
@@ -7,6 +8,14 @@ pub(crate) fn user_places(places: &[PlaceEntry]) -> Vec<UserPlace> {
         .iter()
         .filter(|place| place.editable && place.removable)
         .map(|place| UserPlace::new(place.label.clone(), place.path.clone()))
+        .collect()
+}
+
+pub(crate) fn primary_place_order(places: &[PlaceEntry]) -> Vec<PathBuf> {
+    places
+        .iter()
+        .filter(|place| place.group.is_empty())
+        .map(|place| place.path.clone())
         .collect()
 }
 
@@ -29,6 +38,20 @@ mod tests {
                 "Alpha".to_string(),
                 PathBuf::from("/home/yk/Alpha")
             )]
+        );
+    }
+
+    #[test]
+    fn primary_place_order_exports_all_primary_paths() {
+        let places = vec![
+            place("", "Home", "/home/yk", false),
+            place("", "Alpha", "/home/yk/Alpha", true),
+            place("Devices", "Root", "/", false),
+        ];
+
+        assert_eq!(
+            primary_place_order(&places),
+            vec![PathBuf::from("/home/yk"), PathBuf::from("/home/yk/Alpha")]
         );
     }
 

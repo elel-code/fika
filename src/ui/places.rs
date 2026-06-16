@@ -22,6 +22,7 @@ pub(crate) use sidebar::places_sidebar;
 pub(crate) use snapshot::{PlaceIcon, PlaceSnapshot};
 pub(crate) use user::{
     MoveUserPlaceResult, add_user_place_from_dropped_paths, commit_user_place_draft,
-    move_user_place_to_insert_index, remove_user_place, user_place_insert_index, user_places,
+    move_user_place_to_insert_index, primary_place_order, remove_user_place,
+    user_place_insert_index, user_places,
 };
 pub(crate) use visibility::{hide_place, hide_place_section, show_hidden_places};
