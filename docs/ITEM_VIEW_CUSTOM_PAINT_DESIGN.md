@@ -77,6 +77,9 @@ Current per-surface decisions live in
 remaining GPUI surface or before reverting a custom-painted surface back to a
 GPUI renderer.
 
+The current replacement matrix and full transition roadmap live in
+`docs/ITEM_VIEW_CUSTOM_PAINT_STATUS.md`.
+
 ## Dolphin Reference
 
 Relevant Dolphin flow:

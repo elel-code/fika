@@ -216,6 +216,22 @@ This is the active task board for the GPUI item view custom-paint migration.
   renderer-policy surface counts so custom-paint evidence cannot claim more
   custom/retained/GPUI surfaces than the logged item count.
 
+## P14: Full Transition Roadmap
+
+- [x] Add `docs/ITEM_VIEW_CUSTOM_PAINT_STATUS.md` so the current replacement
+  state, remaining GPUI boundaries, and full transition roadmap are explicit.
+- [ ] Freeze a current desktop-session runtime evidence block for Compact,
+  Icons, and Details before another painter expansion.
+- [ ] Split `src/ui/file_grid.rs` along Dolphin-style model/projection,
+  controller/hit-test, painter, and renderer-policy boundaries without changing
+  behavior.
+- [ ] Keep remaining drag-start shells until public GPUI custom-element
+  drag-start support exists or an audited GPUI patch is carried.
+- [ ] Keep rename on the GPUI overlay until custom text editing has behavior
+  coverage for focus, caret, selection, validation, commit/cancel, and IME.
+- [ ] Treat Places as a separate renderer migration with its own GPUI baseline
+  and DnD/scroll acceptance gate.
+
 ## Acceptance Gates
 
 - [~] No behavior regression in rename, selection, context menu, item DnD,

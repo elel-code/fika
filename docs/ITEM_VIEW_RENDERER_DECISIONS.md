@@ -5,6 +5,9 @@ It is intentionally separate from the implementation TODO: a renderer can stay
 on GPUI built-ins while the model, layouter, controller, and painter inputs
 remain Dolphin-aligned.
 
+Current replacement status and the full transition roadmap are tracked in
+`docs/ITEM_VIEW_CUSTOM_PAINT_STATUS.md`.
+
 ## Decision Rules
 
 - Model ownership is not negotiable: `DirectoryModel`, `ItemId`, pane-local
