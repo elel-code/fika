@@ -11879,6 +11879,114 @@ text/plain=viewer.desktop;\n",
     }
 
     #[test]
+    fn place_order_persists_after_bookmark_insert_and_remove() {
+        let current = test_dir("place-order-mutate-current");
+        let alpha = test_dir("place-order-mutate-alpha");
+        let dropped = test_dir("place-order-mutate-dropped");
+        std::fs::create_dir_all(&current).unwrap();
+        std::fs::create_dir_all(&alpha).unwrap();
+        std::fs::create_dir_all(&dropped).unwrap();
+        let current_arg = current.display().to_string();
+        let home = home_dir();
+        let mut app = test_app_with_entries(&current_arg, &[]);
+        let pane_id = app.panes.focused().unwrap();
+        app.places = vec![
+            PlaceEntry {
+                group: "",
+                marker: "H",
+                label: "Home".to_string(),
+                path: home.clone(),
+                device_id: None,
+                device_mounted: true,
+                editable: false,
+                removable: false,
+                device_ejectable: false,
+                device_can_power_off: false,
+            },
+            PlaceEntry {
+                group: "",
+                marker: "B",
+                label: "Alpha".to_string(),
+                path: alpha.clone(),
+                device_id: None,
+                device_mounted: true,
+                editable: true,
+                removable: true,
+                device_ejectable: false,
+                device_can_power_off: false,
+            },
+            PlaceEntry {
+                group: "Devices",
+                marker: "/",
+                label: "Root".to_string(),
+                path: PathBuf::from("/"),
+                device_id: None,
+                device_mounted: true,
+                editable: false,
+                removable: false,
+                device_ejectable: false,
+                device_can_power_off: false,
+            },
+        ];
+
+        app.drop_place_drag_to_place_insert(0, 2);
+        app.insert_place_from_dropped_paths(pane_id, vec![dropped.clone()], 1);
+
+        assert_eq!(
+            app.places
+                .iter()
+                .map(|place| place.label.clone())
+                .collect::<Vec<_>>(),
+            vec![
+                "Alpha".to_string(),
+                default_place_label(&dropped),
+                "Home".to_string(),
+                "Root".to_string()
+            ]
+        );
+        assert_eq!(
+            fika_core::load_place_order(&fika_core::place_order_path_for_user_places_path(
+                &app.user_places_path
+            )),
+            Ok(vec![alpha.clone(), dropped.clone(), home.clone()])
+        );
+        let rebuilt_primary_labels = build_places(&app.user_places_path)
+            .into_iter()
+            .filter(|place| place.group.is_empty())
+            .take(3)
+            .map(|place| place.label)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            rebuilt_primary_labels,
+            vec![
+                "Alpha".to_string(),
+                default_place_label(&dropped),
+                "Home".to_string()
+            ]
+        );
+
+        app.remove_place(pane_id, &dropped);
+
+        assert_eq!(
+            fika_core::load_place_order(&fika_core::place_order_path_for_user_places_path(
+                &app.user_places_path
+            )),
+            Ok(vec![alpha.clone(), home.clone()])
+        );
+        let rebuilt_primary_labels = build_places(&app.user_places_path)
+            .into_iter()
+            .filter(|place| place.group.is_empty())
+            .take(2)
+            .map(|place| place.label)
+            .collect::<Vec<_>>();
+        assert_eq!(rebuilt_primary_labels, vec!["Alpha", "Home"]);
+
+        let _ = std::fs::remove_dir_all(current);
+        let _ = std::fs::remove_dir_all(alpha);
+        let _ = std::fs::remove_dir_all(dropped);
+    }
+
+    #[test]
     fn place_drag_reorder_allows_active_and_builtin_primary_places() {
         let current = test_dir("place-reorder-active-current");
         let user = test_dir("place-reorder-refuse-user");
