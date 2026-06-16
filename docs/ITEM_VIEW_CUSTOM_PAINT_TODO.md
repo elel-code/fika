@@ -44,14 +44,18 @@ This is the active task board for the GPUI item view custom-paint migration.
 
 ## P4: Thumbnail Paint Boundary
 
-- [ ] Audit GPUI `img()` and `Window::paint_image` cache ownership.
-- [ ] Decide retained image element vs direct paint handle.
-- [ ] Preserve freedesktop cached-thumbnail first-frame behavior.
-- [ ] Preserve thumbnail failed/invalidation model semantics.
+- [x] Audit GPUI `img()` and `Window::paint_image` cache ownership.
+- [x] Decide retained image element vs direct paint handle.
+- [x] Add pane-local retained image cache for file-grid image items.
+- [x] Key thumbnail/theme-icon image elements by visual slot id.
+- [x] Preserve freedesktop cached-thumbnail first-frame behavior.
+- [x] Preserve thumbnail failed/invalidation model semantics.
+- [ ] Revisit direct `Window::paint_image` after Fika owns render-image decode
+  and invalidation.
 
 ## P5: Dedicated Custom Element
 
-- [ ] Replace canvas spike if direct custom element gives better retained
+- [x] Replace canvas spike if direct custom element gives better retained
   prepaint state.
 - [ ] Move paint timing instrumentation into the custom element.
 - [ ] Add tests around geometry and content-key invalidation.

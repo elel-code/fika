@@ -28,10 +28,11 @@ use fika_core::{
 };
 use gpui::prelude::*;
 use gpui::{
-    App, Bounds, Context, Div, Empty, ExternalPaths, Font, FontWeight, MouseButton,
-    NavigationDirection, ParentElement, Pixels, Render, Rgba, ScrollHandle, SharedString, Stateful,
-    Styled, TextAlign, TextRun, WeakEntity, Window, canvas, div, fill, img, point, px, rgb, rgba,
-    size,
+    App, Bounds, Context, Div, Element, ElementId, Empty, ExternalPaths, Font, FontWeight,
+    GlobalElementId, InspectorElementId, IntoElement, LayoutId, MouseButton, NavigationDirection,
+    ParentElement, Pixels, Render, Rgba, ScrollHandle, SharedString, Stateful, Style,
+    StyleRefinement, Styled, TextAlign, TextRun, WeakEntity, Window, div, fill, img, point, px,
+    retain_all, rgb, rgba, size,
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -527,6 +528,14 @@ fn item_identity_element_id(prefix: &'static str, item_id: ItemId) -> (&'static 
     (prefix, item_id.0)
 }
 
+fn item_image_element_id(slot_id: u64) -> (&'static str, u64) {
+    ("item-image", slot_id)
+}
+
+fn static_item_visual_element_id(item_id: ItemId) -> (&'static str, u64) {
+    ("static-item-visual", item_id.0)
+}
+
 fn handle_file_grid_item_drag_move(
     app: &mut FikaApp,
     pane_id: PaneId,
@@ -805,6 +814,7 @@ pub(crate) fn file_grid(
     };
 
     let root = div()
+        .image_cache(retain_all(("file-grid-image-cache", pane_id.0)))
         .on_children_prepainted(move |bounds, _window, cx| {
             let prepaint_started = perf_enabled.then(std::time::Instant::now);
             let Some(bounds) = bounds.first() else {
@@ -1698,7 +1708,8 @@ fn item_tile(
             )
             .into_any_element()
         };
-        core.child(icon_view(content, item.layout)).child(text)
+        core.child(icon_view(item.slot_id, content, item.layout))
+            .child(text)
     };
 
     div()
@@ -1759,31 +1770,123 @@ fn static_item_visual_view(
     drop_target: bool,
     app: WeakEntity<FikaApp>,
 ) -> impl IntoElement {
-    canvas(
-        move |_bounds, window, cx| {
-            static_item_visual_prepaint(
-                pane_id,
-                item_id,
-                display_name,
-                icon_name_lines,
-                icon,
-                fallback_marker,
-                layout,
-                text_alignment,
-                selected,
-                hovered,
-                drop_target,
-                app,
-                window,
-                cx,
-            )
-        },
-        static_item_visual_paint,
-    )
+    StaticItemVisualElement {
+        pane_id,
+        item_id,
+        display_name,
+        icon_name_lines,
+        icon,
+        fallback_marker,
+        layout,
+        text_alignment,
+        selected,
+        hovered,
+        drop_target,
+        app,
+        style: StyleRefinement::default(),
+    }
     .absolute()
     .left_0()
     .top_0()
     .size_full()
+}
+
+struct StaticItemVisualElement {
+    pane_id: PaneId,
+    item_id: ItemId,
+    display_name: SharedString,
+    icon_name_lines: Arc<[SharedString]>,
+    icon: FileIconSnapshot,
+    fallback_marker: SharedString,
+    layout: ItemLayout,
+    text_alignment: ItemTileTextAlignment,
+    selected: bool,
+    hovered: bool,
+    drop_target: bool,
+    app: WeakEntity<FikaApp>,
+    style: StyleRefinement,
+}
+
+impl IntoElement for StaticItemVisualElement {
+    type Element = Self;
+
+    fn into_element(self) -> Self::Element {
+        self
+    }
+}
+
+impl Element for StaticItemVisualElement {
+    type RequestLayoutState = Style;
+    type PrepaintState = StaticItemVisualPaintState;
+
+    fn id(&self) -> Option<ElementId> {
+        Some(ElementId::from(static_item_visual_element_id(self.item_id)))
+    }
+
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, Self::RequestLayoutState) {
+        let mut style = Style::default();
+        style.refine(&self.style);
+        let layout_id = window.request_layout(style.clone(), [], cx);
+        (layout_id, style)
+    }
+
+    fn prepaint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        _bounds: Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Self::PrepaintState {
+        static_item_visual_prepaint(
+            self.pane_id,
+            self.item_id,
+            self.display_name.clone(),
+            self.icon_name_lines.clone(),
+            self.icon.clone(),
+            self.fallback_marker.clone(),
+            self.layout,
+            self.text_alignment,
+            self.selected,
+            self.hovered,
+            self.drop_target,
+            self.app.clone(),
+            window,
+            cx,
+        )
+    }
+
+    fn paint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        request_layout: &mut Self::RequestLayoutState,
+        prepaint: &mut Self::PrepaintState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        request_layout.paint(bounds, window, cx, |window, cx| {
+            static_item_visual_paint(bounds, prepaint, window, cx);
+        });
+    }
+}
+
+impl Styled for StaticItemVisualElement {
+    fn style(&mut self) -> &mut StyleRefinement {
+        &mut self.style
+    }
 }
 
 fn static_item_visual_prepaint(
@@ -1983,7 +2086,7 @@ fn shape_static_item_text(
 
 fn static_item_visual_paint(
     bounds: Bounds<Pixels>,
-    state: StaticItemVisualPaintState,
+    state: &StaticItemVisualPaintState,
     window: &mut Window,
     cx: &mut App,
 ) {
@@ -2084,7 +2187,7 @@ fn static_paint_wrapped_lines_height(
         .min(max_height)
 }
 
-fn icon_view(content: &ItemPaintContent, layout: ItemLayout) -> Div {
+fn icon_view(slot_id: u64, content: &ItemPaintContent, layout: ItemLayout) -> Div {
     let visual = layout.visual_rect;
     let icon = layout.icon_rect;
     let icon_left = (icon.x - visual.x).round();
@@ -2110,9 +2213,32 @@ fn icon_view(content: &ItemPaintContent, layout: ItemLayout) -> Div {
                 .size_full()
                 .rounded_md()
                 .overflow_hidden()
-                .child(img(path).size_full()),
+                .child(img(path).id(item_image_element_id(slot_id)).size_full()),
         ),
-        None => icon_container.child(icon_image_or_fallback(icon_snapshot, fallback_marker)),
+        None => icon_container.child(item_image_or_fallback(
+            slot_id,
+            icon_snapshot,
+            fallback_marker,
+        )),
+    }
+}
+
+fn item_image_or_fallback(
+    slot_id: u64,
+    icon: FileIconSnapshot,
+    fallback_marker: SharedString,
+) -> gpui::AnyElement {
+    match icon.path.clone() {
+        Some(path) => img(path)
+            .id(item_image_element_id(slot_id))
+            .size_full()
+            .with_fallback({
+                let fallback_fg = icon.fallback_fg;
+                let fallback_bg = icon.fallback_bg;
+                move || fallback_icon_element(fallback_marker.clone(), fallback_fg, fallback_bg)
+            })
+            .into_any_element(),
+        None => fallback_icon_element(fallback_marker, icon.fallback_fg, icon.fallback_bg),
     }
 }
 
@@ -2549,8 +2675,9 @@ mod tests {
         FileGridMode, FileGridRenderSnapshot, FileGridSnapshot, ItemPaintContent,
         ItemPaintSlotCache, ItemTileTextAlignment, VisibleItemSnapshot, display_text_layout,
         drag_preview_content_origin, drag_preview_label, item_identity_element_id,
-        item_mouse_down_opens_directory, measured_viewport_for_scrollbar_axis,
-        normalized_text_range, rename_text_layout, viewport_bounds_update_requires_notify,
+        item_image_element_id, item_mouse_down_opens_directory,
+        measured_viewport_for_scrollbar_axis, normalized_text_range, rename_text_layout,
+        static_item_visual_element_id, viewport_bounds_update_requires_notify,
     };
     use crate::ui::icons::FileIconSnapshot;
     use crate::ui::item_view::ItemViewScrollbarAxis;
@@ -2594,6 +2721,24 @@ mod tests {
         assert_ne!(
             item_identity_element_id("item-core", ItemId(7)),
             item_identity_element_id("item-core", ItemId(8))
+        );
+    }
+
+    #[test]
+    fn item_image_id_is_keyed_by_visual_slot_for_retained_image_cache() {
+        assert_eq!(item_image_element_id(4), ("item-image", 4));
+        assert_ne!(item_image_element_id(4), item_image_element_id(5));
+    }
+
+    #[test]
+    fn static_item_visual_id_is_keyed_by_item_identity() {
+        assert_eq!(
+            static_item_visual_element_id(ItemId(7)),
+            ("static-item-visual", 7)
+        );
+        assert_ne!(
+            static_item_visual_element_id(ItemId(7)),
+            static_item_visual_element_id(ItemId(8))
         );
     }
 

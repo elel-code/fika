@@ -81,7 +81,10 @@ Paint layer may use:
 - `Window::paint_quad`
 - `WindowTextSystem::shape_line`
 - `ShapedLine::paint`
-- `Window::paint_image` only after thumbnail/icon cache ownership is clear
+- retained GPUI `img()` elements for thumbnail/theme-icon slots while GPUI owns
+  path loading and decode cache
+- `Window::paint_image` only after thumbnail/icon cache ownership is moved into
+  a Fika-controlled render-image cache
 
 Paint layer must not:
 
@@ -101,8 +104,9 @@ Temporarily keep one GPUI `Div` per visible item for:
 Viewport-level hit testing remains authoritative for normal click, context menu,
 middle click, rubber band, and drop target routing.
 
-Rename items keep the existing editor subtree. Thumbnail items may keep `img()`
-until image cache integration is moved behind a paint cache.
+Rename items keep the existing editor subtree. Thumbnail and theme-icon items use
+slot-stable retained `img()` elements under a pane-local image cache until image
+cache integration is moved behind a paint cache.
 
 ## Migration Phases
 
@@ -171,14 +175,21 @@ Acceptance:
 
 Replace thumbnail `img()` subtree after image ownership is clear:
 
-- either wrap GPUI image cache into a paint handle
-- or keep a minimal retained image element per thumbnail slot
+- GPUI's path/URI `ImageSource` loader remains crate-private, so direct
+  `Window::paint_image` would require Fika to own file reads, image format
+  detection, decode, invalidation, and render-image lifetime.
+- Current boundary keeps a minimal retained image element per thumbnail/theme
+  icon slot, using a pane-local `retain_all` image cache and a stable
+  `("item-image", slot_id)` id.
+- A future direct paint handle must be introduced only after Fika owns the image
+  cache contract explicitly.
 
 Acceptance:
 
 - cached thumbnails still show on first relevant frame
 - thumbnail failures and invalidations remain model-driven
 - no sync image decode in paint
+- image element identity is tied to visual slots, not transient GPUI child order
 
 ### Phase 5: Custom Element
 

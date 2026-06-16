@@ -81,7 +81,7 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
 - [~] Phase 1：非重命名、非缩略图 item 的静态视觉转向自绘，保留当前交互 shell。
 - [~] Phase 2：静态文本 shaping cache，resize 时复用已成形文本。
 - [x] Phase 3：显式 retained paint slot state，区分 geometry-only/content/visual changes。
-- [ ] Phase 4：缩略图/图片绘制边界收敛到 retained image path。
+- [x] Phase 4：缩略图/图片绘制边界收敛到 retained image path。
 - [ ] Phase 5：必要时从 `canvas` spike 升级到 dedicated GPUI custom element。
 
 ### GPUI Backend / External MIME Drag (阻塞)
