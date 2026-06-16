@@ -2294,7 +2294,6 @@ fn details_row(
         .on_drop::<PlaceDrag>(cx.listener(move |this, drag: &PlaceDrag, window, cx| {
             handle_file_grid_place_drop(this, pane_id, drag, window, cx);
         }))
-        .when(is_dir_for_drop, directory_drag_over_styles)
         .when(is_dir_for_drop, |row| {
             let target_dir_for_primary_paste = target_dir_for_drop.clone();
             row.on_mouse_down(
@@ -2617,12 +2616,6 @@ fn item_tile_hover_background(selected: bool, drop_target: bool) -> Rgba {
 
 fn drop_target_item_background() -> Rgba {
     rgba(0xf59e0b4a)
-}
-
-fn directory_drag_over_styles(item: Stateful<Div>) -> Stateful<Div> {
-    item.drag_over::<ItemDrag>(|style, _, _, _| style.bg(drop_target_item_background()))
-        .drag_over::<ExternalPaths>(|style, _, _, _| style.bg(drop_target_item_background()))
-        .drag_over::<PlaceDrag>(|style, _, _, _| style.bg(drop_target_item_background()))
 }
 
 fn static_item_visual_layer_view(

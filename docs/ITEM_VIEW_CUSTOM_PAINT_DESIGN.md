@@ -309,6 +309,8 @@ Acceptance:
 - non-renaming Compact/Icons hover/cursor no longer require per-item hover
   handlers or cursor styles
 - hover/selection/drop visuals are projected through retained visual state
+- directory drag-over tint is painted from retained drop-target state, not
+  transient shell `drag_over` styling
 - item drag payload and preview behavior remain unchanged
 - perf logs do not show a new steady render/build regression
 
