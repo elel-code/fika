@@ -41,9 +41,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use super::drag_drop::{
-    FileTransferMode, ItemDragPayload, PathListDropTargetKind, PathListDropTargetUpdate,
-    drag_preview_content_origin_for_cursor_offset, refresh_active_drag_cursor_for_drop_menu,
-    refresh_active_drag_cursor_for_transfer_mode, refresh_active_drag_cursor_not_allowed,
+    DragPreviewLayout, FileTransferMode, ItemDragPayload, PathListDropTargetKind,
+    PathListDropTargetUpdate, drag_preview_layout_for_cursor_offset,
+    refresh_active_drag_cursor_for_drop_menu, refresh_active_drag_cursor_for_transfer_mode,
+    refresh_active_drag_cursor_not_allowed,
 };
 use super::icons::{FileIconSnapshot, cached_icon_or_fallback};
 use super::item_view::{
@@ -772,8 +773,7 @@ struct DragPreview {
     icon: FileIconSnapshot,
     label: String,
     count: usize,
-    content_origin_x: f32,
-    content_origin_y: f32,
+    layout: DragPreviewLayout,
 }
 
 const DRAG_PREVIEW_MIN_WIDTH: f32 = 220.0;
@@ -2359,14 +2359,15 @@ fn details_row(
             let _ = app.update(cx, |this, _cx| {
                 this.begin_item_drag(drag.payload());
             });
-            let (content_origin_x, content_origin_y) =
-                drag_preview_content_origin_for_cursor_offset(cursor_offset);
             cx.new(|_| DragPreview {
                 icon: drag.icon.clone(),
                 label: drag_preview_label(drag.name.as_ref(), drag.selected, drag.selection_count),
                 count: drag.selection_count,
-                content_origin_x,
-                content_origin_y,
+                layout: drag_preview_layout_for_cursor_offset(
+                    cursor_offset,
+                    DRAG_PREVIEW_MIN_WIDTH,
+                    DRAG_PREVIEW_MIN_HEIGHT + 6.0,
+                ),
             })
         })
 }
@@ -2571,14 +2572,15 @@ fn item_tile(
             let _ = drag_app.update(cx, |this, _cx| {
                 this.begin_item_drag(drag.payload());
             });
-            let (content_origin_x, content_origin_y) =
-                drag_preview_content_origin_for_cursor_offset(cursor_offset);
             cx.new(|_| DragPreview {
                 icon: drag.icon.clone(),
                 label: drag_preview_label(drag.name.as_ref(), drag.selected, drag.selection_count),
                 count: drag.selection_count,
-                content_origin_x,
-                content_origin_y,
+                layout: drag_preview_layout_for_cursor_offset(
+                    cursor_offset,
+                    DRAG_PREVIEW_MIN_WIDTH,
+                    DRAG_PREVIEW_MIN_HEIGHT + 6.0,
+                ),
             })
         });
     let core = if use_layer_interaction {
@@ -4098,15 +4100,15 @@ fn clamp_text_boundary(text: &str, index: usize) -> usize {
 
 impl Render for DragPreview {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        let left = self.content_origin_x;
-        let top = self.content_origin_y;
+        let left = self.layout.content_origin_x;
+        let top = self.layout.content_origin_y;
         let icon = self.icon.clone();
         let show_count = self.count > 1;
         let count = self.count;
         div()
             .relative()
-            .w(px(left.max(0.0) + DRAG_PREVIEW_MIN_WIDTH))
-            .h(px(top.max(0.0) + DRAG_PREVIEW_MIN_HEIGHT + 6.0))
+            .w(px(self.layout.surface_width))
+            .h(px(self.layout.surface_height))
             .child(
                 div()
                     .absolute()

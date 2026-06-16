@@ -2,7 +2,9 @@ mod preview;
 mod state;
 
 pub(crate) use fika_core::FileTransferMode;
+#[cfg(test)]
 pub(crate) use preview::drag_preview_content_origin_for_cursor_offset;
+pub(crate) use preview::{DragPreviewLayout, drag_preview_layout_for_cursor_offset};
 #[cfg(test)]
 pub(crate) use state::place_drop_target_matches_insert;
 pub(crate) use state::{

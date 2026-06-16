@@ -4,7 +4,8 @@ use std::sync::Arc;
 use gpui::{Context, IntoElement, ParentElement, Render, Styled, div, px, rgb};
 
 use super::super::drag_drop::{
-    DragExportPayload, drag_preview_content_origin_for_cursor_offset, place_drag_export_payload,
+    DragExportPayload, DragPreviewLayout, drag_preview_layout_for_cursor_offset,
+    place_drag_export_payload,
 };
 use crate::ui::icons::{FileIconSnapshot, cached_icon_or_fallback};
 
@@ -53,19 +54,19 @@ impl PlaceDrag {
 pub(crate) struct PlaceDragPreview {
     label: Arc<str>,
     icon: FileIconSnapshot,
-    content_origin_x: f32,
-    content_origin_y: f32,
+    layout: DragPreviewLayout,
 }
 
 impl PlaceDragPreview {
     pub(crate) fn from_drag(drag: &PlaceDrag, cursor_offset: gpui::Point<gpui::Pixels>) -> Self {
-        let (content_origin_x, content_origin_y) =
-            drag_preview_content_origin_for_cursor_offset(cursor_offset);
         Self {
             label: drag.label.clone(),
             icon: drag.icon.clone(),
-            content_origin_x,
-            content_origin_y,
+            layout: drag_preview_layout_for_cursor_offset(
+                cursor_offset,
+                PLACE_DRAG_PREVIEW_MIN_WIDTH,
+                PLACE_DRAG_PREVIEW_MIN_HEIGHT + 6.0,
+            ),
         }
     }
 }
@@ -121,13 +122,13 @@ fn place_drop_zone_for_y(local_y: f32, height: f32) -> PlaceDropZone {
 
 impl Render for PlaceDragPreview {
     fn render(&mut self, _window: &mut gpui::Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        let left = self.content_origin_x;
-        let top = self.content_origin_y;
+        let left = self.layout.content_origin_x;
+        let top = self.layout.content_origin_y;
         let icon = self.icon.clone();
         div()
             .relative()
-            .w(px(left.max(0.0) + PLACE_DRAG_PREVIEW_MIN_WIDTH))
-            .h(px(top.max(0.0) + PLACE_DRAG_PREVIEW_MIN_HEIGHT + 6.0))
+            .w(px(self.layout.surface_width))
+            .h(px(self.layout.surface_height))
             .child(
                 div()
                     .absolute()
