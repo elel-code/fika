@@ -144,9 +144,9 @@ This is the active task board for the GPUI item view custom-paint migration.
 - [x] P11d: Split Details visual layer perf logging into a dedicated
   `[fika details-visual]` channel so GPUI row-shell cost and custom paint cost
   can be compared without mixing with Compact/Icons static visuals.
-- [~] Share image/text cache concepts with Compact/Icons where practical:
-  Details now uses the same GPUI retained image cache path; text shaping is
-  still per-prepaint until a Details text-cache key is justified by perf logs.
+- [x] Share image/text cache concepts with Compact/Icons where practical:
+  Details now uses the same GPUI retained image cache path and a pane-local
+  Details text shape cache with separate perf stats.
 
 ## Acceptance Gates
 
@@ -155,7 +155,8 @@ This is the active task board for the GPUI item view custom-paint migration.
 - [ ] `cargo test` stays green.
 - [ ] Perf logs show resize steady path stays sub-millisecond for item snapshot
   conversion, no new large `file-grid build` regression, and Details custom
-  visual cost is visible separately through `[fika details-visual]`.
+  visual/text-shape cost is visible separately through `[fika details-visual]`
+  and `[fika details-shape-cache]`.
 - [ ] Cold mode switch cost is tracked separately from resize cost.
 - [ ] Any custom paint expansion keeps Dolphin's model/controller/painter split
   and is retained only when perf is neutral or better than the GPUI built-in

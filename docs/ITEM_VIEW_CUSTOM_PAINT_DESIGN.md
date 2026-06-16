@@ -362,6 +362,8 @@ After Compact/Icons are fully retained, move Details rows to the same model:
   visual layer cells.
 - P11d gives the Details visual layer a dedicated perf channel so custom paint
   expansion can be judged independently from Compact/Icons static visuals.
+- Details text shaping uses a pane-local cache keyed by text and text style; its
+  hit/miss/eviction stats are reported separately from row visual prepaint/paint.
 - row backgrounds, text cells, and icons are painted from retained row snapshots
 - column resize/sort/drop hit testing stays model-driven
 - inline rename in Details uses the same overlay boundary as Compact/Icons
@@ -375,7 +377,8 @@ Acceptance:
 - P11c proves Trash visual columns survive the painter migration and row-shell
   controller data still carries the menu/DnD/drop fields.
 - P11d keeps Details paint timing attributable through `[fika details-visual]`
-  before removing any remaining row-shell behavior.
+  and Details text cache activity attributable through
+  `[fika details-shape-cache]` before removing any remaining row-shell behavior.
 - Details steady render no longer builds one visual row subtree per visible item
 - selection, context menu, drag/drop, and Trash columns retain behavior
 - Compact/Icons and Details share slot/image/text cache concepts where practical

@@ -82,13 +82,14 @@ use ui::drag_drop::{
     place_drop_target_matches_insert, place_drop_target_matches_place,
 };
 use ui::file_grid::{
-    CompactColumnWidthCache, ContentItemHit, DetailsVisualPerfStats, ItemDrag,
-    ItemInteractionPerfStats, ItemPaintSlotCache, PaneLayoutProjection, PaneLayoutProjectionInput,
-    PaneViewportGeometry, RawFileGridSnapshot, RawFileGridSnapshotInput, StaticItemTextShapeCache,
-    StaticItemVisualPerfStats, VisibleItemSlotPool, VisibleItemSnapshotCache, compact_text_width,
-    compact_text_width_for_name, content_item_hit_at_point,
-    deferred_thumbnail_candidates_for_model, model_indexes_intersecting_visual_rect,
-    pane_layout_projection, raw_file_grid_snapshot, rename_editor_required_text_width,
+    CompactColumnWidthCache, ContentItemHit, DetailsTextShapeCache, DetailsVisualPerfStats,
+    ItemDrag, ItemInteractionPerfStats, ItemPaintSlotCache, PaneLayoutProjection,
+    PaneLayoutProjectionInput, PaneViewportGeometry, RawFileGridSnapshot, RawFileGridSnapshotInput,
+    StaticItemTextShapeCache, StaticItemVisualPerfStats, VisibleItemSlotPool,
+    VisibleItemSnapshotCache, compact_text_width, compact_text_width_for_name,
+    content_item_hit_at_point, deferred_thumbnail_candidates_for_model,
+    model_indexes_intersecting_visual_rect, pane_layout_projection, raw_file_grid_snapshot,
+    rename_editor_required_text_width,
 };
 use ui::filter_bar::{
     FILTER_BAR_HEIGHT, FilterBarSnapshot, FilteredModelCacheEntry, PaneFilterState,
@@ -424,6 +425,7 @@ pub(crate) struct FikaApp {
     item_paint_slots: HashMap<PaneId, ItemPaintSlotCache>,
     visible_item_snapshot_caches: HashMap<PaneId, VisibleItemSnapshotCache>,
     static_item_text_shape_caches: HashMap<PaneId, StaticItemTextShapeCache>,
+    details_text_shape_caches: HashMap<PaneId, DetailsTextShapeCache>,
     static_item_visual_perf_stats: HashMap<PaneId, StaticItemVisualPerfStats>,
     details_visual_perf_stats: HashMap<PaneId, DetailsVisualPerfStats>,
     item_interaction_perf_stats: HashMap<PaneId, ItemInteractionPerfStats>,
@@ -515,6 +517,7 @@ impl FikaApp {
             item_paint_slots: HashMap::new(),
             visible_item_snapshot_caches: HashMap::new(),
             static_item_text_shape_caches: HashMap::new(),
+            details_text_shape_caches: HashMap::new(),
             static_item_visual_perf_stats: HashMap::new(),
             details_visual_perf_stats: HashMap::new(),
             item_interaction_perf_stats: HashMap::new(),
@@ -802,6 +805,7 @@ impl FikaApp {
         self.item_paint_slots.remove(&pane_id);
         self.visible_item_snapshot_caches.remove(&pane_id);
         self.static_item_text_shape_caches.remove(&pane_id);
+        self.details_text_shape_caches.remove(&pane_id);
         self.static_item_visual_perf_stats.remove(&pane_id);
         self.details_visual_perf_stats.remove(&pane_id);
         self.item_interaction_perf_stats.remove(&pane_id);
@@ -2789,6 +2793,7 @@ impl FikaApp {
         self.item_paint_slots.remove(&pane_id);
         self.visible_item_snapshot_caches.remove(&pane_id);
         self.static_item_text_shape_caches.remove(&pane_id);
+        self.details_text_shape_caches.remove(&pane_id);
         self.static_item_visual_perf_stats.remove(&pane_id);
         self.details_visual_perf_stats.remove(&pane_id);
         self.item_interaction_perf_stats.remove(&pane_id);
@@ -3231,6 +3236,7 @@ impl FikaApp {
         self.item_paint_slots.remove(&pane_id);
         self.visible_item_snapshot_caches.remove(&pane_id);
         self.static_item_text_shape_caches.remove(&pane_id);
+        self.details_text_shape_caches.remove(&pane_id);
         self.static_item_visual_perf_stats.remove(&pane_id);
         self.details_visual_perf_stats.remove(&pane_id);
         self.item_interaction_perf_stats.remove(&pane_id);
@@ -16028,6 +16034,7 @@ text/plain=viewer.desktop;\n",
             item_paint_slots: HashMap::new(),
             visible_item_snapshot_caches: HashMap::new(),
             static_item_text_shape_caches: HashMap::new(),
+            details_text_shape_caches: HashMap::new(),
             static_item_visual_perf_stats: HashMap::new(),
             details_visual_perf_stats: HashMap::new(),
             item_interaction_perf_stats: HashMap::new(),

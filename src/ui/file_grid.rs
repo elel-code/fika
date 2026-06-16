@@ -204,14 +204,14 @@ struct StaticItemTextShapeStyle {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-struct StaticItemTextShapeCacheStats {
+struct TextShapeCacheStats {
     hits: usize,
     misses: usize,
     evicted: usize,
     entries: usize,
 }
 
-impl StaticItemTextShapeCacheStats {
+impl TextShapeCacheStats {
     fn has_activity(self) -> bool {
         self.hits > 0 || self.misses > 0 || self.evicted > 0
     }
@@ -220,7 +220,7 @@ impl StaticItemTextShapeCacheStats {
 #[derive(Default)]
 pub(crate) struct StaticItemTextShapeCache {
     entries: HashMap<StaticItemTextShapeCacheKey, Arc<StaticItemTextShapes>>,
-    stats: StaticItemTextShapeCacheStats,
+    stats: TextShapeCacheStats,
 }
 
 impl StaticItemTextShapeCache {
@@ -248,7 +248,54 @@ impl StaticItemTextShapeCache {
         shapes
     }
 
-    fn take_stats(&mut self) -> StaticItemTextShapeCacheStats {
+    fn take_stats(&mut self) -> TextShapeCacheStats {
+        let mut stats = std::mem::take(&mut self.stats);
+        stats.entries = self.entries.len();
+        stats
+    }
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct DetailsTextShapeCacheKey {
+    text: SharedString,
+    font: Font,
+    font_size_bits: u32,
+    line_height_bits: u32,
+    scale_factor_bits: u32,
+    color: u32,
+}
+
+#[derive(Default)]
+pub(crate) struct DetailsTextShapeCache {
+    entries: HashMap<DetailsTextShapeCacheKey, Arc<gpui::ShapedLine>>,
+    stats: TextShapeCacheStats,
+}
+
+impl DetailsTextShapeCache {
+    const MAX_ENTRIES: usize = 4096;
+
+    fn shape_for(
+        &mut self,
+        key: &DetailsTextShapeCacheKey,
+        window: &mut Window,
+    ) -> Arc<gpui::ShapedLine> {
+        if let Some(line) = self.entries.get(key) {
+            self.stats.hits += 1;
+            return line.clone();
+        }
+
+        self.stats.misses += 1;
+        if self.entries.len() >= Self::MAX_ENTRIES {
+            self.stats.evicted += self.entries.len();
+            self.entries.clear();
+        }
+
+        let line = Arc::new(shape_details_visual_text(key, window));
+        self.entries.insert(key.clone(), line.clone());
+        line
+    }
+
+    fn take_stats(&mut self) -> TextShapeCacheStats {
         let mut stats = std::mem::take(&mut self.stats);
         stats.entries = self.entries.len();
         stats
@@ -1105,7 +1152,8 @@ pub(crate) fn file_grid(
             );
             let mut bounds_changed = false;
             let mut notify_requested = false;
-            let mut shape_cache_stats = StaticItemTextShapeCacheStats::default();
+            let mut shape_cache_stats = TextShapeCacheStats::default();
+            let mut details_shape_cache_stats = TextShapeCacheStats::default();
             let mut static_visual_stats = StaticItemVisualPerfStats::default();
             let mut details_visual_stats = DetailsVisualPerfStats::default();
             let mut interaction_stats = ItemInteractionPerfStats::default();
@@ -1134,6 +1182,7 @@ pub(crate) fn file_grid(
                 }
                 if perf_enabled {
                     shape_cache_stats = this.take_static_item_text_shape_cache_stats(pane_id);
+                    details_shape_cache_stats = this.take_details_text_shape_cache_stats(pane_id);
                     static_visual_stats = this.take_static_item_visual_perf_stats(pane_id);
                     details_visual_stats = this.take_details_visual_perf_stats(pane_id);
                     interaction_stats = this.take_item_interaction_perf_stats(pane_id);
@@ -1161,6 +1210,17 @@ pub(crate) fn file_grid(
                         shape_cache_stats.misses,
                         shape_cache_stats.evicted,
                         shape_cache_stats.entries,
+                    );
+                }
+                if details_shape_cache_stats.has_activity() {
+                    eprintln!(
+                        "[fika details-shape-cache] pane={} mode={:?} hits={} misses={} evicted={} entries={}",
+                        pane_id.0,
+                        view_mode,
+                        details_shape_cache_stats.hits,
+                        details_shape_cache_stats.misses,
+                        details_shape_cache_stats.evicted,
+                        details_shape_cache_stats.entries,
                     );
                 }
                 if static_visual_stats.has_activity() {
@@ -1232,13 +1292,17 @@ pub(crate) fn file_grid(
 }
 
 impl FikaApp {
-    fn take_static_item_text_shape_cache_stats(
-        &mut self,
-        pane_id: PaneId,
-    ) -> StaticItemTextShapeCacheStats {
+    fn take_static_item_text_shape_cache_stats(&mut self, pane_id: PaneId) -> TextShapeCacheStats {
         self.static_item_text_shape_caches
             .get_mut(&pane_id)
             .map(StaticItemTextShapeCache::take_stats)
+            .unwrap_or_default()
+    }
+
+    fn take_details_text_shape_cache_stats(&mut self, pane_id: PaneId) -> TextShapeCacheStats {
+        self.details_text_shape_caches
+            .get_mut(&pane_id)
+            .map(DetailsTextShapeCache::take_stats)
             .unwrap_or_default()
     }
 
@@ -1797,7 +1861,7 @@ struct DetailsVisualIconPaintState {
 
 struct DetailsVisualTextPaintState {
     rect: ViewRect,
-    line: gpui::ShapedLine,
+    line: Arc<gpui::ShapedLine>,
     line_height: Pixels,
 }
 
@@ -1852,14 +1916,25 @@ impl Element for DetailsVisualLayerElement {
                 let states = self
                     .items
                     .iter()
-                    .map(|item| details_visual_prepaint_item(item, Some(&cache), window, cx))
+                    .map(|item| {
+                        details_visual_prepaint_item(
+                            self.pane_id,
+                            item,
+                            Some(&cache),
+                            &self.app,
+                            window,
+                            cx,
+                        )
+                    })
                     .collect::<Vec<_>>();
                 (states, cache)
             })
         } else {
             self.items
                 .iter()
-                .map(|item| details_visual_prepaint_item(item, None, window, cx))
+                .map(|item| {
+                    details_visual_prepaint_item(self.pane_id, item, None, &self.app, window, cx)
+                })
                 .collect::<Vec<_>>()
         };
         if let Some(started) = perf_started {
@@ -1908,8 +1983,10 @@ const DETAILS_CELL_PADDING_X: f32 = 8.0;
 const DETAILS_NAME_ICON_GAP: f32 = 8.0;
 
 fn details_visual_prepaint_item(
+    pane_id: PaneId,
     item: &DetailsVisualLayerItem,
     cache: Option<&Entity<RetainAllImageCache>>,
+    app: &WeakEntity<FikaApp>,
     window: &mut Window,
     cx: &mut App,
 ) -> DetailsVisualPaintState {
@@ -1932,7 +2009,10 @@ fn details_visual_prepaint_item(
                         font.clone(),
                         font_size,
                         line_height,
+                        pane_id,
+                        app,
                         window,
+                        cx,
                     ),
                 }
             }
@@ -1944,7 +2024,10 @@ fn details_visual_prepaint_item(
                     font.clone(),
                     font_size,
                     line_height,
+                    pane_id,
+                    app,
                     window,
+                    cx,
                 ))
             }
         })
@@ -2051,24 +2134,64 @@ fn details_visual_text_prepaint(
     font: Font,
     font_size: Pixels,
     line_height: Pixels,
+    pane_id: PaneId,
+    app: &WeakEntity<FikaApp>,
     window: &mut Window,
+    cx: &mut App,
 ) -> DetailsVisualTextPaintState {
-    let text = static_paint_single_line_text(text);
-    let run = TextRun {
-        len: text.len(),
+    let key = details_text_shape_cache_key(text, color, font, font_size, line_height, window);
+    let line = app
+        .update(cx, |this, _cx| {
+            this.details_text_shape_caches
+                .entry(pane_id)
+                .or_default()
+                .shape_for(&key, window)
+        })
+        .ok()
+        .unwrap_or_else(|| Arc::new(shape_details_visual_text(&key, window)));
+    DetailsVisualTextPaintState {
+        rect,
+        line,
+        line_height,
+    }
+}
+
+fn details_text_shape_cache_key(
+    text: SharedString,
+    color: u32,
+    font: Font,
+    font_size: Pixels,
+    line_height: Pixels,
+    window: &Window,
+) -> DetailsTextShapeCacheKey {
+    DetailsTextShapeCacheKey {
+        text: static_paint_single_line_text(text),
         font,
-        color: rgb(color).into(),
+        font_size_bits: font_size.as_f32().to_bits(),
+        line_height_bits: line_height.as_f32().to_bits(),
+        scale_factor_bits: window.scale_factor().to_bits(),
+        color,
+    }
+}
+
+fn shape_details_visual_text(
+    key: &DetailsTextShapeCacheKey,
+    window: &mut Window,
+) -> gpui::ShapedLine {
+    let run = TextRun {
+        len: key.text.len(),
+        font: key.font.clone(),
+        color: rgb(key.color).into(),
         background_color: None,
         underline: None,
         strikethrough: None,
     };
-    DetailsVisualTextPaintState {
-        rect,
-        line: window
-            .text_system()
-            .shape_line(text, font_size, &[run], None),
-        line_height,
-    }
+    window.text_system().shape_line(
+        key.text.clone(),
+        px(f32::from_bits(key.font_size_bits)),
+        &[run],
+        None,
+    )
 }
 
 fn details_visual_paint_item(
@@ -4079,8 +4202,8 @@ fn drag_preview_label(name: &str, selected: bool, selection_count: usize) -> Str
 mod tests {
     use super::{
         DetailsItemSnapshot, DetailsLayoutMetrics, DetailsPaintContent, DetailsRowControllerState,
-        FileGridMode, FileGridRenderSnapshot, FileGridSnapshot, ItemPaintContent,
-        ItemPaintSlotCache, ItemTileTextAlignment, StaticItemLabelTextKey,
+        DetailsTextShapeCacheKey, FileGridMode, FileGridRenderSnapshot, FileGridSnapshot,
+        ItemPaintContent, ItemPaintSlotCache, ItemTileTextAlignment, StaticItemLabelTextKey,
         StaticItemTextShapeCacheKey, VisibleItemSnapshot, details_columns,
         details_visual_layer_element_id, details_visual_layer_items, display_text_layout,
         drag_preview_label, item_identity_element_id, item_image_element_id,
@@ -4319,6 +4442,34 @@ mod tests {
             ..key.clone()
         };
         assert_ne!(key, renamed_label);
+    }
+
+    #[test]
+    fn details_text_shape_cache_key_ignores_cell_geometry_for_resize_reuse() {
+        let font = Font::default();
+        let key = DetailsTextShapeCacheKey {
+            text: SharedString::from("alpha.txt"),
+            font,
+            font_size_bits: 14.0f32.to_bits(),
+            line_height_bits: 20.0f32.to_bits(),
+            scale_factor_bits: 1.0f32.to_bits(),
+            color: 0x1f2937,
+        };
+
+        let moved_or_resized_cell = key.clone();
+        assert_eq!(key, moved_or_resized_cell);
+
+        let selected_color = DetailsTextShapeCacheKey {
+            color: 0x0f172a,
+            ..key.clone()
+        };
+        assert_ne!(key, selected_color);
+
+        let renamed_text = DetailsTextShapeCacheKey {
+            text: SharedString::from("beta.txt"),
+            ..key.clone()
+        };
+        assert_ne!(key, renamed_text);
     }
 
     #[test]
