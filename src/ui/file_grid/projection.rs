@@ -209,9 +209,7 @@ impl PaneLayout {
             PaneLayout::Compact(layout) => {
                 layout.item_with_required_text_width(layout_index, required_text_width)
             }
-            PaneLayout::Icons(layout) => {
-                layout.item_with_required_text_width(layout_index, required_text_width)
-            }
+            PaneLayout::Icons(layout) => layout.item(layout_index),
             PaneLayout::Details {
                 row_count,
                 content_width,
@@ -364,6 +362,34 @@ mod tests {
                 .hit_test_content_point(ViewPoint { x: 18.0, y: 102.0 }),
             Some(2)
         );
+    }
+
+    #[test]
+    fn pane_layout_icons_ignore_required_text_width_for_item_bounds() {
+        let layout = IconsLayout::new(
+            1,
+            fika_core::IconsLayoutOptions {
+                viewport_width: 120.0,
+                item_width: 100.0,
+                item_height: 80.0,
+                gap: 10.0,
+                padding: 4.0,
+                ..fika_core::IconsLayoutOptions::default()
+            },
+        );
+        let projection = PaneLayoutProjection::new(PaneLayout::Icons(layout), None);
+
+        let full = projection
+            .layout
+            .item_with_required_text_width(0, None)
+            .unwrap();
+        let with_estimate = projection
+            .layout
+            .item_with_required_text_width(0, Some(4.0))
+            .unwrap();
+
+        assert_eq!(with_estimate.text_rect, full.text_rect);
+        assert_eq!(with_estimate.visual_rect, full.visual_rect);
     }
 
     #[test]

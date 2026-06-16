@@ -12076,14 +12076,16 @@ text/plain=viewer.desktop;\n",
     }
 
     #[test]
-    fn icons_layout_options_follow_dolphin_zoom_formula() {
+    fn icons_layout_options_follow_dolphin_width_and_reserve_three_name_lines() {
+        let icon_text_height = ui::file_grid::ITEM_NAME_LINE_HEIGHT
+            * ui::file_grid::DOLPHIN_ICON_MAX_TEXT_LINES as f32;
         let default_options = ui::file_grid::icons_layout_options(&ViewState::default(), 0.0);
         assert_eq!(default_options.icon_size, 48.0);
         assert_eq!(default_options.padding, 2.0);
         assert_eq!(default_options.gap, 8.0);
         assert_eq!(default_options.item_width, 96.0);
-        assert_eq!(default_options.item_height, 72.0);
-        assert_eq!(default_options.text_height, 18.0);
+        assert_eq!(default_options.item_height, 108.0);
+        assert_eq!(default_options.text_height, icon_text_height);
 
         let zoomed_options = ui::file_grid::icons_layout_options(
             &ViewState {
@@ -12094,8 +12096,8 @@ text/plain=viewer.desktop;\n",
         );
         assert_eq!(zoomed_options.icon_size, 256.0);
         assert_eq!(zoomed_options.item_width, 269.0);
-        assert_eq!(zoomed_options.item_height, 280.0);
-        assert_eq!(zoomed_options.text_height, 18.0);
+        assert_eq!(zoomed_options.item_height, 316.0);
+        assert_eq!(zoomed_options.text_height, icon_text_height);
     }
 
     #[test]

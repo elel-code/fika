@@ -213,18 +213,6 @@ pub(crate) fn item_name_text_height_for_name(name: &str, available_text_width: f
     wrapped_item_name_line_count(name, available_text_width) as f32 * super::ITEM_NAME_LINE_HEIGHT
 }
 
-pub(crate) fn item_name_text_height_for_width(text_width: f32, available_text_width: f32) -> f32 {
-    let available_text_width = available_text_width.max(1.0);
-    let line_count = (text_width.max(1.0) / available_text_width).ceil().max(1.0);
-    line_count * super::ITEM_NAME_LINE_HEIGHT
-}
-
-fn capped_icon_item_name_text_height(text_height: f32) -> f32 {
-    let min_height = super::ITEM_NAME_LINE_HEIGHT;
-    let max_height = super::ITEM_NAME_LINE_HEIGHT * super::DOLPHIN_ICON_MAX_TEXT_LINES as f32;
-    text_height.max(min_height).min(max_height)
-}
-
 pub(crate) fn dolphin_preprocess_wrap(text: &str) -> String {
     let mut processed = String::with_capacity(text.len());
     let mut chars = text.chars().peekable();
@@ -484,16 +472,7 @@ pub(crate) fn icons_layout_for_model(
         rename_draft,
         reserved_bottom,
     );
-    let text_override = rename_text_override_for_model(model, rename_draft);
-    let item_heights = icon_item_heights_for_model(
-        model,
-        filtered,
-        item_count,
-        text_override,
-        options,
-        icon_name_available_width(options),
-    );
-    IconsLayout::new_with_item_heights(item_count, options, item_heights)
+    IconsLayout::new(item_count, options)
 }
 
 fn compact_layout_options_for_model_view(
@@ -504,43 +483,6 @@ fn compact_layout_options_for_model_view(
     _text_override: Option<CompactTextWidthOverride>,
 ) -> CompactLayoutOptions {
     super::compact_layout_options(view, 0.0)
-}
-
-fn icon_item_heights_for_model(
-    model: &fika_core::DirectoryModel,
-    filtered: Option<&fika_core::FilteredModel>,
-    item_count: usize,
-    text_override: Option<CompactTextWidthOverride>,
-    options: IconsLayoutOptions,
-    available_text_width: f32,
-) -> Vec<f32> {
-    (0..item_count)
-        .map(|layout_index| {
-            let Some(model_index) = model_index_for_layout_index(filtered, layout_index) else {
-                return options.item_height;
-            };
-            let Some(entry) = model.get(model_index) else {
-                return options.item_height;
-            };
-            let text_height = if let Some(override_) =
-                text_override.filter(|override_| override_.model_index == model_index)
-            {
-                item_name_text_height_for_width(override_.text_width, available_text_width)
-            } else {
-                item_name_text_height_for_name(
-                    &dolphin_preprocess_wrap(&entry.name),
-                    available_text_width,
-                )
-            };
-            options.padding * 3.0
-                + options.icon_size
-                + capped_icon_item_name_text_height(text_height)
-        })
-        .collect()
-}
-
-fn icon_name_available_width(options: IconsLayoutOptions) -> f32 {
-    (options.item_width - options.padding * 2.0).max(1.0)
 }
 
 #[cfg(test)]
@@ -586,7 +528,7 @@ mod tests {
     }
 
     #[test]
-    fn icons_layout_uses_dolphin_item_height_hints_for_wrapped_names() {
+    fn icons_layout_reserves_three_name_lines_for_all_items() {
         let long_name = "elzykosuda227446+breuyev@hotmail.cpa.2026-06-22.json";
         let mut model = DirectoryModel::for_directory(PathBuf::from("/tmp"));
         model.replace_listing(
@@ -605,15 +547,25 @@ mod tests {
         let base_options = crate::ui::file_grid::icons_layout_options(&view, 0.0);
 
         let layout = icons_layout_for_model(&model, None, model.len(), &view, None, 0.0);
+        let expected_text_height =
+            super::super::ITEM_NAME_LINE_HEIGHT * super::super::DOLPHIN_ICON_MAX_TEXT_LINES as f32;
 
+        assert_eq!(base_options.text_height, expected_text_height);
         assert_eq!(
             layout.item(0).unwrap().item_rect.height,
             base_options.item_height
         );
-        assert!(layout.item(2).unwrap().item_rect.height > base_options.item_height);
+        assert_eq!(
+            layout.item(0).unwrap().text_rect.height,
+            expected_text_height
+        );
+        assert_eq!(
+            layout.item(2).unwrap().item_rect.height,
+            base_options.item_height
+        );
         assert_eq!(
             layout.item(2).unwrap().text_rect.height,
-            super::super::ITEM_NAME_LINE_HEIGHT * super::super::DOLPHIN_ICON_MAX_TEXT_LINES as f32
+            expected_text_height
         );
         assert_eq!(
             layout.item(2).unwrap().item_rect.y,

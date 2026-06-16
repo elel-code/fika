@@ -1850,7 +1850,7 @@ pub(crate) fn icons_layout_options(view: &ViewState, reserved_bottom: f32) -> Ic
     let icon_size = view.icon_size();
     let padding = DOLPHIN_ITEM_PADDING;
     let gap = DOLPHIN_ICON_MARGIN;
-    let text_height = ITEM_NAME_LINE_HEIGHT;
+    let text_height = ITEM_NAME_LINE_HEIGHT * DOLPHIN_ICON_MAX_TEXT_LINES as f32;
     let zoom_factor = (view.zoom_level as f32 / 13.0).exp();
     let item_width = (16.0
         + DOLPHIN_ICON_TEXT_WIDTH_INDEX * 64.0 * DOLPHIN_ICON_FONT_FACTOR * zoom_factor)

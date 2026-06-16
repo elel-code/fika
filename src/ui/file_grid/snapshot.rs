@@ -255,10 +255,7 @@ pub(crate) fn raw_file_grid_snapshot(input: RawFileGridSnapshotInput<'_>) -> Raw
                     let entry = model.get(model_index)?;
                     let path = model.path_for_index(model_index)?;
                     let active_rename_draft = active_rename_draft_for_path(rename_draft, &path);
-                    let required_text_width =
-                        required_text_width_for_entry(entry, active_rename_draft);
-                    let item_layout = layout
-                        .item_with_required_text_width(layout_index, Some(required_text_width))?;
+                    let item_layout = layout.item(layout_index)?;
                     Some(raw_visible_item_snapshot(
                         pane_id,
                         selection,
@@ -975,6 +972,45 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn raw_icon_snapshot_uses_full_text_width_for_names() {
+        let directory = PathBuf::from("/tmp/fika-icon-full-text-width");
+        let entries = Arc::new(vec![test_entry("i", Some("text/plain"), true, Some(10))]);
+        let mut model = DirectoryModel::for_directory(directory.clone());
+        model.replace_listing(directory, entries);
+        let view = ViewState {
+            view_mode: ViewMode::Icons,
+            ..ViewState::default()
+        };
+        let mut compact_column_widths = CompactColumnWidthCache::default();
+
+        let snapshot = raw_file_grid_snapshot(RawFileGridSnapshotInput {
+            pane_id: PaneId(3),
+            model: &model,
+            selection: &SelectionState::default(),
+            view: &view,
+            filtered: None,
+            source_revision: 0,
+            rename_draft: None,
+            item_drop_target: None,
+            compact_column_widths: &mut compact_column_widths,
+        });
+
+        let RawFileGridSnapshot::Icons { items, .. } = snapshot else {
+            panic!("expected icon snapshot");
+        };
+        let item = items.first().expect("icon item should be visible");
+        let options = crate::ui::file_grid::icons_layout_options(&view, 0.0);
+        let estimated_text_width =
+            required_text_width_for_entry(model.get(0).unwrap(), None) + options.padding * 2.0;
+
+        assert_eq!(
+            item.layout.text_rect.width,
+            options.item_width - options.padding * 2.0
+        );
+        assert!(item.layout.text_rect.width > estimated_text_width);
     }
 
     #[test]
