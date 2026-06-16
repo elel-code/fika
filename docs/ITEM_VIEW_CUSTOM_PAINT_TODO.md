@@ -196,6 +196,9 @@ This is the active task board for the GPUI item view custom-paint migration.
   renderer decision log.
 - [x] Add `scripts/summarize-item-view-renderer-evidence.sh` so passing runtime
   perf logs produce a renderer decision evidence block.
+- [x] Centralize Compact/Icons renderer choices in an explicit
+  `ItemRendererPolicy` so custom-paint vs GPUI surface decisions are not hidden
+  behind ad hoc booleans.
 
 ## Acceptance Gates
 

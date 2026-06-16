@@ -2584,8 +2584,15 @@ fn item_tile(
     let selection_count = item.visual.selection_count;
     let hovered = item.visual.hovered;
     let drop_target = item.visual.drop_target;
-    let use_layer_visual_paint = item_uses_layer_visual_paint(content);
-    let use_layer_interaction = item_uses_layer_interaction(content);
+    let renderer_policy = item_renderer_policy(content);
+    let use_layer_visual_paint = matches!(
+        renderer_policy.base_visual,
+        ItemBaseVisualRenderer::ContentLayer
+    );
+    let use_layer_interaction = matches!(
+        renderer_policy.interaction,
+        ItemInteractionRenderer::RetainedLayer
+    );
     let drag_app = app.clone();
     let drag_value = ItemDrag {
         pane_id,
@@ -2611,22 +2618,30 @@ fn item_tile(
         .w(px(visual.width))
         .h(px(visual.height))
         .rounded_md()
-        .bg(shell_background)
-        .on_drag(drag_value, move |drag, cursor_offset, _, cx| {
-            let _ = drag_app.update(cx, |this, _cx| {
-                this.begin_item_drag(drag.payload());
-            });
-            cx.new(|_| DragPreview {
-                icon: drag.icon.clone(),
-                label: drag_preview_label(drag.name.as_ref(), drag.selected, drag.selection_count),
-                count: drag.selection_count,
-                layout: drag_preview_layout_for_cursor_offset(
-                    cursor_offset,
-                    DRAG_PREVIEW_MIN_WIDTH,
-                    DRAG_PREVIEW_MIN_HEIGHT + 6.0,
-                ),
+        .bg(shell_background);
+    let core = match renderer_policy.drag_start {
+        ItemDragStartRenderer::GpuiShell => {
+            core.on_drag(drag_value, move |drag, cursor_offset, _, cx| {
+                let _ = drag_app.update(cx, |this, _cx| {
+                    this.begin_item_drag(drag.payload());
+                });
+                cx.new(|_| DragPreview {
+                    icon: drag.icon.clone(),
+                    label: drag_preview_label(
+                        drag.name.as_ref(),
+                        drag.selected,
+                        drag.selection_count,
+                    ),
+                    count: drag.selection_count,
+                    layout: drag_preview_layout_for_cursor_offset(
+                        cursor_offset,
+                        DRAG_PREVIEW_MIN_WIDTH,
+                        DRAG_PREVIEW_MIN_HEIGHT + 6.0,
+                    ),
+                })
             })
-        });
+        }
+    };
     let core = if use_layer_interaction {
         core
     } else {
@@ -2658,21 +2673,26 @@ fn item_tile(
     } else {
         core
     };
-    let core = if let Some(draft_name) = content.draft_name.as_deref() {
-        core.child(rename_text_view(
-            pane_id,
-            SharedString::from(draft_name),
-            item.layout,
-            text_alignment,
-            selected,
-            content.draft_caret,
-            content.draft_selection,
-            content.draft_error.as_deref(),
-            content.draft_warning.as_deref(),
-            cx,
-        ))
-    } else {
-        core
+    let core = match renderer_policy.rename_editor {
+        ItemRenameEditorRenderer::None => core,
+        ItemRenameEditorRenderer::GpuiOverlay => {
+            let draft_name = content
+                .draft_name
+                .as_deref()
+                .expect("rename renderer policy requires draft text");
+            core.child(rename_text_view(
+                pane_id,
+                SharedString::from(draft_name),
+                item.layout,
+                text_alignment,
+                selected,
+                content.draft_caret,
+                content.draft_selection,
+                content.draft_error.as_deref(),
+                content.draft_warning.as_deref(),
+                cx,
+            ))
+        }
     };
 
     div()
@@ -2685,18 +2705,92 @@ fn item_tile(
         .child(core)
 }
 
-fn item_uses_layer_visual_paint(_content: &ItemPaintContent) -> bool {
-    // Compact/Icons base visuals all live in content-level layers; rename only
-    // keeps a local editor overlay and its legacy interaction shell.
-    true
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ItemRendererPolicy {
+    base_visual: ItemBaseVisualRenderer,
+    image: ItemImageRenderer,
+    interaction: ItemInteractionRenderer,
+    drag_start: ItemDragStartRenderer,
+    rename_editor: ItemRenameEditorRenderer,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ItemBaseVisualRenderer {
+    ContentLayer,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ItemImageRenderer {
+    None,
+    ContentLayer,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ItemInteractionRenderer {
+    RetainedLayer,
+    RenameShell,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ItemDragStartRenderer {
+    GpuiShell,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ItemRenameEditorRenderer {
+    None,
+    GpuiOverlay,
+}
+
+fn item_renderer_policy(content: &ItemPaintContent) -> ItemRendererPolicy {
+    let has_image = content.thumbnail_path.is_some() || content.icon.path.is_some();
+    let renaming = content.draft_name.is_some();
+    ItemRendererPolicy {
+        // Compact/Icons base visuals live in content-level layers. Rename keeps
+        // only a local editor overlay and temporary drag shell.
+        base_visual: ItemBaseVisualRenderer::ContentLayer,
+        image: if has_image {
+            ItemImageRenderer::ContentLayer
+        } else {
+            ItemImageRenderer::None
+        },
+        interaction: if renaming {
+            ItemInteractionRenderer::RenameShell
+        } else {
+            ItemInteractionRenderer::RetainedLayer
+        },
+        drag_start: ItemDragStartRenderer::GpuiShell,
+        rename_editor: if renaming {
+            ItemRenameEditorRenderer::GpuiOverlay
+        } else {
+            ItemRenameEditorRenderer::None
+        },
+    }
+}
+
+fn item_uses_layer_visual_paint(content: &ItemPaintContent) -> bool {
+    matches!(
+        item_renderer_policy(content).base_visual,
+        ItemBaseVisualRenderer::ContentLayer
+    )
 }
 
 fn item_uses_layer_interaction(content: &ItemPaintContent) -> bool {
-    content.draft_name.is_none()
+    matches!(
+        item_renderer_policy(content).interaction,
+        ItemInteractionRenderer::RetainedLayer
+    )
+}
+
+fn item_uses_image_layer(content: &ItemPaintContent) -> bool {
+    matches!(
+        item_renderer_policy(content).image,
+        ItemImageRenderer::ContentLayer
+    )
 }
 
 fn item_paints_fallback_icon(content: &ItemPaintContent) -> bool {
-    content.thumbnail_path.is_none() && content.icon.path.is_none()
+    !item_uses_image_layer(content)
 }
 
 fn item_tile_background(selected: bool, drop_target: bool, hovered: bool) -> Rgba {
@@ -2933,9 +3027,7 @@ fn item_image_layer_items(items: &[ItemPaintSnapshot]) -> Vec<ItemImageLayerItem
         .iter()
         .filter_map(|item| {
             let content = item.content.as_ref();
-            if !item_uses_layer_visual_paint(content)
-                || (content.thumbnail_path.is_none() && content.icon.path.is_none())
-            {
+            if !item_uses_layer_visual_paint(content) || !item_uses_image_layer(content) {
                 return None;
             }
             Some(ItemImageLayerItem {
@@ -4239,17 +4331,19 @@ mod tests {
     use super::{
         DetailsItemSnapshot, DetailsLayoutMetrics, DetailsPaintContent, DetailsRowControllerState,
         DetailsTextShapeCacheKey, FileGridMode, FileGridRenderSnapshot, FileGridSnapshot,
-        ItemPaintContent, ItemPaintSlotCache, ItemTileTextAlignment, StaticItemLabelTextKey,
-        StaticItemTextShapeCacheKey, VisibleItemSnapshot, details_columns,
-        details_interaction_layer_items, details_visual_layer_element_id,
-        details_visual_layer_items, display_text_layout, drag_preview_label,
-        item_identity_element_id, item_image_element_id, item_image_layer_item_source_path,
-        item_image_layer_items, item_image_load_failure_paints_fallback,
-        item_image_paint_layer_element_id, item_interaction_hitbox_bounds,
-        item_interaction_layer_element_id, item_interaction_layer_items,
-        item_mouse_down_opens_directory, measured_viewport_for_scrollbar_axis,
-        normalized_text_range, rename_text_layout, static_item_visual_layer_element_id,
-        static_item_visual_layer_items, viewport_bounds_update_requires_notify,
+        ItemBaseVisualRenderer, ItemDragStartRenderer, ItemImageRenderer, ItemInteractionRenderer,
+        ItemPaintContent, ItemPaintSlotCache, ItemRenameEditorRenderer, ItemRendererPolicy,
+        ItemTileTextAlignment, StaticItemLabelTextKey, StaticItemTextShapeCacheKey,
+        VisibleItemSnapshot, details_columns, details_interaction_layer_items,
+        details_visual_layer_element_id, details_visual_layer_items, display_text_layout,
+        drag_preview_label, item_identity_element_id, item_image_element_id,
+        item_image_layer_item_source_path, item_image_layer_items,
+        item_image_load_failure_paints_fallback, item_image_paint_layer_element_id,
+        item_interaction_hitbox_bounds, item_interaction_layer_element_id,
+        item_interaction_layer_items, item_mouse_down_opens_directory, item_renderer_policy,
+        measured_viewport_for_scrollbar_axis, normalized_text_range, rename_text_layout,
+        static_item_visual_layer_element_id, static_item_visual_layer_items,
+        viewport_bounds_update_requires_notify,
     };
     use crate::ui::drag_drop::drag_preview_content_origin_for_cursor_offset;
     use crate::ui::icons::FileIconSnapshot;
@@ -4386,6 +4480,51 @@ mod tests {
         let visual_items = static_item_visual_layer_items(&items, ItemTileTextAlignment::Center);
         let image_items = item_image_layer_items(&items);
         let interaction_items = item_interaction_layer_items(&items);
+        let policies = items
+            .iter()
+            .map(|item| item_renderer_policy(item.content.as_ref()))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            policies,
+            vec![
+                ItemRendererPolicy {
+                    base_visual: ItemBaseVisualRenderer::ContentLayer,
+                    image: ItemImageRenderer::None,
+                    interaction: ItemInteractionRenderer::RetainedLayer,
+                    drag_start: ItemDragStartRenderer::GpuiShell,
+                    rename_editor: ItemRenameEditorRenderer::None,
+                },
+                ItemRendererPolicy {
+                    base_visual: ItemBaseVisualRenderer::ContentLayer,
+                    image: ItemImageRenderer::ContentLayer,
+                    interaction: ItemInteractionRenderer::RetainedLayer,
+                    drag_start: ItemDragStartRenderer::GpuiShell,
+                    rename_editor: ItemRenameEditorRenderer::None,
+                },
+                ItemRendererPolicy {
+                    base_visual: ItemBaseVisualRenderer::ContentLayer,
+                    image: ItemImageRenderer::ContentLayer,
+                    interaction: ItemInteractionRenderer::RetainedLayer,
+                    drag_start: ItemDragStartRenderer::GpuiShell,
+                    rename_editor: ItemRenameEditorRenderer::None,
+                },
+                ItemRendererPolicy {
+                    base_visual: ItemBaseVisualRenderer::ContentLayer,
+                    image: ItemImageRenderer::None,
+                    interaction: ItemInteractionRenderer::RenameShell,
+                    drag_start: ItemDragStartRenderer::GpuiShell,
+                    rename_editor: ItemRenameEditorRenderer::GpuiOverlay,
+                },
+                ItemRendererPolicy {
+                    base_visual: ItemBaseVisualRenderer::ContentLayer,
+                    image: ItemImageRenderer::ContentLayer,
+                    interaction: ItemInteractionRenderer::RenameShell,
+                    drag_start: ItemDragStartRenderer::GpuiShell,
+                    rename_editor: ItemRenameEditorRenderer::GpuiOverlay,
+                },
+            ]
+        );
 
         assert_eq!(
             visual_items
