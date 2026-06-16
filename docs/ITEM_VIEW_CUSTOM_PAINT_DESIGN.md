@@ -83,8 +83,8 @@ Paint layer may use:
 - `ShapedLine::paint`
 - retained GPUI `img()` elements for thumbnail/theme-icon slots while GPUI owns
   path loading and decode cache
-- `Window::paint_image` only after thumbnail/icon cache ownership is moved into
-  a Fika-controlled render-image cache
+- `Window::paint_image` with GPUI `RenderImage` values loaded by a pane-local
+  `RetainAllImageCache`
 
 Paint layer must not:
 
@@ -181,8 +181,10 @@ Replace thumbnail `img()` subtree after image ownership is clear:
 - Current boundary keeps a minimal retained image element per thumbnail/theme
   icon slot, using a pane-local `retain_all` image cache and a stable
   `("item-image", slot_id)` id.
-- A future direct paint handle must be introduced only after Fika owns the image
-  cache contract explicitly.
+- Direct image painting can still reuse GPUI's public `RetainAllImageCache`,
+  `ImageAssetLoader`, `RenderImage`, and `Window::paint_image` APIs. Fika should
+  only reimplement decode/invalidation if GPUI's cache contract proves
+  insufficient.
 
 Acceptance:
 
@@ -253,6 +255,77 @@ Acceptance:
 - fallback marker shaping is skipped for image-backed items
 - tests prove visual-layer and image-layer membership stay split correctly
 
+### Phase 8: Direct Image Paint Layer
+
+Replace the content-level thumbnail/theme-icon `img()` layer with a custom paint
+element:
+
+- keep using GPUI's `ImageAssetLoader` and pane-local `RetainAllImageCache` for
+  path loading, SVG rendering, image decode, and render-image lifetime
+- draw loaded images from the custom layer with `Window::paint_image`
+- keep fallback marker painting in the image layer only when a theme-icon path
+  fails to load
+- keep thumbnail failures model-driven; a missing thumbnail render image does not
+  synthesize a file icon in paint
+
+Acceptance:
+
+- non-renaming thumbnail/theme-icon items no longer allocate per-image `img()`
+  elements
+- image loads still happen asynchronously and notify the pane on completion
+- loaded image bounds match GPUI `ObjectFit::Contain`
+- image cache state remains pane-local and is released with the pane/layer
+
+### Phase 9: Painted Interaction Hitboxes
+
+Move item interaction out of per-item `Div` shells once GPUI hitbox APIs are
+explicitly wired for custom elements:
+
+- custom element inserts one stable hitbox per visible item visual rect
+- hover, drag source, cursor, and directory drag-over state route through the
+  retained slot table
+- viewport hit testing remains the source of truth for click/menu/drop behavior
+- drag preview offset continues to use GPUI's cursor offset, independent of item
+  geometry
+
+Acceptance:
+
+- Compact/Icons non-renaming items allocate no per-item element at all
+- hover/selection/drop visuals are projected through retained visual state
+- internal item DnD, pane DnD, Places DnD, and external drop behavior remain
+  unchanged
+
+### Phase 10: Rename Overlay Boundary
+
+Keep rename as the only item-local child path until text input is separated from
+item painting:
+
+- the selected item's normal base visual remains painted by the layer
+- the editor, caret, selection highlight, warning/error helper, and click caret
+  hit testing remain in the existing rename subtree
+- the rename subtree is positioned as an overlay, not as the default item visual
+  path
+
+Acceptance:
+
+- starting/stopping rename does not rebuild unrelated item visual/image layers
+- rename caret and UTF-8 selection tests remain green
+- Tab rename-next preserves model order and pane-local draft state
+
+### Phase 11: Details Mode Paint Path
+
+After Compact/Icons are fully retained, move Details rows to the same model:
+
+- row backgrounds, text cells, and icons are painted from retained row snapshots
+- column resize/sort/drop hit testing stays model-driven
+- inline rename in Details uses the same overlay boundary as Compact/Icons
+
+Acceptance:
+
+- Details steady render no longer builds one row subtree per visible item
+- selection, context menu, drag/drop, and Trash columns retain behavior
+- Compact/Icons and Details share slot/image/text cache concepts where practical
+
 ## Invariants
 
 - Click/menu/drop behavior continues to use Rust hit testing.
@@ -266,7 +339,9 @@ Acceptance:
 ## Non-goals
 
 - Do not rewrite Details mode in the first static paint slice.
-- Do not remove `img()` thumbnail rendering before image cache ownership is
-  explicit.
+- Do not reimplement image decode/cache ownership while GPUI's public
+  `RetainAllImageCache` and `ImageAssetLoader` remain sufficient.
+- Do not remove remaining `img()` paths for rename/Details before their
+  interaction and paint boundaries are migrated.
 - Do not introduce a new app-wide ECS or scene graph.
 - Do not move file-manager decisions into GPUI paint code.

@@ -85,6 +85,10 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
 - [x] Phase 5：从 `canvas` spike 升级到 dedicated GPUI custom element。
 - [x] Phase 6：静态 fallback Compact/Icons item 上提到 content-level 自绘 layer，item shell 仅保留交互。
 - [x] Phase 7：所有非 rename Compact/Icons item 的背景/文字进入 content-level 自绘 layer，thumbnail/theme icon 进入独立 content-level image layer，item shell 只保留交互。
+- [x] Phase 8：thumbnail/theme icon image layer 改为 custom paint element，复用 GPUI `RetainAllImageCache`/`ImageAssetLoader`，用 `Window::paint_image` 直接绘制。
+- [ ] Phase 9：用 custom element hitbox 替换非 rename per-item interaction shell，hover/drag/cursor 进入 retained hitbox 路由。
+- [ ] Phase 10：rename 只保留 overlay editor，普通背景/文字/图片继续走 content-level layer。
+- [ ] Phase 11：Details row 背景/图标/文字转入 retained custom paint layer。
 
 ### GPUI Backend / External MIME Drag (阻塞)
 - [~] 外部 MIME 拖出：`DragExportPayload`（`text/uri-list` + `text/plain`）已构造，但 GPUI/Wayland backend 尚未提供从 app 内部 drag source 向外部应用发布 MIME 的 API。待 backend 支持后接入。

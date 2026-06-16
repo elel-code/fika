@@ -28,11 +28,12 @@ use fika_core::{
 };
 use gpui::prelude::*;
 use gpui::{
-    App, Bounds, Context, Div, Element, ElementId, Empty, ExternalPaths, Font, FontWeight,
-    GlobalElementId, InspectorElementId, IntoElement, LayoutId, MouseButton, NavigationDirection,
-    ParentElement, Pixels, Render, Rgba, ScrollHandle, SharedString, Stateful, Style,
-    StyleRefinement, Styled, TextAlign, TextRun, WeakEntity, Window, div, fill, img, point, px,
-    retain_all, rgb, rgba, size,
+    App, Bounds, Context, Corners, Div, Element, ElementId, Empty, Entity, ExternalPaths, Font,
+    FontWeight, GlobalElementId, InspectorElementId, IntoElement, LayoutId, MouseButton,
+    NavigationDirection, ObjectFit, ParentElement, Pixels, Render, RenderImage, Resource,
+    RetainAllImageCache, Rgba, ScrollHandle, SharedString, Stateful, Style, StyleRefinement,
+    Styled, TextAlign, TextRun, WeakEntity, Window, div, fill, img, point, px, retain_all, rgb,
+    rgba, size,
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -563,6 +564,10 @@ fn static_item_visual_layer_element_id(pane_id: PaneId) -> (&'static str, u64) {
     ("static-item-visual-layer", pane_id.0)
 }
 
+fn item_image_paint_layer_element_id(pane_id: PaneId) -> (&'static str, u64) {
+    ("item-image-paint-layer", pane_id.0)
+}
+
 fn handle_file_grid_item_drag_move(
     app: &mut FikaApp,
     pane_id: PaneId,
@@ -782,7 +787,7 @@ pub(crate) fn file_grid(
                 app.clone(),
             );
             let image_layer =
-                item_image_layer_view(&items, content_size.width, content_size.height);
+                item_image_layer_view(pane_id, &items, content_size.width, content_size.height);
             let content = div()
                 .relative()
                 .w(px(content_size.width))
@@ -827,7 +832,7 @@ pub(crate) fn file_grid(
                 app.clone(),
             );
             let image_layer =
-                item_image_layer_view(&items, content_size.width, content_size.height);
+                item_image_layer_view(pane_id, &items, content_size.width, content_size.height);
             let content = div()
                 .relative()
                 .w(px(content_size.width))
@@ -2047,16 +2052,24 @@ impl Styled for StaticItemVisualLayerElement {
     }
 }
 
-fn item_image_layer_view(items: &[ItemPaintSnapshot], width: f32, height: f32) -> Option<Div> {
+fn item_image_layer_view(
+    pane_id: PaneId,
+    items: &[ItemPaintSnapshot],
+    width: f32,
+    height: f32,
+) -> Option<ItemImageLayerElement> {
     let items = item_image_layer_items(items);
     (!items.is_empty()).then(|| {
-        div()
-            .absolute()
-            .left_0()
-            .top_0()
-            .w(px(width.max(1.0)))
-            .h(px(height.max(1.0)))
-            .children(items.into_iter().map(item_image_layer_item_view))
+        ItemImageLayerElement {
+            pane_id,
+            items,
+            style: StyleRefinement::default(),
+        }
+        .absolute()
+        .left_0()
+        .top_0()
+        .w(px(width.max(1.0)))
+        .h(px(height.max(1.0)))
     })
 }
 
@@ -2071,8 +2084,6 @@ fn item_image_layer_items(items: &[ItemPaintSnapshot]) -> Vec<ItemImageLayerItem
                 return None;
             }
             Some(ItemImageLayerItem {
-                slot_id: item.slot_id,
-                item_id: item.item_id,
                 layout: item.layout,
                 thumbnail_path: content.thumbnail_path.clone(),
                 icon: content.icon.clone(),
@@ -2083,45 +2094,233 @@ fn item_image_layer_items(items: &[ItemPaintSnapshot]) -> Vec<ItemImageLayerItem
 }
 
 struct ItemImageLayerItem {
-    slot_id: u64,
-    item_id: ItemId,
     layout: ItemLayout,
     thumbnail_path: Option<Arc<Path>>,
     icon: FileIconSnapshot,
     fallback_marker: SharedString,
 }
 
-fn item_image_layer_item_view(item: ItemImageLayerItem) -> Stateful<Div> {
-    let icon = item.layout.icon_rect;
-    let icon_left = icon.x.round();
-    let icon_top = icon.y.round();
-    let icon_width = icon.width.round().max(1.0);
-    let icon_height = icon.height.round().max(1.0);
-    let icon_container = div()
-        .id(("item-image-layer-item", item.item_id.0))
-        .absolute()
-        .left(px(icon_left))
-        .top(px(icon_top))
-        .w(px(icon_width))
-        .h(px(icon_height))
-        .flex()
-        .items_center()
-        .justify_center();
+fn item_image_layer_item_source_path(item: &ItemImageLayerItem) -> Option<Arc<Path>> {
+    item.thumbnail_path
+        .clone()
+        .or_else(|| item.icon.path.clone())
+}
 
-    match item.thumbnail_path {
-        Some(path) => icon_container.child(
-            div().size_full().rounded_md().overflow_hidden().child(
-                img(path)
-                    .id(item_image_element_id(item.slot_id))
-                    .size_full(),
-            ),
-        ),
-        None => icon_container.child(item_image_or_fallback(
-            item.slot_id,
-            item.icon,
-            item.fallback_marker,
-        )),
+fn item_image_load_failure_paints_fallback(item: &ItemImageLayerItem) -> bool {
+    item.thumbnail_path.is_none()
+}
+
+struct ItemImageLayerElement {
+    pane_id: PaneId,
+    items: Vec<ItemImageLayerItem>,
+    style: StyleRefinement,
+}
+
+struct ItemImagePaintState {
+    icon_rect: ViewRect,
+    image: Option<Arc<RenderImage>>,
+    fallback: Option<ItemImageFallbackPaintState>,
+}
+
+struct ItemImageFallbackPaintState {
+    marker_line: gpui::ShapedLine,
+    marker_line_height: Pixels,
+    fallback_bg: u32,
+}
+
+impl IntoElement for ItemImageLayerElement {
+    type Element = Self;
+
+    fn into_element(self) -> Self::Element {
+        self
     }
+}
+
+impl Element for ItemImageLayerElement {
+    type RequestLayoutState = Style;
+    type PrepaintState = Vec<ItemImagePaintState>;
+
+    fn id(&self) -> Option<ElementId> {
+        Some(ElementId::from(item_image_paint_layer_element_id(
+            self.pane_id,
+        )))
+    }
+
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, Self::RequestLayoutState) {
+        let mut style = Style::default();
+        style.refine(&self.style);
+        let layout_id = window.request_layout(style.clone(), [], cx);
+        (layout_id, style)
+    }
+
+    fn prepaint(
+        &mut self,
+        id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        _bounds: Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Self::PrepaintState {
+        let Some(id) = id else {
+            return Vec::new();
+        };
+        window.with_element_state::<Entity<RetainAllImageCache>, _>(id, |cache, window| {
+            let cache = cache.unwrap_or_else(|| RetainAllImageCache::new(cx));
+            let states = self
+                .items
+                .iter()
+                .filter_map(|item| item_image_layer_prepaint_item(item, &cache, window, cx))
+                .collect::<Vec<_>>();
+            (states, cache)
+        })
+    }
+
+    fn paint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        request_layout: &mut Self::RequestLayoutState,
+        prepaint: &mut Self::PrepaintState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        request_layout.paint(bounds, window, cx, |window, cx| {
+            for state in prepaint.iter() {
+                item_image_layer_paint_item(bounds, state, window, cx);
+            }
+        });
+    }
+}
+
+impl Styled for ItemImageLayerElement {
+    fn style(&mut self) -> &mut StyleRefinement {
+        &mut self.style
+    }
+}
+
+fn item_image_layer_prepaint_item(
+    item: &ItemImageLayerItem,
+    cache: &Entity<RetainAllImageCache>,
+    window: &mut Window,
+    cx: &mut App,
+) -> Option<ItemImagePaintState> {
+    let source_path = item_image_layer_item_source_path(item)?;
+    let resource = Resource::Path(source_path);
+    let load_result = cache.update(cx, |cache, cx| cache.load(&resource, window, cx));
+    let (image, fallback) = match load_result {
+        Some(Ok(image)) => (Some(image), None),
+        Some(Err(_)) if item_image_load_failure_paints_fallback(item) => {
+            (None, Some(item_image_fallback_prepaint(item, window)))
+        }
+        _ => (None, None),
+    };
+    Some(ItemImagePaintState {
+        icon_rect: item.layout.icon_rect,
+        image,
+        fallback,
+    })
+}
+
+fn item_image_fallback_prepaint(
+    item: &ItemImageLayerItem,
+    window: &mut Window,
+) -> ItemImageFallbackPaintState {
+    let text_style = window.text_style();
+    let mut marker_font = text_style.font();
+    marker_font.weight = FontWeight::SEMIBOLD;
+    let marker = static_paint_single_line_text(item.fallback_marker.clone());
+    let marker_run = TextRun {
+        len: marker.len(),
+        font: marker_font,
+        color: rgb(item.icon.fallback_fg).into(),
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    let marker_font_size = px(window.rem_size().as_f32() * 0.75);
+    ItemImageFallbackPaintState {
+        marker_line: window
+            .text_system()
+            .shape_line(marker, marker_font_size, &[marker_run], None),
+        marker_line_height: px(item
+            .layout
+            .icon_rect
+            .height
+            .min(ITEM_NAME_LINE_HEIGHT)
+            .max(1.0)),
+        fallback_bg: item.icon.fallback_bg,
+    }
+}
+
+fn item_image_layer_paint_item(
+    layer_bounds: Bounds<Pixels>,
+    state: &ItemImagePaintState,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let icon_bounds = item_image_layer_icon_bounds(layer_bounds, state.icon_rect);
+    if let Some(image) = state.image.as_ref() {
+        if image.frame_count() == 0 {
+            return;
+        }
+        let image_size = image.size(0);
+        if u32::from(image_size.width) == 0 || u32::from(image_size.height) == 0 {
+            return;
+        }
+        let image_bounds = ObjectFit::Contain.get_bounds(icon_bounds, image_size);
+        window
+            .paint_image(image_bounds, Corners::all(px(6.0)), image.clone(), 0, false)
+            .ok();
+        return;
+    }
+
+    if let Some(fallback) = state.fallback.as_ref() {
+        window.paint_quad(fill(icon_bounds, rgb(fallback.fallback_bg)).corner_radii(px(6.0)));
+        let marker_origin = point(
+            icon_bounds.origin.x,
+            icon_bounds.origin.y
+                + ((icon_bounds.size.height - fallback.marker_line_height).max(px(0.0)) / 2.0),
+        );
+        fallback
+            .marker_line
+            .paint(
+                marker_origin,
+                fallback.marker_line_height,
+                TextAlign::Center,
+                Some(icon_bounds.size.width),
+                window,
+                cx,
+            )
+            .ok();
+    }
+}
+
+fn item_image_layer_icon_bounds(
+    layer_bounds: Bounds<Pixels>,
+    icon_rect: ViewRect,
+) -> Bounds<Pixels> {
+    Bounds::new(
+        point(
+            layer_bounds.origin.x + px(icon_rect.x.round()),
+            layer_bounds.origin.y + px(icon_rect.y.round()),
+        ),
+        size(
+            px(icon_rect.width.round().max(1.0)),
+            px(icon_rect.height.round().max(1.0)),
+        ),
+    )
 }
 
 fn static_item_visual_prepaint(
@@ -2927,10 +3126,11 @@ mod tests {
         FileGridMode, FileGridRenderSnapshot, FileGridSnapshot, ItemPaintContent,
         ItemPaintSlotCache, ItemTileTextAlignment, VisibleItemSnapshot, display_text_layout,
         drag_preview_content_origin, drag_preview_label, item_identity_element_id,
-        item_image_element_id, item_image_layer_items, item_mouse_down_opens_directory,
-        measured_viewport_for_scrollbar_axis, normalized_text_range, rename_text_layout,
-        static_item_visual_layer_element_id, static_item_visual_layer_items,
-        viewport_bounds_update_requires_notify,
+        item_image_element_id, item_image_layer_item_source_path, item_image_layer_items,
+        item_image_load_failure_paints_fallback, item_image_paint_layer_element_id,
+        item_mouse_down_opens_directory, measured_viewport_for_scrollbar_axis,
+        normalized_text_range, rename_text_layout, static_item_visual_layer_element_id,
+        static_item_visual_layer_items, viewport_bounds_update_requires_notify,
     };
     use crate::ui::icons::FileIconSnapshot;
     use crate::ui::item_view::ItemViewScrollbarAxis;
@@ -2939,7 +3139,7 @@ mod tests {
         ViewRect, ViewState,
     };
     use gpui::{Bounds, SharedString, point, px, size};
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     use std::sync::Arc;
 
     #[test]
@@ -2981,6 +3181,18 @@ mod tests {
     fn item_image_id_is_keyed_by_visual_slot_for_retained_image_cache() {
         assert_eq!(item_image_element_id(4), ("item-image", 4));
         assert_ne!(item_image_element_id(4), item_image_element_id(5));
+    }
+
+    #[test]
+    fn item_image_paint_layer_id_is_keyed_by_pane_identity() {
+        assert_eq!(
+            item_image_paint_layer_element_id(fika_core::PaneId(7)),
+            ("item-image-paint-layer", 7)
+        );
+        assert_ne!(
+            item_image_paint_layer_element_id(fika_core::PaneId(7)),
+            item_image_paint_layer_element_id(fika_core::PaneId(8))
+        );
     }
 
     #[test]
@@ -3035,10 +3247,18 @@ mod tests {
         assert_eq!(
             image_items
                 .iter()
-                .map(|item| item.item_id)
+                .map(|item| item_image_layer_item_source_path(item)
+                    .unwrap()
+                    .as_ref()
+                    .to_path_buf())
                 .collect::<Vec<_>>(),
-            vec![ItemId(8), ItemId(9)]
+            vec![
+                PathBuf::from("/tmp/photo.png"),
+                PathBuf::from("/tmp/app.svg")
+            ]
         );
+        assert!(!item_image_load_failure_paints_fallback(&image_items[0]));
+        assert!(item_image_load_failure_paints_fallback(&image_items[1]));
     }
 
     #[test]

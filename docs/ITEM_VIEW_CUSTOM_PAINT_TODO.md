@@ -50,8 +50,9 @@ This is the active task board for the GPUI item view custom-paint migration.
 - [x] Key thumbnail/theme-icon image elements by visual slot id.
 - [x] Preserve freedesktop cached-thumbnail first-frame behavior.
 - [x] Preserve thumbnail failed/invalidation model semantics.
-- [ ] Revisit direct `Window::paint_image` after Fika owns render-image decode
-  and invalidation.
+- [x] Revisit direct `Window::paint_image`: P8 uses GPUI's public
+  `RetainAllImageCache` / `ImageAssetLoader` / `RenderImage` contract instead
+  of reimplementing image decode in Fika.
 
 ## P5: Dedicated Custom Element
 
@@ -69,8 +70,9 @@ This is the active task board for the GPUI item view custom-paint migration.
 - [x] Keep thumbnail, theme-icon, and rename items on their specialized child
   paths.
 - [x] Add tests proving only fallback static items enter the layer.
-- [ ] Revisit whether thumbnail/theme-icon retained image items can join a
-  Fika-owned viewport painter after render-image cache ownership exists.
+- [x] Revisit whether thumbnail/theme-icon retained image items can join a
+  viewport painter: P8 moves them into a custom image paint layer backed by
+  GPUI's retained image cache.
 
 ## P7: Non-Rename Base Visual and Image Layer
 
@@ -84,8 +86,48 @@ This is the active task board for the GPUI item view custom-paint migration.
 - [x] Keep rename items on the current child subtree.
 - [x] Skip fallback marker shaping and cache-key fragmentation for image-backed
   items.
-- [ ] Revisit direct `Window::paint_image` after Fika owns render-image decode
-  and invalidation.
+- [x] Revisit direct `Window::paint_image`: P8 uses GPUI's retained image cache
+  contract for direct painting without adding a Fika-owned decoder yet.
+
+## P8: Direct Image Paint Layer
+
+- [x] Replace content-level thumbnail/theme-icon `img()` children with one
+  custom image paint element.
+- [x] Use pane-local `RetainAllImageCache` plus GPUI `ImageAssetLoader` for
+  async path/SVG/image decode.
+- [x] Paint loaded images with `Window::paint_image`.
+- [x] Preserve theme-icon fallback marker rendering on image load failure.
+- [x] Keep thumbnail failures model-driven; do not synthesize fallback icons for
+  failed thumbnail paths in paint.
+- [x] Match `ObjectFit::Contain` image bounds.
+- [x] Add tests for image-paint membership and fallback policy.
+
+## P9: Painted Interaction Hitboxes
+
+- [ ] Audit GPUI custom element hitbox insertion for drag source, hover, and
+  cursor support.
+- [ ] Replace non-renaming per-item interaction shells with retained hitboxes.
+- [ ] Route hover and directory drag-over projection through retained item visual
+  state.
+- [ ] Preserve item/place drag preview cursor offset behavior.
+- [ ] Preserve Rust viewport hit testing for click/menu/drop.
+
+## P10: Rename Overlay Boundary
+
+- [ ] Keep normal item background/text/image in content-level layers when rename
+  starts.
+- [ ] Position rename editor as the only item-local overlay subtree.
+- [ ] Preserve caret hit testing, UTF-8 selection, warning/error helper, and Tab
+  rename-next.
+- [ ] Verify starting/stopping rename does not rebuild unrelated item layer
+  content.
+
+## P11: Details Mode Paint Path
+
+- [ ] Project Details rows into retained paint slots.
+- [ ] Paint row backgrounds, icons, and text cells from a custom layer.
+- [ ] Preserve sort/menu/DnD/Trash column behavior.
+- [ ] Share image/text cache concepts with Compact/Icons where practical.
 
 ## Acceptance Gates
 
@@ -95,4 +137,7 @@ This is the active task board for the GPUI item view custom-paint migration.
 - [ ] Perf logs show resize steady path stays sub-millisecond for item snapshot
   conversion and no new large `file-grid build` regression.
 - [ ] Cold mode switch cost is tracked separately from resize cost.
-- [ ] Custom paint path is used by non-renaming Compact and Icons base visuals.
+- [ ] Custom paint path is used by non-renaming Compact and Icons base/image
+  visuals.
+- [ ] Non-renaming Compact/Icons items no longer require per-item GPUI visual
+  children after P9.
