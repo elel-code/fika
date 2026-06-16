@@ -28,6 +28,7 @@ scripts/analyze-item-view-perf.sh \
   --require-steady \
   --require-details \
   --require-static-visual \
+  --require-static-modes Compact,Icons \
   --require-interaction \
   --require-modes Compact,Icons,Details \
   --steady-total-us 1000 \

@@ -30,6 +30,7 @@ EOF
     --require-steady \
     --require-details \
     --require-static-visual \
+    --require-static-modes Compact,Icons \
     --require-interaction \
     --require-modes Compact,Icons,Details \
     --steady-total-us 1000 \
@@ -49,6 +50,17 @@ fi
 
 if "$analyzer" --require-static-visual "$tmpdir/missing-channels.log" >/dev/null 2>&1; then
     echo "expected missing static visual channel to fail" >&2
+    exit 1
+fi
+
+cat > "$tmpdir/missing-static-mode.log" <<'EOF'
+[fika item-view] pane=1 mode=Compact phase=steady items=48 visible=32 raw=50us queue=1us convert=40us total=120us
+[fika item-view] pane=1 mode=Icons phase=steady items=48 visible=40 raw=45us queue=1us convert=35us total=110us
+[fika static-item-visual] pane=1 mode=Compact prepaint_count=32 prepaint=180us paint_count=32 paint=160us
+EOF
+
+if "$analyzer" --require-static-modes Compact,Icons "$tmpdir/missing-static-mode.log" >/dev/null 2>&1; then
+    echo "expected missing required static visual mode to fail" >&2
     exit 1
 fi
 

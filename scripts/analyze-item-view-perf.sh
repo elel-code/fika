@@ -19,6 +19,9 @@ Options:
   --require-static-visual
       Fail if [fika static-item-visual] Compact/Icons paint timing is missing.
 
+  --require-static-modes A,B,C
+      Fail if any comma-separated view mode is absent from static visual logs.
+
   --require-interaction
       Fail if [fika item-interaction] hitbox timing is missing.
 
@@ -47,6 +50,7 @@ require_details=false
 require_static_visual=false
 require_interaction=false
 required_modes=""
+required_static_modes=""
 steady_total_us=""
 file_grid_build_us=""
 static_visual_paint_us=""
@@ -63,6 +67,18 @@ while [[ $# -gt 0 ]]; do
             ;;
         --require-static-visual)
             require_static_visual=true
+            ;;
+        --require-static-modes)
+            if [[ $# -lt 2 || "$2" == --* ]]; then
+                echo "--require-static-modes requires a comma-separated value" >&2
+                usage >&2
+                exit 2
+            fi
+            required_static_modes="$2"
+            shift
+            ;;
+        --require-static-modes=*)
+            required_static_modes="${1#--require-static-modes=}"
             ;;
         --require-interaction)
             require_interaction=true
@@ -180,6 +196,7 @@ awk \
     -v require_static_visual="$require_static_visual" \
     -v require_interaction="$require_interaction" \
     -v required_modes="$required_modes" \
+    -v required_static_modes="$required_static_modes" \
     -v steady_total_limit="$steady_total_us" \
     -v file_grid_build_limit="$file_grid_build_us" \
     -v static_visual_paint_limit="$static_visual_paint_us" \
@@ -225,18 +242,24 @@ function fail(message) {
     failures++
 }
 
-BEGIN {
-    if (required_modes != "") {
-        count = split(required_modes, requested_modes, ",")
-        for (i = 1; i <= count; i++) {
-            mode = trim(requested_modes[i])
-            if (mode == "") {
-                fail("empty mode in --require-modes")
-            } else {
-                required_mode[mode] = 1
-            }
+function parse_required_list(list, target, label,    count, i, value) {
+    if (list == "") {
+        return
+    }
+    count = split(list, values, ",")
+    for (i = 1; i <= count; i++) {
+        value = trim(values[i])
+        if (value == "") {
+            fail("empty mode in " label)
+        } else {
+            target[value] = 1
         }
     }
+}
+
+BEGIN {
+    parse_required_list(required_modes, required_mode, "--require-modes")
+    parse_required_list(required_static_modes, required_static_mode, "--require-static-modes")
 }
 
 /^\[fika item-view\]/ {
@@ -272,7 +295,11 @@ BEGIN {
 
 /^\[fika static-item-visual\]/ {
     static_visual_count++
-    note_mode(field("mode"))
+    mode = field("mode")
+    note_mode(mode)
+    if (mode != "") {
+        static_visual_modes[mode] = 1
+    }
     paint = us_field("paint")
     max_assign(single_max, "static_visual_prepaint", us_field("prepaint"))
     max_assign(single_max, "static_visual_paint", paint)
@@ -361,6 +388,11 @@ END {
     }
     if (require_static_visual == "true" && static_visual_count == 0) {
         fail("missing [fika static-item-visual] lines")
+    }
+    for (mode in required_static_mode) {
+        if (!(mode in static_visual_modes)) {
+            fail("missing required static visual mode " mode)
+        }
     }
     if (require_interaction == "true" && item_interaction_count == 0) {
         fail("missing [fika item-interaction] lines")

@@ -172,7 +172,8 @@ This is the active task board for the GPUI item view custom-paint migration.
   perf-log checklist for post-P11e verification.
 - [x] Add `scripts/analyze-item-view-perf.sh` to summarize perf logs and enforce
   required steady/details/static-visual/interaction channels and exercised view
-  modes during post-P11e review.
+  modes, including Compact/Icons static visual mode coverage, during post-P11e
+  review.
 - [ ] Run a runtime DnD smoke pass after P11e: item drag, item-to-directory
   drop, pane drop, Places drop/reorder, external path drop, and rename caret
   click in Compact, Icons, and Details.
