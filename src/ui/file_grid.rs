@@ -29,7 +29,8 @@ use fika_core::{
 use gpui::prelude::*;
 use gpui::{
     Context, Div, Empty, ExternalPaths, MouseButton, NavigationDirection, ParentElement, Render,
-    Rgba, ScrollHandle, SharedString, Stateful, Styled, Window, div, img, px, rgb, rgba,
+    Rgba, ScrollHandle, SharedString, Stateful, Styled, WeakEntity, Window, div, img, px, rgb,
+    rgba,
 };
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -331,74 +332,79 @@ pub(crate) fn file_grid(
     let scrollbar_axis = scrollbar_axis_for_snapshot(&snapshot);
     let view_mode = view_mode_for_snapshot(&snapshot);
 
-    let (content_width, content_height, visible_count, viewport) =
-        match snapshot {
-            FileGridSnapshot::Icons {
-                layout: icons_layout,
-                items,
-            } => {
-                let content_size = icons_layout.content_size();
-                let visible_count = items.len();
-                let viewport = file_grid_viewport_shell(pane_id, drop_target, mode, cx).child(
-                    div()
-                        .relative()
-                        .w(px(content_size.width))
-                        .h(px(content_size.height))
-                        .children(items.into_iter().map(|item| {
-                            item_tile(pane_id, item, ItemTileTextAlignment::Center, cx)
-                        })),
-                );
-                (
-                    content_size.width,
-                    content_size.height,
-                    visible_count,
-                    viewport,
-                )
-            }
-            FileGridSnapshot::Compact { layout, items } => {
-                let content_size = layout.content_size();
-                let visible_count = items.len();
-                let viewport = file_grid_viewport_shell(pane_id, drop_target, mode, cx).child(
-                    div()
-                        .relative()
-                        .w(px(content_size.width))
-                        .h(px(content_size.height))
-                        .children(items.into_iter().map(|item| {
-                            item_tile(pane_id, item, ItemTileTextAlignment::Start, cx)
-                        })),
-                );
-                (
-                    content_size.width,
-                    content_size.height,
-                    visible_count,
-                    viewport,
-                )
-            }
-            FileGridSnapshot::Details {
-                items,
-                row_count,
-                metrics,
-                name_column_width,
-            } => {
-                let content_width = details_content_width(trash_view, name_column_width).max(1.0);
-                let content_height = details_content_height(row_count, metrics).max(1.0);
-                let visible_count = items.len();
-                let viewport =
-                    file_grid_viewport_shell(pane_id, drop_target, mode, cx).child(details_table(
-                        pane_id,
-                        items,
-                        row_count,
-                        trash_view,
-                        content_width,
-                        content_height,
-                        metrics,
-                        name_column_width,
-                        mode,
-                        cx,
-                    ));
-                (content_width, content_height, visible_count, viewport)
-            }
-        };
+    let (content_width, content_height, visible_count, viewport) = match snapshot {
+        FileGridSnapshot::Icons {
+            layout: icons_layout,
+            items,
+        } => {
+            let content_size = icons_layout.content_size();
+            let visible_count = items.len();
+            let viewport = file_grid_viewport_shell(pane_id, drop_target, mode, cx).child(
+                div()
+                    .relative()
+                    .w(px(content_size.width))
+                    .h(px(content_size.height))
+                    .children(items.into_iter().map(|item| {
+                        item_tile(
+                            pane_id,
+                            item,
+                            ItemTileTextAlignment::Center,
+                            app.clone(),
+                            cx,
+                        )
+                    })),
+            );
+            (
+                content_size.width,
+                content_size.height,
+                visible_count,
+                viewport,
+            )
+        }
+        FileGridSnapshot::Compact { layout, items } => {
+            let content_size = layout.content_size();
+            let visible_count = items.len();
+            let viewport = file_grid_viewport_shell(pane_id, drop_target, mode, cx).child(
+                div()
+                    .relative()
+                    .w(px(content_size.width))
+                    .h(px(content_size.height))
+                    .children(items.into_iter().map(|item| {
+                        item_tile(pane_id, item, ItemTileTextAlignment::Start, app.clone(), cx)
+                    })),
+            );
+            (
+                content_size.width,
+                content_size.height,
+                visible_count,
+                viewport,
+            )
+        }
+        FileGridSnapshot::Details {
+            items,
+            row_count,
+            metrics,
+            name_column_width,
+        } => {
+            let content_width = details_content_width(trash_view, name_column_width).max(1.0);
+            let content_height = details_content_height(row_count, metrics).max(1.0);
+            let visible_count = items.len();
+            let viewport =
+                file_grid_viewport_shell(pane_id, drop_target, mode, cx).child(details_table(
+                    pane_id,
+                    items,
+                    row_count,
+                    trash_view,
+                    content_width,
+                    content_height,
+                    metrics,
+                    name_column_width,
+                    mode,
+                    cx,
+                ));
+            (content_width, content_height, visible_count, viewport)
+        }
+    };
 
     let root = div()
         .on_children_prepainted(move |bounds, _window, cx| {
@@ -1163,6 +1169,7 @@ fn item_tile(
     pane_id: PaneId,
     item: VisibleItemSnapshot,
     text_alignment: ItemTileTextAlignment,
+    app: WeakEntity<FikaApp>,
     cx: &mut Context<FikaApp>,
 ) -> Stateful<Div> {
     let draft_name = item.draft_name.clone();
@@ -1183,7 +1190,6 @@ fn item_tile(
         selected,
         selection_count: item.selection_count,
     };
-    let app = cx.weak_entity();
 
     div()
         .id(("item-slot", item.slot_id))
@@ -1439,16 +1445,25 @@ fn item_name_label_view(
         rgb(0x24292f)
     };
     let max_lines = (height / ITEM_NAME_LINE_HEIGHT).round().max(1.0) as usize;
-    let label = div().w_full().max_w_full().min_w_0().flex().flex_col();
+    let label = div()
+        .w_full()
+        .max_w_full()
+        .min_w_0()
+        .overflow_hidden()
+        .flex()
+        .flex_col()
+        .text_sm()
+        .line_height(px(ITEM_NAME_LINE_HEIGHT))
+        .text_center()
+        .whitespace_nowrap()
+        .text_color(text_color);
     let label = if icon_name_lines.is_empty() {
-        label.child(item_name_line_view(display_name, text_color))
+        label.child(display_name)
     } else {
         icon_name_lines
             .iter()
             .take(max_lines)
-            .fold(label, |label, line| {
-                label.child(item_name_line_view(line.clone(), text_color))
-            })
+            .fold(label, |label, line| label.child(line.clone()))
     };
     div()
         .h(px(height))
@@ -1459,21 +1474,6 @@ fn item_name_label_view(
         .items_center()
         .justify_center()
         .child(label)
-}
-
-fn item_name_line_view(line: SharedString, text_color: Rgba) -> Div {
-    div()
-        .h(px(ITEM_NAME_LINE_HEIGHT))
-        .w_full()
-        .max_w_full()
-        .min_w_0()
-        .overflow_hidden()
-        .text_sm()
-        .line_height(px(ITEM_NAME_LINE_HEIGHT))
-        .text_center()
-        .whitespace_nowrap()
-        .text_color(text_color)
-        .child(line)
 }
 
 fn item_helper_label_view(
