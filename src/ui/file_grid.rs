@@ -29,9 +29,9 @@ use fika_core::{
 use gpui::prelude::*;
 use gpui::{
     Context, Div, Empty, ExternalPaths, MouseButton, NavigationDirection, ParentElement, Render,
-    Rgba, ScrollHandle, Stateful, Styled, Window, div, img, px, rgb, rgba,
+    Rgba, ScrollHandle, SharedString, Stateful, Styled, Window, div, img, px, rgb, rgba,
 };
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use super::drag_drop::{
@@ -96,7 +96,7 @@ pub(crate) struct PaneViewportGeometry {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ItemDrag {
     pane_id: PaneId,
-    path: PathBuf,
+    path: Arc<Path>,
     name: Arc<str>,
     icon: FileIconSnapshot,
     selected: bool,
@@ -107,7 +107,7 @@ impl ItemDrag {
     pub(crate) fn payload(&self) -> ItemDragPayload {
         ItemDragPayload {
             source_pane: self.pane_id,
-            source_path: self.path.clone(),
+            source_path: self.path.as_ref().to_path_buf(),
             source_selected: self.selected,
         }
     }
@@ -124,8 +124,8 @@ struct DragPreview {
 const DRAG_PREVIEW_MIN_WIDTH: f32 = 220.0;
 const DRAG_PREVIEW_MIN_HEIGHT: f32 = 36.0;
 
-fn item_interaction_id(prefix: &str, pane_id: PaneId, item_id: ItemId) -> String {
-    format!("{prefix}-{}-{}", pane_id.0, item_id.0)
+fn item_identity_element_id(prefix: &'static str, item_id: ItemId) -> (&'static str, u64) {
+    (prefix, item_id.0)
 }
 
 fn handle_file_grid_item_drag_move(
@@ -830,7 +830,7 @@ fn details_row(
     let item_id = item.item_id;
     let path_for_mouse_down = item.path.clone();
     let path_for_menu = item.path.clone();
-    let path_for_drag = item.path.clone();
+    let path_for_drag = Arc::<Path>::from(item.path.as_path());
     let target_dir_for_drop = item.path.clone();
     let is_dir_for_click = item.is_dir;
     let is_dir_for_menu = item.is_dir;
@@ -847,7 +847,7 @@ fn details_row(
     let app = cx.weak_entity();
 
     div()
-        .id(item_interaction_id("details-row", pane_id, item_id))
+        .id(item_identity_element_id("details-row", item_id))
         .absolute()
         .left_0()
         .top(px(top))
@@ -1014,7 +1014,10 @@ fn details_name_cell(
                 .h(px(metrics.icon_size))
                 .rounded_sm()
                 .overflow_hidden()
-                .child(icon_image_or_fallback(icon)),
+                .child({
+                    let fallback_marker = SharedString::from(icon.fallback_marker.as_ref());
+                    icon_image_or_fallback(icon, fallback_marker)
+                }),
         )
         .child(
             div()
@@ -1162,21 +1165,19 @@ fn item_tile(
     text_alignment: ItemTileTextAlignment,
     cx: &mut Context<FikaApp>,
 ) -> Stateful<Div> {
-    let id = format!("item-slot-{}-{}", pane_id.0, item.slot_id);
-    let visual_id = item_interaction_id("item-core", pane_id, item.item_id);
-    let renaming = item.draft_name.is_some();
-    let display_name = item
-        .draft_name
-        .clone()
-        .unwrap_or_else(|| item.name.to_string());
+    let draft_name = item.draft_name.clone();
+    let renaming = draft_name.is_some();
+    let display_name = draft_name
+        .as_ref()
+        .map(|name| SharedString::from(name.as_str()))
+        .unwrap_or_else(|| item.display_name.clone());
     let item_rect = item.layout.item_rect;
     let visual = item.layout.visual_rect;
-    let path_for_drag = item.path.clone();
     let selected = item.selected;
     let drop_target = item.drop_target;
     let drag_value = ItemDrag {
         pane_id,
-        path: path_for_drag,
+        path: item.drag_path.clone(),
         name: item.name.clone(),
         icon: item.icon.clone(),
         selected,
@@ -1185,7 +1186,7 @@ fn item_tile(
     let app = cx.weak_entity();
 
     div()
-        .id(id)
+        .id(("item-slot", item.slot_id))
         .absolute()
         .left(px(item_rect.x))
         .top(px(item_rect.y))
@@ -1193,7 +1194,7 @@ fn item_tile(
         .h(px(item_rect.height))
         .child(
             div()
-                .id(visual_id)
+                .id(item_identity_element_id("item-core", item.item_id))
                 .absolute()
                 .left(px(visual.x - item_rect.x))
                 .top(px(visual.y - item_rect.y))
@@ -1224,7 +1225,7 @@ fn item_tile(
                 .child(icon_view(&item, item.layout))
                 .child(text_view(
                     pane_id,
-                    &display_name,
+                    display_name,
                     &item.icon_name_lines,
                     item.layout,
                     text_alignment,
@@ -1278,6 +1279,7 @@ fn icon_view(item: &VisibleItemSnapshot, layout: ItemLayout) -> Div {
     let icon_height = icon.height.round().max(1.0);
     let thumbnail_path = item.thumbnail_path.clone();
     let icon_snapshot = item.icon.clone();
+    let fallback_marker = item.fallback_marker.clone();
     let icon_container = div()
         .absolute()
         .left(px(icon_left))
@@ -1296,20 +1298,22 @@ fn icon_view(item: &VisibleItemSnapshot, layout: ItemLayout) -> Div {
                 .overflow_hidden()
                 .child(img(path).size_full()),
         ),
-        None => icon_container.child(icon_image_or_fallback(icon_snapshot)),
+        None => icon_container.child(icon_image_or_fallback(icon_snapshot, fallback_marker)),
     }
 }
 
-fn icon_image_or_fallback(icon: FileIconSnapshot) -> gpui::AnyElement {
-    let fallback = icon.fallback_marker.clone();
+fn icon_image_or_fallback(
+    icon: FileIconSnapshot,
+    fallback_marker: SharedString,
+) -> gpui::AnyElement {
     let fallback_fg = icon.fallback_fg;
     let fallback_bg = icon.fallback_bg;
     cached_icon_or_fallback(&icon, move || {
-        fallback_icon_element(fallback.clone(), fallback_fg, fallback_bg)
+        fallback_icon_element(fallback_marker.clone(), fallback_fg, fallback_bg)
     })
 }
 
-fn fallback_icon_element(marker: Arc<str>, fg: u32, bg: u32) -> gpui::AnyElement {
+fn fallback_icon_element(marker: SharedString, fg: u32, bg: u32) -> gpui::AnyElement {
     div()
         .size_full()
         .rounded_md()
@@ -1320,14 +1324,14 @@ fn fallback_icon_element(marker: Arc<str>, fg: u32, bg: u32) -> gpui::AnyElement
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(rgb(fg))
         .bg(rgb(bg))
-        .child(marker.as_ref().to_string())
+        .child(marker)
         .into_any_element()
 }
 
 fn text_view(
     pane_id: PaneId,
-    display_name: &str,
-    icon_name_lines: &[String],
+    display_name: SharedString,
+    icon_name_lines: &[SharedString],
     layout: ItemLayout,
     text_alignment: ItemTileTextAlignment,
     renaming: bool,
@@ -1338,11 +1342,12 @@ fn text_view(
     rename_warning: Option<&str>,
     cx: &mut Context<FikaApp>,
 ) -> Div {
+    let display_name_ref = display_name.as_ref();
     let visual = layout.visual_rect;
     let text = layout.text_rect;
     let show_helper = rename_error.is_some() || rename_warning.is_some();
     let rename_layout = if !renaming {
-        display_text_layout(display_name, text.width, text.height, text_alignment)
+        display_text_layout(display_name_ref, text.width, text.height, text_alignment)
     } else {
         rename_text_layout(text.height, show_helper)
     };
@@ -1378,7 +1383,7 @@ fn text_view(
         .child(if renaming {
             rename_editor_view(
                 pane_id,
-                display_name,
+                display_name_ref,
                 selected,
                 rename_caret,
                 rename_selection,
@@ -1393,13 +1398,18 @@ fn text_view(
             .into_any_element()
         } else {
             match text_alignment {
-                ItemTileTextAlignment::Start => {
-                    rename_name_view(display_name, false, selected, None, None)
-                        .h(px(rename_layout.name_height))
-                        .into_any_element()
-                }
+                ItemTileTextAlignment::Start => rename_name_view(
+                    display_name_ref,
+                    display_name.clone(),
+                    false,
+                    selected,
+                    None,
+                    None,
+                )
+                .h(px(rename_layout.name_height))
+                .into_any_element(),
                 ItemTileTextAlignment::Center => item_name_label_view(
-                    display_name,
+                    display_name.clone(),
                     icon_name_lines,
                     selected,
                     rename_layout.name_height,
@@ -1407,17 +1417,19 @@ fn text_view(
                 .into_any_element(),
             }
         })
-        .child(item_helper_label_view(
-            helper_text,
-            helper_color,
-            rename_layout.helper_height,
-            text_alignment,
-        ))
+        .when(show_helper, |view| {
+            view.child(item_helper_label_view(
+                helper_text,
+                helper_color,
+                rename_layout.helper_height,
+                text_alignment,
+            ))
+        })
 }
 
 fn item_name_label_view(
-    display_name: &str,
-    icon_name_lines: &[String],
+    display_name: SharedString,
+    icon_name_lines: &[SharedString],
     selected: bool,
     height: f32,
 ) -> Div {
@@ -1427,14 +1439,16 @@ fn item_name_label_view(
         rgb(0x24292f)
     };
     let max_lines = (height / ITEM_NAME_LINE_HEIGHT).round().max(1.0) as usize;
-    let lines = if icon_name_lines.is_empty() {
-        vec![display_name.to_string()]
+    let label = div().w_full().max_w_full().min_w_0().flex().flex_col();
+    let label = if icon_name_lines.is_empty() {
+        label.child(item_name_line_view(display_name, text_color))
     } else {
         icon_name_lines
             .iter()
             .take(max_lines)
-            .cloned()
-            .collect::<Vec<_>>()
+            .fold(label, |label, line| {
+                label.child(item_name_line_view(line.clone(), text_color))
+            })
     };
     div()
         .h(px(height))
@@ -1444,25 +1458,22 @@ fn item_name_label_view(
         .flex()
         .items_center()
         .justify_center()
-        .child(lines.into_iter().fold(
-            div().w_full().max_w_full().min_w_0().flex().flex_col(),
-            |label, line| {
-                label.child(
-                    div()
-                        .h(px(ITEM_NAME_LINE_HEIGHT))
-                        .w_full()
-                        .max_w_full()
-                        .min_w_0()
-                        .overflow_hidden()
-                        .text_sm()
-                        .line_height(px(ITEM_NAME_LINE_HEIGHT))
-                        .text_center()
-                        .whitespace_nowrap()
-                        .text_color(text_color)
-                        .child(line),
-                )
-            },
-        ))
+        .child(label)
+}
+
+fn item_name_line_view(line: SharedString, text_color: Rgba) -> Div {
+    div()
+        .h(px(ITEM_NAME_LINE_HEIGHT))
+        .w_full()
+        .max_w_full()
+        .min_w_0()
+        .overflow_hidden()
+        .text_sm()
+        .line_height(px(ITEM_NAME_LINE_HEIGHT))
+        .text_center()
+        .whitespace_nowrap()
+        .text_color(text_color)
+        .child(line)
 }
 
 fn item_helper_label_view(
@@ -1533,6 +1544,7 @@ fn rename_editor_view(
         )
         .child(rename_name_view(
             display_name,
+            SharedString::from(display_name),
             true,
             selected,
             rename_caret,
@@ -1542,6 +1554,7 @@ fn rename_editor_view(
 
 fn rename_name_view(
     display_name: &str,
+    display_name_text: SharedString,
     renaming: bool,
     selected: bool,
     rename_caret: Option<usize>,
@@ -1561,7 +1574,7 @@ fn rename_name_view(
         .text_color(text_color)
         .when(renaming, |name| name.cursor_text());
     if !renaming {
-        return base.whitespace_normal().child(display_name.to_string());
+        return base.whitespace_normal().child(display_name_text);
     }
 
     let base = base.whitespace_nowrap();
@@ -1676,7 +1689,11 @@ impl Render for DragPreview {
                             .h(px(26.0))
                             .rounded_sm()
                             .overflow_hidden()
-                            .child(icon_image_or_fallback(icon))
+                            .child({
+                                let fallback_marker =
+                                    SharedString::from(icon.fallback_marker.as_ref());
+                                icon_image_or_fallback(icon, fallback_marker)
+                            })
                             .when(show_count, |icon| {
                                 icon.child(
                                     div()
@@ -1718,12 +1735,12 @@ fn drag_preview_label(name: &str, selected: bool, selection_count: usize) -> Str
 mod tests {
     use super::{
         FileGridMode, ItemTileTextAlignment, display_text_layout, drag_preview_content_origin,
-        drag_preview_label, item_interaction_id, item_mouse_down_opens_directory,
+        drag_preview_label, item_identity_element_id, item_mouse_down_opens_directory,
         measured_viewport_for_scrollbar_axis, normalized_text_range, rename_text_layout,
         viewport_bounds_update_requires_notify,
     };
     use crate::ui::item_view::ItemViewScrollbarAxis;
-    use fika_core::{CompactLayout, CompactLayoutOptions, ItemId, PaneId, ViewRect, ViewState};
+    use fika_core::{CompactLayout, CompactLayoutOptions, ItemId, ViewRect, ViewState};
     use gpui::{Bounds, point, px, size};
 
     #[test]
@@ -1748,12 +1765,12 @@ mod tests {
     #[test]
     fn item_interaction_id_is_keyed_by_item_identity_not_virtual_slot() {
         assert_eq!(
-            item_interaction_id("item-core", PaneId(2), ItemId(7)),
-            "item-core-2-7"
+            item_identity_element_id("item-core", ItemId(7)),
+            ("item-core", 7)
         );
         assert_ne!(
-            item_interaction_id("item-core", PaneId(2), ItemId(7)),
-            item_interaction_id("item-core", PaneId(2), ItemId(8))
+            item_identity_element_id("item-core", ItemId(7)),
+            item_identity_element_id("item-core", ItemId(8))
         );
     }
 

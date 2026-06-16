@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -26,6 +26,7 @@ use fika_core::{
     mime_magic_resolution_required, thumbnail_read_ahead_indexes,
     thumbnail_request_may_have_preview,
 };
+use gpui::SharedString;
 
 pub(crate) fn visible_item_thumbnail_path(entry: &fika_core::ModelEntry) -> Option<PathBuf> {
     if entry.is_dir {
@@ -40,11 +41,13 @@ pub(crate) struct VisibleItemSnapshot {
     pub(crate) slot_id: u64,
     pub(crate) item_id: ItemId,
     pub(crate) layout: fika_core::ItemLayout,
-    pub(crate) path: PathBuf,
     pub(crate) name: Arc<str>,
-    pub(crate) thumbnail_path: Option<PathBuf>,
+    pub(crate) display_name: SharedString,
+    pub(crate) thumbnail_path: Option<Arc<Path>>,
     pub(crate) icon: FileIconSnapshot,
-    pub(crate) icon_name_lines: Vec<String>,
+    pub(crate) fallback_marker: SharedString,
+    pub(crate) icon_name_lines: Arc<[SharedString]>,
+    pub(crate) drag_path: Arc<Path>,
     pub(crate) selected: bool,
     pub(crate) selection_count: usize,
     pub(crate) drop_target: bool,
@@ -71,22 +74,31 @@ struct VisibleItemSnapshotCacheKey {
 #[derive(Clone, Debug)]
 struct VisibleItemSnapshotCacheEntry {
     key: VisibleItemSnapshotCacheKey,
-    path: PathBuf,
+    visible_epoch: u64,
     name: Arc<str>,
-    thumbnail_path: Option<PathBuf>,
+    display_name: SharedString,
+    thumbnail_path: Option<Arc<Path>>,
     icon: FileIconSnapshot,
-    icon_name_lines: Vec<String>,
+    fallback_marker: SharedString,
+    icon_name_lines: Arc<[SharedString]>,
+    drag_path: Arc<Path>,
 }
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct VisibleItemSnapshotCache {
     entries: HashMap<ItemId, VisibleItemSnapshotCacheEntry>,
+    visible_epoch: u64,
 }
 
 impl VisibleItemSnapshotCache {
-    fn retain_visible(&mut self, item_ids: impl IntoIterator<Item = ItemId>) {
-        let visible = item_ids.into_iter().collect::<HashSet<_>>();
-        self.entries.retain(|item_id, _| visible.contains(item_id));
+    fn begin_visible_update(&mut self) {
+        self.visible_epoch = self.visible_epoch.wrapping_add(1).max(1);
+    }
+
+    fn retain_current_visible(&mut self) {
+        let visible_epoch = self.visible_epoch;
+        self.entries
+            .retain(|_, entry| entry.visible_epoch == visible_epoch);
     }
 
     fn content_for_raw_item<F>(
@@ -99,11 +111,10 @@ impl VisibleItemSnapshotCache {
         F: for<'a> FnMut(FileGridIconRequest<'a>) -> FileIconSnapshot,
     {
         let key = visible_item_snapshot_cache_key(item, cache_text_lines);
-        if let Some(entry) = self
-            .entries
-            .get(&item.item_id)
-            .filter(|entry| entry.key == key)
+        if let Some(entry) = self.entries.get_mut(&item.item_id)
+            && entry.key == key
         {
+            entry.visible_epoch = self.visible_epoch;
             return entry.clone();
         }
 
@@ -114,22 +125,32 @@ impl VisibleItemSnapshotCache {
             mime_magic_checked: item.mime_magic_checked,
             icon_size: item.layout.icon_rect.width,
         });
-        let icon_name_lines = cache_text_lines
-            .then(|| {
-                icon_name_display_lines(
-                    &item.name,
-                    icon_name_layout_width(item.layout.text_rect.width),
-                    icon_name_max_lines(item.layout.text_rect.height),
-                )
-            })
-            .unwrap_or_default();
+        let icon_name_lines = if cache_text_lines {
+            icon_name_display_lines(
+                &item.name,
+                icon_name_layout_width(item.layout.text_rect.width),
+                icon_name_max_lines(item.layout.text_rect.height),
+            )
+            .into_iter()
+            .map(SharedString::from)
+            .collect::<Vec<_>>()
+            .into()
+        } else {
+            Vec::<SharedString>::new().into()
+        };
         let entry = VisibleItemSnapshotCacheEntry {
             key,
-            path: item.path.clone(),
+            visible_epoch: self.visible_epoch,
             name: item.name.clone(),
-            thumbnail_path: item.thumbnail_path.clone(),
+            display_name: SharedString::from(item.name.as_ref()),
+            thumbnail_path: item
+                .thumbnail_path
+                .as_ref()
+                .map(|path| Arc::from(path.as_path())),
+            fallback_marker: SharedString::from(icon.fallback_marker.as_ref()),
             icon,
             icon_name_lines,
+            drag_path: Arc::from(item.path.as_path()),
         };
         self.entries.insert(item.item_id, entry.clone());
         entry
@@ -479,7 +500,7 @@ impl RawFileGridSnapshot {
     {
         match self {
             Self::Compact { layout, items } => {
-                visible_item_cache.retain_visible(items.iter().map(|item| item.item_id));
+                visible_item_cache.begin_visible_update();
                 let items = items
                     .into_iter()
                     .filter_map(|item| {
@@ -495,11 +516,13 @@ impl RawFileGridSnapshot {
                             slot_id: item.slot_id,
                             item_id: item.item_id,
                             layout: item.layout,
-                            path: content.path,
                             name: content.name,
+                            display_name: content.display_name,
                             thumbnail_path: content.thumbnail_path,
                             icon: content.icon,
+                            fallback_marker: content.fallback_marker,
                             icon_name_lines: content.icon_name_lines,
+                            drag_path: content.drag_path,
                             selected: item.selected,
                             selection_count,
                             drop_target: item.drop_target,
@@ -511,10 +534,11 @@ impl RawFileGridSnapshot {
                         })
                     })
                     .collect::<Vec<_>>();
+                visible_item_cache.retain_current_visible();
                 FileGridSnapshot::Compact { layout, items }
             }
             Self::Icons { layout, items } => {
-                visible_item_cache.retain_visible(items.iter().map(|item| item.item_id));
+                visible_item_cache.begin_visible_update();
                 let items = items
                     .into_iter()
                     .filter_map(|item| {
@@ -530,11 +554,13 @@ impl RawFileGridSnapshot {
                             slot_id: item.slot_id,
                             item_id: item.item_id,
                             layout: item.layout,
-                            path: content.path,
                             name: content.name,
+                            display_name: content.display_name,
                             thumbnail_path: content.thumbnail_path,
                             icon: content.icon,
+                            fallback_marker: content.fallback_marker,
                             icon_name_lines: content.icon_name_lines,
+                            drag_path: content.drag_path,
                             selected: item.selected,
                             selection_count,
                             drop_target: item.drop_target,
@@ -546,6 +572,7 @@ impl RawFileGridSnapshot {
                         })
                     })
                     .collect::<Vec<_>>();
+                visible_item_cache.retain_current_visible();
                 FileGridSnapshot::Icons { layout, items }
             }
             Self::Details {
@@ -1080,7 +1107,13 @@ mod tests {
             icon_name_layout_width(item.layout.text_rect.width),
             icon_name_max_lines(item.layout.text_rect.height),
         );
-        assert_eq!(item.icon_name_lines, expected);
+        assert_eq!(
+            item.icon_name_lines
+                .iter()
+                .map(SharedString::as_ref)
+                .collect::<Vec<_>>(),
+            expected.iter().map(String::as_str).collect::<Vec<_>>()
+        );
         assert!(
             item.icon_name_lines
                 .last()
