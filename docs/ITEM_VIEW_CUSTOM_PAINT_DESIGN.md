@@ -27,6 +27,16 @@ surface. Each custom-paint expansion needs perf evidence from
 is measurably faster or simpler for a surface, keep that surface on the built-in
 path until a retained-state or behavior requirement justifies moving it.
 
+Decision rule:
+
+- Dolphin-style model architecture is mandatory; GPUI element identity must not
+  become the file-item model, layout model, or controller state.
+- custom paint is a renderer choice for retained item state, not a goal by
+  itself.
+- if custom paint is slower, less reliable, or harder to keep behavior-complete
+  for a surface, keep the Dolphin-aligned retained model and render that surface
+  with GPUI built-ins until there is stronger evidence or a narrower migration.
+
 ## Dolphin Reference
 
 Relevant Dolphin flow:

@@ -161,6 +161,9 @@ This is the active task board for the GPUI item view custom-paint migration.
 - [ ] Any custom paint expansion keeps Dolphin's model/controller/painter split
   and is retained only when perf is neutral or better than the GPUI built-in
   path for that surface.
+- [ ] If a custom-painted surface loses to GPUI built-ins on perf or behavior
+  completeness, keep the Dolphin-aligned retained model but leave that surface on
+  the GPUI renderer until the migration can be narrowed or justified.
 - [x] Custom paint path is used by non-renaming Compact and Icons base/image
   visuals.
 - [x] Non-renaming Compact/Icons items no longer require per-item GPUI visual
