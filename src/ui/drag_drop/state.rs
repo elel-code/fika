@@ -177,6 +177,10 @@ impl DropTargetState {
             Some(ItemDropTarget::Pane {
                 pane_id: target_pane,
                 ..
+            })
+            | Some(ItemDropTarget::Directory {
+                pane_id: target_pane,
+                ..
             }) if target_pane == pane_id
         ) {
             return self.clear_item();
@@ -555,6 +559,32 @@ mod tests {
         assert_eq!(state.lease_generation(), generation);
 
         assert!(state.clear_item_for_directory(pane, &path));
+        assert!(state.item().is_none());
+        assert!(state.lease_generation() > generation);
+    }
+
+    #[test]
+    fn drop_target_state_clears_directory_target_for_matching_pane() {
+        let pane = PaneId(1);
+        let other_pane = PaneId(2);
+        let path = PathBuf::from("/tmp/fika-drop-target-state/target");
+        let mut state = DropTargetState::default();
+
+        assert!(state.set_item(ItemDropTarget::Directory {
+            pane_id: pane,
+            path: path.clone(),
+        }));
+        let generation = state.lease_generation();
+
+        assert!(!state.clear_item_for_pane(other_pane));
+        assert!(item_drop_target_matches_directory(
+            state.item(),
+            pane,
+            &path
+        ));
+        assert_eq!(state.lease_generation(), generation);
+
+        assert!(state.clear_item_for_pane(pane));
         assert!(state.item().is_none());
         assert!(state.lease_generation() > generation);
     }

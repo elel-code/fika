@@ -240,6 +240,11 @@ This is the active task board for the GPUI item view custom-paint migration.
   boundary.
 - [x] Move item/details drag payload projection into `src/ui/file_grid/dnd.rs`
   so the remaining GPUI shell consumes DnD-owned data.
+- [x] Centralize viewport-level item/external/place drag-move and drop shell
+  installation in `src/ui/file_grid/dnd.rs`.
+- [x] Install directory item/row drop-target shells through
+  `src/ui/file_grid/dnd.rs` so pane-internal item drags update retained
+  directory highlight while moving, matching the Places-to-pane path.
 - [ ] Keep remaining drag-start shells until public GPUI custom-element
   drag-start support exists or an audited GPUI patch is carried.
 - [ ] Keep rename on the GPUI overlay until custom text editing has behavior

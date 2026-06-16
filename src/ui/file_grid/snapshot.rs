@@ -41,6 +41,7 @@ pub(crate) struct VisibleItemSnapshot {
     pub(crate) slot_id: u64,
     pub(crate) item_id: ItemId,
     pub(crate) layout: fika_core::ItemLayout,
+    pub(crate) is_dir: bool,
     pub(crate) name: Arc<str>,
     pub(crate) display_name: SharedString,
     pub(crate) thumbnail_path: Option<Arc<Path>>,
@@ -75,6 +76,7 @@ struct VisibleItemSnapshotCacheKey {
 struct VisibleItemSnapshotCacheEntry {
     key: VisibleItemSnapshotCacheKey,
     visible_epoch: u64,
+    is_dir: bool,
     name: Arc<str>,
     display_name: SharedString,
     thumbnail_path: Option<Arc<Path>>,
@@ -141,6 +143,7 @@ impl VisibleItemSnapshotCache {
         let entry = VisibleItemSnapshotCacheEntry {
             key,
             visible_epoch: self.visible_epoch,
+            is_dir: item.is_dir,
             name: item.name.clone(),
             display_name: SharedString::from(item.name.as_ref()),
             thumbnail_path: item
@@ -516,6 +519,7 @@ impl RawFileGridSnapshot {
                             slot_id: item.slot_id,
                             item_id: item.item_id,
                             layout: item.layout,
+                            is_dir: content.is_dir,
                             name: content.name,
                             display_name: content.display_name,
                             thumbnail_path: content.thumbnail_path,
@@ -554,6 +558,7 @@ impl RawFileGridSnapshot {
                             slot_id: item.slot_id,
                             item_id: item.item_id,
                             layout: item.layout,
+                            is_dir: content.is_dir,
                             name: content.name,
                             display_name: content.display_name,
                             thumbnail_path: content.thumbnail_path,

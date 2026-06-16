@@ -36,12 +36,12 @@ use fika_core::{
 };
 use gpui::prelude::*;
 use gpui::{
-    App, Bounds, Context, Corners, CursorStyle, Div, Element, ElementId, Empty, Entity,
-    ExternalPaths, Font, FontWeight, GlobalElementId, Hitbox, HitboxBehavior, InspectorElementId,
-    IntoElement, LayoutId, MouseButton, MouseMoveEvent, NavigationDirection, ObjectFit,
-    ParentElement, Pixels, RenderImage, Resource, RetainAllImageCache, Rgba, ScrollHandle,
-    SharedString, Stateful, Style, StyleRefinement, Styled, TextAlign, TextRun, WeakEntity, Window,
-    div, fill, img, point, px, retain_all, rgb, rgba, size,
+    App, Bounds, Context, Corners, CursorStyle, Div, Element, ElementId, Empty, Entity, Font,
+    FontWeight, GlobalElementId, Hitbox, HitboxBehavior, InspectorElementId, IntoElement, LayoutId,
+    MouseButton, MouseMoveEvent, NavigationDirection, ObjectFit, ParentElement, Pixels,
+    RenderImage, Resource, RetainAllImageCache, Rgba, ScrollHandle, SharedString, Stateful, Style,
+    StyleRefinement, Styled, TextAlign, TextRun, WeakEntity, Window, div, fill, img, point, px,
+    retain_all, rgb, rgba, size,
 };
 use std::collections::HashMap;
 use std::path::Path;
@@ -52,7 +52,6 @@ use super::icons::FileIconSnapshot;
 use super::item_view::{
     ITEM_VIEW_SCROLLBAR_RESERVED_EXTENT, ItemViewScrollbarAxis, item_view_scrollbar_container,
 };
-use super::places::PlaceDrag;
 use super::rename::RENAME_TEXT_INSET_X;
 use super::rubber_band::RubberBandDrag;
 #[cfg(test)]
@@ -64,10 +63,8 @@ use details::{DetailsColumn, DetailsColumnKind, details_columns};
 #[cfg(test)]
 use dnd::drag_preview_label;
 use dnd::{
-    handle_file_grid_external_drag_move, handle_file_grid_external_drop,
-    handle_file_grid_item_drag_move, handle_file_grid_item_drop, handle_file_grid_place_drag_move,
-    handle_file_grid_place_drop, install_item_drag_start_shell, item_drag_from_details_snapshot,
-    item_drag_from_item_snapshot,
+    install_directory_drop_target_shell, install_file_grid_path_drop_shell,
+    install_item_drag_start_shell, item_drag_from_details_snapshot, item_drag_from_item_snapshot,
 };
 use renderer_policy::{
     DetailsRowDragStartRenderer, DetailsRowInteractionRenderer, DetailsRowVisualRenderer,
@@ -590,6 +587,7 @@ pub(crate) struct ItemPaintSnapshot {
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct ItemPaintContent {
     item_id: ItemId,
+    is_dir: bool,
     name: Arc<str>,
     display_name: SharedString,
     thumbnail_path: Option<Arc<Path>>,
@@ -608,6 +606,7 @@ impl ItemPaintContent {
     fn from_item(item: &VisibleItemSnapshot) -> Self {
         Self {
             item_id: item.item_id,
+            is_dir: item.is_dir,
             name: item.name.clone(),
             display_name: item.display_name.clone(),
             thumbnail_path: item.thumbnail_path.clone(),
@@ -1354,7 +1353,7 @@ fn file_grid_viewport_shell(
     mode: FileGridMode,
     cx: &mut Context<FikaApp>,
 ) -> Stateful<Div> {
-    div()
+    let shell = div()
         .id(format!("items-viewport-{}", pane_id.0))
         .relative()
         .flex_1()
@@ -1481,38 +1480,13 @@ fn file_grid_viewport_shell(
                 }
             },
         ))
-        .on_drop::<RubberBandDrag>(
-            cx.listener(move |this, _drag: &RubberBandDrag, _window, cx| {
+        .on_drop::<RubberBandDrag>(cx.listener(
+            move |this, _drag: &RubberBandDrag, _window, cx| {
                 this.finish_rubber_band(pane_id);
                 cx.notify();
-            }),
-        )
-        .on_drag_move::<ItemDrag>(cx.listener(
-            move |this, event: &gpui::DragMoveEvent<ItemDrag>, window, cx| {
-                handle_file_grid_item_drag_move(this, pane_id, event, window, cx);
             },
-        ))
-        .on_drag_move::<ExternalPaths>(cx.listener(
-            move |this, event: &gpui::DragMoveEvent<ExternalPaths>, window, cx| {
-                handle_file_grid_external_drag_move(this, pane_id, event, window, cx);
-            },
-        ))
-        .on_drag_move::<PlaceDrag>(cx.listener(
-            move |this, event: &gpui::DragMoveEvent<PlaceDrag>, window, cx| {
-                handle_file_grid_place_drag_move(this, pane_id, event, window, cx);
-            },
-        ))
-        .on_drop::<ItemDrag>(cx.listener(move |this, drag: &ItemDrag, window, cx| {
-            handle_file_grid_item_drop(this, pane_id, drag, window, cx);
-        }))
-        .on_drop::<ExternalPaths>(cx.listener(
-            move |this, external_paths: &ExternalPaths, window, cx| {
-                handle_file_grid_external_drop(this, pane_id, external_paths, window, cx);
-            },
-        ))
-        .on_drop::<PlaceDrag>(cx.listener(move |this, drag: &PlaceDrag, window, cx| {
-            handle_file_grid_place_drop(this, pane_id, drag, window, cx);
-        }))
+        ));
+    install_file_grid_path_drop_shell(shell, pane_id, cx)
 }
 
 fn details_table(
@@ -2207,6 +2181,7 @@ fn details_row(
     let policy = details_row_renderer_policy(&item);
     let drag_value = item_drag_from_details_snapshot(pane_id, &item);
     let app = cx.weak_entity();
+    let directory_drop_target = item.content.is_dir.then(|| item.content.path.clone());
 
     let row = div()
         .id(item_identity_element_id("details-row", item_id))
@@ -2218,6 +2193,10 @@ fn details_row(
         .flex()
         .items_center()
         .bg(rgba(0x00000000));
+    let row = match directory_drop_target {
+        Some(target_dir) => install_directory_drop_target_shell(row, pane_id, target_dir, cx),
+        None => row,
+    };
 
     // The viewport owns click/menu/navigation hit testing from retained
     // geometry; this row remains only as GPUI's drag-start boundary.
@@ -2274,6 +2253,7 @@ fn item_tile(
     );
     let drag_app = app.clone();
     let drag_value = item_drag_from_item_snapshot(pane_id, &item);
+    let directory_drop_target = content.is_dir.then(|| content.drag_path.clone());
     let shell_background = if use_layer_visual_paint {
         rgba(0x00000000)
     } else {
@@ -2291,6 +2271,10 @@ fn item_tile(
         .h(px(visual.height))
         .rounded_md()
         .bg(shell_background);
+    let core = match directory_drop_target {
+        Some(target_dir) => install_directory_drop_target_shell(core, pane_id, target_dir, cx),
+        None => core,
+    };
     let core = match renderer_policy.drag_start {
         ItemDragStartRenderer::GpuiShell => {
             install_item_drag_start_shell(core, drag_value, drag_app)
@@ -4638,6 +4622,20 @@ mod tests {
         assert_eq!(drag.icon.fallback_marker.as_ref(), "DIR");
     }
 
+    #[test]
+    fn item_paint_content_preserves_directory_identity_for_drop_target_shells() {
+        let mut cache = ItemPaintSlotCache::default();
+        let mut item = test_visible_item(1, ItemId(7), "target", test_item_layout(0.0), false);
+        item.is_dir = true;
+        item.drag_path = Arc::from(Path::new("/tmp/target"));
+
+        let projection = cache.project_file_grid_snapshot(icons_snapshot(vec![item]), None);
+        let content = first_icon_paint_content(&projection.snapshot);
+
+        assert!(content.is_dir);
+        assert_eq!(content.drag_path.as_ref(), Path::new("/tmp/target"));
+    }
+
     fn icons_snapshot(items: Vec<VisibleItemSnapshot>) -> FileGridSnapshot {
         FileGridSnapshot::Icons {
             layout: IconsLayout::new(items.len(), IconsLayoutOptions::default()),
@@ -4683,6 +4681,7 @@ mod tests {
             slot_id,
             item_id,
             layout,
+            is_dir: false,
             name: Arc::from(name),
             display_name: SharedString::from(name),
             thumbnail_path: None,

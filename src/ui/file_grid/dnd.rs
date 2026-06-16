@@ -11,7 +11,7 @@ use gpui::{
 use crate::FikaApp;
 use crate::ui::drag_drop::{
     DragPreviewLayout, FileTransferMode, ItemDragPayload, PathListDropTargetKind,
-    PathListDropTargetUpdate, drag_preview_layout_for_cursor_offset,
+    PathListDropTargetUpdate, drag_preview_layout_for_cursor_offset, item_drop_reject_reason,
     refresh_active_drag_cursor_for_drop_menu, refresh_active_drag_cursor_for_transfer_mode,
     refresh_active_drag_cursor_not_allowed,
 };
@@ -115,6 +115,98 @@ pub(super) fn install_item_drag_start_shell(
     })
 }
 
+pub(super) fn install_file_grid_path_drop_shell(
+    shell: Stateful<Div>,
+    pane_id: PaneId,
+    cx: &mut Context<FikaApp>,
+) -> Stateful<Div> {
+    shell
+        .on_drag_move::<ItemDrag>(cx.listener(
+            move |this, event: &gpui::DragMoveEvent<ItemDrag>, window, cx| {
+                handle_file_grid_item_drag_move(this, pane_id, event, window, cx);
+            },
+        ))
+        .on_drag_move::<ExternalPaths>(cx.listener(
+            move |this, event: &gpui::DragMoveEvent<ExternalPaths>, window, cx| {
+                handle_file_grid_external_drag_move(this, pane_id, event, window, cx);
+            },
+        ))
+        .on_drag_move::<PlaceDrag>(cx.listener(
+            move |this, event: &gpui::DragMoveEvent<PlaceDrag>, window, cx| {
+                handle_file_grid_place_drag_move(this, pane_id, event, window, cx);
+            },
+        ))
+        .on_drop::<ItemDrag>(cx.listener(move |this, drag: &ItemDrag, window, cx| {
+            handle_file_grid_item_drop(this, pane_id, drag, window, cx);
+        }))
+        .on_drop::<ExternalPaths>(cx.listener(
+            move |this, external_paths: &ExternalPaths, window, cx| {
+                handle_file_grid_external_drop(this, pane_id, external_paths, window, cx);
+            },
+        ))
+        .on_drop::<PlaceDrag>(cx.listener(move |this, drag: &PlaceDrag, window, cx| {
+            handle_file_grid_place_drop(this, pane_id, drag, window, cx);
+        }))
+}
+
+pub(super) fn install_directory_drop_target_shell(
+    shell: Stateful<Div>,
+    pane_id: PaneId,
+    target_dir: Arc<Path>,
+    cx: &mut Context<FikaApp>,
+) -> Stateful<Div> {
+    let item_target_dir = target_dir.clone();
+    let external_target_dir = target_dir.clone();
+    let place_target_dir = target_dir;
+    shell
+        .on_drag_move::<ItemDrag>(cx.listener(
+            move |this, event: &gpui::DragMoveEvent<ItemDrag>, window, cx| {
+                let contains = event.bounds.contains(&event.event.position);
+                let source_paths = this.item_drag_source_paths(&event.drag(cx).payload());
+                handle_file_grid_directory_path_list_drag_move(
+                    this,
+                    pane_id,
+                    contains,
+                    &source_paths,
+                    item_target_dir.as_ref(),
+                    window,
+                    cx,
+                );
+            },
+        ))
+        .on_drag_move::<ExternalPaths>(cx.listener(
+            move |this, event: &gpui::DragMoveEvent<ExternalPaths>, window, cx| {
+                let contains = event.bounds.contains(&event.event.position);
+                let source_paths = this.external_drag_source_paths(event.drag(cx).paths());
+                handle_file_grid_directory_path_list_drag_move(
+                    this,
+                    pane_id,
+                    contains,
+                    &source_paths,
+                    external_target_dir.as_ref(),
+                    window,
+                    cx,
+                );
+            },
+        ))
+        .on_drag_move::<PlaceDrag>(cx.listener(
+            move |this, event: &gpui::DragMoveEvent<PlaceDrag>, window, cx| {
+                let contains = event.bounds.contains(&event.event.position);
+                let source_path = event.drag(cx).path();
+                let source_paths = std::slice::from_ref(&source_path);
+                handle_file_grid_directory_path_list_drag_move(
+                    this,
+                    pane_id,
+                    contains,
+                    source_paths,
+                    place_target_dir.as_ref(),
+                    window,
+                    cx,
+                );
+            },
+        ))
+}
+
 impl Render for DragPreview {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         let left = self.layout.content_origin_x;
@@ -196,7 +288,7 @@ fn item_drag_icon_or_fallback(icon: FileIconSnapshot) -> gpui::AnyElement {
     })
 }
 
-pub(super) fn handle_file_grid_item_drag_move(
+fn handle_file_grid_item_drag_move(
     app: &mut FikaApp,
     pane_id: PaneId,
     event: &gpui::DragMoveEvent<ItemDrag>,
@@ -217,7 +309,7 @@ pub(super) fn handle_file_grid_item_drag_move(
     );
 }
 
-pub(super) fn handle_file_grid_external_drag_move(
+fn handle_file_grid_external_drag_move(
     app: &mut FikaApp,
     pane_id: PaneId,
     event: &gpui::DragMoveEvent<ExternalPaths>,
@@ -270,7 +362,41 @@ fn handle_file_grid_path_list_drag_move(
     }
 }
 
-pub(super) fn handle_file_grid_place_drag_move(
+fn handle_file_grid_directory_path_list_drag_move(
+    app: &mut FikaApp,
+    pane_id: PaneId,
+    contains: bool,
+    source_paths: &[PathBuf],
+    target_dir: &Path,
+    window: &mut Window,
+    cx: &mut Context<FikaApp>,
+) {
+    let changed = if contains {
+        app.set_dragged_paths_drop_target_for_directory(
+            pane_id,
+            source_paths,
+            target_dir.to_path_buf(),
+        )
+    } else {
+        app.clear_item_drop_target_for_directory(pane_id, target_dir)
+    };
+    if contains {
+        if item_drop_reject_reason(source_paths, target_dir).is_none() {
+            refresh_active_drag_cursor_for_drop_menu(window, cx);
+            app.refresh_drop_target_lease(cx);
+        } else {
+            refresh_active_drag_cursor_not_allowed(window, cx);
+        }
+    }
+    if changed {
+        cx.notify();
+    }
+    if contains {
+        cx.stop_propagation();
+    }
+}
+
+fn handle_file_grid_place_drag_move(
     app: &mut FikaApp,
     pane_id: PaneId,
     event: &gpui::DragMoveEvent<PlaceDrag>,
@@ -315,7 +441,7 @@ pub(super) fn handle_file_grid_place_drag_move(
     }
 }
 
-pub(super) fn handle_file_grid_item_drop(
+fn handle_file_grid_item_drop(
     app: &mut FikaApp,
     pane_id: PaneId,
     drag: &ItemDrag,
@@ -329,7 +455,7 @@ pub(super) fn handle_file_grid_item_drop(
     cx.notify();
 }
 
-pub(super) fn handle_file_grid_external_drop(
+fn handle_file_grid_external_drop(
     app: &mut FikaApp,
     pane_id: PaneId,
     external_paths: &ExternalPaths,
@@ -347,7 +473,7 @@ pub(super) fn handle_file_grid_external_drop(
     cx.notify();
 }
 
-pub(super) fn handle_file_grid_place_drop(
+fn handle_file_grid_place_drop(
     app: &mut FikaApp,
     pane_id: PaneId,
     drag: &PlaceDrag,
