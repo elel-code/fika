@@ -131,6 +131,7 @@ pub(crate) struct ItemLayerPerfStats {
 }
 
 pub(crate) type StaticItemVisualPerfStats = ItemLayerPerfStats;
+pub(crate) type DetailsVisualPerfStats = ItemLayerPerfStats;
 pub(crate) type ItemInteractionPerfStats = ItemLayerPerfStats;
 
 impl ItemLayerPerfStats {
@@ -1106,6 +1107,7 @@ pub(crate) fn file_grid(
             let mut notify_requested = false;
             let mut shape_cache_stats = StaticItemTextShapeCacheStats::default();
             let mut static_visual_stats = StaticItemVisualPerfStats::default();
+            let mut details_visual_stats = DetailsVisualPerfStats::default();
             let mut interaction_stats = ItemInteractionPerfStats::default();
             let _ = app.update(cx, |this, cx| {
                 let previous_view = this.panes.pane(pane_id).map(|pane| pane.view.clone());
@@ -1133,6 +1135,7 @@ pub(crate) fn file_grid(
                 if perf_enabled {
                     shape_cache_stats = this.take_static_item_text_shape_cache_stats(pane_id);
                     static_visual_stats = this.take_static_item_visual_perf_stats(pane_id);
+                    details_visual_stats = this.take_details_visual_perf_stats(pane_id);
                     interaction_stats = this.take_item_interaction_perf_stats(pane_id);
                 }
             });
@@ -1180,6 +1183,17 @@ pub(crate) fn file_grid(
                         interaction_stats.prepaint_us,
                         interaction_stats.paint_count,
                         interaction_stats.paint_us,
+                    );
+                }
+                if details_visual_stats.has_activity() {
+                    eprintln!(
+                        "[fika details-visual] pane={} mode={:?} prepaint_count={} prepaint={}us paint_count={} paint={}us",
+                        pane_id.0,
+                        view_mode,
+                        details_visual_stats.prepaint_count,
+                        details_visual_stats.prepaint_us,
+                        details_visual_stats.paint_count,
+                        details_visual_stats.paint_us,
                     );
                 }
             }
@@ -1234,6 +1248,12 @@ impl FikaApp {
             .unwrap_or_default()
     }
 
+    fn take_details_visual_perf_stats(&mut self, pane_id: PaneId) -> DetailsVisualPerfStats {
+        self.details_visual_perf_stats
+            .remove(&pane_id)
+            .unwrap_or_default()
+    }
+
     fn take_item_interaction_perf_stats(&mut self, pane_id: PaneId) -> ItemInteractionPerfStats {
         self.item_interaction_perf_stats
             .remove(&pane_id)
@@ -1259,6 +1279,20 @@ impl FikaApp {
         count: usize,
     ) {
         self.static_item_visual_perf_stats
+            .entry(pane_id)
+            .or_default()
+            .record_paint(elapsed, count);
+    }
+
+    fn record_details_visual_prepaint(&mut self, pane_id: PaneId, elapsed: Duration, count: usize) {
+        self.details_visual_perf_stats
+            .entry(pane_id)
+            .or_default()
+            .record_prepaint(elapsed, count);
+    }
+
+    fn record_details_visual_paint(&mut self, pane_id: PaneId, elapsed: Duration, count: usize) {
+        self.details_visual_perf_stats
             .entry(pane_id)
             .or_default()
             .record_paint(elapsed, count);
@@ -1832,7 +1866,7 @@ impl Element for DetailsVisualLayerElement {
             let elapsed = started.elapsed();
             let count = states.len();
             let _ = self.app.update(cx, |this, _cx| {
-                this.record_static_item_visual_prepaint(self.pane_id, elapsed, count);
+                this.record_details_visual_prepaint(self.pane_id, elapsed, count);
             });
         }
         states
@@ -1858,7 +1892,7 @@ impl Element for DetailsVisualLayerElement {
         if let Some(started) = perf_started {
             let elapsed = started.elapsed();
             let _ = self.app.update(cx, |this, _cx| {
-                this.record_static_item_visual_paint(self.pane_id, elapsed, count);
+                this.record_details_visual_paint(self.pane_id, elapsed, count);
             });
         }
     }
