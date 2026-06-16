@@ -1,5 +1,6 @@
 mod details;
 mod layout;
+mod perf;
 mod projection;
 mod renderer_policy;
 mod slots;
@@ -11,6 +12,9 @@ pub(crate) use details::{
 pub(crate) use layout::{
     CompactColumnWidthCache, compact_text_width, compact_text_width_for_name,
     rename_editor_required_text_width,
+};
+pub(crate) use perf::{
+    DetailsVisualPerfStats, ItemImagePerfStats, ItemInteractionPerfStats, StaticItemVisualPerfStats,
 };
 pub(crate) use projection::{
     ContentItemHit, PaneLayoutProjection, PaneLayoutProjectionInput, content_item_hit_at_point,
@@ -133,35 +137,6 @@ struct StaticItemVisualPaintState {
     background: Rgba,
     paint_fallback_icon: bool,
     fallback_bg: u32,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct ItemLayerPerfStats {
-    pub(crate) prepaint_count: usize,
-    pub(crate) prepaint_us: u128,
-    pub(crate) paint_count: usize,
-    pub(crate) paint_us: u128,
-}
-
-pub(crate) type StaticItemVisualPerfStats = ItemLayerPerfStats;
-pub(crate) type ItemImagePerfStats = ItemLayerPerfStats;
-pub(crate) type DetailsVisualPerfStats = ItemLayerPerfStats;
-pub(crate) type ItemInteractionPerfStats = ItemLayerPerfStats;
-
-impl ItemLayerPerfStats {
-    fn has_activity(self) -> bool {
-        self.prepaint_count > 0 || self.paint_count > 0
-    }
-
-    fn record_prepaint(&mut self, elapsed: Duration, count: usize) {
-        self.prepaint_count += count;
-        self.prepaint_us += elapsed.as_micros();
-    }
-
-    fn record_paint(&mut self, elapsed: Duration, count: usize) {
-        self.paint_count += count;
-        self.paint_us += elapsed.as_micros();
-    }
 }
 
 struct StaticItemTextShapes {
