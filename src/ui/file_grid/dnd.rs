@@ -2,15 +2,19 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use fika_core::PaneId;
-use gpui::{Context, ExternalPaths, Window};
+use gpui::prelude::*;
+use gpui::{
+    Context, ExternalPaths, IntoElement, ParentElement, Render, Styled, Window, div, px, rgb,
+};
 
 use crate::FikaApp;
 use crate::ui::drag_drop::{
-    FileTransferMode, ItemDragPayload, PathListDropTargetKind, PathListDropTargetUpdate,
+    DragPreviewLayout, FileTransferMode, ItemDragPayload, PathListDropTargetKind,
+    PathListDropTargetUpdate, drag_preview_layout_for_cursor_offset,
     refresh_active_drag_cursor_for_drop_menu, refresh_active_drag_cursor_for_transfer_mode,
     refresh_active_drag_cursor_not_allowed,
 };
-use crate::ui::icons::FileIconSnapshot;
+use crate::ui::icons::{FileIconSnapshot, cached_icon_or_fallback};
 use crate::ui::places::PlaceDrag;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -31,6 +35,121 @@ impl ItemDrag {
             source_selected: self.selected,
         }
     }
+}
+
+pub(super) struct DragPreview {
+    icon: FileIconSnapshot,
+    label: String,
+    count: usize,
+    layout: DragPreviewLayout,
+}
+
+const DRAG_PREVIEW_MIN_WIDTH: f32 = 220.0;
+const DRAG_PREVIEW_MIN_HEIGHT: f32 = 36.0;
+
+pub(super) fn item_drag_preview(
+    drag: &ItemDrag,
+    cursor_offset: gpui::Point<gpui::Pixels>,
+) -> DragPreview {
+    DragPreview {
+        icon: drag.icon.clone(),
+        label: drag_preview_label(drag.name.as_ref(), drag.selected, drag.selection_count),
+        count: drag.selection_count,
+        layout: drag_preview_layout_for_cursor_offset(
+            cursor_offset,
+            DRAG_PREVIEW_MIN_WIDTH,
+            DRAG_PREVIEW_MIN_HEIGHT + 6.0,
+        ),
+    }
+}
+
+pub(super) fn drag_preview_label(name: &str, selected: bool, selection_count: usize) -> String {
+    if selected && selection_count > 1 {
+        format!("{selection_count} items")
+    } else {
+        name.to_string()
+    }
+}
+
+impl Render for DragPreview {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        let left = self.layout.content_origin_x;
+        let top = self.layout.content_origin_y;
+        let icon = self.icon.clone();
+        let show_count = self.count > 1;
+        let count = self.count;
+        div()
+            .relative()
+            .w(px(self.layout.surface_width))
+            .h(px(self.layout.surface_height))
+            .child(
+                div()
+                    .absolute()
+                    .left(px(left))
+                    .top(px(top))
+                    .h(px(DRAG_PREVIEW_MIN_HEIGHT))
+                    .px_2()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(rgb(0x94a3b8))
+                    .bg(rgb(0xffffff))
+                    .shadow_md()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .text_sm()
+                    .text_color(rgb(0x1f2937))
+                    .child(
+                        div()
+                            .relative()
+                            .w(px(26.0))
+                            .h(px(26.0))
+                            .rounded_sm()
+                            .overflow_hidden()
+                            .child(item_drag_icon_or_fallback(icon))
+                            .when(show_count, |icon| {
+                                icon.child(
+                                    div()
+                                        .absolute()
+                                        .right(px(-1.0))
+                                        .bottom(px(-1.0))
+                                        .min_w(px(14.0))
+                                        .h(px(14.0))
+                                        .px(px(3.0))
+                                        .rounded_full()
+                                        .bg(rgb(0xd97706))
+                                        .text_xs()
+                                        .text_color(rgb(0xffffff))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .child(count.to_string()),
+                                )
+                            }),
+                    )
+                    .child(div().max_w(px(170.0)).truncate().child(self.label.clone())),
+            )
+    }
+}
+
+fn item_drag_icon_or_fallback(icon: FileIconSnapshot) -> gpui::AnyElement {
+    let marker = icon.fallback_marker.clone();
+    let fg = icon.fallback_fg;
+    let bg = icon.fallback_bg;
+    cached_icon_or_fallback(&icon, move || {
+        div()
+            .size_full()
+            .rounded_sm()
+            .flex()
+            .items_center()
+            .justify_center()
+            .text_xs()
+            .font_weight(gpui::FontWeight::SEMIBOLD)
+            .text_color(rgb(fg))
+            .bg(rgb(bg))
+            .child(marker.as_ref().to_string())
+            .into_any_element()
+    })
 }
 
 pub(super) fn handle_file_grid_item_drag_move(

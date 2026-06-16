@@ -230,6 +230,9 @@ This is the active task board for the GPUI item view custom-paint migration.
 - [x] Extract file-grid item/place/external drag move and drop handlers into
   `src/ui/file_grid/dnd.rs` so controller routing is no longer owned by the
   main painter/render surface.
+- [x] Move item drag preview rendering and selection-count label logic into
+  `src/ui/file_grid/dnd.rs` so the remaining GPUI drag-start shell boundary is
+  centralized.
 - [ ] Keep remaining drag-start shells until public GPUI custom-element
   drag-start support exists or an audited GPUI patch is carried.
 - [ ] Keep rename on the GPUI overlay until custom text editing has behavior

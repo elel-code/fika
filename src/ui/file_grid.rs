@@ -38,7 +38,7 @@ use gpui::{
     App, Bounds, Context, Corners, CursorStyle, Div, Element, ElementId, Empty, Entity,
     ExternalPaths, Font, FontWeight, GlobalElementId, Hitbox, HitboxBehavior, InspectorElementId,
     IntoElement, LayoutId, MouseButton, MouseMoveEvent, NavigationDirection, ObjectFit,
-    ParentElement, Pixels, Render, RenderImage, Resource, RetainAllImageCache, Rgba, ScrollHandle,
+    ParentElement, Pixels, RenderImage, Resource, RetainAllImageCache, Rgba, ScrollHandle,
     SharedString, Stateful, Style, StyleRefinement, Styled, TextAlign, TextRun, WeakEntity, Window,
     div, fill, img, point, px, retain_all, rgb, rgba, size,
 };
@@ -47,8 +47,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::drag_drop::{DragPreviewLayout, drag_preview_layout_for_cursor_offset};
-use super::icons::{FileIconSnapshot, cached_icon_or_fallback};
+use super::icons::FileIconSnapshot;
 use super::item_view::{
     ITEM_VIEW_SCROLLBAR_RESERVED_EXTENT, ItemViewScrollbarAxis, item_view_scrollbar_container,
 };
@@ -56,10 +55,12 @@ use super::places::PlaceDrag;
 use super::rename::RENAME_TEXT_INSET_X;
 use super::rubber_band::RubberBandDrag;
 use details::{DetailsColumn, DetailsColumnKind, details_columns};
+#[cfg(test)]
+use dnd::drag_preview_label;
 use dnd::{
     handle_file_grid_external_drag_move, handle_file_grid_external_drop,
     handle_file_grid_item_drag_move, handle_file_grid_item_drop, handle_file_grid_place_drag_move,
-    handle_file_grid_place_drop,
+    handle_file_grid_place_drop, item_drag_preview,
 };
 use renderer_policy::{
     DetailsRowDragStartRenderer, DetailsRowInteractionRenderer, DetailsRowVisualRenderer,
@@ -738,16 +739,6 @@ impl ItemPaintVisualState {
 pub(crate) struct PaneViewportGeometry {
     pub(crate) window_rect: ViewRect,
 }
-
-struct DragPreview {
-    icon: FileIconSnapshot,
-    label: String,
-    count: usize,
-    layout: DragPreviewLayout,
-}
-
-const DRAG_PREVIEW_MIN_WIDTH: f32 = 220.0;
-const DRAG_PREVIEW_MIN_HEIGHT: f32 = 36.0;
 
 fn item_identity_element_id(prefix: &'static str, item_id: ItemId) -> (&'static str, u64) {
     (prefix, item_id.0)
@@ -2239,20 +2230,7 @@ fn details_row(
                 let _ = app.update(cx, |this, _cx| {
                     this.begin_item_drag(drag.payload());
                 });
-                cx.new(|_| DragPreview {
-                    icon: drag.icon.clone(),
-                    label: drag_preview_label(
-                        drag.name.as_ref(),
-                        drag.selected,
-                        drag.selection_count,
-                    ),
-                    count: drag.selection_count,
-                    layout: drag_preview_layout_for_cursor_offset(
-                        cursor_offset,
-                        DRAG_PREVIEW_MIN_WIDTH,
-                        DRAG_PREVIEW_MIN_HEIGHT + 6.0,
-                    ),
-                })
+                cx.new(|_| item_drag_preview(drag, cursor_offset))
             })
         }
     }
@@ -2467,20 +2445,7 @@ fn item_tile(
                 let _ = drag_app.update(cx, |this, _cx| {
                     this.begin_item_drag(drag.payload());
                 });
-                cx.new(|_| DragPreview {
-                    icon: drag.icon.clone(),
-                    label: drag_preview_label(
-                        drag.name.as_ref(),
-                        drag.selected,
-                        drag.selection_count,
-                    ),
-                    count: drag.selection_count,
-                    layout: drag_preview_layout_for_cursor_offset(
-                        cursor_offset,
-                        DRAG_PREVIEW_MIN_WIDTH,
-                        DRAG_PREVIEW_MIN_HEIGHT + 6.0,
-                    ),
-                })
+                cx.new(|_| item_drag_preview(drag, cursor_offset))
             })
         }
     };
@@ -3667,17 +3632,6 @@ fn item_image_or_fallback(
     }
 }
 
-fn icon_image_or_fallback(
-    icon: FileIconSnapshot,
-    fallback_marker: SharedString,
-) -> gpui::AnyElement {
-    let fallback_fg = icon.fallback_fg;
-    let fallback_bg = icon.fallback_bg;
-    cached_icon_or_fallback(&icon, move || {
-        fallback_icon_element(fallback_marker.clone(), fallback_fg, fallback_bg)
-    })
-}
-
 fn fallback_icon_element(marker: SharedString, fg: u32, bg: u32) -> gpui::AnyElement {
     div()
         .size_full()
@@ -4012,79 +3966,6 @@ fn clamp_text_boundary(text: &str, index: usize) -> usize {
         index -= 1;
     }
     index
-}
-
-impl Render for DragPreview {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        let left = self.layout.content_origin_x;
-        let top = self.layout.content_origin_y;
-        let icon = self.icon.clone();
-        let show_count = self.count > 1;
-        let count = self.count;
-        div()
-            .relative()
-            .w(px(self.layout.surface_width))
-            .h(px(self.layout.surface_height))
-            .child(
-                div()
-                    .absolute()
-                    .left(px(left))
-                    .top(px(top))
-                    .h(px(DRAG_PREVIEW_MIN_HEIGHT))
-                    .px_2()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(rgb(0x94a3b8))
-                    .bg(rgb(0xffffff))
-                    .shadow_md()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .text_sm()
-                    .text_color(rgb(0x1f2937))
-                    .child(
-                        div()
-                            .relative()
-                            .w(px(26.0))
-                            .h(px(26.0))
-                            .rounded_sm()
-                            .overflow_hidden()
-                            .child({
-                                let fallback_marker =
-                                    SharedString::from(icon.fallback_marker.as_ref());
-                                icon_image_or_fallback(icon, fallback_marker)
-                            })
-                            .when(show_count, |icon| {
-                                icon.child(
-                                    div()
-                                        .absolute()
-                                        .right(px(-1.0))
-                                        .bottom(px(-1.0))
-                                        .min_w(px(14.0))
-                                        .h(px(14.0))
-                                        .px(px(3.0))
-                                        .rounded_full()
-                                        .bg(rgb(0xd97706))
-                                        .text_xs()
-                                        .text_color(rgb(0xffffff))
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .child(count.to_string()),
-                                )
-                            }),
-                    )
-                    .child(div().max_w(px(170.0)).truncate().child(self.label.clone())),
-            )
-    }
-}
-
-fn drag_preview_label(name: &str, selected: bool, selection_count: usize) -> String {
-    if selected && selection_count > 1 {
-        format!("{selection_count} items")
-    } else {
-        name.to_string()
-    }
 }
 
 #[cfg(test)]
