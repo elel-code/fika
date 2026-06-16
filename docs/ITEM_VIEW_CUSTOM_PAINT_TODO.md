@@ -235,6 +235,9 @@ This is the active task board for the GPUI item view custom-paint migration.
   centralized.
 - [x] Extract file-grid wheel, pane navigation, and item mouse-down controller
   decisions into `src/ui/file_grid/controller.rs`.
+- [x] Centralize GPUI item/details drag-start shell installation in
+  `src/ui/file_grid/dnd.rs` while keeping the shell as the current platform
+  boundary.
 - [ ] Keep remaining drag-start shells until public GPUI custom-element
   drag-start support exists or an audited GPUI patch is carried.
 - [ ] Keep rename on the GPUI overlay until custom text editing has behavior

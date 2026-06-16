@@ -66,7 +66,7 @@ use dnd::drag_preview_label;
 use dnd::{
     handle_file_grid_external_drag_move, handle_file_grid_external_drop,
     handle_file_grid_item_drag_move, handle_file_grid_item_drop, handle_file_grid_place_drag_move,
-    handle_file_grid_place_drop, item_drag_preview,
+    handle_file_grid_place_drop, install_item_drag_start_shell,
 };
 use renderer_policy::{
     DetailsRowDragStartRenderer, DetailsRowInteractionRenderer, DetailsRowVisualRenderer,
@@ -2232,12 +2232,7 @@ fn details_row(
     // geometry; this row remains only as GPUI's drag-start boundary.
     match policy.drag_start {
         DetailsRowDragStartRenderer::GpuiShell => {
-            row.on_drag(drag_value, move |drag, cursor_offset, _, cx| {
-                let _ = app.update(cx, |this, _cx| {
-                    this.begin_item_drag(drag.payload());
-                });
-                cx.new(|_| item_drag_preview(drag, cursor_offset))
-            })
+            install_item_drag_start_shell(row, drag_value, app)
         }
     }
 }
@@ -2338,12 +2333,7 @@ fn item_tile(
         .bg(shell_background);
     let core = match renderer_policy.drag_start {
         ItemDragStartRenderer::GpuiShell => {
-            core.on_drag(drag_value, move |drag, cursor_offset, _, cx| {
-                let _ = drag_app.update(cx, |this, _cx| {
-                    this.begin_item_drag(drag.payload());
-                });
-                cx.new(|_| item_drag_preview(drag, cursor_offset))
-            })
+            install_item_drag_start_shell(core, drag_value, drag_app)
         }
     };
     let core = if use_layer_interaction {

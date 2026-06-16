@@ -4,7 +4,8 @@ use std::sync::Arc;
 use fika_core::PaneId;
 use gpui::prelude::*;
 use gpui::{
-    Context, ExternalPaths, IntoElement, ParentElement, Render, Styled, Window, div, px, rgb,
+    Context, Div, ExternalPaths, IntoElement, ParentElement, Render, Stateful, Styled, WeakEntity,
+    Window, div, px, rgb,
 };
 
 use crate::FikaApp;
@@ -69,6 +70,21 @@ pub(super) fn drag_preview_label(name: &str, selected: bool, selection_count: us
     } else {
         name.to_string()
     }
+}
+
+pub(super) fn install_item_drag_start_shell(
+    shell: Stateful<Div>,
+    drag_value: ItemDrag,
+    app: WeakEntity<FikaApp>,
+) -> Stateful<Div> {
+    // GPUI still owns drag initiation; this shell is the remaining platform
+    // boundary until custom elements can start drags directly.
+    shell.on_drag(drag_value, move |drag, cursor_offset, _, cx| {
+        let _ = app.update(cx, |this, _cx| {
+            this.begin_item_drag(drag.payload());
+        });
+        cx.new(|_| item_drag_preview(drag, cursor_offset))
+    })
 }
 
 impl Render for DragPreview {
