@@ -98,6 +98,7 @@ The runtime-log gate and analyzer itself can be checked with:
 
 ```sh
 scripts/check-item-view-runtime-log.sh --help
+scripts/summarize-item-view-renderer-evidence.sh --help
 scripts/check-item-view-perf-analyzer.sh
 ```
 

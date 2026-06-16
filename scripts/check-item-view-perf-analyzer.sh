@@ -4,6 +4,7 @@ set -euo pipefail
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 analyzer="$root_dir/scripts/analyze-item-view-perf.sh"
 runtime_gate="$root_dir/scripts/check-item-view-runtime-log.sh"
+renderer_evidence="$root_dir/scripts/summarize-item-view-renderer-evidence.sh"
 tmpdir="$(mktemp -d)"
 cleanup() {
     rm -rf "$tmpdir"
@@ -12,6 +13,7 @@ trap cleanup EXIT
 
 bash -n "$analyzer"
 bash -n "$runtime_gate"
+bash -n "$renderer_evidence"
 
 cat > "$tmpdir/complete.log" <<'EOF'
 [fika item-view] pane=1 mode=Compact phase=steady items=48 visible=32 raw=50us queue=1us convert=40us total=120us
@@ -43,6 +45,16 @@ EOF
     "$tmpdir/complete.log" >/dev/null
 
 "$runtime_gate" "$tmpdir/complete.log" >/dev/null
+
+evidence="$("$renderer_evidence" "$tmpdir/complete.log")"
+if [[ "$evidence" != *"## Item View Renderer Evidence"* ]]; then
+    echo "expected renderer evidence heading" >&2
+    exit 1
+fi
+if [[ "$evidence" != *"custom_paint_frames"* ]]; then
+    echo "expected renderer evidence to include analyzer summary" >&2
+    exit 1
+fi
 
 cat > "$tmpdir/missing-channels.log" <<'EOF'
 [fika item-view] pane=1 mode=Compact phase=steady items=48 visible=32 raw=50us queue=1us convert=40us total=120us
@@ -76,6 +88,11 @@ fi
 
 if "$runtime_gate" "$tmpdir/missing-channels.log" >/dev/null 2>&1; then
     echo "expected runtime log gate to fail missing channels" >&2
+    exit 1
+fi
+
+if "$renderer_evidence" "$tmpdir/missing-channels.log" >/dev/null 2>&1; then
+    echo "expected renderer evidence to fail missing channels" >&2
     exit 1
 fi
 

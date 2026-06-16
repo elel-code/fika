@@ -37,6 +37,7 @@ session, exercise Compact, Icons, and Details, then save the log and run:
 
 ```sh
 scripts/check-item-view-runtime-log.sh /tmp/fika-item-view.log
+scripts/summarize-item-view-renderer-evidence.sh /tmp/fika-item-view.log
 ```
 
 Human review still needs to confirm the DnD and rename checklist in
