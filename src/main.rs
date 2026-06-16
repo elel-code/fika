@@ -7937,19 +7937,6 @@ impl Render for FikaApp {
                         multiple: chooser.multiple,
                     }
                 });
-        let chooser_action_label = self.chooser.as_ref().map(|chooser| {
-            let target = if chooser.directories {
-                "folders"
-            } else {
-                "files"
-            };
-            let count = if chooser.multiple {
-                "multiple"
-            } else {
-                "single"
-            };
-            format!("{} - {} {}", chooser.accept_label, count, target)
-        });
         let pane_ids = snapshots
             .iter()
             .map(|snapshot| snapshot.id)
@@ -7967,6 +7954,10 @@ impl Render for FikaApp {
                 filter_toggle_snapshot(&mut self.file_icons, focused_filter_active),
             )
         });
+        let chooser_accept_label = self
+            .chooser
+            .as_ref()
+            .map(|chooser| chooser.accept_label.clone());
         let split_icon = pane_split_icon_snapshot(&mut self.file_icons);
         let close_icon = pane_close_icon_snapshot(&mut self.file_icons);
         let mut pane_elements = Vec::with_capacity(pane_ids.len().saturating_mul(2));
@@ -8011,25 +8002,8 @@ impl Render for FikaApp {
                     .flex()
                     .items_center()
                     .gap_2()
-                    .px_3()
-                    .py_2()
-                    .border_b_1()
-                    .border_color(rgb(0xc8ced6))
-                    .bg(rgb(0xffffff))
-                    .child(div().font_weight(gpui::FontWeight::SEMIBOLD).child(
-                        if self.chooser.is_some() {
-                            "Fika Chooser"
-                        } else {
-                            "Fika"
-                        },
-                    ))
-                    .child(
-                        div().text_sm().text_color(rgb(0x59636e)).child(
-                            chooser_action_label
-                                .clone()
-                                .unwrap_or_else(|| "GPUI directory shell".to_string()),
-                        ),
-                    )
+                    .px_2()
+                    .pt_2()
                     .child(div().flex_1())
                     .when_some(focused_filter_toggle, |bar, (pane_id, filter_toggle)| {
                         bar.child(
@@ -8053,13 +8027,15 @@ impl Render for FikaApp {
                                 )),
                         )
                     })
-                    .when(self.chooser.is_some(), |bar| {
-                        bar.child(ui::controls::toolbar_button("choose", "Choose").on_click(
-                            cx.listener(move |this, _event, _window, cx| {
-                                this.confirm_chooser();
-                                cx.notify();
-                            }),
-                        ))
+                    .when_some(chooser_accept_label, |bar, accept_label| {
+                        bar.child(
+                            ui::controls::toolbar_button("choose", accept_label).on_click(
+                                cx.listener(move |this, _event, _window, cx| {
+                                    this.confirm_chooser();
+                                    cx.notify();
+                                }),
+                            ),
+                        )
                     }),
             )
             .child(

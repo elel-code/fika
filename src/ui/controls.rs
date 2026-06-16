@@ -1,7 +1,7 @@
 use gpui::prelude::*;
 use gpui::{Div, Stateful, Styled, div, rgb};
 
-pub(crate) fn toolbar_button(id: &'static str, label: &'static str) -> Stateful<Div> {
+pub(crate) fn toolbar_button(id: &'static str, label: impl Into<String>) -> Stateful<Div> {
     div()
         .id(format!("toolbar-{id}"))
         .px_2()
@@ -13,5 +13,5 @@ pub(crate) fn toolbar_button(id: &'static str, label: &'static str) -> Stateful<
         .hover(|button| button.bg(rgb(0xeaf1ff)))
         .cursor_pointer()
         .text_xs()
-        .child(label)
+        .child(label.into())
 }
