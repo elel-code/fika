@@ -90,6 +90,10 @@ activity, and retained interaction hitbox activity. Human review is still
 required for whether the exercised mode switches, resizes, fullscreen toggles,
 and DnD actions match this checklist.
 
+After a passing runtime review, update
+`docs/ITEM_VIEW_RENDERER_DECISIONS.md` with the evidence for any surface whose
+renderer will be kept, expanded, or reverted.
+
 The runtime-log gate and analyzer itself can be checked with:
 
 ```sh

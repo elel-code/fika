@@ -59,6 +59,11 @@ Renderer policy:
 - Keep model, layout, interaction, and painter data split even when the current
   renderer for a surface remains a GPUI `Div`, `img()`, or text editor subtree.
 
+Current per-surface decisions live in
+`docs/ITEM_VIEW_RENDERER_DECISIONS.md`. Update that file before replacing any
+remaining GPUI surface or before reverting a custom-painted surface back to a
+GPUI renderer.
+
 ## Dolphin Reference
 
 Relevant Dolphin flow:

@@ -192,6 +192,8 @@ This is the active task board for the GPUI item view custom-paint migration.
   selection paths.
 - [ ] Record the renderer decision and perf evidence in the relevant reference
   doc or TODO entry before removing any existing GPUI surface.
+- [x] Add `docs/ITEM_VIEW_RENDERER_DECISIONS.md` as the current per-surface
+  renderer decision log.
 
 ## Acceptance Gates
 
