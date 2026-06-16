@@ -13,7 +13,11 @@ bash -n "$analyzer"
 
 cat > "$tmpdir/complete.log" <<'EOF'
 [fika item-view] pane=1 mode=Compact phase=steady items=48 visible=32 raw=50us queue=1us convert=40us total=120us
+[fika item-view] pane=1 mode=Icons phase=steady items=48 visible=40 raw=45us queue=1us convert=35us total=110us
+[fika item-view] pane=1 mode=Details phase=steady items=48 visible=30 raw=42us queue=1us convert=32us total=105us
 [fika file-grid] pane=1 mode=Compact visible=32 content=1602.5x882 build=400us
+[fika file-grid] pane=1 mode=Icons visible=40 content=587x1168 build=450us
+[fika file-grid] pane=1 mode=Details visible=30 content=601x882 build=420us
 [fika details-visual] pane=1 mode=Details prepaint_count=48 prepaint=120us paint_count=48 paint=130us
 [fika details-shape-cache] pane=1 mode=Details hits=20 misses=2 evicted=0 entries=22
 [fika item-interaction] pane=1 mode=Details prepaint_count=48 prepaint=60us paint_count=48 paint=50us
@@ -23,6 +27,7 @@ EOF
     --require-steady \
     --require-details \
     --require-interaction \
+    --require-modes Compact,Icons,Details \
     --steady-total-us 1000 \
     --file-grid-build-us 3000 \
     "$tmpdir/complete.log" >/dev/null
@@ -33,6 +38,11 @@ EOF
 
 if "$analyzer" --require-details --require-interaction "$tmpdir/missing-channels.log" >/dev/null 2>&1; then
     echo "expected missing details/interaction channels to fail" >&2
+    exit 1
+fi
+
+if "$analyzer" --require-modes Compact,Icons,Details "$tmpdir/missing-channels.log" >/dev/null 2>&1; then
+    echo "expected missing required modes to fail" >&2
     exit 1
 fi
 

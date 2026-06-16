@@ -171,7 +171,8 @@ This is the active task board for the GPUI item view custom-paint migration.
 - [x] Add `docs/ITEM_VIEW_RUNTIME_SMOKE.md` with the runtime DnD, rename, and
   perf-log checklist for post-P11e verification.
 - [x] Add `scripts/analyze-item-view-perf.sh` to summarize perf logs and enforce
-  required steady/details/interaction channels during post-P11e review.
+  required steady/details/interaction channels and exercised view modes during
+  post-P11e review.
 - [ ] Run a runtime DnD smoke pass after P11e: item drag, item-to-directory
   drop, pane drop, Places drop/reorder, external path drop, and rename caret
   click in Compact, Icons, and Details.

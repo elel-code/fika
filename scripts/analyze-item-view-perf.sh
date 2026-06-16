@@ -19,6 +19,9 @@ Options:
   --require-interaction
       Fail if [fika item-interaction] hitbox timing is missing.
 
+  --require-modes A,B,C
+      Fail if any comma-separated view mode is absent from parsed perf logs.
+
   --steady-total-us N
       Fail if any item-view phase=steady total exceeds N microseconds.
 
@@ -33,6 +36,7 @@ EOF
 require_steady=false
 require_details=false
 require_interaction=false
+required_modes=""
 steady_total_us=""
 file_grid_build_us=""
 log_path=""
@@ -47,6 +51,18 @@ while [[ $# -gt 0 ]]; do
             ;;
         --require-interaction)
             require_interaction=true
+            ;;
+        --require-modes)
+            if [[ $# -lt 2 || "$2" == --* ]]; then
+                echo "--require-modes requires a comma-separated value" >&2
+                usage >&2
+                exit 2
+            fi
+            required_modes="$2"
+            shift
+            ;;
+        --require-modes=*)
+            required_modes="${1#--require-modes=}"
             ;;
         --steady-total-us)
             if [[ $# -lt 2 || "$2" == --* ]]; then
@@ -113,8 +129,15 @@ awk \
     -v require_steady="$require_steady" \
     -v require_details="$require_details" \
     -v require_interaction="$require_interaction" \
+    -v required_modes="$required_modes" \
     -v steady_total_limit="$steady_total_us" \
     -v file_grid_build_limit="$file_grid_build_us" '
+function trim(value) {
+    sub(/^[[:space:]]+/, "", value)
+    sub(/[[:space:]]+$/, "", value)
+    return value
+}
+
 function field(name,    prefix, i, value) {
     prefix = name "="
     for (i = 1; i <= NF; i++) {
@@ -150,6 +173,20 @@ function fail(message) {
     failures++
 }
 
+BEGIN {
+    if (required_modes != "") {
+        count = split(required_modes, requested_modes, ",")
+        for (i = 1; i <= count; i++) {
+            mode = trim(requested_modes[i])
+            if (mode == "") {
+                fail("empty mode in --require-modes")
+            } else {
+                required_mode[mode] = 1
+            }
+        }
+    }
+}
+
 /^\[fika item-view\]/ {
     item_view_count++
     mode = field("mode")
@@ -173,6 +210,7 @@ function fail(message) {
 
 /^\[fika file-grid\]/ {
     file_grid_count++
+    note_mode(field("mode"))
     build = us_field("build")
     max_assign(single_max, "file_grid_build", build)
     if (file_grid_build_limit != "" && build > file_grid_build_limit + 0) {
@@ -182,18 +220,21 @@ function fail(message) {
 
 /^\[fika details-visual\]/ {
     details_visual_count++
+    note_mode(field("mode"))
     max_assign(single_max, "details_visual_prepaint", us_field("prepaint"))
     max_assign(single_max, "details_visual_paint", us_field("paint"))
 }
 
 /^\[fika details-shape-cache\]/ {
     details_shape_count++
+    note_mode(field("mode"))
     details_shape_hits += field("hits") + 0
     details_shape_misses += field("misses") + 0
 }
 
 /^\[fika item-interaction\]/ {
     item_interaction_count++
+    note_mode(field("mode"))
     max_assign(single_max, "interaction_prepaint", us_field("prepaint"))
     max_assign(single_max, "interaction_paint", us_field("paint"))
     max_assign(single_max, "interaction_prepaint_count", field("prepaint_count") + 0)
@@ -240,6 +281,11 @@ END {
     }
     if (require_interaction == "true" && item_interaction_count == 0) {
         fail("missing [fika item-interaction] lines")
+    }
+    for (mode in required_mode) {
+        if (!(mode in modes)) {
+            fail("missing required mode " mode)
+        }
     }
     if (steady_over_limit > 0) {
         fail(steady_over_limit " steady item-view frame(s) exceeded " steady_total_limit "us")
