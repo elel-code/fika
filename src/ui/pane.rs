@@ -10,7 +10,7 @@ pub(crate) use splitter::{
     pane_row_width_from_child_bounds, pane_splitter, pane_width_available, split_ratio_eq,
     width_value_eq,
 };
-pub(crate) use toolbar::{close_pane_button, filter_pane_button, split_pane_button};
+pub(crate) use toolbar::{filter_pane_button, pane_layout_button};
 pub(crate) use toolbar::{pane_close_icon_snapshot, pane_split_icon_snapshot};
 
 use crate::FikaApp;

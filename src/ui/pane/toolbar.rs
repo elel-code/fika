@@ -56,56 +56,35 @@ pub(crate) fn filter_pane_button(
     )
 }
 
-pub(crate) fn split_pane_button(
+pub(crate) fn pane_layout_button(
     pane_id: PaneId,
-    icon: FileIconSnapshot,
-    enabled: bool,
+    pane_count: usize,
+    split_icon: FileIconSnapshot,
+    close_icon: FileIconSnapshot,
     cx: &mut Context<FikaApp>,
 ) -> Stateful<Div> {
-    toolbar_button_base(
-        format!("pane-split-button-{}", pane_id.0),
-        icon,
-        "Split",
-        false,
-        enabled,
-    )
-    .when(enabled, |button| {
-        button.on_click(
-            cx.listener(move |this, event: &gpui::ClickEvent, _window, cx| {
-                if event.standard_click() {
-                    this.split_pane_from_button(pane_id);
-                    cx.stop_propagation();
-                    cx.notify();
-                }
-            }),
-        )
-    })
-}
+    let (icon, label) = if pane_count <= 1 {
+        (split_icon, "Split")
+    } else {
+        (close_icon, "Close Pane")
+    };
 
-pub(crate) fn close_pane_button(
-    pane_id: PaneId,
-    icon: FileIconSnapshot,
-    enabled: bool,
-    cx: &mut Context<FikaApp>,
-) -> Stateful<Div> {
     toolbar_button_base(
-        format!("pane-close-button-{}", pane_id.0),
+        format!("pane-layout-button-{}", pane_id.0),
         icon,
-        "Close Pane",
+        label,
         false,
-        enabled,
+        true,
     )
-    .when(enabled, |button| {
-        button.on_click(
-            cx.listener(move |this, event: &gpui::ClickEvent, _window, cx| {
-                if event.standard_click() {
-                    this.close_pane_from_button(pane_id);
-                    cx.stop_propagation();
-                    cx.notify();
-                }
-            }),
-        )
-    })
+    .on_click(
+        cx.listener(move |this, event: &gpui::ClickEvent, _window, cx| {
+            if event.standard_click() {
+                this.toggle_pane_layout_from_button(pane_id);
+                cx.stop_propagation();
+                cx.notify();
+            }
+        }),
+    )
 }
 
 fn toolbar_button_base(

@@ -646,22 +646,13 @@ impl FikaApp {
         }
     }
 
-    pub(crate) fn split_pane_from_button(&mut self, pane_id: PaneId) {
-        if self.panes.pane_ids().len() != 1 {
-            self.set_pane_status(pane_id, "Split already active");
-            return;
-        }
+    pub(crate) fn toggle_pane_layout_from_button(&mut self, pane_id: PaneId) {
         self.panes.focus(pane_id);
-        self.split_pane(pane_id);
-    }
-
-    pub(crate) fn close_pane_from_button(&mut self, pane_id: PaneId) {
         if self.panes.pane_ids().len() <= 1 {
-            self.set_pane_status(pane_id, "Cannot close the only pane");
-            return;
+            self.split_pane(pane_id);
+        } else {
+            self.close_pane(pane_id);
         }
-        self.panes.focus(pane_id);
-        self.close_pane(pane_id);
     }
 
     pub(crate) fn close_filter_bar(&mut self, pane_id: PaneId) {
@@ -8013,17 +8004,8 @@ impl Render for FikaApp {
                                 .items_center()
                                 .gap_1()
                                 .child(ui::pane::filter_pane_button(pane_id, filter_toggle, cx))
-                                .child(ui::pane::split_pane_button(
-                                    pane_id,
-                                    split_icon,
-                                    pane_count == 1,
-                                    cx,
-                                ))
-                                .child(ui::pane::close_pane_button(
-                                    pane_id,
-                                    close_icon,
-                                    pane_count > 1,
-                                    cx,
+                                .child(ui::pane::pane_layout_button(
+                                    pane_id, pane_count, split_icon, close_icon, cx,
                                 )),
                         )
                     })
@@ -13609,25 +13591,23 @@ text/plain=viewer.desktop;\n",
     }
 
     #[test]
-    fn pane_toolbar_split_and_close_buttons_follow_availability_rules() {
+    fn pane_toolbar_layout_button_toggles_split_state() {
         let mut app = test_app_with_entries("/tmp/fika-pane-toolbar", &["alpha.rs", "beta.txt"]);
         let first = app.panes.focused().unwrap();
 
-        app.split_pane_from_button(first);
+        app.toggle_pane_layout_from_button(first);
         let split_ids = app.panes.pane_ids().to_vec();
         assert_eq!(split_ids.len(), 2);
+        assert_eq!(app.panes.focused(), Some(split_ids[1]));
 
-        app.split_pane_from_button(first);
-        assert_eq!(app.panes.pane_ids().len(), 2);
-
-        let second = split_ids[1];
-        app.close_pane_from_button(second);
+        app.toggle_pane_layout_from_button(split_ids[1]);
         let remaining = app.panes.pane_ids().to_vec();
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0], first);
+        assert_eq!(app.panes.focused(), Some(first));
 
-        app.close_pane_from_button(first);
-        assert_eq!(app.panes.pane_ids(), &[first]);
+        app.toggle_pane_layout_from_button(first);
+        assert_eq!(app.panes.pane_ids().len(), 2);
     }
 
     #[test]
