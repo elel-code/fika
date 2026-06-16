@@ -207,6 +207,9 @@ This is the active task board for the GPUI item view custom-paint migration.
   GPUI shell boundaries.
 - [x] Require renderer-policy log coverage for Compact, Icons, and Details in
   the standard runtime perf gate.
+- [x] Split renderer policy into `src/ui/file_grid/renderer_policy.rs` so the
+  custom-paint vs GPUI renderer decision boundary is separate from rendering
+  construction.
 
 ## Acceptance Gates
 

@@ -1,6 +1,7 @@
 mod details;
 mod layout;
 mod projection;
+mod renderer_policy;
 mod slots;
 mod snapshot;
 
@@ -54,6 +55,17 @@ use super::places::PlaceDrag;
 use super::rename::RENAME_TEXT_INSET_X;
 use super::rubber_band::RubberBandDrag;
 use details::{DetailsColumn, DetailsColumnKind, details_columns};
+use renderer_policy::{
+    DetailsRowDragStartRenderer, DetailsRowInteractionRenderer, DetailsRowVisualRenderer,
+    ItemBaseVisualRenderer, ItemDragStartRenderer, ItemInteractionRenderer,
+    ItemRenameEditorRenderer, details_renderer_policy_stats, details_row_renderer_policy,
+    item_paints_fallback_icon, item_renderer_policy, item_renderer_policy_stats,
+    item_uses_image_layer, item_uses_layer_interaction, item_uses_layer_visual_paint,
+};
+#[cfg(test)]
+use renderer_policy::{
+    DetailsRowRendererPolicy, ItemImageRenderer, ItemRendererPolicy, RendererPolicyStats,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum FileGridMode {
@@ -2476,95 +2488,6 @@ impl DetailsRowControllerState {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct DetailsRowRendererPolicy {
-    visual: DetailsRowVisualRenderer,
-    interaction: DetailsRowInteractionRenderer,
-    drag_start: DetailsRowDragStartRenderer,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum DetailsRowVisualRenderer {
-    ContentLayer,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum DetailsRowInteractionRenderer {
-    RetainedLayer,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum DetailsRowDragStartRenderer {
-    GpuiShell,
-}
-
-fn details_row_renderer_policy(_item: &DetailsPaintSnapshot) -> DetailsRowRendererPolicy {
-    DetailsRowRendererPolicy {
-        visual: DetailsRowVisualRenderer::ContentLayer,
-        interaction: DetailsRowInteractionRenderer::RetainedLayer,
-        drag_start: DetailsRowDragStartRenderer::GpuiShell,
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-struct RendererPolicyStats {
-    items: usize,
-    visual_layer: usize,
-    image_layer: usize,
-    retained_interaction: usize,
-    gpui_drag_shell: usize,
-    rename_overlay: usize,
-}
-
-fn item_renderer_policy_stats(items: &[ItemPaintSnapshot]) -> RendererPolicyStats {
-    let mut stats = RendererPolicyStats {
-        items: items.len(),
-        ..RendererPolicyStats::default()
-    };
-    for item in items {
-        let policy = item_renderer_policy(item.content.as_ref());
-        if matches!(policy.base_visual, ItemBaseVisualRenderer::ContentLayer) {
-            stats.visual_layer += 1;
-        }
-        if matches!(policy.image, ItemImageRenderer::ContentLayer) {
-            stats.image_layer += 1;
-        }
-        if matches!(policy.interaction, ItemInteractionRenderer::RetainedLayer) {
-            stats.retained_interaction += 1;
-        }
-        if matches!(policy.drag_start, ItemDragStartRenderer::GpuiShell) {
-            stats.gpui_drag_shell += 1;
-        }
-        if matches!(policy.rename_editor, ItemRenameEditorRenderer::GpuiOverlay) {
-            stats.rename_overlay += 1;
-        }
-    }
-    stats
-}
-
-fn details_renderer_policy_stats(items: &[DetailsPaintSnapshot]) -> RendererPolicyStats {
-    let mut stats = RendererPolicyStats {
-        items: items.len(),
-        ..RendererPolicyStats::default()
-    };
-    for item in items {
-        let policy = details_row_renderer_policy(item);
-        if matches!(policy.visual, DetailsRowVisualRenderer::ContentLayer) {
-            stats.visual_layer += 1;
-        }
-        if matches!(
-            policy.interaction,
-            DetailsRowInteractionRenderer::RetainedLayer
-        ) {
-            stats.retained_interaction += 1;
-        }
-        if matches!(policy.drag_start, DetailsRowDragStartRenderer::GpuiShell) {
-            stats.gpui_drag_shell += 1;
-        }
-    }
-    stats
-}
-
 fn details_row_background(
     selected: bool,
     hovered: bool,
@@ -2829,94 +2752,6 @@ fn item_tile(
         .w(px(item_rect.width))
         .h(px(item_rect.height))
         .child(core)
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct ItemRendererPolicy {
-    base_visual: ItemBaseVisualRenderer,
-    image: ItemImageRenderer,
-    interaction: ItemInteractionRenderer,
-    drag_start: ItemDragStartRenderer,
-    rename_editor: ItemRenameEditorRenderer,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ItemBaseVisualRenderer {
-    ContentLayer,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ItemImageRenderer {
-    None,
-    ContentLayer,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ItemInteractionRenderer {
-    RetainedLayer,
-    RenameShell,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ItemDragStartRenderer {
-    GpuiShell,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ItemRenameEditorRenderer {
-    None,
-    GpuiOverlay,
-}
-
-fn item_renderer_policy(content: &ItemPaintContent) -> ItemRendererPolicy {
-    let has_image = content.thumbnail_path.is_some() || content.icon.path.is_some();
-    let renaming = content.draft_name.is_some();
-    ItemRendererPolicy {
-        // Compact/Icons base visuals live in content-level layers. Rename keeps
-        // only a local editor overlay and temporary drag shell.
-        base_visual: ItemBaseVisualRenderer::ContentLayer,
-        image: if has_image {
-            ItemImageRenderer::ContentLayer
-        } else {
-            ItemImageRenderer::None
-        },
-        interaction: if renaming {
-            ItemInteractionRenderer::RenameShell
-        } else {
-            ItemInteractionRenderer::RetainedLayer
-        },
-        drag_start: ItemDragStartRenderer::GpuiShell,
-        rename_editor: if renaming {
-            ItemRenameEditorRenderer::GpuiOverlay
-        } else {
-            ItemRenameEditorRenderer::None
-        },
-    }
-}
-
-fn item_uses_layer_visual_paint(content: &ItemPaintContent) -> bool {
-    matches!(
-        item_renderer_policy(content).base_visual,
-        ItemBaseVisualRenderer::ContentLayer
-    )
-}
-
-fn item_uses_layer_interaction(content: &ItemPaintContent) -> bool {
-    matches!(
-        item_renderer_policy(content).interaction,
-        ItemInteractionRenderer::RetainedLayer
-    )
-}
-
-fn item_uses_image_layer(content: &ItemPaintContent) -> bool {
-    matches!(
-        item_renderer_policy(content).image,
-        ItemImageRenderer::ContentLayer
-    )
-}
-
-fn item_paints_fallback_icon(content: &ItemPaintContent) -> bool {
-    !item_uses_image_layer(content)
 }
 
 fn item_tile_background(selected: bool, drop_target: bool, hovered: bool) -> Rgba {
