@@ -9,8 +9,9 @@ use super::details::{
 };
 use super::layout::{
     CompactColumnWidthCache, compact_layout_for_filtered_model_with_text_override,
-    compact_layout_for_model_with_text_override, entry_name_text_width, icons_layout_for_model,
-    model_index_for_layout_index, rename_text_override_for_model, required_text_width_for_entry,
+    compact_layout_for_model_with_text_override, entry_name_text_width, icon_name_display_lines,
+    icons_layout_for_model, model_index_for_layout_index, rename_text_override_for_model,
+    required_text_width_for_entry,
 };
 use super::{FileGridSnapshot, VisibleItemSlotPool};
 use crate::ui::drag_drop::{ItemDropTarget, item_drop_target_matches_directory};
@@ -76,6 +77,7 @@ pub(crate) struct VisibleItemSnapshot {
     pub(crate) name: Arc<str>,
     pub(crate) thumbnail_path: Option<PathBuf>,
     pub(crate) icon: FileIconSnapshot,
+    pub(crate) icon_name_lines: Vec<String>,
     pub(crate) selected: bool,
     pub(crate) selection_count: usize,
     pub(crate) drop_target: bool,
@@ -84,6 +86,18 @@ pub(crate) struct VisibleItemSnapshot {
     pub(crate) draft_selection: Option<(usize, usize)>,
     pub(crate) draft_error: Option<String>,
     pub(crate) draft_warning: Option<String>,
+}
+
+const ICON_NAME_HORIZONTAL_SAFE_INSET: f32 = 6.0;
+
+fn icon_name_layout_width(text_rect_width: f32) -> f32 {
+    (text_rect_width - ICON_NAME_HORIZONTAL_SAFE_INSET * 2.0).max(1.0)
+}
+
+fn icon_name_max_lines(text_rect_height: f32) -> usize {
+    (text_rect_height / super::ITEM_NAME_LINE_HEIGHT)
+        .round()
+        .max(1.0) as usize
 }
 
 #[derive(Clone, Debug)]
@@ -447,6 +461,7 @@ impl RawFileGridSnapshot {
                             name: item.name,
                             thumbnail_path: item.thumbnail_path,
                             icon,
+                            icon_name_lines: Vec::new(),
                             selected: item.selected,
                             selection_count,
                             drop_target: item.drop_target,
@@ -474,6 +489,11 @@ impl RawFileGridSnapshot {
                             mime_magic_checked: item.mime_magic_checked,
                             icon_size: item.layout.icon_rect.width,
                         });
+                        let icon_name_lines = icon_name_display_lines(
+                            &item.name,
+                            icon_name_layout_width(item.layout.text_rect.width),
+                            icon_name_max_lines(item.layout.text_rect.height),
+                        );
                         Some(VisibleItemSnapshot {
                             slot_id: item.slot_id,
                             item_id: item.item_id,
@@ -483,6 +503,7 @@ impl RawFileGridSnapshot {
                             name: item.name,
                             thumbnail_path: item.thumbnail_path,
                             icon,
+                            icon_name_lines,
                             selected: item.selected,
                             selection_count,
                             drop_target: item.drop_target,
@@ -1040,6 +1061,36 @@ mod tests {
         assert!(items.iter().all(|item| item.slot_id != 0));
         assert_eq!(requests.len(), 2);
         assert_eq!(requests[0].0, PathBuf::from("/tmp/alpha.txt"));
+    }
+
+    #[test]
+    fn icon_snapshot_precomputes_name_lines_with_safe_width() {
+        let long_name = "elzykosuda227446+breuyev@hotmail.cpa.2026-06-22.json";
+        let mut raw_file_grid = RawFileGridSnapshot::Icons {
+            layout: IconsLayout::new(1, fika_core::IconsLayoutOptions::default()),
+            items: vec![test_raw_visible_item(1, long_name, 0)],
+        };
+        let mut slots = VisibleItemSlotPool::default();
+        raw_file_grid.assign_visible_item_slots(&mut slots);
+        let icon = test_icon_snapshot();
+
+        let snapshot = raw_file_grid.into_file_grid_snapshot(1, |_| icon.clone());
+
+        let FileGridSnapshot::Icons { items, .. } = snapshot else {
+            panic!("expected icons snapshot");
+        };
+        let item = items.first().expect("icon item should be visible");
+        let expected = icon_name_display_lines(
+            long_name,
+            icon_name_layout_width(item.layout.text_rect.width),
+            icon_name_max_lines(item.layout.text_rect.height),
+        );
+        assert_eq!(item.icon_name_lines, expected);
+        assert!(
+            item.icon_name_lines
+                .last()
+                .is_some_and(|line| line.contains('\u{2026}'))
+        );
     }
 
     #[test]

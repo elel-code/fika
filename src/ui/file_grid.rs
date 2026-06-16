@@ -1201,6 +1201,7 @@ fn item_tile(
                 .child(text_view(
                     pane_id,
                     &display_name,
+                    &item.icon_name_lines,
                     item.layout,
                     text_alignment,
                     renaming,
@@ -1302,6 +1303,7 @@ fn fallback_icon_element(marker: Arc<str>, fg: u32, bg: u32) -> gpui::AnyElement
 fn text_view(
     pane_id: PaneId,
     display_name: &str,
+    icon_name_lines: &[String],
     layout: ItemLayout,
     text_alignment: ItemTileTextAlignment,
     renaming: bool,
@@ -1374,8 +1376,8 @@ fn text_view(
                 }
                 ItemTileTextAlignment::Center => item_name_label_view(
                     display_name,
+                    icon_name_lines,
                     selected,
-                    text.width,
                     rename_layout.name_height,
                 )
                 .into_any_element(),
@@ -1389,14 +1391,27 @@ fn text_view(
         ))
 }
 
-fn item_name_label_view(display_name: &str, selected: bool, width: f32, height: f32) -> Div {
+fn item_name_label_view(
+    display_name: &str,
+    icon_name_lines: &[String],
+    selected: bool,
+    height: f32,
+) -> Div {
     let text_color = if selected {
         rgb(0x0f172a)
     } else {
         rgb(0x24292f)
     };
     let max_lines = (height / ITEM_NAME_LINE_HEIGHT).round().max(1.0) as usize;
-    let lines = layout::icon_name_display_lines(display_name, width, max_lines);
+    let lines = if icon_name_lines.is_empty() {
+        vec![display_name.to_string()]
+    } else {
+        icon_name_lines
+            .iter()
+            .take(max_lines)
+            .cloned()
+            .collect::<Vec<_>>()
+    };
     div()
         .h(px(height))
         .w_full()
