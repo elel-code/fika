@@ -46,7 +46,6 @@ use gpui::{
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
 
 use super::icons::FileIconSnapshot;
 use super::item_view::{
@@ -1145,117 +1144,6 @@ pub(crate) fn file_grid(
         );
     }
     root
-}
-
-impl FikaApp {
-    fn take_static_item_text_shape_cache_stats(&mut self, pane_id: PaneId) -> TextShapeCacheStats {
-        self.static_item_text_shape_caches
-            .get_mut(&pane_id)
-            .map(StaticItemTextShapeCache::take_stats)
-            .unwrap_or_default()
-    }
-
-    fn take_details_text_shape_cache_stats(&mut self, pane_id: PaneId) -> TextShapeCacheStats {
-        self.details_text_shape_caches
-            .get_mut(&pane_id)
-            .map(DetailsTextShapeCache::take_stats)
-            .unwrap_or_default()
-    }
-
-    fn take_static_item_visual_perf_stats(&mut self, pane_id: PaneId) -> StaticItemVisualPerfStats {
-        self.static_item_visual_perf_stats
-            .remove(&pane_id)
-            .unwrap_or_default()
-    }
-
-    fn take_item_image_perf_stats(&mut self, pane_id: PaneId) -> ItemImagePerfStats {
-        self.item_image_perf_stats
-            .remove(&pane_id)
-            .unwrap_or_default()
-    }
-
-    fn take_details_visual_perf_stats(&mut self, pane_id: PaneId) -> DetailsVisualPerfStats {
-        self.details_visual_perf_stats
-            .remove(&pane_id)
-            .unwrap_or_default()
-    }
-
-    fn take_item_interaction_perf_stats(&mut self, pane_id: PaneId) -> ItemInteractionPerfStats {
-        self.item_interaction_perf_stats
-            .remove(&pane_id)
-            .unwrap_or_default()
-    }
-
-    fn record_static_item_visual_prepaint(
-        &mut self,
-        pane_id: PaneId,
-        elapsed: Duration,
-        count: usize,
-    ) {
-        self.static_item_visual_perf_stats
-            .entry(pane_id)
-            .or_default()
-            .record_prepaint(elapsed, count);
-    }
-
-    fn record_static_item_visual_paint(
-        &mut self,
-        pane_id: PaneId,
-        elapsed: Duration,
-        count: usize,
-    ) {
-        self.static_item_visual_perf_stats
-            .entry(pane_id)
-            .or_default()
-            .record_paint(elapsed, count);
-    }
-
-    fn record_item_image_prepaint(&mut self, pane_id: PaneId, elapsed: Duration, count: usize) {
-        self.item_image_perf_stats
-            .entry(pane_id)
-            .or_default()
-            .record_prepaint(elapsed, count);
-    }
-
-    fn record_item_image_paint(&mut self, pane_id: PaneId, elapsed: Duration, count: usize) {
-        self.item_image_perf_stats
-            .entry(pane_id)
-            .or_default()
-            .record_paint(elapsed, count);
-    }
-
-    fn record_details_visual_prepaint(&mut self, pane_id: PaneId, elapsed: Duration, count: usize) {
-        self.details_visual_perf_stats
-            .entry(pane_id)
-            .or_default()
-            .record_prepaint(elapsed, count);
-    }
-
-    fn record_details_visual_paint(&mut self, pane_id: PaneId, elapsed: Duration, count: usize) {
-        self.details_visual_perf_stats
-            .entry(pane_id)
-            .or_default()
-            .record_paint(elapsed, count);
-    }
-
-    fn record_item_interaction_prepaint(
-        &mut self,
-        pane_id: PaneId,
-        elapsed: Duration,
-        count: usize,
-    ) {
-        self.item_interaction_perf_stats
-            .entry(pane_id)
-            .or_default()
-            .record_prepaint(elapsed, count);
-    }
-
-    fn record_item_interaction_paint(&mut self, pane_id: PaneId, elapsed: Duration, count: usize) {
-        self.item_interaction_perf_stats
-            .entry(pane_id)
-            .or_default()
-            .record_paint(elapsed, count);
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

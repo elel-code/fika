@@ -227,6 +227,8 @@ This is the active task board for the GPUI item view custom-paint migration.
   behavior.
 - [x] Extract item-view painter perf counters into `src/ui/file_grid/perf.rs`
   so render instrumentation is no longer owned by the main file-grid surface.
+- [x] Move FikaApp item-view perf accessor/record methods into
+  `src/ui/file_grid/perf.rs`.
 - [x] Extract file-grid item/place/external drag move and drop handlers into
   `src/ui/file_grid/dnd.rs` so controller routing is no longer owned by the
   main painter/render surface.
