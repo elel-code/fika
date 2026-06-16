@@ -1407,11 +1407,13 @@ fn item_name_label_view(display_name: &str, selected: bool, height: f32) -> Div 
                 .w_full()
                 .max_w_full()
                 .min_w_0()
+                .overflow_hidden()
                 .text_sm()
                 .line_height(px(ITEM_NAME_LINE_HEIGHT))
                 .text_center()
                 .whitespace_normal()
                 .line_clamp(max_lines)
+                .text_ellipsis()
                 .text_color(text_color)
                 .child(display_name),
         )
