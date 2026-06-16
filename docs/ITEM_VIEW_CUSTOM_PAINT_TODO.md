@@ -152,7 +152,7 @@ This is the active task board for the GPUI item view custom-paint migration.
 
 - [ ] No behavior regression in rename, selection, context menu, item DnD,
   places DnD, and external drop paths.
-- [ ] `cargo test` stays green.
+- [x] `cargo test` stays green.
 - [ ] Perf logs show resize steady path stays sub-millisecond for item snapshot
   conversion, no new large `file-grid build` regression, and Details custom
   visual/text-shape cost is visible separately through `[fika details-visual]`
@@ -161,7 +161,7 @@ This is the active task board for the GPUI item view custom-paint migration.
 - [ ] Any custom paint expansion keeps Dolphin's model/controller/painter split
   and is retained only when perf is neutral or better than the GPUI built-in
   path for that surface.
-- [ ] Custom paint path is used by non-renaming Compact and Icons base/image
+- [x] Custom paint path is used by non-renaming Compact and Icons base/image
   visuals.
-- [ ] Non-renaming Compact/Icons items no longer require per-item GPUI visual
-  children after P9.
+- [x] Non-renaming Compact/Icons items no longer require per-item GPUI visual
+  children after P9a; temporary drag shells remain until P9b.
