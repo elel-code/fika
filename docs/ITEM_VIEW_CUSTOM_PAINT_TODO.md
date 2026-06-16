@@ -168,6 +168,8 @@ This is the active task board for the GPUI item view custom-paint migration.
   no public custom-element drag-start hook.
 - [x] Document the remaining item-local surfaces: Compact/Icons drag-start
   shells, Details drag-start row shells, and the rename text-editing overlay.
+- [x] Add `docs/ITEM_VIEW_RUNTIME_SMOKE.md` with the runtime DnD, rename, and
+  perf-log checklist for post-P11e verification.
 - [ ] Run a runtime DnD smoke pass after P11e: item drag, item-to-directory
   drop, pane drop, Places drop/reorder, external path drop, and rename caret
   click in Compact, Icons, and Details.
