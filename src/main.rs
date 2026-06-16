@@ -93,6 +93,10 @@ use ui::filter_bar::{
 use ui::icons::{FileIconCache, FileIconSnapshot};
 use ui::item_view::{ITEM_VIEW_SCROLLBAR_RESERVED_EXTENT, ItemViewScrollState};
 use ui::location_bar::{LocationDraft, LocationEditMetrics};
+use ui::network_auth::{
+    NetworkAuthDraft, NetworkAuthField, NetworkAuthInputResult, apply_network_auth_input_action,
+    network_auth_overlay,
+};
 use ui::pane::{
     MIN_PANE_WIDTH, PANE_SPLITTER_WIDTH, PaneSnapshot, PaneSplitterDrag, normalize_pane_ratios,
     pane_close_icon_snapshot, pane_row_width_from_child_bounds, pane_split_icon_snapshot,
@@ -324,6 +328,7 @@ pub(crate) struct FikaApp {
     location_draft: Option<LocationDraft>,
     location_edit_metrics: HashMap<PaneId, LocationEditMetrics>,
     place_draft: Option<PlaceDraft>,
+    network_auth_draft: Option<NetworkAuthDraft>,
     chooser: Option<ChooserState>,
     listing_worker: ListingWorker,
     _keystroke_subscription: Option<gpui::Subscription>,
@@ -403,6 +408,7 @@ impl FikaApp {
             location_draft: None,
             location_edit_metrics: HashMap::new(),
             place_draft: None,
+            network_auth_draft: None,
             chooser,
             listing_worker: ListingWorker::with_result_notifier(listing_results_tx),
             _keystroke_subscription: None,
@@ -1231,6 +1237,7 @@ impl FikaApp {
             DirectoryListerEvent::ListingCompleted { .. }
                 | DirectoryListerEvent::CurrentDirectoryRemoved { .. }
                 | DirectoryListerEvent::Error { .. }
+                | DirectoryListerEvent::NetworkAuthRequired { .. }
         ) {
             return false;
         }
@@ -1271,6 +1278,18 @@ impl FikaApp {
                     self.set_pane_status(
                         *pane_id,
                         format!("Cannot load {}: {message}", path.display()),
+                    );
+                }
+            }
+            DirectoryListerEvent::NetworkAuthRequired { pane_id, path, .. } => {
+                if self
+                    .pane_statuses
+                    .get(pane_id)
+                    .is_some_and(|status| pane_loading_status_matches_path(status, path))
+                {
+                    self.set_pane_status(
+                        *pane_id,
+                        format!("Authentication required for {}", path.display()),
                     );
                 }
             }
@@ -1915,7 +1934,10 @@ impl FikaApp {
                 .map(|has_items| self.set_trash_has_items(has_items))
                 .unwrap_or(false),
             DirectoryListerEvent::CurrentDirectoryRemoved { .. }
-            | DirectoryListerEvent::Error { .. } => self.refresh_trash_emptiness_state(),
+            | DirectoryListerEvent::Error { .. }
+            | DirectoryListerEvent::NetworkAuthRequired { .. } => {
+                self.refresh_trash_emptiness_state()
+            }
             DirectoryListerEvent::LoadingStarted { .. } => false,
         }
     }
@@ -2470,6 +2492,7 @@ impl FikaApp {
         self.clear_rename_draft_for_pane(pane_id);
         self.clear_location_draft_for_pane(pane_id);
         self.clear_place_draft_for_pane(pane_id);
+        self.clear_network_auth_draft_for_pane(pane_id);
     }
 
     fn begin_pane_loading_transition(
@@ -2528,6 +2551,7 @@ impl FikaApp {
         self.clear_rename_draft_for_pane(pane_id);
         self.clear_location_draft_for_pane(pane_id);
         self.clear_place_draft_for_pane(pane_id);
+        self.clear_network_auth_draft_for_pane(pane_id);
     }
 
     fn clear_pane_lifecycle_state(&mut self, pane_id: PaneId) {
@@ -3469,6 +3493,16 @@ impl FikaApp {
         clear_place_draft_state_for_pane(&mut self.place_draft, pane_id);
     }
 
+    fn clear_network_auth_draft_for_pane(&mut self, pane_id: PaneId) {
+        if self
+            .network_auth_draft
+            .as_ref()
+            .is_some_and(|draft| draft.pane_id == pane_id)
+        {
+            self.network_auth_draft = None;
+        }
+    }
+
     fn clear_application_chooser_for_pane(&mut self, pane_id: PaneId) {
         if self
             .application_chooser
@@ -3574,6 +3608,27 @@ impl FikaApp {
             PlaceDraftInputResult::Commit => self.commit_place_draft(),
             PlaceDraftInputResult::Edited => {}
             PlaceDraftInputResult::Ignore => return false,
+        }
+        true
+    }
+
+    fn handle_network_auth_draft_keystroke(&mut self, keystroke: &gpui::Keystroke) -> bool {
+        if self.network_auth_draft.is_none() {
+            return false;
+        }
+
+        let result = {
+            let Some(draft) = &mut self.network_auth_draft else {
+                return false;
+            };
+            apply_network_auth_input_action(draft, place_input_action(keystroke))
+        };
+
+        match result {
+            NetworkAuthInputResult::Cancel => self.dismiss_network_auth_draft(),
+            NetworkAuthInputResult::Commit => self.commit_network_auth_draft(),
+            NetworkAuthInputResult::Edited => {}
+            NetworkAuthInputResult::Ignore => {}
         }
         true
     }
@@ -5916,6 +5971,36 @@ impl FikaApp {
         set_place_draft_state_focus(&mut self.place_draft, field);
     }
 
+    pub(crate) fn dismiss_network_auth_draft(&mut self) {
+        if let Some(draft) = self.network_auth_draft.take() {
+            self.set_pane_status(draft.pane_id, "Network authentication cancelled");
+        }
+    }
+
+    pub(crate) fn set_network_auth_draft_focus(&mut self, field: NetworkAuthField) {
+        if let Some(draft) = &mut self.network_auth_draft {
+            draft.focus = field;
+        }
+    }
+
+    pub(crate) fn commit_network_auth_draft(&mut self) {
+        let Some(draft) = self.network_auth_draft.take() else {
+            return;
+        };
+        if let Err(err) = fika_core::remember_network_auth(&draft.uri, draft.to_auth()) {
+            self.set_pane_status(draft.pane_id, err.to_string());
+            return;
+        }
+        let pane_still_at_path = self
+            .panes
+            .pane(draft.pane_id)
+            .is_some_and(|pane| pane.current_dir == draft.path);
+        if pane_still_at_path {
+            self.set_pane_status(draft.pane_id, format!("Connecting to {}", draft.uri));
+            self.reload_pane(draft.pane_id);
+        }
+    }
+
     pub(crate) fn dismiss_properties_dialog(&mut self) {
         self.properties_dialog = None;
     }
@@ -6981,6 +7066,9 @@ impl FikaApp {
         if self.application_chooser.is_some() {
             return self.handle_application_chooser_keystroke(&event.keystroke, cx);
         }
+        if self.handle_network_auth_draft_keystroke(&event.keystroke) {
+            return true;
+        }
         if event.keystroke.key.eq_ignore_ascii_case("escape") && self.context_menu.is_some() {
             self.dismiss_context_menu();
             return true;
@@ -7099,6 +7187,32 @@ impl FikaApp {
         let finishes_current_loading = self.event_finishes_current_loading(&event);
         self.update_loading_state(&event, previous_summary);
         self.finish_current_loading_status(&event, finishes_current_loading);
+        if let DirectoryListerEvent::NetworkAuthRequired {
+            pane_id,
+            path,
+            uri,
+            message,
+            default_username,
+            default_domain,
+            ..
+        } = &event
+        {
+            let still_current = self.panes.pane(*pane_id).is_some_and(|pane| {
+                event.matches_target(pane.id, pane.generation, &pane.current_dir)
+            });
+            if still_current {
+                self.network_auth_draft = Some(NetworkAuthDraft::new(
+                    *pane_id,
+                    path.clone(),
+                    uri.clone(),
+                    message.clone(),
+                    default_username.clone(),
+                    default_domain.clone(),
+                ));
+                self.set_pane_status(*pane_id, format!("Authentication required for {uri}"));
+            }
+            return;
+        }
         if let DirectoryListerEvent::CurrentDirectoryRemoved { pane_id, path, .. } = &event {
             self.listing_worker.remove_cached_directory(path);
             self.log_listing_cache_debug(&format!("current-directory-removed {}", path.display()));
@@ -7412,6 +7526,7 @@ impl Render for FikaApp {
         let trash_conflict_dialog = self.trash_conflict_dialog.clone();
         let application_chooser = self.application_chooser.clone();
         let place_draft = self.place_draft.clone();
+        let network_auth_draft = self.network_auth_draft.clone();
         let clipboard_available = self.clipboard.is_some();
         let context_menu_icons = context_menu
             .as_ref()
@@ -7609,6 +7724,9 @@ impl Render for FikaApp {
             })
             .when_some(place_draft, |root, draft| {
                 root.child(place_draft_overlay(draft, cx))
+            })
+            .when_some(network_auth_draft, |root, draft| {
+                root.child(network_auth_overlay(draft, cx))
             })
     }
 }
@@ -11793,6 +11911,115 @@ text/plain=viewer.desktop;\n",
     }
 
     #[test]
+    fn network_auth_event_opens_prompt_for_current_pane() {
+        let current = PathBuf::from("smb://server/share/");
+        let mut app = test_app_with_entries(current.to_str().unwrap(), &[]);
+        let pane_id = app.panes.focused().unwrap();
+        app.reload_pane(pane_id);
+        let loading = app.loading_panes.get(&pane_id).unwrap().clone();
+
+        app.apply_event(DirectoryListerEvent::NetworkAuthRequired {
+            pane_id,
+            generation: loading.key.generation,
+            request_serial: loading.key.request_serial,
+            path: current.clone(),
+            uri: "smb://server/share/".to_string(),
+            message: "Password required".to_string(),
+            default_username: Some("yk".to_string()),
+            default_domain: Some("WORKGROUP".to_string()),
+        });
+
+        let draft = app.network_auth_draft.as_ref().unwrap();
+        assert_eq!(draft.pane_id, pane_id);
+        assert_eq!(draft.path, current);
+        assert_eq!(draft.uri, "smb://server/share/");
+        assert_eq!(draft.username, "yk");
+        assert_eq!(draft.domain, "WORKGROUP");
+        assert_eq!(draft.focus, NetworkAuthField::Password);
+        assert!(!app.loading_panes.contains_key(&pane_id));
+        assert_eq!(
+            app.status_message_for_pane(pane_id),
+            "Authentication required for smb://server/share/"
+        );
+    }
+
+    #[test]
+    fn stale_network_auth_event_does_not_open_prompt() {
+        let current = PathBuf::from("smb://server/share/");
+        let mut app = test_app_with_entries(current.to_str().unwrap(), &[]);
+        let pane_id = app.panes.focused().unwrap();
+        app.reload_pane(pane_id);
+        let loading = app.loading_panes.get(&pane_id).unwrap().clone();
+
+        app.apply_event(DirectoryListerEvent::NetworkAuthRequired {
+            pane_id,
+            generation: Generation(loading.key.generation.0 + 1),
+            request_serial: loading.key.request_serial,
+            path: current,
+            uri: "smb://server/share/".to_string(),
+            message: "Password required".to_string(),
+            default_username: None,
+            default_domain: None,
+        });
+
+        assert!(app.network_auth_draft.is_none());
+        assert!(app.loading_panes.contains_key(&pane_id));
+    }
+
+    #[test]
+    fn committing_network_auth_prompt_retries_listing() {
+        let current = PathBuf::from("smb://server/share/");
+        let mut app = test_app_with_entries(current.to_str().unwrap(), &[]);
+        let pane_id = app.panes.focused().unwrap();
+        app.network_auth_draft = Some(NetworkAuthDraft::new(
+            pane_id,
+            current.clone(),
+            "smb://server/share/".to_string(),
+            "Password required".to_string(),
+            Some("yk".to_string()),
+            Some("WORKGROUP".to_string()),
+        ));
+        let draft = app.network_auth_draft.as_mut().unwrap();
+        draft.password = "secret".to_string();
+
+        app.commit_network_auth_draft();
+
+        assert!(app.network_auth_draft.is_none());
+        assert!(app.loading_panes.contains_key(&pane_id));
+        assert_eq!(
+            app.status_message_for_pane(pane_id),
+            "Reloading smb://server/share/"
+        );
+        assert!(fika_core::forget_network_auth("smb://server/share/").is_ok());
+    }
+
+    #[test]
+    fn network_auth_prompt_consumes_shortcuts_without_focused_pane_match() {
+        let current = PathBuf::from("smb://server/share/");
+        let mut app = test_app_with_entries(current.to_str().unwrap(), &[]);
+        let pane_id = app.panes.focused().unwrap();
+        let other_pane = app.panes.split(pane_id).unwrap();
+        app.panes.focus(other_pane);
+        app.network_auth_draft = Some(NetworkAuthDraft::new(
+            pane_id,
+            current,
+            "smb://server/share/".to_string(),
+            "Password required".to_string(),
+            None,
+            None,
+        ));
+
+        assert!(app.handle_network_auth_draft_keystroke(&gpui::Keystroke::parse("f5").unwrap()));
+        assert!(app.network_auth_draft.is_some());
+        assert!(!app.loading_panes.contains_key(&other_pane));
+
+        assert!(
+            app.handle_network_auth_draft_keystroke(&gpui::Keystroke::parse("escape").unwrap())
+        );
+        assert!(app.network_auth_draft.is_none());
+    }
+
+    #[test]
     fn orphan_loading_cleanup_clears_transient_status() {
         let initial = test_dir("status-orphan-initial");
         let target = test_dir("status-orphan-target");
@@ -14488,6 +14715,7 @@ text/plain=viewer.desktop;\n",
             location_draft: None,
             location_edit_metrics: HashMap::new(),
             place_draft: None,
+            network_auth_draft: None,
             chooser: None,
             listing_worker: ListingWorker::new(),
             _keystroke_subscription: None,

@@ -68,11 +68,11 @@ pub use core::model::{
 pub use core::network::{
     DOLPHIN_REMOTE_ROOT_URI, NETWORK_ROOT_ICON, NETWORK_ROOT_LABEL, NETWORK_ROOT_URI, NetworkAuth,
     NetworkFilesystemKind, NetworkLocation, NetworkScanError, NetworkUrlError,
-    classify_network_filesystem, filesystem_type_is_remote, is_network_path, is_network_root_path,
-    is_network_root_uri, is_supported_network_scheme, network_child_path, network_parent_path,
-    network_path_display_name, network_path_from_uri, network_root_location, network_root_path,
-    network_uri_from_path, normalize_network_uri, parse_network_location,
-    read_network_entry_batches_sync_cancellable, supported_network_schemes,
+    classify_network_filesystem, filesystem_type_is_remote, forget_network_auth, is_network_path,
+    is_network_root_path, is_network_root_uri, is_supported_network_scheme, network_child_path,
+    network_parent_path, network_path_display_name, network_path_from_uri, network_root_location,
+    network_root_path, network_uri_from_path, normalize_network_uri, parse_network_location,
+    read_network_entry_batches_sync_cancellable, remember_network_auth, supported_network_schemes,
 };
 pub use core::operation_runtime::{
     OperationController, OperationId, OperationRuntime, OperationRuntimeError, OperationSnapshot,

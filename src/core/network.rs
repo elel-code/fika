@@ -1,9 +1,10 @@
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::Duration;
 
@@ -77,6 +78,8 @@ pub enum NetworkScanError {
     AuthenticationRequired {
         uri: String,
         message: String,
+        default_username: Option<String>,
+        default_domain: Option<String>,
     },
     Gio {
         uri: String,
@@ -90,7 +93,7 @@ impl fmt::Display for NetworkScanError {
         match self {
             Self::Url(error) => write!(f, "{error}"),
             Self::Cancelled => write!(f, "network scan was cancelled"),
-            Self::AuthenticationRequired { uri, message } => {
+            Self::AuthenticationRequired { uri, message, .. } => {
                 write!(f, "authentication required for {uri}: {message}")
             }
             Self::Gio {
@@ -119,6 +122,13 @@ pub struct NetworkAuth {
     pub password: Option<String>,
     pub anonymous: bool,
     pub remember: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct NetworkAuthPrompt {
+    message: String,
+    default_username: Option<String>,
+    default_domain: Option<String>,
 }
 
 impl fmt::Debug for NetworkAuth {
@@ -174,6 +184,24 @@ pub fn network_uri_from_path(path: &Path) -> Option<String> {
 
 pub fn is_network_path(path: &Path) -> bool {
     network_uri_from_path(path).is_some()
+}
+
+pub fn remember_network_auth(uri: &str, auth: NetworkAuth) -> Result<(), NetworkUrlError> {
+    let key = network_auth_key(uri)?;
+    network_auth_store()
+        .lock()
+        .expect("network auth store poisoned")
+        .insert(key, auth);
+    Ok(())
+}
+
+pub fn forget_network_auth(uri: &str) -> Result<(), NetworkUrlError> {
+    let key = network_auth_key(uri)?;
+    network_auth_store()
+        .lock()
+        .expect("network auth store poisoned")
+        .remove(&key);
+    Ok(())
 }
 
 pub fn is_network_root_uri(uri: &str) -> bool {
@@ -522,11 +550,23 @@ fn mount_network_uri_if_needed(
     }
 
     let mount_operation = gio::MountOperation::new();
-    let auth_message = Rc::new(RefCell::new(None::<String>));
-    let auth_message_for_callback = auth_message.clone();
+    let auth_prompt = Rc::new(RefCell::new(None::<NetworkAuthPrompt>));
+    let auth_prompt_for_callback = auth_prompt.clone();
+    let auth_attempted = Rc::new(RefCell::new(false));
+    let auth_attempted_for_callback = auth_attempted.clone();
+    let uri_for_callback = uri.to_string();
     mount_operation.connect_ask_password(
         move |operation, message, default_user, default_domain, _flags| {
-            *auth_message_for_callback.borrow_mut() = Some(network_auth_required_message(
+            if !*auth_attempted_for_callback.borrow()
+                && let Some(auth) = stored_network_auth_for_uri(&uri_for_callback)
+            {
+                apply_network_auth_to_mount_operation(operation, &auth);
+                *auth_attempted_for_callback.borrow_mut() = true;
+                operation.reply(gio::MountOperationResult::Handled);
+                return;
+            }
+            let _ = forget_network_auth(&uri_for_callback);
+            *auth_prompt_for_callback.borrow_mut() = Some(network_auth_required_prompt(
                 message,
                 default_user,
                 default_domain,
@@ -576,10 +616,12 @@ fn mount_network_uri_if_needed(
             operation: "mount",
             message: "mount finished without a result".to_string(),
         })?;
-    if let Some(message) = auth_message.borrow_mut().take() {
+    if let Some(prompt) = auth_prompt.borrow_mut().take() {
         return Err(NetworkScanError::AuthenticationRequired {
             uri: uri.to_string(),
-            message,
+            message: prompt.message,
+            default_username: prompt.default_username,
+            default_domain: prompt.default_domain,
         });
     }
     mount_result.map_err(|err| network_gio_error(uri, "mount", err))
@@ -657,25 +699,85 @@ fn push_unique_network_location(locations: &mut Vec<NetworkLocation>, location: 
     }
 }
 
-fn network_auth_required_message(
+fn network_auth_store() -> &'static Mutex<HashMap<String, NetworkAuth>> {
+    static STORE: OnceLock<Mutex<HashMap<String, NetworkAuth>>> = OnceLock::new();
+    STORE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn stored_network_auth_for_uri(uri: &str) -> Option<NetworkAuth> {
+    let key = network_auth_key(uri).ok()?;
+    network_auth_store()
+        .lock()
+        .expect("network auth store poisoned")
+        .get(&key)
+        .cloned()
+}
+
+fn network_auth_key(uri: &str) -> Result<String, NetworkUrlError> {
+    let normalized = normalize_network_uri(uri)?;
+    if normalized == NETWORK_ROOT_URI {
+        return Ok(normalized);
+    }
+    let (scheme, rest) = split_scheme(&normalized)?;
+    let after_slashes = rest
+        .strip_prefix("//")
+        .ok_or_else(|| NetworkUrlError::MissingAuthority(scheme.to_string()))?;
+    let (authority, path) = after_slashes
+        .split_once('/')
+        .map_or((after_slashes, ""), |(authority, path)| (authority, path));
+    let path_without_tail = path
+        .split(['?', '#'])
+        .next()
+        .unwrap_or(path)
+        .trim_matches('/');
+    let share_segment = path_without_tail
+        .split('/')
+        .find(|segment| !segment.is_empty());
+
+    match (scheme, share_segment) {
+        ("smb" | "nfs", Some(share)) => Ok(format!("{scheme}://{authority}/{share}/")),
+        _ => Ok(format!("{scheme}://{authority}/")),
+    }
+}
+
+fn apply_network_auth_to_mount_operation(operation: &gio::MountOperation, auth: &NetworkAuth) {
+    operation.set_anonymous(auth.anonymous);
+    operation.set_username(auth.username.as_deref());
+    operation.set_domain(auth.domain.as_deref());
+    operation.set_password(auth.password.as_deref());
+    operation.set_password_save(if auth.remember {
+        gio::PasswordSave::ForSession
+    } else {
+        gio::PasswordSave::Never
+    });
+}
+
+fn network_auth_required_prompt(
     message: &str,
     default_user: &str,
     default_domain: &str,
-) -> String {
+) -> NetworkAuthPrompt {
     let mut parts = Vec::new();
     if let Some(message) = non_empty_string(message) {
         parts.push(message);
     }
-    if let Some(default_user) = non_empty_string(default_user) {
+    let default_username = non_empty_string(default_user);
+    let default_domain = non_empty_string(default_domain);
+    if let Some(default_user) = default_username.as_deref() {
         parts.push(format!("user: {default_user}"));
     }
-    if let Some(default_domain) = non_empty_string(default_domain) {
+    if let Some(default_domain) = default_domain.as_deref() {
         parts.push(format!("domain: {default_domain}"));
     }
-    if parts.is_empty() {
+    let message = if parts.is_empty() {
         "authentication required".to_string()
     } else {
         parts.join("; ")
+    };
+    NetworkAuthPrompt {
+        message,
+        default_username,
+        default_domain,
     }
 }
 
@@ -697,6 +799,8 @@ fn network_gio_error(
         NetworkScanError::AuthenticationRequired {
             uri: uri.to_string(),
             message,
+            default_username: None,
+            default_domain: None,
         }
     } else {
         NetworkScanError::Gio {
@@ -912,12 +1016,53 @@ mod tests {
     #[test]
     fn auth_required_message_includes_prompt_defaults_without_passwords() {
         assert_eq!(
-            network_auth_required_message("Password required", "yk", "WORKGROUP"),
-            "Password required; user: yk; domain: WORKGROUP"
+            network_auth_required_prompt("Password required", "yk", "WORKGROUP"),
+            NetworkAuthPrompt {
+                message: "Password required; user: yk; domain: WORKGROUP".to_string(),
+                default_username: Some("yk".to_string()),
+                default_domain: Some("WORKGROUP".to_string()),
+            }
         );
         assert_eq!(
-            network_auth_required_message("", "", ""),
-            "authentication required"
+            network_auth_required_prompt("", "", ""),
+            NetworkAuthPrompt {
+                message: "authentication required".to_string(),
+                default_username: None,
+                default_domain: None,
+            }
+        );
+    }
+
+    #[test]
+    fn network_auth_store_keys_credentials_by_mount_root() {
+        let uri = "smb://server/share/folder/report.txt";
+        let auth = NetworkAuth {
+            username: Some("yk".to_string()),
+            domain: Some("WORKGROUP".to_string()),
+            password: Some("secret".to_string()),
+            anonymous: false,
+            remember: false,
+        };
+
+        remember_network_auth(uri, auth.clone()).unwrap();
+
+        assert_eq!(
+            network_auth_key("smb://server/share/other"),
+            Ok("smb://server/share/".to_string())
+        );
+        assert_eq!(
+            stored_network_auth_for_uri("smb://server/share/other"),
+            Some(auth)
+        );
+        forget_network_auth("smb://server/share/").unwrap();
+        assert_eq!(stored_network_auth_for_uri(uri), None);
+    }
+
+    #[test]
+    fn network_auth_store_keys_host_scoped_protocols_by_authority() {
+        assert_eq!(
+            network_auth_key("sftp://user@example.test/home/yk"),
+            Ok("sftp://user@example.test/".to_string())
         );
     }
 }

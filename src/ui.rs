@@ -10,6 +10,7 @@ pub(crate) mod filter_bar;
 pub(crate) mod icons;
 pub(crate) mod item_view;
 pub(crate) mod location_bar;
+pub(crate) mod network_auth;
 pub(crate) mod pane;
 pub(crate) mod place_draft;
 pub(crate) mod places;

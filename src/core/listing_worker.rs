@@ -547,6 +547,22 @@ fn retarget_listing_event(
             path: target.path.clone(),
             message: message.clone(),
         },
+        DirectoryListerEvent::NetworkAuthRequired {
+            uri,
+            message,
+            default_username,
+            default_domain,
+            ..
+        } => DirectoryListerEvent::NetworkAuthRequired {
+            pane_id: target.pane_id,
+            generation: target.generation,
+            request_serial: target.request_serial,
+            path: target.path.clone(),
+            uri: uri.clone(),
+            message: message.clone(),
+            default_username: default_username.clone(),
+            default_domain: default_domain.clone(),
+        },
     }
 }
 
@@ -568,7 +584,8 @@ fn append_listing_results_for_pane(
         match event {
             DirectoryListerEvent::ListingRefreshed { .. }
             | DirectoryListerEvent::CurrentDirectoryRemoved { .. }
-            | DirectoryListerEvent::Error { .. } => {
+            | DirectoryListerEvent::Error { .. }
+            | DirectoryListerEvent::NetworkAuthRequired { .. } => {
                 results.clear();
                 results.push(event);
             }
@@ -649,6 +666,12 @@ pub fn update_loading_state_for_event(
             ..
         }
         | DirectoryListerEvent::Error {
+            pane_id,
+            generation,
+            request_serial,
+            ..
+        }
+        | DirectoryListerEvent::NetworkAuthRequired {
             pane_id,
             generation,
             request_serial,

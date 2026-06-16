@@ -2,7 +2,9 @@ use super::entries::{
     Entry, read_entries_sync_cancellable, read_entry_batches_sync_cancellable, read_entry_sync,
 };
 use super::model::{DirectoryModel, DirectoryModelSignal};
-use super::network::{is_network_path, read_network_entry_batches_sync_cancellable};
+use super::network::{
+    NetworkScanError, is_network_path, read_network_entry_batches_sync_cancellable,
+};
 use super::pane::{Generation, PaneId, RequestSerial};
 use notify::event::{CreateKind, ModifyKind, RemoveKind, RenameMode};
 use notify::{Event, EventKind, RecursiveMode, Watcher};
@@ -79,6 +81,16 @@ pub enum DirectoryListerEvent {
         path: PathBuf,
         message: String,
     },
+    NetworkAuthRequired {
+        pane_id: PaneId,
+        generation: Generation,
+        request_serial: RequestSerial,
+        path: PathBuf,
+        uri: String,
+        message: String,
+        default_username: Option<String>,
+        default_domain: Option<String>,
+    },
 }
 
 impl DirectoryListerEvent {
@@ -91,7 +103,8 @@ impl DirectoryListerEvent {
             | Self::ListingRefreshed { pane_id, .. }
             | Self::ListingCompleted { pane_id, .. }
             | Self::CurrentDirectoryRemoved { pane_id, .. }
-            | Self::Error { pane_id, .. } => *pane_id,
+            | Self::Error { pane_id, .. }
+            | Self::NetworkAuthRequired { pane_id, .. } => *pane_id,
         }
     }
 
@@ -104,7 +117,8 @@ impl DirectoryListerEvent {
             | Self::ListingRefreshed { generation, .. }
             | Self::ListingCompleted { generation, .. }
             | Self::CurrentDirectoryRemoved { generation, .. }
-            | Self::Error { generation, .. } => *generation,
+            | Self::Error { generation, .. }
+            | Self::NetworkAuthRequired { generation, .. } => *generation,
         }
     }
 
@@ -117,7 +131,8 @@ impl DirectoryListerEvent {
             | Self::ListingRefreshed { request_serial, .. }
             | Self::ListingCompleted { request_serial, .. }
             | Self::CurrentDirectoryRemoved { request_serial, .. }
-            | Self::Error { request_serial, .. } => *request_serial,
+            | Self::Error { request_serial, .. }
+            | Self::NetworkAuthRequired { request_serial, .. } => *request_serial,
         }
     }
 
@@ -130,7 +145,8 @@ impl DirectoryListerEvent {
             | Self::ListingRefreshed { path, .. }
             | Self::ListingCompleted { path, .. }
             | Self::CurrentDirectoryRemoved { path, .. }
-            | Self::Error { path, .. } => path,
+            | Self::Error { path, .. }
+            | Self::NetworkAuthRequired { path, .. } => path,
         }
     }
 
@@ -154,6 +170,27 @@ pub struct DirectoryLister {
 struct ActiveListing {
     request_serial: RequestSerial,
     received_items: bool,
+}
+
+#[derive(Debug)]
+enum ListingReadError {
+    Io(std::io::Error),
+    Network(NetworkScanError),
+}
+
+impl std::fmt::Display for ListingReadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Io(err) => write!(f, "{err}"),
+            Self::Network(err) => write!(f, "{err}"),
+        }
+    }
+}
+
+impl From<std::io::Error> for ListingReadError {
+    fn from(error: std::io::Error) -> Self {
+        Self::Io(error)
+    }
 }
 
 impl DirectoryLister {
@@ -342,7 +379,8 @@ impl DirectoryLister {
                 Vec::new()
             }
             DirectoryListerEvent::CurrentDirectoryRemoved { request_serial, .. }
-            | DirectoryListerEvent::Error { request_serial, .. } => {
+            | DirectoryListerEvent::Error { request_serial, .. }
+            | DirectoryListerEvent::NetworkAuthRequired { request_serial, .. } => {
                 self.clear_active_listing_for_serial(request_serial);
                 Vec::new()
             }
@@ -547,22 +585,7 @@ fn read_listing_events_cancellable(
         },
         Ok(None) => return None,
         Err(err) => {
-            if mode == LoadMode::Reload && !is_network_path(&path) && !path.exists() {
-                DirectoryListerEvent::CurrentDirectoryRemoved {
-                    pane_id,
-                    generation,
-                    request_serial,
-                    path: path.clone(),
-                }
-            } else {
-                DirectoryListerEvent::Error {
-                    pane_id,
-                    generation,
-                    request_serial,
-                    path: path.clone(),
-                    message: err.to_string(),
-                }
-            }
+            listing_error_event(pane_id, generation, request_serial, path.clone(), mode, err)
         }
     };
     if is_cancelled() {
@@ -582,7 +605,7 @@ fn read_listing_events_cancellable(
 fn read_entries_for_listing(
     path: &Path,
     mut is_cancelled: impl FnMut() -> bool,
-) -> std::io::Result<Option<Vec<Entry>>> {
+) -> Result<Option<Vec<Entry>>, ListingReadError> {
     if is_network_path(path) {
         let mut entries = Vec::new();
         let Some(()) =
@@ -594,7 +617,7 @@ fn read_entries_for_listing(
         };
         Ok(Some(entries))
     } else {
-        read_entries_sync_cancellable(path, is_cancelled)
+        read_entries_sync_cancellable(path, is_cancelled).map_err(ListingReadError::Io)
     }
 }
 
@@ -603,12 +626,58 @@ fn read_entry_batches_for_listing(
     batch_size: usize,
     is_cancelled: impl FnMut() -> bool,
     on_batch: impl FnMut(Vec<Entry>),
-) -> std::io::Result<Option<()>> {
+) -> Result<Option<()>, ListingReadError> {
     if is_network_path(path) {
         read_network_entry_batches_sync_cancellable(path, batch_size, is_cancelled, on_batch)
-            .map_err(|err| std::io::Error::other(err.to_string()))
+            .map_err(ListingReadError::Network)
     } else {
         read_entry_batches_sync_cancellable(path, batch_size, is_cancelled, on_batch)
+            .map_err(ListingReadError::Io)
+    }
+}
+
+fn listing_error_event(
+    pane_id: PaneId,
+    generation: Generation,
+    request_serial: RequestSerial,
+    path: PathBuf,
+    mode: LoadMode,
+    error: ListingReadError,
+) -> DirectoryListerEvent {
+    if let ListingReadError::Network(NetworkScanError::AuthenticationRequired {
+        uri,
+        message,
+        default_username,
+        default_domain,
+    }) = error
+    {
+        return DirectoryListerEvent::NetworkAuthRequired {
+            pane_id,
+            generation,
+            request_serial,
+            path,
+            uri,
+            message,
+            default_username,
+            default_domain,
+        };
+    }
+
+    if mode == LoadMode::Reload && !is_network_path(&path) && !path.exists() {
+        DirectoryListerEvent::CurrentDirectoryRemoved {
+            pane_id,
+            generation,
+            request_serial,
+            path,
+        }
+    } else {
+        DirectoryListerEvent::Error {
+            pane_id,
+            generation,
+            request_serial,
+            path,
+            message: error.to_string(),
+        }
     }
 }
 
@@ -677,22 +746,7 @@ fn read_listing_events_streaming_cancellable(
             if is_cancelled() {
                 return None;
             }
-            let event = if mode == LoadMode::Reload && !is_network_path(&path) && !path.exists() {
-                DirectoryListerEvent::CurrentDirectoryRemoved {
-                    pane_id,
-                    generation,
-                    request_serial,
-                    path,
-                }
-            } else {
-                DirectoryListerEvent::Error {
-                    pane_id,
-                    generation,
-                    request_serial,
-                    path,
-                    message: err.to_string(),
-                }
-            };
+            let event = listing_error_event(pane_id, generation, request_serial, path, mode, err);
             on_events(vec![event]);
             Some(())
         }

@@ -79,7 +79,7 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
 ### Network 网络文件系统
 - [x] Backend 边界决策：GVfs/GIO 后端。`src/core/network.rs` 支持 URL scheme 解析、`NetworkLocation` 模型、`NetworkAuth`、GVfs filesystem type 分类、`network:///` root 枚举和 remote URI listing。
 - [x] Saved network bookmarks 和 Add Network Drive UI。
-- [~] 认证交互、取消、结构化错误报告。GVfs scan cancellation 和结构化 auth/GIO error 已接入；in-app credential prompt 仍需后续实现。
+- [x] 认证交互、取消、结构化错误报告。GVfs scan cancellation、结构化 auth/GIO error、in-app credential prompt、内存凭据重试已接入。
 - [x] `DirectoryLister` 集成 network scan，无 pane 闪烁。
 - [x] Remote/GVfs metadata 降级（MIME、thumbnail、size、watcher）。
 - [x] Remote 位置的文件操作和 DnD 语义：remote URI 可导航/复制，local file ops、DnD transfer、trash/rename/create/paste 和 privileged helper 会显式拒绝 remote path。
