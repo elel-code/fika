@@ -181,6 +181,18 @@ This is the active task board for the GPUI item view custom-paint migration.
   Details resize/fullscreen paths before expanding custom paint or attempting
   another shell-removal slice.
 
+## P13: Renderer Decision Gate
+
+- [ ] Before each new custom-painted surface, identify the Dolphin-style model,
+  layouter, controller/hit-test, and painter owners.
+- [ ] Keep GPUI built-ins for surfaces where GPUI remains faster or owns a
+  required platform contract, while still feeding them from retained model data.
+- [ ] Expand custom paint only when runtime logs show neutral or better steady
+  behavior and the migration keeps behavior-complete drag/drop, rename, and
+  selection paths.
+- [ ] Record the renderer decision and perf evidence in the relevant reference
+  doc or TODO entry before removing any existing GPUI surface.
+
 ## Acceptance Gates
 
 - [~] No behavior regression in rename, selection, context menu, item DnD,

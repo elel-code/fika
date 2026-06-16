@@ -37,6 +37,28 @@ Decision rule:
   for a surface, keep the Dolphin-aligned retained model and render that surface
   with GPUI built-ins until there is stronger evidence or a narrower migration.
 
+## Architecture Contract
+
+The migration is model-first. Renderer choice is deliberately replaceable.
+
+| Dolphin concept | Fika owner | Constraint |
+| --- | --- | --- |
+| `KFileItemModel` roles and item identity | `DirectoryModel`, `ItemId`, visible snapshots | GPUI elements must not define item identity or role state. |
+| `KItemListViewLayouter` geometry | pane layout projection, visible ranges, slot pools | Layout changes patch retained geometry instead of rebuilding business state. |
+| `KItemListController` hit testing and DnD state | viewport retained hit testing and `drag_drop` state | Painter code must not decide selection, menu, drop, or transfer behavior. |
+| `KItemListWidget` reuse | visual slot pools and retained paint snapshots | Slot ids are reusable visual instances, not model indexes. |
+| item painter | GPUI built-ins or custom GPUI painter over retained snapshots | Use the faster behavior-complete renderer for each surface. |
+
+Renderer policy:
+
+- Prefer GPUI built-ins where GPUI owns a hard platform contract, such as
+  text editing, public drag-start, or an image/cache path that outperforms a
+  custom layer.
+- Prefer custom paint only where retained snapshots reduce per-frame element
+  work and `FIKA_PERF_ITEM_VIEW=1` logs show neutral or better steady behavior.
+- Keep model, layout, interaction, and painter data split even when the current
+  renderer for a surface remains a GPUI `Div`, `img()`, or text editor subtree.
+
 ## Dolphin Reference
 
 Relevant Dolphin flow:
