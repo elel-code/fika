@@ -2151,26 +2151,24 @@ fn details_row(
 ) -> Stateful<Div> {
     let top = f32::from_bits(item.geometry.row_top);
     let row_height = f32::from_bits(item.geometry.row_height);
-    let content = item.content.as_ref();
-    let selected = item.visual.selected;
-    let selection_count = item.visual.selection_count;
-    let drop_target = item.visual.drop_target;
-    let item_id = item.item_id;
-    let path_for_mouse_down = content.path.as_ref().to_path_buf();
-    let path_for_menu = content.path.as_ref().to_path_buf();
-    let path_for_drag = content.path.clone();
-    let target_dir_for_drop = content.path.as_ref().to_path_buf();
-    let is_dir_for_click = content.is_dir;
-    let is_dir_for_menu = content.is_dir;
-    let is_dir_for_drop = content.is_dir;
+    let controller = DetailsRowControllerState::from_snapshot(&item);
+    let item_id = controller.item_id;
+    let selected = controller.selected;
+    let drop_target = controller.drop_target;
+    let path_for_mouse_down = controller.path.as_ref().to_path_buf();
+    let path_for_menu = controller.path.as_ref().to_path_buf();
+    let target_dir_for_drop = controller.path.as_ref().to_path_buf();
+    let is_dir_for_click = controller.is_dir;
+    let is_dir_for_menu = controller.is_dir;
+    let is_dir_for_drop = controller.is_dir;
 
     let drag_value = ItemDrag {
         pane_id,
-        path: path_for_drag,
-        name: content.name.clone(),
-        icon: content.icon.clone(),
+        path: controller.path.clone(),
+        name: controller.name.clone(),
+        icon: controller.icon.clone(),
         selected,
-        selection_count,
+        selection_count: controller.selection_count,
     };
     let app = cx.weak_entity();
 
@@ -2280,6 +2278,33 @@ fn details_row(
                 }),
             )
         })
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct DetailsRowControllerState {
+    item_id: ItemId,
+    path: Arc<Path>,
+    is_dir: bool,
+    name: Arc<str>,
+    icon: FileIconSnapshot,
+    selected: bool,
+    selection_count: usize,
+    drop_target: bool,
+}
+
+impl DetailsRowControllerState {
+    fn from_snapshot(item: &DetailsPaintSnapshot) -> Self {
+        Self {
+            item_id: item.item_id,
+            path: item.content.path.clone(),
+            is_dir: item.content.is_dir,
+            name: item.content.name.clone(),
+            icon: item.content.icon.clone(),
+            selected: item.visual.selected,
+            selection_count: item.visual.selection_count,
+            drop_target: item.visual.drop_target,
+        }
+    }
 }
 
 fn details_row_background(selected: bool, drop_target: bool, row_index: usize) -> Rgba {
@@ -4026,9 +4051,9 @@ fn drag_preview_label(name: &str, selected: bool, selection_count: usize) -> Str
 #[cfg(test)]
 mod tests {
     use super::{
-        DetailsItemSnapshot, DetailsLayoutMetrics, DetailsPaintContent, FileGridMode,
-        FileGridRenderSnapshot, FileGridSnapshot, ItemPaintContent, ItemPaintSlotCache,
-        ItemTileTextAlignment, VisibleItemSnapshot, details_columns,
+        DetailsItemSnapshot, DetailsLayoutMetrics, DetailsPaintContent, DetailsRowControllerState,
+        FileGridMode, FileGridRenderSnapshot, FileGridSnapshot, ItemPaintContent,
+        ItemPaintSlotCache, ItemTileTextAlignment, VisibleItemSnapshot, details_columns,
         details_visual_layer_element_id, details_visual_layer_items, display_text_layout,
         drag_preview_label, item_identity_element_id, item_image_element_id,
         item_image_layer_item_source_path, item_image_layer_items,
@@ -4553,6 +4578,67 @@ mod tests {
             }
             _ => panic!("expected modified text cell"),
         }
+    }
+
+    #[test]
+    fn details_visual_layer_items_project_trash_columns_and_drop_state() {
+        let mut cache = ItemPaintSlotCache::default();
+        let metrics = test_details_metrics();
+        let mut item = test_details_item(0, ItemId(7), "trash.txt");
+        item.drop_target = true;
+        item.original_path_label = "/home/yk/trash.txt".to_string();
+        item.deletion_time_label = "2026-06-17 10:00".to_string();
+        let projection =
+            cache.project_file_grid_snapshot(details_snapshot(vec![item], metrics, 260.0), None);
+        let FileGridRenderSnapshot::Details { items, .. } = projection.snapshot else {
+            panic!("expected details render snapshot");
+        };
+        let columns = details_columns(true, 260.0);
+        let visual_items = details_visual_layer_items(&items, &columns);
+
+        assert_eq!(visual_items[0].cells.len(), 5);
+        assert!(visual_items[0].drop_target);
+        match &visual_items[0].cells[3].content {
+            super::DetailsVisualCellContent::Text { text } => {
+                assert_eq!(text.as_ref(), "/home/yk/trash.txt");
+            }
+            _ => panic!("expected original path text cell"),
+        }
+        match &visual_items[0].cells[4].content {
+            super::DetailsVisualCellContent::Text { text } => {
+                assert_eq!(text.as_ref(), "2026-06-17 10:00");
+            }
+            _ => panic!("expected deletion time text cell"),
+        }
+    }
+
+    #[test]
+    fn details_row_controller_state_preserves_menu_drag_and_drop_fields() {
+        let mut cache = ItemPaintSlotCache::default();
+        let metrics = test_details_metrics();
+        let mut item = test_details_item(0, ItemId(7), "folder");
+        item.path = PathBuf::from("/tmp/folder");
+        item.is_dir = true;
+        item.selected = true;
+        item.selection_count = 4;
+        item.drop_target = true;
+        item.icon.fallback_marker = Arc::from("DIR");
+        let projection =
+            cache.project_file_grid_snapshot(details_snapshot(vec![item], metrics, 260.0), None);
+        let FileGridRenderSnapshot::Details { items, .. } = projection.snapshot else {
+            panic!("expected details render snapshot");
+        };
+
+        let controller = DetailsRowControllerState::from_snapshot(&items[0]);
+
+        assert_eq!(controller.item_id, ItemId(7));
+        assert_eq!(controller.path.as_ref(), Path::new("/tmp/folder"));
+        assert_eq!(controller.name.as_ref(), "folder");
+        assert!(controller.is_dir);
+        assert!(controller.selected);
+        assert_eq!(controller.selection_count, 4);
+        assert!(controller.drop_target);
+        assert_eq!(controller.icon.fallback_marker.as_ref(), "DIR");
     }
 
     fn icons_snapshot(items: Vec<VisibleItemSnapshot>) -> FileGridSnapshot {

@@ -351,6 +351,10 @@ After Compact/Icons are fully retained, move Details rows to the same model:
 - P11b moves row backgrounds, icons, and text cells into a content-level custom
   visual layer. Row shells remain as controller/drag surfaces until hit testing
   and drag-start can be safely moved without losing behavior or perf evidence.
+- P11c keeps controller data explicit for row shells: path, directory flag,
+  name/icon, selection count, and drop-target state are projected from retained
+  row snapshots and covered by tests. Trash-only columns are also projected into
+  visual layer cells.
 - row backgrounds, text cells, and icons are painted from retained row snapshots
 - column resize/sort/drop hit testing stays model-driven
 - inline rename in Details uses the same overlay boundary as Compact/Icons
@@ -361,6 +365,8 @@ Acceptance:
   selection/drop changes are visual-state patches.
 - P11b proves Details row visuals are projected into painter data and no longer
   build per-cell GPUI visual children.
+- P11c proves Trash visual columns survive the painter migration and row-shell
+  controller data still carries the menu/DnD/drop fields.
 - Details steady render no longer builds one visual row subtree per visible item
 - selection, context menu, drag/drop, and Trash columns retain behavior
 - Compact/Icons and Details share slot/image/text cache concepts where practical

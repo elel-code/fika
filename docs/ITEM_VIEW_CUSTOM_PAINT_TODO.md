@@ -134,8 +134,11 @@ This is the active task board for the GPUI item view custom-paint migration.
   existing GPUI row subtree as the render path.
 - [x] P11b: Paint row backgrounds, icons, and text cells from a content-level
   custom layer while retaining row shells for interaction and drag.
-- [ ] Preserve sort/menu/DnD/Trash column behavior.
-- [ ] Share image/text cache concepts with Compact/Icons where practical.
+- [x] P11c: Preserve menu/DnD/drop controller fields and Trash-specific visual
+  columns at the retained painter boundary.
+- [~] Share image/text cache concepts with Compact/Icons where practical:
+  Details now uses the same GPUI retained image cache path; text shaping is
+  still per-prepaint until a Details text-cache key is justified by perf logs.
 
 ## Acceptance Gates
 
