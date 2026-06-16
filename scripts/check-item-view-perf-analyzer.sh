@@ -37,6 +37,7 @@ EOF
     --file-grid-build-us 3000 \
     --static-visual-paint-us 1000 \
     --image-paint-us 1000 \
+    --custom-paint-us 1000 \
     "$tmpdir/complete.log" >/dev/null
 
 cat > "$tmpdir/missing-channels.log" <<'EOF'
@@ -81,6 +82,11 @@ fi
 
 if "$analyzer" --image-paint-us 50 "$tmpdir/complete.log" >/dev/null 2>&1; then
     echo "expected item image paint threshold violation to fail" >&2
+    exit 1
+fi
+
+if "$analyzer" --custom-paint-us 100 "$tmpdir/complete.log" >/dev/null 2>&1; then
+    echo "expected custom paint threshold violation to fail" >&2
     exit 1
 fi
 

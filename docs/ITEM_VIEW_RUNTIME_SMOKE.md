@@ -34,6 +34,7 @@ scripts/analyze-item-view-perf.sh \
   --steady-total-us 1000 \
   --static-visual-paint-us 3000 \
   --image-paint-us 3000 \
+  --custom-paint-us 3000 \
   /tmp/fika-item-view.log
 ```
 
@@ -95,9 +96,10 @@ Expected log properties:
 Use `scripts/analyze-item-view-perf.sh` as the first pass. It summarizes
 item-view phases, file-grid build maxima, Compact/Icons static custom visual
 activity, image paint activity when the directory exercises image-backed icons
-or thumbnails, Details visual/shape-cache activity, and retained interaction
-hitbox activity. Human review is still required for whether the exercised mode
-switches, resizes, fullscreen toggles, and DnD actions match this checklist.
+or thumbnails, aggregate custom paint maxima, Details visual/shape-cache
+activity, and retained interaction hitbox activity. Human review is still
+required for whether the exercised mode switches, resizes, fullscreen toggles,
+and DnD actions match this checklist.
 
 The analyzer itself can be checked with:
 

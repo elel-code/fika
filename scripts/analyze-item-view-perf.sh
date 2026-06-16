@@ -40,6 +40,9 @@ Options:
   --image-paint-us N
       Fail if any [fika item-image] paint exceeds N microseconds.
 
+  --custom-paint-us N
+      Fail if any custom paint channel exceeds N microseconds.
+
   -h, --help
       Show this help.
 EOF
@@ -55,6 +58,7 @@ steady_total_us=""
 file_grid_build_us=""
 static_visual_paint_us=""
 image_paint_us=""
+custom_paint_us=""
 log_path=""
 
 while [[ $# -gt 0 ]]; do
@@ -143,6 +147,18 @@ while [[ $# -gt 0 ]]; do
         --image-paint-us=*)
             image_paint_us="${1#--image-paint-us=}"
             ;;
+        --custom-paint-us)
+            if [[ $# -lt 2 || "$2" == --* ]]; then
+                echo "--custom-paint-us requires a numeric value" >&2
+                usage >&2
+                exit 2
+            fi
+            custom_paint_us="$2"
+            shift
+            ;;
+        --custom-paint-us=*)
+            custom_paint_us="${1#--custom-paint-us=}"
+            ;;
         -h|--help)
             usage
             exit 0
@@ -190,6 +206,11 @@ if [[ -n "$image_paint_us" && ! "$image_paint_us" =~ ^[0-9]+$ ]]; then
     exit 2
 fi
 
+if [[ -n "$custom_paint_us" && ! "$custom_paint_us" =~ ^[0-9]+$ ]]; then
+    echo "--custom-paint-us must be an integer microsecond value" >&2
+    exit 2
+fi
+
 awk \
     -v require_steady="$require_steady" \
     -v require_details="$require_details" \
@@ -200,7 +221,8 @@ awk \
     -v steady_total_limit="$steady_total_us" \
     -v file_grid_build_limit="$file_grid_build_us" \
     -v static_visual_paint_limit="$static_visual_paint_us" \
-    -v image_paint_limit="$image_paint_us" '
+    -v image_paint_limit="$image_paint_us" \
+    -v custom_paint_limit="$custom_paint_us" '
 function trim(value) {
     sub(/^[[:space:]]+/, "", value)
     sub(/[[:space:]]+$/, "", value)
@@ -240,6 +262,15 @@ function max_assign(array, key, value) {
 function fail(message) {
     print "fail: " message > "/dev/stderr"
     failures++
+}
+
+function record_custom_paint(prepaint, paint) {
+    custom_paint_count++
+    max_assign(single_max, "custom_paint_prepaint", prepaint)
+    max_assign(single_max, "custom_paint_paint", paint)
+    if (custom_paint_limit != "" && paint > custom_paint_limit + 0) {
+        custom_paint_over_limit++
+    }
 }
 
 function parse_required_list(list, target, label,    count, i, value) {
@@ -301,8 +332,10 @@ BEGIN {
         static_visual_modes[mode] = 1
     }
     paint = us_field("paint")
-    max_assign(single_max, "static_visual_prepaint", us_field("prepaint"))
+    prepaint = us_field("prepaint")
+    max_assign(single_max, "static_visual_prepaint", prepaint)
     max_assign(single_max, "static_visual_paint", paint)
+    record_custom_paint(prepaint, paint)
     if (static_visual_paint_limit != "" && paint > static_visual_paint_limit + 0) {
         static_visual_over_limit++
     }
@@ -312,8 +345,10 @@ BEGIN {
     image_count++
     note_mode(field("mode"))
     paint = us_field("paint")
-    max_assign(single_max, "image_prepaint", us_field("prepaint"))
+    prepaint = us_field("prepaint")
+    max_assign(single_max, "image_prepaint", prepaint)
     max_assign(single_max, "image_paint", paint)
+    record_custom_paint(prepaint, paint)
     if (image_paint_limit != "" && paint > image_paint_limit + 0) {
         image_over_limit++
     }
@@ -322,8 +357,11 @@ BEGIN {
 /^\[fika details-visual\]/ {
     details_visual_count++
     note_mode(field("mode"))
-    max_assign(single_max, "details_visual_prepaint", us_field("prepaint"))
-    max_assign(single_max, "details_visual_paint", us_field("paint"))
+    prepaint = us_field("prepaint")
+    paint = us_field("paint")
+    max_assign(single_max, "details_visual_prepaint", prepaint)
+    max_assign(single_max, "details_visual_paint", paint)
+    record_custom_paint(prepaint, paint)
 }
 
 /^\[fika details-shape-cache\]/ {
@@ -365,6 +403,9 @@ END {
     print "  image_frames: " (image_count + 0) \
         " max_prepaint=" (("image_prepaint" in single_max) ? single_max["image_prepaint"] : 0) "us" \
         " max_paint=" (("image_paint" in single_max) ? single_max["image_paint"] : 0) "us"
+    print "  custom_paint_frames: " (custom_paint_count + 0) \
+        " max_prepaint=" (("custom_paint_prepaint" in single_max) ? single_max["custom_paint_prepaint"] : 0) "us" \
+        " max_paint=" (("custom_paint_paint" in single_max) ? single_max["custom_paint_paint"] : 0) "us"
     print "  details_visual_frames: " (details_visual_count + 0) \
         " max_prepaint=" (("details_visual_prepaint" in single_max) ? single_max["details_visual_prepaint"] : 0) "us" \
         " max_paint=" (("details_visual_paint" in single_max) ? single_max["details_visual_paint"] : 0) "us"
@@ -413,6 +454,9 @@ END {
     }
     if (image_over_limit > 0) {
         fail(image_over_limit " item image paint frame(s) exceeded " image_paint_limit "us")
+    }
+    if (custom_paint_over_limit > 0) {
+        fail(custom_paint_over_limit " custom paint frame(s) exceeded " custom_paint_limit "us")
     }
 
     exit failures > 0 ? 1 : 0

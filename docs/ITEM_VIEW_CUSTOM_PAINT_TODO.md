@@ -195,8 +195,9 @@ This is the active task board for the GPUI item view custom-paint migration.
   conversion, no new large `file-grid build` regression, Compact/Icons custom
   visual cost is visible through `[fika static-item-visual]`, image paint cost
   is visible through `[fika item-image]` when image-backed icons/thumbnails are
-  present, and Details custom visual/text-shape cost is visible separately
-  through `[fika details-visual]` and `[fika details-shape-cache]`.
+  present, aggregate custom paint cost is summarized, and Details custom
+  visual/text-shape cost is visible separately through `[fika details-visual]`
+  and `[fika details-shape-cache]`.
 - [x] Cold mode switch cost is tracked separately from resize cost: `[fika
   item-view]` now includes `phase=initial|mode-switch|content-change|
   geometry-change|visual-change|steady`, with unit coverage proving mode
