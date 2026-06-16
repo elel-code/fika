@@ -150,15 +150,6 @@ impl ThumbnailScheduler {
                 }
                 continue;
             }
-            let failure_cached = thumbnail_failure_is_cached(
-                &self.cache_root,
-                request.uri(),
-                request.modified_secs(),
-            );
-            if failure_cached {
-                self.seen.insert(key);
-                continue;
-            }
             if self.requests.enqueue(request) {
                 self.seen.insert(key);
                 queued = true;
