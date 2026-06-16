@@ -13723,6 +13723,30 @@ text/plain=viewer.desktop;\n",
     }
 
     #[test]
+    fn pending_rename_next_is_pane_local() {
+        let mut app =
+            test_app_with_entries("/tmp/fika-rename-next-pane", &["alpha.txt", "beta.txt"]);
+        let first = app.panes.focused().unwrap();
+        let second = app.panes.split(first).unwrap();
+        let beta = PathBuf::from("/tmp/fika-rename-next-pane/beta.txt");
+        app.rename_next_after_operation = Some((first, beta.clone()));
+
+        app.start_pending_rename_next_for_pane(second);
+
+        assert!(app.rename_draft.is_none());
+        assert_eq!(app.rename_next_after_operation, Some((first, beta.clone())));
+
+        app.start_pending_rename_next_for_pane(first);
+
+        assert!(app.rename_next_after_operation.is_none());
+        let draft = app.rename_draft.as_ref().unwrap();
+        assert_eq!(draft.pane_id, first);
+        assert_eq!(draft.original_path, beta);
+        assert_eq!(draft.draft_name, "beta.txt");
+        assert_eq!(draft.caret, "beta".len());
+    }
+
+    #[test]
     fn start_rename_for_path_selects_item_and_creates_draft() {
         let mut app = test_app_with_entries("/tmp/fika-rename-path", &["alpha.txt", "beta.txt"]);
         let pane_id = app.panes.focused().unwrap();

@@ -4365,6 +4365,10 @@ mod tests {
         let mut beta_renaming = beta.clone();
         beta_renaming.draft_name = Some("beta-2.txt".to_string());
         beta_renaming.draft_caret = Some("beta".len());
+        beta_renaming.draft_selection = Some((0, "beta".len()));
+        beta_renaming.draft_error = Some("Name cannot be empty".to_string());
+        beta_renaming.draft_warning =
+            Some("Changing file extension may make it unusable".to_string());
         let projection = cache
             .project_file_grid_snapshot(icons_snapshot(vec![alpha.clone(), beta_renaming]), None);
         let stats = projection.stats;
@@ -4377,6 +4381,17 @@ mod tests {
         };
         assert!(Arc::ptr_eq(&alpha_content, &items[0].content));
         assert!(!Arc::ptr_eq(&beta_content, &items[1].content));
+        assert_eq!(items[1].content.draft_name.as_deref(), Some("beta-2.txt"));
+        assert_eq!(items[1].content.draft_caret, Some("beta".len()));
+        assert_eq!(items[1].content.draft_selection, Some((0, "beta".len())));
+        assert_eq!(
+            items[1].content.draft_error.as_deref(),
+            Some("Name cannot be empty")
+        );
+        assert_eq!(
+            items[1].content.draft_warning.as_deref(),
+            Some("Changing file extension may make it unusable")
+        );
 
         assert_eq!(
             static_item_visual_layer_items(&items, ItemTileTextAlignment::Center)
