@@ -247,6 +247,10 @@ This is the active task board for the GPUI item view custom-paint migration.
 - [x] Install directory item/row drop-target shells through
   `src/ui/file_grid/dnd.rs` so pane-internal item drags update retained
   directory highlight while moving, matching the Places-to-pane path.
+- [x] Extract viewport measurement and shell wiring into
+  `src/ui/file_grid/viewport.rs`, keeping scroll, retained hit testing,
+  rubber-band selection, and viewport-level DnD handlers outside the main
+  painter/render surface.
 - [ ] Keep remaining drag-start shells until public GPUI custom-element
   drag-start support exists or an audited GPUI patch is carried.
 - [ ] Keep rename on the GPUI overlay until custom text editing has behavior
