@@ -93,6 +93,12 @@ and retained interaction hitbox activity. Human review is still required for
 whether the exercised mode switches, resizes, fullscreen toggles, and DnD
 actions match this checklist.
 
+The analyzer itself can be checked with:
+
+```sh
+scripts/check-item-view-perf-analyzer.sh
+```
+
 ## Decision Gate
 
 Do not remove the remaining drag-start shells unless one of these is true:
