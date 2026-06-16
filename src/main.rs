@@ -196,6 +196,7 @@ const THUMBNAIL_PROBE_BATCH_SIZE: usize = 32;
 const METADATA_ROLE_BATCH_SIZE: usize = 16;
 const SYNC_METADATA_ROLE_LIMIT: usize = 30;
 const SYNC_METADATA_ROLE_TIMEOUT: Duration = Duration::from_millis(50);
+const PANE_HORIZONTAL_BORDER_EXTENT: f32 = 2.0;
 
 const CONTEXT_SUBMENU_HIDE_DELAY: Duration = Duration::from_millis(300);
 
@@ -990,7 +991,6 @@ impl FikaApp {
                 let scroll_handle = self.item_view_scroll_handle_for_pane(pane_id);
                 let mut filtered_model = self.filtered_model_for_pane(pane_id);
                 let split_ratio = self.pane_split_ratio(pane_id);
-                let projected_viewport_width = self.projected_pane_width(pane_id);
                 let item_drop_target = self.drop_targets.item().cloned();
                 let pane_drop_target =
                     item_drop_target_matches_pane(item_drop_target.as_ref(), pane_id);
@@ -1008,10 +1008,11 @@ impl FikaApp {
                 let (breadcrumbs, view, generation, focused, selection_count, trash_view) = {
                     let pane = self.panes.pane(pane_id)?;
                     let mut view = pane.view.clone();
-                    if let Some(projected_viewport_width) = projected_viewport_width
+                    if let Some(projected_viewport_width) =
+                        self.projected_item_viewport_width(pane_id, view.view_mode)
                         && projected_viewport_width > 0.0
                     {
-                        view.viewport_width = projected_viewport_width.floor();
+                        view.viewport_width = projected_viewport_width;
                     }
                     (
                         breadcrumb_segments(&pane.current_dir),
@@ -3200,6 +3201,22 @@ impl FikaApp {
         let ratios = self.normalized_pane_ratios_for_ids(pane_ids);
         let available = pane_width_available(self.pane_row_width, pane_ids.len());
         (available > 0.0).then(|| ratios[index] * available)
+    }
+
+    pub(crate) fn projected_item_viewport_width(
+        &self,
+        pane_id: PaneId,
+        view_mode: ViewMode,
+    ) -> Option<f32> {
+        let pane_width = self.projected_pane_width(pane_id)?;
+        let scrollbar_extent = if view_mode_uses_horizontal_item_scrollbar(view_mode) {
+            0.0
+        } else {
+            ITEM_VIEW_SCROLLBAR_RESERVED_EXTENT
+        };
+        Some(fika_core::normalize_viewport_extent(
+            (pane_width - PANE_HORIZONTAL_BORDER_EXTENT - scrollbar_extent).max(1.0),
+        ))
     }
 
     fn normalized_pane_ratios_for_ids(&self, pane_ids: &[PaneId]) -> Vec<f32> {
@@ -12124,6 +12141,32 @@ text/plain=viewer.desktop;\n",
                 + app.projected_pane_width(pane_ids[2]).unwrap(),
             available / 2.0
         ));
+    }
+
+    #[test]
+    fn projected_item_viewport_width_matches_scrollbar_axis() {
+        let mut app = test_app_with_entries("/tmp/fika-panes-viewport", &[]);
+        let first = app.panes.focused().unwrap();
+        assert!(app.set_pane_row_width(820.0));
+        let second = app.panes.split(first).unwrap();
+        app.split_pane_ratio(first, second);
+
+        assert!(width_value_eq(
+            app.projected_pane_width(first).unwrap(),
+            (820.0 - PANE_SPLITTER_WIDTH) / 2.0
+        ));
+        assert_eq!(
+            app.projected_item_viewport_width(first, ViewMode::Icons),
+            Some(393.0)
+        );
+        assert_eq!(
+            app.projected_item_viewport_width(first, ViewMode::Details),
+            Some(393.0)
+        );
+        assert_eq!(
+            app.projected_item_viewport_width(first, ViewMode::Compact),
+            Some(407.0)
+        );
     }
 
     #[test]

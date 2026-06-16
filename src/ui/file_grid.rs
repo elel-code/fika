@@ -24,7 +24,7 @@ pub(crate) use snapshot::{
 use crate::FikaApp;
 use fika_core::{
     CompactLayout, CompactLayoutOptions, IconsLayout, IconsLayoutOptions, ItemId, ItemLayout,
-    PaneId, ViewRect, ViewState, normalize_viewport_extent,
+    PaneId, ViewMode, ViewRect, ViewState, normalize_viewport_extent,
 };
 use gpui::prelude::*;
 use gpui::{
@@ -327,6 +327,7 @@ pub(crate) fn file_grid(
     } = props;
     let app = cx.weak_entity();
     let scrollbar_axis = scrollbar_axis_for_snapshot(&snapshot);
+    let view_mode = view_mode_for_snapshot(&snapshot);
 
     let (content_width, content_height, viewport) = match snapshot {
         FileGridSnapshot::Icons {
@@ -395,7 +396,8 @@ pub(crate) fn file_grid(
                 scrollbar_axis,
             );
             let _ = app.update(cx, |this, cx| {
-                let geometry_changed = this.set_pane_viewport_geometry(pane_id, measured.rect);
+                let previous_view = this.panes.pane(pane_id).map(|pane| pane.view.clone());
+                this.set_pane_viewport_geometry(pane_id, measured.rect);
                 let bounds_changed = this.set_pane_viewport_bounds(
                     pane_id,
                     measured.rect.width,
@@ -403,7 +405,16 @@ pub(crate) fn file_grid(
                     measured.max_scroll_x,
                     measured.max_scroll_y,
                 );
-                if geometry_changed || bounds_changed {
+                let next_view = this.panes.pane(pane_id).map(|pane| pane.view.clone());
+                let projected_width = this.projected_item_viewport_width(pane_id, view_mode);
+                if bounds_changed
+                    && viewport_bounds_update_requires_notify(
+                        previous_view.as_ref(),
+                        next_view.as_ref(),
+                        projected_width,
+                        measured.rect,
+                    )
+                {
                     cx.notify();
                 }
             });
@@ -443,6 +454,41 @@ fn scrollbar_axis_for_snapshot(snapshot: &FileGridSnapshot) -> ItemViewScrollbar
             ItemViewScrollbarAxis::Vertical
         }
     }
+}
+
+fn view_mode_for_snapshot(snapshot: &FileGridSnapshot) -> ViewMode {
+    match snapshot {
+        FileGridSnapshot::Compact { .. } => ViewMode::Compact,
+        FileGridSnapshot::Icons { .. } => ViewMode::Icons,
+        FileGridSnapshot::Details { .. } => ViewMode::Details,
+    }
+}
+
+fn viewport_bounds_update_requires_notify(
+    previous: Option<&ViewState>,
+    next: Option<&ViewState>,
+    projected_width: Option<f32>,
+    measured_rect: ViewRect,
+) -> bool {
+    let (Some(previous), Some(next)) = (previous, next) else {
+        return true;
+    };
+    if !viewport_value_eq(previous.scroll_x, next.scroll_x)
+        || !viewport_value_eq(previous.scroll_y, next.scroll_y)
+    {
+        return true;
+    }
+    if !viewport_value_eq(previous.viewport_height, measured_rect.height) {
+        return true;
+    }
+    if projected_width.is_some_and(|width| viewport_value_eq(width, measured_rect.width)) {
+        return false;
+    }
+    !viewport_value_eq(previous.viewport_width, measured_rect.width)
+}
+
+fn viewport_value_eq(left: f32, right: f32) -> bool {
+    (left - right).abs() < 0.5
 }
 
 fn measured_viewport_for_scrollbar_axis(
@@ -1696,9 +1742,10 @@ mod tests {
         FileGridMode, ItemTileTextAlignment, display_text_layout, drag_preview_content_origin,
         drag_preview_label, item_interaction_id, item_mouse_down_opens_directory,
         measured_viewport_for_scrollbar_axis, normalized_text_range, rename_text_layout,
+        viewport_bounds_update_requires_notify,
     };
     use crate::ui::item_view::ItemViewScrollbarAxis;
-    use fika_core::{CompactLayout, CompactLayoutOptions, ItemId, PaneId};
+    use fika_core::{CompactLayout, CompactLayoutOptions, ItemId, PaneId, ViewRect, ViewState};
     use gpui::{Bounds, point, px, size};
 
     #[test]
@@ -1783,6 +1830,51 @@ mod tests {
 
         assert_eq!(measured.max_scroll_x, 0.0);
         assert_eq!(measured.max_scroll_y, 0.0);
+    }
+
+    #[test]
+    fn projected_width_prepaint_update_does_not_require_second_notify() {
+        let previous = ViewState {
+            viewport_width: 320.0,
+            viewport_height: 200.0,
+            ..ViewState::default()
+        };
+        let next = ViewState {
+            viewport_width: 286.0,
+            viewport_height: 200.0,
+            max_scroll_y: 600.0,
+            ..previous.clone()
+        };
+        let measured = ViewRect {
+            x: 0.0,
+            y: 0.0,
+            width: 286.0,
+            height: 200.0,
+        };
+
+        assert!(!viewport_bounds_update_requires_notify(
+            Some(&previous),
+            Some(&next),
+            Some(286.0),
+            measured,
+        ));
+        assert!(viewport_bounds_update_requires_notify(
+            Some(&previous),
+            Some(&next),
+            None,
+            measured,
+        ));
+
+        let scrolled = ViewState {
+            scroll_y: 120.0,
+            ..next
+        };
+        assert!(viewport_bounds_update_requires_notify(
+            Some(&previous),
+            Some(&scrolled),
+            Some(286.0),
+            measured,
+        ));
     }
 
     #[test]
