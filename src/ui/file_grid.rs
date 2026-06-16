@@ -743,6 +743,10 @@ fn item_interaction_layer_element_id(pane_id: PaneId) -> (&'static str, u64) {
     ("item-interaction-layer", pane_id.0)
 }
 
+fn details_visual_layer_element_id(pane_id: PaneId) -> (&'static str, u64) {
+    ("details-visual-layer", pane_id.0)
+}
+
 fn handle_file_grid_item_drag_move(
     app: &mut FikaApp,
     pane_id: PaneId,
@@ -1078,6 +1082,7 @@ pub(crate) fn file_grid(
                     metrics,
                     name_column_width,
                     mode,
+                    app.clone(),
                     cx,
                 ));
             (content_width, content_height, visible_count, viewport)
@@ -1545,18 +1550,33 @@ fn details_table(
     metrics: DetailsLayoutMetrics,
     name_column_width: f32,
     mode: FileGridMode,
+    app: WeakEntity<FikaApp>,
     cx: &mut Context<FikaApp>,
 ) -> Div {
     let columns = details_columns(trash_view, name_column_width);
-    div()
+    let visual_layer = details_visual_layer_view(
+        pane_id,
+        &items,
+        &columns,
+        content_width,
+        content_height,
+        app,
+    );
+    let table = div()
         .relative()
         .w(px(content_width))
         .h(px(content_height))
-        .child(details_header(&columns, content_width, metrics))
+        .child(details_header(&columns, content_width, metrics));
+    let table = if let Some(layer) = visual_layer {
+        table.child(layer)
+    } else {
+        table
+    };
+    table
         .children(
             items
                 .into_iter()
-                .map(|item| details_row(pane_id, item, &columns, content_width, mode, cx)),
+                .map(|item| details_row(pane_id, item, content_width, mode, cx)),
         )
         .when(row_count == 0, |table| {
             table.child(
@@ -1608,10 +1628,523 @@ fn details_header(
         }))
 }
 
+fn details_visual_layer_view(
+    pane_id: PaneId,
+    items: &[DetailsPaintSnapshot],
+    columns: &[DetailsColumn],
+    width: f32,
+    height: f32,
+    app: WeakEntity<FikaApp>,
+) -> Option<DetailsVisualLayerElement> {
+    let items = details_visual_layer_items(items, columns);
+    (!items.is_empty()).then(|| {
+        DetailsVisualLayerElement {
+            pane_id,
+            app,
+            items,
+            style: StyleRefinement::default(),
+        }
+        .absolute()
+        .left_0()
+        .top_0()
+        .w(px(width.max(1.0)))
+        .h(px(height.max(1.0)))
+    })
+}
+
+fn details_visual_layer_items(
+    items: &[DetailsPaintSnapshot],
+    columns: &[DetailsColumn],
+) -> Vec<DetailsVisualLayerItem> {
+    items
+        .iter()
+        .map(|item| {
+            let mut x = 0.0;
+            let cells = columns
+                .iter()
+                .map(|column| {
+                    let cell_x = x;
+                    x += column.width;
+                    DetailsVisualCell {
+                        x: cell_x,
+                        width: column.width,
+                        content: match column.kind {
+                            DetailsColumnKind::Name => DetailsVisualCellContent::Name {
+                                name: SharedString::from(item.content.name.as_ref()),
+                                icon: item.content.icon.clone(),
+                            },
+                            DetailsColumnKind::Size => DetailsVisualCellContent::Text {
+                                text: SharedString::from(item.content.size_label.as_str()),
+                            },
+                            DetailsColumnKind::Modified => DetailsVisualCellContent::Text {
+                                text: SharedString::from(item.content.modified_label.as_str()),
+                            },
+                            DetailsColumnKind::OriginalPath => DetailsVisualCellContent::Text {
+                                text: SharedString::from(item.content.original_path_label.as_str()),
+                            },
+                            DetailsColumnKind::DeletionTime => DetailsVisualCellContent::Text {
+                                text: SharedString::from(item.content.deletion_time_label.as_str()),
+                            },
+                        },
+                    }
+                })
+                .collect();
+            DetailsVisualLayerItem {
+                row_index: item.row_index,
+                row_top: f32::from_bits(item.geometry.row_top),
+                row_height: f32::from_bits(item.geometry.row_height),
+                icon_size: f32::from_bits(item.geometry.icon_size),
+                selected: item.visual.selected,
+                drop_target: item.visual.drop_target,
+                cells,
+            }
+        })
+        .collect()
+}
+
+#[derive(Clone)]
+struct DetailsVisualLayerItem {
+    row_index: usize,
+    row_top: f32,
+    row_height: f32,
+    icon_size: f32,
+    selected: bool,
+    drop_target: bool,
+    cells: Vec<DetailsVisualCell>,
+}
+
+#[derive(Clone)]
+struct DetailsVisualCell {
+    x: f32,
+    width: f32,
+    content: DetailsVisualCellContent,
+}
+
+#[derive(Clone)]
+enum DetailsVisualCellContent {
+    Name {
+        name: SharedString,
+        icon: FileIconSnapshot,
+    },
+    Text {
+        text: SharedString,
+    },
+}
+
+struct DetailsVisualLayerElement {
+    pane_id: PaneId,
+    app: WeakEntity<FikaApp>,
+    items: Vec<DetailsVisualLayerItem>,
+    style: StyleRefinement,
+}
+
+struct DetailsVisualPaintState {
+    row_index: usize,
+    row_top: f32,
+    row_height: f32,
+    selected: bool,
+    drop_target: bool,
+    cells: Vec<DetailsVisualCellPaintState>,
+}
+
+enum DetailsVisualCellPaintState {
+    Name {
+        icon: DetailsVisualIconPaintState,
+        text: DetailsVisualTextPaintState,
+    },
+    Text(DetailsVisualTextPaintState),
+}
+
+struct DetailsVisualIconPaintState {
+    rect: ViewRect,
+    image: Option<Arc<RenderImage>>,
+    fallback: Option<ItemImageFallbackPaintState>,
+}
+
+struct DetailsVisualTextPaintState {
+    rect: ViewRect,
+    line: gpui::ShapedLine,
+    line_height: Pixels,
+}
+
+impl IntoElement for DetailsVisualLayerElement {
+    type Element = Self;
+
+    fn into_element(self) -> Self::Element {
+        self
+    }
+}
+
+impl Element for DetailsVisualLayerElement {
+    type RequestLayoutState = Style;
+    type PrepaintState = Vec<DetailsVisualPaintState>;
+
+    fn id(&self) -> Option<ElementId> {
+        Some(ElementId::from(details_visual_layer_element_id(
+            self.pane_id,
+        )))
+    }
+
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, Self::RequestLayoutState) {
+        let mut style = Style::default();
+        style.refine(&self.style);
+        let layout_id = window.request_layout(style.clone(), [], cx);
+        (layout_id, style)
+    }
+
+    fn prepaint(
+        &mut self,
+        id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        _bounds: Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Self::PrepaintState {
+        let perf_started = crate::item_view_perf_enabled().then(std::time::Instant::now);
+        let states = if let Some(id) = id {
+            window.with_element_state::<Entity<RetainAllImageCache>, _>(id, |cache, window| {
+                let cache = cache.unwrap_or_else(|| RetainAllImageCache::new(cx));
+                let states = self
+                    .items
+                    .iter()
+                    .map(|item| details_visual_prepaint_item(item, Some(&cache), window, cx))
+                    .collect::<Vec<_>>();
+                (states, cache)
+            })
+        } else {
+            self.items
+                .iter()
+                .map(|item| details_visual_prepaint_item(item, None, window, cx))
+                .collect::<Vec<_>>()
+        };
+        if let Some(started) = perf_started {
+            let elapsed = started.elapsed();
+            let count = states.len();
+            let _ = self.app.update(cx, |this, _cx| {
+                this.record_static_item_visual_prepaint(self.pane_id, elapsed, count);
+            });
+        }
+        states
+    }
+
+    fn paint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        request_layout: &mut Self::RequestLayoutState,
+        prepaint: &mut Self::PrepaintState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let perf_started = crate::item_view_perf_enabled().then(std::time::Instant::now);
+        let count = prepaint.len();
+        request_layout.paint(bounds, window, cx, |window, cx| {
+            for state in prepaint.iter() {
+                details_visual_paint_item(bounds, state, window, cx);
+            }
+        });
+        if let Some(started) = perf_started {
+            let elapsed = started.elapsed();
+            let _ = self.app.update(cx, |this, _cx| {
+                this.record_static_item_visual_paint(self.pane_id, elapsed, count);
+            });
+        }
+    }
+}
+
+impl Styled for DetailsVisualLayerElement {
+    fn style(&mut self) -> &mut StyleRefinement {
+        &mut self.style
+    }
+}
+
+const DETAILS_CELL_PADDING_X: f32 = 8.0;
+const DETAILS_NAME_ICON_GAP: f32 = 8.0;
+
+fn details_visual_prepaint_item(
+    item: &DetailsVisualLayerItem,
+    cache: Option<&Entity<RetainAllImageCache>>,
+    window: &mut Window,
+    cx: &mut App,
+) -> DetailsVisualPaintState {
+    let font = window.text_style().font();
+    let font_size = px(window.rem_size().as_f32() * 0.875);
+    let line_height = px(ITEM_NAME_LINE_HEIGHT);
+    let cells = item
+        .cells
+        .iter()
+        .map(|cell| match &cell.content {
+            DetailsVisualCellContent::Name { name, icon } => {
+                let icon_rect = details_visual_name_icon_rect(item, cell);
+                let text_rect = details_visual_name_text_rect(item, cell);
+                DetailsVisualCellPaintState::Name {
+                    icon: details_visual_icon_prepaint(icon_rect, icon, cache, window, cx),
+                    text: details_visual_text_prepaint(
+                        text_rect,
+                        name.clone(),
+                        if item.selected { 0x0f172a } else { 0x1f2937 },
+                        font.clone(),
+                        font_size,
+                        line_height,
+                        window,
+                    ),
+                }
+            }
+            DetailsVisualCellContent::Text { text } => {
+                DetailsVisualCellPaintState::Text(details_visual_text_prepaint(
+                    details_visual_text_rect(item, cell),
+                    text.clone(),
+                    0x4b5563,
+                    font.clone(),
+                    font_size,
+                    line_height,
+                    window,
+                ))
+            }
+        })
+        .collect();
+    DetailsVisualPaintState {
+        row_index: item.row_index,
+        row_top: item.row_top,
+        row_height: item.row_height,
+        selected: item.selected,
+        drop_target: item.drop_target,
+        cells,
+    }
+}
+
+fn details_visual_name_icon_rect(
+    item: &DetailsVisualLayerItem,
+    cell: &DetailsVisualCell,
+) -> ViewRect {
+    ViewRect {
+        x: cell.x + DETAILS_CELL_PADDING_X,
+        y: item.row_top + ((item.row_height - item.icon_size).max(0.0) * 0.5).floor(),
+        width: item.icon_size.max(1.0),
+        height: item.icon_size.max(1.0),
+    }
+}
+
+fn details_visual_name_text_rect(
+    item: &DetailsVisualLayerItem,
+    cell: &DetailsVisualCell,
+) -> ViewRect {
+    let x = cell.x + DETAILS_CELL_PADDING_X + item.icon_size + DETAILS_NAME_ICON_GAP;
+    ViewRect {
+        x,
+        y: item.row_top + ((item.row_height - ITEM_NAME_LINE_HEIGHT).max(0.0) * 0.5).floor(),
+        width: (cell.width - (x - cell.x) - DETAILS_CELL_PADDING_X).max(1.0),
+        height: ITEM_NAME_LINE_HEIGHT,
+    }
+}
+
+fn details_visual_text_rect(item: &DetailsVisualLayerItem, cell: &DetailsVisualCell) -> ViewRect {
+    ViewRect {
+        x: cell.x + DETAILS_CELL_PADDING_X,
+        y: item.row_top + ((item.row_height - ITEM_NAME_LINE_HEIGHT).max(0.0) * 0.5).floor(),
+        width: (cell.width - DETAILS_CELL_PADDING_X * 2.0).max(1.0),
+        height: ITEM_NAME_LINE_HEIGHT,
+    }
+}
+
+fn details_visual_icon_prepaint(
+    rect: ViewRect,
+    icon: &FileIconSnapshot,
+    cache: Option<&Entity<RetainAllImageCache>>,
+    window: &mut Window,
+    cx: &mut App,
+) -> DetailsVisualIconPaintState {
+    let image = icon.path.as_ref().and_then(|path| {
+        let cache = cache?;
+        let resource = Resource::Path(path.clone());
+        cache
+            .update(cx, |cache, cx| cache.load(&resource, window, cx))
+            .and_then(Result::ok)
+    });
+    let fallback = image
+        .is_none()
+        .then(|| details_visual_icon_fallback_prepaint(rect, icon, window));
+    DetailsVisualIconPaintState {
+        rect,
+        image,
+        fallback,
+    }
+}
+
+fn details_visual_icon_fallback_prepaint(
+    rect: ViewRect,
+    icon: &FileIconSnapshot,
+    window: &mut Window,
+) -> ItemImageFallbackPaintState {
+    let text_style = window.text_style();
+    let mut marker_font = text_style.font();
+    marker_font.weight = FontWeight::SEMIBOLD;
+    let marker = static_paint_single_line_text(SharedString::from(icon.fallback_marker.as_ref()));
+    let marker_run = TextRun {
+        len: marker.len(),
+        font: marker_font,
+        color: rgb(icon.fallback_fg).into(),
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    let marker_font_size = px(window.rem_size().as_f32() * 0.75);
+    ItemImageFallbackPaintState {
+        marker_line: window
+            .text_system()
+            .shape_line(marker, marker_font_size, &[marker_run], None),
+        marker_line_height: px(rect.height.min(ITEM_NAME_LINE_HEIGHT).max(1.0)),
+        fallback_bg: icon.fallback_bg,
+    }
+}
+
+fn details_visual_text_prepaint(
+    rect: ViewRect,
+    text: SharedString,
+    color: u32,
+    font: Font,
+    font_size: Pixels,
+    line_height: Pixels,
+    window: &mut Window,
+) -> DetailsVisualTextPaintState {
+    let text = static_paint_single_line_text(text);
+    let run = TextRun {
+        len: text.len(),
+        font,
+        color: rgb(color).into(),
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    DetailsVisualTextPaintState {
+        rect,
+        line: window
+            .text_system()
+            .shape_line(text, font_size, &[run], None),
+        line_height,
+    }
+}
+
+fn details_visual_paint_item(
+    layer_bounds: Bounds<Pixels>,
+    state: &DetailsVisualPaintState,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let row_bounds = Bounds::new(
+        point(
+            layer_bounds.origin.x,
+            layer_bounds.origin.y + px(state.row_top),
+        ),
+        size(layer_bounds.size.width, px(state.row_height.max(1.0))),
+    );
+    window.paint_quad(fill(
+        row_bounds,
+        details_row_background(state.selected, state.drop_target, state.row_index),
+    ));
+    for cell in state.cells.iter() {
+        match cell {
+            DetailsVisualCellPaintState::Name { icon, text } => {
+                details_visual_paint_icon(layer_bounds, icon, window, cx);
+                details_visual_paint_text(layer_bounds, text, window, cx);
+            }
+            DetailsVisualCellPaintState::Text(text) => {
+                details_visual_paint_text(layer_bounds, text, window, cx);
+            }
+        }
+    }
+}
+
+fn details_visual_paint_icon(
+    layer_bounds: Bounds<Pixels>,
+    state: &DetailsVisualIconPaintState,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let icon_bounds = details_visual_bounds(layer_bounds, state.rect);
+    if let Some(image) = state.image.as_ref() {
+        if image.frame_count() > 0 {
+            let image_size = image.size(0);
+            if u32::from(image_size.width) > 0 && u32::from(image_size.height) > 0 {
+                let image_bounds = ObjectFit::Contain.get_bounds(icon_bounds, image_size);
+                window
+                    .paint_image(image_bounds, Corners::all(px(4.0)), image.clone(), 0, false)
+                    .ok();
+                return;
+            }
+        }
+    }
+    if let Some(fallback) = state.fallback.as_ref() {
+        window.paint_quad(fill(icon_bounds, rgb(fallback.fallback_bg)).corner_radii(px(4.0)));
+        let marker_origin = point(
+            icon_bounds.origin.x,
+            icon_bounds.origin.y
+                + ((icon_bounds.size.height - fallback.marker_line_height).max(px(0.0)) / 2.0),
+        );
+        fallback
+            .marker_line
+            .paint(
+                marker_origin,
+                fallback.marker_line_height,
+                TextAlign::Center,
+                Some(icon_bounds.size.width),
+                window,
+                cx,
+            )
+            .ok();
+    }
+}
+
+fn details_visual_paint_text(
+    layer_bounds: Bounds<Pixels>,
+    state: &DetailsVisualTextPaintState,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let text_bounds = details_visual_bounds(layer_bounds, state.rect);
+    window.paint_layer(text_bounds, |window| {
+        state
+            .line
+            .paint(
+                point(text_bounds.origin.x, text_bounds.origin.y),
+                state.line_height,
+                TextAlign::Left,
+                Some(text_bounds.size.width),
+                window,
+                cx,
+            )
+            .ok();
+    });
+}
+
+fn details_visual_bounds(layer_bounds: Bounds<Pixels>, rect: ViewRect) -> Bounds<Pixels> {
+    Bounds::new(
+        point(
+            layer_bounds.origin.x + px(rect.x.round()),
+            layer_bounds.origin.y + px(rect.y.round()),
+        ),
+        size(
+            px(rect.width.round().max(1.0)),
+            px(rect.height.round().max(1.0)),
+        ),
+    )
+}
+
 fn details_row(
     pane_id: PaneId,
     item: DetailsPaintSnapshot,
-    columns: &[DetailsColumn],
     content_width: f32,
     mode: FileGridMode,
     cx: &mut Context<FikaApp>,
@@ -1650,11 +2183,7 @@ fn details_row(
         .h(px(row_height))
         .flex()
         .items_center()
-        .bg(details_row_background(
-            selected,
-            drop_target,
-            item.row_index,
-        ))
+        .bg(rgba(0x00000000))
         .block_mouse_except_scroll()
         .cursor_pointer()
         .hover(move |row| row.bg(item_tile_hover_background(selected, drop_target)))
@@ -1751,11 +2280,6 @@ fn details_row(
                 }),
             )
         })
-        .children(
-            columns
-                .iter()
-                .map(|column| details_cell(&item, *column, selected)),
-        )
 }
 
 fn details_row_background(selected: bool, drop_target: bool, row_index: usize) -> Rgba {
@@ -1768,80 +2292,6 @@ fn details_row_background(selected: bool, drop_target: bool, row_index: usize) -
     } else {
         rgb(0xf8fafc)
     }
-}
-
-fn details_cell(
-    item: &DetailsPaintSnapshot,
-    column: DetailsColumn,
-    selected: bool,
-) -> gpui::AnyElement {
-    match column.kind {
-        DetailsColumnKind::Name => details_name_cell(item, column.width, selected),
-        DetailsColumnKind::Size => details_text_cell(column.width, item.content.size_label.clone()),
-        DetailsColumnKind::Modified => {
-            details_text_cell(column.width, item.content.modified_label.clone())
-        }
-        DetailsColumnKind::OriginalPath => {
-            details_text_cell(column.width, item.content.original_path_label.clone())
-        }
-        DetailsColumnKind::DeletionTime => {
-            details_text_cell(column.width, item.content.deletion_time_label.clone())
-        }
-    }
-}
-
-fn details_name_cell(item: &DetailsPaintSnapshot, width: f32, selected: bool) -> gpui::AnyElement {
-    let icon = item.content.icon.clone();
-    let width = width.max(f32::from_bits(item.geometry.name_column_width));
-    let icon_size = f32::from_bits(item.geometry.icon_size);
-    div()
-        .w(px(width))
-        .h_full()
-        .min_w_0()
-        .px_2()
-        .flex()
-        .items_center()
-        .gap_2()
-        .child(
-            div()
-                .w(px(icon_size))
-                .h(px(icon_size))
-                .rounded_sm()
-                .overflow_hidden()
-                .child({
-                    let fallback_marker = SharedString::from(icon.fallback_marker.as_ref());
-                    icon_image_or_fallback(icon, fallback_marker)
-                }),
-        )
-        .child(
-            div()
-                .min_w_0()
-                .flex_1()
-                .text_sm()
-                .text_color(if selected {
-                    rgb(0x0f172a)
-                } else {
-                    rgb(0x1f2937)
-                })
-                .whitespace_nowrap()
-                .child(item.content.name.to_string()),
-        )
-        .into_any_element()
-}
-
-fn details_text_cell(width: f32, text: String) -> gpui::AnyElement {
-    div()
-        .w(px(width))
-        .h_full()
-        .min_w_0()
-        .px_2()
-        .flex()
-        .items_center()
-        .text_sm()
-        .text_color(rgb(0x4b5563))
-        .truncate()
-        .child(text)
-        .into_any_element()
 }
 
 fn handle_pane_navigation_mouse_down(
@@ -3578,14 +4028,16 @@ mod tests {
     use super::{
         DetailsItemSnapshot, DetailsLayoutMetrics, DetailsPaintContent, FileGridMode,
         FileGridRenderSnapshot, FileGridSnapshot, ItemPaintContent, ItemPaintSlotCache,
-        ItemTileTextAlignment, VisibleItemSnapshot, display_text_layout, drag_preview_label,
-        item_identity_element_id, item_image_element_id, item_image_layer_item_source_path,
-        item_image_layer_items, item_image_load_failure_paints_fallback,
-        item_image_paint_layer_element_id, item_interaction_hitbox_bounds,
-        item_interaction_layer_element_id, item_interaction_layer_items,
-        item_mouse_down_opens_directory, measured_viewport_for_scrollbar_axis,
-        normalized_text_range, rename_text_layout, static_item_visual_layer_element_id,
-        static_item_visual_layer_items, viewport_bounds_update_requires_notify,
+        ItemTileTextAlignment, VisibleItemSnapshot, details_columns,
+        details_visual_layer_element_id, details_visual_layer_items, display_text_layout,
+        drag_preview_label, item_identity_element_id, item_image_element_id,
+        item_image_layer_item_source_path, item_image_layer_items,
+        item_image_load_failure_paints_fallback, item_image_paint_layer_element_id,
+        item_interaction_hitbox_bounds, item_interaction_layer_element_id,
+        item_interaction_layer_items, item_mouse_down_opens_directory,
+        measured_viewport_for_scrollbar_axis, normalized_text_range, rename_text_layout,
+        static_item_visual_layer_element_id, static_item_visual_layer_items,
+        viewport_bounds_update_requires_notify,
     };
     use crate::ui::drag_drop::drag_preview_content_origin_for_cursor_offset;
     use crate::ui::icons::FileIconSnapshot;
@@ -3672,6 +4124,18 @@ mod tests {
         assert_ne!(
             item_interaction_layer_element_id(fika_core::PaneId(7)),
             item_interaction_layer_element_id(fika_core::PaneId(8))
+        );
+    }
+
+    #[test]
+    fn details_visual_layer_id_is_keyed_by_pane_identity() {
+        assert_eq!(
+            details_visual_layer_element_id(fika_core::PaneId(7)),
+            ("details-visual-layer", 7)
+        );
+        assert_ne!(
+            details_visual_layer_element_id(fika_core::PaneId(7)),
+            details_visual_layer_element_id(fika_core::PaneId(8))
         );
     }
 
@@ -4044,6 +4508,51 @@ mod tests {
         assert_eq!(stats.inserted, 1);
         assert_eq!(stats.removed, 1);
         assert_eq!(stats.entries, 1);
+    }
+
+    #[test]
+    fn details_visual_layer_items_project_rows_and_cells() {
+        let mut cache = ItemPaintSlotCache::default();
+        let metrics = test_details_metrics();
+        let mut item = test_details_item(2, ItemId(7), "alpha.txt");
+        item.selected = true;
+        item.size_label = "42 B".to_string();
+        item.modified_label = "Today".to_string();
+        let projection =
+            cache.project_file_grid_snapshot(details_snapshot(vec![item], metrics, 260.0), None);
+        let FileGridRenderSnapshot::Details { items, .. } = projection.snapshot else {
+            panic!("expected details render snapshot");
+        };
+        let columns = details_columns(false, 260.0);
+        let visual_items = details_visual_layer_items(&items, &columns);
+
+        assert_eq!(visual_items.len(), 1);
+        assert_eq!(visual_items[0].row_index, 2);
+        assert_eq!(
+            visual_items[0].row_top,
+            metrics.header_height + 2.0 * metrics.row_height
+        );
+        assert!(visual_items[0].selected);
+        assert_eq!(visual_items[0].cells.len(), 3);
+        match &visual_items[0].cells[0].content {
+            super::DetailsVisualCellContent::Name { name, icon } => {
+                assert_eq!(name.as_ref(), "alpha.txt");
+                assert_eq!(icon.fallback_marker.as_ref(), "TXT");
+            }
+            _ => panic!("expected name cell"),
+        }
+        match &visual_items[0].cells[1].content {
+            super::DetailsVisualCellContent::Text { text } => {
+                assert_eq!(text.as_ref(), "42 B");
+            }
+            _ => panic!("expected size text cell"),
+        }
+        match &visual_items[0].cells[2].content {
+            super::DetailsVisualCellContent::Text { text } => {
+                assert_eq!(text.as_ref(), "Today");
+            }
+            _ => panic!("expected modified text cell"),
+        }
     }
 
     fn icons_snapshot(items: Vec<VisibleItemSnapshot>) -> FileGridSnapshot {

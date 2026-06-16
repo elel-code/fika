@@ -132,7 +132,8 @@ This is the active task board for the GPUI item view custom-paint migration.
 
 - [x] P11a: Project Details rows into retained paint slots while keeping the
   existing GPUI row subtree as the render path.
-- [ ] Paint row backgrounds, icons, and text cells from a custom layer.
+- [x] P11b: Paint row backgrounds, icons, and text cells from a content-level
+  custom layer while retaining row shells for interaction and drag.
 - [ ] Preserve sort/menu/DnD/Trash column behavior.
 - [ ] Share image/text cache concepts with Compact/Icons where practical.
 

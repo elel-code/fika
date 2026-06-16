@@ -348,6 +348,9 @@ After Compact/Icons are fully retained, move Details rows to the same model:
 - P11a projects visible Details rows into retained `DetailsPaintSlot` state and
   feeds the existing GPUI row subtree from retained content/geometry/visual
   snapshots. This is a bridge only; it does not claim a custom-paint win.
+- P11b moves row backgrounds, icons, and text cells into a content-level custom
+  visual layer. Row shells remain as controller/drag surfaces until hit testing
+  and drag-start can be safely moved without losing behavior or perf evidence.
 - row backgrounds, text cells, and icons are painted from retained row snapshots
 - column resize/sort/drop hit testing stays model-driven
 - inline rename in Details uses the same overlay boundary as Compact/Icons
@@ -356,7 +359,9 @@ Acceptance:
 
 - P11a proves row content is reused across geometry-only changes and that
   selection/drop changes are visual-state patches.
-- Details steady render no longer builds one row subtree per visible item
+- P11b proves Details row visuals are projected into painter data and no longer
+  build per-cell GPUI visual children.
+- Details steady render no longer builds one visual row subtree per visible item
 - selection, context menu, drag/drop, and Trash columns retain behavior
 - Compact/Icons and Details share slot/image/text cache concepts where practical
 
