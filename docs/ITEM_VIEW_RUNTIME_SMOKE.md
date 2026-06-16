@@ -20,6 +20,18 @@ Recommended launch command:
 FIKA_PERF_ITEM_VIEW=1 cargo run -- ~/Downloads
 ```
 
+To save and summarize logs:
+
+```sh
+FIKA_PERF_ITEM_VIEW=1 cargo run -- ~/Downloads 2>&1 | tee /tmp/fika-item-view.log
+scripts/analyze-item-view-perf.sh \
+  --require-steady \
+  --require-details \
+  --require-interaction \
+  --steady-total-us 1000 \
+  /tmp/fika-item-view.log
+```
+
 ## Drag And Drop
 
 For each view mode:
@@ -74,6 +86,12 @@ Expected log properties:
   attributable.
 - `[fika item-interaction]` hitbox count should match the visible retained
   interaction items for Compact/Icons and Details.
+
+Use `scripts/analyze-item-view-perf.sh` as the first pass. It summarizes
+item-view phases, file-grid build maxima, Details visual/shape-cache activity,
+and retained interaction hitbox activity. Human review is still required for
+whether the exercised mode switches, resizes, fullscreen toggles, and DnD
+actions match this checklist.
 
 ## Decision Gate
 
