@@ -84,14 +84,16 @@ Expected log properties:
 - `[fika renderer-policy]` should appear for Compact, Icons, and Details and
   show how many visible surfaces are using the visual layer, image layer,
   retained interaction layer, GPUI drag-start shell, and rename overlay for
-  each exercised mode.
+  each exercised mode. Each surface count must be internally consistent with
+  the logged item count; impossible counts are not valid renderer evidence.
 
 Use `scripts/analyze-item-view-perf.sh` as the first pass. It summarizes
 item-view phases, file-grid build maxima, Compact/Icons static custom visual
 activity, image paint activity when the directory exercises image-backed icons
 or thumbnails, aggregate custom paint maxima, Details visual/shape-cache
 activity, retained interaction hitbox activity, and renderer-policy surface
-counts. Human review is still required for whether the exercised mode switches,
+counts. It rejects renderer-policy counts that cannot fit inside the logged item
+count. Human review is still required for whether the exercised mode switches,
 resizes, fullscreen toggles, and DnD actions match this checklist.
 
 After a passing runtime review, update

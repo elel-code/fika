@@ -103,6 +103,16 @@ if "$analyzer" --require-renderer-policy-modes Compact,Icons,Details "$tmpdir/mi
     exit 1
 fi
 
+cat > "$tmpdir/invalid-renderer-policy-count.log" <<'EOF'
+[fika item-view] pane=1 mode=Compact phase=steady items=2 visible=2 raw=50us queue=1us convert=40us total=120us
+[fika renderer-policy] pane=1 mode=Compact items=2 visual_layer=3 image_layer=0 retained_interaction=2 gpui_drag_shell=2 rename_overlay=0
+EOF
+
+if "$analyzer" "$tmpdir/invalid-renderer-policy-count.log" >/dev/null 2>&1; then
+    echo "expected invalid renderer-policy surface count to fail" >&2
+    exit 1
+fi
+
 if "$analyzer" --require-modes Compact,Icons,Details "$tmpdir/missing-channels.log" >/dev/null 2>&1; then
     echo "expected missing required modes to fail" >&2
     exit 1

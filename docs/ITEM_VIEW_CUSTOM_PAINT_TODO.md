@@ -210,6 +210,9 @@ This is the active task board for the GPUI item view custom-paint migration.
 - [x] Split renderer policy into `src/ui/file_grid/renderer_policy.rs` so the
   custom-paint vs GPUI renderer decision boundary is separate from rendering
   construction.
+- [x] Make `scripts/analyze-item-view-perf.sh` reject impossible
+  renderer-policy surface counts so custom-paint evidence cannot claim more
+  custom/retained/GPUI surfaces than the logged item count.
 
 ## Acceptance Gates
 

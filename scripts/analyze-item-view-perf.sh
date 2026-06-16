@@ -298,6 +298,15 @@ function record_custom_paint(prepaint, paint) {
     }
 }
 
+function check_renderer_policy_count(name, items, value, mode) {
+    if (value < 0) {
+        fail("renderer-policy " name " is negative in mode " mode)
+    }
+    if (value > items) {
+        fail("renderer-policy " name " exceeds items in mode " mode)
+    }
+}
+
 function parse_required_list(list, target, label,    count, i, value) {
     if (list == "") {
         return
@@ -409,16 +418,30 @@ BEGIN {
 /^\[fika renderer-policy\]/ {
     renderer_policy_count++
     mode = field("mode")
+    items = field("items") + 0
+    visual_layer = field("visual_layer") + 0
+    image_layer = field("image_layer") + 0
+    retained_interaction = field("retained_interaction") + 0
+    gpui_drag_shell = field("gpui_drag_shell") + 0
+    rename_overlay = field("rename_overlay") + 0
     note_mode(mode)
     if (mode != "") {
         renderer_policy_modes[mode] = 1
     }
-    max_assign(single_max, "renderer_policy_items", field("items") + 0)
-    max_assign(single_max, "renderer_policy_visual_layer", field("visual_layer") + 0)
-    max_assign(single_max, "renderer_policy_image_layer", field("image_layer") + 0)
-    max_assign(single_max, "renderer_policy_retained_interaction", field("retained_interaction") + 0)
-    max_assign(single_max, "renderer_policy_gpui_drag_shell", field("gpui_drag_shell") + 0)
-    max_assign(single_max, "renderer_policy_rename_overlay", field("rename_overlay") + 0)
+    if (items < 0) {
+        fail("renderer-policy items is negative in mode " mode)
+    }
+    check_renderer_policy_count("visual_layer", items, visual_layer, mode)
+    check_renderer_policy_count("image_layer", items, image_layer, mode)
+    check_renderer_policy_count("retained_interaction", items, retained_interaction, mode)
+    check_renderer_policy_count("gpui_drag_shell", items, gpui_drag_shell, mode)
+    check_renderer_policy_count("rename_overlay", items, rename_overlay, mode)
+    max_assign(single_max, "renderer_policy_items", items)
+    max_assign(single_max, "renderer_policy_visual_layer", visual_layer)
+    max_assign(single_max, "renderer_policy_image_layer", image_layer)
+    max_assign(single_max, "renderer_policy_retained_interaction", retained_interaction)
+    max_assign(single_max, "renderer_policy_gpui_drag_shell", gpui_drag_shell)
+    max_assign(single_max, "renderer_policy_rename_overlay", rename_overlay)
 }
 
 END {
