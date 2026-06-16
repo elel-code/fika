@@ -83,10 +83,10 @@ use ui::drag_drop::{
 };
 use ui::file_grid::{
     CompactColumnWidthCache, ContentItemHit, DetailsTextShapeCache, DetailsVisualPerfStats,
-    ItemDrag, ItemInteractionPerfStats, ItemPaintSlotCache, PaneLayoutProjection,
-    PaneLayoutProjectionInput, PaneViewportGeometry, RawFileGridSnapshot, RawFileGridSnapshotInput,
-    StaticItemTextShapeCache, StaticItemVisualPerfStats, VisibleItemSlotPool,
-    VisibleItemSnapshotCache, compact_text_width, compact_text_width_for_name,
+    ItemDrag, ItemInteractionPerfStats, ItemPaintSlotCache, ItemPaintSlotStats,
+    PaneLayoutProjection, PaneLayoutProjectionInput, PaneViewportGeometry, RawFileGridSnapshot,
+    RawFileGridSnapshotInput, StaticItemTextShapeCache, StaticItemVisualPerfStats,
+    VisibleItemSlotPool, VisibleItemSnapshotCache, compact_text_width, compact_text_width_for_name,
     content_item_hit_at_point, deferred_thumbnail_candidates_for_model,
     model_indexes_intersecting_visual_rect, pane_layout_projection, raw_file_grid_snapshot,
     rename_editor_required_text_width,
@@ -392,6 +392,73 @@ impl PaneVisibleWorkKey {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ItemViewPerfFrameState {
+    mode: ViewMode,
+    item_count: usize,
+    visible_count: usize,
+}
+
+impl ItemViewPerfFrameState {
+    fn new(mode: ViewMode, item_count: usize, visible_count: usize) -> Self {
+        Self {
+            mode,
+            item_count,
+            visible_count,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ItemViewPerfPhase {
+    Initial,
+    ModeSwitch,
+    ContentChange,
+    GeometryChange,
+    VisualChange,
+    Steady,
+}
+
+impl ItemViewPerfPhase {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Initial => "initial",
+            Self::ModeSwitch => "mode-switch",
+            Self::ContentChange => "content-change",
+            Self::GeometryChange => "geometry-change",
+            Self::VisualChange => "visual-change",
+            Self::Steady => "steady",
+        }
+    }
+}
+
+fn classify_item_view_perf_phase(
+    previous: Option<ItemViewPerfFrameState>,
+    current: ItemViewPerfFrameState,
+    slot_stats: ItemPaintSlotStats,
+) -> ItemViewPerfPhase {
+    let Some(previous) = previous else {
+        return ItemViewPerfPhase::Initial;
+    };
+    if previous.mode != current.mode {
+        return ItemViewPerfPhase::ModeSwitch;
+    }
+    if previous.item_count != current.item_count || slot_stats.content_changed > 0 {
+        return ItemViewPerfPhase::ContentChange;
+    }
+    if previous.visible_count != current.visible_count
+        || slot_stats.geometry_changed > 0
+        || slot_stats.inserted > 0
+        || slot_stats.removed > 0
+    {
+        return ItemViewPerfPhase::GeometryChange;
+    }
+    if slot_stats.visual_changed > 0 {
+        return ItemViewPerfPhase::VisualChange;
+    }
+    ItemViewPerfPhase::Steady
+}
+
 pub(crate) struct FikaApp {
     pub(crate) panes: PaneController,
     places: Vec<PlaceEntry>,
@@ -426,6 +493,7 @@ pub(crate) struct FikaApp {
     visible_item_snapshot_caches: HashMap<PaneId, VisibleItemSnapshotCache>,
     static_item_text_shape_caches: HashMap<PaneId, StaticItemTextShapeCache>,
     details_text_shape_caches: HashMap<PaneId, DetailsTextShapeCache>,
+    item_view_perf_frames: HashMap<PaneId, ItemViewPerfFrameState>,
     static_item_visual_perf_stats: HashMap<PaneId, StaticItemVisualPerfStats>,
     details_visual_perf_stats: HashMap<PaneId, DetailsVisualPerfStats>,
     item_interaction_perf_stats: HashMap<PaneId, ItemInteractionPerfStats>,
@@ -518,6 +586,7 @@ impl FikaApp {
             visible_item_snapshot_caches: HashMap::new(),
             static_item_text_shape_caches: HashMap::new(),
             details_text_shape_caches: HashMap::new(),
+            item_view_perf_frames: HashMap::new(),
             static_item_visual_perf_stats: HashMap::new(),
             details_visual_perf_stats: HashMap::new(),
             item_interaction_perf_stats: HashMap::new(),
@@ -806,6 +875,7 @@ impl FikaApp {
         self.visible_item_snapshot_caches.remove(&pane_id);
         self.static_item_text_shape_caches.remove(&pane_id);
         self.details_text_shape_caches.remove(&pane_id);
+        self.item_view_perf_frames.remove(&pane_id);
         self.static_item_visual_perf_stats.remove(&pane_id);
         self.details_visual_perf_stats.remove(&pane_id);
         self.item_interaction_perf_stats.remove(&pane_id);
@@ -1209,13 +1279,29 @@ impl FikaApp {
                     .project_file_grid_snapshot(file_grid, hovered_item);
                 let item_paint_slot_stats = item_paint_slot_projection.stats;
                 let file_grid = item_paint_slot_projection.snapshot;
+                let item_view_perf_phase = if perf_enabled {
+                    let current_frame =
+                        ItemViewPerfFrameState::new(view.view_mode, item_count, visible_count);
+                    let previous_frame =
+                        self.item_view_perf_frames.insert(pane_id, current_frame);
+                    Some(classify_item_view_perf_phase(
+                        previous_frame,
+                        current_frame,
+                        item_paint_slot_stats,
+                    ))
+                } else {
+                    None
+                };
                 let convert_elapsed = convert_started.map(|started| started.elapsed());
                 let status_bar = self.status_bar_snapshot_for_pane(pane_id, cx);
                 if let Some(pane_started) = pane_started {
                     eprintln!(
-                        "[fika item-view] pane={} mode={:?} items={} visible={} raw={}us queue={}us convert={}us total={}us",
+                        "[fika item-view] pane={} mode={:?} phase={} items={} visible={} raw={}us queue={}us convert={}us total={}us",
                         pane_id.0,
                         view.view_mode,
+                        item_view_perf_phase
+                            .map(ItemViewPerfPhase::label)
+                            .unwrap_or("unknown"),
                         item_count,
                         visible_count,
                         raw_elapsed.map_or(0, |elapsed| elapsed.as_micros()),
@@ -2794,6 +2880,7 @@ impl FikaApp {
         self.visible_item_snapshot_caches.remove(&pane_id);
         self.static_item_text_shape_caches.remove(&pane_id);
         self.details_text_shape_caches.remove(&pane_id);
+        self.item_view_perf_frames.remove(&pane_id);
         self.static_item_visual_perf_stats.remove(&pane_id);
         self.details_visual_perf_stats.remove(&pane_id);
         self.item_interaction_perf_stats.remove(&pane_id);
@@ -12610,6 +12697,77 @@ text/plain=viewer.desktop;\n",
     }
 
     #[test]
+    fn item_view_perf_phase_separates_mode_switch_from_resize() {
+        let previous = ItemViewPerfFrameState::new(ViewMode::Compact, 48, 32);
+        assert_eq!(
+            classify_item_view_perf_phase(
+                None,
+                ItemViewPerfFrameState::new(ViewMode::Compact, 48, 32),
+                ItemPaintSlotStats::default(),
+            ),
+            ItemViewPerfPhase::Initial
+        );
+        assert_eq!(
+            classify_item_view_perf_phase(
+                Some(previous),
+                ItemViewPerfFrameState::new(ViewMode::Icons, 48, 40),
+                ItemPaintSlotStats {
+                    inserted: 40,
+                    ..Default::default()
+                },
+            ),
+            ItemViewPerfPhase::ModeSwitch
+        );
+        assert_eq!(
+            classify_item_view_perf_phase(
+                Some(ItemViewPerfFrameState::new(ViewMode::Icons, 48, 40)),
+                ItemViewPerfFrameState::new(ViewMode::Icons, 48, 48),
+                ItemPaintSlotStats {
+                    inserted: 8,
+                    unchanged: 40,
+                    ..Default::default()
+                },
+            ),
+            ItemViewPerfPhase::GeometryChange
+        );
+        assert_eq!(
+            classify_item_view_perf_phase(
+                Some(ItemViewPerfFrameState::new(ViewMode::Icons, 48, 48)),
+                ItemViewPerfFrameState::new(ViewMode::Icons, 49, 48),
+                ItemPaintSlotStats {
+                    content_changed: 1,
+                    unchanged: 48,
+                    ..Default::default()
+                },
+            ),
+            ItemViewPerfPhase::ContentChange
+        );
+        assert_eq!(
+            classify_item_view_perf_phase(
+                Some(ItemViewPerfFrameState::new(ViewMode::Icons, 48, 48)),
+                ItemViewPerfFrameState::new(ViewMode::Icons, 48, 48),
+                ItemPaintSlotStats {
+                    visual_changed: 1,
+                    unchanged: 47,
+                    ..Default::default()
+                },
+            ),
+            ItemViewPerfPhase::VisualChange
+        );
+        assert_eq!(
+            classify_item_view_perf_phase(
+                Some(ItemViewPerfFrameState::new(ViewMode::Icons, 48, 48)),
+                ItemViewPerfFrameState::new(ViewMode::Icons, 48, 48),
+                ItemPaintSlotStats {
+                    unchanged: 48,
+                    ..Default::default()
+                },
+            ),
+            ItemViewPerfPhase::Steady
+        );
+    }
+
+    #[test]
     fn window_resize_primes_icon_viewport_before_prepaint_bounds_arrive() {
         let mut app = test_app_with_entries("/tmp/fika-window-resize-prime", &[]);
         let pane_id = app.panes.focused().unwrap();
@@ -16199,6 +16357,7 @@ text/plain=viewer.desktop;\n",
             visible_item_snapshot_caches: HashMap::new(),
             static_item_text_shape_caches: HashMap::new(),
             details_text_shape_caches: HashMap::new(),
+            item_view_perf_frames: HashMap::new(),
             static_item_visual_perf_stats: HashMap::new(),
             details_visual_perf_stats: HashMap::new(),
             item_interaction_perf_stats: HashMap::new(),
