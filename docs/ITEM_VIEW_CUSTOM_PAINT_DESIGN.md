@@ -59,7 +59,8 @@ Owned by `src/ui/file_grid`:
 
 - stable slot id for visible items
 - mapping from `ItemId` to slot
-- retained paint content key
+- retained paint content
+- retained visual state for selection, drop target, and hover
 - optional shaped text cache
 - optional fallback icon paint cache
 
@@ -94,7 +95,7 @@ Paint layer must not:
 Temporarily keep one GPUI `Div` per visible item for:
 
 - stable `id(("item-slot", slot_id))`
-- hover/cursor/drag source
+- hover event reporting, cursor, and drag source
 - `on_drag`
 
 Viewport-level hit testing remains authoritative for normal click, context menu,
@@ -151,9 +152,10 @@ Acceptance:
 Introduce an explicit retained slot paint state:
 
 - `ItemPaintSlot`
-- `ItemPaintContentKey`
+- `ItemPaintContent`
 - `ItemPaintGeometry`
-- `ItemPaintStateCache`
+- `ItemPaintVisualState`
+- `ItemPaintSlotCache`
 
 The render function should project visible snapshots into slot paint state before
 building GPUI elements.
@@ -162,6 +164,7 @@ Acceptance:
 
 - stable visible item keeps slot id across resize/scroll overlap
 - selection/drop changes patch state only for affected slots
+- hover enter/leave patches visual state without changing retained content
 - directory local insert/delete does not rebuild unrelated content caches
 
 ### Phase 4: Thumbnail/Image Paint Integration

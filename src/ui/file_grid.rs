@@ -59,7 +59,7 @@ pub(crate) enum FileGridMode {
 
 pub(crate) struct FileGridProps {
     pub(crate) pane_id: PaneId,
-    pub(crate) snapshot: FileGridSnapshot,
+    pub(crate) snapshot: FileGridRenderSnapshot,
     pub(crate) trash_view: bool,
     pub(crate) scroll_handle: ScrollHandle,
     pub(crate) rubber_band: Option<ViewRect>,
@@ -85,6 +85,24 @@ pub(crate) enum FileGridSnapshot {
     },
 }
 
+#[derive(Clone, Debug)]
+pub(crate) enum FileGridRenderSnapshot {
+    Compact {
+        layout: CompactLayout,
+        items: Vec<ItemPaintSnapshot>,
+    },
+    Icons {
+        layout: IconsLayout,
+        items: Vec<ItemPaintSnapshot>,
+    },
+    Details {
+        items: Vec<DetailsItemSnapshot>,
+        row_count: usize,
+        metrics: DetailsLayoutMetrics,
+        name_column_width: f32,
+    },
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 enum ItemTileTextAlignment {
     Start,
@@ -96,6 +114,7 @@ struct StaticItemVisualPaintState {
     marker_line_height: Pixels,
     shapes: Arc<StaticItemTextShapes>,
     label_line_height: Pixels,
+    background: Rgba,
     fallback_bg: u32,
 }
 
@@ -231,40 +250,95 @@ pub(crate) struct ItemPaintSlotCache {
     visible_epoch: u64,
 }
 
+pub(crate) struct ItemPaintSlotProjection {
+    pub(crate) stats: ItemPaintSlotStats,
+    pub(crate) snapshot: FileGridRenderSnapshot,
+}
+
 impl ItemPaintSlotCache {
     pub(crate) fn project_file_grid_snapshot(
         &mut self,
-        snapshot: &FileGridSnapshot,
-    ) -> ItemPaintSlotStats {
+        snapshot: FileGridSnapshot,
+        hovered_item: Option<ItemId>,
+    ) -> ItemPaintSlotProjection {
         match snapshot {
-            FileGridSnapshot::Compact { items, .. } | FileGridSnapshot::Icons { items, .. } => {
-                self.project_visible_items(items)
+            FileGridSnapshot::Compact { layout, items } => {
+                let (stats, items) = self.project_visible_items(items, hovered_item);
+                ItemPaintSlotProjection {
+                    stats,
+                    snapshot: FileGridRenderSnapshot::Compact { layout, items },
+                }
             }
-            FileGridSnapshot::Details { .. } => self.project_visible_items(&[]),
+            FileGridSnapshot::Icons { layout, items } => {
+                let (stats, items) = self.project_visible_items(items, hovered_item);
+                ItemPaintSlotProjection {
+                    stats,
+                    snapshot: FileGridRenderSnapshot::Icons { layout, items },
+                }
+            }
+            FileGridSnapshot::Details {
+                items,
+                row_count,
+                metrics,
+                name_column_width,
+            } => {
+                let (stats, _) = self.project_visible_items(Vec::new(), None);
+                ItemPaintSlotProjection {
+                    stats,
+                    snapshot: FileGridRenderSnapshot::Details {
+                        items,
+                        row_count,
+                        metrics,
+                        name_column_width,
+                    },
+                }
+            }
         }
     }
 
-    fn project_visible_items(&mut self, items: &[VisibleItemSnapshot]) -> ItemPaintSlotStats {
+    fn project_visible_items(
+        &mut self,
+        items: Vec<VisibleItemSnapshot>,
+        hovered_item: Option<ItemId>,
+    ) -> (ItemPaintSlotStats, Vec<ItemPaintSnapshot>) {
         self.visible_epoch = self.visible_epoch.wrapping_add(1).max(1);
         let mut stats = ItemPaintSlotStats::default();
+        let mut snapshots = Vec::with_capacity(items.len());
         for item in items {
-            let next = ItemPaintSlot::from_item(item, self.visible_epoch);
+            let slot_id = item.slot_id;
+            let item_id = item.item_id;
+            let geometry = ItemPaintGeometry::from_layout(item.layout);
+            let next_content = ItemPaintContent::from_item(&item);
+            let visual = ItemPaintVisualState::from_item(&item, hovered_item);
             match self.slots.get_mut(&item.slot_id) {
                 Some(slot) => {
-                    if slot.content != next.content {
+                    if slot.content.as_ref() != &next_content {
                         stats.content_changed += 1;
-                    } else if slot.geometry != next.geometry {
+                        slot.content = Arc::new(next_content);
+                    } else if slot.geometry != geometry {
                         stats.geometry_changed += 1;
-                    } else if slot.visual != next.visual {
+                    } else if slot.visual != visual {
                         stats.visual_changed += 1;
                     } else {
                         stats.unchanged += 1;
                     }
-                    *slot = next;
+                    slot.item_id = item_id;
+                    slot.geometry = geometry;
+                    slot.visual = visual;
+                    slot.visible_epoch = self.visible_epoch;
+                    snapshots.push(slot.snapshot(slot_id, item.layout));
                 }
                 None => {
                     stats.inserted += 1;
-                    self.slots.insert(item.slot_id, next);
+                    let slot = ItemPaintSlot {
+                        item_id,
+                        geometry,
+                        content: Arc::new(next_content),
+                        visual,
+                        visible_epoch: self.visible_epoch,
+                    };
+                    snapshots.push(slot.snapshot(slot_id, item.layout));
+                    self.slots.insert(slot_id, slot);
                 }
             }
         }
@@ -275,7 +349,7 @@ impl ItemPaintSlotCache {
             .retain(|_, slot| slot.visible_epoch == visible_epoch);
         stats.removed = before_retain.saturating_sub(self.slots.len());
         stats.entries = self.slots.len();
-        stats
+        (stats, snapshots)
     }
 }
 
@@ -283,19 +357,19 @@ impl ItemPaintSlotCache {
 struct ItemPaintSlot {
     item_id: ItemId,
     geometry: ItemPaintGeometry,
-    content: ItemPaintContentKey,
+    content: Arc<ItemPaintContent>,
     visual: ItemPaintVisualState,
     visible_epoch: u64,
 }
 
 impl ItemPaintSlot {
-    fn from_item(item: &VisibleItemSnapshot, visible_epoch: u64) -> Self {
-        Self {
-            item_id: item.item_id,
-            geometry: ItemPaintGeometry::from_layout(item.layout),
-            content: ItemPaintContentKey::from_item(item),
-            visual: ItemPaintVisualState::from_item(item),
-            visible_epoch,
+    fn snapshot(&self, slot_id: u64, layout: ItemLayout) -> ItemPaintSnapshot {
+        ItemPaintSnapshot {
+            slot_id,
+            item_id: self.item_id,
+            layout,
+            content: self.content.clone(),
+            visual: self.visual,
         }
     }
 }
@@ -347,14 +421,25 @@ impl ItemPaintGeometry {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct ItemPaintContentKey {
+#[derive(Clone, Debug)]
+pub(crate) struct ItemPaintSnapshot {
+    slot_id: u64,
     item_id: ItemId,
+    layout: ItemLayout,
+    content: Arc<ItemPaintContent>,
+    visual: ItemPaintVisualState,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ItemPaintContent {
+    item_id: ItemId,
+    name: Arc<str>,
     display_name: SharedString,
     thumbnail_path: Option<Arc<Path>>,
     icon: FileIconSnapshot,
     fallback_marker: SharedString,
     icon_name_lines: Arc<[SharedString]>,
+    drag_path: Arc<Path>,
     draft_name: Option<String>,
     draft_caret: Option<usize>,
     draft_selection: Option<(usize, usize)>,
@@ -362,15 +447,17 @@ struct ItemPaintContentKey {
     draft_warning: Option<String>,
 }
 
-impl ItemPaintContentKey {
+impl ItemPaintContent {
     fn from_item(item: &VisibleItemSnapshot) -> Self {
         Self {
             item_id: item.item_id,
+            name: item.name.clone(),
             display_name: item.display_name.clone(),
             thumbnail_path: item.thumbnail_path.clone(),
             icon: item.icon.clone(),
             fallback_marker: item.fallback_marker.clone(),
             icon_name_lines: item.icon_name_lines.clone(),
+            drag_path: item.drag_path.clone(),
             draft_name: item.draft_name.clone(),
             draft_caret: item.draft_caret,
             draft_selection: item.draft_selection,
@@ -383,13 +470,17 @@ impl ItemPaintContentKey {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ItemPaintVisualState {
     selected: bool,
+    selection_count: usize,
+    hovered: bool,
     drop_target: bool,
 }
 
 impl ItemPaintVisualState {
-    fn from_item(item: &VisibleItemSnapshot) -> Self {
+    fn from_item(item: &VisibleItemSnapshot, hovered_item: Option<ItemId>) -> Self {
         Self {
             selected: item.selected,
+            selection_count: item.selection_count,
+            hovered: hovered_item == Some(item.item_id),
             drop_target: item.drop_target,
         }
     }
@@ -640,7 +731,7 @@ pub(crate) fn file_grid(
     let view_mode = view_mode_for_snapshot(&snapshot);
 
     let (content_width, content_height, visible_count, viewport) = match snapshot {
-        FileGridSnapshot::Icons {
+        FileGridRenderSnapshot::Icons {
             layout: icons_layout,
             items,
         } => {
@@ -668,7 +759,7 @@ pub(crate) fn file_grid(
                 viewport,
             )
         }
-        FileGridSnapshot::Compact { layout, items } => {
+        FileGridRenderSnapshot::Compact { layout, items } => {
             let content_size = layout.content_size();
             let visible_count = items.len();
             let viewport = file_grid_viewport_shell(pane_id, drop_target, mode, cx).child(
@@ -687,7 +778,7 @@ pub(crate) fn file_grid(
                 viewport,
             )
         }
-        FileGridSnapshot::Details {
+        FileGridRenderSnapshot::Details {
             items,
             row_count,
             metrics,
@@ -833,20 +924,20 @@ struct MeasuredViewport {
     max_scroll_y: f32,
 }
 
-fn scrollbar_axis_for_snapshot(snapshot: &FileGridSnapshot) -> ItemViewScrollbarAxis {
+fn scrollbar_axis_for_snapshot(snapshot: &FileGridRenderSnapshot) -> ItemViewScrollbarAxis {
     match snapshot {
-        FileGridSnapshot::Compact { .. } => ItemViewScrollbarAxis::Horizontal,
-        FileGridSnapshot::Icons { .. } | FileGridSnapshot::Details { .. } => {
+        FileGridRenderSnapshot::Compact { .. } => ItemViewScrollbarAxis::Horizontal,
+        FileGridRenderSnapshot::Icons { .. } | FileGridRenderSnapshot::Details { .. } => {
             ItemViewScrollbarAxis::Vertical
         }
     }
 }
 
-fn view_mode_for_snapshot(snapshot: &FileGridSnapshot) -> ViewMode {
+fn view_mode_for_snapshot(snapshot: &FileGridRenderSnapshot) -> ViewMode {
     match snapshot {
-        FileGridSnapshot::Compact { .. } => ViewMode::Compact,
-        FileGridSnapshot::Icons { .. } => ViewMode::Icons,
-        FileGridSnapshot::Details { .. } => ViewMode::Details,
+        FileGridRenderSnapshot::Compact { .. } => ViewMode::Compact,
+        FileGridRenderSnapshot::Icons { .. } => ViewMode::Icons,
+        FileGridRenderSnapshot::Details { .. } => ViewMode::Details,
     }
 }
 
@@ -1501,40 +1592,59 @@ fn item_mouse_down_opens_directory(is_dir: bool, _mode: FileGridMode, click_coun
 
 fn item_tile(
     pane_id: PaneId,
-    item: VisibleItemSnapshot,
+    item: ItemPaintSnapshot,
     text_alignment: ItemTileTextAlignment,
     app: WeakEntity<FikaApp>,
     cx: &mut Context<FikaApp>,
 ) -> Stateful<Div> {
     let item_rect = item.layout.item_rect;
     let visual = item.layout.visual_rect;
-    let selected = item.selected;
-    let drop_target = item.drop_target;
-    let use_static_visual_paint =
-        item.draft_name.is_none() && item.thumbnail_path.is_none() && item.icon.path.is_none();
+    let item_id = item.item_id;
+    let content = item.content.as_ref();
+    let selected = item.visual.selected;
+    let selection_count = item.visual.selection_count;
+    let hovered = item.visual.hovered;
+    let drop_target = item.visual.drop_target;
+    let use_static_visual_paint = content.draft_name.is_none()
+        && content.thumbnail_path.is_none()
+        && content.icon.path.is_none();
     let drag_app = app.clone();
     let drag_value = ItemDrag {
         pane_id,
-        path: item.drag_path.clone(),
-        name: item.name.clone(),
-        icon: item.icon.clone(),
+        path: content.drag_path.clone(),
+        name: content.name.clone(),
+        icon: content.icon.clone(),
         selected,
-        selection_count: item.selection_count,
+        selection_count,
+    };
+    let shell_background = if use_static_visual_paint {
+        rgba(0x00000000)
+    } else {
+        item_tile_background(selected, drop_target, hovered)
     };
 
     // Temporary migration boundary: this Div remains the interaction shell while
     // static fallback item visuals move toward retained custom painting.
     let core = div()
-        .id(item_identity_element_id("item-core", item.item_id))
+        .id(item_identity_element_id("item-core", item_id))
         .absolute()
         .left(px(visual.x - item_rect.x))
         .top(px(visual.y - item_rect.y))
         .w(px(visual.width))
         .h(px(visual.height))
         .rounded_md()
-        .bg(item_tile_background(selected, drop_target))
+        .bg(shell_background)
         .cursor_pointer()
-        .hover(move |tile| tile.bg(item_tile_hover_background(selected, drop_target)))
+        .on_hover(cx.listener(move |this, hovered: &bool, _window, cx| {
+            let changed = if *hovered {
+                this.set_hovered_item(pane_id, item_id)
+            } else {
+                this.clear_hovered_item(pane_id, item_id)
+            };
+            if changed {
+                cx.notify();
+            }
+        }))
         .on_drag(drag_value, move |drag, cursor_offset, _, cx| {
             let _ = drag_app.update(cx, |this, _cx| {
                 this.begin_item_drag(drag.payload());
@@ -1551,42 +1661,44 @@ fn item_tile(
     let core = if use_static_visual_paint {
         core.child(static_item_visual_view(
             pane_id,
-            item.item_id,
-            item.display_name.clone(),
-            item.icon_name_lines.clone(),
-            item.icon.clone(),
-            item.fallback_marker.clone(),
+            item_id,
+            content.display_name.clone(),
+            content.icon_name_lines.clone(),
+            content.icon.clone(),
+            content.fallback_marker.clone(),
             item.layout,
             text_alignment,
             selected,
+            hovered,
+            drop_target,
             app,
         ))
     } else {
-        let text = if let Some(draft_name) = item.draft_name.as_deref() {
+        let text = if let Some(draft_name) = content.draft_name.as_deref() {
             rename_text_view(
                 pane_id,
                 SharedString::from(draft_name),
                 item.layout,
                 text_alignment,
                 selected,
-                item.draft_caret,
-                item.draft_selection,
-                item.draft_error.as_deref(),
-                item.draft_warning.as_deref(),
+                content.draft_caret,
+                content.draft_selection,
+                content.draft_error.as_deref(),
+                content.draft_warning.as_deref(),
                 cx,
             )
             .into_any_element()
         } else {
             static_text_view(
-                item.display_name.clone(),
-                &item.icon_name_lines,
+                content.display_name.clone(),
+                &content.icon_name_lines,
                 item.layout,
                 text_alignment,
                 selected,
             )
             .into_any_element()
         };
-        core.child(icon_view(&item, item.layout)).child(text)
+        core.child(icon_view(content, item.layout)).child(text)
     };
 
     div()
@@ -1599,11 +1711,15 @@ fn item_tile(
         .child(core)
 }
 
-fn item_tile_background(selected: bool, drop_target: bool) -> Rgba {
+fn item_tile_background(selected: bool, drop_target: bool, hovered: bool) -> Rgba {
     if drop_target {
         drop_target_item_background()
+    } else if selected && hovered {
+        rgb(0xcfe3ff)
     } else if selected {
         rgb(0xdbeafe)
+    } else if hovered {
+        rgb(0xeaf1ff)
     } else {
         rgba(0x00000000)
     }
@@ -1639,6 +1755,8 @@ fn static_item_visual_view(
     layout: ItemLayout,
     text_alignment: ItemTileTextAlignment,
     selected: bool,
+    hovered: bool,
+    drop_target: bool,
     app: WeakEntity<FikaApp>,
 ) -> impl IntoElement {
     canvas(
@@ -1653,6 +1771,8 @@ fn static_item_visual_view(
                 layout,
                 text_alignment,
                 selected,
+                hovered,
+                drop_target,
                 app,
                 window,
                 cx,
@@ -1676,6 +1796,8 @@ fn static_item_visual_prepaint(
     layout: ItemLayout,
     text_alignment: ItemTileTextAlignment,
     selected: bool,
+    hovered: bool,
+    drop_target: bool,
     app: WeakEntity<FikaApp>,
     window: &mut Window,
     cx: &mut App,
@@ -1706,6 +1828,7 @@ fn static_item_visual_prepaint(
         marker_line_height: style.marker_line_height,
         shapes,
         label_line_height: style.label_line_height,
+        background: item_tile_background(selected, drop_target, hovered),
         fallback_bg: icon.fallback_bg,
     }
 }
@@ -1864,6 +1987,7 @@ fn static_item_visual_paint(
     window: &mut Window,
     cx: &mut App,
 ) {
+    window.paint_quad(fill(bounds, state.background).corner_radii(px(6.0)));
     let icon_bounds =
         static_item_local_bounds(bounds, state.layout.visual_rect, state.layout.icon_rect);
     window.paint_quad(fill(icon_bounds, rgb(state.fallback_bg)).corner_radii(px(6.0)));
@@ -1960,16 +2084,16 @@ fn static_paint_wrapped_lines_height(
         .min(max_height)
 }
 
-fn icon_view(item: &VisibleItemSnapshot, layout: ItemLayout) -> Div {
+fn icon_view(content: &ItemPaintContent, layout: ItemLayout) -> Div {
     let visual = layout.visual_rect;
     let icon = layout.icon_rect;
     let icon_left = (icon.x - visual.x).round();
     let icon_top = (icon.y - visual.y).round();
     let icon_width = icon.width.round().max(1.0);
     let icon_height = icon.height.round().max(1.0);
-    let thumbnail_path = item.thumbnail_path.clone();
-    let icon_snapshot = item.icon.clone();
-    let fallback_marker = item.fallback_marker.clone();
+    let thumbnail_path = content.thumbnail_path.clone();
+    let icon_snapshot = content.icon.clone();
+    let fallback_marker = content.fallback_marker.clone();
     let icon_container = div()
         .absolute()
         .left(px(icon_left))
@@ -2348,8 +2472,8 @@ impl Render for DragPreview {
         let count = self.count;
         div()
             .relative()
-            .w(px(left + DRAG_PREVIEW_MIN_WIDTH))
-            .h(px(top + DRAG_PREVIEW_MIN_HEIGHT + 6.0))
+            .w(px(left.max(0.0) + DRAG_PREVIEW_MIN_WIDTH))
+            .h(px(top.max(0.0) + DRAG_PREVIEW_MIN_HEIGHT + 6.0))
             .child(
                 div()
                     .absolute()
@@ -2406,8 +2530,8 @@ impl Render for DragPreview {
 
 fn drag_preview_content_origin(offset: gpui::Point<gpui::Pixels>) -> (f32, f32) {
     (
-        (offset.x.as_f32() + DRAG_PREVIEW_CURSOR_GAP).max(0.0),
-        (offset.y.as_f32() + DRAG_PREVIEW_CURSOR_GAP).max(0.0),
+        offset.x.as_f32() + DRAG_PREVIEW_CURSOR_GAP,
+        offset.y.as_f32() + DRAG_PREVIEW_CURSOR_GAP,
     )
 }
 
@@ -2422,11 +2546,11 @@ fn drag_preview_label(name: &str, selected: bool, selection_count: usize) -> Str
 #[cfg(test)]
 mod tests {
     use super::{
-        FileGridMode, FileGridSnapshot, ItemPaintSlotCache, ItemTileTextAlignment,
-        VisibleItemSnapshot, display_text_layout, drag_preview_content_origin, drag_preview_label,
-        item_identity_element_id, item_mouse_down_opens_directory,
-        measured_viewport_for_scrollbar_axis, normalized_text_range, rename_text_layout,
-        viewport_bounds_update_requires_notify,
+        FileGridMode, FileGridRenderSnapshot, FileGridSnapshot, ItemPaintContent,
+        ItemPaintSlotCache, ItemTileTextAlignment, VisibleItemSnapshot, display_text_layout,
+        drag_preview_content_origin, drag_preview_label, item_identity_element_id,
+        item_mouse_down_opens_directory, measured_viewport_for_scrollbar_axis,
+        normalized_text_range, rename_text_layout, viewport_bounds_update_requires_notify,
     };
     use crate::ui::icons::FileIconSnapshot;
     use crate::ui::item_view::ItemViewScrollbarAxis;
@@ -2455,6 +2579,10 @@ mod tests {
             drag_preview_content_origin(point(px(-4.0), px(-2.0))),
             (4.0, 6.0)
         );
+        assert_eq!(
+            drag_preview_content_origin(point(px(-12.0), px(-10.0))),
+            (-4.0, -2.0)
+        );
     }
 
     #[test]
@@ -2474,34 +2602,63 @@ mod tests {
         let mut cache = ItemPaintSlotCache::default();
         let base = test_visible_item(1, ItemId(7), "alpha.txt", test_item_layout(0.0), false);
 
-        let stats = cache.project_file_grid_snapshot(&icons_snapshot(vec![base.clone()]));
+        let projection = cache.project_file_grid_snapshot(icons_snapshot(vec![base.clone()]), None);
+        let stats = projection.stats;
         assert_eq!(stats.inserted, 1);
         assert_eq!(stats.entries, 1);
+        let first_content = first_icon_paint_content(&projection.snapshot);
 
-        let stats = cache.project_file_grid_snapshot(&icons_snapshot(vec![base.clone()]));
+        let stats = cache
+            .project_file_grid_snapshot(icons_snapshot(vec![base.clone()]), None)
+            .stats;
         assert_eq!(stats.unchanged, 1);
         assert_eq!(stats.entries, 1);
 
         let mut moved = base.clone();
         moved.layout = test_item_layout(18.0);
-        let stats = cache.project_file_grid_snapshot(&icons_snapshot(vec![moved.clone()]));
+        let stats = cache
+            .project_file_grid_snapshot(icons_snapshot(vec![moved.clone()]), None)
+            .stats;
         assert_eq!(stats.geometry_changed, 1);
         assert_eq!(stats.entries, 1);
 
-        let mut selected = moved.clone();
-        selected.selected = true;
-        let stats = cache.project_file_grid_snapshot(&icons_snapshot(vec![selected.clone()]));
+        let projection =
+            cache.project_file_grid_snapshot(icons_snapshot(vec![moved.clone()]), Some(ItemId(7)));
+        let stats = projection.stats;
         assert_eq!(stats.visual_changed, 1);
         assert_eq!(stats.entries, 1);
+        assert!(Arc::ptr_eq(
+            &first_content,
+            &first_icon_paint_content(&projection.snapshot)
+        ));
+
+        let mut selected = moved.clone();
+        selected.selected = true;
+        let projection =
+            cache.project_file_grid_snapshot(icons_snapshot(vec![selected.clone()]), None);
+        let stats = projection.stats;
+        assert_eq!(stats.visual_changed, 1);
+        assert_eq!(stats.entries, 1);
+        assert!(Arc::ptr_eq(
+            &first_content,
+            &first_icon_paint_content(&projection.snapshot)
+        ));
 
         let mut renamed = selected.clone();
         renamed.display_name = SharedString::from("beta.txt");
         renamed.icon_name_lines = vec![SharedString::from("beta.txt")].into();
-        let stats = cache.project_file_grid_snapshot(&icons_snapshot(vec![renamed]));
+        let projection = cache.project_file_grid_snapshot(icons_snapshot(vec![renamed]), None);
+        let stats = projection.stats;
         assert_eq!(stats.content_changed, 1);
         assert_eq!(stats.entries, 1);
+        assert!(!Arc::ptr_eq(
+            &first_content,
+            &first_icon_paint_content(&projection.snapshot)
+        ));
 
-        let stats = cache.project_file_grid_snapshot(&icons_snapshot(Vec::new()));
+        let stats = cache
+            .project_file_grid_snapshot(icons_snapshot(Vec::new()), None)
+            .stats;
         assert_eq!(stats.removed, 1);
         assert_eq!(stats.entries, 0);
     }
@@ -2511,6 +2668,13 @@ mod tests {
             layout: IconsLayout::new(items.len(), IconsLayoutOptions::default()),
             items,
         }
+    }
+
+    fn first_icon_paint_content(snapshot: &FileGridRenderSnapshot) -> Arc<ItemPaintContent> {
+        let FileGridRenderSnapshot::Icons { items, .. } = snapshot else {
+            panic!("expected icons render snapshot");
+        };
+        items[0].content.clone()
     }
 
     fn test_visible_item(

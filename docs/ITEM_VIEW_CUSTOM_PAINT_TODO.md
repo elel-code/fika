@@ -39,7 +39,7 @@ This is the active task board for the GPUI item view custom-paint migration.
 - [x] Add `ItemPaintSlot` state beside `VisibleItemSlotPool`.
 - [x] Project `VisibleItemSnapshot` into retained paint state.
 - [x] Track geometry-only vs content changes.
-- [ ] Patch selection/drop/hover visual state without rebuilding content.
+- [x] Patch selection/drop/hover visual state without rebuilding content.
 - [x] Keep slot identity stable across overlapping scroll and resize.
 
 ## P4: Thumbnail Paint Boundary

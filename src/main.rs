@@ -16,15 +16,15 @@ use fika_core::{
 use fika_core::{
     CreateUndoItem, CreatedItemKind, DeviceInfo, DeviceMonitorMessage, DevicePlaceOperation,
     DevicePlaceOperationResult, DirectoryCacheDebugSnapshot, DirectoryListerEvent, Generation,
-    ListingRequest, ListingWorker, LoadingPaneState, MetadataRoleResult, MetadataRoleScheduler,
-    OperationQueue, OperationRuntime, OperationSnapshot, PaneController, PaneId, RefreshPair,
-    RenameUndoItem, SelectionMove, SortDescriptor, SortOrder, SortRole, ThumbnailProbeResult,
-    ThumbnailScheduler, TrashEmptinessMonitor, UndoPayload, UserPlace, ViewMode, ViewPoint,
-    ViewRect, ZoomChange, apply_thumbnail_probe_result_to_model, breadcrumb_segments,
-    complete_location_input, file_ops, is_network_path, listing_requests_from_events,
-    metadata_role_results_for_requests, nearest_existing_ancestor, parent_location,
-    perform_device_place_operation, resolve_location_input, thumbnail_probe_results_for_requests,
-    update_loading_state_for_event,
+    ItemId, ListingRequest, ListingWorker, LoadingPaneState, MetadataRoleResult,
+    MetadataRoleScheduler, OperationQueue, OperationRuntime, OperationSnapshot, PaneController,
+    PaneId, RefreshPair, RenameUndoItem, SelectionMove, SortDescriptor, SortOrder, SortRole,
+    ThumbnailProbeResult, ThumbnailScheduler, TrashEmptinessMonitor, UndoPayload, UserPlace,
+    ViewMode, ViewPoint, ViewRect, ZoomChange, apply_thumbnail_probe_result_to_model,
+    breadcrumb_segments, complete_location_input, file_ops, is_network_path,
+    listing_requests_from_events, metadata_role_results_for_requests, nearest_existing_ancestor,
+    parent_location, perform_device_place_operation, resolve_location_input,
+    thumbnail_probe_results_for_requests, update_loading_state_for_event,
 };
 use fika_core::{
     DesktopLaunchPlan, LauncherError, MimeApplication, MimeApplicationCache, NewWindowLaunchResult,
@@ -423,6 +423,7 @@ pub(crate) struct FikaApp {
     item_paint_slots: HashMap<PaneId, ItemPaintSlotCache>,
     visible_item_snapshot_caches: HashMap<PaneId, VisibleItemSnapshotCache>,
     static_item_text_shape_caches: HashMap<PaneId, StaticItemTextShapeCache>,
+    hovered_item: Option<(PaneId, ItemId)>,
     compact_column_widths: HashMap<PaneId, CompactColumnWidthCache>,
     pane_filters: HashMap<PaneId, PaneFilterState>,
     filtered_models: HashMap<PaneId, FilteredModelCacheEntry>,
@@ -510,6 +511,7 @@ impl FikaApp {
             item_paint_slots: HashMap::new(),
             visible_item_snapshot_caches: HashMap::new(),
             static_item_text_shape_caches: HashMap::new(),
+            hovered_item: None,
             compact_column_widths: HashMap::new(),
             pane_filters: HashMap::new(),
             filtered_models: HashMap::new(),
@@ -793,6 +795,7 @@ impl FikaApp {
         self.item_paint_slots.remove(&pane_id);
         self.visible_item_snapshot_caches.remove(&pane_id);
         self.static_item_text_shape_caches.remove(&pane_id);
+        self.clear_hovered_item_for_pane(pane_id);
         self.compact_column_widths.remove(&pane_id);
         self.filtered_models.remove(&pane_id);
         self.status_summaries.remove(&pane_id);
@@ -803,6 +806,31 @@ impl FikaApp {
             }
             self.reset_item_view_scroll_for_pane(pane_id);
         }
+    }
+
+    pub(crate) fn set_hovered_item(&mut self, pane_id: PaneId, item_id: ItemId) -> bool {
+        let next = Some((pane_id, item_id));
+        if self.hovered_item == next {
+            return false;
+        }
+        self.hovered_item = next;
+        true
+    }
+
+    pub(crate) fn clear_hovered_item(&mut self, pane_id: PaneId, item_id: ItemId) -> bool {
+        if self.hovered_item != Some((pane_id, item_id)) {
+            return false;
+        }
+        self.hovered_item = None;
+        true
+    }
+
+    fn clear_hovered_item_for_pane(&mut self, pane_id: PaneId) -> bool {
+        if !matches!(self.hovered_item, Some((hovered_pane, _)) if hovered_pane == pane_id) {
+            return false;
+        }
+        self.hovered_item = None;
+        true
     }
 
     fn item_view_scroll_handle_for_pane(&mut self, pane_id: PaneId) -> ScrollHandle {
@@ -1157,11 +1185,16 @@ impl FikaApp {
                 );
                 self.visible_item_snapshot_caches
                     .insert(pane_id, visible_item_cache);
-                let item_paint_slot_stats = self
+                let hovered_item = self
+                    .hovered_item
+                    .and_then(|(hovered_pane, item_id)| (hovered_pane == pane_id).then_some(item_id));
+                let item_paint_slot_projection = self
                     .item_paint_slots
                     .entry(pane_id)
                     .or_default()
-                    .project_file_grid_snapshot(&file_grid);
+                    .project_file_grid_snapshot(file_grid, hovered_item);
+                let item_paint_slot_stats = item_paint_slot_projection.stats;
+                let file_grid = item_paint_slot_projection.snapshot;
                 let convert_elapsed = convert_started.map(|started| started.elapsed());
                 let status_bar = self.status_bar_snapshot_for_pane(pane_id, cx);
                 if let Some(pane_started) = pane_started {
@@ -2746,6 +2779,7 @@ impl FikaApp {
         self.item_paint_slots.remove(&pane_id);
         self.visible_item_snapshot_caches.remove(&pane_id);
         self.static_item_text_shape_caches.remove(&pane_id);
+        self.clear_hovered_item_for_pane(pane_id);
         self.compact_column_widths.remove(&pane_id);
         self.status_summaries.remove(&pane_id);
         self.filtered_models.remove(&pane_id);
@@ -3184,6 +3218,7 @@ impl FikaApp {
         self.item_paint_slots.remove(&pane_id);
         self.visible_item_snapshot_caches.remove(&pane_id);
         self.static_item_text_shape_caches.remove(&pane_id);
+        self.clear_hovered_item_for_pane(pane_id);
         self.compact_column_widths.remove(&pane_id);
         self.set_pane_status(pane_id, view_mode_status(view.view_mode));
     }
@@ -11729,6 +11764,7 @@ text/plain=viewer.desktop;\n",
         std::fs::create_dir_all(&alpha).unwrap();
         std::fs::create_dir_all(&beta).unwrap();
         let current_arg = current.display().to_string();
+        let home = home_dir();
         let mut app = test_app_with_entries(&current_arg, &[]);
         let pane_id = app.panes.focused().unwrap();
         app.places = vec![
@@ -11736,7 +11772,7 @@ text/plain=viewer.desktop;\n",
                 group: "",
                 marker: "H",
                 label: "Home".to_string(),
-                path: current.clone(),
+                path: home.clone(),
                 device_id: None,
                 device_mounted: true,
                 editable: false,
@@ -11805,8 +11841,15 @@ text/plain=viewer.desktop;\n",
             fika_core::load_place_order(&fika_core::place_order_path_for_user_places_path(
                 &app.user_places_path
             )),
-            Ok(vec![current.clone(), beta.clone(), alpha.clone()])
+            Ok(vec![home.clone(), beta.clone(), alpha.clone()])
         );
+        let rebuilt_primary_labels = build_places(&app.user_places_path)
+            .into_iter()
+            .filter(|place| place.group.is_empty())
+            .take(3)
+            .map(|place| place.label)
+            .collect::<Vec<_>>();
+        assert_eq!(rebuilt_primary_labels, vec!["Home", "Beta", "Alpha"]);
 
         app.drop_place_drag_to_place_insert(2, app.places.len());
 
@@ -15678,6 +15721,7 @@ text/plain=viewer.desktop;\n",
             item_paint_slots: HashMap::new(),
             visible_item_snapshot_caches: HashMap::new(),
             static_item_text_shape_caches: HashMap::new(),
+            hovered_item: None,
             compact_column_widths: HashMap::new(),
             pane_filters: HashMap::new(),
             filtered_models: HashMap::new(),

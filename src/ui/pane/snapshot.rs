@@ -1,4 +1,4 @@
-use crate::ui::file_grid::FileGridSnapshot;
+use crate::ui::file_grid::FileGridRenderSnapshot;
 use crate::ui::filter_bar::FilterBarSnapshot;
 use crate::ui::location_bar::LocationDraftSnapshot;
 use crate::ui::status_bar::StatusBarSnapshot;
@@ -13,7 +13,7 @@ pub(crate) struct PaneSnapshot {
     pub(crate) location_draft: Option<LocationDraftSnapshot>,
     pub(crate) filter_bar: Option<FilterBarSnapshot>,
     pub(crate) status_bar: StatusBarSnapshot,
-    pub(crate) file_grid: FileGridSnapshot,
+    pub(crate) file_grid: FileGridRenderSnapshot,
     pub(crate) trash_view: bool,
     pub(crate) scroll_handle: ScrollHandle,
     pub(crate) view: ViewState,

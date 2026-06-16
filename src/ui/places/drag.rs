@@ -119,8 +119,8 @@ fn place_drop_zone_for_y(local_y: f32, height: f32) -> PlaceDropZone {
 
 fn place_drag_preview_content_origin(offset: gpui::Point<gpui::Pixels>) -> (f32, f32) {
     (
-        (offset.x.as_f32() + PLACE_DRAG_PREVIEW_CURSOR_GAP).max(0.0),
-        (offset.y.as_f32() + PLACE_DRAG_PREVIEW_CURSOR_GAP).max(0.0),
+        offset.x.as_f32() + PLACE_DRAG_PREVIEW_CURSOR_GAP,
+        offset.y.as_f32() + PLACE_DRAG_PREVIEW_CURSOR_GAP,
     )
 }
 
@@ -131,8 +131,8 @@ impl Render for PlaceDragPreview {
         let icon = self.icon.clone();
         div()
             .relative()
-            .w(px(left + PLACE_DRAG_PREVIEW_MIN_WIDTH))
-            .h(px(top + PLACE_DRAG_PREVIEW_MIN_HEIGHT + 6.0))
+            .w(px(left.max(0.0) + PLACE_DRAG_PREVIEW_MIN_WIDTH))
+            .h(px(top.max(0.0) + PLACE_DRAG_PREVIEW_MIN_HEIGHT + 6.0))
             .child(
                 div()
                     .absolute()
@@ -218,7 +218,7 @@ mod tests {
         );
         assert_eq!(
             place_drag_preview_content_origin(gpui::point(gpui::px(-12.0), gpui::px(-4.0))),
-            (0.0, 4.0)
+            (-4.0, 4.0)
         );
     }
 
