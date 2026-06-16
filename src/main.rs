@@ -82,13 +82,13 @@ use ui::drag_drop::{
     place_drop_target_matches_insert, place_drop_target_matches_place,
 };
 use ui::file_grid::{
-    CompactColumnWidthCache, ContentItemHit, ItemDrag, ItemPaintSlotCache, PaneLayoutProjection,
-    PaneLayoutProjectionInput, PaneViewportGeometry, RawFileGridSnapshot, RawFileGridSnapshotInput,
-    StaticItemTextShapeCache, StaticItemVisualPerfStats, VisibleItemSlotPool,
-    VisibleItemSnapshotCache, compact_text_width, compact_text_width_for_name,
-    content_item_hit_at_point, deferred_thumbnail_candidates_for_model,
-    model_indexes_intersecting_visual_rect, pane_layout_projection, raw_file_grid_snapshot,
-    rename_editor_required_text_width,
+    CompactColumnWidthCache, ContentItemHit, ItemDrag, ItemInteractionPerfStats,
+    ItemPaintSlotCache, PaneLayoutProjection, PaneLayoutProjectionInput, PaneViewportGeometry,
+    RawFileGridSnapshot, RawFileGridSnapshotInput, StaticItemTextShapeCache,
+    StaticItemVisualPerfStats, VisibleItemSlotPool, VisibleItemSnapshotCache, compact_text_width,
+    compact_text_width_for_name, content_item_hit_at_point,
+    deferred_thumbnail_candidates_for_model, model_indexes_intersecting_visual_rect,
+    pane_layout_projection, raw_file_grid_snapshot, rename_editor_required_text_width,
 };
 use ui::filter_bar::{
     FILTER_BAR_HEIGHT, FilterBarSnapshot, FilteredModelCacheEntry, PaneFilterState,
@@ -425,6 +425,7 @@ pub(crate) struct FikaApp {
     visible_item_snapshot_caches: HashMap<PaneId, VisibleItemSnapshotCache>,
     static_item_text_shape_caches: HashMap<PaneId, StaticItemTextShapeCache>,
     static_item_visual_perf_stats: HashMap<PaneId, StaticItemVisualPerfStats>,
+    item_interaction_perf_stats: HashMap<PaneId, ItemInteractionPerfStats>,
     hovered_item: Option<(PaneId, ItemId)>,
     compact_column_widths: HashMap<PaneId, CompactColumnWidthCache>,
     pane_filters: HashMap<PaneId, PaneFilterState>,
@@ -514,6 +515,7 @@ impl FikaApp {
             visible_item_snapshot_caches: HashMap::new(),
             static_item_text_shape_caches: HashMap::new(),
             static_item_visual_perf_stats: HashMap::new(),
+            item_interaction_perf_stats: HashMap::new(),
             hovered_item: None,
             compact_column_widths: HashMap::new(),
             pane_filters: HashMap::new(),
@@ -799,6 +801,7 @@ impl FikaApp {
         self.visible_item_snapshot_caches.remove(&pane_id);
         self.static_item_text_shape_caches.remove(&pane_id);
         self.static_item_visual_perf_stats.remove(&pane_id);
+        self.item_interaction_perf_stats.remove(&pane_id);
         self.clear_hovered_item_for_pane(pane_id);
         self.compact_column_widths.remove(&pane_id);
         self.filtered_models.remove(&pane_id);
@@ -2784,6 +2787,7 @@ impl FikaApp {
         self.visible_item_snapshot_caches.remove(&pane_id);
         self.static_item_text_shape_caches.remove(&pane_id);
         self.static_item_visual_perf_stats.remove(&pane_id);
+        self.item_interaction_perf_stats.remove(&pane_id);
         self.clear_hovered_item_for_pane(pane_id);
         self.compact_column_widths.remove(&pane_id);
         self.status_summaries.remove(&pane_id);
@@ -3224,6 +3228,7 @@ impl FikaApp {
         self.visible_item_snapshot_caches.remove(&pane_id);
         self.static_item_text_shape_caches.remove(&pane_id);
         self.static_item_visual_perf_stats.remove(&pane_id);
+        self.item_interaction_perf_stats.remove(&pane_id);
         self.clear_hovered_item_for_pane(pane_id);
         self.compact_column_widths.remove(&pane_id);
         self.set_pane_status(pane_id, view_mode_status(view.view_mode));
@@ -15728,6 +15733,7 @@ text/plain=viewer.desktop;\n",
             visible_item_snapshot_caches: HashMap::new(),
             static_item_text_shape_caches: HashMap::new(),
             static_item_visual_perf_stats: HashMap::new(),
+            item_interaction_perf_stats: HashMap::new(),
             hovered_item: None,
             compact_column_widths: HashMap::new(),
             pane_filters: HashMap::new(),

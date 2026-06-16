@@ -123,14 +123,17 @@ struct StaticItemVisualPaintState {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct StaticItemVisualPerfStats {
+pub(crate) struct ItemLayerPerfStats {
     pub(crate) prepaint_count: usize,
     pub(crate) prepaint_us: u128,
     pub(crate) paint_count: usize,
     pub(crate) paint_us: u128,
 }
 
-impl StaticItemVisualPerfStats {
+pub(crate) type StaticItemVisualPerfStats = ItemLayerPerfStats;
+pub(crate) type ItemInteractionPerfStats = ItemLayerPerfStats;
+
+impl ItemLayerPerfStats {
     fn has_activity(self) -> bool {
         self.prepaint_count > 0 || self.paint_count > 0
     }
@@ -929,6 +932,7 @@ pub(crate) fn file_grid(
             let mut notify_requested = false;
             let mut shape_cache_stats = StaticItemTextShapeCacheStats::default();
             let mut static_visual_stats = StaticItemVisualPerfStats::default();
+            let mut interaction_stats = ItemInteractionPerfStats::default();
             let _ = app.update(cx, |this, cx| {
                 let previous_view = this.panes.pane(pane_id).map(|pane| pane.view.clone());
                 this.set_pane_viewport_geometry(pane_id, measured.rect);
@@ -955,6 +959,7 @@ pub(crate) fn file_grid(
                 if perf_enabled {
                     shape_cache_stats = this.take_static_item_text_shape_cache_stats(pane_id);
                     static_visual_stats = this.take_static_item_visual_perf_stats(pane_id);
+                    interaction_stats = this.take_item_interaction_perf_stats(pane_id);
                 }
             });
             if let Some(started) = prepaint_started {
@@ -990,6 +995,17 @@ pub(crate) fn file_grid(
                         static_visual_stats.prepaint_us,
                         static_visual_stats.paint_count,
                         static_visual_stats.paint_us,
+                    );
+                }
+                if interaction_stats.has_activity() {
+                    eprintln!(
+                        "[fika item-interaction] pane={} mode={:?} prepaint_count={} prepaint={}us paint_count={} paint={}us",
+                        pane_id.0,
+                        view_mode,
+                        interaction_stats.prepaint_count,
+                        interaction_stats.prepaint_us,
+                        interaction_stats.paint_count,
+                        interaction_stats.paint_us,
                     );
                 }
             }
@@ -1044,6 +1060,12 @@ impl FikaApp {
             .unwrap_or_default()
     }
 
+    fn take_item_interaction_perf_stats(&mut self, pane_id: PaneId) -> ItemInteractionPerfStats {
+        self.item_interaction_perf_stats
+            .remove(&pane_id)
+            .unwrap_or_default()
+    }
+
     fn record_static_item_visual_prepaint(
         &mut self,
         pane_id: PaneId,
@@ -1063,6 +1085,25 @@ impl FikaApp {
         count: usize,
     ) {
         self.static_item_visual_perf_stats
+            .entry(pane_id)
+            .or_default()
+            .record_paint(elapsed, count);
+    }
+
+    fn record_item_interaction_prepaint(
+        &mut self,
+        pane_id: PaneId,
+        elapsed: Duration,
+        count: usize,
+    ) {
+        self.item_interaction_perf_stats
+            .entry(pane_id)
+            .or_default()
+            .record_prepaint(elapsed, count);
+    }
+
+    fn record_item_interaction_paint(&mut self, pane_id: PaneId, elapsed: Duration, count: usize) {
+        self.item_interaction_perf_stats
             .entry(pane_id)
             .or_default()
             .record_paint(elapsed, count);
@@ -2453,9 +2494,11 @@ impl Element for ItemInteractionLayerElement {
         bounds: Bounds<Pixels>,
         _request_layout: &mut Self::RequestLayoutState,
         window: &mut Window,
-        _cx: &mut App,
+        cx: &mut App,
     ) -> Self::PrepaintState {
-        self.items
+        let perf_started = crate::item_view_perf_enabled().then(std::time::Instant::now);
+        let states = self
+            .items
             .iter()
             .map(|item| ItemInteractionHitboxState {
                 item_id: item.item_id,
@@ -2464,7 +2507,15 @@ impl Element for ItemInteractionLayerElement {
                     HitboxBehavior::Normal,
                 ),
             })
-            .collect()
+            .collect::<Vec<_>>();
+        if let Some(started) = perf_started {
+            let elapsed = started.elapsed();
+            let count = states.len();
+            let _ = self.app.update(cx, |this, _cx| {
+                this.record_item_interaction_prepaint(self.pane_id, elapsed, count);
+            });
+        }
+        states
     }
 
     fn paint(
@@ -2477,11 +2528,19 @@ impl Element for ItemInteractionLayerElement {
         window: &mut Window,
         cx: &mut App,
     ) {
+        let perf_started = crate::item_view_perf_enabled().then(std::time::Instant::now);
+        let count = prepaint.len();
         request_layout.paint(bounds, window, cx, |_window, _cx| {});
         if let Some(state) = item_interaction_hovered_state(prepaint, window) {
             window.set_cursor_style(CursorStyle::PointingHand, &state.hitbox);
         }
         install_item_interaction_hover_listener(self.pane_id, self.app.clone(), prepaint, window);
+        if let Some(started) = perf_started {
+            let elapsed = started.elapsed();
+            let _ = self.app.update(cx, |this, _cx| {
+                this.record_item_interaction_paint(self.pane_id, elapsed, count);
+            });
+        }
     }
 }
 

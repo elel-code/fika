@@ -113,6 +113,8 @@ This is the active task board for the GPUI item view custom-paint migration.
 - [ ] Route directory drag-over projection through retained item visual state.
 - [x] Preserve item/place drag preview cursor offset behavior.
 - [ ] Preserve Rust viewport hit testing for click/menu/drop.
+- [x] Add P9a interaction-layer perf logging for retained hitbox prepaint/paint
+  count and timing.
 - [ ] Compare P9a perf logs against the previous GPUI hover/cursor shell path
   before expanding custom interaction further.
 
