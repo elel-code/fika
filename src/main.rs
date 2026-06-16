@@ -14999,6 +14999,165 @@ text/plain=viewer.desktop;\n",
         );
     }
 
+    fn configure_retained_hit_test_view(app: &mut FikaApp, pane_id: PaneId, view_mode: ViewMode) {
+        app.set_pane_view_mode(pane_id, view_mode);
+        let _ = app.set_pane_viewport_bounds(pane_id, 480.0, 280.0, 1_000.0, 1_000.0);
+        let _ = app.set_pane_viewport_geometry(
+            pane_id,
+            ViewRect {
+                x: 80.0,
+                y: 40.0,
+                width: 480.0,
+                height: 280.0,
+            },
+        );
+    }
+
+    fn retained_hit_test_item_window_point(
+        app: &mut FikaApp,
+        pane_id: PaneId,
+        layout_index: usize,
+    ) -> gpui::Point<gpui::Pixels> {
+        let geometry = app
+            .pane_viewport_geometries
+            .get(&pane_id)
+            .expect("viewport geometry")
+            .window_rect;
+        let layout = app.layout_projection_for_pane(pane_id).unwrap().layout;
+        let item = layout
+            .item_with_required_text_width(layout_index, None)
+            .expect("item layout");
+        let view = app.panes.pane(pane_id).unwrap().view.clone();
+        gpui::point(
+            px(geometry.x + item.icon_rect.x + item.icon_rect.width / 2.0 - view.scroll_x),
+            px(geometry.y + item.icon_rect.y + item.icon_rect.height / 2.0 - view.scroll_y),
+        )
+    }
+
+    fn retained_hit_test_blank_window_point(
+        app: &mut FikaApp,
+        pane_id: PaneId,
+    ) -> gpui::Point<gpui::Pixels> {
+        let geometry = app
+            .pane_viewport_geometries
+            .get(&pane_id)
+            .expect("viewport geometry")
+            .window_rect;
+        for (x, y) in [
+            (geometry.right() - 8.0, geometry.bottom() - 8.0),
+            (geometry.right() - 8.0, geometry.y + geometry.height / 2.0),
+            (geometry.x + geometry.width / 2.0, geometry.bottom() - 8.0),
+        ] {
+            let point = gpui::point(px(x), px(y));
+            if app.item_at_window_position(pane_id, point).is_none() {
+                return point;
+            }
+        }
+        panic!("expected a blank viewport point");
+    }
+
+    #[test]
+    fn retained_hit_testing_drives_context_menus_across_view_modes() {
+        let temp = test_dir("retained-hit-context");
+        let target_dir = temp.join("target");
+        let source_file = temp.join("source.txt");
+        std::fs::create_dir_all(&target_dir).unwrap();
+        std::fs::write(&source_file, "source").unwrap();
+        let mut app = test_app_with_entries(temp.to_str().unwrap(), &[]);
+        let pane_id = app.panes.focused().unwrap();
+        app.panes.pane_mut(pane_id).unwrap().model.replace_listing(
+            temp.clone(),
+            Arc::new(vec![
+                test_directory_entry("target"),
+                test_entry("source.txt"),
+            ]),
+        );
+
+        for view_mode in [ViewMode::Compact, ViewMode::Icons, ViewMode::Details] {
+            configure_retained_hit_test_view(&mut app, pane_id, view_mode);
+            app.clear_selection(pane_id);
+            app.dismiss_context_menu();
+
+            let item_point = retained_hit_test_item_window_point(&mut app, pane_id, 0);
+            let hit = app
+                .item_at_window_position(pane_id, item_point)
+                .expect("directory hit");
+            assert_eq!(hit.path, target_dir);
+            assert!(hit.is_dir);
+            assert!(app.show_item_context_menu(pane_id, hit.path, hit.is_dir, item_point));
+            assert!(matches!(
+                app.context_menu.as_ref().map(|menu| &menu.target),
+                Some(ContextMenuTarget::Item {
+                    path,
+                    is_dir: true,
+                    ..
+                }) if path == &target_dir
+            ));
+
+            app.dismiss_context_menu();
+            let blank_point = retained_hit_test_blank_window_point(&mut app, pane_id);
+            assert!(app.item_at_window_position(pane_id, blank_point).is_none());
+            assert!(app.show_blank_context_menu_if_blank(pane_id, blank_point));
+            assert!(matches!(
+                app.context_menu.as_ref().map(|menu| &menu.target),
+                Some(ContextMenuTarget::Blank { path, .. }) if path == &temp
+            ));
+        }
+
+        let _ = std::fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn retained_hit_testing_routes_drop_targets_across_view_modes() {
+        let temp = test_dir("retained-hit-drop");
+        let target_dir = temp.join("target");
+        let source_file = temp.join("source.txt");
+        std::fs::create_dir_all(&target_dir).unwrap();
+        std::fs::write(&source_file, "source").unwrap();
+        let mut app = test_app_with_entries(temp.to_str().unwrap(), &[]);
+        let pane_id = app.panes.focused().unwrap();
+        app.panes.pane_mut(pane_id).unwrap().model.replace_listing(
+            temp.clone(),
+            Arc::new(vec![
+                test_directory_entry("target"),
+                test_entry("source.txt"),
+            ]),
+        );
+
+        for view_mode in [ViewMode::Compact, ViewMode::Icons, ViewMode::Details] {
+            configure_retained_hit_test_view(&mut app, pane_id, view_mode);
+            assert!(app.clear_drag_drop_targets() || app.drop_targets.item().is_none());
+
+            let item_point = retained_hit_test_item_window_point(&mut app, pane_id, 0);
+            let update = app.update_dragged_paths_drop_target_from_window_position(
+                pane_id,
+                item_point,
+                std::slice::from_ref(&source_file),
+            );
+            assert_eq!(update.kind, Some(PathListDropTargetKind::Directory));
+            assert!(item_drop_target_matches_directory(
+                app.drop_targets.item(),
+                pane_id,
+                &target_dir
+            ));
+
+            assert!(app.clear_drag_drop_targets());
+            let blank_point = retained_hit_test_blank_window_point(&mut app, pane_id);
+            let update = app.update_dragged_paths_drop_target_from_window_position(
+                pane_id,
+                blank_point,
+                std::slice::from_ref(&source_file),
+            );
+            assert_eq!(update.kind, Some(PathListDropTargetKind::Pane));
+            assert!(item_drop_target_matches_pane(
+                app.drop_targets.item(),
+                pane_id
+            ));
+        }
+
+        let _ = std::fs::remove_dir_all(temp);
+    }
+
     #[test]
     fn rubber_band_selection_blank_right_click_clears_without_menu() {
         let mut app =
