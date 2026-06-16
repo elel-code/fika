@@ -120,12 +120,12 @@ This is the active task board for the GPUI item view custom-paint migration.
 
 ## P10: Rename Overlay Boundary
 
-- [ ] Keep normal item background/text/image in content-level layers when rename
+- [x] Keep normal item background/text/image in content-level layers when rename
   starts.
-- [ ] Position rename editor as the only item-local overlay subtree.
+- [x] Position rename editor as the only item-local overlay subtree.
 - [ ] Preserve caret hit testing, UTF-8 selection, warning/error helper, and Tab
   rename-next.
-- [ ] Verify starting/stopping rename does not rebuild unrelated item layer
+- [x] Verify starting/stopping rename does not rebuild unrelated item layer
   content.
 
 ## P11: Details Mode Paint Path

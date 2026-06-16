@@ -328,6 +328,8 @@ Keep rename as the only item-local child path until text input is separated from
 item painting:
 
 - the selected item's normal base visual remains painted by the layer
+- thumbnail/theme-icon images for the renaming item remain painted by the image
+  layer
 - the editor, caret, selection highlight, warning/error helper, and click caret
   hit testing remain in the existing rename subtree
 - the rename subtree is positioned as an overlay, not as the default item visual

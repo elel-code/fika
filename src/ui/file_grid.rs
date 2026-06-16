@@ -1800,6 +1800,7 @@ fn item_tile(
     let hovered = item.visual.hovered;
     let drop_target = item.visual.drop_target;
     let use_layer_visual_paint = item_uses_layer_visual_paint(content);
+    let use_layer_interaction = item_uses_layer_interaction(content);
     let drag_app = app.clone();
     let drag_value = ItemDrag {
         pane_id,
@@ -1840,7 +1841,7 @@ fn item_tile(
                 content_origin_y,
             })
         });
-    let core = if use_layer_visual_paint {
+    let core = if use_layer_interaction {
         core
     } else {
         core.cursor_pointer()
@@ -1855,24 +1856,8 @@ fn item_tile(
                 }
             }))
     };
-    let core = if use_layer_visual_paint {
-        core
-    } else {
-        let text = if let Some(draft_name) = content.draft_name.as_deref() {
-            rename_text_view(
-                pane_id,
-                SharedString::from(draft_name),
-                item.layout,
-                text_alignment,
-                selected,
-                content.draft_caret,
-                content.draft_selection,
-                content.draft_error.as_deref(),
-                content.draft_warning.as_deref(),
-                cx,
-            )
-            .into_any_element()
-        } else {
+    let core = if !use_layer_visual_paint {
+        let text = {
             static_text_view(
                 content.display_name.clone(),
                 &content.icon_name_lines,
@@ -1884,6 +1869,24 @@ fn item_tile(
         };
         core.child(icon_view(item.slot_id, content, item.layout))
             .child(text)
+    } else {
+        core
+    };
+    let core = if let Some(draft_name) = content.draft_name.as_deref() {
+        core.child(rename_text_view(
+            pane_id,
+            SharedString::from(draft_name),
+            item.layout,
+            text_alignment,
+            selected,
+            content.draft_caret,
+            content.draft_selection,
+            content.draft_error.as_deref(),
+            content.draft_warning.as_deref(),
+            cx,
+        ))
+    } else {
+        core
     };
 
     div()
@@ -1896,7 +1899,13 @@ fn item_tile(
         .child(core)
 }
 
-fn item_uses_layer_visual_paint(content: &ItemPaintContent) -> bool {
+fn item_uses_layer_visual_paint(_content: &ItemPaintContent) -> bool {
+    // Compact/Icons base visuals all live in content-level layers; rename only
+    // keeps a local editor overlay and its legacy interaction shell.
+    true
+}
+
+fn item_uses_layer_interaction(content: &ItemPaintContent) -> bool {
     content.draft_name.is_none()
 }
 
@@ -2424,12 +2433,10 @@ fn item_interaction_layer_items(items: &[ItemPaintSnapshot]) -> Vec<ItemInteract
     items
         .iter()
         .filter_map(|item| {
-            item_uses_layer_visual_paint(item.content.as_ref()).then_some(
-                ItemInteractionLayerItem {
-                    item_id: item.item_id,
-                    visual_rect: item.layout.visual_rect,
-                },
-            )
+            item_uses_layer_interaction(item.content.as_ref()).then_some(ItemInteractionLayerItem {
+                item_id: item.item_id,
+                visual_rect: item.layout.visual_rect,
+            })
         })
         .collect()
 }
@@ -3513,6 +3520,10 @@ mod tests {
         let mut rename_item =
             test_visible_item(4, ItemId(10), "draft.txt", test_item_layout(288.0), false);
         rename_item.draft_name = Some("draft-2.txt".to_string());
+        let mut rename_thumbnail_item =
+            test_visible_item(5, ItemId(11), "rename.png", test_item_layout(384.0), false);
+        rename_thumbnail_item.thumbnail_path = Some(Arc::from(Path::new("/tmp/rename.png")));
+        rename_thumbnail_item.draft_name = Some("rename-2.png".to_string());
 
         let projection = cache.project_file_grid_snapshot(
             icons_snapshot(vec![
@@ -3520,6 +3531,7 @@ mod tests {
                 thumbnail_item,
                 theme_icon_item,
                 rename_item,
+                rename_thumbnail_item,
             ]),
             None,
         );
@@ -3535,7 +3547,13 @@ mod tests {
                 .iter()
                 .map(|item| (item.item_id, item.paint_fallback_icon))
                 .collect::<Vec<_>>(),
-            vec![(ItemId(7), true), (ItemId(8), false), (ItemId(9), false)]
+            vec![
+                (ItemId(7), true),
+                (ItemId(8), false),
+                (ItemId(9), false),
+                (ItemId(10), true),
+                (ItemId(11), false)
+            ]
         );
         assert_eq!(
             image_items
@@ -3547,11 +3565,13 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 PathBuf::from("/tmp/photo.png"),
-                PathBuf::from("/tmp/app.svg")
+                PathBuf::from("/tmp/app.svg"),
+                PathBuf::from("/tmp/rename.png")
             ]
         );
         assert!(!item_image_load_failure_paints_fallback(&image_items[0]));
         assert!(item_image_load_failure_paints_fallback(&image_items[1]));
+        assert!(!item_image_load_failure_paints_fallback(&image_items[2]));
         assert_eq!(
             interaction_items
                 .iter()
@@ -3641,6 +3661,72 @@ mod tests {
             .stats;
         assert_eq!(stats.removed, 1);
         assert_eq!(stats.entries, 0);
+    }
+
+    #[test]
+    fn rename_overlay_changes_only_target_slot_content() {
+        let mut cache = ItemPaintSlotCache::default();
+        let alpha = test_visible_item(1, ItemId(7), "alpha.txt", test_item_layout(0.0), false);
+        let beta = test_visible_item(2, ItemId(8), "beta.txt", test_item_layout(96.0), false);
+
+        let projection = cache
+            .project_file_grid_snapshot(icons_snapshot(vec![alpha.clone(), beta.clone()]), None);
+        let FileGridRenderSnapshot::Icons { items, .. } = projection.snapshot else {
+            panic!("expected icons render snapshot");
+        };
+        let alpha_content = items[0].content.clone();
+        let beta_content = items[1].content.clone();
+
+        let mut beta_renaming = beta.clone();
+        beta_renaming.draft_name = Some("beta-2.txt".to_string());
+        beta_renaming.draft_caret = Some("beta".len());
+        let projection = cache
+            .project_file_grid_snapshot(icons_snapshot(vec![alpha.clone(), beta_renaming]), None);
+        let stats = projection.stats;
+        assert_eq!(stats.content_changed, 1);
+        assert_eq!(stats.unchanged, 1);
+        assert_eq!(stats.entries, 2);
+
+        let FileGridRenderSnapshot::Icons { items, .. } = projection.snapshot else {
+            panic!("expected icons render snapshot");
+        };
+        assert!(Arc::ptr_eq(&alpha_content, &items[0].content));
+        assert!(!Arc::ptr_eq(&beta_content, &items[1].content));
+
+        assert_eq!(
+            static_item_visual_layer_items(&items, ItemTileTextAlignment::Center)
+                .iter()
+                .map(|item| item.item_id)
+                .collect::<Vec<_>>(),
+            vec![ItemId(7), ItemId(8)]
+        );
+        assert_eq!(
+            item_interaction_layer_items(&items)
+                .iter()
+                .map(|item| item.item_id)
+                .collect::<Vec<_>>(),
+            vec![ItemId(7)]
+        );
+
+        let beta_renaming_content = items[1].content.clone();
+        let projection = cache.project_file_grid_snapshot(icons_snapshot(vec![alpha, beta]), None);
+        let stats = projection.stats;
+        assert_eq!(stats.content_changed, 1);
+        assert_eq!(stats.unchanged, 1);
+        assert_eq!(stats.entries, 2);
+
+        let FileGridRenderSnapshot::Icons { items, .. } = projection.snapshot else {
+            panic!("expected icons render snapshot");
+        };
+        assert!(Arc::ptr_eq(&alpha_content, &items[0].content));
+        assert!(!Arc::ptr_eq(&beta_renaming_content, &items[1].content));
+        assert_eq!(
+            item_interaction_layer_items(&items)
+                .iter()
+                .map(|item| item.item_id)
+                .collect::<Vec<_>>(),
+            vec![ItemId(7), ItemId(8)]
+        );
     }
 
     fn icons_snapshot(items: Vec<VisibleItemSnapshot>) -> FileGridSnapshot {
