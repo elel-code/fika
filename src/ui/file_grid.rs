@@ -4080,7 +4080,8 @@ mod tests {
     use super::{
         DetailsItemSnapshot, DetailsLayoutMetrics, DetailsPaintContent, DetailsRowControllerState,
         FileGridMode, FileGridRenderSnapshot, FileGridSnapshot, ItemPaintContent,
-        ItemPaintSlotCache, ItemTileTextAlignment, VisibleItemSnapshot, details_columns,
+        ItemPaintSlotCache, ItemTileTextAlignment, StaticItemLabelTextKey,
+        StaticItemTextShapeCacheKey, VisibleItemSnapshot, details_columns,
         details_visual_layer_element_id, details_visual_layer_items, display_text_layout,
         drag_preview_label, item_identity_element_id, item_image_element_id,
         item_image_layer_item_source_path, item_image_layer_items,
@@ -4098,7 +4099,7 @@ mod tests {
         CompactLayout, CompactLayoutOptions, IconsLayout, IconsLayoutOptions, ItemId, ItemLayout,
         ViewRect, ViewState,
     };
-    use gpui::{Bounds, SharedString, point, px, size};
+    use gpui::{Bounds, Font, SharedString, point, px, size};
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
 
@@ -4280,6 +4281,44 @@ mod tests {
 
         assert_eq!(bounds.origin, point(px(25.0), px(37.0)));
         assert_eq!(bounds.size, size(px(40.0), px(24.0)));
+    }
+
+    #[test]
+    fn static_text_shape_cache_key_ignores_item_origin_for_resize_reuse() {
+        let font = Font::default();
+        let key = StaticItemTextShapeCacheKey {
+            item_id: ItemId(7),
+            text_alignment: ItemTileTextAlignment::Start,
+            paint_fallback_icon: true,
+            text_font: font.clone(),
+            marker_font: font,
+            text_font_size_bits: 14.0f32.to_bits(),
+            marker_font_size_bits: 12.0f32.to_bits(),
+            label_line_height_bits: 20.0f32.to_bits(),
+            marker_line_height_bits: 20.0f32.to_bits(),
+            text_width_bits: 96.0f32.to_bits(),
+            text_height_bits: 20.0f32.to_bits(),
+            scale_factor_bits: 1.0f32.to_bits(),
+            text_color: 0x24292f,
+            fallback_fg: 0xffffff,
+            fallback_marker: SharedString::from("TXT"),
+            label: StaticItemLabelTextKey::Start(SharedString::from("alpha.txt")),
+        };
+
+        let moved_without_resize = key.clone();
+        assert_eq!(key, moved_without_resize);
+
+        let resized_text_rect = StaticItemTextShapeCacheKey {
+            text_width_bits: 112.0f32.to_bits(),
+            ..key.clone()
+        };
+        assert_ne!(key, resized_text_rect);
+
+        let renamed_label = StaticItemTextShapeCacheKey {
+            label: StaticItemLabelTextKey::Start(SharedString::from("beta.txt")),
+            ..key.clone()
+        };
+        assert_ne!(key, renamed_label);
     }
 
     #[test]

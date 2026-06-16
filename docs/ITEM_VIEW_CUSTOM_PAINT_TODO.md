@@ -22,8 +22,8 @@ This is the active task board for the GPUI item view custom-paint migration.
 - [x] Keep rename items on current editor path.
 - [x] Preserve item drag preview and payload behavior.
 - [x] Run `cargo fmt`, `cargo check`, `cargo test`, `cargo build`.
-- [ ] Ask for `FIKA_PERF_ITEM_VIEW=1 cargo run -- ~/Downloads` logs after
-  this slice.
+- [x] Review user-provided `FIKA_PERF_ITEM_VIEW=1 cargo run -- ~/Downloads`
+  logs after this slice.
 
 ## P2: Text Shape Cache
 
@@ -32,7 +32,8 @@ This is the active task board for the GPUI item view custom-paint migration.
 - [x] Invalidate on view mode, zoom/font metrics, selection color, displayed
   lines, or rename state change.
 - [x] Instrument cache hit/miss counts behind `FIKA_PERF_ITEM_VIEW`.
-- [ ] Verify resize does not reshape unchanged visible item labels.
+- [x] Verify resize does not reshape unchanged visible item labels when text
+  content and text rect dimensions are stable.
 
 ## P3: Retained Paint Slot State
 
