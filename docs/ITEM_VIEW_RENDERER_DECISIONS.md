@@ -13,6 +13,8 @@ remain Dolphin-aligned.
   acceptable renderers when fed from retained model/layout/controller data.
 - A custom-painted surface must have runtime perf evidence and behavior
   coverage before it replaces a GPUI surface.
+- When a GPUI baseline exists, the evidence must compare the custom painter
+  against that baseline under the same directory, viewport, mode, and action.
 - A GPUI built-in surface should stay when GPUI owns a platform contract that
   Fika cannot yet reproduce through public APIs.
 

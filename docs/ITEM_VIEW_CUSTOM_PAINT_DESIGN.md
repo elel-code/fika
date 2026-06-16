@@ -59,6 +59,19 @@ Renderer policy:
 - Keep model, layout, interaction, and painter data split even when the current
   renderer for a surface remains a GPUI `Div`, `img()`, or text editor subtree.
 
+Renderer baseline gate:
+
+- Treat the existing GPUI renderer as the baseline for any surface that already
+  has one. A custom painter must be compared against that baseline under the
+  same directory, viewport size, view mode, and user action before it becomes
+  the default path.
+- A custom painter that does not beat or match the GPUI baseline on steady perf,
+  behavior completeness, and maintenance risk is not accepted just because it
+  fits the long-term reuse-pool direction.
+- The Dolphin-aligned model/controller split can advance independently of the
+  renderer. If the custom painter loses, keep the retained state boundary and
+  leave that surface rendered by GPUI built-ins.
+
 Current per-surface decisions live in
 `docs/ITEM_VIEW_RENDERER_DECISIONS.md`. Update that file before replacing any
 remaining GPUI surface or before reverting a custom-painted surface back to a

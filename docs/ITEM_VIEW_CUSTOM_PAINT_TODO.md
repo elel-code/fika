@@ -190,6 +190,8 @@ This is the active task board for the GPUI item view custom-paint migration.
 - [ ] Expand custom paint only when runtime logs show neutral or better steady
   behavior and the migration keeps behavior-complete drag/drop, rename, and
   selection paths.
+- [ ] For every surface that currently has a GPUI path, capture a same-scenario
+  GPUI baseline before accepting a custom painter as the default renderer.
 - [ ] Record the renderer decision and perf evidence in the relevant reference
   doc or TODO entry before removing any existing GPUI surface.
 - [x] Add `docs/ITEM_VIEW_RENDERER_DECISIONS.md` as the current per-surface
