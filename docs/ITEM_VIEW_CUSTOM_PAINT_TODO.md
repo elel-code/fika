@@ -117,6 +117,9 @@ This is the active task board for the GPUI item view custom-paint migration.
   row shells no longer paint ad hoc hover backgrounds.
 - [x] Route Details hover/cursor hit testing through the retained interaction
   layer; Details row shells no longer own hover listeners or cursor styling.
+- [x] Route Details click/menu/navigation/middle-paste through viewport-level
+  retained hit testing; Details row shells no longer own mouse-down handlers or
+  block mouse events.
 - [x] Preserve item/place drag preview cursor offset behavior.
 - [x] Preserve Rust viewport hit testing for click/menu/drop across Compact,
   Icons, and Details retained migration paths.
@@ -143,8 +146,11 @@ This is the active task board for the GPUI item view custom-paint migration.
   existing GPUI row subtree as the render path.
 - [x] P11b: Paint row backgrounds, icons, and text cells from a content-level
   custom layer while retaining row shells for interaction and drag.
-- [x] P11c: Preserve menu/DnD/drop controller fields and Trash-specific visual
-  columns at the retained painter boundary.
+- [x] P11c: Preserve retained Details path/DnD/drop fields and Trash-specific
+  visual columns at the retained painter boundary.
+- [x] P11e: Shrink Details row shells to the remaining GPUI drag/drop boundary;
+  click, menu, navigation, scroll, and middle-paste controller behavior now
+  routes through viewport retained hit testing.
 - [x] P11d: Split Details visual layer perf logging into a dedicated
   `[fika details-visual]` channel so GPUI row-shell cost and custom paint cost
   can be compared without mixing with Compact/Icons static visuals.

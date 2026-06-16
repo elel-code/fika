@@ -364,18 +364,21 @@ After Compact/Icons are fully retained, move Details rows to the same model:
   feeds the existing GPUI row subtree from retained content/geometry/visual
   snapshots. This is a bridge only; it does not claim a custom-paint win.
 - P11b moves row backgrounds, icons, and text cells into a content-level custom
-  visual layer. Row shells remain as controller/drag surfaces until hit testing
-  and drag-start can be safely moved without losing behavior or perf evidence.
-- P11c keeps controller data explicit for row shells: path, directory flag,
+  visual layer. Row shells remain only as the GPUI drag/drop boundary until
+  drag-start can be safely moved without losing behavior or perf evidence.
+- P11c keeps retained Details row data explicit: path, directory flag,
   name/icon, selection count, and drop-target state are projected from retained
-  row snapshots and covered by tests. Trash-only columns are also projected into
-  visual layer cells.
+  row snapshots and covered by tests. Row shells consume only the remaining
+  drag/drop fields. Trash-only columns are also projected into visual layer
+  cells.
 - P11d gives the Details visual layer a dedicated perf channel so custom paint
   expansion can be judged independently from Compact/Icons static visuals.
 - Details text shaping uses a pane-local cache keyed by text and text style; its
   hit/miss/eviction stats are reported separately from row visual prepaint/paint.
 - row backgrounds, text cells, and icons are painted from retained row snapshots
 - column resize/sort/drop hit testing stays model-driven
+- click, menu, navigation, scroll, and middle-paste behavior routes through the
+  viewport's retained hit testing instead of row-local mouse handlers
 - inline rename in Details uses the same overlay boundary as Compact/Icons
 
 Acceptance:

@@ -1137,7 +1137,6 @@ pub(crate) fn file_grid(
                     content_height,
                     metrics,
                     name_column_width,
-                    mode,
                     app.clone(),
                     cx,
                 ));
@@ -1655,7 +1654,6 @@ fn details_table(
     content_height: f32,
     metrics: DetailsLayoutMetrics,
     name_column_width: f32,
-    mode: FileGridMode,
     app: WeakEntity<FikaApp>,
     cx: &mut Context<FikaApp>,
 ) -> Div {
@@ -1689,7 +1687,7 @@ fn details_table(
         .children(
             items
                 .into_iter()
-                .map(|item| details_row(pane_id, item, content_width, mode, cx)),
+                .map(|item| details_row(pane_id, item, content_width, cx)),
         )
         .when(row_count == 0, |table| {
             table.child(
@@ -2327,7 +2325,6 @@ fn details_row(
     pane_id: PaneId,
     item: DetailsPaintSnapshot,
     content_width: f32,
-    mode: FileGridMode,
     cx: &mut Context<FikaApp>,
 ) -> Stateful<Div> {
     let top = f32::from_bits(item.geometry.row_top);
@@ -2335,12 +2332,6 @@ fn details_row(
     let controller = DetailsRowControllerState::from_snapshot(&item);
     let item_id = controller.item_id;
     let selected = controller.selected;
-    let path_for_mouse_down = controller.path.as_ref().to_path_buf();
-    let path_for_menu = controller.path.as_ref().to_path_buf();
-    let target_dir_for_drop = controller.path.as_ref().to_path_buf();
-    let is_dir_for_click = controller.is_dir;
-    let is_dir_for_menu = controller.is_dir;
-    let is_dir_for_drop = controller.is_dir;
 
     let drag_value = ItemDrag {
         pane_id,
@@ -2362,57 +2353,8 @@ fn details_row(
         .flex()
         .items_center()
         .bg(rgba(0x00000000))
-        .block_mouse_except_scroll()
-        .on_scroll_wheel(
-            cx.listener(move |this, event: &gpui::ScrollWheelEvent, _window, cx| {
-                handle_file_grid_wheel(this, pane_id, event, cx);
-            }),
-        )
-        .on_mouse_down(
-            MouseButton::Left,
-            cx.listener(move |this, event: &gpui::MouseDownEvent, _window, cx| {
-                if handle_item_mouse_down(
-                    this,
-                    pane_id,
-                    path_for_mouse_down.clone(),
-                    is_dir_for_click,
-                    mode,
-                    event,
-                    cx,
-                ) {
-                    cx.notify();
-                }
-            }),
-        )
-        .on_mouse_down(
-            MouseButton::Right,
-            cx.listener(move |this, event: &gpui::MouseDownEvent, _window, cx| {
-                this.show_item_context_menu(
-                    pane_id,
-                    path_for_menu.clone(),
-                    is_dir_for_menu,
-                    event.position,
-                );
-                cx.stop_propagation();
-                cx.notify();
-            }),
-        )
-        .on_mouse_down(
-            MouseButton::Navigate(NavigationDirection::Back),
-            cx.listener(move |this, _event: &gpui::MouseDownEvent, _window, cx| {
-                handle_pane_navigation_mouse_down(this, pane_id, NavigationDirection::Back);
-                cx.stop_propagation();
-                cx.notify();
-            }),
-        )
-        .on_mouse_down(
-            MouseButton::Navigate(NavigationDirection::Forward),
-            cx.listener(move |this, _event: &gpui::MouseDownEvent, _window, cx| {
-                handle_pane_navigation_mouse_down(this, pane_id, NavigationDirection::Forward);
-                cx.stop_propagation();
-                cx.notify();
-            }),
-        )
+        // The viewport owns click/menu/navigation hit testing from retained
+        // geometry; this row remains only as GPUI's drag/drop boundary.
         .on_drag(drag_value, move |drag, cursor_offset, _, cx| {
             let _ = app.update(cx, |this, _cx| {
                 this.begin_item_drag(drag.payload());
@@ -2438,23 +2380,6 @@ fn details_row(
         .on_drop::<PlaceDrag>(cx.listener(move |this, drag: &PlaceDrag, window, cx| {
             handle_file_grid_place_drop(this, pane_id, drag, window, cx);
         }))
-        .when(is_dir_for_drop, |row| {
-            let target_dir_for_primary_paste = target_dir_for_drop.clone();
-            row.on_mouse_down(
-                MouseButton::Middle,
-                cx.listener(move |this, _event: &gpui::MouseDownEvent, _window, cx| {
-                    if matches!(mode, FileGridMode::Manager) {
-                        this.paste_primary_into_directory(
-                            pane_id,
-                            target_dir_for_primary_paste.clone(),
-                            cx,
-                        );
-                        cx.stop_propagation();
-                        cx.notify();
-                    }
-                }),
-            )
-        })
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -4974,7 +4899,7 @@ mod tests {
     }
 
     #[test]
-    fn details_row_controller_state_preserves_menu_drag_and_drop_fields() {
+    fn details_row_controller_state_preserves_retained_drag_and_drop_fields() {
         let mut cache = ItemPaintSlotCache::default();
         let metrics = test_details_metrics();
         let mut item = test_details_item(0, ItemId(7), "folder");
