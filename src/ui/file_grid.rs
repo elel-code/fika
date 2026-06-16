@@ -368,8 +368,13 @@ impl ItemPaintSlotCache {
                 name_column_width,
             } => {
                 let (mut stats, _) = self.project_visible_items(Vec::new(), None);
-                let items =
-                    self.project_details_items(items, metrics, name_column_width, &mut stats);
+                let items = self.project_details_items(
+                    items,
+                    metrics,
+                    name_column_width,
+                    hovered_item,
+                    &mut stats,
+                );
                 self.finish_stats(&mut stats);
                 ItemPaintSlotProjection {
                     stats,
@@ -454,6 +459,7 @@ impl ItemPaintSlotCache {
         items: Vec<DetailsItemSnapshot>,
         metrics: DetailsLayoutMetrics,
         name_column_width: f32,
+        hovered_item: Option<ItemId>,
         stats: &mut ItemPaintSlotStats,
     ) -> Vec<DetailsPaintSnapshot> {
         self.visible_epoch = self.visible_epoch.wrapping_add(1).max(1);
@@ -462,7 +468,7 @@ impl ItemPaintSlotCache {
             let item_id = item.item_id;
             let geometry = DetailsPaintGeometry::from_item(&item, metrics, name_column_width);
             let next_content = DetailsPaintContent::from_item(&item);
-            let visual = DetailsPaintVisualState::from_item(&item);
+            let visual = DetailsPaintVisualState::from_item(&item, hovered_item);
             match self.details_slots.get_mut(&item_id) {
                 Some(slot) => {
                     if slot.content.as_ref() != &next_content {
@@ -703,14 +709,16 @@ impl DetailsPaintContent {
 struct DetailsPaintVisualState {
     selected: bool,
     selection_count: usize,
+    hovered: bool,
     drop_target: bool,
 }
 
 impl DetailsPaintVisualState {
-    fn from_item(item: &DetailsItemSnapshot) -> Self {
+    fn from_item(item: &DetailsItemSnapshot, hovered_item: Option<ItemId>) -> Self {
         Self {
             selected: item.selected,
             selection_count: item.selection_count,
+            hovered: hovered_item == Some(item.item_id),
             drop_target: item.drop_target,
         }
     }
@@ -1793,6 +1801,7 @@ fn details_visual_layer_items(
                 row_height: f32::from_bits(item.geometry.row_height),
                 icon_size: f32::from_bits(item.geometry.icon_size),
                 selected: item.visual.selected,
+                hovered: item.visual.hovered,
                 drop_target: item.visual.drop_target,
                 cells,
             }
@@ -1807,6 +1816,7 @@ struct DetailsVisualLayerItem {
     row_height: f32,
     icon_size: f32,
     selected: bool,
+    hovered: bool,
     drop_target: bool,
     cells: Vec<DetailsVisualCell>,
 }
@@ -1841,6 +1851,7 @@ struct DetailsVisualPaintState {
     row_top: f32,
     row_height: f32,
     selected: bool,
+    hovered: bool,
     drop_target: bool,
     cells: Vec<DetailsVisualCellPaintState>,
 }
@@ -2037,6 +2048,7 @@ fn details_visual_prepaint_item(
         row_top: item.row_top,
         row_height: item.row_height,
         selected: item.selected,
+        hovered: item.hovered,
         drop_target: item.drop_target,
         cells,
     }
@@ -2209,7 +2221,12 @@ fn details_visual_paint_item(
     );
     window.paint_quad(fill(
         row_bounds,
-        details_row_background(state.selected, state.drop_target, state.row_index),
+        details_row_background(
+            state.selected,
+            state.hovered,
+            state.drop_target,
+            state.row_index,
+        ),
     ));
     for cell in state.cells.iter() {
         match cell {
@@ -2311,7 +2328,6 @@ fn details_row(
     let controller = DetailsRowControllerState::from_snapshot(&item);
     let item_id = controller.item_id;
     let selected = controller.selected;
-    let drop_target = controller.drop_target;
     let path_for_mouse_down = controller.path.as_ref().to_path_buf();
     let path_for_menu = controller.path.as_ref().to_path_buf();
     let target_dir_for_drop = controller.path.as_ref().to_path_buf();
@@ -2341,7 +2357,16 @@ fn details_row(
         .bg(rgba(0x00000000))
         .block_mouse_except_scroll()
         .cursor_pointer()
-        .hover(move |row| row.bg(item_tile_hover_background(selected, drop_target)))
+        .on_hover(cx.listener(move |this, hovered: &bool, _window, cx| {
+            let changed = if *hovered {
+                this.set_hovered_item(pane_id, item_id)
+            } else {
+                this.clear_hovered_item(pane_id, item_id)
+            };
+            if changed {
+                cx.notify();
+            }
+        }))
         .on_scroll_wheel(
             cx.listener(move |this, event: &gpui::ScrollWheelEvent, _window, cx| {
                 handle_file_grid_wheel(this, pane_id, event, cx);
@@ -2463,11 +2488,20 @@ impl DetailsRowControllerState {
     }
 }
 
-fn details_row_background(selected: bool, drop_target: bool, row_index: usize) -> Rgba {
+fn details_row_background(
+    selected: bool,
+    hovered: bool,
+    drop_target: bool,
+    row_index: usize,
+) -> Rgba {
     if drop_target {
         drop_target_item_background()
+    } else if selected && hovered {
+        rgb(0xcfe3ff)
     } else if selected {
         rgb(0xdbeafe)
+    } else if hovered {
+        rgb(0xeaf1ff)
     } else if row_index % 2 == 0 {
         rgb(0xffffff)
     } else {
@@ -2724,16 +2758,6 @@ fn item_tile_background(selected: bool, drop_target: bool, hovered: bool) -> Rgb
         rgb(0xeaf1ff)
     } else {
         rgba(0x00000000)
-    }
-}
-
-fn item_tile_hover_background(selected: bool, drop_target: bool) -> Rgba {
-    if drop_target {
-        drop_target_item_background()
-    } else if selected {
-        rgb(0xcfe3ff)
-    } else {
-        rgb(0xeaf1ff)
     }
 }
 
@@ -4694,6 +4718,21 @@ mod tests {
             &first_content,
             &first_details_paint_content(&projection.snapshot)
         ));
+
+        let projection = cache.project_file_grid_snapshot(
+            details_snapshot(vec![base.clone()], metrics, 260.0),
+            Some(ItemId(7)),
+        );
+        assert_eq!(projection.stats.visual_changed, 1);
+        assert_eq!(projection.stats.entries, 1);
+        assert!(Arc::ptr_eq(
+            &first_content,
+            &first_details_paint_content(&projection.snapshot)
+        ));
+        let FileGridRenderSnapshot::Details { items, .. } = &projection.snapshot else {
+            panic!("expected details render snapshot");
+        };
+        assert!(items[0].visual.hovered);
     }
 
     #[test]
@@ -4775,8 +4814,10 @@ mod tests {
         item.selected = true;
         item.size_label = "42 B".to_string();
         item.modified_label = "Today".to_string();
-        let projection =
-            cache.project_file_grid_snapshot(details_snapshot(vec![item], metrics, 260.0), None);
+        let projection = cache.project_file_grid_snapshot(
+            details_snapshot(vec![item], metrics, 260.0),
+            Some(ItemId(7)),
+        );
         let FileGridRenderSnapshot::Details { items, .. } = projection.snapshot else {
             panic!("expected details render snapshot");
         };
@@ -4790,6 +4831,7 @@ mod tests {
             metrics.header_height + 2.0 * metrics.row_height
         );
         assert!(visual_items[0].selected);
+        assert!(visual_items[0].hovered);
         assert_eq!(visual_items[0].cells.len(), 3);
         match &visual_items[0].cells[0].content {
             super::DetailsVisualCellContent::Name { name, icon } => {
