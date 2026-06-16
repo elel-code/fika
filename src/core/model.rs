@@ -230,10 +230,21 @@ impl DirectoryModel {
     }
 
     pub fn path_for_entry(&self, entry: &ModelEntry) -> PathBuf {
+        if let Some(target_path) = &entry.target_path {
+            return target_path.clone();
+        }
         self.data.directory.join(entry.name.as_ref())
     }
 
     pub fn index_of_path(&self, path: &Path) -> Option<usize> {
+        if let Some(index) = self
+            .data
+            .entries
+            .iter()
+            .position(|entry| entry.target_path.as_deref() == Some(path))
+        {
+            return Some(index);
+        }
         let item_path = directory_entry_path(&self.data.directory, path)?;
         let name = item_path.file_name()?.to_string_lossy();
         self.index_of_name(name.as_ref())
@@ -1153,6 +1164,7 @@ mod tests {
         Entry::new(EntryData {
             name: Arc::from(name),
             name_width_units: name.len() as u16,
+            target_path: None,
             size_bytes,
             modified_secs,
             metadata_complete: true,
@@ -1174,6 +1186,7 @@ mod tests {
         Entry::new(EntryData {
             name: Arc::from(name),
             name_width_units: name.len() as u16,
+            target_path: None,
             size_bytes,
             modified_secs,
             metadata_complete,
@@ -1195,6 +1208,7 @@ mod tests {
         Entry::new(EntryData {
             name: Arc::from(name),
             name_width_units: name.len() as u16,
+            target_path: None,
             size_bytes,
             modified_secs,
             metadata_complete: true,
@@ -1206,10 +1220,27 @@ mod tests {
         })
     }
 
+    fn entry_with_target(name: &str, target_path: &str) -> Entry {
+        Entry::new(EntryData {
+            name: Arc::from(name),
+            name_width_units: name.len() as u16,
+            target_path: Some(PathBuf::from(target_path)),
+            size_bytes: 0,
+            modified_secs: None,
+            metadata_complete: true,
+            mime_type: Some(Arc::from("inode/directory")),
+            mime_magic_checked: true,
+            trash_original_path: None,
+            trash_deletion_time: None,
+            is_dir: true,
+        })
+    }
+
     fn trash_entry(name: &str, original_path: &str, deletion_time: &str) -> Entry {
         Entry::new(EntryData {
             name: Arc::from(name),
             name_width_units: name.len() as u16,
+            target_path: None,
             size_bytes: 0,
             modified_secs: None,
             metadata_complete: true,
@@ -1237,6 +1268,24 @@ mod tests {
         assert_eq!(model.entries()[0].name.as_ref(), "a");
         assert_eq!(model.path_for_index(1), Some(PathBuf::from("/tmp/b.txt")));
         assert_eq!(model.index_of_path(Path::new("/tmp/b.txt")), Some(1));
+    }
+
+    #[test]
+    fn listing_uses_entry_target_path_for_activation_and_indexing() {
+        let mut model = DirectoryModel::for_directory(PathBuf::from("network:///"));
+        model.replace_listing(
+            PathBuf::from("network:///"),
+            listing(vec![entry_with_target("Team Share", "smb://server/share/")]),
+        );
+
+        assert_eq!(
+            model.path_for_index(0),
+            Some(PathBuf::from("smb://server/share/"))
+        );
+        assert_eq!(
+            model.index_of_path(Path::new("smb://server/share/")),
+            Some(0)
+        );
     }
 
     #[test]

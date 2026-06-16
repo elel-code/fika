@@ -50,7 +50,7 @@ pub use core::listing_worker::{
 };
 pub use core::location::{
     BreadcrumbSegment, breadcrumb_segments, complete_location_input, expand_user_path, home_dir,
-    normalize_start_dir, resolve_location_input,
+    normalize_start_dir, parent_location, resolve_location_input,
 };
 pub use core::metadata::{
     MetadataRoleBatch, MetadataRoleCandidate, MetadataRoleRequest, MetadataRoleResult,
@@ -67,10 +67,12 @@ pub use core::model::{
 };
 pub use core::network::{
     DOLPHIN_REMOTE_ROOT_URI, NETWORK_ROOT_ICON, NETWORK_ROOT_LABEL, NETWORK_ROOT_URI, NetworkAuth,
-    NetworkFilesystemKind, NetworkLocation, NetworkUrlError, classify_network_filesystem,
-    filesystem_type_is_remote, is_network_root_path, is_network_root_uri,
-    is_supported_network_scheme, network_root_location, network_root_path, normalize_network_uri,
-    parse_network_location, supported_network_schemes,
+    NetworkFilesystemKind, NetworkLocation, NetworkScanError, NetworkUrlError,
+    classify_network_filesystem, filesystem_type_is_remote, is_network_path, is_network_root_path,
+    is_network_root_uri, is_supported_network_scheme, network_child_path, network_parent_path,
+    network_path_display_name, network_path_from_uri, network_root_location, network_root_path,
+    network_uri_from_path, normalize_network_uri, parse_network_location,
+    read_network_entry_batches_sync_cancellable, supported_network_schemes,
 };
 pub use core::operation_runtime::{
     OperationController, OperationId, OperationRuntime, OperationRuntimeError, OperationSnapshot,
@@ -81,9 +83,8 @@ pub use core::operations::{
     Operation, OperationQueue, RenameItemResult, RenameUndoItem, TransferTaskResult,
     TransferUndoItem, TrashSelectionResult, TrashUndoItem, TrashViewOperation,
     TrashViewOperationResult, UndoPayload, UndoRecord, UndoSerial, UndoTaskResult, action_status,
-    create_item_result,
-    create_item_result_async, created_item_label, default_created_item_name, parent_dirs,
-    paste_text_result, paste_text_result_async, push_unique_path, rename_item_result,
+    create_item_result, create_item_result_async, created_item_label, default_created_item_name,
+    parent_dirs, paste_text_result, paste_text_result_async, push_unique_path, rename_item_result,
     rename_item_result_async, transfer_paths_result, transfer_paths_result_async,
     trash_selection_result, trash_selection_result_async, trash_view_operation_result,
     trash_view_operation_result_async, undo_record_result, undo_record_result_async,

@@ -105,7 +105,10 @@ impl Operation {
             } => operation.progress_label(*item_count),
             Self::Rename { path, .. } => format!("Renaming {}", path.display()),
             Self::Create { kind, .. } => {
-                format!("Creating {}", created_item_label(*kind).to_ascii_lowercase())
+                format!(
+                    "Creating {}",
+                    created_item_label(*kind).to_ascii_lowercase()
+                )
             }
             Self::Undo { label, .. } => format!("Undoing {label}"),
             Self::External { title, .. } => title.clone(),

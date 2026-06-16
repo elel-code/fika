@@ -2,6 +2,7 @@ use super::entries::{
     Entry, read_entries_sync_cancellable, read_entry_batches_sync_cancellable, read_entry_sync,
 };
 use super::model::{DirectoryModel, DirectoryModelSignal};
+use super::network::{is_network_path, read_network_entry_batches_sync_cancellable};
 use super::pane::{Generation, PaneId, RequestSerial};
 use notify::event::{CreateKind, ModifyKind, RemoveKind, RenameMode};
 use notify::{Event, EventKind, RecursiveMode, Watcher};
@@ -254,6 +255,9 @@ impl DirectoryLister {
 
     pub fn start_watcher(&mut self) -> Result<(), String> {
         self.drop_watcher();
+        if is_network_path(&self.path) {
+            return Ok(());
+        }
         let (tx, rx) = mpsc::channel();
         let mut watcher = notify::recommended_watcher(move |event| {
             let _ = tx.send(event);
@@ -533,7 +537,7 @@ fn read_listing_events_cancellable(
         return None;
     }
 
-    let result = match read_entries_sync_cancellable(&path, &mut is_cancelled) {
+    let result = match read_entries_for_listing(&path, &mut is_cancelled) {
         Ok(Some(entries)) => DirectoryListerEvent::ListingRefreshed {
             pane_id,
             generation,
@@ -543,7 +547,7 @@ fn read_listing_events_cancellable(
         },
         Ok(None) => return None,
         Err(err) => {
-            if mode == LoadMode::Reload && !path.exists() {
+            if mode == LoadMode::Reload && !is_network_path(&path) && !path.exists() {
                 DirectoryListerEvent::CurrentDirectoryRemoved {
                     pane_id,
                     generation,
@@ -573,6 +577,39 @@ fn read_listing_events_cancellable(
             path,
         },
     ])
+}
+
+fn read_entries_for_listing(
+    path: &Path,
+    mut is_cancelled: impl FnMut() -> bool,
+) -> std::io::Result<Option<Vec<Entry>>> {
+    if is_network_path(path) {
+        let mut entries = Vec::new();
+        let Some(()) =
+            read_entry_batches_for_listing(path, usize::MAX, &mut is_cancelled, |mut batch| {
+                entries.append(&mut batch);
+            })?
+        else {
+            return Ok(None);
+        };
+        Ok(Some(entries))
+    } else {
+        read_entries_sync_cancellable(path, is_cancelled)
+    }
+}
+
+fn read_entry_batches_for_listing(
+    path: &Path,
+    batch_size: usize,
+    is_cancelled: impl FnMut() -> bool,
+    on_batch: impl FnMut(Vec<Entry>),
+) -> std::io::Result<Option<()>> {
+    if is_network_path(path) {
+        read_network_entry_batches_sync_cancellable(path, batch_size, is_cancelled, on_batch)
+            .map_err(|err| std::io::Error::other(err.to_string()))
+    } else {
+        read_entry_batches_sync_cancellable(path, batch_size, is_cancelled, on_batch)
+    }
 }
 
 fn read_listing_events_streaming_cancellable(
@@ -608,11 +645,8 @@ fn read_listing_events_streaming_cancellable(
             *pending_started_at = None;
         };
 
-    let result = read_entry_batches_sync_cancellable(
-        &path,
-        LISTING_BATCH_SIZE,
-        &mut is_cancelled,
-        |entries| {
+    let result =
+        read_entry_batches_for_listing(&path, LISTING_BATCH_SIZE, &mut is_cancelled, |entries| {
             if pending_entries.is_empty() {
                 pending_started_at = Some(Instant::now());
             }
@@ -622,8 +656,7 @@ fn read_listing_events_streaming_cancellable(
             {
                 dispatch_pending(&mut pending_entries, &mut pending_started_at);
             }
-        },
-    );
+        });
 
     match result {
         Ok(Some(())) => {
@@ -644,7 +677,7 @@ fn read_listing_events_streaming_cancellable(
             if is_cancelled() {
                 return None;
             }
-            let event = if mode == LoadMode::Reload && !path.exists() {
+            let event = if mode == LoadMode::Reload && !is_network_path(&path) && !path.exists() {
                 DirectoryListerEvent::CurrentDirectoryRemoved {
                     pane_id,
                     generation,
@@ -1004,6 +1037,31 @@ mod tests {
     }
 
     #[test]
+    fn network_paths_skip_local_watcher_startup() {
+        let mut lister = DirectoryLister::new(
+            PaneId(1),
+            crate::core::network::network_root_path(),
+            Generation(1),
+        );
+
+        assert!(lister.start_watcher().is_ok());
+    }
+
+    #[test]
+    fn network_listing_cancellation_stops_before_scan() {
+        let result = DirectoryLister::read_listing_events_cancellable(
+            PaneId(1),
+            Generation(1),
+            RequestSerial(1),
+            crate::core::network::network_root_path(),
+            LoadMode::Load,
+            || true,
+        );
+
+        assert_eq!(result, None);
+    }
+
+    #[test]
     fn watcher_create_maps_to_items_added() {
         let root = Path::new("/tmp/root");
         let delta = WatcherDelta {
@@ -1248,6 +1306,7 @@ mod tests {
         Entry::new(super::super::entries::EntryData {
             name: Arc::from(name),
             name_width_units: name.len() as u16,
+            target_path: None,
             size_bytes: 0,
             modified_secs: None,
             metadata_complete: true,

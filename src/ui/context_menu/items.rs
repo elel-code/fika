@@ -95,7 +95,9 @@ fn context_menu_icon_for_action(action: &ContextMenuAction) -> Option<ContextMen
         ContextMenuAction::SafelyRemoveDevice => {
             Some(ContextMenuIcon::Named("drive-removable-media".to_string()))
         }
-        ContextMenuAction::AddPlace => Some(ContextMenuIcon::Place),
+        ContextMenuAction::AddPlace | ContextMenuAction::AddNetworkDrive => {
+            Some(ContextMenuIcon::Place)
+        }
         ContextMenuAction::EditPlace => Some(ContextMenuIcon::Edit),
         ContextMenuAction::RemovePlace => Some(ContextMenuIcon::Remove),
         ContextMenuAction::HidePlace

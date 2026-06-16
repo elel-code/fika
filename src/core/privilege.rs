@@ -2,6 +2,7 @@
 
 use super::bus::{BusController, BusKind, with_bus_tokio_context};
 use super::file_ops;
+use super::network::is_network_path;
 use futures_lite::StreamExt;
 use std::env;
 use std::fs;
@@ -156,6 +157,38 @@ impl PrivilegedCommand {
         }
         dirs
     }
+
+    fn validate_local_paths(&self) -> Result<(), String> {
+        match self {
+            Self::CreateFolder { parent, .. } | Self::CreateFile { parent, .. } => {
+                ensure_privileged_local_path(parent)
+            }
+            Self::Rename { path, .. } => ensure_privileged_local_path(path),
+            Self::Trash { paths } => {
+                for path in paths {
+                    ensure_privileged_local_path(path)?;
+                }
+                Ok(())
+            }
+            Self::Transfer {
+                source, target_dir, ..
+            } => {
+                ensure_privileged_local_path(source)?;
+                ensure_privileged_local_path(target_dir)
+            }
+        }
+    }
+}
+
+fn ensure_privileged_local_path(path: &Path) -> Result<(), String> {
+    if is_network_path(path) {
+        Err(format!(
+            "network locations are not supported by the privileged helper: {}",
+            path.display()
+        ))
+    } else {
+        Ok(())
+    }
 }
 
 #[proxy(
@@ -213,13 +246,16 @@ pub(crate) fn is_permission_error(error: &str) -> bool {
 pub(crate) async fn run_via_dbus(command: PrivilegedCommand) -> PrivilegedOperationResult {
     let label = command.label().to_string();
     let affected_dirs = command.affected_dirs();
-    let result = run_via_dbus_inner(&command).await.map(|message| {
-        if message.is_empty() {
-            "completed with administrator privileges".to_string()
-        } else {
-            message
-        }
-    });
+    let result = match command.validate_local_paths() {
+        Ok(()) => run_via_dbus_inner(&command).await.map(|message| {
+            if message.is_empty() {
+                "completed with administrator privileges".to_string()
+            } else {
+                message
+            }
+        }),
+        Err(err) => Err(err),
+    };
     PrivilegedOperationResult {
         label,
         affected_dirs,
@@ -271,6 +307,7 @@ async fn call_dbus_command(
     command: &PrivilegedCommand,
     connection: &Connection,
 ) -> Result<String, String> {
+    command.validate_local_paths()?;
     with_bus_tokio_context(async move {
         let proxy = PrivilegedProxy::new(connection)
             .await
@@ -328,6 +365,7 @@ async fn prepare_external_edit_via_session_bus(path: &Path) -> Result<ExternalEd
 pub(crate) async fn prepare_external_edit_via_dbus(
     path: PathBuf,
 ) -> Result<ExternalEditSession, String> {
+    ensure_privileged_local_path(&path)?;
     match prepare_external_edit_via_system_bus(&path).await {
         Ok(session) => Ok(session),
         Err(system_error) => match prepare_external_edit_via_session_bus(&path).await {
@@ -470,6 +508,7 @@ async fn prepare_external_edit_call(
     connection: &Connection,
     path: &Path,
 ) -> Result<ExternalEditSession, String> {
+    ensure_privileged_local_path(path)?;
     with_bus_tokio_context(async move {
         let proxy = PrivilegedProxy::new(connection)
             .await
@@ -1044,6 +1083,7 @@ impl PrivilegedService {
         #[zbus(header)] header: Header<'_>,
     ) -> fdo::Result<String> {
         let _authorized_uid = self.authorize(connection, header).await?;
+        ensure_privileged_local_path(Path::new(&parent)).map_err(fdo::Error::Failed)?;
         Self::map_result(
             file_ops::create_folder(Path::new(&parent), &name)
                 .map(|path| path.display().to_string()),
@@ -1059,6 +1099,7 @@ impl PrivilegedService {
         #[zbus(header)] header: Header<'_>,
     ) -> fdo::Result<String> {
         let _authorized_uid = self.authorize(connection, header).await?;
+        ensure_privileged_local_path(Path::new(&parent)).map_err(fdo::Error::Failed)?;
         Self::map_result(
             file_ops::create_file(Path::new(&parent), &name).map(|path| path.display().to_string()),
         )
@@ -1073,6 +1114,7 @@ impl PrivilegedService {
         #[zbus(header)] header: Header<'_>,
     ) -> fdo::Result<String> {
         let _authorized_uid = self.authorize(connection, header).await?;
+        ensure_privileged_local_path(Path::new(&path)).map_err(fdo::Error::Failed)?;
         Self::map_result(
             file_ops::rename_path(Path::new(&path), &new_name)
                 .map(|path| path.display().to_string()),
@@ -1088,6 +1130,9 @@ impl PrivilegedService {
     ) -> fdo::Result<String> {
         let _authorized_uid = self.authorize(connection, header).await?;
         let paths = paths.into_iter().map(PathBuf::from).collect::<Vec<_>>();
+        for path in &paths {
+            ensure_privileged_local_path(path).map_err(fdo::Error::Failed)?;
+        }
         Self::map_result(file_ops::trash_paths(&paths).to_result_message("moved to trash"))
     }
 
@@ -1101,6 +1146,8 @@ impl PrivilegedService {
         #[zbus(header)] header: Header<'_>,
     ) -> fdo::Result<String> {
         let _authorized_uid = self.authorize(connection, header).await?;
+        ensure_privileged_local_path(Path::new(&source)).map_err(fdo::Error::Failed)?;
+        ensure_privileged_local_path(Path::new(&target_dir)).map_err(fdo::Error::Failed)?;
         Self::map_result(
             file_ops::perform_transfer_with_progress(
                 &operation,
@@ -1122,6 +1169,7 @@ impl PrivilegedService {
         #[zbus(header)] header: Header<'_>,
     ) -> fdo::Result<(String, String)> {
         let authorized_uid = self.authorize(connection, header).await?;
+        ensure_privileged_local_path(Path::new(&path)).map_err(fdo::Error::Failed)?;
         Self::map_result(self.prepare_external_edit_inner(PathBuf::from(path), authorized_uid))
     }
 
@@ -1450,36 +1498,42 @@ pub(crate) fn run_helper(args: &[String]) -> Result<String, String> {
             let [_, parent, name] = args else {
                 return Err("create-folder expects parent and name".to_string());
             };
+            ensure_privileged_local_path(Path::new(parent))?;
             file_ops::create_folder(Path::new(parent), name).map(|path| path.display().to_string())
         }
         "create-file" => {
             let [_, parent, name] = args else {
                 return Err("create-file expects parent and name".to_string());
             };
+            ensure_privileged_local_path(Path::new(parent))?;
             file_ops::create_file(Path::new(parent), name).map(|path| path.display().to_string())
         }
         "rename" => {
             let [_, path, new_name] = args else {
                 return Err("rename expects path and new name".to_string());
             };
+            ensure_privileged_local_path(Path::new(path))?;
             file_ops::rename_path(Path::new(path), new_name).map(|path| path.display().to_string())
         }
         "trash" => {
             if args.len() < 2 {
                 return Err("trash expects at least one path".to_string());
             }
-            file_ops::trash_paths(
-                &args[1..]
-                    .iter()
-                    .map(PathBuf::from)
-                    .collect::<Vec<PathBuf>>(),
-            )
-            .to_result_message("moved to trash")
+            let paths = args[1..]
+                .iter()
+                .map(PathBuf::from)
+                .collect::<Vec<PathBuf>>();
+            for path in &paths {
+                ensure_privileged_local_path(path)?;
+            }
+            file_ops::trash_paths(&paths).to_result_message("moved to trash")
         }
         "transfer" => {
             let [_, operation, source, target_dir] = args else {
                 return Err("transfer expects operation, source and target directory".to_string());
             };
+            ensure_privileged_local_path(Path::new(source))?;
+            ensure_privileged_local_path(Path::new(target_dir))?;
             file_ops::perform_transfer_with_progress(
                 operation,
                 Path::new(source),
@@ -1740,6 +1794,66 @@ mod tests {
     }
 
     #[test]
+    fn privileged_commands_reject_network_paths_before_dbus() {
+        let commands = [
+            PrivilegedCommand::CreateFolder {
+                parent: PathBuf::from("smb://server/share/"),
+                name: "folder".to_string(),
+            },
+            PrivilegedCommand::CreateFile {
+                parent: PathBuf::from("smb://server/share/"),
+                name: "file.txt".to_string(),
+            },
+            PrivilegedCommand::Rename {
+                path: PathBuf::from("smb://server/share/file.txt"),
+                new_name: "renamed.txt".to_string(),
+            },
+            PrivilegedCommand::Trash {
+                paths: vec![PathBuf::from("smb://server/share/file.txt")],
+            },
+            PrivilegedCommand::Transfer {
+                operation: "copy".to_string(),
+                source: PathBuf::from("smb://server/share/file.txt"),
+                target_dir: PathBuf::from("/tmp"),
+            },
+            PrivilegedCommand::Transfer {
+                operation: "copy".to_string(),
+                source: PathBuf::from("/tmp/file.txt"),
+                target_dir: PathBuf::from("smb://server/share/"),
+            },
+        ];
+
+        for command in commands {
+            let error = command.validate_local_paths().unwrap_err();
+            assert!(error.contains("network locations are not supported"));
+            assert!(error.contains("smb://server/share"));
+        }
+    }
+
+    #[test]
+    fn privileged_helper_cli_rejects_network_paths() {
+        let error = run_helper(&strings(&[
+            "create-folder",
+            "smb://server/share/",
+            "folder",
+        ]))
+        .unwrap_err();
+        assert!(error.contains("network locations are not supported"));
+
+        let error = run_helper(&strings(&["trash", "smb://server/share/file.txt"])).unwrap_err();
+        assert!(error.contains("network locations are not supported"));
+
+        let error = run_helper(&strings(&[
+            "transfer",
+            "copy",
+            "/tmp/file.txt",
+            "smb://server/share/",
+        ]))
+        .unwrap_err();
+        assert!(error.contains("network locations are not supported"));
+    }
+
+    #[test]
     fn polkit_diagnostics_include_action_and_install_hint() {
         let failed = polkit_check_failed_message("missing action");
         assert!(failed.contains(ACTION_ID));
@@ -1778,5 +1892,9 @@ mod tests {
             std::process::id(),
             TOKEN_COUNTER.fetch_add(1, Ordering::Relaxed)
         ))
+    }
+
+    fn strings(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| value.to_string()).collect()
     }
 }

@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
 
+use super::network::{network_uri_from_path, normalize_network_uri};
+
 const FIKA_CUT_MARKER: &str = "# fika-cut";
 const GNOME_COPY_MARKER: &str = "copy";
 const GNOME_CUT_MARKER: &str = "cut";
@@ -81,10 +83,16 @@ fn parse_clipboard_path_line(line: &str) -> Option<PathBuf> {
     if let Some(rest) = line.strip_prefix("file://") {
         return percent_decode_file_uri_path(rest).map(PathBuf::from);
     }
+    if let Ok(uri) = normalize_network_uri(line) {
+        return Some(PathBuf::from(uri));
+    }
     line.starts_with('/').then(|| PathBuf::from(line))
 }
 
 fn path_to_file_uri(path: &Path) -> String {
+    if let Some(uri) = network_uri_from_path(path) {
+        return uri;
+    }
     let raw = path.to_string_lossy();
     let mut uri = String::with_capacity(raw.len() + "file://".len());
     uri.push_str("file://");
@@ -167,6 +175,18 @@ mod tests {
         assert_eq!(
             decode_file_clipboard_text(&text),
             Some(FileClipboardPayload::new(FileClipboardRole::Cut, paths))
+        );
+    }
+
+    #[test]
+    fn file_clipboard_text_preserves_network_uris() {
+        let paths = vec![PathBuf::from("smb://server/share/report%202026.txt")];
+        let text = encode_file_clipboard_text(FileClipboardRole::Copy, &paths);
+
+        assert_eq!(text, "smb://server/share/report%202026.txt");
+        assert_eq!(
+            decode_file_clipboard_text("copy\nsmb://server/share/report%202026.txt\n"),
+            Some(FileClipboardPayload::new(FileClipboardRole::Copy, paths))
         );
     }
 

@@ -802,6 +802,7 @@ mod tests {
         let entries = Arc::new(vec![Entry::new(super::super::entries::EntryData {
             name: Arc::from("shared.txt"),
             name_width_units: 10,
+            target_path: None,
             size_bytes: 4,
             modified_secs: None,
             metadata_complete: true,
@@ -1315,6 +1316,7 @@ mod tests {
                     Entry::new(super::super::entries::EntryData {
                         name: Arc::from(*name),
                         name_width_units: name.len() as u16,
+                        target_path: None,
                         size_bytes: 0,
                         modified_secs: None,
                         metadata_complete: true,

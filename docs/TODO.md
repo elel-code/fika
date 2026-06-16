@@ -77,12 +77,12 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
 - [~] Move 专用 drag cursor/icon 仍需 GPUI/backend 暴露对应 cursor style。
 
 ### Network 网络文件系统
-- [~] Backend 边界决策：GVfs/GIO、KIOFuse 或二者兼容的小型抽象层。`src/core/network.rs` 已完成 URL scheme 解析、`NetworkLocation` 模型、`NetworkAuth`、GVfs filesystem type 分类。
-- [ ] Saved network bookmarks 和 Add Network Drive UI。
-- [ ] 认证交互、取消、结构化错误报告。
-- [ ] `DirectoryLister` 集成 network scan，无 pane 闪烁。
-- [ ] Remote/GVfs metadata 降级（MIME、thumbnail、size、watcher）。
-- [ ] Remote 位置的文件操作和 DnD 语义。
+- [x] Backend 边界决策：GVfs/GIO 后端。`src/core/network.rs` 支持 URL scheme 解析、`NetworkLocation` 模型、`NetworkAuth`、GVfs filesystem type 分类、`network:///` root 枚举和 remote URI listing。
+- [x] Saved network bookmarks 和 Add Network Drive UI。
+- [~] 认证交互、取消、结构化错误报告。GVfs scan cancellation 和结构化 auth/GIO error 已接入；in-app credential prompt 仍需后续实现。
+- [x] `DirectoryLister` 集成 network scan，无 pane 闪烁。
+- [x] Remote/GVfs metadata 降级（MIME、thumbnail、size、watcher）。
+- [x] Remote 位置的文件操作和 DnD 语义：remote URI 可导航/复制，local file ops、DnD transfer、trash/rename/create/paste 和 privileged helper 会显式拒绝 remote path。
 
 ### KDE Service Menu 高级条件
 - [ ] 依赖 KIO/权限上下文的 `X-KDE-*` 高级条件（如 `X-KDE-Require=`、`X-KDE-ShowIfRunning=` 等）。

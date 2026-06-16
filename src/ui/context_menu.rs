@@ -115,6 +115,7 @@ pub(crate) enum ContextMenuAction {
     EjectDevice,
     SafelyRemoveDevice,
     AddPlace,
+    AddNetworkDrive,
     EditPlace,
     RemovePlace,
     HidePlace,

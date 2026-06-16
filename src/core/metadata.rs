@@ -1,6 +1,7 @@
 use super::entries::{EntryMetadataRole, ItemId};
 use super::mime::{MimeDatabase, mime_magic_resolution_required, read_mime_magic};
 use super::model::DirectoryModel;
+use super::network::is_network_path;
 use super::pane::{Generation, PaneId};
 use std::collections::{HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
@@ -92,6 +93,9 @@ impl MetadataRoleRequest {
         generation: Generation,
         candidate: MetadataRoleCandidate,
     ) -> Option<Self> {
+        if is_network_path(&candidate.path) {
+            return None;
+        }
         if !mime_magic_resolution_required(
             false,
             candidate.size_bytes,
@@ -442,6 +446,7 @@ mod tests {
             Arc::new(vec![Entry::new(EntryData {
                 name: Arc::from("payload"),
                 name_width_units: 7,
+                target_path: None,
                 size_bytes: 12,
                 modified_secs: Some(42),
                 metadata_complete: true,

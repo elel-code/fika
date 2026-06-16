@@ -247,6 +247,7 @@ mod tests {
         let entry = model_entry(EntryData {
             name: Arc::from("payload"),
             name_width_units: 7,
+            target_path: None,
             size_bytes: 0,
             modified_secs: None,
             metadata_complete: false,
@@ -266,6 +267,7 @@ mod tests {
         let entry = model_entry(EntryData {
             name: Arc::from("payload"),
             name_width_units: 7,
+            target_path: None,
             size_bytes: 1536,
             modified_secs: Some(42),
             metadata_complete: false,

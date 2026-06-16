@@ -25,6 +25,7 @@ impl ItemId {
 pub struct EntryData {
     pub name: Arc<str>,
     pub name_width_units: u16,
+    pub target_path: Option<PathBuf>,
     pub size_bytes: u64,
     pub modified_secs: Option<u64>,
     pub metadata_complete: bool,
@@ -434,7 +435,7 @@ fn ascii_case_insensitive_cmp(left: &str, right: &str) -> Ordering {
     }
 }
 
-fn name_width_units(name: &str) -> u16 {
+pub(crate) fn name_width_units(name: &str) -> u16 {
     name.chars()
         .map(|ch| if ch.is_ascii() { 1u32 } else { 2u32 })
         .sum::<u32>()
@@ -457,6 +458,7 @@ fn complete_entry_data(name: String, metadata: Metadata, mime: &MimeDatabase) ->
     EntryData {
         name: Arc::from(name),
         name_width_units,
+        target_path: None,
         size_bytes: role.size_bytes,
         modified_secs: role.modified_secs,
         metadata_complete: true,

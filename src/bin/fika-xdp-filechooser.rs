@@ -657,7 +657,7 @@ fn gui_executable() -> Result<PathBuf, String> {
 
 fn current_folder(options: &HashMap<String, OwnedValue>) -> Option<PathBuf> {
     let value = options.get("current_folder")?;
-    nul_terminated_bytes_to_path(Vec::<u8>::try_from(value.clone()).ok()?)
+    nul_terminated_bytes_to_location(Vec::<u8>::try_from(value.clone()).ok()?)
 }
 
 fn save_file_start_and_name(
@@ -666,9 +666,9 @@ fn save_file_start_and_name(
     if let Some(current_file) = options
         .get("current_file")
         .and_then(|value| Vec::<u8>::try_from(value.clone()).ok())
-        .and_then(nul_terminated_bytes_to_path)
+        .and_then(nul_terminated_bytes_to_location)
     {
-        let start_dir = current_file.parent().map(Path::to_path_buf);
+        let start_dir = fika_core::parent_location(&current_file);
         let name = current_file
             .file_name()
             .map(|name| name.to_string_lossy().to_string());
@@ -945,8 +945,12 @@ fn chooser_choice_label(value: &str) -> Option<String> {
     (!normalized.is_empty()).then_some(normalized)
 }
 
-fn nul_terminated_bytes_to_path(bytes: Vec<u8>) -> Option<PathBuf> {
-    nul_terminated_bytes_to_string(bytes).map(PathBuf::from)
+fn nul_terminated_bytes_to_location(bytes: Vec<u8>) -> Option<PathBuf> {
+    nul_terminated_bytes_to_string(bytes).map(|value| {
+        fika_core::normalize_network_uri(&value)
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from(value))
+    })
 }
 
 fn nul_terminated_bytes_to_string(bytes: Vec<u8>) -> Option<String> {
@@ -1135,7 +1139,7 @@ fn results_for_paths(
     let uris = result
         .paths
         .iter()
-        .map(|path| path_to_file_uri(path))
+        .map(|path| path_to_portal_uri(path))
         .collect::<Vec<_>>();
     let mut results = HashMap::new();
     if let Ok(value) = OwnedValue::try_from(Value::new(uris)) {
@@ -1201,6 +1205,10 @@ fn path_to_file_uri(path: &Path) -> String {
         }
     }
     uri
+}
+
+fn path_to_portal_uri(path: &Path) -> String {
+    fika_core::network_uri_from_path(path).unwrap_or_else(|| path_to_file_uri(path))
 }
 
 fn is_uri_path_byte(byte: u8) -> bool {
@@ -1801,6 +1809,56 @@ mod tests {
 
         assert_eq!(current_folder(&options), Some(PathBuf::from("/tmp/fika")));
         assert_eq!(save_files(&options), vec!["one.txt", "two.txt"]);
+    }
+
+    #[test]
+    fn portal_byte_arrays_decode_network_locations() {
+        let mut options = HashMap::new();
+        options.insert(
+            "current_folder".to_string(),
+            OwnedValue::try_from(Value::new(b"smb://server/share/\0".to_vec())).unwrap(),
+        );
+        options.insert(
+            "current_file".to_string(),
+            OwnedValue::try_from(Value::new(b"smb://server/share/report.txt\0".to_vec())).unwrap(),
+        );
+
+        assert_eq!(
+            current_folder(&options),
+            Some(PathBuf::from("smb://server/share/"))
+        );
+        assert_eq!(
+            save_file_start_and_name(&options),
+            (
+                Some(PathBuf::from("smb://server/share/")),
+                Some("report.txt".to_string())
+            )
+        );
+    }
+
+    #[test]
+    fn portal_results_preserve_network_uris() {
+        let result = results_for_paths(
+            ChooserResult {
+                paths: vec![
+                    PathBuf::from("smb://server/share/report.txt"),
+                    PathBuf::from("/tmp/local.txt"),
+                ],
+                filter_index: None,
+                choices: Vec::new(),
+            },
+            &HashMap::new(),
+            &ChooserFilterMap::default(),
+        );
+        let uris = Vec::<String>::try_from(result.get("uris").cloned().unwrap()).unwrap();
+
+        assert_eq!(
+            uris,
+            vec![
+                "smb://server/share/report.txt".to_string(),
+                "file:///tmp/local.txt".to_string(),
+            ]
+        );
     }
 
     #[test]

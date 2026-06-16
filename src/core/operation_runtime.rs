@@ -196,10 +196,7 @@ impl OperationRuntime {
     }
 
     pub fn complete_operation(&self, id: OperationId) -> Option<OperationHandle> {
-        self.operations
-            .lock()
-            .ok()?
-            .remove(&id)
+        self.operations.lock().ok()?.remove(&id)
     }
 
     pub fn operation_controller(&self, id: OperationId) -> Option<OperationController> {
@@ -365,8 +362,7 @@ mod tests {
     #[test]
     fn operation_runtime_accepts_multiple_submitted_tasks() {
         let first = futures_lite::future::block_on(run_operation_task(|| async { 1_u8 })).unwrap();
-        let second =
-            futures_lite::future::block_on(run_operation_task(|| async { 2_u8 })).unwrap();
+        let second = futures_lite::future::block_on(run_operation_task(|| async { 2_u8 })).unwrap();
 
         assert_eq!((first, second), (1, 2));
     }

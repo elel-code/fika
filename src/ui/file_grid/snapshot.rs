@@ -21,8 +21,8 @@ use fika_core::{
     CompactLayout, DirectoryModel, FilteredModel, Generation, IconsLayout, ItemId, ItemLayout,
     MetadataRoleCandidate, MetadataRoleScheduler, PaneId, SelectionState, ThumbnailCandidate,
     ThumbnailRequestPriority, ThumbnailScheduler, ViewMode, ViewState, cached_thumbnail_for_path,
-    default_thumbnail_cache_root, mime_magic_resolution_required, thumbnail_read_ahead_indexes,
-    thumbnail_request_may_have_preview,
+    default_thumbnail_cache_root, is_network_path, mime_magic_resolution_required,
+    thumbnail_read_ahead_indexes, thumbnail_request_may_have_preview,
 };
 
 pub(crate) fn visible_item_thumbnail_path(entry: &fika_core::ModelEntry) -> Option<PathBuf> {
@@ -40,6 +40,7 @@ fn visible_or_cached_item_thumbnail_path(
 ) -> Option<PathBuf> {
     visible_item_thumbnail_path(entry).or_else(|| {
         if entry.is_dir
+            || is_network_path(path)
             || entry.thumbnail_failed
             || !entry.effective_metadata_complete()
             || entry.metadata_refresh_pending
@@ -653,6 +654,7 @@ pub(crate) fn deferred_thumbnail_candidates_for_model<'a>(
             let entry = model.get(model_index)?;
             let path = model.path_for_index(model_index)?;
             if entry.is_dir
+                || is_network_path(&path)
                 || !entry.effective_metadata_complete()
                 || entry.metadata_refresh_pending
                 || visible_item_thumbnail_path(entry).is_some()
@@ -721,6 +723,7 @@ fn visible_thumbnail_candidate(
     mime_magic_checked: bool,
 ) -> Option<ThumbnailCandidate> {
     if is_dir
+        || is_network_path(path)
         || !metadata_complete
         || metadata_refresh_pending
         || thumbnail_path.is_some()
@@ -761,6 +764,7 @@ mod tests {
             entry: fika_core::Entry::new(fika_core::EntryData {
                 name: Arc::from("photo.jpg"),
                 name_width_units: 9,
+                target_path: None,
                 size_bytes: 12,
                 modified_secs: Some(42),
                 metadata_complete: true,
@@ -780,6 +784,7 @@ mod tests {
             entry: fika_core::Entry::new(fika_core::EntryData {
                 name: Arc::from("Pictures"),
                 name_width_units: 8,
+                target_path: None,
                 size_bytes: 0,
                 modified_secs: Some(42),
                 metadata_complete: true,
@@ -823,6 +828,7 @@ mod tests {
             entry: fika_core::Entry::new(fika_core::EntryData {
                 name: Arc::from("photo.png"),
                 name_width_units: 9,
+                target_path: None,
                 size_bytes: 12,
                 modified_secs: Some(modified_secs),
                 metadata_complete: true,
@@ -1101,6 +1107,28 @@ mod tests {
     }
 
     #[test]
+    fn raw_file_grid_snapshot_does_not_queue_network_metadata_role() {
+        let mut remote = test_raw_visible_item(1, "payload", 0);
+        remote.path = PathBuf::from("smb://server/share/payload");
+        remote.metadata_complete = true;
+        remote.size_bytes = 12;
+        remote.mime_type = Some(Arc::from("application/octet-stream"));
+        remote.mime_magic_checked = false;
+        let raw_file_grid = RawFileGridSnapshot::Icons {
+            layout: IconsLayout::new(1, fika_core::IconsLayoutOptions::default()),
+            items: vec![remote],
+        };
+        let mut scheduler = MetadataRoleScheduler::default();
+
+        assert!(!raw_file_grid.queue_metadata_role_candidates(
+            &mut scheduler,
+            PaneId(1),
+            Generation(1)
+        ));
+        assert!(scheduler.start_role_batch(8).is_none());
+    }
+
+    #[test]
     fn thumbnail_candidates_skip_plain_text_without_preview_support() {
         let mime_type = Arc::from("text/plain");
 
@@ -1108,6 +1136,28 @@ mod tests {
             visible_thumbnail_candidate(
                 ItemId(1),
                 Path::new("/tmp/notes.txt"),
+                false,
+                None,
+                false,
+                Some(42),
+                12,
+                true,
+                false,
+                Some(&mime_type),
+                true,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn thumbnail_candidates_skip_network_paths() {
+        let mime_type = Arc::from("image/png");
+
+        assert_eq!(
+            visible_thumbnail_candidate(
+                ItemId(1),
+                Path::new("smb://server/share/photo.png"),
                 false,
                 None,
                 false,
@@ -1177,6 +1227,7 @@ mod tests {
         fika_core::Entry::new(fika_core::EntryData {
             name: Arc::from(name),
             name_width_units: name.chars().count() as u16,
+            target_path: None,
             size_bytes: 12,
             modified_secs,
             metadata_complete: true,
@@ -1192,6 +1243,7 @@ mod tests {
         fika_core::Entry::new(fika_core::EntryData {
             name: Arc::from(name),
             name_width_units: name.chars().count() as u16,
+            target_path: None,
             size_bytes: 0,
             modified_secs: Some(42),
             metadata_complete: true,

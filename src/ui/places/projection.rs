@@ -8,7 +8,7 @@ use crate::ui::icons::FileIconCache;
 
 use super::model::{
     REMOVABLE_DEVICES_GROUP, active_place_index, place_icon_for, place_icon_snapshot,
-    place_is_mounted, place_is_network_root,
+    place_is_mounted, place_is_network,
 };
 use super::{PlaceEntry, PlaceSnapshot};
 
@@ -38,7 +38,7 @@ pub(crate) fn place_snapshots_for(
         })
         .map(|(index, place)| {
             let trash_place = file_ops::is_trash_files_dir(&place.path);
-            let network = place_is_network_root(place);
+            let network = place_is_network(place);
             let mounted = place_is_mounted(place);
             let device = place.group == REMOVABLE_DEVICES_GROUP;
             let place_icon = place_icon_for(place, trash_place);

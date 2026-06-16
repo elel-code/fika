@@ -1,9 +1,10 @@
 use std::path::{Path, PathBuf};
 
-use fika_core::resolve_location_input;
+use fika_core::{is_network_path, resolve_location_input};
 
 use super::super::PlaceEntry;
-use super::ordering::insert_user_place;
+use super::super::model::NETWORK_GROUP;
+use super::ordering::{insert_user_place, user_place_insert_index};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum CommitUserPlaceDraftResult {
@@ -54,7 +55,8 @@ pub(crate) fn commit_user_place_draft(
     let Some(path) = resolve_location_input(current_dir, path_input) else {
         return CommitUserPlaceDraftResult::EmptyPath;
     };
-    if !path.is_dir() {
+    let network = is_network_path(&path);
+    if !network && !path.is_dir() {
         return CommitUserPlaceDraftResult::NotFolder { path };
     }
 
@@ -70,16 +72,88 @@ pub(crate) fn commit_user_place_draft(
             return CommitUserPlaceDraftResult::AlreadyExists;
         }
 
-        places[index].label = label.clone();
-        places[index].path = path;
+        let mut place = places.remove(index);
+        place.label = label.clone();
+        place.path = path;
+        apply_place_kind(&mut place, network);
+        insert_existing_place(places, place, index);
         return CommitUserPlaceDraftResult::Updated { label };
     }
 
     if duplicate.is_some() {
         return CommitUserPlaceDraftResult::AlreadyExists;
     }
-    insert_user_place(places, label.clone(), path);
+    insert_bookmark_place(places, label.clone(), path, network);
     CommitUserPlaceDraftResult::Added { label }
+}
+
+fn insert_bookmark_place(
+    places: &mut Vec<PlaceEntry>,
+    label: String,
+    path: PathBuf,
+    network: bool,
+) {
+    if network {
+        let insert_at = network_place_insert_index(places);
+        places.insert(insert_at, network_place_entry(label, path));
+    } else {
+        insert_user_place(places, label, path);
+    }
+}
+
+fn insert_existing_place(places: &mut Vec<PlaceEntry>, place: PlaceEntry, previous_index: usize) {
+    let insert_at = if place.group == NETWORK_GROUP {
+        network_place_insert_index(places)
+    } else {
+        user_place_insert_index(places, previous_index)
+    };
+    places.insert(insert_at, place);
+}
+
+fn apply_place_kind(place: &mut PlaceEntry, network: bool) {
+    if network {
+        place.group = NETWORK_GROUP;
+        place.marker = "Net";
+    } else {
+        place.group = "";
+        place.marker = "B";
+    }
+    place.device_id = None;
+    place.device_mounted = true;
+    place.editable = true;
+    place.removable = true;
+    place.device_ejectable = false;
+    place.device_can_power_off = false;
+}
+
+fn network_place_entry(label: String, path: PathBuf) -> PlaceEntry {
+    PlaceEntry {
+        group: NETWORK_GROUP,
+        marker: "Net",
+        label,
+        path,
+        device_id: None,
+        device_mounted: true,
+        editable: true,
+        removable: true,
+        device_ejectable: false,
+        device_can_power_off: false,
+    }
+}
+
+fn network_place_insert_index(places: &[PlaceEntry]) -> usize {
+    places
+        .iter()
+        .enumerate()
+        .filter(|(_, place)| place.group == NETWORK_GROUP)
+        .map(|(index, _)| index + 1)
+        .last()
+        .unwrap_or_else(|| {
+            places
+                .iter()
+                .position(|place| !place.group.is_empty())
+                .unwrap_or(places.len())
+        })
 }
 
 #[cfg(test)]
@@ -214,6 +288,46 @@ mod tests {
             CommitUserPlaceDraftResult::CannotEdit
         );
         assert_eq!(places[0].label, "Home");
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn commit_user_place_draft_adds_network_bookmark_under_network_group() {
+        let root = temp_dir("place-edit-network");
+        std::fs::create_dir_all(&root).unwrap();
+        let mut places = vec![
+            place("", "Home", &root, false),
+            place(NETWORK_GROUP, "Network", Path::new("network:///"), false),
+            place("Devices", "Root", Path::new("/"), false),
+        ];
+
+        let result = commit_user_place_draft(
+            &mut places,
+            &root,
+            "Team Share",
+            "smb://server/share/",
+            None,
+        );
+
+        assert_eq!(
+            result,
+            CommitUserPlaceDraftResult::Added {
+                label: "Team Share".to_string()
+            }
+        );
+        assert_eq!(
+            places
+                .iter()
+                .map(|place| place.label.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Home", "Network", "Team Share", "Root"]
+        );
+        assert_eq!(places[2].path, PathBuf::from("smb://server/share/"));
+        assert_eq!(places[2].group, NETWORK_GROUP);
+        assert_eq!(places[2].marker, "Net");
+        assert!(places[2].editable);
+        assert!(places[2].removable);
 
         let _ = std::fs::remove_dir_all(root);
     }

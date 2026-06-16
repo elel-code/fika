@@ -168,4 +168,16 @@ mod tests {
         assert!(args.chooser_directories);
         assert_eq!(args.start_dir, PathBuf::from("/tmp"));
     }
+
+    #[test]
+    fn parses_network_start_dir_without_normalizing_to_local_parent() {
+        let args = Args::parse(
+            ["--chooser", "smb://server/share/Reports"]
+                .into_iter()
+                .map(str::to_string),
+        );
+
+        assert_eq!(args.mode, Mode::Chooser);
+        assert_eq!(args.start_dir, PathBuf::from("smb://server/share/Reports"));
+    }
 }

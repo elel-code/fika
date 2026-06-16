@@ -2,6 +2,8 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use super::network::{network_uri_from_path, normalize_network_uri};
+
 const FIKA_DATA_DIR_NAME: &str = "fika";
 const USER_PLACES_FILE_NAME: &str = "places.xbel";
 
@@ -81,7 +83,7 @@ pub fn parse_user_places_xbel(contents: &str) -> Result<Vec<UserPlace>, String> 
         let Some(href) = xml_attribute(tag, "href") else {
             continue;
         };
-        let Some(path) = file_uri_to_path(&href) else {
+        let Some(path) = place_href_to_path(&href) else {
             continue;
         };
         let Some(title) = xml_element_text(body, "title") else {
@@ -105,7 +107,7 @@ pub fn user_places_xbel(places: &[UserPlace]) -> String {
     );
     for place in places {
         output.push_str("  <bookmark href=\"");
-        output.push_str(&escape_xml_attr(&path_to_file_uri(&place.path)));
+        output.push_str(&escape_xml_attr(&path_to_place_href(&place.path)));
         output.push_str("\">\n");
         output.push_str("    <title>");
         output.push_str(&escape_xml_text(&place.label));
@@ -165,6 +167,14 @@ fn path_to_file_uri(path: &Path) -> String {
 fn file_uri_to_path(uri: &str) -> Option<PathBuf> {
     let path = uri.strip_prefix("file://")?;
     percent_decode(path).map(PathBuf::from)
+}
+
+fn place_href_to_path(uri: &str) -> Option<PathBuf> {
+    file_uri_to_path(uri).or_else(|| normalize_network_uri(uri).ok().map(PathBuf::from))
+}
+
+fn path_to_place_href(path: &Path) -> String {
+    network_uri_from_path(path).unwrap_or_else(|| path_to_file_uri(path))
 }
 
 fn percent_decode(text: &str) -> Option<String> {
@@ -258,6 +268,20 @@ mod tests {
 
         assert!(xbel.contains("file:///tmp/a%20b"));
         assert!(xbel.contains("Projects &amp; Work"));
+        assert_eq!(parse_user_places_xbel(&xbel), Ok(places));
+    }
+
+    #[test]
+    fn user_places_xbel_round_trips_network_bookmarks() {
+        let places = vec![UserPlace::new(
+            "Team Share".to_string(),
+            PathBuf::from("smb://server/Share%20Name/"),
+        )];
+
+        let xbel = user_places_xbel(&places);
+
+        assert!(xbel.contains("href=\"smb://server/Share%20Name/\""));
+        assert!(!xbel.contains("file://smb"));
         assert_eq!(parse_user_places_xbel(&xbel), Ok(places));
     }
 

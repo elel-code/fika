@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use fika_core::{MimeApplication, is_archive_mime_or_path};
+use fika_core::{MimeApplication, is_archive_mime_or_path, is_network_path, is_network_root_path};
 
 use super::items::{
     context_menu_group_items, context_menu_item, context_menu_item_enabled,
@@ -58,6 +58,37 @@ pub(crate) fn context_menu_actions(
                 "Properties",
             )),
         ],
+        ContextMenuTarget::Blank {
+            trash_view: false,
+            path,
+            ..
+        } if is_network_path(path) => {
+            let mut actions = Vec::new();
+            if is_network_root_path(path) {
+                actions.push(context_menu_item(
+                    ContextMenuAction::AddNetworkDrive,
+                    "Add Network Drive",
+                ));
+            }
+            actions.extend([
+                context_menu_separator_before(context_menu_submenu_item(
+                    ContextMenuAction::SortBySubmenu,
+                    "Sort By",
+                    ContextMenuSubmenu::SortBy,
+                )),
+                context_menu_submenu_item(
+                    ContextMenuAction::ViewModeSubmenu,
+                    "View Mode",
+                    ContextMenuSubmenu::ViewMode,
+                ),
+                context_menu_separator_before(context_menu_item(
+                    ContextMenuAction::SelectAll,
+                    "Select All",
+                )),
+                context_menu_item(ContextMenuAction::Refresh, "Refresh"),
+            ]);
+            actions
+        }
         ContextMenuTarget::Blank {
             trash_view: false,
             service_actions,
@@ -128,6 +159,13 @@ pub(crate) fn context_menu_actions(
             ));
             actions
         }
+        ContextMenuTarget::PlaceSection { group } if *group == "Network" => vec![
+            context_menu_item(ContextMenuAction::AddNetworkDrive, "Add Network Drive"),
+            context_menu_separator_before(context_menu_item(
+                ContextMenuAction::HidePlaceSection,
+                "Hide Section",
+            )),
+        ],
         ContextMenuTarget::PlaceSection { .. } => {
             vec![context_menu_item(
                 ContextMenuAction::HidePlaceSection,
@@ -164,6 +202,7 @@ pub(crate) fn context_menu_actions(
             )),
         ],
         ContextMenuTarget::Place {
+            path,
             mounted,
             device,
             device_ejectable,
@@ -207,6 +246,12 @@ pub(crate) fn context_menu_actions(
                 if !device_actions.is_empty() {
                     actions.extend(context_menu_group_items(device_actions));
                 }
+            }
+            if is_network_root_path(path) {
+                actions.extend(context_menu_group_items(vec![context_menu_item(
+                    ContextMenuAction::AddNetworkDrive,
+                    "Add Network Drive",
+                )]));
             }
             actions.extend([
                 context_menu_item_enabled(ContextMenuAction::EditPlace, "Edit Entry", *editable),
@@ -280,6 +325,34 @@ pub(crate) fn context_menu_actions(
                 ContextMenuAction::Properties,
                 "Properties",
             )));
+            actions
+        }
+        ContextMenuTarget::Item {
+            path,
+            is_dir,
+            mime_type,
+            service_actions,
+            open_with_apps,
+            ..
+        } if is_network_path(path) => {
+            let mut actions = if *is_dir {
+                vec![
+                    context_menu_item(ContextMenuAction::Open, "Open"),
+                    context_menu_item(ContextMenuAction::OpenInNewPane, "Open in New Pane"),
+                ]
+            } else {
+                Vec::new()
+            };
+            actions.extend([
+                context_menu_separator_before(context_menu_item(
+                    ContextMenuAction::CopyLocation,
+                    "Copy Location",
+                )),
+                context_menu_separator_before(context_menu_item(
+                    ContextMenuAction::Properties,
+                    "Properties",
+                )),
+            ]);
             actions
         }
         ContextMenuTarget::Item {

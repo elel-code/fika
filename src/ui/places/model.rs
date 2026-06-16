@@ -1,7 +1,9 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use fika_core::{DeviceInfo, file_ops, home_dir, is_network_root_path, network_root_path};
+use fika_core::{
+    DeviceInfo, file_ops, home_dir, is_network_path, network_path_display_name, network_root_path,
+};
 
 use super::PlaceIcon;
 use crate::ui::icons::{FileIconCache, FileIconSnapshot};
@@ -52,9 +54,14 @@ pub(crate) fn build_places_with_devices(
         .chain(std::iter::once(PathBuf::from("/")))
         .chain(std::iter::once(network_root_path()))
         .collect::<BTreeSet<_>>();
+    let mut network_places = Vec::new();
     for place in fika_core::load_user_places(user_places_path).unwrap_or_default() {
         if !built_in_paths.contains(&place.path) {
-            push_user_place(&mut places, place.label, place.path);
+            if is_network_path(&place.path) {
+                network_places.push(place);
+            } else {
+                push_user_place(&mut places, place.label, place.path);
+            }
         }
     }
     push_place(
@@ -64,6 +71,9 @@ pub(crate) fn build_places_with_devices(
         fika_core::NETWORK_ROOT_LABEL,
         network_root_path(),
     );
+    for place in network_places {
+        push_network_place(&mut places, place.label, place.path);
+    }
     append_removable_device_places(&mut places, devices);
     push_place(&mut places, DEVICES_GROUP, "/", "Root", PathBuf::from("/"));
     places
@@ -175,11 +185,29 @@ pub(crate) fn push_user_place(places: &mut Vec<PlaceEntry>, label: String, path:
     });
 }
 
+pub(crate) fn push_network_place(places: &mut Vec<PlaceEntry>, label: String, path: PathBuf) {
+    if places.iter().any(|place| place.path == path) {
+        return;
+    }
+    places.push(PlaceEntry {
+        group: NETWORK_GROUP,
+        marker: "Net",
+        label,
+        path,
+        device_id: None,
+        device_mounted: true,
+        editable: true,
+        removable: true,
+        device_ejectable: false,
+        device_can_power_off: false,
+    });
+}
+
 pub(crate) fn place_icon_for(place: &PlaceEntry, trash_place: bool) -> PlaceIcon {
     if trash_place {
         return PlaceIcon::Trash;
     }
-    if place_is_network_root(place) {
+    if place_is_network(place) {
         return PlaceIcon::Network;
     }
     if place.path == PathBuf::from("/") {
@@ -309,6 +337,9 @@ pub(crate) fn place_icon_snapshot(cache: &mut FileIconCache, icon: PlaceIcon) ->
 }
 
 pub(crate) fn default_place_label(path: &Path) -> String {
+    if let Some(name) = network_path_display_name(path) {
+        return name;
+    }
     path.file_name()
         .and_then(|name| name.to_str())
         .filter(|name| !name.is_empty())
@@ -327,10 +358,9 @@ pub(crate) fn active_place_index(places: &[PlaceEntry], current_dir: &Path) -> O
 }
 
 pub(crate) fn place_is_mounted(place: &PlaceEntry) -> bool {
-    !place_is_network_root(place)
-        && (place.group != REMOVABLE_DEVICES_GROUP || place.device_mounted)
+    place.group != REMOVABLE_DEVICES_GROUP || place.device_mounted
 }
 
-pub(crate) fn place_is_network_root(place: &PlaceEntry) -> bool {
-    is_network_root_path(&place.path)
+pub(crate) fn place_is_network(place: &PlaceEntry) -> bool {
+    is_network_path(&place.path)
 }

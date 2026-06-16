@@ -20,9 +20,9 @@ use fika_core::{
     SelectionMove, SortDescriptor, SortOrder, SortRole, ThumbnailProbeResult, ThumbnailScheduler,
     TrashEmptinessMonitor, UndoPayload, UserPlace, ViewMode, ViewPoint, ViewRect, ZoomChange,
     apply_thumbnail_probe_result_to_model, breadcrumb_segments, complete_location_input, file_ops,
-    listing_requests_from_events, metadata_role_results_for_requests, nearest_existing_ancestor,
-    perform_device_place_operation, resolve_location_input, thumbnail_probe_results_for_requests,
-    update_loading_state_for_event,
+    is_network_path, listing_requests_from_events, metadata_role_results_for_requests,
+    nearest_existing_ancestor, parent_location, perform_device_place_operation,
+    resolve_location_input, thumbnail_probe_results_for_requests, update_loading_state_for_event,
 };
 use fika_core::{
     DesktopLaunchPlan, LauncherError, MimeApplication, MimeApplicationCache, NewWindowLaunchResult,
@@ -1937,16 +1937,12 @@ impl FikaApp {
         label: String,
         mounted: bool,
         device: bool,
-        network: bool,
+        _network: bool,
         cx: &mut Context<Self>,
     ) {
         let Some(pane_id) = self.panes.focused() else {
             return;
         };
-        if network {
-            self.set_pane_status(pane_id, "Network locations are not connected yet");
-            return;
-        }
         if mounted {
             self.open_place(path);
         } else if device && let Some(device_id) = device_id {
@@ -2365,7 +2361,7 @@ impl FikaApp {
         let Some(parent) = self
             .panes
             .pane(pane_id)
-            .and_then(|pane| pane.current_dir.parent().map(Path::to_path_buf))
+            .and_then(|pane| parent_location(&pane.current_dir))
         else {
             return;
         };
@@ -3502,6 +3498,20 @@ impl FikaApp {
         self.set_pane_status(pane_id, format!("Adding place {}", path.display()));
     }
 
+    fn start_add_network_drive(&mut self, pane_id: PaneId) {
+        self.panes.focus(pane_id);
+        self.clear_rename_draft_for_pane(pane_id);
+        self.clear_location_draft_for_pane(pane_id);
+        self.place_draft = Some(PlaceDraft {
+            pane_id,
+            editing_path: None,
+            focus: PlaceDraftField::Path,
+            label: "Network Drive".to_string(),
+            path: "smb://server/share/".to_string(),
+        });
+        self.set_pane_status(pane_id, "Adding network drive");
+    }
+
     fn start_edit_place(&mut self, pane_id: PaneId, path: PathBuf) {
         let Some(place) = self
             .places
@@ -4087,6 +4097,10 @@ impl FikaApp {
             self.set_rename_draft_error(draft_pane_id, "Name cannot be empty");
             return;
         }
+        if is_network_path(&original_path) {
+            self.set_rename_draft_error(draft_pane_id, "Remote rename is not available yet");
+            return;
+        }
         if original_path
             .file_name()
             .and_then(|name| name.to_str())
@@ -4259,6 +4273,10 @@ impl FikaApp {
         if self.chooser.is_some() {
             return;
         }
+        if is_network_path(&parent_dir) {
+            self.set_pane_status(pane_id, "Remote item creation is not available yet");
+            return;
+        }
         let Some(task_id) = self.begin_operation(Operation::Create { pane_id, kind }) else {
             return;
         };
@@ -4344,6 +4362,10 @@ impl FikaApp {
         }
 
         let count = paths.len();
+        if mode == ClipboardMode::Cut && paths.iter().any(|path| is_network_path(path)) {
+            self.set_pane_status(pane_id, "Remote cut is not available yet");
+            return;
+        }
         let clipboard = ClipboardState::files(mode, paths);
         let item = clipboard.to_clipboard_item();
         cx.write_to_clipboard(item.clone());
@@ -4459,6 +4481,11 @@ impl FikaApp {
         clipboard: ClipboardState,
         cx: &mut Context<Self>,
     ) {
+        if is_network_path(&target_dir) || clipboard.paths.iter().any(|path| is_network_path(path))
+        {
+            self.set_pane_status(pane_id, "Remote paste is not available yet");
+            return;
+        }
         if !target_dir.is_dir() {
             self.set_pane_status(
                 pane_id,
@@ -5166,6 +5193,10 @@ impl FikaApp {
         paths: Vec<PathBuf>,
         cx: &mut Context<Self>,
     ) {
+        if is_network_path(&target_dir) || paths.iter().any(|path| is_network_path(path)) {
+            self.set_pane_status(pane_id, "Remote file transfer is not available yet");
+            return;
+        }
         if !target_dir.is_dir() {
             self.set_pane_status(
                 pane_id,
@@ -5284,6 +5315,10 @@ impl FikaApp {
         let selected_paths = self.panes.selected_paths(pane_id).unwrap_or_default();
         if selected_paths.is_empty() {
             self.set_pane_status(pane_id, "No selection to trash");
+            return;
+        }
+        if selected_paths.iter().any(|path| is_network_path(path)) {
+            self.set_pane_status(pane_id, "Remote trash is not available yet");
             return;
         }
 
@@ -6414,6 +6449,11 @@ impl FikaApp {
             (ContextMenuAction::AddPlace, ContextMenuTarget::PlacesBlank { .. }) => {
                 self.start_add_place(menu.pane_id);
             }
+            (ContextMenuAction::AddNetworkDrive, ContextMenuTarget::PlaceSection { .. })
+            | (ContextMenuAction::AddNetworkDrive, ContextMenuTarget::Place { .. }) => {
+                self.start_add_network_drive(menu.pane_id);
+            }
+            (ContextMenuAction::AddNetworkDrive, _) => {}
             (
                 ContextMenuAction::EditPlace,
                 ContextMenuTarget::Place {
@@ -9754,6 +9794,10 @@ text/plain=viewer.desktop;\n",
             &path,
             &[
                 UserPlace::new("Bookmark".to_string(), bookmark.clone()),
+                UserPlace::new(
+                    "Team Share".to_string(),
+                    PathBuf::from("smb://server/share/"),
+                ),
                 UserPlace::new("Duplicate Network".to_string(), network_root_path()),
             ],
         )
@@ -9772,16 +9816,28 @@ text/plain=viewer.desktop;\n",
             .iter()
             .position(|place| place.path == PathBuf::from("/"))
             .expect("root device place should exist");
+        let share_index = places
+            .iter()
+            .position(|place| place.path == PathBuf::from("smb://server/share/"))
+            .expect("network bookmark should be loaded");
         let network = &places[network_index];
+        let share = &places[share_index];
 
         assert!(bookmark_index < network_index);
+        assert!(network_index < share_index);
+        assert!(share_index < root_index);
         assert!(network_index < root_index);
         assert_eq!(network.group, NETWORK_GROUP);
         assert_eq!(network.marker, "Net");
         assert_eq!(network.label, fika_core::NETWORK_ROOT_LABEL);
         assert!(!network.editable);
         assert!(!network.removable);
-        assert!(!place_is_mounted(network));
+        assert!(place_is_mounted(network));
+        assert_eq!(share.group, NETWORK_GROUP);
+        assert_eq!(share.marker, "Net");
+        assert_eq!(share.label, "Team Share");
+        assert!(share.editable);
+        assert!(share.removable);
         assert_eq!(
             places
                 .iter()
@@ -10431,6 +10487,84 @@ text/plain=viewer.desktop;\n",
             Ok(vec![UserPlace::new(
                 default_place_label(&current),
                 current.clone()
+            )])
+        );
+
+        let _ = std::fs::remove_dir_all(current);
+    }
+
+    #[test]
+    fn add_network_drive_starts_path_draft_and_persists_network_bookmark() {
+        let current = test_dir("network-place-add-current");
+        std::fs::create_dir_all(&current).unwrap();
+        let current_arg = current.display().to_string();
+        let mut app = test_app_with_entries(&current_arg, &[]);
+        let pane_id = app.panes.focused().unwrap();
+        app.places = vec![
+            PlaceEntry {
+                group: "",
+                marker: "H",
+                label: "Home".to_string(),
+                path: home_dir(),
+                device_id: None,
+                device_mounted: true,
+                editable: false,
+                removable: false,
+                device_ejectable: false,
+                device_can_power_off: false,
+            },
+            PlaceEntry {
+                group: NETWORK_GROUP,
+                marker: "Net",
+                label: "Network".to_string(),
+                path: network_root_path(),
+                device_id: None,
+                device_mounted: true,
+                editable: false,
+                removable: false,
+                device_ejectable: false,
+                device_can_power_off: false,
+            },
+            PlaceEntry {
+                group: "Devices",
+                marker: "/",
+                label: "Root".to_string(),
+                path: PathBuf::from("/"),
+                device_id: None,
+                device_mounted: true,
+                editable: false,
+                removable: false,
+                device_ejectable: false,
+                device_can_power_off: false,
+            },
+        ];
+
+        app.start_add_network_drive(pane_id);
+        let draft = app.place_draft.as_mut().unwrap();
+        assert_eq!(draft.focus, PlaceDraftField::Path);
+        assert_eq!(draft.label, "Network Drive");
+        assert_eq!(draft.path, "smb://server/share/");
+        draft.label = "Team Share".to_string();
+        app.commit_place_draft();
+
+        assert_eq!(app.places.len(), 4);
+        assert_eq!(app.places[2].label, "Team Share");
+        assert_eq!(app.places[2].path, PathBuf::from("smb://server/share/"));
+        assert_eq!(app.places[2].group, NETWORK_GROUP);
+        assert_eq!(app.places[2].marker, "Net");
+        assert!(app.places[2].editable);
+        assert!(app.places[2].removable);
+        assert_eq!(app.places[3].group, "Devices");
+        assert!(app.place_draft.is_none());
+        assert_eq!(
+            app.status_message_for_pane(pane_id),
+            "Added place Team Share"
+        );
+        assert_eq!(
+            fika_core::load_user_places(&app.user_places_path),
+            Ok(vec![UserPlace::new(
+                "Team Share".to_string(),
+                PathBuf::from("smb://server/share/")
             )])
         );
 
@@ -11463,6 +11597,7 @@ text/plain=viewer.desktop;\n",
             Arc::new(vec![fika_core::Entry::new(fika_core::EntryData {
                 name: Arc::from("child"),
                 name_width_units: 5,
+                target_path: None,
                 size_bytes: 0,
                 modified_secs: None,
                 metadata_complete: true,
@@ -14016,6 +14151,7 @@ text/plain=viewer.desktop;\n",
             Arc::new(vec![fika_core::Entry::new(fika_core::EntryData {
                 name: Arc::from("image.png"),
                 name_width_units: 9,
+                target_path: None,
                 size_bytes: 128,
                 modified_secs: Some(42),
                 metadata_complete: true,
@@ -14088,6 +14224,7 @@ text/plain=viewer.desktop;\n",
             Arc::new(vec![fika_core::Entry::new(fika_core::EntryData {
                 name: Arc::from("payload"),
                 name_width_units: 7,
+                target_path: None,
                 size_bytes: 12,
                 modified_secs: Some(42),
                 metadata_complete: true,
@@ -14173,6 +14310,7 @@ text/plain=viewer.desktop;\n",
             Arc::new(vec![fika_core::Entry::new(fika_core::EntryData {
                 name: Arc::from("payload"),
                 name_width_units: 7,
+                target_path: None,
                 size_bytes: 10,
                 modified_secs: Some(modified_secs),
                 metadata_complete: true,
@@ -14246,6 +14384,7 @@ text/plain=viewer.desktop;\n",
             Arc::new(vec![fika_core::Entry::new(fika_core::EntryData {
                 name: Arc::from("payload"),
                 name_width_units: 7,
+                target_path: None,
                 size_bytes: 12,
                 modified_secs: Some(42),
                 metadata_complete: true,
@@ -14371,6 +14510,7 @@ text/plain=viewer.desktop;\n",
         fika_core::Entry::new(fika_core::EntryData {
             name: Arc::from(name),
             name_width_units: name.len() as u16,
+            target_path: None,
             size_bytes: 0,
             modified_secs: None,
             metadata_complete: true,
@@ -14386,6 +14526,7 @@ text/plain=viewer.desktop;\n",
         fika_core::Entry::new(fika_core::EntryData {
             name: Arc::from(name),
             name_width_units: name.len() as u16,
+            target_path: None,
             size_bytes: 0,
             modified_secs: None,
             metadata_complete: true,
@@ -14431,6 +14572,7 @@ text/plain=viewer.desktop;\n",
             entry: fika_core::Entry::new(fika_core::EntryData {
                 name: Arc::from(name),
                 name_width_units: name.len() as u16,
+                target_path: None,
                 size_bytes,
                 modified_secs: None,
                 metadata_complete: true,

@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use fika_core::{
     FileClipboardRole, FileTransferMode, PaneController, PaneId, encode_file_clipboard_text,
-    file_ops,
+    file_ops, is_network_path,
 };
 
 pub(crate) const TEXT_URI_LIST_MIME: &str = "text/uri-list";
@@ -284,6 +284,9 @@ pub(crate) fn item_drop_reject_reason(paths: &[PathBuf], target_dir: &Path) -> O
     if paths.is_empty() {
         return Some("No dragged items".to_string());
     }
+    if is_network_path(target_dir) || paths.iter().any(|path| is_network_path(path)) {
+        return Some("Remote file transfer is not available yet".to_string());
+    }
     if !target_dir.is_dir() {
         return Some(format!("Cannot drop into {}", target_dir.display()));
     }
@@ -403,6 +406,16 @@ mod tests {
     }
 
     #[test]
+    fn drag_export_payload_preserves_network_uris() {
+        let payload =
+            drag_export_payload_for_paths(vec![PathBuf::from("smb://server/share/report.txt")])
+                .unwrap();
+
+        assert_eq!(payload.uri_list, "smb://server/share/report.txt");
+        assert_eq!(payload.plain_text, "smb://server/share/report.txt");
+    }
+
+    #[test]
     fn drag_export_payload_prunes_children_when_parent_is_exported() {
         let payload = drag_export_payload_for_paths(vec![
             PathBuf::from("/tmp/parent/child.txt"),
@@ -456,6 +469,24 @@ mod tests {
         assert_eq!(item_drop_reject_reason(&[source], &sibling), None);
 
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn item_drop_rejects_remote_sources_or_targets() {
+        assert_eq!(
+            item_drop_reject_reason(
+                &[PathBuf::from("/tmp/local.txt")],
+                PathBuf::from("smb://server/share/").as_path(),
+            ),
+            Some("Remote file transfer is not available yet".to_string())
+        );
+        assert_eq!(
+            item_drop_reject_reason(
+                &[PathBuf::from("smb://server/share/local.txt")],
+                PathBuf::from("/tmp").as_path(),
+            ),
+            Some("Remote file transfer is not available yet".to_string())
+        );
     }
 
     #[test]

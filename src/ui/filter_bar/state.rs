@@ -226,6 +226,7 @@ mod tests {
         Entry::new(EntryData {
             name: Arc::from(name),
             name_width_units: name.len() as u16,
+            target_path: None,
             size_bytes: 0,
             modified_secs: None,
             metadata_complete: true,
