@@ -171,8 +171,8 @@ This is the active task board for the GPUI item view custom-paint migration.
 - [x] Add `docs/ITEM_VIEW_RUNTIME_SMOKE.md` with the runtime DnD, rename, and
   perf-log checklist for post-P11e verification.
 - [x] Add `scripts/analyze-item-view-perf.sh` to summarize perf logs and enforce
-  required steady/details/interaction channels and exercised view modes during
-  post-P11e review.
+  required steady/details/static-visual/interaction channels and exercised view
+  modes during post-P11e review.
 - [ ] Run a runtime DnD smoke pass after P11e: item drag, item-to-directory
   drop, pane drop, Places drop/reorder, external path drop, and rename caret
   click in Compact, Icons, and Details.
@@ -191,7 +191,8 @@ This is the active task board for the GPUI item view custom-paint migration.
   refreshed after each shell-removal or painter expansion slice.
 - [x] `cargo test` stays green.
 - [ ] Perf logs show resize steady path stays sub-millisecond for item snapshot
-  conversion, no new large `file-grid build` regression, and Details custom
+  conversion, no new large `file-grid build` regression, Compact/Icons custom
+  visual cost is visible through `[fika static-item-visual]`, and Details custom
   visual/text-shape cost is visible separately through `[fika details-visual]`
   and `[fika details-shape-cache]`.
 - [x] Cold mode switch cost is tracked separately from resize cost: `[fika

@@ -27,9 +27,11 @@ FIKA_PERF_ITEM_VIEW=1 cargo run -- ~/Downloads 2>&1 | tee /tmp/fika-item-view.lo
 scripts/analyze-item-view-perf.sh \
   --require-steady \
   --require-details \
+  --require-static-visual \
   --require-interaction \
   --require-modes Compact,Icons,Details \
   --steady-total-us 1000 \
+  --static-visual-paint-us 3000 \
   /tmp/fika-item-view.log
 ```
 
@@ -89,10 +91,10 @@ Expected log properties:
   interaction items for Compact/Icons and Details.
 
 Use `scripts/analyze-item-view-perf.sh` as the first pass. It summarizes
-item-view phases, file-grid build maxima, Details visual/shape-cache activity,
-and retained interaction hitbox activity. Human review is still required for
-whether the exercised mode switches, resizes, fullscreen toggles, and DnD
-actions match this checklist.
+item-view phases, file-grid build maxima, Compact/Icons static custom visual
+activity, Details visual/shape-cache activity, and retained interaction hitbox
+activity. Human review is still required for whether the exercised mode
+switches, resizes, fullscreen toggles, and DnD actions match this checklist.
 
 The analyzer itself can be checked with:
 

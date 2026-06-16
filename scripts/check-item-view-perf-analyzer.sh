@@ -18,6 +18,8 @@ cat > "$tmpdir/complete.log" <<'EOF'
 [fika file-grid] pane=1 mode=Compact visible=32 content=1602.5x882 build=400us
 [fika file-grid] pane=1 mode=Icons visible=40 content=587x1168 build=450us
 [fika file-grid] pane=1 mode=Details visible=30 content=601x882 build=420us
+[fika static-item-visual] pane=1 mode=Compact prepaint_count=32 prepaint=180us paint_count=32 paint=160us
+[fika static-item-visual] pane=1 mode=Icons prepaint_count=40 prepaint=210us paint_count=40 paint=190us
 [fika details-visual] pane=1 mode=Details prepaint_count=48 prepaint=120us paint_count=48 paint=130us
 [fika details-shape-cache] pane=1 mode=Details hits=20 misses=2 evicted=0 entries=22
 [fika item-interaction] pane=1 mode=Details prepaint_count=48 prepaint=60us paint_count=48 paint=50us
@@ -26,10 +28,12 @@ EOF
 "$analyzer" \
     --require-steady \
     --require-details \
+    --require-static-visual \
     --require-interaction \
     --require-modes Compact,Icons,Details \
     --steady-total-us 1000 \
     --file-grid-build-us 3000 \
+    --static-visual-paint-us 1000 \
     "$tmpdir/complete.log" >/dev/null
 
 cat > "$tmpdir/missing-channels.log" <<'EOF'
@@ -41,6 +45,11 @@ if "$analyzer" --require-details --require-interaction "$tmpdir/missing-channels
     exit 1
 fi
 
+if "$analyzer" --require-static-visual "$tmpdir/missing-channels.log" >/dev/null 2>&1; then
+    echo "expected missing static visual channel to fail" >&2
+    exit 1
+fi
+
 if "$analyzer" --require-modes Compact,Icons,Details "$tmpdir/missing-channels.log" >/dev/null 2>&1; then
     echo "expected missing required modes to fail" >&2
     exit 1
@@ -48,6 +57,11 @@ fi
 
 if "$analyzer" --steady-total-us 100 "$tmpdir/complete.log" >/dev/null 2>&1; then
     echo "expected steady threshold violation to fail" >&2
+    exit 1
+fi
+
+if "$analyzer" --static-visual-paint-us 100 "$tmpdir/complete.log" >/dev/null 2>&1; then
+    echo "expected static visual paint threshold violation to fail" >&2
     exit 1
 fi
 

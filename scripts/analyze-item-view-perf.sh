@@ -16,6 +16,9 @@ Options:
   --require-details
       Fail if Details-specific visual and shape-cache channels are missing.
 
+  --require-static-visual
+      Fail if [fika static-item-visual] Compact/Icons paint timing is missing.
+
   --require-interaction
       Fail if [fika item-interaction] hitbox timing is missing.
 
@@ -28,6 +31,9 @@ Options:
   --file-grid-build-us N
       Fail if any [fika file-grid] build exceeds N microseconds.
 
+  --static-visual-paint-us N
+      Fail if any [fika static-item-visual] paint exceeds N microseconds.
+
   -h, --help
       Show this help.
 EOF
@@ -35,10 +41,12 @@ EOF
 
 require_steady=false
 require_details=false
+require_static_visual=false
 require_interaction=false
 required_modes=""
 steady_total_us=""
 file_grid_build_us=""
+static_visual_paint_us=""
 log_path=""
 
 while [[ $# -gt 0 ]]; do
@@ -48,6 +56,9 @@ while [[ $# -gt 0 ]]; do
             ;;
         --require-details)
             require_details=true
+            ;;
+        --require-static-visual)
+            require_static_visual=true
             ;;
         --require-interaction)
             require_interaction=true
@@ -88,6 +99,18 @@ while [[ $# -gt 0 ]]; do
         --file-grid-build-us=*)
             file_grid_build_us="${1#--file-grid-build-us=}"
             ;;
+        --static-visual-paint-us)
+            if [[ $# -lt 2 || "$2" == --* ]]; then
+                echo "--static-visual-paint-us requires a numeric value" >&2
+                usage >&2
+                exit 2
+            fi
+            static_visual_paint_us="$2"
+            shift
+            ;;
+        --static-visual-paint-us=*)
+            static_visual_paint_us="${1#--static-visual-paint-us=}"
+            ;;
         -h|--help)
             usage
             exit 0
@@ -125,13 +148,20 @@ if [[ -n "$file_grid_build_us" && ! "$file_grid_build_us" =~ ^[0-9]+$ ]]; then
     exit 2
 fi
 
+if [[ -n "$static_visual_paint_us" && ! "$static_visual_paint_us" =~ ^[0-9]+$ ]]; then
+    echo "--static-visual-paint-us must be an integer microsecond value" >&2
+    exit 2
+fi
+
 awk \
     -v require_steady="$require_steady" \
     -v require_details="$require_details" \
+    -v require_static_visual="$require_static_visual" \
     -v require_interaction="$require_interaction" \
     -v required_modes="$required_modes" \
     -v steady_total_limit="$steady_total_us" \
-    -v file_grid_build_limit="$file_grid_build_us" '
+    -v file_grid_build_limit="$file_grid_build_us" \
+    -v static_visual_paint_limit="$static_visual_paint_us" '
 function trim(value) {
     sub(/^[[:space:]]+/, "", value)
     sub(/[[:space:]]+$/, "", value)
@@ -218,6 +248,17 @@ BEGIN {
     }
 }
 
+/^\[fika static-item-visual\]/ {
+    static_visual_count++
+    note_mode(field("mode"))
+    paint = us_field("paint")
+    max_assign(single_max, "static_visual_prepaint", us_field("prepaint"))
+    max_assign(single_max, "static_visual_paint", paint)
+    if (static_visual_paint_limit != "" && paint > static_visual_paint_limit + 0) {
+        static_visual_over_limit++
+    }
+}
+
 /^\[fika details-visual\]/ {
     details_visual_count++
     note_mode(field("mode"))
@@ -258,6 +299,9 @@ END {
     }
     print "  modes: " (modes_text == "" ? "<none>" : modes_text)
     print "  file_grid_frames: " (file_grid_count + 0) " max_build=" (("file_grid_build" in single_max) ? single_max["file_grid_build"] : 0) "us"
+    print "  static_visual_frames: " (static_visual_count + 0) \
+        " max_prepaint=" (("static_visual_prepaint" in single_max) ? single_max["static_visual_prepaint"] : 0) "us" \
+        " max_paint=" (("static_visual_paint" in single_max) ? single_max["static_visual_paint"] : 0) "us"
     print "  details_visual_frames: " (details_visual_count + 0) \
         " max_prepaint=" (("details_visual_prepaint" in single_max) ? single_max["details_visual_prepaint"] : 0) "us" \
         " max_paint=" (("details_visual_paint" in single_max) ? single_max["details_visual_paint"] : 0) "us"
@@ -279,6 +323,9 @@ END {
     if (require_details == "true" && details_shape_count == 0) {
         fail("missing [fika details-shape-cache] lines")
     }
+    if (require_static_visual == "true" && static_visual_count == 0) {
+        fail("missing [fika static-item-visual] lines")
+    }
     if (require_interaction == "true" && item_interaction_count == 0) {
         fail("missing [fika item-interaction] lines")
     }
@@ -292,6 +339,9 @@ END {
     }
     if (file_grid_over_limit > 0) {
         fail(file_grid_over_limit " file-grid build frame(s) exceeded " file_grid_build_limit "us")
+    }
+    if (static_visual_over_limit > 0) {
+        fail(static_visual_over_limit " static visual paint frame(s) exceeded " static_visual_paint_limit "us")
     }
 
     exit failures > 0 ? 1 : 0
