@@ -387,14 +387,38 @@ Acceptance:
   selection/drop changes are visual-state patches.
 - P11b proves Details row visuals are projected into painter data and no longer
   build per-cell GPUI visual children.
-- P11c proves Trash visual columns survive the painter migration and row-shell
-  controller data still carries the menu/DnD/drop fields.
+- P11c proves Trash visual columns survive the painter migration and retained
+  Details row data still carries the DnD/drop fields needed by the remaining
+  drag boundary.
 - P11d keeps Details paint timing attributable through `[fika details-visual]`
   and Details text cache activity attributable through
   `[fika details-shape-cache]` before removing any remaining row-shell behavior.
 - Details steady render no longer builds one visual row subtree per visible item
 - selection, context menu, drag/drop, and Trash columns retain behavior
 - Compact/Icons and Details share slot/image/text cache concepts where practical
+
+## Current Remaining Boundaries
+
+After P11e, ordinary click, context-menu, navigation, scroll, hover, cursor, and
+middle-paste behavior is routed through retained model/layout data instead of
+row-local handlers.
+
+The remaining item-local surfaces are intentional:
+
+- Compact/Icons non-renaming item shells: GPUI `Div::on_drag` drag-start
+  boundary only. Their visuals, images, hover/cursor, click/menu/drop hit
+  testing, and drag-over state are retained/painter driven.
+- Details row shells: GPUI `Div::on_drag` and drop-dispatch boundary only. Row
+  visuals and row hover/click/menu/navigation are retained/painter driven.
+- Rename overlay: text-editing boundary for caret hit testing, selection,
+  warning/error helper text, and cursor text behavior.
+
+Local GPUI 0.2.2 exposes drag initiation through `Div::on_drag`, while custom
+elements expose `Window::insert_hitbox` plus `Window::on_mouse_event` for mouse
+hit testing. P9b therefore remains blocked on either a public custom-element
+drag-start API or a small audited GPUI patch. Until then, removing these last
+drag shells would risk regressing DnD behavior instead of improving the retained
+architecture.
 
 ## Invariants
 
