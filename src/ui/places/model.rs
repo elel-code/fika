@@ -391,3 +391,71 @@ pub(crate) fn place_is_mounted(place: &PlaceEntry) -> bool {
 pub(crate) fn place_is_network(place: &PlaceEntry) -> bool {
     is_network_path(&place.path)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn primary_place_order_restores_builtin_only_order() {
+        let home = PathBuf::from("/home/yk");
+        let downloads = PathBuf::from("/home/yk/Downloads");
+        let mut places = vec![
+            place("", "Home", home.clone(), false),
+            place("", "Downloads", downloads.clone(), false),
+            place(NETWORK_GROUP, "Network", network_root_path(), false),
+            place(DEVICES_GROUP, "Root", PathBuf::from("/"), false),
+        ];
+
+        apply_primary_place_order(&mut places, &[downloads, home]);
+
+        assert_eq!(
+            places
+                .iter()
+                .map(|place| (place.group, place.label.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("", "Downloads"),
+                ("", "Home"),
+                (NETWORK_GROUP, "Network"),
+                (DEVICES_GROUP, "Root"),
+            ]
+        );
+    }
+
+    #[test]
+    fn primary_place_order_keeps_unknown_paths_from_displacing_known_places() {
+        let home = PathBuf::from("/home/yk");
+        let downloads = PathBuf::from("/home/yk/Downloads");
+        let mut places = vec![
+            place("", "Home", home.clone(), false),
+            place("", "Downloads", downloads.clone(), false),
+            place(DEVICES_GROUP, "Root", PathBuf::from("/"), false),
+        ];
+
+        apply_primary_place_order(&mut places, &[PathBuf::from("/missing"), downloads.clone()]);
+
+        assert_eq!(
+            places
+                .iter()
+                .map(|place| place.label.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Downloads", "Home", "Root"]
+        );
+    }
+
+    fn place(group: &'static str, label: &str, path: PathBuf, editable: bool) -> PlaceEntry {
+        PlaceEntry {
+            group,
+            marker: "P",
+            label: label.to_string(),
+            path,
+            device_id: None,
+            device_mounted: true,
+            editable,
+            removable: editable,
+            device_ejectable: false,
+            device_can_power_off: false,
+        }
+    }
+}

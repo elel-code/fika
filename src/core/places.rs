@@ -1,5 +1,6 @@
 use std::env;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use super::network::{network_uri_from_path, normalize_network_uri};
@@ -79,10 +80,11 @@ pub fn save_place_order(path: &Path, order: &[PathBuf]) -> Result<(), String> {
 }
 
 fn write_parented_file(path: &Path, contents: String, label: &str) -> Result<(), String> {
-    if let Some(parent) = path
+    let parent = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
-    {
+        .map(Path::to_path_buf);
+    if let Some(parent) = parent.as_deref() {
         fs::create_dir_all(parent).map_err(|error| {
             format!(
                 "failed to create {label} directory {}: {error}",
@@ -90,8 +92,30 @@ fn write_parented_file(path: &Path, contents: String, label: &str) -> Result<(),
             )
         })?;
     }
-    fs::write(path, contents)
-        .map_err(|error| format!("failed to write {label} {}: {error}", path.display()))
+    let temp_path = parent
+        .as_deref()
+        .unwrap_or_else(|| Path::new("."))
+        .join(format!(
+            ".{}.tmp-{}",
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("places"),
+            std::process::id()
+        ));
+    let write_result = (|| -> Result<(), String> {
+        let mut file = fs::File::create(&temp_path)
+            .map_err(|error| format!("failed to write {label} {}: {error}", temp_path.display()))?;
+        file.write_all(contents.as_bytes())
+            .map_err(|error| format!("failed to write {label} {}: {error}", temp_path.display()))?;
+        file.sync_all()
+            .map_err(|error| format!("failed to flush {label} {}: {error}", temp_path.display()))?;
+        fs::rename(&temp_path, path)
+            .map_err(|error| format!("failed to write {label} {}: {error}", path.display()))
+    })();
+    if write_result.is_err() {
+        let _ = fs::remove_file(&temp_path);
+    }
+    write_result
 }
 
 pub fn parse_user_places_xbel(contents: &str) -> Result<Vec<UserPlace>, String> {

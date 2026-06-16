@@ -3,7 +3,9 @@ use std::sync::Arc;
 
 use gpui::{Context, IntoElement, ParentElement, Render, Styled, div, px, rgb};
 
-use super::super::drag_drop::{DragExportPayload, place_drag_export_payload};
+use super::super::drag_drop::{
+    DragExportPayload, drag_preview_content_origin_for_cursor_offset, place_drag_export_payload,
+};
 use crate::ui::icons::{FileIconSnapshot, cached_icon_or_fallback};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -57,7 +59,8 @@ pub(crate) struct PlaceDragPreview {
 
 impl PlaceDragPreview {
     pub(crate) fn from_drag(drag: &PlaceDrag, cursor_offset: gpui::Point<gpui::Pixels>) -> Self {
-        let (content_origin_x, content_origin_y) = place_drag_preview_content_origin(cursor_offset);
+        let (content_origin_x, content_origin_y) =
+            drag_preview_content_origin_for_cursor_offset(cursor_offset);
         Self {
             label: drag.label.clone(),
             icon: drag.icon.clone(),
@@ -69,7 +72,6 @@ impl PlaceDragPreview {
 
 const PLACE_DRAG_PREVIEW_MIN_WIDTH: f32 = 220.0;
 const PLACE_DRAG_PREVIEW_MIN_HEIGHT: f32 = 36.0;
-const PLACE_DRAG_PREVIEW_CURSOR_GAP: f32 = 8.0;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PlaceDropZone {
@@ -115,13 +117,6 @@ fn place_drop_zone_for_y(local_y: f32, height: f32) -> PlaceDropZone {
     } else {
         PlaceDropZone::OnPlace
     }
-}
-
-fn place_drag_preview_content_origin(offset: gpui::Point<gpui::Pixels>) -> (f32, f32) {
-    (
-        offset.x.as_f32() + PLACE_DRAG_PREVIEW_CURSOR_GAP,
-        offset.y.as_f32() + PLACE_DRAG_PREVIEW_CURSOR_GAP,
-    )
 }
 
 impl Render for PlaceDragPreview {
@@ -191,6 +186,7 @@ fn place_drag_icon_or_fallback(icon: FileIconSnapshot) -> gpui::AnyElement {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui::drag_drop::drag_preview_content_origin_for_cursor_offset;
     use std::sync::Arc;
 
     #[test]
@@ -213,11 +209,17 @@ mod tests {
     #[test]
     fn place_drag_preview_compensates_for_row_cursor_offset() {
         assert_eq!(
-            place_drag_preview_content_origin(gpui::point(gpui::px(48.0), gpui::px(12.0))),
+            drag_preview_content_origin_for_cursor_offset(gpui::point(
+                gpui::px(48.0),
+                gpui::px(12.0)
+            )),
             (56.0, 20.0)
         );
         assert_eq!(
-            place_drag_preview_content_origin(gpui::point(gpui::px(-12.0), gpui::px(-4.0))),
+            drag_preview_content_origin_for_cursor_offset(gpui::point(
+                gpui::px(-12.0),
+                gpui::px(-4.0)
+            )),
             (-4.0, 4.0)
         );
     }

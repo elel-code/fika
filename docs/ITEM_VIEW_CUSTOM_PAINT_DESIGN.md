@@ -104,9 +104,10 @@ Temporarily keep one GPUI `Div` per visible item for:
 Viewport-level hit testing remains authoritative for normal click, context menu,
 middle click, rubber band, and drop target routing.
 
-Rename items keep the existing editor subtree. Thumbnail and theme-icon items use
-slot-stable retained `img()` elements under a pane-local image cache until image
-cache integration is moved behind a paint cache.
+Rename items keep the existing editor subtree. Before Phase 8, thumbnail and
+theme-icon items used slot-stable retained `img()` elements under a pane-local
+image cache; Phase 8 moves non-renaming Compact/Icons images behind the custom
+paint layer.
 
 ## Migration Phases
 
@@ -243,7 +244,8 @@ Move all non-renaming Compact and Icons base visuals into content-level layers:
 - fallback icon marker painting remains in the visual layer only for items
   without thumbnail or theme-icon paths
 - thumbnail and theme-icon `img()` elements live in one content-level image layer
-  keyed by retained visual slot id
+  keyed by retained visual slot id for this phase; Phase 8 replaces that layer
+  with direct custom image painting
 - each non-renaming item slot remains a transparent interaction/drag shell
 - rename items keep the current child subtree and editor behavior
 

@@ -42,8 +42,8 @@ use std::time::Duration;
 
 use super::drag_drop::{
     FileTransferMode, ItemDragPayload, PathListDropTargetKind, PathListDropTargetUpdate,
-    refresh_active_drag_cursor_for_drop_menu, refresh_active_drag_cursor_for_transfer_mode,
-    refresh_active_drag_cursor_not_allowed,
+    drag_preview_content_origin_for_cursor_offset, refresh_active_drag_cursor_for_drop_menu,
+    refresh_active_drag_cursor_for_transfer_mode, refresh_active_drag_cursor_not_allowed,
 };
 use super::icons::{FileIconSnapshot, cached_icon_or_fallback};
 use super::item_view::{
@@ -550,7 +550,6 @@ struct DragPreview {
 
 const DRAG_PREVIEW_MIN_WIDTH: f32 = 220.0;
 const DRAG_PREVIEW_MIN_HEIGHT: f32 = 36.0;
-const DRAG_PREVIEW_CURSOR_GAP: f32 = 8.0;
 
 fn item_identity_element_id(prefix: &'static str, item_id: ItemId) -> (&'static str, u64) {
     (prefix, item_id.0)
@@ -1473,7 +1472,8 @@ fn details_row(
             let _ = app.update(cx, |this, _cx| {
                 this.begin_item_drag(drag.payload());
             });
-            let (content_origin_x, content_origin_y) = drag_preview_content_origin(cursor_offset);
+            let (content_origin_x, content_origin_y) =
+                drag_preview_content_origin_for_cursor_offset(cursor_offset);
             cx.new(|_| DragPreview {
                 icon: drag.icon.clone(),
                 label: drag_preview_label(drag.name.as_ref(), drag.selected, drag.selection_count),
@@ -1772,7 +1772,8 @@ fn item_tile(
             let _ = drag_app.update(cx, |this, _cx| {
                 this.begin_item_drag(drag.payload());
             });
-            let (content_origin_x, content_origin_y) = drag_preview_content_origin(cursor_offset);
+            let (content_origin_x, content_origin_y) =
+                drag_preview_content_origin_for_cursor_offset(cursor_offset);
             cx.new(|_| DragPreview {
                 icon: drag.icon.clone(),
                 label: drag_preview_label(drag.name.as_ref(), drag.selected, drag.selection_count),
@@ -3105,13 +3106,6 @@ impl Render for DragPreview {
     }
 }
 
-fn drag_preview_content_origin(offset: gpui::Point<gpui::Pixels>) -> (f32, f32) {
-    (
-        offset.x.as_f32() + DRAG_PREVIEW_CURSOR_GAP,
-        offset.y.as_f32() + DRAG_PREVIEW_CURSOR_GAP,
-    )
-}
-
 fn drag_preview_label(name: &str, selected: bool, selection_count: usize) -> String {
     if selected && selection_count > 1 {
         format!("{selection_count} items")
@@ -3125,13 +3119,14 @@ mod tests {
     use super::{
         FileGridMode, FileGridRenderSnapshot, FileGridSnapshot, ItemPaintContent,
         ItemPaintSlotCache, ItemTileTextAlignment, VisibleItemSnapshot, display_text_layout,
-        drag_preview_content_origin, drag_preview_label, item_identity_element_id,
-        item_image_element_id, item_image_layer_item_source_path, item_image_layer_items,
+        drag_preview_label, item_identity_element_id, item_image_element_id,
+        item_image_layer_item_source_path, item_image_layer_items,
         item_image_load_failure_paints_fallback, item_image_paint_layer_element_id,
         item_mouse_down_opens_directory, measured_viewport_for_scrollbar_axis,
         normalized_text_range, rename_text_layout, static_item_visual_layer_element_id,
         static_item_visual_layer_items, viewport_bounds_update_requires_notify,
     };
+    use crate::ui::drag_drop::drag_preview_content_origin_for_cursor_offset;
     use crate::ui::icons::FileIconSnapshot;
     use crate::ui::item_view::ItemViewScrollbarAxis;
     use fika_core::{
@@ -3152,15 +3147,15 @@ mod tests {
     #[test]
     fn drag_preview_stays_near_cursor_independent_of_item_offset() {
         assert_eq!(
-            drag_preview_content_origin(point(px(48.0), px(12.0))),
+            drag_preview_content_origin_for_cursor_offset(point(px(48.0), px(12.0))),
             (56.0, 20.0)
         );
         assert_eq!(
-            drag_preview_content_origin(point(px(-4.0), px(-2.0))),
+            drag_preview_content_origin_for_cursor_offset(point(px(-4.0), px(-2.0))),
             (4.0, 6.0)
         );
         assert_eq!(
-            drag_preview_content_origin(point(px(-12.0), px(-10.0))),
+            drag_preview_content_origin_for_cursor_offset(point(px(-12.0), px(-10.0))),
             (-4.0, -2.0)
         );
     }
