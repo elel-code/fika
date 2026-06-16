@@ -312,7 +312,10 @@ Acceptance:
 - directory drag-over tint is painted from retained drop-target state, not
   transient shell `drag_over` styling
 - item drag payload and preview behavior remain unchanged
-- perf logs do not show a new steady render/build regression
+- perf logs do not show a new steady render/build regression; cold mode-switch
+  cache warm-up remains tracked separately from resize/fullscreen steady paths
+- P9a perf evidence is not permission to remove drag shells; P9b still requires
+  a public GPUI drag-start API or an audited GPUI patch
 
 #### Phase 9b: Drag Source Hitboxes
 

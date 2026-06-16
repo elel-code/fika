@@ -117,8 +117,10 @@ This is the active task board for the GPUI item view custom-paint migration.
   Icons, and Details retained migration paths.
 - [x] Add P9a interaction-layer perf logging for retained hitbox prepaint/paint
   count and timing.
-- [ ] Compare P9a perf logs against the previous GPUI hover/cursor shell path
-  before expanding custom interaction further.
+- [x] Compare P9a perf logs against the previous GPUI hover/cursor shell path
+  before expanding custom interaction further; user `~/Downloads` logs show
+  warm resize/fullscreen item-view conversion remains sub-millisecond, while
+  cold mode-switch cache warm-up stays tracked separately.
 
 ## P10: Rename Overlay Boundary
 
