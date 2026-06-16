@@ -37,6 +37,7 @@ use gpui::{
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use super::drag_drop::{
     FileTransferMode, ItemDragPayload, PathListDropTargetKind, PathListDropTargetUpdate,
@@ -111,12 +112,38 @@ enum ItemTileTextAlignment {
 }
 
 struct StaticItemVisualPaintState {
+    pane_id: PaneId,
+    app: WeakEntity<FikaApp>,
     layout: ItemLayout,
     marker_line_height: Pixels,
     shapes: Arc<StaticItemTextShapes>,
     label_line_height: Pixels,
     background: Rgba,
     fallback_bg: u32,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct StaticItemVisualPerfStats {
+    pub(crate) prepaint_count: usize,
+    pub(crate) prepaint_us: u128,
+    pub(crate) paint_count: usize,
+    pub(crate) paint_us: u128,
+}
+
+impl StaticItemVisualPerfStats {
+    fn has_activity(self) -> bool {
+        self.prepaint_count > 0 || self.paint_count > 0
+    }
+
+    fn record_prepaint(&mut self, elapsed: Duration) {
+        self.prepaint_count += 1;
+        self.prepaint_us += elapsed.as_micros();
+    }
+
+    fn record_paint(&mut self, elapsed: Duration) {
+        self.paint_count += 1;
+        self.paint_us += elapsed.as_micros();
+    }
 }
 
 struct StaticItemTextShapes {
@@ -829,6 +856,7 @@ pub(crate) fn file_grid(
             let mut bounds_changed = false;
             let mut notify_requested = false;
             let mut shape_cache_stats = StaticItemTextShapeCacheStats::default();
+            let mut static_visual_stats = StaticItemVisualPerfStats::default();
             let _ = app.update(cx, |this, cx| {
                 let previous_view = this.panes.pane(pane_id).map(|pane| pane.view.clone());
                 this.set_pane_viewport_geometry(pane_id, measured.rect);
@@ -854,6 +882,7 @@ pub(crate) fn file_grid(
                 }
                 if perf_enabled {
                     shape_cache_stats = this.take_static_item_text_shape_cache_stats(pane_id);
+                    static_visual_stats = this.take_static_item_visual_perf_stats(pane_id);
                 }
             });
             if let Some(started) = prepaint_started {
@@ -878,6 +907,17 @@ pub(crate) fn file_grid(
                         shape_cache_stats.misses,
                         shape_cache_stats.evicted,
                         shape_cache_stats.entries,
+                    );
+                }
+                if static_visual_stats.has_activity() {
+                    eprintln!(
+                        "[fika static-item-visual] pane={} mode={:?} prepaint_count={} prepaint={}us paint_count={} paint={}us",
+                        pane_id.0,
+                        view_mode,
+                        static_visual_stats.prepaint_count,
+                        static_visual_stats.prepaint_us,
+                        static_visual_stats.paint_count,
+                        static_visual_stats.paint_us,
                     );
                 }
             }
@@ -924,6 +964,26 @@ impl FikaApp {
             .get_mut(&pane_id)
             .map(StaticItemTextShapeCache::take_stats)
             .unwrap_or_default()
+    }
+
+    fn take_static_item_visual_perf_stats(&mut self, pane_id: PaneId) -> StaticItemVisualPerfStats {
+        self.static_item_visual_perf_stats
+            .remove(&pane_id)
+            .unwrap_or_default()
+    }
+
+    fn record_static_item_visual_prepaint(&mut self, pane_id: PaneId, elapsed: Duration) {
+        self.static_item_visual_perf_stats
+            .entry(pane_id)
+            .or_default()
+            .record_prepaint(elapsed);
+    }
+
+    fn record_static_item_visual_paint(&mut self, pane_id: PaneId, elapsed: Duration) {
+        self.static_item_visual_perf_stats
+            .entry(pane_id)
+            .or_default()
+            .record_paint(elapsed);
     }
 }
 
@@ -1905,6 +1965,7 @@ fn static_item_visual_prepaint(
     window: &mut Window,
     cx: &mut App,
 ) -> StaticItemVisualPaintState {
+    let perf_started = crate::item_view_perf_enabled().then(std::time::Instant::now);
     let style = static_item_text_shape_style(layout, selected, &icon, window);
     let key = static_item_text_shape_cache_key(
         item_id,
@@ -1926,14 +1987,23 @@ fn static_item_visual_prepaint(
         })
         .ok()
         .unwrap_or_else(|| Arc::new(shape_static_item_text(&key, &style, window)));
-    StaticItemVisualPaintState {
+    let state = StaticItemVisualPaintState {
+        pane_id,
+        app: app.clone(),
         layout,
         marker_line_height: style.marker_line_height,
         shapes,
         label_line_height: style.label_line_height,
         background: item_tile_background(selected, drop_target, hovered),
         fallback_bg: icon.fallback_bg,
+    };
+    if let Some(started) = perf_started {
+        let elapsed = started.elapsed();
+        let _ = app.update(cx, |this, _cx| {
+            this.record_static_item_visual_prepaint(pane_id, elapsed);
+        });
     }
+    state
 }
 
 fn static_item_text_shape_style(
@@ -2090,6 +2160,7 @@ fn static_item_visual_paint(
     window: &mut Window,
     cx: &mut App,
 ) {
+    let perf_started = crate::item_view_perf_enabled().then(std::time::Instant::now);
     window.paint_quad(fill(bounds, state.background).corner_radii(px(6.0)));
     let icon_bounds =
         static_item_local_bounds(bounds, state.layout.visual_rect, state.layout.icon_rect);
@@ -2151,6 +2222,12 @@ fn static_item_visual_paint(
             }
         }
     });
+    if let Some(started) = perf_started {
+        let elapsed = started.elapsed();
+        let _ = state.app.update(cx, |this, _cx| {
+            this.record_static_item_visual_paint(state.pane_id, elapsed);
+        });
+    }
 }
 
 fn static_item_local_bounds(

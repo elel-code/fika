@@ -57,8 +57,8 @@ This is the active task board for the GPUI item view custom-paint migration.
 
 - [x] Replace canvas spike if direct custom element gives better retained
   prepaint state.
-- [ ] Move paint timing instrumentation into the custom element.
-- [ ] Add tests around geometry and content-key invalidation.
+- [x] Move paint timing instrumentation into the custom element.
+- [x] Add tests around geometry and content-key invalidation.
 
 ## Acceptance Gates
 

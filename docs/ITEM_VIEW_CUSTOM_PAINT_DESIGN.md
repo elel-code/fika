@@ -199,6 +199,13 @@ Replace `canvas` spike with a dedicated custom GPUI element if needed:
 - optional hitbox insertion for future per-item interaction consolidation
 - direct instrumentation for shape/paint/cache hit counts
 
+Current boundary:
+
+- static fallback visuals use `StaticItemVisualElement` instead of `gpui::canvas`
+- the element owns prepaint/paint state and reports pane-local aggregate timing
+- item interaction still remains on the outer shell while the painter boundary is
+  migrated
+
 Acceptance:
 
 - no normal static item child tree except the interaction shell
