@@ -146,6 +146,10 @@ Before adding a new UI feature:
 ### Architecture and Planning
 - [DESIGN.md](DESIGN.md) — Current GPUI/core architecture
 - [TODO.md](TODO.md) — Remaining task board
+- [ITEM_VIEW_CUSTOM_PAINT_DESIGN.md](ITEM_VIEW_CUSTOM_PAINT_DESIGN.md) — Active retained item-view architecture
+- [ITEM_VIEW_CUSTOM_PAINT_TODO.md](ITEM_VIEW_CUSTOM_PAINT_TODO.md) — Active item-view custom-paint task board
+- [ITEM_VIEW_RENDERER_DECISIONS.md](ITEM_VIEW_RENDERER_DECISIONS.md) — Per-surface renderer choices and gates
+- [ITEM_VIEW_RUNTIME_SMOKE.md](ITEM_VIEW_RUNTIME_SMOKE.md) — Runtime DnD, rename, and perf-log smoke checklist
 - [GPUI_DOLPHIN_MIGRATION_PLAN.md](GPUI_DOLPHIN_MIGRATION_PLAN.md) — Original cutover plan
 - [DOLPHIN_ITEM_SLOT_REUSE_PLAN.md](DOLPHIN_ITEM_SLOT_REUSE_PLAN.md) — Archived slot-reuse notes
 - [SCROLL_ZOOM_PERFORMANCE_PLAN.md](SCROLL_ZOOM_PERFORMANCE_PLAN.md) — Archived scroll/zoom notes

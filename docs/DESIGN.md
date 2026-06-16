@@ -545,6 +545,12 @@ Undo follows the same rule: filesystem change first, affected pane refresh secon
 
 ## Historical Docs
 
+Active retained item-view work is tracked in
+`docs/ITEM_VIEW_CUSTOM_PAINT_DESIGN.md`,
+`docs/ITEM_VIEW_CUSTOM_PAINT_TODO.md`,
+`docs/ITEM_VIEW_RENDERER_DECISIONS.md`, and
+`docs/ITEM_VIEW_RUNTIME_SMOKE.md`.
+
 The archived optimization documents (`docs/OPTIMIZATION.md`,
 `docs/SCROLL_ZOOM_PERFORMANCE_PLAN.md`,
 `docs/DOLPHIN_ITEM_SLOT_REUSE_PLAN.md`,

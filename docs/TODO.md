@@ -77,9 +77,11 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
 
 - `docs/ITEM_VIEW_CUSTOM_PAINT_DESIGN.md`
 - `docs/ITEM_VIEW_CUSTOM_PAINT_TODO.md`
+- `docs/ITEM_VIEW_RENDERER_DECISIONS.md`
+- `docs/ITEM_VIEW_RUNTIME_SMOKE.md`
 
-- [~] Phase 1：非重命名、非缩略图 item 的静态视觉转向自绘，保留当前交互 shell。
-- [~] Phase 2：静态文本 shaping cache，resize 时复用已成形文本。
+- [x] Phase 1：非重命名、非缩略图 item 的静态视觉转向自绘，保留当前交互 shell。
+- [x] Phase 2：静态文本 shaping cache，resize 时复用已成形文本。
 - [x] Phase 3：显式 retained paint slot state，区分 geometry-only/content/visual changes。
 - [x] Phase 4：缩略图/图片绘制边界收敛到 retained image path。
 - [x] Phase 5：从 `canvas` spike 升级到 dedicated GPUI custom element。
@@ -87,9 +89,10 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
 - [x] Phase 7：所有非 rename Compact/Icons item 的背景/文字进入 content-level 自绘 layer，thumbnail/theme icon 进入独立 content-level image layer，item shell 只保留交互。
 - [x] Phase 8：thumbnail/theme icon image layer 改为 custom paint element，复用 GPUI `RetainAllImageCache`/`ImageAssetLoader`，用 `Window::paint_image` 直接绘制。
 - [~] Phase 9：custom element hitbox 迁移分两步。P9a 已开始把非 rename Compact/Icons hover/cursor 放进 retained hitbox layer；P9b 删除 drag shell 需等待 GPUI 公开 custom-element drag-start API 或引入可审计 GPUI patch。每一步都必须保留 Dolphin model/controller/painter 分层，并用 perf logs 证明不劣于 GPUI built-in 路径。
-- [~] Phase 10：rename 只保留 overlay editor，普通背景/文字/图片继续走 content-level layer。
-- [~] Phase 11：Details row 已进入 retained paint slot，背景/图标/文字已转入 content-level custom visual layer；click/menu/navigation/scroll/middle-paste 和 drop dispatch 已走 viewport retained hit testing/drop handlers，row shell 只剩 GPUI drag-start 边界。继续移除 row shell 或扩大自绘前必须用 perf 证明不劣于 GPUI built-in 路径。
+- [x] Phase 10：rename 只保留 overlay editor，普通背景/文字/图片继续走 content-level layer。
+- [x] Phase 11：Details row 已进入 retained paint slot，背景/图标/文字已转入 content-level custom visual layer；click/menu/navigation/scroll/middle-paste 和 drop dispatch 已走 viewport retained hit testing/drop handlers，row shell 只剩 GPUI drag-start 边界。继续移除 row shell 或扩大自绘前必须用 perf 证明不劣于 GPUI built-in 路径。
 - [~] Phase 12：剩余边界已审计：GPUI 0.2.2 公开 drag-start 仍绑定 `Div::on_drag`，custom element 只有 hitbox/mouse event 路径；P9b 需要公开 custom-element drag-start API 或可审计 GPUI patch。runtime DnD/perf 验证清单见 `docs/ITEM_VIEW_RUNTIME_SMOKE.md`，下一步先执行 smoke 和 post-P11e perf log 收集。
+- [~] Phase 13：renderer decision gate 已建立：每个 surface 先记录 Dolphin-style model/layout/controller/painter owner，再由 runtime perf 和行为证据决定保留 custom paint 还是 GPUI built-in renderer。当前决策见 `docs/ITEM_VIEW_RENDERER_DECISIONS.md`。
 
 ### GPUI Backend / External MIME Drag (阻塞)
 - [~] 外部 MIME 拖出：`DragExportPayload`（`text/uri-list` + `text/plain`）已构造，但 GPUI/Wayland backend 尚未提供从 app 内部 drag source 向外部应用发布 MIME 的 API。待 backend 支持后接入。
