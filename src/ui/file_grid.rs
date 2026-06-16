@@ -28,12 +28,12 @@ use fika_core::{
 };
 use gpui::prelude::*;
 use gpui::{
-    App, Bounds, Context, Corners, Div, Element, ElementId, Empty, Entity, ExternalPaths, Font,
-    FontWeight, GlobalElementId, InspectorElementId, IntoElement, LayoutId, MouseButton,
-    NavigationDirection, ObjectFit, ParentElement, Pixels, Render, RenderImage, Resource,
-    RetainAllImageCache, Rgba, ScrollHandle, SharedString, Stateful, Style, StyleRefinement,
-    Styled, TextAlign, TextRun, WeakEntity, Window, div, fill, img, point, px, retain_all, rgb,
-    rgba, size,
+    App, Bounds, Context, Corners, CursorStyle, Div, Element, ElementId, Empty, Entity,
+    ExternalPaths, Font, FontWeight, GlobalElementId, Hitbox, HitboxBehavior, InspectorElementId,
+    IntoElement, LayoutId, MouseButton, MouseMoveEvent, NavigationDirection, ObjectFit,
+    ParentElement, Pixels, Render, RenderImage, Resource, RetainAllImageCache, Rgba, ScrollHandle,
+    SharedString, Stateful, Style, StyleRefinement, Styled, TextAlign, TextRun, WeakEntity, Window,
+    div, fill, img, point, px, retain_all, rgb, rgba, size,
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -567,6 +567,10 @@ fn item_image_paint_layer_element_id(pane_id: PaneId) -> (&'static str, u64) {
     ("item-image-paint-layer", pane_id.0)
 }
 
+fn item_interaction_layer_element_id(pane_id: PaneId) -> (&'static str, u64) {
+    ("item-interaction-layer", pane_id.0)
+}
+
 fn handle_file_grid_item_drag_move(
     app: &mut FikaApp,
     pane_id: PaneId,
@@ -787,6 +791,13 @@ pub(crate) fn file_grid(
             );
             let image_layer =
                 item_image_layer_view(pane_id, &items, content_size.width, content_size.height);
+            let interaction_layer = item_interaction_layer_view(
+                pane_id,
+                &items,
+                content_size.width,
+                content_size.height,
+                app.clone(),
+            );
             let content = div()
                 .relative()
                 .w(px(content_size.width))
@@ -797,6 +808,11 @@ pub(crate) fn file_grid(
                 content
             };
             let content = if let Some(layer) = image_layer {
+                content.child(layer)
+            } else {
+                content
+            };
+            let content = if let Some(layer) = interaction_layer {
                 content.child(layer)
             } else {
                 content
@@ -832,6 +848,13 @@ pub(crate) fn file_grid(
             );
             let image_layer =
                 item_image_layer_view(pane_id, &items, content_size.width, content_size.height);
+            let interaction_layer = item_interaction_layer_view(
+                pane_id,
+                &items,
+                content_size.width,
+                content_size.height,
+                app.clone(),
+            );
             let content = div()
                 .relative()
                 .w(px(content_size.width))
@@ -842,6 +865,11 @@ pub(crate) fn file_grid(
                 content
             };
             let content = if let Some(layer) = image_layer {
+                content.child(layer)
+            } else {
+                content
+            };
+            let content = if let Some(layer) = interaction_layer {
                 content.child(layer)
             } else {
                 content
@@ -1746,8 +1774,8 @@ fn item_tile(
         item_tile_background(selected, drop_target, hovered)
     };
 
-    // Temporary migration boundary: this Div remains the interaction shell while
-    // non-rename item visuals move toward retained custom painting.
+    // Temporary migration boundary: GPUI drag starts are still tied to a Div
+    // until a public custom-element drag-start API exists.
     let core = div()
         .id(item_identity_element_id("item-core", item_id))
         .absolute()
@@ -1757,17 +1785,6 @@ fn item_tile(
         .h(px(visual.height))
         .rounded_md()
         .bg(shell_background)
-        .cursor_pointer()
-        .on_hover(cx.listener(move |this, hovered: &bool, _window, cx| {
-            let changed = if *hovered {
-                this.set_hovered_item(pane_id, item_id)
-            } else {
-                this.clear_hovered_item(pane_id, item_id)
-            };
-            if changed {
-                cx.notify();
-            }
-        }))
         .on_drag(drag_value, move |drag, cursor_offset, _, cx| {
             let _ = drag_app.update(cx, |this, _cx| {
                 this.begin_item_drag(drag.payload());
@@ -1782,6 +1799,21 @@ fn item_tile(
                 content_origin_y,
             })
         });
+    let core = if use_layer_visual_paint {
+        core
+    } else {
+        core.cursor_pointer()
+            .on_hover(cx.listener(move |this, hovered: &bool, _window, cx| {
+                let changed = if *hovered {
+                    this.set_hovered_item(pane_id, item_id)
+                } else {
+                    this.clear_hovered_item(pane_id, item_id)
+                };
+                if changed {
+                    cx.notify();
+                }
+            }))
+    };
     let core = if use_layer_visual_paint {
         core
     } else {
@@ -2322,6 +2354,198 @@ fn item_image_layer_icon_bounds(
             px(icon_rect.height.round().max(1.0)),
         ),
     )
+}
+
+fn item_interaction_layer_view(
+    pane_id: PaneId,
+    items: &[ItemPaintSnapshot],
+    width: f32,
+    height: f32,
+    app: WeakEntity<FikaApp>,
+) -> Option<ItemInteractionLayerElement> {
+    let items = item_interaction_layer_items(items);
+    (!items.is_empty()).then(|| {
+        ItemInteractionLayerElement {
+            pane_id,
+            app,
+            items,
+            style: StyleRefinement::default(),
+        }
+        .absolute()
+        .left_0()
+        .top_0()
+        .w(px(width.max(1.0)))
+        .h(px(height.max(1.0)))
+    })
+}
+
+fn item_interaction_layer_items(items: &[ItemPaintSnapshot]) -> Vec<ItemInteractionLayerItem> {
+    items
+        .iter()
+        .filter_map(|item| {
+            item_uses_layer_visual_paint(item.content.as_ref()).then_some(
+                ItemInteractionLayerItem {
+                    item_id: item.item_id,
+                    visual_rect: item.layout.visual_rect,
+                },
+            )
+        })
+        .collect()
+}
+
+struct ItemInteractionLayerItem {
+    item_id: ItemId,
+    visual_rect: ViewRect,
+}
+
+struct ItemInteractionLayerElement {
+    pane_id: PaneId,
+    app: WeakEntity<FikaApp>,
+    items: Vec<ItemInteractionLayerItem>,
+    style: StyleRefinement,
+}
+
+#[derive(Clone)]
+struct ItemInteractionHitboxState {
+    item_id: ItemId,
+    hitbox: Hitbox,
+}
+
+impl IntoElement for ItemInteractionLayerElement {
+    type Element = Self;
+
+    fn into_element(self) -> Self::Element {
+        self
+    }
+}
+
+impl Element for ItemInteractionLayerElement {
+    type RequestLayoutState = Style;
+    type PrepaintState = Vec<ItemInteractionHitboxState>;
+
+    fn id(&self) -> Option<ElementId> {
+        Some(ElementId::from(item_interaction_layer_element_id(
+            self.pane_id,
+        )))
+    }
+
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, Self::RequestLayoutState) {
+        let mut style = Style::default();
+        style.refine(&self.style);
+        let layout_id = window.request_layout(style.clone(), [], cx);
+        (layout_id, style)
+    }
+
+    fn prepaint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        window: &mut Window,
+        _cx: &mut App,
+    ) -> Self::PrepaintState {
+        self.items
+            .iter()
+            .map(|item| ItemInteractionHitboxState {
+                item_id: item.item_id,
+                hitbox: window.insert_hitbox(
+                    item_interaction_hitbox_bounds(bounds, item.visual_rect),
+                    HitboxBehavior::Normal,
+                ),
+            })
+            .collect()
+    }
+
+    fn paint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        request_layout: &mut Self::RequestLayoutState,
+        prepaint: &mut Self::PrepaintState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        request_layout.paint(bounds, window, cx, |_window, _cx| {});
+        if let Some(state) = item_interaction_hovered_state(prepaint, window) {
+            window.set_cursor_style(CursorStyle::PointingHand, &state.hitbox);
+        }
+        install_item_interaction_hover_listener(self.pane_id, self.app.clone(), prepaint, window);
+    }
+}
+
+impl Styled for ItemInteractionLayerElement {
+    fn style(&mut self) -> &mut StyleRefinement {
+        &mut self.style
+    }
+}
+
+fn item_interaction_hitbox_bounds(
+    layer_bounds: Bounds<Pixels>,
+    visual_rect: ViewRect,
+) -> Bounds<Pixels> {
+    Bounds::new(
+        point(
+            layer_bounds.origin.x + px(visual_rect.x),
+            layer_bounds.origin.y + px(visual_rect.y),
+        ),
+        size(
+            px(visual_rect.width.max(1.0)),
+            px(visual_rect.height.max(1.0)),
+        ),
+    )
+}
+
+fn item_interaction_hovered_state<'a>(
+    states: &'a [ItemInteractionHitboxState],
+    window: &Window,
+) -> Option<&'a ItemInteractionHitboxState> {
+    states
+        .iter()
+        .rev()
+        .find(|state| state.hitbox.is_hovered(window))
+}
+
+fn install_item_interaction_hover_listener(
+    pane_id: PaneId,
+    app: WeakEntity<FikaApp>,
+    states: &[ItemInteractionHitboxState],
+    window: &mut Window,
+) {
+    let states = states.to_vec();
+    window.on_mouse_event(move |_event: &MouseMoveEvent, phase, window, cx| {
+        if !phase.bubble() {
+            return;
+        }
+        let hovered_item =
+            item_interaction_hovered_state(&states, window).map(|state| state.item_id);
+        let changed = app
+            .update(cx, |this, cx| {
+                let changed = match hovered_item {
+                    Some(item_id) => this.set_hovered_item(pane_id, item_id),
+                    None => this.clear_hovered_item_for_pane(pane_id),
+                };
+                if changed {
+                    cx.notify();
+                }
+                changed
+            })
+            .unwrap_or(false);
+        if changed {
+            window.refresh();
+        }
+    });
 }
 
 fn static_item_visual_prepaint(
@@ -3122,9 +3346,11 @@ mod tests {
         drag_preview_label, item_identity_element_id, item_image_element_id,
         item_image_layer_item_source_path, item_image_layer_items,
         item_image_load_failure_paints_fallback, item_image_paint_layer_element_id,
-        item_mouse_down_opens_directory, measured_viewport_for_scrollbar_axis,
-        normalized_text_range, rename_text_layout, static_item_visual_layer_element_id,
-        static_item_visual_layer_items, viewport_bounds_update_requires_notify,
+        item_interaction_hitbox_bounds, item_interaction_layer_element_id,
+        item_interaction_layer_items, item_mouse_down_opens_directory,
+        measured_viewport_for_scrollbar_axis, normalized_text_range, rename_text_layout,
+        static_item_visual_layer_element_id, static_item_visual_layer_items,
+        viewport_bounds_update_requires_notify,
     };
     use crate::ui::drag_drop::drag_preview_content_origin_for_cursor_offset;
     use crate::ui::icons::FileIconSnapshot;
@@ -3203,6 +3429,18 @@ mod tests {
     }
 
     #[test]
+    fn item_interaction_layer_id_is_keyed_by_pane_identity() {
+        assert_eq!(
+            item_interaction_layer_element_id(fika_core::PaneId(7)),
+            ("item-interaction-layer", 7)
+        );
+        assert_ne!(
+            item_interaction_layer_element_id(fika_core::PaneId(7)),
+            item_interaction_layer_element_id(fika_core::PaneId(8))
+        );
+    }
+
+    #[test]
     fn content_layers_split_base_visuals_from_image_visuals() {
         let mut cache = ItemPaintSlotCache::default();
         let static_item =
@@ -3231,6 +3469,7 @@ mod tests {
         };
         let visual_items = static_item_visual_layer_items(&items, ItemTileTextAlignment::Center);
         let image_items = item_image_layer_items(&items);
+        let interaction_items = item_interaction_layer_items(&items);
 
         assert_eq!(
             visual_items
@@ -3254,6 +3493,29 @@ mod tests {
         );
         assert!(!item_image_load_failure_paints_fallback(&image_items[0]));
         assert!(item_image_load_failure_paints_fallback(&image_items[1]));
+        assert_eq!(
+            interaction_items
+                .iter()
+                .map(|item| item.item_id)
+                .collect::<Vec<_>>(),
+            vec![ItemId(7), ItemId(8), ItemId(9)]
+        );
+    }
+
+    #[test]
+    fn item_interaction_hitbox_bounds_are_layer_relative_visual_rects() {
+        let bounds = item_interaction_hitbox_bounds(
+            Bounds::new(point(px(20.0), px(30.0)), size(px(400.0), px(300.0))),
+            ViewRect {
+                x: 5.0,
+                y: 7.0,
+                width: 40.0,
+                height: 24.0,
+            },
+        );
+
+        assert_eq!(bounds.origin, point(px(25.0), px(37.0)));
+        assert_eq!(bounds.size, size(px(40.0), px(24.0)));
     }
 
     #[test]

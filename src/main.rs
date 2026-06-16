@@ -829,7 +829,7 @@ impl FikaApp {
         true
     }
 
-    fn clear_hovered_item_for_pane(&mut self, pane_id: PaneId) -> bool {
+    pub(crate) fn clear_hovered_item_for_pane(&mut self, pane_id: PaneId) -> bool {
         if !matches!(self.hovered_item, Some((hovered_pane, _)) if hovered_pane == pane_id) {
             return false;
         }

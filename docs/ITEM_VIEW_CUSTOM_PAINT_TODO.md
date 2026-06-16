@@ -104,13 +104,17 @@ This is the active task board for the GPUI item view custom-paint migration.
 
 ## P9: Painted Interaction Hitboxes
 
-- [ ] Audit GPUI custom element hitbox insertion for drag source, hover, and
-  cursor support.
-- [ ] Replace non-renaming per-item interaction shells with retained hitboxes.
-- [ ] Route hover and directory drag-over projection through retained item visual
-  state.
-- [ ] Preserve item/place drag preview cursor offset behavior.
+- [x] Audit GPUI custom element hitbox insertion for hover and cursor support.
+- [~] Replace non-renaming per-item interaction shells with retained hitboxes:
+  P9a moves hover/cursor first; P9b removes drag shells only after GPUI exposes
+  a public custom-element drag-start API or Fika carries an audited GPUI patch.
+- [x] Route non-renaming Compact/Icons hover and cursor projection through
+  retained item visual state.
+- [ ] Route directory drag-over projection through retained item visual state.
+- [x] Preserve item/place drag preview cursor offset behavior.
 - [ ] Preserve Rust viewport hit testing for click/menu/drop.
+- [ ] Compare P9a perf logs against the previous GPUI hover/cursor shell path
+  before expanding custom interaction further.
 
 ## P10: Rename Overlay Boundary
 
@@ -137,6 +141,9 @@ This is the active task board for the GPUI item view custom-paint migration.
 - [ ] Perf logs show resize steady path stays sub-millisecond for item snapshot
   conversion and no new large `file-grid build` regression.
 - [ ] Cold mode switch cost is tracked separately from resize cost.
+- [ ] Any custom paint expansion keeps Dolphin's model/controller/painter split
+  and is retained only when perf is neutral or better than the GPUI built-in
+  path for that surface.
 - [ ] Custom paint path is used by non-renaming Compact and Icons base/image
   visuals.
 - [ ] Non-renaming Compact/Icons items no longer require per-item GPUI visual

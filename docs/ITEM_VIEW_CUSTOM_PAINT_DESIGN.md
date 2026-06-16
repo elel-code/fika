@@ -19,6 +19,14 @@ The practical target is not merely lower latency. The target is a retained item
 view where resize, scroll, selection, hover, and metadata updates patch stable
 state and paint from cached data.
 
+Custom painting is an implementation technique, not the architecture boundary.
+Fika must keep the Dolphin split between model, layouter, controller/hit testing,
+and painter even when GPUI built-in elements remain faster for a specific
+surface. Each custom-paint expansion needs perf evidence from
+`FIKA_PERF_ITEM_VIEW=1` logs and render/build timings. If the GPUI built-in path
+is measurably faster or simpler for a surface, keep that surface on the built-in
+path until a retained-state or behavior requirement justifies moving it.
+
 ## Dolphin Reference
 
 Relevant Dolphin flow:
@@ -98,8 +106,9 @@ Paint layer must not:
 Temporarily keep one GPUI `Div` per visible item for:
 
 - stable `id(("item-slot", slot_id))`
-- hover event reporting, cursor, and drag source
-- `on_drag`
+- non-renaming drag source while GPUI lacks a public custom-element drag-start
+  API
+- rename hover/cursor/input until rename moves to an overlay boundary
 
 Viewport-level hit testing remains authoritative for normal click, context menu,
 middle click, rubber band, and drop target routing.
@@ -280,20 +289,36 @@ Acceptance:
 
 ### Phase 9: Painted Interaction Hitboxes
 
-Move item interaction out of per-item `Div` shells once GPUI hitbox APIs are
-explicitly wired for custom elements:
+Move item interaction out of per-item `Div` shells in two steps, matching the
+current GPUI public API boundary.
+
+#### Phase 9a: Retained Hover/Cursor Hitboxes
+
+Route non-renaming Compact/Icons hover and cursor through a content-level custom
+element:
 
 - custom element inserts one stable hitbox per visible item visual rect
-- hover, drag source, cursor, and directory drag-over state route through the
-  retained slot table
+- hover and cursor route through the retained slot table
+- per-item shell stays only as the GPUI drag source boundary
 - viewport hit testing remains the source of truth for click/menu/drop behavior
 - drag preview offset continues to use GPUI's cursor offset, independent of item
   geometry
 
 Acceptance:
 
-- Compact/Icons non-renaming items allocate no per-item element at all
+- non-renaming Compact/Icons hover/cursor no longer require per-item hover
+  handlers or cursor styles
 - hover/selection/drop visuals are projected through retained visual state
+- item drag payload and preview behavior remain unchanged
+- perf logs do not show a new steady render/build regression
+
+#### Phase 9b: Drag Source Hitboxes
+
+Remove the remaining non-renaming per-item drag shells only after GPUI exposes a
+public custom-element drag-start API or Fika carries a small audited GPUI patch:
+
+- drag source starts from retained hitboxes
+- Compact/Icons non-renaming items allocate no per-item element at all
 - internal item DnD, pane DnD, Places DnD, and external drop behavior remain
   unchanged
 
