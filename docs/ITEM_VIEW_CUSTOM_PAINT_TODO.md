@@ -150,8 +150,13 @@ This is the active task board for the GPUI item view custom-paint migration.
 
 ## Acceptance Gates
 
-- [ ] No behavior regression in rename, selection, context menu, item DnD,
-  places DnD, and external drop paths.
+- [~] No behavior regression in rename, selection, context menu, item DnD,
+  places DnD, and external drop paths: unit coverage now includes a retained
+  behavior matrix across Compact, Icons, and Details for app-side hit testing,
+  selection, item menus, rename draft routing, item drag source state, external
+  path normalization/drop target menus, and item/place drop-target handoff.
+  Keep this partial until full `cargo test` and runtime DnD smoke are both
+  refreshed after each shell-removal or painter expansion slice.
 - [x] `cargo test` stays green.
 - [ ] Perf logs show resize steady path stays sub-millisecond for item snapshot
   conversion, no new large `file-grid build` regression, and Details custom

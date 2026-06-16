@@ -15189,6 +15189,170 @@ text/plain=viewer.desktop;\n",
     }
 
     #[test]
+    fn retained_item_view_behavior_matrix_covers_core_paths() {
+        let temp = test_dir("retained-behavior-matrix");
+        let target_dir = temp.join("target");
+        let alpha = temp.join("alpha.txt");
+        let external_source = temp.join("external.txt");
+        std::fs::create_dir_all(&target_dir).unwrap();
+        std::fs::write(&alpha, "alpha").unwrap();
+        std::fs::write(&external_source, "external").unwrap();
+        let mut app = test_app_with_entries(temp.to_str().unwrap(), &[]);
+        let pane_id = app.panes.focused().unwrap();
+        app.panes.pane_mut(pane_id).unwrap().model.replace_listing(
+            temp.clone(),
+            Arc::new(vec![
+                test_directory_entry("target"),
+                test_entry("alpha.txt"),
+            ]),
+        );
+        app.places = vec![
+            PlaceEntry {
+                group: "",
+                marker: "H",
+                label: "Home".to_string(),
+                path: temp.clone(),
+                device_id: None,
+                device_mounted: true,
+                editable: false,
+                removable: false,
+                device_ejectable: false,
+                device_can_power_off: false,
+            },
+            PlaceEntry {
+                group: "",
+                marker: "B",
+                label: "Target".to_string(),
+                path: target_dir.clone(),
+                device_id: None,
+                device_mounted: true,
+                editable: true,
+                removable: true,
+                device_ejectable: false,
+                device_can_power_off: false,
+            },
+        ];
+
+        for view_mode in [ViewMode::Compact, ViewMode::Icons, ViewMode::Details] {
+            configure_retained_hit_test_view(&mut app, pane_id, view_mode);
+            app.clear_selection(pane_id);
+            app.clear_drag_drop_targets();
+            app.dismiss_context_menu();
+            app.clear_rename_draft_for_pane(pane_id);
+
+            let target_point = retained_hit_test_item_window_point(&mut app, pane_id, 0);
+            let target_hit = app
+                .item_at_window_position(pane_id, target_point)
+                .expect("directory hit");
+            assert_eq!(target_hit.path, target_dir);
+            assert!(target_hit.is_dir);
+
+            app.select_only(pane_id, target_hit.path.clone());
+            assert_eq!(app.panes.selected_count(pane_id), Some(1));
+            assert!(app.panes.is_selected(pane_id, &target_dir));
+
+            app.show_item_context_menu(
+                pane_id,
+                target_hit.path.clone(),
+                target_hit.is_dir,
+                target_point,
+            );
+            assert!(matches!(
+                app.context_menu.as_ref().map(|menu| &menu.target),
+                Some(ContextMenuTarget::Item {
+                    path,
+                    is_dir: true,
+                    selection_count: 1,
+                    ..
+                }) if path == &target_dir
+            ));
+            app.dismiss_context_menu();
+
+            assert!(app.start_rename_for_path(pane_id, alpha.clone()));
+            assert_eq!(
+                app.rename_draft
+                    .as_ref()
+                    .map(|draft| draft.original_path.clone()),
+                Some(alpha.clone())
+            );
+            app.clear_rename_draft_for_pane(pane_id);
+
+            let update = app.update_dragged_paths_drop_target_from_window_position(
+                pane_id,
+                target_point,
+                std::slice::from_ref(&alpha),
+            );
+            assert_eq!(update.kind, Some(PathListDropTargetKind::Directory));
+            assert!(item_drop_target_matches_directory(
+                app.drop_targets.item(),
+                pane_id,
+                &target_dir
+            ));
+
+            let payload = ItemDragPayload {
+                source_pane: pane_id,
+                source_path: alpha.clone(),
+                source_selected: false,
+            };
+            app.begin_item_drag(payload.clone());
+            assert_eq!(app.item_drag_source_paths(&payload), vec![alpha.clone()]);
+            assert!(app.active_item_drag.is_some());
+            app.clear_item_drag(&payload);
+
+            app.clear_drag_drop_targets();
+            assert!(app.drop_targets.item().is_none());
+            assert!(app.drop_targets.place().is_none());
+            let external_paths =
+                app.external_drag_source_paths(&[external_source.clone(), external_source.clone()]);
+            assert_eq!(external_paths, vec![external_source.clone()]);
+            let update = app.update_dragged_paths_drop_target_from_window_position(
+                pane_id,
+                target_point,
+                &external_paths,
+            );
+            assert_eq!(update.kind, Some(PathListDropTargetKind::Directory));
+            assert!(item_drop_target_matches_directory(
+                app.drop_targets.item(),
+                pane_id,
+                &target_dir
+            ));
+            app.show_drop_operation_menu(
+                pane_id,
+                target_dir.clone(),
+                external_paths,
+                false,
+                target_point,
+            );
+            assert!(matches!(
+                app.context_menu.as_ref().map(|menu| &menu.target),
+                Some(ContextMenuTarget::DropOperation {
+                    target_dir: dir,
+                    paths,
+                    load_target_dir: false,
+                }) if dir == &target_dir && paths == &vec![external_source.clone()]
+            ));
+            app.dismiss_context_menu();
+
+            app.clear_drag_drop_targets();
+            assert!(app.drop_targets.item().is_none());
+            assert!(app.drop_targets.place().is_none());
+            assert!(app.set_place_drag_drop_target_for_path(target_dir.clone()));
+            assert!(place_drop_target_matches_place(
+                app.drop_targets.place(),
+                &target_dir
+            ));
+            assert!(app.set_dragged_paths_drop_target_for_directory(
+                pane_id,
+                std::slice::from_ref(&alpha),
+                target_dir.clone()
+            ));
+            assert!(app.drop_targets.place().is_none());
+        }
+
+        let _ = std::fs::remove_dir_all(temp);
+    }
+
+    #[test]
     fn rubber_band_selection_blank_right_click_clears_without_menu() {
         let mut app =
             test_app_with_entries("/tmp/fika-rubber-context-blank", &["alpha.txt", "beta.txt"]);
