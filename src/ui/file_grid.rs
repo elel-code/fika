@@ -1172,16 +1172,34 @@ fn item_tile(
     app: WeakEntity<FikaApp>,
     cx: &mut Context<FikaApp>,
 ) -> Stateful<Div> {
-    let draft_name = item.draft_name.clone();
-    let renaming = draft_name.is_some();
-    let display_name = draft_name
-        .as_ref()
-        .map(|name| SharedString::from(name.as_str()))
-        .unwrap_or_else(|| item.display_name.clone());
     let item_rect = item.layout.item_rect;
     let visual = item.layout.visual_rect;
     let selected = item.selected;
     let drop_target = item.drop_target;
+    let text = if let Some(draft_name) = item.draft_name.as_deref() {
+        rename_text_view(
+            pane_id,
+            SharedString::from(draft_name),
+            item.layout,
+            text_alignment,
+            selected,
+            item.draft_caret,
+            item.draft_selection,
+            item.draft_error.as_deref(),
+            item.draft_warning.as_deref(),
+            cx,
+        )
+        .into_any_element()
+    } else {
+        static_text_view(
+            item.display_name.clone(),
+            &item.icon_name_lines,
+            item.layout,
+            text_alignment,
+            selected,
+        )
+        .into_any_element()
+    };
     let drag_value = ItemDrag {
         pane_id,
         path: item.drag_path.clone(),
@@ -1229,20 +1247,7 @@ fn item_tile(
                     })
                 })
                 .child(icon_view(&item, item.layout))
-                .child(text_view(
-                    pane_id,
-                    display_name,
-                    &item.icon_name_lines,
-                    item.layout,
-                    text_alignment,
-                    renaming,
-                    selected,
-                    item.draft_caret,
-                    item.draft_selection,
-                    item.draft_error.as_deref(),
-                    item.draft_warning.as_deref(),
-                    cx,
-                )),
+                .child(text),
         )
 }
 
@@ -1334,13 +1339,84 @@ fn fallback_icon_element(marker: SharedString, fg: u32, bg: u32) -> gpui::AnyEle
         .into_any_element()
 }
 
-fn text_view(
-    pane_id: PaneId,
+fn static_text_view(
     display_name: SharedString,
     icon_name_lines: &[SharedString],
     layout: ItemLayout,
     text_alignment: ItemTileTextAlignment,
-    renaming: bool,
+    selected: bool,
+) -> Div {
+    let visual = layout.visual_rect;
+    let text = layout.text_rect;
+    let text_left = text.x - visual.x;
+    let text_top = text.y - visual.y;
+    let text_color = if selected {
+        rgb(0x0f172a)
+    } else {
+        rgb(0x24292f)
+    };
+
+    match text_alignment {
+        ItemTileTextAlignment::Start => {
+            let name_height = display_text_layout(
+                display_name.as_ref(),
+                text.width,
+                text.height,
+                text_alignment,
+            )
+            .name_height;
+            let centered_top = text_top + ((text.height - name_height).max(0.0) * 0.5);
+            div()
+                .absolute()
+                .left(px(text_left))
+                .top(px(centered_top))
+                .w(px(text.width))
+                .h(px(name_height))
+                .min_w_0()
+                .overflow_hidden()
+                .text_sm()
+                .line_height(px(ITEM_NAME_LINE_HEIGHT))
+                .text_color(text_color)
+                .whitespace_normal()
+                .child(display_name)
+        }
+        ItemTileTextAlignment::Center => {
+            let max_lines = (text.height / ITEM_NAME_LINE_HEIGHT).round().max(1.0) as usize;
+            let label = div()
+                .absolute()
+                .left(px(text_left))
+                .top(px(text_top))
+                .w(px(text.width))
+                .h(px(text.height))
+                .min_w_0()
+                .overflow_hidden()
+                .flex()
+                .flex_col()
+                .items_center()
+                .justify_center()
+                .text_sm()
+                .line_height(px(ITEM_NAME_LINE_HEIGHT))
+                .text_center()
+                .whitespace_nowrap()
+                .text_color(text_color);
+
+            if icon_name_lines.is_empty() {
+                label.child(display_name)
+            } else {
+                icon_name_lines
+                    .iter()
+                    .take(max_lines)
+                    .fold(label, |label, line| label.child(line.clone()))
+            }
+        }
+    }
+}
+
+fn rename_text_view(
+    pane_id: PaneId,
+    display_name: SharedString,
+    layout: ItemLayout,
+    text_alignment: ItemTileTextAlignment,
     selected: bool,
     rename_caret: Option<usize>,
     rename_selection: Option<(usize, usize)>,
@@ -1352,11 +1428,7 @@ fn text_view(
     let visual = layout.visual_rect;
     let text = layout.text_rect;
     let show_helper = rename_error.is_some() || rename_warning.is_some();
-    let rename_layout = if !renaming {
-        display_text_layout(display_name_ref, text.width, text.height, text_alignment)
-    } else {
-        rename_text_layout(text.height, show_helper)
-    };
+    let rename_layout = rename_text_layout(text.height, show_helper);
     let helper_text = rename_error.or(rename_warning).unwrap_or_default();
     let helper_color = if rename_error.is_some() {
         rgb(0xdc2626)
@@ -1380,13 +1452,11 @@ fn text_view(
         .h(px(text.height))
         .flex()
         .flex_col()
-        .when(!renaming, |view| view.overflow_hidden())
         .when(
-            (!renaming && matches!(text_alignment, ItemTileTextAlignment::Start))
-                || (renaming && !show_helper),
+            matches!(text_alignment, ItemTileTextAlignment::Start) && !show_helper,
             |view| view.justify_center(),
         )
-        .child(if renaming {
+        .child(
             rename_editor_view(
                 pane_id,
                 display_name_ref,
@@ -1400,29 +1470,8 @@ fn text_view(
             .when(
                 matches!(text_alignment, ItemTileTextAlignment::Start),
                 |editor| editor.relative().left(px(-1.0)).top(px(1.0)),
-            )
-            .into_any_element()
-        } else {
-            match text_alignment {
-                ItemTileTextAlignment::Start => rename_name_view(
-                    display_name_ref,
-                    display_name.clone(),
-                    false,
-                    selected,
-                    None,
-                    None,
-                )
-                .h(px(rename_layout.name_height))
-                .into_any_element(),
-                ItemTileTextAlignment::Center => item_name_label_view(
-                    display_name.clone(),
-                    icon_name_lines,
-                    selected,
-                    rename_layout.name_height,
-                )
-                .into_any_element(),
-            }
-        })
+            ),
+        )
         .when(show_helper, |view| {
             view.child(item_helper_label_view(
                 helper_text,
@@ -1431,49 +1480,6 @@ fn text_view(
                 text_alignment,
             ))
         })
-}
-
-fn item_name_label_view(
-    display_name: SharedString,
-    icon_name_lines: &[SharedString],
-    selected: bool,
-    height: f32,
-) -> Div {
-    let text_color = if selected {
-        rgb(0x0f172a)
-    } else {
-        rgb(0x24292f)
-    };
-    let max_lines = (height / ITEM_NAME_LINE_HEIGHT).round().max(1.0) as usize;
-    let label = div()
-        .w_full()
-        .max_w_full()
-        .min_w_0()
-        .overflow_hidden()
-        .flex()
-        .flex_col()
-        .text_sm()
-        .line_height(px(ITEM_NAME_LINE_HEIGHT))
-        .text_center()
-        .whitespace_nowrap()
-        .text_color(text_color);
-    let label = if icon_name_lines.is_empty() {
-        label.child(display_name)
-    } else {
-        icon_name_lines
-            .iter()
-            .take(max_lines)
-            .fold(label, |label, line| label.child(line.clone()))
-    };
-    div()
-        .h(px(height))
-        .w_full()
-        .min_w_0()
-        .overflow_hidden()
-        .flex()
-        .items_center()
-        .justify_center()
-        .child(label)
 }
 
 fn item_helper_label_view(
