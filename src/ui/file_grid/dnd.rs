@@ -18,6 +18,8 @@ use crate::ui::drag_drop::{
 use crate::ui::icons::{FileIconSnapshot, cached_icon_or_fallback};
 use crate::ui::places::PlaceDrag;
 
+use super::{DetailsPaintSnapshot, ItemPaintSnapshot};
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ItemDrag {
     pub(super) pane_id: PaneId,
@@ -35,6 +37,32 @@ impl ItemDrag {
             source_path: self.path.as_ref().to_path_buf(),
             source_selected: self.selected,
         }
+    }
+}
+
+pub(super) fn item_drag_from_item_snapshot(pane_id: PaneId, item: &ItemPaintSnapshot) -> ItemDrag {
+    let content = item.content.as_ref();
+    ItemDrag {
+        pane_id,
+        path: content.drag_path.clone(),
+        name: content.name.clone(),
+        icon: content.icon.clone(),
+        selected: item.visual.selected,
+        selection_count: item.visual.selection_count,
+    }
+}
+
+pub(super) fn item_drag_from_details_snapshot(
+    pane_id: PaneId,
+    item: &DetailsPaintSnapshot,
+) -> ItemDrag {
+    ItemDrag {
+        pane_id,
+        path: item.content.path.clone(),
+        name: item.content.name.clone(),
+        icon: item.content.icon.clone(),
+        selected: item.visual.selected,
+        selection_count: item.visual.selection_count,
     }
 }
 

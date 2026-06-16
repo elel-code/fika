@@ -66,7 +66,8 @@ use dnd::drag_preview_label;
 use dnd::{
     handle_file_grid_external_drag_move, handle_file_grid_external_drop,
     handle_file_grid_item_drag_move, handle_file_grid_item_drop, handle_file_grid_place_drag_move,
-    handle_file_grid_place_drop, install_item_drag_start_shell,
+    handle_file_grid_place_drop, install_item_drag_start_shell, item_drag_from_details_snapshot,
+    item_drag_from_item_snapshot,
 };
 use renderer_policy::{
     DetailsRowDragStartRenderer, DetailsRowInteractionRenderer, DetailsRowVisualRenderer,
@@ -2202,19 +2203,9 @@ fn details_row(
 ) -> Stateful<Div> {
     let top = f32::from_bits(item.geometry.row_top);
     let row_height = f32::from_bits(item.geometry.row_height);
-    let controller = DetailsRowControllerState::from_snapshot(&item);
-    let item_id = controller.item_id;
-    let selected = controller.selected;
+    let item_id = item.item_id;
     let policy = details_row_renderer_policy(&item);
-
-    let drag_value = ItemDrag {
-        pane_id,
-        path: controller.path.clone(),
-        name: controller.name.clone(),
-        icon: controller.icon.clone(),
-        selected,
-        selection_count: controller.selection_count,
-    };
+    let drag_value = item_drag_from_details_snapshot(pane_id, &item);
     let app = cx.weak_entity();
 
     let row = div()
@@ -2233,29 +2224,6 @@ fn details_row(
     match policy.drag_start {
         DetailsRowDragStartRenderer::GpuiShell => {
             install_item_drag_start_shell(row, drag_value, app)
-        }
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct DetailsRowControllerState {
-    item_id: ItemId,
-    path: Arc<Path>,
-    name: Arc<str>,
-    icon: FileIconSnapshot,
-    selected: bool,
-    selection_count: usize,
-}
-
-impl DetailsRowControllerState {
-    fn from_snapshot(item: &DetailsPaintSnapshot) -> Self {
-        Self {
-            item_id: item.item_id,
-            path: item.content.path.clone(),
-            name: item.content.name.clone(),
-            icon: item.content.icon.clone(),
-            selected: item.visual.selected,
-            selection_count: item.visual.selection_count,
         }
     }
 }
@@ -2293,7 +2261,6 @@ fn item_tile(
     let item_id = item.item_id;
     let content = item.content.as_ref();
     let selected = item.visual.selected;
-    let selection_count = item.visual.selection_count;
     let hovered = item.visual.hovered;
     let drop_target = item.visual.drop_target;
     let renderer_policy = item_renderer_policy(content);
@@ -2306,14 +2273,7 @@ fn item_tile(
         ItemInteractionRenderer::RetainedLayer
     );
     let drag_app = app.clone();
-    let drag_value = ItemDrag {
-        pane_id,
-        path: content.drag_path.clone(),
-        name: content.name.clone(),
-        icon: content.icon.clone(),
-        selected,
-        selection_count,
-    };
+    let drag_value = item_drag_from_item_snapshot(pane_id, &item);
     let shell_background = if use_layer_visual_paint {
         rgba(0x00000000)
     } else {
@@ -3858,7 +3818,7 @@ fn clamp_text_boundary(text: &str, index: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::{
-        DetailsItemSnapshot, DetailsLayoutMetrics, DetailsPaintContent, DetailsRowControllerState,
+        DetailsItemSnapshot, DetailsLayoutMetrics, DetailsPaintContent,
         DetailsRowDragStartRenderer, DetailsRowInteractionRenderer, DetailsRowRendererPolicy,
         DetailsRowVisualRenderer, DetailsTextShapeCacheKey, FileGridMode, FileGridRenderSnapshot,
         FileGridSnapshot, ItemBaseVisualRenderer, ItemDragStartRenderer, ItemImageRenderer,
@@ -3867,13 +3827,14 @@ mod tests {
         StaticItemTextShapeCacheKey, VisibleItemSnapshot, details_columns,
         details_interaction_layer_items, details_renderer_policy_stats,
         details_row_renderer_policy, details_visual_layer_element_id, details_visual_layer_items,
-        display_text_layout, drag_preview_label, item_identity_element_id, item_image_element_id,
-        item_image_layer_item_source_path, item_image_layer_items,
-        item_image_load_failure_paints_fallback, item_image_paint_layer_element_id,
-        item_interaction_hitbox_bounds, item_interaction_layer_element_id,
-        item_interaction_layer_items, item_mouse_down_opens_directory, item_renderer_policy,
-        item_renderer_policy_stats, measured_viewport_for_scrollbar_axis, normalized_text_range,
-        rename_text_layout, static_item_visual_layer_element_id, static_item_visual_layer_items,
+        display_text_layout, drag_preview_label, item_drag_from_details_snapshot,
+        item_identity_element_id, item_image_element_id, item_image_layer_item_source_path,
+        item_image_layer_items, item_image_load_failure_paints_fallback,
+        item_image_paint_layer_element_id, item_interaction_hitbox_bounds,
+        item_interaction_layer_element_id, item_interaction_layer_items,
+        item_mouse_down_opens_directory, item_renderer_policy, item_renderer_policy_stats,
+        measured_viewport_for_scrollbar_axis, normalized_text_range, rename_text_layout,
+        static_item_visual_layer_element_id, static_item_visual_layer_items,
         viewport_bounds_update_requires_notify,
     };
     use crate::ui::drag_drop::drag_preview_content_origin_for_cursor_offset;
@@ -4653,7 +4614,7 @@ mod tests {
     }
 
     #[test]
-    fn details_row_controller_state_preserves_retained_drag_start_fields() {
+    fn details_item_drag_projection_preserves_retained_drag_start_fields() {
         let mut cache = ItemPaintSlotCache::default();
         let metrics = test_details_metrics();
         let mut item = test_details_item(0, ItemId(7), "folder");
@@ -4667,14 +4628,14 @@ mod tests {
             panic!("expected details render snapshot");
         };
 
-        let controller = DetailsRowControllerState::from_snapshot(&items[0]);
+        let drag = item_drag_from_details_snapshot(fika_core::PaneId(3), &items[0]);
 
-        assert_eq!(controller.item_id, ItemId(7));
-        assert_eq!(controller.path.as_ref(), Path::new("/tmp/folder"));
-        assert_eq!(controller.name.as_ref(), "folder");
-        assert!(controller.selected);
-        assert_eq!(controller.selection_count, 4);
-        assert_eq!(controller.icon.fallback_marker.as_ref(), "DIR");
+        assert_eq!(drag.pane_id, fika_core::PaneId(3));
+        assert_eq!(drag.path.as_ref(), Path::new("/tmp/folder"));
+        assert_eq!(drag.name.as_ref(), "folder");
+        assert!(drag.selected);
+        assert_eq!(drag.selection_count, 4);
+        assert_eq!(drag.icon.fallback_marker.as_ref(), "DIR");
     }
 
     fn icons_snapshot(items: Vec<VisibleItemSnapshot>) -> FileGridSnapshot {

@@ -238,6 +238,8 @@ This is the active task board for the GPUI item view custom-paint migration.
 - [x] Centralize GPUI item/details drag-start shell installation in
   `src/ui/file_grid/dnd.rs` while keeping the shell as the current platform
   boundary.
+- [x] Move item/details drag payload projection into `src/ui/file_grid/dnd.rs`
+  so the remaining GPUI shell consumes DnD-owned data.
 - [ ] Keep remaining drag-start shells until public GPUI custom-element
   drag-start support exists or an audited GPUI patch is carried.
 - [ ] Keep rename on the GPUI overlay until custom text editing has behavior
