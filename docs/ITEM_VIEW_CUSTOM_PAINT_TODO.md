@@ -146,11 +146,14 @@ This is the active task board for the GPUI item view custom-paint migration.
   existing GPUI row subtree as the render path.
 - [x] P11b: Paint row backgrounds, icons, and text cells from a content-level
   custom layer while initially retaining row shells as the bridge.
-- [x] P11c: Preserve retained Details path/DnD/drop fields and Trash-specific
+- [x] P11c: Preserve retained Details path/drag fields and Trash-specific
   visual columns at the retained painter boundary.
-- [x] P11e: Shrink Details row shells to the remaining GPUI drag/drop boundary;
+- [x] P11e: Shrink Details row shells to the remaining GPUI drag-start boundary;
   click, menu, navigation, scroll, and middle-paste controller behavior now
   routes through viewport retained hit testing.
+- [x] P11f: Route Details drop dispatch through the viewport-level drop
+  handlers; Details row shells no longer own per-row item/external/place drop
+  handlers.
 - [x] P11d: Split Details visual layer perf logging into a dedicated
   `[fika details-visual]` channel so GPUI row-shell cost and custom paint cost
   can be compared without mixing with Compact/Icons static visuals.
@@ -164,7 +167,7 @@ This is the active task board for the GPUI item view custom-paint migration.
   `Div::on_drag`, while custom elements expose hitboxes and mouse listeners but
   no public custom-element drag-start hook.
 - [x] Document the remaining item-local surfaces: Compact/Icons drag-start
-  shells, Details drag/drop row shells, and the rename text-editing overlay.
+  shells, Details drag-start row shells, and the rename text-editing overlay.
 - [ ] Run a runtime DnD smoke pass after P11e: item drag, item-to-directory
   drop, pane drop, Places drop/reorder, external path drop, and rename caret
   click in Compact, Icons, and Details.

@@ -364,13 +364,12 @@ After Compact/Icons are fully retained, move Details rows to the same model:
   feeds the existing GPUI row subtree from retained content/geometry/visual
   snapshots. This is a bridge only; it does not claim a custom-paint win.
 - P11b moves row backgrounds, icons, and text cells into a content-level custom
-  visual layer. Row shells remain only as the GPUI drag/drop boundary until
+  visual layer. Row shells remain only as the GPUI drag-start boundary until
   drag-start can be safely moved without losing behavior or perf evidence.
 - P11c keeps retained Details row data explicit: path, directory flag,
   name/icon, selection count, and drop-target state are projected from retained
-  row snapshots and covered by tests. Row shells consume only the remaining
-  drag/drop fields. Trash-only columns are also projected into visual layer
-  cells.
+  row snapshots and covered by tests. Row shells consume only the drag-start
+  fields. Trash-only columns are also projected into visual layer cells.
 - P11d gives the Details visual layer a dedicated perf channel so custom paint
   expansion can be judged independently from Compact/Icons static visuals.
 - Details text shaping uses a pane-local cache keyed by text and text style; its
@@ -388,8 +387,8 @@ Acceptance:
 - P11b proves Details row visuals are projected into painter data and no longer
   build per-cell GPUI visual children.
 - P11c proves Trash visual columns survive the painter migration and retained
-  Details row data still carries the DnD/drop fields needed by the remaining
-  drag boundary.
+  Details row data still carries the fields needed by the remaining drag-start
+  boundary.
 - P11d keeps Details paint timing attributable through `[fika details-visual]`
   and Details text cache activity attributable through
   `[fika details-shape-cache]` before removing any remaining row-shell behavior.
@@ -408,8 +407,9 @@ The remaining item-local surfaces are intentional:
 - Compact/Icons non-renaming item shells: GPUI `Div::on_drag` drag-start
   boundary only. Their visuals, images, hover/cursor, click/menu/drop hit
   testing, and drag-over state are retained/painter driven.
-- Details row shells: GPUI `Div::on_drag` and drop-dispatch boundary only. Row
-  visuals and row hover/click/menu/navigation are retained/painter driven.
+- Details row shells: GPUI `Div::on_drag` drag-start boundary only. Row visuals,
+  drop dispatch, and row hover/click/menu/navigation are retained/painter or
+  viewport driven.
 - Rename overlay: text-editing boundary for caret hit testing, selection,
   warning/error helper text, and cursor text behavior.
 

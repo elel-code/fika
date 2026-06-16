@@ -2354,7 +2354,7 @@ fn details_row(
         .items_center()
         .bg(rgba(0x00000000))
         // The viewport owns click/menu/navigation hit testing from retained
-        // geometry; this row remains only as GPUI's drag/drop boundary.
+        // geometry; this row remains only as GPUI's drag-start boundary.
         .on_drag(drag_value, move |drag, cursor_offset, _, cx| {
             let _ = app.update(cx, |this, _cx| {
                 this.begin_item_drag(drag.payload());
@@ -2369,29 +2369,16 @@ fn details_row(
                 content_origin_y,
             })
         })
-        .on_drop::<ItemDrag>(cx.listener(move |this, drag: &ItemDrag, window, cx| {
-            handle_file_grid_item_drop(this, pane_id, drag, window, cx);
-        }))
-        .on_drop::<ExternalPaths>(cx.listener(
-            move |this, external_paths: &ExternalPaths, window, cx| {
-                handle_file_grid_external_drop(this, pane_id, external_paths, window, cx);
-            },
-        ))
-        .on_drop::<PlaceDrag>(cx.listener(move |this, drag: &PlaceDrag, window, cx| {
-            handle_file_grid_place_drop(this, pane_id, drag, window, cx);
-        }))
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct DetailsRowControllerState {
     item_id: ItemId,
     path: Arc<Path>,
-    is_dir: bool,
     name: Arc<str>,
     icon: FileIconSnapshot,
     selected: bool,
     selection_count: usize,
-    drop_target: bool,
 }
 
 impl DetailsRowControllerState {
@@ -2399,12 +2386,10 @@ impl DetailsRowControllerState {
         Self {
             item_id: item.item_id,
             path: item.content.path.clone(),
-            is_dir: item.content.is_dir,
             name: item.content.name.clone(),
             icon: item.content.icon.clone(),
             selected: item.visual.selected,
             selection_count: item.visual.selection_count,
-            drop_target: item.visual.drop_target,
         }
     }
 }
@@ -4899,15 +4884,13 @@ mod tests {
     }
 
     #[test]
-    fn details_row_controller_state_preserves_retained_drag_and_drop_fields() {
+    fn details_row_controller_state_preserves_retained_drag_start_fields() {
         let mut cache = ItemPaintSlotCache::default();
         let metrics = test_details_metrics();
         let mut item = test_details_item(0, ItemId(7), "folder");
         item.path = PathBuf::from("/tmp/folder");
-        item.is_dir = true;
         item.selected = true;
         item.selection_count = 4;
-        item.drop_target = true;
         item.icon.fallback_marker = Arc::from("DIR");
         let projection =
             cache.project_file_grid_snapshot(details_snapshot(vec![item], metrics, 260.0), None);
@@ -4920,10 +4903,8 @@ mod tests {
         assert_eq!(controller.item_id, ItemId(7));
         assert_eq!(controller.path.as_ref(), Path::new("/tmp/folder"));
         assert_eq!(controller.name.as_ref(), "folder");
-        assert!(controller.is_dir);
         assert!(controller.selected);
         assert_eq!(controller.selection_count, 4);
-        assert!(controller.drop_target);
         assert_eq!(controller.icon.fallback_marker.as_ref(), "DIR");
     }
 
