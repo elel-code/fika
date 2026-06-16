@@ -7,6 +7,7 @@ use std::ops::Range;
 
 const AVERAGE_COMPACT_CHAR_WIDTH: f32 = 8.5;
 const DOLPHIN_WRAP_OPPORTUNITY: char = '\u{200B}';
+const DOLPHIN_ELISION_MARKER: &str = "\u{2026}";
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct CompactColumnWidthCacheKey {
@@ -199,6 +200,7 @@ pub(crate) fn compact_text_width_for_name(name: &str) -> f32 {
 fn estimated_name_char_width(ch: char) -> f32 {
     match ch {
         DOLPHIN_WRAP_OPPORTUNITY => 0.0,
+        '\u{2026}' => 8.0,
         'i' | 'l' | 'I' | '!' | '.' | ',' | ':' | ';' | '\'' | '`' | '|' => 4.0,
         ' ' | '-' | '_' => 5.0,
         'm' | 'w' | 'M' | 'W' | '@' | '%' | '#' => 11.0,
@@ -211,6 +213,90 @@ fn estimated_name_char_width(ch: char) -> f32 {
 
 pub(crate) fn item_name_text_height_for_name(name: &str, available_text_width: f32) -> f32 {
     wrapped_item_name_line_count(name, available_text_width) as f32 * super::ITEM_NAME_LINE_HEIGHT
+}
+
+pub(crate) fn icon_name_display_lines(
+    name: &str,
+    available_text_width: f32,
+    max_lines: usize,
+) -> Vec<String> {
+    if max_lines == 0 {
+        return Vec::new();
+    }
+
+    let name = dolphin_preprocess_wrap(name);
+    let ranges = wrapped_item_name_line_ranges(&name, available_text_width);
+    if ranges.len() <= max_lines {
+        return ranges
+            .into_iter()
+            .map(|range| visible_item_name_text(&name[range]))
+            .collect();
+    }
+
+    let mut lines = ranges
+        .iter()
+        .take(max_lines.saturating_sub(1))
+        .map(|range| visible_item_name_text(&name[range.clone()]))
+        .collect::<Vec<_>>();
+    let last_start = ranges[max_lines - 1].start;
+    let last_start = skip_leading_whitespace(&name, last_start);
+    lines.push(elide_middle_text_for_width(
+        &name[last_start..],
+        available_text_width,
+    ));
+    lines
+}
+
+fn visible_item_name_text(text: &str) -> String {
+    text.chars()
+        .filter(|ch| *ch != DOLPHIN_WRAP_OPPORTUNITY)
+        .collect()
+}
+
+fn elide_middle_text_for_width(text: &str, available_text_width: f32) -> String {
+    let available_text_width = available_text_width.max(1.0);
+    let visible = visible_item_name_text(text);
+    if estimated_text_width(&visible) <= available_text_width {
+        return visible;
+    }
+
+    if estimated_text_width(DOLPHIN_ELISION_MARKER) >= available_text_width {
+        return DOLPHIN_ELISION_MARKER.to_string();
+    }
+
+    let chars = visible.chars().collect::<Vec<_>>();
+    let mut omitted_start = chars.len() / 2;
+    let mut omitted_end = omitted_start;
+    loop {
+        let candidate = middle_elided_candidate(&chars, omitted_start, omitted_end);
+        if estimated_text_width(&candidate) <= available_text_width {
+            return candidate;
+        }
+        if omitted_start == 0 && omitted_end == chars.len() {
+            return DOLPHIN_ELISION_MARKER.to_string();
+        }
+        let prefix_width = estimated_chars_width(&chars[..omitted_start]);
+        let suffix_width = estimated_chars_width(&chars[omitted_end..]);
+        if prefix_width >= suffix_width && omitted_start > 0 {
+            omitted_start -= 1;
+        } else if omitted_end < chars.len() {
+            omitted_end += 1;
+        } else if omitted_start > 0 {
+            omitted_start -= 1;
+        }
+    }
+}
+
+fn estimated_chars_width(chars: &[char]) -> f32 {
+    chars.iter().copied().map(estimated_name_char_width).sum()
+}
+
+fn middle_elided_candidate(chars: &[char], omitted_start: usize, omitted_end: usize) -> String {
+    let mut candidate = String::new();
+    candidate.extend(chars[..omitted_start].iter().copied());
+    candidate.push_str(DOLPHIN_ELISION_MARKER);
+    candidate.extend(chars[omitted_end..].iter().copied());
+    candidate
 }
 
 pub(crate) fn dolphin_preprocess_wrap(text: &str) -> String {
@@ -525,6 +611,46 @@ mod tests {
             item_name_text_height_for_name(name, available_width),
             super::super::ITEM_NAME_LINE_HEIGHT * 3.0
         );
+    }
+
+    #[test]
+    fn icon_name_display_lines_elides_remaining_text_on_last_line() {
+        let name = "elzykosuda227446+breuyev@hotmail.cpa.2026-06-22.json";
+        let available_width = compact_text_width_for_name("elzykosuda227");
+
+        let lines = icon_name_display_lines(name, available_width, 3);
+
+        assert_eq!(lines.len(), 3);
+        assert!(!lines[0].contains(DOLPHIN_ELISION_MARKER));
+        assert!(!lines[1].contains(DOLPHIN_ELISION_MARKER));
+        assert!(lines[2].contains(DOLPHIN_ELISION_MARKER));
+        assert!(
+            lines
+                .iter()
+                .all(|line| estimated_text_width(line) <= available_width)
+        );
+    }
+
+    #[test]
+    fn icon_name_display_lines_hide_wrap_opportunities() {
+        let name = "alpha-beta.gamma";
+        let lines = icon_name_display_lines(name, 240.0, 3);
+
+        assert_eq!(lines, vec![name.to_string()]);
+    }
+
+    #[test]
+    fn middle_elision_preserves_both_ends() {
+        let name = "very-long-filename-with-extension.txt";
+        let available_width =
+            compact_text_width_for_name("very-l") + compact_text_width_for_name(".txt");
+
+        let elided = elide_middle_text_for_width(name, available_width);
+
+        assert!(elided.starts_with("very"));
+        assert!(elided.ends_with(".txt"));
+        assert!(elided.contains(DOLPHIN_ELISION_MARKER));
+        assert!(estimated_text_width(&elided) <= available_width);
     }
 
     #[test]
