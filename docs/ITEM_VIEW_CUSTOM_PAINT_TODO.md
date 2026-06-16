@@ -199,6 +199,9 @@ This is the active task board for the GPUI item view custom-paint migration.
 - [x] Centralize Compact/Icons renderer choices in an explicit
   `ItemRendererPolicy` so custom-paint vs GPUI surface decisions are not hidden
   behind ad hoc booleans.
+- [x] Centralize Details row renderer choices in an explicit
+  `DetailsRowRendererPolicy` covering visual layer, retained interaction, and
+  GPUI drag-start shell boundaries.
 
 ## Acceptance Gates
 

@@ -1813,7 +1813,11 @@ fn details_visual_layer_items(
 ) -> Vec<DetailsVisualLayerItem> {
     items
         .iter()
-        .map(|item| {
+        .filter_map(|item| {
+            let policy = details_row_renderer_policy(item);
+            if !matches!(policy.visual, DetailsRowVisualRenderer::ContentLayer) {
+                return None;
+            }
             let mut x = 0.0;
             let cells = columns
                 .iter()
@@ -1844,7 +1848,7 @@ fn details_visual_layer_items(
                     }
                 })
                 .collect();
-            DetailsVisualLayerItem {
+            Some(DetailsVisualLayerItem {
                 row_index: item.row_index,
                 row_top: f32::from_bits(item.geometry.row_top),
                 row_height: f32::from_bits(item.geometry.row_height),
@@ -1853,7 +1857,7 @@ fn details_visual_layer_items(
                 hovered: item.visual.hovered,
                 drop_target: item.visual.drop_target,
                 cells,
-            }
+            })
         })
         .collect()
 }
@@ -2376,6 +2380,7 @@ fn details_row(
     let controller = DetailsRowControllerState::from_snapshot(&item);
     let item_id = controller.item_id;
     let selected = controller.selected;
+    let policy = details_row_renderer_policy(&item);
 
     let drag_value = ItemDrag {
         pane_id,
@@ -2387,7 +2392,7 @@ fn details_row(
     };
     let app = cx.weak_entity();
 
-    div()
+    let row = div()
         .id(item_identity_element_id("details-row", item_id))
         .absolute()
         .left_0()
@@ -2396,24 +2401,33 @@ fn details_row(
         .h(px(row_height))
         .flex()
         .items_center()
-        .bg(rgba(0x00000000))
-        // The viewport owns click/menu/navigation hit testing from retained
-        // geometry; this row remains only as GPUI's drag-start boundary.
-        .on_drag(drag_value, move |drag, cursor_offset, _, cx| {
-            let _ = app.update(cx, |this, _cx| {
-                this.begin_item_drag(drag.payload());
-            });
-            cx.new(|_| DragPreview {
-                icon: drag.icon.clone(),
-                label: drag_preview_label(drag.name.as_ref(), drag.selected, drag.selection_count),
-                count: drag.selection_count,
-                layout: drag_preview_layout_for_cursor_offset(
-                    cursor_offset,
-                    DRAG_PREVIEW_MIN_WIDTH,
-                    DRAG_PREVIEW_MIN_HEIGHT + 6.0,
-                ),
+        .bg(rgba(0x00000000));
+
+    // The viewport owns click/menu/navigation hit testing from retained
+    // geometry; this row remains only as GPUI's drag-start boundary.
+    match policy.drag_start {
+        DetailsRowDragStartRenderer::GpuiShell => {
+            row.on_drag(drag_value, move |drag, cursor_offset, _, cx| {
+                let _ = app.update(cx, |this, _cx| {
+                    this.begin_item_drag(drag.payload());
+                });
+                cx.new(|_| DragPreview {
+                    icon: drag.icon.clone(),
+                    label: drag_preview_label(
+                        drag.name.as_ref(),
+                        drag.selected,
+                        drag.selection_count,
+                    ),
+                    count: drag.selection_count,
+                    layout: drag_preview_layout_for_cursor_offset(
+                        cursor_offset,
+                        DRAG_PREVIEW_MIN_WIDTH,
+                        DRAG_PREVIEW_MIN_HEIGHT + 6.0,
+                    ),
+                })
             })
-        })
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -2436,6 +2450,36 @@ impl DetailsRowControllerState {
             selected: item.visual.selected,
             selection_count: item.visual.selection_count,
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DetailsRowRendererPolicy {
+    visual: DetailsRowVisualRenderer,
+    interaction: DetailsRowInteractionRenderer,
+    drag_start: DetailsRowDragStartRenderer,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DetailsRowVisualRenderer {
+    ContentLayer,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DetailsRowInteractionRenderer {
+    RetainedLayer,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DetailsRowDragStartRenderer {
+    GpuiShell,
+}
+
+fn details_row_renderer_policy(_item: &DetailsPaintSnapshot) -> DetailsRowRendererPolicy {
+    DetailsRowRendererPolicy {
+        visual: DetailsRowVisualRenderer::ContentLayer,
+        interaction: DetailsRowInteractionRenderer::RetainedLayer,
+        drag_start: DetailsRowDragStartRenderer::GpuiShell,
     }
 }
 
@@ -3316,14 +3360,21 @@ fn details_interaction_layer_items(
 ) -> Vec<ItemInteractionLayerItem> {
     items
         .iter()
-        .map(|item| ItemInteractionLayerItem {
-            item_id: item.item_id,
-            visual_rect: ViewRect {
-                x: 0.0,
-                y: f32::from_bits(item.geometry.row_top),
-                width: width.max(1.0),
-                height: f32::from_bits(item.geometry.row_height).max(1.0),
-            },
+        .filter_map(|item| {
+            let policy = details_row_renderer_policy(item);
+            matches!(
+                policy.interaction,
+                DetailsRowInteractionRenderer::RetainedLayer
+            )
+            .then(|| ItemInteractionLayerItem {
+                item_id: item.item_id,
+                visual_rect: ViewRect {
+                    x: 0.0,
+                    y: f32::from_bits(item.geometry.row_top),
+                    width: width.max(1.0),
+                    height: f32::from_bits(item.geometry.row_height).max(1.0),
+                },
+            })
         })
         .collect()
 }
@@ -4330,11 +4381,13 @@ fn drag_preview_label(name: &str, selected: bool, selection_count: usize) -> Str
 mod tests {
     use super::{
         DetailsItemSnapshot, DetailsLayoutMetrics, DetailsPaintContent, DetailsRowControllerState,
-        DetailsTextShapeCacheKey, FileGridMode, FileGridRenderSnapshot, FileGridSnapshot,
-        ItemBaseVisualRenderer, ItemDragStartRenderer, ItemImageRenderer, ItemInteractionRenderer,
-        ItemPaintContent, ItemPaintSlotCache, ItemRenameEditorRenderer, ItemRendererPolicy,
-        ItemTileTextAlignment, StaticItemLabelTextKey, StaticItemTextShapeCacheKey,
-        VisibleItemSnapshot, details_columns, details_interaction_layer_items,
+        DetailsRowDragStartRenderer, DetailsRowInteractionRenderer, DetailsRowRendererPolicy,
+        DetailsRowVisualRenderer, DetailsTextShapeCacheKey, FileGridMode, FileGridRenderSnapshot,
+        FileGridSnapshot, ItemBaseVisualRenderer, ItemDragStartRenderer, ItemImageRenderer,
+        ItemInteractionRenderer, ItemPaintContent, ItemPaintSlotCache, ItemRenameEditorRenderer,
+        ItemRendererPolicy, ItemTileTextAlignment, StaticItemLabelTextKey,
+        StaticItemTextShapeCacheKey, VisibleItemSnapshot, details_columns,
+        details_interaction_layer_items, details_row_renderer_policy,
         details_visual_layer_element_id, details_visual_layer_items, display_text_layout,
         drag_preview_label, item_identity_element_id, item_image_element_id,
         item_image_layer_item_source_path, item_image_layer_items,
@@ -4974,6 +5027,16 @@ mod tests {
         };
         let columns = details_columns(false, 260.0);
         let visual_items = details_visual_layer_items(&items, &columns);
+        let policy = details_row_renderer_policy(&items[0]);
+
+        assert_eq!(
+            policy,
+            DetailsRowRendererPolicy {
+                visual: DetailsRowVisualRenderer::ContentLayer,
+                interaction: DetailsRowInteractionRenderer::RetainedLayer,
+                drag_start: DetailsRowDragStartRenderer::GpuiShell,
+            }
+        );
 
         assert_eq!(visual_items.len(), 1);
         assert_eq!(visual_items[0].row_index, 2);
