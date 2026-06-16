@@ -34,6 +34,9 @@ Options:
   --static-visual-paint-us N
       Fail if any [fika static-item-visual] paint exceeds N microseconds.
 
+  --image-paint-us N
+      Fail if any [fika item-image] paint exceeds N microseconds.
+
   -h, --help
       Show this help.
 EOF
@@ -47,6 +50,7 @@ required_modes=""
 steady_total_us=""
 file_grid_build_us=""
 static_visual_paint_us=""
+image_paint_us=""
 log_path=""
 
 while [[ $# -gt 0 ]]; do
@@ -111,6 +115,18 @@ while [[ $# -gt 0 ]]; do
         --static-visual-paint-us=*)
             static_visual_paint_us="${1#--static-visual-paint-us=}"
             ;;
+        --image-paint-us)
+            if [[ $# -lt 2 || "$2" == --* ]]; then
+                echo "--image-paint-us requires a numeric value" >&2
+                usage >&2
+                exit 2
+            fi
+            image_paint_us="$2"
+            shift
+            ;;
+        --image-paint-us=*)
+            image_paint_us="${1#--image-paint-us=}"
+            ;;
         -h|--help)
             usage
             exit 0
@@ -153,6 +169,11 @@ if [[ -n "$static_visual_paint_us" && ! "$static_visual_paint_us" =~ ^[0-9]+$ ]]
     exit 2
 fi
 
+if [[ -n "$image_paint_us" && ! "$image_paint_us" =~ ^[0-9]+$ ]]; then
+    echo "--image-paint-us must be an integer microsecond value" >&2
+    exit 2
+fi
+
 awk \
     -v require_steady="$require_steady" \
     -v require_details="$require_details" \
@@ -161,7 +182,8 @@ awk \
     -v required_modes="$required_modes" \
     -v steady_total_limit="$steady_total_us" \
     -v file_grid_build_limit="$file_grid_build_us" \
-    -v static_visual_paint_limit="$static_visual_paint_us" '
+    -v static_visual_paint_limit="$static_visual_paint_us" \
+    -v image_paint_limit="$image_paint_us" '
 function trim(value) {
     sub(/^[[:space:]]+/, "", value)
     sub(/[[:space:]]+$/, "", value)
@@ -259,6 +281,17 @@ BEGIN {
     }
 }
 
+/^\[fika item-image\]/ {
+    image_count++
+    note_mode(field("mode"))
+    paint = us_field("paint")
+    max_assign(single_max, "image_prepaint", us_field("prepaint"))
+    max_assign(single_max, "image_paint", paint)
+    if (image_paint_limit != "" && paint > image_paint_limit + 0) {
+        image_over_limit++
+    }
+}
+
 /^\[fika details-visual\]/ {
     details_visual_count++
     note_mode(field("mode"))
@@ -302,6 +335,9 @@ END {
     print "  static_visual_frames: " (static_visual_count + 0) \
         " max_prepaint=" (("static_visual_prepaint" in single_max) ? single_max["static_visual_prepaint"] : 0) "us" \
         " max_paint=" (("static_visual_paint" in single_max) ? single_max["static_visual_paint"] : 0) "us"
+    print "  image_frames: " (image_count + 0) \
+        " max_prepaint=" (("image_prepaint" in single_max) ? single_max["image_prepaint"] : 0) "us" \
+        " max_paint=" (("image_paint" in single_max) ? single_max["image_paint"] : 0) "us"
     print "  details_visual_frames: " (details_visual_count + 0) \
         " max_prepaint=" (("details_visual_prepaint" in single_max) ? single_max["details_visual_prepaint"] : 0) "us" \
         " max_paint=" (("details_visual_paint" in single_max) ? single_max["details_visual_paint"] : 0) "us"
@@ -342,6 +378,9 @@ END {
     }
     if (static_visual_over_limit > 0) {
         fail(static_visual_over_limit " static visual paint frame(s) exceeded " static_visual_paint_limit "us")
+    }
+    if (image_over_limit > 0) {
+        fail(image_over_limit " item image paint frame(s) exceeded " image_paint_limit "us")
     }
 
     exit failures > 0 ? 1 : 0

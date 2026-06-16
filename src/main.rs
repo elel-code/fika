@@ -83,7 +83,7 @@ use ui::drag_drop::{
 };
 use ui::file_grid::{
     CompactColumnWidthCache, ContentItemHit, DetailsTextShapeCache, DetailsVisualPerfStats,
-    ItemDrag, ItemInteractionPerfStats, ItemPaintSlotCache, ItemPaintSlotStats,
+    ItemDrag, ItemImagePerfStats, ItemInteractionPerfStats, ItemPaintSlotCache, ItemPaintSlotStats,
     PaneLayoutProjection, PaneLayoutProjectionInput, PaneViewportGeometry, RawFileGridSnapshot,
     RawFileGridSnapshotInput, StaticItemTextShapeCache, StaticItemVisualPerfStats,
     VisibleItemSlotPool, VisibleItemSnapshotCache, compact_text_width, compact_text_width_for_name,
@@ -495,6 +495,7 @@ pub(crate) struct FikaApp {
     details_text_shape_caches: HashMap<PaneId, DetailsTextShapeCache>,
     item_view_perf_frames: HashMap<PaneId, ItemViewPerfFrameState>,
     static_item_visual_perf_stats: HashMap<PaneId, StaticItemVisualPerfStats>,
+    item_image_perf_stats: HashMap<PaneId, ItemImagePerfStats>,
     details_visual_perf_stats: HashMap<PaneId, DetailsVisualPerfStats>,
     item_interaction_perf_stats: HashMap<PaneId, ItemInteractionPerfStats>,
     hovered_item: Option<(PaneId, ItemId)>,
@@ -588,6 +589,7 @@ impl FikaApp {
             details_text_shape_caches: HashMap::new(),
             item_view_perf_frames: HashMap::new(),
             static_item_visual_perf_stats: HashMap::new(),
+            item_image_perf_stats: HashMap::new(),
             details_visual_perf_stats: HashMap::new(),
             item_interaction_perf_stats: HashMap::new(),
             hovered_item: None,
@@ -877,6 +879,7 @@ impl FikaApp {
         self.details_text_shape_caches.remove(&pane_id);
         self.item_view_perf_frames.remove(&pane_id);
         self.static_item_visual_perf_stats.remove(&pane_id);
+        self.item_image_perf_stats.remove(&pane_id);
         self.details_visual_perf_stats.remove(&pane_id);
         self.item_interaction_perf_stats.remove(&pane_id);
         self.clear_hovered_item_for_pane(pane_id);
@@ -2882,6 +2885,7 @@ impl FikaApp {
         self.details_text_shape_caches.remove(&pane_id);
         self.item_view_perf_frames.remove(&pane_id);
         self.static_item_visual_perf_stats.remove(&pane_id);
+        self.item_image_perf_stats.remove(&pane_id);
         self.details_visual_perf_stats.remove(&pane_id);
         self.item_interaction_perf_stats.remove(&pane_id);
         self.clear_hovered_item_for_pane(pane_id);
@@ -3325,6 +3329,7 @@ impl FikaApp {
         self.static_item_text_shape_caches.remove(&pane_id);
         self.details_text_shape_caches.remove(&pane_id);
         self.static_item_visual_perf_stats.remove(&pane_id);
+        self.item_image_perf_stats.remove(&pane_id);
         self.details_visual_perf_stats.remove(&pane_id);
         self.item_interaction_perf_stats.remove(&pane_id);
         self.clear_hovered_item_for_pane(pane_id);
@@ -16359,6 +16364,7 @@ text/plain=viewer.desktop;\n",
             details_text_shape_caches: HashMap::new(),
             item_view_perf_frames: HashMap::new(),
             static_item_visual_perf_stats: HashMap::new(),
+            item_image_perf_stats: HashMap::new(),
             details_visual_perf_stats: HashMap::new(),
             item_interaction_perf_stats: HashMap::new(),
             hovered_item: None,

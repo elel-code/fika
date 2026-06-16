@@ -132,6 +132,7 @@ pub(crate) struct ItemLayerPerfStats {
 }
 
 pub(crate) type StaticItemVisualPerfStats = ItemLayerPerfStats;
+pub(crate) type ItemImagePerfStats = ItemLayerPerfStats;
 pub(crate) type DetailsVisualPerfStats = ItemLayerPerfStats;
 pub(crate) type ItemInteractionPerfStats = ItemLayerPerfStats;
 
@@ -1021,8 +1022,13 @@ pub(crate) fn file_grid(
                 ItemTileTextAlignment::Center,
                 app.clone(),
             );
-            let image_layer =
-                item_image_layer_view(pane_id, &items, content_size.width, content_size.height);
+            let image_layer = item_image_layer_view(
+                pane_id,
+                &items,
+                content_size.width,
+                content_size.height,
+                app.clone(),
+            );
             let interaction_layer = item_interaction_layer_view(
                 pane_id,
                 &items,
@@ -1078,8 +1084,13 @@ pub(crate) fn file_grid(
                 ItemTileTextAlignment::Start,
                 app.clone(),
             );
-            let image_layer =
-                item_image_layer_view(pane_id, &items, content_size.width, content_size.height);
+            let image_layer = item_image_layer_view(
+                pane_id,
+                &items,
+                content_size.width,
+                content_size.height,
+                app.clone(),
+            );
             let interaction_layer = item_interaction_layer_view(
                 pane_id,
                 &items,
@@ -1162,6 +1173,7 @@ pub(crate) fn file_grid(
             let mut shape_cache_stats = TextShapeCacheStats::default();
             let mut details_shape_cache_stats = TextShapeCacheStats::default();
             let mut static_visual_stats = StaticItemVisualPerfStats::default();
+            let mut image_stats = ItemImagePerfStats::default();
             let mut details_visual_stats = DetailsVisualPerfStats::default();
             let mut interaction_stats = ItemInteractionPerfStats::default();
             let _ = app.update(cx, |this, cx| {
@@ -1191,6 +1203,7 @@ pub(crate) fn file_grid(
                     shape_cache_stats = this.take_static_item_text_shape_cache_stats(pane_id);
                     details_shape_cache_stats = this.take_details_text_shape_cache_stats(pane_id);
                     static_visual_stats = this.take_static_item_visual_perf_stats(pane_id);
+                    image_stats = this.take_item_image_perf_stats(pane_id);
                     details_visual_stats = this.take_details_visual_perf_stats(pane_id);
                     interaction_stats = this.take_item_interaction_perf_stats(pane_id);
                 }
@@ -1250,6 +1263,17 @@ pub(crate) fn file_grid(
                         interaction_stats.prepaint_us,
                         interaction_stats.paint_count,
                         interaction_stats.paint_us,
+                    );
+                }
+                if image_stats.has_activity() {
+                    eprintln!(
+                        "[fika item-image] pane={} mode={:?} prepaint_count={} prepaint={}us paint_count={} paint={}us",
+                        pane_id.0,
+                        view_mode,
+                        image_stats.prepaint_count,
+                        image_stats.prepaint_us,
+                        image_stats.paint_count,
+                        image_stats.paint_us,
                     );
                 }
                 if details_visual_stats.has_activity() {
@@ -1319,6 +1343,12 @@ impl FikaApp {
             .unwrap_or_default()
     }
 
+    fn take_item_image_perf_stats(&mut self, pane_id: PaneId) -> ItemImagePerfStats {
+        self.item_image_perf_stats
+            .remove(&pane_id)
+            .unwrap_or_default()
+    }
+
     fn take_details_visual_perf_stats(&mut self, pane_id: PaneId) -> DetailsVisualPerfStats {
         self.details_visual_perf_stats
             .remove(&pane_id)
@@ -1350,6 +1380,20 @@ impl FikaApp {
         count: usize,
     ) {
         self.static_item_visual_perf_stats
+            .entry(pane_id)
+            .or_default()
+            .record_paint(elapsed, count);
+    }
+
+    fn record_item_image_prepaint(&mut self, pane_id: PaneId, elapsed: Duration, count: usize) {
+        self.item_image_perf_stats
+            .entry(pane_id)
+            .or_default()
+            .record_prepaint(elapsed, count);
+    }
+
+    fn record_item_image_paint(&mut self, pane_id: PaneId, elapsed: Duration, count: usize) {
+        self.item_image_perf_stats
             .entry(pane_id)
             .or_default()
             .record_paint(elapsed, count);
@@ -2866,11 +2910,13 @@ fn item_image_layer_view(
     items: &[ItemPaintSnapshot],
     width: f32,
     height: f32,
+    app: WeakEntity<FikaApp>,
 ) -> Option<ItemImageLayerElement> {
     let items = item_image_layer_items(items);
     (!items.is_empty()).then(|| {
         ItemImageLayerElement {
             pane_id,
+            app,
             items,
             style: StyleRefinement::default(),
         }
@@ -2921,6 +2967,7 @@ fn item_image_load_failure_paints_fallback(item: &ItemImageLayerItem) -> bool {
 
 struct ItemImageLayerElement {
     pane_id: PaneId,
+    app: WeakEntity<FikaApp>,
     items: Vec<ItemImageLayerItem>,
     style: StyleRefinement,
 }
@@ -2984,6 +3031,7 @@ impl Element for ItemImageLayerElement {
         let Some(id) = id else {
             return Vec::new();
         };
+        let perf_started = crate::item_view_perf_enabled().then(std::time::Instant::now);
         window.with_element_state::<Entity<RetainAllImageCache>, _>(id, |cache, window| {
             let cache = cache.unwrap_or_else(|| RetainAllImageCache::new(cx));
             let states = self
@@ -2991,6 +3039,13 @@ impl Element for ItemImageLayerElement {
                 .iter()
                 .filter_map(|item| item_image_layer_prepaint_item(item, &cache, window, cx))
                 .collect::<Vec<_>>();
+            if let Some(started) = perf_started {
+                let elapsed = started.elapsed();
+                let count = states.len();
+                let _ = self.app.update(cx, |this, _cx| {
+                    this.record_item_image_prepaint(self.pane_id, elapsed, count);
+                });
+            }
             (states, cache)
         })
     }
@@ -3005,11 +3060,19 @@ impl Element for ItemImageLayerElement {
         window: &mut Window,
         cx: &mut App,
     ) {
+        let perf_started = crate::item_view_perf_enabled().then(std::time::Instant::now);
+        let count = prepaint.len();
         request_layout.paint(bounds, window, cx, |window, cx| {
             for state in prepaint.iter() {
                 item_image_layer_paint_item(bounds, state, window, cx);
             }
         });
+        if let Some(started) = perf_started {
+            let elapsed = started.elapsed();
+            let _ = self.app.update(cx, |this, _cx| {
+                this.record_item_image_paint(self.pane_id, elapsed, count);
+            });
+        }
     }
 }
 
