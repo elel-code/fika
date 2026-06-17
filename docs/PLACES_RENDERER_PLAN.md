@@ -82,6 +82,11 @@ retained Places row surface with the same separations as file-grid:
   visible rows, section transitions, active rows, place targets, and insert
   indicators. `src/main.rs` applies scenario actions, but it does not compute
   target/overflow/layout evidence counts.
+- `src/ui/places/autosmoke.rs`: own Places layout autosmoke reporting for
+  sidebar width/visibility state, deterministic resize targets, action log
+  formatting, and saved-settings verification. `src/main.rs` keeps the actual
+  app mutations and settings load, but it does not own the report model that
+  proves hide/show/resize/reset/restore behavior.
 
 Panel layout belongs beside the Places view/controller boundary, not inside the
 row painter. The Places panel has state for visibility and width; the sidebar
@@ -245,6 +250,9 @@ places_autosmoke target=1 insert_start=1 insert_end=1 clear=1 snapshots=1,1,1,1,
 /tmp/fika-places-snapshot-autosmoke-module.log:
   places_autosmoke target=1 insert_start=1 insert_end=1 clear=1 snapshots=1,1,1,1,1
   places_renderer_policy_frames=10 max_rows=11 max_row_gpui=11 max_row_visual_layer=0
+/tmp/fika-places-layout-autosmoke-module.log:
+  places_layout_autosmoke start=1 complete=1 initial=1 hide=1 show=1 resize=1 reset=1 restore=1 verify_saved=1
+  places_renderer_policy_frames=9 max_rows=11 max_row_gpui=11 max_row_visual_layer=0
 ```
 
 2026-06-18 retained geometry evidence:

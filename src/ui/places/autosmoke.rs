@@ -1,5 +1,5 @@
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::ui::icons::FileIconSnapshot;
@@ -67,6 +67,26 @@ struct PlacesSnapshotAutosmokeReport {
     place_targets: usize,
     insert_before: usize,
     insert_after: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct PlacesLayoutAutosmokeState {
+    pub(crate) width: f32,
+    pub(crate) visible: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct PlacesLayoutSettingsAutosmokeReport {
+    state: PlacesLayoutAutosmokeState,
+    saved_width: Option<f32>,
+    saved_visible: Option<bool>,
+    ok: bool,
+}
+
+impl PlacesLayoutAutosmokeState {
+    pub(crate) fn new(width: f32, visible: bool) -> Self {
+        Self { width, visible }
+    }
 }
 
 impl PlacesAutosmokeScenario {
@@ -209,6 +229,14 @@ fn append_overflow_test_places(snapshots: &mut Vec<PlaceSnapshot>) {
     }
 }
 
+pub(crate) fn places_autosmoke_resize_target_width(current_width: f32) -> f32 {
+    if current_width < 300.0 {
+        320.0
+    } else {
+        super::PLACES_SIDEBAR_DEFAULT_WIDTH - 40.0
+    }
+}
+
 pub(crate) fn emit_places_retained_hit_test_autosmoke(
     label: &'static str,
     snapshots: &[PlaceSnapshot],
@@ -242,6 +270,60 @@ pub(crate) fn emit_places_retained_hit_test_autosmoke(
     );
 }
 
+pub(crate) fn emit_places_autosmoke_layout_capture(
+    label: &'static str,
+    state: PlacesLayoutAutosmokeState,
+) {
+    eprintln!(
+        "[fika autosmoke] places action={} width={:.1} visible={}",
+        label, state.width, state.visible
+    );
+}
+
+pub(crate) fn emit_places_autosmoke_layout_update(
+    label: &'static str,
+    state: PlacesLayoutAutosmokeState,
+    changed: bool,
+) {
+    eprintln!(
+        "[fika autosmoke] places action={} width={:.1} visible={} changed={}",
+        label, state.width, state.visible, changed
+    );
+}
+
+pub(crate) fn emit_places_autosmoke_layout_resize(
+    label: &'static str,
+    state: PlacesLayoutAutosmokeState,
+    target_width: f32,
+    changed: bool,
+) {
+    eprintln!(
+        "[fika autosmoke] places action={} width={:.1} visible={} target_width={:.1} changed={}",
+        label, state.width, state.visible, target_width, changed
+    );
+}
+
+pub(crate) fn emit_places_autosmoke_layout_settings_verification(
+    label: &'static str,
+    state: PlacesLayoutAutosmokeState,
+    saved_width: Option<f32>,
+    saved_visible: Option<bool>,
+    path: &Path,
+) -> bool {
+    let report = layout_settings_autosmoke_report(state, saved_width, saved_visible);
+    eprintln!(
+        "[fika autosmoke] places action={} width={:.1} visible={} saved_width={} saved_visible={} ok={} path={}",
+        label,
+        report.state.width,
+        report.state.visible,
+        saved_width_label(report.saved_width),
+        saved_visible_label(report.saved_visible),
+        report.ok,
+        path.display()
+    );
+    report.ok
+}
+
 pub(crate) fn emit_places_autosmoke_snapshot(label: &'static str, snapshots: &[PlaceSnapshot]) {
     let report = snapshot_autosmoke_report(snapshots);
     eprintln!(
@@ -254,6 +336,37 @@ pub(crate) fn emit_places_autosmoke_snapshot(label: &'static str, snapshots: &[P
         report.insert_before,
         report.insert_after
     );
+}
+
+fn layout_settings_autosmoke_report(
+    state: PlacesLayoutAutosmokeState,
+    saved_width: Option<f32>,
+    saved_visible: Option<bool>,
+) -> PlacesLayoutSettingsAutosmokeReport {
+    let width_ok = saved_width.is_some_and(|width| layout_width_value_eq(width, state.width));
+    let visible_ok = saved_visible == Some(state.visible);
+    PlacesLayoutSettingsAutosmokeReport {
+        state,
+        saved_width,
+        saved_visible,
+        ok: width_ok && visible_ok,
+    }
+}
+
+fn layout_width_value_eq(left: f32, right: f32) -> bool {
+    (left - right).abs() < 0.5
+}
+
+fn saved_width_label(width: Option<f32>) -> String {
+    width
+        .map(|width| format!("{width:.1}"))
+        .unwrap_or_else(|| "<none>".to_string())
+}
+
+fn saved_visible_label(visible: Option<bool>) -> String {
+    visible
+        .map(|visible| visible.to_string())
+        .unwrap_or_else(|| "<none>".to_string())
 }
 
 fn snapshot_autosmoke_report(snapshots: &[PlaceSnapshot]) -> PlacesSnapshotAutosmokeReport {
@@ -477,6 +590,30 @@ mod tests {
             actions[6],
             PlacesAutosmokeAction::VerifyLayoutSettings { .. }
         ));
+    }
+
+    #[test]
+    fn layout_resize_target_moves_between_default_and_wide_widths() {
+        assert_eq!(places_autosmoke_resize_target_width(220.0), 320.0);
+        assert_eq!(places_autosmoke_resize_target_width(320.0), 180.0);
+    }
+
+    #[test]
+    fn layout_settings_autosmoke_report_matches_saved_sidebar_state() {
+        let state = PlacesLayoutAutosmokeState::new(276.0, false);
+
+        assert_eq!(
+            layout_settings_autosmoke_report(state, Some(276.2), Some(false)),
+            PlacesLayoutSettingsAutosmokeReport {
+                state,
+                saved_width: Some(276.2),
+                saved_visible: Some(false),
+                ok: true,
+            }
+        );
+        assert!(!layout_settings_autosmoke_report(state, Some(277.0), Some(false)).ok);
+        assert!(!layout_settings_autosmoke_report(state, Some(276.0), Some(true)).ok);
+        assert!(!layout_settings_autosmoke_report(state, None, Some(false)).ok);
     }
 
     #[test]

@@ -701,6 +701,14 @@ by risk and evidence, not by how custom-painted a surface looks.
   snapshot boundary used by Places projection. Evidence:
   `/tmp/fika-places-snapshot-autosmoke-module.log` passed
   `--require-autosmoke --expect-current-gpui-policy`.
+- [x] P16ag: Move Places layout autosmoke reporting out of `src/main.rs`.
+  `src/ui/places/autosmoke.rs` now owns the sidebar layout smoke state type,
+  resize target policy, layout action log formatting, and saved-settings
+  verification report. The app root still mutates panel visibility/width and
+  reads settings, but no longer owns the evidence/reporting logic for hide,
+  show, resize, reset, restore, or verify. Evidence:
+  `/tmp/fika-places-layout-autosmoke-module.log` passed
+  `--require-layout-autosmoke --expect-current-gpui-policy`.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,
