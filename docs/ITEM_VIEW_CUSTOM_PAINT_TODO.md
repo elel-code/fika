@@ -262,6 +262,9 @@ This is the active task board for the GPUI item view custom-paint migration.
 - [x] Extract Compact/Icons transparent item shells into
   `src/ui/file_grid/item_shell.rs` so the remaining GPUI drag-start and rename
   overlay bridge is separate from the main file-grid renderer surface.
+- [x] Extract Details table/header and transparent row shells into
+  `src/ui/file_grid/details_shell.rs` so the remaining Details GPUI drag-start
+  bridge is separate from the main file-grid renderer surface.
 - [x] Centralize GPUI item/details drag-start shell installation in
   `src/ui/file_grid/dnd.rs` while keeping the shell as the current platform
   boundary.

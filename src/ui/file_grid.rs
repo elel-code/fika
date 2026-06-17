@@ -1,5 +1,6 @@
 mod controller;
 mod details;
+mod details_shell;
 mod details_visual;
 mod dnd;
 mod image_layer;
@@ -50,15 +51,16 @@ use fika_core::{
 };
 use gpui::prelude::*;
 use gpui::{
-    Context, Div, ParentElement, Rgba, ScrollHandle, Stateful, WeakEntity, Window, div, px,
-    retain_all, rgb, rgba,
+    Context, Div, ParentElement, Rgba, ScrollHandle, Stateful, Window, div, px, retain_all, rgb,
+    rgba,
 };
 
 use super::item_view::item_view_scrollbar_container;
 #[cfg(test)]
 use controller::item_mouse_down_opens_directory;
-use details::{DetailsColumn, details_columns};
-use details_visual::details_visual_layer_view;
+#[cfg(test)]
+use details::details_columns;
+use details_shell::details_table;
 #[cfg(test)]
 use details_visual::{
     DetailsTextShapeCacheKey, DetailsVisualCellContent, details_visual_layer_element_id,
@@ -66,38 +68,34 @@ use details_visual::{
 };
 #[cfg(test)]
 use dnd::drag_preview_label;
-use dnd::{
-    install_directory_drop_target_shell, install_item_drag_start_shell,
-    item_drag_from_details_snapshot,
-};
+#[cfg(test)]
+use dnd::item_drag_from_details_snapshot;
 use image_layer::item_image_layer_view;
 #[cfg(test)]
 use image_layer::{
     item_image_layer_item_source_path, item_image_layer_items,
     item_image_load_failure_paints_fallback, item_image_paint_layer_element_id,
 };
+use interaction::item_interaction_layer_view;
 #[cfg(test)]
 use interaction::{
     details_interaction_layer_items, item_interaction_hitbox_bounds,
     item_interaction_layer_element_id, item_interaction_layer_items,
 };
-use interaction::{details_interaction_layer_view, item_interaction_layer_view};
 use item_shell::item_tile;
 #[cfg(test)]
 use paint_slots::DetailsPaintContent;
 use paint_slots::ItemPaintContent;
 #[cfg(test)]
 use rename_overlay::{display_text_layout, normalized_text_range, rename_text_layout};
-use renderer_policy::{
-    DetailsRowDragStartRenderer, details_renderer_policy_stats, details_row_renderer_policy,
-    item_renderer_policy_stats,
-};
 #[cfg(test)]
 use renderer_policy::{
-    DetailsRowInteractionRenderer, DetailsRowRendererPolicy, DetailsRowVisualRenderer,
-    ItemBaseVisualRenderer, ItemDragStartRenderer, ItemImageRenderer, ItemInteractionRenderer,
-    ItemRenameEditorRenderer, ItemRendererPolicy, RendererPolicyStats, item_renderer_policy,
+    DetailsRowDragStartRenderer, DetailsRowInteractionRenderer, DetailsRowRendererPolicy,
+    DetailsRowVisualRenderer, ItemBaseVisualRenderer, ItemDragStartRenderer, ItemImageRenderer,
+    ItemInteractionRenderer, ItemRenameEditorRenderer, ItemRendererPolicy, RendererPolicyStats,
+    details_row_renderer_policy, item_renderer_policy,
 };
+use renderer_policy::{details_renderer_policy_stats, item_renderer_policy_stats};
 use static_visual::static_item_visual_layer_view;
 #[cfg(test)]
 use static_visual::{
@@ -558,138 +556,6 @@ pub(crate) fn file_grid(
         );
     }
     root
-}
-
-fn details_table(
-    pane_id: PaneId,
-    items: Vec<DetailsPaintSnapshot>,
-    row_count: usize,
-    trash_view: bool,
-    content_width: f32,
-    content_height: f32,
-    metrics: DetailsLayoutMetrics,
-    name_column_width: f32,
-    app: WeakEntity<FikaApp>,
-    cx: &mut Context<FikaApp>,
-) -> Div {
-    let columns = details_columns(trash_view, name_column_width);
-    let visual_layer = details_visual_layer_view(
-        pane_id,
-        &items,
-        &columns,
-        content_width,
-        content_height,
-        app.clone(),
-    );
-    let interaction_layer =
-        details_interaction_layer_view(pane_id, &items, content_width, content_height, app.clone());
-    let table = div()
-        .relative()
-        .w(px(content_width))
-        .h(px(content_height))
-        .child(details_header(&columns, content_width, metrics));
-    let table = if let Some(layer) = visual_layer {
-        table.child(layer)
-    } else {
-        table
-    };
-    let table = if let Some(layer) = interaction_layer {
-        table.child(layer)
-    } else {
-        table
-    };
-    table
-        .children(
-            items
-                .into_iter()
-                .map(|item| details_row(pane_id, item, content_width, cx)),
-        )
-        .when(row_count == 0, |table| {
-            table.child(
-                div()
-                    .absolute()
-                    .top(px(metrics.header_height))
-                    .left_0()
-                    .w(px(content_width))
-                    .h(px(metrics.row_height))
-                    .px_2()
-                    .flex()
-                    .items_center()
-                    .text_sm()
-                    .text_color(rgb(0x6b7280))
-                    .child("No items"),
-            )
-        })
-}
-
-fn details_header(
-    columns: &[DetailsColumn],
-    content_width: f32,
-    metrics: DetailsLayoutMetrics,
-) -> Div {
-    div()
-        .absolute()
-        .top_0()
-        .left_0()
-        .w(px(content_width))
-        .h(px(metrics.header_height))
-        .flex()
-        .items_center()
-        .border_b_1()
-        .border_color(rgb(0xd5d9df))
-        .bg(rgb(0xf3f5f8))
-        .children(columns.iter().map(|column| {
-            div()
-                .w(px(column.width))
-                .h_full()
-                .px_2()
-                .flex()
-                .items_center()
-                .text_xs()
-                .font_weight(gpui::FontWeight::SEMIBOLD)
-                .text_color(rgb(0x4b5563))
-                .border_r_1()
-                .border_color(rgb(0xe1e5eb))
-                .child(column.title)
-        }))
-}
-
-fn details_row(
-    pane_id: PaneId,
-    item: DetailsPaintSnapshot,
-    content_width: f32,
-    cx: &mut Context<FikaApp>,
-) -> Stateful<Div> {
-    let top = f32::from_bits(item.geometry.row_top);
-    let row_height = f32::from_bits(item.geometry.row_height);
-    let item_id = item.item_id;
-    let policy = details_row_renderer_policy(&item);
-    let drag_value = item_drag_from_details_snapshot(pane_id, &item);
-    let app = cx.weak_entity();
-    let directory_drop_target = item.content.is_dir.then(|| item.content.path.clone());
-
-    let row = div()
-        .id(item_identity_element_id("details-row", item_id))
-        .absolute()
-        .left_0()
-        .top(px(top))
-        .w(px(content_width))
-        .h(px(row_height))
-        .flex()
-        .items_center()
-        .bg(rgba(0x00000000));
-    let row = match directory_drop_target {
-        Some(target_dir) => install_directory_drop_target_shell(row, pane_id, target_dir, cx),
-        None => row,
-    };
-
-    // The viewport owns click/menu/navigation hit testing from retained
-    // geometry; this row remains only as GPUI's drag-start boundary.
-    match policy.drag_start {
-        DetailsRowDragStartRenderer::GpuiShell => {
-            install_item_drag_start_shell(row, drag_value, app)
-        }
-    }
 }
 
 fn details_row_background(

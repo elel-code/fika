@@ -488,9 +488,9 @@ The remaining item-local surfaces are intentional:
   boundary only. They do not carry GPUI `img()` or static text visual children.
   Their visuals, images, hover/cursor, click/menu/drop hit testing, and
   drag-over state are retained/painter driven.
-- Details row shells: GPUI `Div::on_drag` drag-start boundary only. Row visuals,
-  drop dispatch, and row hover/click/menu/navigation are retained/painter or
-  viewport driven.
+- Details row shells: `src/ui/file_grid/details_shell.rs` owns the GPUI
+  `Div::on_drag` drag-start boundary only. Row visuals, drop dispatch, and row
+  hover/click/menu/navigation are retained/painter or viewport driven.
 - Rename overlay: text-editing boundary for caret hit testing, selection,
   warning/error helper text, and cursor text behavior.
 
