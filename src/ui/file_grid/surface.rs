@@ -373,12 +373,13 @@ pub(crate) fn file_grid(
         ));
     if let Some(started) = build_started {
         eprintln!(
-            "[fika renderer-policy] pane={} mode={:?} items={} visual_layer={} image_layer={} retained_interaction={} gpui_drag_shell={} rename_overlay={}",
+            "[fika renderer-policy] pane={} mode={:?} items={} visual_layer={} image_layer={} gpui_image_element={} retained_interaction={} gpui_drag_shell={} rename_overlay={}",
             pane_id.0,
             view_mode,
             renderer_policy_stats.items,
             renderer_policy_stats.visual_layer,
             renderer_policy_stats.image_layer,
+            renderer_policy_stats.gpui_image_element,
             renderer_policy_stats.retained_interaction,
             renderer_policy_stats.gpui_drag_shell,
             renderer_policy_stats.rename_overlay,

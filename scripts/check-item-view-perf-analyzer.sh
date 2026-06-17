@@ -28,9 +28,9 @@ cat > "$tmpdir/complete.log" <<'EOF'
 [fika details-visual] pane=1 mode=Details prepaint_count=48 prepaint=120us paint_count=48 paint=130us
 [fika details-shape-cache] pane=1 mode=Details hits=20 misses=2 evicted=0 entries=22
 [fika item-interaction] pane=1 mode=Details prepaint_count=48 prepaint=60us paint_count=48 paint=50us
-[fika renderer-policy] pane=1 mode=Compact items=48 visual_layer=48 image_layer=8 retained_interaction=48 gpui_drag_shell=48 rename_overlay=0
-[fika renderer-policy] pane=1 mode=Icons items=48 visual_layer=48 image_layer=8 retained_interaction=48 gpui_drag_shell=48 rename_overlay=0
-[fika renderer-policy] pane=1 mode=Details items=48 visual_layer=48 image_layer=0 retained_interaction=48 gpui_drag_shell=48 rename_overlay=0
+[fika renderer-policy] pane=1 mode=Compact items=48 visual_layer=48 image_layer=8 gpui_image_element=0 retained_interaction=48 gpui_drag_shell=48 rename_overlay=0
+[fika renderer-policy] pane=1 mode=Icons items=48 visual_layer=48 image_layer=8 gpui_image_element=0 retained_interaction=48 gpui_drag_shell=48 rename_overlay=0
+[fika renderer-policy] pane=1 mode=Details items=48 visual_layer=48 image_layer=0 gpui_image_element=0 retained_interaction=48 gpui_drag_shell=48 rename_overlay=0
 EOF
 
 "$analyzer" \
@@ -112,8 +112,8 @@ cat > "$tmpdir/missing-renderer-policy-mode.log" <<'EOF'
 [fika item-view] pane=1 mode=Compact phase=steady items=48 visible=32 raw=50us icon_sync=2us queue=1us convert=40us total=120us
 [fika item-view] pane=1 mode=Icons phase=steady items=48 visible=40 raw=45us icon_sync=3us queue=1us convert=35us total=110us
 [fika item-view] pane=1 mode=Details phase=steady items=48 visible=30 raw=42us icon_sync=1us queue=1us convert=32us total=105us
-[fika renderer-policy] pane=1 mode=Compact items=48 visual_layer=48 image_layer=8 retained_interaction=48 gpui_drag_shell=48 rename_overlay=0
-[fika renderer-policy] pane=1 mode=Icons items=48 visual_layer=48 image_layer=8 retained_interaction=48 gpui_drag_shell=48 rename_overlay=0
+[fika renderer-policy] pane=1 mode=Compact items=48 visual_layer=48 image_layer=8 gpui_image_element=0 retained_interaction=48 gpui_drag_shell=48 rename_overlay=0
+[fika renderer-policy] pane=1 mode=Icons items=48 visual_layer=48 image_layer=8 gpui_image_element=0 retained_interaction=48 gpui_drag_shell=48 rename_overlay=0
 EOF
 
 if "$analyzer" --require-renderer-policy-modes Compact,Icons,Details "$tmpdir/missing-renderer-policy-mode.log" >/dev/null 2>&1; then
@@ -123,7 +123,7 @@ fi
 
 cat > "$tmpdir/invalid-renderer-policy-count.log" <<'EOF'
 [fika item-view] pane=1 mode=Compact phase=steady items=2 visible=2 raw=50us icon_sync=2us queue=1us convert=40us total=120us
-[fika renderer-policy] pane=1 mode=Compact items=2 visual_layer=3 image_layer=0 retained_interaction=2 gpui_drag_shell=2 rename_overlay=0
+[fika renderer-policy] pane=1 mode=Compact items=2 visual_layer=3 image_layer=0 gpui_image_element=0 retained_interaction=2 gpui_drag_shell=2 rename_overlay=0
 EOF
 
 if "$analyzer" "$tmpdir/invalid-renderer-policy-count.log" >/dev/null 2>&1; then

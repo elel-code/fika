@@ -437,6 +437,7 @@ BEGIN {
     items = field("items") + 0
     visual_layer = field("visual_layer") + 0
     image_layer = field("image_layer") + 0
+    gpui_image_element = field("gpui_image_element") + 0
     retained_interaction = field("retained_interaction") + 0
     gpui_drag_shell = field("gpui_drag_shell") + 0
     rename_overlay = field("rename_overlay") + 0
@@ -449,12 +450,14 @@ BEGIN {
     }
     check_renderer_policy_count("visual_layer", items, visual_layer, mode)
     check_renderer_policy_count("image_layer", items, image_layer, mode)
+    check_renderer_policy_count("gpui_image_element", items, gpui_image_element, mode)
     check_renderer_policy_count("retained_interaction", items, retained_interaction, mode)
     check_renderer_policy_count("gpui_drag_shell", items, gpui_drag_shell, mode)
     check_renderer_policy_count("rename_overlay", items, rename_overlay, mode)
     max_assign(single_max, "renderer_policy_items", items)
     max_assign(single_max, "renderer_policy_visual_layer", visual_layer)
     max_assign(single_max, "renderer_policy_image_layer", image_layer)
+    max_assign(single_max, "renderer_policy_gpui_image_element", gpui_image_element)
     max_assign(single_max, "renderer_policy_retained_interaction", retained_interaction)
     max_assign(single_max, "renderer_policy_gpui_drag_shell", gpui_drag_shell)
     max_assign(single_max, "renderer_policy_rename_overlay", rename_overlay)
@@ -511,6 +514,7 @@ END {
         " max_items=" (("renderer_policy_items" in single_max) ? single_max["renderer_policy_items"] : 0) \
         " max_visual_layer=" (("renderer_policy_visual_layer" in single_max) ? single_max["renderer_policy_visual_layer"] : 0) \
         " max_image_layer=" (("renderer_policy_image_layer" in single_max) ? single_max["renderer_policy_image_layer"] : 0) \
+        " max_gpui_image_element=" (("renderer_policy_gpui_image_element" in single_max) ? single_max["renderer_policy_gpui_image_element"] : 0) \
         " max_retained_interaction=" (("renderer_policy_retained_interaction" in single_max) ? single_max["renderer_policy_retained_interaction"] : 0) \
         " max_gpui_drag_shell=" (("renderer_policy_gpui_drag_shell" in single_max) ? single_max["renderer_policy_gpui_drag_shell"] : 0) \
         " max_rename_overlay=" (("renderer_policy_rename_overlay" in single_max) ? single_max["renderer_policy_rename_overlay"] : 0)

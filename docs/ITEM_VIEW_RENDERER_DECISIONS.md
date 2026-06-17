@@ -59,6 +59,11 @@ change:
 - Current Fika custom image layer: `[fika item-image]` reports
   `theme_loaded`, `theme_decoded`, `theme_retained`, and
   `theme_placeholder`.
+- Current-code GPUI image A/B path: run with `FIKA_GPUI_ITEM_IMAGES=1` to keep
+  the retained item model/controller path but render Compact/Icons
+  thumbnail/theme-icon images as GPUI `img()` children. Renderer-policy logs
+  should then show `gpui_image_element>0` and lower `image_layer` counts for
+  image-backed Compact/Icons items.
 
 Decision rule: if the custom image layer keeps showing visible first-load
 placeholders or zoom-time decode/size churn while the GPUI `img()` baseline is

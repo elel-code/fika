@@ -1,4 +1,9 @@
+use std::env;
+use std::sync::OnceLock;
+
 use super::{DetailsPaintSnapshot, ItemPaintContent, ItemPaintSnapshot};
+
+const GPUI_ITEM_IMAGES_ENV: &str = "FIKA_GPUI_ITEM_IMAGES";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct ItemRendererPolicy {
@@ -18,6 +23,7 @@ pub(super) enum ItemBaseVisualRenderer {
 pub(super) enum ItemImageRenderer {
     None,
     ContentLayer,
+    GpuiElement,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -64,6 +70,7 @@ pub(super) struct RendererPolicyStats {
     pub(super) items: usize,
     pub(super) visual_layer: usize,
     pub(super) image_layer: usize,
+    pub(super) gpui_image_element: usize,
     pub(super) retained_interaction: usize,
     pub(super) gpui_drag_shell: usize,
     pub(super) rename_overlay: usize,
@@ -72,15 +79,18 @@ pub(super) struct RendererPolicyStats {
 pub(super) fn item_renderer_policy(content: &ItemPaintContent) -> ItemRendererPolicy {
     let has_image = content.thumbnail_path.is_some() || content.icon.path.is_some();
     let renaming = content.draft_name.is_some();
+    let image = if !has_image {
+        ItemImageRenderer::None
+    } else if gpui_item_images_enabled() {
+        ItemImageRenderer::GpuiElement
+    } else {
+        ItemImageRenderer::ContentLayer
+    };
     ItemRendererPolicy {
         // Compact/Icons base visuals live in content-level layers. Rename keeps
         // only a local editor overlay and temporary drag shell.
         base_visual: ItemBaseVisualRenderer::ContentLayer,
-        image: if has_image {
-            ItemImageRenderer::ContentLayer
-        } else {
-            ItemImageRenderer::None
-        },
+        image,
         interaction: if renaming {
             ItemInteractionRenderer::RenameShell
         } else {
@@ -117,6 +127,9 @@ pub(super) fn item_renderer_policy_stats(items: &[ItemPaintSnapshot]) -> Rendere
         }
         if matches!(policy.image, ItemImageRenderer::ContentLayer) {
             stats.image_layer += 1;
+        }
+        if matches!(policy.image, ItemImageRenderer::GpuiElement) {
+            stats.gpui_image_element += 1;
         }
         if matches!(policy.interaction, ItemInteractionRenderer::RetainedLayer) {
             stats.retained_interaction += 1;
@@ -175,6 +188,25 @@ pub(super) fn item_uses_image_layer(content: &ItemPaintContent) -> bool {
     )
 }
 
+pub(super) fn item_uses_gpui_image_element(content: &ItemPaintContent) -> bool {
+    matches!(
+        item_renderer_policy(content).image,
+        ItemImageRenderer::GpuiElement
+    )
+}
+
 pub(super) fn item_paints_fallback_icon(content: &ItemPaintContent) -> bool {
-    !item_uses_image_layer(content)
+    matches!(item_renderer_policy(content).image, ItemImageRenderer::None)
+}
+
+fn gpui_item_images_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        env::var(GPUI_ITEM_IMAGES_ENV).is_ok_and(|value| env_flag_is_truthy(&value))
+    })
+}
+
+fn env_flag_is_truthy(value: &str) -> bool {
+    let normalized = value.trim().to_ascii_lowercase();
+    !normalized.is_empty() && normalized != "0" && normalized != "false" && normalized != "no"
 }

@@ -484,7 +484,10 @@ by risk and evidence, not by how custom-painted a surface looks.
   to model/projection, retained slot state, custom element paint, or the
   custom image layer. Compare these with Dolphin
   `KStandardItemListWidget::updatePixmapCache()` / `pixmapForIcon()` before
-  changing the current image renderer.
+  changing the current image renderer. Current-code A/B support is available
+  through `FIKA_GPUI_ITEM_IMAGES=1`, which keeps retained item state but renders
+  Compact/Icons item images through GPUI `img()` children for desktop-session
+  comparison.
 - [ ] P16k: Decide the Compact/Icons theme-icon renderer from evidence:
   keep/fix the custom image layer only if `[fika item-image]` shows low
   `theme_placeholder`, low zoom-time `theme_decoded`, and stable
