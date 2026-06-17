@@ -51,7 +51,7 @@ impl RawFileGridSnapshot {
                     .visible_layout_range_and_count()
                     .map(|(range, _)| range);
 
-                visit_visible_icon_items(items, |item| {
+                visit_visible_icon_items_files_first(items, |item| {
                     queued |= queue(file_icon_request_for_item(item, icon_role_size));
                     true
                 });
@@ -102,7 +102,7 @@ impl RawFileGridSnapshot {
     {
         match self {
             Self::Compact { items, .. } | Self::Icons { items, .. } => {
-                visit_visible_icon_items(items, |item| {
+                visit_visible_icon_items_by_index(items, |item| {
                     visit(file_icon_request_for_item(item, icon_role_size))
                 });
             }
@@ -134,7 +134,18 @@ impl RawFileGridSnapshot {
     }
 }
 
-fn visit_visible_icon_items<F>(items: &[RawVisibleItemSnapshot], mut visit: F)
+fn visit_visible_icon_items_by_index<F>(items: &[RawVisibleItemSnapshot], mut visit: F)
+where
+    F: FnMut(&RawVisibleItemSnapshot) -> bool,
+{
+    for item in items.iter().filter(|item| item.visible) {
+        if !visit(item) {
+            return;
+        }
+    }
+}
+
+fn visit_visible_icon_items_files_first<F>(items: &[RawVisibleItemSnapshot], mut visit: F)
 where
     F: FnMut(&RawVisibleItemSnapshot) -> bool,
 {
@@ -386,7 +397,7 @@ mod tests {
 
         assert_eq!(
             paths,
-            vec!["visible-file.txt", "visible-second-file.txt", "visible-dir"]
+            vec!["visible-file.txt", "visible-dir", "visible-second-file.txt"]
         );
     }
 

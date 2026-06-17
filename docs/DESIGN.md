@@ -333,8 +333,9 @@ named icon, and resolves theme paths from the item's MIME type, extension, and
 file kind. Icons are NOT written back into the model as a persistent role; the
 model role writeback path (`ModelEntry.icon_name` and
 `src/ui/icons/roles.rs`) has been removed. Visible snapshot construction warms
-the icon cache for the current visible range, and read-ahead candidates follow
-Dolphin `KFileItemModelRolesUpdater::updateVisibleIcons()` order. File-grid
+the icon cache for the current visible range in Dolphin `updateVisibleIcons()`
+index order; background/read-ahead candidates follow Dolphin
+`KFileItemModelRolesUpdater::indexesToResolve()` order. File-grid
 rendering uses a custom image paint layer backed by GPUI `RetainAllImageCache`
 and `Window::paint_image`, so the file-grid root no longer owns GPUI `img()`
 children or a root `retain_all` image-cache provider.

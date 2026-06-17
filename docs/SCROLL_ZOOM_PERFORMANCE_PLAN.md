@@ -31,8 +31,9 @@ the render frame.
 
 - File icon theme path resolution is no longer done synchronously during
   raw-to-render snapshot conversion. The frame path calls
-  `FileIconCache::cached_or_preliminary_icon_for()`, and background batches
-  resolve theme icon paths in Dolphin-style visible/read-ahead order.
+  `FileIconCache::cached_or_preliminary_icon_for()`. Visible icon warming uses
+  Dolphin `updateVisibleIcons()` index order, and background batches resolve
+  theme icon paths in Dolphin `indexesToResolve()` visible/read-ahead order.
 - When background icon resolve completes, visible item snapshot caches are
   invalidated so preliminary fallback icons are replaced on the next frame.
 - Thumbnail and theme-icon image pending/failure states no longer have to drop

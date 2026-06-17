@@ -362,8 +362,9 @@ This is the active task board for the GPUI item view custom-paint migration.
   icon/text content resolution during the current render conversion.
 - [x] Move file-icon theme path resolution out of render conversion: visible
   Compact/Icons/Details items now use cached/preliminary icon snapshots in the
-  frame, while a background resolve queue fills theme icon paths in
-  Dolphin-style visible/read-ahead order.
+  frame. Visible synchronous icon warming follows Dolphin `updateVisibleIcons()`
+  index order, while the background resolve queue follows Dolphin
+  `indexesToResolve()` visible/read-ahead order.
 - [x] Invalidate visible item snapshot caches when background icon resolve
   results arrive so preliminary icons are replaced without synchronous theme
   lookup in scroll or zoom frames.
