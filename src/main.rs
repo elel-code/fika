@@ -8570,6 +8570,42 @@ mod tests {
         app.drop_targets.set_item(ItemDropTarget::Pane { pane_id })
     }
 
+    fn assert_raw_grid_marks_directory_drop_target(
+        app: &mut FikaApp,
+        pane_id: PaneId,
+        target_dir: &Path,
+    ) {
+        let view = app.panes.pane(pane_id).unwrap().view.clone();
+        let item_drop_target = app.drop_targets.item().cloned();
+        let snapshot = app
+            .raw_file_grid_snapshot_for_pane(
+                pane_id,
+                &view,
+                None,
+                0,
+                None,
+                item_drop_target.as_ref(),
+            )
+            .unwrap();
+        match snapshot {
+            RawFileGridSnapshot::Compact { items, .. }
+            | RawFileGridSnapshot::Icons { items, .. } => {
+                let target = items
+                    .iter()
+                    .find(|item| item.path == target_dir)
+                    .expect("target directory snapshot");
+                assert!(target.drop_target);
+            }
+            RawFileGridSnapshot::Details { items, .. } => {
+                let target = items
+                    .iter()
+                    .find(|item| item.path == target_dir)
+                    .expect("target directory row snapshot");
+                assert!(target.drop_target);
+            }
+        }
+    }
+
     #[test]
     fn app_env_flag_truthy_values_are_explicit() {
         assert!(env_flag_is_truthy("1"));
@@ -14924,6 +14960,7 @@ text/plain=viewer.desktop;\n",
             pane_id,
             &target_dir
         ));
+        assert_raw_grid_marks_directory_drop_target(&mut app, pane_id, &target_dir);
 
         assert!(app.clear_drag_drop_targets());
         let update = app.update_dragged_paths_drop_target_from_window_position(
@@ -14937,6 +14974,7 @@ text/plain=viewer.desktop;\n",
             pane_id,
             &target_dir
         ));
+        assert_raw_grid_marks_directory_drop_target(&mut app, pane_id, &target_dir);
 
         let _ = std::fs::remove_dir_all(temp);
     }
