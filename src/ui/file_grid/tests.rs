@@ -6,9 +6,9 @@ use super::details_visual::{
 };
 use super::dnd::{drag_preview_label, item_drag_from_details_snapshot};
 use super::image_layer::{
-    item_image_layer_item_source_path, item_image_layer_items,
+    ItemImageRetainedSource, item_image_layer_item_source_path, item_image_layer_items,
     item_image_load_failure_paints_fallback, item_image_paint_layer_element_id,
-    item_image_pending_load_paints_fallback,
+    item_image_pending_load_paints_fallback, item_image_retained_source_for,
 };
 use super::interaction::{
     details_interaction_layer_items, item_interaction_hitbox_bounds,
@@ -258,6 +258,50 @@ fn content_layers_split_base_visuals_from_image_visuals() {
             .map(|item| item.item_id)
             .collect::<Vec<_>>(),
         vec![ItemId(7), ItemId(8), ItemId(9)]
+    );
+}
+
+#[test]
+fn retained_image_source_uses_icon_name_across_theme_icon_paths() {
+    let mut icon = FileIconSnapshot {
+        icon_name: Arc::from("text-x-generic"),
+        path: Some(Arc::from(Path::new(
+            "/theme/48/mimetypes/text-x-generic.svg",
+        ))),
+        fallback_marker: Arc::from("TXT"),
+        fallback_fg: 0xffffff,
+        fallback_bg: 0x2563eb,
+    };
+    let first = item_image_retained_source_for(None, &icon);
+
+    icon.path = Some(Arc::from(Path::new(
+        "/theme/64/mimetypes/text-x-generic.svg",
+    )));
+    let zoomed = item_image_retained_source_for(None, &icon);
+
+    assert_eq!(
+        first,
+        Some(ItemImageRetainedSource::ThemeIcon(Arc::from(
+            "text-x-generic"
+        )))
+    );
+    assert_eq!(first, zoomed);
+}
+
+#[test]
+fn retained_image_source_uses_thumbnail_path_before_icon_name() {
+    let thumbnail = Arc::from(Path::new("/tmp/thumbs/photo.png"));
+    let icon = FileIconSnapshot {
+        icon_name: Arc::from("image-png"),
+        path: Some(Arc::from(Path::new("/theme/48/mimetypes/image-png.svg"))),
+        fallback_marker: Arc::from("IMG"),
+        fallback_fg: 0xffffff,
+        fallback_bg: 0x2563eb,
+    };
+
+    assert_eq!(
+        item_image_retained_source_for(Some(&thumbnail), &icon),
+        Some(ItemImageRetainedSource::Thumbnail(thumbnail))
     );
 }
 

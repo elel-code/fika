@@ -97,9 +97,11 @@ This is the active task board for the GPUI item view custom-paint migration.
 - [x] Use pane-local `RetainAllImageCache` plus GPUI `ImageAssetLoader` for
   async path/SVG/image decode.
 - [x] Paint loaded images with `Window::paint_image`.
-- [x] Preserve theme-icon fallback marker rendering on image load failure.
+- [x] Preserve theme-icon fallback marker rendering when no retained real image
+  is available for an image load failure.
 - [x] Keep thumbnail role success/failure model-driven while painting item
-  fallback visuals during pending image loads or resource load failures.
+  fallback visuals during pending image loads or resource load failures only
+  after same-source retained images have been tried.
 - [x] Match `ObjectFit::Contain` image bounds.
 - [x] Add tests for image-paint membership and fallback policy.
 
@@ -365,9 +367,9 @@ This is the active task board for the GPUI item view custom-paint migration.
 - [x] Invalidate visible item snapshot caches when background icon resolve
   results arrive so preliminary icons are replaced without synchronous theme
   lookup in scroll or zoom frames.
-- [x] Paint fallback visuals for thumbnail/theme-icon image pending or load
-  failure states so zoom does not produce blank icon frames while GPUI image
-  cache work is in flight.
+- [x] Keep thumbnail/theme-icon pending or load-failure frames visually stable:
+  reuse retained same-source real images first, then paint fallback visuals when
+  no retained image exists.
 - [x] Extract retained item/details paint slot state into
   `src/ui/file_grid/paint_slots.rs` so model-to-painter snapshot reuse is
   separate from the renderer construction code.

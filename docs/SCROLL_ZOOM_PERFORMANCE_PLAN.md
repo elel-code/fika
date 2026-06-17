@@ -35,9 +35,14 @@ the render frame.
   resolve theme icon paths in Dolphin-style visible/read-ahead order.
 - When background icon resolve completes, visible item snapshot caches are
   invalidated so preliminary fallback icons are replaced on the next frame.
-- Thumbnail and theme-icon image pending/failure states paint the item fallback
-  visual instead of leaving the icon rect blank, reducing zoom flicker while
-  GPUI image cache loading is in flight.
+- Thumbnail and theme-icon image pending/failure states no longer have to drop
+  directly to fallback. Compact/Icons and Details keep a pane-local retained
+  image map: MIME/theme icons are retained by `iconName`, while thumbnails are
+  retained by exact thumbnail path. A zoom-level path change can therefore keep
+  painting the previous real MIME icon until GPUI finishes decoding the new
+  resource, matching Dolphin's `KStandardItemListWidget::m_pixmap` behavior.
+  Fallback is still used when no real image has ever been decoded for that
+  semantic source.
 - Read-ahead items stay in raw/render snapshots for scheduler projection and
   cache retention, but they no longer enter static visual or image prepaint.
   This matches Dolphin's split where `KItemListView` paints visible widgets and
@@ -48,6 +53,11 @@ the render frame.
   queued. This mirrors Dolphin's visual-stability behavior: do not replace a
   real visible icon with a fallback marker just because the new zoom level's
   icon path has not resolved yet.
+- The image paint layer now applies the same rule after path resolution too:
+  if GPUI `RetainAllImageCache::load()` returns pending/error for a new icon
+  path, the painter first tries a retained image for the same MIME icon name.
+  This avoids the probabilistic fallback flash seen while scrolling or zooming
+  image-backed MIME icons.
 
 ### Open Verification Work
 

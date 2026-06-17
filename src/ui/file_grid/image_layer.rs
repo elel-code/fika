@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -75,12 +76,73 @@ pub(super) fn item_image_layer_item_source_path(item: &ItemImageLayerItem) -> Op
         .or_else(|| item.icon.path.clone())
 }
 
+#[cfg(test)]
 pub(super) fn item_image_load_failure_paints_fallback(_item: &ItemImageLayerItem) -> bool {
     true
 }
 
+#[cfg(test)]
 pub(super) fn item_image_pending_load_paints_fallback(_item: &ItemImageLayerItem) -> bool {
     true
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub(super) enum ItemImageRetainedSource {
+    Thumbnail(Arc<Path>),
+    ThemeIcon(Arc<str>),
+}
+
+pub(super) fn item_image_retained_source_for(
+    thumbnail_path: Option<&Arc<Path>>,
+    icon: &FileIconSnapshot,
+) -> Option<ItemImageRetainedSource> {
+    if let Some(thumbnail_path) = thumbnail_path {
+        return Some(ItemImageRetainedSource::Thumbnail(thumbnail_path.clone()));
+    }
+
+    icon.path
+        .as_ref()
+        .map(|_| ItemImageRetainedSource::ThemeIcon(icon.icon_name.clone()))
+}
+
+pub(super) fn item_image_layer_retained_source(
+    item: &ItemImageLayerItem,
+) -> Option<ItemImageRetainedSource> {
+    item_image_retained_source_for(item.thumbnail_path.as_ref(), &item.icon)
+}
+
+pub(super) struct RetainedImageLayerState {
+    image_cache: Entity<RetainAllImageCache>,
+    retained_images: HashMap<ItemImageRetainedSource, Arc<RenderImage>>,
+}
+
+impl RetainedImageLayerState {
+    pub(super) fn new(cx: &mut App) -> Self {
+        Self {
+            image_cache: RetainAllImageCache::new(cx),
+            retained_images: HashMap::new(),
+        }
+    }
+
+    pub(super) fn load_or_retained(
+        &mut self,
+        source_path: Arc<Path>,
+        retained_source: ItemImageRetainedSource,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Option<Arc<RenderImage>> {
+        let resource = Resource::Path(source_path);
+        let load_result = self
+            .image_cache
+            .update(cx, |cache, cx| cache.load(&resource, window, cx));
+        match load_result {
+            Some(Ok(image)) => {
+                self.retained_images.insert(retained_source, image.clone());
+                Some(image)
+            }
+            _ => self.retained_images.get(&retained_source).cloned(),
+        }
+    }
 }
 
 pub(super) struct ItemImageLayerElement {
@@ -151,12 +213,12 @@ impl Element for ItemImageLayerElement {
             return Vec::new();
         };
         let perf_started = crate::item_view_perf_enabled().then(std::time::Instant::now);
-        window.with_element_state::<Entity<RetainAllImageCache>, _>(id, |cache, window| {
-            let cache = cache.unwrap_or_else(|| RetainAllImageCache::new(cx));
+        window.with_element_state::<RetainedImageLayerState, _>(id, |state, window| {
+            let mut state = state.unwrap_or_else(|| RetainedImageLayerState::new(cx));
             let states = self
                 .items
                 .iter()
-                .filter_map(|item| item_image_layer_prepaint_item(item, &cache, window, cx))
+                .filter_map(|item| item_image_layer_prepaint_item(item, &mut state, window, cx))
                 .collect::<Vec<_>>();
             if let Some(started) = perf_started {
                 let elapsed = started.elapsed();
@@ -165,7 +227,7 @@ impl Element for ItemImageLayerElement {
                     this.record_item_image_prepaint(self.pane_id, elapsed, count);
                 });
             }
-            (states, cache)
+            (states, state)
         })
     }
 
@@ -210,7 +272,7 @@ pub(super) fn item_image_paint_layer_element_id(pane_id: PaneId) -> (&'static st
 
 fn item_image_layer_prepaint_item(
     item: &ItemImageLayerItem,
-    cache: &Entity<RetainAllImageCache>,
+    state: &mut RetainedImageLayerState,
     window: &mut Window,
     cx: &mut App,
 ) -> Option<ItemImagePaintState> {
@@ -218,18 +280,11 @@ fn item_image_layer_prepaint_item(
         return None;
     }
     let source_path = item_image_layer_item_source_path(item)?;
-    let resource = Resource::Path(source_path);
-    let load_result = cache.update(cx, |cache, cx| cache.load(&resource, window, cx));
-    let (image, fallback) = match load_result {
-        Some(Ok(image)) => (Some(image), None),
-        None if item_image_pending_load_paints_fallback(item) => {
-            (None, Some(item_image_fallback_prepaint(item, window)))
-        }
-        Some(Err(_)) if item_image_load_failure_paints_fallback(item) => {
-            (None, Some(item_image_fallback_prepaint(item, window)))
-        }
-        _ => (None, None),
-    };
+    let retained_source = item_image_layer_retained_source(item)?;
+    let image = state.load_or_retained(source_path, retained_source, window, cx);
+    let fallback = image
+        .is_none()
+        .then(|| item_image_fallback_prepaint(item, window));
     Some(ItemImagePaintState {
         visible: item.visible,
         icon_rect: item.layout.icon_rect,

@@ -4,17 +4,18 @@ use std::sync::Arc;
 use fika_core::{PaneId, ViewRect};
 use gpui::prelude::*;
 use gpui::{
-    App, Bounds, Corners, Element, ElementId, Entity, Font, FontWeight, GlobalElementId,
-    InspectorElementId, IntoElement, LayoutId, ObjectFit, Pixels, RenderImage, Resource,
-    RetainAllImageCache, SharedString, Style, StyleRefinement, Styled, TextAlign, TextRun,
-    WeakEntity, Window, fill, point, px, rgb, size,
+    App, Bounds, Corners, Element, ElementId, Font, FontWeight, GlobalElementId,
+    InspectorElementId, IntoElement, LayoutId, ObjectFit, Pixels, RenderImage, SharedString, Style,
+    StyleRefinement, Styled, TextAlign, TextRun, WeakEntity, Window, fill, point, px, rgb, size,
 };
 
 use crate::FikaApp;
 use crate::ui::icons::FileIconSnapshot;
 
 use super::details::{DetailsColumn, DetailsColumnKind};
-use super::image_layer::ItemImageFallbackPaintState;
+use super::image_layer::{
+    ItemImageFallbackPaintState, RetainedImageLayerState, item_image_retained_source_for,
+};
 use super::paint_slots::DetailsPaintSnapshot;
 use super::renderer_policy::{DetailsRowVisualRenderer, details_row_renderer_policy};
 use super::text::static_paint_single_line_text;
@@ -259,23 +260,20 @@ impl Element for DetailsVisualLayerElement {
     ) -> Self::PrepaintState {
         let perf_started = crate::item_view_perf_enabled().then(std::time::Instant::now);
         let states = if let Some(id) = id {
-            window.with_element_state::<Entity<RetainAllImageCache>, _>(id, |cache, window| {
-                let cache = cache.unwrap_or_else(|| RetainAllImageCache::new(cx));
-                let states = self
-                    .items
-                    .iter()
-                    .map(|item| {
-                        details_visual_prepaint_item(
-                            self.pane_id,
-                            item,
-                            Some(&cache),
-                            &self.app,
-                            window,
-                            cx,
-                        )
-                    })
-                    .collect::<Vec<_>>();
-                (states, cache)
+            window.with_element_state::<RetainedImageLayerState, _>(id, |state, window| {
+                let mut state = state.unwrap_or_else(|| RetainedImageLayerState::new(cx));
+                let mut states = Vec::with_capacity(self.items.len());
+                for item in &self.items {
+                    states.push(details_visual_prepaint_item(
+                        self.pane_id,
+                        item,
+                        Some(&mut state),
+                        &self.app,
+                        window,
+                        cx,
+                    ));
+                }
+                (states, state)
             })
         } else {
             self.items
@@ -337,7 +335,7 @@ const DETAILS_NAME_ICON_GAP: f32 = 8.0;
 fn details_visual_prepaint_item(
     pane_id: PaneId,
     item: &DetailsVisualLayerItem,
-    cache: Option<&Entity<RetainAllImageCache>>,
+    mut image_state: Option<&mut RetainedImageLayerState>,
     app: &WeakEntity<FikaApp>,
     window: &mut Window,
     cx: &mut App,
@@ -345,15 +343,20 @@ fn details_visual_prepaint_item(
     let font = window.text_style().font();
     let font_size = px(window.rem_size().as_f32() * 0.875);
     let line_height = px(ITEM_NAME_LINE_HEIGHT);
-    let cells = item
-        .cells
-        .iter()
-        .map(|cell| match &cell.content {
+    let mut cells = Vec::with_capacity(item.cells.len());
+    for cell in &item.cells {
+        let paint_state = match &cell.content {
             DetailsVisualCellContent::Name { name, icon } => {
                 let icon_rect = details_visual_name_icon_rect(item, cell);
                 let text_rect = details_visual_name_text_rect(item, cell);
                 DetailsVisualCellPaintState::Name {
-                    icon: details_visual_icon_prepaint(icon_rect, icon, cache, window, cx),
+                    icon: details_visual_icon_prepaint(
+                        icon_rect,
+                        icon,
+                        image_state.as_mut().map(|state| &mut **state),
+                        window,
+                        cx,
+                    ),
                     text: details_visual_text_prepaint(
                         text_rect,
                         name.clone(),
@@ -382,8 +385,9 @@ fn details_visual_prepaint_item(
                     cx,
                 ))
             }
-        })
-        .collect();
+        };
+        cells.push(paint_state);
+    }
     DetailsVisualPaintState {
         row_index: item.row_index,
         row_top: item.row_top,
@@ -432,16 +436,14 @@ fn details_visual_text_rect(item: &DetailsVisualLayerItem, cell: &DetailsVisualC
 fn details_visual_icon_prepaint(
     rect: ViewRect,
     icon: &FileIconSnapshot,
-    cache: Option<&Entity<RetainAllImageCache>>,
+    image_state: Option<&mut RetainedImageLayerState>,
     window: &mut Window,
     cx: &mut App,
 ) -> DetailsVisualIconPaintState {
     let image = icon.path.as_ref().and_then(|path| {
-        let cache = cache?;
-        let resource = Resource::Path(path.clone());
-        cache
-            .update(cx, |cache, cx| cache.load(&resource, window, cx))
-            .and_then(Result::ok)
+        let state = image_state?;
+        let retained_source = item_image_retained_source_for(None, icon)?;
+        state.load_or_retained(path.clone(), retained_source, window, cx)
     });
     let fallback = image
         .is_none()
