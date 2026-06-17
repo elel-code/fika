@@ -464,9 +464,14 @@ by risk and evidence, not by how custom-painted a surface looks.
   summarizes them as `image_sources`. `FIKA_AUTOSMOKE_ITEM_VIEW` now exercises
   zoom/scroll without manual input and adds `[fika autosmoke]` markers to the
   same perf log.
-- [ ] P16e: Audit local GPUI source for a retained/custom-element drag-start
+- [x] P16e: Audit local GPUI source for a retained/custom-element drag-start
   path. If no public API exists, document the exact blocker and keep item and
-  Details drag-start shells.
+  Details drag-start shells. Result: GPUI `0.2.2` at Zed commit `f16a469`
+  exposes typed drag initiation through `Interactivity::on_drag` /
+  `InteractiveElement::on_drag` in `crates/gpui/src/elements/div.rs`.
+  Custom elements can insert hitboxes with `Window::insert_hitbox()` but do not
+  have a public API to start a typed drag from those retained hitboxes, so the
+  item and Details drag-start shells remain explicit platform boundaries.
 - [ ] P16f: If an audited GPUI patch is chosen, design the smallest API that
   starts drags from retained hitboxes while preserving payload, preview,
   cursor offset, accepted transfer modes, and external drop behavior.

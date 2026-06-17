@@ -242,6 +242,13 @@ Do not remove the remaining drag-start shells unless one of these is true:
 - Fika carries a small audited GPUI patch that exposes drag-start for retained
   hitboxes.
 
+Current GPUI audit source: Fika uses GPUI `0.2.2` at Zed commit `f16a469`.
+`crates/gpui/src/elements/div.rs` exposes drag start through
+`Interactivity::on_drag` and `InteractiveElement::on_drag`; custom elements can
+insert hitboxes with `Window::insert_hitbox()` but cannot publicly initiate a
+typed drag from those hitboxes. Keep item and Details drag-start shells until
+that API boundary changes or a patch is explicitly chosen.
+
 If a custom-painted surface loses to GPUI built-ins in steady perf or behavior
 completeness, keep the Dolphin-aligned retained model and leave that surface on
 the GPUI renderer until a narrower migration is justified.
