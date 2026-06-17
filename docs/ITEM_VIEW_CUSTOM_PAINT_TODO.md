@@ -493,9 +493,15 @@ by risk and evidence, not by how custom-painted a surface looks.
   `places/model`, `projection`, `sidebar/row`, `drag`, and custom scrollbar
   modules, then gates any retained row painter behind Places-specific perf logs,
   runtime smoke, and renderer-policy evidence.
-- [ ] P16i: Draft a rename custom-editor behavior matrix before changing the
+- [x] P16i: Draft a rename custom-editor behavior matrix before changing the
   GPUI rename overlay. It must cover focus, caret hit testing, UTF-8 selection,
-  validation helper text, commit/cancel, Tab rename-next, and IME.
+  validation helper text, commit/cancel, Tab rename-next, and IME. Result:
+  `docs/RENAME_EDITOR_PLAN.md` compares Dolphin's
+  `DolphinView::renameSelectedItems()`, `KItemListView::editRole()`, and
+  `KItemListRoleEditor` path with Fika's `RenameDraft`, shortcut routing, and
+  GPUI overlay. The matrix keeps the overlay as default until IME,
+  focus/focus-out, mouse selection, accessibility, and runtime smoke are
+  covered.
 - [x] P16j: Establish the historical image-renderer baseline before the next
   MIME/theme-icon flicker fix. Use `a3f5b0f` as the pre-retained/custom-paint
   GPUI `img()` baseline, and use `d497593`, `8d1198f`, `36da130`, and

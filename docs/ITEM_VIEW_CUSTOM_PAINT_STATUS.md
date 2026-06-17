@@ -207,6 +207,9 @@ contract. A custom rename renderer needs behavior coverage for focus, caret
 movement, selection, validation state, commit/cancel, and IME before it can be
 accepted.
 
+The concrete behavior matrix and Dolphin source comparison live in
+`docs/RENAME_EDITOR_PLAN.md`.
+
 ### R5: Evaluate Places Renderer Separately
 
 Places is not part of the current item-view custom-paint win. Before replacing
