@@ -172,7 +172,11 @@ element drag-move callbacks are not delivered. The retained interaction layer
 therefore installs a window mouse tracker while an `ActiveItemDrag` exists. That
 tracker routes the current window position through the retained pane hit-test
 and updates the same `ItemDropTarget` state used by Places-to-pane and external
-path drops. GPUI item shells remain responsible for drag initiation only.
+path drops. When the platform/backend does not deliver the underlying move
+callback during a same-window active item drag, the GPUI drag preview repaint
+uses the current window mouse position to run the same retained hit-test update.
+GPUI item shells remain responsible for drag initiation and preview ownership
+only.
 
 Rename items keep the existing editor subtree. Before Phase 8, thumbnail and
 theme-icon items used slot-stable retained `img()` elements under a pane-local

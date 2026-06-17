@@ -67,6 +67,8 @@ pub(super) fn item_drag_from_details_snapshot(
 }
 
 pub(super) struct DragPreview {
+    source_pane: PaneId,
+    app: WeakEntity<FikaApp>,
     icon: FileIconSnapshot,
     label: String,
     count: usize,
@@ -79,8 +81,11 @@ const DRAG_PREVIEW_MIN_HEIGHT: f32 = 36.0;
 pub(super) fn item_drag_preview(
     drag: &ItemDrag,
     cursor_offset: gpui::Point<gpui::Pixels>,
+    app: WeakEntity<FikaApp>,
 ) -> DragPreview {
     DragPreview {
+        source_pane: drag.pane_id,
+        app,
         icon: drag.icon.clone(),
         label: drag_preview_label(drag.name.as_ref(), drag.selected, drag.selection_count),
         count: drag.selection_count,
@@ -120,7 +125,7 @@ pub(super) fn install_item_drag_start_shell(
                 )
             });
         });
-        cx.new(|_| item_drag_preview(drag, cursor_offset))
+        cx.new(|_| item_drag_preview(drag, cursor_offset, app.clone()))
     })
 }
 
@@ -134,56 +139,14 @@ pub(super) fn install_active_item_drag_mouse_tracker(
         if !phase.capture() {
             return;
         }
-        let position = event.position;
-        let Some((target_pane, update, source_paths)) = move_app
-            .update(cx, |this, cx| {
-                let Some((target_pane, update, source_paths)) = this
-                    .update_active_item_drag_drop_target_from_window_position(pane_id, position)
-                else {
-                    return None;
-                };
-                if update.accepted() {
-                    this.refresh_drop_target_lease(cx);
-                }
-                if update.changed {
-                    cx.notify();
-                }
-                Some((target_pane, update, source_paths))
-            })
-            .unwrap_or(None)
-        else {
-            return;
-        };
-        debug_dnd_log(|| {
-            format!(
-                "active-item-move source_pane={} target_pane={} pos=({:.1},{:.1}) kind={:?} changed={} sources={}",
-                pane_id.0,
-                target_pane
-                    .map(|pane_id| pane_id.0.to_string())
-                    .unwrap_or_else(|| "none".to_string()),
-                position.x.as_f32(),
-                position.y.as_f32(),
-                update.kind,
-                update.changed,
-                debug_paths(&source_paths)
-            )
-        });
-
-        if target_pane.is_some() {
-            match update.kind {
-                Some(_) => {
-                    set_active_drag_cursor_style(gpui::CursorStyle::ContextualMenu, window, cx)
-                }
-                None => set_active_drag_cursor_style(
-                    gpui::CursorStyle::OperationNotAllowed,
-                    window,
-                    cx,
-                ),
-            }
-        }
-        if update.changed {
-            window.refresh();
-        }
+        update_active_item_drag_drop_target_from_position(
+            pane_id,
+            event.position,
+            &move_app,
+            window,
+            cx,
+            "window",
+        );
     });
 }
 
@@ -280,7 +243,20 @@ pub(super) fn install_directory_drop_target_shell(
 }
 
 impl Render for DragPreview {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // GPUI may not dispatch pane-level drag-move callbacks for same-window
+        // item self-drags after the drag starts, but it does repaint the drag
+        // preview as the pointer moves. Use that stable repaint path to keep
+        // retained pane hit testing and directory hover state current.
+        update_active_item_drag_drop_target_from_position(
+            self.source_pane,
+            window.mouse_position(),
+            &self.app,
+            window,
+            cx,
+            "preview",
+        );
+
         let left = self.layout.content_origin_x;
         let top = self.layout.content_origin_y;
         let icon = self.icon.clone();
@@ -377,6 +353,64 @@ fn debug_paths(paths: &[PathBuf]) -> String {
         rendered.push(format!("+{} more", paths.len() - MAX_PATHS));
     }
     rendered.join(",")
+}
+
+fn update_active_item_drag_drop_target_from_position(
+    source_pane: PaneId,
+    position: gpui::Point<gpui::Pixels>,
+    app: &WeakEntity<FikaApp>,
+    window: &mut Window,
+    cx: &mut gpui::App,
+    via: &'static str,
+) -> bool {
+    let Some((target_pane, update, source_paths)) = app
+        .update(cx, |this, cx| {
+            let Some((target_pane, update, source_paths)) = this
+                .update_active_item_drag_drop_target_from_window_position(source_pane, position)
+            else {
+                return None;
+            };
+            if update.accepted() {
+                this.refresh_drop_target_lease(cx);
+            }
+            if update.changed {
+                cx.notify();
+            }
+            Some((target_pane, update, source_paths))
+        })
+        .unwrap_or(None)
+    else {
+        return false;
+    };
+
+    debug_dnd_log(|| {
+        format!(
+            "active-item-move via={} source_pane={} target_pane={} pos=({:.1},{:.1}) kind={:?} changed={} sources={}",
+            via,
+            source_pane.0,
+            target_pane
+                .map(|pane_id| pane_id.0.to_string())
+                .unwrap_or_else(|| "none".to_string()),
+            position.x.as_f32(),
+            position.y.as_f32(),
+            update.kind,
+            update.changed,
+            debug_paths(&source_paths)
+        )
+    });
+
+    if target_pane.is_some() {
+        match update.kind {
+            Some(_) => set_active_drag_cursor_style(gpui::CursorStyle::ContextualMenu, window, cx),
+            None => {
+                set_active_drag_cursor_style(gpui::CursorStyle::OperationNotAllowed, window, cx)
+            }
+        }
+    }
+    if update.changed {
+        window.refresh();
+    }
+    true
 }
 
 fn set_active_drag_cursor_style(style: gpui::CursorStyle, window: &mut Window, cx: &mut gpui::App) {
