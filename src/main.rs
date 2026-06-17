@@ -3735,6 +3735,18 @@ impl FikaApp {
         })
     }
 
+    fn pane_at_window_position(&self, position: gpui::Point<gpui::Pixels>) -> Option<PaneId> {
+        let window_point = ViewPoint {
+            x: position.x.as_f32(),
+            y: position.y.as_f32(),
+        };
+        self.panes.pane_ids().iter().copied().find(|pane_id| {
+            self.pane_viewport_geometries
+                .get(pane_id)
+                .is_some_and(|geometry| geometry.window_rect.contains(window_point))
+        })
+    }
+
     fn clamped_content_point_from_window(
         &self,
         pane_id: PaneId,
@@ -3952,6 +3964,30 @@ impl FikaApp {
             changed: self.set_path_list_drop_target(target),
             kind: Some(kind),
         }
+    }
+
+    pub(crate) fn update_dragged_paths_drop_target_from_any_window_position(
+        &mut self,
+        position: gpui::Point<gpui::Pixels>,
+        source_paths: &[PathBuf],
+    ) -> (Option<PaneId>, PathListDropTargetUpdate) {
+        let Some(pane_id) = self.pane_at_window_position(position) else {
+            return (
+                None,
+                PathListDropTargetUpdate {
+                    changed: self.clear_item_drop_target(),
+                    kind: None,
+                },
+            );
+        };
+        (
+            Some(pane_id),
+            self.update_dragged_paths_drop_target_from_window_position(
+                pane_id,
+                position,
+                source_paths,
+            ),
+        )
     }
 
     fn set_path_list_drop_target(&mut self, target: PathListDropTarget) -> bool {
@@ -15389,6 +15425,72 @@ text/plain=viewer.desktop;\n",
                 app.drop_targets.item(),
                 pane_id
             ));
+        }
+
+        let _ = std::fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn source_item_drag_move_updates_drop_target_from_global_window_position() {
+        let temp = test_dir("source-item-drag-global-drop");
+        let target_dir = temp.join("target");
+        let source_file = temp.join("source.txt");
+        std::fs::create_dir_all(&target_dir).unwrap();
+        std::fs::write(&source_file, "source").unwrap();
+        let mut app = test_app_with_entries(temp.to_str().unwrap(), &[]);
+        let pane_id = app.panes.focused().unwrap();
+        app.panes.pane_mut(pane_id).unwrap().model.replace_listing(
+            temp.clone(),
+            Arc::new(vec![
+                test_directory_entry("target"),
+                test_entry("source.txt"),
+            ]),
+        );
+
+        for view_mode in [ViewMode::Compact, ViewMode::Icons, ViewMode::Details] {
+            configure_retained_hit_test_view(&mut app, pane_id, view_mode);
+            assert!(app.clear_drag_drop_targets() || app.drop_targets.item().is_none());
+
+            let item_point = retained_hit_test_item_window_point(&mut app, pane_id, 0);
+            let (target_pane, update) = app
+                .update_dragged_paths_drop_target_from_any_window_position(
+                    item_point,
+                    std::slice::from_ref(&source_file),
+                );
+            assert_eq!(target_pane, Some(pane_id));
+            assert_eq!(update.kind, Some(PathListDropTargetKind::Directory));
+            assert!(item_drop_target_matches_directory(
+                app.drop_targets.item(),
+                pane_id,
+                &target_dir
+            ));
+            assert_raw_grid_marks_directory_drop_target(&mut app, pane_id, &target_dir);
+
+            let outside = gpui::point(px(10.0), px(10.0));
+            let (target_pane, update) = app
+                .update_dragged_paths_drop_target_from_any_window_position(
+                    outside,
+                    std::slice::from_ref(&source_file),
+                );
+            assert_eq!(target_pane, None);
+            assert_eq!(update.kind, None);
+            assert!(update.changed);
+            assert!(app.drop_targets.item().is_none());
+
+            assert!(app.set_place_drag_drop_target_for_path(target_dir.clone()));
+            let (target_pane, update) = app
+                .update_dragged_paths_drop_target_from_any_window_position(
+                    outside,
+                    std::slice::from_ref(&source_file),
+                );
+            assert_eq!(target_pane, None);
+            assert_eq!(update.kind, None);
+            assert!(!update.changed);
+            assert!(place_drop_target_matches_place(
+                app.drop_targets.place(),
+                &target_dir
+            ));
+            app.clear_drag_drop_targets();
         }
 
         let _ = std::fs::remove_dir_all(temp);
