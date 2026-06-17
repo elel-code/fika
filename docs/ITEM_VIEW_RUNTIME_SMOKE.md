@@ -146,7 +146,7 @@ Exercise this sequence while `FIKA_PERF_ITEM_VIEW=1` is enabled:
 Expected log properties:
 
 - `[fika item-view]` includes `phase=initial|mode-switch|content-change|
-  geometry-change|visual-change|steady`.
+  geometry-change|visual-change|steady` and `icon_sync=...us`.
 - Cold `initial` and `mode-switch` frames may show cache warm-up cost.
 - Warm `steady` resize/fullscreen item snapshot conversion should stay
   sub-millisecond on ordinary directories.
@@ -164,13 +164,14 @@ Expected log properties:
   the logged item count; impossible counts are not valid renderer evidence.
 
 Use `scripts/analyze-item-view-perf.sh` as the first pass. It summarizes
-item-view phases, file-grid build maxima, Compact/Icons static custom visual
-activity, image paint activity when the directory exercises image-backed icons
-or thumbnails, aggregate custom paint maxima, Details visual/shape-cache
-activity, retained interaction hitbox activity, and renderer-policy surface
-counts. It rejects renderer-policy counts that cannot fit inside the logged item
-count. Human review is still required for whether the exercised mode switches,
-resizes, fullscreen toggles, and DnD actions match this checklist.
+item-view phases and stage maxima (`raw`, `icon_sync`, `queue`, `convert`),
+file-grid build maxima, Compact/Icons static custom visual activity, image
+paint activity when the directory exercises image-backed icons or thumbnails,
+aggregate custom paint maxima, Details visual/shape-cache activity, retained
+interaction hitbox activity, and renderer-policy surface counts. It rejects
+renderer-policy counts that cannot fit inside the logged item count. Human
+review is still required for whether the exercised mode switches, resizes,
+fullscreen toggles, and DnD actions match this checklist.
 
 After a passing runtime review, update
 `docs/ITEM_VIEW_RENDERER_DECISIONS.md` with the evidence for any surface whose

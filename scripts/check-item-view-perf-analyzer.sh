@@ -16,9 +16,9 @@ bash -n "$runtime_gate"
 bash -n "$renderer_evidence"
 
 cat > "$tmpdir/complete.log" <<'EOF'
-[fika item-view] pane=1 mode=Compact phase=steady items=48 visible=32 raw=50us queue=1us convert=40us total=120us
-[fika item-view] pane=1 mode=Icons phase=steady items=48 visible=40 raw=45us queue=1us convert=35us total=110us
-[fika item-view] pane=1 mode=Details phase=steady items=48 visible=30 raw=42us queue=1us convert=32us total=105us
+[fika item-view] pane=1 mode=Compact phase=steady items=48 visible=32 raw=50us icon_sync=2us queue=1us convert=40us total=120us
+[fika item-view] pane=1 mode=Icons phase=steady items=48 visible=40 raw=45us icon_sync=3us queue=1us convert=35us total=110us
+[fika item-view] pane=1 mode=Details phase=steady items=48 visible=30 raw=42us icon_sync=1us queue=1us convert=32us total=105us
 [fika file-grid] pane=1 mode=Compact visible=32 content=1602.5x882 build=400us
 [fika file-grid] pane=1 mode=Icons visible=40 content=587x1168 build=450us
 [fika file-grid] pane=1 mode=Details visible=30 content=601x882 build=420us
@@ -60,13 +60,27 @@ if [[ "$evidence" != *"custom_paint_frames"* ]]; then
     echo "expected renderer evidence to include analyzer summary" >&2
     exit 1
 fi
+if [[ "$evidence" != *"item_view_stage_max"* || "$evidence" != *"icon_sync=3us"* ]]; then
+    echo "expected renderer evidence to include item-view stage summary" >&2
+    exit 1
+fi
 if [[ "$evidence" != *"renderer_policy_frames"* ]]; then
     echo "expected renderer evidence to include renderer policy summary" >&2
     exit 1
 fi
 
-cat > "$tmpdir/missing-channels.log" <<'EOF'
+cat > "$tmpdir/legacy-no-icon-sync.log" <<'EOF'
 [fika item-view] pane=1 mode=Compact phase=steady items=48 visible=32 raw=50us queue=1us convert=40us total=120us
+EOF
+
+legacy_summary="$("$analyzer" "$tmpdir/legacy-no-icon-sync.log")"
+if [[ "$legacy_summary" != *"item_view_stage_max"* || "$legacy_summary" != *"icon_sync=0us"* ]]; then
+    echo "expected legacy item-view logs without icon_sync to stay parseable" >&2
+    exit 1
+fi
+
+cat > "$tmpdir/missing-channels.log" <<'EOF'
+[fika item-view] pane=1 mode=Compact phase=steady items=48 visible=32 raw=50us icon_sync=2us queue=1us convert=40us total=120us
 EOF
 
 if "$analyzer" --require-details --require-interaction "$tmpdir/missing-channels.log" >/dev/null 2>&1; then
@@ -80,8 +94,8 @@ if "$analyzer" --require-static-visual "$tmpdir/missing-channels.log" >/dev/null
 fi
 
 cat > "$tmpdir/missing-static-mode.log" <<'EOF'
-[fika item-view] pane=1 mode=Compact phase=steady items=48 visible=32 raw=50us queue=1us convert=40us total=120us
-[fika item-view] pane=1 mode=Icons phase=steady items=48 visible=40 raw=45us queue=1us convert=35us total=110us
+[fika item-view] pane=1 mode=Compact phase=steady items=48 visible=32 raw=50us icon_sync=2us queue=1us convert=40us total=120us
+[fika item-view] pane=1 mode=Icons phase=steady items=48 visible=40 raw=45us icon_sync=3us queue=1us convert=35us total=110us
 [fika static-item-visual] pane=1 mode=Compact prepaint_count=32 prepaint=180us paint_count=32 paint=160us
 EOF
 
@@ -91,9 +105,9 @@ if "$analyzer" --require-static-modes Compact,Icons "$tmpdir/missing-static-mode
 fi
 
 cat > "$tmpdir/missing-renderer-policy-mode.log" <<'EOF'
-[fika item-view] pane=1 mode=Compact phase=steady items=48 visible=32 raw=50us queue=1us convert=40us total=120us
-[fika item-view] pane=1 mode=Icons phase=steady items=48 visible=40 raw=45us queue=1us convert=35us total=110us
-[fika item-view] pane=1 mode=Details phase=steady items=48 visible=30 raw=42us queue=1us convert=32us total=105us
+[fika item-view] pane=1 mode=Compact phase=steady items=48 visible=32 raw=50us icon_sync=2us queue=1us convert=40us total=120us
+[fika item-view] pane=1 mode=Icons phase=steady items=48 visible=40 raw=45us icon_sync=3us queue=1us convert=35us total=110us
+[fika item-view] pane=1 mode=Details phase=steady items=48 visible=30 raw=42us icon_sync=1us queue=1us convert=32us total=105us
 [fika renderer-policy] pane=1 mode=Compact items=48 visual_layer=48 image_layer=8 retained_interaction=48 gpui_drag_shell=48 rename_overlay=0
 [fika renderer-policy] pane=1 mode=Icons items=48 visual_layer=48 image_layer=8 retained_interaction=48 gpui_drag_shell=48 rename_overlay=0
 EOF
@@ -104,7 +118,7 @@ if "$analyzer" --require-renderer-policy-modes Compact,Icons,Details "$tmpdir/mi
 fi
 
 cat > "$tmpdir/invalid-renderer-policy-count.log" <<'EOF'
-[fika item-view] pane=1 mode=Compact phase=steady items=2 visible=2 raw=50us queue=1us convert=40us total=120us
+[fika item-view] pane=1 mode=Compact phase=steady items=2 visible=2 raw=50us icon_sync=2us queue=1us convert=40us total=120us
 [fika renderer-policy] pane=1 mode=Compact items=2 visual_layer=3 image_layer=0 retained_interaction=2 gpui_drag_shell=2 rename_overlay=0
 EOF
 

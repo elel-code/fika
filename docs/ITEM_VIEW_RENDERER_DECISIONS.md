@@ -52,10 +52,12 @@ The `[fika renderer-policy]` summary is the runtime check that the current frame
 is still following this table's surface choices. It should be reviewed before
 removing a GPUI shell or reverting a custom-painted surface.
 
-For scroll and zoom investigations, treat `[fika item-view] ... convert=...`
-as a renderer decision signal too: a cold theme-icon miss should now be absorbed
-by preliminary icon snapshots and a background resolve queue, not by synchronous
-theme path lookup during conversion.
+For scroll and zoom investigations, treat `[fika item-view] ... icon_sync=...
+convert=...` as a renderer decision signal too: visible theme-icon path work
+must stay inside the small Dolphin-style `icon_sync` budget, while read-ahead
+icon work should still be absorbed by preliminary icon snapshots and a
+background resolve queue, not by synchronous theme path lookup during
+conversion.
 
 For paint-layer investigations, compare `[fika static-item-visual]` and
 `[fika item-image]` prepaint counts against visible item counts, not raw

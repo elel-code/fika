@@ -336,11 +336,19 @@ BEGIN {
         phase = "unknown"
     }
     total = us_field("total")
+    raw = us_field("raw")
+    icon_sync = us_field("icon_sync")
+    queue = us_field("queue")
+    convert = us_field("convert")
     visible = field("visible") + 0
     note_mode(mode)
     phase_count[phase]++
     max_assign(phase_max_total, phase, total)
     max_assign(phase_max_visible, phase, visible)
+    max_assign(single_max, "item_view_raw", raw)
+    max_assign(single_max, "item_view_icon_sync", icon_sync)
+    max_assign(single_max, "item_view_queue", queue)
+    max_assign(single_max, "item_view_convert", convert)
     if (phase == "steady") {
         steady_count++
         if (steady_total_limit != "" && total > steady_total_limit + 0) {
@@ -455,6 +463,11 @@ END {
         }
     }
 
+    print "  item_view_stage_max:" \
+        " raw=" (("item_view_raw" in single_max) ? single_max["item_view_raw"] : 0) "us" \
+        " icon_sync=" (("item_view_icon_sync" in single_max) ? single_max["item_view_icon_sync"] : 0) "us" \
+        " queue=" (("item_view_queue" in single_max) ? single_max["item_view_queue"] : 0) "us" \
+        " convert=" (("item_view_convert" in single_max) ? single_max["item_view_convert"] : 0) "us"
     modes_text = ""
     for (mode in modes) {
         modes_text = modes_text (modes_text == "" ? "" : ",") mode
