@@ -45,7 +45,9 @@ pub(crate) fn places_sidebar(
         PlacesSidebarScrollState::new()
     });
     let scroll_handle = state.read(cx).scroll_handle.clone();
-    let row_visual_layer = custom_row_visuals.then(|| places_row_visual_layer(places.clone()));
+    let app = cx.weak_entity();
+    let row_visual_layer =
+        custom_row_visuals.then(|| places_row_visual_layer(places.clone(), app.clone()));
     let mut rows = Vec::new();
     let mut current_group = None;
 

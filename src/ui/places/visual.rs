@@ -1,11 +1,19 @@
+use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Instant;
 
 use gpui::{
-    App, Bounds, IntoElement, Pixels, SharedString, Styled, TextAlign, TextRun, Window, canvas,
-    fill, point, px, rgb, rgba, size,
+    App, Bounds, Font, IntoElement, Pixels, SharedString, Styled, TextAlign, TextRun, WeakEntity,
+    Window, canvas, fill, point, px, rgb, rgba, size,
 };
 
-use super::perf::{PlacesRowVisualPerfLog, emit_places_row_visual_perf_log, places_perf_enabled};
+use crate::FikaApp;
+
+use super::perf::{
+    PlacesRowTextShapeCachePerfLog, PlacesRowTextShapeCacheStats, PlacesRowVisualPerfLog,
+    emit_places_row_text_shape_cache_perf_log, emit_places_row_visual_perf_log,
+    places_perf_enabled,
+};
 use super::snapshot::PlaceSnapshot;
 use super::style::{place_row_background, place_row_border_color};
 
@@ -18,11 +26,16 @@ const ICON_TEXT_GAP: f32 = 8.0;
 const TRASH_DOT_SIZE: f32 = 7.0;
 const INSERT_INDICATOR_HEIGHT: f32 = 2.0;
 
-pub(super) fn places_row_visual_layer(places: Vec<PlaceSnapshot>) -> impl IntoElement {
+pub(super) fn places_row_visual_layer(
+    places: Vec<PlaceSnapshot>,
+    app: WeakEntity<FikaApp>,
+) -> impl IntoElement {
     let rows = place_row_visual_layer_rows(&places);
     let height = places_row_visual_content_height(&places).max(1.0);
     canvas(
-        move |_bounds, window, cx| places_row_visual_prepaint(rows.clone(), window, cx),
+        move |_bounds, window, cx| {
+            places_row_visual_prepaint(rows.clone(), app.clone(), window, cx)
+        },
         move |bounds, paint_state, window, cx| {
             let paint_started = Instant::now();
             for row in &paint_state.rows {
@@ -34,6 +47,11 @@ pub(super) fn places_row_visual_layer(places: Vec<PlaceSnapshot>) -> impl IntoEl
                     prepaint_elapsed: paint_state.prepaint_elapsed,
                     paint_elapsed: paint_started.elapsed(),
                 });
+                if paint_state.shape_cache_stats.has_activity() {
+                    emit_places_row_text_shape_cache_perf_log(PlacesRowTextShapeCachePerfLog {
+                        stats: paint_state.shape_cache_stats,
+                    });
+                }
             }
         },
     )
@@ -77,33 +95,87 @@ impl PlaceRowVisualState {
 struct PlaceRowVisualLayerPaintState {
     rows: Vec<PlaceRowVisualPaintState>,
     prepaint_elapsed: std::time::Duration,
+    shape_cache_stats: PlacesRowTextShapeCacheStats,
 }
 
 struct PlaceRowVisualPaintState {
     input: PlaceRowVisualState,
-    line: gpui::ShapedLine,
+    line: Arc<gpui::ShapedLine>,
     line_height: Pixels,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub(crate) struct PlacesRowTextShapeCacheKey {
+    label: SharedString,
+    font: Font,
+    font_size_bits: u32,
+    text_color: u32,
+}
+
+#[derive(Default)]
+pub(crate) struct PlacesRowTextShapeCache {
+    entries: HashMap<PlacesRowTextShapeCacheKey, Arc<gpui::ShapedLine>>,
+    stats: PlacesRowTextShapeCacheStats,
+}
+
+impl PlacesRowTextShapeCache {
+    const MAX_ENTRIES: usize = 512;
+
+    fn shape_for(
+        &mut self,
+        key: &PlacesRowTextShapeCacheKey,
+        window: &mut Window,
+    ) -> Arc<gpui::ShapedLine> {
+        if let Some(line) = self.entries.get(key) {
+            self.stats.hits += 1;
+            return line.clone();
+        }
+
+        self.stats.misses += 1;
+        if self.entries.len() >= Self::MAX_ENTRIES {
+            self.stats.evicted += self.entries.len();
+            self.entries.clear();
+        }
+
+        let line = Arc::new(shape_place_row_visual_text(key, window));
+        self.entries.insert(key.clone(), line.clone());
+        line
+    }
+
+    pub(crate) fn take_stats(&mut self) -> PlacesRowTextShapeCacheStats {
+        let mut stats = std::mem::take(&mut self.stats);
+        stats.entries = self.entries.len();
+        stats
+    }
 }
 
 fn places_row_visual_prepaint(
     rows: Vec<PlaceRowVisualState>,
+    app: WeakEntity<FikaApp>,
     window: &mut Window,
-    _cx: &mut App,
+    cx: &mut App,
 ) -> PlaceRowVisualLayerPaintState {
     let started = Instant::now();
     let rows = rows
         .into_iter()
-        .map(|input| place_row_visual_prepaint(input, window))
+        .map(|input| place_row_visual_prepaint(input, &app, window, cx))
         .collect();
+    let shape_cache_stats = app
+        .update(cx, |this, _cx| this.place_row_text_shape_cache.take_stats())
+        .ok()
+        .unwrap_or_default();
     PlaceRowVisualLayerPaintState {
         rows,
         prepaint_elapsed: started.elapsed(),
+        shape_cache_stats,
     }
 }
 
 fn place_row_visual_prepaint(
     input: PlaceRowVisualState,
+    app: &WeakEntity<FikaApp>,
     window: &mut Window,
+    cx: &mut App,
 ) -> PlaceRowVisualPaintState {
     let text_style = window.text_style();
     let font_size = px(window.rem_size().as_f32() * 0.875);
@@ -114,22 +186,43 @@ fn place_row_visual_prepaint(
     } else {
         0x24292f
     };
-    let run = TextRun {
-        len: input.label.len(),
+    let key = PlacesRowTextShapeCacheKey {
+        label: input.label.clone(),
         font: text_style.font(),
-        color: rgb(text_color).into(),
-        background_color: None,
-        underline: None,
-        strikethrough: None,
+        font_size_bits: font_size.as_f32().to_bits(),
+        text_color,
     };
-    let line = window
-        .text_system()
-        .shape_line(input.label.clone(), font_size, &[run], None);
+    let line = app
+        .update(cx, |this, _cx| {
+            this.place_row_text_shape_cache.shape_for(&key, window)
+        })
+        .ok()
+        .unwrap_or_else(|| Arc::new(shape_place_row_visual_text(&key, window)));
     PlaceRowVisualPaintState {
         input,
         line,
         line_height: px(20.0),
     }
+}
+
+fn shape_place_row_visual_text(
+    key: &PlacesRowTextShapeCacheKey,
+    window: &mut Window,
+) -> gpui::ShapedLine {
+    let run = TextRun {
+        len: key.label.len(),
+        font: key.font.clone(),
+        color: rgb(key.text_color).into(),
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    window.text_system().shape_line(
+        key.label.clone(),
+        px(f32::from_bits(key.font_size_bits)),
+        &[run],
+        None,
+    )
 }
 
 fn paint_place_row_visual(

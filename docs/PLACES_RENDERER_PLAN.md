@@ -299,6 +299,51 @@ guard is `--expect-custom-row-visual-policy`, which now requires
 `places_row_visual max_rows == places_renderer_policy max_rows` and fails the
 old per-row `rows=1` shape.
 
+The next opt-in row visual cost was text shaping, not Places model work. The
+aggregated layer still reshaped every row label during each prepaint pass even
+when the same `PlaceSnapshot` labels, font, and visual text color were stable.
+Fika now mirrors the item-view text-cache pattern with an app-level
+`PlacesRowTextShapeCache`, keyed by label/font/font-size/color. The cache is
+only used by `FIKA_CUSTOM_PLACES_ROWS=1`; the default GPUI row renderer is
+unchanged. Runtime logs include:
+
+```text
+[fika places-row-shape-cache] hits=... misses=... evicted=... entries=...
+```
+
+`--expect-custom-row-visual-policy` requires this shape-cache channel for the
+opt-in custom row path, so future Places row painter changes cannot silently
+return to per-frame row label shaping without runtime evidence.
+
+2026-06-18 opt-in row text shape-cache evidence:
+
+```bash
+timeout 5s env FIKA_PERF_PLACES_VIEW=1 FIKA_CUSTOM_PLACES_ROWS=1 FIKA_AUTOSMOKE_PLACES=targets target/debug/fika /etc > /tmp/fika-places-custom-rows-shape-cache.log 2>&1
+scripts/analyze-places-perf.sh --require-autosmoke --expect-custom-row-visual-policy /tmp/fika-places-custom-rows-shape-cache.log
+
+timeout 5s env FIKA_PERF_PLACES_VIEW=1 FIKA_CUSTOM_PLACES_ROWS=1 FIKA_AUTOSMOKE_PLACES=overflow target/debug/fika /etc > /tmp/fika-places-overflow-custom-shape-cache.log 2>&1
+scripts/analyze-places-perf.sh --require-overflow-autosmoke --expect-custom-row-visual-policy /tmp/fika-places-overflow-custom-shape-cache.log
+```
+
+Targets summary:
+
+```text
+places_row_visual_frames=11 max_rows=11 max_prepaint=1139us max_paint=5175us
+places_row_shape_cache_frames=11 max_hits=11 max_misses=11 max_evicted=0 max_entries=11
+```
+
+Overflow summary:
+
+```text
+places_row_visual_frames=6 max_rows=75 max_prepaint=9578us max_paint=8794us
+places_row_shape_cache_frames=6 max_hits=75 max_misses=75 max_evicted=0 max_entries=75
+```
+
+The maxima include the cold first frame, where every visible row label is a
+cache miss. The same overflow log then stabilizes at `hits=75 misses=0`, with
+row visual prepaint around `148-176us`; the repeated row-label shaping cost is
+removed from steady opt-in Places frames.
+
 ## Acceptance Gates
 
 - Primary Places order persists across restart and dynamic device refresh does

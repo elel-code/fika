@@ -593,6 +593,15 @@ by risk and evidence, not by how custom-painted a surface looks.
   `--require-overflow-autosmoke --expect-custom-row-visual-policy` with
   `max_rows=75`. Guard: the analyzer now rejects custom row visual policy logs
   where `[fika places-row-visual] rows` does not match the policy row count.
+- [x] P16v: Add retained text shaping for the opt-in Places row visual layer.
+  Root cause: after row visuals were aggregated into one canvas, the opt-in
+  prepaint path still reshaped every row label every frame. Implementation:
+  `PlacesRowTextShapeCache` lives on `FikaApp` and caches row labels by
+  label/font/font-size/text color for `FIKA_CUSTOM_PLACES_ROWS=1` only.
+  Evidence/guard: `FIKA_PERF_PLACES_VIEW=1` now emits
+  `[fika places-row-shape-cache] hits=... misses=... evicted=... entries=...`,
+  and `scripts/analyze-places-perf.sh --expect-custom-row-visual-policy`
+  requires that channel for opt-in custom row logs.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

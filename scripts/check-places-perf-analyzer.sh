@@ -85,6 +85,7 @@ cat > "$tmpdir/custom-row-visual.log" <<'EOF'
 [fika places-sidebar] rows=11 sections=2 elements=13 build=240us
 [fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 icon_gpui=11 retained_interaction=0 drag_shell=11 section_gpui=2 scrollbar_canvas=1
 [fika places-row-visual] rows=11 prepaint=20us paint=31us
+[fika places-row-shape-cache] hits=11 misses=0 evicted=0 entries=11
 EOF
 
 custom_summary="$("$analyzer" \
@@ -99,6 +100,10 @@ if [[ "$custom_summary" != *"places_row_visual_frames=1 max_rows=11 max_prepaint
     echo "expected Places row visual paint summary" >&2
     exit 1
 fi
+if [[ "$custom_summary" != *"places_row_shape_cache_frames=1 max_hits=11 max_misses=0 max_evicted=0 max_entries=11"* ]]; then
+    echo "expected Places row shape-cache summary" >&2
+    exit 1
+fi
 
 cat > "$tmpdir/custom-row-visual-per-row.log" <<'EOF'
 [fika places-slots] rows=11 sections=2 entries=13 inserted=13 content=0 geometry=0 visual=0 unchanged=0 removed=0 project=25us
@@ -107,10 +112,25 @@ cat > "$tmpdir/custom-row-visual-per-row.log" <<'EOF'
 [fika places-sidebar] rows=11 sections=2 elements=13 build=240us
 [fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 icon_gpui=11 retained_interaction=0 drag_shell=11 section_gpui=2 scrollbar_canvas=1
 [fika places-row-visual] rows=1 prepaint=20us paint=31us
+[fika places-row-shape-cache] hits=11 misses=0 evicted=0 entries=11
 EOF
 
 if "$analyzer" --expect-custom-row-visual-policy "$tmpdir/custom-row-visual-per-row.log" >/dev/null 2>&1; then
     echo "expected per-row Places visual policy to fail" >&2
+    exit 1
+fi
+
+cat > "$tmpdir/custom-row-visual-missing-shape-cache.log" <<'EOF'
+[fika places-slots] rows=11 sections=2 entries=13 inserted=13 content=0 geometry=0 visual=0 unchanged=0 removed=0 project=25us
+[fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
+[fika places-view] source=11 visible=11 sections=2 snapshot=100us
+[fika places-sidebar] rows=11 sections=2 elements=13 build=240us
+[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 icon_gpui=11 retained_interaction=0 drag_shell=11 section_gpui=2 scrollbar_canvas=1
+[fika places-row-visual] rows=11 prepaint=20us paint=31us
+EOF
+
+if "$analyzer" --expect-custom-row-visual-policy "$tmpdir/custom-row-visual-missing-shape-cache.log" >/dev/null 2>&1; then
+    echo "expected missing Places row shape-cache policy to fail" >&2
     exit 1
 fi
 

@@ -123,9 +123,9 @@ use ui::places::{
 };
 use ui::places::{
     PlaceDrag, PlaceEntry, PlaceSnapshot, PlacesAutosmokeAction, PlacesAutosmokeScenario,
-    PlacesSnapshotPerfLog, build_places, default_place_label, emit_place_paint_slot_perf_log,
-    emit_places_snapshot_perf_log, place_snapshots_for, places_perf_enabled, places_section_count,
-    read_live_device_snapshot,
+    PlacesRowTextShapeCache, PlacesSnapshotPerfLog, build_places, default_place_label,
+    emit_place_paint_slot_perf_log, emit_places_snapshot_perf_log, place_snapshots_for,
+    places_perf_enabled, places_section_count, read_live_device_snapshot,
 };
 use ui::places::{PlacePaintSlotCache, PlacePaintSlotPerfLog};
 use ui::properties_dialog::{
@@ -370,6 +370,7 @@ pub(crate) struct FikaApp {
     hidden_places: BTreeSet<PathBuf>,
     hidden_place_sections: BTreeSet<&'static str>,
     place_paint_slots: PlacePaintSlotCache,
+    place_row_text_shape_cache: PlacesRowTextShapeCache,
     user_places_path: PathBuf,
     device_refresh_pending: bool,
     next_device_refresh_at: Instant,
@@ -462,6 +463,7 @@ impl FikaApp {
             hidden_places: BTreeSet::new(),
             hidden_place_sections: BTreeSet::new(),
             place_paint_slots: PlacePaintSlotCache::default(),
+            place_row_text_shape_cache: PlacesRowTextShapeCache::default(),
             user_places_path,
             device_refresh_pending: false,
             next_device_refresh_at: Instant::now(),
@@ -16663,6 +16665,7 @@ text/plain=viewer.desktop;\n",
             hidden_places: BTreeSet::new(),
             hidden_place_sections: BTreeSet::new(),
             place_paint_slots: PlacePaintSlotCache::default(),
+            place_row_text_shape_cache: PlacesRowTextShapeCache::default(),
             user_places_path: test_dir("user-places").join("places.xbel"),
             device_refresh_pending: false,
             next_device_refresh_at: Instant::now(),

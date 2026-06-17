@@ -91,6 +91,33 @@ pub(crate) fn emit_places_row_visual_perf_log(log: PlacesRowVisualPerfLog) {
     );
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct PlacesRowTextShapeCacheStats {
+    pub(crate) hits: usize,
+    pub(crate) misses: usize,
+    pub(crate) evicted: usize,
+    pub(crate) entries: usize,
+}
+
+impl PlacesRowTextShapeCacheStats {
+    pub(crate) fn has_activity(self) -> bool {
+        self.hits > 0 || self.misses > 0 || self.evicted > 0
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlacesRowTextShapeCachePerfLog {
+    pub(crate) stats: PlacesRowTextShapeCacheStats,
+}
+
+pub(crate) fn emit_places_row_text_shape_cache_perf_log(log: PlacesRowTextShapeCachePerfLog) {
+    let stats = log.stats;
+    eprintln!(
+        "[fika places-row-shape-cache] hits={} misses={} evicted={} entries={}",
+        stats.hits, stats.misses, stats.evicted, stats.entries,
+    );
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct PlacesScrollbarPerfLog {
     pub(crate) visible: bool,

@@ -29,7 +29,8 @@ Options:
       FIKA_CUSTOM_PLACES_ROWS=1 policy: row_visual_layer/icon_gpui/drag_shell
       equal rows, row_gpui=0, retained_interaction=0, section_gpui=sections,
       and scrollbar_canvas=1. Also requires aggregated [fika places-row-visual]
-      logs whose rows count matches the policy rows.
+      logs whose rows count matches the policy rows and row text shape-cache
+      logs for the opt-in visual path.
 
   --snapshot-us N
       Fail if any [fika places-view] snapshot exceeds N microseconds.
@@ -274,6 +275,18 @@ function fail(message) {
     max_update("row_visual_paint", paint)
 }
 
+/^\[fika places-row-shape-cache\]/ {
+    row_shape_cache_frames++
+    hits = field("hits") + 0
+    misses = field("misses") + 0
+    evicted = field("evicted") + 0
+    entries = field("entries") + 0
+    max_update("row_shape_hits", hits)
+    max_update("row_shape_misses", misses)
+    max_update("row_shape_evicted", evicted)
+    max_update("row_shape_entries", entries)
+}
+
 /^\[fika places-scrollbar\]/ {
     scrollbar_frames++
     visible = field("visible") + 0
@@ -373,6 +386,9 @@ END {
         if (row_visual_frames == 0) {
             fail("missing [fika places-row-visual] logs for custom row visual policy")
         }
+        if (row_shape_cache_frames == 0) {
+            fail("missing [fika places-row-shape-cache] logs for custom row visual policy")
+        }
         if (max_values["row_visual_rows"] != max_values["policy_rows"]) {
             fail("custom Places row visual layer is not aggregated to the policy row count")
         }
@@ -457,6 +473,12 @@ END {
         max_values["row_visual_rows"],
         max_values["row_visual_prepaint"],
         max_values["row_visual_paint"])
+    printf("places_row_shape_cache_frames=%d max_hits=%d max_misses=%d max_evicted=%d max_entries=%d\n",
+        row_shape_cache_frames,
+        max_values["row_shape_hits"],
+        max_values["row_shape_misses"],
+        max_values["row_shape_evicted"],
+        max_values["row_shape_entries"])
     printf("places_scrollbar_frames=%d max_visible=%d max_scroll_y=%.1f max_thumb_height=%.1f max_track_height=%.1f\n",
         scrollbar_frames,
         max_values["scrollbar_visible"],
