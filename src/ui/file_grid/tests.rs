@@ -187,7 +187,7 @@ fn content_layers_split_base_visuals_from_image_visuals() {
             },
             ItemRendererPolicy {
                 base_visual: ItemBaseVisualRenderer::ContentLayer,
-                image: ItemImageRenderer::ContentLayer,
+                image: ItemImageRenderer::GpuiElement,
                 interaction: ItemInteractionRenderer::RetainedLayer,
                 drag_start: ItemDragStartRenderer::GpuiShell,
                 rename_editor: ItemRenameEditorRenderer::None,
@@ -213,8 +213,8 @@ fn content_layers_split_base_visuals_from_image_visuals() {
         RendererPolicyStats {
             items: 5,
             visual_layer: 5,
-            image_layer: 3,
-            gpui_image_element: 0,
+            image_layer: 2,
+            gpui_image_element: 1,
             retained_interaction: 3,
             gpui_drag_shell: 5,
             rename_overlay: 2,
@@ -244,22 +244,19 @@ fn content_layers_split_base_visuals_from_image_visuals() {
             .collect::<Vec<_>>(),
         vec![
             PathBuf::from("/tmp/photo.png"),
-            PathBuf::from("/tmp/app.svg"),
             PathBuf::from("/tmp/rename.png")
         ]
     );
     assert!(item_image_load_failure_paints_fallback(&image_items[0]));
     assert!(item_image_load_failure_paints_fallback(&image_items[1]));
-    assert!(item_image_load_failure_paints_fallback(&image_items[2]));
     assert!(item_image_pending_load_paints_fallback(&image_items[0]));
     assert!(item_image_pending_load_paints_fallback(&image_items[1]));
-    assert!(item_image_pending_load_paints_fallback(&image_items[2]));
     assert_eq!(
         image_items
             .iter()
             .map(item_image_pending_load_paints_marker)
             .collect::<Vec<_>>(),
-        vec![true, false, true]
+        vec![true, true]
     );
     assert_eq!(
         interaction_items

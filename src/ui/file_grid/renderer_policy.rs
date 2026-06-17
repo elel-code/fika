@@ -3,7 +3,7 @@ use std::sync::OnceLock;
 
 use super::{DetailsPaintSnapshot, ItemPaintContent, ItemPaintSnapshot};
 
-const GPUI_ITEM_IMAGES_ENV: &str = "FIKA_GPUI_ITEM_IMAGES";
+const CUSTOM_THEME_ICONS_ENV: &str = "FIKA_CUSTOM_THEME_ICONS";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct ItemRendererPolicy {
@@ -77,14 +77,17 @@ pub(super) struct RendererPolicyStats {
 }
 
 pub(super) fn item_renderer_policy(content: &ItemPaintContent) -> ItemRendererPolicy {
-    let has_image = content.thumbnail_path.is_some() || content.icon.path.is_some();
     let renaming = content.draft_name.is_some();
-    let image = if !has_image {
-        ItemImageRenderer::None
-    } else if gpui_item_images_enabled() {
-        ItemImageRenderer::GpuiElement
-    } else {
+    let image = if content.thumbnail_path.is_some() {
         ItemImageRenderer::ContentLayer
+    } else if content.icon.path.is_some() {
+        if custom_theme_icons_enabled() {
+            ItemImageRenderer::ContentLayer
+        } else {
+            ItemImageRenderer::GpuiElement
+        }
+    } else {
+        ItemImageRenderer::None
     };
     ItemRendererPolicy {
         // Compact/Icons base visuals live in content-level layers. Rename keeps
@@ -199,10 +202,10 @@ pub(super) fn item_paints_fallback_icon(content: &ItemPaintContent) -> bool {
     matches!(item_renderer_policy(content).image, ItemImageRenderer::None)
 }
 
-fn gpui_item_images_enabled() -> bool {
+fn custom_theme_icons_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| {
-        env::var(GPUI_ITEM_IMAGES_ENV).is_ok_and(|value| env_flag_is_truthy(&value))
+        env::var(CUSTOM_THEME_ICONS_ENV).is_ok_and(|value| env_flag_is_truthy(&value))
     })
 }
 

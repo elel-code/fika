@@ -485,17 +485,18 @@ by risk and evidence, not by how custom-painted a surface looks.
   custom image layer. Compare these with Dolphin
   `KStandardItemListWidget::updatePixmapCache()` / `pixmapForIcon()` before
   changing the current image renderer. Current-code A/B support is available
-  through `FIKA_GPUI_ITEM_IMAGES=1`, which keeps retained item state but renders
-  Compact/Icons item images through GPUI `img()` children for desktop-session
-  comparison. `scripts/compare-item-image-renderers.sh` now standardizes the
-  paired-log comparison, and the 2026-06-17 `/etc` smoke evidence is recorded
-  in `docs/ITEM_VIEW_RENDERER_DECISIONS.md`.
-- [ ] P16k: Decide the Compact/Icons theme-icon renderer from evidence:
-  keep/fix the custom image layer only if `[fika item-image]` shows low
-  `theme_placeholder`, low zoom-time `theme_decoded`, and stable
-  `theme_retained` behavior. If the historical GPUI `img()` path is smoother,
-  keep the retained model/controller split but move theme-icon rendering back
-  to a GPUI image element or design an equivalent retained pixmap cache.
+  through `FIKA_CUSTOM_THEME_ICONS=1`, which keeps retained item state but
+  forces MIME/theme icons through the custom item-image layer for
+  desktop-session comparison against the default GPUI theme-icon renderer.
+  `scripts/compare-item-image-renderers.sh` now standardizes the paired-log
+  comparison, and the 2026-06-17 `/etc` smoke evidence is recorded in
+  `docs/ITEM_VIEW_RENDERER_DECISIONS.md`.
+- [x] P16k: Decide the Compact/Icons theme-icon renderer from evidence:
+  default now uses GPUI `img()` elements for MIME/theme icons and keeps
+  thumbnails on the custom image layer. Keep this split unless paired
+  default-vs-`FIKA_CUSTOM_THEME_ICONS=1` zoom/scroll logs prove the custom
+  theme-icon painter is neutral or better without first-load placeholders,
+  zoom-time `theme_decoded` churn, or size jumps.
 - [ ] P16l: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

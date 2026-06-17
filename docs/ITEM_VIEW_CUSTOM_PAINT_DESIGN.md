@@ -12,9 +12,10 @@ Fika item views should converge on Dolphin's `KItemListView` model:
 - layout identity belongs to Rust-side projection and visible slot state
 - UI hitboxes are stable interaction surfaces
 - static item visuals are custom painted instead of rebuilt as GPUI child trees
-- thumbnail/theme-icon images are painted by retained content-level image
-  layers backed by GPUI's image cache; prepaint must not synchronously read or
-  decode theme icon files
+- thumbnail images are painted by retained content-level image layers backed by
+  GPUI's image cache; MIME/theme icons default to GPUI `img()` elements over
+  retained item shells because that path currently has better first-load
+  evidence
 - rename editors and drag-start initiation can remain specialized GPUI child
   paths until their platform contracts are replaceable
 
@@ -89,7 +90,9 @@ Historical baseline gate:
   `a3f5b0f` (`Refactor file_grid drop type and optimize cache retention`) as
   the pre-retained/custom-paint code baseline. That commit still rendered
   thumbnail/theme-icon images through GPUI `img()` children and the root
-  `image_cache(retain_all(...))` provider.
+  `image_cache(retain_all(...))` provider. Current code keeps that renderer
+  direction for MIME/theme icons while thumbnails remain on the custom image
+  paint layer.
 - Treat `d497593`, `8d1198f`, `36da130`, and `b0cac9a` as transition
   checkpoints: retained paint slot/text cache, retained hover state, dedicated
   custom element, and content-level fallback painting. They are useful for
@@ -158,7 +161,8 @@ Fika equivalent:
   projection or painter internals.
 - `VisibleItemSlotPool` owns stable visual slot identity.
 - `VisibleItemSnapshotCache` owns stable per-item content.
-- custom-painted item visuals consume snapshots and paint quads/text/images.
+- custom-painted item visuals consume snapshots and paint quads/text/thumbnail
+  images; GPUI `img()` theme icons still consume retained item snapshots.
 
 ## Current Role/Update Policy
 
@@ -178,10 +182,10 @@ file roles inside the painter:
 - when icon resolve results arrive, visible item snapshot caches are invalidated
   so the next frame can replace preliminary icons with resolved theme images.
 - thumbnail role success/failure remains model-driven, and the image paint
-  layer paints a fallback only after a same-source retained image has been
-  tried. Theme icons use the same GPUI image-cache decode path and are retained
-  by `iconName`; a pending new theme resource must not replace an already loaded
-  same-icon image with a marker or blank frame.
+  layer paints a fallback only after a same-thumbnail retained image has been
+  tried. MIME/theme icons default to GPUI `img()` elements over retained item
+  shells; `FIKA_CUSTOM_THEME_ICONS=1` can still force theme icons through the
+  custom image layer for A/B evidence, but that is not the default renderer.
 - zoom mirrors Dolphin's ordinary icon paint path: item geometry changes
   immediately, and MIME/theme icon snapshots resolve against the current layout
   icon size, just as `KStandardItemListWidget::pixmapForIcon()` uses the
@@ -230,7 +234,7 @@ Custom-painted static item visuals should draw:
 - fallback icon background and marker
 - item name text lines
 - future metadata overlays
-- future thumbnail/image quads once GPUI image cache integration is explicit
+- thumbnail/image quads whose renderer-policy path is the custom image layer
 
 Paint layer may use:
 
@@ -295,14 +299,15 @@ start in a custom element or GPUI exposes a stronger active-drag callback.
 
 Rename items keep the existing editor subtree. Before Phase 8, thumbnail and
 theme-icon items used slot-stable retained `img()` elements under a pane-local
-image cache; Phase 8 moved non-renaming Compact/Icons images behind the custom
-paint layer, and the file-grid root no longer installs a GPUI image-cache
-provider for obsolete `img()` children.
+image cache. Phase 8 moved thumbnails behind the custom paint layer, while
+MIME/theme icons now default back to GPUI `img()` elements because the custom
+theme-icon layer showed first-load placeholder churn in `/etc` logs.
 
 Current Compact/Icons item shells live in `src/ui/file_grid/item_shell.rs` and
-no longer contain per-item GPUI `img()` or static text visual children. They are
-transparent drag-start/rename boundaries; base visuals and images are owned by
-content-level custom paint layers.
+no longer contain per-item static text visual children. They are transparent
+drag-start/rename boundaries; base visuals and thumbnails are owned by
+content-level custom paint layers, and MIME/theme icon `img()` children are an
+explicit renderer-policy bridge over retained item state.
 
 ## Migration Phases
 
@@ -422,7 +427,8 @@ layer for Compact and Icons:
 - paint all non-renaming, non-thumbnail, non-theme-icon fallback items in one
   custom element
 - keep each item slot as a transparent interaction and drag shell
-- keep thumbnail, theme-icon, and rename paths as specialized child paths
+- keep thumbnail image, theme-icon renderer, and rename paths as specialized
+  child paths
 
 Acceptance:
 
@@ -440,9 +446,10 @@ Move all non-renaming Compact and Icons base visuals into content-level layers:
 - the custom visual layer paints every non-renaming item's background and text
 - fallback icon marker painting remains in the visual layer only for items
   without thumbnail or theme-icon paths
-- thumbnail and theme-icon `img()` elements live in one content-level image layer
-  keyed by retained visual slot id for this phase; Phase 8 replaces that layer
-  with direct custom image painting
+- thumbnail image elements live in one content-level image layer keyed by
+  retained visual slot id for this phase; Phase 8 replaces that thumbnail layer
+  with direct custom image painting, while theme-icon rendering remains a
+  renderer-policy decision
 - each non-renaming item slot remains a transparent interaction/drag shell
 - rename items keep the current child subtree and editor behavior
 
@@ -456,29 +463,29 @@ Acceptance:
 
 ### Phase 8: Direct Image Paint Layer
 
-Replace the content-level thumbnail/theme-icon `img()` layer with a custom paint
-element:
+Replace the content-level thumbnail `img()` layer with a custom paint element;
+theme icons may use this path only for A/B evidence:
 
 - keep using GPUI's `ImageAssetLoader` and pane-local `RetainAllImageCache` for
   thumbnail path loading, image decode, and render-image lifetime
-- for theme icons, keep the same GPUI image-cache decode path; retain by
-  `iconName` so zoom can reuse the previous icon while a final-size resource is
-  pending
+- for default MIME/theme icons, keep GPUI `img()` children over retained item
+  shells; if `FIKA_CUSTOM_THEME_ICONS=1` is enabled, keep the same GPUI
+  image-cache decode path and retain by `iconName` for comparison
 - draw loaded images from the custom layer with `Window::paint_image`
-- keep thumbnail fallback marker painting in the image layer; theme icons use a
-  neutral markerless placeholder only before any same-icon image has ever loaded
-  or when loading fails with no retained same-icon image
+- keep thumbnail fallback marker painting in the image layer; custom-theme A/B
+  mode uses a neutral markerless placeholder only before any same-icon image has
+  ever loaded or when loading fails with no retained same-icon image
 - keep thumbnail failures model-driven; a missing thumbnail render image does not
   synthesize a file icon in paint
 
 Acceptance:
 
-- non-renaming thumbnail/theme-icon items no longer allocate per-image `img()`
-  elements
+- non-renaming thumbnail items no longer allocate per-image `img()` elements
 - thumbnail image loads still happen asynchronously and notify the pane on
   completion
-- theme icon pending/error frames do not replace an already loaded same-`iconName`
-  image with a marker, blank rect, or unrelated fallback
+- default theme icons use GPUI `img()` elements; custom-theme A/B runs must not
+  replace an already loaded same-`iconName` image with a marker, blank rect, or
+  unrelated fallback
 - loaded image bounds match GPUI `ObjectFit::Contain`
 - image cache state remains pane-local and is released with the pane/layer
 
@@ -528,8 +535,8 @@ Keep rename as the only item-local child path until text input is separated from
 item painting:
 
 - the selected item's normal base visual remains painted by the layer
-- thumbnail/theme-icon images for the renaming item remain painted by the image
-  layer
+- thumbnail images for the renaming item remain painted by the image layer;
+  theme-icon images follow the current renderer policy
 - the editor, caret, selection highlight, warning/error helper, and click caret
   hit testing remain in the existing rename subtree
 - the rename subtree is positioned as an overlay, not as the default item visual

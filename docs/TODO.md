@@ -21,7 +21,7 @@
 - [x] 功能提炼与集成：Dolphin 是 UI 行为和文件操作流程的第一参考；cosmic-files 是纯 Rust 系统集成的参考源。两个源码库中提炼的功能统一集成到 `fika-core`，UI 层只做渲染和输入路由。
 - [x] Dolphin 分层模型对齐：渲染层不做数据决策，模型层不持有 UI 句柄，交互层不直接操作文件系统。
 - [x] 文件拆分：`src/main.rs` 只保留 app 状态编排和跨模块路由。所有功能模块已拆入 `src/core/`（domain logic）和 `src/ui/`（rendering），子职责继续按目录式模块拆分。
-- [x] 图标模型已收敛为按需路径缓存：删除 `ModelEntry.icon_name`、`src/ui/icons/roles.rs`、`RenderImage` 自解码路径；图标由 `FileIconCache` 按 `FileIconKind + icon_size` / named icon 缓存。文件视图图片由 custom image paint layer 通过 `Window::paint_image` 绘制：缩略图和 theme icon 均继续走 GPUI `RetainAllImageCache` 解码路径，paint layer 只保留 same-source 真实图片并在 pending/failure 时复用。Zoom 对齐 Dolphin 普通图标路径：布局立即变化，MIME/theme icon path 按当前 layout icon size 解析，不套用 300ms preview role-size timer。
+- [x] 图标模型已收敛为按需路径缓存：删除 `ModelEntry.icon_name`、`src/ui/icons/roles.rs`、`RenderImage` 自解码路径；图标由 `FileIconCache` 按 `FileIconKind + icon_size` / named icon 缓存。文件视图图片策略按证据拆分：缩略图由 custom image paint layer 通过 `Window::paint_image` 绘制并复用 GPUI `RetainAllImageCache` 解码结果，MIME/theme icon 默认由 GPUI `img()` 渲染，仍由 retained item snapshot 和当前 layout icon size 的 `FileIconCache` 路径驱动。`FIKA_CUSTOM_THEME_ICONS=1` 可强制 theme icon 回到 custom image layer 做 A/B。Zoom 对齐 Dolphin 普通图标路径：布局立即变化，MIME/theme icon path 按当前 layout icon size 解析，不套用 300ms preview role-size timer。
 
 ## Completed Features
 
@@ -86,8 +86,8 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
 - [x] Phase 4：缩略图/图片绘制边界收敛到 retained image path。
 - [x] Phase 5：从 `canvas` spike 升级到 dedicated GPUI custom element。
 - [x] Phase 6：静态 fallback Compact/Icons item 上提到 content-level 自绘 layer，item shell 仅保留交互。
-- [x] Phase 7：所有非 rename Compact/Icons item 的背景/文字进入 content-level 自绘 layer，thumbnail/theme icon 进入独立 content-level image layer，item shell 只保留交互。
-- [x] Phase 8：thumbnail/theme icon image layer 改为 custom paint element，复用 GPUI `RetainAllImageCache`/`ImageAssetLoader`，用 `Window::paint_image` 直接绘制。
+- [x] Phase 7：所有非 rename Compact/Icons item 的背景/文字进入 content-level 自绘 layer，thumbnail image 进入独立 content-level image layer，item shell 只保留交互/drag-start/rename 和明确的 GPUI theme-icon renderer bridge。
+- [x] Phase 8：thumbnail image layer 改为 custom paint element，复用 GPUI `RetainAllImageCache`/`ImageAssetLoader`，用 `Window::paint_image` 直接绘制；MIME/theme icon 默认保留 GPUI `img()`，custom theme-icon paint 只作为 A/B 开关。
 - [~] Phase 9：custom element hitbox 迁移分两步。P9a 已开始把非 rename Compact/Icons hover/cursor 放进 retained hitbox layer；P9b 删除 drag shell 需等待 GPUI 公开 custom-element drag-start API 或引入可审计 GPUI patch。每一步都必须保留 Dolphin model/controller/painter 分层，并用 perf logs 证明不劣于 GPUI built-in 路径。
 - [x] Phase 10：rename 只保留 overlay editor，普通背景/文字/图片继续走 content-level layer。
 - [x] Phase 11：Details row 已进入 retained paint slot，背景/图标/文字已转入 content-level custom visual layer；click/menu/navigation/scroll/middle-paste 和 drop dispatch 已走 viewport retained hit testing/drop handlers，row shell 只剩 GPUI drag-start 边界。继续移除 row shell 或扩大自绘前必须用 perf 证明不劣于 GPUI built-in 路径。
@@ -135,8 +135,8 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
 - [x] **P4 — zoom 缩略图 fallback 稳定性**：thumbnail 图片 pending 或 load failure 时由 image paint layer 绘制 item fallback，避免 zoom 期间出现空白图标 rect。
 - [x] **P5 — visible MIME icon 首帧稳定性**：对齐 Dolphin `updateVisibleIcons()` + `pixmapForIcon()`，目录加载和 zoom 时在 snapshot 转换前用 Dolphin `MaxBlockTimeout = 200ms` 同步解析 visible item 的 theme icon path；read-ahead/offscreen icon 仍走后台队列。
 - [x] **P6 — theme icon fallback marker 去除**：theme icon 图片尚未加载或加载失败且没有 retained same-`iconName` 图片时，只使用中性无文字占位，不再显示 `TXT/IMG/FILE` 等 MIME marker。
-- [x] **P7 — file-grid 根级 image cache 清理**：thumbnail/theme icon 已由 custom image paint layer 负责；删除 file-grid root 上旧 `image_cache(retain_all(...))` provider，避免保留已无 `img()` 子树使用的 GPUI renderer 边界。
-- [x] **P8 — Dolphin icon visual stability 对齐**：theme icon 不在 GPUI prepaint 同步读文件/解码；paint layer 通过 `RetainAllImageCache` 获取图片，并优先复用 retained same-`iconName` 真实图片。Zoom 期间普通 MIME/theme icon 使用当前 layout icon size，避免 300ms 后二次调整；Dolphin 300ms timer 只作为未来 preview/role work 的参考边界。
+- [x] **P7 — file-grid 根级 image cache 清理**：thumbnail 已由 custom image paint layer 负责；旧 root-level `image_cache(retain_all(...))` provider 不再作为所有 item image 的隐式边界。MIME/theme icon GPUI `img()` 是显式 renderer-policy path。
+- [x] **P8 — Dolphin icon visual stability 对齐**：theme icon 不在 GPUI prepaint 同步读文件/解码；默认 GPUI `img()` 路径由 retained item snapshot 和当前 layout icon size 的 `FileIconCache` 路径驱动。Custom theme-icon paint 仅通过 `FIKA_CUSTOM_THEME_ICONS=1` 做对比。Zoom 期间普通 MIME/theme icon 使用当前 layout icon size，避免 300ms 后二次调整；Dolphin 300ms timer 只作为未来 preview/role work 的参考边界。
 
 ### 双运行时对齐（COSMIC Files）
 

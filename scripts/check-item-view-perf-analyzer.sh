@@ -75,29 +75,29 @@ if [[ "$evidence" != *"renderer_policy_frames"* ]]; then
     exit 1
 fi
 
-cat > "$tmpdir/custom-image.log" <<'EOF'
+cat > "$tmpdir/custom-theme.log" <<'EOF'
 [fika item-view] pane=1 mode=Compact phase=initial items=197 visible=48 raw=187us icon_sync=99us queue=180us convert=196us total=770us
 [fika renderer-policy] pane=1 mode=Compact items=48 visual_layer=48 image_layer=48 gpui_image_element=0 retained_interaction=48 gpui_drag_shell=48 rename_overlay=0
 [fika item-image] pane=1 mode=Compact prepaint_count=48 prepaint=263us paint_count=0 paint=0us theme_loaded=0 theme_decoded=0 theme_retained=0 theme_placeholder=48 thumb_loaded=0 thumb_decoded=0 thumb_retained=0 thumb_fallback=0
 [fika item-image] pane=1 mode=Compact prepaint_count=48 prepaint=211us paint_count=48 paint=990us theme_loaded=48 theme_decoded=1 theme_retained=0 theme_placeholder=0 thumb_loaded=0 thumb_decoded=0 thumb_retained=0 thumb_fallback=0
 EOF
 
-cat > "$tmpdir/gpui-image.log" <<'EOF'
+cat > "$tmpdir/default-split.log" <<'EOF'
 [fika item-view] pane=1 mode=Compact phase=initial items=197 visible=48 raw=141us icon_sync=75us queue=124us convert=150us total=570us
 [fika renderer-policy] pane=1 mode=Compact items=48 visual_layer=48 image_layer=0 gpui_image_element=48 retained_interaction=48 gpui_drag_shell=48 rename_overlay=0
 EOF
 
-image_renderer_evidence="$("$image_renderer_compare" "$tmpdir/custom-image.log" "$tmpdir/gpui-image.log")"
+image_renderer_evidence="$("$image_renderer_compare" "$tmpdir/custom-theme.log" "$tmpdir/default-split.log")"
 if [[ "$image_renderer_evidence" != *"## Item Image Renderer A/B Evidence"* ]]; then
     echo "expected item image renderer comparison heading" >&2
     exit 1
 fi
-if [[ "$image_renderer_evidence" != *"Custom renderer state: custom-image-layer"* ]]; then
+if [[ "$image_renderer_evidence" != *"Custom-theme renderer state: custom-image-layer"* ]]; then
     echo "expected custom image renderer state in comparison" >&2
     exit 1
 fi
-if [[ "$image_renderer_evidence" != *"GPUI renderer state: gpui-img"* ]]; then
-    echo "expected GPUI image renderer state in comparison" >&2
+if [[ "$image_renderer_evidence" != *"Default renderer state: default-gpui-theme-icons"* ]]; then
+    echo "expected default GPUI theme-icon renderer state in comparison" >&2
     exit 1
 fi
 if [[ "$image_renderer_evidence" != *"theme placeholder | 48 | 0"* ]]; then

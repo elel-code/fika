@@ -12,7 +12,8 @@ becomes the default.
 | --- | --- | --- | --- |
 | Compact/Icons item model and geometry | retained | `DirectoryModel`, visible snapshots, slot pools | none for current path |
 | Compact/Icons base background, selection, hover, drop tint, labels | replaced | custom content-level painter | runtime perf and DnD smoke evidence must stay current |
-| Compact/Icons thumbnail and theme-icon images | replaced | custom image painter using GPUI `RetainAllImageCache` plus retained same-source images | theme-icon paths resolve off the render path with the current layout icon size; pending/failure still reuses retained images or paints fallback |
+| Compact/Icons thumbnail images | replaced | custom image painter using GPUI `RetainAllImageCache` plus retained same-thumbnail images | pending/failure still reuses retained images or paints thumbnail fallback |
+| Compact/Icons MIME/theme-icon images | retained model, GPUI renderer | GPUI `img()` element over retained item shell | theme-icon paths resolve off the render path with the current layout icon size; custom theme-icon painting is only enabled by `FIKA_CUSTOM_THEME_ICONS=1` for A/B evidence |
 | Compact/Icons click, menu, hover, cursor, and drop hit testing | replaced | retained viewport/custom hitboxes plus active item-drag window tracker | runtime DnD smoke still required after painter changes |
 | Compact/Icons drag start | not replaced | GPUI `Div::on_drag` shell | public GPUI custom-element drag-start API or audited Fika GPUI patch |
 | Compact/Icons rename editor | not replaced | GPUI editor overlay | only revisit after caret, selection, IME, and text input behavior are covered |
@@ -58,9 +59,8 @@ DnD state helpers, but its renderer is still GPUI.
 - Runtime DnD debug channel: `FIKA_DEBUG_DND=1`, especially
   `[fika dnd] active-item-move`
 - Compact/Icons image paint channel: `[fika item-image]`
-  (`theme_loaded`, `theme_decoded`, `theme_retained`,
-  `theme_placeholder`, `thumb_loaded`, `thumb_decoded`, `thumb_retained`,
-  `thumb_fallback`)
+  (`thumb_loaded`, `thumb_decoded`, `thumb_retained`, `thumb_fallback`;
+  `theme_*` counters appear only in custom-theme A/B runs)
 - Details visual paint channel: `[fika details-visual]`
 - Renderer surface count channel: `[fika renderer-policy]`
 - Runtime checklist: `docs/ITEM_VIEW_RUNTIME_SMOKE.md`
@@ -134,20 +134,19 @@ remaining metadata/icon work. Visible icon path resolution uses Dolphin's
 `MaxBlockTimeout` budget of 200ms and still does not decode image resources in
 the render/prepaint path. Read-ahead and offscreen items remain scheduler-owned.
 
-Image-backed icon work follows the same visual stability rule. Thumbnail probe
-success and failure remain model roles, but the image paint layers now keep a
-real decoded image through transient GPUI image-cache misses whenever the
-semantic source still matches. MIME/theme icons are retained by `iconName`, so
-zoom path changes and scroll re-entry can reuse a same-icon image until the new
-resource is available. Theme icon decoding remains on GPUI's image-cache path;
-the paint layer must not synchronously read or decode theme icon files during
-prepaint. Theme icons are painted into the current Dolphin-style square icon
-box instead of recomputing their visible size from the decoded image's
-intrinsic dimensions; first-load or load-failure placeholders use the same
-square box and remain markerless. Thumbnails are retained only by exact
-thumbnail path and continue to use contained image bounds. Thumbnail fallback
-icons are still painted when no real image exists yet or the semantic source
-changed.
+Image-backed work follows the same visual stability rule. Thumbnail probe
+success and failure remain model roles, and the thumbnail paint layer keeps a
+real decoded thumbnail through transient GPUI image-cache misses whenever the
+semantic source still matches. MIME/theme icons default to GPUI `img()`
+elements fed by the same retained item snapshots because `/etc` evidence showed
+the custom image layer exposed a first-load placeholder frame that GPUI's image
+element path avoided. The custom theme-icon paint path remains available only
+through `FIKA_CUSTOM_THEME_ICONS=1` for paired evidence. In either renderer,
+theme icon decoding stays on GPUI's image-cache path; render/prepaint code must
+not synchronously read or decode theme icon files. Thumbnails are retained only
+by exact thumbnail path and continue to use contained image bounds. Thumbnail
+fallback icons are still painted when no real image exists yet or the semantic
+source changed.
 
 The immediate non-GUI-safe work is to freeze fresh runtime evidence after the
 Dolphin-aligned zoom/icon visual update, then execute the P15 transition order.

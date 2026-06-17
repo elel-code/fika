@@ -26,7 +26,8 @@ Current replacement status and the full transition roadmap are tracked in
 | Surface | Current renderer | Dolphin-style owner | Decision | Evidence required before changing |
 | --- | --- | --- | --- | --- |
 | Compact/Icons base background and labels | custom content-level painter | visible item snapshots, paint slots, text shape cache | Keep custom paint. | Runtime logs must keep steady snapshot conversion sub-ms and static visual paint/build under budget. |
-| Compact/Icons thumbnail and theme-icon images | custom image painter | image paint snapshots, pane-local thumbnail image cache, retained theme/thumbnail image map, background file-icon resolve queue | Keep custom paint while image decode/cache stays on GPUI `RetainAllImageCache`; theme icons reuse retained same-`iconName` images through pending loads. Zoom resolves theme icon paths for the current layout icon size immediately, matching Dolphin's widget pixmap path instead of applying the delayed preview role-size timer to ordinary MIME icons. Render conversion uses cached/preliminary icon snapshots only. | Logs must include `[fika item-image]` plus `image_sources`; no synchronous icon-theme lookup in conversion, no thumbnail sync decode, no theme-icon file decode in prepaint, and no regression where a previously visible real MIME icon flashes back to fallback while a new image resource is pending. |
+| Compact/Icons thumbnail images | custom image painter | image paint snapshots, pane-local thumbnail image cache, retained thumbnail image map, thumbnail scheduler roles | Keep custom paint for thumbnails while image decode/cache stays on GPUI `RetainAllImageCache`; thumbnail pending/failure behavior remains model-driven and can paint fallback without changing MIME/theme icon policy. | Logs must include `[fika item-image]` plus `thumb_*` `image_sources` when thumbnails are exercised; no thumbnail sync decode in prepaint. |
+| Compact/Icons MIME/theme-icon images | GPUI `img()` element over retained item shell | retained item slots, visible icon role/path cache, background file-icon resolve queue | Use GPUI image elements by default. `/etc` evidence showed the custom image layer exposed a first-load placeholder frame for all 48 visible theme icons; GPUI elements keep the retained model/controller boundary without feeding theme icons through the custom painter. Render conversion still uses cached/preliminary icon snapshots only, and zoom resolves theme icon paths for the current layout icon size immediately. | Revisit only with paired logs from `FIKA_CUSTOM_THEME_ICONS=1` and default runs. The default should show `gpui_image_element>0`; the custom override should be the only path with theme-icon `theme_placeholder` churn. |
 | Compact/Icons hover, cursor, click, menu, drop hit testing | retained viewport/custom hitboxes plus active item-drag window tracker | viewport retained hit testing and `drag_drop` state | Keep retained controller path. | DnD smoke must pass across internal item, pane, Places, and external drops; pane self-drags should log `active-item-move`. |
 | Compact/Icons drag start | GPUI `Div::on_drag` shell | retained drag payload state plus temporary shell | Keep GPUI shell for initiation only. | Do not remove until GPUI exposes public custom-element drag-start or Fika carries an audited GPUI patch. |
 | Compact/Icons rename editor | GPUI text/editor subtree overlay | rename draft model and overlay geometry | Keep GPUI built-in editor. | Only revisit when text input, caret hit testing, selection, and IME behavior can stay behavior-complete. |
@@ -56,14 +57,12 @@ change:
   icon name/height.
 - Historical Fika GPUI path: `a3f5b0f` / early transition commits rely on GPUI
   `img()` loading and element fallback behavior.
-- Current Fika custom image layer: `[fika item-image]` reports
-  `theme_loaded`, `theme_decoded`, `theme_retained`, and
-  `theme_placeholder`.
-- Current-code GPUI image A/B path: run with `FIKA_GPUI_ITEM_IMAGES=1` to keep
-  the retained item model/controller path but render Compact/Icons
-  thumbnail/theme-icon images as GPUI `img()` children. Renderer-policy logs
-  should then show `gpui_image_element>0` and lower `image_layer` counts for
-  image-backed Compact/Icons items.
+- Custom-theme override: run with `FIKA_CUSTOM_THEME_ICONS=1` to force
+  theme/MIME icons back through the custom item-image paint layer.
+- Current default path: run without image renderer overrides. Thumbnails stay
+  on the custom image layer, while MIME/theme icons use GPUI `img()` children
+  over retained item shells. Renderer-policy logs should show
+  `gpui_image_element>0` for visible theme icons.
 
 Decision rule: if the custom image layer keeps showing visible first-load
 placeholders or zoom-time decode/size churn while the GPUI `img()` baseline is
@@ -77,24 +76,24 @@ image painter.
 Automated launch commands:
 
 ```sh
+timeout 8s env FIKA_PERF_ITEM_VIEW=1 FIKA_CUSTOM_THEME_ICONS=1 target/debug/fika /etc
 timeout 8s env FIKA_PERF_ITEM_VIEW=1 target/debug/fika /etc
-timeout 8s env FIKA_PERF_ITEM_VIEW=1 FIKA_GPUI_ITEM_IMAGES=1 target/debug/fika /etc
 ```
 
 Observed structured evidence from `scripts/compare-item-image-renderers.sh`:
 
-- Default custom image layer:
+- Custom-theme override:
   `max_image_layer=48`, `max_gpui_image_element=0`, `image_frames=3`,
   `theme_loaded=96`, `theme_decoded=1`, `theme_placeholder=48`.
-- GPUI image switch:
+- Default split renderer:
   `max_image_layer=0`, `max_gpui_image_element=48`, `image_frames=0`,
   `theme_placeholder=0`.
 
-This proves the current custom image layer shows a first-load placeholder frame
-for all 48 visible `/etc` MIME/theme icons, then switches when GPUI image-cache
-decode completion feeds the custom painter. It also proves the A/B path keeps
-the retained item model/controller path while routing image-backed Compact
-items through GPUI `img()` children.
+This proves the custom theme-icon image layer shows a first-load placeholder
+frame for all 48 visible `/etc` MIME/theme icons, then switches when GPUI
+image-cache decode completion feeds the custom painter. It also proves the
+default split renderer keeps the retained item model/controller path while
+routing MIME/theme icons through GPUI `img()` children.
 
 This evidence is sufficient to explain startup placeholder-to-icon switching
 in `/etc` for the custom image layer. It is not yet sufficient to decide the
@@ -131,26 +130,26 @@ For paint-layer investigations, compare `[fika static-item-visual]` and
 `[fika item-image]` prepaint counts against visible item counts, not raw
 read-ahead work counts. Read-ahead belongs to scheduler projection and retained
 caches; it should not add image-cache loads or text shaping to the current
-paint prepass. The analyzer's `image_sources` line separates first-ready GPUI
-decode results (`theme_decoded` / `thumb_decoded`), already-ready cache loads
-(`theme_loaded` / `thumb_loaded`), retained fallback-to-last-real-image paths
-(`theme_retained` / `thumb_retained`), and visible fallback paths
-(`theme_placeholder` / `thumb_fallback`). A zoom or scroll trace with high
-`theme_retained` and low `theme_placeholder` is evidence that the custom image
-layer is preserving Dolphin-style same-icon visual stability through pending
-image-cache loads.
+paint prepass. The analyzer's `image_sources` line separates thumbnail
+first-ready GPUI decode results (`thumb_decoded`), already-ready cache loads
+(`thumb_loaded`), retained fallback-to-last-real-image paths
+(`thumb_retained`), and visible fallback paths (`thumb_fallback`). Theme
+`image_sources` counters appear only when `FIKA_CUSTOM_THEME_ICONS=1` routes
+MIME/theme icons through the custom image layer for A/B evidence.
 
 For MIME icon flicker investigations, compare against Dolphin's
 `KStandardItemListWidget::updatePixmap()` and `pixmapForIcon()`: Dolphin keeps a
 widget-local `m_pixmap` and uses `QPixmapCache` by icon name/size, so a loaded
 real icon is not replaced by a marker while a same-icon resource is refreshed.
-Fika's custom image painters must preserve that behavior with retained images
-keyed by MIME/theme `iconName`; thumbnail retention remains keyed by the exact
-thumbnail path. Fika does not mirror Dolphin's synchronous `QIcon::pixmap()` by
-reading and decoding SVGs in GPUI prepaint; GPUI image loading remains the
-decode path, and retained same-`iconName` images cover pending frames. A neutral
-markerless placeholder is only the first-load/failure fallback, not a
-regression from an already loaded real icon.
+Fika's default path preserves that behavior by keeping MIME/theme icons on GPUI
+`img()` elements fed by retained item snapshots and current-size icon paths.
+If `FIKA_CUSTOM_THEME_ICONS=1` is used, the custom image painter must preserve
+the same behavior with retained images keyed by MIME/theme `iconName`.
+Thumbnail retention remains keyed by the exact thumbnail path. Fika does not
+mirror Dolphin's synchronous `QIcon::pixmap()` by reading and decoding SVGs in
+GPUI prepaint; GPUI image loading remains the decode path. A neutral markerless
+placeholder is only acceptable as the custom-theme first-load/failure fallback,
+not as a regression from an already loaded real icon.
 
 For zoom investigations, compare against
 `KFileItemListView::triggerIconSizeUpdate()` and `updateIconSize()`: Dolphin
@@ -170,7 +169,8 @@ the same split: visible generic MIME metadata and visible theme-icon paths may
 be resolved synchronously within bounded budgets; read-ahead/offscreen metadata
 and icon paths remain queued. This mirrors Dolphin's `iconName` plus
 `pixmapForIcon()` path without moving read-ahead icon-theme scans into render
-conversion. Image decoding itself stays on the scheduler/image-cache path; the
+conversion. Image decoding itself stays on the scheduler/image-cache path;
+default theme icons decode through GPUI `img()`, while the custom-theme A/B
 paint layer may retain a previous same-`iconName` image but must not
 synchronously decode theme icon files during prepaint.
 

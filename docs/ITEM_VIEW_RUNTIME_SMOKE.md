@@ -180,18 +180,18 @@ review is still required for whether the exercised mode switches, resizes,
 fullscreen toggles, and DnD actions match this checklist.
 
 For MIME/theme-icon image renderer A/B, repeat the same `~/Downloads` and
-`/etc` runs with `FIKA_GPUI_ITEM_IMAGES=1`. That run keeps retained item
-snapshots and controller routing but renders Compact/Icons item images through
-GPUI `img()` children. Compare `renderer-policy gpui_image_element` counts and
-the absence or presence of `[fika item-image]` source churn against the default
-custom image-layer run.
+`/etc` runs with `FIKA_CUSTOM_THEME_ICONS=1`. The default run keeps retained
+item snapshots and controller routing while rendering MIME/theme icons through
+GPUI `img()` children; the override forces MIME/theme icons back through the
+custom item-image layer. Compare `renderer-policy gpui_image_element` counts
+and the absence or presence of theme-icon `[fika item-image]` source churn.
 
 Use `scripts/compare-item-image-renderers.sh` for this comparison:
 
 ```sh
-FIKA_PERF_ITEM_VIEW=1 cargo run -- /etc 2>&1 | tee /tmp/fika-etc-custom.log
-FIKA_PERF_ITEM_VIEW=1 FIKA_GPUI_ITEM_IMAGES=1 cargo run -- /etc 2>&1 | tee /tmp/fika-etc-gpui.log
-scripts/compare-item-image-renderers.sh /tmp/fika-etc-custom.log /tmp/fika-etc-gpui.log
+FIKA_PERF_ITEM_VIEW=1 FIKA_CUSTOM_THEME_ICONS=1 cargo run -- /etc 2>&1 | tee /tmp/fika-etc-custom-theme.log
+FIKA_PERF_ITEM_VIEW=1 cargo run -- /etc 2>&1 | tee /tmp/fika-etc-default.log
+scripts/compare-item-image-renderers.sh /tmp/fika-etc-custom-theme.log /tmp/fika-etc-default.log
 ```
 
 After a passing runtime review, update
