@@ -303,6 +303,9 @@ This is the active task board for the GPUI item view custom-paint migration.
 - [x] Extract raw file-grid snapshot construction into
   `src/ui/file_grid/snapshot/builder.rs` so model/layout traversal is separate
   from render snapshot conversion and scheduler projection helpers.
+- [x] Extract raw-to-render snapshot conversion into
+  `src/ui/file_grid/snapshot/render.rs` so final visible item/details
+  projection is separate from raw snapshot types and scheduler helpers.
 - [x] Extract visible item snapshot/cache projection into
   `src/ui/file_grid/snapshot/visible.rs` so stable visible item content reuse is
   separate from raw directory snapshot construction.

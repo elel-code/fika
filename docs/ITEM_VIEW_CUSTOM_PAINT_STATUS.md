@@ -42,6 +42,7 @@ DnD state helpers, but its renderer is still GPUI.
 - Shared visual style and item identity helpers: `src/ui/file_grid/style.rs`
 - File-grid root API snapshot/props/viewport types: `src/ui/file_grid/types.rs`
 - Raw file-grid snapshot construction: `src/ui/file_grid/snapshot/builder.rs`
+- Raw-to-render snapshot conversion: `src/ui/file_grid/snapshot/render.rs`
 - Visible item snapshot/cache projection: `src/ui/file_grid/snapshot/visible.rs`
 - Thumbnail candidate and read-ahead projection: `src/ui/file_grid/snapshot/thumbnail.rs`
 - Metadata role candidate projection: `src/ui/file_grid/snapshot/metadata.rs`
