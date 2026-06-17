@@ -27,12 +27,12 @@ Current replacement status and the full transition roadmap are tracked in
 | --- | --- | --- | --- | --- |
 | Compact/Icons base background and labels | custom content-level painter | visible item snapshots, paint slots, text shape cache | Keep custom paint. | Runtime logs must keep steady snapshot conversion sub-ms and static visual paint/build under budget. |
 | Compact/Icons thumbnail and theme-icon images | custom image painter backed by GPUI `RetainAllImageCache` | image paint snapshots and pane-local image cache | Keep custom paint while GPUI owns decode/cache. | Logs must include `[fika item-image]`; no sync decode or thumbnail fallback regression. |
-| Compact/Icons hover, cursor, click, menu, drop hit testing | retained viewport/custom hitboxes | viewport retained hit testing and `drag_drop` state | Keep retained controller path. | DnD smoke must pass across internal item, pane, Places, and external drops. |
-| Compact/Icons drag start | GPUI `Div::on_drag` shell | retained drag payload state plus temporary shell | Keep GPUI shell. | Do not remove until GPUI exposes public custom-element drag-start or Fika carries an audited GPUI patch. |
+| Compact/Icons hover, cursor, click, menu, drop hit testing | retained viewport/custom hitboxes plus active item-drag window tracker | viewport retained hit testing and `drag_drop` state | Keep retained controller path. | DnD smoke must pass across internal item, pane, Places, and external drops; pane self-drags should log `active-item-move`. |
+| Compact/Icons drag start | GPUI `Div::on_drag` shell | retained drag payload state plus temporary shell | Keep GPUI shell for initiation only. | Do not remove until GPUI exposes public custom-element drag-start or Fika carries an audited GPUI patch. |
 | Compact/Icons rename editor | GPUI text/editor subtree overlay | rename draft model and overlay geometry | Keep GPUI built-in editor. | Only revisit when text input, caret hit testing, selection, and IME behavior can stay behavior-complete. |
 | Details row backgrounds, icons, and text cells | custom content-level painter | Details paint slots, image cache, text shape cache | Keep custom paint. | Logs must include `[fika details-visual]` and `[fika details-shape-cache]` with no steady build regression. |
-| Details row click, menu, navigation, drop, hover, cursor | retained viewport/custom hitboxes | viewport retained hit testing and Details row snapshots | Keep retained controller path. | Runtime smoke must cover Details item drag, directory drop, pane drop, and rename overlay. |
-| Details drag start | GPUI `Div::on_drag` row shell | retained Details drag fields plus temporary shell | Keep GPUI shell. | Same public drag-start API or audited GPUI patch gate as Compact/Icons. |
+| Details row click, menu, navigation, drop, hover, cursor | retained viewport/custom hitboxes plus active item-drag window tracker | viewport retained hit testing and Details row snapshots | Keep retained controller path. | Runtime smoke must cover Details item drag, directory drop, pane drop, and rename overlay. |
+| Details drag start | GPUI `Div::on_drag` row shell | retained Details drag fields plus temporary shell | Keep GPUI shell for initiation only. | Same public drag-start API or audited GPUI patch gate as Compact/Icons. |
 | Places rows and sidebar scrollbar | GPUI elements with retained drag/drop state helpers | `places` model/projection and `drag_drop` state | Keep GPUI renderer for now. | A future custom painter needs a separate perf case; current priority is item-view shell removal only after DnD evidence. |
 
 ## Post-P11e Evidence To Collect
@@ -55,6 +55,8 @@ removing a GPUI shell or reverting a custom-painted surface.
 ## Next Renderer Decisions
 
 1. Keep the remaining drag-start shells until the GPUI API boundary changes.
+   Do not use GPUI per-element `on_drag_move` as the source of truth for pane
+   self-drag hover; the active item-drag window tracker owns that path.
 2. Use runtime logs to decide whether any currently custom-painted surface
    should stay custom-painted or fall back to a GPUI renderer over the retained
    model.

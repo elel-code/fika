@@ -222,6 +222,10 @@ This is the active task board for the GPUI item view custom-paint migration.
   state, remaining GPUI boundaries, and full transition roadmap are explicit.
 - [ ] Freeze a current desktop-session runtime evidence block for Compact,
   Icons, and Details before another painter expansion.
+- [ ] Refresh `FIKA_DEBUG_DND=1` runtime evidence after the active item-drag
+  window tracker: pane item drag over a pane directory should log
+  `active-item-move ... kind=Some(Directory)` and visually highlight the
+  directory before drop.
 - [ ] Split `src/ui/file_grid.rs` along Dolphin-style model/projection,
   controller/hit-test, painter, and renderer-policy boundaries without changing
   behavior.
@@ -245,8 +249,12 @@ This is the active task board for the GPUI item view custom-paint migration.
 - [x] Centralize viewport-level item/external/place drag-move and drop shell
   installation in `src/ui/file_grid/dnd.rs`.
 - [x] Install directory item/row drop-target shells through
-  `src/ui/file_grid/dnd.rs` so pane-internal item drags update retained
-  directory highlight while moving, matching the Places-to-pane path.
+  `src/ui/file_grid/dnd.rs`; these remain positive target assertions, not the
+  only source of pane-internal drag hover state.
+- [x] Track pane-internal active item drags from a window mouse listener in the
+  retained interaction layer so self-drags update retained directory highlight
+  while moving even when GPUI does not deliver per-element `on_drag_move`
+  callbacks after `item-start`.
 - [x] Extract viewport measurement and shell wiring into
   `src/ui/file_grid/viewport.rs`, keeping scroll, retained hit testing,
   rubber-band selection, and viewport-level DnD handlers outside the main

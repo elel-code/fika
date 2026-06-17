@@ -166,6 +166,14 @@ Temporarily keep one GPUI `Div` per visible item for:
 Viewport-level hit testing remains authoritative for normal click, context menu,
 middle click, rubber band, and drop target routing.
 
+Pane-internal item drag hover is not owned by GPUI per-element `on_drag_move`.
+Runtime evidence showed item self-drags can start successfully while later
+element drag-move callbacks are not delivered. The retained interaction layer
+therefore installs a window mouse tracker while an `ActiveItemDrag` exists. That
+tracker routes the current window position through the retained pane hit-test
+and updates the same `ItemDropTarget` state used by Places-to-pane and external
+path drops. GPUI item shells remain responsible for drag initiation only.
+
 Rename items keep the existing editor subtree. Before Phase 8, thumbnail and
 theme-icon items used slot-stable retained `img()` elements under a pane-local
 image cache; Phase 8 moves non-renaming Compact/Icons images behind the custom

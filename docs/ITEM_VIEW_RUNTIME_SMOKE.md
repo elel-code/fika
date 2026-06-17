@@ -20,6 +20,12 @@ Recommended launch command:
 FIKA_PERF_ITEM_VIEW=1 cargo run -- ~/Downloads
 ```
 
+For drag/drop routing diagnostics, add `FIKA_DEBUG_DND=1`:
+
+```sh
+FIKA_DEBUG_DND=1 cargo run -- ~/Downloads
+```
+
 To save and summarize logs:
 
 ```sh
@@ -32,6 +38,10 @@ scripts/check-item-view-runtime-log.sh /tmp/fika-item-view.log
 For each view mode:
 
 - Start dragging a file item and confirm the preview stays near the cursor.
+- While dragging a pane item over a visible pane directory, confirm the directory
+  highlights before drop. With `FIKA_DEBUG_DND=1`, this should emit
+  `active-item-move ... kind=Some(Directory)`; `item-start` without a later
+  active move line means the active item-drag hover path is not running.
 - Drop one file onto a visible directory item; the drop menu/cursor should target
   that directory.
 - Drop one file onto blank pane space; the drop menu/cursor should target the
@@ -42,6 +52,17 @@ For each view mode:
 - Drop one external folder onto Places; it should be added at the insert target.
 - Drop external paths onto a directory item and onto blank pane space; both
   should use the same target logic as internal item drags.
+
+Expected DnD debug interpretation:
+
+- `item-start`: GPUI drag-start shell created the item drag payload.
+- `active-item-move`: Fika's retained interaction layer is tracking the active
+  pane item drag from window mouse movement.
+- `viewport-place-move`: Places-to-pane drag is using the viewport retained
+  hit-test path.
+- `directory-shell-hit`: a visible directory shell asserted a positive target;
+  this is helpful but not sufficient for pane self-drag hover because GPUI may
+  skip per-element drag-move callbacks after drag start.
 
 ## Rename
 

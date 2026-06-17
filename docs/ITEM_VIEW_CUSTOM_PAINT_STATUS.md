@@ -13,12 +13,12 @@ becomes the default.
 | Compact/Icons item model and geometry | retained | `DirectoryModel`, visible snapshots, slot pools | none for current path |
 | Compact/Icons base background, selection, hover, drop tint, labels | replaced | custom content-level painter | runtime perf and DnD smoke evidence must stay current |
 | Compact/Icons thumbnail and theme-icon images | replaced | custom image painter using GPUI `RetainAllImageCache` | keep GPUI image decode/cache unless a narrower image baseline wins |
-| Compact/Icons click, menu, hover, cursor, and drop hit testing | replaced | retained viewport/custom hitboxes | runtime DnD smoke still required after painter changes |
+| Compact/Icons click, menu, hover, cursor, and drop hit testing | replaced | retained viewport/custom hitboxes plus active item-drag window tracker | runtime DnD smoke still required after painter changes |
 | Compact/Icons drag start | not replaced | GPUI `Div::on_drag` shell | public GPUI custom-element drag-start API or audited Fika GPUI patch |
 | Compact/Icons rename editor | not replaced | GPUI editor overlay | only revisit after caret, selection, IME, and text input behavior are covered |
 | Details row model and geometry | retained | Details paint snapshots and row layout projection | none for current path |
 | Details row backgrounds, icons, text cells, Trash columns | replaced | custom content-level painter | runtime Details perf and DnD smoke evidence must stay current |
-| Details click, menu, navigation, hover, cursor, drop hit testing | replaced | retained row hit testing/controller state | runtime DnD smoke still required after painter changes |
+| Details click, menu, navigation, hover, cursor, drop hit testing | replaced | retained row hit testing/controller state plus active item-drag window tracker | runtime DnD smoke still required after painter changes |
 | Details drag start | not replaced | GPUI `Div::on_drag` row shell | same drag-start API or audited GPUI patch gate |
 | Places rows and sidebar scrollbar | not replaced | GPUI elements over retained places projection | requires separate GPUI baseline, runtime DnD smoke, and Places-specific custom painter plan |
 
@@ -32,6 +32,10 @@ DnD state helpers, but its renderer is still GPUI.
 - Renderer policy code: `src/ui/file_grid/renderer_policy.rs`
 - Compact/Icons static visual painter: `StaticItemVisualLayerElement` in
   `src/ui/file_grid.rs`
+- Active item-drag hover routing: `install_active_item_drag_mouse_tracker` in
+  `src/ui/file_grid/dnd.rs`
+- Runtime DnD debug channel: `FIKA_DEBUG_DND=1`, especially
+  `[fika dnd] active-item-move`
 - Compact/Icons image paint channel: `[fika item-image]`
 - Details visual paint channel: `[fika details-visual]`
 - Renderer surface count channel: `[fika renderer-policy]`
@@ -78,6 +82,13 @@ Do not remove the remaining GPUI drag-start shells until one of these is true:
 Removing the shell before this gate would make the architecture less reliable,
 even if it looks closer to full custom paint.
 
+The shell is now only the drag initiation boundary. Pane-internal item drag
+hover must not depend on GPUI per-element `on_drag_move`; runtime evidence showed
+that self-drags can emit `item-start` without later element drag-move callbacks.
+Fika tracks active item drags from a window mouse listener installed by the
+retained interaction layer, then routes the window position through the same
+retained pane hit-test used by Places and external drops.
+
 ### R4: Evaluate Rename Boundary
 
 Keep the GPUI rename overlay while text editing remains a GPUI-owned platform
@@ -97,6 +108,10 @@ it:
 
 Until then, keep Places on GPUI elements fed by retained places projection and
 drag/drop state.
+
+Places remains useful as the behavior reference for pane drop hover: dragging a
+Place over pane directories and dragging a pane item over pane directories
+should both produce a retained `Directory` item drop target while moving.
 
 ### R6: Pool Reuse Target
 
