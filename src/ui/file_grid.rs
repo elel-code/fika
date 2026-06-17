@@ -61,8 +61,8 @@ use details::{DetailsColumn, DetailsColumnKind, details_columns};
 #[cfg(test)]
 use dnd::drag_preview_label;
 use dnd::{
-    install_directory_drop_target_shell, install_item_drag_start_shell,
-    item_drag_from_details_snapshot, item_drag_from_item_snapshot,
+    install_active_item_drag_mouse_tracker, install_directory_drop_target_shell,
+    install_item_drag_start_shell, item_drag_from_details_snapshot, item_drag_from_item_snapshot,
 };
 #[cfg(test)]
 use paint_slots::DetailsPaintContent;
@@ -2241,6 +2241,7 @@ impl Element for ItemInteractionLayerElement {
             window.set_cursor_style(CursorStyle::PointingHand, &state.hitbox);
         }
         install_item_interaction_hover_listener(self.pane_id, self.app.clone(), prepaint, window);
+        install_active_item_drag_mouse_tracker(self.pane_id, self.app.clone(), window);
         if let Some(started) = perf_started {
             let elapsed = started.elapsed();
             let _ = self.app.update(cx, |this, _cx| {

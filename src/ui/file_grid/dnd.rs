@@ -4,8 +4,8 @@ use std::sync::Arc;
 use fika_core::PaneId;
 use gpui::prelude::*;
 use gpui::{
-    Context, Div, ExternalPaths, IntoElement, ParentElement, Render, Stateful, Styled, WeakEntity,
-    Window, div, px, rgb,
+    Context, Div, ExternalPaths, IntoElement, MouseMoveEvent, ParentElement, Render, Stateful,
+    Styled, WeakEntity, Window, div, px, rgb,
 };
 
 use crate::FikaApp;
@@ -105,7 +105,6 @@ pub(super) fn install_item_drag_start_shell(
     drag_value: ItemDrag,
     app: WeakEntity<FikaApp>,
 ) -> Stateful<Div> {
-    let drag_move_app = app.clone();
     // GPUI still owns drag initiation; this shell is the remaining platform
     // boundary until custom elements can start drags directly.
     shell.on_drag(drag_value, move |drag, cursor_offset, _, cx| {
@@ -123,47 +122,52 @@ pub(super) fn install_item_drag_start_shell(
         });
         cx.new(|_| item_drag_preview(drag, cursor_offset))
     })
-    .on_drag_move::<ItemDrag>(move |event, window, cx| {
-        let payload = event.drag(cx).payload();
-        let position = event.event.position;
-        let mut source_paths = Vec::new();
-        let (target_pane, update) = drag_move_app
+}
+
+pub(super) fn install_active_item_drag_mouse_tracker(
+    pane_id: PaneId,
+    app: WeakEntity<FikaApp>,
+    window: &mut Window,
+) {
+    let move_app = app.clone();
+    window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
+        if !phase.capture() || !event.dragging() {
+            return;
+        }
+        let position = event.position;
+        let Some((target_pane, update, source_paths)) = move_app
             .update(cx, |this, cx| {
-                source_paths = this.item_drag_source_paths(&payload);
-                let (target_pane, update) = this
-                    .update_dragged_paths_drop_target_from_any_window_position(
-                        position,
-                        &source_paths,
-                    );
+                let Some((target_pane, update, source_paths)) = this
+                    .update_active_item_drag_drop_target_from_window_position(pane_id, position)
+                else {
+                    return None;
+                };
                 if update.accepted() {
                     this.refresh_drop_target_lease(cx);
                 }
                 if update.changed {
                     cx.notify();
                 }
-                debug_dnd_log(|| {
-                    format!(
-                        "source-item-move source_pane={} target_pane={} pos=({:.1},{:.1}) kind={:?} changed={} sources={}",
-                        payload.source_pane.0,
-                        target_pane
-                            .map(|pane_id| pane_id.0.to_string())
-                            .unwrap_or_else(|| "none".to_string()),
-                        position.x.as_f32(),
-                        position.y.as_f32(),
-                        update.kind,
-                        update.changed,
-                        debug_paths(&source_paths)
-                    )
-                });
-                (target_pane, update)
+                Some((target_pane, update, source_paths))
             })
-            .unwrap_or((
-                None,
-                PathListDropTargetUpdate {
-                    changed: false,
-                    kind: None,
-                },
-            ));
+            .unwrap_or(None)
+        else {
+            return;
+        };
+        debug_dnd_log(|| {
+            format!(
+                "active-item-move source_pane={} target_pane={} pos=({:.1},{:.1}) kind={:?} changed={} sources={}",
+                pane_id.0,
+                target_pane
+                    .map(|pane_id| pane_id.0.to_string())
+                    .unwrap_or_else(|| "none".to_string()),
+                position.x.as_f32(),
+                position.y.as_f32(),
+                update.kind,
+                update.changed,
+                debug_paths(&source_paths)
+            )
+        });
 
         if target_pane.is_some() {
             match update.kind {
@@ -180,7 +184,7 @@ pub(super) fn install_item_drag_start_shell(
         if update.changed {
             window.refresh();
         }
-    })
+    });
 }
 
 pub(super) fn install_file_grid_path_drop_shell(
