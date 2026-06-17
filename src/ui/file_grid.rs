@@ -21,8 +21,6 @@ mod text;
 mod types;
 mod viewport;
 
-#[cfg(test)]
-pub(crate) use details::DetailsItemSnapshot;
 pub(crate) use details::DetailsLayoutMetrics;
 pub(crate) use details_visual::DetailsTextShapeCache;
 pub(crate) use dnd::ItemDrag;
@@ -45,8 +43,6 @@ pub(crate) use projection::{
     model_indexes_intersecting_visual_rect, pane_layout_projection,
 };
 pub(crate) use slots::VisibleItemSlotPool;
-#[cfg(test)]
-pub(crate) use snapshot::VisibleItemSnapshot;
 pub(crate) use snapshot::{
     RawFileGridSnapshot, RawFileGridSnapshotInput, VisibleItemSnapshotCache,
     deferred_thumbnail_candidates_for_model, raw_file_grid_snapshot,
@@ -62,50 +58,7 @@ use style::{
     item_tile_background,
 };
 
-#[cfg(test)]
-use controller::item_mouse_down_opens_directory;
-#[cfg(test)]
-use details::details_columns;
-#[cfg(test)]
-use details_visual::{
-    DetailsTextShapeCacheKey, DetailsVisualCellContent, details_visual_layer_element_id,
-    details_visual_layer_items,
-};
-#[cfg(test)]
-use dnd::drag_preview_label;
-#[cfg(test)]
-use dnd::item_drag_from_details_snapshot;
-#[cfg(test)]
-use image_layer::{
-    item_image_layer_item_source_path, item_image_layer_items,
-    item_image_load_failure_paints_fallback, item_image_paint_layer_element_id,
-    item_image_pending_load_paints_fallback,
-};
-#[cfg(test)]
-use interaction::{
-    details_interaction_layer_items, item_interaction_hitbox_bounds,
-    item_interaction_layer_element_id, item_interaction_layer_items,
-};
-#[cfg(test)]
-use paint_slots::DetailsPaintContent;
 use paint_slots::ItemPaintContent;
-#[cfg(test)]
-use rename_overlay::{display_text_layout, normalized_text_range, rename_text_layout};
-#[cfg(test)]
-use renderer_policy::{
-    DetailsRowDragStartRenderer, DetailsRowInteractionRenderer, DetailsRowRendererPolicy,
-    DetailsRowVisualRenderer, ItemBaseVisualRenderer, ItemDragStartRenderer, ItemImageRenderer,
-    ItemInteractionRenderer, ItemRenameEditorRenderer, ItemRendererPolicy, RendererPolicyStats,
-    details_renderer_policy_stats, details_row_renderer_policy, item_renderer_policy,
-    item_renderer_policy_stats,
-};
-#[cfg(test)]
-use static_visual::{
-    StaticItemLabelTextKey, StaticItemTextShapeCacheKey, static_item_visual_layer_element_id,
-    static_item_visual_layer_items,
-};
-#[cfg(test)]
-use viewport::{measured_viewport_for_scrollbar_axis, viewport_bounds_update_requires_notify};
 
 #[cfg(test)]
 mod tests;

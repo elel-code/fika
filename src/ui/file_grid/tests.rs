@@ -1,23 +1,37 @@
-
-use super::{
-    DetailsItemSnapshot, DetailsLayoutMetrics, DetailsPaintContent, DetailsRowDragStartRenderer,
-    DetailsRowInteractionRenderer, DetailsRowRendererPolicy, DetailsRowVisualRenderer,
-    DetailsTextShapeCacheKey, FileGridMode, FileGridRenderSnapshot, FileGridSnapshot,
-    ItemBaseVisualRenderer, ItemDragStartRenderer, ItemImageRenderer, ItemInteractionRenderer,
-    ItemPaintContent, ItemPaintSlotCache, ItemRenameEditorRenderer, ItemRendererPolicy,
-    ItemTileTextAlignment, RendererPolicyStats, StaticItemLabelTextKey,
-    StaticItemTextShapeCacheKey, VisibleItemSnapshot, details_columns,
-    details_interaction_layer_items, details_renderer_policy_stats, details_row_renderer_policy,
-    details_visual_layer_element_id, details_visual_layer_items, display_text_layout,
-    drag_preview_label, item_drag_from_details_snapshot, item_identity_element_id,
+use super::controller::item_mouse_down_opens_directory;
+use super::details::{DetailsItemSnapshot, DetailsLayoutMetrics, details_columns};
+use super::details_visual::{
+    DetailsTextShapeCacheKey, DetailsVisualCellContent, details_visual_layer_element_id,
+    details_visual_layer_items,
+};
+use super::dnd::{drag_preview_label, item_drag_from_details_snapshot};
+use super::image_layer::{
     item_image_layer_item_source_path, item_image_layer_items,
     item_image_load_failure_paints_fallback, item_image_paint_layer_element_id,
-    item_image_pending_load_paints_fallback, item_interaction_hitbox_bounds,
+    item_image_pending_load_paints_fallback,
+};
+use super::interaction::{
+    details_interaction_layer_items, item_interaction_hitbox_bounds,
     item_interaction_layer_element_id, item_interaction_layer_items,
-    item_mouse_down_opens_directory, item_renderer_policy, item_renderer_policy_stats,
-    measured_viewport_for_scrollbar_axis, normalized_text_range, rename_text_layout,
-    static_item_visual_layer_element_id, static_item_visual_layer_items,
-    viewport_bounds_update_requires_notify,
+};
+use super::paint_slots::{DetailsPaintContent, ItemPaintContent, ItemPaintSlotCache};
+use super::rename_overlay::{display_text_layout, normalized_text_range, rename_text_layout};
+use super::renderer_policy::{
+    DetailsRowDragStartRenderer, DetailsRowInteractionRenderer, DetailsRowRendererPolicy,
+    DetailsRowVisualRenderer, ItemBaseVisualRenderer, ItemDragStartRenderer, ItemImageRenderer,
+    ItemInteractionRenderer, ItemRenameEditorRenderer, ItemRendererPolicy, RendererPolicyStats,
+    details_renderer_policy_stats, details_row_renderer_policy, item_renderer_policy,
+    item_renderer_policy_stats,
+};
+use super::snapshot::VisibleItemSnapshot;
+use super::static_visual::{
+    StaticItemLabelTextKey, StaticItemTextShapeCacheKey, static_item_visual_layer_element_id,
+    static_item_visual_layer_items,
+};
+use super::style::{ItemTileTextAlignment, item_identity_element_id};
+use super::types::{FileGridMode, FileGridRenderSnapshot, FileGridSnapshot};
+use super::viewport::{
+    measured_viewport_for_scrollbar_axis, viewport_bounds_update_requires_notify,
 };
 use crate::ui::drag_drop::drag_preview_content_origin_for_cursor_offset;
 use crate::ui::icons::FileIconSnapshot;
@@ -717,20 +731,20 @@ fn details_visual_layer_items_project_rows_and_cells() {
     assert!(visual_items[0].hovered);
     assert_eq!(visual_items[0].cells.len(), 3);
     match &visual_items[0].cells[0].content {
-        super::DetailsVisualCellContent::Name { name, icon } => {
+        DetailsVisualCellContent::Name { name, icon } => {
             assert_eq!(name.as_ref(), "alpha.txt");
             assert_eq!(icon.fallback_marker.as_ref(), "TXT");
         }
         _ => panic!("expected name cell"),
     }
     match &visual_items[0].cells[1].content {
-        super::DetailsVisualCellContent::Text { text } => {
+        DetailsVisualCellContent::Text { text } => {
             assert_eq!(text.as_ref(), "42 B");
         }
         _ => panic!("expected size text cell"),
     }
     match &visual_items[0].cells[2].content {
-        super::DetailsVisualCellContent::Text { text } => {
+        DetailsVisualCellContent::Text { text } => {
             assert_eq!(text.as_ref(), "Today");
         }
         _ => panic!("expected modified text cell"),
@@ -806,13 +820,13 @@ fn details_visual_layer_items_project_trash_columns_and_drop_state() {
     assert_eq!(visual_items[0].cells.len(), 5);
     assert!(visual_items[0].drop_target);
     match &visual_items[0].cells[3].content {
-        super::DetailsVisualCellContent::Text { text } => {
+        DetailsVisualCellContent::Text { text } => {
             assert_eq!(text.as_ref(), "/home/yk/trash.txt");
         }
         _ => panic!("expected original path text cell"),
     }
     match &visual_items[0].cells[4].content {
-        super::DetailsVisualCellContent::Text { text } => {
+        DetailsVisualCellContent::Text { text } => {
             assert_eq!(text.as_ref(), "2026-06-17 10:00");
         }
         _ => panic!("expected deletion time text cell"),
