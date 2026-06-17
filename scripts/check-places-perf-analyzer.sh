@@ -17,6 +17,7 @@ cat > "$tmpdir/complete.log" <<'EOF'
 [fika places-sidebar] rows=11 sections=2 elements=13 build=232us
 [fika places-renderer-policy] rows=11 row_gpui=11 row_visual_layer=0 icon_gpui=11 retained_interaction=0 drag_shell=11 section_gpui=2 scrollbar_canvas=1
 [fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=11
+[fika places-interaction-geometry] rows=11 sections=2 entries=13 content_height=378 project=5us
 [fika autosmoke] places start scenario=DropTargets
 [fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
 [fika places-view] source=11 visible=11 sections=2 snapshot=89us
@@ -58,6 +59,7 @@ EOF
 summary="$("$analyzer" \
     --require-autosmoke \
     --require-interaction-policy \
+    --require-interaction-geometry \
     --expect-current-gpui-policy \
     --snapshot-us 5000 \
     --sidebar-build-us 1000 \
@@ -78,6 +80,10 @@ if [[ "$summary" != *"places_autosmoke target=1 insert_start=1 insert_end=1 clea
 fi
 if [[ "$summary" != *"places_interaction_policy_frames=6 max_rows=11 max_sections=2 max_row_target_decisions=11 max_section_target_decisions=2 max_retained_hitboxes=0 max_gpui_event_shells=13 max_drag_shells=11"* ]]; then
     echo "expected Places interaction policy summary" >&2
+    exit 1
+fi
+if [[ "$summary" != *"places_interaction_geometry_frames=1 max_rows=11 max_sections=2 max_entries=13 max_content_height=378.0 max_project=5us"* ]]; then
+    echo "expected Places interaction geometry summary" >&2
     exit 1
 fi
 if [[ "$summary" != *"places_row_visual_frames=0"* ]]; then
@@ -283,6 +289,21 @@ if "$analyzer" --require-interaction-policy "$tmpdir/bad-interaction-policy.log"
     exit 1
 fi
 
+cat > "$tmpdir/bad-interaction-geometry.log" <<'EOF'
+[fika places-slots] rows=11 sections=2 entries=13 inserted=13 content=0 geometry=0 visual=0 unchanged=0 removed=0 project=25us
+[fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
+[fika places-view] source=11 visible=11 sections=2 snapshot=100us
+[fika places-sidebar] rows=11 sections=2 elements=13 build=200us
+[fika places-renderer-policy] rows=11 row_gpui=11 row_visual_layer=0 icon_gpui=11 retained_interaction=0 drag_shell=11 section_gpui=2 scrollbar_canvas=1
+[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=11
+[fika places-interaction-geometry] rows=10 sections=2 entries=11 content_height=0 project=5us
+EOF
+
+if "$analyzer" --require-interaction-geometry "$tmpdir/bad-interaction-geometry.log" >/dev/null 2>&1; then
+    echo "expected invalid Places interaction geometry to fail" >&2
+    exit 1
+fi
+
 cat > "$tmpdir/missing-autosmoke.log" <<'EOF'
 [fika places-slots] rows=11 sections=2 entries=13 inserted=13 content=0 geometry=0 visual=0 unchanged=0 removed=0 project=25us
 [fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
@@ -308,6 +329,11 @@ fi
 
 if "$analyzer" --require-interaction-policy "$tmpdir/missing-autosmoke.log" >/dev/null 2>&1; then
     echo "expected missing Places interaction policy to fail" >&2
+    exit 1
+fi
+
+if "$analyzer" --require-interaction-geometry "$tmpdir/missing-autosmoke.log" >/dev/null 2>&1; then
+    echo "expected missing Places interaction geometry to fail" >&2
     exit 1
 fi
 

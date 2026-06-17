@@ -639,6 +639,19 @@ by risk and evidence, not by how custom-painted a surface looks.
   `--require-autosmoke --require-interaction-policy --expect-current-gpui-policy`;
   `/tmp/fika-places-custom-targets-interaction.log` passed
   `--require-autosmoke --require-interaction-policy --expect-custom-row-visual-policy`.
+- [x] P16aa: Add retained Places interaction geometry projection without
+  changing event delivery. `places_interaction_geometry()` projects row and
+  section y/height data from the same `PLACE_ROW_HEIGHT` and
+  `PLACE_SECTION_HEADING_HEIGHT` constants used by the opt-in visual layer.
+  `[fika places-interaction-geometry]` reports rows, sections, entries,
+  content height, and projection time; `--require-interaction-geometry`
+  requires those counts to match renderer policy. This creates the future
+  retained hit-test data boundary while keeping `retained_hitboxes=0` and GPUI
+  row/section event shells explicit. Evidence:
+  `/tmp/fika-places-targets-geometry.log` passed
+  `--require-autosmoke --require-interaction-policy --require-interaction-geometry --expect-current-gpui-policy`;
+  `/tmp/fika-places-custom-targets-geometry.log` passed
+  `--require-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-visual-policy`.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

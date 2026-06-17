@@ -16,9 +16,11 @@ use crate::ui::icons::{FileIconCache, FileIconSnapshot, cached_icon_or_fallback}
 use std::time::Instant;
 
 use super::drag::PlaceDrag;
+use super::interaction::places_interaction_geometry;
 use super::perf::{
-    PlacesInteractionPolicyLog, PlacesRendererPolicyLog, PlacesScrollbarPerfLog,
-    PlacesSidebarPerfLog, custom_places_rows_enabled, emit_places_interaction_policy_log,
+    PlacesInteractionGeometryPerfLog, PlacesInteractionPolicyLog, PlacesRendererPolicyLog,
+    PlacesScrollbarPerfLog, PlacesSidebarPerfLog, custom_places_rows_enabled,
+    emit_places_interaction_geometry_perf_log, emit_places_interaction_policy_log,
     emit_places_renderer_policy_log, emit_places_scrollbar_perf_log, emit_places_sidebar_perf_log,
     places_perf_enabled, places_section_count,
 };
@@ -173,6 +175,11 @@ pub(crate) fn places_sidebar(
     let build_started = perf_enabled.then(Instant::now);
     let row_count = places.len();
     let section_count = places_section_count(&places);
+    let interaction_geometry = perf_enabled.then(|| {
+        let started = Instant::now();
+        let geometry = places_interaction_geometry(&places);
+        (geometry, started.elapsed())
+    });
     let custom_row_visuals = custom_places_rows_enabled();
     let state = window.use_keyed_state("places-sidebar-scrollbar", cx, |_, _| {
         PlacesSidebarScrollState::new()
@@ -215,6 +222,15 @@ pub(crate) fn places_sidebar(
             row_count,
             section_count,
         });
+        if let Some((geometry, elapsed)) = &interaction_geometry {
+            emit_places_interaction_geometry_perf_log(PlacesInteractionGeometryPerfLog {
+                rows: geometry.rows().len(),
+                sections: geometry.sections().len(),
+                entries: geometry.entries(),
+                content_height: geometry.content_height(),
+                elapsed: *elapsed,
+            });
+        }
     }
 
     div()

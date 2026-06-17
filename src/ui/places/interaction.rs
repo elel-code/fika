@@ -1,6 +1,8 @@
 use std::path::{Path, PathBuf};
 
 use super::drag::{PlaceDropZone, place_drag_insert_index, place_drag_insert_index_for_zone};
+use super::snapshot::PlaceSnapshot;
+use super::visual::{PLACE_ROW_HEIGHT, PLACE_SECTION_HEADING_HEIGHT};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PlaceInteractionCursor {
@@ -128,9 +130,96 @@ pub(crate) fn place_section_place_drag_target(
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct PlacesInteractionGeometry {
+    rows: Vec<PlaceRowInteractionGeometry>,
+    sections: Vec<PlaceSectionInteractionGeometry>,
+    content_height: f32,
+}
+
+impl PlacesInteractionGeometry {
+    pub(crate) fn rows(&self) -> &[PlaceRowInteractionGeometry] {
+        &self.rows
+    }
+
+    pub(crate) fn sections(&self) -> &[PlaceSectionInteractionGeometry] {
+        &self.sections
+    }
+
+    pub(crate) fn entries(&self) -> usize {
+        self.rows.len() + self.sections.len()
+    }
+
+    pub(crate) fn content_height(&self) -> f32 {
+        self.content_height
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct PlaceRowInteractionGeometry {
+    pub(crate) visible_index: usize,
+    pub(crate) place_index: usize,
+    pub(crate) group: &'static str,
+    pub(crate) path: PathBuf,
+    pub(crate) y: f32,
+    pub(crate) height: f32,
+    pub(crate) insert_before_index: usize,
+    pub(crate) insert_after_index: usize,
+    pub(crate) mounted: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct PlaceSectionInteractionGeometry {
+    pub(crate) group: &'static str,
+    pub(crate) insert_index: usize,
+    pub(crate) y: f32,
+    pub(crate) height: f32,
+}
+
+pub(crate) fn places_interaction_geometry(places: &[PlaceSnapshot]) -> PlacesInteractionGeometry {
+    let mut rows = Vec::with_capacity(places.len());
+    let mut sections = Vec::new();
+    let mut current_group = None;
+    let mut y = 0.0;
+
+    for (visible_index, place) in places.iter().enumerate() {
+        if current_group != Some(place.group) {
+            current_group = Some(place.group);
+            if !place.group.is_empty() {
+                sections.push(PlaceSectionInteractionGeometry {
+                    group: place.group,
+                    insert_index: place.index,
+                    y,
+                    height: PLACE_SECTION_HEADING_HEIGHT,
+                });
+                y += PLACE_SECTION_HEADING_HEIGHT;
+            }
+        }
+        rows.push(PlaceRowInteractionGeometry {
+            visible_index,
+            place_index: place.index,
+            group: place.group,
+            path: place.path.clone(),
+            y,
+            height: PLACE_ROW_HEIGHT,
+            insert_before_index: place.index,
+            insert_after_index: place.index + 1,
+            mounted: place.mounted,
+        });
+        y += PLACE_ROW_HEIGHT;
+    }
+
+    PlacesInteractionGeometry {
+        rows,
+        sections,
+        content_height: y,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui::icons::FileIconSnapshot;
 
     #[test]
     fn row_path_list_target_prefers_insert_edges_when_addable() {
@@ -258,5 +347,67 @@ mod tests {
             place_section_place_drag_target(true, 0, 1),
             PlaceInteractionDecision::clear()
         );
+    }
+
+    #[test]
+    fn interaction_geometry_matches_visual_row_and_section_stack() {
+        let mut first = test_place(0, "", "Home", "/home/yk");
+        first.mounted = true;
+        let mut second = test_place(1, "Devices", "Root", "/");
+        second.mounted = false;
+
+        let geometry = places_interaction_geometry(&[first, second]);
+
+        assert_eq!(geometry.rows().len(), 2);
+        assert_eq!(geometry.sections().len(), 1);
+        assert_eq!(geometry.entries(), 3);
+        assert_eq!(
+            geometry.content_height(),
+            PLACE_ROW_HEIGHT * 2.0 + PLACE_SECTION_HEADING_HEIGHT
+        );
+        assert_eq!(geometry.rows()[0].visible_index, 0);
+        assert_eq!(geometry.rows()[0].place_index, 0);
+        assert_eq!(geometry.rows()[0].y, 0.0);
+        assert_eq!(geometry.rows()[0].height, PLACE_ROW_HEIGHT);
+        assert!(geometry.rows()[0].mounted);
+        assert_eq!(geometry.sections()[0].group, "Devices");
+        assert_eq!(geometry.sections()[0].insert_index, 1);
+        assert_eq!(geometry.sections()[0].y, PLACE_ROW_HEIGHT);
+        assert_eq!(geometry.sections()[0].height, PLACE_SECTION_HEADING_HEIGHT);
+        assert_eq!(
+            geometry.rows()[1].y,
+            PLACE_ROW_HEIGHT + PLACE_SECTION_HEADING_HEIGHT
+        );
+        assert!(!geometry.rows()[1].mounted);
+    }
+
+    fn test_place(index: usize, group: &'static str, label: &str, path: &str) -> PlaceSnapshot {
+        PlaceSnapshot {
+            index,
+            group,
+            icon: FileIconSnapshot {
+                icon_name: "folder".into(),
+                path: None,
+                fallback_marker: "F".into(),
+                fallback_fg: 0x1f4fbf,
+                fallback_bg: 0xeaf1ff,
+            },
+            label: label.to_string(),
+            path: PathBuf::from(path),
+            device_id: None,
+            mounted: true,
+            device: false,
+            network: false,
+            device_ejectable: false,
+            device_can_power_off: false,
+            active: false,
+            drop_target: false,
+            insert_before: false,
+            insert_after: false,
+            trash_place: false,
+            trash_has_items: false,
+            editable: true,
+            removable: true,
+        }
     }
 }

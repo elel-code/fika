@@ -26,6 +26,10 @@ Options:
       Fail unless [fika places-interaction-policy] is present and proves the
       current retained target-decision / GPUI event-shell boundary.
 
+  --require-interaction-geometry
+      Fail unless [fika places-interaction-geometry] is present and matches
+      the retained Places row/section projection counts.
+
   --expect-current-gpui-policy
       Fail unless [fika places-renderer-policy] matches the current GPUI row
       renderer baseline: row_gpui/icon_gpui/drag_shell equal rows,
@@ -58,6 +62,7 @@ require_autosmoke=false
 require_overflow_autosmoke=false
 require_layout_autosmoke=false
 require_interaction_policy=false
+require_interaction_geometry=false
 expect_current_gpui_policy=false
 expect_custom_row_visual_policy=false
 snapshot_us=""
@@ -78,6 +83,9 @@ while [[ $# -gt 0 ]]; do
             ;;
         --require-interaction-policy)
             require_interaction_policy=true
+            ;;
+        --require-interaction-geometry)
+            require_interaction_geometry=true
             ;;
         --expect-current-gpui-policy)
             expect_current_gpui_policy=true
@@ -161,6 +169,7 @@ awk \
     -v require_overflow_autosmoke="$require_overflow_autosmoke" \
     -v require_layout_autosmoke="$require_layout_autosmoke" \
     -v require_interaction_policy="$require_interaction_policy" \
+    -v require_interaction_geometry="$require_interaction_geometry" \
     -v expect_current_gpui_policy="$expect_current_gpui_policy" \
     -v expect_custom_row_visual_policy="$expect_custom_row_visual_policy" \
     -v snapshot_limit="$snapshot_us" \
@@ -305,6 +314,26 @@ function fail(message) {
         gpui_event_shells != rows + sections ||
         drag_shells != rows) {
         interaction_policy_invalid = 1
+    }
+}
+
+/^\[fika places-interaction-geometry\]/ {
+    interaction_geometry_frames++
+    rows = field("rows") + 0
+    sections = field("sections") + 0
+    entries = field("entries") + 0
+    content_height = field("content_height") + 0
+    project = field("project") + 0
+    max_update("interaction_geometry_rows", rows)
+    max_update("interaction_geometry_sections", sections)
+    max_update("interaction_geometry_entries", entries)
+    max_update("interaction_geometry_content_height", content_height)
+    max_update("interaction_geometry_project", project)
+    if (entries != rows + sections || content_height <= 0) {
+        interaction_geometry_invalid = 1
+    }
+    if (policy_frames > 0 && rows != max_values["policy_rows"]) {
+        interaction_geometry_invalid = 1
     }
 }
 
@@ -515,6 +544,18 @@ END {
             fail("Places interaction policy does not match the retained target-decision / GPUI shell boundary")
         }
     }
+    if (require_interaction_geometry == "true") {
+        if (interaction_geometry_frames == 0) {
+            fail("missing [fika places-interaction-geometry] logs")
+        }
+        if (interaction_geometry_invalid) {
+            fail("Places interaction geometry does not match retained row/section projection counts")
+        }
+        if (max_values["interaction_geometry_rows"] != max_values["policy_rows"] ||
+            max_values["interaction_geometry_sections"] != max_values["policy_section_gpui"]) {
+            fail("Places interaction geometry count does not match renderer policy")
+        }
+    }
     if (exit_code) {
         exit exit_code
     }
@@ -562,6 +603,13 @@ END {
         max_values["interaction_retained_hitboxes"],
         max_values["interaction_gpui_event_shells"],
         max_values["interaction_drag_shells"])
+    printf("places_interaction_geometry_frames=%d max_rows=%d max_sections=%d max_entries=%d max_content_height=%.1f max_project=%dus\n",
+        interaction_geometry_frames,
+        max_values["interaction_geometry_rows"],
+        max_values["interaction_geometry_sections"],
+        max_values["interaction_geometry_entries"],
+        max_values["interaction_geometry_content_height"],
+        max_values["interaction_geometry_project"])
     printf("places_row_visual_frames=%d max_rows=%d max_prepaint=%dus max_paint=%dus\n",
         row_visual_frames,
         max_values["row_visual_rows"],

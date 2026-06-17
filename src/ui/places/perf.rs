@@ -208,6 +208,26 @@ pub(crate) fn emit_places_interaction_policy_log(log: PlacesInteractionPolicyLog
     );
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct PlacesInteractionGeometryPerfLog {
+    pub(crate) rows: usize,
+    pub(crate) sections: usize,
+    pub(crate) entries: usize,
+    pub(crate) content_height: f32,
+    pub(crate) elapsed: Duration,
+}
+
+pub(crate) fn emit_places_interaction_geometry_perf_log(log: PlacesInteractionGeometryPerfLog) {
+    eprintln!(
+        "[fika places-interaction-geometry] rows={} sections={} entries={} content_height={} project={}us",
+        log.rows,
+        log.sections,
+        log.entries,
+        log.content_height,
+        log.elapsed.as_micros(),
+    );
+}
+
 pub(crate) fn places_section_count(places: &[PlaceSnapshot]) -> usize {
     let mut current_group = None;
     let mut section_count = 0;
