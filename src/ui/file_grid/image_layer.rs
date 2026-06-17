@@ -76,6 +76,10 @@ pub(super) fn item_image_load_failure_paints_fallback(item: &ItemImageLayerItem)
     item.thumbnail_path.is_none()
 }
 
+pub(super) fn item_image_pending_load_paints_fallback(item: &ItemImageLayerItem) -> bool {
+    item.thumbnail_path.is_none()
+}
+
 pub(super) struct ItemImageLayerElement {
     pane_id: PaneId,
     app: WeakEntity<FikaApp>,
@@ -208,6 +212,9 @@ fn item_image_layer_prepaint_item(
     let load_result = cache.update(cx, |cache, cx| cache.load(&resource, window, cx));
     let (image, fallback) = match load_result {
         Some(Ok(image)) => (Some(image), None),
+        None if item_image_pending_load_paints_fallback(item) => {
+            (None, Some(item_image_fallback_prepaint(item, window)))
+        }
         Some(Err(_)) if item_image_load_failure_paints_fallback(item) => {
             (None, Some(item_image_fallback_prepaint(item, window)))
         }

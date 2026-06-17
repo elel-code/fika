@@ -79,6 +79,7 @@ use dnd::item_drag_from_details_snapshot;
 use image_layer::{
     item_image_layer_item_source_path, item_image_layer_items,
     item_image_load_failure_paints_fallback, item_image_paint_layer_element_id,
+    item_image_pending_load_paints_fallback,
 };
 #[cfg(test)]
 use interaction::{
@@ -121,10 +122,11 @@ mod tests {
         display_text_layout, drag_preview_label, item_drag_from_details_snapshot,
         item_identity_element_id, item_image_layer_item_source_path, item_image_layer_items,
         item_image_load_failure_paints_fallback, item_image_paint_layer_element_id,
-        item_interaction_hitbox_bounds, item_interaction_layer_element_id,
-        item_interaction_layer_items, item_mouse_down_opens_directory, item_renderer_policy,
-        item_renderer_policy_stats, measured_viewport_for_scrollbar_axis, normalized_text_range,
-        rename_text_layout, static_item_visual_layer_element_id, static_item_visual_layer_items,
+        item_image_pending_load_paints_fallback, item_interaction_hitbox_bounds,
+        item_interaction_layer_element_id, item_interaction_layer_items,
+        item_mouse_down_opens_directory, item_renderer_policy, item_renderer_policy_stats,
+        measured_viewport_for_scrollbar_axis, normalized_text_range, rename_text_layout,
+        static_item_visual_layer_element_id, static_item_visual_layer_items,
         viewport_bounds_update_requires_notify,
     };
     use crate::ui::drag_drop::drag_preview_content_origin_for_cursor_offset;
@@ -344,6 +346,9 @@ mod tests {
         assert!(!item_image_load_failure_paints_fallback(&image_items[0]));
         assert!(item_image_load_failure_paints_fallback(&image_items[1]));
         assert!(!item_image_load_failure_paints_fallback(&image_items[2]));
+        assert!(!item_image_pending_load_paints_fallback(&image_items[0]));
+        assert!(item_image_pending_load_paints_fallback(&image_items[1]));
+        assert!(!item_image_pending_load_paints_fallback(&image_items[2]));
         assert_eq!(
             interaction_items
                 .iter()
