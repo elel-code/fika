@@ -17,9 +17,10 @@ use std::time::Instant;
 
 use super::drag::PlaceDrag;
 use super::perf::{
-    PlacesRendererPolicyLog, PlacesScrollbarPerfLog, PlacesSidebarPerfLog,
-    custom_places_rows_enabled, emit_places_renderer_policy_log, emit_places_scrollbar_perf_log,
-    emit_places_sidebar_perf_log, places_perf_enabled, places_section_count,
+    PlacesInteractionPolicyLog, PlacesRendererPolicyLog, PlacesScrollbarPerfLog,
+    PlacesSidebarPerfLog, custom_places_rows_enabled, emit_places_interaction_policy_log,
+    emit_places_renderer_policy_log, emit_places_scrollbar_perf_log, emit_places_sidebar_perf_log,
+    places_perf_enabled, places_section_count,
 };
 use super::snapshot::PlaceSnapshot;
 use super::visual::places_row_visual_layer;
@@ -209,6 +210,10 @@ pub(crate) fn places_sidebar(
             section_count,
             custom_row_visuals,
             scrollbar_canvas_count: 1,
+        });
+        emit_places_interaction_policy_log(PlacesInteractionPolicyLog {
+            row_count,
+            section_count,
         });
     }
 

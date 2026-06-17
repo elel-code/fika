@@ -626,6 +626,19 @@ by risk and evidence, not by how custom-painted a surface looks.
   `--require-layout-autosmoke --expect-current-gpui-policy`, and
   `/tmp/fika-places-layout-custom.log` passed
   `--require-layout-autosmoke --expect-custom-row-visual-policy`.
+- [x] P16z: Make the Places interaction boundary measurable before moving row
+  hitboxes out of GPUI. `[fika places-interaction-policy]` reports retained
+  row/section target-decision counts separately from the current GPUI
+  event-shell and drag-start shell counts. The analyzer option
+  `--require-interaction-policy` requires row and section target decisions to
+  match visible rows/sections while `retained_hitboxes=0`,
+  `gpui_event_shells=rows+sections`, and `drag_shells=rows`; this keeps the
+  current Dolphin-aligned decision layer explicit without pretending that
+  activation, menus, DnD event delivery, or drag start have already left GPUI.
+  Evidence: `/tmp/fika-places-targets-interaction.log` passed
+  `--require-autosmoke --require-interaction-policy --expect-current-gpui-policy`;
+  `/tmp/fika-places-custom-targets-interaction.log` passed
+  `--require-autosmoke --require-interaction-policy --expect-custom-row-visual-policy`.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

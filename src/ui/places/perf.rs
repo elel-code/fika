@@ -167,6 +167,47 @@ pub(crate) fn emit_places_renderer_policy_log(log: PlacesRendererPolicyLog) {
     );
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlacesInteractionPolicyLog {
+    pub(crate) row_count: usize,
+    pub(crate) section_count: usize,
+}
+
+impl PlacesInteractionPolicyLog {
+    pub(crate) fn retained_row_target_decisions(self) -> usize {
+        self.row_count
+    }
+
+    pub(crate) fn retained_section_target_decisions(self) -> usize {
+        self.section_count
+    }
+
+    pub(crate) fn retained_hitboxes(self) -> usize {
+        0
+    }
+
+    pub(crate) fn gpui_event_shells(self) -> usize {
+        self.row_count + self.section_count
+    }
+
+    pub(crate) fn drag_shells(self) -> usize {
+        self.row_count
+    }
+}
+
+pub(crate) fn emit_places_interaction_policy_log(log: PlacesInteractionPolicyLog) {
+    eprintln!(
+        "[fika places-interaction-policy] rows={} sections={} row_target_decisions={} section_target_decisions={} retained_hitboxes={} gpui_event_shells={} drag_shells={}",
+        log.row_count,
+        log.section_count,
+        log.retained_row_target_decisions(),
+        log.retained_section_target_decisions(),
+        log.retained_hitboxes(),
+        log.gpui_event_shells(),
+        log.drag_shells(),
+    );
+}
+
 pub(crate) fn places_section_count(places: &[PlaceSnapshot]) -> usize {
     let mut current_group = None;
     let mut section_count = 0;
@@ -210,6 +251,20 @@ mod tests {
         ];
 
         assert_eq!(places_section_count(&places), 2);
+    }
+
+    #[test]
+    fn places_interaction_policy_keeps_gpui_shell_boundary_explicit() {
+        let policy = PlacesInteractionPolicyLog {
+            row_count: 11,
+            section_count: 2,
+        };
+
+        assert_eq!(policy.retained_row_target_decisions(), 11);
+        assert_eq!(policy.retained_section_target_decisions(), 2);
+        assert_eq!(policy.retained_hitboxes(), 0);
+        assert_eq!(policy.gpui_event_shells(), 13);
+        assert_eq!(policy.drag_shells(), 11);
     }
 
     fn place(group: &'static str, label: &str) -> PlaceSnapshot {

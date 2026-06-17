@@ -61,6 +61,11 @@ retained Places row surface with the same separations as file-grid:
 - `places/perf.rs`: add `FIKA_PERF_PLACES_VIEW=1` timing for snapshot
   projection, slot projection, row visual prepaint/paint, icon path, scrollbar
   paint, and total sidebar build.
+- `places-interaction-policy`: log retained row/section target-decision counts
+  separately from GPUI event-shell and drag-start shell counts. The current
+  state has retained target decisions but `retained_hitboxes=0`; this is the
+  evidence boundary that must change when activation, context menus, or DnD
+  event delivery move out of GPUI rows.
 
 Panel layout belongs beside the Places view/controller boundary, not inside the
 row painter. The Places panel has state for visibility and width; the sidebar
@@ -76,11 +81,11 @@ executor, so sidebar dragging does not synchronously write config files.
 that panel state and settings persistence:
 
 ```bash
-scripts/analyze-places-perf.sh --require-autosmoke --expect-current-gpui-policy /tmp/fika-places-targets-sidebar-layout.log
-scripts/analyze-places-perf.sh --require-overflow-autosmoke --expect-current-gpui-policy /tmp/fika-places-overflow-sidebar-layout.log
-scripts/analyze-places-perf.sh --require-autosmoke --expect-custom-row-visual-policy /tmp/fika-places-custom-sidebar-layout.log
-scripts/analyze-places-perf.sh --require-layout-autosmoke --expect-current-gpui-policy /tmp/fika-places-layout.log
-scripts/analyze-places-perf.sh --require-layout-autosmoke --expect-custom-row-visual-policy /tmp/fika-places-layout-custom.log
+scripts/analyze-places-perf.sh --require-autosmoke --require-interaction-policy --expect-current-gpui-policy /tmp/fika-places-targets-sidebar-layout.log
+scripts/analyze-places-perf.sh --require-overflow-autosmoke --require-interaction-policy --expect-current-gpui-policy /tmp/fika-places-overflow-sidebar-layout.log
+scripts/analyze-places-perf.sh --require-autosmoke --require-interaction-policy --expect-custom-row-visual-policy /tmp/fika-places-custom-sidebar-layout.log
+scripts/analyze-places-perf.sh --require-layout-autosmoke --require-interaction-policy --expect-current-gpui-policy /tmp/fika-places-layout.log
+scripts/analyze-places-perf.sh --require-layout-autosmoke --require-interaction-policy --expect-custom-row-visual-policy /tmp/fika-places-layout-custom.log
 ```
 
 ## Migration Order
@@ -111,6 +116,9 @@ scripts/analyze-places-perf.sh --require-layout-autosmoke --expect-custom-row-vi
    target decision for item/external path drops and place reorders. GPUI row and
    section shells still provide event delivery and bounds, so
    `retained_interaction=0` remains correct until row hitboxes move out of GPUI.
+   `[fika places-interaction-policy]` is the explicit bridge log: target
+   decisions are retained today, while activation, context menu, drag/drop event
+   delivery, and drag start still route through GPUI event shells.
 5. Add a custom row visual painter behind an opt-in flag. Compare against the
    current GPUI row path for scroll and DnD.
    Current implementation provides `FIKA_CUSTOM_PLACES_ROWS=1` as an opt-in
@@ -143,7 +151,7 @@ and the regression guard that future Places work must run.
 
 ```bash
 timeout 5s env FIKA_PERF_PLACES_VIEW=1 target/debug/fika /etc > /tmp/fika-places-baseline.log 2>&1
-scripts/analyze-places-perf.sh --expect-current-gpui-policy /tmp/fika-places-baseline.log
+scripts/analyze-places-perf.sh --require-interaction-policy --expect-current-gpui-policy /tmp/fika-places-baseline.log
 ```
 
 The current GPUI sidebar logs `source=11 visible=11 sections=2`, with
@@ -167,7 +175,7 @@ for drop or insert state without content or geometry churn.
 
 ```bash
 timeout 5s env FIKA_PERF_PLACES_VIEW=1 FIKA_AUTOSMOKE_PLACES=targets target/debug/fika /etc > /tmp/fika-places-targets.log 2>&1
-scripts/analyze-places-perf.sh --require-autosmoke --expect-current-gpui-policy /tmp/fika-places-targets.log
+scripts/analyze-places-perf.sh --require-autosmoke --require-interaction-policy --expect-current-gpui-policy /tmp/fika-places-targets.log
 ```
 
 Expected markers:
@@ -194,7 +202,17 @@ The analyzer summary for the current GPUI baseline should include:
 ```text
 places_slots_frames=... max_inserted=13 max_content=0 max_geometry=0 max_visual=2 max_unchanged=13 max_removed=0
 places_renderer_policy_frames=... max_row_gpui=11 max_row_visual_layer=0 max_icon_gpui=11 max_retained_interaction=0 max_drag_shell=11
+places_interaction_policy_frames=... max_row_target_decisions=11 max_section_target_decisions=2 max_retained_hitboxes=0 max_gpui_event_shells=13 max_drag_shells=11
 places_autosmoke target=1 insert_start=1 insert_end=1 clear=1 snapshots=1,1,1,1,1
+```
+
+2026-06-18 interaction policy evidence:
+
+```text
+/tmp/fika-places-targets-interaction.log:
+  places_interaction_policy_frames=10 max_rows=11 max_sections=2 max_row_target_decisions=11 max_section_target_decisions=2 max_retained_hitboxes=0 max_gpui_event_shells=13 max_drag_shells=11
+/tmp/fika-places-custom-targets-interaction.log:
+  places_interaction_policy_frames=14 max_rows=11 max_sections=2 max_row_target_decisions=11 max_section_target_decisions=2 max_retained_hitboxes=0 max_gpui_event_shells=13 max_drag_shells=11
 ```
 
 ## Overflow Autosmoke
@@ -203,7 +221,7 @@ For Places scroll/overflow evidence, run:
 
 ```bash
 timeout 5s env FIKA_PERF_PLACES_VIEW=1 FIKA_AUTOSMOKE_PLACES=overflow target/debug/fika /etc > /tmp/fika-places-overflow-default.log 2>&1
-scripts/analyze-places-perf.sh --require-overflow-autosmoke --expect-current-gpui-policy /tmp/fika-places-overflow-default.log
+scripts/analyze-places-perf.sh --require-overflow-autosmoke --require-interaction-policy --expect-current-gpui-policy /tmp/fika-places-overflow-default.log
 ```
 
 `FIKA_AUTOSMOKE_PLACES=overflow` appends 64 non-persistent test rows at the
@@ -229,7 +247,7 @@ an isolated config directory:
 XDG_CONFIG_HOME=/tmp/fika-places-layout-config \
   timeout 6s env FIKA_PERF_PLACES_VIEW=1 FIKA_AUTOSMOKE_PLACES=layout \
   target/debug/fika /etc > /tmp/fika-places-layout.log 2>&1
-scripts/analyze-places-perf.sh --require-layout-autosmoke --expect-current-gpui-policy /tmp/fika-places-layout.log
+scripts/analyze-places-perf.sh --require-layout-autosmoke --require-interaction-policy --expect-current-gpui-policy /tmp/fika-places-layout.log
 ```
 
 For the opt-in row visual policy, add `FIKA_CUSTOM_PLACES_ROWS=1` and switch
@@ -240,7 +258,7 @@ XDG_CONFIG_HOME=/tmp/fika-places-layout-custom-config \
   timeout 6s env FIKA_PERF_PLACES_VIEW=1 FIKA_CUSTOM_PLACES_ROWS=1 \
   FIKA_AUTOSMOKE_PLACES=layout target/debug/fika /etc \
   > /tmp/fika-places-layout-custom.log 2>&1
-scripts/analyze-places-perf.sh --require-layout-autosmoke --expect-custom-row-visual-policy /tmp/fika-places-layout-custom.log
+scripts/analyze-places-perf.sh --require-layout-autosmoke --require-interaction-policy --expect-custom-row-visual-policy /tmp/fika-places-layout-custom.log
 ```
 
 `FIKA_AUTOSMOKE_PLACES=layout` does not mutate user Places ordering. It captures
@@ -286,14 +304,14 @@ beats or matches the GPUI row baseline. Run it with:
 
 ```bash
 timeout 5s env FIKA_PERF_PLACES_VIEW=1 FIKA_CUSTOM_PLACES_ROWS=1 FIKA_AUTOSMOKE_PLACES=targets target/debug/fika /etc > /tmp/fika-places-custom-rows.log 2>&1
-scripts/analyze-places-perf.sh --require-autosmoke --expect-custom-row-visual-policy /tmp/fika-places-custom-rows.log
+scripts/analyze-places-perf.sh --require-autosmoke --require-interaction-policy --expect-custom-row-visual-policy /tmp/fika-places-custom-rows.log
 ```
 
 For overflow comparison, switch the scenario and analyzer gate:
 
 ```bash
 timeout 5s env FIKA_PERF_PLACES_VIEW=1 FIKA_CUSTOM_PLACES_ROWS=1 FIKA_AUTOSMOKE_PLACES=overflow target/debug/fika /etc > /tmp/fika-places-overflow-custom.log 2>&1
-scripts/analyze-places-perf.sh --require-overflow-autosmoke --expect-custom-row-visual-policy /tmp/fika-places-overflow-custom.log
+scripts/analyze-places-perf.sh --require-overflow-autosmoke --require-interaction-policy --expect-custom-row-visual-policy /tmp/fika-places-overflow-custom.log
 ```
 
 Expected policy shape:
@@ -343,10 +361,10 @@ visuals into a retained sidebar layer before considering a default switch.
 
 ```bash
 timeout 5s env FIKA_PERF_PLACES_VIEW=1 FIKA_CUSTOM_PLACES_ROWS=1 FIKA_AUTOSMOKE_PLACES=targets target/debug/fika /etc > /tmp/fika-places-custom-rows-layer.log 2>&1
-scripts/analyze-places-perf.sh --require-autosmoke --expect-custom-row-visual-policy /tmp/fika-places-custom-rows-layer.log
+scripts/analyze-places-perf.sh --require-autosmoke --require-interaction-policy --expect-custom-row-visual-policy /tmp/fika-places-custom-rows-layer.log
 
 timeout 5s env FIKA_PERF_PLACES_VIEW=1 FIKA_CUSTOM_PLACES_ROWS=1 FIKA_AUTOSMOKE_PLACES=overflow target/debug/fika /etc > /tmp/fika-places-overflow-custom-layer.log 2>&1
-scripts/analyze-places-perf.sh --require-overflow-autosmoke --expect-custom-row-visual-policy /tmp/fika-places-overflow-custom-layer.log
+scripts/analyze-places-perf.sh --require-overflow-autosmoke --require-interaction-policy --expect-custom-row-visual-policy /tmp/fika-places-overflow-custom-layer.log
 ```
 
 Targets summary:
@@ -399,10 +417,10 @@ return to per-frame row label shaping without runtime evidence.
 
 ```bash
 timeout 5s env FIKA_PERF_PLACES_VIEW=1 FIKA_CUSTOM_PLACES_ROWS=1 FIKA_AUTOSMOKE_PLACES=targets target/debug/fika /etc > /tmp/fika-places-custom-rows-shape-cache.log 2>&1
-scripts/analyze-places-perf.sh --require-autosmoke --expect-custom-row-visual-policy /tmp/fika-places-custom-rows-shape-cache.log
+scripts/analyze-places-perf.sh --require-autosmoke --require-interaction-policy --expect-custom-row-visual-policy /tmp/fika-places-custom-rows-shape-cache.log
 
 timeout 5s env FIKA_PERF_PLACES_VIEW=1 FIKA_CUSTOM_PLACES_ROWS=1 FIKA_AUTOSMOKE_PLACES=overflow target/debug/fika /etc > /tmp/fika-places-overflow-custom-shape-cache.log 2>&1
-scripts/analyze-places-perf.sh --require-overflow-autosmoke --expect-custom-row-visual-policy /tmp/fika-places-overflow-custom-shape-cache.log
+scripts/analyze-places-perf.sh --require-overflow-autosmoke --require-interaction-policy --expect-custom-row-visual-policy /tmp/fika-places-overflow-custom-shape-cache.log
 ```
 
 Targets summary:

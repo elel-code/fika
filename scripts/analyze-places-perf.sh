@@ -22,6 +22,10 @@ Options:
       Fail unless FIKA_AUTOSMOKE_PLACES=layout markers are present and prove
       sidebar hide/show, resize, reset, restore, and persisted settings.
 
+  --require-interaction-policy
+      Fail unless [fika places-interaction-policy] is present and proves the
+      current retained target-decision / GPUI event-shell boundary.
+
   --expect-current-gpui-policy
       Fail unless [fika places-renderer-policy] matches the current GPUI row
       renderer baseline: row_gpui/icon_gpui/drag_shell equal rows,
@@ -53,6 +57,7 @@ EOF
 require_autosmoke=false
 require_overflow_autosmoke=false
 require_layout_autosmoke=false
+require_interaction_policy=false
 expect_current_gpui_policy=false
 expect_custom_row_visual_policy=false
 snapshot_us=""
@@ -70,6 +75,9 @@ while [[ $# -gt 0 ]]; do
             ;;
         --require-layout-autosmoke)
             require_layout_autosmoke=true
+            ;;
+        --require-interaction-policy)
+            require_interaction_policy=true
             ;;
         --expect-current-gpui-policy)
             expect_current_gpui_policy=true
@@ -152,6 +160,7 @@ awk \
     -v require_autosmoke="$require_autosmoke" \
     -v require_overflow_autosmoke="$require_overflow_autosmoke" \
     -v require_layout_autosmoke="$require_layout_autosmoke" \
+    -v require_interaction_policy="$require_interaction_policy" \
     -v expect_current_gpui_policy="$expect_current_gpui_policy" \
     -v expect_custom_row_visual_policy="$expect_custom_row_visual_policy" \
     -v snapshot_limit="$snapshot_us" \
@@ -271,6 +280,31 @@ function fail(message) {
             section_gpui != last_sidebar_sections || scrollbar_canvas != 1) {
             custom_policy_invalid = 1
         }
+    }
+}
+
+/^\[fika places-interaction-policy\]/ {
+    interaction_policy_frames++
+    rows = field("rows") + 0
+    sections = field("sections") + 0
+    row_target_decisions = field("row_target_decisions") + 0
+    section_target_decisions = field("section_target_decisions") + 0
+    retained_hitboxes = field("retained_hitboxes") + 0
+    gpui_event_shells = field("gpui_event_shells") + 0
+    drag_shells = field("drag_shells") + 0
+    max_update("interaction_rows", rows)
+    max_update("interaction_sections", sections)
+    max_update("interaction_row_target_decisions", row_target_decisions)
+    max_update("interaction_section_target_decisions", section_target_decisions)
+    max_update("interaction_retained_hitboxes", retained_hitboxes)
+    max_update("interaction_gpui_event_shells", gpui_event_shells)
+    max_update("interaction_drag_shells", drag_shells)
+    if (row_target_decisions != rows ||
+        section_target_decisions != sections ||
+        retained_hitboxes != 0 ||
+        gpui_event_shells != rows + sections ||
+        drag_shells != rows) {
+        interaction_policy_invalid = 1
     }
 }
 
@@ -473,6 +507,14 @@ END {
             fail("missing or invalid Places layout autosmoke action markers")
         }
     }
+    if (require_interaction_policy == "true") {
+        if (interaction_policy_frames == 0) {
+            fail("missing [fika places-interaction-policy] logs")
+        }
+        if (interaction_policy_invalid) {
+            fail("Places interaction policy does not match the retained target-decision / GPUI shell boundary")
+        }
+    }
     if (exit_code) {
         exit exit_code
     }
@@ -511,6 +553,15 @@ END {
         max_values["policy_drag_shell"],
         max_values["policy_section_gpui"],
         max_values["policy_scrollbar_canvas"])
+    printf("places_interaction_policy_frames=%d max_rows=%d max_sections=%d max_row_target_decisions=%d max_section_target_decisions=%d max_retained_hitboxes=%d max_gpui_event_shells=%d max_drag_shells=%d\n",
+        interaction_policy_frames,
+        max_values["interaction_rows"],
+        max_values["interaction_sections"],
+        max_values["interaction_row_target_decisions"],
+        max_values["interaction_section_target_decisions"],
+        max_values["interaction_retained_hitboxes"],
+        max_values["interaction_gpui_event_shells"],
+        max_values["interaction_drag_shells"])
     printf("places_row_visual_frames=%d max_rows=%d max_prepaint=%dus max_paint=%dus\n",
         row_visual_frames,
         max_values["row_visual_rows"],
