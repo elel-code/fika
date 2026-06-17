@@ -1,6 +1,8 @@
 use std::path::{Path, PathBuf};
 
-use super::drag::{PlaceDropZone, place_drag_insert_index, place_drag_insert_index_for_zone};
+use super::drag::{
+    PlaceDropZone, place_drag_insert_index, place_drag_insert_index_for_zone, place_drop_zone_for_y,
+};
 use super::snapshot::PlaceSnapshot;
 use super::visual::{PLACE_ROW_HEIGHT, PLACE_SECTION_HEADING_HEIGHT};
 
@@ -153,6 +155,30 @@ impl PlacesInteractionGeometry {
     pub(crate) fn content_height(&self) -> f32 {
         self.content_height
     }
+
+    pub(crate) fn hit_test_y(&self, y: f32) -> Option<PlaceInteractionHit<'_>> {
+        if !y.is_finite() || y < 0.0 || y >= self.content_height {
+            return None;
+        }
+
+        for section in &self.sections {
+            if section.contains_y(y) {
+                return Some(PlaceInteractionHit::Section(section));
+            }
+        }
+
+        for row in &self.rows {
+            if row.contains_y(y) {
+                let local_y = y - row.y;
+                return Some(PlaceInteractionHit::Row {
+                    row,
+                    drop_zone: place_drop_zone_for_y(local_y, row.height),
+                });
+            }
+        }
+
+        None
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -168,12 +194,33 @@ pub(crate) struct PlaceRowInteractionGeometry {
     pub(crate) mounted: bool,
 }
 
+impl PlaceRowInteractionGeometry {
+    fn contains_y(&self, y: f32) -> bool {
+        y >= self.y && y < self.y + self.height
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct PlaceSectionInteractionGeometry {
     pub(crate) group: &'static str,
     pub(crate) insert_index: usize,
     pub(crate) y: f32,
     pub(crate) height: f32,
+}
+
+impl PlaceSectionInteractionGeometry {
+    fn contains_y(&self, y: f32) -> bool {
+        y >= self.y && y < self.y + self.height
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum PlaceInteractionHit<'a> {
+    Row {
+        row: &'a PlaceRowInteractionGeometry,
+        drop_zone: PlaceDropZone,
+    },
+    Section(&'a PlaceSectionInteractionGeometry),
 }
 
 pub(crate) fn places_interaction_geometry(places: &[PlaceSnapshot]) -> PlacesInteractionGeometry {
@@ -379,6 +426,50 @@ mod tests {
             PLACE_ROW_HEIGHT + PLACE_SECTION_HEADING_HEIGHT
         );
         assert!(!geometry.rows()[1].mounted);
+    }
+
+    #[test]
+    fn interaction_geometry_hit_test_routes_sections_rows_and_edges() {
+        let first = test_place(0, "", "Home", "/home/yk");
+        let second = test_place(1, "Devices", "Root", "/");
+        let geometry = places_interaction_geometry(&[first, second]);
+
+        assert_eq!(geometry.hit_test_y(-1.0), None);
+        assert_eq!(geometry.hit_test_y(geometry.content_height()), None);
+        assert_eq!(geometry.hit_test_y(f32::NAN), None);
+
+        assert!(matches!(
+            geometry.hit_test_y(1.0),
+            Some(PlaceInteractionHit::Row {
+                row,
+                drop_zone: PlaceDropZone::InsertBefore,
+            }) if row.visible_index == 0 && row.place_index == 0
+        ));
+        assert!(matches!(
+            geometry.hit_test_y(PLACE_ROW_HEIGHT / 2.0),
+            Some(PlaceInteractionHit::Row {
+                row,
+                drop_zone: PlaceDropZone::OnPlace,
+            }) if row.visible_index == 0
+        ));
+        assert!(matches!(
+            geometry.hit_test_y(PLACE_ROW_HEIGHT - 1.0),
+            Some(PlaceInteractionHit::Row {
+                row,
+                drop_zone: PlaceDropZone::InsertAfter,
+            }) if row.visible_index == 0
+        ));
+        assert!(matches!(
+            geometry.hit_test_y(PLACE_ROW_HEIGHT + 1.0),
+            Some(PlaceInteractionHit::Section(section)) if section.group == "Devices" && section.insert_index == 1
+        ));
+        assert!(matches!(
+            geometry.hit_test_y(PLACE_ROW_HEIGHT + PLACE_SECTION_HEADING_HEIGHT + 10.0),
+            Some(PlaceInteractionHit::Row {
+                row,
+                drop_zone: PlaceDropZone::OnPlace,
+            }) if row.visible_index == 1 && row.place_index == 1
+        ));
     }
 
     fn test_place(index: usize, group: &'static str, label: &str, path: &str) -> PlaceSnapshot {

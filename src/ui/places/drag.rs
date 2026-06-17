@@ -109,7 +109,7 @@ pub(crate) fn place_drag_insert_index(source_index: usize, insert_index: usize) 
     }
 }
 
-fn place_drop_zone_for_y(local_y: f32, height: f32) -> PlaceDropZone {
+pub(crate) fn place_drop_zone_for_y(local_y: f32, height: f32) -> PlaceDropZone {
     let edge = (height * 0.18).clamp(4.0, 6.0);
     if local_y <= edge {
         PlaceDropZone::InsertBefore

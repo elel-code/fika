@@ -70,6 +70,10 @@ retained Places row surface with the same separations as file-grid:
   the same row/section constants as the opt-in visual layer. It is not yet the
   event delivery path; it is the retained geometry boundary that later row
   hitboxes must consume.
+- `PlacesInteractionGeometry::hit_test_y()`: convert content-local y
+  coordinates into retained row/section hits. Row hits reuse the same
+  edge/body `PlaceDropZone` rule as the current GPUI row DnD handlers, so the
+  later retained hitbox layer can preserve insertion and on-place semantics.
 
 Panel layout belongs beside the Places view/controller boundary, not inside the
 row painter. The Places panel has state for visibility and width; the sidebar
@@ -210,7 +214,7 @@ The analyzer summary for the current GPUI baseline should include:
 places_slots_frames=... max_inserted=13 max_content=0 max_geometry=0 max_visual=2 max_unchanged=13 max_removed=0
 places_renderer_policy_frames=... max_row_gpui=11 max_row_visual_layer=0 max_icon_gpui=11 max_retained_interaction=0 max_drag_shell=11
 places_interaction_policy_frames=... max_row_target_decisions=11 max_section_target_decisions=2 max_retained_hitboxes=0 max_gpui_event_shells=13 max_drag_shells=11
-places_interaction_geometry_frames=... max_rows=11 max_sections=2 max_entries=13 max_content_height=378.0
+places_interaction_geometry_frames=... max_rows=11 max_sections=2 max_entries=13 max_content_height=378.0 max_hit_tests=2
 places_autosmoke target=1 insert_start=1 insert_end=1 clear=1 snapshots=1,1,1,1,1
 ```
 
@@ -227,9 +231,13 @@ places_autosmoke target=1 insert_start=1 insert_end=1 clear=1 snapshots=1,1,1,1,
 
 ```text
 /tmp/fika-places-targets-geometry.log:
-  places_interaction_geometry_frames=10 max_rows=11 max_sections=2 max_entries=13 max_content_height=378.0 max_project=4us
+  places_interaction_geometry_frames=10 max_rows=11 max_sections=2 max_entries=13 max_content_height=378.0 max_hit_tests=2 max_project=4us
 /tmp/fika-places-custom-targets-geometry.log:
-  places_interaction_geometry_frames=9 max_rows=11 max_sections=2 max_entries=13 max_content_height=378.0 max_project=3us
+  places_interaction_geometry_frames=9 max_rows=11 max_sections=2 max_entries=13 max_content_height=378.0 max_hit_tests=2 max_project=3us
+/tmp/fika-places-targets-hit-test.log:
+  places_interaction_geometry_frames=12 max_rows=11 max_sections=2 max_entries=13 max_content_height=378.0 max_hit_tests=2 max_project=4us
+/tmp/fika-places-custom-targets-hit-test.log:
+  places_interaction_geometry_frames=13 max_rows=11 max_sections=2 max_entries=13 max_content_height=378.0 max_hit_tests=2 max_project=7us
 ```
 
 ## Overflow Autosmoke

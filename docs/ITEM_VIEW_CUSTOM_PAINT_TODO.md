@@ -644,14 +644,25 @@ by risk and evidence, not by how custom-painted a surface looks.
   section y/height data from the same `PLACE_ROW_HEIGHT` and
   `PLACE_SECTION_HEADING_HEIGHT` constants used by the opt-in visual layer.
   `[fika places-interaction-geometry]` reports rows, sections, entries,
-  content height, and projection time; `--require-interaction-geometry`
-  requires those counts to match renderer policy. This creates the future
-  retained hit-test data boundary while keeping `retained_hitboxes=0` and GPUI
-  row/section event shells explicit. Evidence:
+  content height, hit-test samples, and projection time;
+  `--require-interaction-geometry` requires those counts to match renderer
+  policy. This creates the future retained hit-test data boundary while keeping
+  `retained_hitboxes=0` and GPUI row/section event shells explicit. Evidence:
   `/tmp/fika-places-targets-geometry.log` passed
   `--require-autosmoke --require-interaction-policy --require-interaction-geometry --expect-current-gpui-policy`;
   `/tmp/fika-places-custom-targets-geometry.log` passed
   `--require-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-visual-policy`.
+- [x] P16ab: Add retained Places geometry hit-test logic without changing event
+  delivery. `PlacesInteractionGeometry::hit_test_y()` maps a content-local y
+  coordinate to a retained row or section, and row hits reuse the same
+  `place_drop_zone_for_y()` edge/body rule as the existing GPUI row DnD
+  handlers. This prepares the future retained hitbox layer while keeping
+  activation, context menus, DnD event delivery, and drag start on GPUI shells.
+  Evidence: `/tmp/fika-places-targets-hit-test.log` passed
+  `--require-autosmoke --require-interaction-policy --require-interaction-geometry --expect-current-gpui-policy`;
+  `/tmp/fika-places-custom-targets-hit-test.log` passed
+  `--require-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-visual-policy`,
+  both with `max_hit_tests=2`.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

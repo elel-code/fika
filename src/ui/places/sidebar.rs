@@ -223,11 +223,13 @@ pub(crate) fn places_sidebar(
             section_count,
         });
         if let Some((geometry, elapsed)) = &interaction_geometry {
+            let hit_tests = places_interaction_geometry_hit_test_samples(geometry);
             emit_places_interaction_geometry_perf_log(PlacesInteractionGeometryPerfLog {
                 rows: geometry.rows().len(),
                 sections: geometry.sections().len(),
                 entries: geometry.entries(),
                 content_height: geometry.content_height(),
+                hit_tests,
                 elapsed: *elapsed,
             });
         }
@@ -346,6 +348,17 @@ pub(crate) fn places_sidebar(
         .when_some(background_tasks, |sidebar, tasks| {
             sidebar.child(background_tasks_panel(tasks, cx))
         })
+}
+
+fn places_interaction_geometry_hit_test_samples(
+    geometry: &super::interaction::PlacesInteractionGeometry,
+) -> usize {
+    if geometry.content_height() <= 0.0 {
+        return 0;
+    }
+    let last_y = (geometry.content_height() - 1.0).max(0.0);
+    usize::from(geometry.hit_test_y(0.0).is_some())
+        + usize::from(geometry.hit_test_y(last_y).is_some())
 }
 
 fn clear_places_drop_target_after_sidebar_leave(

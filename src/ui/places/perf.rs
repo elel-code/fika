@@ -214,16 +214,18 @@ pub(crate) struct PlacesInteractionGeometryPerfLog {
     pub(crate) sections: usize,
     pub(crate) entries: usize,
     pub(crate) content_height: f32,
+    pub(crate) hit_tests: usize,
     pub(crate) elapsed: Duration,
 }
 
 pub(crate) fn emit_places_interaction_geometry_perf_log(log: PlacesInteractionGeometryPerfLog) {
     eprintln!(
-        "[fika places-interaction-geometry] rows={} sections={} entries={} content_height={} project={}us",
+        "[fika places-interaction-geometry] rows={} sections={} entries={} content_height={} hit_tests={} project={}us",
         log.rows,
         log.sections,
         log.entries,
         log.content_height,
+        log.hit_tests,
         log.elapsed.as_micros(),
     );
 }

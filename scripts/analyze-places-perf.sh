@@ -323,13 +323,16 @@ function fail(message) {
     sections = field("sections") + 0
     entries = field("entries") + 0
     content_height = field("content_height") + 0
+    hit_tests = field("hit_tests") + 0
     project = field("project") + 0
     max_update("interaction_geometry_rows", rows)
     max_update("interaction_geometry_sections", sections)
     max_update("interaction_geometry_entries", entries)
     max_update("interaction_geometry_content_height", content_height)
+    max_update("interaction_geometry_hit_tests", hit_tests)
     max_update("interaction_geometry_project", project)
-    if (entries != rows + sections || content_height <= 0) {
+    if (entries != rows + sections || content_height <= 0 ||
+        (rows > 0 && hit_tests == 0)) {
         interaction_geometry_invalid = 1
     }
     if (policy_frames > 0 && rows != max_values["policy_rows"]) {
@@ -603,12 +606,13 @@ END {
         max_values["interaction_retained_hitboxes"],
         max_values["interaction_gpui_event_shells"],
         max_values["interaction_drag_shells"])
-    printf("places_interaction_geometry_frames=%d max_rows=%d max_sections=%d max_entries=%d max_content_height=%.1f max_project=%dus\n",
+    printf("places_interaction_geometry_frames=%d max_rows=%d max_sections=%d max_entries=%d max_content_height=%.1f max_hit_tests=%d max_project=%dus\n",
         interaction_geometry_frames,
         max_values["interaction_geometry_rows"],
         max_values["interaction_geometry_sections"],
         max_values["interaction_geometry_entries"],
         max_values["interaction_geometry_content_height"],
+        max_values["interaction_geometry_hit_tests"],
         max_values["interaction_geometry_project"])
     printf("places_row_visual_frames=%d max_rows=%d max_prepaint=%dus max_paint=%dus\n",
         row_visual_frames,
