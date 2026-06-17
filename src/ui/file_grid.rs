@@ -1,5 +1,6 @@
 mod controller;
 mod details;
+mod details_visual;
 mod dnd;
 mod image_layer;
 mod interaction;
@@ -17,6 +18,7 @@ mod viewport;
 pub(crate) use details::{
     DetailsItemSnapshot, DetailsLayoutMetrics, details_content_height, details_content_width,
 };
+pub(crate) use details_visual::DetailsTextShapeCache;
 pub(crate) use dnd::ItemDrag;
 pub(crate) use layout::{
     CompactColumnWidthCache, compact_text_width, compact_text_width_for_name,
@@ -46,28 +48,29 @@ use fika_core::{
 };
 use gpui::prelude::*;
 use gpui::{
-    App, Bounds, Context, Corners, Div, Element, ElementId, Entity, Font, FontWeight,
-    GlobalElementId, InspectorElementId, IntoElement, LayoutId, MouseButton, ObjectFit,
-    ParentElement, Pixels, RenderImage, Resource, RetainAllImageCache, Rgba, ScrollHandle,
-    SharedString, Stateful, Style, StyleRefinement, Styled, TextAlign, TextRun, WeakEntity, Window,
-    div, fill, img, point, px, retain_all, rgb, rgba, size,
+    Context, Div, IntoElement, MouseButton, ParentElement, Rgba, ScrollHandle, SharedString,
+    Stateful, WeakEntity, Window, div, img, px, retain_all, rgb, rgba,
 };
-use std::collections::HashMap;
-use std::sync::Arc;
 
 use super::icons::FileIconSnapshot;
 use super::item_view::item_view_scrollbar_container;
 use super::rename::RENAME_TEXT_INSET_X;
 #[cfg(test)]
 use controller::item_mouse_down_opens_directory;
-use details::{DetailsColumn, DetailsColumnKind, details_columns};
+use details::{DetailsColumn, details_columns};
+use details_visual::details_visual_layer_view;
+#[cfg(test)]
+use details_visual::{
+    DetailsTextShapeCacheKey, DetailsVisualCellContent, details_visual_layer_element_id,
+    details_visual_layer_items,
+};
 #[cfg(test)]
 use dnd::drag_preview_label;
 use dnd::{
     install_directory_drop_target_shell, install_item_drag_start_shell,
     item_drag_from_details_snapshot, item_drag_from_item_snapshot,
 };
-use image_layer::{ItemImageFallbackPaintState, item_image_layer_view};
+use image_layer::item_image_layer_view;
 #[cfg(test)]
 use image_layer::{
     item_image_layer_item_source_path, item_image_layer_items,
@@ -83,15 +86,14 @@ use interaction::{details_interaction_layer_view, item_interaction_layer_view};
 use paint_slots::DetailsPaintContent;
 use paint_slots::ItemPaintContent;
 use renderer_policy::{
-    DetailsRowDragStartRenderer, DetailsRowVisualRenderer, ItemBaseVisualRenderer,
-    ItemDragStartRenderer, ItemInteractionRenderer, ItemRenameEditorRenderer,
-    details_renderer_policy_stats, details_row_renderer_policy, item_renderer_policy,
-    item_renderer_policy_stats,
+    DetailsRowDragStartRenderer, ItemBaseVisualRenderer, ItemDragStartRenderer,
+    ItemInteractionRenderer, ItemRenameEditorRenderer, details_renderer_policy_stats,
+    details_row_renderer_policy, item_renderer_policy, item_renderer_policy_stats,
 };
 #[cfg(test)]
 use renderer_policy::{
-    DetailsRowInteractionRenderer, DetailsRowRendererPolicy, ItemImageRenderer, ItemRendererPolicy,
-    RendererPolicyStats,
+    DetailsRowInteractionRenderer, DetailsRowRendererPolicy, DetailsRowVisualRenderer,
+    ItemImageRenderer, ItemRendererPolicy, RendererPolicyStats,
 };
 use static_visual::static_item_visual_layer_view;
 #[cfg(test)]
@@ -99,7 +101,6 @@ use static_visual::{
     StaticItemLabelTextKey, StaticItemTextShapeCacheKey, static_item_visual_layer_element_id,
     static_item_visual_layer_items,
 };
-use text::static_paint_single_line_text;
 use viewport::{
     file_grid_viewport_shell, measured_viewport_for_scrollbar_axis, scrollbar_axis_for_snapshot,
     view_mode_for_snapshot, viewport_bounds_update_requires_notify,
@@ -177,53 +178,6 @@ impl TextShapeCacheStats {
     }
 }
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-struct DetailsTextShapeCacheKey {
-    text: SharedString,
-    font: Font,
-    font_size_bits: u32,
-    line_height_bits: u32,
-    scale_factor_bits: u32,
-    color: u32,
-}
-
-#[derive(Default)]
-pub(crate) struct DetailsTextShapeCache {
-    entries: HashMap<DetailsTextShapeCacheKey, Arc<gpui::ShapedLine>>,
-    stats: TextShapeCacheStats,
-}
-
-impl DetailsTextShapeCache {
-    const MAX_ENTRIES: usize = 4096;
-
-    fn shape_for(
-        &mut self,
-        key: &DetailsTextShapeCacheKey,
-        window: &mut Window,
-    ) -> Arc<gpui::ShapedLine> {
-        if let Some(line) = self.entries.get(key) {
-            self.stats.hits += 1;
-            return line.clone();
-        }
-
-        self.stats.misses += 1;
-        if self.entries.len() >= Self::MAX_ENTRIES {
-            self.stats.evicted += self.entries.len();
-            self.entries.clear();
-        }
-
-        let line = Arc::new(shape_details_visual_text(key, window));
-        self.entries.insert(key.clone(), line.clone());
-        line
-    }
-
-    fn take_stats(&mut self) -> TextShapeCacheStats {
-        let mut stats = std::mem::take(&mut self.stats);
-        stats.entries = self.entries.len();
-        stats
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct PaneViewportGeometry {
     pub(crate) window_rect: ViewRect,
@@ -235,10 +189,6 @@ fn item_identity_element_id(prefix: &'static str, item_id: ItemId) -> (&'static 
 
 fn item_image_element_id(slot_id: u64) -> (&'static str, u64) {
     ("item-image", slot_id)
-}
-
-fn details_visual_layer_element_id(pane_id: PaneId) -> (&'static str, u64) {
-    ("details-visual-layer", pane_id.0)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -710,592 +660,6 @@ fn details_header(
                 .border_color(rgb(0xe1e5eb))
                 .child(column.title)
         }))
-}
-
-fn details_visual_layer_view(
-    pane_id: PaneId,
-    items: &[DetailsPaintSnapshot],
-    columns: &[DetailsColumn],
-    width: f32,
-    height: f32,
-    app: WeakEntity<FikaApp>,
-) -> Option<DetailsVisualLayerElement> {
-    let items = details_visual_layer_items(items, columns);
-    (!items.is_empty()).then(|| {
-        DetailsVisualLayerElement {
-            pane_id,
-            app,
-            items,
-            style: StyleRefinement::default(),
-        }
-        .absolute()
-        .left_0()
-        .top_0()
-        .w(px(width.max(1.0)))
-        .h(px(height.max(1.0)))
-    })
-}
-
-fn details_visual_layer_items(
-    items: &[DetailsPaintSnapshot],
-    columns: &[DetailsColumn],
-) -> Vec<DetailsVisualLayerItem> {
-    items
-        .iter()
-        .filter_map(|item| {
-            let policy = details_row_renderer_policy(item);
-            if !matches!(policy.visual, DetailsRowVisualRenderer::ContentLayer) {
-                return None;
-            }
-            let mut x = 0.0;
-            let cells = columns
-                .iter()
-                .map(|column| {
-                    let cell_x = x;
-                    x += column.width;
-                    DetailsVisualCell {
-                        x: cell_x,
-                        width: column.width,
-                        content: match column.kind {
-                            DetailsColumnKind::Name => DetailsVisualCellContent::Name {
-                                name: SharedString::from(item.content.name.as_ref()),
-                                icon: item.content.icon.clone(),
-                            },
-                            DetailsColumnKind::Size => DetailsVisualCellContent::Text {
-                                text: SharedString::from(item.content.size_label.as_str()),
-                            },
-                            DetailsColumnKind::Modified => DetailsVisualCellContent::Text {
-                                text: SharedString::from(item.content.modified_label.as_str()),
-                            },
-                            DetailsColumnKind::OriginalPath => DetailsVisualCellContent::Text {
-                                text: SharedString::from(item.content.original_path_label.as_str()),
-                            },
-                            DetailsColumnKind::DeletionTime => DetailsVisualCellContent::Text {
-                                text: SharedString::from(item.content.deletion_time_label.as_str()),
-                            },
-                        },
-                    }
-                })
-                .collect();
-            Some(DetailsVisualLayerItem {
-                row_index: item.row_index,
-                row_top: f32::from_bits(item.geometry.row_top),
-                row_height: f32::from_bits(item.geometry.row_height),
-                icon_size: f32::from_bits(item.geometry.icon_size),
-                selected: item.visual.selected,
-                hovered: item.visual.hovered,
-                drop_target: item.visual.drop_target,
-                cells,
-            })
-        })
-        .collect()
-}
-
-#[derive(Clone)]
-struct DetailsVisualLayerItem {
-    row_index: usize,
-    row_top: f32,
-    row_height: f32,
-    icon_size: f32,
-    selected: bool,
-    hovered: bool,
-    drop_target: bool,
-    cells: Vec<DetailsVisualCell>,
-}
-
-#[derive(Clone)]
-struct DetailsVisualCell {
-    x: f32,
-    width: f32,
-    content: DetailsVisualCellContent,
-}
-
-#[derive(Clone)]
-enum DetailsVisualCellContent {
-    Name {
-        name: SharedString,
-        icon: FileIconSnapshot,
-    },
-    Text {
-        text: SharedString,
-    },
-}
-
-struct DetailsVisualLayerElement {
-    pane_id: PaneId,
-    app: WeakEntity<FikaApp>,
-    items: Vec<DetailsVisualLayerItem>,
-    style: StyleRefinement,
-}
-
-struct DetailsVisualPaintState {
-    row_index: usize,
-    row_top: f32,
-    row_height: f32,
-    selected: bool,
-    hovered: bool,
-    drop_target: bool,
-    cells: Vec<DetailsVisualCellPaintState>,
-}
-
-enum DetailsVisualCellPaintState {
-    Name {
-        icon: DetailsVisualIconPaintState,
-        text: DetailsVisualTextPaintState,
-    },
-    Text(DetailsVisualTextPaintState),
-}
-
-struct DetailsVisualIconPaintState {
-    rect: ViewRect,
-    image: Option<Arc<RenderImage>>,
-    fallback: Option<ItemImageFallbackPaintState>,
-}
-
-struct DetailsVisualTextPaintState {
-    rect: ViewRect,
-    line: Arc<gpui::ShapedLine>,
-    line_height: Pixels,
-}
-
-impl IntoElement for DetailsVisualLayerElement {
-    type Element = Self;
-
-    fn into_element(self) -> Self::Element {
-        self
-    }
-}
-
-impl Element for DetailsVisualLayerElement {
-    type RequestLayoutState = Style;
-    type PrepaintState = Vec<DetailsVisualPaintState>;
-
-    fn id(&self) -> Option<ElementId> {
-        Some(ElementId::from(details_visual_layer_element_id(
-            self.pane_id,
-        )))
-    }
-
-    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
-        None
-    }
-
-    fn request_layout(
-        &mut self,
-        _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> (LayoutId, Self::RequestLayoutState) {
-        let mut style = Style::default();
-        style.refine(&self.style);
-        let layout_id = window.request_layout(style.clone(), [], cx);
-        (layout_id, style)
-    }
-
-    fn prepaint(
-        &mut self,
-        id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
-        _bounds: Bounds<Pixels>,
-        _request_layout: &mut Self::RequestLayoutState,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> Self::PrepaintState {
-        let perf_started = crate::item_view_perf_enabled().then(std::time::Instant::now);
-        let states = if let Some(id) = id {
-            window.with_element_state::<Entity<RetainAllImageCache>, _>(id, |cache, window| {
-                let cache = cache.unwrap_or_else(|| RetainAllImageCache::new(cx));
-                let states = self
-                    .items
-                    .iter()
-                    .map(|item| {
-                        details_visual_prepaint_item(
-                            self.pane_id,
-                            item,
-                            Some(&cache),
-                            &self.app,
-                            window,
-                            cx,
-                        )
-                    })
-                    .collect::<Vec<_>>();
-                (states, cache)
-            })
-        } else {
-            self.items
-                .iter()
-                .map(|item| {
-                    details_visual_prepaint_item(self.pane_id, item, None, &self.app, window, cx)
-                })
-                .collect::<Vec<_>>()
-        };
-        if let Some(started) = perf_started {
-            let elapsed = started.elapsed();
-            let count = states.len();
-            let _ = self.app.update(cx, |this, _cx| {
-                this.record_details_visual_prepaint(self.pane_id, elapsed, count);
-            });
-        }
-        states
-    }
-
-    fn paint(
-        &mut self,
-        _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
-        bounds: Bounds<Pixels>,
-        request_layout: &mut Self::RequestLayoutState,
-        prepaint: &mut Self::PrepaintState,
-        window: &mut Window,
-        cx: &mut App,
-    ) {
-        let perf_started = crate::item_view_perf_enabled().then(std::time::Instant::now);
-        let count = prepaint.len();
-        request_layout.paint(bounds, window, cx, |window, cx| {
-            for state in prepaint.iter() {
-                details_visual_paint_item(bounds, state, window, cx);
-            }
-        });
-        if let Some(started) = perf_started {
-            let elapsed = started.elapsed();
-            let _ = self.app.update(cx, |this, _cx| {
-                this.record_details_visual_paint(self.pane_id, elapsed, count);
-            });
-        }
-    }
-}
-
-impl Styled for DetailsVisualLayerElement {
-    fn style(&mut self) -> &mut StyleRefinement {
-        &mut self.style
-    }
-}
-
-const DETAILS_CELL_PADDING_X: f32 = 8.0;
-const DETAILS_NAME_ICON_GAP: f32 = 8.0;
-
-fn details_visual_prepaint_item(
-    pane_id: PaneId,
-    item: &DetailsVisualLayerItem,
-    cache: Option<&Entity<RetainAllImageCache>>,
-    app: &WeakEntity<FikaApp>,
-    window: &mut Window,
-    cx: &mut App,
-) -> DetailsVisualPaintState {
-    let font = window.text_style().font();
-    let font_size = px(window.rem_size().as_f32() * 0.875);
-    let line_height = px(ITEM_NAME_LINE_HEIGHT);
-    let cells = item
-        .cells
-        .iter()
-        .map(|cell| match &cell.content {
-            DetailsVisualCellContent::Name { name, icon } => {
-                let icon_rect = details_visual_name_icon_rect(item, cell);
-                let text_rect = details_visual_name_text_rect(item, cell);
-                DetailsVisualCellPaintState::Name {
-                    icon: details_visual_icon_prepaint(icon_rect, icon, cache, window, cx),
-                    text: details_visual_text_prepaint(
-                        text_rect,
-                        name.clone(),
-                        if item.selected { 0x0f172a } else { 0x1f2937 },
-                        font.clone(),
-                        font_size,
-                        line_height,
-                        pane_id,
-                        app,
-                        window,
-                        cx,
-                    ),
-                }
-            }
-            DetailsVisualCellContent::Text { text } => {
-                DetailsVisualCellPaintState::Text(details_visual_text_prepaint(
-                    details_visual_text_rect(item, cell),
-                    text.clone(),
-                    0x4b5563,
-                    font.clone(),
-                    font_size,
-                    line_height,
-                    pane_id,
-                    app,
-                    window,
-                    cx,
-                ))
-            }
-        })
-        .collect();
-    DetailsVisualPaintState {
-        row_index: item.row_index,
-        row_top: item.row_top,
-        row_height: item.row_height,
-        selected: item.selected,
-        hovered: item.hovered,
-        drop_target: item.drop_target,
-        cells,
-    }
-}
-
-fn details_visual_name_icon_rect(
-    item: &DetailsVisualLayerItem,
-    cell: &DetailsVisualCell,
-) -> ViewRect {
-    ViewRect {
-        x: cell.x + DETAILS_CELL_PADDING_X,
-        y: item.row_top + ((item.row_height - item.icon_size).max(0.0) * 0.5).floor(),
-        width: item.icon_size.max(1.0),
-        height: item.icon_size.max(1.0),
-    }
-}
-
-fn details_visual_name_text_rect(
-    item: &DetailsVisualLayerItem,
-    cell: &DetailsVisualCell,
-) -> ViewRect {
-    let x = cell.x + DETAILS_CELL_PADDING_X + item.icon_size + DETAILS_NAME_ICON_GAP;
-    ViewRect {
-        x,
-        y: item.row_top + ((item.row_height - ITEM_NAME_LINE_HEIGHT).max(0.0) * 0.5).floor(),
-        width: (cell.width - (x - cell.x) - DETAILS_CELL_PADDING_X).max(1.0),
-        height: ITEM_NAME_LINE_HEIGHT,
-    }
-}
-
-fn details_visual_text_rect(item: &DetailsVisualLayerItem, cell: &DetailsVisualCell) -> ViewRect {
-    ViewRect {
-        x: cell.x + DETAILS_CELL_PADDING_X,
-        y: item.row_top + ((item.row_height - ITEM_NAME_LINE_HEIGHT).max(0.0) * 0.5).floor(),
-        width: (cell.width - DETAILS_CELL_PADDING_X * 2.0).max(1.0),
-        height: ITEM_NAME_LINE_HEIGHT,
-    }
-}
-
-fn details_visual_icon_prepaint(
-    rect: ViewRect,
-    icon: &FileIconSnapshot,
-    cache: Option<&Entity<RetainAllImageCache>>,
-    window: &mut Window,
-    cx: &mut App,
-) -> DetailsVisualIconPaintState {
-    let image = icon.path.as_ref().and_then(|path| {
-        let cache = cache?;
-        let resource = Resource::Path(path.clone());
-        cache
-            .update(cx, |cache, cx| cache.load(&resource, window, cx))
-            .and_then(Result::ok)
-    });
-    let fallback = image
-        .is_none()
-        .then(|| details_visual_icon_fallback_prepaint(rect, icon, window));
-    DetailsVisualIconPaintState {
-        rect,
-        image,
-        fallback,
-    }
-}
-
-fn details_visual_icon_fallback_prepaint(
-    rect: ViewRect,
-    icon: &FileIconSnapshot,
-    window: &mut Window,
-) -> ItemImageFallbackPaintState {
-    let text_style = window.text_style();
-    let mut marker_font = text_style.font();
-    marker_font.weight = FontWeight::SEMIBOLD;
-    let marker = static_paint_single_line_text(SharedString::from(icon.fallback_marker.as_ref()));
-    let marker_run = TextRun {
-        len: marker.len(),
-        font: marker_font,
-        color: rgb(icon.fallback_fg).into(),
-        background_color: None,
-        underline: None,
-        strikethrough: None,
-    };
-    let marker_font_size = px(window.rem_size().as_f32() * 0.75);
-    ItemImageFallbackPaintState {
-        marker_line: window
-            .text_system()
-            .shape_line(marker, marker_font_size, &[marker_run], None),
-        marker_line_height: px(rect.height.min(ITEM_NAME_LINE_HEIGHT).max(1.0)),
-        fallback_bg: icon.fallback_bg,
-    }
-}
-
-fn details_visual_text_prepaint(
-    rect: ViewRect,
-    text: SharedString,
-    color: u32,
-    font: Font,
-    font_size: Pixels,
-    line_height: Pixels,
-    pane_id: PaneId,
-    app: &WeakEntity<FikaApp>,
-    window: &mut Window,
-    cx: &mut App,
-) -> DetailsVisualTextPaintState {
-    let key = details_text_shape_cache_key(text, color, font, font_size, line_height, window);
-    let line = app
-        .update(cx, |this, _cx| {
-            this.details_text_shape_caches
-                .entry(pane_id)
-                .or_default()
-                .shape_for(&key, window)
-        })
-        .ok()
-        .unwrap_or_else(|| Arc::new(shape_details_visual_text(&key, window)));
-    DetailsVisualTextPaintState {
-        rect,
-        line,
-        line_height,
-    }
-}
-
-fn details_text_shape_cache_key(
-    text: SharedString,
-    color: u32,
-    font: Font,
-    font_size: Pixels,
-    line_height: Pixels,
-    window: &Window,
-) -> DetailsTextShapeCacheKey {
-    DetailsTextShapeCacheKey {
-        text: static_paint_single_line_text(text),
-        font,
-        font_size_bits: font_size.as_f32().to_bits(),
-        line_height_bits: line_height.as_f32().to_bits(),
-        scale_factor_bits: window.scale_factor().to_bits(),
-        color,
-    }
-}
-
-fn shape_details_visual_text(
-    key: &DetailsTextShapeCacheKey,
-    window: &mut Window,
-) -> gpui::ShapedLine {
-    let run = TextRun {
-        len: key.text.len(),
-        font: key.font.clone(),
-        color: rgb(key.color).into(),
-        background_color: None,
-        underline: None,
-        strikethrough: None,
-    };
-    window.text_system().shape_line(
-        key.text.clone(),
-        px(f32::from_bits(key.font_size_bits)),
-        &[run],
-        None,
-    )
-}
-
-fn details_visual_paint_item(
-    layer_bounds: Bounds<Pixels>,
-    state: &DetailsVisualPaintState,
-    window: &mut Window,
-    cx: &mut App,
-) {
-    let row_bounds = Bounds::new(
-        point(
-            layer_bounds.origin.x,
-            layer_bounds.origin.y + px(state.row_top),
-        ),
-        size(layer_bounds.size.width, px(state.row_height.max(1.0))),
-    );
-    window.paint_quad(fill(
-        row_bounds,
-        details_row_background(
-            state.selected,
-            state.hovered,
-            state.drop_target,
-            state.row_index,
-        ),
-    ));
-    for cell in state.cells.iter() {
-        match cell {
-            DetailsVisualCellPaintState::Name { icon, text } => {
-                details_visual_paint_icon(layer_bounds, icon, window, cx);
-                details_visual_paint_text(layer_bounds, text, window, cx);
-            }
-            DetailsVisualCellPaintState::Text(text) => {
-                details_visual_paint_text(layer_bounds, text, window, cx);
-            }
-        }
-    }
-}
-
-fn details_visual_paint_icon(
-    layer_bounds: Bounds<Pixels>,
-    state: &DetailsVisualIconPaintState,
-    window: &mut Window,
-    cx: &mut App,
-) {
-    let icon_bounds = details_visual_bounds(layer_bounds, state.rect);
-    if let Some(image) = state.image.as_ref() {
-        if image.frame_count() > 0 {
-            let image_size = image.size(0);
-            if u32::from(image_size.width) > 0 && u32::from(image_size.height) > 0 {
-                let image_bounds = ObjectFit::Contain.get_bounds(icon_bounds, image_size);
-                window
-                    .paint_image(image_bounds, Corners::all(px(4.0)), image.clone(), 0, false)
-                    .ok();
-                return;
-            }
-        }
-    }
-    if let Some(fallback) = state.fallback.as_ref() {
-        window.paint_quad(fill(icon_bounds, rgb(fallback.fallback_bg)).corner_radii(px(4.0)));
-        let marker_origin = point(
-            icon_bounds.origin.x,
-            icon_bounds.origin.y
-                + ((icon_bounds.size.height - fallback.marker_line_height).max(px(0.0)) / 2.0),
-        );
-        fallback
-            .marker_line
-            .paint(
-                marker_origin,
-                fallback.marker_line_height,
-                TextAlign::Center,
-                Some(icon_bounds.size.width),
-                window,
-                cx,
-            )
-            .ok();
-    }
-}
-
-fn details_visual_paint_text(
-    layer_bounds: Bounds<Pixels>,
-    state: &DetailsVisualTextPaintState,
-    window: &mut Window,
-    cx: &mut App,
-) {
-    let text_bounds = details_visual_bounds(layer_bounds, state.rect);
-    window.paint_layer(text_bounds, |window| {
-        state
-            .line
-            .paint(
-                point(text_bounds.origin.x, text_bounds.origin.y),
-                state.line_height,
-                TextAlign::Left,
-                Some(text_bounds.size.width),
-                window,
-                cx,
-            )
-            .ok();
-    });
-}
-
-fn details_visual_bounds(layer_bounds: Bounds<Pixels>, rect: ViewRect) -> Bounds<Pixels> {
-    Bounds::new(
-        point(
-            layer_bounds.origin.x + px(rect.x.round()),
-            layer_bounds.origin.y + px(rect.y.round()),
-        ),
-        size(
-            px(rect.width.round().max(1.0)),
-            px(rect.height.round().max(1.0)),
-        ),
-    )
 }
 
 fn details_row(

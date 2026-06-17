@@ -32,6 +32,7 @@ DnD state helpers, but its renderer is still GPUI.
 - Renderer policy code: `src/ui/file_grid/renderer_policy.rs`
 - Compact/Icons static visual painter: `src/ui/file_grid/static_visual.rs`
 - Compact/Icons image paint layer: `src/ui/file_grid/image_layer.rs`
+- Details visual painter: `src/ui/file_grid/details_visual.rs`
 - Active item-drag hover routing: `install_active_item_drag_mouse_tracker` plus
   drag preview repaint fallback in `src/ui/file_grid/dnd.rs`
 - Runtime DnD debug channel: `FIKA_DEBUG_DND=1`, especially
@@ -88,6 +89,15 @@ that self-drags can emit `item-start` without later element drag-move callbacks.
 Fika tracks active item drags from a window mouse listener installed by the
 retained interaction layer, then routes the window position through the same
 retained pane hit-test used by Places and external drops.
+
+The accepted fallback is the drag preview repaint path. GPUI may keep repainting
+the drag preview while the pointer moves even when it does not deliver the
+underlying pane's drag-move callback for a same-window item drag. Fika therefore
+uses the preview render pass only as a clock to query the current window mouse
+position and run the same retained hit test. A valid smoke log can show only
+`active-item-move via=preview`; the required signal is that the move reaches
+`kind=Some(Directory)` before drop and the directory item highlights while the
+cursor is over it.
 
 ### R4: Evaluate Rename Boundary
 

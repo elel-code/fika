@@ -247,6 +247,10 @@ This is the active task board for the GPUI item view custom-paint migration.
 - [x] Extract Compact/Icons static visual paint layer into
   `src/ui/file_grid/static_visual.rs` so base item background, fallback icon,
   and label shaping/painting are no longer owned by the main file-grid surface.
+- [x] Extract Details visual paint layer into
+  `src/ui/file_grid/details_visual.rs` so row backgrounds, icon prepaint,
+  fallback icon painting, text shaping, and cell painting are no longer owned by
+  the main file-grid surface.
 - [x] Centralize GPUI item/details drag-start shell installation in
   `src/ui/file_grid/dnd.rs` while keeping the shell as the current platform
   boundary.

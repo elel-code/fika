@@ -73,6 +73,24 @@ Expected DnD debug interpretation:
   this is helpful but not sufficient for pane self-drag hover because GPUI may
   skip per-element drag-move callbacks after drag start.
 
+Pane item self-drag root cause:
+
+- The remaining GPUI `Div::on_drag` shell is a drag initiation boundary, not the
+  owner of hover state after the drag starts.
+- Places-to-pane drag stays responsive because the viewport drag-move path keeps
+  delivering target updates while the drag is moving.
+- Pane-item-to-pane-directory drag is different: after the same-window item
+  drag starts, GPUI can keep only the drag preview moving and stop delivering
+  reliable move callbacks to the underlying pane/item elements. Earlier fixes
+  that depended on per-element `on_drag_move`, directory shell hits, or a window
+  mouse event gated by `MouseMoveEvent::dragging()` could therefore update only
+  at drop time or not at all while hovering.
+- The stable owner is now Fika's `ActiveItemDrag` state. Both `via=window` and
+  `via=preview` call the same retained pane hit-test from the current window
+  pointer position. The preview path exists because GPUI reliably repaints the
+  drag preview during the active drag, so it can drive the same target update
+  even when the underlying pane move event is absent.
+
 ## Rename
 
 For Compact and Icons:
