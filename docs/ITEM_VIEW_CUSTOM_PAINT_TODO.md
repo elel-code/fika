@@ -709,6 +709,14 @@ by risk and evidence, not by how custom-painted a surface looks.
   show, resize, reset, restore, or verify. Evidence:
   `/tmp/fika-places-layout-autosmoke-module.log` passed
   `--require-layout-autosmoke --expect-current-gpui-policy`.
+- [x] P16ah: Move Places drop-target autosmoke action reporting out of
+  `src/main.rs`. `src/ui/places/autosmoke.rs` now owns the target path label,
+  insert-index action report, and clear-target action log formatting used by
+  the non-destructive DropTargets scenario. The app root still chooses and
+  mutates the target state, but the Places module owns the runtime evidence
+  markers consumed by the analyzer. Evidence:
+  `/tmp/fika-places-target-actions-autosmoke-module.log` passed
+  `--require-autosmoke --expect-current-gpui-policy`.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

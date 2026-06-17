@@ -126,9 +126,11 @@ use ui::places::{
     PLACES_SIDEBAR_DEFAULT_WIDTH, PlaceDrag, PlaceEntry, PlaceSnapshot, PlacesAutosmokeAction,
     PlacesAutosmokeScenario, PlacesLayoutAutosmokeState, PlacesRowTextShapeCache,
     PlacesSidebarResizeDrag, PlacesSnapshotPerfLog, build_places, clamp_places_sidebar_width,
-    default_place_label, emit_place_paint_slot_perf_log, emit_places_autosmoke_layout_capture,
-    emit_places_autosmoke_layout_resize, emit_places_autosmoke_layout_settings_verification,
-    emit_places_autosmoke_layout_update, emit_places_autosmoke_snapshot,
+    default_place_label, emit_place_paint_slot_perf_log,
+    emit_places_autosmoke_clear_targets_action, emit_places_autosmoke_insert_target_action,
+    emit_places_autosmoke_layout_capture, emit_places_autosmoke_layout_resize,
+    emit_places_autosmoke_layout_settings_verification, emit_places_autosmoke_layout_update,
+    emit_places_autosmoke_place_target_action, emit_places_autosmoke_snapshot,
     emit_places_retained_hit_test_autosmoke, emit_places_snapshot_perf_log, place_snapshots_for,
     places_autosmoke_resize_target_width, places_panel_button, places_panel_icon_snapshot,
     places_perf_enabled, places_section_count, places_sidebar_splitter,
@@ -725,44 +727,28 @@ impl FikaApp {
             }
             PlacesAutosmokeAction::TargetFirstPlace { label } => {
                 let target = self.places_autosmoke_first_target_path();
-                let target_label = target
-                    .as_ref()
-                    .map(|path| path.display().to_string())
-                    .unwrap_or_else(|| "<none>".to_string());
-                let changed = if let Some(path) = target {
-                    self.set_place_drag_drop_target_for_path(path)
+                let changed = if let Some(path) = target.as_ref() {
+                    self.set_place_drag_drop_target_for_path(path.clone())
                 } else {
                     false
                 };
-                eprintln!(
-                    "[fika autosmoke] places action={} target={} changed={}",
-                    label, target_label, changed
-                );
+                emit_places_autosmoke_place_target_action(label, target.as_deref(), changed);
                 changed
             }
             PlacesAutosmokeAction::TargetInsertStart { label } => {
                 let changed = self.set_place_drag_drop_target_for_insert(0);
-                eprintln!(
-                    "[fika autosmoke] places action={} index=0 changed={}",
-                    label, changed
-                );
+                emit_places_autosmoke_insert_target_action(label, 0, changed);
                 changed
             }
             PlacesAutosmokeAction::TargetInsertEnd { label } => {
                 let index = self.places.len();
                 let changed = self.set_place_drag_drop_target_for_insert(index);
-                eprintln!(
-                    "[fika autosmoke] places action={} index={} changed={}",
-                    label, index, changed
-                );
+                emit_places_autosmoke_insert_target_action(label, index, changed);
                 changed
             }
             PlacesAutosmokeAction::ClearTargets { label } => {
                 let changed = self.clear_place_drop_target();
-                eprintln!(
-                    "[fika autosmoke] places action={} changed={}",
-                    label, changed
-                );
+                emit_places_autosmoke_clear_targets_action(label, changed);
                 changed
             }
             PlacesAutosmokeAction::CaptureLayout { label } => {

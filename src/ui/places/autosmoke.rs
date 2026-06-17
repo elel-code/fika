@@ -69,6 +69,18 @@ struct PlacesSnapshotAutosmokeReport {
     insert_after: usize,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+struct PlacesTargetActionAutosmokeReport {
+    target: String,
+    changed: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PlacesIndexActionAutosmokeReport {
+    index: usize,
+    changed: bool,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct PlacesLayoutAutosmokeState {
     pub(crate) width: f32,
@@ -270,6 +282,37 @@ pub(crate) fn emit_places_retained_hit_test_autosmoke(
     );
 }
 
+pub(crate) fn emit_places_autosmoke_place_target_action(
+    label: &'static str,
+    target: Option<&Path>,
+    changed: bool,
+) {
+    let report = target_action_autosmoke_report(target, changed);
+    eprintln!(
+        "[fika autosmoke] places action={} target={} changed={}",
+        label, report.target, report.changed
+    );
+}
+
+pub(crate) fn emit_places_autosmoke_insert_target_action(
+    label: &'static str,
+    index: usize,
+    changed: bool,
+) {
+    let report = index_action_autosmoke_report(index, changed);
+    eprintln!(
+        "[fika autosmoke] places action={} index={} changed={}",
+        label, report.index, report.changed
+    );
+}
+
+pub(crate) fn emit_places_autosmoke_clear_targets_action(label: &'static str, changed: bool) {
+    eprintln!(
+        "[fika autosmoke] places action={} changed={}",
+        label, changed
+    );
+}
+
 pub(crate) fn emit_places_autosmoke_layout_capture(
     label: &'static str,
     state: PlacesLayoutAutosmokeState,
@@ -336,6 +379,22 @@ pub(crate) fn emit_places_autosmoke_snapshot(label: &'static str, snapshots: &[P
         report.insert_before,
         report.insert_after
     );
+}
+
+fn target_action_autosmoke_report(
+    target: Option<&Path>,
+    changed: bool,
+) -> PlacesTargetActionAutosmokeReport {
+    PlacesTargetActionAutosmokeReport {
+        target: target
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "<none>".to_string()),
+        changed,
+    }
+}
+
+fn index_action_autosmoke_report(index: usize, changed: bool) -> PlacesIndexActionAutosmokeReport {
+    PlacesIndexActionAutosmokeReport { index, changed }
 }
 
 fn layout_settings_autosmoke_report(
@@ -533,6 +592,35 @@ mod tests {
             actions[7],
             PlacesAutosmokeAction::ClearTargets { .. }
         ));
+    }
+
+    #[test]
+    fn target_action_autosmoke_report_formats_target_path() {
+        assert_eq!(
+            target_action_autosmoke_report(Some(std::path::Path::new("/home/yk/Downloads")), true),
+            PlacesTargetActionAutosmokeReport {
+                target: "/home/yk/Downloads".to_string(),
+                changed: true,
+            }
+        );
+        assert_eq!(
+            target_action_autosmoke_report(None, false),
+            PlacesTargetActionAutosmokeReport {
+                target: "<none>".to_string(),
+                changed: false,
+            }
+        );
+    }
+
+    #[test]
+    fn index_action_autosmoke_report_keeps_insert_index() {
+        assert_eq!(
+            index_action_autosmoke_report(12, true),
+            PlacesIndexActionAutosmokeReport {
+                index: 12,
+                changed: true,
+            }
+        );
     }
 
     #[test]
