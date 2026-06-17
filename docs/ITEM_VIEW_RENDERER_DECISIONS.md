@@ -57,6 +57,12 @@ as a renderer decision signal too: a cold theme-icon miss should now be absorbed
 by preliminary icon snapshots and a background resolve queue, not by synchronous
 theme path lookup during conversion.
 
+For paint-layer investigations, compare `[fika static-item-visual]` and
+`[fika item-image]` prepaint counts against visible item counts, not raw
+read-ahead work counts. Read-ahead belongs to scheduler projection and retained
+caches; it should not add image-cache loads or text shaping to the current
+paint prepass.
+
 ## Next Renderer Decisions
 
 1. Keep the remaining drag-start shells until the GPUI API boundary changes.

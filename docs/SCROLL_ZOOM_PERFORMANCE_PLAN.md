@@ -38,6 +38,16 @@ the render frame.
 - Thumbnail and theme-icon image pending/failure states paint the item fallback
   visual instead of leaving the icon rect blank, reducing zoom flicker while
   GPUI image cache loading is in flight.
+- Read-ahead items stay in raw/render snapshots for scheduler projection and
+  cache retention, but they no longer enter static visual or image prepaint.
+  This matches Dolphin's split where `KItemListView` paints visible widgets and
+  `KFileItemModelRolesUpdater::indexesToResolve()` handles read-ahead role
+  work outside the paint frame.
+- Zoom exact-size theme-icon misses reuse an already cached icon snapshot for
+  the same file-icon kind at another size while the exact-size resolve remains
+  queued. This mirrors Dolphin's visual-stability behavior: do not replace a
+  real visible icon with a fallback marker just because the new zoom level's
+  icon path has not resolved yet.
 
 ### Open Verification Work
 

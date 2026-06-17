@@ -95,11 +95,11 @@ visible directories, and bounded before/after read-ahead indexes for role work.
 Fika mirrors that by keeping the raw Compact/Icons work range for scheduler
 projection, while render conversion only materializes render snapshots for
 currently visible items or already-cached read-ahead content. Invisible
-read-ahead items may reuse already cached snapshot content for paint/cache
-warm-up, but they must not introduce new synchronous icon-theme or text-shaping
-misses into the current frame. Visible icon cache misses also use preliminary
-snapshots and queue background resolve work rather than scanning icon themes in
-the conversion path.
+read-ahead items may retain snapshot/cache state, but they must not enter
+static visual or image prepaint, and they must not introduce new synchronous
+icon-theme, image-cache-load, or text-shaping misses into the current frame.
+Visible icon cache misses also use preliminary snapshots and queue background
+resolve work rather than scanning icon themes in the conversion path.
 
 Current GPUI icon work follows that boundary: render conversion asks
 `FileIconCache` for a cached or preliminary snapshot only. If the theme path is
@@ -108,6 +108,10 @@ resolve batch ordered as visible files, visible directories, read-ahead after,
 then read-ahead before. Resolve completion invalidates visible item snapshot
 caches so the next frame can swap preliminary fallback icons for theme images
 without doing theme-directory scanning inside the scroll or zoom frame.
+When zoom changes the requested icon size, exact-size misses reuse an existing
+same-kind cached icon snapshot from another size as a transition while the
+exact-size request stays queued. This avoids a fallback-marker flash between
+two real theme icons.
 
 Thumbnail work follows the same visual stability rule. Thumbnail probe success
 and failure remain model roles, but the image paint layer now paints the item's
