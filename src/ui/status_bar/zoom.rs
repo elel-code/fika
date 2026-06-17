@@ -78,9 +78,10 @@ fn zoom_track(
             move |this, event: &gpui::DragMoveEvent<ZoomSliderDrag>, _window, cx| {
                 let drag = *event.drag(cx);
                 let track_x = (event.event.position.x - event.bounds.origin.x).as_f32();
-                this.set_zoom_level(
+                this.set_zoom_level_with_context(
                     pane_id,
                     zoom_level_for_track_x(track_x, drag.track_width, drag.zoom_min, drag.zoom_max),
+                    cx,
                 );
                 cx.stop_propagation();
                 cx.notify();
@@ -123,7 +124,7 @@ fn zoom_segment(
         .on_click(
             cx.listener(move |this, event: &gpui::ClickEvent, _window, cx| {
                 if event.standard_click() {
-                    this.set_zoom_level(pane_id, level);
+                    this.set_zoom_level_with_context(pane_id, level, cx);
                     cx.stop_propagation();
                     cx.notify();
                 }

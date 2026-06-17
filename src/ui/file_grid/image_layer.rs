@@ -1,15 +1,14 @@
-use std::collections::{HashMap, HashSet};
-use std::fs;
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
 use fika_core::{ItemLayout, PaneId, ViewRect};
 use gpui::prelude::*;
 use gpui::{
-    App, Bounds, Corners, Element, ElementId, Entity, FontWeight, GlobalElementId, Image,
-    ImageFormat, InspectorElementId, IntoElement, LayoutId, ObjectFit, Pixels, RenderImage,
-    Resource, RetainAllImageCache, SharedString, Style, StyleRefinement, Styled, TextAlign,
-    TextRun, WeakEntity, Window, fill, point, px, rgb, size,
+    App, Bounds, Corners, Element, ElementId, Entity, FontWeight, GlobalElementId,
+    InspectorElementId, IntoElement, LayoutId, ObjectFit, Pixels, RenderImage, Resource,
+    RetainAllImageCache, SharedString, Style, StyleRefinement, Styled, TextAlign, TextRun,
+    WeakEntity, Window, fill, point, px, rgb, size,
 };
 
 use crate::FikaApp;
@@ -120,8 +119,6 @@ pub(super) fn item_image_layer_retained_source(
 pub(super) struct RetainedImageLayerState {
     image_cache: Entity<RetainAllImageCache>,
     retained_images: HashMap<ItemImageRetainedSource, Arc<RenderImage>>,
-    retained_image_paths: HashMap<ItemImageRetainedSource, Arc<Path>>,
-    failed_theme_icons: HashSet<(ItemImageRetainedSource, Arc<Path>)>,
 }
 
 impl RetainedImageLayerState {
@@ -129,8 +126,6 @@ impl RetainedImageLayerState {
         Self {
             image_cache: RetainAllImageCache::new(cx),
             retained_images: HashMap::new(),
-            retained_image_paths: HashMap::new(),
-            failed_theme_icons: HashSet::new(),
         }
     }
 
@@ -161,30 +156,7 @@ impl RetainedImageLayerState {
         window: &mut Window,
         cx: &mut App,
     ) -> Option<Arc<RenderImage>> {
-        let retained_path_matches = self
-            .retained_image_paths
-            .get(&retained_source)
-            .is_some_and(|path| path.as_ref() == source_path.as_ref());
-        if retained_path_matches && let Some(image) = self.retained_images.get(&retained_source) {
-            return Some(image.clone());
-        }
-
-        let failure_key = (retained_source.clone(), source_path.clone());
-        if !self.failed_theme_icons.contains(&failure_key) {
-            if let Some(image) = load_theme_icon_image_sync(source_path.as_ref(), cx) {
-                if let Some(old_image) = self.retained_images.remove(&retained_source) {
-                    cx.drop_image(old_image, Some(window));
-                }
-                self.retained_images
-                    .insert(retained_source.clone(), image.clone());
-                self.retained_image_paths
-                    .insert(retained_source, source_path);
-                return Some(image);
-            }
-            self.failed_theme_icons.insert(failure_key);
-        }
-
-        self.retained_images.get(&retained_source).cloned()
+        self.load_thumbnail_or_retained(source_path, retained_source, window, cx)
     }
 }
 
@@ -500,31 +472,6 @@ fn item_image_layer_icon_bounds(
     )
 }
 
-fn load_theme_icon_image_sync(path: &Path, cx: &mut App) -> Option<Arc<RenderImage>> {
-    let format = image_format_for_path(path)?;
-    let bytes = fs::read(path).ok()?;
-    let image = Image::from_bytes(format, bytes);
-    image.to_image_data(cx.svg_renderer()).ok()
-}
-
-fn image_format_for_path(path: &Path) -> Option<ImageFormat> {
-    match path
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .map(str::to_ascii_lowercase)
-        .as_deref()
-    {
-        Some("png") => Some(ImageFormat::Png),
-        Some("svg") => Some(ImageFormat::Svg),
-        Some("webp") => Some(ImageFormat::Webp),
-        Some("jpg" | "jpeg") => Some(ImageFormat::Jpeg),
-        Some("bmp") => Some(ImageFormat::Bmp),
-        Some("gif") => Some(ImageFormat::Gif),
-        Some("ico") => Some(ImageFormat::Ico),
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -549,22 +496,6 @@ mod tests {
 
         assert!(item_image_pending_load_paints_fallback(&item));
         assert!(!item_image_pending_load_paints_marker(&item));
-    }
-
-    #[test]
-    fn theme_icon_sync_loader_accepts_resolver_icon_formats() {
-        assert_eq!(
-            image_format_for_path(Path::new("/theme/48x48/mimetypes/text-x-generic.svg")),
-            Some(ImageFormat::Svg)
-        );
-        assert_eq!(
-            image_format_for_path(Path::new("/theme/48x48/mimetypes/text-x-generic.png")),
-            Some(ImageFormat::Png)
-        );
-        assert_eq!(
-            image_format_for_path(Path::new("/theme/48x48/mimetypes/text-x-generic.txt")),
-            None
-        );
     }
 
     fn test_item(thumbnail_path: Option<Arc<Path>>) -> ItemImageLayerItem {

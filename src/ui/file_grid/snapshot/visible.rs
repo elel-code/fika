@@ -82,12 +82,13 @@ impl VisibleItemSnapshotCache {
         item: &RawVisibleItemSnapshot,
         cache_text_lines: bool,
         resolve_uncached: bool,
+        icon_role_size: f32,
         icon_for_item: &mut F,
     ) -> Option<VisibleItemSnapshotCacheEntry>
     where
         F: for<'a> FnMut(FileGridIconRequest<'a>) -> FileIconSnapshot,
     {
-        let key = visible_item_snapshot_cache_key(item, cache_text_lines);
+        let key = visible_item_snapshot_cache_key(item, cache_text_lines, icon_role_size);
         if let Some(entry) = self.entries.get_mut(&item.item_id)
             && entry.key == key
         {
@@ -104,7 +105,7 @@ impl VisibleItemSnapshotCache {
             is_dir: item.is_dir,
             mime_type: item.mime_type.clone(),
             mime_magic_checked: item.mime_magic_checked,
-            icon_size: item.layout.icon_rect.width,
+            icon_size: icon_role_size,
         });
         let icon_name_lines = if cache_text_lines {
             super::super::layout::icon_name_display_lines(
@@ -142,6 +143,7 @@ impl VisibleItemSnapshotCache {
 fn visible_item_snapshot_cache_key(
     item: &RawVisibleItemSnapshot,
     cache_text_lines: bool,
+    icon_role_size: f32,
 ) -> VisibleItemSnapshotCacheKey {
     VisibleItemSnapshotCacheKey {
         path: item.path.clone(),
@@ -150,7 +152,7 @@ fn visible_item_snapshot_cache_key(
         thumbnail_path: item.thumbnail_path.clone(),
         mime_type: item.mime_type.clone(),
         mime_magic_checked: item.mime_magic_checked,
-        icon_size_px: item.layout.icon_rect.width.round().clamp(16.0, 256.0) as u16,
+        icon_size_px: icon_role_size.round().clamp(16.0, 256.0) as u16,
         text_width_bits: cache_text_lines
             .then(|| icon_name_layout_width(item.layout.text_rect.width).to_bits())
             .unwrap_or_default(),
@@ -197,7 +199,7 @@ mod tests {
             items: vec![test_raw_visible_item(1, "alpha.txt", 0)],
         };
         first_raw.assign_visible_item_slots(&mut slots);
-        let first = first_raw.into_file_grid_snapshot(1, &mut cache, |_| {
+        let first = first_raw.into_file_grid_snapshot(1, &mut cache, 48.0, |_| {
             icon_requests += 1;
             icon.clone()
         });
@@ -215,7 +217,7 @@ mod tests {
             items: vec![second_item],
         };
         second_raw.assign_visible_item_slots(&mut slots);
-        let second = second_raw.into_file_grid_snapshot(1, &mut cache, |_| {
+        let second = second_raw.into_file_grid_snapshot(1, &mut cache, 48.0, |_| {
             icon_requests += 1;
             icon.clone()
         });

@@ -36,7 +36,11 @@ impl RawFileGridSnapshot {
         }
     }
 
-    pub(crate) fn queue_file_icon_resolve_candidates<F>(&self, mut queue: F) -> bool
+    pub(crate) fn queue_file_icon_resolve_candidates<F>(
+        &self,
+        icon_role_size: f32,
+        mut queue: F,
+    ) -> bool
     where
         F: for<'a> FnMut(FileGridIconRequest<'a>) -> bool,
     {
@@ -48,7 +52,7 @@ impl RawFileGridSnapshot {
                     .map(|(range, _)| range);
 
                 visit_visible_icon_items(items, |item| {
-                    queued |= queue(file_icon_request_for_item(item));
+                    queued |= queue(file_icon_request_for_item(item, icon_role_size));
                     true
                 });
 
@@ -56,23 +60,23 @@ impl RawFileGridSnapshot {
                     for item in items.iter().filter(|item| {
                         !item.visible && item.layout.model_index >= visible_range.end
                     }) {
-                        queued |= queue(file_icon_request_for_item(item));
+                        queued |= queue(file_icon_request_for_item(item, icon_role_size));
                     }
                     for item in items.iter().rev().filter(|item| {
                         !item.visible && item.layout.model_index < visible_range.start
                     }) {
-                        queued |= queue(file_icon_request_for_item(item));
+                        queued |= queue(file_icon_request_for_item(item, icon_role_size));
                     }
                 }
             }
-            Self::Details { items, metrics, .. } => {
+            Self::Details { items, .. } => {
                 for item in items.iter().filter(|item| !item.is_dir) {
                     queued |= queue(FileGridIconRequest {
                         path: &item.path,
                         is_dir: item.is_dir,
                         mime_type: item.mime_type.clone(),
                         mime_magic_checked: item.mime_magic_checked,
-                        icon_size: metrics.icon_size,
+                        icon_size: icon_role_size,
                     });
                 }
                 for item in items.iter().filter(|item| item.is_dir) {
@@ -81,7 +85,7 @@ impl RawFileGridSnapshot {
                         is_dir: item.is_dir,
                         mime_type: item.mime_type.clone(),
                         mime_magic_checked: item.mime_magic_checked,
-                        icon_size: metrics.icon_size,
+                        icon_size: icon_role_size,
                     });
                 }
             }
@@ -89,22 +93,27 @@ impl RawFileGridSnapshot {
         queued
     }
 
-    pub(crate) fn for_each_visible_file_icon_resolve_candidate<F>(&self, mut visit: F)
-    where
+    pub(crate) fn for_each_visible_file_icon_resolve_candidate<F>(
+        &self,
+        icon_role_size: f32,
+        mut visit: F,
+    ) where
         F: for<'a> FnMut(FileGridIconRequest<'a>) -> bool,
     {
         match self {
             Self::Compact { items, .. } | Self::Icons { items, .. } => {
-                visit_visible_icon_items(items, |item| visit(file_icon_request_for_item(item)));
+                visit_visible_icon_items(items, |item| {
+                    visit(file_icon_request_for_item(item, icon_role_size))
+                });
             }
-            Self::Details { items, metrics, .. } => {
+            Self::Details { items, .. } => {
                 for item in items.iter().filter(|item| !item.is_dir) {
                     if !visit(FileGridIconRequest {
                         path: &item.path,
                         is_dir: item.is_dir,
                         mime_type: item.mime_type.clone(),
                         mime_magic_checked: item.mime_magic_checked,
-                        icon_size: metrics.icon_size,
+                        icon_size: icon_role_size,
                     }) {
                         return;
                     }
@@ -115,7 +124,7 @@ impl RawFileGridSnapshot {
                         is_dir: item.is_dir,
                         mime_type: item.mime_type.clone(),
                         mime_magic_checked: item.mime_magic_checked,
-                        icon_size: metrics.icon_size,
+                        icon_size: icon_role_size,
                     }) {
                         return;
                     }
@@ -141,13 +150,16 @@ where
     }
 }
 
-fn file_icon_request_for_item(item: &RawVisibleItemSnapshot) -> FileGridIconRequest<'_> {
+fn file_icon_request_for_item(
+    item: &RawVisibleItemSnapshot,
+    icon_role_size: f32,
+) -> FileGridIconRequest<'_> {
     FileGridIconRequest {
         path: &item.path,
         is_dir: item.is_dir,
         mime_type: item.mime_type.clone(),
         mime_magic_checked: item.mime_magic_checked,
-        icon_size: item.layout.icon_rect.width,
+        icon_size: icon_role_size,
     }
 }
 
@@ -312,17 +324,19 @@ mod tests {
         };
         let mut paths = Vec::new();
 
-        assert!(raw_file_grid.queue_file_icon_resolve_candidates(|request| {
-            paths.push(
-                request
-                    .path
-                    .file_name()
-                    .unwrap()
-                    .to_string_lossy()
-                    .to_string(),
-            );
-            true
-        }));
+        assert!(
+            raw_file_grid.queue_file_icon_resolve_candidates(48.0, |request| {
+                paths.push(
+                    request
+                        .path
+                        .file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .to_string(),
+                );
+                true
+            })
+        );
 
         assert_eq!(
             paths,
@@ -358,7 +372,7 @@ mod tests {
         };
         let mut paths = Vec::new();
 
-        raw_file_grid.for_each_visible_file_icon_resolve_candidate(|request| {
+        raw_file_grid.for_each_visible_file_icon_resolve_candidate(48.0, |request| {
             paths.push(
                 request
                     .path
@@ -390,17 +404,19 @@ mod tests {
         };
         let mut paths = Vec::new();
 
-        assert!(raw_file_grid.queue_file_icon_resolve_candidates(|request| {
-            paths.push(
-                request
-                    .path
-                    .file_name()
-                    .unwrap()
-                    .to_string_lossy()
-                    .to_string(),
-            );
-            true
-        }));
+        assert!(
+            raw_file_grid.queue_file_icon_resolve_candidates(48.0, |request| {
+                paths.push(
+                    request
+                        .path
+                        .file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .to_string(),
+                );
+                true
+            })
+        );
 
         assert_eq!(paths, vec!["alpha.txt", "beta.txt", "Documents"]);
     }

@@ -27,7 +27,7 @@ pub(super) fn handle_file_grid_wheel(
 ) {
     if wheel_modifiers_request_zoom(event.modifiers) {
         app.finish_rubber_band(pane_id);
-        app.zoom_pane_from_wheel(pane_id, event.delta);
+        app.zoom_pane_from_wheel(pane_id, event.delta, cx);
         cx.stop_propagation();
         cx.notify();
     } else if app.scroll_pane_from_wheel(pane_id, event.delta) {

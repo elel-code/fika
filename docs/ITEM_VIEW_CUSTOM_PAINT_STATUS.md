@@ -12,7 +12,7 @@ becomes the default.
 | --- | --- | --- | --- |
 | Compact/Icons item model and geometry | retained | `DirectoryModel`, visible snapshots, slot pools | none for current path |
 | Compact/Icons base background, selection, hover, drop tint, labels | replaced | custom content-level painter | runtime perf and DnD smoke evidence must stay current |
-| Compact/Icons thumbnail and theme-icon images | replaced | custom image painter using GPUI `RetainAllImageCache` for thumbnails plus synchronous small-icon `RenderImage` creation for theme icons | theme-icon paths resolve off the render path; theme icon cold miss now matches Dolphin `pixmapForIcon()` instead of painting a placeholder frame; thumbnail pending/failure still reuses retained images or paints fallback |
+| Compact/Icons thumbnail and theme-icon images | replaced | custom image painter using GPUI `RetainAllImageCache` plus retained same-source images | theme-icon paths resolve off the render path; zoom freezes icon role size for Dolphin's 300ms update delay; pending/failure still reuses retained images or paints fallback |
 | Compact/Icons click, menu, hover, cursor, and drop hit testing | replaced | retained viewport/custom hitboxes plus active item-drag window tracker | runtime DnD smoke still required after painter changes |
 | Compact/Icons drag start | not replaced | GPUI `Div::on_drag` shell | public GPUI custom-element drag-start API or audited Fika GPUI patch |
 | Compact/Icons rename editor | not replaced | GPUI editor overlay | only revisit after caret, selection, IME, and text input behavior are covered |
@@ -113,7 +113,10 @@ without doing theme-directory scanning inside the scroll or zoom frame.
 When zoom changes the requested icon size, exact-size misses reuse an existing
 same-kind cached icon snapshot from another size as a transition while the
 exact-size request stays queued. This avoids a fallback-marker flash between
-two real theme icons.
+two real theme icons. During active zoom, Fika mirrors Dolphin's
+`triggerIconSizeUpdate()` path by freezing the pane's icon role size for 300ms:
+layout geometry changes immediately, but icon snapshot conversion and file-icon
+resolve requests keep using the previous role size until the debounce fires.
 
 Directory-load MIME metadata and visible icon paths now follow Dolphin's
 visible-widget exception to that async rule. Dolphin keeps full role resolution
@@ -129,12 +132,12 @@ success and failure remain model roles, but the image paint layers now keep a
 real decoded image through transient GPUI image-cache misses whenever the
 semantic source still matches. MIME/theme icons are retained by `iconName`, so
 zoom path changes and scroll re-entry can reuse a same-icon image until the new
-resource is available. For theme icons, the cold miss path now synchronously
-reads the already-resolved small icon file and creates a `RenderImage`, matching
-Dolphin's `pixmapForIcon()`/`QPixmapCache` behavior. A neutral markerless
-document placeholder is only a load-failure fallback for theme icons. Thumbnails
-are retained only by exact thumbnail path. Thumbnail fallback icons are still
-painted when no real image exists yet or the semantic source changed.
+resource is available. Theme icon decoding remains on GPUI's image-cache path;
+the paint layer must not synchronously read or decode theme icon files during
+prepaint. A neutral markerless document placeholder is only the first-load or
+load-failure fallback for theme icons. Thumbnails are retained only by exact
+thumbnail path. Thumbnail fallback icons are still painted when no real image
+exists yet or the semantic source changed.
 
 The immediate non-GUI-safe work is to split the large `src/ui/file_grid.rs`
 painter/controller code into smaller modules without changing behavior.

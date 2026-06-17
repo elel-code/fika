@@ -11,6 +11,7 @@ impl RawFileGridSnapshot {
         self,
         selection_count: usize,
         visible_item_cache: &mut VisibleItemSnapshotCache,
+        icon_role_size: f32,
         mut icon_for_item: F,
     ) -> FileGridSnapshot
     where
@@ -29,6 +30,7 @@ impl RawFileGridSnapshot {
                             &item,
                             false,
                             item.visible,
+                            icon_role_size,
                             &mut icon_for_item,
                         )?;
                         Some(VisibleItemSnapshot {
@@ -70,6 +72,7 @@ impl RawFileGridSnapshot {
                             &item,
                             true,
                             item.visible,
+                            icon_role_size,
                             &mut icon_for_item,
                         )?;
                         Some(VisibleItemSnapshot {
@@ -113,7 +116,7 @@ impl RawFileGridSnapshot {
                             is_dir: item.is_dir,
                             mime_type: item.mime_type.clone(),
                             mime_magic_checked: item.mime_magic_checked,
-                            icon_size: metrics.icon_size,
+                            icon_size: icon_role_size,
                         });
                         DetailsItemSnapshot {
                             row_index: item.row_index,
@@ -175,7 +178,7 @@ mod tests {
         let mut icon_requests = Vec::new();
         let mut cache = VisibleItemSnapshotCache::default();
 
-        let snapshot = raw_file_grid.into_file_grid_snapshot(1, &mut cache, |request| {
+        let snapshot = raw_file_grid.into_file_grid_snapshot(1, &mut cache, 48.0, |request| {
             icon_requests.push(request.path.to_path_buf());
             icon.clone()
         });
@@ -199,7 +202,7 @@ mod tests {
             items: vec![test_raw_visible_item(1, "cached.txt", 0)],
         };
         first_raw.assign_visible_item_slots(&mut slots);
-        let _first = first_raw.into_file_grid_snapshot(1, &mut cache, |_| icon.clone());
+        let _first = first_raw.into_file_grid_snapshot(1, &mut cache, 48.0, |_| icon.clone());
 
         let mut cached_read_ahead = test_raw_visible_item(1, "cached.txt", 0);
         cached_read_ahead.visible = false;
@@ -213,7 +216,7 @@ mod tests {
         second_raw.assign_visible_item_slots(&mut slots);
         let mut icon_requests = Vec::new();
 
-        let snapshot = second_raw.into_file_grid_snapshot(1, &mut cache, |request| {
+        let snapshot = second_raw.into_file_grid_snapshot(1, &mut cache, 48.0, |request| {
             icon_requests.push(request.path.to_path_buf());
             icon.clone()
         });
@@ -247,7 +250,7 @@ mod tests {
         let icon = test_icon_snapshot();
         let mut cache = VisibleItemSnapshotCache::default();
 
-        let snapshot = raw_file_grid.into_file_grid_snapshot(1, &mut cache, |_| icon.clone());
+        let snapshot = raw_file_grid.into_file_grid_snapshot(1, &mut cache, 48.0, |_| icon.clone());
 
         let FileGridSnapshot::Icons { items, .. } = snapshot else {
             panic!("expected icons snapshot");
@@ -270,6 +273,29 @@ mod tests {
                 .last()
                 .is_some_and(|line| line.contains('\u{2026}'))
         );
+    }
+
+    #[test]
+    fn icon_snapshot_uses_role_icon_size_instead_of_layout_icon_rect() {
+        let mut item = test_raw_visible_item(1, "zoomed.txt", 0);
+        item.layout.icon_rect.width = 128.0;
+        item.layout.icon_rect.height = 128.0;
+        let mut raw_file_grid = RawFileGridSnapshot::Icons {
+            layout: IconsLayout::new(1, fika_core::IconsLayoutOptions::default()),
+            items: vec![item],
+        };
+        let mut slots = VisibleItemSlotPool::default();
+        raw_file_grid.assign_visible_item_slots(&mut slots);
+        let icon = test_icon_snapshot();
+        let mut cache = VisibleItemSnapshotCache::default();
+        let mut requested_icon_sizes = Vec::new();
+
+        let _snapshot = raw_file_grid.into_file_grid_snapshot(1, &mut cache, 48.0, |request| {
+            requested_icon_sizes.push(request.icon_size);
+            icon.clone()
+        });
+
+        assert_eq!(requested_icon_sizes, vec![48.0]);
     }
 
     fn test_raw_visible_item(id: u64, name: &str, model_index: usize) -> RawVisibleItemSnapshot {

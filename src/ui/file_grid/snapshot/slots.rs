@@ -46,7 +46,7 @@ mod tests {
         let mut requests = Vec::new();
         let icon = test_icon_snapshot();
         let mut cache = VisibleItemSnapshotCache::default();
-        let snapshot = raw_file_grid.into_file_grid_snapshot(2, &mut cache, |request| {
+        let snapshot = raw_file_grid.into_file_grid_snapshot(2, &mut cache, 48.0, |request| {
             requests.push((request.path.to_path_buf(), request.icon_size));
             icon.clone()
         });
