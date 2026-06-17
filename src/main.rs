@@ -126,10 +126,10 @@ use ui::places::{
     PLACES_SIDEBAR_DEFAULT_WIDTH, PlaceDrag, PlaceEntry, PlaceSnapshot, PlacesAutosmokeAction,
     PlacesAutosmokeScenario, PlacesRowTextShapeCache, PlacesSidebarResizeDrag,
     PlacesSnapshotPerfLog, build_places, clamp_places_sidebar_width, default_place_label,
-    emit_place_paint_slot_perf_log, emit_places_retained_hit_test_autosmoke,
-    emit_places_snapshot_perf_log, place_snapshots_for, places_panel_button,
-    places_panel_icon_snapshot, places_perf_enabled, places_section_count, places_sidebar_splitter,
-    places_sidebar_width_from_drag, read_live_device_snapshot,
+    emit_place_paint_slot_perf_log, emit_places_autosmoke_snapshot,
+    emit_places_retained_hit_test_autosmoke, emit_places_snapshot_perf_log, place_snapshots_for,
+    places_panel_button, places_panel_icon_snapshot, places_perf_enabled, places_section_count,
+    places_sidebar_splitter, places_sidebar_width_from_drag, read_live_device_snapshot,
 };
 use ui::places::{PlacePaintSlotCache, PlacePaintSlotPerfLog};
 use ui::properties_dialog::{
@@ -731,7 +731,7 @@ impl FikaApp {
     ) -> bool {
         match action {
             PlacesAutosmokeAction::Snapshot { label } => {
-                self.emit_places_autosmoke_snapshot(label);
+                emit_places_autosmoke_snapshot(label, &self.place_snapshots());
                 false
             }
             PlacesAutosmokeAction::TargetFirstPlace { label } => {
@@ -890,25 +890,6 @@ impl FikaApp {
                 false
             }
         }
-    }
-
-    fn emit_places_autosmoke_snapshot(&mut self, label: &'static str) {
-        let snapshots = self.place_snapshots();
-        let sections = places_section_count(&snapshots);
-        let active = snapshots.iter().filter(|place| place.active).count();
-        let place_targets = snapshots.iter().filter(|place| place.drop_target).count();
-        let insert_before = snapshots.iter().filter(|place| place.insert_before).count();
-        let insert_after = snapshots.iter().filter(|place| place.insert_after).count();
-        eprintln!(
-            "[fika autosmoke] places snapshot={} visible={} sections={} active={} place_targets={} insert_before={} insert_after={}",
-            label,
-            snapshots.len(),
-            sections,
-            active,
-            place_targets,
-            insert_before,
-            insert_after
-        );
     }
 
     fn places_autosmoke_first_target_path(&mut self) -> Option<PathBuf> {

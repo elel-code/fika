@@ -59,6 +59,16 @@ struct PlacesHitTestAutosmokeSample {
     ok: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PlacesSnapshotAutosmokeReport {
+    visible: usize,
+    sections: usize,
+    active: usize,
+    place_targets: usize,
+    insert_before: usize,
+    insert_after: usize,
+}
+
 impl PlacesAutosmokeScenario {
     pub(crate) fn from_env() -> Option<Self> {
         places_autosmoke_scenario_from_value(&env::var(AUTOSMOKE_PLACES_ENV).ok()?)
@@ -230,6 +240,45 @@ pub(crate) fn emit_places_retained_hit_test_autosmoke(
         report.sections,
         report.ok()
     );
+}
+
+pub(crate) fn emit_places_autosmoke_snapshot(label: &'static str, snapshots: &[PlaceSnapshot]) {
+    let report = snapshot_autosmoke_report(snapshots);
+    eprintln!(
+        "[fika autosmoke] places snapshot={} visible={} sections={} active={} place_targets={} insert_before={} insert_after={}",
+        label,
+        report.visible,
+        report.sections,
+        report.active,
+        report.place_targets,
+        report.insert_before,
+        report.insert_after
+    );
+}
+
+fn snapshot_autosmoke_report(snapshots: &[PlaceSnapshot]) -> PlacesSnapshotAutosmokeReport {
+    PlacesSnapshotAutosmokeReport {
+        visible: snapshots.len(),
+        sections: snapshot_section_count(snapshots),
+        active: snapshots.iter().filter(|place| place.active).count(),
+        place_targets: snapshots.iter().filter(|place| place.drop_target).count(),
+        insert_before: snapshots.iter().filter(|place| place.insert_before).count(),
+        insert_after: snapshots.iter().filter(|place| place.insert_after).count(),
+    }
+}
+
+fn snapshot_section_count(snapshots: &[PlaceSnapshot]) -> usize {
+    let mut sections = 0;
+    let mut current_group = None;
+    for place in snapshots {
+        if current_group != Some(place.group) {
+            current_group = Some(place.group);
+            if !place.group.is_empty() {
+                sections += 1;
+            }
+        }
+    }
+    sections
 }
 
 fn retained_hit_test_autosmoke_report(snapshots: &[PlaceSnapshot]) -> PlacesHitTestAutosmokeReport {
@@ -441,6 +490,30 @@ mod tests {
                 label: "retained-hit-test"
             }
         ));
+    }
+
+    #[test]
+    fn snapshot_autosmoke_report_counts_visible_sections_and_targets() {
+        let mut home = test_place(0, "", "Home", "/home/yk");
+        home.active = true;
+        let mut downloads = test_place(1, "", "Downloads", "/home/yk/Downloads");
+        downloads.drop_target = true;
+        let mut root = test_place(2, "Devices", "Root", "/");
+        root.insert_before = true;
+        let mut network = test_place(3, "Network", "Share", "smb://server/share");
+        network.insert_after = true;
+
+        assert_eq!(
+            snapshot_autosmoke_report(&[home, downloads, root, network]),
+            PlacesSnapshotAutosmokeReport {
+                visible: 4,
+                sections: 2,
+                active: 1,
+                place_targets: 1,
+                insert_before: 1,
+                insert_after: 1,
+            }
+        );
     }
 
     #[test]

@@ -15,7 +15,8 @@ mod visibility;
 mod visual;
 
 pub(crate) use autosmoke::{
-    PlacesAutosmokeAction, PlacesAutosmokeScenario, emit_places_retained_hit_test_autosmoke,
+    PlacesAutosmokeAction, PlacesAutosmokeScenario, emit_places_autosmoke_snapshot,
+    emit_places_retained_hit_test_autosmoke,
 };
 pub(crate) use devices::replace_removable_device_places;
 pub(crate) use drag::PlaceDrag;

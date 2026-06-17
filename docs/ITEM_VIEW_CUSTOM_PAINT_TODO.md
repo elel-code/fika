@@ -693,6 +693,14 @@ by risk and evidence, not by how custom-painted a surface looks.
   model/controller boundary before row/section event delivery leaves GPUI
   shells. Evidence: `/tmp/fika-places-hit-test-autosmoke-module.log` passed
   `--require-hit-test-autosmoke --expect-current-gpui-policy`.
+- [x] P16af: Move Places autosmoke snapshot summary ownership out of
+  `src/main.rs` and into `src/ui/places/autosmoke.rs`. The Places module now
+  owns visible row count, section transition count, active row count, place
+  target count, and insert-before/after counts for non-destructive runtime
+  smoke logs. This keeps target/overflow/layout evidence on the same retained
+  snapshot boundary used by Places projection. Evidence:
+  `/tmp/fika-places-snapshot-autosmoke-module.log` passed
+  `--require-autosmoke --expect-current-gpui-policy`.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

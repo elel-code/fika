@@ -78,6 +78,10 @@ retained Places row surface with the same separations as file-grid:
   sample expectations. `src/main.rs` only supplies the current `PlaceSnapshot`
   projection, so runtime evidence stays beside the Places interaction model
   instead of becoming another app-root geometry owner.
+- `src/ui/places/autosmoke.rs`: own Places snapshot autosmoke summaries for
+  visible rows, section transitions, active rows, place targets, and insert
+  indicators. `src/main.rs` applies scenario actions, but it does not compute
+  target/overflow/layout evidence counts.
 
 Panel layout belongs beside the Places view/controller boundary, not inside the
 row painter. The Places panel has state for visibility and width; the sidebar
@@ -238,6 +242,9 @@ places_autosmoke target=1 insert_start=1 insert_end=1 clear=1 snapshots=1,1,1,1,
   places_interaction_policy_frames=10 max_rows=11 max_sections=2 max_row_target_decisions=11 max_section_target_decisions=2 max_retained_hitboxes=0 max_gpui_event_shells=13 max_drag_shells=11
 /tmp/fika-places-custom-targets-interaction.log:
   places_interaction_policy_frames=14 max_rows=11 max_sections=2 max_row_target_decisions=11 max_section_target_decisions=2 max_retained_hitboxes=0 max_gpui_event_shells=13 max_drag_shells=11
+/tmp/fika-places-snapshot-autosmoke-module.log:
+  places_autosmoke target=1 insert_start=1 insert_end=1 clear=1 snapshots=1,1,1,1,1
+  places_renderer_policy_frames=10 max_rows=11 max_row_gpui=11 max_row_visual_layer=0
 ```
 
 2026-06-18 retained geometry evidence:
