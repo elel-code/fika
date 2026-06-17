@@ -26,11 +26,11 @@ Current replacement status and the full transition roadmap are tracked in
 | Surface | Current renderer | Dolphin-style owner | Decision | Evidence required before changing |
 | --- | --- | --- | --- | --- |
 | Compact/Icons base background and labels | custom content-level painter | visible item snapshots, paint slots, text shape cache | Keep custom paint. | Runtime logs must keep steady snapshot conversion sub-ms and static visual paint/build under budget. |
-| Compact/Icons thumbnail and theme-icon images | custom image painter backed by GPUI `RetainAllImageCache` | image paint snapshots and pane-local image cache | Keep custom paint while GPUI owns decode/cache. | Logs must include `[fika item-image]`; no sync decode or thumbnail fallback regression. |
+| Compact/Icons thumbnail and theme-icon images | custom image painter backed by GPUI `RetainAllImageCache` | image paint snapshots, pane-local image cache, background file-icon resolve queue | Keep custom paint while GPUI owns decode/cache. Render frames use cached/preliminary icon snapshots only. | Logs must include `[fika item-image]`; no sync decode, no synchronous icon-theme lookup in conversion, and no blank pending-thumbnail frame regression. |
 | Compact/Icons hover, cursor, click, menu, drop hit testing | retained viewport/custom hitboxes plus active item-drag window tracker | viewport retained hit testing and `drag_drop` state | Keep retained controller path. | DnD smoke must pass across internal item, pane, Places, and external drops; pane self-drags should log `active-item-move`. |
 | Compact/Icons drag start | GPUI `Div::on_drag` shell | retained drag payload state plus temporary shell | Keep GPUI shell for initiation only. | Do not remove until GPUI exposes public custom-element drag-start or Fika carries an audited GPUI patch. |
 | Compact/Icons rename editor | GPUI text/editor subtree overlay | rename draft model and overlay geometry | Keep GPUI built-in editor. | Only revisit when text input, caret hit testing, selection, and IME behavior can stay behavior-complete. |
-| Details row backgrounds, icons, and text cells | custom content-level painter | Details paint slots, image cache, text shape cache | Keep custom paint. | Logs must include `[fika details-visual]` and `[fika details-shape-cache]` with no steady build regression. |
+| Details row backgrounds, icons, and text cells | custom content-level painter | Details paint slots, image cache, text shape cache, background file-icon resolve queue | Keep custom paint. Render frames use cached/preliminary icon snapshots only. | Logs must include `[fika details-visual]` and `[fika details-shape-cache]` with no steady build regression or synchronous icon-theme lookup spike. |
 | Details row click, menu, navigation, drop, hover, cursor | retained viewport/custom hitboxes plus active item-drag window tracker | viewport retained hit testing and Details row snapshots | Keep retained controller path. | Runtime smoke must cover Details item drag, directory drop, pane drop, and rename overlay. |
 | Details drag start | GPUI `Div::on_drag` row shell | retained Details drag fields plus temporary shell | Keep GPUI shell for initiation only. | Same public drag-start API or audited GPUI patch gate as Compact/Icons. |
 | Places rows and sidebar scrollbar | GPUI elements with retained drag/drop state helpers | `places` model/projection and `drag_drop` state | Keep GPUI renderer for now. | A future custom painter needs a separate perf case; current priority is item-view shell removal only after DnD evidence. |
@@ -51,6 +51,11 @@ Human review still needs to confirm the DnD and rename checklist in
 The `[fika renderer-policy]` summary is the runtime check that the current frame
 is still following this table's surface choices. It should be reviewed before
 removing a GPUI shell or reverting a custom-painted surface.
+
+For scroll and zoom investigations, treat `[fika item-view] ... convert=...`
+as a renderer decision signal too: a cold theme-icon miss should now be absorbed
+by preliminary icon snapshots and a background resolve queue, not by synchronous
+theme path lookup during conversion.
 
 ## Next Renderer Decisions
 

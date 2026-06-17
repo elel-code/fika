@@ -98,8 +98,8 @@ This is the active task board for the GPUI item view custom-paint migration.
   async path/SVG/image decode.
 - [x] Paint loaded images with `Window::paint_image`.
 - [x] Preserve theme-icon fallback marker rendering on image load failure.
-- [x] Keep thumbnail failures model-driven; do not synthesize fallback icons for
-  failed thumbnail paths in paint.
+- [x] Keep thumbnail role success/failure model-driven while painting item
+  fallback visuals during pending image loads or resource load failures.
 - [x] Match `ObjectFit::Contain` image bounds.
 - [x] Add tests for image-paint membership and fallback policy.
 
@@ -350,6 +350,16 @@ This is the active task board for the GPUI item view custom-paint migration.
   invisible work-window items can reuse existing snapshot content for paint
   warm-up, but uncached read-ahead items no longer trigger synchronous
   icon/text content resolution during the current render conversion.
+- [x] Move file-icon theme path resolution out of render conversion: visible
+  Compact/Icons/Details items now use cached/preliminary icon snapshots in the
+  frame, while a background resolve queue fills theme icon paths in
+  Dolphin-style visible/read-ahead order.
+- [x] Invalidate visible item snapshot caches when background icon resolve
+  results arrive so preliminary icons are replaced without synchronous theme
+  lookup in scroll or zoom frames.
+- [x] Paint fallback visuals for thumbnail/theme-icon image pending or load
+  failure states so zoom does not produce blank icon frames while GPUI image
+  cache work is in flight.
 - [x] Extract retained item/details paint slot state into
   `src/ui/file_grid/paint_slots.rs` so model-to-painter snapshot reuse is
   separate from the renderer construction code.
@@ -379,7 +389,9 @@ This is the active task board for the GPUI item view custom-paint migration.
   is visible through `[fika item-image]` when image-backed icons/thumbnails are
   present, aggregate custom paint cost is summarized, and Details custom
   visual/text-shape cost is visible separately through `[fika details-visual]`
-  and `[fika details-shape-cache]`.
+  and `[fika details-shape-cache]`. Scroll/zoom evidence should also show that
+  cold theme-icon work no longer appears as a synchronous render conversion
+  spike after the first frame has switched to preliminary icons.
 - [x] Cold mode switch cost is tracked separately from resize cost: `[fika
   item-view]` now includes `phase=initial|mode-switch|content-change|
   geometry-change|visual-change|steady`, with unit coverage proving mode

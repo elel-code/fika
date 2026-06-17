@@ -1,7 +1,64 @@
 # Scroll and Zoom Performance Plan
 
-> Archived Slint-era investigation. Future UI work targets GPUI and should follow
-> `docs/TODO.md`, `docs/DESIGN.md`, and `docs/GPUI_DOLPHIN_MIGRATION_PLAN.md`.
+> Current GPUI entry point plus archived Slint-era investigation. The legacy
+> Slint notes remain below for historical context; active item-view scroll/zoom
+> work must follow the GPUI/Dolphin boundaries in
+> `docs/ITEM_VIEW_CUSTOM_PAINT_DESIGN.md`,
+> `docs/ITEM_VIEW_CUSTOM_PAINT_STATUS.md`, and
+> `docs/ITEM_VIEW_RENDERER_DECISIONS.md`.
+
+## Current GPUI Plan
+
+The current GPUI item-view path treats scroll and zoom as retained state
+updates, not as opportunities to rebuild item identity or resolve file roles in
+the render frame.
+
+### Dolphin-Aligned Boundaries
+
+- Scroll updates the pane `ViewState`, visible range, slot geometry, retained
+  hit testing, and paint snapshots. It must not synchronously scan icon themes,
+  probe thumbnails, or read MIME magic.
+- Zoom changes item metrics and may invalidate layout/text/image geometry, but
+  model roles stay on the role/update side. The frame may use preliminary icon
+  snapshots until resolved role data is ready.
+- `raw_file_grid_snapshot()` owns the visible/work range. Scheduler projection
+  queues metadata roles, thumbnails, and file-icon theme resolve work.
+- `VisibleItemSnapshotCache`, paint slots, text shape caches, and GPUI
+  `RetainAllImageCache` are the retained-state surfaces that should absorb
+  repeated scroll/zoom work.
+
+### Current Fixes
+
+- File icon theme path resolution is no longer done synchronously during
+  raw-to-render snapshot conversion. The frame path calls
+  `FileIconCache::cached_or_preliminary_icon_for()`, and background batches
+  resolve theme icon paths in Dolphin-style visible/read-ahead order.
+- When background icon resolve completes, visible item snapshot caches are
+  invalidated so preliminary fallback icons are replaced on the next frame.
+- Thumbnail and theme-icon image pending/failure states paint the item fallback
+  visual instead of leaving the icon rect blank, reducing zoom flicker while
+  GPUI image cache loading is in flight.
+
+### Open Verification Work
+
+- Collect desktop-session logs for `/etc` initial scroll and ordinary-directory
+  initial zoom in Compact and Icons:
+
+  ```sh
+  FIKA_PERF_ITEM_VIEW=1 cargo run -- /etc 2>&1 | tee /tmp/fika-etc-scroll.log
+  FIKA_PERF_ITEM_VIEW=1 cargo run -- ~/Downloads 2>&1 | tee /tmp/fika-downloads-zoom.log
+  ```
+
+- In those logs, verify:
+  - warm scroll/zoom `convert=` is not dominated by synchronous icon work
+  - `[fika item-image]` appears when image-backed items are present
+  - no repeated blank thumbnail/icon frame is visible during zoom
+  - cold first-frame work is separated from steady scroll/zoom phases
+- Keep comparing against Dolphin source before moving more work into custom
+  paint. If a GPUI built-in renderer is faster for a surface, keep the retained
+  Dolphin-style model/controller boundary and leave that surface on GPUI.
+
+## Archived Slint-Era Investigation
 
 ## Scope
 

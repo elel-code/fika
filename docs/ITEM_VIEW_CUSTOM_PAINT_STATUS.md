@@ -12,12 +12,12 @@ becomes the default.
 | --- | --- | --- | --- |
 | Compact/Icons item model and geometry | retained | `DirectoryModel`, visible snapshots, slot pools | none for current path |
 | Compact/Icons base background, selection, hover, drop tint, labels | replaced | custom content-level painter | runtime perf and DnD smoke evidence must stay current |
-| Compact/Icons thumbnail and theme-icon images | replaced | custom image painter using GPUI `RetainAllImageCache` | keep GPUI image decode/cache unless a narrower image baseline wins |
+| Compact/Icons thumbnail and theme-icon images | replaced | custom image painter using GPUI `RetainAllImageCache` | theme-icon paths resolve off the render path; image pending/failure paints fallback |
 | Compact/Icons click, menu, hover, cursor, and drop hit testing | replaced | retained viewport/custom hitboxes plus active item-drag window tracker | runtime DnD smoke still required after painter changes |
 | Compact/Icons drag start | not replaced | GPUI `Div::on_drag` shell | public GPUI custom-element drag-start API or audited Fika GPUI patch |
 | Compact/Icons rename editor | not replaced | GPUI editor overlay | only revisit after caret, selection, IME, and text input behavior are covered |
 | Details row model and geometry | retained | Details paint snapshots and row layout projection | none for current path |
-| Details row backgrounds, icons, text cells, Trash columns | replaced | custom content-level painter | runtime Details perf and DnD smoke evidence must stay current |
+| Details row backgrounds, icons, text cells, Trash columns | replaced | custom content-level painter | Details icons use the same cached/preliminary icon policy; runtime Details perf and DnD smoke evidence must stay current |
 | Details click, menu, navigation, hover, cursor, drop hit testing | replaced | retained row hit testing/controller state plus active item-drag window tracker | runtime DnD smoke still required after painter changes |
 | Details drag start | not replaced | GPUI `Div::on_drag` row shell | same drag-start API or audited GPUI patch gate |
 | Places rows and sidebar scrollbar | not replaced | GPUI elements over retained places projection | requires separate GPUI baseline, runtime DnD smoke, and Places-specific custom painter plan |
@@ -35,6 +35,8 @@ DnD state helpers, but its renderer is still GPUI.
   `src/ui/file_grid/layout.rs`
 - Compact/Icons static visual painter: `src/ui/file_grid/static_visual.rs`
 - Compact/Icons image paint layer: `src/ui/file_grid/image_layer.rs`
+- File icon cache and background resolve policy: `src/ui/icons/cache.rs`,
+  `FikaApp::queue_file_icon_resolve_work_for_raw_grid`
 - Compact/Icons transparent item shell boundary: `src/ui/file_grid/item_shell.rs`
 - Details visual painter: `src/ui/file_grid/details_visual.rs`
 - Details transparent row shell boundary: `src/ui/file_grid/details_shell.rs`
@@ -91,10 +93,26 @@ visible first/last indexes in `KItemListViewLayouter::updateVisibleIndexes()`,
 then `KFileItemModelRolesUpdater::indexesToResolve()` appends visible files,
 visible directories, and bounded before/after read-ahead indexes for role work.
 Fika mirrors that by keeping the raw Compact/Icons work range for scheduler
-projection, while render conversion only resolves uncached icon/text content for
-currently visible items. Invisible read-ahead items may reuse already cached
-snapshot content for paint/cache warm-up, but they must not introduce new
-synchronous icon-theme or text-shaping misses into the current frame.
+projection, while render conversion only materializes render snapshots for
+currently visible items or already-cached read-ahead content. Invisible
+read-ahead items may reuse already cached snapshot content for paint/cache
+warm-up, but they must not introduce new synchronous icon-theme or text-shaping
+misses into the current frame. Visible icon cache misses also use preliminary
+snapshots and queue background resolve work rather than scanning icon themes in
+the conversion path.
+
+Current GPUI icon work follows that boundary: render conversion asks
+`FileIconCache` for a cached or preliminary snapshot only. If the theme path is
+missing, `queue_file_icon_resolve_work_for_raw_grid()` queues a background
+resolve batch ordered as visible files, visible directories, read-ahead after,
+then read-ahead before. Resolve completion invalidates visible item snapshot
+caches so the next frame can swap preliminary fallback icons for theme images
+without doing theme-directory scanning inside the scroll or zoom frame.
+
+Thumbnail work follows the same visual stability rule. Thumbnail probe success
+and failure remain model roles, but the image paint layer now paints the item's
+fallback icon while GPUI image cache loading is pending or failed. This keeps
+zoom frames nonblank while preserving model ownership of thumbnail availability.
 
 The immediate non-GUI-safe work is to split the large `src/ui/file_grid.rs`
 painter/controller code into smaller modules without changing behavior.

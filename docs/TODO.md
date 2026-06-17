@@ -127,10 +127,11 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
 1. 文本文件首次渲染时先显示 `unknown` 齿轮图标，1-3 帧后跳变为正确文本图标。
 2. 已缓存的缩略图首帧未显示，异步探测完成后跳变替换文件图标。
 
-- [x] **P0 — PreliminaryFile 扩展名智能回退**：`src/ui/icons/cache.rs` line 345-355，将 `PreliminaryFile` 的图标候选从 `["unknown"]` 改为扩展名驱动的智能列表（`text-x-{ext}` → `text-x-generic` → `unknown`）。效果：`.rs` → `text-x-rust`，无扩展名 → `text-x-generic`（视觉与 `text/plain` 一致），消除文本图标视觉跳变。
-- [x] **P1 — 提高 metadata 异步批量大小**：`src/main.rs` line 191，`METADATA_ROLE_BATCH_SIZE` 从 1 改为 16。效果：`/etc` 中 80 个需解析文件的异步往返从 80 次降至 5 次。
-- [x] **P2 — 缩略图缓存同步探测**：`src/ui/file_grid/snapshot.rs` line 569-602，在 `raw_visible_item_snapshot()` 中同步调用 `cached_thumbnail_for_path()` 检查 freedesktop 缓存。效果：已缓存缩略图首帧即显示，无跳变。
-- [x] **P3 — 可见项同步 MIME 解析（对标 Dolphin `updateVisibleIcons()`）**：在 `raw_file_grid_snapshot()` 中对可见项中需 magic 的前 N 项同步调用 `read_mime_magic()`。建议超时 50ms，上限 30 项。对标 Dolphin 的 `KFileItemModelRolesUpdater::updateVisibleIcons()` 200ms 超时设计。
+- [x] **P0 — PreliminaryFile 扩展名智能回退**：`FileIconKind::PreliminaryFile` 使用扩展名驱动的智能候选（`text-x-{ext}` → `text-x-generic` → `unknown`），让未完成 magic MIME 的文件先显示稳定的初级图标。
+- [x] **P1 — metadata 异步批量化**：`METADATA_ROLE_BATCH_SIZE` 为 16，降低 magic MIME 解析的异步往返次数。
+- [x] **P2 — 缩略图角色调度和 read-ahead**：thumbnail probe 继续走 scheduler，按 Dolphin visible/read-ahead 顺序调度，成功/失败写回 model role。
+- [x] **P3 — 图标 theme path 后台 resolve**：渲染帧只调用 `FileIconCache::cached_or_preliminary_icon_for()`，cache miss 返回无 I/O 的 preliminary/fallback snapshot；`FikaApp::queue_file_icon_resolve_work_for_raw_grid()` 按 Dolphin visible file → visible dir → read-ahead after → read-ahead before 顺序后台解析 theme path。
+- [x] **P4 — zoom 缩略图 fallback 稳定性**：thumbnail/theme-icon 图片 pending 或 load failure 时由 image paint layer 绘制 item fallback，避免 zoom 期间出现空白图标 rect。
 
 ### 双运行时对齐（COSMIC Files）
 

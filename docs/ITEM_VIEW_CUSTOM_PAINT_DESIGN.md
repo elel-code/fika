@@ -12,8 +12,10 @@ Fika item views should converge on Dolphin's `KItemListView` model:
 - layout identity belongs to Rust-side projection and visible slot state
 - UI hitboxes are stable interaction surfaces
 - static item visuals are custom painted instead of rebuilt as GPUI child trees
-- thumbnails and rename editors can remain specialized child paths until their
-  cache and input contracts are ready
+- thumbnail/theme-icon images are painted by retained content-level image
+  layers backed by GPUI's image cache
+- rename editors and drag-start initiation can remain specialized GPUI child
+  paths until their platform contracts are replaceable
 
 The practical target is not merely lower latency. The target is a retained item
 view where resize, scroll, selection, hover, and metadata updates patch stable
@@ -101,6 +103,33 @@ Fika equivalent:
 - `VisibleItemSlotPool` owns stable visual slot identity.
 - `VisibleItemSnapshotCache` owns stable per-item content.
 - custom-painted item visuals consume snapshots and paint quads/text/images.
+
+## Current Role/Update Policy
+
+The current GPUI path follows Dolphin's role-updater split instead of resolving
+file roles inside the painter:
+
+- `raw_file_grid_snapshot()` computes visible geometry and the bounded work
+  range. It is the source of truth for visible indexes and read-ahead indexes.
+- `queue_visible_model_work_for_raw_grid()` queues metadata roles, thumbnail
+  probes, and file-icon theme resolution before render conversion.
+- `FileIconCache::cached_or_preliminary_icon_for()` is the render-frame icon
+  path. On cache miss it returns an in-memory preliminary/fallback snapshot and
+  does not scan icon theme directories.
+- file-icon theme path resolution runs through a background batch ordered like
+  Dolphin's `KFileItemModelRolesUpdater::indexesToResolve()`: visible files,
+  visible directories, read-ahead after, then read-ahead before.
+- when icon resolve results arrive, visible item snapshot caches are invalidated
+  so the next frame can replace preliminary icons with resolved theme images.
+- thumbnail role success/failure remains model-driven, but the image paint layer
+  paints a fallback while a thumbnail or theme-icon image is pending or fails to
+  load. This avoids blank zoom frames without moving thumbnail decisions into
+  the painter.
+
+This means scroll and zoom frames must never synchronously perform theme icon
+lookup, MIME magic reads, thumbnail probing, or filesystem I/O. They may only
+consume already projected model roles, cached images, retained shape data, and
+preliminary visual fallbacks.
 
 ## Architecture Boundary
 
