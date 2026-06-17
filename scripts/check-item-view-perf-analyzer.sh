@@ -18,9 +18,14 @@ bash -n "$renderer_evidence"
 bash -n "$image_renderer_compare"
 
 cat > "$tmpdir/complete.log" <<'EOF'
+[fika autosmoke] item-view start pane=1 scenario=ZoomScroll
 [fika item-view] pane=1 mode=Compact phase=steady items=48 visible=32 raw=50us icon_sync=2us queue=1us convert=40us total=120us
 [fika item-view] pane=1 mode=Icons phase=steady items=48 visible=40 raw=45us icon_sync=3us queue=1us convert=35us total=110us
 [fika item-view] pane=1 mode=Details phase=steady items=48 visible=30 raw=42us icon_sync=1us queue=1us convert=32us total=105us
+[fika autosmoke] item-view action=zoom-in pane=1
+[fika autosmoke] item-view action=zoom-out pane=1
+[fika autosmoke] item-view action=scroll-forward pane=1 changed=true
+[fika autosmoke] item-view action=scroll-back pane=1 changed=true
 [fika file-grid] pane=1 mode=Compact visible=32 content=1602.5x882 build=400us
 [fika file-grid] pane=1 mode=Icons visible=40 content=587x1168 build=450us
 [fika file-grid] pane=1 mode=Details visible=30 content=601x882 build=420us
@@ -33,10 +38,12 @@ cat > "$tmpdir/complete.log" <<'EOF'
 [fika renderer-policy] pane=1 mode=Compact items=48 visual_layer=48 image_layer=8 gpui_image_element=0 retained_interaction=48 gpui_drag_shell=48 rename_overlay=0
 [fika renderer-policy] pane=1 mode=Icons items=48 visual_layer=48 image_layer=8 gpui_image_element=0 retained_interaction=48 gpui_drag_shell=48 rename_overlay=0
 [fika renderer-policy] pane=1 mode=Details items=48 visual_layer=48 image_layer=0 gpui_image_element=0 retained_interaction=48 gpui_drag_shell=48 rename_overlay=0
+[fika autosmoke] item-view complete pane=1 scenario=ZoomScroll
 EOF
 
 "$analyzer" \
     --require-steady \
+    --require-autosmoke \
     --require-details \
     --require-static-visual \
     --require-static-modes Compact,Icons \
@@ -72,6 +79,10 @@ if [[ "$evidence" != *"item_view_stage_max"* || "$evidence" != *"icon_sync=3us"*
 fi
 if [[ "$evidence" != *"renderer_policy_frames"* ]]; then
     echo "expected renderer evidence to include renderer policy summary" >&2
+    exit 1
+fi
+if [[ "$evidence" != *"autosmoke:" || "$evidence" != *"scenario=ZoomScroll"* ]]; then
+    echo "expected renderer evidence to include autosmoke summary" >&2
     exit 1
 fi
 
@@ -150,6 +161,19 @@ EOF
 
 if "$analyzer" --require-renderer-policy-modes Compact,Icons,Details "$tmpdir/missing-renderer-policy-mode.log" >/dev/null 2>&1; then
     echo "expected missing required renderer-policy mode to fail" >&2
+    exit 1
+fi
+
+cat > "$tmpdir/missing-autosmoke-action.log" <<'EOF'
+[fika autosmoke] item-view start pane=1 scenario=ZoomScroll
+[fika item-view] pane=1 mode=Compact phase=steady items=48 visible=32 raw=50us icon_sync=2us queue=1us convert=40us total=120us
+[fika autosmoke] item-view action=zoom-in pane=1
+[fika autosmoke] item-view action=zoom-out pane=1
+[fika autosmoke] item-view complete pane=1 scenario=ZoomScroll
+EOF
+
+if "$analyzer" --require-autosmoke "$tmpdir/missing-autosmoke-action.log" >/dev/null 2>&1; then
+    echo "expected missing required autosmoke scroll markers to fail" >&2
     exit 1
 fi
 
