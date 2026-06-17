@@ -171,3 +171,115 @@ pub(super) fn icon_name_max_lines(text_rect_height: f32) -> usize {
         .round()
         .max(1.0) as usize
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    use fika_core::{IconsLayout, ItemLayout};
+
+    use super::super::super::FileGridSnapshot;
+    use super::super::super::VisibleItemSlotPool;
+    use super::super::{RawFileGridSnapshot, RawVisibleItemSnapshot};
+
+    #[test]
+    fn icon_item_snapshot_cache_reuses_content_across_layout_only_resize() {
+        let mut slots = VisibleItemSlotPool::default();
+        let mut cache = VisibleItemSnapshotCache::default();
+        let icon = test_icon_snapshot();
+        let mut icon_requests = 0;
+
+        let mut first_raw = RawFileGridSnapshot::Icons {
+            layout: IconsLayout::new(1, fika_core::IconsLayoutOptions::default()),
+            items: vec![test_raw_visible_item(1, "alpha.txt", 0)],
+        };
+        first_raw.assign_visible_item_slots(&mut slots);
+        let first = first_raw.into_file_grid_snapshot(1, &mut cache, |_| {
+            icon_requests += 1;
+            icon.clone()
+        });
+        let FileGridSnapshot::Icons { items: first, .. } = first else {
+            panic!("expected icons snapshot");
+        };
+
+        let mut second_item = test_raw_visible_item(1, "alpha.txt", 0);
+        second_item.layout.item_rect.x = 24.0;
+        second_item.layout.visual_rect.x = 24.0;
+        second_item.layout.icon_rect.x = 24.0;
+        second_item.layout.text_rect.x = 24.0;
+        let mut second_raw = RawFileGridSnapshot::Icons {
+            layout: IconsLayout::new(1, fika_core::IconsLayoutOptions::default()),
+            items: vec![second_item],
+        };
+        second_raw.assign_visible_item_slots(&mut slots);
+        let second = second_raw.into_file_grid_snapshot(1, &mut cache, |_| {
+            icon_requests += 1;
+            icon.clone()
+        });
+        let FileGridSnapshot::Icons { items: second, .. } = second else {
+            panic!("expected icons snapshot");
+        };
+
+        assert_eq!(icon_requests, 1);
+        assert_eq!(first[0].icon_name_lines, second[0].icon_name_lines);
+        assert_eq!(second[0].layout.item_rect.x, 24.0);
+    }
+
+    fn test_raw_visible_item(id: u64, name: &str, model_index: usize) -> RawVisibleItemSnapshot {
+        RawVisibleItemSnapshot {
+            slot_id: 0,
+            visible: true,
+            layout: test_layout(model_index),
+            item_id: fika_core::ItemId(id),
+            path: PathBuf::from("/tmp").join(name),
+            is_dir: false,
+            name: Arc::from(name),
+            thumbnail_path: None,
+            thumbnail_failed: false,
+            modified_secs: Some(42),
+            size_bytes: 12,
+            metadata_complete: true,
+            metadata_refresh_pending: false,
+            mime_type: Some(Arc::from("text/plain")),
+            mime_magic_checked: true,
+            selected: false,
+            drop_target: false,
+            draft_name: None,
+            draft_caret: None,
+            draft_selection: None,
+            draft_error: None,
+            draft_warning: None,
+        }
+    }
+
+    fn test_icon_snapshot() -> FileIconSnapshot {
+        FileIconSnapshot {
+            icon_name: Arc::from("text-plain"),
+            path: None,
+            fallback_marker: Arc::from("TXT"),
+            fallback_fg: 0xffffff,
+            fallback_bg: 0x222222,
+        }
+    }
+
+    fn test_layout(model_index: usize) -> ItemLayout {
+        let rect = fika_core::ViewRect {
+            x: 0.0,
+            y: 0.0,
+            width: 10.0,
+            height: 10.0,
+        };
+        ItemLayout {
+            model_index,
+            column: 0,
+            row: model_index,
+            item_rect: rect,
+            visual_rect: rect,
+            icon_rect: rect,
+            text_rect: rect,
+        }
+    }
+}

@@ -306,6 +306,9 @@ This is the active task board for the GPUI item view custom-paint migration.
 - [x] Extract raw-to-render snapshot conversion into
   `src/ui/file_grid/snapshot/render.rs` so final visible item/details
   projection is separate from raw snapshot types and scheduler helpers.
+- [x] Move raw-to-render conversion tests into
+  `src/ui/file_grid/snapshot/render.rs` so the snapshot facade no longer imports
+  render conversion test helpers.
 - [x] Extract visible item slot assignment into
   `src/ui/file_grid/snapshot/slots.rs` so snapshot-to-reuse-pool projection is
   separate from raw snapshot types and render conversion.
@@ -327,6 +330,9 @@ This is the active task board for the GPUI item view custom-paint migration.
 - [x] Extract visible item snapshot/cache projection into
   `src/ui/file_grid/snapshot/visible.rs` so stable visible item content reuse is
   separate from raw directory snapshot construction.
+- [x] Move visible item snapshot cache tests into
+  `src/ui/file_grid/snapshot/visible.rs` so geometry-only cache reuse coverage
+  lives with the cache implementation.
 - [x] Extract thumbnail candidate and read-ahead projection into
   `src/ui/file_grid/snapshot/thumbnail.rs` so role scheduling decisions are
   separate from raw snapshot construction.
