@@ -1,0 +1,231 @@
+> 本文是 [ITEM_VIEW_CUSTOM_PAINT_TODO.md](ITEM_VIEW_CUSTOM_PAINT_TODO.md) 的简体中文翻译。
+
+# 条目视图自定义绘制 TODO
+
+> 本文是 [ITEM_VIEW_CUSTOM_PAINT_TODO.md](ITEM_VIEW_CUSTOM_PAINT_TODO.md) 的简体中文翻译。
+
+这是 GPUI 条目视图自定义绘制迁移的活动任务板。
+
+## P0：准备
+
+- [x] 确认 `KItemListView` widget 复用的 Dolphin 参考边界。
+- [x] 保持当前 viewport 调整大小预备和快照缓存行为。
+- [x] 记录设计和迁移阶段。
+- [x] 在 `file_grid.rs` 中添加简短注释，标记临时交互 shell 与静态绘制边界。
+
+## P1：静态后备视觉画布
+
+- [x] 为非重命名、非缩略图后备图标条目添加静态条目视觉元素。
+- [x] 从 `FileIconSnapshot` 绘制后备图标背景和标记。
+- [x] 从 `VisibleItemSnapshot` 绘制 Compact/Icons 条目名称行。
+- [x] 将缩略图条目保留在当前 `img()` 路径上。
+- [x] 将真实主题图标条目保留在当前缓存图标路径上，直到图像绘制所有权被审计。
+- [x] 将重命名条目保留在当前编辑器路径上。
+- [x] 保留条目拖拽预览和 payload 行为。
+- [x] 运行 `cargo fmt`、`cargo check`、`cargo test`、`cargo build`。
+- [x] 在此切片后审查用户提供的 `FIKA_PERF_ITEM_VIEW=1 cargo run -- ~/Downloads` 日志。
+
+## P2：文本形状缓存
+
+- [x] 定义文本绘制缓存键。
+- [x] 为静态条目标签缓存形状行。
+- [x] 在视图模式、缩放/字体度量、选择颜色、显示行或重命名状态更改时失效。
+- [x] 在 `FIKA_PERF_ITEM_VIEW` 之后埋入缓存命中/未命中计数。
+- [x] 验证当文本内容和文本矩形尺寸稳定时，调整大小不会重新塑造未更改的可见条目标签。
+
+## P3：保留绘制 Slot 状态
+
+- [x] 在 `VisibleItemSlotPool` 旁添加 `ItemPaintSlot` 状态。
+- [x] 将 `VisibleItemSnapshot` 投影到保留绘制状态。
+- [x] 跟踪纯几何与内容更改。
+- [x] 在不重建内容的情况下修补选择/放置/悬停视觉状态。
+- [x] 在重叠滚动和调整大小期间保持 slot identity 稳定。
+
+## P4：缩略图绘制边界
+
+- [x] 审计 GPUI `img()` 和 `Window::paint_image` 缓存所有权。
+- [x] 决定保留图像元素 vs 直接绘制句柄。
+- [x] 为文件网格图像条目添加 pane 本地保留图像缓存。
+- [x] 按视觉 slot id 键控缩略图/主题图标图像元素。
+- [x] 保留 freedesktop 缓存缩略图首帧行为。
+- [x] 保留缩略图失败/失效 model 语义。
+- [x] 重新审视直接 `Window::paint_image`：P8 使用 GPUI 的公共 `RetainAllImageCache` / `ImageAssetLoader` / `RenderImage` 契约，而不是在 Fika 中重新实现图像解码。
+
+## P5：专用自定义元素
+
+- [x] 如果直接自定义元素提供更好的保留 prepaint 状态，则替换 canvas spike。
+- [x] 将绘制计时埋点移入自定义元素。
+- [x] 添加围绕几何和内容键失效的测试。
+
+## P6：Pane 级静态视觉层
+
+- [x] 通过一个内容级自定义层绘制静态后备 Compact 和 Icons 视觉。
+- [x] 为静态后备条目将条目 slot 保留为透明交互 shell。
+- [x] 将缩略图、主题图标和重命名条目保留在其专门的子路径上。
+- [x] 添加测试，证明只有后备静态条目进入该层。
+- [x] 重新审视缩略图/主题图标保留图像条目是否可以加入 viewport 绘制器：P8 将它们移入由 GPUI 保留图像缓存支持的自定义图像绘制层。
+
+## P7：非重命名基础视觉和图像层
+
+- [x] 在内容级基础视觉层中包含每个非重命名 Compact/Icons 条目。
+- [x] 仅为没有缩略图/主题图标路径的条目绘制后备图标标记。
+- [x] 将缩略图/主题图标 `img()` 元素移入按保留视觉 slot id 键控的内容级图像层。
+- [x] 保持非重命名条目 shell 透明且仅交互。
+- [x] 保持重命名条目在当前子子树上。
+- [x] 对图像支持的条目跳过后备标记形状和缓存键碎片。
+- [x] 重新审视直接 `Window::paint_image`：P8 使用 GPUI 的保留图像缓存契约进行直接绘制，而不添加 Fika 拥有的解码器。
+
+## P8：直接图像绘制层
+
+- [x] 用一个自定义图像绘制元素替换内容级缩略图/主题图标 `img()` 子元素。
+- [x] 使用 pane 本地 `RetainAllImageCache` 加上 GPUI `ImageAssetLoader` 进行异步路径/SVG/图像解码。
+- [x] 使用 `Window::paint_image` 绘制已加载图像。
+- [x] 通过复用保留同 `iconName` 图像（在回退到中性无标记占位符之前）来保持主题图标视觉稳定性。
+- [x] 保持缩略图角色成功/失败 model 驱动，同时在挂起图像加载或资源加载失败时仅在已尝试同源保留图像后才绘制条目后备视觉。
+- [x] 匹配 `ObjectFit::Contain` 图像边界。
+- [x] 添加图像绘制成员资格和后备策略的测试。
+
+## P9：绘制交互 Hitbox
+
+- [x] 审计 GPUI 自定义元素 hitbox 插入以支持悬停和光标。
+- [~] 用保留 hitbox 替换非重命名每条目交互 shell：P9a 首先移动悬停/光标；P9b 仅在 GPUI 暴露公共自定义元素拖拽启动 API 或 Fika 携带经过审计的 GPUI patch 后移除拖拽 shell。
+- [x] 通过保留条目视觉状态路由非重命名 Compact/Icons 悬停和光标投影。
+- [x] 通过保留条目视觉状态路由目录拖拽覆盖投影；条目/行 shell 不再绘制临时 `drag_over` 背景。
+- [x] 通过保留行视觉状态路由详情悬停投影；详情行 shell 不再绘制临时悬停背景。
+- [x] 通过保留交互层路由详情悬停/光标 hit testing；详情行 shell 不再拥有悬停监听器或光标样式。
+- [x] 通过 viewport 级保留 hit testing 路由详情点击/菜单/导航/中键粘贴；详情行 shell 不再拥有鼠标按下处理器或阻止鼠标事件。
+- [x] 保留条目/place 拖拽预览光标偏移行为。
+- [x] 在 Compact、Icons 和 Details 保留迁移路径中保留 Rust viewport hit testing 用于点击/菜单/放置。
+- [x] 为保留 hitbox prepaint/paint 计数和计时添加 P9a 交互层性能日志。
+- [x] 在进一步扩展自定义交互之前，将 P9a 性能日志与之前的 GPUI 悬停/光标 shell 路径进行比较；用户 `~/Downloads` 日志显示热调整大小/全屏条目视图转换保持亚毫秒级，而冷模式切换缓存预热保持单独跟踪。
+
+## P10：重命名叠加层边界
+
+- [x] 在重命名启动时保持普通条目背景/文本/图像在内容级层中。
+- [x] 将重命名编辑器定位为唯一条目本地叠加子树。
+- [x] 保留 caret hit testing、UTF-8 选择、警告/错误助手和 Tab 重命名下一个。
+- [x] 验证启动/停止重命名不重建无关条目层内容。
+
+## P11：详情模式绘制路径
+
+- [x] P11a：将详情行投影到保留绘制 slot 中，同时保持现有 GPUI 行子树作为渲染路径。
+- [x] P11b：从内容级自定义层绘制行背景、图标和文本单元格，同时最初保留行 shell 作为桥梁。
+- [x] P11c：在保留绘制器边界保留保留详情路径/拖拽字段和回收站特定视觉列。
+- [x] P11e：将详情行 shell 缩小到剩余的 GPUI 拖拽启动边界；点击、菜单、导航、滚动和中键粘贴 controller 行为现在通过 viewport 保留 hit testing 路由。
+- [x] P11f：通过 viewport 级放置处理器路由详情放置分发；详情行 shell 不再拥有每行条目/外部/place 放置处理器。
+- [x] P11d：将详情视觉层性能日志拆分为专用的 `[fika details-visual]` 通道，以便在不与 Compact/Icons 静态视觉混合的情况下比较 GPUI 行 shell 成本和自定义绘制成本。
+- [x] 在可行的地方与 Compact/Icons 共享图像/文本缓存概念：详情现在使用相同的 GPUI 保留图像缓存路径和一个 pane 本地详情文本形状缓存，具有单独的性能统计。
+
+## P12：剩余边界审计
+
+- [x] 审计本地 GPUI 拖拽 API：GPUI 0.2.2 通过 `Div::on_drag` 暴露拖拽启动，而自定义元素暴露 hitbox 和鼠标监听器但不暴露公共自定义元素拖拽启动钩子。
+- [x] 记录剩余的条目本地表面：Compact/Icons 拖拽启动 shell、详情拖拽启动行 shell 和重命名文本编辑叠加层。
+- [x] 添加 `docs/ITEM_VIEW_RUNTIME_SMOKE.md`，包含用于 P11e 后验证的运行时 DnD、重命名和性能日志检查清单。
+- [x] 添加 `scripts/analyze-item-view-perf.sh` 以总结性能日志并在 P11e 后审查期间强制执行所需的 steady/details/static-visual/interaction 通道和已锻炼的视图模式，包括 Compact/Icons 静态视觉模式覆盖。
+- [ ] 在 P11e 之后运行运行时 DnD smoke pass：条目拖拽、条目到目录放置、pane 放置、Places 放置/重排、外部路径放置，以及在 Compact、Icons 和 Details 中的重命名 caret 点击。
+- [ ] 在扩展自定义绘制或尝试另一个 shell 移除切片之前，收集 Compact、Icons 和 Details 调整大小/全屏路径的 P11e 后 `FIKA_PERF_ITEM_VIEW=1` 日志。
+
+## P13：渲染器决策门
+
+- [ ] 在每个新的自定义绘制表面之前，识别 Dolphin 风格的 model、layouter、controller/hit-test 和 painter 所有者。
+- [ ] 在 GPUI 保持更快或拥有所需平台契约的表面上保持 GPUI 内置元素，同时仍然从保留 model 数据馈送它们。
+- [ ] 仅在运行时日志显示中性或更好的稳定行为且迁移保持行为完整的拖放、重命名和选择路径时，才扩展自定义绘制。
+- [ ] 对于当前具有 GPUI 路径的每个表面，在将自定义绘制器接受为默认渲染器之前捕获相同场景的 GPUI 基线。
+- [ ] 在移除任何现有 GPUI 表面之前，在相关参考文档或 TODO 条目中记录渲染器决策和性能证据。
+- [x] 添加 `docs/ITEM_VIEW_RENDERER_DECISIONS.md` 作为当前每表面渲染器决策日志。
+- [x] 添加 `scripts/summarize-item-view-renderer-evidence.sh`，以便通过的运行时性能日志产生渲染器决策证据块。
+- [x] 将 Compact/Icons 渲染器选择集中到显式的 `ItemRendererPolicy`，使自定义绘制 vs GPUI 表面决策不隐藏在临时布尔值后面。
+- [x] 将详情行渲染器选择集中到显式的 `DetailsRowRendererPolicy`，覆盖视觉层、保留交互和 GPUI 拖拽启动 shell 边界。
+- [x] 发出 `[fika renderer-policy]` 日志，使运行时性能证据包括自定义绘制、保留交互和 GPUI shell 边界的实际表面计数分布。
+- [x] 在标准运行时性能门中要求 Compact、Icons 和 Details 的渲染器策略日志覆盖。
+- [x] 将渲染器策略拆分到 `src/ui/file_grid/renderer_policy.rs`，使自定义绘制 vs GPUI 渲染器的决策边界与渲染构造分离。
+- [x] 使 `scripts/analyze-item-view-perf.sh` 拒绝不可能的渲染器策略表面计数，因此自定义绘制证据不能声明比记录的条目数量更多的自定义/保留/GPUI 表面。
+
+## P14：完整转换路线图
+
+- [x] 添加 `docs/ITEM_VIEW_CUSTOM_PAINT_STATUS.md`，使当前替换状态、剩余 GPUI 边界和完整转换路线图显式化。
+- [ ] 在另一个绘制器扩展之前冻结 Compact、Icons 和 Details 的当前桌面会话运行时证据块。
+- [x] 在活动条目拖拽预览重绘后备之后刷新 `FIKA_DEBUG_DND=1` 运行时证据：pane 条目拖到 pane 目录上记录 `active-item-move via=preview ... kind=Some(Directory)` 并在放置前视觉高亮目录。
+- [x] 记录 2026-06-17 pane 自拖拽根本原因和验收追踪：GPUI 可以在拖拽启动后停止传递 pane/条目移动回调，因此保留的 `ActiveItemDrag` 目标必须在必要时由预览重绘 tick。
+- [x] 沿 Dolphin 风格的 model/投影、controller/hit-test、painter 和 renderer-policy 边界拆分 `src/ui/file_grid.rs`，而不改变行为。
+- [x] 将根文件网格渲染表面组合提取到 `src/ui/file_grid/surface.rs`，使 `src/ui/file_grid.rs` 不再是 viewport/层/shell 组装的所有者。
+- [x] 将条目视图绘制器性能计数器提取到 `src/ui/file_grid/perf.rs`，使渲染埋点不再由主文件网格表面拥有。
+- [x] 将 FikaApp 条目视图性能访问器/记录方法移入 `src/ui/file_grid/perf.rs`。
+- [x] 将条目视图性能帧阶段分类移入 `src/ui/file_grid/perf.rs`，使调整大小/模式/内容/视觉埋点不再在 `main.rs` 中定义。
+- [x] 将文件网格条目/place/外部拖拽移动和放置处理器提取到 `src/ui/file_grid/dnd.rs`，使 controller 路由不再由主绘制器/渲染表面拥有。
+- [x] 将条目拖拽预览渲染和选择计数标签逻辑移入 `src/ui/file_grid/dnd.rs`，使剩余的 GPUI 拖拽启动 shell 边界集中化。
+- [x] 将文件网格滚轮、pane 导航和条目鼠标按下 controller 决策提取到 `src/ui/file_grid/controller.rs`。
+- [x] 将文件图标解析候选排序移入 `src/ui/file_grid/snapshot/scheduler.rs`，使可见/预读角色工作与元数据和缩略图调度一起投影，而不是在 `snapshot.rs` 中。
+- [x] 将原始文件网格快照模型/转换边界提取到 `src/ui/file_grid/snapshot.rs` 子模块，使 model 投影、角色调度和视图模式组合模块化。
+- [x] 将缩略图候选和预读投影移入 `src/ui/file_grid/snapshot/thumbnail.rs`，使角色调度决策与原始快照构造分离。
+- [x] 将缩略图/预读投影测试移入 `src/ui/file_grid/snapshot/thumbnail.rs`，使快照门面不再导入缩略图私有测试助手。
+- [x] 将元数据角色候选投影及其 `RawFileGridSnapshot` 方法实现提取到 `src/ui/file_grid/snapshot/metadata.rs`，使 MIME magic 调度决策与原始快照构造分离。
+- [x] 将原始快照 model/投影类型提取到 `src/ui/file_grid/snapshot/types.rs`，使原始数据契约与构造、转换、调度器和范围助手分离。
+- [x] 将 Compact/Icons 预读与 Dolphin 的角色更新器边界对齐：不可见工作窗口条目可以复用现有快照内容进行绘制预热，但未缓存的预读条目在渲染转换期间不再触发同步图标/文本内容解析。
+- [x] 将文件图标主题路径解析移出渲染转换：可见 Compact/Icons/Details 条目现在在帧中使用缓存/初步图标快照。可见同步图标预热遵循 Dolphin `updateVisibleIcons()` 索引顺序，而后台解析队列遵循 Dolphin `indexesToResolve()` 可见/预读顺序。
+- [x] 当后台图标解析结果到达时使可见条目快照缓存失效，以便初步图标被替换而无需在滚动或缩放帧中进行同步主题查找。
+- [x] 保持缩略图/主题图标挂起或加载失败帧视觉稳定：首先复用保留的同源真实图像，然后在没有保留图像存在时绘制后备视觉。
+- [x] 将缩放图标视觉与 Dolphin 对齐：普通 MIME/主题图标立即根据当前布局图标尺寸解析，匹配 Dolphin `KStandardItemListWidget::pixmapForIcon()`，而主题图标文件仍然不在 prepaint 中同步解码。主题图标图像及其首帧加载占位符现在绘制到相同的当前方形图标框中，以避免挂起小图标然后真实图标尺寸跳跃。
+- [x] 将保留条目/详情绘制 slot 状态提取到 `src/ui/file_grid/paint_slots.rs`，使 model 到绘制器快照复用与渲染器构造代码分离。
+- [x] 将保留条目/详情交互 hitbox 层提取到 `src/ui/file_grid/interaction.rs`，使悬停/光标 hitbox 和活动条目拖拽窗口跟踪与主绘制器/渲染表面分离。
+- [x] 将剩余的跨模块文件网格测试移入 `src/ui/file_grid/tests.rs`，使 `src/ui/file_grid.rs` 仅是模块门面和公共导出边界。
+- [ ] 在公共 GPUI 自定义元素拖拽启动支持存在或携带经过审计的 GPUI patch 之前保持剩余拖拽启动 shell。
+- [ ] 在自定义文本编辑具有焦点、caret、选择、验证、提交/取消和 IME 的行为覆盖之前保持重命名在 GPUI 叠加层上。
+- [x] 将 Places 视为单独的渲染器迁移，具有自己的 GPUI 基线和 DnD/滚动验收门。结果：`docs/PLACES_RENDERER_PLAN.md` 定义了 Dolphin model/view 划分、保留行迁移门、DnD/滚动验收检查以及当前的 `FIKA_PERF_PLACES_VIEW=1` GPUI 基线。
+
+## P15：完整转换执行计划
+
+这是在保留条目视图方向被接受后的活动计划。它将代码库推向完全自定义绘制/复用池所有权，而不假装每个剩余的 GPUI 边界今天都可以安全移除。
+
+- [~] P15a：在 Dolphin 对齐的缩放图标视觉更新后冻结当前桌面会话证据。所需日志：`FIKA_PERF_ITEM_VIEW=1 cargo run -- ~/Downloads`、`FIKA_PERF_ITEM_VIEW=1 cargo run -- /etc` 和一个 `FIKA_DEBUG_DND=1` pane 自拖拽追踪。当前状态：`/etc` 缩放/滚动 autosmoke 和 pane 自拖拽 `via=preview` 追踪已记录；完整的 `~/Downloads`/详情/手动 DnD 桌面会话 pass 在另一个 shell 移除或绘制器扩展切片之前仍需要刷新。
+- [x] P15b：在扩展或回退任何渲染器表面之前，在 `docs/ITEM_VIEW_RENDERER_DECISIONS.md` 中记录证据摘要。当前证据默认将 MIME/主题图标保留在 GPUI `img()` 元素上，并将剩余的 `/etc` autosmoke 成本识别为静态视觉/文本/基础绘制，而非同步主题图标路径查找。
+- [x] P15c：从源而非猜测决定拖拽启动边界：要么确认公共 GPUI 自定义元素拖拽启动 API 存在，要么携带小型经过审计的 GPUI patch，要么将 Compact/Icons 和 Details 拖拽启动 shell 保留为显式平台边界。当前决定：GPUI `0.2.2` 仅通过交互元素暴露类型化拖拽启动，因此 shell 保留为显式平台边界。
+- [ ] P15d：如果 P15c 解锁保留拖拽启动，先移除 Compact/Icons 非重命名拖拽 shell，然后移除详情行拖拽 shell。每次移除需要对条目到目录、pane 放置、Places 放置/重排和外部路径放置进行 DnD smoke。
+- [~] P15e：在实现之前对保留/自定义行绘制器进行基准测试，与当前 GPUI 侧栏比较。仅当滚动、重排、挂载/回收站/设备行、右键菜单和放置行为中性或更好时才接受 Places 迁移。当前状态：GPUI 侧栏基线和渲染器策略日志存在，且 `FIKA_AUTOSMOKE_PLACES=targets` 覆盖非持久目标/插入投影。`PlacePaintSlotCache` 现在记录保留行/section slot 和 `[fika places-slots]` 统计；没有保留/自定义行绘制器是默认值。`FIKA_CUSTOM_PLACES_ROWS=1` 现在为背景、活动/放置状态、标签、回收站标记和插入指示器提供可选的行视觉绘制器，同时保持 GPUI 图标、行事件传递、右键菜单、DnD 和拖拽启动 shell。`places/interaction.rs` 现在拥有行/section 目标决策，而 GPUI shell 仍提供事件传递和边界。
+- [ ] P15f：在自定义文本编辑计划覆盖焦点、caret hit testing、UTF-8 选择、验证、提交/取消、Tab 重命名下一个和 IME 之前，保持重命名在 GPUI 上。不要在没有该行为矩阵的情况下合并自定义重命名绘制器。
+- [ ] P15g：收紧复用池证据。运行时渲染器策略日志应证明普通 Compact/Icons 和 Details 帧没有每条目 GPUI 视觉子元素，只有已知的拖拽启动/重命名边界。
+- [ ] P15h：在可以在不改变行为的情况下完成时，将仍存在于 `src/main.rs` 中的任何剩余条目视图编排移入 Dolphin 对齐的文件网格模块。候选边界：图标角色更新调度、文件图标解析队列移交和运行时证据收集助手。已完成：
+  - [x] 修剪 `file_grid.rs` 重导出：`src/ui/file_grid.rs` 不再从子模块重新导出私有 surface/details/details_shell/item_shell/types（需要的 crate 使用 `pub(crate)` 子模块路径）。`src/ui.rs` 不再重新导出 `interaction` 或 `renderer_policy` 符号。
+  - [x] 将文件图标解析候选排序移入 `src/ui/file_grid/snapshot/scheduler.rs`，使可见/预读角色工作与元数据和缩略图调度一起投影，而不是在 `snapshot.rs` 中。
+  - [x] 将缩略图候选和预读投影移入 `src/ui/file_grid/snapshot/thumbnail.rs`，使角色调度决策与原始快照构造分离。
+  - [x] 将元数据角色候选投影移入 `src/ui/file_grid/snapshot/metadata.rs`，使 MIME magic 调度决策与原始快照构造分离。
+  - [x] 将原始快照类型提取到 `src/ui/file_grid/snapshot/types.rs`，使原始数据契约与构造、转换、调度器和范围助手分离。
+  - [x] 将条目视图绘制器性能埋点移入 `src/ui/file_grid/perf.rs`，并将 FikaApp 条目视图性能访问器/记录方法移入同一模块。
+  - [x] 将文件网格条目/place/外部拖拽移动和放置处理器移入 `src/ui/file_grid/dnd.rs`，使 controller 路由不再由主绘制器/渲染表面拥有。
+  - [x] 将文件网格滚轮、pane 导航和条目鼠标按下 controller 决策移入 `src/ui/file_grid/controller.rs`。
+  - [x] 将保留条目/详情绘制 slot 状态移入 `src/ui/file_grid/paint_slots.rs`。
+  - [x] 将保留条目/详情交互 hitbox 层移入 `src/ui/file_grid/interaction.rs`。
+  - [x] 将渲染器策略决策移入 `src/ui/file_grid/renderer_policy.rs`。
+  - [x] 将剩余的跨模块文件网格测试移入 `src/ui/file_grid/tests.rs`，使 `src/ui/file_grid.rs` 仅是模块门面和公共导出边界。
+
+## P16：Places 渲染器迁移准备
+
+这是保留 Places 渲染器迁移的独立准备切片。在保留行绘制器作为默认渲染器被接受之前，所有 P16 项必须在没有 Places 行为回退的情况下完成。
+
+- [x] P16a：在实现任何自定义 Places 行绘制器之前添加详细的滚动性能日志：`[fika places-view]` 每帧 `scroll_y` 和 `max_scroll_y`，加上可见行、目标行、插入行和设备行的每帧摘要。
+- [x] P16b：在实现自定义 Places 行绘制器之前添加可折叠 section 性能日志：`[fika places-view]` 现在包括每帧 `sections_visible`、`sections_collapsed`、`visible_in_collapsed` 和设备 section 状态。可见内容行摘要排除在折叠 section 内隐藏的行。
+- [x] P16c：在实现任何自定义行绘制器之前添加侧栏渲染性能日志。`[fika places-sidebar]` 现在包括具有 `paint_us` 的绘制计时以及可见/隐藏行和 section 的计数，带标记用于跟踪高度和溢出。
+- [x] P16d：在自定义行绘制器处于活动状态之前添加 Places 渲染器策略日志。`[fika places-renderer-policy]` 通道现在报告每帧可见行/section 计数、自定义绘制行数、保留交互条目数和 GPUI shell 条目数，即使当前所有表面都是 GPUI。
+- [x] P16e：在考虑自定义行绘制器之前添加 Places 自动 smoke 路径，以在隔离中证明行/section 投影行为。`FIKA_AUTOSMOKE_PLACES=targets` 产生非持久添加的行和插入指示器，用 `[fika places-renderer-policy]` 覆盖进行记录，并且不改变书签持久化。
+- [x] P16f：在实现任何自定义行绘制器之前捕获 Places 特定性能分析器脚本和门。`scripts/analyze-places-perf.sh` 验证 `FIKA_PERF_PLACES_VIEW=1` 和 `FIKA_AUTOSMOKE_PLACES=targets` 证据，加上 Places 渲染器策略和侧栏健康摘要。
+- [x] P16g：添加 Places 拖拽和 DnD 重排管道日志，从 `FIKA_DEBUG_DND=1` 开始并在添加 Places 特定 hitbox 或拖拽目标数据之前。`[fika places-dnd]` 现在报告 `RowDragStart/Verdict`、`SectionDragStart/Verdict` 和 `RowDragOver/Verdict`，具有 `row_idx`、`drop_zone` 和 `source` 字段。如果 `target.drop_enabled_for()` 被禁用，则不产生日志。
+- [x] P16h：在完成基线并添加渲染器策略/自动 smoke 日志后，为 Places 接受一个单独的带有其自己的证据门的渲染器迁移。`docs/PLACES_RENDERER_PLAN.md` 定义了 Dolphin model/view 划分、保留行迁移门、DnD/滚动验收检查以及当前的 `FIKA_PERF_PLACES_VIEW=1` GPUI 基线。
+- [x] P16m：在任何保留行绘制器工作之前添加非破坏性 Places 运行时 smoke 路径。`FIKA_AUTOSMOKE_PLACES=targets` 现在驱动 place 目标、插入开始、插入结束、清除和快照日志，而不重排或持久化书签。完整的重排/放置变异 smoke 仍然门控于隔离的用户 place 配置或手动审查。
+- [x] P16n：在不改变可见渲染的情况下添加保留 Places 绘制 slot 和统计。`PlacePaintSlotCache` 通过稳定的语义 identity 保留 section 标题和 place 行，对设备行优选设备 id，对普通行优选路径/组。`[fika places-slots]` 现在报告当前 GPUI 侧栏的插入/内容/几何/视觉/未更改/已移除 slot 活动。
+- [x] P16o：在任何保留 hitbox 或自定义行绘制器工作之前，将 Places 行/section 目标决策提取出 GPUI 行闭包。`places/interaction.rs` 现在返回条目/外部路径放置和 place 重排的共享目标/光标决策。GPUI 行/section shell 仍提供事件传递、边界和拖拽启动。
+- [x] P16p：在基准测试自定义行绘制器之前添加 Places 性能/自动 smoke 分析器。`scripts/analyze-places-perf.sh` 现在总结 `[fika places-view]`、`[fika places-sidebar]`、`[fika places-slots]`、`[fika places-renderer-policy]` 和非破坏性 Places autosmoke 标记。`scripts/check-places-perf-analyzer.sh` 覆盖分析器门。
+- [x] P16s：在不切换默认渲染器的情况下添加第一个可选 Places 行视觉绘制器。`FIKA_CUSTOM_PLACES_ROWS=1` 自定义绘制行背景、活动/放置视觉状态、标签、回收站标记和插入指示器；默认 Places 行保持 GPUI。分析器支持现在包括 `--expect-custom-row-visual-policy` 和 `[fika places-row-visual]` prepaint/paint 最大值。
+- [x] P16t：添加非破坏性 Places 溢出 autosmoke 和滚动条性能证据。`FIKA_AUTOSMOKE_PLACES=overflow` 在附加仅快照测试行时不写入用户 Places 配置，`[fika places-scrollbar]` 报告可见溢出和 `max_scroll_y`，且 `scripts/analyze-places-perf.sh` 现在支持 `--require-overflow-autosmoke`。
+- [ ] P16q：在每个 P16 实现切片之后，单独提交并附带相关验证：仅文档切片需要 `git diff --check`；代码切片需要 `cargo fmt`、`cargo check`、`cargo test -q`、`scripts/check-item-view-perf-analyzer.sh`、`scripts/check-places-perf-analyzer.sh` 和 `git diff --check`。
+- [x] P16r：记录运行时自测试和突破记录规则。可重复的滚动、缩放、启动图标、调整大小、模式切换和 Places 目标回退应在依赖手动计时之前通过 autosmoke 日志和分析器脚本重现。任何确认的优化突破必须记录症状、Dolphin 比较边界、根本原因、实现、保存的日志/分析器命令和未来回归守卫在拥有的设计或决策文档中。
+
+## 验收门
+
+- [~] 重命名、选择、右键菜单、条目 DnD、places DnD 和外部放置路径无行为回退：单元覆盖现在包括一个跨 Compact、Icons 和 Details 的保留行为矩阵，用于应用侧 hit testing、选择、条目菜单、重命名 draft 路由、条目拖拽源状态、外部路径归一化/放置目标菜单，以及条目/place 放置目标移交。在每次 shell 移除或绘制器扩展切片后，保持此部分直到完整的 `cargo test` 和运行时 DnD smoke 都被刷新。
+- [x] `cargo test` 保持绿色。
+- [~] 性能日志显示调整大小稳定路径对条目快照转换保持亚毫秒级，没有新的大型 `file-grid build` 回退，Compact/Icons 自定义视觉成本通过 `[fika static-item-visual]` 可见，存在图像支持的图标/缩略图时图像绘制成本通过 `[fika item-image]` 可见，条目图像源计数显示帧是否使用了解码主题图标、保留同 `iconName` 图像、首帧加载占位符或缩略图后备，聚合自定义绘制成本被汇总，详情自定义视觉/文本形状成本通过 `[fika details-visual]` 和 `[fika details-shape-cache]` 分开可见。滚动/缩放证据还应显示，在第一帧切换到初步图标后，冷主题图标工作不再出现为同步渲染转换尖峰。当前 `/etc` autosmoke 满足 Compact/Icons 缩放-滚动图标同步部分；详情和完整 DnD 运行时 smoke 仍需要桌面会话刷新。
+- [x] 冷模式切换成本与调整大小成本分开跟踪：`[fika item-view]` 现在包括 `phase=initial|mode-switch|content-change|geometry-change|visual-change|steady`，具有单元覆盖证明模式切换不被分类为调整大小/几何更改。
+- [ ] 任何自定义绘制扩展保持 Dolphin 的 model/controller/painter 划分，并且仅当在该表面上性能中性或优于 GPUI 内置路径时才保留。
+- [ ] 如果自定义绘制表面在性能或行为完整性上输给 GPUI 内置元素，保持 Dolphin 对齐的保留 model，但将该表面保留在 GPUI 渲染器上，直到迁移可以被收窄或被证明合理。
+- [x] 自定义绘制路径由非重命名 Compact 和 Icons 基础/图像视觉使用。
+- [x] 非重命名 Compact/Icons 条目在 P9a 之后不再需要每条目 GPUI 视觉子元素；临时拖拽 shell 保持直到 P9b。

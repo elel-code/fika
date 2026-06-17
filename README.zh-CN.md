@@ -27,12 +27,14 @@ GPUI 依赖来自 Zed 官方仓库：`https://github.com/zed-industries/zed`。m
 - Navigation history（Back/Forward），按 `PaneId` 隔离。
 - Compact file-view 布局：列优先，按列宽度缓存，可见范围投影，hit-test，
   viewport 数学。
-- Core 层平滑滚动、kinetic tracker、retarget 和 scroll clamp。
+- Core 层平滑滚动缓动、惯性跟踪器、retarget 和 scroll clamp。
 - Zoom level 映射（Dolphin 风格 0–16 → 16–256 px icon size）。
 - 文件操作 primitives：copy、move、link、trash、create、rename、undo。
 - Privileged operation API surface（受保护文件系统操作）。
 - 路径解析：`~` 展开，绝对/相对路径，breadcrumb segments，文件系统 Tab 补全。
 - MIME 类型检测（shared-mime-info globs、后缀、magic bytes）。
+  文件图标通过 Dolphin-aligned 扩展名降级链解析
+  (`text-x-{ext}` → `text-x-generic` → `unknown`)，实现无闪烁首帧显示。
 - 应用启动器：`.desktop` 解析，`mimeapps.list` Default/Added/Removed 关联，
   `XDG_DATA_DIRS` 应用缓存，systemd user transient unit 启动。
 - KDE service-menu 解析：`X-KDE-ServiceTypes`、
@@ -45,15 +47,19 @@ GPUI 依赖来自 Zed 官方仓库：`https://github.com/zed-industries/zed`。m
 - 回收站：`$XDG_DATA_HOME/Trash` metadata 读取，还原，永久删除，清空，
   按删除时间排序。
 - 缩略图：freedesktop 缩略图 URI，缓存键，缓存命中，失败标记，
-  `EntryData` path role。
-- GIO/GVfs 设备发现：mount/volume monitor 快照、Removable Devices 动态
+  `EntryData` path role。首帧显示使用同步 freedesktop 缓存探测；
+  Dolphin 风格的可见优先调度，支持预读。
+- GIO/GVfs 设备发现：mount/volume monitor 快照、可移动设备动态
   section、mount/unmount/eject 操作。
 - Network/GVfs 远程文件系统分类和 Places Network root。
 - D-Bus bus controller：session/system 连接缓存，超时重试 helper，
   owned proxy 创建，结构化 `BusError`。
 - COSMIC-style 操作运行时：Tokio multi-thread context 加 dedicated Compio
   操作线程，使用 bounded task submission，并通过 Compio blocking fallback
-  承接同步文件操作片段。
+  承接同步文件操作片段。`OperationId` 身份标识，`Operation` 枚举
+  (Transfer/Trash/Rename/Create/Undo)，`OperationController` 支持
+  cancel/pause/progress，运行时级 `BTreeMap<OperationId, OperationHandle>`
+  跟踪。
 
 ### UI (GPUI)
 
@@ -108,79 +114,146 @@ src/
   lib.rs                         UI-neutral core 模块导出
   main.rs                        GPUI 应用和 chooser shell
   core.rs                        Core 模块重导出
-  core/archive.rs                Ark DnD 解压和分类
-  core/bus.rs                    D-Bus session/system 总线控制器
-  core/cache.rs                  目录条目缓存（LRU，按 pane）
-  core/clipboard.rs              URI-list 编解码和 GPUI 往返
-  core/devices.rs                GIO/GVfs 设备发现入口
-  core/devices/actions.rs        Mount/unmount/eject/safely-remove 操作
-  core/directory.rs              目录 lister 和 watcher 事件
-  core/entries.rs                文件条目 metadata 和排序
-  core/file_ops.rs               文件 transfer/trash/create/rename primitives
-  core/filter.rs                 名称过滤模型（plain-text、glob）
-  core/launcher.rs               .desktop / mimeapps.list 应用发现
-  core/launcher/ark.rs           Ark 压缩文件 launch plan 构建
-  core/launcher/results.rs       Launch 结果类型
-  core/listing_worker.rs         后台目录读取 worker
-  core/location.rs               路径解析、breadcrumb、Tab 补全
-  core/mime.rs                   shared-mime-info MIME 检测
-  core/model.rs                  目录 model snapshots 和 signals
-  core/network.rs                GVfs/远程文件系统分类
-  core/operations.rs             操作队列和 undo 边界
-  core/operations/tasks.rs       文件操作任务结果类型
-  core/operation_runtime.rs       Tokio + Compio 操作运行时 bridge
-  core/pane.rs                   Pane identity、state、split/close 路由
-  core/places.rs                 Places model（书签、设备、网络）
-  core/privilege.rs              特权操作 API surface
-  core/thumbnails.rs             Freedesktop 缩略图 URI 和缓存键
-  core/view.rs                   Compact 布局、viewport 数学、可见范围
+  cli.rs                         CLI 参数解析入口
+  cli/
+    args.rs                      Chooser 模式 metadata 和 help 解析
+  core/
+    archive.rs                   Ark DnD 解压和分类
+    bus.rs                       D-Bus session/system 总线控制器
+    cache.rs                     目录条目缓存（LRU，共享 Arc 载荷）
+    clipboard.rs                 URI-list 编解码和 GPUI 往返
+    devices.rs                   GIO/GVfs 设备发现入口
+    devices/
+      actions.rs                 Mount/unmount/eject/safely-remove 操作
+    directory.rs                 目录 lister 和 watcher 事件
+    entries.rs                   文件条目 metadata 和排序输入
+    file_ops.rs                  文件 transfer/trash/create/rename primitives
+    filter.rs                    名称过滤模型（plain-text、glob）
+    launcher.rs                  .desktop / mimeapps.list 应用发现
+    launcher/
+      ark.rs                     Ark 压缩文件 launch plan 构建
+      results.rs                 Launch 结果类型
+    listing_worker.rs            后台目录读取 worker
+    location.rs                  路径解析、breadcrumb、Tab 补全
+    metadata.rs                  条目 metadata role 解析
+    mime.rs                      shared-mime-info MIME 检测
+    model.rs                     目录 model snapshots 和 signals
+    network.rs                   GVfs/远程文件系统分类
+    operation_runtime.rs         Tokio + Compio 操作运行时 bridge
+    operations.rs                操作队列和 undo 边界
+    operations/
+      tasks.rs                   文件操作任务结果类型
+    pane.rs                      Pane identity、state、split/close 路由
+    places.rs                    Places model（书签、设备、网络）
+    privilege.rs                 特权操作 API surface
+    thumbnails.rs                Freedesktop 缩略图 URI 和缓存键
+    thumbnails/
+      scheduler.rs               Dolphin 风格可见优先缩略图调度
+    trash_monitor.rs             App 自管回收站空状态和 watcher
+    view.rs                      Compact 布局、viewport 数学、可见范围
   ui.rs                          UI 模块重导出
-  ui/application_chooser.rs      "Other Application…" 选择器入口
-  ui/application_chooser/
-    identity.rs                  应用选择器条目 identity
-  ui/background_tasks.rs         侧栏后台任务面板
-  ui/chooser.rs                  文件选择器模式入口
-  ui/chooser/state.rs            选择器状态和 portal metadata 输出
-  ui/clipboard.rs                剪贴板 UI 入口
-  ui/clipboard/state.rs          Copy/cut 模式和 GPUI ClipboardItem 状态
-  ui/context_menu.rs             右键菜单 target/action/icon model
-  ui/controls.rs                 共享 UI 控件 helper
-  ui/drag_drop.rs                拖放 UI 入口
-  ui/drag_drop/state.rs          DnD 状态、路径归一化、target 匹配
-  ui/file_grid.rs                文件网格 UI 入口
-  ui/file_grid/layout.rs         Compact 列宽缓存和布局组装
-  ui/file_grid/slots.rs          可见条目 slot pool（回收 ID）
-  ui/file_grid/snapshot.rs       可见条目 snapshot 数据
-  ui/filter_bar.rs               过滤栏 UI 入口
-  ui/filter_bar/state.rs         过滤 snapshot 和过滤后 model 缓存
-  ui/icons.rs                    文件/命名图标入口
-  ui/icons/cache.rs              FileIconCache、MIME 候选、主题解析
-  ui/item_view.rs                item-view scroll ownership
-  ui/item_view/scroll_bar.rs     tracked 横向滚动条
-  ui/item_view/scroll_state.rs   per-pane scroll handle 状态
-  ui/location_bar.rs             地址栏 UI 入口
-  ui/location_bar/draft.rs       可编辑地址栏 draft 和 caret 状态
-  ui/location_bar/metrics.rs     可编辑 metrics、hit-test、滚动数学
-  ui/pane.rs                     Pane 外壳 UI 入口
-  ui/pane/snapshot.rs            Pane 渲染 snapshot
-  ui/pane/splitter.rs            Splitter drag payload 和比例几何
-  ui/place_draft.rs              Places Add/Edit draft 状态
-  ui/places.rs                   Places 侧栏 UI 入口
-  ui/places/sidebar.rs           Places 面板布局和后台任务 slot
-  ui/places/model.rs             Place 条目、分组、图标 snapshot
-  ui/places/snapshot.rs          Place 图标和 snapshot 类型
-  ui/properties_dialog.rs        Properties 对话框入口
-  ui/properties_dialog/
-    metadata.rs                  文件 metadata 读取和行生成
-  ui/rename.rs                   Inline rename 入口
-  ui/rename/draft.rs             Pane-local rename draft 状态
-  ui/rubber_band.rs              Rubber-band 框选入口
-  ui/rubber_band/state.rs        Rubber-band drag payload 和 rect 投影
-  ui/shortcuts.rs                键盘快捷键分类
-  ui/status_bar.rs               状态栏 UI 入口
-  ui/status_bar/state.rs         Snapshot、空间信息缓存、进度句柄
-  ui/status_bar/summary.rs       Pane selection/model 摘要格式化
-  src/bin/
+  ui/
+    application_chooser.rs       "Other Application…" 选择器入口
+    application_chooser/
+      identity.rs                应用选择器条目 identity
+      matching.rs                应用去重和搜索匹配
+      search.rs                  搜索框光标、hit-test 和输入
+    background_tasks.rs          侧栏后台任务面板
+    chooser.rs                   文件选择器模式入口
+    chooser/
+      state.rs                   选择器状态和 portal metadata 输出
+    clipboard.rs                 剪贴板 UI 入口
+    clipboard/
+      state.rs                   Copy/cut 模式和 GPUI ClipboardItem 状态
+      tasks.rs                   Paste 任务结果和进度跟踪
+    context_menu.rs              右键菜单 target/action/icon model
+    context_menu/
+      actions.rs                 Root action 生成和路由
+      icons.rs                   右键菜单图标解析
+      items.rs                   菜单条目构造和分组
+      layout.rs                  菜单尺寸、viewport clamp 和 flip 数学
+      overlay.rs                 右键菜单 overlay 渲染
+      service.rs                 Service-menu action 分发
+    controls.rs                  共享 UI 控件 helper
+    drag_drop.rs                 拖放 UI 入口
+    drag_drop/
+      preview.rs                 拖放预览渲染
+      state.rs                   DnD 状态、路径归一化、target 匹配
+    file_grid.rs                 文件网格 UI 入口
+    file_grid/
+      details.rs                 Details-view 列布局和渲染
+      layout.rs                  Compact 列宽缓存和布局组装
+      projection.rs              Hit-test 投影和过滤后布局映射
+      slots.rs                   可见条目 slot pool（回收元素 ID）
+      snapshot.rs                可见条目 snapshot 数据和图标投影
+    filter_bar.rs                过滤栏 UI 入口
+    filter_bar/
+      icon.rs                    过滤模式切换图标
+      state.rs                   过滤 snapshot 和过滤后 model 缓存
+    icons.rs                     文件/命名图标入口
+    icons/
+      cache.rs                   FileIconCache、MIME 候选、主题解析
+      view.rs                    缓存主题图标渲染 helper
+    item_view.rs                 Item-view scroll ownership
+    item_view/
+      scroll_bar.rs              Pane-decoupled tracked 横向滚动条
+      scroll_state.rs            Per-pane ScrollHandle 映射和 view/handle 同步
+    location_bar.rs              地址栏 UI 入口
+    location_bar/
+      draft.rs                   可编辑地址栏 draft 和 caret 状态
+      metrics.rs                 可编辑 metrics、hit-test、滚动数学
+    pane.rs                      Pane 外壳 UI 入口
+    pane/
+      snapshot.rs                Pane 渲染 snapshot
+      sort.rs                    Pane sort-status 格式化
+      splitter.rs                Splitter drag payload 和比例几何
+      toolbar.rs                 Pane header Search/Close、Split、Close Pane 按钮
+    place_draft.rs               Places Add/Edit draft 入口
+    place_draft/
+      overlay.rs                 Draft 对话框和字段渲染
+      state.rs                   Draft 状态、字段切换和文本输入
+    places.rs                    Places 侧栏 UI 入口
+    places/
+      devices.rs                 可移动设备 section 替换和排序
+      drag.rs                    PlaceDrag payload、预览、drop-zone 数学
+      icon_view.rs               Place 图标渲染和降级分类
+      model.rs                   Place 条目、分组和图标 snapshots
+      projection.rs              Place row snapshot 投影和状态映射
+      snapshot.rs                Place 图标和 snapshot 类型
+      sidebar.rs                 Places 面板布局和后台任务 slot
+      sidebar/
+        row.rs                   Place row 视觉结构、点击和右键菜单
+        section.rs               Section header 视觉结构和右键菜单
+      style.rs                   Row/drop-target/insert-indicator 颜色 helper
+      user.rs                    用户书签入口
+      user/
+        dropped.rs               拖入文件夹添加验证
+        edit.rs                  Add/Edit draft 提交和去重
+        entry.rs                 用户书签 PlaceEntry 构造
+        ordering.rs              插入索引、插入和重排
+        persistence.rs           XBEL 持久化投影
+        removal.rs               删除结果和可移除门
+      visibility.rs              隐藏 place/section 状态过滤
+    properties_dialog.rs         Properties 对话框入口
+    properties_dialog/
+      metadata.rs                文件 metadata 读取和行生成
+    rename.rs                    Inline rename 入口
+    rename/
+      draft.rs                   Pane-local rename draft 状态和 caret
+      metrics.rs                 Rename caret hit-test 和文本内缩 metrics
+    rubber_band.rs               Rubber-band 框选入口
+    rubber_band/
+      state.rs                   Rubber-band drag payload 和 rect 投影
+    shortcuts.rs                 键盘快捷键分类
+    status_bar.rs                状态栏 UI 入口
+    status_bar/
+      progress.rs                操作进度/busy 视图和 Stop 路由
+      space.rs                   文件系统空间信息视图和使用量颜色
+      state.rs                   Snapshot、空间信息缓存、进度句柄
+      summary.rs                 Pane selection/model 摘要格式化
+      zoom.rs                    Zoom track/segment 渲染和 drag 更新
+    trash_conflict.rs            回收站还原冲突对话框
+  bin/
     fika-xdp-filechooser.rs      XDG Desktop Portal FileChooser 后端
     fika-privileged-helper.rs    系统总线特权 helper
 ```
@@ -266,6 +339,7 @@ scripts/check-runtime-integration.sh
 - [docs/SCROLL_ZOOM_PERFORMANCE_PLAN.md](docs/SCROLL_ZOOM_PERFORMANCE_PLAN.md) — 已归档的滚动/缩放性能计划。
 - [docs/OPTIMIZATION.md](docs/OPTIMIZATION.md) — 已归档的优化笔记。
 - [docs/BUG_ANALYSIS_BLANK_DIRECTORY.md](docs/BUG_ANALYSIS_BLANK_DIRECTORY.md) — 空白目录 bug 分析。
+- [docs/BUG_ANALYSIS_SCROLLBAR_DRAG.md](docs/BUG_ANALYSIS_SCROLLBAR_DRAG.md) — 滚动条拖拽回退 bug 分析。
 
 ### Dolphin / Fika 参考
 
@@ -275,6 +349,7 @@ scripts/check-runtime-integration.sh
 - [docs/STATUS_BAR_REFERENCE.md](docs/STATUS_BAR_REFERENCE.md) — Dolphin `DolphinStatusBar` 信息显示和 zoom slider。
 - [docs/SMOOTH_SCROLL_REFERENCE.md](docs/SMOOTH_SCROLL_REFERENCE.md) — Dolphin `QScroller` 平滑/惯性滚动。
 - [docs/SEARCH_REFERENCE.md](docs/SEARCH_REFERENCE.md) — Dolphin 搜索框和 KIO 搜索集成。
+- [docs/ICON_THUMBNAIL_PERFORMANCE_ANALYSIS.md](docs/ICON_THUMBNAIL_PERFORMANCE_ANALYSIS.md) — 图标/缩略图加载性能分析和 Dolphin 对齐。
 
 ### 交互参考
 
