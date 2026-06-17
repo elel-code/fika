@@ -2,7 +2,7 @@ use fika_core::{
     Generation, MetadataRoleScheduler, PaneId, ThumbnailCandidate, ThumbnailScheduler,
 };
 
-use super::{RawFileGridSnapshot, RawVisibleItemSnapshot, thumbnail};
+use super::{FileGridIconRequest, RawFileGridSnapshot, RawVisibleItemSnapshot, thumbnail};
 
 impl RawFileGridSnapshot {
     pub(crate) fn queue_metadata_role_candidates(
@@ -35,6 +35,71 @@ impl RawFileGridSnapshot {
             }
         }
     }
+
+    pub(crate) fn queue_file_icon_resolve_candidates<F>(&self, mut queue: F) -> bool
+    where
+        F: for<'a> FnMut(FileGridIconRequest<'a>) -> bool,
+    {
+        let mut queued = false;
+        match self {
+            Self::Compact { items, .. } | Self::Icons { items, .. } => {
+                let visible_range = self
+                    .visible_layout_range_and_count()
+                    .map(|(range, _)| range);
+
+                for item in items.iter().filter(|item| item.visible && !item.is_dir) {
+                    queued |= queue(file_icon_request_for_item(item));
+                }
+                for item in items.iter().filter(|item| item.visible && item.is_dir) {
+                    queued |= queue(file_icon_request_for_item(item));
+                }
+
+                if let Some(visible_range) = visible_range {
+                    for item in items.iter().filter(|item| {
+                        !item.visible && item.layout.model_index >= visible_range.end
+                    }) {
+                        queued |= queue(file_icon_request_for_item(item));
+                    }
+                    for item in items.iter().rev().filter(|item| {
+                        !item.visible && item.layout.model_index < visible_range.start
+                    }) {
+                        queued |= queue(file_icon_request_for_item(item));
+                    }
+                }
+            }
+            Self::Details { items, metrics, .. } => {
+                for item in items.iter().filter(|item| !item.is_dir) {
+                    queued |= queue(FileGridIconRequest {
+                        path: &item.path,
+                        is_dir: item.is_dir,
+                        mime_type: item.mime_type.clone(),
+                        mime_magic_checked: item.mime_magic_checked,
+                        icon_size: metrics.icon_size,
+                    });
+                }
+                for item in items.iter().filter(|item| item.is_dir) {
+                    queued |= queue(FileGridIconRequest {
+                        path: &item.path,
+                        is_dir: item.is_dir,
+                        mime_type: item.mime_type.clone(),
+                        mime_magic_checked: item.mime_magic_checked,
+                        icon_size: metrics.icon_size,
+                    });
+                }
+            }
+        }
+        queued
+    }
+}
+
+fn file_icon_request_for_item(item: &RawVisibleItemSnapshot) -> FileGridIconRequest<'_> {
+    FileGridIconRequest {
+        path: &item.path,
+        is_dir: item.is_dir,
+        mime_type: item.mime_type.clone(),
+        mime_magic_checked: item.mime_magic_checked,
+        icon_size: item.layout.icon_rect.width,
+    }
 }
 
 fn raw_visible_thumbnail_candidate(item: &RawVisibleItemSnapshot) -> Option<ThumbnailCandidate> {
@@ -64,6 +129,8 @@ mod tests {
     use std::sync::Arc;
 
     use fika_core::{IconsLayout, ItemId, ItemLayout};
+
+    use super::super::RawDetailsItemSnapshot;
 
     #[test]
     fn raw_file_grid_snapshot_queues_only_generic_magic_metadata() {
@@ -149,6 +216,81 @@ mod tests {
         assert!(scheduler.start_role_batch(8).is_none());
     }
 
+    #[test]
+    fn file_icon_resolve_candidates_follow_visible_and_read_ahead_order() {
+        let mut before = test_raw_visible_item(1, "before.txt", 0);
+        before.visible = false;
+        let visible_file = test_raw_visible_item(2, "visible-file.txt", 1);
+        let mut visible_dir = test_raw_visible_item(3, "visible-dir", 2);
+        visible_dir.is_dir = true;
+        let visible_second_file = test_raw_visible_item(4, "visible-second-file.txt", 3);
+        let mut after = test_raw_visible_item(5, "after.txt", 4);
+        after.visible = false;
+        let raw_file_grid = RawFileGridSnapshot::Icons {
+            layout: IconsLayout::new(5, fika_core::IconsLayoutOptions::default()),
+            items: vec![
+                before,
+                visible_file,
+                visible_dir,
+                visible_second_file,
+                after,
+            ],
+        };
+        let mut paths = Vec::new();
+
+        assert!(raw_file_grid.queue_file_icon_resolve_candidates(|request| {
+            paths.push(
+                request
+                    .path
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string(),
+            );
+            true
+        }));
+
+        assert_eq!(
+            paths,
+            vec![
+                "visible-file.txt",
+                "visible-second-file.txt",
+                "visible-dir",
+                "after.txt",
+                "before.txt",
+            ]
+        );
+    }
+
+    #[test]
+    fn details_file_icon_resolve_candidates_queue_files_before_directories() {
+        let raw_file_grid = RawFileGridSnapshot::Details {
+            items: vec![
+                test_raw_details_item(0, 1, "alpha.txt", false),
+                test_raw_details_item(1, 2, "Documents", true),
+                test_raw_details_item(2, 3, "beta.txt", false),
+            ],
+            row_count: 3,
+            metrics: super::super::super::details::details_layout_metrics(48.0),
+            name_column_width: 260.0,
+        };
+        let mut paths = Vec::new();
+
+        assert!(raw_file_grid.queue_file_icon_resolve_candidates(|request| {
+            paths.push(
+                request
+                    .path
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string(),
+            );
+            true
+        }));
+
+        assert_eq!(paths, vec!["alpha.txt", "beta.txt", "Documents"]);
+    }
+
     fn test_raw_visible_item(id: u64, name: &str, model_index: usize) -> RawVisibleItemSnapshot {
         RawVisibleItemSnapshot {
             slot_id: 0,
@@ -173,6 +315,35 @@ mod tests {
             draft_selection: None,
             draft_error: None,
             draft_warning: None,
+        }
+    }
+
+    fn test_raw_details_item(
+        row_index: usize,
+        id: u64,
+        name: &str,
+        is_dir: bool,
+    ) -> RawDetailsItemSnapshot {
+        RawDetailsItemSnapshot {
+            row_index,
+            item_id: ItemId(id),
+            path: PathBuf::from("/tmp").join(name),
+            is_dir,
+            name: Arc::from(name),
+            size_bytes: 12,
+            modified_secs: Some(42),
+            mime_type: Some(Arc::from(if is_dir {
+                "inode/directory"
+            } else {
+                "text/plain"
+            })),
+            mime_magic_checked: true,
+            selected: false,
+            drop_target: false,
+            size_label: "12 B".to_string(),
+            modified_label: "Today".to_string(),
+            original_path_label: String::new(),
+            deletion_time_label: String::new(),
         }
     }
 

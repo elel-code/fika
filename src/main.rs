@@ -1441,80 +1441,15 @@ impl FikaApp {
         &mut self,
         raw_file_grid: &RawFileGridSnapshot,
     ) -> bool {
-        let mut queued = false;
-        match raw_file_grid {
-            RawFileGridSnapshot::Compact { items, .. }
-            | RawFileGridSnapshot::Icons { items, .. } => {
-                let visible_range = raw_file_grid
-                    .visible_layout_range_and_count()
-                    .map(|(range, _)| range);
-
-                for item in items.iter().filter(|item| item.visible && !item.is_dir) {
-                    queued |= self.queue_file_icon_resolve_request_for_item(
-                        &item.path,
-                        item.is_dir,
-                        item.mime_type.clone(),
-                        item.mime_magic_checked,
-                        item.layout.icon_rect.width,
-                    );
-                }
-                for item in items.iter().filter(|item| item.visible && item.is_dir) {
-                    queued |= self.queue_file_icon_resolve_request_for_item(
-                        &item.path,
-                        item.is_dir,
-                        item.mime_type.clone(),
-                        item.mime_magic_checked,
-                        item.layout.icon_rect.width,
-                    );
-                }
-
-                if let Some(visible_range) = visible_range {
-                    for item in items.iter().filter(|item| {
-                        !item.visible && item.layout.model_index >= visible_range.end
-                    }) {
-                        queued |= self.queue_file_icon_resolve_request_for_item(
-                            &item.path,
-                            item.is_dir,
-                            item.mime_type.clone(),
-                            item.mime_magic_checked,
-                            item.layout.icon_rect.width,
-                        );
-                    }
-                    for item in items.iter().rev().filter(|item| {
-                        !item.visible && item.layout.model_index < visible_range.start
-                    }) {
-                        queued |= self.queue_file_icon_resolve_request_for_item(
-                            &item.path,
-                            item.is_dir,
-                            item.mime_type.clone(),
-                            item.mime_magic_checked,
-                            item.layout.icon_rect.width,
-                        );
-                    }
-                }
-            }
-            RawFileGridSnapshot::Details { items, metrics, .. } => {
-                for item in items.iter().filter(|item| !item.is_dir) {
-                    queued |= self.queue_file_icon_resolve_request_for_item(
-                        &item.path,
-                        item.is_dir,
-                        item.mime_type.clone(),
-                        item.mime_magic_checked,
-                        metrics.icon_size,
-                    );
-                }
-                for item in items.iter().filter(|item| item.is_dir) {
-                    queued |= self.queue_file_icon_resolve_request_for_item(
-                        &item.path,
-                        item.is_dir,
-                        item.mime_type.clone(),
-                        item.mime_magic_checked,
-                        metrics.icon_size,
-                    );
-                }
-            }
-        }
-        queued
+        raw_file_grid.queue_file_icon_resolve_candidates(|request| {
+            self.queue_file_icon_resolve_request_for_item(
+                request.path,
+                request.is_dir,
+                request.mime_type.clone(),
+                request.mime_magic_checked,
+                request.icon_size,
+            )
+        })
     }
 
     fn queue_file_icon_resolve_request_for_item(
