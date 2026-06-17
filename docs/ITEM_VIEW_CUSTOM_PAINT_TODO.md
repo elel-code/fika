@@ -390,8 +390,11 @@ This is the active task board for the GPUI item view custom-paint migration.
   drag-start support exists or an audited GPUI patch is carried.
 - [ ] Keep rename on the GPUI overlay until custom text editing has behavior
   coverage for focus, caret, selection, validation, commit/cancel, and IME.
-- [ ] Treat Places as a separate renderer migration with its own GPUI baseline
-  and DnD/scroll acceptance gate.
+- [x] Treat Places as a separate renderer migration with its own GPUI baseline
+  and DnD/scroll acceptance gate. Result: `docs/PLACES_RENDERER_PLAN.md`
+  defines the Dolphin model/view split, the retained-row migration gate, the
+  DnD/scroll acceptance checks, and the current `FIKA_PERF_PLACES_VIEW=1`
+  GPUI baseline.
 
 ## P15: Full Transition Execution Plan
 
@@ -399,26 +402,36 @@ This is the active plan after the retained item-view direction was accepted.
 It moves the codebase toward full custom-painted/reuse-pool ownership without
 pretending that every remaining GPUI boundary can be removed safely today.
 
-- [ ] P15a: Freeze current desktop-session evidence after the Dolphin-aligned
+- [~] P15a: Freeze current desktop-session evidence after the Dolphin-aligned
   zoom icon visual update. Required logs:
   `FIKA_PERF_ITEM_VIEW=1 cargo run -- ~/Downloads`,
   `FIKA_PERF_ITEM_VIEW=1 cargo run -- /etc`, and one
-  `FIKA_DEBUG_DND=1` pane self-drag trace.
-- [ ] P15b: Record the evidence summary in
+  `FIKA_DEBUG_DND=1` pane self-drag trace. Current state: `/etc`
+  zoom/scroll autosmoke and the pane self-drag `via=preview` trace are
+  recorded; the full `~/Downloads`/Details/manual DnD desktop-session pass
+  still needs a refresh before another shell-removal or painter-expansion
+  slice.
+- [x] P15b: Record the evidence summary in
   `docs/ITEM_VIEW_RENDERER_DECISIONS.md` before expanding or reverting any
-  renderer surface.
-- [ ] P15c: Decide the drag-start boundary from source, not guesswork: either
+  renderer surface. Current evidence keeps MIME/theme icons on GPUI `img()`
+  elements by default and identifies remaining `/etc` autosmoke cost as static
+  visual/text/base paint rather than synchronous theme-icon path lookup.
+- [x] P15c: Decide the drag-start boundary from source, not guesswork: either
   confirm a public GPUI custom-element drag-start API exists, carry a small
   audited GPUI patch, or keep Compact/Icons and Details drag-start shells as
-  explicit platform boundaries.
+  explicit platform boundaries. Current decision: GPUI `0.2.2` exposes typed
+  drag start through interactive elements only, so the shells stay as explicit
+  platform boundaries.
 - [ ] P15d: If P15c unlocks retained drag start, remove Compact/Icons
   non-renaming drag shells first, then Details row drag shells. Each removal
   needs DnD smoke for item-to-directory, pane drop, Places drop/reorder, and
   external path drop.
-- [ ] P15e: Benchmark a Places retained/custom row painter against the current
+- [~] P15e: Benchmark a Places retained/custom row painter against the current
   GPUI sidebar before implementing it. Places migration is accepted only if
   scroll, reorder, mount/trash/device rows, context menu, and drop behavior are
-  neutral or better.
+  neutral or better. Current state: the GPUI sidebar baseline and
+  renderer-policy logs exist; no retained/custom row painter has been
+  benchmarked yet.
 - [ ] P15f: Keep rename on GPUI until a custom text-editing plan covers focus,
   caret hit testing, UTF-8 selection, validation, commit/cancel, Tab rename-next,
   and IME. Do not merge a custom rename painter without that behavior matrix.
@@ -522,7 +535,12 @@ by risk and evidence, not by how custom-painted a surface looks.
   default-vs-`FIKA_CUSTOM_THEME_ICONS=1` zoom/scroll logs prove the custom
   theme-icon painter is neutral or better without first-load placeholders,
   zoom-time `theme_decoded` churn, or size jumps.
-- [ ] P16l: After every P16 implementation slice, commit separately with the
+- [x] P16l: Establish the Places GPUI sidebar baseline before any retained row
+  painter work. `FIKA_PERF_PLACES_VIEW=1` now logs snapshot time, sidebar build
+  time, and the current renderer-policy surface counts for the GPUI row path;
+  `docs/PLACES_RENDERER_PLAN.md` records the 2026-06-17 desktop-session
+  baseline.
+- [ ] P16m: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,
   `scripts/check-item-view-perf-analyzer.sh`, and `git diff --check`.
