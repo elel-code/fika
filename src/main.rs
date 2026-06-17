@@ -16,15 +16,16 @@ use fika_core::{
 use fika_core::{
     CreateUndoItem, CreatedItemKind, DeviceInfo, DeviceMonitorMessage, DevicePlaceOperation,
     DevicePlaceOperationResult, DirectoryCacheDebugSnapshot, DirectoryListerEvent, Generation,
-    ItemId, ListingRequest, ListingWorker, LoadingPaneState, MetadataRoleResult,
-    MetadataRoleScheduler, OperationQueue, OperationRuntime, OperationSnapshot, PaneController,
-    PaneId, RefreshPair, RenameUndoItem, SelectionMove, SortDescriptor, SortOrder, SortRole,
-    ThumbnailProbeResult, ThumbnailScheduler, TrashEmptinessMonitor, UndoPayload, UserPlace,
-    ViewMode, ViewPoint, ViewRect, ZoomChange, apply_thumbnail_probe_result_to_model,
+    ItemId, ListingRequest, ListingWorker, LoadingPaneState, MetadataRoleRequest,
+    MetadataRoleResult, MetadataRoleScheduler, OperationQueue, OperationRuntime, OperationSnapshot,
+    PaneController, PaneId, RefreshPair, RenameUndoItem, SelectionMove, SortDescriptor, SortOrder,
+    SortRole, ThumbnailProbeResult, ThumbnailScheduler, TrashEmptinessMonitor, UndoPayload,
+    UserPlace, ViewMode, ViewPoint, ViewRect, ZoomChange, apply_thumbnail_probe_result_to_model,
     breadcrumb_segments, complete_location_input, file_ops, is_network_path,
-    listing_requests_from_events, metadata_role_results_for_requests, nearest_existing_ancestor,
-    parent_location, perform_device_place_operation, resolve_location_input,
-    thumbnail_probe_results_for_requests, update_loading_state_for_event,
+    listing_requests_from_events, metadata_role_result_for_request,
+    metadata_role_results_for_requests, nearest_existing_ancestor, parent_location,
+    perform_device_place_operation, resolve_location_input, thumbnail_probe_results_for_requests,
+    update_loading_state_for_event,
 };
 use fika_core::{
     DesktopLaunchPlan, LauncherError, MimeApplication, MimeApplicationCache, NewWindowLaunchResult,
@@ -208,6 +209,7 @@ fn listing_cache_debug_summary(
 const THUMBNAIL_PROBE_BATCH_SIZE: usize = 32;
 const METADATA_ROLE_BATCH_SIZE: usize = 16;
 const FILE_ICON_RESOLVE_BATCH_SIZE: usize = 64;
+const VISIBLE_METADATA_ROLE_SYNC_BUDGET: Duration = Duration::from_millis(12);
 const PANE_HORIZONTAL_BORDER_EXTENT: f32 = 2.0;
 
 const CONTEXT_SUBMENU_HIDE_DELAY: Duration = Duration::from_millis(300);
@@ -1117,8 +1119,9 @@ impl FikaApp {
                 };
                 let filtered = filtered_model.as_ref().map(|(model, _)| model);
                 let source_revision = filtered_model.as_ref().map_or(0, |(_, revision)| *revision);
+                let mut model_data_generation = model_data_generation;
                 let raw_started = perf_enabled.then(Instant::now);
-                let raw_file_grid = self.raw_file_grid_snapshot_for_pane(
+                let mut raw_file_grid = self.raw_file_grid_snapshot_for_pane(
                     pane_id,
                     &view,
                     filtered,
@@ -1126,6 +1129,22 @@ impl FikaApp {
                     rename_draft.as_ref(),
                     item_drop_target.as_ref(),
                 )?;
+                if self.resolve_visible_metadata_roles_for_raw_grid(
+                    pane_id,
+                    generation,
+                    &raw_file_grid,
+                    VISIBLE_METADATA_ROLE_SYNC_BUDGET,
+                ) {
+                    model_data_generation = self.panes.pane(pane_id)?.model.data_generation();
+                    raw_file_grid = self.raw_file_grid_snapshot_for_pane(
+                        pane_id,
+                        &view,
+                        filtered,
+                        source_revision,
+                        rename_draft.as_ref(),
+                        item_drop_target.as_ref(),
+                    )?;
+                }
                 let raw_elapsed = raw_started.map(|started| started.elapsed());
                 let visible_count = raw_file_grid
                     .visible_layout_range_and_count()
@@ -1164,7 +1183,6 @@ impl FikaApp {
                 if file_icon_resolve_queued {
                     self.maybe_start_file_icon_resolve(cx);
                 }
-                let mut raw_file_grid = raw_file_grid;
                 raw_file_grid
                     .assign_visible_item_slots(self.visible_item_slots.entry(pane_id).or_default());
                 let convert_started = perf_enabled.then(Instant::now);
@@ -1282,6 +1300,37 @@ impl FikaApp {
             item_drop_target,
             compact_column_widths: self.compact_column_widths.entry(pane_id).or_default(),
         }))
+    }
+
+    fn resolve_visible_metadata_roles_for_raw_grid(
+        &mut self,
+        pane_id: PaneId,
+        generation: Generation,
+        raw_file_grid: &RawFileGridSnapshot,
+        budget: Duration,
+    ) -> bool {
+        let started = Instant::now();
+        let mut results = Vec::new();
+        for candidate in raw_file_grid.visible_metadata_role_candidates() {
+            if started.elapsed() >= budget {
+                break;
+            }
+            let Some(request) = MetadataRoleRequest::from_candidate(pane_id, generation, candidate)
+            else {
+                continue;
+            };
+            results.push(metadata_role_result_for_request(request));
+        }
+
+        if results.is_empty() {
+            return false;
+        }
+
+        let changed = self.finish_metadata_role_results(results);
+        if changed {
+            self.visible_item_snapshot_caches.remove(&pane_id);
+        }
+        changed
     }
 
     fn queue_visible_model_work_for_raw_grid(

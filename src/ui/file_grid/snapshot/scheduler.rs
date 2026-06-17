@@ -173,6 +173,31 @@ mod tests {
     }
 
     #[test]
+    fn visible_metadata_role_candidates_skip_read_ahead_items() {
+        let mut visible = test_raw_visible_item(5, "visible.bin", 4);
+        visible.metadata_complete = true;
+        visible.size_bytes = 12;
+        visible.mime_type = Some(Arc::from("application/octet-stream"));
+        visible.mime_magic_checked = false;
+        let mut read_ahead = test_raw_visible_item(6, "ahead.bin", 5);
+        read_ahead.visible = false;
+        read_ahead.metadata_complete = true;
+        read_ahead.size_bytes = 12;
+        read_ahead.mime_type = Some(Arc::from("application/octet-stream"));
+        read_ahead.mime_magic_checked = false;
+        let raw_file_grid = RawFileGridSnapshot::Icons {
+            layout: IconsLayout::new(6, fika_core::IconsLayoutOptions::default()),
+            items: vec![visible, read_ahead],
+        };
+
+        let candidates = raw_file_grid.visible_metadata_role_candidates();
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].item_id, ItemId(5));
+        assert_eq!(candidates[0].path, PathBuf::from("/tmp/visible.bin"));
+    }
+
+    #[test]
     fn raw_file_grid_snapshot_does_not_queue_directory_metadata_role() {
         let mut directory = test_raw_visible_item(1, "Documents", 0);
         directory.is_dir = true;

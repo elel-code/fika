@@ -58,6 +58,15 @@ the render frame.
   path, the painter first tries a retained image for the same MIME icon name.
   This avoids the probabilistic fallback flash seen while scrolling or zooming
   image-backed MIME icons.
+- Directory-load MIME icon stability now follows Dolphin's visible-widget
+  boundary. Dolphin avoids expensive `KFileItem::iconName()` in
+  `KFileItemModel::retrieveData()` when MIME is unknown, but
+  `KFileItemModelRolesUpdater::startUpdating()` calls `updateVisibleIcons()`
+  and `KFileItemListView::initializeItemListWidget()` fills `iconName` for
+  widgets that are actually created. Fika mirrors that by resolving visible
+  generic MIME metadata synchronously within a small frame budget before
+  queueing background metadata work; read-ahead and offscreen items still use
+  the asynchronous role scheduler.
 
 ### Open Verification Work
 
@@ -73,6 +82,8 @@ the render frame.
   - warm scroll/zoom `convert=` is not dominated by synchronous icon work
   - `[fika item-image]` appears when image-backed items are present
   - no repeated blank thumbnail/icon frame is visible during zoom
+  - loading a directory does not show a visible cascade from preliminary MIME
+    icons to resolved MIME icons for the initial visible range
   - cold first-frame work is separated from steady scroll/zoom phases
 - Keep comparing against Dolphin source before moving more work into custom
   paint. If a GPUI built-in renderer is faster for a surface, keep the retained

@@ -113,6 +113,13 @@ same-kind cached icon snapshot from another size as a transition while the
 exact-size request stays queued. This avoids a fallback-marker flash between
 two real theme icons.
 
+Directory-load MIME metadata now follows Dolphin's visible-widget exception to
+that async rule. Dolphin keeps full role resolution asynchronous, but
+`updateVisibleIcons()`/`initializeItemListWidget()` synchronously gives created
+visible items an `iconName`. Fika mirrors this by resolving only visible generic
+MIME metadata within a small frame budget before queueing the remaining
+metadata work. Read-ahead and offscreen items remain scheduler-owned.
+
 Image-backed icon work follows the same visual stability rule. Thumbnail probe
 success and failure remain model roles, but the image paint layers now keep a
 real decoded image through transient GPUI image-cache misses whenever the

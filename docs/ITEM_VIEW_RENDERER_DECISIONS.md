@@ -71,6 +71,14 @@ Fika's custom image painters must preserve that behavior with retained images
 keyed by MIME/theme `iconName`; thumbnail retention remains keyed by the exact
 thumbnail path.
 
+For directory-load MIME icon switching, compare against
+`KFileItemModel::retrieveData()`, `KFileItemModelRolesUpdater::updateVisibleIcons()`,
+and `KFileItemListView::initializeItemListWidget()`: Dolphin does not resolve
+all model roles synchronously, but it does give created visible widgets an
+`iconName` before the async `ResolveAll` pass walks the rest. Fika should keep
+the same split: visible generic MIME metadata may be resolved synchronously
+within a bounded budget; read-ahead/offscreen metadata remains queued.
+
 ## Next Renderer Decisions
 
 1. Keep the remaining drag-start shells until the GPUI API boundary changes.
