@@ -248,12 +248,14 @@ For non-destructive Places target-projection smoke, run:
 
 ```sh
 FIKA_PERF_PLACES_VIEW=1 FIKA_AUTOSMOKE_PLACES=targets cargo run -- /etc 2>&1 | tee /tmp/fika-places-targets.log
+scripts/analyze-places-perf.sh --require-autosmoke --expect-current-gpui-policy /tmp/fika-places-targets.log
 ```
 
 This should emit `[fika autosmoke] places` markers for place target,
 insert-start, insert-end, clear, and snapshot counts. It does not reorder or
 persist Places entries; full reorder/drop smoke still needs isolated config or
-manual review.
+manual review. The analyzer verifies the current GPUI row renderer policy,
+slot projection stability, and target/insert/clear snapshot counts.
 
 After a passing runtime review, update
 `docs/ITEM_VIEW_RENDERER_DECISIONS.md` with the evidence for any surface whose
@@ -265,6 +267,7 @@ The runtime-log gate and analyzer itself can be checked with:
 scripts/check-item-view-runtime-log.sh --help
 scripts/summarize-item-view-renderer-evidence.sh --help
 scripts/check-item-view-perf-analyzer.sh
+scripts/check-places-perf-analyzer.sh
 ```
 
 ## Decision Gate

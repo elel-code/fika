@@ -101,7 +101,8 @@ retained Places row surface with the same separations as file-grid:
 2026-06-17 desktop-session command:
 
 ```bash
-timeout 5s env FIKA_PERF_PLACES_VIEW=1 target/debug/fika /etc
+timeout 5s env FIKA_PERF_PLACES_VIEW=1 target/debug/fika /etc > /tmp/fika-places-baseline.log 2>&1
+scripts/analyze-places-perf.sh --expect-current-gpui-policy /tmp/fika-places-baseline.log
 ```
 
 The current GPUI sidebar logs `source=11 visible=11 sections=2`, with
@@ -124,7 +125,8 @@ for drop or insert state without content or geometry churn.
 2026-06-17 desktop-session command:
 
 ```bash
-timeout 5s env FIKA_PERF_PLACES_VIEW=1 FIKA_AUTOSMOKE_PLACES=targets target/debug/fika /etc
+timeout 5s env FIKA_PERF_PLACES_VIEW=1 FIKA_AUTOSMOKE_PLACES=targets target/debug/fika /etc > /tmp/fika-places-targets.log 2>&1
+scripts/analyze-places-perf.sh --require-autosmoke --expect-current-gpui-policy /tmp/fika-places-targets.log
 ```
 
 Expected markers:
@@ -145,6 +147,14 @@ Expected markers:
 This smoke is deliberately non-destructive. A later Places smoke can cover
 actual reorder/drop persistence only after it can run with isolated user-place
 configuration or an explicit test fixture.
+
+The analyzer summary for the current GPUI baseline should include:
+
+```text
+places_slots_frames=... max_inserted=13 max_content=0 max_geometry=0 max_visual=2 max_unchanged=13 max_removed=0
+places_renderer_policy_frames=... max_row_gpui=11 max_row_visual_layer=0 max_icon_gpui=11 max_retained_interaction=0 max_drag_shell=11
+places_autosmoke target=1 insert_start=1 insert_end=1 clear=1 snapshots=1,1,1,1,1
+```
 
 ## Acceptance Gates
 

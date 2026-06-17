@@ -1,0 +1,376 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+    cat <<'EOF'
+Usage: analyze-places-perf.sh [OPTIONS] LOG
+       FIKA_PERF_PLACES_VIEW=1 FIKA_AUTOSMOKE_PLACES=targets target/debug/fika /etc 2>&1 | analyze-places-perf.sh [OPTIONS] -
+
+Summarizes FIKA_PERF_PLACES_VIEW logs and optionally enforces Places renderer
+baseline gates.
+
+Options:
+  --require-autosmoke
+      Fail unless the non-destructive FIKA_AUTOSMOKE_PLACES=targets markers are
+      present and show target/insert/clear projection.
+
+  --expect-current-gpui-policy
+      Fail unless [fika places-renderer-policy] matches the current GPUI row
+      renderer baseline: row_gpui/icon_gpui/drag_shell equal rows,
+      row_visual_layer=0, retained_interaction=0, section_gpui=sections, and
+      scrollbar_canvas=1.
+
+  --snapshot-us N
+      Fail if any [fika places-view] snapshot exceeds N microseconds.
+
+  --sidebar-build-us N
+      Fail if any [fika places-sidebar] build exceeds N microseconds.
+
+  --slot-project-us N
+      Fail if any [fika places-slots] project exceeds N microseconds.
+
+  -h, --help
+      Show this help.
+EOF
+}
+
+require_autosmoke=false
+expect_current_gpui_policy=false
+snapshot_us=""
+sidebar_build_us=""
+slot_project_us=""
+log_path=""
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --require-autosmoke)
+            require_autosmoke=true
+            ;;
+        --expect-current-gpui-policy)
+            expect_current_gpui_policy=true
+            ;;
+        --snapshot-us)
+            if [[ $# -lt 2 || "$2" == --* ]]; then
+                echo "--snapshot-us requires a numeric value" >&2
+                usage >&2
+                exit 2
+            fi
+            snapshot_us="$2"
+            shift
+            ;;
+        --snapshot-us=*)
+            snapshot_us="${1#--snapshot-us=}"
+            ;;
+        --sidebar-build-us)
+            if [[ $# -lt 2 || "$2" == --* ]]; then
+                echo "--sidebar-build-us requires a numeric value" >&2
+                usage >&2
+                exit 2
+            fi
+            sidebar_build_us="$2"
+            shift
+            ;;
+        --sidebar-build-us=*)
+            sidebar_build_us="${1#--sidebar-build-us=}"
+            ;;
+        --slot-project-us)
+            if [[ $# -lt 2 || "$2" == --* ]]; then
+                echo "--slot-project-us requires a numeric value" >&2
+                usage >&2
+                exit 2
+            fi
+            slot_project_us="$2"
+            shift
+            ;;
+        --slot-project-us=*)
+            slot_project_us="${1#--slot-project-us=}"
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        --*)
+            echo "unknown argument: $1" >&2
+            usage >&2
+            exit 2
+            ;;
+        *)
+            if [[ -n "$log_path" ]]; then
+                echo "only one LOG path is supported" >&2
+                usage >&2
+                exit 2
+            fi
+            log_path="$1"
+            ;;
+    esac
+    shift
+done
+
+if [[ -z "$log_path" ]]; then
+    echo "LOG path is required; use - for stdin" >&2
+    usage >&2
+    exit 2
+fi
+
+for value_name in snapshot_us sidebar_build_us slot_project_us; do
+    value="${!value_name}"
+    if [[ -n "$value" && ! "$value" =~ ^[0-9]+$ ]]; then
+        echo "--${value_name//_/-} must be an integer microsecond value" >&2
+        exit 2
+    fi
+done
+
+awk \
+    -v require_autosmoke="$require_autosmoke" \
+    -v expect_current_gpui_policy="$expect_current_gpui_policy" \
+    -v snapshot_limit="$snapshot_us" \
+    -v sidebar_build_limit="$sidebar_build_us" \
+    -v slot_project_limit="$slot_project_us" '
+function field(name,    prefix, i, value) {
+    prefix = name "="
+    for (i = 1; i <= NF; i++) {
+        if (index($i, prefix) == 1) {
+            value = substr($i, length(prefix) + 1)
+            gsub(/,$/, "", value)
+            gsub(/us$/, "", value)
+            return value
+        }
+    }
+    return ""
+}
+
+function max_update(name, value) {
+    value += 0
+    if (!(name in max_values) || value > max_values[name]) {
+        max_values[name] = value
+    }
+}
+
+function fail(message) {
+    print "error: " message > "/dev/stderr"
+    exit_code = 1
+}
+
+/^\[fika places-view\]/ {
+    places_view_frames++
+    source = field("source") + 0
+    visible = field("visible") + 0
+    sections = field("sections") + 0
+    snapshot = field("snapshot") + 0
+    max_update("snapshot", snapshot)
+    max_update("source", source)
+    max_update("visible", visible)
+    max_update("sections", sections)
+}
+
+/^\[fika places-sidebar\]/ {
+    sidebar_frames++
+    rows = field("rows") + 0
+    sections = field("sections") + 0
+    elements = field("elements") + 0
+    build = field("build") + 0
+    max_update("sidebar_rows", rows)
+    max_update("sidebar_sections", sections)
+    max_update("sidebar_elements", elements)
+    max_update("sidebar_build", build)
+    last_sidebar_sections = sections
+}
+
+/^\[fika places-slots\]/ {
+    slot_frames++
+    rows = field("rows") + 0
+    sections = field("sections") + 0
+    entries = field("entries") + 0
+    inserted = field("inserted") + 0
+    content = field("content") + 0
+    geometry = field("geometry") + 0
+    visual = field("visual") + 0
+    unchanged = field("unchanged") + 0
+    removed = field("removed") + 0
+    project = field("project") + 0
+    if (inserted > 0) {
+        slot_inserted_frame_seen = 1
+    }
+    if (unchanged > 0) {
+        slot_unchanged_frame_seen = 1
+    }
+    if (visual > 0) {
+        slot_visual_frame_seen = 1
+    }
+    max_update("slot_rows", rows)
+    max_update("slot_sections", sections)
+    max_update("slot_entries", entries)
+    max_update("slot_inserted", inserted)
+    max_update("slot_content", content)
+    max_update("slot_geometry", geometry)
+    max_update("slot_visual", visual)
+    max_update("slot_unchanged", unchanged)
+    max_update("slot_removed", removed)
+    max_update("slot_project", project)
+}
+
+/^\[fika places-renderer-policy\]/ {
+    policy_frames++
+    rows = field("rows") + 0
+    row_gpui = field("row_gpui") + 0
+    row_visual_layer = field("row_visual_layer") + 0
+    icon_gpui = field("icon_gpui") + 0
+    retained_interaction = field("retained_interaction") + 0
+    drag_shell = field("drag_shell") + 0
+    section_gpui = field("section_gpui") + 0
+    scrollbar_canvas = field("scrollbar_canvas") + 0
+    max_update("policy_rows", rows)
+    max_update("policy_row_gpui", row_gpui)
+    max_update("policy_row_visual_layer", row_visual_layer)
+    max_update("policy_icon_gpui", icon_gpui)
+    max_update("policy_retained_interaction", retained_interaction)
+    max_update("policy_drag_shell", drag_shell)
+    max_update("policy_section_gpui", section_gpui)
+    max_update("policy_scrollbar_canvas", scrollbar_canvas)
+    if (expect_current_gpui_policy == "true") {
+        if (row_gpui != rows || icon_gpui != rows || drag_shell != rows ||
+            row_visual_layer != 0 || retained_interaction != 0 ||
+            section_gpui != last_sidebar_sections || scrollbar_canvas != 1) {
+            policy_invalid = 1
+        }
+    }
+}
+
+/^\[fika autosmoke\] places start scenario=DropTargets/ {
+    autosmoke_start_seen = 1
+}
+
+/^\[fika autosmoke\] places complete scenario=DropTargets/ {
+    autosmoke_complete_seen = 1
+}
+
+/^\[fika autosmoke\] places action=/ {
+    action = field("action")
+    changed = field("changed")
+    if (action == "target-first-place" && changed == "true") {
+        autosmoke_target_action_seen = 1
+    } else if (action == "target-insert-start" && changed == "true") {
+        autosmoke_insert_start_action_seen = 1
+    } else if (action == "target-insert-end" && changed == "true") {
+        autosmoke_insert_end_action_seen = 1
+    } else if (action == "clear-targets" && changed == "true") {
+        autosmoke_clear_action_seen = 1
+    }
+}
+
+/^\[fika autosmoke\] places snapshot=/ {
+    snapshot_label = field("snapshot")
+    place_targets = field("place_targets") + 0
+    insert_before = field("insert_before") + 0
+    insert_after = field("insert_after") + 0
+    if (snapshot_label == "initial" && place_targets == 0 && insert_before == 0 && insert_after == 0) {
+        autosmoke_initial_seen = 1
+    } else if (snapshot_label == "after-place-target" && place_targets > 0 && insert_before == 0 && insert_after == 0) {
+        autosmoke_after_place_target_seen = 1
+    } else if (snapshot_label == "after-insert-start" && place_targets == 0 && insert_before > 0 && insert_after == 0) {
+        autosmoke_after_insert_start_seen = 1
+    } else if (snapshot_label == "after-insert-end" && place_targets == 0 && insert_before == 0 && insert_after > 0) {
+        autosmoke_after_insert_end_seen = 1
+    } else if (snapshot_label == "after-clear" && place_targets == 0 && insert_before == 0 && insert_after == 0) {
+        autosmoke_after_clear_seen = 1
+    }
+}
+
+END {
+    if (places_view_frames == 0) {
+        fail("missing [fika places-view] logs")
+    }
+    if (sidebar_frames == 0) {
+        fail("missing [fika places-sidebar] logs")
+    }
+    if (slot_frames == 0) {
+        fail("missing [fika places-slots] logs")
+    }
+    if (policy_frames == 0) {
+        fail("missing [fika places-renderer-policy] logs")
+    }
+    if (!slot_inserted_frame_seen) {
+        fail("missing initial inserted places slot frame")
+    }
+    if (!slot_unchanged_frame_seen) {
+        fail("missing steady unchanged places slot frame")
+    }
+    if (expect_current_gpui_policy == "true" && policy_invalid) {
+        fail("places renderer policy does not match current GPUI baseline")
+    }
+    if (snapshot_limit != "" && max_values["snapshot"] > snapshot_limit) {
+        fail("places snapshot exceeded threshold: " max_values["snapshot"] "us > " snapshot_limit "us")
+    }
+    if (sidebar_build_limit != "" && max_values["sidebar_build"] > sidebar_build_limit) {
+        fail("places sidebar build exceeded threshold: " max_values["sidebar_build"] "us > " sidebar_build_limit "us")
+    }
+    if (slot_project_limit != "" && max_values["slot_project"] > slot_project_limit) {
+        fail("places slot projection exceeded threshold: " max_values["slot_project"] "us > " slot_project_limit "us")
+    }
+    if (require_autosmoke == "true") {
+        if (!autosmoke_start_seen || !autosmoke_complete_seen) {
+            fail("missing Places autosmoke start/complete markers")
+        }
+        if (!autosmoke_target_action_seen || !autosmoke_insert_start_action_seen ||
+            !autosmoke_insert_end_action_seen || !autosmoke_clear_action_seen) {
+            fail("missing Places autosmoke action markers")
+        }
+        if (!autosmoke_initial_seen || !autosmoke_after_place_target_seen ||
+            !autosmoke_after_insert_start_seen || !autosmoke_after_insert_end_seen ||
+            !autosmoke_after_clear_seen) {
+            fail("missing or invalid Places autosmoke snapshot projections")
+        }
+        if (!slot_visual_frame_seen) {
+            fail("Places autosmoke did not produce a visual slot-change frame")
+        }
+    }
+    if (exit_code) {
+        exit exit_code
+    }
+
+    printf("places_view_frames=%d max_source=%d max_visible=%d max_sections=%d max_snapshot=%dus\n",
+        places_view_frames,
+        max_values["source"],
+        max_values["visible"],
+        max_values["sections"],
+        max_values["snapshot"])
+    printf("places_sidebar_frames=%d max_rows=%d max_sections=%d max_elements=%d max_build=%dus\n",
+        sidebar_frames,
+        max_values["sidebar_rows"],
+        max_values["sidebar_sections"],
+        max_values["sidebar_elements"],
+        max_values["sidebar_build"])
+    printf("places_slots_frames=%d max_rows=%d max_sections=%d max_entries=%d max_inserted=%d max_content=%d max_geometry=%d max_visual=%d max_unchanged=%d max_removed=%d max_project=%dus\n",
+        slot_frames,
+        max_values["slot_rows"],
+        max_values["slot_sections"],
+        max_values["slot_entries"],
+        max_values["slot_inserted"],
+        max_values["slot_content"],
+        max_values["slot_geometry"],
+        max_values["slot_visual"],
+        max_values["slot_unchanged"],
+        max_values["slot_removed"],
+        max_values["slot_project"])
+    printf("places_renderer_policy_frames=%d max_rows=%d max_row_gpui=%d max_row_visual_layer=%d max_icon_gpui=%d max_retained_interaction=%d max_drag_shell=%d max_section_gpui=%d max_scrollbar_canvas=%d\n",
+        policy_frames,
+        max_values["policy_rows"],
+        max_values["policy_row_gpui"],
+        max_values["policy_row_visual_layer"],
+        max_values["policy_icon_gpui"],
+        max_values["policy_retained_interaction"],
+        max_values["policy_drag_shell"],
+        max_values["policy_section_gpui"],
+        max_values["policy_scrollbar_canvas"])
+    printf("places_autosmoke target=%d insert_start=%d insert_end=%d clear=%d snapshots=%d,%d,%d,%d,%d\n",
+        autosmoke_target_action_seen,
+        autosmoke_insert_start_action_seen,
+        autosmoke_insert_end_action_seen,
+        autosmoke_clear_action_seen,
+        autosmoke_initial_seen,
+        autosmoke_after_place_target_seen,
+        autosmoke_after_insert_start_seen,
+        autosmoke_after_insert_end_seen,
+        autosmoke_after_clear_seen)
+}
+' "$log_path"

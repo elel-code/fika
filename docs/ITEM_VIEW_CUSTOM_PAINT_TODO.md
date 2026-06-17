@@ -559,10 +559,16 @@ by risk and evidence, not by how custom-painted a surface looks.
   `places/interaction.rs` now returns shared target/cursor decisions for
   item/external path drops and place reorders. The GPUI row/section shells still
   provide event delivery, bounds, and drag start.
-- [ ] P16p: After every P16 implementation slice, commit separately with the
+- [x] P16p: Add a Places perf/autosmoke analyzer before benchmarking a custom
+  row painter. `scripts/analyze-places-perf.sh` now summarizes
+  `[fika places-view]`, `[fika places-sidebar]`, `[fika places-slots]`,
+  `[fika places-renderer-policy]`, and non-destructive Places autosmoke
+  markers. `scripts/check-places-perf-analyzer.sh` covers the analyzer gates.
+- [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,
-  `scripts/check-item-view-perf-analyzer.sh`, and `git diff --check`.
+  `scripts/check-item-view-perf-analyzer.sh`,
+  `scripts/check-places-perf-analyzer.sh`, and `git diff --check`.
 
 ## Acceptance Gates
 
