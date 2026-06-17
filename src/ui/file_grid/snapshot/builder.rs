@@ -21,7 +21,7 @@ use crate::ui::rename::RenameDraft;
 use fika_core::{DirectoryModel, FilteredModel, ItemLayout, PaneId, SelectionState, ViewMode};
 
 const ITEM_VIEW_WORK_READ_AHEAD_PAGES: usize = 2;
-const ITEM_VIEW_MAX_WORK_ITEMS: usize = 160;
+const ITEM_VIEW_MAX_WORK_ITEMS: usize = 100;
 
 pub(crate) fn raw_file_grid_snapshot(input: RawFileGridSnapshotInput<'_>) -> RawFileGridSnapshot {
     let RawFileGridSnapshotInput {
