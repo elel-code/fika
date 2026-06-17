@@ -476,11 +476,11 @@ by risk and evidence, not by how custom-painted a surface looks.
   Done so far: the `FIKA_PERF_ITEM_VIEW` flag and file-grid perf-layer callers
   are owned by `src/ui/file_grid/perf.rs`; item-view perf frame classification
   and perf-state cleanup are owned by `src/ui/file_grid/perf.rs`; frame-state
-  storage and render summary emission still live in `src/main.rs`; autosmoke
-  scenario parsing and action sequencing now live in
-  `src/ui/file_grid/autosmoke.rs`. Next concrete target: move item-view perf
-  summary emission behind file-grid/runtime evidence helpers so `main.rs` no
-  longer owns item-view diagnostic orchestration.
+  storage still lives in `src/main.rs`; item-view perf summary emission is now
+  owned by `src/ui/file_grid/perf.rs`; autosmoke scenario parsing and action
+  sequencing now live in `src/ui/file_grid/autosmoke.rs`. Next concrete target:
+  move the remaining frame-state storage behind a file-grid runtime evidence
+  state holder so `main.rs` no longer owns item-view diagnostic orchestration.
 - [ ] P16h: Draft a Places retained row painter design before changing Places
   rendering. The design must cover row groups, hidden sections, device rows,
   reorder/drop insertion, context menus, and sidebar scroll.

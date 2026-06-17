@@ -88,6 +88,58 @@ pub(crate) fn classify_item_view_perf_phase(
     ItemViewPerfPhase::Steady
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ItemViewPerfLogFrame {
+    pub(crate) pane_id: PaneId,
+    pub(crate) mode: ViewMode,
+    pub(crate) phase: Option<ItemViewPerfPhase>,
+    pub(crate) item_count: usize,
+    pub(crate) visible_count: usize,
+    pub(crate) raw_elapsed: Option<Duration>,
+    pub(crate) icon_sync_elapsed: Option<Duration>,
+    pub(crate) queue_elapsed: Option<Duration>,
+    pub(crate) convert_elapsed: Option<Duration>,
+    pub(crate) total_elapsed: Duration,
+    pub(crate) slot_stats: ItemPaintSlotStats,
+}
+
+pub(crate) fn emit_item_view_perf_log(frame: ItemViewPerfLogFrame) {
+    eprintln!(
+        "[fika item-view] pane={} mode={:?} phase={} items={} visible={} raw={}us icon_sync={}us queue={}us convert={}us total={}us",
+        frame.pane_id.0,
+        frame.mode,
+        frame
+            .phase
+            .map(ItemViewPerfPhase::label)
+            .unwrap_or("unknown"),
+        frame.item_count,
+        frame.visible_count,
+        duration_micros(frame.raw_elapsed),
+        duration_micros(frame.icon_sync_elapsed),
+        duration_micros(frame.queue_elapsed),
+        duration_micros(frame.convert_elapsed),
+        frame.total_elapsed.as_micros(),
+    );
+    if frame.slot_stats.has_activity() {
+        eprintln!(
+            "[fika item-paint-slots] pane={} mode={:?} inserted={} content={} geometry={} visual={} unchanged={} removed={} entries={}",
+            frame.pane_id.0,
+            frame.mode,
+            frame.slot_stats.inserted,
+            frame.slot_stats.content_changed,
+            frame.slot_stats.geometry_changed,
+            frame.slot_stats.visual_changed,
+            frame.slot_stats.unchanged,
+            frame.slot_stats.removed,
+            frame.slot_stats.entries,
+        );
+    }
+}
+
+fn duration_micros(duration: Option<Duration>) -> u128 {
+    duration.map_or(0, |elapsed| elapsed.as_micros())
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct ItemLayerPerfStats {
     pub(crate) prepaint_count: usize,

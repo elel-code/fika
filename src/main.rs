@@ -1272,9 +1272,9 @@ impl FikaApp {
                 );
                 self.visible_item_snapshot_caches
                     .insert(pane_id, visible_item_cache);
-                let hovered_item = self
-                    .hovered_item
-                    .and_then(|(hovered_pane, item_id)| (hovered_pane == pane_id).then_some(item_id));
+                let hovered_item = self.hovered_item.and_then(|(hovered_pane, item_id)| {
+                    (hovered_pane == pane_id).then_some(item_id)
+                });
                 let item_paint_slot_projection = self
                     .item_paint_slots
                     .entry(pane_id)
@@ -1296,35 +1296,19 @@ impl FikaApp {
                 let convert_elapsed = convert_started.map(|started| started.elapsed());
                 let status_bar = self.status_bar_snapshot_for_pane(pane_id, cx);
                 if let Some(pane_started) = pane_started {
-                    eprintln!(
-                        "[fika item-view] pane={} mode={:?} phase={} items={} visible={} raw={}us icon_sync={}us queue={}us convert={}us total={}us",
-                        pane_id.0,
-                        view.view_mode,
-                        item_view_perf_phase
-                            .map(|phase| phase.label())
-                            .unwrap_or("unknown"),
+                    ui::file_grid::emit_item_view_perf_log(ui::file_grid::ItemViewPerfLogFrame {
+                        pane_id,
+                        mode: view.view_mode,
+                        phase: item_view_perf_phase,
                         item_count,
                         visible_count,
-                        raw_elapsed.map_or(0, |elapsed| elapsed.as_micros()),
-                        icon_sync_elapsed.map_or(0, |elapsed| elapsed.as_micros()),
-                        queue_elapsed.map_or(0, |elapsed| elapsed.as_micros()),
-                        convert_elapsed.map_or(0, |elapsed| elapsed.as_micros()),
-                        pane_started.elapsed().as_micros(),
-                    );
-                    if item_paint_slot_stats.has_activity() {
-                        eprintln!(
-                            "[fika item-paint-slots] pane={} mode={:?} inserted={} content={} geometry={} visual={} unchanged={} removed={} entries={}",
-                            pane_id.0,
-                            view.view_mode,
-                            item_paint_slot_stats.inserted,
-                            item_paint_slot_stats.content_changed,
-                            item_paint_slot_stats.geometry_changed,
-                            item_paint_slot_stats.visual_changed,
-                            item_paint_slot_stats.unchanged,
-                            item_paint_slot_stats.removed,
-                            item_paint_slot_stats.entries,
-                        );
-                    }
+                        raw_elapsed,
+                        icon_sync_elapsed,
+                        queue_elapsed,
+                        convert_elapsed,
+                        total_elapsed: pane_started.elapsed(),
+                        slot_stats: item_paint_slot_stats,
+                    });
                 }
                 Some(PaneSnapshot {
                     id: pane_id,
