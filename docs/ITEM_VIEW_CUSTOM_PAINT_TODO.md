@@ -241,6 +241,9 @@ This is the active task board for the GPUI item view custom-paint migration.
   centralized.
 - [x] Extract file-grid wheel, pane navigation, and item mouse-down controller
   decisions into `src/ui/file_grid/controller.rs`.
+- [x] Move Compact/Icons layout option builders and Dolphin sizing constants
+  into `src/ui/file_grid/layout.rs` so layout policy is no longer owned by the
+  main renderer surface.
 - [x] Extract Compact/Icons image paint layer into
   `src/ui/file_grid/image_layer.rs` so image-cache prepaint and image/fallback
   painting are no longer owned by the main file-grid surface.

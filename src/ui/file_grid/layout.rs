@@ -2,9 +2,21 @@ use crate::ui::rename::{RENAME_TEXT_INSET_X, RenameDraft};
 
 use fika_core::{
     CompactColumnMetrics, CompactLayout, CompactLayoutOptions, IconsLayout, IconsLayoutOptions,
+    ViewState,
 };
 use std::ops::Range;
 
+pub(crate) const ITEM_NAME_LINE_HEIGHT: f32 = 18.0;
+const DEFAULT_TILE_TEXT_HEIGHT: f32 = 40.0;
+const DOLPHIN_ITEM_PADDING: f32 = 2.0;
+const DOLPHIN_ICON_TEXT_WIDTH_INDEX: f32 = 1.0;
+const DOLPHIN_ICON_FONT_FACTOR: f32 = 1.0;
+const DOLPHIN_ICON_MARGIN: f32 = 8.0;
+pub(crate) const DOLPHIN_ICON_MAX_TEXT_LINES: usize = 3;
+const DOLPHIN_COMPACT_SIDE_PADDING: f32 = 8.0;
+const DOLPHIN_COMPACT_COLUMN_GAP: f32 = 8.0;
+const DOLPHIN_COMPACT_TEXT_GAP: f32 = DOLPHIN_ITEM_PADDING * 2.0;
+const DOLPHIN_COMPACT_BASE_TEXT_WIDTH: f32 = ITEM_NAME_LINE_HEIGHT * 5.0;
 const AVERAGE_COMPACT_CHAR_WIDTH: f32 = 8.5;
 const DOLPHIN_WRAP_OPPORTUNITY: char = '\u{200B}';
 const DOLPHIN_ELISION_MARKER: &str = "\u{2026}";
@@ -197,6 +209,60 @@ pub(crate) fn compact_text_width_for_name(name: &str) -> f32 {
     name.chars().map(estimated_name_char_width).sum()
 }
 
+pub(crate) fn compact_layout_options(
+    view: &ViewState,
+    reserved_bottom: f32,
+) -> CompactLayoutOptions {
+    let icon_size = view.icon_size();
+    let padding = DOLPHIN_ITEM_PADDING;
+    let side_padding = DOLPHIN_COMPACT_SIDE_PADDING;
+    let gap = DOLPHIN_COMPACT_COLUMN_GAP;
+    let text_gap = DOLPHIN_COMPACT_TEXT_GAP;
+    let text_height = DEFAULT_TILE_TEXT_HEIGHT;
+    CompactLayoutOptions {
+        viewport_width: view.viewport_width.max(1.0),
+        viewport_height: view.viewport_height.max(1.0),
+        reserved_bottom,
+        scroll_x: view.scroll_x,
+        scroll_y: view.scroll_y,
+        padding,
+        side_padding,
+        gap,
+        text_gap,
+        item_width: icon_size + DOLPHIN_COMPACT_BASE_TEXT_WIDTH + padding * 2.0 + text_gap,
+        item_height: padding * 2.0 + icon_size.max(text_height),
+        icon_size,
+        text_height,
+        ..CompactLayoutOptions::default()
+    }
+}
+
+pub(crate) fn icons_layout_options(view: &ViewState, reserved_bottom: f32) -> IconsLayoutOptions {
+    let icon_size = view.icon_size();
+    let padding = DOLPHIN_ITEM_PADDING;
+    let gap = DOLPHIN_ICON_MARGIN;
+    let text_height = ITEM_NAME_LINE_HEIGHT * DOLPHIN_ICON_MAX_TEXT_LINES as f32;
+    let zoom_factor = (view.zoom_level as f32 / 13.0).exp();
+    let item_width = (16.0
+        + DOLPHIN_ICON_TEXT_WIDTH_INDEX * 64.0 * DOLPHIN_ICON_FONT_FACTOR * zoom_factor)
+        .max(icon_size + padding * 2.0 * zoom_factor)
+        .floor();
+    IconsLayoutOptions {
+        viewport_width: view.viewport_width.max(1.0),
+        viewport_height: view.viewport_height.max(1.0),
+        reserved_bottom,
+        scroll_x: view.scroll_x,
+        scroll_y: view.scroll_y,
+        padding,
+        gap,
+        item_width,
+        item_height: padding * 3.0 + icon_size + text_height,
+        icon_size,
+        text_height,
+        ..IconsLayoutOptions::default()
+    }
+}
+
 fn estimated_name_char_width(ch: char) -> f32 {
     match ch {
         DOLPHIN_WRAP_OPPORTUNITY => 0.0,
@@ -213,7 +279,7 @@ fn estimated_name_char_width(ch: char) -> f32 {
 
 #[cfg(test)]
 pub(crate) fn item_name_text_height_for_name(name: &str, available_text_width: f32) -> f32 {
-    wrapped_item_name_line_count(name, available_text_width) as f32 * super::ITEM_NAME_LINE_HEIGHT
+    wrapped_item_name_line_count(name, available_text_width) as f32 * ITEM_NAME_LINE_HEIGHT
 }
 
 pub(crate) fn icon_name_display_lines(
@@ -541,7 +607,7 @@ pub(crate) fn icons_layout_options_for_model(
     _rename_draft: Option<&RenameDraft>,
     reserved_bottom: f32,
 ) -> IconsLayoutOptions {
-    super::icons_layout_options(view, reserved_bottom)
+    icons_layout_options(view, reserved_bottom)
 }
 
 pub(crate) fn icons_layout_for_model(
@@ -570,7 +636,7 @@ fn compact_layout_options_for_model_view(
     view: &fika_core::ViewState,
     _text_override: Option<CompactTextWidthOverride>,
 ) -> CompactLayoutOptions {
-    super::compact_layout_options(view, 0.0)
+    compact_layout_options(view, 0.0)
 }
 
 #[cfg(test)]
@@ -611,7 +677,7 @@ mod tests {
 
         assert_eq!(
             item_name_text_height_for_name(name, available_width),
-            super::super::ITEM_NAME_LINE_HEIGHT * 3.0
+            ITEM_NAME_LINE_HEIGHT * 3.0
         );
     }
 
@@ -675,8 +741,7 @@ mod tests {
         let base_options = crate::ui::file_grid::icons_layout_options(&view, 0.0);
 
         let layout = icons_layout_for_model(&model, None, model.len(), &view, None, 0.0);
-        let expected_text_height =
-            super::super::ITEM_NAME_LINE_HEIGHT * super::super::DOLPHIN_ICON_MAX_TEXT_LINES as f32;
+        let expected_text_height = ITEM_NAME_LINE_HEIGHT * DOLPHIN_ICON_MAX_TEXT_LINES as f32;
 
         assert_eq!(base_options.text_height, expected_text_height);
         assert_eq!(

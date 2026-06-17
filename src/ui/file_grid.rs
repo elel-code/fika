@@ -24,8 +24,12 @@ pub(crate) use details::{
 pub(crate) use details_visual::DetailsTextShapeCache;
 pub(crate) use dnd::ItemDrag;
 pub(crate) use layout::{
-    CompactColumnWidthCache, compact_text_width, compact_text_width_for_name,
-    rename_editor_required_text_width,
+    CompactColumnWidthCache, ITEM_NAME_LINE_HEIGHT, compact_text_width,
+    compact_text_width_for_name, rename_editor_required_text_width,
+};
+#[cfg(test)]
+pub(crate) use layout::{
+    DOLPHIN_ICON_MAX_TEXT_LINES, compact_layout_options, icons_layout_options,
 };
 pub(crate) use paint_slots::{
     DetailsPaintSnapshot, ItemPaintSlotCache, ItemPaintSlotStats, ItemPaintSnapshot,
@@ -45,10 +49,7 @@ pub(crate) use snapshot::{
 pub(crate) use static_visual::StaticItemTextShapeCache;
 
 use crate::FikaApp;
-use fika_core::{
-    CompactLayout, CompactLayoutOptions, IconsLayout, IconsLayoutOptions, ItemId, PaneId, ViewRect,
-    ViewState,
-};
+use fika_core::{CompactLayout, IconsLayout, ItemId, PaneId, ViewRect};
 use gpui::prelude::*;
 use gpui::{
     Context, Div, ParentElement, Rgba, ScrollHandle, Stateful, Window, div, px, retain_all, rgb,
@@ -187,18 +188,6 @@ pub(crate) struct PaneViewportGeometry {
 fn item_identity_element_id(prefix: &'static str, item_id: ItemId) -> (&'static str, u64) {
     (prefix, item_id.0)
 }
-
-pub(crate) const ITEM_NAME_LINE_HEIGHT: f32 = 18.0;
-const DEFAULT_TILE_TEXT_HEIGHT: f32 = 40.0;
-const DOLPHIN_ITEM_PADDING: f32 = 2.0;
-const DOLPHIN_ICON_TEXT_WIDTH_INDEX: f32 = 1.0;
-const DOLPHIN_ICON_FONT_FACTOR: f32 = 1.0;
-const DOLPHIN_ICON_MARGIN: f32 = 8.0;
-pub(crate) const DOLPHIN_ICON_MAX_TEXT_LINES: usize = 3;
-const DOLPHIN_COMPACT_SIDE_PADDING: f32 = 8.0;
-const DOLPHIN_COMPACT_COLUMN_GAP: f32 = 8.0;
-const DOLPHIN_COMPACT_TEXT_GAP: f32 = DOLPHIN_ITEM_PADDING * 2.0;
-const DOLPHIN_COMPACT_BASE_TEXT_WIDTH: f32 = ITEM_NAME_LINE_HEIGHT * 5.0;
 
 pub(crate) fn file_grid(
     props: FileGridProps,
@@ -1713,59 +1702,5 @@ mod tests {
             FileGridMode::Manager,
             2
         ));
-    }
-}
-
-pub(crate) fn compact_layout_options(
-    view: &ViewState,
-    reserved_bottom: f32,
-) -> CompactLayoutOptions {
-    let icon_size = view.icon_size();
-    let padding = DOLPHIN_ITEM_PADDING;
-    let side_padding = DOLPHIN_COMPACT_SIDE_PADDING;
-    let gap = DOLPHIN_COMPACT_COLUMN_GAP;
-    let text_gap = DOLPHIN_COMPACT_TEXT_GAP;
-    let text_height = DEFAULT_TILE_TEXT_HEIGHT;
-    CompactLayoutOptions {
-        viewport_width: view.viewport_width.max(1.0),
-        viewport_height: view.viewport_height.max(1.0),
-        reserved_bottom,
-        scroll_x: view.scroll_x,
-        scroll_y: view.scroll_y,
-        padding,
-        side_padding,
-        gap,
-        text_gap,
-        item_width: icon_size + DOLPHIN_COMPACT_BASE_TEXT_WIDTH + padding * 2.0 + text_gap,
-        item_height: padding * 2.0 + icon_size.max(text_height),
-        icon_size,
-        text_height,
-        ..CompactLayoutOptions::default()
-    }
-}
-
-pub(crate) fn icons_layout_options(view: &ViewState, reserved_bottom: f32) -> IconsLayoutOptions {
-    let icon_size = view.icon_size();
-    let padding = DOLPHIN_ITEM_PADDING;
-    let gap = DOLPHIN_ICON_MARGIN;
-    let text_height = ITEM_NAME_LINE_HEIGHT * DOLPHIN_ICON_MAX_TEXT_LINES as f32;
-    let zoom_factor = (view.zoom_level as f32 / 13.0).exp();
-    let item_width = (16.0
-        + DOLPHIN_ICON_TEXT_WIDTH_INDEX * 64.0 * DOLPHIN_ICON_FONT_FACTOR * zoom_factor)
-        .max(icon_size + padding * 2.0 * zoom_factor)
-        .floor();
-    IconsLayoutOptions {
-        viewport_width: view.viewport_width.max(1.0),
-        viewport_height: view.viewport_height.max(1.0),
-        reserved_bottom,
-        scroll_x: view.scroll_x,
-        scroll_y: view.scroll_y,
-        padding,
-        gap,
-        item_width,
-        item_height: padding * 3.0 + icon_size + text_height,
-        icon_size,
-        text_height,
-        ..IconsLayoutOptions::default()
     }
 }
