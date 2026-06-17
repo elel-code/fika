@@ -5,6 +5,12 @@ use fika_core::{ItemId, MetadataRoleCandidate, mime_magic_resolution_required};
 
 use super::RawFileGridSnapshot;
 
+impl RawFileGridSnapshot {
+    pub(crate) fn visible_metadata_role_candidates(&self) -> Vec<MetadataRoleCandidate> {
+        visible_metadata_role_candidates(self)
+    }
+}
+
 trait MetadataRoleCandidateSource {
     fn item_id(&self) -> ItemId;
     fn path(&self) -> &PathBuf;
@@ -75,7 +81,7 @@ impl MetadataRoleCandidateSource for super::RawDetailsItemSnapshot {
     }
 }
 
-pub(super) fn visible_metadata_role_candidates(
+fn visible_metadata_role_candidates(
     raw_file_grid: &RawFileGridSnapshot,
 ) -> Vec<MetadataRoleCandidate> {
     match raw_file_grid {

@@ -54,12 +54,6 @@ pub(crate) use visible::{VisibleItemSnapshot, VisibleItemSnapshotCache};
 #[cfg(test)]
 use visible::{icon_name_layout_width, icon_name_max_lines};
 
-impl RawFileGridSnapshot {
-    pub(crate) fn visible_metadata_role_candidates(&self) -> Vec<fika_core::MetadataRoleCandidate> {
-        metadata::visible_metadata_role_candidates(self)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
