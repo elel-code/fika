@@ -1,3 +1,4 @@
+mod dnd_helpers;
 mod row;
 mod section;
 

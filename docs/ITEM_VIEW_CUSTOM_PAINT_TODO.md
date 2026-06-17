@@ -433,7 +433,9 @@ pretending that every remaining GPUI boundary can be removed safely today.
   renderer-policy logs exist, and `FIKA_AUTOSMOKE_PLACES=targets` covers
   non-persistent target/insert projection. `PlacePaintSlotCache` now records
   retained row/section slots and `[fika places-slots]` stats; no retained/custom
-  row painter has been benchmarked yet.
+  row painter has been benchmarked yet. `places/interaction.rs` now owns the
+  row/section target decision, while GPUI shells still provide event delivery
+  and bounds.
 - [ ] P15f: Keep rename on GPUI until a custom text-editing plan covers focus,
   caret hit testing, UTF-8 selection, validation, commit/cancel, Tab rename-next,
   and IME. Do not merge a custom rename painter without that behavior matrix.
@@ -552,7 +554,12 @@ by risk and evidence, not by how custom-painted a surface looks.
   stable semantic identity, preferring device id for device rows and path/group
   for normal rows. `[fika places-slots]` now reports inserted/content/
   geometry/visual/unchanged/removed slot activity for the current GPUI sidebar.
-- [ ] P16o: After every P16 implementation slice, commit separately with the
+- [x] P16o: Extract Places row/section target decisions out of GPUI row
+  closures before any retained hitbox or custom row painter work.
+  `places/interaction.rs` now returns shared target/cursor decisions for
+  item/external path drops and place reorders. The GPUI row/section shells still
+  provide event delivery, bounds, and drag start.
+- [ ] P16p: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,
   `scripts/check-item-view-perf-analyzer.sh`, and `git diff --check`.

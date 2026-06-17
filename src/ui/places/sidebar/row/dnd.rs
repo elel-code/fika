@@ -4,15 +4,15 @@ use crate::FikaApp;
 use gpui::prelude::*;
 use gpui::{Context, Div, ExternalPaths, Stateful};
 
-use crate::ui::drag_drop::{
-    FileTransferMode, item_drop_reject_reason, refresh_active_drag_cursor_for_drop_menu,
-    refresh_active_drag_cursor_for_transfer_mode, refresh_active_drag_cursor_not_allowed,
-};
+use crate::ui::drag_drop::item_drop_reject_reason;
 use crate::ui::file_grid::ItemDrag;
 
-use super::super::super::drag::{
-    PlaceDrag, PlaceDropZone, place_drag_insert_index, place_drag_insert_index_for_zone,
-    place_drop_zone,
+use super::super::super::drag::{PlaceDrag, PlaceDropZone, place_drop_zone};
+use super::super::super::interaction::{
+    PlaceRowTargetInput, place_row_path_list_target, place_row_place_drag_target,
+};
+use super::super::dnd_helpers::{
+    apply_place_interaction_decision, refresh_place_interaction_cursor,
 };
 
 pub(super) struct PlaceRowDndConfig {
@@ -23,25 +23,6 @@ pub(super) struct PlaceRowDndConfig {
     pub(super) path_for_internal_drop: PathBuf,
     pub(super) path_for_external_target: PathBuf,
     pub(super) path_for_external_drop: PathBuf,
-}
-
-fn place_drag_row_insert_index(
-    movable: bool,
-    source_index: usize,
-    drop_zone: PlaceDropZone,
-    insert_before_index: usize,
-    insert_after_index: usize,
-) -> Option<usize> {
-    if !movable {
-        return None;
-    }
-    match drop_zone {
-        PlaceDropZone::InsertBefore => place_drag_insert_index(source_index, insert_before_index),
-        PlaceDropZone::InsertAfter => place_drag_insert_index(source_index, insert_after_index),
-        PlaceDropZone::OnPlace => {
-            place_drag_insert_index_for_zone(source_index, insert_before_index, drop_zone)
-        }
-    }
 }
 
 fn handle_place_row_path_list_drag_move(
@@ -55,35 +36,17 @@ fn handle_place_row_path_list_drag_move(
     window: &mut gpui::Window,
     cx: &mut Context<FikaApp>,
 ) {
-    let accepts_insert = app.dragged_paths_can_add_place(source_paths);
-    let accepts_place = mounted && item_drop_reject_reason(source_paths, target_path).is_none();
-    let changed = match drop_zone {
-        PlaceDropZone::InsertBefore if accepts_insert => {
-            app.set_place_drag_drop_target_for_insert(insert_before_index)
-        }
-        PlaceDropZone::InsertAfter if accepts_insert => {
-            app.set_place_drag_drop_target_for_insert(insert_after_index)
-        }
-        PlaceDropZone::InsertBefore | PlaceDropZone::InsertAfter => app.clear_drag_drop_targets(),
-        PlaceDropZone::OnPlace if accepts_place => {
-            app.set_place_drag_drop_target_for_path(target_path.to_path_buf())
-        }
-        PlaceDropZone::OnPlace => app.clear_drag_drop_targets(),
-    };
-    if accepts_insert
-        && matches!(
-            drop_zone,
-            PlaceDropZone::InsertBefore | PlaceDropZone::InsertAfter
-        )
-    {
-        refresh_active_drag_cursor_for_transfer_mode(FileTransferMode::Copy, window, cx);
-        app.refresh_drop_target_lease(cx);
-    } else if accepts_place && matches!(drop_zone, PlaceDropZone::OnPlace) {
-        refresh_active_drag_cursor_for_drop_menu(window, cx);
-        app.refresh_drop_target_lease(cx);
-    } else {
-        refresh_active_drag_cursor_not_allowed(window, cx);
-    }
+    let decision = place_row_path_list_target(PlaceRowTargetInput {
+        drop_zone,
+        mounted,
+        can_add_place: app.dragged_paths_can_add_place(source_paths),
+        accepts_place: item_drop_reject_reason(source_paths, target_path).is_none(),
+        insert_before_index,
+        insert_after_index,
+        target_path,
+    });
+    let changed = apply_place_interaction_decision(app, &decision);
+    refresh_place_interaction_cursor(app, decision.cursor, window, cx);
     if changed {
         cx.notify();
     }
@@ -154,30 +117,15 @@ pub(super) fn install_place_row_dnd(
             }
             let drag = event.drag(cx);
             let drop_zone = place_drop_zone(event);
-            let insert_index = place_drag_row_insert_index(
+            let decision = place_row_place_drag_target(
                 drag.movable(),
                 drag.source_index(),
                 drop_zone,
                 insert_before_index,
                 insert_after_index,
             );
-            let changed = match insert_index {
-                Some(index) => this.set_place_drag_drop_target_for_insert(index),
-                None => this.clear_drag_drop_targets(),
-            };
-            match insert_index {
-                Some(_) => {
-                    refresh_active_drag_cursor_for_transfer_mode(
-                        FileTransferMode::Move,
-                        window,
-                        cx,
-                    );
-                    this.refresh_drop_target_lease(cx);
-                }
-                None => {
-                    refresh_active_drag_cursor_not_allowed(window, cx);
-                }
-            }
+            let changed = apply_place_interaction_decision(this, &decision);
+            refresh_place_interaction_cursor(this, decision.cursor, window, cx);
             if changed {
                 cx.notify();
             }
@@ -224,65 +172,4 @@ pub(super) fn install_place_row_dnd(
         cx.stop_propagation();
         cx.notify();
     }))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn movable_place_drag_uses_row_body_as_reorder_target() {
-        assert_eq!(
-            place_drag_row_insert_index(true, 0, PlaceDropZone::OnPlace, 1, 2),
-            Some(2)
-        );
-        assert_eq!(
-            place_drag_row_insert_index(true, 2, PlaceDropZone::OnPlace, 1, 2),
-            Some(1)
-        );
-        assert_eq!(
-            place_drag_row_insert_index(true, 1, PlaceDropZone::OnPlace, 1, 2),
-            None
-        );
-    }
-
-    #[test]
-    fn movable_place_drag_uses_row_edges_for_reorder() {
-        assert_eq!(
-            place_drag_row_insert_index(true, 0, PlaceDropZone::InsertAfter, 1, 2),
-            Some(2)
-        );
-        assert_eq!(
-            place_drag_row_insert_index(true, 2, PlaceDropZone::InsertBefore, 1, 2),
-            Some(1)
-        );
-    }
-
-    #[test]
-    fn movable_place_drag_rejects_noop_row_edges() {
-        assert_eq!(
-            place_drag_row_insert_index(true, 0, PlaceDropZone::InsertBefore, 0, 1),
-            None
-        );
-        assert_eq!(
-            place_drag_row_insert_index(true, 0, PlaceDropZone::InsertAfter, 0, 1),
-            None
-        );
-        assert_eq!(
-            place_drag_row_insert_index(true, 1, PlaceDropZone::InsertAfter, 0, 1),
-            None
-        );
-    }
-
-    #[test]
-    fn non_movable_place_drag_has_no_places_row_target() {
-        assert_eq!(
-            place_drag_row_insert_index(false, 0, PlaceDropZone::OnPlace, 1, 2),
-            None
-        );
-        assert_eq!(
-            place_drag_row_insert_index(false, 0, PlaceDropZone::InsertAfter, 1, 2),
-            None
-        );
-    }
 }

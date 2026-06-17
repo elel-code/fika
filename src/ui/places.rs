@@ -2,6 +2,7 @@ mod autosmoke;
 mod devices;
 mod drag;
 mod icon_view;
+mod interaction;
 mod model;
 mod paint_slots;
 mod perf;

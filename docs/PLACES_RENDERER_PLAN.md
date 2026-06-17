@@ -86,6 +86,10 @@ retained Places row surface with the same separations as file-grid:
 4. Move hover/drop hit testing into retained Places interaction while keeping
    GPUI drag-start shells. Verify item-to-place, place-to-pane, external
    path-to-place, and reorder targets.
+   Current implementation has `places/interaction.rs` owning the row/section
+   target decision for item/external path drops and place reorders. GPUI row and
+   section shells still provide event delivery and bounds, so
+   `retained_interaction=0` remains correct until row hitboxes move out of GPUI.
 5. Add a custom row visual painter behind an opt-in flag. Compare against the
    current GPUI row path for scroll and DnD.
 6. Switch the default only if the retained row painter is behavior-complete and

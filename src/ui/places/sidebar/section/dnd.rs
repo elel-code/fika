@@ -4,13 +4,15 @@ use crate::FikaApp;
 use gpui::prelude::*;
 use gpui::{Context, Div, ExternalPaths, Stateful};
 
-use crate::ui::drag_drop::{
-    FileTransferMode, refresh_active_drag_cursor_for_transfer_mode,
-    refresh_active_drag_cursor_not_allowed,
-};
 use crate::ui::file_grid::ItemDrag;
 
 use super::super::super::drag::{PlaceDrag, place_drag_insert_index};
+use super::super::super::interaction::{
+    place_section_path_list_target, place_section_place_drag_target,
+};
+use super::super::dnd_helpers::{
+    apply_place_interaction_decision, refresh_place_interaction_cursor,
+};
 
 fn handle_section_path_list_drag_move(
     app: &mut FikaApp,
@@ -19,16 +21,10 @@ fn handle_section_path_list_drag_move(
     window: &mut gpui::Window,
     cx: &mut Context<FikaApp>,
 ) {
-    let changed = if app.dragged_paths_can_add_place(source_paths) {
-        let changed = app.set_place_drag_drop_target_for_insert(insert_index);
-        refresh_active_drag_cursor_for_transfer_mode(FileTransferMode::Copy, window, cx);
-        app.refresh_drop_target_lease(cx);
-        changed
-    } else {
-        let changed = app.clear_drag_drop_targets();
-        refresh_active_drag_cursor_not_allowed(window, cx);
-        changed
-    };
+    let decision =
+        place_section_path_list_target(app.dragged_paths_can_add_place(source_paths), insert_index);
+    let changed = apply_place_interaction_decision(app, &decision);
+    refresh_place_interaction_cursor(app, decision.cursor, window, cx);
     if changed {
         cx.notify();
     }
@@ -83,24 +79,13 @@ pub(super) fn install_section_dnd(
                     return;
                 }
                 let drag = event.drag(cx);
-                let target_index = drag
-                    .movable()
-                    .then(|| place_drag_insert_index(drag.source_index(), insert_index))
-                    .flatten();
-                let changed = match target_index {
-                    Some(index) => this.set_place_drag_drop_target_for_insert(index),
-                    None => this.clear_drag_drop_targets(),
-                };
-                if target_index.is_some() {
-                    refresh_active_drag_cursor_for_transfer_mode(
-                        FileTransferMode::Move,
-                        window,
-                        cx,
-                    );
-                    this.refresh_drop_target_lease(cx);
-                } else {
-                    refresh_active_drag_cursor_not_allowed(window, cx);
-                }
+                let decision = place_section_place_drag_target(
+                    drag.movable(),
+                    drag.source_index(),
+                    insert_index,
+                );
+                let changed = apply_place_interaction_decision(this, &decision);
+                refresh_place_interaction_cursor(this, decision.cursor, window, cx);
                 if changed {
                     cx.notify();
                 }
