@@ -2,6 +2,7 @@ mod devices;
 mod drag;
 mod icon_view;
 mod model;
+mod perf;
 mod projection;
 mod sidebar;
 mod snapshot;
@@ -17,6 +18,9 @@ pub(crate) use model::{
     build_places_with_devices, place_is_mounted,
 };
 pub(crate) use model::{PlaceEntry, build_places, default_place_label, read_live_device_snapshot};
+pub(crate) use perf::{
+    PlacesSnapshotPerfLog, emit_places_snapshot_perf_log, places_perf_enabled, places_section_count,
+};
 pub(crate) use projection::place_snapshots_for;
 pub(crate) use sidebar::places_sidebar;
 pub(crate) use snapshot::{PlaceIcon, PlaceSnapshot};

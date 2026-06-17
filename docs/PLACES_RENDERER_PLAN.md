@@ -66,6 +66,9 @@ retained Places row surface with the same separations as file-grid:
 
 1. Add Places perf and renderer-policy logs around the current GPUI sidebar.
    This is the baseline. No default renderer change is allowed before this.
+   Current implementation uses `FIKA_PERF_PLACES_VIEW=1` to emit
+   `[fika places-view]`, `[fika places-sidebar]`, and
+   `[fika places-renderer-policy]` for the existing GPUI sidebar.
 2. Add a deterministic runtime smoke path for Places if manual testing is still
    needed for reorder/drop/scroll. Prefer the same pattern as
    `FIKA_AUTOSMOKE_ITEM_VIEW`.
@@ -80,6 +83,22 @@ retained Places row surface with the same separations as file-grid:
 6. Switch the default only if the retained row painter is behavior-complete and
    perf-neutral or better. Otherwise keep the Dolphin-aligned model/projection
    and leave row rendering on GPUI.
+
+## Current Baseline Smoke
+
+2026-06-17 desktop-session command:
+
+```bash
+timeout 5s env FIKA_PERF_PLACES_VIEW=1 target/debug/fika /etc
+```
+
+The current GPUI sidebar logs `source=11 visible=11 sections=2`, with
+`rows=11 sections=2 elements=13`. Repeated cold first snapshots were around
+`4.3ms`; steady snapshot frames were roughly `58-133us`. Sidebar row build was
+usually `185-270us`, with occasional frames around `0.5-0.6ms`.
+Renderer-policy logs showed the expected current state: `row_gpui=11`,
+`row_visual_layer=0`, `icon_gpui=11`, `retained_interaction=0`,
+`drag_shell=11`, `section_gpui=2`, and `scrollbar_canvas=1`.
 
 ## Acceptance Gates
 

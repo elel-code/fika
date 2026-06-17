@@ -122,7 +122,8 @@ use ui::places::{
     build_places_with_devices, place_is_mounted,
 };
 use ui::places::{
-    PlaceDrag, PlaceEntry, PlaceSnapshot, build_places, default_place_label, place_snapshots_for,
+    PlaceDrag, PlaceEntry, PlaceSnapshot, PlacesSnapshotPerfLog, build_places, default_place_label,
+    emit_places_snapshot_perf_log, place_snapshots_for, places_perf_enabled, places_section_count,
     read_live_device_snapshot,
 };
 use ui::properties_dialog::{
@@ -2325,13 +2326,16 @@ impl FikaApp {
     }
 
     fn place_snapshots(&mut self) -> Vec<PlaceSnapshot> {
+        let perf_enabled = places_perf_enabled();
+        let snapshot_started = perf_enabled.then(Instant::now);
+        let source_count = self.places.len();
         let current_dir = self
             .panes
             .focused()
             .and_then(|pane_id| self.panes.pane(pane_id))
             .map(|pane| pane.current_dir.as_path());
         let trash_has_items = self.trash_has_items;
-        place_snapshots_for(
+        let snapshots = place_snapshots_for(
             &self.places,
             current_dir,
             &self.hidden_place_sections,
@@ -2339,7 +2343,16 @@ impl FikaApp {
             self.drop_targets.place(),
             trash_has_items,
             &mut self.file_icons,
-        )
+        );
+        if let Some(started) = snapshot_started {
+            emit_places_snapshot_perf_log(PlacesSnapshotPerfLog {
+                source_count,
+                visible_count: snapshots.len(),
+                section_count: places_section_count(&snapshots),
+                elapsed: started.elapsed(),
+            });
+        }
+        snapshots
     }
 
     fn replace_removable_device_places(&mut self, devices: &[DeviceInfo]) -> bool {

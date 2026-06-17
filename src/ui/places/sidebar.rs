@@ -11,8 +11,13 @@ use gpui::{
 
 use crate::ui::background_tasks::{BackgroundTasksSnapshot, background_tasks_panel};
 use crate::ui::file_grid::ItemDrag;
+use std::time::Instant;
 
 use super::drag::PlaceDrag;
+use super::perf::{
+    PlacesRendererPolicyLog, PlacesSidebarPerfLog, emit_places_renderer_policy_log,
+    emit_places_sidebar_perf_log, places_perf_enabled, places_section_count,
+};
 use super::snapshot::PlaceSnapshot;
 use row::place_row;
 use section::group_heading;
@@ -28,6 +33,10 @@ pub(crate) fn places_sidebar(
     window: &mut Window,
     cx: &mut Context<FikaApp>,
 ) -> Stateful<Div> {
+    let perf_enabled = places_perf_enabled();
+    let build_started = perf_enabled.then(Instant::now);
+    let row_count = places.len();
+    let section_count = places_section_count(&places);
     let state = window.use_keyed_state("places-sidebar-scrollbar", cx, |_, _| {
         PlacesSidebarScrollState::new()
     });
@@ -43,6 +52,19 @@ pub(crate) fn places_sidebar(
             }
         }
         rows.push(place_row(index, place, cx));
+    }
+    if let Some(started) = build_started {
+        emit_places_sidebar_perf_log(PlacesSidebarPerfLog {
+            row_count,
+            section_count,
+            element_count: rows.len(),
+            build_elapsed: started.elapsed(),
+        });
+        emit_places_renderer_policy_log(PlacesRendererPolicyLog {
+            row_count,
+            section_count,
+            scrollbar_canvas_count: 1,
+        });
     }
 
     div()
