@@ -231,8 +231,9 @@ start in a custom element or GPUI exposes a stronger active-drag callback.
 
 Rename items keep the existing editor subtree. Before Phase 8, thumbnail and
 theme-icon items used slot-stable retained `img()` elements under a pane-local
-image cache; Phase 8 moves non-renaming Compact/Icons images behind the custom
-paint layer.
+image cache; Phase 8 moved non-renaming Compact/Icons images behind the custom
+paint layer, and the file-grid root no longer installs a GPUI image-cache
+provider for obsolete `img()` children.
 
 Current Compact/Icons item shells live in `src/ui/file_grid/item_shell.rs` and
 no longer contain per-item GPUI `img()` or static text visual children. They are
@@ -309,9 +310,10 @@ Replace thumbnail `img()` subtree after image ownership is clear:
 - GPUI's path/URI `ImageSource` loader remains crate-private, so direct
   `Window::paint_image` would require Fika to own file reads, image format
   detection, decode, invalidation, and render-image lifetime.
-- Current boundary keeps a minimal retained image element per thumbnail/theme
-  icon slot, using a pane-local `retain_all` image cache and a stable
-  `("item-image", slot_id)` id.
+- Current boundary keeps one custom image paint layer per pane. That layer owns
+  pane-local `RetainAllImageCache` state internally instead of relying on a
+  file-grid-root `image_cache(retain_all(...))` provider for child `img()`
+  elements.
 - Direct image painting can still reuse GPUI's public `RetainAllImageCache`,
   `ImageAssetLoader`, `RenderImage`, and `Window::paint_image` APIs. Fika should
   only reimplement decode/invalidation if GPUI's cache contract proves
@@ -322,7 +324,8 @@ Acceptance:
 - cached thumbnails still show on first relevant frame
 - thumbnail failures and invalidations remain model-driven
 - no sync image decode in paint
-- image element identity is tied to visual slots, not transient GPUI child order
+- image cache state is pane-local and keyed by semantic image source, not
+  transient GPUI child order
 
 ### Phase 5: Custom Element
 
@@ -395,8 +398,8 @@ element:
 - keep using GPUI's `ImageAssetLoader` and pane-local `RetainAllImageCache` for
   path loading, SVG rendering, image decode, and render-image lifetime
 - draw loaded images from the custom layer with `Window::paint_image`
-- keep fallback marker painting in the image layer only when a theme-icon path
-  fails to load
+- keep thumbnail fallback marker painting in the image layer; theme icons with
+  no retained decoded image use a neutral markerless placeholder while waiting
 - keep thumbnail failures model-driven; a missing thumbnail render image does not
   synthesize a file icon in paint
 

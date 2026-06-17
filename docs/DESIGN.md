@@ -335,9 +335,9 @@ model role writeback path (`ModelEntry.icon_name` and
 `src/ui/icons/roles.rs`) has been removed. Visible snapshot construction warms
 the icon cache for the current visible range, and read-ahead candidates follow
 Dolphin `KFileItemModelRolesUpdater::updateVisibleIcons()` order. File-grid
-rendering uses GPUI `img(path).with_fallback()`, letting GPUI's own image cache
-handle lazy loading, so Fika no longer decodes `RenderImage` data in its own
-background tasks.
+rendering uses a custom image paint layer backed by GPUI `RetainAllImageCache`
+and `Window::paint_image`, so the file-grid root no longer owns GPUI `img()`
+children or a root `retain_all` image-cache provider.
 
 ### Devices
 

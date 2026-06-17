@@ -1,5 +1,5 @@
 use gpui::prelude::*;
-use gpui::{Context, Div, ParentElement, Stateful, Window, div, px, retain_all};
+use gpui::{Context, Div, ParentElement, Stateful, Window, div, px};
 
 use crate::FikaApp;
 
@@ -212,7 +212,6 @@ pub(crate) fn file_grid(
         };
 
     let root = div()
-        .image_cache(retain_all(("file-grid-image-cache", pane_id.0)))
         .on_children_prepainted(move |bounds, _window, cx| {
             let prepaint_started = perf_enabled.then(std::time::Instant::now);
             let Some(bounds) = bounds.first() else {

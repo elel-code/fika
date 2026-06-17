@@ -81,7 +81,9 @@ GPUI should only render the resolved image path for visible items.
   - Theme file icons are resolved on-demand through `FileIconCache`
     (`src/ui/icons/cache.rs`). The model role writeback path
     (`ModelEntry.icon_name` and `src/ui/icons/roles.rs`) has been removed.
-    File-grid rendering uses GPUI `img(path).with_fallback()` directly.
+    File-grid rendering feeds thumbnail/theme paths into the custom image paint
+    layer, which uses GPUI `RetainAllImageCache` internally and paints loaded
+    images with `Window::paint_image`.
 - `src/core/thumbnails/scheduler.rs`
   - Owns the UI-neutral scheduling support around `ThumbnailRequestQueue`:
     `ThumbnailScheduler`, `ThumbnailCandidate`, `ThumbnailWorkKey`,

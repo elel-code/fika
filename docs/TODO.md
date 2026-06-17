@@ -21,7 +21,7 @@
 - [x] 功能提炼与集成：Dolphin 是 UI 行为和文件操作流程的第一参考；cosmic-files 是纯 Rust 系统集成的参考源。两个源码库中提炼的功能统一集成到 `fika-core`，UI 层只做渲染和输入路由。
 - [x] Dolphin 分层模型对齐：渲染层不做数据决策，模型层不持有 UI 句柄，交互层不直接操作文件系统。
 - [x] 文件拆分：`src/main.rs` 只保留 app 状态编排和跨模块路由。所有功能模块已拆入 `src/core/`（domain logic）和 `src/ui/`（rendering），子职责继续按目录式模块拆分。
-- [x] 图标模型已收敛为按需路径缓存：删除 `ModelEntry.icon_name`、`src/ui/icons/roles.rs`、`RenderImage` 自解码路径；图标由 `FileIconCache` 按 `FileIconKind + icon_size` / named icon 缓存，GPUI `img(path).with_fallback()` 懒加载。
+- [x] 图标模型已收敛为按需路径缓存：删除 `ModelEntry.icon_name`、`src/ui/icons/roles.rs`、`RenderImage` 自解码路径；图标由 `FileIconCache` 按 `FileIconKind + icon_size` / named icon 缓存，文件视图图片由 custom image paint layer 通过 GPUI `RetainAllImageCache` 懒加载并用 `Window::paint_image` 绘制。
 
 ## Completed Features
 
@@ -134,6 +134,7 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
 - [x] **P4 — zoom 缩略图 fallback 稳定性**：thumbnail/theme-icon 图片 pending 或 load failure 时由 image paint layer 绘制 item fallback，避免 zoom 期间出现空白图标 rect。
 - [x] **P5 — visible MIME icon 首帧稳定性**：对齐 Dolphin `updateVisibleIcons()` + `pixmapForIcon()`，目录加载和 zoom 时在 snapshot 转换前用小预算同步解析 visible item 的 theme icon path；read-ahead/offscreen icon 仍走后台队列。
 - [x] **P6 — theme icon pending marker 去除**：GPUI `RetainAllImageCache` 冷 miss 仍异步 decode；theme icon 等待真实图片时改用中性无文字占位，不再显示 `TXT/IMG/FILE` 等 MIME marker，避免目录加载时出现多种 MIME 图标切换动作。
+- [x] **P7 — file-grid 根级 image cache 清理**：thumbnail/theme icon 已由 custom image paint layer 内部持有 `RetainAllImageCache`；删除 file-grid root 上旧 `image_cache(retain_all(...))` provider，避免保留已无 `img()` 子树使用的 GPUI renderer 边界。
 
 ### 双运行时对齐（COSMIC Files）
 
