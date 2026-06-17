@@ -312,6 +312,9 @@ This is the active task board for the GPUI item view custom-paint migration.
 - [x] Extract metadata/thumbnail scheduler queue projection into
   `src/ui/file_grid/snapshot/scheduler.rs` so async role scheduling handoff is
   separate from raw snapshot types and render conversion.
+- [x] Move metadata scheduler queue tests into
+  `src/ui/file_grid/snapshot/scheduler.rs` so the snapshot facade no longer
+  imports scheduler-private metadata test helpers.
 - [x] Extract visible range/work range projection into
   `src/ui/file_grid/snapshot/range.rs` so scroll/read-ahead range derivation is
   separate from raw snapshot types and render conversion.
