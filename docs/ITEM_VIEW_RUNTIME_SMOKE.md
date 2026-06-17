@@ -14,6 +14,30 @@ manual visual-only judgment. Manual review is still allowed for behavior that
 has no reliable log signal yet, but any repeated investigation should become a
 scripted evidence path before the next renderer decision.
 
+## Automation Rule
+
+For every repeated performance or visual-stability report, first decide whether
+the app can drive the scenario without human timing. If yes, add or reuse an
+autosmoke mode, save the log under `/tmp`, and make the analyzer output the
+first pass/fail signal. Manual observation can confirm the final feel, but it
+must not be the primary evidence for a repeatable scroll, zoom, resize,
+startup-icon, or mode-switch regression.
+
+The default loop is:
+
+1. Reproduce with a representative directory such as `/etc` for dense MIME icon
+   churn or `~/Downloads` for mixed real-user files.
+2. Run the matching perf flag and autosmoke command against `target/debug/fika`
+   after `cargo build`, saving stdout/stderr to a named log in `/tmp`.
+3. Run the matching analyzer script and inspect phase maxima, renderer-policy
+   counts, and source counters before changing architecture or renderer code.
+4. Compare against the local Dolphin source path that owns the same behavior.
+   Dolphin's model/layout/controller split is the default reference; the final
+   renderer still needs evidence against the GPUI baseline when one exists.
+5. Commit the slice only after the relevant verification command passes and the
+   evidence is recorded in the design, decision, or plan document that owns the
+   surface.
+
 When an optimization produces a clear breakthrough, update the relevant design
 or decision document in the same slice. The record should include the visible
 symptom, the Dolphin source boundary used for comparison, the root cause, the

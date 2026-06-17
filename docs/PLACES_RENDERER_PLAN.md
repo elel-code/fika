@@ -96,6 +96,21 @@ retained Places row surface with the same separations as file-grid:
    perf-neutral or better. Otherwise keep the Dolphin-aligned model/projection
    and leave row rendering on GPUI.
 
+## Runtime Evidence Rule
+
+Places changes follow the same unattended-evidence rule as item-view changes:
+repeatable behavior must be driven by `FIKA_AUTOSMOKE_PLACES` or a new isolated
+runtime smoke before a renderer decision depends on it. The current
+`targets` smoke is intentionally non-destructive, so reorder/drop persistence
+still needs either an isolated user-place configuration or manual review until
+that fixture exists.
+
+Each Places optimization breakthrough must be recorded in this plan or the
+renderer-decision document in the same slice. The record should name the user
+visible symptom, the Dolphin Places source boundary used for comparison, the
+root cause in Fika, the implementation change, the saved log/analyzer command,
+and the regression guard that future Places work must run.
+
 ## Current Baseline Smoke
 
 2026-06-17 desktop-session command:

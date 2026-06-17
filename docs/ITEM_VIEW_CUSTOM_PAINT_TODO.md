@@ -569,6 +569,13 @@ by risk and evidence, not by how custom-painted a surface looks.
   need `cargo fmt`, `cargo check`, `cargo test -q`,
   `scripts/check-item-view-perf-analyzer.sh`,
   `scripts/check-places-perf-analyzer.sh`, and `git diff --check`.
+- [x] P16r: Document the runtime self-test and breakthrough-recording rule.
+  Repeatable scroll, zoom, startup-icon, resize, mode-switch, and Places target
+  regressions should be reproduced through autosmoke logs and analyzer scripts
+  before relying on manual timing. Any confirmed optimization breakthrough must
+  record the symptom, Dolphin comparison boundary, root cause, implementation,
+  saved log/analyzer command, and future regression guard in the owning design
+  or decision document.
 
 ## Acceptance Gates
 
