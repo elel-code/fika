@@ -127,10 +127,11 @@ use ui::places::{
     PlacesAutosmokeScenario, PlacesLayoutAutosmokeState, PlacesRowTextShapeCache,
     PlacesSidebarResizeDrag, PlacesSnapshotPerfLog, build_places, clamp_places_sidebar_width,
     default_place_label, emit_place_paint_slot_perf_log,
-    emit_places_autosmoke_clear_targets_action, emit_places_autosmoke_insert_target_action,
-    emit_places_autosmoke_layout_capture, emit_places_autosmoke_layout_resize,
-    emit_places_autosmoke_layout_settings_verification, emit_places_autosmoke_layout_update,
-    emit_places_autosmoke_place_target_action, emit_places_autosmoke_snapshot,
+    emit_places_autosmoke_clear_targets_action, emit_places_autosmoke_complete,
+    emit_places_autosmoke_insert_target_action, emit_places_autosmoke_layout_capture,
+    emit_places_autosmoke_layout_resize, emit_places_autosmoke_layout_settings_verification,
+    emit_places_autosmoke_layout_update, emit_places_autosmoke_place_target_action,
+    emit_places_autosmoke_snapshot, emit_places_autosmoke_start,
     emit_places_retained_hit_test_autosmoke, emit_places_snapshot_perf_log, place_snapshots_for,
     places_autosmoke_first_target_path, places_autosmoke_resize_target_width, places_panel_button,
     places_panel_icon_snapshot, places_perf_enabled, places_section_count, places_sidebar_splitter,
@@ -689,7 +690,7 @@ impl FikaApp {
             move |this: gpui::WeakEntity<FikaApp>, cx: &mut gpui::AsyncApp| {
                 let mut cx = cx.clone();
                 async move {
-                    eprintln!("[fika autosmoke] places start scenario={scenario:?}");
+                    emit_places_autosmoke_start(scenario);
                     cx.background_executor().timer(scenario.start_delay()).await;
 
                     for action in scenario.actions() {
@@ -708,7 +709,7 @@ impl FikaApp {
                             .await;
                     }
 
-                    eprintln!("[fika autosmoke] places complete scenario={scenario:?}");
+                    emit_places_autosmoke_complete(scenario);
                 }
             },
         )

@@ -724,6 +724,13 @@ by risk and evidence, not by how custom-painted a surface looks.
   model no longer depends on app-root iteration over projected Places rows.
   Evidence: `/tmp/fika-places-first-target-autosmoke-module.log` passed
   `--require-autosmoke --expect-current-gpui-policy`.
+- [x] P16aj: Move Places autosmoke start/complete marker formatting out of
+  `src/main.rs`. `src/ui/places/autosmoke.rs` now owns the stable scenario
+  marker labels consumed by the analyzer instead of relying on app-root
+  `Debug` formatting. The app root still schedules scenario actions, but the
+  marker surface belongs to the Places autosmoke module. Evidence:
+  `/tmp/fika-places-start-complete-autosmoke-module.log` passed
+  `--require-autosmoke --expect-current-gpui-policy`.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

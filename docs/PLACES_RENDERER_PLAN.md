@@ -90,6 +90,10 @@ retained Places row surface with the same separations as file-grid:
   rule over `PlaceSnapshot` data. `src/main.rs` applies the selected path to
   mutable app state, but it does not decide which projected Places row the
   non-destructive smoke targets.
+- `src/ui/places/autosmoke.rs`: own Places autosmoke start/complete marker
+  formatting and stable scenario labels. `src/main.rs` schedules the scenario,
+  but analyzer-facing marker strings no longer depend on app-root `Debug`
+  formatting.
 - `src/ui/places/autosmoke.rs`: own Places layout autosmoke reporting for
   sidebar width/visibility state, deterministic resize targets, action log
   formatting, and saved-settings verification. `src/main.rs` keeps the actual
@@ -267,6 +271,9 @@ places_autosmoke target=1 insert_start=1 insert_end=1 clear=1 snapshots=1,1,1,1,
 /tmp/fika-places-first-target-autosmoke-module.log:
   places_autosmoke target=1 insert_start=1 insert_end=1 clear=1 snapshots=1,1,1,1,1
   places_renderer_policy_frames=12 max_rows=11 max_row_gpui=11 max_row_visual_layer=0
+/tmp/fika-places-start-complete-autosmoke-module.log:
+  places_autosmoke target=1 insert_start=1 insert_end=1 clear=1 snapshots=1,1,1,1,1
+  places_renderer_policy_frames=18 max_rows=11 max_row_gpui=11 max_row_visual_layer=0
 ```
 
 2026-06-18 retained geometry evidence:

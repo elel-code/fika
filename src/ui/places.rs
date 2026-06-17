@@ -16,10 +16,11 @@ mod visual;
 
 pub(crate) use autosmoke::{
     PlacesAutosmokeAction, PlacesAutosmokeScenario, PlacesLayoutAutosmokeState,
-    emit_places_autosmoke_clear_targets_action, emit_places_autosmoke_insert_target_action,
-    emit_places_autosmoke_layout_capture, emit_places_autosmoke_layout_resize,
-    emit_places_autosmoke_layout_settings_verification, emit_places_autosmoke_layout_update,
-    emit_places_autosmoke_place_target_action, emit_places_autosmoke_snapshot,
+    emit_places_autosmoke_clear_targets_action, emit_places_autosmoke_complete,
+    emit_places_autosmoke_insert_target_action, emit_places_autosmoke_layout_capture,
+    emit_places_autosmoke_layout_resize, emit_places_autosmoke_layout_settings_verification,
+    emit_places_autosmoke_layout_update, emit_places_autosmoke_place_target_action,
+    emit_places_autosmoke_snapshot, emit_places_autosmoke_start,
     emit_places_retained_hit_test_autosmoke, places_autosmoke_first_target_path,
     places_autosmoke_resize_target_width,
 };

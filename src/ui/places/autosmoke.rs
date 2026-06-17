@@ -106,6 +106,15 @@ impl PlacesAutosmokeScenario {
         places_autosmoke_scenario_from_value(&env::var(AUTOSMOKE_PLACES_ENV).ok()?)
     }
 
+    fn marker_label(self) -> &'static str {
+        match self {
+            Self::DropTargets => "DropTargets",
+            Self::Overflow => "Overflow",
+            Self::Layout => "Layout",
+            Self::HitTest => "HitTest",
+        }
+    }
+
     pub(crate) fn start_delay(self) -> Duration {
         let _ = self;
         Duration::from_millis(1200)
@@ -184,6 +193,20 @@ impl PlacesAutosmokeScenario {
         }
         append_overflow_test_places(snapshots);
     }
+}
+
+pub(crate) fn emit_places_autosmoke_start(scenario: PlacesAutosmokeScenario) {
+    eprintln!(
+        "[fika autosmoke] places start scenario={}",
+        scenario.marker_label()
+    );
+}
+
+pub(crate) fn emit_places_autosmoke_complete(scenario: PlacesAutosmokeScenario) {
+    eprintln!(
+        "[fika autosmoke] places complete scenario={}",
+        scenario.marker_label()
+    );
 }
 
 fn places_autosmoke_scenario_from_value(value: &str) -> Option<PlacesAutosmokeScenario> {
@@ -575,6 +598,17 @@ mod tests {
             Some(PlacesAutosmokeScenario::HitTest)
         );
         assert_eq!(places_autosmoke_scenario_from_value("off"), None);
+    }
+
+    #[test]
+    fn scenario_marker_labels_match_analyzer_markers() {
+        assert_eq!(
+            PlacesAutosmokeScenario::DropTargets.marker_label(),
+            "DropTargets"
+        );
+        assert_eq!(PlacesAutosmokeScenario::Overflow.marker_label(), "Overflow");
+        assert_eq!(PlacesAutosmokeScenario::Layout.marker_label(), "Layout");
+        assert_eq!(PlacesAutosmokeScenario::HitTest.marker_label(), "HitTest");
     }
 
     #[test]
