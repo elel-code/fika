@@ -220,6 +220,9 @@ it:
 Until then, keep Places on GPUI elements fed by retained places projection and
 drag/drop state.
 
+The concrete retained-row design and Dolphin source comparison live in
+`docs/PLACES_RENDERER_PLAN.md`.
+
 Places remains useful as the behavior reference for pane drop hover: dragging a
 Place over pane directories and dragging a pane item over pane directories
 should both produce a retained `Directory` item drop target while moving.

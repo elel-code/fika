@@ -485,9 +485,14 @@ by risk and evidence, not by how custom-painted a surface looks.
   `src/ui/file_grid/perf.rs`; item-view perf summary emission is now owned by
   `src/ui/file_grid/perf.rs`; autosmoke scenario parsing and action sequencing
   now live in `src/ui/file_grid/autosmoke.rs`.
-- [ ] P16h: Draft a Places retained row painter design before changing Places
+- [x] P16h: Draft a Places retained row painter design before changing Places
   rendering. The design must cover row groups, hidden sections, device rows,
-  reorder/drop insertion, context menus, and sidebar scroll.
+  reorder/drop insertion, context menus, and sidebar scroll. Result:
+  `docs/PLACES_RENDERER_PLAN.md` compares Dolphin's
+  `DolphinPlacesModel + KFilePlacesView` split with Fika's current
+  `places/model`, `projection`, `sidebar/row`, `drag`, and custom scrollbar
+  modules, then gates any retained row painter behind Places-specific perf logs,
+  runtime smoke, and renderer-policy evidence.
 - [ ] P16i: Draft a rename custom-editor behavior matrix before changing the
   GPUI rename overlay. It must cover focus, caret hit testing, UTF-8 selection,
   validation helper text, commit/cancel, Tab rename-next, and IME.
