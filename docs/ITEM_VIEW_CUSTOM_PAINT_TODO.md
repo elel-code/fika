@@ -309,6 +309,9 @@ This is the active task board for the GPUI item view custom-paint migration.
 - [x] Extract visible item slot assignment into
   `src/ui/file_grid/snapshot/slots.rs` so snapshot-to-reuse-pool projection is
   separate from raw snapshot types and render conversion.
+- [x] Extract metadata/thumbnail scheduler queue projection into
+  `src/ui/file_grid/snapshot/scheduler.rs` so async role scheduling handoff is
+  separate from raw snapshot types and render conversion.
 - [x] Extract visible range/work range projection into
   `src/ui/file_grid/snapshot/range.rs` so scroll/read-ahead range derivation is
   separate from raw snapshot types and render conversion.

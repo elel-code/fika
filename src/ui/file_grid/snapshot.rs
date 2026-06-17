@@ -5,6 +5,7 @@ mod builder;
 mod metadata;
 mod range;
 mod render;
+mod scheduler;
 mod slots;
 mod thumbnail;
 mod visible;
@@ -15,9 +16,8 @@ use crate::ui::drag_drop::ItemDropTarget;
 use crate::ui::rename::RenameDraft;
 
 use fika_core::{
-    CompactLayout, DirectoryModel, FilteredModel, Generation, IconsLayout, ItemId, ItemLayout,
-    MetadataRoleScheduler, PaneId, SelectionState, ThumbnailCandidate, ThumbnailScheduler,
-    ViewState,
+    CompactLayout, DirectoryModel, FilteredModel, IconsLayout, ItemId, ItemLayout, PaneId,
+    SelectionState, ViewState,
 };
 
 #[cfg(test)]
@@ -37,6 +37,8 @@ pub(crate) use builder::raw_file_grid_snapshot;
 use fika_core::ThumbnailRequestPriority;
 #[cfg(test)]
 use fika_core::ViewMode;
+#[cfg(test)]
+use fika_core::{Generation, MetadataRoleScheduler};
 #[cfg(test)]
 use gpui::SharedString;
 #[cfg(test)]
@@ -71,24 +73,6 @@ pub(crate) struct RawVisibleItemSnapshot {
     pub(crate) draft_selection: Option<(usize, usize)>,
     pub(crate) draft_error: Option<String>,
     pub(crate) draft_warning: Option<String>,
-}
-
-impl RawVisibleItemSnapshot {
-    fn thumbnail_candidate(&self) -> Option<ThumbnailCandidate> {
-        thumbnail::visible_thumbnail_candidate(
-            self.item_id,
-            &self.path,
-            self.is_dir,
-            self.thumbnail_path.as_ref(),
-            self.thumbnail_failed,
-            self.modified_secs,
-            self.size_bytes,
-            self.metadata_complete,
-            self.metadata_refresh_pending,
-            self.mime_type.as_ref(),
-            self.mime_magic_checked,
-        )
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -151,37 +135,6 @@ pub(crate) struct RawFileGridSnapshotInput<'a> {
 impl RawFileGridSnapshot {
     pub(crate) fn visible_metadata_role_candidates(&self) -> Vec<fika_core::MetadataRoleCandidate> {
         metadata::visible_metadata_role_candidates(self)
-    }
-
-    pub(crate) fn queue_metadata_role_candidates(
-        &self,
-        scheduler: &mut MetadataRoleScheduler,
-        pane_id: PaneId,
-        generation: Generation,
-    ) -> bool {
-        scheduler.queue_candidates(pane_id, generation, self.visible_metadata_role_candidates())
-    }
-
-    pub(crate) fn queue_thumbnail_candidates(
-        &self,
-        scheduler: &mut ThumbnailScheduler,
-        pane_id: PaneId,
-        generation: Generation,
-        deferred_candidates: impl IntoIterator<Item = ThumbnailCandidate>,
-    ) -> bool {
-        match self {
-            Self::Compact { items, .. } | Self::Icons { items, .. } => scheduler.queue_candidates(
-                pane_id,
-                generation,
-                items
-                    .iter()
-                    .filter_map(|item| item.thumbnail_candidate())
-                    .chain(deferred_candidates),
-            ),
-            Self::Details { .. } => {
-                scheduler.queue_candidates(pane_id, generation, deferred_candidates)
-            }
-        }
     }
 }
 
