@@ -84,12 +84,11 @@ use ui::drag_drop::{
 };
 use ui::file_grid::{
     CompactColumnWidthCache, ContentItemHit, DOLPHIN_VISIBLE_ICON_SYNC_BUDGET,
-    DetailsTextShapeCache, DetailsVisualPerfStats, FileIconResolveQueue, ItemDrag,
-    ItemImagePerfStats, ItemInteractionPerfStats, ItemPaintSlotCache, ItemViewAutosmokeAction,
-    ItemViewAutosmokeScenario, ItemViewPerfFrameState, PaneLayoutProjection,
+    DetailsTextShapeCache, FileIconResolveQueue, ItemDrag, ItemPaintSlotCache,
+    ItemViewAutosmokeAction, ItemViewAutosmokeScenario, ItemViewPerfState, PaneLayoutProjection,
     PaneLayoutProjectionInput, PaneViewportGeometry, PaneVisibleWorkKey, RawFileGridSnapshot,
-    RawFileGridSnapshotInput, StaticItemTextShapeCache, StaticItemVisualPerfStats,
-    VisibleItemSlotPool, VisibleItemSnapshotCache, compact_text_width, compact_text_width_for_name,
+    RawFileGridSnapshotInput, StaticItemTextShapeCache, VisibleItemSlotPool,
+    VisibleItemSnapshotCache, compact_text_width, compact_text_width_for_name,
     content_item_hit_at_point, deferred_thumbnail_candidates_for_model, item_view_perf_enabled,
     model_indexes_intersecting_visual_rect, pane_layout_projection,
     queue_file_icon_resolve_work_for_raw_grid, raw_file_grid_snapshot,
@@ -395,11 +394,7 @@ pub(crate) struct FikaApp {
     visible_item_snapshot_caches: HashMap<PaneId, VisibleItemSnapshotCache>,
     static_item_text_shape_caches: HashMap<PaneId, StaticItemTextShapeCache>,
     details_text_shape_caches: HashMap<PaneId, DetailsTextShapeCache>,
-    item_view_perf_frames: HashMap<PaneId, ItemViewPerfFrameState>,
-    static_item_visual_perf_stats: HashMap<PaneId, StaticItemVisualPerfStats>,
-    item_image_perf_stats: HashMap<PaneId, ItemImagePerfStats>,
-    details_visual_perf_stats: HashMap<PaneId, DetailsVisualPerfStats>,
-    item_interaction_perf_stats: HashMap<PaneId, ItemInteractionPerfStats>,
+    item_view_perf: ItemViewPerfState,
     hovered_item: Option<(PaneId, ItemId)>,
     compact_column_widths: HashMap<PaneId, CompactColumnWidthCache>,
     pane_filters: HashMap<PaneId, PaneFilterState>,
@@ -490,11 +485,7 @@ impl FikaApp {
             visible_item_snapshot_caches: HashMap::new(),
             static_item_text_shape_caches: HashMap::new(),
             details_text_shape_caches: HashMap::new(),
-            item_view_perf_frames: HashMap::new(),
-            static_item_visual_perf_stats: HashMap::new(),
-            item_image_perf_stats: HashMap::new(),
-            details_visual_perf_stats: HashMap::new(),
-            item_interaction_perf_stats: HashMap::new(),
+            item_view_perf: ItemViewPerfState::default(),
             hovered_item: None,
             compact_column_widths: HashMap::new(),
             pane_filters: HashMap::new(),
@@ -3419,10 +3410,7 @@ impl FikaApp {
         self.visible_item_snapshot_caches.remove(&pane_id);
         self.static_item_text_shape_caches.remove(&pane_id);
         self.details_text_shape_caches.remove(&pane_id);
-        self.static_item_visual_perf_stats.remove(&pane_id);
-        self.item_image_perf_stats.remove(&pane_id);
-        self.details_visual_perf_stats.remove(&pane_id);
-        self.item_interaction_perf_stats.remove(&pane_id);
+        self.clear_item_view_perf_layer_stats(pane_id);
         self.clear_hovered_item_for_pane(pane_id);
         self.compact_column_widths.remove(&pane_id);
         self.set_pane_status(pane_id, view_mode_status(view.view_mode));
@@ -16563,11 +16551,7 @@ text/plain=viewer.desktop;\n",
             visible_item_snapshot_caches: HashMap::new(),
             static_item_text_shape_caches: HashMap::new(),
             details_text_shape_caches: HashMap::new(),
-            item_view_perf_frames: HashMap::new(),
-            static_item_visual_perf_stats: HashMap::new(),
-            item_image_perf_stats: HashMap::new(),
-            details_visual_perf_stats: HashMap::new(),
-            item_interaction_perf_stats: HashMap::new(),
+            item_view_perf: ItemViewPerfState::default(),
             hovered_item: None,
             compact_column_widths: HashMap::new(),
             pane_filters: HashMap::new(),

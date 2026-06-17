@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::env;
 use std::time::Duration;
 
@@ -86,6 +87,141 @@ pub(crate) fn classify_item_view_perf_phase(
         return ItemViewPerfPhase::VisualChange;
     }
     ItemViewPerfPhase::Steady
+}
+
+#[derive(Default)]
+pub(crate) struct ItemViewPerfState {
+    frames: HashMap<PaneId, ItemViewPerfFrameState>,
+    static_item_visual_stats: HashMap<PaneId, StaticItemVisualPerfStats>,
+    item_image_stats: HashMap<PaneId, ItemImagePerfStats>,
+    details_visual_stats: HashMap<PaneId, DetailsVisualPerfStats>,
+    item_interaction_stats: HashMap<PaneId, ItemInteractionPerfStats>,
+}
+
+impl ItemViewPerfState {
+    fn record_frame(
+        &mut self,
+        pane_id: PaneId,
+        mode: ViewMode,
+        item_count: usize,
+        visible_count: usize,
+        slot_stats: ItemPaintSlotStats,
+    ) -> ItemViewPerfPhase {
+        let current_frame = ItemViewPerfFrameState::new(mode, item_count, visible_count);
+        let previous_frame = self.frames.insert(pane_id, current_frame);
+        classify_item_view_perf_phase(previous_frame, current_frame, slot_stats)
+    }
+
+    fn clear_pane(&mut self, pane_id: PaneId) {
+        self.frames.remove(&pane_id);
+        self.clear_layer_stats(pane_id);
+    }
+
+    fn clear_layer_stats(&mut self, pane_id: PaneId) {
+        self.static_item_visual_stats.remove(&pane_id);
+        self.item_image_stats.remove(&pane_id);
+        self.details_visual_stats.remove(&pane_id);
+        self.item_interaction_stats.remove(&pane_id);
+    }
+
+    fn take_static_item_visual_stats(&mut self, pane_id: PaneId) -> StaticItemVisualPerfStats {
+        self.static_item_visual_stats
+            .remove(&pane_id)
+            .unwrap_or_default()
+    }
+
+    fn take_item_image_stats(&mut self, pane_id: PaneId) -> ItemImagePerfStats {
+        self.item_image_stats.remove(&pane_id).unwrap_or_default()
+    }
+
+    fn take_details_visual_stats(&mut self, pane_id: PaneId) -> DetailsVisualPerfStats {
+        self.details_visual_stats
+            .remove(&pane_id)
+            .unwrap_or_default()
+    }
+
+    fn take_item_interaction_stats(&mut self, pane_id: PaneId) -> ItemInteractionPerfStats {
+        self.item_interaction_stats
+            .remove(&pane_id)
+            .unwrap_or_default()
+    }
+
+    fn record_static_item_visual_prepaint(
+        &mut self,
+        pane_id: PaneId,
+        elapsed: Duration,
+        count: usize,
+    ) {
+        self.static_item_visual_stats
+            .entry(pane_id)
+            .or_default()
+            .record_prepaint(elapsed, count);
+    }
+
+    fn record_static_item_visual_paint(
+        &mut self,
+        pane_id: PaneId,
+        elapsed: Duration,
+        count: usize,
+    ) {
+        self.static_item_visual_stats
+            .entry(pane_id)
+            .or_default()
+            .record_paint(elapsed, count);
+    }
+
+    fn record_item_image_prepaint(
+        &mut self,
+        pane_id: PaneId,
+        elapsed: Duration,
+        count: usize,
+        source_stats: ItemImageSourcePerfStats,
+    ) {
+        self.item_image_stats
+            .entry(pane_id)
+            .or_default()
+            .record_prepaint(elapsed, count, source_stats);
+    }
+
+    fn record_item_image_paint(&mut self, pane_id: PaneId, elapsed: Duration, count: usize) {
+        self.item_image_stats
+            .entry(pane_id)
+            .or_default()
+            .record_paint(elapsed, count);
+    }
+
+    fn record_details_visual_prepaint(&mut self, pane_id: PaneId, elapsed: Duration, count: usize) {
+        self.details_visual_stats
+            .entry(pane_id)
+            .or_default()
+            .record_prepaint(elapsed, count);
+    }
+
+    fn record_details_visual_paint(&mut self, pane_id: PaneId, elapsed: Duration, count: usize) {
+        self.details_visual_stats
+            .entry(pane_id)
+            .or_default()
+            .record_paint(elapsed, count);
+    }
+
+    fn record_item_interaction_prepaint(
+        &mut self,
+        pane_id: PaneId,
+        elapsed: Duration,
+        count: usize,
+    ) {
+        self.item_interaction_stats
+            .entry(pane_id)
+            .or_default()
+            .record_prepaint(elapsed, count);
+    }
+
+    fn record_item_interaction_paint(&mut self, pane_id: PaneId, elapsed: Duration, count: usize) {
+        self.item_interaction_stats
+            .entry(pane_id)
+            .or_default()
+            .record_paint(elapsed, count);
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -310,6 +446,49 @@ mod tests {
             ItemViewPerfPhase::Steady
         );
     }
+
+    #[test]
+    fn item_view_perf_state_can_clear_layer_stats_without_resetting_phase_history() {
+        let mut state = ItemViewPerfState::default();
+        let pane_id = PaneId(1);
+
+        assert_eq!(
+            state.record_frame(
+                pane_id,
+                ViewMode::Compact,
+                48,
+                32,
+                ItemPaintSlotStats::default(),
+            ),
+            ItemViewPerfPhase::Initial
+        );
+
+        state.clear_layer_stats(pane_id);
+
+        assert_eq!(
+            state.record_frame(
+                pane_id,
+                ViewMode::Icons,
+                48,
+                40,
+                ItemPaintSlotStats::default(),
+            ),
+            ItemViewPerfPhase::ModeSwitch
+        );
+
+        state.clear_pane(pane_id);
+
+        assert_eq!(
+            state.record_frame(
+                pane_id,
+                ViewMode::Icons,
+                48,
+                40,
+                ItemPaintSlotStats::default(),
+            ),
+            ItemViewPerfPhase::Initial
+        );
+    }
 }
 
 impl FikaApp {
@@ -321,17 +500,16 @@ impl FikaApp {
         visible_count: usize,
         slot_stats: ItemPaintSlotStats,
     ) -> ItemViewPerfPhase {
-        let current_frame = ItemViewPerfFrameState::new(mode, item_count, visible_count);
-        let previous_frame = self.item_view_perf_frames.insert(pane_id, current_frame);
-        classify_item_view_perf_phase(previous_frame, current_frame, slot_stats)
+        self.item_view_perf
+            .record_frame(pane_id, mode, item_count, visible_count, slot_stats)
     }
 
     pub(crate) fn clear_item_view_perf_state(&mut self, pane_id: PaneId) {
-        self.item_view_perf_frames.remove(&pane_id);
-        self.static_item_visual_perf_stats.remove(&pane_id);
-        self.item_image_perf_stats.remove(&pane_id);
-        self.details_visual_perf_stats.remove(&pane_id);
-        self.item_interaction_perf_stats.remove(&pane_id);
+        self.item_view_perf.clear_pane(pane_id);
+    }
+
+    pub(crate) fn clear_item_view_perf_layer_stats(&mut self, pane_id: PaneId) {
+        self.item_view_perf.clear_layer_stats(pane_id);
     }
 
     pub(super) fn take_static_item_text_shape_cache_stats(
@@ -358,33 +536,25 @@ impl FikaApp {
         &mut self,
         pane_id: PaneId,
     ) -> StaticItemVisualPerfStats {
-        self.static_item_visual_perf_stats
-            .remove(&pane_id)
-            .unwrap_or_default()
+        self.item_view_perf.take_static_item_visual_stats(pane_id)
     }
 
     pub(super) fn take_item_image_perf_stats(&mut self, pane_id: PaneId) -> ItemImagePerfStats {
-        self.item_image_perf_stats
-            .remove(&pane_id)
-            .unwrap_or_default()
+        self.item_view_perf.take_item_image_stats(pane_id)
     }
 
     pub(super) fn take_details_visual_perf_stats(
         &mut self,
         pane_id: PaneId,
     ) -> DetailsVisualPerfStats {
-        self.details_visual_perf_stats
-            .remove(&pane_id)
-            .unwrap_or_default()
+        self.item_view_perf.take_details_visual_stats(pane_id)
     }
 
     pub(super) fn take_item_interaction_perf_stats(
         &mut self,
         pane_id: PaneId,
     ) -> ItemInteractionPerfStats {
-        self.item_interaction_perf_stats
-            .remove(&pane_id)
-            .unwrap_or_default()
+        self.item_view_perf.take_item_interaction_stats(pane_id)
     }
 
     pub(super) fn record_static_item_visual_prepaint(
@@ -393,10 +563,8 @@ impl FikaApp {
         elapsed: Duration,
         count: usize,
     ) {
-        self.static_item_visual_perf_stats
-            .entry(pane_id)
-            .or_default()
-            .record_prepaint(elapsed, count);
+        self.item_view_perf
+            .record_static_item_visual_prepaint(pane_id, elapsed, count);
     }
 
     pub(super) fn record_static_item_visual_paint(
@@ -405,10 +573,8 @@ impl FikaApp {
         elapsed: Duration,
         count: usize,
     ) {
-        self.static_item_visual_perf_stats
-            .entry(pane_id)
-            .or_default()
-            .record_paint(elapsed, count);
+        self.item_view_perf
+            .record_static_item_visual_paint(pane_id, elapsed, count);
     }
 
     pub(super) fn record_item_image_prepaint(
@@ -418,10 +584,8 @@ impl FikaApp {
         count: usize,
         source_stats: ItemImageSourcePerfStats,
     ) {
-        self.item_image_perf_stats
-            .entry(pane_id)
-            .or_default()
-            .record_prepaint(elapsed, count, source_stats);
+        self.item_view_perf
+            .record_item_image_prepaint(pane_id, elapsed, count, source_stats);
     }
 
     pub(super) fn record_item_image_paint(
@@ -430,10 +594,8 @@ impl FikaApp {
         elapsed: Duration,
         count: usize,
     ) {
-        self.item_image_perf_stats
-            .entry(pane_id)
-            .or_default()
-            .record_paint(elapsed, count);
+        self.item_view_perf
+            .record_item_image_paint(pane_id, elapsed, count);
     }
 
     pub(super) fn record_details_visual_prepaint(
@@ -442,10 +604,8 @@ impl FikaApp {
         elapsed: Duration,
         count: usize,
     ) {
-        self.details_visual_perf_stats
-            .entry(pane_id)
-            .or_default()
-            .record_prepaint(elapsed, count);
+        self.item_view_perf
+            .record_details_visual_prepaint(pane_id, elapsed, count);
     }
 
     pub(super) fn record_details_visual_paint(
@@ -454,10 +614,8 @@ impl FikaApp {
         elapsed: Duration,
         count: usize,
     ) {
-        self.details_visual_perf_stats
-            .entry(pane_id)
-            .or_default()
-            .record_paint(elapsed, count);
+        self.item_view_perf
+            .record_details_visual_paint(pane_id, elapsed, count);
     }
 
     pub(super) fn record_item_interaction_prepaint(
@@ -466,10 +624,8 @@ impl FikaApp {
         elapsed: Duration,
         count: usize,
     ) {
-        self.item_interaction_perf_stats
-            .entry(pane_id)
-            .or_default()
-            .record_prepaint(elapsed, count);
+        self.item_view_perf
+            .record_item_interaction_prepaint(pane_id, elapsed, count);
     }
 
     pub(super) fn record_item_interaction_paint(
@@ -478,9 +634,7 @@ impl FikaApp {
         elapsed: Duration,
         count: usize,
     ) {
-        self.item_interaction_perf_stats
-            .entry(pane_id)
-            .or_default()
-            .record_paint(elapsed, count);
+        self.item_view_perf
+            .record_item_interaction_paint(pane_id, elapsed, count);
     }
 }
