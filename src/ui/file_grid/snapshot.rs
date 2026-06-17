@@ -36,8 +36,6 @@ use fika_core::{Generation, MetadataRoleScheduler};
 #[cfg(test)]
 use gpui::SharedString;
 #[cfg(test)]
-use range::layout_index_range_and_count;
-#[cfg(test)]
 use std::path::{Path, PathBuf};
 #[cfg(test)]
 use std::sync::Arc;
@@ -53,18 +51,6 @@ use visible::{icon_name_layout_width, icon_name_max_lines};
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn layout_index_range_and_count_uses_visible_indexes_without_collecting_layouts() {
-        assert_eq!(
-            layout_index_range_and_count([12, 10, 11]),
-            Some((10..13, 3))
-        );
-        assert_eq!(
-            layout_index_range_and_count(std::iter::empty::<usize>()),
-            None
-        );
-    }
 
     #[test]
     fn raw_file_grid_snapshot_marks_directory_drop_target_visible_item_in_all_modes() {
@@ -196,64 +182,6 @@ mod tests {
         assert!(items.iter().all(|item| item.slot_id != 0));
         assert_eq!(requests.len(), 2);
         assert_eq!(requests[0].0, PathBuf::from("/tmp/alpha.txt"));
-    }
-
-    #[test]
-    fn raw_icon_snapshot_keeps_read_ahead_work_items_out_of_visible_range() {
-        let directory = PathBuf::from("/tmp/fika-icon-work-window");
-        let entries = (0..80)
-            .map(|index| {
-                test_entry(
-                    &format!("item-{index:02}.txt"),
-                    Some("text/plain"),
-                    true,
-                    Some(index),
-                )
-            })
-            .collect::<Vec<_>>();
-        let mut model = DirectoryModel::for_directory(directory.clone());
-        model.replace_listing(directory, Arc::new(entries));
-        let view = ViewState {
-            view_mode: ViewMode::Icons,
-            viewport_width: 260.0,
-            viewport_height: 180.0,
-            scroll_y: 360.0,
-            ..ViewState::default()
-        };
-
-        let raw_file_grid = raw_file_grid_snapshot(RawFileGridSnapshotInput {
-            pane_id: PaneId(1),
-            model: &model,
-            selection: &SelectionState::default(),
-            view: &view,
-            filtered: None,
-            source_revision: 0,
-            rename_draft: None,
-            item_drop_target: None,
-            compact_column_widths: &mut CompactColumnWidthCache::default(),
-        });
-
-        let RawFileGridSnapshot::Icons { items, .. } = &raw_file_grid else {
-            panic!("expected icons snapshot");
-        };
-        let visible_count = items.iter().filter(|item| item.visible).count();
-
-        assert!(visible_count > 0);
-        assert!(items.len() > visible_count);
-        assert!(items.iter().any(|item| !item.visible));
-        assert_eq!(
-            raw_file_grid.visible_layout_range_and_count(),
-            layout_index_range_and_count(
-                items
-                    .iter()
-                    .filter(|item| item.visible)
-                    .map(|item| item.layout.model_index)
-            )
-        );
-        assert_eq!(
-            raw_file_grid.visible_work_range_and_count(),
-            layout_index_range_and_count(items.iter().map(|item| item.layout.model_index))
-        );
     }
 
     #[test]

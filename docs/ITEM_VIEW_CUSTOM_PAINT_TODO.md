@@ -315,6 +315,9 @@ This is the active task board for the GPUI item view custom-paint migration.
 - [x] Extract visible range/work range projection into
   `src/ui/file_grid/snapshot/range.rs` so scroll/read-ahead range derivation is
   separate from raw snapshot types and render conversion.
+- [x] Move visible/work range projection tests into
+  `src/ui/file_grid/snapshot/range.rs` so the snapshot facade no longer imports
+  range-private test helpers.
 - [x] Extract visible item snapshot/cache projection into
   `src/ui/file_grid/snapshot/visible.rs` so stable visible item content reuse is
   separate from raw directory snapshot construction.
