@@ -300,6 +300,9 @@ This is the active task board for the GPUI item view custom-paint migration.
 - [x] Extract file-grid root API types into `src/ui/file_grid/types.rs` so
   props, render snapshots, mode, and pane viewport geometry are no longer
   defined in the module index.
+- [x] Extract visible item snapshot/cache projection into
+  `src/ui/file_grid/snapshot/visible.rs` so stable visible item content reuse is
+  separate from raw directory snapshot construction.
 - [x] Extract retained item/details paint slot state into
   `src/ui/file_grid/paint_slots.rs` so model-to-painter snapshot reuse is
   separate from the renderer construction code.
