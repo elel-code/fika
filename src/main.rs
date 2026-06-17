@@ -122,9 +122,9 @@ use ui::places::{
     build_places_with_devices, place_is_mounted,
 };
 use ui::places::{
-    PlaceDrag, PlaceEntry, PlaceSnapshot, PlacesSnapshotPerfLog, build_places, default_place_label,
-    emit_places_snapshot_perf_log, place_snapshots_for, places_perf_enabled, places_section_count,
-    read_live_device_snapshot,
+    PlaceDrag, PlaceEntry, PlaceSnapshot, PlacesAutosmokeAction, PlacesAutosmokeScenario,
+    PlacesSnapshotPerfLog, build_places, default_place_label, emit_places_snapshot_perf_log,
+    place_snapshots_for, places_perf_enabled, places_section_count, read_live_device_snapshot,
 };
 use ui::properties_dialog::{
     PropertiesDialogState, properties_dialog_overlay, properties_for_path, properties_for_selection,
@@ -534,6 +534,9 @@ impl FikaApp {
         if let Some(scenario) = ItemViewAutosmokeScenario::from_env() {
             Self::start_item_view_autosmoke(first, scenario, cx);
         }
+        if let Some(scenario) = PlacesAutosmokeScenario::from_env() {
+            Self::start_places_autosmoke(scenario, cx);
+        }
         cx.spawn(
             move |this: gpui::WeakEntity<FikaApp>, cx: &mut gpui::AsyncApp| {
                 let mut cx = cx.clone();
@@ -643,6 +646,114 @@ impl FikaApp {
             },
         )
         .detach();
+    }
+
+    fn start_places_autosmoke(scenario: PlacesAutosmokeScenario, cx: &mut Context<Self>) {
+        cx.spawn(
+            move |this: gpui::WeakEntity<FikaApp>, cx: &mut gpui::AsyncApp| {
+                let mut cx = cx.clone();
+                async move {
+                    eprintln!("[fika autosmoke] places start scenario={scenario:?}");
+                    cx.background_executor().timer(scenario.start_delay()).await;
+
+                    for action in scenario.actions() {
+                        if this
+                            .update(&mut cx, |app, cx| {
+                                if app.apply_places_autosmoke_action(action) {
+                                    cx.notify();
+                                }
+                            })
+                            .is_err()
+                        {
+                            return;
+                        }
+                        cx.background_executor()
+                            .timer(scenario.action_delay())
+                            .await;
+                    }
+
+                    eprintln!("[fika autosmoke] places complete scenario={scenario:?}");
+                }
+            },
+        )
+        .detach();
+    }
+
+    fn apply_places_autosmoke_action(&mut self, action: PlacesAutosmokeAction) -> bool {
+        match action {
+            PlacesAutosmokeAction::Snapshot { label } => {
+                self.emit_places_autosmoke_snapshot(label);
+                false
+            }
+            PlacesAutosmokeAction::TargetFirstPlace { label } => {
+                let target = self.places_autosmoke_first_target_path();
+                let target_label = target
+                    .as_ref()
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_else(|| "<none>".to_string());
+                let changed = if let Some(path) = target {
+                    self.set_place_drag_drop_target_for_path(path)
+                } else {
+                    false
+                };
+                eprintln!(
+                    "[fika autosmoke] places action={} target={} changed={}",
+                    label, target_label, changed
+                );
+                changed
+            }
+            PlacesAutosmokeAction::TargetInsertStart { label } => {
+                let changed = self.set_place_drag_drop_target_for_insert(0);
+                eprintln!(
+                    "[fika autosmoke] places action={} index=0 changed={}",
+                    label, changed
+                );
+                changed
+            }
+            PlacesAutosmokeAction::TargetInsertEnd { label } => {
+                let index = self.places.len();
+                let changed = self.set_place_drag_drop_target_for_insert(index);
+                eprintln!(
+                    "[fika autosmoke] places action={} index={} changed={}",
+                    label, index, changed
+                );
+                changed
+            }
+            PlacesAutosmokeAction::ClearTargets { label } => {
+                let changed = self.clear_place_drop_target();
+                eprintln!(
+                    "[fika autosmoke] places action={} changed={}",
+                    label, changed
+                );
+                changed
+            }
+        }
+    }
+
+    fn emit_places_autosmoke_snapshot(&mut self, label: &'static str) {
+        let snapshots = self.place_snapshots();
+        let sections = places_section_count(&snapshots);
+        let active = snapshots.iter().filter(|place| place.active).count();
+        let place_targets = snapshots.iter().filter(|place| place.drop_target).count();
+        let insert_before = snapshots.iter().filter(|place| place.insert_before).count();
+        let insert_after = snapshots.iter().filter(|place| place.insert_after).count();
+        eprintln!(
+            "[fika autosmoke] places snapshot={} visible={} sections={} active={} place_targets={} insert_before={} insert_after={}",
+            label,
+            snapshots.len(),
+            sections,
+            active,
+            place_targets,
+            insert_before,
+            insert_after
+        );
+    }
+
+    fn places_autosmoke_first_target_path(&mut self) -> Option<PathBuf> {
+        self.place_snapshots()
+            .into_iter()
+            .find(|place| place.mounted)
+            .map(|place| place.path)
     }
 
     fn filtered_model_for_pane(

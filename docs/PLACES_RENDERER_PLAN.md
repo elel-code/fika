@@ -72,6 +72,10 @@ retained Places row surface with the same separations as file-grid:
 2. Add a deterministic runtime smoke path for Places if manual testing is still
    needed for reorder/drop/scroll. Prefer the same pattern as
    `FIKA_AUTOSMOKE_ITEM_VIEW`.
+   Current implementation uses `FIKA_AUTOSMOKE_PLACES=targets` for a safe,
+   non-persistent target-projection smoke. It sets a place target, start/end
+   insert targets, clears the target, and logs snapshot counts after each step.
+   It intentionally does not reorder or add bookmarks.
 3. Add retained paint slots and stats without changing visible rendering.
    Confirm primary order persistence and hidden-section projection still pass
    unit tests.
@@ -99,6 +103,33 @@ usually `185-270us`, with occasional frames around `0.5-0.6ms`.
 Renderer-policy logs showed the expected current state: `row_gpui=11`,
 `row_visual_layer=0`, `icon_gpui=11`, `retained_interaction=0`,
 `drag_shell=11`, `section_gpui=2`, and `scrollbar_canvas=1`.
+
+## Current Autosmoke
+
+2026-06-17 desktop-session command:
+
+```bash
+timeout 5s env FIKA_PERF_PLACES_VIEW=1 FIKA_AUTOSMOKE_PLACES=targets target/debug/fika /etc
+```
+
+Expected markers:
+
+```text
+[fika autosmoke] places start scenario=DropTargets
+[fika autosmoke] places action=target-first-place ... changed=true
+[fika autosmoke] places snapshot=after-place-target ... place_targets=1
+[fika autosmoke] places action=target-insert-start index=0 changed=true
+[fika autosmoke] places snapshot=after-insert-start ... insert_before=1
+[fika autosmoke] places action=target-insert-end ... changed=true
+[fika autosmoke] places snapshot=after-insert-end ... insert_after=1
+[fika autosmoke] places action=clear-targets changed=true
+[fika autosmoke] places snapshot=after-clear ... place_targets=0 insert_before=0 insert_after=0
+[fika autosmoke] places complete scenario=DropTargets
+```
+
+This smoke is deliberately non-destructive. A later Places smoke can cover
+actual reorder/drop persistence only after it can run with isolated user-place
+configuration or an explicit test fixture.
 
 ## Acceptance Gates
 

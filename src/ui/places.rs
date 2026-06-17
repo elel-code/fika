@@ -1,3 +1,4 @@
+mod autosmoke;
 mod devices;
 mod drag;
 mod icon_view;
@@ -10,6 +11,7 @@ mod style;
 mod user;
 mod visibility;
 
+pub(crate) use autosmoke::{PlacesAutosmokeAction, PlacesAutosmokeScenario};
 pub(crate) use devices::replace_removable_device_places;
 pub(crate) use drag::PlaceDrag;
 #[cfg(test)]

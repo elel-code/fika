@@ -244,6 +244,17 @@ FIKA_PERF_ITEM_VIEW=1 cargo run -- /etc 2>&1 | tee /tmp/fika-etc-default.log
 scripts/compare-item-image-renderers.sh /tmp/fika-etc-custom-theme.log /tmp/fika-etc-default.log
 ```
 
+For non-destructive Places target-projection smoke, run:
+
+```sh
+FIKA_PERF_PLACES_VIEW=1 FIKA_AUTOSMOKE_PLACES=targets cargo run -- /etc 2>&1 | tee /tmp/fika-places-targets.log
+```
+
+This should emit `[fika autosmoke] places` markers for place target,
+insert-start, insert-end, clear, and snapshot counts. It does not reorder or
+persist Places entries; full reorder/drop smoke still needs isolated config or
+manual review.
+
 After a passing runtime review, update
 `docs/ITEM_VIEW_RENDERER_DECISIONS.md` with the evidence for any surface whose
 renderer will be kept, expanded, or reverted.
