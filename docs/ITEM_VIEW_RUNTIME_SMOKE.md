@@ -281,6 +281,19 @@ persist Places entries; full reorder/drop smoke still needs isolated config or
 manual review. The analyzer verifies the current GPUI row renderer policy,
 slot projection stability, and target/insert/clear snapshot counts.
 
+For non-destructive Places overflow/sidebar-scrollbar smoke, run:
+
+```sh
+FIKA_PERF_PLACES_VIEW=1 FIKA_AUTOSMOKE_PLACES=overflow cargo run -- /etc 2>&1 | tee /tmp/fika-places-overflow.log
+scripts/analyze-places-perf.sh --require-overflow-autosmoke --expect-current-gpui-policy /tmp/fika-places-overflow.log
+```
+
+Use `FIKA_CUSTOM_PLACES_ROWS=1` and
+`--expect-custom-row-visual-policy` for the opt-in custom row visual path. This
+smoke appends non-persistent snapshot-only rows, verifies
+`[fika places-scrollbar] visible=1 max_scroll_y>0`, and does not write user
+Places configuration.
+
 After a passing runtime review, update
 `docs/ITEM_VIEW_RENDERER_DECISIONS.md` with the evidence for any surface whose
 renderer will be kept, expanded, or reverted.

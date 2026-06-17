@@ -176,6 +176,29 @@ places_renderer_policy_frames=... max_row_gpui=11 max_row_visual_layer=0 max_ico
 places_autosmoke target=1 insert_start=1 insert_end=1 clear=1 snapshots=1,1,1,1,1
 ```
 
+## Overflow Autosmoke
+
+For Places scroll/overflow evidence, run:
+
+```bash
+timeout 5s env FIKA_PERF_PLACES_VIEW=1 FIKA_AUTOSMOKE_PLACES=overflow target/debug/fika /etc > /tmp/fika-places-overflow-default.log 2>&1
+scripts/analyze-places-perf.sh --require-overflow-autosmoke --expect-current-gpui-policy /tmp/fika-places-overflow-default.log
+```
+
+`FIKA_AUTOSMOKE_PLACES=overflow` appends 64 non-persistent test rows at the
+snapshot layer. It does not write user Places configuration or mutate
+`self.places`. The expected evidence is `visible=75`, an extra `Autosmoke`
+section, `[fika places-scrollbar] visible=1`, and `max_scroll_y>0`.
+
+2026-06-17 default GPUI overflow evidence:
+
+```text
+places_sidebar_frames=7 max_rows=75 max_sections=3 max_elements=78 max_build=3083us
+places_renderer_policy_frames=7 max_row_gpui=75 max_row_visual_layer=0 max_icon_gpui=75
+places_scrollbar_frames=7 max_visible=1 max_scroll_y=1909.0
+places_overflow_autosmoke start=1 complete=1 snapshot=1 max_visible=75
+```
+
 ## Opt-In Row Visual Smoke
 
 The custom Places row visual path is experimental and must stay opt-in until it
@@ -184,6 +207,13 @@ beats or matches the GPUI row baseline. Run it with:
 ```bash
 timeout 5s env FIKA_PERF_PLACES_VIEW=1 FIKA_CUSTOM_PLACES_ROWS=1 FIKA_AUTOSMOKE_PLACES=targets target/debug/fika /etc > /tmp/fika-places-custom-rows.log 2>&1
 scripts/analyze-places-perf.sh --require-autosmoke --expect-custom-row-visual-policy /tmp/fika-places-custom-rows.log
+```
+
+For overflow comparison, switch the scenario and analyzer gate:
+
+```bash
+timeout 5s env FIKA_PERF_PLACES_VIEW=1 FIKA_CUSTOM_PLACES_ROWS=1 FIKA_AUTOSMOKE_PLACES=overflow target/debug/fika /etc > /tmp/fika-places-overflow-custom.log 2>&1
+scripts/analyze-places-perf.sh --require-overflow-autosmoke --expect-custom-row-visual-policy /tmp/fika-places-overflow-custom.log
 ```
 
 Expected policy shape:
@@ -212,6 +242,21 @@ per-row `max_paint` came from the first cold frames; later rows in the same log
 were typically around `14-33us` paint each. Before replacing the default GPUI
 row renderer, collect scroll/DnD behavior evidence and decide whether per-row
 canvas overhead should be collapsed into a retained sidebar visual layer.
+
+2026-06-17 opt-in overflow evidence:
+
+```text
+places_sidebar_frames=9 max_rows=75 max_sections=3 max_elements=78 max_build=3968us
+places_renderer_policy_frames=9 max_row_gpui=0 max_row_visual_layer=75 max_icon_gpui=75
+places_row_visual_frames=675 max_rows=1 max_prepaint=249us max_paint=951us
+places_scrollbar_frames=9 max_visible=1 max_scroll_y=1684.0
+places_overflow_autosmoke start=1 complete=1 snapshot=1 max_visible=75
+```
+
+This confirms the first opt-in visual painter works under overflow, but it also
+shows the expected cost of one canvas per row (`675` row-visual frames in this
+5s smoke). That is evidence for the next renderer slice: aggregate Places row
+visuals into a retained sidebar layer before considering a default switch.
 
 ## Acceptance Gates
 

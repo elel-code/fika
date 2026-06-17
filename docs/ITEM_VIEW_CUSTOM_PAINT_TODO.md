@@ -573,6 +573,11 @@ by risk and evidence, not by how custom-painted a surface looks.
   indicator; default Places rows remain GPUI. Analyzer support now includes
   `--expect-custom-row-visual-policy` and `[fika places-row-visual]`
   prepaint/paint maxima.
+- [x] P16t: Add non-destructive Places overflow autosmoke and scrollbar perf
+  evidence. `FIKA_AUTOSMOKE_PLACES=overflow` appends snapshot-only test rows
+  without writing user Places configuration, `[fika places-scrollbar]` reports
+  visible overflow and `max_scroll_y`, and `scripts/analyze-places-perf.sh`
+  now supports `--require-overflow-autosmoke`.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

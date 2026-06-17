@@ -91,6 +91,24 @@ pub(crate) fn emit_places_row_visual_perf_log(log: PlacesRowVisualPerfLog) {
     );
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct PlacesScrollbarPerfLog {
+    pub(crate) visible: bool,
+    pub(crate) max_scroll_y: f32,
+    pub(crate) thumb_height: f32,
+    pub(crate) track_height: f32,
+}
+
+pub(crate) fn emit_places_scrollbar_perf_log(log: PlacesScrollbarPerfLog) {
+    eprintln!(
+        "[fika places-scrollbar] visible={} max_scroll_y={} thumb_height={} track_height={}",
+        usize::from(log.visible),
+        log.max_scroll_y,
+        log.thumb_height,
+        log.track_height,
+    );
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PlacesRendererPolicyLog {
     pub(crate) row_count: usize,

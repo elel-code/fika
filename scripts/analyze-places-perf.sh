@@ -14,6 +14,10 @@ Options:
       Fail unless the non-destructive FIKA_AUTOSMOKE_PLACES=targets markers are
       present and show target/insert/clear projection.
 
+  --require-overflow-autosmoke
+      Fail unless FIKA_AUTOSMOKE_PLACES=overflow markers are present and the
+      log proves sidebar overflow through [fika places-scrollbar].
+
   --expect-current-gpui-policy
       Fail unless [fika places-renderer-policy] matches the current GPUI row
       renderer baseline: row_gpui/icon_gpui/drag_shell equal rows,
@@ -41,6 +45,7 @@ EOF
 }
 
 require_autosmoke=false
+require_overflow_autosmoke=false
 expect_current_gpui_policy=false
 expect_custom_row_visual_policy=false
 snapshot_us=""
@@ -52,6 +57,9 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --require-autosmoke)
             require_autosmoke=true
+            ;;
+        --require-overflow-autosmoke)
+            require_overflow_autosmoke=true
             ;;
         --expect-current-gpui-policy)
             expect_current_gpui_policy=true
@@ -132,6 +140,7 @@ done
 
 awk \
     -v require_autosmoke="$require_autosmoke" \
+    -v require_overflow_autosmoke="$require_overflow_autosmoke" \
     -v expect_current_gpui_policy="$expect_current_gpui_policy" \
     -v expect_custom_row_visual_policy="$expect_custom_row_visual_policy" \
     -v snapshot_limit="$snapshot_us" \
@@ -264,12 +273,38 @@ function fail(message) {
     max_update("row_visual_paint", paint)
 }
 
+/^\[fika places-scrollbar\]/ {
+    scrollbar_frames++
+    visible = field("visible") + 0
+    max_scroll_y = field("max_scroll_y") + 0
+    thumb_height = field("thumb_height") + 0
+    track_height = field("track_height") + 0
+    if (visible > 0) {
+        scrollbar_visible_seen = 1
+    }
+    if (max_scroll_y > 0) {
+        scrollbar_overflow_seen = 1
+    }
+    max_update("scrollbar_visible", visible)
+    max_update("scrollbar_max_scroll_y", max_scroll_y)
+    max_update("scrollbar_thumb_height", thumb_height)
+    max_update("scrollbar_track_height", track_height)
+}
+
 /^\[fika autosmoke\] places start scenario=DropTargets/ {
     autosmoke_start_seen = 1
 }
 
 /^\[fika autosmoke\] places complete scenario=DropTargets/ {
     autosmoke_complete_seen = 1
+}
+
+/^\[fika autosmoke\] places start scenario=Overflow/ {
+    overflow_autosmoke_start_seen = 1
+}
+
+/^\[fika autosmoke\] places complete scenario=Overflow/ {
+    overflow_autosmoke_complete_seen = 1
 }
 
 /^\[fika autosmoke\] places action=/ {
@@ -288,6 +323,7 @@ function fail(message) {
 
 /^\[fika autosmoke\] places snapshot=/ {
     snapshot_label = field("snapshot")
+    visible = field("visible") + 0
     place_targets = field("place_targets") + 0
     insert_before = field("insert_before") + 0
     insert_after = field("insert_after") + 0
@@ -301,6 +337,9 @@ function fail(message) {
         autosmoke_after_insert_end_seen = 1
     } else if (snapshot_label == "after-clear" && place_targets == 0 && insert_before == 0 && insert_after == 0) {
         autosmoke_after_clear_seen = 1
+    } else if (snapshot_label == "overflow" && visible > 0) {
+        overflow_autosmoke_snapshot_seen = 1
+        max_update("overflow_visible", visible)
     }
 }
 
@@ -360,6 +399,17 @@ END {
             fail("Places autosmoke did not produce a visual slot-change frame")
         }
     }
+    if (require_overflow_autosmoke == "true") {
+        if (!overflow_autosmoke_start_seen || !overflow_autosmoke_complete_seen) {
+            fail("missing Places overflow autosmoke start/complete markers")
+        }
+        if (!overflow_autosmoke_snapshot_seen) {
+            fail("missing Places overflow autosmoke snapshot")
+        }
+        if (!scrollbar_visible_seen || !scrollbar_overflow_seen) {
+            fail("missing visible overflowing Places scrollbar evidence")
+        }
+    }
     if (exit_code) {
         exit exit_code
     }
@@ -403,6 +453,17 @@ END {
         max_values["row_visual_rows"],
         max_values["row_visual_prepaint"],
         max_values["row_visual_paint"])
+    printf("places_scrollbar_frames=%d max_visible=%d max_scroll_y=%.1f max_thumb_height=%.1f max_track_height=%.1f\n",
+        scrollbar_frames,
+        max_values["scrollbar_visible"],
+        max_values["scrollbar_max_scroll_y"],
+        max_values["scrollbar_thumb_height"],
+        max_values["scrollbar_track_height"])
+    printf("places_overflow_autosmoke start=%d complete=%d snapshot=%d max_visible=%d\n",
+        overflow_autosmoke_start_seen,
+        overflow_autosmoke_complete_seen,
+        overflow_autosmoke_snapshot_seen,
+        max_values["overflow_visible"])
     printf("places_autosmoke target=%d insert_start=%d insert_end=%d clear=%d snapshots=%d,%d,%d,%d,%d\n",
         autosmoke_target_action_seen,
         autosmoke_insert_start_action_seen,

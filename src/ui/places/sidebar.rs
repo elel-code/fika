@@ -16,9 +16,9 @@ use std::time::Instant;
 
 use super::drag::PlaceDrag;
 use super::perf::{
-    PlacesRendererPolicyLog, PlacesSidebarPerfLog, custom_places_rows_enabled,
-    emit_places_renderer_policy_log, emit_places_sidebar_perf_log, places_perf_enabled,
-    places_section_count,
+    PlacesRendererPolicyLog, PlacesScrollbarPerfLog, PlacesSidebarPerfLog,
+    custom_places_rows_enabled, emit_places_renderer_policy_log, emit_places_scrollbar_perf_log,
+    emit_places_sidebar_perf_log, places_perf_enabled, places_section_count,
 };
 use super::snapshot::PlaceSnapshot;
 use row::place_row;
@@ -177,7 +177,7 @@ pub(crate) fn places_sidebar(
                         .track_scroll(&scroll_handle)
                         .children(rows),
                 )
-                .child(places_sidebar_scrollbar(state)),
+                .child(places_sidebar_scrollbar(state, perf_enabled)),
         )
         .when_some(background_tasks, |sidebar, tasks| {
             sidebar.child(background_tasks_panel(tasks, cx))
@@ -243,7 +243,7 @@ struct PlacesSidebarScrollbarPaintState {
     hitbox: Option<Hitbox>,
 }
 
-fn places_sidebar_scrollbar(state: Entity<PlacesSidebarScrollState>) -> Div {
+fn places_sidebar_scrollbar(state: Entity<PlacesSidebarScrollState>, perf_enabled: bool) -> Div {
     div()
         .relative()
         .flex_none()
@@ -265,6 +265,9 @@ fn places_sidebar_scrollbar(state: Entity<PlacesSidebarScrollState>) -> Div {
                 },
                 move |bounds, paint_state, window, cx| {
                     paint_places_sidebar_scrollbar(bounds, &paint_state, window);
+                    if perf_enabled {
+                        emit_places_sidebar_scrollbar_perf(&paint_state);
+                    }
                     install_places_sidebar_scrollbar_mouse_handlers(
                         state.clone(),
                         bounds,
@@ -349,6 +352,24 @@ fn paint_places_sidebar_scrollbar(
     );
     window.paint_quad(fill(track_bounds, rgba(0xd5dbe466)).corner_radii(px(2.0)));
     window.paint_quad(fill(metrics.thumb_bounds(bounds), rgba(0x6f7b8acc)).corner_radii(px(2.0)));
+}
+
+fn emit_places_sidebar_scrollbar_perf(paint_state: &PlacesSidebarScrollbarPaintState) {
+    let Some(metrics) = paint_state.metrics else {
+        emit_places_scrollbar_perf_log(PlacesScrollbarPerfLog {
+            visible: false,
+            max_scroll_y: 0.0,
+            thumb_height: 0.0,
+            track_height: 0.0,
+        });
+        return;
+    };
+    emit_places_scrollbar_perf_log(PlacesScrollbarPerfLog {
+        visible: true,
+        max_scroll_y: metrics.max_scroll_y,
+        thumb_height: metrics.thumb_height,
+        track_height: metrics.track_height,
+    });
 }
 
 fn install_places_sidebar_scrollbar_mouse_handlers(

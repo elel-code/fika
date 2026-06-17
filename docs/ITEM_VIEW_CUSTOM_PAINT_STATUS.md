@@ -224,7 +224,9 @@ it:
 Until then, keep Places on GPUI elements fed by retained places projection and
 drag/drop state. The `FIKA_CUSTOM_PLACES_ROWS=1` path is only an opt-in
 benchmark surface; it does not replace GPUI row event delivery, GPUI icons, row
-context menu shells, row DnD, or drag-start shells.
+context menu shells, row DnD, or drag-start shells. Overflow evidence is now
+available through `FIKA_AUTOSMOKE_PLACES=overflow`, which adds non-persistent
+snapshot-only rows and validates `[fika places-scrollbar] visible=1`.
 
 The concrete retained-row design and Dolphin source comparison live in
 `docs/PLACES_RENDERER_PLAN.md`.

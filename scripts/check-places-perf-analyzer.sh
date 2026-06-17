@@ -73,6 +73,10 @@ if [[ "$summary" != *"places_row_visual_frames=0"* ]]; then
     echo "expected default Places row visual summary" >&2
     exit 1
 fi
+if [[ "$summary" != *"places_scrollbar_frames=0"* ]]; then
+    echo "expected default Places scrollbar summary" >&2
+    exit 1
+fi
 
 cat > "$tmpdir/custom-row-visual.log" <<'EOF'
 [fika places-slots] rows=11 sections=2 entries=13 inserted=13 content=0 geometry=0 visual=0 unchanged=0 removed=0 project=25us
@@ -94,6 +98,34 @@ if [[ "$custom_summary" != *"max_row_gpui=0 max_row_visual_layer=11"* ]]; then
 fi
 if [[ "$custom_summary" != *"places_row_visual_frames=2 max_rows=1 max_prepaint=20us max_paint=31us"* ]]; then
     echo "expected Places row visual paint summary" >&2
+    exit 1
+fi
+
+cat > "$tmpdir/overflow.log" <<'EOF'
+[fika places-slots] rows=75 sections=3 entries=78 inserted=78 content=0 geometry=0 visual=0 unchanged=0 removed=0 project=90us
+[fika places-view] source=11 visible=75 sections=3 snapshot=600us
+[fika places-sidebar] rows=75 sections=3 elements=78 build=1400us
+[fika places-renderer-policy] rows=75 row_gpui=75 row_visual_layer=0 icon_gpui=75 retained_interaction=0 drag_shell=75 section_gpui=3 scrollbar_canvas=1
+[fika places-scrollbar] visible=1 max_scroll_y=1420 thumb_height=118 track_height=620
+[fika autosmoke] places start scenario=Overflow
+[fika places-slots] rows=75 sections=3 entries=78 inserted=0 content=0 geometry=0 visual=0 unchanged=78 removed=0 project=72us
+[fika places-view] source=11 visible=75 sections=3 snapshot=510us
+[fika autosmoke] places snapshot=overflow visible=75 sections=3 active=1 place_targets=0 insert_before=0 insert_after=0
+[fika places-scrollbar] visible=1 max_scroll_y=1420 thumb_height=118 track_height=620
+[fika autosmoke] places complete scenario=Overflow
+EOF
+
+overflow_summary="$("$analyzer" \
+    --require-overflow-autosmoke \
+    --expect-current-gpui-policy \
+    "$tmpdir/overflow.log")"
+
+if [[ "$overflow_summary" != *"places_scrollbar_frames=2 max_visible=1 max_scroll_y=1420.0"* ]]; then
+    echo "expected Places overflow scrollbar summary" >&2
+    exit 1
+fi
+if [[ "$overflow_summary" != *"places_overflow_autosmoke start=1 complete=1 snapshot=1 max_visible=75"* ]]; then
+    echo "expected Places overflow autosmoke summary" >&2
     exit 1
 fi
 
@@ -148,6 +180,11 @@ EOF
 
 if "$analyzer" --require-autosmoke "$tmpdir/missing-autosmoke.log" >/dev/null 2>&1; then
     echo "expected missing autosmoke markers to fail" >&2
+    exit 1
+fi
+
+if "$analyzer" --require-overflow-autosmoke "$tmpdir/missing-autosmoke.log" >/dev/null 2>&1; then
+    echo "expected missing overflow autosmoke markers to fail" >&2
     exit 1
 fi
 

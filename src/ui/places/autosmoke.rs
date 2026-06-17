@@ -1,11 +1,18 @@
 use std::env;
+use std::path::PathBuf;
 use std::time::Duration;
 
+use crate::ui::icons::FileIconSnapshot;
+
+use super::snapshot::PlaceSnapshot;
+
 const AUTOSMOKE_PLACES_ENV: &str = "FIKA_AUTOSMOKE_PLACES";
+const OVERFLOW_PLACE_COUNT: usize = 64;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PlacesAutosmokeScenario {
     DropTargets,
+    Overflow,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -33,34 +40,43 @@ impl PlacesAutosmokeScenario {
     }
 
     pub(crate) fn actions(self) -> Vec<PlacesAutosmokeAction> {
-        let _ = self;
-        vec![
-            PlacesAutosmokeAction::Snapshot { label: "initial" },
-            PlacesAutosmokeAction::TargetFirstPlace {
-                label: "target-first-place",
-            },
-            PlacesAutosmokeAction::Snapshot {
-                label: "after-place-target",
-            },
-            PlacesAutosmokeAction::TargetInsertStart {
-                label: "target-insert-start",
-            },
-            PlacesAutosmokeAction::Snapshot {
-                label: "after-insert-start",
-            },
-            PlacesAutosmokeAction::TargetInsertEnd {
-                label: "target-insert-end",
-            },
-            PlacesAutosmokeAction::Snapshot {
-                label: "after-insert-end",
-            },
-            PlacesAutosmokeAction::ClearTargets {
-                label: "clear-targets",
-            },
-            PlacesAutosmokeAction::Snapshot {
-                label: "after-clear",
-            },
-        ]
+        match self {
+            Self::DropTargets => vec![
+                PlacesAutosmokeAction::Snapshot { label: "initial" },
+                PlacesAutosmokeAction::TargetFirstPlace {
+                    label: "target-first-place",
+                },
+                PlacesAutosmokeAction::Snapshot {
+                    label: "after-place-target",
+                },
+                PlacesAutosmokeAction::TargetInsertStart {
+                    label: "target-insert-start",
+                },
+                PlacesAutosmokeAction::Snapshot {
+                    label: "after-insert-start",
+                },
+                PlacesAutosmokeAction::TargetInsertEnd {
+                    label: "target-insert-end",
+                },
+                PlacesAutosmokeAction::Snapshot {
+                    label: "after-insert-end",
+                },
+                PlacesAutosmokeAction::ClearTargets {
+                    label: "clear-targets",
+                },
+                PlacesAutosmokeAction::Snapshot {
+                    label: "after-clear",
+                },
+            ],
+            Self::Overflow => vec![PlacesAutosmokeAction::Snapshot { label: "overflow" }],
+        }
+    }
+
+    pub(crate) fn append_extra_snapshots(self, snapshots: &mut Vec<PlaceSnapshot>) {
+        if !matches!(self, Self::Overflow) {
+            return;
+        }
+        append_overflow_test_places(snapshots);
     }
 }
 
@@ -69,7 +85,47 @@ fn places_autosmoke_scenario_from_value(value: &str) -> Option<PlacesAutosmokeSc
         "1" | "true" | "yes" | "on" | "targets" | "drop-targets" | "drop_targets" => {
             Some(PlacesAutosmokeScenario::DropTargets)
         }
+        "overflow" | "scroll" | "scroll-overflow" | "scroll_overflow" => {
+            Some(PlacesAutosmokeScenario::Overflow)
+        }
         _ => None,
+    }
+}
+
+fn append_overflow_test_places(snapshots: &mut Vec<PlaceSnapshot>) {
+    let start_index = snapshots
+        .iter()
+        .map(|place| place.index)
+        .max()
+        .map_or(0, |index| index + 1);
+    for offset in 0..OVERFLOW_PLACE_COUNT {
+        snapshots.push(PlaceSnapshot {
+            index: start_index + offset,
+            group: "Autosmoke",
+            icon: FileIconSnapshot {
+                icon_name: "folder".into(),
+                path: None,
+                fallback_marker: "F".into(),
+                fallback_fg: 0x1f4fbf,
+                fallback_bg: 0xeaf1ff,
+            },
+            label: format!("Autosmoke {:02}", offset + 1),
+            path: PathBuf::from(format!("/tmp/fika-places-autosmoke-{offset:02}")),
+            device_id: None,
+            mounted: true,
+            device: false,
+            network: false,
+            device_ejectable: false,
+            device_can_power_off: false,
+            active: false,
+            drop_target: false,
+            insert_before: false,
+            insert_after: false,
+            trash_place: false,
+            trash_has_items: false,
+            editable: false,
+            removable: false,
+        });
     }
 }
 
@@ -90,6 +146,14 @@ mod tests {
         assert_eq!(
             places_autosmoke_scenario_from_value("1"),
             Some(PlacesAutosmokeScenario::DropTargets)
+        );
+        assert_eq!(
+            places_autosmoke_scenario_from_value("overflow"),
+            Some(PlacesAutosmokeScenario::Overflow)
+        );
+        assert_eq!(
+            places_autosmoke_scenario_from_value("scroll-overflow"),
+            Some(PlacesAutosmokeScenario::Overflow)
         );
         assert_eq!(places_autosmoke_scenario_from_value("off"), None);
     }
@@ -115,6 +179,28 @@ mod tests {
         assert!(matches!(
             actions[7],
             PlacesAutosmokeAction::ClearTargets { .. }
+        ));
+    }
+
+    #[test]
+    fn overflow_scenario_appends_non_persistent_test_places() {
+        let mut snapshots = Vec::new();
+        PlacesAutosmokeScenario::Overflow.append_extra_snapshots(&mut snapshots);
+
+        assert_eq!(snapshots.len(), OVERFLOW_PLACE_COUNT);
+        assert_eq!(snapshots[0].group, "Autosmoke");
+        assert_eq!(snapshots[0].index, 0);
+        assert_eq!(snapshots[OVERFLOW_PLACE_COUNT - 1].label, "Autosmoke 64");
+    }
+
+    #[test]
+    fn overflow_scenario_contains_only_snapshot_action() {
+        let actions = PlacesAutosmokeScenario::Overflow.actions();
+
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(
+            actions[0],
+            PlacesAutosmokeAction::Snapshot { label: "overflow" }
         ));
     }
 }

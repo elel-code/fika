@@ -2450,7 +2450,7 @@ impl FikaApp {
             .and_then(|pane_id| self.panes.pane(pane_id))
             .map(|pane| pane.current_dir.as_path());
         let trash_has_items = self.trash_has_items;
-        let snapshots = place_snapshots_for(
+        let mut snapshots = place_snapshots_for(
             &self.places,
             current_dir,
             &self.hidden_place_sections,
@@ -2459,6 +2459,9 @@ impl FikaApp {
             trash_has_items,
             &mut self.file_icons,
         );
+        if let Some(scenario) = PlacesAutosmokeScenario::from_env() {
+            scenario.append_extra_snapshots(&mut snapshots);
+        }
         let slot_started = perf_enabled.then(Instant::now);
         let slot_stats = self.place_paint_slots.project_snapshots(&snapshots);
         if let Some(started) = slot_started {
