@@ -86,6 +86,10 @@ retained Places row surface with the same separations as file-grid:
   formatting for target path labels, insert indexes, and clear-target markers.
   `src/main.rs` still chooses the target and mutates drop-target state, but it
   does not own the marker model consumed by the analyzer.
+- `src/ui/places/autosmoke.rs`: own the DropTargets first-target selection
+  rule over `PlaceSnapshot` data. `src/main.rs` applies the selected path to
+  mutable app state, but it does not decide which projected Places row the
+  non-destructive smoke targets.
 - `src/ui/places/autosmoke.rs`: own Places layout autosmoke reporting for
   sidebar width/visibility state, deterministic resize targets, action log
   formatting, and saved-settings verification. `src/main.rs` keeps the actual
@@ -260,6 +264,9 @@ places_autosmoke target=1 insert_start=1 insert_end=1 clear=1 snapshots=1,1,1,1,
 /tmp/fika-places-target-actions-autosmoke-module.log:
   places_autosmoke target=1 insert_start=1 insert_end=1 clear=1 snapshots=1,1,1,1,1
   places_renderer_policy_frames=10 max_rows=11 max_row_gpui=11 max_row_visual_layer=0
+/tmp/fika-places-first-target-autosmoke-module.log:
+  places_autosmoke target=1 insert_start=1 insert_end=1 clear=1 snapshots=1,1,1,1,1
+  places_renderer_policy_frames=12 max_rows=11 max_row_gpui=11 max_row_visual_layer=0
 ```
 
 2026-06-18 retained geometry evidence:

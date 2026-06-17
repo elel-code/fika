@@ -241,6 +241,13 @@ fn append_overflow_test_places(snapshots: &mut Vec<PlaceSnapshot>) {
     }
 }
 
+pub(crate) fn places_autosmoke_first_target_path(snapshots: &[PlaceSnapshot]) -> Option<PathBuf> {
+    snapshots
+        .iter()
+        .find(|place| place.mounted)
+        .map(|place| place.path.clone())
+}
+
 pub(crate) fn places_autosmoke_resize_target_width(current_width: f32) -> f32 {
     if current_width < 300.0 {
         320.0
@@ -610,6 +617,27 @@ mod tests {
                 changed: false,
             }
         );
+    }
+
+    #[test]
+    fn first_target_path_uses_first_mounted_place() {
+        let mut hidden = test_place(0, "", "Offline", "/offline");
+        hidden.mounted = false;
+        let home = test_place(1, "", "Home", "/home/yk");
+        let downloads = test_place(2, "", "Downloads", "/home/yk/Downloads");
+
+        assert_eq!(
+            places_autosmoke_first_target_path(&[hidden, home, downloads]),
+            Some(PathBuf::from("/home/yk"))
+        );
+    }
+
+    #[test]
+    fn first_target_path_returns_none_when_no_place_is_mounted() {
+        let mut hidden = test_place(0, "", "Offline", "/offline");
+        hidden.mounted = false;
+
+        assert_eq!(places_autosmoke_first_target_path(&[hidden]), None);
     }
 
     #[test]

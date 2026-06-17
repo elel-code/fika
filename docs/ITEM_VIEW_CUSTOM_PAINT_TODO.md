@@ -717,6 +717,13 @@ by risk and evidence, not by how custom-painted a surface looks.
   markers consumed by the analyzer. Evidence:
   `/tmp/fika-places-target-actions-autosmoke-module.log` passed
   `--require-autosmoke --expect-current-gpui-policy`.
+- [x] P16ai: Move the DropTargets first-place selection rule out of
+  `src/main.rs`. `src/ui/places/autosmoke.rs` now owns the rule that picks the
+  first mounted `PlaceSnapshot` for the non-destructive place-target action.
+  The app root still applies the selected path to app state, but the scenario
+  model no longer depends on app-root iteration over projected Places rows.
+  Evidence: `/tmp/fika-places-first-target-autosmoke-module.log` passed
+  `--require-autosmoke --expect-current-gpui-policy`.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

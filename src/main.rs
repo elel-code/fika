@@ -132,8 +132,8 @@ use ui::places::{
     emit_places_autosmoke_layout_settings_verification, emit_places_autosmoke_layout_update,
     emit_places_autosmoke_place_target_action, emit_places_autosmoke_snapshot,
     emit_places_retained_hit_test_autosmoke, emit_places_snapshot_perf_log, place_snapshots_for,
-    places_autosmoke_resize_target_width, places_panel_button, places_panel_icon_snapshot,
-    places_perf_enabled, places_section_count, places_sidebar_splitter,
+    places_autosmoke_first_target_path, places_autosmoke_resize_target_width, places_panel_button,
+    places_panel_icon_snapshot, places_perf_enabled, places_section_count, places_sidebar_splitter,
     places_sidebar_width_from_drag, read_live_device_snapshot,
 };
 use ui::places::{PlacePaintSlotCache, PlacePaintSlotPerfLog};
@@ -726,7 +726,7 @@ impl FikaApp {
                 false
             }
             PlacesAutosmokeAction::TargetFirstPlace { label } => {
-                let target = self.places_autosmoke_first_target_path();
+                let target = places_autosmoke_first_target_path(&self.place_snapshots());
                 let changed = if let Some(path) = target.as_ref() {
                     self.set_place_drag_drop_target_for_path(path.clone())
                 } else {
@@ -871,13 +871,6 @@ impl FikaApp {
                 false
             }
         }
-    }
-
-    fn places_autosmoke_first_target_path(&mut self) -> Option<PathBuf> {
-        self.place_snapshots()
-            .into_iter()
-            .find(|place| place.mounted)
-            .map(|place| place.path)
     }
 
     fn filtered_model_for_pane(
