@@ -222,10 +222,10 @@ This is the active task board for the GPUI item view custom-paint migration.
   state, remaining GPUI boundaries, and full transition roadmap are explicit.
 - [ ] Freeze a current desktop-session runtime evidence block for Compact,
   Icons, and Details before another painter expansion.
-- [ ] Refresh `FIKA_DEBUG_DND=1` runtime evidence after the active item-drag
-  window tracker: pane item drag over a pane directory should log
-  `active-item-move ... kind=Some(Directory)` and visually highlight the
-  directory before drop.
+- [x] Refresh `FIKA_DEBUG_DND=1` runtime evidence after the active item-drag
+  preview repaint fallback: pane item drag over a pane directory logs
+  `active-item-move via=preview ... kind=Some(Directory)` and visually
+  highlights the directory before drop.
 - [ ] Split `src/ui/file_grid.rs` along Dolphin-style model/projection,
   controller/hit-test, painter, and renderer-policy boundaries without changing
   behavior.

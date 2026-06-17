@@ -178,6 +178,28 @@ uses the current window mouse position to run the same retained hit-test update.
 GPUI item shells remain responsible for drag initiation and preview ownership
 only.
 
+#### Same-window Item Drag Hover Root Cause
+
+The 2026-06-17 runtime trace isolated the pane-internal hover miss:
+
+- `item-start` was emitted, so the GPUI drag-start shell created the
+  `ItemDragPayload` and Fika populated `ActiveItemDrag`.
+- No `active-item-move via=window` or viewport `on_drag_move::<ItemDrag>` path
+  followed in the failing build, so the retained hit-test state was not being
+  refreshed while the cursor moved over pane items.
+- After adding the preview repaint fallback, the same drag produced continuous
+  `active-item-move via=preview` lines. The target changed from
+  `kind=Some(Pane)` to `kind=Some(Directory)` at the directory's retained
+  geometry, proving that hit testing and drop-target state were correct once a
+  reliable active-drag tick reached them.
+
+The concrete cause was therefore not stale item geometry, directory rejection,
+or drop-target painting. It was the event source: during same-window GPUI item
+drags, the underlying pane/item drag-move callbacks may not be delivered after
+drag start. The drag preview is still repainted to follow the pointer, so it is
+currently the stable runtime tick for pane self-drag hover until Fika owns drag
+start in a custom element or GPUI exposes a stronger active-drag callback.
+
 Rename items keep the existing editor subtree. Before Phase 8, thumbnail and
 theme-icon items used slot-stable retained `img()` elements under a pane-local
 image cache; Phase 8 moves non-renaming Compact/Icons images behind the custom

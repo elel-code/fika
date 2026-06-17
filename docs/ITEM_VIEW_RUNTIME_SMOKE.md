@@ -64,6 +64,9 @@ Expected DnD debug interpretation:
 - Both active item move paths are driven by Fika's `ActiveItemDrag` state, not
   by GPUI `MouseMoveEvent::dragging()`, because platform move events during an
   active drag may not report a pressed button.
+- A valid pane self-drag can report only `via=preview`. The important acceptance
+  signal is that the same drag reaches `kind=Some(Directory)` before drop and
+  the directory highlight updates while hovering.
 - `viewport-place-move`: Places-to-pane drag is using the viewport retained
   hit-test path.
 - `directory-shell-hit`: a visible directory shell asserted a positive target;
