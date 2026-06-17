@@ -74,12 +74,12 @@ pub(super) fn item_image_layer_item_source_path(item: &ItemImageLayerItem) -> Op
         .or_else(|| item.icon.path.clone())
 }
 
-pub(super) fn item_image_load_failure_paints_fallback(item: &ItemImageLayerItem) -> bool {
-    item.thumbnail_path.is_none()
+pub(super) fn item_image_load_failure_paints_fallback(_item: &ItemImageLayerItem) -> bool {
+    true
 }
 
-pub(super) fn item_image_pending_load_paints_fallback(item: &ItemImageLayerItem) -> bool {
-    item.thumbnail_path.is_none()
+pub(super) fn item_image_pending_load_paints_fallback(_item: &ItemImageLayerItem) -> bool {
+    true
 }
 
 pub(super) struct ItemImageLayerElement {
@@ -322,4 +322,53 @@ fn item_image_layer_icon_bounds(
             px(icon_rect.height.round().max(1.0)),
         ),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn thumbnail_pending_load_paints_fallback() {
+        let item = test_item(Some(Arc::from(Path::new("/tmp/thumb.png"))));
+
+        assert!(item_image_pending_load_paints_fallback(&item));
+    }
+
+    #[test]
+    fn thumbnail_load_failure_paints_fallback() {
+        let item = test_item(Some(Arc::from(Path::new("/tmp/thumb.png"))));
+
+        assert!(item_image_load_failure_paints_fallback(&item));
+    }
+
+    fn test_item(thumbnail_path: Option<Arc<Path>>) -> ItemImageLayerItem {
+        let rect = ViewRect {
+            x: 0.0,
+            y: 0.0,
+            width: 48.0,
+            height: 48.0,
+        };
+        ItemImageLayerItem {
+            visible: true,
+            layout: ItemLayout {
+                model_index: 0,
+                column: 0,
+                row: 0,
+                item_rect: rect,
+                visual_rect: rect,
+                icon_rect: rect,
+                text_rect: rect,
+            },
+            thumbnail_path,
+            icon: FileIconSnapshot {
+                icon_name: Arc::from("image-png"),
+                path: Some(Arc::from(Path::new("/tmp/icon.png"))),
+                fallback_marker: Arc::from("IMG"),
+                fallback_fg: 0xffffff,
+                fallback_bg: 0x222222,
+            },
+            fallback_marker: SharedString::from("IMG"),
+        }
+    }
 }
