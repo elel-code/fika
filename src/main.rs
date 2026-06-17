@@ -149,6 +149,7 @@ const DROP_TARGET_LEASE_TIMEOUT: Duration = Duration::from_millis(3000);
 const DEVICE_REFRESH_INTERVAL: Duration = Duration::from_secs(10);
 const DEVICE_MONITOR_RETRY_INTERVAL: Duration = Duration::from_secs(60);
 const DEBUG_CACHE_ENV: &str = "FIKA_DEBUG_CACHE";
+const DEBUG_DND_ENV: &str = "FIKA_DEBUG_DND";
 const DEBUG_NAV_ENV: &str = "FIKA_DEBUG_NAV";
 const PERF_ITEM_VIEW_ENV: &str = "FIKA_PERF_ITEM_VIEW";
 const BACKGROUND_TASK_HISTORY_LIMIT: usize = 8;
@@ -170,6 +171,10 @@ fn listing_cache_debug_enabled() -> bool {
 
 pub(crate) fn item_view_perf_enabled() -> bool {
     env_flag_enabled(PERF_ITEM_VIEW_ENV)
+}
+
+pub(crate) fn dnd_debug_enabled() -> bool {
+    env_flag_enabled(DEBUG_DND_ENV)
 }
 
 fn listing_cache_debug_summary(

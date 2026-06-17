@@ -110,6 +110,15 @@ pub(super) fn install_item_drag_start_shell(
     shell.on_drag(drag_value, move |drag, cursor_offset, _, cx| {
         let _ = app.update(cx, |this, _cx| {
             this.begin_item_drag(drag.payload());
+            debug_dnd_log(|| {
+                format!(
+                    "item-start pane={} path={} selected={} selection_count={}",
+                    drag.pane_id.0,
+                    drag.path.display(),
+                    drag.selected,
+                    drag.selection_count
+                )
+            });
         });
         cx.new(|_| item_drag_preview(drag, cursor_offset))
     })
@@ -288,6 +297,25 @@ fn item_drag_icon_or_fallback(icon: FileIconSnapshot) -> gpui::AnyElement {
     })
 }
 
+fn debug_dnd_log(message: impl FnOnce() -> String) {
+    if crate::dnd_debug_enabled() {
+        eprintln!("[fika dnd] {}", message());
+    }
+}
+
+fn debug_paths(paths: &[PathBuf]) -> String {
+    const MAX_PATHS: usize = 3;
+    let mut rendered = paths
+        .iter()
+        .take(MAX_PATHS)
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>();
+    if paths.len() > MAX_PATHS {
+        rendered.push(format!("+{} more", paths.len() - MAX_PATHS));
+    }
+    rendered.join(",")
+}
+
 fn handle_file_grid_item_drag_move(
     app: &mut FikaApp,
     pane_id: PaneId,
@@ -298,7 +326,7 @@ fn handle_file_grid_item_drag_move(
     let contains = event.bounds.contains(&event.event.position);
     let payload = event.drag(cx).payload();
     let source_paths = app.item_drag_source_paths(&payload);
-    handle_file_grid_path_list_drag_move(
+    let update = handle_file_grid_path_list_drag_move(
         app,
         pane_id,
         contains,
@@ -307,6 +335,18 @@ fn handle_file_grid_item_drag_move(
         window,
         cx,
     );
+    debug_dnd_log(|| {
+        format!(
+            "viewport-item-move pane={} contains={} pos=({:.1},{:.1}) kind={:?} changed={} sources={}",
+            pane_id.0,
+            contains,
+            event.event.position.x.as_f32(),
+            event.event.position.y.as_f32(),
+            update.kind,
+            update.changed,
+            debug_paths(&source_paths)
+        )
+    });
 }
 
 fn handle_file_grid_external_drag_move(
@@ -318,7 +358,7 @@ fn handle_file_grid_external_drag_move(
 ) {
     let contains = event.bounds.contains(&event.event.position);
     let source_paths = app.external_drag_source_paths(event.drag(cx).paths());
-    handle_file_grid_path_list_drag_move(
+    let _ = handle_file_grid_path_list_drag_move(
         app,
         pane_id,
         contains,
@@ -337,7 +377,7 @@ fn handle_file_grid_path_list_drag_move(
     source_paths: &[PathBuf],
     window: &mut Window,
     cx: &mut Context<FikaApp>,
-) {
+) -> PathListDropTargetUpdate {
     let update = if contains {
         app.update_dragged_paths_drop_target_from_window_position(pane_id, position, source_paths)
     } else {
@@ -360,6 +400,7 @@ fn handle_file_grid_path_list_drag_move(
     if contains {
         cx.stop_propagation();
     }
+    update
 }
 
 fn handle_file_grid_directory_path_list_drag_move(
@@ -384,6 +425,15 @@ fn handle_file_grid_directory_path_list_drag_move(
         source_paths,
         target_dir.to_path_buf(),
     );
+    debug_dnd_log(|| {
+        format!(
+            "directory-shell-hit pane={} target={} changed={} sources={}",
+            pane_id.0,
+            target_dir.display(),
+            changed,
+            debug_paths(source_paths)
+        )
+    });
     if item_drop_reject_reason(source_paths, target_dir).is_none() {
         refresh_active_drag_cursor_for_drop_menu(window, cx);
         app.refresh_drop_target_lease(cx);
@@ -418,6 +468,18 @@ fn handle_file_grid_place_drag_move(
             kind: None,
         }
     };
+    debug_dnd_log(|| {
+        format!(
+            "viewport-place-move pane={} contains={} pos=({:.1},{:.1}) kind={:?} changed={} source={}",
+            pane_id.0,
+            contains,
+            event.event.position.x.as_f32(),
+            event.event.position.y.as_f32(),
+            update.kind,
+            update.changed,
+            source_path.display()
+        )
+    });
     if contains {
         match update.kind {
             Some(PathListDropTargetKind::Directory) => {
