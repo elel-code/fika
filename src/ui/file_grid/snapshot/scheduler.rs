@@ -38,7 +38,7 @@ impl RawFileGridSnapshot {
 
     pub(crate) fn queue_file_icon_resolve_candidates<F>(
         &self,
-        icon_role_size: f32,
+        file_icon_size: f32,
         mut queue: F,
     ) -> bool
     where
@@ -52,7 +52,7 @@ impl RawFileGridSnapshot {
                     .map(|(range, _)| range);
 
                 visit_visible_icon_items_files_first(items, |item| {
-                    queued |= queue(file_icon_request_for_item(item, icon_role_size));
+                    queued |= queue(file_icon_request_for_item(item, file_icon_size));
                     true
                 });
 
@@ -60,12 +60,12 @@ impl RawFileGridSnapshot {
                     for item in items.iter().filter(|item| {
                         !item.visible && item.layout.model_index >= visible_range.end
                     }) {
-                        queued |= queue(file_icon_request_for_item(item, icon_role_size));
+                        queued |= queue(file_icon_request_for_item(item, file_icon_size));
                     }
                     for item in items.iter().rev().filter(|item| {
                         !item.visible && item.layout.model_index < visible_range.start
                     }) {
-                        queued |= queue(file_icon_request_for_item(item, icon_role_size));
+                        queued |= queue(file_icon_request_for_item(item, file_icon_size));
                     }
                 }
             }
@@ -76,7 +76,7 @@ impl RawFileGridSnapshot {
                         is_dir: item.is_dir,
                         mime_type: item.mime_type.clone(),
                         mime_magic_checked: item.mime_magic_checked,
-                        icon_size: icon_role_size,
+                        icon_size: file_icon_size,
                     });
                 }
                 for item in items.iter().filter(|item| item.is_dir) {
@@ -85,7 +85,7 @@ impl RawFileGridSnapshot {
                         is_dir: item.is_dir,
                         mime_type: item.mime_type.clone(),
                         mime_magic_checked: item.mime_magic_checked,
-                        icon_size: icon_role_size,
+                        icon_size: file_icon_size,
                     });
                 }
             }
@@ -95,7 +95,7 @@ impl RawFileGridSnapshot {
 
     pub(crate) fn for_each_visible_file_icon_resolve_candidate<F>(
         &self,
-        icon_role_size: f32,
+        file_icon_size: f32,
         mut visit: F,
     ) where
         F: for<'a> FnMut(FileGridIconRequest<'a>) -> bool,
@@ -103,7 +103,7 @@ impl RawFileGridSnapshot {
         match self {
             Self::Compact { items, .. } | Self::Icons { items, .. } => {
                 visit_visible_icon_items_by_index(items, |item| {
-                    visit(file_icon_request_for_item(item, icon_role_size))
+                    visit(file_icon_request_for_item(item, file_icon_size))
                 });
             }
             Self::Details { items, .. } => {
@@ -113,7 +113,7 @@ impl RawFileGridSnapshot {
                         is_dir: item.is_dir,
                         mime_type: item.mime_type.clone(),
                         mime_magic_checked: item.mime_magic_checked,
-                        icon_size: icon_role_size,
+                        icon_size: file_icon_size,
                     }) {
                         return;
                     }
@@ -124,7 +124,7 @@ impl RawFileGridSnapshot {
                         is_dir: item.is_dir,
                         mime_type: item.mime_type.clone(),
                         mime_magic_checked: item.mime_magic_checked,
-                        icon_size: icon_role_size,
+                        icon_size: file_icon_size,
                     }) {
                         return;
                     }
@@ -163,14 +163,14 @@ where
 
 fn file_icon_request_for_item(
     item: &RawVisibleItemSnapshot,
-    icon_role_size: f32,
+    file_icon_size: f32,
 ) -> FileGridIconRequest<'_> {
     FileGridIconRequest {
         path: &item.path,
         is_dir: item.is_dir,
         mime_type: item.mime_type.clone(),
         mime_magic_checked: item.mime_magic_checked,
-        icon_size: icon_role_size,
+        icon_size: file_icon_size,
     }
 }
 

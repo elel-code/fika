@@ -26,7 +26,7 @@ Current replacement status and the full transition roadmap are tracked in
 | Surface | Current renderer | Dolphin-style owner | Decision | Evidence required before changing |
 | --- | --- | --- | --- | --- |
 | Compact/Icons base background and labels | custom content-level painter | visible item snapshots, paint slots, text shape cache | Keep custom paint. | Runtime logs must keep steady snapshot conversion sub-ms and static visual paint/build under budget. |
-| Compact/Icons thumbnail and theme-icon images | custom image painter | image paint snapshots, pane-local thumbnail image cache, retained theme/thumbnail image map, background file-icon resolve queue | Keep custom paint while image decode/cache stays on GPUI `RetainAllImageCache`; theme icons reuse retained same-`iconName` images through pending loads. Zoom follows Dolphin's delayed role-size update instead of decoding each intermediate icon size. Render conversion uses cached/preliminary icon snapshots only. | Logs must include `[fika item-image]`; no synchronous icon-theme lookup in conversion, no thumbnail sync decode, no theme-icon file decode in prepaint, and no regression where a previously visible real MIME icon flashes back to fallback while a new image resource is pending. |
+| Compact/Icons thumbnail and theme-icon images | custom image painter | image paint snapshots, pane-local thumbnail image cache, retained theme/thumbnail image map, background file-icon resolve queue | Keep custom paint while image decode/cache stays on GPUI `RetainAllImageCache`; theme icons reuse retained same-`iconName` images through pending loads. Zoom resolves theme icon paths for the current layout icon size immediately, matching Dolphin's widget pixmap path instead of applying the delayed preview role-size timer to ordinary MIME icons. Render conversion uses cached/preliminary icon snapshots only. | Logs must include `[fika item-image]`; no synchronous icon-theme lookup in conversion, no thumbnail sync decode, no theme-icon file decode in prepaint, and no regression where a previously visible real MIME icon flashes back to fallback while a new image resource is pending. |
 | Compact/Icons hover, cursor, click, menu, drop hit testing | retained viewport/custom hitboxes plus active item-drag window tracker | viewport retained hit testing and `drag_drop` state | Keep retained controller path. | DnD smoke must pass across internal item, pane, Places, and external drops; pane self-drags should log `active-item-move`. |
 | Compact/Icons drag start | GPUI `Div::on_drag` shell | retained drag payload state plus temporary shell | Keep GPUI shell for initiation only. | Do not remove until GPUI exposes public custom-element drag-start or Fika carries an audited GPUI patch. |
 | Compact/Icons rename editor | GPUI text/editor subtree overlay | rename draft model and overlay geometry | Keep GPUI built-in editor. | Only revisit when text input, caret hit testing, selection, and IME behavior can stay behavior-complete. |
@@ -80,11 +80,11 @@ regression from an already loaded real icon.
 For zoom investigations, compare against
 `KFileItemListView::triggerIconSizeUpdate()` and `updateIconSize()`: Dolphin
 updates item geometry immediately but pauses `KFileItemModelRolesUpdater`,
-restarting icon-size/visible-range role work after `LongInterval` (300ms). Fika
-mirrors that with a pane-local icon role size. The layout icon rect changes on
-each zoom step, but icon snapshot conversion and file-icon resolve requests keep
-using the frozen role size until the 300ms debounce fires; then Fika invalidates
-the visible snapshot/work caches and resolves the final size.
+restarting preview/visible-range role work after `LongInterval` (300ms).
+Dolphin's ordinary `iconName` pixmap path is different: `pixmapForIcon()` uses
+the widget's current style-option icon size. Fika therefore resolves MIME/theme
+icon paths against the current layout icon size on every zoom step and must not
+schedule a delayed second icon-size commit for theme icons.
 
 For directory-load MIME icon switching, compare against
 `KFileItemModel::retrieveData()`, `KFileItemModelRolesUpdater::updateVisibleIcons()`,

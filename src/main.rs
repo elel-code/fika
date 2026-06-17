@@ -83,24 +83,22 @@ use ui::drag_drop::{
     place_drop_target_matches_insert, place_drop_target_matches_place,
 };
 use ui::file_grid::{
-    CompactColumnWidthCache, ContentItemHit, DOLPHIN_ICON_SIZE_UPDATE_DELAY,
-    DOLPHIN_VISIBLE_ICON_SYNC_BUDGET, DetailsTextShapeCache, DetailsVisualPerfStats, ItemDrag,
+    CompactColumnWidthCache, ContentItemHit, DOLPHIN_VISIBLE_ICON_SYNC_BUDGET,
+    DetailsTextShapeCache, DetailsVisualPerfStats, FileIconResolveQueue, ItemDrag,
     ItemImagePerfStats, ItemInteractionPerfStats, ItemPaintSlotCache, ItemViewPerfFrameState,
-    ItemViewPerfPhase, PaneIconRoleSizeState, PaneLayoutProjection, PaneLayoutProjectionInput,
-    PaneViewportGeometry, PaneVisibleWorkKey, RawFileGridSnapshot, RawFileGridSnapshotInput,
-    StaticItemTextShapeCache, StaticItemVisualPerfStats, VisibleItemSlotPool,
-    VisibleItemSnapshotCache, classify_item_view_perf_phase, compact_text_width,
-    compact_text_width_for_name, content_item_hit_at_point,
-    deferred_thumbnail_candidates_for_model, model_indexes_intersecting_visual_rect,
-    pane_layout_projection, raw_file_grid_snapshot, rename_editor_required_text_width,
+    ItemViewPerfPhase, PaneLayoutProjection, PaneLayoutProjectionInput, PaneViewportGeometry,
+    PaneVisibleWorkKey, RawFileGridSnapshot, RawFileGridSnapshotInput, StaticItemTextShapeCache,
+    StaticItemVisualPerfStats, VisibleItemSlotPool, VisibleItemSnapshotCache,
+    classify_item_view_perf_phase, compact_text_width, compact_text_width_for_name,
+    content_item_hit_at_point, deferred_thumbnail_candidates_for_model,
+    model_indexes_intersecting_visual_rect, pane_layout_projection, raw_file_grid_snapshot,
+    rename_editor_required_text_width,
 };
 use ui::filter_bar::{
     FILTER_BAR_HEIGHT, FilterBarSnapshot, FilteredModelCacheEntry, PaneFilterState,
     cached_filtered_model_for_pane, filter_toggle_snapshot,
 };
-use ui::icons::{
-    FileIconCache, FileIconResolveRequest, FileIconSnapshot, file_icon_resolve_results_for_requests,
-};
+use ui::icons::{FileIconCache, FileIconSnapshot, file_icon_resolve_results_for_requests};
 use ui::item_view::{ITEM_VIEW_SCROLLBAR_RESERVED_EXTENT, ItemViewScrollState};
 use ui::location_bar::{LocationDraft, LocationEditMetrics};
 use ui::network_auth::{
@@ -209,7 +207,6 @@ fn listing_cache_debug_summary(
 }
 const THUMBNAIL_PROBE_BATCH_SIZE: usize = 32;
 const METADATA_ROLE_BATCH_SIZE: usize = 16;
-const FILE_ICON_RESOLVE_BATCH_SIZE: usize = 64;
 const VISIBLE_METADATA_ROLE_SYNC_BUDGET: Duration = Duration::from_millis(12);
 const PANE_HORIZONTAL_BORDER_EXTENT: f32 = 2.0;
 
@@ -381,10 +378,7 @@ pub(crate) struct FikaApp {
     device_monitor_active: bool,
     next_device_monitor_start_at: Instant,
     file_icons: FileIconCache,
-    file_icon_resolve_queued: VecDeque<FileIconResolveRequest>,
-    file_icon_resolve_seen: HashSet<FileIconResolveRequest>,
-    file_icon_resolve_pending: bool,
-    pane_icon_roles: PaneIconRoleSizeState,
+    file_icon_resolve_queue: FileIconResolveQueue,
     mime_applications: MimeApplicationCache,
     space_info: SpaceInfoCache,
     status_summaries: HashMap<PaneId, StatusSummaryCacheEntry>,
@@ -479,10 +473,7 @@ impl FikaApp {
             device_monitor_active: false,
             next_device_monitor_start_at: Instant::now(),
             file_icons: FileIconCache::default(),
-            file_icon_resolve_queued: VecDeque::new(),
-            file_icon_resolve_seen: HashSet::new(),
-            file_icon_resolve_pending: false,
-            pane_icon_roles: PaneIconRoleSizeState::default(),
+            file_icon_resolve_queue: FileIconResolveQueue::default(),
             mime_applications: MimeApplicationCache::load(),
             space_info: SpaceInfoCache::default(),
             status_summaries: HashMap::new(),
@@ -1149,12 +1140,12 @@ impl FikaApp {
                     )?;
                 }
                 let raw_elapsed = raw_started.map(|started| started.elapsed());
-                let icon_role_size = self.pane_icon_role_size(pane_id);
+                let file_icon_size = view.icon_size();
                 let icon_sync_started = perf_enabled.then(Instant::now);
                 self.resolve_visible_file_icons_for_raw_grid(
                     pane_id,
                     &raw_file_grid,
-                    icon_role_size,
+                    file_icon_size,
                     DOLPHIN_VISIBLE_ICON_SYNC_BUDGET,
                 );
                 let icon_sync_elapsed = icon_sync_started.map(|started| started.elapsed());
@@ -1180,7 +1171,7 @@ impl FikaApp {
                         source_revision,
                         item_count,
                         &raw_file_grid,
-                        icon_role_size,
+                        file_icon_size,
                         filtered,
                     )?;
                 let queue_elapsed = queue_started.map(|started| started.elapsed());
@@ -1206,7 +1197,7 @@ impl FikaApp {
                 let file_grid = raw_file_grid.into_file_grid_snapshot(
                     selection_count,
                     &mut visible_item_cache,
-                    icon_role_size,
+                    file_icon_size,
                     |request| {
                         self.icon_snapshot_for_model_item(
                             request.path,
@@ -1348,26 +1339,16 @@ impl FikaApp {
         changed
     }
 
-    fn pane_icon_role_size(&self, pane_id: PaneId) -> f32 {
-        let fallback_icon_size = self
-            .panes
-            .pane(pane_id)
-            .map(|pane| pane.view.icon_size())
-            .unwrap_or_else(|| fika_core::icon_size_for_zoom_level(fika_core::DEFAULT_ZOOM_LEVEL));
-        self.pane_icon_roles
-            .role_size_or(pane_id, fallback_icon_size)
-    }
-
     fn resolve_visible_file_icons_for_raw_grid(
         &mut self,
         pane_id: PaneId,
         raw_file_grid: &RawFileGridSnapshot,
-        icon_role_size: f32,
+        file_icon_size: f32,
         budget: Duration,
     ) -> bool {
         let started = Instant::now();
         let mut changed = false;
-        raw_file_grid.for_each_visible_file_icon_resolve_candidate(icon_role_size, |request| {
+        raw_file_grid.for_each_visible_file_icon_resolve_candidate(file_icon_size, |request| {
             if started.elapsed() >= budget {
                 return false;
             }
@@ -1396,7 +1377,7 @@ impl FikaApp {
         source_revision: u64,
         item_count: usize,
         raw_file_grid: &RawFileGridSnapshot,
-        icon_role_size: f32,
+        file_icon_size: f32,
         filtered: Option<&fika_core::FilteredModel>,
     ) -> Option<(bool, bool, bool)> {
         let key = PaneVisibleWorkKey::new(
@@ -1430,7 +1411,7 @@ impl FikaApp {
             ),
         );
         let file_icon_resolve_queued =
-            self.queue_file_icon_resolve_work_for_raw_grid(raw_file_grid, icon_role_size);
+            self.queue_file_icon_resolve_work_for_raw_grid(raw_file_grid, file_icon_size);
         Some((
             metadata_role_queued,
             thumbnail_probe_queued,
@@ -1441,9 +1422,9 @@ impl FikaApp {
     fn queue_file_icon_resolve_work_for_raw_grid(
         &mut self,
         raw_file_grid: &RawFileGridSnapshot,
-        icon_role_size: f32,
+        file_icon_size: f32,
     ) -> bool {
-        raw_file_grid.queue_file_icon_resolve_candidates(icon_role_size, |request| {
+        raw_file_grid.queue_file_icon_resolve_candidates(file_icon_size, |request| {
             self.queue_file_icon_resolve_request_for_item(
                 request.path,
                 request.is_dir,
@@ -1472,11 +1453,7 @@ impl FikaApp {
         let Some(request) = request else {
             return false;
         };
-        if !self.file_icon_resolve_seen.insert(request.clone()) {
-            return false;
-        }
-        self.file_icon_resolve_queued.push_back(request);
-        true
+        self.file_icon_resolve_queue.queue(request)
     }
 
     fn start_listing_result_monitor(receiver: mpsc::Receiver<()>, cx: &mut Context<Self>) {
@@ -2142,21 +2119,9 @@ impl FikaApp {
     }
 
     fn maybe_start_file_icon_resolve(&mut self, cx: &mut Context<Self>) {
-        if self.file_icon_resolve_pending || self.file_icon_resolve_queued.is_empty() {
+        let Some(requests) = self.file_icon_resolve_queue.start_next_batch() else {
             return;
-        }
-
-        let mut requests = Vec::new();
-        while requests.len() < FILE_ICON_RESOLVE_BATCH_SIZE {
-            let Some(request) = self.file_icon_resolve_queued.pop_front() else {
-                break;
-            };
-            requests.push(request);
-        }
-        if requests.is_empty() {
-            return;
-        }
-        self.file_icon_resolve_pending = true;
+        };
         let finished_requests = requests.clone();
 
         cx.spawn(
@@ -2169,10 +2134,7 @@ impl FikaApp {
                         })
                         .await;
                     let _ = this.update(&mut cx, |app, cx| {
-                        app.file_icon_resolve_pending = false;
-                        for request in finished_requests {
-                            app.file_icon_resolve_seen.remove(&request);
-                        }
+                        app.file_icon_resolve_queue.finish_batch(finished_requests);
                         let changed = app.file_icons.finish_resolve_results(results);
                         if changed {
                             app.visible_item_snapshot_caches.clear();
@@ -3125,7 +3087,6 @@ impl FikaApp {
     fn clear_pane_lifecycle_state(&mut self, pane_id: PaneId) {
         self.clear_pane_content_state(pane_id);
         self.pane_split_ratios.remove(&pane_id);
-        self.pane_icon_roles.remove_pane(pane_id);
     }
 
     fn select_only(&mut self, pane_id: PaneId, path: PathBuf) {
@@ -3331,24 +3292,19 @@ impl FikaApp {
 
     #[cfg(test)]
     fn apply_zoom_change(&mut self, pane_id: PaneId, change: ZoomChange) {
-        self.apply_zoom_change_impl(pane_id, change, None);
+        self.apply_zoom_change_impl(pane_id, change);
     }
 
     fn apply_zoom_change_with_context(
         &mut self,
         pane_id: PaneId,
         change: ZoomChange,
-        cx: &mut Context<Self>,
+        _cx: &mut Context<Self>,
     ) {
-        self.apply_zoom_change_impl(pane_id, change, Some(cx));
+        self.apply_zoom_change_impl(pane_id, change);
     }
 
-    fn apply_zoom_change_impl(
-        &mut self,
-        pane_id: PaneId,
-        change: ZoomChange,
-        cx: Option<&mut Context<Self>>,
-    ) {
+    fn apply_zoom_change_impl(&mut self, pane_id: PaneId, change: ZoomChange) {
         let Some(previous_view) = self.panes.pane(pane_id).map(|pane| pane.view.clone()) else {
             return;
         };
@@ -3368,12 +3324,6 @@ impl FikaApp {
         let Some(view) = self.panes.set_zoom_level(pane_id, next_level) else {
             return;
         };
-        self.update_pane_icon_role_size_after_zoom(
-            pane_id,
-            previous_view.icon_size(),
-            view.icon_size(),
-            cx,
-        );
         self.set_pane_status(
             pane_id,
             format!(
@@ -3439,23 +3389,22 @@ impl FikaApp {
 
     #[cfg(test)]
     pub(crate) fn set_zoom_level(&mut self, pane_id: PaneId, level: i32) {
-        self.set_zoom_level_impl(pane_id, level, None);
+        self.set_zoom_level_impl(pane_id, level);
     }
 
     pub(crate) fn set_zoom_level_with_context(
         &mut self,
         pane_id: PaneId,
         level: i32,
-        cx: &mut Context<Self>,
+        _cx: &mut Context<Self>,
     ) {
-        self.set_zoom_level_impl(pane_id, level, Some(cx));
+        self.set_zoom_level_impl(pane_id, level);
     }
 
-    fn set_zoom_level_impl(&mut self, pane_id: PaneId, level: i32, cx: Option<&mut Context<Self>>) {
+    fn set_zoom_level_impl(&mut self, pane_id: PaneId, level: i32) {
         let Some(previous_level) = self.panes.pane(pane_id).map(|pane| pane.view.zoom_level) else {
             return;
         };
-        let previous_icon_size = fika_core::icon_size_for_zoom_level(previous_level);
         let next_level = level.clamp(fika_core::MIN_ZOOM_LEVEL, fika_core::MAX_ZOOM_LEVEL);
         if next_level != previous_level {
             self.preserve_item_view_scroll_for_layout_change(pane_id);
@@ -3463,14 +3412,6 @@ impl FikaApp {
         let Some(view) = self.panes.set_zoom_level(pane_id, next_level) else {
             return;
         };
-        if next_level != previous_level {
-            self.update_pane_icon_role_size_after_zoom(
-                pane_id,
-                previous_icon_size,
-                view.icon_size(),
-                cx,
-            );
-        }
         self.set_pane_status(
             pane_id,
             format!(
@@ -3479,75 +3420,6 @@ impl FikaApp {
                 view.icon_size() as i32
             ),
         );
-    }
-
-    fn update_pane_icon_role_size_after_zoom(
-        &mut self,
-        pane_id: PaneId,
-        previous_icon_size: f32,
-        target_icon_size: f32,
-        cx: Option<&mut Context<Self>>,
-    ) {
-        if let Some(cx) = cx {
-            self.defer_pane_icon_role_size_update(pane_id, previous_icon_size, cx);
-        } else {
-            self.commit_pane_icon_role_size(pane_id, target_icon_size);
-        }
-    }
-
-    fn defer_pane_icon_role_size_update(
-        &mut self,
-        pane_id: PaneId,
-        previous_icon_size: f32,
-        cx: &mut Context<Self>,
-    ) {
-        let version = self
-            .pane_icon_roles
-            .begin_deferred_update(pane_id, previous_icon_size);
-
-        cx.spawn(
-            move |this: gpui::WeakEntity<FikaApp>, cx: &mut gpui::AsyncApp| {
-                let mut cx = cx.clone();
-                async move {
-                    cx.background_executor()
-                        .timer(DOLPHIN_ICON_SIZE_UPDATE_DELAY)
-                        .await;
-                    let _ = this.update(&mut cx, |app, cx| {
-                        if app.finish_deferred_pane_icon_role_size_update(pane_id, version) {
-                            cx.notify();
-                        }
-                    });
-                }
-            },
-        )
-        .detach();
-    }
-
-    fn finish_deferred_pane_icon_role_size_update(
-        &mut self,
-        pane_id: PaneId,
-        version: u64,
-    ) -> bool {
-        if !self
-            .pane_icon_roles
-            .is_current_deferred_update(pane_id, version)
-        {
-            return false;
-        }
-        let Some(target_icon_size) = self.panes.pane(pane_id).map(|pane| pane.view.icon_size())
-        else {
-            return false;
-        };
-        self.commit_pane_icon_role_size(pane_id, target_icon_size)
-    }
-
-    fn commit_pane_icon_role_size(&mut self, pane_id: PaneId, icon_size: f32) -> bool {
-        if !self.pane_icon_roles.commit(pane_id, icon_size) {
-            return false;
-        }
-        self.visible_item_snapshot_caches.remove(&pane_id);
-        self.visible_work_keys.remove(&pane_id);
-        true
     }
 
     fn set_pane_view_mode(&mut self, pane_id: PaneId, view_mode: ViewMode) {
@@ -16692,10 +16564,7 @@ text/plain=viewer.desktop;\n",
             device_monitor_active: false,
             next_device_monitor_start_at: Instant::now(),
             file_icons: FileIconCache::default(),
-            file_icon_resolve_queued: VecDeque::new(),
-            file_icon_resolve_seen: HashSet::new(),
-            file_icon_resolve_pending: false,
-            pane_icon_roles: PaneIconRoleSizeState::default(),
+            file_icon_resolve_queue: FileIconResolveQueue::default(),
             mime_applications: MimeApplicationCache::empty(),
             space_info: SpaceInfoCache::default(),
             status_summaries: HashMap::new(),

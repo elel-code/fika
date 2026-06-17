@@ -371,10 +371,10 @@ This is the active task board for the GPUI item view custom-paint migration.
 - [x] Keep thumbnail/theme-icon pending or load-failure frames visually stable:
   reuse retained same-source real images first, then paint fallback visuals when
   no retained image exists.
-- [x] Align zoom icon role updates with Dolphin: freeze pane-local icon role
-  size during active zoom, let layout geometry change immediately, then refresh
-  final icon roles after the 300ms debounce. Theme icon files are not decoded
-  synchronously in prepaint.
+- [x] Align zoom icon visuals with Dolphin: ordinary MIME/theme icons resolve
+  against the current layout icon size immediately, matching Dolphin
+  `KStandardItemListWidget::pixmapForIcon()`, while theme icon files are still
+  not decoded synchronously in prepaint.
 - [x] Extract retained item/details paint slot state into
   `src/ui/file_grid/paint_slots.rs` so model-to-painter snapshot reuse is
   separate from the renderer construction code.
@@ -397,8 +397,8 @@ This is the active plan after the retained item-view direction was accepted.
 It moves the codebase toward full custom-painted/reuse-pool ownership without
 pretending that every remaining GPUI boundary can be removed safely today.
 
-- [ ] P15a: Freeze current desktop-session evidence after the Dolphin 300ms
-  zoom role-size debounce. Required logs:
+- [ ] P15a: Freeze current desktop-session evidence after the Dolphin-aligned
+  zoom icon visual update. Required logs:
   `FIKA_PERF_ITEM_VIEW=1 cargo run -- ~/Downloads`,
   `FIKA_PERF_ITEM_VIEW=1 cargo run -- /etc`, and one
   `FIKA_DEBUG_DND=1` pane self-drag trace.
@@ -427,6 +427,10 @@ pretending that every remaining GPUI boundary can be removed safely today.
   `src/main.rs` into Dolphin-aligned file-grid modules when it can be done
   without changing behavior. Candidate boundaries: icon-role update scheduling,
   file-icon resolve queue handoff, and runtime evidence collection helpers.
+  Done so far: file-icon queued/seen/in-flight resolve state lives in
+  `file_grid/icon_work.rs`; the earlier pane-local theme-icon role-size
+  debounce was removed because it caused a delayed second zoom adjustment.
+  Runtime evidence collection helpers remain in `src/main.rs`/scripts.
 
 ## Acceptance Gates
 

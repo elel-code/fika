@@ -127,11 +127,12 @@ file roles inside the painter:
   tried. Theme icons use the same GPUI image-cache decode path and are retained
   by `iconName`; a pending new theme resource must not replace an already loaded
   same-icon image with a marker or blank frame.
-- zoom mirrors Dolphin's `KFileItemListView::triggerIconSizeUpdate()` path:
-  item geometry changes immediately, while icon snapshot conversion and
-  file-icon resolve requests keep using a pane-local icon role size until the
-  300ms update delay expires. The final role size then invalidates visible
-  snapshot/work caches and queues only the final icon size.
+- zoom mirrors Dolphin's ordinary icon paint path: item geometry changes
+  immediately, and MIME/theme icon snapshots resolve against the current layout
+  icon size, just as `KStandardItemListWidget::pixmapForIcon()` uses the
+  current style-option icon size. Dolphin's 300ms `triggerIconSizeUpdate()`
+  timer is a preview/role-updater boundary and must not create a delayed second
+  size commit for Fika theme icons.
 
 This means scroll and zoom frames must never synchronously perform theme icon
 path lookup, MIME magic reads, thumbnail probing, theme icon file decoding, or

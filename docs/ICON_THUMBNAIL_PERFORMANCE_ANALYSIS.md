@@ -7,9 +7,10 @@
 > **当前状态**：本文主体保留为历史根因分析。当前 GPUI mainline 已不再在
 > render conversion 中同步调用 `FileIconCache::icon_for()` 解析 theme path；
 > render frame 使用 `cached_or_preliminary_icon_for()`，theme path 由后台
-> `queue_file_icon_resolve_work_for_raw_grid()` 按 Dolphin visible/read-ahead
-> 顺序解析。`METADATA_ROLE_BATCH_SIZE` 当前为 16，文件 icon resolve batch
-> 当前为 64。thumbnail/theme-icon image pending 或 load failure 时 image
+> `RawFileGridSnapshot::queue_file_icon_resolve_candidates()` 投影 Dolphin
+> visible/read-ahead 顺序，并由 `FileIconResolveQueue` 管理后台队列去重和
+> in-flight 状态。`METADATA_ROLE_BATCH_SIZE` 当前为 16，文件 icon resolve
+> batch 当前为 64。thumbnail/theme-icon image pending 或 load failure 时 image
 > layer 会绘制 item fallback，避免 zoom 空白帧。后续以
 > `docs/SCROLL_ZOOM_PERFORMANCE_PLAN.md` 和
 > `docs/ITEM_VIEW_CUSTOM_PAINT_STATUS.md` 为当前计划入口。

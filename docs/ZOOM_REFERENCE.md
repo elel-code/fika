@@ -35,10 +35,11 @@ Fika pane-local zoom maps to Dolphin's view zoom level path.
 - Dolphin current view zoom level -> `ViewState::zoom_level`.
 - Dolphin icon-size mapping -> `icon_size_for_zoom_level()`.
 - Dolphin item list grid update -> `compact_layout_options()` deriving icon size, item width, and item height from `ViewState`.
-- Dolphin delayed icon role update -> pane-local icon role size in `FikaApp`;
-  layout icon rects use the current zoom immediately, while icon snapshot
-  conversion and file-icon resolve requests use the frozen role size until the
-  300ms Dolphin-style debounce fires.
+- Dolphin delayed icon role update -> future preview/thumbnail role work only.
+  Dolphin's ordinary MIME/theme icon pixmap is still sized from the widget's
+  current `styleOption().iconSize` in `KStandardItemListWidget::pixmapForIcon()`.
+  Fika therefore resolves theme icon paths with the current pane icon size
+  immediately; it does not keep a pane-local frozen icon size for theme icons.
 - Dolphin active-view action routing -> focused `PaneId` shortcut routing in `FikaApp`.
 
 ## Behavioral Rules
@@ -49,7 +50,7 @@ Fika pane-local zoom maps to Dolphin's view zoom level path.
 - Zoom changes invalidate only the target pane compact column width cache and do not reload directory data.
 - Zoom must not synchronously decode theme icon files in GPUI prepaint. During
   repeated zoom, Fika should keep painting retained same-`iconName` images or
-  cached/preliminary snapshots until the final debounced role size is resolved.
+  cached/preliminary snapshots while resolving the current layout icon size.
 - If a zoom optimization appears to reduce one frame but reintroduces visible
   blank/marker switching or per-frame icon file decoding, it is not Dolphin
   aligned.

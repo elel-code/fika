@@ -12,7 +12,7 @@ becomes the default.
 | --- | --- | --- | --- |
 | Compact/Icons item model and geometry | retained | `DirectoryModel`, visible snapshots, slot pools | none for current path |
 | Compact/Icons base background, selection, hover, drop tint, labels | replaced | custom content-level painter | runtime perf and DnD smoke evidence must stay current |
-| Compact/Icons thumbnail and theme-icon images | replaced | custom image painter using GPUI `RetainAllImageCache` plus retained same-source images | theme-icon paths resolve off the render path; zoom freezes icon role size for Dolphin's 300ms update delay; pending/failure still reuses retained images or paints fallback |
+| Compact/Icons thumbnail and theme-icon images | replaced | custom image painter using GPUI `RetainAllImageCache` plus retained same-source images | theme-icon paths resolve off the render path with the current layout icon size; pending/failure still reuses retained images or paints fallback |
 | Compact/Icons click, menu, hover, cursor, and drop hit testing | replaced | retained viewport/custom hitboxes plus active item-drag window tracker | runtime DnD smoke still required after painter changes |
 | Compact/Icons drag start | not replaced | GPUI `Div::on_drag` shell | public GPUI custom-element drag-start API or audited Fika GPUI patch |
 | Compact/Icons rename editor | not replaced | GPUI editor overlay | only revisit after caret, selection, IME, and text input behavior are covered |
@@ -36,7 +36,8 @@ DnD state helpers, but its renderer is still GPUI.
 - Compact/Icons static visual painter: `src/ui/file_grid/static_visual.rs`
 - Compact/Icons image paint layer: `src/ui/file_grid/image_layer.rs`
 - File icon cache and background resolve policy: `src/ui/icons/cache.rs`,
-  `FikaApp::queue_file_icon_resolve_work_for_raw_grid`
+  `src/ui/file_grid/icon_work.rs`, and
+  `RawFileGridSnapshot::queue_file_icon_resolve_candidates`
 - Compact/Icons transparent item shell boundary: `src/ui/file_grid/item_shell.rs`
 - Details visual painter: `src/ui/file_grid/details_visual.rs`
 - Details transparent row shell boundary: `src/ui/file_grid/details_shell.rs`
@@ -99,24 +100,26 @@ read-ahead items may retain snapshot/cache state, but they must not enter
 static visual or image prepaint, and they must not introduce new synchronous
 icon-theme, image-cache-load, or text-shaping misses into the current frame.
 Visible icon cache misses are the Dolphin-style exception: before render
-conversion, Fika may spend a small budget resolving visible `iconName` theme
-paths so the first visible paint does not show marker icons and then switch to
-MIME icons. Read-ahead icon-theme work stays queued.
+conversion, Fika may spend Dolphin's 200ms `MaxBlockTimeout` budget resolving
+visible `iconName` theme paths so the first visible paint does not show marker
+icons and then switch to MIME icons. Read-ahead icon-theme work stays queued.
 
 Current GPUI icon work follows that boundary: render conversion asks
 `FileIconCache` for a cached or preliminary snapshot only. If the theme path is
-missing, `queue_file_icon_resolve_work_for_raw_grid()` queues a background
-resolve batch ordered as visible files, visible directories, read-ahead after,
-then read-ahead before. Resolve completion invalidates visible item snapshot
-caches so the next frame can swap preliminary fallback icons for theme images
-without doing theme-directory scanning inside the scroll or zoom frame.
+missing, `RawFileGridSnapshot::queue_file_icon_resolve_candidates()` projects
+the Dolphin visible/read-ahead order, and `FileIconResolveQueue` owns queued,
+seen, and in-flight request state for background batches. Resolve completion
+invalidates visible item snapshot caches so the next frame can swap preliminary
+fallback icons for theme images without doing theme-directory scanning inside
+the scroll or zoom frame.
 When zoom changes the requested icon size, exact-size misses reuse an existing
 same-kind cached icon snapshot from another size as a transition while the
 exact-size request stays queued. This avoids a fallback-marker flash between
-two real theme icons. During active zoom, Fika mirrors Dolphin's
-`triggerIconSizeUpdate()` path by freezing the pane's icon role size for 300ms:
-layout geometry changes immediately, but icon snapshot conversion and file-icon
-resolve requests keep using the previous role size until the debounce fires.
+two real theme icons. Fika intentionally does not freeze the theme-icon resolve
+size during zoom: Dolphin delays preview/role updater work with
+`triggerIconSizeUpdate()`, but ordinary `iconName` pixmaps are generated from
+the widget's current style-option icon size. Freezing Fika's theme-icon size
+would create a visible second size adjustment when the delayed size commits.
 
 Directory-load MIME metadata and visible icon paths now follow Dolphin's
 visible-widget exception to that async rule. Dolphin keeps full role resolution
@@ -141,7 +144,7 @@ thumbnail path. Thumbnail fallback icons are still painted when no real image
 exists yet or the semantic source changed.
 
 The immediate non-GUI-safe work is to freeze fresh runtime evidence after the
-Dolphin-aligned zoom/icon role update, then execute the P15 transition order.
+Dolphin-aligned zoom/icon visual update, then execute the P15 transition order.
 The large file-grid renderer/controller module has already been split into
 focused model/projection, controller/hit-test, painter, and renderer-policy
 modules.
@@ -223,7 +226,7 @@ custom-painted today.
 The next transition work must follow this order:
 
 1. Freeze current desktop-session evidence after the Dolphin-aligned zoom
-   role-size debounce. Use `~/Downloads` for ordinary MIME/thumbnail behavior,
+   icon visual update. Use `~/Downloads` for ordinary MIME/thumbnail behavior,
    `/etc` for large mixed-directory scrolling, and `FIKA_DEBUG_DND=1` for pane
    self-drag hover.
 2. Update `docs/ITEM_VIEW_RENDERER_DECISIONS.md` with evidence before changing

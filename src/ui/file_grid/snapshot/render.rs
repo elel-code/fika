@@ -11,7 +11,7 @@ impl RawFileGridSnapshot {
         self,
         selection_count: usize,
         visible_item_cache: &mut VisibleItemSnapshotCache,
-        icon_role_size: f32,
+        file_icon_size: f32,
         mut icon_for_item: F,
     ) -> FileGridSnapshot
     where
@@ -30,7 +30,7 @@ impl RawFileGridSnapshot {
                             &item,
                             false,
                             item.visible,
-                            icon_role_size,
+                            file_icon_size,
                             &mut icon_for_item,
                         )?;
                         Some(VisibleItemSnapshot {
@@ -72,7 +72,7 @@ impl RawFileGridSnapshot {
                             &item,
                             true,
                             item.visible,
-                            icon_role_size,
+                            file_icon_size,
                             &mut icon_for_item,
                         )?;
                         Some(VisibleItemSnapshot {
@@ -116,7 +116,7 @@ impl RawFileGridSnapshot {
                             is_dir: item.is_dir,
                             mime_type: item.mime_type.clone(),
                             mime_magic_checked: item.mime_magic_checked,
-                            icon_size: icon_role_size,
+                            icon_size: file_icon_size,
                         });
                         DetailsItemSnapshot {
                             row_index: item.row_index,
@@ -276,7 +276,7 @@ mod tests {
     }
 
     #[test]
-    fn icon_snapshot_uses_role_icon_size_instead_of_layout_icon_rect() {
+    fn icon_snapshot_uses_view_icon_size_instead_of_layout_icon_rect() {
         let mut item = test_raw_visible_item(1, "zoomed.txt", 0);
         item.layout.icon_rect.width = 128.0;
         item.layout.icon_rect.height = 128.0;

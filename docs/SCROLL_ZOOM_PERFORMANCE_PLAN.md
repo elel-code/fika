@@ -54,11 +54,12 @@ the render frame.
   queued. This mirrors Dolphin's visual-stability behavior: do not replace a
   real visible icon with a fallback marker just because the new zoom level's
   icon path has not resolved yet.
-- Active zoom now mirrors Dolphin's `KFileItemListView::triggerIconSizeUpdate()`
-  / `updateIconSize()` split. Item layout changes immediately, but icon snapshot
-  conversion and file-icon resolve requests keep using the previous pane-local
-  icon role size for 300ms; only the final role size invalidates visible
-  snapshots and queues exact-size icon work.
+- Active zoom now mirrors Dolphin's ordinary theme-icon paint path. Item layout
+  changes immediately, and icon snapshot conversion/file-icon resolve requests
+  use the current layout icon size immediately, matching
+  `KStandardItemListWidget::pixmapForIcon()`. Dolphin's 300ms
+  `triggerIconSizeUpdate()` timer is treated as a preview/role-updater boundary,
+  not as a delayed second size commit for Fika theme icons.
 - The image paint layer now applies the same rule after path resolution too:
   if GPUI `RetainAllImageCache::load()` returns pending/error for a new icon
   path, the painter first tries a retained image for the same MIME icon name.
