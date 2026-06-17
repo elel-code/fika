@@ -24,7 +24,7 @@ cat > "$tmpdir/complete.log" <<'EOF'
 [fika file-grid] pane=1 mode=Details visible=30 content=601x882 build=420us
 [fika static-item-visual] pane=1 mode=Compact prepaint_count=32 prepaint=180us paint_count=32 paint=160us
 [fika static-item-visual] pane=1 mode=Icons prepaint_count=40 prepaint=210us paint_count=40 paint=190us
-[fika item-image] pane=1 mode=Icons prepaint_count=8 prepaint=70us paint_count=8 paint=80us
+[fika item-image] pane=1 mode=Icons prepaint_count=8 prepaint=70us paint_count=8 paint=80us theme_loaded=4 theme_decoded=2 theme_retained=1 theme_placeholder=1 thumb_loaded=2 thumb_decoded=1 thumb_retained=0 thumb_fallback=0
 [fika details-visual] pane=1 mode=Details prepaint_count=48 prepaint=120us paint_count=48 paint=130us
 [fika details-shape-cache] pane=1 mode=Details hits=20 misses=2 evicted=0 entries=22
 [fika item-interaction] pane=1 mode=Details prepaint_count=48 prepaint=60us paint_count=48 paint=50us
@@ -58,6 +58,10 @@ if [[ "$evidence" != *"## Item View Renderer Evidence"* ]]; then
 fi
 if [[ "$evidence" != *"custom_paint_frames"* ]]; then
     echo "expected renderer evidence to include analyzer summary" >&2
+    exit 1
+fi
+if [[ "$evidence" != *"image_sources"* || "$evidence" != *"theme_placeholder=1"* ]]; then
+    echo "expected renderer evidence to include image source summary" >&2
     exit 1
 fi
 if [[ "$evidence" != *"item_view_stage_max"* || "$evidence" != *"icon_sync=3us"* ]]; then

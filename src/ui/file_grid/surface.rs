@@ -322,13 +322,21 @@ pub(crate) fn file_grid(
                 }
                 if image_stats.has_activity() {
                     eprintln!(
-                        "[fika item-image] pane={} mode={:?} prepaint_count={} prepaint={}us paint_count={} paint={}us",
+                        "[fika item-image] pane={} mode={:?} prepaint_count={} prepaint={}us paint_count={} paint={}us theme_loaded={} theme_decoded={} theme_retained={} theme_placeholder={} thumb_loaded={} thumb_decoded={} thumb_retained={} thumb_fallback={}",
                         pane_id.0,
                         view_mode,
                         image_stats.prepaint_count,
                         image_stats.prepaint_us,
                         image_stats.paint_count,
                         image_stats.paint_us,
+                        image_stats.sources.theme_loaded,
+                        image_stats.sources.theme_decoded,
+                        image_stats.sources.theme_retained,
+                        image_stats.sources.theme_placeholder,
+                        image_stats.sources.thumbnail_loaded,
+                        image_stats.sources.thumbnail_decoded,
+                        image_stats.sources.thumbnail_retained,
+                        image_stats.sources.thumbnail_fallback,
                     );
                 }
                 if details_visual_stats.has_activity() {

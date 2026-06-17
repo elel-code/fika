@@ -97,9 +97,42 @@ pub(crate) struct ItemLayerPerfStats {
 }
 
 pub(crate) type StaticItemVisualPerfStats = ItemLayerPerfStats;
-pub(crate) type ItemImagePerfStats = ItemLayerPerfStats;
 pub(crate) type DetailsVisualPerfStats = ItemLayerPerfStats;
 pub(crate) type ItemInteractionPerfStats = ItemLayerPerfStats;
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct ItemImageSourcePerfStats {
+    pub(crate) theme_loaded: usize,
+    pub(crate) theme_decoded: usize,
+    pub(crate) theme_retained: usize,
+    pub(crate) theme_placeholder: usize,
+    pub(crate) thumbnail_loaded: usize,
+    pub(crate) thumbnail_decoded: usize,
+    pub(crate) thumbnail_retained: usize,
+    pub(crate) thumbnail_fallback: usize,
+}
+
+impl ItemImageSourcePerfStats {
+    fn add(&mut self, stats: Self) {
+        self.theme_loaded += stats.theme_loaded;
+        self.theme_decoded += stats.theme_decoded;
+        self.theme_retained += stats.theme_retained;
+        self.theme_placeholder += stats.theme_placeholder;
+        self.thumbnail_loaded += stats.thumbnail_loaded;
+        self.thumbnail_decoded += stats.thumbnail_decoded;
+        self.thumbnail_retained += stats.thumbnail_retained;
+        self.thumbnail_fallback += stats.thumbnail_fallback;
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct ItemImagePerfStats {
+    pub(crate) prepaint_count: usize,
+    pub(crate) prepaint_us: u128,
+    pub(crate) paint_count: usize,
+    pub(crate) paint_us: u128,
+    pub(crate) sources: ItemImageSourcePerfStats,
+}
 
 impl ItemLayerPerfStats {
     pub(super) fn has_activity(self) -> bool {
@@ -109,6 +142,28 @@ impl ItemLayerPerfStats {
     pub(super) fn record_prepaint(&mut self, elapsed: Duration, count: usize) {
         self.prepaint_count += count;
         self.prepaint_us += elapsed.as_micros();
+    }
+
+    pub(super) fn record_paint(&mut self, elapsed: Duration, count: usize) {
+        self.paint_count += count;
+        self.paint_us += elapsed.as_micros();
+    }
+}
+
+impl ItemImagePerfStats {
+    pub(super) fn has_activity(self) -> bool {
+        self.prepaint_count > 0 || self.paint_count > 0
+    }
+
+    pub(super) fn record_prepaint(
+        &mut self,
+        elapsed: Duration,
+        count: usize,
+        source_stats: ItemImageSourcePerfStats,
+    ) {
+        self.prepaint_count += count;
+        self.prepaint_us += elapsed.as_micros();
+        self.sources.add(source_stats);
     }
 
     pub(super) fn record_paint(&mut self, elapsed: Duration, count: usize) {
@@ -309,11 +364,12 @@ impl FikaApp {
         pane_id: PaneId,
         elapsed: Duration,
         count: usize,
+        source_stats: ItemImageSourcePerfStats,
     ) {
         self.item_image_perf_stats
             .entry(pane_id)
             .or_default()
-            .record_prepaint(elapsed, count);
+            .record_prepaint(elapsed, count, source_stats);
     }
 
     pub(super) fn record_item_image_paint(

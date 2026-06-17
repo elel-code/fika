@@ -58,6 +58,9 @@ DnD state helpers, but its renderer is still GPUI.
 - Runtime DnD debug channel: `FIKA_DEBUG_DND=1`, especially
   `[fika dnd] active-item-move`
 - Compact/Icons image paint channel: `[fika item-image]`
+  (`theme_loaded`, `theme_decoded`, `theme_retained`,
+  `theme_placeholder`, `thumb_loaded`, `thumb_decoded`, `thumb_retained`,
+  `thumb_fallback`)
 - Details visual paint channel: `[fika details-visual]`
 - Renderer surface count channel: `[fika renderer-policy]`
 - Runtime checklist: `docs/ITEM_VIEW_RUNTIME_SMOKE.md`

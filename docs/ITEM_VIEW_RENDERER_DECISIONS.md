@@ -26,7 +26,7 @@ Current replacement status and the full transition roadmap are tracked in
 | Surface | Current renderer | Dolphin-style owner | Decision | Evidence required before changing |
 | --- | --- | --- | --- | --- |
 | Compact/Icons base background and labels | custom content-level painter | visible item snapshots, paint slots, text shape cache | Keep custom paint. | Runtime logs must keep steady snapshot conversion sub-ms and static visual paint/build under budget. |
-| Compact/Icons thumbnail and theme-icon images | custom image painter | image paint snapshots, pane-local thumbnail image cache, retained theme/thumbnail image map, background file-icon resolve queue | Keep custom paint while image decode/cache stays on GPUI `RetainAllImageCache`; theme icons reuse retained same-`iconName` images through pending loads. Zoom resolves theme icon paths for the current layout icon size immediately, matching Dolphin's widget pixmap path instead of applying the delayed preview role-size timer to ordinary MIME icons. Render conversion uses cached/preliminary icon snapshots only. | Logs must include `[fika item-image]`; no synchronous icon-theme lookup in conversion, no thumbnail sync decode, no theme-icon file decode in prepaint, and no regression where a previously visible real MIME icon flashes back to fallback while a new image resource is pending. |
+| Compact/Icons thumbnail and theme-icon images | custom image painter | image paint snapshots, pane-local thumbnail image cache, retained theme/thumbnail image map, background file-icon resolve queue | Keep custom paint while image decode/cache stays on GPUI `RetainAllImageCache`; theme icons reuse retained same-`iconName` images through pending loads. Zoom resolves theme icon paths for the current layout icon size immediately, matching Dolphin's widget pixmap path instead of applying the delayed preview role-size timer to ordinary MIME icons. Render conversion uses cached/preliminary icon snapshots only. | Logs must include `[fika item-image]` plus `image_sources`; no synchronous icon-theme lookup in conversion, no thumbnail sync decode, no theme-icon file decode in prepaint, and no regression where a previously visible real MIME icon flashes back to fallback while a new image resource is pending. |
 | Compact/Icons hover, cursor, click, menu, drop hit testing | retained viewport/custom hitboxes plus active item-drag window tracker | viewport retained hit testing and `drag_drop` state | Keep retained controller path. | DnD smoke must pass across internal item, pane, Places, and external drops; pane self-drags should log `active-item-move`. |
 | Compact/Icons drag start | GPUI `Div::on_drag` shell | retained drag payload state plus temporary shell | Keep GPUI shell for initiation only. | Do not remove until GPUI exposes public custom-element drag-start or Fika carries an audited GPUI patch. |
 | Compact/Icons rename editor | GPUI text/editor subtree overlay | rename draft model and overlay geometry | Keep GPUI built-in editor. | Only revisit when text input, caret hit testing, selection, and IME behavior can stay behavior-complete. |
@@ -63,7 +63,14 @@ For paint-layer investigations, compare `[fika static-item-visual]` and
 `[fika item-image]` prepaint counts against visible item counts, not raw
 read-ahead work counts. Read-ahead belongs to scheduler projection and retained
 caches; it should not add image-cache loads or text shaping to the current
-paint prepass.
+paint prepass. The analyzer's `image_sources` line separates first-ready GPUI
+decode results (`theme_decoded` / `thumb_decoded`), already-ready cache loads
+(`theme_loaded` / `thumb_loaded`), retained fallback-to-last-real-image paths
+(`theme_retained` / `thumb_retained`), and visible fallback paths
+(`theme_placeholder` / `thumb_fallback`). A zoom or scroll trace with high
+`theme_retained` and low `theme_placeholder` is evidence that the custom image
+layer is preserving Dolphin-style same-icon visual stability through pending
+image-cache loads.
 
 For MIME icon flicker investigations, compare against Dolphin's
 `KStandardItemListWidget::updatePixmap()` and `pixmapForIcon()`: Dolphin keeps a

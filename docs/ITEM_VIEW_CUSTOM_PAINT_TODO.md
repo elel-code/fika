@@ -451,10 +451,13 @@ by risk and evidence, not by how custom-painted a surface looks.
 - [ ] P16c: Update `docs/ITEM_VIEW_RENDERER_DECISIONS.md` with that evidence,
   including whether `/etc` zoom/scroll still shows cold image-load jank or
   visible placeholder-to-icon switching.
-- [ ] P16d: Add or extend runtime evidence tooling if the current logs cannot
+- [x] P16d: Add or extend runtime evidence tooling if the current logs cannot
   distinguish these cases: first-load theme-icon placeholder, retained
   same-`iconName` reuse, GPUI image-cache decode completion, and steady
-  repaint cost.
+  repaint cost. `[fika item-image]` now reports `theme_loaded`,
+  `theme_decoded`, `theme_retained`, `theme_placeholder`, `thumb_loaded`,
+  `thumb_decoded`, `thumb_retained`, and `thumb_fallback`; the runtime analyzer
+  summarizes them as `image_sources`.
 - [ ] P16e: Audit local GPUI source for a retained/custom-element drag-start
   path. If no public API exists, document the exact blocker and keep item and
   Details drag-start shells.
@@ -493,9 +496,12 @@ by risk and evidence, not by how custom-painted a surface looks.
   conversion, no new large `file-grid build` regression, Compact/Icons custom
   visual cost is visible through `[fika static-item-visual]`, image paint cost
   is visible through `[fika item-image]` when image-backed icons/thumbnails are
-  present, aggregate custom paint cost is summarized, and Details custom
-  visual/text-shape cost is visible separately through `[fika details-visual]`
-  and `[fika details-shape-cache]`. Scroll/zoom evidence should also show that
+  present, item-image source counts show whether frames are using decoded
+  theme icons, retained same-`iconName` images, first-load placeholders, or
+  thumbnail fallbacks, aggregate custom paint cost is summarized, and Details
+  custom visual/text-shape cost is visible separately through
+  `[fika details-visual]` and `[fika details-shape-cache]`. Scroll/zoom evidence
+  should also show that
   cold theme-icon work no longer appears as a synchronous render conversion
   spike after the first frame has switched to preliminary icons.
 - [x] Cold mode switch cost is tracked separately from resize cost: `[fika

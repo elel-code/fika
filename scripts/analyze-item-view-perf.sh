@@ -389,6 +389,14 @@ BEGIN {
     note_mode(field("mode"))
     paint = us_field("paint")
     prepaint = us_field("prepaint")
+    image_theme_loaded += field("theme_loaded") + 0
+    image_theme_decoded += field("theme_decoded") + 0
+    image_theme_retained += field("theme_retained") + 0
+    image_theme_placeholder += field("theme_placeholder") + 0
+    image_thumb_loaded += field("thumb_loaded") + 0
+    image_thumb_decoded += field("thumb_decoded") + 0
+    image_thumb_retained += field("thumb_retained") + 0
+    image_thumb_fallback += field("thumb_fallback") + 0
     max_assign(single_max, "image_prepaint", prepaint)
     max_assign(single_max, "image_paint", paint)
     record_custom_paint(prepaint, paint)
@@ -480,6 +488,14 @@ END {
     print "  image_frames: " (image_count + 0) \
         " max_prepaint=" (("image_prepaint" in single_max) ? single_max["image_prepaint"] : 0) "us" \
         " max_paint=" (("image_paint" in single_max) ? single_max["image_paint"] : 0) "us"
+    print "  image_sources: theme_loaded=" (image_theme_loaded + 0) \
+        " theme_decoded=" (image_theme_decoded + 0) \
+        " theme_retained=" (image_theme_retained + 0) \
+        " theme_placeholder=" (image_theme_placeholder + 0) \
+        " thumb_loaded=" (image_thumb_loaded + 0) \
+        " thumb_decoded=" (image_thumb_decoded + 0) \
+        " thumb_retained=" (image_thumb_retained + 0) \
+        " thumb_fallback=" (image_thumb_fallback + 0)
     print "  custom_paint_frames: " (custom_paint_count + 0) \
         " max_prepaint=" (("custom_paint_prepaint" in single_max) ? single_max["custom_paint_prepaint"] : 0) "us" \
         " max_paint=" (("custom_paint_paint" in single_max) ? single_max["custom_paint_paint"] : 0) "us"

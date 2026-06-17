@@ -15,6 +15,7 @@ use crate::FikaApp;
 use crate::ui::icons::FileIconSnapshot;
 
 use super::ITEM_NAME_LINE_HEIGHT;
+use super::ItemImageSourcePerfStats;
 use super::paint_slots::ItemPaintSnapshot;
 use super::renderer_policy::{item_uses_image_layer, item_uses_layer_visual_paint};
 use super::text::static_paint_single_line_text;
@@ -121,6 +122,18 @@ pub(super) struct RetainedImageLayerState {
     retained_images: HashMap<ItemImageRetainedSource, Arc<RenderImage>>,
 }
 
+pub(super) struct RetainedImageLoad {
+    image: Option<Arc<RenderImage>>,
+    outcome: RetainedImageLoadOutcome,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum RetainedImageLoadOutcome {
+    CacheReady { first_ready: bool },
+    Retained,
+    Missing,
+}
+
 impl RetainedImageLayerState {
     pub(super) fn new(cx: &mut App) -> Self {
         Self {
@@ -129,23 +142,35 @@ impl RetainedImageLayerState {
         }
     }
 
-    pub(super) fn load_thumbnail_or_retained(
+    fn load_image_or_retained(
         &mut self,
         source_path: Arc<Path>,
         retained_source: ItemImageRetainedSource,
         window: &mut Window,
         cx: &mut App,
-    ) -> Option<Arc<RenderImage>> {
+    ) -> RetainedImageLoad {
         let resource = Resource::Path(source_path);
         let load_result = self
             .image_cache
             .update(cx, |cache, cx| cache.load(&resource, window, cx));
         match load_result {
             Some(Ok(image)) => {
+                let first_ready = !self.retained_images.contains_key(&retained_source);
                 self.retained_images.insert(retained_source, image.clone());
-                Some(image)
+                RetainedImageLoad {
+                    image: Some(image),
+                    outcome: RetainedImageLoadOutcome::CacheReady { first_ready },
+                }
             }
-            _ => self.retained_images.get(&retained_source).cloned(),
+            _ => {
+                let image = self.retained_images.get(&retained_source).cloned();
+                let outcome = if image.is_some() {
+                    RetainedImageLoadOutcome::Retained
+                } else {
+                    RetainedImageLoadOutcome::Missing
+                };
+                RetainedImageLoad { image, outcome }
+            }
         }
     }
 
@@ -156,7 +181,28 @@ impl RetainedImageLayerState {
         window: &mut Window,
         cx: &mut App,
     ) -> Option<Arc<RenderImage>> {
-        self.load_thumbnail_or_retained(source_path, retained_source, window, cx)
+        self.load_image_or_retained(source_path, retained_source, window, cx)
+            .image
+    }
+
+    fn load_thumbnail_or_retained_with_outcome(
+        &mut self,
+        source_path: Arc<Path>,
+        retained_source: ItemImageRetainedSource,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> RetainedImageLoad {
+        self.load_image_or_retained(source_path, retained_source, window, cx)
+    }
+
+    fn load_theme_icon_or_retained_with_outcome(
+        &mut self,
+        source_path: Arc<Path>,
+        retained_source: ItemImageRetainedSource,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> RetainedImageLoad {
+        self.load_image_or_retained(source_path, retained_source, window, cx)
     }
 }
 
@@ -244,16 +290,19 @@ impl Element for ItemImageLayerElement {
         let perf_started = super::item_view_perf_enabled().then(std::time::Instant::now);
         window.with_element_state::<RetainedImageLayerState, _>(id, |state, window| {
             let mut state = state.unwrap_or_else(|| RetainedImageLayerState::new(cx));
+            let mut source_stats = ItemImageSourcePerfStats::default();
             let states = self
                 .items
                 .iter()
-                .filter_map(|item| item_image_layer_prepaint_item(item, &mut state, window, cx))
+                .filter_map(|item| {
+                    item_image_layer_prepaint_item(item, &mut state, &mut source_stats, window, cx)
+                })
                 .collect::<Vec<_>>();
             if let Some(started) = perf_started {
                 let elapsed = started.elapsed();
                 let count = states.len();
                 let _ = self.app.update(cx, |this, _cx| {
-                    this.record_item_image_prepaint(self.pane_id, elapsed, count);
+                    this.record_item_image_prepaint(self.pane_id, elapsed, count, source_stats);
                 });
             }
             (states, state)
@@ -302,6 +351,7 @@ pub(super) fn item_image_paint_layer_element_id(pane_id: PaneId) -> (&'static st
 fn item_image_layer_prepaint_item(
     item: &ItemImageLayerItem,
     state: &mut RetainedImageLayerState,
+    source_stats: &mut ItemImageSourcePerfStats,
     window: &mut Window,
     cx: &mut App,
 ) -> Option<ItemImagePaintState> {
@@ -315,11 +365,13 @@ fn item_image_layer_prepaint_item(
     } else {
         ItemImagePaintKind::ThemeIcon
     };
-    let image = if kind == ItemImagePaintKind::Thumbnail {
-        state.load_thumbnail_or_retained(source_path, retained_source, window, cx)
+    let load = if kind == ItemImagePaintKind::Thumbnail {
+        state.load_thumbnail_or_retained_with_outcome(source_path, retained_source, window, cx)
     } else {
-        state.load_theme_icon_or_retained(source_path, retained_source, window, cx)
+        state.load_theme_icon_or_retained_with_outcome(source_path, retained_source, window, cx)
     };
+    record_item_image_source_stats(source_stats, kind, load.outcome);
+    let image = load.image;
     let fallback = image.is_none().then(|| {
         if kind == ItemImagePaintKind::Thumbnail {
             item_image_marker_fallback_prepaint(item, window)
@@ -334,6 +386,39 @@ fn item_image_layer_prepaint_item(
         image,
         fallback,
     })
+}
+
+fn record_item_image_source_stats(
+    stats: &mut ItemImageSourcePerfStats,
+    kind: ItemImagePaintKind,
+    outcome: RetainedImageLoadOutcome,
+) {
+    match (kind, outcome) {
+        (ItemImagePaintKind::Thumbnail, RetainedImageLoadOutcome::CacheReady { first_ready }) => {
+            stats.thumbnail_loaded += 1;
+            if first_ready {
+                stats.thumbnail_decoded += 1;
+            }
+        }
+        (ItemImagePaintKind::Thumbnail, RetainedImageLoadOutcome::Retained) => {
+            stats.thumbnail_retained += 1;
+        }
+        (ItemImagePaintKind::Thumbnail, RetainedImageLoadOutcome::Missing) => {
+            stats.thumbnail_fallback += 1;
+        }
+        (ItemImagePaintKind::ThemeIcon, RetainedImageLoadOutcome::CacheReady { first_ready }) => {
+            stats.theme_loaded += 1;
+            if first_ready {
+                stats.theme_decoded += 1;
+            }
+        }
+        (ItemImagePaintKind::ThemeIcon, RetainedImageLoadOutcome::Retained) => {
+            stats.theme_retained += 1;
+        }
+        (ItemImagePaintKind::ThemeIcon, RetainedImageLoadOutcome::Missing) => {
+            stats.theme_placeholder += 1;
+        }
+    }
 }
 
 fn item_image_marker_fallback_prepaint(
@@ -661,6 +746,46 @@ mod tests {
         assert_eq!(square.origin.y, px(20.0));
         assert_eq!(square.size.width, px(24.0));
         assert_eq!(square.size.height, px(24.0));
+    }
+
+    #[test]
+    fn image_source_stats_separate_decoded_retained_and_pending_paths() {
+        let mut stats = ItemImageSourcePerfStats::default();
+
+        record_item_image_source_stats(
+            &mut stats,
+            ItemImagePaintKind::ThemeIcon,
+            RetainedImageLoadOutcome::CacheReady { first_ready: true },
+        );
+        record_item_image_source_stats(
+            &mut stats,
+            ItemImagePaintKind::ThemeIcon,
+            RetainedImageLoadOutcome::Retained,
+        );
+        record_item_image_source_stats(
+            &mut stats,
+            ItemImagePaintKind::ThemeIcon,
+            RetainedImageLoadOutcome::Missing,
+        );
+        record_item_image_source_stats(
+            &mut stats,
+            ItemImagePaintKind::Thumbnail,
+            RetainedImageLoadOutcome::CacheReady { first_ready: false },
+        );
+        record_item_image_source_stats(
+            &mut stats,
+            ItemImagePaintKind::Thumbnail,
+            RetainedImageLoadOutcome::Missing,
+        );
+
+        assert_eq!(stats.theme_loaded, 1);
+        assert_eq!(stats.theme_decoded, 1);
+        assert_eq!(stats.theme_retained, 1);
+        assert_eq!(stats.theme_placeholder, 1);
+        assert_eq!(stats.thumbnail_loaded, 1);
+        assert_eq!(stats.thumbnail_decoded, 0);
+        assert_eq!(stats.thumbnail_retained, 0);
+        assert_eq!(stats.thumbnail_fallback, 1);
     }
 
     fn test_item(thumbnail_path: Option<Arc<Path>>) -> ItemImageLayerItem {
