@@ -18,6 +18,10 @@ Options:
       Fail unless FIKA_AUTOSMOKE_PLACES=overflow markers are present and the
       log proves sidebar overflow through [fika places-scrollbar].
 
+  --require-layout-autosmoke
+      Fail unless FIKA_AUTOSMOKE_PLACES=layout markers are present and prove
+      sidebar hide/show, resize, reset, restore, and persisted settings.
+
   --expect-current-gpui-policy
       Fail unless [fika places-renderer-policy] matches the current GPUI row
       renderer baseline: row_gpui/icon_gpui/drag_shell equal rows,
@@ -48,6 +52,7 @@ EOF
 
 require_autosmoke=false
 require_overflow_autosmoke=false
+require_layout_autosmoke=false
 expect_current_gpui_policy=false
 expect_custom_row_visual_policy=false
 snapshot_us=""
@@ -62,6 +67,9 @@ while [[ $# -gt 0 ]]; do
             ;;
         --require-overflow-autosmoke)
             require_overflow_autosmoke=true
+            ;;
+        --require-layout-autosmoke)
+            require_layout_autosmoke=true
             ;;
         --expect-current-gpui-policy)
             expect_current_gpui_policy=true
@@ -143,6 +151,7 @@ done
 awk \
     -v require_autosmoke="$require_autosmoke" \
     -v require_overflow_autosmoke="$require_overflow_autosmoke" \
+    -v require_layout_autosmoke="$require_layout_autosmoke" \
     -v expect_current_gpui_policy="$expect_current_gpui_policy" \
     -v expect_custom_row_visual_policy="$expect_custom_row_visual_policy" \
     -v snapshot_limit="$snapshot_us" \
@@ -321,9 +330,19 @@ function fail(message) {
     overflow_autosmoke_complete_seen = 1
 }
 
+/^\[fika autosmoke\] places start scenario=Layout/ {
+    layout_autosmoke_start_seen = 1
+}
+
+/^\[fika autosmoke\] places complete scenario=Layout/ {
+    layout_autosmoke_complete_seen = 1
+}
+
 /^\[fika autosmoke\] places action=/ {
     action = field("action")
     changed = field("changed")
+    visible = field("visible")
+    ok = field("ok")
     if (action == "target-first-place" && changed == "true") {
         autosmoke_target_action_seen = 1
     } else if (action == "target-insert-start" && changed == "true") {
@@ -332,6 +351,20 @@ function fail(message) {
         autosmoke_insert_end_action_seen = 1
     } else if (action == "clear-targets" && changed == "true") {
         autosmoke_clear_action_seen = 1
+    } else if (action == "layout-initial") {
+        layout_initial_seen = 1
+    } else if (action == "layout-hide" && changed == "true" && visible == "false") {
+        layout_hide_seen = 1
+    } else if (action == "layout-show" && changed == "true" && visible == "true") {
+        layout_show_seen = 1
+    } else if (action == "layout-resize" && changed == "true" && visible == "true") {
+        layout_resize_seen = 1
+    } else if (action == "layout-reset" && changed == "true" && visible == "true") {
+        layout_reset_seen = 1
+    } else if (action == "layout-restore") {
+        layout_restore_seen = 1
+    } else if (action == "layout-verify-saved" && ok == "true") {
+        layout_verify_saved_seen = 1
     }
 }
 
@@ -430,6 +463,16 @@ END {
             fail("missing visible overflowing Places scrollbar evidence")
         }
     }
+    if (require_layout_autosmoke == "true") {
+        if (!layout_autosmoke_start_seen || !layout_autosmoke_complete_seen) {
+            fail("missing Places layout autosmoke start/complete markers")
+        }
+        if (!layout_initial_seen || !layout_hide_seen || !layout_show_seen ||
+            !layout_resize_seen || !layout_reset_seen || !layout_restore_seen ||
+            !layout_verify_saved_seen) {
+            fail("missing or invalid Places layout autosmoke action markers")
+        }
+    }
     if (exit_code) {
         exit exit_code
     }
@@ -490,6 +533,16 @@ END {
         overflow_autosmoke_complete_seen,
         overflow_autosmoke_snapshot_seen,
         max_values["overflow_visible"])
+    printf("places_layout_autosmoke start=%d complete=%d initial=%d hide=%d show=%d resize=%d reset=%d restore=%d verify_saved=%d\n",
+        layout_autosmoke_start_seen,
+        layout_autosmoke_complete_seen,
+        layout_initial_seen,
+        layout_hide_seen,
+        layout_show_seen,
+        layout_resize_seen,
+        layout_reset_seen,
+        layout_restore_seen,
+        layout_verify_saved_seen)
     printf("places_autosmoke target=%d insert_start=%d insert_end=%d clear=%d snapshots=%d,%d,%d,%d,%d\n",
         autosmoke_target_action_seen,
         autosmoke_insert_start_action_seen,

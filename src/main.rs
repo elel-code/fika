@@ -366,6 +366,20 @@ async fn privileged_task_result_for_commands(
 
 const RUBBER_BAND_START_DRAG_DISTANCE: f32 = 6.0;
 
+#[derive(Clone, Copy, Debug)]
+struct PlacesLayoutAutosmokeOriginal {
+    width: f32,
+    visible: bool,
+}
+
+fn places_autosmoke_resize_target_width(current_width: f32) -> f32 {
+    if current_width < 300.0 {
+        320.0
+    } else {
+        PLACES_SIDEBAR_DEFAULT_WIDTH - 40.0
+    }
+}
+
 pub(crate) struct FikaApp {
     pub(crate) panes: PaneController,
     places: Vec<PlaceEntry>,
@@ -377,6 +391,7 @@ pub(crate) struct FikaApp {
     place_row_text_shape_cache: PlacesRowTextShapeCache,
     places_sidebar_width: f32,
     places_sidebar_visible: bool,
+    places_layout_autosmoke_original: Option<PlacesLayoutAutosmokeOriginal>,
     app_settings_path: PathBuf,
     app_settings_save_generation: u64,
     app_settings_save_task_running: bool,
@@ -483,6 +498,7 @@ impl FikaApp {
             place_row_text_shape_cache: PlacesRowTextShapeCache::default(),
             places_sidebar_width,
             places_sidebar_visible,
+            places_layout_autosmoke_original: None,
             app_settings_path,
             app_settings_save_generation: 0,
             app_settings_save_task_running: false,
@@ -687,7 +703,7 @@ impl FikaApp {
                     for action in scenario.actions() {
                         if this
                             .update(&mut cx, |app, cx| {
-                                if app.apply_places_autosmoke_action(action) {
+                                if app.apply_places_autosmoke_action(action, cx) {
                                     cx.notify();
                                 }
                             })
@@ -707,7 +723,11 @@ impl FikaApp {
         .detach();
     }
 
-    fn apply_places_autosmoke_action(&mut self, action: PlacesAutosmokeAction) -> bool {
+    fn apply_places_autosmoke_action(
+        &mut self,
+        action: PlacesAutosmokeAction,
+        cx: &mut Context<Self>,
+    ) -> bool {
         match action {
             PlacesAutosmokeAction::Snapshot { label } => {
                 self.emit_places_autosmoke_snapshot(label);
@@ -754,6 +774,115 @@ impl FikaApp {
                     label, changed
                 );
                 changed
+            }
+            PlacesAutosmokeAction::CaptureLayout { label } => {
+                let original = self.places_layout_autosmoke_original.get_or_insert(
+                    PlacesLayoutAutosmokeOriginal {
+                        width: self.places_sidebar_width,
+                        visible: self.places_sidebar_visible,
+                    },
+                );
+                eprintln!(
+                    "[fika autosmoke] places action={} width={:.1} visible={}",
+                    label, original.width, original.visible
+                );
+                false
+            }
+            PlacesAutosmokeAction::HideSidebar { label } => {
+                let changed = self.update_places_sidebar_layout_for_autosmoke(
+                    self.places_sidebar_width,
+                    false,
+                    cx,
+                );
+                eprintln!(
+                    "[fika autosmoke] places action={} width={:.1} visible={} changed={}",
+                    label, self.places_sidebar_width, self.places_sidebar_visible, changed
+                );
+                changed
+            }
+            PlacesAutosmokeAction::ShowSidebar { label } => {
+                let changed = self.update_places_sidebar_layout_for_autosmoke(
+                    self.places_sidebar_width,
+                    true,
+                    cx,
+                );
+                eprintln!(
+                    "[fika autosmoke] places action={} width={:.1} visible={} changed={}",
+                    label, self.places_sidebar_width, self.places_sidebar_visible, changed
+                );
+                changed
+            }
+            PlacesAutosmokeAction::ResizeSidebar { label } => {
+                let target_width = places_autosmoke_resize_target_width(self.places_sidebar_width);
+                let changed =
+                    self.update_places_sidebar_layout_for_autosmoke(target_width, true, cx);
+                eprintln!(
+                    "[fika autosmoke] places action={} width={:.1} visible={} target_width={:.1} changed={}",
+                    label,
+                    self.places_sidebar_width,
+                    self.places_sidebar_visible,
+                    target_width,
+                    changed
+                );
+                changed
+            }
+            PlacesAutosmokeAction::ResetSidebar { label } => {
+                let changed = self.update_places_sidebar_layout_for_autosmoke(
+                    PLACES_SIDEBAR_DEFAULT_WIDTH,
+                    true,
+                    cx,
+                );
+                eprintln!(
+                    "[fika autosmoke] places action={} width={:.1} visible={} changed={}",
+                    label, self.places_sidebar_width, self.places_sidebar_visible, changed
+                );
+                changed
+            }
+            PlacesAutosmokeAction::RestoreLayout { label } => {
+                let original = self.places_layout_autosmoke_original.unwrap_or(
+                    PlacesLayoutAutosmokeOriginal {
+                        width: self.places_sidebar_width,
+                        visible: self.places_sidebar_visible,
+                    },
+                );
+                let changed = self.update_places_sidebar_layout_for_autosmoke(
+                    original.width,
+                    original.visible,
+                    cx,
+                );
+                eprintln!(
+                    "[fika autosmoke] places action={} width={:.1} visible={} changed={}",
+                    label, self.places_sidebar_width, self.places_sidebar_visible, changed
+                );
+                changed
+            }
+            PlacesAutosmokeAction::VerifyLayoutSettings { label } => {
+                let settings = load_app_settings(&self.app_settings_path).ok();
+                let saved_width = settings
+                    .as_ref()
+                    .and_then(|settings| settings.places_sidebar.width);
+                let saved_visible = settings
+                    .as_ref()
+                    .and_then(|settings| settings.places_sidebar.visible);
+                let width_ok = saved_width
+                    .is_some_and(|width| width_value_eq(width, self.places_sidebar_width));
+                let visible_ok = saved_visible == Some(self.places_sidebar_visible);
+                let ok = width_ok && visible_ok;
+                eprintln!(
+                    "[fika autosmoke] places action={} width={:.1} visible={} saved_width={} saved_visible={} ok={} path={}",
+                    label,
+                    self.places_sidebar_width,
+                    self.places_sidebar_visible,
+                    saved_width
+                        .map(|width| format!("{width:.1}"))
+                        .unwrap_or_else(|| "<none>".to_string()),
+                    saved_visible
+                        .map(|visible| visible.to_string())
+                        .unwrap_or_else(|| "<none>".to_string()),
+                    ok,
+                    self.app_settings_path.display()
+                );
+                false
             }
         }
     }
@@ -924,6 +1053,24 @@ impl FikaApp {
     ) -> bool {
         let width = places_sidebar_width_from_drag(pointer_x, row_x);
         self.update_places_sidebar_width(width, cx)
+    }
+
+    fn update_places_sidebar_layout_for_autosmoke(
+        &mut self,
+        width: f32,
+        visible: bool,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let width_changed = self.set_places_sidebar_width(width);
+        let visible_changed = self.places_sidebar_visible != visible;
+        if visible_changed {
+            self.places_sidebar_visible = visible;
+        }
+        let changed = width_changed || visible_changed;
+        if changed {
+            self.schedule_app_settings_save(cx);
+        }
+        changed
     }
 
     fn current_app_settings(&self) -> AppSettings {
@@ -16871,6 +17018,7 @@ text/plain=viewer.desktop;\n",
             place_row_text_shape_cache: PlacesRowTextShapeCache::default(),
             places_sidebar_width: PLACES_SIDEBAR_DEFAULT_WIDTH,
             places_sidebar_visible: true,
+            places_layout_autosmoke_original: None,
             app_settings_path: test_dir("settings").join("settings.tsv"),
             app_settings_save_generation: 0,
             app_settings_save_task_running: false,

@@ -162,6 +162,55 @@ if [[ "$overflow_summary" != *"places_overflow_autosmoke start=1 complete=1 snap
     exit 1
 fi
 
+cat > "$tmpdir/layout.log" <<'EOF'
+[fika places-slots] rows=11 sections=2 entries=13 inserted=13 content=0 geometry=0 visual=0 unchanged=0 removed=0 project=25us
+[fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
+[fika places-view] source=11 visible=11 sections=2 snapshot=100us
+[fika places-sidebar] rows=11 sections=2 elements=13 build=200us
+[fika places-renderer-policy] rows=11 row_gpui=11 row_visual_layer=0 icon_gpui=11 retained_interaction=0 drag_shell=11 section_gpui=2 scrollbar_canvas=1
+[fika autosmoke] places start scenario=Layout
+[fika autosmoke] places action=layout-initial width=220.0 visible=true
+[fika autosmoke] places action=layout-hide width=220.0 visible=false changed=true
+[fika autosmoke] places action=layout-show width=220.0 visible=true changed=true
+[fika autosmoke] places action=layout-resize width=320.0 visible=true target_width=320.0 changed=true
+[fika autosmoke] places action=layout-reset width=220.0 visible=true changed=true
+[fika autosmoke] places action=layout-restore width=220.0 visible=true changed=false
+[fika autosmoke] places action=layout-verify-saved width=220.0 visible=true saved_width=220.0 saved_visible=true ok=true path=/tmp/fika-settings/settings.tsv
+[fika autosmoke] places complete scenario=Layout
+EOF
+
+layout_summary="$("$analyzer" \
+    --require-layout-autosmoke \
+    --expect-current-gpui-policy \
+    "$tmpdir/layout.log")"
+
+if [[ "$layout_summary" != *"places_layout_autosmoke start=1 complete=1 initial=1 hide=1 show=1 resize=1 reset=1 restore=1 verify_saved=1"* ]]; then
+    echo "expected Places layout autosmoke summary" >&2
+    exit 1
+fi
+
+cat > "$tmpdir/bad-layout.log" <<'EOF'
+[fika places-slots] rows=11 sections=2 entries=13 inserted=13 content=0 geometry=0 visual=0 unchanged=0 removed=0 project=25us
+[fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
+[fika places-view] source=11 visible=11 sections=2 snapshot=100us
+[fika places-sidebar] rows=11 sections=2 elements=13 build=200us
+[fika places-renderer-policy] rows=11 row_gpui=11 row_visual_layer=0 icon_gpui=11 retained_interaction=0 drag_shell=11 section_gpui=2 scrollbar_canvas=1
+[fika autosmoke] places start scenario=Layout
+[fika autosmoke] places action=layout-initial width=220.0 visible=true
+[fika autosmoke] places action=layout-hide width=220.0 visible=false changed=true
+[fika autosmoke] places action=layout-show width=220.0 visible=true changed=true
+[fika autosmoke] places action=layout-resize width=320.0 visible=true target_width=320.0 changed=true
+[fika autosmoke] places action=layout-reset width=220.0 visible=true changed=true
+[fika autosmoke] places action=layout-restore width=220.0 visible=true changed=false
+[fika autosmoke] places action=layout-verify-saved width=220.0 visible=true saved_width=220.0 saved_visible=true ok=false path=/tmp/fika-settings/settings.tsv
+[fika autosmoke] places complete scenario=Layout
+EOF
+
+if "$analyzer" --require-layout-autosmoke "$tmpdir/bad-layout.log" >/dev/null 2>&1; then
+    echo "expected invalid Places layout autosmoke to fail" >&2
+    exit 1
+fi
+
 cat > "$tmpdir/missing-slots.log" <<'EOF'
 [fika places-view] source=11 visible=11 sections=2 snapshot=100us
 [fika places-sidebar] rows=11 sections=2 elements=13 build=200us
@@ -218,6 +267,11 @@ fi
 
 if "$analyzer" --require-overflow-autosmoke "$tmpdir/missing-autosmoke.log" >/dev/null 2>&1; then
     echo "expected missing overflow autosmoke markers to fail" >&2
+    exit 1
+fi
+
+if "$analyzer" --require-layout-autosmoke "$tmpdir/missing-autosmoke.log" >/dev/null 2>&1; then
+    echo "expected missing layout autosmoke markers to fail" >&2
     exit 1
 fi
 

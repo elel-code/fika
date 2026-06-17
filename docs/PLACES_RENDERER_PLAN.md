@@ -73,12 +73,14 @@ the actual file write is delayed by 120ms and runs on the GPUI background
 executor, so sidebar dragging does not synchronously write config files.
 
 2026-06-18 runtime layout smoke kept both renderer policies intact after adding
-that panel state:
+that panel state and settings persistence:
 
 ```bash
 scripts/analyze-places-perf.sh --require-autosmoke --expect-current-gpui-policy /tmp/fika-places-targets-sidebar-layout.log
 scripts/analyze-places-perf.sh --require-overflow-autosmoke --expect-current-gpui-policy /tmp/fika-places-overflow-sidebar-layout.log
 scripts/analyze-places-perf.sh --require-autosmoke --expect-custom-row-visual-policy /tmp/fika-places-custom-sidebar-layout.log
+scripts/analyze-places-perf.sh --require-layout-autosmoke --expect-current-gpui-policy /tmp/fika-places-layout.log
+scripts/analyze-places-perf.sh --require-layout-autosmoke --expect-custom-row-visual-policy /tmp/fika-places-layout-custom.log
 ```
 
 ## Migration Order
@@ -216,6 +218,65 @@ places_sidebar_frames=7 max_rows=75 max_sections=3 max_elements=78 max_build=308
 places_renderer_policy_frames=7 max_row_gpui=75 max_row_visual_layer=0 max_icon_gpui=75
 places_scrollbar_frames=7 max_visible=1 max_scroll_y=1909.0
 places_overflow_autosmoke start=1 complete=1 snapshot=1 max_visible=75
+```
+
+## Layout Autosmoke
+
+For Places panel width/visibility and settings persistence evidence, run with
+an isolated config directory:
+
+```bash
+XDG_CONFIG_HOME=/tmp/fika-places-layout-config \
+  timeout 6s env FIKA_PERF_PLACES_VIEW=1 FIKA_AUTOSMOKE_PLACES=layout \
+  target/debug/fika /etc > /tmp/fika-places-layout.log 2>&1
+scripts/analyze-places-perf.sh --require-layout-autosmoke --expect-current-gpui-policy /tmp/fika-places-layout.log
+```
+
+For the opt-in row visual policy, add `FIKA_CUSTOM_PLACES_ROWS=1` and switch
+the analyzer policy:
+
+```bash
+XDG_CONFIG_HOME=/tmp/fika-places-layout-custom-config \
+  timeout 6s env FIKA_PERF_PLACES_VIEW=1 FIKA_CUSTOM_PLACES_ROWS=1 \
+  FIKA_AUTOSMOKE_PLACES=layout target/debug/fika /etc \
+  > /tmp/fika-places-layout-custom.log 2>&1
+scripts/analyze-places-perf.sh --require-layout-autosmoke --expect-custom-row-visual-policy /tmp/fika-places-layout-custom.log
+```
+
+`FIKA_AUTOSMOKE_PLACES=layout` does not mutate user Places ordering. It captures
+the startup panel state, hides the sidebar, shows it again, resizes it, resets
+to the default width, restores the captured startup state, and verifies the
+coalesced settings write by reading `$XDG_CONFIG_HOME/fika/settings.tsv`.
+
+Expected markers:
+
+```text
+[fika autosmoke] places start scenario=Layout
+[fika autosmoke] places action=layout-hide ... visible=false changed=true
+[fika autosmoke] places action=layout-show ... visible=true changed=true
+[fika autosmoke] places action=layout-resize ... changed=true
+[fika autosmoke] places action=layout-reset ... changed=true
+[fika autosmoke] places action=layout-restore ...
+[fika autosmoke] places action=layout-verify-saved ... ok=true
+[fika autosmoke] places complete scenario=Layout
+```
+
+The analyzer summary should include:
+
+```text
+places_layout_autosmoke start=1 complete=1 initial=1 hide=1 show=1 resize=1 reset=1 restore=1 verify_saved=1
+```
+
+2026-06-18 evidence:
+
+```text
+/tmp/fika-places-layout.log:
+  places_layout_autosmoke start=1 complete=1 initial=1 hide=1 show=1 resize=1 reset=1 restore=1 verify_saved=1
+  max_row_gpui=11 max_row_visual_layer=0
+/tmp/fika-places-layout-custom.log:
+  places_layout_autosmoke start=1 complete=1 initial=1 hide=1 show=1 resize=1 reset=1 restore=1 verify_saved=1
+  max_row_gpui=0 max_row_visual_layer=11
+  places_row_visual_frames=8 max_rows=11
 ```
 
 ## Opt-In Row Visual Smoke

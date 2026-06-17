@@ -615,6 +615,17 @@ by risk and evidence, not by how custom-painted a surface looks.
   loads those values before rendering the panel. UI changes schedule a
   latest-only 120ms delayed background save using a generation counter, so
   repeated sidebar drag frames update memory without synchronous config writes.
+- [x] P16y: Add unattended Places panel layout smoke before depending on manual
+  sidebar testing. `FIKA_AUTOSMOKE_PLACES=layout` drives hide, show, resize,
+  reset, restore, and final settings-file verification through the same app
+  state/update-save path as the toolbar and splitter. The analyzer gate
+  `--require-layout-autosmoke` rejects missing actions or a final
+  `layout-verify-saved ok=false`, so future Places renderer work can prove it
+  did not break panel layout state while comparing GPUI and opt-in custom row
+  policies. Evidence: `/tmp/fika-places-layout.log` passed
+  `--require-layout-autosmoke --expect-current-gpui-policy`, and
+  `/tmp/fika-places-layout-custom.log` passed
+  `--require-layout-autosmoke --expect-custom-row-visual-policy`.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

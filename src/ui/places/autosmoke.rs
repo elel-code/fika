@@ -13,6 +13,7 @@ const OVERFLOW_PLACE_COUNT: usize = 64;
 pub(crate) enum PlacesAutosmokeScenario {
     DropTargets,
     Overflow,
+    Layout,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -22,6 +23,13 @@ pub(crate) enum PlacesAutosmokeAction {
     TargetInsertStart { label: &'static str },
     TargetInsertEnd { label: &'static str },
     ClearTargets { label: &'static str },
+    CaptureLayout { label: &'static str },
+    HideSidebar { label: &'static str },
+    ShowSidebar { label: &'static str },
+    ResizeSidebar { label: &'static str },
+    ResetSidebar { label: &'static str },
+    RestoreLayout { label: &'static str },
+    VerifyLayoutSettings { label: &'static str },
 }
 
 impl PlacesAutosmokeScenario {
@@ -35,8 +43,10 @@ impl PlacesAutosmokeScenario {
     }
 
     pub(crate) fn action_delay(self) -> Duration {
-        let _ = self;
-        Duration::from_millis(160)
+        match self {
+            Self::DropTargets | Self::Overflow => Duration::from_millis(160),
+            Self::Layout => Duration::from_millis(260),
+        }
     }
 
     pub(crate) fn actions(self) -> Vec<PlacesAutosmokeAction> {
@@ -69,6 +79,29 @@ impl PlacesAutosmokeScenario {
                 },
             ],
             Self::Overflow => vec![PlacesAutosmokeAction::Snapshot { label: "overflow" }],
+            Self::Layout => vec![
+                PlacesAutosmokeAction::CaptureLayout {
+                    label: "layout-initial",
+                },
+                PlacesAutosmokeAction::HideSidebar {
+                    label: "layout-hide",
+                },
+                PlacesAutosmokeAction::ShowSidebar {
+                    label: "layout-show",
+                },
+                PlacesAutosmokeAction::ResizeSidebar {
+                    label: "layout-resize",
+                },
+                PlacesAutosmokeAction::ResetSidebar {
+                    label: "layout-reset",
+                },
+                PlacesAutosmokeAction::RestoreLayout {
+                    label: "layout-restore",
+                },
+                PlacesAutosmokeAction::VerifyLayoutSettings {
+                    label: "layout-verify-saved",
+                },
+            ],
         }
     }
 
@@ -87,6 +120,9 @@ fn places_autosmoke_scenario_from_value(value: &str) -> Option<PlacesAutosmokeSc
         }
         "overflow" | "scroll" | "scroll-overflow" | "scroll_overflow" => {
             Some(PlacesAutosmokeScenario::Overflow)
+        }
+        "layout" | "sidebar" | "sidebar-layout" | "sidebar_layout" => {
+            Some(PlacesAutosmokeScenario::Layout)
         }
         _ => None,
     }
@@ -155,6 +191,14 @@ mod tests {
             places_autosmoke_scenario_from_value("scroll-overflow"),
             Some(PlacesAutosmokeScenario::Overflow)
         );
+        assert_eq!(
+            places_autosmoke_scenario_from_value("layout"),
+            Some(PlacesAutosmokeScenario::Layout)
+        );
+        assert_eq!(
+            places_autosmoke_scenario_from_value("sidebar-layout"),
+            Some(PlacesAutosmokeScenario::Layout)
+        );
         assert_eq!(places_autosmoke_scenario_from_value("off"), None);
     }
 
@@ -201,6 +245,41 @@ mod tests {
         assert!(matches!(
             actions[0],
             PlacesAutosmokeAction::Snapshot { label: "overflow" }
+        ));
+    }
+
+    #[test]
+    fn layout_scenario_contains_sidebar_layout_actions() {
+        let actions = PlacesAutosmokeScenario::Layout.actions();
+
+        assert_eq!(actions.len(), 7);
+        assert!(matches!(
+            actions[0],
+            PlacesAutosmokeAction::CaptureLayout { .. }
+        ));
+        assert!(matches!(
+            actions[1],
+            PlacesAutosmokeAction::HideSidebar { .. }
+        ));
+        assert!(matches!(
+            actions[2],
+            PlacesAutosmokeAction::ShowSidebar { .. }
+        ));
+        assert!(matches!(
+            actions[3],
+            PlacesAutosmokeAction::ResizeSidebar { .. }
+        ));
+        assert!(matches!(
+            actions[4],
+            PlacesAutosmokeAction::ResetSidebar { .. }
+        ));
+        assert!(matches!(
+            actions[5],
+            PlacesAutosmokeAction::RestoreLayout { .. }
+        ));
+        assert!(matches!(
+            actions[6],
+            PlacesAutosmokeAction::VerifyLayoutSettings { .. }
         ));
     }
 }
