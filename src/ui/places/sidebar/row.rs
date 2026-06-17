@@ -2,7 +2,7 @@ mod dnd;
 
 use crate::FikaApp;
 use gpui::prelude::*;
-use gpui::{Context, Div, MouseButton, ParentElement, Stateful, Styled, div, px, rgb};
+use gpui::{Context, Div, MouseButton, ParentElement, Stateful, Styled, div, px, rgb, rgba};
 
 use dnd::{PlaceRowDndConfig, install_place_row_dnd};
 
@@ -13,6 +13,7 @@ use super::super::style::{
     PlaceInsertIndicatorEdge, place_insert_indicator, place_row_background, place_row_border_color,
     place_row_hover_background,
 };
+use super::super::visual::place_row_visual;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct PlaceRowHighlight {
@@ -36,6 +37,7 @@ fn place_row_drag_is_movable(place: &PlaceSnapshot) -> bool {
 pub(super) fn place_row(
     visible_index: usize,
     place: PlaceSnapshot,
+    custom_visual: bool,
     cx: &mut Context<FikaApp>,
 ) -> Stateful<Div> {
     let row_id = format!("place-{visible_index}");
@@ -62,6 +64,7 @@ pub(super) fn place_row(
 
     let row = div()
         .id(row_id)
+        .relative()
         .flex()
         .items_center()
         .gap_2()
@@ -69,10 +72,24 @@ pub(super) fn place_row(
         .py_1()
         .rounded_md()
         .border_1()
-        .border_color(place_row_border_color(active, row_drop_target))
-        .bg(place_row_background(active, row_drop_target))
+        .border_color(if custom_visual {
+            rgba(0x00000000)
+        } else {
+            place_row_border_color(active, row_drop_target)
+        })
+        .bg(if custom_visual {
+            rgba(0x00000000)
+        } else {
+            place_row_background(active, row_drop_target)
+        })
         .when(highlight.hover_enabled, |row| {
-            row.hover(move |row| row.bg(place_row_hover_background(active, row_drop_target)))
+            row.hover(move |row| {
+                row.bg(if custom_visual {
+                    rgba(0x00000000)
+                } else {
+                    place_row_hover_background(active, row_drop_target)
+                })
+            })
         })
         .when(mounted || device || network, |row| row.cursor_pointer())
         .on_drag(place_drag, |drag, cursor_offset, _, cx| {
@@ -99,7 +116,7 @@ pub(super) fn place_row(
                 cx.notify();
             }),
         );
-    let row = install_place_row_dnd(
+    let mut row = install_place_row_dnd(
         row,
         PlaceRowDndConfig {
             mounted,
@@ -113,50 +130,58 @@ pub(super) fn place_row(
         cx,
     );
 
-    let row_content = row
-        .child(place_icon_view(&place.icon, active))
-        .child(
-            div()
-                .flex_1()
-                .truncate()
-                .text_sm()
-                .text_color(if place.active {
-                    rgb(0x1f4fbf)
-                } else if !place.mounted {
-                    rgb(0x6b7280)
-                } else {
-                    rgb(0x24292f)
-                })
-                .child(place.label),
-        )
-        .when(place.trash_place, |row| {
-            row.child(
+    if custom_visual {
+        row = row
+            .h(px(30.0))
+            .child(place_row_visual(&place, active, row_drop_target))
+            .child(place_icon_view(&place.icon, active))
+            .child(div().flex_1());
+    } else {
+        row = row
+            .child(place_icon_view(&place.icon, active))
+            .child(
                 div()
-                    .id(format!("place-trash-state-{visible_index}"))
-                    .w(px(7.0))
-                    .h(px(7.0))
-                    .rounded_full()
-                    .bg(if place.trash_has_items {
-                        rgb(0x2f6fed)
+                    .flex_1()
+                    .truncate()
+                    .text_sm()
+                    .text_color(if place.active {
+                        rgb(0x1f4fbf)
+                    } else if !place.mounted {
+                        rgb(0x6b7280)
                     } else {
-                        rgb(0xc8ced6)
-                    }),
+                        rgb(0x24292f)
+                    })
+                    .child(place.label.clone()),
             )
-        });
+            .when(place.trash_place, |row| {
+                row.child(
+                    div()
+                        .id(format!("place-trash-state-{visible_index}"))
+                        .w(px(7.0))
+                        .h(px(7.0))
+                        .rounded_full()
+                        .bg(if place.trash_has_items {
+                            rgb(0x2f6fed)
+                        } else {
+                            rgb(0xc8ced6)
+                        }),
+                )
+            });
+    }
 
     div()
         .id(format!("place-wrap-{visible_index}"))
         .relative()
         .flex()
         .flex_col()
-        .child(row_content)
-        .when(place.insert_before, |row| {
+        .child(row)
+        .when(place.insert_before && !custom_visual, |row| {
             row.child(place_insert_indicator(
                 format!("place-insert-before-{visible_index}"),
                 PlaceInsertIndicatorEdge::Before,
             ))
         })
-        .when(place.insert_after, |row| {
+        .when(place.insert_after && !custom_visual, |row| {
             row.child(place_insert_indicator(
                 format!("place-insert-after-{visible_index}"),
                 PlaceInsertIndicatorEdge::After,

@@ -20,6 +20,12 @@ Options:
       row_visual_layer=0, retained_interaction=0, section_gpui=sections, and
       scrollbar_canvas=1.
 
+  --expect-custom-row-visual-policy
+      Fail unless [fika places-renderer-policy] matches the opt-in
+      FIKA_CUSTOM_PLACES_ROWS=1 policy: row_visual_layer/icon_gpui/drag_shell
+      equal rows, row_gpui=0, retained_interaction=0, section_gpui=sections,
+      and scrollbar_canvas=1. Also requires [fika places-row-visual] logs.
+
   --snapshot-us N
       Fail if any [fika places-view] snapshot exceeds N microseconds.
 
@@ -36,6 +42,7 @@ EOF
 
 require_autosmoke=false
 expect_current_gpui_policy=false
+expect_custom_row_visual_policy=false
 snapshot_us=""
 sidebar_build_us=""
 slot_project_us=""
@@ -48,6 +55,9 @@ while [[ $# -gt 0 ]]; do
             ;;
         --expect-current-gpui-policy)
             expect_current_gpui_policy=true
+            ;;
+        --expect-custom-row-visual-policy)
+            expect_custom_row_visual_policy=true
             ;;
         --snapshot-us)
             if [[ $# -lt 2 || "$2" == --* ]]; then
@@ -123,6 +133,7 @@ done
 awk \
     -v require_autosmoke="$require_autosmoke" \
     -v expect_current_gpui_policy="$expect_current_gpui_policy" \
+    -v expect_custom_row_visual_policy="$expect_custom_row_visual_policy" \
     -v snapshot_limit="$snapshot_us" \
     -v sidebar_build_limit="$sidebar_build_us" \
     -v slot_project_limit="$slot_project_us" '
@@ -234,6 +245,23 @@ function fail(message) {
             policy_invalid = 1
         }
     }
+    if (expect_custom_row_visual_policy == "true") {
+        if (row_gpui != 0 || icon_gpui != rows || drag_shell != rows ||
+            row_visual_layer != rows || retained_interaction != 0 ||
+            section_gpui != last_sidebar_sections || scrollbar_canvas != 1) {
+            custom_policy_invalid = 1
+        }
+    }
+}
+
+/^\[fika places-row-visual\]/ {
+    row_visual_frames++
+    rows = field("rows") + 0
+    prepaint = field("prepaint") + 0
+    paint = field("paint") + 0
+    max_update("row_visual_rows", rows)
+    max_update("row_visual_prepaint", prepaint)
+    max_update("row_visual_paint", paint)
 }
 
 /^\[fika autosmoke\] places start scenario=DropTargets/ {
@@ -297,6 +325,14 @@ END {
     }
     if (expect_current_gpui_policy == "true" && policy_invalid) {
         fail("places renderer policy does not match current GPUI baseline")
+    }
+    if (expect_custom_row_visual_policy == "true") {
+        if (custom_policy_invalid) {
+            fail("places renderer policy does not match opt-in custom row visual policy")
+        }
+        if (row_visual_frames == 0) {
+            fail("missing [fika places-row-visual] logs for custom row visual policy")
+        }
     }
     if (snapshot_limit != "" && max_values["snapshot"] > snapshot_limit) {
         fail("places snapshot exceeded threshold: " max_values["snapshot"] "us > " snapshot_limit "us")
@@ -362,6 +398,11 @@ END {
         max_values["policy_drag_shell"],
         max_values["policy_section_gpui"],
         max_values["policy_scrollbar_canvas"])
+    printf("places_row_visual_frames=%d max_rows=%d max_prepaint=%dus max_paint=%dus\n",
+        row_visual_frames,
+        max_values["row_visual_rows"],
+        max_values["row_visual_prepaint"],
+        max_values["row_visual_paint"])
     printf("places_autosmoke target=%d insert_start=%d insert_end=%d clear=%d snapshots=%d,%d,%d,%d,%d\n",
         autosmoke_target_action_seen,
         autosmoke_insert_start_action_seen,

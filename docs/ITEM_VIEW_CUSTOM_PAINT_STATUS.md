@@ -21,7 +21,7 @@ becomes the default.
 | Details row backgrounds, icons, text cells, Trash columns | replaced | custom content-level painter | Details icons use the same cached/preliminary icon policy; runtime Details perf and DnD smoke evidence must stay current |
 | Details click, menu, navigation, hover, cursor, drop hit testing | replaced | retained row hit testing/controller state plus active item-drag window tracker | runtime DnD smoke still required after painter changes |
 | Details drag start | not replaced | GPUI `Div::on_drag` row shell | same drag-start API or audited GPUI patch gate |
-| Places rows and sidebar scrollbar | retained model/slot/target-decision state, renderer not replaced | GPUI elements over retained places projection, `PlacePaintSlotCache` stats, and `places/interaction.rs` target decisions | retained hitboxes and custom row painter still require Places-specific DnD/scroll evidence |
+| Places rows and sidebar scrollbar | retained model/slot/target-decision state, default renderer not replaced | GPUI elements over retained places projection by default; `FIKA_CUSTOM_PLACES_ROWS=1` opt-in row visual painter for background/label/trash/insert; `PlacePaintSlotCache` stats and `places/interaction.rs` target decisions | retained hitboxes and default custom row painter still require Places-specific DnD/scroll evidence |
 
 The practical state is: item-view static visuals and most app-side controller
 paths have moved to retained/custom-painted architecture. Drag-start and rename
@@ -222,7 +222,9 @@ it:
 - prove that custom paint does not regress DnD or scroll behavior
 
 Until then, keep Places on GPUI elements fed by retained places projection and
-drag/drop state.
+drag/drop state. The `FIKA_CUSTOM_PLACES_ROWS=1` path is only an opt-in
+benchmark surface; it does not replace GPUI row event delivery, GPUI icons, row
+context menu shells, row DnD, or drag-start shells.
 
 The concrete retained-row design and Dolphin source comparison live in
 `docs/PLACES_RENDERER_PLAN.md`.

@@ -16,8 +16,9 @@ use std::time::Instant;
 
 use super::drag::PlaceDrag;
 use super::perf::{
-    PlacesRendererPolicyLog, PlacesSidebarPerfLog, emit_places_renderer_policy_log,
-    emit_places_sidebar_perf_log, places_perf_enabled, places_section_count,
+    PlacesRendererPolicyLog, PlacesSidebarPerfLog, custom_places_rows_enabled,
+    emit_places_renderer_policy_log, emit_places_sidebar_perf_log, places_perf_enabled,
+    places_section_count,
 };
 use super::snapshot::PlaceSnapshot;
 use row::place_row;
@@ -38,6 +39,7 @@ pub(crate) fn places_sidebar(
     let build_started = perf_enabled.then(Instant::now);
     let row_count = places.len();
     let section_count = places_section_count(&places);
+    let custom_row_visuals = custom_places_rows_enabled();
     let state = window.use_keyed_state("places-sidebar-scrollbar", cx, |_, _| {
         PlacesSidebarScrollState::new()
     });
@@ -52,7 +54,7 @@ pub(crate) fn places_sidebar(
                 rows.push(group_heading(place.group, place.index, cx));
             }
         }
-        rows.push(place_row(index, place, cx));
+        rows.push(place_row(index, place, custom_row_visuals, cx));
     }
     if let Some(started) = build_started {
         emit_places_sidebar_perf_log(PlacesSidebarPerfLog {
@@ -64,6 +66,7 @@ pub(crate) fn places_sidebar(
         emit_places_renderer_policy_log(PlacesRendererPolicyLog {
             row_count,
             section_count,
+            custom_row_visuals,
             scrollbar_canvas_count: 1,
         });
     }

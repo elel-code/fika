@@ -5,12 +5,17 @@ use super::PlacePaintSlotPerfLog;
 use super::PlaceSnapshot;
 
 const PERF_PLACES_VIEW_ENV: &str = "FIKA_PERF_PLACES_VIEW";
+const CUSTOM_PLACES_ROWS_ENV: &str = "FIKA_CUSTOM_PLACES_ROWS";
 
 pub(crate) fn places_perf_enabled() -> bool {
     env::var(PERF_PLACES_VIEW_ENV).is_ok_and(|value| env_flag_is_truthy(&value))
 }
 
-fn env_flag_is_truthy(value: &str) -> bool {
+pub(crate) fn custom_places_rows_enabled() -> bool {
+    env::var(CUSTOM_PLACES_ROWS_ENV).is_ok_and(|value| env_flag_is_truthy(&value))
+}
+
+pub(crate) fn env_flag_is_truthy(value: &str) -> bool {
     matches!(
         value.trim().to_ascii_lowercase().as_str(),
         "1" | "true" | "yes" | "on"
@@ -71,17 +76,45 @@ pub(crate) fn emit_places_sidebar_perf_log(log: PlacesSidebarPerfLog) {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlacesRowVisualPerfLog {
+    pub(crate) rows: usize,
+    pub(crate) prepaint_elapsed: Duration,
+    pub(crate) paint_elapsed: Duration,
+}
+
+pub(crate) fn emit_places_row_visual_perf_log(log: PlacesRowVisualPerfLog) {
+    eprintln!(
+        "[fika places-row-visual] rows={} prepaint={}us paint={}us",
+        log.rows,
+        log.prepaint_elapsed.as_micros(),
+        log.paint_elapsed.as_micros(),
+    );
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PlacesRendererPolicyLog {
     pub(crate) row_count: usize,
     pub(crate) section_count: usize,
+    pub(crate) custom_row_visuals: bool,
     pub(crate) scrollbar_canvas_count: usize,
 }
 
 pub(crate) fn emit_places_renderer_policy_log(log: PlacesRendererPolicyLog) {
+    let row_gpui = if log.custom_row_visuals {
+        0
+    } else {
+        log.row_count
+    };
+    let row_visual_layer = if log.custom_row_visuals {
+        log.row_count
+    } else {
+        0
+    };
     eprintln!(
-        "[fika places-renderer-policy] rows={} row_gpui={} row_visual_layer=0 icon_gpui={} retained_interaction=0 drag_shell={} section_gpui={} scrollbar_canvas={}",
+        "[fika places-renderer-policy] rows={} row_gpui={} row_visual_layer={} icon_gpui={} retained_interaction=0 drag_shell={} section_gpui={} scrollbar_canvas={}",
         log.row_count,
-        log.row_count,
+        row_gpui,
+        row_visual_layer,
         log.row_count,
         log.row_count,
         log.section_count,

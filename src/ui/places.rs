@@ -12,6 +12,7 @@ mod snapshot;
 mod style;
 mod user;
 mod visibility;
+mod visual;
 
 pub(crate) use autosmoke::{PlacesAutosmokeAction, PlacesAutosmokeScenario};
 pub(crate) use devices::replace_removable_device_places;

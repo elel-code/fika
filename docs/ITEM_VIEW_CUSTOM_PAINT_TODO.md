@@ -433,7 +433,10 @@ pretending that every remaining GPUI boundary can be removed safely today.
   renderer-policy logs exist, and `FIKA_AUTOSMOKE_PLACES=targets` covers
   non-persistent target/insert projection. `PlacePaintSlotCache` now records
   retained row/section slots and `[fika places-slots]` stats; no retained/custom
-  row painter has been benchmarked yet. `places/interaction.rs` now owns the
+  row painter is default. `FIKA_CUSTOM_PLACES_ROWS=1` now provides an opt-in
+  row visual painter for background, active/drop state, label, trash marker,
+  and insert indicators while keeping GPUI icons, row event delivery, context
+  menus, DnD, and drag-start shells. `places/interaction.rs` now owns the
   row/section target decision, while GPUI shells still provide event delivery
   and bounds.
 - [ ] P15f: Keep rename on GPUI until a custom text-editing plan covers focus,
@@ -564,6 +567,12 @@ by risk and evidence, not by how custom-painted a surface looks.
   `[fika places-view]`, `[fika places-sidebar]`, `[fika places-slots]`,
   `[fika places-renderer-policy]`, and non-destructive Places autosmoke
   markers. `scripts/check-places-perf-analyzer.sh` covers the analyzer gates.
+- [x] P16s: Add the first opt-in Places row visual painter without switching
+  the default renderer. `FIKA_CUSTOM_PLACES_ROWS=1` custom-paints row
+  background, active/drop visual state, label, trash marker, and insert
+  indicator; default Places rows remain GPUI. Analyzer support now includes
+  `--expect-custom-row-visual-policy` and `[fika places-row-visual]`
+  prepaint/paint maxima.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,
