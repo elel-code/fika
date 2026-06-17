@@ -35,6 +35,38 @@ Current replacement status and the full transition roadmap are tracked in
 | Details drag start | GPUI `Div::on_drag` row shell | retained Details drag fields plus temporary shell | Keep GPUI shell for initiation only. | Same public drag-start API or audited GPUI patch gate as Compact/Icons. |
 | Places rows and sidebar scrollbar | GPUI elements with retained drag/drop state helpers | `places` model/projection and `drag_drop` state | Keep GPUI renderer for now. | A future custom painter needs a separate perf case; current priority is item-view shell removal only after DnD evidence. |
 
+## Historical GPUI Image Baseline
+
+Use `a3f5b0f` as the pre-retained/custom-paint image-renderer baseline for
+Compact/Icons. In that state, item thumbnails and theme icons were still GPUI
+`img()` children under a root `image_cache(retain_all(...))` provider. Use the
+transition commits to localize regressions:
+
+- `d497593`: retained item paint slot and static text shape cache introduced.
+- `8d1198f`: hovered item state moved into retained paint visual state.
+- `36da130`: static item visuals moved into a dedicated custom element.
+- `b0cac9a`: static fallback visuals moved to the content-level paint layer.
+
+For the current startup MIME blank, zoom size jump, and `/etc` zoom smoothness
+investigations, compare three paths before accepting another custom image-layer
+change:
+
+- Dolphin source: `KStandardItemListWidget::updatePixmapCache()` and
+  `pixmapForIcon()` synchronously produce a current-size pixmap and cache it by
+  icon name/height.
+- Historical Fika GPUI path: `a3f5b0f` / early transition commits rely on GPUI
+  `img()` loading and element fallback behavior.
+- Current Fika custom image layer: `[fika item-image]` reports
+  `theme_loaded`, `theme_decoded`, `theme_retained`, and
+  `theme_placeholder`.
+
+Decision rule: if the custom image layer keeps showing visible first-load
+placeholders or zoom-time decode/size churn while the GPUI `img()` baseline is
+visually smoother in the same scenario, keep the retained model/projection
+architecture but reconsider the renderer. A GPUI image element over retained
+slots, or an audited retained pixmap strategy, is preferable to a slower custom
+image painter.
+
 ## Post-P11e Evidence To Collect
 
 Run `FIKA_PERF_ITEM_VIEW=1 cargo run -- ~/Downloads` from a desktop compositor

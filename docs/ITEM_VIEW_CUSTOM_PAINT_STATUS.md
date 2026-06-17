@@ -263,6 +263,10 @@ execution must stay split into evidence-backed tracks:
    and `/etc`, including resize, fullscreen, scroll, zoom, mode switches, and
    DnD. These logs decide whether a renderer stays custom-painted, not the
    architectural preference alone.
+   For image flicker and zoom-size investigations, include the historical
+   GPUI-image baseline at `a3f5b0f` and transition checkpoints
+   `d497593`/`8d1198f`/`36da130`/`b0cac9a` before changing the current image
+   renderer.
 2. **Painter track**: continue moving visual work into content-level painters
    only where the painter consumes retained snapshots and can match Dolphin's
    widget behavior. The next painter work is stabilization and measurement of

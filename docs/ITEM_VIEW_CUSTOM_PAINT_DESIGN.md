@@ -83,6 +83,30 @@ GPUI renderer.
 The current replacement matrix and full transition roadmap live in
 `docs/ITEM_VIEW_CUSTOM_PAINT_STATUS.md`.
 
+Historical baseline gate:
+
+- For Compact/Icons image flicker, startup blanks, and zoom size jumps, use
+  `a3f5b0f` (`Refactor file_grid drop type and optimize cache retention`) as
+  the pre-retained/custom-paint code baseline. That commit still rendered
+  thumbnail/theme-icon images through GPUI `img()` children and the root
+  `image_cache(retain_all(...))` provider.
+- Treat `d497593`, `8d1198f`, `36da130`, and `b0cac9a` as transition
+  checkpoints: retained paint slot/text cache, retained hover state, dedicated
+  custom element, and content-level fallback painting. They are useful for
+  locating whether a regression belongs to model/projection, retained slot
+  state, custom element paint, or image-layer ownership.
+- Compare those baselines against Dolphin's synchronous
+  `KStandardItemListWidget::updatePixmapCache()` / `pixmapForIcon()` path:
+  Dolphin keeps a widget-local `m_pixmap`, uses `QPixmapCache` keyed by icon
+  name and icon height, and gets ordinary MIME/theme pixmaps at the current
+  style-option icon size.
+- If the custom image layer shows persistent first-load blanks, repeated
+  `theme_placeholder` frames, or zoom-time `theme_decoded` churn that the GPUI
+  `img()` baseline does not show, the renderer decision is open again. The
+  retained model/controller boundary should stay, but theme-icon rendering may
+  return to a GPUI image element or gain an equivalent retained pixmap strategy
+  instead of preserving custom paint for its own sake.
+
 ## Full-Transition Design Rule
 
 The full transition is not a single switch from GPUI widgets to one giant

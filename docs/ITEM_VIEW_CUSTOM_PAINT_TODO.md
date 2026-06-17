@@ -477,7 +477,21 @@ by risk and evidence, not by how custom-painted a surface looks.
 - [ ] P16i: Draft a rename custom-editor behavior matrix before changing the
   GPUI rename overlay. It must cover focus, caret hit testing, UTF-8 selection,
   validation helper text, commit/cancel, Tab rename-next, and IME.
-- [ ] P16j: After every P16 implementation slice, commit separately with the
+- [ ] P16j: Establish the historical image-renderer baseline before the next
+  MIME/theme-icon flicker fix. Use `a3f5b0f` as the pre-retained/custom-paint
+  GPUI `img()` baseline, and use `d497593`, `8d1198f`, `36da130`, and
+  `b0cac9a` as transition checkpoints to decide whether the regression belongs
+  to model/projection, retained slot state, custom element paint, or the
+  custom image layer. Compare these with Dolphin
+  `KStandardItemListWidget::updatePixmapCache()` / `pixmapForIcon()` before
+  changing the current image renderer.
+- [ ] P16k: Decide the Compact/Icons theme-icon renderer from evidence:
+  keep/fix the custom image layer only if `[fika item-image]` shows low
+  `theme_placeholder`, low zoom-time `theme_decoded`, and stable
+  `theme_retained` behavior. If the historical GPUI `img()` path is smoother,
+  keep the retained model/controller split but move theme-icon rendering back
+  to a GPUI image element or design an equivalent retained pixmap cache.
+- [ ] P16l: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,
   `scripts/check-item-view-perf-analyzer.sh`, and `git diff --check`.
