@@ -21,7 +21,7 @@
 - [x] 功能提炼与集成：Dolphin 是 UI 行为和文件操作流程的第一参考；cosmic-files 是纯 Rust 系统集成的参考源。两个源码库中提炼的功能统一集成到 `fika-core`，UI 层只做渲染和输入路由。
 - [x] Dolphin 分层模型对齐：渲染层不做数据决策，模型层不持有 UI 句柄，交互层不直接操作文件系统。
 - [x] 文件拆分：`src/main.rs` 只保留 app 状态编排和跨模块路由。所有功能模块已拆入 `src/core/`（domain logic）和 `src/ui/`（rendering），子职责继续按目录式模块拆分。
-- [x] 图标模型已收敛为按需路径缓存：删除 `ModelEntry.icon_name`、`src/ui/icons/roles.rs`、`RenderImage` 自解码路径；图标由 `FileIconCache` 按 `FileIconKind + icon_size` / named icon 缓存。文件视图图片由 custom image paint layer 通过 `Window::paint_image` 绘制：缩略图继续走 GPUI `RetainAllImageCache` 异步加载，theme icon 对齐 Dolphin `pixmapForIcon()` 在小图标路径上同步生成 `RenderImage`，避免目录加载时出现 placeholder→MIME icon 跳变。
+- [x] 图标模型已收敛为按需路径缓存：删除 `ModelEntry.icon_name`、`src/ui/icons/roles.rs`、`RenderImage` 自解码路径；图标由 `FileIconCache` 按 `FileIconKind + icon_size` / named icon 缓存。文件视图图片由 custom image paint layer 通过 `Window::paint_image` 绘制：缩略图和 theme icon 均继续走 GPUI `RetainAllImageCache` 解码路径，paint layer 只保留 same-source 真实图片并在 pending/failure 时复用。Zoom 对齐 Dolphin `triggerIconSizeUpdate()`：布局立即变化，icon role size 冻结 300ms 后再刷新最终尺寸，避免连续缩放中反复解析/解码中间尺寸图标。
 
 ## Completed Features
 
@@ -93,6 +93,7 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
 - [x] Phase 11：Details row 已进入 retained paint slot，背景/图标/文字已转入 content-level custom visual layer；click/menu/navigation/scroll/middle-paste 和 drop dispatch 已走 viewport retained hit testing/drop handlers，row shell 只剩 GPUI drag-start 边界。继续移除 row shell 或扩大自绘前必须用 perf 证明不劣于 GPUI built-in 路径。
 - [~] Phase 12：剩余边界已审计：GPUI 0.2.2 公开 drag-start 仍绑定 `Div::on_drag`，custom element 只有 hitbox/mouse event 路径；P9b 需要公开 custom-element drag-start API 或可审计 GPUI patch。runtime DnD/perf 验证清单见 `docs/ITEM_VIEW_RUNTIME_SMOKE.md`，下一步先执行 smoke 和 post-P11e perf log 收集。
 - [~] Phase 13：renderer decision gate 已建立：每个 surface 先记录 Dolphin-style model/layout/controller/painter owner，再由 runtime perf 和行为证据决定保留 custom paint 还是 GPUI built-in renderer。当前决策见 `docs/ITEM_VIEW_RENDERER_DECISIONS.md`。
+- [~] Phase 15：全面转向执行计划已写入 `docs/ITEM_VIEW_CUSTOM_PAINT_TODO.md#p15-full-transition-execution-plan`。下一步不是盲目删除所有 GPUI 边界，而是先冻结当前 runtime 证据，再按 drag-start、Places、rename、reuse-pool 证据门槛逐段迁移。
 
 ### GPUI Backend / External MIME Drag (阻塞)
 - [~] 外部 MIME 拖出：`DragExportPayload`（`text/uri-list` + `text/plain`）已构造，但 GPUI/Wayland backend 尚未提供从 app 内部 drag source 向外部应用发布 MIME 的 API。待 backend 支持后接入。
@@ -133,9 +134,9 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
 - [x] **P3 — 图标 theme path 后台 resolve**：渲染帧只调用 `FileIconCache::cached_or_preliminary_icon_for()`，cache miss 返回无 I/O 的 preliminary/fallback snapshot；`FikaApp::queue_file_icon_resolve_work_for_raw_grid()` 按 Dolphin visible file → visible dir → read-ahead after → read-ahead before 顺序后台解析 theme path。
 - [x] **P4 — zoom 缩略图 fallback 稳定性**：thumbnail 图片 pending 或 load failure 时由 image paint layer 绘制 item fallback，避免 zoom 期间出现空白图标 rect。
 - [x] **P5 — visible MIME icon 首帧稳定性**：对齐 Dolphin `updateVisibleIcons()` + `pixmapForIcon()`，目录加载和 zoom 时在 snapshot 转换前用小预算同步解析 visible item 的 theme icon path；read-ahead/offscreen icon 仍走后台队列。
-- [x] **P6 — theme icon fallback marker 去除**：theme icon 无法同步生成真实小图标时只使用中性无文字占位，不再显示 `TXT/IMG/FILE` 等 MIME marker。
+- [x] **P6 — theme icon fallback marker 去除**：theme icon 图片尚未加载或加载失败且没有 retained same-`iconName` 图片时，只使用中性无文字占位，不再显示 `TXT/IMG/FILE` 等 MIME marker。
 - [x] **P7 — file-grid 根级 image cache 清理**：thumbnail/theme icon 已由 custom image paint layer 负责；删除 file-grid root 上旧 `image_cache(retain_all(...))` provider，避免保留已无 `img()` 子树使用的 GPUI renderer 边界。
-- [x] **P8 — Dolphin `pixmapForIcon()` 对齐**：theme icon 冷 miss 不再走 GPUI `RetainAllImageCache` 的异步 placeholder 帧，而是在 custom image layer 内同步读小图标并生成 `RenderImage`；缩略图仍按 Dolphin preview job/thumbnail role 语义异步加载。
+- [x] **P8 — Dolphin icon visual stability 对齐**：theme icon 不在 GPUI prepaint 同步读文件/解码；paint layer 通过 `RetainAllImageCache` 获取图片，并优先复用 retained same-`iconName` 真实图片。Zoom 期间使用 pane-local icon role size debounce，对齐 Dolphin 300ms `KFileItemModelRolesUpdater` 暂停/恢复路径。
 
 ### 双运行时对齐（COSMIC Files）
 

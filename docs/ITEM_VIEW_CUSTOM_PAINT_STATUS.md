@@ -139,8 +139,11 @@ load-failure fallback for theme icons. Thumbnails are retained only by exact
 thumbnail path. Thumbnail fallback icons are still painted when no real image
 exists yet or the semantic source changed.
 
-The immediate non-GUI-safe work is to split the large `src/ui/file_grid.rs`
-painter/controller code into smaller modules without changing behavior.
+The immediate non-GUI-safe work is to freeze fresh runtime evidence after the
+Dolphin-aligned zoom/icon role update, then execute the P15 transition order.
+The large file-grid renderer/controller module has already been split into
+focused model/projection, controller/hit-test, painter, and renderer-policy
+modules.
 
 ### R3: Resolve Drag-Start Boundary
 
@@ -213,3 +216,30 @@ owned outside GPUI child identity:
 This target can advance while drag-start and rename stay on GPUI. The pool
 boundary is the retained item/row state, not a claim that every renderer is
 custom-painted today.
+
+### R7: Full Transition Execution Order
+
+The next transition work must follow this order:
+
+1. Freeze current desktop-session evidence after the Dolphin-aligned zoom
+   role-size debounce. Use `~/Downloads` for ordinary MIME/thumbnail behavior,
+   `/etc` for large mixed-directory scrolling, and `FIKA_DEBUG_DND=1` for pane
+   self-drag hover.
+2. Update `docs/ITEM_VIEW_RENDERER_DECISIONS.md` with evidence before changing
+   a renderer surface. Do not treat a passing unit test as enough evidence for
+   DnD, resize, fullscreen, or zoom visual stability.
+3. Resolve the drag-start platform boundary from GPUI source or an audited
+   local patch. Remove item/details drag shells only after retained hitboxes can
+   start drags without losing payload, preview, cursor offset, or external drop
+   behavior.
+4. Treat Places as its own migration. It needs a GPUI baseline and a
+   Places-specific retained row painter plan before any custom-paint switch.
+5. Keep rename as a GPUI text-editing boundary until a custom editor covers
+   focus, caret hit testing, UTF-8 selection, validation, commit/cancel, Tab
+   rename-next, and IME.
+6. Keep tightening reuse-pool evidence: ordinary item-view frames should show
+   retained visual/image/text/interaction ownership with only the explicitly
+   accepted GPUI platform boundaries remaining.
+
+The detailed task board for this order is P15 in
+`docs/ITEM_VIEW_CUSTOM_PAINT_TODO.md`.

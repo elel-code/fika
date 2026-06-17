@@ -67,10 +67,10 @@
 | `DolphinUrlNavigator` / `KUrlNavigator` | `src/ui/location_bar.rs` |
 | `KDirLister` | `src/core/directory.rs` |
 | `KFileItemModel` | `src/core/model.rs` |
-| `KItemListView` | layout in `src/core/view.rs`, rendering in `src/ui/file_grid.rs` |
+| `KItemListView` | layout in `src/core/view.rs` / `src/ui/file_grid/layout.rs`, retained rendering in `src/ui/file_grid/` |
 | `KItemListSmoothScroller` | documented in `docs/SMOOTH_SCROLL_REFERENCE.md`; removed from active code |
 | `KDirectoryListerCache` | `src/core/cache.rs` |
-| `KItemListCreatorBase` (slot reuse) | `src/ui/file_grid/slots.rs` |
+| `KItemListCreatorBase` (slot reuse) | `src/ui/file_grid/slots.rs` and `src/ui/file_grid/paint_slots.rs` |
 | `KItemListSizeHintResolver` (column width) | `src/ui/file_grid/layout.rs` |
 | pane identity / split | `src/core/pane.rs` |
 | navigation history | `src/core/pane.rs` |
@@ -89,7 +89,7 @@
 | Ark / `kerfuffle` | `src/core/archive.rs` + `src/core/launcher/ark.rs` |
 | application launch / `KProcessRunner` | `src/core/launcher.rs` (systemd transient units) |
 | clipboard (`KIO::paste`) | `src/core/clipboard.rs` → `src/ui/clipboard.rs` |
-| `KFileItemModelRolesUpdater` (thumbnail) | `src/core/thumbnails.rs` |
+| `KFileItemModelRolesUpdater` (metadata/icon/thumbnail roles) | `src/ui/file_grid/snapshot/scheduler.rs`, `src/ui/icons/cache.rs`, `src/core/thumbnails.rs` |
 | GIO/GVfs devices / `Solid::Device` | `src/core/devices.rs` → `src/ui/places.rs` |
 | Network / `KFilePlacesModel` remote | `src/core/network.rs` → `src/ui/places.rs` |
 | D-Bus / `KDirNotify` / `FileManager1` | `src/core/bus.rs` |
@@ -112,7 +112,7 @@
 | CLI argument parsing | `src/cli.rs` + `src/cli/args.rs` |
 | trash conflict dialog | `src/ui/trash_conflict.rs` |
 | details-view columns | `src/ui/file_grid/details.rs` |
-| file-grid hit-test projection | `src/ui/file_grid/projection.rs` |
+| file-grid hit-test projection | `src/ui/file_grid/projection.rs` and retained interaction in `src/ui/file_grid/interaction.rs` |
 
 ## Cargo Boundaries
 

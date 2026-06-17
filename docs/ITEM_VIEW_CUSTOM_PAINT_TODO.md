@@ -97,8 +97,8 @@ This is the active task board for the GPUI item view custom-paint migration.
 - [x] Use pane-local `RetainAllImageCache` plus GPUI `ImageAssetLoader` for
   async path/SVG/image decode.
 - [x] Paint loaded images with `Window::paint_image`.
-- [x] Preserve theme-icon fallback marker rendering when no retained real image
-  is available for an image load failure.
+- [x] Preserve theme-icon visual stability by reusing retained same-`iconName`
+  images before falling back to a neutral markerless placeholder.
 - [x] Keep thumbnail role success/failure model-driven while painting item
   fallback visuals during pending image loads or resource load failures only
   after same-source retained images have been tried.
@@ -232,7 +232,7 @@ This is the active task board for the GPUI item view custom-paint migration.
   GPUI can stop delivering pane/item move callbacks after drag start, so the
   retained `ActiveItemDrag` target must be ticked by preview repaint when
   necessary.
-- [ ] Split `src/ui/file_grid.rs` along Dolphin-style model/projection,
+- [x] Split `src/ui/file_grid.rs` along Dolphin-style model/projection,
   controller/hit-test, painter, and renderer-policy boundaries without changing
   behavior.
 - [x] Extract root file-grid render surface composition into
@@ -370,6 +370,10 @@ This is the active task board for the GPUI item view custom-paint migration.
 - [x] Keep thumbnail/theme-icon pending or load-failure frames visually stable:
   reuse retained same-source real images first, then paint fallback visuals when
   no retained image exists.
+- [x] Align zoom icon role updates with Dolphin: freeze pane-local icon role
+  size during active zoom, let layout geometry change immediately, then refresh
+  final icon roles after the 300ms debounce. Theme icon files are not decoded
+  synchronously in prepaint.
 - [x] Extract retained item/details paint slot state into
   `src/ui/file_grid/paint_slots.rs` so model-to-painter snapshot reuse is
   separate from the renderer construction code.
@@ -385,6 +389,43 @@ This is the active task board for the GPUI item view custom-paint migration.
   coverage for focus, caret, selection, validation, commit/cancel, and IME.
 - [ ] Treat Places as a separate renderer migration with its own GPUI baseline
   and DnD/scroll acceptance gate.
+
+## P15: Full Transition Execution Plan
+
+This is the active plan after the retained item-view direction was accepted.
+It moves the codebase toward full custom-painted/reuse-pool ownership without
+pretending that every remaining GPUI boundary can be removed safely today.
+
+- [ ] P15a: Freeze current desktop-session evidence after the Dolphin 300ms
+  zoom role-size debounce. Required logs:
+  `FIKA_PERF_ITEM_VIEW=1 cargo run -- ~/Downloads`,
+  `FIKA_PERF_ITEM_VIEW=1 cargo run -- /etc`, and one
+  `FIKA_DEBUG_DND=1` pane self-drag trace.
+- [ ] P15b: Record the evidence summary in
+  `docs/ITEM_VIEW_RENDERER_DECISIONS.md` before expanding or reverting any
+  renderer surface.
+- [ ] P15c: Decide the drag-start boundary from source, not guesswork: either
+  confirm a public GPUI custom-element drag-start API exists, carry a small
+  audited GPUI patch, or keep Compact/Icons and Details drag-start shells as
+  explicit platform boundaries.
+- [ ] P15d: If P15c unlocks retained drag start, remove Compact/Icons
+  non-renaming drag shells first, then Details row drag shells. Each removal
+  needs DnD smoke for item-to-directory, pane drop, Places drop/reorder, and
+  external path drop.
+- [ ] P15e: Benchmark a Places retained/custom row painter against the current
+  GPUI sidebar before implementing it. Places migration is accepted only if
+  scroll, reorder, mount/trash/device rows, context menu, and drop behavior are
+  neutral or better.
+- [ ] P15f: Keep rename on GPUI until a custom text-editing plan covers focus,
+  caret hit testing, UTF-8 selection, validation, commit/cancel, Tab rename-next,
+  and IME. Do not merge a custom rename painter without that behavior matrix.
+- [ ] P15g: Tighten reuse-pool evidence. Runtime renderer-policy logs should
+  prove that ordinary Compact/Icons and Details frames have no per-item GPUI
+  visual children, only the known drag-start/rename boundaries.
+- [ ] P15h: Move any remaining item-view orchestration still living in
+  `src/main.rs` into Dolphin-aligned file-grid modules when it can be done
+  without changing behavior. Candidate boundaries: icon-role update scheduling,
+  file-icon resolve queue handoff, and runtime evidence collection helpers.
 
 ## Acceptance Gates
 

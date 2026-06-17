@@ -19,8 +19,8 @@ the render frame.
   hit testing, and paint snapshots. It must not synchronously scan icon themes,
   probe thumbnails, or read MIME magic.
 - Zoom changes item metrics and may invalidate layout/text/image geometry, but
-  model roles stay on the role/update side. The frame may use preliminary icon
-  snapshots until resolved role data is ready.
+  model roles stay on the role/update side. The frame may use preliminary or
+  retained same-source icon snapshots until resolved role data is ready.
 - `raw_file_grid_snapshot()` owns the visible/work range. Scheduler projection
   queues metadata roles, thumbnails, and file-icon theme resolve work.
 - `VisibleItemSnapshotCache`, paint slots, text shape caches, and GPUI
@@ -53,11 +53,19 @@ the render frame.
   queued. This mirrors Dolphin's visual-stability behavior: do not replace a
   real visible icon with a fallback marker just because the new zoom level's
   icon path has not resolved yet.
+- Active zoom now mirrors Dolphin's `KFileItemListView::triggerIconSizeUpdate()`
+  / `updateIconSize()` split. Item layout changes immediately, but icon snapshot
+  conversion and file-icon resolve requests keep using the previous pane-local
+  icon role size for 300ms; only the final role size invalidates visible
+  snapshots and queues exact-size icon work.
 - The image paint layer now applies the same rule after path resolution too:
   if GPUI `RetainAllImageCache::load()` returns pending/error for a new icon
   path, the painter first tries a retained image for the same MIME icon name.
   This avoids the probabilistic fallback flash seen while scrolling or zooming
   image-backed MIME icons.
+- Theme icon file decoding is not performed synchronously in GPUI prepaint.
+  Decoding stays on GPUI's image-cache path; paint uses retained same-`iconName`
+  images to avoid visible blank/marker regression.
 - Directory-load MIME icon stability now follows Dolphin's visible-widget
   boundary. Dolphin avoids expensive `KFileItem::iconName()` in
   `KFileItemModel::retrieveData()` when MIME is unknown, but

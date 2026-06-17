@@ -13,7 +13,8 @@ Fika item views should converge on Dolphin's `KItemListView` model:
 - UI hitboxes are stable interaction surfaces
 - static item visuals are custom painted instead of rebuilt as GPUI child trees
 - thumbnail/theme-icon images are painted by retained content-level image
-  layers backed by GPUI's image cache
+  layers backed by GPUI's image cache; prepaint must not synchronously read or
+  decode theme icon files
 - rename editors and drag-start initiation can remain specialized GPUI child
   paths until their platform contracts are replaceable
 
@@ -121,18 +122,22 @@ file roles inside the painter:
   visible directories, read-ahead after, then read-ahead before.
 - when icon resolve results arrive, visible item snapshot caches are invalidated
   so the next frame can replace preliminary icons with resolved theme images.
-- thumbnail role success/failure remains model-driven, but the image paint layer
-  paints a fallback while a thumbnail image is pending or fails to load. Theme
-  icon cold miss is different: after the theme path is already known, the image
-  layer synchronously creates the small `RenderImage`, matching Dolphin
-  `pixmapForIcon()` and avoiding a normal placeholder frame.
+- thumbnail role success/failure remains model-driven, and the image paint
+  layer paints a fallback only after a same-source retained image has been
+  tried. Theme icons use the same GPUI image-cache decode path and are retained
+  by `iconName`; a pending new theme resource must not replace an already loaded
+  same-icon image with a marker or blank frame.
+- zoom mirrors Dolphin's `KFileItemListView::triggerIconSizeUpdate()` path:
+  item geometry changes immediately, while icon snapshot conversion and
+  file-icon resolve requests keep using a pane-local icon role size until the
+  300ms update delay expires. The final role size then invalidates visible
+  snapshot/work caches and queues only the final icon size.
 
 This means scroll and zoom frames must never synchronously perform theme icon
-path lookup, MIME magic reads, thumbnail probing, or large image work. They may
-consume already projected model roles, cached images, retained shape data, and
-preliminary visual fallbacks. The only allowed synchronous I/O/decode exception
-is a Dolphin-aligned theme icon cold miss after `FileIconCache` has already
-resolved the icon path.
+path lookup, MIME magic reads, thumbnail probing, theme icon file decoding, or
+large image work. They may consume already projected model roles, cached images,
+retained shape data, retained same-source images, and preliminary visual
+fallbacks.
 
 ## Architecture Boundary
 
@@ -400,12 +405,13 @@ element:
 
 - keep using GPUI's `ImageAssetLoader` and pane-local `RetainAllImageCache` for
   thumbnail path loading, image decode, and render-image lifetime
-- for theme icons, mirror Dolphin `pixmapForIcon()` by synchronously creating a
-  small `RenderImage` from the already-resolved theme icon path; retain by
-  `iconName` so zoom can reuse the previous icon while a new size path is used
+- for theme icons, keep the same GPUI image-cache decode path; retain by
+  `iconName` so zoom can reuse the previous icon while a final-size resource is
+  pending
 - draw loaded images from the custom layer with `Window::paint_image`
 - keep thumbnail fallback marker painting in the image layer; theme icons use a
-  neutral markerless placeholder only if synchronous loading fails
+  neutral markerless placeholder only before any same-icon image has ever loaded
+  or when loading fails with no retained same-icon image
 - keep thumbnail failures model-driven; a missing thumbnail render image does not
   synthesize a file icon in paint
 
@@ -415,7 +421,8 @@ Acceptance:
   elements
 - thumbnail image loads still happen asynchronously and notify the pane on
   completion
-- theme icon cold miss does not produce a normal placeholder frame
+- theme icon pending/error frames do not replace an already loaded same-`iconName`
+  image with a marker, blank rect, or unrelated fallback
 - loaded image bounds match GPUI `ObjectFit::Contain`
 - image cache state remains pane-local and is released with the pane/layer
 
@@ -558,7 +565,7 @@ architecture.
 - Do not rewrite Details mode in the first static paint slice.
 - Do not reimplement thumbnail decode/cache ownership while GPUI's public
   `RetainAllImageCache` and `ImageAssetLoader` remain sufficient. Theme icon
-  synchronous small-image creation is the Dolphin-aligned exception.
+  files must not be synchronously decoded in GPUI prepaint.
 - Do not reintroduce Compact/Icons item-local `img()` or static text children
   unless a measured GPUI baseline proves that path is better than the retained
   content-level painter.

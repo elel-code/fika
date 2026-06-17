@@ -406,18 +406,32 @@ Rendering is intentionally thin. Feature work should move domain logic into
 
 ### Key UI Components
 
-#### File Grid (`src/ui/file_grid.rs`)
+#### File Grid (`src/ui/file_grid/`)
 
-The file grid renders a compact (column-first) view of directory items using
-GPUI declarative elements (`div`, `img`, text). Virtualization is achieved
-through three layers:
+The file grid now follows a Dolphin-style retained pipeline rather than a
+per-item GPUI visual tree. The module facade is `src/ui/file_grid.rs`, while the
+implementation lives in focused modules under `src/ui/file_grid/`.
+Virtualization and rendering are split across retained layers:
 
-1. **Layout math** (`src/core/view.rs`): `CompactLayout::visible_items()`
-   computes only items intersecting the viewport.
-2. **Slot pool** (`src/ui/file_grid/slots.rs`): `VisibleItemSlotPool` recycles
-   element IDs from off-screen items, capped at 100.
-3. **GPU-composited scroll**: Content translation via
-   `left(-scroll_x) / top(-scroll_y)` avoids layout recalculation on scroll.
+1. **Layout math** (`src/core/view.rs`, `src/ui/file_grid/layout.rs`):
+   Compact/Icons/Details geometry is derived from pane `ViewState` and Dolphin
+   sizing rules.
+2. **Raw snapshot and role scheduling** (`src/ui/file_grid/snapshot/`): raw
+   visible/work ranges are projected once, then metadata, thumbnail, and
+   file-icon resolve work is queued outside the paint path.
+3. **Slot and paint state** (`src/ui/file_grid/slots.rs`,
+   `src/ui/file_grid/paint_slots.rs`): visible visual identity and retained
+   item/details painter content are reused across geometry-only changes.
+4. **Custom visual/image painters** (`static_visual.rs`, `image_layer.rs`,
+   `details_visual.rs`): backgrounds, labels, fallback icons, theme icons, and
+   thumbnails are painted from retained snapshots. Theme icon files are not
+   synchronously decoded in GPUI prepaint; image decode stays on GPUI's
+   `RetainAllImageCache` path with same-source retained fallback.
+5. **Interaction and platform boundaries** (`interaction.rs`, `dnd.rs`,
+   `item_shell.rs`, `details_shell.rs`, `rename_overlay.rs`): hover/cursor,
+   click/menu/drop hit testing, and active item-drag hover are retained. GPUI
+   item/row shells remain only for drag start, and rename remains a GPUI text
+   editing overlay until those platform contracts are replaceable.
 
 Active inline rename drafts add a pane-local text-width override to the compact
 column metrics. Snapshot generation, item hit-testing, rubber-band visual
@@ -445,7 +459,7 @@ reproduces Zed's `ScrollHandle` scrollbar model inside Fika:
   not carry scrollbar drag state.
 - `src/main.rs` owns one `gpui::ScrollHandle` per `PaneId`, deletes the handle
   when the pane is removed, and resets it for directory/layout resets.
-- `src/ui/file_grid.rs` makes the item viewport the tracked scroll container
+- `src/ui/file_grid/viewport.rs` makes the item viewport the tracked scroll container
   with `track_scroll()` and `overflow_x_scroll()`. It no longer manually shifts
   the content div by `-ViewState.scroll_x`.
 - `src/ui/item_view/scroll_bar.rs` is a sibling overlay of that tracked
