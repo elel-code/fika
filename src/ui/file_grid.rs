@@ -18,9 +18,12 @@ mod static_visual;
 mod style;
 mod surface;
 mod text;
+mod types;
 mod viewport;
 
-pub(crate) use details::{DetailsItemSnapshot, DetailsLayoutMetrics};
+#[cfg(test)]
+pub(crate) use details::DetailsItemSnapshot;
+pub(crate) use details::DetailsLayoutMetrics;
 pub(crate) use details_visual::DetailsTextShapeCache;
 pub(crate) use dnd::ItemDrag;
 pub(crate) use layout::{
@@ -42,15 +45,18 @@ pub(crate) use projection::{
     model_indexes_intersecting_visual_rect, pane_layout_projection,
 };
 pub(crate) use slots::VisibleItemSlotPool;
+#[cfg(test)]
+pub(crate) use snapshot::VisibleItemSnapshot;
 pub(crate) use snapshot::{
-    RawFileGridSnapshot, RawFileGridSnapshotInput, VisibleItemSnapshot, VisibleItemSnapshotCache,
+    RawFileGridSnapshot, RawFileGridSnapshotInput, VisibleItemSnapshotCache,
     deferred_thumbnail_candidates_for_model, raw_file_grid_snapshot,
 };
 pub(crate) use static_visual::StaticItemTextShapeCache;
 pub(crate) use surface::file_grid;
+pub(crate) use types::{
+    FileGridMode, FileGridProps, FileGridRenderSnapshot, FileGridSnapshot, PaneViewportGeometry,
+};
 
-use fika_core::{CompactLayout, IconsLayout, PaneId, ViewRect};
-use gpui::ScrollHandle;
 use style::{
     ItemTileTextAlignment, TextShapeCacheStats, details_row_background, item_identity_element_id,
     item_tile_background,
@@ -99,63 +105,6 @@ use static_visual::{
 };
 #[cfg(test)]
 use viewport::{measured_viewport_for_scrollbar_axis, viewport_bounds_update_requires_notify};
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum FileGridMode {
-    Manager,
-    Chooser { directories: bool, multiple: bool },
-}
-
-pub(crate) struct FileGridProps {
-    pub(crate) pane_id: PaneId,
-    pub(crate) snapshot: FileGridRenderSnapshot,
-    pub(crate) trash_view: bool,
-    pub(crate) scroll_handle: ScrollHandle,
-    pub(crate) rubber_band: Option<ViewRect>,
-    pub(crate) drop_target: bool,
-    pub(crate) mode: FileGridMode,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) enum FileGridSnapshot {
-    Compact {
-        layout: CompactLayout,
-        items: Vec<VisibleItemSnapshot>,
-    },
-    Icons {
-        layout: IconsLayout,
-        items: Vec<VisibleItemSnapshot>,
-    },
-    Details {
-        items: Vec<DetailsItemSnapshot>,
-        row_count: usize,
-        metrics: DetailsLayoutMetrics,
-        name_column_width: f32,
-    },
-}
-
-#[derive(Clone, Debug)]
-pub(crate) enum FileGridRenderSnapshot {
-    Compact {
-        layout: CompactLayout,
-        items: Vec<ItemPaintSnapshot>,
-    },
-    Icons {
-        layout: IconsLayout,
-        items: Vec<ItemPaintSnapshot>,
-    },
-    Details {
-        items: Vec<DetailsPaintSnapshot>,
-        row_count: usize,
-        metrics: DetailsLayoutMetrics,
-        name_column_width: f32,
-    },
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct PaneViewportGeometry {
-    pub(crate) window_rect: ViewRect,
-}
 
 #[cfg(test)]
 mod tests {
