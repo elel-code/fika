@@ -28,7 +28,8 @@ Options:
       Fail unless [fika places-renderer-policy] matches the opt-in
       FIKA_CUSTOM_PLACES_ROWS=1 policy: row_visual_layer/icon_gpui/drag_shell
       equal rows, row_gpui=0, retained_interaction=0, section_gpui=sections,
-      and scrollbar_canvas=1. Also requires [fika places-row-visual] logs.
+      and scrollbar_canvas=1. Also requires aggregated [fika places-row-visual]
+      logs whose rows count matches the policy rows.
 
   --snapshot-us N
       Fail if any [fika places-view] snapshot exceeds N microseconds.
@@ -371,6 +372,9 @@ END {
         }
         if (row_visual_frames == 0) {
             fail("missing [fika places-row-visual] logs for custom row visual policy")
+        }
+        if (max_values["row_visual_rows"] != max_values["policy_rows"]) {
+            fail("custom Places row visual layer is not aggregated to the policy row count")
         }
     }
     if (snapshot_limit != "" && max_values["snapshot"] > snapshot_limit) {

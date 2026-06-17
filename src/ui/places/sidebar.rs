@@ -21,6 +21,7 @@ use super::perf::{
     emit_places_sidebar_perf_log, places_perf_enabled, places_section_count,
 };
 use super::snapshot::PlaceSnapshot;
+use super::visual::places_row_visual_layer;
 use row::place_row;
 use section::group_heading;
 
@@ -44,6 +45,7 @@ pub(crate) fn places_sidebar(
         PlacesSidebarScrollState::new()
     });
     let scroll_handle = state.read(cx).scroll_handle.clone();
+    let row_visual_layer = custom_row_visuals.then(|| places_row_visual_layer(places.clone()));
     let mut rows = Vec::new();
     let mut current_group = None;
 
@@ -51,7 +53,12 @@ pub(crate) fn places_sidebar(
         if current_group != Some(place.group) {
             current_group = Some(place.group);
             if !place.group.is_empty() {
-                rows.push(group_heading(place.group, place.index, cx));
+                rows.push(group_heading(
+                    place.group,
+                    place.index,
+                    custom_row_visuals,
+                    cx,
+                ));
             }
         }
         rows.push(place_row(index, place, custom_row_visuals, cx));
@@ -168,6 +175,7 @@ pub(crate) fn places_sidebar(
                 .child(
                     div()
                         .id("places-sidebar-list")
+                        .relative()
                         .flex()
                         .flex_col()
                         .flex_1()
@@ -175,6 +183,7 @@ pub(crate) fn places_sidebar(
                         .min_h_0()
                         .overflow_y_scroll()
                         .track_scroll(&scroll_handle)
+                        .when_some(row_visual_layer, |list, layer| list.child(layer))
                         .children(rows),
                 )
                 .child(places_sidebar_scrollbar(state, perf_enabled)),

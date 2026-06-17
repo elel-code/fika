@@ -13,7 +13,7 @@ use super::super::style::{
     PlaceInsertIndicatorEdge, place_insert_indicator, place_row_background, place_row_border_color,
     place_row_hover_background,
 };
-use super::super::visual::place_row_visual;
+use super::super::visual::PLACE_ROW_HEIGHT;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct PlaceRowHighlight {
@@ -132,8 +132,7 @@ pub(super) fn place_row(
 
     if custom_visual {
         row = row
-            .h(px(30.0))
-            .child(place_row_visual(&place, active, row_drop_target))
+            .h(px(PLACE_ROW_HEIGHT))
             .child(place_icon_view(&place.icon, active))
             .child(div().flex_1());
     } else {

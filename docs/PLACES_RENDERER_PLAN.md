@@ -220,13 +220,14 @@ Expected policy shape:
 
 ```text
 places_renderer_policy_frames=... max_row_gpui=0 max_row_visual_layer=11 max_icon_gpui=11 max_retained_interaction=0 max_drag_shell=11
-places_row_visual_frames=... max_rows=1 max_prepaint=...us max_paint=...us
+places_row_visual_frames=... max_rows=11 max_prepaint=...us max_paint=...us
 ```
 
-`max_rows=1` is expected because the current opt-in implementation paints one
-canvas per row. This is acceptable for the first benchmark slice; a later
-retained row/section layer can aggregate row visuals if the per-row canvas
-overhead loses to the GPUI baseline.
+`max_rows` must match the renderer-policy row count. The current opt-in
+implementation paints row backgrounds, active/drop state, label, trash marker,
+and insert indicators through one sidebar-level visual layer, while GPUI still
+owns icons, row event delivery, context menus, DnD, and drag-start shells. The
+analyzer rejects custom row visual logs that fall back to one canvas per row.
 
 2026-06-17 first opt-in desktop-session evidence:
 
@@ -257,6 +258,46 @@ This confirms the first opt-in visual painter works under overflow, but it also
 shows the expected cost of one canvas per row (`675` row-visual frames in this
 5s smoke). That is evidence for the next renderer slice: aggregate Places row
 visuals into a retained sidebar layer before considering a default switch.
+
+2026-06-17 aggregated opt-in row visual evidence:
+
+```bash
+timeout 5s env FIKA_PERF_PLACES_VIEW=1 FIKA_CUSTOM_PLACES_ROWS=1 FIKA_AUTOSMOKE_PLACES=targets target/debug/fika /etc > /tmp/fika-places-custom-rows-layer.log 2>&1
+scripts/analyze-places-perf.sh --require-autosmoke --expect-custom-row-visual-policy /tmp/fika-places-custom-rows-layer.log
+
+timeout 5s env FIKA_PERF_PLACES_VIEW=1 FIKA_CUSTOM_PLACES_ROWS=1 FIKA_AUTOSMOKE_PLACES=overflow target/debug/fika /etc > /tmp/fika-places-overflow-custom-layer.log 2>&1
+scripts/analyze-places-perf.sh --require-overflow-autosmoke --expect-custom-row-visual-policy /tmp/fika-places-overflow-custom-layer.log
+```
+
+Targets summary:
+
+```text
+places_sidebar_frames=7 max_rows=11 max_sections=2 max_elements=13 max_build=938us
+places_renderer_policy_frames=7 max_row_gpui=0 max_row_visual_layer=11 max_icon_gpui=11
+places_row_visual_frames=7 max_rows=11 max_prepaint=1515us max_paint=7570us
+places_autosmoke target=1 insert_start=1 insert_end=1 clear=1 snapshots=1,1,1,1,1
+```
+
+Overflow summary:
+
+```text
+places_sidebar_frames=11 max_rows=75 max_sections=3 max_elements=78 max_build=3289us
+places_renderer_policy_frames=11 max_row_gpui=0 max_row_visual_layer=75 max_icon_gpui=75
+places_row_visual_frames=11 max_rows=75 max_prepaint=12610us max_paint=16108us
+places_scrollbar_frames=11 max_visible=1 max_scroll_y=1663.0
+places_overflow_autosmoke start=1 complete=1 snapshot=1 max_visible=75
+```
+
+The root cause of the first opt-in overflow cost was structural: each row owned
+its own canvas, so one sidebar frame with 75 rows produced 75 row-visual
+prepaint/paint passes. Dolphin's `KFilePlacesView` keeps the model/view split
+and does not make row rendering own Places ordering or device semantics, so
+Fika can collapse row-only visuals without changing Places behavior. The
+implementation moves row visuals into one absolute sidebar layer that computes
+section-heading offsets from the same `PlaceSnapshot` stream. The regression
+guard is `--expect-custom-row-visual-policy`, which now requires
+`places_row_visual max_rows == places_renderer_policy max_rows` and fails the
+old per-row `rows=1` shape.
 
 ## Acceptance Gates
 

@@ -438,7 +438,9 @@ pretending that every remaining GPUI boundary can be removed safely today.
   and insert indicators while keeping GPUI icons, row event delivery, context
   menus, DnD, and drag-start shells. `places/interaction.rs` now owns the
   row/section target decision, while GPUI shells still provide event delivery
-  and bounds.
+  and bounds. The opt-in row visuals are now aggregated into one sidebar-level
+  layer, so `[fika places-row-visual] rows` must match the policy row count
+  instead of logging one canvas per row.
 - [ ] P15f: Keep rename on GPUI until a custom text-editing plan covers focus,
   caret hit testing, UTF-8 selection, validation, commit/cancel, Tab rename-next,
   and IME. Do not merge a custom rename painter without that behavior matrix.
@@ -578,6 +580,19 @@ by risk and evidence, not by how custom-painted a surface looks.
   without writing user Places configuration, `[fika places-scrollbar]` reports
   visible overflow and `max_scroll_y`, and `scripts/analyze-places-perf.sh`
   now supports `--require-overflow-autosmoke`.
+- [x] P16u: Aggregate the opt-in Places row visual painter into one
+  sidebar-level layer before considering a default switch. Root cause:
+  the first opt-in painter used one canvas per row, so the overflow smoke logged
+  `places_row_visual_frames=675 max_rows=1` for 75 visible rows. Implementation:
+  `places_row_visual_layer` paints all row backgrounds, labels, trash markers,
+  and insert indicators from the sidebar snapshot stream while GPUI keeps icons,
+  event delivery, context menus, DnD, and drag-start shells. Evidence:
+  `/tmp/fika-places-custom-rows-layer.log` passed
+  `--require-autosmoke --expect-custom-row-visual-policy` with `max_rows=11`,
+  and `/tmp/fika-places-overflow-custom-layer.log` passed
+  `--require-overflow-autosmoke --expect-custom-row-visual-policy` with
+  `max_rows=75`. Guard: the analyzer now rejects custom row visual policy logs
+  where `[fika places-row-visual] rows` does not match the policy row count.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

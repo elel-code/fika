@@ -9,26 +9,28 @@ use super::perf::{PlacesRowVisualPerfLog, emit_places_row_visual_perf_log, place
 use super::snapshot::PlaceSnapshot;
 use super::style::{place_row_background, place_row_border_color};
 
+pub(super) const PLACE_ROW_HEIGHT: f32 = 30.0;
+pub(super) const PLACE_SECTION_HEADING_HEIGHT: f32 = 24.0;
+
 const ROW_PADDING_X: f32 = 8.0;
 const ICON_SIZE: f32 = 22.0;
 const ICON_TEXT_GAP: f32 = 8.0;
 const TRASH_DOT_SIZE: f32 = 7.0;
 const INSERT_INDICATOR_HEIGHT: f32 = 2.0;
 
-pub(super) fn place_row_visual(
-    place: &PlaceSnapshot,
-    active: bool,
-    drop_target: bool,
-) -> impl IntoElement {
-    let state = PlaceRowVisualState::from_place(place, active, drop_target);
+pub(super) fn places_row_visual_layer(places: Vec<PlaceSnapshot>) -> impl IntoElement {
+    let rows = place_row_visual_layer_rows(&places);
+    let height = places_row_visual_content_height(&places).max(1.0);
     canvas(
-        move |bounds, window, cx| place_row_visual_prepaint(bounds, state.clone(), window, cx),
+        move |_bounds, window, cx| places_row_visual_prepaint(rows.clone(), window, cx),
         move |bounds, paint_state, window, cx| {
             let paint_started = Instant::now();
-            paint_place_row_visual(bounds, &paint_state, window, cx);
+            for row in &paint_state.rows {
+                paint_place_row_visual(bounds, row, window, cx);
+            }
             if places_perf_enabled() {
                 emit_places_row_visual_perf_log(PlacesRowVisualPerfLog {
-                    rows: 1,
+                    rows: paint_state.rows.len(),
                     prepaint_elapsed: paint_state.prepaint_elapsed,
                     paint_elapsed: paint_started.elapsed(),
                 });
@@ -38,11 +40,13 @@ pub(super) fn place_row_visual(
     .absolute()
     .left_0()
     .top_0()
-    .size_full()
+    .w_full()
+    .h(px(height))
 }
 
 #[derive(Clone)]
 struct PlaceRowVisualState {
+    y: f32,
     label: SharedString,
     active: bool,
     mounted: bool,
@@ -54,12 +58,14 @@ struct PlaceRowVisualState {
 }
 
 impl PlaceRowVisualState {
-    fn from_place(place: &PlaceSnapshot, active: bool, drop_target: bool) -> Self {
+    fn from_place(place: &PlaceSnapshot, y: f32) -> Self {
+        let insert_target = place.insert_before || place.insert_after;
         Self {
+            y,
             label: SharedString::from(place.label.as_str()),
-            active,
+            active: place.active && !insert_target,
             mounted: place.mounted,
-            drop_target,
+            drop_target: place.drop_target && !insert_target,
             insert_before: place.insert_before,
             insert_after: place.insert_after,
             trash_place: place.trash_place,
@@ -68,20 +74,37 @@ impl PlaceRowVisualState {
     }
 }
 
+struct PlaceRowVisualLayerPaintState {
+    rows: Vec<PlaceRowVisualPaintState>,
+    prepaint_elapsed: std::time::Duration,
+}
+
 struct PlaceRowVisualPaintState {
     input: PlaceRowVisualState,
     line: gpui::ShapedLine,
     line_height: Pixels,
-    prepaint_elapsed: std::time::Duration,
+}
+
+fn places_row_visual_prepaint(
+    rows: Vec<PlaceRowVisualState>,
+    window: &mut Window,
+    _cx: &mut App,
+) -> PlaceRowVisualLayerPaintState {
+    let started = Instant::now();
+    let rows = rows
+        .into_iter()
+        .map(|input| place_row_visual_prepaint(input, window))
+        .collect();
+    PlaceRowVisualLayerPaintState {
+        rows,
+        prepaint_elapsed: started.elapsed(),
+    }
 }
 
 fn place_row_visual_prepaint(
-    _bounds: Bounds<Pixels>,
     input: PlaceRowVisualState,
     window: &mut Window,
-    _cx: &mut App,
 ) -> PlaceRowVisualPaintState {
-    let started = Instant::now();
     let text_style = window.text_style();
     let font_size = px(window.rem_size().as_f32() * 0.875);
     let text_color = if input.active {
@@ -106,23 +129,26 @@ fn place_row_visual_prepaint(
         input,
         line,
         line_height: px(20.0),
-        prepaint_elapsed: started.elapsed(),
     }
 }
 
 fn paint_place_row_visual(
-    bounds: Bounds<Pixels>,
+    layer_bounds: Bounds<Pixels>,
     state: &PlaceRowVisualPaintState,
     window: &mut Window,
     cx: &mut App,
 ) {
     let input = &state.input;
+    let row_bounds = Bounds::new(
+        point(layer_bounds.origin.x, layer_bounds.origin.y + px(input.y)),
+        size(layer_bounds.size.width, px(PLACE_ROW_HEIGHT)),
+    );
     let background = place_row_background(input.active, input.drop_target);
     let border_color = place_row_border_color(input.active, input.drop_target);
-    window.paint_quad(fill(bounds, background).corner_radii(px(6.0)));
+    window.paint_quad(fill(row_bounds, background).corner_radii(px(6.0)));
     if input.active || input.drop_target {
         window.paint_quad(
-            fill(bounds, rgba(0x00000000))
+            fill(row_bounds, rgba(0x00000000))
                 .corner_radii(px(6.0))
                 .border_widths(px(1.0))
                 .border_color(border_color),
@@ -136,14 +162,14 @@ fn paint_place_row_visual(
         ROW_PADDING_X
     };
     let text_bounds = Bounds::new(
-        point(bounds.origin.x + px(text_left), bounds.origin.y),
+        point(row_bounds.origin.x + px(text_left), row_bounds.origin.y),
         size(
-            (bounds.size.width - px(text_left + reserved_right)).max(px(1.0)),
-            bounds.size.height,
+            (row_bounds.size.width - px(text_left + reserved_right)).max(px(1.0)),
+            row_bounds.size.height,
         ),
     );
     let text_y = text_bounds.origin.y
-        + ((bounds.size.height - state.line_height).max(px(0.0)) / 2.0).floor();
+        + ((row_bounds.size.height - state.line_height).max(px(0.0)) / 2.0).floor();
     window.paint_layer(text_bounds, |window| {
         state
             .line
@@ -159,8 +185,9 @@ fn paint_place_row_visual(
     });
 
     if input.trash_place {
-        let dot_x = bounds.origin.x + bounds.size.width - px(ROW_PADDING_X + TRASH_DOT_SIZE);
-        let dot_y = bounds.origin.y + (bounds.size.height - px(TRASH_DOT_SIZE)) / 2.0;
+        let dot_x =
+            row_bounds.origin.x + row_bounds.size.width - px(ROW_PADDING_X + TRASH_DOT_SIZE);
+        let dot_y = row_bounds.origin.y + (row_bounds.size.height - px(TRASH_DOT_SIZE)) / 2.0;
         window.paint_quad(
             fill(
                 Bounds::new(
@@ -179,16 +206,16 @@ fn paint_place_row_visual(
 
     if input.insert_before || input.insert_after {
         let y = if input.insert_before {
-            bounds.origin.y
+            row_bounds.origin.y
         } else {
-            bounds.origin.y + bounds.size.height - px(INSERT_INDICATOR_HEIGHT)
+            row_bounds.origin.y + row_bounds.size.height - px(INSERT_INDICATOR_HEIGHT)
         };
         window.paint_quad(
             fill(
                 Bounds::new(
-                    point(bounds.origin.x + px(ROW_PADDING_X), y),
+                    point(row_bounds.origin.x + px(ROW_PADDING_X), y),
                     size(
-                        (bounds.size.width - px(ROW_PADDING_X * 2.0)).max(px(1.0)),
+                        (row_bounds.size.width - px(ROW_PADDING_X * 2.0)).max(px(1.0)),
                         px(INSERT_INDICATOR_HEIGHT),
                     ),
                 ),
@@ -197,6 +224,38 @@ fn paint_place_row_visual(
             .corner_radii(px(1.0)),
         );
     }
+}
+
+fn place_row_visual_layer_rows(places: &[PlaceSnapshot]) -> Vec<PlaceRowVisualState> {
+    let mut rows = Vec::with_capacity(places.len());
+    let mut current_group = None;
+    let mut y = 0.0;
+    for place in places {
+        if current_group != Some(place.group) {
+            current_group = Some(place.group);
+            if !place.group.is_empty() {
+                y += PLACE_SECTION_HEADING_HEIGHT;
+            }
+        }
+        rows.push(PlaceRowVisualState::from_place(place, y));
+        y += PLACE_ROW_HEIGHT;
+    }
+    rows
+}
+
+pub(super) fn places_row_visual_content_height(places: &[PlaceSnapshot]) -> f32 {
+    let mut current_group = None;
+    let mut height = 0.0;
+    for place in places {
+        if current_group != Some(place.group) {
+            current_group = Some(place.group);
+            if !place.group.is_empty() {
+                height += PLACE_SECTION_HEADING_HEIGHT;
+            }
+        }
+        height += PLACE_ROW_HEIGHT;
+    }
+    height
 }
 
 #[cfg(test)]
@@ -211,7 +270,7 @@ mod tests {
         place.active = true;
         place.drop_target = true;
         place.insert_before = true;
-        let state = PlaceRowVisualState::from_place(&place, false, false);
+        let state = PlaceRowVisualState::from_place(&place, 0.0);
         assert!(!state.active);
         assert!(!state.drop_target);
         assert!(state.insert_before);
@@ -222,9 +281,37 @@ mod tests {
         let mut place = test_place();
         place.trash_place = true;
         place.trash_has_items = true;
-        let state = PlaceRowVisualState::from_place(&place, false, false);
+        let state = PlaceRowVisualState::from_place(&place, 0.0);
         assert!(state.trash_place);
         assert!(state.trash_has_items);
+    }
+
+    #[test]
+    fn place_row_visual_layer_offsets_skip_section_headings() {
+        let mut first = test_place();
+        first.group = "";
+        first.label = "Home".to_string();
+        let mut second = test_place();
+        second.group = "Devices";
+        second.label = "Root".to_string();
+        let rows = place_row_visual_layer_rows(&[first, second]);
+
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].y, 0.0);
+        assert_eq!(rows[1].y, PLACE_ROW_HEIGHT + PLACE_SECTION_HEADING_HEIGHT);
+    }
+
+    #[test]
+    fn places_row_visual_content_height_matches_rows_and_sections() {
+        let mut first = test_place();
+        first.group = "";
+        let mut second = test_place();
+        second.group = "Devices";
+
+        assert_eq!(
+            places_row_visual_content_height(&[first, second]),
+            PLACE_ROW_HEIGHT * 2.0 + PLACE_SECTION_HEADING_HEIGHT
+        );
     }
 
     fn test_place() -> PlaceSnapshot {

@@ -2,13 +2,16 @@ mod dnd;
 
 use crate::FikaApp;
 use gpui::prelude::*;
-use gpui::{Context, Div, MouseButton, ParentElement, Stateful, Styled, div, rgb};
+use gpui::{Context, Div, MouseButton, ParentElement, Stateful, Styled, div, px, rgb};
 
 use dnd::install_section_dnd;
+
+use super::super::visual::PLACE_SECTION_HEADING_HEIGHT;
 
 pub(super) fn group_heading(
     label: &'static str,
     insert_index: usize,
+    custom_visual: bool,
     cx: &mut Context<FikaApp>,
 ) -> Stateful<Div> {
     let heading = div()
@@ -26,6 +29,11 @@ pub(super) fn group_heading(
                 cx.notify();
             }),
         );
+    let heading = if custom_visual {
+        heading.h(px(PLACE_SECTION_HEADING_HEIGHT))
+    } else {
+        heading
+    };
     let heading = install_section_dnd(heading, insert_index, cx).child(label);
 
     div()
