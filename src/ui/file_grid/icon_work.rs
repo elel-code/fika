@@ -52,10 +52,15 @@ impl FileIconResolveQueue {
             self.seen.remove(&request);
         }
     }
+
+    pub(crate) fn contains(&self, request: &FileIconResolveRequest) -> bool {
+        self.seen.contains(request)
+    }
 }
 
 pub(crate) fn resolve_visible_file_icons_for_raw_grid(
     file_icons: &mut FileIconCache,
+    queue: &FileIconResolveQueue,
     raw_file_grid: &RawFileGridSnapshot,
     file_icon_size: f32,
     budget: Duration,
@@ -65,6 +70,19 @@ pub(crate) fn resolve_visible_file_icons_for_raw_grid(
     raw_file_grid.for_each_visible_file_icon_resolve_candidate(file_icon_size, |request| {
         if started.elapsed() >= budget {
             return false;
+        }
+        let queued_request = file_icons.resolve_request_for(
+            request.path,
+            request.is_dir,
+            request.mime_type.clone(),
+            request.mime_magic_checked,
+            request.icon_size,
+        );
+        if queued_request
+            .as_ref()
+            .is_some_and(|request| queue.contains(request))
+        {
+            return true;
         }
         changed |= file_icons.resolve_now_for(
             request.path,
@@ -148,6 +166,20 @@ mod tests {
 
         queue.finish_batch(batch);
         assert_eq!(queue.start_next_batch().unwrap(), vec![beta]);
+    }
+
+    #[test]
+    fn contains_tracks_queued_and_pending_requests() {
+        let mut queue = FileIconResolveQueue::default();
+        let request = request("alpha.txt");
+
+        assert!(!queue.contains(&request));
+        assert!(queue.queue(request.clone()));
+        assert!(queue.contains(&request));
+        let batch = queue.start_next_batch().unwrap();
+        assert!(queue.contains(&request));
+        queue.finish_batch(batch);
+        assert!(!queue.contains(&request));
     }
 
     #[test]

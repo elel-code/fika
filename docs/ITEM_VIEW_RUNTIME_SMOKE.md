@@ -179,6 +179,20 @@ renderer-policy counts that cannot fit inside the logged item count. Human
 review is still required for whether the exercised mode switches, resizes,
 fullscreen toggles, and DnD actions match this checklist.
 
+For unattended zoom/scroll sampling, run with `FIKA_AUTOSMOKE_ITEM_VIEW`:
+
+```sh
+FIKA_PERF_ITEM_VIEW=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll cargo run -- /etc 2>&1 | tee /tmp/fika-etc-zoom-scroll.log
+scripts/analyze-item-view-perf.sh /tmp/fika-etc-zoom-scroll.log
+```
+
+Accepted values are `zoom`, `scroll`, and `zoom-scroll` (`1` is an alias for
+`zoom-scroll`). The app waits for the first pane to settle, then logs
+`[fika autosmoke]` markers while applying zoom in/out and scroll forward/back
+actions through the same app-side controller methods used by keyboard and
+wheel input. This does not replace visual review for final UX, but it prevents
+zoom/scroll perf regressions from depending on manual event timing.
+
 For MIME/theme-icon image renderer A/B, repeat the same `~/Downloads` and
 `/etc` runs with `FIKA_CUSTOM_THEME_ICONS=1`. The default run keeps retained
 item snapshots and controller routing while rendering MIME/theme icons through

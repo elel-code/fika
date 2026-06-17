@@ -42,7 +42,7 @@ use gpui::prelude::*;
 use gpui::{
     App, Bounds, ClipboardItem, Context, ExternalPaths, IntoElement, ParentElement, Render,
     ScrollDelta, ScrollHandle, ScrollStrategy, Styled, Window, WindowBounds, WindowOptions, div,
-    px, rgb, size,
+    point, px, rgb, size,
 };
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::env;
@@ -155,7 +155,31 @@ const DEVICE_MONITOR_RETRY_INTERVAL: Duration = Duration::from_secs(60);
 const DEBUG_CACHE_ENV: &str = "FIKA_DEBUG_CACHE";
 const DEBUG_DND_ENV: &str = "FIKA_DEBUG_DND";
 const DEBUG_NAV_ENV: &str = "FIKA_DEBUG_NAV";
+const AUTOSMOKE_ITEM_VIEW_ENV: &str = "FIKA_AUTOSMOKE_ITEM_VIEW";
 const BACKGROUND_TASK_HISTORY_LIMIT: usize = 8;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ItemViewAutosmokeScenario {
+    Zoom,
+    Scroll,
+    ZoomScroll,
+}
+
+impl ItemViewAutosmokeScenario {
+    fn includes_zoom(self) -> bool {
+        matches!(
+            self,
+            ItemViewAutosmokeScenario::Zoom | ItemViewAutosmokeScenario::ZoomScroll
+        )
+    }
+
+    fn includes_scroll(self) -> bool {
+        matches!(
+            self,
+            ItemViewAutosmokeScenario::Scroll | ItemViewAutosmokeScenario::ZoomScroll
+        )
+    }
+}
 
 fn env_flag_is_truthy(value: &str) -> bool {
     matches!(
@@ -166,6 +190,18 @@ fn env_flag_is_truthy(value: &str) -> bool {
 
 fn env_flag_enabled(name: &str) -> bool {
     env::var(name).is_ok_and(|value| env_flag_is_truthy(&value))
+}
+
+fn item_view_autosmoke_scenario() -> Option<ItemViewAutosmokeScenario> {
+    let value = env::var(AUTOSMOKE_ITEM_VIEW_ENV).ok()?;
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" | "zoom-scroll" | "scroll-zoom" => {
+            Some(ItemViewAutosmokeScenario::ZoomScroll)
+        }
+        "zoom" => Some(ItemViewAutosmokeScenario::Zoom),
+        "scroll" => Some(ItemViewAutosmokeScenario::Scroll),
+        _ => None,
+    }
 }
 
 fn listing_cache_debug_enabled() -> bool {
@@ -539,6 +575,9 @@ impl FikaApp {
         app.start_trash_monitor();
         app.maybe_start_device_monitor(cx);
         Self::start_listing_result_monitor(listing_results_rx, cx);
+        if let Some(scenario) = item_view_autosmoke_scenario() {
+            Self::start_item_view_autosmoke(first, scenario, cx);
+        }
         cx.spawn(
             move |this: gpui::WeakEntity<FikaApp>, cx: &mut gpui::AsyncApp| {
                 let mut cx = cx.clone();
@@ -583,6 +622,99 @@ impl FikaApp {
         )
         .detach();
         app
+    }
+
+    fn start_item_view_autosmoke(
+        pane_id: PaneId,
+        scenario: ItemViewAutosmokeScenario,
+        cx: &mut Context<Self>,
+    ) {
+        cx.spawn(
+            move |this: gpui::WeakEntity<FikaApp>, cx: &mut gpui::AsyncApp| {
+                let mut cx = cx.clone();
+                async move {
+                    eprintln!(
+                        "[fika autosmoke] item-view start pane={} scenario={:?}",
+                        pane_id.0, scenario
+                    );
+                    cx.background_executor()
+                        .timer(Duration::from_millis(1200))
+                        .await;
+
+                    if scenario.includes_zoom() {
+                        for (label, change) in [
+                            ("zoom-in", ZoomChange::In),
+                            ("zoom-in", ZoomChange::In),
+                            ("zoom-out", ZoomChange::Out),
+                            ("zoom-out", ZoomChange::Out),
+                        ] {
+                            if this
+                                .update(&mut cx, |app, cx| {
+                                    eprintln!(
+                                        "[fika autosmoke] item-view action={} pane={}",
+                                        label, pane_id.0
+                                    );
+                                    app.apply_zoom_change_with_context(pane_id, change, cx);
+                                    cx.notify();
+                                })
+                                .is_err()
+                            {
+                                return;
+                            }
+                            cx.background_executor()
+                                .timer(Duration::from_millis(180))
+                                .await;
+                        }
+                    }
+
+                    if scenario.includes_scroll() {
+                        for (label, delta) in [
+                            (
+                                "scroll-forward",
+                                ScrollDelta::Pixels(point(px(0.0), px(-260.0))),
+                            ),
+                            (
+                                "scroll-forward",
+                                ScrollDelta::Pixels(point(px(0.0), px(-260.0))),
+                            ),
+                            (
+                                "scroll-back",
+                                ScrollDelta::Pixels(point(px(0.0), px(260.0))),
+                            ),
+                            (
+                                "scroll-back",
+                                ScrollDelta::Pixels(point(px(0.0), px(260.0))),
+                            ),
+                        ] {
+                            if this
+                                .update(&mut cx, |app, cx| {
+                                    let changed = app.scroll_pane_from_wheel(pane_id, delta);
+                                    eprintln!(
+                                        "[fika autosmoke] item-view action={} pane={} changed={}",
+                                        label, pane_id.0, changed
+                                    );
+                                    if changed {
+                                        cx.notify();
+                                    }
+                                })
+                                .is_err()
+                            {
+                                return;
+                            }
+                            cx.background_executor()
+                                .timer(Duration::from_millis(180))
+                                .await;
+                        }
+                    }
+
+                    eprintln!(
+                        "[fika autosmoke] item-view complete pane={} scenario={:?}",
+                        pane_id.0, scenario
+                    );
+                }
+            },
+        )
+        .detach();
     }
 
     fn filtered_model_for_pane(
@@ -1136,6 +1268,7 @@ impl FikaApp {
                 let icon_sync_started = perf_enabled.then(Instant::now);
                 if resolve_visible_file_icons_for_raw_grid(
                     &mut self.file_icons,
+                    &self.file_icon_resolve_queue,
                     &raw_file_grid,
                     file_icon_size,
                     DOLPHIN_VISIBLE_ICON_SYNC_BUDGET,
