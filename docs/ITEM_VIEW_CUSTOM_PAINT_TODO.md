@@ -609,6 +609,12 @@ by risk and evidence, not by how custom-painted a surface looks.
   viewports are recalculated after width changes. This is intentionally runtime
   only; a later persistence slice must save width/visibility through a
   coalesced settings path rather than writing config on every drag frame.
+- [x] P16x: Persist Places panel width and visibility through a narrow app
+  settings model. `src/core/settings.rs` stores `places.sidebar.width` and
+  `places.sidebar.visible` in `$XDG_CONFIG_HOME/fika/settings.tsv`; startup
+  loads those values before rendering the panel. UI changes schedule a
+  latest-only 120ms delayed background save using a generation counter, so
+  repeated sidebar drag frames update memory without synchronous config writes.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

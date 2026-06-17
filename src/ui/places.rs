@@ -33,6 +33,7 @@ pub(crate) use sidebar::places_sidebar;
 pub(crate) use sidebar::{
     PLACES_SIDEBAR_DEFAULT_WIDTH, PlacesSidebarResizeDrag, clamp_places_sidebar_width,
     places_panel_button, places_panel_icon_snapshot, places_sidebar_splitter,
+    places_sidebar_width_from_drag,
 };
 pub(crate) use snapshot::{PlaceIcon, PlaceSnapshot};
 pub(crate) use user::{

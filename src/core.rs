@@ -19,6 +19,7 @@ pub mod operations;
 pub mod pane;
 pub mod places;
 pub mod privilege;
+pub mod settings;
 pub mod thumbnails;
 pub mod trash_monitor;
 pub mod view;

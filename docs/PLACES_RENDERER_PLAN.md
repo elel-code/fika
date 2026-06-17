@@ -63,13 +63,14 @@ retained Places row surface with the same separations as file-grid:
   paint, and total sidebar build.
 
 Panel layout belongs beside the Places view/controller boundary, not inside the
-row painter. The Places panel has runtime state for visibility and width; the
-sidebar splitter updates that width and asks the pane row to remeasure item
-viewports through the same next-frame resize path as pane splitters. The toggle
-button hides or shows the panel without destroying pane state. A later
-persistence slice should save width/visibility with the same coalesced settings
-discipline used for other high-frequency UI state; it must not write config
-files from every drag frame.
+row painter. The Places panel has state for visibility and width; the sidebar
+splitter updates that width and asks the pane row to remeasure item viewports
+through the same next-frame resize path as pane splitters. The toggle button
+hides or shows the panel without destroying pane state. Width/visibility are
+saved to `$XDG_CONFIG_HOME/fika/settings.tsv` through a latest-only delayed
+settings save task. Drag frames update memory and bump a generation counter;
+the actual file write is delayed by 120ms and runs on the GPUI background
+executor, so sidebar dragging does not synchronously write config files.
 
 2026-06-18 runtime layout smoke kept both renderer policies intact after adding
 that panel state:
@@ -379,4 +380,5 @@ removed from steady opt-in Places frames.
   opt-in flag or be removed.
 - Sidebar width/visibility changes remeasure pane viewports without resetting
   pane content, scroll, selection, Places order, or the current renderer policy.
-  Persistence for width/visibility must be coalesced and verified separately.
+  Persistence for width/visibility must stay latest-only/coalesced; future
+  settings additions should not write config files from every drag frame.

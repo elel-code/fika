@@ -46,6 +46,10 @@ pub(crate) fn clamp_places_sidebar_width(width: f32) -> f32 {
     width.clamp(PLACES_SIDEBAR_MIN_WIDTH, PLACES_SIDEBAR_MAX_WIDTH)
 }
 
+pub(crate) fn places_sidebar_width_from_drag(pointer_x: f32, row_x: f32) -> f32 {
+    (pointer_x - row_x).floor()
+}
+
 pub(crate) fn places_panel_icon_snapshot(
     cache: &mut FileIconCache,
     visible: bool,
@@ -106,7 +110,7 @@ pub(crate) fn places_panel_button(
         .on_click(
             cx.listener(move |this, event: &gpui::ClickEvent, _window, cx| {
                 if event.standard_click() {
-                    this.toggle_places_sidebar_from_button();
+                    this.toggle_places_sidebar_from_button(cx);
                     cx.stop_propagation();
                     cx.notify();
                 }
@@ -146,7 +150,7 @@ pub(crate) fn places_sidebar_splitter(cx: &mut Context<FikaApp>) -> Stateful<Div
                 .block_mouse_except_scroll()
                 .on_click(
                     cx.listener(move |this, event: &gpui::ClickEvent, _window, cx| {
-                        if event.click_count() >= 2 && this.reset_places_sidebar_width() {
+                        if event.click_count() >= 2 && this.reset_places_sidebar_width(cx) {
                             cx.notify();
                         }
                         cx.stop_propagation();

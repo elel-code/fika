@@ -6,11 +6,12 @@ use fika_core::Operation;
 #[cfg(test)]
 use fika_core::SystemdLaunchResult;
 use fika_core::{
-    CreateItemResult, FileTransferMode, PrivilegedCommand, PrivilegedOperationResult,
-    RenameItemResult, TransferTaskResult, TrashSelectionResult, TrashViewOperation,
-    TrashViewOperationResult, UndoTaskResult, action_status, create_item_result_async,
-    created_item_label, default_created_item_name, rename_item_result_async, run_operation_task,
-    run_registered_operation, run_via_dbus, transfer_paths_result_async,
+    AppSettings, CreateItemResult, FileTransferMode, PlacesSidebarSettings, PrivilegedCommand,
+    PrivilegedOperationResult, RenameItemResult, TransferTaskResult, TrashSelectionResult,
+    TrashViewOperation, TrashViewOperationResult, UndoTaskResult, action_status,
+    create_item_result_async, created_item_label, default_app_settings_path,
+    default_created_item_name, load_app_settings, rename_item_result_async, run_operation_task,
+    run_registered_operation, run_via_dbus, save_app_settings, transfer_paths_result_async,
     trash_selection_result_async, trash_view_operation_result_async, undo_record_result_async,
 };
 use fika_core::{
@@ -127,7 +128,7 @@ use ui::places::{
     PlacesSnapshotPerfLog, build_places, clamp_places_sidebar_width, default_place_label,
     emit_place_paint_slot_perf_log, emit_places_snapshot_perf_log, place_snapshots_for,
     places_panel_button, places_panel_icon_snapshot, places_perf_enabled, places_section_count,
-    places_sidebar_splitter, read_live_device_snapshot,
+    places_sidebar_splitter, places_sidebar_width_from_drag, read_live_device_snapshot,
 };
 use ui::places::{PlacePaintSlotCache, PlacePaintSlotPerfLog};
 use ui::properties_dialog::{
@@ -211,6 +212,7 @@ const VISIBLE_METADATA_ROLE_SYNC_BUDGET: Duration = Duration::from_millis(12);
 const PANE_HORIZONTAL_BORDER_EXTENT: f32 = 2.0;
 
 const CONTEXT_SUBMENU_HIDE_DELAY: Duration = Duration::from_millis(300);
+const APP_SETTINGS_SAVE_DELAY: Duration = Duration::from_millis(120);
 
 fn zoom_level_after_change(current: i32, change: ZoomChange) -> i32 {
     match change {
@@ -375,6 +377,9 @@ pub(crate) struct FikaApp {
     place_row_text_shape_cache: PlacesRowTextShapeCache,
     places_sidebar_width: f32,
     places_sidebar_visible: bool,
+    app_settings_path: PathBuf,
+    app_settings_save_generation: u64,
+    app_settings_save_task_running: bool,
     user_places_path: PathBuf,
     device_refresh_pending: bool,
     next_device_refresh_at: Instant,
@@ -440,6 +445,14 @@ pub(crate) struct FikaApp {
 impl FikaApp {
     fn new(args: Args, cx: &mut Context<Self>) -> Self {
         let user_places_path = fika_core::default_user_places_path();
+        let app_settings_path = default_app_settings_path();
+        let app_settings = load_app_settings(&app_settings_path).unwrap_or_default();
+        let places_sidebar_width = app_settings
+            .places_sidebar
+            .width
+            .map(clamp_places_sidebar_width)
+            .unwrap_or(PLACES_SIDEBAR_DEFAULT_WIDTH);
+        let places_sidebar_visible = app_settings.places_sidebar.visible.unwrap_or(true);
         let chooser = (args.mode == Mode::Chooser).then(|| ChooserState {
             directories: args.chooser_directories,
             multiple: args.chooser_multiple,
@@ -468,8 +481,11 @@ impl FikaApp {
             hidden_place_sections: BTreeSet::new(),
             place_paint_slots: PlacePaintSlotCache::default(),
             place_row_text_shape_cache: PlacesRowTextShapeCache::default(),
-            places_sidebar_width: PLACES_SIDEBAR_DEFAULT_WIDTH,
-            places_sidebar_visible: true,
+            places_sidebar_width,
+            places_sidebar_visible,
+            app_settings_path,
+            app_settings_save_generation: 0,
+            app_settings_save_task_running: false,
             user_places_path,
             device_refresh_pending: false,
             next_device_refresh_at: Instant::now(),
@@ -874,12 +890,13 @@ impl FikaApp {
         }
     }
 
-    pub(crate) fn toggle_places_sidebar_from_button(&mut self) {
+    pub(crate) fn toggle_places_sidebar_from_button(&mut self, cx: &mut Context<Self>) {
         self.places_sidebar_visible = !self.places_sidebar_visible;
+        self.schedule_app_settings_save(cx);
     }
 
-    pub(crate) fn reset_places_sidebar_width(&mut self) -> bool {
-        self.set_places_sidebar_width(PLACES_SIDEBAR_DEFAULT_WIDTH)
+    pub(crate) fn reset_places_sidebar_width(&mut self, cx: &mut Context<Self>) -> bool {
+        self.update_places_sidebar_width(PLACES_SIDEBAR_DEFAULT_WIDTH, cx)
     }
 
     fn set_places_sidebar_width(&mut self, width: f32) -> bool {
@@ -891,9 +908,80 @@ impl FikaApp {
         true
     }
 
-    fn resize_places_sidebar_from_row_drag(&mut self, pointer_x: f32, row_x: f32) -> bool {
-        let width = (pointer_x - row_x).floor();
-        self.set_places_sidebar_width(width)
+    fn update_places_sidebar_width(&mut self, width: f32, cx: &mut Context<Self>) -> bool {
+        if !self.set_places_sidebar_width(width) {
+            return false;
+        }
+        self.schedule_app_settings_save(cx);
+        true
+    }
+
+    fn resize_places_sidebar_from_row_drag(
+        &mut self,
+        pointer_x: f32,
+        row_x: f32,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let width = places_sidebar_width_from_drag(pointer_x, row_x);
+        self.update_places_sidebar_width(width, cx)
+    }
+
+    fn current_app_settings(&self) -> AppSettings {
+        AppSettings {
+            places_sidebar: PlacesSidebarSettings {
+                width: Some(self.places_sidebar_width),
+                visible: Some(self.places_sidebar_visible),
+            },
+        }
+    }
+
+    fn schedule_app_settings_save(&mut self, cx: &mut Context<Self>) {
+        self.app_settings_save_generation = self.app_settings_save_generation.wrapping_add(1);
+        if self.app_settings_save_task_running {
+            return;
+        }
+        self.app_settings_save_task_running = true;
+        cx.spawn(
+            move |this: gpui::WeakEntity<FikaApp>, cx: &mut gpui::AsyncApp| {
+                let mut cx = cx.clone();
+                async move {
+                    loop {
+                        cx.background_executor()
+                            .timer(APP_SETTINGS_SAVE_DELAY)
+                            .await;
+                        let Ok((path, settings, generation)) = this.update(&mut cx, |app, _cx| {
+                            (
+                                app.app_settings_path.clone(),
+                                app.current_app_settings(),
+                                app.app_settings_save_generation,
+                            )
+                        }) else {
+                            break;
+                        };
+                        let result = cx
+                            .background_spawn(async move { save_app_settings(&path, &settings) })
+                            .await;
+                        let keep_running = this
+                            .update(&mut cx, |app, _cx| {
+                                if let Err(err) = result {
+                                    eprintln!("[fika settings] save failed: {err}");
+                                }
+                                if app.app_settings_save_generation != generation {
+                                    true
+                                } else {
+                                    app.app_settings_save_task_running = false;
+                                    false
+                                }
+                            })
+                            .unwrap_or(false);
+                        if !keep_running {
+                            break;
+                        }
+                    }
+                }
+            },
+        )
+        .detach();
     }
 
     pub(crate) fn close_filter_bar(&mut self, pane_id: PaneId) {
@@ -8703,6 +8791,7 @@ impl Render for FikaApp {
                             if this.resize_places_sidebar_from_row_drag(
                                 event.event.position.x.as_f32(),
                                 event.bounds.origin.x.as_f32(),
+                                cx,
                             ) {
                                 this.request_pane_resize_notify(window, cx);
                             }
@@ -13140,18 +13229,18 @@ text/plain=viewer.desktop;\n",
         assert_eq!(app.places_sidebar_width, clamp_places_sidebar_width(80.0));
         assert!(app.set_places_sidebar_width(999.0));
         assert_eq!(app.places_sidebar_width, clamp_places_sidebar_width(999.0));
-        assert!(app.reset_places_sidebar_width());
+        assert!(app.set_places_sidebar_width(PLACES_SIDEBAR_DEFAULT_WIDTH));
         assert_eq!(app.places_sidebar_width, PLACES_SIDEBAR_DEFAULT_WIDTH);
-        assert!(!app.reset_places_sidebar_width());
+        assert!(!app.set_places_sidebar_width(PLACES_SIDEBAR_DEFAULT_WIDTH));
     }
 
     #[test]
     fn places_sidebar_drag_uses_row_origin() {
         let mut app = test_app_with_entries("/tmp/fika-places-sidebar-drag", &[]);
 
-        assert!(app.resize_places_sidebar_from_row_drag(315.0, 12.0));
+        assert!(app.set_places_sidebar_width(places_sidebar_width_from_drag(315.0, 12.0)));
         assert_eq!(app.places_sidebar_width, clamp_places_sidebar_width(303.0));
-        assert!(app.resize_places_sidebar_from_row_drag(-100.0, 12.0));
+        assert!(app.set_places_sidebar_width(places_sidebar_width_from_drag(-100.0, 12.0)));
         assert_eq!(app.places_sidebar_width, clamp_places_sidebar_width(-112.0));
     }
 
@@ -13160,13 +13249,30 @@ text/plain=viewer.desktop;\n",
         let mut app = test_app_with_entries("/tmp/fika-places-sidebar-toggle", &[]);
         assert!(app.set_places_sidebar_width(276.0));
 
-        app.toggle_places_sidebar_from_button();
+        app.places_sidebar_visible = !app.places_sidebar_visible;
         assert!(!app.places_sidebar_visible);
         assert_eq!(app.places_sidebar_width, 276.0);
 
-        app.toggle_places_sidebar_from_button();
+        app.places_sidebar_visible = !app.places_sidebar_visible;
         assert!(app.places_sidebar_visible);
         assert_eq!(app.places_sidebar_width, 276.0);
+    }
+
+    #[test]
+    fn app_settings_snapshot_contains_places_sidebar_layout() {
+        let mut app = test_app_with_entries("/tmp/fika-places-sidebar-settings", &[]);
+        assert!(app.set_places_sidebar_width(276.0));
+        app.places_sidebar_visible = false;
+
+        assert_eq!(
+            app.current_app_settings(),
+            AppSettings {
+                places_sidebar: PlacesSidebarSettings {
+                    width: Some(276.0),
+                    visible: Some(false),
+                },
+            }
+        );
     }
 
     #[test]
@@ -16765,6 +16871,9 @@ text/plain=viewer.desktop;\n",
             place_row_text_shape_cache: PlacesRowTextShapeCache::default(),
             places_sidebar_width: PLACES_SIDEBAR_DEFAULT_WIDTH,
             places_sidebar_visible: true,
+            app_settings_path: test_dir("settings").join("settings.tsv"),
+            app_settings_save_generation: 0,
+            app_settings_save_task_running: false,
             user_places_path: test_dir("user-places").join("places.xbel"),
             device_refresh_pending: false,
             next_device_refresh_at: Instant::now(),
