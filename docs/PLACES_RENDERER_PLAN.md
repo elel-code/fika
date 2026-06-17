@@ -79,6 +79,10 @@ retained Places row surface with the same separations as file-grid:
 3. Add retained paint slots and stats without changing visible rendering.
    Confirm primary order persistence and hidden-section projection still pass
    unit tests.
+   Current implementation keeps `PlacePaintSlotCache` in app state and emits
+   `[fika places-slots]` with row/section entries plus inserted/content/
+   geometry/visual/unchanged/removed counts. It does not change the GPUI row
+   renderer.
 4. Move hover/drop hit testing into retained Places interaction while keeping
    GPUI drag-start shells. Verify item-to-place, place-to-pane, external
    path-to-place, and reorder targets.
@@ -103,6 +107,13 @@ usually `185-270us`, with occasional frames around `0.5-0.6ms`.
 Renderer-policy logs showed the expected current state: `row_gpui=11`,
 `row_visual_layer=0`, `icon_gpui=11`, `retained_interaction=0`,
 `drag_shell=11`, `section_gpui=2`, and `scrollbar_canvas=1`.
+
+After the retained slot cache landed, the same perf run also emits
+`[fika places-slots]`. For the default `/etc` sidebar, the first projection has
+`rows=11 sections=2 entries=13 inserted=13`; steady frames should move to
+`unchanged=13`, with observed projection time around `21-46us` on the
+2026-06-17 desktop session. Target-projection smoke should show visual changes
+for drop or insert state without content or geometry churn.
 
 ## Current Autosmoke
 

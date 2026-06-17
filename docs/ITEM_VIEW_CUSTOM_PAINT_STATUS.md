@@ -21,12 +21,12 @@ becomes the default.
 | Details row backgrounds, icons, text cells, Trash columns | replaced | custom content-level painter | Details icons use the same cached/preliminary icon policy; runtime Details perf and DnD smoke evidence must stay current |
 | Details click, menu, navigation, hover, cursor, drop hit testing | replaced | retained row hit testing/controller state plus active item-drag window tracker | runtime DnD smoke still required after painter changes |
 | Details drag start | not replaced | GPUI `Div::on_drag` row shell | same drag-start API or audited GPUI patch gate |
-| Places rows and sidebar scrollbar | not replaced | GPUI elements over retained places projection | requires separate GPUI baseline, runtime DnD smoke, and Places-specific custom painter plan |
+| Places rows and sidebar scrollbar | retained model/slot state, renderer not replaced | GPUI elements over retained places projection and `PlacePaintSlotCache` stats | retained interaction and custom row painter still require Places-specific DnD/scroll evidence |
 
 The practical state is: item-view static visuals and most app-side controller
 paths have moved to retained/custom-painted architecture. Drag-start and rename
-remain GPUI renderer/platform-contract boundaries. Places has retained model and
-DnD state helpers, but its renderer is still GPUI.
+remain GPUI renderer/platform-contract boundaries. Places has retained model,
+paint-slot stats, and DnD state helpers, but its row renderer is still GPUI.
 
 ## Evidence Anchors
 

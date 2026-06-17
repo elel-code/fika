@@ -1,6 +1,7 @@
 use std::env;
 use std::time::Duration;
 
+use super::PlacePaintSlotPerfLog;
 use super::PlaceSnapshot;
 
 const PERF_PLACES_VIEW_ENV: &str = "FIKA_PERF_PLACES_VIEW";
@@ -30,6 +31,23 @@ pub(crate) fn emit_places_snapshot_perf_log(log: PlacesSnapshotPerfLog) {
         log.source_count,
         log.visible_count,
         log.section_count,
+        log.elapsed.as_micros(),
+    );
+}
+
+pub(crate) fn emit_place_paint_slot_perf_log(log: PlacePaintSlotPerfLog) {
+    let stats = log.stats;
+    eprintln!(
+        "[fika places-slots] rows={} sections={} entries={} inserted={} content={} geometry={} visual={} unchanged={} removed={} project={}us",
+        stats.rows,
+        stats.sections,
+        stats.entries,
+        stats.inserted,
+        stats.content_changed,
+        stats.geometry_changed,
+        stats.visual_changed,
+        stats.unchanged,
+        stats.removed,
         log.elapsed.as_micros(),
     );
 }

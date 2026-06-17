@@ -431,8 +431,9 @@ pretending that every remaining GPUI boundary can be removed safely today.
   scroll, reorder, mount/trash/device rows, context menu, and drop behavior are
   neutral or better. Current state: the GPUI sidebar baseline and
   renderer-policy logs exist, and `FIKA_AUTOSMOKE_PLACES=targets` covers
-  non-persistent target/insert projection; no retained/custom row painter has
-  been benchmarked yet.
+  non-persistent target/insert projection. `PlacePaintSlotCache` now records
+  retained row/section slots and `[fika places-slots]` stats; no retained/custom
+  row painter has been benchmarked yet.
 - [ ] P15f: Keep rename on GPUI until a custom text-editing plan covers focus,
   caret hit testing, UTF-8 selection, validation, commit/cancel, Tab rename-next,
   and IME. Do not merge a custom rename painter without that behavior matrix.
@@ -546,7 +547,12 @@ by risk and evidence, not by how custom-painted a surface looks.
   insert-start, insert-end, clear, and snapshot logging without reordering or
   persisting bookmarks. Full reorder/drop mutation smoke remains gated on
   isolated user-place configuration or manual review.
-- [ ] P16n: After every P16 implementation slice, commit separately with the
+- [x] P16n: Add retained Places paint slots and stats without changing visible
+  rendering. `PlacePaintSlotCache` retains section headings and place rows by
+  stable semantic identity, preferring device id for device rows and path/group
+  for normal rows. `[fika places-slots]` now reports inserted/content/
+  geometry/visual/unchanged/removed slot activity for the current GPUI sidebar.
+- [ ] P16o: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,
   `scripts/check-item-view-perf-analyzer.sh`, and `git diff --check`.

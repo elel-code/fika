@@ -123,9 +123,11 @@ use ui::places::{
 };
 use ui::places::{
     PlaceDrag, PlaceEntry, PlaceSnapshot, PlacesAutosmokeAction, PlacesAutosmokeScenario,
-    PlacesSnapshotPerfLog, build_places, default_place_label, emit_places_snapshot_perf_log,
-    place_snapshots_for, places_perf_enabled, places_section_count, read_live_device_snapshot,
+    PlacesSnapshotPerfLog, build_places, default_place_label, emit_place_paint_slot_perf_log,
+    emit_places_snapshot_perf_log, place_snapshots_for, places_perf_enabled, places_section_count,
+    read_live_device_snapshot,
 };
+use ui::places::{PlacePaintSlotCache, PlacePaintSlotPerfLog};
 use ui::properties_dialog::{
     PropertiesDialogState, properties_dialog_overlay, properties_for_path, properties_for_selection,
 };
@@ -367,6 +369,7 @@ pub(crate) struct FikaApp {
     trash_monitor: TrashEmptinessMonitor,
     hidden_places: BTreeSet<PathBuf>,
     hidden_place_sections: BTreeSet<&'static str>,
+    place_paint_slots: PlacePaintSlotCache,
     user_places_path: PathBuf,
     device_refresh_pending: bool,
     next_device_refresh_at: Instant,
@@ -458,6 +461,7 @@ impl FikaApp {
             trash_monitor,
             hidden_places: BTreeSet::new(),
             hidden_place_sections: BTreeSet::new(),
+            place_paint_slots: PlacePaintSlotCache::default(),
             user_places_path,
             device_refresh_pending: false,
             next_device_refresh_at: Instant::now(),
@@ -2455,6 +2459,14 @@ impl FikaApp {
             trash_has_items,
             &mut self.file_icons,
         );
+        let slot_started = perf_enabled.then(Instant::now);
+        let slot_stats = self.place_paint_slots.project_snapshots(&snapshots);
+        if let Some(started) = slot_started {
+            emit_place_paint_slot_perf_log(PlacePaintSlotPerfLog {
+                stats: slot_stats,
+                elapsed: started.elapsed(),
+            });
+        }
         if let Some(started) = snapshot_started {
             emit_places_snapshot_perf_log(PlacesSnapshotPerfLog {
                 source_count,
@@ -16647,6 +16659,7 @@ text/plain=viewer.desktop;\n",
             trash_monitor: TrashEmptinessMonitor::from_known_state(false),
             hidden_places: BTreeSet::new(),
             hidden_place_sections: BTreeSet::new(),
+            place_paint_slots: PlacePaintSlotCache::default(),
             user_places_path: test_dir("user-places").join("places.xbel"),
             device_refresh_pending: false,
             next_device_refresh_at: Instant::now(),
