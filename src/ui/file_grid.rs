@@ -15,6 +15,7 @@ mod renderer_policy;
 mod slots;
 mod snapshot;
 mod static_visual;
+mod style;
 mod surface;
 mod text;
 mod viewport;
@@ -48,8 +49,12 @@ pub(crate) use snapshot::{
 pub(crate) use static_visual::StaticItemTextShapeCache;
 pub(crate) use surface::file_grid;
 
-use fika_core::{CompactLayout, IconsLayout, ItemId, PaneId, ViewRect};
-use gpui::{Rgba, ScrollHandle, rgb, rgba};
+use fika_core::{CompactLayout, IconsLayout, PaneId, ViewRect};
+use gpui::ScrollHandle;
+use style::{
+    ItemTileTextAlignment, TextShapeCacheStats, details_row_background, item_identity_element_id,
+    item_tile_background,
+};
 
 #[cfg(test)]
 use controller::item_mouse_down_opens_directory;
@@ -147,72 +152,9 @@ pub(crate) enum FileGridRenderSnapshot {
     },
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-enum ItemTileTextAlignment {
-    Start,
-    Center,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(super) struct TextShapeCacheStats {
-    hits: usize,
-    misses: usize,
-    evicted: usize,
-    entries: usize,
-}
-
-impl TextShapeCacheStats {
-    pub(super) fn has_activity(self) -> bool {
-        self.hits > 0 || self.misses > 0 || self.evicted > 0
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct PaneViewportGeometry {
     pub(crate) window_rect: ViewRect,
-}
-
-fn item_identity_element_id(prefix: &'static str, item_id: ItemId) -> (&'static str, u64) {
-    (prefix, item_id.0)
-}
-
-fn details_row_background(
-    selected: bool,
-    hovered: bool,
-    drop_target: bool,
-    row_index: usize,
-) -> Rgba {
-    if drop_target {
-        drop_target_item_background()
-    } else if selected && hovered {
-        rgb(0xcfe3ff)
-    } else if selected {
-        rgb(0xdbeafe)
-    } else if hovered {
-        rgb(0xeaf1ff)
-    } else if row_index % 2 == 0 {
-        rgb(0xffffff)
-    } else {
-        rgb(0xf8fafc)
-    }
-}
-
-pub(super) fn item_tile_background(selected: bool, drop_target: bool, hovered: bool) -> Rgba {
-    if drop_target {
-        drop_target_item_background()
-    } else if selected && hovered {
-        rgb(0xcfe3ff)
-    } else if selected {
-        rgb(0xdbeafe)
-    } else if hovered {
-        rgb(0xeaf1ff)
-    } else {
-        rgba(0x00000000)
-    }
-}
-
-fn drop_target_item_background() -> Rgba {
-    rgba(0xf59e0b4a)
 }
 
 #[cfg(test)]

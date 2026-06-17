@@ -39,6 +39,7 @@ DnD state helpers, but its renderer is still GPUI.
 - Details visual painter: `src/ui/file_grid/details_visual.rs`
 - Details transparent row shell boundary: `src/ui/file_grid/details_shell.rs`
 - GPUI rename overlay boundary: `src/ui/file_grid/rename_overlay.rs`
+- Shared visual style and item identity helpers: `src/ui/file_grid/style.rs`
 - Active item-drag hover routing: `install_active_item_drag_mouse_tracker` plus
   drag preview repaint fallback in `src/ui/file_grid/dnd.rs`
 - Runtime DnD debug channel: `FIKA_DEBUG_DND=1`, especially
