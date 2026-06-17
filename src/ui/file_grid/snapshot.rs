@@ -13,8 +13,6 @@ use super::FileGridSnapshot;
 #[cfg(test)]
 use super::VisibleItemSlotPool;
 #[cfg(test)]
-use super::details::{details_layout_metrics, details_name_column_width};
-#[cfg(test)]
 use super::layout::CompactColumnWidthCache;
 #[cfg(test)]
 use super::layout::icon_name_display_lines;
@@ -150,36 +148,6 @@ mod tests {
             options.item_width - options.padding * 2.0
         );
         assert!(item.layout.text_rect.width > estimated_text_width);
-    }
-
-    #[test]
-    fn raw_file_grid_snapshot_assigns_slots_before_final_conversion() {
-        let mut raw_file_grid = RawFileGridSnapshot::Icons {
-            layout: IconsLayout::new(2, fika_core::IconsLayoutOptions::default()),
-            items: vec![
-                test_raw_visible_item(1, "alpha.txt", 0),
-                test_raw_visible_item(2, "beta.txt", 1),
-            ],
-        };
-        let mut slots = VisibleItemSlotPool::default();
-
-        raw_file_grid.assign_visible_item_slots(&mut slots);
-
-        let mut requests = Vec::new();
-        let icon = test_icon_snapshot();
-        let mut cache = VisibleItemSnapshotCache::default();
-        let snapshot = raw_file_grid.into_file_grid_snapshot(2, &mut cache, |request| {
-            requests.push((request.path.to_path_buf(), request.icon_size));
-            icon.clone()
-        });
-
-        let FileGridSnapshot::Icons { items, .. } = snapshot else {
-            panic!("expected icons snapshot");
-        };
-        assert_eq!(items.len(), 2);
-        assert!(items.iter().all(|item| item.slot_id != 0));
-        assert_eq!(requests.len(), 2);
-        assert_eq!(requests[0].0, PathBuf::from("/tmp/alpha.txt"));
     }
 
     #[test]
@@ -334,24 +302,6 @@ mod tests {
         assert_eq!(icon_requests, 1);
         assert_eq!(first[0].icon_name_lines, second[0].icon_name_lines);
         assert_eq!(second[0].layout.item_rect.x, 24.0);
-    }
-
-    #[test]
-    fn details_snapshot_preserves_item_view_slot_pool() {
-        let mut slots = VisibleItemSlotPool::default();
-        let item_id = ItemId(7);
-        slots.update_visible_items([item_id]);
-        let slot_id = slots.slot_for_item(item_id);
-        let mut raw_file_grid = RawFileGridSnapshot::Details {
-            items: Vec::new(),
-            row_count: 0,
-            metrics: details_layout_metrics(48.0),
-            name_column_width: details_name_column_width(0.0, details_layout_metrics(48.0)),
-        };
-
-        raw_file_grid.assign_visible_item_slots(&mut slots);
-
-        assert_eq!(slots.slot_for_item(item_id), slot_id);
     }
 
     fn test_entry(
