@@ -14,6 +14,13 @@ manual visual-only judgment. Manual review is still allowed for behavior that
 has no reliable log signal yet, but any repeated investigation should become a
 scripted evidence path before the next renderer decision.
 
+When an optimization produces a clear breakthrough, update the relevant design
+or decision document in the same slice. The record should include the visible
+symptom, the Dolphin source boundary used for comparison, the root cause, the
+implementation, the exact log commands or analyzer output, and the regression
+guard that future work must run. Do not rely on "felt smoother" as the only
+evidence once an automated path can reproduce the issue.
+
 Required view modes:
 
 - Compact
@@ -38,6 +45,21 @@ To save and summarize logs:
 FIKA_PERF_ITEM_VIEW=1 cargo run -- ~/Downloads 2>&1 | tee /tmp/fika-item-view.log
 scripts/check-item-view-runtime-log.sh /tmp/fika-item-view.log
 ```
+
+For issues that can be driven from app-side controller actions, add or reuse an
+unattended smoke mode instead of asking for repeated manual interaction. The
+preferred loop is:
+
+```sh
+cargo build
+FIKA_PERF_ITEM_VIEW=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll target/debug/fika /etc 2>&1 | tee /tmp/fika-etc-zoom-scroll.log
+scripts/analyze-item-view-perf.sh /tmp/fika-etc-zoom-scroll.log
+```
+
+Use the resulting phase maxima and renderer-policy counts as the first
+pass/fail signal. Manual inspection remains useful for final visual quality,
+but it should not be the only way to detect a repeated scroll, zoom, resize, or
+mode-switch regression.
 
 ## Drag And Drop
 

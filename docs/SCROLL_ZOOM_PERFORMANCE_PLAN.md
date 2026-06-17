@@ -78,6 +78,78 @@ the render frame.
   queueing background metadata work; read-ahead and offscreen items still use
   the asynchronous role scheduler.
 
+### 2026-06-17 Breakthrough: MIME Icon Load, Zoom, And Scroll Stability
+
+This record captures the root cause and accepted implementation for the recent
+`/etc` and zoom stability fix. Keep it as the comparison point before changing
+MIME/theme icon rendering again.
+
+Symptoms:
+
+- Loading `/etc` showed a visible blank/placeholder-to-MIME-icon cascade.
+- Zoom could show a second icon-size adjustment after the item geometry had
+  already changed.
+- Initial `/etc` scroll/zoom autosmoke produced intermittent hitches even after
+  MIME/theme icons moved away from the custom image painter.
+
+Root causes:
+
+- The custom MIME/theme icon painter could enter the first paint before GPUI's
+  image cache had decoded the theme icon resource. In the `/etc` A/B smoke it
+  logged `theme_placeholder=48`, matching the visible placeholder cascade.
+- Fika initially treated Dolphin's 300ms `triggerIconSizeUpdate()` delay as an
+  icon-size debounce. Dolphin only delays preview/role-updater work there;
+  ordinary `iconName` pixmaps are generated from the widget's current style
+  option icon size. Delaying or freezing Fika theme-icon size therefore created
+  a visible second-size commit during zoom.
+- Visible icon sync duplicated work that was already queued for read-ahead icon
+  resolution. The first autosmoke after the renderer split logged
+  `icon_sync=28340us` and `total=29451us` on a geometry-change frame.
+
+Implementation:
+
+- MIME/theme icons now default to GPUI `img()` elements over retained item
+  shells. The custom theme-icon image painter remains available only through
+  `FIKA_CUSTOM_THEME_ICONS=1` for paired A/B evidence.
+- Render conversion uses cached or preliminary icon snapshots only. Theme icon
+  path scanning stays in visible icon sync and the background resolve queue, not
+  in GPUI prepaint or render conversion.
+- Visible icon sync skips requests already queued or pending in
+  `FileIconResolveQueue`, preserving Dolphin's visible-first exception without
+  redoing read-ahead scans in the scroll frame.
+- Zoom resolves MIME/theme icon paths for the current layout icon size
+  immediately. Preview/thumbnail role work may still be coalesced, but theme
+  icon geometry and path requests must not use a delayed second size.
+- Directory load resolves visible generic MIME metadata and visible theme icon
+  paths within the bounded visible-widget budget before queueing offscreen
+  metadata/icon work.
+
+Evidence:
+
+```text
+custom-theme /etc A/B: theme_placeholder=48, gpui_image_element=0
+default /etc A/B:      theme_placeholder=0,  gpui_image_element=48
+
+before queued/pending skip:
+  icon_sync=28340us, geometry-change total=29451us
+
+after queued/pending skip:
+  icon_sync=173us, geometry-change max_total=1635us
+```
+
+Regression guard:
+
+- For renderer changes, compare default and `FIKA_CUSTOM_THEME_ICONS=1` logs
+  with `scripts/compare-item-image-renderers.sh`.
+- For scroll/zoom changes, run
+  `FIKA_PERF_ITEM_VIEW=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll target/debug/fika /etc`
+  and summarize with `scripts/analyze-item-view-perf.sh`.
+- If `icon_sync` returns to multi-ms values, inspect visible/read-ahead icon
+  queue ownership before changing the renderer.
+- If `icon_sync` stays low but the frame is still slow, inspect static visual
+  paint, text shaping, or GPUI image-cache behavior instead of blaming MIME
+  icon path lookup.
+
 ### Open Verification Work
 
 - Collect desktop-session logs for `/etc` initial scroll and ordinary-directory
