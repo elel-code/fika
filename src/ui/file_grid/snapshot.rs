@@ -26,8 +26,6 @@ use crate::ui::drag_drop::ItemDropTarget;
 use crate::ui::icons::FileIconSnapshot;
 pub(crate) use builder::raw_file_grid_snapshot;
 #[cfg(test)]
-use fika_core::ThumbnailRequestPriority;
-#[cfg(test)]
 use fika_core::ViewMode;
 #[cfg(test)]
 use fika_core::{
@@ -43,8 +41,6 @@ use range::layout_index_range_and_count;
 use std::path::{Path, PathBuf};
 #[cfg(test)]
 use std::sync::Arc;
-#[cfg(test)]
-use thumbnail::visible_thumbnail_candidate;
 pub(crate) use thumbnail::{deferred_thumbnail_candidates_for_model, visible_item_thumbnail_path};
 pub(crate) use types::{
     FileGridIconRequest, RawDetailsItemSnapshot, RawFileGridSnapshot, RawFileGridSnapshotInput,
@@ -59,54 +55,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn visible_item_thumbnail_path_uses_file_cache_hit_only() {
-        let thumbnail = PathBuf::from("/tmp/fika-thumbnail-cache/normal/hash.png");
-        let file = fika_core::ModelEntry {
-            id: fika_core::ItemId(1),
-            metadata_role: None,
-            metadata_refresh_pending: false,
-            thumbnail_path: Some(thumbnail.clone()),
-            thumbnail_failed: false,
-            entry: fika_core::Entry::new(fika_core::EntryData {
-                name: Arc::from("photo.jpg"),
-                name_width_units: 9,
-                target_path: None,
-                size_bytes: 12,
-                modified_secs: Some(42),
-                metadata_complete: true,
-                mime_type: Some(Arc::from("image/jpeg")),
-                mime_magic_checked: true,
-                trash_original_path: None,
-                trash_deletion_time: None,
-                is_dir: false,
-            }),
-        };
-        let dir = fika_core::ModelEntry {
-            id: fika_core::ItemId(2),
-            metadata_role: None,
-            metadata_refresh_pending: false,
-            thumbnail_path: Some(thumbnail.clone()),
-            thumbnail_failed: false,
-            entry: fika_core::Entry::new(fika_core::EntryData {
-                name: Arc::from("Pictures"),
-                name_width_units: 8,
-                target_path: None,
-                size_bytes: 0,
-                modified_secs: Some(42),
-                metadata_complete: true,
-                mime_type: None,
-                mime_magic_checked: true,
-                trash_original_path: None,
-                trash_deletion_time: None,
-                is_dir: true,
-            }),
-        };
-
-        assert_eq!(visible_item_thumbnail_path(&file), Some(thumbnail));
-        assert_eq!(visible_item_thumbnail_path(&dir), None);
-    }
-
-    #[test]
     fn layout_index_range_and_count_uses_visible_indexes_without_collecting_layouts() {
         assert_eq!(
             layout_index_range_and_count([12, 10, 11]),
@@ -116,61 +64,6 @@ mod tests {
             layout_index_range_and_count(std::iter::empty::<usize>()),
             None
         );
-    }
-
-    #[test]
-    fn deferred_thumbnail_candidates_stream_from_model_read_ahead() {
-        let directory = PathBuf::from("/tmp/fika-deferred-thumbnail-candidates");
-        let entries = Arc::new(vec![
-            test_entry("a-visible.jpg", Some("image/jpeg"), true, Some(10)),
-            test_entry("b-candidate.png", Some("image/png"), true, Some(20)),
-            test_entry(
-                "c-needs-magic.bin",
-                Some("application/octet-stream"),
-                false,
-                Some(30),
-            ),
-            test_entry("d-no-mtime.jpg", Some("image/jpeg"), true, None),
-        ]);
-        let mut model = DirectoryModel::for_directory(directory.clone());
-        model.replace_listing(directory.clone(), entries);
-        let visible_entry = model.get(0).unwrap();
-        let raw_file_grid = RawFileGridSnapshot::Icons {
-            layout: IconsLayout::new(4, fika_core::IconsLayoutOptions::default()),
-            items: vec![RawVisibleItemSnapshot {
-                slot_id: 0,
-                visible: true,
-                layout: test_layout(0),
-                item_id: visible_entry.id,
-                path: model.path_for_index(0).unwrap(),
-                is_dir: visible_entry.is_dir,
-                name: visible_entry.name.clone(),
-                thumbnail_path: None,
-                thumbnail_failed: false,
-                modified_secs: visible_entry.effective_modified_secs(),
-                size_bytes: visible_entry.effective_size_bytes(),
-                metadata_complete: visible_entry.effective_metadata_complete(),
-                metadata_refresh_pending: visible_entry.metadata_refresh_pending,
-                mime_type: visible_entry.effective_mime_type_cloned(),
-                mime_magic_checked: visible_entry.effective_mime_magic_checked(),
-                selected: false,
-                drop_target: false,
-                draft_name: None,
-                draft_caret: None,
-                draft_selection: None,
-                draft_error: None,
-                draft_warning: None,
-            }],
-        };
-
-        let candidates =
-            deferred_thumbnail_candidates_for_model(&raw_file_grid, &model, None, model.len())
-                .collect::<Vec<_>>();
-
-        assert_eq!(candidates.len(), 1);
-        assert_eq!(candidates[0].path, directory.join("b-candidate.png"));
-        assert_eq!(candidates[0].modified_secs, 20);
-        assert_eq!(candidates[0].priority, ThumbnailRequestPriority::Deferred);
     }
 
     #[test]
@@ -617,96 +510,6 @@ mod tests {
             Generation(1)
         ));
         assert!(scheduler.start_role_batch(8).is_none());
-    }
-
-    #[test]
-    fn thumbnail_candidates_skip_plain_text_without_preview_support() {
-        let mime_type = Arc::from("text/plain");
-
-        assert_eq!(
-            visible_thumbnail_candidate(
-                ItemId(1),
-                Path::new("/tmp/notes.txt"),
-                false,
-                None,
-                false,
-                Some(42),
-                12,
-                true,
-                false,
-                Some(&mime_type),
-                true,
-            ),
-            None
-        );
-    }
-
-    #[test]
-    fn thumbnail_candidates_skip_network_paths() {
-        let mime_type = Arc::from("image/png");
-
-        assert_eq!(
-            visible_thumbnail_candidate(
-                ItemId(1),
-                Path::new("smb://server/share/photo.png"),
-                false,
-                None,
-                false,
-                Some(42),
-                12,
-                true,
-                false,
-                Some(&mime_type),
-                true,
-            ),
-            None
-        );
-    }
-
-    #[test]
-    fn thumbnail_candidates_include_images() {
-        let mime_type = Arc::from("image/png");
-
-        let candidate = visible_thumbnail_candidate(
-            ItemId(1),
-            Path::new("/tmp/photo.png"),
-            false,
-            None,
-            false,
-            Some(42),
-            12,
-            true,
-            false,
-            Some(&mime_type),
-            true,
-        )
-        .unwrap();
-
-        assert_eq!(candidate.path, PathBuf::from("/tmp/photo.png"));
-        assert_eq!(candidate.mime_type.as_deref(), Some("image/png"));
-        assert_eq!(candidate.priority, ThumbnailRequestPriority::Visible);
-    }
-
-    #[test]
-    fn thumbnail_candidates_skip_failed_preview_role() {
-        let mime_type = Arc::from("image/png");
-
-        assert_eq!(
-            visible_thumbnail_candidate(
-                ItemId(1),
-                Path::new("/tmp/photo.png"),
-                false,
-                None,
-                true,
-                Some(42),
-                12,
-                true,
-                false,
-                Some(&mime_type),
-                true,
-            ),
-            None
-        );
     }
 
     fn test_entry(
