@@ -83,15 +83,16 @@ use ui::drag_drop::{
     place_drop_target_matches_insert, place_drop_target_matches_place,
 };
 use ui::file_grid::{
-    CompactColumnWidthCache, ContentItemHit, DetailsTextShapeCache, DetailsVisualPerfStats,
-    ItemDrag, ItemImagePerfStats, ItemInteractionPerfStats, ItemPaintSlotCache,
-    ItemViewPerfFrameState, ItemViewPerfPhase, PaneLayoutProjection, PaneLayoutProjectionInput,
-    PaneViewportGeometry, PaneVisibleWorkKey, RawFileGridSnapshot, RawFileGridSnapshotInput,
-    StaticItemTextShapeCache, StaticItemVisualPerfStats, VisibleItemSlotPool,
-    VisibleItemSnapshotCache, classify_item_view_perf_phase, compact_text_width,
-    compact_text_width_for_name, content_item_hit_at_point,
-    deferred_thumbnail_candidates_for_model, model_indexes_intersecting_visual_rect,
-    pane_layout_projection, raw_file_grid_snapshot, rename_editor_required_text_width,
+    CompactColumnWidthCache, ContentItemHit, DOLPHIN_ICON_SIZE_UPDATE_DELAY, DetailsTextShapeCache,
+    DetailsVisualPerfStats, ItemDrag, ItemImagePerfStats, ItemInteractionPerfStats,
+    ItemPaintSlotCache, ItemViewPerfFrameState, ItemViewPerfPhase, PaneIconRoleSizeState,
+    PaneLayoutProjection, PaneLayoutProjectionInput, PaneViewportGeometry, PaneVisibleWorkKey,
+    RawFileGridSnapshot, RawFileGridSnapshotInput, StaticItemTextShapeCache,
+    StaticItemVisualPerfStats, VisibleItemSlotPool, VisibleItemSnapshotCache,
+    classify_item_view_perf_phase, compact_text_width, compact_text_width_for_name,
+    content_item_hit_at_point, deferred_thumbnail_candidates_for_model,
+    model_indexes_intersecting_visual_rect, pane_layout_projection, raw_file_grid_snapshot,
+    rename_editor_required_text_width,
 };
 use ui::filter_bar::{
     FILTER_BAR_HEIGHT, FilterBarSnapshot, FilteredModelCacheEntry, PaneFilterState,
@@ -150,7 +151,6 @@ use ui::status_bar::{PROGRESS_DISPLAY_DELAY, parse_df_space_output, space_info_s
 use ui::trash_conflict::{TrashConflictDialogState, trash_conflict_dialog_overlay};
 
 const DROP_TARGET_LEASE_TIMEOUT: Duration = Duration::from_millis(3000);
-const DOLPHIN_ICON_SIZE_UPDATE_DELAY: Duration = Duration::from_millis(300);
 const DEVICE_REFRESH_INTERVAL: Duration = Duration::from_secs(10);
 const DEVICE_MONITOR_RETRY_INTERVAL: Duration = Duration::from_secs(60);
 const DEBUG_CACHE_ENV: &str = "FIKA_DEBUG_CACHE";
@@ -385,8 +385,7 @@ pub(crate) struct FikaApp {
     file_icon_resolve_queued: VecDeque<FileIconResolveRequest>,
     file_icon_resolve_seen: HashSet<FileIconResolveRequest>,
     file_icon_resolve_pending: bool,
-    pane_icon_role_sizes: HashMap<PaneId, f32>,
-    pane_icon_size_update_versions: HashMap<PaneId, u64>,
+    pane_icon_roles: PaneIconRoleSizeState,
     mime_applications: MimeApplicationCache,
     space_info: SpaceInfoCache,
     status_summaries: HashMap<PaneId, StatusSummaryCacheEntry>,
@@ -484,8 +483,7 @@ impl FikaApp {
             file_icon_resolve_queued: VecDeque::new(),
             file_icon_resolve_seen: HashSet::new(),
             file_icon_resolve_pending: false,
-            pane_icon_role_sizes: HashMap::new(),
-            pane_icon_size_update_versions: HashMap::new(),
+            pane_icon_roles: PaneIconRoleSizeState::default(),
             mime_applications: MimeApplicationCache::load(),
             space_info: SpaceInfoCache::default(),
             status_summaries: HashMap::new(),
@@ -1352,11 +1350,13 @@ impl FikaApp {
     }
 
     fn pane_icon_role_size(&self, pane_id: PaneId) -> f32 {
-        self.pane_icon_role_sizes
-            .get(&pane_id)
-            .copied()
-            .or_else(|| self.panes.pane(pane_id).map(|pane| pane.view.icon_size()))
-            .unwrap_or_else(|| fika_core::icon_size_for_zoom_level(fika_core::DEFAULT_ZOOM_LEVEL))
+        let fallback_icon_size = self
+            .panes
+            .pane(pane_id)
+            .map(|pane| pane.view.icon_size())
+            .unwrap_or_else(|| fika_core::icon_size_for_zoom_level(fika_core::DEFAULT_ZOOM_LEVEL));
+        self.pane_icon_roles
+            .role_size_or(pane_id, fallback_icon_size)
     }
 
     fn resolve_visible_file_icons_for_raw_grid(
@@ -3126,8 +3126,7 @@ impl FikaApp {
     fn clear_pane_lifecycle_state(&mut self, pane_id: PaneId) {
         self.clear_pane_content_state(pane_id);
         self.pane_split_ratios.remove(&pane_id);
-        self.pane_icon_role_sizes.remove(&pane_id);
-        self.pane_icon_size_update_versions.remove(&pane_id);
+        self.pane_icon_roles.remove_pane(pane_id);
     }
 
     fn select_only(&mut self, pane_id: PaneId, path: PathBuf) {
@@ -3503,15 +3502,9 @@ impl FikaApp {
         previous_icon_size: f32,
         cx: &mut Context<Self>,
     ) {
-        self.pane_icon_role_sizes
-            .entry(pane_id)
-            .or_insert(previous_icon_size);
         let version = self
-            .pane_icon_size_update_versions
-            .entry(pane_id)
-            .and_modify(|version| *version = version.wrapping_add(1).max(1))
-            .or_insert(1);
-        let version = *version;
+            .pane_icon_roles
+            .begin_deferred_update(pane_id, previous_icon_size);
 
         cx.spawn(
             move |this: gpui::WeakEntity<FikaApp>, cx: &mut gpui::AsyncApp| {
@@ -3536,7 +3529,10 @@ impl FikaApp {
         pane_id: PaneId,
         version: u64,
     ) -> bool {
-        if self.pane_icon_size_update_versions.get(&pane_id) != Some(&version) {
+        if !self
+            .pane_icon_roles
+            .is_current_deferred_update(pane_id, version)
+        {
             return false;
         }
         let Some(target_icon_size) = self.panes.pane(pane_id).map(|pane| pane.view.icon_size())
@@ -3547,14 +3543,9 @@ impl FikaApp {
     }
 
     fn commit_pane_icon_role_size(&mut self, pane_id: PaneId, icon_size: f32) -> bool {
-        let changed = self
-            .pane_icon_role_sizes
-            .get(&pane_id)
-            .is_none_or(|current| (current - icon_size).abs() > f32::EPSILON);
-        if !changed {
+        if !self.pane_icon_roles.commit(pane_id, icon_size) {
             return false;
         }
-        self.pane_icon_role_sizes.insert(pane_id, icon_size);
         self.visible_item_snapshot_caches.remove(&pane_id);
         self.visible_work_keys.remove(&pane_id);
         true
@@ -16705,8 +16696,7 @@ text/plain=viewer.desktop;\n",
             file_icon_resolve_queued: VecDeque::new(),
             file_icon_resolve_seen: HashSet::new(),
             file_icon_resolve_pending: false,
-            pane_icon_role_sizes: HashMap::new(),
-            pane_icon_size_update_versions: HashMap::new(),
+            pane_icon_roles: PaneIconRoleSizeState::default(),
             mime_applications: MimeApplicationCache::empty(),
             space_info: SpaceInfoCache::default(),
             status_summaries: HashMap::new(),
