@@ -32,6 +32,7 @@ DnD state helpers, but its renderer is still GPUI.
 - Renderer policy code: `src/ui/file_grid/renderer_policy.rs`
 - Compact/Icons static visual painter: `StaticItemVisualLayerElement` in
   `src/ui/file_grid.rs`
+- Compact/Icons image paint layer: `src/ui/file_grid/image_layer.rs`
 - Active item-drag hover routing: `install_active_item_drag_mouse_tracker` plus
   drag preview repaint fallback in `src/ui/file_grid/dnd.rs`
 - Runtime DnD debug channel: `FIKA_DEBUG_DND=1`, especially
