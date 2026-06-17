@@ -1,3 +1,4 @@
+mod autosmoke;
 mod controller;
 mod details;
 mod details_shell;
@@ -22,6 +23,7 @@ mod text;
 mod types;
 mod viewport;
 
+pub(crate) use autosmoke::{ItemViewAutosmokeAction, ItemViewAutosmokeScenario};
 pub(crate) use details::DetailsLayoutMetrics;
 pub(crate) use details_visual::DetailsTextShapeCache;
 pub(crate) use dnd::ItemDrag;
