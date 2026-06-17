@@ -211,6 +211,57 @@ if [[ "$layout_summary" != *"places_layout_autosmoke start=1 complete=1 initial=
     exit 1
 fi
 
+cat > "$tmpdir/hit-test.log" <<'EOF'
+[fika places-slots] rows=11 sections=2 entries=13 inserted=13 content=0 geometry=0 visual=0 unchanged=0 removed=0 project=25us
+[fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
+[fika places-view] source=11 visible=11 sections=2 snapshot=100us
+[fika places-sidebar] rows=11 sections=2 elements=13 build=200us
+[fika places-renderer-policy] rows=11 row_gpui=11 row_visual_layer=0 icon_gpui=11 retained_interaction=0 drag_shell=11 section_gpui=2 scrollbar_canvas=1
+[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=11
+[fika places-interaction-geometry] rows=11 sections=2 entries=13 content_height=378 hit_tests=2 project=5us
+[fika autosmoke] places start scenario=HitTest
+[fika autosmoke] places hit-test label=retained-hit-test sample=row-before y=19.0 kind=Row zone=InsertBefore visible_index=0 insert_index=0 ok=true
+[fika autosmoke] places hit-test label=retained-hit-test sample=row-body y=36.0 kind=Row zone=OnPlace visible_index=0 insert_index=1 ok=true
+[fika autosmoke] places hit-test label=retained-hit-test sample=row-after y=53.0 kind=Row zone=InsertAfter visible_index=0 insert_index=1 ok=true
+[fika autosmoke] places hit-test label=retained-hit-test sample=section y=1.0 kind=Section zone=Section visible_index=<none> insert_index=0 ok=true
+[fika autosmoke] places hit-test-summary label=retained-hit-test rows=11 sections=2 ok=true
+[fika autosmoke] places complete scenario=HitTest
+EOF
+
+hit_test_summary="$("$analyzer" \
+    --require-hit-test-autosmoke \
+    --require-interaction-policy \
+    --require-interaction-geometry \
+    --expect-current-gpui-policy \
+    "$tmpdir/hit-test.log")"
+
+if [[ "$hit_test_summary" != *"places_hit_test_autosmoke start=1 complete=1 row_before=1 row_body=1 row_after=1 section=1 summary=1 max_rows=11 max_sections=2"* ]]; then
+    echo "expected Places retained hit-test autosmoke summary" >&2
+    exit 1
+fi
+
+cat > "$tmpdir/bad-hit-test.log" <<'EOF'
+[fika places-slots] rows=11 sections=2 entries=13 inserted=13 content=0 geometry=0 visual=0 unchanged=0 removed=0 project=25us
+[fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
+[fika places-view] source=11 visible=11 sections=2 snapshot=100us
+[fika places-sidebar] rows=11 sections=2 elements=13 build=200us
+[fika places-renderer-policy] rows=11 row_gpui=11 row_visual_layer=0 icon_gpui=11 retained_interaction=0 drag_shell=11 section_gpui=2 scrollbar_canvas=1
+[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=11
+[fika places-interaction-geometry] rows=11 sections=2 entries=13 content_height=378 hit_tests=2 project=5us
+[fika autosmoke] places start scenario=HitTest
+[fika autosmoke] places hit-test label=retained-hit-test sample=row-before y=19.0 kind=Row zone=InsertBefore visible_index=0 insert_index=0 ok=true
+[fika autosmoke] places hit-test label=retained-hit-test sample=row-body y=36.0 kind=Row zone=InsertAfter visible_index=0 insert_index=1 ok=false
+[fika autosmoke] places hit-test label=retained-hit-test sample=row-after y=53.0 kind=Row zone=InsertAfter visible_index=0 insert_index=1 ok=true
+[fika autosmoke] places hit-test label=retained-hit-test sample=section y=1.0 kind=Section zone=Section visible_index=<none> insert_index=0 ok=true
+[fika autosmoke] places hit-test-summary label=retained-hit-test rows=11 sections=2 ok=false
+[fika autosmoke] places complete scenario=HitTest
+EOF
+
+if "$analyzer" --require-hit-test-autosmoke "$tmpdir/bad-hit-test.log" >/dev/null 2>&1; then
+    echo "expected invalid Places retained hit-test autosmoke to fail" >&2
+    exit 1
+fi
+
 cat > "$tmpdir/bad-layout.log" <<'EOF'
 [fika places-slots] rows=11 sections=2 entries=13 inserted=13 content=0 geometry=0 visual=0 unchanged=0 removed=0 project=25us
 [fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
@@ -324,6 +375,11 @@ fi
 
 if "$analyzer" --require-layout-autosmoke "$tmpdir/missing-autosmoke.log" >/dev/null 2>&1; then
     echo "expected missing layout autosmoke markers to fail" >&2
+    exit 1
+fi
+
+if "$analyzer" --require-hit-test-autosmoke "$tmpdir/missing-autosmoke.log" >/dev/null 2>&1; then
+    echo "expected missing hit-test autosmoke markers to fail" >&2
     exit 1
 fi
 

@@ -127,8 +127,9 @@ use ui::places::{
     PlacesAutosmokeScenario, PlacesRowTextShapeCache, PlacesSidebarResizeDrag,
     PlacesSnapshotPerfLog, build_places, clamp_places_sidebar_width, default_place_label,
     emit_place_paint_slot_perf_log, emit_places_snapshot_perf_log, place_snapshots_for,
-    places_panel_button, places_panel_icon_snapshot, places_perf_enabled, places_section_count,
-    places_sidebar_splitter, places_sidebar_width_from_drag, read_live_device_snapshot,
+    places_interaction_geometry, places_panel_button, places_panel_icon_snapshot,
+    places_perf_enabled, places_section_count, places_sidebar_splitter,
+    places_sidebar_width_from_drag, read_live_device_snapshot,
 };
 use ui::places::{PlacePaintSlotCache, PlacePaintSlotPerfLog};
 use ui::properties_dialog::{
@@ -884,7 +885,65 @@ impl FikaApp {
                 );
                 false
             }
+            PlacesAutosmokeAction::HitTest { label } => {
+                self.emit_places_retained_hit_test_autosmoke(label);
+                false
+            }
         }
+    }
+
+    fn emit_places_retained_hit_test_autosmoke(&mut self, label: &'static str) {
+        let snapshots = self.place_snapshots();
+        let geometry = places_interaction_geometry(&snapshots);
+        let emit_hit = |sample: &'static str,
+                        y: f32,
+                        expected_kind: &'static str,
+                        expected_zone: &'static str| {
+            let hit = geometry.hit_test_y(y);
+            let (kind, zone, visible_index, insert_index) = match hit {
+                Some(hit) => (
+                    hit.kind(),
+                    hit.drop_zone(),
+                    hit.visible_index()
+                        .map(|index| index.to_string())
+                        .unwrap_or_else(|| "<none>".to_string()),
+                    hit.insert_index().to_string(),
+                ),
+                None => (
+                    "<none>",
+                    "<none>",
+                    "<none>".to_string(),
+                    "<none>".to_string(),
+                ),
+            };
+            let ok = kind == expected_kind && zone == expected_zone;
+            eprintln!(
+                "[fika autosmoke] places hit-test label={} sample={} y={:.1} kind={} zone={} visible_index={} insert_index={} ok={}",
+                label, sample, y, kind, zone, visible_index, insert_index, ok
+            );
+            ok
+        };
+        let mut row_before = false;
+        let mut row_body = false;
+        let mut row_after = false;
+        let mut section = false;
+
+        if let Some(row) = geometry.rows().first() {
+            row_before = emit_hit("row-before", row.y + 1.0, "Row", "InsertBefore");
+            row_body = emit_hit("row-body", row.y + row.height / 2.0, "Row", "OnPlace");
+            row_after = emit_hit("row-after", row.y + row.height - 1.0, "Row", "InsertAfter");
+        }
+        if let Some(section_geometry) = geometry.sections().first() {
+            section = emit_hit("section", section_geometry.y + 1.0, "Section", "Section");
+        }
+        let ok = row_before && row_body && row_after && section;
+        eprintln!(
+            "[fika autosmoke] places hit-test-summary label={} rows={} sections={} ok={}",
+            label,
+            geometry.rows().len(),
+            geometry.sections().len(),
+            ok
+        );
     }
 
     fn emit_places_autosmoke_snapshot(&mut self, label: &'static str) {

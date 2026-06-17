@@ -22,6 +22,10 @@ Options:
       Fail unless FIKA_AUTOSMOKE_PLACES=layout markers are present and prove
       sidebar hide/show, resize, reset, restore, and persisted settings.
 
+  --require-hit-test-autosmoke
+      Fail unless FIKA_AUTOSMOKE_PLACES=hit-test markers are present and prove
+      retained Places row edge/body and section hit testing.
+
   --require-interaction-policy
       Fail unless [fika places-interaction-policy] is present and proves the
       current retained target-decision / GPUI event-shell boundary.
@@ -61,6 +65,7 @@ EOF
 require_autosmoke=false
 require_overflow_autosmoke=false
 require_layout_autosmoke=false
+require_hit_test_autosmoke=false
 require_interaction_policy=false
 require_interaction_geometry=false
 expect_current_gpui_policy=false
@@ -80,6 +85,9 @@ while [[ $# -gt 0 ]]; do
             ;;
         --require-layout-autosmoke)
             require_layout_autosmoke=true
+            ;;
+        --require-hit-test-autosmoke)
+            require_hit_test_autosmoke=true
             ;;
         --require-interaction-policy)
             require_interaction_policy=true
@@ -168,6 +176,7 @@ awk \
     -v require_autosmoke="$require_autosmoke" \
     -v require_overflow_autosmoke="$require_overflow_autosmoke" \
     -v require_layout_autosmoke="$require_layout_autosmoke" \
+    -v require_hit_test_autosmoke="$require_hit_test_autosmoke" \
     -v require_interaction_policy="$require_interaction_policy" \
     -v require_interaction_geometry="$require_interaction_geometry" \
     -v expect_current_gpui_policy="$expect_current_gpui_policy" \
@@ -404,6 +413,14 @@ function fail(message) {
     layout_autosmoke_complete_seen = 1
 }
 
+/^\[fika autosmoke\] places start scenario=HitTest/ {
+    hit_test_autosmoke_start_seen = 1
+}
+
+/^\[fika autosmoke\] places complete scenario=HitTest/ {
+    hit_test_autosmoke_complete_seen = 1
+}
+
 /^\[fika autosmoke\] places action=/ {
     action = field("action")
     changed = field("changed")
@@ -431,6 +448,33 @@ function fail(message) {
         layout_restore_seen = 1
     } else if (action == "layout-verify-saved" && ok == "true") {
         layout_verify_saved_seen = 1
+    }
+}
+
+/^\[fika autosmoke\] places hit-test / {
+    sample = field("sample")
+    kind = field("kind")
+    zone = field("zone")
+    ok = field("ok")
+    if (sample == "row-before" && kind == "Row" && zone == "InsertBefore" && ok == "true") {
+        hit_test_row_before_seen = 1
+    } else if (sample == "row-body" && kind == "Row" && zone == "OnPlace" && ok == "true") {
+        hit_test_row_body_seen = 1
+    } else if (sample == "row-after" && kind == "Row" && zone == "InsertAfter" && ok == "true") {
+        hit_test_row_after_seen = 1
+    } else if (sample == "section" && kind == "Section" && zone == "Section" && ok == "true") {
+        hit_test_section_seen = 1
+    }
+}
+
+/^\[fika autosmoke\] places hit-test-summary / {
+    ok = field("ok")
+    rows = field("rows") + 0
+    sections = field("sections") + 0
+    if (ok == "true" && rows > 0 && sections > 0) {
+        hit_test_summary_seen = 1
+        max_update("hit_test_rows", rows)
+        max_update("hit_test_sections", sections)
     }
 }
 
@@ -537,6 +581,16 @@ END {
             !layout_resize_seen || !layout_reset_seen || !layout_restore_seen ||
             !layout_verify_saved_seen) {
             fail("missing or invalid Places layout autosmoke action markers")
+        }
+    }
+    if (require_hit_test_autosmoke == "true") {
+        if (!hit_test_autosmoke_start_seen || !hit_test_autosmoke_complete_seen) {
+            fail("missing Places retained hit-test autosmoke start/complete markers")
+        }
+        if (!hit_test_row_before_seen || !hit_test_row_body_seen ||
+            !hit_test_row_after_seen || !hit_test_section_seen ||
+            !hit_test_summary_seen) {
+            fail("missing or invalid Places retained hit-test autosmoke markers")
         }
     }
     if (require_interaction_policy == "true") {
@@ -646,6 +700,16 @@ END {
         layout_reset_seen,
         layout_restore_seen,
         layout_verify_saved_seen)
+    printf("places_hit_test_autosmoke start=%d complete=%d row_before=%d row_body=%d row_after=%d section=%d summary=%d max_rows=%d max_sections=%d\n",
+        hit_test_autosmoke_start_seen,
+        hit_test_autosmoke_complete_seen,
+        hit_test_row_before_seen,
+        hit_test_row_body_seen,
+        hit_test_row_after_seen,
+        hit_test_section_seen,
+        hit_test_summary_seen,
+        max_values["hit_test_rows"],
+        max_values["hit_test_sections"])
     printf("places_autosmoke target=%d insert_start=%d insert_end=%d clear=%d snapshots=%d,%d,%d,%d,%d\n",
         autosmoke_target_action_seen,
         autosmoke_insert_start_action_seen,

@@ -14,6 +14,7 @@ pub(crate) enum PlacesAutosmokeScenario {
     DropTargets,
     Overflow,
     Layout,
+    HitTest,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -30,6 +31,7 @@ pub(crate) enum PlacesAutosmokeAction {
     ResetSidebar { label: &'static str },
     RestoreLayout { label: &'static str },
     VerifyLayoutSettings { label: &'static str },
+    HitTest { label: &'static str },
 }
 
 impl PlacesAutosmokeScenario {
@@ -46,6 +48,7 @@ impl PlacesAutosmokeScenario {
         match self {
             Self::DropTargets | Self::Overflow => Duration::from_millis(160),
             Self::Layout => Duration::from_millis(260),
+            Self::HitTest => Duration::from_millis(160),
         }
     }
 
@@ -102,6 +105,9 @@ impl PlacesAutosmokeScenario {
                     label: "layout-verify-saved",
                 },
             ],
+            Self::HitTest => vec![PlacesAutosmokeAction::HitTest {
+                label: "retained-hit-test",
+            }],
         }
     }
 
@@ -123,6 +129,9 @@ fn places_autosmoke_scenario_from_value(value: &str) -> Option<PlacesAutosmokeSc
         }
         "layout" | "sidebar" | "sidebar-layout" | "sidebar_layout" => {
             Some(PlacesAutosmokeScenario::Layout)
+        }
+        "hit-test" | "hit_test" | "hittest" | "retained-hit-test" | "retained_hit_test" => {
+            Some(PlacesAutosmokeScenario::HitTest)
         }
         _ => None,
     }
@@ -198,6 +207,14 @@ mod tests {
         assert_eq!(
             places_autosmoke_scenario_from_value("sidebar-layout"),
             Some(PlacesAutosmokeScenario::Layout)
+        );
+        assert_eq!(
+            places_autosmoke_scenario_from_value("hit-test"),
+            Some(PlacesAutosmokeScenario::HitTest)
+        );
+        assert_eq!(
+            places_autosmoke_scenario_from_value("retained_hit_test"),
+            Some(PlacesAutosmokeScenario::HitTest)
         );
         assert_eq!(places_autosmoke_scenario_from_value("off"), None);
     }
@@ -280,6 +297,19 @@ mod tests {
         assert!(matches!(
             actions[6],
             PlacesAutosmokeAction::VerifyLayoutSettings { .. }
+        ));
+    }
+
+    #[test]
+    fn hit_test_scenario_contains_only_retained_hit_test_action() {
+        let actions = PlacesAutosmokeScenario::HitTest.actions();
+
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(
+            actions[0],
+            PlacesAutosmokeAction::HitTest {
+                label: "retained-hit-test"
+            }
         ));
     }
 }

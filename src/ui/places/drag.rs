@@ -81,6 +81,16 @@ pub(crate) enum PlaceDropZone {
     InsertAfter,
 }
 
+impl PlaceDropZone {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::InsertBefore => "InsertBefore",
+            Self::OnPlace => "OnPlace",
+            Self::InsertAfter => "InsertAfter",
+        }
+    }
+}
+
 pub(crate) fn place_drop_zone<T>(event: &gpui::DragMoveEvent<T>) -> PlaceDropZone {
     let local_y = (event.event.position.y - event.bounds.origin.y).as_f32();
     place_drop_zone_for_y(local_y, event.bounds.size.height.as_f32())

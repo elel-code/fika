@@ -663,6 +663,25 @@ by risk and evidence, not by how custom-painted a surface looks.
   `/tmp/fika-places-custom-targets-hit-test.log` passed
   `--require-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-visual-policy`,
   both with `max_hit_tests=2`.
+- [x] P16ac: Add unattended retained Places hit-test autosmoke before moving
+  row/section event delivery out of GPUI shells. `FIKA_AUTOSMOKE_PLACES=hit-test`
+  samples the first retained row at insert-before, on-place, and insert-after
+  y positions, samples the first section heading, and emits a summary that
+  requires both rows and sections to exist. `scripts/analyze-places-perf.sh`
+  now has `--require-hit-test-autosmoke`, and
+  `scripts/check-places-perf-analyzer.sh` covers both valid and invalid marker
+  fixtures. The runtime evidence paths are documented in
+  `docs/PLACES_RENDERER_PLAN.md`: `/tmp/fika-places-retained-hit-test.log`
+  passed the current GPUI policy gate, and
+  `/tmp/fika-places-custom-retained-hit-test.log` passed the opt-in custom row
+  visual policy gate.
+- [ ] P16ad: Polish the user-facing Places sidebar layout controls after the
+  retained renderer boundary is stable. The current code already has runtime
+  width, hide/show, reset, settings persistence, and
+  `FIKA_AUTOSMOKE_PLACES=layout`; future UI work should expose the same state
+  through the preferred menu/shortcut surface, preserve the last non-hidden
+  width when toggling, and keep pane viewport remeasurement behavior covered by
+  the layout autosmoke.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

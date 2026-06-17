@@ -84,6 +84,11 @@ saved to `$XDG_CONFIG_HOME/fika/settings.tsv` through a latest-only delayed
 settings save task. Drag frames update memory and bump a generation counter;
 the actual file write is delayed by 120ms and runs on the GPUI background
 executor, so sidebar dragging does not synchronously write config files.
+Future panel polish should remain in this layout/controller layer: expose the
+same width and hidden state through the main menu or shortcut surface, keep a
+usable splitter hit target, preserve the last non-hidden width when toggling,
+and prove through `FIKA_AUTOSMOKE_PLACES=layout` that hiding/resizing does not
+reset pane scroll, selection, Places ordering, or the active renderer policy.
 
 2026-06-18 runtime layout smoke kept both renderer policies intact after adding
 that panel state and settings persistence:
@@ -238,6 +243,57 @@ places_autosmoke target=1 insert_start=1 insert_end=1 clear=1 snapshots=1,1,1,1,
   places_interaction_geometry_frames=12 max_rows=11 max_sections=2 max_entries=13 max_content_height=378.0 max_hit_tests=2 max_project=4us
 /tmp/fika-places-custom-targets-hit-test.log:
   places_interaction_geometry_frames=13 max_rows=11 max_sections=2 max_entries=13 max_content_height=378.0 max_hit_tests=2 max_project=7us
+```
+
+## Retained Hit-Test Autosmoke
+
+For non-destructive retained row/section hit-test evidence, run:
+
+```bash
+timeout 8s env FIKA_PERF_PLACES_VIEW=1 FIKA_AUTOSMOKE_PLACES=hit-test target/debug/fika /etc > /tmp/fika-places-retained-hit-test.log 2>&1
+scripts/analyze-places-perf.sh --require-hit-test-autosmoke --require-interaction-policy --require-interaction-geometry --expect-current-gpui-policy /tmp/fika-places-retained-hit-test.log
+```
+
+For the opt-in row visual policy, add `FIKA_CUSTOM_PLACES_ROWS=1` and switch
+the analyzer policy:
+
+```bash
+timeout 8s env FIKA_PERF_PLACES_VIEW=1 FIKA_CUSTOM_PLACES_ROWS=1 FIKA_AUTOSMOKE_PLACES=hit-test target/debug/fika /etc > /tmp/fika-places-custom-retained-hit-test.log 2>&1
+scripts/analyze-places-perf.sh --require-hit-test-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-visual-policy /tmp/fika-places-custom-retained-hit-test.log
+```
+
+Expected markers:
+
+```text
+[fika autosmoke] places start scenario=HitTest
+[fika autosmoke] places hit-test ... sample=row-before ... kind=Row zone=InsertBefore ... ok=true
+[fika autosmoke] places hit-test ... sample=row-body ... kind=Row zone=OnPlace ... ok=true
+[fika autosmoke] places hit-test ... sample=row-after ... kind=Row zone=InsertAfter ... ok=true
+[fika autosmoke] places hit-test ... sample=section ... kind=Section zone=Section ... ok=true
+[fika autosmoke] places hit-test-summary ... rows=... sections=... ok=true
+[fika autosmoke] places complete scenario=HitTest
+```
+
+The analyzer summary should include:
+
+```text
+places_hit_test_autosmoke start=1 complete=1 row_before=1 row_body=1 row_after=1 section=1 summary=1
+```
+
+This is the retained geometry acceptance gate before any row/section event
+delivery moves out of GPUI shells.
+
+2026-06-18 evidence:
+
+```text
+/tmp/fika-places-retained-hit-test.log:
+  places_hit_test_autosmoke start=1 complete=1 row_before=1 row_body=1 row_after=1 section=1 summary=1 max_rows=11 max_sections=2
+  places_interaction_geometry_frames=15 max_rows=11 max_sections=2 max_entries=13 max_content_height=378.0 max_hit_tests=2 max_project=6us
+  max_row_gpui=11 max_row_visual_layer=0
+/tmp/fika-places-custom-retained-hit-test.log:
+  places_hit_test_autosmoke start=1 complete=1 row_before=1 row_body=1 row_after=1 section=1 summary=1 max_rows=11 max_sections=2
+  places_interaction_geometry_frames=10 max_rows=11 max_sections=2 max_entries=13 max_content_height=378.0 max_hit_tests=2 max_project=15us
+  max_row_gpui=0 max_row_visual_layer=11
 ```
 
 ## Overflow Autosmoke

@@ -223,6 +223,39 @@ pub(crate) enum PlaceInteractionHit<'a> {
     Section(&'a PlaceSectionInteractionGeometry),
 }
 
+impl PlaceInteractionHit<'_> {
+    pub(crate) fn kind(self) -> &'static str {
+        match self {
+            Self::Row { .. } => "Row",
+            Self::Section(_) => "Section",
+        }
+    }
+
+    pub(crate) fn drop_zone(self) -> &'static str {
+        match self {
+            Self::Row { drop_zone, .. } => drop_zone.as_str(),
+            Self::Section(_) => "Section",
+        }
+    }
+
+    pub(crate) fn visible_index(self) -> Option<usize> {
+        match self {
+            Self::Row { row, .. } => Some(row.visible_index),
+            Self::Section(_) => None,
+        }
+    }
+
+    pub(crate) fn insert_index(self) -> usize {
+        match self {
+            Self::Row { row, drop_zone } => match drop_zone {
+                PlaceDropZone::InsertBefore => row.insert_before_index,
+                PlaceDropZone::OnPlace | PlaceDropZone::InsertAfter => row.insert_after_index,
+            },
+            Self::Section(section) => section.insert_index,
+        }
+    }
+}
+
 pub(crate) fn places_interaction_geometry(places: &[PlaceSnapshot]) -> PlacesInteractionGeometry {
     let mut rows = Vec::with_capacity(places.len());
     let mut sections = Vec::new();
