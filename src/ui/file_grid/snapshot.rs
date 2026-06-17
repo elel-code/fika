@@ -5,10 +5,10 @@ mod builder;
 mod metadata;
 mod range;
 mod render;
+mod slots;
 mod thumbnail;
 mod visible;
 
-use super::VisibleItemSlotPool;
 use super::details::DetailsLayoutMetrics;
 use super::layout::CompactColumnWidthCache;
 use crate::ui::drag_drop::ItemDropTarget;
@@ -22,6 +22,8 @@ use fika_core::{
 
 #[cfg(test)]
 use super::FileGridSnapshot;
+#[cfg(test)]
+use super::VisibleItemSlotPool;
 #[cfg(test)]
 use super::details::{details_layout_metrics, details_name_column_width};
 #[cfg(test)]
@@ -149,18 +151,6 @@ pub(crate) struct RawFileGridSnapshotInput<'a> {
 impl RawFileGridSnapshot {
     pub(crate) fn visible_metadata_role_candidates(&self) -> Vec<fika_core::MetadataRoleCandidate> {
         metadata::visible_metadata_role_candidates(self)
-    }
-
-    pub(crate) fn assign_visible_item_slots(&mut self, slots: &mut VisibleItemSlotPool) {
-        match self {
-            Self::Compact { items, .. } | Self::Icons { items, .. } => {
-                slots.update_visible_items(items.iter().map(|item| item.item_id));
-                for item in items {
-                    item.slot_id = slots.slot_for_item(item.item_id).unwrap_or_default();
-                }
-            }
-            Self::Details { .. } => {}
-        }
     }
 
     pub(crate) fn queue_metadata_role_candidates(
