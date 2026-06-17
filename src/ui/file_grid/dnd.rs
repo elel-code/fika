@@ -131,7 +131,7 @@ pub(super) fn install_active_item_drag_mouse_tracker(
 ) {
     let move_app = app.clone();
     window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
-        if !phase.capture() || !event.dragging() {
+        if !phase.capture() {
             return;
         }
         let position = event.position;

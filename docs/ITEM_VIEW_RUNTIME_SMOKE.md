@@ -57,7 +57,9 @@ Expected DnD debug interpretation:
 
 - `item-start`: GPUI drag-start shell created the item drag payload.
 - `active-item-move`: Fika's retained interaction layer is tracking the active
-  pane item drag from window mouse movement.
+  pane item drag from window mouse movement. This is driven by Fika's
+  `ActiveItemDrag` state, not by GPUI `MouseMoveEvent::dragging()`, because
+  platform move events during an active drag may not report a pressed button.
 - `viewport-place-move`: Places-to-pane drag is using the viewport retained
   hit-test path.
 - `directory-shell-hit`: a visible directory shell asserted a positive target;
