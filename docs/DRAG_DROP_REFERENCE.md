@@ -85,8 +85,10 @@ model, and file operations are launched only after a drop target is resolved.
   onto their own source directory or descendant directory.
 - Dolphin `KItemListView::showDropIndicator()` -> Fika pane drop target keeps
   directory-hover highlight separate from insertion indicators and from normal
-  selection highlight. GPUI `on_drag_move` handlers must check their own bounds:
-  capture-phase drag move is not a reliable hover test by itself.
+  selection highlight. The retained item-view hit-test is the source of truth
+  for pane targets; GPUI per-element drag-move handlers are only an optional
+  event source because same-window item drags may stop delivering those
+  callbacks after drag start.
 - Dolphin drag/drop transient state -> `src/ui/drag_drop.rs` as the module
   entry and `src/ui/drag_drop/state.rs` as the directory-style child module for
   transfer modes, item/place drag payloads, drop target state and target helper
@@ -107,11 +109,12 @@ model, and file operations are launched only after a drop target is resolved.
   item visual rect.
 - Drag preview now reflects the current pane selection count for selected items,
   matching Dolphin's "drag selected item means drag selected set" behavior.
-- Pane-background drop target updates only when the pointer is inside the file
-  viewport and the content hit-test says the pointer is on blank space. Directory
-  item, file item, Places row and Places heading targets update only when the
-  pointer is inside their GPUI bounds, so the active drop target tracks the
-  actual endpoint in real time instead of being overwritten by sibling handlers.
+- Pane-background and pane-directory item targets resolve through the retained
+  file-view hit-test while an `ActiveItemDrag` is live. Blank space is accepted
+  only when the pointer is inside the file viewport and the hit-test says the
+  pointer is not over a directory-capable item. Places rows, Places headings and
+  external path shells still check their own GPUI bounds before forwarding, so
+  sibling handlers cannot overwrite the active endpoint.
 - Pane blank space, directory item, breadcrumb segment, Places row and Places
   section drag handlers also clear only the target they own when a later
   drag-move event reports the pointer outside their bounds. This mirrors
@@ -140,6 +143,15 @@ model, and file operations are launched only after a drop target is resolved.
   GPUI drag value. The payload contains the resolved path list, `text/uri-list`
   and `text/plain` data. Places drags prepare the same payload only when the
   place path exists and is a directory.
+- Same-window pane item drags use `ActiveItemDrag` plus retained hit-testing for
+  hover, not GPUI item `on_drag_move` as the owner of state. The verified
+  failure signature was `item-start` with no later active move over the pane:
+  final drop could still resolve the directory, but hover could not repaint
+  while the cursor moved. The accepted fixed signature is
+  `active-item-move via=preview ... kind=Some(Directory) changed=true`. That
+  means GPUI kept repainting the drag preview, Fika used that repaint as the
+  active-drag tick, and the retained hit-test installed the directory target
+  before drop.
 - GPUI `ExternalPaths` drops are wired through the same target resolution path
   for file-grid blank space, directory items, breadcrumb segments, Places rows
   and Places insertion lines. Places insertion accepts only one new existing
