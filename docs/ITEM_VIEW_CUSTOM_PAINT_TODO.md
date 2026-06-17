@@ -506,7 +506,9 @@ by risk and evidence, not by how custom-painted a surface looks.
   and painter perf stats storage now live behind `ItemViewPerfState` in
   `src/ui/file_grid/perf.rs`; item-view perf summary emission is now owned by
   `src/ui/file_grid/perf.rs`; autosmoke scenario parsing and action sequencing
-  now live in `src/ui/file_grid/autosmoke.rs`.
+  now live in `src/ui/file_grid/autosmoke.rs`; autosmoke marker formatting for
+  start/complete, zoom actions, and scroll actions also lives in
+  `src/ui/file_grid/autosmoke.rs`.
 - [x] P16h: Draft a Places retained row painter design before changing Places
   rendering. The design must cover row groups, hidden sections, device rows,
   reorder/drop insertion, context menus, and sidebar scroll. Result:
@@ -731,6 +733,14 @@ by risk and evidence, not by how custom-painted a surface looks.
   marker surface belongs to the Places autosmoke module. Evidence:
   `/tmp/fika-places-start-complete-autosmoke-module.log` passed
   `--require-autosmoke --expect-current-gpui-policy`.
+- [x] P16ak: Move item-view autosmoke marker formatting out of `src/main.rs`.
+  `src/ui/file_grid/autosmoke.rs` now owns stable scenario labels plus
+  start/complete, zoom-action, and scroll-action marker formatting for
+  `FIKA_AUTOSMOKE_ITEM_VIEW`. The app root still applies zoom and scroll to
+  pane state, but item-view runtime evidence markers belong to the file-grid
+  autosmoke module. Evidence:
+  `/tmp/fika-item-view-autosmoke-marker-module.log` passed the item-view
+  analyzer gates used for `/etc` zoom/scroll evidence.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

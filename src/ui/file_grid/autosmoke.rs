@@ -1,7 +1,7 @@
 use std::env;
 use std::time::Duration;
 
-use fika_core::ZoomChange;
+use fika_core::{PaneId, ZoomChange};
 use gpui::{ScrollDelta, point, px};
 
 const AUTOSMOKE_ITEM_VIEW_ENV: &str = "FIKA_AUTOSMOKE_ITEM_VIEW";
@@ -28,6 +28,14 @@ pub(crate) enum ItemViewAutosmokeAction {
 impl ItemViewAutosmokeScenario {
     pub(crate) fn from_env() -> Option<Self> {
         item_view_autosmoke_scenario_from_value(&env::var(AUTOSMOKE_ITEM_VIEW_ENV).ok()?)
+    }
+
+    fn marker_label(self) -> &'static str {
+        match self {
+            Self::Zoom => "Zoom",
+            Self::Scroll => "Scroll",
+            Self::ZoomScroll => "ZoomScroll",
+        }
     }
 
     pub(crate) fn start_delay(self) -> Duration {
@@ -86,6 +94,43 @@ impl ItemViewAutosmokeScenario {
     }
 }
 
+pub(crate) fn emit_item_view_autosmoke_start(pane_id: PaneId, scenario: ItemViewAutosmokeScenario) {
+    eprintln!(
+        "[fika autosmoke] item-view start pane={} scenario={}",
+        pane_id.0,
+        scenario.marker_label()
+    );
+}
+
+pub(crate) fn emit_item_view_autosmoke_complete(
+    pane_id: PaneId,
+    scenario: ItemViewAutosmokeScenario,
+) {
+    eprintln!(
+        "[fika autosmoke] item-view complete pane={} scenario={}",
+        pane_id.0,
+        scenario.marker_label()
+    );
+}
+
+pub(crate) fn emit_item_view_autosmoke_zoom_action(label: &'static str, pane_id: PaneId) {
+    eprintln!(
+        "[fika autosmoke] item-view action={} pane={}",
+        label, pane_id.0
+    );
+}
+
+pub(crate) fn emit_item_view_autosmoke_scroll_action(
+    label: &'static str,
+    pane_id: PaneId,
+    changed: bool,
+) {
+    eprintln!(
+        "[fika autosmoke] item-view action={} pane={} changed={}",
+        label, pane_id.0, changed
+    );
+}
+
 fn item_view_autosmoke_scenario_from_value(value: &str) -> Option<ItemViewAutosmokeScenario> {
     match value.trim().to_ascii_lowercase().as_str() {
         "1" | "true" | "yes" | "on" | "zoom-scroll" | "scroll-zoom" => {
@@ -120,6 +165,16 @@ mod tests {
             Some(ItemViewAutosmokeScenario::Scroll)
         );
         assert_eq!(item_view_autosmoke_scenario_from_value("off"), None);
+    }
+
+    #[test]
+    fn scenario_marker_labels_match_runtime_markers() {
+        assert_eq!(ItemViewAutosmokeScenario::Zoom.marker_label(), "Zoom");
+        assert_eq!(ItemViewAutosmokeScenario::Scroll.marker_label(), "Scroll");
+        assert_eq!(
+            ItemViewAutosmokeScenario::ZoomScroll.marker_label(),
+            "ZoomScroll"
+        );
     }
 
     #[test]

@@ -152,6 +152,14 @@ phase geometry-change frames=5 max_total=1635us max_visible=64
 renderer_policy_frames: max_image_layer=0 max_gpui_image_element=64
 ```
 
+The item-view autosmoke marker surface is now owned by
+`src/ui/file_grid/autosmoke.rs`, not `src/main.rs`. The module owns stable
+scenario labels plus start/complete, zoom-action, and scroll-action marker
+formatting; the app root only applies the scheduled zoom and scroll changes to
+pane state. Evidence:
+`/tmp/fika-item-view-autosmoke-marker-module.log` passed the same analyzer
+gates used for `/etc` zoom/scroll evidence.
+
 Remaining visible cost in that log is static text/background painting:
 `static_visual max_prepaint=5794us`, `max_paint=12043us`, with shape cache
 misses only when new items enter the retained visible set. Treat future work

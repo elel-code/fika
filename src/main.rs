@@ -90,7 +90,9 @@ use ui::file_grid::{
     PaneLayoutProjectionInput, PaneViewportGeometry, PaneVisibleWorkKey, RawFileGridSnapshot,
     RawFileGridSnapshotInput, StaticItemTextShapeCache, VisibleItemSlotPool,
     VisibleItemSnapshotCache, compact_text_width, compact_text_width_for_name,
-    content_item_hit_at_point, deferred_thumbnail_candidates_for_model, item_view_perf_enabled,
+    content_item_hit_at_point, deferred_thumbnail_candidates_for_model,
+    emit_item_view_autosmoke_complete, emit_item_view_autosmoke_scroll_action,
+    emit_item_view_autosmoke_start, emit_item_view_autosmoke_zoom_action, item_view_perf_enabled,
     model_indexes_intersecting_visual_rect, pane_layout_projection,
     queue_file_icon_resolve_work_for_raw_grid, raw_file_grid_snapshot,
     rename_editor_required_text_width, resolve_visible_file_icons_for_raw_grid,
@@ -629,10 +631,7 @@ impl FikaApp {
             move |this: gpui::WeakEntity<FikaApp>, cx: &mut gpui::AsyncApp| {
                 let mut cx = cx.clone();
                 async move {
-                    eprintln!(
-                        "[fika autosmoke] item-view start pane={} scenario={:?}",
-                        pane_id.0, scenario
-                    );
+                    emit_item_view_autosmoke_start(pane_id, scenario);
                     cx.background_executor().timer(scenario.start_delay()).await;
 
                     for action in scenario.actions() {
@@ -640,10 +639,7 @@ impl FikaApp {
                             ItemViewAutosmokeAction::Zoom { label, change } => {
                                 if this
                                     .update(&mut cx, |app, cx| {
-                                        eprintln!(
-                                            "[fika autosmoke] item-view action={} pane={}",
-                                            label, pane_id.0
-                                        );
+                                        emit_item_view_autosmoke_zoom_action(label, pane_id);
                                         app.apply_zoom_change_with_context(pane_id, change, cx);
                                         cx.notify();
                                     })
@@ -656,9 +652,8 @@ impl FikaApp {
                                 if this
                                     .update(&mut cx, |app, cx| {
                                         let changed = app.scroll_pane_from_wheel(pane_id, delta);
-                                        eprintln!(
-                                            "[fika autosmoke] item-view action={} pane={} changed={}",
-                                            label, pane_id.0, changed
+                                        emit_item_view_autosmoke_scroll_action(
+                                            label, pane_id, changed,
                                         );
                                         if changed {
                                             cx.notify();
@@ -675,10 +670,7 @@ impl FikaApp {
                             .await;
                     }
 
-                    eprintln!(
-                        "[fika autosmoke] item-view complete pane={} scenario={:?}",
-                        pane_id.0, scenario
-                    );
+                    emit_item_view_autosmoke_complete(pane_id, scenario);
                 }
             },
         )
