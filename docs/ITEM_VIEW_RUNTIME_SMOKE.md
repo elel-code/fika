@@ -8,6 +8,12 @@ after the retained/custom-painted item view migration.
 Run this after any slice that removes an item/row shell handler, expands a
 custom painter, or changes drag/drop routing.
 
+Runtime evidence should be automated whenever GPUI exposes enough structured
+signals. Prefer paired launch commands, saved logs, and analyzer scripts over
+manual visual-only judgment. Manual review is still allowed for behavior that
+has no reliable log signal yet, but any repeated investigation should become a
+scripted evidence path before the next renderer decision.
+
 Required view modes:
 
 - Compact
@@ -179,6 +185,14 @@ snapshots and controller routing but renders Compact/Icons item images through
 GPUI `img()` children. Compare `renderer-policy gpui_image_element` counts and
 the absence or presence of `[fika item-image]` source churn against the default
 custom image-layer run.
+
+Use `scripts/compare-item-image-renderers.sh` for this comparison:
+
+```sh
+FIKA_PERF_ITEM_VIEW=1 cargo run -- /etc 2>&1 | tee /tmp/fika-etc-custom.log
+FIKA_PERF_ITEM_VIEW=1 FIKA_GPUI_ITEM_IMAGES=1 cargo run -- /etc 2>&1 | tee /tmp/fika-etc-gpui.log
+scripts/compare-item-image-renderers.sh /tmp/fika-etc-custom.log /tmp/fika-etc-gpui.log
+```
 
 After a passing runtime review, update
 `docs/ITEM_VIEW_RENDERER_DECISIONS.md` with the evidence for any surface whose

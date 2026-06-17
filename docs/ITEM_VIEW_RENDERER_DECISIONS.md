@@ -72,6 +72,37 @@ architecture but reconsider the renderer. A GPUI image element over retained
 slots, or an audited retained pixmap strategy, is preferable to a slower custom
 image painter.
 
+### 2026-06-17 `/etc` Image Renderer A/B Smoke
+
+Automated launch commands:
+
+```sh
+timeout 8s env FIKA_PERF_ITEM_VIEW=1 target/debug/fika /etc
+timeout 8s env FIKA_PERF_ITEM_VIEW=1 FIKA_GPUI_ITEM_IMAGES=1 target/debug/fika /etc
+```
+
+Observed structured evidence from `scripts/compare-item-image-renderers.sh`:
+
+- Default custom image layer:
+  `max_image_layer=48`, `max_gpui_image_element=0`, `image_frames=3`,
+  `theme_loaded=96`, `theme_decoded=1`, `theme_placeholder=48`.
+- GPUI image switch:
+  `max_image_layer=0`, `max_gpui_image_element=48`, `image_frames=0`,
+  `theme_placeholder=0`.
+
+This proves the current custom image layer shows a first-load placeholder frame
+for all 48 visible `/etc` MIME/theme icons, then switches when GPUI image-cache
+decode completion feeds the custom painter. It also proves the A/B path keeps
+the retained item model/controller path while routing image-backed Compact
+items through GPUI `img()` children.
+
+This evidence is sufficient to explain startup placeholder-to-icon switching
+in `/etc` for the custom image layer. It is not yet sufficient to decide the
+full zoom/scroll renderer policy, because the 8s smoke did not exercise zoom
+or scroll. The next automated comparison must save both logs and run
+`scripts/compare-item-image-renderers.sh` after scripted or manually triggered
+zoom/scroll interaction in the same directory.
+
 ## Post-P11e Evidence To Collect
 
 Run `FIKA_PERF_ITEM_VIEW=1 cargo run -- ~/Downloads` from a desktop compositor

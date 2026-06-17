@@ -477,7 +477,7 @@ by risk and evidence, not by how custom-painted a surface looks.
 - [ ] P16i: Draft a rename custom-editor behavior matrix before changing the
   GPUI rename overlay. It must cover focus, caret hit testing, UTF-8 selection,
   validation helper text, commit/cancel, Tab rename-next, and IME.
-- [ ] P16j: Establish the historical image-renderer baseline before the next
+- [x] P16j: Establish the historical image-renderer baseline before the next
   MIME/theme-icon flicker fix. Use `a3f5b0f` as the pre-retained/custom-paint
   GPUI `img()` baseline, and use `d497593`, `8d1198f`, `36da130`, and
   `b0cac9a` as transition checkpoints to decide whether the regression belongs
@@ -487,7 +487,9 @@ by risk and evidence, not by how custom-painted a surface looks.
   changing the current image renderer. Current-code A/B support is available
   through `FIKA_GPUI_ITEM_IMAGES=1`, which keeps retained item state but renders
   Compact/Icons item images through GPUI `img()` children for desktop-session
-  comparison.
+  comparison. `scripts/compare-item-image-renderers.sh` now standardizes the
+  paired-log comparison, and the 2026-06-17 `/etc` smoke evidence is recorded
+  in `docs/ITEM_VIEW_RENDERER_DECISIONS.md`.
 - [ ] P16k: Decide the Compact/Icons theme-icon renderer from evidence:
   keep/fix the custom image layer only if `[fika item-image]` shows low
   `theme_placeholder`, low zoom-time `theme_decoded`, and stable
