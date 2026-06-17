@@ -13,9 +13,10 @@ use gpui::{
 use crate::FikaApp;
 use crate::ui::icons::FileIconSnapshot;
 
+use super::ITEM_NAME_LINE_HEIGHT;
 use super::paint_slots::ItemPaintSnapshot;
 use super::renderer_policy::{item_uses_image_layer, item_uses_layer_visual_paint};
-use super::{ITEM_NAME_LINE_HEIGHT, static_paint_single_line_text};
+use super::text::static_paint_single_line_text;
 
 pub(super) fn item_image_layer_view(
     pane_id: PaneId,
