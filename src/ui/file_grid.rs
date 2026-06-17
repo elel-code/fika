@@ -4,6 +4,7 @@ mod details_visual;
 mod dnd;
 mod image_layer;
 mod interaction;
+mod item_shell;
 mod layout;
 mod paint_slots;
 mod perf;
@@ -49,8 +50,8 @@ use fika_core::{
 };
 use gpui::prelude::*;
 use gpui::{
-    Context, Div, ParentElement, Rgba, ScrollHandle, SharedString, Stateful, WeakEntity, Window,
-    div, px, retain_all, rgb, rgba,
+    Context, Div, ParentElement, Rgba, ScrollHandle, Stateful, WeakEntity, Window, div, px,
+    retain_all, rgb, rgba,
 };
 
 use super::item_view::item_view_scrollbar_container;
@@ -67,7 +68,7 @@ use details_visual::{
 use dnd::drag_preview_label;
 use dnd::{
     install_directory_drop_target_shell, install_item_drag_start_shell,
-    item_drag_from_details_snapshot, item_drag_from_item_snapshot,
+    item_drag_from_details_snapshot,
 };
 use image_layer::item_image_layer_view;
 #[cfg(test)]
@@ -81,21 +82,21 @@ use interaction::{
     item_interaction_layer_element_id, item_interaction_layer_items,
 };
 use interaction::{details_interaction_layer_view, item_interaction_layer_view};
+use item_shell::item_tile;
 #[cfg(test)]
 use paint_slots::DetailsPaintContent;
 use paint_slots::ItemPaintContent;
-use rename_overlay::rename_text_view;
 #[cfg(test)]
 use rename_overlay::{display_text_layout, normalized_text_range, rename_text_layout};
 use renderer_policy::{
-    DetailsRowDragStartRenderer, ItemDragStartRenderer, ItemInteractionRenderer,
-    ItemRenameEditorRenderer, details_renderer_policy_stats, details_row_renderer_policy,
-    item_renderer_policy, item_renderer_policy_stats,
+    DetailsRowDragStartRenderer, details_renderer_policy_stats, details_row_renderer_policy,
+    item_renderer_policy_stats,
 };
 #[cfg(test)]
 use renderer_policy::{
     DetailsRowInteractionRenderer, DetailsRowRendererPolicy, DetailsRowVisualRenderer,
-    ItemBaseVisualRenderer, ItemImageRenderer, ItemRendererPolicy, RendererPolicyStats,
+    ItemBaseVisualRenderer, ItemDragStartRenderer, ItemImageRenderer, ItemInteractionRenderer,
+    ItemRenameEditorRenderer, ItemRendererPolicy, RendererPolicyStats, item_renderer_policy,
 };
 use static_visual::static_item_visual_layer_view;
 #[cfg(test)]
@@ -710,94 +711,6 @@ fn details_row_background(
     } else {
         rgb(0xf8fafc)
     }
-}
-
-fn item_tile(
-    pane_id: PaneId,
-    item: ItemPaintSnapshot,
-    text_alignment: ItemTileTextAlignment,
-    app: WeakEntity<FikaApp>,
-    cx: &mut Context<FikaApp>,
-) -> Stateful<Div> {
-    let item_rect = item.layout.item_rect;
-    let visual = item.layout.visual_rect;
-    let item_id = item.item_id;
-    let content = item.content.as_ref();
-    let selected = item.visual.selected;
-    let renderer_policy = item_renderer_policy(content);
-    let use_layer_interaction = matches!(
-        renderer_policy.interaction,
-        ItemInteractionRenderer::RetainedLayer
-    );
-    let drag_app = app.clone();
-    let drag_value = item_drag_from_item_snapshot(pane_id, &item);
-    let directory_drop_target = content.is_dir.then(|| content.drag_path.clone());
-
-    // Temporary migration boundary: GPUI drag starts are still tied to a Div
-    // until a public custom-element drag-start API exists.
-    let core = div()
-        .id(item_identity_element_id("item-core", item_id))
-        .absolute()
-        .left(px(visual.x - item_rect.x))
-        .top(px(visual.y - item_rect.y))
-        .w(px(visual.width))
-        .h(px(visual.height))
-        .rounded_md()
-        .bg(rgba(0x00000000));
-    let core = match directory_drop_target {
-        Some(target_dir) => install_directory_drop_target_shell(core, pane_id, target_dir, cx),
-        None => core,
-    };
-    let core = match renderer_policy.drag_start {
-        ItemDragStartRenderer::GpuiShell => {
-            install_item_drag_start_shell(core, drag_value, drag_app)
-        }
-    };
-    let core = if use_layer_interaction {
-        core
-    } else {
-        core.cursor_pointer()
-            .on_hover(cx.listener(move |this, hovered: &bool, _window, cx| {
-                let changed = if *hovered {
-                    this.set_hovered_item(pane_id, item_id)
-                } else {
-                    this.clear_hovered_item(pane_id, item_id)
-                };
-                if changed {
-                    cx.notify();
-                }
-            }))
-    };
-    let core = match renderer_policy.rename_editor {
-        ItemRenameEditorRenderer::None => core,
-        ItemRenameEditorRenderer::GpuiOverlay => {
-            let draft_name = content
-                .draft_name
-                .as_deref()
-                .expect("rename renderer policy requires draft text");
-            core.child(rename_text_view(
-                pane_id,
-                SharedString::from(draft_name),
-                item.layout,
-                text_alignment,
-                selected,
-                content.draft_caret,
-                content.draft_selection,
-                content.draft_error.as_deref(),
-                content.draft_warning.as_deref(),
-                cx,
-            ))
-        }
-    };
-
-    div()
-        .id(("item-slot", item.slot_id))
-        .absolute()
-        .left(px(item_rect.x))
-        .top(px(item_rect.y))
-        .w(px(item_rect.width))
-        .h(px(item_rect.height))
-        .child(core)
 }
 
 pub(super) fn item_tile_background(selected: bool, drop_target: bool, hovered: bool) -> Rgba {

@@ -32,8 +32,7 @@ DnD state helpers, but its renderer is still GPUI.
 - Renderer policy code: `src/ui/file_grid/renderer_policy.rs`
 - Compact/Icons static visual painter: `src/ui/file_grid/static_visual.rs`
 - Compact/Icons image paint layer: `src/ui/file_grid/image_layer.rs`
-- Compact/Icons transparent item shell boundary: `item_tile` in
-  `src/ui/file_grid.rs`
+- Compact/Icons transparent item shell boundary: `src/ui/file_grid/item_shell.rs`
 - Details visual painter: `src/ui/file_grid/details_visual.rs`
 - GPUI rename overlay boundary: `src/ui/file_grid/rename_overlay.rs`
 - Active item-drag hover routing: `install_active_item_drag_mouse_tracker` plus

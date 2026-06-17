@@ -203,9 +203,10 @@ theme-icon items used slot-stable retained `img()` elements under a pane-local
 image cache; Phase 8 moves non-renaming Compact/Icons images behind the custom
 paint layer.
 
-Current Compact/Icons item shells no longer contain per-item GPUI `img()` or
-static text visual children. They are transparent drag-start/rename boundaries;
-base visuals and images are owned by content-level custom paint layers.
+Current Compact/Icons item shells live in `src/ui/file_grid/item_shell.rs` and
+no longer contain per-item GPUI `img()` or static text visual children. They are
+transparent drag-start/rename boundaries; base visuals and images are owned by
+content-level custom paint layers.
 
 ## Migration Phases
 

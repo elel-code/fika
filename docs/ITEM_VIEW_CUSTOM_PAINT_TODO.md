@@ -259,6 +259,9 @@ This is the active task board for the GPUI item view custom-paint migration.
   visual fallback branch from `src/ui/file_grid.rs`; item shells are now
   transparent drag-start/rename boundaries while visuals and images come from
   retained content-level painters.
+- [x] Extract Compact/Icons transparent item shells into
+  `src/ui/file_grid/item_shell.rs` so the remaining GPUI drag-start and rename
+  overlay bridge is separate from the main file-grid renderer surface.
 - [x] Centralize GPUI item/details drag-start shell installation in
   `src/ui/file_grid/dnd.rs` while keeping the shell as the current platform
   boundary.
