@@ -1,6 +1,3 @@
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-
 mod builder;
 mod metadata;
 mod range;
@@ -8,17 +5,8 @@ mod render;
 mod scheduler;
 mod slots;
 mod thumbnail;
+mod types;
 mod visible;
-
-use super::details::DetailsLayoutMetrics;
-use super::layout::CompactColumnWidthCache;
-use crate::ui::drag_drop::ItemDropTarget;
-use crate::ui::rename::RenameDraft;
-
-use fika_core::{
-    CompactLayout, DirectoryModel, FilteredModel, IconsLayout, ItemId, ItemLayout, PaneId,
-    SelectionState, ViewState,
-};
 
 #[cfg(test)]
 use super::FileGridSnapshot;
@@ -27,9 +15,13 @@ use super::VisibleItemSlotPool;
 #[cfg(test)]
 use super::details::{details_layout_metrics, details_name_column_width};
 #[cfg(test)]
+use super::layout::CompactColumnWidthCache;
+#[cfg(test)]
 use super::layout::icon_name_display_lines;
 #[cfg(test)]
 use super::layout::required_text_width_for_entry;
+#[cfg(test)]
+use crate::ui::drag_drop::ItemDropTarget;
 #[cfg(test)]
 use crate::ui::icons::FileIconSnapshot;
 pub(crate) use builder::raw_file_grid_snapshot;
@@ -38,100 +30,29 @@ use fika_core::ThumbnailRequestPriority;
 #[cfg(test)]
 use fika_core::ViewMode;
 #[cfg(test)]
+use fika_core::{
+    DirectoryModel, IconsLayout, ItemId, ItemLayout, PaneId, SelectionState, ViewState,
+};
+#[cfg(test)]
 use fika_core::{Generation, MetadataRoleScheduler};
 #[cfg(test)]
 use gpui::SharedString;
 #[cfg(test)]
 use range::layout_index_range_and_count;
 #[cfg(test)]
+use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::sync::Arc;
+#[cfg(test)]
 use thumbnail::visible_thumbnail_candidate;
 pub(crate) use thumbnail::{deferred_thumbnail_candidates_for_model, visible_item_thumbnail_path};
+pub(crate) use types::{
+    FileGridIconRequest, RawDetailsItemSnapshot, RawFileGridSnapshot, RawFileGridSnapshotInput,
+    RawVisibleItemSnapshot,
+};
 pub(crate) use visible::{VisibleItemSnapshot, VisibleItemSnapshotCache};
 #[cfg(test)]
 use visible::{icon_name_layout_width, icon_name_max_lines};
-
-#[derive(Clone, Debug)]
-pub(crate) struct RawVisibleItemSnapshot {
-    pub(crate) slot_id: u64,
-    pub(crate) visible: bool,
-    pub(crate) layout: ItemLayout,
-    pub(crate) item_id: ItemId,
-    pub(crate) path: PathBuf,
-    pub(crate) is_dir: bool,
-    pub(crate) name: Arc<str>,
-    pub(crate) thumbnail_path: Option<PathBuf>,
-    pub(crate) thumbnail_failed: bool,
-    pub(crate) modified_secs: Option<u64>,
-    pub(crate) size_bytes: u64,
-    pub(crate) metadata_complete: bool,
-    pub(crate) metadata_refresh_pending: bool,
-    pub(crate) mime_type: Option<Arc<str>>,
-    pub(crate) mime_magic_checked: bool,
-    pub(crate) selected: bool,
-    pub(crate) drop_target: bool,
-    pub(crate) draft_name: Option<String>,
-    pub(crate) draft_caret: Option<usize>,
-    pub(crate) draft_selection: Option<(usize, usize)>,
-    pub(crate) draft_error: Option<String>,
-    pub(crate) draft_warning: Option<String>,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct RawDetailsItemSnapshot {
-    pub(crate) row_index: usize,
-    pub(crate) item_id: ItemId,
-    pub(crate) path: PathBuf,
-    pub(crate) is_dir: bool,
-    pub(crate) name: Arc<str>,
-    pub(crate) size_bytes: u64,
-    pub(crate) modified_secs: Option<u64>,
-    pub(crate) mime_type: Option<Arc<str>>,
-    pub(crate) mime_magic_checked: bool,
-    pub(crate) selected: bool,
-    pub(crate) drop_target: bool,
-    pub(crate) size_label: String,
-    pub(crate) modified_label: String,
-    pub(crate) original_path_label: String,
-    pub(crate) deletion_time_label: String,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) enum RawFileGridSnapshot {
-    Compact {
-        layout: CompactLayout,
-        items: Vec<RawVisibleItemSnapshot>,
-    },
-    Icons {
-        layout: IconsLayout,
-        items: Vec<RawVisibleItemSnapshot>,
-    },
-    Details {
-        items: Vec<RawDetailsItemSnapshot>,
-        row_count: usize,
-        metrics: DetailsLayoutMetrics,
-        name_column_width: f32,
-    },
-}
-
-pub(crate) struct FileGridIconRequest<'a> {
-    pub(crate) path: &'a Path,
-    pub(crate) is_dir: bool,
-    pub(crate) mime_type: Option<Arc<str>>,
-    pub(crate) mime_magic_checked: bool,
-    pub(crate) icon_size: f32,
-}
-
-pub(crate) struct RawFileGridSnapshotInput<'a> {
-    pub(crate) pane_id: PaneId,
-    pub(crate) model: &'a DirectoryModel,
-    pub(crate) selection: &'a SelectionState,
-    pub(crate) view: &'a ViewState,
-    pub(crate) filtered: Option<&'a FilteredModel>,
-    pub(crate) source_revision: u64,
-    pub(crate) rename_draft: Option<&'a RenameDraft>,
-    pub(crate) item_drop_target: Option<&'a ItemDropTarget>,
-    pub(crate) compact_column_widths: &'a mut CompactColumnWidthCache,
-}
 
 impl RawFileGridSnapshot {
     pub(crate) fn visible_metadata_role_candidates(&self) -> Vec<fika_core::MetadataRoleCandidate> {

@@ -41,6 +41,7 @@ DnD state helpers, but its renderer is still GPUI.
 - GPUI rename overlay boundary: `src/ui/file_grid/rename_overlay.rs`
 - Shared visual style and item identity helpers: `src/ui/file_grid/style.rs`
 - File-grid root API snapshot/props/viewport types: `src/ui/file_grid/types.rs`
+- Raw snapshot model/projection types: `src/ui/file_grid/snapshot/types.rs`
 - Raw file-grid snapshot construction: `src/ui/file_grid/snapshot/builder.rs`
 - Raw-to-render snapshot conversion: `src/ui/file_grid/snapshot/render.rs`
 - Visible item slot assignment projection: `src/ui/file_grid/snapshot/slots.rs`
