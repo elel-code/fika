@@ -2,6 +2,7 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+mod metadata;
 mod thumbnail;
 mod visible;
 
@@ -22,8 +23,8 @@ use crate::ui::rename::RenameDraft;
 
 use fika_core::{
     CompactLayout, DirectoryModel, FilteredModel, Generation, IconsLayout, ItemId, ItemLayout,
-    MetadataRoleCandidate, MetadataRoleScheduler, PaneId, SelectionState, ThumbnailCandidate,
-    ThumbnailScheduler, ViewMode, ViewState, mime_magic_resolution_required,
+    MetadataRoleScheduler, PaneId, SelectionState, ThumbnailCandidate, ThumbnailScheduler,
+    ViewMode, ViewState,
 };
 
 #[cfg(test)]
@@ -283,47 +284,8 @@ fn max_details_name_text_width(
 }
 
 impl RawFileGridSnapshot {
-    pub(crate) fn visible_metadata_role_candidates(&self) -> Vec<MetadataRoleCandidate> {
-        match self {
-            Self::Compact { items, .. } | Self::Icons { items, .. } => items
-                .iter()
-                .filter(|item| {
-                    metadata_role_update_needed(
-                        item.is_dir,
-                        item.size_bytes,
-                        item.mime_type.as_deref(),
-                        item.mime_magic_checked,
-                    )
-                })
-                .map(|item| MetadataRoleCandidate {
-                    item_id: item.item_id,
-                    path: item.path.clone(),
-                    size_bytes: item.size_bytes,
-                    modified_secs: item.modified_secs,
-                    mime_type: item.mime_type.as_ref().map(|mime| mime.to_string()),
-                    mime_magic_checked: item.mime_magic_checked,
-                })
-                .collect(),
-            Self::Details { items, .. } => items
-                .iter()
-                .filter(|item| {
-                    metadata_role_update_needed(
-                        item.is_dir,
-                        item.size_bytes,
-                        item.mime_type.as_deref(),
-                        item.mime_magic_checked,
-                    )
-                })
-                .map(|item| MetadataRoleCandidate {
-                    item_id: item.item_id,
-                    path: item.path.clone(),
-                    size_bytes: item.size_bytes,
-                    modified_secs: item.modified_secs,
-                    mime_type: item.mime_type.as_ref().map(|mime| mime.to_string()),
-                    mime_magic_checked: item.mime_magic_checked,
-                })
-                .collect(),
-        }
+    pub(crate) fn visible_metadata_role_candidates(&self) -> Vec<fika_core::MetadataRoleCandidate> {
+        metadata::visible_metadata_role_candidates(self)
     }
 
     pub(crate) fn assign_visible_item_slots(&mut self, slots: &mut VisibleItemSlotPool) {
@@ -519,15 +481,6 @@ impl RawFileGridSnapshot {
             }
         }
     }
-}
-
-fn metadata_role_update_needed(
-    is_dir: bool,
-    size_bytes: u64,
-    mime_type: Option<&str>,
-    mime_magic_checked: bool,
-) -> bool {
-    mime_magic_resolution_required(is_dir, size_bytes, mime_type, mime_magic_checked)
 }
 
 fn active_rename_draft_for_path<'a>(

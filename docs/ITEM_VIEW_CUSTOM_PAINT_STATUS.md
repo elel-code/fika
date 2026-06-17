@@ -43,6 +43,7 @@ DnD state helpers, but its renderer is still GPUI.
 - File-grid root API snapshot/props/viewport types: `src/ui/file_grid/types.rs`
 - Visible item snapshot/cache projection: `src/ui/file_grid/snapshot/visible.rs`
 - Thumbnail candidate and read-ahead projection: `src/ui/file_grid/snapshot/thumbnail.rs`
+- Metadata role candidate projection: `src/ui/file_grid/snapshot/metadata.rs`
 - Active item-drag hover routing: `install_active_item_drag_mouse_tracker` plus
   drag preview repaint fallback in `src/ui/file_grid/dnd.rs`
 - Runtime DnD debug channel: `FIKA_DEBUG_DND=1`, especially

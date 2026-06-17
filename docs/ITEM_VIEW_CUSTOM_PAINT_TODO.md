@@ -306,6 +306,9 @@ This is the active task board for the GPUI item view custom-paint migration.
 - [x] Extract thumbnail candidate and read-ahead projection into
   `src/ui/file_grid/snapshot/thumbnail.rs` so role scheduling decisions are
   separate from raw snapshot construction.
+- [x] Extract metadata role candidate projection into
+  `src/ui/file_grid/snapshot/metadata.rs` so MIME magic scheduling decisions
+  are separate from raw snapshot construction.
 - [x] Extract retained item/details paint slot state into
   `src/ui/file_grid/paint_slots.rs` so model-to-painter snapshot reuse is
   separate from the renderer construction code.
