@@ -226,6 +226,10 @@ This is the active task board for the GPUI item view custom-paint migration.
   preview repaint fallback: pane item drag over a pane directory logs
   `active-item-move via=preview ... kind=Some(Directory)` and visually
   highlights the directory before drop.
+- [x] Record the 2026-06-17 pane self-drag root cause and acceptance trace:
+  GPUI can stop delivering pane/item move callbacks after drag start, so the
+  retained `ActiveItemDrag` target must be ticked by preview repaint when
+  necessary.
 - [ ] Split `src/ui/file_grid.rs` along Dolphin-style model/projection,
   controller/hit-test, painter, and renderer-policy boundaries without changing
   behavior.

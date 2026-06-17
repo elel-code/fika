@@ -105,6 +105,13 @@ position and run the same retained hit test. A valid smoke log can show only
 `kind=Some(Directory)` before drop and the directory item highlights while the
 cursor is over it.
 
+The 2026-06-17 runtime trace confirmed this exact path: a pane self-drag first
+reported `kind=Some(Pane)`, then crossed a directory and reported
+`kind=Some(Directory) changed=true` through `via=preview` without requiring a
+per-item `on_drag_move`. That means the accepted architecture is retained
+hit-testing plus preview-driven ticking until GPUI exposes a public retained
+drag-start/move API that can replace the remaining shell boundary.
+
 ### R4: Evaluate Rename Boundary
 
 Keep the GPUI rename overlay while text editing remains a GPUI-owned platform

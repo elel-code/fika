@@ -91,6 +91,34 @@ Pane item self-drag root cause:
   drag preview during the active drag, so it can drive the same target update
   even when the underlying pane move event is absent.
 
+Verified pane self-drag trace from 2026-06-17:
+
+```text
+[fika dnd] item-start pane=1 path=/home/yk/.viminfo selected=true selection_count=1
+[fika dnd] active-item-move via=preview source_pane=1 target_pane=1 pos=(592.9,653.8) kind=Some(Pane) changed=true sources=/home/yk/.viminfo
+[fika dnd] active-item-move via=preview source_pane=1 target_pane=1 pos=(476.7,648.6) kind=Some(Pane) changed=false sources=/home/yk/.viminfo
+[fika dnd] active-item-move via=preview source_pane=1 target_pane=1 pos=(470.7,648.6) kind=Some(Directory) changed=true sources=/home/yk/.viminfo
+[fika dnd] active-item-move via=preview source_pane=1 target_pane=1 pos=(467.7,648.6) kind=Some(Directory) changed=false sources=/home/yk/.viminfo
+```
+
+This trace is the important distinction between the broken and fixed states.
+The drag start shell created the payload, but no pane/item element move callback
+was required after that. While the cursor was over blank pane space, the
+retained hit-test returned `kind=Some(Pane)`. As soon as the preview repaint
+queried the current mouse position over the directory bounds, the same retained
+hit-test returned `kind=Some(Directory)` with `changed=true`; later moves over
+the same directory correctly stayed `changed=false` because the active target
+was already installed.
+
+The earlier visible symptom, "directory highlights only at drop time", was
+therefore not caused by wrong directory geometry, wrong drop-target styling, or
+a failed final drop dispatch. The missing piece was a continuous hover clock for
+same-window pane item drags. Final drop still reached the pane drop handler, so
+the target could be computed at the end, but hover could not repaint while the
+cursor was moving. The accepted fix is to keep `ActiveItemDrag` as the single
+owner of pane item-drag hover state and let the drag preview repaint path drive
+the same retained hit-test when GPUI does not deliver pane-level move events.
+
 ## Rename
 
 For Compact and Icons:
