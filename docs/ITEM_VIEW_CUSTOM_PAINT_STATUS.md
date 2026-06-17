@@ -123,9 +123,10 @@ visible-widget exception to that async rule. Dolphin keeps full role resolution
 asynchronous, but `updateVisibleIcons()`/`initializeItemListWidget()` gives
 created visible items an `iconName`, and `pixmapForIcon()` synchronously obtains
 the themed pixmap through `QPixmapCache`. Fika mirrors this by resolving only
-visible generic MIME metadata and visible theme-icon paths within small frame
-budgets before queueing the remaining metadata/icon work. Read-ahead and
-offscreen items remain scheduler-owned.
+visible generic MIME metadata and visible theme-icon paths before queueing the
+remaining metadata/icon work. Visible icon path resolution uses Dolphin's
+`MaxBlockTimeout` budget of 200ms and still does not decode image resources in
+the render/prepaint path. Read-ahead and offscreen items remain scheduler-owned.
 
 Image-backed icon work follows the same visual stability rule. Thumbnail probe
 success and failure remain model roles, but the image paint layers now keep a

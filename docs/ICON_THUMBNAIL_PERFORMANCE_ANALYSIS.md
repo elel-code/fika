@@ -433,7 +433,7 @@ const SYNC_MIME_RESOLVE_TIMEOUT_MS: u64 = 50;      // 超时 50ms
 | metadata 批量 | `resolveNextPendingRoles()` 逐个 | `BATCH_SIZE = 1` | `BATCH_SIZE = 16` |
 | 缩略图缓存检查 | `KIO::PreviewJob` 框架管理 | `background_spawn` | 同步 `cached_thumbnail_for_path()` |
 | 已完成追踪 | `m_finishedItems` QSet | `ThumbnailScheduler.seen` | 相同 |
-| 超时保护 | 200ms `MaxBlockTimeout` | 无 | Fix 4 增加 50ms |
+| 超时保护 | 200ms `MaxBlockTimeout` | 200ms visible icon sync budget | 已对齐 Dolphin |
 | 图标查找 I/O | 框架级文件系统缓存 | 每图标多目录遍历 `fs::metadata()` | 不变（缓存命中率高） |
 
 ## 7. 推荐执行顺序

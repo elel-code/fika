@@ -83,16 +83,16 @@ use ui::drag_drop::{
     place_drop_target_matches_insert, place_drop_target_matches_place,
 };
 use ui::file_grid::{
-    CompactColumnWidthCache, ContentItemHit, DOLPHIN_ICON_SIZE_UPDATE_DELAY, DetailsTextShapeCache,
-    DetailsVisualPerfStats, ItemDrag, ItemImagePerfStats, ItemInteractionPerfStats,
-    ItemPaintSlotCache, ItemViewPerfFrameState, ItemViewPerfPhase, PaneIconRoleSizeState,
-    PaneLayoutProjection, PaneLayoutProjectionInput, PaneViewportGeometry, PaneVisibleWorkKey,
-    RawFileGridSnapshot, RawFileGridSnapshotInput, StaticItemTextShapeCache,
-    StaticItemVisualPerfStats, VisibleItemSlotPool, VisibleItemSnapshotCache,
-    classify_item_view_perf_phase, compact_text_width, compact_text_width_for_name,
-    content_item_hit_at_point, deferred_thumbnail_candidates_for_model,
-    model_indexes_intersecting_visual_rect, pane_layout_projection, raw_file_grid_snapshot,
-    rename_editor_required_text_width,
+    CompactColumnWidthCache, ContentItemHit, DOLPHIN_ICON_SIZE_UPDATE_DELAY,
+    DOLPHIN_VISIBLE_ICON_SYNC_BUDGET, DetailsTextShapeCache, DetailsVisualPerfStats, ItemDrag,
+    ItemImagePerfStats, ItemInteractionPerfStats, ItemPaintSlotCache, ItemViewPerfFrameState,
+    ItemViewPerfPhase, PaneIconRoleSizeState, PaneLayoutProjection, PaneLayoutProjectionInput,
+    PaneViewportGeometry, PaneVisibleWorkKey, RawFileGridSnapshot, RawFileGridSnapshotInput,
+    StaticItemTextShapeCache, StaticItemVisualPerfStats, VisibleItemSlotPool,
+    VisibleItemSnapshotCache, classify_item_view_perf_phase, compact_text_width,
+    compact_text_width_for_name, content_item_hit_at_point,
+    deferred_thumbnail_candidates_for_model, model_indexes_intersecting_visual_rect,
+    pane_layout_projection, raw_file_grid_snapshot, rename_editor_required_text_width,
 };
 use ui::filter_bar::{
     FILTER_BAR_HEIGHT, FilterBarSnapshot, FilteredModelCacheEntry, PaneFilterState,
@@ -211,7 +211,6 @@ const THUMBNAIL_PROBE_BATCH_SIZE: usize = 32;
 const METADATA_ROLE_BATCH_SIZE: usize = 16;
 const FILE_ICON_RESOLVE_BATCH_SIZE: usize = 64;
 const VISIBLE_METADATA_ROLE_SYNC_BUDGET: Duration = Duration::from_millis(12);
-const VISIBLE_FILE_ICON_SYNC_BUDGET: Duration = Duration::from_millis(16);
 const PANE_HORIZONTAL_BORDER_EXTENT: f32 = 2.0;
 
 const CONTEXT_SUBMENU_HIDE_DELAY: Duration = Duration::from_millis(300);
@@ -1156,7 +1155,7 @@ impl FikaApp {
                     pane_id,
                     &raw_file_grid,
                     icon_role_size,
-                    VISIBLE_FILE_ICON_SYNC_BUDGET,
+                    DOLPHIN_VISIBLE_ICON_SYNC_BUDGET,
                 );
                 let icon_sync_elapsed = icon_sync_started.map(|started| started.elapsed());
                 let visible_count = raw_file_grid

@@ -25,7 +25,9 @@ mod viewport;
 pub(crate) use details::DetailsLayoutMetrics;
 pub(crate) use details_visual::DetailsTextShapeCache;
 pub(crate) use dnd::ItemDrag;
-pub(crate) use icon_roles::{DOLPHIN_ICON_SIZE_UPDATE_DELAY, PaneIconRoleSizeState};
+pub(crate) use icon_roles::{
+    DOLPHIN_ICON_SIZE_UPDATE_DELAY, DOLPHIN_VISIBLE_ICON_SYNC_BUDGET, PaneIconRoleSizeState,
+};
 pub(crate) use layout::{
     CompactColumnWidthCache, ITEM_NAME_LINE_HEIGHT, compact_text_width,
     compact_text_width_for_name, rename_editor_required_text_width,

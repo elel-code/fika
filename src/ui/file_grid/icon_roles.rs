@@ -4,6 +4,7 @@ use std::time::Duration;
 use fika_core::PaneId;
 
 pub(crate) const DOLPHIN_ICON_SIZE_UPDATE_DELAY: Duration = Duration::from_millis(300);
+pub(crate) const DOLPHIN_VISIBLE_ICON_SYNC_BUDGET: Duration = Duration::from_millis(200);
 
 #[derive(Debug, Default)]
 pub(crate) struct PaneIconRoleSizeState {
