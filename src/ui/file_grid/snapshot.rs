@@ -19,6 +19,7 @@ pub(crate) use builder::raw_file_grid_snapshot;
 use fika_core::ViewMode;
 #[cfg(test)]
 use fika_core::{DirectoryModel, PaneId, SelectionState, ViewState};
+pub(crate) use range::PaneVisibleWorkKey;
 #[cfg(test)]
 use std::path::PathBuf;
 #[cfg(test)]

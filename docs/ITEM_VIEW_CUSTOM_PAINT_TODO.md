@@ -251,6 +251,8 @@ This is the active task board for the GPUI item view custom-paint migration.
 - [x] Move file-icon resolve candidate ordering into
   `src/ui/file_grid/snapshot/scheduler.rs` so visible/read-ahead role work is
   projected beside metadata and thumbnail scheduling instead of in `main.rs`.
+- [x] Move `PaneVisibleWorkKey` into `src/ui/file_grid/snapshot/range.rs` so
+  app-level work dedupe no longer owns raw visible/work range extraction.
 - [x] Move Compact/Icons layout option builders and Dolphin sizing constants
   into `src/ui/file_grid/layout.rs` so layout policy is no longer owned by the
   main renderer surface.

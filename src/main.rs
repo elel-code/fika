@@ -84,12 +84,12 @@ use ui::drag_drop::{
 use ui::file_grid::{
     CompactColumnWidthCache, ContentItemHit, DetailsTextShapeCache, DetailsVisualPerfStats,
     ItemDrag, ItemImagePerfStats, ItemInteractionPerfStats, ItemPaintSlotCache, ItemPaintSlotStats,
-    PaneLayoutProjection, PaneLayoutProjectionInput, PaneViewportGeometry, RawFileGridSnapshot,
-    RawFileGridSnapshotInput, StaticItemTextShapeCache, StaticItemVisualPerfStats,
-    VisibleItemSlotPool, VisibleItemSnapshotCache, compact_text_width, compact_text_width_for_name,
-    content_item_hit_at_point, deferred_thumbnail_candidates_for_model,
-    model_indexes_intersecting_visual_rect, pane_layout_projection, raw_file_grid_snapshot,
-    rename_editor_required_text_width,
+    PaneLayoutProjection, PaneLayoutProjectionInput, PaneViewportGeometry, PaneVisibleWorkKey,
+    RawFileGridSnapshot, RawFileGridSnapshotInput, StaticItemTextShapeCache,
+    StaticItemVisualPerfStats, VisibleItemSlotPool, VisibleItemSnapshotCache, compact_text_width,
+    compact_text_width_for_name, content_item_hit_at_point,
+    deferred_thumbnail_candidates_for_model, model_indexes_intersecting_visual_rect,
+    pane_layout_projection, raw_file_grid_snapshot, rename_editor_required_text_width,
 };
 use ui::filter_bar::{
     FILTER_BAR_HEIGHT, FilterBarSnapshot, FilteredModelCacheEntry, PaneFilterState,
@@ -362,43 +362,6 @@ async fn privileged_task_result_for_commands(
 }
 
 const RUBBER_BAND_START_DRAG_DISTANCE: f32 = 6.0;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct PaneVisibleWorkKey {
-    generation: Generation,
-    view_mode: ViewMode,
-    model_data_generation: u64,
-    source_revision: u64,
-    item_count: usize,
-    visible_start: usize,
-    visible_end: usize,
-    visible_count: usize,
-}
-
-impl PaneVisibleWorkKey {
-    fn new(
-        generation: Generation,
-        view_mode: ViewMode,
-        model_data_generation: u64,
-        source_revision: u64,
-        item_count: usize,
-        raw_file_grid: &RawFileGridSnapshot,
-    ) -> Self {
-        let (visible_range, visible_count) = raw_file_grid
-            .visible_work_range_and_count()
-            .unwrap_or((0..0, 0));
-        Self {
-            generation,
-            view_mode,
-            model_data_generation,
-            source_revision,
-            item_count,
-            visible_start: visible_range.start,
-            visible_end: visible_range.end,
-            visible_count,
-        }
-    }
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ItemViewPerfFrameState {
