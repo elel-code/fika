@@ -96,6 +96,8 @@ Fika equivalent:
 
 - `raw_file_grid_snapshot()` and `pane_layout_projection()` own model/layout
   projection.
+- `src/ui/file_grid/surface.rs` owns viewport/layer/shell assembly, not model
+  projection or painter internals.
 - `VisibleItemSlotPool` owns stable visual slot identity.
 - `VisibleItemSnapshotCache` owns stable per-item content.
 - custom-painted item visuals consume snapshots and paint quads/text/images.

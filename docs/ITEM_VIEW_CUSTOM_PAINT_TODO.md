@@ -229,6 +229,9 @@ This is the active task board for the GPUI item view custom-paint migration.
 - [ ] Split `src/ui/file_grid.rs` along Dolphin-style model/projection,
   controller/hit-test, painter, and renderer-policy boundaries without changing
   behavior.
+- [x] Extract root file-grid render surface composition into
+  `src/ui/file_grid/surface.rs` so `src/ui/file_grid.rs` is no longer the owner
+  of viewport/layer/shell assembly.
 - [x] Extract item-view painter perf counters into `src/ui/file_grid/perf.rs`
   so render instrumentation is no longer owned by the main file-grid surface.
 - [x] Move FikaApp item-view perf accessor/record methods into

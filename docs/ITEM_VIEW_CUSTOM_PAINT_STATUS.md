@@ -30,6 +30,7 @@ DnD state helpers, but its renderer is still GPUI.
 ## Evidence Anchors
 
 - Renderer policy code: `src/ui/file_grid/renderer_policy.rs`
+- Root file-grid render surface composition: `src/ui/file_grid/surface.rs`
 - Compact/Icons layout options and Dolphin sizing constants:
   `src/ui/file_grid/layout.rs`
 - Compact/Icons static visual painter: `src/ui/file_grid/static_visual.rs`
