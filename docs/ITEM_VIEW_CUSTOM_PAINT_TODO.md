@@ -443,21 +443,27 @@ by risk and evidence, not by how custom-painted a surface looks.
 
 - [x] P16a: Record the full-transition tracks in the planning, design, and TODO
   docs: evidence, painter, controller, shell boundary, Places, and ownership.
-- [ ] P16b: Collect a fresh desktop-session evidence set after the latest
+- [x] P16b: Collect a fresh desktop-session evidence set after the latest
   Dolphin-aligned theme-icon paint-bound change:
-  `FIKA_PERF_ITEM_VIEW=1 cargo run -- ~/Downloads`,
-  `FIKA_PERF_ITEM_VIEW=1 cargo run -- /etc`, and
-  `FIKA_DEBUG_DND=1 cargo run`.
-- [ ] P16c: Update `docs/ITEM_VIEW_RENDERER_DECISIONS.md` with that evidence,
+  `/etc` custom-theme vs default logs now prove default MIME/theme icons avoid
+  first-load `theme_placeholder` churn, and
+  `FIKA_PERF_ITEM_VIEW=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll target/debug/fika /etc`
+  captures unattended zoom/scroll evidence.
+- [x] P16c: Update `docs/ITEM_VIEW_RENDERER_DECISIONS.md` with that evidence,
   including whether `/etc` zoom/scroll still shows cold image-load jank or
-  visible placeholder-to-icon switching.
+  visible placeholder-to-icon switching. Current evidence: `icon_sync` max fell
+  from `28340us` to `173us` after visible sync stopped duplicating queued
+  read-ahead icon work; remaining `/etc` autosmoke cost is static visual
+  text/base paint, not MIME/theme image rendering.
 - [x] P16d: Add or extend runtime evidence tooling if the current logs cannot
   distinguish these cases: first-load theme-icon placeholder, retained
   same-`iconName` reuse, GPUI image-cache decode completion, and steady
   repaint cost. `[fika item-image]` now reports `theme_loaded`,
   `theme_decoded`, `theme_retained`, `theme_placeholder`, `thumb_loaded`,
   `thumb_decoded`, `thumb_retained`, and `thumb_fallback`; the runtime analyzer
-  summarizes them as `image_sources`.
+  summarizes them as `image_sources`. `FIKA_AUTOSMOKE_ITEM_VIEW` now exercises
+  zoom/scroll without manual input and adds `[fika autosmoke]` markers to the
+  same perf log.
 - [ ] P16e: Audit local GPUI source for a retained/custom-element drag-start
   path. If no public API exists, document the exact blocker and keep item and
   Details drag-start shells.
@@ -470,7 +476,10 @@ by risk and evidence, not by how custom-painted a surface looks.
   Done so far: the `FIKA_PERF_ITEM_VIEW` flag and file-grid perf-layer callers
   are owned by `src/ui/file_grid/perf.rs`; item-view perf frame classification
   and perf-state cleanup are owned by `src/ui/file_grid/perf.rs`; frame-state
-  storage and render summary emission still live in `src/main.rs`.
+  storage and render summary emission still live in `src/main.rs`. Next
+  concrete target: move the autosmoke scenario parsing/driver and item-view
+  perf summary emission behind file-grid/runtime evidence helpers so `main.rs`
+  no longer owns item-view diagnostic orchestration.
 - [ ] P16h: Draft a Places retained row painter design before changing Places
   rendering. The design must cover row groups, hidden sections, device rows,
   reorder/drop insertion, context menus, and sidebar scroll.
@@ -512,7 +521,7 @@ by risk and evidence, not by how custom-painted a surface looks.
   Keep this partial until full `cargo test` and runtime DnD smoke are both
   refreshed after each shell-removal or painter expansion slice.
 - [x] `cargo test` stays green.
-- [ ] Perf logs show resize steady path stays sub-millisecond for item snapshot
+- [~] Perf logs show resize steady path stays sub-millisecond for item snapshot
   conversion, no new large `file-grid build` regression, Compact/Icons custom
   visual cost is visible through `[fika static-item-visual]`, image paint cost
   is visible through `[fika item-image]` when image-backed icons/thumbnails are
@@ -523,7 +532,9 @@ by risk and evidence, not by how custom-painted a surface looks.
   `[fika details-visual]` and `[fika details-shape-cache]`. Scroll/zoom evidence
   should also show that
   cold theme-icon work no longer appears as a synchronous render conversion
-  spike after the first frame has switched to preliminary icons.
+  spike after the first frame has switched to preliminary icons. Current
+  `/etc` autosmoke satisfies the Compact/Icons zoom-scroll icon-sync part;
+  Details and full DnD runtime smoke still need a desktop-session refresh.
 - [x] Cold mode switch cost is tracked separately from resize cost: `[fika
   item-view]` now includes `phase=initial|mode-switch|content-change|
   geometry-change|visual-change|steady`, with unit coverage proving mode

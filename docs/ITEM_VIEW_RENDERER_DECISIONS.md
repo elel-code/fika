@@ -126,6 +126,37 @@ icon work should still be absorbed by preliminary icon snapshots and a
 background resolve queue, not by synchronous theme path lookup during
 conversion.
 
+### 2026-06-17 `/etc` Zoom/Scroll Autosmoke
+
+The first `FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll` run exposed the remaining
+`/etc` scroll hitch after MIME/theme icons moved back to GPUI `img()` elements:
+the second `scroll-forward` frame logged
+`phase=geometry-change visible=64 icon_sync=28340us total=29451us`. This was
+not image decode or custom image painting; `image_frames=0` and
+`theme_placeholder=0`. The spike came from visible theme-icon path resolution
+duplicating work that had already been queued for the background read-ahead
+resolver.
+
+After changing visible icon sync to skip requests already queued or pending in
+`FileIconResolveQueue`, the same autosmoke command logged
+`icon_sync=173us` max and `geometry-change max_total=1635us`. This preserves
+the Dolphin-style visible-first exception for unqueued work, while keeping
+read-ahead icon theme scans on the role/update side instead of redoing them in
+the scroll frame.
+
+Current `/etc` autosmoke summary to compare against future regressions:
+
+```text
+item_view_stage_max: raw=602us icon_sync=173us queue=336us convert=426us
+phase geometry-change frames=5 max_total=1635us max_visible=64
+renderer_policy_frames: max_image_layer=0 max_gpui_image_element=64
+```
+
+Remaining visible cost in that log is static text/background painting:
+`static_visual max_prepaint=5794us`, `max_paint=12043us`, with shape cache
+misses only when new items enter the retained visible set. Treat future work
+there as static visual painter/cache work, not MIME/theme icon renderer work.
+
 For paint-layer investigations, compare `[fika static-item-visual]` and
 `[fika item-image]` prepaint counts against visible item counts, not raw
 read-ahead work counts. Read-ahead belongs to scheduler projection and retained

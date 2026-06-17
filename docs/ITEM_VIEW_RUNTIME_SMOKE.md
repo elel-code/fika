@@ -193,6 +193,20 @@ actions through the same app-side controller methods used by keyboard and
 wheel input. This does not replace visual review for final UX, but it prevents
 zoom/scroll perf regressions from depending on manual event timing.
 
+For `/etc`, the current baseline after skipping queued/pending icon resolve
+work in visible sync is:
+
+```text
+item_view_stage_max: raw=602us icon_sync=173us queue=336us convert=426us
+phase geometry-change frames=5 max_total=1635us max_visible=64
+```
+
+If `icon_sync` returns to multi-millisecond or tens-of-milliseconds values
+during scroll, inspect `FileIconResolveQueue` and read-ahead scheduling before
+changing MIME/theme icon rendering. If `static_visual max_prepaint` or
+`max_paint` dominates while `icon_sync` stays low, the next issue is text/base
+visual paint caching rather than theme-icon lookup.
+
 For MIME/theme-icon image renderer A/B, repeat the same `~/Downloads` and
 `/etc` runs with `FIKA_CUSTOM_THEME_ICONS=1`. The default run keeps retained
 item snapshots and controller routing while rendering MIME/theme icons through
