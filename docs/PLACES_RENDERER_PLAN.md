@@ -74,6 +74,10 @@ retained Places row surface with the same separations as file-grid:
   coordinates into retained row/section hits. Row hits reuse the same
   edge/body `PlaceDropZone` rule as the current GPUI row DnD handlers, so the
   later retained hitbox layer can preserve insertion and on-place semantics.
+- `src/ui/places/autosmoke.rs`: own retained hit-test autosmoke reporting and
+  sample expectations. `src/main.rs` only supplies the current `PlaceSnapshot`
+  projection, so runtime evidence stays beside the Places interaction model
+  instead of becoming another app-root geometry owner.
 
 Panel layout belongs beside the Places view/controller boundary, not inside the
 row painter. The Places panel has state for visibility and width; the sidebar
@@ -298,6 +302,10 @@ delivery moves out of GPUI shells.
   places_hit_test_autosmoke start=1 complete=1 row_before=1 row_body=1 row_after=1 section=1 summary=1 max_rows=11 max_sections=2
   places_interaction_geometry_frames=10 max_rows=11 max_sections=2 max_entries=13 max_content_height=378.0 max_hit_tests=2 max_project=15us
   max_row_gpui=0 max_row_visual_layer=11
+/tmp/fika-places-hit-test-autosmoke-module.log:
+  places_hit_test_autosmoke start=1 complete=1 row_before=1 row_body=1 row_after=1 section=1 summary=1 max_rows=11 max_sections=2
+  places_interaction_geometry_frames=11 max_rows=11 max_sections=2 max_entries=13 max_content_height=378.0 max_hit_tests=2 max_project=4us
+  max_row_gpui=11 max_row_visual_layer=0
 ```
 
 ## Overflow Autosmoke

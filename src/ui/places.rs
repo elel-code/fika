@@ -14,10 +14,11 @@ mod user;
 mod visibility;
 mod visual;
 
-pub(crate) use autosmoke::{PlacesAutosmokeAction, PlacesAutosmokeScenario};
+pub(crate) use autosmoke::{
+    PlacesAutosmokeAction, PlacesAutosmokeScenario, emit_places_retained_hit_test_autosmoke,
+};
 pub(crate) use devices::replace_removable_device_places;
 pub(crate) use drag::PlaceDrag;
-pub(crate) use interaction::places_interaction_geometry;
 #[cfg(test)]
 pub(crate) use model::{
     DEVICES_GROUP, NETWORK_GROUP, REMOVABLE_DEVICES_GROUP, active_place_index,

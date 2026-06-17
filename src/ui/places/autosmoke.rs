@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use crate::ui::icons::FileIconSnapshot;
 
+use super::interaction::places_interaction_geometry;
 use super::snapshot::PlaceSnapshot;
 
 const AUTOSMOKE_PLACES_ENV: &str = "FIKA_AUTOSMOKE_PLACES";
@@ -32,6 +33,30 @@ pub(crate) enum PlacesAutosmokeAction {
     RestoreLayout { label: &'static str },
     VerifyLayoutSettings { label: &'static str },
     HitTest { label: &'static str },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct PlacesHitTestAutosmokeReport {
+    rows: usize,
+    sections: usize,
+    samples: Vec<PlacesHitTestAutosmokeSample>,
+}
+
+impl PlacesHitTestAutosmokeReport {
+    fn ok(&self) -> bool {
+        self.samples.iter().all(|sample| sample.ok)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct PlacesHitTestAutosmokeSample {
+    sample: &'static str,
+    y: f32,
+    kind: &'static str,
+    zone: &'static str,
+    visible_index: Option<usize>,
+    insert_index: Option<usize>,
+    ok: bool,
 }
 
 impl PlacesAutosmokeScenario {
@@ -174,6 +199,111 @@ fn append_overflow_test_places(snapshots: &mut Vec<PlaceSnapshot>) {
     }
 }
 
+pub(crate) fn emit_places_retained_hit_test_autosmoke(
+    label: &'static str,
+    snapshots: &[PlaceSnapshot],
+) {
+    let report = retained_hit_test_autosmoke_report(snapshots);
+    for sample in &report.samples {
+        eprintln!(
+            "[fika autosmoke] places hit-test label={} sample={} y={:.1} kind={} zone={} visible_index={} insert_index={} ok={}",
+            label,
+            sample.sample,
+            sample.y,
+            sample.kind,
+            sample.zone,
+            sample
+                .visible_index
+                .map(|index| index.to_string())
+                .unwrap_or_else(|| "<none>".to_string()),
+            sample
+                .insert_index
+                .map(|index| index.to_string())
+                .unwrap_or_else(|| "<none>".to_string()),
+            sample.ok
+        );
+    }
+    eprintln!(
+        "[fika autosmoke] places hit-test-summary label={} rows={} sections={} ok={}",
+        label,
+        report.rows,
+        report.sections,
+        report.ok()
+    );
+}
+
+fn retained_hit_test_autosmoke_report(snapshots: &[PlaceSnapshot]) -> PlacesHitTestAutosmokeReport {
+    let geometry = places_interaction_geometry(snapshots);
+    let mut samples = Vec::new();
+
+    if let Some(row) = geometry.rows().first() {
+        samples.push(retained_hit_test_autosmoke_sample(
+            "row-before",
+            row.y + 1.0,
+            "Row",
+            "InsertBefore",
+            &geometry,
+        ));
+        samples.push(retained_hit_test_autosmoke_sample(
+            "row-body",
+            row.y + row.height / 2.0,
+            "Row",
+            "OnPlace",
+            &geometry,
+        ));
+        samples.push(retained_hit_test_autosmoke_sample(
+            "row-after",
+            row.y + row.height - 1.0,
+            "Row",
+            "InsertAfter",
+            &geometry,
+        ));
+    }
+    if let Some(section) = geometry.sections().first() {
+        samples.push(retained_hit_test_autosmoke_sample(
+            "section",
+            section.y + 1.0,
+            "Section",
+            "Section",
+            &geometry,
+        ));
+    }
+
+    PlacesHitTestAutosmokeReport {
+        rows: geometry.rows().len(),
+        sections: geometry.sections().len(),
+        samples,
+    }
+}
+
+fn retained_hit_test_autosmoke_sample(
+    sample: &'static str,
+    y: f32,
+    expected_kind: &'static str,
+    expected_zone: &'static str,
+    geometry: &super::interaction::PlacesInteractionGeometry,
+) -> PlacesHitTestAutosmokeSample {
+    let hit = geometry.hit_test_y(y);
+    let (kind, zone, visible_index, insert_index) = match hit {
+        Some(hit) => (
+            hit.kind(),
+            hit.drop_zone(),
+            hit.visible_index(),
+            Some(hit.insert_index()),
+        ),
+        None => ("<none>", "<none>", None, None),
+    };
+    PlacesHitTestAutosmokeSample {
+        sample,
+        y,
+        kind,
+        zone,
+        visible_index,
+        insert_index,
+        ok: kind == expected_kind && zone == expected_zone,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -311,5 +441,69 @@ mod tests {
                 label: "retained-hit-test"
             }
         ));
+    }
+
+    #[test]
+    fn retained_hit_test_autosmoke_report_covers_row_edges_body_and_section() {
+        let report = retained_hit_test_autosmoke_report(&[
+            test_place(0, "", "Home", "/home/yk"),
+            test_place(1, "Devices", "Root", "/"),
+        ]);
+
+        assert_eq!(report.rows, 2);
+        assert_eq!(report.sections, 1);
+        assert!(report.ok());
+        assert_eq!(
+            report
+                .samples
+                .iter()
+                .map(|sample| (
+                    sample.sample,
+                    sample.kind,
+                    sample.zone,
+                    sample.visible_index
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                ("row-before", "Row", "InsertBefore", Some(0)),
+                ("row-body", "Row", "OnPlace", Some(0)),
+                ("row-after", "Row", "InsertAfter", Some(0)),
+                ("section", "Section", "Section", None),
+            ]
+        );
+        assert_eq!(report.samples[0].insert_index, Some(0));
+        assert_eq!(report.samples[1].insert_index, Some(1));
+        assert_eq!(report.samples[2].insert_index, Some(1));
+        assert_eq!(report.samples[3].insert_index, Some(1));
+    }
+
+    fn test_place(index: usize, group: &'static str, label: &str, path: &str) -> PlaceSnapshot {
+        PlaceSnapshot {
+            index,
+            group,
+            icon: FileIconSnapshot {
+                icon_name: "folder".into(),
+                path: None,
+                fallback_marker: "F".into(),
+                fallback_fg: 0x1f4fbf,
+                fallback_bg: 0xeaf1ff,
+            },
+            label: label.to_string(),
+            path: PathBuf::from(path),
+            device_id: None,
+            mounted: true,
+            device: false,
+            network: false,
+            device_ejectable: false,
+            device_can_power_off: false,
+            active: false,
+            drop_target: false,
+            insert_before: false,
+            insert_after: false,
+            trash_place: false,
+            trash_has_items: false,
+            editable: true,
+            removable: true,
+        }
     }
 }

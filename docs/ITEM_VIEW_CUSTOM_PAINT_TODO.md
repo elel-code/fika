@@ -685,6 +685,14 @@ by risk and evidence, not by how custom-painted a surface looks.
   preserves the last sidebar width. Pane viewport remeasurement remains covered
   by the layout autosmoke; `/tmp/fika-places-f9-layout.log` passed
   `--require-layout-autosmoke --expect-current-gpui-policy`.
+- [x] P16ae: Move retained Places hit-test autosmoke report ownership out of
+  `src/main.rs` and into `src/ui/places/autosmoke.rs`. The app root now only
+  supplies the projected `PlaceSnapshot` list; Places owns retained row/section
+  sampling, expected edge/body zones, summary calculation, and module-level
+  tests. This keeps runtime evidence collection aligned with the Places
+  model/controller boundary before row/section event delivery leaves GPUI
+  shells. Evidence: `/tmp/fika-places-hit-test-autosmoke-module.log` passed
+  `--require-hit-test-autosmoke --expect-current-gpui-policy`.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,
