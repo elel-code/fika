@@ -251,6 +251,9 @@ This is the active task board for the GPUI item view custom-paint migration.
   `src/ui/file_grid/viewport.rs`, keeping scroll, retained hit testing,
   rubber-band selection, and viewport-level DnD handlers outside the main
   painter/render surface.
+- [x] Extract retained item/details paint slot state into
+  `src/ui/file_grid/paint_slots.rs` so model-to-painter snapshot reuse is
+  separate from the renderer construction code.
 - [ ] Keep remaining drag-start shells until public GPUI custom-element
   drag-start support exists or an audited GPUI patch is carried.
 - [ ] Keep rename on the GPUI overlay until custom text editing has behavior
