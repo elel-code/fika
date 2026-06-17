@@ -44,16 +44,15 @@ pub(crate) use static_visual::StaticItemTextShapeCache;
 
 use crate::FikaApp;
 use fika_core::{
-    CompactLayout, CompactLayoutOptions, IconsLayout, IconsLayoutOptions, ItemId, ItemLayout,
-    PaneId, ViewRect, ViewState,
+    CompactLayout, CompactLayoutOptions, IconsLayout, IconsLayoutOptions, ItemId, PaneId, ViewRect,
+    ViewState,
 };
 use gpui::prelude::*;
 use gpui::{
-    Context, Div, IntoElement, ParentElement, Rgba, ScrollHandle, SharedString, Stateful,
-    WeakEntity, Window, div, img, px, retain_all, rgb, rgba,
+    Context, Div, ParentElement, Rgba, ScrollHandle, SharedString, Stateful, WeakEntity, Window,
+    div, px, retain_all, rgb, rgba,
 };
 
-use super::icons::FileIconSnapshot;
 use super::item_view::item_view_scrollbar_container;
 #[cfg(test)]
 use controller::item_mouse_down_opens_directory;
@@ -85,18 +84,18 @@ use interaction::{details_interaction_layer_view, item_interaction_layer_view};
 #[cfg(test)]
 use paint_slots::DetailsPaintContent;
 use paint_slots::ItemPaintContent;
-use rename_overlay::{display_text_layout, rename_text_view};
+use rename_overlay::rename_text_view;
 #[cfg(test)]
-use rename_overlay::{normalized_text_range, rename_text_layout};
+use rename_overlay::{display_text_layout, normalized_text_range, rename_text_layout};
 use renderer_policy::{
-    DetailsRowDragStartRenderer, ItemBaseVisualRenderer, ItemDragStartRenderer,
-    ItemInteractionRenderer, ItemRenameEditorRenderer, details_renderer_policy_stats,
-    details_row_renderer_policy, item_renderer_policy, item_renderer_policy_stats,
+    DetailsRowDragStartRenderer, ItemDragStartRenderer, ItemInteractionRenderer,
+    ItemRenameEditorRenderer, details_renderer_policy_stats, details_row_renderer_policy,
+    item_renderer_policy, item_renderer_policy_stats,
 };
 #[cfg(test)]
 use renderer_policy::{
     DetailsRowInteractionRenderer, DetailsRowRendererPolicy, DetailsRowVisualRenderer,
-    ItemImageRenderer, ItemRendererPolicy, RendererPolicyStats,
+    ItemBaseVisualRenderer, ItemImageRenderer, ItemRendererPolicy, RendererPolicyStats,
 };
 use static_visual::static_item_visual_layer_view;
 #[cfg(test)]
@@ -188,10 +187,6 @@ pub(crate) struct PaneViewportGeometry {
 
 fn item_identity_element_id(prefix: &'static str, item_id: ItemId) -> (&'static str, u64) {
     (prefix, item_id.0)
-}
-
-fn item_image_element_id(slot_id: u64) -> (&'static str, u64) {
-    ("item-image", slot_id)
 }
 
 pub(crate) const ITEM_NAME_LINE_HEIGHT: f32 = 18.0;
@@ -729,13 +724,7 @@ fn item_tile(
     let item_id = item.item_id;
     let content = item.content.as_ref();
     let selected = item.visual.selected;
-    let hovered = item.visual.hovered;
-    let drop_target = item.visual.drop_target;
     let renderer_policy = item_renderer_policy(content);
-    let use_layer_visual_paint = matches!(
-        renderer_policy.base_visual,
-        ItemBaseVisualRenderer::ContentLayer
-    );
     let use_layer_interaction = matches!(
         renderer_policy.interaction,
         ItemInteractionRenderer::RetainedLayer
@@ -743,11 +732,6 @@ fn item_tile(
     let drag_app = app.clone();
     let drag_value = item_drag_from_item_snapshot(pane_id, &item);
     let directory_drop_target = content.is_dir.then(|| content.drag_path.clone());
-    let shell_background = if use_layer_visual_paint {
-        rgba(0x00000000)
-    } else {
-        item_tile_background(selected, drop_target, hovered)
-    };
 
     // Temporary migration boundary: GPUI drag starts are still tied to a Div
     // until a public custom-element drag-start API exists.
@@ -759,7 +743,7 @@ fn item_tile(
         .w(px(visual.width))
         .h(px(visual.height))
         .rounded_md()
-        .bg(shell_background);
+        .bg(rgba(0x00000000));
     let core = match directory_drop_target {
         Some(target_dir) => install_directory_drop_target_shell(core, pane_id, target_dir, cx),
         None => core,
@@ -783,22 +767,6 @@ fn item_tile(
                     cx.notify();
                 }
             }))
-    };
-    let core = if !use_layer_visual_paint {
-        let text = {
-            static_text_view(
-                content.display_name.clone(),
-                &content.icon_name_lines,
-                item.layout,
-                text_alignment,
-                selected,
-            )
-            .into_any_element()
-        };
-        core.child(icon_view(item.slot_id, content, item.layout))
-            .child(text)
-    } else {
-        core
     };
     let core = match renderer_policy.rename_editor {
         ItemRenameEditorRenderer::None => core,
@@ -832,7 +800,7 @@ fn item_tile(
         .child(core)
 }
 
-fn item_tile_background(selected: bool, drop_target: bool, hovered: bool) -> Rgba {
+pub(super) fn item_tile_background(selected: bool, drop_target: bool, hovered: bool) -> Rgba {
     if drop_target {
         drop_target_item_background()
     } else if selected && hovered {
@@ -850,149 +818,6 @@ fn drop_target_item_background() -> Rgba {
     rgba(0xf59e0b4a)
 }
 
-fn icon_view(slot_id: u64, content: &ItemPaintContent, layout: ItemLayout) -> Div {
-    let visual = layout.visual_rect;
-    let icon = layout.icon_rect;
-    let icon_left = (icon.x - visual.x).round();
-    let icon_top = (icon.y - visual.y).round();
-    let icon_width = icon.width.round().max(1.0);
-    let icon_height = icon.height.round().max(1.0);
-    let thumbnail_path = content.thumbnail_path.clone();
-    let icon_snapshot = content.icon.clone();
-    let fallback_marker = content.fallback_marker.clone();
-    let icon_container = div()
-        .absolute()
-        .left(px(icon_left))
-        .top(px(icon_top))
-        .w(px(icon_width))
-        .h(px(icon_height))
-        .flex()
-        .items_center()
-        .justify_center();
-
-    match thumbnail_path {
-        Some(path) => icon_container.child(
-            div()
-                .size_full()
-                .rounded_md()
-                .overflow_hidden()
-                .child(img(path).id(item_image_element_id(slot_id)).size_full()),
-        ),
-        None => icon_container.child(item_image_or_fallback(
-            slot_id,
-            icon_snapshot,
-            fallback_marker,
-        )),
-    }
-}
-
-fn item_image_or_fallback(
-    slot_id: u64,
-    icon: FileIconSnapshot,
-    fallback_marker: SharedString,
-) -> gpui::AnyElement {
-    match icon.path.clone() {
-        Some(path) => img(path)
-            .id(item_image_element_id(slot_id))
-            .size_full()
-            .with_fallback({
-                let fallback_fg = icon.fallback_fg;
-                let fallback_bg = icon.fallback_bg;
-                move || fallback_icon_element(fallback_marker.clone(), fallback_fg, fallback_bg)
-            })
-            .into_any_element(),
-        None => fallback_icon_element(fallback_marker, icon.fallback_fg, icon.fallback_bg),
-    }
-}
-
-fn fallback_icon_element(marker: SharedString, fg: u32, bg: u32) -> gpui::AnyElement {
-    div()
-        .size_full()
-        .rounded_md()
-        .flex()
-        .items_center()
-        .justify_center()
-        .text_xs()
-        .font_weight(gpui::FontWeight::SEMIBOLD)
-        .text_color(rgb(fg))
-        .bg(rgb(bg))
-        .child(marker)
-        .into_any_element()
-}
-
-fn static_text_view(
-    display_name: SharedString,
-    icon_name_lines: &[SharedString],
-    layout: ItemLayout,
-    text_alignment: ItemTileTextAlignment,
-    selected: bool,
-) -> Div {
-    let visual = layout.visual_rect;
-    let text = layout.text_rect;
-    let text_left = text.x - visual.x;
-    let text_top = text.y - visual.y;
-    let text_color = if selected {
-        rgb(0x0f172a)
-    } else {
-        rgb(0x24292f)
-    };
-
-    match text_alignment {
-        ItemTileTextAlignment::Start => {
-            let name_height = display_text_layout(
-                display_name.as_ref(),
-                text.width,
-                text.height,
-                text_alignment,
-            )
-            .name_height;
-            let centered_top = text_top + ((text.height - name_height).max(0.0) * 0.5);
-            div()
-                .absolute()
-                .left(px(text_left))
-                .top(px(centered_top))
-                .w(px(text.width))
-                .h(px(name_height))
-                .min_w_0()
-                .overflow_hidden()
-                .text_sm()
-                .line_height(px(ITEM_NAME_LINE_HEIGHT))
-                .text_color(text_color)
-                .whitespace_normal()
-                .child(display_name)
-        }
-        ItemTileTextAlignment::Center => {
-            let max_lines = (text.height / ITEM_NAME_LINE_HEIGHT).round().max(1.0) as usize;
-            let label = div()
-                .absolute()
-                .left(px(text_left))
-                .top(px(text_top))
-                .w(px(text.width))
-                .h(px(text.height))
-                .min_w_0()
-                .overflow_hidden()
-                .flex()
-                .flex_col()
-                .items_center()
-                .justify_center()
-                .text_sm()
-                .line_height(px(ITEM_NAME_LINE_HEIGHT))
-                .text_center()
-                .whitespace_nowrap()
-                .text_color(text_color);
-
-            if icon_name_lines.is_empty() {
-                label.child(display_name)
-            } else {
-                icon_name_lines
-                    .iter()
-                    .take(max_lines)
-                    .fold(label, |label, line| label.child(line.clone()))
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
@@ -1006,13 +831,12 @@ mod tests {
         details_interaction_layer_items, details_renderer_policy_stats,
         details_row_renderer_policy, details_visual_layer_element_id, details_visual_layer_items,
         display_text_layout, drag_preview_label, item_drag_from_details_snapshot,
-        item_identity_element_id, item_image_element_id, item_image_layer_item_source_path,
-        item_image_layer_items, item_image_load_failure_paints_fallback,
-        item_image_paint_layer_element_id, item_interaction_hitbox_bounds,
-        item_interaction_layer_element_id, item_interaction_layer_items,
-        item_mouse_down_opens_directory, item_renderer_policy, item_renderer_policy_stats,
-        measured_viewport_for_scrollbar_axis, normalized_text_range, rename_text_layout,
-        static_item_visual_layer_element_id, static_item_visual_layer_items,
+        item_identity_element_id, item_image_layer_item_source_path, item_image_layer_items,
+        item_image_load_failure_paints_fallback, item_image_paint_layer_element_id,
+        item_interaction_hitbox_bounds, item_interaction_layer_element_id,
+        item_interaction_layer_items, item_mouse_down_opens_directory, item_renderer_policy,
+        item_renderer_policy_stats, measured_viewport_for_scrollbar_axis, normalized_text_range,
+        rename_text_layout, static_item_visual_layer_element_id, static_item_visual_layer_items,
         viewport_bounds_update_requires_notify,
     };
     use crate::ui::drag_drop::drag_preview_content_origin_for_cursor_offset;
@@ -1059,12 +883,6 @@ mod tests {
             item_identity_element_id("item-core", ItemId(7)),
             item_identity_element_id("item-core", ItemId(8))
         );
-    }
-
-    #[test]
-    fn item_image_id_is_keyed_by_visual_slot_for_retained_image_cache() {
-        assert_eq!(item_image_element_id(4), ("item-image", 4));
-        assert_ne!(item_image_element_id(4), item_image_element_id(5));
     }
 
     #[test]

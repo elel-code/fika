@@ -211,6 +211,7 @@ fn estimated_name_char_width(ch: char) -> f32 {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn item_name_text_height_for_name(name: &str, available_text_width: f32) -> f32 {
     wrapped_item_name_line_count(name, available_text_width) as f32 * super::ITEM_NAME_LINE_HEIGHT
 }
@@ -321,6 +322,7 @@ fn dolphin_wrap_opportunity_after(ch: char) -> bool {
     ch.is_ascii_punctuation()
 }
 
+#[cfg(test)]
 fn wrapped_item_name_line_count(name: &str, available_text_width: f32) -> usize {
     wrapped_item_name_line_ranges(name, available_text_width).len()
 }

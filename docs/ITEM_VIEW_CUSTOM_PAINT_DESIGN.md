@@ -142,8 +142,6 @@ Paint layer may use:
 - `Window::paint_quad`
 - `WindowTextSystem::shape_line`
 - `ShapedLine::paint`
-- retained GPUI `img()` elements for thumbnail/theme-icon slots while GPUI owns
-  path loading and decode cache
 - `Window::paint_image` with GPUI `RenderImage` values loaded by a pane-local
   `RetainAllImageCache`
 
@@ -204,6 +202,10 @@ Rename items keep the existing editor subtree. Before Phase 8, thumbnail and
 theme-icon items used slot-stable retained `img()` elements under a pane-local
 image cache; Phase 8 moves non-renaming Compact/Icons images behind the custom
 paint layer.
+
+Current Compact/Icons item shells no longer contain per-item GPUI `img()` or
+static text visual children. They are transparent drag-start/rename boundaries;
+base visuals and images are owned by content-level custom paint layers.
 
 ## Migration Phases
 
@@ -482,8 +484,9 @@ row-local handlers.
 The remaining item-local surfaces are intentional:
 
 - Compact/Icons non-renaming item shells: GPUI `Div::on_drag` drag-start
-  boundary only. Their visuals, images, hover/cursor, click/menu/drop hit
-  testing, and drag-over state are retained/painter driven.
+  boundary only. They do not carry GPUI `img()` or static text visual children.
+  Their visuals, images, hover/cursor, click/menu/drop hit testing, and
+  drag-over state are retained/painter driven.
 - Details row shells: GPUI `Div::on_drag` drag-start boundary only. Row visuals,
   drop dispatch, and row hover/click/menu/navigation are retained/painter or
   viewport driven.
@@ -512,7 +515,8 @@ architecture.
 - Do not rewrite Details mode in the first static paint slice.
 - Do not reimplement image decode/cache ownership while GPUI's public
   `RetainAllImageCache` and `ImageAssetLoader` remain sufficient.
-- Do not remove remaining `img()` paths for rename/Details before their
-  interaction and paint boundaries are migrated.
+- Do not reintroduce Compact/Icons item-local `img()` or static text children
+  unless a measured GPUI baseline proves that path is better than the retained
+  content-level painter.
 - Do not introduce a new app-wide ECS or scene graph.
 - Do not move file-manager decisions into GPUI paint code.

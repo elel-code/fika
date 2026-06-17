@@ -5,7 +5,9 @@ use gpui::{Context, Div, MouseButton, Rgba, SharedString, div, px, rgb};
 use crate::FikaApp;
 use crate::ui::rename::RENAME_TEXT_INSET_X;
 
-use super::{ITEM_NAME_LINE_HEIGHT, ItemTileTextAlignment, layout};
+#[cfg(test)]
+use super::layout;
+use super::{ITEM_NAME_LINE_HEIGHT, ItemTileTextAlignment};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct RenameTextLayout {
@@ -226,6 +228,7 @@ pub(super) fn rename_text_layout(text_height: f32, show_helper: bool) -> RenameT
     }
 }
 
+#[cfg(test)]
 pub(super) fn display_text_layout(
     display_name: &str,
     text_width: f32,

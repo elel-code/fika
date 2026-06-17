@@ -255,6 +255,10 @@ This is the active task board for the GPUI item view custom-paint migration.
   `src/ui/file_grid/rename_overlay.rs` so caret placement, UTF-8 selection
   clamping, helper text, and editor positioning are separate from the main
   file-grid renderer surface while remaining on GPUI.
+- [x] Remove the obsolete Compact/Icons item-local GPUI `img()` and static text
+  visual fallback branch from `src/ui/file_grid.rs`; item shells are now
+  transparent drag-start/rename boundaries while visuals and images come from
+  retained content-level painters.
 - [x] Centralize GPUI item/details drag-start shell installation in
   `src/ui/file_grid/dnd.rs` while keeping the shell as the current platform
   boundary.
