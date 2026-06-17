@@ -122,14 +122,17 @@ file roles inside the painter:
 - when icon resolve results arrive, visible item snapshot caches are invalidated
   so the next frame can replace preliminary icons with resolved theme images.
 - thumbnail role success/failure remains model-driven, but the image paint layer
-  paints a fallback while a thumbnail or theme-icon image is pending or fails to
-  load. This avoids blank zoom frames without moving thumbnail decisions into
-  the painter.
+  paints a fallback while a thumbnail image is pending or fails to load. Theme
+  icon cold miss is different: after the theme path is already known, the image
+  layer synchronously creates the small `RenderImage`, matching Dolphin
+  `pixmapForIcon()` and avoiding a normal placeholder frame.
 
 This means scroll and zoom frames must never synchronously perform theme icon
-lookup, MIME magic reads, thumbnail probing, or filesystem I/O. They may only
+path lookup, MIME magic reads, thumbnail probing, or large image work. They may
 consume already projected model roles, cached images, retained shape data, and
-preliminary visual fallbacks.
+preliminary visual fallbacks. The only allowed synchronous I/O/decode exception
+is a Dolphin-aligned theme icon cold miss after `FileIconCache` has already
+resolved the icon path.
 
 ## Architecture Boundary
 
@@ -396,10 +399,13 @@ Replace the content-level thumbnail/theme-icon `img()` layer with a custom paint
 element:
 
 - keep using GPUI's `ImageAssetLoader` and pane-local `RetainAllImageCache` for
-  path loading, SVG rendering, image decode, and render-image lifetime
+  thumbnail path loading, image decode, and render-image lifetime
+- for theme icons, mirror Dolphin `pixmapForIcon()` by synchronously creating a
+  small `RenderImage` from the already-resolved theme icon path; retain by
+  `iconName` so zoom can reuse the previous icon while a new size path is used
 - draw loaded images from the custom layer with `Window::paint_image`
-- keep thumbnail fallback marker painting in the image layer; theme icons with
-  no retained decoded image use a neutral markerless placeholder while waiting
+- keep thumbnail fallback marker painting in the image layer; theme icons use a
+  neutral markerless placeholder only if synchronous loading fails
 - keep thumbnail failures model-driven; a missing thumbnail render image does not
   synthesize a file icon in paint
 
@@ -407,7 +413,9 @@ Acceptance:
 
 - non-renaming thumbnail/theme-icon items no longer allocate per-image `img()`
   elements
-- image loads still happen asynchronously and notify the pane on completion
+- thumbnail image loads still happen asynchronously and notify the pane on
+  completion
+- theme icon cold miss does not produce a normal placeholder frame
 - loaded image bounds match GPUI `ObjectFit::Contain`
 - image cache state remains pane-local and is released with the pane/layer
 
@@ -548,8 +556,9 @@ architecture.
 ## Non-goals
 
 - Do not rewrite Details mode in the first static paint slice.
-- Do not reimplement image decode/cache ownership while GPUI's public
-  `RetainAllImageCache` and `ImageAssetLoader` remain sufficient.
+- Do not reimplement thumbnail decode/cache ownership while GPUI's public
+  `RetainAllImageCache` and `ImageAssetLoader` remain sufficient. Theme icon
+  synchronous small-image creation is the Dolphin-aligned exception.
 - Do not reintroduce Compact/Icons item-local `img()` or static text children
   unless a measured GPUI baseline proves that path is better than the retained
   content-level painter.

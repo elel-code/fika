@@ -444,7 +444,7 @@ fn details_visual_icon_prepaint(
     let image = icon.path.as_ref().and_then(|path| {
         let state = image_state?;
         let retained_source = item_image_retained_source_for(None, icon)?;
-        state.load_or_retained(path.clone(), retained_source, window, cx)
+        state.load_theme_icon_or_retained(path.clone(), retained_source, window, cx)
     });
     let fallback = image.is_none().then(|| {
         if icon.path.is_some() {
