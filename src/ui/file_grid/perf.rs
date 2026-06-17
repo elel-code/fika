@@ -1,10 +1,78 @@
 use std::time::Duration;
 
-use fika_core::PaneId;
+use fika_core::{PaneId, ViewMode};
 
 use crate::FikaApp;
 
+use super::ItemPaintSlotStats;
 use super::{DetailsTextShapeCache, StaticItemTextShapeCache, TextShapeCacheStats};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ItemViewPerfFrameState {
+    mode: ViewMode,
+    item_count: usize,
+    visible_count: usize,
+}
+
+impl ItemViewPerfFrameState {
+    pub(crate) fn new(mode: ViewMode, item_count: usize, visible_count: usize) -> Self {
+        Self {
+            mode,
+            item_count,
+            visible_count,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ItemViewPerfPhase {
+    Initial,
+    ModeSwitch,
+    ContentChange,
+    GeometryChange,
+    VisualChange,
+    Steady,
+}
+
+impl ItemViewPerfPhase {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Initial => "initial",
+            Self::ModeSwitch => "mode-switch",
+            Self::ContentChange => "content-change",
+            Self::GeometryChange => "geometry-change",
+            Self::VisualChange => "visual-change",
+            Self::Steady => "steady",
+        }
+    }
+}
+
+pub(crate) fn classify_item_view_perf_phase(
+    previous: Option<ItemViewPerfFrameState>,
+    current: ItemViewPerfFrameState,
+    slot_stats: ItemPaintSlotStats,
+) -> ItemViewPerfPhase {
+    let Some(previous) = previous else {
+        return ItemViewPerfPhase::Initial;
+    };
+    if previous.mode != current.mode {
+        return ItemViewPerfPhase::ModeSwitch;
+    }
+    if previous.item_count != current.item_count || slot_stats.content_changed > 0 {
+        return ItemViewPerfPhase::ContentChange;
+    }
+    if previous.visible_count != current.visible_count
+        || slot_stats.geometry_changed > 0
+        || slot_stats.inserted > 0
+        || slot_stats.removed > 0
+    {
+        return ItemViewPerfPhase::GeometryChange;
+    }
+    if slot_stats.visual_changed > 0 {
+        return ItemViewPerfPhase::VisualChange;
+    }
+    ItemViewPerfPhase::Steady
+}
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct ItemLayerPerfStats {
@@ -32,6 +100,82 @@ impl ItemLayerPerfStats {
     pub(super) fn record_paint(&mut self, elapsed: Duration, count: usize) {
         self.paint_count += count;
         self.paint_us += elapsed.as_micros();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn item_view_perf_phase_separates_mode_switch_from_resize() {
+        let previous = ItemViewPerfFrameState::new(ViewMode::Compact, 48, 32);
+        assert_eq!(
+            classify_item_view_perf_phase(
+                None,
+                ItemViewPerfFrameState::new(ViewMode::Compact, 48, 32),
+                ItemPaintSlotStats::default(),
+            ),
+            ItemViewPerfPhase::Initial
+        );
+        assert_eq!(
+            classify_item_view_perf_phase(
+                Some(previous),
+                ItemViewPerfFrameState::new(ViewMode::Icons, 48, 40),
+                ItemPaintSlotStats {
+                    inserted: 40,
+                    ..Default::default()
+                },
+            ),
+            ItemViewPerfPhase::ModeSwitch
+        );
+        assert_eq!(
+            classify_item_view_perf_phase(
+                Some(ItemViewPerfFrameState::new(ViewMode::Icons, 48, 40)),
+                ItemViewPerfFrameState::new(ViewMode::Icons, 48, 48),
+                ItemPaintSlotStats {
+                    inserted: 8,
+                    unchanged: 40,
+                    ..Default::default()
+                },
+            ),
+            ItemViewPerfPhase::GeometryChange
+        );
+        assert_eq!(
+            classify_item_view_perf_phase(
+                Some(ItemViewPerfFrameState::new(ViewMode::Icons, 48, 48)),
+                ItemViewPerfFrameState::new(ViewMode::Icons, 49, 48),
+                ItemPaintSlotStats {
+                    content_changed: 1,
+                    unchanged: 48,
+                    ..Default::default()
+                },
+            ),
+            ItemViewPerfPhase::ContentChange
+        );
+        assert_eq!(
+            classify_item_view_perf_phase(
+                Some(ItemViewPerfFrameState::new(ViewMode::Icons, 48, 48)),
+                ItemViewPerfFrameState::new(ViewMode::Icons, 48, 48),
+                ItemPaintSlotStats {
+                    visual_changed: 1,
+                    unchanged: 47,
+                    ..Default::default()
+                },
+            ),
+            ItemViewPerfPhase::VisualChange
+        );
+        assert_eq!(
+            classify_item_view_perf_phase(
+                Some(ItemViewPerfFrameState::new(ViewMode::Icons, 48, 48)),
+                ItemViewPerfFrameState::new(ViewMode::Icons, 48, 48),
+                ItemPaintSlotStats {
+                    unchanged: 48,
+                    ..Default::default()
+                },
+            ),
+            ItemViewPerfPhase::Steady
+        );
     }
 }
 

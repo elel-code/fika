@@ -83,10 +83,11 @@ use ui::drag_drop::{
 };
 use ui::file_grid::{
     CompactColumnWidthCache, ContentItemHit, DetailsTextShapeCache, DetailsVisualPerfStats,
-    ItemDrag, ItemImagePerfStats, ItemInteractionPerfStats, ItemPaintSlotCache, ItemPaintSlotStats,
-    PaneLayoutProjection, PaneLayoutProjectionInput, PaneViewportGeometry, PaneVisibleWorkKey,
-    RawFileGridSnapshot, RawFileGridSnapshotInput, StaticItemTextShapeCache,
-    StaticItemVisualPerfStats, VisibleItemSlotPool, VisibleItemSnapshotCache, compact_text_width,
+    ItemDrag, ItemImagePerfStats, ItemInteractionPerfStats, ItemPaintSlotCache,
+    ItemViewPerfFrameState, ItemViewPerfPhase, PaneLayoutProjection, PaneLayoutProjectionInput,
+    PaneViewportGeometry, PaneVisibleWorkKey, RawFileGridSnapshot, RawFileGridSnapshotInput,
+    StaticItemTextShapeCache, StaticItemVisualPerfStats, VisibleItemSlotPool,
+    VisibleItemSnapshotCache, classify_item_view_perf_phase, compact_text_width,
     compact_text_width_for_name, content_item_hit_at_point,
     deferred_thumbnail_candidates_for_model, model_indexes_intersecting_visual_rect,
     pane_layout_projection, raw_file_grid_snapshot, rename_editor_required_text_width,
@@ -362,73 +363,6 @@ async fn privileged_task_result_for_commands(
 }
 
 const RUBBER_BAND_START_DRAG_DISTANCE: f32 = 6.0;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct ItemViewPerfFrameState {
-    mode: ViewMode,
-    item_count: usize,
-    visible_count: usize,
-}
-
-impl ItemViewPerfFrameState {
-    fn new(mode: ViewMode, item_count: usize, visible_count: usize) -> Self {
-        Self {
-            mode,
-            item_count,
-            visible_count,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ItemViewPerfPhase {
-    Initial,
-    ModeSwitch,
-    ContentChange,
-    GeometryChange,
-    VisualChange,
-    Steady,
-}
-
-impl ItemViewPerfPhase {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Initial => "initial",
-            Self::ModeSwitch => "mode-switch",
-            Self::ContentChange => "content-change",
-            Self::GeometryChange => "geometry-change",
-            Self::VisualChange => "visual-change",
-            Self::Steady => "steady",
-        }
-    }
-}
-
-fn classify_item_view_perf_phase(
-    previous: Option<ItemViewPerfFrameState>,
-    current: ItemViewPerfFrameState,
-    slot_stats: ItemPaintSlotStats,
-) -> ItemViewPerfPhase {
-    let Some(previous) = previous else {
-        return ItemViewPerfPhase::Initial;
-    };
-    if previous.mode != current.mode {
-        return ItemViewPerfPhase::ModeSwitch;
-    }
-    if previous.item_count != current.item_count || slot_stats.content_changed > 0 {
-        return ItemViewPerfPhase::ContentChange;
-    }
-    if previous.visible_count != current.visible_count
-        || slot_stats.geometry_changed > 0
-        || slot_stats.inserted > 0
-        || slot_stats.removed > 0
-    {
-        return ItemViewPerfPhase::GeometryChange;
-    }
-    if slot_stats.visual_changed > 0 {
-        return ItemViewPerfPhase::VisualChange;
-    }
-    ItemViewPerfPhase::Steady
-}
 
 pub(crate) struct FikaApp {
     pub(crate) panes: PaneController,
@@ -12864,77 +12798,6 @@ text/plain=viewer.desktop;\n",
         assert_eq!(
             app.projected_item_viewport_width(first, ViewMode::Compact),
             Some(407.0)
-        );
-    }
-
-    #[test]
-    fn item_view_perf_phase_separates_mode_switch_from_resize() {
-        let previous = ItemViewPerfFrameState::new(ViewMode::Compact, 48, 32);
-        assert_eq!(
-            classify_item_view_perf_phase(
-                None,
-                ItemViewPerfFrameState::new(ViewMode::Compact, 48, 32),
-                ItemPaintSlotStats::default(),
-            ),
-            ItemViewPerfPhase::Initial
-        );
-        assert_eq!(
-            classify_item_view_perf_phase(
-                Some(previous),
-                ItemViewPerfFrameState::new(ViewMode::Icons, 48, 40),
-                ItemPaintSlotStats {
-                    inserted: 40,
-                    ..Default::default()
-                },
-            ),
-            ItemViewPerfPhase::ModeSwitch
-        );
-        assert_eq!(
-            classify_item_view_perf_phase(
-                Some(ItemViewPerfFrameState::new(ViewMode::Icons, 48, 40)),
-                ItemViewPerfFrameState::new(ViewMode::Icons, 48, 48),
-                ItemPaintSlotStats {
-                    inserted: 8,
-                    unchanged: 40,
-                    ..Default::default()
-                },
-            ),
-            ItemViewPerfPhase::GeometryChange
-        );
-        assert_eq!(
-            classify_item_view_perf_phase(
-                Some(ItemViewPerfFrameState::new(ViewMode::Icons, 48, 48)),
-                ItemViewPerfFrameState::new(ViewMode::Icons, 49, 48),
-                ItemPaintSlotStats {
-                    content_changed: 1,
-                    unchanged: 48,
-                    ..Default::default()
-                },
-            ),
-            ItemViewPerfPhase::ContentChange
-        );
-        assert_eq!(
-            classify_item_view_perf_phase(
-                Some(ItemViewPerfFrameState::new(ViewMode::Icons, 48, 48)),
-                ItemViewPerfFrameState::new(ViewMode::Icons, 48, 48),
-                ItemPaintSlotStats {
-                    visual_changed: 1,
-                    unchanged: 47,
-                    ..Default::default()
-                },
-            ),
-            ItemViewPerfPhase::VisualChange
-        );
-        assert_eq!(
-            classify_item_view_perf_phase(
-                Some(ItemViewPerfFrameState::new(ViewMode::Icons, 48, 48)),
-                ItemViewPerfFrameState::new(ViewMode::Icons, 48, 48),
-                ItemPaintSlotStats {
-                    unchanged: 48,
-                    ..Default::default()
-                },
-            ),
-            ItemViewPerfPhase::Steady
         );
     }
 
