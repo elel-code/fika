@@ -86,6 +86,16 @@ Continue moving the item-view code toward Dolphin-style ownership boundaries:
 - painter data stays in paint snapshots and painter modules
 - renderer choice stays in renderer-policy modules
 
+Read-ahead must stay on the role/update side of that split. Dolphin computes the
+visible first/last indexes in `KItemListViewLayouter::updateVisibleIndexes()`,
+then `KFileItemModelRolesUpdater::indexesToResolve()` appends visible files,
+visible directories, and bounded before/after read-ahead indexes for role work.
+Fika mirrors that by keeping the raw Compact/Icons work range for scheduler
+projection, while render conversion only resolves uncached icon/text content for
+currently visible items. Invisible read-ahead items may reuse already cached
+snapshot content for paint/cache warm-up, but they must not introduce new
+synchronous icon-theme or text-shaping misses into the current frame.
+
 The immediate non-GUI-safe work is to split the large `src/ui/file_grid.rs`
 painter/controller code into smaller modules without changing behavior.
 

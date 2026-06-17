@@ -370,6 +370,80 @@ mod tests {
     }
 
     #[test]
+    fn raw_icon_snapshot_does_not_resolve_uncached_read_ahead_item_content() {
+        let mut read_ahead = test_raw_visible_item(2, "read-ahead.txt", 1);
+        read_ahead.visible = false;
+        let mut raw_file_grid = RawFileGridSnapshot::Icons {
+            layout: IconsLayout::new(2, fika_core::IconsLayoutOptions::default()),
+            items: vec![test_raw_visible_item(1, "visible.txt", 0), read_ahead],
+        };
+        let mut slots = VisibleItemSlotPool::default();
+        raw_file_grid.assign_visible_item_slots(&mut slots);
+        let icon = test_icon_snapshot();
+        let mut icon_requests = Vec::new();
+        let mut cache = VisibleItemSnapshotCache::default();
+
+        let snapshot = raw_file_grid.into_file_grid_snapshot(1, &mut cache, |request| {
+            icon_requests.push(request.path.to_path_buf());
+            icon.clone()
+        });
+
+        let FileGridSnapshot::Icons { items, .. } = snapshot else {
+            panic!("expected icons snapshot");
+        };
+        assert_eq!(icon_requests, vec![PathBuf::from("/tmp/visible.txt")]);
+        assert_eq!(items.len(), 1);
+        assert!(items[0].visible);
+        assert_eq!(items[0].item_id, ItemId(1));
+    }
+
+    #[test]
+    fn raw_icon_snapshot_reuses_cached_read_ahead_item_content_without_resolving_it() {
+        let icon = test_icon_snapshot();
+        let mut slots = VisibleItemSlotPool::default();
+        let mut cache = VisibleItemSnapshotCache::default();
+        let mut first_raw = RawFileGridSnapshot::Icons {
+            layout: IconsLayout::new(1, fika_core::IconsLayoutOptions::default()),
+            items: vec![test_raw_visible_item(1, "cached.txt", 0)],
+        };
+        first_raw.assign_visible_item_slots(&mut slots);
+        let _first = first_raw.into_file_grid_snapshot(1, &mut cache, |_| icon.clone());
+
+        let mut cached_read_ahead = test_raw_visible_item(1, "cached.txt", 0);
+        cached_read_ahead.visible = false;
+        let mut second_raw = RawFileGridSnapshot::Icons {
+            layout: IconsLayout::new(2, fika_core::IconsLayoutOptions::default()),
+            items: vec![
+                cached_read_ahead,
+                test_raw_visible_item(2, "visible-now.txt", 1),
+            ],
+        };
+        second_raw.assign_visible_item_slots(&mut slots);
+        let mut icon_requests = Vec::new();
+
+        let snapshot = second_raw.into_file_grid_snapshot(1, &mut cache, |request| {
+            icon_requests.push(request.path.to_path_buf());
+            icon.clone()
+        });
+
+        let FileGridSnapshot::Icons { items, .. } = snapshot else {
+            panic!("expected icons snapshot");
+        };
+        assert_eq!(icon_requests, vec![PathBuf::from("/tmp/visible-now.txt")]);
+        assert_eq!(items.len(), 2);
+        assert!(
+            items
+                .iter()
+                .any(|item| item.item_id == ItemId(1) && !item.visible)
+        );
+        assert!(
+            items
+                .iter()
+                .any(|item| item.item_id == ItemId(2) && item.visible)
+        );
+    }
+
+    #[test]
     fn icon_snapshot_precomputes_name_lines_with_safe_width() {
         let long_name = "elzykosuda227446+breuyev@hotmail.cpa.2026-06-22.json";
         let mut raw_file_grid = RawFileGridSnapshot::Icons {

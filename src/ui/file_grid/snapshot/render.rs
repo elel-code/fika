@@ -28,8 +28,9 @@ impl RawFileGridSnapshot {
                         let content = visible_item_cache.content_for_raw_item(
                             &item,
                             false,
+                            item.visible,
                             &mut icon_for_item,
-                        );
+                        )?;
                         Some(VisibleItemSnapshot {
                             slot_id: item.slot_id,
                             visible: item.visible,
@@ -68,8 +69,9 @@ impl RawFileGridSnapshot {
                         let content = visible_item_cache.content_for_raw_item(
                             &item,
                             true,
+                            item.visible,
                             &mut icon_for_item,
-                        );
+                        )?;
                         Some(VisibleItemSnapshot {
                             slot_id: item.slot_id,
                             visible: item.visible,

@@ -81,8 +81,9 @@ impl VisibleItemSnapshotCache {
         &mut self,
         item: &RawVisibleItemSnapshot,
         cache_text_lines: bool,
+        resolve_uncached: bool,
         icon_for_item: &mut F,
-    ) -> VisibleItemSnapshotCacheEntry
+    ) -> Option<VisibleItemSnapshotCacheEntry>
     where
         F: for<'a> FnMut(FileGridIconRequest<'a>) -> FileIconSnapshot,
     {
@@ -91,7 +92,11 @@ impl VisibleItemSnapshotCache {
             && entry.key == key
         {
             entry.visible_epoch = self.visible_epoch;
-            return entry.clone();
+            return Some(entry.clone());
+        }
+
+        if !resolve_uncached {
+            return None;
         }
 
         let icon = icon_for_item(FileGridIconRequest {
@@ -130,7 +135,7 @@ impl VisibleItemSnapshotCache {
             drag_path: Arc::from(item.path.as_path()),
         };
         self.entries.insert(item.item_id, entry.clone());
-        entry
+        Some(entry)
     }
 }
 

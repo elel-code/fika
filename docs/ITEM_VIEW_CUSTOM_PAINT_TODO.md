@@ -327,6 +327,10 @@ This is the active task board for the GPUI item view custom-paint migration.
 - [x] Extract raw snapshot model/projection types into
   `src/ui/file_grid/snapshot/types.rs` so raw data contracts are separate from
   construction, conversion, scheduler, and range helpers.
+- [x] Align Compact/Icons read-ahead with Dolphin's role-updater boundary:
+  invisible work-window items can reuse existing snapshot content for paint
+  warm-up, but uncached read-ahead items no longer trigger synchronous
+  icon/text content resolution during the current render conversion.
 - [x] Extract retained item/details paint slot state into
   `src/ui/file_grid/paint_slots.rs` so model-to-painter snapshot reuse is
   separate from the renderer construction code.
