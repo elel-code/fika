@@ -98,8 +98,10 @@ currently visible items or already-cached read-ahead content. Invisible
 read-ahead items may retain snapshot/cache state, but they must not enter
 static visual or image prepaint, and they must not introduce new synchronous
 icon-theme, image-cache-load, or text-shaping misses into the current frame.
-Visible icon cache misses also use preliminary snapshots and queue background
-resolve work rather than scanning icon themes in the conversion path.
+Visible icon cache misses are the Dolphin-style exception: before render
+conversion, Fika may spend a small budget resolving visible `iconName` theme
+paths so the first visible paint does not show marker icons and then switch to
+MIME icons. Read-ahead icon-theme work stays queued.
 
 Current GPUI icon work follows that boundary: render conversion asks
 `FileIconCache` for a cached or preliminary snapshot only. If the theme path is
@@ -113,12 +115,14 @@ same-kind cached icon snapshot from another size as a transition while the
 exact-size request stays queued. This avoids a fallback-marker flash between
 two real theme icons.
 
-Directory-load MIME metadata now follows Dolphin's visible-widget exception to
-that async rule. Dolphin keeps full role resolution asynchronous, but
-`updateVisibleIcons()`/`initializeItemListWidget()` synchronously gives created
-visible items an `iconName`. Fika mirrors this by resolving only visible generic
-MIME metadata within a small frame budget before queueing the remaining
-metadata work. Read-ahead and offscreen items remain scheduler-owned.
+Directory-load MIME metadata and visible icon paths now follow Dolphin's
+visible-widget exception to that async rule. Dolphin keeps full role resolution
+asynchronous, but `updateVisibleIcons()`/`initializeItemListWidget()` gives
+created visible items an `iconName`, and `pixmapForIcon()` synchronously obtains
+the themed pixmap through `QPixmapCache`. Fika mirrors this by resolving only
+visible generic MIME metadata and visible theme-icon paths within small frame
+budgets before queueing the remaining metadata/icon work. Read-ahead and
+offscreen items remain scheduler-owned.
 
 Image-backed icon work follows the same visual stability rule. Thumbnail probe
 success and failure remain model roles, but the image paint layers now keep a

@@ -210,6 +210,7 @@ const THUMBNAIL_PROBE_BATCH_SIZE: usize = 32;
 const METADATA_ROLE_BATCH_SIZE: usize = 16;
 const FILE_ICON_RESOLVE_BATCH_SIZE: usize = 64;
 const VISIBLE_METADATA_ROLE_SYNC_BUDGET: Duration = Duration::from_millis(12);
+const VISIBLE_FILE_ICON_SYNC_BUDGET: Duration = Duration::from_millis(16);
 const PANE_HORIZONTAL_BORDER_EXTENT: f32 = 2.0;
 
 const CONTEXT_SUBMENU_HIDE_DELAY: Duration = Duration::from_millis(300);
@@ -1146,6 +1147,13 @@ impl FikaApp {
                     )?;
                 }
                 let raw_elapsed = raw_started.map(|started| started.elapsed());
+                let icon_sync_started = perf_enabled.then(Instant::now);
+                self.resolve_visible_file_icons_for_raw_grid(
+                    pane_id,
+                    &raw_file_grid,
+                    VISIBLE_FILE_ICON_SYNC_BUDGET,
+                );
+                let icon_sync_elapsed = icon_sync_started.map(|started| started.elapsed());
                 let visible_count = raw_file_grid
                     .visible_layout_range_and_count()
                     .or_else(|| raw_file_grid.visible_work_range_and_count())
@@ -1232,7 +1240,7 @@ impl FikaApp {
                 let status_bar = self.status_bar_snapshot_for_pane(pane_id, cx);
                 if let Some(pane_started) = pane_started {
                     eprintln!(
-                        "[fika item-view] pane={} mode={:?} phase={} items={} visible={} raw={}us queue={}us convert={}us total={}us",
+                        "[fika item-view] pane={} mode={:?} phase={} items={} visible={} raw={}us icon_sync={}us queue={}us convert={}us total={}us",
                         pane_id.0,
                         view.view_mode,
                         item_view_perf_phase
@@ -1241,6 +1249,7 @@ impl FikaApp {
                         item_count,
                         visible_count,
                         raw_elapsed.map_or(0, |elapsed| elapsed.as_micros()),
+                        icon_sync_elapsed.map_or(0, |elapsed| elapsed.as_micros()),
                         queue_elapsed.map_or(0, |elapsed| elapsed.as_micros()),
                         convert_elapsed.map_or(0, |elapsed| elapsed.as_micros()),
                         pane_started.elapsed().as_micros(),
@@ -1327,6 +1336,34 @@ impl FikaApp {
         }
 
         let changed = self.finish_metadata_role_results(results);
+        if changed {
+            self.visible_item_snapshot_caches.remove(&pane_id);
+        }
+        changed
+    }
+
+    fn resolve_visible_file_icons_for_raw_grid(
+        &mut self,
+        pane_id: PaneId,
+        raw_file_grid: &RawFileGridSnapshot,
+        budget: Duration,
+    ) -> bool {
+        let started = Instant::now();
+        let mut changed = false;
+        raw_file_grid.for_each_visible_file_icon_resolve_candidate(|request| {
+            if started.elapsed() >= budget {
+                return false;
+            }
+            changed |= self.file_icons.resolve_now_for(
+                request.path,
+                request.is_dir,
+                request.mime_type.clone(),
+                request.mime_magic_checked,
+                request.icon_size,
+            );
+            true
+        });
+
         if changed {
             self.visible_item_snapshot_caches.remove(&pane_id);
         }

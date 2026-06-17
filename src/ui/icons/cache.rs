@@ -115,6 +115,24 @@ impl FileIconCache {
         (!self.cached.contains_key(&key)).then_some(FileIconResolveRequest { key })
     }
 
+    pub(crate) fn resolve_now_for(
+        &mut self,
+        path: &Path,
+        is_dir: bool,
+        mime_type: Option<Arc<str>>,
+        mime_magic_checked: bool,
+        icon_size: f32,
+    ) -> bool {
+        let key = file_icon_cache_key(path, is_dir, mime_type, mime_magic_checked, icon_size);
+        if self.cached.contains_key(&key) {
+            return false;
+        }
+
+        let icon = file_icon_snapshot(&key.kind, key.size_px, &mut self.theme, &self.mime);
+        self.cached.insert(key, icon);
+        true
+    }
+
     pub(crate) fn finish_resolve_results(&mut self, results: Vec<FileIconResolveResult>) -> bool {
         let mut changed = false;
         for result in results {
@@ -1278,6 +1296,67 @@ gtk-icon-theme-name=breeze\n"
             ),
             resolved
         );
+        assert!(
+            cache
+                .resolve_request_for(
+                    Path::new("main.rs"),
+                    false,
+                    Some(Arc::from("text/rust")),
+                    true,
+                    48.0,
+                )
+                .is_none()
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn resolve_now_for_caches_exact_theme_path() {
+        let root = test_dir("visible-icon-sync");
+        let resolved_path = root.join("theme/48x48/mimetypes/text-rust.svg");
+        std::fs::create_dir_all(resolved_path.parent().unwrap()).unwrap();
+        std::fs::write(&resolved_path, test_svg()).unwrap();
+        let mut cache = FileIconCache {
+            cached: HashMap::new(),
+            named_cached: HashMap::new(),
+            theme: IconThemeResolver {
+                roots: vec![root.clone()],
+                themes: vec!["theme".to_string()],
+                search_order: None,
+                inherits_cache: HashMap::new(),
+                path_cache: HashMap::new(),
+            },
+            mime: fika_core::MimeDatabase::from_maps(
+                HashMap::new(),
+                HashMap::new(),
+                HashMap::new(),
+            ),
+        };
+
+        assert!(cache.resolve_now_for(
+            Path::new("lib.rs"),
+            false,
+            Some(Arc::from("text/rust")),
+            true,
+            48.0,
+        ));
+        assert!(!cache.resolve_now_for(
+            Path::new("lib.rs"),
+            false,
+            Some(Arc::from("text/rust")),
+            true,
+            48.0,
+        ));
+
+        let icon = cache.cached_or_preliminary_icon_for(
+            Path::new("main.rs"),
+            false,
+            Some(Arc::from("text/rust")),
+            true,
+            48.0,
+        );
+        assert_eq!(icon.icon_name.as_ref(), "text-rust");
+        assert_eq!(icon.path, Some(Arc::from(resolved_path.as_path())));
         assert!(
             cache
                 .resolve_request_for(

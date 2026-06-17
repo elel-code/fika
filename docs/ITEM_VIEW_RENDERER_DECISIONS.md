@@ -76,8 +76,11 @@ For directory-load MIME icon switching, compare against
 and `KFileItemListView::initializeItemListWidget()`: Dolphin does not resolve
 all model roles synchronously, but it does give created visible widgets an
 `iconName` before the async `ResolveAll` pass walks the rest. Fika should keep
-the same split: visible generic MIME metadata may be resolved synchronously
-within a bounded budget; read-ahead/offscreen metadata remains queued.
+the same split: visible generic MIME metadata and visible theme-icon paths may
+be resolved synchronously within bounded budgets; read-ahead/offscreen metadata
+and icon paths remain queued. This mirrors Dolphin's `iconName` plus
+`pixmapForIcon()` path without moving read-ahead icon-theme scans into render
+conversion.
 
 ## Next Renderer Decisions
 

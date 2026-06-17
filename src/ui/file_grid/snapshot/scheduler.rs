@@ -47,12 +47,10 @@ impl RawFileGridSnapshot {
                     .visible_layout_range_and_count()
                     .map(|(range, _)| range);
 
-                for item in items.iter().filter(|item| item.visible && !item.is_dir) {
+                visit_visible_icon_items(items, |item| {
                     queued |= queue(file_icon_request_for_item(item));
-                }
-                for item in items.iter().filter(|item| item.visible && item.is_dir) {
-                    queued |= queue(file_icon_request_for_item(item));
-                }
+                    true
+                });
 
                 if let Some(visible_range) = visible_range {
                     for item in items.iter().filter(|item| {
@@ -89,6 +87,57 @@ impl RawFileGridSnapshot {
             }
         }
         queued
+    }
+
+    pub(crate) fn for_each_visible_file_icon_resolve_candidate<F>(&self, mut visit: F)
+    where
+        F: for<'a> FnMut(FileGridIconRequest<'a>) -> bool,
+    {
+        match self {
+            Self::Compact { items, .. } | Self::Icons { items, .. } => {
+                visit_visible_icon_items(items, |item| visit(file_icon_request_for_item(item)));
+            }
+            Self::Details { items, metrics, .. } => {
+                for item in items.iter().filter(|item| !item.is_dir) {
+                    if !visit(FileGridIconRequest {
+                        path: &item.path,
+                        is_dir: item.is_dir,
+                        mime_type: item.mime_type.clone(),
+                        mime_magic_checked: item.mime_magic_checked,
+                        icon_size: metrics.icon_size,
+                    }) {
+                        return;
+                    }
+                }
+                for item in items.iter().filter(|item| item.is_dir) {
+                    if !visit(FileGridIconRequest {
+                        path: &item.path,
+                        is_dir: item.is_dir,
+                        mime_type: item.mime_type.clone(),
+                        mime_magic_checked: item.mime_magic_checked,
+                        icon_size: metrics.icon_size,
+                    }) {
+                        return;
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn visit_visible_icon_items<F>(items: &[RawVisibleItemSnapshot], mut visit: F)
+where
+    F: FnMut(&RawVisibleItemSnapshot) -> bool,
+{
+    for item in items.iter().filter(|item| item.visible && !item.is_dir) {
+        if !visit(item) {
+            return;
+        }
+    }
+    for item in items.iter().filter(|item| item.visible && item.is_dir) {
+        if !visit(item) {
+            return;
+        }
     }
 }
 
@@ -284,6 +333,46 @@ mod tests {
                 "after.txt",
                 "before.txt",
             ]
+        );
+    }
+
+    #[test]
+    fn visible_file_icon_resolve_candidates_skip_read_ahead_items() {
+        let mut before = test_raw_visible_item(1, "before.txt", 0);
+        before.visible = false;
+        let visible_file = test_raw_visible_item(2, "visible-file.txt", 1);
+        let mut visible_dir = test_raw_visible_item(3, "visible-dir", 2);
+        visible_dir.is_dir = true;
+        let visible_second_file = test_raw_visible_item(4, "visible-second-file.txt", 3);
+        let mut after = test_raw_visible_item(5, "after.txt", 4);
+        after.visible = false;
+        let raw_file_grid = RawFileGridSnapshot::Icons {
+            layout: IconsLayout::new(5, fika_core::IconsLayoutOptions::default()),
+            items: vec![
+                before,
+                visible_file,
+                visible_dir,
+                visible_second_file,
+                after,
+            ],
+        };
+        let mut paths = Vec::new();
+
+        raw_file_grid.for_each_visible_file_icon_resolve_candidate(|request| {
+            paths.push(
+                request
+                    .path
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string(),
+            );
+            true
+        });
+
+        assert_eq!(
+            paths,
+            vec!["visible-file.txt", "visible-second-file.txt", "visible-dir"]
         );
     }
 
