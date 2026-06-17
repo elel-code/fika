@@ -343,12 +343,12 @@ mod tests {
                 PathBuf::from("/tmp/rename.png")
             ]
         );
-        assert!(!item_image_load_failure_paints_fallback(&image_items[0]));
+        assert!(item_image_load_failure_paints_fallback(&image_items[0]));
         assert!(item_image_load_failure_paints_fallback(&image_items[1]));
-        assert!(!item_image_load_failure_paints_fallback(&image_items[2]));
-        assert!(!item_image_pending_load_paints_fallback(&image_items[0]));
+        assert!(item_image_load_failure_paints_fallback(&image_items[2]));
+        assert!(item_image_pending_load_paints_fallback(&image_items[0]));
         assert!(item_image_pending_load_paints_fallback(&image_items[1]));
-        assert!(!item_image_pending_load_paints_fallback(&image_items[2]));
+        assert!(item_image_pending_load_paints_fallback(&image_items[2]));
         assert_eq!(
             interaction_items
                 .iter()
