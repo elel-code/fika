@@ -262,6 +262,9 @@ This is the active task board for the GPUI item view custom-paint migration.
 - [x] Extract retained item/details paint slot state into
   `src/ui/file_grid/paint_slots.rs` so model-to-painter snapshot reuse is
   separate from the renderer construction code.
+- [x] Extract retained item/details interaction hitbox layer into
+  `src/ui/file_grid/interaction.rs` so hover/cursor hitboxes and active
+  item-drag window tracking are separate from the main painter/render surface.
 - [ ] Keep remaining drag-start shells until public GPUI custom-element
   drag-start support exists or an audited GPUI patch is carried.
 - [ ] Keep rename on the GPUI overlay until custom text editing has behavior
