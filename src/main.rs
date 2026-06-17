@@ -1222,7 +1222,8 @@ impl FikaApp {
                 )?;
                 let raw_elapsed = raw_started.map(|started| started.elapsed());
                 let visible_count = raw_file_grid
-                    .visible_work_range_and_count()
+                    .visible_layout_range_and_count()
+                    .or_else(|| raw_file_grid.visible_work_range_and_count())
                     .map(|(_, count)| count)
                     .unwrap_or_default();
                 let item_count = {

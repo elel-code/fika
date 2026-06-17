@@ -1,3 +1,4 @@
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use super::super::details::{
@@ -18,6 +19,9 @@ use crate::ui::drag_drop::{ItemDropTarget, item_drop_target_matches_directory};
 use crate::ui::rename::RenameDraft;
 
 use fika_core::{DirectoryModel, FilteredModel, ItemLayout, PaneId, SelectionState, ViewMode};
+
+const ITEM_VIEW_WORK_READ_AHEAD_PAGES: usize = 2;
+const ITEM_VIEW_MAX_WORK_ITEMS: usize = 160;
 
 pub(crate) fn raw_file_grid_snapshot(input: RawFileGridSnapshotInput<'_>) -> RawFileGridSnapshot {
     let RawFileGridSnapshotInput {
@@ -52,10 +56,14 @@ pub(crate) fn raw_file_grid_snapshot(input: RawFileGridSnapshotInput<'_>) -> Raw
                     rename_text_override,
                 ),
             };
-            let items = layout
-                .visible_items()
-                .filter_map(|visible_item| {
-                    let layout_index = visible_item.model_index;
+            let visible_range = visible_layout_index_range(layout.visible_items());
+            let viewport = layout.viewport_rect();
+            let work_range = visible_range
+                .as_ref()
+                .map(|range| item_view_work_range(range.clone(), item_count))
+                .unwrap_or(0..0);
+            let items = work_range
+                .filter_map(|layout_index| {
                     let model_index = model_index_for_layout_index(filtered, layout_index)?;
                     let entry = model.get(model_index)?;
                     let path = model.path_for_index(model_index)?;
@@ -72,6 +80,7 @@ pub(crate) fn raw_file_grid_snapshot(input: RawFileGridSnapshotInput<'_>) -> Raw
                         item_layout,
                         entry,
                         path,
+                        item_layout.item_rect.intersects(viewport),
                     ))
                 })
                 .collect::<Vec<_>>();
@@ -80,10 +89,14 @@ pub(crate) fn raw_file_grid_snapshot(input: RawFileGridSnapshotInput<'_>) -> Raw
         ViewMode::Icons => {
             let layout =
                 icons_layout_for_model(model, filtered, item_count, view, rename_draft, 0.0);
-            let items = layout
-                .visible_items()
-                .filter_map(|visible_item| {
-                    let layout_index = visible_item.model_index;
+            let visible_range = visible_layout_index_range(layout.visible_items());
+            let viewport = layout.viewport_rect();
+            let work_range = visible_range
+                .as_ref()
+                .map(|range| item_view_work_range(range.clone(), item_count))
+                .unwrap_or(0..0);
+            let items = work_range
+                .filter_map(|layout_index| {
                     let model_index = model_index_for_layout_index(filtered, layout_index)?;
                     let entry = model.get(model_index)?;
                     let path = model.path_for_index(model_index)?;
@@ -97,6 +110,7 @@ pub(crate) fn raw_file_grid_snapshot(input: RawFileGridSnapshotInput<'_>) -> Raw
                         item_layout,
                         entry,
                         path,
+                        item_layout.item_rect.intersects(viewport),
                     ))
                 })
                 .collect::<Vec<_>>();
@@ -177,12 +191,14 @@ fn raw_visible_item_snapshot(
     layout: ItemLayout,
     entry: &fika_core::ModelEntry,
     path: PathBuf,
+    visible: bool,
 ) -> RawVisibleItemSnapshot {
     let selected = selection.is_selected(entry.id);
     let drop_target = item_drop_target_matches_directory(item_drop_target, pane_id, &path);
     let thumbnail_path = visible_item_thumbnail_path(entry);
     RawVisibleItemSnapshot {
         slot_id: 0,
+        visible,
         layout,
         item_id: entry.id,
         path,
@@ -204,4 +220,37 @@ fn raw_visible_item_snapshot(
         draft_error: active_rename_draft.and_then(|draft| draft.error.clone()),
         draft_warning: active_rename_draft.and_then(|draft| draft.extension_warning(entry.is_dir)),
     }
+}
+
+fn visible_layout_index_range(items: impl IntoIterator<Item = ItemLayout>) -> Option<Range<usize>> {
+    let mut indexes = items.into_iter().map(|item| item.model_index);
+    let first = indexes.next()?;
+    let mut start = first;
+    let mut end = first;
+    for index in indexes {
+        start = start.min(index);
+        end = end.max(index);
+    }
+    Some(start..end + 1)
+}
+
+fn item_view_work_range(visible_range: Range<usize>, item_count: usize) -> Range<usize> {
+    if item_count == 0 || visible_range.is_empty() {
+        return 0..0;
+    }
+
+    let visible_start = visible_range.start.min(item_count);
+    let visible_end = visible_range.end.min(item_count).max(visible_start);
+    if visible_start >= visible_end {
+        return 0..0;
+    }
+
+    let visible_count = visible_end - visible_start;
+    let max_extra_each_side = ITEM_VIEW_MAX_WORK_ITEMS
+        .saturating_sub(visible_count)
+        .saturating_div(2);
+    let read_ahead = visible_count
+        .saturating_mul(ITEM_VIEW_WORK_READ_AHEAD_PAGES)
+        .min(max_extra_each_side);
+    visible_start.saturating_sub(read_ahead)..(visible_end + read_ahead).min(item_count)
 }

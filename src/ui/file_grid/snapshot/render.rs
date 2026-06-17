@@ -32,6 +32,7 @@ impl RawFileGridSnapshot {
                         );
                         Some(VisibleItemSnapshot {
                             slot_id: item.slot_id,
+                            visible: item.visible,
                             item_id: item.item_id,
                             layout: item.layout,
                             is_dir: content.is_dir,
@@ -71,6 +72,7 @@ impl RawFileGridSnapshot {
                         );
                         Some(VisibleItemSnapshot {
                             slot_id: item.slot_id,
+                            visible: item.visible,
                             item_id: item.item_id,
                             layout: item.layout,
                             is_dir: content.is_dir,

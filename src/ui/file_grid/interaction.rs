@@ -127,6 +127,9 @@ fn item_interaction_layer_items_impl(items: &[ItemPaintSnapshot]) -> Vec<ItemInt
     items
         .iter()
         .filter_map(|item| {
+            if !item.visible {
+                return None;
+            }
             item_uses_layer_interaction(item.content.as_ref()).then_some(ItemInteractionLayerItem {
                 item_id: item.item_id,
                 visual_rect: item.layout.visual_rect,

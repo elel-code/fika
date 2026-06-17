@@ -129,6 +129,7 @@ impl ItemPaintSlotCache {
                         stats.unchanged += 1;
                     }
                     slot.item_id = item_id;
+                    slot.visible = item.visible;
                     slot.geometry = geometry;
                     slot.visual = visual;
                     slot.visible_epoch = self.visible_epoch;
@@ -138,6 +139,7 @@ impl ItemPaintSlotCache {
                     stats.inserted += 1;
                     let slot = ItemPaintSlot {
                         item_id,
+                        visible: item.visible,
                         geometry,
                         content: Arc::new(next_content),
                         visual,
@@ -223,6 +225,7 @@ impl ItemPaintSlotCache {
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct ItemPaintSlot {
     item_id: ItemId,
+    visible: bool,
     geometry: ItemPaintGeometry,
     content: Arc<ItemPaintContent>,
     visual: ItemPaintVisualState,
@@ -233,6 +236,7 @@ impl ItemPaintSlot {
     fn snapshot(&self, slot_id: u64, layout: ItemLayout) -> ItemPaintSnapshot {
         ItemPaintSnapshot {
             slot_id,
+            visible: self.visible,
             item_id: self.item_id,
             layout,
             content: self.content.clone(),
@@ -291,6 +295,7 @@ impl ItemPaintGeometry {
 #[derive(Clone, Debug)]
 pub(crate) struct ItemPaintSnapshot {
     pub(super) slot_id: u64,
+    pub(super) visible: bool,
     pub(super) item_id: ItemId,
     pub(super) layout: ItemLayout,
     pub(super) content: Arc<ItemPaintContent>,

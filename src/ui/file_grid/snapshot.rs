@@ -53,6 +53,7 @@ use visible::{icon_name_layout_width, icon_name_max_lines};
 #[derive(Clone, Debug)]
 pub(crate) struct RawVisibleItemSnapshot {
     pub(crate) slot_id: u64,
+    pub(crate) visible: bool,
     pub(crate) layout: ItemLayout,
     pub(crate) item_id: ItemId,
     pub(crate) path: PathBuf,
@@ -223,6 +224,7 @@ mod tests {
             layout: IconsLayout::new(4, fika_core::IconsLayoutOptions::default()),
             items: vec![RawVisibleItemSnapshot {
                 slot_id: 0,
+                visible: true,
                 layout: test_layout(0),
                 item_id: visible_entry.id,
                 path: model.path_for_index(0).unwrap(),
@@ -386,6 +388,64 @@ mod tests {
         assert!(items.iter().all(|item| item.slot_id != 0));
         assert_eq!(requests.len(), 2);
         assert_eq!(requests[0].0, PathBuf::from("/tmp/alpha.txt"));
+    }
+
+    #[test]
+    fn raw_icon_snapshot_keeps_read_ahead_work_items_out_of_visible_range() {
+        let directory = PathBuf::from("/tmp/fika-icon-work-window");
+        let entries = (0..80)
+            .map(|index| {
+                test_entry(
+                    &format!("item-{index:02}.txt"),
+                    Some("text/plain"),
+                    true,
+                    Some(index),
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut model = DirectoryModel::for_directory(directory.clone());
+        model.replace_listing(directory, Arc::new(entries));
+        let view = ViewState {
+            view_mode: ViewMode::Icons,
+            viewport_width: 260.0,
+            viewport_height: 180.0,
+            scroll_y: 360.0,
+            ..ViewState::default()
+        };
+
+        let raw_file_grid = raw_file_grid_snapshot(RawFileGridSnapshotInput {
+            pane_id: PaneId(1),
+            model: &model,
+            selection: &SelectionState::default(),
+            view: &view,
+            filtered: None,
+            source_revision: 0,
+            rename_draft: None,
+            item_drop_target: None,
+            compact_column_widths: &mut CompactColumnWidthCache::default(),
+        });
+
+        let RawFileGridSnapshot::Icons { items, .. } = &raw_file_grid else {
+            panic!("expected icons snapshot");
+        };
+        let visible_count = items.iter().filter(|item| item.visible).count();
+
+        assert!(visible_count > 0);
+        assert!(items.len() > visible_count);
+        assert!(items.iter().any(|item| !item.visible));
+        assert_eq!(
+            raw_file_grid.visible_layout_range_and_count(),
+            layout_index_range_and_count(
+                items
+                    .iter()
+                    .filter(|item| item.visible)
+                    .map(|item| item.layout.model_index)
+            )
+        );
+        assert_eq!(
+            raw_file_grid.visible_work_range_and_count(),
+            layout_index_range_and_count(items.iter().map(|item| item.layout.model_index))
+        );
     }
 
     #[test]
@@ -700,6 +760,7 @@ mod tests {
     fn test_raw_visible_item(id: u64, name: &str, model_index: usize) -> RawVisibleItemSnapshot {
         RawVisibleItemSnapshot {
             slot_id: 0,
+            visible: true,
             layout: test_layout(model_index),
             item_id: ItemId(id),
             path: PathBuf::from("/tmp").join(name),

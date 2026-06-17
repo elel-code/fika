@@ -12,6 +12,7 @@ use super::{FileGridIconRequest, RawVisibleItemSnapshot};
 #[derive(Clone, Debug)]
 pub(crate) struct VisibleItemSnapshot {
     pub(crate) slot_id: u64,
+    pub(crate) visible: bool,
     pub(crate) item_id: ItemId,
     pub(crate) layout: ItemLayout,
     pub(crate) is_dir: bool,

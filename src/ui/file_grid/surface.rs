@@ -48,8 +48,13 @@ pub(crate) fn file_grid(
                 items,
             } => {
                 let content_size = icons_layout.content_size();
-                let visible_count = items.len();
-                let renderer_policy_stats = item_renderer_policy_stats(&items);
+                let visible_items = items
+                    .iter()
+                    .filter(|item| item.visible)
+                    .cloned()
+                    .collect::<Vec<_>>();
+                let visible_count = visible_items.len();
+                let renderer_policy_stats = item_renderer_policy_stats(&visible_items);
                 let static_visual_layer = static_item_visual_layer_view(
                     pane_id,
                     &items,
@@ -67,7 +72,7 @@ pub(crate) fn file_grid(
                 );
                 let interaction_layer = item_interaction_layer_view(
                     pane_id,
-                    &items,
+                    &visible_items,
                     content_size.width,
                     content_size.height,
                     app.clone(),
@@ -92,7 +97,7 @@ pub(crate) fn file_grid(
                     content
                 };
                 let viewport = file_grid_viewport_shell(pane_id, drop_target, mode, cx).child(
-                    content.children(items.into_iter().map(|item| {
+                    content.children(visible_items.into_iter().map(|item| {
                         item_tile(
                             pane_id,
                             item,
@@ -112,8 +117,13 @@ pub(crate) fn file_grid(
             }
             FileGridRenderSnapshot::Compact { layout, items } => {
                 let content_size = layout.content_size();
-                let visible_count = items.len();
-                let renderer_policy_stats = item_renderer_policy_stats(&items);
+                let visible_items = items
+                    .iter()
+                    .filter(|item| item.visible)
+                    .cloned()
+                    .collect::<Vec<_>>();
+                let visible_count = visible_items.len();
+                let renderer_policy_stats = item_renderer_policy_stats(&visible_items);
                 let static_visual_layer = static_item_visual_layer_view(
                     pane_id,
                     &items,
@@ -131,7 +141,7 @@ pub(crate) fn file_grid(
                 );
                 let interaction_layer = item_interaction_layer_view(
                     pane_id,
-                    &items,
+                    &visible_items,
                     content_size.width,
                     content_size.height,
                     app.clone(),
@@ -156,7 +166,7 @@ pub(crate) fn file_grid(
                     content
                 };
                 let viewport = file_grid_viewport_shell(pane_id, drop_target, mode, cx).child(
-                    content.children(items.into_iter().map(|item| {
+                    content.children(visible_items.into_iter().map(|item| {
                         item_tile(pane_id, item, ItemTileTextAlignment::Start, app.clone(), cx)
                     })),
                 );

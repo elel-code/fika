@@ -6,7 +6,12 @@ impl RawFileGridSnapshot {
     pub(crate) fn visible_layout_range_and_count(&self) -> Option<(Range<usize>, usize)> {
         match self {
             Self::Compact { items, .. } | Self::Icons { items, .. } => {
-                raw_visible_layout_range_and_count(items)
+                layout_index_range_and_count(
+                    items
+                        .iter()
+                        .filter(|item| item.visible)
+                        .map(|item| item.layout.model_index),
+                )
             }
             Self::Details { .. } => None,
         }
@@ -15,7 +20,7 @@ impl RawFileGridSnapshot {
     pub(crate) fn visible_work_range_and_count(&self) -> Option<(Range<usize>, usize)> {
         match self {
             Self::Compact { items, .. } | Self::Icons { items, .. } => {
-                raw_visible_layout_range_and_count(items)
+                raw_work_layout_range_and_count(items)
             }
             Self::Details { items, .. } => {
                 layout_index_range_and_count(items.iter().map(|item| item.row_index))
@@ -40,7 +45,7 @@ pub(super) fn layout_index_range_and_count(
     Some((start..end + 1, count))
 }
 
-fn raw_visible_layout_range_and_count(
+fn raw_work_layout_range_and_count(
     items: &[RawVisibleItemSnapshot],
 ) -> Option<(Range<usize>, usize)> {
     layout_index_range_and_count(items.iter().map(|item| item.layout.model_index))

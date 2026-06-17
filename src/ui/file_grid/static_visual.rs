@@ -18,6 +18,7 @@ use super::text::static_paint_single_line_text;
 use super::{ITEM_NAME_LINE_HEIGHT, ItemTileTextAlignment, TextShapeCacheStats};
 
 pub(super) struct StaticItemVisualPaintState {
+    visible: bool,
     layout: ItemLayout,
     marker_line_height: Pixels,
     shapes: Arc<StaticItemTextShapes>,
@@ -152,6 +153,7 @@ pub(super) fn static_item_visual_layer_items(
             let content = item.content.as_ref();
             item_uses_layer_visual_paint(content).then(|| StaticItemVisualLayerItem {
                 item_id: item.item_id,
+                visible: item.visible,
                 display_name: content.display_name.clone(),
                 icon_name_lines: content.icon_name_lines.clone(),
                 icon: content.icon.clone(),
@@ -169,6 +171,7 @@ pub(super) fn static_item_visual_layer_items(
 
 pub(super) struct StaticItemVisualLayerItem {
     pub(super) item_id: ItemId,
+    visible: bool,
     display_name: SharedString,
     icon_name_lines: Arc<[SharedString]>,
     icon: FileIconSnapshot,
@@ -240,6 +243,7 @@ impl Element for StaticItemVisualLayerElement {
                 static_item_visual_prepaint(
                     self.pane_id,
                     item.item_id,
+                    item.visible,
                     item.display_name.clone(),
                     item.icon_name_lines.clone(),
                     item.icon.clone(),
@@ -280,6 +284,9 @@ impl Element for StaticItemVisualLayerElement {
         let count = prepaint.len();
         request_layout.paint(bounds, window, cx, |window, cx| {
             for state in prepaint.iter() {
+                if !state.visible {
+                    continue;
+                }
                 let visual = state.layout.visual_rect;
                 let item_bounds = Bounds::new(
                     point(
@@ -313,6 +320,7 @@ pub(super) fn static_item_visual_layer_element_id(pane_id: PaneId) -> (&'static 
 fn static_item_visual_prepaint(
     pane_id: PaneId,
     item_id: ItemId,
+    visible: bool,
     display_name: SharedString,
     icon_name_lines: Arc<[SharedString]>,
     icon: FileIconSnapshot,
@@ -350,6 +358,7 @@ fn static_item_visual_prepaint(
         .ok()
         .unwrap_or_else(|| Arc::new(shape_static_item_text(&key, &style, window)));
     StaticItemVisualPaintState {
+        visible,
         layout,
         marker_line_height: style.marker_line_height,
         shapes,

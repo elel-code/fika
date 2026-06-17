@@ -38,6 +38,9 @@ impl RawFileGridSnapshot {
 }
 
 fn raw_visible_thumbnail_candidate(item: &RawVisibleItemSnapshot) -> Option<ThumbnailCandidate> {
+    if !item.visible {
+        return None;
+    }
     thumbnail::visible_thumbnail_candidate(
         item.item_id,
         &item.path,

@@ -359,6 +359,37 @@ mod tests {
     }
 
     #[test]
+    fn read_ahead_items_warm_visual_layers_without_interaction_hitboxes() {
+        let mut cache = ItemPaintSlotCache::default();
+        let visible_item =
+            test_visible_item(1, ItemId(7), "visible.txt", test_item_layout(0.0), false);
+        let mut read_ahead_item =
+            test_visible_item(2, ItemId(8), "ahead.txt", test_item_layout(96.0), false);
+        read_ahead_item.visible = false;
+
+        let projection = cache
+            .project_file_grid_snapshot(icons_snapshot(vec![visible_item, read_ahead_item]), None);
+        let FileGridRenderSnapshot::Icons { items, .. } = projection.snapshot else {
+            panic!("expected icons snapshot");
+        };
+
+        assert_eq!(
+            static_item_visual_layer_items(&items, ItemTileTextAlignment::Center)
+                .iter()
+                .map(|item| item.item_id)
+                .collect::<Vec<_>>(),
+            vec![ItemId(7), ItemId(8)]
+        );
+        assert_eq!(
+            item_interaction_layer_items(&items)
+                .iter()
+                .map(|item| item.item_id)
+                .collect::<Vec<_>>(),
+            vec![ItemId(7)]
+        );
+    }
+
+    #[test]
     fn item_interaction_hitbox_bounds_are_layer_relative_visual_rects() {
         let bounds = item_interaction_hitbox_bounds(
             Bounds::new(point(px(20.0), px(30.0)), size(px(400.0), px(300.0))),
@@ -984,6 +1015,7 @@ mod tests {
     ) -> VisibleItemSnapshot {
         VisibleItemSnapshot {
             slot_id,
+            visible: true,
             item_id,
             layout,
             is_dir: false,

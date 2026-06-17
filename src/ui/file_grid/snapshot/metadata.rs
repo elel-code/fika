@@ -80,17 +80,20 @@ pub(super) fn visible_metadata_role_candidates(
 ) -> Vec<MetadataRoleCandidate> {
     match raw_file_grid {
         RawFileGridSnapshot::Compact { items, .. } | RawFileGridSnapshot::Icons { items, .. } => {
-            metadata_role_candidates_for_items(items)
+            metadata_role_candidates_for_items(items.iter().filter(|item| item.visible))
         }
         RawFileGridSnapshot::Details { items, .. } => metadata_role_candidates_for_items(items),
     }
 }
 
-fn metadata_role_candidates_for_items(
-    items: &[impl MetadataRoleCandidateSource],
-) -> Vec<MetadataRoleCandidate> {
+fn metadata_role_candidates_for_items<'a, T>(
+    items: impl IntoIterator<Item = &'a T>,
+) -> Vec<MetadataRoleCandidate>
+where
+    T: MetadataRoleCandidateSource + 'a,
+{
     items
-        .iter()
+        .into_iter()
         .filter(|item| {
             metadata_role_update_needed(
                 item.is_dir(),

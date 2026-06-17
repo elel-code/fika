@@ -50,6 +50,7 @@ pub(super) fn item_image_layer_items(items: &[ItemPaintSnapshot]) -> Vec<ItemIma
                 return None;
             }
             Some(ItemImageLayerItem {
+                visible: item.visible,
                 layout: item.layout,
                 thumbnail_path: content.thumbnail_path.clone(),
                 icon: content.icon.clone(),
@@ -60,6 +61,7 @@ pub(super) fn item_image_layer_items(items: &[ItemPaintSnapshot]) -> Vec<ItemIma
 }
 
 pub(super) struct ItemImageLayerItem {
+    visible: bool,
     layout: ItemLayout,
     thumbnail_path: Option<Arc<Path>>,
     icon: FileIconSnapshot,
@@ -88,6 +90,7 @@ pub(super) struct ItemImageLayerElement {
 }
 
 pub(super) struct ItemImagePaintState {
+    visible: bool,
     icon_rect: ViewRect,
     image: Option<Arc<RenderImage>>,
     fallback: Option<ItemImageFallbackPaintState>,
@@ -179,6 +182,9 @@ impl Element for ItemImageLayerElement {
         let count = prepaint.len();
         request_layout.paint(bounds, window, cx, |window, cx| {
             for state in prepaint.iter() {
+                if !state.visible {
+                    continue;
+                }
                 item_image_layer_paint_item(bounds, state, window, cx);
             }
         });
@@ -221,6 +227,7 @@ fn item_image_layer_prepaint_item(
         _ => (None, None),
     };
     Some(ItemImagePaintState {
+        visible: item.visible,
         icon_rect: item.layout.icon_rect,
         image,
         fallback,
