@@ -40,6 +40,17 @@ struct FileIconCacheKey {
     size_px: u16,
 }
 
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub(crate) struct FileIconResolveRequest {
+    key: FileIconCacheKey,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct FileIconResolveResult {
+    request: FileIconResolveRequest,
+    icon: FileIconSnapshot,
+}
+
 #[derive(Clone, Debug, Default)]
 pub(crate) struct FileIconCache {
     cached: HashMap<FileIconCacheKey, FileIconSnapshot>,
@@ -49,6 +60,7 @@ pub(crate) struct FileIconCache {
 }
 
 impl FileIconCache {
+    #[cfg(test)]
     pub(crate) fn icon_for(
         &mut self,
         path: &Path,
@@ -57,11 +69,7 @@ impl FileIconCache {
         mime_magic_checked: bool,
         icon_size: f32,
     ) -> FileIconSnapshot {
-        let kind = file_icon_kind(path, is_dir, mime_type, mime_magic_checked);
-        let key = FileIconCacheKey {
-            kind,
-            size_px: icon_cache_size(icon_size),
-        };
+        let key = file_icon_cache_key(path, is_dir, mime_type, mime_magic_checked, icon_size);
         if let Some(icon) = self.cached.get(&key) {
             return icon.clone();
         }
@@ -69,6 +77,45 @@ impl FileIconCache {
         let icon = file_icon_snapshot(&key.kind, key.size_px, &mut self.theme, &self.mime);
         self.cached.insert(key, icon.clone());
         icon
+    }
+
+    pub(crate) fn cached_or_preliminary_icon_for(
+        &mut self,
+        path: &Path,
+        is_dir: bool,
+        mime_type: Option<Arc<str>>,
+        mime_magic_checked: bool,
+        icon_size: f32,
+    ) -> FileIconSnapshot {
+        let key = file_icon_cache_key(path, is_dir, mime_type, mime_magic_checked, icon_size);
+        self.cached
+            .get(&key)
+            .cloned()
+            .unwrap_or_else(|| preliminary_file_icon_snapshot(&key.kind, &self.mime))
+    }
+
+    pub(crate) fn resolve_request_for(
+        &self,
+        path: &Path,
+        is_dir: bool,
+        mime_type: Option<Arc<str>>,
+        mime_magic_checked: bool,
+        icon_size: f32,
+    ) -> Option<FileIconResolveRequest> {
+        let key = file_icon_cache_key(path, is_dir, mime_type, mime_magic_checked, icon_size);
+        (!self.cached.contains_key(&key)).then_some(FileIconResolveRequest { key })
+    }
+
+    pub(crate) fn finish_resolve_results(&mut self, results: Vec<FileIconResolveResult>) -> bool {
+        let mut changed = false;
+        for result in results {
+            if self.cached.get(&result.request.key) == Some(&result.icon) {
+                continue;
+            }
+            self.cached.insert(result.request.key, result.icon);
+            changed = true;
+        }
+        changed
     }
 
     pub(crate) fn named_icon(
@@ -121,6 +168,21 @@ impl FileIconCache {
         self.named_cached.insert(key, icon.clone());
         icon
     }
+}
+
+pub(crate) fn file_icon_resolve_results_for_requests(
+    requests: Vec<FileIconResolveRequest>,
+) -> Vec<FileIconResolveResult> {
+    let mut theme = IconThemeResolver::default();
+    let mime = fika_core::MimeDatabase::default();
+    requests
+        .into_iter()
+        .map(|request| {
+            let icon =
+                file_icon_snapshot(&request.key.kind, request.key.size_px, &mut theme, &mime);
+            FileIconResolveResult { request, icon }
+        })
+        .collect()
 }
 
 #[derive(Clone, Debug)]
@@ -260,12 +322,46 @@ fn icon_cache_size(icon_size: f32) -> u16 {
     icon_size.round().clamp(16.0, 256.0) as u16
 }
 
+fn file_icon_cache_key(
+    path: &Path,
+    is_dir: bool,
+    mime_type: Option<Arc<str>>,
+    mime_magic_checked: bool,
+    icon_size: f32,
+) -> FileIconCacheKey {
+    FileIconCacheKey {
+        kind: file_icon_kind(path, is_dir, mime_type, mime_magic_checked),
+        size_px: icon_cache_size(icon_size),
+    }
+}
+
 fn absolute_icon_candidate(icon_name: &str) -> Option<PathBuf> {
     let path = Path::new(icon_name);
     if path.is_absolute() && is_renderable_icon_file(path) {
         return Some(path.to_path_buf());
     }
     None
+}
+
+fn preliminary_file_icon_snapshot(
+    kind: &FileIconKind,
+    mime: &fika_core::MimeDatabase,
+) -> FileIconSnapshot {
+    let profile = file_icon_profile(kind, mime);
+    let icon_name = profile
+        .icon_candidates
+        .first()
+        .or_else(|| profile.generic_candidates.first())
+        .cloned()
+        .unwrap_or_else(|| "unknown".to_string());
+
+    FileIconSnapshot {
+        icon_name: Arc::from(icon_name),
+        path: None,
+        fallback_marker: Arc::from(profile.marker),
+        fallback_fg: profile.fg,
+        fallback_bg: profile.bg,
+    }
 }
 
 fn file_icon_snapshot(
@@ -1104,6 +1200,85 @@ gtk-icon-theme-name=breeze\n"
         assert_eq!(
             resolved_binary.icon_name.as_ref(),
             "application-octet-stream"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn cached_or_preliminary_icon_does_not_resolve_theme_path_on_miss() {
+        let root = test_dir("nonblocking-icon-miss");
+        let resolved_path = root.join("theme/48x48/mimetypes/text-rust.svg");
+        std::fs::create_dir_all(resolved_path.parent().unwrap()).unwrap();
+        std::fs::write(&resolved_path, test_svg()).unwrap();
+        let mut cache = FileIconCache {
+            cached: HashMap::new(),
+            named_cached: HashMap::new(),
+            theme: IconThemeResolver {
+                roots: vec![root.clone()],
+                themes: vec!["theme".to_string()],
+                search_order: None,
+                inherits_cache: HashMap::new(),
+                path_cache: HashMap::new(),
+            },
+            mime: fika_core::MimeDatabase::from_maps(
+                HashMap::new(),
+                HashMap::new(),
+                HashMap::new(),
+            ),
+        };
+
+        let preliminary = cache.cached_or_preliminary_icon_for(
+            Path::new("lib.rs"),
+            false,
+            Some(Arc::from("text/rust")),
+            true,
+            48.0,
+        );
+
+        assert_eq!(preliminary.icon_name.as_ref(), "text-rust");
+        assert_eq!(preliminary.path, None);
+        assert!(cache.cached.is_empty());
+        let request = cache
+            .resolve_request_for(
+                Path::new("lib.rs"),
+                false,
+                Some(Arc::from("text/rust")),
+                true,
+                48.0,
+            )
+            .unwrap();
+        let resolved = FileIconSnapshot {
+            icon_name: Arc::from("text-rust"),
+            path: Some(Arc::from(resolved_path.as_path())),
+            fallback_marker: preliminary.fallback_marker.clone(),
+            fallback_fg: preliminary.fallback_fg,
+            fallback_bg: preliminary.fallback_bg,
+        };
+
+        assert!(cache.finish_resolve_results(vec![FileIconResolveResult {
+            request,
+            icon: resolved.clone(),
+        }]));
+        assert_eq!(
+            cache.cached_or_preliminary_icon_for(
+                Path::new("main.rs"),
+                false,
+                Some(Arc::from("text/rust")),
+                true,
+                48.0,
+            ),
+            resolved
+        );
+        assert!(
+            cache
+                .resolve_request_for(
+                    Path::new("main.rs"),
+                    false,
+                    Some(Arc::from("text/rust")),
+                    true,
+                    48.0,
+                )
+                .is_none()
         );
         let _ = std::fs::remove_dir_all(root);
     }

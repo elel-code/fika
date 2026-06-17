@@ -95,7 +95,9 @@ use ui::filter_bar::{
     FILTER_BAR_HEIGHT, FilterBarSnapshot, FilteredModelCacheEntry, PaneFilterState,
     cached_filtered_model_for_pane, filter_toggle_snapshot,
 };
-use ui::icons::{FileIconCache, FileIconSnapshot};
+use ui::icons::{
+    FileIconCache, FileIconResolveRequest, FileIconSnapshot, file_icon_resolve_results_for_requests,
+};
 use ui::item_view::{ITEM_VIEW_SCROLLBAR_RESERVED_EXTENT, ItemViewScrollState};
 use ui::location_bar::{LocationDraft, LocationEditMetrics};
 use ui::network_auth::{
@@ -204,6 +206,7 @@ fn listing_cache_debug_summary(
 }
 const THUMBNAIL_PROBE_BATCH_SIZE: usize = 32;
 const METADATA_ROLE_BATCH_SIZE: usize = 16;
+const FILE_ICON_RESOLVE_BATCH_SIZE: usize = 64;
 const PANE_HORIZONTAL_BORDER_EXTENT: f32 = 2.0;
 
 const CONTEXT_SUBMENU_HIDE_DELAY: Duration = Duration::from_millis(300);
@@ -478,6 +481,9 @@ pub(crate) struct FikaApp {
     device_monitor_active: bool,
     next_device_monitor_start_at: Instant,
     file_icons: FileIconCache,
+    file_icon_resolve_queued: VecDeque<FileIconResolveRequest>,
+    file_icon_resolve_seen: HashSet<FileIconResolveRequest>,
+    file_icon_resolve_pending: bool,
     mime_applications: MimeApplicationCache,
     space_info: SpaceInfoCache,
     status_summaries: HashMap<PaneId, StatusSummaryCacheEntry>,
@@ -572,6 +578,9 @@ impl FikaApp {
             device_monitor_active: false,
             next_device_monitor_start_at: Instant::now(),
             file_icons: FileIconCache::default(),
+            file_icon_resolve_queued: VecDeque::new(),
+            file_icon_resolve_seen: HashSet::new(),
+            file_icon_resolve_pending: false,
             mime_applications: MimeApplicationCache::load(),
             space_info: SpaceInfoCache::default(),
             status_summaries: HashMap::new(),
@@ -1234,7 +1243,7 @@ impl FikaApp {
                 };
                 let filtered = filtered_model.as_ref().map(|(model, _)| model);
                 let queue_started = perf_enabled.then(Instant::now);
-                let (metadata_role_queued, thumbnail_probe_queued) = self
+                let (metadata_role_queued, thumbnail_probe_queued, file_icon_resolve_queued) = self
                     .queue_visible_model_work_for_raw_grid(
                         pane_id,
                         generation,
@@ -1254,6 +1263,9 @@ impl FikaApp {
                 }
                 if thumbnail_probe_queued {
                     self.maybe_start_thumbnail_probe(cx);
+                }
+                if file_icon_resolve_queued {
+                    self.maybe_start_file_icon_resolve(cx);
                 }
                 let mut raw_file_grid = raw_file_grid;
                 raw_file_grid
@@ -1385,7 +1397,7 @@ impl FikaApp {
         item_count: usize,
         raw_file_grid: &RawFileGridSnapshot,
         filtered: Option<&fika_core::FilteredModel>,
-    ) -> Option<(bool, bool)> {
+    ) -> Option<(bool, bool, bool)> {
         let key = PaneVisibleWorkKey::new(
             generation,
             view_mode,
@@ -1395,7 +1407,7 @@ impl FikaApp {
             raw_file_grid,
         );
         if self.visible_work_keys.get(&pane_id) == Some(&key) {
-            return Some((false, false));
+            return Some((false, false, false));
         }
         self.visible_work_keys.insert(pane_id, key);
 
@@ -1416,7 +1428,118 @@ impl FikaApp {
                 item_count,
             ),
         );
-        Some((metadata_role_queued, thumbnail_probe_queued))
+        let file_icon_resolve_queued =
+            self.queue_file_icon_resolve_work_for_raw_grid(raw_file_grid);
+        Some((
+            metadata_role_queued,
+            thumbnail_probe_queued,
+            file_icon_resolve_queued,
+        ))
+    }
+
+    fn queue_file_icon_resolve_work_for_raw_grid(
+        &mut self,
+        raw_file_grid: &RawFileGridSnapshot,
+    ) -> bool {
+        let mut queued = false;
+        match raw_file_grid {
+            RawFileGridSnapshot::Compact { items, .. }
+            | RawFileGridSnapshot::Icons { items, .. } => {
+                let visible_range = raw_file_grid
+                    .visible_layout_range_and_count()
+                    .map(|(range, _)| range);
+
+                for item in items.iter().filter(|item| item.visible && !item.is_dir) {
+                    queued |= self.queue_file_icon_resolve_request_for_item(
+                        &item.path,
+                        item.is_dir,
+                        item.mime_type.clone(),
+                        item.mime_magic_checked,
+                        item.layout.icon_rect.width,
+                    );
+                }
+                for item in items.iter().filter(|item| item.visible && item.is_dir) {
+                    queued |= self.queue_file_icon_resolve_request_for_item(
+                        &item.path,
+                        item.is_dir,
+                        item.mime_type.clone(),
+                        item.mime_magic_checked,
+                        item.layout.icon_rect.width,
+                    );
+                }
+
+                if let Some(visible_range) = visible_range {
+                    for item in items.iter().filter(|item| {
+                        !item.visible && item.layout.model_index >= visible_range.end
+                    }) {
+                        queued |= self.queue_file_icon_resolve_request_for_item(
+                            &item.path,
+                            item.is_dir,
+                            item.mime_type.clone(),
+                            item.mime_magic_checked,
+                            item.layout.icon_rect.width,
+                        );
+                    }
+                    for item in items.iter().rev().filter(|item| {
+                        !item.visible && item.layout.model_index < visible_range.start
+                    }) {
+                        queued |= self.queue_file_icon_resolve_request_for_item(
+                            &item.path,
+                            item.is_dir,
+                            item.mime_type.clone(),
+                            item.mime_magic_checked,
+                            item.layout.icon_rect.width,
+                        );
+                    }
+                }
+            }
+            RawFileGridSnapshot::Details { items, metrics, .. } => {
+                for item in items.iter().filter(|item| !item.is_dir) {
+                    queued |= self.queue_file_icon_resolve_request_for_item(
+                        &item.path,
+                        item.is_dir,
+                        item.mime_type.clone(),
+                        item.mime_magic_checked,
+                        metrics.icon_size,
+                    );
+                }
+                for item in items.iter().filter(|item| item.is_dir) {
+                    queued |= self.queue_file_icon_resolve_request_for_item(
+                        &item.path,
+                        item.is_dir,
+                        item.mime_type.clone(),
+                        item.mime_magic_checked,
+                        metrics.icon_size,
+                    );
+                }
+            }
+        }
+        queued
+    }
+
+    fn queue_file_icon_resolve_request_for_item(
+        &mut self,
+        path: &Path,
+        is_dir: bool,
+        mime_type: Option<Arc<str>>,
+        mime_magic_checked: bool,
+        icon_size: f32,
+    ) -> bool {
+        let request = self.file_icons.resolve_request_for(
+            path,
+            is_dir,
+            mime_type,
+            mime_magic_checked,
+            icon_size,
+        );
+        let Some(request) = request else {
+            return false;
+        };
+        if !self.file_icon_resolve_seen.insert(request.clone()) {
+            return false;
+        }
+        self.file_icon_resolve_queued.push_back(request);
+        true
     }
 
     fn start_listing_result_monitor(receiver: mpsc::Receiver<()>, cx: &mut Context<Self>) {
@@ -2081,6 +2204,53 @@ impl FikaApp {
         changed
     }
 
+    fn maybe_start_file_icon_resolve(&mut self, cx: &mut Context<Self>) {
+        if self.file_icon_resolve_pending || self.file_icon_resolve_queued.is_empty() {
+            return;
+        }
+
+        let mut requests = Vec::new();
+        while requests.len() < FILE_ICON_RESOLVE_BATCH_SIZE {
+            let Some(request) = self.file_icon_resolve_queued.pop_front() else {
+                break;
+            };
+            requests.push(request);
+        }
+        if requests.is_empty() {
+            return;
+        }
+        self.file_icon_resolve_pending = true;
+        let finished_requests = requests.clone();
+
+        cx.spawn(
+            move |this: gpui::WeakEntity<FikaApp>, cx: &mut gpui::AsyncApp| {
+                let mut cx = cx.clone();
+                async move {
+                    let results = cx
+                        .background_spawn(async move {
+                            file_icon_resolve_results_for_requests(requests)
+                        })
+                        .await;
+                    let _ = this.update(&mut cx, |app, cx| {
+                        app.file_icon_resolve_pending = false;
+                        for request in finished_requests {
+                            app.file_icon_resolve_seen.remove(&request);
+                        }
+                        let changed = app.file_icons.finish_resolve_results(results);
+                        if changed {
+                            app.visible_item_snapshot_caches.clear();
+                        }
+                        app.maybe_start_file_icon_resolve(cx);
+                        if changed {
+                            cx.notify();
+                        }
+                    });
+                }
+            },
+        )
+        .detach();
+    }
+
     fn icon_snapshot_for_model_item(
         &mut self,
         path: &Path,
@@ -2089,8 +2259,13 @@ impl FikaApp {
         mime_magic_checked: bool,
         icon_size: f32,
     ) -> FileIconSnapshot {
-        self.file_icons
-            .icon_for(path, is_dir, mime_type, mime_magic_checked, icon_size)
+        self.file_icons.cached_or_preliminary_icon_for(
+            path,
+            is_dir,
+            mime_type,
+            mime_magic_checked,
+            icon_size,
+        )
     }
 
     fn cancel_metadata_role_work_for_pane(&mut self, pane_id: PaneId) {
@@ -12975,7 +13150,7 @@ text/plain=viewer.desktop;\n",
                 &first_raw,
                 None,
             ),
-            Some((true, false))
+            Some((true, false, true))
         );
 
         app.panes.pane_mut(pane_id).unwrap().view.viewport_width = 430.0;
@@ -12997,7 +13172,7 @@ text/plain=viewer.desktop;\n",
                 &second_raw,
                 None,
             ),
-            Some((false, false))
+            Some((false, false, false))
         );
         let batch = app.metadata_role_scheduler.start_role_batch(8).unwrap();
         assert_eq!(batch.requests.len(), 1);
@@ -16524,6 +16699,9 @@ text/plain=viewer.desktop;\n",
             device_monitor_active: false,
             next_device_monitor_start_at: Instant::now(),
             file_icons: FileIconCache::default(),
+            file_icon_resolve_queued: VecDeque::new(),
+            file_icon_resolve_seen: HashSet::new(),
+            file_icon_resolve_pending: false,
             mime_applications: MimeApplicationCache::empty(),
             space_info: SpaceInfoCache::default(),
             status_summaries: HashMap::new(),
