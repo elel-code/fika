@@ -5,13 +5,14 @@ mod section;
 use crate::FikaApp;
 use gpui::prelude::*;
 use gpui::{
-    App, Bounds, Context, Div, Entity, ExternalPaths, Hitbox, HitboxBehavior, MouseButton,
+    App, Bounds, Context, Div, Empty, Entity, ExternalPaths, Hitbox, HitboxBehavior, MouseButton,
     NavigationDirection, ParentElement, Pixels, ScrollHandle, Size, Stateful, Styled, Window,
     canvas, div, fill, point, px, rgb, rgba, size,
 };
 
 use crate::ui::background_tasks::{BackgroundTasksSnapshot, background_tasks_panel};
 use crate::ui::file_grid::ItemDrag;
+use crate::ui::icons::{FileIconCache, FileIconSnapshot, cached_icon_or_fallback};
 use std::time::Instant;
 
 use super::drag::PlaceDrag;
@@ -29,10 +30,137 @@ const PLACES_SCROLLBAR_WIDTH: f32 = 10.0;
 const PLACES_SCROLLBAR_THUMB_WIDTH: f32 = 4.0;
 const PLACES_SCROLLBAR_PADDING: f32 = 3.0;
 const PLACES_SCROLLBAR_MIN_THUMB_HEIGHT: f32 = 24.0;
+pub(crate) const PLACES_SIDEBAR_DEFAULT_WIDTH: f32 = 220.0;
+pub(crate) const PLACES_SIDEBAR_MIN_WIDTH: f32 = 160.0;
+pub(crate) const PLACES_SIDEBAR_MAX_WIDTH: f32 = 420.0;
+const PLACES_SIDEBAR_SPLITTER_WIDTH: f32 = 1.0;
+const PLACES_SIDEBAR_SPLITTER_HITBOX_WIDTH: f32 = 8.0;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlacesSidebarResizeDrag;
+
+pub(crate) fn clamp_places_sidebar_width(width: f32) -> f32 {
+    if !width.is_finite() {
+        return PLACES_SIDEBAR_DEFAULT_WIDTH;
+    }
+    width.clamp(PLACES_SIDEBAR_MIN_WIDTH, PLACES_SIDEBAR_MAX_WIDTH)
+}
+
+pub(crate) fn places_panel_icon_snapshot(
+    cache: &mut FileIconCache,
+    visible: bool,
+) -> FileIconSnapshot {
+    cache.named_icon(
+        if visible {
+            "places-sidebar-visible"
+        } else {
+            "places-sidebar-hidden"
+        },
+        &[
+            "sidebar-show",
+            "view-left-sidebar",
+            "bookmarks",
+            "folder-bookmarks",
+        ],
+        "P",
+        if visible { 0x1f4fbf } else { 0x475569 },
+        if visible { 0xeaf1ff } else { 0xf1f5f9 },
+        18.0,
+    )
+}
+
+pub(crate) fn places_panel_button(
+    visible: bool,
+    icon: FileIconSnapshot,
+    cx: &mut Context<FikaApp>,
+) -> Stateful<Div> {
+    div()
+        .id("places-sidebar-toggle")
+        .h(px(28.0))
+        .min_w(px(28.0))
+        .px_1()
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded_md()
+        .border_1()
+        .border_color(if visible {
+            rgb(0x2f6fed)
+        } else {
+            rgb(0xb6bcc6)
+        })
+        .bg(if visible {
+            rgb(0xeaf1ff)
+        } else {
+            rgb(0xffffff)
+        })
+        .hover(|button| button.bg(rgb(0xdbe7fb)))
+        .cursor_pointer()
+        .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
+            cx.stop_propagation();
+        })
+        .on_mouse_down(MouseButton::Right, |_event, _window, cx| {
+            cx.stop_propagation();
+        })
+        .on_click(
+            cx.listener(move |this, event: &gpui::ClickEvent, _window, cx| {
+                if event.standard_click() {
+                    this.toggle_places_sidebar_from_button();
+                    cx.stop_propagation();
+                    cx.notify();
+                }
+            }),
+        )
+        .child(
+            div()
+                .w(px(18.0))
+                .h(px(18.0))
+                .flex_none()
+                .overflow_hidden()
+                .child(cached_icon_or_fallback(&icon, || {
+                    div().text_xs().child("P").into_any_element()
+                })),
+        )
+}
+
+pub(crate) fn places_sidebar_splitter(cx: &mut Context<FikaApp>) -> Stateful<Div> {
+    div()
+        .id("places-sidebar-splitter")
+        .relative()
+        .flex_none()
+        .w(px(PLACES_SIDEBAR_SPLITTER_WIDTH))
+        .h_full()
+        .bg(rgb(0xc8ced6))
+        .child(
+            div()
+                .id("places-sidebar-splitter-hitbox")
+                .absolute()
+                .top(px(0.0))
+                .bottom(px(0.0))
+                .left(px((PLACES_SIDEBAR_SPLITTER_WIDTH
+                    - PLACES_SIDEBAR_SPLITTER_HITBOX_WIDTH)
+                    / 2.0))
+                .w(px(PLACES_SIDEBAR_SPLITTER_HITBOX_WIDTH))
+                .cursor_col_resize()
+                .block_mouse_except_scroll()
+                .on_click(
+                    cx.listener(move |this, event: &gpui::ClickEvent, _window, cx| {
+                        if event.click_count() >= 2 && this.reset_places_sidebar_width() {
+                            cx.notify();
+                        }
+                        cx.stop_propagation();
+                    }),
+                )
+                .on_drag(PlacesSidebarResizeDrag, |_, _, _, cx| cx.new(|_| Empty)),
+        )
+        .hover(|splitter| splitter.bg(rgb(0x2f6fed)))
+}
 
 pub(crate) fn places_sidebar(
     places: Vec<PlaceSnapshot>,
     background_tasks: Option<BackgroundTasksSnapshot>,
+    width: f32,
     window: &mut Window,
     cx: &mut Context<FikaApp>,
 ) -> Stateful<Div> {
@@ -84,8 +212,8 @@ pub(crate) fn places_sidebar(
         .id("places-sidebar")
         .flex()
         .flex_col()
-        .w(px(220.0))
-        .min_w(px(200.0))
+        .w(px(clamp_places_sidebar_width(width)))
+        .min_w(px(PLACES_SIDEBAR_MIN_WIDTH))
         .min_h_0()
         .mt(px(8.0))
         .mb(px(8.0))

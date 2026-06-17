@@ -602,6 +602,13 @@ by risk and evidence, not by how custom-painted a surface looks.
   `[fika places-row-shape-cache] hits=... misses=... evicted=... entries=...`,
   and `scripts/analyze-places-perf.sh --expect-custom-row-visual-policy`
   requires that channel for opt-in custom row logs.
+- [x] P16w: Add runtime Places panel width and visibility state without changing
+  the row renderer default. The top toolbar now has a Places toggle, the
+  sidebar splitter can resize the panel and double-click reset it, and resize
+  requests flow through the existing pane-row remeasure path so item-view
+  viewports are recalculated after width changes. This is intentionally runtime
+  only; a later persistence slice must save width/visibility through a
+  coalesced settings path rather than writing config on every drag frame.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

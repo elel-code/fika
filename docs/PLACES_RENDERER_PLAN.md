@@ -62,6 +62,24 @@ retained Places row surface with the same separations as file-grid:
   projection, slot projection, row visual prepaint/paint, icon path, scrollbar
   paint, and total sidebar build.
 
+Panel layout belongs beside the Places view/controller boundary, not inside the
+row painter. The Places panel has runtime state for visibility and width; the
+sidebar splitter updates that width and asks the pane row to remeasure item
+viewports through the same next-frame resize path as pane splitters. The toggle
+button hides or shows the panel without destroying pane state. A later
+persistence slice should save width/visibility with the same coalesced settings
+discipline used for other high-frequency UI state; it must not write config
+files from every drag frame.
+
+2026-06-18 runtime layout smoke kept both renderer policies intact after adding
+that panel state:
+
+```bash
+scripts/analyze-places-perf.sh --require-autosmoke --expect-current-gpui-policy /tmp/fika-places-targets-sidebar-layout.log
+scripts/analyze-places-perf.sh --require-overflow-autosmoke --expect-current-gpui-policy /tmp/fika-places-overflow-sidebar-layout.log
+scripts/analyze-places-perf.sh --require-autosmoke --expect-custom-row-visual-policy /tmp/fika-places-custom-sidebar-layout.log
+```
+
 ## Migration Order
 
 1. Add Places perf and renderer-policy logs around the current GPUI sidebar.
@@ -359,3 +377,6 @@ removed from steady opt-in Places frames.
 - Scroll/paint evidence shows no regression against the current GPUI sidebar
   baseline. A custom Places painter that loses to GPUI must stay behind an
   opt-in flag or be removed.
+- Sidebar width/visibility changes remeasure pane viewports without resetting
+  pane content, scroll, selection, Places order, or the current renderer policy.
+  Persistence for width/visibility must be coalesced and verified separately.

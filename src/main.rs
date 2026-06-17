@@ -122,10 +122,12 @@ use ui::places::{
     build_places_with_devices, place_is_mounted,
 };
 use ui::places::{
-    PlaceDrag, PlaceEntry, PlaceSnapshot, PlacesAutosmokeAction, PlacesAutosmokeScenario,
-    PlacesRowTextShapeCache, PlacesSnapshotPerfLog, build_places, default_place_label,
+    PLACES_SIDEBAR_DEFAULT_WIDTH, PlaceDrag, PlaceEntry, PlaceSnapshot, PlacesAutosmokeAction,
+    PlacesAutosmokeScenario, PlacesRowTextShapeCache, PlacesSidebarResizeDrag,
+    PlacesSnapshotPerfLog, build_places, clamp_places_sidebar_width, default_place_label,
     emit_place_paint_slot_perf_log, emit_places_snapshot_perf_log, place_snapshots_for,
-    places_perf_enabled, places_section_count, read_live_device_snapshot,
+    places_panel_button, places_panel_icon_snapshot, places_perf_enabled, places_section_count,
+    places_sidebar_splitter, read_live_device_snapshot,
 };
 use ui::places::{PlacePaintSlotCache, PlacePaintSlotPerfLog};
 use ui::properties_dialog::{
@@ -371,6 +373,8 @@ pub(crate) struct FikaApp {
     hidden_place_sections: BTreeSet<&'static str>,
     place_paint_slots: PlacePaintSlotCache,
     place_row_text_shape_cache: PlacesRowTextShapeCache,
+    places_sidebar_width: f32,
+    places_sidebar_visible: bool,
     user_places_path: PathBuf,
     device_refresh_pending: bool,
     next_device_refresh_at: Instant,
@@ -464,6 +468,8 @@ impl FikaApp {
             hidden_place_sections: BTreeSet::new(),
             place_paint_slots: PlacePaintSlotCache::default(),
             place_row_text_shape_cache: PlacesRowTextShapeCache::default(),
+            places_sidebar_width: PLACES_SIDEBAR_DEFAULT_WIDTH,
+            places_sidebar_visible: true,
             user_places_path,
             device_refresh_pending: false,
             next_device_refresh_at: Instant::now(),
@@ -866,6 +872,28 @@ impl FikaApp {
         } else {
             self.close_pane(pane_id);
         }
+    }
+
+    pub(crate) fn toggle_places_sidebar_from_button(&mut self) {
+        self.places_sidebar_visible = !self.places_sidebar_visible;
+    }
+
+    pub(crate) fn reset_places_sidebar_width(&mut self) -> bool {
+        self.set_places_sidebar_width(PLACES_SIDEBAR_DEFAULT_WIDTH)
+    }
+
+    fn set_places_sidebar_width(&mut self, width: f32) -> bool {
+        let width = clamp_places_sidebar_width(width);
+        if width_value_eq(self.places_sidebar_width, width) {
+            return false;
+        }
+        self.places_sidebar_width = width;
+        true
+    }
+
+    fn resize_places_sidebar_from_row_drag(&mut self, pointer_x: f32, row_x: f32) -> bool {
+        let width = (pointer_x - row_x).floor();
+        self.set_places_sidebar_width(width)
     }
 
     pub(crate) fn close_filter_bar(&mut self, pane_id: PaneId) {
@@ -8541,6 +8569,8 @@ impl Render for FikaApp {
             viewport_size.width.as_f32(),
             viewport_size.height.as_f32(),
         );
+        let places_sidebar_visible = self.places_sidebar_visible;
+        let places_sidebar_width = self.places_sidebar_width;
         let places_started = perf_enabled.then(Instant::now);
         let places = self.place_snapshots();
         let places_elapsed = places_started.map(|started| started.elapsed());
@@ -8582,6 +8612,8 @@ impl Render for FikaApp {
             .map(|chooser| chooser.accept_label.clone());
         let split_icon = pane_split_icon_snapshot(&mut self.file_icons);
         let close_icon = pane_close_icon_snapshot(&mut self.file_icons);
+        let places_panel_icon =
+            places_panel_icon_snapshot(&mut self.file_icons, places_sidebar_visible);
         let pane_elements_started = perf_enabled.then(Instant::now);
         let mut pane_elements = Vec::with_capacity(pane_ids.len().saturating_mul(2));
         for (index, snapshot) in snapshots.into_iter().enumerate() {
@@ -8629,6 +8661,11 @@ impl Render for FikaApp {
                     .gap_2()
                     .px_2()
                     .pt_2()
+                    .child(places_panel_button(
+                        places_sidebar_visible,
+                        places_panel_icon,
+                        cx,
+                    ))
                     .child(div().flex_1())
                     .when_some(focused_filter_toggle, |bar, (pane_id, filter_toggle)| {
                         bar.child(
@@ -8661,12 +8698,34 @@ impl Render for FikaApp {
                     .flex_1()
                     .min_w_0()
                     .overflow_hidden()
-                    .child(ui::places::places_sidebar(
-                        places,
-                        background_tasks,
-                        window,
-                        cx,
+                    .on_drag_move::<PlacesSidebarResizeDrag>(cx.listener(
+                        |this, event: &gpui::DragMoveEvent<PlacesSidebarResizeDrag>, window, cx| {
+                            if this.resize_places_sidebar_from_row_drag(
+                                event.event.position.x.as_f32(),
+                                event.bounds.origin.x.as_f32(),
+                            ) {
+                                this.request_pane_resize_notify(window, cx);
+                            }
+                            cx.stop_propagation();
+                        },
                     ))
+                    .on_drop::<PlacesSidebarResizeDrag>(cx.listener(
+                        |this, _drag: &PlacesSidebarResizeDrag, _window, cx| {
+                            this.pane_resize_notify_pending = false;
+                            cx.notify();
+                            cx.stop_propagation();
+                        },
+                    ))
+                    .when(places_sidebar_visible, |row| {
+                        row.child(ui::places::places_sidebar(
+                            places,
+                            background_tasks,
+                            places_sidebar_width,
+                            window,
+                            cx,
+                        ))
+                        .child(places_sidebar_splitter(cx))
+                    })
                     .child(
                         div()
                             .flex()
@@ -13073,6 +13132,44 @@ text/plain=viewer.desktop;\n",
     }
 
     #[test]
+    fn places_sidebar_width_clamps_and_resets() {
+        let mut app = test_app_with_entries("/tmp/fika-places-sidebar-width", &[]);
+
+        assert_eq!(app.places_sidebar_width, PLACES_SIDEBAR_DEFAULT_WIDTH);
+        assert!(app.set_places_sidebar_width(80.0));
+        assert_eq!(app.places_sidebar_width, clamp_places_sidebar_width(80.0));
+        assert!(app.set_places_sidebar_width(999.0));
+        assert_eq!(app.places_sidebar_width, clamp_places_sidebar_width(999.0));
+        assert!(app.reset_places_sidebar_width());
+        assert_eq!(app.places_sidebar_width, PLACES_SIDEBAR_DEFAULT_WIDTH);
+        assert!(!app.reset_places_sidebar_width());
+    }
+
+    #[test]
+    fn places_sidebar_drag_uses_row_origin() {
+        let mut app = test_app_with_entries("/tmp/fika-places-sidebar-drag", &[]);
+
+        assert!(app.resize_places_sidebar_from_row_drag(315.0, 12.0));
+        assert_eq!(app.places_sidebar_width, clamp_places_sidebar_width(303.0));
+        assert!(app.resize_places_sidebar_from_row_drag(-100.0, 12.0));
+        assert_eq!(app.places_sidebar_width, clamp_places_sidebar_width(-112.0));
+    }
+
+    #[test]
+    fn places_sidebar_visibility_toggle_preserves_width() {
+        let mut app = test_app_with_entries("/tmp/fika-places-sidebar-toggle", &[]);
+        assert!(app.set_places_sidebar_width(276.0));
+
+        app.toggle_places_sidebar_from_button();
+        assert!(!app.places_sidebar_visible);
+        assert_eq!(app.places_sidebar_width, 276.0);
+
+        app.toggle_places_sidebar_from_button();
+        assert!(app.places_sidebar_visible);
+        assert_eq!(app.places_sidebar_width, 276.0);
+    }
+
+    #[test]
     fn visible_model_work_queue_is_retained_across_same_icon_resize_range() {
         let mut app = test_app_with_entries("/tmp/fika-visible-work", &[]);
         let pane_id = app.panes.focused().unwrap();
@@ -16666,6 +16763,8 @@ text/plain=viewer.desktop;\n",
             hidden_place_sections: BTreeSet::new(),
             place_paint_slots: PlacePaintSlotCache::default(),
             place_row_text_shape_cache: PlacesRowTextShapeCache::default(),
+            places_sidebar_width: PLACES_SIDEBAR_DEFAULT_WIDTH,
+            places_sidebar_visible: true,
             user_places_path: test_dir("user-places").join("places.xbel"),
             device_refresh_pending: false,
             next_device_refresh_at: Instant::now(),
