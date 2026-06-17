@@ -206,6 +206,27 @@ mod tests {
 }
 
 impl FikaApp {
+    pub(crate) fn record_item_view_perf_frame(
+        &mut self,
+        pane_id: PaneId,
+        mode: ViewMode,
+        item_count: usize,
+        visible_count: usize,
+        slot_stats: ItemPaintSlotStats,
+    ) -> ItemViewPerfPhase {
+        let current_frame = ItemViewPerfFrameState::new(mode, item_count, visible_count);
+        let previous_frame = self.item_view_perf_frames.insert(pane_id, current_frame);
+        classify_item_view_perf_phase(previous_frame, current_frame, slot_stats)
+    }
+
+    pub(crate) fn clear_item_view_perf_state(&mut self, pane_id: PaneId) {
+        self.item_view_perf_frames.remove(&pane_id);
+        self.static_item_visual_perf_stats.remove(&pane_id);
+        self.item_image_perf_stats.remove(&pane_id);
+        self.details_visual_perf_stats.remove(&pane_id);
+        self.item_interaction_perf_stats.remove(&pane_id);
+    }
+
     pub(super) fn take_static_item_text_shape_cache_stats(
         &mut self,
         pane_id: PaneId,

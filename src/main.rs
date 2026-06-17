@@ -86,11 +86,11 @@ use ui::file_grid::{
     CompactColumnWidthCache, ContentItemHit, DOLPHIN_VISIBLE_ICON_SYNC_BUDGET,
     DetailsTextShapeCache, DetailsVisualPerfStats, FileIconResolveQueue, ItemDrag,
     ItemImagePerfStats, ItemInteractionPerfStats, ItemPaintSlotCache, ItemViewPerfFrameState,
-    ItemViewPerfPhase, PaneLayoutProjection, PaneLayoutProjectionInput, PaneViewportGeometry,
-    PaneVisibleWorkKey, RawFileGridSnapshot, RawFileGridSnapshotInput, StaticItemTextShapeCache,
-    StaticItemVisualPerfStats, VisibleItemSlotPool, VisibleItemSnapshotCache,
-    classify_item_view_perf_phase, compact_text_width, compact_text_width_for_name,
-    content_item_hit_at_point, deferred_thumbnail_candidates_for_model, item_view_perf_enabled,
+    PaneLayoutProjection, PaneLayoutProjectionInput, PaneViewportGeometry, PaneVisibleWorkKey,
+    RawFileGridSnapshot, RawFileGridSnapshotInput, StaticItemTextShapeCache,
+    StaticItemVisualPerfStats, VisibleItemSlotPool, VisibleItemSnapshotCache, compact_text_width,
+    compact_text_width_for_name, content_item_hit_at_point,
+    deferred_thumbnail_candidates_for_model, item_view_perf_enabled,
     model_indexes_intersecting_visual_rect, pane_layout_projection,
     queue_file_icon_resolve_work_for_raw_grid, raw_file_grid_snapshot,
     rename_editor_required_text_width, resolve_visible_file_icons_for_raw_grid,
@@ -780,11 +780,7 @@ impl FikaApp {
         self.visible_item_snapshot_caches.remove(&pane_id);
         self.static_item_text_shape_caches.remove(&pane_id);
         self.details_text_shape_caches.remove(&pane_id);
-        self.item_view_perf_frames.remove(&pane_id);
-        self.static_item_visual_perf_stats.remove(&pane_id);
-        self.item_image_perf_stats.remove(&pane_id);
-        self.details_visual_perf_stats.remove(&pane_id);
-        self.item_interaction_perf_stats.remove(&pane_id);
+        self.clear_item_view_perf_state(pane_id);
         self.clear_hovered_item_for_pane(pane_id);
         self.compact_column_widths.remove(&pane_id);
         self.filtered_models.remove(&pane_id);
@@ -1219,13 +1215,11 @@ impl FikaApp {
                 let item_paint_slot_stats = item_paint_slot_projection.stats;
                 let file_grid = item_paint_slot_projection.snapshot;
                 let item_view_perf_phase = if perf_enabled {
-                    let current_frame =
-                        ItemViewPerfFrameState::new(view.view_mode, item_count, visible_count);
-                    let previous_frame =
-                        self.item_view_perf_frames.insert(pane_id, current_frame);
-                    Some(classify_item_view_perf_phase(
-                        previous_frame,
-                        current_frame,
+                    Some(self.record_item_view_perf_frame(
+                        pane_id,
+                        view.view_mode,
+                        item_count,
+                        visible_count,
                         item_paint_slot_stats,
                     ))
                 } else {
@@ -1239,7 +1233,7 @@ impl FikaApp {
                         pane_id.0,
                         view.view_mode,
                         item_view_perf_phase
-                            .map(ItemViewPerfPhase::label)
+                            .map(|phase| phase.label())
                             .unwrap_or("unknown"),
                         item_count,
                         visible_count,
@@ -2899,11 +2893,7 @@ impl FikaApp {
         self.visible_item_snapshot_caches.remove(&pane_id);
         self.static_item_text_shape_caches.remove(&pane_id);
         self.details_text_shape_caches.remove(&pane_id);
-        self.item_view_perf_frames.remove(&pane_id);
-        self.static_item_visual_perf_stats.remove(&pane_id);
-        self.item_image_perf_stats.remove(&pane_id);
-        self.details_visual_perf_stats.remove(&pane_id);
-        self.item_interaction_perf_stats.remove(&pane_id);
+        self.clear_item_view_perf_state(pane_id);
         self.clear_hovered_item_for_pane(pane_id);
         self.compact_column_widths.remove(&pane_id);
         self.status_summaries.remove(&pane_id);
