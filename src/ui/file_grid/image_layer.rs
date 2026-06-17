@@ -170,14 +170,28 @@ pub(super) struct ItemImageLayerElement {
 pub(super) struct ItemImagePaintState {
     visible: bool,
     icon_rect: ViewRect,
+    kind: ItemImagePaintKind,
     image: Option<Arc<RenderImage>>,
     fallback: Option<ItemImageFallbackPaintState>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum ItemImagePaintKind {
+    Thumbnail,
+    ThemeIcon,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum ThemeIconPlaceholderKind {
+    File,
+    Folder,
 }
 
 pub(super) struct ItemImageFallbackPaintState {
     pub(super) marker_line: Option<gpui::ShapedLine>,
     pub(super) marker_line_height: Pixels,
     pub(super) fallback_bg: u32,
+    pub(super) placeholder: Option<ThemeIconPlaceholderKind>,
 }
 
 impl IntoElement for ItemImageLayerElement {
@@ -296,21 +310,27 @@ fn item_image_layer_prepaint_item(
     }
     let source_path = item_image_layer_item_source_path(item)?;
     let retained_source = item_image_layer_retained_source(item)?;
-    let image = if item.thumbnail_path.is_some() {
+    let kind = if item.thumbnail_path.is_some() {
+        ItemImagePaintKind::Thumbnail
+    } else {
+        ItemImagePaintKind::ThemeIcon
+    };
+    let image = if kind == ItemImagePaintKind::Thumbnail {
         state.load_thumbnail_or_retained(source_path, retained_source, window, cx)
     } else {
         state.load_theme_icon_or_retained(source_path, retained_source, window, cx)
     };
     let fallback = image.is_none().then(|| {
-        if item.thumbnail_path.is_some() {
+        if kind == ItemImagePaintKind::Thumbnail {
             item_image_marker_fallback_prepaint(item, window)
         } else {
-            theme_icon_placeholder_fallback()
+            theme_icon_placeholder_fallback(&item.icon)
         }
     });
     Some(ItemImagePaintState {
         visible: item.visible,
         icon_rect: item.layout.icon_rect,
+        kind,
         image,
         fallback,
     })
@@ -347,14 +367,29 @@ fn item_image_marker_fallback_prepaint(
             .min(ITEM_NAME_LINE_HEIGHT)
             .max(1.0)),
         fallback_bg: item.icon.fallback_bg,
+        placeholder: None,
     }
 }
 
-pub(super) fn theme_icon_placeholder_fallback() -> ItemImageFallbackPaintState {
+pub(super) fn theme_icon_placeholder_fallback(
+    icon: &FileIconSnapshot,
+) -> ItemImageFallbackPaintState {
     ItemImageFallbackPaintState {
         marker_line: None,
         marker_line_height: px(0.0),
         fallback_bg: 0xf3f4f6,
+        placeholder: Some(theme_icon_placeholder_kind(icon)),
+    }
+}
+
+pub(super) fn theme_icon_placeholder_kind(icon: &FileIconSnapshot) -> ThemeIconPlaceholderKind {
+    if icon.fallback_marker.as_ref() == "DIR"
+        || icon.icon_name.as_ref() == "folder"
+        || icon.icon_name.as_ref() == "inode-directory"
+    {
+        ThemeIconPlaceholderKind::Folder
+    } else {
+        ThemeIconPlaceholderKind::File
     }
 }
 
@@ -373,7 +408,10 @@ fn item_image_layer_paint_item(
         if u32::from(image_size.width) == 0 || u32::from(image_size.height) == 0 {
             return;
         }
-        let image_bounds = ObjectFit::Contain.get_bounds(icon_bounds, image_size);
+        let image_bounds = match state.kind {
+            ItemImagePaintKind::Thumbnail => ObjectFit::Contain.get_bounds(icon_bounds, image_size),
+            ItemImagePaintKind::ThemeIcon => theme_icon_square_bounds(icon_bounds),
+        };
         window
             .paint_image(image_bounds, Corners::all(px(6.0)), image.clone(), 0, false)
             .ok();
@@ -410,23 +448,72 @@ pub(super) fn paint_item_image_fallback(
             )
             .ok();
     } else {
-        paint_theme_icon_placeholder(icon_bounds, corner_radius, window);
+        paint_theme_icon_placeholder(
+            icon_bounds,
+            corner_radius,
+            fallback
+                .placeholder
+                .unwrap_or(ThemeIconPlaceholderKind::File),
+            window,
+        );
     }
+}
+
+pub(super) fn paint_theme_icon_image(
+    icon_bounds: Bounds<Pixels>,
+    image: &Arc<RenderImage>,
+    corner_radius: Pixels,
+    window: &mut Window,
+) -> bool {
+    if image.frame_count() == 0 {
+        return false;
+    }
+    let image_size = image.size(0);
+    if u32::from(image_size.width) == 0 || u32::from(image_size.height) == 0 {
+        return false;
+    }
+    window
+        .paint_image(
+            theme_icon_square_bounds(icon_bounds),
+            Corners::all(corner_radius),
+            image.clone(),
+            0,
+            false,
+        )
+        .is_ok()
 }
 
 fn paint_theme_icon_placeholder(
     icon_bounds: Bounds<Pixels>,
     corner_radius: Pixels,
+    kind: ThemeIconPlaceholderKind,
     window: &mut Window,
 ) {
+    let icon_bounds = theme_icon_square_bounds(icon_bounds);
     let side = icon_bounds
         .size
         .width
         .min(icon_bounds.size.height)
         .as_f32()
         .max(1.0);
-    let body_width = side * 0.72;
-    let body_height = side * 0.84;
+    match kind {
+        ThemeIconPlaceholderKind::File => {
+            paint_file_theme_icon_placeholder(icon_bounds, side, corner_radius, window);
+        }
+        ThemeIconPlaceholderKind::Folder => {
+            paint_folder_theme_icon_placeholder(icon_bounds, side, corner_radius, window);
+        }
+    }
+}
+
+fn paint_file_theme_icon_placeholder(
+    icon_bounds: Bounds<Pixels>,
+    side: f32,
+    corner_radius: Pixels,
+    window: &mut Window,
+) {
+    let body_width = side * 0.86;
+    let body_height = side * 0.92;
     let body = Bounds::new(
         point(
             icon_bounds.origin.x
@@ -440,7 +527,7 @@ fn paint_theme_icon_placeholder(
         fill(body, rgb(0xf8fafc))
             .corner_radii(corner_radius.min(px(5.0)))
             .border_widths(px(1.0))
-            .border_color(rgb(0xcbd5e1)),
+            .border_color(rgb(0x94a3b8)),
     );
 
     let fold = (side * 0.22).clamp(4.0, 14.0);
@@ -452,8 +539,58 @@ fn paint_theme_icon_placeholder(
         fill(fold_bounds, rgb(0xe2e8f0))
             .corner_radii(px(2.0))
             .border_widths(px(1.0))
-            .border_color(rgb(0xcbd5e1)),
+            .border_color(rgb(0x94a3b8)),
     );
+}
+
+fn paint_folder_theme_icon_placeholder(
+    icon_bounds: Bounds<Pixels>,
+    side: f32,
+    corner_radius: Pixels,
+    window: &mut Window,
+) {
+    let body_width = side * 0.9;
+    let body_height = side * 0.68;
+    let body_left = icon_bounds.origin.x + px(side * 0.05);
+    let body_top = icon_bounds.origin.y + px(side * 0.26);
+    let tab = Bounds::new(
+        point(
+            body_left + px(side * 0.04),
+            icon_bounds.origin.y + px(side * 0.16),
+        ),
+        size(px(side * 0.36), px(side * 0.18)),
+    );
+    let body = Bounds::new(
+        point(body_left, body_top),
+        size(px(body_width), px(body_height)),
+    );
+    window.paint_quad(
+        fill(tab, rgb(0xdbeafe))
+            .corner_radii(corner_radius.min(px(5.0)))
+            .border_widths(px(1.0))
+            .border_color(rgb(0x93c5fd)),
+    );
+    window.paint_quad(
+        fill(body, rgb(0xe8f2ff))
+            .corner_radii(corner_radius.min(px(6.0)))
+            .border_widths(px(1.0))
+            .border_color(rgb(0x93c5fd)),
+    );
+}
+
+fn theme_icon_square_bounds(icon_bounds: Bounds<Pixels>) -> Bounds<Pixels> {
+    let side = icon_bounds
+        .size
+        .width
+        .min(icon_bounds.size.height)
+        .max(px(1.0));
+    Bounds::new(
+        point(
+            icon_bounds.origin.x + ((icon_bounds.size.width - side) / 2.0),
+            icon_bounds.origin.y + ((icon_bounds.size.height - side) / 2.0),
+        ),
+        size(side, side),
+    )
 }
 
 fn item_image_layer_icon_bounds(
@@ -496,6 +633,34 @@ mod tests {
 
         assert!(item_image_pending_load_paints_fallback(&item));
         assert!(!item_image_pending_load_paints_marker(&item));
+        assert_eq!(
+            theme_icon_placeholder_kind(&item.icon),
+            ThemeIconPlaceholderKind::File
+        );
+    }
+
+    #[test]
+    fn folder_theme_icon_pending_load_uses_folder_placeholder() {
+        let mut item = test_item(None);
+        item.icon.icon_name = Arc::from("folder");
+        item.icon.fallback_marker = Arc::from("DIR");
+
+        assert_eq!(
+            theme_icon_placeholder_kind(&item.icon),
+            ThemeIconPlaceholderKind::Folder
+        );
+    }
+
+    #[test]
+    fn theme_icon_square_bounds_centers_non_square_icon_rect() {
+        let bounds = Bounds::new(point(px(10.0), px(20.0)), size(px(40.0), px(24.0)));
+
+        let square = theme_icon_square_bounds(bounds);
+
+        assert_eq!(square.origin.x, px(18.0));
+        assert_eq!(square.origin.y, px(20.0));
+        assert_eq!(square.size.width, px(24.0));
+        assert_eq!(square.size.height, px(24.0));
     }
 
     fn test_item(thumbnail_path: Option<Arc<Path>>) -> ItemImageLayerItem {

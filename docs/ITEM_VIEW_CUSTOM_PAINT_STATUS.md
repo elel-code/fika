@@ -138,10 +138,13 @@ semantic source still matches. MIME/theme icons are retained by `iconName`, so
 zoom path changes and scroll re-entry can reuse a same-icon image until the new
 resource is available. Theme icon decoding remains on GPUI's image-cache path;
 the paint layer must not synchronously read or decode theme icon files during
-prepaint. A neutral markerless document placeholder is only the first-load or
-load-failure fallback for theme icons. Thumbnails are retained only by exact
-thumbnail path. Thumbnail fallback icons are still painted when no real image
-exists yet or the semantic source changed.
+prepaint. Theme icons are painted into the current Dolphin-style square icon
+box instead of recomputing their visible size from the decoded image's
+intrinsic dimensions; first-load or load-failure placeholders use the same
+square box and remain markerless. Thumbnails are retained only by exact
+thumbnail path and continue to use contained image bounds. Thumbnail fallback
+icons are still painted when no real image exists yet or the semantic source
+changed.
 
 The immediate non-GUI-safe work is to freeze fresh runtime evidence after the
 Dolphin-aligned zoom/icon visual update, then execute the P15 transition order.

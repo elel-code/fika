@@ -4,9 +4,9 @@ use std::sync::Arc;
 use fika_core::{PaneId, ViewRect};
 use gpui::prelude::*;
 use gpui::{
-    App, Bounds, Corners, Element, ElementId, Font, FontWeight, GlobalElementId,
-    InspectorElementId, IntoElement, LayoutId, ObjectFit, Pixels, RenderImage, SharedString, Style,
-    StyleRefinement, Styled, TextAlign, TextRun, WeakEntity, Window, fill, point, px, rgb, size,
+    App, Bounds, Element, ElementId, Font, FontWeight, GlobalElementId, InspectorElementId,
+    IntoElement, LayoutId, Pixels, RenderImage, SharedString, Style, StyleRefinement, Styled,
+    TextAlign, TextRun, WeakEntity, Window, fill, point, px, rgb, size,
 };
 
 use crate::FikaApp;
@@ -15,7 +15,7 @@ use crate::ui::icons::FileIconSnapshot;
 use super::details::{DetailsColumn, DetailsColumnKind};
 use super::image_layer::{
     ItemImageFallbackPaintState, RetainedImageLayerState, item_image_retained_source_for,
-    paint_item_image_fallback, theme_icon_placeholder_fallback,
+    paint_item_image_fallback, paint_theme_icon_image, theme_icon_placeholder_fallback,
 };
 use super::paint_slots::DetailsPaintSnapshot;
 use super::renderer_policy::{DetailsRowVisualRenderer, details_row_renderer_policy};
@@ -448,7 +448,7 @@ fn details_visual_icon_prepaint(
     });
     let fallback = image.is_none().then(|| {
         if icon.path.is_some() {
-            theme_icon_placeholder_fallback()
+            theme_icon_placeholder_fallback(icon)
         } else {
             details_visual_icon_fallback_prepaint(rect, icon, window)
         }
@@ -487,6 +487,7 @@ fn details_visual_icon_fallback_prepaint(
         )),
         marker_line_height: px(rect.height.min(ITEM_NAME_LINE_HEIGHT).max(1.0)),
         fallback_bg: icon.fallback_bg,
+        placeholder: None,
     }
 }
 
@@ -600,15 +601,8 @@ fn details_visual_paint_icon(
 ) {
     let icon_bounds = details_visual_bounds(layer_bounds, state.rect);
     if let Some(image) = state.image.as_ref() {
-        if image.frame_count() > 0 {
-            let image_size = image.size(0);
-            if u32::from(image_size.width) > 0 && u32::from(image_size.height) > 0 {
-                let image_bounds = ObjectFit::Contain.get_bounds(icon_bounds, image_size);
-                window
-                    .paint_image(image_bounds, Corners::all(px(4.0)), image.clone(), 0, false)
-                    .ok();
-                return;
-            }
+        if paint_theme_icon_image(icon_bounds, image, px(4.0), window) {
+            return;
         }
     }
     if let Some(fallback) = state.fallback.as_ref() {

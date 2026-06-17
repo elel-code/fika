@@ -51,6 +51,10 @@ Fika pane-local zoom maps to Dolphin's view zoom level path.
 - Zoom must not synchronously decode theme icon files in GPUI prepaint. During
   repeated zoom, Fika should keep painting retained same-`iconName` images or
   cached/preliminary snapshots while resolving the current layout icon size.
+- Theme icons must paint into the current square icon box, matching Dolphin's
+  `pixmapForIcon(iconName, QSize(iconHeight, iconHeight), mode)` behavior.
+  Pending placeholders use that same square box so zoom does not show a smaller
+  temporary icon followed by a second size adjustment.
 - If a zoom optimization appears to reduce one frame but reintroduces visible
   blank/marker switching or per-frame icon file decoding, it is not Dolphin
   aligned.

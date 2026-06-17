@@ -374,7 +374,9 @@ This is the active task board for the GPUI item view custom-paint migration.
 - [x] Align zoom icon visuals with Dolphin: ordinary MIME/theme icons resolve
   against the current layout icon size immediately, matching Dolphin
   `KStandardItemListWidget::pixmapForIcon()`, while theme icon files are still
-  not decoded synchronously in prepaint.
+  not decoded synchronously in prepaint. Theme icon images and their first-load
+  placeholders now paint into the same current square icon box to avoid a
+  pending-small-icon then real-icon size jump.
 - [x] Extract retained item/details paint slot state into
   `src/ui/file_grid/paint_slots.rs` so model-to-painter snapshot reuse is
   separate from the renderer construction code.
