@@ -12,7 +12,7 @@ becomes the default.
 | --- | --- | --- | --- |
 | Compact/Icons item model and geometry | retained | `DirectoryModel`, visible snapshots, slot pools | none for current path |
 | Compact/Icons base background, selection, hover, drop tint, labels | replaced | custom content-level painter | runtime perf and DnD smoke evidence must stay current |
-| Compact/Icons thumbnail and theme-icon images | replaced | custom image painter using GPUI `RetainAllImageCache` plus retained real-image fallback | theme-icon paths resolve off the render path; image pending/failure reuses a same-icon retained image when available |
+| Compact/Icons thumbnail and theme-icon images | replaced | custom image painter using GPUI `RetainAllImageCache` plus retained real-image fallback | theme-icon paths resolve off the render path; image pending/failure reuses a same-icon retained image when available, otherwise theme icons use a neutral placeholder rather than MIME marker text |
 | Compact/Icons click, menu, hover, cursor, and drop hit testing | replaced | retained viewport/custom hitboxes plus active item-drag window tracker | runtime DnD smoke still required after painter changes |
 | Compact/Icons drag start | not replaced | GPUI `Div::on_drag` shell | public GPUI custom-element drag-start API or audited Fika GPUI patch |
 | Compact/Icons rename editor | not replaced | GPUI editor overlay | only revisit after caret, selection, IME, and text input behavior are covered |
@@ -129,9 +129,11 @@ success and failure remain model roles, but the image paint layers now keep a
 real decoded image through transient GPUI image-cache misses whenever the
 semantic source still matches. MIME/theme icons are retained by `iconName`, so
 zoom path changes and scroll re-entry can reuse a same-icon image until the new
-resource is decoded. Thumbnails are retained only by exact thumbnail path.
-Fallback icons are still painted when no real image exists yet or the semantic
-source changed.
+resource is decoded. If GPUI has no retained image for a theme icon yet, Fika
+paints a neutral markerless document placeholder; it does not paint the
+extension/MIME fallback marker while waiting for the theme image. Thumbnails
+are retained only by exact thumbnail path. Thumbnail fallback icons are still
+painted when no real image exists yet or the semantic source changed.
 
 The immediate non-GUI-safe work is to split the large `src/ui/file_grid.rs`
 painter/controller code into smaller modules without changing behavior.

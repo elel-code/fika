@@ -69,7 +69,9 @@ widget-local `m_pixmap` and uses `QPixmapCache` by icon name/size, so a loaded
 real icon is not replaced by a marker while a same-icon resource is refreshed.
 Fika's custom image painters must preserve that behavior with retained images
 keyed by MIME/theme `iconName`; thumbnail retention remains keyed by the exact
-thumbnail path.
+thumbnail path. When a theme icon has no retained decoded image yet, the
+pending fallback must be a neutral markerless placeholder, not a MIME- or
+extension-colored text marker.
 
 For directory-load MIME icon switching, compare against
 `KFileItemModel::retrieveData()`, `KFileItemModelRolesUpdater::updateVisibleIcons()`,

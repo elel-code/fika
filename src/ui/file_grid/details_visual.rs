@@ -15,6 +15,7 @@ use crate::ui::icons::FileIconSnapshot;
 use super::details::{DetailsColumn, DetailsColumnKind};
 use super::image_layer::{
     ItemImageFallbackPaintState, RetainedImageLayerState, item_image_retained_source_for,
+    paint_item_image_fallback, theme_icon_placeholder_fallback,
 };
 use super::paint_slots::DetailsPaintSnapshot;
 use super::renderer_policy::{DetailsRowVisualRenderer, details_row_renderer_policy};
@@ -445,9 +446,13 @@ fn details_visual_icon_prepaint(
         let retained_source = item_image_retained_source_for(None, icon)?;
         state.load_or_retained(path.clone(), retained_source, window, cx)
     });
-    let fallback = image
-        .is_none()
-        .then(|| details_visual_icon_fallback_prepaint(rect, icon, window));
+    let fallback = image.is_none().then(|| {
+        if icon.path.is_some() {
+            theme_icon_placeholder_fallback()
+        } else {
+            details_visual_icon_fallback_prepaint(rect, icon, window)
+        }
+    });
     DetailsVisualIconPaintState {
         rect,
         image,
@@ -474,9 +479,12 @@ fn details_visual_icon_fallback_prepaint(
     };
     let marker_font_size = px(window.rem_size().as_f32() * 0.75);
     ItemImageFallbackPaintState {
-        marker_line: window
-            .text_system()
-            .shape_line(marker, marker_font_size, &[marker_run], None),
+        marker_line: Some(window.text_system().shape_line(
+            marker,
+            marker_font_size,
+            &[marker_run],
+            None,
+        )),
         marker_line_height: px(rect.height.min(ITEM_NAME_LINE_HEIGHT).max(1.0)),
         fallback_bg: icon.fallback_bg,
     }
@@ -604,23 +612,7 @@ fn details_visual_paint_icon(
         }
     }
     if let Some(fallback) = state.fallback.as_ref() {
-        window.paint_quad(fill(icon_bounds, rgb(fallback.fallback_bg)).corner_radii(px(4.0)));
-        let marker_origin = point(
-            icon_bounds.origin.x,
-            icon_bounds.origin.y
-                + ((icon_bounds.size.height - fallback.marker_line_height).max(px(0.0)) / 2.0),
-        );
-        fallback
-            .marker_line
-            .paint(
-                marker_origin,
-                fallback.marker_line_height,
-                TextAlign::Center,
-                Some(icon_bounds.size.width),
-                window,
-                cx,
-            )
-            .ok();
+        paint_item_image_fallback(icon_bounds, fallback, px(4.0), window, cx);
     }
 }
 

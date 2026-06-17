@@ -86,6 +86,11 @@ pub(super) fn item_image_pending_load_paints_fallback(_item: &ItemImageLayerItem
     true
 }
 
+#[cfg(test)]
+pub(super) fn item_image_pending_load_paints_marker(item: &ItemImageLayerItem) -> bool {
+    item.thumbnail_path.is_some()
+}
+
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(super) enum ItemImageRetainedSource {
     Thumbnail(Arc<Path>),
@@ -160,7 +165,7 @@ pub(super) struct ItemImagePaintState {
 }
 
 pub(super) struct ItemImageFallbackPaintState {
-    pub(super) marker_line: gpui::ShapedLine,
+    pub(super) marker_line: Option<gpui::ShapedLine>,
     pub(super) marker_line_height: Pixels,
     pub(super) fallback_bg: u32,
 }
@@ -282,9 +287,13 @@ fn item_image_layer_prepaint_item(
     let source_path = item_image_layer_item_source_path(item)?;
     let retained_source = item_image_layer_retained_source(item)?;
     let image = state.load_or_retained(source_path, retained_source, window, cx);
-    let fallback = image
-        .is_none()
-        .then(|| item_image_fallback_prepaint(item, window));
+    let fallback = image.is_none().then(|| {
+        if item.thumbnail_path.is_some() {
+            item_image_marker_fallback_prepaint(item, window)
+        } else {
+            theme_icon_placeholder_fallback()
+        }
+    });
     Some(ItemImagePaintState {
         visible: item.visible,
         icon_rect: item.layout.icon_rect,
@@ -293,7 +302,7 @@ fn item_image_layer_prepaint_item(
     })
 }
 
-fn item_image_fallback_prepaint(
+fn item_image_marker_fallback_prepaint(
     item: &ItemImageLayerItem,
     window: &mut Window,
 ) -> ItemImageFallbackPaintState {
@@ -311,9 +320,12 @@ fn item_image_fallback_prepaint(
     };
     let marker_font_size = px(window.rem_size().as_f32() * 0.75);
     ItemImageFallbackPaintState {
-        marker_line: window
-            .text_system()
-            .shape_line(marker, marker_font_size, &[marker_run], None),
+        marker_line: Some(window.text_system().shape_line(
+            marker,
+            marker_font_size,
+            &[marker_run],
+            None,
+        )),
         marker_line_height: px(item
             .layout
             .icon_rect
@@ -321,6 +333,14 @@ fn item_image_fallback_prepaint(
             .min(ITEM_NAME_LINE_HEIGHT)
             .max(1.0)),
         fallback_bg: item.icon.fallback_bg,
+    }
+}
+
+pub(super) fn theme_icon_placeholder_fallback() -> ItemImageFallbackPaintState {
+    ItemImageFallbackPaintState {
+        marker_line: None,
+        marker_line_height: px(0.0),
+        fallback_bg: 0xf3f4f6,
     }
 }
 
@@ -347,14 +367,25 @@ fn item_image_layer_paint_item(
     }
 
     if let Some(fallback) = state.fallback.as_ref() {
-        window.paint_quad(fill(icon_bounds, rgb(fallback.fallback_bg)).corner_radii(px(6.0)));
+        paint_item_image_fallback(icon_bounds, fallback, px(6.0), window, cx);
+    }
+}
+
+pub(super) fn paint_item_image_fallback(
+    icon_bounds: Bounds<Pixels>,
+    fallback: &ItemImageFallbackPaintState,
+    corner_radius: Pixels,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    if let Some(marker_line) = fallback.marker_line.as_ref() {
+        window.paint_quad(fill(icon_bounds, rgb(fallback.fallback_bg)).corner_radii(corner_radius));
         let marker_origin = point(
             icon_bounds.origin.x,
             icon_bounds.origin.y
                 + ((icon_bounds.size.height - fallback.marker_line_height).max(px(0.0)) / 2.0),
         );
-        fallback
-            .marker_line
+        marker_line
             .paint(
                 marker_origin,
                 fallback.marker_line_height,
@@ -364,7 +395,51 @@ fn item_image_layer_paint_item(
                 cx,
             )
             .ok();
+    } else {
+        paint_theme_icon_placeholder(icon_bounds, corner_radius, window);
     }
+}
+
+fn paint_theme_icon_placeholder(
+    icon_bounds: Bounds<Pixels>,
+    corner_radius: Pixels,
+    window: &mut Window,
+) {
+    let side = icon_bounds
+        .size
+        .width
+        .min(icon_bounds.size.height)
+        .as_f32()
+        .max(1.0);
+    let body_width = side * 0.72;
+    let body_height = side * 0.84;
+    let body = Bounds::new(
+        point(
+            icon_bounds.origin.x
+                + px((icon_bounds.size.width.as_f32() - body_width).max(0.0) / 2.0),
+            icon_bounds.origin.y
+                + px((icon_bounds.size.height.as_f32() - body_height).max(0.0) / 2.0),
+        ),
+        size(px(body_width), px(body_height)),
+    );
+    window.paint_quad(
+        fill(body, rgb(0xf8fafc))
+            .corner_radii(corner_radius.min(px(5.0)))
+            .border_widths(px(1.0))
+            .border_color(rgb(0xcbd5e1)),
+    );
+
+    let fold = (side * 0.22).clamp(4.0, 14.0);
+    let fold_bounds = Bounds::new(
+        point(body.origin.x + body.size.width - px(fold), body.origin.y),
+        size(px(fold), px(fold)),
+    );
+    window.paint_quad(
+        fill(fold_bounds, rgb(0xe2e8f0))
+            .corner_radii(px(2.0))
+            .border_widths(px(1.0))
+            .border_color(rgb(0xcbd5e1)),
+    );
 }
 
 fn item_image_layer_icon_bounds(
@@ -399,6 +474,14 @@ mod tests {
         let item = test_item(Some(Arc::from(Path::new("/tmp/thumb.png"))));
 
         assert!(item_image_load_failure_paints_fallback(&item));
+    }
+
+    #[test]
+    fn theme_icon_pending_load_uses_markerless_placeholder() {
+        let item = test_item(None);
+
+        assert!(item_image_pending_load_paints_fallback(&item));
+        assert!(!item_image_pending_load_paints_marker(&item));
     }
 
     fn test_item(thumbnail_path: Option<Arc<Path>>) -> ItemImageLayerItem {

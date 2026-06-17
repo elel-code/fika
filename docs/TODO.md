@@ -133,6 +133,7 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
 - [x] **P3 — 图标 theme path 后台 resolve**：渲染帧只调用 `FileIconCache::cached_or_preliminary_icon_for()`，cache miss 返回无 I/O 的 preliminary/fallback snapshot；`FikaApp::queue_file_icon_resolve_work_for_raw_grid()` 按 Dolphin visible file → visible dir → read-ahead after → read-ahead before 顺序后台解析 theme path。
 - [x] **P4 — zoom 缩略图 fallback 稳定性**：thumbnail/theme-icon 图片 pending 或 load failure 时由 image paint layer 绘制 item fallback，避免 zoom 期间出现空白图标 rect。
 - [x] **P5 — visible MIME icon 首帧稳定性**：对齐 Dolphin `updateVisibleIcons()` + `pixmapForIcon()`，目录加载和 zoom 时在 snapshot 转换前用小预算同步解析 visible item 的 theme icon path；read-ahead/offscreen icon 仍走后台队列。
+- [x] **P6 — theme icon pending marker 去除**：GPUI `RetainAllImageCache` 冷 miss 仍异步 decode；theme icon 等待真实图片时改用中性无文字占位，不再显示 `TXT/IMG/FILE` 等 MIME marker，避免目录加载时出现多种 MIME 图标切换动作。
 
 ### 双运行时对齐（COSMIC Files）
 

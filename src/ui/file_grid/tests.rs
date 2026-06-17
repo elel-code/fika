@@ -8,7 +8,8 @@ use super::dnd::{drag_preview_label, item_drag_from_details_snapshot};
 use super::image_layer::{
     ItemImageRetainedSource, item_image_layer_item_source_path, item_image_layer_items,
     item_image_load_failure_paints_fallback, item_image_paint_layer_element_id,
-    item_image_pending_load_paints_fallback, item_image_retained_source_for,
+    item_image_pending_load_paints_fallback, item_image_pending_load_paints_marker,
+    item_image_retained_source_for,
 };
 use super::interaction::{
     details_interaction_layer_items, item_interaction_hitbox_bounds,
@@ -252,6 +253,13 @@ fn content_layers_split_base_visuals_from_image_visuals() {
     assert!(item_image_pending_load_paints_fallback(&image_items[0]));
     assert!(item_image_pending_load_paints_fallback(&image_items[1]));
     assert!(item_image_pending_load_paints_fallback(&image_items[2]));
+    assert_eq!(
+        image_items
+            .iter()
+            .map(item_image_pending_load_paints_marker)
+            .collect::<Vec<_>>(),
+        vec![true, false, true]
+    );
     assert_eq!(
         interaction_items
             .iter()
