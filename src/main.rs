@@ -91,8 +91,9 @@ use ui::file_grid::{
     StaticItemVisualPerfStats, VisibleItemSlotPool, VisibleItemSnapshotCache,
     classify_item_view_perf_phase, compact_text_width, compact_text_width_for_name,
     content_item_hit_at_point, deferred_thumbnail_candidates_for_model,
-    model_indexes_intersecting_visual_rect, pane_layout_projection, raw_file_grid_snapshot,
-    rename_editor_required_text_width,
+    model_indexes_intersecting_visual_rect, pane_layout_projection,
+    queue_file_icon_resolve_work_for_raw_grid, raw_file_grid_snapshot,
+    rename_editor_required_text_width, resolve_visible_file_icons_for_raw_grid,
 };
 use ui::filter_bar::{
     FILTER_BAR_HEIGHT, FilterBarSnapshot, FilteredModelCacheEntry, PaneFilterState,
@@ -1142,12 +1143,14 @@ impl FikaApp {
                 let raw_elapsed = raw_started.map(|started| started.elapsed());
                 let file_icon_size = view.icon_size();
                 let icon_sync_started = perf_enabled.then(Instant::now);
-                self.resolve_visible_file_icons_for_raw_grid(
-                    pane_id,
+                if resolve_visible_file_icons_for_raw_grid(
+                    &mut self.file_icons,
                     &raw_file_grid,
                     file_icon_size,
                     DOLPHIN_VISIBLE_ICON_SYNC_BUDGET,
-                );
+                ) {
+                    self.visible_item_snapshot_caches.remove(&pane_id);
+                }
                 let icon_sync_elapsed = icon_sync_started.map(|started| started.elapsed());
                 let visible_count = raw_file_grid
                     .visible_layout_range_and_count()
@@ -1339,35 +1342,6 @@ impl FikaApp {
         changed
     }
 
-    fn resolve_visible_file_icons_for_raw_grid(
-        &mut self,
-        pane_id: PaneId,
-        raw_file_grid: &RawFileGridSnapshot,
-        file_icon_size: f32,
-        budget: Duration,
-    ) -> bool {
-        let started = Instant::now();
-        let mut changed = false;
-        raw_file_grid.for_each_visible_file_icon_resolve_candidate(file_icon_size, |request| {
-            if started.elapsed() >= budget {
-                return false;
-            }
-            changed |= self.file_icons.resolve_now_for(
-                request.path,
-                request.is_dir,
-                request.mime_type.clone(),
-                request.mime_magic_checked,
-                request.icon_size,
-            );
-            true
-        });
-
-        if changed {
-            self.visible_item_snapshot_caches.remove(&pane_id);
-        }
-        changed
-    }
-
     fn queue_visible_model_work_for_raw_grid(
         &mut self,
         pane_id: PaneId,
@@ -1410,50 +1384,17 @@ impl FikaApp {
                 item_count,
             ),
         );
-        let file_icon_resolve_queued =
-            self.queue_file_icon_resolve_work_for_raw_grid(raw_file_grid, file_icon_size);
+        let file_icon_resolve_queued = queue_file_icon_resolve_work_for_raw_grid(
+            &self.file_icons,
+            &mut self.file_icon_resolve_queue,
+            raw_file_grid,
+            file_icon_size,
+        );
         Some((
             metadata_role_queued,
             thumbnail_probe_queued,
             file_icon_resolve_queued,
         ))
-    }
-
-    fn queue_file_icon_resolve_work_for_raw_grid(
-        &mut self,
-        raw_file_grid: &RawFileGridSnapshot,
-        file_icon_size: f32,
-    ) -> bool {
-        raw_file_grid.queue_file_icon_resolve_candidates(file_icon_size, |request| {
-            self.queue_file_icon_resolve_request_for_item(
-                request.path,
-                request.is_dir,
-                request.mime_type.clone(),
-                request.mime_magic_checked,
-                request.icon_size,
-            )
-        })
-    }
-
-    fn queue_file_icon_resolve_request_for_item(
-        &mut self,
-        path: &Path,
-        is_dir: bool,
-        mime_type: Option<Arc<str>>,
-        mime_magic_checked: bool,
-        icon_size: f32,
-    ) -> bool {
-        let request = self.file_icons.resolve_request_for(
-            path,
-            is_dir,
-            mime_type,
-            mime_magic_checked,
-            icon_size,
-        );
-        let Some(request) = request else {
-            return false;
-        };
-        self.file_icon_resolve_queue.queue(request)
     }
 
     fn start_listing_result_monitor(receiver: mpsc::Receiver<()>, cx: &mut Context<Self>) {

@@ -1,7 +1,9 @@
 use std::collections::{HashSet, VecDeque};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use crate::ui::icons::FileIconResolveRequest;
+use crate::ui::icons::{FileIconCache, FileIconResolveRequest};
+
+use super::snapshot::RawFileGridSnapshot;
 
 pub(crate) const DOLPHIN_VISIBLE_ICON_SYNC_BUDGET: Duration = Duration::from_millis(200);
 pub(crate) const FILE_ICON_RESOLVE_BATCH_SIZE: usize = 64;
@@ -50,6 +52,48 @@ impl FileIconResolveQueue {
             self.seen.remove(&request);
         }
     }
+}
+
+pub(crate) fn resolve_visible_file_icons_for_raw_grid(
+    file_icons: &mut FileIconCache,
+    raw_file_grid: &RawFileGridSnapshot,
+    file_icon_size: f32,
+    budget: Duration,
+) -> bool {
+    let started = Instant::now();
+    let mut changed = false;
+    raw_file_grid.for_each_visible_file_icon_resolve_candidate(file_icon_size, |request| {
+        if started.elapsed() >= budget {
+            return false;
+        }
+        changed |= file_icons.resolve_now_for(
+            request.path,
+            request.is_dir,
+            request.mime_type.clone(),
+            request.mime_magic_checked,
+            request.icon_size,
+        );
+        true
+    });
+    changed
+}
+
+pub(crate) fn queue_file_icon_resolve_work_for_raw_grid(
+    file_icons: &FileIconCache,
+    queue: &mut FileIconResolveQueue,
+    raw_file_grid: &RawFileGridSnapshot,
+    file_icon_size: f32,
+) -> bool {
+    raw_file_grid.queue_file_icon_resolve_candidates(file_icon_size, |request| {
+        let request = file_icons.resolve_request_for(
+            request.path,
+            request.is_dir,
+            request.mime_type.clone(),
+            request.mime_magic_checked,
+            request.icon_size,
+        );
+        request.is_some_and(|request| queue.queue(request))
+    })
 }
 
 #[cfg(test)]
