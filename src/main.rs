@@ -1079,8 +1079,25 @@ impl FikaApp {
     }
 
     pub(crate) fn toggle_places_sidebar_from_button(&mut self, cx: &mut Context<Self>) {
-        self.places_sidebar_visible = !self.places_sidebar_visible;
-        self.schedule_app_settings_save(cx);
+        self.toggle_places_sidebar_from_shortcut(cx);
+    }
+
+    fn toggle_places_sidebar_from_shortcut(&mut self, cx: &mut Context<Self>) {
+        if self.toggle_places_sidebar_visibility() {
+            self.schedule_app_settings_save(cx);
+        }
+    }
+
+    fn set_places_sidebar_visible(&mut self, visible: bool) -> bool {
+        if self.places_sidebar_visible == visible {
+            return false;
+        }
+        self.places_sidebar_visible = visible;
+        true
+    }
+
+    fn toggle_places_sidebar_visibility(&mut self) -> bool {
+        self.set_places_sidebar_visible(!self.places_sidebar_visible)
     }
 
     pub(crate) fn reset_places_sidebar_width(&mut self, cx: &mut Context<Self>) -> bool {
@@ -1121,10 +1138,7 @@ impl FikaApp {
         cx: &mut Context<Self>,
     ) -> bool {
         let width_changed = self.set_places_sidebar_width(width);
-        let visible_changed = self.places_sidebar_visible != visible;
-        if visible_changed {
-            self.places_sidebar_visible = visible;
-        }
+        let visible_changed = self.set_places_sidebar_visible(visible);
         let changed = width_changed || visible_changed;
         if changed {
             self.schedule_app_settings_save(cx);
@@ -8485,6 +8499,7 @@ impl FikaApp {
             Some(PaneShortcut::GoParent) => self.go_parent(pane_id),
             Some(PaneShortcut::GoBack) => self.go_back(pane_id),
             Some(PaneShortcut::GoForward) => self.go_forward(pane_id),
+            Some(PaneShortcut::TogglePlacesSidebar) => self.toggle_places_sidebar_from_shortcut(cx),
             Some(PaneShortcut::SplitPane) => self.split_pane(pane_id),
             Some(PaneShortcut::ClosePane) => self.close_pane(pane_id),
             Some(PaneShortcut::EditLocation) => self.start_location_edit(pane_id),
@@ -13101,6 +13116,10 @@ text/plain=viewer.desktop;\n",
             Some(PaneShortcut::EditLocation)
         );
         assert_eq!(
+            pane_shortcut(&gpui::Keystroke::parse("f9").unwrap()),
+            Some(PaneShortcut::TogglePlacesSidebar)
+        );
+        assert_eq!(
             pane_shortcut(&gpui::Keystroke::parse("up").unwrap()),
             Some(PaneShortcut::MoveSelection {
                 direction: SelectionMove::Previous,
@@ -13455,11 +13474,11 @@ text/plain=viewer.desktop;\n",
         let mut app = test_app_with_entries("/tmp/fika-places-sidebar-toggle", &[]);
         assert!(app.set_places_sidebar_width(276.0));
 
-        app.places_sidebar_visible = !app.places_sidebar_visible;
+        assert!(app.toggle_places_sidebar_visibility());
         assert!(!app.places_sidebar_visible);
         assert_eq!(app.places_sidebar_width, 276.0);
 
-        app.places_sidebar_visible = !app.places_sidebar_visible;
+        assert!(app.toggle_places_sidebar_visibility());
         assert!(app.places_sidebar_visible);
         assert_eq!(app.places_sidebar_width, 276.0);
     }

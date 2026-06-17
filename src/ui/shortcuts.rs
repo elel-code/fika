@@ -9,6 +9,7 @@ pub(crate) enum PaneShortcut {
     GoParent,
     GoBack,
     GoForward,
+    TogglePlacesSidebar,
     SplitPane,
     ClosePane,
     MoveSelection {
@@ -34,6 +35,7 @@ pub(crate) fn pane_shortcut(keystroke: &gpui::Keystroke) -> Option<PaneShortcut>
             "/" => Some(PaneShortcut::ShowFilter),
             "f5" => Some(PaneShortcut::Refresh),
             "f6" => Some(PaneShortcut::EditLocation),
+            "f9" => Some(PaneShortcut::TogglePlacesSidebar),
             "f3" => Some(PaneShortcut::SplitPane),
             "f2" => Some(PaneShortcut::RenameSelection),
             "up" | "left" => Some(PaneShortcut::MoveSelection {

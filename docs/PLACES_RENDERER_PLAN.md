@@ -89,6 +89,10 @@ same width and hidden state through the main menu or shortcut surface, keep a
 usable splitter hit target, preserve the last non-hidden width when toggling,
 and prove through `FIKA_AUTOSMOKE_PLACES=layout` that hiding/resizing does not
 reset pane scroll, selection, Places ordering, or the active renderer policy.
+Dolphin wires the Places panel through a dock action named `show_places_panel`
+with `Qt::Key_F9` in `src/dolphinmainwindow.cpp`, so Fika mirrors that
+shortcut for the Places panel toggle while keeping the toolbar button and the
+splitter on the same app-level layout state.
 
 2026-06-18 runtime layout smoke kept both renderer policies intact after adding
 that panel state and settings persistence:
@@ -376,6 +380,9 @@ places_layout_autosmoke start=1 complete=1 initial=1 hide=1 show=1 resize=1 rese
   places_layout_autosmoke start=1 complete=1 initial=1 hide=1 show=1 resize=1 reset=1 restore=1 verify_saved=1
   max_row_gpui=0 max_row_visual_layer=11
   places_row_visual_frames=8 max_rows=11
+/tmp/fika-places-f9-layout.log:
+  places_layout_autosmoke start=1 complete=1 initial=1 hide=1 show=1 resize=1 reset=1 restore=1 verify_saved=1
+  max_row_gpui=11 max_row_visual_layer=0
 ```
 
 ## Opt-In Row Visual Smoke

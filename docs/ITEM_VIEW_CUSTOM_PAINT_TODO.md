@@ -675,13 +675,16 @@ by risk and evidence, not by how custom-painted a surface looks.
   passed the current GPUI policy gate, and
   `/tmp/fika-places-custom-retained-hit-test.log` passed the opt-in custom row
   visual policy gate.
-- [ ] P16ad: Polish the user-facing Places sidebar layout controls after the
+- [x] P16ad: Polish the user-facing Places sidebar layout controls after the
   retained renderer boundary is stable. The current code already has runtime
   width, hide/show, reset, settings persistence, and
-  `FIKA_AUTOSMOKE_PLACES=layout`; future UI work should expose the same state
-  through the preferred menu/shortcut surface, preserve the last non-hidden
-  width when toggling, and keep pane viewport remeasurement behavior covered by
-  the layout autosmoke.
+  `FIKA_AUTOSMOKE_PLACES=layout`. Dolphin exposes the Places panel dock action
+  as `show_places_panel` with `Qt::Key_F9`; Fika now mirrors that with an F9
+  Places toggle while the toolbar button shares the same app-level visibility
+  path. Unit coverage proves the shortcut classification and that toggling
+  preserves the last sidebar width. Pane viewport remeasurement remains covered
+  by the layout autosmoke; `/tmp/fika-places-f9-layout.log` passed
+  `--require-layout-autosmoke --expect-current-gpui-policy`.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,
