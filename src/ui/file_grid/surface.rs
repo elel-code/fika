@@ -26,7 +26,7 @@ pub(crate) fn file_grid(
     window: &mut Window,
     cx: &mut Context<FikaApp>,
 ) -> Stateful<Div> {
-    let perf_enabled = crate::item_view_perf_enabled();
+    let perf_enabled = super::item_view_perf_enabled();
     let build_started = perf_enabled.then(std::time::Instant::now);
     let FileGridProps {
         pane_id,

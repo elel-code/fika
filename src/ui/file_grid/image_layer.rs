@@ -241,7 +241,7 @@ impl Element for ItemImageLayerElement {
         let Some(id) = id else {
             return Vec::new();
         };
-        let perf_started = crate::item_view_perf_enabled().then(std::time::Instant::now);
+        let perf_started = super::item_view_perf_enabled().then(std::time::Instant::now);
         window.with_element_state::<RetainedImageLayerState, _>(id, |state, window| {
             let mut state = state.unwrap_or_else(|| RetainedImageLayerState::new(cx));
             let states = self
@@ -270,7 +270,7 @@ impl Element for ItemImageLayerElement {
         window: &mut Window,
         cx: &mut App,
     ) {
-        let perf_started = crate::item_view_perf_enabled().then(std::time::Instant::now);
+        let perf_started = super::item_view_perf_enabled().then(std::time::Instant::now);
         let count = prepaint.len();
         request_layout.paint(bounds, window, cx, |window, cx| {
             for state in prepaint.iter() {

@@ -90,7 +90,7 @@ use ui::file_grid::{
     PaneVisibleWorkKey, RawFileGridSnapshot, RawFileGridSnapshotInput, StaticItemTextShapeCache,
     StaticItemVisualPerfStats, VisibleItemSlotPool, VisibleItemSnapshotCache,
     classify_item_view_perf_phase, compact_text_width, compact_text_width_for_name,
-    content_item_hit_at_point, deferred_thumbnail_candidates_for_model,
+    content_item_hit_at_point, deferred_thumbnail_candidates_for_model, item_view_perf_enabled,
     model_indexes_intersecting_visual_rect, pane_layout_projection,
     queue_file_icon_resolve_work_for_raw_grid, raw_file_grid_snapshot,
     rename_editor_required_text_width, resolve_visible_file_icons_for_raw_grid,
@@ -155,7 +155,6 @@ const DEVICE_MONITOR_RETRY_INTERVAL: Duration = Duration::from_secs(60);
 const DEBUG_CACHE_ENV: &str = "FIKA_DEBUG_CACHE";
 const DEBUG_DND_ENV: &str = "FIKA_DEBUG_DND";
 const DEBUG_NAV_ENV: &str = "FIKA_DEBUG_NAV";
-const PERF_ITEM_VIEW_ENV: &str = "FIKA_PERF_ITEM_VIEW";
 const BACKGROUND_TASK_HISTORY_LIMIT: usize = 8;
 
 fn env_flag_is_truthy(value: &str) -> bool {
@@ -171,10 +170,6 @@ fn env_flag_enabled(name: &str) -> bool {
 
 fn listing_cache_debug_enabled() -> bool {
     env_flag_enabled(DEBUG_CACHE_ENV) || env_flag_enabled(DEBUG_NAV_ENV)
-}
-
-pub(crate) fn item_view_perf_enabled() -> bool {
-    env_flag_enabled(PERF_ITEM_VIEW_ENV)
 }
 
 pub(crate) fn dnd_debug_enabled() -> bool {

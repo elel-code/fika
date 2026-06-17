@@ -464,6 +464,9 @@ by risk and evidence, not by how custom-painted a surface looks.
 - [ ] P16g: Move the next behavior-preserving item-view orchestration boundary
   out of `src/main.rs`. Candidate: runtime item-view perf/evidence collection
   accessors, because painter perf state already lives under `file_grid/perf.rs`.
+  Done so far: the `FIKA_PERF_ITEM_VIEW` flag and file-grid perf-layer callers
+  are owned by `src/ui/file_grid/perf.rs`; frame-state storage and render
+  summary emission still live in `src/main.rs`.
 - [ ] P16h: Draft a Places retained row painter design before changing Places
   rendering. The design must cover row groups, hidden sections, device rows,
   reorder/drop insertion, context menus, and sidebar scroll.

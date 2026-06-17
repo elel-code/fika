@@ -200,7 +200,7 @@ impl Element for ItemInteractionLayerElement {
         window: &mut Window,
         cx: &mut App,
     ) -> Self::PrepaintState {
-        let perf_started = crate::item_view_perf_enabled().then(std::time::Instant::now);
+        let perf_started = super::item_view_perf_enabled().then(std::time::Instant::now);
         let states = self
             .items
             .iter()
@@ -232,7 +232,7 @@ impl Element for ItemInteractionLayerElement {
         window: &mut Window,
         cx: &mut App,
     ) {
-        let perf_started = crate::item_view_perf_enabled().then(std::time::Instant::now);
+        let perf_started = super::item_view_perf_enabled().then(std::time::Instant::now);
         let count = prepaint.len();
         request_layout.paint(bounds, window, cx, |_window, _cx| {});
         if let Some(state) = item_interaction_hovered_state(prepaint, window) {

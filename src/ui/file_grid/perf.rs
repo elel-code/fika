@@ -1,3 +1,4 @@
+use std::env;
 use std::time::Duration;
 
 use fika_core::{PaneId, ViewMode};
@@ -6,6 +7,19 @@ use crate::FikaApp;
 
 use super::ItemPaintSlotStats;
 use super::{DetailsTextShapeCache, StaticItemTextShapeCache, TextShapeCacheStats};
+
+const PERF_ITEM_VIEW_ENV: &str = "FIKA_PERF_ITEM_VIEW";
+
+pub(crate) fn item_view_perf_enabled() -> bool {
+    env::var(PERF_ITEM_VIEW_ENV).is_ok_and(|value| env_flag_is_truthy(&value))
+}
+
+fn env_flag_is_truthy(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ItemViewPerfFrameState {
@@ -106,6 +120,18 @@ impl ItemLayerPerfStats {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn item_view_perf_env_flag_truthy_values_are_explicit() {
+        assert!(env_flag_is_truthy("1"));
+        assert!(env_flag_is_truthy(" true "));
+        assert!(env_flag_is_truthy("YES"));
+        assert!(env_flag_is_truthy("on"));
+        assert!(!env_flag_is_truthy(""));
+        assert!(!env_flag_is_truthy("0"));
+        assert!(!env_flag_is_truthy("false"));
+        assert!(!env_flag_is_truthy("disabled"));
+    }
 
     #[test]
     fn item_view_perf_phase_separates_mode_switch_from_resize() {

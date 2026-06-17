@@ -259,7 +259,7 @@ impl Element for DetailsVisualLayerElement {
         window: &mut Window,
         cx: &mut App,
     ) -> Self::PrepaintState {
-        let perf_started = crate::item_view_perf_enabled().then(std::time::Instant::now);
+        let perf_started = super::item_view_perf_enabled().then(std::time::Instant::now);
         let states = if let Some(id) = id {
             window.with_element_state::<RetainedImageLayerState, _>(id, |state, window| {
                 let mut state = state.unwrap_or_else(|| RetainedImageLayerState::new(cx));
@@ -304,7 +304,7 @@ impl Element for DetailsVisualLayerElement {
         window: &mut Window,
         cx: &mut App,
     ) {
-        let perf_started = crate::item_view_perf_enabled().then(std::time::Instant::now);
+        let perf_started = super::item_view_perf_enabled().then(std::time::Instant::now);
         let count = prepaint.len();
         request_layout.paint(bounds, window, cx, |window, cx| {
             for state in prepaint.iter() {
