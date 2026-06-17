@@ -44,6 +44,7 @@ pub(super) fn item_image_layer_view(
 pub(super) fn item_image_layer_items(items: &[ItemPaintSnapshot]) -> Vec<ItemImageLayerItem> {
     items
         .iter()
+        .filter(|item| item.visible)
         .filter_map(|item| {
             let content = item.content.as_ref();
             if !item_uses_layer_visual_paint(content) || !item_uses_image_layer(content) {
@@ -213,6 +214,9 @@ fn item_image_layer_prepaint_item(
     window: &mut Window,
     cx: &mut App,
 ) -> Option<ItemImagePaintState> {
+    if !item.visible {
+        return None;
+    }
     let source_path = item_image_layer_item_source_path(item)?;
     let resource = Resource::Path(source_path);
     let load_result = cache.update(cx, |cache, cx| cache.load(&resource, window, cx));

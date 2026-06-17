@@ -262,7 +262,7 @@ fn content_layers_split_base_visuals_from_image_visuals() {
 }
 
 #[test]
-fn read_ahead_items_warm_visual_layers_without_interaction_hitboxes() {
+fn read_ahead_items_stay_out_of_prepaint_layers_and_interaction_hitboxes() {
     let mut cache = ItemPaintSlotCache::default();
     let visible_item = test_visible_item(1, ItemId(7), "visible.txt", test_item_layout(0.0), false);
     let mut read_ahead_item =
@@ -280,7 +280,17 @@ fn read_ahead_items_warm_visual_layers_without_interaction_hitboxes() {
             .iter()
             .map(|item| item.item_id)
             .collect::<Vec<_>>(),
-        vec![ItemId(7), ItemId(8)]
+        vec![ItemId(7)]
+    );
+    assert_eq!(
+        item_image_layer_items(&items)
+            .iter()
+            .map(|item| item_image_layer_item_source_path(item)
+                .unwrap()
+                .as_ref()
+                .to_path_buf())
+            .collect::<Vec<_>>(),
+        Vec::<PathBuf>::new()
     );
     assert_eq!(
         item_interaction_layer_items(&items)

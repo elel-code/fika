@@ -149,6 +149,7 @@ pub(super) fn static_item_visual_layer_items(
 ) -> Vec<StaticItemVisualLayerItem> {
     items
         .iter()
+        .filter(|item| item.visible)
         .filter_map(|item| {
             let content = item.content.as_ref();
             item_uses_layer_visual_paint(content).then(|| StaticItemVisualLayerItem {
