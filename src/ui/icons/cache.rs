@@ -91,7 +91,16 @@ impl FileIconCache {
         self.cached
             .get(&key)
             .cloned()
+            .or_else(|| self.cached_icon_for_kind(&key))
             .unwrap_or_else(|| preliminary_file_icon_snapshot(&key.kind, &self.mime))
+    }
+
+    fn cached_icon_for_kind(&self, key: &FileIconCacheKey) -> Option<FileIconSnapshot> {
+        self.cached
+            .iter()
+            .filter(|(candidate_key, icon)| candidate_key.kind.eq(&key.kind) && icon.path.is_some())
+            .min_by_key(|(candidate_key, _)| candidate_key.size_px.abs_diff(key.size_px))
+            .map(|(_, icon)| icon.clone())
     }
 
     pub(crate) fn resolve_request_for(
@@ -1279,6 +1288,95 @@ gtk-icon-theme-name=breeze\n"
                     48.0,
                 )
                 .is_none()
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn cached_or_preliminary_icon_reuses_cached_kind_at_other_size_while_resolving_exact_size() {
+        let root = test_dir("zoom-icon-transition");
+        let resolved_48 = root.join("theme/48x48/mimetypes/text-rust.svg");
+        let resolved_64 = root.join("theme/64x64/mimetypes/text-rust.svg");
+        std::fs::create_dir_all(resolved_48.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(resolved_64.parent().unwrap()).unwrap();
+        std::fs::write(&resolved_48, test_svg()).unwrap();
+        std::fs::write(&resolved_64, test_svg()).unwrap();
+        let mut cache = FileIconCache {
+            cached: HashMap::new(),
+            named_cached: HashMap::new(),
+            theme: IconThemeResolver {
+                roots: vec![root.clone()],
+                themes: vec!["theme".to_string()],
+                search_order: None,
+                inherits_cache: HashMap::new(),
+                path_cache: HashMap::new(),
+            },
+            mime: fika_core::MimeDatabase::from_maps(
+                HashMap::new(),
+                HashMap::new(),
+                HashMap::new(),
+            ),
+        };
+
+        let request_48 = cache
+            .resolve_request_for(
+                Path::new("lib.rs"),
+                false,
+                Some(Arc::from("text/rust")),
+                true,
+                48.0,
+            )
+            .unwrap();
+        let icon_48 = FileIconSnapshot {
+            icon_name: Arc::from("text-rust"),
+            path: Some(Arc::from(resolved_48.as_path())),
+            fallback_marker: Arc::from("RS"),
+            fallback_fg: 0xffffff,
+            fallback_bg: 0x111111,
+        };
+        assert!(cache.finish_resolve_results(vec![FileIconResolveResult {
+            request: request_48,
+            icon: icon_48.clone(),
+        }]));
+
+        let transitional = cache.cached_or_preliminary_icon_for(
+            Path::new("main.rs"),
+            false,
+            Some(Arc::from("text/rust")),
+            true,
+            64.0,
+        );
+
+        assert_eq!(transitional, icon_48);
+        let request_64 = cache
+            .resolve_request_for(
+                Path::new("main.rs"),
+                false,
+                Some(Arc::from("text/rust")),
+                true,
+                64.0,
+            )
+            .unwrap();
+        let icon_64 = FileIconSnapshot {
+            icon_name: Arc::from("text-rust"),
+            path: Some(Arc::from(resolved_64.as_path())),
+            fallback_marker: Arc::from("RS"),
+            fallback_fg: 0xffffff,
+            fallback_bg: 0x111111,
+        };
+        assert!(cache.finish_resolve_results(vec![FileIconResolveResult {
+            request: request_64,
+            icon: icon_64.clone(),
+        }]));
+        assert_eq!(
+            cache.cached_or_preliminary_icon_for(
+                Path::new("main.rs"),
+                false,
+                Some(Arc::from("text/rust")),
+                true,
+                64.0,
+            ),
+            icon_64
         );
         let _ = std::fs::remove_dir_all(root);
     }
