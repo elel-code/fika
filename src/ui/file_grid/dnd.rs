@@ -371,29 +371,29 @@ fn handle_file_grid_directory_path_list_drag_move(
     window: &mut Window,
     cx: &mut Context<FikaApp>,
 ) {
-    let changed = if contains {
-        app.set_dragged_paths_drop_target_for_directory(
-            pane_id,
-            source_paths,
-            target_dir.to_path_buf(),
-        )
+    if !contains {
+        // The viewport-level retained hit test owns blank/leave transitions.
+        // Per-directory shells only assert positive hits; clearing here can
+        // race against the viewport setting a directory target when GPUI shell
+        // bounds and retained item geometry differ.
+        return;
+    }
+
+    let changed = app.set_dragged_paths_drop_target_for_directory(
+        pane_id,
+        source_paths,
+        target_dir.to_path_buf(),
+    );
+    if item_drop_reject_reason(source_paths, target_dir).is_none() {
+        refresh_active_drag_cursor_for_drop_menu(window, cx);
+        app.refresh_drop_target_lease(cx);
     } else {
-        app.clear_item_drop_target_for_directory(pane_id, target_dir)
-    };
-    if contains {
-        if item_drop_reject_reason(source_paths, target_dir).is_none() {
-            refresh_active_drag_cursor_for_drop_menu(window, cx);
-            app.refresh_drop_target_lease(cx);
-        } else {
-            refresh_active_drag_cursor_not_allowed(window, cx);
-        }
+        refresh_active_drag_cursor_not_allowed(window, cx);
     }
     if changed {
         cx.notify();
     }
-    if contains {
-        cx.stop_propagation();
-    }
+    cx.stop_propagation();
 }
 
 fn handle_file_grid_place_drag_move(
