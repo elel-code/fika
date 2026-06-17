@@ -251,6 +251,10 @@ This is the active task board for the GPUI item view custom-paint migration.
   `src/ui/file_grid/details_visual.rs` so row backgrounds, icon prepaint,
   fallback icon painting, text shaping, and cell painting are no longer owned by
   the main file-grid surface.
+- [x] Extract the GPUI rename overlay boundary into
+  `src/ui/file_grid/rename_overlay.rs` so caret placement, UTF-8 selection
+  clamping, helper text, and editor positioning are separate from the main
+  file-grid renderer surface while remaining on GPUI.
 - [x] Centralize GPUI item/details drag-start shell installation in
   `src/ui/file_grid/dnd.rs` while keeping the shell as the current platform
   boundary.
