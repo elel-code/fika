@@ -83,6 +83,37 @@ GPUI renderer.
 The current replacement matrix and full transition roadmap live in
 `docs/ITEM_VIEW_CUSTOM_PAINT_STATUS.md`.
 
+## Full-Transition Design Rule
+
+The full transition is not a single switch from GPUI widgets to one giant
+custom painter. It is a sequence of retained ownership moves:
+
+1. model roles and async work are projected before render conversion;
+2. layout and visible/work ranges are pane-owned Rust data;
+3. interaction and DnD decisions use retained viewport hit testing;
+4. visual and image painters consume retained paint snapshots;
+5. any GPUI child that remains is a named platform boundary.
+
+This rule lets Fika keep moving toward Dolphin's reuse model without forcing a
+surface into custom paint before the behavior or performance evidence supports
+it. The code should therefore prefer small ownership-preserving cuts over
+surface-wide rewrites. A valid transition slice either removes a GPUI renderer
+with evidence, or makes the retained model/controller/painter boundary more
+true while leaving an explicit GPUI platform bridge in place.
+
+The current non-negotiable boundaries are:
+
+- drag start: GPUI `Div::on_drag` remains until custom elements can initiate a
+  drag with the same payload, preview, cursor offset, and drop behavior;
+- rename editing: GPUI text input remains until focus, caret, selection,
+  validation, commit/cancel, Tab rename-next, and IME are covered;
+- image decode: GPUI image cache remains the decode path unless a replacement
+  beats it on cold load, zoom, memory, and SVG/theme behavior;
+- Places renderer: GPUI stays until a Places-specific retained painter plan and
+  baseline are captured.
+
+When in doubt, align the owner first and the renderer second.
+
 ## Dolphin Reference
 
 Relevant Dolphin flow:

@@ -250,3 +250,35 @@ The next transition work must follow this order:
 
 The detailed task board for this order is P15 in
 `docs/ITEM_VIEW_CUSTOM_PAINT_TODO.md`.
+
+### R8: Concrete Full-Transition Tracks
+
+The accepted direction is a retained/custom-painted item view, but the
+execution must stay split into evidence-backed tracks:
+
+1. **Evidence track**: keep refreshing desktop-session logs for `~/Downloads`
+   and `/etc`, including resize, fullscreen, scroll, zoom, mode switches, and
+   DnD. These logs decide whether a renderer stays custom-painted, not the
+   architectural preference alone.
+2. **Painter track**: continue moving visual work into content-level painters
+   only where the painter consumes retained snapshots and can match Dolphin's
+   widget behavior. The next painter work is stabilization and measurement of
+   image cold-load/zoom paths, not adding new visual surfaces blindly.
+3. **Controller track**: keep click, menu, hover, cursor, selection, pane drop,
+   item drop, and external drop routed through retained viewport hit testing.
+   GPUI per-item callbacks are only temporary platform bridges.
+4. **Shell-boundary track**: remove drag-start shells only after a public GPUI
+   custom-element drag-start API or an audited local GPUI patch exists. Keep
+   rename on GPUI until a behavior matrix covers text input and IME.
+5. **Places track**: treat Places as a separate renderer migration. Its model
+   and DnD state may be retained first, but the GPUI renderer stays until a
+   Places-specific baseline and painter design are recorded.
+6. **Ownership track**: keep extracting orchestration from `src/main.rs` into
+   Dolphin-aligned file-grid modules when the move is behavior-preserving. This
+   includes role scheduling handoff, runtime evidence helpers, and eventually
+   shell-boundary ownership.
+
+This is the practical meaning of "fully transition": every item-view behavior
+should be owned by retained model/layout/controller/painter state, while any
+remaining GPUI renderer is an explicit platform boundary with evidence and a
+removal gate.

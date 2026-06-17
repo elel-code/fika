@@ -430,9 +430,50 @@ pretending that every remaining GPUI boundary can be removed safely today.
   without changing behavior. Candidate boundaries: icon-role update scheduling,
   file-icon resolve queue handoff, and runtime evidence collection helpers.
   Done so far: file-icon queued/seen/in-flight resolve state lives in
-  `file_grid/icon_work.rs`; the earlier pane-local theme-icon role-size
-  debounce was removed because it caused a delayed second zoom adjustment.
-  Runtime evidence collection helpers remain in `src/main.rs`/scripts.
+  `file_grid/icon_work.rs`; visible file-icon sync and queued work handoff now
+  route through `file_grid/icon_work.rs`; the earlier pane-local theme-icon
+  role-size debounce was removed because it caused a delayed second zoom
+  adjustment. Runtime evidence collection helpers remain in `src/main.rs` and
+  scripts.
+
+## P16: Concrete Full-Transition Backlog
+
+This phase turns the accepted direction into an executable queue. It is ordered
+by risk and evidence, not by how custom-painted a surface looks.
+
+- [x] P16a: Record the full-transition tracks in the planning, design, and TODO
+  docs: evidence, painter, controller, shell boundary, Places, and ownership.
+- [ ] P16b: Collect a fresh desktop-session evidence set after the latest
+  Dolphin-aligned theme-icon paint-bound change:
+  `FIKA_PERF_ITEM_VIEW=1 cargo run -- ~/Downloads`,
+  `FIKA_PERF_ITEM_VIEW=1 cargo run -- /etc`, and
+  `FIKA_DEBUG_DND=1 cargo run`.
+- [ ] P16c: Update `docs/ITEM_VIEW_RENDERER_DECISIONS.md` with that evidence,
+  including whether `/etc` zoom/scroll still shows cold image-load jank or
+  visible placeholder-to-icon switching.
+- [ ] P16d: Add or extend runtime evidence tooling if the current logs cannot
+  distinguish these cases: first-load theme-icon placeholder, retained
+  same-`iconName` reuse, GPUI image-cache decode completion, and steady
+  repaint cost.
+- [ ] P16e: Audit local GPUI source for a retained/custom-element drag-start
+  path. If no public API exists, document the exact blocker and keep item and
+  Details drag-start shells.
+- [ ] P16f: If an audited GPUI patch is chosen, design the smallest API that
+  starts drags from retained hitboxes while preserving payload, preview,
+  cursor offset, accepted transfer modes, and external drop behavior.
+- [ ] P16g: Move the next behavior-preserving item-view orchestration boundary
+  out of `src/main.rs`. Candidate: runtime item-view perf/evidence collection
+  accessors, because painter perf state already lives under `file_grid/perf.rs`.
+- [ ] P16h: Draft a Places retained row painter design before changing Places
+  rendering. The design must cover row groups, hidden sections, device rows,
+  reorder/drop insertion, context menus, and sidebar scroll.
+- [ ] P16i: Draft a rename custom-editor behavior matrix before changing the
+  GPUI rename overlay. It must cover focus, caret hit testing, UTF-8 selection,
+  validation helper text, commit/cancel, Tab rename-next, and IME.
+- [ ] P16j: After every P16 implementation slice, commit separately with the
+  relevant verification: docs-only slices need `git diff --check`; code slices
+  need `cargo fmt`, `cargo check`, `cargo test -q`,
+  `scripts/check-item-view-perf-analyzer.sh`, and `git diff --check`.
 
 ## Acceptance Gates
 
