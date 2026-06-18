@@ -1167,6 +1167,11 @@ by risk and evidence, not by how custom-painted a surface looks.
   item-view facade. App-side tests now query authoritative-scroll and
   scrollbar-dragging state through item-view helpers instead of directly
   invoking `ItemViewScrollState` inspection methods from `main.rs`.
+- [x] P16dj: Group rubber-band interaction state into a rubber-band controller.
+  `main.rs` now holds one `RubberBandController` instead of separate
+  pending-band, active-band, and selection-activity fields; viewport and app
+  paths query/mutate rubber-band state through controller methods while keeping
+  the existing GPUI drag shell boundary.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

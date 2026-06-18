@@ -88,6 +88,107 @@ impl RubberBandState {
     }
 }
 
+#[derive(Default, Debug)]
+pub(crate) struct RubberBandController {
+    pending: Option<PendingRubberBand>,
+    active: Option<RubberBandState>,
+    selection_panes: HashSet<PaneId>,
+}
+
+impl RubberBandController {
+    pub(crate) fn active_viewport_rect_for_pane(
+        &self,
+        pane_id: PaneId,
+        view: &ViewState,
+    ) -> Option<ViewRect> {
+        active_rubber_band_viewport_rect_for_pane(self.active, pane_id, view)
+    }
+
+    pub(crate) fn active_is_for_pane(&self, pane_id: PaneId) -> bool {
+        active_rubber_band_is_for_pane(self.active, pane_id)
+    }
+
+    pub(crate) fn clear_active_for_pane(&mut self, pane_id: PaneId) -> bool {
+        clear_active_rubber_band_for_pane(&mut self.active, pane_id)
+    }
+
+    pub(crate) fn press_pending_for_pane(&mut self, pane_id: PaneId, start: ViewPoint) {
+        press_pending_rubber_band_for_pane(&mut self.pending, &mut self.active, pane_id, start);
+    }
+
+    pub(crate) fn pending_activation_start(
+        &self,
+        pane_id: PaneId,
+        current: ViewPoint,
+    ) -> Option<ViewPoint> {
+        pending_rubber_band_activation_start(self.pending, pane_id, current)
+    }
+
+    pub(crate) fn start_active_for_pane(&mut self, pane_id: PaneId, start: ViewPoint) {
+        start_active_rubber_band_for_pane(&mut self.pending, &mut self.active, pane_id, start);
+    }
+
+    pub(crate) fn update_active_for_pane(
+        &mut self,
+        pane_id: PaneId,
+        current: ViewPoint,
+    ) -> Option<RubberBandState> {
+        update_active_rubber_band_for_pane(&mut self.active, pane_id, current)
+    }
+
+    pub(crate) fn finish_for_pane(&mut self, pane_id: PaneId) -> bool {
+        finish_rubber_band_for_pane(&mut self.pending, &mut self.active, pane_id)
+    }
+
+    pub(crate) fn set_selection_activity_for_count(
+        &mut self,
+        pane_id: PaneId,
+        selected_count: usize,
+    ) -> bool {
+        set_rubber_band_selection_activity_for_count(
+            &mut self.selection_panes,
+            pane_id,
+            selected_count,
+        )
+    }
+
+    pub(crate) fn clear_selection_activity_for_pane(&mut self, pane_id: PaneId) -> bool {
+        clear_rubber_band_selection_activity_for_pane(&mut self.selection_panes, pane_id)
+    }
+
+    pub(crate) fn selection_activity_is_active(
+        &self,
+        pane_id: PaneId,
+        selected_count: Option<usize>,
+    ) -> bool {
+        rubber_band_selection_activity_is_active(&self.selection_panes, pane_id, selected_count)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pending_start_for_pane(&self, pane_id: PaneId) -> Option<ViewPoint> {
+        self.pending
+            .filter(|pending| pending.is_for_pane(pane_id))
+            .map(|pending| pending.start)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn active_current_for_pane(&self, pane_id: PaneId) -> Option<ViewPoint> {
+        self.active
+            .filter(|active| active.is_for_pane(pane_id))
+            .map(|active| active.current)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn mark_selection_activity_for_pane(&mut self, pane_id: PaneId) -> bool {
+        self.selection_panes.insert(pane_id)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn has_selection_activity_for_pane(&self, pane_id: PaneId) -> bool {
+        self.selection_panes.contains(&pane_id)
+    }
+}
+
 pub(crate) fn finish_rubber_band_for_pane(
     pending: &mut Option<PendingRubberBand>,
     active: &mut Option<RubberBandState>,
@@ -476,5 +577,47 @@ mod tests {
             pending_rubber_band_activation_start(None, PaneId(1), ViewPoint { x: 20.0, y: 20.0 }),
             None
         );
+    }
+
+    #[test]
+    fn controller_owns_pending_active_and_selection_state() {
+        let pane_id = PaneId(1);
+        let start = ViewPoint { x: 10.0, y: 10.0 };
+        let current = ViewPoint { x: 20.0, y: 30.0 };
+        let mut controller = RubberBandController::default();
+
+        controller.press_pending_for_pane(pane_id, start);
+        assert_eq!(controller.pending_start_for_pane(pane_id), Some(start));
+        assert!(!controller.active_is_for_pane(pane_id));
+        assert_eq!(
+            controller.pending_activation_start(pane_id, ViewPoint { x: 12.0, y: 12.0 }),
+            None
+        );
+        assert_eq!(
+            controller.pending_activation_start(pane_id, current),
+            Some(start)
+        );
+
+        controller.start_active_for_pane(pane_id, start);
+        assert!(controller.pending_start_for_pane(pane_id).is_none());
+        assert!(controller.active_is_for_pane(pane_id));
+        assert_eq!(
+            controller.update_active_for_pane(pane_id, current),
+            Some(RubberBandState {
+                pane_id,
+                start,
+                current
+            })
+        );
+        assert_eq!(controller.active_current_for_pane(pane_id), Some(current));
+
+        assert!(controller.set_selection_activity_for_count(pane_id, 2));
+        assert!(controller.selection_activity_is_active(pane_id, Some(2)));
+        assert!(!controller.selection_activity_is_active(pane_id, Some(0)));
+        assert!(controller.clear_selection_activity_for_pane(pane_id));
+        assert!(!controller.selection_activity_is_active(pane_id, Some(2)));
+
+        assert!(controller.finish_for_pane(pane_id));
+        assert!(!controller.active_is_for_pane(pane_id));
     }
 }

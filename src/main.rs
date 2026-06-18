@@ -164,14 +164,7 @@ use ui::properties_dialog::{
     PropertiesDialogState, properties_dialog_overlay, properties_for_path, properties_for_selection,
 };
 use ui::rename::{RENAME_TEXT_INSET_X, RenameDraft};
-use ui::rubber_band::{
-    PendingRubberBand, RubberBandState, active_rubber_band_is_for_pane,
-    active_rubber_band_viewport_rect_for_pane, clear_active_rubber_band_for_pane,
-    clear_rubber_band_selection_activity_for_pane, finish_rubber_band_for_pane,
-    pending_rubber_band_activation_start, press_pending_rubber_band_for_pane,
-    rubber_band_selection_activity_is_active, set_rubber_band_selection_activity_for_count,
-    start_active_rubber_band_for_pane, update_active_rubber_band_for_pane,
-};
+use ui::rubber_band::RubberBandController;
 #[cfg(test)]
 use ui::shortcuts::PlaceInputAction;
 use ui::shortcuts::{
@@ -429,9 +422,7 @@ pub(crate) struct FikaApp {
     chooser: Option<ChooserState>,
     listing_worker: ListingWorker,
     _keystroke_subscription: Option<gpui::Subscription>,
-    rubber_band_pending: Option<PendingRubberBand>,
-    pub(crate) rubber_band: Option<RubberBandState>,
-    rubber_band_selection_panes: HashSet<PaneId>,
+    rubber_band: RubberBandController,
     context_menu: Option<ContextMenuState>,
     context_menu_tree_hovered: bool,
     context_submenu_hide_generation: u64,
@@ -534,9 +525,7 @@ impl FikaApp {
             chooser,
             listing_worker: ListingWorker::with_result_notifier(listing_results_tx),
             _keystroke_subscription: None,
-            rubber_band_pending: None,
-            rubber_band: None,
-            rubber_band_selection_panes: HashSet::new(),
+            rubber_band: RubberBandController::default(),
             context_menu: None,
             context_menu_tree_hovered: false,
             context_submenu_hide_generation: 0,
@@ -1334,7 +1323,6 @@ impl FikaApp {
                     .as_ref()
                     .filter(|draft| draft.pane_id == pane_id)
                     .map(LocationDraft::snapshot);
-                let rubber_band_state = self.rubber_band;
                 let (
                     breadcrumbs,
                     view,
@@ -1429,8 +1417,9 @@ impl FikaApp {
                         filtered,
                     )?;
                 let queue_elapsed = queue_started.map(|started| started.elapsed());
-                let rubber_band =
-                    active_rubber_band_viewport_rect_for_pane(rubber_band_state, pane_id, &view);
+                let rubber_band = self
+                    .rubber_band
+                    .active_viewport_rect_for_pane(pane_id, &view);
                 let filter_bar = self.filter_bar_snapshot(pane_id, focused_pane, item_count);
                 if metadata_role_queued {
                     self.maybe_start_metadata_role(cx);
@@ -1794,10 +1783,8 @@ impl FikaApp {
         }
         if result.clear_clipboard && result.failure_count == 0 && result.success_count > 0 {
             self.clipboard = None;
-            clear_rubber_band_selection_activity_for_pane(
-                &mut self.rubber_band_selection_panes,
-                result.pane_id,
-            );
+            self.rubber_band
+                .clear_selection_activity_for_pane(result.pane_id);
             let _ = self.panes.clear_selection(result.pane_id);
         }
         let status = match (result.success_count, result.failure_count) {
@@ -2960,10 +2947,7 @@ impl FikaApp {
         self.cancel_metadata_role_work_for_pane(pane_id);
         self.cancel_thumbnail_work_for_pane(pane_id);
         self.pane_viewport_geometries.remove(&pane_id);
-        clear_rubber_band_selection_activity_for_pane(
-            &mut self.rubber_band_selection_panes,
-            pane_id,
-        );
+        self.rubber_band.clear_selection_activity_for_pane(pane_id);
         self.pane_statuses.remove(&pane_id);
         self.location_edit_metrics.remove(&pane_id);
         if self
@@ -2986,7 +2970,7 @@ impl FikaApp {
         }) {
             self.drop_targets.clear_item();
         }
-        clear_active_rubber_band_for_pane(&mut self.rubber_band, pane_id);
+        self.rubber_band.clear_active_for_pane(pane_id);
         if self
             .context_menu
             .as_ref()
@@ -3040,7 +3024,7 @@ impl FikaApp {
         }) {
             self.drop_targets.clear_item();
         }
-        clear_active_rubber_band_for_pane(&mut self.rubber_band, pane_id);
+        self.rubber_band.clear_active_for_pane(pane_id);
         if self
             .context_menu
             .as_ref()
@@ -3064,10 +3048,7 @@ impl FikaApp {
 
     fn select_only(&mut self, pane_id: PaneId, path: PathBuf) {
         if self.panes.select_only(pane_id, path) {
-            clear_rubber_band_selection_activity_for_pane(
-                &mut self.rubber_band_selection_panes,
-                pane_id,
-            );
+            self.rubber_band.clear_selection_activity_for_pane(pane_id);
             self.clear_rename_draft_for_pane(pane_id);
             self.clear_location_draft_for_pane(pane_id);
             let selected = self.panes.selected_count(pane_id).unwrap_or_default();
@@ -3077,10 +3058,7 @@ impl FikaApp {
 
     fn toggle_selection(&mut self, pane_id: PaneId, path: PathBuf) {
         if self.panes.toggle_selection(pane_id, path).is_some() {
-            clear_rubber_band_selection_activity_for_pane(
-                &mut self.rubber_band_selection_panes,
-                pane_id,
-            );
+            self.rubber_band.clear_selection_activity_for_pane(pane_id);
             self.clear_rename_draft_for_pane(pane_id);
             self.clear_location_draft_for_pane(pane_id);
             let selected = self.panes.selected_count(pane_id).unwrap_or_default();
@@ -3095,10 +3073,7 @@ impl FikaApp {
             self.panes.select_range_to(pane_id, path)
         };
         if let Some(selected) = selected {
-            clear_rubber_band_selection_activity_for_pane(
-                &mut self.rubber_band_selection_panes,
-                pane_id,
-            );
+            self.rubber_band.clear_selection_activity_for_pane(pane_id);
             self.clear_rename_draft_for_pane(pane_id);
             self.clear_location_draft_for_pane(pane_id);
             self.set_pane_status(pane_id, format!("{selected} selected"));
@@ -3112,10 +3087,7 @@ impl FikaApp {
             self.panes.select_all(pane_id)
         };
         if let Some(selected) = selected {
-            clear_rubber_band_selection_activity_for_pane(
-                &mut self.rubber_band_selection_panes,
-                pane_id,
-            );
+            self.rubber_band.clear_selection_activity_for_pane(pane_id);
             self.clear_rename_draft_for_pane(pane_id);
             self.clear_location_draft_for_pane(pane_id);
             self.set_pane_status(pane_id, format!("{selected} selected"));
@@ -3123,10 +3095,7 @@ impl FikaApp {
     }
 
     fn clear_selection(&mut self, pane_id: PaneId) {
-        clear_rubber_band_selection_activity_for_pane(
-            &mut self.rubber_band_selection_panes,
-            pane_id,
-        );
+        self.rubber_band.clear_selection_activity_for_pane(pane_id);
         if self.panes.clear_selection(pane_id) {
             self.clear_rename_draft_for_pane(pane_id);
             self.clear_location_draft_for_pane(pane_id);
@@ -3141,10 +3110,7 @@ impl FikaApp {
             self.panes.move_selection(pane_id, direction, extend)
         };
         if let Some(selected) = selected {
-            clear_rubber_band_selection_activity_for_pane(
-                &mut self.rubber_band_selection_panes,
-                pane_id,
-            );
+            self.rubber_band.clear_selection_activity_for_pane(pane_id);
             self.clear_rename_draft_for_pane(pane_id);
             self.clear_location_draft_for_pane(pane_id);
             self.set_pane_status(pane_id, format!("{selected} selected"));
@@ -3152,11 +3118,8 @@ impl FikaApp {
     }
 
     fn rubber_band_selection_active(&self, pane_id: PaneId) -> bool {
-        rubber_band_selection_activity_is_active(
-            &self.rubber_band_selection_panes,
-            pane_id,
-            self.panes.selected_count(pane_id),
-        )
+        self.rubber_band
+            .selection_activity_is_active(pane_id, self.panes.selected_count(pane_id))
     }
 
     fn select_all_filtered(
@@ -3837,12 +3800,7 @@ impl FikaApp {
             return false;
         }
         self.clear_selection_from_blank(pane_id);
-        press_pending_rubber_band_for_pane(
-            &mut self.rubber_band_pending,
-            &mut self.rubber_band,
-            pane_id,
-            start,
-        );
+        self.rubber_band.press_pending_for_pane(pane_id, start);
         true
     }
 
@@ -3865,9 +3823,7 @@ impl FikaApp {
         let Some(current) = self.clamped_content_point_from_window(pane_id, position) else {
             return false;
         };
-        let Some(start) =
-            pending_rubber_band_activation_start(self.rubber_band_pending, pane_id, current)
-        else {
+        let Some(start) = self.rubber_band.pending_activation_start(pane_id, current) else {
             return false;
         };
         self.start_rubber_band(pane_id, start);
@@ -3880,7 +3836,7 @@ impl FikaApp {
         pane_id: PaneId,
         position: gpui::Point<gpui::Pixels>,
     ) -> bool {
-        if !active_rubber_band_is_for_pane(self.rubber_band, pane_id) {
+        if !self.rubber_band.active_is_for_pane(pane_id) {
             return false;
         }
         let Some(current) = self.clamped_content_point_from_window(pane_id, position) else {
@@ -3888,6 +3844,10 @@ impl FikaApp {
         };
         self.update_rubber_band(pane_id, current);
         true
+    }
+
+    pub(crate) fn rubber_band_active_for_pane(&self, pane_id: PaneId) -> bool {
+        self.rubber_band.active_is_for_pane(pane_id)
     }
 
     pub(crate) fn window_position_is_blank_in_pane(
@@ -3995,18 +3955,11 @@ impl FikaApp {
         self.clear_rename_draft_for_pane(pane_id);
         self.clear_location_draft_for_pane(pane_id);
         self.clear_place_draft_for_pane(pane_id);
-        start_active_rubber_band_for_pane(
-            &mut self.rubber_band_pending,
-            &mut self.rubber_band,
-            pane_id,
-            start,
-        );
+        self.rubber_band.start_active_for_pane(pane_id, start);
     }
 
     fn update_rubber_band(&mut self, pane_id: PaneId, current: ViewPoint) {
-        let Some(band) =
-            update_active_rubber_band_for_pane(&mut self.rubber_band, pane_id, current)
-        else {
+        let Some(band) = self.rubber_band.update_active_for_pane(pane_id, current) else {
             return;
         };
         let selection = self.indexes_intersecting_visual_rect(pane_id, band.rect());
@@ -4014,21 +3967,14 @@ impl FikaApp {
             .panes
             .replace_selection_by_indexes(pane_id, selection.iter().copied())
         {
-            set_rubber_band_selection_activity_for_count(
-                &mut self.rubber_band_selection_panes,
-                pane_id,
-                selected,
-            );
+            self.rubber_band
+                .set_selection_activity_for_count(pane_id, selected);
             self.set_pane_status(pane_id, format!("{selected} selected"));
         }
     }
 
     fn finish_rubber_band(&mut self, pane_id: PaneId) {
-        let _ = finish_rubber_band_for_pane(
-            &mut self.rubber_band_pending,
-            &mut self.rubber_band,
-            pane_id,
-        );
+        let _ = self.rubber_band.finish_for_pane(pane_id);
     }
 
     fn clear_rename_draft_for_pane(&mut self, pane_id: PaneId) {
@@ -6076,18 +6022,12 @@ impl FikaApp {
                 );
             }
             if let Some(path) = created_selection {
-                clear_rubber_band_selection_activity_for_pane(
-                    &mut self.rubber_band_selection_panes,
-                    pane_id,
-                );
+                self.rubber_band.clear_selection_activity_for_pane(pane_id);
                 let _ = self.panes.select_only(pane_id, path);
             }
             if clear_clipboard && has_transfer_items {
                 self.clipboard = None;
-                clear_rubber_band_selection_activity_for_pane(
-                    &mut self.rubber_band_selection_panes,
-                    pane_id,
-                );
+                self.rubber_band.clear_selection_activity_for_pane(pane_id);
                 let _ = self.panes.clear_selection(pane_id);
             }
         }
@@ -6185,10 +6125,8 @@ impl FikaApp {
                 },
             );
             self.refresh_affected_dirs(&result.affected_dirs);
-            clear_rubber_band_selection_activity_for_pane(
-                &mut self.rubber_band_selection_panes,
-                result.pane_id,
-            );
+            self.rubber_band
+                .clear_selection_activity_for_pane(result.pane_id);
             let _ = self.panes.clear_selection(result.pane_id);
         }
 
@@ -6314,10 +6252,8 @@ impl FikaApp {
     ) {
         if result.success_count > 0 {
             self.refresh_affected_dirs(&result.affected_dirs);
-            clear_rubber_band_selection_activity_for_pane(
-                &mut self.rubber_band_selection_panes,
-                result.pane_id,
-            );
+            self.rubber_band
+                .clear_selection_activity_for_pane(result.pane_id);
             let _ = self.panes.clear_selection(result.pane_id);
         }
         let restore_conflict_count = result.restore_conflicts.len();
@@ -15106,11 +15042,8 @@ text/plain=viewer.desktop;\n",
         ));
 
         assert_eq!(app.panes.selected_count(pane_id), Some(0));
-        assert!(app.rubber_band.is_none());
-        assert!(
-            app.rubber_band_pending
-                .is_some_and(|pending| pending.pane_id == pane_id)
-        );
+        assert!(!app.rubber_band.active_is_for_pane(pane_id));
+        assert!(app.rubber_band.pending_start_for_pane(pane_id).is_some());
     }
 
     #[test]
@@ -15136,10 +15069,11 @@ text/plain=viewer.desktop;\n",
         );
 
         assert_eq!(app.panes.selected_count(pane_id), Some(0));
-        assert!(app.rubber_band.is_none());
-        assert!(app.rubber_band_pending.is_some_and(|pending| {
-            pending.pane_id == pane_id && pending.start == ViewPoint { x: 400.0, y: 250.0 }
-        }));
+        assert!(!app.rubber_band.active_is_for_pane(pane_id));
+        assert_eq!(
+            app.rubber_band.pending_start_for_pane(pane_id),
+            Some(ViewPoint { x: 400.0, y: 250.0 })
+        );
     }
 
     #[test]
@@ -15166,8 +15100,8 @@ text/plain=viewer.desktop;\n",
         ));
 
         assert_eq!(app.panes.selected_count(pane_id), Some(1));
-        assert!(app.rubber_band.is_none());
-        assert!(app.rubber_band_pending.is_none());
+        assert!(!app.rubber_band.active_is_for_pane(pane_id));
+        assert!(app.rubber_band.pending_start_for_pane(pane_id).is_none());
     }
 
     #[test]
@@ -15194,8 +15128,8 @@ text/plain=viewer.desktop;\n",
                 gpui::point(px(123.0), px(72.0)),
             )
         );
-        assert!(app.rubber_band.is_none());
-        assert!(app.rubber_band_pending.is_some());
+        assert!(!app.rubber_band.active_is_for_pane(pane_id));
+        assert!(app.rubber_band.pending_start_for_pane(pane_id).is_some());
 
         assert!(
             app.activate_pending_rubber_band_from_window(
@@ -15204,11 +15138,15 @@ text/plain=viewer.desktop;\n",
             )
         );
 
-        let band = app.rubber_band.unwrap();
-        assert_eq!(band.current, ViewPoint { x: 300.0, y: 200.0 });
+        assert_eq!(
+            app.rubber_band.active_current_for_pane(pane_id),
+            Some(ViewPoint { x: 300.0, y: 200.0 })
+        );
         let view = &app.panes.pane(pane_id).unwrap().view;
         assert_eq!(
-            band.viewport_rect(view),
+            app.rubber_band
+                .active_viewport_rect_for_pane(pane_id, view)
+                .unwrap(),
             ViewRect {
                 x: 20.0,
                 y: 20.0,
@@ -15232,8 +15170,8 @@ text/plain=viewer.desktop;\n",
         );
 
         assert_eq!(app.panes.selected_count(pane_id), Some(1));
-        assert!(app.rubber_band.is_none());
-        assert!(app.rubber_band_pending.is_none());
+        assert!(!app.rubber_band.active_is_for_pane(pane_id));
+        assert!(app.rubber_band.pending_start_for_pane(pane_id).is_none());
     }
 
     #[test]
@@ -15710,7 +15648,7 @@ text/plain=viewer.desktop;\n",
             pane_id,
             PathBuf::from("/tmp/fika-rubber-context-blank/beta.txt"),
         );
-        app.rubber_band_selection_panes.insert(pane_id);
+        app.rubber_band.mark_selection_activity_for_pane(pane_id);
         assert!(app.set_pane_viewport_geometry(
             pane_id,
             ViewRect {
@@ -15725,7 +15663,7 @@ text/plain=viewer.desktop;\n",
 
         assert_eq!(app.panes.selected_count(pane_id), Some(0));
         assert!(app.context_menu.is_none());
-        assert!(!app.rubber_band_selection_panes.contains(&pane_id));
+        assert!(!app.rubber_band.has_selection_activity_for_pane(pane_id));
     }
 
     #[test]
@@ -15740,7 +15678,7 @@ text/plain=viewer.desktop;\n",
         let gamma = PathBuf::from("/tmp/fika-rubber-context-item/gamma.txt");
         app.select_only(pane_id, alpha);
         app.toggle_selection(pane_id, beta.clone());
-        app.rubber_band_selection_panes.insert(pane_id);
+        app.rubber_band.mark_selection_activity_for_pane(pane_id);
 
         assert!(
             app.show_item_context_menu(pane_id, beta, false, gpui::point(px(120.0), px(80.0)),)
@@ -15762,7 +15700,7 @@ text/plain=viewer.desktop;\n",
         ));
         assert_eq!(app.panes.selected_count(pane_id), Some(0));
         assert!(app.context_menu.is_none());
-        assert!(!app.rubber_band_selection_panes.contains(&pane_id));
+        assert!(!app.rubber_band.has_selection_activity_for_pane(pane_id));
     }
 
     #[test]
@@ -15773,7 +15711,7 @@ text/plain=viewer.desktop;\n",
             pane_id,
             PathBuf::from("/tmp/fika-rubber-context-visual/alpha.txt"),
         );
-        app.rubber_band_selection_panes.insert(pane_id);
+        app.rubber_band.mark_selection_activity_for_pane(pane_id);
         assert!(app.set_pane_viewport_geometry(
             pane_id,
             ViewRect {
@@ -15806,7 +15744,7 @@ text/plain=viewer.desktop;\n",
         assert!(!app.show_blank_context_menu_if_blank(pane_id, click));
         assert_eq!(app.panes.selected_count(pane_id), Some(0));
         assert!(app.context_menu.is_none());
-        assert!(!app.rubber_band_selection_panes.contains(&pane_id));
+        assert!(!app.rubber_band.has_selection_activity_for_pane(pane_id));
     }
 
     #[test]
@@ -16570,9 +16508,7 @@ text/plain=viewer.desktop;\n",
             chooser: None,
             listing_worker: ListingWorker::new(),
             _keystroke_subscription: None,
-            rubber_band_pending: None,
-            rubber_band: None,
-            rubber_band_selection_panes: HashSet::new(),
+            rubber_band: RubberBandController::default(),
             context_menu: None,
             context_menu_tree_hovered: false,
             context_submenu_hide_generation: 0,
