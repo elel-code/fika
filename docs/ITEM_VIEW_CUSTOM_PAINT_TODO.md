@@ -1221,6 +1221,10 @@ by risk and evidence, not by how custom-painted a surface looks.
   pane-level file-grid render frame. `main.rs` now receives file-grid snapshot,
   item/visible counts, slot stats, perf phase, and timing fields as one facade
   result instead of holding raw grid and model-generation intermediates.
+- [x] P16dv: Hide item-view perf log field mapping inside the file-grid render
+  frame. `main.rs` now passes only pane id, mode, and total pane elapsed time;
+  raw/icon/queue/convert timings, visible count, perf phase, and slot stats stay
+  encapsulated in the frame.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

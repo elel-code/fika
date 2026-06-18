@@ -1358,19 +1358,7 @@ impl FikaApp {
                 let filter_bar = self.filter_bar_snapshot(pane_id, focused_pane, item_count);
                 let status_bar = self.status_bar_snapshot_for_pane(pane_id, cx);
                 if let Some(pane_started) = pane_started {
-                    ui::file_grid::emit_item_view_perf_log(ui::file_grid::ItemViewPerfLogFrame {
-                        pane_id,
-                        mode: view.view_mode,
-                        phase: file_grid_frame.item_view_perf_phase,
-                        item_count,
-                        visible_count: file_grid_frame.visible_count,
-                        raw_elapsed: file_grid_frame.raw_elapsed,
-                        icon_sync_elapsed: file_grid_frame.icon_sync_elapsed,
-                        queue_elapsed: file_grid_frame.queue_elapsed,
-                        convert_elapsed: file_grid_frame.convert_elapsed,
-                        total_elapsed: pane_started.elapsed(),
-                        slot_stats: file_grid_frame.item_paint_slot_stats,
-                    });
+                    file_grid_frame.emit_perf_log(pane_id, view.view_mode, pane_started.elapsed());
                 }
                 Some(PaneSnapshot {
                     id: pane_id,

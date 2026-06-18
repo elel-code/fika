@@ -327,6 +327,7 @@
 - [x] P16ds：将 retained projection frame 组装移入 file-grid retained facade。facade 现在拥有 visible-count 推导、retained slot projection、paint-slot stats 和 item-view perf phase 记录；`main.rs` 只消费 frame 来生成 pane snapshot 和 perf log。
 - [x] P16dt：记录 2026-06 依赖更新后的 GPUI 调度依赖边界。设计文档现在说明 `async-std` 和 `async-global-executor` 已移除，但 GPUI/platform async 支持 crate 仍存在；item-view worker 编排应继续留在 file-grid/places facade 后面，而不是回到 `main.rs`。
 - [x] P16du：将 raw/work/projection 条目视图渲染管线合并为 pane-level file-grid render frame。`main.rs` 现在以一个 facade 结果接收 file-grid snapshot、item/visible count、slot stats、perf phase 和 timing 字段，不再持有 raw grid 与 model-generation 中间态。
+- [x] P16dv：将 item-view perf log 字段映射隐藏到 file-grid render frame 内。`main.rs` 现在只传 pane id、mode 和 pane 总耗时；raw/icon/queue/convert timing、visible count、perf phase 与 slot stats 都封装在 frame 中。
 - [ ] P16q：在每个 P16 实现切片之后，单独提交并附带相关验证：仅文档切片需要 `git diff --check`；代码切片需要 `cargo fmt`、`cargo check`、`cargo test -q`、`scripts/check-item-view-perf-analyzer.sh`、`scripts/check-places-perf-analyzer.sh` 和 `git diff --check`。
 - [x] P16r：记录运行时自测试和突破记录规则。可重复的滚动、缩放、启动图标、调整大小、模式切换和 Places 目标回退应在依赖手动计时之前通过 autosmoke 日志和分析器脚本重现。任何确认的优化突破必须记录症状、Dolphin 比较边界、根本原因、实现、保存的日志/分析器命令和未来回归守卫在拥有的设计或决策文档中。
 

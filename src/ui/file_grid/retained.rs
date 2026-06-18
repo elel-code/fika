@@ -2,7 +2,7 @@ use super::icon_work::{
     DOLPHIN_VISIBLE_ICON_SYNC_BUDGET,
     resolve_visible_file_icons_for_raw_grid as resolve_visible_file_icons_for_raw_grid_with_cache,
 };
-use super::perf::ItemViewPerfPhase;
+use super::perf::{ItemViewPerfLogFrame, ItemViewPerfPhase, emit_item_view_perf_log};
 use super::snapshot::{
     QueuedVisibleModelWork, RawFileGridSnapshot, RawFileGridSnapshotInput,
     RetainedFileGridProjection, project_retained_file_grid_snapshot,
@@ -48,13 +48,31 @@ pub(crate) struct RetainedFileGridFrame {
 pub(crate) struct PaneFileGridRenderFrame {
     pub(crate) file_grid: FileGridRenderSnapshot,
     pub(crate) item_count: usize,
-    pub(crate) visible_count: usize,
-    pub(crate) raw_elapsed: Option<Duration>,
-    pub(crate) icon_sync_elapsed: Option<Duration>,
-    pub(crate) queue_elapsed: Option<Duration>,
-    pub(crate) convert_elapsed: Option<Duration>,
-    pub(crate) item_paint_slot_stats: ItemPaintSlotStats,
-    pub(crate) item_view_perf_phase: Option<ItemViewPerfPhase>,
+    visible_count: usize,
+    raw_elapsed: Option<Duration>,
+    icon_sync_elapsed: Option<Duration>,
+    queue_elapsed: Option<Duration>,
+    convert_elapsed: Option<Duration>,
+    item_paint_slot_stats: ItemPaintSlotStats,
+    item_view_perf_phase: Option<ItemViewPerfPhase>,
+}
+
+impl PaneFileGridRenderFrame {
+    pub(crate) fn emit_perf_log(&self, pane_id: PaneId, mode: ViewMode, total_elapsed: Duration) {
+        emit_item_view_perf_log(ItemViewPerfLogFrame {
+            pane_id,
+            mode,
+            phase: self.item_view_perf_phase,
+            item_count: self.item_count,
+            visible_count: self.visible_count,
+            raw_elapsed: self.raw_elapsed,
+            icon_sync_elapsed: self.icon_sync_elapsed,
+            queue_elapsed: self.queue_elapsed,
+            convert_elapsed: self.convert_elapsed,
+            total_elapsed,
+            slot_stats: self.item_paint_slot_stats,
+        });
+    }
 }
 
 impl FikaApp {
