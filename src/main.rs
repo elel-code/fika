@@ -23,7 +23,7 @@ use fika_core::{
     UndoPayload, UserPlace, ViewMode, ViewPoint, ViewRect, ZoomChange, breadcrumb_segments,
     complete_location_input, file_ops, is_network_path, listing_requests_from_events,
     nearest_existing_ancestor, parent_location, perform_device_place_operation,
-    resolve_location_input, thumbnail_probe_results_for_requests, update_loading_state_for_event,
+    resolve_location_input, update_loading_state_for_event,
 };
 use fika_core::{
     DesktopLaunchPlan, LauncherError, MimeApplication, MimeApplicationCache, NewWindowLaunchResult,
@@ -80,8 +80,6 @@ use ui::drag_drop::{
     drag_cursor_style_for_transfer_mode, item_drop_target_matches_directory,
     place_drop_target_matches_insert, place_drop_target_matches_place,
 };
-#[cfg(test)]
-use ui::file_grid::RawFileGridSnapshot;
 use ui::file_grid::{
     CompactColumnWidthCache, ContentItemHit, DetailsTextShapeCache, FileIconResolveQueue, ItemDrag,
     ItemPaintSlotCache, ItemViewAutosmokeAction, ItemViewAutosmokeScenario, ItemViewPerfState,
@@ -94,6 +92,8 @@ use ui::file_grid::{
     pane_content_item_hit_at_point, pane_layout_projection,
     pane_model_indexes_intersecting_visual_rect, rename_editor_required_text_width,
 };
+#[cfg(test)]
+use ui::file_grid::{RawFileGridSnapshot, THUMBNAIL_PROBE_BATCH_SIZE};
 use ui::filter_bar::{
     FILTER_BAR_HEIGHT, FilterBarSnapshot, FilteredModelCacheEntry, PaneFilterState,
     cached_filtered_model_for_pane, filter_toggle_snapshot,
@@ -232,7 +232,6 @@ fn listing_cache_debug_summary(
         snapshot.skipped_large_directories().len(),
     )
 }
-const THUMBNAIL_PROBE_BATCH_SIZE: usize = 32;
 const VISIBLE_METADATA_ROLE_SYNC_BUDGET: Duration = Duration::from_millis(12);
 const PANE_HORIZONTAL_BORDER_EXTENT: f32 = 2.0;
 
@@ -2092,44 +2091,6 @@ impl FikaApp {
         snapshot: Option<SpaceInfoSnapshot>,
     ) -> bool {
         self.space_info.finish_request(&path, snapshot)
-    }
-
-    fn maybe_start_thumbnail_probe(&mut self, cx: &mut Context<Self>) {
-        let Some(batch) = self
-            .thumbnail_scheduler
-            .start_probe_batch(THUMBNAIL_PROBE_BATCH_SIZE)
-        else {
-            return;
-        };
-        let cache_root = batch.cache_root;
-        let requests = batch.requests;
-        let cancel_handle = batch.cancel_handle;
-
-        cx.spawn(
-            move |this: gpui::WeakEntity<FikaApp>, cx: &mut gpui::AsyncApp| {
-                let mut cx = cx.clone();
-                async move {
-                    let results = cx
-                        .background_spawn(async move {
-                            thumbnail_probe_results_for_requests(
-                                cache_root,
-                                requests,
-                                cancel_handle,
-                            )
-                        })
-                        .await;
-                    let _ = this.update(&mut cx, |app, cx| {
-                        app.thumbnail_scheduler.finish_probe_batch();
-                        let changed = app.finish_thumbnail_probe_results(results);
-                        app.maybe_start_thumbnail_probe(cx);
-                        if changed {
-                            cx.notify();
-                        }
-                    });
-                }
-            },
-        )
-        .detach();
     }
 
     fn maybe_start_device_monitor(&mut self, cx: &mut Context<Self>) {

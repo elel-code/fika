@@ -14,7 +14,7 @@ use crate::ui::rename::RenameDraft;
 use fika_core::{
     FilteredModel, Generation, MetadataRoleResult, PaneId, ThumbnailProbeResult, ViewMode,
     ViewState, apply_metadata_role_result_to_model, apply_thumbnail_probe_result_to_model,
-    metadata_role_results_for_requests,
+    metadata_role_results_for_requests, thumbnail_probe_results_for_requests,
 };
 use gpui::{AppContext, Context};
 use std::path::Path;
@@ -22,6 +22,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 const METADATA_ROLE_BATCH_SIZE: usize = 16;
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) const THUMBNAIL_PROBE_BATCH_SIZE: usize = 32;
 
 impl FikaApp {
     pub(crate) fn raw_file_grid_snapshot_for_pane(
@@ -269,6 +271,44 @@ impl FikaApp {
                             app.invalidate_all_file_grid_visible_snapshot_caches();
                         }
                         app.maybe_start_file_icon_resolve(cx);
+                        if changed {
+                            cx.notify();
+                        }
+                    });
+                }
+            },
+        )
+        .detach();
+    }
+
+    pub(crate) fn maybe_start_thumbnail_probe(&mut self, cx: &mut Context<Self>) {
+        let Some(batch) = self
+            .thumbnail_scheduler
+            .start_probe_batch(THUMBNAIL_PROBE_BATCH_SIZE)
+        else {
+            return;
+        };
+        let cache_root = batch.cache_root;
+        let requests = batch.requests;
+        let cancel_handle = batch.cancel_handle;
+
+        cx.spawn(
+            move |this: gpui::WeakEntity<FikaApp>, cx: &mut gpui::AsyncApp| {
+                let mut cx = cx.clone();
+                async move {
+                    let results = cx
+                        .background_spawn(async move {
+                            thumbnail_probe_results_for_requests(
+                                cache_root,
+                                requests,
+                                cancel_handle,
+                            )
+                        })
+                        .await;
+                    let _ = this.update(&mut cx, |app, cx| {
+                        app.thumbnail_scheduler.finish_probe_batch();
+                        let changed = app.finish_thumbnail_probe_results(results);
+                        app.maybe_start_thumbnail_probe(cx);
                         if changed {
                             cx.notify();
                         }

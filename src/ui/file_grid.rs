@@ -57,6 +57,8 @@ pub(crate) use projection::{
     pane_content_item_hit_at_point, pane_layout_projection,
     pane_model_indexes_intersecting_visual_rect,
 };
+#[cfg(test)]
+pub(crate) use retained::THUMBNAIL_PROBE_BATCH_SIZE;
 pub(crate) use slots::VisibleItemSlotPool;
 #[cfg(test)]
 pub(crate) use snapshot::RawFileGridSnapshot;
