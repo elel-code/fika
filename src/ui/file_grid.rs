@@ -67,6 +67,9 @@ pub(crate) use surface::file_grid;
 pub(crate) use types::{
     FileGridMode, FileGridProps, FileGridRenderSnapshot, FileGridSnapshot, PaneViewportGeometry,
 };
+pub(crate) use viewport::{
+    clamped_content_point_from_window_position, content_point_from_window_position,
+};
 
 use style::{
     ItemTileTextAlignment, TextShapeCacheStats, details_row_background, item_identity_element_id,

@@ -1,4 +1,4 @@
-use fika_core::{PaneId, ViewMode, ViewRect, ViewState, normalize_viewport_extent};
+use fika_core::{PaneId, ViewMode, ViewPoint, ViewRect, ViewState, normalize_viewport_extent};
 use gpui::prelude::*;
 use gpui::{Context, Div, Empty, MouseButton, NavigationDirection, Stateful, div, rgba};
 
@@ -10,7 +10,7 @@ use super::controller::{
     handle_file_grid_wheel, handle_item_mouse_down, handle_pane_navigation_mouse_down,
 };
 use super::dnd::install_file_grid_path_drop_shell;
-use super::{FileGridMode, FileGridRenderSnapshot};
+use super::{FileGridMode, FileGridRenderSnapshot, PaneViewportGeometry};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct MeasuredViewport {
@@ -100,6 +100,41 @@ pub(super) fn measured_viewport_for_scrollbar_axis(
         },
         max_scroll_x,
         max_scroll_y,
+    }
+}
+
+pub(crate) fn content_point_from_window_position(
+    geometry: PaneViewportGeometry,
+    view: &ViewState,
+    position: gpui::Point<gpui::Pixels>,
+) -> Option<ViewPoint> {
+    let window_point = ViewPoint {
+        x: position.x.as_f32(),
+        y: position.y.as_f32(),
+    };
+    if !geometry.window_rect.contains(window_point) {
+        return None;
+    }
+    let local_x = window_point.x - geometry.window_rect.x;
+    let local_y = window_point.y - geometry.window_rect.y;
+    Some(ViewPoint {
+        x: local_x + view.scroll_x,
+        y: local_y + view.scroll_y,
+    })
+}
+
+pub(crate) fn clamped_content_point_from_window_position(
+    geometry: PaneViewportGeometry,
+    view: &ViewState,
+    position: gpui::Point<gpui::Pixels>,
+) -> ViewPoint {
+    let local_x =
+        (position.x.as_f32() - geometry.window_rect.x).clamp(0.0, geometry.window_rect.width);
+    let local_y =
+        (position.y.as_f32() - geometry.window_rect.y).clamp(0.0, geometry.window_rect.height);
+    ViewPoint {
+        x: local_x + view.scroll_x,
+        y: local_y + view.scroll_y,
     }
 }
 
@@ -243,4 +278,65 @@ pub(super) fn file_grid_viewport_shell(
             },
         ));
     install_file_grid_path_drop_shell(shell, pane_id, cx)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::{point, px};
+
+    fn test_geometry() -> PaneViewportGeometry {
+        PaneViewportGeometry {
+            window_rect: ViewRect {
+                x: 100.0,
+                y: 50.0,
+                width: 300.0,
+                height: 200.0,
+            },
+        }
+    }
+
+    #[test]
+    fn content_point_from_window_position_accounts_for_origin_and_scroll() {
+        let view = ViewState {
+            scroll_x: 12.0,
+            scroll_y: 8.0,
+            ..ViewState::default()
+        };
+
+        assert_eq!(
+            content_point_from_window_position(test_geometry(), &view, point(px(120.0), px(70.0))),
+            Some(ViewPoint { x: 32.0, y: 28.0 })
+        );
+        assert_eq!(
+            content_point_from_window_position(test_geometry(), &view, point(px(420.0), px(70.0))),
+            None
+        );
+    }
+
+    #[test]
+    fn clamped_content_point_from_window_position_clamps_to_viewport() {
+        let view = ViewState {
+            scroll_x: 12.0,
+            scroll_y: 8.0,
+            ..ViewState::default()
+        };
+
+        assert_eq!(
+            clamped_content_point_from_window_position(
+                test_geometry(),
+                &view,
+                point(px(1000.0), px(900.0))
+            ),
+            ViewPoint { x: 312.0, y: 208.0 }
+        );
+        assert_eq!(
+            clamped_content_point_from_window_position(
+                test_geometry(),
+                &view,
+                point(px(90.0), px(40.0))
+            ),
+            ViewPoint { x: 12.0, y: 8.0 }
+        );
+    }
 }

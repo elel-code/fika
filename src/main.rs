@@ -88,10 +88,11 @@ use ui::file_grid::{
     DetailsTextShapeCache, FileIconResolveQueue, ItemDrag, ItemPaintSlotCache,
     ItemViewAutosmokeAction, ItemViewAutosmokeScenario, ItemViewPerfState, PaneLayoutProjection,
     PaneLayoutProjectionInput, PaneViewportGeometry, PaneVisibleWorkKey, RetainedHoveredItem,
-    StaticItemTextShapeCache, VisibleItemSlotPool, VisibleItemSnapshotCache, compact_text_width,
-    compact_text_width_for_name, content_item_hit_at_point, emit_item_view_autosmoke_complete,
-    emit_item_view_autosmoke_scroll_action, emit_item_view_autosmoke_start,
-    emit_item_view_autosmoke_zoom_action, item_view_perf_enabled,
+    StaticItemTextShapeCache, VisibleItemSlotPool, VisibleItemSnapshotCache,
+    clamped_content_point_from_window_position, compact_text_width, compact_text_width_for_name,
+    content_item_hit_at_point, content_point_from_window_position,
+    emit_item_view_autosmoke_complete, emit_item_view_autosmoke_scroll_action,
+    emit_item_view_autosmoke_start, emit_item_view_autosmoke_zoom_action, item_view_perf_enabled,
     model_indexes_intersecting_visual_rect, pane_layout_projection,
     rename_editor_required_text_width, resolve_visible_file_icons_for_raw_grid,
 };
@@ -3908,19 +3909,7 @@ impl FikaApp {
     ) -> Option<ViewPoint> {
         let geometry = *self.pane_viewport_geometries.get(&pane_id)?;
         let view = &self.panes.pane(pane_id)?.view;
-        let window_point = ViewPoint {
-            x: position.x.as_f32(),
-            y: position.y.as_f32(),
-        };
-        if !geometry.window_rect.contains(window_point) {
-            return None;
-        }
-        let local_x = window_point.x - geometry.window_rect.x;
-        let local_y = window_point.y - geometry.window_rect.y;
-        Some(ViewPoint {
-            x: local_x + view.scroll_x,
-            y: local_y + view.scroll_y,
-        })
+        content_point_from_window_position(geometry, view, position)
     }
 
     fn pane_at_window_position(&self, position: gpui::Point<gpui::Pixels>) -> Option<PaneId> {
@@ -3942,14 +3931,9 @@ impl FikaApp {
     ) -> Option<ViewPoint> {
         let geometry = *self.pane_viewport_geometries.get(&pane_id)?;
         let view = &self.panes.pane(pane_id)?.view;
-        let local_x =
-            (position.x.as_f32() - geometry.window_rect.x).clamp(0.0, geometry.window_rect.width);
-        let local_y =
-            (position.y.as_f32() - geometry.window_rect.y).clamp(0.0, geometry.window_rect.height);
-        Some(ViewPoint {
-            x: local_x + view.scroll_x,
-            y: local_y + view.scroll_y,
-        })
+        Some(clamped_content_point_from_window_position(
+            geometry, view, position,
+        ))
     }
 
     fn layout_projection_for_pane(&mut self, pane_id: PaneId) -> Option<PaneLayoutProjection> {

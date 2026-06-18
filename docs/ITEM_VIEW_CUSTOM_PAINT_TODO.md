@@ -952,6 +952,12 @@ by risk and evidence, not by how custom-painted a surface looks.
   threshold for activating a pending rubber-band selection, while `src/main.rs`
   still supplies clamped content points and starts/updates the active
   selection band.
+- [x] P16br: Move file-grid viewport window-to-content point policy into the
+  viewport module. `ui/file_grid/viewport.rs` now owns converting window
+  positions into scrolled content points and clamped content points from
+  `PaneViewportGeometry` plus `ViewState`. `src/main.rs` still performs pane
+  lookup and uses those points for hit testing, drag targets, and rubber-band
+  selection.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,
