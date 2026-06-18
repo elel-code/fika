@@ -1133,6 +1133,10 @@ by risk and evidence, not by how custom-painted a surface looks.
   through `sync_pane_view_from_authoritative_item_view_scroll_handle()` instead
   of assembling the authoritative handle snapshot/writeback closure in
   `main.rs`.
+- [x] P16db: Move item-view scrollbar finish sync orchestration into the
+  item-view facade. `finish_item_view_scrollbar_drag()` now owns the existing
+  pane snapshot lookup, missing-pane drag-finish fallback, and pane writeback
+  closure; `main.rs` only delegates the public action.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,
