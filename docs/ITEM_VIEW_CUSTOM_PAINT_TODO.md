@@ -923,6 +923,12 @@ by risk and evidence, not by how custom-painted a surface looks.
   priming such as filter-bar visibility changes. `src/main.rs` still supplies
   the pane view scroll values, but no longer combines raw handle sync with a
   frame-count mark itself.
+- [x] P16bm: Move item-view bounds-update scroll sync policy into the scroll
+  state. `ItemViewScrollState::sync_after_bounds_update()` now owns the
+  scrollbar-drag branch, normal handle sync, authoritative tick, and
+  handle-changed reporting after viewport bounds arrive. `src/main.rs` still
+  applies returned pane-view sync actions, but no longer decides this
+  lifecycle path itself.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

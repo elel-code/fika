@@ -263,6 +263,7 @@
 - [x] P16bj：将 item-view window-resize viewport prime policy 移入 item-view 模块。`ui/item_view.rs` 现在拥有 render viewport 尺寸归一化、resize delta 检测，以及把 width/height delta 应用到缓存 item-view extent 的规则。`src/main.rs` 仍更新 pane-row width、根据 split geometry 投影各 pane 的 item width，并写回 pane view 尺寸。
 - [x] P16bk：将 item-view layout-change scroll authoritative policy 移入 scroll state。`ItemViewScrollState::preserve_for_layout_change()` 现在拥有缩放或布局变化期间保留 scroll 后，接下来两帧以 view 为权威的交接规则。`src/main.rs` 仍把保留后的 scroll 值写回 pane model，但不再知道这条路径的 frame-count policy。
 - [x] P16bl：将 item-view authoritative handle-sync policy 移入 scroll state。`ItemViewScrollState::sync_handle_to_view_authoritatively()` 现在拥有 app 侧 viewport 预热后使用的两帧 view-authoritative 交接规则，例如 filter-bar 可见性变化。`src/main.rs` 仍提供 pane view scroll 值，但不再自己组合 raw handle sync 和 frame-count 标记。
+- [x] P16bm：将 item-view bounds-update scroll sync policy 移入 scroll state。`ItemViewScrollState::sync_after_bounds_update()` 现在拥有 viewport bounds 到达后的 scrollbar-drag 分支、普通 handle sync、authoritative tick 和 handle-changed 上报。`src/main.rs` 仍应用返回的 pane-view sync action，但不再自行决定这条 lifecycle 路径。
 - [ ] P16q：在每个 P16 实现切片之后，单独提交并附带相关验证：仅文档切片需要 `git diff --check`；代码切片需要 `cargo fmt`、`cargo check`、`cargo test -q`、`scripts/check-item-view-perf-analyzer.sh`、`scripts/check-places-perf-analyzer.sh` 和 `git diff --check`。
 - [x] P16r：记录运行时自测试和突破记录规则。可重复的滚动、缩放、启动图标、调整大小、模式切换和 Places 目标回退应在依赖手动计时之前通过 autosmoke 日志和分析器脚本重现。任何确认的优化突破必须记录症状、Dolphin 比较边界、根本原因、实现、保存的日志/分析器命令和未来回归守卫在拥有的设计或决策文档中。
 

@@ -22,6 +22,12 @@ pub(crate) enum ItemViewScrollSyncAction {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ItemViewScrollBoundsSync {
+    pub(crate) action: ItemViewScrollSyncAction,
+    pub(crate) handle_changed: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct ItemViewScrollHandleObservation {
     scroll_x: f32,
     scroll_y: f32,
@@ -133,6 +139,32 @@ impl ItemViewScrollState {
             self.clear_authoritative_scroll(pane_id);
         }
         ItemViewScrollSyncAction::SyncView(sync)
+    }
+
+    pub(crate) fn sync_after_bounds_update(
+        &mut self,
+        pane_id: PaneId,
+        view_scroll_x: f32,
+        view_scroll_y: f32,
+        view_max_scroll_x: f32,
+        view_max_scroll_y: f32,
+    ) -> ItemViewScrollBoundsSync {
+        if self.is_scrollbar_dragging(pane_id) {
+            let action = self
+                .sync_from_authoritative_handle(pane_id, view_max_scroll_x, view_max_scroll_y)
+                .map(ItemViewScrollSyncAction::SyncView)
+                .unwrap_or(ItemViewScrollSyncAction::None);
+            return ItemViewScrollBoundsSync {
+                action,
+                handle_changed: false,
+            };
+        }
+        let handle_changed = self.sync_handle_to_view(pane_id, view_scroll_x, view_scroll_y);
+        self.tick_authoritative_scroll(pane_id);
+        ItemViewScrollBoundsSync {
+            action: ItemViewScrollSyncAction::SyncHandleToView,
+            handle_changed,
+        }
     }
 
     pub(crate) fn sync_from_authoritative_handle(
@@ -497,6 +529,39 @@ mod tests {
                 max_scroll_x: 1_000.0,
                 max_scroll_y: 0.0,
             })
+        );
+    }
+
+    #[test]
+    fn scroll_state_bounds_update_syncs_handle_or_drag_view() {
+        let pane_id = PaneId(1);
+        let mut state = ItemViewScrollState::default();
+        let handle = state.handle_for_pane(pane_id);
+
+        state.mark_authoritative_for_frames(pane_id, 1);
+        assert_eq!(
+            state.sync_after_bounds_update(pane_id, 180.0, 0.0, 1_000.0, 0.0),
+            ItemViewScrollBoundsSync {
+                action: ItemViewScrollSyncAction::SyncHandleToView,
+                handle_changed: true,
+            }
+        );
+        assert_eq!(handle.offset().x, px(-180.0));
+        assert!(!state.has_authoritative_scroll(pane_id));
+
+        state.begin_scrollbar_drag(pane_id);
+        handle.set_offset(point(px(-320.0), px(0.0)));
+        assert_eq!(
+            state.sync_after_bounds_update(pane_id, 180.0, 0.0, 1_000.0, 0.0),
+            ItemViewScrollBoundsSync {
+                action: ItemViewScrollSyncAction::SyncView(ItemViewScrollSync {
+                    scroll_x: 320.0,
+                    scroll_y: 0.0,
+                    max_scroll_x: 1_000.0,
+                    max_scroll_y: 0.0,
+                }),
+                handle_changed: false,
+            }
         );
     }
 

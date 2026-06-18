@@ -3870,19 +3870,25 @@ impl FikaApp {
                 max_scroll_y,
             )
             .unwrap_or(false);
-        if self.item_view_scroll.is_scrollbar_dragging(pane_id) {
-            return self.sync_pane_view_from_authoritative_item_view_scroll_handle(pane_id)
-                || changed;
-        }
-        let handle_changed = self.panes.pane(pane_id).is_some_and(|pane| {
-            self.item_view_scroll.sync_handle_to_view(
-                pane_id,
-                pane.view.scroll_x,
-                pane.view.scroll_y,
-            )
-        });
-        self.item_view_scroll.tick_authoritative_scroll(pane_id);
-        changed || handle_changed
+        let Some(view) = self.panes.pane(pane_id).map(|pane| pane.view.clone()) else {
+            return changed;
+        };
+        let bounds_sync = self.item_view_scroll.sync_after_bounds_update(
+            pane_id,
+            view.scroll_x,
+            view.scroll_y,
+            view.max_scroll_x,
+            view.max_scroll_y,
+        );
+        let action_changed = self.apply_item_view_scroll_sync_action(
+            pane_id,
+            bounds_sync.action,
+            view.scroll_x,
+            view.scroll_y,
+            view.max_scroll_x,
+            view.max_scroll_y,
+        );
+        changed || bounds_sync.handle_changed || action_changed
     }
 
     fn content_point_from_window(
