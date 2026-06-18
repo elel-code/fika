@@ -319,6 +319,7 @@
 - [x] P16dk：将 rubber-band drag-move 的 active/pending 分支移出 viewport shell。GPUI shell 现在只把 drag move 转发给 `move_rubber_band_drag_from_window()`，由 app/controller 边界决定激活 pending band 还是更新 active band。
 - [x] P16dl：将 visible file-icon sync handoff 收到 file-grid retained facade 后面。渲染循环现在调用 pane-level `resolve_visible_file_icons_for_raw_grid()` 方法；Dolphin visible-icon sync budget、queue-aware cache sync 和 visible snapshot invalidation 留在 file-grid 模块中，而不是 `main.rs`。
 - [x] P16dm：将 file-icon resolve worker 编排移入 file-grid retained facade。批次启动、后台图标解析、queue completion、resolved icon application、visible snapshot invalidation 和继续调度后续批次现在与 file-grid icon work 边界在一起，而不是 `main.rs`。
+- [x] P16dn：将 metadata role worker 编排移入 file-grid retained facade。metadata role 批次启动、后台 role 收集、scheduler completion、model result application、继续调度和通知决策现在与 visible metadata sync 放在一起，而不是 `main.rs`。
 - [ ] P16q：在每个 P16 实现切片之后，单独提交并附带相关验证：仅文档切片需要 `git diff --check`；代码切片需要 `cargo fmt`、`cargo check`、`cargo test -q`、`scripts/check-item-view-perf-analyzer.sh`、`scripts/check-places-perf-analyzer.sh` 和 `git diff --check`。
 - [x] P16r：记录运行时自测试和突破记录规则。可重复的滚动、缩放、启动图标、调整大小、模式切换和 Places 目标回退应在依赖手动计时之前通过 autosmoke 日志和分析器脚本重现。任何确认的优化突破必须记录症状、Dolphin 比较边界、根本原因、实现、保存的日志/分析器命令和未来回归守卫在拥有的设计或决策文档中。
 

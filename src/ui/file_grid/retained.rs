@@ -14,11 +14,14 @@ use crate::ui::rename::RenameDraft;
 use fika_core::{
     FilteredModel, Generation, MetadataRoleResult, PaneId, ThumbnailProbeResult, ViewMode,
     ViewState, apply_metadata_role_result_to_model, apply_thumbnail_probe_result_to_model,
+    metadata_role_results_for_requests,
 };
 use gpui::{AppContext, Context};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
+
+const METADATA_ROLE_BATCH_SIZE: usize = 16;
 
 impl FikaApp {
     pub(crate) fn raw_file_grid_snapshot_for_pane(
@@ -209,6 +212,39 @@ impl FikaApp {
             mime_magic_checked,
             icon_size,
         )
+    }
+
+    pub(crate) fn maybe_start_metadata_role(&mut self, cx: &mut Context<Self>) {
+        let Some(batch) = self
+            .metadata_role_scheduler
+            .start_role_batch(METADATA_ROLE_BATCH_SIZE)
+        else {
+            return;
+        };
+        let requests = batch.requests;
+
+        cx.spawn(
+            move |this: gpui::WeakEntity<FikaApp>, cx: &mut gpui::AsyncApp| {
+                let mut cx = cx.clone();
+                async move {
+                    let results = cx
+                        .background_spawn(
+                            async move { metadata_role_results_for_requests(requests) },
+                        )
+                        .await;
+                    let _ = this.update(&mut cx, |app, cx| {
+                        app.metadata_role_scheduler
+                            .finish_role_batch_with_results(&results);
+                        let changed = app.finish_metadata_role_results(results);
+                        app.maybe_start_metadata_role(cx);
+                        if changed {
+                            cx.notify();
+                        }
+                    });
+                }
+            },
+        )
+        .detach();
     }
 
     pub(crate) fn maybe_start_file_icon_resolve(&mut self, cx: &mut Context<Self>) {

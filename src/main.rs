@@ -22,9 +22,8 @@ use fika_core::{
     SelectionMove, SortDescriptor, SortOrder, SortRole, ThumbnailScheduler, TrashEmptinessMonitor,
     UndoPayload, UserPlace, ViewMode, ViewPoint, ViewRect, ZoomChange, breadcrumb_segments,
     complete_location_input, file_ops, is_network_path, listing_requests_from_events,
-    metadata_role_results_for_requests, nearest_existing_ancestor, parent_location,
-    perform_device_place_operation, resolve_location_input, thumbnail_probe_results_for_requests,
-    update_loading_state_for_event,
+    nearest_existing_ancestor, parent_location, perform_device_place_operation,
+    resolve_location_input, thumbnail_probe_results_for_requests, update_loading_state_for_event,
 };
 use fika_core::{
     DesktopLaunchPlan, LauncherError, MimeApplication, MimeApplicationCache, NewWindowLaunchResult,
@@ -234,7 +233,6 @@ fn listing_cache_debug_summary(
     )
 }
 const THUMBNAIL_PROBE_BATCH_SIZE: usize = 32;
-const METADATA_ROLE_BATCH_SIZE: usize = 16;
 const VISIBLE_METADATA_ROLE_SYNC_BUDGET: Duration = Duration::from_millis(12);
 const PANE_HORIZONTAL_BORDER_EXTENT: f32 = 2.0;
 
@@ -2094,39 +2092,6 @@ impl FikaApp {
         snapshot: Option<SpaceInfoSnapshot>,
     ) -> bool {
         self.space_info.finish_request(&path, snapshot)
-    }
-
-    fn maybe_start_metadata_role(&mut self, cx: &mut Context<Self>) {
-        let Some(batch) = self
-            .metadata_role_scheduler
-            .start_role_batch(METADATA_ROLE_BATCH_SIZE)
-        else {
-            return;
-        };
-        let requests = batch.requests;
-
-        cx.spawn(
-            move |this: gpui::WeakEntity<FikaApp>, cx: &mut gpui::AsyncApp| {
-                let mut cx = cx.clone();
-                async move {
-                    let results = cx
-                        .background_spawn(
-                            async move { metadata_role_results_for_requests(requests) },
-                        )
-                        .await;
-                    let _ = this.update(&mut cx, |app, cx| {
-                        app.metadata_role_scheduler
-                            .finish_role_batch_with_results(&results);
-                        let changed = app.finish_metadata_role_results(results);
-                        app.maybe_start_metadata_role(cx);
-                        if changed {
-                            cx.notify();
-                        }
-                    });
-                }
-            },
-        )
-        .detach();
     }
 
     fn maybe_start_thumbnail_probe(&mut self, cx: &mut Context<Self>) {

@@ -1186,6 +1186,11 @@ by risk and evidence, not by how custom-painted a surface looks.
   resolved icon application, visible snapshot invalidation, and continued batch
   scheduling now live with the file-grid icon work boundary instead of
   `main.rs`.
+- [x] P16dn: Move metadata role worker orchestration into the file-grid
+  retained facade. Metadata role batch startup, background role collection,
+  scheduler completion, model result application, continued scheduling, and
+  notification decisions now live beside visible metadata sync instead of
+  `main.rs`.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,
