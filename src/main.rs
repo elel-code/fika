@@ -1269,16 +1269,17 @@ impl FikaApp {
 
     fn preserve_item_view_scroll_for_layout_change(&mut self, pane_id: PaneId) {
         let view = self.item_view_scroll_view_snapshot_for_pane(pane_id);
-        let sync = self
-            .item_view_scroll
-            .preserve_for_layout_change_snapshot(pane_id, view);
-        let _ = self.panes.set_view_scroll(
-            pane_id,
-            sync.scroll_x,
-            sync.scroll_y,
-            sync.max_scroll_x,
-            sync.max_scroll_y,
-        );
+        let panes = &mut self.panes;
+        self.item_view_scroll
+            .preserve_layout_scroll_syncing_view_snapshot(pane_id, view, |sync| {
+                let _ = panes.set_view_scroll(
+                    pane_id,
+                    sync.scroll_x,
+                    sync.scroll_y,
+                    sync.max_scroll_x,
+                    sync.max_scroll_y,
+                );
+            });
     }
 
     fn reset_item_view_scroll_for_pane(&mut self, pane_id: PaneId) {

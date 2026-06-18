@@ -380,7 +380,7 @@ impl ItemViewScrollState {
         (scroll_x, scroll_y)
     }
 
-    pub(crate) fn preserve_for_layout_change_snapshot(
+    fn preserve_for_layout_change_snapshot(
         &mut self,
         pane_id: PaneId,
         view: ItemViewScrollViewSnapshot,
@@ -398,6 +398,16 @@ impl ItemViewScrollState {
             max_scroll_x: view.max_scroll_x,
             max_scroll_y: view.max_scroll_y,
         }
+    }
+
+    pub(crate) fn preserve_layout_scroll_syncing_view_snapshot(
+        &mut self,
+        pane_id: PaneId,
+        view: ItemViewScrollViewSnapshot,
+        mut apply_sync: impl FnMut(ItemViewScrollSync),
+    ) {
+        let sync = self.preserve_for_layout_change_snapshot(pane_id, view);
+        apply_sync(sync);
     }
 
     fn sync_handle_to_view(&self, pane_id: PaneId, scroll_x: f32, scroll_y: f32) -> bool {
@@ -941,6 +951,25 @@ mod tests {
     fn scroll_state_lifecycle_snapshot_apply_apis_write_view_inside_scroll_state() {
         let pane_id = PaneId(1);
         let view = ItemViewScrollViewSnapshot::new(180.0, 0.0, 1_000.0, 0.0);
+
+        let mut preserve_state = ItemViewScrollState::default();
+        let preserve_handle = preserve_state.handle_for_pane(pane_id);
+        preserve_handle.set_offset(point(px(-240.0), px(0.0)));
+        let mut preserve_applied = Vec::new();
+        preserve_state.preserve_layout_scroll_syncing_view_snapshot(pane_id, view, |sync| {
+            preserve_applied.push(sync);
+        });
+        assert_eq!(preserve_handle.offset().x, px(-180.0));
+        assert_eq!(
+            preserve_applied,
+            vec![ItemViewScrollSync {
+                scroll_x: 180.0,
+                scroll_y: 0.0,
+                max_scroll_x: 1_000.0,
+                max_scroll_y: 0.0,
+            }]
+        );
+        assert!(preserve_state.has_authoritative_scroll(pane_id));
 
         let mut bounds_state = ItemViewScrollState::default();
         let bounds_handle = bounds_state.handle_for_pane(pane_id);

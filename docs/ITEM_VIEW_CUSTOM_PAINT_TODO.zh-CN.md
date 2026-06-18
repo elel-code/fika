@@ -296,6 +296,7 @@
 - [x] P16cn：将 item-view scroll sync-action 应用规则移入 scroll state。`ItemViewScrollSyncAction::apply_to_view()` 现在拥有 sync action 何时写入 pane view values，以及该写入是否代表 view change 的判断；`src/main.rs` 只提供 pane model 写入闭包。
 - [x] P16co：将 item-view handle-sync action 组合移入 scroll state。`sync_view_from_handle_snapshot()` 和 `sync_view_from_authoritative_handle_snapshot()` 现在拥有 handle action 创建和 view-write 应用；`src/main.rs` 只提供 pane view snapshot 和 pane model 写入闭包。
 - [x] P16cp：将 item-view bounds-update 和 scrollbar-finish 的 scroll action 应用移入 scroll state。Bounds 和 drag-finish 路径现在暴露 snapshot API，拥有 action 创建、handle-change 聚合和 view-write 应用；`src/main.rs` 只保留 pane bounds 更新和 pane model 写入闭包。
+- [x] P16cq：将 item-view layout-change scroll preservation 写回移入 scroll state。`preserve_layout_scroll_syncing_view_snapshot()` 现在拥有 preserved scroll 计算和 view-write 应用；`src/main.rs` 只提供 pane view snapshot 和 pane model 写入闭包。
 - [ ] P16q：在每个 P16 实现切片之后，单独提交并附带相关验证：仅文档切片需要 `git diff --check`；代码切片需要 `cargo fmt`、`cargo check`、`cargo test -q`、`scripts/check-item-view-perf-analyzer.sh`、`scripts/check-places-perf-analyzer.sh` 和 `git diff --check`。
 - [x] P16r：记录运行时自测试和突破记录规则。可重复的滚动、缩放、启动图标、调整大小、模式切换和 Places 目标回退应在依赖手动计时之前通过 autosmoke 日志和分析器脚本重现。任何确认的优化突破必须记录症状、Dolphin 比较边界、根本原因、实现、保存的日志/分析器命令和未来回归守卫在拥有的设计或决策文档中。
 

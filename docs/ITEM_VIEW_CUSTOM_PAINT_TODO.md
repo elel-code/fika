@@ -1085,6 +1085,10 @@ by risk and evidence, not by how custom-painted a surface looks.
   snapshot APIs that own action creation, handle-change aggregation, and
   view-write application while `src/main.rs` keeps only pane bounds updates and
   pane model write closures.
+- [x] P16cq: Move item-view layout-change scroll preservation writeback into
+  scroll state. `preserve_layout_scroll_syncing_view_snapshot()` now owns the
+  preserved scroll calculation plus view-write application; `src/main.rs` only
+  supplies the pane view snapshot and pane model write closure.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,
