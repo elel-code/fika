@@ -102,7 +102,8 @@ use ui::filter_bar::{
 use ui::icons::{FileIconCache, file_icon_resolve_results_for_requests};
 use ui::item_view::{
     ITEM_VIEW_SCROLLBAR_RESERVED_EXTENT, ItemViewScrollState, ItemViewScrollSync,
-    ItemViewScrollSyncAction, scroll_sync_changes_view,
+    ItemViewScrollSyncAction, projected_item_viewport_width_for_pane_width,
+    scroll_sync_changes_view, view_mode_uses_horizontal_item_scrollbar,
 };
 use ui::location_bar::{LocationDraft, LocationEditMetrics};
 use ui::network_auth::{
@@ -267,10 +268,6 @@ fn wheel_scroll_delta_for_view_mode(view_mode: ViewMode, delta: ScrollDelta) -> 
         }
         ViewMode::Icons | ViewMode::Details => (0.0, -y),
     }
-}
-
-fn view_mode_uses_horizontal_item_scrollbar(view_mode: ViewMode) -> bool {
-    matches!(view_mode, ViewMode::Compact)
 }
 
 fn rubber_band_drag_distance_reached(start: ViewPoint, current: ViewPoint) -> bool {
@@ -3685,13 +3682,10 @@ impl FikaApp {
         view_mode: ViewMode,
     ) -> Option<f32> {
         let pane_width = self.projected_pane_width(pane_id)?;
-        let scrollbar_extent = if view_mode_uses_horizontal_item_scrollbar(view_mode) {
-            0.0
-        } else {
-            ITEM_VIEW_SCROLLBAR_RESERVED_EXTENT
-        };
-        Some(fika_core::normalize_viewport_extent(
-            (pane_width - PANE_HORIZONTAL_BORDER_EXTENT - scrollbar_extent).max(1.0),
+        Some(projected_item_viewport_width_for_pane_width(
+            pane_width,
+            view_mode,
+            PANE_HORIZONTAL_BORDER_EXTENT,
         ))
     }
 

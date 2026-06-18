@@ -885,6 +885,11 @@ by risk and evidence, not by how custom-painted a surface looks.
   for normal handle sync, post-layout authoritative view sync, and scrollbar
   drag sync. `src/main.rs` still applies resulting scroll values to the pane
   model, but no longer decides which scroll source is authoritative.
+- [x] P16bf: Move item-view scrollbar-axis viewport policy into the item-view
+  module. `ui/item_view.rs` now owns which view modes use horizontal item-view
+  scrollbars and the projected item viewport width calculation for a pane
+  width. `src/main.rs` still supplies pane geometry and applies viewport
+  priming, but no longer embeds the scrollbar-axis width deduction rule.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,
