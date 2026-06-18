@@ -764,6 +764,13 @@ by risk and evidence, not by how custom-painted a surface looks.
   `gpui_event_shells=0`, and drag shells to remain rows. The analyzer fixture
   covers default visuals, custom visuals, and the negative mixed state where
   custom row visuals still depend on GPUI event shells.
+- [x] P16ao: Record the item-view reuse-pool ownership boundary. The status
+  doc now makes `VisibleItemSlotPool` and `ItemPaintSlotCache` the source of
+  Compact/Icons reusable item identity, with Details paint state retained by
+  `ItemId`. GPUI ids remain only as consumers for shell/image surfaces, not as
+  the primary reuse mechanism. Future reuse-pool work must preserve that
+  boundary and update the retained slot/paint-slot tests or runtime
+  `[fika item-paint-slots]` evidence if it changes.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

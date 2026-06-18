@@ -50,6 +50,8 @@ row-level event delivery are still GPUI.
 - Raw file-grid snapshot construction: `src/ui/file_grid/snapshot/builder.rs`
 - Raw-to-render snapshot conversion: `src/ui/file_grid/snapshot/render.rs`
 - Visible item slot assignment projection: `src/ui/file_grid/snapshot/slots.rs`
+- Visible item slot pool: `src/ui/file_grid/slots.rs`
+- Retained item/details paint slots: `src/ui/file_grid/paint_slots.rs`
 - Metadata/thumbnail scheduler queue projection: `src/ui/file_grid/snapshot/scheduler.rs`
 - Visible range/work range projection: `src/ui/file_grid/snapshot/range.rs`
 - Visible item snapshot/cache projection: `src/ui/file_grid/snapshot/visible.rs`
@@ -247,6 +249,25 @@ owned outside GPUI child identity:
 - Details use row paint snapshots and shape caches
 - image and text shaping caches are pane-local and slot/content keyed
 - renderer-policy logs prove which surfaces remain GPUI shells
+
+Current item-view reuse already follows that ownership rule. `VisibleItemSlotPool`
+maps `ItemId` to a pane-local `slot_id`, recycles offscreen slot ids through a
+bounded free list, and assigns those slots before raw snapshots become render
+snapshots. `ItemPaintSlotCache` then retains Compact/Icons paint content,
+geometry, and visual state by `slot_id`; Details retains row paint state by
+`ItemId`. GPUI ids still exist for the remaining shell surfaces, but they are
+consumers of retained identity, not the source of item reuse. For example,
+`item_shell.rs` uses `("item-slot", slot_id)` and the GPUI theme-icon image
+element uses `slot_id` only to stabilize the current GPUI renderer surface,
+while the reusable item state remains in the slot pool and paint-slot cache.
+
+The evidence anchors are the retained tests:
+`visible_item_slot_pool_reuses_offscreen_slots`,
+`visible_item_slot_pool_caps_recycled_slots`, the paint-slot content,
+geometry, and visual-change tests in `src/ui/file_grid/tests.rs`, and runtime
+`[fika item-paint-slots]` / `[fika renderer-policy]` logs. A future reuse-pool
+change should update these tests or logs if it changes the source of visual
+identity. It should not rely on GPUI child keys as the primary reuse mechanism.
 
 This target can advance while drag-start and rename stay on GPUI. The pool
 boundary is the retained item/row state, not a claim that every renderer is
