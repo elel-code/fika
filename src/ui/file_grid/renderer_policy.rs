@@ -5,6 +5,7 @@ use super::{DetailsPaintSnapshot, ItemPaintContent, ItemPaintSnapshot};
 
 const CUSTOM_THEME_ICONS_ENV: &str = "FIKA_CUSTOM_THEME_ICONS";
 const HYBRID_THEME_ICONS_ENV: &str = "FIKA_HYBRID_THEME_ICONS";
+const GPUI_THEME_ICONS_ENV: &str = "FIKA_GPUI_THEME_ICONS";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct ItemRendererPolicy {
@@ -86,6 +87,7 @@ pub(super) struct ItemRendererPolicyInput {
 struct ItemRendererPolicyFlags {
     custom_theme_icons: bool,
     hybrid_theme_icons: bool,
+    force_gpui_theme_icons: bool,
 }
 
 pub(super) fn item_renderer_policy(content: &ItemPaintContent) -> ItemRendererPolicy {
@@ -108,7 +110,9 @@ fn item_renderer_policy_for_flags(
     let image = if content.thumbnail_path.is_some() {
         ItemImageRenderer::ContentLayer
     } else if content.icon.path.is_some() {
-        if flags.custom_theme_icons || (flags.hybrid_theme_icons && input.theme_icon_ready) {
+        if flags.force_gpui_theme_icons {
+            ItemImageRenderer::GpuiElement
+        } else if flags.custom_theme_icons || (flags.hybrid_theme_icons && input.theme_icon_ready) {
             ItemImageRenderer::ContentLayer
         } else {
             ItemImageRenderer::GpuiElement
@@ -247,13 +251,15 @@ pub(super) fn item_paints_fallback_icon(content: &ItemPaintContent) -> bool {
 }
 
 pub(super) fn theme_icon_hybrid_enabled() -> bool {
-    item_renderer_policy_flags().hybrid_theme_icons
+    let flags = item_renderer_policy_flags();
+    flags.hybrid_theme_icons && !flags.force_gpui_theme_icons
 }
 
 fn item_renderer_policy_flags() -> ItemRendererPolicyFlags {
     ItemRendererPolicyFlags {
         custom_theme_icons: custom_theme_icons_enabled(),
         hybrid_theme_icons: hybrid_theme_icons_enabled(),
+        force_gpui_theme_icons: force_gpui_theme_icons_enabled(),
     }
 }
 
@@ -266,8 +272,16 @@ fn custom_theme_icons_enabled() -> bool {
 
 fn hybrid_theme_icons_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| match env::var(HYBRID_THEME_ICONS_ENV) {
+        Ok(value) => env_flag_is_truthy(&value),
+        Err(_) => true,
+    })
+}
+
+fn force_gpui_theme_icons_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| {
-        env::var(HYBRID_THEME_ICONS_ENV).is_ok_and(|value| env_flag_is_truthy(&value))
+        env::var(GPUI_THEME_ICONS_ENV).is_ok_and(|value| env_flag_is_truthy(&value))
     })
 }
 
@@ -294,6 +308,7 @@ mod tests {
         let flags = ItemRendererPolicyFlags {
             custom_theme_icons: false,
             hybrid_theme_icons: true,
+            force_gpui_theme_icons: false,
         };
 
         let pending = item_renderer_policy_for_flags(
@@ -326,10 +341,29 @@ mod tests {
             ItemRendererPolicyFlags {
                 custom_theme_icons: true,
                 hybrid_theme_icons: false,
+                force_gpui_theme_icons: false,
             },
         );
 
         assert_eq!(policy.image, ItemImageRenderer::ContentLayer);
+    }
+
+    #[test]
+    fn force_gpui_theme_policy_overrides_custom_and_hybrid() {
+        let content = theme_icon_content();
+        let policy = item_renderer_policy_for_flags(
+            &content,
+            ItemRendererPolicyInput {
+                theme_icon_ready: true,
+            },
+            ItemRendererPolicyFlags {
+                custom_theme_icons: true,
+                hybrid_theme_icons: true,
+                force_gpui_theme_icons: true,
+            },
+        );
+
+        assert_eq!(policy.image, ItemImageRenderer::GpuiElement);
     }
 
     fn theme_icon_content() -> ItemPaintContent {

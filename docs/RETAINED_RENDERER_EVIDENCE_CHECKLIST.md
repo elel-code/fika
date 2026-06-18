@@ -75,9 +75,9 @@ The summary block is the preferred evidence snippet for
 Only required when changing MIME/theme icon rendering:
 
 ```sh
-timeout 8s env FIKA_PERF_ITEM_VIEW=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll target/debug/fika /etc > /tmp/fika-evidence-icon-default-etc.log 2>&1
+timeout 8s env FIKA_PERF_ITEM_VIEW=1 FIKA_GPUI_THEME_ICONS=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll target/debug/fika /etc > /tmp/fika-evidence-icon-default-etc.log 2>&1
 timeout 8s env FIKA_PERF_ITEM_VIEW=1 FIKA_CUSTOM_THEME_ICONS=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll target/debug/fika /etc > /tmp/fika-evidence-icon-custom-etc.log 2>&1
-timeout 8s env FIKA_PERF_ITEM_VIEW=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll target/debug/fika ~/Downloads > /tmp/fika-evidence-icon-default-downloads.log 2>&1
+timeout 8s env FIKA_PERF_ITEM_VIEW=1 FIKA_GPUI_THEME_ICONS=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll target/debug/fika ~/Downloads > /tmp/fika-evidence-icon-default-downloads.log 2>&1
 timeout 8s env FIKA_PERF_ITEM_VIEW=1 FIKA_CUSTOM_THEME_ICONS=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll target/debug/fika ~/Downloads > /tmp/fika-evidence-icon-custom-downloads.log 2>&1
 ```
 
@@ -91,10 +91,10 @@ scripts/compare-item-image-renderers.sh --gate-default-promotion /tmp/fika-evide
 For the staged hybrid readiness path, use:
 
 ```sh
-timeout 8s env FIKA_PERF_ITEM_VIEW=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll target/debug/fika /etc > /tmp/fika-evidence-icon-hybrid-default-etc.log 2>&1
-timeout 8s env FIKA_PERF_ITEM_VIEW=1 FIKA_HYBRID_THEME_ICONS=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll target/debug/fika /etc > /tmp/fika-evidence-icon-hybrid-etc.log 2>&1
-timeout 8s env FIKA_PERF_ITEM_VIEW=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll target/debug/fika ~/Downloads > /tmp/fika-evidence-icon-hybrid-default-downloads.log 2>&1
-timeout 8s env FIKA_PERF_ITEM_VIEW=1 FIKA_HYBRID_THEME_ICONS=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll target/debug/fika ~/Downloads > /tmp/fika-evidence-icon-hybrid-downloads.log 2>&1
+timeout 8s env FIKA_PERF_ITEM_VIEW=1 FIKA_GPUI_THEME_ICONS=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll target/debug/fika /etc > /tmp/fika-evidence-icon-hybrid-default-etc.log 2>&1
+timeout 8s env FIKA_PERF_ITEM_VIEW=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll target/debug/fika /etc > /tmp/fika-evidence-icon-hybrid-etc.log 2>&1
+timeout 8s env FIKA_PERF_ITEM_VIEW=1 FIKA_GPUI_THEME_ICONS=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll target/debug/fika ~/Downloads > /tmp/fika-evidence-icon-hybrid-default-downloads.log 2>&1
+timeout 8s env FIKA_PERF_ITEM_VIEW=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll target/debug/fika ~/Downloads > /tmp/fika-evidence-icon-hybrid-downloads.log 2>&1
 
 scripts/compare-item-image-renderers.sh --gate-hybrid-handoff /tmp/fika-evidence-icon-hybrid-etc.log /tmp/fika-evidence-icon-hybrid-default-etc.log
 scripts/compare-item-image-renderers.sh --gate-hybrid-handoff /tmp/fika-evidence-icon-hybrid-downloads.log /tmp/fika-evidence-icon-hybrid-default-downloads.log

@@ -1553,10 +1553,8 @@ tracks.
   --hybrid-icons --skip-build --prefix fika-hybrid-icons-20260619` passed
   `--gate-hybrid-handoff` for both `/etc` and Downloads with
   `theme_placeholder=0` and visible `theme_decoded=0`. The result supports
-  continuing toward a default hybrid renderer, but default GPUI `img()` remains
-  in place until a stricter hybrid default-promotion gate compares phase
-  maxima, image paint, static visual variance, and renderer-policy distribution
-  against the GPUI baseline.
+  continuing toward a default hybrid renderer; P16ff adds the stricter gate and
+  P16fg switches the default.
 - [x] P16ff: Add a strict hybrid icon default-promotion gate.
   `scripts/compare-item-image-renderers.sh --gate-hybrid-default-promotion`
   now extends the handoff gate with explicit tolerances for `icon_sync`,
@@ -1564,6 +1562,14 @@ tracks.
   against the GPUI baseline. The 2026-06-19 `/etc` and Downloads hybrid logs
   both pass this stricter gate, so the next code slice can attempt a default
   hybrid renderer policy and rerun the same gate.
+- [x] P16fg: Switch ordinary MIME/theme icons to the hybrid renderer by
+  default. `FIKA_GPUI_THEME_ICONS=1` now forces the previous GPUI `img()`
+  baseline, while the default path keeps not-yet-ready theme-icon keys on GPUI
+  and hands ready keys to the retained custom image layer. The evidence runner
+  now uses `FIKA_GPUI_THEME_ICONS=1` for baseline logs and no hybrid env for the
+  default candidate. Evidence:
+  `scripts/run-retained-renderer-evidence.sh --hybrid-icons --skip-build --prefix fika-hybrid-default-20260619`
+  passed `--gate-hybrid-default-promotion` for `/etc` and Downloads.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

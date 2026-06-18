@@ -2,12 +2,13 @@
 
 This plan covers ordinary MIME/theme icons in Compact/Icons and Details. It
 does not replace thumbnail handling. Thumbnails already use thumbnail-path
-identity and the custom image layer; ordinary theme icons currently stay on GPUI
-`img()` elements because that path has better first-load evidence.
+identity and the custom image layer; ordinary theme icons now use the hybrid
+renderer by default, keeping GPUI `img()` as fallback until a retained
+same-key image is ready.
 
-The purpose of this plan is to define the cache boundary required before
-`FIKA_CUSTOM_THEME_ICONS=1` or a future custom icon renderer can become the
-default.
+The purpose of this plan is to define and guard the cache boundary required for
+that hybrid default, while keeping `FIKA_CUSTOM_THEME_ICONS=1` as a full custom
+stress path and `FIKA_GPUI_THEME_ICONS=1` as the GPUI baseline.
 
 ## Dolphin Reference
 
@@ -31,11 +32,13 @@ placeholder after a real same-key image has already loaded.
 
 Current accepted renderer policy:
 
-- MIME/theme icons default to GPUI `img()` over retained item shells.
+- MIME/theme icons default to hybrid: GPUI `img()` for not-yet-ready keys and
+  the custom image layer for ready retained image keys.
 - Thumbnail images use the custom item image layer and retained same-thumbnail
   image fallback.
 - `FIKA_CUSTOM_THEME_ICONS=1` forces theme icons through the custom image layer
   only for A/B evidence.
+- `FIKA_GPUI_THEME_ICONS=1` forces the previous GPUI `img()` baseline.
 - Initial icon path resolution may use the current layout icon size, but once a
   file-icon kind has a resolved theme path, zoom reuses that stable path rather
   than creating another exact-size path request. Fika does not use a delayed
@@ -201,11 +204,11 @@ Hybrid readiness handoff foundation from 2026-06-18:
 - `PaneSnapshot`/`FileGridProps` carry a cheap readiness snapshot into the
   renderer path so renderer-policy stats, item shells, and the image layer all
   use the same decision input.
-- `FIKA_HYBRID_THEME_ICONS=1` is opt-in. In that mode visible MIME/theme icons
-  stay on GPUI `img()` until the exact current `(iconName, icon_size_px, scale)`
-  key is ready; ready keys may hand off to the custom image painter.
-- Default behavior is unchanged: ordinary MIME/theme icons remain GPUI `img()`
-  unless `FIKA_CUSTOM_THEME_ICONS=1` or `FIKA_HYBRID_THEME_ICONS=1` is set.
+- Hybrid is now the default. Visible MIME/theme icons stay on GPUI `img()` until
+  the exact current `(iconName, icon_size_px, scale)` key is ready; ready keys
+  may hand off to the custom image painter.
+- `FIKA_HYBRID_THEME_ICONS=0` disables hybrid handoff, and
+  `FIKA_GPUI_THEME_ICONS=1` forces the old GPUI baseline for paired evidence.
 
 Hybrid `/etc` smoke evidence from 2026-06-18:
 
@@ -251,6 +254,20 @@ Paired hybrid evidence from 2026-06-19:
   code slice that changes the default renderer policy to hybrid while keeping
   GPUI fallback for not-yet-ready icon keys.
 
+Default-hybrid code-slice evidence from 2026-06-19:
+
+- Runner: `scripts/run-retained-renderer-evidence.sh --hybrid-icons --skip-build --prefix fika-hybrid-default-20260619`.
+- Candidate logs use the default renderer policy with no `FIKA_HYBRID_THEME_ICONS`
+  override; baseline logs use `FIKA_GPUI_THEME_ICONS=1`.
+- `/etc` logs:
+  `/tmp/fika-hybrid-default-20260619-icon-hybrid-default-etc.log` and
+  `/tmp/fika-hybrid-default-20260619-icon-hybrid-etc.log`.
+- Downloads logs:
+  `/tmp/fika-hybrid-default-20260619-icon-hybrid-default-downloads.log` and
+  `/tmp/fika-hybrid-default-20260619-icon-hybrid-downloads.log`.
+- Both pairs passed `--gate-hybrid-default-promotion` with
+  `theme_placeholder=0` and visible `theme_decoded=0`.
+
 ## TODO
 
 - [x] Add a `ThemeIconImageKey` type beside the file icon snapshot path.
@@ -285,7 +302,7 @@ Paired hybrid evidence from 2026-06-19:
   ready-key handoff, and no visible placeholder/decode churn; the default switch
   also needs an explicit performance threshold for item-view phase maxima,
   image paint, static visual variance, and renderer-policy distribution.
-- [ ] Change the default MIME/theme icon renderer policy to hybrid only after
+- [x] Change the default MIME/theme icon renderer policy to hybrid only after
   the code slice preserves the same gate pass on `/etc` and a mixed user
   directory.
 - [ ] Keep GPUI `img()` as the default MIME/theme icon renderer until the

@@ -38,7 +38,7 @@ custom renderer can replace a GPUI surface.
 | --- | --- | --- | --- | --- |
 | Compact/Icons base background and labels | custom content-level painter | visible item snapshots, paint slots, text shape cache | Keep custom paint. | Runtime logs must keep steady snapshot conversion sub-ms and static visual paint/build under budget. |
 | Compact/Icons thumbnail images | custom image painter | image paint snapshots, pane-local thumbnail image cache, retained thumbnail image map, thumbnail scheduler roles | Keep custom paint for thumbnails while image decode/cache stays on GPUI `RetainAllImageCache`; thumbnail pending/failure behavior remains model-driven and can paint fallback without changing MIME/theme icon policy. | Logs must include `[fika item-image]` plus `thumb_*` `image_sources` when thumbnails are exercised; no thumbnail sync decode in prepaint. |
-| Compact/Icons MIME/theme-icon images | GPUI `img()` element over retained item shell | retained item slots, visible icon role/path cache, background file-icon resolve queue | Use GPUI image elements by default. `/etc` evidence showed the custom image layer exposed a first-load placeholder frame for all 48 visible theme icons; GPUI elements keep the retained model/controller boundary without feeding theme icons through the custom painter. Render conversion still uses cached/preliminary icon snapshots only; once a file-icon kind has a resolved theme path, zoom reuses that stable path instead of requesting another exact-size path. | Revisit only with paired logs from `FIKA_CUSTOM_THEME_ICONS=1` and default runs. The default should show `gpui_image_element>0`; the custom override should be the only path with theme-icon `theme_placeholder` churn. |
+| Compact/Icons MIME/theme-icon images | Hybrid GPUI fallback plus custom image layer for ready theme-icon keys | retained item slots, visible icon role/path cache, app-level `ThemeIconImageReadiness`, pane image layer, background file-icon resolve queue | Use hybrid by default. Not-yet-ready theme-icon keys remain GPUI `img()` elements; ready keys paint through the retained custom image layer. `FIKA_GPUI_THEME_ICONS=1` forces the old GPUI baseline, and `FIKA_CUSTOM_THEME_ICONS=1` remains the full custom stress path. | Default hybrid logs must pass `scripts/compare-item-image-renderers.sh --gate-hybrid-default-promotion` against a `FIKA_GPUI_THEME_ICONS=1` baseline for `/etc` and a mixed user directory. |
 | Compact/Icons hover, cursor, click, menu, drop hit testing | retained viewport/custom hitboxes plus active item-drag window tracker | viewport retained hit testing and `drag_drop` state | Keep retained controller path. | DnD smoke must pass across internal item, pane, Places, and external drops; pane self-drags should log `active-item-move`. |
 | Compact/Icons drag start | GPUI `Div::on_drag` shell | retained drag payload state plus temporary shell | Keep GPUI shell for initiation only. | Do not remove until GPUI exposes public custom-element drag-start or Fika carries an audited GPUI patch. |
 | Compact/Icons rename editor | GPUI text/editor subtree overlay | rename draft model and overlay geometry | Keep GPUI built-in editor. | Only revisit when text input, caret hit testing, selection, and IME behavior can stay behavior-complete. |
@@ -197,10 +197,11 @@ For MIME icon flicker investigations, compare against Dolphin's
 `KStandardItemListWidget::updatePixmap()` and `pixmapForIcon()`: Dolphin keeps a
 widget-local `m_pixmap` and uses `QPixmapCache` by icon name/size, so a loaded
 real icon is not replaced by a marker while a same-icon resource is refreshed.
-Fika's default path preserves that behavior by keeping MIME/theme icons on GPUI
-`img()` elements fed by retained item snapshots and current-size icon paths.
-If `FIKA_CUSTOM_THEME_ICONS=1` is used, the custom image painter must preserve
-the same behavior with retained images keyed by MIME/theme `iconName`.
+Fika's default hybrid path preserves that behavior by keeping MIME/theme icons
+on GPUI `img()` until the current retained image key is ready, then painting the
+ready key through the custom image layer. If `FIKA_CUSTOM_THEME_ICONS=1` is used,
+the custom image painter must preserve the same behavior with retained images
+keyed by MIME/theme `iconName`.
 Thumbnail retention remains keyed by the exact thumbnail path. Fika does not
 mirror Dolphin's synchronous `QIcon::pixmap()` by reading and decoding SVGs in
 GPUI prepaint; GPUI image loading remains the decode path. A neutral markerless
@@ -340,6 +341,14 @@ logs, and both passed `scripts/compare-item-image-renderers.sh
 MIME/theme icons can move to the hybrid renderer by default if the code change
 preserves the same gate pass and keeps GPUI fallback for not-yet-ready keys.
 
+The default-policy code slice was validated with
+`scripts/run-retained-renderer-evidence.sh --hybrid-icons --skip-build --prefix
+fika-hybrid-default-20260619`. Candidate logs used the default renderer policy
+with no `FIKA_HYBRID_THEME_ICONS` override, baseline logs used
+`FIKA_GPUI_THEME_ICONS=1`, and both `/etc` and Downloads passed
+`--gate-hybrid-default-promotion` with `theme_placeholder=0` and visible
+`theme_decoded=0`.
+
 ## Next Renderer Decisions
 
 1. Keep the remaining drag-start shells until the GPUI API boundary changes.
@@ -348,8 +357,8 @@ preserves the same gate pass and keeps GPUI fallback for not-yet-ready keys.
 2. Use runtime logs to decide whether any currently custom-painted surface
    should stay custom-painted or fall back to a GPUI renderer over the retained
    model.
-3. Switch ordinary MIME/theme icons to the hybrid renderer by default only in a
-   code slice that reruns and passes `--gate-hybrid-default-promotion` for
-   `/etc` and a mixed user directory.
+3. Keep `FIKA_GPUI_THEME_ICONS=1` as the GPUI baseline path and use
+   `--gate-hybrid-default-promotion` for future MIME/theme icon renderer
+   changes.
 4. Do not start a Places custom-paint migration until item-view runtime DnD and
    perf gates are refreshed.

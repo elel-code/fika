@@ -313,11 +313,11 @@ if [[ "$capture_icons" == true ]]; then
     icon_custom_downloads_log="$(log_path icon-custom-downloads)"
 
     run_capture "icon default etc" "$icon_default_etc_log" \
-        env FIKA_PERF_ITEM_VIEW=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll "$binary" /etc
+        env FIKA_PERF_ITEM_VIEW=1 FIKA_GPUI_THEME_ICONS=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll "$binary" /etc
     run_capture "icon custom etc" "$icon_custom_etc_log" \
         env FIKA_PERF_ITEM_VIEW=1 FIKA_CUSTOM_THEME_ICONS=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll "$binary" /etc
     run_capture "icon default downloads" "$icon_default_downloads_log" \
-        env FIKA_PERF_ITEM_VIEW=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll "$binary" "$downloads_dir"
+        env FIKA_PERF_ITEM_VIEW=1 FIKA_GPUI_THEME_ICONS=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll "$binary" "$downloads_dir"
     run_capture "icon custom downloads" "$icon_custom_downloads_log" \
         env FIKA_PERF_ITEM_VIEW=1 FIKA_CUSTOM_THEME_ICONS=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll "$binary" "$downloads_dir"
 
@@ -334,14 +334,14 @@ if [[ "$capture_hybrid_icons" == true ]]; then
     icon_default_downloads_log="$(log_path icon-hybrid-default-downloads)"
     icon_hybrid_downloads_log="$(log_path icon-hybrid-downloads)"
 
-    run_capture "icon hybrid default etc" "$icon_default_etc_log" \
-        env FIKA_PERF_ITEM_VIEW=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll "$binary" /etc
+    run_capture "icon hybrid gpui baseline etc" "$icon_default_etc_log" \
+        env FIKA_PERF_ITEM_VIEW=1 FIKA_GPUI_THEME_ICONS=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll "$binary" /etc
     run_capture "icon hybrid etc" "$icon_hybrid_etc_log" \
-        env FIKA_PERF_ITEM_VIEW=1 FIKA_HYBRID_THEME_ICONS=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll "$binary" /etc
-    run_capture "icon hybrid default downloads" "$icon_default_downloads_log" \
-        env FIKA_PERF_ITEM_VIEW=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll "$binary" "$downloads_dir"
+        env FIKA_PERF_ITEM_VIEW=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll "$binary" /etc
+    run_capture "icon hybrid gpui baseline downloads" "$icon_default_downloads_log" \
+        env FIKA_PERF_ITEM_VIEW=1 FIKA_GPUI_THEME_ICONS=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll "$binary" "$downloads_dir"
     run_capture "icon hybrid downloads" "$icon_hybrid_downloads_log" \
-        env FIKA_PERF_ITEM_VIEW=1 FIKA_HYBRID_THEME_ICONS=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll "$binary" "$downloads_dir"
+        env FIKA_PERF_ITEM_VIEW=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll "$binary" "$downloads_dir"
 
     compare="$root_dir/scripts/compare-item-image-renderers.sh"
     run_gate "icon hybrid default promotion etc" \

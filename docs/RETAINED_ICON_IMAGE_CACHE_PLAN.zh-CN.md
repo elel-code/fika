@@ -5,10 +5,12 @@
 
 本计划覆盖 Compact/Icons 和 Details 中的普通 MIME/theme 图标，不替换缩略图处理。
 缩略图已经使用 thumbnail-path identity 和 custom image layer；普通 theme icon
-当前默认继续走 GPUI `img()` element，因为该路径目前有更好的首帧证据。
+现在默认使用 hybrid renderer，在 retained same-key image ready 前继续用 GPUI `img()`
+作为 fallback。
 
-本计划的目的，是定义 `FIKA_CUSTOM_THEME_ICONS=1` 或未来 custom icon renderer
-成为默认值之前必须具备的 cache 边界。
+本计划的目的，是定义并守住这个 hybrid 默认所需的 cache 边界，同时保留
+`FIKA_CUSTOM_THEME_ICONS=1` 作为 full custom 压力路径，`FIKA_GPUI_THEME_ICONS=1`
+作为 GPUI baseline。
 
 ## Dolphin 参考
 
@@ -28,9 +30,11 @@ marker placeholder。
 
 当前已接受的 renderer policy：
 
-- MIME/theme icon 默认使用 GPUI `img()`，叠加在 retained item shell 上。
+- MIME/theme icon 默认使用 hybrid：尚未 ready 的 key 走 GPUI `img()`，ready 的 retained
+  image key 走 custom image layer。
 - Thumbnail image 使用 custom item image layer 和 retained same-thumbnail image fallback。
 - `FIKA_CUSTOM_THEME_ICONS=1` 只为 A/B 证据强制 theme icon 走 custom image layer。
+- `FIKA_GPUI_THEME_ICONS=1` 强制旧 GPUI `img()` baseline。
 - 首次 icon path 解析可以使用当前 layout icon size；但同一文件图标类型已有
   resolved theme path 后，zoom 会复用该稳定 path，而不是创建另一个 exact-size path
   request。Fika 不使用延迟的第二次 icon-size 或 path commit。
@@ -175,11 +179,11 @@ full custom icon 路径强行通过 `--gate-default-promotion`。
   theme key 标记为 ready；pending placeholder 不会污染 readiness。
 - `PaneSnapshot`/`FileGridProps` 传递轻量 readiness snapshot，因此 renderer-policy
   统计、item shell 和 image layer 使用同一份决策输入。
-- `FIKA_HYBRID_THEME_ICONS=1` 是 opt-in。该模式下，可见 MIME/theme icon 会继续走
-  GPUI `img()`，直到当前精确 `(iconName, icon_size_px, scale)` key ready；ready key
-  才允许 handoff 到 custom image painter。
-- 默认行为不变：普通 MIME/theme icon 仍走 GPUI `img()`，除非显式设置
-  `FIKA_CUSTOM_THEME_ICONS=1` 或 `FIKA_HYBRID_THEME_ICONS=1`。
+- Hybrid 现在是默认路径。可见 MIME/theme icon 会继续走 GPUI `img()`，直到当前精确
+  `(iconName, icon_size_px, scale)` key ready；ready key 才允许 handoff 到 custom image
+  painter。
+- `FIKA_HYBRID_THEME_ICONS=0` 会关闭 hybrid handoff，`FIKA_GPUI_THEME_ICONS=1` 会强制旧
+  GPUI baseline 以便采集配对证据。
 
 2026-06-18 hybrid `/etc` smoke 证据：
 
@@ -220,6 +224,20 @@ full custom icon 路径强行通过 `--gate-default-promotion`。
   它支持后续代码切片把默认 renderer policy 改成 hybrid，同时对尚未 ready 的 icon key 继续保留
   GPUI fallback。
 
+2026-06-19 默认 hybrid 代码切片证据：
+
+- Runner：`scripts/run-retained-renderer-evidence.sh --hybrid-icons --skip-build --prefix fika-hybrid-default-20260619`。
+- Candidate 日志使用默认 renderer policy，不设置 `FIKA_HYBRID_THEME_ICONS`；baseline 日志使用
+  `FIKA_GPUI_THEME_ICONS=1`。
+- `/etc` 日志：
+  `/tmp/fika-hybrid-default-20260619-icon-hybrid-default-etc.log` 和
+  `/tmp/fika-hybrid-default-20260619-icon-hybrid-etc.log`。
+- Downloads 日志：
+  `/tmp/fika-hybrid-default-20260619-icon-hybrid-default-downloads.log` 和
+  `/tmp/fika-hybrid-default-20260619-icon-hybrid-downloads.log`。
+- 两组都通过了 `--gate-hybrid-default-promotion`，且 `theme_placeholder=0`、visible
+  `theme_decoded=0`。
+
 ## TODO
 
 - [x] 在 file icon snapshot 路径旁添加 `ThemeIconImageKey` 类型。
@@ -248,7 +266,7 @@ full custom icon 路径强行通过 `--gate-default-promotion`。
   `--gate-hybrid-handoff` 证明 GPUI fallback、prewarm、ready-key handoff 和没有可见
   placeholder/decode churn；默认切换还需要为 item-view phase maxima、image paint、
   static visual variance 和 renderer-policy 分布定义明确性能阈值。
-- [ ] 只有在代码切片继续让 `/etc` 和混合用户目录通过同一 gate 后，才把默认 MIME/theme
+- [x] 只有在代码切片继续让 `/etc` 和混合用户目录通过同一 gate 后，才把默认 MIME/theme
   icon renderer policy 改成 hybrid。
 - [ ] 在配对证据通过且 `docs/ITEM_VIEW_RENDERER_DECISIONS.md` 更新前，保持 GPUI
   `img()` 为默认 MIME/theme icon renderer。
