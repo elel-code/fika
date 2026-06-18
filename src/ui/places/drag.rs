@@ -9,6 +9,8 @@ use super::super::drag_drop::{
 };
 use crate::ui::icons::{FileIconSnapshot, cached_icon_or_fallback};
 
+use super::snapshot::PlaceSnapshot;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PlaceDrag {
     path: PathBuf,
@@ -49,6 +51,33 @@ impl PlaceDrag {
     pub(crate) fn movable(&self) -> bool {
         self.movable
     }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PlaceDragStartSource {
+    drag: PlaceDrag,
+}
+
+impl PlaceDragStartSource {
+    pub(crate) fn from_snapshot(place: &PlaceSnapshot) -> Self {
+        Self {
+            drag: PlaceDrag::new(
+                place.path.clone(),
+                place.label.as_str(),
+                place.icon.clone(),
+                place.index,
+                place_drag_is_movable(place),
+            ),
+        }
+    }
+
+    pub(crate) fn into_drag(self) -> PlaceDrag {
+        self.drag
+    }
+}
+
+pub(crate) fn place_drag_is_movable(place: &PlaceSnapshot) -> bool {
+    place.group.is_empty()
 }
 
 pub(crate) struct PlaceDragPreview {
@@ -198,6 +227,7 @@ fn place_drag_icon_or_fallback(icon: FileIconSnapshot) -> gpui::AnyElement {
 mod tests {
     use super::*;
     use crate::ui::drag_drop::drag_preview_content_origin_for_cursor_offset;
+    use std::path::PathBuf;
     use std::sync::Arc;
 
     #[test]
@@ -307,6 +337,26 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    #[test]
+    fn place_drag_start_source_projects_snapshot_identity() {
+        let place = test_place_snapshot("", "Home", "/home/yk", 4);
+        let drag = PlaceDragStartSource::from_snapshot(&place).into_drag();
+
+        assert_eq!(drag.path(), PathBuf::from("/home/yk"));
+        assert_eq!(drag.source_index(), 4);
+        assert!(drag.movable());
+    }
+
+    #[test]
+    fn place_drag_start_source_marks_grouped_places_immovable() {
+        let place = test_place_snapshot("Devices", "Root", "/", 7);
+        let drag = PlaceDragStartSource::from_snapshot(&place).into_drag();
+
+        assert_eq!(drag.path(), PathBuf::from("/"));
+        assert_eq!(drag.source_index(), 7);
+        assert!(!drag.movable());
+    }
+
     fn test_icon_snapshot() -> FileIconSnapshot {
         FileIconSnapshot {
             icon_name: Arc::from("test-place"),
@@ -314,6 +364,35 @@ mod tests {
             fallback_marker: Arc::from("P"),
             fallback_fg: 0x1f4fbf,
             fallback_bg: 0xeaf1ff,
+        }
+    }
+
+    fn test_place_snapshot(
+        group: &'static str,
+        label: &str,
+        path: &str,
+        index: usize,
+    ) -> PlaceSnapshot {
+        PlaceSnapshot {
+            index,
+            group,
+            icon: test_icon_snapshot(),
+            label: label.to_string(),
+            path: PathBuf::from(path),
+            device_id: None,
+            mounted: true,
+            device: false,
+            network: false,
+            device_ejectable: false,
+            device_can_power_off: false,
+            active: false,
+            drop_target: false,
+            insert_before: false,
+            insert_after: false,
+            trash_place: false,
+            trash_has_items: false,
+            editable: true,
+            removable: true,
         }
     }
 }

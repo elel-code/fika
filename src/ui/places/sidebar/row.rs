@@ -6,7 +6,7 @@ use gpui::{Context, Div, MouseButton, ParentElement, Stateful, Styled, div, px, 
 
 use dnd::{PlaceRowDndConfig, install_place_row_dnd};
 
-use super::super::drag::{PlaceDrag, PlaceDragPreview};
+use super::super::drag::{PlaceDragPreview, PlaceDragStartSource};
 use super::super::icon_view::place_icon_view;
 use super::super::perf::PlacesRowVisualPolicy;
 use super::super::snapshot::PlaceSnapshot;
@@ -31,10 +31,6 @@ fn place_row_highlight(active: bool, drop_target: bool, insert_target: bool) -> 
     }
 }
 
-fn place_row_drag_is_movable(place: &PlaceSnapshot) -> bool {
-    place.group.is_empty()
-}
-
 pub(super) fn place_row(
     visible_index: usize,
     place: PlaceSnapshot,
@@ -48,13 +44,7 @@ pub(super) fn place_row(
     let gpui_text = !row_visual_policy.paints_text();
     let row_id = format!("place-{visible_index}");
     let path = place.path.clone();
-    let place_drag = PlaceDrag::new(
-        place.path.clone(),
-        place.label.as_str(),
-        place.icon.clone(),
-        place.index,
-        place_row_drag_is_movable(&place),
-    );
+    let place_drag = PlaceDragStartSource::from_snapshot(&place).into_drag();
     let context_place = place.clone();
     let insert_before_index = place.index;
     let insert_after_index = place.index + 1;
@@ -209,7 +199,6 @@ pub(super) fn place_row(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::icons::FileIconSnapshot;
 
     #[test]
     fn place_row_insert_target_suppresses_ordinary_row_highlight() {
@@ -229,49 +218,5 @@ mod tests {
                 hover_enabled: true,
             }
         );
-    }
-
-    #[test]
-    fn place_row_drag_reorder_allows_primary_place_sources() {
-        let mut place = PlaceSnapshot {
-            index: 0,
-            group: "",
-            icon: FileIconSnapshot {
-                icon_name: "folder".into(),
-                path: None,
-                fallback_marker: "F".into(),
-                fallback_fg: 0x1f4fbf,
-                fallback_bg: 0xeaf1ff,
-            },
-            label: "Work".to_string(),
-            path: "/tmp/work".into(),
-            device_id: None,
-            mounted: true,
-            device: false,
-            network: false,
-            device_ejectable: false,
-            device_can_power_off: false,
-            active: false,
-            drop_target: false,
-            insert_before: false,
-            insert_after: false,
-            trash_place: false,
-            trash_has_items: false,
-            editable: true,
-            removable: true,
-        };
-
-        assert!(place_row_drag_is_movable(&place));
-
-        place.active = true;
-        assert!(place_row_drag_is_movable(&place));
-
-        place.active = false;
-        place.editable = false;
-        place.removable = false;
-        assert!(place_row_drag_is_movable(&place));
-
-        place.group = "Network";
-        assert!(!place_row_drag_is_movable(&place));
     }
 }

@@ -43,6 +43,7 @@ Fika 的等价边界是：
 retained_hitboxes=0
 gpui_event_shells=rows+sections
 drag_shells=rows
+drag_start_models=rows
 ```
 
 默认提升前的目标 policy 形状：
@@ -51,9 +52,12 @@ drag_shells=rows
 retained_hitboxes=rows+sections
 gpui_event_shells=0
 drag_shells=rows
+drag_start_models=rows
 ```
 
 `drag_shells=rows` 是有意保留的 GPUI typed drag-start 边界，不代表事件传递失败。
+`drag_start_models=rows` 记录 payload、movable flag、export metadata 和 preview model
+由 Places drag 模块拥有；row shell 应该只调用 GPUI `on_drag` API。
 
 ## Retained Event Layer
 
@@ -241,6 +245,19 @@ retained DnD autosmoke 切片：
   geometry 的 summary。这给后续 drag-start / GPUI shell 移除切片提供了非破坏性回归守卫；
   真正执行 reorder/drop 的 destructive smoke 仍需隔离配置后再添加。
 
+retained drag-start source-model 切片：
+
+- 本地 GPUI 源码在 Zed commit `e4f6742a` 仍然只通过
+  `InteractiveElement::on_drag` / `Div::on_drag` 暴露 typed drag 启动；retained hitbox
+  没有公开 typed drag-start API。
+- 因此 row shell 仍保留为平台 drag-start 触发器，但 `places/drag.rs` 现在拥有从
+  `PlaceSnapshot` 投影 `PlaceDragStartSource` 的逻辑。该投影在安装 GPUI shell 前决定
+  path、label、icon、source index、movable flag、export payload 和 preview model。
+- `[fika places-interaction-policy]` 报告 `drag_start_models=rows`，并且
+  `scripts/analyze-places-perf.sh --require-interaction-policy` 会拒绝 drag-start model
+  数量与可见 row 数不一致的日志。这在保留平台 shell 的同时保持 Dolphin
+  model/controller 边界显式。
+
 ## TODO
 
 - [x] 添加 `PlacesEventDeliveryPolicy`，默认 `GpuiShells`，opt-in
@@ -263,5 +280,8 @@ retained DnD autosmoke 切片：
   `retained-dnd` 在一个 sidebar-level GPUI typed drag shell 后面拥有 row/section 目标查找
   和 drop dispatch。剩余 GPUI 边界是 payload delivery 和 drag-start，而不是 per-row/section
   DnD target logic。
+- [x] 将 Places drag-start source modeling 移出 row shell。当前状态：
+  `PlaceDragStartSource` 位于 `places/drag.rs`，且 analyzer 日志要求
+  `drag_start_models=rows`。
 - [ ] analyzer gates 通过后移除 GPUI row/section event callbacks。
 - [ ] Track 4 解决 typed drag start 前，继续保留 GPUI row drag-start shells。

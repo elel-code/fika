@@ -48,6 +48,7 @@ Current policy shape:
 retained_hitboxes=0
 gpui_event_shells=rows+sections
 drag_shells=rows
+drag_start_models=rows
 ```
 
 Target policy shape before default promotion:
@@ -56,10 +57,13 @@ Target policy shape before default promotion:
 retained_hitboxes=rows+sections
 gpui_event_shells=0
 drag_shells=rows
+drag_start_models=rows
 ```
 
 `drag_shells=rows` remains intentional. It is the GPUI typed drag-start
-boundary, not an event-delivery failure.
+boundary, not an event-delivery failure. `drag_start_models=rows` records that
+the payload, movable flag, export metadata, and preview model are owned by the
+Places drag module; the row shell should only call GPUI's `on_drag` API.
 
 ## Retained Event Layer
 
@@ -262,6 +266,22 @@ Retained DnD autosmoke slice:
   next drag-start / GPUI-shell-removal slices a non-destructive regression
   guard before any destructive reorder/drop smoke is added.
 
+Retained drag-start source-model slice:
+
+- Local GPUI source at Zed commit `e4f6742a` still exposes typed drag
+  initiation through `InteractiveElement::on_drag` / `Div::on_drag`; retained
+  hitboxes do not have a public typed drag-start API.
+- The row shell therefore remains the platform drag-start trigger, but
+  `places/drag.rs` now owns the `PlaceDragStartSource` projection from
+  `PlaceSnapshot`. That projection decides the path, label, icon, source index,
+  movable flag, export payload, and preview model before the GPUI shell is
+  installed.
+- `[fika places-interaction-policy]` reports `drag_start_models=rows`, and
+  `scripts/analyze-places-perf.sh --require-interaction-policy` rejects logs
+  where the drag-start model count differs from visible row count. This keeps
+  the Dolphin model/controller boundary explicit while the platform shell
+  remains.
+
 ## TODO
 
 - [x] Add a `PlacesEventDeliveryPolicy` with `GpuiShells` default and an
@@ -288,5 +308,8 @@ Retained DnD autosmoke slice:
   `retained-dnd` owns row/section target lookup and drop dispatch behind one
   sidebar-level GPUI typed drag shell. The remaining GPUI boundary is payload
   delivery and drag-start, not per-row/section DnD target logic.
+- [x] Move Places drag-start source modeling out of the row shell. Current
+  status: `PlaceDragStartSource` lives in `places/drag.rs`, and analyzer logs
+  require `drag_start_models=rows`.
 - [ ] Remove GPUI row/section event callbacks after analyzer gates pass.
 - [ ] Keep GPUI row drag-start shells until Track 4 solves typed drag start.

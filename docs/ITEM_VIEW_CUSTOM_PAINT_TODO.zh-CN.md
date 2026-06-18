@@ -208,7 +208,7 @@ Places chrome 默认之后的当前执行入口是
 - [x] P16b：在最新的 Dolphin 对齐主题图标绘制边界更改后收集一组新的桌面会话证据：`/etc` 自定义主题 vs 默认日志现在证明默认 MIME/主题图标避免了首帧加载 `theme_placeholder` 变动，且 `FIKA_PERF_ITEM_VIEW=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll target/debug/fika /etc` 捕获无人值守缩放/滚动证据。
 - [x] P16c：使用该证据更新 `docs/ITEM_VIEW_RENDERER_DECISIONS.md`，包括 `/etc` 缩放/滚动是否仍然显示冷图像加载卡顿或可见占位符到图标切换。当前证据：可见同步停止复制排队的预读图标工作后，`icon_sync` 最大值从 `28340us` 降至 `173us`；剩余的 `/etc` autosmoke 成本是静态视觉文本/基础绘制，而非 MIME/主题图像渲染。
 - [x] P16d：如果当前日志无法区分以下情况，则添加或扩展运行时证据工具：首帧加载主题图标占位符、保留同 `iconName` 复用、GPUI 图像缓存解码完成和稳定重绘成本。`[fika item-image]` 现在报告 `theme_loaded`、`theme_decoded`、`theme_retained`、`theme_placeholder`、`thumb_loaded`、`thumb_decoded`、`thumb_retained` 和 `thumb_fallback`；运行时分析器将其总结为 `image_sources`。`FIKA_AUTOSMOKE_ITEM_VIEW` 现在无需手动输入即可练习缩放/滚动，并添加 `[fika autosmoke]` 标记到同一性能日志中。
-- [x] P16e：审计本地 GPUI 源码中保留/自定义元素拖拽启动路径。如果没有公共 API 存在，记录确切阻塞并保留条目和详情拖拽启动 shell。结果：Zed 提交 `f16a469` 处的 GPUI `0.2.2` 通过 `Interactivity::on_drag` / `InteractiveElement::on_drag` 在 `crates/gpui/src/elements/div.rs` 中暴露类型化拖拽启动。自定义元素可以通过 `Window::insert_hitbox()` 插入 hitbox，但没有公共 API 从这些保留 hitbox 启动类型化拖拽，因此条目和详情拖拽启动 shell 保留为显式平台边界。
+- [x] P16e：审计本地 GPUI 源码中保留/自定义元素拖拽启动路径。如果没有公共 API 存在，记录确切阻塞并保留条目和详情拖拽启动 shell。结果：GPUI 通过 `Interactivity::on_drag` / `InteractiveElement::on_drag` 在 `crates/gpui/src/elements/div.rs` 中暴露类型化拖拽启动。自定义元素可以通过 `Window::insert_hitbox()` 插入 hitbox，但没有公共 API 从这些保留 hitbox 启动类型化拖拽，因此条目和详情拖拽启动 shell 保留为显式平台边界。2026-06-19 复查：Zed commit `e4f6742a` 仍然是同一阻塞。
 - [ ] P16f：如果选择经过审计的 GPUI patch，设计最小的从保留 hitbox 启动拖拽的 API，同时保留 payload、预览、光标偏移、接受的传输模式和外部放置行为。
 - [x] P16g：将下一个行为保留的条目视图编排边界移出 `src/main.rs`。候选：运行时条目视图性能/证据收集访问器，因为绘制器性能状态已经存在于 `file_grid/perf.rs` 下。已完成：`FIKA_PERF_ITEM_VIEW` 标志和文件网格性能层调用者由 `src/ui/file_grid/perf.rs` 拥有；条目视图性能帧分类和性能状态清理由 `src/ui/file_grid/perf.rs` 拥有；帧状态和绘制器性能统计存储现在位于 `src/ui/file_grid/perf.rs` 中的 `ItemViewPerfState` 后面；条目视图性能摘要发出现在由 `src/ui/file_grid/perf.rs` 拥有；autosmoke 场景解析和操作排序现在位于 `src/ui/file_grid/autosmoke.rs` 中。
 - [x] P16h：在更改 Places 渲染之前起草保留 Places 行绘制器设计。设计必须覆盖行组、隐藏 section、设备行、重排/放置插入、右键菜单和侧栏滚动。结果：`docs/PLACES_RENDERER_PLAN.md` 将 Dolphin 的 `DolphinPlacesModel + KFilePlacesView` 划分与 Fika 当前的 `places/model`、`projection`、`sidebar/row`、`drag` 和自定义滚动条模块进行比较，然后将任何保留行绘制器门控于 Places 特定性能日志、运行时 smoke 和渲染器策略证据之后。
@@ -385,6 +385,15 @@ Places chrome 默认之后的当前执行入口是
   这证明了 Dolphin 风格 retained geometry/controller decision 边界，同时不改变用户
   Places 排序。证据：`/tmp/fika-places-retained-dnd.log` 通过
   `--require-retained-dnd-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-chrome-policy`。
+- [x] P16eo：将 Places drag-start source modeling 移出 row shell。GPUI 平台边界仍然
+  需要 row `Div::on_drag`，但 `src/ui/places/drag.rs` 现在拥有从 `PlaceSnapshot` 投影
+  `PlaceDragStartSource` 的逻辑，包括 path、label、icon、source index、movable flag、
+  export payload 和 preview model。`[fika places-interaction-policy]` 现在报告
+  `drag_start_models=rows`，Places analyzer 会拒绝 model 数量不匹配可见 row 数的
+  interaction 日志。这在保留 drag-start shell 的同时让 Dolphin 风格 source model 边界
+  保持显式。证据：`/tmp/fika-places-drag-start-model.log` 通过
+  `--require-retained-dnd-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-chrome-policy`，
+  且 `max_drag_start_models=11`。
 - [ ] P16q：在每个 P16 实现切片之后，单独提交并附带相关验证：仅文档切片需要 `git diff --check`；代码切片需要 `cargo fmt`、`cargo check`、`cargo test -q`、`scripts/check-item-view-perf-analyzer.sh`、`scripts/check-places-perf-analyzer.sh` 和 `git diff --check`。
 - [x] P16r：记录运行时自测试和突破记录规则。可重复的滚动、缩放、启动图标、调整大小、模式切换和 Places 目标回退应在依赖手动计时之前通过 autosmoke 日志和分析器脚本重现。任何确认的优化突破必须记录症状、Dolphin 比较边界、根本原因、实现、保存的日志/分析器命令和未来回归守卫在拥有的设计或决策文档中。
 

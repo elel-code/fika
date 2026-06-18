@@ -419,11 +419,15 @@ impl PlacesInteractionPolicyLog {
     pub(crate) fn drag_shells(self) -> usize {
         self.row_count
     }
+
+    pub(crate) fn drag_start_models(self) -> usize {
+        self.row_count
+    }
 }
 
 pub(crate) fn emit_places_interaction_policy_log(log: PlacesInteractionPolicyLog) {
     eprintln!(
-        "[fika places-interaction-policy] rows={} sections={} row_target_decisions={} section_target_decisions={} retained_hitboxes={} retained_probe_hitboxes={} gpui_event_shells={} drag_shells={} event_policy={} retained_targeting={} retained_dnd={}",
+        "[fika places-interaction-policy] rows={} sections={} row_target_decisions={} section_target_decisions={} retained_hitboxes={} retained_probe_hitboxes={} gpui_event_shells={} drag_shells={} drag_start_models={} event_policy={} retained_targeting={} retained_dnd={}",
         log.row_count,
         log.section_count,
         log.retained_row_target_decisions(),
@@ -432,6 +436,7 @@ pub(crate) fn emit_places_interaction_policy_log(log: PlacesInteractionPolicyLog
         log.retained_probe_hitboxes(),
         log.gpui_event_shells(),
         log.drag_shells(),
+        log.drag_start_models(),
         log.event_delivery_policy.kind(),
         log.retained_targeting(),
         log.retained_dnd(),
@@ -559,6 +564,7 @@ mod tests {
         assert_eq!(policy.retained_probe_hitboxes(), 0);
         assert_eq!(policy.gpui_event_shells(), 13);
         assert_eq!(policy.drag_shells(), 11);
+        assert_eq!(policy.drag_start_models(), 11);
     }
 
     #[test]
@@ -577,6 +583,7 @@ mod tests {
         assert_eq!(policy.retained_targeting(), 0);
         assert_eq!(policy.retained_dnd(), 0);
         assert_eq!(policy.drag_shells(), 11);
+        assert_eq!(policy.drag_start_models(), 11);
     }
 
     #[test]
@@ -596,6 +603,7 @@ mod tests {
         assert_eq!(policy.retained_targeting(), 13);
         assert_eq!(policy.retained_dnd(), 0);
         assert_eq!(policy.drag_shells(), 11);
+        assert_eq!(policy.drag_start_models(), 11);
     }
 
     #[test]
@@ -616,6 +624,7 @@ mod tests {
         assert_eq!(policy.retained_targeting(), 13);
         assert_eq!(policy.retained_dnd(), 13);
         assert_eq!(policy.drag_shells(), 11);
+        assert_eq!(policy.drag_start_models(), 11);
     }
 
     #[test]
@@ -630,6 +639,7 @@ mod tests {
         assert_eq!(policy.retained_probe_hitboxes(), 13);
         assert_eq!(policy.gpui_event_shells(), 13);
         assert_eq!(policy.drag_shells(), 11);
+        assert_eq!(policy.drag_start_models(), 11);
     }
 
     fn place(group: &'static str, label: &str) -> PlaceSnapshot {

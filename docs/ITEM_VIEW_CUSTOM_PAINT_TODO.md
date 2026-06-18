@@ -500,12 +500,13 @@ tracks.
   same perf log.
 - [x] P16e: Audit local GPUI source for a retained/custom-element drag-start
   path. If no public API exists, document the exact blocker and keep item and
-  Details drag-start shells. Result: GPUI `0.2.2` at Zed commit `f16a469`
-  exposes typed drag initiation through `Interactivity::on_drag` /
-  `InteractiveElement::on_drag` in `crates/gpui/src/elements/div.rs`.
-  Custom elements can insert hitboxes with `Window::insert_hitbox()` but do not
-  have a public API to start a typed drag from those retained hitboxes, so the
-  item and Details drag-start shells remain explicit platform boundaries.
+  Details drag-start shells. Result: GPUI exposes typed drag initiation through
+  `Interactivity::on_drag` / `InteractiveElement::on_drag` in
+  `crates/gpui/src/elements/div.rs`. Custom elements can insert hitboxes with
+  `Window::insert_hitbox()` but do not have a public API to start a typed drag
+  from those retained hitboxes, so the item and Details drag-start shells
+  remain explicit platform boundaries. 2026-06-19 refresh: the same blocker is
+  still true at Zed commit `e4f6742a`.
 - [ ] P16f: If an audited GPUI patch is chosen, design the smallest API that
   starts drags from retained hitboxes while preserving payload, preview,
   cursor offset, accepted transfer modes, and external drop behavior.
@@ -1421,6 +1422,17 @@ tracks.
   geometry/controller decision boundary without mutating user Places ordering.
   Evidence: `/tmp/fika-places-retained-dnd.log` passed
   `--require-retained-dnd-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-chrome-policy`.
+- [x] P16eo: Move Places drag-start source modeling out of the row shell. The
+  GPUI platform boundary still requires row `Div::on_drag`, but
+  `src/ui/places/drag.rs` now owns `PlaceDragStartSource` projection from
+  `PlaceSnapshot`, including path, label, icon, source index, movable flag,
+  export payload, and preview model. `[fika places-interaction-policy]` now
+  reports `drag_start_models=rows`, and the Places analyzer rejects interaction
+  logs where the model count does not match visible rows. This keeps the
+  Dolphin-style source model boundary explicit while drag-start shells remain.
+  Evidence: `/tmp/fika-places-drag-start-model.log` passed
+  `--require-retained-dnd-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-chrome-policy`
+  with `max_drag_start_models=11`.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

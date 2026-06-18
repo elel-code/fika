@@ -82,6 +82,10 @@ if [[ "$summary" != *"places_interaction_policy_frames=6 max_rows=11 max_section
     echo "expected Places interaction policy summary" >&2
     exit 1
 fi
+if [[ "$summary" != *"max_drag_start_models=11"* ]]; then
+    echo "expected Places drag-start model summary" >&2
+    exit 1
+fi
 if [[ "$summary" != *"places_interaction_geometry_frames=1 max_rows=11 max_sections=2 max_entries=13 max_content_height=378.0 max_hit_tests=2 max_project=5us"* ]]; then
     echo "expected Places interaction geometry summary" >&2
     exit 1
@@ -606,6 +610,20 @@ EOF
 
 if "$analyzer" --require-interaction-policy "$tmpdir/bad-interaction-policy.log" >/dev/null 2>&1; then
     echo "expected invalid Places interaction policy to fail" >&2
+    exit 1
+fi
+
+cat > "$tmpdir/bad-drag-start-model-policy.log" <<'EOF'
+[fika places-slots] rows=11 sections=2 entries=13 inserted=13 content=0 geometry=0 visual=0 unchanged=0 removed=0 project=25us
+[fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
+[fika places-view] source=11 visible=11 sections=2 snapshot=100us
+[fika places-sidebar] rows=11 sections=2 elements=13 build=200us
+[fika places-renderer-policy] rows=11 row_gpui=11 row_visual_layer=0 icon_gpui=11 retained_interaction=0 drag_shell=11 section_gpui=2 scrollbar_canvas=1
+[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=11 drag_start_models=10
+EOF
+
+if "$analyzer" --require-interaction-policy "$tmpdir/bad-drag-start-model-policy.log" >/dev/null 2>&1; then
+    echo "expected invalid Places drag-start model policy to fail" >&2
     exit 1
 fi
 
