@@ -1011,6 +1011,11 @@ by risk and evidence, not by how custom-painted a surface looks.
   module. `update_active_rubber_band_for_pane()` now owns same-pane current
   point updates and writing the updated active band back into the active state
   slot. `src/main.rs` still uses the returned band rect to compute selection.
+- [x] P16ce: Move pending rubber-band activation start selection into the
+  rubber-band module. `pending_rubber_band_activation_start()` now owns checking
+  whether a pending band can activate for the current pane/content point and
+  returning the start point for active-band startup. `src/main.rs` still
+  supplies the clamped current point and performs draft cleanup/selection.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

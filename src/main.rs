@@ -153,9 +153,9 @@ use ui::rubber_band::{
     PendingRubberBand, RubberBandState, active_rubber_band_is_for_pane,
     active_rubber_band_viewport_rect_for_pane, clear_active_rubber_band_for_pane,
     clear_rubber_band_selection_activity_for_pane, finish_rubber_band_for_pane,
-    press_pending_rubber_band_for_pane, rubber_band_selection_activity_is_active,
-    set_rubber_band_selection_activity_for_count, start_active_rubber_band_for_pane,
-    update_active_rubber_band_for_pane,
+    pending_rubber_band_activation_start, press_pending_rubber_band_for_pane,
+    rubber_band_selection_activity_is_active, set_rubber_band_selection_activity_for_count,
+    start_active_rubber_band_for_pane, update_active_rubber_band_for_pane,
 };
 #[cfg(test)]
 use ui::shortcuts::PlaceInputAction;
@@ -4042,16 +4042,15 @@ impl FikaApp {
         pane_id: PaneId,
         position: gpui::Point<gpui::Pixels>,
     ) -> bool {
-        let Some(pending) = self.rubber_band_pending else {
-            return false;
-        };
         let Some(current) = self.clamped_content_point_from_window(pane_id, position) else {
             return false;
         };
-        if !pending.can_activate(pane_id, current) {
+        let Some(start) =
+            pending_rubber_band_activation_start(self.rubber_band_pending, pane_id, current)
+        else {
             return false;
-        }
-        self.start_rubber_band(pane_id, pending.start);
+        };
+        self.start_rubber_band(pane_id, start);
         self.update_rubber_band(pane_id, current);
         true
     }

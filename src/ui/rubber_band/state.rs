@@ -198,6 +198,17 @@ pub(crate) fn update_active_rubber_band_for_pane(
     Some(band)
 }
 
+pub(crate) fn pending_rubber_band_activation_start(
+    pending: Option<PendingRubberBand>,
+    pane_id: PaneId,
+    current: ViewPoint,
+) -> Option<ViewPoint> {
+    let pending = pending?;
+    pending
+        .can_activate(pane_id, current)
+        .then_some(pending.start)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct RubberBandDrag {
     pub(crate) pane_id: PaneId,
@@ -430,5 +441,40 @@ mod tests {
             })
         );
         assert_eq!(active, updated);
+    }
+
+    #[test]
+    fn pending_rubber_band_activation_start_requires_matching_pane_and_distance() {
+        let start = ViewPoint { x: 10.0, y: 10.0 };
+        let pending = Some(PendingRubberBand::new(PaneId(1), start));
+
+        assert_eq!(
+            pending_rubber_band_activation_start(
+                pending,
+                PaneId(1),
+                ViewPoint { x: 13.0, y: 13.0 }
+            ),
+            Some(start)
+        );
+        assert_eq!(
+            pending_rubber_band_activation_start(
+                pending,
+                PaneId(2),
+                ViewPoint { x: 20.0, y: 20.0 }
+            ),
+            None
+        );
+        assert_eq!(
+            pending_rubber_band_activation_start(
+                pending,
+                PaneId(1),
+                ViewPoint { x: 13.0, y: 12.0 }
+            ),
+            None
+        );
+        assert_eq!(
+            pending_rubber_band_activation_start(None, PaneId(1), ViewPoint { x: 20.0, y: 20.0 }),
+            None
+        );
     }
 }
