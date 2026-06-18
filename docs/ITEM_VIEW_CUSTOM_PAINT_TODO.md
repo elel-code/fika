@@ -1113,6 +1113,11 @@ by risk and evidence, not by how custom-painted a surface looks.
   item-view module. `main.rs` now supplies `PaneController` and `PaneId` to
   `apply_item_view_scroll_snapshot_to_pane()` instead of owning the adapter
   logic that unpacks the item-view scroll snapshot.
+- [x] P16cx: Move pane-to-item-view scroll snapshot projection into the
+  item-view module. `item_view_scroll_snapshot_for_pane()` and
+  `item_view_scroll_snapshot_for_existing_pane()` now own projecting pane
+  `ViewState` into `ItemViewScrollViewSnapshot`, so `main.rs` no longer keeps
+  its own pane snapshot helper.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

@@ -147,6 +147,22 @@ pub(crate) fn apply_item_view_scroll_snapshot_to_pane(
     });
 }
 
+pub(crate) fn item_view_scroll_snapshot_for_pane(
+    panes: &PaneController,
+    pane_id: PaneId,
+) -> ItemViewScrollViewSnapshot {
+    item_view_scroll_snapshot_for_existing_pane(panes, pane_id).unwrap_or_default()
+}
+
+pub(crate) fn item_view_scroll_snapshot_for_existing_pane(
+    panes: &PaneController,
+    pane_id: PaneId,
+) -> Option<ItemViewScrollViewSnapshot> {
+    panes
+        .pane(pane_id)
+        .map(|pane| ItemViewScrollViewSnapshot::from_view_state(&pane.view))
+}
+
 fn apply_window_resize_delta(extent: f32, delta: f32) -> f32 {
     fika_core::normalize_viewport_extent(extent + delta)
 }
@@ -308,5 +324,23 @@ mod tests {
         assert_eq!(view.scroll_y, 20.0);
         assert_eq!(view.max_scroll_x, 100.0);
         assert_eq!(view.max_scroll_y, 20.0);
+    }
+
+    #[test]
+    fn scroll_snapshot_for_pane_projects_pane_view_state() {
+        let mut panes = PaneController::new(PathBuf::from("/tmp/fika-item-view-scroll"));
+        let pane_id = panes.focused().expect("initial pane exists");
+        panes
+            .set_view_scroll(pane_id, 140.0, 32.0, 1_000.0, 500.0)
+            .expect("pane exists");
+
+        assert_eq!(
+            item_view_scroll_snapshot_for_existing_pane(&panes, pane_id),
+            Some(ItemViewScrollViewSnapshot::new(140.0, 32.0, 1_000.0, 500.0))
+        );
+        assert_eq!(
+            item_view_scroll_snapshot_for_pane(&panes, PaneId(99)),
+            ItemViewScrollViewSnapshot::default()
+        );
     }
 }
