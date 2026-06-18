@@ -381,9 +381,16 @@ function fail(message) {
 /^\[fika places-row-visual\]/ {
     row_visual_frames++
     rows = field("rows") + 0
+    painted = field("painted")
+    if (painted == "") {
+        painted = rows
+    } else {
+        painted += 0
+    }
     prepaint = field("prepaint") + 0
     paint = field("paint") + 0
     max_update("row_visual_rows", rows)
+    max_update("row_visual_painted", painted)
     max_update("row_visual_prepaint", prepaint)
     max_update("row_visual_paint", paint)
 }
@@ -721,9 +728,10 @@ END {
         max_values["interaction_geometry_content_height"],
         max_values["interaction_geometry_hit_tests"],
         max_values["interaction_geometry_project"])
-    printf("places_row_visual_frames=%d max_rows=%d max_prepaint=%dus max_paint=%dus\n",
+    printf("places_row_visual_frames=%d max_rows=%d max_painted=%d max_prepaint=%dus max_paint=%dus\n",
         row_visual_frames,
         max_values["row_visual_rows"],
+        max_values["row_visual_painted"],
         max_values["row_visual_prepaint"],
         max_values["row_visual_paint"])
     printf("places_row_shape_cache_frames=%d max_hits=%d max_misses=%d max_evicted=%d max_entries=%d\n",

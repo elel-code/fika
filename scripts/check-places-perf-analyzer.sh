@@ -102,7 +102,7 @@ cat > "$tmpdir/custom-row-visual.log" <<'EOF'
 [fika places-sidebar] rows=11 sections=2 elements=13 build=240us
 [fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 icon_gpui=11 retained_interaction=0 drag_shell=11 section_gpui=2 scrollbar_canvas=1
 [fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=11
-[fika places-row-visual] rows=11 prepaint=20us paint=31us
+[fika places-row-visual] rows=11 painted=11 prepaint=20us paint=31us
 [fika places-row-shape-cache] hits=11 misses=0 evicted=0 entries=11
 EOF
 
@@ -114,7 +114,7 @@ if [[ "$custom_summary" != *"max_row_gpui=0 max_row_visual_layer=11"* ]]; then
     echo "expected custom Places row visual policy summary" >&2
     exit 1
 fi
-if [[ "$custom_summary" != *"places_row_visual_frames=1 max_rows=11 max_prepaint=20us max_paint=31us"* ]]; then
+if [[ "$custom_summary" != *"places_row_visual_frames=1 max_rows=11 max_painted=11 max_prepaint=20us max_paint=31us"* ]]; then
     echo "expected Places row visual paint summary" >&2
     exit 1
 fi
@@ -153,7 +153,7 @@ cat > "$tmpdir/retained-event-custom-visual.log" <<'EOF'
 [fika places-sidebar] rows=11 sections=2 elements=13 build=240us
 [fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 icon_gpui=11 retained_interaction=13 drag_shell=11 section_gpui=2 scrollbar_canvas=1
 [fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=13 gpui_event_shells=0 drag_shells=11
-[fika places-row-visual] rows=11 prepaint=20us paint=31us
+[fika places-row-visual] rows=11 painted=11 prepaint=20us paint=31us
 [fika places-row-shape-cache] hits=11 misses=0 evicted=0 entries=11
 EOF
 
@@ -165,7 +165,7 @@ if [[ "$retained_custom_summary" != *"max_row_gpui=0 max_row_visual_layer=11"* ]
     echo "expected retained event custom visual renderer summary" >&2
     exit 1
 fi
-if [[ "$retained_custom_summary" != *"places_row_visual_frames=1 max_rows=11 max_prepaint=20us max_paint=31us"* ]]; then
+if [[ "$retained_custom_summary" != *"places_row_visual_frames=1 max_rows=11 max_painted=11 max_prepaint=20us max_paint=31us"* ]]; then
     echo "expected retained event custom row visual summary" >&2
     exit 1
 fi
@@ -177,7 +177,7 @@ cat > "$tmpdir/retained-event-mixed-gpui-shell.log" <<'EOF'
 [fika places-sidebar] rows=11 sections=2 elements=13 build=240us
 [fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 icon_gpui=11 retained_interaction=0 drag_shell=11 section_gpui=2 scrollbar_canvas=1
 [fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=11
-[fika places-row-visual] rows=11 prepaint=20us paint=31us
+[fika places-row-visual] rows=11 painted=11 prepaint=20us paint=31us
 [fika places-row-shape-cache] hits=11 misses=0 evicted=0 entries=11
 EOF
 
@@ -193,7 +193,7 @@ cat > "$tmpdir/custom-row-visual-per-row.log" <<'EOF'
 [fika places-sidebar] rows=11 sections=2 elements=13 build=240us
 [fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 icon_gpui=11 retained_interaction=0 drag_shell=11 section_gpui=2 scrollbar_canvas=1
 [fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=11
-[fika places-row-visual] rows=1 prepaint=20us paint=31us
+[fika places-row-visual] rows=1 painted=1 prepaint=20us paint=31us
 [fika places-row-shape-cache] hits=11 misses=0 evicted=0 entries=11
 EOF
 
@@ -209,7 +209,7 @@ cat > "$tmpdir/custom-row-visual-missing-shape-cache.log" <<'EOF'
 [fika places-sidebar] rows=11 sections=2 elements=13 build=240us
 [fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 icon_gpui=11 retained_interaction=0 drag_shell=11 section_gpui=2 scrollbar_canvas=1
 [fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=11
-[fika places-row-visual] rows=11 prepaint=20us paint=31us
+[fika places-row-visual] rows=11 painted=11 prepaint=20us paint=31us
 EOF
 
 if "$analyzer" --expect-custom-row-visual-policy "$tmpdir/custom-row-visual-missing-shape-cache.log" >/dev/null 2>&1; then

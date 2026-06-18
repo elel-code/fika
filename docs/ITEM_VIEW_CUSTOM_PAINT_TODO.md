@@ -1230,6 +1230,20 @@ by risk and evidence, not by how custom-painted a surface looks.
   snapshot/queue protocol is now covered where the work key and scheduler
   contract are owned, instead of requiring `main.rs` tests to call low-level
   file-grid methods.
+- [x] P16dx: Advance the Places custom row visual layer with visible-row
+  filtering, but do not make it the default yet. Root cause: the aggregated
+  Places row visual layer used one canvas, but the overflow scenario still
+  shaped and painted all 75 rows every frame. Implementation: the prepaint path
+  now uses GPUI `Window::content_mask()` to keep only rows intersecting the
+  current scroll clip; `[fika places-row-visual]` keeps total `rows` and adds
+  `painted`, and the analyzer summarizes `max_painted`. Evidence:
+  `/tmp/fika-places-custom-targets-visible-rows.log` passes the targets custom
+  policy gate, and `/tmp/fika-places-custom-overflow-visible-rows.log` passes
+  the overflow custom policy gate. Overflow drops from painting all 75 rows to
+  at most 32 painted rows, with steady paint around `0.6-0.7ms`. It is still not
+  default because the first two frames show roughly `7-8ms` glyph/text cold-start
+  paint spikes; the next step must eliminate that spike or prove it neutral
+  against the GPUI baseline.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

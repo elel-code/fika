@@ -78,14 +78,16 @@ pub(crate) fn emit_places_sidebar_perf_log(log: PlacesSidebarPerfLog) {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PlacesRowVisualPerfLog {
     pub(crate) rows: usize,
+    pub(crate) painted_rows: usize,
     pub(crate) prepaint_elapsed: Duration,
     pub(crate) paint_elapsed: Duration,
 }
 
 pub(crate) fn emit_places_row_visual_perf_log(log: PlacesRowVisualPerfLog) {
     eprintln!(
-        "[fika places-row-visual] rows={} prepaint={}us paint={}us",
+        "[fika places-row-visual] rows={} painted={} prepaint={}us paint={}us",
         log.rows,
+        log.painted_rows,
         log.prepaint_elapsed.as_micros(),
         log.paint_elapsed.as_micros(),
     );

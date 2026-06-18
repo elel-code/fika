@@ -31,10 +31,11 @@ pub(super) fn places_row_visual_layer(
     app: WeakEntity<FikaApp>,
 ) -> impl IntoElement {
     let rows = place_row_visual_layer_rows(&places);
+    let total_rows = rows.len();
     let height = places_row_visual_content_height(&places).max(1.0);
     canvas(
-        move |_bounds, window, cx| {
-            places_row_visual_prepaint(rows.clone(), app.clone(), window, cx)
+        move |bounds, window, cx| {
+            places_row_visual_prepaint(rows.clone(), total_rows, app.clone(), bounds, window, cx)
         },
         move |bounds, paint_state, window, cx| {
             let paint_started = Instant::now();
@@ -43,7 +44,8 @@ pub(super) fn places_row_visual_layer(
             }
             if places_perf_enabled() {
                 emit_places_row_visual_perf_log(PlacesRowVisualPerfLog {
-                    rows: paint_state.rows.len(),
+                    rows: paint_state.total_rows,
+                    painted_rows: paint_state.rows.len(),
                     prepaint_elapsed: paint_state.prepaint_elapsed,
                     paint_elapsed: paint_started.elapsed(),
                 });
@@ -90,10 +92,15 @@ impl PlaceRowVisualState {
             trash_has_items: place.trash_has_items,
         }
     }
+
+    fn intersects_y_range(&self, top: f32, bottom: f32) -> bool {
+        self.y < bottom && self.y + PLACE_ROW_HEIGHT > top
+    }
 }
 
 struct PlaceRowVisualLayerPaintState {
     rows: Vec<PlaceRowVisualPaintState>,
+    total_rows: usize,
     prepaint_elapsed: std::time::Duration,
     shape_cache_stats: PlacesRowTextShapeCacheStats,
 }
@@ -151,12 +158,14 @@ impl PlacesRowTextShapeCache {
 
 fn places_row_visual_prepaint(
     rows: Vec<PlaceRowVisualState>,
+    total_rows: usize,
     app: WeakEntity<FikaApp>,
+    layer_bounds: Bounds<Pixels>,
     window: &mut Window,
     cx: &mut App,
 ) -> PlaceRowVisualLayerPaintState {
     let started = Instant::now();
-    let rows = rows
+    let rows = visible_place_row_visuals(rows, layer_bounds, window.content_mask().bounds)
         .into_iter()
         .map(|input| place_row_visual_prepaint(input, &app, window, cx))
         .collect();
@@ -166,9 +175,29 @@ fn places_row_visual_prepaint(
         .unwrap_or_default();
     PlaceRowVisualLayerPaintState {
         rows,
+        total_rows,
         prepaint_elapsed: started.elapsed(),
         shape_cache_stats,
     }
+}
+
+fn visible_place_row_visuals(
+    rows: Vec<PlaceRowVisualState>,
+    layer_bounds: Bounds<Pixels>,
+    content_mask_bounds: Bounds<Pixels>,
+) -> Vec<PlaceRowVisualState> {
+    let visible_bounds = layer_bounds.intersect(&content_mask_bounds);
+    if visible_bounds.is_empty() {
+        return Vec::new();
+    }
+
+    let visible_top = (visible_bounds.origin.y - layer_bounds.origin.y)
+        .as_f32()
+        .max(0.0);
+    let visible_bottom = visible_top + visible_bounds.size.height.as_f32().max(0.0);
+    rows.into_iter()
+        .filter(|row| row.intersects_y_range(visible_top, visible_bottom))
+        .collect()
 }
 
 fn place_row_visual_prepaint(
@@ -405,6 +434,25 @@ mod tests {
             places_row_visual_content_height(&[first, second]),
             PLACE_ROW_HEIGHT * 2.0 + PLACE_SECTION_HEADING_HEIGHT
         );
+    }
+
+    #[test]
+    fn place_row_visual_prepaint_filters_to_content_mask() {
+        let rows = (0..5)
+            .map(|index| {
+                let mut place = test_place();
+                place.label = format!("Place {index}");
+                PlaceRowVisualState::from_place(&place, index as f32 * PLACE_ROW_HEIGHT)
+            })
+            .collect();
+        let layer_bounds = Bounds::new(point(px(10.0), px(20.0)), size(px(200.0), px(150.0)));
+        let content_mask_bounds = Bounds::new(point(px(10.0), px(50.0)), size(px(200.0), px(60.0)));
+
+        let visible = visible_place_row_visuals(rows, layer_bounds, content_mask_bounds);
+
+        assert_eq!(visible.len(), 2);
+        assert_eq!(visible[0].label.as_ref(), "Place 1");
+        assert_eq!(visible[1].label.as_ref(), "Place 2");
     }
 
     fn test_place() -> PlaceSnapshot {

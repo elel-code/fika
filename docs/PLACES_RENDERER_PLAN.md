@@ -626,6 +626,51 @@ cache miss. The same overflow log then stabilizes at `hits=75 misses=0`, with
 row visual prepaint around `148-176us`; the repeated row-label shaping cost is
 removed from steady opt-in Places frames.
 
+2026-06-18 visible-row custom layer update:
+
+The aggregated custom row visual layer used to shape and paint every Places row
+inside the scroll content, even when the GPUI scroll container clipped most of
+those rows. The layer now uses `Window::content_mask()` during prepaint to
+retain only rows intersecting the current clipped content bounds. Runtime logs
+keep `rows` as the policy row count and add `painted` for the per-frame
+visible-row count:
+
+```text
+[fika places-row-visual] rows=75 painted=29 prepaint=...us paint=...us
+```
+
+Evidence:
+
+```bash
+timeout 6s env FIKA_PERF_PLACES_VIEW=1 FIKA_CUSTOM_PLACES_ROWS=1 FIKA_AUTOSMOKE_PLACES=targets target/debug/fika /etc > /tmp/fika-places-custom-targets-visible-rows.log 2>&1
+scripts/analyze-places-perf.sh --require-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-visual-policy /tmp/fika-places-custom-targets-visible-rows.log
+
+timeout 6s env FIKA_PERF_PLACES_VIEW=1 FIKA_CUSTOM_PLACES_ROWS=1 FIKA_AUTOSMOKE_PLACES=overflow target/debug/fika /etc > /tmp/fika-places-custom-overflow-visible-rows.log 2>&1
+scripts/analyze-places-perf.sh --require-overflow-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-visual-policy /tmp/fika-places-custom-overflow-visible-rows.log
+```
+
+Targets summary:
+
+```text
+places_row_visual_frames=9 max_rows=11 max_painted=11 max_prepaint=1110us max_paint=5264us
+places_row_shape_cache_frames=9 max_hits=11 max_misses=11 max_evicted=0 max_entries=11
+```
+
+Overflow summary:
+
+```text
+places_row_visual_frames=18 max_rows=75 max_painted=32 max_prepaint=2395us max_paint=8398us
+places_row_shape_cache_frames=18 max_hits=31 max_misses=20 max_evicted=0 max_entries=49
+```
+
+Steady overflow frames are improved because only roughly `29-32` visible rows
+are painted instead of all `75`; typical prepaint falls to `70-90us` once the
+visible labels are cached and steady paint is around `0.6-0.7ms`. This is not
+yet sufficient to make the custom Places row visual the default: the first two
+frames still show glyph/raster cold-start paint spikes around `7-8ms` and must
+be eliminated or proven neutral against the GPUI baseline before default
+switching.
+
 ## Acceptance Gates
 
 - Primary Places order persists across restart and dynamic device refresh does

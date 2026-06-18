@@ -329,6 +329,7 @@
 - [x] P16du：将 raw/work/projection 条目视图渲染管线合并为 pane-level file-grid render frame。`main.rs` 现在以一个 facade 结果接收 file-grid snapshot、item/visible count、slot stats、perf phase 和 timing 字段，不再持有 raw grid 与 model-generation 中间态。
 - [x] P16dv：将 item-view perf log 字段映射隐藏到 file-grid render frame 内。`main.rs` 现在只传 pane id、mode 和 pane 总耗时；raw/icon/queue/convert timing、visible count、perf phase 与 slot stats 都封装在 frame 中。
 - [x] P16dw：将 same-visible-work-range resize queue invariant 从 app-side 测试移入 file-grid snapshot scheduler 测试。raw snapshot/queue 协议现在由拥有 work key 和 scheduler contract 的模块覆盖，而不是要求 `main.rs` 测试调用低层 file-grid 方法。
+- [x] P16dx：推进 Places 自绘层的可见行过滤，但暂不设为默认。根本原因：聚合 Places 行视觉层虽然只用一个 canvas，但 overflow 场景仍在每帧 shape/paint 全部 75 行。实现：`places_row_visual_layer` 在 prepaint 使用 GPUI `Window::content_mask()` 过滤当前滚动裁剪区域，只 shape/paint 可见行；`[fika places-row-visual]` 保留总 `rows` 并新增 `painted`，分析器汇总 `max_painted`。证据：`/tmp/fika-places-custom-targets-visible-rows.log` 通过 targets 自绘策略门，`/tmp/fika-places-custom-overflow-visible-rows.log` 通过 overflow 自绘策略门，overflow 从全量 75 行降为最多 32 个 painted rows，稳态约 `0.6-0.7ms`。仍不默认的原因：首两帧仍存在约 `7-8ms` 字形/文本绘制冷启动尖峰；下一步需要消除或证明它相对 GPUI baseline 中性。
 - [ ] P16q：在每个 P16 实现切片之后，单独提交并附带相关验证：仅文档切片需要 `git diff --check`；代码切片需要 `cargo fmt`、`cargo check`、`cargo test -q`、`scripts/check-item-view-perf-analyzer.sh`、`scripts/check-places-perf-analyzer.sh` 和 `git diff --check`。
 - [x] P16r：记录运行时自测试和突破记录规则。可重复的滚动、缩放、启动图标、调整大小、模式切换和 Places 目标回退应在依赖手动计时之前通过 autosmoke 日志和分析器脚本重现。任何确认的优化突破必须记录症状、Dolphin 比较边界、根本原因、实现、保存的日志/分析器命令和未来回归守卫在拥有的设计或决策文档中。
 
