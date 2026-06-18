@@ -150,6 +150,24 @@ pub(crate) fn active_rubber_band_viewport_rect_for_pane(
         .map(|band| band.viewport_rect(view))
 }
 
+pub(crate) fn active_rubber_band_is_for_pane(
+    active: Option<RubberBandState>,
+    pane_id: PaneId,
+) -> bool {
+    active.is_some_and(|band| band.is_for_pane(pane_id))
+}
+
+pub(crate) fn clear_active_rubber_band_for_pane(
+    active: &mut Option<RubberBandState>,
+    pane_id: PaneId,
+) -> bool {
+    if !active_rubber_band_is_for_pane(*active, pane_id) {
+        return false;
+    }
+    *active = None;
+    true
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct RubberBandDrag {
     pub(crate) pane_id: PaneId,
@@ -314,5 +332,20 @@ mod tests {
             active_rubber_band_viewport_rect_for_pane(None, PaneId(1), &view),
             None
         );
+    }
+
+    #[test]
+    fn active_rubber_band_query_and_clear_require_matching_pane() {
+        let start = ViewPoint { x: 10.0, y: 10.0 };
+        let band = RubberBandState::new(PaneId(1), start);
+        let mut active = Some(band);
+
+        assert!(active_rubber_band_is_for_pane(active, PaneId(1)));
+        assert!(!active_rubber_band_is_for_pane(active, PaneId(2)));
+        assert!(!clear_active_rubber_band_for_pane(&mut active, PaneId(2)));
+        assert_eq!(active, Some(band));
+        assert!(clear_active_rubber_band_for_pane(&mut active, PaneId(1)));
+        assert_eq!(active, None);
+        assert!(!active_rubber_band_is_for_pane(active, PaneId(1)));
     }
 }

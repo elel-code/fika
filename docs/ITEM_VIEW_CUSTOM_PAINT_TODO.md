@@ -994,6 +994,11 @@ by risk and evidence, not by how custom-painted a surface looks.
   pane ownership checking plus converting the active band into a clipped
   viewport rect for rendering. `src/main.rs` still supplies the active state
   snapshot and current pane view.
+- [x] P16ca: Move active rubber-band pane ownership query/clear policy into the
+  rubber-band module. `active_rubber_band_is_for_pane()` and
+  `clear_active_rubber_band_for_pane()` now own production-path active-band
+  pane checks and active-only clearing. `src/main.rs` still decides which app
+  lifecycle events request that clearing.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

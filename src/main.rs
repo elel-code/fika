@@ -150,7 +150,8 @@ use ui::properties_dialog::{
 };
 use ui::rename::{RENAME_TEXT_INSET_X, RenameDraft};
 use ui::rubber_band::{
-    PendingRubberBand, RubberBandState, active_rubber_band_viewport_rect_for_pane,
+    PendingRubberBand, RubberBandState, active_rubber_band_is_for_pane,
+    active_rubber_band_viewport_rect_for_pane, clear_active_rubber_band_for_pane,
     clear_rubber_band_selection_activity_for_pane, finish_rubber_band_for_pane,
     rubber_band_selection_activity_is_active, set_rubber_band_selection_activity_for_count,
 };
@@ -3116,13 +3117,7 @@ impl FikaApp {
         }) {
             self.drop_targets.clear_item();
         }
-        if self
-            .rubber_band
-            .as_ref()
-            .is_some_and(|band| band.pane_id == pane_id)
-        {
-            self.rubber_band = None;
-        }
+        clear_active_rubber_band_for_pane(&mut self.rubber_band, pane_id);
         if self
             .context_menu
             .as_ref()
@@ -3176,13 +3171,7 @@ impl FikaApp {
         }) {
             self.drop_targets.clear_item();
         }
-        if self
-            .rubber_band
-            .as_ref()
-            .is_some_and(|band| band.pane_id == pane_id)
-        {
-            self.rubber_band = None;
-        }
+        clear_active_rubber_band_for_pane(&mut self.rubber_band, pane_id);
         if self
             .context_menu
             .as_ref()
@@ -4066,11 +4055,7 @@ impl FikaApp {
         pane_id: PaneId,
         position: gpui::Point<gpui::Pixels>,
     ) -> bool {
-        if !self
-            .rubber_band
-            .as_ref()
-            .is_some_and(|band| band.pane_id == pane_id)
-        {
+        if !active_rubber_band_is_for_pane(self.rubber_band, pane_id) {
             return false;
         }
         let Some(current) = self.clamped_content_point_from_window(pane_id, position) else {
