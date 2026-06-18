@@ -855,6 +855,12 @@ by risk and evidence, not by how custom-painted a surface looks.
   drop-target, filter, source revision, and compact column-width state.
   `src/main.rs` still decides when snapshots are needed, but no longer builds
   raw file-grid snapshot inputs inline.
+- [x] P16ba: Move the visible metadata sync application wrapper into the
+  file-grid module. `file_grid/retained.rs` now owns collecting visible
+  metadata role results for a raw grid, applying them through the existing app
+  model result path, and invalidating the pane visible snapshot cache when
+  visible roles change. Background metadata workers still use the shared model
+  result application path in `src/main.rs`.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

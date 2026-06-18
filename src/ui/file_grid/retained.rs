@@ -1,11 +1,13 @@
 use super::snapshot::{
     RawFileGridSnapshot, RawFileGridSnapshotInput, RetainedFileGridProjection,
     project_retained_file_grid_snapshot, queue_raw_file_grid_model_work, raw_file_grid_snapshot,
+    visible_metadata_role_results_for_raw_grid,
 };
 use crate::FikaApp;
 use crate::ui::drag_drop::ItemDropTarget;
 use crate::ui::rename::RenameDraft;
 use fika_core::{FilteredModel, Generation, PaneId, ViewMode, ViewState};
+use std::time::Duration;
 
 impl FikaApp {
     pub(crate) fn raw_file_grid_snapshot_for_pane(
@@ -104,5 +106,25 @@ impl FikaApp {
             )
             .into_tuple(),
         )
+    }
+
+    pub(crate) fn resolve_visible_metadata_roles_for_raw_grid(
+        &mut self,
+        pane_id: PaneId,
+        generation: Generation,
+        raw_file_grid: &RawFileGridSnapshot,
+        budget: Duration,
+    ) -> bool {
+        let results =
+            visible_metadata_role_results_for_raw_grid(pane_id, generation, raw_file_grid, budget);
+        if results.is_empty() {
+            return false;
+        }
+
+        let changed = self.finish_metadata_role_results(results);
+        if changed {
+            self.invalidate_file_grid_visible_snapshot_cache(pane_id);
+        }
+        changed
     }
 }

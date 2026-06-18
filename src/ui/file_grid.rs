@@ -59,10 +59,9 @@ pub(crate) use projection::{
     model_indexes_intersecting_visual_rect, pane_layout_projection,
 };
 pub(crate) use slots::VisibleItemSlotPool;
-pub(crate) use snapshot::{
-    PaneVisibleWorkKey, RawFileGridSnapshot, VisibleItemSnapshotCache,
-    visible_metadata_role_results_for_raw_grid,
-};
+#[cfg(test)]
+pub(crate) use snapshot::RawFileGridSnapshot;
+pub(crate) use snapshot::{PaneVisibleWorkKey, VisibleItemSnapshotCache};
 pub(crate) use static_visual::StaticItemTextShapeCache;
 pub(crate) use surface::file_grid;
 pub(crate) use types::{

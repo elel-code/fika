@@ -16,16 +16,16 @@ use fika_core::{
 };
 use fika_core::{
     CreateUndoItem, CreatedItemKind, DeviceInfo, DeviceMonitorMessage, DevicePlaceOperation,
-    DevicePlaceOperationResult, DirectoryCacheDebugSnapshot, DirectoryListerEvent, Generation,
-    ItemId, ListingRequest, ListingWorker, LoadingPaneState, MetadataRoleResult,
-    MetadataRoleScheduler, OperationQueue, OperationRuntime, OperationSnapshot, PaneController,
-    PaneId, RefreshPair, RenameUndoItem, SelectionMove, SortDescriptor, SortOrder, SortRole,
-    ThumbnailProbeResult, ThumbnailScheduler, TrashEmptinessMonitor, UndoPayload, UserPlace,
-    ViewMode, ViewPoint, ViewRect, ZoomChange, apply_thumbnail_probe_result_to_model,
-    breadcrumb_segments, complete_location_input, file_ops, is_network_path,
-    listing_requests_from_events, metadata_role_results_for_requests, nearest_existing_ancestor,
-    parent_location, perform_device_place_operation, resolve_location_input,
-    thumbnail_probe_results_for_requests, update_loading_state_for_event,
+    DevicePlaceOperationResult, DirectoryCacheDebugSnapshot, DirectoryListerEvent, ItemId,
+    ListingRequest, ListingWorker, LoadingPaneState, MetadataRoleResult, MetadataRoleScheduler,
+    OperationQueue, OperationRuntime, OperationSnapshot, PaneController, PaneId, RefreshPair,
+    RenameUndoItem, SelectionMove, SortDescriptor, SortOrder, SortRole, ThumbnailProbeResult,
+    ThumbnailScheduler, TrashEmptinessMonitor, UndoPayload, UserPlace, ViewMode, ViewPoint,
+    ViewRect, ZoomChange, apply_thumbnail_probe_result_to_model, breadcrumb_segments,
+    complete_location_input, file_ops, is_network_path, listing_requests_from_events,
+    metadata_role_results_for_requests, nearest_existing_ancestor, parent_location,
+    perform_device_place_operation, resolve_location_input, thumbnail_probe_results_for_requests,
+    update_loading_state_for_event,
 };
 use fika_core::{
     DesktopLaunchPlan, LauncherError, MimeApplication, MimeApplicationCache, NewWindowLaunchResult,
@@ -35,8 +35,8 @@ use fika_core::{
 };
 #[cfg(test)]
 use fika_core::{
-    ServiceMenuAction, ThumbnailCandidate, ThumbnailRequestPriority, ViewState, home_dir,
-    is_network_root_path, network_root_path,
+    Generation, ServiceMenuAction, ThumbnailCandidate, ThumbnailRequestPriority, ViewState,
+    home_dir, is_network_root_path, network_root_path,
 };
 use gpui::prelude::*;
 use gpui::{
@@ -82,18 +82,19 @@ use ui::drag_drop::{
     drag_cursor_style_for_transfer_mode, item_drop_target_matches_directory,
     place_drop_target_matches_insert, place_drop_target_matches_place,
 };
+#[cfg(test)]
+use ui::file_grid::RawFileGridSnapshot;
 use ui::file_grid::{
     CompactColumnWidthCache, ContentItemHit, DOLPHIN_VISIBLE_ICON_SYNC_BUDGET,
     DetailsTextShapeCache, FileIconResolveQueue, ItemDrag, ItemPaintSlotCache,
     ItemViewAutosmokeAction, ItemViewAutosmokeScenario, ItemViewPerfState, PaneLayoutProjection,
-    PaneLayoutProjectionInput, PaneViewportGeometry, PaneVisibleWorkKey, RawFileGridSnapshot,
-    RetainedHoveredItem, StaticItemTextShapeCache, VisibleItemSlotPool, VisibleItemSnapshotCache,
-    compact_text_width, compact_text_width_for_name, content_item_hit_at_point,
-    emit_item_view_autosmoke_complete, emit_item_view_autosmoke_scroll_action,
-    emit_item_view_autosmoke_start, emit_item_view_autosmoke_zoom_action, item_view_perf_enabled,
+    PaneLayoutProjectionInput, PaneViewportGeometry, PaneVisibleWorkKey, RetainedHoveredItem,
+    StaticItemTextShapeCache, VisibleItemSlotPool, VisibleItemSnapshotCache, compact_text_width,
+    compact_text_width_for_name, content_item_hit_at_point, emit_item_view_autosmoke_complete,
+    emit_item_view_autosmoke_scroll_action, emit_item_view_autosmoke_start,
+    emit_item_view_autosmoke_zoom_action, item_view_perf_enabled,
     model_indexes_intersecting_visual_rect, pane_layout_projection,
     rename_editor_required_text_width, resolve_visible_file_icons_for_raw_grid,
-    visible_metadata_role_results_for_raw_grid,
 };
 use ui::filter_bar::{
     FILTER_BAR_HEIGHT, FilterBarSnapshot, FilteredModelCacheEntry, PaneFilterState,
@@ -1619,26 +1620,6 @@ impl FikaApp {
                 })
             })
             .collect()
-    }
-
-    fn resolve_visible_metadata_roles_for_raw_grid(
-        &mut self,
-        pane_id: PaneId,
-        generation: Generation,
-        raw_file_grid: &RawFileGridSnapshot,
-        budget: Duration,
-    ) -> bool {
-        let results =
-            visible_metadata_role_results_for_raw_grid(pane_id, generation, raw_file_grid, budget);
-        if results.is_empty() {
-            return false;
-        }
-
-        let changed = self.finish_metadata_role_results(results);
-        if changed {
-            self.invalidate_file_grid_visible_snapshot_cache(pane_id);
-        }
-        changed
     }
 
     fn start_listing_result_monitor(receiver: mpsc::Receiver<()>, cx: &mut Context<Self>) {
