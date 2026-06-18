@@ -232,16 +232,22 @@ cat > "$tmpdir/retained-event-probe.log" <<'EOF'
 [fika places-sidebar] rows=11 sections=2 elements=13 build=240us
 [fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=11 icon_gpui=11 retained_interaction=0 drag_shell=11 section_gpui=2 scrollbar_canvas=1 visual_kind=chrome event_policy=retained-probe retained_probe_hitboxes=13
 [fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 retained_probe_hitboxes=13 gpui_event_shells=13 drag_shells=11 event_policy=retained-probe
+[fika places-event-probe] rows=11 sections=2 hitboxes=13 hovered=1 prepaint=40us paint=3us
 [fika places-row-visual] rows=11 painted=11 prepaint=20us paint=31us
 EOF
 
 probe_summary="$("$analyzer" \
     --require-interaction-policy \
+    --require-event-probe \
     --expect-custom-row-chrome-policy \
     "$tmpdir/retained-event-probe.log")"
 
 if [[ "$probe_summary" != *"max_retained_probe_hitboxes=13"* ]]; then
     echo "expected retained event probe hitbox summary" >&2
+    exit 1
+fi
+if [[ "$probe_summary" != *"places_event_probe_frames=1 max_rows=11 max_sections=2 max_hitboxes=13 max_hovered=1 max_prepaint=40us max_paint=3us"* ]]; then
+    echo "expected retained event probe layer summary" >&2
     exit 1
 fi
 if "$analyzer" --expect-retained-event-policy "$tmpdir/retained-event-probe.log" >/dev/null 2>&1; then

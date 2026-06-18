@@ -16,6 +16,7 @@ use crate::ui::icons::{FileIconCache, FileIconSnapshot, cached_icon_or_fallback}
 use std::time::Instant;
 
 use super::drag::PlaceDrag;
+use super::event_layer::places_event_probe_layer;
 use super::interaction::places_interaction_geometry;
 use super::perf::{
     PlacesInteractionGeometryPerfLog, PlacesInteractionPolicyLog, PlacesRendererPolicyLog,
@@ -175,13 +176,15 @@ pub(crate) fn places_sidebar(
     let build_started = perf_enabled.then(Instant::now);
     let row_count = places.len();
     let section_count = places_section_count(&places);
-    let interaction_geometry = perf_enabled.then(|| {
+    let event_delivery_policy = places_event_delivery_policy();
+    let needs_interaction_geometry =
+        perf_enabled || event_delivery_policy.retained_probe_layer_enabled();
+    let interaction_geometry = needs_interaction_geometry.then(|| {
         let started = Instant::now();
         let geometry = places_interaction_geometry(&places);
         (geometry, started.elapsed())
     });
     let row_visual_policy = places_row_visual_policy();
-    let event_delivery_policy = places_event_delivery_policy();
     let custom_row_visuals = row_visual_policy.custom_layer_enabled();
     let state = window.use_keyed_state("places-sidebar-scrollbar", cx, |_, _| {
         PlacesSidebarScrollState::new()
@@ -191,6 +194,16 @@ pub(crate) fn places_sidebar(
     let row_visual_layer = custom_row_visuals.then(|| {
         places_row_visual_layer(places.clone(), app.clone(), row_visual_policy.paints_text())
     });
+    let event_probe_layer = event_delivery_policy
+        .retained_probe_layer_enabled()
+        .then(|| {
+            places_event_probe_layer(
+                interaction_geometry
+                    .as_ref()
+                    .map(|(geometry, _elapsed)| geometry.clone())
+                    .unwrap_or_else(|| places_interaction_geometry(&places)),
+            )
+        });
     let mut rows = Vec::new();
     let mut current_group = None;
 
@@ -346,6 +359,7 @@ pub(crate) fn places_sidebar(
                         .overflow_y_scroll()
                         .track_scroll(&scroll_handle)
                         .when_some(row_visual_layer, |list, layer| list.child(layer))
+                        .when_some(event_probe_layer, |list, layer| list.child(layer))
                         .children(rows),
                 )
                 .child(places_sidebar_scrollbar(state, perf_enabled)),

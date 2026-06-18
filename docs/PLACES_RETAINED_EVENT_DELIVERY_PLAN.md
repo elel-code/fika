@@ -184,13 +184,27 @@ that gate. Extend it only when a new retained event log surface is added.
   `--expect-retained-event-policy`.
 - No activation, menu, hover, drop, DnD, or drag-start behavior changed.
 
+2026-06-18 retained probe layer slice:
+
+- `src/ui/places/event_layer.rs` adds an opt-in sidebar-level event probe layer
+  behind `FIKA_PLACES_EVENT_DELIVERY_POLICY=retained-probe`.
+- The layer consumes `PlacesInteractionGeometry`, inserts one normal GPUI
+  hitbox per retained row/section, and does not register event handlers, set
+  cursor state, or mutate app state.
+- `[fika places-event-probe]` reports `rows`, `sections`, inserted `hitboxes`,
+  hovered hitboxes, and prepaint/paint time.
+- `scripts/analyze-places-perf.sh --require-event-probe` verifies the layer
+  hitbox count matches the retained-probe policy count.
+- This is Phase 1 structure only. Phase 2 is still responsible for moving
+  hover/cursor/leave clearing out of GPUI shells.
+
 ## TODO
 
 - [x] Add a `PlacesEventDeliveryPolicy` with `GpuiShells` default and an
   explicit `RetainedProbe` opt-in. Keep logs explicit in mixed states and do
   not let probe logs satisfy the retained-event policy gate.
-- [ ] Add a retained sidebar event layer that can insert row/section hitboxes
-  and report counts without changing behavior.
+- [x] Add a retained sidebar event probe layer that can insert row/section
+  hitboxes and report counts without changing behavior.
 - [ ] Add unit coverage for content-local coordinate conversion with scroll
   offsets and section/row boundaries.
 - [ ] Move hover/cursor/leave clearing to the retained layer.

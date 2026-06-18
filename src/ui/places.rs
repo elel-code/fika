@@ -1,6 +1,7 @@
 mod autosmoke;
 mod devices;
 mod drag;
+mod event_layer;
 mod icon_view;
 mod interaction;
 mod model;

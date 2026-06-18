@@ -70,6 +70,10 @@ pub(crate) enum PlacesEventDeliveryPolicy {
 }
 
 impl PlacesEventDeliveryPolicy {
+    pub(crate) fn retained_probe_layer_enabled(self) -> bool {
+        matches!(self, Self::RetainedProbe)
+    }
+
     fn kind(self) -> &'static str {
         match self {
             Self::GpuiShells => "gpui",
@@ -232,6 +236,28 @@ pub(crate) fn emit_places_scrollbar_perf_log(log: PlacesScrollbarPerfLog) {
         log.max_scroll_y,
         log.thumb_height,
         log.track_height,
+    );
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlacesEventProbePerfLog {
+    pub(crate) rows: usize,
+    pub(crate) sections: usize,
+    pub(crate) hitboxes: usize,
+    pub(crate) hovered_hitboxes: usize,
+    pub(crate) prepaint_elapsed: Duration,
+    pub(crate) paint_elapsed: Duration,
+}
+
+pub(crate) fn emit_places_event_probe_perf_log(log: PlacesEventProbePerfLog) {
+    eprintln!(
+        "[fika places-event-probe] rows={} sections={} hitboxes={} hovered={} prepaint={}us paint={}us",
+        log.rows,
+        log.sections,
+        log.hitboxes,
+        log.hovered_hitboxes,
+        log.prepaint_elapsed.as_micros(),
+        log.paint_elapsed.as_micros(),
     );
 }
 

@@ -170,12 +170,25 @@ event 日志 surface 时才扩展 analyzer。
   interaction boundary，并且不能通过 `--expect-retained-event-policy`。
 - activation、menu、hover、drop、DnD 或 drag-start 行为都没有改变。
 
+2026-06-18 retained probe layer 切片：
+
+- `src/ui/places/event_layer.rs` 添加 opt-in sidebar-level event probe layer，
+  由 `FIKA_PLACES_EVENT_DELIVERY_POLICY=retained-probe` 开启。
+- 该 layer 消费 `PlacesInteractionGeometry`，为每个 retained row/section 插入一个
+  normal GPUI hitbox；它不注册 event handler、不设置 cursor state，也不修改 app state。
+- `[fika places-event-probe]` 报告 `rows`、`sections`、插入的 `hitboxes`、
+  hovered hitboxes，以及 prepaint/paint 时间。
+- `scripts/analyze-places-perf.sh --require-event-probe` 验证 layer hitbox 数匹配
+  retained-probe policy 计数。
+- 这只是 Phase 1 结构层。Phase 2 仍负责把 hover/cursor/leave clearing 从 GPUI shell
+  移出。
+
 ## TODO
 
 - [x] 添加 `PlacesEventDeliveryPolicy`，默认 `GpuiShells`，opt-in
   `RetainedProbe`。mixed state 必须显式记录在日志里，且 probe 日志不能满足
   retained-event policy gate。
-- [ ] 添加 retained sidebar event layer，能插入 row/section hitboxes 并报告计数，
+- [x] 添加 retained sidebar event probe layer，能插入 row/section hitboxes 并报告计数，
   但不改变行为。
 - [ ] 为带 scroll offset 的 content-local 坐标转换、section/row 边界添加单元覆盖。
 - [ ] 将 hover/cursor/leave clearing 移到 retained layer。

@@ -34,6 +34,10 @@ Options:
       Fail unless [fika places-interaction-geometry] is present and matches
       the retained Places row/section projection counts.
 
+  --require-event-probe
+      Fail unless [fika places-event-probe] is present and its hitbox count
+      matches the explicit retained-probe policy count.
+
   --expect-current-gpui-policy
       Fail unless [fika places-renderer-policy] matches the current GPUI row
       renderer baseline: row_gpui/icon_gpui/drag_shell equal rows,
@@ -84,6 +88,7 @@ require_layout_autosmoke=false
 require_hit_test_autosmoke=false
 require_interaction_policy=false
 require_interaction_geometry=false
+require_event_probe=false
 expect_current_gpui_policy=false
 expect_custom_row_visual_policy=false
 expect_custom_row_chrome_policy=false
@@ -112,6 +117,9 @@ while [[ $# -gt 0 ]]; do
             ;;
         --require-interaction-geometry)
             require_interaction_geometry=true
+            ;;
+        --require-event-probe)
+            require_event_probe=true
             ;;
         --expect-current-gpui-policy)
             expect_current_gpui_policy=true
@@ -203,6 +211,7 @@ awk \
     -v require_hit_test_autosmoke="$require_hit_test_autosmoke" \
     -v require_interaction_policy="$require_interaction_policy" \
     -v require_interaction_geometry="$require_interaction_geometry" \
+    -v require_event_probe="$require_event_probe" \
     -v expect_current_gpui_policy="$expect_current_gpui_policy" \
     -v expect_custom_row_visual_policy="$expect_custom_row_visual_policy" \
     -v expect_custom_row_chrome_policy="$expect_custom_row_chrome_policy" \
@@ -441,6 +450,25 @@ function fail(message) {
     }
     if (policy_frames > 0 && rows != max_values["policy_rows"]) {
         interaction_geometry_invalid = 1
+    }
+}
+
+/^\[fika places-event-probe\]/ {
+    event_probe_frames++
+    rows = field("rows") + 0
+    sections = field("sections") + 0
+    hitboxes = field("hitboxes") + 0
+    hovered = field("hovered") + 0
+    prepaint = field("prepaint") + 0
+    paint = field("paint") + 0
+    max_update("event_probe_rows", rows)
+    max_update("event_probe_sections", sections)
+    max_update("event_probe_hitboxes", hitboxes)
+    max_update("event_probe_hovered", hovered)
+    max_update("event_probe_prepaint", prepaint)
+    max_update("event_probe_paint", paint)
+    if (hitboxes != rows + sections) {
+        event_probe_invalid = 1
     }
 }
 
@@ -756,6 +784,17 @@ END {
             fail("Places interaction geometry count does not match renderer policy")
         }
     }
+    if (require_event_probe == "true") {
+        if (event_probe_frames == 0) {
+            fail("missing [fika places-event-probe] logs")
+        }
+        if (event_probe_invalid) {
+            fail("Places event probe hitbox count does not match rows+sections")
+        }
+        if (max_values["event_probe_hitboxes"] != max_values["policy_retained_probe_hitboxes"]) {
+            fail("Places event probe hitbox count does not match retained-probe policy")
+        }
+    }
     if (exit_code) {
         exit exit_code
     }
@@ -828,6 +867,14 @@ END {
         max_values["interaction_geometry_content_height"],
         max_values["interaction_geometry_hit_tests"],
         max_values["interaction_geometry_project"])
+    printf("places_event_probe_frames=%d max_rows=%d max_sections=%d max_hitboxes=%d max_hovered=%d max_prepaint=%dus max_paint=%dus\n",
+        event_probe_frames,
+        max_values["event_probe_rows"],
+        max_values["event_probe_sections"],
+        max_values["event_probe_hitboxes"],
+        max_values["event_probe_hovered"],
+        max_values["event_probe_prepaint"],
+        max_values["event_probe_paint"])
     printf("places_row_visual_frames=%d max_rows=%d max_painted=%d max_prepaint=%dus max_paint=%dus\n",
         row_visual_frames,
         max_values["row_visual_rows"],

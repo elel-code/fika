@@ -1377,6 +1377,13 @@ tracks.
   it cannot satisfy the future retained-event gate. This records the Dolphin
   conclusion that full custom Places performance requires viewport-level event
   ownership, not only row chrome paint.
+- [x] P16ej: Add the non-mutating Places retained event probe layer. The opt-in
+  layer consumes `PlacesInteractionGeometry`, inserts normal row/section
+  hitboxes with `Window::insert_hitbox()`, and reports
+  `[fika places-event-probe]` without registering event handlers or changing
+  app state. The analyzer now has `--require-event-probe`, proving the inserted
+  hitbox count matches `retained_probe_hitboxes` while the retained-event gate
+  still rejects this mixed GPUI-shell policy.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,
