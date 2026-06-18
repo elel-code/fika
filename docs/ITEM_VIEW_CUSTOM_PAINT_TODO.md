@@ -941,6 +941,12 @@ by risk and evidence, not by how custom-painted a surface looks.
   the GPUI handle when pane loading preserves model scroll. `src/main.rs` still
   supplies pane view scroll values, but no longer sequences those scroll-state
   operations itself.
+- [x] P16bp: Move item-view scrollbar-drag sync policy into the scroll state.
+  `ItemViewScrollState` now owns authoritative handle sync actions during
+  scrollbar drag updates and the finish-drag handoff that reports both the
+  pane-view sync action and whether a drag was active. `src/main.rs` still
+  applies returned pane-view sync actions, but no longer reaches into the raw
+  finish/sync primitives for this lifecycle path.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

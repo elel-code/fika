@@ -28,6 +28,12 @@ pub(crate) struct ItemViewScrollBoundsSync {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ItemViewScrollDragFinish {
+    pub(crate) action: ItemViewScrollSyncAction,
+    pub(crate) was_dragging: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct ItemViewScrollHandleObservation {
     scroll_x: f32,
     scroll_y: f32,
@@ -79,7 +85,7 @@ impl ItemViewScrollState {
         self.scrollbar_dragging.insert(pane_id)
     }
 
-    pub(crate) fn finish_scrollbar_drag(&mut self, pane_id: PaneId) -> bool {
+    fn finish_scrollbar_drag(&mut self, pane_id: PaneId) -> bool {
         self.scrollbar_dragging.remove(&pane_id)
     }
 
@@ -141,6 +147,17 @@ impl ItemViewScrollState {
         ItemViewScrollSyncAction::SyncView(sync)
     }
 
+    pub(crate) fn sync_action_from_authoritative_handle(
+        &self,
+        pane_id: PaneId,
+        view_max_scroll_x: f32,
+        view_max_scroll_y: f32,
+    ) -> ItemViewScrollSyncAction {
+        self.sync_from_authoritative_handle(pane_id, view_max_scroll_x, view_max_scroll_y)
+            .map(ItemViewScrollSyncAction::SyncView)
+            .unwrap_or(ItemViewScrollSyncAction::None)
+    }
+
     pub(crate) fn sync_after_bounds_update(
         &mut self,
         pane_id: PaneId,
@@ -167,7 +184,25 @@ impl ItemViewScrollState {
         }
     }
 
-    pub(crate) fn sync_from_authoritative_handle(
+    pub(crate) fn finish_scrollbar_drag_with_sync(
+        &mut self,
+        pane_id: PaneId,
+        view_max_scroll_x: f32,
+        view_max_scroll_y: f32,
+    ) -> ItemViewScrollDragFinish {
+        let was_dragging = self.finish_scrollbar_drag(pane_id);
+        let action = self.sync_action_from_authoritative_handle(
+            pane_id,
+            view_max_scroll_x,
+            view_max_scroll_y,
+        );
+        ItemViewScrollDragFinish {
+            action,
+            was_dragging,
+        }
+    }
+
+    fn sync_from_authoritative_handle(
         &self,
         pane_id: PaneId,
         view_max_scroll_x: f32,
@@ -611,6 +646,30 @@ mod tests {
                 handle_changed: false,
             }
         );
+    }
+
+    #[test]
+    fn scroll_state_finish_drag_reports_action_and_drag_state() {
+        let pane_id = PaneId(1);
+        let mut state = ItemViewScrollState::default();
+        let handle = state.handle_for_pane(pane_id);
+
+        state.begin_scrollbar_drag(pane_id);
+        handle.set_offset(point(px(-480.0), px(0.0)));
+
+        assert_eq!(
+            state.finish_scrollbar_drag_with_sync(pane_id, 1_000.0, 0.0),
+            ItemViewScrollDragFinish {
+                action: ItemViewScrollSyncAction::SyncView(ItemViewScrollSync {
+                    scroll_x: 480.0,
+                    scroll_y: 0.0,
+                    max_scroll_x: 1_000.0,
+                    max_scroll_y: 0.0,
+                }),
+                was_dragging: true,
+            }
+        );
+        assert!(!state.is_scrollbar_dragging(pane_id));
     }
 
     #[test]

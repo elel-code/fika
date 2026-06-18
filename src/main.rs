@@ -1238,16 +1238,14 @@ impl FikaApp {
             .panes
             .pane(pane_id)
             .map_or(0.0, |pane| pane.view.max_scroll_y);
-        let Some(sync) = self.item_view_scroll.sync_from_authoritative_handle(
+        let action = self.item_view_scroll.sync_action_from_authoritative_handle(
             pane_id,
             view_max_scroll_x,
             view_max_scroll_y,
-        ) else {
-            return false;
-        };
-        self.apply_item_view_scroll_sync(
+        );
+        self.apply_item_view_scroll_sync_action(
             pane_id,
-            sync,
+            action,
             view_scroll_x,
             view_scroll_y,
             view_max_scroll_x,
@@ -1312,8 +1310,26 @@ impl FikaApp {
     }
 
     pub(crate) fn finish_item_view_scrollbar_drag(&mut self, pane_id: PaneId) -> bool {
-        let was_dragging = self.item_view_scroll.finish_scrollbar_drag(pane_id);
-        self.sync_pane_view_from_authoritative_item_view_scroll_handle(pane_id) || was_dragging
+        let Some(view) = self.panes.pane(pane_id).map(|pane| pane.view.clone()) else {
+            return self
+                .item_view_scroll
+                .finish_scrollbar_drag_with_sync(pane_id, 0.0, 0.0)
+                .was_dragging;
+        };
+        let finish = self.item_view_scroll.finish_scrollbar_drag_with_sync(
+            pane_id,
+            view.max_scroll_x,
+            view.max_scroll_y,
+        );
+        let action_changed = self.apply_item_view_scroll_sync_action(
+            pane_id,
+            finish.action,
+            view.scroll_x,
+            view.scroll_y,
+            view.max_scroll_x,
+            view.max_scroll_y,
+        );
+        action_changed || finish.was_dragging
     }
 
     fn preserve_item_view_scroll_for_layout_change(&mut self, pane_id: PaneId) {
