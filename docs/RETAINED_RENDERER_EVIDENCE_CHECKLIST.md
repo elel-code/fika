@@ -14,6 +14,14 @@ The standard core capture is automated:
 scripts/run-retained-renderer-evidence.sh --core
 ```
 
+When a slice only changes one side of the renderer boundary, use a narrower
+capture so unrelated evidence is not mixed into the review:
+
+```sh
+scripts/run-retained-renderer-evidence.sh --items-only
+scripts/run-retained-renderer-evidence.sh --places-only
+```
+
 Use `--icons` only when validating a MIME/theme icon renderer candidate that is
 expected to pass default-promotion gates:
 

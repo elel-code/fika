@@ -14,6 +14,12 @@ Options:
   --core
       Capture item-view and Places evidence. This is the default.
 
+  --items-only
+      Capture only item-view evidence.
+
+  --places-only
+      Capture only Places evidence.
+
   --icons
       Also capture MIME/theme icon default-vs-custom A/B logs and require the
       default-promotion gate to pass. Use this only when testing an image
@@ -54,7 +60,8 @@ out_dir="/tmp"
 prefix="fika-evidence"
 downloads_dir="${HOME:-}/Downloads"
 timeout_seconds=8
-capture_core=true
+capture_items=true
+capture_places=true
 capture_icons=false
 analyze_only=false
 skip_build=false
@@ -62,13 +69,23 @@ skip_build=false
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --core)
-            capture_core=true
+            capture_items=true
+            capture_places=true
+            ;;
+        --items-only)
+            capture_items=true
+            capture_places=false
+            ;;
+        --places-only)
+            capture_items=false
+            capture_places=true
             ;;
         --icons)
             capture_icons=true
             ;;
         --all)
-            capture_core=true
+            capture_items=true
+            capture_places=true
             capture_icons=true
             ;;
         --analyze-only)
@@ -213,7 +230,7 @@ expect_gate_failure() {
     fi
 }
 
-if [[ "$capture_core" == true ]]; then
+if [[ "$capture_items" == true ]]; then
     item_downloads_log="$(log_path item-downloads)"
     item_etc_log="$(log_path item-etc)"
     item_zoom_log="$(log_path item-etc-zoom-scroll)"
@@ -229,7 +246,9 @@ if [[ "$capture_core" == true ]]; then
         "$root_dir/scripts/check-item-view-runtime-log.sh" "$item_zoom_log"
     run_gate "item renderer evidence summary" \
         "$root_dir/scripts/summarize-item-view-renderer-evidence.sh" "$item_zoom_log"
+fi
 
+if [[ "$capture_places" == true ]]; then
     places_targets_log="$(log_path places-targets)"
     places_overflow_log="$(log_path places-overflow)"
     places_layout_log="$(log_path places-layout)"

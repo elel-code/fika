@@ -1531,6 +1531,12 @@ tracks.
   faster, and which model, layout, role-readiness, painter, controller and
   analyzer gates must be satisfied before a GPUI bridge can be removed or a
   custom renderer can become default.
+- [x] P16fb: Split the retained-renderer evidence runner into narrow item-only
+  and Places-only modes. `scripts/run-retained-renderer-evidence.sh
+  --items-only` now captures only the item-view Track 1 logs, while
+  `--places-only` captures only the Places targets/overflow/layout/hit-test/
+  targeting/DnD logs and still verifies the full retained-event gate fails as
+  expected. The default `--core` behavior remains item plus Places.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

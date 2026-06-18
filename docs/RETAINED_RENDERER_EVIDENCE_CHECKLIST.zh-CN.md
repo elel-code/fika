@@ -16,6 +16,13 @@ GUI 命令必须在真实桌面会话中运行。沙箱或 headless shell 可能
 scripts/run-retained-renderer-evidence.sh --core
 ```
 
+当某个切片只改变 renderer 边界的一侧时，使用更窄的采集，避免混入无关证据：
+
+```sh
+scripts/run-retained-renderer-evidence.sh --items-only
+scripts/run-retained-renderer-evidence.sh --places-only
+```
+
 只有在验证预期能通过默认提升 gate 的 MIME/theme icon renderer 候选时，才使用
 `--icons`：
 
