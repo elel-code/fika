@@ -1338,71 +1338,38 @@ impl FikaApp {
                 };
                 let filtered = filtered_model.as_ref().map(|(model, _)| model);
                 let source_revision = filtered_model.as_ref().map_or(0, |(_, revision)| *revision);
-                let raw_started = perf_enabled.then(Instant::now);
-                let prepared_raw_file_grid = self
-                    .raw_file_grid_snapshot_after_visible_metadata_sync(
-                        pane_id,
-                        generation,
-                        &view,
-                        filtered,
-                        source_revision,
-                        rename_draft.as_ref(),
-                        item_drop_target.as_ref(),
-                        VISIBLE_METADATA_ROLE_SYNC_BUDGET,
-                    )?;
-                let raw_file_grid = prepared_raw_file_grid.raw_file_grid;
-                let model_data_generation = prepared_raw_file_grid.model_data_generation;
-                let raw_elapsed = raw_started.map(|started| started.elapsed());
-                let file_icon_size = view.icon_size();
-                let item_count = {
-                    let pane = self.panes.pane(pane_id)?;
-                    filtered_model
-                        .as_ref()
-                        .map_or_else(|| pane.model.len(), |(filtered, _)| filtered.len())
-                };
-                let filtered = filtered_model.as_ref().map(|(model, _)| model);
-                let visible_work_frame = self.sync_and_start_file_grid_visible_work_for_raw_grid(
+                let file_grid_frame = self.pane_file_grid_render_frame_for_pane(
                     pane_id,
                     generation,
-                    view.view_mode,
-                    model_data_generation,
-                    source_revision,
-                    item_count,
-                    &raw_file_grid,
-                    file_icon_size,
+                    &view,
+                    selection_count,
                     filtered,
+                    source_revision,
+                    rename_draft.as_ref(),
+                    item_drop_target.as_ref(),
+                    VISIBLE_METADATA_ROLE_SYNC_BUDGET,
                     perf_enabled,
                     cx,
                 )?;
+                let item_count = file_grid_frame.item_count;
                 let rubber_band = self
                     .rubber_band
                     .active_viewport_rect_for_pane(pane_id, &view);
                 let filter_bar = self.filter_bar_snapshot(pane_id, focused_pane, item_count);
-                let convert_started = perf_enabled.then(Instant::now);
-                let retained_file_grid_frame = self.project_retained_file_grid_frame_for_pane(
-                    pane_id,
-                    raw_file_grid,
-                    selection_count,
-                    file_icon_size,
-                    view.view_mode,
-                    item_count,
-                    perf_enabled,
-                );
-                let convert_elapsed = convert_started.map(|started| started.elapsed());
                 let status_bar = self.status_bar_snapshot_for_pane(pane_id, cx);
                 if let Some(pane_started) = pane_started {
                     ui::file_grid::emit_item_view_perf_log(ui::file_grid::ItemViewPerfLogFrame {
                         pane_id,
                         mode: view.view_mode,
-                        phase: retained_file_grid_frame.item_view_perf_phase,
+                        phase: file_grid_frame.item_view_perf_phase,
                         item_count,
-                        visible_count: retained_file_grid_frame.visible_count,
-                        raw_elapsed,
-                        icon_sync_elapsed: visible_work_frame.icon_sync_elapsed,
-                        queue_elapsed: visible_work_frame.queue_elapsed,
-                        convert_elapsed,
+                        visible_count: file_grid_frame.visible_count,
+                        raw_elapsed: file_grid_frame.raw_elapsed,
+                        icon_sync_elapsed: file_grid_frame.icon_sync_elapsed,
+                        queue_elapsed: file_grid_frame.queue_elapsed,
+                        convert_elapsed: file_grid_frame.convert_elapsed,
                         total_elapsed: pane_started.elapsed(),
-                        slot_stats: retained_file_grid_frame.item_paint_slot_stats,
+                        slot_stats: file_grid_frame.item_paint_slot_stats,
                     });
                 }
                 Some(PaneSnapshot {
@@ -1412,7 +1379,7 @@ impl FikaApp {
                     location_draft,
                     filter_bar,
                     status_bar,
-                    file_grid: retained_file_grid_frame.file_grid,
+                    file_grid: file_grid_frame.file_grid,
                     trash_view,
                     scroll_handle,
                     view,

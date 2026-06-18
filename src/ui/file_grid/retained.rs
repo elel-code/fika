@@ -45,6 +45,18 @@ pub(crate) struct RetainedFileGridFrame {
     pub(crate) item_view_perf_phase: Option<ItemViewPerfPhase>,
 }
 
+pub(crate) struct PaneFileGridRenderFrame {
+    pub(crate) file_grid: FileGridRenderSnapshot,
+    pub(crate) item_count: usize,
+    pub(crate) visible_count: usize,
+    pub(crate) raw_elapsed: Option<Duration>,
+    pub(crate) icon_sync_elapsed: Option<Duration>,
+    pub(crate) queue_elapsed: Option<Duration>,
+    pub(crate) convert_elapsed: Option<Duration>,
+    pub(crate) item_paint_slot_stats: ItemPaintSlotStats,
+    pub(crate) item_view_perf_phase: Option<ItemViewPerfPhase>,
+}
+
 impl FikaApp {
     pub(crate) fn raw_file_grid_snapshot_for_pane(
         &mut self,
@@ -189,6 +201,80 @@ impl FikaApp {
             visible_count,
             item_view_perf_phase,
         }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn pane_file_grid_render_frame_for_pane(
+        &mut self,
+        pane_id: PaneId,
+        generation: Generation,
+        view: &ViewState,
+        selection_count: usize,
+        filtered: Option<&FilteredModel>,
+        source_revision: u64,
+        rename_draft: Option<&RenameDraft>,
+        item_drop_target: Option<&ItemDropTarget>,
+        metadata_budget: Duration,
+        perf_enabled: bool,
+        cx: &mut Context<Self>,
+    ) -> Option<PaneFileGridRenderFrame> {
+        let raw_started = perf_enabled.then(Instant::now);
+        let prepared_raw_file_grid = self.raw_file_grid_snapshot_after_visible_metadata_sync(
+            pane_id,
+            generation,
+            view,
+            filtered,
+            source_revision,
+            rename_draft,
+            item_drop_target,
+            metadata_budget,
+        )?;
+        let raw_file_grid = prepared_raw_file_grid.raw_file_grid;
+        let model_data_generation = prepared_raw_file_grid.model_data_generation;
+        let raw_elapsed = raw_started.map(|started| started.elapsed());
+
+        let file_icon_size = view.icon_size();
+        let item_count = {
+            let pane = self.panes.pane(pane_id)?;
+            filtered.map_or_else(|| pane.model.len(), |filtered| filtered.len())
+        };
+        let visible_work_frame = self.sync_and_start_file_grid_visible_work_for_raw_grid(
+            pane_id,
+            generation,
+            view.view_mode,
+            model_data_generation,
+            source_revision,
+            item_count,
+            &raw_file_grid,
+            file_icon_size,
+            filtered,
+            perf_enabled,
+            cx,
+        )?;
+
+        let convert_started = perf_enabled.then(Instant::now);
+        let retained_file_grid_frame = self.project_retained_file_grid_frame_for_pane(
+            pane_id,
+            raw_file_grid,
+            selection_count,
+            file_icon_size,
+            view.view_mode,
+            item_count,
+            perf_enabled,
+        );
+        let convert_elapsed = convert_started.map(|started| started.elapsed());
+
+        Some(PaneFileGridRenderFrame {
+            file_grid: retained_file_grid_frame.file_grid,
+            item_count,
+            visible_count: retained_file_grid_frame.visible_count,
+            raw_elapsed,
+            icon_sync_elapsed: visible_work_frame.icon_sync_elapsed,
+            queue_elapsed: visible_work_frame.queue_elapsed,
+            convert_elapsed,
+            item_paint_slot_stats: retained_file_grid_frame.item_paint_slot_stats,
+            item_view_perf_phase: retained_file_grid_frame.item_view_perf_phase,
+        })
     }
 
     #[allow(clippy::too_many_arguments)]

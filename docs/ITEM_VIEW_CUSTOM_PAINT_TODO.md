@@ -1217,6 +1217,10 @@ by risk and evidence, not by how custom-painted a surface looks.
   `async-global-executor` are gone, while GPUI/platform async support crates
   still exist, and item-view worker orchestration should stay behind
   file-grid/places facades instead of returning to `main.rs`.
+- [x] P16du: Collapse the raw/work/projection item-view render pipeline into a
+  pane-level file-grid render frame. `main.rs` now receives file-grid snapshot,
+  item/visible counts, slot stats, perf phase, and timing fields as one facade
+  result instead of holding raw grid and model-generation intermediates.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,
