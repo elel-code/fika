@@ -178,6 +178,16 @@ pub(crate) fn press_pending_rubber_band_for_pane(
     *pending = Some(PendingRubberBand::new(pane_id, start));
 }
 
+pub(crate) fn start_active_rubber_band_for_pane(
+    pending: &mut Option<PendingRubberBand>,
+    active: &mut Option<RubberBandState>,
+    pane_id: PaneId,
+    start: ViewPoint,
+) {
+    *pending = None;
+    *active = Some(RubberBandState::new(pane_id, start));
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct RubberBandDrag {
     pub(crate) pane_id: PaneId,
@@ -373,5 +383,18 @@ mod tests {
             pending,
             Some(PendingRubberBand::new(PaneId(1), pending_start))
         );
+    }
+
+    #[test]
+    fn start_active_rubber_band_replaces_pending_band() {
+        let pending_start = ViewPoint { x: 1.0, y: 2.0 };
+        let active_start = ViewPoint { x: 10.0, y: 20.0 };
+        let mut pending = Some(PendingRubberBand::new(PaneId(2), pending_start));
+        let mut active = None;
+
+        start_active_rubber_band_for_pane(&mut pending, &mut active, PaneId(1), active_start);
+
+        assert_eq!(pending, None);
+        assert_eq!(active, Some(RubberBandState::new(PaneId(1), active_start)));
     }
 }

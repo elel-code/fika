@@ -1003,6 +1003,10 @@ by risk and evidence, not by how custom-painted a surface looks.
   rubber-band module. `press_pending_rubber_band_for_pane()` now owns clearing
   the active band and installing a pending band for a blank-press start.
   `src/main.rs` still decides when a blank press is valid.
+- [x] P16cc: Move active rubber-band start state replacement into the
+  rubber-band module. `start_active_rubber_band_for_pane()` now owns clearing
+  pending state and installing the active band when a pending drag activates.
+  `src/main.rs` still clears drafts and applies selection updates.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,
