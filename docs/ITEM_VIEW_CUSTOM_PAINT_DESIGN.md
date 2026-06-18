@@ -84,6 +84,22 @@ GPUI renderer.
 The current replacement matrix and full transition roadmap live in
 `docs/ITEM_VIEW_CUSTOM_PAINT_STATUS.md`.
 
+GPUI scheduling dependency note:
+
+- After the 2026-06 dependency update to Zed/GPUI `e4f6742a`, `async-std`
+  and `async-global-executor` are no longer present in Fika's dependency tree.
+  This does not mean the Linux/platform stack is free of async support crates:
+  `smol` still comes through `gpui_linux`, and `async-channel` still appears
+  through GPUI/platform/accessibility/zbus paths.
+- Item-view UI work should continue to use GPUI's `cx.spawn()` and
+  `cx.background_spawn()` boundary, with worker orchestration owned by the
+  relevant file-grid or places facade. Do not reintroduce app-level ownership
+  of item-view worker scheduling in `main.rs` just because the old runtime
+  crates disappeared.
+- File operations and privileged/background tasks remain on the explicit
+  operation runtime described in `docs/OPERATION_RUNTIME_REFERENCE.md`; that is
+  a separate application I/O boundary from GPUI UI-frame work.
+
 Historical baseline gate:
 
 - For Compact/Icons image flicker, startup blanks, and zoom size jumps, use

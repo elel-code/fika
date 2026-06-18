@@ -1212,6 +1212,11 @@ by risk and evidence, not by how custom-painted a surface looks.
   retained facade. The facade now owns visible-count derivation, retained slot
   projection, paint-slot stats, and item-view perf phase recording; `main.rs`
   only consumes the frame for pane snapshots and perf log emission.
+- [x] P16dt: Record the GPUI scheduling dependency boundary after the 2026-06
+  dependency update. The design now notes that `async-std` and
+  `async-global-executor` are gone, while GPUI/platform async support crates
+  still exist, and item-view worker orchestration should stay behind
+  file-grid/places facades instead of returning to `main.rs`.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

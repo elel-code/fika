@@ -51,6 +51,18 @@ Fika 条目视图应收敛到 Dolphin 的 `KItemListView` 模型：
 
 有疑问时，先对齐所有者，再对齐渲染器。
 
+GPUI 调度依赖说明：
+
+- 2026-06 依赖更新到 Zed/GPUI `e4f6742a` 后，`async-std` 和
+  `async-global-executor` 已不在 Fika 的依赖树中。这不表示 Linux/平台栈完全没有
+  async 支持 crate：`smol` 仍通过 `gpui_linux` 进入，`async-channel` 仍通过
+  GPUI/platform/accessibility/zbus 路径出现。
+- 条目视图 UI 工作继续使用 GPUI 的 `cx.spawn()` 和 `cx.background_spawn()` 边界，
+  worker 编排由对应的 file-grid 或 places facade 拥有。不要因为旧 runtime crate
+  消失，就把 item-view worker scheduling 的应用级所有权重新放回 `main.rs`。
+- 文件操作和特权/后台任务继续使用 `docs/OPERATION_RUNTIME_REFERENCE.md` 中记录的显式
+  operation runtime；这与 GPUI UI-frame 工作是分开的应用 I/O 边界。
+
 ## Dolphin 参考
 
 相关 Dolphin 流程：
