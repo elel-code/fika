@@ -376,6 +376,10 @@ fn install_places_event_dnd_handlers(
             let app = app.clone();
             let state = state.clone();
             move |event, window, cx| {
+                if !event.bounds.contains(&event.event.position) {
+                    let _ = app.update(cx, |this, cx| places_event_dnd_leave(this, &state, cx));
+                    return;
+                }
                 let payload = event.drag(cx).payload();
                 let local_y = places_event_drag_local_y(event.bounds, event.event.position);
                 let handled = app
@@ -402,6 +406,10 @@ fn install_places_event_dnd_handlers(
             let app = app.clone();
             let state = state.clone();
             move |event, window, cx| {
+                if !event.bounds.contains(&event.event.position) {
+                    let _ = app.update(cx, |this, cx| places_event_dnd_leave(this, &state, cx));
+                    return;
+                }
                 let source_paths = event.drag(cx).paths().to_vec();
                 let local_y = places_event_drag_local_y(event.bounds, event.event.position);
                 let handled = app
@@ -428,6 +436,10 @@ fn install_places_event_dnd_handlers(
             let app = app.clone();
             let state = state.clone();
             move |event, window, cx| {
+                if !event.bounds.contains(&event.event.position) {
+                    let _ = app.update(cx, |this, cx| places_event_dnd_leave(this, &state, cx));
+                    return;
+                }
                 let drag = event.drag(cx);
                 let source_index = drag.source_index();
                 let movable = drag.movable();
@@ -516,6 +528,21 @@ fn install_places_event_dnd_handlers(
                 }
             }
         })
+}
+
+fn places_event_dnd_leave(
+    app: &mut FikaApp,
+    state: &Entity<PlacesEventTargetingState>,
+    cx: &mut Context<FikaApp>,
+) -> bool {
+    state.update(cx, |state, _cx| {
+        state.retained_dnd_target = None;
+    });
+    let changed = app.clear_place_drop_target();
+    if changed {
+        cx.notify();
+    }
+    changed
 }
 
 fn places_event_path_list_drag_move(
