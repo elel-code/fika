@@ -935,6 +935,12 @@ by risk and evidence, not by how custom-painted a surface looks.
   handle after wheel-driven pane model scroll changes. `src/main.rs` still
   applies the pane model scroll, but no longer combines those scroll-state
   lifecycle operations itself.
+- [x] P16bo: Move item-view transient-clearing handle sync policy into the
+  scroll state. `ItemViewScrollState::sync_handle_to_view_clearing_transients()`
+  now owns clearing authoritative/scrollbar-drag transient state and syncing
+  the GPUI handle when pane loading preserves model scroll. `src/main.rs` still
+  supplies pane view scroll values, but no longer sequences those scroll-state
+  operations itself.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

@@ -1354,13 +1354,14 @@ impl FikaApp {
     }
 
     fn sync_item_view_scroll_handle_to_pane_view(&mut self, pane_id: PaneId) {
-        self.item_view_scroll.clear_transient_state(pane_id);
         if let Some(pane) = self.panes.pane(pane_id) {
-            let _ = self.item_view_scroll.sync_handle_to_view(
-                pane_id,
-                pane.view.scroll_x,
-                pane.view.scroll_y,
-            );
+            let _ = self
+                .item_view_scroll
+                .sync_handle_to_view_clearing_transients(
+                    pane_id,
+                    pane.view.scroll_x,
+                    pane.view.scroll_y,
+                );
         }
     }
 
