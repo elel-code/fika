@@ -3,6 +3,8 @@ use std::collections::{HashMap, HashSet};
 use fika_core::PaneId;
 use gpui::{ScrollHandle, point, px};
 
+const LAYOUT_CHANGE_AUTHORITATIVE_FRAMES: u8 = 2;
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct ItemViewScrollSync {
     pub(crate) scroll_x: f32,
@@ -162,6 +164,7 @@ impl ItemViewScrollState {
             view_max_scroll_y,
         );
         self.set_handle_offset(pane_id, scroll_x, scroll_y);
+        self.mark_authoritative_for_frames(pane_id, LAYOUT_CHANGE_AUTHORITATIVE_FRAMES);
         (scroll_x, scroll_y)
     }
 
@@ -399,6 +402,11 @@ mod tests {
         state.preserve_for_layout_change(pane_id, 120.0, 0.0, 1_000.0, 0.0);
 
         assert_eq!(handle.offset().x, px(-120.0));
+        assert!(state.has_authoritative_scroll(pane_id));
+        state.tick_authoritative_scroll(pane_id);
+        assert!(state.has_authoritative_scroll(pane_id));
+        state.tick_authoritative_scroll(pane_id);
+        assert!(!state.has_authoritative_scroll(pane_id));
     }
 
     #[test]

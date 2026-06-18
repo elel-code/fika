@@ -912,6 +912,11 @@ by risk and evidence, not by how custom-painted a surface looks.
   deltas to cached item-view extents. `src/main.rs` still updates pane-row
   width, projects per-pane item widths from split geometry, and writes the
   pane view dimensions.
+- [x] P16bk: Move item-view layout-change scroll authoritative policy into the
+  scroll state. `ItemViewScrollState::preserve_for_layout_change()` now owns the
+  two-frame view-authoritative handoff after preserving scroll through zoom or
+  layout changes. `src/main.rs` still writes the preserved scroll values to the
+  pane model, but no longer knows the frame-count policy for that path.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

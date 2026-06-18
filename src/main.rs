@@ -1342,8 +1342,6 @@ impl FikaApp {
             view_max_scroll_x,
             view_max_scroll_y,
         );
-        self.item_view_scroll
-            .mark_authoritative_for_frames(pane_id, 2);
         let _ = self.panes.set_view_scroll(
             pane_id,
             scroll_x,
