@@ -401,8 +401,6 @@ pub(crate) struct FikaApp {
     status_summaries: HashMap<PaneId, StatusSummaryCacheEntry>,
     loading_panes: HashMap<PaneId, LoadingPaneState>,
     item_view_scroll: ItemViewScrollState,
-    item_view_authoritative_scroll: HashMap<PaneId, u8>,
-    item_view_scrollbar_dragging: HashSet<PaneId>,
     metadata_role_scheduler: MetadataRoleScheduler,
     thumbnail_scheduler: ThumbnailScheduler,
     visible_work_keys: HashMap<PaneId, PaneVisibleWorkKey>,
@@ -508,8 +506,6 @@ impl FikaApp {
             status_summaries: HashMap::new(),
             loading_panes: HashMap::new(),
             item_view_scroll: ItemViewScrollState::default(),
-            item_view_authoritative_scroll: HashMap::new(),
-            item_view_scrollbar_dragging: HashSet::new(),
             metadata_role_scheduler: MetadataRoleScheduler::default(),
             thumbnail_scheduler: ThumbnailScheduler::default(),
             visible_work_keys: HashMap::new(),
@@ -927,7 +923,8 @@ impl FikaApp {
         let scroll_x = pane.view.scroll_x;
         let scroll_y = pane.view.scroll_y;
 
-        self.item_view_authoritative_scroll.insert(pane_id, 2);
+        self.item_view_scroll
+            .mark_authoritative_for_frames(pane_id, 2);
         let _ = self
             .item_view_scroll
             .sync_handle_to_view(pane_id, scroll_x, scroll_y);
@@ -1207,7 +1204,7 @@ impl FikaApp {
     }
 
     fn sync_pane_view_from_item_view_scroll_handle(&mut self, pane_id: PaneId) -> bool {
-        if self.item_view_scrollbar_dragging.contains(&pane_id) {
+        if self.item_view_scroll.is_scrollbar_dragging(pane_id) {
             return self.sync_pane_view_from_authoritative_item_view_scroll_handle(pane_id);
         }
         let view_scroll_x = self
@@ -1226,7 +1223,7 @@ impl FikaApp {
             .panes
             .pane(pane_id)
             .map_or(0.0, |pane| pane.view.max_scroll_y);
-        if self.item_view_authoritative_scroll.contains_key(&pane_id) {
+        if self.item_view_scroll.has_authoritative_scroll(pane_id) {
             self.item_view_scroll
                 .sync_handle_to_view(pane_id, view_scroll_x, view_scroll_y);
             return false;
@@ -1243,7 +1240,7 @@ impl FikaApp {
         if !scroll_offset_matches(view_scroll_x, sync.scroll_x)
             || !scroll_offset_matches(view_scroll_y, sync.scroll_y)
         {
-            self.item_view_authoritative_scroll.remove(&pane_id);
+            self.item_view_scroll.clear_authoritative_scroll(pane_id);
         }
         let changed = !scroll_offset_matches(view_scroll_x, sync.scroll_x)
             || !scroll_offset_matches(view_scroll_y, sync.scroll_y)
@@ -1301,8 +1298,7 @@ impl FikaApp {
     }
 
     pub(crate) fn begin_item_view_scrollbar_drag(&mut self, pane_id: PaneId) -> bool {
-        self.item_view_authoritative_scroll.remove(&pane_id);
-        self.item_view_scrollbar_dragging.insert(pane_id)
+        self.item_view_scroll.begin_scrollbar_drag(pane_id)
     }
 
     pub(crate) fn update_item_view_scrollbar_drag(&mut self, pane_id: PaneId) -> bool {
@@ -1310,7 +1306,7 @@ impl FikaApp {
     }
 
     pub(crate) fn finish_item_view_scrollbar_drag(&mut self, pane_id: PaneId) -> bool {
-        let was_dragging = self.item_view_scrollbar_dragging.remove(&pane_id);
+        let was_dragging = self.item_view_scroll.finish_scrollbar_drag(pane_id);
         self.sync_pane_view_from_authoritative_item_view_scroll_handle(pane_id) || was_dragging
     }
 
@@ -1338,7 +1334,8 @@ impl FikaApp {
             view_max_scroll_x,
             view_max_scroll_y,
         );
-        self.item_view_authoritative_scroll.insert(pane_id, 2);
+        self.item_view_scroll
+            .mark_authoritative_for_frames(pane_id, 2);
         let _ = self.panes.set_view_scroll(
             pane_id,
             scroll_x,
@@ -1350,13 +1347,10 @@ impl FikaApp {
 
     fn reset_item_view_scroll_for_pane(&mut self, pane_id: PaneId) {
         self.item_view_scroll.reset_pane(pane_id);
-        self.item_view_authoritative_scroll.remove(&pane_id);
-        self.item_view_scrollbar_dragging.remove(&pane_id);
     }
 
     fn sync_item_view_scroll_handle_to_pane_view(&mut self, pane_id: PaneId) {
-        self.item_view_authoritative_scroll.remove(&pane_id);
-        self.item_view_scrollbar_dragging.remove(&pane_id);
+        self.item_view_scroll.clear_transient_state(pane_id);
         if let Some(pane) = self.panes.pane(pane_id) {
             let _ = self.item_view_scroll.sync_handle_to_view(
                 pane_id,
@@ -1368,8 +1362,6 @@ impl FikaApp {
 
     fn remove_item_view_scroll_for_pane(&mut self, pane_id: PaneId) {
         self.item_view_scroll.remove_pane(pane_id);
-        self.item_view_authoritative_scroll.remove(&pane_id);
-        self.item_view_scrollbar_dragging.remove(&pane_id);
     }
 
     fn clear_filter_focus_for_pane(&mut self, pane_id: PaneId) {
@@ -3480,7 +3472,7 @@ impl FikaApp {
                 next_view.max_scroll_y,
             );
         if changed {
-            self.item_view_authoritative_scroll.remove(&pane_id);
+            self.item_view_scroll.clear_authoritative_scroll(pane_id);
             let _ = self.item_view_scroll.sync_handle_to_view(
                 pane_id,
                 next_view.scroll_x,
@@ -3894,7 +3886,7 @@ impl FikaApp {
                 max_scroll_y,
             )
             .unwrap_or(false);
-        if self.item_view_scrollbar_dragging.contains(&pane_id) {
+        if self.item_view_scroll.is_scrollbar_dragging(pane_id) {
             return self.sync_pane_view_from_authoritative_item_view_scroll_handle(pane_id)
                 || changed;
         }
@@ -3905,13 +3897,7 @@ impl FikaApp {
                 pane.view.scroll_y,
             )
         });
-        if let Some(remaining) = self.item_view_authoritative_scroll.get_mut(&pane_id) {
-            if *remaining <= 1 {
-                self.item_view_authoritative_scroll.remove(&pane_id);
-            } else {
-                *remaining -= 1;
-            }
-        }
+        self.item_view_scroll.tick_authoritative_scroll(pane_id);
         changed || handle_changed
     }
 
@@ -13828,16 +13814,17 @@ text/plain=viewer.desktop;\n",
         app.panes
             .set_view_scroll(pane_id, 140.0, 32.0, 1_000.0, 500.0)
             .unwrap();
-        app.item_view_authoritative_scroll.insert(pane_id, 1);
-        app.item_view_scrollbar_dragging.insert(pane_id);
+        app.item_view_scroll
+            .mark_authoritative_for_frames(pane_id, 1);
+        app.item_view_scroll.begin_scrollbar_drag(pane_id);
 
         app.begin_pane_loading_transition(pane_id, PaneLoadingScrollPolicy::Preserve);
 
         assert_eq!(scroll_handle.offset(), gpui::point(px(-140.0), px(-32.0)));
         assert_eq!(app.panes.pane(pane_id).unwrap().view.scroll_x, 140.0);
         assert_eq!(app.panes.pane(pane_id).unwrap().view.scroll_y, 32.0);
-        assert!(!app.item_view_authoritative_scroll.contains_key(&pane_id));
-        assert!(!app.item_view_scrollbar_dragging.contains(&pane_id));
+        assert!(!app.item_view_scroll.has_authoritative_scroll(pane_id));
+        assert!(!app.item_view_scroll.is_scrollbar_dragging(pane_id));
     }
 
     #[test]
@@ -13859,7 +13846,7 @@ text/plain=viewer.desktop;\n",
         assert_eq!(app.panes.pane(pane_id).unwrap().view.scroll_x, 480.0);
 
         assert!(app.finish_item_view_scrollbar_drag(pane_id));
-        assert!(!app.item_view_scrollbar_dragging.contains(&pane_id));
+        assert!(!app.item_view_scroll.is_scrollbar_dragging(pane_id));
         assert_eq!(scroll_handle.offset().x, px(-480.0));
         assert_eq!(app.panes.pane(pane_id).unwrap().view.scroll_x, 480.0);
     }
@@ -16764,8 +16751,6 @@ text/plain=viewer.desktop;\n",
             status_summaries: HashMap::new(),
             loading_panes: HashMap::new(),
             item_view_scroll: ItemViewScrollState::default(),
-            item_view_authoritative_scroll: HashMap::new(),
-            item_view_scrollbar_dragging: HashSet::new(),
             metadata_role_scheduler: MetadataRoleScheduler::default(),
             thumbnail_scheduler: ThumbnailScheduler::default(),
             visible_work_keys: HashMap::new(),

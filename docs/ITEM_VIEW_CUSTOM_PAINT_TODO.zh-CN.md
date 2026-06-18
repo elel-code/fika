@@ -254,6 +254,7 @@
 - [x] P16ba：将 visible metadata sync 应用 wrapper 移入文件网格模块。`file_grid/retained.rs` 现在拥有从 raw grid 收集 visible metadata role results、通过现有 app model result 路径应用结果，并在 visible role 变化时失效 pane visible snapshot cache。后台 metadata worker 仍使用 `src/main.rs` 中共享的 model result application 路径。
 - [x] P16bb：将后台 metadata 和 thumbnail 结果应用移入文件网格 retained 边界。`file_grid/retained.rs` 现在拥有将经过 generation 校验的 `MetadataRoleResult` 和 `ThumbnailProbeResult` 批次应用到 pane model 的逻辑，而 `src/main.rs` 只保留 worker 调度、scheduler 完成、继续启动和通知决策。这让 raw-grid 可见同步和后台角色/缩略图结果变更都位于 Dolphin 风格边界中的同一个 retained model 侧。
 - [x] P16bc：将文件网格 model-work lifecycle helper 移入 retained 边界。`file_grid/retained.rs` 现在拥有 pane-local metadata-role 和 thumbnail 取消、stale generation 清理，以及 retained 投影使用的文件图标快照查找。`src/main.rs` 仍从 pane load/refresh/close 事件和 worker 调度触发这些动作，但不再拥有 scheduler 清理或图标快照策略。
+- [x] P16bd：将 item-view scroll transient state 移入 item-view 模块。`ItemViewScrollState` 现在同时拥有 GPUI scroll handle、布局后短暂以 view 为权威的 frame 计数和 scrollbar-drag 状态。`src/main.rs` 仍负责把 pane `ViewState` 与该 controller 同步，但不再为 item-view scroll lifecycle 携带并行的 `HashMap`/`HashSet` 状态。
 - [ ] P16q：在每个 P16 实现切片之后，单独提交并附带相关验证：仅文档切片需要 `git diff --check`；代码切片需要 `cargo fmt`、`cargo check`、`cargo test -q`、`scripts/check-item-view-perf-analyzer.sh`、`scripts/check-places-perf-analyzer.sh` 和 `git diff --check`。
 - [x] P16r：记录运行时自测试和突破记录规则。可重复的滚动、缩放、启动图标、调整大小、模式切换和 Places 目标回退应在依赖手动计时之前通过 autosmoke 日志和分析器脚本重现。任何确认的优化突破必须记录症状、Dolphin 比较边界、根本原因、实现、保存的日志/分析器命令和未来回归守卫在拥有的设计或决策文档中。
 

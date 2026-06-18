@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use fika_core::PaneId;
 use gpui::{ScrollHandle, point, px};
@@ -23,11 +23,53 @@ struct ItemViewScrollHandleObservation {
 #[derive(Default)]
 pub(crate) struct ItemViewScrollState {
     handles: HashMap<PaneId, ScrollHandle>,
+    authoritative_scroll: HashMap<PaneId, u8>,
+    scrollbar_dragging: HashSet<PaneId>,
 }
 
 impl ItemViewScrollState {
     pub(crate) fn handle_for_pane(&mut self, pane_id: PaneId) -> ScrollHandle {
         self.handles.entry(pane_id).or_default().clone()
+    }
+
+    pub(crate) fn mark_authoritative_for_frames(&mut self, pane_id: PaneId, frames: u8) {
+        self.authoritative_scroll.insert(pane_id, frames);
+    }
+
+    pub(crate) fn clear_authoritative_scroll(&mut self, pane_id: PaneId) {
+        self.authoritative_scroll.remove(&pane_id);
+    }
+
+    pub(crate) fn has_authoritative_scroll(&self, pane_id: PaneId) -> bool {
+        self.authoritative_scroll.contains_key(&pane_id)
+    }
+
+    pub(crate) fn tick_authoritative_scroll(&mut self, pane_id: PaneId) {
+        if let Some(remaining) = self.authoritative_scroll.get_mut(&pane_id) {
+            if *remaining <= 1 {
+                self.authoritative_scroll.remove(&pane_id);
+            } else {
+                *remaining -= 1;
+            }
+        }
+    }
+
+    pub(crate) fn is_scrollbar_dragging(&self, pane_id: PaneId) -> bool {
+        self.scrollbar_dragging.contains(&pane_id)
+    }
+
+    pub(crate) fn begin_scrollbar_drag(&mut self, pane_id: PaneId) -> bool {
+        self.authoritative_scroll.remove(&pane_id);
+        self.scrollbar_dragging.insert(pane_id)
+    }
+
+    pub(crate) fn finish_scrollbar_drag(&mut self, pane_id: PaneId) -> bool {
+        self.scrollbar_dragging.remove(&pane_id)
+    }
+
+    pub(crate) fn clear_transient_state(&mut self, pane_id: PaneId) {
+        self.authoritative_scroll.remove(&pane_id);
+        self.scrollbar_dragging.remove(&pane_id);
     }
 
     pub(crate) fn sync_from_handle(
@@ -94,10 +136,12 @@ impl ItemViewScrollState {
         if let Some(scroll_handle) = self.handles.get(&pane_id) {
             scroll_handle.set_offset(point(px(0.0), px(0.0)));
         }
+        self.clear_transient_state(pane_id);
     }
 
     pub(crate) fn remove_pane(&mut self, pane_id: PaneId) {
         self.handles.remove(&pane_id);
+        self.clear_transient_state(pane_id);
     }
 
     fn scroll_for_pane(
@@ -307,6 +351,32 @@ mod tests {
         assert!(state.sync_handle_to_view(pane_id, 180.0, 40.0));
 
         assert_eq!(handle.offset(), point(px(-180.0), px(-40.0)));
+    }
+
+    #[test]
+    fn scroll_state_owns_authoritative_and_drag_transient_state() {
+        let pane_id = PaneId(1);
+        let mut state = ItemViewScrollState::default();
+
+        state.mark_authoritative_for_frames(pane_id, 2);
+        assert!(state.has_authoritative_scroll(pane_id));
+        state.tick_authoritative_scroll(pane_id);
+        assert!(state.has_authoritative_scroll(pane_id));
+        state.tick_authoritative_scroll(pane_id);
+        assert!(!state.has_authoritative_scroll(pane_id));
+
+        state.mark_authoritative_for_frames(pane_id, 1);
+        assert!(state.begin_scrollbar_drag(pane_id));
+        assert!(!state.has_authoritative_scroll(pane_id));
+        assert!(state.is_scrollbar_dragging(pane_id));
+        assert!(state.finish_scrollbar_drag(pane_id));
+        assert!(!state.is_scrollbar_dragging(pane_id));
+
+        state.mark_authoritative_for_frames(pane_id, 1);
+        state.begin_scrollbar_drag(pane_id);
+        state.clear_transient_state(pane_id);
+        assert!(!state.has_authoritative_scroll(pane_id));
+        assert!(!state.is_scrollbar_dragging(pane_id));
     }
 
     #[test]

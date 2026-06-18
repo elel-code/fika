@@ -874,6 +874,12 @@ by risk and evidence, not by how custom-painted a surface looks.
   lookup for retained projection. `src/main.rs` still triggers these actions
   from pane load/refresh/close events and worker scheduling, but no longer owns
   the scheduler cleanup or icon snapshot policy.
+- [x] P16bd: Move item-view scroll transient state into the item-view module.
+  `ItemViewScrollState` now owns GPUI scroll handles, post-layout
+  authoritative-scroll frame counters, and scrollbar-drag state together.
+  `src/main.rs` still syncs pane `ViewState` to and from the controller, but no
+  longer carries parallel `HashMap`/`HashSet` state for item-view scroll
+  lifecycle.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,
