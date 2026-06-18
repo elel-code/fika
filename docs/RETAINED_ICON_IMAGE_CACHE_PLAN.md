@@ -148,10 +148,10 @@ The future custom path is acceptable only if analyzer output proves:
 
 ## TODO
 
-- [ ] Add a `ThemeIconImageKey` type beside the file icon snapshot path.
-- [ ] Add retained same-key image storage with loaded/pending/failed/stale
+- [x] Add a `ThemeIconImageKey` type beside the file icon snapshot path.
+- [x] Add retained same-key image storage with loaded/pending/failed/stale
   status.
-- [ ] Make `[fika item-image]` distinguish retained same-key theme image reuse
+- [x] Make `[fika item-image]` distinguish retained same-key theme image reuse
   from first-load placeholders.
 - [ ] Extend `scripts/compare-item-image-renderers.sh` or the item-view
   analyzer so paired default/custom logs fail on placeholder churn or zoom-time

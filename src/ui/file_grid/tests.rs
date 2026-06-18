@@ -268,7 +268,7 @@ fn content_layers_split_base_visuals_from_image_visuals() {
 }
 
 #[test]
-fn retained_image_source_uses_icon_name_across_theme_icon_paths() {
+fn retained_image_source_uses_size_aware_theme_icon_key() {
     let mut icon = FileIconSnapshot {
         icon_name: Arc::from("text-x-generic"),
         path: Some(Arc::from(Path::new(
@@ -278,20 +278,21 @@ fn retained_image_source_uses_icon_name_across_theme_icon_paths() {
         fallback_fg: 0xffffff,
         fallback_bg: 0x2563eb,
     };
-    let first = item_image_retained_source_for(None, &icon);
+    let first = item_image_retained_source_for(None, &icon, 48, 1.0);
 
     icon.path = Some(Arc::from(Path::new(
         "/theme/64/mimetypes/text-x-generic.svg",
     )));
-    let zoomed = item_image_retained_source_for(None, &icon);
+    let same_size_new_path = item_image_retained_source_for(None, &icon, 48, 1.0);
+    let zoomed = item_image_retained_source_for(None, &icon, 64, 1.0);
 
-    assert_eq!(
-        first,
-        Some(ItemImageRetainedSource::ThemeIcon(Arc::from(
-            "text-x-generic"
-        )))
-    );
-    assert_eq!(first, zoomed);
+    let Some(ItemImageRetainedSource::ThemeIcon(key)) = first.as_ref() else {
+        panic!("expected theme icon retained source");
+    };
+    assert_eq!(key.icon_name.as_ref(), "text-x-generic");
+    assert_eq!(key.icon_size_px, 48);
+    assert_eq!(first, same_size_new_path);
+    assert_ne!(first, zoomed);
 }
 
 #[test]
@@ -306,7 +307,7 @@ fn retained_image_source_uses_thumbnail_path_before_icon_name() {
     };
 
     assert_eq!(
-        item_image_retained_source_for(Some(&thumbnail), &icon),
+        item_image_retained_source_for(Some(&thumbnail), &icon, 48, 1.0),
         Some(ItemImageRetainedSource::Thumbnail(thumbnail))
     );
 }

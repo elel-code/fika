@@ -12,7 +12,10 @@ use gpui::{
 };
 
 use crate::FikaApp;
-use crate::ui::icons::FileIconSnapshot;
+use crate::ui::icons::{
+    FileIconSnapshot, RetainedThemeIconImageCache, RetainedThemeIconImageLoadOutcome,
+    ThemeIconImageKey, theme_icon_image_key_for_snapshot, theme_icon_image_size_px,
+};
 
 use super::ITEM_NAME_LINE_HEIGHT;
 use super::ItemImageSourcePerfStats;
@@ -95,31 +98,43 @@ pub(super) fn item_image_pending_load_paints_marker(item: &ItemImageLayerItem) -
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(super) enum ItemImageRetainedSource {
     Thumbnail(Arc<Path>),
-    ThemeIcon(Arc<str>),
+    ThemeIcon(ThemeIconImageKey),
 }
 
 pub(super) fn item_image_retained_source_for(
     thumbnail_path: Option<&Arc<Path>>,
     icon: &FileIconSnapshot,
+    icon_size_px: u32,
+    scale_factor: f32,
 ) -> Option<ItemImageRetainedSource> {
     if let Some(thumbnail_path) = thumbnail_path {
         return Some(ItemImageRetainedSource::Thumbnail(thumbnail_path.clone()));
     }
 
-    icon.path
-        .as_ref()
-        .map(|_| ItemImageRetainedSource::ThemeIcon(icon.icon_name.clone()))
+    theme_icon_image_key_for_snapshot(icon, icon_size_px, scale_factor)
+        .map(ItemImageRetainedSource::ThemeIcon)
 }
 
-pub(super) fn item_image_layer_retained_source(
+fn item_image_layer_retained_source(
     item: &ItemImageLayerItem,
+    scale_factor: f32,
 ) -> Option<ItemImageRetainedSource> {
-    item_image_retained_source_for(item.thumbnail_path.as_ref(), &item.icon)
+    item_image_retained_source_for(
+        item.thumbnail_path.as_ref(),
+        &item.icon,
+        item_image_theme_icon_size_px(item),
+        scale_factor,
+    )
+}
+
+fn item_image_theme_icon_size_px(item: &ItemImageLayerItem) -> u32 {
+    theme_icon_image_size_px(item.layout.icon_rect.width, item.layout.icon_rect.height)
 }
 
 pub(super) struct RetainedImageLayerState {
     image_cache: Entity<RetainAllImageCache>,
-    retained_images: HashMap<ItemImageRetainedSource, Arc<RenderImage>>,
+    retained_thumbnails: HashMap<Arc<Path>, Arc<RenderImage>>,
+    retained_theme_icons: RetainedThemeIconImageCache<Arc<RenderImage>>,
 }
 
 pub(super) struct RetainedImageLoad {
@@ -138,32 +153,32 @@ impl RetainedImageLayerState {
     pub(super) fn new(cx: &mut App) -> Self {
         Self {
             image_cache: RetainAllImageCache::new(cx),
-            retained_images: HashMap::new(),
+            retained_thumbnails: HashMap::new(),
+            retained_theme_icons: RetainedThemeIconImageCache::default(),
         }
     }
 
-    fn load_image_or_retained(
+    fn load_thumbnail_or_retained_with_outcome(
         &mut self,
         source_path: Arc<Path>,
-        retained_source: ItemImageRetainedSource,
         window: &mut Window,
         cx: &mut App,
     ) -> RetainedImageLoad {
-        let resource = Resource::Path(source_path);
+        let resource = Resource::Path(source_path.clone());
         let load_result = self
             .image_cache
             .update(cx, |cache, cx| cache.load(&resource, window, cx));
         match load_result {
             Some(Ok(image)) => {
-                let first_ready = !self.retained_images.contains_key(&retained_source);
-                self.retained_images.insert(retained_source, image.clone());
+                let first_ready = !self.retained_thumbnails.contains_key(&source_path);
+                self.retained_thumbnails.insert(source_path, image.clone());
                 RetainedImageLoad {
                     image: Some(image),
                     outcome: RetainedImageLoadOutcome::CacheReady { first_ready },
                 }
             }
             _ => {
-                let image = self.retained_images.get(&retained_source).cloned();
+                let image = self.retained_thumbnails.get(&source_path).cloned();
                 let outcome = if image.is_some() {
                     RetainedImageLoadOutcome::Retained
                 } else {
@@ -177,32 +192,48 @@ impl RetainedImageLayerState {
     pub(super) fn load_theme_icon_or_retained(
         &mut self,
         source_path: Arc<Path>,
-        retained_source: ItemImageRetainedSource,
+        key: ThemeIconImageKey,
         window: &mut Window,
         cx: &mut App,
     ) -> Option<Arc<RenderImage>> {
-        self.load_image_or_retained(source_path, retained_source, window, cx)
+        self.load_theme_icon_or_retained_with_outcome(source_path, key, window, cx)
             .image
-    }
-
-    fn load_thumbnail_or_retained_with_outcome(
-        &mut self,
-        source_path: Arc<Path>,
-        retained_source: ItemImageRetainedSource,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> RetainedImageLoad {
-        self.load_image_or_retained(source_path, retained_source, window, cx)
     }
 
     fn load_theme_icon_or_retained_with_outcome(
         &mut self,
         source_path: Arc<Path>,
-        retained_source: ItemImageRetainedSource,
+        key: ThemeIconImageKey,
         window: &mut Window,
         cx: &mut App,
     ) -> RetainedImageLoad {
-        self.load_image_or_retained(source_path, retained_source, window, cx)
+        let resource = Resource::Path(source_path.clone());
+        let load_result = self
+            .image_cache
+            .update(cx, |cache, cx| cache.load(&resource, window, cx));
+        let retained = match load_result {
+            Some(Ok(image)) => self
+                .retained_theme_icons
+                .record_loaded(key, source_path, image),
+            Some(Err(_)) => self.retained_theme_icons.record_failed(key, source_path),
+            None => self.retained_theme_icons.record_pending(key, source_path),
+        };
+        RetainedImageLoad {
+            image: retained.image,
+            outcome: retained_theme_icon_load_outcome(retained.outcome),
+        }
+    }
+}
+
+fn retained_theme_icon_load_outcome(
+    outcome: RetainedThemeIconImageLoadOutcome,
+) -> RetainedImageLoadOutcome {
+    match outcome {
+        RetainedThemeIconImageLoadOutcome::Loaded { first_ready } => {
+            RetainedImageLoadOutcome::CacheReady { first_ready }
+        }
+        RetainedThemeIconImageLoadOutcome::Retained { .. } => RetainedImageLoadOutcome::Retained,
+        RetainedThemeIconImageLoadOutcome::Missing { .. } => RetainedImageLoadOutcome::Missing,
     }
 }
 
@@ -359,16 +390,20 @@ fn item_image_layer_prepaint_item(
         return None;
     }
     let source_path = item_image_layer_item_source_path(item)?;
-    let retained_source = item_image_layer_retained_source(item)?;
+    let retained_source = item_image_layer_retained_source(item, window.scale_factor())?;
     let kind = if item.thumbnail_path.is_some() {
         ItemImagePaintKind::Thumbnail
     } else {
         ItemImagePaintKind::ThemeIcon
     };
-    let load = if kind == ItemImagePaintKind::Thumbnail {
-        state.load_thumbnail_or_retained_with_outcome(source_path, retained_source, window, cx)
-    } else {
-        state.load_theme_icon_or_retained_with_outcome(source_path, retained_source, window, cx)
+    let load = match (kind, retained_source) {
+        (ItemImagePaintKind::Thumbnail, ItemImageRetainedSource::Thumbnail(_)) => {
+            state.load_thumbnail_or_retained_with_outcome(source_path, window, cx)
+        }
+        (ItemImagePaintKind::ThemeIcon, ItemImageRetainedSource::ThemeIcon(key)) => {
+            state.load_theme_icon_or_retained_with_outcome(source_path, key, window, cx)
+        }
+        _ => return None,
     };
     record_item_image_source_stats(source_stats, kind, load.outcome);
     let image = load.image;

@@ -10,12 +10,14 @@ use gpui::{
 };
 
 use crate::FikaApp;
-use crate::ui::icons::FileIconSnapshot;
+use crate::ui::icons::{
+    FileIconSnapshot, theme_icon_image_key_for_snapshot, theme_icon_image_size_px,
+};
 
 use super::details::{DetailsColumn, DetailsColumnKind};
 use super::image_layer::{
-    ItemImageFallbackPaintState, RetainedImageLayerState, item_image_retained_source_for,
-    paint_item_image_fallback, paint_theme_icon_image, theme_icon_placeholder_fallback,
+    ItemImageFallbackPaintState, RetainedImageLayerState, paint_item_image_fallback,
+    paint_theme_icon_image, theme_icon_placeholder_fallback,
 };
 use super::paint_slots::DetailsPaintSnapshot;
 use super::renderer_policy::{DetailsRowVisualRenderer, details_row_renderer_policy};
@@ -443,8 +445,12 @@ fn details_visual_icon_prepaint(
 ) -> DetailsVisualIconPaintState {
     let image = icon.path.as_ref().and_then(|path| {
         let state = image_state?;
-        let retained_source = item_image_retained_source_for(None, icon)?;
-        state.load_theme_icon_or_retained(path.clone(), retained_source, window, cx)
+        let key = theme_icon_image_key_for_snapshot(
+            icon,
+            theme_icon_image_size_px(rect.width, rect.height),
+            window.scale_factor(),
+        )?;
+        state.load_theme_icon_or_retained(path.clone(), key, window, cx)
     });
     let fallback = image.is_none().then(|| {
         if icon.path.is_some() {

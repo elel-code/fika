@@ -128,9 +128,9 @@ FIKA_PERF_ITEM_VIEW=1 FIKA_CUSTOM_THEME_ICONS=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-sc
 
 ## TODO
 
-- [ ] 在 file icon snapshot 路径旁添加 `ThemeIconImageKey` 类型。
-- [ ] 添加 retained same-key image storage，包含 loaded/pending/failed/stale 状态。
-- [ ] 让 `[fika item-image]` 区分 retained same-key theme image reuse 和 first-load
+- [x] 在 file icon snapshot 路径旁添加 `ThemeIconImageKey` 类型。
+- [x] 添加 retained same-key image storage，包含 loaded/pending/failed/stale 状态。
+- [x] 让 `[fika item-image]` 区分 retained same-key theme image reuse 和 first-load
   placeholder。
 - [ ] 扩展 `scripts/compare-item-image-renderers.sh` 或 item-view analyzer，使配对
   default/custom 日志在 placeholder churn 或 zoom-time decode burst 时失败。

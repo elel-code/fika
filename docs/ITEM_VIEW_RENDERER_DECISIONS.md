@@ -237,6 +237,10 @@ work stream, because the retained model/slot architecture is already in place
 and the remaining risk is image-resource readiness, not item identity.
 The detailed retained image-cache design is
 `docs/RETAINED_ICON_IMAGE_CACHE_PLAN.md`.
+The implementation foundation now exists in `src/ui/icons/image_cache.rs` and
+the custom image layer uses that size/scale-aware key when
+`FIKA_CUSTOM_THEME_ICONS=1` is enabled; the default MIME/theme renderer remains
+GPUI `img()` until paired runtime evidence passes.
 
 The target architecture should mirror Dolphin's pixmap stability rather than
 the current custom-theme A/B path:

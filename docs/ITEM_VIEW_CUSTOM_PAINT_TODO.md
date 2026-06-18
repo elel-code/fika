@@ -564,7 +564,8 @@ tracks.
   those affect the selected path. It must retain the last real same-key image
   during refresh, keep thumbnail retention separate by thumbnail path, and never
   synchronously decode theme icon files during prepaint. Design is now captured
-  in `docs/RETAINED_ICON_IMAGE_CACHE_PLAN.md`; implementation remains pending.
+  in `docs/RETAINED_ICON_IMAGE_CACHE_PLAN.md`; the foundation is implemented,
+  while paired runtime evidence and analyzer gates remain pending.
 - [ ] P16k2: Add paired default-vs-custom autosmoke evidence for the future
   MIME/theme icon renderer. Required scenarios: `/etc` and a mixed user
   directory, startup plus `FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll`, default GPUI
@@ -1278,6 +1279,15 @@ tracks.
   same-key loaded/pending/failed/stale image states, ownership boundary, paired
   default-vs-custom runtime evidence, and TODO gates required before custom
   theme-icon painting can become default.
+- [x] P16eb: Implement the retained MIME/theme icon image cache foundation.
+  `src/ui/icons/image_cache.rs` now owns `ThemeIconImageKey`,
+  `RetainedThemeIconImageCache`, and loaded/pending/failed/stale status. The
+  custom image layer keeps thumbnails keyed by thumbnail path but routes
+  theme/MIME icons through a size/scale-aware key, including Details visual
+  icons. Root cause: the old custom A/B path retained theme images by
+  `iconName` only, so zoom could reuse an old-size image before the current-size
+  image loaded. Default MIME/theme icons still use GPUI `img()` until paired
+  evidence proves the custom path is neutral or better.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,
