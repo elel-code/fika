@@ -971,6 +971,10 @@ by risk and evidence, not by how custom-painted a surface looks.
   module. `PendingRubberBand` now owns pane matching plus the Dolphin-like
   Manhattan drag threshold through `can_activate()`, while `src/main.rs` still
   supplies the clamped current content point and starts/updates selection.
+- [x] P16bv: Move active rubber-band state mutation policy into the rubber-band
+  module. `RubberBandState` now owns construction, pane ownership checks, and
+  same-pane current-point updates. `src/main.rs` still stores the active state,
+  clears drafts, computes intersecting items, and applies selection changes.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

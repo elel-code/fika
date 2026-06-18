@@ -13,8 +13,12 @@ impl PendingRubberBand {
         Self { pane_id, start }
     }
 
+    pub(crate) fn is_for_pane(self, pane_id: PaneId) -> bool {
+        self.pane_id == pane_id
+    }
+
     pub(crate) fn can_activate(self, pane_id: PaneId, current: ViewPoint) -> bool {
-        self.pane_id == pane_id && rubber_band_drag_distance_reached(self.start, current)
+        self.is_for_pane(pane_id) && rubber_band_drag_distance_reached(self.start, current)
     }
 }
 
@@ -26,6 +30,30 @@ pub(crate) struct RubberBandState {
 }
 
 impl RubberBandState {
+    pub(crate) fn new(pane_id: PaneId, start: ViewPoint) -> Self {
+        Self {
+            pane_id,
+            start,
+            current: start,
+        }
+    }
+
+    pub(crate) fn is_for_pane(self, pane_id: PaneId) -> bool {
+        self.pane_id == pane_id
+    }
+
+    pub(crate) fn with_current_for_pane(
+        mut self,
+        pane_id: PaneId,
+        current: ViewPoint,
+    ) -> Option<Self> {
+        if !self.is_for_pane(pane_id) {
+            return None;
+        }
+        self.current = current;
+        Some(self)
+    }
+
     pub(crate) fn rect(self) -> ViewRect {
         let x = self.start.x.min(self.current.x);
         let y = self.start.y.min(self.current.y);
@@ -96,5 +124,23 @@ mod tests {
         assert!(!pending.can_activate(PaneId(2), ViewPoint { x: 20.0, y: 20.0 }));
         assert!(!pending.can_activate(PaneId(1), ViewPoint { x: 13.0, y: 12.0 }));
         assert!(pending.can_activate(PaneId(1), ViewPoint { x: 13.0, y: 13.0 }));
+    }
+
+    #[test]
+    fn active_rubber_band_update_requires_same_pane() {
+        let start = ViewPoint { x: 10.0, y: 10.0 };
+        let current = ViewPoint { x: 20.0, y: 30.0 };
+        let band = RubberBandState::new(PaneId(1), start);
+
+        assert_eq!(band.current, start);
+        assert!(band.with_current_for_pane(PaneId(2), current).is_none());
+        assert_eq!(
+            band.with_current_for_pane(PaneId(1), current),
+            Some(RubberBandState {
+                pane_id: PaneId(1),
+                start,
+                current
+            })
+        );
     }
 }

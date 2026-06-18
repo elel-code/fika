@@ -4158,21 +4158,16 @@ impl FikaApp {
         self.clear_location_draft_for_pane(pane_id);
         self.clear_place_draft_for_pane(pane_id);
         self.rubber_band_pending = None;
-        self.rubber_band = Some(RubberBandState {
-            pane_id,
-            start,
-            current: start,
-        });
+        self.rubber_band = Some(RubberBandState::new(pane_id, start));
     }
 
     fn update_rubber_band(&mut self, pane_id: PaneId, current: ViewPoint) {
-        let Some(mut band) = self.rubber_band else {
+        let Some(band) = self
+            .rubber_band
+            .and_then(|band| band.with_current_for_pane(pane_id, current))
+        else {
             return;
         };
-        if band.pane_id != pane_id {
-            return;
-        }
-        band.current = current;
         self.rubber_band = Some(band);
         let selection = self.indexes_intersecting_visual_rect(pane_id, band.rect());
         if let Some(selected) = self
@@ -4191,14 +4186,14 @@ impl FikaApp {
     fn finish_rubber_band(&mut self, pane_id: PaneId) {
         if self
             .rubber_band_pending
-            .is_some_and(|pending| pending.pane_id == pane_id)
+            .is_some_and(|pending| pending.is_for_pane(pane_id))
         {
             self.rubber_band_pending = None;
         }
         if self
             .rubber_band
             .as_ref()
-            .is_some_and(|band| band.pane_id == pane_id)
+            .is_some_and(|band| band.is_for_pane(pane_id))
         {
             self.rubber_band = None;
         }
