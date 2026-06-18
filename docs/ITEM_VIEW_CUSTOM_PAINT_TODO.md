@@ -1093,6 +1093,10 @@ by risk and evidence, not by how custom-painted a surface looks.
   item-view module. Production paths now use
   `ItemViewScrollViewSnapshot::from_view_state()` instead of hand-copying
   `scroll_x`, `scroll_y`, `max_scroll_x`, and `max_scroll_y` in `src/main.rs`.
+- [x] P16cs: Hide the internal item-view scroll sync calculation type from
+  cross-module writeback. Public scroll-state writeback callbacks now receive
+  `ItemViewScrollViewSnapshot`, while `ItemViewScrollSync` is private to
+  `scroll_state.rs`.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

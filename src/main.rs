@@ -1195,13 +1195,13 @@ impl FikaApp {
         let view = self.item_view_scroll_view_snapshot_for_pane(pane_id);
         let panes = &mut self.panes;
         self.item_view_scroll
-            .sync_view_from_handle_snapshot(pane_id, view, |sync| {
+            .sync_view_from_handle_snapshot(pane_id, view, |view| {
                 let _ = panes.set_view_scroll(
                     pane_id,
-                    sync.scroll_x,
-                    sync.scroll_y,
-                    sync.max_scroll_x,
-                    sync.max_scroll_y,
+                    view.scroll_x,
+                    view.scroll_y,
+                    view.max_scroll_x,
+                    view.max_scroll_y,
                 );
             })
     }
@@ -1213,13 +1213,13 @@ impl FikaApp {
         let view = self.item_view_scroll_view_snapshot_for_pane(pane_id);
         let panes = &mut self.panes;
         self.item_view_scroll
-            .sync_view_from_authoritative_handle_snapshot(pane_id, view, |sync| {
+            .sync_view_from_authoritative_handle_snapshot(pane_id, view, |view| {
                 let _ = panes.set_view_scroll(
                     pane_id,
-                    sync.scroll_x,
-                    sync.scroll_y,
-                    sync.max_scroll_x,
-                    sync.max_scroll_y,
+                    view.scroll_x,
+                    view.scroll_y,
+                    view.max_scroll_x,
+                    view.max_scroll_y,
                 );
             })
     }
@@ -1244,13 +1244,13 @@ impl FikaApp {
         };
         let panes = &mut self.panes;
         self.item_view_scroll
-            .finish_scrollbar_drag_syncing_view_snapshot(pane_id, view_snapshot, |sync| {
+            .finish_scrollbar_drag_syncing_view_snapshot(pane_id, view_snapshot, |view| {
                 let _ = panes.set_view_scroll(
                     pane_id,
-                    sync.scroll_x,
-                    sync.scroll_y,
-                    sync.max_scroll_x,
-                    sync.max_scroll_y,
+                    view.scroll_x,
+                    view.scroll_y,
+                    view.max_scroll_x,
+                    view.max_scroll_y,
                 );
             })
     }
@@ -1259,13 +1259,13 @@ impl FikaApp {
         let view = self.item_view_scroll_view_snapshot_for_pane(pane_id);
         let panes = &mut self.panes;
         self.item_view_scroll
-            .preserve_layout_scroll_syncing_view_snapshot(pane_id, view, |sync| {
+            .preserve_layout_scroll_syncing_view_snapshot(pane_id, view, |view| {
                 let _ = panes.set_view_scroll(
                     pane_id,
-                    sync.scroll_x,
-                    sync.scroll_y,
-                    sync.max_scroll_x,
-                    sync.max_scroll_y,
+                    view.scroll_x,
+                    view.scroll_y,
+                    view.max_scroll_x,
+                    view.max_scroll_y,
                 );
             });
     }
@@ -3809,13 +3809,13 @@ impl FikaApp {
         let panes = &mut self.panes;
         let scroll_changed = self
             .item_view_scroll
-            .sync_view_after_bounds_update_snapshot(pane_id, view_snapshot, |sync| {
+            .sync_view_after_bounds_update_snapshot(pane_id, view_snapshot, |view| {
                 let _ = panes.set_view_scroll(
                     pane_id,
-                    sync.scroll_x,
-                    sync.scroll_y,
-                    sync.max_scroll_x,
-                    sync.max_scroll_y,
+                    view.scroll_x,
+                    view.scroll_y,
+                    view.max_scroll_x,
+                    view.max_scroll_y,
                 );
             });
         changed || scroll_changed

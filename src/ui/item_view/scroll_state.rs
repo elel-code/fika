@@ -7,11 +7,22 @@ const LAYOUT_CHANGE_AUTHORITATIVE_FRAMES: u8 = 2;
 const VIEW_SYNC_AUTHORITATIVE_FRAMES: u8 = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct ItemViewScrollSync {
-    pub(crate) scroll_x: f32,
-    pub(crate) scroll_y: f32,
-    pub(crate) max_scroll_x: f32,
-    pub(crate) max_scroll_y: f32,
+struct ItemViewScrollSync {
+    scroll_x: f32,
+    scroll_y: f32,
+    max_scroll_x: f32,
+    max_scroll_y: f32,
+}
+
+impl ItemViewScrollSync {
+    fn into_view_snapshot(self) -> ItemViewScrollViewSnapshot {
+        ItemViewScrollViewSnapshot::new(
+            self.scroll_x,
+            self.scroll_y,
+            self.max_scroll_x,
+            self.max_scroll_y,
+        )
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -53,11 +64,11 @@ impl ItemViewScrollSyncAction {
     fn apply_to_view(
         self,
         view: ItemViewScrollViewSnapshot,
-        mut apply_sync: impl FnMut(ItemViewScrollSync),
+        mut apply_sync: impl FnMut(ItemViewScrollViewSnapshot),
     ) -> bool {
         let outcome = self.into_outcome(view);
         if let Some(sync) = outcome.sync {
-            apply_sync(sync);
+            apply_sync(sync.into_view_snapshot());
         }
         outcome.changed
     }
@@ -193,7 +204,7 @@ impl ItemViewScrollState {
         &mut self,
         pane_id: PaneId,
         view: ItemViewScrollViewSnapshot,
-        apply_sync: impl FnMut(ItemViewScrollSync),
+        apply_sync: impl FnMut(ItemViewScrollViewSnapshot),
     ) -> bool {
         self.sync_action_from_handle_snapshot(pane_id, view)
             .apply_to_view(view, apply_sync)
@@ -246,7 +257,7 @@ impl ItemViewScrollState {
         &self,
         pane_id: PaneId,
         view: ItemViewScrollViewSnapshot,
-        apply_sync: impl FnMut(ItemViewScrollSync),
+        apply_sync: impl FnMut(ItemViewScrollViewSnapshot),
     ) -> bool {
         self.sync_action_from_authoritative_handle_snapshot(pane_id, view)
             .apply_to_view(view, apply_sync)
@@ -307,7 +318,7 @@ impl ItemViewScrollState {
         &mut self,
         pane_id: PaneId,
         view: ItemViewScrollViewSnapshot,
-        apply_sync: impl FnMut(ItemViewScrollSync),
+        apply_sync: impl FnMut(ItemViewScrollViewSnapshot),
     ) -> bool {
         let bounds_sync = self.sync_after_bounds_update_snapshot(pane_id, view);
         let action_changed = bounds_sync.action.apply_to_view(view, apply_sync);
@@ -344,7 +355,7 @@ impl ItemViewScrollState {
         &mut self,
         pane_id: PaneId,
         view: ItemViewScrollViewSnapshot,
-        apply_sync: impl FnMut(ItemViewScrollSync),
+        apply_sync: impl FnMut(ItemViewScrollViewSnapshot),
     ) -> bool {
         let finish = self.finish_scrollbar_drag_with_sync_snapshot(pane_id, view);
         let action_changed = finish.action.apply_to_view(view, apply_sync);
@@ -413,10 +424,10 @@ impl ItemViewScrollState {
         &mut self,
         pane_id: PaneId,
         view: ItemViewScrollViewSnapshot,
-        mut apply_sync: impl FnMut(ItemViewScrollSync),
+        mut apply_sync: impl FnMut(ItemViewScrollViewSnapshot),
     ) {
         let sync = self.preserve_for_layout_change_snapshot(pane_id, view);
-        apply_sync(sync);
+        apply_sync(sync.into_view_snapshot());
     }
 
     fn sync_handle_to_view(&self, pane_id: PaneId, scroll_x: f32, scroll_y: f32) -> bool {
@@ -635,10 +646,7 @@ fn set_scroll_handle_offset(scroll_handle: &ScrollHandle, scroll_x: f32, scroll_
     true
 }
 
-pub(crate) fn scroll_sync_changes_view(
-    view: ItemViewScrollViewSnapshot,
-    sync: ItemViewScrollSync,
-) -> bool {
+fn scroll_sync_changes_view(view: ItemViewScrollViewSnapshot, sync: ItemViewScrollSync) -> bool {
     !scroll_offset_matches(view.scroll_x, sync.scroll_x)
         || !scroll_offset_matches(view.scroll_y, sync.scroll_y)
         || !scroll_offset_matches(view.max_scroll_x, sync.max_scroll_x)
@@ -896,12 +904,7 @@ mod tests {
         }));
         assert_eq!(
             drag_applied,
-            vec![ItemViewScrollSync {
-                scroll_x: 320.0,
-                scroll_y: 0.0,
-                max_scroll_x: 1_000.0,
-                max_scroll_y: 0.0,
-            }]
+            vec![ItemViewScrollViewSnapshot::new(320.0, 0.0, 1_000.0, 0.0)]
         );
 
         handle.set_offset(point(px(-480.0), px(0.0)));
@@ -913,12 +916,7 @@ mod tests {
         );
         assert_eq!(
             authoritative_drag_applied,
-            vec![ItemViewScrollSync {
-                scroll_x: 480.0,
-                scroll_y: 0.0,
-                max_scroll_x: 1_000.0,
-                max_scroll_y: 0.0,
-            }]
+            vec![ItemViewScrollViewSnapshot::new(480.0, 0.0, 1_000.0, 0.0)]
         );
     }
 
@@ -987,12 +985,7 @@ mod tests {
         assert_eq!(preserve_handle.offset().x, px(-180.0));
         assert_eq!(
             preserve_applied,
-            vec![ItemViewScrollSync {
-                scroll_x: 180.0,
-                scroll_y: 0.0,
-                max_scroll_x: 1_000.0,
-                max_scroll_y: 0.0,
-            }]
+            vec![ItemViewScrollViewSnapshot::new(180.0, 0.0, 1_000.0, 0.0)]
         );
         assert!(preserve_state.has_authoritative_scroll(pane_id));
 
@@ -1017,12 +1010,7 @@ mod tests {
         );
         assert_eq!(
             bounds_applied,
-            vec![ItemViewScrollSync {
-                scroll_x: 320.0,
-                scroll_y: 0.0,
-                max_scroll_x: 1_000.0,
-                max_scroll_y: 0.0,
-            }]
+            vec![ItemViewScrollViewSnapshot::new(320.0, 0.0, 1_000.0, 0.0)]
         );
 
         let mut finish_state = ItemViewScrollState::default();
@@ -1037,12 +1025,7 @@ mod tests {
         );
         assert_eq!(
             finish_applied,
-            vec![ItemViewScrollSync {
-                scroll_x: 480.0,
-                scroll_y: 0.0,
-                max_scroll_x: 1_000.0,
-                max_scroll_y: 0.0,
-            }]
+            vec![ItemViewScrollViewSnapshot::new(480.0, 0.0, 1_000.0, 0.0)]
         );
         assert!(!finish_state.is_scrollbar_dragging(pane_id));
 
@@ -1181,7 +1164,10 @@ mod tests {
                 applied.push(sync);
             })
         );
-        assert_eq!(applied, vec![sync]);
+        assert_eq!(
+            applied,
+            vec![ItemViewScrollViewSnapshot::new(180.0, 12.0, 1_000.0, 400.0)]
+        );
     }
 
     #[test]
