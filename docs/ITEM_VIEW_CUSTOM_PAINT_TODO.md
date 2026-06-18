@@ -947,6 +947,11 @@ by risk and evidence, not by how custom-painted a surface looks.
   pane-view sync action and whether a drag was active. `src/main.rs` still
   applies returned pane-view sync actions, but no longer reaches into the raw
   finish/sync primitives for this lifecycle path.
+- [x] P16bq: Move item-view rubber-band drag threshold policy into the
+  rubber-band module. `ui/rubber_band` now owns the Manhattan-distance start
+  threshold for activating a pending rubber-band selection, while `src/main.rs`
+  still supplies clamped content points and starts/updates the active
+  selection band.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

@@ -148,7 +148,7 @@ use ui::properties_dialog::{
     PropertiesDialogState, properties_dialog_overlay, properties_for_path, properties_for_selection,
 };
 use ui::rename::{RENAME_TEXT_INSET_X, RenameDraft};
-use ui::rubber_band::RubberBandState;
+use ui::rubber_band::{RubberBandState, rubber_band_drag_distance_reached};
 #[cfg(test)]
 use ui::shortcuts::PlaceInputAction;
 use ui::shortcuts::{
@@ -259,10 +259,6 @@ fn background_task_state_for_message(message: &str) -> BackgroundTaskState {
     }
 }
 
-fn rubber_band_drag_distance_reached(start: ViewPoint, current: ViewPoint) -> bool {
-    (start.x - current.x).abs() + (start.y - current.y).abs() >= RUBBER_BAND_START_DRAG_DISTANCE
-}
-
 fn pane_loading_status_matches_path(message: &str, path: &Path) -> bool {
     let display_path = path.display().to_string();
     message == format!("Loading {display_path}") || message == format!("Reloading {display_path}")
@@ -355,8 +351,6 @@ async fn privileged_task_result_for_commands(
         detail: detail_lines.join("\n"),
     }
 }
-
-const RUBBER_BAND_START_DRAG_DISTANCE: f32 = 6.0;
 
 pub(crate) struct FikaApp {
     pub(crate) panes: PaneController,

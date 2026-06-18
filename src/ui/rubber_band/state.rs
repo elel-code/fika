@@ -1,5 +1,7 @@
 use fika_core::{PaneId, ViewPoint, ViewRect, ViewState};
 
+const RUBBER_BAND_START_DRAG_DISTANCE: f32 = 6.0;
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct RubberBandState {
     pub(crate) pane_id: PaneId,
@@ -43,4 +45,31 @@ impl RubberBandState {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct RubberBandDrag {
     pub(crate) pane_id: PaneId,
+}
+
+pub(crate) fn rubber_band_drag_distance_reached(start: ViewPoint, current: ViewPoint) -> bool {
+    (start.x - current.x).abs() + (start.y - current.y).abs() >= RUBBER_BAND_START_DRAG_DISTANCE
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn drag_distance_uses_dolphin_like_manhattan_threshold() {
+        let start = ViewPoint { x: 10.0, y: 10.0 };
+
+        assert!(!rubber_band_drag_distance_reached(
+            start,
+            ViewPoint { x: 13.0, y: 12.0 }
+        ));
+        assert!(rubber_band_drag_distance_reached(
+            start,
+            ViewPoint { x: 13.0, y: 13.0 }
+        ));
+        assert!(rubber_band_drag_distance_reached(
+            start,
+            ViewPoint { x: 4.0, y: 10.0 }
+        ));
+    }
 }
