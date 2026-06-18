@@ -52,6 +52,7 @@ EOF
     --require-static-modes Compact,Icons \
     --require-interaction \
     --require-renderer-policy \
+    --expect-retained-item-policy \
     --require-paint-slots \
     --require-renderer-policy-modes Compact,Icons,Details \
     --require-modes Compact,Icons,Details \
@@ -207,6 +208,16 @@ EOF
 
 if "$analyzer" "$tmpdir/invalid-renderer-policy-count.log" >/dev/null 2>&1; then
     echo "expected invalid renderer-policy surface count to fail" >&2
+    exit 1
+fi
+
+cat > "$tmpdir/invalid-retained-item-policy.log" <<'EOF'
+[fika item-view] pane=1 mode=Compact phase=steady items=48 visible=32 raw=50us icon_sync=2us queue=1us convert=40us total=120us
+[fika renderer-policy] pane=1 mode=Compact items=48 visual_layer=48 image_layer=8 gpui_image_element=0 retained_interaction=47 gpui_drag_shell=48 rename_overlay=0
+EOF
+
+if "$analyzer" --expect-retained-item-policy "$tmpdir/invalid-retained-item-policy.log" >/dev/null 2>&1; then
+    echo "expected invalid retained item renderer policy to fail" >&2
     exit 1
 fi
 

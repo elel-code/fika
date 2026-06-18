@@ -28,6 +28,11 @@ Options:
   --require-renderer-policy
       Fail if [fika renderer-policy] surface-count logs are missing.
 
+  --expect-retained-item-policy
+      Fail if renderer-policy logs do not show retained item visual and
+      interaction surfaces, allowing only the known GPUI drag shell, rename
+      overlay, and image-element boundaries.
+
   --require-paint-slots
       Fail if [fika item-paint-slots] retained slot activity logs are missing.
 
@@ -65,6 +70,7 @@ require_details=false
 require_static_visual=false
 require_interaction=false
 require_renderer_policy=false
+expect_retained_item_policy=false
 require_paint_slots=false
 require_autosmoke=false
 required_modes=""
@@ -105,6 +111,9 @@ while [[ $# -gt 0 ]]; do
             ;;
         --require-renderer-policy)
             require_renderer_policy=true
+            ;;
+        --expect-retained-item-policy)
+            expect_retained_item_policy=true
             ;;
         --require-paint-slots)
             require_paint_slots=true
@@ -254,6 +263,7 @@ awk \
     -v require_static_visual="$require_static_visual" \
     -v require_interaction="$require_interaction" \
     -v require_renderer_policy="$require_renderer_policy" \
+    -v expect_retained_item_policy="$expect_retained_item_policy" \
     -v require_paint_slots="$require_paint_slots" \
     -v require_autosmoke="$require_autosmoke" \
     -v required_modes="$required_modes" \
@@ -482,6 +492,14 @@ BEGIN {
     check_renderer_policy_count("retained_interaction", items, retained_interaction, mode)
     check_renderer_policy_count("gpui_drag_shell", items, gpui_drag_shell, mode)
     check_renderer_policy_count("rename_overlay", items, rename_overlay, mode)
+    if (expect_retained_item_policy == "true") {
+        if (visual_layer != items ||
+            retained_interaction + rename_overlay != items ||
+            gpui_drag_shell != items ||
+            image_layer + gpui_image_element > items) {
+            retained_item_policy_invalid = 1
+        }
+    }
     max_assign(single_max, "renderer_policy_items", items)
     max_assign(single_max, "renderer_policy_visual_layer", visual_layer)
     max_assign(single_max, "renderer_policy_image_layer", image_layer)
@@ -625,6 +643,14 @@ END {
     }
     if (require_renderer_policy == "true" && renderer_policy_count == 0) {
         fail("missing [fika renderer-policy] lines")
+    }
+    if (expect_retained_item_policy == "true") {
+        if (renderer_policy_count == 0) {
+            fail("missing [fika renderer-policy] lines for retained item policy")
+        }
+        if (retained_item_policy_invalid) {
+            fail("renderer-policy does not match retained item policy")
+        }
     }
     if (require_paint_slots == "true") {
         if (item_paint_slot_count == 0) {

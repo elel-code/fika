@@ -116,8 +116,11 @@ Human review still needs to confirm the DnD and rename checklist in
 `docs/ITEM_VIEW_RUNTIME_SMOKE.md`.
 
 The `[fika renderer-policy]` summary is the runtime check that the current frame
-is still following this table's surface choices. It should be reviewed before
-removing a GPUI shell or reverting a custom-painted surface.
+is still following this table's surface choices. The standard runtime gate also
+passes `--expect-retained-item-policy`, so base item visuals and interaction
+must stay retained even while drag-start shells, rename overlays, and the
+current theme-icon image elements remain GPUI boundaries. It should be reviewed
+before removing a GPUI shell or reverting a custom-painted surface.
 
 For scroll and zoom investigations, treat `[fika item-view] ... icon_sync=...
 convert=...` as a renderer decision signal too: visible theme-icon path work

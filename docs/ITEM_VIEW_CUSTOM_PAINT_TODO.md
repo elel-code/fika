@@ -444,9 +444,10 @@ pretending that every remaining GPUI boundary can be removed safely today.
 - [ ] P15f: Keep rename on GPUI until a custom text-editing plan covers focus,
   caret hit testing, UTF-8 selection, validation, commit/cancel, Tab rename-next,
   and IME. Do not merge a custom rename painter without that behavior matrix.
-- [ ] P15g: Tighten reuse-pool evidence. Runtime renderer-policy logs should
-  prove that ordinary Compact/Icons and Details frames have no per-item GPUI
-  visual children, only the known drag-start/rename boundaries.
+- [x] P15g: Tighten reuse-pool evidence. Runtime renderer-policy logs now prove
+  that ordinary Compact/Icons and Details frames keep base visuals and
+  interaction on retained item surfaces, with only the known drag-start,
+  rename, and image-renderer boundaries allowed.
 - [ ] P15h: Move any remaining item-view orchestration still living in
   `src/main.rs` into Dolphin-aligned file-grid modules when it can be done
   without changing behavior. Candidate boundaries: icon-role update scheduling,
@@ -777,6 +778,13 @@ by risk and evidence, not by how custom-painted a surface looks.
   uses it so renderer evidence includes inserted, content, geometry, visual,
   unchanged, removed, and entries maxima. The analyzer fixture covers valid
   Compact/Icons/Details paint-slot logs plus missing and empty slot evidence.
+- [x] P16aq: Make retained item renderer-policy evidence analyzer-enforced.
+  `scripts/analyze-item-view-perf.sh --expect-retained-item-policy` now rejects
+  renderer-policy logs unless every item has a retained base visual,
+  `retained_interaction + rename_overlay == items`, the current GPUI drag shell
+  is explicit for every item, and image surfaces stay within the item count.
+  The standard runtime log gate enables this check, and the analyzer fixture
+  covers a count-valid but retained-interaction-invalid policy.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

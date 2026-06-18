@@ -82,7 +82,9 @@ scripts/check-item-view-runtime-log.sh /tmp/fika-item-view.log
 scripts/summarize-item-view-renderer-evidence.sh /tmp/fika-item-view.log
 ```
 
-The log must include renderer-policy coverage for Compact, Icons, and Details.
+The log must include renderer-policy coverage for Compact, Icons, and Details,
+and the standard log gate enforces retained item policy with
+`--expect-retained-item-policy`.
 Human review must still exercise item drag, directory drop, pane drop, Places
 drop/reorder, external path drop, and rename caret click.
 
@@ -269,9 +271,13 @@ geometry, and visual-change tests in `src/ui/file_grid/tests.rs`, and runtime
 change should update these tests or logs if it changes the source of visual
 identity. It should not rely on GPUI child keys as the primary reuse mechanism.
 `scripts/analyze-item-view-perf.sh --require-paint-slots` is the runtime gate
-for that retained reuse evidence; it rejects logs that lack non-empty
+for retained paint-slot evidence; it rejects logs that lack non-empty
 `[fika item-paint-slots]` entries and summarizes inserted, content, geometry,
 visual, unchanged, removed, and entries maxima.
+`--expect-retained-item-policy` is the companion renderer-policy gate: base
+visuals must be retained for every item, retained interaction plus rename
+overlays must cover every item, and the remaining GPUI drag/image boundaries
+must stay explicit in the policy counts.
 
 This target can advance while drag-start and rename stay on GPUI. The pool
 boundary is the retained item/row state, not a claim that every renderer is
