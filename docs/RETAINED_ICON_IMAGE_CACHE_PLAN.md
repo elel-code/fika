@@ -178,6 +178,39 @@ Opt-in prewarm evidence from 2026-06-18:
   painting default-ready; the next slice must use warmed readiness to decide
   when a visible icon can leave GPUI `img()`.
 
+Hybrid readiness handoff foundation from 2026-06-18:
+
+- `FikaApp` now owns an app-level `ThemeIconImageReadiness` cache keyed by the
+  same size/scale-aware `ThemeIconImageKey` used by retained image storage.
+- The custom image layer marks a theme key ready only after GPUI's
+  `RetainAllImageCache` returns a real `RenderImage`; pending placeholders do
+  not mark readiness.
+- `PaneSnapshot`/`FileGridProps` carry a cheap readiness snapshot into the
+  renderer path so renderer-policy stats, item shells, and the image layer all
+  use the same decision input.
+- `FIKA_HYBRID_THEME_ICONS=1` is opt-in. In that mode visible MIME/theme icons
+  stay on GPUI `img()` until the exact current `(iconName, icon_size_px, scale)`
+  key is ready; ready keys may hand off to the custom image painter.
+- Default behavior is unchanged: ordinary MIME/theme icons remain GPUI `img()`
+  unless `FIKA_CUSTOM_THEME_ICONS=1` or `FIKA_HYBRID_THEME_ICONS=1` is set.
+
+Hybrid `/etc` smoke evidence from 2026-06-18:
+
+- Default log: `/tmp/fika-etc-zoom-scroll.log`.
+- Hybrid log: `/tmp/fika-icon-hybrid-etc-readiness.log`, captured with
+  `FIKA_HYBRID_THEME_ICONS=1`.
+- Default remained unchanged: `max_image_layer=0`, `max_gpui_image_element=64`,
+  and no `[fika item-image]` frames for ordinary theme icons.
+- Hybrid staged the handoff: early frames stayed on GPUI while prewarm reported
+  `theme_prewarm_pending=118`; later frames painted ready keys through the image
+  layer with `theme_loaded=396`, `theme_placeholder=0`, `theme_decoded=0`, and
+  `max_paint=383us`.
+- Decision: the readiness handoff works mechanically and avoids visible
+  placeholder/decode churn in this `/etc` smoke, but it is still not a default
+  promotion. The run still shows a visible-item `icon_sync` spike around 24ms
+  when scrolling into new `/etc` entries, and the mixed user-directory evidence
+  is still missing.
+
 ## TODO
 
 - [x] Add a `ThemeIconImageKey` type beside the file icon snapshot path.
@@ -192,5 +225,16 @@ Opt-in prewarm evidence from 2026-06-18:
 - [x] Add opt-in theme-icon prewarm evidence. `FIKA_PREWARM_THEME_ICONS=1`
   creates a non-painting image layer for GPUI-rendered theme icons and reports
   `theme_prewarm_*` counts without increasing `theme_placeholder`.
+- [x] Add an app-level readiness handoff foundation. The renderer policy can
+  now receive a size/scale-aware `theme_icon_ready` input, and
+  `FIKA_HYBRID_THEME_ICONS=1` uses that input without changing the default
+  GPUI `img()` path.
+- [ ] Capture paired default-vs-hybrid runtime evidence for `/etc` and a mixed
+  user directory. Hybrid must keep `theme_placeholder=0`, avoid zoom-time
+  `theme_decoded` bursts, and show that ready-key custom painting is not slower
+  than the default GPUI image element path before any default promotion.
+  2026-06-18 `/etc` evidence passed the placeholder/decode portion but not the
+  full promotion bar because the `icon_sync` spike and mixed-directory run still
+  need follow-up.
 - [ ] Keep GPUI `img()` as the default MIME/theme icon renderer until the
   paired evidence passes and `docs/ITEM_VIEW_RENDERER_DECISIONS.md` is updated.

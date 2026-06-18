@@ -67,6 +67,20 @@ placeholder（`theme_placeholder=0`、`paint_count=0`），同时通过 `theme_p
 单独记录 retained-image readiness。这只是 staging step；默认提升仍需要 readiness
 handoff，确保可见 icon 只有在当前 key 的 retained image ready 后才离开 GPUI。
 
+readiness handoff 基础现在位于 `FIKA_HYBRID_THEME_ICONS=1` 后面。app 拥有 size/scale
+aware 的 `ThemeIconImageReadiness` snapshot；image layer 只有在真实 `RenderImage` 可用后才
+标记 key ready；renderer policy、item shell 和 image layer 都消费同一份 readiness 输入。
+这仍然不改变默认 renderer。Hybrid 必须在 `/etc` 和混合目录的成对 zoom/scroll 证据中证明没有
+placeholder、没有 zoom-time decode burst、没有 paint 回归，之后该决策表才能把 MIME/theme
+icon 从 GPUI `img()` 提升出去。
+
+第一份 `/etc` hybrid smoke 记录在 `/tmp/fika-icon-hybrid-etc-readiness.log`，默认对照为
+`/tmp/fika-etc-zoom-scroll.log`。它证明 handoff 路径可以在没有 theme placeholder 或
+zoom-time decode churn 的情况下工作（`theme_placeholder=0`、`theme_decoded=0`、
+`max_paint=383us`），同时默认 split 保持不变（`max_image_layer=0`、
+`max_gpui_image_element=64`）。这仍不足以提升默认值，因为 `/etc` 滚动进入新条目时仍有约
+24ms 的 visible-item `icon_sync` spike，混合目录证据也还未采集。
+
 ## 下一批渲染器决策
 
 1. 保持剩余 drag-start shells 直到 GPUI API 边界变化。不要将 GPUI per-element `on_drag_move` 用作 pane self-drag 悬停的真实来源；active item-drag window tracker 拥有该路径。

@@ -16,14 +16,16 @@ use gpui::{
 use crate::FikaApp;
 use crate::ui::icons::{
     FileIconSnapshot, RetainedThemeIconImageCache, RetainedThemeIconImageLoadOutcome,
-    ThemeIconImageKey, theme_icon_image_key_for_snapshot, theme_icon_image_size_px,
+    ThemeIconImageKey, ThemeIconImageReadinessSnapshot, theme_icon_image_key_for_snapshot,
+    theme_icon_image_size_px,
 };
 
 use super::ITEM_NAME_LINE_HEIGHT;
 use super::ItemImageSourcePerfStats;
 use super::paint_slots::ItemPaintSnapshot;
 use super::renderer_policy::{
-    item_uses_gpui_image_element, item_uses_image_layer, item_uses_layer_visual_paint,
+    ItemRendererPolicyInput, item_uses_gpui_image_element_with_input,
+    item_uses_image_layer_with_input, item_uses_layer_visual_paint, theme_icon_hybrid_enabled,
 };
 use super::text::static_paint_single_line_text;
 
@@ -32,9 +34,16 @@ pub(super) fn item_image_layer_view(
     items: &[ItemPaintSnapshot],
     width: f32,
     height: f32,
+    theme_icon_readiness: &ThemeIconImageReadinessSnapshot,
+    scale_factor: f32,
     app: WeakEntity<FikaApp>,
 ) -> Option<ItemImageLayerElement> {
-    let items = item_image_layer_items(items);
+    let items = item_image_layer_items_for_theme_readiness(
+        items,
+        theme_icon_prewarm_enabled() || theme_icon_hybrid_enabled(),
+        theme_icon_readiness,
+        scale_factor,
+    );
     (!items.is_empty()).then(|| {
         ItemImageLayerElement {
             pane_id,
@@ -50,13 +59,29 @@ pub(super) fn item_image_layer_view(
     })
 }
 
+#[cfg(test)]
 pub(super) fn item_image_layer_items(items: &[ItemPaintSnapshot]) -> Vec<ItemImageLayerItem> {
     item_image_layer_items_with_theme_prewarm(items, theme_icon_prewarm_enabled())
 }
 
+#[cfg(test)]
 pub(super) fn item_image_layer_items_with_theme_prewarm(
     items: &[ItemPaintSnapshot],
     prewarm_theme_icons: bool,
+) -> Vec<ItemImageLayerItem> {
+    item_image_layer_items_for_theme_readiness(
+        items,
+        prewarm_theme_icons,
+        &ThemeIconImageReadinessSnapshot::default(),
+        1.0,
+    )
+}
+
+pub(super) fn item_image_layer_items_for_theme_readiness(
+    items: &[ItemPaintSnapshot],
+    prewarm_theme_icons: bool,
+    theme_icon_readiness: &ThemeIconImageReadinessSnapshot,
+    scale_factor: f32,
 ) -> Vec<ItemImageLayerItem> {
     items
         .iter()
@@ -66,10 +91,15 @@ pub(super) fn item_image_layer_items_with_theme_prewarm(
             if !item_uses_layer_visual_paint(content) {
                 return None;
             }
-            let role = if item_uses_image_layer(content) {
+            let policy_input = item_renderer_policy_input_for_theme_readiness(
+                item,
+                theme_icon_readiness,
+                scale_factor,
+            );
+            let role = if item_uses_image_layer_with_input(content, policy_input) {
                 ItemImageLayerRole::Paint
             } else if prewarm_theme_icons
-                && item_uses_gpui_image_element(content)
+                && item_uses_gpui_image_element_with_input(content, policy_input)
                 && content.thumbnail_path.is_none()
                 && content.icon.path.is_some()
             {
@@ -87,6 +117,31 @@ pub(super) fn item_image_layer_items_with_theme_prewarm(
             })
         })
         .collect()
+}
+
+pub(super) fn item_renderer_policy_input_for_theme_readiness(
+    item: &ItemPaintSnapshot,
+    theme_icon_readiness: &ThemeIconImageReadinessSnapshot,
+    scale_factor: f32,
+) -> ItemRendererPolicyInput {
+    let content = item.content.as_ref();
+    ItemRendererPolicyInput {
+        theme_icon_ready: content.thumbnail_path.is_none()
+            && item_theme_icon_image_key(content, item.layout, scale_factor)
+                .is_some_and(|key| theme_icon_readiness.is_ready(&key)),
+    }
+}
+
+fn item_theme_icon_image_key(
+    content: &super::ItemPaintContent,
+    layout: ItemLayout,
+    scale_factor: f32,
+) -> Option<ThemeIconImageKey> {
+    theme_icon_image_key_for_snapshot(
+        &content.icon,
+        theme_icon_image_size_px(layout.icon_rect.width, layout.icon_rect.height),
+        scale_factor,
+    )
 }
 
 pub(super) struct ItemImageLayerItem {
@@ -353,18 +408,35 @@ impl Element for ItemImageLayerElement {
         window.with_element_state::<RetainedImageLayerState, _>(id, |state, window| {
             let mut state = state.unwrap_or_else(|| RetainedImageLayerState::new(cx));
             let mut source_stats = ItemImageSourcePerfStats::default();
+            let mut ready_theme_icons = Vec::new();
             let states = self
                 .items
                 .iter()
                 .filter_map(|item| {
-                    item_image_layer_prepaint_item(item, &mut state, &mut source_stats, window, cx)
+                    item_image_layer_prepaint_item(
+                        item,
+                        &mut state,
+                        &mut source_stats,
+                        &mut ready_theme_icons,
+                        window,
+                        cx,
+                    )
                 })
                 .collect::<Vec<_>>();
-            if let Some(started) = perf_started {
-                let elapsed = started.elapsed();
+            if perf_started.is_some() || !ready_theme_icons.is_empty() {
+                let elapsed = perf_started.map(|started| started.elapsed());
                 let count = states.len();
                 let _ = self.app.update(cx, |this, _cx| {
-                    this.record_item_image_prepaint(self.pane_id, elapsed, count, source_stats);
+                    let mut readiness_changed = false;
+                    for key in ready_theme_icons {
+                        readiness_changed |= this.mark_theme_icon_image_ready(key);
+                    }
+                    if let Some(elapsed) = elapsed {
+                        this.record_item_image_prepaint(self.pane_id, elapsed, count, source_stats);
+                    }
+                    if readiness_changed {
+                        _cx.notify();
+                    }
                 });
             }
             (states, state)
@@ -414,6 +486,7 @@ fn item_image_layer_prepaint_item(
     item: &ItemImageLayerItem,
     state: &mut RetainedImageLayerState,
     source_stats: &mut ItemImageSourcePerfStats,
+    ready_theme_icons: &mut Vec<ThemeIconImageKey>,
     window: &mut Window,
     cx: &mut App,
 ) -> Option<ItemImagePaintState> {
@@ -427,6 +500,10 @@ fn item_image_layer_prepaint_item(
     } else {
         ItemImagePaintKind::ThemeIcon
     };
+    let ready_theme_key = match &retained_source {
+        ItemImageRetainedSource::ThemeIcon(key) => Some(key.clone()),
+        ItemImageRetainedSource::Thumbnail(_) => None,
+    };
     let load = match (kind, retained_source) {
         (ItemImagePaintKind::Thumbnail, ItemImageRetainedSource::Thumbnail(_)) => {
             state.load_thumbnail_or_retained_with_outcome(source_path, window, cx)
@@ -436,6 +513,12 @@ fn item_image_layer_prepaint_item(
         }
         _ => return None,
     };
+    if kind == ItemImagePaintKind::ThemeIcon
+        && load.image.is_some()
+        && let Some(key) = ready_theme_key
+    {
+        ready_theme_icons.push(key);
+    }
     let paint = matches!(item.role, ItemImageLayerRole::Paint);
     record_item_image_source_stats(source_stats, kind, load.outcome, paint);
     if !paint {

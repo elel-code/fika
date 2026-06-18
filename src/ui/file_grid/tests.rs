@@ -10,6 +10,7 @@ use super::image_layer::{
     item_image_layer_items_with_theme_prewarm, item_image_load_failure_paints_fallback,
     item_image_paint_layer_element_id, item_image_pending_load_paints_fallback,
     item_image_pending_load_paints_marker, item_image_retained_source_for,
+    item_renderer_policy_input_for_theme_readiness,
 };
 use super::interaction::{
     details_interaction_layer_items, item_interaction_hitbox_bounds,
@@ -35,7 +36,7 @@ use super::viewport::{
     measured_viewport_for_scrollbar_axis, viewport_bounds_update_requires_notify,
 };
 use crate::ui::drag_drop::drag_preview_content_origin_for_cursor_offset;
-use crate::ui::icons::FileIconSnapshot;
+use crate::ui::icons::{FileIconSnapshot, ThemeIconImageKey, ThemeIconImageReadiness};
 use crate::ui::item_view::ItemViewScrollbarAxis;
 use fika_core::{
     CompactLayout, CompactLayoutOptions, IconsLayout, IconsLayoutOptions, ItemId, ItemLayout,
@@ -308,6 +309,35 @@ fn retained_image_source_uses_size_aware_theme_icon_key() {
     assert_eq!(key.icon_size_px, 48);
     assert_eq!(first, same_size_new_path);
     assert_ne!(first, zoomed);
+}
+
+#[test]
+fn theme_icon_readiness_input_is_size_and_scale_aware() {
+    let mut cache = ItemPaintSlotCache::default();
+    let mut theme_icon_item =
+        test_visible_item(3, ItemId(9), "app.desktop", test_item_layout(192.0), false);
+    theme_icon_item.icon.path = Some(Arc::from(Path::new("/tmp/app.svg")));
+
+    let projection = cache.project_file_grid_snapshot(icons_snapshot(vec![theme_icon_item]), None);
+    let FileGridRenderSnapshot::Icons { items, .. } = projection.snapshot else {
+        panic!("expected icons snapshot");
+    };
+    let item = items.first().expect("item should be projected");
+    let mut readiness = ThemeIconImageReadiness::default();
+    readiness.mark_ready(ThemeIconImageKey::new(
+        item.content.icon.icon_name.clone(),
+        48,
+        1.0,
+    ));
+
+    assert!(
+        item_renderer_policy_input_for_theme_readiness(item, &readiness.snapshot(), 1.0)
+            .theme_icon_ready
+    );
+    assert!(
+        !item_renderer_policy_input_for_theme_readiness(item, &readiness.snapshot(), 2.0)
+            .theme_icon_ready
+    );
 }
 
 #[test]

@@ -1,10 +1,11 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use super::FileIconSnapshot;
 
 const UNKNOWN_THEME_NAME: &str = "__fika_unknown_icon_theme__";
+const DEFAULT_THEME_ICON_READINESS_LIMIT: usize = 4096;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum IconColorScheme {
@@ -36,6 +37,66 @@ impl ThemeIconImageKey {
             color_scheme: IconColorScheme::Unknown,
             mode: IconPaintMode::Normal,
         }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ThemeIconImageReadiness {
+    ready: Arc<HashSet<ThemeIconImageKey>>,
+    order: VecDeque<ThemeIconImageKey>,
+    max_entries: usize,
+}
+
+impl Default for ThemeIconImageReadiness {
+    fn default() -> Self {
+        Self {
+            ready: Arc::new(HashSet::new()),
+            order: VecDeque::new(),
+            max_entries: DEFAULT_THEME_ICON_READINESS_LIMIT,
+        }
+    }
+}
+
+impl ThemeIconImageReadiness {
+    pub(crate) fn snapshot(&self) -> ThemeIconImageReadinessSnapshot {
+        ThemeIconImageReadinessSnapshot {
+            ready: self.ready.clone(),
+        }
+    }
+
+    pub(crate) fn mark_ready(&mut self, key: ThemeIconImageKey) -> bool {
+        if self.ready.contains(&key) {
+            return false;
+        }
+
+        Arc::make_mut(&mut self.ready).insert(key.clone());
+        self.order.push_back(key);
+        while self.ready.len() > self.max_entries {
+            let Some(evicted) = self.order.pop_front() else {
+                break;
+            };
+            Arc::make_mut(&mut self.ready).remove(&evicted);
+        }
+        true
+    }
+
+    #[cfg(test)]
+    fn with_max_entries(max_entries: usize) -> Self {
+        Self {
+            max_entries: max_entries.max(1),
+            ..Self::default()
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ThemeIconImageReadinessSnapshot {
+    ready: Arc<HashSet<ThemeIconImageKey>>,
+}
+
+impl ThemeIconImageReadinessSnapshot {
+    pub(crate) fn is_ready(&self, key: &ThemeIconImageKey) -> bool {
+        self.ready.contains(key)
     }
 }
 
@@ -289,6 +350,22 @@ mod tests {
             }
         );
         assert_eq!(pending.image, Some("old-image"));
+    }
+
+    #[test]
+    fn readiness_snapshot_tracks_ready_keys_and_eviction() {
+        let key_48 = ThemeIconImageKey::new(Arc::from("text-x-generic"), 48, 1.0);
+        let key_64 = ThemeIconImageKey::new(Arc::from("text-x-generic"), 64, 1.0);
+        let mut readiness = ThemeIconImageReadiness::with_max_entries(1);
+
+        assert!(readiness.mark_ready(key_48.clone()));
+        assert!(readiness.snapshot().is_ready(&key_48));
+        assert!(!readiness.mark_ready(key_48.clone()));
+
+        assert!(readiness.mark_ready(key_64.clone()));
+        let snapshot = readiness.snapshot();
+        assert!(!snapshot.is_ready(&key_48));
+        assert!(snapshot.is_ready(&key_64));
     }
 
     fn icon_snapshot(icon_name: &str, path: &str) -> FileIconSnapshot {

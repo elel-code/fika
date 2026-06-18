@@ -52,6 +52,7 @@ pub(crate) fn pane_view(
         filter_bar,
         status_bar: status_bar_snapshot,
         file_grid: file_grid_snapshot,
+        theme_icon_readiness,
         trash_view,
         scroll_handle,
         view,
@@ -133,6 +134,7 @@ pub(crate) fn pane_view(
             FileGridProps {
                 pane_id,
                 snapshot: file_grid_snapshot,
+                theme_icon_readiness,
                 trash_view,
                 scroll_handle,
                 rubber_band,

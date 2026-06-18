@@ -98,7 +98,7 @@ use ui::filter_bar::{
     FILTER_BAR_HEIGHT, FilterBarSnapshot, FilteredModelCacheEntry, PaneFilterState,
     cached_filtered_model_for_pane, filter_toggle_snapshot,
 };
-use ui::icons::FileIconCache;
+use ui::icons::{FileIconCache, ThemeIconImageReadiness};
 use ui::item_view::{
     ItemViewScrollState, begin_item_view_scrollbar_drag as begin_item_view_scrollbar_drag_state,
     finish_item_view_scrollbar_drag as finish_item_view_scrollbar_drag_state,
@@ -380,6 +380,7 @@ pub(crate) struct FikaApp {
     next_device_monitor_start_at: Instant,
     file_icons: FileIconCache,
     file_icon_resolve_queue: FileIconResolveQueue,
+    theme_icon_readiness: ThemeIconImageReadiness,
     mime_applications: MimeApplicationCache,
     space_info: SpaceInfoCache,
     status_summaries: HashMap<PaneId, StatusSummaryCacheEntry>,
@@ -483,6 +484,7 @@ impl FikaApp {
             next_device_monitor_start_at: Instant::now(),
             file_icons: FileIconCache::default(),
             file_icon_resolve_queue: FileIconResolveQueue::default(),
+            theme_icon_readiness: ThemeIconImageReadiness::default(),
             mime_applications: MimeApplicationCache::load(),
             space_info: SpaceInfoCache::default(),
             status_summaries: HashMap::new(),
@@ -1368,6 +1370,7 @@ impl FikaApp {
                     filter_bar,
                     status_bar,
                     file_grid: file_grid_frame.file_grid,
+                    theme_icon_readiness: self.theme_icon_readiness.snapshot(),
                     trash_view,
                     scroll_handle,
                     view,
@@ -16183,6 +16186,7 @@ text/plain=viewer.desktop;\n",
             next_device_monitor_start_at: Instant::now(),
             file_icons: FileIconCache::default(),
             file_icon_resolve_queue: FileIconResolveQueue::default(),
+            theme_icon_readiness: ThemeIconImageReadiness::default(),
             mime_applications: MimeApplicationCache::empty(),
             space_info: SpaceInfoCache::default(),
             status_summaries: HashMap::new(),

@@ -5,10 +5,12 @@ use crate::FikaApp;
 
 use super::details::{details_content_height, details_content_width};
 use super::details_shell::details_table;
-use super::image_layer::item_image_layer_view;
+use super::image_layer::{item_image_layer_view, item_renderer_policy_input_for_theme_readiness};
 use super::interaction::item_interaction_layer_view;
 use super::item_shell::item_tile;
-use super::renderer_policy::{details_renderer_policy_stats, item_renderer_policy_stats};
+use super::renderer_policy::{
+    details_renderer_policy_stats, item_renderer_policy_stats_with_input,
+};
 use super::static_visual::static_item_visual_layer_view;
 use super::viewport::{
     file_grid_viewport_shell, measured_viewport_for_scrollbar_axis, scrollbar_axis_for_snapshot,
@@ -31,6 +33,7 @@ pub(crate) fn file_grid(
     let FileGridProps {
         pane_id,
         snapshot,
+        theme_icon_readiness,
         trash_view,
         scroll_handle,
         rubber_band,
@@ -38,6 +41,7 @@ pub(crate) fn file_grid(
         mode,
     } = props;
     let app = cx.weak_entity();
+    let scale_factor = window.scale_factor();
     let scrollbar_axis = scrollbar_axis_for_snapshot(&snapshot);
     let view_mode = view_mode_for_snapshot(&snapshot);
 
@@ -54,7 +58,14 @@ pub(crate) fn file_grid(
                     .cloned()
                     .collect::<Vec<_>>();
                 let visible_count = visible_items.len();
-                let renderer_policy_stats = item_renderer_policy_stats(&visible_items);
+                let renderer_policy_stats =
+                    item_renderer_policy_stats_with_input(&visible_items, |item| {
+                        item_renderer_policy_input_for_theme_readiness(
+                            item,
+                            &theme_icon_readiness,
+                            scale_factor,
+                        )
+                    });
                 let static_visual_layer = static_item_visual_layer_view(
                     pane_id,
                     &items,
@@ -68,6 +79,8 @@ pub(crate) fn file_grid(
                     &items,
                     content_size.width,
                     content_size.height,
+                    &theme_icon_readiness,
+                    scale_factor,
                     app.clone(),
                 );
                 let interaction_layer = item_interaction_layer_view(
@@ -98,10 +111,16 @@ pub(crate) fn file_grid(
                 };
                 let viewport = file_grid_viewport_shell(pane_id, drop_target, mode, cx).child(
                     content.children(visible_items.into_iter().map(|item| {
+                        let renderer_policy_input = item_renderer_policy_input_for_theme_readiness(
+                            &item,
+                            &theme_icon_readiness,
+                            scale_factor,
+                        );
                         item_tile(
                             pane_id,
                             item,
                             ItemTileTextAlignment::Center,
+                            renderer_policy_input,
                             app.clone(),
                             cx,
                         )
@@ -123,7 +142,14 @@ pub(crate) fn file_grid(
                     .cloned()
                     .collect::<Vec<_>>();
                 let visible_count = visible_items.len();
-                let renderer_policy_stats = item_renderer_policy_stats(&visible_items);
+                let renderer_policy_stats =
+                    item_renderer_policy_stats_with_input(&visible_items, |item| {
+                        item_renderer_policy_input_for_theme_readiness(
+                            item,
+                            &theme_icon_readiness,
+                            scale_factor,
+                        )
+                    });
                 let static_visual_layer = static_item_visual_layer_view(
                     pane_id,
                     &items,
@@ -137,6 +163,8 @@ pub(crate) fn file_grid(
                     &items,
                     content_size.width,
                     content_size.height,
+                    &theme_icon_readiness,
+                    scale_factor,
                     app.clone(),
                 );
                 let interaction_layer = item_interaction_layer_view(
@@ -167,7 +195,19 @@ pub(crate) fn file_grid(
                 };
                 let viewport = file_grid_viewport_shell(pane_id, drop_target, mode, cx).child(
                     content.children(visible_items.into_iter().map(|item| {
-                        item_tile(pane_id, item, ItemTileTextAlignment::Start, app.clone(), cx)
+                        let renderer_policy_input = item_renderer_policy_input_for_theme_readiness(
+                            &item,
+                            &theme_icon_readiness,
+                            scale_factor,
+                        );
+                        item_tile(
+                            pane_id,
+                            item,
+                            ItemTileTextAlignment::Start,
+                            renderer_policy_input,
+                            app.clone(),
+                            cx,
+                        )
                     })),
                 );
                 (

@@ -1,8 +1,13 @@
 use fika_core::PaneId;
 
 use crate::FikaApp;
+use crate::ui::icons::ThemeIconImageKey;
 
 impl FikaApp {
+    pub(super) fn mark_theme_icon_image_ready(&mut self, key: ThemeIconImageKey) -> bool {
+        self.theme_icon_readiness.mark_ready(key)
+    }
+
     pub(crate) fn clear_file_grid_projection_state(&mut self, pane_id: PaneId) {
         self.visible_item_slots.remove(&pane_id);
         self.item_paint_slots.remove(&pane_id);

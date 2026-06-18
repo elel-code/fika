@@ -300,6 +300,26 @@ does not expose custom theme placeholders (`theme_placeholder=0`,
 a readiness handoff so visible icons leave GPUI only after their retained image
 for the current key is ready.
 
+The readiness handoff foundation now exists behind
+`FIKA_HYBRID_THEME_ICONS=1`. The app owns a size/scale-aware
+`ThemeIconImageReadiness` snapshot; the image layer marks keys ready only after a
+real `RenderImage` is available; renderer policy, item shells, and the image
+layer all consume the same readiness input. This still does not change the
+default renderer. Hybrid must produce paired `/etc` and mixed-directory
+zoom/scroll evidence with no placeholders, no zoom-time decode burst, and no
+paint regression before this decision table can promote MIME/theme icons away
+from GPUI `img()`.
+
+The first `/etc` hybrid smoke is recorded at
+`/tmp/fika-icon-hybrid-etc-readiness.log` with the default comparison at
+`/tmp/fika-etc-zoom-scroll.log`. It proves the handoff path works without
+theme placeholders or zoom-time decode churn (`theme_placeholder=0`,
+`theme_decoded=0`, `max_paint=383us`) while preserving the unchanged default
+split (`max_image_layer=0`, `max_gpui_image_element=64`). It is not sufficient
+for promotion because `/etc` still shows a roughly 24ms visible-item
+`icon_sync` spike when scrolling into new entries, and mixed-directory evidence
+has not been captured.
+
 ## Next Renderer Decisions
 
 1. Keep the remaining drag-start shells until the GPUI API boundary changes.

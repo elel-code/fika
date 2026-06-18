@@ -7,6 +7,7 @@ pub(crate) use cache::{
 };
 pub(crate) use image_cache::{
     RetainedThemeIconImageCache, RetainedThemeIconImageLoadOutcome, ThemeIconImageKey,
-    theme_icon_image_key_for_snapshot, theme_icon_image_size_px,
+    ThemeIconImageReadiness, ThemeIconImageReadinessSnapshot, theme_icon_image_key_for_snapshot,
+    theme_icon_image_size_px,
 };
 pub(crate) use view::cached_icon_or_fallback;

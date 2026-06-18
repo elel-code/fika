@@ -13,8 +13,9 @@ use super::dnd::{
 };
 use super::rename_overlay::rename_text_view;
 use super::renderer_policy::{
-    ItemDragStartRenderer, ItemInteractionRenderer, ItemRenameEditorRenderer, item_renderer_policy,
-    item_uses_gpui_image_element,
+    ItemDragStartRenderer, ItemInteractionRenderer, ItemRenameEditorRenderer,
+    ItemRendererPolicyInput, item_renderer_policy_with_input,
+    item_uses_gpui_image_element_with_input,
 };
 use super::{ItemPaintContent, ItemPaintSnapshot, ItemTileTextAlignment, item_identity_element_id};
 
@@ -22,6 +23,7 @@ pub(super) fn item_tile(
     pane_id: PaneId,
     item: ItemPaintSnapshot,
     text_alignment: ItemTileTextAlignment,
+    renderer_policy_input: ItemRendererPolicyInput,
     app: WeakEntity<FikaApp>,
     cx: &mut Context<FikaApp>,
 ) -> Stateful<Div> {
@@ -30,7 +32,7 @@ pub(super) fn item_tile(
     let item_id = item.item_id;
     let content = item.content.as_ref();
     let selected = item.visual.selected;
-    let renderer_policy = item_renderer_policy(content);
+    let renderer_policy = item_renderer_policy_with_input(content, renderer_policy_input);
     let use_layer_interaction = matches!(
         renderer_policy.interaction,
         ItemInteractionRenderer::RetainedLayer
@@ -74,7 +76,7 @@ pub(super) fn item_tile(
                 }
             }))
     };
-    let core = if item_uses_gpui_image_element(content) {
+    let core = if item_uses_gpui_image_element_with_input(content, renderer_policy_input) {
         if let Some(image) = gpui_item_image_view(item.slot_id, content, item.layout) {
             core.child(image)
         } else {

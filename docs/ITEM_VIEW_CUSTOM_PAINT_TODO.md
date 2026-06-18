@@ -586,8 +586,18 @@ tracks.
   `max_image_layer=0`, `max_gpui_image_element=64`, `theme_placeholder=0`, and
   `paint_count=0`, while exposing prewarm work as `theme_prewarm_loaded=598`,
   `theme_prewarm_decoded=5`, and `theme_prewarm_pending=118`. This validates
-  the no-visible-placeholder bridge, but the next step still needs a readiness
-  handoff before custom painting can replace GPUI for visible icons.
+  the no-visible-placeholder bridge. The readiness handoff foundation is now
+  implemented: app-level `ThemeIconImageReadiness` records exact size/scale
+  theme keys only after a real `RenderImage` exists, `PaneSnapshot`/`FileGridProps`
+  carry that snapshot to renderer policy, and opt-in `FIKA_HYBRID_THEME_ICONS=1`
+  keeps visible icons on GPUI until the current key is ready.
+  `/tmp/fika-icon-hybrid-etc-readiness.log` confirms the `/etc` handoff has
+  `theme_placeholder=0`, `theme_decoded=0`, and `max_paint=383us` while the
+  default comparison `/tmp/fika-etc-zoom-scroll.log` remains
+  `max_image_layer=0`/`max_gpui_image_element=64`. Runtime default-vs-hybrid
+  evidence still needs to pass before any default promotion because `/etc`
+  still has a visible-item `icon_sync` spike around 24ms and the mixed-directory
+  run is still missing.
 - [ ] P16k3: Only after P16k1/P16k2 pass, reconsider the Compact/Icons
   MIME/theme icon renderer policy in `docs/ITEM_VIEW_RENDERER_DECISIONS.md`.
   Until then, keep the current split: thumbnails on the custom image layer and
