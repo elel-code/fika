@@ -93,7 +93,7 @@ use ui::file_grid::{
     pane_model_indexes_intersecting_visual_rect, rename_editor_required_text_width,
 };
 #[cfg(test)]
-use ui::file_grid::{QueuedVisibleModelWork, RawFileGridSnapshot, THUMBNAIL_PROBE_BATCH_SIZE};
+use ui::file_grid::{RawFileGridSnapshot, THUMBNAIL_PROBE_BATCH_SIZE};
 use ui::filter_bar::{
     FILTER_BAR_HEIGHT, FilterBarSnapshot, FilteredModelCacheEntry, PaneFilterState,
     cached_filtered_model_for_pane, filter_toggle_snapshot,
@@ -12647,88 +12647,6 @@ text/plain=viewer.desktop;\n",
                 },
             }
         );
-    }
-
-    #[test]
-    fn visible_model_work_queue_is_retained_across_same_icon_resize_range() {
-        let mut app = test_app_with_entries("/tmp/fika-visible-work", &[]);
-        let pane_id = app.panes.focused().unwrap();
-        let path = PathBuf::from("/tmp/fika-visible-work");
-        app.panes.pane_mut(pane_id).unwrap().model.replace_listing(
-            path.clone(),
-            Arc::new(vec![fika_core::Entry::new(fika_core::EntryData {
-                name: Arc::from("payload"),
-                name_width_units: 7,
-                target_path: None,
-                size_bytes: 12,
-                modified_secs: Some(42),
-                metadata_complete: true,
-                mime_type: Some(Arc::from(fika_core::GENERIC_BINARY_MIME)),
-                mime_magic_checked: false,
-                trash_original_path: None,
-                trash_deletion_time: None,
-                is_dir: false,
-            })]),
-        );
-        {
-            let pane = app.panes.pane_mut(pane_id).unwrap();
-            pane.view.view_mode = ViewMode::Icons;
-            pane.view.viewport_width = 420.0;
-            pane.view.viewport_height = 240.0;
-        }
-
-        let view = app.panes.pane(pane_id).unwrap().view.clone();
-        let first_raw = app
-            .raw_file_grid_snapshot_for_pane(pane_id, &view, None, 0, None, None)
-            .unwrap();
-        let pane = app.panes.pane(pane_id).unwrap();
-        let generation = pane.generation;
-        let model_data_generation = pane.model.data_generation();
-        let item_count = pane.model.len();
-
-        assert_eq!(
-            app.queue_file_grid_model_work_for_raw_grid(
-                pane_id,
-                generation,
-                ViewMode::Icons,
-                model_data_generation,
-                0,
-                item_count,
-                &first_raw,
-                48.0,
-                None,
-            ),
-            Some(QueuedVisibleModelWork {
-                metadata_role: true,
-                thumbnail_probe: false,
-                file_icon_resolve: true,
-            })
-        );
-
-        app.panes.pane_mut(pane_id).unwrap().view.viewport_width = 430.0;
-        let view = app.panes.pane(pane_id).unwrap().view.clone();
-        let second_raw = app
-            .raw_file_grid_snapshot_for_pane(pane_id, &view, None, 0, None, None)
-            .unwrap();
-
-        assert_eq!(first_raw.visible_work_range_and_count(), Some((0..1, 1)));
-        assert_eq!(second_raw.visible_work_range_and_count(), Some((0..1, 1)));
-        assert_eq!(
-            app.queue_file_grid_model_work_for_raw_grid(
-                pane_id,
-                generation,
-                ViewMode::Icons,
-                model_data_generation,
-                0,
-                item_count,
-                &second_raw,
-                48.0,
-                None,
-            ),
-            Some(QueuedVisibleModelWork::default())
-        );
-        let batch = app.metadata_role_scheduler.start_role_batch(8).unwrap();
-        assert_eq!(batch.requests.len(), 1);
     }
 
     #[test]

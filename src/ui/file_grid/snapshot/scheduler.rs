@@ -277,9 +277,10 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
 
-    use fika_core::{DirectoryModel, IconsLayout, ItemId, ItemLayout};
+    use fika_core::{DirectoryModel, IconsLayout, ItemId, ItemLayout, SelectionState, ViewState};
 
-    use super::super::RawDetailsItemSnapshot;
+    use super::super::super::CompactColumnWidthCache;
+    use super::super::{RawDetailsItemSnapshot, RawFileGridSnapshotInput, raw_file_grid_snapshot};
 
     #[test]
     fn raw_file_grid_model_work_queue_skips_unchanged_work_key() {
@@ -352,6 +353,114 @@ mod tests {
                 0,
                 model.len(),
                 &raw_file_grid,
+                48.0,
+                &model,
+                None,
+            ),
+            QueuedVisibleModelWork::default()
+        );
+        let batch = metadata_scheduler.start_role_batch(8).unwrap();
+        assert_eq!(batch.requests.len(), 1);
+    }
+
+    #[test]
+    fn raw_file_grid_model_work_queue_is_retained_across_same_icon_resize_range() {
+        let directory = PathBuf::from("/tmp/fika-visible-work");
+        let mut model = DirectoryModel::for_directory(directory.clone());
+        model.replace_listing(
+            directory,
+            Arc::new(vec![fika_core::Entry::new(fika_core::EntryData {
+                name: Arc::from("payload"),
+                name_width_units: 7,
+                target_path: None,
+                size_bytes: 12,
+                modified_secs: Some(42),
+                metadata_complete: true,
+                mime_type: Some(Arc::from(fika_core::GENERIC_BINARY_MIME)),
+                mime_magic_checked: false,
+                trash_original_path: None,
+                trash_deletion_time: None,
+                is_dir: false,
+            })]),
+        );
+        let mut first_view = ViewState {
+            view_mode: ViewMode::Icons,
+            viewport_width: 420.0,
+            viewport_height: 240.0,
+            ..ViewState::default()
+        };
+        let mut compact_column_widths = CompactColumnWidthCache::default();
+        let first_raw = raw_file_grid_snapshot(RawFileGridSnapshotInput {
+            pane_id: PaneId(1),
+            model: &model,
+            selection: &SelectionState::default(),
+            view: &first_view,
+            filtered: None,
+            source_revision: 0,
+            rename_draft: None,
+            item_drop_target: None,
+            compact_column_widths: &mut compact_column_widths,
+        });
+        let mut visible_work_keys = HashMap::new();
+        let mut metadata_scheduler = MetadataRoleScheduler::default();
+        let mut thumbnail_scheduler = ThumbnailScheduler::default();
+        let file_icons = FileIconCache::default();
+        let mut icon_queue = FileIconResolveQueue::default();
+
+        assert_eq!(
+            queue_raw_file_grid_model_work(
+                &mut visible_work_keys,
+                &mut metadata_scheduler,
+                &mut thumbnail_scheduler,
+                &file_icons,
+                &mut icon_queue,
+                PaneId(1),
+                Generation(1),
+                ViewMode::Icons,
+                model.data_generation(),
+                0,
+                model.len(),
+                &first_raw,
+                48.0,
+                &model,
+                None,
+            ),
+            QueuedVisibleModelWork {
+                metadata_role: true,
+                thumbnail_probe: false,
+                file_icon_resolve: true,
+            }
+        );
+
+        first_view.viewport_width = 430.0;
+        let second_raw = raw_file_grid_snapshot(RawFileGridSnapshotInput {
+            pane_id: PaneId(1),
+            model: &model,
+            selection: &SelectionState::default(),
+            view: &first_view,
+            filtered: None,
+            source_revision: 0,
+            rename_draft: None,
+            item_drop_target: None,
+            compact_column_widths: &mut compact_column_widths,
+        });
+
+        assert_eq!(first_raw.visible_work_range_and_count(), Some((0..1, 1)));
+        assert_eq!(second_raw.visible_work_range_and_count(), Some((0..1, 1)));
+        assert_eq!(
+            queue_raw_file_grid_model_work(
+                &mut visible_work_keys,
+                &mut metadata_scheduler,
+                &mut thumbnail_scheduler,
+                &file_icons,
+                &mut icon_queue,
+                PaneId(1),
+                Generation(1),
+                ViewMode::Icons,
+                model.data_generation(),
+                0,
+                model.len(),
+                &second_raw,
                 48.0,
                 &model,
                 None,

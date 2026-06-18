@@ -1225,6 +1225,11 @@ by risk and evidence, not by how custom-painted a surface looks.
   frame. `main.rs` now passes only pane id, mode, and total pane elapsed time;
   raw/icon/queue/convert timings, visible count, perf phase, and slot stats stay
   encapsulated in the frame.
+- [x] P16dw: Move the same-visible-work-range resize queue invariant out of
+  app-side tests and into the file-grid snapshot scheduler tests. The raw
+  snapshot/queue protocol is now covered where the work key and scheduler
+  contract are owned, instead of requiring `main.rs` tests to call low-level
+  file-grid methods.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

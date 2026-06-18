@@ -60,8 +60,6 @@ pub(crate) use projection::{
 pub(crate) use retained::THUMBNAIL_PROBE_BATCH_SIZE;
 pub(crate) use slots::VisibleItemSlotPool;
 #[cfg(test)]
-pub(crate) use snapshot::QueuedVisibleModelWork;
-#[cfg(test)]
 pub(crate) use snapshot::RawFileGridSnapshot;
 pub(crate) use snapshot::{PaneVisibleWorkKey, VisibleItemSnapshotCache};
 pub(crate) use static_visual::StaticItemTextShapeCache;
