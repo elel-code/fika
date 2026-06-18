@@ -891,20 +891,17 @@ impl FikaApp {
     }
 
     fn prime_pane_viewport_for_filter_bar_change(&mut self, pane_id: PaneId, visible: bool) {
-        let Some(pane) = self.panes.pane_mut(pane_id) else {
-            return;
+        let view_snapshot = {
+            let Some(pane) = self.panes.pane_mut(pane_id) else {
+                return;
+            };
+            pane.view.viewport_height = viewport_height_after_filter_bar_visibility_change(
+                pane.view.viewport_height,
+                visible,
+                FILTER_BAR_HEIGHT,
+            );
+            ItemViewScrollViewSnapshot::from_view_state(&pane.view)
         };
-        pane.view.viewport_height = viewport_height_after_filter_bar_visibility_change(
-            pane.view.viewport_height,
-            visible,
-            FILTER_BAR_HEIGHT,
-        );
-        let view_snapshot = ItemViewScrollViewSnapshot::new(
-            pane.view.scroll_x,
-            pane.view.scroll_y,
-            pane.view.max_scroll_x,
-            pane.view.max_scroll_y,
-        );
 
         let _ = self
             .item_view_scroll
@@ -1190,14 +1187,7 @@ impl FikaApp {
     ) -> ItemViewScrollViewSnapshot {
         self.panes
             .pane(pane_id)
-            .map(|pane| {
-                ItemViewScrollViewSnapshot::new(
-                    pane.view.scroll_x,
-                    pane.view.scroll_y,
-                    pane.view.max_scroll_x,
-                    pane.view.max_scroll_y,
-                )
-            })
+            .map(|pane| ItemViewScrollViewSnapshot::from_view_state(&pane.view))
             .unwrap_or_default()
     }
 
@@ -1243,17 +1233,15 @@ impl FikaApp {
     }
 
     pub(crate) fn finish_item_view_scrollbar_drag(&mut self, pane_id: PaneId) -> bool {
-        let Some(view) = self.panes.pane(pane_id).map(|pane| pane.view.clone()) else {
+        let Some(view_snapshot) = self
+            .panes
+            .pane(pane_id)
+            .map(|pane| ItemViewScrollViewSnapshot::from_view_state(&pane.view))
+        else {
             return self
                 .item_view_scroll
                 .finish_scrollbar_drag_without_view(pane_id);
         };
-        let view_snapshot = ItemViewScrollViewSnapshot::new(
-            view.scroll_x,
-            view.scroll_y,
-            view.max_scroll_x,
-            view.max_scroll_y,
-        );
         let panes = &mut self.panes;
         self.item_view_scroll
             .finish_scrollbar_drag_syncing_view_snapshot(pane_id, view_snapshot, |sync| {
@@ -1288,12 +1276,7 @@ impl FikaApp {
 
     fn sync_item_view_scroll_handle_to_pane_view(&mut self, pane_id: PaneId) {
         if let Some(pane) = self.panes.pane(pane_id) {
-            let view = ItemViewScrollViewSnapshot::new(
-                pane.view.scroll_x,
-                pane.view.scroll_y,
-                pane.view.max_scroll_x,
-                pane.view.max_scroll_y,
-            );
+            let view = ItemViewScrollViewSnapshot::from_view_state(&pane.view);
             let _ = self
                 .item_view_scroll
                 .sync_handle_to_view_clearing_transients_snapshot(pane_id, view);
@@ -3424,12 +3407,7 @@ impl FikaApp {
                 next_view.max_scroll_y,
             );
         if changed {
-            let view = ItemViewScrollViewSnapshot::new(
-                next_view.scroll_x,
-                next_view.scroll_y,
-                next_view.max_scroll_x,
-                next_view.max_scroll_y,
-            );
+            let view = ItemViewScrollViewSnapshot::from_view_state(&next_view);
             let _ = self
                 .item_view_scroll
                 .sync_handle_after_user_scroll_snapshot(pane_id, view);
@@ -3821,15 +3799,13 @@ impl FikaApp {
                 max_scroll_y,
             )
             .unwrap_or(false);
-        let Some(view) = self.panes.pane(pane_id).map(|pane| pane.view.clone()) else {
+        let Some(view_snapshot) = self
+            .panes
+            .pane(pane_id)
+            .map(|pane| ItemViewScrollViewSnapshot::from_view_state(&pane.view))
+        else {
             return changed;
         };
-        let view_snapshot = ItemViewScrollViewSnapshot::new(
-            view.scroll_x,
-            view.scroll_y,
-            view.max_scroll_x,
-            view.max_scroll_y,
-        );
         let panes = &mut self.panes;
         let scroll_changed = self
             .item_view_scroll

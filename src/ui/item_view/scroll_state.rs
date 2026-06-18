@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use fika_core::PaneId;
+use fika_core::{PaneId, ViewState};
 use gpui::{ScrollHandle, point, px};
 
 const LAYOUT_CHANGE_AUTHORITATIVE_FRAMES: u8 = 2;
@@ -30,6 +30,15 @@ impl ItemViewScrollViewSnapshot {
             max_scroll_x,
             max_scroll_y,
         }
+    }
+
+    pub(crate) fn from_view_state(view: &ViewState) -> Self {
+        Self::new(
+            view.scroll_x,
+            view.scroll_y,
+            view.max_scroll_x,
+            view.max_scroll_y,
+        )
     }
 }
 
@@ -687,6 +696,22 @@ mod tests {
         assert!(state.sync_handle_to_view(pane_id, 180.0, 40.0));
 
         assert_eq!(handle.offset(), point(px(-180.0), px(-40.0)));
+    }
+
+    #[test]
+    fn scroll_view_snapshot_reads_scroll_tuple_from_view_state() {
+        let view = ViewState {
+            scroll_x: 12.0,
+            scroll_y: 24.0,
+            max_scroll_x: 120.0,
+            max_scroll_y: 240.0,
+            ..ViewState::default()
+        };
+
+        assert_eq!(
+            ItemViewScrollViewSnapshot::from_view_state(&view),
+            ItemViewScrollViewSnapshot::new(12.0, 24.0, 120.0, 240.0)
+        );
     }
 
     #[test]
