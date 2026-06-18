@@ -260,6 +260,16 @@ retained drag-start source-model 切片：
   数量与可见 row 数不一致的日志。这在保留平台 shell 的同时保持 Dolphin
   model/controller 边界显式。
 
+retained content-y conversion test 切片：
+
+- `places_content_y_from_viewport_y()` 现在拥有未来 viewport-local y 加 scroll offset
+  后进入 `PlacesInteractionGeometry::hit_test_y()` 的转换规则。当前 retained event layer
+  位于 scroll content 内，因此传入 zero scroll，但该转换已为未来 viewport-level layer
+  显式化。
+- 单元覆盖证明非零 scroll 会把 viewport y 映射到预期 row 或 section，并证明
+  row/section/content bounds 使用半开区间。这能防止后续移动 event layer 时出现
+  row/section target off-by-one 回归。
+
 ## TODO
 
 - [x] 添加 `PlacesEventDeliveryPolicy`，默认 `GpuiShells`，opt-in
@@ -270,7 +280,7 @@ retained drag-start source-model 切片：
 - [~] 将 hover/cursor/leave clearing 移到 retained layer。当前状态：
   `retained-pointer` 将 pointer cursor ownership 和 active-drag leave clearing 移到
   opt-in retained layer 后面；GPUI row/section shell 仍拥有 typed DnD move/drop delivery。
-- [ ] 为带 scroll offset 的 content-local 坐标转换、section/row 边界添加单元覆盖。
+- [x] 为带 scroll offset 的 content-local 坐标转换、section/row 边界添加单元覆盖。
 - [~] 将 activation/context-menu targeting 移到 retained layer。当前状态：
   `retained-targeting` 拥有 row activation 和 row/section context menu targeting，
   但 typed DnD move/drop 和 drag-start 仍需要 GPUI shell，因此该 policy 仍保持 opt-in。

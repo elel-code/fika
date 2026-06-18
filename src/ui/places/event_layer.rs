@@ -17,6 +17,7 @@ use super::interaction::{
     PlaceInteractionDecision, PlaceInteractionHit, PlaceInteractionTarget, PlaceRowTargetInput,
     PlacesInteractionGeometry, place_row_path_list_target, place_row_place_drag_target,
     place_section_path_list_target, place_section_place_drag_target,
+    places_content_y_from_viewport_y,
 };
 use super::perf::{PlacesEventProbePerfLog, emit_places_event_probe_perf_log, places_perf_enabled};
 use super::sidebar::dnd_helpers::{
@@ -672,7 +673,7 @@ fn places_event_drop_external_paths(
 }
 
 fn places_event_drag_local_y(bounds: Bounds<Pixels>, position: gpui::Point<Pixels>) -> f32 {
-    (position.y - bounds.origin.y).as_f32()
+    places_content_y_from_viewport_y((position.y - bounds.origin.y).as_f32(), 0.0)
 }
 
 fn install_places_event_pointer_leave_handler(

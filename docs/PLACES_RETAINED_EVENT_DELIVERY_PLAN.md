@@ -284,6 +284,16 @@ Retained drag-start source-model slice:
   the Dolphin model/controller boundary explicit while the platform shell
   remains.
 
+Retained content-y conversion test slice:
+
+- `places_content_y_from_viewport_y()` now owns the future viewport-local y plus
+  scroll offset conversion that feeds `PlacesInteractionGeometry::hit_test_y()`.
+  The current retained event layer lives in scroll content and passes zero
+  scroll, but the conversion is now explicit for a future viewport-level layer.
+- Unit coverage proves non-zero scroll maps viewport y into the expected row or
+  section and that row/section/content bounds use half-open ranges. This guards
+  later event-layer relocation from off-by-one row/section target regressions.
+
 ## TODO
 
 - [x] Add a `PlacesEventDeliveryPolicy` with `GpuiShells` default and an
@@ -295,7 +305,7 @@ Retained drag-start source-model slice:
   `retained-pointer` moves pointer cursor ownership and active-drag leave
   clearing behind an opt-in retained layer, while GPUI row/section shells still
   own typed DnD move/drop delivery.
-- [ ] Add unit coverage for content-local coordinate conversion with scroll
+- [x] Add unit coverage for content-local coordinate conversion with scroll
   offsets and section/row boundaries.
 - [~] Move activation/context-menu targeting to the retained layer. Current
   status: `retained-targeting` owns row activation and row/section context menu

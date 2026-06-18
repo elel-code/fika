@@ -181,6 +181,10 @@ impl PlacesInteractionGeometry {
     }
 }
 
+pub(crate) fn places_content_y_from_viewport_y(viewport_local_y: f32, scroll_y: f32) -> f32 {
+    viewport_local_y + scroll_y.max(0.0)
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct PlaceRowInteractionGeometry {
     pub(crate) visible_index: usize,
@@ -513,6 +517,64 @@ mod tests {
                 drop_zone: PlaceDropZone::OnPlace,
             }) if row.visible_index == 1 && row.place_index == 1
         ));
+    }
+
+    #[test]
+    fn interaction_geometry_hit_test_uses_half_open_row_and_section_boundaries() {
+        let first = test_place(0, "", "Home", "/home/yk");
+        let second = test_place(1, "Devices", "Root", "/");
+        let geometry = places_interaction_geometry(&[first, second]);
+
+        let row_end = PLACE_ROW_HEIGHT;
+        assert!(matches!(
+            geometry.hit_test_y(row_end),
+            Some(PlaceInteractionHit::Section(section)) if section.group == "Devices"
+        ));
+
+        let section_end = PLACE_ROW_HEIGHT + PLACE_SECTION_HEADING_HEIGHT;
+        assert!(matches!(
+            geometry.hit_test_y(section_end),
+            Some(PlaceInteractionHit::Row {
+                row,
+                drop_zone: PlaceDropZone::InsertBefore,
+            }) if row.visible_index == 1
+        ));
+
+        let content_end = geometry.content_height();
+        assert!(matches!(
+            geometry.hit_test_y(content_end - 0.1),
+            Some(PlaceInteractionHit::Row {
+                row,
+                drop_zone: PlaceDropZone::InsertAfter,
+            }) if row.visible_index == 1
+        ));
+        assert_eq!(geometry.hit_test_y(content_end), None);
+    }
+
+    #[test]
+    fn viewport_y_to_content_y_accounts_for_scroll_offset() {
+        let first = test_place(0, "", "Home", "/home/yk");
+        let second = test_place(1, "Devices", "Root", "/");
+        let geometry = places_interaction_geometry(&[first, second]);
+        let scrolled_to_second_row = PLACE_ROW_HEIGHT + PLACE_SECTION_HEADING_HEIGHT;
+
+        let content_y = places_content_y_from_viewport_y(10.0, scrolled_to_second_row);
+        assert_eq!(content_y, scrolled_to_second_row + 10.0);
+        assert!(matches!(
+            geometry.hit_test_y(content_y),
+            Some(PlaceInteractionHit::Row {
+                row,
+                drop_zone: PlaceDropZone::OnPlace,
+            }) if row.visible_index == 1
+        ));
+
+        let section_y = places_content_y_from_viewport_y(4.0, PLACE_ROW_HEIGHT);
+        assert!(matches!(
+            geometry.hit_test_y(section_y),
+            Some(PlaceInteractionHit::Section(section)) if section.group == "Devices"
+        ));
+
+        assert_eq!(places_content_y_from_viewport_y(7.0, -25.0), 7.0);
     }
 
     fn test_place(index: usize, group: &'static str, label: &str, path: &str) -> PlaceSnapshot {

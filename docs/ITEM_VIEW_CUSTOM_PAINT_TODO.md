@@ -1441,6 +1441,13 @@ tracks.
   same owned drag module boundary. Evidence:
   `/tmp/fika-places-drag-start-model.log` passed
   `--require-retained-dnd-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-chrome-policy`.
+- [x] P16eq: Add retained Places content-y conversion and boundary tests.
+  `places_content_y_from_viewport_y()` now centralizes the viewport-local y plus
+  scroll offset conversion that feeds retained hit testing, and unit coverage
+  proves non-zero scroll maps to the expected row/section while row, section,
+  and content bounds remain half-open. This keeps the future viewport-level
+  event layer from regressing drop/activation targets when it no longer lives
+  inside scroll content.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,
