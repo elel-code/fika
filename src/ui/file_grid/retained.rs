@@ -5,11 +5,14 @@ use super::snapshot::{
 };
 use crate::FikaApp;
 use crate::ui::drag_drop::ItemDropTarget;
+use crate::ui::icons::FileIconSnapshot;
 use crate::ui::rename::RenameDraft;
 use fika_core::{
     FilteredModel, Generation, MetadataRoleResult, PaneId, ThumbnailProbeResult, ViewMode,
     ViewState, apply_metadata_role_result_to_model, apply_thumbnail_probe_result_to_model,
 };
+use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
 impl FikaApp {
@@ -165,5 +168,48 @@ impl FikaApp {
             }
         }
         changed
+    }
+
+    pub(crate) fn icon_snapshot_for_model_item(
+        &mut self,
+        path: &Path,
+        is_dir: bool,
+        mime_type: Option<Arc<str>>,
+        mime_magic_checked: bool,
+        icon_size: f32,
+    ) -> FileIconSnapshot {
+        self.file_icons.cached_or_preliminary_icon_for(
+            path,
+            is_dir,
+            mime_type,
+            mime_magic_checked,
+            icon_size,
+        )
+    }
+
+    pub(crate) fn cancel_metadata_role_work_for_pane(&mut self, pane_id: PaneId) {
+        self.metadata_role_scheduler.cancel_pane(pane_id);
+    }
+
+    pub(crate) fn cancel_stale_metadata_role_work_for_pane(&mut self, pane_id: PaneId) {
+        let Some(generation) = self.panes.pane(pane_id).map(|pane| pane.generation) else {
+            self.cancel_metadata_role_work_for_pane(pane_id);
+            return;
+        };
+        self.metadata_role_scheduler
+            .cancel_stale_pane_generations(pane_id, generation);
+    }
+
+    pub(crate) fn cancel_thumbnail_work_for_pane(&mut self, pane_id: PaneId) {
+        self.thumbnail_scheduler.cancel_pane(pane_id);
+    }
+
+    pub(crate) fn cancel_stale_thumbnail_work_for_pane(&mut self, pane_id: PaneId) {
+        let Some(generation) = self.panes.pane(pane_id).map(|pane| pane.generation) else {
+            self.cancel_thumbnail_work_for_pane(pane_id);
+            return;
+        };
+        self.thumbnail_scheduler
+            .cancel_stale_pane_generations(pane_id, generation);
     }
 }

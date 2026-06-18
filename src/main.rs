@@ -99,7 +99,7 @@ use ui::filter_bar::{
     FILTER_BAR_HEIGHT, FilterBarSnapshot, FilteredModelCacheEntry, PaneFilterState,
     cached_filtered_model_for_pane, filter_toggle_snapshot,
 };
-use ui::icons::{FileIconCache, FileIconSnapshot, file_icon_resolve_results_for_requests};
+use ui::icons::{FileIconCache, file_icon_resolve_results_for_requests};
 use ui::item_view::{ITEM_VIEW_SCROLLBAR_RESERVED_EXTENT, ItemViewScrollState};
 use ui::location_bar::{LocationDraft, LocationEditMetrics};
 use ui::network_auth::{
@@ -2301,36 +2301,6 @@ impl FikaApp {
         .detach();
     }
 
-    fn icon_snapshot_for_model_item(
-        &mut self,
-        path: &Path,
-        is_dir: bool,
-        mime_type: Option<Arc<str>>,
-        mime_magic_checked: bool,
-        icon_size: f32,
-    ) -> FileIconSnapshot {
-        self.file_icons.cached_or_preliminary_icon_for(
-            path,
-            is_dir,
-            mime_type,
-            mime_magic_checked,
-            icon_size,
-        )
-    }
-
-    fn cancel_metadata_role_work_for_pane(&mut self, pane_id: PaneId) {
-        self.metadata_role_scheduler.cancel_pane(pane_id);
-    }
-
-    fn cancel_stale_metadata_role_work_for_pane(&mut self, pane_id: PaneId) {
-        let Some(generation) = self.panes.pane(pane_id).map(|pane| pane.generation) else {
-            self.cancel_metadata_role_work_for_pane(pane_id);
-            return;
-        };
-        self.metadata_role_scheduler
-            .cancel_stale_pane_generations(pane_id, generation);
-    }
-
     fn maybe_start_thumbnail_probe(&mut self, cx: &mut Context<Self>) {
         let Some(batch) = self
             .thumbnail_scheduler
@@ -2367,19 +2337,6 @@ impl FikaApp {
             },
         )
         .detach();
-    }
-
-    fn cancel_thumbnail_work_for_pane(&mut self, pane_id: PaneId) {
-        self.thumbnail_scheduler.cancel_pane(pane_id);
-    }
-
-    fn cancel_stale_thumbnail_work_for_pane(&mut self, pane_id: PaneId) {
-        let Some(generation) = self.panes.pane(pane_id).map(|pane| pane.generation) else {
-            self.cancel_thumbnail_work_for_pane(pane_id);
-            return;
-        };
-        self.thumbnail_scheduler
-            .cancel_stale_pane_generations(pane_id, generation);
     }
 
     fn maybe_start_device_monitor(&mut self, cx: &mut Context<Self>) {

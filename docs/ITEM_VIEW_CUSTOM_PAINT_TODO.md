@@ -868,6 +868,12 @@ by risk and evidence, not by how custom-painted a surface looks.
   completion, restart, and notify decisions. This keeps raw-grid visible sync
   and background role/thumbnail result mutation on the same retained model
   side of the Dolphin-style boundary.
+- [x] P16bc: Move file-grid model-work lifecycle helpers into the retained
+  boundary. `file_grid/retained.rs` now owns pane-local metadata-role and
+  thumbnail cancellation, stale-generation cleanup, and file-icon snapshot
+  lookup for retained projection. `src/main.rs` still triggers these actions
+  from pane load/refresh/close events and worker scheduling, but no longer owns
+  the scheduler cleanup or icon snapshot policy.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,
