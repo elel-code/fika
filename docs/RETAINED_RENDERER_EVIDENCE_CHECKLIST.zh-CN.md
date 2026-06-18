@@ -10,6 +10,21 @@ GUI 命令必须在真实桌面会话中运行。沙箱或 headless shell 可能
 `NoCompositor`，这种结果不是有效运行时证据。优先使用已构建的 binary，而不是
 `cargo run`，避免编译时间混入日志。
 
+标准 core 采集已自动化：
+
+```sh
+scripts/run-retained-renderer-evidence.sh --core
+```
+
+只有在验证预期能通过默认提升 gate 的 MIME/theme icon renderer 候选时，才使用
+`--icons`：
+
+```sh
+scripts/run-retained-renderer-evidence.sh --icons
+```
+
+下面各节展示脚本运行的命令，以及仍需人工审查的手动检查。
+
 ## 构建
 
 ```sh

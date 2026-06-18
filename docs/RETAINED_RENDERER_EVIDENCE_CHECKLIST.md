@@ -8,6 +8,22 @@ Run GUI commands from a real desktop session. A sandbox or headless shell can
 return GPUI `NoCompositor`, which is not valid runtime evidence. Prefer a built
 binary over `cargo run` so compile time is not mixed into the log.
 
+The standard core capture is automated:
+
+```sh
+scripts/run-retained-renderer-evidence.sh --core
+```
+
+Use `--icons` only when validating a MIME/theme icon renderer candidate that is
+expected to pass default-promotion gates:
+
+```sh
+scripts/run-retained-renderer-evidence.sh --icons
+```
+
+The sections below show the commands that the script runs and the manual checks
+that still need human review.
+
 ## Build
 
 ```sh

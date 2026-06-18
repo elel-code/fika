@@ -1517,6 +1517,13 @@ tracks.
   gates, Places retained-DnD expectations, manual DnD/rename smoke reminders,
   and recording rule required before promoting a custom renderer or removing a
   GPUI bridge.
+- [x] P16ez: Add a retained-renderer evidence runner. The new
+  `scripts/run-retained-renderer-evidence.sh` automates the core Track 1 item
+  and Places desktop-session captures, runs the matching analyzer gates, and
+  verifies that the current Places full-retained gate still fails until the
+  typed DnD payload shell is removed. MIME/theme icon A/B evidence is available
+  behind `--icons` so the current non-promotable custom icon path does not block
+  every baseline freeze.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,
