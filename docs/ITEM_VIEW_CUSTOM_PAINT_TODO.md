@@ -843,6 +843,12 @@ by risk and evidence, not by how custom-painted a surface looks.
   retained hovered-item lookup and icon snapshot callback. `src/main.rs` still
   decides when a pane render needs conversion, but no longer wires the retained
   slot/cache handoff inline.
+- [x] P16ay: Move the app-side raw-grid model-work queue wrapper into the
+  file-grid module. `file_grid/retained.rs` now owns the thin pane lookup and
+  app-state handoff into `queue_raw_file_grid_model_work()`, while `src/main.rs`
+  only consumes the queued metadata/thumbnail/icon booleans to start the
+  existing workers. This keeps the Dolphin-style visible-work dedupe and role
+  scheduling handoff behind the file-grid boundary.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,
