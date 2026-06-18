@@ -771,6 +771,12 @@ by risk and evidence, not by how custom-painted a surface looks.
   the primary reuse mechanism. Future reuse-pool work must preserve that
   boundary and update the retained slot/paint-slot tests or runtime
   `[fika item-paint-slots]` evidence if it changes.
+- [x] P16ap: Make retained item paint-slot evidence analyzer-visible. The
+  item-view analyzer now summarizes `[fika item-paint-slots]` retained slot
+  activity and supports `--require-paint-slots`; the standard runtime log gate
+  uses it so renderer evidence includes inserted, content, geometry, visual,
+  unchanged, removed, and entries maxima. The analyzer fixture covers valid
+  Compact/Icons/Details paint-slot logs plus missing and empty slot evidence.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

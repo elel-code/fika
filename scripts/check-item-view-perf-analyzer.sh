@@ -29,6 +29,9 @@ cat > "$tmpdir/complete.log" <<'EOF'
 [fika file-grid] pane=1 mode=Compact visible=32 content=1602.5x882 build=400us
 [fika file-grid] pane=1 mode=Icons visible=40 content=587x1168 build=450us
 [fika file-grid] pane=1 mode=Details visible=30 content=601x882 build=420us
+[fika item-paint-slots] pane=1 mode=Compact inserted=32 content=0 geometry=0 visual=0 unchanged=0 removed=0 entries=32
+[fika item-paint-slots] pane=1 mode=Icons inserted=8 content=0 geometry=32 visual=0 unchanged=0 removed=0 entries=40
+[fika item-paint-slots] pane=1 mode=Details inserted=30 content=0 geometry=0 visual=0 unchanged=0 removed=40 entries=30
 [fika static-item-visual] pane=1 mode=Compact prepaint_count=32 prepaint=180us paint_count=32 paint=160us
 [fika static-item-visual] pane=1 mode=Icons prepaint_count=40 prepaint=210us paint_count=40 paint=190us
 [fika item-image] pane=1 mode=Icons prepaint_count=8 prepaint=70us paint_count=8 paint=80us theme_loaded=4 theme_decoded=2 theme_retained=1 theme_placeholder=1 thumb_loaded=2 thumb_decoded=1 thumb_retained=0 thumb_fallback=0
@@ -49,6 +52,7 @@ EOF
     --require-static-modes Compact,Icons \
     --require-interaction \
     --require-renderer-policy \
+    --require-paint-slots \
     --require-renderer-policy-modes Compact,Icons,Details \
     --require-modes Compact,Icons,Details \
     --steady-total-us 1000 \
@@ -79,6 +83,10 @@ if [[ "$evidence" != *"item_view_stage_max"* || "$evidence" != *"icon_sync=3us"*
 fi
 if [[ "$evidence" != *"renderer_policy_frames"* ]]; then
     echo "expected renderer evidence to include renderer policy summary" >&2
+    exit 1
+fi
+if [[ "$evidence" != *"item_paint_slots_frames"* || "$evidence" != *"max_removed=40"* ]]; then
+    echo "expected renderer evidence to include retained paint-slot summary" >&2
     exit 1
 fi
 if [[ "$evidence" != *"autosmoke:"* || "$evidence" != *"scenario=ZoomScroll"* ]]; then
@@ -161,6 +169,21 @@ EOF
 
 if "$analyzer" --require-renderer-policy-modes Compact,Icons,Details "$tmpdir/missing-renderer-policy-mode.log" >/dev/null 2>&1; then
     echo "expected missing required renderer-policy mode to fail" >&2
+    exit 1
+fi
+
+if "$analyzer" --require-paint-slots "$tmpdir/missing-channels.log" >/dev/null 2>&1; then
+    echo "expected missing retained paint-slot logs to fail" >&2
+    exit 1
+fi
+
+cat > "$tmpdir/empty-paint-slots.log" <<'EOF'
+[fika item-view] pane=1 mode=Compact phase=steady items=48 visible=32 raw=50us icon_sync=2us queue=1us convert=40us total=120us
+[fika item-paint-slots] pane=1 mode=Compact inserted=0 content=0 geometry=0 visual=0 unchanged=0 removed=0 entries=0
+EOF
+
+if "$analyzer" --require-paint-slots "$tmpdir/empty-paint-slots.log" >/dev/null 2>&1; then
+    echo "expected empty retained paint-slot evidence to fail" >&2
     exit 1
 fi
 

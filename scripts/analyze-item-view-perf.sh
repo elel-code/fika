@@ -28,6 +28,9 @@ Options:
   --require-renderer-policy
       Fail if [fika renderer-policy] surface-count logs are missing.
 
+  --require-paint-slots
+      Fail if [fika item-paint-slots] retained slot activity logs are missing.
+
   --require-autosmoke
       Fail if item-view autosmoke start/complete and scenario actions are missing.
 
@@ -62,6 +65,7 @@ require_details=false
 require_static_visual=false
 require_interaction=false
 require_renderer_policy=false
+require_paint_slots=false
 require_autosmoke=false
 required_modes=""
 required_static_modes=""
@@ -101,6 +105,9 @@ while [[ $# -gt 0 ]]; do
             ;;
         --require-renderer-policy)
             require_renderer_policy=true
+            ;;
+        --require-paint-slots)
+            require_paint_slots=true
             ;;
         --require-autosmoke)
             require_autosmoke=true
@@ -247,6 +254,7 @@ awk \
     -v require_static_visual="$require_static_visual" \
     -v require_interaction="$require_interaction" \
     -v require_renderer_policy="$require_renderer_policy" \
+    -v require_paint_slots="$require_paint_slots" \
     -v require_autosmoke="$require_autosmoke" \
     -v required_modes="$required_modes" \
     -v required_static_modes="$required_static_modes" \
@@ -439,6 +447,18 @@ BEGIN {
     max_assign(single_max, "interaction_paint_count", field("paint_count") + 0)
 }
 
+/^\[fika item-paint-slots\]/ {
+    item_paint_slot_count++
+    note_mode(field("mode"))
+    max_assign(single_max, "paint_slot_inserted", field("inserted") + 0)
+    max_assign(single_max, "paint_slot_content", field("content") + 0)
+    max_assign(single_max, "paint_slot_geometry", field("geometry") + 0)
+    max_assign(single_max, "paint_slot_visual", field("visual") + 0)
+    max_assign(single_max, "paint_slot_unchanged", field("unchanged") + 0)
+    max_assign(single_max, "paint_slot_removed", field("removed") + 0)
+    max_assign(single_max, "paint_slot_entries", field("entries") + 0)
+}
+
 /^\[fika renderer-policy\]/ {
     renderer_policy_count++
     mode = field("mode")
@@ -554,6 +574,14 @@ END {
     print "  interaction_frames: " (item_interaction_count + 0) \
         " max_prepaint_count=" (("interaction_prepaint_count" in single_max) ? single_max["interaction_prepaint_count"] : 0) \
         " max_paint_count=" (("interaction_paint_count" in single_max) ? single_max["interaction_paint_count"] : 0)
+    print "  item_paint_slots_frames: " (item_paint_slot_count + 0) \
+        " max_inserted=" (("paint_slot_inserted" in single_max) ? single_max["paint_slot_inserted"] : 0) \
+        " max_content=" (("paint_slot_content" in single_max) ? single_max["paint_slot_content"] : 0) \
+        " max_geometry=" (("paint_slot_geometry" in single_max) ? single_max["paint_slot_geometry"] : 0) \
+        " max_visual=" (("paint_slot_visual" in single_max) ? single_max["paint_slot_visual"] : 0) \
+        " max_unchanged=" (("paint_slot_unchanged" in single_max) ? single_max["paint_slot_unchanged"] : 0) \
+        " max_removed=" (("paint_slot_removed" in single_max) ? single_max["paint_slot_removed"] : 0) \
+        " max_entries=" (("paint_slot_entries" in single_max) ? single_max["paint_slot_entries"] : 0)
     print "  renderer_policy_frames: " (renderer_policy_count + 0) \
         " max_items=" (("renderer_policy_items" in single_max) ? single_max["renderer_policy_items"] : 0) \
         " max_visual_layer=" (("renderer_policy_visual_layer" in single_max) ? single_max["renderer_policy_visual_layer"] : 0) \
@@ -597,6 +625,14 @@ END {
     }
     if (require_renderer_policy == "true" && renderer_policy_count == 0) {
         fail("missing [fika renderer-policy] lines")
+    }
+    if (require_paint_slots == "true") {
+        if (item_paint_slot_count == 0) {
+            fail("missing [fika item-paint-slots] lines")
+        }
+        if (!(("paint_slot_entries" in single_max) && single_max["paint_slot_entries"] > 0)) {
+            fail("missing non-empty retained item paint-slot evidence")
+        }
     }
     if (require_autosmoke == "true") {
         if (autosmoke_start_seen == 0 || autosmoke_complete_seen == 0) {

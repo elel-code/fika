@@ -268,6 +268,10 @@ geometry, and visual-change tests in `src/ui/file_grid/tests.rs`, and runtime
 `[fika item-paint-slots]` / `[fika renderer-policy]` logs. A future reuse-pool
 change should update these tests or logs if it changes the source of visual
 identity. It should not rely on GPUI child keys as the primary reuse mechanism.
+`scripts/analyze-item-view-perf.sh --require-paint-slots` is the runtime gate
+for that retained reuse evidence; it rejects logs that lack non-empty
+`[fika item-paint-slots]` entries and summarizes inserted, content, geometry,
+visual, unchanged, removed, and entries maxima.
 
 This target can advance while drag-start and rename stay on GPUI. The pool
 boundary is the retained item/row state, not a claim that every renderer is
