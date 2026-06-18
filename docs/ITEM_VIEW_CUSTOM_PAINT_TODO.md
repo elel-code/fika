@@ -1123,6 +1123,11 @@ by risk and evidence, not by how custom-painted a surface looks.
   `item_view_scroll_snapshot_for_view()`, wheel scroll uses
   `changed_item_view_scroll_snapshot()`, and app tests reuse the pane snapshot
   projection instead of constructing `ItemViewScrollViewSnapshot` directly.
+- [x] P16cz: Move normal item-view scroll-handle-to-pane sync orchestration into
+  the item-view facade. `main.rs` now delegates the ordinary handle sync path to
+  `sync_pane_view_from_item_view_scroll_handle()` with the scroll state,
+  pane controller, and pane id instead of assembling the snapshot/writeback
+  closure locally.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,
