@@ -830,6 +830,12 @@ by risk and evidence, not by how custom-painted a surface looks.
   those results to the pane model and invalidates visible snapshots when model
   roles change. Unit coverage proves zero-budget cutoff and visible-only
   candidate conversion.
+- [x] P16aw: Move file-grid visible snapshot cache invalidation policy into the
+  file-grid lifecycle module. `file_grid/lifecycle.rs` now owns pane-local and
+  global visible snapshot cache invalidation used after visible icon sync,
+  visible metadata sync, and background icon resolve completion. `src/main.rs`
+  still decides when role/icon results changed, but no longer reaches directly
+  into `visible_item_snapshot_caches` for those invalidation paths.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

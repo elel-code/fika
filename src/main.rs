@@ -1526,7 +1526,7 @@ impl FikaApp {
                     file_icon_size,
                     DOLPHIN_VISIBLE_ICON_SYNC_BUDGET,
                 ) {
-                    self.visible_item_snapshot_caches.remove(&pane_id);
+                    self.invalidate_file_grid_visible_snapshot_cache(pane_id);
                 }
                 let icon_sync_elapsed = icon_sync_started.map(|started| started.elapsed());
                 let visible_count = raw_file_grid
@@ -1686,7 +1686,7 @@ impl FikaApp {
 
         let changed = self.finish_metadata_role_results(results);
         if changed {
-            self.visible_item_snapshot_caches.remove(&pane_id);
+            self.invalidate_file_grid_visible_snapshot_cache(pane_id);
         }
         changed
     }
@@ -2407,7 +2407,7 @@ impl FikaApp {
                         app.file_icon_resolve_queue.finish_batch(finished_requests);
                         let changed = app.file_icons.finish_resolve_results(results);
                         if changed {
-                            app.visible_item_snapshot_caches.clear();
+                            app.invalidate_all_file_grid_visible_snapshot_caches();
                         }
                         app.maybe_start_file_icon_resolve(cx);
                         if changed {

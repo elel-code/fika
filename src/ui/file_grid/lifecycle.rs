@@ -24,4 +24,12 @@ impl FikaApp {
         self.clear_hovered_item_for_pane(pane_id);
         self.compact_column_widths.remove(&pane_id);
     }
+
+    pub(crate) fn invalidate_file_grid_visible_snapshot_cache(&mut self, pane_id: PaneId) {
+        self.visible_item_snapshot_caches.remove(&pane_id);
+    }
+
+    pub(crate) fn invalidate_all_file_grid_visible_snapshot_caches(&mut self) {
+        self.visible_item_snapshot_caches.clear();
+    }
 }
