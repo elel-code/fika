@@ -1054,6 +1054,10 @@ by risk and evidence, not by how custom-painted a surface looks.
   `(iconName, icon_size)` image-cache direction, hybrid promotion option,
   no-sync-decode rule, and paired default/custom evidence gate needed before
   replacing the default GPUI `img()` MIME/theme renderer.
+- [x] P16cj: Move item-view scroll lifecycle snapshot APIs into the scroll
+  state. Bounds updates, scrollbar-drag finish sync, and layout-change scroll
+  preservation now have `ItemViewScrollViewSnapshot` entry points; production
+  paths in `src/main.rs` no longer pass those scroll values as loose fields.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

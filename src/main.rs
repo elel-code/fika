@@ -1247,55 +1247,37 @@ impl FikaApp {
         let Some(view) = self.panes.pane(pane_id).map(|pane| pane.view.clone()) else {
             return self
                 .item_view_scroll
-                .finish_scrollbar_drag_with_sync(pane_id, 0.0, 0.0)
+                .finish_scrollbar_drag_with_sync_snapshot(
+                    pane_id,
+                    ItemViewScrollViewSnapshot::default(),
+                )
                 .was_dragging;
         };
-        let finish = self.item_view_scroll.finish_scrollbar_drag_with_sync(
-            pane_id,
-            view.max_scroll_x,
-            view.max_scroll_y,
-        );
         let view_snapshot = ItemViewScrollViewSnapshot::new(
             view.scroll_x,
             view.scroll_y,
             view.max_scroll_x,
             view.max_scroll_y,
         );
+        let finish = self
+            .item_view_scroll
+            .finish_scrollbar_drag_with_sync_snapshot(pane_id, view_snapshot);
         let action_changed =
             self.apply_item_view_scroll_sync_action(pane_id, finish.action, view_snapshot);
         action_changed || finish.was_dragging
     }
 
     fn preserve_item_view_scroll_for_layout_change(&mut self, pane_id: PaneId) {
-        let view_scroll_x = self
-            .panes
-            .pane(pane_id)
-            .map_or(0.0, |pane| pane.view.scroll_x);
-        let view_scroll_y = self
-            .panes
-            .pane(pane_id)
-            .map_or(0.0, |pane| pane.view.scroll_y);
-        let view_max_scroll_x = self
-            .panes
-            .pane(pane_id)
-            .map_or(0.0, |pane| pane.view.max_scroll_x);
-        let view_max_scroll_y = self
-            .panes
-            .pane(pane_id)
-            .map_or(0.0, |pane| pane.view.max_scroll_y);
-        let (scroll_x, scroll_y) = self.item_view_scroll.preserve_for_layout_change(
-            pane_id,
-            view_scroll_x,
-            view_scroll_y,
-            view_max_scroll_x,
-            view_max_scroll_y,
-        );
+        let view = self.item_view_scroll_view_snapshot_for_pane(pane_id);
+        let sync = self
+            .item_view_scroll
+            .preserve_for_layout_change_snapshot(pane_id, view);
         let _ = self.panes.set_view_scroll(
             pane_id,
-            scroll_x,
-            scroll_y,
-            view_max_scroll_x,
-            view_max_scroll_y,
+            sync.scroll_x,
+            sync.scroll_y,
+            sync.max_scroll_x,
+            sync.max_scroll_y,
         );
     }
 
@@ -3835,19 +3817,15 @@ impl FikaApp {
         let Some(view) = self.panes.pane(pane_id).map(|pane| pane.view.clone()) else {
             return changed;
         };
-        let bounds_sync = self.item_view_scroll.sync_after_bounds_update(
-            pane_id,
-            view.scroll_x,
-            view.scroll_y,
-            view.max_scroll_x,
-            view.max_scroll_y,
-        );
         let view_snapshot = ItemViewScrollViewSnapshot::new(
             view.scroll_x,
             view.scroll_y,
             view.max_scroll_x,
             view.max_scroll_y,
         );
+        let bounds_sync = self
+            .item_view_scroll
+            .sync_after_bounds_update_snapshot(pane_id, view_snapshot);
         let action_changed =
             self.apply_item_view_scroll_sync_action(pane_id, bounds_sync.action, view_snapshot);
         changed || bounds_sync.handle_changed || action_changed

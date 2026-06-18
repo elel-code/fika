@@ -251,6 +251,20 @@ impl ItemViewScrollState {
         }
     }
 
+    pub(crate) fn sync_after_bounds_update_snapshot(
+        &mut self,
+        pane_id: PaneId,
+        view: ItemViewScrollViewSnapshot,
+    ) -> ItemViewScrollBoundsSync {
+        self.sync_after_bounds_update(
+            pane_id,
+            view.scroll_x,
+            view.scroll_y,
+            view.max_scroll_x,
+            view.max_scroll_y,
+        )
+    }
+
     pub(crate) fn finish_scrollbar_drag_with_sync(
         &mut self,
         pane_id: PaneId,
@@ -267,6 +281,14 @@ impl ItemViewScrollState {
             action,
             was_dragging,
         }
+    }
+
+    pub(crate) fn finish_scrollbar_drag_with_sync_snapshot(
+        &mut self,
+        pane_id: PaneId,
+        view: ItemViewScrollViewSnapshot,
+    ) -> ItemViewScrollDragFinish {
+        self.finish_scrollbar_drag_with_sync(pane_id, view.max_scroll_x, view.max_scroll_y)
     }
 
     fn sync_from_authoritative_handle(
@@ -301,6 +323,26 @@ impl ItemViewScrollState {
         self.set_handle_offset(pane_id, scroll_x, scroll_y);
         self.mark_authoritative_for_frames(pane_id, LAYOUT_CHANGE_AUTHORITATIVE_FRAMES);
         (scroll_x, scroll_y)
+    }
+
+    pub(crate) fn preserve_for_layout_change_snapshot(
+        &mut self,
+        pane_id: PaneId,
+        view: ItemViewScrollViewSnapshot,
+    ) -> ItemViewScrollSync {
+        let (scroll_x, scroll_y) = self.preserve_for_layout_change(
+            pane_id,
+            view.scroll_x,
+            view.scroll_y,
+            view.max_scroll_x,
+            view.max_scroll_y,
+        );
+        ItemViewScrollSync {
+            scroll_x,
+            scroll_y,
+            max_scroll_x: view.max_scroll_x,
+            max_scroll_y: view.max_scroll_y,
+        }
     }
 
     pub(crate) fn sync_handle_to_view(
@@ -704,6 +746,56 @@ mod tests {
                 max_scroll_x: 1_000.0,
                 max_scroll_y: 0.0,
             })
+        );
+    }
+
+    #[test]
+    fn scroll_state_lifecycle_snapshot_apis_match_view_tuple_policy() {
+        let pane_id = PaneId(1);
+        let view = ItemViewScrollViewSnapshot::new(180.0, 0.0, 1_000.0, 0.0);
+
+        let mut preserve_state = ItemViewScrollState::default();
+        let preserve_handle = preserve_state.handle_for_pane(pane_id);
+        preserve_handle.set_offset(point(px(-240.0), px(0.0)));
+        assert_eq!(
+            preserve_state.preserve_for_layout_change_snapshot(pane_id, view),
+            ItemViewScrollSync {
+                scroll_x: 180.0,
+                scroll_y: 0.0,
+                max_scroll_x: 1_000.0,
+                max_scroll_y: 0.0,
+            }
+        );
+        assert_eq!(preserve_handle.offset().x, px(-180.0));
+        assert!(preserve_state.has_authoritative_scroll(pane_id));
+
+        let mut bounds_state = ItemViewScrollState::default();
+        let bounds_handle = bounds_state.handle_for_pane(pane_id);
+        bounds_state.mark_authoritative_for_frames(pane_id, 1);
+        assert_eq!(
+            bounds_state.sync_after_bounds_update_snapshot(pane_id, view),
+            ItemViewScrollBoundsSync {
+                action: ItemViewScrollSyncAction::SyncHandleToView,
+                handle_changed: true,
+            }
+        );
+        assert_eq!(bounds_handle.offset().x, px(-180.0));
+
+        let mut finish_state = ItemViewScrollState::default();
+        let finish_handle = finish_state.handle_for_pane(pane_id);
+        finish_state.begin_scrollbar_drag(pane_id);
+        finish_handle.set_offset(point(px(-480.0), px(0.0)));
+        assert_eq!(
+            finish_state.finish_scrollbar_drag_with_sync_snapshot(pane_id, view),
+            ItemViewScrollDragFinish {
+                action: ItemViewScrollSyncAction::SyncView(ItemViewScrollSync {
+                    scroll_x: 480.0,
+                    scroll_y: 0.0,
+                    max_scroll_x: 1_000.0,
+                    max_scroll_y: 0.0,
+                }),
+                was_dragging: true,
+            }
         );
     }
 
