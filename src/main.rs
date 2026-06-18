@@ -102,15 +102,13 @@ use ui::filter_bar::{
     cached_filtered_model_for_pane, filter_toggle_snapshot,
 };
 use ui::icons::{FileIconCache, file_icon_resolve_results_for_requests};
-#[cfg(test)]
-use ui::item_view::item_view_scroll_snapshot_for_pane;
 use ui::item_view::{
     ItemViewScrollState, finish_item_view_scrollbar_drag as finish_item_view_scrollbar_drag_state,
-    item_view_scroll_snapshot_for_view,
     preserve_item_view_scroll_for_layout_change as preserve_item_view_scroll_for_layout_change_state,
     projected_item_viewport_width_for_pane_width,
     scroll_pane_from_item_view_wheel as scroll_item_view_pane_from_wheel,
     sync_item_view_scroll_handle_to_pane_view as sync_item_view_handle_to_pane_view_state,
+    sync_item_view_scroll_handle_to_view_authoritatively as sync_item_view_handle_to_view_authoritatively,
     sync_pane_view_after_item_view_bounds_update as sync_item_view_pane_after_bounds_update,
     sync_pane_view_from_authoritative_item_view_scroll_handle as sync_item_view_pane_from_authoritative_scroll_handle,
     sync_pane_view_from_item_view_scroll_handle as sync_item_view_pane_from_scroll_handle,
@@ -900,21 +898,22 @@ impl FikaApp {
     }
 
     fn prime_pane_viewport_for_filter_bar_change(&mut self, pane_id: PaneId, visible: bool) {
-        let view_snapshot = {
-            let Some(pane) = self.panes.pane_mut(pane_id) else {
-                return;
-            };
+        let Some(view) = self.panes.pane_mut(pane_id).map(|pane| {
             pane.view.viewport_height = viewport_height_after_filter_bar_visibility_change(
                 pane.view.viewport_height,
                 visible,
                 FILTER_BAR_HEIGHT,
             );
-            item_view_scroll_snapshot_for_view(&pane.view)
+            pane.view.clone()
+        }) else {
+            return;
         };
 
-        let _ = self
-            .item_view_scroll
-            .sync_handle_to_view_authoritatively_snapshot(pane_id, view_snapshot);
+        let _ = sync_item_view_handle_to_view_authoritatively(
+            &mut self.item_view_scroll,
+            pane_id,
+            &view,
+        );
     }
 
     pub(crate) fn show_filter_bar(&mut self, pane_id: PaneId) {
@@ -13585,9 +13584,8 @@ text/plain=viewer.desktop;\n",
         app.panes
             .set_view_scroll(pane_id, 140.0, 32.0, 1_000.0, 500.0)
             .unwrap();
-        let view_snapshot = item_view_scroll_snapshot_for_pane(&app.panes, pane_id);
-        app.item_view_scroll
-            .sync_handle_to_view_authoritatively_snapshot(pane_id, view_snapshot);
+        let view = app.panes.pane(pane_id).unwrap().view.clone();
+        sync_item_view_handle_to_view_authoritatively(&mut app.item_view_scroll, pane_id, &view);
         app.item_view_scroll.begin_scrollbar_drag(pane_id);
 
         app.begin_pane_loading_transition(pane_id, PaneLoadingScrollPolicy::Preserve);

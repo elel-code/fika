@@ -1155,6 +1155,10 @@ by risk and evidence, not by how custom-painted a surface looks.
   facade. `scroll_pane_from_wheel()` now delegates wheel axis mapping, pane
   model scroll, snapshot change detection, and user-scroll handle sync through
   `scroll_pane_from_item_view_wheel()`.
+- [x] P16dg: Move item-view authoritative handle-to-view priming into the
+  item-view facade. Filter-bar viewport priming now delegates through
+  `sync_item_view_scroll_handle_to_view_authoritatively()` instead of
+  constructing a scroll snapshot and calling the scroll-state API in `main.rs`.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

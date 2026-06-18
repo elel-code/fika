@@ -176,6 +176,17 @@ pub(crate) fn changed_item_view_scroll_snapshot(
     (previous != next).then_some(next)
 }
 
+pub(crate) fn sync_item_view_scroll_handle_to_view_authoritatively(
+    scroll_state: &mut ItemViewScrollState,
+    pane_id: PaneId,
+    view: &ViewState,
+) -> bool {
+    scroll_state.sync_handle_to_view_authoritatively_snapshot(
+        pane_id,
+        item_view_scroll_snapshot_for_view(view),
+    )
+}
+
 pub(crate) fn sync_pane_view_from_item_view_scroll_handle(
     scroll_state: &mut ItemViewScrollState,
     panes: &mut PaneController,
