@@ -21,6 +21,16 @@ Current replacement status and the full transition roadmap are tracked in
 - A GPUI built-in surface should stay when GPUI owns a platform contract that
   Fika cannot yet reproduce through public APIs.
 
+## GPUI Dependency Baseline
+
+As of the 2026-06-18 lockfile update to Zed/GPUI commit `e4f6742a`, the
+resolved dependency graph no longer contains `async-std`,
+`async-global-executor`, or the old Zed `util` crate. This removes one
+historical dependency-weight concern around keeping GPUI built-in surfaces.
+It does not change renderer decisions by itself: image, drag-start, rename,
+and Places boundaries still require same-scenario runtime evidence before a
+custom renderer can replace a GPUI surface.
+
 ## Current Surface Decisions
 
 | Surface | Current renderer | Dolphin-style owner | Decision | Evidence required before changing |

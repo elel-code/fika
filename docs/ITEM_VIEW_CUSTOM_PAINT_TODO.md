@@ -1065,6 +1065,12 @@ by risk and evidence, not by how custom-painted a surface looks.
 - [x] P16cl: Narrow item-view scroll tuple helper visibility. The loose-field
   scroll helpers are now scroll-state implementation details; production and
   cross-module tests use the snapshot API surface.
+- [x] P16cm: Record the updated GPUI dependency baseline. The 2026-06-18
+  lockfile update moves GPUI to Zed commit `e4f6742a` and the resolved graph
+  no longer includes `async-std`, `async-global-executor`, or the old Zed
+  `util` crate. This lowers the dependency-weight concern for keeping GPUI
+  surfaces, but renderer replacement decisions still require paired runtime
+  evidence.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,
