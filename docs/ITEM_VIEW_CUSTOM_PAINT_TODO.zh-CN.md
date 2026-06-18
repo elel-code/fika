@@ -250,6 +250,7 @@
 - [x] P16aw：将文件网格可见快照 cache 失效策略移入文件网格 lifecycle 模块。`file_grid/lifecycle.rs` 现在拥有 pane-local 和 global visible snapshot cache invalidation，用于 visible icon sync、visible metadata sync 和后台 icon resolve 完成后。`src/main.rs` 仍决定 role/icon 结果何时变化，但这些失效路径不再直接访问 `visible_item_snapshot_caches`。
 - [x] P16ax：将保留文件网格投影状态 handoff 移入文件网格模块。`file_grid/retained.rs` 现在拥有 raw-to-retained projection 前后取出并放回 pane-local `VisibleItemSlotPool`、`VisibleItemSnapshotCache` 和 `ItemPaintSlotCache` 状态，包括保留 hovered-item lookup 和 icon snapshot callback。`src/main.rs` 仍决定 pane render 何时需要转换，但不再内联连接 retained slot/cache handoff。
 - [x] P16ay：将 app 侧 raw-grid model-work 队列 wrapper 移入文件网格模块。`file_grid/retained.rs` 现在拥有进入 `queue_raw_file_grid_model_work()` 前的薄 pane lookup 和 app-state handoff，而 `src/main.rs` 只消费 metadata/thumbnail/icon 是否排队的布尔值来启动现有 worker。这让 Dolphin 风格的 visible-work dedupe 和角色调度移交保持在文件网格边界后面。
+- [x] P16az：将 app 侧 raw file-grid snapshot wrapper 移入文件网格模块。`file_grid/retained.rs` 现在拥有 pane lookup 和 `RawFileGridSnapshotInput` 组装，包括 selection、rename draft、drop-target、filter、source revision 和 compact column-width 状态。`src/main.rs` 仍决定何时需要 snapshot，但不再内联构造 raw file-grid snapshot input。
 - [ ] P16q：在每个 P16 实现切片之后，单独提交并附带相关验证：仅文档切片需要 `git diff --check`；代码切片需要 `cargo fmt`、`cargo check`、`cargo test -q`、`scripts/check-item-view-perf-analyzer.sh`、`scripts/check-places-perf-analyzer.sh` 和 `git diff --check`。
 - [x] P16r：记录运行时自测试和突破记录规则。可重复的滚动、缩放、启动图标、调整大小、模式切换和 Places 目标回退应在依赖手动计时之前通过 autosmoke 日志和分析器脚本重现。任何确认的优化突破必须记录症状、Dolphin 比较边界、根本原因、实现、保存的日志/分析器命令和未来回归守卫在拥有的设计或决策文档中。
 

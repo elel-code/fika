@@ -1,11 +1,36 @@
 use super::snapshot::{
-    RawFileGridSnapshot, RetainedFileGridProjection, project_retained_file_grid_snapshot,
-    queue_raw_file_grid_model_work,
+    RawFileGridSnapshot, RawFileGridSnapshotInput, RetainedFileGridProjection,
+    project_retained_file_grid_snapshot, queue_raw_file_grid_model_work, raw_file_grid_snapshot,
 };
 use crate::FikaApp;
-use fika_core::{Generation, PaneId, ViewMode};
+use crate::ui::drag_drop::ItemDropTarget;
+use crate::ui::rename::RenameDraft;
+use fika_core::{FilteredModel, Generation, PaneId, ViewMode, ViewState};
 
 impl FikaApp {
+    pub(crate) fn raw_file_grid_snapshot_for_pane(
+        &mut self,
+        pane_id: PaneId,
+        view: &ViewState,
+        filtered: Option<&FilteredModel>,
+        source_revision: u64,
+        rename_draft: Option<&RenameDraft>,
+        item_drop_target: Option<&ItemDropTarget>,
+    ) -> Option<RawFileGridSnapshot> {
+        let pane = self.panes.pane(pane_id)?;
+        Some(raw_file_grid_snapshot(RawFileGridSnapshotInput {
+            pane_id,
+            model: &pane.model,
+            selection: &pane.selection,
+            view,
+            filtered,
+            source_revision,
+            rename_draft,
+            item_drop_target,
+            compact_column_widths: self.compact_column_widths.entry(pane_id).or_default(),
+        }))
+    }
+
     pub(crate) fn project_retained_file_grid_for_pane(
         &mut self,
         pane_id: PaneId,

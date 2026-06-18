@@ -87,12 +87,11 @@ use ui::file_grid::{
     DetailsTextShapeCache, FileIconResolveQueue, ItemDrag, ItemPaintSlotCache,
     ItemViewAutosmokeAction, ItemViewAutosmokeScenario, ItemViewPerfState, PaneLayoutProjection,
     PaneLayoutProjectionInput, PaneViewportGeometry, PaneVisibleWorkKey, RawFileGridSnapshot,
-    RawFileGridSnapshotInput, RetainedHoveredItem, StaticItemTextShapeCache, VisibleItemSlotPool,
-    VisibleItemSnapshotCache, compact_text_width, compact_text_width_for_name,
-    content_item_hit_at_point, emit_item_view_autosmoke_complete,
-    emit_item_view_autosmoke_scroll_action, emit_item_view_autosmoke_start,
-    emit_item_view_autosmoke_zoom_action, item_view_perf_enabled,
-    model_indexes_intersecting_visual_rect, pane_layout_projection, raw_file_grid_snapshot,
+    RetainedHoveredItem, StaticItemTextShapeCache, VisibleItemSlotPool, VisibleItemSnapshotCache,
+    compact_text_width, compact_text_width_for_name, content_item_hit_at_point,
+    emit_item_view_autosmoke_complete, emit_item_view_autosmoke_scroll_action,
+    emit_item_view_autosmoke_start, emit_item_view_autosmoke_zoom_action, item_view_perf_enabled,
+    model_indexes_intersecting_visual_rect, pane_layout_projection,
     rename_editor_required_text_width, resolve_visible_file_icons_for_raw_grid,
     visible_metadata_role_results_for_raw_grid,
 };
@@ -1620,29 +1619,6 @@ impl FikaApp {
                 })
             })
             .collect()
-    }
-
-    fn raw_file_grid_snapshot_for_pane(
-        &mut self,
-        pane_id: PaneId,
-        view: &fika_core::ViewState,
-        filtered: Option<&fika_core::FilteredModel>,
-        source_revision: u64,
-        rename_draft: Option<&RenameDraft>,
-        item_drop_target: Option<&ItemDropTarget>,
-    ) -> Option<RawFileGridSnapshot> {
-        let pane = self.panes.pane(pane_id)?;
-        Some(raw_file_grid_snapshot(RawFileGridSnapshotInput {
-            pane_id,
-            model: &pane.model,
-            selection: &pane.selection,
-            view,
-            filtered,
-            source_revision,
-            rename_draft,
-            item_drop_target,
-            compact_column_widths: self.compact_column_widths.entry(pane_id).or_default(),
-        }))
     }
 
     fn resolve_visible_metadata_roles_for_raw_grid(

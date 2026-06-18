@@ -849,6 +849,12 @@ by risk and evidence, not by how custom-painted a surface looks.
   only consumes the queued metadata/thumbnail/icon booleans to start the
   existing workers. This keeps the Dolphin-style visible-work dedupe and role
   scheduling handoff behind the file-grid boundary.
+- [x] P16az: Move the app-side raw file-grid snapshot wrapper into the
+  file-grid module. `file_grid/retained.rs` now owns pane lookup and
+  `RawFileGridSnapshotInput` assembly, including selection, rename draft,
+  drop-target, filter, source revision, and compact column-width state.
+  `src/main.rs` still decides when snapshots are needed, but no longer builds
+  raw file-grid snapshot inputs inline.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,
