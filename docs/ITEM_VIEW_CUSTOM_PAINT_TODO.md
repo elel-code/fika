@@ -917,6 +917,12 @@ by risk and evidence, not by how custom-painted a surface looks.
   two-frame view-authoritative handoff after preserving scroll through zoom or
   layout changes. `src/main.rs` still writes the preserved scroll values to the
   pane model, but no longer knows the frame-count policy for that path.
+- [x] P16bl: Move item-view authoritative handle-sync policy into the scroll
+  state. `ItemViewScrollState::sync_handle_to_view_authoritatively()` now owns
+  the two-frame view-authoritative handoff used after app-side viewport
+  priming such as filter-bar visibility changes. `src/main.rs` still supplies
+  the pane view scroll values, but no longer combines raw handle sync with a
+  frame-count mark itself.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

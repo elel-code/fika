@@ -4,6 +4,7 @@ use fika_core::PaneId;
 use gpui::{ScrollHandle, point, px};
 
 const LAYOUT_CHANGE_AUTHORITATIVE_FRAMES: u8 = 2;
+const VIEW_SYNC_AUTHORITATIVE_FRAMES: u8 = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct ItemViewScrollSync {
@@ -175,6 +176,16 @@ impl ItemViewScrollState {
         scroll_y: f32,
     ) -> bool {
         self.set_handle_offset(pane_id, scroll_x, scroll_y)
+    }
+
+    pub(crate) fn sync_handle_to_view_authoritatively(
+        &mut self,
+        pane_id: PaneId,
+        scroll_x: f32,
+        scroll_y: f32,
+    ) -> bool {
+        self.mark_authoritative_for_frames(pane_id, VIEW_SYNC_AUTHORITATIVE_FRAMES);
+        self.sync_handle_to_view(pane_id, scroll_x, scroll_y)
     }
 
     pub(crate) fn reset_pane(&mut self, pane_id: PaneId) {
@@ -418,6 +429,22 @@ mod tests {
         assert!(state.sync_handle_to_view(pane_id, 180.0, 40.0));
 
         assert_eq!(handle.offset(), point(px(-180.0), px(-40.0)));
+    }
+
+    #[test]
+    fn scroll_state_syncs_handle_to_view_authoritatively() {
+        let pane_id = PaneId(1);
+        let mut state = ItemViewScrollState::default();
+        let handle = state.handle_for_pane(pane_id);
+
+        assert!(state.sync_handle_to_view_authoritatively(pane_id, 180.0, 40.0));
+
+        assert_eq!(handle.offset(), point(px(-180.0), px(-40.0)));
+        assert!(state.has_authoritative_scroll(pane_id));
+        state.tick_authoritative_scroll(pane_id);
+        assert!(state.has_authoritative_scroll(pane_id));
+        state.tick_authoritative_scroll(pane_id);
+        assert!(!state.has_authoritative_scroll(pane_id));
     }
 
     #[test]

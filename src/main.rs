@@ -906,11 +906,9 @@ impl FikaApp {
         let scroll_x = pane.view.scroll_x;
         let scroll_y = pane.view.scroll_y;
 
-        self.item_view_scroll
-            .mark_authoritative_for_frames(pane_id, 2);
         let _ = self
             .item_view_scroll
-            .sync_handle_to_view(pane_id, scroll_x, scroll_y);
+            .sync_handle_to_view_authoritatively(pane_id, scroll_x, scroll_y);
     }
 
     pub(crate) fn show_filter_bar(&mut self, pane_id: PaneId) {
