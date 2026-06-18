@@ -10,6 +10,7 @@ mod image_layer;
 mod interaction;
 mod item_shell;
 mod layout;
+mod lifecycle;
 mod paint_slots;
 mod perf;
 mod projection;

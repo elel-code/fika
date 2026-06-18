@@ -461,7 +461,8 @@ pretending that every remaining GPUI boundary can be removed safely today.
   snapshot cache conversion, hover projection, and paint-slot projection;
   visible metadata/thumbnail/icon work keying and queue handoff now live in
   `file_grid/snapshot/scheduler.rs`; retained hovered-item state now lives in
-  `file_grid/hover.rs`.
+  `file_grid/hover.rs`; retained file-grid projection/mode-switch cleanup
+  policy now lives in `file_grid/lifecycle.rs`.
   Runtime evidence collection helpers remain in `src/main.rs` and scripts.
 
 ## P16: Concrete Full-Transition Backlog
@@ -814,6 +815,13 @@ by risk and evidence, not by how custom-painted a surface looks.
   shells and retained hitbox callbacks, but the state model is no longer a raw
   app-root `Option<(PaneId, ItemId)>`. Unit coverage proves idempotent set,
   item clear, pane clear, and cross-pane lookup behavior.
+- [x] P16au: Move retained file-grid lifecycle cleanup policy into the
+  file-grid module. `file_grid/lifecycle.rs` now owns which retained item-view
+  slots, paint slots, snapshot caches, text-shape caches, perf phase/layer
+  stats, hover state, compact widths, and visible work keys are cleared for
+  projection invalidation versus mode-switch invalidation. `src/main.rs`
+  still decides when a pane/filter/view-mode transition triggers cleanup, but
+  no longer repeats the retained state cleanup list inline.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

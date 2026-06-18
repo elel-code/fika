@@ -1181,17 +1181,9 @@ impl FikaApp {
     }
 
     fn invalidate_pane_layout_projection(&mut self, pane_id: PaneId, reset_scroll: bool) {
-        self.visible_item_slots.remove(&pane_id);
-        self.item_paint_slots.remove(&pane_id);
-        self.visible_item_snapshot_caches.remove(&pane_id);
-        self.static_item_text_shape_caches.remove(&pane_id);
-        self.details_text_shape_caches.remove(&pane_id);
-        self.clear_item_view_perf_state(pane_id);
-        self.clear_hovered_item_for_pane(pane_id);
-        self.compact_column_widths.remove(&pane_id);
+        self.clear_file_grid_projection_state(pane_id);
         self.filtered_models.remove(&pane_id);
         self.status_summaries.remove(&pane_id);
-        self.visible_work_keys.remove(&pane_id);
         if reset_scroll {
             if let Some(pane) = self.panes.pane_mut(pane_id) {
                 pane.view.reset_scroll();
@@ -3270,17 +3262,9 @@ impl FikaApp {
     }
 
     fn clear_pane_content_state(&mut self, pane_id: PaneId) {
-        self.visible_item_slots.remove(&pane_id);
-        self.item_paint_slots.remove(&pane_id);
-        self.visible_item_snapshot_caches.remove(&pane_id);
-        self.static_item_text_shape_caches.remove(&pane_id);
-        self.details_text_shape_caches.remove(&pane_id);
-        self.clear_item_view_perf_state(pane_id);
-        self.clear_hovered_item_for_pane(pane_id);
-        self.compact_column_widths.remove(&pane_id);
+        self.clear_file_grid_projection_state(pane_id);
         self.status_summaries.remove(&pane_id);
         self.filtered_models.remove(&pane_id);
-        self.visible_work_keys.remove(&pane_id);
         self.loading_panes.remove(&pane_id);
         self.remove_item_view_scroll_for_pane(pane_id);
         self.cancel_metadata_role_work_for_pane(pane_id);
@@ -3745,13 +3729,7 @@ impl FikaApp {
         };
         self.prime_pane_viewport_for_view_mode_axis_change(pane_id, previous_mode, view_mode);
         self.reset_item_view_scroll_for_pane(pane_id);
-        self.item_paint_slots.remove(&pane_id);
-        self.visible_item_snapshot_caches.remove(&pane_id);
-        self.static_item_text_shape_caches.remove(&pane_id);
-        self.details_text_shape_caches.remove(&pane_id);
-        self.clear_item_view_perf_layer_stats(pane_id);
-        self.clear_hovered_item_for_pane(pane_id);
-        self.compact_column_widths.remove(&pane_id);
+        self.clear_file_grid_mode_switch_state(pane_id);
         self.set_pane_status(pane_id, view_mode_status(view.view_mode));
     }
 
