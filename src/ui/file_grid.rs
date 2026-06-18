@@ -58,7 +58,8 @@ pub(crate) use projection::{
 pub(crate) use slots::VisibleItemSlotPool;
 pub(crate) use snapshot::{
     PaneVisibleWorkKey, RawFileGridSnapshot, RawFileGridSnapshotInput, VisibleItemSnapshotCache,
-    deferred_thumbnail_candidates_for_model, raw_file_grid_snapshot,
+    deferred_thumbnail_candidates_for_model, project_retained_file_grid_snapshot,
+    raw_file_grid_snapshot,
 };
 pub(crate) use static_visual::StaticItemTextShapeCache;
 pub(crate) use surface::file_grid;

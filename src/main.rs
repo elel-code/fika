@@ -94,8 +94,9 @@ use ui::file_grid::{
     emit_item_view_autosmoke_complete, emit_item_view_autosmoke_scroll_action,
     emit_item_view_autosmoke_start, emit_item_view_autosmoke_zoom_action, item_view_perf_enabled,
     model_indexes_intersecting_visual_rect, pane_layout_projection,
-    queue_file_icon_resolve_work_for_raw_grid, raw_file_grid_snapshot,
-    rename_editor_required_text_width, resolve_visible_file_icons_for_raw_grid,
+    project_retained_file_grid_snapshot, queue_file_icon_resolve_work_for_raw_grid,
+    raw_file_grid_snapshot, rename_editor_required_text_width,
+    resolve_visible_file_icons_for_raw_grid,
 };
 use ui::filter_bar::{
     FILTER_BAR_HEIGHT, FilterBarSnapshot, FilteredModelCacheEntry, PaneFilterState,
@@ -1588,16 +1589,25 @@ impl FikaApp {
                 if file_icon_resolve_queued {
                     self.maybe_start_file_icon_resolve(cx);
                 }
-                raw_file_grid
-                    .assign_visible_item_slots(self.visible_item_slots.entry(pane_id).or_default());
                 let convert_started = perf_enabled.then(Instant::now);
+                let mut visible_item_slots =
+                    self.visible_item_slots.remove(&pane_id).unwrap_or_default();
                 let mut visible_item_cache = self
                     .visible_item_snapshot_caches
                     .remove(&pane_id)
                     .unwrap_or_default();
-                let file_grid = raw_file_grid.into_file_grid_snapshot(
+                let mut item_paint_slots =
+                    self.item_paint_slots.remove(&pane_id).unwrap_or_default();
+                let hovered_item = self.hovered_item.and_then(|(hovered_pane, item_id)| {
+                    (hovered_pane == pane_id).then_some(item_id)
+                });
+                let projection = project_retained_file_grid_snapshot(
+                    raw_file_grid,
                     selection_count,
+                    &mut visible_item_slots,
                     &mut visible_item_cache,
+                    &mut item_paint_slots,
+                    hovered_item,
                     file_icon_size,
                     |request| {
                         self.icon_snapshot_for_model_item(
@@ -1609,18 +1619,12 @@ impl FikaApp {
                         )
                     },
                 );
+                self.visible_item_slots.insert(pane_id, visible_item_slots);
                 self.visible_item_snapshot_caches
                     .insert(pane_id, visible_item_cache);
-                let hovered_item = self.hovered_item.and_then(|(hovered_pane, item_id)| {
-                    (hovered_pane == pane_id).then_some(item_id)
-                });
-                let item_paint_slot_projection = self
-                    .item_paint_slots
-                    .entry(pane_id)
-                    .or_default()
-                    .project_file_grid_snapshot(file_grid, hovered_item);
-                let item_paint_slot_stats = item_paint_slot_projection.stats;
-                let file_grid = item_paint_slot_projection.snapshot;
+                self.item_paint_slots.insert(pane_id, item_paint_slots);
+                let item_paint_slot_stats = projection.slot_stats;
+                let file_grid = projection.snapshot;
                 let item_view_perf_phase = if perf_enabled {
                     Some(self.record_item_view_perf_frame(
                         pane_id,

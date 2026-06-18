@@ -3,8 +3,43 @@ use super::{
 };
 use crate::ui::icons::FileIconSnapshot;
 
-use super::super::FileGridSnapshot;
 use super::super::details::DetailsItemSnapshot;
+use super::super::{
+    FileGridRenderSnapshot, FileGridSnapshot, ItemPaintSlotCache, ItemPaintSlotStats,
+    VisibleItemSlotPool,
+};
+
+pub(crate) struct RetainedFileGridProjection {
+    pub(crate) snapshot: FileGridRenderSnapshot,
+    pub(crate) slot_stats: ItemPaintSlotStats,
+}
+
+pub(crate) fn project_retained_file_grid_snapshot<F>(
+    mut raw_file_grid: RawFileGridSnapshot,
+    selection_count: usize,
+    visible_item_slots: &mut VisibleItemSlotPool,
+    visible_item_cache: &mut VisibleItemSnapshotCache,
+    item_paint_slots: &mut ItemPaintSlotCache,
+    hovered_item: Option<fika_core::ItemId>,
+    file_icon_size: f32,
+    icon_for_item: F,
+) -> RetainedFileGridProjection
+where
+    F: for<'a> FnMut(FileGridIconRequest<'a>) -> FileIconSnapshot,
+{
+    raw_file_grid.assign_visible_item_slots(visible_item_slots);
+    let file_grid = raw_file_grid.into_file_grid_snapshot(
+        selection_count,
+        visible_item_cache,
+        file_icon_size,
+        icon_for_item,
+    );
+    let projection = item_paint_slots.project_file_grid_snapshot(file_grid, hovered_item);
+    RetainedFileGridProjection {
+        snapshot: projection.snapshot,
+        slot_stats: projection.stats,
+    }
+}
 
 impl RawFileGridSnapshot {
     pub(crate) fn into_file_grid_snapshot<F>(
@@ -158,11 +193,52 @@ mod tests {
 
     use crate::ui::icons::FileIconSnapshot;
 
-    use super::super::super::FileGridSnapshot;
     use super::super::super::VisibleItemSlotPool;
     use super::super::super::layout::icon_name_display_lines;
+    use super::super::super::{FileGridRenderSnapshot, FileGridSnapshot, ItemPaintSlotCache};
     use super::super::visible::{icon_name_layout_width, icon_name_max_lines};
     use super::super::{RawVisibleItemSnapshot, VisibleItemSnapshotCache};
+
+    #[test]
+    fn retained_file_grid_projection_assigns_slots_and_paint_state() {
+        let raw_file_grid = RawFileGridSnapshot::Icons {
+            layout: IconsLayout::new(1, fika_core::IconsLayoutOptions::default()),
+            items: vec![test_raw_visible_item(1, "visible.txt", 0)],
+        };
+        let mut slots = VisibleItemSlotPool::default();
+        let mut cache = VisibleItemSnapshotCache::default();
+        let mut paint_slots = ItemPaintSlotCache::default();
+        let icon = test_icon_snapshot();
+        let mut icon_requests = Vec::new();
+
+        let projection = project_retained_file_grid_snapshot(
+            raw_file_grid,
+            1,
+            &mut slots,
+            &mut cache,
+            &mut paint_slots,
+            Some(ItemId(1)),
+            48.0,
+            |request| {
+                icon_requests.push(request.path.to_path_buf());
+                icon.clone()
+            },
+        );
+
+        assert_eq!(icon_requests, vec![PathBuf::from("/tmp/visible.txt")]);
+        assert_eq!(projection.slot_stats.inserted, 1);
+        assert_eq!(projection.slot_stats.entries, 1);
+        let slot_id = slots
+            .slot_for_item(ItemId(1))
+            .expect("visible item should receive a retained slot");
+        let FileGridRenderSnapshot::Icons { items, .. } = projection.snapshot else {
+            panic!("expected retained icons snapshot");
+        };
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].slot_id, slot_id);
+        assert_eq!(items[0].item_id, ItemId(1));
+        assert!(items[0].visual.hovered);
+    }
 
     #[test]
     fn raw_icon_snapshot_does_not_resolve_uncached_read_ahead_item_content() {

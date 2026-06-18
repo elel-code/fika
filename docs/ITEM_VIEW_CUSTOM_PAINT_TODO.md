@@ -456,8 +456,10 @@ pretending that every remaining GPUI boundary can be removed safely today.
   `file_grid/icon_work.rs`; visible file-icon sync and queued work handoff now
   route through `file_grid/icon_work.rs`; the earlier pane-local theme-icon
   role-size debounce was removed because it caused a delayed second zoom
-  adjustment. Runtime evidence collection helpers remain in `src/main.rs` and
-  scripts.
+  adjustment; raw-to-retained render snapshot projection now lives in
+  `file_grid/snapshot/render.rs`, covering visible slot assignment, visible
+  snapshot cache conversion, hover projection, and paint-slot projection.
+  Runtime evidence collection helpers remain in `src/main.rs` and scripts.
 
 ## P16: Concrete Full-Transition Backlog
 
@@ -785,6 +787,15 @@ by risk and evidence, not by how custom-painted a surface looks.
   is explicit for every item, and image surfaces stay within the item count.
   The standard runtime log gate enables this check, and the analyzer fixture
   covers a count-valid but retained-interaction-invalid policy.
+- [x] P16ar: Move raw item-view snapshot conversion into the file-grid module.
+  `project_retained_file_grid_snapshot()` now owns the behavior-preserving
+  sequence from raw grid snapshot to retained render snapshot: assign
+  `VisibleItemSlotPool` slots, convert through `VisibleItemSnapshotCache`,
+  apply hovered-item visual state, and project into `ItemPaintSlotCache`.
+  `src/main.rs` still owns pane/app state storage and icon resolution, but no
+  longer hand-wires that retained projection sequence inline. Unit coverage
+  proves slot assignment, icon request, paint-slot insertion, and hover visual
+  projection through the new boundary.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

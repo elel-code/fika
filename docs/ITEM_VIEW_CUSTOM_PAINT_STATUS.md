@@ -339,7 +339,10 @@ execution must stay split into evidence-backed tracks:
 6. **Ownership track**: keep extracting orchestration from `src/main.rs` into
    Dolphin-aligned file-grid modules when the move is behavior-preserving. This
    includes role scheduling handoff, runtime evidence helpers, and eventually
-   shell-boundary ownership.
+   shell-boundary ownership. Current raw-to-retained item projection is owned by
+   `project_retained_file_grid_snapshot()` in `file_grid/snapshot/render.rs`;
+   app root storage remains in `FikaApp`, but the conversion sequence is no
+   longer hand-wired inline in `src/main.rs`.
 
 This is the practical meaning of "fully transition": every item-view behavior
 should be owned by retained model/layout/controller/painter state, while any
