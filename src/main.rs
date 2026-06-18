@@ -149,7 +149,10 @@ use ui::properties_dialog::{
     PropertiesDialogState, properties_dialog_overlay, properties_for_path, properties_for_selection,
 };
 use ui::rename::{RENAME_TEXT_INSET_X, RenameDraft};
-use ui::rubber_band::{PendingRubberBand, RubberBandState, finish_rubber_band_for_pane};
+use ui::rubber_band::{
+    PendingRubberBand, RubberBandState, finish_rubber_band_for_pane,
+    set_rubber_band_selection_activity_for_count,
+};
 #[cfg(test)]
 use ui::shortcuts::PlaceInputAction;
 use ui::shortcuts::{
@@ -4174,11 +4177,11 @@ impl FikaApp {
             .panes
             .replace_selection_by_indexes(pane_id, selection.iter().copied())
         {
-            if selected > 0 {
-                self.rubber_band_selection_panes.insert(pane_id);
-            } else {
-                self.rubber_band_selection_panes.remove(&pane_id);
-            }
+            set_rubber_band_selection_activity_for_count(
+                &mut self.rubber_band_selection_panes,
+                pane_id,
+                selected,
+            );
             self.set_pane_status(pane_id, format!("{selected} selected"));
         }
     }

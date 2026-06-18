@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use fika_core::{PaneId, ViewPoint, ViewRect, ViewState};
 
 const RUBBER_BAND_START_DRAG_DISTANCE: f32 = 6.0;
@@ -109,6 +111,20 @@ pub(crate) fn finish_rubber_band_for_pane(
     changed
 }
 
+pub(crate) fn set_rubber_band_selection_activity_for_count(
+    selection_panes: &mut HashSet<PaneId>,
+    pane_id: PaneId,
+    selected_count: usize,
+) -> bool {
+    if selected_count > 0 {
+        selection_panes.insert(pane_id);
+        true
+    } else {
+        selection_panes.remove(&pane_id);
+        false
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct RubberBandDrag {
     pub(crate) pane_id: PaneId,
@@ -193,5 +209,23 @@ mod tests {
             &mut active,
             PaneId(2)
         ));
+    }
+
+    #[test]
+    fn selection_activity_tracks_selected_count() {
+        let mut selection_panes = HashSet::new();
+
+        assert!(set_rubber_band_selection_activity_for_count(
+            &mut selection_panes,
+            PaneId(1),
+            2
+        ));
+        assert!(selection_panes.contains(&PaneId(1)));
+        assert!(!set_rubber_band_selection_activity_for_count(
+            &mut selection_panes,
+            PaneId(1),
+            0
+        ));
+        assert!(!selection_panes.contains(&PaneId(1)));
     }
 }

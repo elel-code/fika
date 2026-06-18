@@ -274,6 +274,7 @@
 - [x] P16bu：将 pending rubber-band activation policy 移入 rubber-band 模块。`PendingRubberBand` 现在通过 `can_activate()` 拥有 pane 匹配和 Dolphin-like Manhattan drag threshold；`src/main.rs` 仍提供 clamp 后的当前 content point，并负责启动/更新 selection。
 - [x] P16bv：将 active rubber-band state mutation policy 移入 rubber-band 模块。`RubberBandState` 现在拥有构造、pane ownership 检查和同 pane current-point 更新规则。`src/main.rs` 仍保存 active state、清理 draft、计算相交 item 并应用 selection 变化。
 - [x] P16bw：将 rubber-band finish state-clearing policy 移入 rubber-band 模块。`finish_rubber_band_for_pane()` 现在拥有只清理属于目标 pane 的 pending 和 active rubber-band state 的规则。`src/main.rs` 仍决定哪些 lifecycle event 会结束 rubber-band 交互。
+- [x] P16bx：将 rubber-band selection activity update policy 移入 rubber-band 模块。`set_rubber_band_selection_activity_for_count()` 现在拥有最新 rubber-band selection count 非零时 pane 才保持 rubber-band-selection active 的规则。`src/main.rs` 仍保存 active pane set 并发出 status text。
 - [ ] P16q：在每个 P16 实现切片之后，单独提交并附带相关验证：仅文档切片需要 `git diff --check`；代码切片需要 `cargo fmt`、`cargo check`、`cargo test -q`、`scripts/check-item-view-perf-analyzer.sh`、`scripts/check-places-perf-analyzer.sh` 和 `git diff --check`。
 - [x] P16r：记录运行时自测试和突破记录规则。可重复的滚动、缩放、启动图标、调整大小、模式切换和 Places 目标回退应在依赖手动计时之前通过 autosmoke 日志和分析器脚本重现。任何确认的优化突破必须记录症状、Dolphin 比较边界、根本原因、实现、保存的日志/分析器命令和未来回归守卫在拥有的设计或决策文档中。
 

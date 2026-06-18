@@ -979,6 +979,11 @@ by risk and evidence, not by how custom-painted a surface looks.
   module. `finish_rubber_band_for_pane()` now owns clearing only the pending
   and active rubber-band states that belong to the target pane. `src/main.rs`
   still decides when lifecycle events finish a rubber-band interaction.
+- [x] P16bx: Move rubber-band selection activity update policy into the
+  rubber-band module. `set_rubber_band_selection_activity_for_count()` now owns
+  the rule that a pane remains rubber-band-selection active only while the
+  latest rubber-band selection count is nonzero. `src/main.rs` still stores the
+  active pane set and emits status text.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,
