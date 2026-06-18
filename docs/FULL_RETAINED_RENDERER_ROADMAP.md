@@ -84,6 +84,8 @@ Acceptance:
 Purpose: make image rendering custom only after it can match Dolphin's
 widget-local pixmap stability.
 
+Detailed design: `docs/RETAINED_ICON_IMAGE_CACHE_PLAN.md`.
+
 Next design step:
 
 - Define a retained icon image cache keyed by at least
@@ -185,7 +187,8 @@ Acceptance:
 
 1. Add a small smoke/evidence checklist update that makes Track 1 repeatable
    for both item-view and Places before any more shell removal.
-2. Design the retained MIME/theme icon image cache for Track 2.
+2. Implement the retained MIME/theme icon image cache foundation from
+   `docs/RETAINED_ICON_IMAGE_CACHE_PLAN.md`.
 3. Design and gate retained Places event delivery for Track 3.
 4. Re-audit GPUI drag-start API after dependency updates before Track 4.
 5. Convert rename behavior matrix items into tests/smoke before Track 5.

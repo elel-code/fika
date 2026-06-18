@@ -558,12 +558,13 @@ tracks.
   default-vs-`FIKA_CUSTOM_THEME_ICONS=1` zoom/scroll logs prove the custom
   theme-icon painter is neutral or better without first-load placeholders,
   zoom-time `theme_decoded` churn, or size jumps.
-- [ ] P16k1: Design and implement a retained MIME/theme icon image cache before
+- [~] P16k1: Design and implement a retained MIME/theme icon image cache before
   making custom theme-icon paint the default. The cache should be keyed by at
   least `(iconName, icon_size_px)` plus theme/scale/color-scheme inputs when
   those affect the selected path. It must retain the last real same-key image
   during refresh, keep thumbnail retention separate by thumbnail path, and never
-  synchronously decode theme icon files during prepaint.
+  synchronously decode theme icon files during prepaint. Design is now captured
+  in `docs/RETAINED_ICON_IMAGE_CACHE_PLAN.md`; implementation remains pending.
 - [ ] P16k2: Add paired default-vs-custom autosmoke evidence for the future
   MIME/theme icon renderer. Required scenarios: `/etc` and a mixed user
   directory, startup plus `FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll`, default GPUI
@@ -1271,6 +1272,12 @@ tracks.
   Places retained event delivery, drag-start boundary, rename editor, and
   ownership cleanup. This gives future implementation slices one planning entry
   point before continuing the broader transition.
+- [x] P16ea: Add the retained MIME/theme icon image cache design. The new
+  `docs/RETAINED_ICON_IMAGE_CACHE_PLAN.md` and zh-CN translation define the
+  Dolphin `QPixmapCache` comparison, conservative `ThemeIconImageKey`, retained
+  same-key loaded/pending/failed/stale image states, ownership boundary, paired
+  default-vs-custom runtime evidence, and TODO gates required before custom
+  theme-icon painting can become default.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

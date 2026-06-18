@@ -77,6 +77,8 @@
 
 目的：只有在能匹配 Dolphin widget-local pixmap 稳定性后，才将图标渲染自定义化。
 
+详细设计：`docs/RETAINED_ICON_IMAGE_CACHE_PLAN.zh-CN.md`。
+
 下一步设计：
 
 - 定义 retained icon image cache，至少以 `(icon_name, icon_size_px)` 为键，
@@ -165,7 +167,8 @@ file-grid 和 Places facade。
 ## 下一批队列
 
 1. 更新小型 smoke/evidence checklist，让 Track 1 在继续移除 shell 前可重复执行。
-2. 为 Track 2 设计 retained MIME/theme icon image cache。
+2. 按 `docs/RETAINED_ICON_IMAGE_CACHE_PLAN.zh-CN.md` 实现 retained MIME/theme icon
+   image cache 基础。
 3. 为 Track 3 设计并加 gate：retained Places event delivery。
 4. 在依赖更新后重新审计 GPUI drag-start API，再进入 Track 4。
 5. 在 Track 5 前，把 rename 行为矩阵转为测试/smoke。

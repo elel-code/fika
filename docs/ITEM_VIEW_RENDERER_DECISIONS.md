@@ -235,6 +235,8 @@ The current default intentionally keeps Compact/Icons MIME/theme icons on GPUI
 `img()` elements. A future full-custom renderer is allowed only as a separate
 work stream, because the retained model/slot architecture is already in place
 and the remaining risk is image-resource readiness, not item identity.
+The detailed retained image-cache design is
+`docs/RETAINED_ICON_IMAGE_CACHE_PLAN.md`.
 
 The target architecture should mirror Dolphin's pixmap stability rather than
 the current custom-theme A/B path:
