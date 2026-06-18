@@ -201,6 +201,9 @@
 
 此阶段将已接受的方向转化为可执行的队列。它按风险和证据排序，而非按表面看起来有多自定义绘制。
 
+Places chrome 默认之后的当前执行入口是
+`docs/FULL_RETAINED_RENDERER_ROADMAP.zh-CN.md`；本 backlog 需要与其中轨道保持一致。
+
 - [x] P16a：在规划、设计和 TODO 文档中记录完整转换轨道：证据、绘制器、controller、shell 边界、Places 和所有权。
 - [x] P16b：在最新的 Dolphin 对齐主题图标绘制边界更改后收集一组新的桌面会话证据：`/etc` 自定义主题 vs 默认日志现在证明默认 MIME/主题图标避免了首帧加载 `theme_placeholder` 变动，且 `FIKA_PERF_ITEM_VIEW=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll target/debug/fika /etc` 捕获无人值守缩放/滚动证据。
 - [x] P16c：使用该证据更新 `docs/ITEM_VIEW_RENDERER_DECISIONS.md`，包括 `/etc` 缩放/滚动是否仍然显示冷图像加载卡顿或可见占位符到图标切换。当前证据：可见同步停止复制排队的预读图标工作后，`icon_sync` 最大值从 `28340us` 降至 `173us`；剩余的 `/etc` autosmoke 成本是静态视觉文本/基础绘制，而非 MIME/主题图像渲染。
@@ -331,6 +334,7 @@
 - [x] P16dw：将 same-visible-work-range resize queue invariant 从 app-side 测试移入 file-grid snapshot scheduler 测试。raw snapshot/queue 协议现在由拥有 work key 和 scheduler contract 的模块覆盖，而不是要求 `main.rs` 测试调用低层 file-grid 方法。
 - [x] P16dx：推进 Places 自绘层的可见行过滤，但暂不设为默认。根本原因：聚合 Places 行视觉层虽然只用一个 canvas，但 overflow 场景仍在每帧 shape/paint 全部 75 行。实现：`places_row_visual_layer` 在 prepaint 使用 GPUI `Window::content_mask()` 过滤当前滚动裁剪区域，只 shape/paint 可见行；`[fika places-row-visual]` 保留总 `rows` 并新增 `painted`，分析器汇总 `max_painted`。证据：`/tmp/fika-places-custom-targets-visible-rows.log` 通过 targets 自绘策略门，`/tmp/fika-places-custom-overflow-visible-rows.log` 通过 overflow 自绘策略门，overflow 从全量 75 行降为最多 32 个 painted rows，稳态约 `0.6-0.7ms`。仍不默认的原因：首两帧仍存在约 `7-8ms` 字形/文本绘制冷启动尖峰；下一步需要消除或证明它相对 GPUI baseline 中性。
 - [x] P16dy：将 Dolphin 对齐的 Places custom chrome 策略设为默认，同时保留 full custom text 为 opt-in。根本原因：Dolphin 高性能 item view 复用可见 widget，并依赖 static text/pixmap cache；Fika 的 full Places canvas text 路径仍有字形/文本冷启动成本。实现：`FIKA_PLACES_ROW_VISUAL_POLICY` 现在支持 `gpui`、默认 `chrome` 和 `full`；chrome 用一个可见行过滤后的 layer 绘制 row background/drop/insert/trash，同时 GPUI 保留文本和图标。分析器新增 `--expect-custom-row-chrome-policy`，跟踪 `text_gpui` 和 `visual_kind`，并拒绝 chrome 路径出现 row shape-cache 日志。证据：`/tmp/fika-places-chrome-targets.log`、`/tmp/fika-places-chrome-overflow.log`、`/tmp/fika-places-chrome-layout.log` 和 `/tmp/fika-places-chrome-hit-test.log` 通过 chrome gate；`/tmp/fika-places-gpui-targets.log` 通过 GPUI fallback gate；`/tmp/fika-places-full-targets.log` 通过 full custom-text gate，但仍保持 opt-in，因为它有 `max_paint=5183us` 和 shape-cache 活动，而 chrome targets 为 `max_paint=83us`、overflow 为 `148us` 且没有 shape-cache channel。
+- [x] P16dz：添加 Places chrome 默认之后的全面 retained renderer 路线图。新的 `docs/FULL_RETAINED_RENDERER_ROADMAP.md` 及中文翻译定义当前基线、显式 GPUI bridge、不可违反的 Dolphin 对齐规则，以及六条执行轨道：证据冻结、MIME/theme icon renderer、Places retained event delivery、drag-start 边界、rename editor 和 ownership cleanup。这为后续继续全面转向提供单一规划入口。
 - [ ] P16q：在每个 P16 实现切片之后，单独提交并附带相关验证：仅文档切片需要 `git diff --check`；代码切片需要 `cargo fmt`、`cargo check`、`cargo test -q`、`scripts/check-item-view-perf-analyzer.sh`、`scripts/check-places-perf-analyzer.sh` 和 `git diff --check`。
 - [x] P16r：记录运行时自测试和突破记录规则。可重复的滚动、缩放、启动图标、调整大小、模式切换和 Places 目标回退应在依赖手动计时之前通过 autosmoke 日志和分析器脚本重现。任何确认的优化突破必须记录症状、Dolphin 比较边界、根本原因、实现、保存的日志/分析器命令和未来回归守卫在拥有的设计或决策文档中。
 

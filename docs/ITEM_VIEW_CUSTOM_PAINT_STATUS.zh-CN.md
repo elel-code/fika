@@ -6,6 +6,9 @@
 
 这是 Dolphin 风格条目视图迁移的当前替换地图。它是一份状态文档，而非承诺每个表面都必须变为自定义绘制。架构目标是保留 model/布局/controller/painter 状态；每个渲染器在成为默认值之前仍必须击败或匹配 GPUI 基线。
 
+Places chrome 默认之后的当前执行路线图是
+`docs/FULL_RETAINED_RENDERER_ROADMAP.zh-CN.md`。
+
 ## 当前替换矩阵
 
 | 表面 | 当前状态 | 渲染器 | 剩余依赖 |

@@ -29,6 +29,9 @@ Fika 条目视图应收敛到 Dolphin 的 `KItemListView` 模型：
 - 自定义绘制是针对保留条目状态的渲染器选择，本身不是目标。
 - 如果自定义绘制更慢、更不可靠或更难保持行为完整性，则保持 Dolphin 对齐的保留 model，并使用 GPUI 内置元素渲染该表面，直到有更强的证据或更窄的迁移范围。
 
+当前替换矩阵见 `docs/ITEM_VIEW_CUSTOM_PAINT_STATUS.zh-CN.md`。Places chrome 默认
+之后的执行入口见 `docs/FULL_RETAINED_RENDERER_ROADMAP.zh-CN.md`。
+
 ## 架构契约
 
 迁移是 model 优先的。渲染器选择是刻意可替换的。

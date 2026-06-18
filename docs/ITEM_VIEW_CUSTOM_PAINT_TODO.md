@@ -471,6 +471,10 @@ pretending that every remaining GPUI boundary can be removed safely today.
 This phase turns the accepted direction into an executable queue. It is ordered
 by risk and evidence, not by how custom-painted a surface looks.
 
+The current post-Places-chrome execution entry point is
+`docs/FULL_RETAINED_RENDERER_ROADMAP.md`; keep this backlog aligned with its
+tracks.
+
 - [x] P16a: Record the full-transition tracks in the planning, design, and TODO
   docs: evidence, painter, controller, shell boundary, Places, and ownership.
 - [x] P16b: Collect a fresh desktop-session evidence set after the latest
@@ -1260,6 +1264,13 @@ by risk and evidence, not by how custom-painted a surface looks.
   gate and remains opt-in because it shows `max_paint=5183us` with shape-cache
   activity compared with chrome `max_paint=83us` targets and `148us` overflow
   with no shape-cache channel.
+- [x] P16dz: Add the post-Places-chrome full retained renderer roadmap. The new
+  `docs/FULL_RETAINED_RENDERER_ROADMAP.md` and zh-CN translation define the
+  current baseline, explicit GPUI bridges, non-negotiable Dolphin-aligned
+  rules, and six execution tracks: evidence freeze, MIME/theme icon renderer,
+  Places retained event delivery, drag-start boundary, rename editor, and
+  ownership cleanup. This gives future implementation slices one planning entry
+  point before continuing the broader transition.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

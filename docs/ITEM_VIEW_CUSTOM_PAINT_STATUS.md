@@ -6,6 +6,9 @@ painted. The architecture target is retained model/layout/controller/painter
 state; each renderer still has to beat or match the GPUI baseline before it
 becomes the default.
 
+The active post-Places-chrome execution roadmap is
+`docs/FULL_RETAINED_RENDERER_ROADMAP.md`.
+
 ## Current Replacement Matrix
 
 | Surface | Current state | Renderer | Remaining dependency |
