@@ -1176,6 +1176,11 @@ by risk and evidence, not by how custom-painted a surface looks.
   viewport shell. The GPUI shell now forwards drag moves to
   `move_rubber_band_drag_from_window()`, while the app/controller boundary
   decides whether to activate a pending band or update the active band.
+- [x] P16dl: Move visible file-icon sync handoff behind the file-grid retained
+  facade. The render loop now calls a pane-level
+  `resolve_visible_file_icons_for_raw_grid()` method; the Dolphin visible-icon
+  sync budget, queue-aware cache sync, and visible snapshot invalidation stay in
+  the file-grid module instead of `main.rs`.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

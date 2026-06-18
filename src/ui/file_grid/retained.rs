@@ -1,3 +1,7 @@
+use super::icon_work::{
+    DOLPHIN_VISIBLE_ICON_SYNC_BUDGET,
+    resolve_visible_file_icons_for_raw_grid as resolve_visible_file_icons_for_raw_grid_with_cache,
+};
 use super::snapshot::{
     RawFileGridSnapshot, RawFileGridSnapshotInput, RetainedFileGridProjection,
     project_retained_file_grid_snapshot, queue_raw_file_grid_model_work, raw_file_grid_snapshot,
@@ -128,6 +132,25 @@ impl FikaApp {
         }
 
         let changed = self.finish_metadata_role_results(results);
+        if changed {
+            self.invalidate_file_grid_visible_snapshot_cache(pane_id);
+        }
+        changed
+    }
+
+    pub(crate) fn resolve_visible_file_icons_for_raw_grid(
+        &mut self,
+        pane_id: PaneId,
+        raw_file_grid: &RawFileGridSnapshot,
+        file_icon_size: f32,
+    ) -> bool {
+        let changed = resolve_visible_file_icons_for_raw_grid_with_cache(
+            &mut self.file_icons,
+            &self.file_icon_resolve_queue,
+            raw_file_grid,
+            file_icon_size,
+            DOLPHIN_VISIBLE_ICON_SYNC_BUDGET,
+        );
         if changed {
             self.invalidate_file_grid_visible_snapshot_cache(pane_id);
         }

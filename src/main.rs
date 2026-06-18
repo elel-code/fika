@@ -84,18 +84,16 @@ use ui::drag_drop::{
 #[cfg(test)]
 use ui::file_grid::RawFileGridSnapshot;
 use ui::file_grid::{
-    CompactColumnWidthCache, ContentItemHit, DOLPHIN_VISIBLE_ICON_SYNC_BUDGET,
-    DetailsTextShapeCache, FileIconResolveQueue, ItemDrag, ItemPaintSlotCache,
-    ItemViewAutosmokeAction, ItemViewAutosmokeScenario, ItemViewPerfState, PaneLayoutProjection,
-    PaneLayoutProjectionInput, PaneViewportGeometry, PaneVisibleWorkKey, RetainedHoveredItem,
-    StaticItemTextShapeCache, VisibleItemSlotPool, VisibleItemSnapshotCache,
+    CompactColumnWidthCache, ContentItemHit, DetailsTextShapeCache, FileIconResolveQueue, ItemDrag,
+    ItemPaintSlotCache, ItemViewAutosmokeAction, ItemViewAutosmokeScenario, ItemViewPerfState,
+    PaneLayoutProjection, PaneLayoutProjectionInput, PaneViewportGeometry, PaneVisibleWorkKey,
+    RetainedHoveredItem, StaticItemTextShapeCache, VisibleItemSlotPool, VisibleItemSnapshotCache,
     clamped_content_point_from_window_position, compact_text_width, compact_text_width_for_name,
     content_point_from_window_position, emit_item_view_autosmoke_complete,
     emit_item_view_autosmoke_scroll_action, emit_item_view_autosmoke_start,
     emit_item_view_autosmoke_zoom_action, item_view_perf_enabled, pane_at_window_position,
     pane_content_item_hit_at_point, pane_layout_projection,
     pane_model_indexes_intersecting_visual_rect, rename_editor_required_text_width,
-    resolve_visible_file_icons_for_raw_grid,
 };
 use ui::filter_bar::{
     FILTER_BAR_HEIGHT, FilterBarSnapshot, FilteredModelCacheEntry, PaneFilterState,
@@ -1381,15 +1379,11 @@ impl FikaApp {
                 let raw_elapsed = raw_started.map(|started| started.elapsed());
                 let file_icon_size = view.icon_size();
                 let icon_sync_started = perf_enabled.then(Instant::now);
-                if resolve_visible_file_icons_for_raw_grid(
-                    &mut self.file_icons,
-                    &self.file_icon_resolve_queue,
+                self.resolve_visible_file_icons_for_raw_grid(
+                    pane_id,
                     &raw_file_grid,
                     file_icon_size,
-                    DOLPHIN_VISIBLE_ICON_SYNC_BUDGET,
-                ) {
-                    self.invalidate_file_grid_visible_snapshot_cache(pane_id);
-                }
+                );
                 let icon_sync_elapsed = icon_sync_started.map(|started| started.elapsed());
                 let visible_count = raw_file_grid
                     .visible_layout_range_and_count()
