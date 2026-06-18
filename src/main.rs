@@ -103,8 +103,9 @@ use ui::filter_bar::{
 };
 use ui::icons::{FileIconCache, file_icon_resolve_results_for_requests};
 use ui::item_view::{
-    ItemViewScrollState, ItemViewScrollViewSnapshot, apply_item_view_scroll_snapshot_to_pane,
-    item_view_scroll_snapshot_for_existing_pane, item_view_scroll_snapshot_for_pane,
+    ItemViewScrollState, apply_item_view_scroll_snapshot_to_pane,
+    changed_item_view_scroll_snapshot, item_view_scroll_snapshot_for_existing_pane,
+    item_view_scroll_snapshot_for_pane, item_view_scroll_snapshot_for_view,
     projected_item_viewport_width_for_pane_width, viewport_extents_after_view_mode_axis_change,
     viewport_height_after_filter_bar_visibility_change, wheel_scroll_delta_for_view_mode,
     window_resize_viewport_prime,
@@ -901,7 +902,7 @@ impl FikaApp {
                 visible,
                 FILTER_BAR_HEIGHT,
             );
-            ItemViewScrollViewSnapshot::from_view_state(&pane.view)
+            item_view_scroll_snapshot_for_view(&pane.view)
         };
 
         let _ = self
@@ -3350,21 +3351,20 @@ impl FikaApp {
 
         let max_scroll_x = view.max_scroll_x.max(0.0);
         let max_scroll_y = view.max_scroll_y.max(0.0);
-        let before = ItemViewScrollViewSnapshot::from_view_state(&view);
         let Some(next_view) =
             self.panes
                 .scroll_view(pane_id, delta_x, delta_y, max_scroll_x, max_scroll_y)
         else {
             return false;
         };
-        let next = ItemViewScrollViewSnapshot::from_view_state(&next_view);
-        let changed = before != next;
-        if changed {
+        if let Some(next_scroll) = changed_item_view_scroll_snapshot(&view, &next_view) {
             let _ = self
                 .item_view_scroll
-                .sync_handle_after_user_scroll_snapshot(pane_id, next);
+                .sync_handle_after_user_scroll_snapshot(pane_id, next_scroll);
+            true
+        } else {
+            false
         }
-        changed
     }
 
     #[cfg(test)]
@@ -13618,11 +13618,9 @@ text/plain=viewer.desktop;\n",
         app.panes
             .set_view_scroll(pane_id, 140.0, 32.0, 1_000.0, 500.0)
             .unwrap();
+        let view_snapshot = item_view_scroll_snapshot_for_pane(&app.panes, pane_id);
         app.item_view_scroll
-            .sync_handle_to_view_authoritatively_snapshot(
-                pane_id,
-                ItemViewScrollViewSnapshot::new(140.0, 32.0, 1_000.0, 500.0),
-            );
+            .sync_handle_to_view_authoritatively_snapshot(pane_id, view_snapshot);
         app.item_view_scroll.begin_scrollbar_drag(pane_id);
 
         app.begin_pane_loading_transition(pane_id, PaneLoadingScrollPolicy::Preserve);

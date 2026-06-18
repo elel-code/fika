@@ -1,7 +1,7 @@
 mod scroll_bar;
 mod scroll_state;
 
-use fika_core::{PaneController, PaneId, ViewMode};
+use fika_core::{PaneController, PaneId, ViewMode, ViewState};
 use gpui::{ScrollDelta, px};
 
 pub(crate) use scroll_bar::{
@@ -160,7 +160,20 @@ pub(crate) fn item_view_scroll_snapshot_for_existing_pane(
 ) -> Option<ItemViewScrollViewSnapshot> {
     panes
         .pane(pane_id)
-        .map(|pane| ItemViewScrollViewSnapshot::from_view_state(&pane.view))
+        .map(|pane| item_view_scroll_snapshot_for_view(&pane.view))
+}
+
+pub(crate) fn item_view_scroll_snapshot_for_view(view: &ViewState) -> ItemViewScrollViewSnapshot {
+    ItemViewScrollViewSnapshot::from_view_state(view)
+}
+
+pub(crate) fn changed_item_view_scroll_snapshot(
+    previous: &ViewState,
+    next: &ViewState,
+) -> Option<ItemViewScrollViewSnapshot> {
+    let previous = item_view_scroll_snapshot_for_view(previous);
+    let next = item_view_scroll_snapshot_for_view(next);
+    (previous != next).then_some(next)
 }
 
 fn apply_window_resize_delta(extent: f32, delta: f32) -> f32 {
@@ -341,6 +354,30 @@ mod tests {
         assert_eq!(
             item_view_scroll_snapshot_for_pane(&panes, PaneId(99)),
             ItemViewScrollViewSnapshot::default()
+        );
+    }
+
+    #[test]
+    fn changed_scroll_snapshot_returns_next_snapshot_only_for_scroll_changes() {
+        let previous = fika_core::ViewState {
+            scroll_x: 140.0,
+            scroll_y: 32.0,
+            max_scroll_x: 1_000.0,
+            max_scroll_y: 500.0,
+            ..Default::default()
+        };
+        let mut same_scroll = previous.clone();
+        same_scroll.viewport_width = 640.0;
+        let mut next = previous.clone();
+        next.scroll_x = 180.0;
+
+        assert_eq!(
+            changed_item_view_scroll_snapshot(&previous, &same_scroll),
+            None
+        );
+        assert_eq!(
+            changed_item_view_scroll_snapshot(&previous, &next),
+            Some(ItemViewScrollViewSnapshot::new(180.0, 32.0, 1_000.0, 500.0))
         );
     }
 }

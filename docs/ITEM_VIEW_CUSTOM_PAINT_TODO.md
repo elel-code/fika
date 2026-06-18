@@ -1118,6 +1118,11 @@ by risk and evidence, not by how custom-painted a surface looks.
   `item_view_scroll_snapshot_for_existing_pane()` now own projecting pane
   `ViewState` into `ItemViewScrollViewSnapshot`, so `main.rs` no longer keeps
   its own pane snapshot helper.
+- [x] P16cy: Hide direct item-view scroll snapshot construction from
+  `main.rs`. Filter-bar priming now uses
+  `item_view_scroll_snapshot_for_view()`, wheel scroll uses
+  `changed_item_view_scroll_snapshot()`, and app tests reuse the pane snapshot
+  projection instead of constructing `ItemViewScrollViewSnapshot` directly.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,
