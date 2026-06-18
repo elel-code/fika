@@ -369,6 +369,14 @@ Places chrome 默认之后的当前执行入口是
   section right-click shell 被关闭。typed DnD move/drop 和 row drag-start 仍留在
   GPUI shell，因此 analyzer 会记录 `retained_targeting=rows+sections` 以及
   `pointer=1 targeting=1`，同时完整 retained-event gate 仍拒绝这个 mixed state。
+- [x] P16em：添加 Places retained-DnD event 切片。opt-in
+  `FIKA_PLACES_EVENT_DELIVERY_POLICY=retained-dnd` policy 使用一个 sidebar-level GPUI
+  typed drag shell，因为 GPUI 通过 `Div::on_drag_move` / `Div::on_drop` 暴露 app 内部
+  typed drag payload。该 policy 下 row/section DnD move/drop shell 被关闭，retained
+  `PlacesInteractionGeometry` 拥有 item、external-path 和 place drag 的 row/section
+  target lookup。row drag-start 仍留在 GPUI shell。analyzer 记录
+  `retained_dnd=rows+sections`、`gpui_event_shells=1` 以及
+  `pointer=1 targeting=1 dnd=1`；完整 retained-event gate 仍拒绝这个 mixed state。
 - [ ] P16q：在每个 P16 实现切片之后，单独提交并附带相关验证：仅文档切片需要 `git diff --check`；代码切片需要 `cargo fmt`、`cargo check`、`cargo test -q`、`scripts/check-item-view-perf-analyzer.sh`、`scripts/check-places-perf-analyzer.sh` 和 `git diff --check`。
 - [x] P16r：记录运行时自测试和突破记录规则。可重复的滚动、缩放、启动图标、调整大小、模式切换和 Places 目标回退应在依赖手动计时之前通过 autosmoke 日志和分析器脚本重现。任何确认的优化突破必须记录症状、Dolphin 比较边界、根本原因、实现、保存的日志/分析器命令和未来回归守卫在拥有的设计或决策文档中。
 

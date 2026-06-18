@@ -13,6 +13,7 @@ pub(super) fn group_heading(
     insert_index: usize,
     custom_visual: bool,
     shell_targeting_enabled: bool,
+    shell_dnd_enabled: bool,
     cx: &mut Context<FikaApp>,
 ) -> Stateful<Div> {
     let mut heading = div()
@@ -37,7 +38,12 @@ pub(super) fn group_heading(
     } else {
         heading
     };
-    let heading = install_section_dnd(heading, insert_index, cx).child(label);
+    let heading = if shell_dnd_enabled {
+        install_section_dnd(heading, insert_index, cx)
+    } else {
+        heading
+    }
+    .child(label);
 
     div()
         .id(format!("place-group-wrap-{label}"))

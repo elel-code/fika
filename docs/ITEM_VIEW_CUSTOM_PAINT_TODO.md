@@ -1401,6 +1401,16 @@ tracks.
   the analyzer records `retained_targeting=rows+sections` and
   `pointer=1 targeting=1` while the full retained-event gate still rejects the
   mixed state.
+- [x] P16em: Add the retained-DnD Places event slice. The opt-in
+  `FIKA_PLACES_EVENT_DELIVERY_POLICY=retained-dnd` policy uses one
+  sidebar-level GPUI typed drag shell, because GPUI exposes app-internal typed
+  drag payloads through `Div::on_drag_move` / `Div::on_drop`. Row/section DnD
+  move/drop shells are disabled in that policy, and retained
+  `PlacesInteractionGeometry` owns row/section target lookup for item,
+  external-path, and place drags. Row drag-start remains on GPUI shells. The
+  analyzer records `retained_dnd=rows+sections`, `gpui_event_shells=1`, and
+  `pointer=1 targeting=1 dnd=1`; the full retained-event gate still rejects the
+  mixed state.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

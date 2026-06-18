@@ -407,6 +407,7 @@ function fail(message) {
     gpui_event_shells = field("gpui_event_shells") + 0
     drag_shells = field("drag_shells") + 0
     retained_targeting = field("retained_targeting") + 0
+    retained_dnd = field("retained_dnd") + 0
     max_update("interaction_rows", rows)
     max_update("interaction_sections", sections)
     max_update("interaction_row_target_decisions", row_target_decisions)
@@ -416,10 +417,13 @@ function fail(message) {
     max_update("interaction_gpui_event_shells", gpui_event_shells)
     max_update("interaction_drag_shells", drag_shells)
     max_update("interaction_retained_targeting", retained_targeting)
+    max_update("interaction_retained_dnd", retained_dnd)
+    current_gpui_shell_boundary_valid = (gpui_event_shells == rows + sections && retained_dnd == 0)
+    current_single_dnd_shell_boundary_valid = (gpui_event_shells == 1 && retained_dnd == rows + sections)
     if (row_target_decisions != rows ||
         section_target_decisions != sections ||
         retained_hitboxes != 0 ||
-        gpui_event_shells != rows + sections ||
+        !(current_gpui_shell_boundary_valid || current_single_dnd_shell_boundary_valid) ||
         drag_shells != rows) {
         current_interaction_policy_invalid = 1
     }
@@ -463,6 +467,7 @@ function fail(message) {
     hovered = field("hovered") + 0
     pointer = field("pointer") + 0
     targeting = field("targeting") + 0
+    dnd = field("dnd") + 0
     prepaint = field("prepaint") + 0
     paint = field("paint") + 0
     max_update("event_probe_rows", rows)
@@ -471,6 +476,7 @@ function fail(message) {
     max_update("event_probe_hovered", hovered)
     max_update("event_probe_pointer", pointer)
     max_update("event_probe_targeting", targeting)
+    max_update("event_probe_dnd", dnd)
     max_update("event_probe_prepaint", prepaint)
     max_update("event_probe_paint", paint)
     if (hitboxes != rows + sections) {
@@ -855,7 +861,7 @@ END {
         max_values["policy_text_gpui"],
         policy_kinds,
         max_values["policy_retained_probe_hitboxes"])
-    printf("places_interaction_policy_frames=%d max_rows=%d max_sections=%d max_row_target_decisions=%d max_section_target_decisions=%d max_retained_hitboxes=%d max_gpui_event_shells=%d max_drag_shells=%d max_retained_probe_hitboxes=%d max_retained_targeting=%d\n",
+    printf("places_interaction_policy_frames=%d max_rows=%d max_sections=%d max_row_target_decisions=%d max_section_target_decisions=%d max_retained_hitboxes=%d max_gpui_event_shells=%d max_drag_shells=%d max_retained_probe_hitboxes=%d max_retained_targeting=%d max_retained_dnd=%d\n",
         interaction_policy_frames,
         max_values["interaction_rows"],
         max_values["interaction_sections"],
@@ -865,7 +871,8 @@ END {
         max_values["interaction_gpui_event_shells"],
         max_values["interaction_drag_shells"],
         max_values["interaction_retained_probe_hitboxes"],
-        max_values["interaction_retained_targeting"])
+        max_values["interaction_retained_targeting"],
+        max_values["interaction_retained_dnd"])
     printf("places_interaction_geometry_frames=%d max_rows=%d max_sections=%d max_entries=%d max_content_height=%.1f max_hit_tests=%d max_project=%dus\n",
         interaction_geometry_frames,
         max_values["interaction_geometry_rows"],
@@ -874,7 +881,7 @@ END {
         max_values["interaction_geometry_content_height"],
         max_values["interaction_geometry_hit_tests"],
         max_values["interaction_geometry_project"])
-    printf("places_event_probe_frames=%d max_rows=%d max_sections=%d max_hitboxes=%d max_hovered=%d max_pointer=%d max_prepaint=%dus max_paint=%dus max_targeting=%d\n",
+    printf("places_event_probe_frames=%d max_rows=%d max_sections=%d max_hitboxes=%d max_hovered=%d max_pointer=%d max_prepaint=%dus max_paint=%dus max_targeting=%d max_dnd=%d\n",
         event_probe_frames,
         max_values["event_probe_rows"],
         max_values["event_probe_sections"],
@@ -883,7 +890,8 @@ END {
         max_values["event_probe_pointer"],
         max_values["event_probe_prepaint"],
         max_values["event_probe_paint"],
-        max_values["event_probe_targeting"])
+        max_values["event_probe_targeting"],
+        max_values["event_probe_dnd"])
     printf("places_row_visual_frames=%d max_rows=%d max_painted=%d max_prepaint=%dus max_paint=%dus\n",
         row_visual_frames,
         max_values["row_visual_rows"],

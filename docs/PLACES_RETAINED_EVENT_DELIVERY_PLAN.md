@@ -230,6 +230,24 @@ that gate. Extend it only when a new retained event log surface is added.
   The full retained-event analyzer gate still rejects this mixed state because
   `retained_hitboxes=0` and `gpui_event_shells=rows+sections`.
 
+2026-06-18 retained DnD slice:
+
+- `FIKA_PLACES_EVENT_DELIVERY_POLICY=retained-dnd` keeps the same retained
+  layer and moves typed item, external-path, and place drag move/drop target
+  lookup to retained `PlacesInteractionGeometry`.
+- GPUI still exposes typed drag payloads only through `Div::on_drag_move` and
+  `Div::on_drop`, so this slice deliberately uses one sidebar-level GPUI typed
+  drag shell instead of row/section shells. The Dolphin alignment is the target
+  lookup and state transition: a viewport event layer owns hit testing, while
+  model/controller methods own drop target and drop execution.
+- In this policy, row/section DnD move/drop shells are disabled. Row drag-start
+  shells remain, because GPUI still starts app-internal drags from `Div::on_drag`.
+- `[fika places-interaction-policy]` reports `retained_dnd=rows+sections` and
+  `gpui_event_shells=1`. `[fika places-event-probe]` reports
+  `pointer=1 targeting=1 dnd=1`. The full retained-event analyzer gate still
+  rejects this state because `retained_hitboxes=0`, `gpui_event_shells=1`, and
+  `drag_shells=rows`.
+
 ## TODO
 
 - [x] Add a `PlacesEventDeliveryPolicy` with `GpuiShells` default and an
@@ -248,6 +266,9 @@ that gate. Extend it only when a new retained event log surface is added.
   targeting, but the policy remains opt-in while typed DnD move/drop and
   drag-start still need GPUI shells.
 - [ ] Add isolated DnD smoke for retained item/external/place drops.
-- [ ] Move drag-move/drop delivery to the retained layer.
+- [~] Move drag-move/drop delivery to the retained layer. Current status:
+  `retained-dnd` owns row/section target lookup and drop dispatch behind one
+  sidebar-level GPUI typed drag shell. The remaining GPUI boundary is payload
+  delivery and drag-start, not per-row/section DnD target logic.
 - [ ] Remove GPUI row/section event callbacks after analyzer gates pass.
 - [ ] Keep GPUI row drag-start shells until Track 4 solves typed drag start.

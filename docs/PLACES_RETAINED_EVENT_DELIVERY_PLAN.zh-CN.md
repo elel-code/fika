@@ -213,6 +213,22 @@ event 日志 surface 时才扩展 analyzer。
   完整 retained-event analyzer gate 仍会拒绝该 mixed state，因为
   `retained_hitboxes=0` 且 `gpui_event_shells=rows+sections`。
 
+2026-06-18 retained DnD 切片：
+
+- `FIKA_PLACES_EVENT_DELIVERY_POLICY=retained-dnd` 继续使用同一个 retained layer，
+  并将 typed item、external-path 和 place drag move/drop 的目标查找移到 retained
+  `PlacesInteractionGeometry`。
+- GPUI 公开 API 目前仍只能通过 `Div::on_drag_move` 和 `Div::on_drop` 取得 typed drag
+  payload，因此该切片有意使用一个 sidebar-level GPUI typed drag shell，而不是
+  row/section shell。这里与 Dolphin 对齐的是目标查找和状态转换：viewport event layer
+  拥有 hit testing，model/controller 方法拥有 drop target 和 drop execution。
+- 在该 policy 下，row/section DnD move/drop shell 被关闭。row drag-start shell 仍保留，
+  因为 GPUI 仍通过 `Div::on_drag` 启动 app 内部 drag。
+- `[fika places-interaction-policy]` 报告 `retained_dnd=rows+sections` 和
+  `gpui_event_shells=1`。`[fika places-event-probe]` 报告
+  `pointer=1 targeting=1 dnd=1`。完整 retained-event analyzer gate 仍拒绝该状态，
+  因为 `retained_hitboxes=0`、`gpui_event_shells=1` 且 `drag_shells=rows`。
+
 ## TODO
 
 - [x] 添加 `PlacesEventDeliveryPolicy`，默认 `GpuiShells`，opt-in
@@ -228,6 +244,9 @@ event 日志 surface 时才扩展 analyzer。
   `retained-targeting` 拥有 row activation 和 row/section context menu targeting，
   但 typed DnD move/drop 和 drag-start 仍需要 GPUI shell，因此该 policy 仍保持 opt-in。
 - [ ] 添加 retained item/external/place drops 的隔离 DnD smoke。
-- [ ] 将 drag-move/drop delivery 移到 retained layer。
+- [~] 将 drag-move/drop delivery 移到 retained layer。当前状态：
+  `retained-dnd` 在一个 sidebar-level GPUI typed drag shell 后面拥有 row/section 目标查找
+  和 drop dispatch。剩余 GPUI 边界是 payload delivery 和 drag-start，而不是 per-row/section
+  DnD target logic。
 - [ ] analyzer gates 通过后移除 GPUI row/section event callbacks。
 - [ ] Track 4 解决 typed drag start 前，继续保留 GPUI row drag-start shells。

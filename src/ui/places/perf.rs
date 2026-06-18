@@ -69,22 +69,33 @@ pub(crate) enum PlacesEventDeliveryPolicy {
     RetainedProbe,
     RetainedPointer,
     RetainedTargeting,
+    RetainedDnd,
 }
 
 impl PlacesEventDeliveryPolicy {
     pub(crate) fn retained_event_layer_enabled(self) -> bool {
         matches!(
             self,
-            Self::RetainedProbe | Self::RetainedPointer | Self::RetainedTargeting
+            Self::RetainedProbe
+                | Self::RetainedPointer
+                | Self::RetainedTargeting
+                | Self::RetainedDnd
         )
     }
 
     pub(crate) fn retained_pointer_enabled(self) -> bool {
-        matches!(self, Self::RetainedPointer | Self::RetainedTargeting)
+        matches!(
+            self,
+            Self::RetainedPointer | Self::RetainedTargeting | Self::RetainedDnd
+        )
     }
 
     pub(crate) fn retained_targeting_enabled(self) -> bool {
-        matches!(self, Self::RetainedTargeting)
+        matches!(self, Self::RetainedTargeting | Self::RetainedDnd)
+    }
+
+    pub(crate) fn retained_dnd_enabled(self) -> bool {
+        matches!(self, Self::RetainedDnd)
     }
 
     fn kind(self) -> &'static str {
@@ -93,6 +104,7 @@ impl PlacesEventDeliveryPolicy {
             Self::RetainedProbe => "retained-probe",
             Self::RetainedPointer => "retained-pointer",
             Self::RetainedTargeting => "retained-targeting",
+            Self::RetainedDnd => "retained-dnd",
         }
     }
 
@@ -107,9 +119,10 @@ impl PlacesEventDeliveryPolicy {
     fn retained_probe_hitboxes(self, rows: usize, sections: usize) -> usize {
         match self {
             Self::GpuiShells => 0,
-            Self::RetainedProbe | Self::RetainedPointer | Self::RetainedTargeting => {
-                rows + sections
-            }
+            Self::RetainedProbe
+            | Self::RetainedPointer
+            | Self::RetainedTargeting
+            | Self::RetainedDnd => rows + sections,
         }
     }
 
@@ -119,13 +132,24 @@ impl PlacesEventDeliveryPolicy {
             | Self::RetainedProbe
             | Self::RetainedPointer
             | Self::RetainedTargeting => rows + sections,
+            Self::RetainedDnd => usize::from(rows + sections > 0),
         }
     }
 
     fn retained_targeting(self, rows: usize, sections: usize) -> usize {
         match self {
-            Self::RetainedTargeting => rows + sections,
+            Self::RetainedTargeting | Self::RetainedDnd => rows + sections,
             Self::GpuiShells | Self::RetainedProbe | Self::RetainedPointer => 0,
+        }
+    }
+
+    fn retained_dnd(self, rows: usize, sections: usize) -> usize {
+        match self {
+            Self::RetainedDnd => rows + sections,
+            Self::GpuiShells
+            | Self::RetainedProbe
+            | Self::RetainedPointer
+            | Self::RetainedTargeting => 0,
         }
     }
 }
@@ -151,6 +175,9 @@ fn places_event_delivery_policy_from_str(value: &str) -> Option<PlacesEventDeliv
         }
         "targeting" | "retained-targeting" | "click" | "retained-click" => {
             Some(PlacesEventDeliveryPolicy::RetainedTargeting)
+        }
+        "dnd" | "retained-dnd" | "drag-drop" | "retained-drag-drop" => {
+            Some(PlacesEventDeliveryPolicy::RetainedDnd)
         }
         _ => None,
     }
@@ -280,19 +307,21 @@ pub(crate) struct PlacesEventProbePerfLog {
     pub(crate) hovered_hitboxes: usize,
     pub(crate) pointer_delivery: bool,
     pub(crate) targeting_delivery: bool,
+    pub(crate) dnd_delivery: bool,
     pub(crate) prepaint_elapsed: Duration,
     pub(crate) paint_elapsed: Duration,
 }
 
 pub(crate) fn emit_places_event_probe_perf_log(log: PlacesEventProbePerfLog) {
     eprintln!(
-        "[fika places-event-probe] rows={} sections={} hitboxes={} hovered={} pointer={} targeting={} prepaint={}us paint={}us",
+        "[fika places-event-probe] rows={} sections={} hitboxes={} hovered={} pointer={} targeting={} dnd={} prepaint={}us paint={}us",
         log.rows,
         log.sections,
         log.hitboxes,
         log.hovered_hitboxes,
         usize::from(log.pointer_delivery),
         usize::from(log.targeting_delivery),
+        usize::from(log.dnd_delivery),
         log.prepaint_elapsed.as_micros(),
         log.paint_elapsed.as_micros(),
     );
@@ -382,6 +411,11 @@ impl PlacesInteractionPolicyLog {
             .retained_targeting(self.row_count, self.section_count)
     }
 
+    pub(crate) fn retained_dnd(self) -> usize {
+        self.event_delivery_policy
+            .retained_dnd(self.row_count, self.section_count)
+    }
+
     pub(crate) fn drag_shells(self) -> usize {
         self.row_count
     }
@@ -389,7 +423,7 @@ impl PlacesInteractionPolicyLog {
 
 pub(crate) fn emit_places_interaction_policy_log(log: PlacesInteractionPolicyLog) {
     eprintln!(
-        "[fika places-interaction-policy] rows={} sections={} row_target_decisions={} section_target_decisions={} retained_hitboxes={} retained_probe_hitboxes={} gpui_event_shells={} drag_shells={} event_policy={} retained_targeting={}",
+        "[fika places-interaction-policy] rows={} sections={} row_target_decisions={} section_target_decisions={} retained_hitboxes={} retained_probe_hitboxes={} gpui_event_shells={} drag_shells={} event_policy={} retained_targeting={} retained_dnd={}",
         log.row_count,
         log.section_count,
         log.retained_row_target_decisions(),
@@ -400,6 +434,7 @@ pub(crate) fn emit_places_interaction_policy_log(log: PlacesInteractionPolicyLog
         log.drag_shells(),
         log.event_delivery_policy.kind(),
         log.retained_targeting(),
+        log.retained_dnd(),
     );
 }
 
@@ -490,6 +525,10 @@ mod tests {
             places_event_delivery_policy_from_str("retained-targeting"),
             Some(PlacesEventDeliveryPolicy::RetainedTargeting)
         );
+        assert_eq!(
+            places_event_delivery_policy_from_str("retained-dnd"),
+            Some(PlacesEventDeliveryPolicy::RetainedDnd)
+        );
         assert_eq!(places_event_delivery_policy_from_str("retained"), None);
     }
 
@@ -536,6 +575,7 @@ mod tests {
         assert_eq!(policy.retained_probe_hitboxes(), 13);
         assert_eq!(policy.gpui_event_shells(), 13);
         assert_eq!(policy.retained_targeting(), 0);
+        assert_eq!(policy.retained_dnd(), 0);
         assert_eq!(policy.drag_shells(), 11);
     }
 
@@ -554,6 +594,27 @@ mod tests {
         assert_eq!(policy.retained_probe_hitboxes(), 13);
         assert_eq!(policy.gpui_event_shells(), 13);
         assert_eq!(policy.retained_targeting(), 13);
+        assert_eq!(policy.retained_dnd(), 0);
+        assert_eq!(policy.drag_shells(), 11);
+    }
+
+    #[test]
+    fn places_interaction_dnd_policy_keeps_single_gpui_typed_drag_boundary_explicit() {
+        let policy = PlacesInteractionPolicyLog {
+            row_count: 11,
+            section_count: 2,
+            event_delivery_policy: PlacesEventDeliveryPolicy::RetainedDnd,
+        };
+
+        assert!(PlacesEventDeliveryPolicy::RetainedDnd.retained_event_layer_enabled());
+        assert!(PlacesEventDeliveryPolicy::RetainedDnd.retained_pointer_enabled());
+        assert!(PlacesEventDeliveryPolicy::RetainedDnd.retained_targeting_enabled());
+        assert!(PlacesEventDeliveryPolicy::RetainedDnd.retained_dnd_enabled());
+        assert_eq!(policy.retained_hitboxes(), 0);
+        assert_eq!(policy.retained_probe_hitboxes(), 13);
+        assert_eq!(policy.gpui_event_shells(), 1);
+        assert_eq!(policy.retained_targeting(), 13);
+        assert_eq!(policy.retained_dnd(), 13);
         assert_eq!(policy.drag_shells(), 11);
     }
 

@@ -1,4 +1,4 @@
-mod dnd_helpers;
+pub(super) mod dnd_helpers;
 mod row;
 mod section;
 
@@ -205,7 +205,9 @@ pub(crate) fn places_sidebar(
         .retained_event_layer_enabled()
         .then(|| {
             let mode = if event_delivery_policy.retained_pointer_enabled() {
-                if event_delivery_policy.retained_targeting_enabled() {
+                if event_delivery_policy.retained_dnd_enabled() {
+                    PlacesEventLayerMode::Dnd
+                } else if event_delivery_policy.retained_targeting_enabled() {
                     PlacesEventLayerMode::Targeting
                 } else {
                     PlacesEventLayerMode::Pointer
@@ -236,6 +238,7 @@ pub(crate) fn places_sidebar(
                     place.index,
                     custom_row_visuals,
                     !event_delivery_policy.retained_targeting_enabled(),
+                    !event_delivery_policy.retained_dnd_enabled(),
                     cx,
                 ));
             }
@@ -246,6 +249,7 @@ pub(crate) fn places_sidebar(
             row_visual_policy,
             !event_delivery_policy.retained_pointer_enabled(),
             !event_delivery_policy.retained_targeting_enabled(),
+            !event_delivery_policy.retained_dnd_enabled(),
             cx,
         ));
     }

@@ -10,7 +10,7 @@ use super::super::interaction::{
     PlaceInteractionCursor, PlaceInteractionDecision, PlaceInteractionTarget,
 };
 
-pub(super) fn apply_place_interaction_decision(
+pub(in crate::ui::places) fn apply_place_interaction_decision(
     app: &mut FikaApp,
     decision: &PlaceInteractionDecision,
 ) -> bool {
@@ -25,7 +25,7 @@ pub(super) fn apply_place_interaction_decision(
     }
 }
 
-pub(super) fn refresh_place_interaction_cursor(
+pub(in crate::ui::places) fn refresh_place_interaction_cursor(
     app: &mut FikaApp,
     cursor: PlaceInteractionCursor,
     window: &mut gpui::Window,

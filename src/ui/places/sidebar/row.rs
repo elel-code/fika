@@ -41,6 +41,7 @@ pub(super) fn place_row(
     row_visual_policy: PlacesRowVisualPolicy,
     row_shell_cursor_enabled: bool,
     row_shell_targeting_enabled: bool,
+    row_shell_dnd_enabled: bool,
     cx: &mut Context<FikaApp>,
 ) -> Stateful<Div> {
     let custom_chrome = row_visual_policy.custom_layer_enabled();
@@ -128,19 +129,23 @@ pub(super) fn place_row(
                 }),
             );
     }
-    let mut row = install_place_row_dnd(
-        row,
-        PlaceRowDndConfig {
-            mounted,
-            insert_before_index,
-            insert_after_index,
-            path_for_internal_target: place.path.clone(),
-            path_for_internal_drop: place.path.clone(),
-            path_for_external_target: place.path.clone(),
-            path_for_external_drop: place.path.clone(),
-        },
-        cx,
-    );
+    let mut row = if row_shell_dnd_enabled {
+        install_place_row_dnd(
+            row,
+            PlaceRowDndConfig {
+                mounted,
+                insert_before_index,
+                insert_after_index,
+                path_for_internal_target: place.path.clone(),
+                path_for_internal_drop: place.path.clone(),
+                path_for_external_target: place.path.clone(),
+                path_for_external_drop: place.path.clone(),
+            },
+            cx,
+        )
+    } else {
+        row
+    };
 
     if custom_chrome {
         row = row.h(px(PLACE_ROW_HEIGHT));
