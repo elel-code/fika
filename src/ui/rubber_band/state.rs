@@ -86,6 +86,29 @@ impl RubberBandState {
     }
 }
 
+pub(crate) fn finish_rubber_band_for_pane(
+    pending: &mut Option<PendingRubberBand>,
+    active: &mut Option<RubberBandState>,
+    pane_id: PaneId,
+) -> bool {
+    let mut changed = false;
+    if pending
+        .as_ref()
+        .is_some_and(|pending| pending.is_for_pane(pane_id))
+    {
+        *pending = None;
+        changed = true;
+    }
+    if active
+        .as_ref()
+        .is_some_and(|active| active.is_for_pane(pane_id))
+    {
+        *active = None;
+        changed = true;
+    }
+    changed
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct RubberBandDrag {
     pub(crate) pane_id: PaneId,
@@ -142,5 +165,33 @@ mod tests {
                 current
             })
         );
+    }
+
+    #[test]
+    fn finish_rubber_band_for_pane_clears_only_matching_state() {
+        let start = ViewPoint { x: 10.0, y: 10.0 };
+        let mut pending = Some(PendingRubberBand::new(PaneId(1), start));
+        let mut active = Some(RubberBandState::new(PaneId(2), start));
+
+        assert!(finish_rubber_band_for_pane(
+            &mut pending,
+            &mut active,
+            PaneId(1)
+        ));
+        assert_eq!(pending, None);
+        assert_eq!(active, Some(RubberBandState::new(PaneId(2), start)));
+
+        assert!(finish_rubber_band_for_pane(
+            &mut pending,
+            &mut active,
+            PaneId(2)
+        ));
+        assert_eq!(pending, None);
+        assert_eq!(active, None);
+        assert!(!finish_rubber_band_for_pane(
+            &mut pending,
+            &mut active,
+            PaneId(2)
+        ));
     }
 }

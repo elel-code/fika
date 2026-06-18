@@ -149,7 +149,7 @@ use ui::properties_dialog::{
     PropertiesDialogState, properties_dialog_overlay, properties_for_path, properties_for_selection,
 };
 use ui::rename::{RENAME_TEXT_INSET_X, RenameDraft};
-use ui::rubber_band::{PendingRubberBand, RubberBandState};
+use ui::rubber_band::{PendingRubberBand, RubberBandState, finish_rubber_band_for_pane};
 #[cfg(test)]
 use ui::shortcuts::PlaceInputAction;
 use ui::shortcuts::{
@@ -4184,19 +4184,11 @@ impl FikaApp {
     }
 
     fn finish_rubber_band(&mut self, pane_id: PaneId) {
-        if self
-            .rubber_band_pending
-            .is_some_and(|pending| pending.is_for_pane(pane_id))
-        {
-            self.rubber_band_pending = None;
-        }
-        if self
-            .rubber_band
-            .as_ref()
-            .is_some_and(|band| band.is_for_pane(pane_id))
-        {
-            self.rubber_band = None;
-        }
+        let _ = finish_rubber_band_for_pane(
+            &mut self.rubber_band_pending,
+            &mut self.rubber_band,
+            pane_id,
+        );
     }
 
     fn clear_rename_draft_for_pane(&mut self, pane_id: PaneId) {

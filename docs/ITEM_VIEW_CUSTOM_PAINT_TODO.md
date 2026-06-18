@@ -975,6 +975,10 @@ by risk and evidence, not by how custom-painted a surface looks.
   module. `RubberBandState` now owns construction, pane ownership checks, and
   same-pane current-point updates. `src/main.rs` still stores the active state,
   clears drafts, computes intersecting items, and applies selection changes.
+- [x] P16bw: Move rubber-band finish state-clearing policy into the rubber-band
+  module. `finish_rubber_band_for_pane()` now owns clearing only the pending
+  and active rubber-band states that belong to the target pane. `src/main.rs`
+  still decides when lifecycle events finish a rubber-band interaction.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,
