@@ -458,7 +458,9 @@ pretending that every remaining GPUI boundary can be removed safely today.
   role-size debounce was removed because it caused a delayed second zoom
   adjustment; raw-to-retained render snapshot projection now lives in
   `file_grid/snapshot/render.rs`, covering visible slot assignment, visible
-  snapshot cache conversion, hover projection, and paint-slot projection.
+  snapshot cache conversion, hover projection, and paint-slot projection;
+  visible metadata/thumbnail/icon work keying and queue handoff now live in
+  `file_grid/snapshot/scheduler.rs`.
   Runtime evidence collection helpers remain in `src/main.rs` and scripts.
 
 ## P16: Concrete Full-Transition Backlog
@@ -796,6 +798,14 @@ by risk and evidence, not by how custom-painted a surface looks.
   longer hand-wires that retained projection sequence inline. Unit coverage
   proves slot assignment, icon request, paint-slot insertion, and hover visual
   projection through the new boundary.
+- [x] P16as: Move visible raw-grid work queue handoff into the file-grid
+  module. `queue_raw_file_grid_model_work()` now owns the
+  `PaneVisibleWorkKey` duplicate-work gate plus metadata role, thumbnail probe,
+  and file-icon resolve candidate queueing for a raw grid snapshot. `src/main.rs`
+  keeps a thin pane/app-state wrapper and still starts the background workers,
+  but no longer hand-wires the three scheduler handoffs inline. Unit coverage
+  proves unchanged work keys skip duplicate queueing after the first metadata
+  and icon work submission.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

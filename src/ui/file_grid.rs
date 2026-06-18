@@ -32,8 +32,7 @@ pub(crate) use details::DetailsLayoutMetrics;
 pub(crate) use details_visual::DetailsTextShapeCache;
 pub(crate) use dnd::ItemDrag;
 pub(crate) use icon_work::{
-    DOLPHIN_VISIBLE_ICON_SYNC_BUDGET, FileIconResolveQueue,
-    queue_file_icon_resolve_work_for_raw_grid, resolve_visible_file_icons_for_raw_grid,
+    DOLPHIN_VISIBLE_ICON_SYNC_BUDGET, FileIconResolveQueue, resolve_visible_file_icons_for_raw_grid,
 };
 pub(crate) use layout::{
     CompactColumnWidthCache, ITEM_NAME_LINE_HEIGHT, compact_text_width,
@@ -58,8 +57,7 @@ pub(crate) use projection::{
 pub(crate) use slots::VisibleItemSlotPool;
 pub(crate) use snapshot::{
     PaneVisibleWorkKey, RawFileGridSnapshot, RawFileGridSnapshotInput, VisibleItemSnapshotCache,
-    deferred_thumbnail_candidates_for_model, project_retained_file_grid_snapshot,
-    raw_file_grid_snapshot,
+    project_retained_file_grid_snapshot, queue_raw_file_grid_model_work, raw_file_grid_snapshot,
 };
 pub(crate) use static_visual::StaticItemTextShapeCache;
 pub(crate) use surface::file_grid;

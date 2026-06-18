@@ -90,13 +90,12 @@ use ui::file_grid::{
     PaneLayoutProjectionInput, PaneViewportGeometry, PaneVisibleWorkKey, RawFileGridSnapshot,
     RawFileGridSnapshotInput, StaticItemTextShapeCache, VisibleItemSlotPool,
     VisibleItemSnapshotCache, compact_text_width, compact_text_width_for_name,
-    content_item_hit_at_point, deferred_thumbnail_candidates_for_model,
-    emit_item_view_autosmoke_complete, emit_item_view_autosmoke_scroll_action,
-    emit_item_view_autosmoke_start, emit_item_view_autosmoke_zoom_action, item_view_perf_enabled,
+    content_item_hit_at_point, emit_item_view_autosmoke_complete,
+    emit_item_view_autosmoke_scroll_action, emit_item_view_autosmoke_start,
+    emit_item_view_autosmoke_zoom_action, item_view_perf_enabled,
     model_indexes_intersecting_visual_rect, pane_layout_projection,
-    project_retained_file_grid_snapshot, queue_file_icon_resolve_work_for_raw_grid,
-    raw_file_grid_snapshot, rename_editor_required_text_width,
-    resolve_visible_file_icons_for_raw_grid,
+    project_retained_file_grid_snapshot, queue_raw_file_grid_model_work, raw_file_grid_snapshot,
+    rename_editor_required_text_width, resolve_visible_file_icons_for_raw_grid,
 };
 use ui::filter_bar::{
     FILTER_BAR_HEIGHT, FilterBarSnapshot, FilteredModelCacheEntry, PaneFilterState,
@@ -1738,47 +1737,27 @@ impl FikaApp {
         file_icon_size: f32,
         filtered: Option<&fika_core::FilteredModel>,
     ) -> Option<(bool, bool, bool)> {
-        let key = PaneVisibleWorkKey::new(
-            generation,
-            view_mode,
-            model_data_generation,
-            source_revision,
-            item_count,
-            raw_file_grid,
-        );
-        if self.visible_work_keys.get(&pane_id) == Some(&key) {
-            return Some((false, false, false));
-        }
-        self.visible_work_keys.insert(pane_id, key);
-
         let pane = self.panes.pane(pane_id)?;
-        let metadata_role_queued = raw_file_grid.queue_metadata_role_candidates(
-            &mut self.metadata_role_scheduler,
-            pane_id,
-            generation,
-        );
-        let thumbnail_probe_queued = raw_file_grid.queue_thumbnail_candidates(
-            &mut self.thumbnail_scheduler,
-            pane_id,
-            generation,
-            deferred_thumbnail_candidates_for_model(
+        Some(
+            queue_raw_file_grid_model_work(
+                &mut self.visible_work_keys,
+                &mut self.metadata_role_scheduler,
+                &mut self.thumbnail_scheduler,
+                &self.file_icons,
+                &mut self.file_icon_resolve_queue,
+                pane_id,
+                generation,
+                view_mode,
+                model_data_generation,
+                source_revision,
+                item_count,
                 raw_file_grid,
+                file_icon_size,
                 &pane.model,
                 filtered,
-                item_count,
-            ),
-        );
-        let file_icon_resolve_queued = queue_file_icon_resolve_work_for_raw_grid(
-            &self.file_icons,
-            &mut self.file_icon_resolve_queue,
-            raw_file_grid,
-            file_icon_size,
-        );
-        Some((
-            metadata_role_queued,
-            thumbnail_probe_queued,
-            file_icon_resolve_queued,
-        ))
+            )
+            .into_tuple(),
+        )
     }
 
     fn start_listing_result_monitor(receiver: mpsc::Receiver<()>, cx: &mut Context<Self>) {

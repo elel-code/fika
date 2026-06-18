@@ -341,6 +341,8 @@ execution must stay split into evidence-backed tracks:
    includes role scheduling handoff, runtime evidence helpers, and eventually
    shell-boundary ownership. Current raw-to-retained item projection is owned by
    `project_retained_file_grid_snapshot()` in `file_grid/snapshot/render.rs`;
+   visible metadata/thumbnail/icon work keying and queue handoff is owned by
+   `queue_raw_file_grid_model_work()` in `file_grid/snapshot/scheduler.rs`;
    app root storage remains in `FikaApp`, but the conversion sequence is no
    longer hand-wired inline in `src/main.rs`.
 

@@ -21,11 +21,12 @@ use fika_core::ViewMode;
 use fika_core::{DirectoryModel, PaneId, SelectionState, ViewState};
 pub(crate) use range::PaneVisibleWorkKey;
 pub(crate) use render::project_retained_file_grid_snapshot;
+pub(crate) use scheduler::queue_raw_file_grid_model_work;
 #[cfg(test)]
 use std::path::PathBuf;
 #[cfg(test)]
 use std::sync::Arc;
-pub(crate) use thumbnail::{deferred_thumbnail_candidates_for_model, visible_item_thumbnail_path};
+pub(crate) use thumbnail::visible_item_thumbnail_path;
 pub(crate) use types::{
     FileGridIconRequest, RawDetailsItemSnapshot, RawFileGridSnapshot, RawFileGridSnapshotInput,
     RawVisibleItemSnapshot,

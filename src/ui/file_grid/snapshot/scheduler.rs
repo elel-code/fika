@@ -1,8 +1,89 @@
+use std::collections::HashMap;
+
 use fika_core::{
-    Generation, MetadataRoleScheduler, PaneId, ThumbnailCandidate, ThumbnailScheduler,
+    DirectoryModel, FilteredModel, Generation, MetadataRoleScheduler, PaneId, ThumbnailCandidate,
+    ThumbnailScheduler, ViewMode,
 };
 
+use crate::ui::icons::FileIconCache;
+
+use super::super::icon_work::{FileIconResolveQueue, queue_file_icon_resolve_work_for_raw_grid};
+use super::PaneVisibleWorkKey;
 use super::{FileGridIconRequest, RawFileGridSnapshot, RawVisibleItemSnapshot, thumbnail};
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct QueuedVisibleModelWork {
+    pub(crate) metadata_role: bool,
+    pub(crate) thumbnail_probe: bool,
+    pub(crate) file_icon_resolve: bool,
+}
+
+impl QueuedVisibleModelWork {
+    pub(crate) fn into_tuple(self) -> (bool, bool, bool) {
+        (
+            self.metadata_role,
+            self.thumbnail_probe,
+            self.file_icon_resolve,
+        )
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn queue_raw_file_grid_model_work(
+    visible_work_keys: &mut HashMap<PaneId, PaneVisibleWorkKey>,
+    metadata_role_scheduler: &mut MetadataRoleScheduler,
+    thumbnail_scheduler: &mut ThumbnailScheduler,
+    file_icons: &FileIconCache,
+    file_icon_resolve_queue: &mut FileIconResolveQueue,
+    pane_id: PaneId,
+    generation: Generation,
+    view_mode: ViewMode,
+    model_data_generation: u64,
+    source_revision: u64,
+    item_count: usize,
+    raw_file_grid: &RawFileGridSnapshot,
+    file_icon_size: f32,
+    model: &DirectoryModel,
+    filtered: Option<&FilteredModel>,
+) -> QueuedVisibleModelWork {
+    let key = PaneVisibleWorkKey::new(
+        generation,
+        view_mode,
+        model_data_generation,
+        source_revision,
+        item_count,
+        raw_file_grid,
+    );
+    if visible_work_keys.get(&pane_id) == Some(&key) {
+        return QueuedVisibleModelWork::default();
+    }
+    visible_work_keys.insert(pane_id, key);
+
+    let metadata_role =
+        raw_file_grid.queue_metadata_role_candidates(metadata_role_scheduler, pane_id, generation);
+    let thumbnail_probe = raw_file_grid.queue_thumbnail_candidates(
+        thumbnail_scheduler,
+        pane_id,
+        generation,
+        thumbnail::deferred_thumbnail_candidates_for_model(
+            raw_file_grid,
+            model,
+            filtered,
+            item_count,
+        ),
+    );
+    let file_icon_resolve = queue_file_icon_resolve_work_for_raw_grid(
+        file_icons,
+        file_icon_resolve_queue,
+        raw_file_grid,
+        file_icon_size,
+    );
+    QueuedVisibleModelWork {
+        metadata_role,
+        thumbnail_probe,
+        file_icon_resolve,
+    }
+}
 
 impl RawFileGridSnapshot {
     pub(crate) fn queue_metadata_role_candidates(
@@ -200,9 +281,90 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
 
-    use fika_core::{IconsLayout, ItemId, ItemLayout};
+    use fika_core::{DirectoryModel, IconsLayout, ItemId, ItemLayout};
 
     use super::super::RawDetailsItemSnapshot;
+
+    #[test]
+    fn raw_file_grid_model_work_queue_skips_unchanged_work_key() {
+        let directory = PathBuf::from("/tmp/fika-raw-grid-model-work");
+        let mut model = DirectoryModel::for_directory(directory.clone());
+        model.replace_listing(
+            directory,
+            Arc::new(vec![fika_core::Entry::new(fika_core::EntryData {
+                name: Arc::from("payload"),
+                name_width_units: 7,
+                target_path: None,
+                size_bytes: 12,
+                modified_secs: Some(42),
+                metadata_complete: true,
+                mime_type: Some(Arc::from(fika_core::GENERIC_BINARY_MIME)),
+                mime_magic_checked: false,
+                trash_original_path: None,
+                trash_deletion_time: None,
+                is_dir: false,
+            })]),
+        );
+        let mut item = test_raw_visible_item(1, "payload", 0);
+        item.mime_type = Some(Arc::from(fika_core::GENERIC_BINARY_MIME));
+        item.mime_magic_checked = false;
+        let raw_file_grid = RawFileGridSnapshot::Icons {
+            layout: IconsLayout::new(1, fika_core::IconsLayoutOptions::default()),
+            items: vec![item],
+        };
+        let mut visible_work_keys = HashMap::new();
+        let mut metadata_scheduler = MetadataRoleScheduler::default();
+        let mut thumbnail_scheduler = ThumbnailScheduler::default();
+        let file_icons = FileIconCache::default();
+        let mut icon_queue = FileIconResolveQueue::default();
+
+        assert_eq!(
+            queue_raw_file_grid_model_work(
+                &mut visible_work_keys,
+                &mut metadata_scheduler,
+                &mut thumbnail_scheduler,
+                &file_icons,
+                &mut icon_queue,
+                PaneId(1),
+                Generation(1),
+                ViewMode::Icons,
+                model.data_generation(),
+                0,
+                model.len(),
+                &raw_file_grid,
+                48.0,
+                &model,
+                None,
+            ),
+            QueuedVisibleModelWork {
+                metadata_role: true,
+                thumbnail_probe: false,
+                file_icon_resolve: true,
+            }
+        );
+        assert_eq!(
+            queue_raw_file_grid_model_work(
+                &mut visible_work_keys,
+                &mut metadata_scheduler,
+                &mut thumbnail_scheduler,
+                &file_icons,
+                &mut icon_queue,
+                PaneId(1),
+                Generation(1),
+                ViewMode::Icons,
+                model.data_generation(),
+                0,
+                model.len(),
+                &raw_file_grid,
+                48.0,
+                &model,
+                None,
+            ),
+            QueuedVisibleModelWork::default()
+        );
+        let batch = metadata_scheduler.start_role_batch(8).unwrap();
+        assert_eq!(batch.requests.len(), 1);
+    }
 
     #[test]
     fn raw_file_grid_snapshot_queues_only_generic_magic_metadata() {
