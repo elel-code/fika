@@ -419,6 +419,10 @@ BEGIN {
     image_theme_decoded += field("theme_decoded") + 0
     image_theme_retained += field("theme_retained") + 0
     image_theme_placeholder += field("theme_placeholder") + 0
+    image_theme_prewarm_loaded += field("theme_prewarm_loaded") + 0
+    image_theme_prewarm_decoded += field("theme_prewarm_decoded") + 0
+    image_theme_prewarm_retained += field("theme_prewarm_retained") + 0
+    image_theme_prewarm_pending += field("theme_prewarm_pending") + 0
     image_thumb_loaded += field("thumb_loaded") + 0
     image_thumb_decoded += field("thumb_decoded") + 0
     image_thumb_retained += field("thumb_retained") + 0
@@ -577,6 +581,10 @@ END {
         " theme_decoded=" (image_theme_decoded + 0) \
         " theme_retained=" (image_theme_retained + 0) \
         " theme_placeholder=" (image_theme_placeholder + 0) \
+        " theme_prewarm_loaded=" (image_theme_prewarm_loaded + 0) \
+        " theme_prewarm_decoded=" (image_theme_prewarm_decoded + 0) \
+        " theme_prewarm_retained=" (image_theme_prewarm_retained + 0) \
+        " theme_prewarm_pending=" (image_theme_prewarm_pending + 0) \
         " thumb_loaded=" (image_thumb_loaded + 0) \
         " thumb_decoded=" (image_thumb_decoded + 0) \
         " thumb_retained=" (image_thumb_retained + 0) \

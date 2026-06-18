@@ -579,6 +579,15 @@ tracks.
   show no steady `theme_placeholder` churn, no zoom-time `theme_decoded` burst,
   no visible size jump, and `icon_sync` within the Dolphin-style visible-first
   budget before the default renderer can change.
+- [~] P16k2a: Build the prewarm/hybrid bridge before reconsidering default
+  custom theme icons. `FIKA_PREWARM_THEME_ICONS=1` now prewarms retained
+  theme-icon images while leaving visible theme icons on GPUI `img()`. The
+  2026-06-18 `/tmp/fika-icon-prewarm-etc-p16k2.log` smoke kept
+  `max_image_layer=0`, `max_gpui_image_element=64`, `theme_placeholder=0`, and
+  `paint_count=0`, while exposing prewarm work as `theme_prewarm_loaded=598`,
+  `theme_prewarm_decoded=5`, and `theme_prewarm_pending=118`. This validates
+  the no-visible-placeholder bridge, but the next step still needs a readiness
+  handoff before custom painting can replace GPUI for visible icons.
 - [ ] P16k3: Only after P16k1/P16k2 pass, reconsider the Compact/Icons
   MIME/theme icon renderer policy in `docs/ITEM_VIEW_RENDERER_DECISIONS.md`.
   Until then, keep the current split: thumbnails on the custom image layer and
@@ -1310,6 +1319,14 @@ tracks.
   This confirms the next architecture step is prewarming or hybrid delivery
   before default promotion, not switching ordinary MIME/theme icons fully to the
   custom image layer yet.
+- [x] P16ee: Add opt-in theme-icon prewarm telemetry and runtime evidence.
+  `FIKA_PREWARM_THEME_ICONS=1` adds non-painting image-layer prewarm items for
+  GPUI-rendered theme icons and extends `[fika item-image]` with
+  `theme_prewarm_loaded`, `theme_prewarm_decoded`, `theme_prewarm_retained`, and
+  `theme_prewarm_pending`. `/tmp/fika-icon-prewarm-etc-p16k2.log` proves the
+  bridge keeps default GPUI renderer policy and does not expose custom
+  placeholders (`theme_placeholder=0`, `paint_count=0`) while warming retained
+  images. This is still an intermediate bridge, not a default promotion.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

@@ -60,6 +60,13 @@ item-view autosmoke marker surface 现在由 `src/ui/file_grid/autosmoke.rs` 拥
 `theme_decoded=5`；`/tmp/fika-icon-default-etc-p16k2.log` 继续让普通 MIME/theme
 icon 走 GPUI `img()`，且 `[fika item-image]` 中没有 placeholder/decode churn。因此当前默认策略保持不变。
 
+Opt-in prewarm bridge 现在可通过 `FIKA_PREWARM_THEME_ICONS=1` 使用。
+`/tmp/fika-icon-prewarm-etc-p16k2.log` 显示该 bridge 继续让普通 MIME/theme icon 走
+GPUI（`max_image_layer=0`、`max_gpui_image_element=64`），且不暴露 custom theme
+placeholder（`theme_placeholder=0`、`paint_count=0`），同时通过 `theme_prewarm_*`
+单独记录 retained-image readiness。这只是 staging step；默认提升仍需要 readiness
+handoff，确保可见 icon 只有在当前 key 的 retained image ready 后才离开 GPUI。
+
 ## 下一批渲染器决策
 
 1. 保持剩余 drag-start shells 直到 GPUI API 边界变化。不要将 GPUI per-element `on_drag_move` 用作 pane self-drag 悬停的真实来源；active item-drag window tracker 拥有该路径。

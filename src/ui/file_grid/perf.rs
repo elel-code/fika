@@ -294,6 +294,10 @@ pub(crate) struct ItemImageSourcePerfStats {
     pub(crate) theme_decoded: usize,
     pub(crate) theme_retained: usize,
     pub(crate) theme_placeholder: usize,
+    pub(crate) theme_prewarm_loaded: usize,
+    pub(crate) theme_prewarm_decoded: usize,
+    pub(crate) theme_prewarm_retained: usize,
+    pub(crate) theme_prewarm_pending: usize,
     pub(crate) thumbnail_loaded: usize,
     pub(crate) thumbnail_decoded: usize,
     pub(crate) thumbnail_retained: usize,
@@ -306,6 +310,10 @@ impl ItemImageSourcePerfStats {
         self.theme_decoded += stats.theme_decoded;
         self.theme_retained += stats.theme_retained;
         self.theme_placeholder += stats.theme_placeholder;
+        self.theme_prewarm_loaded += stats.theme_prewarm_loaded;
+        self.theme_prewarm_decoded += stats.theme_prewarm_decoded;
+        self.theme_prewarm_retained += stats.theme_prewarm_retained;
+        self.theme_prewarm_pending += stats.theme_prewarm_pending;
         self.thumbnail_loaded += stats.thumbnail_loaded;
         self.thumbnail_decoded += stats.thumbnail_decoded;
         self.thumbnail_retained += stats.thumbnail_retained;

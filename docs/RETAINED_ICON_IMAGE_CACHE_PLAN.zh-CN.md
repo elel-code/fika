@@ -141,6 +141,21 @@ FIKA_PERF_ITEM_VIEW=1 FIKA_CUSTOM_THEME_ICONS=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-sc
   placeholder，较可能的方向是在 visible MIME/theme icon 离开 GPUI `img()` 前先 warm
   retained image。
 
+2026-06-18 opt-in prewarm 证据：
+
+- Prewarm 日志：`/tmp/fika-icon-prewarm-etc-p16k2.log`，使用
+  `FIKA_PREWARM_THEME_ICONS=1` 采集。
+- 普通 theme icon 的 renderer policy 仍停留在 GPUI：
+  `max_image_layer=0`，`max_gpui_image_element=64`。
+- item-image layer 没有绘制 theme placeholder：
+  `theme_placeholder=0`，`paint_count=0`，`max_paint=9us`。
+- Prewarm 活动单独可见：
+  `theme_prewarm_loaded=598`，`theme_prewarm_decoded=5`，
+  `theme_prewarm_pending=118`。
+- 决策：prewarm 保持 opt-in。它证明 retained image 可以在不暴露可见 placeholder
+  fallback 的情况下预热，但仍不足以让 custom theme-icon painting 成为默认；下一切片需要
+  使用 warmed readiness 判断可见 icon 何时可以离开 GPUI `img()`。
+
 ## TODO
 
 - [x] 在 file icon snapshot 路径旁添加 `ThemeIconImageKey` 类型。
@@ -151,5 +166,8 @@ FIKA_PERF_ITEM_VIEW=1 FIKA_CUSTOM_THEME_ICONS=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-sc
   default/custom 日志在 placeholder churn 或 zoom-time decode burst 时失败。
   `--gate-default-promotion` 现在会在 custom theme placeholder、theme decode
   churn 或 renderer-policy 证据无效时失败。
+- [x] 添加 opt-in theme-icon prewarm 证据。`FIKA_PREWARM_THEME_ICONS=1` 会为
+  GPUI-rendered theme icon 创建不绘制的 image layer，并报告 `theme_prewarm_*`
+  计数，同时不增加 `theme_placeholder`。
 - [ ] 在配对证据通过且 `docs/ITEM_VIEW_RENDERER_DECISIONS.md` 更新前，保持 GPUI
   `img()` 为默认 MIME/theme icon renderer。

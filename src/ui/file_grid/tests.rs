@@ -7,9 +7,9 @@ use super::details_visual::{
 use super::dnd::{drag_preview_label, item_drag_from_details_snapshot};
 use super::image_layer::{
     ItemImageRetainedSource, item_image_layer_item_source_path, item_image_layer_items,
-    item_image_load_failure_paints_fallback, item_image_paint_layer_element_id,
-    item_image_pending_load_paints_fallback, item_image_pending_load_paints_marker,
-    item_image_retained_source_for,
+    item_image_layer_items_with_theme_prewarm, item_image_load_failure_paints_fallback,
+    item_image_paint_layer_element_id, item_image_pending_load_paints_fallback,
+    item_image_pending_load_paints_marker, item_image_retained_source_for,
 };
 use super::interaction::{
     details_interaction_layer_items, item_interaction_hitbox_bounds,
@@ -161,6 +161,7 @@ fn content_layers_split_base_visuals_from_image_visuals() {
     };
     let visual_items = static_item_visual_layer_items(&items, ItemTileTextAlignment::Center);
     let image_items = item_image_layer_items(&items);
+    let prewarm_items = item_image_layer_items_with_theme_prewarm(&items, true);
     let interaction_items = item_interaction_layer_items(&items);
     let policies = items
         .iter()
@@ -244,6 +245,20 @@ fn content_layers_split_base_visuals_from_image_visuals() {
             .collect::<Vec<_>>(),
         vec![
             PathBuf::from("/tmp/photo.png"),
+            PathBuf::from("/tmp/rename.png")
+        ]
+    );
+    assert_eq!(
+        prewarm_items
+            .iter()
+            .map(|item| item_image_layer_item_source_path(item)
+                .unwrap()
+                .as_ref()
+                .to_path_buf())
+            .collect::<Vec<_>>(),
+        vec![
+            PathBuf::from("/tmp/photo.png"),
+            PathBuf::from("/tmp/app.svg"),
             PathBuf::from("/tmp/rename.png")
         ]
     );

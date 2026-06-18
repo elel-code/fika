@@ -162,6 +162,22 @@ Current `/etc` evidence from 2026-06-18:
   warming retained images before routing visible MIME/theme icons away from GPUI
   `img()`.
 
+Opt-in prewarm evidence from 2026-06-18:
+
+- Prewarm log: `/tmp/fika-icon-prewarm-etc-p16k2.log`, captured with
+  `FIKA_PREWARM_THEME_ICONS=1`.
+- Renderer policy stayed on GPUI for ordinary theme icons:
+  `max_image_layer=0`, `max_gpui_image_element=64`.
+- The item-image layer did not paint theme placeholders:
+  `theme_placeholder=0`, `paint_count=0`, `max_paint=9us`.
+- Prewarm activity was visible separately:
+  `theme_prewarm_loaded=598`, `theme_prewarm_decoded=5`,
+  `theme_prewarm_pending=118`.
+- Decision: keep prewarm opt-in. It proves retained images can be warmed without
+  visible placeholder fallback, but it still does not make custom theme-icon
+  painting default-ready; the next slice must use warmed readiness to decide
+  when a visible icon can leave GPUI `img()`.
+
 ## TODO
 
 - [x] Add a `ThemeIconImageKey` type beside the file icon snapshot path.
@@ -173,5 +189,8 @@ Current `/etc` evidence from 2026-06-18:
   analyzer so paired default/custom logs fail on placeholder churn or zoom-time
   decode bursts. `--gate-default-promotion` now fails on custom theme
   placeholders, theme decode churn, or invalid renderer-policy evidence.
+- [x] Add opt-in theme-icon prewarm evidence. `FIKA_PREWARM_THEME_ICONS=1`
+  creates a non-painting image layer for GPUI-rendered theme icons and reports
+  `theme_prewarm_*` counts without increasing `theme_placeholder`.
 - [ ] Keep GPUI `img()` as the default MIME/theme icon renderer until the
   paired evidence passes and `docs/ITEM_VIEW_RENDERER_DECISIONS.md` is updated.

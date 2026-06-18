@@ -1,6 +1,8 @@
 use std::collections::HashMap;
+use std::env;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::OnceLock;
 
 use fika_core::{ItemLayout, PaneId, ViewRect};
 use gpui::prelude::*;
@@ -20,7 +22,9 @@ use crate::ui::icons::{
 use super::ITEM_NAME_LINE_HEIGHT;
 use super::ItemImageSourcePerfStats;
 use super::paint_slots::ItemPaintSnapshot;
-use super::renderer_policy::{item_uses_image_layer, item_uses_layer_visual_paint};
+use super::renderer_policy::{
+    item_uses_gpui_image_element, item_uses_image_layer, item_uses_layer_visual_paint,
+};
 use super::text::static_paint_single_line_text;
 
 pub(super) fn item_image_layer_view(
@@ -47,16 +51,35 @@ pub(super) fn item_image_layer_view(
 }
 
 pub(super) fn item_image_layer_items(items: &[ItemPaintSnapshot]) -> Vec<ItemImageLayerItem> {
+    item_image_layer_items_with_theme_prewarm(items, theme_icon_prewarm_enabled())
+}
+
+pub(super) fn item_image_layer_items_with_theme_prewarm(
+    items: &[ItemPaintSnapshot],
+    prewarm_theme_icons: bool,
+) -> Vec<ItemImageLayerItem> {
     items
         .iter()
         .filter(|item| item.visible)
         .filter_map(|item| {
             let content = item.content.as_ref();
-            if !item_uses_layer_visual_paint(content) || !item_uses_image_layer(content) {
+            if !item_uses_layer_visual_paint(content) {
                 return None;
             }
+            let role = if item_uses_image_layer(content) {
+                ItemImageLayerRole::Paint
+            } else if prewarm_theme_icons
+                && item_uses_gpui_image_element(content)
+                && content.thumbnail_path.is_none()
+                && content.icon.path.is_some()
+            {
+                ItemImageLayerRole::PrewarmThemeIcon
+            } else {
+                return None;
+            };
             Some(ItemImageLayerItem {
                 visible: item.visible,
+                role,
                 layout: item.layout,
                 thumbnail_path: content.thumbnail_path.clone(),
                 icon: content.icon.clone(),
@@ -68,10 +91,17 @@ pub(super) fn item_image_layer_items(items: &[ItemPaintSnapshot]) -> Vec<ItemIma
 
 pub(super) struct ItemImageLayerItem {
     visible: bool,
+    role: ItemImageLayerRole,
     layout: ItemLayout,
     thumbnail_path: Option<Arc<Path>>,
     icon: FileIconSnapshot,
     fallback_marker: SharedString,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ItemImageLayerRole {
+    Paint,
+    PrewarmThemeIcon,
 }
 
 pub(super) fn item_image_layer_item_source_path(item: &ItemImageLayerItem) -> Option<Arc<Path>> {
@@ -246,6 +276,7 @@ pub(super) struct ItemImageLayerElement {
 
 pub(super) struct ItemImagePaintState {
     visible: bool,
+    paint: bool,
     icon_rect: ViewRect,
     kind: ItemImagePaintKind,
     image: Option<Arc<RenderImage>>,
@@ -351,10 +382,10 @@ impl Element for ItemImageLayerElement {
         cx: &mut App,
     ) {
         let perf_started = super::item_view_perf_enabled().then(std::time::Instant::now);
-        let count = prepaint.len();
+        let paint_count = prepaint.iter().filter(|state| state.paint).count();
         request_layout.paint(bounds, window, cx, |window, cx| {
             for state in prepaint.iter() {
-                if !state.visible {
+                if !state.visible || !state.paint {
                     continue;
                 }
                 item_image_layer_paint_item(bounds, state, window, cx);
@@ -363,7 +394,7 @@ impl Element for ItemImageLayerElement {
         if let Some(started) = perf_started {
             let elapsed = started.elapsed();
             let _ = self.app.update(cx, |this, _cx| {
-                this.record_item_image_paint(self.pane_id, elapsed, count);
+                this.record_item_image_paint(self.pane_id, elapsed, paint_count);
             });
         }
     }
@@ -405,7 +436,18 @@ fn item_image_layer_prepaint_item(
         }
         _ => return None,
     };
-    record_item_image_source_stats(source_stats, kind, load.outcome);
+    let paint = matches!(item.role, ItemImageLayerRole::Paint);
+    record_item_image_source_stats(source_stats, kind, load.outcome, paint);
+    if !paint {
+        return Some(ItemImagePaintState {
+            visible: item.visible,
+            paint: false,
+            icon_rect: item.layout.icon_rect,
+            kind,
+            image: None,
+            fallback: None,
+        });
+    }
     let image = load.image;
     let fallback = image.is_none().then(|| {
         if kind == ItemImagePaintKind::Thumbnail {
@@ -416,6 +458,7 @@ fn item_image_layer_prepaint_item(
     });
     Some(ItemImagePaintState {
         visible: item.visible,
+        paint: true,
         icon_rect: item.layout.icon_rect,
         kind,
         image,
@@ -427,7 +470,26 @@ fn record_item_image_source_stats(
     stats: &mut ItemImageSourcePerfStats,
     kind: ItemImagePaintKind,
     outcome: RetainedImageLoadOutcome,
+    paint: bool,
 ) {
+    if !paint && kind == ItemImagePaintKind::ThemeIcon {
+        match outcome {
+            RetainedImageLoadOutcome::CacheReady { first_ready } => {
+                stats.theme_prewarm_loaded += 1;
+                if first_ready {
+                    stats.theme_prewarm_decoded += 1;
+                }
+            }
+            RetainedImageLoadOutcome::Retained => {
+                stats.theme_prewarm_retained += 1;
+            }
+            RetainedImageLoadOutcome::Missing => {
+                stats.theme_prewarm_pending += 1;
+            }
+        }
+        return;
+    }
+
     match (kind, outcome) {
         (ItemImagePaintKind::Thumbnail, RetainedImageLoadOutcome::CacheReady { first_ready }) => {
             stats.thumbnail_loaded += 1;
@@ -454,6 +516,18 @@ fn record_item_image_source_stats(
             stats.theme_placeholder += 1;
         }
     }
+}
+
+fn theme_icon_prewarm_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        env::var("FIKA_PREWARM_THEME_ICONS").is_ok_and(|value| env_flag_is_truthy(&value))
+    })
+}
+
+fn env_flag_is_truthy(value: &str) -> bool {
+    let normalized = value.trim().to_ascii_lowercase();
+    !normalized.is_empty() && normalized != "0" && normalized != "false" && normalized != "no"
 }
 
 fn item_image_marker_fallback_prepaint(
@@ -791,32 +865,44 @@ mod tests {
             &mut stats,
             ItemImagePaintKind::ThemeIcon,
             RetainedImageLoadOutcome::CacheReady { first_ready: true },
+            true,
         );
         record_item_image_source_stats(
             &mut stats,
             ItemImagePaintKind::ThemeIcon,
             RetainedImageLoadOutcome::Retained,
+            true,
         );
         record_item_image_source_stats(
             &mut stats,
             ItemImagePaintKind::ThemeIcon,
             RetainedImageLoadOutcome::Missing,
+            true,
         );
         record_item_image_source_stats(
             &mut stats,
             ItemImagePaintKind::Thumbnail,
             RetainedImageLoadOutcome::CacheReady { first_ready: false },
+            true,
         );
         record_item_image_source_stats(
             &mut stats,
             ItemImagePaintKind::Thumbnail,
             RetainedImageLoadOutcome::Missing,
+            true,
+        );
+        record_item_image_source_stats(
+            &mut stats,
+            ItemImagePaintKind::ThemeIcon,
+            RetainedImageLoadOutcome::Missing,
+            false,
         );
 
         assert_eq!(stats.theme_loaded, 1);
         assert_eq!(stats.theme_decoded, 1);
         assert_eq!(stats.theme_retained, 1);
         assert_eq!(stats.theme_placeholder, 1);
+        assert_eq!(stats.theme_prewarm_pending, 1);
         assert_eq!(stats.thumbnail_loaded, 1);
         assert_eq!(stats.thumbnail_decoded, 0);
         assert_eq!(stats.thumbnail_retained, 0);
@@ -832,6 +918,7 @@ mod tests {
         };
         ItemImageLayerItem {
             visible: true,
+            role: ItemImageLayerRole::Paint,
             layout: ItemLayout {
                 model_index: 0,
                 column: 0,

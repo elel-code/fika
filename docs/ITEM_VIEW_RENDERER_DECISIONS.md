@@ -291,6 +291,15 @@ the following for `/etc` and a mixed user directory:
 MIME/theme icons on GPUI `img()` with no item-image placeholder/decode churn.
 This keeps the current default policy unchanged.
 
+The opt-in prewarm bridge is now available as `FIKA_PREWARM_THEME_ICONS=1`.
+`/tmp/fika-icon-prewarm-etc-p16k2.log` shows the bridge keeps ordinary
+MIME/theme icons on GPUI (`max_image_layer=0`, `max_gpui_image_element=64`) and
+does not expose custom theme placeholders (`theme_placeholder=0`,
+`paint_count=0`) while recording retained-image readiness separately through
+`theme_prewarm_*`. This is a staging step only; default promotion still requires
+a readiness handoff so visible icons leave GPUI only after their retained image
+for the current key is ready.
+
 ## Next Renderer Decisions
 
 1. Keep the remaining drag-start shells until the GPUI API boundary changes.

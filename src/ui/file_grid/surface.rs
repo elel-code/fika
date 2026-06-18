@@ -322,7 +322,7 @@ pub(crate) fn file_grid(
                 }
                 if image_stats.has_activity() {
                     eprintln!(
-                        "[fika item-image] pane={} mode={:?} prepaint_count={} prepaint={}us paint_count={} paint={}us theme_loaded={} theme_decoded={} theme_retained={} theme_placeholder={} thumb_loaded={} thumb_decoded={} thumb_retained={} thumb_fallback={}",
+                        "[fika item-image] pane={} mode={:?} prepaint_count={} prepaint={}us paint_count={} paint={}us theme_loaded={} theme_decoded={} theme_retained={} theme_placeholder={} theme_prewarm_loaded={} theme_prewarm_decoded={} theme_prewarm_retained={} theme_prewarm_pending={} thumb_loaded={} thumb_decoded={} thumb_retained={} thumb_fallback={}",
                         pane_id.0,
                         view_mode,
                         image_stats.prepaint_count,
@@ -333,6 +333,10 @@ pub(crate) fn file_grid(
                         image_stats.sources.theme_decoded,
                         image_stats.sources.theme_retained,
                         image_stats.sources.theme_placeholder,
+                        image_stats.sources.theme_prewarm_loaded,
+                        image_stats.sources.theme_prewarm_decoded,
+                        image_stats.sources.theme_prewarm_retained,
+                        image_stats.sources.theme_prewarm_pending,
                         image_stats.sources.thumbnail_loaded,
                         image_stats.sources.thumbnail_decoded,
                         image_stats.sources.thumbnail_retained,
