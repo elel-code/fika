@@ -11,6 +11,33 @@ pub(crate) use scroll_state::{
     ItemViewScrollState, ItemViewScrollSync, ItemViewScrollSyncAction, scroll_sync_changes_view,
 };
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ItemViewWindowResizePrime {
+    pub(crate) viewport_width: f32,
+    pub(crate) viewport_height: f32,
+    pub(crate) delta_width: f32,
+    pub(crate) delta_height: f32,
+    pub(crate) width_changed: bool,
+    pub(crate) height_changed: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ItemViewWindowResizePrimeResult {
+    pub(crate) viewport_width: f32,
+    pub(crate) viewport_height: f32,
+    pub(crate) resize: Option<ItemViewWindowResizePrime>,
+}
+
+impl ItemViewWindowResizePrime {
+    pub(crate) fn apply_width_delta(self, width: f32) -> f32 {
+        apply_window_resize_delta(width, self.delta_width)
+    }
+
+    pub(crate) fn apply_height_delta(self, height: f32) -> f32 {
+        apply_window_resize_delta(height, self.delta_height)
+    }
+}
+
 pub(crate) fn view_mode_uses_horizontal_item_scrollbar(view_mode: ViewMode) -> bool {
     matches!(view_mode, ViewMode::Compact)
 }
@@ -67,6 +94,35 @@ pub(crate) fn viewport_height_after_filter_bar_visibility_change(
     fika_core::normalize_viewport_extent(viewport_height + delta)
 }
 
+pub(crate) fn window_resize_viewport_prime(
+    previous: Option<(f32, f32)>,
+    viewport_width: f32,
+    viewport_height: f32,
+) -> ItemViewWindowResizePrimeResult {
+    let viewport_width = fika_core::normalize_viewport_extent(viewport_width);
+    let viewport_height = fika_core::normalize_viewport_extent(viewport_height);
+    let resize = previous.and_then(|(previous_width, previous_height)| {
+        let delta_width = viewport_width - previous_width;
+        let delta_height = viewport_height - previous_height;
+        let width_changed = viewport_delta_changed(delta_width);
+        let height_changed = viewport_delta_changed(delta_height);
+        (width_changed || height_changed).then_some(ItemViewWindowResizePrime {
+            viewport_width,
+            viewport_height,
+            delta_width,
+            delta_height,
+            width_changed,
+            height_changed,
+        })
+    });
+
+    ItemViewWindowResizePrimeResult {
+        viewport_width,
+        viewport_height,
+        resize,
+    }
+}
+
 pub(crate) fn wheel_scroll_delta_for_view_mode(
     view_mode: ViewMode,
     delta: ScrollDelta,
@@ -81,6 +137,14 @@ pub(crate) fn wheel_scroll_delta_for_view_mode(
         }
         ViewMode::Icons | ViewMode::Details => (0.0, -y),
     }
+}
+
+fn apply_window_resize_delta(extent: f32, delta: f32) -> f32 {
+    fika_core::normalize_viewport_extent(extent + delta)
+}
+
+fn viewport_delta_changed(delta: f32) -> bool {
+    delta.abs() >= 0.5
 }
 
 #[cfg(test)]
@@ -147,6 +211,43 @@ mod tests {
         assert_eq!(
             viewport_height_after_filter_bar_visibility_change(20.0, true, 35.0),
             1.0
+        );
+    }
+
+    #[test]
+    fn window_resize_prime_normalizes_and_reports_resize_deltas() {
+        assert_eq!(
+            window_resize_viewport_prime(None, 1024.9, 768.1),
+            ItemViewWindowResizePrimeResult {
+                viewport_width: 1024.0,
+                viewport_height: 768.0,
+                resize: None,
+            }
+        );
+
+        let result = window_resize_viewport_prime(Some((1024.0, 768.0)), 1224.0, 918.0);
+        assert_eq!(
+            result,
+            ItemViewWindowResizePrimeResult {
+                viewport_width: 1224.0,
+                viewport_height: 918.0,
+                resize: Some(ItemViewWindowResizePrime {
+                    viewport_width: 1224.0,
+                    viewport_height: 918.0,
+                    delta_width: 200.0,
+                    delta_height: 150.0,
+                    width_changed: true,
+                    height_changed: true,
+                }),
+            }
+        );
+        let resize = result.resize.unwrap();
+        assert_eq!(resize.apply_width_delta(620.0), 820.0);
+        assert_eq!(resize.apply_height_delta(360.0), 510.0);
+
+        assert_eq!(
+            window_resize_viewport_prime(Some((1024.0, 768.0)), 1024.0, 768.0).resize,
+            None
         );
     }
 

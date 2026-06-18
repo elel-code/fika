@@ -105,6 +105,7 @@ use ui::item_view::{
     projected_item_viewport_width_for_pane_width, scroll_sync_changes_view,
     viewport_extents_after_view_mode_axis_change,
     viewport_height_after_filter_bar_visibility_change, wheel_scroll_delta_for_view_mode,
+    window_resize_viewport_prime,
 };
 use ui::location_bar::{LocationDraft, LocationEditMetrics};
 use ui::network_auth::{
@@ -3672,39 +3673,30 @@ impl FikaApp {
         viewport_width: f32,
         viewport_height: f32,
     ) {
-        let viewport_width = fika_core::normalize_viewport_extent(viewport_width);
-        let viewport_height = fika_core::normalize_viewport_extent(viewport_height);
-        let previous = self
-            .last_render_viewport_size
-            .replace((viewport_width, viewport_height));
-        let Some((previous_width, previous_height)) = previous else {
+        let prime = window_resize_viewport_prime(
+            self.last_render_viewport_size,
+            viewport_width,
+            viewport_height,
+        );
+        self.last_render_viewport_size = Some((prime.viewport_width, prime.viewport_height));
+        let Some(resize) = prime.resize else {
             return;
         };
 
-        let delta_width = viewport_width - previous_width;
-        let delta_height = viewport_height - previous_height;
-        let width_changed = !width_value_eq(delta_width, 0.0);
-        let height_changed = !width_value_eq(delta_height, 0.0);
-        if !width_changed && !height_changed {
-            return;
+        if resize.width_changed && self.pane_row_width > 0.0 {
+            self.pane_row_width = resize.apply_width_delta(self.pane_row_width);
         }
 
-        if width_changed && self.pane_row_width > 0.0 {
-            self.pane_row_width =
-                fika_core::normalize_viewport_extent((self.pane_row_width + delta_width).max(1.0));
-        }
-
-        if height_changed {
+        if resize.height_changed {
             for pane_id in self.panes.pane_ids().to_vec() {
                 if let Some(pane) = self.panes.pane_mut(pane_id) {
-                    pane.view.viewport_height = fika_core::normalize_viewport_extent(
-                        pane.view.viewport_height + delta_height,
-                    );
+                    pane.view.viewport_height =
+                        resize.apply_height_delta(pane.view.viewport_height);
                 }
             }
         }
 
-        if width_changed {
+        if resize.width_changed {
             let projected_widths = self
                 .panes
                 .pane_ids()

@@ -260,6 +260,7 @@
 - [x] P16bg：将 item-view wheel scroll axis policy 移入 item-view 模块。`ui/item_view.rs` 现在拥有 Compact 如何把滚轮输入映射为水平滚动，以及 Icons/Details 如何保持垂直滚动。`src/main.rs` 仍把结果 delta 应用到 pane model，但不再内联各 view mode 的滚轮轴向映射。
 - [x] P16bh：将 item-view view-mode axis-change viewport priming policy 移入 item-view 模块。`ui/item_view.rs` 现在拥有在水平 scrollbar 模式和垂直 scrollbar 模式之间切换时，如何按保留 scrollbar extent 调整缓存的 viewport width/height。`src/main.rs` 仍把结果尺寸写回 pane view 并重置 scroll max。
 - [x] P16bi：将 item-view filter-bar viewport-height priming policy 移入 item-view 模块。`ui/item_view.rs` 现在拥有显示或隐藏 filter bar 时如何调整缓存的 item viewport height，并应用 core viewport normalization 规则。`src/main.rs` 仍提供 filter-bar height、写回 pane view height，并保持 scroll handle 的短暂权威状态。
+- [x] P16bj：将 item-view window-resize viewport prime policy 移入 item-view 模块。`ui/item_view.rs` 现在拥有 render viewport 尺寸归一化、resize delta 检测，以及把 width/height delta 应用到缓存 item-view extent 的规则。`src/main.rs` 仍更新 pane-row width、根据 split geometry 投影各 pane 的 item width，并写回 pane view 尺寸。
 - [ ] P16q：在每个 P16 实现切片之后，单独提交并附带相关验证：仅文档切片需要 `git diff --check`；代码切片需要 `cargo fmt`、`cargo check`、`cargo test -q`、`scripts/check-item-view-perf-analyzer.sh`、`scripts/check-places-perf-analyzer.sh` 和 `git diff --check`。
 - [x] P16r：记录运行时自测试和突破记录规则。可重复的滚动、缩放、启动图标、调整大小、模式切换和 Places 目标回退应在依赖手动计时之前通过 autosmoke 日志和分析器脚本重现。任何确认的优化突破必须记录症状、Dolphin 比较边界、根本原因、实现、保存的日志/分析器命令和未来回归守卫在拥有的设计或决策文档中。
 

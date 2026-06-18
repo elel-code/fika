@@ -906,6 +906,12 @@ by risk and evidence, not by how custom-painted a surface looks.
   normalization rule. `src/main.rs` still supplies the filter-bar height,
   writes the pane view height, and keeps the scroll handle temporarily
   authoritative.
+- [x] P16bj: Move item-view window-resize viewport prime policy into the
+  item-view module. `ui/item_view.rs` now owns normalization of render viewport
+  dimensions, resize delta detection, and applying the resulting width/height
+  deltas to cached item-view extents. `src/main.rs` still updates pane-row
+  width, projects per-pane item widths from split geometry, and writes the
+  pane view dimensions.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,
