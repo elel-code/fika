@@ -68,34 +68,41 @@ out_dir="/tmp"
 prefix="fika-evidence"
 downloads_dir="${HOME:-}/Downloads"
 timeout_seconds=8
-capture_items=true
-capture_places=true
+capture_items=false
+capture_places=false
 capture_icons=false
 capture_hybrid_icons=false
 analyze_only=false
 skip_build=false
+explicit_selection=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --core)
+            explicit_selection=true
             capture_items=true
             capture_places=true
             ;;
         --items-only)
+            explicit_selection=true
             capture_items=true
             capture_places=false
             ;;
         --places-only)
+            explicit_selection=true
             capture_items=false
             capture_places=true
             ;;
         --icons)
+            explicit_selection=true
             capture_icons=true
             ;;
         --hybrid-icons)
+            explicit_selection=true
             capture_hybrid_icons=true
             ;;
         --all)
+            explicit_selection=true
             capture_items=true
             capture_places=true
             capture_icons=true
@@ -179,6 +186,11 @@ while [[ $# -gt 0 ]]; do
     esac
     shift
 done
+
+if [[ "$explicit_selection" != true ]]; then
+    capture_items=true
+    capture_places=true
+fi
 
 if [[ "$analyze_only" != true && "$skip_build" != true ]]; then
     (cd "$root_dir" && cargo build)

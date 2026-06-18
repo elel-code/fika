@@ -1544,6 +1544,10 @@ tracks.
   --gate-hybrid-handoff`. This makes the next image-readiness step measurable
   without forcing the current non-promotable full custom icon path through
   `--gate-default-promotion`.
+- [x] P16fd: Make retained-renderer evidence runner selection explicit.
+  The script now enables core item+Places capture only when no selection
+  option is passed, so `--hybrid-icons` by itself runs only the hybrid icon
+  handoff evidence while `--core --hybrid-icons` still runs both groups.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,
