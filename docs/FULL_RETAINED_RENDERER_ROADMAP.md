@@ -89,6 +89,8 @@ The practical conclusion is:
 Purpose: keep a current desktop-session baseline before removing any more GPUI
 bridges.
 
+Runnable checklist: `docs/RETAINED_RENDERER_EVIDENCE_CHECKLIST.md`.
+
 Required evidence:
 
 - `/etc` and `~/Downloads` item-view logs with `FIKA_PERF_ITEM_VIEW=1`.
@@ -224,14 +226,12 @@ Acceptance:
 
 ## Next Queue
 
-1. Add a small smoke/evidence checklist update that makes Track 1 repeatable
-   for both item-view and Places before any more shell removal.
-2. Implement the retained MIME/theme icon image cache foundation from
+1. Implement the retained MIME/theme icon image cache foundation from
    `docs/RETAINED_ICON_IMAGE_CACHE_PLAN.md`.
-3. Start the opt-in retained Places event layer from
+2. Start the opt-in retained Places event layer from
    `docs/PLACES_RETAINED_EVENT_DELIVERY_PLAN.md`.
-4. Re-audit GPUI drag-start API after dependency updates before Track 4.
-5. Convert rename behavior matrix items into tests/smoke before Track 5.
+3. Re-audit GPUI drag-start API after dependency updates before Track 4.
+4. Convert rename behavior matrix items into tests/smoke before Track 5.
 
 This queue is intentionally evidence-first. It moves the codebase toward full
 retained reuse while preserving the current rule: custom paint only stays

@@ -451,6 +451,10 @@ Places chrome 默认之后的当前执行入口是
   Compact/Icons、Details 或 Places drag-start shell 前所需的最小审计 patch/API 形状：
   payload、preview entity、cursor offset、transfer modes、cancel、同窗口 drop dispatch
   和 external drop 行为都必须保留，并且不能为了作为拖拽源而重新创建可见 GPUI row。
+- [x] P16ey：添加 Track 1 retained-renderer evidence checklist。新的
+  `docs/RETAINED_RENDERER_EVIDENCE_CHECKLIST.md` 和中文翻译定义了桌面会话命令、
+  `/tmp` 日志名、analyzer gate、image A/B gate、Places retained-DnD 期望、手动
+  DnD/rename smoke 提醒，以及提升 custom renderer 或移除 GPUI bridge 前必须遵守的记录规则。
 - [ ] P16q：在每个 P16 实现切片之后，单独提交并附带相关验证：仅文档切片需要 `git diff --check`；代码切片需要 `cargo fmt`、`cargo check`、`cargo test -q`、`scripts/check-item-view-perf-analyzer.sh`、`scripts/check-places-perf-analyzer.sh` 和 `git diff --check`。
 - [x] P16r：记录运行时自测试和突破记录规则。可重复的滚动、缩放、启动图标、调整大小、模式切换和 Places 目标回退应在依赖手动计时之前通过 autosmoke 日志和分析器脚本重现。任何确认的优化突破必须记录症状、Dolphin 比较边界、根本原因、实现、保存的日志/分析器命令和未来回归守卫在拥有的设计或决策文档中。
 

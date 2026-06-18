@@ -1511,6 +1511,12 @@ tracks.
   cursor offset, transfer modes, cancellation, same-window drop dispatch, and
   external drop behavior must all survive without recreating visual GPUI rows
   as drag sources.
+- [x] P16ey: Add the Track 1 retained-renderer evidence checklist. The new
+  `docs/RETAINED_RENDERER_EVIDENCE_CHECKLIST.md` and Chinese translation define
+  the desktop-session commands, `/tmp` log names, analyzer gates, image A/B
+  gates, Places retained-DnD expectations, manual DnD/rename smoke reminders,
+  and recording rule required before promoting a custom renderer or removing a
+  GPUI bridge.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,
