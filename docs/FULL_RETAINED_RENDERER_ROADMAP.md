@@ -109,6 +109,8 @@ Default may change only when:
 Purpose: move Places from GPUI row event shells to retained hitboxes without
 changing text/icon renderer policy.
 
+Detailed design: `docs/PLACES_RETAINED_EVENT_DELIVERY_PLAN.md`.
+
 Next design step:
 
 - Add retained row/section hitbox delivery for activation, context menu,
@@ -189,7 +191,8 @@ Acceptance:
    for both item-view and Places before any more shell removal.
 2. Implement the retained MIME/theme icon image cache foundation from
    `docs/RETAINED_ICON_IMAGE_CACHE_PLAN.md`.
-3. Design and gate retained Places event delivery for Track 3.
+3. Start the opt-in retained Places event layer from
+   `docs/PLACES_RETAINED_EVENT_DELIVERY_PLAN.md`.
 4. Re-audit GPUI drag-start API after dependency updates before Track 4.
 5. Convert rename behavior matrix items into tests/smoke before Track 5.
 

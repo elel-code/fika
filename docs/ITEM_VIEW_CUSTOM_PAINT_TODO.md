@@ -1361,6 +1361,14 @@ tracks.
   `scripts/check-places-perf-analyzer.sh` pass. The current automation
   environment has no Wayland compositor, so `/etc` runtime autosmoke hit GPUI
   `NoCompositor`; refresh real logs in a desktop session.
+- [x] P16eh: Add the implementation-level Places retained event-delivery plan.
+  `docs/PLACES_RETAINED_EVENT_DELIVERY_PLAN.md` and the Chinese translation now
+  define the Dolphin boundary, the current GPUI-shell policy, the target
+  retained-hitbox policy, the sidebar-level event layer, the scroll-local
+  coordinate rule, phased migration order, analyzer/smoke requirements, and
+  TODOs. The plan keeps row drag-start shells on GPUI until Track 4 and makes
+  the next implementation slice an opt-in retained hitbox layer with no
+  behavior change.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

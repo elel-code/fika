@@ -380,6 +380,10 @@ cursor state, and drag start. This is intentional: Dolphin's
 renderer, so Fika should move event ownership only after the retained
 interaction geometry and behavior evidence are explicit.
 
+The implementation-level plan now lives in
+`docs/PLACES_RETAINED_EVENT_DELIVERY_PLAN.md`. Keep this section as the summary
+and use that document for phased code work and TODO tracking.
+
 The next retained Places event-delivery work should move in this order:
 
 1. Add a renderer-policy/analyzer gate for the future retained-hitbox policy

@@ -99,6 +99,8 @@
 目的：将 Places 从 GPUI row event shell 迁到 retained hitbox，但不改变文本/图标
 renderer policy。
 
+详细设计：`docs/PLACES_RETAINED_EVENT_DELIVERY_PLAN.zh-CN.md`。
+
 下一步设计：
 
 - 为 activation、context menu、on-place drop target、insert-before/after、
@@ -169,7 +171,8 @@ file-grid 和 Places facade。
 1. 更新小型 smoke/evidence checklist，让 Track 1 在继续移除 shell 前可重复执行。
 2. 按 `docs/RETAINED_ICON_IMAGE_CACHE_PLAN.zh-CN.md` 实现 retained MIME/theme icon
    image cache 基础。
-3. 为 Track 3 设计并加 gate：retained Places event delivery。
+3. 按 `docs/PLACES_RETAINED_EVENT_DELIVERY_PLAN.zh-CN.md` 启动 opt-in retained
+   Places event layer。
 4. 在依赖更新后重新审计 GPUI drag-start API，再进入 Track 4。
 5. 在 Track 5 前，把 rename 行为矩阵转为测试/smoke。
 

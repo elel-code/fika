@@ -107,6 +107,9 @@ surface，与 file-grid 保持相同的分离方式：
    而激活、右键菜单、drag/drop 事件传递和 drag start 仍通过 GPUI 事件 shell 路由。
    `[fika places-interaction-geometry]` 是配套的 retained 几何投影。
    在 GPUI shell 可被替换为 retained hitbox 之前，它必须与 row/section 计数匹配。
+   具体实现阶段和 TODO 现在位于
+   `docs/PLACES_RETAINED_EVENT_DELIVERY_PLAN.zh-CN.md`。本计划只保留摘要，
+   后续代码切片以该文档为准。
 5. 在 renderer policy 背后添加自定义行视觉绘制器，并与 GPUI row 路径对比滚动
    和 DnD。当前实现有三种策略：`gpui` 保留 fallback row renderer；默认
    `chrome` 自定义绘制 row background、active/drop 状态、trash 标记和插入指示器，
