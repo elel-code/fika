@@ -1062,6 +1062,9 @@ by risk and evidence, not by how custom-painted a surface looks.
   state. Authoritative handle sync, user-scroll handle sync, and
   transient-clearing handle sync now consume `ItemViewScrollViewSnapshot` in
   production paths instead of loose scroll fields.
+- [x] P16cl: Narrow item-view scroll tuple helper visibility. The loose-field
+  scroll helpers are now scroll-state implementation details; production and
+  cross-module tests use the snapshot API surface.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

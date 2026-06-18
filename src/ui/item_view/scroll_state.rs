@@ -99,11 +99,11 @@ impl ItemViewScrollState {
         self.handles.entry(pane_id).or_default().clone()
     }
 
-    pub(crate) fn mark_authoritative_for_frames(&mut self, pane_id: PaneId, frames: u8) {
+    fn mark_authoritative_for_frames(&mut self, pane_id: PaneId, frames: u8) {
         self.authoritative_scroll.insert(pane_id, frames);
     }
 
-    pub(crate) fn clear_authoritative_scroll(&mut self, pane_id: PaneId) {
+    fn clear_authoritative_scroll(&mut self, pane_id: PaneId) {
         self.authoritative_scroll.remove(&pane_id);
     }
 
@@ -111,7 +111,7 @@ impl ItemViewScrollState {
         self.authoritative_scroll.contains_key(&pane_id)
     }
 
-    pub(crate) fn tick_authoritative_scroll(&mut self, pane_id: PaneId) {
+    fn tick_authoritative_scroll(&mut self, pane_id: PaneId) {
         if let Some(remaining) = self.authoritative_scroll.get_mut(&pane_id) {
             if *remaining <= 1 {
                 self.authoritative_scroll.remove(&pane_id);
@@ -139,7 +139,7 @@ impl ItemViewScrollState {
         self.scrollbar_dragging.remove(&pane_id);
     }
 
-    pub(crate) fn sync_from_handle(
+    fn sync_from_handle(
         &self,
         pane_id: PaneId,
         view_scroll_x: f32,
@@ -171,7 +171,7 @@ impl ItemViewScrollState {
         )
     }
 
-    pub(crate) fn sync_action_from_handle(
+    fn sync_action_from_handle(
         &mut self,
         pane_id: PaneId,
         view_scroll_x: f32,
@@ -214,7 +214,7 @@ impl ItemViewScrollState {
         self.sync_action_from_authoritative_handle(pane_id, view.max_scroll_x, view.max_scroll_y)
     }
 
-    pub(crate) fn sync_action_from_authoritative_handle(
+    fn sync_action_from_authoritative_handle(
         &self,
         pane_id: PaneId,
         view_max_scroll_x: f32,
@@ -225,7 +225,7 @@ impl ItemViewScrollState {
             .unwrap_or(ItemViewScrollSyncAction::None)
     }
 
-    pub(crate) fn sync_after_bounds_update(
+    fn sync_after_bounds_update(
         &mut self,
         pane_id: PaneId,
         view_scroll_x: f32,
@@ -265,7 +265,7 @@ impl ItemViewScrollState {
         )
     }
 
-    pub(crate) fn finish_scrollbar_drag_with_sync(
+    fn finish_scrollbar_drag_with_sync(
         &mut self,
         pane_id: PaneId,
         view_max_scroll_x: f32,
@@ -305,7 +305,7 @@ impl ItemViewScrollState {
         ))
     }
 
-    pub(crate) fn preserve_for_layout_change(
+    fn preserve_for_layout_change(
         &mut self,
         pane_id: PaneId,
         view_scroll_x: f32,
@@ -345,12 +345,7 @@ impl ItemViewScrollState {
         }
     }
 
-    pub(crate) fn sync_handle_to_view(
-        &self,
-        pane_id: PaneId,
-        scroll_x: f32,
-        scroll_y: f32,
-    ) -> bool {
+    fn sync_handle_to_view(&self, pane_id: PaneId, scroll_x: f32, scroll_y: f32) -> bool {
         self.set_handle_offset(pane_id, scroll_x, scroll_y)
     }
 

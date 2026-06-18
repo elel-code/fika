@@ -13696,7 +13696,10 @@ text/plain=viewer.desktop;\n",
             .set_view_scroll(pane_id, 140.0, 32.0, 1_000.0, 500.0)
             .unwrap();
         app.item_view_scroll
-            .mark_authoritative_for_frames(pane_id, 1);
+            .sync_handle_to_view_authoritatively_snapshot(
+                pane_id,
+                ItemViewScrollViewSnapshot::new(140.0, 32.0, 1_000.0, 500.0),
+            );
         app.item_view_scroll.begin_scrollbar_drag(pane_id);
 
         app.begin_pane_loading_transition(pane_id, PaneLoadingScrollPolicy::Preserve);
