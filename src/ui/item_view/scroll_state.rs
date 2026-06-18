@@ -166,7 +166,7 @@ impl ItemViewScrollState {
         )
     }
 
-    pub(crate) fn sync_action_from_handle_snapshot(
+    fn sync_action_from_handle_snapshot(
         &mut self,
         pane_id: PaneId,
         view: ItemViewScrollViewSnapshot,
@@ -178,6 +178,16 @@ impl ItemViewScrollState {
             view.max_scroll_x,
             view.max_scroll_y,
         )
+    }
+
+    pub(crate) fn sync_view_from_handle_snapshot(
+        &mut self,
+        pane_id: PaneId,
+        view: ItemViewScrollViewSnapshot,
+        apply_sync: impl FnMut(ItemViewScrollSync),
+    ) -> bool {
+        self.sync_action_from_handle_snapshot(pane_id, view)
+            .apply_to_view(view, apply_sync)
     }
 
     fn sync_action_from_handle(
@@ -215,12 +225,22 @@ impl ItemViewScrollState {
         ItemViewScrollSyncAction::SyncView(sync)
     }
 
-    pub(crate) fn sync_action_from_authoritative_handle_snapshot(
+    fn sync_action_from_authoritative_handle_snapshot(
         &self,
         pane_id: PaneId,
         view: ItemViewScrollViewSnapshot,
     ) -> ItemViewScrollSyncAction {
         self.sync_action_from_authoritative_handle(pane_id, view.max_scroll_x, view.max_scroll_y)
+    }
+
+    pub(crate) fn sync_view_from_authoritative_handle_snapshot(
+        &self,
+        pane_id: PaneId,
+        view: ItemViewScrollViewSnapshot,
+        apply_sync: impl FnMut(ItemViewScrollSync),
+    ) -> bool {
+        self.sync_action_from_authoritative_handle_snapshot(pane_id, view)
+            .apply_to_view(view, apply_sync)
     }
 
     fn sync_action_from_authoritative_handle(
@@ -786,6 +806,58 @@ mod tests {
                 max_scroll_x: 1_000.0,
                 max_scroll_y: 0.0,
             })
+        );
+    }
+
+    #[test]
+    fn scroll_state_snapshot_handle_sync_applies_view_writes_inside_scroll_state() {
+        let pane_id = PaneId(1);
+        let view = ItemViewScrollViewSnapshot::new(180.0, 0.0, 1_000.0, 0.0);
+        let mut state = ItemViewScrollState::default();
+        let handle = state.handle_for_pane(pane_id);
+
+        state.mark_authoritative_for_frames(pane_id, 1);
+        handle.set_offset(point(px(0.0), px(0.0)));
+        let mut authoritative_applied = Vec::new();
+        assert!(
+            !state.sync_view_from_handle_snapshot(pane_id, view, |sync| {
+                authoritative_applied.push(sync);
+            })
+        );
+        assert_eq!(handle.offset().x, px(-180.0));
+        assert!(authoritative_applied.is_empty());
+
+        state.begin_scrollbar_drag(pane_id);
+        handle.set_offset(point(px(-320.0), px(0.0)));
+        let mut drag_applied = Vec::new();
+        assert!(state.sync_view_from_handle_snapshot(pane_id, view, |sync| {
+            drag_applied.push(sync);
+        }));
+        assert_eq!(
+            drag_applied,
+            vec![ItemViewScrollSync {
+                scroll_x: 320.0,
+                scroll_y: 0.0,
+                max_scroll_x: 1_000.0,
+                max_scroll_y: 0.0,
+            }]
+        );
+
+        handle.set_offset(point(px(-480.0), px(0.0)));
+        let mut authoritative_drag_applied = Vec::new();
+        assert!(
+            state.sync_view_from_authoritative_handle_snapshot(pane_id, view, |sync| {
+                authoritative_drag_applied.push(sync);
+            })
+        );
+        assert_eq!(
+            authoritative_drag_applied,
+            vec![ItemViewScrollSync {
+                scroll_x: 480.0,
+                scroll_y: 0.0,
+                max_scroll_x: 1_000.0,
+                max_scroll_y: 0.0,
+            }]
         );
     }
 

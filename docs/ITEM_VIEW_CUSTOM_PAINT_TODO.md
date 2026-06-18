@@ -1075,6 +1075,11 @@ by risk and evidence, not by how custom-painted a surface looks.
   `ItemViewScrollSyncAction::apply_to_view()` now owns when a sync action writes
   pane view values and whether that write represents a view change; `src/main.rs`
   only supplies the pane model write closure.
+- [x] P16co: Move item-view handle-sync action composition into scroll state.
+  `sync_view_from_handle_snapshot()` and
+  `sync_view_from_authoritative_handle_snapshot()` now own handle action
+  creation plus view-write application; `src/main.rs` only supplies pane view
+  snapshots and the pane model write closure.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

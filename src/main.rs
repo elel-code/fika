@@ -1203,10 +1203,17 @@ impl FikaApp {
 
     fn sync_pane_view_from_item_view_scroll_handle(&mut self, pane_id: PaneId) -> bool {
         let view = self.item_view_scroll_view_snapshot_for_pane(pane_id);
-        let action = self
-            .item_view_scroll
-            .sync_action_from_handle_snapshot(pane_id, view);
-        self.apply_item_view_scroll_sync_action(pane_id, action, view)
+        let panes = &mut self.panes;
+        self.item_view_scroll
+            .sync_view_from_handle_snapshot(pane_id, view, |sync| {
+                let _ = panes.set_view_scroll(
+                    pane_id,
+                    sync.scroll_x,
+                    sync.scroll_y,
+                    sync.max_scroll_x,
+                    sync.max_scroll_y,
+                );
+            })
     }
 
     fn sync_pane_view_from_authoritative_item_view_scroll_handle(
@@ -1214,10 +1221,17 @@ impl FikaApp {
         pane_id: PaneId,
     ) -> bool {
         let view = self.item_view_scroll_view_snapshot_for_pane(pane_id);
-        let action = self
-            .item_view_scroll
-            .sync_action_from_authoritative_handle_snapshot(pane_id, view);
-        self.apply_item_view_scroll_sync_action(pane_id, action, view)
+        let panes = &mut self.panes;
+        self.item_view_scroll
+            .sync_view_from_authoritative_handle_snapshot(pane_id, view, |sync| {
+                let _ = panes.set_view_scroll(
+                    pane_id,
+                    sync.scroll_x,
+                    sync.scroll_y,
+                    sync.max_scroll_x,
+                    sync.max_scroll_y,
+                );
+            })
     }
 
     fn apply_item_view_scroll_sync_action(
