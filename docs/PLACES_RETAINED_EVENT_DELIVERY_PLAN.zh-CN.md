@@ -196,6 +196,23 @@ event 日志 surface 时才扩展 analyzer。
   analyzer gate 仍会拒绝它，因为 `retained_hitboxes=0` 且
   `gpui_event_shells=rows+sections`。
 
+2026-06-18 retained targeting 切片：
+
+- `FIKA_PLACES_EVENT_DELIVERY_POLICY=retained-targeting` 继续扩展同一个
+  sidebar-level retained layer，让 row activation 和 row/section context menu
+  targeting 由 retained layer 拥有。
+- retained layer 使用已插入的 row/section hitbox 以及 `Hitbox::is_hovered()` 进行
+  dispatch，而不是从原始 scroll offset 重新计算 pointer 位置。这与 Dolphin 方向一致：
+  viewport event layer 负责目标查找，model/controller 方法继续负责 activation 和 menu state
+  change。
+- 在该 policy 下，GPUI row `on_click`、row right-click 和 section right-click shell
+  被关闭。GPUI row/section shell 仍拥有 typed DnD move/drop，row shell 也仍拥有
+  drag-start。
+- `[fika places-event-probe]` 包含 `pointer=1 targeting=1`，并且
+  `[fika places-interaction-policy]` 包含 `retained_targeting=rows+sections`。
+  完整 retained-event analyzer gate 仍会拒绝该 mixed state，因为
+  `retained_hitboxes=0` 且 `gpui_event_shells=rows+sections`。
+
 ## TODO
 
 - [x] 添加 `PlacesEventDeliveryPolicy`，默认 `GpuiShells`，opt-in
@@ -207,7 +224,9 @@ event 日志 surface 时才扩展 analyzer。
   `retained-pointer` 将 pointer cursor ownership 和 active-drag leave clearing 移到
   opt-in retained layer 后面；GPUI row/section shell 仍拥有 typed DnD move/drop delivery。
 - [ ] 为带 scroll offset 的 content-local 坐标转换、section/row 边界添加单元覆盖。
-- [ ] 将 activation/context-menu targeting 移到 retained layer。
+- [~] 将 activation/context-menu targeting 移到 retained layer。当前状态：
+  `retained-targeting` 拥有 row activation 和 row/section context menu targeting，
+  但 typed DnD move/drop 和 drag-start 仍需要 GPUI shell，因此该 policy 仍保持 opt-in。
 - [ ] 添加 retained item/external/place drops 的隔离 DnD smoke。
 - [ ] 将 drag-move/drop delivery 移到 retained layer。
 - [ ] analyzer gates 通过后移除 GPUI row/section event callbacks。

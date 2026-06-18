@@ -1,31 +1,55 @@
 use std::time::{Duration, Instant};
 
 use gpui::{
-    App, Bounds, CursorStyle, Hitbox, HitboxBehavior, IntoElement, Pixels, Styled, WeakEntity,
-    Window, canvas, point, px, size,
+    App, Bounds, CursorStyle, Entity, Hitbox, HitboxBehavior, IntoElement, MouseButton, Pixels,
+    Styled, WeakEntity, Window, canvas, point, px, size,
 };
 
 use crate::FikaApp;
 
 use super::interaction::PlacesInteractionGeometry;
 use super::perf::{PlacesEventProbePerfLog, emit_places_event_probe_perf_log, places_perf_enabled};
+use super::snapshot::PlaceSnapshot;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum PlacesEventLayerMode {
     Probe,
     Pointer,
+    Targeting,
 }
 
 impl PlacesEventLayerMode {
     fn pointer_delivery_enabled(self) -> bool {
-        matches!(self, Self::Pointer)
+        matches!(self, Self::Pointer | Self::Targeting)
     }
+
+    fn targeting_delivery_enabled(self) -> bool {
+        matches!(self, Self::Targeting)
+    }
+}
+
+#[derive(Default)]
+pub(super) struct PlacesEventTargetingState {
+    pending_left: Option<PlacesEventTargetingPending>,
+}
+
+impl PlacesEventTargetingState {
+    pub(super) fn new() -> Self {
+        Self::default()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PlacesEventTargetingPending {
+    visible_index: usize,
 }
 
 pub(super) fn places_event_probe_layer(
     geometry: PlacesInteractionGeometry,
+    places: Vec<PlaceSnapshot>,
     app: WeakEntity<FikaApp>,
     mode: PlacesEventLayerMode,
+    targeting_state: Option<Entity<PlacesEventTargetingState>>,
 ) -> impl IntoElement {
     let height = geometry.content_height().max(1.0);
     canvas(
@@ -36,6 +60,17 @@ pub(super) fn places_event_probe_layer(
                 apply_places_event_pointer_cursor(&paint_state, window);
                 install_places_event_pointer_leave_handler(app.clone(), bounds, window);
             }
+            if mode.targeting_delivery_enabled()
+                && let Some(targeting_state) = targeting_state.clone()
+            {
+                install_places_event_targeting_handlers(
+                    app.clone(),
+                    places.clone(),
+                    targeting_state,
+                    &paint_state.hitboxes,
+                    window,
+                );
+            }
             if places_perf_enabled() {
                 emit_places_event_probe_perf_log(PlacesEventProbePerfLog {
                     rows: paint_state.rows,
@@ -43,6 +78,7 @@ pub(super) fn places_event_probe_layer(
                     hitboxes: paint_state.hitboxes.len(),
                     hovered_hitboxes: paint_state.hovered_hitboxes(window),
                     pointer_delivery: mode.pointer_delivery_enabled(),
+                    targeting_delivery: mode.targeting_delivery_enabled(),
                     prepaint_elapsed: paint_state.prepaint_elapsed,
                     paint_elapsed: paint_started.elapsed(),
                 });
@@ -75,7 +111,30 @@ impl PlacesEventProbePaintState {
 #[derive(Clone)]
 struct PlacesEventProbeHitboxState {
     hitbox: Hitbox,
-    activatable: bool,
+    target: PlacesEventProbeHitboxTarget,
+}
+
+impl PlacesEventProbeHitboxState {
+    fn activatable(&self) -> bool {
+        matches!(
+            self.target,
+            PlacesEventProbeHitboxTarget::Row {
+                activatable: true,
+                ..
+            }
+        )
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PlacesEventProbeHitboxTarget {
+    Section {
+        group: &'static str,
+    },
+    Row {
+        visible_index: usize,
+        activatable: bool,
+    },
 }
 
 fn places_event_probe_prepaint(
@@ -91,7 +150,9 @@ fn places_event_probe_prepaint(
                 places_event_probe_hitbox_bounds(bounds, section.y, section.height),
                 HitboxBehavior::Normal,
             ),
-            activatable: false,
+            target: PlacesEventProbeHitboxTarget::Section {
+                group: section.group,
+            },
         });
     }
     for row in geometry.rows() {
@@ -100,7 +161,10 @@ fn places_event_probe_prepaint(
                 places_event_probe_hitbox_bounds(bounds, row.y, row.height),
                 HitboxBehavior::Normal,
             ),
-            activatable: row.activatable(),
+            target: PlacesEventProbeHitboxTarget::Row {
+                visible_index: row.visible_index,
+                activatable: row.activatable(),
+            },
         });
     }
     PlacesEventProbePaintState {
@@ -116,10 +180,143 @@ fn apply_places_event_pointer_cursor(state: &PlacesEventProbePaintState, window:
         .hitboxes
         .iter()
         .rev()
-        .find(|state| state.activatable && state.hitbox.is_hovered(window))
+        .find(|state| state.activatable() && state.hitbox.is_hovered(window))
     {
         window.set_cursor_style(CursorStyle::PointingHand, &hitbox_state.hitbox);
     }
+}
+
+fn install_places_event_targeting_handlers(
+    app: WeakEntity<FikaApp>,
+    places: Vec<PlaceSnapshot>,
+    state: Entity<PlacesEventTargetingState>,
+    hitboxes: &[PlacesEventProbeHitboxState],
+    window: &mut Window,
+) {
+    let left_down_hitboxes = hitboxes.to_vec();
+    let left_down_state = state.clone();
+    window.on_mouse_event(
+        move |event: &gpui::MouseDownEvent, phase, window, cx: &mut App| {
+            if !phase.bubble() || event.button != MouseButton::Left {
+                return;
+            }
+            let Some(PlacesEventProbeHitboxState {
+                target:
+                    PlacesEventProbeHitboxTarget::Row {
+                        visible_index,
+                        activatable: true,
+                    },
+                ..
+            }) = places_event_hovered_hitbox(&left_down_hitboxes, window)
+            else {
+                left_down_state.update(cx, |state, _cx| state.pending_left = None);
+                return;
+            };
+            left_down_state.update(cx, |state, _cx| {
+                state.pending_left = Some(PlacesEventTargetingPending {
+                    visible_index: *visible_index,
+                });
+            });
+        },
+    );
+
+    let left_up_hitboxes = hitboxes.to_vec();
+    let left_up_places = places.clone();
+    let left_up_app = app.clone();
+    let left_up_state = state.clone();
+    window.on_mouse_event(
+        move |event: &gpui::MouseUpEvent, phase, window, cx: &mut App| {
+            if !phase.bubble() || event.button != MouseButton::Left {
+                return;
+            }
+            let pending = left_up_state.update(cx, |state, _cx| state.pending_left.take());
+            if pending.is_none() || cx.has_active_drag() {
+                return;
+            }
+            let Some(PlacesEventProbeHitboxState {
+                target:
+                    PlacesEventProbeHitboxTarget::Row {
+                        visible_index,
+                        activatable: true,
+                    },
+                ..
+            }) = places_event_hovered_hitbox(&left_up_hitboxes, window)
+            else {
+                return;
+            };
+            if pending.is_some_and(|pending| pending.visible_index != *visible_index) {
+                return;
+            }
+            let Some(place) = left_up_places.get(*visible_index).cloned() else {
+                return;
+            };
+            let handled = left_up_app
+                .update(cx, |this, cx| {
+                    this.activate_place(
+                        place.path,
+                        place.device_id,
+                        place.label,
+                        place.mounted,
+                        place.device,
+                        place.network,
+                        cx,
+                    );
+                    cx.notify();
+                    true
+                })
+                .unwrap_or(false);
+            if handled {
+                cx.stop_propagation();
+            }
+        },
+    );
+
+    let context_hitboxes = hitboxes.to_vec();
+    let context_app = app;
+    window.on_mouse_event(
+        move |event: &gpui::MouseDownEvent, phase, window, cx: &mut App| {
+            if !phase.capture() || event.button != MouseButton::Right {
+                return;
+            }
+            let Some(hitbox) = places_event_hovered_hitbox(&context_hitboxes, window) else {
+                return;
+            };
+            let handled = match hitbox.target {
+                PlacesEventProbeHitboxTarget::Row { visible_index, .. } => {
+                    let Some(place) = places.get(visible_index).cloned() else {
+                        return;
+                    };
+                    context_app
+                        .update(cx, |this, cx| {
+                            this.show_place_context_menu(place, event.position);
+                            cx.notify();
+                            true
+                        })
+                        .unwrap_or(false)
+                }
+                PlacesEventProbeHitboxTarget::Section { group } => context_app
+                    .update(cx, |this, cx| {
+                        this.show_place_section_context_menu(group, event.position);
+                        cx.notify();
+                        true
+                    })
+                    .unwrap_or(false),
+            };
+            if handled {
+                cx.stop_propagation();
+            }
+        },
+    );
+}
+
+fn places_event_hovered_hitbox<'a>(
+    hitboxes: &'a [PlacesEventProbeHitboxState],
+    window: &Window,
+) -> Option<&'a PlacesEventProbeHitboxState> {
+    hitboxes
+        .iter()
+        .rev()
+        .find(|state| state.hitbox.is_hovered(window))
 }
 
 fn install_places_event_pointer_leave_handler(

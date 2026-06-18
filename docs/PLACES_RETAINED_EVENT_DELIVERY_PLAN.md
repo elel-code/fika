@@ -212,6 +212,24 @@ that gate. Extend it only when a new retained event log surface is added.
   retained-event analyzer gate still rejects it because
   `retained_hitboxes=0` and `gpui_event_shells=rows+sections`.
 
+2026-06-18 retained targeting slice:
+
+- `FIKA_PLACES_EVENT_DELIVERY_POLICY=retained-targeting` extends the same
+  sidebar-level retained layer to own row activation and row/section context
+  menu targeting.
+- The retained layer uses the inserted row/section hitboxes and
+  `Hitbox::is_hovered()` for dispatch instead of recomputing pointer positions
+  from raw scroll offsets. This matches the Dolphin direction: the viewport
+  event layer owns target lookup, while the model/controller methods still own
+  activation and menu state changes.
+- In that policy, GPUI row `on_click`, row right-click, and section right-click
+  shells are disabled. GPUI row/section shells still own typed DnD move/drop,
+  and row shells still own drag-start.
+- `[fika places-event-probe]` includes `pointer=1 targeting=1`, and
+  `[fika places-interaction-policy]` includes `retained_targeting=rows+sections`.
+  The full retained-event analyzer gate still rejects this mixed state because
+  `retained_hitboxes=0` and `gpui_event_shells=rows+sections`.
+
 ## TODO
 
 - [x] Add a `PlacesEventDeliveryPolicy` with `GpuiShells` default and an
@@ -225,7 +243,10 @@ that gate. Extend it only when a new retained event log surface is added.
   own typed DnD move/drop delivery.
 - [ ] Add unit coverage for content-local coordinate conversion with scroll
   offsets and section/row boundaries.
-- [ ] Move activation/context-menu targeting to the retained layer.
+- [~] Move activation/context-menu targeting to the retained layer. Current
+  status: `retained-targeting` owns row activation and row/section context menu
+  targeting, but the policy remains opt-in while typed DnD move/drop and
+  drag-start still need GPUI shells.
 - [ ] Add isolated DnD smoke for retained item/external/place drops.
 - [ ] Move drag-move/drop delivery to the retained layer.
 - [ ] Remove GPUI row/section event callbacks after analyzer gates pass.

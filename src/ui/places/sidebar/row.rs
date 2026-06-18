@@ -40,6 +40,7 @@ pub(super) fn place_row(
     place: PlaceSnapshot,
     row_visual_policy: PlacesRowVisualPolicy,
     row_shell_cursor_enabled: bool,
+    row_shell_targeting_enabled: bool,
     cx: &mut Context<FikaApp>,
 ) -> Stateful<Div> {
     let custom_chrome = row_visual_policy.custom_layer_enabled();
@@ -66,7 +67,7 @@ pub(super) fn place_row(
     let device_id = place.device_id.clone();
     let label = place.label.clone();
 
-    let row = div()
+    let mut row = div()
         .id(row_id)
         .relative()
         .flex()
@@ -101,28 +102,32 @@ pub(super) fn place_row(
         )
         .on_drag(place_drag, |drag, cursor_offset, _, cx| {
             cx.new(|_| PlaceDragPreview::from_drag(drag, cursor_offset))
-        })
-        .on_click(cx.listener(move |this, _event, _window, cx| {
-            this.activate_place(
-                path.clone(),
-                device_id.clone(),
-                label.clone(),
-                mounted,
-                device,
-                network,
-                cx,
-            );
-            cx.stop_propagation();
-            cx.notify();
-        }))
-        .on_mouse_down(
-            MouseButton::Right,
-            cx.listener(move |this, event: &gpui::MouseDownEvent, _window, cx| {
-                this.show_place_context_menu(context_place.clone(), event.position);
+        });
+
+    if row_shell_targeting_enabled {
+        row = row
+            .on_click(cx.listener(move |this, _event, _window, cx| {
+                this.activate_place(
+                    path.clone(),
+                    device_id.clone(),
+                    label.clone(),
+                    mounted,
+                    device,
+                    network,
+                    cx,
+                );
                 cx.stop_propagation();
                 cx.notify();
-            }),
-        );
+            }))
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, event: &gpui::MouseDownEvent, _window, cx| {
+                    this.show_place_context_menu(context_place.clone(), event.position);
+                    cx.stop_propagation();
+                    cx.notify();
+                }),
+            );
+    }
     let mut row = install_place_row_dnd(
         row,
         PlaceRowDndConfig {

@@ -1392,6 +1392,15 @@ tracks.
   context menu, typed DnD move/drop, and drag start. `[fika places-event-probe]`
   now reports `pointer=1` for this mixed state and the retained-event gate still
   rejects it.
+- [x] P16el: Add the retained-targeting Places event slice. The opt-in
+  `FIKA_PLACES_EVENT_DELIVERY_POLICY=retained-targeting` policy keeps using the
+  sidebar retained event layer, but now row activation and row/section context
+  menu targeting are dispatched from retained row/section hitboxes. GPUI row
+  `on_click`, row right-click, and section right-click shells are disabled in
+  that policy. Typed DnD move/drop and row drag-start remain on GPUI shells, so
+  the analyzer records `retained_targeting=rows+sections` and
+  `pointer=1 targeting=1` while the full retained-event gate still rejects the
+  mixed state.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

@@ -12,16 +12,18 @@ pub(super) fn group_heading(
     label: &'static str,
     insert_index: usize,
     custom_visual: bool,
+    shell_targeting_enabled: bool,
     cx: &mut Context<FikaApp>,
 ) -> Stateful<Div> {
-    let heading = div()
+    let mut heading = div()
         .id(format!("place-group-{label}"))
         .px_2()
         .pt_2()
         .pb_1()
         .text_xs()
-        .text_color(rgb(0x6b7280))
-        .on_mouse_down(
+        .text_color(rgb(0x6b7280));
+    if shell_targeting_enabled {
+        heading = heading.on_mouse_down(
             MouseButton::Right,
             cx.listener(move |this, event: &gpui::MouseDownEvent, _window, cx| {
                 this.show_place_section_context_menu(label, event.position);
@@ -29,6 +31,7 @@ pub(super) fn group_heading(
                 cx.notify();
             }),
         );
+    }
     let heading = if custom_visual {
         heading.h(px(PLACE_SECTION_HEADING_HEIGHT))
     } else {

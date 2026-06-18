@@ -16,7 +16,9 @@ use crate::ui::icons::{FileIconCache, FileIconSnapshot, cached_icon_or_fallback}
 use std::time::Instant;
 
 use super::drag::PlaceDrag;
-use super::event_layer::{PlacesEventLayerMode, places_event_probe_layer};
+use super::event_layer::{
+    PlacesEventLayerMode, PlacesEventTargetingState, places_event_probe_layer,
+};
 use super::interaction::places_interaction_geometry;
 use super::perf::{
     PlacesInteractionGeometryPerfLog, PlacesInteractionPolicyLog, PlacesRendererPolicyLog,
@@ -190,6 +192,11 @@ pub(crate) fn places_sidebar(
         PlacesSidebarScrollState::new()
     });
     let scroll_handle = state.read(cx).scroll_handle.clone();
+    let targeting_state = event_delivery_policy.retained_targeting_enabled().then(|| {
+        window.use_keyed_state("places-event-targeting", cx, |_, _| {
+            PlacesEventTargetingState::new()
+        })
+    });
     let app = cx.weak_entity();
     let row_visual_layer = custom_row_visuals.then(|| {
         places_row_visual_layer(places.clone(), app.clone(), row_visual_policy.paints_text())
@@ -198,7 +205,11 @@ pub(crate) fn places_sidebar(
         .retained_event_layer_enabled()
         .then(|| {
             let mode = if event_delivery_policy.retained_pointer_enabled() {
-                PlacesEventLayerMode::Pointer
+                if event_delivery_policy.retained_targeting_enabled() {
+                    PlacesEventLayerMode::Targeting
+                } else {
+                    PlacesEventLayerMode::Pointer
+                }
             } else {
                 PlacesEventLayerMode::Probe
             };
@@ -207,8 +218,10 @@ pub(crate) fn places_sidebar(
                     .as_ref()
                     .map(|(geometry, _elapsed)| geometry.clone())
                     .unwrap_or_else(|| places_interaction_geometry(&places)),
+                places.clone(),
                 app.clone(),
                 mode,
+                targeting_state.clone(),
             )
         });
     let mut rows = Vec::new();
@@ -222,6 +235,7 @@ pub(crate) fn places_sidebar(
                     place.group,
                     place.index,
                     custom_row_visuals,
+                    !event_delivery_policy.retained_targeting_enabled(),
                     cx,
                 ));
             }
@@ -231,6 +245,7 @@ pub(crate) fn places_sidebar(
             place,
             row_visual_policy,
             !event_delivery_policy.retained_pointer_enabled(),
+            !event_delivery_policy.retained_targeting_enabled(),
             cx,
         ));
     }
