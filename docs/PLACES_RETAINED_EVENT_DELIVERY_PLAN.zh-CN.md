@@ -380,6 +380,22 @@ future isolated destructive drop/reorder smoke with a temporary Places config
 rg -n "on_drag_move|on_drop|insert_hitbox|DragMoveEvent|DropEvent|ExternalPaths|PlaceDrag|ItemDrag" ~/.cargo/git/checkouts/zed-* src
 ```
 
+2026-06-19 typed payload API 审计切片：
+
+- 当前 `Cargo.lock` 将 GPUI 解析到 Zed commit
+  `69b602c797a62f09318916d24a98c930533fbdc8`。
+- 在该 checkout 中，`crates/gpui/src/elements/div.rs:63` 定义
+  `DragMoveEvent<T>`，`div.rs:315` 暴露 `Interactivity::on_drag_move<T>()`，
+  `div.rs:525` 暴露 `Interactivity::on_drop<T>()`。这些 API 绑定在 interactive
+  element hitbox 上，并通过 `cx.active_drag` 接收 typed payload。
+- retained hitbox surface 仍然是分开的：
+  `crates/gpui/src/window.rs:4243` 暴露 `Window::insert_hitbox()`，
+  `window.rs:4360` 暴露 `Window::on_mouse_event<Event: MouseEvent>()`。这两个 API 都没有为
+  retained painter hitbox 提供 typed drag payload callback 或 drop payload callback。
+- 结论：sidebar typed DnD payload bridge 仍然必要。下一条有效代码路径要么是设计
+  retained-hitbox typed drag-move/drop delivery 的 GPUI API/patch，要么继续把 bridge
+  限制为一个 sidebar-level shell，同时保持 row/section target delivery retained。
+
 ## TODO
 
 - [x] 添加 `PlacesEventDeliveryPolicy`，保留显式 `GpuiShells` fallback，当前默认为

@@ -507,6 +507,13 @@ Places chrome 默认之后的当前执行入口是
   `gpui_row_section_event_shells=0` 和 `gpui_typed_dnd_payload_shells=1`。后者在 retained
   hitbox 能传递 typed `ItemDrag`、`ExternalPaths` 和 `PlaceDrag` move/drop payload，并且完整
   retained-event analyzer 加隔离 DnD smoke 通过之前，仍是经过审计的 GPUI API 边界。
+- [x] P16fj：依赖更新后重新审计 GPUI typed drag-move/drop delivery。当前
+  `Cargo.lock` 将 GPUI 解析到 Zed `69b602c797a62f09318916d24a98c930533fbdc8`；
+  `DragMoveEvent<T>`、`Interactivity::on_drag_move<T>()` 和
+  `Interactivity::on_drop<T>()` 仍是 interactive-element API，而
+  `Window::insert_hitbox()` 和 `Window::on_mouse_event<Event: MouseEvent>()` 仍没有为
+  retained painter hitbox 暴露 typed drag payload。这确认 Places sidebar typed payload
+  bridge 仍是 API 边界，不是可直接移除的 row/section shell debt。
 - [ ] P16q：在每个 P16 实现切片之后，单独提交并附带相关验证：仅文档切片需要 `git diff --check`；代码切片需要 `cargo fmt`、`cargo check`、`cargo test -q`、`scripts/check-item-view-perf-analyzer.sh`、`scripts/check-places-perf-analyzer.sh` 和 `git diff --check`。
 - [x] P16r：记录运行时自测试和突破记录规则。可重复的滚动、缩放、启动图标、调整大小、模式切换和 Places 目标回退应在依赖手动计时之前通过 autosmoke 日志和分析器脚本重现。任何确认的优化突破必须记录症状、Dolphin 比较边界、根本原因、实现、保存的日志/分析器命令和未来回归守卫在拥有的设计或决策文档中。
 

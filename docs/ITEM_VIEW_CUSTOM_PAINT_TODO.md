@@ -1584,6 +1584,15 @@ tracks.
   The latter remains an audited GPUI API boundary until retained hitboxes can
   deliver typed `ItemDrag`, `ExternalPaths`, and `PlaceDrag` move/drop payloads
   and the full retained-event analyzer plus isolated DnD smoke pass.
+- [x] P16fj: Re-audit GPUI typed drag-move/drop delivery after the dependency
+  update. Current `Cargo.lock` resolves GPUI to Zed
+  `69b602c797a62f09318916d24a98c930533fbdc8`; `DragMoveEvent<T>`,
+  `Interactivity::on_drag_move<T>()`, and `Interactivity::on_drop<T>()` remain
+  interactive-element APIs, while `Window::insert_hitbox()` and
+  `Window::on_mouse_event<Event: MouseEvent>()` still do not expose typed drag
+  payloads for retained painter hitboxes. This confirms the Places sidebar
+  typed payload bridge is still an API boundary rather than removable
+  row/section shell debt.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

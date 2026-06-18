@@ -418,6 +418,25 @@ future isolated destructive drop/reorder smoke with a temporary Places config
 rg -n "on_drag_move|on_drop|insert_hitbox|DragMoveEvent|DropEvent|ExternalPaths|PlaceDrag|ItemDrag" ~/.cargo/git/checkouts/zed-* src
 ```
 
+2026-06-19 typed payload API audit slice:
+
+- Current `Cargo.lock` resolves GPUI to Zed commit
+  `69b602c797a62f09318916d24a98c930533fbdc8`.
+- In that checkout, `crates/gpui/src/elements/div.rs:63` defines
+  `DragMoveEvent<T>`, `div.rs:315` exposes `Interactivity::on_drag_move<T>()`,
+  and `div.rs:525` exposes `Interactivity::on_drop<T>()`. These APIs are tied
+  to interactive element hitboxes and receive typed payloads through
+  `cx.active_drag`.
+- The retained hitbox surface remains separate:
+  `crates/gpui/src/window.rs:4243` exposes `Window::insert_hitbox()`, and
+  `window.rs:4360` exposes `Window::on_mouse_event<Event: MouseEvent>()`.
+  Neither API provides a typed drag payload callback or drop payload callback
+  for retained painter hitboxes.
+- Result: the sidebar typed DnD payload bridge remains required. The next valid
+  code path is either a GPUI API/patch design for retained-hitbox typed
+  drag-move/drop delivery, or continued containment of the bridge as one
+  sidebar-level shell while row/section target delivery stays retained.
+
 ## TODO
 
 - [x] Add a `PlacesEventDeliveryPolicy` with an explicit `GpuiShells` fallback,
