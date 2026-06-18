@@ -150,7 +150,8 @@ use ui::properties_dialog::{
 };
 use ui::rename::{RENAME_TEXT_INSET_X, RenameDraft};
 use ui::rubber_band::{
-    PendingRubberBand, RubberBandState, finish_rubber_band_for_pane,
+    PendingRubberBand, RubberBandState, clear_rubber_band_selection_activity_for_pane,
+    finish_rubber_band_for_pane, rubber_band_selection_activity_is_active,
     set_rubber_band_selection_activity_for_count,
 };
 #[cfg(test)]
@@ -1923,7 +1924,10 @@ impl FikaApp {
         }
         if result.clear_clipboard && result.failure_count == 0 && result.success_count > 0 {
             self.clipboard = None;
-            self.rubber_band_selection_panes.remove(&result.pane_id);
+            clear_rubber_band_selection_activity_for_pane(
+                &mut self.rubber_band_selection_panes,
+                result.pane_id,
+            );
             let _ = self.panes.clear_selection(result.pane_id);
         }
         let status = match (result.success_count, result.failure_count) {
@@ -3086,7 +3090,10 @@ impl FikaApp {
         self.cancel_metadata_role_work_for_pane(pane_id);
         self.cancel_thumbnail_work_for_pane(pane_id);
         self.pane_viewport_geometries.remove(&pane_id);
-        self.rubber_band_selection_panes.remove(&pane_id);
+        clear_rubber_band_selection_activity_for_pane(
+            &mut self.rubber_band_selection_panes,
+            pane_id,
+        );
         self.pane_statuses.remove(&pane_id);
         self.location_edit_metrics.remove(&pane_id);
         if self
@@ -3199,7 +3206,10 @@ impl FikaApp {
 
     fn select_only(&mut self, pane_id: PaneId, path: PathBuf) {
         if self.panes.select_only(pane_id, path) {
-            self.rubber_band_selection_panes.remove(&pane_id);
+            clear_rubber_band_selection_activity_for_pane(
+                &mut self.rubber_band_selection_panes,
+                pane_id,
+            );
             self.clear_rename_draft_for_pane(pane_id);
             self.clear_location_draft_for_pane(pane_id);
             let selected = self.panes.selected_count(pane_id).unwrap_or_default();
@@ -3209,7 +3219,10 @@ impl FikaApp {
 
     fn toggle_selection(&mut self, pane_id: PaneId, path: PathBuf) {
         if self.panes.toggle_selection(pane_id, path).is_some() {
-            self.rubber_band_selection_panes.remove(&pane_id);
+            clear_rubber_band_selection_activity_for_pane(
+                &mut self.rubber_band_selection_panes,
+                pane_id,
+            );
             self.clear_rename_draft_for_pane(pane_id);
             self.clear_location_draft_for_pane(pane_id);
             let selected = self.panes.selected_count(pane_id).unwrap_or_default();
@@ -3224,7 +3237,10 @@ impl FikaApp {
             self.panes.select_range_to(pane_id, path)
         };
         if let Some(selected) = selected {
-            self.rubber_band_selection_panes.remove(&pane_id);
+            clear_rubber_band_selection_activity_for_pane(
+                &mut self.rubber_band_selection_panes,
+                pane_id,
+            );
             self.clear_rename_draft_for_pane(pane_id);
             self.clear_location_draft_for_pane(pane_id);
             self.set_pane_status(pane_id, format!("{selected} selected"));
@@ -3238,7 +3254,10 @@ impl FikaApp {
             self.panes.select_all(pane_id)
         };
         if let Some(selected) = selected {
-            self.rubber_band_selection_panes.remove(&pane_id);
+            clear_rubber_band_selection_activity_for_pane(
+                &mut self.rubber_band_selection_panes,
+                pane_id,
+            );
             self.clear_rename_draft_for_pane(pane_id);
             self.clear_location_draft_for_pane(pane_id);
             self.set_pane_status(pane_id, format!("{selected} selected"));
@@ -3246,7 +3265,10 @@ impl FikaApp {
     }
 
     fn clear_selection(&mut self, pane_id: PaneId) {
-        self.rubber_band_selection_panes.remove(&pane_id);
+        clear_rubber_band_selection_activity_for_pane(
+            &mut self.rubber_band_selection_panes,
+            pane_id,
+        );
         if self.panes.clear_selection(pane_id) {
             self.clear_rename_draft_for_pane(pane_id);
             self.clear_location_draft_for_pane(pane_id);
@@ -3261,7 +3283,10 @@ impl FikaApp {
             self.panes.move_selection(pane_id, direction, extend)
         };
         if let Some(selected) = selected {
-            self.rubber_band_selection_panes.remove(&pane_id);
+            clear_rubber_band_selection_activity_for_pane(
+                &mut self.rubber_band_selection_panes,
+                pane_id,
+            );
             self.clear_rename_draft_for_pane(pane_id);
             self.clear_location_draft_for_pane(pane_id);
             self.set_pane_status(pane_id, format!("{selected} selected"));
@@ -3269,11 +3294,11 @@ impl FikaApp {
     }
 
     fn rubber_band_selection_active(&self, pane_id: PaneId) -> bool {
-        self.rubber_band_selection_panes.contains(&pane_id)
-            && self
-                .panes
-                .selected_count(pane_id)
-                .is_some_and(|selected| selected > 0)
+        rubber_band_selection_activity_is_active(
+            &self.rubber_band_selection_panes,
+            pane_id,
+            self.panes.selected_count(pane_id),
+        )
     }
 
     fn select_all_filtered(
@@ -6239,12 +6264,18 @@ impl FikaApp {
                 );
             }
             if let Some(path) = created_selection {
-                self.rubber_band_selection_panes.remove(&pane_id);
+                clear_rubber_band_selection_activity_for_pane(
+                    &mut self.rubber_band_selection_panes,
+                    pane_id,
+                );
                 let _ = self.panes.select_only(pane_id, path);
             }
             if clear_clipboard && has_transfer_items {
                 self.clipboard = None;
-                self.rubber_band_selection_panes.remove(&pane_id);
+                clear_rubber_band_selection_activity_for_pane(
+                    &mut self.rubber_band_selection_panes,
+                    pane_id,
+                );
                 let _ = self.panes.clear_selection(pane_id);
             }
         }
@@ -6342,7 +6373,10 @@ impl FikaApp {
                 },
             );
             self.refresh_affected_dirs(&result.affected_dirs);
-            self.rubber_band_selection_panes.remove(&result.pane_id);
+            clear_rubber_band_selection_activity_for_pane(
+                &mut self.rubber_band_selection_panes,
+                result.pane_id,
+            );
             let _ = self.panes.clear_selection(result.pane_id);
         }
 
@@ -6468,7 +6502,10 @@ impl FikaApp {
     ) {
         if result.success_count > 0 {
             self.refresh_affected_dirs(&result.affected_dirs);
-            self.rubber_band_selection_panes.remove(&result.pane_id);
+            clear_rubber_band_selection_activity_for_pane(
+                &mut self.rubber_band_selection_panes,
+                result.pane_id,
+            );
             let _ = self.panes.clear_selection(result.pane_id);
         }
         let restore_conflict_count = result.restore_conflicts.len();

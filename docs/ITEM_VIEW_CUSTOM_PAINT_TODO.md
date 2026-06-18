@@ -984,6 +984,11 @@ by risk and evidence, not by how custom-painted a surface looks.
   the rule that a pane remains rubber-band-selection active only while the
   latest rubber-band selection count is nonzero. `src/main.rs` still stores the
   active pane set and emits status text.
+- [x] P16by: Move rubber-band selection activity clear/query policy into the
+  rubber-band module. `clear_rubber_band_selection_activity_for_pane()` and
+  `rubber_band_selection_activity_is_active()` now own production-path clearing
+  and selected-count-aware activity checks. `src/main.rs` still supplies the
+  activity set and pane selected count.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

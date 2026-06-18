@@ -125,6 +125,21 @@ pub(crate) fn set_rubber_band_selection_activity_for_count(
     }
 }
 
+pub(crate) fn clear_rubber_band_selection_activity_for_pane(
+    selection_panes: &mut HashSet<PaneId>,
+    pane_id: PaneId,
+) -> bool {
+    selection_panes.remove(&pane_id)
+}
+
+pub(crate) fn rubber_band_selection_activity_is_active(
+    selection_panes: &HashSet<PaneId>,
+    pane_id: PaneId,
+    selected_count: Option<usize>,
+) -> bool {
+    selection_panes.contains(&pane_id) && selected_count.is_some_and(|selected| selected > 0)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct RubberBandDrag {
     pub(crate) pane_id: PaneId,
@@ -227,5 +242,40 @@ mod tests {
             0
         ));
         assert!(!selection_panes.contains(&PaneId(1)));
+    }
+
+    #[test]
+    fn selection_activity_clear_and_active_check_use_selected_count() {
+        let mut selection_panes = HashSet::from([PaneId(1)]);
+
+        assert!(rubber_band_selection_activity_is_active(
+            &selection_panes,
+            PaneId(1),
+            Some(1)
+        ));
+        assert!(!rubber_band_selection_activity_is_active(
+            &selection_panes,
+            PaneId(1),
+            Some(0)
+        ));
+        assert!(!rubber_band_selection_activity_is_active(
+            &selection_panes,
+            PaneId(2),
+            Some(1)
+        ));
+
+        assert!(clear_rubber_band_selection_activity_for_pane(
+            &mut selection_panes,
+            PaneId(1)
+        ));
+        assert!(!rubber_band_selection_activity_is_active(
+            &selection_panes,
+            PaneId(1),
+            Some(1)
+        ));
+        assert!(!clear_rubber_band_selection_activity_for_pane(
+            &mut selection_panes,
+            PaneId(1)
+        ));
     }
 }
