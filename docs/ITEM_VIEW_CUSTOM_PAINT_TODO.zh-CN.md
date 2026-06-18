@@ -293,6 +293,7 @@
 - [x] P16ck：将 item-view handle-to-view snapshot sync APIs 移入 scroll state。Authoritative handle sync、user-scroll handle sync 和 transient-clearing handle sync 现在在生产路径中消费 `ItemViewScrollViewSnapshot`，不再使用松散 scroll 字段。
 - [x] P16cl：收窄 item-view scroll tuple helper 可见性。松散字段 scroll helpers 现在只是 scroll-state 实现细节；生产路径和跨模块测试都使用 snapshot API surface。
 - [x] P16cm：记录更新后的 GPUI 依赖基线。2026-06-18 的 lockfile 更新将 GPUI 移到 Zed commit `e4f6742a`，解析后的依赖图不再包含 `async-std`、`async-global-executor` 或旧 Zed `util` crate。这降低了保留 GPUI surface 的依赖重量顾虑，但 renderer 替换决策仍然必须依赖成对运行时证据。
+- [x] P16cn：将 item-view scroll sync-action 应用规则移入 scroll state。`ItemViewScrollSyncAction::apply_to_view()` 现在拥有 sync action 何时写入 pane view values，以及该写入是否代表 view change 的判断；`src/main.rs` 只提供 pane model 写入闭包。
 - [ ] P16q：在每个 P16 实现切片之后，单独提交并附带相关验证：仅文档切片需要 `git diff --check`；代码切片需要 `cargo fmt`、`cargo check`、`cargo test -q`、`scripts/check-item-view-perf-analyzer.sh`、`scripts/check-places-perf-analyzer.sh` 和 `git diff --check`。
 - [x] P16r：记录运行时自测试和突破记录规则。可重复的滚动、缩放、启动图标、调整大小、模式切换和 Places 目标回退应在依赖手动计时之前通过 autosmoke 日志和分析器脚本重现。任何确认的优化突破必须记录症状、Dolphin 比较边界、根本原因、实现、保存的日志/分析器命令和未来回归守卫在拥有的设计或决策文档中。
 

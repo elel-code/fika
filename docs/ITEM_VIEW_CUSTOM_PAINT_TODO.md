@@ -1071,6 +1071,10 @@ by risk and evidence, not by how custom-painted a surface looks.
   `util` crate. This lowers the dependency-weight concern for keeping GPUI
   surfaces, but renderer replacement decisions still require paired runtime
   evidence.
+- [x] P16cn: Move item-view scroll sync-action application into scroll state.
+  `ItemViewScrollSyncAction::apply_to_view()` now owns when a sync action writes
+  pane view values and whether that write represents a view change; `src/main.rs`
+  only supplies the pane model write closure.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

@@ -41,10 +41,19 @@ pub(crate) enum ItemViewScrollSyncAction {
 }
 
 impl ItemViewScrollSyncAction {
-    pub(crate) fn into_outcome(
+    pub(crate) fn apply_to_view(
         self,
         view: ItemViewScrollViewSnapshot,
-    ) -> ItemViewScrollSyncOutcome {
+        mut apply_sync: impl FnMut(ItemViewScrollSync),
+    ) -> bool {
+        let outcome = self.into_outcome(view);
+        if let Some(sync) = outcome.sync {
+            apply_sync(sync);
+        }
+        outcome.changed
+    }
+
+    fn into_outcome(self, view: ItemViewScrollViewSnapshot) -> ItemViewScrollSyncOutcome {
         match self {
             ItemViewScrollSyncAction::None | ItemViewScrollSyncAction::SyncHandleToView => {
                 ItemViewScrollSyncOutcome {
@@ -61,9 +70,9 @@ impl ItemViewScrollSyncAction {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct ItemViewScrollSyncOutcome {
-    pub(crate) sync: Option<ItemViewScrollSync>,
-    pub(crate) changed: bool,
+struct ItemViewScrollSyncOutcome {
+    sync: Option<ItemViewScrollSync>,
+    changed: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -934,6 +943,33 @@ mod tests {
                 changed: true,
             }
         );
+    }
+
+    #[test]
+    fn scroll_sync_action_apply_to_view_invokes_writer_only_for_sync_view() {
+        let view = ItemViewScrollViewSnapshot::new(100.0, 0.0, 1_000.0, 0.0);
+        let mut applied = Vec::new();
+
+        assert!(!ItemViewScrollSyncAction::None.apply_to_view(view, |sync| applied.push(sync)));
+        assert!(applied.is_empty());
+        assert!(
+            !ItemViewScrollSyncAction::SyncHandleToView
+                .apply_to_view(view, |sync| applied.push(sync))
+        );
+        assert!(applied.is_empty());
+
+        let sync = ItemViewScrollSync {
+            scroll_x: 180.0,
+            scroll_y: 12.0,
+            max_scroll_x: 1_000.0,
+            max_scroll_y: 400.0,
+        };
+        assert!(
+            ItemViewScrollSyncAction::SyncView(sync).apply_to_view(view, |sync| {
+                applied.push(sync);
+            })
+        );
+        assert_eq!(applied, vec![sync]);
     }
 
     #[test]

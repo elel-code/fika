@@ -1226,8 +1226,7 @@ impl FikaApp {
         action: ItemViewScrollSyncAction,
         view: ItemViewScrollViewSnapshot,
     ) -> bool {
-        let outcome = action.into_outcome(view);
-        if let Some(sync) = outcome.sync {
+        action.apply_to_view(view, |sync| {
             let _ = self.panes.set_view_scroll(
                 pane_id,
                 sync.scroll_x,
@@ -1235,8 +1234,7 @@ impl FikaApp {
                 sync.max_scroll_x,
                 sync.max_scroll_y,
             );
-        }
-        outcome.changed
+        })
     }
 
     pub(crate) fn begin_item_view_scrollbar_drag(&mut self, pane_id: PaneId) -> bool {
