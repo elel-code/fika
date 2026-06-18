@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
     cat <<'EOF'
-Usage: compare-item-image-renderers.sh CUSTOM_THEME_LOG DEFAULT_LOG
+Usage: compare-item-image-renderers.sh [--gate-default-promotion] CUSTOM_THEME_LOG DEFAULT_LOG
 
 Compares two FIKA_PERF_ITEM_VIEW logs for Compact/Icons item image rendering:
 
@@ -16,8 +16,19 @@ Compares two FIKA_PERF_ITEM_VIEW logs for Compact/Icons item image rendering:
 This is a log comparison helper. It cannot judge subjective smoothness, but it
 does identify renderer-policy activation and custom image-layer placeholder,
 decode, and retained-image churn.
+
+Options:
+  --gate-default-promotion
+      Exit non-zero unless the custom theme-icon path is clean enough to be
+      considered for becoming the default renderer.
 EOF
 }
+
+gate_default_promotion=false
+if [[ "${1:-}" == "--gate-default-promotion" ]]; then
+    gate_default_promotion=true
+    shift
+fi
 
 if [[ $# -ne 2 || "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
     usage
@@ -101,6 +112,39 @@ if (( custom_theme_decoded > 0 )); then
     decode_judgement="custom image layer observed GPUI theme decode completion"
 fi
 
+promotion_gate_state="not requested"
+promotion_gate_reasons=()
+if [[ "$gate_default_promotion" == true ]]; then
+    promotion_gate_state="pass"
+    if [[ "$custom_renderer_state" != "custom-image-layer" ]]; then
+        promotion_gate_reasons+=("custom log did not route theme icons through the custom image layer")
+    fi
+    if [[ "$default_renderer_state" != "default-gpui-theme-icons" ]]; then
+        promotion_gate_reasons+=("default log did not show GPUI theme-icon elements")
+    fi
+    if (( custom_image_frames == 0 )); then
+        promotion_gate_reasons+=("custom log did not include item-image frames")
+    fi
+    if (( custom_theme_placeholder > 0 )); then
+        promotion_gate_reasons+=("custom log still has theme_placeholder churn")
+    fi
+    if (( custom_theme_decoded > 0 )); then
+        promotion_gate_reasons+=("custom log still has theme_decoded first-ready churn")
+    fi
+    if (( default_theme_placeholder > 0 )); then
+        promotion_gate_reasons+=("default log unexpectedly has theme placeholders")
+    fi
+    if (( ${#promotion_gate_reasons[@]} > 0 )); then
+        promotion_gate_state="fail"
+    fi
+fi
+
+promotion_gate_reason_text="none"
+if (( ${#promotion_gate_reasons[@]} > 0 )); then
+    promotion_gate_reason_text="$(printf '%s; ' "${promotion_gate_reasons[@]}")"
+    promotion_gate_reason_text="${promotion_gate_reason_text%; }"
+fi
+
 cat <<EOF
 ## Item Image Renderer A/B Evidence
 
@@ -126,6 +170,8 @@ Automated interpretation:
 - Placeholder evidence: $placeholder_judgement
 - Decode evidence: $decode_judgement
 - Retained same-icon evidence: theme_retained=$custom_theme_retained
+- Default-promotion gate: $promotion_gate_state
+- Default-promotion reasons: $promotion_gate_reason_text
 
 Custom-theme analyzer summary:
 
@@ -139,3 +185,7 @@ Default split-renderer analyzer summary:
 $default_summary
 \`\`\`
 EOF
+
+if [[ "$promotion_gate_state" == "fail" ]]; then
+    exit 1
+fi

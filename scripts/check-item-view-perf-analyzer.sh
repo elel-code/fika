@@ -124,6 +124,22 @@ if [[ "$image_renderer_evidence" != *"theme placeholder | 48 | 0"* ]]; then
     echo "expected image renderer comparison to include placeholder delta" >&2
     exit 1
 fi
+if "$image_renderer_compare" --gate-default-promotion "$tmpdir/custom-theme.log" "$tmpdir/default-split.log" >/dev/null 2>&1; then
+    echo "expected default-promotion gate to fail on placeholder/decode churn" >&2
+    exit 1
+fi
+
+cat > "$tmpdir/custom-theme-clean.log" <<'EOF'
+[fika item-view] pane=1 mode=Compact phase=steady items=197 visible=48 raw=187us icon_sync=99us queue=180us convert=196us total=770us
+[fika renderer-policy] pane=1 mode=Compact items=48 visual_layer=48 image_layer=48 gpui_image_element=0 retained_interaction=48 gpui_drag_shell=48 rename_overlay=0
+[fika item-image] pane=1 mode=Compact prepaint_count=48 prepaint=180us paint_count=48 paint=700us theme_loaded=48 theme_decoded=0 theme_retained=48 theme_placeholder=0 thumb_loaded=0 thumb_decoded=0 thumb_retained=0 thumb_fallback=0
+EOF
+
+image_renderer_gate_evidence="$("$image_renderer_compare" --gate-default-promotion "$tmpdir/custom-theme-clean.log" "$tmpdir/default-split.log")"
+if [[ "$image_renderer_gate_evidence" != *"Default-promotion gate: pass"* ]]; then
+    echo "expected clean custom/default comparison to pass default-promotion gate" >&2
+    exit 1
+fi
 
 cat > "$tmpdir/legacy-no-icon-sync.log" <<'EOF'
 [fika item-view] pane=1 mode=Compact phase=steady items=48 visible=32 raw=50us queue=1us convert=40us total=120us

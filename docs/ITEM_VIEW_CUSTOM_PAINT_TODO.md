@@ -570,9 +570,12 @@ tracks.
   MIME/theme icon renderer. Required scenarios: `/etc` and a mixed user
   directory, startup plus `FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll`, default GPUI
   `img()` versus `FIKA_CUSTOM_THEME_ICONS=1` or a future retained-icon-cache
-  flag. The custom path must show no steady `theme_placeholder` churn, no
-  zoom-time `theme_decoded` burst, no visible size jump, and `icon_sync` within
-  the Dolphin-style visible-first budget before the default renderer can change.
+  flag. The offline comparison gate exists as
+  `scripts/compare-item-image-renderers.sh --gate-default-promotion`; runtime
+  logs still need to be captured. The custom path must show no steady
+  `theme_placeholder` churn, no zoom-time `theme_decoded` burst, no visible size
+  jump, and `icon_sync` within the Dolphin-style visible-first budget before the
+  default renderer can change.
 - [ ] P16k3: Only after P16k1/P16k2 pass, reconsider the Compact/Icons
   MIME/theme icon renderer policy in `docs/ITEM_VIEW_RENDERER_DECISIONS.md`.
   Until then, keep the current split: thumbnails on the custom image layer and
@@ -1288,6 +1291,13 @@ tracks.
   `iconName` only, so zoom could reuse an old-size image before the current-size
   image loaded. Default MIME/theme icons still use GPUI `img()` until paired
   evidence proves the custom path is neutral or better.
+- [x] P16ec: Add the paired item-image default-promotion gate. The
+  `scripts/compare-item-image-renderers.sh --gate-default-promotion` mode now
+  exits non-zero if the custom log has theme placeholders, theme decode churn,
+  missing custom item-image frames, or invalid default/custom renderer-policy
+  evidence. `scripts/check-item-view-perf-analyzer.sh` covers both failing and
+  passing synthetic comparisons. Real `/etc` and mixed-directory runtime
+  evidence remains P16k2.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

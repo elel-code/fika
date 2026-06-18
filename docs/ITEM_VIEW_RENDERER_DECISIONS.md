@@ -240,7 +240,8 @@ The detailed retained image-cache design is
 The implementation foundation now exists in `src/ui/icons/image_cache.rs` and
 the custom image layer uses that size/scale-aware key when
 `FIKA_CUSTOM_THEME_ICONS=1` is enabled; the default MIME/theme renderer remains
-GPUI `img()` until paired runtime evidence passes.
+GPUI `img()` until paired runtime evidence passes
+`scripts/compare-item-image-renderers.sh --gate-default-promotion`.
 
 The target architecture should mirror Dolphin's pixmap stability rather than
 the current custom-theme A/B path:

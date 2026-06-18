@@ -153,8 +153,9 @@ The future custom path is acceptable only if analyzer output proves:
   status.
 - [x] Make `[fika item-image]` distinguish retained same-key theme image reuse
   from first-load placeholders.
-- [ ] Extend `scripts/compare-item-image-renderers.sh` or the item-view
+- [x] Extend `scripts/compare-item-image-renderers.sh` or the item-view
   analyzer so paired default/custom logs fail on placeholder churn or zoom-time
-  decode bursts.
+  decode bursts. `--gate-default-promotion` now fails on custom theme
+  placeholders, theme decode churn, or invalid renderer-policy evidence.
 - [ ] Keep GPUI `img()` as the default MIME/theme icon renderer until the
   paired evidence passes and `docs/ITEM_VIEW_RENDERER_DECISIONS.md` is updated.
