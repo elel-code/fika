@@ -21,7 +21,7 @@
 - [x] 功能提炼与集成：Dolphin 是 UI 行为和文件操作流程的第一参考；cosmic-files 是纯 Rust 系统集成的参考源。两个源码库中提炼的功能统一集成到 `fika-core`，UI 层只做渲染和输入路由。
 - [x] Dolphin 分层模型对齐：渲染层不做数据决策，模型层不持有 UI 句柄，交互层不直接操作文件系统。
 - [x] 文件拆分：`src/main.rs` 只保留 app 状态编排和跨模块路由。所有功能模块已拆入 `src/core/`（domain logic）和 `src/ui/`（rendering），子职责继续按目录式模块拆分。
-- [x] 图标模型已收敛为按需路径缓存：删除 `ModelEntry.icon_name`、`src/ui/icons/roles.rs`、`RenderImage` 自解码路径；图标由 `FileIconCache` 按 `FileIconKind + icon_size` / named icon 缓存。文件视图图片策略按证据拆分：缩略图由 custom image paint layer 通过 `Window::paint_image` 绘制并复用 GPUI `RetainAllImageCache` 解码结果，MIME/theme icon 默认由 GPUI `img()` 渲染，仍由 retained item snapshot 和当前 layout icon size 的 `FileIconCache` 路径驱动。`FIKA_CUSTOM_THEME_ICONS=1` 可强制 theme icon 回到 custom image layer 做 A/B。Zoom 对齐 Dolphin 普通图标路径：布局立即变化，MIME/theme icon path 按当前 layout icon size 解析，不套用 300ms preview role-size timer。
+- [x] 图标模型已收敛为按需路径缓存：删除 `ModelEntry.icon_name`、`src/ui/icons/roles.rs`、`RenderImage` 自解码路径；图标由 `FileIconCache` 按 exact `FileIconKind + icon_size` / named icon 缓存，同时同一 `FileIconKind` 已有 resolved path 时跨 zoom 尺寸复用该稳定 path。文件视图图片策略按证据拆分：缩略图由 custom image paint layer 通过 `Window::paint_image` 绘制并复用 GPUI `RetainAllImageCache` 解码结果，MIME/theme icon 默认由 GPUI `img()` 渲染，仍由 retained item snapshot 和 stable file-icon path 驱动。`FIKA_CUSTOM_THEME_ICONS=1` 可强制 theme icon 回到 custom image layer 做 A/B。Zoom 对齐 Dolphin 普通图标路径：布局立即变化，MIME/theme icon path identity 不套用 300ms preview role-size timer，也不因每个 zoom size 提交第二次 path identity。
 
 ## Completed Features
 

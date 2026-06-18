@@ -1344,6 +1344,21 @@ tracks.
   `scripts/check-item-view-perf-analyzer.sh` covers passing and failing
   synthetic hybrid comparisons; real `/etc` and mixed-directory promotion
   evidence remains tracked by P16k2/P16k2a.
+- [x] P16eg: Align zoom-time MIME/theme icon path identity with Dolphin's stable
+  `iconName` role. Root cause: the old `FileIconCacheKey` included `size_px` in
+  the exact key, so zoom could create a new exact-size request even after the
+  same file-icon kind already had a resolved path. That could cause visible
+  path lookup, a second GPUI image identity commit, and a perceived icon-size
+  jump. Implementation: `FileIconCache::resolve_request_for()` and
+  `resolve_now_for()` now treat any resolved same-`FileIconKind` path as cached;
+  visible icon sync counts a missing request as cached and skips synchronous
+  resolve; `find_icon_direct()` skips missing directories and uses one
+  `metadata` call for file/length checks to reduce theme-miss syscalls.
+  Verification: `cargo fmt --check`, `cargo check`, `cargo build`,
+  `cargo test -q`, `scripts/check-item-view-perf-analyzer.sh`, and
+  `scripts/check-places-perf-analyzer.sh` pass. The current automation
+  environment has no Wayland compositor, so `/etc` runtime autosmoke hit GPUI
+  `NoCompositor`; refresh real logs in a desktop session.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

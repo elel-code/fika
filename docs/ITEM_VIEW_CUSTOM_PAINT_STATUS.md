@@ -16,7 +16,7 @@ The active post-Places-chrome execution roadmap is
 | Compact/Icons item model and geometry | retained | `DirectoryModel`, visible snapshots, slot pools | none for current path |
 | Compact/Icons base background, selection, hover, drop tint, labels | replaced | custom content-level painter | runtime perf and DnD smoke evidence must stay current |
 | Compact/Icons thumbnail images | replaced | custom image painter using GPUI `RetainAllImageCache` plus retained same-thumbnail images | pending/failure still reuses retained images or paints thumbnail fallback |
-| Compact/Icons MIME/theme-icon images | retained model, GPUI renderer | GPUI `img()` element over retained item shell | theme-icon paths resolve off the render path with the current layout icon size; custom theme-icon painting is only enabled by `FIKA_CUSTOM_THEME_ICONS=1` for A/B evidence |
+| Compact/Icons MIME/theme-icon images | retained model, GPUI renderer | GPUI `img()` element over retained item shell | theme-icon paths resolve off the render path and then stay stable per file-icon kind across zoom sizes; custom theme-icon painting is only enabled by `FIKA_CUSTOM_THEME_ICONS=1` for A/B evidence |
 | Compact/Icons click, menu, hover, cursor, and drop hit testing | replaced | retained viewport/custom hitboxes plus active item-drag window tracker | runtime DnD smoke still required after painter changes |
 | Compact/Icons drag start | not replaced | GPUI `Div::on_drag` shell | public GPUI custom-element drag-start API or audited Fika GPUI patch |
 | Compact/Icons rename editor | not replaced | GPUI editor overlay | only revisit after caret, selection, IME, and text input behavior are covered |
@@ -123,14 +123,14 @@ seen, and in-flight request state for background batches. Resolve completion
 invalidates visible item snapshot caches so the next frame can swap preliminary
 fallback icons for theme images without doing theme-directory scanning inside
 the scroll or zoom frame.
-When zoom changes the requested icon size, exact-size misses reuse an existing
-same-kind cached icon snapshot from another size as a transition while the
-exact-size request stays queued. This avoids a fallback-marker flash between
-two real theme icons. Fika intentionally does not freeze the theme-icon resolve
+When zoom changes the requested icon size, Fika now treats an already resolved
+same-kind icon path as stable role data and suppresses new exact-size path
+requests. This avoids a fallback-marker flash and a second image-identity commit
+between two real theme icons. Fika intentionally does not freeze the layout icon
 size during zoom: Dolphin delays preview/role updater work with
 `triggerIconSizeUpdate()`, but ordinary `iconName` pixmaps are generated from
-the widget's current style-option icon size. Freezing Fika's theme-icon size
-would create a visible second size adjustment when the delayed size commits.
+the widget's current style-option icon size. Freezing Fika's layout size would
+create a visible second size adjustment when the delayed size commits.
 
 Directory-load MIME metadata and visible icon paths now follow Dolphin's
 visible-widget exception to that async rule. Dolphin keeps full role resolution

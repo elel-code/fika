@@ -103,6 +103,11 @@ impl FileIconCache {
             .map(|(_, icon)| icon.clone())
     }
 
+    fn has_resolved_icon_for_kind(&self, key: &FileIconCacheKey) -> bool {
+        self.cached.get(key).is_some_and(|icon| icon.path.is_some())
+            || self.cached_icon_for_kind(key).is_some()
+    }
+
     pub(crate) fn resolve_request_for(
         &self,
         path: &Path,
@@ -112,7 +117,7 @@ impl FileIconCache {
         icon_size: f32,
     ) -> Option<FileIconResolveRequest> {
         let key = file_icon_cache_key(path, is_dir, mime_type, mime_magic_checked, icon_size);
-        (!self.cached.contains_key(&key)).then_some(FileIconResolveRequest { key })
+        (!self.has_resolved_icon_for_kind(&key)).then_some(FileIconResolveRequest { key })
     }
 
     pub(crate) fn resolve_now_for(
@@ -124,7 +129,7 @@ impl FileIconCache {
         icon_size: f32,
     ) -> bool {
         let key = file_icon_cache_key(path, is_dir, mime_type, mime_magic_checked, icon_size);
-        if self.cached.contains_key(&key) {
+        if self.has_resolved_icon_for_kind(&key) {
             return false;
         }
 
@@ -821,6 +826,9 @@ fn push_icon_size_dir(dirs: &mut Vec<String>, value: String) {
 }
 
 fn find_icon_direct(root: &Path, icon_name: &str) -> Option<PathBuf> {
+    if !root.is_dir() {
+        return None;
+    }
     ["png", "svg", "webp", "jpg", "jpeg", "bmp", "gif", "ico"]
         .into_iter()
         .map(|extension| root.join(format!("{icon_name}.{extension}")))
@@ -828,11 +836,10 @@ fn find_icon_direct(root: &Path, icon_name: &str) -> Option<PathBuf> {
 }
 
 fn is_renderable_icon_file(path: &Path) -> bool {
-    if !path.is_file()
-        || fs::metadata(path)
-            .map(|metadata| metadata.len() == 0)
-            .unwrap_or(true)
-    {
+    let Ok(metadata) = fs::metadata(path) else {
+        return false;
+    };
+    if !metadata.is_file() || metadata.len() == 0 {
         return false;
     }
 
@@ -1372,7 +1379,7 @@ gtk-icon-theme-name=breeze\n"
     }
 
     #[test]
-    fn cached_or_preliminary_icon_reuses_cached_kind_at_other_size_while_resolving_exact_size() {
+    fn cached_or_preliminary_icon_reuses_cached_kind_at_other_size_without_exact_size_request() {
         let root = test_dir("zoom-icon-transition");
         let resolved_48 = root.join("theme/48x48/mimetypes/text-rust.svg");
         let resolved_64 = root.join("theme/64x64/mimetypes/text-rust.svg");
@@ -1427,26 +1434,24 @@ gtk-icon-theme-name=breeze\n"
         );
 
         assert_eq!(transitional, icon_48);
-        let request_64 = cache
-            .resolve_request_for(
-                Path::new("main.rs"),
-                false,
-                Some(Arc::from("text/rust")),
-                true,
-                64.0,
-            )
-            .unwrap();
-        let icon_64 = FileIconSnapshot {
-            icon_name: Arc::from("text-rust"),
-            path: Some(Arc::from(resolved_64.as_path())),
-            fallback_marker: Arc::from("RS"),
-            fallback_fg: 0xffffff,
-            fallback_bg: 0x111111,
-        };
-        assert!(cache.finish_resolve_results(vec![FileIconResolveResult {
-            request: request_64,
-            icon: icon_64.clone(),
-        }]));
+        assert!(
+            cache
+                .resolve_request_for(
+                    Path::new("main.rs"),
+                    false,
+                    Some(Arc::from("text/rust")),
+                    true,
+                    64.0,
+                )
+                .is_none()
+        );
+        assert!(!cache.resolve_now_for(
+            Path::new("main.rs"),
+            false,
+            Some(Arc::from("text/rust")),
+            true,
+            64.0,
+        ));
         assert_eq!(
             cache.cached_or_preliminary_icon_for(
                 Path::new("main.rs"),
@@ -1455,7 +1460,7 @@ gtk-icon-theme-name=breeze\n"
                 true,
                 64.0,
             ),
-            icon_64
+            icon_48
         );
         let _ = std::fs::remove_dir_all(root);
     }

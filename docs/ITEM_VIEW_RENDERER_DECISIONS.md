@@ -37,7 +37,7 @@ custom renderer can replace a GPUI surface.
 | --- | --- | --- | --- | --- |
 | Compact/Icons base background and labels | custom content-level painter | visible item snapshots, paint slots, text shape cache | Keep custom paint. | Runtime logs must keep steady snapshot conversion sub-ms and static visual paint/build under budget. |
 | Compact/Icons thumbnail images | custom image painter | image paint snapshots, pane-local thumbnail image cache, retained thumbnail image map, thumbnail scheduler roles | Keep custom paint for thumbnails while image decode/cache stays on GPUI `RetainAllImageCache`; thumbnail pending/failure behavior remains model-driven and can paint fallback without changing MIME/theme icon policy. | Logs must include `[fika item-image]` plus `thumb_*` `image_sources` when thumbnails are exercised; no thumbnail sync decode in prepaint. |
-| Compact/Icons MIME/theme-icon images | GPUI `img()` element over retained item shell | retained item slots, visible icon role/path cache, background file-icon resolve queue | Use GPUI image elements by default. `/etc` evidence showed the custom image layer exposed a first-load placeholder frame for all 48 visible theme icons; GPUI elements keep the retained model/controller boundary without feeding theme icons through the custom painter. Render conversion still uses cached/preliminary icon snapshots only, and zoom resolves theme icon paths for the current layout icon size immediately. | Revisit only with paired logs from `FIKA_CUSTOM_THEME_ICONS=1` and default runs. The default should show `gpui_image_element>0`; the custom override should be the only path with theme-icon `theme_placeholder` churn. |
+| Compact/Icons MIME/theme-icon images | GPUI `img()` element over retained item shell | retained item slots, visible icon role/path cache, background file-icon resolve queue | Use GPUI image elements by default. `/etc` evidence showed the custom image layer exposed a first-load placeholder frame for all 48 visible theme icons; GPUI elements keep the retained model/controller boundary without feeding theme icons through the custom painter. Render conversion still uses cached/preliminary icon snapshots only; once a file-icon kind has a resolved theme path, zoom reuses that stable path instead of requesting another exact-size path. | Revisit only with paired logs from `FIKA_CUSTOM_THEME_ICONS=1` and default runs. The default should show `gpui_image_element>0`; the custom override should be the only path with theme-icon `theme_placeholder` churn. |
 | Compact/Icons hover, cursor, click, menu, drop hit testing | retained viewport/custom hitboxes plus active item-drag window tracker | viewport retained hit testing and `drag_drop` state | Keep retained controller path. | DnD smoke must pass across internal item, pane, Places, and external drops; pane self-drags should log `active-item-move`. |
 | Compact/Icons drag start | GPUI `Div::on_drag` shell | retained drag payload state plus temporary shell | Keep GPUI shell for initiation only. | Do not remove until GPUI exposes public custom-element drag-start or Fika carries an audited GPUI patch. |
 | Compact/Icons rename editor | GPUI text/editor subtree overlay | rename draft model and overlay geometry | Keep GPUI built-in editor. | Only revisit when text input, caret hit testing, selection, and IME behavior can stay behavior-complete. |
@@ -211,9 +211,11 @@ For zoom investigations, compare against
 updates item geometry immediately but pauses `KFileItemModelRolesUpdater`,
 restarting preview/visible-range role work after `LongInterval` (300ms).
 Dolphin's ordinary `iconName` pixmap path is different: `pixmapForIcon()` uses
-the widget's current style-option icon size. Fika therefore resolves MIME/theme
-icon paths against the current layout icon size on every zoom step and must not
-schedule a delayed second icon-size commit for theme icons.
+the widget's current style-option icon size while the item role remains the
+same `iconName`. Fika therefore changes layout/icon bounds immediately, but
+keeps MIME/theme icon path identity stable after the same file-icon kind has
+resolved once. It must not schedule a delayed second icon-size or path commit
+for theme icons.
 
 For directory-load MIME icon switching, compare against
 `KFileItemModel::retrieveData()`, `KFileItemModelRolesUpdater::updateVisibleIcons()`,
@@ -222,9 +224,12 @@ all model roles synchronously, but it does give created visible widgets an
 `iconName` before the async `ResolveAll` pass walks the rest. Fika should keep
 the same split: visible generic MIME metadata and visible theme-icon paths may
 be resolved synchronously within bounded budgets; read-ahead/offscreen metadata
-and icon paths remain queued. This mirrors Dolphin's `iconName` plus
-`pixmapForIcon()` path without moving read-ahead icon-theme scans into render
-conversion. Image decoding itself stays on the scheduler/image-cache path;
+and icon paths remain queued. Zoom is a separate case: after the same
+file-icon kind has any resolved theme path, Fika reuses that stable path rather
+than enqueueing another exact-size path request. This mirrors Dolphin's
+`iconName` plus `pixmapForIcon()` path without moving read-ahead icon-theme
+scans into render conversion or committing a second image identity during zoom.
+Image decoding itself stays on the scheduler/image-cache path;
 default theme icons decode through GPUI `img()`, while the custom-theme A/B
 paint layer may retain a previous same-`iconName` image but must not
 synchronously decode theme icon files during prepaint.
@@ -258,9 +263,11 @@ the current custom-theme A/B path:
 - Do not synchronously decode SVGs or raster theme icon files during GPUI
   prepaint. Path resolution may use the existing visible-first bounded
   `icon_sync` policy; image decode must stay on the image-cache/scheduler path.
-- Prevent zoom-time second commits: ordinary MIME/theme icons must request the
-  current layout icon size immediately, and any custom renderer must paint that
-  size in the same icon bounds used by layout.
+- Prevent zoom-time second commits: ordinary MIME/theme icons must update icon
+  bounds with layout immediately, but their path/image identity should remain
+  stable once the same file-icon kind has a resolved theme path. Any custom
+  renderer must paint in the same icon bounds used by layout without forcing a
+  new path/decode identity on every zoom step.
 - Consider a hybrid promotion path: keep GPUI `img()` as the default renderer
   while warming the retained theme-icon image cache, then route a visible icon
   through the custom image layer only when the retained image for its current

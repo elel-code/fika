@@ -23,8 +23,8 @@
 - 当后台图标解析完成时，可见 item snapshot 缓存被失效，以便在下一帧替换初步 fallback 图标。
 - 缩略图和主题图标图片的 pending/failure 状态不再必须直接降级到 fallback。Compact/Icons 和 Details 维护一个 pane 本地 retained 图片映射：MIME/主题图标按 `iconName` 保留，缩略图按精确缩略图路径保留。因此缩放级别的路径变化可以在 GPUI 解码新资源期间继续绘制前一张真实的 MIME 图标，匹配 Dolphin 的 `KStandardItemListWidget::m_pixmap` 行为。当从未对该语义源解码过真实图片时，仍使用 fallback。
 - 预读条目保留在 raw/render snapshot 中用于调度器投影和缓存保留，但它们不再进入静态视觉或图片 prepaint。这匹配 Dolphin 的拆分：`KItemListView` 绘制可见 widget，`KFileItemModelRolesUpdater::indexesToResolve()` 处理 paint 帧外的预读角色工作。
-- 缩放精确尺寸主题图标未命中时，复用同文件图标类型在另一尺寸下已缓存的图标 snapshot，同时精确尺寸解析保持在队列中。这镜像了 Dolphin 的视觉稳定性行为：不要仅因为新缩放级别的图标路径尚未解析就将真实可见图标替换为 fallback 标记。
-- 活动缩放现在镜像 Dolphin 的普通主题图标 paint 路径。Item layout 立即变更，图标 snapshot 转换/文件图标解析请求立即使用当前 layout 图标尺寸，匹配 `KStandardItemListWidget::pixmapForIcon()`。Dolphin 的 300ms `triggerIconSizeUpdate()` timer 被视为 preview/role-updater 边界，而不是 Fika 主题图标的延迟第二次尺寸提交。
+- 缩放精确尺寸主题图标未命中时，复用同文件图标类型已经解析出的稳定 theme path，并且不再为新尺寸排队另一个 exact-size path 请求。这镜像了 Dolphin 的视觉稳定性行为：不要仅因为新缩放级别改变了图标边界，就把真实可见图标替换为 fallback 标记或提交第二个 image identity。
+- 活动缩放现在镜像 Dolphin 的普通主题图标 paint 路径。Item layout 和 icon bounds 立即变更；一旦同一文件图标类型已有 resolved theme path，文件图标 role/path identity 保持稳定。Dolphin 的 300ms `triggerIconSizeUpdate()` timer 被视为 preview/role-updater 边界，而不是 Fika 主题图标的延迟第二次尺寸或路径提交。
 - 图片 paint 层现在在路径解析后也应用相同规则：如果 GPUI `RetainAllImageCache::load()` 返回新图标路径的 pending/error，painter 首先尝试同 MIME 图标名称的 retained 图片。这避免了滚动或缩放图片支持的 MIME 图标时出现的概率性 fallback 闪烁。
 - 主题图标文件解码不在 GPUI prepaint 中同步执行。解码保持在 GPUI 的 image-cache 路径上；paint 使用 retained 同 `iconName` 图片以避免可见的空白/标记回退。
 - 目录加载 MIME 图标稳定性现在遵循 Dolphin 的 visible-widget 边界。Dolphin 在 MIME 未知时避免在 `KFileItemModel::retrieveData()` 中进行昂贵的 `KFileItem::iconName()` 调用，但 `KFileItemModelRolesUpdater::startUpdating()` 调用 `updateVisibleIcons()`，且 `KFileItemListView::initializeItemListWidget()` 为实际创建的 widget 填充 `iconName`。Fika 镜像此行为：在排队后台 metadata 工作之前，在较小帧预算内同步解析可见的通用 MIME metadata；预读和离屏条目仍使用异步角色调度器。
@@ -50,7 +50,7 @@
 - MIME/主题图标现在默认使用 GPUI `img()` 元素而非 retained item shell。自定义主题图标图片 painter 仅通过 `FIKA_CUSTOM_THEME_ICONS=1` 保持可用，用于配对的 A/B 证据。
 - 渲染转换仅使用缓存或初步图标 snapshot。主题图标路径扫描保持在可见图标同步和后台解析队列中，不在 GPUI prepaint 或渲染转换中。
 - 可见图标同步跳过已在 `FileIconResolveQueue` 中排队或 pending 的请求，保留 Dolphin 的可见优先例外而不在滚动帧中重做预读扫描。
-- 缩放立即按当前 layout 图标尺寸解析 MIME/主题图标路径。Preview/thumbnail role 工作可能仍然合并，但主题图标几何和路径请求不得使用延迟的第二次尺寸。
+- 缩放立即提交当前 layout 图标边界；MIME/主题图标 path 在同一文件图标类型首次解析后保持稳定，不再因新缩放尺寸同步或排队 exact-size path 请求。Preview/thumbnail role 工作可能仍然合并，但主题图标几何不得使用延迟的第二次尺寸。
 - 目录加载在排队离屏 metadata/图标工作之前，在有界的 visible-widget 预算内解析可见通用 MIME metadata 和可见主题图标路径。
 
 证据：

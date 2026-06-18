@@ -31,8 +31,9 @@ marker placeholder。
 - MIME/theme icon 默认使用 GPUI `img()`，叠加在 retained item shell 上。
 - Thumbnail image 使用 custom item image layer 和 retained same-thumbnail image fallback。
 - `FIKA_CUSTOM_THEME_ICONS=1` 只为 A/B 证据强制 theme icon 走 custom image layer。
-- Render conversion 按当前 layout icon size 解析 icon snapshot，不使用延迟的第二次
-  icon-size commit。
+- 首次 icon path 解析可以使用当前 layout icon size；但同一文件图标类型已有
+  resolved theme path 后，zoom 会复用该稳定 path，而不是创建另一个 exact-size path
+  request。Fika 不使用延迟的第二次 icon-size 或 path commit。
 
 缺失的是 retained same-theme-icon image cache，它让 custom theme-icon 路径获得
 Dolphin 从 widget-local pixmap 和 `QPixmapCache` 中得到的稳定性。

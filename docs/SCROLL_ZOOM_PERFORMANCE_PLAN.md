@@ -49,17 +49,16 @@ the render frame.
   This matches Dolphin's split where `KItemListView` paints visible widgets and
   `KFileItemModelRolesUpdater::indexesToResolve()` handles read-ahead role
   work outside the paint frame.
-- Zoom exact-size theme-icon misses reuse an already cached icon snapshot for
-  the same file-icon kind at another size while the exact-size resolve remains
-  queued. This mirrors Dolphin's visual-stability behavior: do not replace a
-  real visible icon with a fallback marker just because the new zoom level's
-  icon path has not resolved yet.
+- Zoom exact-size theme-icon misses now reuse an already resolved icon path for
+  the same file-icon kind and do not enqueue another exact-size path request.
+  This mirrors Dolphin's visual-stability behavior: do not replace a real
+  visible icon with a fallback marker, or commit a second image identity, just
+  because the new zoom level changed the requested icon bounds.
 - Active zoom now mirrors Dolphin's ordinary theme-icon paint path. Item layout
-  changes immediately, and icon snapshot conversion/file-icon resolve requests
-  use the current layout icon size immediately, matching
-  `KStandardItemListWidget::pixmapForIcon()`. Dolphin's 300ms
+  and icon bounds change immediately, while file-icon role/path identity remains
+  stable once the same file-icon kind has a resolved theme path. Dolphin's 300ms
   `triggerIconSizeUpdate()` timer is treated as a preview/role-updater boundary,
-  not as a delayed second size commit for Fika theme icons.
+  not as a delayed second size or path commit for Fika theme icons.
 - The image paint layer now applies the same rule after path resolution too:
   if GPUI `RetainAllImageCache::load()` returns pending/error for a new icon
   path, the painter first tries a retained image for the same MIME icon name.
@@ -117,9 +116,11 @@ Implementation:
 - Visible icon sync skips requests already queued or pending in
   `FileIconResolveQueue`, preserving Dolphin's visible-first exception without
   redoing read-ahead scans in the scroll frame.
-- Zoom resolves MIME/theme icon paths for the current layout icon size
-  immediately. Preview/thumbnail role work may still be coalesced, but theme
-  icon geometry and path requests must not use a delayed second size.
+- Zoom commits the current layout icon bounds immediately. MIME/theme icon
+  paths stay stable after the same file-icon kind has resolved once, so zoom no
+  longer synchronously resolves or queues an exact-size path request. Preview
+  and thumbnail role work may still be coalesced, but theme icon geometry must
+  not use a delayed second size.
 - Directory load resolves visible generic MIME metadata and visible theme icon
   paths within the bounded visible-widget budget before queueing offscreen
   metadata/icon work.

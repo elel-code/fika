@@ -89,17 +89,17 @@ pub(crate) fn resolve_visible_file_icons_for_raw_grid_with_stats(
             return false;
         }
         stats.candidates += 1;
-        let queued_request = file_icons.resolve_request_for(
+        let Some(queued_request) = file_icons.resolve_request_for(
             request.path,
             request.is_dir,
             request.mime_type.clone(),
             request.mime_magic_checked,
             request.icon_size,
-        );
-        if queued_request
-            .as_ref()
-            .is_some_and(|request| queue.contains(request))
-        {
+        ) else {
+            stats.cached += 1;
+            return true;
+        };
+        if queue.contains(&queued_request) {
             stats.queued += 1;
             return true;
         }

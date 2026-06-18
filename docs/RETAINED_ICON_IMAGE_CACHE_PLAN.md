@@ -36,8 +36,10 @@ Current accepted renderer policy:
   image fallback.
 - `FIKA_CUSTOM_THEME_ICONS=1` forces theme icons through the custom image layer
   only for A/B evidence.
-- Render conversion resolves icon snapshots against the current layout icon
-  size and does not use a delayed second icon-size commit.
+- Initial icon path resolution may use the current layout icon size, but once a
+  file-icon kind has a resolved theme path, zoom reuses that stable path rather
+  than creating another exact-size path request. Fika does not use a delayed
+  second icon-size or path commit.
 
 The missing piece is a retained same-theme-icon image cache that gives the
 custom theme-icon path the same stability that Dolphin gets from widget-local
