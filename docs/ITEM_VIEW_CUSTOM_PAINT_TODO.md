@@ -1142,6 +1142,11 @@ by risk and evidence, not by how custom-painted a surface looks.
   snapshot lookup and pane writeback through
   `preserve_item_view_scroll_for_layout_change()` instead of assembling that
   closure in `main.rs`.
+- [x] P16dd: Move item-view transient-clearing handle sync orchestration into
+  the item-view facade. Loading transitions that preserve pane scroll now
+  delegate handle sync and transient cleanup through
+  `sync_item_view_scroll_handle_to_pane_view()` instead of looking up the pane
+  snapshot and calling the scroll-state API directly in `main.rs`.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

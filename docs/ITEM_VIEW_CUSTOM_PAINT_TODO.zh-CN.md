@@ -309,6 +309,7 @@
 - [x] P16da：将 authoritative item-view scroll handle 到 pane 的同步编排移入 item-view facade。scrollbar-drag update 现在通过 `sync_pane_view_from_authoritative_item_view_scroll_handle()` 委托，而不是在 `main.rs` 组装 authoritative handle snapshot/writeback 闭包。
 - [x] P16db：将 item-view scrollbar finish 同步编排移入 item-view facade。`finish_item_view_scrollbar_drag()` 现在拥有现有 pane snapshot lookup、缺失 pane 时只结束 drag 的 fallback，以及 pane 写回闭包；`main.rs` 只委托 public action。
 - [x] P16dc：将 item-view layout-change scroll preservation 编排移入 item-view facade。缩放/layout 路径现在通过 `preserve_item_view_scroll_for_layout_change()` 委托 preserved-scroll snapshot lookup 和 pane 写回，而不是在 `main.rs` 组装闭包。
+- [x] P16dd：将 item-view transient-clearing handle sync 编排移入 item-view facade。保留 pane scroll 的加载过渡现在通过 `sync_item_view_scroll_handle_to_pane_view()` 委托 handle sync 和 transient cleanup，而不是在 `main.rs` 查找 pane snapshot 并直接调用 scroll-state API。
 - [ ] P16q：在每个 P16 实现切片之后，单独提交并附带相关验证：仅文档切片需要 `git diff --check`；代码切片需要 `cargo fmt`、`cargo check`、`cargo test -q`、`scripts/check-item-view-perf-analyzer.sh`、`scripts/check-places-perf-analyzer.sh` 和 `git diff --check`。
 - [x] P16r：记录运行时自测试和突破记录规则。可重复的滚动、缩放、启动图标、调整大小、模式切换和 Places 目标回退应在依赖手动计时之前通过 autosmoke 日志和分析器脚本重现。任何确认的优化突破必须记录症状、Dolphin 比较边界、根本原因、实现、保存的日志/分析器命令和未来回归守卫在拥有的设计或决策文档中。
 

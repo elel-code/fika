@@ -111,6 +111,7 @@ use ui::item_view::{
     item_view_scroll_snapshot_for_existing_pane, item_view_scroll_snapshot_for_view,
     preserve_item_view_scroll_for_layout_change as preserve_item_view_scroll_for_layout_change_state,
     projected_item_viewport_width_for_pane_width,
+    sync_item_view_scroll_handle_to_pane_view as sync_item_view_handle_to_pane_view_state,
     sync_pane_view_from_authoritative_item_view_scroll_handle as sync_item_view_pane_from_authoritative_scroll_handle,
     sync_pane_view_from_item_view_scroll_handle as sync_item_view_pane_from_scroll_handle,
     viewport_extents_after_view_mode_axis_change,
@@ -1230,11 +1231,11 @@ impl FikaApp {
     }
 
     fn sync_item_view_scroll_handle_to_pane_view(&mut self, pane_id: PaneId) {
-        if let Some(view) = item_view_scroll_snapshot_for_existing_pane(&self.panes, pane_id) {
-            let _ = self
-                .item_view_scroll
-                .sync_handle_to_view_clearing_transients_snapshot(pane_id, view);
-        }
+        let _ = sync_item_view_handle_to_pane_view_state(
+            &mut self.item_view_scroll,
+            &self.panes,
+            pane_id,
+        );
     }
 
     fn remove_item_view_scroll_for_pane(&mut self, pane_id: PaneId) {

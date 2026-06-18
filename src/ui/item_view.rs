@@ -222,6 +222,17 @@ pub(crate) fn preserve_item_view_scroll_for_layout_change(
     });
 }
 
+pub(crate) fn sync_item_view_scroll_handle_to_pane_view(
+    scroll_state: &mut ItemViewScrollState,
+    panes: &PaneController,
+    pane_id: PaneId,
+) -> bool {
+    let Some(view) = item_view_scroll_snapshot_for_existing_pane(panes, pane_id) else {
+        return false;
+    };
+    scroll_state.sync_handle_to_view_clearing_transients_snapshot(pane_id, view)
+}
+
 fn apply_window_resize_delta(extent: f32, delta: f32) -> f32 {
     fika_core::normalize_viewport_extent(extent + delta)
 }
