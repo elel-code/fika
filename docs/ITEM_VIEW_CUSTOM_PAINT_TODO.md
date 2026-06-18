@@ -1411,6 +1411,16 @@ tracks.
   analyzer records `retained_dnd=rows+sections`, `gpui_event_shells=1`, and
   `pointer=1 targeting=1 dnd=1`; the full retained-event gate still rejects the
   mixed state.
+- [x] P16en: Add non-destructive retained Places DnD autosmoke. The
+  `FIKA_AUTOSMOKE_PLACES=dnd` scenario now emits retained target-decision
+  samples for path-list drags over row body, row edge, and section heading, plus
+  a place drag over another row. `scripts/analyze-places-perf.sh` supports
+  `--require-retained-dnd-autosmoke`, and
+  `scripts/check-places-perf-analyzer.sh` covers both valid markers and an
+  invalid failed-decision fixture. This proves the Dolphin-style retained
+  geometry/controller decision boundary without mutating user Places ordering.
+  Evidence: `/tmp/fika-places-retained-dnd.log` passed
+  `--require-retained-dnd-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-chrome-policy`.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

@@ -4,7 +4,11 @@ use std::time::Duration;
 
 use crate::ui::icons::FileIconSnapshot;
 
-use super::interaction::places_interaction_geometry;
+use super::interaction::{
+    PlaceInteractionCursor, PlaceInteractionDecision, PlaceInteractionHit, PlaceInteractionTarget,
+    PlaceRowTargetInput, place_row_path_list_target, place_row_place_drag_target,
+    place_section_path_list_target, places_interaction_geometry,
+};
 use super::snapshot::PlaceSnapshot;
 
 const AUTOSMOKE_PLACES_ENV: &str = "FIKA_AUTOSMOKE_PLACES";
@@ -16,6 +20,7 @@ pub(crate) enum PlacesAutosmokeScenario {
     Overflow,
     Layout,
     HitTest,
+    RetainedDnd,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -33,6 +38,7 @@ pub(crate) enum PlacesAutosmokeAction {
     RestoreLayout { label: &'static str },
     VerifyLayoutSettings { label: &'static str },
     HitTest { label: &'static str },
+    RetainedDnd { label: &'static str },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -56,6 +62,29 @@ struct PlacesHitTestAutosmokeSample {
     zone: &'static str,
     visible_index: Option<usize>,
     insert_index: Option<usize>,
+    ok: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct PlacesRetainedDndAutosmokeReport {
+    rows: usize,
+    sections: usize,
+    samples: Vec<PlacesRetainedDndAutosmokeSample>,
+}
+
+impl PlacesRetainedDndAutosmokeReport {
+    fn ok(&self) -> bool {
+        self.samples.iter().all(|sample| sample.ok)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct PlacesRetainedDndAutosmokeSample {
+    sample: &'static str,
+    drag: &'static str,
+    y: f32,
+    target: String,
+    cursor: &'static str,
     ok: bool,
 }
 
@@ -112,6 +141,7 @@ impl PlacesAutosmokeScenario {
             Self::Overflow => "Overflow",
             Self::Layout => "Layout",
             Self::HitTest => "HitTest",
+            Self::RetainedDnd => "RetainedDnd",
         }
     }
 
@@ -124,7 +154,7 @@ impl PlacesAutosmokeScenario {
         match self {
             Self::DropTargets | Self::Overflow => Duration::from_millis(160),
             Self::Layout => Duration::from_millis(260),
-            Self::HitTest => Duration::from_millis(160),
+            Self::HitTest | Self::RetainedDnd => Duration::from_millis(160),
         }
     }
 
@@ -184,6 +214,9 @@ impl PlacesAutosmokeScenario {
             Self::HitTest => vec![PlacesAutosmokeAction::HitTest {
                 label: "retained-hit-test",
             }],
+            Self::RetainedDnd => vec![PlacesAutosmokeAction::RetainedDnd {
+                label: "retained-dnd",
+            }],
         }
     }
 
@@ -222,6 +255,9 @@ fn places_autosmoke_scenario_from_value(value: &str) -> Option<PlacesAutosmokeSc
         }
         "hit-test" | "hit_test" | "hittest" | "retained-hit-test" | "retained_hit_test" => {
             Some(PlacesAutosmokeScenario::HitTest)
+        }
+        "dnd" | "retained-dnd" | "retained_dnd" | "drag-drop" | "drag_drop" => {
+            Some(PlacesAutosmokeScenario::RetainedDnd)
         }
         _ => None,
     }
@@ -305,6 +341,23 @@ pub(crate) fn emit_places_retained_hit_test_autosmoke(
     }
     eprintln!(
         "[fika autosmoke] places hit-test-summary label={} rows={} sections={} ok={}",
+        label,
+        report.rows,
+        report.sections,
+        report.ok()
+    );
+}
+
+pub(crate) fn emit_places_retained_dnd_autosmoke(label: &'static str, snapshots: &[PlaceSnapshot]) {
+    let report = retained_dnd_autosmoke_report(snapshots);
+    for sample in &report.samples {
+        eprintln!(
+            "[fika autosmoke] places dnd label={} sample={} drag={} y={:.1} target={} cursor={} ok={}",
+            label, sample.sample, sample.drag, sample.y, sample.target, sample.cursor, sample.ok
+        );
+    }
+    eprintln!(
+        "[fika autosmoke] places dnd-summary label={} rows={} sections={} ok={}",
         label,
         report.rows,
         report.sections,
@@ -555,6 +608,171 @@ fn retained_hit_test_autosmoke_sample(
     }
 }
 
+fn retained_dnd_autosmoke_report(snapshots: &[PlaceSnapshot]) -> PlacesRetainedDndAutosmokeReport {
+    let geometry = places_interaction_geometry(snapshots);
+    let mut samples = Vec::new();
+
+    if let Some(row) = geometry.rows().first() {
+        samples.push(retained_dnd_path_list_sample(
+            "path-row-body",
+            row.y + row.height / 2.0,
+            "Place",
+            PlaceInteractionCursor::DropMenu,
+            false,
+            &geometry,
+        ));
+        samples.push(retained_dnd_path_list_sample(
+            "path-row-before",
+            row.y + 1.0,
+            "Insert",
+            PlaceInteractionCursor::Copy,
+            true,
+            &geometry,
+        ));
+    }
+    if let Some(section) = geometry.sections().first() {
+        samples.push(retained_dnd_path_list_sample(
+            "path-section",
+            section.y + 1.0,
+            "Insert",
+            PlaceInteractionCursor::Copy,
+            true,
+            &geometry,
+        ));
+    }
+    if geometry.rows().len() >= 2 {
+        let source_index = geometry.rows()[0].place_index;
+        let target_row = &geometry.rows()[1];
+        samples.push(retained_dnd_place_drag_sample(
+            "place-row-body",
+            target_row.y + target_row.height / 2.0,
+            source_index,
+            "Insert",
+            PlaceInteractionCursor::Move,
+            &geometry,
+        ));
+    }
+
+    PlacesRetainedDndAutosmokeReport {
+        rows: geometry.rows().len(),
+        sections: geometry.sections().len(),
+        samples,
+    }
+}
+
+fn retained_dnd_path_list_sample(
+    sample: &'static str,
+    y: f32,
+    expected_target: &'static str,
+    expected_cursor: PlaceInteractionCursor,
+    can_add_place: bool,
+    geometry: &super::interaction::PlacesInteractionGeometry,
+) -> PlacesRetainedDndAutosmokeSample {
+    let decision = match geometry.hit_test_y(y) {
+        Some(PlaceInteractionHit::Row { row, drop_zone }) => {
+            place_row_path_list_target(PlaceRowTargetInput {
+                drop_zone,
+                mounted: row.mounted,
+                can_add_place,
+                accepts_place: true,
+                insert_before_index: row.insert_before_index,
+                insert_after_index: row.insert_after_index,
+                target_path: &row.path,
+            })
+        }
+        Some(PlaceInteractionHit::Section(section)) => {
+            place_section_path_list_target(can_add_place, section.insert_index)
+        }
+        None => PlaceInteractionDecision {
+            target: PlaceInteractionTarget::Clear,
+            cursor: PlaceInteractionCursor::NotAllowed,
+        },
+    };
+    retained_dnd_autosmoke_sample_from_decision(
+        sample,
+        "path-list",
+        y,
+        decision,
+        expected_target,
+        expected_cursor,
+    )
+}
+
+fn retained_dnd_place_drag_sample(
+    sample: &'static str,
+    y: f32,
+    source_index: usize,
+    expected_target: &'static str,
+    expected_cursor: PlaceInteractionCursor,
+    geometry: &super::interaction::PlacesInteractionGeometry,
+) -> PlacesRetainedDndAutosmokeSample {
+    let decision = match geometry.hit_test_y(y) {
+        Some(PlaceInteractionHit::Row { row, drop_zone }) => place_row_place_drag_target(
+            true,
+            source_index,
+            drop_zone,
+            row.insert_before_index,
+            row.insert_after_index,
+        ),
+        Some(PlaceInteractionHit::Section(section)) => {
+            super::interaction::place_section_place_drag_target(
+                true,
+                source_index,
+                section.insert_index,
+            )
+        }
+        None => PlaceInteractionDecision {
+            target: PlaceInteractionTarget::Clear,
+            cursor: PlaceInteractionCursor::NotAllowed,
+        },
+    };
+    retained_dnd_autosmoke_sample_from_decision(
+        sample,
+        "place",
+        y,
+        decision,
+        expected_target,
+        expected_cursor,
+    )
+}
+
+fn retained_dnd_autosmoke_sample_from_decision(
+    sample: &'static str,
+    drag: &'static str,
+    y: f32,
+    decision: PlaceInteractionDecision,
+    expected_target: &'static str,
+    expected_cursor: PlaceInteractionCursor,
+) -> PlacesRetainedDndAutosmokeSample {
+    let target = retained_dnd_target_label(&decision);
+    let cursor = retained_dnd_cursor_label(decision.cursor);
+    PlacesRetainedDndAutosmokeSample {
+        sample,
+        drag,
+        y,
+        ok: target == expected_target && decision.cursor == expected_cursor,
+        target: target.to_string(),
+        cursor,
+    }
+}
+
+fn retained_dnd_target_label(decision: &PlaceInteractionDecision) -> &'static str {
+    match decision.target {
+        PlaceInteractionTarget::Clear => "Clear",
+        PlaceInteractionTarget::Insert { .. } => "Insert",
+        PlaceInteractionTarget::Place { .. } => "Place",
+    }
+}
+
+fn retained_dnd_cursor_label(cursor: PlaceInteractionCursor) -> &'static str {
+    match cursor {
+        PlaceInteractionCursor::Copy => "Copy",
+        PlaceInteractionCursor::Move => "Move",
+        PlaceInteractionCursor::DropMenu => "DropMenu",
+        PlaceInteractionCursor::NotAllowed => "NotAllowed",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -597,6 +815,14 @@ mod tests {
             places_autosmoke_scenario_from_value("retained_hit_test"),
             Some(PlacesAutosmokeScenario::HitTest)
         );
+        assert_eq!(
+            places_autosmoke_scenario_from_value("retained-dnd"),
+            Some(PlacesAutosmokeScenario::RetainedDnd)
+        );
+        assert_eq!(
+            places_autosmoke_scenario_from_value("drag_drop"),
+            Some(PlacesAutosmokeScenario::RetainedDnd)
+        );
         assert_eq!(places_autosmoke_scenario_from_value("off"), None);
     }
 
@@ -609,6 +835,10 @@ mod tests {
         assert_eq!(PlacesAutosmokeScenario::Overflow.marker_label(), "Overflow");
         assert_eq!(PlacesAutosmokeScenario::Layout.marker_label(), "Layout");
         assert_eq!(PlacesAutosmokeScenario::HitTest.marker_label(), "HitTest");
+        assert_eq!(
+            PlacesAutosmokeScenario::RetainedDnd.marker_label(),
+            "RetainedDnd"
+        );
     }
 
     #[test]
@@ -780,6 +1010,19 @@ mod tests {
     }
 
     #[test]
+    fn retained_dnd_scenario_contains_only_dnd_action() {
+        let actions = PlacesAutosmokeScenario::RetainedDnd.actions();
+
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(
+            actions[0],
+            PlacesAutosmokeAction::RetainedDnd {
+                label: "retained-dnd"
+            }
+        ));
+    }
+
+    #[test]
     fn snapshot_autosmoke_report_counts_visible_sections_and_targets() {
         let mut home = test_place(0, "", "Home", "/home/yk");
         home.active = true;
@@ -835,6 +1078,36 @@ mod tests {
         assert_eq!(report.samples[1].insert_index, Some(1));
         assert_eq!(report.samples[2].insert_index, Some(1));
         assert_eq!(report.samples[3].insert_index, Some(1));
+    }
+
+    #[test]
+    fn retained_dnd_autosmoke_report_covers_path_and_place_drag_targets() {
+        let report = retained_dnd_autosmoke_report(&[
+            test_place(0, "", "Home", "/home/yk"),
+            test_place(1, "Devices", "Root", "/"),
+        ]);
+
+        assert_eq!(report.rows, 2);
+        assert_eq!(report.sections, 1);
+        assert!(report.ok());
+        assert_eq!(
+            report
+                .samples
+                .iter()
+                .map(|sample| (
+                    sample.sample,
+                    sample.drag,
+                    sample.target.as_str(),
+                    sample.cursor
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                ("path-row-body", "path-list", "Place", "DropMenu"),
+                ("path-row-before", "path-list", "Insert", "Copy"),
+                ("path-section", "path-list", "Insert", "Copy"),
+                ("place-row-body", "place", "Insert", "Move"),
+            ]
+        );
     }
 
     fn test_place(index: usize, group: &'static str, label: &str, path: &str) -> PlaceSnapshot {

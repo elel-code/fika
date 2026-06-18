@@ -229,6 +229,18 @@ event 日志 surface 时才扩展 analyzer。
   `pointer=1 targeting=1 dnd=1`。完整 retained-event analyzer gate 仍拒绝该状态，
   因为 `retained_hitboxes=0`、`gpui_event_shells=1` 且 `drag_shells=rows`。
 
+retained DnD autosmoke 切片：
+
+- `FIKA_AUTOSMOKE_PLACES=dnd` 现在可以在不改写用户 Places 排序、不写 bookmark 的
+  前提下验证 retained Places DnD target decision。
+- 该 smoke 会采样 path-list drag 经过 row body、row edge、section heading，再采样
+  place drag 经过另一个 row。预期 retained decision 分别是 `Place`/`DropMenu`、
+  `Insert`/`Copy`、`Insert`/`Copy` 和 `Insert`/`Move`。
+- `scripts/analyze-places-perf.sh --require-retained-dnd-autosmoke` 会拒绝缺失
+  start/complete marker、缺失采样覆盖、失败采样决策，或没有同时包含 row 和 section
+  geometry 的 summary。这给后续 drag-start / GPUI shell 移除切片提供了非破坏性回归守卫；
+  真正执行 reorder/drop 的 destructive smoke 仍需隔离配置后再添加。
+
 ## TODO
 
 - [x] 添加 `PlacesEventDeliveryPolicy`，默认 `GpuiShells`，opt-in
@@ -243,7 +255,10 @@ event 日志 surface 时才扩展 analyzer。
 - [~] 将 activation/context-menu targeting 移到 retained layer。当前状态：
   `retained-targeting` 拥有 row activation 和 row/section context menu targeting，
   但 typed DnD move/drop 和 drag-start 仍需要 GPUI shell，因此该 policy 仍保持 opt-in。
-- [ ] 添加 retained item/external/place drops 的隔离 DnD smoke。
+- [~] 添加 retained item/external/place drops 的隔离 DnD smoke。当前状态：
+  `FIKA_AUTOSMOKE_PLACES=dnd` 在不改变用户 Places 的前提下验证 path-list 和 place drag
+  对 row body、row edge、section target 的 retained target decision。它有意不执行
+  destructive drop，因此完整隔离 drop/reorder smoke 仍未关闭。
 - [~] 将 drag-move/drop delivery 移到 retained layer。当前状态：
   `retained-dnd` 在一个 sidebar-level GPUI typed drag shell 后面拥有 row/section 目标查找
   和 drop dispatch。剩余 GPUI 边界是 payload delivery 和 drag-start，而不是 per-row/section

@@ -26,6 +26,10 @@ Options:
       Fail unless FIKA_AUTOSMOKE_PLACES=hit-test markers are present and prove
       retained Places row edge/body and section hit testing.
 
+  --require-retained-dnd-autosmoke
+      Fail unless FIKA_AUTOSMOKE_PLACES=dnd markers are present and prove
+      retained Places DnD target decisions for path-list and place drags.
+
   --require-interaction-policy
       Fail unless [fika places-interaction-policy] is present and proves the
       current retained target-decision / GPUI event-shell boundary.
@@ -86,6 +90,7 @@ require_autosmoke=false
 require_overflow_autosmoke=false
 require_layout_autosmoke=false
 require_hit_test_autosmoke=false
+require_retained_dnd_autosmoke=false
 require_interaction_policy=false
 require_interaction_geometry=false
 require_event_probe=false
@@ -111,6 +116,9 @@ while [[ $# -gt 0 ]]; do
             ;;
         --require-hit-test-autosmoke)
             require_hit_test_autosmoke=true
+            ;;
+        --require-retained-dnd-autosmoke)
+            require_retained_dnd_autosmoke=true
             ;;
         --require-interaction-policy)
             require_interaction_policy=true
@@ -209,6 +217,7 @@ awk \
     -v require_overflow_autosmoke="$require_overflow_autosmoke" \
     -v require_layout_autosmoke="$require_layout_autosmoke" \
     -v require_hit_test_autosmoke="$require_hit_test_autosmoke" \
+    -v require_retained_dnd_autosmoke="$require_retained_dnd_autosmoke" \
     -v require_interaction_policy="$require_interaction_policy" \
     -v require_interaction_geometry="$require_interaction_geometry" \
     -v require_event_probe="$require_event_probe" \
@@ -563,6 +572,14 @@ function fail(message) {
     hit_test_autosmoke_complete_seen = 1
 }
 
+/^\[fika autosmoke\] places start scenario=RetainedDnd/ {
+    retained_dnd_autosmoke_start_seen = 1
+}
+
+/^\[fika autosmoke\] places complete scenario=RetainedDnd/ {
+    retained_dnd_autosmoke_complete_seen = 1
+}
+
 /^\[fika autosmoke\] places action=/ {
     action = field("action")
     changed = field("changed")
@@ -617,6 +634,34 @@ function fail(message) {
         hit_test_summary_seen = 1
         max_update("hit_test_rows", rows)
         max_update("hit_test_sections", sections)
+    }
+}
+
+/^\[fika autosmoke\] places dnd / {
+    sample = field("sample")
+    drag = field("drag")
+    target = field("target")
+    cursor = field("cursor")
+    ok = field("ok")
+    if (sample == "path-row-body" && drag == "path-list" && target == "Place" && cursor == "DropMenu" && ok == "true") {
+        retained_dnd_path_row_body_seen = 1
+    } else if (sample == "path-row-before" && drag == "path-list" && target == "Insert" && cursor == "Copy" && ok == "true") {
+        retained_dnd_path_row_before_seen = 1
+    } else if (sample == "path-section" && drag == "path-list" && target == "Insert" && cursor == "Copy" && ok == "true") {
+        retained_dnd_path_section_seen = 1
+    } else if (sample == "place-row-body" && drag == "place" && target == "Insert" && cursor == "Move" && ok == "true") {
+        retained_dnd_place_row_body_seen = 1
+    }
+}
+
+/^\[fika autosmoke\] places dnd-summary / {
+    ok = field("ok")
+    rows = field("rows") + 0
+    sections = field("sections") + 0
+    if (ok == "true" && rows > 1 && sections > 0) {
+        retained_dnd_summary_seen = 1
+        max_update("retained_dnd_rows", rows)
+        max_update("retained_dnd_sections", sections)
     }
 }
 
@@ -772,6 +817,16 @@ END {
             !hit_test_row_after_seen || !hit_test_section_seen ||
             !hit_test_summary_seen) {
             fail("missing or invalid Places retained hit-test autosmoke markers")
+        }
+    }
+    if (require_retained_dnd_autosmoke == "true") {
+        if (!retained_dnd_autosmoke_start_seen || !retained_dnd_autosmoke_complete_seen) {
+            fail("missing Places retained DnD autosmoke start/complete markers")
+        }
+        if (!retained_dnd_path_row_body_seen || !retained_dnd_path_row_before_seen ||
+            !retained_dnd_path_section_seen || !retained_dnd_place_row_body_seen ||
+            !retained_dnd_summary_seen) {
+            fail("missing or invalid Places retained DnD autosmoke markers")
         }
     }
     if (require_interaction_policy == "true") {
@@ -935,6 +990,16 @@ END {
         hit_test_summary_seen,
         max_values["hit_test_rows"],
         max_values["hit_test_sections"])
+    printf("places_retained_dnd_autosmoke start=%d complete=%d path_row_body=%d path_row_before=%d path_section=%d place_row_body=%d summary=%d max_rows=%d max_sections=%d\n",
+        retained_dnd_autosmoke_start_seen,
+        retained_dnd_autosmoke_complete_seen,
+        retained_dnd_path_row_body_seen,
+        retained_dnd_path_row_before_seen,
+        retained_dnd_path_section_seen,
+        retained_dnd_place_row_body_seen,
+        retained_dnd_summary_seen,
+        max_values["retained_dnd_rows"],
+        max_values["retained_dnd_sections"])
     printf("places_autosmoke target=%d insert_start=%d insert_end=%d clear=%d snapshots=%d,%d,%d,%d,%d\n",
         autosmoke_target_action_seen,
         autosmoke_insert_start_action_seen,

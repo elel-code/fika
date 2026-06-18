@@ -151,9 +151,10 @@ use ui::places::{
     emit_places_autosmoke_layout_resize, emit_places_autosmoke_layout_settings_verification,
     emit_places_autosmoke_layout_update, emit_places_autosmoke_place_target_action,
     emit_places_autosmoke_snapshot, emit_places_autosmoke_start,
-    emit_places_retained_hit_test_autosmoke, emit_places_snapshot_perf_log, place_snapshots_for,
-    places_autosmoke_first_target_path, places_autosmoke_resize_target_width, places_panel_button,
-    places_panel_icon_snapshot, places_perf_enabled, places_section_count, places_sidebar_splitter,
+    emit_places_retained_dnd_autosmoke, emit_places_retained_hit_test_autosmoke,
+    emit_places_snapshot_perf_log, place_snapshots_for, places_autosmoke_first_target_path,
+    places_autosmoke_resize_target_width, places_panel_button, places_panel_icon_snapshot,
+    places_perf_enabled, places_section_count, places_sidebar_splitter,
     places_sidebar_width_from_drag, read_live_device_snapshot,
 };
 use ui::places::{PlacePaintSlotCache, PlacePaintSlotPerfLog};
@@ -837,6 +838,10 @@ impl FikaApp {
             }
             PlacesAutosmokeAction::HitTest { label } => {
                 emit_places_retained_hit_test_autosmoke(label, &self.place_snapshots());
+                false
+            }
+            PlacesAutosmokeAction::RetainedDnd { label } => {
+                emit_places_retained_dnd_autosmoke(label, &self.place_snapshots());
                 false
             }
         }

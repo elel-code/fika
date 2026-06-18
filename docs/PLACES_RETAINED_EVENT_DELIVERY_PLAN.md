@@ -248,6 +248,20 @@ that gate. Extend it only when a new retained event log surface is added.
   rejects this state because `retained_hitboxes=0`, `gpui_event_shells=1`, and
   `drag_shells=rows`.
 
+Retained DnD autosmoke slice:
+
+- `FIKA_AUTOSMOKE_PLACES=dnd` now exercises retained Places DnD target
+  decisions without mutating user Places ordering or writing bookmarks.
+- The smoke samples path-list drags over a row body, a row edge, and a section
+  heading, then samples a place drag over another row. The expected retained
+  decisions are `Place`/`DropMenu`, `Insert`/`Copy`, `Insert`/`Copy`, and
+  `Insert`/`Move`.
+- `scripts/analyze-places-perf.sh --require-retained-dnd-autosmoke` rejects
+  missing start/complete markers, missing sample coverage, failed sample
+  decisions, or summaries without both row and section geometry. This gives the
+  next drag-start / GPUI-shell-removal slices a non-destructive regression
+  guard before any destructive reorder/drop smoke is added.
+
 ## TODO
 
 - [x] Add a `PlacesEventDeliveryPolicy` with `GpuiShells` default and an
@@ -265,7 +279,11 @@ that gate. Extend it only when a new retained event log surface is added.
   status: `retained-targeting` owns row activation and row/section context menu
   targeting, but the policy remains opt-in while typed DnD move/drop and
   drag-start still need GPUI shells.
-- [ ] Add isolated DnD smoke for retained item/external/place drops.
+- [~] Add isolated DnD smoke for retained item/external/place drops. Current
+  status: `FIKA_AUTOSMOKE_PLACES=dnd` proves retained path-list and place drag
+  target decisions for row body, row edge, and section targets without mutating
+  user Places. It intentionally does not execute destructive drops, so full
+  isolated drop/reorder smoke remains open.
 - [~] Move drag-move/drop delivery to the retained layer. Current status:
   `retained-dnd` owns row/section target lookup and drop dispatch behind one
   sidebar-level GPUI typed drag shell. The remaining GPUI boundary is payload
