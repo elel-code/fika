@@ -48,6 +48,13 @@ Options:
       logs whose rows count matches the policy rows and row text shape-cache
       logs for the opt-in visual path.
 
+  --expect-retained-event-policy
+      Fail unless [fika places-renderer-policy] and
+      [fika places-interaction-policy] match the future retained event-delivery
+      policy: retained interaction/hitboxes equal rows+sections,
+      gpui_event_shells=0, drag_shells=rows, and row visuals are either the
+      current GPUI rows or the aggregated opt-in custom visual layer.
+
   --snapshot-us N
       Fail if any [fika places-view] snapshot exceeds N microseconds.
 
@@ -70,6 +77,7 @@ require_interaction_policy=false
 require_interaction_geometry=false
 expect_current_gpui_policy=false
 expect_custom_row_visual_policy=false
+expect_retained_event_policy=false
 snapshot_us=""
 sidebar_build_us=""
 slot_project_us=""
@@ -100,6 +108,9 @@ while [[ $# -gt 0 ]]; do
             ;;
         --expect-custom-row-visual-policy)
             expect_custom_row_visual_policy=true
+            ;;
+        --expect-retained-event-policy)
+            expect_retained_event_policy=true
             ;;
         --snapshot-us)
             if [[ $# -lt 2 || "$2" == --* ]]; then
@@ -181,6 +192,7 @@ awk \
     -v require_interaction_geometry="$require_interaction_geometry" \
     -v expect_current_gpui_policy="$expect_current_gpui_policy" \
     -v expect_custom_row_visual_policy="$expect_custom_row_visual_policy" \
+    -v expect_retained_event_policy="$expect_retained_event_policy" \
     -v snapshot_limit="$snapshot_us" \
     -v sidebar_build_limit="$sidebar_build_us" \
     -v slot_project_limit="$slot_project_us" '
@@ -299,6 +311,16 @@ function fail(message) {
             custom_policy_invalid = 1
         }
     }
+    if (expect_retained_event_policy == "true") {
+        row_visual_policy_valid = (row_gpui == rows && row_visual_layer == 0) ||
+            (row_gpui == 0 && row_visual_layer == rows)
+        if (!row_visual_policy_valid || icon_gpui != rows ||
+            retained_interaction != rows + last_sidebar_sections ||
+            drag_shell != rows || section_gpui != last_sidebar_sections ||
+            scrollbar_canvas != 1) {
+            retained_event_renderer_policy_invalid = 1
+        }
+    }
 }
 
 /^\[fika places-interaction-policy\]/ {
@@ -322,7 +344,14 @@ function fail(message) {
         retained_hitboxes != 0 ||
         gpui_event_shells != rows + sections ||
         drag_shells != rows) {
-        interaction_policy_invalid = 1
+        current_interaction_policy_invalid = 1
+    }
+    if (row_target_decisions != rows ||
+        section_target_decisions != sections ||
+        retained_hitboxes != rows + sections ||
+        gpui_event_shells != 0 ||
+        drag_shells != rows) {
+        retained_event_interaction_policy_invalid = 1
     }
 }
 
@@ -536,6 +565,28 @@ END {
             fail("custom Places row visual layer is not aggregated to the policy row count")
         }
     }
+    if (expect_retained_event_policy == "true") {
+        if (retained_event_renderer_policy_invalid) {
+            fail("places renderer policy does not match retained event-delivery policy")
+        }
+        if (interaction_policy_frames == 0) {
+            fail("missing [fika places-interaction-policy] logs for retained event-delivery policy")
+        }
+        if (retained_event_interaction_policy_invalid) {
+            fail("Places interaction policy does not match retained event-delivery policy")
+        }
+        if (max_values["policy_row_visual_layer"] > 0) {
+            if (row_visual_frames == 0) {
+                fail("missing [fika places-row-visual] logs for retained custom row visual policy")
+            }
+            if (row_shape_cache_frames == 0) {
+                fail("missing [fika places-row-shape-cache] logs for retained custom row visual policy")
+            }
+            if (max_values["row_visual_rows"] != max_values["policy_rows"]) {
+                fail("retained custom Places row visual layer is not aggregated to the policy row count")
+            }
+        }
+    }
     if (snapshot_limit != "" && max_values["snapshot"] > snapshot_limit) {
         fail("places snapshot exceeded threshold: " max_values["snapshot"] "us > " snapshot_limit "us")
     }
@@ -597,7 +648,9 @@ END {
         if (interaction_policy_frames == 0) {
             fail("missing [fika places-interaction-policy] logs")
         }
-        if (interaction_policy_invalid) {
+        if (expect_retained_event_policy == "true" && retained_event_interaction_policy_invalid) {
+            fail("Places interaction policy does not match retained event-delivery policy")
+        } else if (expect_retained_event_policy != "true" && current_interaction_policy_invalid) {
             fail("Places interaction policy does not match the retained target-decision / GPUI shell boundary")
         }
     }

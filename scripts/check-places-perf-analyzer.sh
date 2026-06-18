@@ -123,6 +123,69 @@ if [[ "$custom_summary" != *"places_row_shape_cache_frames=1 max_hits=11 max_mis
     exit 1
 fi
 
+cat > "$tmpdir/retained-event-default-visual.log" <<'EOF'
+[fika places-slots] rows=11 sections=2 entries=13 inserted=13 content=0 geometry=0 visual=0 unchanged=0 removed=0 project=25us
+[fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
+[fika places-view] source=11 visible=11 sections=2 snapshot=100us
+[fika places-sidebar] rows=11 sections=2 elements=13 build=240us
+[fika places-renderer-policy] rows=11 row_gpui=11 row_visual_layer=0 icon_gpui=11 retained_interaction=13 drag_shell=11 section_gpui=2 scrollbar_canvas=1
+[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=13 gpui_event_shells=0 drag_shells=11
+EOF
+
+retained_default_summary="$("$analyzer" \
+    --require-interaction-policy \
+    --expect-retained-event-policy \
+    "$tmpdir/retained-event-default-visual.log")"
+
+if [[ "$retained_default_summary" != *"max_retained_interaction=13"* ]]; then
+    echo "expected retained event renderer policy summary" >&2
+    exit 1
+fi
+if [[ "$retained_default_summary" != *"max_retained_hitboxes=13 max_gpui_event_shells=0 max_drag_shells=11"* ]]; then
+    echo "expected retained event interaction policy summary" >&2
+    exit 1
+fi
+
+cat > "$tmpdir/retained-event-custom-visual.log" <<'EOF'
+[fika places-slots] rows=11 sections=2 entries=13 inserted=13 content=0 geometry=0 visual=0 unchanged=0 removed=0 project=25us
+[fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
+[fika places-view] source=11 visible=11 sections=2 snapshot=100us
+[fika places-sidebar] rows=11 sections=2 elements=13 build=240us
+[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 icon_gpui=11 retained_interaction=13 drag_shell=11 section_gpui=2 scrollbar_canvas=1
+[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=13 gpui_event_shells=0 drag_shells=11
+[fika places-row-visual] rows=11 prepaint=20us paint=31us
+[fika places-row-shape-cache] hits=11 misses=0 evicted=0 entries=11
+EOF
+
+retained_custom_summary="$("$analyzer" \
+    --expect-retained-event-policy \
+    "$tmpdir/retained-event-custom-visual.log")"
+
+if [[ "$retained_custom_summary" != *"max_row_gpui=0 max_row_visual_layer=11"* ]]; then
+    echo "expected retained event custom visual renderer summary" >&2
+    exit 1
+fi
+if [[ "$retained_custom_summary" != *"places_row_visual_frames=1 max_rows=11 max_prepaint=20us max_paint=31us"* ]]; then
+    echo "expected retained event custom row visual summary" >&2
+    exit 1
+fi
+
+cat > "$tmpdir/retained-event-mixed-gpui-shell.log" <<'EOF'
+[fika places-slots] rows=11 sections=2 entries=13 inserted=13 content=0 geometry=0 visual=0 unchanged=0 removed=0 project=25us
+[fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
+[fika places-view] source=11 visible=11 sections=2 snapshot=100us
+[fika places-sidebar] rows=11 sections=2 elements=13 build=240us
+[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 icon_gpui=11 retained_interaction=0 drag_shell=11 section_gpui=2 scrollbar_canvas=1
+[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=11
+[fika places-row-visual] rows=11 prepaint=20us paint=31us
+[fika places-row-shape-cache] hits=11 misses=0 evicted=0 entries=11
+EOF
+
+if "$analyzer" --expect-retained-event-policy "$tmpdir/retained-event-mixed-gpui-shell.log" >/dev/null 2>&1; then
+    echo "expected retained event policy with GPUI event shells to fail" >&2
+    exit 1
+fi
+
 cat > "$tmpdir/custom-row-visual-per-row.log" <<'EOF'
 [fika places-slots] rows=11 sections=2 entries=13 inserted=13 content=0 geometry=0 visual=0 unchanged=0 removed=0 project=25us
 [fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us

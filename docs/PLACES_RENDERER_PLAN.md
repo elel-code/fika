@@ -390,11 +390,11 @@ scripts/analyze-places-perf.sh --require-overflow-autosmoke --require-interactio
 scripts/analyze-places-perf.sh --require-layout-autosmoke --require-interaction-policy --require-interaction-geometry --expect-retained-event-policy ...
 ```
 
-`--expect-retained-event-policy` does not exist yet; add it in the same slice
-that introduces retained Places event delivery logs. It should reject mixed
-claims where row visuals are custom-painted but event delivery still depends on
-GPUI row shells, and it should continue to require GPUI drag shells until typed
-drag initiation can start from retained hitboxes.
+`--expect-retained-event-policy` is available in
+`scripts/analyze-places-perf.sh` before the retained event-delivery code lands.
+It rejects mixed claims where row visuals are custom-painted but event delivery
+still depends on GPUI row shells, and it continues to require GPUI drag shells
+until typed drag initiation can start from retained hitboxes.
 
 ## Overflow Autosmoke
 

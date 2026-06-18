@@ -756,6 +756,14 @@ by risk and evidence, not by how custom-painted a surface looks.
   targeting, drag-move/drop delivery, then GPUI row/section shell removal. This
   prevents the opt-in row visual painter from being mistaken for
   behavior-complete retained Places rows.
+- [x] P16an: Add the Places retained event-delivery analyzer gate before
+  changing event routing. `scripts/analyze-places-perf.sh` now supports
+  `--expect-retained-event-policy`, which accepts either current GPUI row
+  visuals or the aggregated opt-in custom visual layer while requiring
+  `retained_interaction` and retained hitboxes to equal rows+sections,
+  `gpui_event_shells=0`, and drag shells to remain rows. The analyzer fixture
+  covers default visuals, custom visuals, and the negative mixed state where
+  custom row visuals still depend on GPUI event shells.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,
