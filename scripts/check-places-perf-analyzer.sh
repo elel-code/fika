@@ -177,6 +177,21 @@ if "$analyzer" --expect-retained-event-policy "$tmpdir/default-retained-dnd-chro
     exit 1
 fi
 
+cat > "$tmpdir/bad-retained-dnd-sidebar-leave-shells.log" <<'EOF'
+[fika places-slots] rows=11 sections=2 entries=13 inserted=13 content=0 geometry=0 visual=0 unchanged=0 removed=0 project=25us
+[fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
+[fika places-view] source=11 visible=11 sections=2 snapshot=100us
+[fika places-sidebar] rows=11 sections=2 elements=13 build=240us
+[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=11 icon_gpui=11 retained_interaction=13 drag_shell=11 section_gpui=2 scrollbar_canvas=1 visual_kind=chrome event_policy=retained-dnd retained_probe_hitboxes=13
+[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=13 retained_probe_hitboxes=13 gpui_event_shells=1 drag_shells=11 drag_start_models=11 gpui_sidebar_leave_shells=3 event_policy=retained-dnd retained_targeting=13 retained_dnd=13
+[fika places-row-visual] rows=11 painted=11 prepaint=18us paint=24us
+EOF
+
+if "$analyzer" --require-interaction-policy "$tmpdir/bad-retained-dnd-sidebar-leave-shells.log" >/dev/null 2>&1; then
+    echo "expected retained-DnD with GPUI sidebar leave shells to fail" >&2
+    exit 1
+fi
+
 cat > "$tmpdir/custom-row-chrome-with-shape-cache.log" <<'EOF'
 [fika places-slots] rows=11 sections=2 entries=13 inserted=13 content=0 geometry=0 visual=0 unchanged=0 removed=0 project=25us
 [fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us

@@ -319,6 +319,18 @@ retained targeting autosmoke 切片：
 - full retained-event analyzer gate 不变，仍会因为默认 mixed policy 的
   `gpui_event_shells=1` 拒绝它。
 
+retained sidebar leave shell 移除切片：
+
+- 默认 retained-DnD 现在依赖 retained pointer layer 做 active-drag leave clearing，
+  不再安装 item、external-path 和 place drag 三个 root sidebar GPUI `on_drag_move`
+  leave-clear shell。
+- `FIKA_PLACES_EVENT_DELIVERY_POLICY=gpui` 和 `retained-probe` 仍会安装这些 GPUI
+  leave shell，因为它们不拥有 retained pointer movement。
+- `[fika places-interaction-policy]` 在 retained-pointer、retained-targeting 和
+  retained-DnD 下报告 `gpui_sidebar_leave_shells=0`，在 GPUI/probe fallback policy
+  下报告 `3`。analyzer 会拒绝重新引入这些 shell 的 retained-DnD 日志，同时 full
+  retained-event gate 仍保持严格，因为 sidebar typed DnD payload shell 还存在。
+
 ## TODO
 
 - [x] 添加 `PlacesEventDeliveryPolicy`，保留显式 `GpuiShells` fallback，当前默认为
@@ -358,5 +370,9 @@ retained targeting autosmoke 切片：
 - [x] 将 Places event delivery 默认提升到 retained-DnD mixed policy。当前状态：
   默认日志显示 `event_policy=retained-dnd`、`retained_hitboxes=rows+sections`、
   `gpui_event_shells=1` 和 `drag_start_models=rows`；显式 `gpui` 仍是 fallback。
+- [x] 从 retained pointer policy 移除冗余 root sidebar GPUI leave-clear shell。当前状态：
+  retained-pointer、retained-targeting 和 retained-DnD 报告
+  `gpui_sidebar_leave_shells=0`；GPUI/probe policy 报告 `3`；analyzer 夹具会拒绝重新引入这些
+  shell 的 retained-DnD 日志。
 - [ ] analyzer gates 通过后移除 GPUI row/section event callbacks。
 - [ ] Track 4 解决 typed drag start 前，继续保留 GPUI row drag-start shells。

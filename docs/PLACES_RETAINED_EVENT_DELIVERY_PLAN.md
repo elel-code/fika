@@ -349,6 +349,19 @@ Default retained-DnD promotion slice:
 - The full retained-event analyzer gate is intentionally unchanged and still
   rejects the default mixed policy because `gpui_event_shells=1`.
 
+Retained sidebar leave shell removal slice:
+
+- Default retained-DnD now relies on the retained pointer layer for active-drag
+  leave clearing and no longer installs the three root sidebar GPUI
+  `on_drag_move` leave-clear shells for item, external-path, and place drags.
+- `FIKA_PLACES_EVENT_DELIVERY_POLICY=gpui` and `retained-probe` still install
+  those GPUI leave shells because they do not own retained pointer movement.
+- `[fika places-interaction-policy]` reports `gpui_sidebar_leave_shells=0` for
+  retained-pointer, retained-targeting, and retained-DnD policies, and `3` for
+  GPUI/probe fallback policies. The analyzer rejects retained-DnD logs that
+  reintroduce those shells, while the full retained-event gate remains strict
+  because the sidebar typed DnD payload shell is still present.
+
 ## TODO
 
 - [x] Add a `PlacesEventDeliveryPolicy` with an explicit `GpuiShells` fallback,
@@ -395,5 +408,9 @@ Default retained-DnD promotion slice:
   Current status: default logs show `event_policy=retained-dnd`,
   `retained_hitboxes=rows+sections`, `gpui_event_shells=1`, and
   `drag_start_models=rows`; explicit `gpui` remains the fallback.
+- [x] Remove redundant root sidebar GPUI leave-clear shells from retained
+  pointer policies. Current status: retained-pointer, retained-targeting, and
+  retained-DnD report `gpui_sidebar_leave_shells=0`; GPUI/probe policies report
+  `3`; analyzer fixtures reject retained-DnD logs that reintroduce them.
 - [ ] Remove GPUI row/section event callbacks after analyzer gates pass.
 - [ ] Keep GPUI row drag-start shells until Track 4 solves typed drag start.

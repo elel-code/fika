@@ -302,39 +302,45 @@ pub(crate) fn places_sidebar(
         .overflow_hidden()
         .px_2()
         .py_2()
-        .on_drag_move::<ItemDrag>(cx.listener(
-            |this, event: &gpui::DragMoveEvent<ItemDrag>, _window, cx| {
-                if clear_places_drop_target_after_sidebar_leave(
-                    this,
-                    event.bounds,
-                    event.event.position,
-                ) {
-                    cx.notify();
-                }
+        .when(
+            !event_delivery_policy.retained_pointer_enabled(),
+            |sidebar| {
+                sidebar
+                    .on_drag_move::<ItemDrag>(cx.listener(
+                        |this, event: &gpui::DragMoveEvent<ItemDrag>, _window, cx| {
+                            if clear_places_drop_target_after_sidebar_leave(
+                                this,
+                                event.bounds,
+                                event.event.position,
+                            ) {
+                                cx.notify();
+                            }
+                        },
+                    ))
+                    .on_drag_move::<ExternalPaths>(cx.listener(
+                        |this, event: &gpui::DragMoveEvent<ExternalPaths>, _window, cx| {
+                            if clear_places_drop_target_after_sidebar_leave(
+                                this,
+                                event.bounds,
+                                event.event.position,
+                            ) {
+                                cx.notify();
+                            }
+                        },
+                    ))
+                    .on_drag_move::<PlaceDrag>(cx.listener(
+                        |this, event: &gpui::DragMoveEvent<PlaceDrag>, _window, cx| {
+                            if clear_places_drop_target_after_sidebar_leave(
+                                this,
+                                event.bounds,
+                                event.event.position,
+                            ) {
+                                cx.notify();
+                            }
+                        },
+                    ))
             },
-        ))
-        .on_drag_move::<ExternalPaths>(cx.listener(
-            |this, event: &gpui::DragMoveEvent<ExternalPaths>, _window, cx| {
-                if clear_places_drop_target_after_sidebar_leave(
-                    this,
-                    event.bounds,
-                    event.event.position,
-                ) {
-                    cx.notify();
-                }
-            },
-        ))
-        .on_drag_move::<PlaceDrag>(cx.listener(
-            |this, event: &gpui::DragMoveEvent<PlaceDrag>, _window, cx| {
-                if clear_places_drop_target_after_sidebar_leave(
-                    this,
-                    event.bounds,
-                    event.event.position,
-                ) {
-                    cx.notify();
-                }
-            },
-        ))
+        )
         .on_mouse_down(
             MouseButton::Navigate(NavigationDirection::Back),
             cx.listener(|this, _event: &gpui::MouseDownEvent, _window, cx| {

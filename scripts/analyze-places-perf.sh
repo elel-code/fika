@@ -435,14 +435,24 @@ function renderer_retained_interaction_for_policy(event_policy, rows, sections) 
     retained_probe_hitboxes = field("retained_probe_hitboxes") + 0
     gpui_event_shells = field("gpui_event_shells") + 0
     drag_shells = field("drag_shells") + 0
+    event_policy = field("event_policy")
     drag_start_models_field = field("drag_start_models")
     if (drag_start_models_field == "") {
         drag_start_models = drag_shells
     } else {
         drag_start_models = drag_start_models_field + 0
     }
+    gpui_sidebar_leave_shells_field = field("gpui_sidebar_leave_shells")
     retained_targeting = field("retained_targeting") + 0
     retained_dnd = field("retained_dnd") + 0
+    expected_gpui_sidebar_leave_shells = (expect_retained_event_policy == "true" ||
+        event_policy == "retained-pointer" || event_policy == "retained-targeting" ||
+        retained_dnd == rows + sections) ? 0 : 3
+    if (gpui_sidebar_leave_shells_field == "") {
+        gpui_sidebar_leave_shells = expected_gpui_sidebar_leave_shells
+    } else {
+        gpui_sidebar_leave_shells = gpui_sidebar_leave_shells_field + 0
+    }
     max_update("interaction_rows", rows)
     max_update("interaction_sections", sections)
     max_update("interaction_row_target_decisions", row_target_decisions)
@@ -452,6 +462,7 @@ function renderer_retained_interaction_for_policy(event_policy, rows, sections) 
     max_update("interaction_gpui_event_shells", gpui_event_shells)
     max_update("interaction_drag_shells", drag_shells)
     max_update("interaction_drag_start_models", drag_start_models)
+    max_update("interaction_gpui_sidebar_leave_shells", gpui_sidebar_leave_shells)
     max_update("interaction_retained_targeting", retained_targeting)
     max_update("interaction_retained_dnd", retained_dnd)
     current_gpui_shell_boundary_valid = (gpui_event_shells == rows + sections && retained_dnd == 0)
@@ -462,7 +473,8 @@ function renderer_retained_interaction_for_policy(event_policy, rows, sections) 
         retained_hitboxes != expected_retained_hitboxes ||
         !(current_gpui_shell_boundary_valid || current_single_dnd_shell_boundary_valid) ||
         drag_shells != rows ||
-        drag_start_models != rows) {
+        drag_start_models != rows ||
+        gpui_sidebar_leave_shells != expected_gpui_sidebar_leave_shells) {
         current_interaction_policy_invalid = 1
     }
     if (row_target_decisions != rows ||
@@ -470,7 +482,8 @@ function renderer_retained_interaction_for_policy(event_policy, rows, sections) 
         retained_hitboxes != rows + sections ||
         gpui_event_shells != 0 ||
         drag_shells != rows ||
-        drag_start_models != rows) {
+        drag_start_models != rows ||
+        gpui_sidebar_leave_shells != 0) {
         retained_event_interaction_policy_invalid = 1
     }
 }
@@ -990,7 +1003,7 @@ END {
         max_values["policy_text_gpui"],
         policy_kinds,
         max_values["policy_retained_probe_hitboxes"])
-    printf("places_interaction_policy_frames=%d max_rows=%d max_sections=%d max_row_target_decisions=%d max_section_target_decisions=%d max_retained_hitboxes=%d max_gpui_event_shells=%d max_drag_shells=%d max_retained_probe_hitboxes=%d max_retained_targeting=%d max_retained_dnd=%d max_drag_start_models=%d\n",
+    printf("places_interaction_policy_frames=%d max_rows=%d max_sections=%d max_row_target_decisions=%d max_section_target_decisions=%d max_retained_hitboxes=%d max_gpui_event_shells=%d max_drag_shells=%d max_retained_probe_hitboxes=%d max_retained_targeting=%d max_retained_dnd=%d max_drag_start_models=%d max_gpui_sidebar_leave_shells=%d\n",
         interaction_policy_frames,
         max_values["interaction_rows"],
         max_values["interaction_sections"],
@@ -1002,7 +1015,8 @@ END {
         max_values["interaction_retained_probe_hitboxes"],
         max_values["interaction_retained_targeting"],
         max_values["interaction_retained_dnd"],
-        max_values["interaction_drag_start_models"])
+        max_values["interaction_drag_start_models"],
+        max_values["interaction_gpui_sidebar_leave_shells"])
     printf("places_interaction_geometry_frames=%d max_rows=%d max_sections=%d max_entries=%d max_content_height=%.1f max_hit_tests=%d max_project=%dus\n",
         interaction_geometry_frames,
         max_values["interaction_geometry_rows"],

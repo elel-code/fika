@@ -1481,6 +1481,15 @@ tracks.
   `gpui_event_shells=1`, and `drag_start_models=rows`; the full retained-event
   analyzer gate remains intentionally failing until the sidebar typed DnD shell
   can be removed.
+- [x] P16ev: Remove the redundant root sidebar GPUI leave-clear shells from
+  retained pointer policies. The retained event layer already clears active
+  Places drop targets when an active drag leaves its bounds, so retained-pointer,
+  retained-targeting, and retained-DnD no longer install the item,
+  external-path, and place root sidebar `on_drag_move` leave handlers. GPUI and
+  probe policies keep those three fallback shells. The interaction policy log
+  now reports `gpui_sidebar_leave_shells`, and the analyzer rejects
+  retained-DnD logs that reintroduce them without loosening the full
+  retained-event gate.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,
