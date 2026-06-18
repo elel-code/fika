@@ -437,6 +437,27 @@ rg -n "on_drag_move|on_drop|insert_hitbox|DragMoveEvent|DropEvent|ExternalPaths|
   drag-move/drop delivery, or continued containment of the bridge as one
   sidebar-level shell while row/section target delivery stays retained.
 
+2026-06-19 drag-time target isolation slice:
+
+- Root cause: GPUI typed `on_drag_move` handlers run during capture dispatch and
+  are not clipped to the element bounds automatically. The retained Places
+  bridge is a sidebar-level typed shell, so it must explicitly reject drag-move
+  events whose pointer is outside the Places layer before converting
+  `event.position.y` into Places local row geometry.
+- Without that bounds gate, a pane-internal item drag could still feed the
+  Places retained-DnD path when the pointer's y coordinate overlapped a Places
+  row, causing Places drop highlight during a pane drag.
+- The fix lives at `install_places_event_dnd_handlers()`: each typed
+  drag-move handler first checks `event.bounds.contains(&event.event.position)`.
+  If false, it clears only the retained Places DnD target and
+  `place_drop_target`, then returns without stopping propagation. It must not
+  call `clear_drag_drop_targets()` because pane-owned item targets may be
+  active in the same drag frame.
+- Regression rule: any future replacement for the sidebar typed bridge must
+  preserve target isolation. Pointer outside Places clears Places state only;
+  pointer inside Places may own Places target decisions and stop propagation;
+  pane preview/window drag tracking remains responsible for pane item targets.
+
 ## TODO
 
 - [x] Add a `PlacesEventDeliveryPolicy` with an explicit `GpuiShells` fallback,

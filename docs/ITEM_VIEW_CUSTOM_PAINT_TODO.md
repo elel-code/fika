@@ -1605,6 +1605,12 @@ tracks.
   source registration and retained hitbox drag target callbacks, both keyed by
   retained `HitboxId` and explicitly forbidden from recreating visible GPUI
   rows/items as replacement shell owners.
+- [x] P16fl: Record the drag-time pane/Places target isolation regression.
+  `docs/PLACES_RETAINED_EVENT_DELIVERY_PLAN.md` now documents that GPUI typed
+  `on_drag_move` capture handlers are not automatically clipped to element
+  bounds. The retained Places typed payload bridge must bounds-gate move events,
+  clear only Places state when the pointer leaves Places, and avoid clearing
+  pane item targets owned by pane preview/window drag tracking.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

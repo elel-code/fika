@@ -396,6 +396,23 @@ rg -n "on_drag_move|on_drop|insert_hitbox|DragMoveEvent|DropEvent|ExternalPaths|
   retained-hitbox typed drag-move/drop delivery 的 GPUI API/patch，要么继续把 bridge
   限制为一个 sidebar-level shell，同时保持 row/section target delivery retained。
 
+2026-06-19 drag-time target isolation 切片：
+
+- 根本原因：GPUI typed `on_drag_move` handler 在 capture dispatch 阶段运行，且不会自动被
+  element bounds 裁剪。retained Places bridge 是 sidebar-level typed shell，因此必须在把
+  `event.position.y` 转成 Places local row geometry 之前，显式拒绝 pointer 位于 Places
+  layer bounds 之外的 drag-move event。
+- 如果缺少该 bounds gate，pane 内部 item drag 在 pointer 的 y 坐标与某个 Places row 重叠时，
+  仍可能进入 Places retained-DnD 路径，从而在 pane drag 过程中错误显示 Places drop
+  highlight。
+- 修复点位于 `install_places_event_dnd_handlers()`：每个 typed drag-move handler 先检查
+  `event.bounds.contains(&event.event.position)`。如果为 false，只清 retained Places DnD
+  target 和 `place_drop_target`，然后直接返回且不 stop propagation。这里不能调用
+  `clear_drag_drop_targets()`，因为同一个 drag frame 里 pane-owned item target 可能正在生效。
+- 回归规则：后续任何替换 sidebar typed bridge 的实现都必须保留 target isolation。Pointer 在
+  Places 外只清 Places state；pointer 在 Places 内才可以拥有 Places target decision 并 stop
+  propagation；pane preview/window drag tracking 继续负责 pane item target。
+
 ## TODO
 
 - [x] 添加 `PlacesEventDeliveryPolicy`，保留显式 `GpuiShells` fallback，当前默认为
