@@ -33,7 +33,9 @@ Explicit GPUI bridges:
 
 - Compact/Icons and Details drag start use GPUI `Div::on_drag` shells.
 - Rename uses the GPUI editor overlay.
-- Compact/Icons MIME/theme icons default to GPUI `img()` elements.
+- Compact/Icons MIME/theme icons use the hybrid renderer by default: GPUI
+  `img()` remains the fallback for not-yet-ready keys, while ready retained
+  image keys paint through the custom image layer.
 - Places text, icons, event delivery, context menus, DnD shells, and drag start
   remain GPUI.
 
@@ -135,14 +137,14 @@ Next design step:
 - Keep thumbnail retention keyed by thumbnail path, not icon name.
 - Keep GPUI image cache as the decode backend unless a replacement beats it.
 
-Default may change only when:
+The default is now hybrid. Future icon-renderer changes must keep:
 
-- Paired default GPUI `img()` and custom icon-renderer logs pass for `/etc` and
-  a mixed user directory.
-- Custom logs show no steady `theme_placeholder` churn, no zoom-time
-  `theme_decoded` burst, no visible icon size second-jump, and no synchronous
-  icon work regression.
-- `docs/ITEM_VIEW_RENDERER_DECISIONS.md` is updated with the evidence.
+- Paired default hybrid and `FIKA_GPUI_THEME_ICONS=1` baseline logs passing for
+  `/etc` and a mixed user directory.
+- Hybrid/custom logs free of steady `theme_placeholder` churn, zoom-time
+  `theme_decoded` burst, visible icon size second-jump, and synchronous icon
+  work regression.
+- `docs/ITEM_VIEW_RENDERER_DECISIONS.md` updated with the evidence.
 
 ### Track 3: Places Retained Event Delivery
 

@@ -114,8 +114,8 @@ Candidate module boundary:
 - `src/ui/icons/image_cache.rs`: generic retained theme-icon image cache.
 - `src/ui/file_grid/image_layer.rs`: consumes retained image handles in custom
   paint.
-- `src/ui/file_grid/renderer_policy.rs`: keeps the default GPUI image-element
-  policy until evidence changes.
+- `src/ui/file_grid/renderer_policy.rs`: owns the default hybrid policy and the
+  explicit GPUI/custom override flags.
 
 Worker orchestration remains visible-first:
 

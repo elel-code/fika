@@ -99,7 +99,8 @@ Cache 应归属 file-grid 或 icon UI，而不是 `main.rs`。候选模块边界
 
 - `src/ui/icons/image_cache.rs`：通用 retained theme-icon image cache。
 - `src/ui/file_grid/image_layer.rs`：custom paint 消费 retained image handle。
-- `src/ui/file_grid/renderer_policy.rs`：在证据改变前保持默认 GPUI image-element 策略。
+- `src/ui/file_grid/renderer_policy.rs`：拥有默认 hybrid 策略以及显式 GPUI/custom override
+  flag。
 
 Worker orchestration 保持 visible-first：
 

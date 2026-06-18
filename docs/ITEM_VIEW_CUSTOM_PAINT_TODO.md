@@ -1570,6 +1570,12 @@ tracks.
   default candidate. Evidence:
   `scripts/run-retained-renderer-evidence.sh --hybrid-icons --skip-build --prefix fika-hybrid-default-20260619`
   passed `--gate-hybrid-default-promotion` for `/etc` and Downloads.
+- [x] P16fh: Synchronize top-level roadmap and status docs after the default
+  hybrid switch. `docs/FULL_RETAINED_RENDERER_ROADMAP.md`,
+  `docs/ITEM_VIEW_CUSTOM_PAINT_STATUS.md`, and
+  `docs/RETAINED_ICON_IMAGE_CACHE_PLAN.md` now describe the current MIME/theme
+  icon state as hybrid-by-default with `FIKA_GPUI_THEME_ICONS=1` as the baseline
+  override.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

@@ -33,7 +33,8 @@
 
 - Compact/Icons 和 Details drag start 使用 GPUI `Div::on_drag` shell。
 - Rename 使用 GPUI editor overlay。
-- Compact/Icons MIME/theme icon 默认使用 GPUI `img()` element。
+- Compact/Icons MIME/theme icon 默认使用 hybrid renderer：尚未 ready 的 key 继续以
+  GPUI `img()` 作为 fallback，ready 的 retained image key 通过 custom image layer 绘制。
 - Places 文本、图标、事件传递、右键菜单、DnD shell 和 drag start 仍是 GPUI。
 
 这些 bridge 是有意保留的平台或性能边界。只能通过下面的轨道移除。
@@ -122,11 +123,11 @@ path 后，才能成为默认。
 - Thumbnail retention 继续按 thumbnail path，而不是 icon name。
 - 除非替代方案胜出，否则 GPUI image cache 仍是 decode backend。
 
-默认值只有在以下条件满足后才能改变：
+默认值现在是 hybrid。未来 icon renderer 变更必须继续满足：
 
-- 默认 GPUI `img()` 和 custom icon renderer 的配对日志在 `/etc` 与混合用户目录通过。
-- Custom 日志没有稳态 `theme_placeholder` 抖动、没有 zoom-time `theme_decoded`
-  burst、没有可见图标大小二次跳变、没有同步 icon work 回归。
+- 默认 hybrid 与 `FIKA_GPUI_THEME_ICONS=1` baseline 的配对日志在 `/etc` 与混合用户目录通过。
+- Hybrid/custom 日志没有稳态 `theme_placeholder` 抖动、没有 zoom-time
+  `theme_decoded` burst、没有可见图标大小二次跳变、没有同步 icon work 回归。
 - `docs/ITEM_VIEW_RENDERER_DECISIONS.zh-CN.md` 记录证据。
 
 ### Track 3：Places Retained Event Delivery

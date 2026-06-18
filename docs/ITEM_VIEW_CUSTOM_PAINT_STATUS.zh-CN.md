@@ -16,7 +16,7 @@ Places chrome 默认之后的当前执行路线图是
 | Compact/Icons 条目 model 和几何 | 保留 | `DirectoryModel`、可见快照、slot 池 | 当前路径无 |
 | Compact/Icons 基础背景、选择、悬停、放置色调、标签 | 已替换 | 自定义内容级绘制器 | 运行时性能和 DnD smoke 证据必须保持最新 |
 | Compact/Icons 缩略图图像 | 已替换 | 自定义图像绘制器，使用 GPUI `RetainAllImageCache` 加上保留同缩略图图像 | 挂起/失败仍复用保留图像或绘制缩略图后备 |
-| Compact/Icons MIME/主题图标图像 | 保留 model，GPUI 渲染器 | GPUI `img()` 元素叠加在保留条目 shell 上 | 主题图标路径脱离渲染路径解析，并在同一文件图标类型已有 resolved path 后跨 zoom 尺寸保持稳定；自定义主题图标绘制仅通过 `FIKA_CUSTOM_THEME_ICONS=1` 启用以获取 A/B 证据 |
+| Compact/Icons MIME/主题图标图像 | 保留 model，hybrid renderer | 尚未 ready 的 key 使用 GPUI `img()` fallback，ready 的 retained image key 使用 custom image layer | 由 `--gate-hybrid-default-promotion` 守卫；`FIKA_GPUI_THEME_ICONS=1` 保留 GPUI baseline，`FIKA_CUSTOM_THEME_ICONS=1` 仍是 full custom 压力路径 |
 | Compact/Icons 点击、菜单、悬停、光标和放置 hit testing | 已替换 | 保留 viewport/自定义 hitbox 加上活动条目拖拽窗口跟踪器 | 绘制器更改后仍需要运行时 DnD smoke |
 | Compact/Icons 拖拽启动 | 未替换 | GPUI `Div::on_drag` shell | 公共 GPUI 自定义元素拖拽启动 API 或经过审计的 Fika GPUI patch |
 | Compact/Icons 重命名编辑器 | 未替换 | GPUI 编辑器叠加层 | 仅在 caret、选择、IME 和文本输入行为被覆盖后才重新审视 |
@@ -84,7 +84,7 @@ Places chrome 默认之后的当前执行路线图是
 
 ### R2：图像和主题图标视觉稳定性
 
-在 P8 自定义图像绘制层被接受后，主题图标渲染对首帧加载占位符抖动很敏感。GPUI 的 `img()` 元素避免了自定义图像层暴露的首帧加载占位符帧。自定义主题图标绘制路径仅通过 `FIKA_CUSTOM_THEME_ICONS=1` 可用以获取配对证据。在任一渲染器中，主题图标解码保持在 GPUI 的图像缓存路径上；渲染/prepaint 代码不得同步读取或解码主题图标文件。缩略图仅按精确缩略图路径保留，并继续使用容纳的图像边界。缩略图后备图标仍然在没有真实图像存在或语义源更改时绘制。
+在 P8 自定义图像绘制层被接受后，主题图标渲染对首帧加载占位符抖动很敏感。默认 hybrid 路径会在当前 retained image key ready 前继续使用 GPUI `img()`，ready 后再把图标交给 custom image layer；`FIKA_GPUI_THEME_ICONS=1` 保留旧 GPUI baseline，`FIKA_CUSTOM_THEME_ICONS=1` 保留 full custom 压力路径。在任一渲染器中，主题图标解码保持在 GPUI 的图像缓存路径上；渲染/prepaint 代码不得同步读取或解码主题图标文件。缩略图仅按精确缩略图路径保留，并继续使用容纳的图像边界。缩略图后备图标仍然在没有真实图像存在或语义源更改时绘制。
 
 即时非 GUI 安全的工作是在 Dolphin 对齐的缩放/图标视觉更新后冻结新的运行时证据，然后执行 P15 转换顺序。大型文件网格渲染器/controller 模块已拆分为聚焦的 model/投影、controller/hit-test、painter 和 renderer-policy 模块。
 

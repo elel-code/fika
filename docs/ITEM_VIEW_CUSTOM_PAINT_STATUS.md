@@ -16,7 +16,7 @@ The active post-Places-chrome execution roadmap is
 | Compact/Icons item model and geometry | retained | `DirectoryModel`, visible snapshots, slot pools | none for current path |
 | Compact/Icons base background, selection, hover, drop tint, labels | replaced | custom content-level painter | runtime perf and DnD smoke evidence must stay current |
 | Compact/Icons thumbnail images | replaced | custom image painter using GPUI `RetainAllImageCache` plus retained same-thumbnail images | pending/failure still reuses retained images or paints thumbnail fallback |
-| Compact/Icons MIME/theme-icon images | retained model, GPUI renderer | GPUI `img()` element over retained item shell | theme-icon paths resolve off the render path and then stay stable per file-icon kind across zoom sizes; custom theme-icon painting is only enabled by `FIKA_CUSTOM_THEME_ICONS=1` for A/B evidence |
+| Compact/Icons MIME/theme-icon images | retained model, hybrid renderer | GPUI `img()` fallback for not-yet-ready keys plus custom image layer for ready retained image keys | guarded by `--gate-hybrid-default-promotion`; `FIKA_GPUI_THEME_ICONS=1` keeps the GPUI baseline and `FIKA_CUSTOM_THEME_ICONS=1` remains the full custom stress path |
 | Compact/Icons click, menu, hover, cursor, and drop hit testing | replaced | retained viewport/custom hitboxes plus active item-drag window tracker | runtime DnD smoke still required after painter changes |
 | Compact/Icons drag start | not replaced | GPUI `Div::on_drag` shell | public GPUI custom-element drag-start API or audited Fika GPUI patch |
 | Compact/Icons rename editor | not replaced | GPUI editor overlay | only revisit after caret, selection, IME, and text input behavior are covered |
@@ -145,11 +145,9 @@ the render/prepaint path. Read-ahead and offscreen items remain scheduler-owned.
 Image-backed work follows the same visual stability rule. Thumbnail probe
 success and failure remain model roles, and the thumbnail paint layer keeps a
 real decoded thumbnail through transient GPUI image-cache misses whenever the
-semantic source still matches. MIME/theme icons default to GPUI `img()`
-elements fed by the same retained item snapshots because `/etc` evidence showed
-the custom image layer exposed a first-load placeholder frame that GPUI's image
-element path avoided. The custom theme-icon paint path remains available only
-through `FIKA_CUSTOM_THEME_ICONS=1` for paired evidence. In either renderer,
+semantic source still matches. MIME/theme icons now default to hybrid: the GPUI
+`img()` element remains the fallback while the current retained image key is not
+ready, and ready keys paint through the custom image layer. In either renderer,
 theme icon decoding stays on GPUI's image-cache path; render/prepaint code must
 not synchronously read or decode theme icon files. Thumbnails are retained only
 by exact thumbnail path and continue to use contained image bounds. Thumbnail
