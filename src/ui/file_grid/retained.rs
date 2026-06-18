@@ -20,7 +20,7 @@ use fika_core::{
 use gpui::{AppContext, Context};
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const METADATA_ROLE_BATCH_SIZE: usize = 16;
 #[cfg_attr(not(test), allow(dead_code))]
@@ -29,6 +29,11 @@ pub(crate) const THUMBNAIL_PROBE_BATCH_SIZE: usize = 32;
 pub(crate) struct PaneRawFileGridSnapshot {
     pub(crate) raw_file_grid: RawFileGridSnapshot,
     pub(crate) model_data_generation: u64,
+}
+
+pub(crate) struct FileGridVisibleWorkFrame {
+    pub(crate) icon_sync_elapsed: Option<Duration>,
+    pub(crate) queue_elapsed: Option<Duration>,
 }
 
 impl FikaApp {
@@ -380,6 +385,46 @@ impl FikaApp {
         if queued_work.file_icon_resolve {
             self.maybe_start_file_icon_resolve(cx);
         }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn sync_and_start_file_grid_visible_work_for_raw_grid(
+        &mut self,
+        pane_id: PaneId,
+        generation: Generation,
+        view_mode: ViewMode,
+        model_data_generation: u64,
+        source_revision: u64,
+        item_count: usize,
+        raw_file_grid: &RawFileGridSnapshot,
+        file_icon_size: f32,
+        filtered: Option<&fika_core::FilteredModel>,
+        perf_enabled: bool,
+        cx: &mut Context<Self>,
+    ) -> Option<FileGridVisibleWorkFrame> {
+        let icon_sync_started = perf_enabled.then(Instant::now);
+        self.resolve_visible_file_icons_for_raw_grid(pane_id, raw_file_grid, file_icon_size);
+        let icon_sync_elapsed = icon_sync_started.map(|started| started.elapsed());
+
+        let queue_started = perf_enabled.then(Instant::now);
+        let queued_file_grid_model_work = self.queue_file_grid_model_work_for_raw_grid(
+            pane_id,
+            generation,
+            view_mode,
+            model_data_generation,
+            source_revision,
+            item_count,
+            raw_file_grid,
+            file_icon_size,
+            filtered,
+        )?;
+        let queue_elapsed = queue_started.map(|started| started.elapsed());
+        self.start_queued_file_grid_model_work(queued_file_grid_model_work, cx);
+
+        Some(FileGridVisibleWorkFrame {
+            icon_sync_elapsed,
+            queue_elapsed,
+        })
     }
 
     pub(crate) fn cancel_metadata_role_work_for_pane(&mut self, pane_id: PaneId) {

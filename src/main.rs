@@ -1354,13 +1354,6 @@ impl FikaApp {
                 let model_data_generation = prepared_raw_file_grid.model_data_generation;
                 let raw_elapsed = raw_started.map(|started| started.elapsed());
                 let file_icon_size = view.icon_size();
-                let icon_sync_started = perf_enabled.then(Instant::now);
-                self.resolve_visible_file_icons_for_raw_grid(
-                    pane_id,
-                    &raw_file_grid,
-                    file_icon_size,
-                );
-                let icon_sync_elapsed = icon_sync_started.map(|started| started.elapsed());
                 let visible_count = raw_file_grid
                     .visible_layout_range_and_count()
                     .or_else(|| raw_file_grid.visible_work_range_and_count())
@@ -1373,8 +1366,7 @@ impl FikaApp {
                         .map_or_else(|| pane.model.len(), |(filtered, _)| filtered.len())
                 };
                 let filtered = filtered_model.as_ref().map(|(model, _)| model);
-                let queue_started = perf_enabled.then(Instant::now);
-                let queued_file_grid_model_work = self.queue_file_grid_model_work_for_raw_grid(
+                let visible_work_frame = self.sync_and_start_file_grid_visible_work_for_raw_grid(
                     pane_id,
                     generation,
                     view.view_mode,
@@ -1384,13 +1376,13 @@ impl FikaApp {
                     &raw_file_grid,
                     file_icon_size,
                     filtered,
+                    perf_enabled,
+                    cx,
                 )?;
-                let queue_elapsed = queue_started.map(|started| started.elapsed());
                 let rubber_band = self
                     .rubber_band
                     .active_viewport_rect_for_pane(pane_id, &view);
                 let filter_bar = self.filter_bar_snapshot(pane_id, focused_pane, item_count);
-                self.start_queued_file_grid_model_work(queued_file_grid_model_work, cx);
                 let convert_started = perf_enabled.then(Instant::now);
                 let projection = self.project_retained_file_grid_for_pane(
                     pane_id,
@@ -1421,8 +1413,8 @@ impl FikaApp {
                         item_count,
                         visible_count,
                         raw_elapsed,
-                        icon_sync_elapsed,
-                        queue_elapsed,
+                        icon_sync_elapsed: visible_work_frame.icon_sync_elapsed,
+                        queue_elapsed: visible_work_frame.queue_elapsed,
                         convert_elapsed,
                         total_elapsed: pane_started.elapsed(),
                         slot_stats: item_paint_slot_stats,

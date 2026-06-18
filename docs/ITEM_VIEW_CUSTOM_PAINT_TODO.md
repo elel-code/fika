@@ -1204,6 +1204,10 @@ by risk and evidence, not by how custom-painted a surface looks.
   retained facade. The render loop now asks for a raw grid that has already
   applied same-frame visible metadata role results and receives the updated
   model data generation, instead of rebuilding the raw grid from `main.rs`.
+- [x] P16dr: Move visible icon sync, model-work queueing, and queued worker
+  startup behind one file-grid retained facade entry. The render loop keeps the
+  same icon-sync and queue perf fields, but no longer sequences the metadata,
+  thumbnail, and icon worker controller steps directly.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

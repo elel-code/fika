@@ -323,6 +323,7 @@
 - [x] P16do：将 thumbnail probe worker 编排移入 file-grid retained facade。thumbnail probe 批次启动、后台缓存探测、scheduler completion、model result application、继续调度和通知决策现在与 thumbnail result application 放在一起，而不是 `main.rs`。
 - [x] P16dp：将 visible model work startup 保持在 file-grid retained facade 内。queue 现在返回 typed `QueuedVisibleModelWork` 协议，`main.rs` 只委托 worker 启动，不再拆解 metadata、thumbnail 和 file-icon 三个布尔值。
 - [x] P16dq：将 visible metadata resnapshot 编排移入 file-grid retained facade。render loop 现在请求一个已经应用同帧可见 metadata role 结果的 raw grid，并接收更新后的 model data generation，不再从 `main.rs` 重建 raw grid。
+- [x] P16dr：将 visible icon sync、model-work queueing 和 queued worker startup 收到一个 file-grid retained facade 入口后面。render loop 保留相同的 icon-sync 与 queue perf 字段，但不再直接串起 metadata、thumbnail 和 icon worker controller 步骤。
 - [ ] P16q：在每个 P16 实现切片之后，单独提交并附带相关验证：仅文档切片需要 `git diff --check`；代码切片需要 `cargo fmt`、`cargo check`、`cargo test -q`、`scripts/check-item-view-perf-analyzer.sh`、`scripts/check-places-perf-analyzer.sh` 和 `git diff --check`。
 - [x] P16r：记录运行时自测试和突破记录规则。可重复的滚动、缩放、启动图标、调整大小、模式切换和 Places 目标回退应在依赖手动计时之前通过 autosmoke 日志和分析器脚本重现。任何确认的优化突破必须记录症状、Dolphin 比较边界、根本原因、实现、保存的日志/分析器命令和未来回归守卫在拥有的设计或决策文档中。
 
