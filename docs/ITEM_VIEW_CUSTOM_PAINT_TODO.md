@@ -999,6 +999,10 @@ by risk and evidence, not by how custom-painted a surface looks.
   `clear_active_rubber_band_for_pane()` now own production-path active-band
   pane checks and active-only clearing. `src/main.rs` still decides which app
   lifecycle events request that clearing.
+- [x] P16cb: Move pending rubber-band press state replacement into the
+  rubber-band module. `press_pending_rubber_band_for_pane()` now owns clearing
+  the active band and installing a pending band for a blank-press start.
+  `src/main.rs` still decides when a blank press is valid.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

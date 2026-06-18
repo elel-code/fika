@@ -153,7 +153,8 @@ use ui::rubber_band::{
     PendingRubberBand, RubberBandState, active_rubber_band_is_for_pane,
     active_rubber_band_viewport_rect_for_pane, clear_active_rubber_band_for_pane,
     clear_rubber_band_selection_activity_for_pane, finish_rubber_band_for_pane,
-    rubber_band_selection_activity_is_active, set_rubber_band_selection_activity_for_count,
+    press_pending_rubber_band_for_pane, rubber_band_selection_activity_is_active,
+    set_rubber_band_selection_activity_for_count,
 };
 #[cfg(test)]
 use ui::shortcuts::PlaceInputAction;
@@ -4015,8 +4016,12 @@ impl FikaApp {
             return false;
         }
         self.clear_selection_from_blank(pane_id);
-        self.rubber_band = None;
-        self.rubber_band_pending = Some(PendingRubberBand::new(pane_id, start));
+        press_pending_rubber_band_for_pane(
+            &mut self.rubber_band_pending,
+            &mut self.rubber_band,
+            pane_id,
+            start,
+        );
         true
     }
 
