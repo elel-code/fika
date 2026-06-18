@@ -1159,6 +1159,10 @@ by risk and evidence, not by how custom-painted a surface looks.
   item-view facade. Filter-bar viewport priming now delegates through
   `sync_item_view_scroll_handle_to_view_authoritatively()` instead of
   constructing a scroll snapshot and calling the scroll-state API in `main.rs`.
+- [x] P16dh: Move thin item-view scroll lifecycle entry points into the
+  item-view facade. `main.rs` now delegates handle lookup, scrollbar-drag start,
+  pane reset, and pane removal through item-view functions instead of calling
+  `ItemViewScrollState` methods directly in production paths.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

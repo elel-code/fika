@@ -103,9 +103,13 @@ use ui::filter_bar::{
 };
 use ui::icons::{FileIconCache, file_icon_resolve_results_for_requests};
 use ui::item_view::{
-    ItemViewScrollState, finish_item_view_scrollbar_drag as finish_item_view_scrollbar_drag_state,
+    ItemViewScrollState, begin_item_view_scrollbar_drag as begin_item_view_scrollbar_drag_state,
+    finish_item_view_scrollbar_drag as finish_item_view_scrollbar_drag_state,
+    item_view_scroll_handle_for_pane as item_view_scroll_handle_for_pane_state,
     preserve_item_view_scroll_for_layout_change as preserve_item_view_scroll_for_layout_change_state,
     projected_item_viewport_width_for_pane_width,
+    remove_item_view_scroll_for_pane as remove_item_view_scroll_for_pane_state,
+    reset_item_view_scroll_for_pane as reset_item_view_scroll_for_pane_state,
     scroll_pane_from_item_view_wheel as scroll_item_view_pane_from_wheel,
     sync_item_view_scroll_handle_to_pane_view as sync_item_view_handle_to_pane_view_state,
     sync_item_view_scroll_handle_to_view_authoritatively as sync_item_view_handle_to_view_authoritatively,
@@ -1186,7 +1190,7 @@ impl FikaApp {
     }
 
     fn item_view_scroll_handle_for_pane(&mut self, pane_id: PaneId) -> ScrollHandle {
-        self.item_view_scroll.handle_for_pane(pane_id)
+        item_view_scroll_handle_for_pane_state(&mut self.item_view_scroll, pane_id)
     }
 
     fn sync_pane_view_from_item_view_scroll_handle(&mut self, pane_id: PaneId) -> bool {
@@ -1205,7 +1209,7 @@ impl FikaApp {
     }
 
     pub(crate) fn begin_item_view_scrollbar_drag(&mut self, pane_id: PaneId) -> bool {
-        self.item_view_scroll.begin_scrollbar_drag(pane_id)
+        begin_item_view_scrollbar_drag_state(&mut self.item_view_scroll, pane_id)
     }
 
     pub(crate) fn update_item_view_scrollbar_drag(&mut self, pane_id: PaneId) -> bool {
@@ -1225,7 +1229,7 @@ impl FikaApp {
     }
 
     fn reset_item_view_scroll_for_pane(&mut self, pane_id: PaneId) {
-        self.item_view_scroll.reset_pane(pane_id);
+        reset_item_view_scroll_for_pane_state(&mut self.item_view_scroll, pane_id);
     }
 
     fn sync_item_view_scroll_handle_to_pane_view(&mut self, pane_id: PaneId) {
@@ -1237,7 +1241,7 @@ impl FikaApp {
     }
 
     fn remove_item_view_scroll_for_pane(&mut self, pane_id: PaneId) {
-        self.item_view_scroll.remove_pane(pane_id);
+        remove_item_view_scroll_for_pane_state(&mut self.item_view_scroll, pane_id);
     }
 
     fn clear_filter_focus_for_pane(&mut self, pane_id: PaneId) {
@@ -13586,7 +13590,7 @@ text/plain=viewer.desktop;\n",
             .unwrap();
         let view = app.panes.pane(pane_id).unwrap().view.clone();
         sync_item_view_handle_to_view_authoritatively(&mut app.item_view_scroll, pane_id, &view);
-        app.item_view_scroll.begin_scrollbar_drag(pane_id);
+        app.begin_item_view_scrollbar_drag(pane_id);
 
         app.begin_pane_loading_transition(pane_id, PaneLoadingScrollPolicy::Preserve);
 

@@ -2,7 +2,7 @@ mod scroll_bar;
 mod scroll_state;
 
 use fika_core::{PaneController, PaneId, ViewMode, ViewState};
-use gpui::{ScrollDelta, px};
+use gpui::{ScrollDelta, ScrollHandle, px};
 
 pub(crate) use scroll_bar::{
     ITEM_VIEW_SCROLLBAR_RESERVED_EXTENT, ItemViewScrollbarAxis, item_view_scrollbar_container,
@@ -174,6 +174,34 @@ pub(crate) fn changed_item_view_scroll_snapshot(
     let previous = item_view_scroll_snapshot_for_view(previous);
     let next = item_view_scroll_snapshot_for_view(next);
     (previous != next).then_some(next)
+}
+
+pub(crate) fn item_view_scroll_handle_for_pane(
+    scroll_state: &mut ItemViewScrollState,
+    pane_id: PaneId,
+) -> ScrollHandle {
+    scroll_state.handle_for_pane(pane_id)
+}
+
+pub(crate) fn begin_item_view_scrollbar_drag(
+    scroll_state: &mut ItemViewScrollState,
+    pane_id: PaneId,
+) -> bool {
+    scroll_state.begin_scrollbar_drag(pane_id)
+}
+
+pub(crate) fn reset_item_view_scroll_for_pane(
+    scroll_state: &mut ItemViewScrollState,
+    pane_id: PaneId,
+) {
+    scroll_state.reset_pane(pane_id);
+}
+
+pub(crate) fn remove_item_view_scroll_for_pane(
+    scroll_state: &mut ItemViewScrollState,
+    pane_id: PaneId,
+) {
+    scroll_state.remove_pane(pane_id);
 }
 
 pub(crate) fn sync_item_view_scroll_handle_to_view_authoritatively(
