@@ -487,6 +487,12 @@ Places chrome 默认之后的当前执行入口是
   renderer 推进，但默认 GPUI `img()` 仍保持不变，直到更严格的 hybrid 默认提升 gate
   能把 phase maxima、image paint、static visual variance 和 renderer-policy 分布与
   GPUI baseline 比较清楚。
+- [x] P16ff：添加严格的 hybrid icon 默认提升 gate。
+  `scripts/compare-item-image-renderers.sh --gate-hybrid-default-promotion`
+  现在在 handoff gate 之上，用显式容差比较 `icon_sync`、item-view phase max total、
+  static visual prepaint/paint 和 image paint 与 GPUI baseline。2026-06-19 的 `/etc` 和
+  Downloads hybrid 日志都通过了这个更严格的 gate，因此下一段代码切片可以尝试默认 hybrid
+  renderer policy，并重新运行同一 gate。
 - [ ] P16q：在每个 P16 实现切片之后，单独提交并附带相关验证：仅文档切片需要 `git diff --check`；代码切片需要 `cargo fmt`、`cargo check`、`cargo test -q`、`scripts/check-item-view-perf-analyzer.sh`、`scripts/check-places-perf-analyzer.sh` 和 `git diff --check`。
 - [x] P16r：记录运行时自测试和突破记录规则。可重复的滚动、缩放、启动图标、调整大小、模式切换和 Places 目标回退应在依赖手动计时之前通过 autosmoke 日志和分析器脚本重现。任何确认的优化突破必须记录症状、Dolphin 比较边界、根本原因、实现、保存的日志/分析器命令和未来回归守卫在拥有的设计或决策文档中。
 

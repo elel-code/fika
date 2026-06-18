@@ -332,15 +332,13 @@ The paired 2026-06-19 hybrid run closes that mixed-directory evidence gap:
 `scripts/run-retained-renderer-evidence.sh --hybrid-icons --skip-build --prefix
 fika-hybrid-icons-20260619` produced `/etc` and Downloads default-vs-hybrid
 logs, and both passed `scripts/compare-item-image-renderers.sh
---gate-hybrid-handoff`. `/etc` hybrid reported `theme_loaded=444`,
+--gate-hybrid-handoff` and `--gate-hybrid-default-promotion`. `/etc` hybrid reported `theme_loaded=444`,
 `theme_placeholder=0`, `theme_decoded=0`, `theme_prewarm_pending=52`, and
 `max_paint=504us`; Downloads hybrid reported `theme_loaded=310`,
 `theme_placeholder=0`, `theme_decoded=0`, `theme_prewarm_pending=44`, and
-`max_paint=378us`. This supports continuing toward a default hybrid renderer,
-but the default remains GPUI `img()` for ordinary MIME/theme icons until a
-stricter hybrid default-promotion gate compares item-view phase maxima, image
-paint, static visual variance, and renderer-policy distribution against the
-GPUI baseline.
+`max_paint=378us`. This supports a follow-up default-policy code slice: ordinary
+MIME/theme icons can move to the hybrid renderer by default if the code change
+preserves the same gate pass and keeps GPUI fallback for not-yet-ready keys.
 
 ## Next Renderer Decisions
 
@@ -350,7 +348,8 @@ GPUI baseline.
 2. Use runtime logs to decide whether any currently custom-painted surface
    should stay custom-painted or fall back to a GPUI renderer over the retained
    model.
-3. Add a strict hybrid icon default-promotion gate before switching ordinary
-   MIME/theme icons away from GPUI `img()` by default.
+3. Switch ordinary MIME/theme icons to the hybrid renderer by default only in a
+   code slice that reruns and passes `--gate-hybrid-default-promotion` for
+   `/etc` and a mixed user directory.
 4. Do not start a Places custom-paint migration until item-view runtime DnD and
    perf gates are refreshed.

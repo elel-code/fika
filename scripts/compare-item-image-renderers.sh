@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
     cat <<'EOF'
-Usage: compare-item-image-renderers.sh [--gate-default-promotion|--gate-hybrid-handoff] CANDIDATE_LOG DEFAULT_LOG
+Usage: compare-item-image-renderers.sh [--gate-default-promotion|--gate-hybrid-handoff|--gate-hybrid-default-promotion] CANDIDATE_LOG DEFAULT_LOG
 
 Compares two FIKA_PERF_ITEM_VIEW logs for Compact/Icons item image rendering:
 
@@ -25,6 +25,10 @@ Options:
       Exit non-zero unless the hybrid path proves GPUI fallback, prewarm
       activity, ready-key custom painting, and no theme placeholder/decode
       churn.
+  --gate-hybrid-default-promotion
+      Exit non-zero unless the hybrid path passes the handoff gate and stays
+      within explicit item-view, static-visual, image-paint, and icon-sync
+      tolerances versus the default GPUI image-element baseline.
 EOF
 }
 
@@ -45,6 +49,14 @@ while [[ $# -gt 0 ]]; do
                 exit 2
             fi
             gate_mode="hybrid-handoff"
+            shift
+            ;;
+        --gate-hybrid-default-promotion)
+            if [[ "$gate_mode" != "none" ]]; then
+                usage >&2
+                exit 2
+            fi
+            gate_mode="hybrid-default-promotion"
             shift
             ;;
         *)
@@ -99,9 +111,72 @@ metric() {
     '
 }
 
+phase_metric() {
+    local summary="$1"
+    local phase="$2"
+    local key="$3"
+    printf '%s\n' "$summary" | awk -v phase="$phase" -v key="$key" '
+        $1 == "phase" && $2 == phase {
+            prefix = key "="
+            for (i = 3; i <= NF; i++) {
+                if (index($i, prefix) == 1) {
+                    value = substr($i, length(prefix) + 1)
+                    sub(/us$/, "", value)
+                    print value + 0
+                    found = 1
+                    exit
+                }
+            }
+        }
+        END {
+            if (!found) {
+                print 0
+            }
+        }
+    '
+}
+
+perf_limit() {
+    local baseline="$1"
+    local percent="$2"
+    local slack="$3"
+    local floor="$4"
+    local ratio=$(( (baseline * percent + 99) / 100 ))
+    local plus=$(( baseline + slack ))
+    local limit="$ratio"
+    if (( plus > limit )); then
+        limit="$plus"
+    fi
+    if (( floor > limit )); then
+        limit="$floor"
+    fi
+    printf '%s\n' "$limit"
+}
+
+require_within() {
+    local label="$1"
+    local candidate="$2"
+    local baseline="$3"
+    local percent="$4"
+    local slack="$5"
+    local floor="$6"
+    local limit
+    limit="$(perf_limit "$baseline" "$percent" "$slack" "$floor")"
+    if (( candidate > limit )); then
+        gate_reasons+=("$label regression: candidate=${candidate}us baseline=${baseline}us limit=${limit}us")
+    fi
+}
+
 custom_image_frames="$(metric "$custom_summary" "image_frames:" "image_frames")"
 custom_image_layer="$(metric "$custom_summary" "renderer_policy_frames:" "max_image_layer")"
 custom_gpui_image="$(metric "$custom_summary" "renderer_policy_frames:" "max_gpui_image_element")"
+custom_icon_sync="$(metric "$custom_summary" "item_view_stage_max:" "icon_sync")"
+custom_phase_initial="$(phase_metric "$custom_summary" "initial" "max_total")"
+custom_phase_content="$(phase_metric "$custom_summary" "content-change" "max_total")"
+custom_phase_geometry="$(phase_metric "$custom_summary" "geometry-change" "max_total")"
+custom_phase_steady="$(phase_metric "$custom_summary" "steady" "max_total")"
+custom_static_prepaint="$(metric "$custom_summary" "static_visual_frames:" "max_prepaint")"
+custom_static_paint="$(metric "$custom_summary" "static_visual_frames:" "max_paint")"
 custom_theme_loaded="$(metric "$custom_summary" "image_sources:" "theme_loaded")"
 custom_theme_decoded="$(metric "$custom_summary" "image_sources:" "theme_decoded")"
 custom_theme_retained="$(metric "$custom_summary" "image_sources:" "theme_retained")"
@@ -116,6 +191,13 @@ custom_image_paint="$(metric "$custom_summary" "image_frames:" "max_paint")"
 default_image_frames="$(metric "$default_summary" "image_frames:" "image_frames")"
 default_image_layer="$(metric "$default_summary" "renderer_policy_frames:" "max_image_layer")"
 default_gpui_image="$(metric "$default_summary" "renderer_policy_frames:" "max_gpui_image_element")"
+default_icon_sync="$(metric "$default_summary" "item_view_stage_max:" "icon_sync")"
+default_phase_initial="$(phase_metric "$default_summary" "initial" "max_total")"
+default_phase_content="$(phase_metric "$default_summary" "content-change" "max_total")"
+default_phase_geometry="$(phase_metric "$default_summary" "geometry-change" "max_total")"
+default_phase_steady="$(phase_metric "$default_summary" "steady" "max_total")"
+default_static_prepaint="$(metric "$default_summary" "static_visual_frames:" "max_prepaint")"
+default_static_paint="$(metric "$default_summary" "static_visual_frames:" "max_paint")"
 default_theme_placeholder="$(metric "$default_summary" "image_sources:" "theme_placeholder")"
 default_image_paint="$(metric "$default_summary" "image_frames:" "max_paint")"
 
@@ -145,6 +227,7 @@ fi
 
 promotion_gate_state="not requested"
 hybrid_gate_state="not requested"
+hybrid_promotion_gate_state="not requested"
 gate_reasons=()
 if [[ "$gate_mode" == "default-promotion" ]]; then
     promotion_gate_state="pass"
@@ -169,7 +252,7 @@ if [[ "$gate_mode" == "default-promotion" ]]; then
     if (( ${#gate_reasons[@]} > 0 )); then
         promotion_gate_state="fail"
     fi
-elif [[ "$gate_mode" == "hybrid-handoff" ]]; then
+elif [[ "$gate_mode" == "hybrid-handoff" || "$gate_mode" == "hybrid-default-promotion" ]]; then
     hybrid_gate_state="pass"
     if [[ "$custom_renderer_state" != "hybrid-readiness-handoff" ]]; then
         gate_reasons+=("hybrid log did not show both GPUI fallback and custom image-layer handoff")
@@ -201,6 +284,23 @@ elif [[ "$gate_mode" == "hybrid-handoff" ]]; then
     if (( ${#gate_reasons[@]} > 0 )); then
         hybrid_gate_state="fail"
     fi
+    if [[ "$gate_mode" == "hybrid-default-promotion" ]]; then
+        hybrid_promotion_gate_state="pass"
+        if [[ "$hybrid_gate_state" == "fail" ]]; then
+            hybrid_promotion_gate_state="fail"
+        fi
+        require_within "icon_sync" "$custom_icon_sync" "$default_icon_sync" 125 1000 0
+        require_within "phase initial" "$custom_phase_initial" "$default_phase_initial" 125 500 1000
+        require_within "phase content-change" "$custom_phase_content" "$default_phase_content" 125 500 1000
+        require_within "phase geometry-change" "$custom_phase_geometry" "$default_phase_geometry" 125 500 1000
+        require_within "phase steady" "$custom_phase_steady" "$default_phase_steady" 125 500 1000
+        require_within "static visual prepaint" "$custom_static_prepaint" "$default_static_prepaint" 125 1000 0
+        require_within "static visual paint" "$custom_static_paint" "$default_static_paint" 125 1000 0
+        require_within "image paint" "$custom_image_paint" "$default_image_paint" 125 250 750
+        if (( ${#gate_reasons[@]} > 0 )); then
+            hybrid_promotion_gate_state="fail"
+        fi
+    fi
 fi
 
 gate_reason_text="none"
@@ -219,6 +319,13 @@ cat <<EOF
 | --- | ---: | ---: |
 | renderer max image_layer | $custom_image_layer | $default_image_layer |
 | renderer max gpui_image_element | $custom_gpui_image | $default_gpui_image |
+| icon_sync max us | $custom_icon_sync | $default_icon_sync |
+| phase initial max total us | $custom_phase_initial | $default_phase_initial |
+| phase content-change max total us | $custom_phase_content | $default_phase_content |
+| phase geometry-change max total us | $custom_phase_geometry | $default_phase_geometry |
+| phase steady max total us | $custom_phase_steady | $default_phase_steady |
+| static visual max prepaint us | $custom_static_prepaint | $default_static_prepaint |
+| static visual max paint us | $custom_static_paint | $default_static_paint |
 | item-image frames | $custom_image_frames | $default_image_frames |
 | max item-image paint us | $custom_image_paint | $default_image_paint |
 | theme loaded | $custom_theme_loaded | 0 |
@@ -242,6 +349,7 @@ Automated interpretation:
 - Prewarm evidence: theme_prewarm_loaded=$custom_theme_prewarm_loaded theme_prewarm_decoded=$custom_theme_prewarm_decoded theme_prewarm_retained=$custom_theme_prewarm_retained theme_prewarm_pending=$custom_theme_prewarm_pending
 - Default-promotion gate: $promotion_gate_state
 - Hybrid-handoff gate: $hybrid_gate_state
+- Hybrid-default-promotion gate: $hybrid_promotion_gate_state
 - Gate reasons: $gate_reason_text
 
 Candidate analyzer summary:
@@ -257,6 +365,6 @@ $default_summary
 \`\`\`
 EOF
 
-if [[ "$promotion_gate_state" == "fail" || "$hybrid_gate_state" == "fail" ]]; then
+if [[ "$promotion_gate_state" == "fail" || "$hybrid_gate_state" == "fail" || "$hybrid_promotion_gate_state" == "fail" ]]; then
     exit 1
 fi

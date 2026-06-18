@@ -98,11 +98,15 @@ timeout 8s env FIKA_PERF_ITEM_VIEW=1 FIKA_HYBRID_THEME_ICONS=1 FIKA_AUTOSMOKE_IT
 
 scripts/compare-item-image-renderers.sh --gate-hybrid-handoff /tmp/fika-evidence-icon-hybrid-etc.log /tmp/fika-evidence-icon-hybrid-default-etc.log
 scripts/compare-item-image-renderers.sh --gate-hybrid-handoff /tmp/fika-evidence-icon-hybrid-downloads.log /tmp/fika-evidence-icon-hybrid-default-downloads.log
+scripts/compare-item-image-renderers.sh --gate-hybrid-default-promotion /tmp/fika-evidence-icon-hybrid-etc.log /tmp/fika-evidence-icon-hybrid-default-etc.log
+scripts/compare-item-image-renderers.sh --gate-hybrid-default-promotion /tmp/fika-evidence-icon-hybrid-downloads.log /tmp/fika-evidence-icon-hybrid-default-downloads.log
 ```
 
 A default-promotion candidate must have no visible `theme_placeholder` churn, no
 zoom-time `theme_decoded` burst, no visible icon-size second jump, and no
-sync icon-work regression.
+sync icon-work regression. Hybrid default-promotion candidates must additionally
+stay within the compare script's explicit phase, static-visual, image-paint, and
+icon-sync tolerances versus the default GPUI image-element baseline.
 
 ## Places Baseline
 

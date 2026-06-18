@@ -27,7 +27,7 @@ Options:
 
   --hybrid-icons
       Capture MIME/theme icon default-vs-hybrid readiness handoff logs and
-      require the hybrid-handoff gate to pass.
+      require the hybrid default-promotion gate to pass.
 
   --all
       Same as --core --icons --hybrid-icons.
@@ -344,10 +344,10 @@ if [[ "$capture_hybrid_icons" == true ]]; then
         env FIKA_PERF_ITEM_VIEW=1 FIKA_HYBRID_THEME_ICONS=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll "$binary" "$downloads_dir"
 
     compare="$root_dir/scripts/compare-item-image-renderers.sh"
-    run_gate "icon hybrid handoff etc" \
-        "$compare" --gate-hybrid-handoff "$icon_hybrid_etc_log" "$icon_default_etc_log"
-    run_gate "icon hybrid handoff downloads" \
-        "$compare" --gate-hybrid-handoff "$icon_hybrid_downloads_log" "$icon_default_downloads_log"
+    run_gate "icon hybrid default promotion etc" \
+        "$compare" --gate-hybrid-default-promotion "$icon_hybrid_etc_log" "$icon_default_etc_log"
+    run_gate "icon hybrid default promotion downloads" \
+        "$compare" --gate-hybrid-default-promotion "$icon_hybrid_downloads_log" "$icon_default_downloads_log"
 fi
 
 echo "retained renderer evidence complete"

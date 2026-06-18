@@ -1557,6 +1557,13 @@ tracks.
   in place until a stricter hybrid default-promotion gate compares phase
   maxima, image paint, static visual variance, and renderer-policy distribution
   against the GPUI baseline.
+- [x] P16ff: Add a strict hybrid icon default-promotion gate.
+  `scripts/compare-item-image-renderers.sh --gate-hybrid-default-promotion`
+  now extends the handoff gate with explicit tolerances for `icon_sync`,
+  item-view phase max totals, static visual prepaint/paint, and image paint
+  against the GPUI baseline. The 2026-06-19 `/etc` and Downloads hybrid logs
+  both pass this stricter gate, so the next code slice can attempt a default
+  hybrid renderer policy and rerun the same gate.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,
