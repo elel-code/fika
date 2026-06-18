@@ -1490,6 +1490,15 @@ tracks.
   now reports `gpui_sidebar_leave_shells`, and the analyzer rejects
   retained-DnD logs that reintroduce them without loosening the full
   retained-event gate.
+- [x] P16ew: Split the remaining Places GPUI event-shell accounting into
+  row/section event shells and the sidebar typed DnD payload shell. The
+  interaction policy log now reports `gpui_row_section_event_shells` and
+  `gpui_typed_dnd_payload_shells` in addition to the total
+  `gpui_event_shells`. Default retained-DnD must show
+  `gpui_row_section_event_shells=0` and `gpui_typed_dnd_payload_shells=1`,
+  proving row/section target delivery is retained while the typed payload entry
+  point remains a GPUI platform boundary. The full retained-event gate still
+  requires both split counters to be zero.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

@@ -135,12 +135,27 @@ impl PlacesEventDeliveryPolicy {
     }
 
     fn gpui_event_shells(self, rows: usize, sections: usize) -> usize {
+        self.gpui_row_section_event_shells(rows, sections)
+            + self.gpui_typed_dnd_payload_shells(rows, sections)
+    }
+
+    fn gpui_row_section_event_shells(self, rows: usize, sections: usize) -> usize {
         match self {
             Self::GpuiShells
             | Self::RetainedProbe
             | Self::RetainedPointer
             | Self::RetainedTargeting => rows + sections,
+            Self::RetainedDnd => 0,
+        }
+    }
+
+    fn gpui_typed_dnd_payload_shells(self, rows: usize, sections: usize) -> usize {
+        match self {
             Self::RetainedDnd => usize::from(rows + sections > 0),
+            Self::GpuiShells
+            | Self::RetainedProbe
+            | Self::RetainedPointer
+            | Self::RetainedTargeting => 0,
         }
     }
 
@@ -422,6 +437,16 @@ impl PlacesInteractionPolicyLog {
             .gpui_event_shells(self.row_count, self.section_count)
     }
 
+    pub(crate) fn gpui_row_section_event_shells(self) -> usize {
+        self.event_delivery_policy
+            .gpui_row_section_event_shells(self.row_count, self.section_count)
+    }
+
+    pub(crate) fn gpui_typed_dnd_payload_shells(self) -> usize {
+        self.event_delivery_policy
+            .gpui_typed_dnd_payload_shells(self.row_count, self.section_count)
+    }
+
     pub(crate) fn gpui_sidebar_leave_shells(self) -> usize {
         self.event_delivery_policy.gpui_sidebar_leave_shells()
     }
@@ -447,7 +472,7 @@ impl PlacesInteractionPolicyLog {
 
 pub(crate) fn emit_places_interaction_policy_log(log: PlacesInteractionPolicyLog) {
     eprintln!(
-        "[fika places-interaction-policy] rows={} sections={} row_target_decisions={} section_target_decisions={} retained_hitboxes={} retained_probe_hitboxes={} gpui_event_shells={} drag_shells={} drag_start_models={} gpui_sidebar_leave_shells={} event_policy={} retained_targeting={} retained_dnd={}",
+        "[fika places-interaction-policy] rows={} sections={} row_target_decisions={} section_target_decisions={} retained_hitboxes={} retained_probe_hitboxes={} gpui_event_shells={} gpui_row_section_event_shells={} gpui_typed_dnd_payload_shells={} drag_shells={} drag_start_models={} gpui_sidebar_leave_shells={} event_policy={} retained_targeting={} retained_dnd={}",
         log.row_count,
         log.section_count,
         log.retained_row_target_decisions(),
@@ -455,6 +480,8 @@ pub(crate) fn emit_places_interaction_policy_log(log: PlacesInteractionPolicyLog
         log.retained_hitboxes(),
         log.retained_probe_hitboxes(),
         log.gpui_event_shells(),
+        log.gpui_row_section_event_shells(),
+        log.gpui_typed_dnd_payload_shells(),
         log.drag_shells(),
         log.drag_start_models(),
         log.gpui_sidebar_leave_shells(),
@@ -600,6 +627,8 @@ mod tests {
         assert_eq!(policy.retained_hitboxes(), 0);
         assert_eq!(policy.retained_probe_hitboxes(), 0);
         assert_eq!(policy.gpui_event_shells(), 13);
+        assert_eq!(policy.gpui_row_section_event_shells(), 13);
+        assert_eq!(policy.gpui_typed_dnd_payload_shells(), 0);
         assert_eq!(policy.gpui_sidebar_leave_shells(), 3);
         assert_eq!(policy.drag_shells(), 11);
         assert_eq!(policy.drag_start_models(), 11);
@@ -618,6 +647,8 @@ mod tests {
         assert_eq!(policy.retained_hitboxes(), 0);
         assert_eq!(policy.retained_probe_hitboxes(), 13);
         assert_eq!(policy.gpui_event_shells(), 13);
+        assert_eq!(policy.gpui_row_section_event_shells(), 13);
+        assert_eq!(policy.gpui_typed_dnd_payload_shells(), 0);
         assert_eq!(policy.gpui_sidebar_leave_shells(), 0);
         assert_eq!(policy.retained_targeting(), 0);
         assert_eq!(policy.retained_dnd(), 0);
@@ -643,6 +674,8 @@ mod tests {
         assert_eq!(policy.retained_hitboxes(), 13);
         assert_eq!(policy.retained_probe_hitboxes(), 13);
         assert_eq!(policy.gpui_event_shells(), 13);
+        assert_eq!(policy.gpui_row_section_event_shells(), 13);
+        assert_eq!(policy.gpui_typed_dnd_payload_shells(), 0);
         assert_eq!(policy.gpui_sidebar_leave_shells(), 0);
         assert_eq!(policy.retained_targeting(), 13);
         assert_eq!(policy.retained_dnd(), 0);
@@ -669,6 +702,8 @@ mod tests {
         assert_eq!(policy.retained_hitboxes(), 13);
         assert_eq!(policy.retained_probe_hitboxes(), 13);
         assert_eq!(policy.gpui_event_shells(), 1);
+        assert_eq!(policy.gpui_row_section_event_shells(), 0);
+        assert_eq!(policy.gpui_typed_dnd_payload_shells(), 1);
         assert_eq!(policy.gpui_sidebar_leave_shells(), 0);
         assert_eq!(policy.retained_targeting(), 13);
         assert_eq!(policy.retained_dnd(), 13);
@@ -687,6 +722,8 @@ mod tests {
         assert_eq!(policy.retained_hitboxes(), 0);
         assert_eq!(policy.retained_probe_hitboxes(), 13);
         assert_eq!(policy.gpui_event_shells(), 13);
+        assert_eq!(policy.gpui_row_section_event_shells(), 13);
+        assert_eq!(policy.gpui_typed_dnd_payload_shells(), 0);
         assert_eq!(policy.gpui_sidebar_leave_shells(), 3);
         assert_eq!(policy.drag_shells(), 11);
         assert_eq!(policy.drag_start_models(), 11);

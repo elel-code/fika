@@ -362,6 +362,22 @@ Retained sidebar leave shell removal slice:
   reintroduce those shells, while the full retained-event gate remains strict
   because the sidebar typed DnD payload shell is still present.
 
+Remaining shell accounting split slice:
+
+- `[fika places-interaction-policy]` now splits the overloaded
+  `gpui_event_shells` count into `gpui_row_section_event_shells` and
+  `gpui_typed_dnd_payload_shells`.
+- Default retained-DnD should report `gpui_row_section_event_shells=0` and
+  `gpui_typed_dnd_payload_shells=1`: row/section target delivery is retained,
+  but GPUI still owns the typed drag payload entry point at sidebar level.
+- GPUI/probe/pointer/targeting fallback states still report
+  `gpui_row_section_event_shells=rows+sections` and
+  `gpui_typed_dnd_payload_shells=0`.
+- The full retained-event gate remains strict and now verifies both split
+  counters are zero. The default retained-DnD mixed state should therefore fail
+  specifically on the typed payload shell rather than an ambiguous event-shell
+  total.
+
 ## TODO
 
 - [x] Add a `PlacesEventDeliveryPolicy` with an explicit `GpuiShells` fallback,
@@ -412,5 +428,10 @@ Retained sidebar leave shell removal slice:
   pointer policies. Current status: retained-pointer, retained-targeting, and
   retained-DnD report `gpui_sidebar_leave_shells=0`; GPUI/probe policies report
   `3`; analyzer fixtures reject retained-DnD logs that reintroduce them.
+- [x] Split remaining GPUI event-shell accounting by boundary type. Current
+  status: retained-DnD reports `gpui_row_section_event_shells=0` and
+  `gpui_typed_dnd_payload_shells=1`, while fallback states report row/section
+  shells explicitly; analyzer fixtures reject retained-DnD logs that reintroduce
+  row/section GPUI event shells.
 - [ ] Remove GPUI row/section event callbacks after analyzer gates pass.
 - [ ] Keep GPUI row drag-start shells until Track 4 solves typed drag start.

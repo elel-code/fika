@@ -331,6 +331,20 @@ retained sidebar leave shell 移除切片：
   下报告 `3`。analyzer 会拒绝重新引入这些 shell 的 retained-DnD 日志，同时 full
   retained-event gate 仍保持严格，因为 sidebar typed DnD payload shell 还存在。
 
+剩余 shell accounting 拆分切片：
+
+- `[fika places-interaction-policy]` 现在把原本重载的 `gpui_event_shells` 拆成
+  `gpui_row_section_event_shells` 和 `gpui_typed_dnd_payload_shells`。
+- 默认 retained-DnD 应报告 `gpui_row_section_event_shells=0` 和
+  `gpui_typed_dnd_payload_shells=1`：row/section target delivery 已经 retained，
+  但 GPUI 仍拥有 sidebar-level typed drag payload 入口。
+- GPUI/probe/pointer/targeting fallback 状态仍报告
+  `gpui_row_section_event_shells=rows+sections` 和
+  `gpui_typed_dnd_payload_shells=0`。
+- full retained-event gate 仍保持严格，现在会验证这两个拆分计数都为 0。默认
+  retained-DnD mixed state 因此会明确失败在 typed payload shell，而不是一个含糊的
+  event-shell 总数。
+
 ## TODO
 
 - [x] 添加 `PlacesEventDeliveryPolicy`，保留显式 `GpuiShells` fallback，当前默认为
@@ -374,5 +388,9 @@ retained sidebar leave shell 移除切片：
   retained-pointer、retained-targeting 和 retained-DnD 报告
   `gpui_sidebar_leave_shells=0`；GPUI/probe policy 报告 `3`；analyzer 夹具会拒绝重新引入这些
   shell 的 retained-DnD 日志。
+- [x] 按边界类型拆分剩余 GPUI event-shell accounting。当前状态：retained-DnD 报告
+  `gpui_row_section_event_shells=0` 和 `gpui_typed_dnd_payload_shells=1`；fallback 状态显式报告
+  row/section shell；analyzer 夹具会拒绝重新引入 row/section GPUI event shell 的
+  retained-DnD 日志。
 - [ ] analyzer gates 通过后移除 GPUI row/section event callbacks。
 - [ ] Track 4 解决 typed drag start 前，继续保留 GPUI row drag-start shells。
