@@ -105,13 +105,13 @@ use ui::icons::{FileIconCache, file_icon_resolve_results_for_requests};
 #[cfg(test)]
 use ui::item_view::item_view_scroll_snapshot_for_pane;
 use ui::item_view::{
-    ItemViewScrollState, apply_item_view_scroll_snapshot_to_pane,
-    changed_item_view_scroll_snapshot,
+    ItemViewScrollState, changed_item_view_scroll_snapshot,
     finish_item_view_scrollbar_drag as finish_item_view_scrollbar_drag_state,
-    item_view_scroll_snapshot_for_existing_pane, item_view_scroll_snapshot_for_view,
+    item_view_scroll_snapshot_for_view,
     preserve_item_view_scroll_for_layout_change as preserve_item_view_scroll_for_layout_change_state,
     projected_item_viewport_width_for_pane_width,
     sync_item_view_scroll_handle_to_pane_view as sync_item_view_handle_to_pane_view_state,
+    sync_pane_view_after_item_view_bounds_update as sync_item_view_pane_after_bounds_update,
     sync_pane_view_from_authoritative_item_view_scroll_handle as sync_item_view_pane_from_authoritative_scroll_handle,
     sync_pane_view_from_item_view_scroll_handle as sync_item_view_pane_from_scroll_handle,
     viewport_extents_after_view_mode_axis_change,
@@ -3742,16 +3742,11 @@ impl FikaApp {
                 max_scroll_y,
             )
             .unwrap_or(false);
-        let Some(view_snapshot) = item_view_scroll_snapshot_for_existing_pane(&self.panes, pane_id)
-        else {
-            return changed;
-        };
-        let panes = &mut self.panes;
-        let scroll_changed = self
-            .item_view_scroll
-            .sync_view_after_bounds_update_snapshot(pane_id, view_snapshot, |view| {
-                apply_item_view_scroll_snapshot_to_pane(panes, pane_id, view);
-            });
+        let scroll_changed = sync_item_view_pane_after_bounds_update(
+            &mut self.item_view_scroll,
+            &mut self.panes,
+            pane_id,
+        );
         changed || scroll_changed
     }
 

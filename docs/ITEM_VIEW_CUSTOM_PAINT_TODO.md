@@ -1147,6 +1147,10 @@ by risk and evidence, not by how custom-painted a surface looks.
   delegate handle sync and transient cleanup through
   `sync_item_view_scroll_handle_to_pane_view()` instead of looking up the pane
   snapshot and calling the scroll-state API directly in `main.rs`.
+- [x] P16de: Move item-view bounds-update scroll sync orchestration into the
+  item-view facade. `set_pane_viewport_bounds()` still writes viewport bounds
+  through the pane controller, but subsequent handle/action sync and pane
+  scroll writeback now go through `sync_pane_view_after_item_view_bounds_update()`.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,
