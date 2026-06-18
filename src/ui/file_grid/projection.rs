@@ -151,6 +151,16 @@ pub(crate) fn content_item_hit_at_point(
     })
 }
 
+pub(crate) fn pane_content_item_hit_at_point(
+    input: PaneLayoutProjectionInput<'_>,
+    point: ViewPoint,
+) -> Option<ContentItemHit> {
+    let model = input.model;
+    let rename_draft = input.rename_draft;
+    let projection = pane_layout_projection(input);
+    content_item_hit_at_point(&projection, model, rename_draft, point)
+}
+
 pub(crate) fn model_indexes_intersecting_visual_rect(
     projection: &PaneLayoutProjection,
     model: &DirectoryModel,
@@ -176,6 +186,16 @@ pub(crate) fn model_indexes_intersecting_visual_rect(
                 .then_some(model_index)
         })
         .collect()
+}
+
+pub(crate) fn pane_model_indexes_intersecting_visual_rect(
+    input: PaneLayoutProjectionInput<'_>,
+    rect: ViewRect,
+) -> Vec<usize> {
+    let model = input.model;
+    let rename_draft = input.rename_draft;
+    let projection = pane_layout_projection(input);
+    model_indexes_intersecting_visual_rect(&projection, model, rename_draft, rect)
 }
 
 #[derive(Clone, Debug)]
@@ -560,6 +580,63 @@ mod tests {
             ),
             vec![1, 2]
         );
+    }
+
+    #[test]
+    fn pane_content_query_helpers_build_projection_and_preserve_filtered_mapping() {
+        let entries = Arc::new(vec![
+            test_entry("alpha.txt"),
+            test_entry("beta.txt"),
+            test_entry("gamma.txt"),
+        ]);
+        let mut model = DirectoryModel::for_directory("/tmp/fika-projection-query".into());
+        model.replace_listing("/tmp/fika-projection-query".into(), entries);
+        let filtered = FilteredModel::from_model(&model, &NameFilter::glob("beta.txt"));
+        let view = ViewState {
+            view_mode: ViewMode::Details,
+            ..ViewState::default()
+        };
+        let mut compact_column_widths = CompactColumnWidthCache::default();
+
+        let hit = pane_content_item_hit_at_point(
+            PaneLayoutProjectionInput {
+                model: &model,
+                view: &view,
+                filtered: Some(&filtered),
+                source_revision: 1,
+                rename_draft: None,
+                trash_view: false,
+                compact_column_widths: &mut compact_column_widths,
+            },
+            ViewPoint { x: 12.0, y: 40.0 },
+        )
+        .expect("filtered details row should hit");
+
+        assert_eq!(hit.model_index, 1);
+        assert_eq!(
+            hit.path,
+            PathBuf::from("/tmp/fika-projection-query/beta.txt")
+        );
+
+        let selected = pane_model_indexes_intersecting_visual_rect(
+            PaneLayoutProjectionInput {
+                model: &model,
+                view: &view,
+                filtered: Some(&filtered),
+                source_revision: 1,
+                rename_draft: None,
+                trash_view: false,
+                compact_column_widths: &mut compact_column_widths,
+            },
+            ViewRect {
+                x: 0.0,
+                y: 32.0,
+                width: 480.0,
+                height: 32.0,
+            },
+        );
+
+        assert_eq!(selected, vec![1]);
     }
 
     fn test_entry(name: &str) -> Entry {

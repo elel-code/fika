@@ -55,8 +55,9 @@ pub(crate) use perf::{
     item_view_perf_enabled,
 };
 pub(crate) use projection::{
-    ContentItemHit, PaneLayoutProjection, PaneLayoutProjectionInput, content_item_hit_at_point,
-    model_indexes_intersecting_visual_rect, pane_layout_projection,
+    ContentItemHit, PaneLayoutProjection, PaneLayoutProjectionInput,
+    pane_content_item_hit_at_point, pane_layout_projection,
+    pane_model_indexes_intersecting_visual_rect,
 };
 pub(crate) use slots::VisibleItemSlotPool;
 #[cfg(test)]

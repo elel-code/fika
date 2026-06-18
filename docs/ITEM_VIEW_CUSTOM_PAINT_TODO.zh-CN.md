@@ -282,6 +282,7 @@
 - [x] P16cc：将 active rubber-band start state replacement 移入 rubber-band 模块。`start_active_rubber_band_for_pane()` 现在拥有 pending drag 激活时清理 pending state 并安装 active band 的规则。`src/main.rs` 仍清理 draft 并应用 selection 更新。
 - [x] P16cd：将 active rubber-band update writeback 移入 rubber-band 模块。`update_active_rubber_band_for_pane()` 现在拥有同 pane current point 更新，以及把更新后的 active band 写回 active state slot 的规则。`src/main.rs` 仍使用返回的 band rect 计算 selection。
 - [x] P16ce：将 pending rubber-band activation start selection 移入 rubber-band 模块。`pending_rubber_band_activation_start()` 现在拥有判断 pending band 是否可在当前 pane/content point 激活，并返回 active-band startup 所需 start point 的规则。`src/main.rs` 仍提供 clamp 后的当前点，并执行 draft cleanup/selection。
+- [x] P16cf：将 file-grid projected hit/intersection query composition 移入 projection 模块。`pane_content_item_hit_at_point()` 和 `pane_model_indexes_intersecting_visual_rect()` 现在拥有构建 pane layout projection、应用 rename-draft visual bounds、并把 filtered layout indexes 映射回 model indexes 的顺序。`src/main.rs` 仍提供 pane/filter/cache 输入，并决定 query result 如何影响 selection、DnD 和 context-menu 行为。
 - [ ] P16q：在每个 P16 实现切片之后，单独提交并附带相关验证：仅文档切片需要 `git diff --check`；代码切片需要 `cargo fmt`、`cargo check`、`cargo test -q`、`scripts/check-item-view-perf-analyzer.sh`、`scripts/check-places-perf-analyzer.sh` 和 `git diff --check`。
 - [x] P16r：记录运行时自测试和突破记录规则。可重复的滚动、缩放、启动图标、调整大小、模式切换和 Places 目标回退应在依赖手动计时之前通过 autosmoke 日志和分析器脚本重现。任何确认的优化突破必须记录症状、Dolphin 比较边界、根本原因、实现、保存的日志/分析器命令和未来回归守卫在拥有的设计或决策文档中。
 

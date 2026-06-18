@@ -90,11 +90,12 @@ use ui::file_grid::{
     PaneLayoutProjectionInput, PaneViewportGeometry, PaneVisibleWorkKey, RetainedHoveredItem,
     StaticItemTextShapeCache, VisibleItemSlotPool, VisibleItemSnapshotCache,
     clamped_content_point_from_window_position, compact_text_width, compact_text_width_for_name,
-    content_item_hit_at_point, content_point_from_window_position,
-    emit_item_view_autosmoke_complete, emit_item_view_autosmoke_scroll_action,
-    emit_item_view_autosmoke_start, emit_item_view_autosmoke_zoom_action, item_view_perf_enabled,
-    model_indexes_intersecting_visual_rect, pane_at_window_position, pane_layout_projection,
-    rename_editor_required_text_width, resolve_visible_file_icons_for_raw_grid,
+    content_point_from_window_position, emit_item_view_autosmoke_complete,
+    emit_item_view_autosmoke_scroll_action, emit_item_view_autosmoke_start,
+    emit_item_view_autosmoke_zoom_action, item_view_perf_enabled, pane_at_window_position,
+    pane_content_item_hit_at_point, pane_layout_projection,
+    pane_model_indexes_intersecting_visual_rect, rename_editor_required_text_width,
+    resolve_visible_file_icons_for_raw_grid,
 };
 use ui::filter_bar::{
     FILTER_BAR_HEIGHT, FilterBarSnapshot, FilteredModelCacheEntry, PaneFilterState,
@@ -3945,7 +3946,11 @@ impl FikaApp {
         ))
     }
 
-    fn layout_projection_for_pane(&mut self, pane_id: PaneId) -> Option<PaneLayoutProjection> {
+    fn with_pane_layout_projection_input<R>(
+        &mut self,
+        pane_id: PaneId,
+        f: impl FnOnce(PaneLayoutProjectionInput<'_>) -> R,
+    ) -> Option<R> {
         let filtered_model = self.filtered_model_for_pane(pane_id);
         let pane = self.panes.pane(pane_id)?;
         let filtered = filtered_model.as_ref().map(|(filtered, _)| filtered);
@@ -3954,7 +3959,7 @@ impl FikaApp {
             .rename_draft
             .as_ref()
             .filter(|draft| draft.pane_id == pane_id);
-        Some(pane_layout_projection(PaneLayoutProjectionInput {
+        Some(f(PaneLayoutProjectionInput {
             model: &pane.model,
             view: &pane.view,
             filtered,
@@ -3965,32 +3970,25 @@ impl FikaApp {
         }))
     }
 
+    fn layout_projection_for_pane(&mut self, pane_id: PaneId) -> Option<PaneLayoutProjection> {
+        self.with_pane_layout_projection_input(pane_id, pane_layout_projection)
+    }
+
     fn item_at_content_point(
         &mut self,
         pane_id: PaneId,
         point: ViewPoint,
     ) -> Option<ContentItemHit> {
-        let projection = self.layout_projection_for_pane(pane_id)?;
-        let rename_draft = self
-            .rename_draft
-            .as_ref()
-            .filter(|draft| draft.pane_id == pane_id);
-        let pane = self.panes.pane(pane_id)?;
-        content_item_hit_at_point(&projection, &pane.model, rename_draft, point)
+        self.with_pane_layout_projection_input(pane_id, |input| {
+            pane_content_item_hit_at_point(input, point)
+        })?
     }
 
     fn indexes_intersecting_visual_rect(&mut self, pane_id: PaneId, rect: ViewRect) -> Vec<usize> {
-        let Some(projection) = self.layout_projection_for_pane(pane_id) else {
-            return Vec::new();
-        };
-        let rename_draft = self
-            .rename_draft
-            .as_ref()
-            .filter(|draft| draft.pane_id == pane_id);
-        let Some(pane) = self.panes.pane(pane_id) else {
-            return Vec::new();
-        };
-        model_indexes_intersecting_visual_rect(&projection, &pane.model, rename_draft, rect)
+        self.with_pane_layout_projection_input(pane_id, |input| {
+            pane_model_indexes_intersecting_visual_rect(input, rect)
+        })
+        .unwrap_or_default()
     }
 
     fn handle_blank_click(&mut self, pane_id: PaneId, position: gpui::Point<gpui::Pixels>) -> bool {

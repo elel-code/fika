@@ -1016,6 +1016,13 @@ by risk and evidence, not by how custom-painted a surface looks.
   whether a pending band can activate for the current pane/content point and
   returning the start point for active-band startup. `src/main.rs` still
   supplies the clamped current point and performs draft cleanup/selection.
+- [x] P16cf: Move file-grid projected hit/intersection query composition into
+  the projection module. `pane_content_item_hit_at_point()` and
+  `pane_model_indexes_intersecting_visual_rect()` now own the sequence of
+  building a pane layout projection, applying rename-draft visual bounds, and
+  mapping filtered layout indexes back to model indexes. `src/main.rs` still
+  supplies pane/filter/cache inputs and decides how query results affect
+  selection, DnD, and context-menu behavior.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,
