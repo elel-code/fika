@@ -131,6 +131,29 @@ Places 作为 pane 放置悬停的行为参考仍然有用：将 Place 拖到 pa
 - 图像和文本形状缓存是 pane 本地且按 slot/内容键控的
 - 渲染器策略日志证明哪些表面保持为 GPUI shell
 
+当前条目视图复用已经遵循这个所有权规则。`VisibleItemSlotPool`
+将 `ItemId` 映射到 pane 本地 `slot_id`，通过有界 free-list 回收离屏
+slot，并在原始快照变成渲染快照之前分配这些 slot。随后
+`ItemPaintSlotCache` 按 `slot_id` 保留 Compact/Icons 的绘制内容、几何和
+视觉状态；详情按 `ItemId` 保留行绘制状态。GPUI id 仍然存在于剩余的
+shell 表面，但它们是保留 identity 的消费者，不是条目复用的来源。例如
+`item_shell.rs` 使用 `("item-slot", slot_id)`，GPUI 主题图标 image 元素也
+只用 `slot_id` 稳定当前 GPUI 渲染器表面；可复用条目状态仍然属于 slot 池
+和 paint-slot cache。
+
+证据锚点是保留测试：
+`visible_item_slot_pool_reuses_offscreen_slots`、
+`visible_item_slot_pool_caps_recycled_slots`、`src/ui/file_grid/tests.rs` 中的
+paint-slot 内容/几何/视觉变化测试，以及运行时
+`[fika item-paint-slots]` / `[fika renderer-policy]` 日志。未来的复用池变更如果
+改变视觉 identity 来源，必须更新这些测试或日志。它不应依赖 GPUI 子 key
+作为主要复用机制。`scripts/analyze-item-view-perf.sh --require-paint-slots`
+是保留 paint-slot 证据的运行时门；它拒绝缺失非空 `[fika item-paint-slots]`
+条目的日志，并汇总 inserted、content、geometry、visual、unchanged、removed
+和 entries 最大值。`--expect-retained-item-policy` 是配套 renderer-policy 门：
+基础视觉必须覆盖每个条目的保留表面，保留交互加重命名叠加层必须覆盖每个
+条目，剩余 GPUI 拖拽/image 边界必须在策略计数中保持显式。
+
 此目标可以在拖拽启动和重命名保持在 GPUI 上的同时推进。池边界是保留条目/行状态，而非声称今天每个渲染器都是自定义绘制的。
 
 ### R7：完整转换执行顺序
