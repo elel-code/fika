@@ -434,7 +434,7 @@ impl ItemViewScrollState {
         self.set_handle_offset(pane_id, scroll_x, scroll_y)
     }
 
-    pub(crate) fn sync_handle_to_view_snapshot(
+    fn sync_handle_to_view_snapshot(
         &self,
         pane_id: PaneId,
         view: ItemViewScrollViewSnapshot,
