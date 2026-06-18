@@ -6,7 +6,7 @@ use gpui::{Context, Div, MouseButton, ParentElement, Stateful, Styled, div, px, 
 
 use dnd::{PlaceRowDndConfig, install_place_row_dnd};
 
-use super::super::drag::{PlaceDragPreview, PlaceDragStartSource};
+use super::super::drag::{PlaceDragStartSource, install_place_drag_start_shell};
 use super::super::icon_view::place_icon_view;
 use super::super::perf::PlacesRowVisualPolicy;
 use super::super::snapshot::PlaceSnapshot;
@@ -44,7 +44,7 @@ pub(super) fn place_row(
     let gpui_text = !row_visual_policy.paints_text();
     let row_id = format!("place-{visible_index}");
     let path = place.path.clone();
-    let place_drag = PlaceDragStartSource::from_snapshot(&place).into_drag();
+    let place_drag_source = PlaceDragStartSource::from_snapshot(&place);
     let context_place = place.clone();
     let insert_before_index = place.index;
     let insert_after_index = place.index + 1;
@@ -58,7 +58,7 @@ pub(super) fn place_row(
     let device_id = place.device_id.clone();
     let label = place.label.clone();
 
-    let mut row = div()
+    let row = div()
         .id(row_id)
         .relative()
         .flex()
@@ -90,10 +90,8 @@ pub(super) fn place_row(
         .when(
             row_shell_cursor_enabled && (mounted || device || network),
             |row| row.cursor_pointer(),
-        )
-        .on_drag(place_drag, |drag, cursor_offset, _, cx| {
-            cx.new(|_| PlaceDragPreview::from_drag(drag, cursor_offset))
-        });
+        );
+    let mut row = install_place_drag_start_shell(row, place_drag_source);
 
     if row_shell_targeting_enabled {
         row = row

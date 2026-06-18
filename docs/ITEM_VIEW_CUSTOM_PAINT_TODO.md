@@ -1433,6 +1433,14 @@ tracks.
   Evidence: `/tmp/fika-places-drag-start-model.log` passed
   `--require-retained-dnd-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-chrome-policy`
   with `max_drag_start_models=11`.
+- [x] P16ep: Centralize the remaining Places GPUI drag-start shell installer.
+  Row construction now calls `install_place_drag_start_shell()` from
+  `src/ui/places/drag.rs` instead of installing `Div::on_drag` and constructing
+  `PlaceDragPreview` inline. This keeps the platform shell explicit while
+  payload projection, preview construction, and GPUI drag-start wiring share the
+  same owned drag module boundary. Evidence:
+  `/tmp/fika-places-drag-start-model.log` passed
+  `--require-retained-dnd-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-chrome-policy`.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

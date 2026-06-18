@@ -253,6 +253,8 @@ retained drag-start source-model 切片：
 - 因此 row shell 仍保留为平台 drag-start 触发器，但 `places/drag.rs` 现在拥有从
   `PlaceSnapshot` 投影 `PlaceDragStartSource` 的逻辑。该投影在安装 GPUI shell 前决定
   path、label、icon、source index、movable flag、export payload 和 preview model。
+  shell 安装本身也通过 `install_place_drag_start_shell()` 集中，因此 row construction
+  不再拥有 preview creation 或 drag-start payload wiring。
 - `[fika places-interaction-policy]` 报告 `drag_start_models=rows`，并且
   `scripts/analyze-places-perf.sh --require-interaction-policy` 会拒绝 drag-start model
   数量与可见 row 数不一致的日志。这在保留平台 shell 的同时保持 Dolphin
@@ -281,7 +283,7 @@ retained drag-start source-model 切片：
   和 drop dispatch。剩余 GPUI 边界是 payload delivery 和 drag-start，而不是 per-row/section
   DnD target logic。
 - [x] 将 Places drag-start source modeling 移出 row shell。当前状态：
-  `PlaceDragStartSource` 位于 `places/drag.rs`，且 analyzer 日志要求
-  `drag_start_models=rows`。
+  `PlaceDragStartSource` 和 `install_place_drag_start_shell()` 位于 `places/drag.rs`，
+  且 analyzer 日志要求 `drag_start_models=rows`。
 - [ ] analyzer gates 通过后移除 GPUI row/section event callbacks。
 - [ ] Track 4 解决 typed drag start 前，继续保留 GPUI row drag-start shells。

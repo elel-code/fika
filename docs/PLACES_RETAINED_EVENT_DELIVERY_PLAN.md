@@ -275,7 +275,9 @@ Retained drag-start source-model slice:
   `places/drag.rs` now owns the `PlaceDragStartSource` projection from
   `PlaceSnapshot`. That projection decides the path, label, icon, source index,
   movable flag, export payload, and preview model before the GPUI shell is
-  installed.
+  installed. The shell installation itself is centralized through
+  `install_place_drag_start_shell()`, so row construction does not own preview
+  creation or drag-start payload wiring.
 - `[fika places-interaction-policy]` reports `drag_start_models=rows`, and
   `scripts/analyze-places-perf.sh --require-interaction-policy` rejects logs
   where the drag-start model count differs from visible row count. This keeps
@@ -309,7 +311,7 @@ Retained drag-start source-model slice:
   sidebar-level GPUI typed drag shell. The remaining GPUI boundary is payload
   delivery and drag-start, not per-row/section DnD target logic.
 - [x] Move Places drag-start source modeling out of the row shell. Current
-  status: `PlaceDragStartSource` lives in `places/drag.rs`, and analyzer logs
-  require `drag_start_models=rows`.
+  status: `PlaceDragStartSource` and `install_place_drag_start_shell()` live in
+  `places/drag.rs`, and analyzer logs require `drag_start_models=rows`.
 - [ ] Remove GPUI row/section event callbacks after analyzer gates pass.
 - [ ] Keep GPUI row drag-start shells until Track 4 solves typed drag start.

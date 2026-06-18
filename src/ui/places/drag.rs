@@ -1,7 +1,8 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use gpui::{Context, IntoElement, ParentElement, Render, Styled, div, px, rgb};
+use gpui::prelude::*;
+use gpui::{Context, Div, IntoElement, ParentElement, Render, Stateful, Styled, div, px, rgb};
 
 use super::super::drag_drop::{
     DragExportPayload, DragPreviewLayout, drag_preview_layout_for_cursor_offset,
@@ -74,6 +75,15 @@ impl PlaceDragStartSource {
     pub(crate) fn into_drag(self) -> PlaceDrag {
         self.drag
     }
+}
+
+pub(crate) fn install_place_drag_start_shell(
+    row: Stateful<Div>,
+    source: PlaceDragStartSource,
+) -> Stateful<Div> {
+    row.on_drag(source.into_drag(), |drag, cursor_offset, _, cx| {
+        cx.new(|_| PlaceDragPreview::from_drag(drag, cursor_offset))
+    })
 }
 
 pub(crate) fn place_drag_is_movable(place: &PlaceSnapshot) -> bool {
