@@ -344,6 +344,58 @@ delivery moves out of GPUI shells.
   max_row_gpui=11 max_row_visual_layer=0
 ```
 
+## Retained Event Delivery Plan
+
+Places event delivery is a separate migration from row visual painting. The
+current opt-in row visual layer can paint row backgrounds, labels, trash
+markers, and insert indicators, but GPUI row/section shells still own
+activation clicks, context-menu targeting, drag move/drop callbacks, row hover,
+cursor state, and drag start. This is intentional: Dolphin's
+`KFilePlacesView` keeps model/order/device semantics outside the delegate
+renderer, so Fika should move event ownership only after the retained
+interaction geometry and behavior evidence are explicit.
+
+The next retained Places event-delivery work should move in this order:
+
+1. Add a renderer-policy/analyzer gate for the future retained-hitbox policy
+   before changing default delivery. The future accepted shape is
+   `retained_hitboxes=rows+sections`, `gpui_event_shells=0`, and
+   `drag_shells=rows`; drag shells remain because GPUI still owns typed drag
+   initiation. The current accepted shape remains `retained_hitboxes=0` and
+   `gpui_event_shells=rows+sections`.
+2. Route hover and cursor through retained row/section hitboxes first. This is
+   non-mutating and should prove sidebar-leave clearing, row body hover,
+   section hover, and insert-zone cursor behavior without changing activation,
+   context menus, or drops.
+3. Move activation and context-menu target selection to retained hitboxes while
+   keeping the existing context-menu overlay and action execution path. This
+   must preserve blank sidebar, section header, normal place, editable bookmark,
+   trash, and device row menu distinctions.
+4. Move drag-move and drop target delivery to retained hitboxes, using
+   `PlacesInteractionGeometry::hit_test_y()` and the existing
+   `place_drop_zone_for_y()` edge/body rule. This must preserve item/external
+   path drops, place reorder insert-before/after targets, place-to-pane drops,
+   and clearing on sidebar leave.
+5. Remove GPUI row/section event shells only after the current GPUI policy and
+   opt-in visual policy both pass the retained event-delivery smoke. The GPUI
+   drag-start shell stays until the item-view drag-start API boundary is solved
+   globally.
+
+Required evidence before step 5:
+
+```text
+scripts/analyze-places-perf.sh --require-hit-test-autosmoke --require-interaction-policy --require-interaction-geometry --expect-retained-event-policy ...
+scripts/analyze-places-perf.sh --require-autosmoke --require-interaction-policy --require-interaction-geometry --expect-retained-event-policy ...
+scripts/analyze-places-perf.sh --require-overflow-autosmoke --require-interaction-policy --require-interaction-geometry --expect-retained-event-policy ...
+scripts/analyze-places-perf.sh --require-layout-autosmoke --require-interaction-policy --require-interaction-geometry --expect-retained-event-policy ...
+```
+
+`--expect-retained-event-policy` does not exist yet; add it in the same slice
+that introduces retained Places event delivery logs. It should reject mixed
+claims where row visuals are custom-painted but event delivery still depends on
+GPUI row shells, and it should continue to require GPUI drag shells until typed
+drag initiation can start from retained hitboxes.
+
 ## Overflow Autosmoke
 
 For Places scroll/overflow evidence, run:

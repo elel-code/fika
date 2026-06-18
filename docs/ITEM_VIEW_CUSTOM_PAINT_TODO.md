@@ -749,6 +749,13 @@ by risk and evidence, not by how custom-painted a surface looks.
   prove which scripted scenario produced the log. Evidence:
   `scripts/check-item-view-perf-analyzer.sh` covers the positive `ZoomScroll`
   fixture and a negative missing-scroll-action fixture.
+- [x] P16am: Split the next Places migration boundary into retained event
+  delivery instead of treating row visual painting as enough. The Places plan
+  now defines a future retained event policy gate, keeps GPUI drag-start shells
+  explicit, and orders the work as hover/cursor, activation/context-menu
+  targeting, drag-move/drop delivery, then GPUI row/section shell removal. This
+  prevents the opt-in row visual painter from being mistaken for
+  behavior-complete retained Places rows.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,
