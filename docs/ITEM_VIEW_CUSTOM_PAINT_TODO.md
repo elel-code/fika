@@ -554,6 +554,23 @@ by risk and evidence, not by how custom-painted a surface looks.
   default-vs-`FIKA_CUSTOM_THEME_ICONS=1` zoom/scroll logs prove the custom
   theme-icon painter is neutral or better without first-load placeholders,
   zoom-time `theme_decoded` churn, or size jumps.
+- [ ] P16k1: Design and implement a retained MIME/theme icon image cache before
+  making custom theme-icon paint the default. The cache should be keyed by at
+  least `(iconName, icon_size_px)` plus theme/scale/color-scheme inputs when
+  those affect the selected path. It must retain the last real same-key image
+  during refresh, keep thumbnail retention separate by thumbnail path, and never
+  synchronously decode theme icon files during prepaint.
+- [ ] P16k2: Add paired default-vs-custom autosmoke evidence for the future
+  MIME/theme icon renderer. Required scenarios: `/etc` and a mixed user
+  directory, startup plus `FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll`, default GPUI
+  `img()` versus `FIKA_CUSTOM_THEME_ICONS=1` or a future retained-icon-cache
+  flag. The custom path must show no steady `theme_placeholder` churn, no
+  zoom-time `theme_decoded` burst, no visible size jump, and `icon_sync` within
+  the Dolphin-style visible-first budget before the default renderer can change.
+- [ ] P16k3: Only after P16k1/P16k2 pass, reconsider the Compact/Icons
+  MIME/theme icon renderer policy in `docs/ITEM_VIEW_RENDERER_DECISIONS.md`.
+  Until then, keep the current split: thumbnails on the custom image layer and
+  ordinary MIME/theme icons on GPUI `img()` over retained item shells.
 - [x] P16l: Establish the Places GPUI sidebar baseline before any retained row
   painter work. `FIKA_PERF_PLACES_VIEW=1` now logs snapshot time, sidebar build
   time, and the current renderer-policy surface counts for the GPUI row path;
@@ -1032,6 +1049,11 @@ by risk and evidence, not by how custom-painted a surface looks.
   `ItemViewScrollViewSnapshot` now carries the pane view scroll tuple through
   handle-sync and authoritative-handle sync paths, and `src/main.rs` no longer
   passes those values as loose fields for those production paths.
+- [x] P16ci: Record the future MIME/theme icon custom-renderer work stream.
+  `docs/ITEM_VIEW_RENDERER_DECISIONS.md` now documents the retained
+  `(iconName, icon_size)` image-cache direction, hybrid promotion option,
+  no-sync-decode rule, and paired default/custom evidence gate needed before
+  replacing the default GPUI `img()` MIME/theme renderer.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

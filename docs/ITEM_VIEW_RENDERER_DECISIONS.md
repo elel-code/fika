@@ -219,6 +219,54 @@ default theme icons decode through GPUI `img()`, while the custom-theme A/B
 paint layer may retain a previous same-`iconName` image but must not
 synchronously decode theme icon files during prepaint.
 
+## Future MIME/Theme Icon Custom Renderer
+
+The current default intentionally keeps Compact/Icons MIME/theme icons on GPUI
+`img()` elements. A future full-custom renderer is allowed only as a separate
+work stream, because the retained model/slot architecture is already in place
+and the remaining risk is image-resource readiness, not item identity.
+
+The target architecture should mirror Dolphin's pixmap stability rather than
+the current custom-theme A/B path:
+
+- Add an explicit retained MIME/theme icon image cache keyed by at least
+  `(iconName, icon_size_px)`. Include theme identity, scale factor, or color
+  scheme in the key if the selected icon path can differ across those inputs.
+- Keep thumbnail retention keyed by thumbnail path. Do not mix thumbnail and
+  theme-icon retention, because their invalidation and failure semantics differ.
+- Keep the previously loaded same-key real image visible while a same-key
+  resource refresh is pending. A markerless placeholder is acceptable only for
+  true first-load or permanent failure, never as a replacement for an already
+  loaded real icon.
+- Do not synchronously decode SVGs or raster theme icon files during GPUI
+  prepaint. Path resolution may use the existing visible-first bounded
+  `icon_sync` policy; image decode must stay on the image-cache/scheduler path.
+- Prevent zoom-time second commits: ordinary MIME/theme icons must request the
+  current layout icon size immediately, and any custom renderer must paint that
+  size in the same icon bounds used by layout.
+- Consider a hybrid promotion path: keep GPUI `img()` as the default renderer
+  while warming the retained theme-icon image cache, then route a visible icon
+  through the custom image layer only when the retained image for its current
+  `(iconName, size)` key is ready or when the fallback is a true first-load
+  placeholder.
+
+The default renderer policy may switch from GPUI `img()` to the custom
+MIME/theme image layer only after paired desktop-session evidence proves all of
+the following for `/etc` and a mixed user directory:
+
+- Default and custom runs both pass
+  `FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll` analyzer gates.
+- The custom run has no steady-state `theme_placeholder` churn, no zoom-time
+  `theme_decoded` burst, and no visible icon size jump.
+- `icon_sync` remains within the Dolphin-style visible-first budget; read-ahead
+  icon path work must not re-enter render conversion.
+- Renderer-policy logs still prove retained base visuals and retained
+  interaction for item surfaces. Only the image renderer surface is allowed to
+  change.
+- Manual review or screenshot/video evidence confirms startup, first directory
+  load, zoom, scroll, and mode switching are visually no worse than the GPUI
+  baseline.
+
 ## Next Renderer Decisions
 
 1. Keep the remaining drag-start shells until the GPUI API boundary changes.
