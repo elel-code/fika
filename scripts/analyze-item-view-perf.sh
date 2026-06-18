@@ -28,6 +28,9 @@ Options:
   --require-renderer-policy
       Fail if [fika renderer-policy] surface-count logs are missing.
 
+  --require-autosmoke
+      Fail if item-view autosmoke start/complete and scenario actions are missing.
+
   --require-renderer-policy-modes A,B,C
       Fail if any comma-separated view mode is absent from renderer-policy logs.
 
@@ -59,6 +62,7 @@ require_details=false
 require_static_visual=false
 require_interaction=false
 require_renderer_policy=false
+require_autosmoke=false
 required_modes=""
 required_static_modes=""
 required_renderer_policy_modes=""
@@ -97,6 +101,9 @@ while [[ $# -gt 0 ]]; do
             ;;
         --require-renderer-policy)
             require_renderer_policy=true
+            ;;
+        --require-autosmoke)
+            require_autosmoke=true
             ;;
         --require-renderer-policy-modes)
             if [[ $# -lt 2 || "$2" == --* ]]; then
@@ -240,6 +247,7 @@ awk \
     -v require_static_visual="$require_static_visual" \
     -v require_interaction="$require_interaction" \
     -v require_renderer_policy="$require_renderer_policy" \
+    -v require_autosmoke="$require_autosmoke" \
     -v required_modes="$required_modes" \
     -v required_static_modes="$required_static_modes" \
     -v required_renderer_policy_modes="$required_renderer_policy_modes" \
@@ -463,6 +471,42 @@ BEGIN {
     max_assign(single_max, "renderer_policy_rename_overlay", rename_overlay)
 }
 
+/^\[fika autosmoke\] item-view start / {
+    autosmoke_start_seen++
+    scenario = field("scenario")
+    if (scenario != "") {
+        if (autosmoke_start_scenario != "" && autosmoke_start_scenario != scenario) {
+            autosmoke_scenario_conflict = 1
+        }
+        autosmoke_start_scenario = scenario
+    }
+}
+
+/^\[fika autosmoke\] item-view complete / {
+    autosmoke_complete_seen++
+    scenario = field("scenario")
+    if (scenario != "") {
+        if (autosmoke_complete_scenario != "" && autosmoke_complete_scenario != scenario) {
+            autosmoke_scenario_conflict = 1
+        }
+        autosmoke_complete_scenario = scenario
+    }
+}
+
+/^\[fika autosmoke\] item-view action=/ {
+    action = field("action")
+    changed = field("changed")
+    if (action == "zoom-in") {
+        autosmoke_zoom_in_seen++
+    } else if (action == "zoom-out") {
+        autosmoke_zoom_out_seen++
+    } else if (action == "scroll-forward" && changed == "true") {
+        autosmoke_scroll_forward_seen++
+    } else if (action == "scroll-back" && changed == "true") {
+        autosmoke_scroll_back_seen++
+    }
+}
+
 END {
     print "Item view perf summary"
     print "  item_view_frames: " item_view_count
@@ -518,6 +562,15 @@ END {
         " max_retained_interaction=" (("renderer_policy_retained_interaction" in single_max) ? single_max["renderer_policy_retained_interaction"] : 0) \
         " max_gpui_drag_shell=" (("renderer_policy_gpui_drag_shell" in single_max) ? single_max["renderer_policy_gpui_drag_shell"] : 0) \
         " max_rename_overlay=" (("renderer_policy_rename_overlay" in single_max) ? single_max["renderer_policy_rename_overlay"] : 0)
+    autosmoke_scenario = autosmoke_start_scenario != "" ? autosmoke_start_scenario : autosmoke_complete_scenario
+    print "  autosmoke:" \
+        " start=" (autosmoke_start_seen + 0) \
+        " complete=" (autosmoke_complete_seen + 0) \
+        " scenario=" (autosmoke_scenario == "" ? "<none>" : autosmoke_scenario) \
+        " zoom_in=" (autosmoke_zoom_in_seen + 0) \
+        " zoom_out=" (autosmoke_zoom_out_seen + 0) \
+        " scroll_forward=" (autosmoke_scroll_forward_seen + 0) \
+        " scroll_back=" (autosmoke_scroll_back_seen + 0)
 
     if (item_view_count == 0) {
         fail("missing [fika item-view] lines")
@@ -544,6 +597,36 @@ END {
     }
     if (require_renderer_policy == "true" && renderer_policy_count == 0) {
         fail("missing [fika renderer-policy] lines")
+    }
+    if (require_autosmoke == "true") {
+        if (autosmoke_start_seen == 0 || autosmoke_complete_seen == 0) {
+            fail("missing item-view autosmoke start/complete markers")
+        }
+        if (autosmoke_start_scenario == "" || autosmoke_complete_scenario == "") {
+            fail("missing item-view autosmoke scenario markers")
+        }
+        if (autosmoke_start_scenario != "" && autosmoke_complete_scenario != "" &&
+            autosmoke_start_scenario != autosmoke_complete_scenario) {
+            fail("item-view autosmoke start/complete scenarios differ")
+        }
+        if (autosmoke_scenario_conflict) {
+            fail("conflicting item-view autosmoke scenarios")
+        }
+        if (autosmoke_scenario != "Zoom" &&
+            autosmoke_scenario != "Scroll" &&
+            autosmoke_scenario != "ZoomScroll") {
+            fail("unknown item-view autosmoke scenario " autosmoke_scenario)
+        }
+        if (autosmoke_scenario == "Zoom" || autosmoke_scenario == "ZoomScroll") {
+            if (autosmoke_zoom_in_seen == 0 || autosmoke_zoom_out_seen == 0) {
+                fail("missing item-view autosmoke zoom action markers")
+            }
+        }
+        if (autosmoke_scenario == "Scroll" || autosmoke_scenario == "ZoomScroll") {
+            if (autosmoke_scroll_forward_seen == 0 || autosmoke_scroll_back_seen == 0) {
+                fail("missing changed=true item-view autosmoke scroll action markers")
+            }
+        }
     }
     for (mode in required_renderer_policy_mode) {
         if (!(mode in renderer_policy_modes)) {

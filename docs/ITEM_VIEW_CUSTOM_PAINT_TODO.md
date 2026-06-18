@@ -741,6 +741,14 @@ by risk and evidence, not by how custom-painted a surface looks.
   autosmoke module. Evidence:
   `/tmp/fika-item-view-autosmoke-marker-module.log` passed the item-view
   analyzer gates used for `/etc` zoom/scroll evidence.
+- [x] P16al: Require item-view autosmoke markers in the analyzer. The
+  item-view perf analyzer now supports `--require-autosmoke` and validates
+  start/complete scenario markers plus the required zoom and changed scroll
+  actions for `Zoom`, `Scroll`, and `ZoomScroll` scenarios. The analyzer
+  summary always includes an `autosmoke:` line so renderer evidence blocks can
+  prove which scripted scenario produced the log. Evidence:
+  `scripts/check-item-view-perf-analyzer.sh` covers the positive `ZoomScroll`
+  fixture and a negative missing-scroll-action fixture.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

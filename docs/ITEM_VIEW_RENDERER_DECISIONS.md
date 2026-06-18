@@ -158,7 +158,10 @@ scenario labels plus start/complete, zoom-action, and scroll-action marker
 formatting; the app root only applies the scheduled zoom and scroll changes to
 pane state. Evidence:
 `/tmp/fika-item-view-autosmoke-marker-module.log` passed the same analyzer
-gates used for `/etc` zoom/scroll evidence.
+gates used for `/etc` zoom/scroll evidence. The analyzer now has a
+`--require-autosmoke` gate for these markers, and renderer evidence summaries
+include the parsed `autosmoke:` scenario/action line so future `/etc`
+zoom/scroll logs cannot accidentally omit the scripted interaction markers.
 
 Remaining visible cost in that log is static text/background painting:
 `static_visual max_prepaint=5794us`, `max_paint=12043us`, with shape cache

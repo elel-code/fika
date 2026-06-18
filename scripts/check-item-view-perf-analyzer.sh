@@ -81,7 +81,7 @@ if [[ "$evidence" != *"renderer_policy_frames"* ]]; then
     echo "expected renderer evidence to include renderer policy summary" >&2
     exit 1
 fi
-if [[ "$evidence" != *"autosmoke:" || "$evidence" != *"scenario=ZoomScroll"* ]]; then
+if [[ "$evidence" != *"autosmoke:"* || "$evidence" != *"scenario=ZoomScroll"* ]]; then
     echo "expected renderer evidence to include autosmoke summary" >&2
     exit 1
 fi
