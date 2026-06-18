@@ -1524,6 +1524,13 @@ tracks.
   typed DnD payload shell is removed. MIME/theme icon A/B evidence is available
   behind `--icons` so the current non-promotable custom icon path does not block
   every baseline freeze.
+- [x] P16fa: Document the cross-surface Dolphin retained-renderer alignment
+  contract. `docs/DOLPHIN_RETAINED_RENDERER_ALIGNMENT.md` records why full
+  custom rendering remains theoretically valid, why the current gaps are
+  incomplete model/cache/event loops rather than proof that GPUI is inherently
+  faster, and which model, layout, role-readiness, painter, controller and
+  analyzer gates must be satisfied before a GPUI bridge can be removed or a
+  custom renderer can become default.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

@@ -3,6 +3,8 @@
 This document is the execution entry point for the post-Places-chrome direction.
 It complements:
 
+- `docs/DOLPHIN_RETAINED_RENDERER_ALIGNMENT.md` for the cross-surface
+  Dolphin alignment contract and default-promotion rules.
 - `docs/ITEM_VIEW_CUSTOM_PAINT_DESIGN.md` for architecture contracts.
 - `docs/ITEM_VIEW_CUSTOM_PAINT_STATUS.md` for current replacement state.
 - `docs/ITEM_VIEW_CUSTOM_PAINT_TODO.md` for per-slice implementation history.
@@ -66,6 +68,13 @@ The practical conclusion is:
   image readiness, hit-test ownership, and analyzer-backed default promotion.
 - Until a surface has that loop, keeping a GPUI bridge is the Dolphin-aligned
   choice, not a retreat from the retained architecture.
+
+The detailed cross-surface contract is in
+`docs/DOLPHIN_RETAINED_RENDERER_ALIGNMENT.md`. That document is the guardrail
+for future “full custom rendering” work: a renderer can become default only
+after the model, layout, controller/hit-test, painter, cache and remaining
+bridge boundaries are explicit and analyzer evidence proves the custom path is
+not worse than the GPUI-backed path.
 
 ## Non-Negotiable Rules
 
