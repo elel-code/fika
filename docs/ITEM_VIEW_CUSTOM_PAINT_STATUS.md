@@ -347,6 +347,9 @@ execution must stay split into evidence-backed tracks:
    `file_grid/hover.rs`;
    retained projection and mode-switch cleanup policy is owned by
    `file_grid/lifecycle.rs`;
+   visible metadata role sync result collection is owned by
+   `visible_metadata_role_results_for_raw_grid()` in
+   `file_grid/snapshot/metadata.rs`;
    app root storage remains in `FikaApp`, but the conversion sequence is no
    longer hand-wired inline in `src/main.rs`.
 

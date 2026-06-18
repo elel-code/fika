@@ -17,16 +17,15 @@ use fika_core::{
 use fika_core::{
     CreateUndoItem, CreatedItemKind, DeviceInfo, DeviceMonitorMessage, DevicePlaceOperation,
     DevicePlaceOperationResult, DirectoryCacheDebugSnapshot, DirectoryListerEvent, Generation,
-    ItemId, ListingRequest, ListingWorker, LoadingPaneState, MetadataRoleRequest,
-    MetadataRoleResult, MetadataRoleScheduler, OperationQueue, OperationRuntime, OperationSnapshot,
-    PaneController, PaneId, RefreshPair, RenameUndoItem, SelectionMove, SortDescriptor, SortOrder,
-    SortRole, ThumbnailProbeResult, ThumbnailScheduler, TrashEmptinessMonitor, UndoPayload,
-    UserPlace, ViewMode, ViewPoint, ViewRect, ZoomChange, apply_thumbnail_probe_result_to_model,
+    ItemId, ListingRequest, ListingWorker, LoadingPaneState, MetadataRoleResult,
+    MetadataRoleScheduler, OperationQueue, OperationRuntime, OperationSnapshot, PaneController,
+    PaneId, RefreshPair, RenameUndoItem, SelectionMove, SortDescriptor, SortOrder, SortRole,
+    ThumbnailProbeResult, ThumbnailScheduler, TrashEmptinessMonitor, UndoPayload, UserPlace,
+    ViewMode, ViewPoint, ViewRect, ZoomChange, apply_thumbnail_probe_result_to_model,
     breadcrumb_segments, complete_location_input, file_ops, is_network_path,
-    listing_requests_from_events, metadata_role_result_for_request,
-    metadata_role_results_for_requests, nearest_existing_ancestor, parent_location,
-    perform_device_place_operation, resolve_location_input, thumbnail_probe_results_for_requests,
-    update_loading_state_for_event,
+    listing_requests_from_events, metadata_role_results_for_requests, nearest_existing_ancestor,
+    parent_location, perform_device_place_operation, resolve_location_input,
+    thumbnail_probe_results_for_requests, update_loading_state_for_event,
 };
 use fika_core::{
     DesktopLaunchPlan, LauncherError, MimeApplication, MimeApplicationCache, NewWindowLaunchResult,
@@ -96,6 +95,7 @@ use ui::file_grid::{
     model_indexes_intersecting_visual_rect, pane_layout_projection,
     project_retained_file_grid_snapshot, queue_raw_file_grid_model_work, raw_file_grid_snapshot,
     rename_editor_required_text_width, resolve_visible_file_icons_for_raw_grid,
+    visible_metadata_role_results_for_raw_grid,
 };
 use ui::filter_bar::{
     FILTER_BAR_HEIGHT, FilterBarSnapshot, FilteredModelCacheEntry, PaneFilterState,
@@ -1678,19 +1678,8 @@ impl FikaApp {
         raw_file_grid: &RawFileGridSnapshot,
         budget: Duration,
     ) -> bool {
-        let started = Instant::now();
-        let mut results = Vec::new();
-        for candidate in raw_file_grid.visible_metadata_role_candidates() {
-            if started.elapsed() >= budget {
-                break;
-            }
-            let Some(request) = MetadataRoleRequest::from_candidate(pane_id, generation, candidate)
-            else {
-                continue;
-            };
-            results.push(metadata_role_result_for_request(request));
-        }
-
+        let results =
+            visible_metadata_role_results_for_raw_grid(pane_id, generation, raw_file_grid, budget);
         if results.is_empty() {
             return false;
         }

@@ -462,7 +462,8 @@ pretending that every remaining GPUI boundary can be removed safely today.
   visible metadata/thumbnail/icon work keying and queue handoff now live in
   `file_grid/snapshot/scheduler.rs`; retained hovered-item state now lives in
   `file_grid/hover.rs`; retained file-grid projection/mode-switch cleanup
-  policy now lives in `file_grid/lifecycle.rs`.
+  policy now lives in `file_grid/lifecycle.rs`; visible metadata role sync
+  result collection now lives in `file_grid/snapshot/metadata.rs`.
   Runtime evidence collection helpers remain in `src/main.rs` and scripts.
 
 ## P16: Concrete Full-Transition Backlog
@@ -822,6 +823,13 @@ by risk and evidence, not by how custom-painted a surface looks.
   projection invalidation versus mode-switch invalidation. `src/main.rs`
   still decides when a pane/filter/view-mode transition triggers cleanup, but
   no longer repeats the retained state cleanup list inline.
+- [x] P16av: Move visible metadata role sync collection into the file-grid
+  module. `visible_metadata_role_results_for_raw_grid()` now owns the
+  visible-candidate loop, sync budget cutoff, request filtering, and metadata
+  role result generation for a raw grid snapshot. `src/main.rs` still applies
+  those results to the pane model and invalidates visible snapshots when model
+  roles change. Unit coverage proves zero-budget cutoff and visible-only
+  candidate conversion.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

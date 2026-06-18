@@ -1,7 +1,11 @@
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
-use fika_core::{ItemId, MetadataRoleCandidate, mime_magic_resolution_required};
+use fika_core::{
+    Generation, ItemId, MetadataRoleCandidate, MetadataRoleRequest, MetadataRoleResult, PaneId,
+    metadata_role_result_for_request, mime_magic_resolution_required,
+};
 
 use super::RawFileGridSnapshot;
 
@@ -9,6 +13,27 @@ impl RawFileGridSnapshot {
     pub(crate) fn visible_metadata_role_candidates(&self) -> Vec<MetadataRoleCandidate> {
         visible_metadata_role_candidates(self)
     }
+}
+
+pub(crate) fn visible_metadata_role_results_for_raw_grid(
+    pane_id: PaneId,
+    generation: Generation,
+    raw_file_grid: &RawFileGridSnapshot,
+    budget: Duration,
+) -> Vec<MetadataRoleResult> {
+    let started = Instant::now();
+    let mut results = Vec::new();
+    for candidate in raw_file_grid.visible_metadata_role_candidates() {
+        if started.elapsed() >= budget {
+            break;
+        }
+        let Some(request) = MetadataRoleRequest::from_candidate(pane_id, generation, candidate)
+        else {
+            continue;
+        };
+        results.push(metadata_role_result_for_request(request));
+    }
+    results
 }
 
 trait MetadataRoleCandidateSource {
@@ -126,4 +151,107 @@ fn metadata_role_update_needed(
     mime_magic_checked: bool,
 ) -> bool {
     mime_magic_resolution_required(is_dir, size_bytes, mime_type, mime_magic_checked)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use fika_core::{IconsLayout, ItemLayout, ViewRect};
+
+    #[test]
+    fn visible_metadata_role_results_respects_zero_budget() {
+        let raw_file_grid = RawFileGridSnapshot::Icons {
+            layout: IconsLayout::new(1, fika_core::IconsLayoutOptions::default()),
+            items: vec![test_raw_visible_item(1, "payload", 0)],
+        };
+
+        let results = visible_metadata_role_results_for_raw_grid(
+            PaneId(1),
+            Generation(1),
+            &raw_file_grid,
+            Duration::ZERO,
+        );
+
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn visible_metadata_role_results_convert_visible_candidates() {
+        let raw_file_grid = RawFileGridSnapshot::Icons {
+            layout: IconsLayout::new(2, fika_core::IconsLayoutOptions::default()),
+            items: vec![test_raw_visible_item(7, "visible.bin", 0), {
+                let mut item = test_raw_visible_item(8, "read-ahead.bin", 1);
+                item.visible = false;
+                item
+            }],
+        };
+
+        let results = visible_metadata_role_results_for_raw_grid(
+            PaneId(3),
+            Generation(4),
+            &raw_file_grid,
+            Duration::from_secs(1),
+        );
+
+        assert_eq!(results.len(), 1);
+        let result = &results[0];
+        assert_eq!(result.pane_id, PaneId(3));
+        assert_eq!(result.generation, Generation(4));
+        assert_eq!(result.item_id, ItemId(7));
+        assert_eq!(result.path, PathBuf::from("/tmp/visible.bin"));
+        let role = result.role.as_ref().expect("metadata role should resolve");
+        assert_eq!(role.size_bytes, 12);
+        assert_eq!(role.modified_secs, Some(42));
+        assert_eq!(
+            role.mime_type.as_deref(),
+            Some(fika_core::GENERIC_BINARY_MIME)
+        );
+        assert!(role.mime_magic_checked);
+    }
+
+    fn test_raw_visible_item(
+        id: u64,
+        name: &str,
+        model_index: usize,
+    ) -> super::super::RawVisibleItemSnapshot {
+        let rect = ViewRect {
+            x: 0.0,
+            y: 0.0,
+            width: 10.0,
+            height: 10.0,
+        };
+        super::super::RawVisibleItemSnapshot {
+            slot_id: 0,
+            visible: true,
+            layout: ItemLayout {
+                model_index,
+                column: 0,
+                row: model_index,
+                item_rect: rect,
+                visual_rect: rect,
+                icon_rect: rect,
+                text_rect: rect,
+            },
+            item_id: ItemId(id),
+            path: PathBuf::from("/tmp").join(name),
+            is_dir: false,
+            name: Arc::from(name),
+            thumbnail_path: None,
+            thumbnail_failed: false,
+            modified_secs: Some(42),
+            size_bytes: 12,
+            metadata_complete: true,
+            metadata_refresh_pending: false,
+            mime_type: Some(Arc::from(fika_core::GENERIC_BINARY_MIME)),
+            mime_magic_checked: false,
+            selected: false,
+            drop_target: false,
+            draft_name: None,
+            draft_caret: None,
+            draft_selection: None,
+            draft_error: None,
+            draft_warning: None,
+        }
+    }
 }
