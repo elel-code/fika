@@ -246,6 +246,37 @@ pub(crate) fn sync_pane_view_after_item_view_bounds_update(
     })
 }
 
+pub(crate) fn scroll_pane_from_item_view_wheel(
+    scroll_state: &mut ItemViewScrollState,
+    panes: &mut PaneController,
+    pane_id: PaneId,
+    delta: ScrollDelta,
+) -> bool {
+    let Some(view) = panes.pane(pane_id).map(|pane| pane.view.clone()) else {
+        return false;
+    };
+    let (delta_x, delta_y) = wheel_scroll_delta_for_view_mode(view.view_mode, delta);
+    if delta_x.abs() < f32::EPSILON && delta_y.abs() < f32::EPSILON {
+        return false;
+    }
+
+    let Some(next_view) = panes.scroll_view(
+        pane_id,
+        delta_x,
+        delta_y,
+        view.max_scroll_x.max(0.0),
+        view.max_scroll_y.max(0.0),
+    ) else {
+        return false;
+    };
+    if let Some(next_scroll) = changed_item_view_scroll_snapshot(&view, &next_view) {
+        let _ = scroll_state.sync_handle_after_user_scroll_snapshot(pane_id, next_scroll);
+        true
+    } else {
+        false
+    }
+}
+
 fn apply_window_resize_delta(extent: f32, delta: f32) -> f32 {
     fika_core::normalize_viewport_extent(extent + delta)
 }
@@ -448,6 +479,28 @@ mod tests {
         assert_eq!(
             changed_item_view_scroll_snapshot(&previous, &next),
             Some(ItemViewScrollViewSnapshot::new(180.0, 32.0, 1_000.0, 500.0))
+        );
+    }
+
+    #[test]
+    fn wheel_scroll_updates_pane_view_through_item_view_facade() {
+        let mut panes = PaneController::new(PathBuf::from("/tmp/fika-item-view-scroll"));
+        let pane_id = panes.focused().expect("initial pane exists");
+        panes
+            .set_view_scroll(pane_id, 0.0, 0.0, 1_000.0, 0.0)
+            .expect("pane exists");
+        let mut scroll_state = ItemViewScrollState::default();
+
+        assert!(scroll_pane_from_item_view_wheel(
+            &mut scroll_state,
+            &mut panes,
+            pane_id,
+            ScrollDelta::Lines(gpui::point(0.0, -3.0))
+        ));
+
+        assert_eq!(
+            panes.pane(pane_id).expect("pane exists").view.scroll_x,
+            60.0
         );
     }
 }

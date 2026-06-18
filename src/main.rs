@@ -105,18 +105,17 @@ use ui::icons::{FileIconCache, file_icon_resolve_results_for_requests};
 #[cfg(test)]
 use ui::item_view::item_view_scroll_snapshot_for_pane;
 use ui::item_view::{
-    ItemViewScrollState, changed_item_view_scroll_snapshot,
-    finish_item_view_scrollbar_drag as finish_item_view_scrollbar_drag_state,
+    ItemViewScrollState, finish_item_view_scrollbar_drag as finish_item_view_scrollbar_drag_state,
     item_view_scroll_snapshot_for_view,
     preserve_item_view_scroll_for_layout_change as preserve_item_view_scroll_for_layout_change_state,
     projected_item_viewport_width_for_pane_width,
+    scroll_pane_from_item_view_wheel as scroll_item_view_pane_from_wheel,
     sync_item_view_scroll_handle_to_pane_view as sync_item_view_handle_to_pane_view_state,
     sync_pane_view_after_item_view_bounds_update as sync_item_view_pane_after_bounds_update,
     sync_pane_view_from_authoritative_item_view_scroll_handle as sync_item_view_pane_from_authoritative_scroll_handle,
     sync_pane_view_from_item_view_scroll_handle as sync_item_view_pane_from_scroll_handle,
     viewport_extents_after_view_mode_axis_change,
-    viewport_height_after_filter_bar_visibility_change, wheel_scroll_delta_for_view_mode,
-    window_resize_viewport_prime,
+    viewport_height_after_filter_bar_visibility_change, window_resize_viewport_prime,
 };
 use ui::location_bar::{LocationDraft, LocationEditMetrics};
 use ui::network_auth::{
@@ -3332,30 +3331,12 @@ impl FikaApp {
     }
 
     pub(crate) fn scroll_pane_from_wheel(&mut self, pane_id: PaneId, delta: ScrollDelta) -> bool {
-        let Some(view) = self.panes.pane(pane_id).map(|pane| pane.view.clone()) else {
-            return false;
-        };
-        let (delta_x, delta_y) = wheel_scroll_delta_for_view_mode(view.view_mode, delta);
-        if delta_x.abs() < f32::EPSILON && delta_y.abs() < f32::EPSILON {
-            return false;
-        }
-
-        let max_scroll_x = view.max_scroll_x.max(0.0);
-        let max_scroll_y = view.max_scroll_y.max(0.0);
-        let Some(next_view) =
-            self.panes
-                .scroll_view(pane_id, delta_x, delta_y, max_scroll_x, max_scroll_y)
-        else {
-            return false;
-        };
-        if let Some(next_scroll) = changed_item_view_scroll_snapshot(&view, &next_view) {
-            let _ = self
-                .item_view_scroll
-                .sync_handle_after_user_scroll_snapshot(pane_id, next_scroll);
-            true
-        } else {
-            false
-        }
+        scroll_item_view_pane_from_wheel(
+            &mut self.item_view_scroll,
+            &mut self.panes,
+            pane_id,
+            delta,
+        )
     }
 
     #[cfg(test)]
