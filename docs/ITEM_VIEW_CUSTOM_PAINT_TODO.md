@@ -880,6 +880,11 @@ by risk and evidence, not by how custom-painted a surface looks.
   `src/main.rs` still syncs pane `ViewState` to and from the controller, but no
   longer carries parallel `HashMap`/`HashSet` state for item-view scroll
   lifecycle.
+- [x] P16be: Move item-view scroll-handle sync decision logic into the
+  item-view module. `ItemViewScrollState` now returns `ItemViewScrollSyncAction`
+  for normal handle sync, post-layout authoritative view sync, and scrollbar
+  drag sync. `src/main.rs` still applies resulting scroll values to the pane
+  model, but no longer decides which scroll source is authoritative.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

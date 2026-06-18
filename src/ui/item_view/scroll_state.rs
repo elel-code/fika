@@ -12,6 +12,13 @@ pub(crate) struct ItemViewScrollSync {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum ItemViewScrollSyncAction {
+    None,
+    SyncHandleToView,
+    SyncView(ItemViewScrollSync),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct ItemViewScrollHandleObservation {
     scroll_x: f32,
     scroll_y: f32,
@@ -88,6 +95,41 @@ impl ItemViewScrollState {
             view_max_scroll_x,
             view_max_scroll_y,
         )
+    }
+
+    pub(crate) fn sync_action_from_handle(
+        &mut self,
+        pane_id: PaneId,
+        view_scroll_x: f32,
+        view_scroll_y: f32,
+        view_max_scroll_x: f32,
+        view_max_scroll_y: f32,
+    ) -> ItemViewScrollSyncAction {
+        if self.is_scrollbar_dragging(pane_id) {
+            return self
+                .sync_from_authoritative_handle(pane_id, view_max_scroll_x, view_max_scroll_y)
+                .map(ItemViewScrollSyncAction::SyncView)
+                .unwrap_or(ItemViewScrollSyncAction::None);
+        }
+        if self.has_authoritative_scroll(pane_id) {
+            self.sync_handle_to_view(pane_id, view_scroll_x, view_scroll_y);
+            return ItemViewScrollSyncAction::SyncHandleToView;
+        }
+        let Some(sync) = self.sync_from_handle(
+            pane_id,
+            view_scroll_x,
+            view_scroll_y,
+            view_max_scroll_x,
+            view_max_scroll_y,
+        ) else {
+            return ItemViewScrollSyncAction::None;
+        };
+        if !scroll_offset_matches(view_scroll_x, sync.scroll_x)
+            || !scroll_offset_matches(view_scroll_y, sync.scroll_y)
+        {
+            self.clear_authoritative_scroll(pane_id);
+        }
+        ItemViewScrollSyncAction::SyncView(sync)
     }
 
     pub(crate) fn sync_from_authoritative_handle(
@@ -309,6 +351,23 @@ fn set_scroll_handle_offset(scroll_handle: &ScrollHandle, scroll_x: f32, scroll_
     true
 }
 
+pub(crate) fn scroll_sync_changes_view(
+    view_scroll_x: f32,
+    view_scroll_y: f32,
+    view_max_scroll_x: f32,
+    view_max_scroll_y: f32,
+    sync: ItemViewScrollSync,
+) -> bool {
+    !scroll_offset_matches(view_scroll_x, sync.scroll_x)
+        || !scroll_offset_matches(view_scroll_y, sync.scroll_y)
+        || !scroll_offset_matches(view_max_scroll_x, sync.max_scroll_x)
+        || !scroll_offset_matches(view_max_scroll_y, sync.max_scroll_y)
+}
+
+fn scroll_offset_matches(left: f32, right: f32) -> bool {
+    (left - right).abs() < 0.5
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -377,6 +436,33 @@ mod tests {
         state.clear_transient_state(pane_id);
         assert!(!state.has_authoritative_scroll(pane_id));
         assert!(!state.is_scrollbar_dragging(pane_id));
+    }
+
+    #[test]
+    fn scroll_state_sync_action_respects_authoritative_and_drag_modes() {
+        let pane_id = PaneId(1);
+        let mut state = ItemViewScrollState::default();
+        let handle = state.handle_for_pane(pane_id);
+
+        state.mark_authoritative_for_frames(pane_id, 1);
+        handle.set_offset(point(px(0.0), px(0.0)));
+        assert_eq!(
+            state.sync_action_from_handle(pane_id, 180.0, 0.0, 1_000.0, 0.0),
+            ItemViewScrollSyncAction::SyncHandleToView
+        );
+        assert_eq!(handle.offset().x, px(-180.0));
+
+        state.begin_scrollbar_drag(pane_id);
+        handle.set_offset(point(px(-320.0), px(0.0)));
+        assert_eq!(
+            state.sync_action_from_handle(pane_id, 180.0, 0.0, 1_000.0, 0.0),
+            ItemViewScrollSyncAction::SyncView(ItemViewScrollSync {
+                scroll_x: 320.0,
+                scroll_y: 0.0,
+                max_scroll_x: 1_000.0,
+                max_scroll_y: 0.0,
+            })
+        );
     }
 
     #[test]

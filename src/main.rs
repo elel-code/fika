@@ -100,7 +100,10 @@ use ui::filter_bar::{
     cached_filtered_model_for_pane, filter_toggle_snapshot,
 };
 use ui::icons::{FileIconCache, file_icon_resolve_results_for_requests};
-use ui::item_view::{ITEM_VIEW_SCROLLBAR_RESERVED_EXTENT, ItemViewScrollState};
+use ui::item_view::{
+    ITEM_VIEW_SCROLLBAR_RESERVED_EXTENT, ItemViewScrollState, ItemViewScrollSync,
+    ItemViewScrollSyncAction, scroll_sync_changes_view,
+};
 use ui::location_bar::{LocationDraft, LocationEditMetrics};
 use ui::network_auth::{
     NetworkAuthDraft, NetworkAuthField, NetworkAuthInputResult, apply_network_auth_input_action,
@@ -268,10 +271,6 @@ fn wheel_scroll_delta_for_view_mode(view_mode: ViewMode, delta: ScrollDelta) -> 
 
 fn view_mode_uses_horizontal_item_scrollbar(view_mode: ViewMode) -> bool {
     matches!(view_mode, ViewMode::Compact)
-}
-
-fn scroll_offset_matches(left: f32, right: f32) -> bool {
-    (left - right).abs() < 0.5
 }
 
 fn rubber_band_drag_distance_reached(start: ViewPoint, current: ViewPoint) -> bool {
@@ -1204,9 +1203,6 @@ impl FikaApp {
     }
 
     fn sync_pane_view_from_item_view_scroll_handle(&mut self, pane_id: PaneId) -> bool {
-        if self.item_view_scroll.is_scrollbar_dragging(pane_id) {
-            return self.sync_pane_view_from_authoritative_item_view_scroll_handle(pane_id);
-        }
         let view_scroll_x = self
             .panes
             .pane(pane_id)
@@ -1223,37 +1219,21 @@ impl FikaApp {
             .panes
             .pane(pane_id)
             .map_or(0.0, |pane| pane.view.max_scroll_y);
-        if self.item_view_scroll.has_authoritative_scroll(pane_id) {
-            self.item_view_scroll
-                .sync_handle_to_view(pane_id, view_scroll_x, view_scroll_y);
-            return false;
-        }
-        let Some(sync) = self.item_view_scroll.sync_from_handle(
+        let action = self.item_view_scroll.sync_action_from_handle(
             pane_id,
             view_scroll_x,
             view_scroll_y,
             view_max_scroll_x,
             view_max_scroll_y,
-        ) else {
-            return false;
-        };
-        if !scroll_offset_matches(view_scroll_x, sync.scroll_x)
-            || !scroll_offset_matches(view_scroll_y, sync.scroll_y)
-        {
-            self.item_view_scroll.clear_authoritative_scroll(pane_id);
-        }
-        let changed = !scroll_offset_matches(view_scroll_x, sync.scroll_x)
-            || !scroll_offset_matches(view_scroll_y, sync.scroll_y)
-            || !scroll_offset_matches(view_max_scroll_x, sync.max_scroll_x)
-            || !scroll_offset_matches(view_max_scroll_y, sync.max_scroll_y);
-        let _ = self.panes.set_view_scroll(
-            pane_id,
-            sync.scroll_x,
-            sync.scroll_y,
-            sync.max_scroll_x,
-            sync.max_scroll_y,
         );
-        changed
+        self.apply_item_view_scroll_sync_action(
+            pane_id,
+            action,
+            view_scroll_x,
+            view_scroll_y,
+            view_max_scroll_x,
+            view_max_scroll_y,
+        )
     }
 
     fn sync_pane_view_from_authoritative_item_view_scroll_handle(
@@ -1283,10 +1263,54 @@ impl FikaApp {
         ) else {
             return false;
         };
-        let changed = !scroll_offset_matches(view_scroll_x, sync.scroll_x)
-            || !scroll_offset_matches(view_scroll_y, sync.scroll_y)
-            || !scroll_offset_matches(view_max_scroll_x, sync.max_scroll_x)
-            || !scroll_offset_matches(view_max_scroll_y, sync.max_scroll_y);
+        self.apply_item_view_scroll_sync(
+            pane_id,
+            sync,
+            view_scroll_x,
+            view_scroll_y,
+            view_max_scroll_x,
+            view_max_scroll_y,
+        )
+    }
+
+    fn apply_item_view_scroll_sync_action(
+        &mut self,
+        pane_id: PaneId,
+        action: ItemViewScrollSyncAction,
+        view_scroll_x: f32,
+        view_scroll_y: f32,
+        view_max_scroll_x: f32,
+        view_max_scroll_y: f32,
+    ) -> bool {
+        match action {
+            ItemViewScrollSyncAction::None | ItemViewScrollSyncAction::SyncHandleToView => false,
+            ItemViewScrollSyncAction::SyncView(sync) => self.apply_item_view_scroll_sync(
+                pane_id,
+                sync,
+                view_scroll_x,
+                view_scroll_y,
+                view_max_scroll_x,
+                view_max_scroll_y,
+            ),
+        }
+    }
+
+    fn apply_item_view_scroll_sync(
+        &mut self,
+        pane_id: PaneId,
+        sync: ItemViewScrollSync,
+        view_scroll_x: f32,
+        view_scroll_y: f32,
+        view_max_scroll_x: f32,
+        view_max_scroll_y: f32,
+    ) -> bool {
+        let changed = scroll_sync_changes_view(
+            view_scroll_x,
+            view_scroll_y,
+            view_max_scroll_x,
+            view_max_scroll_y,
+            sync,
+        );
         let _ = self.panes.set_view_scroll(
             pane_id,
             sync.scroll_x,
