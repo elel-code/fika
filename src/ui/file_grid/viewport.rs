@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use fika_core::{PaneId, ViewMode, ViewPoint, ViewRect, ViewState, normalize_viewport_extent};
 use gpui::prelude::*;
 use gpui::{Context, Div, Empty, MouseButton, NavigationDirection, Stateful, div, rgba};
@@ -136,6 +138,22 @@ pub(crate) fn clamped_content_point_from_window_position(
         x: local_x + view.scroll_x,
         y: local_y + view.scroll_y,
     }
+}
+
+pub(crate) fn pane_at_window_position(
+    pane_ids: &[PaneId],
+    geometries: &HashMap<PaneId, PaneViewportGeometry>,
+    position: gpui::Point<gpui::Pixels>,
+) -> Option<PaneId> {
+    let window_point = ViewPoint {
+        x: position.x.as_f32(),
+        y: position.y.as_f32(),
+    };
+    pane_ids.iter().copied().find(|pane_id| {
+        geometries
+            .get(pane_id)
+            .is_some_and(|geometry| geometry.window_rect.contains(window_point))
+    })
 }
 
 pub(super) fn file_grid_viewport_shell(
@@ -337,6 +355,48 @@ mod tests {
                 point(px(90.0), px(40.0))
             ),
             ViewPoint { x: 12.0, y: 8.0 }
+        );
+    }
+
+    #[test]
+    fn pane_at_window_position_uses_pane_order_for_hits() {
+        let panes = [PaneId(2), PaneId(1)];
+        let geometries = HashMap::from([
+            (
+                PaneId(1),
+                PaneViewportGeometry {
+                    window_rect: ViewRect {
+                        x: 0.0,
+                        y: 0.0,
+                        width: 100.0,
+                        height: 100.0,
+                    },
+                },
+            ),
+            (
+                PaneId(2),
+                PaneViewportGeometry {
+                    window_rect: ViewRect {
+                        x: 50.0,
+                        y: 0.0,
+                        width: 100.0,
+                        height: 100.0,
+                    },
+                },
+            ),
+        ]);
+
+        assert_eq!(
+            pane_at_window_position(&panes, &geometries, point(px(75.0), px(50.0))),
+            Some(PaneId(2))
+        );
+        assert_eq!(
+            pane_at_window_position(&panes, &geometries, point(px(25.0), px(50.0))),
+            Some(PaneId(1))
+        );
+        assert_eq!(
+            pane_at_window_position(&panes, &geometries, point(px(250.0), px(50.0))),
+            None
         );
     }
 }

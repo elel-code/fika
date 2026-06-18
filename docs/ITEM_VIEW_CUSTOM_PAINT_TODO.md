@@ -958,6 +958,11 @@ by risk and evidence, not by how custom-painted a surface looks.
   `PaneViewportGeometry` plus `ViewState`. `src/main.rs` still performs pane
   lookup and uses those points for hit testing, drag targets, and rubber-band
   selection.
+- [x] P16bs: Move file-grid viewport pane hit-testing policy into the viewport
+  module. `ui/file_grid/viewport.rs` now owns choosing the pane whose viewport
+  contains a window position while preserving `PaneController::pane_ids()` order
+  as the priority. `src/main.rs` still supplies the current pane order and
+  cached viewport geometries for cross-pane drag target lookup.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

@@ -93,7 +93,7 @@ use ui::file_grid::{
     content_item_hit_at_point, content_point_from_window_position,
     emit_item_view_autosmoke_complete, emit_item_view_autosmoke_scroll_action,
     emit_item_view_autosmoke_start, emit_item_view_autosmoke_zoom_action, item_view_perf_enabled,
-    model_indexes_intersecting_visual_rect, pane_layout_projection,
+    model_indexes_intersecting_visual_rect, pane_at_window_position, pane_layout_projection,
     rename_editor_required_text_width, resolve_visible_file_icons_for_raw_grid,
 };
 use ui::filter_bar::{
@@ -3913,15 +3913,11 @@ impl FikaApp {
     }
 
     fn pane_at_window_position(&self, position: gpui::Point<gpui::Pixels>) -> Option<PaneId> {
-        let window_point = ViewPoint {
-            x: position.x.as_f32(),
-            y: position.y.as_f32(),
-        };
-        self.panes.pane_ids().iter().copied().find(|pane_id| {
-            self.pane_viewport_geometries
-                .get(pane_id)
-                .is_some_and(|geometry| geometry.window_rect.contains(window_point))
-        })
+        pane_at_window_position(
+            self.panes.pane_ids(),
+            &self.pane_viewport_geometries,
+            position,
+        )
     }
 
     fn clamped_content_point_from_window(

@@ -69,6 +69,7 @@ pub(crate) use types::{
 };
 pub(crate) use viewport::{
     clamped_content_point_from_window_position, content_point_from_window_position,
+    pane_at_window_position,
 };
 
 use style::{
