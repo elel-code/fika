@@ -890,6 +890,11 @@ by risk and evidence, not by how custom-painted a surface looks.
   scrollbars and the projected item viewport width calculation for a pane
   width. `src/main.rs` still supplies pane geometry and applies viewport
   priming, but no longer embeds the scrollbar-axis width deduction rule.
+- [x] P16bg: Move item-view wheel scroll axis policy into the item-view module.
+  `ui/item_view.rs` now owns how Compact maps wheel input onto horizontal
+  scrolling and how Icons/Details keep wheel input vertical. `src/main.rs`
+  still applies the resulting delta to the pane model, but no longer embeds
+  per-view-mode wheel-axis mapping.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

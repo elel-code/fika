@@ -104,6 +104,7 @@ use ui::item_view::{
     ITEM_VIEW_SCROLLBAR_RESERVED_EXTENT, ItemViewScrollState, ItemViewScrollSync,
     ItemViewScrollSyncAction, projected_item_viewport_width_for_pane_width,
     scroll_sync_changes_view, view_mode_uses_horizontal_item_scrollbar,
+    wheel_scroll_delta_for_view_mode,
 };
 use ui::location_bar::{LocationDraft, LocationEditMetrics};
 use ui::network_auth::{
@@ -254,19 +255,6 @@ fn background_task_state_for_message(message: &str) -> BackgroundTaskState {
         BackgroundTaskState::Failed
     } else {
         BackgroundTaskState::Complete
-    }
-}
-
-fn wheel_scroll_delta_for_view_mode(view_mode: ViewMode, delta: ScrollDelta) -> (f32, f32) {
-    let delta = delta.pixel_delta(px(20.0));
-    let x = delta.x.as_f32();
-    let y = delta.y.as_f32();
-    match view_mode {
-        ViewMode::Compact => {
-            let primary = if x.abs() > y.abs() { x } else { y };
-            (-primary, 0.0)
-        }
-        ViewMode::Icons | ViewMode::Details => (0.0, -y),
     }
 }
 
@@ -12901,38 +12889,6 @@ text/plain=viewer.desktop;\n",
         assert_eq!(
             zoom_change_for_wheel_delta(ScrollDelta::Pixels(gpui::point(px(0.0), px(0.0)))),
             None
-        );
-    }
-
-    #[test]
-    fn compact_wheel_scroll_maps_vertical_wheel_to_horizontal_axis() {
-        assert_eq!(
-            wheel_scroll_delta_for_view_mode(
-                ViewMode::Compact,
-                ScrollDelta::Lines(gpui::point(0.0, -3.0))
-            ),
-            (60.0, 0.0)
-        );
-        assert_eq!(
-            wheel_scroll_delta_for_view_mode(
-                ViewMode::Details,
-                ScrollDelta::Lines(gpui::point(0.0, -3.0))
-            ),
-            (0.0, 60.0)
-        );
-        assert_eq!(
-            wheel_scroll_delta_for_view_mode(
-                ViewMode::Icons,
-                ScrollDelta::Lines(gpui::point(4.0, 0.0))
-            ),
-            (0.0, -0.0)
-        );
-        assert_eq!(
-            wheel_scroll_delta_for_view_mode(
-                ViewMode::Details,
-                ScrollDelta::Lines(gpui::point(4.0, 0.0))
-            ),
-            (0.0, -0.0)
         );
     }
 
