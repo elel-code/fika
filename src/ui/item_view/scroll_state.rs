@@ -15,10 +15,55 @@ pub(crate) struct ItemViewScrollSync {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ItemViewScrollViewSnapshot {
+    pub(crate) scroll_x: f32,
+    pub(crate) scroll_y: f32,
+    pub(crate) max_scroll_x: f32,
+    pub(crate) max_scroll_y: f32,
+}
+
+impl ItemViewScrollViewSnapshot {
+    pub(crate) fn new(scroll_x: f32, scroll_y: f32, max_scroll_x: f32, max_scroll_y: f32) -> Self {
+        Self {
+            scroll_x,
+            scroll_y,
+            max_scroll_x,
+            max_scroll_y,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum ItemViewScrollSyncAction {
     None,
     SyncHandleToView,
     SyncView(ItemViewScrollSync),
+}
+
+impl ItemViewScrollSyncAction {
+    pub(crate) fn into_outcome(
+        self,
+        view: ItemViewScrollViewSnapshot,
+    ) -> ItemViewScrollSyncOutcome {
+        match self {
+            ItemViewScrollSyncAction::None | ItemViewScrollSyncAction::SyncHandleToView => {
+                ItemViewScrollSyncOutcome {
+                    sync: None,
+                    changed: false,
+                }
+            }
+            ItemViewScrollSyncAction::SyncView(sync) => ItemViewScrollSyncOutcome {
+                sync: Some(sync),
+                changed: scroll_sync_changes_view(view, sync),
+            },
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ItemViewScrollSyncOutcome {
+    pub(crate) sync: Option<ItemViewScrollSync>,
+    pub(crate) changed: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -453,16 +498,13 @@ fn set_scroll_handle_offset(scroll_handle: &ScrollHandle, scroll_x: f32, scroll_
 }
 
 pub(crate) fn scroll_sync_changes_view(
-    view_scroll_x: f32,
-    view_scroll_y: f32,
-    view_max_scroll_x: f32,
-    view_max_scroll_y: f32,
+    view: ItemViewScrollViewSnapshot,
     sync: ItemViewScrollSync,
 ) -> bool {
-    !scroll_offset_matches(view_scroll_x, sync.scroll_x)
-        || !scroll_offset_matches(view_scroll_y, sync.scroll_y)
-        || !scroll_offset_matches(view_max_scroll_x, sync.max_scroll_x)
-        || !scroll_offset_matches(view_max_scroll_y, sync.max_scroll_y)
+    !scroll_offset_matches(view.scroll_x, sync.scroll_x)
+        || !scroll_offset_matches(view.scroll_y, sync.scroll_y)
+        || !scroll_offset_matches(view.max_scroll_x, sync.max_scroll_x)
+        || !scroll_offset_matches(view.max_scroll_y, sync.max_scroll_y)
 }
 
 fn scroll_offset_matches(left: f32, right: f32) -> bool {
@@ -670,6 +712,55 @@ mod tests {
             }
         );
         assert!(!state.is_scrollbar_dragging(pane_id));
+    }
+
+    #[test]
+    fn scroll_sync_action_outcome_reports_view_change_only_for_sync_view() {
+        let view = ItemViewScrollViewSnapshot::new(100.0, 0.0, 1_000.0, 0.0);
+
+        assert_eq!(
+            ItemViewScrollSyncAction::SyncHandleToView.into_outcome(view),
+            ItemViewScrollSyncOutcome {
+                sync: None,
+                changed: false,
+            }
+        );
+        assert_eq!(
+            ItemViewScrollSyncAction::SyncView(ItemViewScrollSync {
+                scroll_x: 100.2,
+                scroll_y: 0.0,
+                max_scroll_x: 1_000.0,
+                max_scroll_y: 0.0,
+            })
+            .into_outcome(view),
+            ItemViewScrollSyncOutcome {
+                sync: Some(ItemViewScrollSync {
+                    scroll_x: 100.2,
+                    scroll_y: 0.0,
+                    max_scroll_x: 1_000.0,
+                    max_scroll_y: 0.0,
+                }),
+                changed: false,
+            }
+        );
+        assert_eq!(
+            ItemViewScrollSyncAction::SyncView(ItemViewScrollSync {
+                scroll_x: 180.0,
+                scroll_y: 0.0,
+                max_scroll_x: 1_000.0,
+                max_scroll_y: 0.0,
+            })
+            .into_outcome(view),
+            ItemViewScrollSyncOutcome {
+                sync: Some(ItemViewScrollSync {
+                    scroll_x: 180.0,
+                    scroll_y: 0.0,
+                    max_scroll_x: 1_000.0,
+                    max_scroll_y: 0.0,
+                }),
+                changed: true,
+            }
+        );
     }
 
     #[test]

@@ -1023,6 +1023,11 @@ by risk and evidence, not by how custom-painted a surface looks.
   mapping filtered layout indexes back to model indexes. `src/main.rs` still
   supplies pane/filter/cache inputs and decides how query results affect
   selection, DnD, and context-menu behavior.
+- [x] P16cg: Move item-view scroll sync outcome classification into the scroll
+  state. `ItemViewScrollSyncAction::into_outcome()` now owns whether a returned
+  scroll action carries pane-view values and whether those values differ from
+  the current view snapshot. `src/main.rs` still applies the returned scroll
+  values to the pane model.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

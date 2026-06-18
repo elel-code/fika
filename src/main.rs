@@ -103,9 +103,8 @@ use ui::filter_bar::{
 };
 use ui::icons::{FileIconCache, file_icon_resolve_results_for_requests};
 use ui::item_view::{
-    ItemViewScrollState, ItemViewScrollSync, ItemViewScrollSyncAction,
-    projected_item_viewport_width_for_pane_width, scroll_sync_changes_view,
-    viewport_extents_after_view_mode_axis_change,
+    ItemViewScrollState, ItemViewScrollSyncAction, ItemViewScrollViewSnapshot,
+    projected_item_viewport_width_for_pane_width, viewport_extents_after_view_mode_axis_change,
     viewport_height_after_filter_bar_visibility_change, wheel_scroll_delta_for_view_mode,
     window_resize_viewport_prime,
 };
@@ -1259,43 +1258,22 @@ impl FikaApp {
         view_max_scroll_x: f32,
         view_max_scroll_y: f32,
     ) -> bool {
-        match action {
-            ItemViewScrollSyncAction::None | ItemViewScrollSyncAction::SyncHandleToView => false,
-            ItemViewScrollSyncAction::SyncView(sync) => self.apply_item_view_scroll_sync(
-                pane_id,
-                sync,
-                view_scroll_x,
-                view_scroll_y,
-                view_max_scroll_x,
-                view_max_scroll_y,
-            ),
-        }
-    }
-
-    fn apply_item_view_scroll_sync(
-        &mut self,
-        pane_id: PaneId,
-        sync: ItemViewScrollSync,
-        view_scroll_x: f32,
-        view_scroll_y: f32,
-        view_max_scroll_x: f32,
-        view_max_scroll_y: f32,
-    ) -> bool {
-        let changed = scroll_sync_changes_view(
+        let outcome = action.into_outcome(ItemViewScrollViewSnapshot::new(
             view_scroll_x,
             view_scroll_y,
             view_max_scroll_x,
             view_max_scroll_y,
-            sync,
-        );
-        let _ = self.panes.set_view_scroll(
-            pane_id,
-            sync.scroll_x,
-            sync.scroll_y,
-            sync.max_scroll_x,
-            sync.max_scroll_y,
-        );
-        changed
+        ));
+        if let Some(sync) = outcome.sync {
+            let _ = self.panes.set_view_scroll(
+                pane_id,
+                sync.scroll_x,
+                sync.scroll_y,
+                sync.max_scroll_x,
+                sync.max_scroll_y,
+            );
+        }
+        outcome.changed
     }
 
     pub(crate) fn begin_item_view_scrollbar_drag(&mut self, pane_id: PaneId) -> bool {
