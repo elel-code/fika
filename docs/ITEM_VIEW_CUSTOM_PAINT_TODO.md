@@ -1137,6 +1137,11 @@ by risk and evidence, not by how custom-painted a surface looks.
   item-view facade. `finish_item_view_scrollbar_drag()` now owns the existing
   pane snapshot lookup, missing-pane drag-finish fallback, and pane writeback
   closure; `main.rs` only delegates the public action.
+- [x] P16dc: Move item-view layout-change scroll preservation orchestration into
+  the item-view facade. Zoom/layout paths now delegate preserved-scroll
+  snapshot lookup and pane writeback through
+  `preserve_item_view_scroll_for_layout_change()` instead of assembling that
+  closure in `main.rs`.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

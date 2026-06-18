@@ -102,12 +102,15 @@ use ui::filter_bar::{
     cached_filtered_model_for_pane, filter_toggle_snapshot,
 };
 use ui::icons::{FileIconCache, file_icon_resolve_results_for_requests};
+#[cfg(test)]
+use ui::item_view::item_view_scroll_snapshot_for_pane;
 use ui::item_view::{
     ItemViewScrollState, apply_item_view_scroll_snapshot_to_pane,
     changed_item_view_scroll_snapshot,
     finish_item_view_scrollbar_drag as finish_item_view_scrollbar_drag_state,
-    item_view_scroll_snapshot_for_existing_pane, item_view_scroll_snapshot_for_pane,
-    item_view_scroll_snapshot_for_view, projected_item_viewport_width_for_pane_width,
+    item_view_scroll_snapshot_for_existing_pane, item_view_scroll_snapshot_for_view,
+    preserve_item_view_scroll_for_layout_change as preserve_item_view_scroll_for_layout_change_state,
+    projected_item_viewport_width_for_pane_width,
     sync_pane_view_from_authoritative_item_view_scroll_handle as sync_item_view_pane_from_authoritative_scroll_handle,
     sync_pane_view_from_item_view_scroll_handle as sync_item_view_pane_from_scroll_handle,
     viewport_extents_after_view_mode_axis_change,
@@ -1215,12 +1218,11 @@ impl FikaApp {
     }
 
     fn preserve_item_view_scroll_for_layout_change(&mut self, pane_id: PaneId) {
-        let view = item_view_scroll_snapshot_for_pane(&self.panes, pane_id);
-        let panes = &mut self.panes;
-        self.item_view_scroll
-            .preserve_layout_scroll_syncing_view_snapshot(pane_id, view, |view| {
-                apply_item_view_scroll_snapshot_to_pane(panes, pane_id, view);
-            });
+        preserve_item_view_scroll_for_layout_change_state(
+            &mut self.item_view_scroll,
+            &mut self.panes,
+            pane_id,
+        );
     }
 
     fn reset_item_view_scroll_for_pane(&mut self, pane_id: PaneId) {
