@@ -436,9 +436,10 @@ function fail(message) {
     max_update("interaction_retained_dnd", retained_dnd)
     current_gpui_shell_boundary_valid = (gpui_event_shells == rows + sections && retained_dnd == 0)
     current_single_dnd_shell_boundary_valid = (gpui_event_shells == 1 && retained_dnd == rows + sections)
+    expected_retained_hitboxes = (retained_targeting == rows + sections || retained_dnd == rows + sections) ? rows + sections : 0
     if (row_target_decisions != rows ||
         section_target_decisions != sections ||
-        retained_hitboxes != 0 ||
+        retained_hitboxes != expected_retained_hitboxes ||
         !(current_gpui_shell_boundary_valid || current_single_dnd_shell_boundary_valid) ||
         drag_shells != rows ||
         drag_start_models != rows) {

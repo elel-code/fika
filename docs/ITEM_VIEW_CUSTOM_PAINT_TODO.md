@@ -1448,6 +1448,16 @@ tracks.
   and content bounds remain half-open. This keeps the future viewport-level
   event layer from regressing drop/activation targets when it no longer lives
   inside scroll content.
+- [x] P16er: Distinguish retained probe hitboxes from retained target-delivery
+  hitboxes. `retained_probe_hitboxes` remains the inserted retained layer count,
+  while `retained_hitboxes` now becomes rows+sections only for
+  `retained-targeting` and `retained-dnd`, where row/section hitboxes actually
+  dispatch targets. The full retained-event gate is unchanged and still rejects
+  those mixed states until `gpui_event_shells=0`. Evidence:
+  `/tmp/fika-places-hitbox-accounting.log` passed
+  `--require-retained-dnd-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-chrome-policy`
+  with `max_retained_hitboxes=13`, while
+  `--expect-retained-event-policy` still failed as expected.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

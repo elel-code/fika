@@ -405,6 +405,14 @@ Places chrome 默认之后的当前执行入口是
   retained hit testing 的转换规则，单元覆盖证明非零 scroll 会映射到预期 row/section，
   同时 row、section 和 content bounds 保持半开区间。这能防止未来 viewport-level event
   layer 不再位于 scroll content 内时回退 drop/activation 目标。
+- [x] P16er：区分 retained probe hitbox 和 retained target-delivery hitbox。
+  `retained_probe_hitboxes` 继续表示插入的 retained layer hitbox 数，而
+  `retained_hitboxes` 现在只在 `retained-targeting` 和 `retained-dnd` 这种 row/section
+  hitbox 实际派发 target 时变成 rows+sections。完整 retained-event gate 不变，在
+  `gpui_event_shells=0` 前仍会拒绝这些 mixed state。证据：
+  `/tmp/fika-places-hitbox-accounting.log` 通过
+  `--require-retained-dnd-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-chrome-policy`，
+  且 `max_retained_hitboxes=13`；`--expect-retained-event-policy` 仍按预期失败。
 - [ ] P16q：在每个 P16 实现切片之后，单独提交并附带相关验证：仅文档切片需要 `git diff --check`；代码切片需要 `cargo fmt`、`cargo check`、`cargo test -q`、`scripts/check-item-view-perf-analyzer.sh`、`scripts/check-places-perf-analyzer.sh` 和 `git diff --check`。
 - [x] P16r：记录运行时自测试和突破记录规则。可重复的滚动、缩放、启动图标、调整大小、模式切换和 Places 目标回退应在依赖手动计时之前通过 autosmoke 日志和分析器脚本重现。任何确认的优化突破必须记录症状、Dolphin 比较边界、根本原因、实现、保存的日志/分析器命令和未来回归守卫在拥有的设计或决策文档中。
 

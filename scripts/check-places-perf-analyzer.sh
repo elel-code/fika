@@ -291,7 +291,7 @@ cat > "$tmpdir/retained-event-targeting.log" <<'EOF'
 [fika places-view] source=11 visible=11 sections=2 snapshot=100us
 [fika places-sidebar] rows=11 sections=2 elements=13 build=240us
 [fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=11 icon_gpui=11 retained_interaction=0 drag_shell=11 section_gpui=2 scrollbar_canvas=1 visual_kind=chrome event_policy=retained-targeting retained_probe_hitboxes=13
-[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 retained_probe_hitboxes=13 gpui_event_shells=13 drag_shells=11 event_policy=retained-targeting retained_targeting=13
+[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=13 retained_probe_hitboxes=13 gpui_event_shells=13 drag_shells=11 event_policy=retained-targeting retained_targeting=13
 [fika places-event-probe] rows=11 sections=2 hitboxes=13 hovered=1 pointer=1 targeting=1 prepaint=46us paint=6us
 [fika places-row-visual] rows=11 painted=11 prepaint=20us paint=31us
 EOF
@@ -302,7 +302,7 @@ targeting_summary="$("$analyzer" \
     --expect-custom-row-chrome-policy \
     "$tmpdir/retained-event-targeting.log")"
 
-if [[ "$targeting_summary" != *"max_retained_targeting=13"* ]]; then
+if [[ "$targeting_summary" != *"max_retained_hitboxes=13"* || "$targeting_summary" != *"max_retained_targeting=13"* ]]; then
     echo "expected retained targeting interaction policy summary" >&2
     exit 1
 fi
@@ -315,13 +315,27 @@ if "$analyzer" --expect-retained-event-policy "$tmpdir/retained-event-targeting.
     exit 1
 fi
 
+cat > "$tmpdir/bad-retained-targeting-hitboxes.log" <<'EOF'
+[fika places-slots] rows=11 sections=2 entries=13 inserted=13 content=0 geometry=0 visual=0 unchanged=0 removed=0 project=25us
+[fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
+[fika places-view] source=11 visible=11 sections=2 snapshot=100us
+[fika places-sidebar] rows=11 sections=2 elements=13 build=240us
+[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=11 icon_gpui=11 retained_interaction=0 drag_shell=11 section_gpui=2 scrollbar_canvas=1 visual_kind=chrome event_policy=retained-targeting retained_probe_hitboxes=13
+[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 retained_probe_hitboxes=13 gpui_event_shells=13 drag_shells=11 event_policy=retained-targeting retained_targeting=13
+EOF
+
+if "$analyzer" --require-interaction-policy "$tmpdir/bad-retained-targeting-hitboxes.log" >/dev/null 2>&1; then
+    echo "expected retained targeting without retained hitboxes to fail" >&2
+    exit 1
+fi
+
 cat > "$tmpdir/retained-event-dnd.log" <<'EOF'
 [fika places-slots] rows=11 sections=2 entries=13 inserted=13 content=0 geometry=0 visual=0 unchanged=0 removed=0 project=25us
 [fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
 [fika places-view] source=11 visible=11 sections=2 snapshot=100us
 [fika places-sidebar] rows=11 sections=2 elements=13 build=240us
 [fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=11 icon_gpui=11 retained_interaction=0 drag_shell=11 section_gpui=2 scrollbar_canvas=1 visual_kind=chrome event_policy=retained-dnd retained_probe_hitboxes=13
-[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 retained_probe_hitboxes=13 gpui_event_shells=1 drag_shells=11 event_policy=retained-dnd retained_targeting=13 retained_dnd=13
+[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=13 retained_probe_hitboxes=13 gpui_event_shells=1 drag_shells=11 event_policy=retained-dnd retained_targeting=13 retained_dnd=13
 [fika places-event-probe] rows=11 sections=2 hitboxes=13 hovered=1 pointer=1 targeting=1 dnd=1 prepaint=48us paint=7us
 [fika places-row-visual] rows=11 painted=11 prepaint=20us paint=31us
 EOF
@@ -332,7 +346,7 @@ dnd_summary="$("$analyzer" \
     --expect-custom-row-chrome-policy \
     "$tmpdir/retained-event-dnd.log")"
 
-if [[ "$dnd_summary" != *"max_gpui_event_shells=1 max_drag_shells=11 max_retained_probe_hitboxes=13 max_retained_targeting=13 max_retained_dnd=13"* ]]; then
+if [[ "$dnd_summary" != *"max_retained_hitboxes=13 max_gpui_event_shells=1 max_drag_shells=11 max_retained_probe_hitboxes=13 max_retained_targeting=13 max_retained_dnd=13"* ]]; then
     echo "expected retained dnd interaction policy summary" >&2
     exit 1
 fi
@@ -490,7 +504,7 @@ cat > "$tmpdir/retained-dnd-autosmoke.log" <<'EOF'
 [fika places-view] source=11 visible=11 sections=2 snapshot=100us
 [fika places-sidebar] rows=11 sections=2 elements=13 build=200us
 [fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=11 icon_gpui=11 retained_interaction=0 drag_shell=11 section_gpui=2 scrollbar_canvas=1 visual_kind=chrome event_policy=retained-dnd retained_probe_hitboxes=13
-[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 retained_probe_hitboxes=13 gpui_event_shells=1 drag_shells=11 event_policy=retained-dnd retained_targeting=13 retained_dnd=13
+[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=13 retained_probe_hitboxes=13 gpui_event_shells=1 drag_shells=11 event_policy=retained-dnd retained_targeting=13 retained_dnd=13
 [fika places-interaction-geometry] rows=11 sections=2 entries=13 content_height=378 hit_tests=2 project=5us
 [fika autosmoke] places start scenario=RetainedDnd
 [fika autosmoke] places dnd label=retained-dnd sample=path-row-body drag=path-list y=36.0 target=Place cursor=DropMenu ok=true
@@ -520,7 +534,7 @@ cat > "$tmpdir/bad-retained-dnd-autosmoke.log" <<'EOF'
 [fika places-view] source=11 visible=11 sections=2 snapshot=100us
 [fika places-sidebar] rows=11 sections=2 elements=13 build=200us
 [fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=11 icon_gpui=11 retained_interaction=0 drag_shell=11 section_gpui=2 scrollbar_canvas=1 visual_kind=chrome event_policy=retained-dnd retained_probe_hitboxes=13
-[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 retained_probe_hitboxes=13 gpui_event_shells=1 drag_shells=11 event_policy=retained-dnd retained_targeting=13 retained_dnd=13
+[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=13 retained_probe_hitboxes=13 gpui_event_shells=1 drag_shells=11 event_policy=retained-dnd retained_targeting=13 retained_dnd=13
 [fika autosmoke] places start scenario=RetainedDnd
 [fika autosmoke] places dnd label=retained-dnd sample=path-row-body drag=path-list y=36.0 target=Insert cursor=Copy ok=false
 [fika autosmoke] places dnd label=retained-dnd sample=path-row-before drag=path-list y=19.0 target=Insert cursor=Copy ok=true

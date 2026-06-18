@@ -232,7 +232,7 @@ that gate. Extend it only when a new retained event log surface is added.
 - `[fika places-event-probe]` includes `pointer=1 targeting=1`, and
   `[fika places-interaction-policy]` includes `retained_targeting=rows+sections`.
   The full retained-event analyzer gate still rejects this mixed state because
-  `retained_hitboxes=0` and `gpui_event_shells=rows+sections`.
+  `gpui_event_shells=rows+sections`.
 
 2026-06-18 retained DnD slice:
 
@@ -249,8 +249,7 @@ that gate. Extend it only when a new retained event log surface is added.
 - `[fika places-interaction-policy]` reports `retained_dnd=rows+sections` and
   `gpui_event_shells=1`. `[fika places-event-probe]` reports
   `pointer=1 targeting=1 dnd=1`. The full retained-event analyzer gate still
-  rejects this state because `retained_hitboxes=0`, `gpui_event_shells=1`, and
-  `drag_shells=rows`.
+  rejects this state because `gpui_event_shells=1` and `drag_shells=rows`.
 
 Retained DnD autosmoke slice:
 
@@ -294,6 +293,17 @@ Retained content-y conversion test slice:
   section and that row/section/content bounds use half-open ranges. This guards
   later event-layer relocation from off-by-one row/section target regressions.
 
+Retained hitbox accounting slice:
+
+- `retained_probe_hitboxes` continues to report the inserted retained layer
+  hitboxes for opt-in retained policies.
+- `retained_hitboxes` now reports rows+sections only once those hitboxes carry
+  retained target delivery (`retained-targeting` and `retained-dnd`). Probe and
+  pointer-only policies still report `retained_hitboxes=0`.
+- The full retained-event gate is unchanged: it still requires
+  `gpui_event_shells=0` and `drag_shells=rows`, so mixed retained-targeting and
+  retained-dnd states remain rejected.
+
 ## TODO
 
 - [x] Add a `PlacesEventDeliveryPolicy` with `GpuiShells` default and an
@@ -323,5 +333,8 @@ Retained content-y conversion test slice:
 - [x] Move Places drag-start source modeling out of the row shell. Current
   status: `PlaceDragStartSource` and `install_place_drag_start_shell()` live in
   `places/drag.rs`, and analyzer logs require `drag_start_models=rows`.
+- [x] Distinguish probe hitboxes from retained target-delivery hitboxes in
+  policy logs. Current status: retained-targeting and retained-dnd report
+  `retained_hitboxes=rows+sections`, while probe/pointer-only policies do not.
 - [ ] Remove GPUI row/section event callbacks after analyzer gates pass.
 - [ ] Keep GPUI row drag-start shells until Track 4 solves typed drag start.

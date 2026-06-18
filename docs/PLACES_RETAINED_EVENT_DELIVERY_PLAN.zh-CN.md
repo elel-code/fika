@@ -215,7 +215,7 @@ event 日志 surface 时才扩展 analyzer。
 - `[fika places-event-probe]` 包含 `pointer=1 targeting=1`，并且
   `[fika places-interaction-policy]` 包含 `retained_targeting=rows+sections`。
   完整 retained-event analyzer gate 仍会拒绝该 mixed state，因为
-  `retained_hitboxes=0` 且 `gpui_event_shells=rows+sections`。
+  `gpui_event_shells=rows+sections`。
 
 2026-06-18 retained DnD 切片：
 
@@ -231,7 +231,7 @@ event 日志 surface 时才扩展 analyzer。
 - `[fika places-interaction-policy]` 报告 `retained_dnd=rows+sections` 和
   `gpui_event_shells=1`。`[fika places-event-probe]` 报告
   `pointer=1 targeting=1 dnd=1`。完整 retained-event analyzer gate 仍拒绝该状态，
-  因为 `retained_hitboxes=0`、`gpui_event_shells=1` 且 `drag_shells=rows`。
+  因为 `gpui_event_shells=1` 且 `drag_shells=rows`。
 
 retained DnD autosmoke 切片：
 
@@ -270,6 +270,16 @@ retained content-y conversion test 切片：
   row/section/content bounds 使用半开区间。这能防止后续移动 event layer 时出现
   row/section target off-by-one 回归。
 
+retained hitbox accounting 切片：
+
+- `retained_probe_hitboxes` 继续报告 opt-in retained policy 插入的 retained layer
+  hitbox 数。
+- `retained_hitboxes` 现在只在这些 hitbox 承载 retained target delivery 时报告
+  rows+sections，也就是 `retained-targeting` 和 `retained-dnd`。probe 和 pointer-only
+  policy 仍报告 `retained_hitboxes=0`。
+- 完整 retained-event gate 不变：仍要求 `gpui_event_shells=0` 和
+  `drag_shells=rows`，因此 mixed retained-targeting 和 retained-dnd 状态仍会被拒绝。
+
 ## TODO
 
 - [x] 添加 `PlacesEventDeliveryPolicy`，默认 `GpuiShells`，opt-in
@@ -295,5 +305,8 @@ retained content-y conversion test 切片：
 - [x] 将 Places drag-start source modeling 移出 row shell。当前状态：
   `PlaceDragStartSource` 和 `install_place_drag_start_shell()` 位于 `places/drag.rs`，
   且 analyzer 日志要求 `drag_start_models=rows`。
+- [x] 在 policy 日志中区分 probe hitbox 与 retained target-delivery hitbox。当前状态：
+  retained-targeting 和 retained-dnd 报告 `retained_hitboxes=rows+sections`，probe /
+  pointer-only policy 不报告。
 - [ ] analyzer gates 通过后移除 GPUI row/section event callbacks。
 - [ ] Track 4 解决 typed drag start 前，继续保留 GPUI row drag-start shells。
