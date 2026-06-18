@@ -155,6 +155,7 @@ use ui::rubber_band::{
     clear_rubber_band_selection_activity_for_pane, finish_rubber_band_for_pane,
     press_pending_rubber_band_for_pane, rubber_band_selection_activity_is_active,
     set_rubber_band_selection_activity_for_count, start_active_rubber_band_for_pane,
+    update_active_rubber_band_for_pane,
 };
 #[cfg(test)]
 use ui::shortcuts::PlaceInputAction;
@@ -4184,13 +4185,11 @@ impl FikaApp {
     }
 
     fn update_rubber_band(&mut self, pane_id: PaneId, current: ViewPoint) {
-        let Some(band) = self
-            .rubber_band
-            .and_then(|band| band.with_current_for_pane(pane_id, current))
+        let Some(band) =
+            update_active_rubber_band_for_pane(&mut self.rubber_band, pane_id, current)
         else {
             return;
         };
-        self.rubber_band = Some(band);
         let selection = self.indexes_intersecting_visual_rect(pane_id, band.rect());
         if let Some(selected) = self
             .panes

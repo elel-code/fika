@@ -188,6 +188,16 @@ pub(crate) fn start_active_rubber_band_for_pane(
     *active = Some(RubberBandState::new(pane_id, start));
 }
 
+pub(crate) fn update_active_rubber_band_for_pane(
+    active: &mut Option<RubberBandState>,
+    pane_id: PaneId,
+    current: ViewPoint,
+) -> Option<RubberBandState> {
+    let band = active.and_then(|band| band.with_current_for_pane(pane_id, current))?;
+    *active = Some(band);
+    Some(band)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct RubberBandDrag {
     pub(crate) pane_id: PaneId,
@@ -396,5 +406,29 @@ mod tests {
 
         assert_eq!(pending, None);
         assert_eq!(active, Some(RubberBandState::new(PaneId(1), active_start)));
+    }
+
+    #[test]
+    fn update_active_rubber_band_for_pane_writes_back_matching_band() {
+        let start = ViewPoint { x: 10.0, y: 10.0 };
+        let current = ViewPoint { x: 30.0, y: 40.0 };
+        let mut active = Some(RubberBandState::new(PaneId(1), start));
+
+        assert_eq!(
+            update_active_rubber_band_for_pane(&mut active, PaneId(2), current),
+            None
+        );
+        assert_eq!(active, Some(RubberBandState::new(PaneId(1), start)));
+
+        let updated = update_active_rubber_band_for_pane(&mut active, PaneId(1), current);
+        assert_eq!(
+            updated,
+            Some(RubberBandState {
+                pane_id: PaneId(1),
+                start,
+                current
+            })
+        );
+        assert_eq!(active, updated);
     }
 }

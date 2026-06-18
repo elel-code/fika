@@ -1007,6 +1007,10 @@ by risk and evidence, not by how custom-painted a surface looks.
   rubber-band module. `start_active_rubber_band_for_pane()` now owns clearing
   pending state and installing the active band when a pending drag activates.
   `src/main.rs` still clears drafts and applies selection updates.
+- [x] P16cd: Move active rubber-band update writeback into the rubber-band
+  module. `update_active_rubber_band_for_pane()` now owns same-pane current
+  point updates and writing the updated active band back into the active state
+  slot. `src/main.rs` still uses the returned band rect to compute selection.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,
