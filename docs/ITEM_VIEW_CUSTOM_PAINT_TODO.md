@@ -1576,6 +1576,14 @@ tracks.
   `docs/RETAINED_ICON_IMAGE_CACHE_PLAN.md` now describe the current MIME/theme
   icon state as hybrid-by-default with `FIKA_GPUI_THEME_ICONS=1` as the baseline
   override.
+- [x] P16fi: Record the remaining Places typed DnD payload bridge boundary.
+  `docs/PLACES_RETAINED_EVENT_DELIVERY_PLAN.md` now distinguishes default
+  row/section event-callback removal from the still-required sidebar typed
+  payload bridge. Default retained-DnD must show
+  `gpui_row_section_event_shells=0` and `gpui_typed_dnd_payload_shells=1`.
+  The latter remains an audited GPUI API boundary until retained hitboxes can
+  deliver typed `ItemDrag`, `ExternalPaths`, and `PlaceDrag` move/drop payloads
+  and the full retained-event analyzer plus isolated DnD smoke pass.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

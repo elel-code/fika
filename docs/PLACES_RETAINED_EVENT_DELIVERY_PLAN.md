@@ -380,6 +380,44 @@ Remaining shell accounting split slice:
   specifically on the typed payload shell rather than an ambiguous event-shell
   total.
 
+Typed payload bridge audit:
+
+- The default retained-DnD path has removed row/section GPUI event callbacks
+  from target delivery. `gpui_row_section_event_shells=0` means activation,
+  row/section context-menu targeting, item/external-path drag target lookup,
+  place reorder target lookup, drop target state, and drop dispatch are owned by
+  the retained Places event layer and `places/interaction.rs`.
+- The remaining `gpui_typed_dnd_payload_shells=1` is a single sidebar-level
+  typed payload bridge installed by
+  `src/ui/places/event_layer.rs::install_places_event_dnd_handlers()`. It
+  exists because the public GPUI drag/drop API currently exposes typed
+  `ItemDrag`, `ExternalPaths`, and `PlaceDrag` move/drop payloads through
+  interactive elements (`Div::on_drag_move` / `Div::on_drop`), not through
+  retained painter hitboxes.
+- This bridge must not grow back into row/section ownership. It may only decode
+  the typed payload, read the current mouse position, and call the retained
+  geometry/controller path that already owns target decisions and drop
+  execution.
+- It can be removed only after GPUI exposes, or Fika carries an audited patch
+  for, typed retained-hitbox drag move/drop delivery with the same payload
+  types. The replacement must preserve same-window item drops, external path
+  drops, place reorder/drop, place-to-pane drag behavior, cursor updates,
+  leave clearing, and current-position drop menu placement.
+- The removal gate is:
+
+```text
+scripts/analyze-places-perf.sh --expect-retained-event-policy ...
+FIKA_AUTOSMOKE_PLACES=dnd ...
+future isolated destructive drop/reorder smoke with a temporary Places config
+```
+
+- Re-audit after GPUI dependency updates by searching the local GPUI checkout
+  for retained hitbox drag/drop payload APIs before changing the bridge:
+
+```sh
+rg -n "on_drag_move|on_drop|insert_hitbox|DragMoveEvent|DropEvent|ExternalPaths|PlaceDrag|ItemDrag" ~/.cargo/git/checkouts/zed-* src
+```
+
 ## TODO
 
 - [x] Add a `PlacesEventDeliveryPolicy` with an explicit `GpuiShells` fallback,
@@ -435,5 +473,11 @@ Remaining shell accounting split slice:
   `gpui_typed_dnd_payload_shells=1`, while fallback states report row/section
   shells explicitly; analyzer fixtures reject retained-DnD logs that reintroduce
   row/section GPUI event shells.
-- [ ] Remove GPUI row/section event callbacks after analyzer gates pass.
+- [x] Remove GPUI row/section event callbacks from default target delivery.
+  Current status: retained-DnD reports `gpui_row_section_event_shells=0`; the
+  remaining full retained-event blocker is the single sidebar typed payload
+  bridge, not row/section activation, menu, or DnD target ownership.
+- [ ] Remove the sidebar-level GPUI typed DnD payload bridge after a retained
+  hitbox typed drag-move/drop API exists and the full retained-event analyzer
+  plus isolated DnD smoke pass.
 - [ ] Keep GPUI row drag-start shells until Track 4 solves typed drag start.

@@ -501,6 +501,12 @@ Places chrome 默认之后的当前执行入口是
   `docs/FULL_RETAINED_RENDERER_ROADMAP.md`、`docs/ITEM_VIEW_CUSTOM_PAINT_STATUS.md`
   和 `docs/RETAINED_ICON_IMAGE_CACHE_PLAN.md` 现在把当前 MIME/theme icon 状态描述为
   hybrid-by-default，并明确 `FIKA_GPUI_THEME_ICONS=1` 是 baseline override。
+- [x] P16fi：记录剩余 Places typed DnD payload bridge 边界。
+  `docs/PLACES_RETAINED_EVENT_DELIVERY_PLAN.zh-CN.md` 现在区分默认 row/section event
+  callback 移除与仍然需要的 sidebar typed payload bridge。默认 retained-DnD 必须显示
+  `gpui_row_section_event_shells=0` 和 `gpui_typed_dnd_payload_shells=1`。后者在 retained
+  hitbox 能传递 typed `ItemDrag`、`ExternalPaths` 和 `PlaceDrag` move/drop payload，并且完整
+  retained-event analyzer 加隔离 DnD smoke 通过之前，仍是经过审计的 GPUI API 边界。
 - [ ] P16q：在每个 P16 实现切片之后，单独提交并附带相关验证：仅文档切片需要 `git diff --check`；代码切片需要 `cargo fmt`、`cargo check`、`cargo test -q`、`scripts/check-item-view-perf-analyzer.sh`、`scripts/check-places-perf-analyzer.sh` 和 `git diff --check`。
 - [x] P16r：记录运行时自测试和突破记录规则。可重复的滚动、缩放、启动图标、调整大小、模式切换和 Places 目标回退应在依赖手动计时之前通过 autosmoke 日志和分析器脚本重现。任何确认的优化突破必须记录症状、Dolphin 比较边界、根本原因、实现、保存的日志/分析器命令和未来回归守卫在拥有的设计或决策文档中。
 

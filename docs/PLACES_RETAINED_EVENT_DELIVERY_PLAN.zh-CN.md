@@ -346,6 +346,40 @@ retained sidebar leave shell 移除切片：
   retained-DnD mixed state 因此会明确失败在 typed payload shell，而不是一个含糊的
   event-shell 总数。
 
+typed payload bridge 审计：
+
+- 默认 retained-DnD 路径已经从 target delivery 中移除了 row/section GPUI event
+  callbacks。`gpui_row_section_event_shells=0` 表示 activation、row/section context-menu
+  targeting、item/external-path drag target lookup、place reorder target lookup、drop
+  target state 和 drop dispatch 都由 retained Places event layer 与
+  `places/interaction.rs` 拥有。
+- 剩余的 `gpui_typed_dnd_payload_shells=1` 是一个 sidebar-level typed payload bridge，
+  安装点是 `src/ui/places/event_layer.rs::install_places_event_dnd_handlers()`。它存在的原因
+  是当前 GPUI 公共 drag/drop API 只能通过 interactive element
+  (`Div::on_drag_move` / `Div::on_drop`) 暴露 typed `ItemDrag`、`ExternalPaths` 和
+  `PlaceDrag` move/drop payload，而不是通过 retained painter hitbox 暴露。
+- 这个 bridge 不能重新膨胀成 row/section ownership。它只能解析 typed payload、读取当前鼠标
+  位置，并调用已经拥有 target decision 与 drop execution 的 retained geometry/controller
+  路径。
+- 只有当 GPUI 暴露 typed retained-hitbox drag move/drop delivery，或 Fika 携带经过审计的
+  最小 patch，并且能提供同样 payload 类型时，才能移除此 bridge。替代路径必须保留同窗口 item
+  drops、external path drops、place reorder/drop、place-to-pane drag 行为、cursor update、
+  leave clearing，以及基于当前位置的 drop menu 放置。
+- 移除 gate 是：
+
+```text
+scripts/analyze-places-perf.sh --expect-retained-event-policy ...
+FIKA_AUTOSMOKE_PLACES=dnd ...
+future isolated destructive drop/reorder smoke with a temporary Places config
+```
+
+- GPUI 依赖更新后，在改变该 bridge 前应重新搜索本地 GPUI checkout，确认是否已经出现
+  retained hitbox drag/drop payload API：
+
+```sh
+rg -n "on_drag_move|on_drop|insert_hitbox|DragMoveEvent|DropEvent|ExternalPaths|PlaceDrag|ItemDrag" ~/.cargo/git/checkouts/zed-* src
+```
+
 ## TODO
 
 - [x] 添加 `PlacesEventDeliveryPolicy`，保留显式 `GpuiShells` fallback，当前默认为
@@ -393,5 +427,9 @@ retained sidebar leave shell 移除切片：
   `gpui_row_section_event_shells=0` 和 `gpui_typed_dnd_payload_shells=1`；fallback 状态显式报告
   row/section shell；analyzer 夹具会拒绝重新引入 row/section GPUI event shell 的
   retained-DnD 日志。
-- [ ] analyzer gates 通过后移除 GPUI row/section event callbacks。
+- [x] 从默认 target delivery 中移除 GPUI row/section event callbacks。当前状态：
+  retained-DnD 报告 `gpui_row_section_event_shells=0`；剩余完整 retained-event blocker 是单个
+  sidebar typed payload bridge，而不是 row/section activation、menu 或 DnD target ownership。
+- [ ] retained hitbox typed drag-move/drop API 存在，且完整 retained-event analyzer 与隔离
+  DnD smoke 通过后，移除 sidebar-level GPUI typed DnD payload bridge。
 - [ ] Track 4 解决 typed drag start 前，继续保留 GPUI row drag-start shells。
