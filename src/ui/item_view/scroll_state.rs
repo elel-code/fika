@@ -354,34 +354,39 @@ impl ItemViewScrollState {
         self.set_handle_offset(pane_id, scroll_x, scroll_y)
     }
 
-    pub(crate) fn sync_handle_to_view_authoritatively(
+    pub(crate) fn sync_handle_to_view_snapshot(
+        &self,
+        pane_id: PaneId,
+        view: ItemViewScrollViewSnapshot,
+    ) -> bool {
+        self.sync_handle_to_view(pane_id, view.scroll_x, view.scroll_y)
+    }
+
+    pub(crate) fn sync_handle_to_view_authoritatively_snapshot(
         &mut self,
         pane_id: PaneId,
-        scroll_x: f32,
-        scroll_y: f32,
+        view: ItemViewScrollViewSnapshot,
     ) -> bool {
         self.mark_authoritative_for_frames(pane_id, VIEW_SYNC_AUTHORITATIVE_FRAMES);
-        self.sync_handle_to_view(pane_id, scroll_x, scroll_y)
+        self.sync_handle_to_view_snapshot(pane_id, view)
     }
 
-    pub(crate) fn sync_handle_after_user_scroll(
+    pub(crate) fn sync_handle_after_user_scroll_snapshot(
         &mut self,
         pane_id: PaneId,
-        scroll_x: f32,
-        scroll_y: f32,
+        view: ItemViewScrollViewSnapshot,
     ) -> bool {
         self.clear_authoritative_scroll(pane_id);
-        self.sync_handle_to_view(pane_id, scroll_x, scroll_y)
+        self.sync_handle_to_view_snapshot(pane_id, view)
     }
 
-    pub(crate) fn sync_handle_to_view_clearing_transients(
+    pub(crate) fn sync_handle_to_view_clearing_transients_snapshot(
         &mut self,
         pane_id: PaneId,
-        scroll_x: f32,
-        scroll_y: f32,
+        view: ItemViewScrollViewSnapshot,
     ) -> bool {
         self.clear_transient_state(pane_id);
-        self.sync_handle_to_view(pane_id, scroll_x, scroll_y)
+        self.sync_handle_to_view_snapshot(pane_id, view)
     }
 
     pub(crate) fn reset_pane(&mut self, pane_id: PaneId) {
@@ -629,8 +634,9 @@ mod tests {
         let pane_id = PaneId(1);
         let mut state = ItemViewScrollState::default();
         let handle = state.handle_for_pane(pane_id);
+        let view = ItemViewScrollViewSnapshot::new(180.0, 40.0, 1_000.0, 400.0);
 
-        assert!(state.sync_handle_to_view_authoritatively(pane_id, 180.0, 40.0));
+        assert!(state.sync_handle_to_view_authoritatively_snapshot(pane_id, view));
 
         assert_eq!(handle.offset(), point(px(-180.0), px(-40.0)));
         assert!(state.has_authoritative_scroll(pane_id));
@@ -645,9 +651,10 @@ mod tests {
         let pane_id = PaneId(1);
         let mut state = ItemViewScrollState::default();
         let handle = state.handle_for_pane(pane_id);
+        let view = ItemViewScrollViewSnapshot::new(180.0, 40.0, 1_000.0, 400.0);
 
         state.mark_authoritative_for_frames(pane_id, 2);
-        assert!(state.sync_handle_after_user_scroll(pane_id, 180.0, 40.0));
+        assert!(state.sync_handle_after_user_scroll_snapshot(pane_id, view));
 
         assert_eq!(handle.offset(), point(px(-180.0), px(-40.0)));
         assert!(!state.has_authoritative_scroll(pane_id));
@@ -658,14 +665,43 @@ mod tests {
         let pane_id = PaneId(1);
         let mut state = ItemViewScrollState::default();
         let handle = state.handle_for_pane(pane_id);
+        let view = ItemViewScrollViewSnapshot::new(180.0, 40.0, 1_000.0, 400.0);
 
         state.mark_authoritative_for_frames(pane_id, 2);
         state.begin_scrollbar_drag(pane_id);
-        assert!(state.sync_handle_to_view_clearing_transients(pane_id, 180.0, 40.0));
+        assert!(state.sync_handle_to_view_clearing_transients_snapshot(pane_id, view));
 
         assert_eq!(handle.offset(), point(px(-180.0), px(-40.0)));
         assert!(!state.has_authoritative_scroll(pane_id));
         assert!(!state.is_scrollbar_dragging(pane_id));
+    }
+
+    #[test]
+    fn scroll_state_snapshot_handle_syncs_preserve_transient_policies() {
+        let pane_id = PaneId(1);
+        let view = ItemViewScrollViewSnapshot::new(180.0, 40.0, 1_000.0, 400.0);
+
+        let mut authoritative_state = ItemViewScrollState::default();
+        let authoritative_handle = authoritative_state.handle_for_pane(pane_id);
+        assert!(authoritative_state.sync_handle_to_view_authoritatively_snapshot(pane_id, view));
+        assert_eq!(authoritative_handle.offset(), point(px(-180.0), px(-40.0)));
+        assert!(authoritative_state.has_authoritative_scroll(pane_id));
+
+        let mut user_scroll_state = ItemViewScrollState::default();
+        let user_scroll_handle = user_scroll_state.handle_for_pane(pane_id);
+        user_scroll_state.mark_authoritative_for_frames(pane_id, 2);
+        assert!(user_scroll_state.sync_handle_after_user_scroll_snapshot(pane_id, view));
+        assert_eq!(user_scroll_handle.offset(), point(px(-180.0), px(-40.0)));
+        assert!(!user_scroll_state.has_authoritative_scroll(pane_id));
+
+        let mut clearing_state = ItemViewScrollState::default();
+        let clearing_handle = clearing_state.handle_for_pane(pane_id);
+        clearing_state.mark_authoritative_for_frames(pane_id, 2);
+        clearing_state.begin_scrollbar_drag(pane_id);
+        assert!(clearing_state.sync_handle_to_view_clearing_transients_snapshot(pane_id, view));
+        assert_eq!(clearing_handle.offset(), point(px(-180.0), px(-40.0)));
+        assert!(!clearing_state.has_authoritative_scroll(pane_id));
+        assert!(!clearing_state.is_scrollbar_dragging(pane_id));
     }
 
     #[test]

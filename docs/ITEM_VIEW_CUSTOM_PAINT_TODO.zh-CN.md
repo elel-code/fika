@@ -290,6 +290,7 @@
 - [x] P16ch：将 item-view scroll sync view-snapshot API 移入 scroll state。`ItemViewScrollViewSnapshot` 现在承载 handle-sync 和 authoritative-handle sync 路径中的 pane view scroll tuple，`src/main.rs` 在这些生产路径中不再用松散字段传递这些值。
 - [x] P16ci：记录后续 MIME/theme icon custom-renderer 工作流。`docs/ITEM_VIEW_RENDERER_DECISIONS.md` 现在记录 retained `(iconName, icon_size)` image-cache 方向、hybrid promotion 选项、禁止同步解码规则，以及替换默认 GPUI `img()` MIME/theme renderer 前必须具备的默认/自定义成对证据门槛。
 - [x] P16cj：将 item-view scroll lifecycle snapshot APIs 移入 scroll state。Bounds update、scrollbar-drag finish sync 和 layout-change scroll preservation 现在都有 `ItemViewScrollViewSnapshot` 入口；`src/main.rs` 的生产路径不再用松散字段传递这些 scroll values。
+- [x] P16ck：将 item-view handle-to-view snapshot sync APIs 移入 scroll state。Authoritative handle sync、user-scroll handle sync 和 transient-clearing handle sync 现在在生产路径中消费 `ItemViewScrollViewSnapshot`，不再使用松散 scroll 字段。
 - [ ] P16q：在每个 P16 实现切片之后，单独提交并附带相关验证：仅文档切片需要 `git diff --check`；代码切片需要 `cargo fmt`、`cargo check`、`cargo test -q`、`scripts/check-item-view-perf-analyzer.sh`、`scripts/check-places-perf-analyzer.sh` 和 `git diff --check`。
 - [x] P16r：记录运行时自测试和突破记录规则。可重复的滚动、缩放、启动图标、调整大小、模式切换和 Places 目标回退应在依赖手动计时之前通过 autosmoke 日志和分析器脚本重现。任何确认的优化突破必须记录症状、Dolphin 比较边界、根本原因、实现、保存的日志/分析器命令和未来回归守卫在拥有的设计或决策文档中。
 

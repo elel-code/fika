@@ -1058,6 +1058,10 @@ by risk and evidence, not by how custom-painted a surface looks.
   state. Bounds updates, scrollbar-drag finish sync, and layout-change scroll
   preservation now have `ItemViewScrollViewSnapshot` entry points; production
   paths in `src/main.rs` no longer pass those scroll values as loose fields.
+- [x] P16ck: Move item-view handle-to-view snapshot sync APIs into the scroll
+  state. Authoritative handle sync, user-scroll handle sync, and
+  transient-clearing handle sync now consume `ItemViewScrollViewSnapshot` in
+  production paths instead of loose scroll fields.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

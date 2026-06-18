@@ -899,12 +899,16 @@ impl FikaApp {
             visible,
             FILTER_BAR_HEIGHT,
         );
-        let scroll_x = pane.view.scroll_x;
-        let scroll_y = pane.view.scroll_y;
+        let view_snapshot = ItemViewScrollViewSnapshot::new(
+            pane.view.scroll_x,
+            pane.view.scroll_y,
+            pane.view.max_scroll_x,
+            pane.view.max_scroll_y,
+        );
 
         let _ = self
             .item_view_scroll
-            .sync_handle_to_view_authoritatively(pane_id, scroll_x, scroll_y);
+            .sync_handle_to_view_authoritatively_snapshot(pane_id, view_snapshot);
     }
 
     pub(crate) fn show_filter_bar(&mut self, pane_id: PaneId) {
@@ -1287,13 +1291,15 @@ impl FikaApp {
 
     fn sync_item_view_scroll_handle_to_pane_view(&mut self, pane_id: PaneId) {
         if let Some(pane) = self.panes.pane(pane_id) {
+            let view = ItemViewScrollViewSnapshot::new(
+                pane.view.scroll_x,
+                pane.view.scroll_y,
+                pane.view.max_scroll_x,
+                pane.view.max_scroll_y,
+            );
             let _ = self
                 .item_view_scroll
-                .sync_handle_to_view_clearing_transients(
-                    pane_id,
-                    pane.view.scroll_x,
-                    pane.view.scroll_y,
-                );
+                .sync_handle_to_view_clearing_transients_snapshot(pane_id, view);
         }
     }
 
@@ -3421,11 +3427,15 @@ impl FikaApp {
                 next_view.max_scroll_y,
             );
         if changed {
-            let _ = self.item_view_scroll.sync_handle_after_user_scroll(
-                pane_id,
+            let view = ItemViewScrollViewSnapshot::new(
                 next_view.scroll_x,
                 next_view.scroll_y,
+                next_view.max_scroll_x,
+                next_view.max_scroll_y,
             );
+            let _ = self
+                .item_view_scroll
+                .sync_handle_after_user_scroll_snapshot(pane_id, view);
         }
         changed
     }
