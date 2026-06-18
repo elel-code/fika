@@ -205,6 +205,9 @@ Hybrid `/etc` smoke evidence from 2026-06-18:
   `theme_prewarm_pending=118`; later frames painted ready keys through the image
   layer with `theme_loaded=396`, `theme_placeholder=0`, `theme_decoded=0`, and
   `max_paint=383us`.
+- `scripts/compare-item-image-renderers.sh --gate-hybrid-handoff
+  /tmp/fika-icon-hybrid-etc-readiness.log /tmp/fika-etc-zoom-scroll.log` passes
+  the handoff-specific gate.
 - Decision: the readiness handoff works mechanically and avoids visible
   placeholder/decode churn in this `/etc` smoke, but it is still not a default
   promotion. The run still shows a visible-item `icon_sync` spike around 24ms
@@ -222,6 +225,9 @@ Hybrid `/etc` smoke evidence from 2026-06-18:
   analyzer so paired default/custom logs fail on placeholder churn or zoom-time
   decode bursts. `--gate-default-promotion` now fails on custom theme
   placeholders, theme decode churn, or invalid renderer-policy evidence.
+- [x] Extend the paired comparison gate for hybrid handoff evidence.
+  `--gate-hybrid-handoff` now requires GPUI fallback, theme prewarm activity,
+  ready-key image-layer paint, and no visible theme placeholder/decode churn.
 - [x] Add opt-in theme-icon prewarm evidence. `FIKA_PREWARM_THEME_ICONS=1`
   creates a non-painting image layer for GPUI-rendered theme icons and reports
   `theme_prewarm_*` counts without increasing `theme_placeholder`.

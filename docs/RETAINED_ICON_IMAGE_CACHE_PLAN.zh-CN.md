@@ -180,6 +180,9 @@ FIKA_PERF_ITEM_VIEW=1 FIKA_CUSTOM_THEME_ICONS=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-sc
 - Hybrid 完成 staged handoff：早期 frame 仍停留在 GPUI，同时 prewarm 报告
   `theme_prewarm_pending=118`；后续 frame 将 ready key 交给 image layer 绘制，
   `theme_loaded=396`、`theme_placeholder=0`、`theme_decoded=0`、`max_paint=383us`。
+- `scripts/compare-item-image-renderers.sh --gate-hybrid-handoff
+  /tmp/fika-icon-hybrid-etc-readiness.log /tmp/fika-etc-zoom-scroll.log` 已通过
+  handoff-specific gate。
 - 决策：readiness handoff 在机制上成立，并在这次 `/etc` smoke 中避免了可见
   placeholder/decode churn，但仍不是默认提升。该运行在滚动到新的 `/etc` 可见条目时仍有约
   24ms 的 visible-item `icon_sync` spike，混合用户目录证据也还没有补齐。
@@ -194,6 +197,9 @@ FIKA_PERF_ITEM_VIEW=1 FIKA_CUSTOM_THEME_ICONS=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-sc
   default/custom 日志在 placeholder churn 或 zoom-time decode burst 时失败。
   `--gate-default-promotion` 现在会在 custom theme placeholder、theme decode
   churn 或 renderer-policy 证据无效时失败。
+- [x] 为 hybrid handoff 证据扩展成对比较 gate。`--gate-hybrid-handoff` 现在要求存在
+  GPUI fallback、theme prewarm 活动、ready-key image-layer paint，且没有可见 theme
+  placeholder/decode churn。
 - [x] 添加 opt-in theme-icon prewarm 证据。`FIKA_PREWARM_THEME_ICONS=1` 会为
   GPUI-rendered theme icon 创建不绘制的 image layer，并报告 `theme_prewarm_*`
   计数，同时不增加 `theme_placeholder`。

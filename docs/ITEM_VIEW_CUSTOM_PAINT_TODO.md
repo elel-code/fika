@@ -1337,6 +1337,13 @@ tracks.
   bridge keeps default GPUI renderer policy and does not expose custom
   placeholders (`theme_placeholder=0`, `paint_count=0`) while warming retained
   images. This is still an intermediate bridge, not a default promotion.
+- [x] P16ef: Add the paired hybrid handoff gate. The
+  `scripts/compare-item-image-renderers.sh --gate-hybrid-handoff` mode now
+  fails unless the candidate log shows GPUI fallback, prewarm activity,
+  ready-key image-layer paint, and no visible theme placeholder/decode churn.
+  `scripts/check-item-view-perf-analyzer.sh` covers passing and failing
+  synthetic hybrid comparisons; real `/etc` and mixed-directory promotion
+  evidence remains tracked by P16k2/P16k2a.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

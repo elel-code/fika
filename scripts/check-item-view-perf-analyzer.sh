@@ -141,6 +141,34 @@ if [[ "$image_renderer_gate_evidence" != *"Default-promotion gate: pass"* ]]; th
     exit 1
 fi
 
+cat > "$tmpdir/hybrid-theme.log" <<'EOF'
+[fika item-view] pane=1 mode=Compact phase=initial items=197 visible=48 raw=187us icon_sync=99us queue=180us convert=196us total=770us
+[fika renderer-policy] pane=1 mode=Compact items=48 visual_layer=48 image_layer=0 gpui_image_element=48 retained_interaction=48 gpui_drag_shell=48 rename_overlay=0
+[fika item-image] pane=1 mode=Compact prepaint_count=48 prepaint=180us paint_count=0 paint=0us theme_loaded=0 theme_decoded=0 theme_retained=0 theme_placeholder=0 theme_prewarm_loaded=0 theme_prewarm_decoded=0 theme_prewarm_retained=0 theme_prewarm_pending=48 thumb_loaded=0 thumb_decoded=0 thumb_retained=0 thumb_fallback=0
+[fika item-view] pane=1 mode=Compact phase=steady items=197 visible=48 raw=90us icon_sync=22us queue=2us convert=118us total=260us
+[fika renderer-policy] pane=1 mode=Compact items=48 visual_layer=48 image_layer=48 gpui_image_element=0 retained_interaction=48 gpui_drag_shell=48 rename_overlay=0
+[fika item-image] pane=1 mode=Compact prepaint_count=48 prepaint=160us paint_count=48 paint=320us theme_loaded=48 theme_decoded=0 theme_retained=0 theme_placeholder=0 theme_prewarm_loaded=0 theme_prewarm_decoded=0 theme_prewarm_retained=0 theme_prewarm_pending=0 thumb_loaded=0 thumb_decoded=0 thumb_retained=0 thumb_fallback=0
+EOF
+
+hybrid_gate_evidence="$("$image_renderer_compare" --gate-hybrid-handoff "$tmpdir/hybrid-theme.log" "$tmpdir/default-split.log")"
+if [[ "$hybrid_gate_evidence" != *"Candidate renderer state: hybrid-readiness-handoff"* ]]; then
+    echo "expected hybrid renderer state in comparison" >&2
+    exit 1
+fi
+if [[ "$hybrid_gate_evidence" != *"Hybrid-handoff gate: pass"* ]]; then
+    echo "expected clean hybrid/default comparison to pass hybrid-handoff gate" >&2
+    exit 1
+fi
+if [[ "$hybrid_gate_evidence" != *"theme prewarm pending | 48 | 0"* ]]; then
+    echo "expected hybrid comparison to include prewarm evidence" >&2
+    exit 1
+fi
+
+if "$image_renderer_compare" --gate-hybrid-handoff "$tmpdir/custom-theme-clean.log" "$tmpdir/default-split.log" >/dev/null 2>&1; then
+    echo "expected hybrid handoff gate to fail when GPUI fallback/prewarm are absent" >&2
+    exit 1
+fi
+
 cat > "$tmpdir/legacy-no-icon-sync.log" <<'EOF'
 [fika item-view] pane=1 mode=Compact phase=steady items=48 visible=32 raw=50us queue=1us convert=40us total=120us
 EOF
