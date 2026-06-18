@@ -318,6 +318,19 @@ Retained interaction policy accounting slice:
   loosened: `retained-dnd` remains rejected until the remaining typed GPUI DnD
   shell can be removed.
 
+Retained targeting autosmoke slice:
+
+- `FIKA_AUTOSMOKE_PLACES=targeting` now emits non-mutating retained targeting
+  samples for activation-row, row context-menu, and section context-menu target
+  classification.
+- The smoke consumes the same `PlacesInteractionGeometry` as the retained event
+  layer and does not activate a place or open menus. It proves the target
+  classification layer that retained event handlers rely on before any default
+  policy promotion.
+- `scripts/analyze-places-perf.sh --require-retained-targeting-autosmoke`
+  rejects missing markers, failed samples, or summaries that do not include both
+  rows and sections.
+
 ## TODO
 
 - [x] Add a `PlacesEventDeliveryPolicy` with `GpuiShells` default and an
@@ -334,7 +347,9 @@ Retained interaction policy accounting slice:
 - [~] Move activation/context-menu targeting to the retained layer. Current
   status: `retained-targeting` owns row activation and row/section context menu
   targeting, but the policy remains opt-in while typed DnD move/drop and
-  drag-start still need GPUI shells.
+  drag-start still need GPUI shells. A non-mutating targeting autosmoke now
+  covers activation-row, row context-menu, and section context-menu target
+  classification.
 - [~] Add isolated DnD smoke for retained item/external/place drops. Current
   status: `FIKA_AUTOSMOKE_PLACES=dnd` proves retained path-list and place drag
   target decisions for row body, row edge, and section targets without mutating
@@ -353,5 +368,9 @@ Retained interaction policy accounting slice:
 - [x] Make renderer `retained_interaction` event-policy aware. Current status:
   retained-targeting and retained-dnd report rows+sections, probe/pointer keep
   zero, and full retained-event policy still fails while `gpui_event_shells=1`.
+- [x] Add non-mutating retained targeting autosmoke and analyzer gate. Current
+  status: `FIKA_AUTOSMOKE_PLACES=targeting` proves activation-row,
+  context-row, and context-section target classification without changing app
+  state or opening menus.
 - [ ] Remove GPUI row/section event callbacks after analyzer gates pass.
 - [ ] Keep GPUI row drag-start shells until Track 4 solves typed drag start.

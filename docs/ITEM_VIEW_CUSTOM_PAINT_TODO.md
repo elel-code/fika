@@ -1466,6 +1466,13 @@ tracks.
   custom chrome/full visual policy against that event-policy-aware count, but
   the full retained-event gate still rejects `retained-dnd` until
   `gpui_event_shells=0`.
+- [x] P16et: Add non-mutating retained Places targeting autosmoke. The
+  `FIKA_AUTOSMOKE_PLACES=targeting` scenario now samples retained
+  activation-row, row context-menu, and section context-menu target
+  classification from `PlacesInteractionGeometry` without activating places or
+  opening menus. `scripts/analyze-places-perf.sh` now supports
+  `--require-retained-targeting-autosmoke` and rejects missing or failed
+  targeting samples before any retained-targeting default promotion.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

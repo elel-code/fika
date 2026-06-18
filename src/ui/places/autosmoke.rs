@@ -20,6 +20,7 @@ pub(crate) enum PlacesAutosmokeScenario {
     Overflow,
     Layout,
     HitTest,
+    RetainedTargeting,
     RetainedDnd,
 }
 
@@ -38,6 +39,7 @@ pub(crate) enum PlacesAutosmokeAction {
     RestoreLayout { label: &'static str },
     VerifyLayoutSettings { label: &'static str },
     HitTest { label: &'static str },
+    RetainedTargeting { label: &'static str },
     RetainedDnd { label: &'static str },
 }
 
@@ -62,6 +64,30 @@ struct PlacesHitTestAutosmokeSample {
     zone: &'static str,
     visible_index: Option<usize>,
     insert_index: Option<usize>,
+    ok: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct PlacesRetainedTargetingAutosmokeReport {
+    rows: usize,
+    sections: usize,
+    samples: Vec<PlacesRetainedTargetingAutosmokeSample>,
+}
+
+impl PlacesRetainedTargetingAutosmokeReport {
+    fn ok(&self) -> bool {
+        self.samples.iter().all(|sample| sample.ok)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct PlacesRetainedTargetingAutosmokeSample {
+    sample: &'static str,
+    y: f32,
+    target: &'static str,
+    visible_index: Option<usize>,
+    group: Option<&'static str>,
+    activatable: bool,
     ok: bool,
 }
 
@@ -141,6 +167,7 @@ impl PlacesAutosmokeScenario {
             Self::Overflow => "Overflow",
             Self::Layout => "Layout",
             Self::HitTest => "HitTest",
+            Self::RetainedTargeting => "RetainedTargeting",
             Self::RetainedDnd => "RetainedDnd",
         }
     }
@@ -154,7 +181,9 @@ impl PlacesAutosmokeScenario {
         match self {
             Self::DropTargets | Self::Overflow => Duration::from_millis(160),
             Self::Layout => Duration::from_millis(260),
-            Self::HitTest | Self::RetainedDnd => Duration::from_millis(160),
+            Self::HitTest | Self::RetainedTargeting | Self::RetainedDnd => {
+                Duration::from_millis(160)
+            }
         }
     }
 
@@ -214,6 +243,9 @@ impl PlacesAutosmokeScenario {
             Self::HitTest => vec![PlacesAutosmokeAction::HitTest {
                 label: "retained-hit-test",
             }],
+            Self::RetainedTargeting => vec![PlacesAutosmokeAction::RetainedTargeting {
+                label: "retained-targeting",
+            }],
             Self::RetainedDnd => vec![PlacesAutosmokeAction::RetainedDnd {
                 label: "retained-dnd",
             }],
@@ -256,6 +288,8 @@ fn places_autosmoke_scenario_from_value(value: &str) -> Option<PlacesAutosmokeSc
         "hit-test" | "hit_test" | "hittest" | "retained-hit-test" | "retained_hit_test" => {
             Some(PlacesAutosmokeScenario::HitTest)
         }
+        "targeting" | "retained-targeting" | "retained_targeting" | "retained-click"
+        | "retained_click" => Some(PlacesAutosmokeScenario::RetainedTargeting),
         "dnd" | "retained-dnd" | "retained_dnd" | "drag-drop" | "drag_drop" => {
             Some(PlacesAutosmokeScenario::RetainedDnd)
         }
@@ -358,6 +392,36 @@ pub(crate) fn emit_places_retained_dnd_autosmoke(label: &'static str, snapshots:
     }
     eprintln!(
         "[fika autosmoke] places dnd-summary label={} rows={} sections={} ok={}",
+        label,
+        report.rows,
+        report.sections,
+        report.ok()
+    );
+}
+
+pub(crate) fn emit_places_retained_targeting_autosmoke(
+    label: &'static str,
+    snapshots: &[PlaceSnapshot],
+) {
+    let report = retained_targeting_autosmoke_report(snapshots);
+    for sample in &report.samples {
+        eprintln!(
+            "[fika autosmoke] places targeting label={} sample={} y={:.1} target={} visible_index={} group={} activatable={} ok={}",
+            label,
+            sample.sample,
+            sample.y,
+            sample.target,
+            sample
+                .visible_index
+                .map(|index| index.to_string())
+                .unwrap_or_else(|| "<none>".to_string()),
+            sample.group.unwrap_or("<none>"),
+            sample.activatable,
+            sample.ok
+        );
+    }
+    eprintln!(
+        "[fika autosmoke] places targeting-summary label={} rows={} sections={} ok={}",
         label,
         report.rows,
         report.sections,
@@ -608,6 +672,83 @@ fn retained_hit_test_autosmoke_sample(
     }
 }
 
+fn retained_targeting_autosmoke_report(
+    snapshots: &[PlaceSnapshot],
+) -> PlacesRetainedTargetingAutosmokeReport {
+    let geometry = places_interaction_geometry(snapshots);
+    let mut samples = Vec::new();
+
+    if let Some(row) = geometry.rows().iter().find(|row| row.activatable()) {
+        samples.push(retained_targeting_autosmoke_sample(
+            "activation-row",
+            row.y + row.height / 2.0,
+            "ActivationRow",
+            &geometry,
+        ));
+    }
+    if let Some(row) = geometry.rows().first() {
+        samples.push(retained_targeting_autosmoke_sample(
+            "context-row",
+            row.y + row.height / 2.0,
+            "ContextRow",
+            &geometry,
+        ));
+    }
+    if let Some(section) = geometry.sections().first() {
+        samples.push(retained_targeting_autosmoke_sample(
+            "context-section",
+            section.y + 1.0,
+            "ContextSection",
+            &geometry,
+        ));
+    }
+
+    PlacesRetainedTargetingAutosmokeReport {
+        rows: geometry.rows().len(),
+        sections: geometry.sections().len(),
+        samples,
+    }
+}
+
+fn retained_targeting_autosmoke_sample(
+    sample: &'static str,
+    y: f32,
+    expected_target: &'static str,
+    geometry: &super::interaction::PlacesInteractionGeometry,
+) -> PlacesRetainedTargetingAutosmokeSample {
+    let hit = geometry.hit_test_y(y);
+    let (target, visible_index, group, activatable) = match hit {
+        Some(PlaceInteractionHit::Row { row, .. }) if sample == "activation-row" => (
+            "ActivationRow",
+            Some(row.visible_index),
+            Some(row.group),
+            row.activatable(),
+        ),
+        Some(PlaceInteractionHit::Row { row, .. }) => (
+            "ContextRow",
+            Some(row.visible_index),
+            Some(row.group),
+            row.activatable(),
+        ),
+        Some(PlaceInteractionHit::Section(section)) => {
+            ("ContextSection", None, Some(section.group), false)
+        }
+        None => ("<none>", None, None, false),
+    };
+
+    PlacesRetainedTargetingAutosmokeSample {
+        sample,
+        y,
+        target,
+        visible_index,
+        group,
+        activatable,
+        ok: target == expected_target
+            && (sample != "activation-row" || activatable)
+            && (sample != "context-section" || group.is_some()),
+    }
+}
+
 fn retained_dnd_autosmoke_report(snapshots: &[PlaceSnapshot]) -> PlacesRetainedDndAutosmokeReport {
     let geometry = places_interaction_geometry(snapshots);
     let mut samples = Vec::new();
@@ -816,6 +957,14 @@ mod tests {
             Some(PlacesAutosmokeScenario::HitTest)
         );
         assert_eq!(
+            places_autosmoke_scenario_from_value("retained-targeting"),
+            Some(PlacesAutosmokeScenario::RetainedTargeting)
+        );
+        assert_eq!(
+            places_autosmoke_scenario_from_value("retained_click"),
+            Some(PlacesAutosmokeScenario::RetainedTargeting)
+        );
+        assert_eq!(
             places_autosmoke_scenario_from_value("retained-dnd"),
             Some(PlacesAutosmokeScenario::RetainedDnd)
         );
@@ -835,6 +984,10 @@ mod tests {
         assert_eq!(PlacesAutosmokeScenario::Overflow.marker_label(), "Overflow");
         assert_eq!(PlacesAutosmokeScenario::Layout.marker_label(), "Layout");
         assert_eq!(PlacesAutosmokeScenario::HitTest.marker_label(), "HitTest");
+        assert_eq!(
+            PlacesAutosmokeScenario::RetainedTargeting.marker_label(),
+            "RetainedTargeting"
+        );
         assert_eq!(
             PlacesAutosmokeScenario::RetainedDnd.marker_label(),
             "RetainedDnd"
@@ -1010,6 +1163,19 @@ mod tests {
     }
 
     #[test]
+    fn retained_targeting_scenario_contains_only_targeting_action() {
+        let actions = PlacesAutosmokeScenario::RetainedTargeting.actions();
+
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(
+            actions[0],
+            PlacesAutosmokeAction::RetainedTargeting {
+                label: "retained-targeting"
+            }
+        ));
+    }
+
+    #[test]
     fn retained_dnd_scenario_contains_only_dnd_action() {
         let actions = PlacesAutosmokeScenario::RetainedDnd.actions();
 
@@ -1106,6 +1272,42 @@ mod tests {
                 ("path-row-before", "path-list", "Insert", "Copy"),
                 ("path-section", "path-list", "Insert", "Copy"),
                 ("place-row-body", "place", "Insert", "Move"),
+            ]
+        );
+    }
+
+    #[test]
+    fn retained_targeting_autosmoke_report_covers_activation_row_and_context_targets() {
+        let report = retained_targeting_autosmoke_report(&[
+            test_place(0, "", "Home", "/home/yk"),
+            test_place(1, "Devices", "Root", "/"),
+        ]);
+
+        assert_eq!(report.rows, 2);
+        assert_eq!(report.sections, 1);
+        assert!(report.ok());
+        assert_eq!(
+            report
+                .samples
+                .iter()
+                .map(|sample| (
+                    sample.sample,
+                    sample.target,
+                    sample.visible_index,
+                    sample.group,
+                    sample.activatable
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                ("activation-row", "ActivationRow", Some(0), Some(""), true),
+                ("context-row", "ContextRow", Some(0), Some(""), true),
+                (
+                    "context-section",
+                    "ContextSection",
+                    None,
+                    Some("Devices"),
+                    false
+                ),
             ]
         );
     }

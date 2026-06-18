@@ -26,6 +26,11 @@ Options:
       Fail unless FIKA_AUTOSMOKE_PLACES=hit-test markers are present and prove
       retained Places row edge/body and section hit testing.
 
+  --require-retained-targeting-autosmoke
+      Fail unless FIKA_AUTOSMOKE_PLACES=targeting markers are present and prove
+      retained Places activation-row, row context-menu, and section context-menu
+      target classification.
+
   --require-retained-dnd-autosmoke
       Fail unless FIKA_AUTOSMOKE_PLACES=dnd markers are present and prove
       retained Places DnD target decisions for path-list and place drags.
@@ -91,6 +96,7 @@ require_autosmoke=false
 require_overflow_autosmoke=false
 require_layout_autosmoke=false
 require_hit_test_autosmoke=false
+require_retained_targeting_autosmoke=false
 require_retained_dnd_autosmoke=false
 require_interaction_policy=false
 require_interaction_geometry=false
@@ -117,6 +123,9 @@ while [[ $# -gt 0 ]]; do
             ;;
         --require-hit-test-autosmoke)
             require_hit_test_autosmoke=true
+            ;;
+        --require-retained-targeting-autosmoke)
+            require_retained_targeting_autosmoke=true
             ;;
         --require-retained-dnd-autosmoke)
             require_retained_dnd_autosmoke=true
@@ -218,6 +227,7 @@ awk \
     -v require_overflow_autosmoke="$require_overflow_autosmoke" \
     -v require_layout_autosmoke="$require_layout_autosmoke" \
     -v require_hit_test_autosmoke="$require_hit_test_autosmoke" \
+    -v require_retained_targeting_autosmoke="$require_retained_targeting_autosmoke" \
     -v require_retained_dnd_autosmoke="$require_retained_dnd_autosmoke" \
     -v require_interaction_policy="$require_interaction_policy" \
     -v require_interaction_geometry="$require_interaction_geometry" \
@@ -592,6 +602,14 @@ function renderer_retained_interaction_for_policy(event_policy, rows, sections) 
     hit_test_autosmoke_complete_seen = 1
 }
 
+/^\[fika autosmoke\] places start scenario=RetainedTargeting/ {
+    retained_targeting_autosmoke_start_seen = 1
+}
+
+/^\[fika autosmoke\] places complete scenario=RetainedTargeting/ {
+    retained_targeting_autosmoke_complete_seen = 1
+}
+
 /^\[fika autosmoke\] places start scenario=RetainedDnd/ {
     retained_dnd_autosmoke_start_seen = 1
 }
@@ -654,6 +672,31 @@ function renderer_retained_interaction_for_policy(event_policy, rows, sections) 
         hit_test_summary_seen = 1
         max_update("hit_test_rows", rows)
         max_update("hit_test_sections", sections)
+    }
+}
+
+/^\[fika autosmoke\] places targeting / {
+    sample = field("sample")
+    target = field("target")
+    activatable = field("activatable")
+    ok = field("ok")
+    if (sample == "activation-row" && target == "ActivationRow" && activatable == "true" && ok == "true") {
+        retained_targeting_activation_row_seen = 1
+    } else if (sample == "context-row" && target == "ContextRow" && ok == "true") {
+        retained_targeting_context_row_seen = 1
+    } else if (sample == "context-section" && target == "ContextSection" && ok == "true") {
+        retained_targeting_context_section_seen = 1
+    }
+}
+
+/^\[fika autosmoke\] places targeting-summary / {
+    ok = field("ok")
+    rows = field("rows") + 0
+    sections = field("sections") + 0
+    if (ok == "true" && rows > 0 && sections > 0) {
+        retained_targeting_summary_seen = 1
+        max_update("retained_targeting_rows", rows)
+        max_update("retained_targeting_sections", sections)
     }
 }
 
@@ -839,6 +882,17 @@ END {
             fail("missing or invalid Places retained hit-test autosmoke markers")
         }
     }
+    if (require_retained_targeting_autosmoke == "true") {
+        if (!retained_targeting_autosmoke_start_seen || !retained_targeting_autosmoke_complete_seen) {
+            fail("missing Places retained targeting autosmoke start/complete markers")
+        }
+        if (!retained_targeting_activation_row_seen ||
+            !retained_targeting_context_row_seen ||
+            !retained_targeting_context_section_seen ||
+            !retained_targeting_summary_seen) {
+            fail("missing or invalid Places retained targeting autosmoke markers")
+        }
+    }
     if (require_retained_dnd_autosmoke == "true") {
         if (!retained_dnd_autosmoke_start_seen || !retained_dnd_autosmoke_complete_seen) {
             fail("missing Places retained DnD autosmoke start/complete markers")
@@ -1011,6 +1065,15 @@ END {
         hit_test_summary_seen,
         max_values["hit_test_rows"],
         max_values["hit_test_sections"])
+    printf("places_retained_targeting_autosmoke start=%d complete=%d activation_row=%d context_row=%d context_section=%d summary=%d max_rows=%d max_sections=%d\n",
+        retained_targeting_autosmoke_start_seen,
+        retained_targeting_autosmoke_complete_seen,
+        retained_targeting_activation_row_seen,
+        retained_targeting_context_row_seen,
+        retained_targeting_context_section_seen,
+        retained_targeting_summary_seen,
+        max_values["retained_targeting_rows"],
+        max_values["retained_targeting_sections"])
     printf("places_retained_dnd_autosmoke start=%d complete=%d path_row_body=%d path_row_before=%d path_section=%d place_row_body=%d summary=%d max_rows=%d max_sections=%d\n",
         retained_dnd_autosmoke_start_seen,
         retained_dnd_autosmoke_complete_seen,

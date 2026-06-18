@@ -292,6 +292,16 @@ retained interaction policy accounting 切片：
   retained-event gate 没有放松：只要 `retained-dnd` 还存在剩余 typed GPUI DnD shell，
   它仍会被拒绝。
 
+retained targeting autosmoke 切片：
+
+- `FIKA_AUTOSMOKE_PLACES=targeting` 现在会输出非变更 retained targeting 采样，覆盖
+  activation-row、row context-menu 和 section context-menu target classification。
+- 该 smoke 消费 retained event layer 使用的同一份 `PlacesInteractionGeometry`，不会真正
+  activate place 或打开菜单。它证明的是 retained event handler 依赖的 target
+  classification 层，为后续默认 policy 提升提供回归守卫。
+- `scripts/analyze-places-perf.sh --require-retained-targeting-autosmoke` 会拒绝缺失
+  marker、失败采样，或没有同时包含 row 和 section 的 summary。
+
 ## TODO
 
 - [x] 添加 `PlacesEventDeliveryPolicy`，默认 `GpuiShells`，opt-in
@@ -306,6 +316,8 @@ retained interaction policy accounting 切片：
 - [~] 将 activation/context-menu targeting 移到 retained layer。当前状态：
   `retained-targeting` 拥有 row activation 和 row/section context menu targeting，
   但 typed DnD move/drop 和 drag-start 仍需要 GPUI shell，因此该 policy 仍保持 opt-in。
+  非变更 targeting autosmoke 现在覆盖 activation-row、row context-menu 和 section
+  context-menu target classification。
 - [~] 添加 retained item/external/place drops 的隔离 DnD smoke。当前状态：
   `FIKA_AUTOSMOKE_PLACES=dnd` 在不改变用户 Places 的前提下验证 path-list 和 place drag
   对 row body、row edge、section target 的 retained target decision。它有意不执行
@@ -323,5 +335,8 @@ retained interaction policy accounting 切片：
 - [x] 让 renderer `retained_interaction` 按 event policy 计数。当前状态：
   retained-targeting 和 retained-dnd 报告 rows+sections，probe/pointer 保持 0，并且
   `gpui_event_shells=1` 时完整 retained-event policy 仍失败。
+- [x] 添加非变更 retained targeting autosmoke 和 analyzer gate。当前状态：
+  `FIKA_AUTOSMOKE_PLACES=targeting` 会在不改变 app state、不打开菜单的前提下证明
+  activation-row、context-row 和 context-section target classification。
 - [ ] analyzer gates 通过后移除 GPUI row/section event callbacks。
 - [ ] Track 4 解决 typed drag start 前，继续保留 GPUI row drag-start shells。

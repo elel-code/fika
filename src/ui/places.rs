@@ -23,7 +23,8 @@ pub(crate) use autosmoke::{
     emit_places_autosmoke_layout_update, emit_places_autosmoke_place_target_action,
     emit_places_autosmoke_snapshot, emit_places_autosmoke_start,
     emit_places_retained_dnd_autosmoke, emit_places_retained_hit_test_autosmoke,
-    places_autosmoke_first_target_path, places_autosmoke_resize_target_width,
+    emit_places_retained_targeting_autosmoke, places_autosmoke_first_target_path,
+    places_autosmoke_resize_target_width,
 };
 pub(crate) use devices::replace_removable_device_places;
 pub(crate) use drag::PlaceDrag;

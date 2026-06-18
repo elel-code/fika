@@ -498,6 +498,57 @@ if "$analyzer" --require-hit-test-autosmoke "$tmpdir/bad-hit-test.log" >/dev/nul
     exit 1
 fi
 
+cat > "$tmpdir/retained-targeting-autosmoke.log" <<'EOF'
+[fika places-slots] rows=11 sections=2 entries=13 inserted=13 content=0 geometry=0 visual=0 unchanged=0 removed=0 project=25us
+[fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
+[fika places-view] source=11 visible=11 sections=2 snapshot=100us
+[fika places-sidebar] rows=11 sections=2 elements=13 build=200us
+[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=11 icon_gpui=11 retained_interaction=13 drag_shell=11 section_gpui=2 scrollbar_canvas=1 visual_kind=chrome event_policy=retained-targeting retained_probe_hitboxes=13
+[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=13 retained_probe_hitboxes=13 gpui_event_shells=13 drag_shells=11 event_policy=retained-targeting retained_targeting=13
+[fika places-interaction-geometry] rows=11 sections=2 entries=13 content_height=378 hit_tests=2 project=5us
+[fika autosmoke] places start scenario=RetainedTargeting
+[fika autosmoke] places targeting label=retained-targeting sample=activation-row y=36.0 target=ActivationRow visible_index=0 group= activatable=true ok=true
+[fika autosmoke] places targeting label=retained-targeting sample=context-row y=36.0 target=ContextRow visible_index=0 group= activatable=true ok=true
+[fika autosmoke] places targeting label=retained-targeting sample=context-section y=61.0 target=ContextSection visible_index=<none> group=Devices activatable=false ok=true
+[fika autosmoke] places targeting-summary label=retained-targeting rows=11 sections=2 ok=true
+[fika autosmoke] places complete scenario=RetainedTargeting
+[fika places-event-probe] rows=11 sections=2 hitboxes=13 hovered=1 pointer=1 targeting=1 prepaint=46us paint=6us
+[fika places-row-visual] rows=11 painted=11 prepaint=20us paint=31us
+EOF
+
+retained_targeting_autosmoke_summary="$("$analyzer" \
+    --require-retained-targeting-autosmoke \
+    --require-interaction-policy \
+    --require-interaction-geometry \
+    --require-event-probe \
+    --expect-custom-row-chrome-policy \
+    "$tmpdir/retained-targeting-autosmoke.log")"
+
+if [[ "$retained_targeting_autosmoke_summary" != *"places_retained_targeting_autosmoke start=1 complete=1 activation_row=1 context_row=1 context_section=1 summary=1 max_rows=11 max_sections=2"* ]]; then
+    echo "expected Places retained targeting autosmoke summary" >&2
+    exit 1
+fi
+
+cat > "$tmpdir/bad-retained-targeting-autosmoke.log" <<'EOF'
+[fika places-slots] rows=11 sections=2 entries=13 inserted=13 content=0 geometry=0 visual=0 unchanged=0 removed=0 project=25us
+[fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
+[fika places-view] source=11 visible=11 sections=2 snapshot=100us
+[fika places-sidebar] rows=11 sections=2 elements=13 build=200us
+[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=11 icon_gpui=11 retained_interaction=13 drag_shell=11 section_gpui=2 scrollbar_canvas=1 visual_kind=chrome event_policy=retained-targeting retained_probe_hitboxes=13
+[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=13 retained_probe_hitboxes=13 gpui_event_shells=13 drag_shells=11 event_policy=retained-targeting retained_targeting=13
+[fika autosmoke] places start scenario=RetainedTargeting
+[fika autosmoke] places targeting label=retained-targeting sample=activation-row y=36.0 target=ContextRow visible_index=0 group= activatable=true ok=false
+[fika autosmoke] places targeting label=retained-targeting sample=context-row y=36.0 target=ContextRow visible_index=0 group= activatable=true ok=true
+[fika autosmoke] places targeting label=retained-targeting sample=context-section y=61.0 target=ContextSection visible_index=<none> group=Devices activatable=false ok=true
+[fika autosmoke] places targeting-summary label=retained-targeting rows=11 sections=2 ok=false
+[fika autosmoke] places complete scenario=RetainedTargeting
+EOF
+
+if "$analyzer" --require-retained-targeting-autosmoke "$tmpdir/bad-retained-targeting-autosmoke.log" >/dev/null 2>&1; then
+    echo "expected invalid Places retained targeting autosmoke to fail" >&2
+    exit 1
+fi
+
 cat > "$tmpdir/retained-dnd-autosmoke.log" <<'EOF'
 [fika places-slots] rows=11 sections=2 entries=13 inserted=13 content=0 geometry=0 visual=0 unchanged=0 removed=0 project=25us
 [fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
