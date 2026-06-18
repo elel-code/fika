@@ -270,6 +270,7 @@
 - [x] P16bq：将 item-view rubber-band drag threshold policy 移入 rubber-band 模块。`ui/rubber_band` 现在拥有激活 pending rubber-band selection 的 Manhattan-distance 启动阈值。`src/main.rs` 仍提供 clamp 后的 content point，并负责启动/更新活动 selection band。
 - [x] P16br：将 file-grid viewport window-to-content point policy 移入 viewport 模块。`ui/file_grid/viewport.rs` 现在拥有基于 `PaneViewportGeometry` 和 `ViewState` 把 window position 转换成 scrolled content point，以及 clamp 后 content point 的规则。`src/main.rs` 仍执行 pane lookup，并把这些 point 用于 hit testing、drag target 和 rubber-band selection。
 - [x] P16bs：将 file-grid viewport pane hit-testing policy 移入 viewport 模块。`ui/file_grid/viewport.rs` 现在拥有根据 window position 命中 viewport pane 的规则，并保持 `PaneController::pane_ids()` 顺序作为优先级。`src/main.rs` 仍提供当前 pane 顺序和缓存的 viewport geometry，用于跨 pane drag target lookup。
+- [x] P16bt：将 pending rubber-band state 移入 rubber-band 模块。`ui/rubber_band` 现在同时拥有 active 和 pending rubber-band 数据模型；`src/main.rs` 仍负责启动、更新、结束这些状态并应用 selection 结果。
 - [ ] P16q：在每个 P16 实现切片之后，单独提交并附带相关验证：仅文档切片需要 `git diff --check`；代码切片需要 `cargo fmt`、`cargo check`、`cargo test -q`、`scripts/check-item-view-perf-analyzer.sh`、`scripts/check-places-perf-analyzer.sh` 和 `git diff --check`。
 - [x] P16r：记录运行时自测试和突破记录规则。可重复的滚动、缩放、启动图标、调整大小、模式切换和 Places 目标回退应在依赖手动计时之前通过 autosmoke 日志和分析器脚本重现。任何确认的优化突破必须记录症状、Dolphin 比较边界、根本原因、实现、保存的日志/分析器命令和未来回归守卫在拥有的设计或决策文档中。
 

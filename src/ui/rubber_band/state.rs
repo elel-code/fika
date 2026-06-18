@@ -3,6 +3,12 @@ use fika_core::{PaneId, ViewPoint, ViewRect, ViewState};
 const RUBBER_BAND_START_DRAG_DISTANCE: f32 = 6.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct PendingRubberBand {
+    pub(crate) pane_id: PaneId,
+    pub(crate) start: ViewPoint,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct RubberBandState {
     pub(crate) pane_id: PaneId,
     pub(crate) start: ViewPoint,

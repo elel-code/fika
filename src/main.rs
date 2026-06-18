@@ -149,7 +149,7 @@ use ui::properties_dialog::{
     PropertiesDialogState, properties_dialog_overlay, properties_for_path, properties_for_selection,
 };
 use ui::rename::{RENAME_TEXT_INSET_X, RenameDraft};
-use ui::rubber_band::{RubberBandState, rubber_band_drag_distance_reached};
+use ui::rubber_band::{PendingRubberBand, RubberBandState, rubber_band_drag_distance_reached};
 #[cfg(test)]
 use ui::shortcuts::PlaceInputAction;
 use ui::shortcuts::{
@@ -271,12 +271,6 @@ fn default_open_with_application_id(applications: &[MimeApplication]) -> Option<
         .find(|application| application.is_default)
         .or_else(|| applications.first())
         .map(|application| application.id.as_str())
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct PendingRubberBand {
-    pane_id: PaneId,
-    start: ViewPoint,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

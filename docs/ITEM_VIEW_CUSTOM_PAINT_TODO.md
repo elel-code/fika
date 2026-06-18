@@ -963,6 +963,10 @@ by risk and evidence, not by how custom-painted a surface looks.
   contains a window position while preserving `PaneController::pane_ids()` order
   as the priority. `src/main.rs` still supplies the current pane order and
   cached viewport geometries for cross-pane drag target lookup.
+- [x] P16bt: Move pending rubber-band state into the rubber-band module.
+  `ui/rubber_band` now owns both active and pending rubber-band data models;
+  `src/main.rs` still starts, updates, finishes, and applies selection results
+  from those states.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,
