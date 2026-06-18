@@ -93,7 +93,7 @@ use ui::file_grid::{
     pane_model_indexes_intersecting_visual_rect, rename_editor_required_text_width,
 };
 #[cfg(test)]
-use ui::file_grid::{RawFileGridSnapshot, THUMBNAIL_PROBE_BATCH_SIZE};
+use ui::file_grid::{QueuedVisibleModelWork, RawFileGridSnapshot, THUMBNAIL_PROBE_BATCH_SIZE};
 use ui::filter_bar::{
     FILTER_BAR_HEIGHT, FilterBarSnapshot, FilteredModelCacheEntry, PaneFilterState,
     cached_filtered_model_for_pane, filter_toggle_snapshot,
@@ -1395,32 +1395,23 @@ impl FikaApp {
                 };
                 let filtered = filtered_model.as_ref().map(|(model, _)| model);
                 let queue_started = perf_enabled.then(Instant::now);
-                let (metadata_role_queued, thumbnail_probe_queued, file_icon_resolve_queued) = self
-                    .queue_file_grid_model_work_for_raw_grid(
-                        pane_id,
-                        generation,
-                        view.view_mode,
-                        model_data_generation,
-                        source_revision,
-                        item_count,
-                        &raw_file_grid,
-                        file_icon_size,
-                        filtered,
-                    )?;
+                let queued_file_grid_model_work = self.queue_file_grid_model_work_for_raw_grid(
+                    pane_id,
+                    generation,
+                    view.view_mode,
+                    model_data_generation,
+                    source_revision,
+                    item_count,
+                    &raw_file_grid,
+                    file_icon_size,
+                    filtered,
+                )?;
                 let queue_elapsed = queue_started.map(|started| started.elapsed());
                 let rubber_band = self
                     .rubber_band
                     .active_viewport_rect_for_pane(pane_id, &view);
                 let filter_bar = self.filter_bar_snapshot(pane_id, focused_pane, item_count);
-                if metadata_role_queued {
-                    self.maybe_start_metadata_role(cx);
-                }
-                if thumbnail_probe_queued {
-                    self.maybe_start_thumbnail_probe(cx);
-                }
-                if file_icon_resolve_queued {
-                    self.maybe_start_file_icon_resolve(cx);
-                }
+                self.start_queued_file_grid_model_work(queued_file_grid_model_work, cx);
                 let convert_started = perf_enabled.then(Instant::now);
                 let projection = self.project_retained_file_grid_for_pane(
                     pane_id,
@@ -12796,7 +12787,11 @@ text/plain=viewer.desktop;\n",
                 48.0,
                 None,
             ),
-            Some((true, false, true))
+            Some(QueuedVisibleModelWork {
+                metadata_role: true,
+                thumbnail_probe: false,
+                file_icon_resolve: true,
+            })
         );
 
         app.panes.pane_mut(pane_id).unwrap().view.viewport_width = 430.0;
@@ -12819,7 +12814,7 @@ text/plain=viewer.desktop;\n",
                 48.0,
                 None,
             ),
-            Some((false, false, false))
+            Some(QueuedVisibleModelWork::default())
         );
         let batch = app.metadata_role_scheduler.start_role_batch(8).unwrap();
         assert_eq!(batch.requests.len(), 1);

@@ -19,12 +19,8 @@ pub(crate) struct QueuedVisibleModelWork {
 }
 
 impl QueuedVisibleModelWork {
-    pub(crate) fn into_tuple(self) -> (bool, bool, bool) {
-        (
-            self.metadata_role,
-            self.thumbnail_probe,
-            self.file_icon_resolve,
-        )
+    pub(crate) fn is_empty(self) -> bool {
+        !self.metadata_role && !self.thumbnail_probe && !self.file_icon_resolve
     }
 }
 

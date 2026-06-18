@@ -1196,6 +1196,10 @@ by risk and evidence, not by how custom-painted a surface looks.
   scheduler completion, model result application, continued scheduling, and
   notification decisions now live beside thumbnail result application instead
   of `main.rs`.
+- [x] P16dp: Keep visible model work startup inside the file-grid retained
+  facade. Queueing now returns the typed `QueuedVisibleModelWork` contract, and
+  `main.rs` delegates worker startup instead of unpacking metadata, thumbnail,
+  and file-icon booleans.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

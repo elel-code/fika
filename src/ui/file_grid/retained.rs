@@ -3,8 +3,9 @@ use super::icon_work::{
     resolve_visible_file_icons_for_raw_grid as resolve_visible_file_icons_for_raw_grid_with_cache,
 };
 use super::snapshot::{
-    RawFileGridSnapshot, RawFileGridSnapshotInput, RetainedFileGridProjection,
-    project_retained_file_grid_snapshot, queue_raw_file_grid_model_work, raw_file_grid_snapshot,
+    QueuedVisibleModelWork, RawFileGridSnapshot, RawFileGridSnapshotInput,
+    RetainedFileGridProjection, project_retained_file_grid_snapshot,
+    queue_raw_file_grid_model_work, raw_file_grid_snapshot,
     visible_metadata_role_results_for_raw_grid,
 };
 use crate::FikaApp;
@@ -100,28 +101,25 @@ impl FikaApp {
         raw_file_grid: &RawFileGridSnapshot,
         file_icon_size: f32,
         filtered: Option<&fika_core::FilteredModel>,
-    ) -> Option<(bool, bool, bool)> {
+    ) -> Option<QueuedVisibleModelWork> {
         let pane = self.panes.pane(pane_id)?;
-        Some(
-            queue_raw_file_grid_model_work(
-                &mut self.visible_work_keys,
-                &mut self.metadata_role_scheduler,
-                &mut self.thumbnail_scheduler,
-                &self.file_icons,
-                &mut self.file_icon_resolve_queue,
-                pane_id,
-                generation,
-                view_mode,
-                model_data_generation,
-                source_revision,
-                item_count,
-                raw_file_grid,
-                file_icon_size,
-                &pane.model,
-                filtered,
-            )
-            .into_tuple(),
-        )
+        Some(queue_raw_file_grid_model_work(
+            &mut self.visible_work_keys,
+            &mut self.metadata_role_scheduler,
+            &mut self.thumbnail_scheduler,
+            &self.file_icons,
+            &mut self.file_icon_resolve_queue,
+            pane_id,
+            generation,
+            view_mode,
+            model_data_generation,
+            source_revision,
+            item_count,
+            raw_file_grid,
+            file_icon_size,
+            &pane.model,
+            filtered,
+        ))
     }
 
     pub(crate) fn resolve_visible_metadata_roles_for_raw_grid(
@@ -317,6 +315,25 @@ impl FikaApp {
             },
         )
         .detach();
+    }
+
+    pub(crate) fn start_queued_file_grid_model_work(
+        &mut self,
+        queued_work: QueuedVisibleModelWork,
+        cx: &mut Context<Self>,
+    ) {
+        if queued_work.is_empty() {
+            return;
+        }
+        if queued_work.metadata_role {
+            self.maybe_start_metadata_role(cx);
+        }
+        if queued_work.thumbnail_probe {
+            self.maybe_start_thumbnail_probe(cx);
+        }
+        if queued_work.file_icon_resolve {
+            self.maybe_start_file_icon_resolve(cx);
+        }
     }
 
     pub(crate) fn cancel_metadata_role_work_for_pane(&mut self, pane_id: PaneId) {
