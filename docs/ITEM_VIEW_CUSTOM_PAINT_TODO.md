@@ -967,6 +967,10 @@ by risk and evidence, not by how custom-painted a surface looks.
   `ui/rubber_band` now owns both active and pending rubber-band data models;
   `src/main.rs` still starts, updates, finishes, and applies selection results
   from those states.
+- [x] P16bu: Move pending rubber-band activation policy into the rubber-band
+  module. `PendingRubberBand` now owns pane matching plus the Dolphin-like
+  Manhattan drag threshold through `can_activate()`, while `src/main.rs` still
+  supplies the clamped current content point and starts/updates selection.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

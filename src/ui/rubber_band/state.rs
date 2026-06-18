@@ -8,6 +8,16 @@ pub(crate) struct PendingRubberBand {
     pub(crate) start: ViewPoint,
 }
 
+impl PendingRubberBand {
+    pub(crate) fn new(pane_id: PaneId, start: ViewPoint) -> Self {
+        Self { pane_id, start }
+    }
+
+    pub(crate) fn can_activate(self, pane_id: PaneId, current: ViewPoint) -> bool {
+        self.pane_id == pane_id && rubber_band_drag_distance_reached(self.start, current)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct RubberBandState {
     pub(crate) pane_id: PaneId,
@@ -53,7 +63,7 @@ pub(crate) struct RubberBandDrag {
     pub(crate) pane_id: PaneId,
 }
 
-pub(crate) fn rubber_band_drag_distance_reached(start: ViewPoint, current: ViewPoint) -> bool {
+fn rubber_band_drag_distance_reached(start: ViewPoint, current: ViewPoint) -> bool {
     (start.x - current.x).abs() + (start.y - current.y).abs() >= RUBBER_BAND_START_DRAG_DISTANCE
 }
 
@@ -77,5 +87,14 @@ mod tests {
             start,
             ViewPoint { x: 4.0, y: 10.0 }
         ));
+    }
+
+    #[test]
+    fn pending_rubber_band_activation_requires_same_pane_and_drag_distance() {
+        let pending = PendingRubberBand::new(PaneId(1), ViewPoint { x: 10.0, y: 10.0 });
+
+        assert!(!pending.can_activate(PaneId(2), ViewPoint { x: 20.0, y: 20.0 }));
+        assert!(!pending.can_activate(PaneId(1), ViewPoint { x: 13.0, y: 12.0 }));
+        assert!(pending.can_activate(PaneId(1), ViewPoint { x: 13.0, y: 13.0 }));
     }
 }

@@ -149,7 +149,7 @@ use ui::properties_dialog::{
     PropertiesDialogState, properties_dialog_overlay, properties_for_path, properties_for_selection,
 };
 use ui::rename::{RENAME_TEXT_INSET_X, RenameDraft};
-use ui::rubber_band::{PendingRubberBand, RubberBandState, rubber_band_drag_distance_reached};
+use ui::rubber_band::{PendingRubberBand, RubberBandState};
 #[cfg(test)]
 use ui::shortcuts::PlaceInputAction;
 use ui::shortcuts::{
@@ -3999,7 +3999,7 @@ impl FikaApp {
         }
         self.clear_selection_from_blank(pane_id);
         self.rubber_band = None;
-        self.rubber_band_pending = Some(PendingRubberBand { pane_id, start });
+        self.rubber_band_pending = Some(PendingRubberBand::new(pane_id, start));
         true
     }
 
@@ -4019,16 +4019,13 @@ impl FikaApp {
         pane_id: PaneId,
         position: gpui::Point<gpui::Pixels>,
     ) -> bool {
-        let Some(pending) = self
-            .rubber_band_pending
-            .filter(|pending| pending.pane_id == pane_id)
-        else {
+        let Some(pending) = self.rubber_band_pending else {
             return false;
         };
         let Some(current) = self.clamped_content_point_from_window(pane_id, position) else {
             return false;
         };
-        if !rubber_band_drag_distance_reached(pending.start, current) {
+        if !pending.can_activate(pane_id, current) {
             return false;
         }
         self.start_rubber_band(pane_id, pending.start);
