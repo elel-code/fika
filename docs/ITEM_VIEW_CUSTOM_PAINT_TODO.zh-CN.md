@@ -302,6 +302,7 @@
 - [x] P16ct：收窄 item-view handle-to-view snapshot helper 可见性。`sync_handle_to_view_snapshot()` 现在是 scroll-state 内部 helper；跨模块路径使用 authoritative、user-scroll 或 transient-clearing policy API，而不是 raw handle sync helper。
 - [x] P16cu：封装 item-view scroll snapshot 写回。snapshot 字段现在仅在 `scroll_state.rs` 内部可见；`main.rs` 通过 `ItemViewScrollViewSnapshot::apply_scroll_writeback()` 和单一 pane 写回 adapter 写入 pane scroll，不再重复拆开 scroll tuple。
 - [x] P16cv：让滚轮滚动变化判断也走 item-view scroll snapshot 协议。`scroll_pane_from_wheel()` 现在比较 pane model scroll 前后的 `ItemViewScrollViewSnapshot`，不再在 `src/main.rs` 手工拼四字段 scroll tuple。
+- [x] P16cw：将 item-view scroll snapshot 的 pane 写回 adapter 移入 item-view 模块。`main.rs` 现在只把 `PaneController` 和 `PaneId` 交给 `apply_item_view_scroll_snapshot_to_pane()`，不再拥有拆解 item-view scroll snapshot 的 adapter 逻辑。
 - [ ] P16q：在每个 P16 实现切片之后，单独提交并附带相关验证：仅文档切片需要 `git diff --check`；代码切片需要 `cargo fmt`、`cargo check`、`cargo test -q`、`scripts/check-item-view-perf-analyzer.sh`、`scripts/check-places-perf-analyzer.sh` 和 `git diff --check`。
 - [x] P16r：记录运行时自测试和突破记录规则。可重复的滚动、缩放、启动图标、调整大小、模式切换和 Places 目标回退应在依赖手动计时之前通过 autosmoke 日志和分析器脚本重现。任何确认的优化突破必须记录症状、Dolphin 比较边界、根本原因、实现、保存的日志/分析器命令和未来回归守卫在拥有的设计或决策文档中。
 

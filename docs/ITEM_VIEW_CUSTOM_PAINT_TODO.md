@@ -1109,6 +1109,10 @@ by risk and evidence, not by how custom-painted a surface looks.
   snapshot protocol. `scroll_pane_from_wheel()` now compares
   `ItemViewScrollViewSnapshot` values before/after pane model scrolling instead
   of open-coding the four-field scroll tuple in `src/main.rs`.
+- [x] P16cw: Move the item-view scroll snapshot pane writeback adapter into the
+  item-view module. `main.rs` now supplies `PaneController` and `PaneId` to
+  `apply_item_view_scroll_snapshot_to_pane()` instead of owning the adapter
+  logic that unpacks the item-view scroll snapshot.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

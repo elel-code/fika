@@ -1,7 +1,7 @@
 mod scroll_bar;
 mod scroll_state;
 
-use fika_core::ViewMode;
+use fika_core::{PaneController, PaneId, ViewMode};
 use gpui::{ScrollDelta, px};
 
 pub(crate) use scroll_bar::{
@@ -137,6 +137,16 @@ pub(crate) fn wheel_scroll_delta_for_view_mode(
     }
 }
 
+pub(crate) fn apply_item_view_scroll_snapshot_to_pane(
+    panes: &mut PaneController,
+    pane_id: PaneId,
+    view: ItemViewScrollViewSnapshot,
+) {
+    view.apply_scroll_writeback(|scroll_x, scroll_y, max_scroll_x, max_scroll_y| {
+        let _ = panes.set_view_scroll(pane_id, scroll_x, scroll_y, max_scroll_x, max_scroll_y);
+    });
+}
+
 fn apply_window_resize_delta(extent: f32, delta: f32) -> f32 {
     fika_core::normalize_viewport_extent(extent + delta)
 }
@@ -148,6 +158,7 @@ fn viewport_delta_changed(delta: f32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     #[test]
     fn projected_item_viewport_width_accounts_for_scrollbar_axis() {
@@ -279,5 +290,23 @@ mod tests {
             ),
             (0.0, -0.0)
         );
+    }
+
+    #[test]
+    fn scroll_snapshot_pane_writeback_uses_pane_controller_policy() {
+        let mut panes = PaneController::new(PathBuf::from("/tmp/fika-item-view-scroll"));
+        let pane_id = panes.focused().expect("initial pane exists");
+
+        apply_item_view_scroll_snapshot_to_pane(
+            &mut panes,
+            pane_id,
+            ItemViewScrollViewSnapshot::new(140.0, 32.0, 100.0, 20.0),
+        );
+
+        let view = &panes.pane(pane_id).expect("pane exists").view;
+        assert_eq!(view.scroll_x, 100.0);
+        assert_eq!(view.scroll_y, 20.0);
+        assert_eq!(view.max_scroll_x, 100.0);
+        assert_eq!(view.max_scroll_y, 20.0);
     }
 }
