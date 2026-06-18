@@ -861,6 +861,13 @@ by risk and evidence, not by how custom-painted a surface looks.
   model result path, and invalidating the pane visible snapshot cache when
   visible roles change. Background metadata workers still use the shared model
   result application path in `src/main.rs`.
+- [x] P16bb: Move background metadata and thumbnail result application into the
+  file-grid retained boundary. `file_grid/retained.rs` now owns applying
+  generation-checked `MetadataRoleResult` and `ThumbnailProbeResult` batches to
+  pane models, while `src/main.rs` keeps only the worker scheduling, scheduler
+  completion, restart, and notify decisions. This keeps raw-grid visible sync
+  and background role/thumbnail result mutation on the same retained model
+  side of the Dolphin-style boundary.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

@@ -6,7 +6,10 @@ use super::snapshot::{
 use crate::FikaApp;
 use crate::ui::drag_drop::ItemDropTarget;
 use crate::ui::rename::RenameDraft;
-use fika_core::{FilteredModel, Generation, PaneId, ViewMode, ViewState};
+use fika_core::{
+    FilteredModel, Generation, MetadataRoleResult, PaneId, ThumbnailProbeResult, ViewMode,
+    ViewState, apply_metadata_role_result_to_model, apply_thumbnail_probe_result_to_model,
+};
 use std::time::Duration;
 
 impl FikaApp {
@@ -124,6 +127,42 @@ impl FikaApp {
         let changed = self.finish_metadata_role_results(results);
         if changed {
             self.invalidate_file_grid_visible_snapshot_cache(pane_id);
+        }
+        changed
+    }
+
+    pub(crate) fn finish_metadata_role_results(
+        &mut self,
+        results: Vec<MetadataRoleResult>,
+    ) -> bool {
+        let mut changed = false;
+        for result in results {
+            let Some(pane) = self.panes.pane_mut(result.pane_id) else {
+                continue;
+            };
+            if pane.generation != result.generation {
+                continue;
+            }
+            changed |= apply_metadata_role_result_to_model(&mut pane.model, result);
+        }
+        changed
+    }
+
+    pub(crate) fn finish_thumbnail_probe_results(
+        &mut self,
+        results: Vec<ThumbnailProbeResult>,
+    ) -> bool {
+        let mut changed = false;
+        for result in results {
+            let Some(pane) = self.panes.pane_mut(result.pane_id) else {
+                continue;
+            };
+            if pane.generation != result.generation {
+                continue;
+            }
+            if apply_thumbnail_probe_result_to_model(&mut pane.model, result) {
+                changed = true;
+            }
         }
         changed
     }

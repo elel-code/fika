@@ -17,11 +17,10 @@ use fika_core::{
 use fika_core::{
     CreateUndoItem, CreatedItemKind, DeviceInfo, DeviceMonitorMessage, DevicePlaceOperation,
     DevicePlaceOperationResult, DirectoryCacheDebugSnapshot, DirectoryListerEvent, ItemId,
-    ListingRequest, ListingWorker, LoadingPaneState, MetadataRoleResult, MetadataRoleScheduler,
-    OperationQueue, OperationRuntime, OperationSnapshot, PaneController, PaneId, RefreshPair,
-    RenameUndoItem, SelectionMove, SortDescriptor, SortOrder, SortRole, ThumbnailProbeResult,
-    ThumbnailScheduler, TrashEmptinessMonitor, UndoPayload, UserPlace, ViewMode, ViewPoint,
-    ViewRect, ZoomChange, apply_thumbnail_probe_result_to_model, breadcrumb_segments,
+    ListingRequest, ListingWorker, LoadingPaneState, MetadataRoleScheduler, OperationQueue,
+    OperationRuntime, OperationSnapshot, PaneController, PaneId, RefreshPair, RenameUndoItem,
+    SelectionMove, SortDescriptor, SortOrder, SortRole, ThumbnailScheduler, TrashEmptinessMonitor,
+    UndoPayload, UserPlace, ViewMode, ViewPoint, ViewRect, ZoomChange, breadcrumb_segments,
     complete_location_input, file_ops, is_network_path, listing_requests_from_events,
     metadata_role_results_for_requests, nearest_existing_ancestor, parent_location,
     perform_device_place_operation, resolve_location_input, thumbnail_probe_results_for_requests,
@@ -35,8 +34,8 @@ use fika_core::{
 };
 #[cfg(test)]
 use fika_core::{
-    Generation, ServiceMenuAction, ThumbnailCandidate, ThumbnailRequestPriority, ViewState,
-    home_dir, is_network_root_path, network_root_path,
+    Generation, MetadataRoleResult, ServiceMenuAction, ThumbnailCandidate, ThumbnailProbeResult,
+    ThumbnailRequestPriority, ViewState, home_dir, is_network_root_path, network_root_path,
 };
 use gpui::prelude::*;
 use gpui::{
@@ -2270,20 +2269,6 @@ impl FikaApp {
         .detach();
     }
 
-    fn finish_metadata_role_results(&mut self, results: Vec<MetadataRoleResult>) -> bool {
-        let mut changed = false;
-        for result in results {
-            let Some(pane) = self.panes.pane_mut(result.pane_id) else {
-                continue;
-            };
-            if pane.generation != result.generation {
-                continue;
-            }
-            changed |= fika_core::apply_metadata_role_result_to_model(&mut pane.model, result);
-        }
-        changed
-    }
-
     fn maybe_start_file_icon_resolve(&mut self, cx: &mut Context<Self>) {
         let Some(requests) = self.file_icon_resolve_queue.start_next_batch() else {
             return;
@@ -2382,22 +2367,6 @@ impl FikaApp {
             },
         )
         .detach();
-    }
-
-    fn finish_thumbnail_probe_results(&mut self, results: Vec<ThumbnailProbeResult>) -> bool {
-        let mut changed = false;
-        for result in results {
-            let Some(pane) = self.panes.pane_mut(result.pane_id) else {
-                continue;
-            };
-            if pane.generation != result.generation {
-                continue;
-            }
-            if apply_thumbnail_probe_result_to_model(&mut pane.model, result) {
-                changed = true;
-            }
-        }
-        changed
     }
 
     fn cancel_thumbnail_work_for_pane(&mut self, pane_id: PaneId) {
