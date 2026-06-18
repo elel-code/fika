@@ -7,6 +7,7 @@ use super::PlaceSnapshot;
 const PERF_PLACES_VIEW_ENV: &str = "FIKA_PERF_PLACES_VIEW";
 const CUSTOM_PLACES_ROWS_ENV: &str = "FIKA_CUSTOM_PLACES_ROWS";
 const PLACES_ROW_VISUAL_POLICY_ENV: &str = "FIKA_PLACES_ROW_VISUAL_POLICY";
+const PLACES_EVENT_DELIVERY_POLICY_ENV: &str = "FIKA_PLACES_EVENT_DELIVERY_POLICY";
 
 pub(crate) fn places_perf_enabled() -> bool {
     env::var(PERF_PLACES_VIEW_ENV).is_ok_and(|value| env_flag_is_truthy(&value))
@@ -60,6 +61,62 @@ pub(crate) fn env_flag_is_truthy(value: &str) -> bool {
         value.trim().to_ascii_lowercase().as_str(),
         "1" | "true" | "yes" | "on"
     )
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PlacesEventDeliveryPolicy {
+    GpuiShells,
+    RetainedProbe,
+}
+
+impl PlacesEventDeliveryPolicy {
+    fn kind(self) -> &'static str {
+        match self {
+            Self::GpuiShells => "gpui",
+            Self::RetainedProbe => "retained-probe",
+        }
+    }
+
+    fn retained_interaction(self, _rows: usize, _sections: usize) -> usize {
+        0
+    }
+
+    fn retained_hitboxes(self, _rows: usize, _sections: usize) -> usize {
+        0
+    }
+
+    fn retained_probe_hitboxes(self, rows: usize, sections: usize) -> usize {
+        match self {
+            Self::GpuiShells => 0,
+            Self::RetainedProbe => rows + sections,
+        }
+    }
+
+    fn gpui_event_shells(self, rows: usize, sections: usize) -> usize {
+        match self {
+            Self::GpuiShells | Self::RetainedProbe => rows + sections,
+        }
+    }
+}
+
+pub(crate) fn places_event_delivery_policy() -> PlacesEventDeliveryPolicy {
+    env::var(PLACES_EVENT_DELIVERY_POLICY_ENV)
+        .ok()
+        .and_then(|value| places_event_delivery_policy_from_str(&value))
+        .unwrap_or(PlacesEventDeliveryPolicy::GpuiShells)
+}
+
+fn places_event_delivery_policy_from_str(value: &str) -> Option<PlacesEventDeliveryPolicy> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "" => None,
+        "gpui" | "gpui-shells" | "shells" | "off" | "0" | "false" | "no" => {
+            Some(PlacesEventDeliveryPolicy::GpuiShells)
+        }
+        "probe" | "retained-probe" | "hitbox-probe" | "hitboxes-probe" => {
+            Some(PlacesEventDeliveryPolicy::RetainedProbe)
+        }
+        _ => None,
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -183,6 +240,7 @@ pub(crate) struct PlacesRendererPolicyLog {
     pub(crate) row_count: usize,
     pub(crate) section_count: usize,
     pub(crate) row_visual_policy: PlacesRowVisualPolicy,
+    pub(crate) event_delivery_policy: PlacesEventDeliveryPolicy,
     pub(crate) scrollbar_canvas_count: usize,
 }
 
@@ -202,17 +260,26 @@ pub(crate) fn emit_places_renderer_policy_log(log: PlacesRendererPolicyLog) {
     } else {
         log.row_count
     };
+    let retained_interaction = log
+        .event_delivery_policy
+        .retained_interaction(log.row_count, log.section_count);
+    let retained_probe_hitboxes = log
+        .event_delivery_policy
+        .retained_probe_hitboxes(log.row_count, log.section_count);
     eprintln!(
-        "[fika places-renderer-policy] rows={} row_gpui={} row_visual_layer={} text_gpui={} icon_gpui={} retained_interaction=0 drag_shell={} section_gpui={} scrollbar_canvas={} visual_kind={}",
+        "[fika places-renderer-policy] rows={} row_gpui={} row_visual_layer={} text_gpui={} icon_gpui={} retained_interaction={} drag_shell={} section_gpui={} scrollbar_canvas={} visual_kind={} event_policy={} retained_probe_hitboxes={}",
         log.row_count,
         row_gpui,
         row_visual_layer,
         text_gpui,
         log.row_count,
+        retained_interaction,
         log.row_count,
         log.section_count,
         log.scrollbar_canvas_count,
         log.row_visual_policy.visual_kind(),
+        log.event_delivery_policy.kind(),
+        retained_probe_hitboxes,
     );
 }
 
@@ -220,6 +287,7 @@ pub(crate) fn emit_places_renderer_policy_log(log: PlacesRendererPolicyLog) {
 pub(crate) struct PlacesInteractionPolicyLog {
     pub(crate) row_count: usize,
     pub(crate) section_count: usize,
+    pub(crate) event_delivery_policy: PlacesEventDeliveryPolicy,
 }
 
 impl PlacesInteractionPolicyLog {
@@ -232,11 +300,18 @@ impl PlacesInteractionPolicyLog {
     }
 
     pub(crate) fn retained_hitboxes(self) -> usize {
-        0
+        self.event_delivery_policy
+            .retained_hitboxes(self.row_count, self.section_count)
+    }
+
+    pub(crate) fn retained_probe_hitboxes(self) -> usize {
+        self.event_delivery_policy
+            .retained_probe_hitboxes(self.row_count, self.section_count)
     }
 
     pub(crate) fn gpui_event_shells(self) -> usize {
-        self.row_count + self.section_count
+        self.event_delivery_policy
+            .gpui_event_shells(self.row_count, self.section_count)
     }
 
     pub(crate) fn drag_shells(self) -> usize {
@@ -246,14 +321,16 @@ impl PlacesInteractionPolicyLog {
 
 pub(crate) fn emit_places_interaction_policy_log(log: PlacesInteractionPolicyLog) {
     eprintln!(
-        "[fika places-interaction-policy] rows={} sections={} row_target_decisions={} section_target_decisions={} retained_hitboxes={} gpui_event_shells={} drag_shells={}",
+        "[fika places-interaction-policy] rows={} sections={} row_target_decisions={} section_target_decisions={} retained_hitboxes={} retained_probe_hitboxes={} gpui_event_shells={} drag_shells={} event_policy={}",
         log.row_count,
         log.section_count,
         log.retained_row_target_decisions(),
         log.retained_section_target_decisions(),
         log.retained_hitboxes(),
+        log.retained_probe_hitboxes(),
         log.gpui_event_shells(),
         log.drag_shells(),
+        log.event_delivery_policy.kind(),
     );
 }
 
@@ -327,6 +404,19 @@ mod tests {
     }
 
     #[test]
+    fn places_event_delivery_policy_parser_keeps_probe_explicit() {
+        assert_eq!(
+            places_event_delivery_policy_from_str("gpui"),
+            Some(PlacesEventDeliveryPolicy::GpuiShells)
+        );
+        assert_eq!(
+            places_event_delivery_policy_from_str("retained-probe"),
+            Some(PlacesEventDeliveryPolicy::RetainedProbe)
+        );
+        assert_eq!(places_event_delivery_policy_from_str("retained"), None);
+    }
+
+    #[test]
     fn places_section_count_tracks_visible_group_transitions() {
         let places = vec![
             place("", "Home"),
@@ -344,11 +434,27 @@ mod tests {
         let policy = PlacesInteractionPolicyLog {
             row_count: 11,
             section_count: 2,
+            event_delivery_policy: PlacesEventDeliveryPolicy::GpuiShells,
         };
 
         assert_eq!(policy.retained_row_target_decisions(), 11);
         assert_eq!(policy.retained_section_target_decisions(), 2);
         assert_eq!(policy.retained_hitboxes(), 0);
+        assert_eq!(policy.retained_probe_hitboxes(), 0);
+        assert_eq!(policy.gpui_event_shells(), 13);
+        assert_eq!(policy.drag_shells(), 11);
+    }
+
+    #[test]
+    fn places_interaction_probe_does_not_claim_delivery() {
+        let policy = PlacesInteractionPolicyLog {
+            row_count: 11,
+            section_count: 2,
+            event_delivery_policy: PlacesEventDeliveryPolicy::RetainedProbe,
+        };
+
+        assert_eq!(policy.retained_hitboxes(), 0);
+        assert_eq!(policy.retained_probe_hitboxes(), 13);
         assert_eq!(policy.gpui_event_shells(), 13);
         assert_eq!(policy.drag_shells(), 11);
     }

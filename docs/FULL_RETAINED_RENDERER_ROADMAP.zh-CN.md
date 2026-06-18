@@ -36,6 +36,32 @@
 
 这些 bridge 是有意保留的平台或性能边界。只能通过下面的轨道移除。
 
+## Dolphin 完整性诊断
+
+剩余性能差距并不证明全自绘天然慢于 GPUI。它证明的是：部分 surface 还没有形成完整的
+Dolphin 风格闭环。
+
+Dolphin item view 快，是因为 `KItemListView` 拥有可见 widget 复用，
+`KFileItemModelRolesUpdater` 拥有 visible-first role work，
+`KStandardItemListWidget` 只从稳定的本地/全局 cache 绘制。它的
+`updatePixmapCache()` 保留 widget-local pixmap，而 `pixmapForIcon()` 用 icon name、
+icon height、device pixel ratio 和 mode 组成 cache key。Zoom 立即更新 item geometry，
+但昂贵的 preview/role work 会延迟合并。Fika 的 custom image renderer 必须先匹配这个
+cache 和 readiness 契约，才能默认替换 GPUI `img()`。
+
+Dolphin Places panel 也是 model/view/delegate 闭环：`DolphinPlacesModel` 拥有
+Places state，`KFilePlacesView` 拥有 interaction delivery。Fika Places renderer 只有在
+row/section hit testing 和 event delivery 都变成 viewport-level retained state，而不是
+per-row GPUI event shell 后，才算 Dolphin-complete。只自绘 row chrome 不是终点。
+
+实际结论：
+
+- Places 和 MIME/theme image 的全自绘仍然是有效目标。
+- 路线不是替换 renderer，而是 retained identity、role readiness、image readiness、
+  hit-test ownership 和 analyzer-backed default promotion。
+- 在某个 surface 闭环完成前，保留 GPUI bridge 是 Dolphin 对齐的选择，不是 retained
+  架构的倒退。
+
 ## 不可违反的规则
 
 - Model identity、layout identity、selection、drop state 和 worker scheduling

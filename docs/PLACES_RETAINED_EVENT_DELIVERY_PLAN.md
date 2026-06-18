@@ -36,6 +36,10 @@ Already implemented:
   reordering.
 - Analyzer support for both current GPUI event shells and the future retained
   event policy.
+- An explicit `PlacesEventDeliveryPolicy`. The default remains `GpuiShells`.
+  `FIKA_PLACES_EVENT_DELIVERY_POLICY=retained-probe` only reports the
+  row/section hitbox count that a future retained layer would need; it keeps
+  `retained_hitboxes=0` and `gpui_event_shells=rows+sections`.
 - Default custom row chrome with GPUI text/icons/event shells.
 
 Current policy shape:
@@ -167,10 +171,24 @@ Before Phase 4 default promotion, add or extend smoke for:
 The existing analyzer already rejects false retained-event claims. Do not loosen
 that gate. Extend it only when a new retained event log surface is added.
 
+2026-06-18 policy-probe slice:
+
+- `src/ui/places/perf.rs` owns `PlacesEventDeliveryPolicy`, matching the
+  renderer-policy pattern used by item view.
+- `retained-probe` is deliberately not accepted as `RetainedHitboxes` or
+  `retained`; the name keeps the mixed state explicit.
+- `[fika places-renderer-policy]` and `[fika places-interaction-policy]` now
+  include `event_policy=...` and `retained_probe_hitboxes=...`.
+- `scripts/check-places-perf-analyzer.sh` proves the probe still passes the
+  current GPUI-shell interaction boundary and fails
+  `--expect-retained-event-policy`.
+- No activation, menu, hover, drop, DnD, or drag-start behavior changed.
+
 ## TODO
 
-- [ ] Add a `PlacesEventDeliveryPolicy` with `GpuiShells` default and
-  `RetainedHitboxes` opt-in. Keep logs explicit in mixed states.
+- [x] Add a `PlacesEventDeliveryPolicy` with `GpuiShells` default and an
+  explicit `RetainedProbe` opt-in. Keep logs explicit in mixed states and do
+  not let probe logs satisfy the retained-event policy gate.
 - [ ] Add a retained sidebar event layer that can insert row/section hitboxes
   and report counts without changing behavior.
 - [ ] Add unit coverage for content-local coordinate conversion with scroll

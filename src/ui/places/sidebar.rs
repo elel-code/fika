@@ -21,8 +21,8 @@ use super::perf::{
     PlacesInteractionGeometryPerfLog, PlacesInteractionPolicyLog, PlacesRendererPolicyLog,
     PlacesScrollbarPerfLog, PlacesSidebarPerfLog, emit_places_interaction_geometry_perf_log,
     emit_places_interaction_policy_log, emit_places_renderer_policy_log,
-    emit_places_scrollbar_perf_log, emit_places_sidebar_perf_log, places_perf_enabled,
-    places_row_visual_policy, places_section_count,
+    emit_places_scrollbar_perf_log, emit_places_sidebar_perf_log, places_event_delivery_policy,
+    places_perf_enabled, places_row_visual_policy, places_section_count,
 };
 use super::snapshot::PlaceSnapshot;
 use super::visual::places_row_visual_layer;
@@ -181,6 +181,7 @@ pub(crate) fn places_sidebar(
         (geometry, started.elapsed())
     });
     let row_visual_policy = places_row_visual_policy();
+    let event_delivery_policy = places_event_delivery_policy();
     let custom_row_visuals = row_visual_policy.custom_layer_enabled();
     let state = window.use_keyed_state("places-sidebar-scrollbar", cx, |_, _| {
         PlacesSidebarScrollState::new()
@@ -218,11 +219,13 @@ pub(crate) fn places_sidebar(
             row_count,
             section_count,
             row_visual_policy,
+            event_delivery_policy,
             scrollbar_canvas_count: 1,
         });
         emit_places_interaction_policy_log(PlacesInteractionPolicyLog {
             row_count,
             section_count,
+            event_delivery_policy,
         });
         if let Some((geometry, elapsed)) = &interaction_geometry {
             let hit_tests = places_interaction_geometry_hit_test_samples(geometry);

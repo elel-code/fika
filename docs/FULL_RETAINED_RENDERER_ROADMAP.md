@@ -38,6 +38,35 @@ Explicit GPUI bridges:
 These bridges are intentional platform or performance boundaries. They should
 be removed only through the tracks below.
 
+## Dolphin Completeness Diagnosis
+
+The remaining performance gaps are not evidence that full custom paint is
+inherently slower than GPUI. They are evidence that some surfaces are not yet
+complete Dolphin-style loops.
+
+Dolphin's item view is fast because `KItemListView` owns visible widget reuse,
+`KFileItemModelRolesUpdater` owns visible-first role work, and
+`KStandardItemListWidget` paints only from stable local/global caches. Its
+`updatePixmapCache()` keeps the widget-local pixmap, while `pixmapForIcon()`
+uses a cache key built from icon name, icon height, device pixel ratio, and
+mode. Zoom updates item geometry immediately, but expensive preview/role work
+is delayed and coalesced. A Fika custom image renderer must match that cache
+and readiness contract before it can replace GPUI `img()` by default.
+
+Dolphin's Places panel is similarly a model/view/delegate loop:
+`DolphinPlacesModel` owns Places state and `KFilePlacesView` owns interaction
+delivery. A Fika Places renderer becomes Dolphin-complete only when row/section
+hit testing and event delivery are viewport-level retained state, not per-row
+GPUI event shells. Row chrome custom paint alone is not the finish line.
+
+The practical conclusion is:
+
+- Full custom paint is still a valid target for Places and MIME/theme images.
+- The route is not a renderer swap. It is retained identity, role readiness,
+  image readiness, hit-test ownership, and analyzer-backed default promotion.
+- Until a surface has that loop, keeping a GPUI bridge is the Dolphin-aligned
+  choice, not a retreat from the retained architecture.
+
 ## Non-Negotiable Rules
 
 - Model identity, layout identity, selection, drop state, and worker scheduling

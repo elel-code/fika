@@ -313,6 +313,7 @@ function fail(message) {
     }
     icon_gpui = field("icon_gpui") + 0
     retained_interaction = field("retained_interaction") + 0
+    retained_probe_hitboxes = field("retained_probe_hitboxes") + 0
     drag_shell = field("drag_shell") + 0
     section_gpui = field("section_gpui") + 0
     scrollbar_canvas = field("scrollbar_canvas") + 0
@@ -334,6 +335,7 @@ function fail(message) {
     max_update("policy_text_gpui", text_gpui)
     max_update("policy_icon_gpui", icon_gpui)
     max_update("policy_retained_interaction", retained_interaction)
+    max_update("policy_retained_probe_hitboxes", retained_probe_hitboxes)
     max_update("policy_drag_shell", drag_shell)
     max_update("policy_section_gpui", section_gpui)
     max_update("policy_scrollbar_canvas", scrollbar_canvas)
@@ -392,6 +394,7 @@ function fail(message) {
     row_target_decisions = field("row_target_decisions") + 0
     section_target_decisions = field("section_target_decisions") + 0
     retained_hitboxes = field("retained_hitboxes") + 0
+    retained_probe_hitboxes = field("retained_probe_hitboxes") + 0
     gpui_event_shells = field("gpui_event_shells") + 0
     drag_shells = field("drag_shells") + 0
     max_update("interaction_rows", rows)
@@ -399,6 +402,7 @@ function fail(message) {
     max_update("interaction_row_target_decisions", row_target_decisions)
     max_update("interaction_section_target_decisions", section_target_decisions)
     max_update("interaction_retained_hitboxes", retained_hitboxes)
+    max_update("interaction_retained_probe_hitboxes", retained_probe_hitboxes)
     max_update("interaction_gpui_event_shells", gpui_event_shells)
     max_update("interaction_drag_shells", drag_shells)
     if (row_target_decisions != rows ||
@@ -793,7 +797,7 @@ END {
     if (policy_kind_other_seen) {
         policy_kinds = append_csv(policy_kinds, "other")
     }
-    printf("places_renderer_policy_frames=%d max_rows=%d max_row_gpui=%d max_row_visual_layer=%d max_icon_gpui=%d max_retained_interaction=%d max_drag_shell=%d max_section_gpui=%d max_scrollbar_canvas=%d max_text_gpui=%d visual_kinds=%s\n",
+    printf("places_renderer_policy_frames=%d max_rows=%d max_row_gpui=%d max_row_visual_layer=%d max_icon_gpui=%d max_retained_interaction=%d max_drag_shell=%d max_section_gpui=%d max_scrollbar_canvas=%d max_text_gpui=%d visual_kinds=%s max_retained_probe_hitboxes=%d\n",
         policy_frames,
         max_values["policy_rows"],
         max_values["policy_row_gpui"],
@@ -804,8 +808,9 @@ END {
         max_values["policy_section_gpui"],
         max_values["policy_scrollbar_canvas"],
         max_values["policy_text_gpui"],
-        policy_kinds)
-    printf("places_interaction_policy_frames=%d max_rows=%d max_sections=%d max_row_target_decisions=%d max_section_target_decisions=%d max_retained_hitboxes=%d max_gpui_event_shells=%d max_drag_shells=%d\n",
+        policy_kinds,
+        max_values["policy_retained_probe_hitboxes"])
+    printf("places_interaction_policy_frames=%d max_rows=%d max_sections=%d max_row_target_decisions=%d max_section_target_decisions=%d max_retained_hitboxes=%d max_gpui_event_shells=%d max_drag_shells=%d max_retained_probe_hitboxes=%d\n",
         interaction_policy_frames,
         max_values["interaction_rows"],
         max_values["interaction_sections"],
@@ -813,7 +818,8 @@ END {
         max_values["interaction_section_target_decisions"],
         max_values["interaction_retained_hitboxes"],
         max_values["interaction_gpui_event_shells"],
-        max_values["interaction_drag_shells"])
+        max_values["interaction_drag_shells"],
+        max_values["interaction_retained_probe_hitboxes"])
     printf("places_interaction_geometry_frames=%d max_rows=%d max_sections=%d max_entries=%d max_content_height=%.1f max_hit_tests=%d max_project=%dus\n",
         interaction_geometry_frames,
         max_values["interaction_geometry_rows"],

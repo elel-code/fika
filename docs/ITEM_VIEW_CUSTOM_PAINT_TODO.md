@@ -1369,6 +1369,14 @@ tracks.
   TODOs. The plan keeps row drag-start shells on GPUI until Track 4 and makes
   the next implementation slice an opt-in retained hitbox layer with no
   behavior change.
+- [x] P16ei: Add the first Places event-delivery policy implementation slice.
+  `PlacesEventDeliveryPolicy` now defaults to `GpuiShells` and supports
+  `FIKA_PLACES_EVENT_DELIVERY_POLICY=retained-probe`. The probe reports
+  `retained_probe_hitboxes=rows+sections` in renderer/interaction policy logs
+  while keeping `retained_hitboxes=0` and `gpui_event_shells=rows+sections`, so
+  it cannot satisfy the future retained-event gate. This records the Dolphin
+  conclusion that full custom Places performance requires viewport-level event
+  ownership, not only row chrome paint.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

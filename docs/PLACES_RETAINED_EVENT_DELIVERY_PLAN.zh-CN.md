@@ -31,6 +31,10 @@ Fika 的等价边界是：
 - `PlacesInteractionGeometry::hit_test_y()` 提供 retained row/section hit test。
 - item/external path drop 和 place reorder 的 retained target-decision helpers。
 - 当前 GPUI event shell 和未来 retained event policy 的 analyzer 支持。
+- 显式的 `PlacesEventDeliveryPolicy`。默认仍是 `GpuiShells`。
+  `FIKA_PLACES_EVENT_DELIVERY_POLICY=retained-probe` 只报告未来 retained layer
+  需要覆盖的 row/section hitbox 计数；它仍保持 `retained_hitboxes=0` 和
+  `gpui_event_shells=rows+sections`。
 - 默认 custom row chrome，同时 GPUI 保留文本/图标/event shell。
 
 当前 policy 形状：
@@ -154,10 +158,23 @@ Phase 4 默认提升前，添加或扩展 smoke：
 现有 analyzer 已经会拒绝虚假的 retained-event 声明，不要放宽 gate。只有新增 retained
 event 日志 surface 时才扩展 analyzer。
 
+2026-06-18 policy-probe 切片：
+
+- `src/ui/places/perf.rs` 拥有 `PlacesEventDeliveryPolicy`，与 item view 的
+  renderer-policy 模式一致。
+- `retained-probe` 有意不接受 `RetainedHitboxes` 或 `retained` 作为别名；名称本身
+  保持 mixed state 显式。
+- `[fika places-renderer-policy]` 和 `[fika places-interaction-policy]` 现在包含
+  `event_policy=...` 和 `retained_probe_hitboxes=...`。
+- `scripts/check-places-perf-analyzer.sh` 证明 probe 仍通过当前 GPUI-shell
+  interaction boundary，并且不能通过 `--expect-retained-event-policy`。
+- activation、menu、hover、drop、DnD 或 drag-start 行为都没有改变。
+
 ## TODO
 
-- [ ] 添加 `PlacesEventDeliveryPolicy`，默认 `GpuiShells`，opt-in `RetainedHitboxes`。
-  mixed state 必须显式记录在日志里。
+- [x] 添加 `PlacesEventDeliveryPolicy`，默认 `GpuiShells`，opt-in
+  `RetainedProbe`。mixed state 必须显式记录在日志里，且 probe 日志不能满足
+  retained-event policy gate。
 - [ ] 添加 retained sidebar event layer，能插入 row/section hitboxes 并报告计数，
   但不改变行为。
 - [ ] 为带 scroll offset 的 content-local 坐标转换、section/row 边界添加单元覆盖。

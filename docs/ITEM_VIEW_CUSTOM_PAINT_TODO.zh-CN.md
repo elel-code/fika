@@ -344,6 +344,12 @@ Places chrome 默认之后的当前执行入口是
 - [x] P16ef：添加成对 hybrid handoff gate。`scripts/compare-item-image-renderers.sh --gate-hybrid-handoff` 现在会在 candidate 日志没有同时显示 GPUI fallback、prewarm 活动、ready-key image-layer paint，或仍有可见 theme placeholder/decode churn 时失败。`scripts/check-item-view-perf-analyzer.sh` 覆盖通过和失败的合成 hybrid 对比；真实 `/etc` 和混合目录提升证据仍由 P16k2/P16k2a 跟踪。
 - [x] P16eg：让 zoom 后的 MIME/theme icon path identity 与 Dolphin 的稳定 `iconName` role 对齐。根本原因：旧 `FileIconCacheKey` 将 `size_px` 纳入 exact key，zoom 后即使同一文件图标类型已经有 resolved path，也会生成新的 exact-size request，可能造成可见帧 path lookup、GPUI image identity 二次提交和体感图标大小跳变。实现：`FileIconCache::resolve_request_for()` 和 `resolve_now_for()` 在同一 `FileIconKind` 已有 resolved path 时直接视为 cached，visible icon sync 看到无 request 就计入 cached 并跳过同步解析；exact key 已解析但无 path 的负结果也视为已完成，防止 negative theme lookup 循环；`find_icon_direct()` 先跳过不存在目录并用一次 metadata 检查文件和长度，降低 theme miss 的系统调用成本。验证：`cargo fmt --check`、`cargo check`、`cargo build`、`cargo test -q`、`scripts/check-item-view-perf-analyzer.sh` 和 `scripts/check-places-perf-analyzer.sh` 通过；当前自动运行环境没有 Wayland compositor，`/etc` runtime autosmoke 触发 GPUI `NoCompositor`，需要在桌面会话刷新真实日志。
 - [x] P16eh：添加实现级 Places retained event-delivery 计划。`docs/PLACES_RETAINED_EVENT_DELIVERY_PLAN.md` 及中文翻译现在定义 Dolphin 边界、当前 GPUI-shell policy、目标 retained-hitbox policy、sidebar-level event layer、scroll-local 坐标规则、分阶段迁移顺序、analyzer/smoke 要求和 TODO。该计划在 Track 4 之前继续保留 GPUI row drag-start shell，并把下一实现切片定义为 opt-in、无行为变更的 retained hitbox layer。
+- [x] P16ei：添加第一段 Places event-delivery policy 实现。`PlacesEventDeliveryPolicy` 现在默认
+  `GpuiShells`，并支持 `FIKA_PLACES_EVENT_DELIVERY_POLICY=retained-probe`。probe 会在
+  renderer/interaction policy 日志中报告 `retained_probe_hitboxes=rows+sections`，同时保持
+  `retained_hitboxes=0` 和 `gpui_event_shells=rows+sections`，因此不能满足未来 retained-event
+  gate。这记录了 Dolphin 对齐结论：Places 全自绘性能需要 viewport-level event ownership，
+  不只是 row chrome paint。
 - [ ] P16q：在每个 P16 实现切片之后，单独提交并附带相关验证：仅文档切片需要 `git diff --check`；代码切片需要 `cargo fmt`、`cargo check`、`cargo test -q`、`scripts/check-item-view-perf-analyzer.sh`、`scripts/check-places-perf-analyzer.sh` 和 `git diff --check`。
 - [x] P16r：记录运行时自测试和突破记录规则。可重复的滚动、缩放、启动图标、调整大小、模式切换和 Places 目标回退应在依赖手动计时之前通过 autosmoke 日志和分析器脚本重现。任何确认的优化突破必须记录症状、Dolphin 比较边界、根本原因、实现、保存的日志/分析器命令和未来回归守卫在拥有的设计或决策文档中。
 
