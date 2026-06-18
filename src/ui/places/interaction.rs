@@ -192,9 +192,15 @@ pub(crate) struct PlaceRowInteractionGeometry {
     pub(crate) insert_before_index: usize,
     pub(crate) insert_after_index: usize,
     pub(crate) mounted: bool,
+    pub(crate) device: bool,
+    pub(crate) network: bool,
 }
 
 impl PlaceRowInteractionGeometry {
+    pub(crate) fn activatable(&self) -> bool {
+        self.mounted || self.device || self.network
+    }
+
     fn contains_y(&self, y: f32) -> bool {
         y >= self.y && y < self.y + self.height
     }
@@ -285,6 +291,8 @@ pub(crate) fn places_interaction_geometry(places: &[PlaceSnapshot]) -> PlacesInt
             insert_before_index: place.index,
             insert_after_index: place.index + 1,
             mounted: place.mounted,
+            device: place.device,
+            network: place.network,
         });
         y += PLACE_ROW_HEIGHT;
     }
@@ -450,6 +458,7 @@ mod tests {
         assert_eq!(geometry.rows()[0].y, 0.0);
         assert_eq!(geometry.rows()[0].height, PLACE_ROW_HEIGHT);
         assert!(geometry.rows()[0].mounted);
+        assert!(geometry.rows()[0].activatable());
         assert_eq!(geometry.sections()[0].group, "Devices");
         assert_eq!(geometry.sections()[0].insert_index, 1);
         assert_eq!(geometry.sections()[0].y, PLACE_ROW_HEIGHT);
@@ -459,6 +468,7 @@ mod tests {
             PLACE_ROW_HEIGHT + PLACE_SECTION_HEADING_HEIGHT
         );
         assert!(!geometry.rows()[1].mounted);
+        assert!(!geometry.rows()[1].activatable());
     }
 
     #[test]

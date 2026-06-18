@@ -39,6 +39,7 @@ pub(super) fn place_row(
     visible_index: usize,
     place: PlaceSnapshot,
     row_visual_policy: PlacesRowVisualPolicy,
+    row_shell_cursor_enabled: bool,
     cx: &mut Context<FikaApp>,
 ) -> Stateful<Div> {
     let custom_chrome = row_visual_policy.custom_layer_enabled();
@@ -94,7 +95,10 @@ pub(super) fn place_row(
                 })
             })
         })
-        .when(mounted || device || network, |row| row.cursor_pointer())
+        .when(
+            row_shell_cursor_enabled && (mounted || device || network),
+            |row| row.cursor_pointer(),
+        )
         .on_drag(place_drag, |drag, cursor_offset, _, cx| {
             cx.new(|_| PlaceDragPreview::from_drag(drag, cursor_offset))
         })

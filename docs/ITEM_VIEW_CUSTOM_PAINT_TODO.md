@@ -1384,6 +1384,14 @@ tracks.
   app state. The analyzer now has `--require-event-probe`, proving the inserted
   hitbox count matches `retained_probe_hitboxes` while the retained-event gate
   still rejects this mixed GPUI-shell policy.
+- [x] P16ek: Add the first retained-pointer Places event slice. The opt-in
+  `FIKA_PLACES_EVENT_DELIVERY_POLICY=retained-pointer` policy reuses the
+  retained event layer to set row pointer cursors and clear active Places drop
+  targets when a drag leaves the retained layer bounds. Row shell cursor styling
+  is disabled in that policy, but GPUI row/section shells still own click,
+  context menu, typed DnD move/drop, and drag start. `[fika places-event-probe]`
+  now reports `pointer=1` for this mixed state and the retained-event gate still
+  rejects it.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

@@ -67,17 +67,23 @@ pub(crate) fn env_flag_is_truthy(value: &str) -> bool {
 pub(crate) enum PlacesEventDeliveryPolicy {
     GpuiShells,
     RetainedProbe,
+    RetainedPointer,
 }
 
 impl PlacesEventDeliveryPolicy {
-    pub(crate) fn retained_probe_layer_enabled(self) -> bool {
-        matches!(self, Self::RetainedProbe)
+    pub(crate) fn retained_event_layer_enabled(self) -> bool {
+        matches!(self, Self::RetainedProbe | Self::RetainedPointer)
+    }
+
+    pub(crate) fn retained_pointer_enabled(self) -> bool {
+        matches!(self, Self::RetainedPointer)
     }
 
     fn kind(self) -> &'static str {
         match self {
             Self::GpuiShells => "gpui",
             Self::RetainedProbe => "retained-probe",
+            Self::RetainedPointer => "retained-pointer",
         }
     }
 
@@ -92,13 +98,13 @@ impl PlacesEventDeliveryPolicy {
     fn retained_probe_hitboxes(self, rows: usize, sections: usize) -> usize {
         match self {
             Self::GpuiShells => 0,
-            Self::RetainedProbe => rows + sections,
+            Self::RetainedProbe | Self::RetainedPointer => rows + sections,
         }
     }
 
     fn gpui_event_shells(self, rows: usize, sections: usize) -> usize {
         match self {
-            Self::GpuiShells | Self::RetainedProbe => rows + sections,
+            Self::GpuiShells | Self::RetainedProbe | Self::RetainedPointer => rows + sections,
         }
     }
 }
@@ -118,6 +124,9 @@ fn places_event_delivery_policy_from_str(value: &str) -> Option<PlacesEventDeliv
         }
         "probe" | "retained-probe" | "hitbox-probe" | "hitboxes-probe" => {
             Some(PlacesEventDeliveryPolicy::RetainedProbe)
+        }
+        "pointer" | "retained-pointer" | "hover" | "retained-hover" => {
+            Some(PlacesEventDeliveryPolicy::RetainedPointer)
         }
         _ => None,
     }
@@ -245,17 +254,19 @@ pub(crate) struct PlacesEventProbePerfLog {
     pub(crate) sections: usize,
     pub(crate) hitboxes: usize,
     pub(crate) hovered_hitboxes: usize,
+    pub(crate) pointer_delivery: bool,
     pub(crate) prepaint_elapsed: Duration,
     pub(crate) paint_elapsed: Duration,
 }
 
 pub(crate) fn emit_places_event_probe_perf_log(log: PlacesEventProbePerfLog) {
     eprintln!(
-        "[fika places-event-probe] rows={} sections={} hitboxes={} hovered={} prepaint={}us paint={}us",
+        "[fika places-event-probe] rows={} sections={} hitboxes={} hovered={} pointer={} prepaint={}us paint={}us",
         log.rows,
         log.sections,
         log.hitboxes,
         log.hovered_hitboxes,
+        usize::from(log.pointer_delivery),
         log.prepaint_elapsed.as_micros(),
         log.paint_elapsed.as_micros(),
     );
@@ -439,6 +450,10 @@ mod tests {
             places_event_delivery_policy_from_str("retained-probe"),
             Some(PlacesEventDeliveryPolicy::RetainedProbe)
         );
+        assert_eq!(
+            places_event_delivery_policy_from_str("retained-pointer"),
+            Some(PlacesEventDeliveryPolicy::RetainedPointer)
+        );
         assert_eq!(places_event_delivery_policy_from_str("retained"), None);
     }
 
@@ -467,6 +482,22 @@ mod tests {
         assert_eq!(policy.retained_section_target_decisions(), 2);
         assert_eq!(policy.retained_hitboxes(), 0);
         assert_eq!(policy.retained_probe_hitboxes(), 0);
+        assert_eq!(policy.gpui_event_shells(), 13);
+        assert_eq!(policy.drag_shells(), 11);
+    }
+
+    #[test]
+    fn places_interaction_pointer_policy_keeps_full_delivery_unclaimed() {
+        let policy = PlacesInteractionPolicyLog {
+            row_count: 11,
+            section_count: 2,
+            event_delivery_policy: PlacesEventDeliveryPolicy::RetainedPointer,
+        };
+
+        assert!(PlacesEventDeliveryPolicy::RetainedPointer.retained_event_layer_enabled());
+        assert!(PlacesEventDeliveryPolicy::RetainedPointer.retained_pointer_enabled());
+        assert_eq!(policy.retained_hitboxes(), 0);
+        assert_eq!(policy.retained_probe_hitboxes(), 13);
         assert_eq!(policy.gpui_event_shells(), 13);
         assert_eq!(policy.drag_shells(), 11);
     }

@@ -16,7 +16,7 @@ use crate::ui::icons::{FileIconCache, FileIconSnapshot, cached_icon_or_fallback}
 use std::time::Instant;
 
 use super::drag::PlaceDrag;
-use super::event_layer::places_event_probe_layer;
+use super::event_layer::{PlacesEventLayerMode, places_event_probe_layer};
 use super::interaction::places_interaction_geometry;
 use super::perf::{
     PlacesInteractionGeometryPerfLog, PlacesInteractionPolicyLog, PlacesRendererPolicyLog,
@@ -178,7 +178,7 @@ pub(crate) fn places_sidebar(
     let section_count = places_section_count(&places);
     let event_delivery_policy = places_event_delivery_policy();
     let needs_interaction_geometry =
-        perf_enabled || event_delivery_policy.retained_probe_layer_enabled();
+        perf_enabled || event_delivery_policy.retained_event_layer_enabled();
     let interaction_geometry = needs_interaction_geometry.then(|| {
         let started = Instant::now();
         let geometry = places_interaction_geometry(&places);
@@ -195,13 +195,20 @@ pub(crate) fn places_sidebar(
         places_row_visual_layer(places.clone(), app.clone(), row_visual_policy.paints_text())
     });
     let event_probe_layer = event_delivery_policy
-        .retained_probe_layer_enabled()
+        .retained_event_layer_enabled()
         .then(|| {
+            let mode = if event_delivery_policy.retained_pointer_enabled() {
+                PlacesEventLayerMode::Pointer
+            } else {
+                PlacesEventLayerMode::Probe
+            };
             places_event_probe_layer(
                 interaction_geometry
                     .as_ref()
                     .map(|(geometry, _elapsed)| geometry.clone())
                     .unwrap_or_else(|| places_interaction_geometry(&places)),
+                app.clone(),
+                mode,
             )
         });
     let mut rows = Vec::new();
@@ -219,7 +226,13 @@ pub(crate) fn places_sidebar(
                 ));
             }
         }
-        rows.push(place_row(index, place, row_visual_policy, cx));
+        rows.push(place_row(
+            index,
+            place,
+            row_visual_policy,
+            !event_delivery_policy.retained_pointer_enabled(),
+            cx,
+        ));
     }
     if let Some(started) = build_started {
         emit_places_sidebar_perf_log(PlacesSidebarPerfLog {

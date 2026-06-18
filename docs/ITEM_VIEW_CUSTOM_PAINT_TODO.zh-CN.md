@@ -355,6 +355,13 @@ Places chrome 默认之后的当前执行入口是
   hitbox，并报告 `[fika places-event-probe]`；它不注册 event handler，也不改变 app state。
   分析器现在有 `--require-event-probe`，证明插入 hitbox 数匹配 `retained_probe_hitboxes`，
   同时 retained-event gate 仍会拒绝该 mixed GPUI-shell policy。
+- [x] P16ek：添加第一段 Places retained-pointer event 切片。opt-in
+  `FIKA_PLACES_EVENT_DELIVERY_POLICY=retained-pointer` policy 复用 retained event layer
+  来设置 row pointer cursor，并在 drag 离开 retained layer bounds 时清理 active Places
+  drop target。该 policy 下 row shell cursor styling 被关闭，但 GPUI row/section shell
+  仍拥有 click、context menu、typed DnD move/drop 和 drag start。
+  `[fika places-event-probe]` 现在对这个 mixed state 报告 `pointer=1`，且 retained-event
+  gate 仍会拒绝它。
 - [ ] P16q：在每个 P16 实现切片之后，单独提交并附带相关验证：仅文档切片需要 `git diff --check`；代码切片需要 `cargo fmt`、`cargo check`、`cargo test -q`、`scripts/check-item-view-perf-analyzer.sh`、`scripts/check-places-perf-analyzer.sh` 和 `git diff --check`。
 - [x] P16r：记录运行时自测试和突破记录规则。可重复的滚动、缩放、启动图标、调整大小、模式切换和 Places 目标回退应在依赖手动计时之前通过 autosmoke 日志和分析器脚本重现。任何确认的优化突破必须记录症状、Dolphin 比较边界、根本原因、实现、保存的日志/分析器命令和未来回归守卫在拥有的设计或决策文档中。
 

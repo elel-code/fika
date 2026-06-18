@@ -198,6 +198,20 @@ that gate. Extend it only when a new retained event log surface is added.
 - This is Phase 1 structure only. Phase 2 is still responsible for moving
   hover/cursor/leave clearing out of GPUI shells.
 
+2026-06-18 retained pointer slice:
+
+- `FIKA_PLACES_EVENT_DELIVERY_POLICY=retained-pointer` enables the same
+  sidebar-level retained layer, but now it sets the pointing-hand cursor for
+  activatable rows from retained row hitboxes.
+- In that policy, per-row GPUI cursor styling is disabled; click, context menu,
+  typed DnD move/drop, and drag start remain on GPUI row/section shells.
+- The retained layer also observes active mouse-drag movement and clears the
+  current Places drop target when the pointer leaves the retained layer bounds.
+  Existing GPUI typed drag handlers remain as a fallback until Phase 4.
+- `[fika places-event-probe]` includes `pointer=1` for this policy. The full
+  retained-event analyzer gate still rejects it because
+  `retained_hitboxes=0` and `gpui_event_shells=rows+sections`.
+
 ## TODO
 
 - [x] Add a `PlacesEventDeliveryPolicy` with `GpuiShells` default and an
@@ -205,9 +219,12 @@ that gate. Extend it only when a new retained event log surface is added.
   not let probe logs satisfy the retained-event policy gate.
 - [x] Add a retained sidebar event probe layer that can insert row/section
   hitboxes and report counts without changing behavior.
+- [~] Move hover/cursor/leave clearing to the retained layer. Current status:
+  `retained-pointer` moves pointer cursor ownership and active-drag leave
+  clearing behind an opt-in retained layer, while GPUI row/section shells still
+  own typed DnD move/drop delivery.
 - [ ] Add unit coverage for content-local coordinate conversion with scroll
   offsets and section/row boundaries.
-- [ ] Move hover/cursor/leave clearing to the retained layer.
 - [ ] Move activation/context-menu targeting to the retained layer.
 - [ ] Add isolated DnD smoke for retained item/external/place drops.
 - [ ] Move drag-move/drop delivery to the retained layer.

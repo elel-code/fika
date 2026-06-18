@@ -459,12 +459,14 @@ function fail(message) {
     sections = field("sections") + 0
     hitboxes = field("hitboxes") + 0
     hovered = field("hovered") + 0
+    pointer = field("pointer") + 0
     prepaint = field("prepaint") + 0
     paint = field("paint") + 0
     max_update("event_probe_rows", rows)
     max_update("event_probe_sections", sections)
     max_update("event_probe_hitboxes", hitboxes)
     max_update("event_probe_hovered", hovered)
+    max_update("event_probe_pointer", pointer)
     max_update("event_probe_prepaint", prepaint)
     max_update("event_probe_paint", paint)
     if (hitboxes != rows + sections) {
@@ -867,12 +869,13 @@ END {
         max_values["interaction_geometry_content_height"],
         max_values["interaction_geometry_hit_tests"],
         max_values["interaction_geometry_project"])
-    printf("places_event_probe_frames=%d max_rows=%d max_sections=%d max_hitboxes=%d max_hovered=%d max_prepaint=%dus max_paint=%dus\n",
+    printf("places_event_probe_frames=%d max_rows=%d max_sections=%d max_hitboxes=%d max_hovered=%d max_pointer=%d max_prepaint=%dus max_paint=%dus\n",
         event_probe_frames,
         max_values["event_probe_rows"],
         max_values["event_probe_sections"],
         max_values["event_probe_hitboxes"],
         max_values["event_probe_hovered"],
+        max_values["event_probe_pointer"],
         max_values["event_probe_prepaint"],
         max_values["event_probe_paint"])
     printf("places_row_visual_frames=%d max_rows=%d max_painted=%d max_prepaint=%dus max_paint=%dus\n",

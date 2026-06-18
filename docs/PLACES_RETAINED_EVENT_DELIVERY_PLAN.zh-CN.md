@@ -183,6 +183,19 @@ event 日志 surface 时才扩展 analyzer。
 - 这只是 Phase 1 结构层。Phase 2 仍负责把 hover/cursor/leave clearing 从 GPUI shell
   移出。
 
+2026-06-18 retained pointer 切片：
+
+- `FIKA_PLACES_EVENT_DELIVERY_POLICY=retained-pointer` 启用同一个 sidebar-level retained
+  layer，但现在会根据 retained row hitbox 为可激活行设置 pointing-hand cursor。
+- 在该 policy 下，每行 GPUI cursor style 被关闭；click、context menu、typed DnD move/drop
+  和 drag start 仍留在 GPUI row/section shell。
+- retained layer 也会观察 active mouse-drag movement，并在 pointer 离开 retained layer
+  bounds 时清理当前 Places drop target。现有 GPUI typed drag handler 保持为 fallback，
+  直到 Phase 4。
+- `[fika places-event-probe]` 在该 policy 下包含 `pointer=1`。完整 retained-event
+  analyzer gate 仍会拒绝它，因为 `retained_hitboxes=0` 且
+  `gpui_event_shells=rows+sections`。
+
 ## TODO
 
 - [x] 添加 `PlacesEventDeliveryPolicy`，默认 `GpuiShells`，opt-in
@@ -190,8 +203,10 @@ event 日志 surface 时才扩展 analyzer。
   retained-event policy gate。
 - [x] 添加 retained sidebar event probe layer，能插入 row/section hitboxes 并报告计数，
   但不改变行为。
+- [~] 将 hover/cursor/leave clearing 移到 retained layer。当前状态：
+  `retained-pointer` 将 pointer cursor ownership 和 active-drag leave clearing 移到
+  opt-in retained layer 后面；GPUI row/section shell 仍拥有 typed DnD move/drop delivery。
 - [ ] 为带 scroll offset 的 content-local 坐标转换、section/row 边界添加单元覆盖。
-- [ ] 将 hover/cursor/leave clearing 移到 retained layer。
 - [ ] 将 activation/context-menu targeting 移到 retained layer。
 - [ ] 添加 retained item/external/place drops 的隔离 DnD smoke。
 - [ ] 将 drag-move/drop delivery 移到 retained layer。
