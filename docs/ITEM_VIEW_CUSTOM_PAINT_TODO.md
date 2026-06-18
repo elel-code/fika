@@ -989,6 +989,11 @@ by risk and evidence, not by how custom-painted a surface looks.
   `rubber_band_selection_activity_is_active()` now own production-path clearing
   and selected-count-aware activity checks. `src/main.rs` still supplies the
   activity set and pane selected count.
+- [x] P16bz: Move active rubber-band viewport-rect projection into the
+  rubber-band module. `active_rubber_band_viewport_rect_for_pane()` now owns
+  pane ownership checking plus converting the active band into a clipped
+  viewport rect for rendering. `src/main.rs` still supplies the active state
+  snapshot and current pane view.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

@@ -150,9 +150,9 @@ use ui::properties_dialog::{
 };
 use ui::rename::{RENAME_TEXT_INSET_X, RenameDraft};
 use ui::rubber_band::{
-    PendingRubberBand, RubberBandState, clear_rubber_band_selection_activity_for_pane,
-    finish_rubber_band_for_pane, rubber_band_selection_activity_is_active,
-    set_rubber_band_selection_activity_for_count,
+    PendingRubberBand, RubberBandState, active_rubber_band_viewport_rect_for_pane,
+    clear_rubber_band_selection_activity_for_pane, finish_rubber_band_for_pane,
+    rubber_band_selection_activity_is_active, set_rubber_band_selection_activity_for_count,
 };
 #[cfg(test)]
 use ui::shortcuts::PlaceInputAction;
@@ -1559,8 +1559,8 @@ impl FikaApp {
                         filtered,
                     )?;
                 let queue_elapsed = queue_started.map(|started| started.elapsed());
-                let rubber_band = rubber_band_state
-                    .and_then(|band| (band.pane_id == pane_id).then(|| band.viewport_rect(&view)));
+                let rubber_band =
+                    active_rubber_band_viewport_rect_for_pane(rubber_band_state, pane_id, &view);
                 let filter_bar = self.filter_bar_snapshot(pane_id, focused_pane, item_count);
                 if metadata_role_queued {
                     self.maybe_start_metadata_role(cx);

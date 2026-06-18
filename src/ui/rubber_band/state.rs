@@ -140,6 +140,16 @@ pub(crate) fn rubber_band_selection_activity_is_active(
     selection_panes.contains(&pane_id) && selected_count.is_some_and(|selected| selected > 0)
 }
 
+pub(crate) fn active_rubber_band_viewport_rect_for_pane(
+    active: Option<RubberBandState>,
+    pane_id: PaneId,
+    view: &ViewState,
+) -> Option<ViewRect> {
+    active
+        .filter(|band| band.is_for_pane(pane_id))
+        .map(|band| band.viewport_rect(view))
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct RubberBandDrag {
     pub(crate) pane_id: PaneId,
@@ -277,5 +287,32 @@ mod tests {
             &mut selection_panes,
             PaneId(1)
         ));
+    }
+
+    #[test]
+    fn active_rubber_band_viewport_rect_requires_matching_pane() {
+        let band = RubberBandState::new(PaneId(1), ViewPoint { x: 10.0, y: 10.0 })
+            .with_current_for_pane(PaneId(1), ViewPoint { x: 30.0, y: 40.0 })
+            .unwrap();
+        let view = ViewState {
+            scroll_x: 5.0,
+            scroll_y: 6.0,
+            viewport_width: 100.0,
+            viewport_height: 100.0,
+            ..ViewState::default()
+        };
+
+        assert_eq!(
+            active_rubber_band_viewport_rect_for_pane(Some(band), PaneId(1), &view),
+            Some(band.viewport_rect(&view))
+        );
+        assert_eq!(
+            active_rubber_band_viewport_rect_for_pane(Some(band), PaneId(2), &view),
+            None
+        );
+        assert_eq!(
+            active_rubber_band_viewport_rect_for_pane(None, PaneId(1), &view),
+            None
+        );
     }
 }
