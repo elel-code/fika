@@ -1163,6 +1163,10 @@ by risk and evidence, not by how custom-painted a surface looks.
   item-view facade. `main.rs` now delegates handle lookup, scrollbar-drag start,
   pane reset, and pane removal through item-view functions instead of calling
   `ItemViewScrollState` methods directly in production paths.
+- [x] P16di: Move item-view scroll transient test inspections into the
+  item-view facade. App-side tests now query authoritative-scroll and
+  scrollbar-dragging state through item-view helpers instead of directly
+  invoking `ItemViewScrollState` inspection methods from `main.rs`.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

@@ -119,6 +119,10 @@ use ui::item_view::{
     viewport_extents_after_view_mode_axis_change,
     viewport_height_after_filter_bar_visibility_change, window_resize_viewport_prime,
 };
+#[cfg(test)]
+use ui::item_view::{
+    item_view_scroll_has_authoritative_scroll, item_view_scroll_is_scrollbar_dragging,
+};
 use ui::location_bar::{LocationDraft, LocationEditMetrics};
 use ui::network_auth::{
     NetworkAuthDraft, NetworkAuthField, NetworkAuthInputResult, apply_network_auth_input_action,
@@ -13597,8 +13601,14 @@ text/plain=viewer.desktop;\n",
         assert_eq!(scroll_handle.offset(), gpui::point(px(-140.0), px(-32.0)));
         assert_eq!(app.panes.pane(pane_id).unwrap().view.scroll_x, 140.0);
         assert_eq!(app.panes.pane(pane_id).unwrap().view.scroll_y, 32.0);
-        assert!(!app.item_view_scroll.has_authoritative_scroll(pane_id));
-        assert!(!app.item_view_scroll.is_scrollbar_dragging(pane_id));
+        assert!(!item_view_scroll_has_authoritative_scroll(
+            &app.item_view_scroll,
+            pane_id
+        ));
+        assert!(!item_view_scroll_is_scrollbar_dragging(
+            &app.item_view_scroll,
+            pane_id
+        ));
     }
 
     #[test]
@@ -13620,7 +13630,10 @@ text/plain=viewer.desktop;\n",
         assert_eq!(app.panes.pane(pane_id).unwrap().view.scroll_x, 480.0);
 
         assert!(app.finish_item_view_scrollbar_drag(pane_id));
-        assert!(!app.item_view_scroll.is_scrollbar_dragging(pane_id));
+        assert!(!item_view_scroll_is_scrollbar_dragging(
+            &app.item_view_scroll,
+            pane_id
+        ));
         assert_eq!(scroll_handle.offset().x, px(-480.0));
         assert_eq!(app.panes.pane(pane_id).unwrap().view.scroll_x, 480.0);
     }

@@ -204,6 +204,22 @@ pub(crate) fn remove_item_view_scroll_for_pane(
     scroll_state.remove_pane(pane_id);
 }
 
+#[cfg(test)]
+pub(crate) fn item_view_scroll_has_authoritative_scroll(
+    scroll_state: &ItemViewScrollState,
+    pane_id: PaneId,
+) -> bool {
+    scroll_state.has_authoritative_scroll(pane_id)
+}
+
+#[cfg(test)]
+pub(crate) fn item_view_scroll_is_scrollbar_dragging(
+    scroll_state: &ItemViewScrollState,
+    pane_id: PaneId,
+) -> bool {
+    scroll_state.is_scrollbar_dragging(pane_id)
+}
+
 pub(crate) fn sync_item_view_scroll_handle_to_view_authoritatively(
     scroll_state: &mut ItemViewScrollState,
     pane_id: PaneId,
