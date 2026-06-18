@@ -536,6 +536,19 @@ mod tests {
     }
 
     #[test]
+    fn drop_target_state_clear_place_preserves_item_target() {
+        let pane = PaneId(1);
+        let mut state = DropTargetState::default();
+
+        assert!(state.set_item(ItemDropTarget::Pane { pane_id: pane }));
+        let generation = state.lease_generation();
+
+        assert!(!state.clear_place());
+        assert!(item_drop_target_matches_pane(state.item(), pane));
+        assert_eq!(state.lease_generation(), generation);
+    }
+
+    #[test]
     fn drop_target_state_clears_only_matching_item_target() {
         let pane = PaneId(1);
         let other_pane = PaneId(2);
