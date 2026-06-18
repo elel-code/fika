@@ -169,26 +169,38 @@ Default may change only when:
   device rows.
 - Internal reorder and item/external drop behavior remain unchanged.
 
-### Track 4: Drag Start Boundary
+### Track 4: Typed Drag Boundary
 
-Purpose: remove temporary GPUI drag shells only if GPUI exposes or Fika carries
-an audited retained-hitbox drag-start API.
+Purpose: remove temporary GPUI drag shells and typed payload bridges only if
+GPUI exposes or Fika carries an audited retained-hitbox typed drag API.
 
 Next design step:
 
 - Current GPUI audit (`0.2.2`, Zed
   `69b602c797a62f09318916d24a98c930533fbdc8`) still has no public retained
-  hitbox drag-start hook. `Interactivity::on_drag` /
+  hitbox typed drag hook. `Interactivity::on_drag`,
+  `Interactivity::on_drag_move`, `Interactivity::on_drop`, and
   `StatefulInteractiveElement::on_drag` are interactive-element APIs, while
   `Window::insert_hitbox()` and `Window::on_mouse_event()` only provide retained
-  hit testing and mouse observation.
-- If using a GPUI patch, specify the smallest API to start a typed drag from a
-  retained hitbox while preserving payload, preview entity, cursor offset,
-  accepted transfer modes, cancellation, same-window drop dispatch, and
-  external drop behavior. The API must not require recreating a visual GPUI row
-  or item element as the drag source.
-- If no patch is accepted, keep drag-start shells and continue reducing their
-  visual/identity role to zero.
+  hit testing and ordinary mouse observation.
+- If using a GPUI patch, keep the API split and minimal:
+  `Window::on_hitbox_drag<T, W>(hitbox, value, preview_constructor)` starts a
+  typed drag from an existing retained hitbox with the same payload, preview
+  entity, cursor offset, accepted transfer modes, cancellation, and external
+  drop semantics as `Interactivity::on_drag`.
+- The matching target side is
+  `Window::on_hitbox_drag_move<T>(hitbox, listener)`,
+  `Window::can_drop_on_hitbox<T>(hitbox, predicate)`, and
+  `Window::on_hitbox_drop<T>(hitbox, listener)`. These callbacks must use the
+  same active-drag payload source and dispatch ordering as
+  `Interactivity::on_drag_move` / `Interactivity::on_drop`, but they must not
+  require a visible or layout-owning `Div`.
+- The API must be registered from retained paint/prepaint state against
+  `HitboxId`, not from row/item GPUI element identity. It must not require
+  recreating a visual GPUI row or item element as the drag source or target.
+- If no patch is accepted, keep drag-start shells and the Places sidebar typed
+  payload bridge, while continuing to reduce their visual/identity role to
+  zero.
 
 Default may change only when:
 
@@ -197,6 +209,9 @@ Default may change only when:
   Places at different window sizes.
 - Renderer-policy logs show shell removal without losing retained interaction
   counts.
+- Places full retained-event logs pass with `gpui_typed_dnd_payload_shells=0`,
+  and item/details policy logs show drag-start shell removal without adding
+  replacement visual GPUI rows.
 
 ### Track 5: Rename Editor
 

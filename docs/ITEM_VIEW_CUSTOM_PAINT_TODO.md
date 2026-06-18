@@ -509,9 +509,15 @@ tracks.
   drag-start shells remain explicit platform boundaries. 2026-06-19 refresh:
   the same blocker is still true at Zed commit
   `69b602c797a62f09318916d24a98c930533fbdc8`.
-- [ ] P16f: If an audited GPUI patch is chosen, design the smallest API that
+- [x] P16f: If an audited GPUI patch is chosen, design the smallest API that
   starts drags from retained hitboxes while preserving payload, preview,
-  cursor offset, accepted transfer modes, and external drop behavior.
+  cursor offset, accepted transfer modes, and external drop behavior. Current
+  design: `docs/FULL_RETAINED_RENDERER_ROADMAP.md` Track 4 now defines a
+  minimal retained typed drag API split covering drag start
+  (`Window::on_hitbox_drag`) and typed drag-move/drop payload delivery
+  (`Window::on_hitbox_drag_move`, `Window::can_drop_on_hitbox`,
+  `Window::on_hitbox_drop`), without recreating visible GPUI rows/items as
+  drag sources or targets.
 - [x] P16g: Move the next behavior-preserving item-view orchestration boundary
   out of `src/main.rs`. Candidate: runtime item-view perf/evidence collection
   accessors, because painter perf state already lives under `file_grid/perf.rs`.
@@ -1593,6 +1599,12 @@ tracks.
   payloads for retained painter hitboxes. This confirms the Places sidebar
   typed payload bridge is still an API boundary rather than removable
   row/section shell debt.
+- [x] P16fk: Extend Track 4 into a retained typed drag API design. The roadmap
+  now treats drag start and typed drag-move/drop payload delivery as one GPUI
+  boundary family. The minimal patch shape is split into retained hitbox drag
+  source registration and retained hitbox drag target callbacks, both keyed by
+  retained `HitboxId` and explicitly forbidden from recreating visible GPUI
+  rows/items as replacement shell owners.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

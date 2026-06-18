@@ -151,30 +151,42 @@ renderer policy。
 - 右键菜单仍区分空白侧栏、section、bookmark、trash 和 device 行。
 - 内部 reorder 和 item/external drop 行为不变。
 
-### Track 4：Drag Start 边界
+### Track 4：Typed Drag 边界
 
-目的：只有当 GPUI 暴露或 Fika 携带经过审计的 retained-hitbox drag-start API 时，
-才移除临时 GPUI drag shell。
+目的：只有当 GPUI 暴露或 Fika 携带经过审计的 retained-hitbox typed drag API 时，
+才移除临时 GPUI drag shell 和 typed payload bridge。
 
 下一步设计：
 
 - 当前 GPUI 审计（`0.2.2`，Zed
-  `69b602c797a62f09318916d24a98c930533fbdc8`）仍然没有公开的 retained hitbox
-  drag-start 钩子。`Interactivity::on_drag` /
-  `StatefulInteractiveElement::on_drag` 是 interactive-element API，而
-  `Window::insert_hitbox()` 和 `Window::on_mouse_event()` 只提供 retained hit testing
-  和鼠标观察。
-- 如果使用 GPUI patch，定义最小 API：从 retained hitbox 启动 typed drag，同时保留
-  payload、preview entity、cursor offset、accepted transfer modes、cancel、
-  同窗口 drop dispatch 和 external drop 行为。该 API 不能要求为了作为拖拽源而重新创建一个
-  可见 GPUI row 或 item element。
-- 如果不接受 patch，保留 drag-start shell，并继续把它的视觉/identity 作用降到 0。
+  `69b602c797a62f09318916d24a98c930533fbdc8`）仍然没有公开的 retained hitbox typed
+  drag 钩子。`Interactivity::on_drag`、`Interactivity::on_drag_move`、
+  `Interactivity::on_drop` 和 `StatefulInteractiveElement::on_drag` 是
+  interactive-element API，而 `Window::insert_hitbox()` 和
+  `Window::on_mouse_event()` 只提供 retained hit testing 和普通鼠标观察。
+- 如果使用 GPUI patch，API 要保持拆分且最小：
+  `Window::on_hitbox_drag<T, W>(hitbox, value, preview_constructor)` 从现有 retained
+  hitbox 启动 typed drag，并保持与 `Interactivity::on_drag` 相同的 payload、preview
+  entity、cursor offset、accepted transfer modes、cancel 和 external drop 语义。
+- 对应的 target 侧 API 是
+  `Window::on_hitbox_drag_move<T>(hitbox, listener)`、
+  `Window::can_drop_on_hitbox<T>(hitbox, predicate)` 和
+  `Window::on_hitbox_drop<T>(hitbox, listener)`。这些 callback 必须使用与
+  `Interactivity::on_drag_move` / `Interactivity::on_drop` 相同的 active-drag payload
+  source 和 dispatch ordering，但不能要求存在可见或拥有布局的 `Div`。
+- 该 API 必须从 retained paint/prepaint state 针对 `HitboxId` 注册，而不是从 row/item
+  GPUI element identity 注册。它不能要求为了作为拖拽源或目标而重新创建可见 GPUI row 或
+  item element。
+- 如果不接受 patch，保留 drag-start shell 和 Places sidebar typed payload bridge，并继续把
+  它们的视觉/identity 作用降到 0。
 
 默认值只有在以下条件满足后才能改变：
 
 - Compact/Icons、Details 和 Places 的 DnD smoke 全部通过。
 - Drag preview 在 Compact、Icons、Details 和 Places 的不同窗口大小下位置稳定。
 - Renderer-policy 日志显示 shell 移除后 retained interaction 计数不丢失。
+- Places full retained-event 日志显示 `gpui_typed_dnd_payload_shells=0`，并且
+  item/details policy 日志显示 drag-start shell 移除后没有新增替代性的可见 GPUI row。
 
 ### Track 5：Rename Editor
 

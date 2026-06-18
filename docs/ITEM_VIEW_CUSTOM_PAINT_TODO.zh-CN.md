@@ -209,7 +209,7 @@ Places chrome 默认之后的当前执行入口是
 - [x] P16c：使用该证据更新 `docs/ITEM_VIEW_RENDERER_DECISIONS.md`，包括 `/etc` 缩放/滚动是否仍然显示冷图像加载卡顿或可见占位符到图标切换。当前证据：可见同步停止复制排队的预读图标工作后，`icon_sync` 最大值从 `28340us` 降至 `173us`；剩余的 `/etc` autosmoke 成本是静态视觉文本/基础绘制，而非 MIME/主题图像渲染。
 - [x] P16d：如果当前日志无法区分以下情况，则添加或扩展运行时证据工具：首帧加载主题图标占位符、保留同 `iconName` 复用、GPUI 图像缓存解码完成和稳定重绘成本。`[fika item-image]` 现在报告 `theme_loaded`、`theme_decoded`、`theme_retained`、`theme_placeholder`、`thumb_loaded`、`thumb_decoded`、`thumb_retained` 和 `thumb_fallback`；运行时分析器将其总结为 `image_sources`。`FIKA_AUTOSMOKE_ITEM_VIEW` 现在无需手动输入即可练习缩放/滚动，并添加 `[fika autosmoke]` 标记到同一性能日志中。
 - [x] P16e：审计本地 GPUI 源码中保留/自定义元素拖拽启动路径。如果没有公共 API 存在，记录确切阻塞并保留条目和详情拖拽启动 shell。结果：GPUI 通过 `Interactivity::on_drag` / `StatefulInteractiveElement::on_drag` 在 `crates/gpui/src/elements/div.rs` 中暴露类型化拖拽启动。自定义元素可以通过 `Window::insert_hitbox()` 插入 hitbox，并通过 `Window::on_mouse_event()` 观察鼠标事件，但没有公共 API 从这些保留 hitbox 启动类型化拖拽，因此条目、详情和 Places 拖拽启动 shell 保留为显式平台边界。2026-06-19 复查：Zed commit `69b602c797a62f09318916d24a98c930533fbdc8` 仍然是同一阻塞。
-- [ ] P16f：如果选择经过审计的 GPUI patch，设计最小的从保留 hitbox 启动拖拽的 API，同时保留 payload、预览、光标偏移、接受的传输模式和外部放置行为。
+- [x] P16f：如果选择经过审计的 GPUI patch，设计最小的从保留 hitbox 启动拖拽的 API，同时保留 payload、预览、光标偏移、接受的传输模式和外部放置行为。当前设计：`docs/FULL_RETAINED_RENDERER_ROADMAP.zh-CN.md` Track 4 现在定义了最小 retained typed drag API 拆分，覆盖 drag start（`Window::on_hitbox_drag`）和 typed drag-move/drop payload delivery（`Window::on_hitbox_drag_move`、`Window::can_drop_on_hitbox`、`Window::on_hitbox_drop`），且不需要为了作为拖拽源或目标而重新创建可见 GPUI row/item。
 - [x] P16g：将下一个行为保留的条目视图编排边界移出 `src/main.rs`。候选：运行时条目视图性能/证据收集访问器，因为绘制器性能状态已经存在于 `file_grid/perf.rs` 下。已完成：`FIKA_PERF_ITEM_VIEW` 标志和文件网格性能层调用者由 `src/ui/file_grid/perf.rs` 拥有；条目视图性能帧分类和性能状态清理由 `src/ui/file_grid/perf.rs` 拥有；帧状态和绘制器性能统计存储现在位于 `src/ui/file_grid/perf.rs` 中的 `ItemViewPerfState` 后面；条目视图性能摘要发出现在由 `src/ui/file_grid/perf.rs` 拥有；autosmoke 场景解析和操作排序现在位于 `src/ui/file_grid/autosmoke.rs` 中。
 - [x] P16h：在更改 Places 渲染之前起草保留 Places 行绘制器设计。设计必须覆盖行组、隐藏 section、设备行、重排/放置插入、右键菜单和侧栏滚动。结果：`docs/PLACES_RENDERER_PLAN.md` 将 Dolphin 的 `DolphinPlacesModel + KFilePlacesView` 划分与 Fika 当前的 `places/model`、`projection`、`sidebar/row`、`drag` 和自定义滚动条模块进行比较，然后将任何保留行绘制器门控于 Places 特定性能日志、运行时 smoke 和渲染器策略证据之后。
 - [x] P16i：在更改 GPUI 重命名叠加层之前起草重命名自定义编辑器行为矩阵。它必须覆盖焦点、caret hit testing、UTF-8 选择、验证帮助文本、提交/取消、Tab 重命名下一个和 IME。结果：`docs/RENAME_EDITOR_PLAN.md` 将 Dolphin 的 `DolphinView::renameSelectedItems()`、`KItemListView::editRole()` 和 `KItemListRoleEditor` 路径与 Fika 的 `RenameDraft`、快捷键路由和 GPUI 叠加层进行比较。该矩阵将叠加层保留为默认值，直到 IME、焦点/失焦、鼠标选择、可访问性和运行时 smoke 被覆盖。
@@ -514,6 +514,10 @@ Places chrome 默认之后的当前执行入口是
   `Window::insert_hitbox()` 和 `Window::on_mouse_event<Event: MouseEvent>()` 仍没有为
   retained painter hitbox 暴露 typed drag payload。这确认 Places sidebar typed payload
   bridge 仍是 API 边界，不是可直接移除的 row/section shell debt。
+- [x] P16fk：将 Track 4 扩展为 retained typed drag API 设计。roadmap 现在把 drag
+  start 和 typed drag-move/drop payload delivery 视为同一组 GPUI 边界。最小 patch 形状拆成
+  retained hitbox drag source 注册和 retained hitbox drag target callback，二者都以 retained
+  `HitboxId` 为 key，并明确禁止为了替代 shell ownership 而重新创建可见 GPUI row/item。
 - [ ] P16q：在每个 P16 实现切片之后，单独提交并附带相关验证：仅文档切片需要 `git diff --check`；代码切片需要 `cargo fmt`、`cargo check`、`cargo test -q`、`scripts/check-item-view-perf-analyzer.sh`、`scripts/check-places-perf-analyzer.sh` 和 `git diff --check`。
 - [x] P16r：记录运行时自测试和突破记录规则。可重复的滚动、缩放、启动图标、调整大小、模式切换和 Places 目标回退应在依赖手动计时之前通过 autosmoke 日志和分析器脚本重现。任何确认的优化突破必须记录症状、Dolphin 比较边界、根本原因、实现、保存的日志/分析器命令和未来回归守卫在拥有的设计或决策文档中。
 
