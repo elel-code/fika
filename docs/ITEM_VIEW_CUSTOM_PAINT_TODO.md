@@ -1208,6 +1208,10 @@ by risk and evidence, not by how custom-painted a surface looks.
   startup behind one file-grid retained facade entry. The render loop keeps the
   same icon-sync and queue perf fields, but no longer sequences the metadata,
   thumbnail, and icon worker controller steps directly.
+- [x] P16ds: Move retained projection frame assembly into the file-grid
+  retained facade. The facade now owns visible-count derivation, retained slot
+  projection, paint-slot stats, and item-view perf phase recording; `main.rs`
+  only consumes the frame for pane snapshots and perf log emission.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

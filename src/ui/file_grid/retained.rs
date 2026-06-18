@@ -2,12 +2,14 @@ use super::icon_work::{
     DOLPHIN_VISIBLE_ICON_SYNC_BUDGET,
     resolve_visible_file_icons_for_raw_grid as resolve_visible_file_icons_for_raw_grid_with_cache,
 };
+use super::perf::ItemViewPerfPhase;
 use super::snapshot::{
     QueuedVisibleModelWork, RawFileGridSnapshot, RawFileGridSnapshotInput,
     RetainedFileGridProjection, project_retained_file_grid_snapshot,
     queue_raw_file_grid_model_work, raw_file_grid_snapshot,
     visible_metadata_role_results_for_raw_grid,
 };
+use super::{FileGridRenderSnapshot, ItemPaintSlotStats};
 use crate::FikaApp;
 use crate::ui::drag_drop::ItemDropTarget;
 use crate::ui::icons::{FileIconSnapshot, file_icon_resolve_results_for_requests};
@@ -34,6 +36,13 @@ pub(crate) struct PaneRawFileGridSnapshot {
 pub(crate) struct FileGridVisibleWorkFrame {
     pub(crate) icon_sync_elapsed: Option<Duration>,
     pub(crate) queue_elapsed: Option<Duration>,
+}
+
+pub(crate) struct RetainedFileGridFrame {
+    pub(crate) file_grid: FileGridRenderSnapshot,
+    pub(crate) item_paint_slot_stats: ItemPaintSlotStats,
+    pub(crate) visible_count: usize,
+    pub(crate) item_view_perf_phase: Option<ItemViewPerfPhase>,
 }
 
 impl FikaApp {
@@ -138,6 +147,48 @@ impl FikaApp {
             .insert(pane_id, visible_item_cache);
         self.item_paint_slots.insert(pane_id, item_paint_slots);
         projection
+    }
+
+    pub(crate) fn project_retained_file_grid_frame_for_pane(
+        &mut self,
+        pane_id: PaneId,
+        raw_file_grid: RawFileGridSnapshot,
+        selection_count: usize,
+        file_icon_size: f32,
+        view_mode: ViewMode,
+        item_count: usize,
+        perf_enabled: bool,
+    ) -> RetainedFileGridFrame {
+        let visible_count = raw_file_grid
+            .visible_layout_range_and_count()
+            .or_else(|| raw_file_grid.visible_work_range_and_count())
+            .map(|(_, count)| count)
+            .unwrap_or_default();
+        let projection = self.project_retained_file_grid_for_pane(
+            pane_id,
+            raw_file_grid,
+            selection_count,
+            file_icon_size,
+        );
+        let item_paint_slot_stats = projection.slot_stats;
+        let item_view_perf_phase = if perf_enabled {
+            Some(self.record_item_view_perf_frame(
+                pane_id,
+                view_mode,
+                item_count,
+                visible_count,
+                item_paint_slot_stats,
+            ))
+        } else {
+            None
+        };
+
+        RetainedFileGridFrame {
+            file_grid: projection.snapshot,
+            item_paint_slot_stats,
+            visible_count,
+            item_view_perf_phase,
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
