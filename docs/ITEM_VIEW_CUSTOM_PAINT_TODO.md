@@ -460,7 +460,8 @@ pretending that every remaining GPUI boundary can be removed safely today.
   `file_grid/snapshot/render.rs`, covering visible slot assignment, visible
   snapshot cache conversion, hover projection, and paint-slot projection;
   visible metadata/thumbnail/icon work keying and queue handoff now live in
-  `file_grid/snapshot/scheduler.rs`.
+  `file_grid/snapshot/scheduler.rs`; retained hovered-item state now lives in
+  `file_grid/hover.rs`.
   Runtime evidence collection helpers remain in `src/main.rs` and scripts.
 
 ## P16: Concrete Full-Transition Backlog
@@ -806,6 +807,13 @@ by risk and evidence, not by how custom-painted a surface looks.
   but no longer hand-wires the three scheduler handoffs inline. Unit coverage
   proves unchanged work keys skip duplicate queueing after the first metadata
   and icon work submission.
+- [x] P16at: Move retained hovered-item controller state into the file-grid
+  module. `RetainedHoveredItem` now owns pane/item hover identity, change
+  detection, pane clearing, and per-pane lookup for retained visual projection.
+  `src/main.rs` still exposes the event-facing methods used by current GPUI
+  shells and retained hitbox callbacks, but the state model is no longer a raw
+  app-root `Option<(PaneId, ItemId)>`. Unit coverage proves idempotent set,
+  item clear, pane clear, and cross-pane lookup behavior.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

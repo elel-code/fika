@@ -4,6 +4,7 @@ mod details;
 mod details_shell;
 mod details_visual;
 mod dnd;
+mod hover;
 mod icon_work;
 mod image_layer;
 mod interaction;
@@ -31,6 +32,7 @@ pub(crate) use autosmoke::{
 pub(crate) use details::DetailsLayoutMetrics;
 pub(crate) use details_visual::DetailsTextShapeCache;
 pub(crate) use dnd::ItemDrag;
+pub(crate) use hover::RetainedHoveredItem;
 pub(crate) use icon_work::{
     DOLPHIN_VISIBLE_ICON_SYNC_BUDGET, FileIconResolveQueue, resolve_visible_file_icons_for_raw_grid,
 };

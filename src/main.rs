@@ -88,7 +88,7 @@ use ui::file_grid::{
     DetailsTextShapeCache, FileIconResolveQueue, ItemDrag, ItemPaintSlotCache,
     ItemViewAutosmokeAction, ItemViewAutosmokeScenario, ItemViewPerfState, PaneLayoutProjection,
     PaneLayoutProjectionInput, PaneViewportGeometry, PaneVisibleWorkKey, RawFileGridSnapshot,
-    RawFileGridSnapshotInput, StaticItemTextShapeCache, VisibleItemSlotPool,
+    RawFileGridSnapshotInput, RetainedHoveredItem, StaticItemTextShapeCache, VisibleItemSlotPool,
     VisibleItemSnapshotCache, compact_text_width, compact_text_width_for_name,
     content_item_hit_at_point, emit_item_view_autosmoke_complete,
     emit_item_view_autosmoke_scroll_action, emit_item_view_autosmoke_start,
@@ -419,7 +419,7 @@ pub(crate) struct FikaApp {
     static_item_text_shape_caches: HashMap<PaneId, StaticItemTextShapeCache>,
     details_text_shape_caches: HashMap<PaneId, DetailsTextShapeCache>,
     item_view_perf: ItemViewPerfState,
-    hovered_item: Option<(PaneId, ItemId)>,
+    hovered_item: RetainedHoveredItem,
     compact_column_widths: HashMap<PaneId, CompactColumnWidthCache>,
     pane_filters: HashMap<PaneId, PaneFilterState>,
     filtered_models: HashMap<PaneId, FilteredModelCacheEntry>,
@@ -526,7 +526,7 @@ impl FikaApp {
             static_item_text_shape_caches: HashMap::new(),
             details_text_shape_caches: HashMap::new(),
             item_view_perf: ItemViewPerfState::default(),
-            hovered_item: None,
+            hovered_item: RetainedHoveredItem::default(),
             compact_column_widths: HashMap::new(),
             pane_filters: HashMap::new(),
             filtered_models: HashMap::new(),
@@ -1201,28 +1201,15 @@ impl FikaApp {
     }
 
     pub(crate) fn set_hovered_item(&mut self, pane_id: PaneId, item_id: ItemId) -> bool {
-        let next = Some((pane_id, item_id));
-        if self.hovered_item == next {
-            return false;
-        }
-        self.hovered_item = next;
-        true
+        self.hovered_item.set(pane_id, item_id)
     }
 
     pub(crate) fn clear_hovered_item(&mut self, pane_id: PaneId, item_id: ItemId) -> bool {
-        if self.hovered_item != Some((pane_id, item_id)) {
-            return false;
-        }
-        self.hovered_item = None;
-        true
+        self.hovered_item.clear_item(pane_id, item_id)
     }
 
     pub(crate) fn clear_hovered_item_for_pane(&mut self, pane_id: PaneId) -> bool {
-        if !matches!(self.hovered_item, Some((hovered_pane, _)) if hovered_pane == pane_id) {
-            return false;
-        }
-        self.hovered_item = None;
-        true
+        self.hovered_item.clear_pane(pane_id)
     }
 
     fn item_view_scroll_handle_for_pane(&mut self, pane_id: PaneId) -> ScrollHandle {
@@ -1597,9 +1584,7 @@ impl FikaApp {
                     .unwrap_or_default();
                 let mut item_paint_slots =
                     self.item_paint_slots.remove(&pane_id).unwrap_or_default();
-                let hovered_item = self.hovered_item.and_then(|(hovered_pane, item_id)| {
-                    (hovered_pane == pane_id).then_some(item_id)
-                });
+                let hovered_item = self.hovered_item.item_for_pane(pane_id);
                 let projection = project_retained_file_grid_snapshot(
                     raw_file_grid,
                     selection_count,
@@ -17006,7 +16991,7 @@ text/plain=viewer.desktop;\n",
             static_item_text_shape_caches: HashMap::new(),
             details_text_shape_caches: HashMap::new(),
             item_view_perf: ItemViewPerfState::default(),
-            hovered_item: None,
+            hovered_item: RetainedHoveredItem::default(),
             compact_column_widths: HashMap::new(),
             pane_filters: HashMap::new(),
             filtered_models: HashMap::new(),

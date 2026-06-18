@@ -343,6 +343,8 @@ execution must stay split into evidence-backed tracks:
    `project_retained_file_grid_snapshot()` in `file_grid/snapshot/render.rs`;
    visible metadata/thumbnail/icon work keying and queue handoff is owned by
    `queue_raw_file_grid_model_work()` in `file_grid/snapshot/scheduler.rs`;
+   retained hover identity is owned by `RetainedHoveredItem` in
+   `file_grid/hover.rs`;
    app root storage remains in `FikaApp`, but the conversion sequence is no
    longer hand-wired inline in `src/main.rs`.
 
