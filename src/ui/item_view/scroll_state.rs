@@ -34,14 +34,14 @@ impl ItemViewScrollViewSnapshot {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) enum ItemViewScrollSyncAction {
+enum ItemViewScrollSyncAction {
     None,
     SyncHandleToView,
     SyncView(ItemViewScrollSync),
 }
 
 impl ItemViewScrollSyncAction {
-    pub(crate) fn apply_to_view(
+    fn apply_to_view(
         self,
         view: ItemViewScrollViewSnapshot,
         mut apply_sync: impl FnMut(ItemViewScrollSync),
@@ -76,15 +76,15 @@ struct ItemViewScrollSyncOutcome {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct ItemViewScrollBoundsSync {
-    pub(crate) action: ItemViewScrollSyncAction,
-    pub(crate) handle_changed: bool,
+struct ItemViewScrollBoundsSync {
+    action: ItemViewScrollSyncAction,
+    handle_changed: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct ItemViewScrollDragFinish {
-    pub(crate) action: ItemViewScrollSyncAction,
-    pub(crate) was_dragging: bool,
+struct ItemViewScrollDragFinish {
+    action: ItemViewScrollSyncAction,
+    was_dragging: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -280,7 +280,7 @@ impl ItemViewScrollState {
         }
     }
 
-    pub(crate) fn sync_after_bounds_update_snapshot(
+    fn sync_after_bounds_update_snapshot(
         &mut self,
         pane_id: PaneId,
         view: ItemViewScrollViewSnapshot,
@@ -292,6 +292,17 @@ impl ItemViewScrollState {
             view.max_scroll_x,
             view.max_scroll_y,
         )
+    }
+
+    pub(crate) fn sync_view_after_bounds_update_snapshot(
+        &mut self,
+        pane_id: PaneId,
+        view: ItemViewScrollViewSnapshot,
+        apply_sync: impl FnMut(ItemViewScrollSync),
+    ) -> bool {
+        let bounds_sync = self.sync_after_bounds_update_snapshot(pane_id, view);
+        let action_changed = bounds_sync.action.apply_to_view(view, apply_sync);
+        bounds_sync.handle_changed || action_changed
     }
 
     fn finish_scrollbar_drag_with_sync(
@@ -312,12 +323,27 @@ impl ItemViewScrollState {
         }
     }
 
-    pub(crate) fn finish_scrollbar_drag_with_sync_snapshot(
+    fn finish_scrollbar_drag_with_sync_snapshot(
         &mut self,
         pane_id: PaneId,
         view: ItemViewScrollViewSnapshot,
     ) -> ItemViewScrollDragFinish {
         self.finish_scrollbar_drag_with_sync(pane_id, view.max_scroll_x, view.max_scroll_y)
+    }
+
+    pub(crate) fn finish_scrollbar_drag_syncing_view_snapshot(
+        &mut self,
+        pane_id: PaneId,
+        view: ItemViewScrollViewSnapshot,
+        apply_sync: impl FnMut(ItemViewScrollSync),
+    ) -> bool {
+        let finish = self.finish_scrollbar_drag_with_sync_snapshot(pane_id, view);
+        let action_changed = finish.action.apply_to_view(view, apply_sync);
+        action_changed || finish.was_dragging
+    }
+
+    pub(crate) fn finish_scrollbar_drag_without_view(&mut self, pane_id: PaneId) -> bool {
+        self.finish_scrollbar_drag(pane_id)
     }
 
     fn sync_from_authoritative_handle(
@@ -909,6 +935,66 @@ mod tests {
                 was_dragging: true,
             }
         );
+    }
+
+    #[test]
+    fn scroll_state_lifecycle_snapshot_apply_apis_write_view_inside_scroll_state() {
+        let pane_id = PaneId(1);
+        let view = ItemViewScrollViewSnapshot::new(180.0, 0.0, 1_000.0, 0.0);
+
+        let mut bounds_state = ItemViewScrollState::default();
+        let bounds_handle = bounds_state.handle_for_pane(pane_id);
+        bounds_state.mark_authoritative_for_frames(pane_id, 1);
+        let mut bounds_applied = Vec::new();
+        assert!(
+            bounds_state.sync_view_after_bounds_update_snapshot(pane_id, view, |sync| {
+                bounds_applied.push(sync);
+            })
+        );
+        assert_eq!(bounds_handle.offset().x, px(-180.0));
+        assert!(bounds_applied.is_empty());
+
+        bounds_state.begin_scrollbar_drag(pane_id);
+        bounds_handle.set_offset(point(px(-320.0), px(0.0)));
+        assert!(
+            bounds_state.sync_view_after_bounds_update_snapshot(pane_id, view, |sync| {
+                bounds_applied.push(sync);
+            })
+        );
+        assert_eq!(
+            bounds_applied,
+            vec![ItemViewScrollSync {
+                scroll_x: 320.0,
+                scroll_y: 0.0,
+                max_scroll_x: 1_000.0,
+                max_scroll_y: 0.0,
+            }]
+        );
+
+        let mut finish_state = ItemViewScrollState::default();
+        let finish_handle = finish_state.handle_for_pane(pane_id);
+        finish_state.begin_scrollbar_drag(pane_id);
+        finish_handle.set_offset(point(px(-480.0), px(0.0)));
+        let mut finish_applied = Vec::new();
+        assert!(
+            finish_state.finish_scrollbar_drag_syncing_view_snapshot(pane_id, view, |sync| {
+                finish_applied.push(sync);
+            })
+        );
+        assert_eq!(
+            finish_applied,
+            vec![ItemViewScrollSync {
+                scroll_x: 480.0,
+                scroll_y: 0.0,
+                max_scroll_x: 1_000.0,
+                max_scroll_y: 0.0,
+            }]
+        );
+        assert!(!finish_state.is_scrollbar_dragging(pane_id));
+
+        finish_state.begin_scrollbar_drag(pane_id);
+        assert!(finish_state.finish_scrollbar_drag_without_view(pane_id));
+        assert!(!finish_state.is_scrollbar_dragging(pane_id));
     }
 
     #[test]

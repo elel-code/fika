@@ -103,8 +103,8 @@ use ui::filter_bar::{
 };
 use ui::icons::{FileIconCache, file_icon_resolve_results_for_requests};
 use ui::item_view::{
-    ItemViewScrollState, ItemViewScrollSyncAction, ItemViewScrollViewSnapshot,
-    projected_item_viewport_width_for_pane_width, viewport_extents_after_view_mode_axis_change,
+    ItemViewScrollState, ItemViewScrollViewSnapshot, projected_item_viewport_width_for_pane_width,
+    viewport_extents_after_view_mode_axis_change,
     viewport_height_after_filter_bar_visibility_change, wheel_scroll_delta_for_view_mode,
     window_resize_viewport_prime,
 };
@@ -1234,23 +1234,6 @@ impl FikaApp {
             })
     }
 
-    fn apply_item_view_scroll_sync_action(
-        &mut self,
-        pane_id: PaneId,
-        action: ItemViewScrollSyncAction,
-        view: ItemViewScrollViewSnapshot,
-    ) -> bool {
-        action.apply_to_view(view, |sync| {
-            let _ = self.panes.set_view_scroll(
-                pane_id,
-                sync.scroll_x,
-                sync.scroll_y,
-                sync.max_scroll_x,
-                sync.max_scroll_y,
-            );
-        })
-    }
-
     pub(crate) fn begin_item_view_scrollbar_drag(&mut self, pane_id: PaneId) -> bool {
         self.item_view_scroll.begin_scrollbar_drag(pane_id)
     }
@@ -1263,11 +1246,7 @@ impl FikaApp {
         let Some(view) = self.panes.pane(pane_id).map(|pane| pane.view.clone()) else {
             return self
                 .item_view_scroll
-                .finish_scrollbar_drag_with_sync_snapshot(
-                    pane_id,
-                    ItemViewScrollViewSnapshot::default(),
-                )
-                .was_dragging;
+                .finish_scrollbar_drag_without_view(pane_id);
         };
         let view_snapshot = ItemViewScrollViewSnapshot::new(
             view.scroll_x,
@@ -1275,12 +1254,17 @@ impl FikaApp {
             view.max_scroll_x,
             view.max_scroll_y,
         );
-        let finish = self
-            .item_view_scroll
-            .finish_scrollbar_drag_with_sync_snapshot(pane_id, view_snapshot);
-        let action_changed =
-            self.apply_item_view_scroll_sync_action(pane_id, finish.action, view_snapshot);
-        action_changed || finish.was_dragging
+        let panes = &mut self.panes;
+        self.item_view_scroll
+            .finish_scrollbar_drag_syncing_view_snapshot(pane_id, view_snapshot, |sync| {
+                let _ = panes.set_view_scroll(
+                    pane_id,
+                    sync.scroll_x,
+                    sync.scroll_y,
+                    sync.max_scroll_x,
+                    sync.max_scroll_y,
+                );
+            })
     }
 
     fn preserve_item_view_scroll_for_layout_change(&mut self, pane_id: PaneId) {
@@ -3845,12 +3829,19 @@ impl FikaApp {
             view.max_scroll_x,
             view.max_scroll_y,
         );
-        let bounds_sync = self
+        let panes = &mut self.panes;
+        let scroll_changed = self
             .item_view_scroll
-            .sync_after_bounds_update_snapshot(pane_id, view_snapshot);
-        let action_changed =
-            self.apply_item_view_scroll_sync_action(pane_id, bounds_sync.action, view_snapshot);
-        changed || bounds_sync.handle_changed || action_changed
+            .sync_view_after_bounds_update_snapshot(pane_id, view_snapshot, |sync| {
+                let _ = panes.set_view_scroll(
+                    pane_id,
+                    sync.scroll_x,
+                    sync.scroll_y,
+                    sync.max_scroll_x,
+                    sync.max_scroll_y,
+                );
+            });
+        changed || scroll_changed
     }
 
     fn content_point_from_window(

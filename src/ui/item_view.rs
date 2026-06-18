@@ -7,9 +7,7 @@ use gpui::{ScrollDelta, px};
 pub(crate) use scroll_bar::{
     ITEM_VIEW_SCROLLBAR_RESERVED_EXTENT, ItemViewScrollbarAxis, item_view_scrollbar_container,
 };
-pub(crate) use scroll_state::{
-    ItemViewScrollState, ItemViewScrollSyncAction, ItemViewScrollViewSnapshot,
-};
+pub(crate) use scroll_state::{ItemViewScrollState, ItemViewScrollViewSnapshot};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct ItemViewWindowResizePrime {

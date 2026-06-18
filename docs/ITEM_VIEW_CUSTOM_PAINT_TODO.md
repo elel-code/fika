@@ -1080,6 +1080,11 @@ by risk and evidence, not by how custom-painted a surface looks.
   `sync_view_from_authoritative_handle_snapshot()` now own handle action
   creation plus view-write application; `src/main.rs` only supplies pane view
   snapshots and the pane model write closure.
+- [x] P16cp: Move item-view bounds-update and scrollbar-finish scroll action
+  application into scroll state. Bounds and drag-finish paths now expose
+  snapshot APIs that own action creation, handle-change aggregation, and
+  view-write application while `src/main.rs` keeps only pane bounds updates and
+  pane model write closures.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,
