@@ -16,6 +16,7 @@ mod perf;
 mod projection;
 mod rename_overlay;
 mod renderer_policy;
+mod retained;
 mod slots;
 mod snapshot;
 mod static_visual;
@@ -60,7 +61,7 @@ pub(crate) use projection::{
 pub(crate) use slots::VisibleItemSlotPool;
 pub(crate) use snapshot::{
     PaneVisibleWorkKey, RawFileGridSnapshot, RawFileGridSnapshotInput, VisibleItemSnapshotCache,
-    project_retained_file_grid_snapshot, queue_raw_file_grid_model_work, raw_file_grid_snapshot,
+    queue_raw_file_grid_model_work, raw_file_grid_snapshot,
     visible_metadata_role_results_for_raw_grid,
 };
 pub(crate) use static_visual::StaticItemTextShapeCache;

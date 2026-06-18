@@ -836,6 +836,13 @@ by risk and evidence, not by how custom-painted a surface looks.
   visible metadata sync, and background icon resolve completion. `src/main.rs`
   still decides when role/icon results changed, but no longer reaches directly
   into `visible_item_snapshot_caches` for those invalidation paths.
+- [x] P16ax: Move retained file-grid projection state handoff into the
+  file-grid module. `file_grid/retained.rs` now owns removing and reinserting
+  pane-local `VisibleItemSlotPool`, `VisibleItemSnapshotCache`, and
+  `ItemPaintSlotCache` state around raw-to-retained projection, including the
+  retained hovered-item lookup and icon snapshot callback. `src/main.rs` still
+  decides when a pane render needs conversion, but no longer wires the retained
+  slot/cache handoff inline.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

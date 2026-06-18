@@ -21,7 +21,7 @@ use fika_core::ViewMode;
 use fika_core::{DirectoryModel, PaneId, SelectionState, ViewState};
 pub(crate) use metadata::visible_metadata_role_results_for_raw_grid;
 pub(crate) use range::PaneVisibleWorkKey;
-pub(crate) use render::project_retained_file_grid_snapshot;
+pub(crate) use render::{RetainedFileGridProjection, project_retained_file_grid_snapshot};
 pub(crate) use scheduler::queue_raw_file_grid_model_work;
 #[cfg(test)]
 use std::path::PathBuf;
