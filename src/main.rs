@@ -107,6 +107,7 @@ use ui::item_view::{
     changed_item_view_scroll_snapshot, item_view_scroll_snapshot_for_existing_pane,
     item_view_scroll_snapshot_for_pane, item_view_scroll_snapshot_for_view,
     projected_item_viewport_width_for_pane_width,
+    sync_pane_view_from_authoritative_item_view_scroll_handle as sync_item_view_pane_from_authoritative_scroll_handle,
     sync_pane_view_from_item_view_scroll_handle as sync_item_view_pane_from_scroll_handle,
     viewport_extents_after_view_mode_axis_change,
     viewport_height_after_filter_bar_visibility_change, wheel_scroll_delta_for_view_mode,
@@ -1193,12 +1194,11 @@ impl FikaApp {
         &mut self,
         pane_id: PaneId,
     ) -> bool {
-        let view = item_view_scroll_snapshot_for_pane(&self.panes, pane_id);
-        let panes = &mut self.panes;
-        self.item_view_scroll
-            .sync_view_from_authoritative_handle_snapshot(pane_id, view, |view| {
-                apply_item_view_scroll_snapshot_to_pane(panes, pane_id, view);
-            })
+        sync_item_view_pane_from_authoritative_scroll_handle(
+            &mut self.item_view_scroll,
+            &mut self.panes,
+            pane_id,
+        )
     }
 
     pub(crate) fn begin_item_view_scrollbar_drag(&mut self, pane_id: PaneId) -> bool {

@@ -306,6 +306,7 @@
 - [x] P16cx：将 pane 到 item-view scroll snapshot 的投影移入 item-view 模块。`item_view_scroll_snapshot_for_pane()` 和 `item_view_scroll_snapshot_for_existing_pane()` 现在拥有从 pane `ViewState` 投影到 `ItemViewScrollViewSnapshot` 的规则，`main.rs` 不再保留自己的 pane snapshot helper。
 - [x] P16cy：在 `main.rs` 中隐藏直接 item-view scroll snapshot 构造。filter-bar 预热现在使用 `item_view_scroll_snapshot_for_view()`，滚轮滚动使用 `changed_item_view_scroll_snapshot()`，应用侧测试复用 pane snapshot 投影而不是直接构造 `ItemViewScrollViewSnapshot`。
 - [x] P16cz：将普通 item-view scroll handle 到 pane 的同步编排移入 item-view facade。`main.rs` 现在把 scroll state、pane controller 和 pane id 交给 `sync_pane_view_from_item_view_scroll_handle()`，不再本地组装 snapshot/writeback 闭包。
+- [x] P16da：将 authoritative item-view scroll handle 到 pane 的同步编排移入 item-view facade。scrollbar-drag update 现在通过 `sync_pane_view_from_authoritative_item_view_scroll_handle()` 委托，而不是在 `main.rs` 组装 authoritative handle snapshot/writeback 闭包。
 - [ ] P16q：在每个 P16 实现切片之后，单独提交并附带相关验证：仅文档切片需要 `git diff --check`；代码切片需要 `cargo fmt`、`cargo check`、`cargo test -q`、`scripts/check-item-view-perf-analyzer.sh`、`scripts/check-places-perf-analyzer.sh` 和 `git diff --check`。
 - [x] P16r：记录运行时自测试和突破记录规则。可重复的滚动、缩放、启动图标、调整大小、模式切换和 Places 目标回退应在依赖手动计时之前通过 autosmoke 日志和分析器脚本重现。任何确认的优化突破必须记录症状、Dolphin 比较边界、根本原因、实现、保存的日志/分析器命令和未来回归守卫在拥有的设计或决策文档中。
 

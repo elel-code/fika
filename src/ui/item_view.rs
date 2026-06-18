@@ -187,6 +187,17 @@ pub(crate) fn sync_pane_view_from_item_view_scroll_handle(
     })
 }
 
+pub(crate) fn sync_pane_view_from_authoritative_item_view_scroll_handle(
+    scroll_state: &mut ItemViewScrollState,
+    panes: &mut PaneController,
+    pane_id: PaneId,
+) -> bool {
+    let view = item_view_scroll_snapshot_for_pane(panes, pane_id);
+    scroll_state.sync_view_from_authoritative_handle_snapshot(pane_id, view, |view| {
+        apply_item_view_scroll_snapshot_to_pane(panes, pane_id, view);
+    })
+}
+
 fn apply_window_resize_delta(extent: f32, delta: f32) -> f32 {
     fika_core::normalize_viewport_extent(extent + delta)
 }

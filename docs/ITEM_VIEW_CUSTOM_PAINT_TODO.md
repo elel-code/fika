@@ -1128,6 +1128,11 @@ by risk and evidence, not by how custom-painted a surface looks.
   `sync_pane_view_from_item_view_scroll_handle()` with the scroll state,
   pane controller, and pane id instead of assembling the snapshot/writeback
   closure locally.
+- [x] P16da: Move authoritative item-view scroll-handle-to-pane sync
+  orchestration into the item-view facade. Scrollbar-drag update now delegates
+  through `sync_pane_view_from_authoritative_item_view_scroll_handle()` instead
+  of assembling the authoritative handle snapshot/writeback closure in
+  `main.rs`.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,
