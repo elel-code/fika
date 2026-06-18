@@ -1101,6 +1101,10 @@ by risk and evidence, not by how custom-painted a surface looks.
   `sync_handle_to_view_snapshot()` is now an internal scroll-state helper;
   cross-module paths use the authoritative, user-scroll, or transient-clearing
   policy APIs instead of the raw handle sync helper.
+- [x] P16cu: Encapsulate item-view scroll snapshot writeback. The snapshot
+  fields are now private to `scroll_state.rs`; `main.rs` writes pane scroll via
+  `ItemViewScrollViewSnapshot::apply_scroll_writeback()` and a single pane
+  adapter instead of repeatedly unpacking the scroll tuple.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

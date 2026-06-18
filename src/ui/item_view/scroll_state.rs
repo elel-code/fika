@@ -27,10 +27,10 @@ impl ItemViewScrollSync {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct ItemViewScrollViewSnapshot {
-    pub(crate) scroll_x: f32,
-    pub(crate) scroll_y: f32,
-    pub(crate) max_scroll_x: f32,
-    pub(crate) max_scroll_y: f32,
+    scroll_x: f32,
+    scroll_y: f32,
+    max_scroll_x: f32,
+    max_scroll_y: f32,
 }
 
 impl ItemViewScrollViewSnapshot {
@@ -50,6 +50,15 @@ impl ItemViewScrollViewSnapshot {
             view.max_scroll_x,
             view.max_scroll_y,
         )
+    }
+
+    pub(crate) fn apply_scroll_writeback(self, mut write_scroll: impl FnMut(f32, f32, f32, f32)) {
+        write_scroll(
+            self.scroll_x,
+            self.scroll_y,
+            self.max_scroll_x,
+            self.max_scroll_y,
+        );
     }
 }
 
@@ -720,6 +729,18 @@ mod tests {
             ItemViewScrollViewSnapshot::from_view_state(&view),
             ItemViewScrollViewSnapshot::new(12.0, 24.0, 120.0, 240.0)
         );
+    }
+
+    #[test]
+    fn scroll_view_snapshot_owns_writeback_tuple_projection() {
+        let view = ItemViewScrollViewSnapshot::new(12.0, 24.0, 120.0, 240.0);
+        let mut applied = None;
+
+        view.apply_scroll_writeback(|scroll_x, scroll_y, max_scroll_x, max_scroll_y| {
+            applied = Some((scroll_x, scroll_y, max_scroll_x, max_scroll_y));
+        });
+
+        assert_eq!(applied, Some((12.0, 24.0, 120.0, 240.0)));
     }
 
     #[test]
