@@ -148,6 +148,17 @@ The future custom path is acceptable only if analyzer output proves:
 - image paint cost is visible through `[fika item-image]` and stays within the
   static visual budget.
 
+The staged hybrid readiness handoff evidence can be captured with:
+
+```bash
+scripts/run-retained-renderer-evidence.sh --hybrid-icons
+```
+
+This is the preferred runner for the next MIME/theme icon step because it uses
+`FIKA_HYBRID_THEME_ICONS=1` and the `--gate-hybrid-handoff` comparison instead
+of forcing the still non-promotable full custom icon path through
+`--gate-default-promotion`.
+
 Current `/etc` evidence from 2026-06-18:
 
 - Default log: `/tmp/fika-icon-default-etc-p16k2.log`.
@@ -243,6 +254,7 @@ Hybrid `/etc` smoke evidence from 2026-06-18:
   than the default GPUI image element path before any default promotion.
   2026-06-18 `/etc` evidence passed the placeholder/decode portion but not the
   full promotion bar because the `icon_sync` spike and mixed-directory run still
-  need follow-up.
+  need follow-up. Preferred runner:
+  `scripts/run-retained-renderer-evidence.sh --hybrid-icons`.
 - [ ] Keep GPUI `img()` as the default MIME/theme icon renderer until the
   paired evidence passes and `docs/ITEM_VIEW_RENDERER_DECISIONS.md` is updated.

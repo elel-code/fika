@@ -127,6 +127,16 @@ FIKA_PERF_ITEM_VIEW=1 FIKA_CUSTOM_THEME_ICONS=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-sc
 - `icon_sync`、queue 和 convert phase 保持在当前 GPUI baseline 内；
 - image paint 成本通过 `[fika item-image]` 可见，并保持在 static visual 预算内。
 
+分阶段 hybrid readiness handoff 证据可以用以下命令采集：
+
+```bash
+scripts/run-retained-renderer-evidence.sh --hybrid-icons
+```
+
+这是下一步 MIME/theme icon 工作的首选 runner，因为它使用
+`FIKA_HYBRID_THEME_ICONS=1` 和 `--gate-hybrid-handoff` 对比，而不是把当前仍不可提升的
+full custom icon 路径强行通过 `--gate-default-promotion`。
+
 2026-06-18 当前 `/etc` 证据：
 
 - 默认日志：`/tmp/fika-icon-default-etc-p16k2.log`。
@@ -210,6 +220,7 @@ FIKA_PERF_ITEM_VIEW=1 FIKA_CUSTOM_THEME_ICONS=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-sc
 - [ ] 采集 `/etc` 和混合用户目录的 default-vs-hybrid 成对运行时证据。Hybrid 必须保持
   `theme_placeholder=0`，避免 zoom-time `theme_decoded` burst，并证明 ready-key custom
   painting 不慢于默认 GPUI image element 路径，才能考虑任何默认提升。
-  2026-06-18 `/etc` 证据已通过 placeholder/decode 部分，但由于 `icon_sync` spike 和混合目录运行仍需跟进，尚未达到完整提升标准。
+  2026-06-18 `/etc` 证据已通过 placeholder/decode 部分，但由于 `icon_sync` spike 和混合目录运行仍需跟进，尚未达到完整提升标准。首选 runner：
+  `scripts/run-retained-renderer-evidence.sh --hybrid-icons`。
 - [ ] 在配对证据通过且 `docs/ITEM_VIEW_RENDERER_DECISIONS.md` 更新前，保持 GPUI
   `img()` 为默认 MIME/theme icon renderer。

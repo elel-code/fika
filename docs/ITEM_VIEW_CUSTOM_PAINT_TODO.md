@@ -1537,6 +1537,13 @@ tracks.
   `--places-only` captures only the Places targets/overflow/layout/hit-test/
   targeting/DnD logs and still verifies the full retained-event gate fails as
   expected. The default `--core` behavior remains item plus Places.
+- [x] P16fc: Add a hybrid MIME/theme icon evidence runner mode.
+  `scripts/run-retained-renderer-evidence.sh --hybrid-icons` captures paired default and
+  `FIKA_HYBRID_THEME_ICONS=1` zoom-scroll logs for `/etc` and the mixed user
+  directory, then runs `scripts/compare-item-image-renderers.sh
+  --gate-hybrid-handoff`. This makes the next image-readiness step measurable
+  without forcing the current non-promotable full custom icon path through
+  `--gate-default-promotion`.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

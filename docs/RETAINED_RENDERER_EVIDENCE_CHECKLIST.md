@@ -29,6 +29,13 @@ expected to pass default-promotion gates:
 scripts/run-retained-renderer-evidence.sh --icons
 ```
 
+Use `--hybrid-icons` when validating the staged GPUI-to-custom readiness
+handoff path:
+
+```sh
+scripts/run-retained-renderer-evidence.sh --hybrid-icons
+```
+
 The sections below show the commands that the script runs and the manual checks
 that still need human review.
 
@@ -79,6 +86,18 @@ Analyze paired logs:
 ```sh
 scripts/compare-item-image-renderers.sh --gate-default-promotion /tmp/fika-evidence-icon-custom-etc.log /tmp/fika-evidence-icon-default-etc.log
 scripts/compare-item-image-renderers.sh --gate-default-promotion /tmp/fika-evidence-icon-custom-downloads.log /tmp/fika-evidence-icon-default-downloads.log
+```
+
+For the staged hybrid readiness path, use:
+
+```sh
+timeout 8s env FIKA_PERF_ITEM_VIEW=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll target/debug/fika /etc > /tmp/fika-evidence-icon-hybrid-default-etc.log 2>&1
+timeout 8s env FIKA_PERF_ITEM_VIEW=1 FIKA_HYBRID_THEME_ICONS=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll target/debug/fika /etc > /tmp/fika-evidence-icon-hybrid-etc.log 2>&1
+timeout 8s env FIKA_PERF_ITEM_VIEW=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll target/debug/fika ~/Downloads > /tmp/fika-evidence-icon-hybrid-default-downloads.log 2>&1
+timeout 8s env FIKA_PERF_ITEM_VIEW=1 FIKA_HYBRID_THEME_ICONS=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll target/debug/fika ~/Downloads > /tmp/fika-evidence-icon-hybrid-downloads.log 2>&1
+
+scripts/compare-item-image-renderers.sh --gate-hybrid-handoff /tmp/fika-evidence-icon-hybrid-etc.log /tmp/fika-evidence-icon-hybrid-default-etc.log
+scripts/compare-item-image-renderers.sh --gate-hybrid-handoff /tmp/fika-evidence-icon-hybrid-downloads.log /tmp/fika-evidence-icon-hybrid-default-downloads.log
 ```
 
 A default-promotion candidate must have no visible `theme_placeholder` churn, no

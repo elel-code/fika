@@ -470,6 +470,12 @@ Places chrome 默认之后的当前执行入口是
   item-view Track 1 日志；`--places-only` 只采集 Places targets/overflow/layout/hit-test/
   targeting/DnD 日志，并且仍会验证完整 retained-event gate 按预期失败。默认 `--core`
   行为保持为 item 加 Places。
+- [x] P16fc：添加 hybrid MIME/theme icon 证据 runner 模式。
+  `scripts/run-retained-renderer-evidence.sh --hybrid-icons` 会为 `/etc` 和混合用户目录采集
+  default 与 `FIKA_HYBRID_THEME_ICONS=1` 的 zoom-scroll 配对日志，然后运行
+  `scripts/compare-item-image-renderers.sh --gate-hybrid-handoff`。这让下一步 image
+  readiness 工作可以被度量，而不需要把当前尚不可提升的 full custom icon 路径强行通过
+  `--gate-default-promotion`。
 - [ ] P16q：在每个 P16 实现切片之后，单独提交并附带相关验证：仅文档切片需要 `git diff --check`；代码切片需要 `cargo fmt`、`cargo check`、`cargo test -q`、`scripts/check-item-view-perf-analyzer.sh`、`scripts/check-places-perf-analyzer.sh` 和 `git diff --check`。
 - [x] P16r：记录运行时自测试和突破记录规则。可重复的滚动、缩放、启动图标、调整大小、模式切换和 Places 目标回退应在依赖手动计时之前通过 autosmoke 日志和分析器脚本重现。任何确认的优化突破必须记录症状、Dolphin 比较边界、根本原因、实现、保存的日志/分析器命令和未来回归守卫在拥有的设计或决策文档中。
 

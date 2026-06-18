@@ -25,8 +25,16 @@ Options:
       default-promotion gate to pass. Use this only when testing an image
       renderer candidate that is expected to be promotable.
 
+  --hybrid-icons
+      Capture MIME/theme icon default-vs-hybrid readiness handoff logs and
+      require the hybrid-handoff gate to pass.
+
   --all
-      Same as --core --icons.
+      Same as --core --icons --hybrid-icons.
+
+      Note: --icons is intentionally strict and may fail for the current
+      non-promotable full custom theme-icon path. Use --hybrid-icons by itself
+      when validating staged readiness handoff work.
 
   --analyze-only
       Do not launch Fika. Re-run analyzers against existing logs.
@@ -63,6 +71,7 @@ timeout_seconds=8
 capture_items=true
 capture_places=true
 capture_icons=false
+capture_hybrid_icons=false
 analyze_only=false
 skip_build=false
 
@@ -83,10 +92,14 @@ while [[ $# -gt 0 ]]; do
         --icons)
             capture_icons=true
             ;;
+        --hybrid-icons)
+            capture_hybrid_icons=true
+            ;;
         --all)
             capture_items=true
             capture_places=true
             capture_icons=true
+            capture_hybrid_icons=true
             ;;
         --analyze-only)
             analyze_only=true
@@ -301,6 +314,28 @@ if [[ "$capture_icons" == true ]]; then
         "$compare" --gate-default-promotion "$icon_custom_etc_log" "$icon_default_etc_log"
     run_gate "icon default promotion downloads" \
         "$compare" --gate-default-promotion "$icon_custom_downloads_log" "$icon_default_downloads_log"
+fi
+
+if [[ "$capture_hybrid_icons" == true ]]; then
+    icon_default_etc_log="$(log_path icon-hybrid-default-etc)"
+    icon_hybrid_etc_log="$(log_path icon-hybrid-etc)"
+    icon_default_downloads_log="$(log_path icon-hybrid-default-downloads)"
+    icon_hybrid_downloads_log="$(log_path icon-hybrid-downloads)"
+
+    run_capture "icon hybrid default etc" "$icon_default_etc_log" \
+        env FIKA_PERF_ITEM_VIEW=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll "$binary" /etc
+    run_capture "icon hybrid etc" "$icon_hybrid_etc_log" \
+        env FIKA_PERF_ITEM_VIEW=1 FIKA_HYBRID_THEME_ICONS=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll "$binary" /etc
+    run_capture "icon hybrid default downloads" "$icon_default_downloads_log" \
+        env FIKA_PERF_ITEM_VIEW=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll "$binary" "$downloads_dir"
+    run_capture "icon hybrid downloads" "$icon_hybrid_downloads_log" \
+        env FIKA_PERF_ITEM_VIEW=1 FIKA_HYBRID_THEME_ICONS=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll "$binary" "$downloads_dir"
+
+    compare="$root_dir/scripts/compare-item-image-renderers.sh"
+    run_gate "icon hybrid handoff etc" \
+        "$compare" --gate-hybrid-handoff "$icon_hybrid_etc_log" "$icon_default_etc_log"
+    run_gate "icon hybrid handoff downloads" \
+        "$compare" --gate-hybrid-handoff "$icon_hybrid_downloads_log" "$icon_default_downloads_log"
 fi
 
 echo "retained renderer evidence complete"

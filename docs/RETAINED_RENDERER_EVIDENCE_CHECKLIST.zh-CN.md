@@ -30,6 +30,12 @@ scripts/run-retained-renderer-evidence.sh --places-only
 scripts/run-retained-renderer-evidence.sh --icons
 ```
 
+验证分阶段 GPUI 到 custom readiness handoff 路径时，使用 `--hybrid-icons`：
+
+```sh
+scripts/run-retained-renderer-evidence.sh --hybrid-icons
+```
+
 下面各节展示脚本运行的命令，以及仍需人工审查的手动检查。
 
 ## 构建
@@ -78,6 +84,18 @@ timeout 8s env FIKA_PERF_ITEM_VIEW=1 FIKA_CUSTOM_THEME_ICONS=1 FIKA_AUTOSMOKE_IT
 ```sh
 scripts/compare-item-image-renderers.sh --gate-default-promotion /tmp/fika-evidence-icon-custom-etc.log /tmp/fika-evidence-icon-default-etc.log
 scripts/compare-item-image-renderers.sh --gate-default-promotion /tmp/fika-evidence-icon-custom-downloads.log /tmp/fika-evidence-icon-default-downloads.log
+```
+
+对于分阶段 hybrid readiness 路径，使用：
+
+```sh
+timeout 8s env FIKA_PERF_ITEM_VIEW=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll target/debug/fika /etc > /tmp/fika-evidence-icon-hybrid-default-etc.log 2>&1
+timeout 8s env FIKA_PERF_ITEM_VIEW=1 FIKA_HYBRID_THEME_ICONS=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll target/debug/fika /etc > /tmp/fika-evidence-icon-hybrid-etc.log 2>&1
+timeout 8s env FIKA_PERF_ITEM_VIEW=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll target/debug/fika ~/Downloads > /tmp/fika-evidence-icon-hybrid-default-downloads.log 2>&1
+timeout 8s env FIKA_PERF_ITEM_VIEW=1 FIKA_HYBRID_THEME_ICONS=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll target/debug/fika ~/Downloads > /tmp/fika-evidence-icon-hybrid-downloads.log 2>&1
+
+scripts/compare-item-image-renderers.sh --gate-hybrid-handoff /tmp/fika-evidence-icon-hybrid-etc.log /tmp/fika-evidence-icon-hybrid-default-etc.log
+scripts/compare-item-image-renderers.sh --gate-hybrid-handoff /tmp/fika-evidence-icon-hybrid-downloads.log /tmp/fika-evidence-icon-hybrid-default-downloads.log
 ```
 
 默认提升候选必须没有可见 `theme_placeholder` 抖动、没有 zoom-time `theme_decoded`
