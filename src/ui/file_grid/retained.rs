@@ -26,6 +26,11 @@ const METADATA_ROLE_BATCH_SIZE: usize = 16;
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) const THUMBNAIL_PROBE_BATCH_SIZE: usize = 32;
 
+pub(crate) struct PaneRawFileGridSnapshot {
+    pub(crate) raw_file_grid: RawFileGridSnapshot,
+    pub(crate) model_data_generation: u64,
+}
+
 impl FikaApp {
     pub(crate) fn raw_file_grid_snapshot_for_pane(
         &mut self,
@@ -48,6 +53,47 @@ impl FikaApp {
             item_drop_target,
             compact_column_widths: self.compact_column_widths.entry(pane_id).or_default(),
         }))
+    }
+
+    pub(crate) fn raw_file_grid_snapshot_after_visible_metadata_sync(
+        &mut self,
+        pane_id: PaneId,
+        generation: Generation,
+        view: &ViewState,
+        filtered: Option<&FilteredModel>,
+        source_revision: u64,
+        rename_draft: Option<&RenameDraft>,
+        item_drop_target: Option<&ItemDropTarget>,
+        metadata_budget: Duration,
+    ) -> Option<PaneRawFileGridSnapshot> {
+        let mut raw_file_grid = self.raw_file_grid_snapshot_for_pane(
+            pane_id,
+            view,
+            filtered,
+            source_revision,
+            rename_draft,
+            item_drop_target,
+        )?;
+        if self.resolve_visible_metadata_roles_for_raw_grid(
+            pane_id,
+            generation,
+            &raw_file_grid,
+            metadata_budget,
+        ) {
+            raw_file_grid = self.raw_file_grid_snapshot_for_pane(
+                pane_id,
+                view,
+                filtered,
+                source_revision,
+                rename_draft,
+                item_drop_target,
+            )?;
+        }
+        let model_data_generation = self.panes.pane(pane_id)?.model.data_generation();
+        Some(PaneRawFileGridSnapshot {
+            raw_file_grid,
+            model_data_generation,
+        })
     }
 
     pub(crate) fn project_retained_file_grid_for_pane(

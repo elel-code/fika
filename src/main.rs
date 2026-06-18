@@ -1318,15 +1318,7 @@ impl FikaApp {
                     .as_ref()
                     .filter(|draft| draft.pane_id == pane_id)
                     .map(LocationDraft::snapshot);
-                let (
-                    breadcrumbs,
-                    view,
-                    generation,
-                    model_data_generation,
-                    focused,
-                    selection_count,
-                    trash_view,
-                ) = {
+                let (breadcrumbs, view, generation, focused, selection_count, trash_view) = {
                     let pane = self.panes.pane(pane_id)?;
                     let mut view = pane.view.clone();
                     if let Some(projected_viewport_width) =
@@ -1339,7 +1331,6 @@ impl FikaApp {
                         breadcrumb_segments(&pane.current_dir),
                         view.clone(),
                         pane.generation,
-                        pane.model.data_generation(),
                         focused_pane == Some(pane_id),
                         pane.selection.count_for_model(pane.model.len()),
                         file_ops::is_trash_files_dir(&pane.current_dir),
@@ -1347,32 +1338,20 @@ impl FikaApp {
                 };
                 let filtered = filtered_model.as_ref().map(|(model, _)| model);
                 let source_revision = filtered_model.as_ref().map_or(0, |(_, revision)| *revision);
-                let mut model_data_generation = model_data_generation;
                 let raw_started = perf_enabled.then(Instant::now);
-                let mut raw_file_grid = self.raw_file_grid_snapshot_for_pane(
-                    pane_id,
-                    &view,
-                    filtered,
-                    source_revision,
-                    rename_draft.as_ref(),
-                    item_drop_target.as_ref(),
-                )?;
-                if self.resolve_visible_metadata_roles_for_raw_grid(
-                    pane_id,
-                    generation,
-                    &raw_file_grid,
-                    VISIBLE_METADATA_ROLE_SYNC_BUDGET,
-                ) {
-                    model_data_generation = self.panes.pane(pane_id)?.model.data_generation();
-                    raw_file_grid = self.raw_file_grid_snapshot_for_pane(
+                let prepared_raw_file_grid = self
+                    .raw_file_grid_snapshot_after_visible_metadata_sync(
                         pane_id,
+                        generation,
                         &view,
                         filtered,
                         source_revision,
                         rename_draft.as_ref(),
                         item_drop_target.as_ref(),
+                        VISIBLE_METADATA_ROLE_SYNC_BUDGET,
                     )?;
-                }
+                let raw_file_grid = prepared_raw_file_grid.raw_file_grid;
+                let model_data_generation = prepared_raw_file_grid.model_data_generation;
                 let raw_elapsed = raw_started.map(|started| started.elapsed());
                 let file_icon_size = view.icon_size();
                 let icon_sync_started = perf_enabled.then(Instant::now);

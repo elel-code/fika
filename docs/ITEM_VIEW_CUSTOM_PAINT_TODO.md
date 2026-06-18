@@ -1200,6 +1200,10 @@ by risk and evidence, not by how custom-painted a surface looks.
   facade. Queueing now returns the typed `QueuedVisibleModelWork` contract, and
   `main.rs` delegates worker startup instead of unpacking metadata, thumbnail,
   and file-icon booleans.
+- [x] P16dq: Move visible metadata resnapshot orchestration into the file-grid
+  retained facade. The render loop now asks for a raw grid that has already
+  applied same-frame visible metadata role results and receives the updated
+  model data generation, instead of rebuilding the raw grid from `main.rs`.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,
