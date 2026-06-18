@@ -1181,6 +1181,11 @@ by risk and evidence, not by how custom-painted a surface looks.
   `resolve_visible_file_icons_for_raw_grid()` method; the Dolphin visible-icon
   sync budget, queue-aware cache sync, and visible snapshot invalidation stay in
   the file-grid module instead of `main.rs`.
+- [x] P16dm: Move file-icon resolve worker orchestration into the file-grid
+  retained facade. Batch startup, background icon resolution, queue completion,
+  resolved icon application, visible snapshot invalidation, and continued batch
+  scheduling now live with the file-grid icon work boundary instead of
+  `main.rs`.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

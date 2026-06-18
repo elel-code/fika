@@ -99,7 +99,7 @@ use ui::filter_bar::{
     FILTER_BAR_HEIGHT, FilterBarSnapshot, FilteredModelCacheEntry, PaneFilterState,
     cached_filtered_model_for_pane, filter_toggle_snapshot,
 };
-use ui::icons::{FileIconCache, file_icon_resolve_results_for_requests};
+use ui::icons::FileIconCache;
 use ui::item_view::{
     ItemViewScrollState, begin_item_view_scrollbar_drag as begin_item_view_scrollbar_drag_state,
     finish_item_view_scrollbar_drag as finish_item_view_scrollbar_drag_state,
@@ -2119,38 +2119,6 @@ impl FikaApp {
                             .finish_role_batch_with_results(&results);
                         let changed = app.finish_metadata_role_results(results);
                         app.maybe_start_metadata_role(cx);
-                        if changed {
-                            cx.notify();
-                        }
-                    });
-                }
-            },
-        )
-        .detach();
-    }
-
-    fn maybe_start_file_icon_resolve(&mut self, cx: &mut Context<Self>) {
-        let Some(requests) = self.file_icon_resolve_queue.start_next_batch() else {
-            return;
-        };
-        let finished_requests = requests.clone();
-
-        cx.spawn(
-            move |this: gpui::WeakEntity<FikaApp>, cx: &mut gpui::AsyncApp| {
-                let mut cx = cx.clone();
-                async move {
-                    let results = cx
-                        .background_spawn(async move {
-                            file_icon_resolve_results_for_requests(requests)
-                        })
-                        .await;
-                    let _ = this.update(&mut cx, |app, cx| {
-                        app.file_icon_resolve_queue.finish_batch(finished_requests);
-                        let changed = app.file_icons.finish_resolve_results(results);
-                        if changed {
-                            app.invalidate_all_file_grid_visible_snapshot_caches();
-                        }
-                        app.maybe_start_file_icon_resolve(cx);
                         if changed {
                             cx.notify();
                         }

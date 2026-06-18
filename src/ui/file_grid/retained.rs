@@ -9,12 +9,13 @@ use super::snapshot::{
 };
 use crate::FikaApp;
 use crate::ui::drag_drop::ItemDropTarget;
-use crate::ui::icons::FileIconSnapshot;
+use crate::ui::icons::{FileIconSnapshot, file_icon_resolve_results_for_requests};
 use crate::ui::rename::RenameDraft;
 use fika_core::{
     FilteredModel, Generation, MetadataRoleResult, PaneId, ThumbnailProbeResult, ViewMode,
     ViewState, apply_metadata_role_result_to_model, apply_thumbnail_probe_result_to_model,
 };
+use gpui::{AppContext, Context};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -208,6 +209,38 @@ impl FikaApp {
             mime_magic_checked,
             icon_size,
         )
+    }
+
+    pub(crate) fn maybe_start_file_icon_resolve(&mut self, cx: &mut Context<Self>) {
+        let Some(requests) = self.file_icon_resolve_queue.start_next_batch() else {
+            return;
+        };
+        let finished_requests = requests.clone();
+
+        cx.spawn(
+            move |this: gpui::WeakEntity<FikaApp>, cx: &mut gpui::AsyncApp| {
+                let mut cx = cx.clone();
+                async move {
+                    let results = cx
+                        .background_spawn(async move {
+                            file_icon_resolve_results_for_requests(requests)
+                        })
+                        .await;
+                    let _ = this.update(&mut cx, |app, cx| {
+                        app.file_icon_resolve_queue.finish_batch(finished_requests);
+                        let changed = app.file_icons.finish_resolve_results(results);
+                        if changed {
+                            app.invalidate_all_file_grid_visible_snapshot_caches();
+                        }
+                        app.maybe_start_file_icon_resolve(cx);
+                        if changed {
+                            cx.notify();
+                        }
+                    });
+                }
+            },
+        )
+        .detach();
     }
 
     pub(crate) fn cancel_metadata_role_work_for_pane(&mut self, pane_id: PaneId) {
