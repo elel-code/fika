@@ -103,7 +103,8 @@ use ui::icons::{FileIconCache, file_icon_resolve_results_for_requests};
 use ui::item_view::{
     ItemViewScrollState, ItemViewScrollSync, ItemViewScrollSyncAction,
     projected_item_viewport_width_for_pane_width, scroll_sync_changes_view,
-    viewport_extents_after_view_mode_axis_change, wheel_scroll_delta_for_view_mode,
+    viewport_extents_after_view_mode_axis_change,
+    viewport_height_after_filter_bar_visibility_change, wheel_scroll_delta_for_view_mode,
 };
 use ui::location_bar::{LocationDraft, LocationEditMetrics};
 use ui::network_auth::{
@@ -896,13 +897,11 @@ impl FikaApp {
         let Some(pane) = self.panes.pane_mut(pane_id) else {
             return;
         };
-        let delta = if visible {
-            -FILTER_BAR_HEIGHT
-        } else {
-            FILTER_BAR_HEIGHT
-        };
-        pane.view.viewport_height =
-            fika_core::normalize_viewport_extent(pane.view.viewport_height + delta);
+        pane.view.viewport_height = viewport_height_after_filter_bar_visibility_change(
+            pane.view.viewport_height,
+            visible,
+            FILTER_BAR_HEIGHT,
+        );
         let scroll_x = pane.view.scroll_x;
         let scroll_y = pane.view.scroll_y;
 

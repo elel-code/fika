@@ -900,6 +900,12 @@ by risk and evidence, not by how custom-painted a surface looks.
   horizontal-scrollbar and vertical-scrollbar modes shifts the cached viewport
   width/height by the reserved scrollbar extent. `src/main.rs` still writes the
   resulting dimensions to the pane view and resets scroll maxima.
+- [x] P16bi: Move item-view filter-bar viewport-height priming policy into the
+  item-view module. `ui/item_view.rs` now owns how showing or hiding the filter
+  bar adjusts the cached item viewport height and applies the core viewport
+  normalization rule. `src/main.rs` still supplies the filter-bar height,
+  writes the pane view height, and keeps the scroll handle temporarily
+  authoritative.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

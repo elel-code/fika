@@ -54,6 +54,19 @@ pub(crate) fn viewport_extents_after_view_mode_axis_change(
     ))
 }
 
+pub(crate) fn viewport_height_after_filter_bar_visibility_change(
+    viewport_height: f32,
+    visible: bool,
+    filter_bar_height: f32,
+) -> f32 {
+    let delta = if visible {
+        -filter_bar_height
+    } else {
+        filter_bar_height
+    };
+    fika_core::normalize_viewport_extent(viewport_height + delta)
+}
+
 pub(crate) fn wheel_scroll_delta_for_view_mode(
     view_mode: ViewMode,
     delta: ScrollDelta,
@@ -118,6 +131,22 @@ mod tests {
                 ViewMode::Details
             ),
             None
+        );
+    }
+
+    #[test]
+    fn viewport_height_tracks_filter_bar_visibility() {
+        assert_eq!(
+            viewport_height_after_filter_bar_visibility_change(360.0, true, 35.0),
+            325.0
+        );
+        assert_eq!(
+            viewport_height_after_filter_bar_visibility_change(325.0, false, 35.0),
+            360.0
+        );
+        assert_eq!(
+            viewport_height_after_filter_bar_visibility_change(20.0, true, 35.0),
+            1.0
         );
     }
 
