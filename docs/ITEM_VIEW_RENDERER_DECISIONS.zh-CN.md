@@ -55,6 +55,11 @@ item-view autosmoke marker surface 现在由 `src/ui/file_grid/autosmoke.rs` 拥
 
 对于目录加载时的 MIME 图标切换，对比 `KFileItemModel::retrieveData()`、`KFileItemModelRolesUpdater::updateVisibleIcons()` 和 `KFileItemListView::initializeItemListWidget()`：Dolphin 不会同步解析所有 model role，但在异步 `ResolveAll` pass 遍历其余部分之前确实给已创建的可见 widget 一个 `iconName`。Fika 应保持相同分离：可见通用 MIME metadata 和可见 theme-icon path 可在有界预算内同步解析；read-ahead/offscreen metadata 和 icon path 保持排队。这复制了 Dolphin 的 `iconName` 加 `pixmapForIcon()` 路径，而不将 read-ahead icon-theme 扫描移入渲染转换。图像解码本身保持在 scheduler/image-cache 路径上；默认 theme icons 通过 GPUI `img()` 解码，而 custom-theme A/B 绘制层可保留先前相同 `iconName` 图像但不得在 prepaint 期间同步解码 theme icon 文件。
 
+2026-06-18 `/etc` 成对证据未通过 default-promotion gate：
+`/tmp/fika-icon-custom-etc-p16k2.log` 有 `theme_placeholder=118` 和
+`theme_decoded=5`；`/tmp/fika-icon-default-etc-p16k2.log` 继续让普通 MIME/theme
+icon 走 GPUI `img()`，且 `[fika item-image]` 中没有 placeholder/decode churn。因此当前默认策略保持不变。
+
 ## 下一批渲染器决策
 
 1. 保持剩余 drag-start shells 直到 GPUI API 边界变化。不要将 GPUI per-element `on_drag_move` 用作 pane self-drag 悬停的真实来源；active item-drag window tracker 拥有该路径。

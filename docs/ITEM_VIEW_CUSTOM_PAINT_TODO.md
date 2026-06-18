@@ -572,10 +572,13 @@ tracks.
   `img()` versus `FIKA_CUSTOM_THEME_ICONS=1` or a future retained-icon-cache
   flag. The offline comparison gate exists as
   `scripts/compare-item-image-renderers.sh --gate-default-promotion`; runtime
-  logs still need to be captured. The custom path must show no steady
-  `theme_placeholder` churn, no zoom-time `theme_decoded` burst, no visible size
-  jump, and `icon_sync` within the Dolphin-style visible-first budget before the
-  default renderer can change.
+  logs still need to pass. 2026-06-18 `/etc` logs were captured at
+  `/tmp/fika-icon-default-etc-p16k2.log` and
+  `/tmp/fika-icon-custom-etc-p16k2.log`; the gate failed because the custom path
+  still had `theme_placeholder=118` and `theme_decoded=5`. The custom path must
+  show no steady `theme_placeholder` churn, no zoom-time `theme_decoded` burst,
+  no visible size jump, and `icon_sync` within the Dolphin-style visible-first
+  budget before the default renderer can change.
 - [ ] P16k3: Only after P16k1/P16k2 pass, reconsider the Compact/Icons
   MIME/theme icon renderer policy in `docs/ITEM_VIEW_RENDERER_DECISIONS.md`.
   Until then, keep the current split: thumbnails on the custom image layer and
@@ -1298,6 +1301,15 @@ tracks.
   evidence. `scripts/check-item-view-perf-analyzer.sh` covers both failing and
   passing synthetic comparisons. Real `/etc` and mixed-directory runtime
   evidence remains P16k2.
+- [x] P16ed: Capture the first real `/etc` default-vs-custom P16k2 evidence
+  after the retained theme image key landed. Default:
+  `/tmp/fika-icon-default-etc-p16k2.log`; custom:
+  `/tmp/fika-icon-custom-etc-p16k2.log`. The default-promotion gate correctly
+  failed because custom still produced `theme_placeholder=118` and
+  `theme_decoded=5`, despite valid custom/default renderer-policy evidence.
+  This confirms the next architecture step is prewarming or hybrid delivery
+  before default promotion, not switching ordinary MIME/theme icons fully to the
+  custom image layer yet.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

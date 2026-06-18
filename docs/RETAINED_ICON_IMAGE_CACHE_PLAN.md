@@ -146,6 +146,22 @@ The future custom path is acceptable only if analyzer output proves:
 - image paint cost is visible through `[fika item-image]` and stays within the
   static visual budget.
 
+Current `/etc` evidence from 2026-06-18:
+
+- Default log: `/tmp/fika-icon-default-etc-p16k2.log`.
+- Custom log: `/tmp/fika-icon-custom-etc-p16k2.log`.
+- Comparison:
+  `scripts/compare-item-image-renderers.sh --gate-default-promotion
+  /tmp/fika-icon-custom-etc-p16k2.log
+  /tmp/fika-icon-default-etc-p16k2.log`.
+- Result: gate failed. Custom rendered through the image layer, but still showed
+  `theme_placeholder=118` and `theme_decoded=5`; default GPUI `img()` showed no
+  theme placeholder/decode churn in `[fika item-image]`.
+- Decision: do not promote the custom theme-icon renderer yet. The next
+  architecture step must avoid first-load/new-size placeholders, most likely by
+  warming retained images before routing visible MIME/theme icons away from GPUI
+  `img()`.
+
 ## TODO
 
 - [x] Add a `ThemeIconImageKey` type beside the file icon snapshot path.

@@ -126,6 +126,21 @@ FIKA_PERF_ITEM_VIEW=1 FIKA_CUSTOM_THEME_ICONS=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-sc
 - `icon_sync`、queue 和 convert phase 保持在当前 GPUI baseline 内；
 - image paint 成本通过 `[fika item-image]` 可见，并保持在 static visual 预算内。
 
+2026-06-18 当前 `/etc` 证据：
+
+- 默认日志：`/tmp/fika-icon-default-etc-p16k2.log`。
+- Custom 日志：`/tmp/fika-icon-custom-etc-p16k2.log`。
+- 对比命令：
+  `scripts/compare-item-image-renderers.sh --gate-default-promotion
+  /tmp/fika-icon-custom-etc-p16k2.log
+  /tmp/fika-icon-default-etc-p16k2.log`。
+- 结果：gate 失败。Custom 已经通过 image layer 绘制，但仍有
+  `theme_placeholder=118` 和 `theme_decoded=5`；默认 GPUI `img()` 在
+  `[fika item-image]` 中没有 theme placeholder/decode churn。
+- 决策：暂不提升 custom theme-icon renderer 为默认。下一步架构必须避免首帧/新尺寸
+  placeholder，较可能的方向是在 visible MIME/theme icon 离开 GPUI `img()` 前先 warm
+  retained image。
+
 ## TODO
 
 - [x] 在 file icon snapshot 路径旁添加 `ThemeIconImageKey` 类型。

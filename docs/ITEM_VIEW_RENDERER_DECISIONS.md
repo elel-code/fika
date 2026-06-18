@@ -273,6 +273,7 @@ the following for `/etc` and a mixed user directory:
 
 - Default and custom runs both pass
   `FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll` analyzer gates.
+- `scripts/compare-item-image-renderers.sh --gate-default-promotion` passes.
 - The custom run has no steady-state `theme_placeholder` churn, no zoom-time
   `theme_decoded` burst, and no visible icon size jump.
 - `icon_sync` remains within the Dolphin-style visible-first budget; read-ahead
@@ -283,6 +284,12 @@ the following for `/etc` and a mixed user directory:
 - Manual review or screenshot/video evidence confirms startup, first directory
   load, zoom, scroll, and mode switching are visually no worse than the GPUI
   baseline.
+
+2026-06-18 `/etc` paired evidence did not pass this gate:
+`/tmp/fika-icon-custom-etc-p16k2.log` had `theme_placeholder=118` and
+`theme_decoded=5`, while `/tmp/fika-icon-default-etc-p16k2.log` kept ordinary
+MIME/theme icons on GPUI `img()` with no item-image placeholder/decode churn.
+This keeps the current default policy unchanged.
 
 ## Next Renderer Decisions
 
