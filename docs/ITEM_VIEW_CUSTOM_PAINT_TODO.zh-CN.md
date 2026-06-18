@@ -424,6 +424,13 @@ Places chrome 默认之后的当前执行入口是
   retained activation-row、row context-menu 和 section context-menu target
   classification，不会 activate place，也不会打开菜单。`scripts/analyze-places-perf.sh`
   现在支持 `--require-retained-targeting-autosmoke`，并会在任何 retained-targeting 默认提升前拒绝缺失或失败的 targeting 采样。
+- [x] P16eu：将 Places event delivery 默认提升到 retained-DnD mixed policy。
+  `places_event_delivery_policy()` 现在默认回退到 `RetainedDnd`，同时
+  `FIKA_PLACES_EVENT_DELIVERY_POLICY=gpui` 仍保留为显式 GPUI row/section event-shell
+  fallback。默认日志应显示 `event_policy=retained-dnd`、
+  `retained_hitboxes=rows+sections`、`gpui_event_shells=1` 和
+  `drag_start_models=rows`；完整 retained-event analyzer gate 在移除 sidebar typed DnD
+  shell 前仍应失败。
 - [ ] P16q：在每个 P16 实现切片之后，单独提交并附带相关验证：仅文档切片需要 `git diff --check`；代码切片需要 `cargo fmt`、`cargo check`、`cargo test -q`、`scripts/check-item-view-perf-analyzer.sh`、`scripts/check-places-perf-analyzer.sh` 和 `git diff --check`。
 - [x] P16r：记录运行时自测试和突破记录规则。可重复的滚动、缩放、启动图标、调整大小、模式切换和 Places 目标回退应在依赖手动计时之前通过 autosmoke 日志和分析器脚本重现。任何确认的优化突破必须记录症状、Dolphin 比较边界、根本原因、实现、保存的日志/分析器命令和未来回归守卫在拥有的设计或决策文档中。
 

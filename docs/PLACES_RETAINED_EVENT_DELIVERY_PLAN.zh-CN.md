@@ -4,9 +4,9 @@
 # Places Retained 事件传递计划
 
 本文是 `docs/FULL_RETAINED_RENDERER_ROADMAP.zh-CN.md` 中 Track 3 的实现计划。
-它只覆盖事件传递，不改变当前渲染器策略：Places row chrome 默认自绘；row 文本、
-图标、context menu 渲染、DnD preview 创建和 drag start 仍保留在 GPUI，除非后续 gate
-证明可以替换。
+它只覆盖事件传递，不改变 row 渲染器策略：Places row chrome 默认自绘；row 文本、
+图标、context menu 渲染、DnD preview 创建、typed drag payload delivery 和 drag start
+仍保留在 GPUI，除非后续 gate 证明可以替换。
 
 ## Dolphin 边界
 
@@ -30,26 +30,33 @@ Fika 的等价边界是：
 - `places_interaction_geometry()` 提供 retained row/section geometry。
 - `PlacesInteractionGeometry::hit_test_y()` 提供 retained row/section hit test。
 - item/external path drop 和 place reorder 的 retained target-decision helpers。
-- 当前 GPUI event shell 和未来 retained event policy 的 analyzer 支持。
-- 显式的 `PlacesEventDeliveryPolicy`。默认仍是 `GpuiShells`。
+- 显式 GPUI event-shell fallback、当前 retained-DnD mixed 默认和未来 full retained event
+  policy 的 analyzer 支持。
+- 显式的 `PlacesEventDeliveryPolicy`。默认现在是 `RetainedDnd`。
+  `FIKA_PLACES_EVENT_DELIVERY_POLICY=gpui` 保留为显式 fallback。
   `FIKA_PLACES_EVENT_DELIVERY_POLICY=retained-probe` 只报告未来 retained layer
   需要覆盖的 row/section hitbox 计数；它仍保持 `retained_hitboxes=0` 和
   `gpui_event_shells=rows+sections`。
-- 默认 custom row chrome，同时 GPUI 保留文本/图标/event shell。
+- 默认 custom row chrome，同时 GPUI 保留文本/图标、一个 sidebar-level typed DnD payload
+  shell 和 row drag-start shell；row/section activation、context-menu 与 DnD target
+  delivery 由 retained layer 承担。
 
-当前 policy 形状：
+默认 mixed policy 形状：
 
 ```text
-retained_hitboxes=0
-gpui_event_shells=rows+sections
+event_policy=retained-dnd
+retained_hitboxes=rows+sections
+retained_interaction=rows+sections
+gpui_event_shells=1
 drag_shells=rows
 drag_start_models=rows
 ```
 
-默认提升前的目标 policy 形状：
+Full retained event policy 形状：
 
 ```text
 retained_hitboxes=rows+sections
+retained_interaction=rows+sections
 gpui_event_shells=0
 drag_shells=rows
 drag_start_models=rows
@@ -302,11 +309,21 @@ retained targeting autosmoke 切片：
 - `scripts/analyze-places-perf.sh --require-retained-targeting-autosmoke` 会拒绝缺失
   marker、失败采样，或没有同时包含 row 和 section 的 summary。
 
+默认 retained-DnD promotion 切片：
+
+- Places event delivery 现在默认使用 `retained-dnd`，也就是当前证据覆盖最强的 mixed
+  policy。默认路径移除了 per-row/section GPUI activation、context-menu 和 DnD target
+  shell，但仍保留 GPUI 文本/图标渲染、一个 sidebar-level typed DnD payload shell 和 row
+  drag-start shell。
+- `FIKA_PLACES_EVENT_DELIVERY_POLICY=gpui` 仍可显式回退到旧 row/section event-shell 路径。
+- full retained-event analyzer gate 不变，仍会因为默认 mixed policy 的
+  `gpui_event_shells=1` 拒绝它。
+
 ## TODO
 
-- [x] 添加 `PlacesEventDeliveryPolicy`，默认 `GpuiShells`，opt-in
-  `RetainedProbe`。mixed state 必须显式记录在日志里，且 probe 日志不能满足
-  retained-event policy gate。
+- [x] 添加 `PlacesEventDeliveryPolicy`，保留显式 `GpuiShells` fallback，当前默认为
+  retained-DnD mixed policy，并提供 opt-in `RetainedProbe`。mixed state 必须显式记录在
+  日志里，且 probe 日志不能满足 retained-event policy gate。
 - [x] 添加 retained sidebar event probe layer，能插入 row/section hitboxes 并报告计数，
   但不改变行为。
 - [~] 将 hover/cursor/leave clearing 移到 retained layer。当前状态：
@@ -338,5 +355,8 @@ retained targeting autosmoke 切片：
 - [x] 添加非变更 retained targeting autosmoke 和 analyzer gate。当前状态：
   `FIKA_AUTOSMOKE_PLACES=targeting` 会在不改变 app state、不打开菜单的前提下证明
   activation-row、context-row 和 context-section target classification。
+- [x] 将 Places event delivery 默认提升到 retained-DnD mixed policy。当前状态：
+  默认日志显示 `event_policy=retained-dnd`、`retained_hitboxes=rows+sections`、
+  `gpui_event_shells=1` 和 `drag_start_models=rows`；显式 `gpui` 仍是 fallback。
 - [ ] analyzer gates 通过后移除 GPUI row/section event callbacks。
 - [ ] Track 4 解决 typed drag start 前，继续保留 GPUI row drag-start shells。

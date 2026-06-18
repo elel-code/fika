@@ -150,6 +150,33 @@ if [[ "$chrome_summary" != *"places_row_shape_cache_frames=0"* ]]; then
     exit 1
 fi
 
+cat > "$tmpdir/default-retained-dnd-chrome.log" <<'EOF'
+[fika places-slots] rows=11 sections=2 entries=13 inserted=13 content=0 geometry=0 visual=0 unchanged=0 removed=0 project=25us
+[fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
+[fika places-view] source=11 visible=11 sections=2 snapshot=100us
+[fika places-sidebar] rows=11 sections=2 elements=13 build=240us
+[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=11 icon_gpui=11 retained_interaction=13 drag_shell=11 section_gpui=2 scrollbar_canvas=1 visual_kind=chrome event_policy=retained-dnd retained_probe_hitboxes=13
+[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=13 retained_probe_hitboxes=13 gpui_event_shells=1 drag_shells=11 drag_start_models=11 event_policy=retained-dnd retained_targeting=13 retained_dnd=13
+[fika places-row-visual] rows=11 painted=11 prepaint=18us paint=24us
+EOF
+
+default_retained_dnd_summary="$("$analyzer" \
+    --require-interaction-policy \
+    --expect-custom-row-chrome-policy \
+    "$tmpdir/default-retained-dnd-chrome.log")"
+
+if [[ "$default_retained_dnd_summary" != *"max_retained_interaction=13"* ||
+    "$default_retained_dnd_summary" != *"max_retained_hitboxes=13 max_gpui_event_shells=1 max_drag_shells=11"* ||
+    "$default_retained_dnd_summary" != *"max_retained_targeting=13 max_retained_dnd=13 max_drag_start_models=11"* ]]; then
+    echo "expected default retained-DnD Places chrome policy summary" >&2
+    exit 1
+fi
+
+if "$analyzer" --expect-retained-event-policy "$tmpdir/default-retained-dnd-chrome.log" >/dev/null 2>&1; then
+    echo "expected default retained-DnD mixed policy to fail the full retained event gate" >&2
+    exit 1
+fi
+
 cat > "$tmpdir/custom-row-chrome-with-shape-cache.log" <<'EOF'
 [fika places-slots] rows=11 sections=2 entries=13 inserted=13 content=0 geometry=0 visual=0 unchanged=0 removed=0 project=25us
 [fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us

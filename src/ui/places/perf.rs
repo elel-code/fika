@@ -8,6 +8,8 @@ const PERF_PLACES_VIEW_ENV: &str = "FIKA_PERF_PLACES_VIEW";
 const CUSTOM_PLACES_ROWS_ENV: &str = "FIKA_CUSTOM_PLACES_ROWS";
 const PLACES_ROW_VISUAL_POLICY_ENV: &str = "FIKA_PLACES_ROW_VISUAL_POLICY";
 const PLACES_EVENT_DELIVERY_POLICY_ENV: &str = "FIKA_PLACES_EVENT_DELIVERY_POLICY";
+const DEFAULT_PLACES_EVENT_DELIVERY_POLICY: PlacesEventDeliveryPolicy =
+    PlacesEventDeliveryPolicy::RetainedDnd;
 
 pub(crate) fn places_perf_enabled() -> bool {
     env::var(PERF_PLACES_VIEW_ENV).is_ok_and(|value| env_flag_is_truthy(&value))
@@ -164,7 +166,7 @@ pub(crate) fn places_event_delivery_policy() -> PlacesEventDeliveryPolicy {
     env::var(PLACES_EVENT_DELIVERY_POLICY_ENV)
         .ok()
         .and_then(|value| places_event_delivery_policy_from_str(&value))
-        .unwrap_or(PlacesEventDeliveryPolicy::GpuiShells)
+        .unwrap_or(DEFAULT_PLACES_EVENT_DELIVERY_POLICY)
 }
 
 fn places_event_delivery_policy_from_str(value: &str) -> Option<PlacesEventDeliveryPolicy> {
@@ -541,6 +543,22 @@ mod tests {
             Some(PlacesEventDeliveryPolicy::RetainedDnd)
         );
         assert_eq!(places_event_delivery_policy_from_str("retained"), None);
+    }
+
+    #[test]
+    fn places_event_delivery_default_uses_retained_dnd_mixed_policy() {
+        assert_eq!(
+            DEFAULT_PLACES_EVENT_DELIVERY_POLICY,
+            PlacesEventDeliveryPolicy::RetainedDnd
+        );
+        assert_eq!(
+            DEFAULT_PLACES_EVENT_DELIVERY_POLICY.gpui_event_shells(11, 2),
+            1
+        );
+        assert_eq!(
+            DEFAULT_PLACES_EVENT_DELIVERY_POLICY.retained_hitboxes(11, 2),
+            13
+        );
     }
 
     #[test]

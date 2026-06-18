@@ -1473,6 +1473,14 @@ tracks.
   opening menus. `scripts/analyze-places-perf.sh` now supports
   `--require-retained-targeting-autosmoke` and rejects missing or failed
   targeting samples before any retained-targeting default promotion.
+- [x] P16eu: Promote Places event delivery default to the retained-DnD mixed
+  policy. `places_event_delivery_policy()` now falls back to `RetainedDnd`,
+  while `FIKA_PLACES_EVENT_DELIVERY_POLICY=gpui` remains the explicit GPUI
+  row/section event-shell fallback. Default logs are expected to show
+  `event_policy=retained-dnd`, `retained_hitboxes=rows+sections`,
+  `gpui_event_shells=1`, and `drag_start_models=rows`; the full retained-event
+  analyzer gate remains intentionally failing until the sidebar typed DnD shell
+  can be removed.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

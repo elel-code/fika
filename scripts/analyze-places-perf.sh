@@ -48,8 +48,8 @@ Options:
       matches the explicit retained-probe policy count.
 
   --expect-current-gpui-policy
-      Fail unless [fika places-renderer-policy] matches the current GPUI row
-      renderer baseline: row_gpui/icon_gpui/drag_shell equal rows,
+      Fail unless [fika places-renderer-policy] matches the explicit GPUI row
+      and event-shell fallback baseline: row_gpui/icon_gpui/drag_shell equal rows,
       row_visual_layer=0, retained_interaction=0, section_gpui=sections, and
       scrollbar_canvas=1.
 
