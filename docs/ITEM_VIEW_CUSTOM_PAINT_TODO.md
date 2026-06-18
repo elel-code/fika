@@ -895,6 +895,11 @@ by risk and evidence, not by how custom-painted a surface looks.
   scrolling and how Icons/Details keep wheel input vertical. `src/main.rs`
   still applies the resulting delta to the pane model, but no longer embeds
   per-view-mode wheel-axis mapping.
+- [x] P16bh: Move item-view view-mode axis-change viewport priming policy into
+  the item-view module. `ui/item_view.rs` now owns how switching between
+  horizontal-scrollbar and vertical-scrollbar modes shifts the cached viewport
+  width/height by the reserved scrollbar extent. `src/main.rs` still writes the
+  resulting dimensions to the pane view and resets scroll maxima.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

@@ -101,10 +101,9 @@ use ui::filter_bar::{
 };
 use ui::icons::{FileIconCache, file_icon_resolve_results_for_requests};
 use ui::item_view::{
-    ITEM_VIEW_SCROLLBAR_RESERVED_EXTENT, ItemViewScrollState, ItemViewScrollSync,
-    ItemViewScrollSyncAction, projected_item_viewport_width_for_pane_width,
-    scroll_sync_changes_view, view_mode_uses_horizontal_item_scrollbar,
-    wheel_scroll_delta_for_view_mode,
+    ItemViewScrollState, ItemViewScrollSync, ItemViewScrollSyncAction,
+    projected_item_viewport_width_for_pane_width, scroll_sync_changes_view,
+    viewport_extents_after_view_mode_axis_change, wheel_scroll_delta_for_view_mode,
 };
 use ui::location_bar::{LocationDraft, LocationEditMetrics};
 use ui::network_auth::{
@@ -3551,27 +3550,19 @@ impl FikaApp {
         previous_mode: ViewMode,
         next_mode: ViewMode,
     ) {
-        let previous_horizontal = view_mode_uses_horizontal_item_scrollbar(previous_mode);
-        let next_horizontal = view_mode_uses_horizontal_item_scrollbar(next_mode);
-        if previous_horizontal == next_horizontal {
-            return;
-        }
-
         let Some(pane) = self.panes.pane_mut(pane_id) else {
             return;
         };
-        let extent = ITEM_VIEW_SCROLLBAR_RESERVED_EXTENT;
-        if next_horizontal {
-            pane.view.viewport_width =
-                fika_core::normalize_viewport_extent(pane.view.viewport_width + extent);
-            pane.view.viewport_height =
-                fika_core::normalize_viewport_extent(pane.view.viewport_height - extent);
-        } else {
-            pane.view.viewport_width =
-                fika_core::normalize_viewport_extent(pane.view.viewport_width - extent);
-            pane.view.viewport_height =
-                fika_core::normalize_viewport_extent(pane.view.viewport_height + extent);
-        }
+        let Some((viewport_width, viewport_height)) = viewport_extents_after_view_mode_axis_change(
+            pane.view.viewport_width,
+            pane.view.viewport_height,
+            previous_mode,
+            next_mode,
+        ) else {
+            return;
+        };
+        pane.view.viewport_width = viewport_width;
+        pane.view.viewport_height = viewport_height;
         pane.view.max_scroll_x = 0.0;
         pane.view.max_scroll_y = 0.0;
     }

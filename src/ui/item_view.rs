@@ -30,6 +30,30 @@ pub(crate) fn projected_item_viewport_width_for_pane_width(
     )
 }
 
+pub(crate) fn viewport_extents_after_view_mode_axis_change(
+    viewport_width: f32,
+    viewport_height: f32,
+    previous_mode: ViewMode,
+    next_mode: ViewMode,
+) -> Option<(f32, f32)> {
+    let previous_horizontal = view_mode_uses_horizontal_item_scrollbar(previous_mode);
+    let next_horizontal = view_mode_uses_horizontal_item_scrollbar(next_mode);
+    if previous_horizontal == next_horizontal {
+        return None;
+    }
+
+    let extent = ITEM_VIEW_SCROLLBAR_RESERVED_EXTENT;
+    let (viewport_width, viewport_height) = if next_horizontal {
+        (viewport_width + extent, viewport_height - extent)
+    } else {
+        (viewport_width - extent, viewport_height + extent)
+    };
+    Some((
+        fika_core::normalize_viewport_extent(viewport_width),
+        fika_core::normalize_viewport_extent(viewport_height),
+    ))
+}
+
 pub(crate) fn wheel_scroll_delta_for_view_mode(
     view_mode: ViewMode,
     delta: ScrollDelta,
@@ -63,6 +87,37 @@ mod tests {
         assert_eq!(
             projected_item_viewport_width_for_pane_width(300.0, ViewMode::Details, 2.0),
             284.0
+        );
+    }
+
+    #[test]
+    fn viewport_extents_shift_when_view_mode_scrollbar_axis_changes() {
+        assert_eq!(
+            viewport_extents_after_view_mode_axis_change(
+                400.0,
+                300.0,
+                ViewMode::Icons,
+                ViewMode::Compact
+            ),
+            Some((414.0, 286.0))
+        );
+        assert_eq!(
+            viewport_extents_after_view_mode_axis_change(
+                400.0,
+                300.0,
+                ViewMode::Compact,
+                ViewMode::Details
+            ),
+            Some((386.0, 314.0))
+        );
+        assert_eq!(
+            viewport_extents_after_view_mode_axis_change(
+                400.0,
+                300.0,
+                ViewMode::Icons,
+                ViewMode::Details
+            ),
+            None
         );
     }
 
