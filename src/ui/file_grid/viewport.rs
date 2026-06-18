@@ -271,15 +271,7 @@ pub(super) fn file_grid_viewport_shell(
         .on_drag(RubberBandDrag { pane_id }, |_, _, _, cx| cx.new(|_| Empty))
         .on_drag_move::<RubberBandDrag>(cx.listener(
             move |this, event: &gpui::DragMoveEvent<RubberBandDrag>, _window, cx| {
-                if !this.rubber_band_active_for_pane(pane_id) {
-                    if this.activate_pending_rubber_band_from_window(pane_id, event.event.position)
-                    {
-                        cx.stop_propagation();
-                        cx.notify();
-                    }
-                    return;
-                }
-                if this.update_rubber_band_from_window(pane_id, event.event.position) {
+                if this.move_rubber_band_drag_from_window(pane_id, event.event.position) {
                     cx.stop_propagation();
                     cx.notify();
                 }

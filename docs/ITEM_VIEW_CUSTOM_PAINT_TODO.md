@@ -1172,6 +1172,10 @@ by risk and evidence, not by how custom-painted a surface looks.
   pending-band, active-band, and selection-activity fields; viewport and app
   paths query/mutate rubber-band state through controller methods while keeping
   the existing GPUI drag shell boundary.
+- [x] P16dk: Move rubber-band drag-move active/pending branching out of the
+  viewport shell. The GPUI shell now forwards drag moves to
+  `move_rubber_band_drag_from_window()`, while the app/controller boundary
+  decides whether to activate a pending band or update the active band.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

@@ -3846,8 +3846,16 @@ impl FikaApp {
         true
     }
 
-    pub(crate) fn rubber_band_active_for_pane(&self, pane_id: PaneId) -> bool {
-        self.rubber_band.active_is_for_pane(pane_id)
+    pub(crate) fn move_rubber_band_drag_from_window(
+        &mut self,
+        pane_id: PaneId,
+        position: gpui::Point<gpui::Pixels>,
+    ) -> bool {
+        if self.rubber_band.active_is_for_pane(pane_id) {
+            self.update_rubber_band_from_window(pane_id, position)
+        } else {
+            self.activate_pending_rubber_band_from_window(pane_id, position)
+        }
     }
 
     pub(crate) fn window_position_is_blank_in_pane(
@@ -15122,20 +15130,12 @@ text/plain=viewer.desktop;\n",
             app.press_rubber_band_from_window_if_blank(pane_id, gpui::point(px(120.0), px(70.0)),)
         );
 
-        assert!(
-            !app.activate_pending_rubber_band_from_window(
-                pane_id,
-                gpui::point(px(123.0), px(72.0)),
-            )
-        );
+        assert!(!app.move_rubber_band_drag_from_window(pane_id, gpui::point(px(123.0), px(72.0)),));
         assert!(!app.rubber_band.active_is_for_pane(pane_id));
         assert!(app.rubber_band.pending_start_for_pane(pane_id).is_some());
 
         assert!(
-            app.activate_pending_rubber_band_from_window(
-                pane_id,
-                gpui::point(px(1000.0), px(900.0)),
-            )
+            app.move_rubber_band_drag_from_window(pane_id, gpui::point(px(1000.0), px(900.0)),)
         );
 
         assert_eq!(
