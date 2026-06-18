@@ -1458,6 +1458,14 @@ tracks.
   `--require-retained-dnd-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-chrome-policy`
   with `max_retained_hitboxes=13`, while
   `--expect-retained-event-policy` still failed as expected.
+- [x] P16es: Make Places renderer retained-interaction accounting event-policy
+  aware. `PlacesEventDeliveryPolicy::retained_interaction()` now reports
+  rows+sections for `retained-targeting` and `retained-dnd`, where the retained
+  event layer actually owns row/section target delivery, while probe and
+  pointer-only policies continue to report zero. The Places analyzer validates
+  custom chrome/full visual policy against that event-policy-aware count, but
+  the full retained-event gate still rejects `retained-dnd` until
+  `gpui_event_shells=0`.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

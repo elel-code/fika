@@ -304,6 +304,20 @@ Retained hitbox accounting slice:
   `gpui_event_shells=0` and `drag_shells=rows`, so mixed retained-targeting and
   retained-dnd states remain rejected.
 
+Retained interaction policy accounting slice:
+
+- Renderer policy logs now report `retained_interaction=rows+sections` for
+  `retained-targeting` and `retained-dnd`, where the retained layer actually
+  owns row/section activation, context-menu targeting, DnD target lookup, and
+  drop dispatch.
+- Probe and pointer-only policies still report `retained_interaction=0` because
+  they do not own target delivery.
+- The custom row visual analyzer gates now validate `retained_interaction`
+  against the selected event policy instead of assuming every custom chrome/full
+  visual run has GPUI event ownership. The full retained-event gate is still not
+  loosened: `retained-dnd` remains rejected until the remaining typed GPUI DnD
+  shell can be removed.
+
 ## TODO
 
 - [x] Add a `PlacesEventDeliveryPolicy` with `GpuiShells` default and an
@@ -336,5 +350,8 @@ Retained hitbox accounting slice:
 - [x] Distinguish probe hitboxes from retained target-delivery hitboxes in
   policy logs. Current status: retained-targeting and retained-dnd report
   `retained_hitboxes=rows+sections`, while probe/pointer-only policies do not.
+- [x] Make renderer `retained_interaction` event-policy aware. Current status:
+  retained-targeting and retained-dnd report rows+sections, probe/pointer keep
+  zero, and full retained-event policy still fails while `gpui_event_shells=1`.
 - [ ] Remove GPUI row/section event callbacks after analyzer gates pass.
 - [ ] Keep GPUI row drag-start shells until Track 4 solves typed drag start.

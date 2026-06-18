@@ -280,6 +280,18 @@ retained hitbox accounting 切片：
 - 完整 retained-event gate 不变：仍要求 `gpui_event_shells=0` 和
   `drag_shells=rows`，因此 mixed retained-targeting 和 retained-dnd 状态仍会被拒绝。
 
+retained interaction policy accounting 切片：
+
+- renderer policy 日志现在会在 `retained-targeting` 和 `retained-dnd` 下报告
+  `retained_interaction=rows+sections`，因为这些 policy 中 retained layer 已经实际拥有
+  row/section activation、context-menu targeting、DnD target lookup 和 drop dispatch。
+- probe 和 pointer-only policy 仍报告 `retained_interaction=0`，因为它们不拥有 target
+  delivery。
+- custom row visual analyzer gate 现在按所选 event policy 校验 `retained_interaction`，
+  不再假设每次 custom chrome/full visual 运行都仍是 GPUI event ownership。完整
+  retained-event gate 没有放松：只要 `retained-dnd` 还存在剩余 typed GPUI DnD shell，
+  它仍会被拒绝。
+
 ## TODO
 
 - [x] 添加 `PlacesEventDeliveryPolicy`，默认 `GpuiShells`，opt-in
@@ -308,5 +320,8 @@ retained hitbox accounting 切片：
 - [x] 在 policy 日志中区分 probe hitbox 与 retained target-delivery hitbox。当前状态：
   retained-targeting 和 retained-dnd 报告 `retained_hitboxes=rows+sections`，probe /
   pointer-only policy 不报告。
+- [x] 让 renderer `retained_interaction` 按 event policy 计数。当前状态：
+  retained-targeting 和 retained-dnd 报告 rows+sections，probe/pointer 保持 0，并且
+  `gpui_event_shells=1` 时完整 retained-event policy 仍失败。
 - [ ] analyzer gates 通过后移除 GPUI row/section event callbacks。
 - [ ] Track 4 解决 typed drag start 前，继续保留 GPUI row drag-start shells。

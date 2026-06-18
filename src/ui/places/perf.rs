@@ -108,8 +108,11 @@ impl PlacesEventDeliveryPolicy {
         }
     }
 
-    fn retained_interaction(self, _rows: usize, _sections: usize) -> usize {
-        0
+    fn retained_interaction(self, rows: usize, sections: usize) -> usize {
+        match self {
+            Self::RetainedTargeting | Self::RetainedDnd => rows + sections,
+            Self::GpuiShells | Self::RetainedProbe | Self::RetainedPointer => 0,
+        }
     }
 
     fn retained_hitboxes(self, rows: usize, sections: usize) -> usize {
@@ -600,6 +603,10 @@ mod tests {
         assert!(PlacesEventDeliveryPolicy::RetainedTargeting.retained_event_layer_enabled());
         assert!(PlacesEventDeliveryPolicy::RetainedTargeting.retained_pointer_enabled());
         assert!(PlacesEventDeliveryPolicy::RetainedTargeting.retained_targeting_enabled());
+        assert_eq!(
+            PlacesEventDeliveryPolicy::RetainedTargeting.retained_interaction(11, 2),
+            13
+        );
         assert_eq!(policy.retained_hitboxes(), 13);
         assert_eq!(policy.retained_probe_hitboxes(), 13);
         assert_eq!(policy.gpui_event_shells(), 13);
@@ -621,6 +628,10 @@ mod tests {
         assert!(PlacesEventDeliveryPolicy::RetainedDnd.retained_pointer_enabled());
         assert!(PlacesEventDeliveryPolicy::RetainedDnd.retained_targeting_enabled());
         assert!(PlacesEventDeliveryPolicy::RetainedDnd.retained_dnd_enabled());
+        assert_eq!(
+            PlacesEventDeliveryPolicy::RetainedDnd.retained_interaction(11, 2),
+            13
+        );
         assert_eq!(policy.retained_hitboxes(), 13);
         assert_eq!(policy.retained_probe_hitboxes(), 13);
         assert_eq!(policy.gpui_event_shells(), 1);

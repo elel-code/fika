@@ -51,19 +51,20 @@ Options:
   --expect-custom-row-visual-policy
       Fail unless [fika places-renderer-policy] matches the opt-in
       full custom-text policy: row_visual_layer/icon_gpui/drag_shell equal
-      rows, row_gpui=0, text_gpui=0, retained_interaction=0,
-      section_gpui=sections, scrollbar_canvas=1, and visual_kind=full. Also
-      requires aggregated [fika places-row-visual] logs whose rows count
-      matches the policy rows and row text shape-cache logs for the opt-in
-      visual path.
+      rows, row_gpui=0, text_gpui=0, retained_interaction matching the
+      selected event policy, section_gpui=sections, scrollbar_canvas=1, and
+      visual_kind=full. Also requires aggregated [fika places-row-visual] logs
+      whose rows count matches the policy rows and row text shape-cache logs
+      for the opt-in visual path.
 
   --expect-custom-row-chrome-policy
       Fail unless [fika places-renderer-policy] matches the Dolphin-aligned
       custom chrome policy: row_visual_layer/text_gpui/icon_gpui/drag_shell
-      equal rows, row_gpui=0, retained_interaction=0, section_gpui=sections,
-      scrollbar_canvas=1, and visual_kind=chrome. Also requires aggregated
-      [fika places-row-visual] logs whose rows count matches the policy rows
-      and rejects row text shape-cache logs because text remains GPUI-rendered.
+      equal rows, row_gpui=0, retained_interaction matching the selected event
+      policy, section_gpui=sections, scrollbar_canvas=1, and
+      visual_kind=chrome. Also requires aggregated [fika places-row-visual]
+      logs whose rows count matches the policy rows and rejects row text
+      shape-cache logs because text remains GPUI-rendered.
 
   --expect-retained-event-policy
       Fail unless [fika places-renderer-policy] and
@@ -260,6 +261,13 @@ function fail(message) {
     exit_code = 1
 }
 
+function renderer_retained_interaction_for_policy(event_policy, rows, sections) {
+    if (event_policy == "retained-targeting" || event_policy == "retained-dnd") {
+        return rows + sections
+    }
+    return 0
+}
+
 /^\[fika places-view\]/ {
     places_view_frames++
     source = field("source") + 0
@@ -335,6 +343,7 @@ function fail(message) {
     drag_shell = field("drag_shell") + 0
     section_gpui = field("section_gpui") + 0
     scrollbar_canvas = field("scrollbar_canvas") + 0
+    event_policy = field("event_policy")
     visual_kind = field("visual_kind")
     if (visual_kind == "") {
         if (row_gpui == rows && row_visual_layer == 0) {
@@ -347,6 +356,7 @@ function fail(message) {
             visual_kind = "mixed"
         }
     }
+    expected_retained_interaction = renderer_retained_interaction_for_policy(event_policy, rows, last_sidebar_sections)
     max_update("policy_rows", rows)
     max_update("policy_row_gpui", row_gpui)
     max_update("policy_row_visual_layer", row_visual_layer)
@@ -376,7 +386,7 @@ function fail(message) {
     }
     if (expect_custom_row_visual_policy == "true") {
         if (row_gpui != 0 || text_gpui != 0 || icon_gpui != rows || drag_shell != rows ||
-            row_visual_layer != rows || retained_interaction != 0 ||
+            row_visual_layer != rows || retained_interaction != expected_retained_interaction ||
             section_gpui != last_sidebar_sections || scrollbar_canvas != 1 ||
             visual_kind != "full") {
             custom_policy_invalid = 1
@@ -384,7 +394,7 @@ function fail(message) {
     }
     if (expect_custom_row_chrome_policy == "true") {
         if (row_gpui != 0 || text_gpui != rows || icon_gpui != rows || drag_shell != rows ||
-            row_visual_layer != rows || retained_interaction != 0 ||
+            row_visual_layer != rows || retained_interaction != expected_retained_interaction ||
             section_gpui != last_sidebar_sections || scrollbar_canvas != 1 ||
             visual_kind != "chrome") {
             custom_chrome_policy_invalid = 1

@@ -413,6 +413,12 @@ Places chrome 默认之后的当前执行入口是
   `/tmp/fika-places-hitbox-accounting.log` 通过
   `--require-retained-dnd-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-chrome-policy`，
   且 `max_retained_hitboxes=13`；`--expect-retained-event-policy` 仍按预期失败。
+- [x] P16es：让 Places renderer retained-interaction accounting 按 event policy 计数。
+  `PlacesEventDeliveryPolicy::retained_interaction()` 现在在 `retained-targeting` 和
+  `retained-dnd` 下报告 rows+sections，因为 retained event layer 在这些 policy 中实际拥有
+  row/section target delivery；probe 和 pointer-only policy 继续报告 0。Places analyzer
+  会按这个 event-policy-aware 计数验证 custom chrome/full visual policy，但完整
+  retained-event gate 在 `gpui_event_shells=0` 前仍拒绝 `retained-dnd`。
 - [ ] P16q：在每个 P16 实现切片之后，单独提交并附带相关验证：仅文档切片需要 `git diff --check`；代码切片需要 `cargo fmt`、`cargo check`、`cargo test -q`、`scripts/check-item-view-perf-analyzer.sh`、`scripts/check-places-perf-analyzer.sh` 和 `git diff --check`。
 - [x] P16r：记录运行时自测试和突破记录规则。可重复的滚动、缩放、启动图标、调整大小、模式切换和 Places 目标回退应在依赖手动计时之前通过 autosmoke 日志和分析器脚本重现。任何确认的优化突破必须记录症状、Dolphin 比较边界、根本原因、实现、保存的日志/分析器命令和未来回归守卫在拥有的设计或决策文档中。
 
