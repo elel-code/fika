@@ -3373,30 +3373,19 @@ impl FikaApp {
 
         let max_scroll_x = view.max_scroll_x.max(0.0);
         let max_scroll_y = view.max_scroll_y.max(0.0);
-        let before = (
-            view.scroll_x,
-            view.scroll_y,
-            view.max_scroll_x,
-            view.max_scroll_y,
-        );
+        let before = ItemViewScrollViewSnapshot::from_view_state(&view);
         let Some(next_view) =
             self.panes
                 .scroll_view(pane_id, delta_x, delta_y, max_scroll_x, max_scroll_y)
         else {
             return false;
         };
-        let changed = before
-            != (
-                next_view.scroll_x,
-                next_view.scroll_y,
-                next_view.max_scroll_x,
-                next_view.max_scroll_y,
-            );
+        let next = ItemViewScrollViewSnapshot::from_view_state(&next_view);
+        let changed = before != next;
         if changed {
-            let view = ItemViewScrollViewSnapshot::from_view_state(&next_view);
             let _ = self
                 .item_view_scroll
-                .sync_handle_after_user_scroll_snapshot(pane_id, view);
+                .sync_handle_after_user_scroll_snapshot(pane_id, next);
         }
         changed
     }

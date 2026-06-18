@@ -1105,6 +1105,10 @@ by risk and evidence, not by how custom-painted a surface looks.
   fields are now private to `scroll_state.rs`; `main.rs` writes pane scroll via
   `ItemViewScrollViewSnapshot::apply_scroll_writeback()` and a single pane
   adapter instead of repeatedly unpacking the scroll tuple.
+- [x] P16cv: Route wheel-scroll change detection through the item-view scroll
+  snapshot protocol. `scroll_pane_from_wheel()` now compares
+  `ItemViewScrollViewSnapshot` values before/after pane model scrolling instead
+  of open-coding the four-field scroll tuple in `src/main.rs`.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,
