@@ -1352,8 +1352,10 @@ tracks.
   jump. Implementation: `FileIconCache::resolve_request_for()` and
   `resolve_now_for()` now treat any resolved same-`FileIconKind` path as cached;
   visible icon sync counts a missing request as cached and skips synchronous
-  resolve; `find_icon_direct()` skips missing directories and uses one
-  `metadata` call for file/length checks to reduce theme-miss syscalls.
+  resolve; exact keys that resolved to no path are also treated as completed so
+  negative theme lookups do not repeat; `find_icon_direct()` skips missing
+  directories and uses one `metadata` call for file/length checks to reduce
+  theme-miss syscalls.
   Verification: `cargo fmt --check`, `cargo check`, `cargo build`,
   `cargo test -q`, `scripts/check-item-view-perf-analyzer.sh`, and
   `scripts/check-places-perf-analyzer.sh` pass. The current automation

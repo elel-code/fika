@@ -104,8 +104,7 @@ impl FileIconCache {
     }
 
     fn has_resolved_icon_for_kind(&self, key: &FileIconCacheKey) -> bool {
-        self.cached.get(key).is_some_and(|icon| icon.path.is_some())
-            || self.cached_icon_for_kind(key).is_some()
+        self.cached.contains_key(key) || self.cached_icon_for_kind(key).is_some()
     }
 
     pub(crate) fn resolve_request_for(
@@ -1368,6 +1367,57 @@ gtk-icon-theme-name=breeze\n"
             cache
                 .resolve_request_for(
                     Path::new("main.rs"),
+                    false,
+                    Some(Arc::from("text/rust")),
+                    true,
+                    48.0,
+                )
+                .is_none()
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn resolve_request_for_does_not_repeat_missing_exact_icon() {
+        let root = test_dir("visible-icon-missing");
+        std::fs::create_dir_all(root.join("theme")).unwrap();
+        let mut cache = FileIconCache {
+            cached: HashMap::new(),
+            named_cached: HashMap::new(),
+            theme: IconThemeResolver {
+                roots: vec![root.clone()],
+                themes: vec!["theme".to_string()],
+                search_order: None,
+                inherits_cache: HashMap::new(),
+                path_cache: HashMap::new(),
+            },
+            mime: fika_core::MimeDatabase::from_maps(
+                HashMap::new(),
+                HashMap::new(),
+                HashMap::new(),
+            ),
+        };
+
+        assert!(cache.resolve_now_for(
+            Path::new("missing.rs"),
+            false,
+            Some(Arc::from("text/rust")),
+            true,
+            48.0,
+        ));
+        let icon = cache.cached_or_preliminary_icon_for(
+            Path::new("missing.rs"),
+            false,
+            Some(Arc::from("text/rust")),
+            true,
+            48.0,
+        );
+        assert_eq!(icon.icon_name.as_ref(), "text-rust");
+        assert_eq!(icon.path, None);
+        assert!(
+            cache
+                .resolve_request_for(
+                    Path::new("missing.rs"),
                     false,
                     Some(Arc::from("text/rust")),
                     true,
