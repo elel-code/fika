@@ -42,11 +42,20 @@ Options:
 
   --expect-custom-row-visual-policy
       Fail unless [fika places-renderer-policy] matches the opt-in
-      FIKA_CUSTOM_PLACES_ROWS=1 policy: row_visual_layer/icon_gpui/drag_shell
+      full custom-text policy: row_visual_layer/icon_gpui/drag_shell equal
+      rows, row_gpui=0, text_gpui=0, retained_interaction=0,
+      section_gpui=sections, scrollbar_canvas=1, and visual_kind=full. Also
+      requires aggregated [fika places-row-visual] logs whose rows count
+      matches the policy rows and row text shape-cache logs for the opt-in
+      visual path.
+
+  --expect-custom-row-chrome-policy
+      Fail unless [fika places-renderer-policy] matches the Dolphin-aligned
+      custom chrome policy: row_visual_layer/text_gpui/icon_gpui/drag_shell
       equal rows, row_gpui=0, retained_interaction=0, section_gpui=sections,
-      and scrollbar_canvas=1. Also requires aggregated [fika places-row-visual]
-      logs whose rows count matches the policy rows and row text shape-cache
-      logs for the opt-in visual path.
+      scrollbar_canvas=1, and visual_kind=chrome. Also requires aggregated
+      [fika places-row-visual] logs whose rows count matches the policy rows
+      and rejects row text shape-cache logs because text remains GPUI-rendered.
 
   --expect-retained-event-policy
       Fail unless [fika places-renderer-policy] and
@@ -77,6 +86,7 @@ require_interaction_policy=false
 require_interaction_geometry=false
 expect_current_gpui_policy=false
 expect_custom_row_visual_policy=false
+expect_custom_row_chrome_policy=false
 expect_retained_event_policy=false
 snapshot_us=""
 sidebar_build_us=""
@@ -108,6 +118,9 @@ while [[ $# -gt 0 ]]; do
             ;;
         --expect-custom-row-visual-policy)
             expect_custom_row_visual_policy=true
+            ;;
+        --expect-custom-row-chrome-policy)
+            expect_custom_row_chrome_policy=true
             ;;
         --expect-retained-event-policy)
             expect_retained_event_policy=true
@@ -192,6 +205,7 @@ awk \
     -v require_interaction_geometry="$require_interaction_geometry" \
     -v expect_current_gpui_policy="$expect_current_gpui_policy" \
     -v expect_custom_row_visual_policy="$expect_custom_row_visual_policy" \
+    -v expect_custom_row_chrome_policy="$expect_custom_row_chrome_policy" \
     -v expect_retained_event_policy="$expect_retained_event_policy" \
     -v snapshot_limit="$snapshot_us" \
     -v sidebar_build_limit="$sidebar_build_us" \
@@ -214,6 +228,13 @@ function max_update(name, value) {
     if (!(name in max_values) || value > max_values[name]) {
         max_values[name] = value
     }
+}
+
+function append_csv(list, value) {
+    if (list == "") {
+        return value
+    }
+    return list "," value
 }
 
 function fail(message) {
@@ -284,36 +305,77 @@ function fail(message) {
     rows = field("rows") + 0
     row_gpui = field("row_gpui") + 0
     row_visual_layer = field("row_visual_layer") + 0
+    text_gpui_field = field("text_gpui")
+    if (text_gpui_field == "") {
+        text_gpui = row_gpui
+    } else {
+        text_gpui = text_gpui_field + 0
+    }
     icon_gpui = field("icon_gpui") + 0
     retained_interaction = field("retained_interaction") + 0
     drag_shell = field("drag_shell") + 0
     section_gpui = field("section_gpui") + 0
     scrollbar_canvas = field("scrollbar_canvas") + 0
+    visual_kind = field("visual_kind")
+    if (visual_kind == "") {
+        if (row_gpui == rows && row_visual_layer == 0) {
+            visual_kind = "gpui"
+        } else if (row_gpui == 0 && row_visual_layer == rows && text_gpui == rows) {
+            visual_kind = "chrome"
+        } else if (row_gpui == 0 && row_visual_layer == rows) {
+            visual_kind = "full"
+        } else {
+            visual_kind = "mixed"
+        }
+    }
     max_update("policy_rows", rows)
     max_update("policy_row_gpui", row_gpui)
     max_update("policy_row_visual_layer", row_visual_layer)
+    max_update("policy_text_gpui", text_gpui)
     max_update("policy_icon_gpui", icon_gpui)
     max_update("policy_retained_interaction", retained_interaction)
     max_update("policy_drag_shell", drag_shell)
     max_update("policy_section_gpui", section_gpui)
     max_update("policy_scrollbar_canvas", scrollbar_canvas)
+    if (visual_kind == "gpui") {
+        policy_kind_gpui_seen = 1
+    } else if (visual_kind == "chrome") {
+        policy_kind_chrome_seen = 1
+    } else if (visual_kind == "full") {
+        policy_kind_full_seen = 1
+    } else {
+        policy_kind_other_seen = 1
+    }
     if (expect_current_gpui_policy == "true") {
-        if (row_gpui != rows || icon_gpui != rows || drag_shell != rows ||
+        if (row_gpui != rows || text_gpui != rows || icon_gpui != rows || drag_shell != rows ||
             row_visual_layer != 0 || retained_interaction != 0 ||
-            section_gpui != last_sidebar_sections || scrollbar_canvas != 1) {
+            section_gpui != last_sidebar_sections || scrollbar_canvas != 1 ||
+            visual_kind != "gpui") {
             policy_invalid = 1
         }
     }
     if (expect_custom_row_visual_policy == "true") {
-        if (row_gpui != 0 || icon_gpui != rows || drag_shell != rows ||
+        if (row_gpui != 0 || text_gpui != 0 || icon_gpui != rows || drag_shell != rows ||
             row_visual_layer != rows || retained_interaction != 0 ||
-            section_gpui != last_sidebar_sections || scrollbar_canvas != 1) {
+            section_gpui != last_sidebar_sections || scrollbar_canvas != 1 ||
+            visual_kind != "full") {
             custom_policy_invalid = 1
         }
     }
+    if (expect_custom_row_chrome_policy == "true") {
+        if (row_gpui != 0 || text_gpui != rows || icon_gpui != rows || drag_shell != rows ||
+            row_visual_layer != rows || retained_interaction != 0 ||
+            section_gpui != last_sidebar_sections || scrollbar_canvas != 1 ||
+            visual_kind != "chrome") {
+            custom_chrome_policy_invalid = 1
+        }
+    }
     if (expect_retained_event_policy == "true") {
-        row_visual_policy_valid = (row_gpui == rows && row_visual_layer == 0) ||
-            (row_gpui == 0 && row_visual_layer == rows)
+        row_visual_policy_valid = (row_gpui == rows && row_visual_layer == 0 &&
+            text_gpui == rows && visual_kind == "gpui") ||
+            (row_gpui == 0 && row_visual_layer == rows &&
+                ((text_gpui == rows && visual_kind == "chrome") ||
+                 (text_gpui == 0 && visual_kind == "full")))
         if (!row_visual_policy_valid || icon_gpui != rows ||
             retained_interaction != rows + last_sidebar_sections ||
             drag_shell != rows || section_gpui != last_sidebar_sections ||
@@ -560,16 +622,30 @@ END {
     }
     if (expect_custom_row_visual_policy == "true") {
         if (custom_policy_invalid) {
-            fail("places renderer policy does not match opt-in custom row visual policy")
+            fail("places renderer policy does not match opt-in full custom row visual policy")
         }
         if (row_visual_frames == 0) {
-            fail("missing [fika places-row-visual] logs for custom row visual policy")
+            fail("missing [fika places-row-visual] logs for full custom row visual policy")
         }
         if (row_shape_cache_frames == 0) {
-            fail("missing [fika places-row-shape-cache] logs for custom row visual policy")
+            fail("missing [fika places-row-shape-cache] logs for full custom row visual policy")
         }
         if (max_values["row_visual_rows"] != max_values["policy_rows"]) {
-            fail("custom Places row visual layer is not aggregated to the policy row count")
+            fail("full custom Places row visual layer is not aggregated to the policy row count")
+        }
+    }
+    if (expect_custom_row_chrome_policy == "true") {
+        if (custom_chrome_policy_invalid) {
+            fail("places renderer policy does not match custom row chrome policy")
+        }
+        if (row_visual_frames == 0) {
+            fail("missing [fika places-row-visual] logs for custom row chrome policy")
+        }
+        if (row_shape_cache_frames != 0) {
+            fail("custom row chrome policy must not emit Places row shape-cache logs")
+        }
+        if (max_values["row_visual_rows"] != max_values["policy_rows"]) {
+            fail("custom Places row chrome layer is not aggregated to the policy row count")
         }
     }
     if (expect_retained_event_policy == "true") {
@@ -586,8 +662,11 @@ END {
             if (row_visual_frames == 0) {
                 fail("missing [fika places-row-visual] logs for retained custom row visual policy")
             }
-            if (row_shape_cache_frames == 0) {
+            if (policy_kind_full_seen && row_shape_cache_frames == 0) {
                 fail("missing [fika places-row-shape-cache] logs for retained custom row visual policy")
+            }
+            if (policy_kind_chrome_seen && row_shape_cache_frames != 0) {
+                fail("retained custom row chrome policy must not emit Places row shape-cache logs")
             }
             if (max_values["row_visual_rows"] != max_values["policy_rows"]) {
                 fail("retained custom Places row visual layer is not aggregated to the policy row count")
@@ -701,7 +780,20 @@ END {
         max_values["slot_unchanged"],
         max_values["slot_removed"],
         max_values["slot_project"])
-    printf("places_renderer_policy_frames=%d max_rows=%d max_row_gpui=%d max_row_visual_layer=%d max_icon_gpui=%d max_retained_interaction=%d max_drag_shell=%d max_section_gpui=%d max_scrollbar_canvas=%d\n",
+    policy_kinds = ""
+    if (policy_kind_gpui_seen) {
+        policy_kinds = append_csv(policy_kinds, "gpui")
+    }
+    if (policy_kind_chrome_seen) {
+        policy_kinds = append_csv(policy_kinds, "chrome")
+    }
+    if (policy_kind_full_seen) {
+        policy_kinds = append_csv(policy_kinds, "full")
+    }
+    if (policy_kind_other_seen) {
+        policy_kinds = append_csv(policy_kinds, "other")
+    }
+    printf("places_renderer_policy_frames=%d max_rows=%d max_row_gpui=%d max_row_visual_layer=%d max_icon_gpui=%d max_retained_interaction=%d max_drag_shell=%d max_section_gpui=%d max_scrollbar_canvas=%d max_text_gpui=%d visual_kinds=%s\n",
         policy_frames,
         max_values["policy_rows"],
         max_values["policy_row_gpui"],
@@ -710,7 +802,9 @@ END {
         max_values["policy_retained_interaction"],
         max_values["policy_drag_shell"],
         max_values["policy_section_gpui"],
-        max_values["policy_scrollbar_canvas"])
+        max_values["policy_scrollbar_canvas"],
+        max_values["policy_text_gpui"],
+        policy_kinds)
     printf("places_interaction_policy_frames=%d max_rows=%d max_sections=%d max_row_target_decisions=%d max_section_target_decisions=%d max_retained_hitboxes=%d max_gpui_event_shells=%d max_drag_shells=%d\n",
         interaction_policy_frames,
         max_values["interaction_rows"],

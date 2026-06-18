@@ -22,6 +22,25 @@ The Dolphin-aligned rule for Fika is therefore: keep Places model/order/device
 semantics outside the renderer, and treat the row renderer as replaceable only
 after the behavior gates are explicit.
 
+For high-performance custom drawing, Dolphin's item-view implementation is
+also a boundary rule, not a license to repaint everything every frame:
+
+- `src/kitemviews/kitemlistview.cpp` creates widgets only for visible indexes,
+  recycles invisible `KItemListWidget`s, and updates widget properties instead
+  of rebuilding the whole view tree.
+- `src/kitemviews/kitemlistwidget.cpp` and
+  `src/kitemviews/kstandarditemlistwidget.cpp` use dirty flags for content,
+  layout, and role changes. Paint work is refreshed only when the cached widget
+  state is dirty.
+- `KStandardItemListWidget::TextInfo` stores `QStaticText` with aggressive
+  caching, so text layout/raster work is not repeated on every paint.
+- Icon pixmaps are keyed through `QPixmapCache` by icon identity, size, device
+  pixel ratio, and mode.
+
+The corresponding Fika rule is: move row chrome first, keep text and icon
+renderers on their fastest cached paths until Fika has retained/static text and
+image caches that are measurably neutral or better.
+
 ## Current Fika Boundary
 
 Current ownership is already close to the Dolphin split:
@@ -99,6 +118,12 @@ retained Places row surface with the same separations as file-grid:
   formatting, and saved-settings verification. `src/main.rs` keeps the actual
   app mutations and settings load, but it does not own the report model that
   proves hide/show/resize/reset/restore behavior.
+- Row rendering policy is three-state:
+  `FIKA_PLACES_ROW_VISUAL_POLICY=gpui` keeps the old GPUI row renderer, the
+  default `chrome` policy paints row background, active/drop state, trash
+  marker, and insert indicators in one sidebar-level custom layer while keeping
+  GPUI text and icons, and `FIKA_CUSTOM_PLACES_ROWS=1` / `full` keeps the full
+  custom text benchmark path.
 
 Panel layout belongs beside the Places view/controller boundary, not inside the
 row painter. The Places panel has state for visibility and width; the sidebar
@@ -164,16 +189,16 @@ scripts/analyze-places-perf.sh --require-layout-autosmoke --require-interaction-
    `[fika places-interaction-geometry]` is the companion retained geometry
    projection. It must match row/section counts before the GPUI shells can be
    replaced with retained hitboxes.
-5. Add a custom row visual painter behind an opt-in flag. Compare against the
-   current GPUI row path for scroll and DnD.
-   Current implementation provides `FIKA_CUSTOM_PLACES_ROWS=1` as an opt-in
-   row visual painter for row background, active/drop state, label, trash
-   marker, and insert indicator. It keeps GPUI icons, row event delivery,
-   context menus, row DnD, and drag-start shells. The default path remains the
-   current GPUI row renderer.
-6. Switch the default only if the retained row painter is behavior-complete and
-   perf-neutral or better. Otherwise keep the Dolphin-aligned model/projection
-   and leave row rendering on GPUI.
+5. Add a custom row visual painter behind a renderer policy and compare against
+   the GPUI row path for scroll and DnD.
+   Current implementation has three policies: `gpui` keeps the fallback row
+   renderer, default `chrome` custom-paints row background, active/drop state,
+   trash marker, and insert indicator while keeping GPUI text/icons/event
+   shells, and `FIKA_CUSTOM_PLACES_ROWS=1` / `full` keeps the full custom-text
+   benchmark path.
+6. Expand beyond chrome only if the retained row painter is behavior-complete
+   and perf-neutral or better. Otherwise keep the Dolphin-aligned
+   model/projection and leave text, icons, and event delivery on GPUI.
 
 ## Runtime Evidence Rule
 
@@ -586,8 +611,8 @@ aggregated layer still reshaped every row label during each prepaint pass even
 when the same `PlaceSnapshot` labels, font, and visual text color were stable.
 Fika now mirrors the item-view text-cache pattern with an app-level
 `PlacesRowTextShapeCache`, keyed by label/font/font-size/color. The cache is
-only used by `FIKA_CUSTOM_PLACES_ROWS=1`; the default GPUI row renderer is
-unchanged. Runtime logs include:
+only used by `FIKA_CUSTOM_PLACES_ROWS=1` / `full`; the default chrome policy
+keeps text on GPUI and must not emit this channel. Runtime logs include:
 
 ```text
 [fika places-row-shape-cache] hits=... misses=... evicted=... entries=...
@@ -670,6 +695,70 @@ yet sufficient to make the custom Places row visual the default: the first two
 frames still show glyph/raster cold-start paint spikes around `7-8ms` and must
 be eliminated or proven neutral against the GPUI baseline before default
 switching.
+
+2026-06-18 Dolphin-aligned Places chrome policy update:
+
+The previous full custom row visual layer was not Dolphin-like enough to become
+the default because it moved text into GPUI canvas painting and reintroduced
+font/glyph cold-start spikes. Dolphin keeps item widgets visible-only and uses
+static text and pixmap caches; Fika does not yet expose an equivalent public
+static-text raster cache for the custom Places canvas. The default policy is
+therefore the narrower custom chrome path:
+
+- `FIKA_PLACES_ROW_VISUAL_POLICY=chrome` is the default.
+- The custom layer paints row background, active/drop border, insert
+  indicators, and trash state.
+- GPUI still paints row text and theme icons, so the row shape-cache channel
+  must stay absent in chrome logs.
+- `FIKA_PLACES_ROW_VISUAL_POLICY=gpui` remains the baseline fallback.
+- `FIKA_CUSTOM_PLACES_ROWS=1` remains the full custom-text benchmark path.
+
+Runtime evidence:
+
+```bash
+timeout 6s env FIKA_PERF_PLACES_VIEW=1 FIKA_AUTOSMOKE_PLACES=targets target/debug/fika /etc > /tmp/fika-places-chrome-targets.log 2>&1
+scripts/analyze-places-perf.sh --require-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-chrome-policy /tmp/fika-places-chrome-targets.log
+
+timeout 6s env FIKA_PERF_PLACES_VIEW=1 FIKA_AUTOSMOKE_PLACES=overflow target/debug/fika /etc > /tmp/fika-places-chrome-overflow.log 2>&1
+scripts/analyze-places-perf.sh --require-overflow-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-chrome-policy /tmp/fika-places-chrome-overflow.log
+
+timeout 6s env FIKA_PERF_PLACES_VIEW=1 FIKA_PLACES_ROW_VISUAL_POLICY=gpui FIKA_AUTOSMOKE_PLACES=targets target/debug/fika /etc > /tmp/fika-places-gpui-targets.log 2>&1
+scripts/analyze-places-perf.sh --require-autosmoke --require-interaction-policy --require-interaction-geometry --expect-current-gpui-policy /tmp/fika-places-gpui-targets.log
+
+timeout 6s env FIKA_PERF_PLACES_VIEW=1 FIKA_CUSTOM_PLACES_ROWS=1 FIKA_AUTOSMOKE_PLACES=targets target/debug/fika /etc > /tmp/fika-places-full-targets.log 2>&1
+scripts/analyze-places-perf.sh --require-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-visual-policy /tmp/fika-places-full-targets.log
+```
+
+Default chrome targets summary:
+
+```text
+places_renderer_policy_frames=10 max_rows=11 max_row_gpui=0 max_row_visual_layer=11 max_text_gpui=11 visual_kinds=chrome
+places_row_visual_frames=10 max_rows=11 max_painted=11 max_prepaint=23us max_paint=83us
+places_row_shape_cache_frames=0
+```
+
+Default chrome overflow summary:
+
+```text
+places_renderer_policy_frames=6 max_rows=75 max_row_gpui=0 max_row_visual_layer=75 max_text_gpui=75 visual_kinds=chrome
+places_row_visual_frames=6 max_rows=75 max_painted=29 max_prepaint=28us max_paint=148us
+places_row_shape_cache_frames=0
+```
+
+Full custom-text comparison:
+
+```text
+places_renderer_policy_frames=10 max_rows=11 max_row_gpui=0 max_row_visual_layer=11 max_text_gpui=0 visual_kinds=full
+places_row_visual_frames=10 max_rows=11 max_painted=11 max_prepaint=1046us max_paint=5183us
+places_row_shape_cache_frames=10 max_hits=11 max_misses=11 max_entries=11
+```
+
+Additional default chrome guards passed:
+
+```bash
+scripts/analyze-places-perf.sh --require-layout-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-chrome-policy /tmp/fika-places-chrome-layout.log
+scripts/analyze-places-perf.sh --require-hit-test-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-chrome-policy /tmp/fika-places-chrome-hit-test.log
+```
 
 ## Acceptance Gates
 

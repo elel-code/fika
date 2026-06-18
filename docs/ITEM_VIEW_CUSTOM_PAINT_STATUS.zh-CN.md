@@ -21,9 +21,9 @@
 | 详情行背景、图标、文本单元格、回收站列 | 已替换 | 自定义内容级绘制器 | 详情图标使用相同的缓存/初步图标策略；运行时详情性能和 DnD smoke 证据必须保持最新 |
 | 详情点击、菜单、导航、悬停、光标、放置 hit testing | 已替换 | 保留行 hit testing/controller 状态加上活动条目拖拽窗口跟踪器 | 绘制器更改后仍需要运行时 DnD smoke |
 | 详情拖拽启动 | 未替换 | GPUI `Div::on_drag` 行 shell | 相同的拖拽启动 API 或经过审计的 GPUI patch 门 |
-| Places 行和侧栏滚动条 | 保留 model/slot/目标决策状态，默认渲染器未替换 | GPUI 元素默认叠加在保留 places 投影上；`FIKA_CUSTOM_PLACES_ROWS=1` 为背景/标签/回收站/插入提供可选的行视觉绘制器；`PlacePaintSlotCache` 统计和 `places/interaction.rs` 目标决策 | 保留 hitbox 和默认自定义行绘制器仍需要 Places 特定的 DnD/滚动证据 |
+| Places 行和侧栏滚动条 | 保留 model/slot/目标决策状态，默认 row chrome 已替换 | 默认 `FIKA_PLACES_ROW_VISUAL_POLICY=chrome` 用一个 sidebar-level 自定义层绘制 background/drop/insert/trash，同时 GPUI 保留文本/图标/事件 shell；`gpui` fallback 和 `FIKA_CUSTOM_PLACES_ROWS=1` full-text 基准路径仍可用 | 保留 hitbox 以及任何文本/图标自定义绘制器仍需要 Places 特定的 DnD/滚动证据 |
 
-实际状态是：条目视图静态视觉和大多数应用侧 controller 路径已迁移到保留/自定义绘制架构。拖拽启动和重命名仍然是 GPUI 渲染器/平台契约边界。Places 拥有保留 model、绘制 slot 统计和 DnD 目标决策助手，但其行渲染器和行级事件传递仍然是 GPUI。
+实际状态是：条目视图静态视觉和大多数应用侧 controller 路径已迁移到保留/自定义绘制架构。拖拽启动和重命名仍然是 GPUI 渲染器/平台契约边界。Places 现在默认使用自定义 row chrome 层，但行文本、图标、拖拽启动、右键菜单和行级事件传递仍然是 GPUI。
 
 ## 证据锚点
 
@@ -110,13 +110,23 @@
 
 ### R5：单独评估 Places 渲染器
 
-Places 不是当前条目视图自定义绘制收益的一部分。在替换它之前：
+Places 是独立于 item-view 的渲染器决策。当前已接受的步骤是 Dolphin 对齐的
+chrome 拆分：默认自定义层绘制 row background/drop/insert/trash 状态，而 GPUI
+仍负责行文本、图标、事件传递、行右键菜单、行 DnD shell 和拖拽启动 shell。
 
-- 捕获滚动、重排、外部放置、条目放置、设备条目、隐藏 section 和右键菜单的 GPUI 基线
-- 定义保留 Places 行/section 绘制器边界
-- 证明自定义绘制不回退 DnD 或滚动行为
+继续扩展之前：
 
-在此之前，保持 Places 在 GPUI 元素上，由保留 places 投影和拖放状态馈送。`FIKA_CUSTOM_PLACES_ROWS=1` 路径仅是一个可选基准表面；它通过一个侧栏级层绘制行视觉，不替换 GPUI 行事件传递、GPUI 图标、行右键菜单 shell、行 DnD 或拖拽启动 shell。溢出证据现在通过 `FIKA_AUTOSMOKE_PLACES=overflow` 可用，它添加非持久仅快照行并验证 `[fika places-scrollbar] visible=1`。Places 分析器通过要求 `[fika places-row-visual] rows` 匹配渲染器策略行计数来拒绝旧的 per-row canvas 形状。
+- 保留滚动、重排、外部放置、条目放置、设备条目、隐藏 section 和右键菜单的
+  GPUI fallback 基线
+- 在替换 GPUI 事件传递之前先证明 retained Places hitbox
+- 只有在 retained/static cache 路径达到或超过 GPUI 时，才把文本或图标迁入自定义绘制
+
+`FIKA_CUSTOM_PLACES_ROWS=1` 仍是 opt-in full-text 基准表面。溢出证据通过
+`FIKA_AUTOSMOKE_PLACES=overflow` 可用，它添加非持久仅快照行并验证
+`[fika places-scrollbar] visible=1`。Places 分析器通过要求
+`[fika places-row-visual] rows` 匹配渲染器策略行计数来拒绝旧的 per-row canvas
+形状；默认 chrome gate 还会拒绝 row shape-cache 日志，因为文本必须继续由 GPUI
+渲染。
 
 具体保留行设计和 Dolphin 源比较位于 `docs/PLACES_RENDERER_PLAN.md`。
 

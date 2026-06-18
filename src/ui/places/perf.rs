@@ -6,13 +6,53 @@ use super::PlaceSnapshot;
 
 const PERF_PLACES_VIEW_ENV: &str = "FIKA_PERF_PLACES_VIEW";
 const CUSTOM_PLACES_ROWS_ENV: &str = "FIKA_CUSTOM_PLACES_ROWS";
+const PLACES_ROW_VISUAL_POLICY_ENV: &str = "FIKA_PLACES_ROW_VISUAL_POLICY";
 
 pub(crate) fn places_perf_enabled() -> bool {
     env::var(PERF_PLACES_VIEW_ENV).is_ok_and(|value| env_flag_is_truthy(&value))
 }
 
-pub(crate) fn custom_places_rows_enabled() -> bool {
-    env::var(CUSTOM_PLACES_ROWS_ENV).is_ok_and(|value| env_flag_is_truthy(&value))
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PlacesRowVisualPolicy {
+    Gpui,
+    CustomChrome,
+    CustomFull,
+}
+
+impl PlacesRowVisualPolicy {
+    pub(crate) fn custom_layer_enabled(self) -> bool {
+        matches!(self, Self::CustomChrome | Self::CustomFull)
+    }
+
+    pub(crate) fn paints_text(self) -> bool {
+        matches!(self, Self::CustomFull)
+    }
+
+    fn visual_kind(self) -> &'static str {
+        match self {
+            Self::Gpui => "gpui",
+            Self::CustomChrome => "chrome",
+            Self::CustomFull => "full",
+        }
+    }
+}
+
+pub(crate) fn places_row_visual_policy() -> PlacesRowVisualPolicy {
+    if env::var(CUSTOM_PLACES_ROWS_ENV).is_ok_and(|value| env_flag_is_truthy(&value)) {
+        return PlacesRowVisualPolicy::CustomFull;
+    }
+
+    env::var(PLACES_ROW_VISUAL_POLICY_ENV)
+        .ok()
+        .and_then(|value| match value.trim().to_ascii_lowercase().as_str() {
+            "gpui" | "off" | "0" => Some(PlacesRowVisualPolicy::Gpui),
+            "chrome" | "hybrid" | "default" | "1" | "true" | "yes" | "on" => {
+                Some(PlacesRowVisualPolicy::CustomChrome)
+            }
+            "full" | "custom" | "text" => Some(PlacesRowVisualPolicy::CustomFull),
+            _ => None,
+        })
+        .unwrap_or(PlacesRowVisualPolicy::CustomChrome)
 }
 
 pub(crate) fn env_flag_is_truthy(value: &str) -> bool {
@@ -142,30 +182,37 @@ pub(crate) fn emit_places_scrollbar_perf_log(log: PlacesScrollbarPerfLog) {
 pub(crate) struct PlacesRendererPolicyLog {
     pub(crate) row_count: usize,
     pub(crate) section_count: usize,
-    pub(crate) custom_row_visuals: bool,
+    pub(crate) row_visual_policy: PlacesRowVisualPolicy,
     pub(crate) scrollbar_canvas_count: usize,
 }
 
 pub(crate) fn emit_places_renderer_policy_log(log: PlacesRendererPolicyLog) {
-    let row_gpui = if log.custom_row_visuals {
-        0
-    } else {
+    let row_gpui = if log.row_visual_policy == PlacesRowVisualPolicy::Gpui {
         log.row_count
+    } else {
+        0
     };
-    let row_visual_layer = if log.custom_row_visuals {
+    let row_visual_layer = if log.row_visual_policy.custom_layer_enabled() {
         log.row_count
     } else {
         0
+    };
+    let text_gpui = if log.row_visual_policy.paints_text() {
+        0
+    } else {
+        log.row_count
     };
     eprintln!(
-        "[fika places-renderer-policy] rows={} row_gpui={} row_visual_layer={} icon_gpui={} retained_interaction=0 drag_shell={} section_gpui={} scrollbar_canvas={}",
+        "[fika places-renderer-policy] rows={} row_gpui={} row_visual_layer={} text_gpui={} icon_gpui={} retained_interaction=0 drag_shell={} section_gpui={} scrollbar_canvas={} visual_kind={}",
         log.row_count,
         row_gpui,
         row_visual_layer,
+        text_gpui,
         log.row_count,
         log.row_count,
         log.section_count,
         log.scrollbar_canvas_count,
+        log.row_visual_policy.visual_kind(),
     );
 }
 
@@ -262,6 +309,21 @@ mod tests {
         assert!(!env_flag_is_truthy("0"));
         assert!(!env_flag_is_truthy("false"));
         assert!(!env_flag_is_truthy("disabled"));
+    }
+
+    #[test]
+    fn places_row_visual_policy_keeps_chrome_and_text_boundaries_separate() {
+        assert!(!PlacesRowVisualPolicy::Gpui.custom_layer_enabled());
+        assert!(!PlacesRowVisualPolicy::Gpui.paints_text());
+        assert_eq!(PlacesRowVisualPolicy::Gpui.visual_kind(), "gpui");
+
+        assert!(PlacesRowVisualPolicy::CustomChrome.custom_layer_enabled());
+        assert!(!PlacesRowVisualPolicy::CustomChrome.paints_text());
+        assert_eq!(PlacesRowVisualPolicy::CustomChrome.visual_kind(), "chrome");
+
+        assert!(PlacesRowVisualPolicy::CustomFull.custom_layer_enabled());
+        assert!(PlacesRowVisualPolicy::CustomFull.paints_text());
+        assert_eq!(PlacesRowVisualPolicy::CustomFull.visual_kind(), "full");
     }
 
     #[test]

@@ -29,7 +29,7 @@
 | Details row 背景、图标、文本单元格、Trash 列 | custom content-level painter | Details paint snapshots, row layout projection, shape cache | 保持 custom paint | 运行时 Details perf 和 DnD 冒烟证据必须保持最新 |
 | Details click/menu/navigation/hover/cursor/drop hit testing | retained row hit testing/controller state 加 active item-drag window tracker | viewport retained hit testing | 保持 retained controller path | painter 变更后 DnD 冒烟必须通过 |
 | Details drag start | GPUI `Div::on_drag` row shell | retained drag payload state | 保持 GPUI shell | 与 Compact/Icons drag start 相同门 |
-| Places rows 和 sidebar scrollbar | retained model/slot/target-decision state，默认渲染器未替换 | GPUI elements over retained places projection（默认）；`FIKA_CUSTOM_PLACES_ROWS=1` 可选 sidebar-level row visual layer；`PlacePaintSlotCache` stats 和 `places/interaction.rs` target decisions | 保持 GPUI 为默认渲染器 | Places 特定 DnD/scroll 基线加 custom vs GPUI 比较证据 |
+| Places rows 和 sidebar scrollbar | 默认 custom chrome layer 加 GPUI text/icons/event shells；`gpui` fallback 和 `FIKA_CUSTOM_PLACES_ROWS=1` full-text 基准路径仍可用 | `places` model/projection 和 `drag_drop` state | 保持 Dolphin 对齐的 chrome 拆分为默认。文本/图标或事件传递在 retained/static cache 与 hitbox 达到或超过 GPUI 前不得移出 GPUI | 默认日志必须通过 `--expect-custom-row-chrome-policy`，并显示 `text_gpui=rows`、`visual_kind=chrome`、无 row shape-cache 日志，且聚合 `[fika places-row-visual]` rows 匹配策略行数。GPUI fallback 必须通过 `--expect-current-gpui-policy`；full text 继续由 `--expect-custom-row-visual-policy` 约束 |
 
 ## Perf 日志收集
 

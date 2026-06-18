@@ -8,6 +8,7 @@ use dnd::{PlaceRowDndConfig, install_place_row_dnd};
 
 use super::super::drag::{PlaceDrag, PlaceDragPreview};
 use super::super::icon_view::place_icon_view;
+use super::super::perf::PlacesRowVisualPolicy;
 use super::super::snapshot::PlaceSnapshot;
 use super::super::style::{
     PlaceInsertIndicatorEdge, place_insert_indicator, place_row_background, place_row_border_color,
@@ -37,9 +38,11 @@ fn place_row_drag_is_movable(place: &PlaceSnapshot) -> bool {
 pub(super) fn place_row(
     visible_index: usize,
     place: PlaceSnapshot,
-    custom_visual: bool,
+    row_visual_policy: PlacesRowVisualPolicy,
     cx: &mut Context<FikaApp>,
 ) -> Stateful<Div> {
+    let custom_chrome = row_visual_policy.custom_layer_enabled();
+    let gpui_text = !row_visual_policy.paints_text();
     let row_id = format!("place-{visible_index}");
     let path = place.path.clone();
     let place_drag = PlaceDrag::new(
@@ -72,19 +75,19 @@ pub(super) fn place_row(
         .py_1()
         .rounded_md()
         .border_1()
-        .border_color(if custom_visual {
+        .border_color(if custom_chrome {
             rgba(0x00000000)
         } else {
             place_row_border_color(active, row_drop_target)
         })
-        .bg(if custom_visual {
+        .bg(if custom_chrome {
             rgba(0x00000000)
         } else {
             place_row_background(active, row_drop_target)
         })
         .when(highlight.hover_enabled, |row| {
             row.hover(move |row| {
-                row.bg(if custom_visual {
+                row.bg(if custom_chrome {
                     rgba(0x00000000)
                 } else {
                     place_row_hover_background(active, row_drop_target)
@@ -130,42 +133,43 @@ pub(super) fn place_row(
         cx,
     );
 
-    if custom_visual {
-        row = row
-            .h(px(PLACE_ROW_HEIGHT))
-            .child(place_icon_view(&place.icon, active))
-            .child(div().flex_1());
+    if custom_chrome {
+        row = row.h(px(PLACE_ROW_HEIGHT));
+    }
+
+    row = row.child(place_icon_view(&place.icon, active));
+
+    if gpui_text {
+        row = row.child(
+            div()
+                .flex_1()
+                .truncate()
+                .text_sm()
+                .text_color(if place.active {
+                    rgb(0x1f4fbf)
+                } else if !place.mounted {
+                    rgb(0x6b7280)
+                } else {
+                    rgb(0x24292f)
+                })
+                .child(place.label.clone()),
+        );
     } else {
-        row = row
-            .child(place_icon_view(&place.icon, active))
-            .child(
-                div()
-                    .flex_1()
-                    .truncate()
-                    .text_sm()
-                    .text_color(if place.active {
-                        rgb(0x1f4fbf)
-                    } else if !place.mounted {
-                        rgb(0x6b7280)
-                    } else {
-                        rgb(0x24292f)
-                    })
-                    .child(place.label.clone()),
-            )
-            .when(place.trash_place, |row| {
-                row.child(
-                    div()
-                        .id(format!("place-trash-state-{visible_index}"))
-                        .w(px(7.0))
-                        .h(px(7.0))
-                        .rounded_full()
-                        .bg(if place.trash_has_items {
-                            rgb(0x2f6fed)
-                        } else {
-                            rgb(0xc8ced6)
-                        }),
-                )
-            });
+        row = row.child(div().flex_1());
+    }
+    if !custom_chrome && place.trash_place {
+        row = row.child(
+            div()
+                .id(format!("place-trash-state-{visible_index}"))
+                .w(px(7.0))
+                .h(px(7.0))
+                .rounded_full()
+                .bg(if place.trash_has_items {
+                    rgb(0x2f6fed)
+                } else {
+                    rgb(0xc8ced6)
+                }),
+        );
     }
 
     div()
@@ -174,13 +178,13 @@ pub(super) fn place_row(
         .flex()
         .flex_col()
         .child(row)
-        .when(place.insert_before && !custom_visual, |row| {
+        .when(place.insert_before && !custom_chrome, |row| {
             row.child(place_insert_indicator(
                 format!("place-insert-before-{visible_index}"),
                 PlaceInsertIndicatorEdge::Before,
             ))
         })
-        .when(place.insert_after && !custom_visual, |row| {
+        .when(place.insert_after && !custom_chrome, |row| {
             row.child(place_insert_indicator(
                 format!("place-insert-after-{visible_index}"),
                 PlaceInsertIndicatorEdge::After,

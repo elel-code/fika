@@ -432,15 +432,15 @@ pretending that every remaining GPUI boundary can be removed safely today.
   neutral or better. Current state: the GPUI sidebar baseline and
   renderer-policy logs exist, and `FIKA_AUTOSMOKE_PLACES=targets` covers
   non-persistent target/insert projection. `PlacePaintSlotCache` now records
-  retained row/section slots and `[fika places-slots]` stats; no retained/custom
-  row painter is default. `FIKA_CUSTOM_PLACES_ROWS=1` now provides an opt-in
-  row visual painter for background, active/drop state, label, trash marker,
-  and insert indicators while keeping GPUI icons, row event delivery, context
-  menus, DnD, and drag-start shells. `places/interaction.rs` now owns the
-  row/section target decision, while GPUI shells still provide event delivery
-  and bounds. The opt-in row visuals are now aggregated into one sidebar-level
-  layer, so `[fika places-row-visual] rows` must match the policy row count
-  instead of logging one canvas per row.
+  retained row/section slots and `[fika places-slots]` stats. This entry was
+  later narrowed by P16dy: the default now uses the Dolphin-aligned custom
+  chrome layer for background/drop/insert/trash while GPUI keeps text, icons,
+  row event delivery, context menus, DnD, and drag-start shells.
+  `FIKA_CUSTOM_PLACES_ROWS=1` remains the full custom-text benchmark path.
+  `places/interaction.rs` now owns the row/section target decision, while GPUI
+  shells still provide event delivery and bounds. The row visuals are
+  aggregated into one sidebar-level layer, so `[fika places-row-visual] rows`
+  must match the policy row count instead of logging one canvas per row.
 - [ ] P15f: Keep rename on GPUI until a custom text-editing plan covers focus,
   caret hit testing, UTF-8 selection, validation, commit/cancel, Tab rename-next,
   and IME. Do not merge a custom rename painter without that behavior matrix.
@@ -1244,6 +1244,22 @@ by risk and evidence, not by how custom-painted a surface looks.
   default because the first two frames show roughly `7-8ms` glyph/text cold-start
   paint spikes; the next step must eliminate that spike or prove it neutral
   against the GPUI baseline.
+- [x] P16dy: Make the Dolphin-aligned Places custom chrome policy the default
+  while keeping full custom text opt-in. Root cause: Dolphin's high-performance
+  item view recycles visible widgets and relies on static text/pixmap caches;
+  Fika's full Places canvas text path still pays glyph/text cold-start costs.
+  Implementation: `FIKA_PLACES_ROW_VISUAL_POLICY` now supports `gpui`,
+  default `chrome`, and `full`; chrome paints row background/drop/insert/trash
+  in one visible-row-filtered layer while GPUI keeps text and icons. The
+  analyzer now has `--expect-custom-row-chrome-policy`, tracks `text_gpui` and
+  `visual_kind`, and rejects row shape-cache logs for chrome. Evidence:
+  `/tmp/fika-places-chrome-targets.log`, `/tmp/fika-places-chrome-overflow.log`,
+  `/tmp/fika-places-chrome-layout.log`, and `/tmp/fika-places-chrome-hit-test.log`
+  pass the chrome gates; `/tmp/fika-places-gpui-targets.log` passes the GPUI
+  fallback gate; `/tmp/fika-places-full-targets.log` passes the full custom-text
+  gate and remains opt-in because it shows `max_paint=5183us` with shape-cache
+  activity compared with chrome `max_paint=83us` targets and `148us` overflow
+  with no shape-cache channel.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

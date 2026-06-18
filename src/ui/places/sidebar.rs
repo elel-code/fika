@@ -19,10 +19,10 @@ use super::drag::PlaceDrag;
 use super::interaction::places_interaction_geometry;
 use super::perf::{
     PlacesInteractionGeometryPerfLog, PlacesInteractionPolicyLog, PlacesRendererPolicyLog,
-    PlacesScrollbarPerfLog, PlacesSidebarPerfLog, custom_places_rows_enabled,
-    emit_places_interaction_geometry_perf_log, emit_places_interaction_policy_log,
-    emit_places_renderer_policy_log, emit_places_scrollbar_perf_log, emit_places_sidebar_perf_log,
-    places_perf_enabled, places_section_count,
+    PlacesScrollbarPerfLog, PlacesSidebarPerfLog, emit_places_interaction_geometry_perf_log,
+    emit_places_interaction_policy_log, emit_places_renderer_policy_log,
+    emit_places_scrollbar_perf_log, emit_places_sidebar_perf_log, places_perf_enabled,
+    places_row_visual_policy, places_section_count,
 };
 use super::snapshot::PlaceSnapshot;
 use super::visual::places_row_visual_layer;
@@ -180,14 +180,16 @@ pub(crate) fn places_sidebar(
         let geometry = places_interaction_geometry(&places);
         (geometry, started.elapsed())
     });
-    let custom_row_visuals = custom_places_rows_enabled();
+    let row_visual_policy = places_row_visual_policy();
+    let custom_row_visuals = row_visual_policy.custom_layer_enabled();
     let state = window.use_keyed_state("places-sidebar-scrollbar", cx, |_, _| {
         PlacesSidebarScrollState::new()
     });
     let scroll_handle = state.read(cx).scroll_handle.clone();
     let app = cx.weak_entity();
-    let row_visual_layer =
-        custom_row_visuals.then(|| places_row_visual_layer(places.clone(), app.clone()));
+    let row_visual_layer = custom_row_visuals.then(|| {
+        places_row_visual_layer(places.clone(), app.clone(), row_visual_policy.paints_text())
+    });
     let mut rows = Vec::new();
     let mut current_group = None;
 
@@ -203,7 +205,7 @@ pub(crate) fn places_sidebar(
                 ));
             }
         }
-        rows.push(place_row(index, place, custom_row_visuals, cx));
+        rows.push(place_row(index, place, row_visual_policy, cx));
     }
     if let Some(started) = build_started {
         emit_places_sidebar_perf_log(PlacesSidebarPerfLog {
@@ -215,7 +217,7 @@ pub(crate) fn places_sidebar(
         emit_places_renderer_policy_log(PlacesRendererPolicyLog {
             row_count,
             section_count,
-            custom_row_visuals,
+            row_visual_policy,
             scrollbar_canvas_count: 1,
         });
         emit_places_interaction_policy_log(PlacesInteractionPolicyLog {

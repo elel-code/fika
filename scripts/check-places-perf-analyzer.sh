@@ -123,6 +123,45 @@ if [[ "$custom_summary" != *"places_row_shape_cache_frames=1 max_hits=11 max_mis
     exit 1
 fi
 
+cat > "$tmpdir/custom-row-chrome.log" <<'EOF'
+[fika places-slots] rows=11 sections=2 entries=13 inserted=13 content=0 geometry=0 visual=0 unchanged=0 removed=0 project=25us
+[fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
+[fika places-view] source=11 visible=11 sections=2 snapshot=100us
+[fika places-sidebar] rows=11 sections=2 elements=13 build=240us
+[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=11 icon_gpui=11 retained_interaction=0 drag_shell=11 section_gpui=2 scrollbar_canvas=1 visual_kind=chrome
+[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=11
+[fika places-row-visual] rows=11 painted=11 prepaint=18us paint=24us
+EOF
+
+chrome_summary="$("$analyzer" \
+    --expect-custom-row-chrome-policy \
+    "$tmpdir/custom-row-chrome.log")"
+
+if [[ "$chrome_summary" != *"max_row_gpui=0 max_row_visual_layer=11"* || "$chrome_summary" != *"max_text_gpui=11 visual_kinds=chrome"* ]]; then
+    echo "expected custom Places row chrome policy summary" >&2
+    exit 1
+fi
+if [[ "$chrome_summary" != *"places_row_shape_cache_frames=0"* ]]; then
+    echo "expected Places chrome row policy without shape-cache summary" >&2
+    exit 1
+fi
+
+cat > "$tmpdir/custom-row-chrome-with-shape-cache.log" <<'EOF'
+[fika places-slots] rows=11 sections=2 entries=13 inserted=13 content=0 geometry=0 visual=0 unchanged=0 removed=0 project=25us
+[fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
+[fika places-view] source=11 visible=11 sections=2 snapshot=100us
+[fika places-sidebar] rows=11 sections=2 elements=13 build=240us
+[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=11 icon_gpui=11 retained_interaction=0 drag_shell=11 section_gpui=2 scrollbar_canvas=1 visual_kind=chrome
+[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=11
+[fika places-row-visual] rows=11 painted=11 prepaint=18us paint=24us
+[fika places-row-shape-cache] hits=1 misses=0 evicted=0 entries=1
+EOF
+
+if "$analyzer" --expect-custom-row-chrome-policy "$tmpdir/custom-row-chrome-with-shape-cache.log" >/dev/null 2>&1; then
+    echo "expected chrome Places row policy with shape-cache to fail" >&2
+    exit 1
+fi
+
 cat > "$tmpdir/retained-event-default-visual.log" <<'EOF'
 [fika places-slots] rows=11 sections=2 entries=13 inserted=13 content=0 geometry=0 visual=0 unchanged=0 removed=0 project=25us
 [fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us

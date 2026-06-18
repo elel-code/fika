@@ -29,13 +29,22 @@ const INSERT_INDICATOR_HEIGHT: f32 = 2.0;
 pub(super) fn places_row_visual_layer(
     places: Vec<PlaceSnapshot>,
     app: WeakEntity<FikaApp>,
+    paint_text: bool,
 ) -> impl IntoElement {
     let rows = place_row_visual_layer_rows(&places);
     let total_rows = rows.len();
     let height = places_row_visual_content_height(&places).max(1.0);
     canvas(
         move |bounds, window, cx| {
-            places_row_visual_prepaint(rows.clone(), total_rows, app.clone(), bounds, window, cx)
+            places_row_visual_prepaint(
+                rows.clone(),
+                total_rows,
+                app.clone(),
+                paint_text,
+                bounds,
+                window,
+                cx,
+            )
         },
         move |bounds, paint_state, window, cx| {
             let paint_started = Instant::now();
@@ -107,7 +116,7 @@ struct PlaceRowVisualLayerPaintState {
 
 struct PlaceRowVisualPaintState {
     input: PlaceRowVisualState,
-    line: Arc<gpui::ShapedLine>,
+    line: Option<Arc<gpui::ShapedLine>>,
     line_height: Pixels,
 }
 
@@ -160,6 +169,7 @@ fn places_row_visual_prepaint(
     rows: Vec<PlaceRowVisualState>,
     total_rows: usize,
     app: WeakEntity<FikaApp>,
+    paint_text: bool,
     layer_bounds: Bounds<Pixels>,
     window: &mut Window,
     cx: &mut App,
@@ -167,7 +177,7 @@ fn places_row_visual_prepaint(
     let started = Instant::now();
     let rows = visible_place_row_visuals(rows, layer_bounds, window.content_mask().bounds)
         .into_iter()
-        .map(|input| place_row_visual_prepaint(input, &app, window, cx))
+        .map(|input| place_row_visual_prepaint(input, paint_text, &app, window, cx))
         .collect();
     let shape_cache_stats = app
         .update(cx, |this, _cx| this.place_row_text_shape_cache.take_stats())
@@ -202,31 +212,33 @@ fn visible_place_row_visuals(
 
 fn place_row_visual_prepaint(
     input: PlaceRowVisualState,
+    paint_text: bool,
     app: &WeakEntity<FikaApp>,
     window: &mut Window,
     cx: &mut App,
 ) -> PlaceRowVisualPaintState {
-    let text_style = window.text_style();
-    let font_size = px(window.rem_size().as_f32() * 0.875);
-    let text_color = if input.active {
-        0x1f4fbf
-    } else if !input.mounted {
-        0x6b7280
-    } else {
-        0x24292f
-    };
-    let key = PlacesRowTextShapeCacheKey {
-        label: input.label.clone(),
-        font: text_style.font(),
-        font_size_bits: font_size.as_f32().to_bits(),
-        text_color,
-    };
-    let line = app
-        .update(cx, |this, _cx| {
+    let line = paint_text.then(|| {
+        let text_style = window.text_style();
+        let font_size = px(window.rem_size().as_f32() * 0.875);
+        let text_color = if input.active {
+            0x1f4fbf
+        } else if !input.mounted {
+            0x6b7280
+        } else {
+            0x24292f
+        };
+        let key = PlacesRowTextShapeCacheKey {
+            label: input.label.clone(),
+            font: text_style.font(),
+            font_size_bits: font_size.as_f32().to_bits(),
+            text_color,
+        };
+        app.update(cx, |this, _cx| {
             this.place_row_text_shape_cache.shape_for(&key, window)
         })
         .ok()
-        .unwrap_or_else(|| Arc::new(shape_place_row_visual_text(&key, window)));
+        .unwrap_or_else(|| Arc::new(shape_place_row_visual_text(&key, window)))
+    });
     PlaceRowVisualPaintState {
         input,
         line,
@@ -277,25 +289,24 @@ fn paint_place_row_visual(
         );
     }
 
-    let text_left = ROW_PADDING_X + ICON_SIZE + ICON_TEXT_GAP;
-    let reserved_right = if input.trash_place {
-        ROW_PADDING_X + TRASH_DOT_SIZE + ICON_TEXT_GAP
-    } else {
-        ROW_PADDING_X
-    };
-    let text_bounds = Bounds::new(
-        point(row_bounds.origin.x + px(text_left), row_bounds.origin.y),
-        size(
-            (row_bounds.size.width - px(text_left + reserved_right)).max(px(1.0)),
-            row_bounds.size.height,
-        ),
-    );
-    let text_y = text_bounds.origin.y
-        + ((row_bounds.size.height - state.line_height).max(px(0.0)) / 2.0).floor();
-    window.paint_layer(text_bounds, |window| {
-        state
-            .line
-            .paint(
+    if let Some(line) = &state.line {
+        let text_left = ROW_PADDING_X + ICON_SIZE + ICON_TEXT_GAP;
+        let reserved_right = if input.trash_place {
+            ROW_PADDING_X + TRASH_DOT_SIZE + ICON_TEXT_GAP
+        } else {
+            ROW_PADDING_X
+        };
+        let text_bounds = Bounds::new(
+            point(row_bounds.origin.x + px(text_left), row_bounds.origin.y),
+            size(
+                (row_bounds.size.width - px(text_left + reserved_right)).max(px(1.0)),
+                row_bounds.size.height,
+            ),
+        );
+        let text_y = text_bounds.origin.y
+            + ((row_bounds.size.height - state.line_height).max(px(0.0)) / 2.0).floor();
+        window.paint_layer(text_bounds, |window| {
+            line.paint(
                 point(text_bounds.origin.x, text_y),
                 state.line_height,
                 TextAlign::Left,
@@ -304,7 +315,8 @@ fn paint_place_row_visual(
                 cx,
             )
             .ok();
-    });
+        });
+    }
 
     if input.trash_place {
         let dot_x =

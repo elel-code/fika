@@ -21,12 +21,12 @@ becomes the default.
 | Details row backgrounds, icons, text cells, Trash columns | replaced | custom content-level painter | Details icons use the same cached/preliminary icon policy; runtime Details perf and DnD smoke evidence must stay current |
 | Details click, menu, navigation, hover, cursor, drop hit testing | replaced | retained row hit testing/controller state plus active item-drag window tracker | runtime DnD smoke still required after painter changes |
 | Details drag start | not replaced | GPUI `Div::on_drag` row shell | same drag-start API or audited GPUI patch gate |
-| Places rows and sidebar scrollbar | retained model/slot/target-decision state, default renderer not replaced | GPUI elements over retained places projection by default; `FIKA_CUSTOM_PLACES_ROWS=1` opt-in sidebar-level row visual layer for background/label/trash/insert; `PlacePaintSlotCache` stats and `places/interaction.rs` target decisions | retained hitboxes and default custom row painter still require Places-specific DnD/scroll evidence |
+| Places rows and sidebar scrollbar | retained model/slot/target-decision state, default row chrome replaced | Default `FIKA_PLACES_ROW_VISUAL_POLICY=chrome` paints background/drop/insert/trash in one sidebar-level custom layer while GPUI keeps text/icons/event shells; `gpui` fallback and `FIKA_CUSTOM_PLACES_ROWS=1` full-text benchmark remain available | retained hitboxes and any text/icon custom painter still require Places-specific DnD/scroll evidence |
 
 The practical state is: item-view static visuals and most app-side controller
 paths have moved to retained/custom-painted architecture. Drag-start and rename
-remain GPUI renderer/platform-contract boundaries. Places has retained model,
-paint-slot stats, and DnD target-decision helpers, but its row renderer and
+remain GPUI renderer/platform-contract boundaries. Places now defaults to a
+custom row chrome layer, but its row text, icons, drag start, context menus, and
 row-level event delivery are still GPUI.
 
 ## Evidence Anchors
@@ -217,23 +217,26 @@ The concrete behavior matrix and Dolphin source comparison live in
 
 ### R5: Evaluate Places Renderer Separately
 
-Places is not part of the current item-view custom-paint win. Before replacing
-it:
+Places is a separate renderer decision from item-view. The current accepted
+step is the Dolphin-aligned chrome split: the default custom layer paints row
+background/drop/insert/trash state, while GPUI still owns row text, icons,
+event delivery, row context menus, row DnD shells, and drag-start shells.
 
-- capture a GPUI baseline for scroll, reorder, external drop, item drop, device
-  entries, hidden sections, and context menus
-- define a retained Places row/section painter boundary
-- prove that custom paint does not regress DnD or scroll behavior
+Before expanding it:
 
-Until then, keep Places on GPUI elements fed by retained places projection and
-drag/drop state. The `FIKA_CUSTOM_PLACES_ROWS=1` path is only an opt-in
-benchmark surface; it paints row visuals through one sidebar-level layer and
-does not replace GPUI row event delivery, GPUI icons, row context menu shells,
-row DnD, or drag-start shells. Overflow evidence is now available through
-`FIKA_AUTOSMOKE_PLACES=overflow`, which adds non-persistent snapshot-only rows
-and validates `[fika places-scrollbar] visible=1`. The Places analyzer rejects
-the old per-row canvas shape by requiring `[fika places-row-visual] rows` to
-match the renderer-policy row count.
+- keep a GPUI fallback baseline for scroll, reorder, external drop, item drop,
+  device entries, hidden sections, and context menus
+- prove retained Places hitboxes before replacing GPUI event delivery
+- only move text or icons into custom painting after a retained/static cache
+  path beats or matches GPUI
+
+`FIKA_CUSTOM_PLACES_ROWS=1` remains an opt-in full-text benchmark surface.
+Overflow evidence is available through `FIKA_AUTOSMOKE_PLACES=overflow`, which
+adds non-persistent snapshot-only rows and validates
+`[fika places-scrollbar] visible=1`. The Places analyzer rejects the old per-row
+canvas shape by requiring `[fika places-row-visual] rows` to match the
+renderer-policy row count, and the default chrome gate rejects row
+shape-cache logs because text must remain GPUI-rendered.
 
 The concrete retained-row design and Dolphin source comparison live in
 `docs/PLACES_RENDERER_PLAN.md`.
