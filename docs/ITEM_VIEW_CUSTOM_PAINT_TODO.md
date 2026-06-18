@@ -929,6 +929,12 @@ by risk and evidence, not by how custom-painted a surface looks.
   handle-changed reporting after viewport bounds arrive. `src/main.rs` still
   applies returned pane-view sync actions, but no longer decides this
   lifecycle path itself.
+- [x] P16bn: Move item-view user-scroll handle sync policy into the scroll
+  state. `ItemViewScrollState::sync_handle_after_user_scroll()` now owns
+  clearing transient view-authoritative state and syncing the GPUI scroll
+  handle after wheel-driven pane model scroll changes. `src/main.rs` still
+  applies the pane model scroll, but no longer combines those scroll-state
+  lifecycle operations itself.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

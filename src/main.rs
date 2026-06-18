@@ -3476,8 +3476,7 @@ impl FikaApp {
                 next_view.max_scroll_y,
             );
         if changed {
-            self.item_view_scroll.clear_authoritative_scroll(pane_id);
-            let _ = self.item_view_scroll.sync_handle_to_view(
+            let _ = self.item_view_scroll.sync_handle_after_user_scroll(
                 pane_id,
                 next_view.scroll_x,
                 next_view.scroll_y,

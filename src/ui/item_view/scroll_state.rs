@@ -220,6 +220,16 @@ impl ItemViewScrollState {
         self.sync_handle_to_view(pane_id, scroll_x, scroll_y)
     }
 
+    pub(crate) fn sync_handle_after_user_scroll(
+        &mut self,
+        pane_id: PaneId,
+        scroll_x: f32,
+        scroll_y: f32,
+    ) -> bool {
+        self.clear_authoritative_scroll(pane_id);
+        self.sync_handle_to_view(pane_id, scroll_x, scroll_y)
+    }
+
     pub(crate) fn reset_pane(&mut self, pane_id: PaneId) {
         if let Some(scroll_handle) = self.handles.get(&pane_id) {
             scroll_handle.set_offset(point(px(0.0), px(0.0)));
@@ -476,6 +486,19 @@ mod tests {
         state.tick_authoritative_scroll(pane_id);
         assert!(state.has_authoritative_scroll(pane_id));
         state.tick_authoritative_scroll(pane_id);
+        assert!(!state.has_authoritative_scroll(pane_id));
+    }
+
+    #[test]
+    fn scroll_state_user_scroll_clears_authoritative_state_and_syncs_handle() {
+        let pane_id = PaneId(1);
+        let mut state = ItemViewScrollState::default();
+        let handle = state.handle_for_pane(pane_id);
+
+        state.mark_authoritative_for_frames(pane_id, 2);
+        assert!(state.sync_handle_after_user_scroll(pane_id, 180.0, 40.0));
+
+        assert_eq!(handle.offset(), point(px(-180.0), px(-40.0)));
         assert!(!state.has_authoritative_scroll(pane_id));
     }
 
