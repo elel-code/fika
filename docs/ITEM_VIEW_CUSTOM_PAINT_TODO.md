@@ -501,12 +501,14 @@ tracks.
 - [x] P16e: Audit local GPUI source for a retained/custom-element drag-start
   path. If no public API exists, document the exact blocker and keep item and
   Details drag-start shells. Result: GPUI exposes typed drag initiation through
-  `Interactivity::on_drag` / `InteractiveElement::on_drag` in
+  `Interactivity::on_drag` / `StatefulInteractiveElement::on_drag` in
   `crates/gpui/src/elements/div.rs`. Custom elements can insert hitboxes with
-  `Window::insert_hitbox()` but do not have a public API to start a typed drag
-  from those retained hitboxes, so the item and Details drag-start shells
-  remain explicit platform boundaries. 2026-06-19 refresh: the same blocker is
-  still true at Zed commit `e4f6742a`.
+  `Window::insert_hitbox()` and observe mouse events with
+  `Window::on_mouse_event()`, but do not have a public API to start a typed
+  drag from those retained hitboxes, so the item, Details, and Places
+  drag-start shells remain explicit platform boundaries. 2026-06-19 refresh:
+  the same blocker is still true at Zed commit
+  `69b602c797a62f09318916d24a98c930533fbdc8`.
 - [ ] P16f: If an audited GPUI patch is chosen, design the smallest API that
   starts drags from retained hitboxes while preserving payload, preview,
   cursor offset, accepted transfer modes, and external drop behavior.
@@ -1098,11 +1100,12 @@ tracks.
   scroll helpers are now scroll-state implementation details; production and
   cross-module tests use the snapshot API surface.
 - [x] P16cm: Record the updated GPUI dependency baseline. The 2026-06-18
-  lockfile update moves GPUI to Zed commit `e4f6742a` and the resolved graph
-  no longer includes `async-std`, `async-global-executor`, or the old Zed
-  `util` crate. This lowers the dependency-weight concern for keeping GPUI
-  surfaces, but renderer replacement decisions still require paired runtime
-  evidence.
+  lockfile update moved GPUI to Zed commit `e4f6742a`, and the current
+  dependency baseline is Zed commit
+  `69b602c797a62f09318916d24a98c930533fbdc8`. The resolved graph no longer
+  includes `async-std`, `async-global-executor`, or the old Zed `util` crate.
+  This lowers the dependency-weight concern for keeping GPUI surfaces, but
+  renderer replacement decisions still require paired runtime evidence.
 - [x] P16cn: Move item-view scroll sync-action application into scroll state.
   `ItemViewScrollSyncAction::apply_to_view()` now owns when a sync action writes
   pane view values and whether that write represents a view change; `src/main.rs`
@@ -1499,6 +1502,15 @@ tracks.
   proving row/section target delivery is retained while the typed payload entry
   point remains a GPUI platform boundary. The full retained-event gate still
   requires both split counters to be zero.
+- [x] P16ex: Re-audit the GPUI drag-start API after the dependency update.
+  Current GPUI `0.2.2` at Zed
+  `69b602c797a62f09318916d24a98c930533fbdc8` still exposes typed drag start
+  through interactive elements, not retained painter hitboxes. Track 4 now
+  records the minimum audited patch/API shape needed before removing
+  Compact/Icons, Details, or Places drag-start shells: payload, preview entity,
+  cursor offset, transfer modes, cancellation, same-window drop dispatch, and
+  external drop behavior must all survive without recreating visual GPUI rows
+  as drag sources.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

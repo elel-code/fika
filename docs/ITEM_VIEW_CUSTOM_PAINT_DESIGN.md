@@ -87,8 +87,10 @@ entry point is `docs/FULL_RETAINED_RENDERER_ROADMAP.md`.
 
 GPUI scheduling dependency note:
 
-- After the 2026-06 dependency update to Zed/GPUI `e4f6742a`, `async-std`
-  and `async-global-executor` are no longer present in Fika's dependency tree.
+- After the 2026-06 dependency update to Zed/GPUI `e4f6742a`, and the current
+  baseline at Zed/GPUI `69b602c797a62f09318916d24a98c930533fbdc8`,
+  `async-std` and `async-global-executor` are no longer present in Fika's
+  dependency tree.
   This does not mean the Linux/platform stack is free of async support crates:
   `smol` still comes through `gpui_linux`, and `async-channel` still appears
   through GPUI/platform/accessibility/zbus paths.

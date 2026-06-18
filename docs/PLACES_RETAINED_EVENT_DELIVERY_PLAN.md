@@ -274,9 +274,11 @@ Retained DnD autosmoke slice:
 
 Retained drag-start source-model slice:
 
-- Local GPUI source at Zed commit `e4f6742a` still exposes typed drag
-  initiation through `InteractiveElement::on_drag` / `Div::on_drag`; retained
-  hitboxes do not have a public typed drag-start API.
+- Local GPUI source at Zed commit
+  `69b602c797a62f09318916d24a98c930533fbdc8` still exposes typed drag
+  initiation through `Interactivity::on_drag` /
+  `StatefulInteractiveElement::on_drag`; retained hitboxes do not have a public
+  typed drag-start API.
 - The row shell therefore remains the platform drag-start trigger, but
   `places/drag.rs` now owns the `PlaceDragStartSource` projection from
   `PlaceSnapshot`. That projection decides the path, label, icon, source index,

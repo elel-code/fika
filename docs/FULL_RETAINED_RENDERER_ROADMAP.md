@@ -163,9 +163,17 @@ an audited retained-hitbox drag-start API.
 
 Next design step:
 
+- Current GPUI audit (`0.2.2`, Zed
+  `69b602c797a62f09318916d24a98c930533fbdc8`) still has no public retained
+  hitbox drag-start hook. `Interactivity::on_drag` /
+  `StatefulInteractiveElement::on_drag` are interactive-element APIs, while
+  `Window::insert_hitbox()` and `Window::on_mouse_event()` only provide retained
+  hit testing and mouse observation.
 - If using a GPUI patch, specify the smallest API to start a typed drag from a
   retained hitbox while preserving payload, preview entity, cursor offset,
-  accepted transfer modes, cancellation, and external drop behavior.
+  accepted transfer modes, cancellation, same-window drop dispatch, and
+  external drop behavior. The API must not require recreating a visual GPUI row
+  or item element as the drag source.
 - If no patch is accepted, keep drag-start shells and continue reducing their
   visual/identity role to zero.
 

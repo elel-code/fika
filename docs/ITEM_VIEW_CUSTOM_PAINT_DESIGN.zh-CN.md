@@ -56,7 +56,8 @@ Fika 条目视图应收敛到 Dolphin 的 `KItemListView` 模型：
 
 GPUI 调度依赖说明：
 
-- 2026-06 依赖更新到 Zed/GPUI `e4f6742a` 后，`async-std` 和
+- 2026-06 依赖更新到 Zed/GPUI `e4f6742a` 后，且当前基线位于 Zed/GPUI
+  `69b602c797a62f09318916d24a98c930533fbdc8`，`async-std` 和
   `async-global-executor` 已不在 Fika 的依赖树中。这不表示 Linux/平台栈完全没有
   async 支持 crate：`smol` 仍通过 `gpui_linux` 进入，`async-channel` 仍通过
   GPUI/platform/accessibility/zbus 路径出现。

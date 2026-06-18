@@ -148,9 +148,16 @@ renderer policy。
 
 下一步设计：
 
+- 当前 GPUI 审计（`0.2.2`，Zed
+  `69b602c797a62f09318916d24a98c930533fbdc8`）仍然没有公开的 retained hitbox
+  drag-start 钩子。`Interactivity::on_drag` /
+  `StatefulInteractiveElement::on_drag` 是 interactive-element API，而
+  `Window::insert_hitbox()` 和 `Window::on_mouse_event()` 只提供 retained hit testing
+  和鼠标观察。
 - 如果使用 GPUI patch，定义最小 API：从 retained hitbox 启动 typed drag，同时保留
-  payload、preview entity、cursor offset、accepted transfer modes、cancel 和
-  external drop 行为。
+  payload、preview entity、cursor offset、accepted transfer modes、cancel、
+  同窗口 drop dispatch 和 external drop 行为。该 API 不能要求为了作为拖拽源而重新创建一个
+  可见 GPUI row 或 item element。
 - 如果不接受 patch，保留 drag-start shell，并继续把它的视觉/identity 作用降到 0。
 
 默认值只有在以下条件满足后才能改变：

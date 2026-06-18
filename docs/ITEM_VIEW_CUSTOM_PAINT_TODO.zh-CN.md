@@ -208,7 +208,7 @@ Places chrome 默认之后的当前执行入口是
 - [x] P16b：在最新的 Dolphin 对齐主题图标绘制边界更改后收集一组新的桌面会话证据：`/etc` 自定义主题 vs 默认日志现在证明默认 MIME/主题图标避免了首帧加载 `theme_placeholder` 变动，且 `FIKA_PERF_ITEM_VIEW=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll target/debug/fika /etc` 捕获无人值守缩放/滚动证据。
 - [x] P16c：使用该证据更新 `docs/ITEM_VIEW_RENDERER_DECISIONS.md`，包括 `/etc` 缩放/滚动是否仍然显示冷图像加载卡顿或可见占位符到图标切换。当前证据：可见同步停止复制排队的预读图标工作后，`icon_sync` 最大值从 `28340us` 降至 `173us`；剩余的 `/etc` autosmoke 成本是静态视觉文本/基础绘制，而非 MIME/主题图像渲染。
 - [x] P16d：如果当前日志无法区分以下情况，则添加或扩展运行时证据工具：首帧加载主题图标占位符、保留同 `iconName` 复用、GPUI 图像缓存解码完成和稳定重绘成本。`[fika item-image]` 现在报告 `theme_loaded`、`theme_decoded`、`theme_retained`、`theme_placeholder`、`thumb_loaded`、`thumb_decoded`、`thumb_retained` 和 `thumb_fallback`；运行时分析器将其总结为 `image_sources`。`FIKA_AUTOSMOKE_ITEM_VIEW` 现在无需手动输入即可练习缩放/滚动，并添加 `[fika autosmoke]` 标记到同一性能日志中。
-- [x] P16e：审计本地 GPUI 源码中保留/自定义元素拖拽启动路径。如果没有公共 API 存在，记录确切阻塞并保留条目和详情拖拽启动 shell。结果：GPUI 通过 `Interactivity::on_drag` / `InteractiveElement::on_drag` 在 `crates/gpui/src/elements/div.rs` 中暴露类型化拖拽启动。自定义元素可以通过 `Window::insert_hitbox()` 插入 hitbox，但没有公共 API 从这些保留 hitbox 启动类型化拖拽，因此条目和详情拖拽启动 shell 保留为显式平台边界。2026-06-19 复查：Zed commit `e4f6742a` 仍然是同一阻塞。
+- [x] P16e：审计本地 GPUI 源码中保留/自定义元素拖拽启动路径。如果没有公共 API 存在，记录确切阻塞并保留条目和详情拖拽启动 shell。结果：GPUI 通过 `Interactivity::on_drag` / `StatefulInteractiveElement::on_drag` 在 `crates/gpui/src/elements/div.rs` 中暴露类型化拖拽启动。自定义元素可以通过 `Window::insert_hitbox()` 插入 hitbox，并通过 `Window::on_mouse_event()` 观察鼠标事件，但没有公共 API 从这些保留 hitbox 启动类型化拖拽，因此条目、详情和 Places 拖拽启动 shell 保留为显式平台边界。2026-06-19 复查：Zed commit `69b602c797a62f09318916d24a98c930533fbdc8` 仍然是同一阻塞。
 - [ ] P16f：如果选择经过审计的 GPUI patch，设计最小的从保留 hitbox 启动拖拽的 API，同时保留 payload、预览、光标偏移、接受的传输模式和外部放置行为。
 - [x] P16g：将下一个行为保留的条目视图编排边界移出 `src/main.rs`。候选：运行时条目视图性能/证据收集访问器，因为绘制器性能状态已经存在于 `file_grid/perf.rs` 下。已完成：`FIKA_PERF_ITEM_VIEW` 标志和文件网格性能层调用者由 `src/ui/file_grid/perf.rs` 拥有；条目视图性能帧分类和性能状态清理由 `src/ui/file_grid/perf.rs` 拥有；帧状态和绘制器性能统计存储现在位于 `src/ui/file_grid/perf.rs` 中的 `ItemViewPerfState` 后面；条目视图性能摘要发出现在由 `src/ui/file_grid/perf.rs` 拥有；autosmoke 场景解析和操作排序现在位于 `src/ui/file_grid/autosmoke.rs` 中。
 - [x] P16h：在更改 Places 渲染之前起草保留 Places 行绘制器设计。设计必须覆盖行组、隐藏 section、设备行、重排/放置插入、右键菜单和侧栏滚动。结果：`docs/PLACES_RENDERER_PLAN.md` 将 Dolphin 的 `DolphinPlacesModel + KFilePlacesView` 划分与 Fika 当前的 `places/model`、`projection`、`sidebar/row`、`drag` 和自定义滚动条模块进行比较，然后将任何保留行绘制器门控于 Places 特定性能日志、运行时 smoke 和渲染器策略证据之后。
@@ -296,7 +296,7 @@ Places chrome 默认之后的当前执行入口是
 - [x] P16cj：将 item-view scroll lifecycle snapshot APIs 移入 scroll state。Bounds update、scrollbar-drag finish sync 和 layout-change scroll preservation 现在都有 `ItemViewScrollViewSnapshot` 入口；`src/main.rs` 的生产路径不再用松散字段传递这些 scroll values。
 - [x] P16ck：将 item-view handle-to-view snapshot sync APIs 移入 scroll state。Authoritative handle sync、user-scroll handle sync 和 transient-clearing handle sync 现在在生产路径中消费 `ItemViewScrollViewSnapshot`，不再使用松散 scroll 字段。
 - [x] P16cl：收窄 item-view scroll tuple helper 可见性。松散字段 scroll helpers 现在只是 scroll-state 实现细节；生产路径和跨模块测试都使用 snapshot API surface。
-- [x] P16cm：记录更新后的 GPUI 依赖基线。2026-06-18 的 lockfile 更新将 GPUI 移到 Zed commit `e4f6742a`，解析后的依赖图不再包含 `async-std`、`async-global-executor` 或旧 Zed `util` crate。这降低了保留 GPUI surface 的依赖重量顾虑，但 renderer 替换决策仍然必须依赖成对运行时证据。
+- [x] P16cm：记录更新后的 GPUI 依赖基线。2026-06-18 的 lockfile 更新将 GPUI 移到 Zed commit `e4f6742a`，当前依赖基线是 Zed commit `69b602c797a62f09318916d24a98c930533fbdc8`；解析后的依赖图不再包含 `async-std`、`async-global-executor` 或旧 Zed `util` crate。这降低了保留 GPUI surface 的依赖重量顾虑，但 renderer 替换决策仍然必须依赖成对运行时证据。
 - [x] P16cn：将 item-view scroll sync-action 应用规则移入 scroll state。`ItemViewScrollSyncAction::apply_to_view()` 现在拥有 sync action 何时写入 pane view values，以及该写入是否代表 view change 的判断；`src/main.rs` 只提供 pane model 写入闭包。
 - [x] P16co：将 item-view handle-sync action 组合移入 scroll state。`sync_view_from_handle_snapshot()` 和 `sync_view_from_authoritative_handle_snapshot()` 现在拥有 handle action 创建和 view-write 应用；`src/main.rs` 只提供 pane view snapshot 和 pane model 写入闭包。
 - [x] P16cp：将 item-view bounds-update 和 scrollbar-finish 的 scroll action 应用移入 scroll state。Bounds 和 drag-finish 路径现在暴露 snapshot API，拥有 action 创建、handle-change 聚合和 view-write 应用；`src/main.rs` 只保留 pane bounds 更新和 pane model 写入闭包。
@@ -445,6 +445,12 @@ Places chrome 默认之后的当前执行入口是
   `gpui_row_section_event_shells=0` 和 `gpui_typed_dnd_payload_shells=1`，证明
   row/section target delivery 已经 retained，而 typed payload 入口仍是 GPUI 平台边界。
   完整 retained-event gate 仍要求两个拆分计数都为 0。
+- [x] P16ex：依赖更新后重新审计 GPUI drag-start API。当前 GPUI `0.2.2` 位于 Zed
+  `69b602c797a62f09318916d24a98c930533fbdc8`，类型化拖拽启动仍只通过
+  interactive element 暴露，而不是 retained painter hitbox。Track 4 现在记录了移除
+  Compact/Icons、Details 或 Places drag-start shell 前所需的最小审计 patch/API 形状：
+  payload、preview entity、cursor offset、transfer modes、cancel、同窗口 drop dispatch
+  和 external drop 行为都必须保留，并且不能为了作为拖拽源而重新创建可见 GPUI row。
 - [ ] P16q：在每个 P16 实现切片之后，单独提交并附带相关验证：仅文档切片需要 `git diff --check`；代码切片需要 `cargo fmt`、`cargo check`、`cargo test -q`、`scripts/check-item-view-perf-analyzer.sh`、`scripts/check-places-perf-analyzer.sh` 和 `git diff --check`。
 - [x] P16r：记录运行时自测试和突破记录规则。可重复的滚动、缩放、启动图标、调整大小、模式切换和 Places 目标回退应在依赖手动计时之前通过 autosmoke 日志和分析器脚本重现。任何确认的优化突破必须记录症状、Dolphin 比较边界、根本原因、实现、保存的日志/分析器命令和未来回归守卫在拥有的设计或决策文档中。
 

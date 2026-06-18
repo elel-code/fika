@@ -23,10 +23,11 @@ Current replacement status and the full transition roadmap are tracked in
 
 ## GPUI Dependency Baseline
 
-As of the 2026-06-18 lockfile update to Zed/GPUI commit `e4f6742a`, the
-resolved dependency graph no longer contains `async-std`,
-`async-global-executor`, or the old Zed `util` crate. This removes one
-historical dependency-weight concern around keeping GPUI built-in surfaces.
+As of the 2026-06 lockfile updates to Zed/GPUI commit `e4f6742a` and the
+current baseline `69b602c797a62f09318916d24a98c930533fbdc8`, the resolved
+dependency graph no longer contains `async-std`, `async-global-executor`, or
+the old Zed `util` crate. This removes one historical dependency-weight concern
+around keeping GPUI built-in surfaces.
 It does not change renderer decisions by itself: image, drag-start, rename,
 and Places boundaries still require same-scenario runtime evidence before a
 custom renderer can replace a GPUI surface.

@@ -254,9 +254,10 @@ retained DnD autosmoke 切片：
 
 retained drag-start source-model 切片：
 
-- 本地 GPUI 源码在 Zed commit `e4f6742a` 仍然只通过
-  `InteractiveElement::on_drag` / `Div::on_drag` 暴露 typed drag 启动；retained hitbox
-  没有公开 typed drag-start API。
+- 本地 GPUI 源码在 Zed commit
+  `69b602c797a62f09318916d24a98c930533fbdc8` 仍然只通过
+  `Interactivity::on_drag` / `StatefulInteractiveElement::on_drag` 暴露 typed drag
+  启动；retained hitbox 没有公开 typed drag-start API。
 - 因此 row shell 仍保留为平台 drag-start 触发器，但 `places/drag.rs` 现在拥有从
   `PlaceSnapshot` 投影 `PlaceDragStartSource` 的逻辑。该投影在安装 GPUI shell 前决定
   path、label、icon、source index、movable flag、export payload 和 preview model。

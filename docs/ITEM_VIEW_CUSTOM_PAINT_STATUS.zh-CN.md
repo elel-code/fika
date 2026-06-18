@@ -97,7 +97,15 @@ Places chrome 默认之后的当前执行路线图是
 
 在此门之前移除 shell 将使架构更不可靠，即使它看起来更接近完全自定义绘制。
 
-当前源审计使用来自 Zed 提交 `f16a469` 的 GPUI `0.2.2`，保持此门关闭。拖拽启动通过 `crates/gpui/src/elements/div.rs` 中的 `Interactivity::on_drag` / `InteractiveElement::on_drag` 暴露，它从交互元素 hitbox 构造类型化拖拽预览。GPUI 自定义元素可以使用 `Window::insert_hitbox()` 插入 hitbox，并可以观察鼠标/拖拽移动，但没有公共 API 从任意保留绘制器 hitbox 启动类型化拖拽。`App::has_active_drag()` 仅是已启动拖拽的观察器。因此实际边界不变：条目和详情拖拽启动 shell 保持，直到 GPUI 暴露该钩子或 Fika 有意携带小型经过审计的 patch。
+当前源审计使用来自 Zed 提交
+`69b602c797a62f09318916d24a98c930533fbdc8` 的 GPUI `0.2.2`，保持此门关闭。
+拖拽启动通过 `crates/gpui/src/elements/div.rs` 中的 `Interactivity::on_drag` /
+`StatefulInteractiveElement::on_drag` 暴露，它从交互元素 hitbox 构造类型化拖拽预览。
+GPUI 自定义元素可以使用 `Window::insert_hitbox()` 插入 hitbox，并可以通过
+`Window::on_mouse_event()` 观察鼠标事件，但没有公共 API 从任意保留绘制器 hitbox
+启动类型化拖拽。`App::has_active_drag()` 仅是已启动拖拽的观察器。因此实际边界不变：
+条目、详情和 Places 拖拽启动 shell 保持，直到 GPUI 暴露该钩子或 Fika 有意携带小型经过审计的
+patch。
 
 现在 shell 仅是拖拽启动边界。Pane 内部条目拖拽悬停不得依赖 GPUI 每元素 `on_drag_move`；运行时证据显示自拖拽可以在没有后续元素拖拽移动回调的情况下发出 `item-start`。Fika 通过保留交互层安装的窗口鼠标监听器跟踪活动条目拖拽，然后将窗口位置通过相同的保留 pane hit-test 路由，该 hit-test 由 Places 和外部放置使用。
 

@@ -173,16 +173,17 @@ Do not remove the remaining GPUI drag-start shells until one of these is true:
 Removing the shell before this gate would make the architecture less reliable,
 even if it looks closer to full custom paint.
 
-Current source audit, using GPUI `0.2.2` from Zed commit `f16a469`, keeps this
-gate closed. Drag initiation is exposed through
-`Interactivity::on_drag` / `InteractiveElement::on_drag` in
-`crates/gpui/src/elements/div.rs`, which constructs the typed drag preview from
-an interactive element hitbox. GPUI custom elements can insert hitboxes with
-`Window::insert_hitbox()` and can observe mouse/drag movement, but there is no
-public API that starts a typed drag from an arbitrary retained painter hitbox.
+Current source audit, using GPUI `0.2.2` from Zed commit
+`69b602c797a62f09318916d24a98c930533fbdc8`, keeps this gate closed. Drag
+initiation is exposed through `Interactivity::on_drag` /
+`StatefulInteractiveElement::on_drag` in `crates/gpui/src/elements/div.rs`,
+which constructs the typed drag preview from an interactive element hitbox.
+GPUI custom elements can insert hitboxes with `Window::insert_hitbox()` and can
+observe mouse events with `Window::on_mouse_event()`, but there is no public API
+that starts a typed drag from an arbitrary retained painter hitbox.
 `App::has_active_drag()` is only an observer for an already-started drag. The
-practical boundary is therefore unchanged: item and Details drag-start shells
-stay until GPUI exposes that hook or Fika intentionally carries a small,
+practical boundary is therefore unchanged: item, Details, and Places drag-start
+shells stay until GPUI exposes that hook or Fika intentionally carries a small,
 audited patch.
 
 The shell is now only the drag initiation boundary. Pane-internal item drag
