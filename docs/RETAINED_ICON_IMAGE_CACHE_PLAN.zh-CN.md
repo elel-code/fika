@@ -198,6 +198,28 @@ full custom icon 路径强行通过 `--gate-default-promotion`。
   placeholder/decode churn，但仍不是默认提升。该运行在滚动到新的 `/etc` 可见条目时仍有约
   24ms 的 visible-item `icon_sync` spike，混合用户目录证据也还没有补齐。
 
+2026-06-19 成对 hybrid 证据：
+
+- Runner：`scripts/run-retained-renderer-evidence.sh --hybrid-icons --skip-build --prefix fika-hybrid-icons-20260619`。
+- `/etc` 日志：
+  `/tmp/fika-hybrid-icons-20260619-icon-hybrid-default-etc.log` 和
+  `/tmp/fika-hybrid-icons-20260619-icon-hybrid-etc.log`。
+- Downloads 日志：
+  `/tmp/fika-hybrid-icons-20260619-icon-hybrid-default-downloads.log` 和
+  `/tmp/fika-hybrid-icons-20260619-icon-hybrid-downloads.log`。
+- 两组比较都通过了 `scripts/compare-item-image-renderers.sh
+  --gate-hybrid-handoff`。
+- `/etc` hybrid 显示 `renderer_state=hybrid-readiness-handoff`、
+  `theme_loaded=444`、`theme_placeholder=0`、`theme_decoded=0`、
+  `theme_prewarm_pending=52`、`max_paint=504us`；默认对照保持
+  `max_image_layer=0`、`max_gpui_image_element=64`。
+- Downloads hybrid 显示 `renderer_state=hybrid-readiness-handoff`、
+  `theme_loaded=310`、`theme_placeholder=0`、`theme_decoded=0`、
+  `theme_prewarm_pending=44`、`max_paint=378us`。
+- 决策：成对证据补齐了之前缺失的混合目录部分，并支持继续向默认 hybrid renderer 推进。
+  但当前仍不更改默认值，因为 `--gate-hybrid-handoff` 证明的是 readiness handoff 稳定性，
+  还不是针对 GPUI 的完整默认提升性能阈值。
+
 ## TODO
 
 - [x] 在 file icon snapshot 路径旁添加 `ThemeIconImageKey` 类型。
@@ -217,10 +239,14 @@ full custom icon 路径强行通过 `--gate-default-promotion`。
 - [x] 添加 app-level readiness handoff 基础。renderer policy 现在可以接收 size/scale
   aware 的 `theme_icon_ready` 输入，`FIKA_HYBRID_THEME_ICONS=1` 使用该输入，同时不改变默认
   GPUI `img()` 路径。
-- [ ] 采集 `/etc` 和混合用户目录的 default-vs-hybrid 成对运行时证据。Hybrid 必须保持
+- [x] 采集 `/etc` 和混合用户目录的 default-vs-hybrid 成对运行时证据。Hybrid 必须保持
   `theme_placeholder=0`，避免 zoom-time `theme_decoded` burst，并证明 ready-key custom
   painting 不慢于默认 GPUI image element 路径，才能考虑任何默认提升。
   2026-06-18 `/etc` 证据已通过 placeholder/decode 部分，但由于 `icon_sync` spike 和混合目录运行仍需跟进，尚未达到完整提升标准。首选 runner：
   `scripts/run-retained-renderer-evidence.sh --hybrid-icons`。
+- [ ] 在切换默认 renderer 前添加更严格的 hybrid 默认提升 gate。当前
+  `--gate-hybrid-handoff` 证明 GPUI fallback、prewarm、ready-key handoff 和没有可见
+  placeholder/decode churn；默认切换还需要为 item-view phase maxima、image paint、
+  static visual variance 和 renderer-policy 分布定义明确性能阈值。
 - [ ] 在配对证据通过且 `docs/ITEM_VIEW_RENDERER_DECISIONS.md` 更新前，保持 GPUI
   `img()` 为默认 MIME/theme icon renderer。

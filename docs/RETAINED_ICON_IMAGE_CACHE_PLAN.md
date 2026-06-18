@@ -227,6 +227,29 @@ Hybrid `/etc` smoke evidence from 2026-06-18:
   when scrolling into new `/etc` entries, and the mixed user-directory evidence
   is still missing.
 
+Paired hybrid evidence from 2026-06-19:
+
+- Runner: `scripts/run-retained-renderer-evidence.sh --hybrid-icons --skip-build --prefix fika-hybrid-icons-20260619`.
+- `/etc` logs:
+  `/tmp/fika-hybrid-icons-20260619-icon-hybrid-default-etc.log` and
+  `/tmp/fika-hybrid-icons-20260619-icon-hybrid-etc.log`.
+- Downloads logs:
+  `/tmp/fika-hybrid-icons-20260619-icon-hybrid-default-downloads.log` and
+  `/tmp/fika-hybrid-icons-20260619-icon-hybrid-downloads.log`.
+- Both comparisons passed `scripts/compare-item-image-renderers.sh
+  --gate-hybrid-handoff`.
+- `/etc` hybrid showed `renderer_state=hybrid-readiness-handoff`,
+  `theme_loaded=444`, `theme_placeholder=0`, `theme_decoded=0`,
+  `theme_prewarm_pending=52`, and `max_paint=504us`; the default comparison
+  remained `max_image_layer=0`, `max_gpui_image_element=64`.
+- Downloads hybrid showed `renderer_state=hybrid-readiness-handoff`,
+  `theme_loaded=310`, `theme_placeholder=0`, `theme_decoded=0`,
+  `theme_prewarm_pending=44`, and `max_paint=378us`.
+- Decision: the paired evidence closes the previous mixed-directory gap and
+  supports continuing toward a default hybrid renderer. It still does not
+  change the default because the current hybrid gate proves readiness handoff
+  stability, not a full default-promotion performance threshold against GPUI.
+
 ## TODO
 
 - [x] Add a `ThemeIconImageKey` type beside the file icon snapshot path.
@@ -248,7 +271,7 @@ Hybrid `/etc` smoke evidence from 2026-06-18:
   now receive a size/scale-aware `theme_icon_ready` input, and
   `FIKA_HYBRID_THEME_ICONS=1` uses that input without changing the default
   GPUI `img()` path.
-- [ ] Capture paired default-vs-hybrid runtime evidence for `/etc` and a mixed
+- [x] Capture paired default-vs-hybrid runtime evidence for `/etc` and a mixed
   user directory. Hybrid must keep `theme_placeholder=0`, avoid zoom-time
   `theme_decoded` bursts, and show that ready-key custom painting is not slower
   than the default GPUI image element path before any default promotion.
@@ -256,5 +279,10 @@ Hybrid `/etc` smoke evidence from 2026-06-18:
   full promotion bar because the `icon_sync` spike and mixed-directory run still
   need follow-up. Preferred runner:
   `scripts/run-retained-renderer-evidence.sh --hybrid-icons`.
+- [ ] Add a stricter hybrid default-promotion gate before switching the default
+  renderer. The current `--gate-hybrid-handoff` proves GPUI fallback, prewarm,
+  ready-key handoff, and no visible placeholder/decode churn; the default switch
+  also needs an explicit performance threshold for item-view phase maxima,
+  image paint, static visual variance, and renderer-policy distribution.
 - [ ] Keep GPUI `img()` as the default MIME/theme icon renderer until the
   paired evidence passes and `docs/ITEM_VIEW_RENDERER_DECISIONS.md` is updated.

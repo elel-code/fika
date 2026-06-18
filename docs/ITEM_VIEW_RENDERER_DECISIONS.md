@@ -328,6 +328,20 @@ for promotion because `/etc` still shows a roughly 24ms visible-item
 `icon_sync` spike when scrolling into new entries, and mixed-directory evidence
 has not been captured.
 
+The paired 2026-06-19 hybrid run closes that mixed-directory evidence gap:
+`scripts/run-retained-renderer-evidence.sh --hybrid-icons --skip-build --prefix
+fika-hybrid-icons-20260619` produced `/etc` and Downloads default-vs-hybrid
+logs, and both passed `scripts/compare-item-image-renderers.sh
+--gate-hybrid-handoff`. `/etc` hybrid reported `theme_loaded=444`,
+`theme_placeholder=0`, `theme_decoded=0`, `theme_prewarm_pending=52`, and
+`max_paint=504us`; Downloads hybrid reported `theme_loaded=310`,
+`theme_placeholder=0`, `theme_decoded=0`, `theme_prewarm_pending=44`, and
+`max_paint=378us`. This supports continuing toward a default hybrid renderer,
+but the default remains GPUI `img()` for ordinary MIME/theme icons until a
+stricter hybrid default-promotion gate compares item-view phase maxima, image
+paint, static visual variance, and renderer-policy distribution against the
+GPUI baseline.
+
 ## Next Renderer Decisions
 
 1. Keep the remaining drag-start shells until the GPUI API boundary changes.
@@ -336,5 +350,7 @@ has not been captured.
 2. Use runtime logs to decide whether any currently custom-painted surface
    should stay custom-painted or fall back to a GPUI renderer over the retained
    model.
-3. Do not start a Places custom-paint migration until item-view runtime DnD and
+3. Add a strict hybrid icon default-promotion gate before switching ordinary
+   MIME/theme icons away from GPUI `img()` by default.
+4. Do not start a Places custom-paint migration until item-view runtime DnD and
    perf gates are refreshed.

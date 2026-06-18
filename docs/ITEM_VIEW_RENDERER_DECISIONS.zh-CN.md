@@ -81,8 +81,21 @@ zoom-time decode churn 的情况下工作（`theme_placeholder=0`、`theme_decod
 `max_gpui_image_element=64`）。这仍不足以提升默认值，因为 `/etc` 滚动进入新条目时仍有约
 24ms 的 visible-item `icon_sync` spike，混合目录证据也还未采集。
 
+2026-06-19 成对 hybrid 运行补齐了混合目录证据缺口：
+`scripts/run-retained-renderer-evidence.sh --hybrid-icons --skip-build --prefix
+fika-hybrid-icons-20260619` 生成了 `/etc` 和 Downloads 的 default-vs-hybrid 日志，且两组都通过
+`scripts/compare-item-image-renderers.sh --gate-hybrid-handoff`。`/etc` hybrid 报告
+`theme_loaded=444`、`theme_placeholder=0`、`theme_decoded=0`、
+`theme_prewarm_pending=52`、`max_paint=504us`；Downloads hybrid 报告
+`theme_loaded=310`、`theme_placeholder=0`、`theme_decoded=0`、
+`theme_prewarm_pending=44`、`max_paint=378us`。这支持继续向默认 hybrid renderer
+推进，但普通 MIME/theme icon 默认仍保持 GPUI `img()`，直到更严格的 hybrid 默认提升 gate
+可以把 item-view phase maxima、image paint、static visual variance 和 renderer-policy
+分布与 GPUI baseline 比较清楚。
+
 ## 下一批渲染器决策
 
 1. 保持剩余 drag-start shells 直到 GPUI API 边界变化。不要将 GPUI per-element `on_drag_move` 用作 pane self-drag 悬停的真实来源；active item-drag window tracker 拥有该路径。
 2. 使用运行时日志决定当前 custom-painted surface 是否保持 custom-paint 或回退到 GPUI 渲染器叠加在 retained model 上。
-3. 在 item-view 运行时 DnD 和 perf 门刷新之前不启动 Places custom-paint 迁移。
+3. 在把普通 MIME/theme icon 默认切离 GPUI `img()` 前，添加严格的 hybrid icon 默认提升 gate。
+4. 在 item-view 运行时 DnD 和 perf 门刷新之前不启动 Places custom-paint 迁移。
