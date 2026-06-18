@@ -29,6 +29,8 @@ cat > "$tmpdir/complete.log" <<'EOF'
 [fika file-grid] pane=1 mode=Compact visible=32 content=1602.5x882 build=400us
 [fika file-grid] pane=1 mode=Icons visible=40 content=587x1168 build=450us
 [fika file-grid] pane=1 mode=Details visible=30 content=601x882 build=420us
+[fika icon-sync] pane=1 mode=Compact candidates=32 cached=20 queued=8 resolved=4 changed=4 budget_exhausted=false total=70us
+[fika icon-sync] pane=1 mode=Icons candidates=40 cached=36 queued=0 resolved=4 changed=4 budget_exhausted=false total=90us
 [fika item-paint-slots] pane=1 mode=Compact inserted=32 content=0 geometry=0 visual=0 unchanged=0 removed=0 entries=32
 [fika item-paint-slots] pane=1 mode=Icons inserted=8 content=0 geometry=32 visual=0 unchanged=0 removed=0 entries=40
 [fika item-paint-slots] pane=1 mode=Details inserted=30 content=0 geometry=0 visual=0 unchanged=0 removed=40 entries=30
@@ -80,6 +82,10 @@ if [[ "$evidence" != *"image_sources"* || "$evidence" != *"theme_placeholder=1"*
 fi
 if [[ "$evidence" != *"item_view_stage_max"* || "$evidence" != *"icon_sync=3us"* ]]; then
     echo "expected renderer evidence to include item-view stage summary" >&2
+    exit 1
+fi
+if [[ "$evidence" != *"icon_sync_frames"* || "$evidence" != *"max_resolved=4"* ]]; then
+    echo "expected renderer evidence to include icon-sync detail summary" >&2
     exit 1
 fi
 if [[ "$evidence" != *"renderer_policy_frames"* ]]; then

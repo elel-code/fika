@@ -1,6 +1,6 @@
 use super::icon_work::{
-    DOLPHIN_VISIBLE_ICON_SYNC_BUDGET,
-    resolve_visible_file_icons_for_raw_grid as resolve_visible_file_icons_for_raw_grid_with_cache,
+    DOLPHIN_VISIBLE_ICON_SYNC_BUDGET, FileIconSyncStats,
+    resolve_visible_file_icons_for_raw_grid_with_stats,
 };
 use super::perf::{ItemViewPerfLogFrame, ItemViewPerfPhase, emit_item_view_perf_log};
 use super::snapshot::{
@@ -353,18 +353,18 @@ impl FikaApp {
         pane_id: PaneId,
         raw_file_grid: &RawFileGridSnapshot,
         file_icon_size: f32,
-    ) -> bool {
-        let changed = resolve_visible_file_icons_for_raw_grid_with_cache(
+    ) -> FileIconSyncStats {
+        let stats = resolve_visible_file_icons_for_raw_grid_with_stats(
             &mut self.file_icons,
             &self.file_icon_resolve_queue,
             raw_file_grid,
             file_icon_size,
             DOLPHIN_VISIBLE_ICON_SYNC_BUDGET,
         );
-        if changed {
+        if stats.changed > 0 {
             self.invalidate_file_grid_visible_snapshot_cache(pane_id);
         }
-        changed
+        stats
     }
 
     pub(crate) fn finish_metadata_role_results(
@@ -558,8 +558,25 @@ impl FikaApp {
         cx: &mut Context<Self>,
     ) -> Option<FileGridVisibleWorkFrame> {
         let icon_sync_started = perf_enabled.then(Instant::now);
-        self.resolve_visible_file_icons_for_raw_grid(pane_id, raw_file_grid, file_icon_size);
+        let icon_sync_stats =
+            self.resolve_visible_file_icons_for_raw_grid(pane_id, raw_file_grid, file_icon_size);
         let icon_sync_elapsed = icon_sync_started.map(|started| started.elapsed());
+        if let Some(elapsed) = icon_sync_elapsed
+            && icon_sync_stats.has_activity()
+        {
+            eprintln!(
+                "[fika icon-sync] pane={} mode={:?} candidates={} cached={} queued={} resolved={} changed={} budget_exhausted={} total={}us",
+                pane_id.0,
+                view_mode,
+                icon_sync_stats.candidates,
+                icon_sync_stats.cached,
+                icon_sync_stats.queued,
+                icon_sync_stats.resolved,
+                icon_sync_stats.changed,
+                icon_sync_stats.budget_exhausted,
+                elapsed.as_micros(),
+            );
+        }
 
         let queue_started = perf_enabled.then(Instant::now);
         let queued_file_grid_model_work = self.queue_file_grid_model_work_for_raw_grid(

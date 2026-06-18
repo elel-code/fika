@@ -8,6 +8,22 @@ use super::snapshot::RawFileGridSnapshot;
 pub(crate) const DOLPHIN_VISIBLE_ICON_SYNC_BUDGET: Duration = Duration::from_millis(200);
 pub(crate) const FILE_ICON_RESOLVE_BATCH_SIZE: usize = 64;
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct FileIconSyncStats {
+    pub(crate) candidates: usize,
+    pub(crate) cached: usize,
+    pub(crate) queued: usize,
+    pub(crate) resolved: usize,
+    pub(crate) changed: usize,
+    pub(crate) budget_exhausted: bool,
+}
+
+impl FileIconSyncStats {
+    pub(crate) fn has_activity(self) -> bool {
+        self.candidates > 0 || self.budget_exhausted
+    }
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct FileIconResolveQueue {
     queued: VecDeque<FileIconResolveRequest>,
@@ -58,19 +74,21 @@ impl FileIconResolveQueue {
     }
 }
 
-pub(crate) fn resolve_visible_file_icons_for_raw_grid(
+pub(crate) fn resolve_visible_file_icons_for_raw_grid_with_stats(
     file_icons: &mut FileIconCache,
     queue: &FileIconResolveQueue,
     raw_file_grid: &RawFileGridSnapshot,
     file_icon_size: f32,
     budget: Duration,
-) -> bool {
+) -> FileIconSyncStats {
     let started = Instant::now();
-    let mut changed = false;
+    let mut stats = FileIconSyncStats::default();
     raw_file_grid.for_each_visible_file_icon_resolve_candidate(file_icon_size, |request| {
         if started.elapsed() >= budget {
+            stats.budget_exhausted = true;
             return false;
         }
+        stats.candidates += 1;
         let queued_request = file_icons.resolve_request_for(
             request.path,
             request.is_dir,
@@ -82,18 +100,25 @@ pub(crate) fn resolve_visible_file_icons_for_raw_grid(
             .as_ref()
             .is_some_and(|request| queue.contains(request))
         {
+            stats.queued += 1;
             return true;
         }
-        changed |= file_icons.resolve_now_for(
+        let changed = file_icons.resolve_now_for(
             request.path,
             request.is_dir,
             request.mime_type.clone(),
             request.mime_magic_checked,
             request.icon_size,
         );
+        if changed {
+            stats.resolved += 1;
+            stats.changed += 1;
+        } else {
+            stats.cached += 1;
+        }
         true
     });
-    changed
+    stats
 }
 
 pub(crate) fn queue_file_icon_resolve_work_for_raw_grid(

@@ -393,6 +393,20 @@ BEGIN {
     }
 }
 
+/^\[fika icon-sync\]/ {
+    icon_sync_count++
+    note_mode(field("mode"))
+    max_assign(single_max, "icon_sync_candidates", field("candidates") + 0)
+    max_assign(single_max, "icon_sync_cached", field("cached") + 0)
+    max_assign(single_max, "icon_sync_queued", field("queued") + 0)
+    max_assign(single_max, "icon_sync_resolved", field("resolved") + 0)
+    max_assign(single_max, "icon_sync_changed", field("changed") + 0)
+    max_assign(single_max, "icon_sync_total", us_field("total"))
+    if (field("budget_exhausted") == "true") {
+        icon_sync_budget_exhausted++
+    }
+}
+
 /^\[fika static-item-visual\]/ {
     static_visual_count++
     mode = field("mode")
@@ -565,6 +579,14 @@ END {
         " icon_sync=" (("item_view_icon_sync" in single_max) ? single_max["item_view_icon_sync"] : 0) "us" \
         " queue=" (("item_view_queue" in single_max) ? single_max["item_view_queue"] : 0) "us" \
         " convert=" (("item_view_convert" in single_max) ? single_max["item_view_convert"] : 0) "us"
+    print "  icon_sync_frames: " (icon_sync_count + 0) \
+        " max_candidates=" (("icon_sync_candidates" in single_max) ? single_max["icon_sync_candidates"] : 0) \
+        " max_cached=" (("icon_sync_cached" in single_max) ? single_max["icon_sync_cached"] : 0) \
+        " max_queued=" (("icon_sync_queued" in single_max) ? single_max["icon_sync_queued"] : 0) \
+        " max_resolved=" (("icon_sync_resolved" in single_max) ? single_max["icon_sync_resolved"] : 0) \
+        " max_changed=" (("icon_sync_changed" in single_max) ? single_max["icon_sync_changed"] : 0) \
+        " budget_exhausted=" (icon_sync_budget_exhausted + 0) \
+        " max_total=" (("icon_sync_total" in single_max) ? single_max["icon_sync_total"] : 0) "us"
     modes_text = ""
     for (mode in modes) {
         modes_text = modes_text (modes_text == "" ? "" : ",") mode
