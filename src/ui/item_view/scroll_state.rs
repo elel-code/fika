@@ -14,7 +14,7 @@ pub(crate) struct ItemViewScrollSync {
     pub(crate) max_scroll_y: f32,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct ItemViewScrollViewSnapshot {
     pub(crate) scroll_x: f32,
     pub(crate) scroll_y: f32,
@@ -157,6 +157,20 @@ impl ItemViewScrollState {
         )
     }
 
+    pub(crate) fn sync_action_from_handle_snapshot(
+        &mut self,
+        pane_id: PaneId,
+        view: ItemViewScrollViewSnapshot,
+    ) -> ItemViewScrollSyncAction {
+        self.sync_action_from_handle(
+            pane_id,
+            view.scroll_x,
+            view.scroll_y,
+            view.max_scroll_x,
+            view.max_scroll_y,
+        )
+    }
+
     pub(crate) fn sync_action_from_handle(
         &mut self,
         pane_id: PaneId,
@@ -190,6 +204,14 @@ impl ItemViewScrollState {
             self.clear_authoritative_scroll(pane_id);
         }
         ItemViewScrollSyncAction::SyncView(sync)
+    }
+
+    pub(crate) fn sync_action_from_authoritative_handle_snapshot(
+        &self,
+        pane_id: PaneId,
+        view: ItemViewScrollViewSnapshot,
+    ) -> ItemViewScrollSyncAction {
+        self.sync_action_from_authoritative_handle(pane_id, view.max_scroll_x, view.max_scroll_y)
     }
 
     pub(crate) fn sync_action_from_authoritative_handle(
@@ -648,6 +670,34 @@ mod tests {
         handle.set_offset(point(px(-320.0), px(0.0)));
         assert_eq!(
             state.sync_action_from_handle(pane_id, 180.0, 0.0, 1_000.0, 0.0),
+            ItemViewScrollSyncAction::SyncView(ItemViewScrollSync {
+                scroll_x: 320.0,
+                scroll_y: 0.0,
+                max_scroll_x: 1_000.0,
+                max_scroll_y: 0.0,
+            })
+        );
+    }
+
+    #[test]
+    fn scroll_state_snapshot_sync_actions_match_view_tuple_policy() {
+        let pane_id = PaneId(1);
+        let view = ItemViewScrollViewSnapshot::new(180.0, 0.0, 1_000.0, 0.0);
+        let mut state = ItemViewScrollState::default();
+        let handle = state.handle_for_pane(pane_id);
+
+        state.mark_authoritative_for_frames(pane_id, 1);
+        handle.set_offset(point(px(0.0), px(0.0)));
+        assert_eq!(
+            state.sync_action_from_handle_snapshot(pane_id, view),
+            ItemViewScrollSyncAction::SyncHandleToView
+        );
+        assert_eq!(handle.offset().x, px(-180.0));
+
+        state.begin_scrollbar_drag(pane_id);
+        handle.set_offset(point(px(-320.0), px(0.0)));
+        assert_eq!(
+            state.sync_action_from_authoritative_handle_snapshot(pane_id, view),
             ItemViewScrollSyncAction::SyncView(ItemViewScrollSync {
                 scroll_x: 320.0,
                 scroll_y: 0.0,

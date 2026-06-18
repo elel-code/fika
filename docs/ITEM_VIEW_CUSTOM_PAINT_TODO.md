@@ -1028,6 +1028,10 @@ by risk and evidence, not by how custom-painted a surface looks.
   scroll action carries pane-view values and whether those values differ from
   the current view snapshot. `src/main.rs` still applies the returned scroll
   values to the pane model.
+- [x] P16ch: Move item-view scroll sync view-snapshot API into the scroll state.
+  `ItemViewScrollViewSnapshot` now carries the pane view scroll tuple through
+  handle-sync and authoritative-handle sync paths, and `src/main.rs` no longer
+  passes those values as loose fields for those production paths.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

@@ -1180,90 +1180,49 @@ impl FikaApp {
         self.item_view_scroll.handle_for_pane(pane_id)
     }
 
+    fn item_view_scroll_view_snapshot_for_pane(
+        &self,
+        pane_id: PaneId,
+    ) -> ItemViewScrollViewSnapshot {
+        self.panes
+            .pane(pane_id)
+            .map(|pane| {
+                ItemViewScrollViewSnapshot::new(
+                    pane.view.scroll_x,
+                    pane.view.scroll_y,
+                    pane.view.max_scroll_x,
+                    pane.view.max_scroll_y,
+                )
+            })
+            .unwrap_or_default()
+    }
+
     fn sync_pane_view_from_item_view_scroll_handle(&mut self, pane_id: PaneId) -> bool {
-        let view_scroll_x = self
-            .panes
-            .pane(pane_id)
-            .map_or(0.0, |pane| pane.view.scroll_x);
-        let view_scroll_y = self
-            .panes
-            .pane(pane_id)
-            .map_or(0.0, |pane| pane.view.scroll_y);
-        let view_max_scroll_x = self
-            .panes
-            .pane(pane_id)
-            .map_or(0.0, |pane| pane.view.max_scroll_x);
-        let view_max_scroll_y = self
-            .panes
-            .pane(pane_id)
-            .map_or(0.0, |pane| pane.view.max_scroll_y);
-        let action = self.item_view_scroll.sync_action_from_handle(
-            pane_id,
-            view_scroll_x,
-            view_scroll_y,
-            view_max_scroll_x,
-            view_max_scroll_y,
-        );
-        self.apply_item_view_scroll_sync_action(
-            pane_id,
-            action,
-            view_scroll_x,
-            view_scroll_y,
-            view_max_scroll_x,
-            view_max_scroll_y,
-        )
+        let view = self.item_view_scroll_view_snapshot_for_pane(pane_id);
+        let action = self
+            .item_view_scroll
+            .sync_action_from_handle_snapshot(pane_id, view);
+        self.apply_item_view_scroll_sync_action(pane_id, action, view)
     }
 
     fn sync_pane_view_from_authoritative_item_view_scroll_handle(
         &mut self,
         pane_id: PaneId,
     ) -> bool {
-        let view_scroll_x = self
-            .panes
-            .pane(pane_id)
-            .map_or(0.0, |pane| pane.view.scroll_x);
-        let view_scroll_y = self
-            .panes
-            .pane(pane_id)
-            .map_or(0.0, |pane| pane.view.scroll_y);
-        let view_max_scroll_x = self
-            .panes
-            .pane(pane_id)
-            .map_or(0.0, |pane| pane.view.max_scroll_x);
-        let view_max_scroll_y = self
-            .panes
-            .pane(pane_id)
-            .map_or(0.0, |pane| pane.view.max_scroll_y);
-        let action = self.item_view_scroll.sync_action_from_authoritative_handle(
-            pane_id,
-            view_max_scroll_x,
-            view_max_scroll_y,
-        );
-        self.apply_item_view_scroll_sync_action(
-            pane_id,
-            action,
-            view_scroll_x,
-            view_scroll_y,
-            view_max_scroll_x,
-            view_max_scroll_y,
-        )
+        let view = self.item_view_scroll_view_snapshot_for_pane(pane_id);
+        let action = self
+            .item_view_scroll
+            .sync_action_from_authoritative_handle_snapshot(pane_id, view);
+        self.apply_item_view_scroll_sync_action(pane_id, action, view)
     }
 
     fn apply_item_view_scroll_sync_action(
         &mut self,
         pane_id: PaneId,
         action: ItemViewScrollSyncAction,
-        view_scroll_x: f32,
-        view_scroll_y: f32,
-        view_max_scroll_x: f32,
-        view_max_scroll_y: f32,
+        view: ItemViewScrollViewSnapshot,
     ) -> bool {
-        let outcome = action.into_outcome(ItemViewScrollViewSnapshot::new(
-            view_scroll_x,
-            view_scroll_y,
-            view_max_scroll_x,
-            view_max_scroll_y,
-        ));
+        let outcome = action.into_outcome(view);
         if let Some(sync) = outcome.sync {
             let _ = self.panes.set_view_scroll(
                 pane_id,
@@ -1296,14 +1255,14 @@ impl FikaApp {
             view.max_scroll_x,
             view.max_scroll_y,
         );
-        let action_changed = self.apply_item_view_scroll_sync_action(
-            pane_id,
-            finish.action,
+        let view_snapshot = ItemViewScrollViewSnapshot::new(
             view.scroll_x,
             view.scroll_y,
             view.max_scroll_x,
             view.max_scroll_y,
         );
+        let action_changed =
+            self.apply_item_view_scroll_sync_action(pane_id, finish.action, view_snapshot);
         action_changed || finish.was_dragging
     }
 
@@ -3883,14 +3842,14 @@ impl FikaApp {
             view.max_scroll_x,
             view.max_scroll_y,
         );
-        let action_changed = self.apply_item_view_scroll_sync_action(
-            pane_id,
-            bounds_sync.action,
+        let view_snapshot = ItemViewScrollViewSnapshot::new(
             view.scroll_x,
             view.scroll_y,
             view.max_scroll_x,
             view.max_scroll_y,
         );
+        let action_changed =
+            self.apply_item_view_scroll_sync_action(pane_id, bounds_sync.action, view_snapshot);
         changed || bounds_sync.handle_changed || action_changed
     }
 
