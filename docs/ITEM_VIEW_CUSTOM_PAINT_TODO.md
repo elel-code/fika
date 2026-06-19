@@ -2221,6 +2221,14 @@ tracks.
   keep owning the same image. Acceptance: the user verifies with debug `/etc`
   USS/private-memory measurement; RSS, release builds, and current GPUI
   fallback are not substitutes for that evidence.
+- [x] P16gbd2: Apply the same QPixmapCache-budgeted release strategy to the
+  Places full row icon path. Root cause: Places owns a separate
+  `PlacesIconImageCache`, which could also retain sidebar icon images through
+  `RetainAllImageCache` and the source map indefinitely. Implementation: Places
+  now finds by `ThemeIconImageKey`, reuses by source path on miss, and only then
+  loads. After each load/insert it evicts LRU semantic keys against the 10MB
+  frame-byte budget; when the last source reference is released it also calls
+  `RetainAllImageCache::remove(Resource::Path)` and `cx.drop_image`.
 - [~] P16gbf: Reduce remaining custom pane cold visual/text paint variance after
   image/icon ownership is stable. Current `/etc` and Downloads logs have image
   and icon-sync under budget, but `[fika static-item-visual]` can still show

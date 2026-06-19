@@ -934,6 +934,22 @@ own unbounded retained image map. USS regression evidence is supplied by the
 user's debug `/etc` private-memory measurement; RSS, release builds, and current
 GPUI fallback are not substitutes for that evidence.
 
+## 2026-06-19 Places Icon Pixmap Cache Budget
+
+After fixing the pane release path, Places full row visual still had the same
+risk: `PlacesIconImageCache` owns its own `RetainAllImageCache` and
+`RetainedThemeIconImageCache`, so appending source images without eviction would
+bypass GPUI `img()` lifecycle for sidebar icons.
+
+Implementation: Places icon loading now follows QPixmapCache-style ordering:
+find by `ThemeIconImageKey` (`iconName + size + scale + theme + mode`), reuse a
+retained `RenderImage` by source path on miss, then load through
+`RetainAllImageCache::load(Resource::Path)` only on a full miss. After each
+load/insert it prunes least-recently-used semantic keys against the same 10MB
+frame-byte budget. When the last source reference is gone, it removes the
+`Resource::Path` from `RetainAllImageCache` and calls
+`cx.drop_image(image, Some(window))`.
+
 ## Next Renderer Decisions
 
 1. Keep the remaining drag-start shells until the GPUI API boundary changes.

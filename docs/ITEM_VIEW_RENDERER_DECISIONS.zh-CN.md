@@ -584,6 +584,19 @@ source path 时，释放 `source path -> RenderImage` entry；有 `Window` 的 p
 USS 回归由用户侧按 debug `/etc` 私有占用验证；这里不再把 RSS、release build 或当前 GPUI
 fallback 作为替代证据。
 
+## 2026-06-19 Places Icon Pixmap Cache Budget
+
+Pane 释放路径修正后，Places full row visual 仍有同类风险：`PlacesIconImageCache` 拥有自己的
+`RetainAllImageCache` 和 `RetainedThemeIconImageCache`，如果只追加 source image 而不淘汰，
+侧栏图标会绕开 GPUI `img()` 的生命周期。
+
+实现：Places 图标加载顺序改为 QPixmapCache 风格：先按 `ThemeIconImageKey`
+（`iconName + size + scale + theme + mode`）find；miss 后按 source path 复用 retained
+`RenderImage`；仍 miss 才通过 `RetainAllImageCache::load(Resource::Path)` 加载并 insert。
+每次 load/insert 后按同样 10MB frame-byte budget 淘汰最近最少使用的 semantic key；最后一个
+source 引用消失时，同时 remove `RetainAllImageCache` 中的 `Resource::Path` 并
+`cx.drop_image(image, Some(window))`。
+
 ## 下一批渲染器决策
 
 1. 保持剩余 drag-start shells 直到 GPUI API 边界变化。不要将 GPUI per-element `on_drag_move` 用作 pane self-drag 悬停的真实来源；active item-drag window tracker 拥有该路径。

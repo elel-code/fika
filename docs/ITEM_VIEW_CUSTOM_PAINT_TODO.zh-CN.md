@@ -904,6 +904,12 @@ Places chrome 默认之后的当前执行入口是
   `RetainAllImageCache::remove(Resource::Path)` 和 `cx.drop_image(image, Some(window))`，
   避免 GPUI resource cache 或 atlas 继续持有。验收：由用户侧用 debug `/etc` USS/私有占用
   测量确认；不要用 RSS、release build 或当前 GPUI fallback 替代该证据。
+- [x] P16gbd2：将同样的 QPixmapCache 预算释放策略应用到 Places full row icon path。根因：
+  Places 拥有独立 `PlacesIconImageCache`，之前同样会通过 `RetainAllImageCache` 和
+  retained source map 长期持有 sidebar icon image。实现：Places 先按
+  `ThemeIconImageKey` find，再按 source path 复用，最后才 load；每次 load/insert 后按 10MB
+  frame-byte budget 淘汰 LRU semantic key；最后一个 source 引用释放时同步
+  `RetainAllImageCache::remove(Resource::Path)` 与 `cx.drop_image`。
 - [~] P16gbf：在 image/icon ownership 稳定后，降低剩余 pane custom visual/text paint 冷帧方差。
   当前 `/etc` 和 Downloads 日志中 image 与 icon-sync 已在预算内，但
   `[fika static-item-visual]` 仍可能出现多毫秒级 cold prepaint/paint。继续对照 Dolphin item

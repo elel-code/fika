@@ -30,6 +30,7 @@ const TRASH_DOT_SIZE: f32 = 7.0;
 const INSERT_INDICATOR_HEIGHT: f32 = 2.0;
 const SECTION_TEXT_X: f32 = 8.0;
 const SECTION_LINE_HEIGHT: f32 = 16.0;
+const PLACES_ICON_PIXMAP_CACHE_LIMIT_KB: usize = 10 * 1024;
 
 pub(super) fn places_row_visual_layer(
     places: Arc<[PlaceSnapshot]>,
@@ -209,6 +210,20 @@ impl PlacesIconImageCache {
             ICON_SIZE.round() as u32,
             window.scale_factor(),
         );
+        if let Some(image) = self.retained_theme_icons.image_for_key(&key) {
+            return Some(image);
+        }
+        if let Some(image) = self
+            .retained_theme_icons
+            .image_for_source_path(path.as_ref())
+        {
+            let retained = self
+                .retained_theme_icons
+                .record_loaded_from_retained_source(key, path.clone(), image);
+            self.prune_retained_icons(window, cx);
+            return retained.image;
+        }
+
         let image_cache = self
             .image_cache
             .get_or_insert_with(|| RetainAllImageCache::new(cx))
@@ -216,7 +231,7 @@ impl PlacesIconImageCache {
         let load_result = image_cache.update(cx, |cache, cx| {
             cache.load(&Resource::Path(path.clone()), window, cx)
         });
-        match load_result {
+        let image = match load_result {
             Some(Ok(image)) => {
                 self.retained_theme_icons
                     .record_loaded(key, path, image)
@@ -224,8 +239,41 @@ impl PlacesIconImageCache {
             }
             Some(Err(_)) => self.retained_theme_icons.record_failed(key, path).image,
             None => self.retained_theme_icons.record_pending(key, path).image,
+        };
+        self.prune_retained_icons(window, cx);
+        image
+    }
+
+    fn prune_retained_icons(&mut self, window: &mut Window, cx: &mut App) {
+        let evicted = self.retained_theme_icons.prune_to_budget(
+            places_icon_pixmap_cache_limit_bytes(),
+            places_render_image_cache_cost_bytes,
+        );
+        let Some(image_cache) = self.image_cache.as_ref().cloned() else {
+            for evicted in evicted {
+                cx.drop_image(evicted.image, Some(window));
+            }
+            return;
+        };
+        for evicted in evicted {
+            if let Some(path) = evicted.resolved_path {
+                let resource = Resource::Path(Arc::<Path>::from(path.into_boxed_path()));
+                image_cache.update(cx, |cache, cx| cache.remove(&resource, window, cx));
+            }
+            cx.drop_image(evicted.image, Some(window));
         }
     }
+}
+
+fn places_render_image_cache_cost_bytes(image: &Arc<RenderImage>) -> usize {
+    (0..image.frame_count())
+        .filter_map(|frame_index| image.as_bytes(frame_index).map(|bytes| bytes.len()))
+        .sum::<usize>()
+        .max(1)
+}
+
+fn places_icon_pixmap_cache_limit_bytes() -> usize {
+    PLACES_ICON_PIXMAP_CACHE_LIMIT_KB * 1024
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]

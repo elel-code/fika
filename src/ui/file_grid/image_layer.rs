@@ -16,7 +16,7 @@ use gpui::{
 
 use crate::FikaApp;
 use crate::ui::icons::{
-    FileIconSnapshot, RetainedThemeIconImageLoadOutcome, ThemeIconImageKey,
+    EvictedThemeIconImage, FileIconSnapshot, RetainedThemeIconImageLoadOutcome, ThemeIconImageKey,
     ThemeIconImageReadinessSnapshot, theme_icon_image_key_for_snapshot, theme_icon_image_size_px,
 };
 
@@ -558,7 +558,7 @@ impl FikaApp {
         &mut self,
         _window: Option<&mut Window>,
         _cx: &mut App,
-    ) -> Vec<crate::ui::icons::EvictedThemeIconImage<Arc<RenderImage>>> {
+    ) -> Vec<EvictedThemeIconImage<Arc<RenderImage>>> {
         self.theme_icon_images.prune_to_budget(
             theme_icon_pixmap_cache_limit_bytes(),
             render_image_cache_cost_bytes,
