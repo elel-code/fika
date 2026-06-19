@@ -71,9 +71,10 @@ change:
 - Custom-theme override: run with `FIKA_CUSTOM_THEME_ICONS=1` to force
   theme/MIME icons back through the custom item-image paint layer.
 - Current default path: run without image renderer overrides. Thumbnails stay
-  on the custom image layer, while MIME/theme icons use GPUI `img()` children
-  over retained item shells. Renderer-policy logs should show
-  `gpui_image_element>0` for visible theme icons.
+  on the custom image layer, while MIME/theme icons use the hybrid renderer:
+  not-yet-ready keys stay on GPUI `img()` children and ready keys paint through
+  the retained custom image layer. Renderer-policy logs may show both
+  `gpui_image_element>0` and `image_layer>0` depending on readiness.
 
 Decision rule: if the custom image layer keeps showing visible first-load
 placeholders or zoom-time decode/size churn while the GPUI `img()` baseline is
@@ -238,20 +239,19 @@ synchronously decode theme icon files during prepaint.
 
 ## Future MIME/Theme Icon Custom Renderer
 
-The current default intentionally keeps Compact/Icons MIME/theme icons on GPUI
-`img()` elements. A future full-custom renderer is allowed only as a separate
-work stream, because the retained model/slot architecture is already in place
-and the remaining risk is image-resource readiness, not item identity.
+The current default is hybrid: Compact/Icons MIME/theme icons stay on GPUI
+`img()` until the retained image for the current key is ready, then hand off to
+the custom image layer. A future full-custom renderer is allowed only as a
+separate work stream, because the retained model/slot architecture is already
+in place and the remaining risk is image-resource readiness, not item identity.
 The detailed retained image-cache design is
 `docs/RETAINED_ICON_IMAGE_CACHE_PLAN.md`.
-The implementation foundation now exists in `src/ui/icons/image_cache.rs` and
-the custom image layer uses that size/scale-aware key when
-`FIKA_CUSTOM_THEME_ICONS=1` is enabled; the default MIME/theme renderer remains
-GPUI `img()` until paired runtime evidence passes
-`scripts/compare-item-image-renderers.sh --gate-default-promotion`.
+The implementation foundation now exists in `src/ui/icons/image_cache.rs`;
+`FIKA_GPUI_THEME_ICONS=1` keeps the old GPUI baseline and
+`FIKA_CUSTOM_THEME_ICONS=1` remains the full custom stress path.
 
-The target architecture should mirror Dolphin's pixmap stability rather than
-the current custom-theme A/B path:
+The full-custom target architecture should mirror Dolphin's pixmap stability
+rather than the custom-theme A/B path:
 
 - Add an explicit retained MIME/theme icon image cache keyed by at least
   `(iconName, icon_size_px)`. Include theme identity, scale factor, or color
@@ -270,13 +270,13 @@ the current custom-theme A/B path:
   stable once the same file-icon kind has a resolved theme path. Any custom
   renderer must paint in the same icon bounds used by layout without forcing a
   new path/decode identity on every zoom step.
-- Consider a hybrid promotion path: keep GPUI `img()` as the default renderer
-  while warming the retained theme-icon image cache, then route a visible icon
+- Keep the hybrid handoff rule unless a future full-custom run beats it:
+  not-yet-ready visible icons stay on GPUI `img()`, and a visible icon routes
   through the custom image layer only when the retained image for its current
   `(iconName, size)` key is ready or when the fallback is a true first-load
   placeholder.
 
-The default renderer policy may switch from GPUI `img()` to the custom
+The default renderer policy may switch from hybrid to a full custom
 MIME/theme image layer only after paired desktop-session evidence proves all of
 the following for `/etc` and a mixed user directory:
 
@@ -298,7 +298,7 @@ the following for `/etc` and a mixed user directory:
 `/tmp/fika-icon-custom-etc-p16k2.log` had `theme_placeholder=118` and
 `theme_decoded=5`, while `/tmp/fika-icon-default-etc-p16k2.log` kept ordinary
 MIME/theme icons on GPUI `img()` with no item-image placeholder/decode churn.
-This keeps the current default policy unchanged.
+At that point, the default policy stayed unchanged.
 
 The opt-in prewarm bridge is now available as `FIKA_PREWARM_THEME_ICONS=1`.
 `/tmp/fika-icon-prewarm-etc-p16k2.log` shows the bridge keeps ordinary

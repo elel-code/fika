@@ -305,5 +305,11 @@ Default-hybrid code-slice evidence from 2026-06-19:
 - [x] Change the default MIME/theme icon renderer policy to hybrid only after
   the code slice preserves the same gate pass on `/etc` and a mixed user
   directory.
-- [ ] Keep GPUI `img()` as the default MIME/theme icon renderer until the
-  paired evidence passes and `docs/ITEM_VIEW_RENDERER_DECISIONS.md` is updated.
+- [x] Update renderer decisions after the hybrid default switch.
+  `docs/ITEM_VIEW_RENDERER_DECISIONS.md` now records the default hybrid policy,
+  `FIKA_GPUI_THEME_ICONS=1` as the old GPUI baseline, and
+  `FIKA_CUSTOM_THEME_ICONS=1` as the full custom stress path.
+- [ ] Keep the hybrid MIME/theme icon renderer as the default until a future
+  full-custom run beats the hybrid/default gate on `/etc` and a mixed user
+  directory without placeholder churn, zoom-time decode bursts, image-paint
+  regressions, or renderer-policy drift.

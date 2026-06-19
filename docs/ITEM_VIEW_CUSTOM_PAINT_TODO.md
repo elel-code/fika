@@ -1631,6 +1631,14 @@ tracks.
   the sidebar typed payload bridge, and row drag-start shells remaining on
   GPUI. The full retained Places gate still requires typed payload and
   drag-start boundary removal.
+- [x] P16fp: Synchronize image decisions after the hybrid icon default.
+  `docs/ITEM_VIEW_RENDERER_DECISIONS.md` and
+  `docs/RETAINED_ICON_IMAGE_CACHE_PLAN.md` now treat hybrid as the current
+  default, `FIKA_GPUI_THEME_ICONS=1` as the old GPUI baseline, and
+  `FIKA_CUSTOM_THEME_ICONS=1` as the full-custom stress path. The remaining
+  image TODO is to keep hybrid default until a future full-custom run beats the
+  hybrid/default gate on `/etc` and a mixed directory without placeholder,
+  zoom-decode, image-paint, or renderer-policy regressions.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

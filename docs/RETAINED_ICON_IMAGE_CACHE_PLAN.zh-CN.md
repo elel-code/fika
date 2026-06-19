@@ -269,5 +269,10 @@ full custom icon 路径强行通过 `--gate-default-promotion`。
   static visual variance 和 renderer-policy 分布定义明确性能阈值。
 - [x] 只有在代码切片继续让 `/etc` 和混合用户目录通过同一 gate 后，才把默认 MIME/theme
   icon renderer policy 改成 hybrid。
-- [ ] 在配对证据通过且 `docs/ITEM_VIEW_RENDERER_DECISIONS.md` 更新前，保持 GPUI
-  `img()` 为默认 MIME/theme icon renderer。
+- [x] 在 hybrid 默认切换后更新 renderer decisions。
+  `docs/ITEM_VIEW_RENDERER_DECISIONS.zh-CN.md` 现在记录默认 hybrid policy、
+  `FIKA_GPUI_THEME_ICONS=1` 作为旧 GPUI baseline，以及 `FIKA_CUSTOM_THEME_ICONS=1`
+  作为 full custom 压力路径。
+- [ ] 在未来 full-custom 运行能在 `/etc` 和混合用户目录中击败 hybrid/default gate，且没有
+  placeholder churn、zoom-time decode burst、image-paint 回归或 renderer-policy 漂移前，
+  保持 hybrid MIME/theme icon renderer 为默认。

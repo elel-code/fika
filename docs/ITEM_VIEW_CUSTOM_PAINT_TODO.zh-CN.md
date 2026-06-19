@@ -540,6 +540,13 @@ Places chrome 默认之后的当前执行入口是
   chrome 加 retained row/section target delivery；仍在 GPUI 上的只剩 text/icons、
   sidebar typed payload bridge 和 row drag-start shell。完整 retained Places gate 仍要求移除
   typed payload 和 drag-start 边界。
+- [x] P16fp：在 hybrid icon 默认后同步 image decisions。
+  `docs/ITEM_VIEW_RENDERER_DECISIONS.zh-CN.md` 和
+  `docs/RETAINED_ICON_IMAGE_CACHE_PLAN.zh-CN.md` 现在把 hybrid 视为当前默认，
+  `FIKA_GPUI_THEME_ICONS=1` 视为旧 GPUI baseline，`FIKA_CUSTOM_THEME_ICONS=1` 视为
+  full-custom 压力路径。剩余 image TODO 是保持 hybrid 默认，直到未来 full-custom 运行能在
+  `/etc` 和混合目录中击败 hybrid/default gate，且没有 placeholder、zoom-decode、
+  image-paint 或 renderer-policy 回归。
 - [ ] P16q：在每个 P16 实现切片之后，单独提交并附带相关验证：仅文档切片需要 `git diff --check`；代码切片需要 `cargo fmt`、`cargo check`、`cargo test -q`、`scripts/check-item-view-perf-analyzer.sh`、`scripts/check-places-perf-analyzer.sh` 和 `git diff --check`。
 - [x] P16r：记录运行时自测试和突破记录规则。可重复的滚动、缩放、启动图标、调整大小、模式切换和 Places 目标回退应在依赖手动计时之前通过 autosmoke 日志和分析器脚本重现。任何确认的优化突破必须记录症状、Dolphin 比较边界、根本原因、实现、保存的日志/分析器命令和未来回归守卫在拥有的设计或决策文档中。
 
