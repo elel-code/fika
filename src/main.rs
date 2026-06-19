@@ -140,14 +140,14 @@ use ui::places::PlacePaintSlotCache;
 #[cfg(test)]
 use ui::places::{
     DEVICES_GROUP, NETWORK_GROUP, REMOVABLE_DEVICES_GROUP, active_place_index,
-    build_places_with_devices, place_is_mounted, places_sidebar_width_from_drag,
+    build_places_with_devices, default_place_label, place_is_mounted,
+    places_sidebar_width_from_drag,
 };
 use ui::places::{
     PLACES_SIDEBAR_DEFAULT_WIDTH, PlaceDrag, PlaceEntry, PlaceSnapshot, PlacesAutosmokeScenario,
     PlacesLayoutAutosmokeState, PlacesRowTextShapeCache, PlacesSidebarResizeDrag, build_places,
-    clamp_places_sidebar_width, default_place_label, places_panel_button,
-    places_panel_icon_snapshot, places_sidebar_splitter, read_live_device_snapshot,
-    start_places_autosmoke,
+    clamp_places_sidebar_width, places_panel_button, places_panel_icon_snapshot,
+    places_sidebar_splitter, read_live_device_snapshot, start_places_autosmoke,
 };
 use ui::properties_dialog::{
     PropertiesDialogState, properties_dialog_overlay, properties_for_path, properties_for_selection,
@@ -3472,25 +3472,6 @@ impl FikaApp {
         }
     }
 
-    fn start_add_place(&mut self, pane_id: PaneId) {
-        let Some(path) = self
-            .panes
-            .pane(pane_id)
-            .map(|pane| pane.current_dir.clone())
-        else {
-            return;
-        };
-        self.panes.focus(pane_id);
-        self.clear_rename_draft_for_pane(pane_id);
-        self.clear_location_draft_for_pane(pane_id);
-        self.place_draft = Some(PlaceDraft::for_add(
-            pane_id,
-            default_place_label(&path),
-            &path,
-        ));
-        self.set_pane_status(pane_id, format!("Adding place {}", path.display()));
-    }
-
     fn start_add_network_drive(&mut self, pane_id: PaneId) {
         self.panes.focus(pane_id);
         self.clear_rename_draft_for_pane(pane_id);
@@ -3503,23 +3484,6 @@ impl FikaApp {
             path: "smb://server/share/".to_string(),
         });
         self.set_pane_status(pane_id, "Adding network drive");
-    }
-
-    fn start_edit_place(&mut self, pane_id: PaneId, path: PathBuf) {
-        let Some(place) = self
-            .places
-            .iter()
-            .find(|place| place.path == path && place.editable)
-            .cloned()
-        else {
-            self.set_pane_status(pane_id, "Place cannot be edited");
-            return;
-        };
-        self.panes.focus(pane_id);
-        self.clear_rename_draft_for_pane(pane_id);
-        self.clear_location_draft_for_pane(pane_id);
-        self.place_draft = Some(PlaceDraft::for_edit(pane_id, place.label, &place.path));
-        self.set_pane_status(pane_id, "Editing place");
     }
 
     fn handle_place_draft_keystroke(&mut self, keystroke: &gpui::Keystroke) -> bool {

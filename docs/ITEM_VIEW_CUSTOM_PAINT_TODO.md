@@ -1721,6 +1721,12 @@ tracks.
   mapping, persistence, and status updates. The low-level
   `commit_user_place_draft()` helper stays private to the user-place edit
   module.
+- [x] P16gae: Move app-facing add/edit place draft startup into the Places user
+  facade. `src/ui/places/user.rs` now owns `start_add_place()` and
+  `start_edit_place()` on `FikaApp`, including pane focus, conflicting draft
+  cleanup, default label projection, editable-place lookup, draft creation, and
+  status updates. `src/main.rs` keeps the network-drive draft startup for now
+  because that path has separate network-auth semantics.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

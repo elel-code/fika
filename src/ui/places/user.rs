@@ -10,6 +10,9 @@ use std::path::{Path, PathBuf};
 use fika_core::PaneId;
 
 use crate::FikaApp;
+use crate::ui::place_draft::PlaceDraft;
+
+use super::model::default_place_label;
 
 impl FikaApp {
     pub(crate) fn user_places(&self) -> Vec<fika_core::UserPlace> {
@@ -129,5 +132,41 @@ impl FikaApp {
             return;
         }
         self.set_pane_status(draft.pane_id, message);
+    }
+
+    pub(crate) fn start_add_place(&mut self, pane_id: PaneId) {
+        let Some(path) = self
+            .panes
+            .pane(pane_id)
+            .map(|pane| pane.current_dir.clone())
+        else {
+            return;
+        };
+        self.panes.focus(pane_id);
+        self.clear_rename_draft_for_pane(pane_id);
+        self.clear_location_draft_for_pane(pane_id);
+        self.place_draft = Some(PlaceDraft::for_add(
+            pane_id,
+            default_place_label(&path),
+            &path,
+        ));
+        self.set_pane_status(pane_id, format!("Adding place {}", path.display()));
+    }
+
+    pub(crate) fn start_edit_place(&mut self, pane_id: PaneId, path: PathBuf) {
+        let Some(place) = self
+            .places
+            .iter()
+            .find(|place| place.path == path && place.editable)
+            .cloned()
+        else {
+            self.set_pane_status(pane_id, "Place cannot be edited");
+            return;
+        };
+        self.panes.focus(pane_id);
+        self.clear_rename_draft_for_pane(pane_id);
+        self.clear_location_draft_for_pane(pane_id);
+        self.place_draft = Some(PlaceDraft::for_edit(pane_id, place.label, &place.path));
+        self.set_pane_status(pane_id, "Editing place");
     }
 }

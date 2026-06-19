@@ -22,9 +22,9 @@ pub(crate) use drag::PlaceDrag;
 #[cfg(test)]
 pub(crate) use model::{
     DEVICES_GROUP, NETWORK_GROUP, REMOVABLE_DEVICES_GROUP, active_place_index,
-    build_places_with_devices, place_is_mounted,
+    build_places_with_devices, default_place_label, place_is_mounted,
 };
-pub(crate) use model::{PlaceEntry, build_places, default_place_label, read_live_device_snapshot};
+pub(crate) use model::{PlaceEntry, build_places, read_live_device_snapshot};
 pub(crate) use paint_slots::PlacePaintSlotCache;
 pub(crate) use sidebar::places_sidebar;
 #[cfg(test)]
