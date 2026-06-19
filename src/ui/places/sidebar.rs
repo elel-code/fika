@@ -349,7 +349,6 @@ pub(crate) fn places_sidebar(
             places.clone(),
             app.clone(),
             places_icon_image_cache,
-            targeting_state.clone(),
             paint_row_text,
             warm_row_text_shapes,
             paint_row_icon,

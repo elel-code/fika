@@ -63,8 +63,6 @@ pub(super) fn place_row(
         .flex()
         .items_center()
         .gap_2()
-        .px_2()
-        .py_1()
         .rounded_md()
         .border_1()
         .border_color(if custom_chrome {
@@ -80,7 +78,13 @@ pub(super) fn place_row(
         .when(highlight.hover_enabled, |row| {
             row.hover(move |row| {
                 row.bg(if custom_chrome {
-                    rgba(0x00000000)
+                    if row_drop_target {
+                        rgba(0xf59e0b26)
+                    } else if active {
+                        rgba(0x2f6fed18)
+                    } else {
+                        rgba(0x64748b18)
+                    }
                 } else {
                     place_row_hover_background(active, row_drop_target)
                 })
@@ -90,6 +94,11 @@ pub(super) fn place_row(
             row_shell_cursor_enabled && (mounted || device || network),
             |row| row.cursor_pointer(),
         );
+    let row = if custom_chrome {
+        row.w_full().h(px(PLACE_ROW_HEIGHT))
+    } else {
+        row.px_2().py_1()
+    };
     let mut row = install_place_drag_start_shell(row, place_drag_source);
 
     if row_shell_targeting_enabled {
@@ -138,10 +147,6 @@ pub(super) fn place_row(
     } else {
         row
     };
-
-    if custom_chrome {
-        row = row.w_full().h(px(PLACE_ROW_HEIGHT));
-    }
 
     if gpui_icon {
         row = row.child(place_icon_view(&place.icon, active));

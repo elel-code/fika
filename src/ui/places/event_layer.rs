@@ -50,7 +50,6 @@ impl PlacesEventLayerMode {
 
 #[derive(Default)]
 pub(super) struct PlacesEventTargetingState {
-    hovered_visible_index: Option<usize>,
     pending_left: Option<PlacesEventTargetingPending>,
     retained_dnd_target: Option<PlacesEventDndDropTarget>,
 }
@@ -58,18 +57,6 @@ pub(super) struct PlacesEventTargetingState {
 impl PlacesEventTargetingState {
     pub(super) fn new() -> Self {
         Self::default()
-    }
-
-    pub(super) fn hovered_visible_index(&self) -> Option<usize> {
-        self.hovered_visible_index
-    }
-
-    fn set_hovered_visible_index(&mut self, hovered_visible_index: Option<usize>) -> bool {
-        if self.hovered_visible_index == hovered_visible_index {
-            return false;
-        }
-        self.hovered_visible_index = hovered_visible_index;
-        true
     }
 }
 
@@ -100,13 +87,6 @@ pub(super) fn places_event_probe_layer(
         move |bounds, paint_state, window, _cx| {
             let paint_started = Instant::now();
             if mode.pointer_delivery_enabled() {
-                sync_places_event_hover_target(
-                    &paint_state,
-                    paint_targeting_state.clone(),
-                    paint_app.clone(),
-                    window,
-                    _cx,
-                );
                 apply_places_event_pointer_cursor(&paint_state, window);
                 install_places_event_pointer_leave_handler(
                     paint_app.clone(),
@@ -156,41 +136,6 @@ pub(super) fn places_event_probe_layer(
         layer = install_places_event_dnd_handlers(layer, geometry, app, targeting_state);
     }
     layer
-}
-
-fn sync_places_event_hover_target(
-    state: &PlacesEventProbePaintState,
-    targeting_state: Option<Entity<PlacesEventTargetingState>>,
-    app: WeakEntity<FikaApp>,
-    window: &Window,
-    cx: &mut App,
-) {
-    let Some(targeting_state) = targeting_state else {
-        return;
-    };
-    let hovered_visible_index =
-        places_event_hovered_hitbox(&state.hitboxes, window).and_then(|hitbox| {
-            match hitbox.target {
-                PlacesEventProbeHitboxTarget::Row {
-                    visible_index,
-                    activatable: true,
-                } => Some(visible_index),
-                PlacesEventProbeHitboxTarget::Row {
-                    activatable: false, ..
-                }
-                | PlacesEventProbeHitboxTarget::Section { .. } => None,
-            }
-        });
-    let changed = targeting_state.update(cx, |state, cx| {
-        let changed = state.set_hovered_visible_index(hovered_visible_index);
-        if changed {
-            cx.notify();
-        }
-        changed
-    });
-    if changed {
-        let _ = app.update(cx, |_this, cx| cx.notify());
-    }
 }
 
 struct PlacesEventProbePaintState {
@@ -960,17 +905,5 @@ mod tests {
         assert!(places_event_probe_intersects_y_range(90.0, 30.0, visible));
         assert!(!places_event_probe_intersects_y_range(120.0, 30.0, visible));
         assert!(!places_event_probe_intersects_y_range(0.0, 30.0, None));
-    }
-
-    #[test]
-    fn event_targeting_state_tracks_hovered_visible_row_changes() {
-        let mut state = PlacesEventTargetingState::new();
-
-        assert_eq!(state.hovered_visible_index(), None);
-        assert!(state.set_hovered_visible_index(Some(2)));
-        assert_eq!(state.hovered_visible_index(), Some(2));
-        assert!(!state.set_hovered_visible_index(Some(2)));
-        assert!(state.set_hovered_visible_index(None));
-        assert_eq!(state.hovered_visible_index(), None);
     }
 }

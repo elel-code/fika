@@ -19,9 +19,6 @@ pub(super) fn group_heading(
 ) -> Stateful<Div> {
     let mut heading = div()
         .id(format!("place-group-{label}"))
-        .px_2()
-        .pt_2()
-        .pb_1()
         .text_xs()
         .text_color(rgb(0x6b7280));
     if shell_targeting_enabled {
@@ -37,7 +34,7 @@ pub(super) fn group_heading(
     let heading = if custom_visual {
         heading.h(px(PLACE_SECTION_HEADING_HEIGHT))
     } else {
-        heading
+        heading.px_2().pt_2().pb_1()
     };
     let heading = if shell_dnd_enabled {
         install_section_dnd(heading, insert_index, cx)
