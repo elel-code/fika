@@ -11,9 +11,9 @@ use gpui::{
 use crate::FikaApp;
 use crate::ui::drag_drop::{
     DragPreviewLayout, FileTransferMode, ItemDragPayload, PathListDropTargetKind,
-    PathListDropTargetUpdate, drag_preview_layout_for_cursor_offset, item_drop_reject_reason,
-    refresh_active_drag_cursor_for_drop_menu, refresh_active_drag_cursor_for_transfer_mode,
-    refresh_active_drag_cursor_not_allowed,
+    PathListDropTargetUpdate, debug_dnd_log, debug_paths, drag_preview_layout_for_cursor_offset,
+    item_drop_reject_reason, refresh_active_drag_cursor_for_drop_menu,
+    refresh_active_drag_cursor_for_transfer_mode, refresh_active_drag_cursor_not_allowed,
 };
 use crate::ui::icons::{FileIconSnapshot, cached_icon_or_fallback};
 use crate::ui::places::PlaceDrag;
@@ -334,25 +334,6 @@ fn item_drag_icon_or_fallback(icon: FileIconSnapshot) -> gpui::AnyElement {
             .child(marker.as_ref().to_string())
             .into_any_element()
     })
-}
-
-fn debug_dnd_log(message: impl FnOnce() -> String) {
-    if crate::dnd_debug_enabled() {
-        eprintln!("[fika dnd] {}", message());
-    }
-}
-
-fn debug_paths(paths: &[PathBuf]) -> String {
-    const MAX_PATHS: usize = 3;
-    let mut rendered = paths
-        .iter()
-        .take(MAX_PATHS)
-        .map(|path| path.display().to_string())
-        .collect::<Vec<_>>();
-    if paths.len() > MAX_PATHS {
-        rendered.push(format!("+{} more", paths.len() - MAX_PATHS));
-    }
-    rendered.join(",")
 }
 
 fn update_active_item_drag_drop_target_from_position(

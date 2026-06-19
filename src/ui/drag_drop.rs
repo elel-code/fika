@@ -1,6 +1,8 @@
 mod preview;
 mod state;
 
+use std::path::PathBuf;
+
 pub(crate) use fika_core::FileTransferMode;
 #[cfg(test)]
 pub(crate) use preview::drag_preview_content_origin_for_cursor_offset;
@@ -47,4 +49,23 @@ pub(crate) fn refresh_active_drag_cursor_not_allowed(
     if cx.active_drag_cursor_style() != Some(new_cursor) {
         cx.set_active_drag_cursor_style(new_cursor, window);
     }
+}
+
+pub(crate) fn debug_dnd_log(message: impl FnOnce() -> String) {
+    if crate::dnd_debug_enabled() {
+        eprintln!("[fika dnd] {}", message());
+    }
+}
+
+pub(crate) fn debug_paths(paths: &[PathBuf]) -> String {
+    const MAX_PATHS: usize = 3;
+    let mut rendered = paths
+        .iter()
+        .take(MAX_PATHS)
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>();
+    if paths.len() > MAX_PATHS {
+        rendered.push(format!("+{} more", paths.len() - MAX_PATHS));
+    }
+    rendered.join(",")
 }

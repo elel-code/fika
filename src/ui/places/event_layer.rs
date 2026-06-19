@@ -9,7 +9,7 @@ use gpui::{
 };
 
 use crate::FikaApp;
-use crate::ui::drag_drop::item_drop_reject_reason;
+use crate::ui::drag_drop::{debug_dnd_log, item_drop_reject_reason};
 use crate::ui::file_grid::ItemDrag;
 
 use super::drag::PlaceDrag;
@@ -377,7 +377,10 @@ fn install_places_event_dnd_handlers(
             let state = state.clone();
             move |event, window, cx| {
                 if !event.bounds.contains(&event.event.position) {
-                    let _ = app.update(cx, |this, cx| places_event_dnd_leave(this, &state, cx));
+                    let changed = app
+                        .update(cx, |this, cx| places_event_dnd_leave(this, &state, cx))
+                        .unwrap_or(false);
+                    debug_places_dnd_leave("item", event.event.position, changed);
                     return;
                 }
                 let payload = event.drag(cx).payload();
@@ -407,7 +410,10 @@ fn install_places_event_dnd_handlers(
             let state = state.clone();
             move |event, window, cx| {
                 if !event.bounds.contains(&event.event.position) {
-                    let _ = app.update(cx, |this, cx| places_event_dnd_leave(this, &state, cx));
+                    let changed = app
+                        .update(cx, |this, cx| places_event_dnd_leave(this, &state, cx))
+                        .unwrap_or(false);
+                    debug_places_dnd_leave("external", event.event.position, changed);
                     return;
                 }
                 let source_paths = event.drag(cx).paths().to_vec();
@@ -437,7 +443,10 @@ fn install_places_event_dnd_handlers(
             let state = state.clone();
             move |event, window, cx| {
                 if !event.bounds.contains(&event.event.position) {
-                    let _ = app.update(cx, |this, cx| places_event_dnd_leave(this, &state, cx));
+                    let changed = app
+                        .update(cx, |this, cx| places_event_dnd_leave(this, &state, cx))
+                        .unwrap_or(false);
+                    debug_places_dnd_leave("place", event.event.position, changed);
                     return;
                 }
                 let drag = event.drag(cx);
@@ -543,6 +552,18 @@ fn places_event_dnd_leave(
         cx.notify();
     }
     changed
+}
+
+fn debug_places_dnd_leave(kind: &'static str, position: gpui::Point<Pixels>, changed: bool) {
+    debug_dnd_log(|| {
+        format!(
+            "places-dnd-leave kind={} pos=({:.1},{:.1}) changed={}",
+            kind,
+            position.x.as_f32(),
+            position.y.as_f32(),
+            changed
+        )
+    });
 }
 
 fn places_event_path_list_drag_move(
