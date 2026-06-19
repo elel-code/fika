@@ -324,6 +324,8 @@ pub(crate) fn places_sidebar(
     let row_visual_handoff =
         places_row_visual_handoff_state(row_visual_policy, &places, row_count, window, cx);
     let paint_row_text = row_visual_policy.paints_text() && !row_visual_handoff.force_gpui_text;
+    let warm_row_text_shapes =
+        row_visual_policy.paints_text() && row_visual_handoff.force_gpui_text;
     let paint_row_icon = row_visual_policy.paints_icon() && !row_visual_handoff.force_gpui_icon;
     let state = window.use_keyed_state("places-sidebar-scrollbar", cx, |_, _| {
         PlacesSidebarScrollState::new()
@@ -336,7 +338,13 @@ pub(crate) fn places_sidebar(
     });
     let app = cx.weak_entity();
     let row_visual_layer = custom_row_visuals.then(|| {
-        places_row_visual_layer(places.clone(), app.clone(), paint_row_text, paint_row_icon)
+        places_row_visual_layer(
+            places.clone(),
+            app.clone(),
+            paint_row_text,
+            warm_row_text_shapes,
+            paint_row_icon,
+        )
     });
     let event_probe_layer = event_delivery_policy
         .retained_event_layer_enabled()

@@ -171,12 +171,22 @@ EOF
 
 handoff_summary="$("$analyzer" \
     --expect-custom-row-handoff-policy \
+    --row-visual-prepaint-us 300 \
     --row-visual-paint-us 1000 \
+    --row-visual-warm-prepaint-us 300 \
     --row-visual-warm-paint-us 1000 \
     "$tmpdir/custom-row-full-handoff.log")"
 
 if [[ "$handoff_summary" != *"places_row_handoff_frames=4 max_rows=11 enabled=1 fallback=1 ready=1 valid_fallback=1 valid_ready=1 max_frames_seen=2 max_required_frames=2 max_paint_text=1 max_paint_icon=1 max_gpui_text=1 max_gpui_icon=1"* ]]; then
     echo "expected full custom Places row handoff summary" >&2
+    exit 1
+fi
+
+if "$analyzer" \
+    --expect-custom-row-handoff-policy \
+    --row-visual-warm-prepaint-us 100 \
+    "$tmpdir/custom-row-full-handoff.log" >/dev/null 2>&1; then
+    echo "expected full custom Places handoff warm-prepaint gate to fail" >&2
     exit 1
 fi
 

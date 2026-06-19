@@ -104,8 +104,15 @@ Options:
   --row-visual-paint-us N
       Fail if any [fika places-row-visual] paint exceeds N microseconds.
 
+  --row-visual-prepaint-us N
+      Fail if any [fika places-row-visual] prepaint exceeds N microseconds.
+
   --row-visual-warm-paint-us N
       Fail if any [fika places-row-visual] paint after the first two frames
+      exceeds N microseconds.
+
+  --row-visual-warm-prepaint-us N
+      Fail if any [fika places-row-visual] prepaint after the first two frames
       exceeds N microseconds.
 
   -h, --help
@@ -132,7 +139,9 @@ snapshot_us=""
 sidebar_build_us=""
 slot_project_us=""
 row_visual_paint_us=""
+row_visual_prepaint_us=""
 row_visual_warm_paint_us=""
+row_visual_warm_prepaint_us=""
 log_path=""
 
 while [[ $# -gt 0 ]]; do
@@ -230,6 +239,18 @@ while [[ $# -gt 0 ]]; do
         --row-visual-paint-us=*)
             row_visual_paint_us="${1#--row-visual-paint-us=}"
             ;;
+        --row-visual-prepaint-us)
+            if [[ $# -lt 2 || "$2" == --* ]]; then
+                echo "--row-visual-prepaint-us requires a numeric value" >&2
+                usage >&2
+                exit 2
+            fi
+            row_visual_prepaint_us="$2"
+            shift
+            ;;
+        --row-visual-prepaint-us=*)
+            row_visual_prepaint_us="${1#--row-visual-prepaint-us=}"
+            ;;
         --row-visual-warm-paint-us)
             if [[ $# -lt 2 || "$2" == --* ]]; then
                 echo "--row-visual-warm-paint-us requires a numeric value" >&2
@@ -241,6 +262,18 @@ while [[ $# -gt 0 ]]; do
             ;;
         --row-visual-warm-paint-us=*)
             row_visual_warm_paint_us="${1#--row-visual-warm-paint-us=}"
+            ;;
+        --row-visual-warm-prepaint-us)
+            if [[ $# -lt 2 || "$2" == --* ]]; then
+                echo "--row-visual-warm-prepaint-us requires a numeric value" >&2
+                usage >&2
+                exit 2
+            fi
+            row_visual_warm_prepaint_us="$2"
+            shift
+            ;;
+        --row-visual-warm-prepaint-us=*)
+            row_visual_warm_prepaint_us="${1#--row-visual-warm-prepaint-us=}"
             ;;
         -h|--help)
             usage
@@ -269,7 +302,7 @@ if [[ -z "$log_path" ]]; then
     exit 2
 fi
 
-for value_name in snapshot_us sidebar_build_us slot_project_us row_visual_paint_us row_visual_warm_paint_us; do
+for value_name in snapshot_us sidebar_build_us slot_project_us row_visual_paint_us row_visual_prepaint_us row_visual_warm_paint_us row_visual_warm_prepaint_us; do
     value="${!value_name}"
     if [[ -n "$value" && ! "$value" =~ ^[0-9]+$ ]]; then
         echo "--${value_name//_/-} must be an integer microsecond value" >&2
@@ -297,7 +330,9 @@ awk \
     -v sidebar_build_limit="$sidebar_build_us" \
     -v slot_project_limit="$slot_project_us" \
     -v row_visual_paint_limit="$row_visual_paint_us" \
-    -v row_visual_warm_paint_limit="$row_visual_warm_paint_us" '
+    -v row_visual_prepaint_limit="$row_visual_prepaint_us" \
+    -v row_visual_warm_paint_limit="$row_visual_warm_paint_us" \
+    -v row_visual_warm_prepaint_limit="$row_visual_warm_prepaint_us" '
 function field(name,    prefix, i, value) {
     prefix = name "="
     for (i = 1; i <= NF; i++) {
@@ -1045,8 +1080,14 @@ END {
     if (row_visual_paint_limit != "" && max_values["row_visual_paint"] > row_visual_paint_limit) {
         fail("places row visual paint exceeded threshold: " max_values["row_visual_paint"] "us > " row_visual_paint_limit "us")
     }
+    if (row_visual_prepaint_limit != "" && max_values["row_visual_prepaint"] > row_visual_prepaint_limit) {
+        fail("places row visual prepaint exceeded threshold: " max_values["row_visual_prepaint"] "us > " row_visual_prepaint_limit "us")
+    }
     if (row_visual_warm_paint_limit != "" && max_values["row_visual_warm_paint"] > row_visual_warm_paint_limit) {
         fail("places warm row visual paint exceeded threshold: " max_values["row_visual_warm_paint"] "us > " row_visual_warm_paint_limit "us")
+    }
+    if (row_visual_warm_prepaint_limit != "" && max_values["row_visual_warm_prepaint"] > row_visual_warm_prepaint_limit) {
+        fail("places warm row visual prepaint exceeded threshold: " max_values["row_visual_warm_prepaint"] "us > " row_visual_warm_prepaint_limit "us")
     }
     if (require_autosmoke == "true") {
         if (!autosmoke_start_seen || !autosmoke_complete_seen) {

@@ -1372,6 +1372,27 @@ tracks.
   prepaint miss (`max_prepaint=1175us` in this run), cover overflow/layout
   handoff evidence, and extend the same stable-key/ready-only pattern to real
   image resources instead of only fallback vector Places icons.
+- [x] P16dz5: Use the handoff warmup frames to prefill retained Places row text
+  shapes and gate row-visual prepaint. Root cause: P16dz4 moved the visible
+  text/glyph paint spike out of the handoff path, but the first ready frame
+  still paid a `PlacesRowTextShapeCache` miss in prepaint. Implementation:
+  `places_row_visual_layer` now accepts a `warm_text_shapes` input; while
+  `FIKA_PLACES_ROW_VISUAL_HANDOFF=1` is in fallback mode it keeps GPUI
+  text/icons visible, paints only chrome, and shapes visible labels into the
+  app-owned cache without painting them. `scripts/analyze-places-perf.sh` now
+  adds `--row-visual-prepaint-us` and `--row-visual-warm-prepaint-us` gates.
+  Evidence: `/tmp/fika-places-full-handoff-prewarm.log` passes
+  `--expect-custom-row-handoff-policy --row-visual-prepaint-us 300
+  --row-visual-paint-us 1000 --row-visual-warm-prepaint-us 100
+  --row-visual-warm-paint-us 1000`, with `max_prepaint=113us`,
+  `max_warm_prepaint=54us`, and `max_warm_paint=282us`. Overflow and layout
+  smokes also pass handoff gates: `/tmp/fika-places-full-handoff-overflow.log`
+  has `max_painted=29`, `max_warm_prepaint=77us`, `max_warm_paint=1058us`;
+  `/tmp/fika-places-full-handoff-layout.log` has `max_warm_prepaint=47us` and
+  `max_warm_paint=282us`. Remaining work before default promotion: decide
+  whether overflow full-custom text paint around 1ms is acceptable against
+  chrome/default evidence, then apply the same ready-only retained-resource
+  model to real image resources.
 - [x] P16dz: Add the post-Places-chrome full retained renderer roadmap. The new
   `docs/FULL_RETAINED_RENDERER_ROADMAP.md` and zh-CN translation define the
   current baseline, explicit GPUI bridges, non-negotiable Dolphin-aligned

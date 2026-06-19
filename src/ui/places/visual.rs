@@ -31,6 +31,7 @@ pub(super) fn places_row_visual_layer(
     places: Vec<PlaceSnapshot>,
     app: WeakEntity<FikaApp>,
     paint_text: bool,
+    warm_text_shapes: bool,
     paint_icon: bool,
 ) -> impl IntoElement {
     let rows = place_row_visual_layer_rows(&places);
@@ -43,6 +44,7 @@ pub(super) fn places_row_visual_layer(
                 total_rows,
                 app.clone(),
                 paint_text,
+                warm_text_shapes,
                 paint_icon,
                 bounds,
                 window,
@@ -193,6 +195,7 @@ fn places_row_visual_prepaint(
     total_rows: usize,
     app: WeakEntity<FikaApp>,
     paint_text: bool,
+    warm_text_shapes: bool,
     paint_icon: bool,
     layer_bounds: Bounds<Pixels>,
     window: &mut Window,
@@ -201,7 +204,17 @@ fn places_row_visual_prepaint(
     let started = Instant::now();
     let rows = visible_place_row_visuals(rows, layer_bounds, window.content_mask().bounds)
         .into_iter()
-        .map(|input| place_row_visual_prepaint(input, paint_text, paint_icon, &app, window, cx))
+        .map(|input| {
+            place_row_visual_prepaint(
+                input,
+                paint_text,
+                warm_text_shapes,
+                paint_icon,
+                &app,
+                window,
+                cx,
+            )
+        })
         .collect();
     let shape_cache_stats = app
         .update(cx, |this, _cx| this.place_row_text_shape_cache.take_stats())
@@ -237,12 +250,13 @@ fn visible_place_row_visuals(
 fn place_row_visual_prepaint(
     input: PlaceRowVisualState,
     paint_text: bool,
+    warm_text_shapes: bool,
     paint_icon: bool,
     app: &WeakEntity<FikaApp>,
     window: &mut Window,
     cx: &mut App,
 ) -> PlaceRowVisualPaintState {
-    let line = paint_text.then(|| {
+    let line = (paint_text || warm_text_shapes).then(|| {
         let text_style = window.text_style();
         let font_size = px(window.rem_size().as_f32() * 0.875);
         let text_color = if input.active {
@@ -266,7 +280,7 @@ fn place_row_visual_prepaint(
     });
     PlaceRowVisualPaintState {
         input,
-        line,
+        line: paint_text.then_some(line).flatten(),
         line_height: px(20.0),
         paint_icon,
     }
