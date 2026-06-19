@@ -6990,6 +6990,7 @@ impl Render for FikaApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let perf_enabled = item_view_perf_enabled();
         let render_started = perf_enabled.then(Instant::now);
+        let window_setup_started = perf_enabled.then(Instant::now);
         let title = self
             .chooser
             .as_ref()
@@ -7001,6 +7002,7 @@ impl Render for FikaApp {
             viewport_size.width.as_f32(),
             viewport_size.height.as_f32(),
         );
+        let window_setup_elapsed = window_setup_started.map(|started| started.elapsed());
         let places_sidebar_visible = self.places_sidebar_visible;
         let places_sidebar_width = self.places_sidebar_width;
         let places_started = perf_enabled.then(Instant::now);
@@ -7012,6 +7014,7 @@ impl Render for FikaApp {
         let snapshots_started = perf_enabled.then(Instant::now);
         let snapshots = self.snapshots(cx);
         let snapshots_elapsed = snapshots_started.map(|started| started.elapsed());
+        let chrome_inputs_started = perf_enabled.then(Instant::now);
         let file_grid_mode =
             self.chooser
                 .as_ref()
@@ -7046,6 +7049,7 @@ impl Render for FikaApp {
         let close_icon = pane_close_icon_snapshot(&mut self.file_icons);
         let places_panel_icon =
             places_panel_icon_snapshot(&mut self.file_icons, places_sidebar_visible);
+        let chrome_inputs_elapsed = chrome_inputs_started.map(|started| started.elapsed());
         let pane_elements_started = perf_enabled.then(Instant::now);
         let mut pane_elements = Vec::with_capacity(pane_ids.len().saturating_mul(2));
         for (index, snapshot) in snapshots.into_iter().enumerate() {
@@ -7063,6 +7067,7 @@ impl Render for FikaApp {
             }
         }
         let pane_elements_elapsed = pane_elements_started.map(|started| started.elapsed());
+        let overlays_started = perf_enabled.then(Instant::now);
         let context_menu = self.context_menu.clone();
         let properties_dialog = self.properties_dialog.clone();
         let trash_conflict_dialog = self.trash_conflict_dialog.clone();
@@ -7077,6 +7082,7 @@ impl Render for FikaApp {
                 context_menu_icon_snapshots(&mut self.file_icons, menu, clipboard_available)
             })
             .unwrap_or_default();
+        let overlays_elapsed = overlays_started.map(|started| started.elapsed());
         let app = cx.weak_entity();
         let root_started = perf_enabled.then(Instant::now);
         let root = div()
@@ -7294,14 +7300,17 @@ impl Render for FikaApp {
             });
         if let Some(started) = render_started {
             eprintln!(
-                "[fika render] panes={} viewport={}x{} places={}us tasks={}us snapshots={}us pane_elements={}us root={}us total={}us",
+                "[fika render] panes={} viewport={}x{} window_setup={}us places={}us tasks={}us snapshots={}us chrome_inputs={}us pane_elements={}us overlays={}us root={}us total={}us",
                 pane_count,
                 viewport_size.width.as_f32(),
                 viewport_size.height.as_f32(),
+                window_setup_elapsed.map_or(0, |elapsed| elapsed.as_micros()),
                 places_elapsed.map_or(0, |elapsed| elapsed.as_micros()),
                 background_tasks_elapsed.map_or(0, |elapsed| elapsed.as_micros()),
                 snapshots_elapsed.map_or(0, |elapsed| elapsed.as_micros()),
+                chrome_inputs_elapsed.map_or(0, |elapsed| elapsed.as_micros()),
                 pane_elements_elapsed.map_or(0, |elapsed| elapsed.as_micros()),
+                overlays_elapsed.map_or(0, |elapsed| elapsed.as_micros()),
                 root_started.map_or(0, |started| started.elapsed().as_micros()),
                 started.elapsed().as_micros(),
             );

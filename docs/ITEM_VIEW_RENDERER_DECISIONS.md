@@ -398,6 +398,13 @@ Future promotion work should separate Places snapshot, pane item, root, and row
 visual ownership in the first-frame total, then reduce full-specific variance
 before lowering the full path's 30ms total-render guard.
 
+Follow-up owner accounting in
+`/tmp/fika-places-full-owner-20260619-places-handoff-full-targets.log` reduced
+the max-total residual to `4us` and showed the dominant same-frame owner was
+`chrome_inputs=7817us`, not row visual painting. The next optimization target is
+therefore toolbar/chrome icon/input preparation before revisiting row visual
+default promotion thresholds.
+
 ## Next Renderer Decisions
 
 1. Keep the remaining drag-start shells until the GPUI API boundary changes.

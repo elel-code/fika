@@ -646,6 +646,18 @@ Places chrome 默认之后的当前执行入口是
   首帧 owner accounting 和 total-render 波动，而不是 cold row visual paint 本身。roadmap、
   renderer decisions 和 evidence checklist 现在要求在修改 Places full-row visual 默认值前采集
   `--places-full-handoff` A/B 证据。
+- [x] P16gal：添加 Places full handoff 首帧 render owner accounting。之前 full targets
+  total 不透明的根因是 `[fika render]` 缺少 owner：analyzer 只有宽泛 render phase 的 max
+  字段，所以 2026-06-19 full targets 日志在 max total 帧显示 `17285us` residual。
+  实现：`[fika render]` 现在输出 `window_setup`、`chrome_inputs` 和 `overlays`；
+  `scripts/analyze-places-perf.sh` 现在输出 `render_at_max_total`，包含同一帧 owner、
+  `accounted`、`residual`、`max_accounted` 和 `max_residual`。证据：
+  `scripts/run-retained-renderer-evidence.sh --places-full-handoff --skip-build --prefix
+  fika-places-full-owner-20260619` 通过了所有 full handoff gate。新 owner 行把 residual
+  降到 `4-5us`，并确认 `chrome_inputs` 是首帧主要 owner：chrome targets `7846us`、
+  full targets `7817us`、chrome overflow `8768us`、full overflow `7832us`、
+  chrome layout `7824us`、full layout `8638us`。这把下一步优化目标从 row visual paint
+  收窄到 toolbar/chrome icon/input preparation。
 - [ ] P16q：在每个 P16 实现切片之后，单独提交并附带相关验证：仅文档切片需要 `git diff --check`；代码切片需要 `cargo fmt`、`cargo check`、`cargo test -q`、`scripts/check-item-view-perf-analyzer.sh`、`scripts/check-places-perf-analyzer.sh` 和 `git diff --check`。
 - [x] P16r：记录运行时自测试和突破记录规则。可重复的滚动、缩放、启动图标、调整大小、模式切换和 Places 目标回退应在依赖手动计时之前通过 autosmoke 日志和分析器脚本重现。任何确认的优化突破必须记录症状、Dolphin 比较边界、根本原因、实现、保存的日志/分析器命令和未来回归守卫在拥有的设计或决策文档中。
 

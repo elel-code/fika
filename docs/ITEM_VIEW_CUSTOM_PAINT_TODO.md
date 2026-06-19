@@ -1883,6 +1883,21 @@ tracks.
   cold row visual paint alone. The roadmap, renderer decisions, and evidence
   checklist now require `--places-full-handoff` A/B evidence before changing
   the Places full-row visual default.
+- [x] P16gal: Add first-frame render owner accounting for Places full handoff.
+  Root cause of the previous opaque full-target total was missing ownership in
+  `[fika render]`: the analyzer only had max fields for broad render phases, so
+  the 2026-06-19 full targets log showed a `17285us` residual at max total.
+  Implementation: `[fika render]` now reports `window_setup`,
+  `chrome_inputs`, and `overlays`; `scripts/analyze-places-perf.sh` now emits
+  `render_at_max_total` with same-frame owner values, `accounted`, `residual`,
+  `max_accounted`, and `max_residual`. Evidence:
+  `scripts/run-retained-renderer-evidence.sh --places-full-handoff --skip-build --prefix
+  fika-places-full-owner-20260619` passed all full handoff gates. The new
+  owner line reduced residual to `4-5us` in the new run and identified
+  `chrome_inputs` as the dominant first-frame owner: chrome targets `7846us`,
+  full targets `7817us`, chrome overflow `8768us`, full overflow `7832us`,
+  chrome layout `7824us`, and full layout `8638us`. This moves the next
+  optimization from row visual paint to toolbar/chrome icon/input preparation.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

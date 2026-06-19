@@ -405,19 +405,43 @@ function renderer_retained_interaction_for_policy(event_policy, rows, sections) 
 /^\[fika render\]/ {
     render_frames++
     panes = field("panes") + 0
+    window_setup = field("window_setup") + 0
     places = field("places") + 0
     tasks = field("tasks") + 0
     snapshots = field("snapshots") + 0
+    chrome_inputs = field("chrome_inputs") + 0
     pane_elements = field("pane_elements") + 0
+    overlays = field("overlays") + 0
     root = field("root") + 0
     total = field("total") + 0
+    accounted = window_setup + places + tasks + snapshots + chrome_inputs + pane_elements + overlays + root
+    residual = total - accounted
     max_update("render_panes", panes)
+    max_update("render_window_setup", window_setup)
     max_update("render_places", places)
     max_update("render_tasks", tasks)
     max_update("render_snapshots", snapshots)
+    max_update("render_chrome_inputs", chrome_inputs)
     max_update("render_pane_elements", pane_elements)
+    max_update("render_overlays", overlays)
     max_update("render_root", root)
     max_update("render_total", total)
+    max_update("render_accounted", accounted)
+    max_update("render_residual", residual)
+    if (render_frames == 1 || total > render_at_max_total) {
+        render_at_max_total = total
+        render_at_max_panes = panes
+        render_at_max_window_setup = window_setup
+        render_at_max_places = places
+        render_at_max_tasks = tasks
+        render_at_max_snapshots = snapshots
+        render_at_max_chrome_inputs = chrome_inputs
+        render_at_max_pane_elements = pane_elements
+        render_at_max_overlays = overlays
+        render_at_max_root = root
+        render_at_max_accounted = accounted
+        render_at_max_residual = residual
+    }
 }
 
 /^\[fika places-sidebar\]/ {
@@ -1258,15 +1282,33 @@ END {
         max_values["slot_unchanged"],
         max_values["slot_removed"],
         max_values["slot_project"])
-    printf("render_frames=%d max_panes=%d max_places=%dus max_tasks=%dus max_snapshots=%dus max_pane_elements=%dus max_root=%dus max_total=%dus\n",
+    printf("render_frames=%d max_panes=%d max_window_setup=%dus max_places=%dus max_tasks=%dus max_snapshots=%dus max_chrome_inputs=%dus max_pane_elements=%dus max_overlays=%dus max_root=%dus max_total=%dus\n",
         render_frames,
         max_values["render_panes"],
+        max_values["render_window_setup"],
         max_values["render_places"],
         max_values["render_tasks"],
         max_values["render_snapshots"],
+        max_values["render_chrome_inputs"],
         max_values["render_pane_elements"],
+        max_values["render_overlays"],
         max_values["render_root"],
         max_values["render_total"])
+    printf("render_at_max_total panes=%d total=%dus window_setup=%dus places=%dus tasks=%dus snapshots=%dus chrome_inputs=%dus pane_elements=%dus overlays=%dus root=%dus accounted=%dus residual=%dus max_accounted=%dus max_residual=%dus\n",
+        render_at_max_panes,
+        render_at_max_total,
+        render_at_max_window_setup,
+        render_at_max_places,
+        render_at_max_tasks,
+        render_at_max_snapshots,
+        render_at_max_chrome_inputs,
+        render_at_max_pane_elements,
+        render_at_max_overlays,
+        render_at_max_root,
+        render_at_max_accounted,
+        render_at_max_residual,
+        max_values["render_accounted"],
+        max_values["render_residual"])
     policy_kinds = ""
     if (policy_kind_gpui_seen) {
         policy_kinds = append_csv(policy_kinds, "gpui")

@@ -76,8 +76,12 @@ if [[ "$summary" != *"places_slots_frames="* || "$summary" != *"max_visual=2"* ]
     echo "expected places-slots summary" >&2
     exit 1
 fi
-if [[ "$summary" != *"render_frames=1 max_panes=1 max_places=4457us max_tasks=30us max_snapshots=120us max_pane_elements=300us max_root=500us max_total=5400us"* ]]; then
+if [[ "$summary" != *"render_frames=1 max_panes=1 max_window_setup=0us max_places=4457us max_tasks=30us max_snapshots=120us max_chrome_inputs=0us max_pane_elements=300us max_overlays=0us max_root=500us max_total=5400us"* ]]; then
     echo "expected render summary" >&2
+    exit 1
+fi
+if [[ "$summary" != *"render_at_max_total panes=1 total=5400us window_setup=0us places=4457us tasks=30us snapshots=120us chrome_inputs=0us pane_elements=300us overlays=0us root=500us accounted=5407us residual=-7us"* ]]; then
+    echo "expected render owner summary" >&2
     exit 1
 fi
 if [[ "$summary" != *"places_autosmoke target=1 insert_start=1 insert_end=1 clear=1 snapshots=1,1,1,1,1"* ]]; then
