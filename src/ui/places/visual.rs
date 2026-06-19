@@ -34,9 +34,10 @@ pub(super) fn places_row_visual_layer(
     warm_text_shapes: bool,
     paint_icon: bool,
 ) -> impl IntoElement {
-    let rows = Arc::new(place_row_visual_layer_rows(&places));
+    let (rows, height) = place_row_visual_layer_rows_and_height(&places);
+    let rows = Arc::new(rows);
     let total_rows = rows.len();
-    let height = places_row_visual_content_height(&places).max(1.0);
+    let height = height.max(1.0);
     canvas(
         move |bounds, window, cx| {
             places_row_visual_prepaint(
@@ -492,7 +493,9 @@ fn paint_place_trash_icon(bounds: Bounds<Pixels>, fg: u32, window: &mut Window) 
     );
 }
 
-fn place_row_visual_layer_rows(places: &[PlaceSnapshot]) -> Vec<PlaceRowVisualState> {
+fn place_row_visual_layer_rows_and_height(
+    places: &[PlaceSnapshot],
+) -> (Vec<PlaceRowVisualState>, f32) {
     let mut rows = Vec::with_capacity(places.len());
     let mut current_group = None;
     let mut y = 0.0;
@@ -506,22 +509,17 @@ fn place_row_visual_layer_rows(places: &[PlaceSnapshot]) -> Vec<PlaceRowVisualSt
         rows.push(PlaceRowVisualState::from_place(place, y));
         y += PLACE_ROW_HEIGHT;
     }
-    rows
+    (rows, y)
 }
 
-pub(super) fn places_row_visual_content_height(places: &[PlaceSnapshot]) -> f32 {
-    let mut current_group = None;
-    let mut height = 0.0;
-    for place in places {
-        if current_group != Some(place.group) {
-            current_group = Some(place.group);
-            if !place.group.is_empty() {
-                height += PLACE_SECTION_HEADING_HEIGHT;
-            }
-        }
-        height += PLACE_ROW_HEIGHT;
-    }
-    height
+#[cfg(test)]
+fn place_row_visual_layer_rows(places: &[PlaceSnapshot]) -> Vec<PlaceRowVisualState> {
+    place_row_visual_layer_rows_and_height(places).0
+}
+
+#[cfg(test)]
+fn places_row_visual_content_height(places: &[PlaceSnapshot]) -> f32 {
+    place_row_visual_layer_rows_and_height(places).1
 }
 
 #[cfg(test)]
