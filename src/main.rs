@@ -20,7 +20,7 @@ use fika_core::{
     ListingRequest, ListingWorker, LoadingPaneState, MetadataRoleScheduler, OperationQueue,
     OperationRuntime, OperationSnapshot, PaneController, PaneId, RefreshPair, RenameUndoItem,
     SelectionMove, SortDescriptor, SortOrder, SortRole, ThumbnailScheduler, TrashEmptinessMonitor,
-    UndoPayload, UserPlace, ViewMode, ViewPoint, ViewRect, ZoomChange, breadcrumb_segments,
+    UndoPayload, ViewMode, ViewPoint, ViewRect, ZoomChange, breadcrumb_segments,
     complete_location_input, file_ops, is_network_path, listing_requests_from_events,
     nearest_existing_ancestor, parent_location, perform_device_place_operation,
     resolve_location_input, update_loading_state_for_event,
@@ -34,8 +34,8 @@ use fika_core::{
 #[cfg(test)]
 use fika_core::{
     DeviceInfo, Generation, MetadataRoleResult, ServiceMenuAction, ThumbnailCandidate,
-    ThumbnailProbeResult, ThumbnailRequestPriority, ViewState, home_dir, is_network_root_path,
-    network_root_path,
+    ThumbnailProbeResult, ThumbnailRequestPriority, UserPlace, ViewState, home_dir,
+    is_network_root_path, network_root_path,
 };
 use gpui::prelude::*;
 use gpui::{
@@ -3673,20 +3673,6 @@ impl FikaApp {
             return;
         }
         self.set_pane_status(pane_id, message);
-    }
-
-    fn user_places(&self) -> Vec<UserPlace> {
-        ui::places::user_places(&self.places)
-    }
-
-    fn save_user_places(&self) -> Result<(), String> {
-        fika_core::save_user_places(&self.user_places_path, &self.user_places())?;
-        let place_order_path =
-            fika_core::place_order_path_for_user_places_path(&self.user_places_path);
-        fika_core::save_place_order(
-            &place_order_path,
-            &ui::places::primary_place_order(&self.places),
-        )
     }
 
     pub(crate) fn update_location_edit_metrics(

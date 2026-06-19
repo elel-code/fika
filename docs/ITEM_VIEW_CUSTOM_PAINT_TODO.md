@@ -1694,6 +1694,11 @@ tracks.
   methods plus status updates, while the low-level visibility helpers stay
   private to the Places visibility module instead of being re-exported through
   the top-level Places facade.
+- [x] P16fz: Move app-facing user-place persistence wrappers into the Places
+  user facade. `src/ui/places/user.rs` now owns `user_places()` and
+  `save_user_places()` on `FikaApp`, including user bookmark export and primary
+  place order persistence. `src/main.rs` still calls the save facade from
+  add/edit/remove/reorder paths but no longer owns the persistence wiring.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,
