@@ -1393,6 +1393,21 @@ tracks.
   whether overflow full-custom text paint around 1ms is acceptable against
   chrome/default evidence, then apply the same ready-only retained-resource
   model to real image resources.
+- [x] P16dz6: Capture paired default-chrome evidence for the full Places
+  handoff decision. Root cause: after P16dz5, full handoff no longer has cold
+  prepaint/paint spikes, but promotion still needs a paired comparison against
+  the current default. Evidence: default chrome runs
+  `/tmp/fika-places-chrome-targets-compare.log`,
+  `/tmp/fika-places-chrome-overflow-compare.log`, and
+  `/tmp/fika-places-chrome-layout-compare.log` passed
+  `--expect-custom-row-chrome-policy`. Compared to handoff logs, row-visual
+  paint remains much lower in chrome: targets `85us` vs full handoff `282us`,
+  layout `64us` vs `282us`, and overflow `154us` vs `1058us` for 29 painted
+  rows. Decision: keep full Places handoff opt-in for now. This does not
+  invalidate the custom-renderer direction because chrome row-visual metrics do
+  not include the GPUI text/icon subtree cost; the next evidence step is either
+  total render/chrome-vs-full accounting or further retained custom text paint
+  optimization before default promotion.
 - [x] P16dz: Add the post-Places-chrome full retained renderer roadmap. The new
   `docs/FULL_RETAINED_RENDERER_ROADMAP.md` and zh-CN translation define the
   current baseline, explicit GPUI bridges, non-negotiable Dolphin-aligned
