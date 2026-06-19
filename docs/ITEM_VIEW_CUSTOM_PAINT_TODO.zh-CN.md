@@ -604,6 +604,10 @@ Places chrome 默认之后的当前执行入口是
   facade。`src/ui/places/user.rs` 现在拥有 `FikaApp` 上的
   `move_user_place_to_insert_index()` 和 `user_place_insert_index()`，包括状态映射和持久化。
   低层 ordering result enum 和函数保持在 user-place 模块内部。
+- [x] P16gad：将面向 app 的 place-draft commit 移入 Places user facade。
+  `src/ui/places/user.rs` 现在拥有 `FikaApp` 上的 `commit_place_draft()`，包括 draft 取出、
+  当前目录查找、校验结果映射、持久化和状态栏更新。低层 `commit_user_place_draft()` helper
+  保持在 user-place edit 模块内部。
 - [ ] P16q：在每个 P16 实现切片之后，单独提交并附带相关验证：仅文档切片需要 `git diff --check`；代码切片需要 `cargo fmt`、`cargo check`、`cargo test -q`、`scripts/check-item-view-perf-analyzer.sh`、`scripts/check-places-perf-analyzer.sh` 和 `git diff --check`。
 - [x] P16r：记录运行时自测试和突破记录规则。可重复的滚动、缩放、启动图标、调整大小、模式切换和 Places 目标回退应在依赖手动计时之前通过 autosmoke 日志和分析器脚本重现。任何确认的优化突破必须记录症状、Dolphin 比较边界、根本原因、实现、保存的日志/分析器命令和未来回归守卫在拥有的设计或决策文档中。
 

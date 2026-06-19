@@ -1715,6 +1715,12 @@ tracks.
   `move_user_place_to_insert_index()` and `user_place_insert_index()` on
   `FikaApp`, including status mapping and persistence. The low-level ordering
   result enum and functions stay private to the user-place module.
+- [x] P16gad: Move app-facing place-draft commit into the Places user facade.
+  `src/ui/places/user.rs` now owns `commit_place_draft()` on `FikaApp`,
+  including draft extraction, current-directory lookup, validation result
+  mapping, persistence, and status updates. The low-level
+  `commit_user_place_draft()` helper stays private to the user-place edit
+  module.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

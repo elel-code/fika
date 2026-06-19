@@ -34,5 +34,4 @@ pub(crate) use sidebar::{
     places_panel_button, places_panel_icon_snapshot, places_sidebar_splitter,
 };
 pub(crate) use snapshot::{PlaceIcon, PlaceSnapshot};
-pub(crate) use user::commit_user_place_draft;
 pub(crate) use visual::PlacesRowTextShapeCache;

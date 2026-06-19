@@ -11,8 +11,6 @@ use fika_core::PaneId;
 
 use crate::FikaApp;
 
-pub(crate) use edit::commit_user_place_draft;
-
 impl FikaApp {
     pub(crate) fn user_places(&self) -> Vec<fika_core::UserPlace> {
         persistence::user_places(&self.places)
@@ -99,5 +97,37 @@ impl FikaApp {
 
     pub(crate) fn user_place_insert_index(&self, index: usize) -> usize {
         ordering::user_place_insert_index(&self.places, index)
+    }
+
+    pub(crate) fn commit_place_draft(&mut self) {
+        let Some(draft) = self.place_draft.take() else {
+            return;
+        };
+        let Some(current_dir) = self
+            .panes
+            .pane(draft.pane_id)
+            .map(|pane| pane.current_dir.clone())
+        else {
+            return;
+        };
+
+        let result = edit::commit_user_place_draft(
+            &mut self.places,
+            &current_dir,
+            &draft.label,
+            &draft.path,
+            draft.editing_path.as_deref(),
+        );
+        let message = result.status_message();
+        if !result.changed() {
+            self.set_pane_status(draft.pane_id, message);
+            return;
+        }
+
+        if let Err(error) = self.save_user_places() {
+            self.set_pane_status(draft.pane_id, error);
+            return;
+        }
+        self.set_pane_status(draft.pane_id, message);
     }
 }
