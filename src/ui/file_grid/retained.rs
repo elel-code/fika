@@ -9,7 +9,10 @@ use super::snapshot::{
     queue_raw_file_grid_model_work, raw_file_grid_snapshot,
     visible_metadata_role_results_for_raw_grid,
 };
-use super::{FileGridRenderSnapshot, ItemPaintSlotStats};
+use super::{
+    FileGridRenderSnapshot, ItemPaintSlotCache, ItemPaintSlotStats, VisibleItemSlotPool,
+    VisibleItemSnapshotCache,
+};
 use crate::FikaApp;
 use crate::ui::drag_drop::ItemDropTarget;
 use crate::ui::icons::{FileIconSnapshot, file_icon_resolve_results_for_requests};
@@ -48,6 +51,7 @@ pub(crate) struct RetainedFileGridFrame {
 
 pub(crate) struct PaneFileGridRenderFrame {
     pub(crate) file_grid: FileGridRenderSnapshot,
+    pub(crate) warm_static_visual_file_grid: Option<FileGridRenderSnapshot>,
     pub(crate) item_count: usize,
     visible_count: usize,
     raw_elapsed: Option<Duration>,
@@ -180,6 +184,64 @@ impl FikaApp {
         projection
     }
 
+    pub(crate) fn warm_static_visual_file_grid_for_pane(
+        &mut self,
+        pane_id: PaneId,
+        view: &ViewState,
+        selection_count: usize,
+        filtered: Option<&FilteredModel>,
+        source_revision: u64,
+        rename_draft: Option<&RenameDraft>,
+        item_drop_target: Option<&ItemDropTarget>,
+    ) -> Option<FileGridRenderSnapshot> {
+        let mut warm_view = view.clone();
+        match view.view_mode {
+            ViewMode::Compact => {
+                warm_view.set_view_mode(ViewMode::Icons);
+            }
+            ViewMode::Icons => {
+                warm_view.set_view_mode(ViewMode::Compact);
+            }
+            ViewMode::Details => return None,
+        }
+        let raw_file_grid = self.raw_file_grid_snapshot_for_pane(
+            pane_id,
+            &warm_view,
+            filtered,
+            source_revision,
+            rename_draft,
+            item_drop_target,
+        )?;
+        let mut visible_item_slots = VisibleItemSlotPool::default();
+        let mut visible_item_cache = VisibleItemSnapshotCache::default();
+        let mut item_paint_slots = ItemPaintSlotCache::default();
+        let file_icon_size = warm_view.icon_size();
+        let projection = project_retained_file_grid_snapshot(
+            raw_file_grid,
+            selection_count,
+            &mut visible_item_slots,
+            &mut visible_item_cache,
+            &mut item_paint_slots,
+            None,
+            file_icon_size,
+            |request| {
+                self.icon_snapshot_for_model_item(
+                    request.path,
+                    request.is_dir,
+                    request.mime_type.clone(),
+                    request.mime_magic_checked,
+                    request.icon_size,
+                )
+            },
+        );
+        match projection.snapshot {
+            FileGridRenderSnapshot::Compact { .. } | FileGridRenderSnapshot::Icons { .. } => {
+                Some(projection.snapshot)
+            }
+            FileGridRenderSnapshot::Details { .. } => None,
+        }
+    }
+
     pub(crate) fn project_retained_file_grid_frame_for_pane(
         &mut self,
         pane_id: PaneId,
@@ -284,9 +346,19 @@ impl FikaApp {
             perf_enabled,
         );
         let convert_elapsed = convert_started.map(|started| started.elapsed());
+        let warm_static_visual_file_grid = self.warm_static_visual_file_grid_for_pane(
+            pane_id,
+            view,
+            selection_count,
+            filtered,
+            source_revision,
+            rename_draft,
+            item_drop_target,
+        );
 
         Some(PaneFileGridRenderFrame {
             file_grid: retained_file_grid_frame.file_grid,
+            warm_static_visual_file_grid,
             item_count,
             visible_count: retained_file_grid_frame.visible_count,
             raw_elapsed,

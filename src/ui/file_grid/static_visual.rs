@@ -15,7 +15,9 @@ use crate::ui::icons::FileIconSnapshot;
 use super::paint_slots::ItemPaintSnapshot;
 use super::renderer_policy::{item_paints_fallback_icon, item_uses_layer_visual_paint};
 use super::text::static_paint_single_line_text;
-use super::{ITEM_NAME_LINE_HEIGHT, ItemTileTextAlignment, TextShapeCacheStats};
+use super::{
+    FileGridRenderSnapshot, ITEM_NAME_LINE_HEIGHT, ItemTileTextAlignment, TextShapeCacheStats,
+};
 
 pub(super) struct StaticItemVisualPaintState {
     visible: bool,
@@ -132,6 +134,44 @@ pub(super) fn static_item_visual_layer_view(
             pane_id,
             app,
             items,
+            warm_only: false,
+            style: StyleRefinement::default(),
+        }
+        .absolute()
+        .left_0()
+        .top_0()
+        .w(px(width.max(1.0)))
+        .h(px(height.max(1.0)))
+    })
+}
+
+pub(super) fn static_item_visual_warm_layer_view(
+    pane_id: PaneId,
+    snapshot: &FileGridRenderSnapshot,
+    app: WeakEntity<FikaApp>,
+) -> Option<StaticItemVisualLayerElement> {
+    let (items, width, height, text_alignment) = match snapshot {
+        FileGridRenderSnapshot::Compact { layout, items } => (
+            items,
+            layout.content_size().width,
+            layout.content_size().height,
+            ItemTileTextAlignment::Start,
+        ),
+        FileGridRenderSnapshot::Icons { layout, items } => (
+            items,
+            layout.content_size().width,
+            layout.content_size().height,
+            ItemTileTextAlignment::Center,
+        ),
+        FileGridRenderSnapshot::Details { .. } => return None,
+    };
+    let items = static_item_visual_layer_items(items, text_alignment);
+    (!items.is_empty()).then(|| {
+        StaticItemVisualLayerElement {
+            pane_id,
+            app,
+            items,
+            warm_only: true,
             style: StyleRefinement::default(),
         }
         .absolute()
@@ -189,6 +229,7 @@ pub(super) struct StaticItemVisualLayerElement {
     pane_id: PaneId,
     app: WeakEntity<FikaApp>,
     items: Vec<StaticItemVisualLayerItem>,
+    warm_only: bool,
     style: StyleRefinement,
 }
 
@@ -205,9 +246,11 @@ impl Element for StaticItemVisualLayerElement {
     type PrepaintState = Vec<StaticItemVisualPaintState>;
 
     fn id(&self) -> Option<ElementId> {
-        Some(ElementId::from(static_item_visual_layer_element_id(
-            self.pane_id,
-        )))
+        Some(ElementId::from(if self.warm_only {
+            static_item_visual_warm_layer_element_id(self.pane_id)
+        } else {
+            static_item_visual_layer_element_id(self.pane_id)
+        }))
     }
 
     fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
@@ -236,7 +279,11 @@ impl Element for StaticItemVisualLayerElement {
         window: &mut Window,
         cx: &mut App,
     ) -> Self::PrepaintState {
-        let perf_started = super::item_view_perf_enabled().then(std::time::Instant::now);
+        let perf_started = if self.warm_only {
+            None
+        } else {
+            super::item_view_perf_enabled().then(std::time::Instant::now)
+        };
         let states = self
             .items
             .iter()
@@ -280,6 +327,9 @@ impl Element for StaticItemVisualLayerElement {
         window: &mut Window,
         cx: &mut App,
     ) {
+        if self.warm_only {
+            return;
+        }
         let perf_started = super::item_view_perf_enabled().then(std::time::Instant::now);
         let count = prepaint.len();
         request_layout.paint(bounds, window, cx, |window, cx| {
@@ -315,6 +365,10 @@ impl Styled for StaticItemVisualLayerElement {
 
 pub(super) fn static_item_visual_layer_element_id(pane_id: PaneId) -> (&'static str, u64) {
     ("static-item-visual-layer", pane_id.0)
+}
+
+pub(super) fn static_item_visual_warm_layer_element_id(pane_id: PaneId) -> (&'static str, u64) {
+    ("static-item-visual-warm-layer", pane_id.0)
 }
 
 fn static_item_visual_prepaint(

@@ -2226,7 +2226,7 @@ tracks.
   `hits=28 misses=0`, and `hits=40 misses=0`, with
   `[fika static-item-visual]` prepaint dropping to 93-254us on repeated zoom
   frames.
-- [ ] P16gbf2: Remove the remaining first-enter cold text/glyph spike for
+- [~] P16gbf2: Remove the remaining first-enter cold text/glyph spike for
   Icons/Compact full custom visual paint. Current evidence shows the next root
   cause: Downloads still reports a stable first Icons switch cold shape spike
   (`/tmp/fika-full-icons-keyed-downloads-r2.log`, `hits=1 misses=39`,
@@ -2236,6 +2236,22 @@ tracks.
   shapes and glyph paint are warmed before handoff, similar to the Places row
   text handoff model, instead of shifting all cold shaping into the first
   visible custom visual frame.
+- [x] P16gbf2a: Add the first pane alternate-mode static text warmup path. The
+  pane render frame now projects a temporary Compact/Icons target-mode snapshot
+  with local slot/cache state, passes it to the file-grid surface, and mounts a
+  warm-only static visual layer before the visible layer. The warm layer shapes
+  text into the pane-local `StaticItemTextShapeCache` but does not paint or
+  report visible static-visual timing. Its `ElementId` is distinct from the
+  visible static visual layer so GPUI retained element identity cannot collide.
+  Evidence after the ID fix: `/tmp/fika-compare-pane-full-etc-r3.log` kept
+  `max_gpui_image_element=0`, `theme_placeholder=0`, visible
+  `theme_decoded=0`, and reduced `/etc` visible static prepaint to
+  `2996us` while the paired `FIKA_GPUI_THEME_ICONS=1` baseline had
+  `2938us`. Downloads remains incomplete:
+  `/tmp/fika-compare-pane-full-downloads-r3.log` still shows
+  `static_visual max_prepaint=16866us max_paint=17580us`, similar to the GPUI
+  image baseline's text cost. Next work should target glyph/text paint
+  retention or a ready-only handoff, not image renderer policy.
 
 ## Acceptance Gates
 

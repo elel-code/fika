@@ -909,13 +909,26 @@ Places chrome 默认之后的当前执行入口是
   `max_gpui_image_element=0`、`theme_placeholder=0`、`theme_decoded=0`；初次切入
   Icons 后，zoom 帧出现 `hits=24 misses=0`、`hits=28 misses=0`、`hits=40 misses=0`，
   重复 zoom 的 `[fika static-item-visual]` prepaint 降到 93-254us。
-- [ ] P16gbf2：移除 Icons/Compact full custom visual paint 剩余的首次进入冷文本/glyph
+- [~] P16gbf2：移除 Icons/Compact full custom visual paint 剩余的首次进入冷文本/glyph
   尖峰。当前证据显示下一个根因：Downloads 仍有稳定的首次 Icons 切换 cold shape 尖峰
   （`/tmp/fika-full-icons-keyed-downloads-r2.log`，`hits=1 misses=39`，
   `static-item-visual prepaint=52840us`）和第一次 text paint 尖峰（`paint=17698us`），
   尽管 image/icon 路径已经干净。下一切片应加入 Dolphin 风格 retained text warmup/state
   pool，让目标模式 label shape 和 glyph paint 在 handoff 前被预热，类似 Places row text
   handoff 模型，而不是把全部 cold shaping 放进第一个可见 custom visual frame。
+- [x] P16gbf2a：加入第一版 pane alternate-mode static text warmup。pane render frame
+  现在用本地临时 slot/cache 状态投影目标 Compact/Icons 模式快照，将其传给 file-grid surface，
+  并在可见层之前挂载 warm-only static visual layer。warm layer 只向 pane-local
+  `StaticItemTextShapeCache` 写入 shaped text，不绘制，也不记录为可见 static-visual timing。
+  它使用独立 `ElementId`，避免与可见 static visual layer 的 GPUI retained identity 碰撞。
+  ID 修复后的证据：`/tmp/fika-compare-pane-full-etc-r3.log` 保持
+  `max_gpui_image_element=0`、`theme_placeholder=0`、visible `theme_decoded=0`，
+  并把 `/etc` 可见 static prepaint 控制到 `2996us`；配对
+  `FIKA_GPUI_THEME_ICONS=1` baseline 为 `2938us`。Downloads 仍未完成：
+  `/tmp/fika-compare-pane-full-downloads-r3.log` 仍显示
+  `static_visual max_prepaint=16866us max_paint=17580us`，接近 GPUI image baseline
+  的文本成本。下一步应处理 glyph/text paint retention 或 ready-only handoff，而不是继续改
+  image renderer policy。
 - [ ] P16q：在每个 P16 实现切片之后，单独提交并附带相关验证：仅文档切片需要 `git diff --check`；代码切片需要 `cargo fmt`、`cargo check`、`cargo test -q`、`scripts/check-item-view-perf-analyzer.sh`、`scripts/check-places-perf-analyzer.sh` 和 `git diff --check`。
 - [x] P16r：记录运行时自测试和突破记录规则。可重复的滚动、缩放、启动图标、调整大小、模式切换和 Places 目标回退应在依赖手动计时之前通过 autosmoke 日志和分析器脚本重现。任何确认的优化突破必须记录症状、Dolphin 比较边界、根本原因、实现、保存的日志/分析器命令和未来回归守卫在拥有的设计或决策文档中。
 

@@ -15,6 +15,7 @@ pub(crate) struct PaneSnapshot {
     pub(crate) filter_bar: Option<FilterBarSnapshot>,
     pub(crate) status_bar: StatusBarSnapshot,
     pub(crate) file_grid: FileGridRenderSnapshot,
+    pub(crate) warm_static_visual_file_grid: Option<FileGridRenderSnapshot>,
     pub(crate) theme_icon_readiness: ThemeIconImageReadinessSnapshot,
     pub(crate) trash_view: bool,
     pub(crate) scroll_handle: ScrollHandle,

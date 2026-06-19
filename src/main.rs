@@ -1133,6 +1133,7 @@ impl FikaApp {
                     filter_bar,
                     status_bar,
                     file_grid: file_grid_frame.file_grid,
+                    warm_static_visual_file_grid: file_grid_frame.warm_static_visual_file_grid,
                     theme_icon_readiness,
                     trash_view,
                     scroll_handle,

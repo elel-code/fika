@@ -38,7 +38,7 @@ custom renderer can replace a GPUI surface.
 | --- | --- | --- | --- | --- |
 | Compact/Icons base background and labels | custom content-level painter | visible item snapshots, paint slots, text shape cache | Keep custom paint. | Runtime logs must keep steady snapshot conversion sub-ms and static visual paint/build under budget. |
 | Compact/Icons thumbnail images | custom image painter | image paint snapshots, pane-local thumbnail image cache, retained thumbnail image map, thumbnail scheduler roles | Keep custom paint for thumbnails while image decode/cache stays on GPUI `RetainAllImageCache`; thumbnail pending/failure behavior remains model-driven and can paint fallback without changing MIME/theme icon policy. | Logs must include `[fika item-image]` plus `thumb_*` `image_sources` when thumbnails are exercised; no thumbnail sync decode in prepaint. |
-| Compact/Icons MIME/theme-icon images | Visible-cohort hybrid GPUI fallback plus custom image layer handoff | retained item slots, visible icon role/path cache, app-level `ThemeIconImageReadiness`, pane image layer, background file-icon resolve queue | Use hybrid by default. If any currently visible theme-icon key is not ready, the visible cohort stays on GPUI `img()` while the custom image layer prewarms retained `RenderImage`s. Once the visible cohort is ready, all of those theme icons hand off to the retained custom image layer together. `FIKA_GPUI_THEME_ICONS=1` forces the old GPUI baseline, and `FIKA_CUSTOM_THEME_ICONS=1` remains the full custom stress path. | Default hybrid logs must pass `scripts/compare-item-image-renderers.sh --gate-hybrid-default-promotion` against a `FIKA_GPUI_THEME_ICONS=1` baseline for `/etc` and a mixed user directory. |
+| Compact/Icons MIME/theme-icon images | default full custom image layer, with `FIKA_GPUI_THEME_ICONS=1` kept as the GPUI `img()` baseline | retained item slots, visible icon role/path cache, app-level `ThemeIconImageReadiness`, pane image layer, background file-icon resolve queue | Keep the full custom image layer as the default. It uses GPUI's efficient `RetainAllImageCache -> RenderImage -> paint_image` backend but removes per-item GPUI `img()` children from the normal pane renderer. `FIKA_GPUI_THEME_ICONS=1` remains the same-scenario non-custom image baseline. | Same-scenario logs must keep `gpui_image_element=0`, `theme_placeholder=0`, and visible `theme_decoded=0` for the default path, and must compare against `FIKA_GPUI_THEME_ICONS=1` when image-layer performance changes. |
 | Compact/Icons hover, cursor, click, menu, drop hit testing | retained viewport/custom hitboxes plus active item-drag window tracker | viewport retained hit testing and `drag_drop` state | Keep retained controller path. Directory item drop hover is resolved from retained window-position hit testing, not per-directory GPUI drag-move shells. | DnD smoke must pass across internal item, pane, Places, and external drops; pane self-drags should log `active-item-move`. Renderer policy must keep `gpui_directory_drop_shell=0`. |
 | Compact/Icons drag start | GPUI `Div::on_drag` shell | retained drag payload state plus temporary shell | Keep GPUI shell for initiation only. | Do not remove until GPUI exposes public custom-element drag-start or Fika carries an audited GPUI patch. |
 | Compact/Icons rename editor | GPUI text/editor subtree overlay | rename draft model and overlay geometry | Keep GPUI built-in editor. | Only revisit when text input, caret hit testing, selection, and IME behavior can stay behavior-complete. |
@@ -189,6 +189,62 @@ remaining GPUI `img()` fallback boundary or reducing cold first-resolve cost,
 not cached same-kind lookup.
 
 ## Post-P11e Evidence To Collect
+
+### 2026-06-19 Default Full Vs GPUI Baselines
+
+Places is now default full custom row visual:
+`DEFAULT_PLACES_ROW_VISUAL_POLICY = CustomFull`. The GPUI row path is only a
+baseline selected with `FIKA_PLACES_ROW_VISUAL_POLICY=gpui`.
+
+Same-scenario Places target autosmoke evidence:
+
+- Full default/handoff:
+  `/tmp/fika-compare-places-full.log` passed
+  `scripts/analyze-places-perf.sh --expect-custom-row-handoff-policy` with
+  `row_gpui=0`, ready-frame `text_gpui=0`, `icon_gpui=0`, and
+  `visual_kind=full`. `places_view max_snapshot=624us`,
+  `places_sidebar max_build=374us`, `places_slots max_project=42us`, and
+  row visual warm paint stayed under `472us`.
+- GPUI baseline:
+  `/tmp/fika-compare-places-gpui.log` used
+  `FIKA_PLACES_ROW_VISUAL_POLICY=gpui` and showed `row_gpui=11`,
+  `row_visual_layer=0`, `visual_kind=gpui`,
+  `places_view max_snapshot=1253us`, `places_sidebar max_build=551us`, and
+  `places_slots max_project=52us`.
+
+Pane comparison has a narrower GPUI baseline because Compact/Icons base
+visuals and retained interaction are already custom by default. The available
+non-custom image baseline is `FIKA_GPUI_THEME_ICONS=1`, which moves ordinary
+MIME/theme icons back to GPUI `img()` while leaving retained item visual/text
+and interaction layers in place.
+
+Same-scenario pane autosmoke evidence after adding alternate-mode static text
+warmup:
+
+- `/etc` default full:
+  `/tmp/fika-compare-pane-full-etc-r3.log` kept `gpui_image_element=0`,
+  `image_layer=48`, `theme_placeholder=0`, visible `theme_decoded=0`, and
+  `image max_prepaint=165us max_paint=384us`. Static text remained the main
+  residual cost, with `static_visual max_prepaint=2996us max_paint=9303us`.
+- `/etc` GPUI image baseline:
+  `/tmp/fika-compare-pane-gpui-etc-r3.log` showed `gpui_image_element=48`,
+  `image_layer=0`, and similar static text cost
+  (`max_prepaint=2938us max_paint=8981us`).
+- Downloads default full:
+  `/tmp/fika-compare-pane-full-downloads-r3.log` kept image stability clean
+  (`gpui_image_element=0`, `theme_placeholder=0`, visible `theme_decoded=0`),
+  but still had static text cold cost
+  (`max_prepaint=16866us max_paint=17580us`).
+- Downloads GPUI image baseline:
+  `/tmp/fika-compare-pane-gpui-downloads-r3.log` still had similar static text
+  cold cost (`max_prepaint=15175us max_paint=17754us`) while using
+  `gpui_image_element=39` for theme icons.
+
+Decision: keep Places full as default. Keep pane image full as default because
+the image layer is stable and removes GPUI image elements, but do not claim pane
+full has fully reached the target performance yet. The remaining pane work is
+text shape/paint retention and handoff, not image decode or MIME icon renderer
+policy.
 
 Run `FIKA_PERF_ITEM_VIEW=1 cargo run -- ~/Downloads` from a desktop compositor
 session, exercise Compact, Icons, and Details, then save the log and run:

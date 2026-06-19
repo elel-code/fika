@@ -14,7 +14,7 @@ use super::item_shell::item_tile;
 use super::renderer_policy::{
     details_renderer_policy_stats, item_renderer_policy_stats_with_input,
 };
-use super::static_visual::static_item_visual_layer_view;
+use super::static_visual::{static_item_visual_layer_view, static_item_visual_warm_layer_view};
 use super::viewport::{
     file_grid_viewport_shell, measured_viewport_for_scrollbar_axis, scrollbar_axis_for_snapshot,
     view_mode_for_snapshot, viewport_bounds_update_requires_notify,
@@ -36,6 +36,7 @@ pub(crate) fn file_grid(
     let FileGridProps {
         pane_id,
         snapshot,
+        warm_static_visual_snapshot,
         theme_icon_readiness,
         trash_view,
         scroll_handle,
@@ -104,6 +105,15 @@ pub(crate) fn file_grid(
                     .relative()
                     .w(px(content_size.width))
                     .h(px(content_size.height));
+                let warm_static_visual_layer =
+                    warm_static_visual_snapshot.as_ref().and_then(|snapshot| {
+                        static_item_visual_warm_layer_view(pane_id, snapshot, app.clone())
+                    });
+                let content = if let Some(layer) = warm_static_visual_layer {
+                    content.child(layer)
+                } else {
+                    content
+                };
                 let content = if let Some(layer) = static_visual_layer {
                     content.child(layer)
                 } else {
@@ -196,6 +206,15 @@ pub(crate) fn file_grid(
                     .relative()
                     .w(px(content_size.width))
                     .h(px(content_size.height));
+                let warm_static_visual_layer =
+                    warm_static_visual_snapshot.as_ref().and_then(|snapshot| {
+                        static_item_visual_warm_layer_view(pane_id, snapshot, app.clone())
+                    });
+                let content = if let Some(layer) = warm_static_visual_layer {
+                    content.child(layer)
+                } else {
+                    content
+                };
                 let content = if let Some(layer) = static_visual_layer {
                     content.child(layer)
                 } else {
