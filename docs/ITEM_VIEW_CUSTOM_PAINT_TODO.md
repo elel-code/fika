@@ -1731,6 +1731,10 @@ tracks.
   facade. `src/ui/places/drag.rs` now owns setting, querying, clearing, and
   pane-viewport ownership clearing for `PlaceDropTarget`; generic item/path-list
   drop-target state remains outside Places.
+- [x] P16gag: Move app-facing Places drop execution into the Places drag
+  facade. `src/ui/places/drag.rs` now owns dropping place drags, item drags, and
+  external paths onto Places targets or insertion positions, while generic pane
+  and filesystem transfer helpers remain outside Places.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,
