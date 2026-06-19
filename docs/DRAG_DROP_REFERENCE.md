@@ -115,6 +115,12 @@ model, and file operations are launched only after a drop target is resolved.
   pointer is not over a directory-capable item. Places rows, Places headings and
   external path shells still check their own GPUI bounds before forwarding, so
   sibling handlers cannot overwrite the active endpoint.
+- Pane viewport ownership wins while a same-window drag is active. If the
+  retained Places typed payload bridge receives a capture-phase drag move whose
+  window position is inside any pane viewport, it must clear only its Places
+  target, emit `places-dnd-defer-to-pane` on `FIKA_DEBUG_DND=1`, and let the
+  pane retained hit-test keep or update the item drop target. A stale Places
+  target must not be allowed to accept `can_drop` for pane coordinates.
 - Pane blank space, directory item, breadcrumb segment, Places row and Places
   section drag handlers also clear only the target they own when a later
   drag-move event reports the pointer outside their bounds. This mirrors

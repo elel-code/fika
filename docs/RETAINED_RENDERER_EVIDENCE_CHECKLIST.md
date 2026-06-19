@@ -168,6 +168,12 @@ sidebar typed payload bridge rejected an out-of-bounds capture-phase drag move
 and cleared only Places state. It must not be accompanied by a persistent Places
 drop highlight while the pointer is inside the pane.
 
+If the capture-phase bridge still receives a drag move while the pointer is
+inside a pane viewport, the expected trace is
+`places-dnd-defer-to-pane kind=... changed=...`. That line means pane viewport
+ownership won, Places cleared only its retained target, and the pane retained
+hit-test remains responsible for the visible directory or pane drop highlight.
+
 ## Recording Rule
 
 When a renderer policy changes, the owning plan or decision document must record:

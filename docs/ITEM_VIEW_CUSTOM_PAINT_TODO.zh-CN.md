@@ -551,6 +551,13 @@ Places chrome 默认之后的当前执行入口是
   `scripts/compare-item-image-renderers.sh` 现在把第二个日志称为 `BASELINE_LOG`，
   这符合当前 hybrid 默认工作流：由 `FIKA_GPUI_THEME_ICONS=1` 提供 GPUI image-element
   baseline。
+- [x] P16fr：记录 active drag 期间 pane/Places drag-target ownership。
+  `docs/PLACES_RETAINED_EVENT_DELIVERY_PLAN.zh-CN.md`、
+  `docs/DRAG_DROP_REFERENCE.zh-CN.md` 和
+  `docs/RETAINED_RENDERER_EVIDENCE_CHECKLIST.zh-CN.md` 现在说明 retained Places typed
+  payload bridge 在 pointer 位于 pane viewport 内时必须 defer 给 pane ownership。
+  必需运行时 trace 是 `places-dnd-defer-to-pane`，且 pane retained hit testing 已拥有 item
+  drop target 时，不允许残留 Places 高亮。
 - [ ] P16q：在每个 P16 实现切片之后，单独提交并附带相关验证：仅文档切片需要 `git diff --check`；代码切片需要 `cargo fmt`、`cargo check`、`cargo test -q`、`scripts/check-item-view-perf-analyzer.sh`、`scripts/check-places-perf-analyzer.sh` 和 `git diff --check`。
 - [x] P16r：记录运行时自测试和突破记录规则。可重复的滚动、缩放、启动图标、调整大小、模式切换和 Places 目标回退应在依赖手动计时之前通过 autosmoke 日志和分析器脚本重现。任何确认的优化突破必须记录症状、Dolphin 比较边界、根本原因、实现、保存的日志/分析器命令和未来回归守卫在拥有的设计或决策文档中。
 

@@ -162,6 +162,11 @@ Perf 日志不能替代以下行为审查：
 bounds 外的 capture-phase drag move，并且只清理 Places state。当 pointer 位于 pane 内时，
 这条日志不应伴随持续的 Places drop 高亮残留。
 
+如果 capture-phase bridge 在 pointer 位于 pane viewport 内时仍然收到 drag move，预期 trace 是
+`places-dnd-defer-to-pane kind=... changed=...`。这表示 pane viewport ownership 获胜，
+Places 只清自己的 retained target，而可见目录或 pane drop 高亮继续由 pane retained hit-test
+负责。
+
 ## 记录规则
 
 当 renderer policy 变化时，所属 plan 或 decision 文档必须记录：

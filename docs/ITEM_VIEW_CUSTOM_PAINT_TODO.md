@@ -1643,6 +1643,14 @@ tracks.
   log. `scripts/compare-item-image-renderers.sh` now describes its second log
   as `BASELINE_LOG`, which matches the current hybrid default workflow where
   `FIKA_GPUI_THEME_ICONS=1` supplies the GPUI image-element baseline.
+- [x] P16fr: Record pane/Places drag-target ownership during active drags.
+  `docs/PLACES_RETAINED_EVENT_DELIVERY_PLAN.md`,
+  `docs/DRAG_DROP_REFERENCE.md`, and
+  `docs/RETAINED_RENDERER_EVIDENCE_CHECKLIST.md` now state that a retained
+  Places typed payload bridge must defer to pane viewport ownership when the
+  pointer is inside a pane. The required runtime trace is
+  `places-dnd-defer-to-pane`, and stale Places highlights must not survive
+  while pane retained hit testing owns an item drop target.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

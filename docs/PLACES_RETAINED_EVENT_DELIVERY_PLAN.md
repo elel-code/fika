@@ -472,6 +472,26 @@ rg -n "on_drag_move|on_drop|insert_hitbox|DragMoveEvent|DropEvent|ExternalPaths|
   pointer inside Places may own Places target decisions and stop propagation;
   pane preview/window drag tracking remains responsible for pane item targets.
 
+2026-06-19 pane-ownership defer slice:
+
+- A second isolation boundary is needed after the bounds gate: the sidebar-level
+  typed payload bridge can still receive capture-phase drag-move events for a
+  pointer that GPUI considers within the bridge element while Fika's pane
+  viewport geometry says the pointer is inside a pane. In that case the pane
+  viewport is the authoritative owner of the drop target, matching Dolphin's
+  item-view controller ownership.
+- The fix is to route every Places retained-DnD move through the app-level pane
+  viewport guard before converting the pointer into Places row geometry. If the
+  pointer is inside any pane viewport, Places clears only its retained DnD
+  target and `place_drop_target`, emits `places-dnd-defer-to-pane`, and returns
+  without setting a new Places target. It also refuses `can_drop` while the
+  current mouse position is inside a pane viewport, so a stale retained Places
+  target cannot win at drop time.
+- Regression rule: future retained-hitbox typed drag APIs must preserve this
+  surface ownership order. Pane viewport hit testing wins over the Places
+  sidebar bridge for pane coordinates; Places may own only coordinates that are
+  outside pane viewports and inside the Places event layer.
+
 ## TODO
 
 - [x] Add a `PlacesEventDeliveryPolicy` with an explicit `GpuiShells` fallback,
