@@ -14999,6 +14999,33 @@ text/plain=viewer.desktop;\n",
             &target_dir
         ));
 
+        let payload = ItemDragPayload {
+            source_pane: pane_id,
+            source_path: source_file.clone(),
+            source_selected: false,
+        };
+        app.begin_item_drag(payload.clone());
+        assert!(app.set_place_drag_drop_target_for_path(target_dir.clone()));
+        assert!(place_drop_target_matches_place(
+            app.drop_targets.place(),
+            &target_dir
+        ));
+
+        let (target_pane, update, paths) = app
+            .update_active_item_drag_drop_target_from_window_position(pane_id, pane_point)
+            .expect("active item drag update");
+        assert_eq!(paths, vec![source_file.clone()]);
+        assert_eq!(target_pane, Some(pane_id));
+        assert_eq!(update.kind, Some(PathListDropTargetKind::Directory));
+        assert!(item_drop_target_matches_directory(
+            app.drop_targets.item(),
+            pane_id,
+            &target_dir
+        ));
+        assert!(app.drop_targets.place().is_none());
+        app.clear_item_drag(&payload);
+        assert!(app.clear_drag_drop_targets());
+
         let _ = std::fs::remove_dir_all(temp);
     }
 
