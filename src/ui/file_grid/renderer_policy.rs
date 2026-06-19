@@ -74,7 +74,9 @@ pub(super) struct RendererPolicyStats {
     pub(super) image_layer: usize,
     pub(super) gpui_image_element: usize,
     pub(super) retained_interaction: usize,
+    pub(super) retained_directory_drop_target: usize,
     pub(super) gpui_drag_shell: usize,
+    pub(super) gpui_directory_drop_shell: usize,
     pub(super) rename_overlay: usize,
 }
 
@@ -179,6 +181,11 @@ where
         if matches!(policy.interaction, ItemInteractionRenderer::RetainedLayer) {
             stats.retained_interaction += 1;
         }
+        if content_is_directory(item.content.as_ref())
+            && matches!(policy.interaction, ItemInteractionRenderer::RetainedLayer)
+        {
+            stats.retained_directory_drop_target += 1;
+        }
         if matches!(policy.drag_start, ItemDragStartRenderer::GpuiShell) {
             stats.gpui_drag_shell += 1;
         }
@@ -205,11 +212,23 @@ pub(super) fn details_renderer_policy_stats(items: &[DetailsPaintSnapshot]) -> R
         ) {
             stats.retained_interaction += 1;
         }
+        if item.content.is_dir
+            && matches!(
+                policy.interaction,
+                DetailsRowInteractionRenderer::RetainedLayer
+            )
+        {
+            stats.retained_directory_drop_target += 1;
+        }
         if matches!(policy.drag_start, DetailsRowDragStartRenderer::GpuiShell) {
             stats.gpui_drag_shell += 1;
         }
     }
     stats
+}
+
+fn content_is_directory(content: &ItemPaintContent) -> bool {
+    content.is_dir
 }
 
 pub(super) fn item_uses_layer_visual_paint(content: &ItemPaintContent) -> bool {

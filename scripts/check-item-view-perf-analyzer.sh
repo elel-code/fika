@@ -271,6 +271,16 @@ if "$analyzer" --expect-retained-item-policy "$tmpdir/invalid-retained-item-poli
     exit 1
 fi
 
+cat > "$tmpdir/invalid-directory-drop-shell-policy.log" <<'EOF'
+[fika item-view] pane=1 mode=Compact phase=steady items=48 visible=32 raw=50us icon_sync=2us queue=1us convert=40us total=120us
+[fika renderer-policy] pane=1 mode=Compact items=48 visual_layer=48 image_layer=8 gpui_image_element=0 retained_interaction=48 retained_directory_drop_target=6 gpui_drag_shell=48 gpui_directory_drop_shell=1 rename_overlay=0
+EOF
+
+if "$analyzer" --expect-retained-item-policy "$tmpdir/invalid-directory-drop-shell-policy.log" >/dev/null 2>&1; then
+    echo "expected retained item policy with GPUI directory drop shell to fail" >&2
+    exit 1
+fi
+
 if "$analyzer" --require-modes Compact,Icons,Details "$tmpdir/missing-channels.log" >/dev/null 2>&1; then
     echo "expected missing required modes to fail" >&2
     exit 1

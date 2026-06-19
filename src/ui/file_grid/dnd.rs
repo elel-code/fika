@@ -12,8 +12,8 @@ use crate::FikaApp;
 use crate::ui::drag_drop::{
     DragPreviewLayout, FileTransferMode, ItemDragPayload, PathListDropTargetKind,
     PathListDropTargetUpdate, debug_dnd_log, debug_paths, drag_preview_layout_for_cursor_offset,
-    item_drop_reject_reason, refresh_active_drag_cursor_for_drop_menu,
-    refresh_active_drag_cursor_for_transfer_mode, refresh_active_drag_cursor_not_allowed,
+    refresh_active_drag_cursor_for_drop_menu, refresh_active_drag_cursor_for_transfer_mode,
+    refresh_active_drag_cursor_not_allowed,
 };
 use crate::ui::icons::{FileIconSnapshot, cached_icon_or_fallback};
 use crate::ui::places::PlaceDrag;
@@ -182,64 +182,6 @@ pub(super) fn install_file_grid_path_drop_shell(
         .on_drop::<PlaceDrag>(cx.listener(move |this, drag: &PlaceDrag, window, cx| {
             handle_file_grid_place_drop(this, pane_id, drag, window, cx);
         }))
-}
-
-pub(super) fn install_directory_drop_target_shell(
-    shell: Stateful<Div>,
-    pane_id: PaneId,
-    target_dir: Arc<Path>,
-    cx: &mut Context<FikaApp>,
-) -> Stateful<Div> {
-    let item_target_dir = target_dir.clone();
-    let external_target_dir = target_dir.clone();
-    let place_target_dir = target_dir;
-    shell
-        .on_drag_move::<ItemDrag>(cx.listener(
-            move |this, event: &gpui::DragMoveEvent<ItemDrag>, window, cx| {
-                let contains = event.bounds.contains(&event.event.position);
-                let source_paths = this.item_drag_source_paths(&event.drag(cx).payload());
-                handle_file_grid_directory_path_list_drag_move(
-                    this,
-                    pane_id,
-                    contains,
-                    &source_paths,
-                    item_target_dir.as_ref(),
-                    window,
-                    cx,
-                );
-            },
-        ))
-        .on_drag_move::<ExternalPaths>(cx.listener(
-            move |this, event: &gpui::DragMoveEvent<ExternalPaths>, window, cx| {
-                let contains = event.bounds.contains(&event.event.position);
-                let source_paths = this.external_drag_source_paths(event.drag(cx).paths());
-                handle_file_grid_directory_path_list_drag_move(
-                    this,
-                    pane_id,
-                    contains,
-                    &source_paths,
-                    external_target_dir.as_ref(),
-                    window,
-                    cx,
-                );
-            },
-        ))
-        .on_drag_move::<PlaceDrag>(cx.listener(
-            move |this, event: &gpui::DragMoveEvent<PlaceDrag>, window, cx| {
-                let contains = event.bounds.contains(&event.event.position);
-                let source_path = event.drag(cx).path();
-                let source_paths = std::slice::from_ref(&source_path);
-                handle_file_grid_directory_path_list_drag_move(
-                    this,
-                    pane_id,
-                    contains,
-                    source_paths,
-                    place_target_dir.as_ref(),
-                    window,
-                    cx,
-                );
-            },
-        ))
 }
 
 impl Render for DragPreview {
@@ -485,49 +427,6 @@ fn handle_file_grid_path_list_drag_move(
         cx.stop_propagation();
     }
     update
-}
-
-fn handle_file_grid_directory_path_list_drag_move(
-    app: &mut FikaApp,
-    pane_id: PaneId,
-    contains: bool,
-    source_paths: &[PathBuf],
-    target_dir: &Path,
-    window: &mut Window,
-    cx: &mut Context<FikaApp>,
-) {
-    if !contains {
-        // The viewport-level retained hit test owns blank/leave transitions.
-        // Per-directory shells only assert positive hits; clearing here can
-        // race against the viewport setting a directory target when GPUI shell
-        // bounds and retained item geometry differ.
-        return;
-    }
-
-    let changed = app.set_dragged_paths_drop_target_for_directory(
-        pane_id,
-        source_paths,
-        target_dir.to_path_buf(),
-    );
-    debug_dnd_log(|| {
-        format!(
-            "directory-shell-hit pane={} target={} changed={} sources={}",
-            pane_id.0,
-            target_dir.display(),
-            changed,
-            debug_paths(source_paths)
-        )
-    });
-    if item_drop_reject_reason(source_paths, target_dir).is_none() {
-        refresh_active_drag_cursor_for_drop_menu(window, cx);
-        app.refresh_drop_target_lease(cx);
-    } else {
-        refresh_active_drag_cursor_not_allowed(window, cx);
-    }
-    if changed {
-        cx.notify();
-    }
-    cx.stop_propagation();
 }
 
 fn handle_file_grid_place_drag_move(

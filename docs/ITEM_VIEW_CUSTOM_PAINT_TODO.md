@@ -292,9 +292,10 @@ This is the active task board for the GPUI item view custom-paint migration.
   so the remaining GPUI shell consumes DnD-owned data.
 - [x] Centralize viewport-level item/external/place drag-move and drop shell
   installation in `src/ui/file_grid/dnd.rs`.
-- [x] Install directory item/row drop-target shells through
-  `src/ui/file_grid/dnd.rs`; these remain positive target assertions, not the
-  only source of pane-internal drag hover state.
+- [x] Route directory item/row drop targeting through
+  `src/ui/file_grid/dnd.rs` during the migration. This was later narrowed by
+  the retained viewport/window-position path: per-directory GPUI drag-move
+  shells are no longer the pane directory hover source.
 - [x] Track pane-internal active item drags from a window mouse listener in the
   retained interaction layer so self-drags update retained directory highlight
   while moving even when GPUI does not deliver per-element `on_drag_move`
@@ -2060,6 +2061,21 @@ tracks.
   `--expect-custom-row-full-policy` with `section_gpui=0`; targets warm row
   paint was `247us`, and overflow kept visible event hitboxes clipped to `32`
   with warm row paint `785us`.
+- [x] P16gaw: Remove pane per-directory GPUI drag-move shells. Root cause:
+  directory item/row drop hover was still asserted through transparent GPUI
+  shells even though retained window-position hit testing already resolved pane
+  and directory targets for item, external-path, and Place drags. Implementation:
+  Compact/Icons item shells and Details row shells no longer install
+  `install_directory_drop_target_shell`; the helper and `directory-shell-hit`
+  handler were removed from `file_grid/dnd.rs`. Renderer-policy logs now report
+  `retained_directory_drop_target` and `gpui_directory_drop_shell`, and
+  `scripts/analyze-item-view-perf.sh --expect-retained-item-policy` rejects any
+  nonzero GPUI directory drop shell count. Remaining GPUI item/row shells are
+  the typed drag-start boundary and rename overlay only. Evidence:
+  `/tmp/fika-item-retained-directory-drop.log` passed the item-view autosmoke,
+  renderer-policy and interaction gates with
+  `max_retained_directory_drop_target=60` and
+  `max_gpui_directory_drop_shell=0`.
 
 ## Acceptance Gates
 

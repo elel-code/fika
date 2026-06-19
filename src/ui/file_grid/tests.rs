@@ -219,7 +219,9 @@ fn content_layers_split_base_visuals_from_image_visuals() {
             image_layer: 2,
             gpui_image_element: 1,
             retained_interaction: 3,
+            retained_directory_drop_target: 0,
             gpui_drag_shell: 5,
+            gpui_directory_drop_shell: 0,
             rename_overlay: 2,
         }
     );
@@ -878,7 +880,9 @@ fn details_visual_layer_items_project_rows_and_cells() {
             image_layer: 0,
             gpui_image_element: 0,
             retained_interaction: 1,
+            retained_directory_drop_target: 0,
             gpui_drag_shell: 1,
+            gpui_directory_drop_shell: 0,
             rename_overlay: 0,
         }
     );
@@ -1021,17 +1025,23 @@ fn details_item_drag_projection_preserves_retained_drag_start_fields() {
 }
 
 #[test]
-fn item_paint_content_preserves_directory_identity_for_drop_target_shells() {
+fn item_paint_content_preserves_directory_identity_for_retained_drop_targets() {
     let mut cache = ItemPaintSlotCache::default();
     let mut item = test_visible_item(1, ItemId(7), "target", test_item_layout(0.0), false);
     item.is_dir = true;
     item.drag_path = Arc::from(Path::new("/tmp/target"));
 
     let projection = cache.project_file_grid_snapshot(icons_snapshot(vec![item]), None);
+    let FileGridRenderSnapshot::Icons { items, .. } = &projection.snapshot else {
+        panic!("expected icons snapshot");
+    };
     let content = first_icon_paint_content(&projection.snapshot);
+    let renderer_stats = item_renderer_policy_stats(items);
 
     assert!(content.is_dir);
     assert_eq!(content.drag_path.as_ref(), Path::new("/tmp/target"));
+    assert_eq!(renderer_stats.retained_directory_drop_target, 1);
+    assert_eq!(renderer_stats.gpui_directory_drop_shell, 0);
 }
 
 fn icons_snapshot(items: Vec<VisibleItemSnapshot>) -> FileGridSnapshot {

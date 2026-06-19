@@ -7,10 +7,7 @@ use gpui::{
 
 use crate::FikaApp;
 
-use super::dnd::{
-    install_directory_drop_target_shell, install_item_drag_start_shell,
-    item_drag_from_item_snapshot,
-};
+use super::dnd::{install_item_drag_start_shell, item_drag_from_item_snapshot};
 use super::rename_overlay::rename_text_view;
 use super::renderer_policy::{
     ItemDragStartRenderer, ItemInteractionRenderer, ItemRenameEditorRenderer,
@@ -39,7 +36,6 @@ pub(super) fn item_tile(
     );
     let drag_app = app.clone();
     let drag_value = item_drag_from_item_snapshot(pane_id, &item);
-    let directory_drop_target = content.is_dir.then(|| content.drag_path.clone());
 
     // Temporary migration boundary: GPUI drag starts are still tied to a Div
     // until a public custom-element drag-start API exists.
@@ -52,10 +48,8 @@ pub(super) fn item_tile(
         .h(px(visual.height))
         .rounded_md()
         .bg(rgba(0x00000000));
-    let core = match directory_drop_target {
-        Some(target_dir) => install_directory_drop_target_shell(core, pane_id, target_dir, cx),
-        None => core,
-    };
+    // Directory drop hover/drop is owned by the retained viewport hit-test path.
+    // The per-item GPUI shell below remains only for typed drag initiation.
     let core = match renderer_policy.drag_start {
         ItemDragStartRenderer::GpuiShell => {
             install_item_drag_start_shell(core, drag_value, drag_app)

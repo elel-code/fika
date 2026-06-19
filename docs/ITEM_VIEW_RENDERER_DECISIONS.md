@@ -39,11 +39,11 @@ custom renderer can replace a GPUI surface.
 | Compact/Icons base background and labels | custom content-level painter | visible item snapshots, paint slots, text shape cache | Keep custom paint. | Runtime logs must keep steady snapshot conversion sub-ms and static visual paint/build under budget. |
 | Compact/Icons thumbnail images | custom image painter | image paint snapshots, pane-local thumbnail image cache, retained thumbnail image map, thumbnail scheduler roles | Keep custom paint for thumbnails while image decode/cache stays on GPUI `RetainAllImageCache`; thumbnail pending/failure behavior remains model-driven and can paint fallback without changing MIME/theme icon policy. | Logs must include `[fika item-image]` plus `thumb_*` `image_sources` when thumbnails are exercised; no thumbnail sync decode in prepaint. |
 | Compact/Icons MIME/theme-icon images | Visible-cohort hybrid GPUI fallback plus custom image layer handoff | retained item slots, visible icon role/path cache, app-level `ThemeIconImageReadiness`, pane image layer, background file-icon resolve queue | Use hybrid by default. If any currently visible theme-icon key is not ready, the visible cohort stays on GPUI `img()` while the custom image layer prewarms retained `RenderImage`s. Once the visible cohort is ready, all of those theme icons hand off to the retained custom image layer together. `FIKA_GPUI_THEME_ICONS=1` forces the old GPUI baseline, and `FIKA_CUSTOM_THEME_ICONS=1` remains the full custom stress path. | Default hybrid logs must pass `scripts/compare-item-image-renderers.sh --gate-hybrid-default-promotion` against a `FIKA_GPUI_THEME_ICONS=1` baseline for `/etc` and a mixed user directory. |
-| Compact/Icons hover, cursor, click, menu, drop hit testing | retained viewport/custom hitboxes plus active item-drag window tracker | viewport retained hit testing and `drag_drop` state | Keep retained controller path. | DnD smoke must pass across internal item, pane, Places, and external drops; pane self-drags should log `active-item-move`. |
+| Compact/Icons hover, cursor, click, menu, drop hit testing | retained viewport/custom hitboxes plus active item-drag window tracker | viewport retained hit testing and `drag_drop` state | Keep retained controller path. Directory item drop hover is resolved from retained window-position hit testing, not per-directory GPUI drag-move shells. | DnD smoke must pass across internal item, pane, Places, and external drops; pane self-drags should log `active-item-move`. Renderer policy must keep `gpui_directory_drop_shell=0`. |
 | Compact/Icons drag start | GPUI `Div::on_drag` shell | retained drag payload state plus temporary shell | Keep GPUI shell for initiation only. | Do not remove until GPUI exposes public custom-element drag-start or Fika carries an audited GPUI patch. |
 | Compact/Icons rename editor | GPUI text/editor subtree overlay | rename draft model and overlay geometry | Keep GPUI built-in editor. | Only revisit when text input, caret hit testing, selection, and IME behavior can stay behavior-complete. |
 | Details row backgrounds, icons, and text cells | custom content-level painter | Details paint slots, image cache, text shape cache, background file-icon resolve queue | Keep custom paint. Render frames use cached/preliminary icon snapshots only. | Logs must include `[fika details-visual]` and `[fika details-shape-cache]` with no steady build regression or synchronous icon-theme lookup spike. |
-| Details row click, menu, navigation, drop, hover, cursor | retained viewport/custom hitboxes plus active item-drag window tracker | viewport retained hit testing and Details row snapshots | Keep retained controller path. | Runtime smoke must cover Details item drag, directory drop, pane drop, and rename overlay. |
+| Details row click, menu, navigation, drop, hover, cursor | retained viewport/custom hitboxes plus active item-drag window tracker | viewport retained hit testing and Details row snapshots | Keep retained controller path. Directory row drop hover is resolved from retained window-position hit testing, not per-directory GPUI drag-move shells. | Runtime smoke must cover Details item drag, directory drop, pane drop, and rename overlay. Renderer policy must keep `gpui_directory_drop_shell=0`. |
 | Details drag start | GPUI `Div::on_drag` row shell | retained Details drag fields plus temporary shell | Keep GPUI shell for initiation only. | Same public drag-start API or audited GPUI patch gate as Compact/Icons. |
 | Places rows, section headings, and sidebar scrollbar | Default full custom row/section visual layer, retained-DnD mixed event delivery, one sidebar typed DnD payload shell, and GPUI row drag-start shells; `gpui`, `chrome`, and `text` fallback policies remain available | `places` model/projection, `places/interaction.rs`, retained event layer, retained Places icon image cache, text shape cache, and `drag_drop` state | Keep the Dolphin-aligned retained model/controller/painter split as default. Row text, section heading text, and Places icons are now Fika-owned custom paint; Places icons use GPUI's efficient underlying `RenderImage`/`paint_image` path through a retained `RetainAllImageCache`, matching Dolphin's pixmap-cache principle without leaving GPUI text/image child elements in Places rows or headings. Typed DnD payload delivery and drag start remain explicit GPUI/platform boundaries. | Default logs must pass `--expect-custom-row-full-policy` and `--require-interaction-policy` with `event_policy=retained-dnd`, `text_gpui=0`, `icon_gpui=0`, `section_gpui=0`, `visual_kind=full`, `retained_hitboxes=rows+sections`, `gpui_event_shells=1`, `gpui_row_section_event_shells=0`, `gpui_typed_dnd_payload_shells=1`, `gpui_sidebar_leave_shells=0`, and aggregated `[fika places-row-visual]` rows matching policy rows. GPUI/chrome fallbacks keep GPUI heading text and remain analyzer-covered baselines. |
 
@@ -529,6 +529,35 @@ reported `max_section_gpui=0`, `max_text_gpui=0`, `max_icon_gpui=0`,
 `visual_kinds=full`, and warm row paint `247us`. The overflow log reported
 `max_rows=75`, `max_sections=3`, `max_section_gpui=0`, visible event hitboxes
 clipped to `32`, and warm row paint `785us`.
+
+## 2026-06-19 Pane Directory Drop Shell Removal
+
+Pane directory hover/drop targeting no longer needs per-directory GPUI
+`on_drag_move` shells. The retained path already has the required model:
+`update_dragged_paths_drop_target_from_window_position()` maps window
+coordinates to pane/item geometry, chooses a directory item or pane target, and
+updates `DropTargetState`. The active item-drag preview/window tracker keeps
+same-pane drags updated even when GPUI stops dispatching per-element drag moves.
+
+Implementation: Compact/Icons item shells and Details rows no longer install
+`install_directory_drop_target_shell`; that helper and its
+`directory-shell-hit` path were removed. Transparent row/item shells remain only
+for typed drag start and rename overlay boundaries. Renderer-policy logs now
+separate `retained_directory_drop_target` from `gpui_directory_drop_shell`, and
+`--expect-retained-item-policy` rejects any nonzero GPUI directory drop shell
+count.
+
+Decision: pane directory drop hover belongs to retained viewport/window-position
+hit testing. This matches the Places direction: GPUI may still initiate typed
+drags, but ongoing hover/drop targeting should be owned by retained controller
+state.
+
+Evidence: `/tmp/fika-item-retained-directory-drop.log` passed
+`scripts/analyze-item-view-perf.sh --require-autosmoke --require-renderer-policy
+--require-interaction --expect-retained-item-policy`. Its renderer-policy
+summary reported `max_retained_directory_drop_target=60` and
+`max_gpui_directory_drop_shell=0`; item interaction hitboxes still matched the
+visible retained layer with `max_prepaint_count=64`.
 
 ## Next Renderer Decisions
 

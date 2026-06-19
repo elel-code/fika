@@ -6,10 +6,7 @@ use crate::FikaApp;
 
 use super::details::{DetailsColumn, details_columns};
 use super::details_visual::details_visual_layer_view;
-use super::dnd::{
-    install_directory_drop_target_shell, install_item_drag_start_shell,
-    item_drag_from_details_snapshot,
-};
+use super::dnd::{install_item_drag_start_shell, item_drag_from_details_snapshot};
 use super::interaction::details_interaction_layer_view;
 use super::renderer_policy::{DetailsRowDragStartRenderer, details_row_renderer_policy};
 use super::{DetailsLayoutMetrics, DetailsPaintSnapshot, item_identity_element_id};
@@ -120,7 +117,6 @@ fn details_row(
     let policy = details_row_renderer_policy(&item);
     let drag_value = item_drag_from_details_snapshot(pane_id, &item);
     let app = cx.weak_entity();
-    let directory_drop_target = item.content.is_dir.then(|| item.content.path.clone());
 
     let row = div()
         .id(item_identity_element_id("details-row", item_id))
@@ -132,13 +128,10 @@ fn details_row(
         .flex()
         .items_center()
         .bg(rgba(0x00000000));
-    let row = match directory_drop_target {
-        Some(target_dir) => install_directory_drop_target_shell(row, pane_id, target_dir, cx),
-        None => row,
-    };
 
     // The viewport owns click/menu/navigation hit testing from retained
-    // geometry; this row remains only as GPUI's drag-start boundary.
+    // geometry and directory drop targeting; this row remains only as GPUI's
+    // drag-start boundary.
     match policy.drag_start {
         DetailsRowDragStartRenderer::GpuiShell => {
             install_item_drag_start_shell(row, drag_value, app)

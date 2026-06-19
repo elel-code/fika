@@ -780,6 +780,18 @@ Places chrome 默认之后的当前执行入口是
   `/tmp/fika-places-section-full-overflow.log` 已以 `section_gpui=0` 通过
   `--expect-custom-row-full-policy`；targets warm row paint 为 `247us`，overflow
   将 visible event hitboxes 裁到 `32`，warm row paint 为 `785us`。
+- [x] P16gaw：移除 pane per-directory GPUI drag-move shell。根因：目录 item/row
+  drop hover 仍通过透明 GPUI shell 正向断言，但 retained window-position hit testing
+  已经能为 item、external-path 和 Place 拖拽解析 pane/目录目标。实现：Compact/Icons
+  item shell 和 Details row shell 不再安装 `install_directory_drop_target_shell`；
+  `file_grid/dnd.rs` 中的 helper 和 `directory-shell-hit` handler 已移除。
+  Renderer-policy 日志现在报告 `retained_directory_drop_target` 和
+  `gpui_directory_drop_shell`，且
+  `scripts/analyze-item-view-perf.sh --expect-retained-item-policy` 会拒绝任何非零
+  GPUI directory drop shell 计数。剩余 GPUI item/row shell 仅是 typed drag-start
+  边界和 rename overlay。证据：`/tmp/fika-item-retained-directory-drop.log` 通过
+  item-view autosmoke、renderer-policy 和 interaction gate，且报告
+  `max_retained_directory_drop_target=60`、`max_gpui_directory_drop_shell=0`。
 - [ ] P16q：在每个 P16 实现切片之后，单独提交并附带相关验证：仅文档切片需要 `git diff --check`；代码切片需要 `cargo fmt`、`cargo check`、`cargo test -q`、`scripts/check-item-view-perf-analyzer.sh`、`scripts/check-places-perf-analyzer.sh` 和 `git diff --check`。
 - [x] P16r：记录运行时自测试和突破记录规则。可重复的滚动、缩放、启动图标、调整大小、模式切换和 Places 目标回退应在依赖手动计时之前通过 autosmoke 日志和分析器脚本重现。任何确认的优化突破必须记录症状、Dolphin 比较边界、根本原因、实现、保存的日志/分析器命令和未来回归守卫在拥有的设计或决策文档中。
 
