@@ -2152,12 +2152,35 @@ tracks.
   reports `max_image_layer=32`, `max_gpui_image_element=0`,
   `theme_placeholder=0`, `theme_decoded=0`, `theme_prewarm_decoded=0`,
   `theme_retained=187`, and `item-image max_prepaint=315us`.
-- [ ] P16gbc: Reduce `/etc` cold/content-change `icon_sync` variance in the
-  model/icon-resolution path. P16gbb moved cold SVG work out of the image
-  element, so remaining `/etc` spikes are no longer visible image paint churn.
-  Continue the Dolphin-aligned model path: stable MIME/icon-name ownership,
-  exact `iconName + size + scale + mode` readiness, and batched visible-work
-  resolution before pane rendering.
+- [x] P16gbc: Reduce `/etc` cold/content-change `icon_sync` variance in the
+  model/icon-resolution path. Root cause: the remaining `/etc` spike was two
+  cold visible semantic icon resolves, not image paint. `.pwd.lock`
+  (`application/octet-stream`) spent about 28ms in theme lookup and `.updated`
+  (`text/plain`) spent about 2ms after read-ahead preliminary keys changed into
+  real MIME keys. Implementation: startup launches a detached background prewarm
+  for common semantic file-icon keys, prioritizing the default 48px size and
+  adjacent zoom levels before filling the rest. The table includes directory
+  plus common text, binary, archive, office, image, video, audio, and PDF MIME
+  keys. The prewarm writes into
+  `FileIconCache` through `finish_resolve_results`, but does not occupy
+  `FileIconResolveQueue` cover keys, because queue-covered visible items caused
+  the first `/etc` content frame to drop the image layer temporarily. Evidence:
+  `/tmp/fika-common-icon-prewarm-detached-etc.log` and
+  `/tmp/fika-common-icon-prewarm-expanded-etc.log` report no scroll-time
+  `application/octet-stream` or `text/plain` sync resolve, with expanded
+  `icon_sync max_total=241us`, `max_resolved=1` only for the initial directory
+  key, `max_image_layer=64`, `max_gpui_image_element=0`, and
+  `theme_placeholder=0`. Downloads still shows a first-visible
+  `application/java-archive` race, so mixed-directory initial MIME prewarm
+  remains future work rather than claimed fixed.
+- [ ] P16gbd: Continue GPUI `img()` internals alignment for pane images. Keep
+  the efficient bottom path (`Arc<RenderImage>` retained by Fika, painted via
+  `Window::paint_image` and GPUI sprite atlas), but move more upper-level
+  identity and prewarm decisions to Dolphin-style semantic keys. In particular,
+  review whether scalable SVG MIME/theme icons should keep size in the
+  readiness key or use size only for raster variant selection, because GPUI
+  `img(Resource::Path(svg))` creates one `RenderImage` and scales by paint
+  bounds rather than decoding a new image for every zoom size.
 
 ## Acceptance Gates
 

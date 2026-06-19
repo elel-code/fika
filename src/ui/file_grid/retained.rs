@@ -15,8 +15,9 @@ use crate::ui::drag_drop::ItemDropTarget;
 use crate::ui::icons::{FileIconSnapshot, file_icon_resolve_results_for_requests};
 use crate::ui::rename::RenameDraft;
 use fika_core::{
-    FilteredModel, Generation, MetadataRoleResult, PaneId, ThumbnailProbeResult, ViewMode,
-    ViewState, apply_metadata_role_result_to_model, apply_thumbnail_probe_result_to_model,
+    FilteredModel, Generation, MAX_ZOOM_LEVEL, MIN_ZOOM_LEVEL, MetadataRoleResult, PaneId,
+    ThumbnailProbeResult, ViewMode, ViewState, apply_metadata_role_result_to_model,
+    apply_thumbnail_probe_result_to_model, icon_size_for_zoom_level,
     metadata_role_results_for_requests, thumbnail_probe_results_for_requests,
 };
 use gpui::{AppContext, Context};
@@ -252,6 +253,7 @@ impl FikaApp {
         let raw_elapsed = raw_started.map(|started| started.elapsed());
 
         let file_icon_size = view.icon_size();
+        let file_icon_resolve_sizes = file_icon_resolve_sizes_for_zoom_level(view.zoom_level);
         let item_count = {
             let pane = self.panes.pane(pane_id)?;
             filtered.map_or_else(|| pane.model.len(), |filtered| filtered.len())
@@ -265,6 +267,7 @@ impl FikaApp {
             item_count,
             &raw_file_grid,
             file_icon_size,
+            &file_icon_resolve_sizes,
             filtered,
             perf_enabled,
             cx,
@@ -306,6 +309,7 @@ impl FikaApp {
         item_count: usize,
         raw_file_grid: &RawFileGridSnapshot,
         file_icon_size: f32,
+        file_icon_resolve_sizes: &[f32],
         filtered: Option<&fika_core::FilteredModel>,
     ) -> Option<QueuedVisibleModelWork> {
         let pane = self.panes.pane(pane_id)?;
@@ -323,6 +327,7 @@ impl FikaApp {
             item_count,
             raw_file_grid,
             file_icon_size,
+            file_icon_resolve_sizes,
             &pane.model,
             filtered,
         ))
@@ -553,6 +558,7 @@ impl FikaApp {
         item_count: usize,
         raw_file_grid: &RawFileGridSnapshot,
         file_icon_size: f32,
+        file_icon_resolve_sizes: &[f32],
         filtered: Option<&fika_core::FilteredModel>,
         perf_enabled: bool,
         cx: &mut Context<Self>,
@@ -588,6 +594,7 @@ impl FikaApp {
             item_count,
             raw_file_grid,
             file_icon_size,
+            file_icon_resolve_sizes,
             filtered,
         )?;
         let queue_elapsed = queue_started.map(|started| started.elapsed());
@@ -624,4 +631,24 @@ impl FikaApp {
         self.thumbnail_scheduler
             .cancel_stale_pane_generations(pane_id, generation);
     }
+}
+
+fn file_icon_resolve_sizes_for_zoom_level(zoom_level: i32) -> Vec<f32> {
+    let mut sizes = Vec::new();
+    for level in [
+        zoom_level,
+        zoom_level + 1,
+        zoom_level + 2,
+        zoom_level - 1,
+        zoom_level - 2,
+    ] {
+        if !(MIN_ZOOM_LEVEL..=MAX_ZOOM_LEVEL).contains(&level) {
+            continue;
+        }
+        let size = icon_size_for_zoom_level(level);
+        if !sizes.iter().any(|existing| *existing == size) {
+            sizes.push(size);
+        }
+    }
+    sizes
 }

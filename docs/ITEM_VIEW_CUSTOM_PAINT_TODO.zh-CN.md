@@ -854,11 +854,28 @@ Places chrome 默认之后的当前执行入口是
   报告 `max_image_layer=32`、`max_gpui_image_element=0`、`theme_placeholder=0`、
   `theme_decoded=0`、`theme_prewarm_decoded=0`、`theme_retained=187`、
   `item-image max_prepaint=315us`。
-- [ ] P16gbc：降低 `/etc` 冷启动/content-change 的 `icon_sync` 方差。P16gbb 已把冷 SVG
-  工作移出 image element，因此剩余 `/etc` 尖峰不再是 visible image paint churn。继续按
-  Dolphin 对齐 model 路径推进：稳定 MIME/icon-name ownership，exact
-  `iconName + size + scale + mode` readiness，以及 pane rendering 前的 batched
-  visible-work resolution。
+- [x] P16gbc：降低 `/etc` 冷启动/content-change 的 `icon_sync` 方差。根因：剩余
+  `/etc` spike 是两个冷的可见语义 icon resolve，不是 image paint。`.pwd.lock`
+  (`application/octet-stream`) 在 theme lookup 中约 28ms，`.updated`
+  (`text/plain`) 约 2ms；read-ahead preliminary key 在滚动后变成真实 MIME key，旧 work
+  覆盖不到。实现：启动时独立后台预热常见语义 file-icon key，并优先处理默认 48px size 与
+  邻近 zoom level，然后补全剩余 size。预热表包含 directory，以及常见 text、binary、
+  archive、office、image、video、audio 和 PDF MIME key。预热通过
+  `finish_resolve_results` 写入 `FileIconCache`，但不占用 `FileIconResolveQueue` cover
+  key；因为 queue-covered visible items 会让首个 `/etc` 内容帧临时失去 image layer。
+  证据：`/tmp/fika-common-icon-prewarm-detached-etc.log` 和
+  `/tmp/fika-common-icon-prewarm-expanded-etc.log` 不再出现 scroll-time
+  `application/octet-stream` 或 `text/plain` sync resolve；扩展表后
+  `icon_sync max_total=241us`，`max_resolved=1` 只剩初始 directory key，
+  `max_image_layer=64`、`max_gpui_image_element=0`、`theme_placeholder=0`。Downloads
+  仍显示首个可见 `application/java-archive` 的竞态，因此混合目录 initial MIME prewarm
+  仍是后续工作，不作为本次已修复项。
+- [ ] P16gbd：继续对齐 GPUI `img()` internals 的 pane image 路径。保留高效下半部分
+  （Fika retained `Arc<RenderImage>`，通过 `Window::paint_image` 和 GPUI sprite atlas
+  绘制），但把更多上层 identity/prewarm 决策移动到 Dolphin 风格语义 key。特别要审查
+  scalable SVG MIME/theme icons 是否还应该在 readiness key 中携带 size，还是只把 size
+  用作 raster variant 选择；因为 GPUI `img(Resource::Path(svg))` 是生成一个
+  `RenderImage`，再通过 paint bounds 缩放，而不是每个 zoom size 都 decode 新 image。
 - [ ] P16q：在每个 P16 实现切片之后，单独提交并附带相关验证：仅文档切片需要 `git diff --check`；代码切片需要 `cargo fmt`、`cargo check`、`cargo test -q`、`scripts/check-item-view-perf-analyzer.sh`、`scripts/check-places-perf-analyzer.sh` 和 `git diff --check`。
 - [x] P16r：记录运行时自测试和突破记录规则。可重复的滚动、缩放、启动图标、调整大小、模式切换和 Places 目标回退应在依赖手动计时之前通过 autosmoke 日志和分析器脚本重现。任何确认的优化突破必须记录症状、Dolphin 比较边界、根本原因、实现、保存的日志/分析器命令和未来回归守卫在拥有的设计或决策文档中。
 

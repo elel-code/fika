@@ -11,6 +11,7 @@ pub(crate) struct PaneVisibleWorkKey {
     model_data_generation: u64,
     source_revision: u64,
     item_count: usize,
+    icon_size_px: u16,
     visible_start: usize,
     visible_end: usize,
     visible_count: usize,
@@ -23,6 +24,7 @@ impl PaneVisibleWorkKey {
         model_data_generation: u64,
         source_revision: u64,
         item_count: usize,
+        file_icon_size: f32,
         raw_file_grid: &RawFileGridSnapshot,
     ) -> Self {
         let (visible_range, visible_count) = raw_file_grid
@@ -34,6 +36,7 @@ impl PaneVisibleWorkKey {
             model_data_generation,
             source_revision,
             item_count,
+            icon_size_px: file_icon_size.round().clamp(1.0, 1024.0) as u16,
             visible_start: visible_range.start,
             visible_end: visible_range.end,
             visible_count,
@@ -225,12 +228,16 @@ mod tests {
         });
 
         assert_ne!(
-            PaneVisibleWorkKey::new(Generation(1), ViewMode::Icons, 1, 0, 80, &first_raw),
-            PaneVisibleWorkKey::new(Generation(1), ViewMode::Icons, 1, 0, 80, &second_raw)
+            PaneVisibleWorkKey::new(Generation(1), ViewMode::Icons, 1, 0, 80, 48.0, &first_raw),
+            PaneVisibleWorkKey::new(Generation(1), ViewMode::Icons, 1, 0, 80, 48.0, &second_raw)
         );
         assert_eq!(
-            PaneVisibleWorkKey::new(Generation(1), ViewMode::Icons, 1, 0, 80, &second_raw),
-            PaneVisibleWorkKey::new(Generation(1), ViewMode::Icons, 1, 0, 80, &second_raw)
+            PaneVisibleWorkKey::new(Generation(1), ViewMode::Icons, 1, 0, 80, 48.0, &second_raw),
+            PaneVisibleWorkKey::new(Generation(1), ViewMode::Icons, 1, 0, 80, 48.0, &second_raw)
+        );
+        assert_ne!(
+            PaneVisibleWorkKey::new(Generation(1), ViewMode::Icons, 1, 0, 80, 48.0, &second_raw),
+            PaneVisibleWorkKey::new(Generation(1), ViewMode::Icons, 1, 0, 80, 64.0, &second_raw)
         );
     }
 

@@ -46,9 +46,50 @@ struct FileIconCacheKey {
     size_px: u16,
 }
 
+const COMMON_FILE_ICON_MIMES: &[&str] = &[
+    "application/octet-stream",
+    "text/plain",
+    "application/x-tar",
+    "application/zip",
+    "application/java-archive",
+    "application/pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "image/jpeg",
+    "image/png",
+    "video/mp4",
+    "audio/mpeg",
+];
+
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct FileIconResolveRequest {
     key: FileIconCacheKey,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub(crate) struct FileIconResolveCoverKey {
+    kind: FileIconResolveCoverKind,
+    size_px: u16,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+enum FileIconResolveCoverKind {
+    Exact(FileIconKind),
+    Mime(Arc<str>),
+}
+
+impl FileIconResolveRequest {
+    pub(crate) fn cover_key(&self) -> FileIconResolveCoverKey {
+        let kind = match &self.key.kind {
+            FileIconKind::Mime { mime, .. } => FileIconResolveCoverKind::Mime(mime.clone()),
+            kind => FileIconResolveCoverKind::Exact(kind.clone()),
+        };
+        FileIconResolveCoverKey {
+            kind,
+            size_px: self.key.size_px,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -250,6 +291,40 @@ pub(crate) fn file_icon_resolve_results_for_requests(
             FileIconResolveResult { request, icon }
         })
         .collect()
+}
+
+pub(crate) fn common_file_icon_resolve_requests_for_sizes(
+    icon_sizes: impl IntoIterator<Item = f32>,
+) -> Vec<FileIconResolveRequest> {
+    let mut requests = Vec::new();
+    let mut size_px = Vec::new();
+    for icon_size in icon_sizes {
+        let size = icon_cache_size(icon_size);
+        if !size_px.contains(&size) {
+            size_px.push(size);
+        }
+    }
+
+    for size_px in size_px {
+        requests.push(FileIconResolveRequest {
+            key: FileIconCacheKey {
+                kind: FileIconKind::Directory,
+                size_px,
+            },
+        });
+        for mime in COMMON_FILE_ICON_MIMES {
+            requests.push(FileIconResolveRequest {
+                key: FileIconCacheKey {
+                    kind: FileIconKind::Mime {
+                        mime: Arc::from(*mime),
+                        extension: None,
+                    },
+                    size_px,
+                },
+            });
+        }
+    }
+    requests
 }
 
 #[derive(Clone, Debug)]
@@ -1007,6 +1082,38 @@ mod tests {
     use super::*;
 
     const GENERIC_BINARY_MIME: &str = "application/octet-stream";
+
+    #[test]
+    fn common_file_icon_resolve_requests_are_semantic_and_size_keyed() {
+        let requests = common_file_icon_resolve_requests_for_sizes([48.0, 48.4, 64.0]);
+        let cover_keys = requests
+            .iter()
+            .map(FileIconResolveRequest::cover_key)
+            .collect::<std::collections::HashSet<_>>();
+
+        let expected_count = 2 * (1 + COMMON_FILE_ICON_MIMES.len());
+        assert_eq!(requests.len(), expected_count);
+        assert_eq!(cover_keys.len(), expected_count);
+        assert!(requests.iter().any(|request| matches!(
+            &request.key.kind,
+            FileIconKind::Directory
+        ) && request.key.size_px == 48));
+        assert!(requests.iter().any(|request| matches!(
+            &request.key.kind,
+            FileIconKind::Mime { mime, extension }
+                if mime.as_ref() == GENERIC_BINARY_MIME && extension.is_none()
+        ) && request.key.size_px == 48));
+        assert!(requests.iter().any(|request| matches!(
+            &request.key.kind,
+            FileIconKind::Mime { mime, extension }
+                if mime.as_ref() == "text/plain" && extension.is_none()
+        ) && request.key.size_px == 64));
+        assert!(requests.iter().any(|request| matches!(
+            &request.key.kind,
+            FileIconKind::Mime { mime, extension }
+                if mime.as_ref() == "application/x-tar" && extension.is_none()
+        ) && request.key.size_px == 48));
+    }
 
     #[test]
     fn mime_icon_candidates_keep_specific_text_icon_before_generic_text() {

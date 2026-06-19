@@ -403,6 +403,40 @@ theme 的资源入口。
 高 `icon_sync`。这现在是 model/icon-resolution 路径问题，不是 visible image paint
 路径问题，后续应继续按 Dolphin 风格推进 MIME/icon model cache 和 visible-work batching。
 
+## 2026-06-19 常见 File Icon 独立预热
+
+`/etc` zoom-scroll smoke 把剩余滚动卡顿定位到两个冷的可见语义 icon 解析，而不是 image
+paint：`.pwd.lock`（`application/octet-stream`）同步扫 theme path 约 28ms，`.updated`
+（`text/plain`）约 2ms。这正对应 Dolphin 的模型约束：常见 MIME/icon-name 结果必须存在按
+icon kind/MIME 和 size keyed 的语义 model cache 中；具体文件 path 不是 cache identity。
+
+实现：启动时现在会独立后台预热常见 file-icon 语义 key，并优先处理默认 48px size 与邻近 zoom
+level，然后补全剩余 size。预热表包含 directory，以及常见 text、binary、archive、office、
+image、video、audio 和 PDF MIME key。这批工作通过 `finish_resolve_results` 写入同一个
+`FileIconCache`，但刻意不占用 `FileIconResolveQueue` 的 cover key。第一次实验把这些 key
+直接排入 visible resolver queue，确实消除了滚动卡顿，但也让首个 `/etc` 内容帧把可见目录视为
+queued，临时失去 image layer。独立预热保留首帧 custom image，同时仍在 scroll/zoom 需要前填充
+共享语义 cache。
+
+GPUI `img()` 仍然是 image 路径下半部分的参考：`RetainAllImageCache` 把 `Resource` load 作为
+后台任务缓存并保存 `Arc<RenderImage>`；`Window::paint_image` 再用
+`(RenderImage.id, frame_index)` 放入 sprite atlas。Fika 的 full custom 路径保留这条高效的
+`RenderImage -> paint_image` GPU/atlas 路线，但把上半部分 identity 改成 Dolphin 风格的语义
+key，而不是 GPUI 的 resource hash。
+
+证据：`/tmp/fika-common-icon-prewarm-detached-etc.log` 使用
+`FIKA_DEBUG_ICON_SYNC=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll` 后，不再出现 scroll-time
+`application/octet-stream` 或 `text/plain` sync resolve。`icon_sync max_total` 从之前约
+30ms（`/tmp/fika-debug-icon-sync-etc.log`）降到 `104us`，`max_resolved=1` 只剩初始 directory
+key；首个内容帧保持 `max_image_layer=48`/`max_gpui_image_element=0`，且
+`theme_placeholder=0`。
+扩展表之后的 `/tmp/fika-common-icon-prewarm-expanded-etc.log` 仍保持同一等级：
+`icon_sync max_total=241us`，没有 scroll-time 文件 MIME resolve。
+`/tmp/fika-common-icon-prewarm-expanded-downloads.log` 显示
+`application/x-tar` 等常见 archive MIME 已变为百微秒级，但首个可见
+`application/java-archive` 仍可能和独立预热竞态，并在首个内容帧同步 resolve。这属于混合目录
+first-visible scheduling 问题，不是本次已修复的 `/etc` scroll 回归。
+
 ## 下一批渲染器决策
 
 1. 保持剩余 drag-start shells 直到 GPUI API 边界变化。不要将 GPUI per-element `on_drag_move` 用作 pane self-drag 悬停的真实来源；active item-drag window tracker 拥有该路径。

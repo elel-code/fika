@@ -97,7 +97,10 @@ use ui::filter_bar::{
     FILTER_BAR_HEIGHT, FilterBarSnapshot, FilteredModelCacheEntry, PaneFilterState,
     cached_filtered_model_for_pane, filter_toggle_snapshot,
 };
-use ui::icons::{FileIconCache, RetainedThemeIconImageCache, ThemeIconImageReadiness};
+use ui::icons::{
+    FileIconCache, RetainedThemeIconImageCache, ThemeIconImageReadiness,
+    common_file_icon_resolve_requests_for_sizes, file_icon_resolve_results_for_requests,
+};
 use ui::item_view::{
     ItemViewScrollState, begin_item_view_scrollbar_drag as begin_item_view_scrollbar_drag_state,
     finish_item_view_scrollbar_drag as finish_item_view_scrollbar_drag_state,
@@ -527,6 +530,7 @@ impl FikaApp {
             background_task_detail_dialog: None,
         };
         app.prewarm_chrome_icon_cache();
+        app.start_common_file_icon_prewarm(cx);
         app.replace_removable_device_places(&initial_devices);
         app._keystroke_subscription = Some(cx.observe_keystrokes(|this, event, _window, cx| {
             if this.handle_keystroke(event, cx) {
@@ -610,6 +614,58 @@ impl FikaApp {
         let _ = pane_close_icon_snapshot(&mut self.file_icons);
         let _ = places_panel_icon_snapshot(&mut self.file_icons, true);
         let _ = places_panel_icon_snapshot(&mut self.file_icons, false);
+    }
+
+    fn start_common_file_icon_prewarm(&mut self, cx: &mut Context<Self>) {
+        let requests =
+            common_file_icon_resolve_requests_for_sizes(Self::common_file_icon_prewarm_sizes());
+        if requests.is_empty() {
+            return;
+        }
+        cx.spawn(
+            move |this: gpui::WeakEntity<FikaApp>, cx: &mut gpui::AsyncApp| {
+                let mut cx = cx.clone();
+                async move {
+                    let results = cx
+                        .background_spawn(async move {
+                            file_icon_resolve_results_for_requests(requests)
+                        })
+                        .await;
+                    let _ = this.update(&mut cx, |app, cx| {
+                        if app.file_icons.finish_resolve_results(results) {
+                            app.invalidate_all_file_grid_visible_snapshot_caches();
+                            cx.notify();
+                        }
+                    });
+                }
+            },
+        )
+        .detach();
+    }
+
+    fn common_file_icon_prewarm_sizes() -> Vec<f32> {
+        let mut levels = Vec::new();
+        for level in [
+            fika_core::DEFAULT_ZOOM_LEVEL,
+            fika_core::DEFAULT_ZOOM_LEVEL + 1,
+            fika_core::DEFAULT_ZOOM_LEVEL - 1,
+            fika_core::DEFAULT_ZOOM_LEVEL + 2,
+            fika_core::DEFAULT_ZOOM_LEVEL - 2,
+        ] {
+            if (fika_core::MIN_ZOOM_LEVEL..=fika_core::MAX_ZOOM_LEVEL).contains(&level) {
+                levels.push(level);
+            }
+        }
+        for level in fika_core::MIN_ZOOM_LEVEL..=fika_core::MAX_ZOOM_LEVEL {
+            if !levels.contains(&level) {
+                levels.push(level);
+            }
+        }
+
+        levels
+            .into_iter()
+            .map(fika_core::icon_size_for_zoom_level)
+            .collect()
     }
 
     fn filter_bar_snapshot(

@@ -7,7 +7,9 @@ use fika_core::{
 
 use crate::ui::icons::FileIconCache;
 
-use super::super::icon_work::{FileIconResolveQueue, queue_file_icon_resolve_work_for_raw_grid};
+use super::super::icon_work::{
+    FileIconResolveQueue, queue_file_icon_resolve_work_for_raw_grid_sizes,
+};
 use super::PaneVisibleWorkKey;
 use super::{FileGridIconRequest, RawFileGridSnapshot, RawVisibleItemSnapshot, thumbnail};
 
@@ -39,6 +41,7 @@ pub(crate) fn queue_raw_file_grid_model_work(
     item_count: usize,
     raw_file_grid: &RawFileGridSnapshot,
     file_icon_size: f32,
+    file_icon_resolve_sizes: &[f32],
     model: &DirectoryModel,
     filtered: Option<&FilteredModel>,
 ) -> QueuedVisibleModelWork {
@@ -48,6 +51,7 @@ pub(crate) fn queue_raw_file_grid_model_work(
         model_data_generation,
         source_revision,
         item_count,
+        file_icon_size,
         raw_file_grid,
     );
     if visible_work_keys.get(&pane_id) == Some(&key) {
@@ -68,11 +72,11 @@ pub(crate) fn queue_raw_file_grid_model_work(
             item_count,
         ),
     );
-    let file_icon_resolve = queue_file_icon_resolve_work_for_raw_grid(
+    let file_icon_resolve = queue_file_icon_resolve_work_for_raw_grid_sizes(
         file_icons,
         file_icon_resolve_queue,
         raw_file_grid,
-        file_icon_size,
+        file_icon_resolve_sizes,
     );
     QueuedVisibleModelWork {
         metadata_role,
@@ -330,6 +334,7 @@ mod tests {
                 model.len(),
                 &raw_file_grid,
                 48.0,
+                &[48.0],
                 &model,
                 None,
             ),
@@ -354,6 +359,7 @@ mod tests {
                 model.len(),
                 &raw_file_grid,
                 48.0,
+                &[48.0],
                 &model,
                 None,
             ),
@@ -422,6 +428,7 @@ mod tests {
                 model.len(),
                 &first_raw,
                 48.0,
+                &[48.0],
                 &model,
                 None,
             ),
@@ -462,6 +469,7 @@ mod tests {
                 model.len(),
                 &second_raw,
                 48.0,
+                &[48.0],
                 &model,
                 None,
             ),

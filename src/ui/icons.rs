@@ -3,7 +3,8 @@ mod image_cache;
 mod view;
 
 pub(crate) use cache::{
-    FileIconCache, FileIconResolveRequest, FileIconSnapshot, file_icon_resolve_results_for_requests,
+    FileIconCache, FileIconResolveCoverKey, FileIconResolveRequest, FileIconSnapshot,
+    common_file_icon_resolve_requests_for_sizes, file_icon_resolve_results_for_requests,
 };
 pub(crate) use image_cache::{
     RetainedThemeIconImageCache, RetainedThemeIconImageLoadOutcome, ThemeIconImageKey,

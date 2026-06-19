@@ -710,6 +710,51 @@ model/icon-resolution path, not a visible image paint path, and should be
 handled by continuing Dolphin-style MIME/icon model caching and visible-work
 batching.
 
+## 2026-06-19 Detached Common File-Icon Prewarm
+
+The `/etc` zoom-scroll smoke isolated the remaining scroll hitch to two cold
+visible semantic icon resolutions, not image paint: `.pwd.lock`
+(`application/octet-stream`) synchronously scanned the theme path for about
+28ms, and `.updated` (`text/plain`) added another roughly 2ms. This matches the
+Dolphin model lesson: common MIME/icon-name results must live in a semantic
+model cache keyed by icon kind/MIME and size; the concrete file path is not the
+cache identity.
+
+Implementation: startup now launches a detached background prewarm for common
+file-icon semantic keys across zoom icon sizes, prioritizing the default 48px
+size and adjacent zoom levels before filling the rest. The table includes
+directory plus common text, binary, archive, office, image, video, audio, and
+PDF MIME keys. The work writes into the same `FileIconCache` through
+`finish_resolve_results`, but deliberately does not occupy
+`FileIconResolveQueue` cover keys. A first experiment queued those keys through
+the visible resolver queue and removed the scroll hitch, but it also made the
+first `/etc` content frame treat visible directories as queued and temporarily
+lose the image layer. Detached prewarm preserves first-frame custom images
+while still filling the shared semantic cache before scroll/zoom work needs it.
+
+GPUI `img()` remains the reference for the bottom half of the image path:
+`RetainAllImageCache` caches `Resource` loads as background tasks and stores
+`Arc<RenderImage>`; `Window::paint_image` then inserts by
+`(RenderImage.id, frame_index)` into the sprite atlas. Fika's full custom path
+keeps that efficient `RenderImage -> paint_image` GPU/atlas route, but moves
+the upper-half identity to Dolphin-style semantic keys instead of GPUI's
+resource hash.
+
+Evidence: `/tmp/fika-common-icon-prewarm-detached-etc.log` with
+`FIKA_DEBUG_ICON_SYNC=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll` reports no
+scroll-time `application/octet-stream` or `text/plain` sync resolves.
+`icon_sync max_total` falls from the previous roughly 30ms
+(`/tmp/fika-debug-icon-sync-etc.log`) to `104us`, `max_resolved=1` only for the
+initial directory key, and the first content frame keeps
+`max_image_layer=48`/`max_gpui_image_element=0` with `theme_placeholder=0`.
+The expanded run `/tmp/fika-common-icon-prewarm-expanded-etc.log` remains in
+the same class (`icon_sync max_total=241us`, no scroll-time file MIME resolves).
+`/tmp/fika-common-icon-prewarm-expanded-downloads.log` shows that common archive
+MIME keys such as `application/x-tar` can be made cheap, but a first-visible
+`application/java-archive` key can still race detached prewarm and synchronously
+resolve on the first content frame. That is a separate mixed-directory
+first-visible scheduling problem, not the `/etc` scroll regression fixed here.
+
 ## Next Renderer Decisions
 
 1. Keep the remaining drag-start shells until the GPUI API boundary changes.
