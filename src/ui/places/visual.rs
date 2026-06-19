@@ -318,10 +318,10 @@ fn paint_place_row_visual(
         point(layer_bounds.origin.x, layer_bounds.origin.y + px(input.y)),
         size(layer_bounds.size.width, px(PLACE_ROW_HEIGHT)),
     );
-    let background = place_row_background(input.active, input.drop_target);
-    let border_color = place_row_border_color(input.active, input.drop_target);
-    window.paint_quad(fill(row_bounds, background).corner_radii(px(6.0)));
     if input.active || input.drop_target {
+        let background = place_row_background(input.active, input.drop_target);
+        let border_color = place_row_border_color(input.active, input.drop_target);
+        window.paint_quad(fill(row_bounds, background).corner_radii(px(6.0)));
         window.paint_quad(
             fill(row_bounds, rgba(0x00000000))
                 .corner_radii(px(6.0))

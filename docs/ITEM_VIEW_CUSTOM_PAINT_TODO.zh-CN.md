@@ -693,6 +693,15 @@ Places chrome 默认之后的当前执行入口是
   `max_pane_elements=1191us`、`max_root=1583us`。这是增量优化，还不是默认提升决策；
   但它更接近 Dolphin 风格 retained row：custom painter 已拥有文本和图标输出后，
   GPUI row shell 不再保留纯视觉占位 child。
+- [x] P16gap：跳过 Places custom visual layer 中普通行的冗余背景填充。根因：
+  full/custom Places painter 会把每个普通行都填成和 sidebar 背景相同的 `0xf8f9fb`，
+  因而 retained painter 会为没有 active/drop 状态的行提交不必要的圆角 quad。实现：
+  `paint_place_row_visual()` 现在只为 active 或 drop-target row 绘制背景和边框；
+  普通行透出 sidebar 背景，文本、图标、Trash 标记和插入指示器保持不变。证据：
+  `/tmp/fika-places-full-overflow-skip-plain-bg.log` 通过 full handoff overflow gate，
+  `places_row_visual max_paint=828us`、`max_warm_paint=828us`，低于最近同类
+  full-overflow run 的约 `1.1-1.3ms`。这是直接的 Dolphin 风格 retained paint 优化：
+  只绘制有状态的 row chrome，而不是为每个 item 重画静态父背景。
 - [ ] P16q：在每个 P16 实现切片之后，单独提交并附带相关验证：仅文档切片需要 `git diff --check`；代码切片需要 `cargo fmt`、`cargo check`、`cargo test -q`、`scripts/check-item-view-perf-analyzer.sh`、`scripts/check-places-perf-analyzer.sh` 和 `git diff --check`。
 - [x] P16r：记录运行时自测试和突破记录规则。可重复的滚动、缩放、启动图标、调整大小、模式切换和 Places 目标回退应在依赖手动计时之前通过 autosmoke 日志和分析器脚本重现。任何确认的优化突破必须记录症状、Dolphin 比较边界、根本原因、实现、保存的日志/分析器命令和未来回归守卫在拥有的设计或决策文档中。
 

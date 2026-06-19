@@ -1942,6 +1942,20 @@ tracks.
   This is incremental rather than a default-promotion decision, but it moves
   full handoff closer to Dolphin-style retained rows by removing a visual-only
   GPUI child once the custom painter owns text and icon output.
+- [x] P16gap: Skip redundant ordinary Places row background fills in the custom
+  visual layer. Root cause: the full/custom Places painter was filling every
+  ordinary row with the same `0xf8f9fb` color as the sidebar background, so the
+  retained painter submitted unnecessary rounded quads for rows with no active
+  or drop state. Implementation: `paint_place_row_visual()` now paints row
+  background and border only for active or drop-target rows; plain rows let the
+  sidebar background show through while text, icons, trash markers, and insert
+  indicators remain unchanged. Evidence:
+  `/tmp/fika-places-full-overflow-skip-plain-bg.log` passed the full handoff
+  overflow gate with `places_row_visual max_paint=828us` and
+  `max_warm_paint=828us`, down from the recent full-overflow runs around
+  `1.1-1.3ms`. This is a direct Dolphin-style retained paint improvement:
+  paint only stateful row chrome instead of repainting the static parent
+  background per item.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,
