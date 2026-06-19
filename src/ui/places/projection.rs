@@ -1,14 +1,22 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use fika_core::file_ops;
 
+use crate::FikaApp;
 use crate::ui::drag_drop::{PlaceDropTarget, place_drop_target_matches_place};
 use crate::ui::icons::FileIconCache;
 
+use super::autosmoke::PlacesAutosmokeScenario;
 use super::model::{
     REMOVABLE_DEVICES_GROUP, active_place_index, place_icon_for, place_icon_snapshot,
     place_is_mounted, place_is_network,
+};
+use super::paint_slots::PlacePaintSlotPerfLog;
+use super::perf::{
+    PlacesSnapshotPerfLog, emit_place_paint_slot_perf_log, emit_places_snapshot_perf_log,
+    places_perf_enabled, places_section_count,
 };
 use super::{PlaceEntry, PlaceSnapshot};
 
@@ -72,6 +80,49 @@ pub(crate) fn place_snapshots_for(
             }
         })
         .collect()
+}
+
+impl FikaApp {
+    pub(crate) fn place_snapshots(&mut self) -> Vec<PlaceSnapshot> {
+        let perf_enabled = places_perf_enabled();
+        let snapshot_started = perf_enabled.then(Instant::now);
+        let source_count = self.places.len();
+        let current_dir = self
+            .panes
+            .focused()
+            .and_then(|pane_id| self.panes.pane(pane_id))
+            .map(|pane| pane.current_dir.as_path());
+        let trash_has_items = self.trash_has_items;
+        let mut snapshots = place_snapshots_for(
+            &self.places,
+            current_dir,
+            &self.hidden_place_sections,
+            &self.hidden_places,
+            self.drop_targets.place(),
+            trash_has_items,
+            &mut self.file_icons,
+        );
+        if let Some(scenario) = PlacesAutosmokeScenario::from_env() {
+            scenario.append_extra_snapshots(&mut snapshots);
+        }
+        let slot_started = perf_enabled.then(Instant::now);
+        let slot_stats = self.place_paint_slots.project_snapshots(&snapshots);
+        if let Some(started) = slot_started {
+            emit_place_paint_slot_perf_log(PlacePaintSlotPerfLog {
+                stats: slot_stats,
+                elapsed: started.elapsed(),
+            });
+        }
+        if let Some(started) = snapshot_started {
+            emit_places_snapshot_perf_log(PlacesSnapshotPerfLog {
+                source_count,
+                visible_count: snapshots.len(),
+                section_count: places_section_count(&snapshots),
+                elapsed: started.elapsed(),
+            });
+        }
+        snapshots
+    }
 }
 
 fn place_insert_indicator_projection(

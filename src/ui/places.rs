@@ -26,12 +26,7 @@ pub(crate) use model::{
     build_places_with_devices, place_is_mounted,
 };
 pub(crate) use model::{PlaceEntry, build_places, default_place_label, read_live_device_snapshot};
-pub(crate) use paint_slots::{PlacePaintSlotCache, PlacePaintSlotPerfLog};
-pub(crate) use perf::{
-    PlacesSnapshotPerfLog, emit_place_paint_slot_perf_log, emit_places_snapshot_perf_log,
-    places_perf_enabled, places_section_count,
-};
-pub(crate) use projection::place_snapshots_for;
+pub(crate) use paint_slots::PlacePaintSlotCache;
 pub(crate) use sidebar::places_sidebar;
 #[cfg(test)]
 pub(crate) use sidebar::places_sidebar_width_from_drag;

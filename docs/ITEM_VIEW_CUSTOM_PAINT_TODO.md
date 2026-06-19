@@ -1676,6 +1676,12 @@ tracks.
   layout state. `src/main.rs` still stores the app-level persisted fields and
   calls the facade from shortcuts/render closures, but no longer owns the
   sidebar mutation policy.
+- [x] P16fw: Move Places snapshot projection orchestration into the Places
+  projection facade. `src/ui/places/projection.rs` now owns the app-facing
+  `place_snapshots()` method, including active-place projection, hidden-place
+  filtering, autosmoke extra rows, paint-slot projection, and Places snapshot
+  perf logs. `src/main.rs` still asks for snapshots during render but no longer
+  wires Places projection internals or evidence emission directly.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

@@ -575,6 +575,11 @@ Places chrome 默认之后的当前执行入口是
   `src/ui/places/sidebar.rs` 现在拥有 sidebar layout state 的切换、重置、拖拽调整、
   clamp 和 app-settings 保存移交。`src/main.rs` 仍保存 app-level 持久化字段，并从快捷键/
   render closure 调用 facade，但不再拥有 sidebar mutation policy。
+- [x] P16fw：将 Places snapshot projection 编排移入 Places projection facade。
+  `src/ui/places/projection.rs` 现在拥有面向 app 的 `place_snapshots()` 方法，包括 active-place
+  投影、隐藏 place 过滤、autosmoke 额外行、paint-slot projection 和 Places snapshot perf
+  日志。`src/main.rs` 仍在 render 时请求 snapshots，但不再直接串联 Places projection 内部或
+  evidence emission。
 - [ ] P16q：在每个 P16 实现切片之后，单独提交并附带相关验证：仅文档切片需要 `git diff --check`；代码切片需要 `cargo fmt`、`cargo check`、`cargo test -q`、`scripts/check-item-view-perf-analyzer.sh`、`scripts/check-places-perf-analyzer.sh` 和 `git diff --check`。
 - [x] P16r：记录运行时自测试和突破记录规则。可重复的滚动、缩放、启动图标、调整大小、模式切换和 Places 目标回退应在依赖手动计时之前通过 autosmoke 日志和分析器脚本重现。任何确认的优化突破必须记录症状、Dolphin 比较边界、根本原因、实现、保存的日志/分析器命令和未来回归守卫在拥有的设计或决策文档中。
 

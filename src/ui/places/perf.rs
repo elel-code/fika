@@ -1,8 +1,8 @@
 use std::env;
 use std::time::Duration;
 
-use super::PlacePaintSlotPerfLog;
 use super::PlaceSnapshot;
+use super::paint_slots::PlacePaintSlotPerfLog;
 
 const PERF_PLACES_VIEW_ENV: &str = "FIKA_PERF_PLACES_VIEW";
 const CUSTOM_PLACES_ROWS_ENV: &str = "FIKA_CUSTOM_PLACES_ROWS";
