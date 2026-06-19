@@ -286,8 +286,9 @@ fn item_renderer_policy_flags() -> ItemRendererPolicyFlags {
 
 fn custom_theme_icons_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| {
-        env::var(CUSTOM_THEME_ICONS_ENV).is_ok_and(|value| env_flag_is_truthy(&value))
+    *ENABLED.get_or_init(|| match env::var(CUSTOM_THEME_ICONS_ENV) {
+        Ok(value) => env_flag_is_truthy(&value),
+        Err(_) => true,
     })
 }
 
@@ -295,7 +296,7 @@ fn hybrid_theme_icons_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| match env::var(HYBRID_THEME_ICONS_ENV) {
         Ok(value) => env_flag_is_truthy(&value),
-        Err(_) => true,
+        Err(_) => false,
     })
 }
 

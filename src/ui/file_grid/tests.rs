@@ -190,7 +190,7 @@ fn content_layers_split_base_visuals_from_image_visuals() {
             },
             ItemRendererPolicy {
                 base_visual: ItemBaseVisualRenderer::ContentLayer,
-                image: ItemImageRenderer::GpuiElement,
+                image: ItemImageRenderer::ContentLayer,
                 interaction: ItemInteractionRenderer::RetainedLayer,
                 drag_start: ItemDragStartRenderer::GpuiShell,
                 rename_editor: ItemRenameEditorRenderer::None,
@@ -216,8 +216,8 @@ fn content_layers_split_base_visuals_from_image_visuals() {
         RendererPolicyStats {
             items: 5,
             visual_layer: 5,
-            image_layer: 2,
-            gpui_image_element: 1,
+            image_layer: 3,
+            gpui_image_element: 0,
             retained_interaction: 3,
             retained_directory_drop_target: 0,
             gpui_drag_shell: 5,
@@ -251,6 +251,7 @@ fn content_layers_split_base_visuals_from_image_visuals() {
             .collect::<Vec<_>>(),
         vec![
             PathBuf::from("/tmp/photo.png"),
+            PathBuf::from("/tmp/app.svg"),
             PathBuf::from("/tmp/rename.png")
         ]
     );
@@ -277,7 +278,7 @@ fn content_layers_split_base_visuals_from_image_visuals() {
             .iter()
             .map(item_image_pending_load_paints_marker)
             .collect::<Vec<_>>(),
-        vec![true, true]
+        vec![true, false, true]
     );
     assert_eq!(
         interaction_items
@@ -346,7 +347,7 @@ fn theme_icon_readiness_input_is_size_and_scale_aware() {
 }
 
 #[test]
-fn theme_icon_readiness_input_reuses_ready_resource_path_across_zoom() {
+fn theme_icon_readiness_input_does_not_reuse_ready_resource_path_across_zoom() {
     let mut cache = ItemPaintSlotCache::default();
     let mut theme_icon_item =
         test_visible_item(3, ItemId(9), "app.desktop", test_item_layout(192.0), false);
@@ -365,7 +366,7 @@ fn theme_icon_readiness_input_reuses_ready_resource_path_across_zoom() {
     );
 
     assert!(
-        item_renderer_policy_input_for_theme_readiness(item, &readiness.snapshot(), 2.0)
+        !item_renderer_policy_input_for_theme_readiness(item, &readiness.snapshot(), 2.0)
             .theme_icon_ready
     );
 }
@@ -450,11 +451,11 @@ fn theme_icon_handoff_accepts_ready_resource_paths_for_visible_cohort() {
     };
     let mut readiness = ThemeIconImageReadiness::default();
     readiness.mark_ready_path(
-        ThemeIconImageKey::new(items[0].content.icon.icon_name.clone(), 48, 1.0),
+        ThemeIconImageKey::new(items[0].content.icon.icon_name.clone(), 48, 2.0),
         first_path,
     );
     readiness.mark_ready_path(
-        ThemeIconImageKey::new(items[1].content.icon.icon_name.clone(), 48, 1.0),
+        ThemeIconImageKey::new(items[1].content.icon.icon_name.clone(), 48, 2.0),
         second_path,
     );
     let snapshot = readiness.snapshot();

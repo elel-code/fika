@@ -620,6 +620,54 @@ the handoff portion and removed visible decode churn (`theme_decoded=0`), while
 full default promotion still failed on `/etc` icon-sync/content-change variance
 outside the image handoff path.
 
+## 2026-06-19 Pane Full Icon Key-Size Cache
+
+The path-ready approach above is now superseded. A closer Dolphin comparison
+shows that cache identity must follow `KStandardItemListWidget::pixmapForIcon()`:
+the model owns a stable `iconName`, and the painter looks up a pixmap by
+`iconName + iconHeight + devicePixelRatio + mode`. The resolved path is only the
+icon-theme resource source; it is not the upper-level readiness or cache key.
+
+Implementation:
+
+- Pane MIME/theme icons now default to the full custom image layer.
+  `FIKA_GPUI_THEME_ICONS=1` remains the GPUI baseline, and
+  `FIKA_HYBRID_THEME_ICONS=1` is an explicit transitional path.
+- `ThemeIconImageReadiness` only tracks `ThemeIconImageKey(iconName, size,
+  scale, theme, color-scheme, mode)` and no longer tracks ready resource paths.
+- `RetainedThemeIconImageCache` no longer reuses an old image for a new size key
+  via `images_by_path`. Different sizes for the same path must have their own
+  semantic key; low-level `Resource::Path` reuse remains the responsibility of
+  GPUI `RetainAllImageCache` or the synchronous SVG loader.
+- `FileIconCache` now keeps exact-size resolved kind entries and adds a
+  `MIME + size` index so files with the same MIME but different extensions reuse
+  resolved icons at the same size. It no longer carries a 48px resolved path
+  into a 64px key.
+- For SVG theme icons, the full image layer synchronously asks GPUI's
+  `svg_renderer` for a `RenderImage` on cold keys, then still paints through
+  `Window::paint_image` and the sprite atlas. This matches Dolphin's
+  `QIcon::pixmap()` first-frame behavior without returning to GPUI `img()`
+  elements.
+
+Evidence:
+
+- `/tmp/fika-full-syncsvg-custom-etc.log` versus
+  `/tmp/fika-full-syncsvg-gpui-etc.log`: full path reports
+  `max_image_layer=64`, `max_gpui_image_element=0`, `theme_placeholder=0`, and
+  `theme_retained=497`; content-change max total is `28663us` versus the GPUI
+  baseline `38298us`, and `icon_sync=27661us` versus `37062us`.
+- `/tmp/fika-full-syncsvg-custom-downloads.log` versus
+  `/tmp/fika-full-syncsvg-gpui-downloads.log`: full path reports
+  `max_image_layer=32`, `max_gpui_image_element=0`, `theme_placeholder=0`, and
+  `theme_retained=543`; initial total is `11899us` versus baseline `15103us`.
+
+Remaining issue: the Downloads cold run has `item-image max_prepaint=38250us`
+from synchronously decoding 22 theme SVGs. The follow-up is not to return to
+hybrid/path-ready; it is to promote the theme `RenderImage` cache to an
+app/global owner and prewarm visible `ThemeIconImageKey`s after directory load,
+keeping full custom first frames placeholder-free while moving cold decode out
+of the paint prepass.
+
 ## Next Renderer Decisions
 
 1. Keep the remaining drag-start shells until the GPUI API boundary changes.

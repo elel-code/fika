@@ -35,6 +35,12 @@ struct NamedIconCacheKey {
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct MimeIconCacheKey {
+    mime: Arc<str>,
+    size_px: u16,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct FileIconCacheKey {
     kind: FileIconKind,
     size_px: u16,
@@ -54,7 +60,8 @@ pub(crate) struct FileIconResolveResult {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct FileIconCache {
     cached: HashMap<FileIconCacheKey, FileIconSnapshot>,
-    resolved_by_kind: HashMap<FileIconKind, FileIconSnapshot>,
+    resolved_by_kind: HashMap<FileIconCacheKey, FileIconSnapshot>,
+    resolved_by_mime: HashMap<MimeIconCacheKey, FileIconSnapshot>,
     named_cached: HashMap<NamedIconCacheKey, FileIconSnapshot>,
     theme: IconThemeResolver,
     mime: fika_core::MimeDatabase,
@@ -97,7 +104,23 @@ impl FileIconCache {
     }
 
     fn cached_icon_for_kind(&self, key: &FileIconCacheKey) -> Option<FileIconSnapshot> {
-        self.resolved_by_kind.get(&key.kind).cloned()
+        self.resolved_by_kind
+            .get(key)
+            .cloned()
+            .or_else(|| self.cached_icon_for_mime(key))
+    }
+
+    fn cached_icon_for_mime(&self, key: &FileIconCacheKey) -> Option<FileIconSnapshot> {
+        match &key.kind {
+            FileIconKind::Mime { mime, .. } => self
+                .resolved_by_mime
+                .get(&MimeIconCacheKey {
+                    mime: mime.clone(),
+                    size_px: key.size_px,
+                })
+                .cloned(),
+            _ => None,
+        }
     }
 
     fn has_resolved_icon_for_kind(&self, key: &FileIconCacheKey) -> bool {
@@ -148,7 +171,16 @@ impl FileIconCache {
 
     fn insert_cached_icon(&mut self, key: FileIconCacheKey, icon: FileIconSnapshot) {
         if icon.path.is_some() {
-            self.resolved_by_kind.insert(key.kind.clone(), icon.clone());
+            if let FileIconKind::Mime { mime, .. } = &key.kind {
+                self.resolved_by_mime.insert(
+                    MimeIconCacheKey {
+                        mime: mime.clone(),
+                        size_px: key.size_px,
+                    },
+                    icon.clone(),
+                );
+            }
+            self.resolved_by_kind.insert(key.clone(), icon.clone());
         }
         self.cached.insert(key, icon);
     }
@@ -227,6 +259,8 @@ struct IconThemeResolver {
     search_order: Option<Vec<String>>,
     inherits_cache: HashMap<String, Vec<String>>,
     path_cache: HashMap<(String, u16), Option<PathBuf>>,
+    dir_exists_cache: HashMap<PathBuf, bool>,
+    renderable_file_cache: HashMap<PathBuf, bool>,
 }
 
 impl Default for IconThemeResolver {
@@ -237,6 +271,8 @@ impl Default for IconThemeResolver {
             search_order: None,
             inherits_cache: HashMap::new(),
             path_cache: HashMap::new(),
+            dir_exists_cache: HashMap::new(),
+            renderable_file_cache: HashMap::new(),
         }
     }
 }
@@ -269,7 +305,7 @@ impl IconThemeResolver {
         for theme in self.theme_search_order() {
             for root in &roots {
                 let theme_root = root.join(&theme);
-                if let Some(path) = find_icon_in_theme(&theme_root, icon_name, desired_size) {
+                if let Some(path) = self.find_icon_in_theme(&theme_root, icon_name, desired_size) {
                     return Some(path);
                 }
             }
@@ -280,7 +316,7 @@ impl IconThemeResolver {
             Path::new("/usr/local/share/pixmaps"),
         ]
         .into_iter()
-        .find_map(|root| find_icon_direct(root, icon_name))
+        .find_map(|root| self.find_icon_direct(root, icon_name))
     }
 
     fn theme_search_order(&mut self) -> Vec<String> {
@@ -325,6 +361,75 @@ impl IconThemeResolver {
         self.inherits_cache
             .insert(theme.to_string(), inherited.clone());
         inherited
+    }
+
+    fn find_icon_in_theme(
+        &mut self,
+        theme_root: &Path,
+        icon_name: &str,
+        desired_size: u16,
+    ) -> Option<PathBuf> {
+        const CATEGORIES: &[&str] = &[
+            "places",
+            "mimetypes",
+            "apps",
+            "actions",
+            "devices",
+            "status",
+        ];
+        if !self.dir_exists(theme_root) {
+            return None;
+        }
+        if let Some(path) = self.find_icon_direct(theme_root, icon_name) {
+            return Some(path);
+        }
+        for size in preferred_icon_size_dirs(desired_size) {
+            for category in CATEGORIES {
+                for base in [
+                    theme_root.join(&size).join(category),
+                    theme_root.join(category).join(&size),
+                ] {
+                    if let Some(path) = self.find_icon_direct(&base, icon_name) {
+                        return Some(path);
+                    }
+                }
+            }
+        }
+        for category in CATEGORIES {
+            if let Some(path) = self.find_icon_direct(&theme_root.join(category), icon_name) {
+                return Some(path);
+            }
+        }
+        None
+    }
+
+    fn find_icon_direct(&mut self, root: &Path, icon_name: &str) -> Option<PathBuf> {
+        if !self.dir_exists(root) {
+            return None;
+        }
+        ["png", "svg", "webp", "jpg", "jpeg", "bmp", "gif", "ico"]
+            .into_iter()
+            .map(|extension| root.join(format!("{icon_name}.{extension}")))
+            .find(|path| self.is_renderable_icon_file(path))
+    }
+
+    fn dir_exists(&mut self, path: &Path) -> bool {
+        if let Some(exists) = self.dir_exists_cache.get(path) {
+            return *exists;
+        }
+        let exists = path.is_dir();
+        self.dir_exists_cache.insert(path.to_path_buf(), exists);
+        exists
+    }
+
+    fn is_renderable_icon_file(&mut self, path: &Path) -> bool {
+        if let Some(is_renderable) = self.renderable_file_cache.get(path) {
+            return *is_renderable;
+        }
+        let is_renderable = is_renderable_icon_file(path);
+        self.renderable_file_cache
+            .insert(path.to_path_buf(), is_renderable);
+        is_renderable
     }
 }
 
@@ -772,6 +877,7 @@ fn parse_icon_theme_inherits(contents: &str) -> Vec<String> {
     themes
 }
 
+#[cfg(test)]
 fn find_icon_in_theme(theme_root: &Path, icon_name: &str, desired_size: u16) -> Option<PathBuf> {
     const CATEGORIES: &[&str] = &[
         "places",
@@ -828,6 +934,7 @@ fn push_icon_size_dir(dirs: &mut Vec<String>, value: String) {
     }
 }
 
+#[cfg(test)]
 fn find_icon_direct(root: &Path, icon_name: &str) -> Option<PathBuf> {
     if !root.is_dir() {
         return None;
@@ -1089,6 +1196,8 @@ gtk-icon-theme-name=breeze\n"
             search_order: None,
             inherits_cache: HashMap::new(),
             path_cache: HashMap::new(),
+            dir_exists_cache: HashMap::new(),
+            renderable_file_cache: HashMap::new(),
         };
 
         assert_eq!(
@@ -1136,6 +1245,7 @@ gtk-icon-theme-name=breeze\n"
         let mut cache = FileIconCache {
             cached: HashMap::new(),
             resolved_by_kind: HashMap::new(),
+            resolved_by_mime: HashMap::new(),
             named_cached: HashMap::new(),
             theme: IconThemeResolver {
                 roots: vec![root.clone()],
@@ -1143,6 +1253,8 @@ gtk-icon-theme-name=breeze\n"
                 search_order: None,
                 inherits_cache: HashMap::new(),
                 path_cache: HashMap::new(),
+                dir_exists_cache: HashMap::new(),
+                renderable_file_cache: HashMap::new(),
             },
             mime: fika_core::MimeDatabase::from_maps(
                 HashMap::new(),
@@ -1204,6 +1316,7 @@ gtk-icon-theme-name=breeze\n"
         let mut cache = FileIconCache {
             cached: HashMap::new(),
             resolved_by_kind: HashMap::new(),
+            resolved_by_mime: HashMap::new(),
             named_cached: HashMap::new(),
             theme: IconThemeResolver {
                 roots: vec![root.clone()],
@@ -1211,6 +1324,8 @@ gtk-icon-theme-name=breeze\n"
                 search_order: None,
                 inherits_cache: HashMap::new(),
                 path_cache: HashMap::new(),
+                dir_exists_cache: HashMap::new(),
+                renderable_file_cache: HashMap::new(),
             },
             mime: fika_core::MimeDatabase::from_maps(
                 HashMap::new(),
@@ -1252,6 +1367,7 @@ gtk-icon-theme-name=breeze\n"
         let mut cache = FileIconCache {
             cached: HashMap::new(),
             resolved_by_kind: HashMap::new(),
+            resolved_by_mime: HashMap::new(),
             named_cached: HashMap::new(),
             theme: IconThemeResolver {
                 roots: vec![root.clone()],
@@ -1259,6 +1375,8 @@ gtk-icon-theme-name=breeze\n"
                 search_order: None,
                 inherits_cache: HashMap::new(),
                 path_cache: HashMap::new(),
+                dir_exists_cache: HashMap::new(),
+                renderable_file_cache: HashMap::new(),
             },
             mime: fika_core::MimeDatabase::from_maps(
                 HashMap::new(),
@@ -1324,6 +1442,89 @@ gtk-icon-theme-name=breeze\n"
     }
 
     #[test]
+    fn resolved_mime_icon_reuses_across_extensions_without_new_request() {
+        let root = test_dir("mime-icon-reuse");
+        let resolved_path = root.join("theme/48x48/mimetypes/text-plain.svg");
+        std::fs::create_dir_all(resolved_path.parent().unwrap()).unwrap();
+        std::fs::write(&resolved_path, test_svg()).unwrap();
+        let mut cache = FileIconCache {
+            cached: HashMap::new(),
+            resolved_by_kind: HashMap::new(),
+            resolved_by_mime: HashMap::new(),
+            named_cached: HashMap::new(),
+            theme: IconThemeResolver {
+                roots: vec![root.clone()],
+                themes: vec!["theme".to_string()],
+                search_order: None,
+                inherits_cache: HashMap::new(),
+                path_cache: HashMap::new(),
+                dir_exists_cache: HashMap::new(),
+                renderable_file_cache: HashMap::new(),
+            },
+            mime: fika_core::MimeDatabase::from_maps(
+                HashMap::new(),
+                HashMap::new(),
+                HashMap::new(),
+            ),
+        };
+
+        let request = cache
+            .resolve_request_for(
+                Path::new("alpha.conf"),
+                false,
+                Some(Arc::from("text/plain")),
+                true,
+                48.0,
+            )
+            .unwrap();
+        let resolved = FileIconSnapshot {
+            icon_name: Arc::from("text-plain"),
+            path: Some(Arc::from(resolved_path.as_path())),
+            fallback_marker: Arc::from("TXT"),
+            fallback_fg: 0xffffff,
+            fallback_bg: 0x111111,
+        };
+        assert!(cache.finish_resolve_results(vec![FileIconResolveResult {
+            request,
+            icon: resolved.clone(),
+        }]));
+
+        assert!(
+            cache
+                .resolve_request_for(
+                    Path::new("beta.txt"),
+                    false,
+                    Some(Arc::from("text/plain")),
+                    true,
+                    48.0,
+                )
+                .is_none()
+        );
+        assert_eq!(
+            cache.cached_or_preliminary_icon_for(
+                Path::new("beta.txt"),
+                false,
+                Some(Arc::from("text/plain")),
+                true,
+                48.0,
+            ),
+            resolved
+        );
+        assert!(
+            cache
+                .resolve_request_for(
+                    Path::new("gamma.txt"),
+                    false,
+                    Some(Arc::from("text/plain")),
+                    true,
+                    64.0,
+                )
+                .is_some()
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn resolve_now_for_caches_exact_theme_path() {
         let root = test_dir("visible-icon-sync");
         let resolved_path = root.join("theme/48x48/mimetypes/text-rust.svg");
@@ -1332,6 +1533,7 @@ gtk-icon-theme-name=breeze\n"
         let mut cache = FileIconCache {
             cached: HashMap::new(),
             resolved_by_kind: HashMap::new(),
+            resolved_by_mime: HashMap::new(),
             named_cached: HashMap::new(),
             theme: IconThemeResolver {
                 roots: vec![root.clone()],
@@ -1339,6 +1541,8 @@ gtk-icon-theme-name=breeze\n"
                 search_order: None,
                 inherits_cache: HashMap::new(),
                 path_cache: HashMap::new(),
+                dir_exists_cache: HashMap::new(),
+                renderable_file_cache: HashMap::new(),
             },
             mime: fika_core::MimeDatabase::from_maps(
                 HashMap::new(),
@@ -1392,6 +1596,7 @@ gtk-icon-theme-name=breeze\n"
         let mut cache = FileIconCache {
             cached: HashMap::new(),
             resolved_by_kind: HashMap::new(),
+            resolved_by_mime: HashMap::new(),
             named_cached: HashMap::new(),
             theme: IconThemeResolver {
                 roots: vec![root.clone()],
@@ -1399,6 +1604,8 @@ gtk-icon-theme-name=breeze\n"
                 search_order: None,
                 inherits_cache: HashMap::new(),
                 path_cache: HashMap::new(),
+                dir_exists_cache: HashMap::new(),
+                renderable_file_cache: HashMap::new(),
             },
             mime: fika_core::MimeDatabase::from_maps(
                 HashMap::new(),
@@ -1438,7 +1645,7 @@ gtk-icon-theme-name=breeze\n"
     }
 
     #[test]
-    fn cached_or_preliminary_icon_reuses_cached_kind_at_other_size_without_exact_size_request() {
+    fn cached_or_preliminary_icon_keeps_size_specific_theme_path() {
         let root = test_dir("zoom-icon-transition");
         let resolved_48 = root.join("theme/48x48/mimetypes/text-rust.svg");
         let resolved_64 = root.join("theme/64x64/mimetypes/text-rust.svg");
@@ -1449,6 +1656,7 @@ gtk-icon-theme-name=breeze\n"
         let mut cache = FileIconCache {
             cached: HashMap::new(),
             resolved_by_kind: HashMap::new(),
+            resolved_by_mime: HashMap::new(),
             named_cached: HashMap::new(),
             theme: IconThemeResolver {
                 roots: vec![root.clone()],
@@ -1456,6 +1664,8 @@ gtk-icon-theme-name=breeze\n"
                 search_order: None,
                 inherits_cache: HashMap::new(),
                 path_cache: HashMap::new(),
+                dir_exists_cache: HashMap::new(),
+                renderable_file_cache: HashMap::new(),
             },
             mime: fika_core::MimeDatabase::from_maps(
                 HashMap::new(),
@@ -1493,7 +1703,8 @@ gtk-icon-theme-name=breeze\n"
             64.0,
         );
 
-        assert_eq!(transitional, icon_48);
+        assert_eq!(transitional.icon_name.as_ref(), "text-rust");
+        assert_eq!(transitional.path, None);
         assert!(
             cache
                 .resolve_request_for(
@@ -1503,25 +1714,24 @@ gtk-icon-theme-name=breeze\n"
                     true,
                     64.0,
                 )
-                .is_none()
+                .is_some()
         );
-        assert!(!cache.resolve_now_for(
+        assert!(cache.resolve_now_for(
             Path::new("main.rs"),
             false,
             Some(Arc::from("text/rust")),
             true,
             64.0,
         ));
-        assert_eq!(
-            cache.cached_or_preliminary_icon_for(
-                Path::new("main.rs"),
-                false,
-                Some(Arc::from("text/rust")),
-                true,
-                64.0,
-            ),
-            icon_48
+        let icon_64 = cache.cached_or_preliminary_icon_for(
+            Path::new("main.rs"),
+            false,
+            Some(Arc::from("text/rust")),
+            true,
+            64.0,
         );
+        assert_eq!(icon_64.icon_name.as_ref(), "text-rust");
+        assert_eq!(icon_64.path, Some(Arc::from(resolved_64.as_path())));
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -1537,6 +1747,7 @@ gtk-icon-theme-name=breeze\n"
         let mut cache = FileIconCache {
             cached: HashMap::new(),
             resolved_by_kind: HashMap::new(),
+            resolved_by_mime: HashMap::new(),
             named_cached: HashMap::new(),
             theme: IconThemeResolver {
                 roots: vec![root.clone()],
@@ -1544,6 +1755,8 @@ gtk-icon-theme-name=breeze\n"
                 search_order: None,
                 inherits_cache: HashMap::new(),
                 path_cache: HashMap::new(),
+                dir_exists_cache: HashMap::new(),
+                renderable_file_cache: HashMap::new(),
             },
             mime: fika_core::MimeDatabase::from_maps(
                 HashMap::new(),
@@ -1598,6 +1811,7 @@ gtk-icon-theme-name=breeze\n"
         let mut cache = FileIconCache {
             cached: HashMap::new(),
             resolved_by_kind: HashMap::new(),
+            resolved_by_mime: HashMap::new(),
             named_cached: HashMap::new(),
             theme: IconThemeResolver {
                 roots: vec![root.clone()],
@@ -1605,6 +1819,8 @@ gtk-icon-theme-name=breeze\n"
                 search_order: None,
                 inherits_cache: HashMap::new(),
                 path_cache: HashMap::new(),
+                dir_exists_cache: HashMap::new(),
+                renderable_file_cache: HashMap::new(),
             },
             mime: fika_core::MimeDatabase::from_maps(
                 HashMap::new(),

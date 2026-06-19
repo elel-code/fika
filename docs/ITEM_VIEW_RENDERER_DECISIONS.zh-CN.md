@@ -326,6 +326,47 @@ full-image 的经验迁到 pane image，同时不会把未知路径强行推入 
 （`theme_decoded=0`），但完整 default promotion 仍因 `/etc` icon-sync/content-change
 方差失败；该失败点不在 image handoff 路径。
 
+## 2026-06-19 Pane Full 图标 Key-Size 缓存
+
+上面的 path-ready 方案已被替代。重新对照 Dolphin 后确认，正确模型不是按
+`Resource::Path` 判断 MIME/theme icon 是否 ready，而是与
+`KStandardItemListWidget::pixmapForIcon()` 一致：model 持有稳定 `iconName`，绘制层按
+`iconName + iconHeight + devicePixelRatio + mode` 查 pixmap cache。Path 只是 icon theme
+resolver 找到的加载入口，不应该成为上层 ready/cache 主 key。
+
+实现：
+
+- pane MIME/theme icon 默认改为 full custom image layer；`FIKA_GPUI_THEME_ICONS=1` 仅作为
+  GPUI baseline，`FIKA_HYBRID_THEME_ICONS=1` 降为显式过渡路径。
+- `ThemeIconImageReadiness` 只记录 `ThemeIconImageKey(iconName, size, scale, theme,
+  color-scheme, mode)`，不再记录 ready resource path。
+- `RetainedThemeIconImageCache` 不再用 `images_by_path` 为新 size key 复用旧 image。相同
+  path 的不同 size 必须形成自己的 key；底层 `Resource::Path` 去重仍由 GPUI
+  `RetainAllImageCache` 或同步 SVG loader 负责。
+- `FileIconCache` 的 resolved kind 索引改为 exact `FileIconCacheKey`，并新增
+  `MIME + size` 索引，用于同 MIME 不同扩展名在同一 size 下复用 resolved icon。它不再把
+  48px path 带到 64px。
+- 对 SVG theme icons，full image layer 在冷 key 上同步调用 GPUI `svg_renderer` 生成
+  `RenderImage`，然后仍通过 `Window::paint_image`/sprite atlas 绘制。这复制 Dolphin
+  `QIcon::pixmap()` 的首帧语义，同时避免回到 GPUI `img()` element。
+
+证据：
+
+- `/tmp/fika-full-syncsvg-custom-etc.log` 相对
+  `/tmp/fika-full-syncsvg-gpui-etc.log`：full path 报告
+  `max_image_layer=64`、`max_gpui_image_element=0`、`theme_placeholder=0`、
+  `theme_retained=497`；`content-change max_total=28663us` 低于 GPUI baseline
+  `38298us`，`icon_sync=27661us` 低于 baseline `37062us`。
+- `/tmp/fika-full-syncsvg-custom-downloads.log` 相对
+  `/tmp/fika-full-syncsvg-gpui-downloads.log`：full path 报告
+  `max_image_layer=32`、`max_gpui_image_element=0`、`theme_placeholder=0`、
+  `theme_retained=543`；initial total `11899us` 低于 baseline `15103us`。
+
+剩余问题：Downloads cold run 的 `item-image max_prepaint=38250us` 来自一次性同步 SVG
+decode 22 个 theme icons。方向不是回退 hybrid/path-ready，而是把 theme `RenderImage`
+cache 提升到 app/global owner，并在目录加载/可见集确定后按 `ThemeIconImageKey` 预热，
+让 full custom 首帧继续无 placeholder，同时把冷 decode 从 paint prepass 移走。
+
 ## 下一批渲染器决策
 
 1. 保持剩余 drag-start shells 直到 GPUI API 边界变化。不要将 GPUI per-element `on_drag_move` 用作 pane self-drag 悬停的真实来源；active item-drag window tracker 拥有该路径。

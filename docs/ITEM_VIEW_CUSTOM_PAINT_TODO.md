@@ -2115,6 +2115,30 @@ tracks.
   the handoff portion and removed visible decode churn (`theme_decoded=0`),
   though full default promotion still failed on `/etc` icon-sync/content-change
   variance outside the image handoff path.
+- [x] P16gba: Replace pane path-ready with a Dolphin-style key-size full path.
+  Root cause: Dolphin's `KStandardItemListWidget::pixmapForIcon()` looks up
+  `QPixmapCache` by `iconName + iconHeight + devicePixelRatio + mode`; path is
+  only the icon-theme resource source and should not be the MIME/theme icon
+  readiness/cache key. Implementation: pane MIME/theme icons now default to the
+  full custom image layer; `ThemeIconImageReadiness` only records
+  `ThemeIconImageKey`; `RetainedThemeIconImageCache` no longer reuses old
+  images across size keys via `images_by_path`; `FileIconCache` no longer
+  carries pathful kind snapshots across sizes and adds `MIME + size` reuse; cold
+  SVG theme icon keys synchronously produce GPUI `RenderImage`s through
+  `svg_renderer` and still paint through `Window::paint_image`/the sprite atlas.
+  Evidence: `/tmp/fika-full-syncsvg-custom-etc.log` versus
+  `/tmp/fika-full-syncsvg-gpui-etc.log` reports `max_image_layer=64`,
+  `max_gpui_image_element=0`, `theme_placeholder=0`, `theme_retained=497`, with
+  content-change and `icon_sync` below the GPUI baseline. Downloads full logs
+  report `max_image_layer=32`, `max_gpui_image_element=0`,
+  `theme_placeholder=0`, `theme_retained=543`, and lower initial total than the
+  GPUI baseline.
+- [ ] P16gbb: Promote the pane theme `RenderImage` cache to an app/global owner
+  and prewarm visible `ThemeIconImageKey`s after directory load. The current
+  full path removes placeholders, but the Downloads cold run spends synchronous
+  SVG decode in image prepaint (`max_prepaint=38250us`, 22 theme SVGs). The
+  next target is to keep full custom and `theme_placeholder=0` without returning
+  to hybrid/path-ready, while moving cold decode out of the paint prepass.
 
 ## Acceptance Gates
 

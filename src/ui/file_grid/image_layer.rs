@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::env;
+use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -177,11 +178,6 @@ fn item_theme_icon_ready(
 ) -> bool {
     item_theme_icon_image_key(content, layout, scale_factor)
         .is_some_and(|key| theme_icon_readiness.is_ready(&key))
-        || content
-            .icon
-            .path
-            .as_ref()
-            .is_some_and(|path| theme_icon_readiness.is_path_ready(path.as_ref()))
 }
 
 fn item_theme_icon_image_key(
@@ -344,6 +340,25 @@ impl RetainedImageLayerState {
         window: &mut Window,
         cx: &mut App,
     ) -> RetainedImageLoad {
+        if let Some(image) = self.retained_theme_icons.image_for_key(&key) {
+            return RetainedImageLoad {
+                image: Some(image),
+                outcome: RetainedImageLoadOutcome::Retained,
+            };
+        }
+
+        if is_svg_icon_path(source_path.as_ref())
+            && let Some(image) = load_svg_theme_icon_sync(source_path.as_ref(), cx)
+        {
+            let retained = self
+                .retained_theme_icons
+                .record_loaded(key, source_path, image);
+            return RetainedImageLoad {
+                image: retained.image,
+                outcome: retained_theme_icon_load_outcome(retained.outcome),
+            };
+        }
+
         let resource = Resource::Path(source_path.clone());
         let load_result = self
             .image_cache
@@ -360,6 +375,17 @@ impl RetainedImageLayerState {
             outcome: retained_theme_icon_load_outcome(retained.outcome),
         }
     }
+}
+
+fn is_svg_icon_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("svg"))
+}
+
+fn load_svg_theme_icon_sync(path: &Path, cx: &mut App) -> Option<Arc<RenderImage>> {
+    let bytes = fs::read(path).ok()?;
+    cx.svg_renderer().render_single_frame(&bytes, 1.0).ok()
 }
 
 fn retained_theme_icon_load_outcome(

@@ -825,6 +825,25 @@ Places chrome 默认之后的当前执行入口是
   `theme_decoded=0`。`/tmp/fika-path-ready-hybrid-etc-r2.log` 通过 handoff 部分并移除
   visible decode churn（`theme_decoded=0`），但完整 default promotion 仍因 `/etc`
   icon-sync/content-change 方差失败；该失败点不在 image handoff 路径。
+- [x] P16gba：用 Dolphin 风格 key-size full path 取代 pane path-ready 方案。根因：
+  Dolphin 的 `KStandardItemListWidget::pixmapForIcon()` 按 `iconName + iconHeight +
+  devicePixelRatio + mode` 查 `QPixmapCache`；path 只是 icon theme resolver 的资源入口，
+  不应该成为 MIME/theme icon ready/cache 主 key。实现：pane MIME/theme icons 默认 full
+  custom image layer；`ThemeIconImageReadiness` 只记录 `ThemeIconImageKey`；
+  `RetainedThemeIconImageCache` 不再通过 `images_by_path` 跨 size 复用旧 image；
+  `FileIconCache` 不再跨 size 复用 pathful kind snapshot，并新增 `MIME + size` 复用；
+  SVG theme icons 冷 key 通过 GPUI `svg_renderer` 同步生成 `RenderImage`，随后仍走
+  `Window::paint_image`/sprite atlas。证据：`/tmp/fika-full-syncsvg-custom-etc.log`
+  相对 `/tmp/fika-full-syncsvg-gpui-etc.log` 报告 `max_image_layer=64`、
+  `max_gpui_image_element=0`、`theme_placeholder=0`、`theme_retained=497`，且
+  content-change 与 `icon_sync` 低于 GPUI baseline；Downloads full log 报告
+  `max_image_layer=32`、`max_gpui_image_element=0`、`theme_placeholder=0`、
+  `theme_retained=543`，initial total 低于 GPUI baseline。
+- [ ] P16gbb：将 pane theme `RenderImage` cache 提升到 app/global owner，并在目录加载后按
+  可见 `ThemeIconImageKey` 预热。当前 full path 已消除 placeholder，但 Downloads cold run
+  的同步 SVG decode 会出现在 image prepaint（`max_prepaint=38250us`，22 个 theme SVG）。
+  下一步目标是在不回退 hybrid/path-ready 的前提下保持 full custom 和
+  `theme_placeholder=0`，同时把 cold decode 从 paint prepass 移到可见集预热/全局缓存。
 - [ ] P16q：在每个 P16 实现切片之后，单独提交并附带相关验证：仅文档切片需要 `git diff --check`；代码切片需要 `cargo fmt`、`cargo check`、`cargo test -q`、`scripts/check-item-view-perf-analyzer.sh`、`scripts/check-places-perf-analyzer.sh` 和 `git diff --check`。
 - [x] P16r：记录运行时自测试和突破记录规则。可重复的滚动、缩放、启动图标、调整大小、模式切换和 Places 目标回退应在依赖手动计时之前通过 autosmoke 日志和分析器脚本重现。任何确认的优化突破必须记录症状、Dolphin 比较边界、根本原因、实现、保存的日志/分析器命令和未来回归守卫在拥有的设计或决策文档中。
 
