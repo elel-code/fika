@@ -39,8 +39,8 @@ use fika_core::{
 use gpui::prelude::*;
 use gpui::{
     App, Bounds, ClipboardItem, Context, ExternalPaths, IntoElement, ParentElement, Render,
-    ScrollDelta, ScrollHandle, ScrollStrategy, Styled, Window, WindowBounds, WindowOptions, div,
-    px, rgb, size,
+    RenderImage, ScrollDelta, ScrollHandle, ScrollStrategy, Styled, Window, WindowBounds,
+    WindowOptions, div, px, rgb, size,
 };
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::env;
@@ -97,7 +97,7 @@ use ui::filter_bar::{
     FILTER_BAR_HEIGHT, FilterBarSnapshot, FilteredModelCacheEntry, PaneFilterState,
     cached_filtered_model_for_pane, filter_toggle_snapshot,
 };
-use ui::icons::{FileIconCache, ThemeIconImageReadiness};
+use ui::icons::{FileIconCache, RetainedThemeIconImageCache, ThemeIconImageReadiness};
 use ui::item_view::{
     ItemViewScrollState, begin_item_view_scrollbar_drag as begin_item_view_scrollbar_drag_state,
     finish_item_view_scrollbar_drag as finish_item_view_scrollbar_drag_state,
@@ -371,6 +371,7 @@ pub(crate) struct FikaApp {
     file_icons: FileIconCache,
     file_icon_resolve_queue: FileIconResolveQueue,
     theme_icon_readiness: ThemeIconImageReadiness,
+    theme_icon_images: RetainedThemeIconImageCache<Arc<RenderImage>>,
     mime_applications: MimeApplicationCache,
     space_info: SpaceInfoCache,
     status_summaries: HashMap<PaneId, StatusSummaryCacheEntry>,
@@ -475,6 +476,7 @@ impl FikaApp {
             file_icons: FileIconCache::default(),
             file_icon_resolve_queue: FileIconResolveQueue::default(),
             theme_icon_readiness: ThemeIconImageReadiness::default(),
+            theme_icon_images: RetainedThemeIconImageCache::default(),
             mime_applications: MimeApplicationCache::load(),
             space_info: SpaceInfoCache::default(),
             status_summaries: HashMap::new(),
@@ -984,7 +986,7 @@ impl FikaApp {
         true
     }
 
-    fn snapshots(&mut self, cx: &mut Context<Self>) -> Vec<PaneSnapshot> {
+    fn snapshots(&mut self, scale_factor: f32, cx: &mut Context<Self>) -> Vec<PaneSnapshot> {
         let focused_pane = self.panes.focused();
         let pane_ids = self.panes.pane_ids().to_vec();
         let perf_enabled = item_view_perf_enabled();
@@ -1051,6 +1053,12 @@ impl FikaApp {
                 if let Some(pane_started) = pane_started {
                     file_grid_frame.emit_perf_log(pane_id, view.view_mode, pane_started.elapsed());
                 }
+                let theme_icon_readiness = ui::file_grid::prewarm_visible_theme_icons_for_snapshot(
+                    &file_grid_frame.file_grid,
+                    self,
+                    scale_factor,
+                    cx,
+                );
                 Some(PaneSnapshot {
                     id: pane_id,
                     split_ratio,
@@ -1059,7 +1067,7 @@ impl FikaApp {
                     filter_bar,
                     status_bar,
                     file_grid: file_grid_frame.file_grid,
-                    theme_icon_readiness: self.theme_icon_readiness.snapshot(),
+                    theme_icon_readiness,
                     trash_view,
                     scroll_handle,
                     view,
@@ -7023,7 +7031,7 @@ impl Render for FikaApp {
         let background_tasks = self.background_tasks_snapshot(Instant::now());
         let background_tasks_elapsed = background_tasks_started.map(|started| started.elapsed());
         let snapshots_started = perf_enabled.then(Instant::now);
-        let snapshots = self.snapshots(cx);
+        let snapshots = self.snapshots(window.scale_factor(), cx);
         let snapshots_elapsed = snapshots_started.map(|started| started.elapsed());
         let chrome_state_started = perf_enabled.then(Instant::now);
         let file_grid_mode =
@@ -15226,6 +15234,7 @@ text/plain=viewer.desktop;\n",
             file_icons: FileIconCache::default(),
             file_icon_resolve_queue: FileIconResolveQueue::default(),
             theme_icon_readiness: ThemeIconImageReadiness::default(),
+            theme_icon_images: RetainedThemeIconImageCache::default(),
             mime_applications: MimeApplicationCache::empty(),
             space_info: SpaceInfoCache::default(),
             status_summaries: HashMap::new(),

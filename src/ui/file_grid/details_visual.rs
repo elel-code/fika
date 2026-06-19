@@ -468,6 +468,7 @@ fn details_visual_prepaint_item(
                         icon_rect,
                         icon,
                         image_state.as_mut().map(|state| &mut **state),
+                        app,
                         window,
                         cx,
                     ),
@@ -551,6 +552,7 @@ fn details_visual_icon_prepaint(
     rect: ViewRect,
     icon: &FileIconSnapshot,
     image_state: Option<&mut RetainedImageLayerState>,
+    app: &WeakEntity<FikaApp>,
     window: &mut Window,
     cx: &mut App,
 ) -> DetailsVisualIconPaintState {
@@ -561,7 +563,7 @@ fn details_visual_icon_prepaint(
             theme_icon_image_size_px(rect.width, rect.height),
             window.scale_factor(),
         )?;
-        state.load_theme_icon_or_retained(path.clone(), key, window, cx)
+        state.load_theme_icon_or_retained(path.clone(), key, app, window, cx)
     });
     let fallback = image.is_none().then(|| {
         if icon.path.is_some() {

@@ -839,11 +839,26 @@ Places chrome 默认之后的当前执行入口是
   content-change 与 `icon_sync` 低于 GPUI baseline；Downloads full log 报告
   `max_image_layer=32`、`max_gpui_image_element=0`、`theme_placeholder=0`、
   `theme_retained=543`，initial total 低于 GPUI baseline。
-- [ ] P16gbb：将 pane theme `RenderImage` cache 提升到 app/global owner，并在目录加载后按
-  可见 `ThemeIconImageKey` 预热。当前 full path 已消除 placeholder，但 Downloads cold run
-  的同步 SVG decode 会出现在 image prepaint（`max_prepaint=38250us`，22 个 theme SVG）。
-  下一步目标是在不回退 hybrid/path-ready 的前提下保持 full custom 和
-  `theme_placeholder=0`，同时把 cold decode 从 paint prepass 移到可见集预热/全局缓存。
+- [x] P16gbb：将 pane theme `RenderImage` cache 提升到 app/global owner，并在 snapshot
+  构建期间预热可见 `ThemeIconImageKey`。根因：Dolphin 风格 key-size full path 之后，
+  retained `RenderImage` cache 仍属于 image-layer element，因此冷 SVG decode 虽然不再造成
+  placeholder，但仍发生在 element prepaint。实现：`FikaApp` 现在拥有 theme
+  `RenderImage` cache；`PaneSnapshot` 构建时从 `FileGridRenderSnapshot` 收集可见
+  custom-theme key，按 `ThemeIconImageKey` 去重，通过 GPUI `svg_renderer` 同步生成 SVG
+  `RenderImage`，标记语义 key ready，并把刷新后的 readiness snapshot 交给 pane
+  rendering。单独的 prewarm element 已移除，因此 file-grid surface 只消费 readiness 并绘制
+  retained image。证据：`/tmp/fika-early-prewarm-custom-etc.log` 报告
+  `max_image_layer=64`、`max_gpui_image_element=0`、`theme_placeholder=0`、
+  `theme_decoded=0`、`theme_prewarm_decoded=0`、`theme_retained=454`、
+  `item-image max_prepaint=166us`；`/tmp/fika-early-prewarm-custom-downloads.log`
+  报告 `max_image_layer=32`、`max_gpui_image_element=0`、`theme_placeholder=0`、
+  `theme_decoded=0`、`theme_prewarm_decoded=0`、`theme_retained=187`、
+  `item-image max_prepaint=315us`。
+- [ ] P16gbc：降低 `/etc` 冷启动/content-change 的 `icon_sync` 方差。P16gbb 已把冷 SVG
+  工作移出 image element，因此剩余 `/etc` 尖峰不再是 visible image paint churn。继续按
+  Dolphin 对齐 model 路径推进：稳定 MIME/icon-name ownership，exact
+  `iconName + size + scale + mode` readiness，以及 pane rendering 前的 batched
+  visible-work resolution。
 - [ ] P16q：在每个 P16 实现切片之后，单独提交并附带相关验证：仅文档切片需要 `git diff --check`；代码切片需要 `cargo fmt`、`cargo check`、`cargo test -q`、`scripts/check-item-view-perf-analyzer.sh`、`scripts/check-places-perf-analyzer.sh` 和 `git diff --check`。
 - [x] P16r：记录运行时自测试和突破记录规则。可重复的滚动、缩放、启动图标、调整大小、模式切换和 Places 目标回退应在依赖手动计时之前通过 autosmoke 日志和分析器脚本重现。任何确认的优化突破必须记录症状、Dolphin 比较边界、根本原因、实现、保存的日志/分析器命令和未来回归守卫在拥有的设计或决策文档中。
 

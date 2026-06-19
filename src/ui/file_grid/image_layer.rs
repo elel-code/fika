@@ -8,7 +8,7 @@ use std::sync::OnceLock;
 use fika_core::{ItemLayout, PaneId, ViewRect};
 use gpui::prelude::*;
 use gpui::{
-    App, Bounds, Corners, Element, ElementId, Entity, FontWeight, GlobalElementId,
+    App, Bounds, Context, Corners, Element, ElementId, Entity, FontWeight, GlobalElementId,
     InspectorElementId, IntoElement, LayoutId, ObjectFit, Pixels, RenderImage, Resource,
     RetainAllImageCache, SharedString, Style, StyleRefinement, Styled, TextAlign, TextRun,
     WeakEntity, Window, fill, point, px, rgb, size,
@@ -16,19 +16,18 @@ use gpui::{
 
 use crate::FikaApp;
 use crate::ui::icons::{
-    FileIconSnapshot, RetainedThemeIconImageCache, RetainedThemeIconImageLoadOutcome,
-    ThemeIconImageKey, ThemeIconImageReadinessSnapshot, theme_icon_image_key_for_snapshot,
-    theme_icon_image_size_px,
+    FileIconSnapshot, RetainedThemeIconImageLoadOutcome, ThemeIconImageKey,
+    ThemeIconImageReadinessSnapshot, theme_icon_image_key_for_snapshot, theme_icon_image_size_px,
 };
 
 use super::ITEM_NAME_LINE_HEIGHT;
-use super::ItemImageSourcePerfStats;
 use super::paint_slots::ItemPaintSnapshot;
 use super::renderer_policy::{
     ItemRendererPolicyInput, item_uses_gpui_image_element_with_input,
     item_uses_image_layer_with_input, item_uses_layer_visual_paint, theme_icon_hybrid_enabled,
 };
 use super::text::static_paint_single_line_text;
+use super::{FileGridRenderSnapshot, ItemImageSourcePerfStats};
 
 pub(super) fn item_image_layer_view(
     pane_id: PaneId,
@@ -60,6 +59,66 @@ pub(super) fn item_image_layer_view(
         .w(px(width.max(1.0)))
         .h(px(height.max(1.0)))
     })
+}
+
+pub(crate) fn prewarm_visible_theme_icons_for_snapshot(
+    snapshot: &FileGridRenderSnapshot,
+    app: &mut FikaApp,
+    scale_factor: f32,
+    cx: &mut Context<FikaApp>,
+) -> ThemeIconImageReadinessSnapshot {
+    match snapshot {
+        FileGridRenderSnapshot::Icons { items, .. }
+        | FileGridRenderSnapshot::Compact { items, .. } => {
+            prewarm_visible_theme_icons_for_policy(items, app, scale_factor, cx)
+        }
+        FileGridRenderSnapshot::Details { .. } => app.theme_icon_readiness.snapshot(),
+    }
+}
+
+fn prewarm_visible_theme_icons_for_policy(
+    items: &[ItemPaintSnapshot],
+    app: &mut FikaApp,
+    scale_factor: f32,
+    cx: &mut Context<FikaApp>,
+) -> ThemeIconImageReadinessSnapshot {
+    let mut theme_icons = HashMap::<ThemeIconImageKey, Arc<Path>>::new();
+    for item in items.iter().filter(|item| item.visible) {
+        let content = item.content.as_ref();
+        if content.thumbnail_path.is_some() || content.icon.path.is_none() {
+            continue;
+        }
+        if !item_uses_image_layer_with_input(
+            content,
+            ItemRendererPolicyInput {
+                theme_icon_ready: true,
+            },
+        ) {
+            continue;
+        }
+        let Some(key) = item_theme_icon_image_key(content, item.layout, scale_factor) else {
+            continue;
+        };
+        let Some(path) = content.icon.path.clone() else {
+            continue;
+        };
+        theme_icons.entry(key).or_insert(path);
+    }
+    if theme_icons.is_empty() {
+        return app.theme_icon_readiness.snapshot();
+    }
+
+    let mut readiness_changed = false;
+    for (key, path) in theme_icons {
+        let load = app.load_retained_or_sync_svg_theme_icon(path.clone(), key.clone(), cx);
+        if load.is_some_and(|load| load.image.is_some()) {
+            readiness_changed |= app.mark_theme_icon_image_path_ready(key, path);
+        }
+    }
+    if readiness_changed {
+        cx.notify();
+    }
+    app.theme_icon_readiness.snapshot()
 }
 
 #[cfg(test)]
@@ -267,7 +326,6 @@ fn item_image_theme_icon_size_px(item: &ItemImageLayerItem) -> u32 {
 pub(super) struct RetainedImageLayerState {
     image_cache: Entity<RetainAllImageCache>,
     retained_thumbnails: HashMap<Arc<Path>, Arc<RenderImage>>,
-    retained_theme_icons: RetainedThemeIconImageCache<Arc<RenderImage>>,
 }
 
 pub(super) struct RetainedImageLoad {
@@ -287,7 +345,6 @@ impl RetainedImageLayerState {
         Self {
             image_cache: RetainAllImageCache::new(cx),
             retained_thumbnails: HashMap::new(),
-            retained_theme_icons: RetainedThemeIconImageCache::default(),
         }
     }
 
@@ -326,10 +383,11 @@ impl RetainedImageLayerState {
         &mut self,
         source_path: Arc<Path>,
         key: ThemeIconImageKey,
+        app: &WeakEntity<FikaApp>,
         window: &mut Window,
         cx: &mut App,
     ) -> Option<Arc<RenderImage>> {
-        self.load_theme_icon_or_retained_with_outcome(source_path, key, window, cx)
+        self.load_theme_icon_or_retained_with_outcome(source_path, key, app, window, cx)
             .image
     }
 
@@ -337,43 +395,27 @@ impl RetainedImageLayerState {
         &mut self,
         source_path: Arc<Path>,
         key: ThemeIconImageKey,
+        app: &WeakEntity<FikaApp>,
         window: &mut Window,
         cx: &mut App,
     ) -> RetainedImageLoad {
-        if let Some(image) = self.retained_theme_icons.image_for_key(&key) {
-            return RetainedImageLoad {
-                image: Some(image),
-                outcome: RetainedImageLoadOutcome::Retained,
-            };
-        }
-
-        if is_svg_icon_path(source_path.as_ref())
-            && let Some(image) = load_svg_theme_icon_sync(source_path.as_ref(), cx)
-        {
-            let retained = self
-                .retained_theme_icons
-                .record_loaded(key, source_path, image);
-            return RetainedImageLoad {
-                image: retained.image,
-                outcome: retained_theme_icon_load_outcome(retained.outcome),
-            };
+        if let Ok(Some(retained)) = app.update(cx, |this, cx| {
+            this.load_retained_or_sync_svg_theme_icon(source_path.clone(), key.clone(), cx)
+        }) {
+            return retained;
         }
 
         let resource = Resource::Path(source_path.clone());
         let load_result = self
             .image_cache
             .update(cx, |cache, cx| cache.load(&resource, window, cx));
-        let retained = match load_result {
-            Some(Ok(image)) => self
-                .retained_theme_icons
-                .record_loaded(key, source_path, image),
-            Some(Err(_)) => self.retained_theme_icons.record_failed(key, source_path),
-            None => self.retained_theme_icons.record_pending(key, source_path),
-        };
-        RetainedImageLoad {
-            image: retained.image,
-            outcome: retained_theme_icon_load_outcome(retained.outcome),
-        }
+        app.update(cx, |this, _cx| {
+            this.record_theme_icon_resource_load_result(source_path, key, load_result)
+        })
+        .unwrap_or(RetainedImageLoad {
+            image: None,
+            outcome: RetainedImageLoadOutcome::Missing,
+        })
     }
 }
 
@@ -386,6 +428,54 @@ fn is_svg_icon_path(path: &Path) -> bool {
 fn load_svg_theme_icon_sync(path: &Path, cx: &mut App) -> Option<Arc<RenderImage>> {
     let bytes = fs::read(path).ok()?;
     cx.svg_renderer().render_single_frame(&bytes, 1.0).ok()
+}
+
+impl FikaApp {
+    fn load_retained_or_sync_svg_theme_icon(
+        &mut self,
+        source_path: Arc<Path>,
+        key: ThemeIconImageKey,
+        cx: &mut App,
+    ) -> Option<RetainedImageLoad> {
+        if let Some(image) = self.theme_icon_images.image_for_key(&key) {
+            return Some(RetainedImageLoad {
+                image: Some(image),
+                outcome: RetainedImageLoadOutcome::Retained,
+            });
+        }
+
+        if !is_svg_icon_path(source_path.as_ref()) {
+            return None;
+        }
+
+        let image = load_svg_theme_icon_sync(source_path.as_ref(), cx)?;
+        let retained = self
+            .theme_icon_images
+            .record_loaded(key, source_path, image);
+        Some(RetainedImageLoad {
+            image: retained.image,
+            outcome: retained_theme_icon_load_outcome(retained.outcome),
+        })
+    }
+
+    fn record_theme_icon_resource_load_result(
+        &mut self,
+        source_path: Arc<Path>,
+        key: ThemeIconImageKey,
+        load_result: Option<Result<Arc<RenderImage>, gpui::ImageCacheError>>,
+    ) -> RetainedImageLoad {
+        let retained = match load_result {
+            Some(Ok(image)) => self
+                .theme_icon_images
+                .record_loaded(key, source_path, image),
+            Some(Err(_)) => self.theme_icon_images.record_failed(key, source_path),
+            None => self.theme_icon_images.record_pending(key, source_path),
+        };
+        RetainedImageLoad {
+            image: retained.image,
+            outcome: retained_theme_icon_load_outcome(retained.outcome),
+        }
+    }
 }
 
 fn retained_theme_icon_load_outcome(
@@ -494,6 +584,7 @@ impl Element for ItemImageLayerElement {
                     item_image_layer_prepaint_item(
                         item,
                         &mut state,
+                        &self.app,
                         &mut source_stats,
                         &mut ready_theme_icons,
                         window,
@@ -563,6 +654,7 @@ pub(super) fn item_image_paint_layer_element_id(pane_id: PaneId) -> (&'static st
 fn item_image_layer_prepaint_item(
     item: &ItemImageLayerItem,
     state: &mut RetainedImageLayerState,
+    app: &WeakEntity<FikaApp>,
     source_stats: &mut ItemImageSourcePerfStats,
     ready_theme_icons: &mut Vec<(ThemeIconImageKey, Arc<Path>)>,
     window: &mut Window,
@@ -586,9 +678,8 @@ fn item_image_layer_prepaint_item(
         (ItemImagePaintKind::Thumbnail, ItemImageRetainedSource::Thumbnail(_)) => {
             state.load_thumbnail_or_retained_with_outcome(source_path.clone(), window, cx)
         }
-        (ItemImagePaintKind::ThemeIcon, ItemImageRetainedSource::ThemeIcon(key)) => {
-            state.load_theme_icon_or_retained_with_outcome(source_path.clone(), key, window, cx)
-        }
+        (ItemImagePaintKind::ThemeIcon, ItemImageRetainedSource::ThemeIcon(key)) => state
+            .load_theme_icon_or_retained_with_outcome(source_path.clone(), key, app, window, cx),
         _ => return None,
     };
     if kind == ItemImagePaintKind::ThemeIcon

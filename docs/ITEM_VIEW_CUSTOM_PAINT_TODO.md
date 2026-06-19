@@ -2133,12 +2133,31 @@ tracks.
   report `max_image_layer=32`, `max_gpui_image_element=0`,
   `theme_placeholder=0`, `theme_retained=543`, and lower initial total than the
   GPUI baseline.
-- [ ] P16gbb: Promote the pane theme `RenderImage` cache to an app/global owner
-  and prewarm visible `ThemeIconImageKey`s after directory load. The current
-  full path removes placeholders, but the Downloads cold run spends synchronous
-  SVG decode in image prepaint (`max_prepaint=38250us`, 22 theme SVGs). The
-  next target is to keep full custom and `theme_placeholder=0` without returning
-  to hybrid/path-ready, while moving cold decode out of the paint prepass.
+- [x] P16gbb: Promote the pane theme `RenderImage` cache to an app/global owner
+  and prewarm visible `ThemeIconImageKey`s during snapshot construction. Root
+  cause: after the Dolphin-style key-size full path, the retained
+  `RenderImage` cache still lived in the image-layer element, so cold SVG
+  decode happened in element prepaint even though placeholder behavior was
+  fixed. Implementation: `FikaApp` now owns the theme `RenderImage` cache;
+  `PaneSnapshot` construction collects visible custom-theme keys from the
+  `FileGridRenderSnapshot`, deduplicates by `ThemeIconImageKey`, synchronously
+  materializes SVG `RenderImage`s through GPUI's `svg_renderer`, marks semantic
+  keys ready, and passes the refreshed readiness snapshot to pane rendering.
+  The separate prewarm element was removed, so the file-grid surface only
+  consumes readiness and paints retained images. Evidence:
+  `/tmp/fika-early-prewarm-custom-etc.log` reports `max_image_layer=64`,
+  `max_gpui_image_element=0`, `theme_placeholder=0`, `theme_decoded=0`,
+  `theme_prewarm_decoded=0`, `theme_retained=454`, and
+  `item-image max_prepaint=166us`; `/tmp/fika-early-prewarm-custom-downloads.log`
+  reports `max_image_layer=32`, `max_gpui_image_element=0`,
+  `theme_placeholder=0`, `theme_decoded=0`, `theme_prewarm_decoded=0`,
+  `theme_retained=187`, and `item-image max_prepaint=315us`.
+- [ ] P16gbc: Reduce `/etc` cold/content-change `icon_sync` variance in the
+  model/icon-resolution path. P16gbb moved cold SVG work out of the image
+  element, so remaining `/etc` spikes are no longer visible image paint churn.
+  Continue the Dolphin-aligned model path: stable MIME/icon-name ownership,
+  exact `iconName + size + scale + mode` readiness, and batched visible-work
+  resolution before pane rendering.
 
 ## Acceptance Gates
 

@@ -367,6 +367,42 @@ decode 22 个 theme icons。方向不是回退 hybrid/path-ready，而是把 the
 cache 提升到 app/global owner，并在目录加载/可见集确定后按 `ThemeIconImageKey` 预热，
 让 full custom 首帧继续无 placeholder，同时把冷 decode 从 paint prepass 移走。
 
+## 2026-06-19 Pane Theme Icon Snapshot 预热
+
+full custom MIME/theme icon 路径暴露了第二个 ownership 问题。保留的 `RenderImage`
+cache 如果仍然属于 image-layer element，冷 SVG 工作只能发生在 element prepaint 中；
+首个 custom frame 虽然没有 placeholder，但 `[fika item-image]` 仍会承担 decode 成本。
+
+实现：`FikaApp` 现在拥有 pane theme `RenderImage` cache。在构建 `PaneSnapshot` 时，
+等可见 `FileGridRenderSnapshot` 已确定、但还没把 `theme_icon_readiness` 交给 pane
+rendering 之前，Fika 会收集可见 custom-theme `ThemeIconImageKey`，按
+`iconName + size + scale + theme + mode` 去重，通过 GPUI `svg_renderer` 同步生成 SVG
+`RenderImage`，写入 app cache，并把这些语义 key 标记 ready。file-grid surface 不再做
+model update，也不再使用单独的 prewarm element；它只消费刷新后的 readiness snapshot，
+并通过 `Window::paint_image` 绘制 retained image。
+
+决策：早期 theme-icon 准备属于 Fika model/snapshot 阶段，不属于 image element
+prepaint。这更接近 Dolphin 的拆分：model/snapshot 路径拥有稳定 icon identity 和可见工作
+发现，painter 只按语义 key 消费已 ready 的 pixmap/image。Resolved path 仍只是当前 icon
+theme 的资源入口。
+
+证据：
+
+- `/tmp/fika-early-prewarm-custom-etc.log` 相对
+  `/tmp/fika-early-prewarm-gpui-etc.log`：默认 full custom 报告
+  `max_image_layer=64`、`max_gpui_image_element=0`、`theme_placeholder=0`、
+  `theme_decoded=0`、`theme_prewarm_decoded=0`、`theme_retained=454`；
+  `item-image max_prepaint=166us`。
+- `/tmp/fika-early-prewarm-custom-downloads.log` 相对
+  `/tmp/fika-early-prewarm-gpui-downloads.log`：默认 full custom 报告
+  `max_image_layer=32`、`max_gpui_image_element=0`、`theme_placeholder=0`、
+  `theme_decoded=0`、`theme_prewarm_decoded=0`、`theme_retained=187`；
+  `item-image max_prepaint=315us`。
+
+剩余问题：冷工作已经移出 image element，但 `/etc` 在 content-change frame 中仍可能出现
+高 `icon_sync`。这现在是 model/icon-resolution 路径问题，不是 visible image paint
+路径问题，后续应继续按 Dolphin 风格推进 MIME/icon model cache 和 visible-work batching。
+
 ## 下一批渲染器决策
 
 1. 保持剩余 drag-start shells 直到 GPUI API 边界变化。不要将 GPUI per-element `on_drag_move` 用作 pane self-drag 悬停的真实来源；active item-drag window tracker 拥有该路径。

@@ -32,6 +32,7 @@ pub(crate) use details_visual::DetailsTextShapeCache;
 pub(crate) use dnd::ItemDrag;
 pub(crate) use hover::RetainedHoveredItem;
 pub(crate) use icon_work::FileIconResolveQueue;
+pub(crate) use image_layer::prewarm_visible_theme_icons_for_snapshot;
 pub(crate) use layout::{
     CompactColumnWidthCache, ITEM_NAME_LINE_HEIGHT, compact_text_width,
     compact_text_width_for_name, rename_editor_required_text_width,

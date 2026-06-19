@@ -668,6 +668,48 @@ app/global owner and prewarm visible `ThemeIconImageKey`s after directory load,
 keeping full custom first frames placeholder-free while moving cold decode out
 of the paint prepass.
 
+## 2026-06-19 Pane Theme Icon Snapshot Prewarm
+
+The full custom MIME/theme icon path exposed a second ownership issue. Keeping
+the retained `RenderImage` cache inside the image-layer element meant cold SVG
+work could only happen during element prepaint, so the first custom frame was
+placeholder-free but still paid decode cost in `[fika item-image]`.
+
+Implementation: `FikaApp` now owns the pane theme `RenderImage` cache. During
+`PaneSnapshot` construction, after the visible `FileGridRenderSnapshot` is
+known and before `theme_icon_readiness` is handed to pane rendering, Fika
+collects visible custom-theme `ThemeIconImageKey`s, deduplicates them by
+`iconName + size + scale + theme + mode`, synchronously materializes SVG
+`RenderImage`s through GPUI's `svg_renderer`, records them in the app cache,
+and marks those semantic keys ready. The file-grid surface no longer performs
+model updates or uses a separate prewarm element; it consumes the refreshed
+readiness snapshot and paints retained images through `Window::paint_image`.
+
+Decision: early theme-icon preparation belongs to the Fika model/snapshot stage,
+not to an image element prepaint. This matches the Dolphin split more closely:
+the model/snapshot path owns stable icon identity and visible work discovery,
+while the painter consumes ready pixmap/image entries by semantic key. The
+resolved path remains only the current icon-theme resource source.
+
+Evidence:
+
+- `/tmp/fika-early-prewarm-custom-etc.log` versus
+  `/tmp/fika-early-prewarm-gpui-etc.log`: default full custom reports
+  `max_image_layer=64`, `max_gpui_image_element=0`, `theme_placeholder=0`,
+  `theme_decoded=0`, `theme_prewarm_decoded=0`, and `theme_retained=454`.
+  `item-image max_prepaint=166us`.
+- `/tmp/fika-early-prewarm-custom-downloads.log` versus
+  `/tmp/fika-early-prewarm-gpui-downloads.log`: default full custom reports
+  `max_image_layer=32`, `max_gpui_image_element=0`, `theme_placeholder=0`,
+  `theme_decoded=0`, `theme_prewarm_decoded=0`, and `theme_retained=187`.
+  `item-image max_prepaint=315us`.
+
+Remaining issue: the cold work has moved out of the image element, but `/etc`
+can still show high `icon_sync` during content-change frames. That is now a
+model/icon-resolution path, not a visible image paint path, and should be
+handled by continuing Dolphin-style MIME/icon model caching and visible-work
+batching.
+
 ## Next Renderer Decisions
 
 1. Keep the remaining drag-start shells until the GPUI API boundary changes.
