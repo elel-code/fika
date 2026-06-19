@@ -38,7 +38,7 @@ custom renderer can replace a GPUI surface.
 | --- | --- | --- | --- | --- |
 | Compact/Icons base background and labels | custom content-level painter | visible item snapshots, paint slots, text shape cache | Keep custom paint. | Runtime logs must keep steady snapshot conversion sub-ms and static visual paint/build under budget. |
 | Compact/Icons thumbnail images | custom image painter | image paint snapshots, pane-local thumbnail image cache, retained thumbnail image map, thumbnail scheduler roles | Keep custom paint for thumbnails while image decode/cache stays on GPUI `RetainAllImageCache`; thumbnail pending/failure behavior remains model-driven and can paint fallback without changing MIME/theme icon policy. | Logs must include `[fika item-image]` plus `thumb_*` `image_sources` when thumbnails are exercised; no thumbnail sync decode in prepaint. |
-| Compact/Icons MIME/theme-icon images | Hybrid GPUI fallback plus custom image layer for ready theme-icon keys | retained item slots, visible icon role/path cache, app-level `ThemeIconImageReadiness`, pane image layer, background file-icon resolve queue | Use hybrid by default. Not-yet-ready theme-icon keys remain GPUI `img()` elements; ready keys paint through the retained custom image layer. `FIKA_GPUI_THEME_ICONS=1` forces the old GPUI baseline, and `FIKA_CUSTOM_THEME_ICONS=1` remains the full custom stress path. | Default hybrid logs must pass `scripts/compare-item-image-renderers.sh --gate-hybrid-default-promotion` against a `FIKA_GPUI_THEME_ICONS=1` baseline for `/etc` and a mixed user directory. |
+| Compact/Icons MIME/theme-icon images | Visible-cohort hybrid GPUI fallback plus custom image layer handoff | retained item slots, visible icon role/path cache, app-level `ThemeIconImageReadiness`, pane image layer, background file-icon resolve queue | Use hybrid by default. If any currently visible theme-icon key is not ready, the visible cohort stays on GPUI `img()` while the custom image layer prewarms retained `RenderImage`s. Once the visible cohort is ready, all of those theme icons hand off to the retained custom image layer together. `FIKA_GPUI_THEME_ICONS=1` forces the old GPUI baseline, and `FIKA_CUSTOM_THEME_ICONS=1` remains the full custom stress path. | Default hybrid logs must pass `scripts/compare-item-image-renderers.sh --gate-hybrid-default-promotion` against a `FIKA_GPUI_THEME_ICONS=1` baseline for `/etc` and a mixed user directory. |
 | Compact/Icons hover, cursor, click, menu, drop hit testing | retained viewport/custom hitboxes plus active item-drag window tracker | viewport retained hit testing and `drag_drop` state | Keep retained controller path. | DnD smoke must pass across internal item, pane, Places, and external drops; pane self-drags should log `active-item-move`. |
 | Compact/Icons drag start | GPUI `Div::on_drag` shell | retained drag payload state plus temporary shell | Keep GPUI shell for initiation only. | Do not remove until GPUI exposes public custom-element drag-start or Fika carries an audited GPUI patch. |
 | Compact/Icons rename editor | GPUI text/editor subtree overlay | rename draft model and overlay geometry | Keep GPUI built-in editor. | Only revisit when text input, caret hit testing, selection, and IME behavior can stay behavior-complete. |
@@ -113,6 +113,39 @@ full zoom/scroll renderer policy, because the 8s smoke did not exercise zoom
 or scroll. The next automated comparison must save both logs and run
 `scripts/compare-item-image-renderers.sh` after scripted or manually triggered
 zoom/scroll interaction in the same directory.
+
+### 2026-06-19 Pane Visible-Cohort Image Handoff
+
+After Places moved to default full row visual, the same principle was applied to
+Compact/Icons MIME/theme icons: own the retained image state in Fika, but keep
+the efficient GPUI `RetainAllImageCache -> RenderImage -> paint_image` path.
+The direct `FIKA_CUSTOM_THEME_ICONS=1` full-custom stress path still is not safe
+as a cold default: `/tmp/fika-pane-full-custom-etc.log` showed
+`theme_placeholder=52` and visible `theme_decoded=5`, which matches startup
+blank-to-icon and zoom-time second-adjustment symptoms.
+
+The accepted pane change is therefore not a forced full-custom cold paint. It is
+a visible-cohort handoff: as long as any visible theme-icon key is not ready,
+all visible theme icons stay on GPUI `img()` while the item image layer prewarms
+retained images. When the cohort is ready, all visible theme icons hand off to
+the custom image layer together. This avoids per-item GPUI/custom mixing inside
+one viewport, which was the likely source of local size/paint jumps.
+
+Evidence after the cohort handoff:
+
+- `/tmp/fika-pane-cohort-default-downloads.log` against
+  `/tmp/fika-pane-cohort-gpui-downloads.log` passed
+  `--gate-hybrid-default-promotion` with `theme_placeholder=0` and visible
+  `theme_decoded=0`.
+- `/tmp/fika-pane-cohort-default-etc-r2.log` kept the important image stability
+  counters clean (`theme_placeholder=0`, visible `theme_decoded=0`), but
+  `--gate-hybrid-default-promotion` still failed because `/etc` icon-sync and
+  content-change totals were higher than the paired GPUI baseline in that run.
+
+Decision: keep the cohort handoff because it reduces visual switching without
+reintroducing visible placeholders. Do not promote the `FIKA_CUSTOM_THEME_ICONS`
+stress path to default yet. The next pane image work should target `/etc`
+`icon_sync` variance and then rerun default-vs-GPUI promotion evidence.
 
 ## Post-P11e Evidence To Collect
 

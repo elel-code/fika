@@ -740,6 +740,21 @@ Places chrome 默认之后的当前执行入口是
   row paint 仍有首次 image atlas/text paint 成本（targets `5179us`、overflow
   `8263us`），下一步要继续预热或平摊冷帧，但默认 Places 行文本和图标已经不再依赖
   GPUI 子元素。
+- [x] P16gat：把 Places full handoff 经验应用到 pane MIME/theme icon。根因：
+  直接把 `FIKA_CUSTOM_THEME_ICONS=1` full-custom 压力路径作为冷启动默认仍会暴露
+  首次加载 custom image placeholder 和 decode completion churn
+  （`/tmp/fika-pane-full-custom-etc.log`：`theme_placeholder=52`、visible
+  `theme_decoded=5`）。实现：默认 hybrid renderer 现在使用可见集合级 handoff。
+  当前可见集合中任意 theme-icon key 未 ready 时，所有可见 theme icons 都继续使用
+  GPUI `img()`，item image layer 只预热 retained images；当这组 key 全部 ready 后，
+  所有可见 theme icons 同一批切到 retained custom image layer。证据：
+  `/tmp/fika-pane-cohort-default-downloads.log` 相对
+  `/tmp/fika-pane-cohort-gpui-downloads.log` 通过
+  `--gate-hybrid-default-promotion`，且 `theme_placeholder=0`、visible
+  `theme_decoded=0`。`/tmp/fika-pane-cohort-default-etc-r2.log` 也保持这些 image
+  稳定指标干净，但完整 promotion gate 仍因 `/etc` 的 icon-sync/content-change
+  波动失败，因此下一步 pane image 目标是降低 `/etc` `icon_sync` 成本，而不是继续调整
+  placeholder 行为。
 - [ ] P16q：在每个 P16 实现切片之后，单独提交并附带相关验证：仅文档切片需要 `git diff --check`；代码切片需要 `cargo fmt`、`cargo check`、`cargo test -q`、`scripts/check-item-view-perf-analyzer.sh`、`scripts/check-places-perf-analyzer.sh` 和 `git diff --check`。
 - [x] P16r：记录运行时自测试和突破记录规则。可重复的滚动、缩放、启动图标、调整大小、模式切换和 Places 目标回退应在依赖手动计时之前通过 autosmoke 日志和分析器脚本重现。任何确认的优化突破必须记录症状、Dolphin 比较边界、根本原因、实现、保存的日志/分析器命令和未来回归守卫在拥有的设计或决策文档中。
 

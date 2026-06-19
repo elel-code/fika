@@ -10,7 +10,8 @@ use super::image_layer::{
     item_image_layer_items_with_theme_prewarm, item_image_load_failure_paints_fallback,
     item_image_paint_layer_element_id, item_image_pending_load_paints_fallback,
     item_image_pending_load_paints_marker, item_image_retained_source_for,
-    item_renderer_policy_input_for_theme_readiness,
+    item_renderer_policy_input_for_theme_handoff, item_renderer_policy_input_for_theme_readiness,
+    visible_theme_icon_handoff_ready,
 };
 use super::interaction::{
     details_interaction_layer_items, item_interaction_hitbox_bounds,
@@ -336,6 +337,60 @@ fn theme_icon_readiness_input_is_size_and_scale_aware() {
     );
     assert!(
         !item_renderer_policy_input_for_theme_readiness(item, &readiness.snapshot(), 2.0)
+            .theme_icon_ready
+    );
+}
+
+#[test]
+fn theme_icon_handoff_waits_for_visible_cohort() {
+    let mut cache = ItemPaintSlotCache::default();
+    let mut ready_item =
+        test_visible_item(1, ItemId(9), "ready.desktop", test_item_layout(0.0), false);
+    ready_item.icon.path = Some(Arc::from(Path::new("/tmp/ready.svg")));
+    ready_item.icon.icon_name = Arc::from("ready-icon");
+    let mut pending_item = test_visible_item(
+        2,
+        ItemId(10),
+        "pending.desktop",
+        test_item_layout(96.0),
+        false,
+    );
+    pending_item.icon.path = Some(Arc::from(Path::new("/tmp/pending.svg")));
+    pending_item.icon.icon_name = Arc::from("pending-icon");
+
+    let projection =
+        cache.project_file_grid_snapshot(icons_snapshot(vec![ready_item, pending_item]), None);
+    let FileGridRenderSnapshot::Icons { items, .. } = projection.snapshot else {
+        panic!("expected icons snapshot");
+    };
+    let mut readiness = ThemeIconImageReadiness::default();
+    readiness.mark_ready(ThemeIconImageKey::new(
+        items[0].content.icon.icon_name.clone(),
+        48,
+        1.0,
+    ));
+    let snapshot = readiness.snapshot();
+
+    assert!(!visible_theme_icon_handoff_ready(&items, &snapshot, 1.0));
+    assert!(
+        !item_renderer_policy_input_for_theme_handoff(&items[0], &snapshot, 1.0, false)
+            .theme_icon_ready
+    );
+
+    readiness.mark_ready(ThemeIconImageKey::new(
+        items[1].content.icon.icon_name.clone(),
+        48,
+        1.0,
+    ));
+    let snapshot = readiness.snapshot();
+
+    assert!(visible_theme_icon_handoff_ready(&items, &snapshot, 1.0));
+    assert!(
+        item_renderer_policy_input_for_theme_handoff(&items[0], &snapshot, 1.0, true)
+            .theme_icon_ready
+    );
+    assert!(
+        item_renderer_policy_input_for_theme_handoff(&items[1], &snapshot, 1.0, true)
             .theme_icon_ready
     );
 }

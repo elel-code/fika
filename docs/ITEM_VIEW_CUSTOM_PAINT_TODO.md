@@ -2013,6 +2013,23 @@ tracks.
   includes first-use image-atlas/text cost (targets `5179us`, overflow
   `8263us`), so the next step is cold-frame prewarm or amortization, but default
   Places row text and icons no longer depend on GPUI child elements.
+- [x] P16gat: Apply the Places full-handoff lesson to pane MIME/theme icons.
+  Root cause: forcing `FIKA_CUSTOM_THEME_ICONS=1` as a cold default still
+  exposes first-load custom image placeholders and decode completion churn
+  (`/tmp/fika-pane-full-custom-etc.log`: `theme_placeholder=52`, visible
+  `theme_decoded=5`). Implementation: the default hybrid renderer now uses a
+  visible-cohort handoff. While any visible theme-icon key is not ready, all
+  visible theme icons remain on GPUI `img()` and the item image layer only
+  prewarms retained images; when the cohort is ready, all visible theme icons
+  switch to the retained custom image layer together. Evidence:
+  `/tmp/fika-pane-cohort-default-downloads.log` passed
+  `--gate-hybrid-default-promotion` against
+  `/tmp/fika-pane-cohort-gpui-downloads.log` with `theme_placeholder=0` and
+  visible `theme_decoded=0`. `/tmp/fika-pane-cohort-default-etc-r2.log` kept
+  those image stability counters clean, but the full promotion gate still
+  failed on `/etc` icon-sync/content-change variance, so the next pane image
+  target is reducing `/etc` `icon_sync` cost rather than changing placeholder
+  behavior.
 
 ## Acceptance Gates
 

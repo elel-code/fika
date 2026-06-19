@@ -16,7 +16,7 @@ Places chrome 默认之后的当前执行路线图是
 | Compact/Icons 条目 model 和几何 | 保留 | `DirectoryModel`、可见快照、slot 池 | 当前路径无 |
 | Compact/Icons 基础背景、选择、悬停、放置色调、标签 | 已替换 | 自定义内容级绘制器 | 运行时性能和 DnD smoke 证据必须保持最新 |
 | Compact/Icons 缩略图图像 | 已替换 | 自定义图像绘制器，使用 GPUI `RetainAllImageCache` 加上保留同缩略图图像 | 挂起/失败仍复用保留图像或绘制缩略图后备 |
-| Compact/Icons MIME/主题图标图像 | 保留 model，hybrid renderer | 尚未 ready 的 key 使用 GPUI `img()` fallback，ready 的 retained image key 使用 custom image layer | 由 `--gate-hybrid-default-promotion` 守卫；`FIKA_GPUI_THEME_ICONS=1` 保留 GPUI baseline，`FIKA_CUSTOM_THEME_ICONS=1` 仍是 full custom 压力路径 |
+| Compact/Icons MIME/主题图标图像 | 保留 model，可见集合级 hybrid renderer | 当前可见集合中任意主题图标 key 未 ready 时整组继续使用 GPUI `img()` fallback；全部 ready 后同一组切到 custom image layer 绘制 retained image key | 由 `--gate-hybrid-default-promotion` 守卫；`FIKA_GPUI_THEME_ICONS=1` 保留 GPUI baseline，`FIKA_CUSTOM_THEME_ICONS=1` 仍是 full custom 压力路径 |
 | Compact/Icons 点击、菜单、悬停、光标和放置 hit testing | 已替换 | 保留 viewport/自定义 hitbox 加上活动条目拖拽窗口跟踪器 | 绘制器更改后仍需要运行时 DnD smoke |
 | Compact/Icons 拖拽启动 | 未替换 | GPUI `Div::on_drag` shell | 公共 GPUI 自定义元素拖拽启动 API 或经过审计的 Fika GPUI patch |
 | Compact/Icons 重命名编辑器 | 未替换 | GPUI 编辑器叠加层 | 仅在 caret、选择、IME 和文本输入行为被覆盖后才重新审视 |

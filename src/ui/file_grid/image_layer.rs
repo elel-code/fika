@@ -36,6 +36,7 @@ pub(super) fn item_image_layer_view(
     height: f32,
     theme_icon_readiness: &ThemeIconImageReadinessSnapshot,
     scale_factor: f32,
+    theme_icon_handoff_ready: bool,
     app: WeakEntity<FikaApp>,
 ) -> Option<ItemImageLayerElement> {
     let items = item_image_layer_items_for_theme_readiness(
@@ -43,6 +44,7 @@ pub(super) fn item_image_layer_view(
         theme_icon_prewarm_enabled() || theme_icon_hybrid_enabled(),
         theme_icon_readiness,
         scale_factor,
+        theme_icon_handoff_ready,
     );
     (!items.is_empty()).then(|| {
         ItemImageLayerElement {
@@ -74,6 +76,7 @@ pub(super) fn item_image_layer_items_with_theme_prewarm(
         prewarm_theme_icons,
         &ThemeIconImageReadinessSnapshot::default(),
         1.0,
+        true,
     )
 }
 
@@ -82,6 +85,7 @@ pub(super) fn item_image_layer_items_for_theme_readiness(
     prewarm_theme_icons: bool,
     theme_icon_readiness: &ThemeIconImageReadinessSnapshot,
     scale_factor: f32,
+    theme_icon_handoff_ready: bool,
 ) -> Vec<ItemImageLayerItem> {
     items
         .iter()
@@ -91,10 +95,11 @@ pub(super) fn item_image_layer_items_for_theme_readiness(
             if !item_uses_layer_visual_paint(content) {
                 return None;
             }
-            let policy_input = item_renderer_policy_input_for_theme_readiness(
+            let policy_input = item_renderer_policy_input_for_theme_handoff(
                 item,
                 theme_icon_readiness,
                 scale_factor,
+                theme_icon_handoff_ready,
             );
             let role = if item_uses_image_layer_with_input(content, policy_input) {
                 ItemImageLayerRole::Paint
@@ -119,17 +124,50 @@ pub(super) fn item_image_layer_items_for_theme_readiness(
         .collect()
 }
 
+#[cfg(test)]
 pub(super) fn item_renderer_policy_input_for_theme_readiness(
     item: &ItemPaintSnapshot,
     theme_icon_readiness: &ThemeIconImageReadinessSnapshot,
     scale_factor: f32,
 ) -> ItemRendererPolicyInput {
+    item_renderer_policy_input_for_theme_handoff(item, theme_icon_readiness, scale_factor, true)
+}
+
+pub(super) fn item_renderer_policy_input_for_theme_handoff(
+    item: &ItemPaintSnapshot,
+    theme_icon_readiness: &ThemeIconImageReadinessSnapshot,
+    scale_factor: f32,
+    theme_icon_handoff_ready: bool,
+) -> ItemRendererPolicyInput {
     let content = item.content.as_ref();
     ItemRendererPolicyInput {
-        theme_icon_ready: content.thumbnail_path.is_none()
+        theme_icon_ready: theme_icon_handoff_ready
+            && content.thumbnail_path.is_none()
             && item_theme_icon_image_key(content, item.layout, scale_factor)
                 .is_some_and(|key| theme_icon_readiness.is_ready(&key)),
     }
+}
+
+pub(super) fn visible_theme_icon_handoff_ready(
+    items: &[ItemPaintSnapshot],
+    theme_icon_readiness: &ThemeIconImageReadinessSnapshot,
+    scale_factor: f32,
+) -> bool {
+    let mut has_theme_icon = false;
+    for item in items.iter().filter(|item| item.visible) {
+        let content = item.content.as_ref();
+        if content.thumbnail_path.is_some() || content.icon.path.is_none() {
+            continue;
+        }
+        let Some(key) = item_theme_icon_image_key(content, item.layout, scale_factor) else {
+            continue;
+        };
+        has_theme_icon = true;
+        if !theme_icon_readiness.is_ready(&key) {
+            return false;
+        }
+    }
+    has_theme_icon
 }
 
 fn item_theme_icon_image_key(

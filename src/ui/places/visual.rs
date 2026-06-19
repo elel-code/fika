@@ -660,7 +660,7 @@ mod tests {
                 place.label = format!("Place {index}");
                 PlaceRowVisualState::from_place(&place, index as f32 * PLACE_ROW_HEIGHT)
             })
-            .collect();
+            .collect::<Vec<_>>();
         let layer_bounds = Bounds::new(point(px(10.0), px(20.0)), size(px(200.0), px(150.0)));
         let content_mask_bounds = Bounds::new(point(px(10.0), px(50.0)), size(px(200.0), px(60.0)));
 
