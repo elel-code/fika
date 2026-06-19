@@ -47,5 +47,5 @@ Renderer decision follow-up:
 - Compact/Icons image layer: keep or revisit custom paint using item image maxima, custom paint maxima, and the image_sources counters above.
 - Details visual layer: keep or revisit custom paint using details visual and shape-cache channels above.
 - Renderer surface counts: compare renderer_policy_frames against docs/ITEM_VIEW_RENDERER_DECISIONS.md.
-- Drag-start shells: do not remove based on perf logs alone; the GPUI drag-start API gate still applies.
+- Retained hitbox drag start: keep gpui_drag_shell=0 and validate behavior with the DnD smoke checklist, not perf logs alone.
 EOF

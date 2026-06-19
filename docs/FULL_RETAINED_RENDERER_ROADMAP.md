@@ -104,6 +104,12 @@ or only Places must explain how the other side reuses the same model.
   `gpui_drag_shell=0`, `drag_shells=0`,
   `gpui_typed_dnd_payload_shells=0`, and retained Places DnD logs must pass
   `--expect-retained-event-policy`.
+- Post-fork core evidence is green. `scripts/run-retained-renderer-evidence.sh
+  --core --skip-build --prefix fika-full-retained-hitbox-dnd-v2` completed with
+  `retained renderer evidence complete`; item logs show `max_gpui_drag_shell=0`,
+  and Places targets/overflow/layout/hit-test/targeting/dnd logs show
+  `max_gpui_event_shells=0`, `max_gpui_typed_dnd_payload_shells=0`,
+  `max_drag_shells=0`, and successful `places full retained-event`.
 
 ## Current Baseline
 

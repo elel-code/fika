@@ -107,7 +107,8 @@ For each view mode:
 
 Expected DnD debug interpretation:
 
-- `item-start`: GPUI drag-start shell created the item drag payload.
+- `item-start`: retained hitbox drag-start registration created the item drag
+  payload through the Fika GPUI fork.
 - `active-item-move via=window`: Fika's retained interaction layer is tracking
   the active pane item drag from window mouse movement.
 - `active-item-move via=preview`: GPUI did not deliver the underlying pane move
@@ -311,20 +312,15 @@ scripts/check-places-perf-analyzer.sh
 
 ## Decision Gate
 
-Do not remove the remaining drag-start shells unless one of these is true:
+The drag-start shell removal gate is now closed as complete. Keep these current
+requirements:
 
-- GPUI exposes a public custom-element drag-start API.
-- Fika carries a small audited GPUI patch that exposes drag-start for retained
-  hitboxes.
-
-Current GPUI audit source: Fika uses GPUI `0.2.2` at Zed commit
-`69b602c797a62f09318916d24a98c930533fbdc8`.
-`crates/gpui/src/elements/div.rs` exposes drag start through
-`Interactivity::on_drag` and `StatefulInteractiveElement::on_drag`; custom
-elements can insert hitboxes with `Window::insert_hitbox()` and observe mouse
-events with `Window::on_mouse_event()`, but cannot publicly initiate a typed
-drag from those hitboxes. Keep item, Details, and Places drag-start shells until
-that API boundary changes or a patch is explicitly chosen.
+- Fika pins `gpui`/`gpui_platform` to the Fika GPUI fork revision
+  `572d53326f722e5634647b2276c42069d6b5b63d`.
+- Item, Details, and Places drag start must remain retained-hitbox based.
+- Runtime/analyzer evidence must keep `gpui_drag_shell=0`; Places DnD evidence
+  must keep `gpui_event_shells=0`, `gpui_typed_dnd_payload_shells=0`, and
+  `drag_shells=0`.
 
 If a custom-painted surface loses to GPUI built-ins in steady perf or behavior
 completeness, keep the Dolphin-aligned retained model and leave that surface on

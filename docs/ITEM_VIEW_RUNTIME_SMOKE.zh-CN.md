@@ -39,4 +39,4 @@ Details：从 Details 行启动重命名，确认行视觉保留同时 rename ov
 
 ## 决策门
 
-不移除剩余 drag-start shells 除非 GPUI 暴露公开 custom-element drag-start API 或 Fika 携带经审计的 GPUI patch。如果 custom-painted surface 在稳态 perf 或行为完整性上落后于 GPUI 内置组件，保持 Dolphin-aligned retained model 并将该 surface 留在 GPUI 渲染器上。
+drag-start shell 移除门已完成。当前要求是：Fika pin `gpui`/`gpui_platform` 到 Fika GPUI fork revision `572d53326f722e5634647b2276c42069d6b5b63d`；Item、Details 和 Places drag start 必须保持 retained-hitbox 路径；runtime/analyzer 证据必须保持 `gpui_drag_shell=0`，Places DnD 证据必须保持 `gpui_event_shells=0`、`gpui_typed_dnd_payload_shells=0` 和 `drag_shells=0`。如果 custom-painted surface 在稳态 perf 或行为完整性上落后于 GPUI 内置组件，保持 Dolphin-aligned retained model 并将该 surface 留在 GPUI 渲染器上。
