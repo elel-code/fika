@@ -1710,6 +1710,11 @@ tracks.
   user-place insertion, persistence, and status updates. The low-level dropped
   helper stays private to the user-place module instead of being re-exported
   through `ui::places`.
+- [x] P16gac: Move app-facing user-place reorder and insert-index helpers into
+  the Places user facade. `src/ui/places/user.rs` now owns
+  `move_user_place_to_insert_index()` and `user_place_insert_index()` on
+  `FikaApp`, including status mapping and persistence. The low-level ordering
+  result enum and functions stay private to the user-place module.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

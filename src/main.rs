@@ -3602,38 +3602,6 @@ impl FikaApp {
         self.set_pane_status(draft.pane_id, message);
     }
 
-    fn move_user_place_to_insert_index(
-        &mut self,
-        pane_id: PaneId,
-        source_index: usize,
-        index: usize,
-    ) {
-        let label = match ui::places::move_user_place_to_insert_index(
-            &mut self.places,
-            source_index,
-            index,
-        ) {
-            ui::places::MoveUserPlaceResult::Moved { label } => label,
-            ui::places::MoveUserPlaceResult::AlreadyThere => {
-                self.set_pane_status(pane_id, "Place already there");
-                return;
-            }
-            ui::places::MoveUserPlaceResult::NotMovable => {
-                self.set_pane_status(pane_id, "Place cannot be moved");
-                return;
-            }
-        };
-        if let Err(error) = self.save_user_places() {
-            self.set_pane_status(pane_id, error);
-            return;
-        }
-        self.set_pane_status(pane_id, format!("Moved place {label}"));
-    }
-
-    fn user_place_insert_index(&self, index: usize) -> usize {
-        ui::places::user_place_insert_index(&self.places, index)
-    }
-
     pub(crate) fn update_location_edit_metrics(
         &mut self,
         pane_id: PaneId,

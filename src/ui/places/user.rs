@@ -12,9 +12,6 @@ use fika_core::PaneId;
 use crate::FikaApp;
 
 pub(crate) use edit::commit_user_place_draft;
-pub(crate) use ordering::{
-    MoveUserPlaceResult, move_user_place_to_insert_index, user_place_insert_index,
-};
 
 impl FikaApp {
     pub(crate) fn user_places(&self) -> Vec<fika_core::UserPlace> {
@@ -70,5 +67,37 @@ impl FikaApp {
             return;
         }
         self.set_pane_status(pane_id, message);
+    }
+
+    pub(crate) fn move_user_place_to_insert_index(
+        &mut self,
+        pane_id: PaneId,
+        source_index: usize,
+        index: usize,
+    ) {
+        let label = match ordering::move_user_place_to_insert_index(
+            &mut self.places,
+            source_index,
+            index,
+        ) {
+            ordering::MoveUserPlaceResult::Moved { label } => label,
+            ordering::MoveUserPlaceResult::AlreadyThere => {
+                self.set_pane_status(pane_id, "Place already there");
+                return;
+            }
+            ordering::MoveUserPlaceResult::NotMovable => {
+                self.set_pane_status(pane_id, "Place cannot be moved");
+                return;
+            }
+        };
+        if let Err(error) = self.save_user_places() {
+            self.set_pane_status(pane_id, error);
+            return;
+        }
+        self.set_pane_status(pane_id, format!("Moved place {label}"));
+    }
+
+    pub(crate) fn user_place_insert_index(&self, index: usize) -> usize {
+        ordering::user_place_insert_index(&self.places, index)
     }
 }

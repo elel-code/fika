@@ -34,8 +34,5 @@ pub(crate) use sidebar::{
     places_panel_button, places_panel_icon_snapshot, places_sidebar_splitter,
 };
 pub(crate) use snapshot::{PlaceIcon, PlaceSnapshot};
-pub(crate) use user::{
-    MoveUserPlaceResult, commit_user_place_draft, move_user_place_to_insert_index,
-    user_place_insert_index,
-};
+pub(crate) use user::commit_user_place_draft;
 pub(crate) use visual::PlacesRowTextShapeCache;
