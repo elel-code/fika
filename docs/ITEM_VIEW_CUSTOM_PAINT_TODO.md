@@ -1929,6 +1929,19 @@ tracks.
   full-path breakthrough because it removes the shared first-frame chrome icon
   spike; default promotion is still gated on repeated row-visual/root/pane
   total-render evidence rather than this owner alone.
+- [x] P16gao: Remove the empty GPUI row spacer after Places full visual
+  handoff. Root cause: once full handoff reached `text_gpui=0` and
+  `icon_gpui=0`, every retained Places row shell still carried an empty
+  `flex_1` child only to keep the shell wide. Implementation: custom chrome
+  row shells now set `w_full()` with the fixed row height, so ready full rows
+  keep their hitbox width without constructing the spacer subtree. Evidence:
+  `/tmp/fika-places-full-overflow-no-spacer.log` passed the full handoff
+  overflow gate and reduced the previous prewarm overflow maxima from
+  `max_total=4760us`, `max_pane_elements=1603us`, and `max_root=2008us` to
+  `max_total=3813us`, `max_pane_elements=1191us`, and `max_root=1583us`.
+  This is incremental rather than a default-promotion decision, but it moves
+  full handoff closer to Dolphin-style retained rows by removing a visual-only
+  GPUI child once the custom painter owns text and icon output.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

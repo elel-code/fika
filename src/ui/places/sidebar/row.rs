@@ -139,7 +139,7 @@ pub(super) fn place_row(
     };
 
     if custom_chrome {
-        row = row.h(px(PLACE_ROW_HEIGHT));
+        row = row.w_full().h(px(PLACE_ROW_HEIGHT));
     }
 
     if gpui_icon {
@@ -161,8 +161,6 @@ pub(super) fn place_row(
                 })
                 .child(place.label.clone()),
         );
-    } else {
-        row = row.child(div().flex_1());
     }
     if !custom_chrome && place.trash_place {
         row = row.child(
