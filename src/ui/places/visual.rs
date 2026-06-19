@@ -8,6 +8,7 @@ use gpui::{
 };
 
 use crate::FikaApp;
+use crate::ui::icons::FileIconSnapshot;
 
 use super::perf::{
     PlacesRowTextShapeCachePerfLog, PlacesRowTextShapeCacheStats, PlacesRowVisualPerfLog,
@@ -30,6 +31,7 @@ pub(super) fn places_row_visual_layer(
     places: Vec<PlaceSnapshot>,
     app: WeakEntity<FikaApp>,
     paint_text: bool,
+    paint_icon: bool,
 ) -> impl IntoElement {
     let rows = place_row_visual_layer_rows(&places);
     let total_rows = rows.len();
@@ -41,6 +43,7 @@ pub(super) fn places_row_visual_layer(
                 total_rows,
                 app.clone(),
                 paint_text,
+                paint_icon,
                 bounds,
                 window,
                 cx,
@@ -77,6 +80,7 @@ pub(super) fn places_row_visual_layer(
 struct PlaceRowVisualState {
     y: f32,
     label: SharedString,
+    icon: PlaceRowIconVisualState,
     active: bool,
     mounted: bool,
     drop_target: bool,
@@ -92,6 +96,7 @@ impl PlaceRowVisualState {
         Self {
             y,
             label: SharedString::from(place.label.as_str()),
+            icon: PlaceRowIconVisualState::from_icon(&place.icon, place.active && !insert_target),
             active: place.active && !insert_target,
             mounted: place.mounted,
             drop_target: place.drop_target && !insert_target,
@@ -107,6 +112,23 @@ impl PlaceRowVisualState {
     }
 }
 
+#[derive(Clone)]
+struct PlaceRowIconVisualState {
+    marker: SharedString,
+    fallback_fg: u32,
+    fallback_bg: u32,
+}
+
+impl PlaceRowIconVisualState {
+    fn from_icon(icon: &FileIconSnapshot, active: bool) -> Self {
+        Self {
+            marker: SharedString::from(icon.fallback_marker.as_ref()),
+            fallback_fg: if active { 0x1f4fbf } else { icon.fallback_fg },
+            fallback_bg: if active { 0xeaf1ff } else { icon.fallback_bg },
+        }
+    }
+}
+
 struct PlaceRowVisualLayerPaintState {
     rows: Vec<PlaceRowVisualPaintState>,
     total_rows: usize,
@@ -118,6 +140,7 @@ struct PlaceRowVisualPaintState {
     input: PlaceRowVisualState,
     line: Option<Arc<gpui::ShapedLine>>,
     line_height: Pixels,
+    paint_icon: bool,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -170,6 +193,7 @@ fn places_row_visual_prepaint(
     total_rows: usize,
     app: WeakEntity<FikaApp>,
     paint_text: bool,
+    paint_icon: bool,
     layer_bounds: Bounds<Pixels>,
     window: &mut Window,
     cx: &mut App,
@@ -177,7 +201,7 @@ fn places_row_visual_prepaint(
     let started = Instant::now();
     let rows = visible_place_row_visuals(rows, layer_bounds, window.content_mask().bounds)
         .into_iter()
-        .map(|input| place_row_visual_prepaint(input, paint_text, &app, window, cx))
+        .map(|input| place_row_visual_prepaint(input, paint_text, paint_icon, &app, window, cx))
         .collect();
     let shape_cache_stats = app
         .update(cx, |this, _cx| this.place_row_text_shape_cache.take_stats())
@@ -213,6 +237,7 @@ fn visible_place_row_visuals(
 fn place_row_visual_prepaint(
     input: PlaceRowVisualState,
     paint_text: bool,
+    paint_icon: bool,
     app: &WeakEntity<FikaApp>,
     window: &mut Window,
     cx: &mut App,
@@ -243,6 +268,7 @@ fn place_row_visual_prepaint(
         input,
         line,
         line_height: px(20.0),
+        paint_icon,
     }
 }
 
@@ -287,6 +313,17 @@ fn paint_place_row_visual(
                 .border_widths(px(1.0))
                 .border_color(border_color),
         );
+    }
+
+    if state.paint_icon {
+        let icon_bounds = Bounds::new(
+            point(
+                row_bounds.origin.x + px(ROW_PADDING_X),
+                row_bounds.origin.y + ((row_bounds.size.height - px(ICON_SIZE)) / 2.0).floor(),
+            ),
+            size(px(ICON_SIZE), px(ICON_SIZE)),
+        );
+        paint_place_row_visual_icon(icon_bounds, &input.icon, window);
     }
 
     if let Some(line) = &state.line {
@@ -358,6 +395,88 @@ fn paint_place_row_visual(
             .corner_radii(px(1.0)),
         );
     }
+}
+
+fn paint_place_row_visual_icon(
+    icon_bounds: Bounds<Pixels>,
+    icon: &PlaceRowIconVisualState,
+    window: &mut Window,
+) {
+    window.paint_quad(fill(icon_bounds, rgb(icon.fallback_bg)).corner_radii(px(6.0)));
+    match icon.marker.as_ref() {
+        "T" => paint_place_trash_icon(icon_bounds, icon.fallback_fg, window),
+        "/" | "D" => paint_place_drive_icon(icon_bounds, icon.fallback_fg, window),
+        _ => paint_place_folder_icon(icon_bounds, icon.fallback_fg, window),
+    }
+}
+
+fn paint_place_folder_icon(bounds: Bounds<Pixels>, fg: u32, window: &mut Window) {
+    window.paint_quad(
+        fill(
+            Bounds::new(
+                point(bounds.origin.x + px(5.0), bounds.origin.y + px(6.0)),
+                size(px(7.0), px(3.0)),
+            ),
+            rgb(fg),
+        )
+        .corner_radii(px(1.0)),
+    );
+    window.paint_quad(
+        fill(
+            Bounds::new(
+                point(bounds.origin.x + px(4.0), bounds.origin.y + px(9.0)),
+                size(px(14.0), px(8.0)),
+            ),
+            rgb(fg),
+        )
+        .corner_radii(px(2.0)),
+    );
+}
+
+fn paint_place_drive_icon(bounds: Bounds<Pixels>, fg: u32, window: &mut Window) {
+    window.paint_quad(
+        fill(
+            Bounds::new(
+                point(bounds.origin.x + px(5.0), bounds.origin.y + px(6.0)),
+                size(px(12.0), px(11.0)),
+            ),
+            rgb(fg),
+        )
+        .corner_radii(px(2.0)),
+    );
+    window.paint_quad(
+        fill(
+            Bounds::new(
+                point(bounds.origin.x + px(7.0), bounds.origin.y + px(13.0)),
+                size(px(8.0), px(1.5)),
+            ),
+            rgb(0xffffff),
+        )
+        .corner_radii(px(1.0)),
+    );
+}
+
+fn paint_place_trash_icon(bounds: Bounds<Pixels>, fg: u32, window: &mut Window) {
+    window.paint_quad(
+        fill(
+            Bounds::new(
+                point(bounds.origin.x + px(6.0), bounds.origin.y + px(6.0)),
+                size(px(10.0), px(2.0)),
+            ),
+            rgb(fg),
+        )
+        .corner_radii(px(1.0)),
+    );
+    window.paint_quad(
+        fill(
+            Bounds::new(
+                point(bounds.origin.x + px(7.0), bounds.origin.y + px(9.0)),
+                size(px(8.0), px(9.0)),
+            ),
+            rgb(fg),
+        )
+        .corner_radii(px(2.0)),
+    );
 }
 
 fn place_row_visual_layer_rows(places: &[PlaceSnapshot]) -> Vec<PlaceRowVisualState> {

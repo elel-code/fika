@@ -19,15 +19,23 @@ pub(crate) fn places_perf_enabled() -> bool {
 pub(crate) enum PlacesRowVisualPolicy {
     Gpui,
     CustomChrome,
+    CustomText,
     CustomFull,
 }
 
 impl PlacesRowVisualPolicy {
     pub(crate) fn custom_layer_enabled(self) -> bool {
-        matches!(self, Self::CustomChrome | Self::CustomFull)
+        matches!(
+            self,
+            Self::CustomChrome | Self::CustomText | Self::CustomFull
+        )
     }
 
     pub(crate) fn paints_text(self) -> bool {
+        matches!(self, Self::CustomText | Self::CustomFull)
+    }
+
+    pub(crate) fn paints_icon(self) -> bool {
         matches!(self, Self::CustomFull)
     }
 
@@ -35,6 +43,7 @@ impl PlacesRowVisualPolicy {
         match self {
             Self::Gpui => "gpui",
             Self::CustomChrome => "chrome",
+            Self::CustomText => "text",
             Self::CustomFull => "full",
         }
     }
@@ -42,7 +51,7 @@ impl PlacesRowVisualPolicy {
 
 pub(crate) fn places_row_visual_policy() -> PlacesRowVisualPolicy {
     if env::var(CUSTOM_PLACES_ROWS_ENV).is_ok_and(|value| env_flag_is_truthy(&value)) {
-        return PlacesRowVisualPolicy::CustomFull;
+        return PlacesRowVisualPolicy::CustomText;
     }
 
     env::var(PLACES_ROW_VISUAL_POLICY_ENV)
@@ -52,7 +61,10 @@ pub(crate) fn places_row_visual_policy() -> PlacesRowVisualPolicy {
             "chrome" | "hybrid" | "default" | "1" | "true" | "yes" | "on" => {
                 Some(PlacesRowVisualPolicy::CustomChrome)
             }
-            "full" | "custom" | "text" => Some(PlacesRowVisualPolicy::CustomFull),
+            "text" | "custom-text" | "full-text" => Some(PlacesRowVisualPolicy::CustomText),
+            "full" | "custom" | "full-icon" | "full-icons" => {
+                Some(PlacesRowVisualPolicy::CustomFull)
+            }
             _ => None,
         })
         .unwrap_or(PlacesRowVisualPolicy::CustomChrome)
@@ -383,6 +395,11 @@ pub(crate) fn emit_places_renderer_policy_log(log: PlacesRendererPolicyLog) {
     } else {
         log.row_count
     };
+    let icon_gpui = if log.row_visual_policy.paints_icon() {
+        0
+    } else {
+        log.row_count
+    };
     let retained_interaction = log
         .event_delivery_policy
         .retained_interaction(log.row_count, log.section_count);
@@ -395,7 +412,7 @@ pub(crate) fn emit_places_renderer_policy_log(log: PlacesRendererPolicyLog) {
         row_gpui,
         row_visual_layer,
         text_gpui,
-        log.row_count,
+        icon_gpui,
         retained_interaction,
         log.row_count,
         log.section_count,
@@ -553,10 +570,17 @@ mod tests {
 
         assert!(PlacesRowVisualPolicy::CustomChrome.custom_layer_enabled());
         assert!(!PlacesRowVisualPolicy::CustomChrome.paints_text());
+        assert!(!PlacesRowVisualPolicy::CustomChrome.paints_icon());
         assert_eq!(PlacesRowVisualPolicy::CustomChrome.visual_kind(), "chrome");
+
+        assert!(PlacesRowVisualPolicy::CustomText.custom_layer_enabled());
+        assert!(PlacesRowVisualPolicy::CustomText.paints_text());
+        assert!(!PlacesRowVisualPolicy::CustomText.paints_icon());
+        assert_eq!(PlacesRowVisualPolicy::CustomText.visual_kind(), "text");
 
         assert!(PlacesRowVisualPolicy::CustomFull.custom_layer_enabled());
         assert!(PlacesRowVisualPolicy::CustomFull.paints_text());
+        assert!(PlacesRowVisualPolicy::CustomFull.paints_icon());
         assert_eq!(PlacesRowVisualPolicy::CustomFull.visual_kind(), "full");
     }
 

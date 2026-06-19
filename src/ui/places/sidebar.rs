@@ -327,7 +327,12 @@ pub(crate) fn places_sidebar(
     });
     let app = cx.weak_entity();
     let row_visual_layer = custom_row_visuals.then(|| {
-        places_row_visual_layer(places.clone(), app.clone(), row_visual_policy.paints_text())
+        places_row_visual_layer(
+            places.clone(),
+            app.clone(),
+            row_visual_policy.paints_text(),
+            row_visual_policy.paints_icon(),
+        )
     });
     let event_probe_layer = event_delivery_policy
         .retained_event_layer_enabled()

@@ -24,14 +24,17 @@ The active post-Places-chrome execution roadmap is
 | Details row backgrounds, icons, text cells, Trash columns | replaced | custom content-level painter | Details icons use the same cached/preliminary icon policy; runtime Details perf and DnD smoke evidence must stay current |
 | Details click, menu, navigation, hover, cursor, drop hit testing | replaced | retained row hit testing/controller state plus active item-drag window tracker | runtime DnD smoke still required after painter changes |
 | Details drag start | not replaced | GPUI `Div::on_drag` row shell | same drag-start API or audited GPUI patch gate |
-| Places rows and sidebar scrollbar | retained model/slot/target-decision state, default row chrome and row/section target delivery replaced | Default `FIKA_PLACES_ROW_VISUAL_POLICY=chrome` paints background/drop/insert/trash in one sidebar-level custom layer while `retained-dnd` owns activation/context-menu targeting/DnD target lookup/drop dispatch; GPUI still renders text/icons and provides one typed payload bridge plus row drag-start shells; `gpui` fallback and `FIKA_CUSTOM_PLACES_ROWS=1` full-text benchmark remain available | full retained Places still needs typed payload and drag-start GPUI boundary removal; any text/icon custom painter still requires Places-specific DnD/scroll evidence |
+| Places rows and sidebar scrollbar | retained model/slot/target-decision state, default row chrome and row/section target delivery replaced | Default `FIKA_PLACES_ROW_VISUAL_POLICY=chrome` paints background/drop/insert/trash in one sidebar-level custom layer while `retained-dnd` owns activation/context-menu targeting/DnD target lookup/drop dispatch; GPUI still renders text/icons and provides one typed payload bridge plus row drag-start shells; `gpui` fallback, `FIKA_CUSTOM_PLACES_ROWS=1` text-only benchmark, and opt-in `FIKA_PLACES_ROW_VISUAL_POLICY=full` text+vector-icon benchmark remain available | full retained Places still needs typed payload and drag-start GPUI boundary removal; full text+icon custom painting is not default because `/tmp/fika-places-full-icon-targets.log` still shows text/glyph cold paint spikes while default chrome stays microsecond-level |
 
 The practical state is: item-view static visuals and most app-side controller
 paths have moved to retained/custom-painted architecture. Drag-start and rename
 remain GPUI renderer/platform-contract boundaries. Places now defaults to a
 custom row chrome layer plus retained-DnD row/section target delivery. Its row
-text/icons remain GPUI-rendered, and the remaining Places GPUI boundaries are
-the sidebar typed DnD payload bridge plus row drag-start shells.
+text/icons remain GPUI-rendered by default. The opt-in full Places visual path
+can remove GPUI row text and icon elements (`icon_gpui=0`), but current evidence
+keeps it behind a flag because custom text painting still has cold spikes. The
+remaining Places GPUI boundaries are the sidebar typed DnD payload bridge plus
+row drag-start shells.
 
 ## Evidence Anchors
 

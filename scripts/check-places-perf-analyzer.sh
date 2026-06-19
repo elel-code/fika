@@ -127,6 +127,26 @@ if [[ "$custom_summary" != *"places_row_shape_cache_frames=1 max_hits=11 max_mis
     exit 1
 fi
 
+cat > "$tmpdir/custom-row-full.log" <<'EOF'
+[fika places-slots] rows=11 sections=2 entries=13 inserted=13 content=0 geometry=0 visual=0 unchanged=0 removed=0 project=25us
+[fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
+[fika places-view] source=11 visible=11 sections=2 snapshot=100us
+[fika places-sidebar] rows=11 sections=2 elements=13 build=240us
+[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=0 icon_gpui=0 retained_interaction=0 drag_shell=11 section_gpui=2 scrollbar_canvas=1 visual_kind=full
+[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=11
+[fika places-row-visual] rows=11 painted=11 prepaint=24us paint=35us
+[fika places-row-shape-cache] hits=11 misses=0 evicted=0 entries=11
+EOF
+
+full_summary="$("$analyzer" \
+    --expect-custom-row-full-policy \
+    "$tmpdir/custom-row-full.log")"
+
+if [[ "$full_summary" != *"max_row_gpui=0 max_row_visual_layer=11 max_icon_gpui=0"* || "$full_summary" != *"max_text_gpui=0 visual_kinds=full"* ]]; then
+    echo "expected full custom Places row policy summary" >&2
+    exit 1
+fi
+
 cat > "$tmpdir/custom-row-chrome.log" <<'EOF'
 [fika places-slots] rows=11 sections=2 entries=13 inserted=13 content=0 geometry=0 visual=0 unchanged=0 removed=0 project=25us
 [fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us

@@ -1301,6 +1301,20 @@ tracks.
   gate and remains opt-in because it shows `max_paint=5183us` with shape-cache
   activity compared with chrome `max_paint=83us` targets and `148us` overflow
   with no shape-cache channel.
+- [x] P16dz0: Add the first opt-in full Places row visual path with GPUI icon
+  removal evidence. Root cause: the previous `full` wording only meant
+  text-only custom painting; Places icons still used GPUI row elements. The
+  renderer policy now distinguishes `chrome`, `text`, and `full`; `full`
+  custom-paints row text plus vector fallback icons in the existing aggregated
+  sidebar layer and emits `icon_gpui=0`. Evidence:
+  `/tmp/fika-places-full-icon-targets.log` passes
+  `--expect-custom-row-full-policy` with `max_icon_gpui=0`, while default
+  `/tmp/fika-places-chrome-after-full-icon.log` still passes the chrome gate.
+  The full path is not default: vector icons removed the extra icon text cost,
+  but full text painting still shows cold paint spikes (`max_paint=5669us`)
+  versus default chrome's microsecond-level row visual paint (`max_paint=63us`).
+  Next gate: solve Places custom text cold-start/warmup or keep GPUI text as the
+  Dolphin-aligned default boundary.
 - [x] P16dz: Add the post-Places-chrome full retained renderer roadmap. The new
   `docs/FULL_RETAINED_RENDERER_ROADMAP.md` and zh-CN translation define the
   current baseline, explicit GPUI bridges, non-negotiable Dolphin-aligned

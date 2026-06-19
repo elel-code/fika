@@ -42,6 +42,7 @@ pub(super) fn place_row(
 ) -> Stateful<Div> {
     let custom_chrome = row_visual_policy.custom_layer_enabled();
     let gpui_text = !row_visual_policy.paints_text();
+    let gpui_icon = !row_visual_policy.paints_icon();
     let row_id = format!("place-{visible_index}");
     let path = place.path.clone();
     let place_drag_source = PlaceDragStartSource::from_snapshot(&place);
@@ -139,7 +140,9 @@ pub(super) fn place_row(
         row = row.h(px(PLACE_ROW_HEIGHT));
     }
 
-    row = row.child(place_icon_view(&place.icon, active));
+    if gpui_icon {
+        row = row.child(place_icon_view(&place.icon, active));
+    }
 
     if gpui_text {
         row = row.child(
