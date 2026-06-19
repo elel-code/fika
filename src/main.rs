@@ -132,8 +132,7 @@ use ui::pane::{
 };
 use ui::place_draft::{
     PlaceDraft, PlaceDraftField, PlaceDraftInputResult, apply_place_input_action,
-    clear_place_draft_for_pane as clear_place_draft_state_for_pane, place_draft_overlay,
-    set_place_draft_focus as set_place_draft_state_focus,
+    place_draft_overlay,
 };
 use ui::places::PlacePaintSlotCache;
 #[cfg(test)]
@@ -3123,10 +3122,6 @@ impl FikaApp {
         }
     }
 
-    fn clear_place_draft_for_pane(&mut self, pane_id: PaneId) {
-        clear_place_draft_state_for_pane(&mut self.place_draft, pane_id);
-    }
-
     fn clear_network_auth_draft_for_pane(&mut self, pane_id: PaneId) {
         if self
             .network_auth_draft
@@ -5422,14 +5417,6 @@ impl FikaApp {
         menu.active_submenu = None;
         self.context_submenu_hide_generation = self.context_submenu_hide_generation.wrapping_add(1);
         true
-    }
-
-    pub(crate) fn dismiss_place_draft(&mut self) {
-        self.place_draft = None;
-    }
-
-    pub(crate) fn set_place_draft_focus(&mut self, field: PlaceDraftField) {
-        set_place_draft_state_focus(&mut self.place_draft, field);
     }
 
     pub(crate) fn dismiss_network_auth_draft(&mut self) {

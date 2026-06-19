@@ -1742,6 +1742,10 @@ tracks.
 - [x] P16gai: Move app-facing Places context-menu target projection into the
   Places sidebar facade. `src/ui/places/sidebar.rs` now owns converting place,
   section, and blank-sidebar interactions into `ContextMenuTarget` values.
+- [x] P16gaj: Move app-facing place-draft lifecycle wrappers into the
+  place-draft facade. `src/ui/place_draft.rs` now owns pane-scoped clearing,
+  dismiss, and focus changes for `PlaceDraft`, while draft creation and commit
+  remain in the owning Places user/network paths.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,
