@@ -11,6 +11,10 @@ use super::ItemPaintSlotStats;
 use super::{DetailsTextShapeCache, StaticItemTextShapeCache, TextShapeCacheStats};
 
 const PERF_ITEM_VIEW_ENV: &str = "FIKA_PERF_ITEM_VIEW";
+const VISIBLE_GLYPH_RASTER_BUDGET_US: u128 = 2_000;
+const VISIBLE_GLYPH_RASTER_BUDGET_COUNT: usize = 96;
+const READ_AHEAD_GLYPH_RASTER_BUDGET_US: u128 = 500;
+const READ_AHEAD_GLYPH_RASTER_BUDGET_COUNT: usize = 24;
 
 pub(crate) fn item_view_perf_enabled() -> bool {
     env::var(PERF_ITEM_VIEW_ENV).is_ok_and(|value| env_flag_is_truthy(&value))
@@ -87,8 +91,10 @@ pub(crate) fn classify_item_view_perf_phase(
 pub(crate) struct ItemViewPerfState {
     frames: HashMap<PaneId, ItemViewPerfFrameState>,
     static_item_visual_stats: HashMap<PaneId, StaticItemVisualPerfStats>,
+    static_item_glyph_budget_stats: HashMap<PaneId, GlyphRasterBudgetStats>,
     item_image_stats: HashMap<PaneId, ItemImagePerfStats>,
     details_visual_stats: HashMap<PaneId, DetailsVisualPerfStats>,
+    details_glyph_budget_stats: HashMap<PaneId, GlyphRasterBudgetStats>,
     item_interaction_stats: HashMap<PaneId, ItemInteractionPerfStats>,
 }
 
@@ -113,13 +119,21 @@ impl ItemViewPerfState {
 
     fn clear_layer_stats(&mut self, pane_id: PaneId) {
         self.static_item_visual_stats.remove(&pane_id);
+        self.static_item_glyph_budget_stats.remove(&pane_id);
         self.item_image_stats.remove(&pane_id);
         self.details_visual_stats.remove(&pane_id);
+        self.details_glyph_budget_stats.remove(&pane_id);
         self.item_interaction_stats.remove(&pane_id);
     }
 
     fn take_static_item_visual_stats(&mut self, pane_id: PaneId) -> StaticItemVisualPerfStats {
         self.static_item_visual_stats
+            .remove(&pane_id)
+            .unwrap_or_default()
+    }
+
+    fn take_static_item_glyph_budget_stats(&mut self, pane_id: PaneId) -> GlyphRasterBudgetStats {
+        self.static_item_glyph_budget_stats
             .remove(&pane_id)
             .unwrap_or_default()
     }
@@ -130,6 +144,12 @@ impl ItemViewPerfState {
 
     fn take_details_visual_stats(&mut self, pane_id: PaneId) -> DetailsVisualPerfStats {
         self.details_visual_stats
+            .remove(&pane_id)
+            .unwrap_or_default()
+    }
+
+    fn take_details_glyph_budget_stats(&mut self, pane_id: PaneId) -> GlyphRasterBudgetStats {
+        self.details_glyph_budget_stats
             .remove(&pane_id)
             .unwrap_or_default()
     }
@@ -164,6 +184,17 @@ impl ItemViewPerfState {
             .record_paint(elapsed, count);
     }
 
+    fn record_static_item_glyph_budget_stats(
+        &mut self,
+        pane_id: PaneId,
+        stats: GlyphRasterBudgetStats,
+    ) {
+        self.static_item_glyph_budget_stats
+            .entry(pane_id)
+            .or_default()
+            .add(stats);
+    }
+
     fn record_item_image_prepaint(
         &mut self,
         pane_id: PaneId,
@@ -196,6 +227,17 @@ impl ItemViewPerfState {
             .entry(pane_id)
             .or_default()
             .record_paint(elapsed, count);
+    }
+
+    fn record_details_glyph_budget_stats(
+        &mut self,
+        pane_id: PaneId,
+        stats: GlyphRasterBudgetStats,
+    ) {
+        self.details_glyph_budget_stats
+            .entry(pane_id)
+            .or_default()
+            .add(stats);
     }
 
     fn record_item_interaction_prepaint(
@@ -281,6 +323,112 @@ pub(crate) struct ItemLayerPerfStats {
 pub(crate) type StaticItemVisualPerfStats = ItemLayerPerfStats;
 pub(crate) type DetailsVisualPerfStats = ItemLayerPerfStats;
 pub(crate) type ItemInteractionPerfStats = ItemLayerPerfStats;
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct GlyphRasterBudgetStats {
+    pub(crate) requested: usize,
+    pub(crate) cache_hits: usize,
+    pub(crate) cache_misses: usize,
+    pub(crate) computed: usize,
+    pub(crate) deferred: usize,
+    pub(crate) failed: usize,
+    pub(crate) compute_us: u128,
+    pub(crate) budget_exhausted: bool,
+}
+
+impl GlyphRasterBudgetStats {
+    pub(crate) fn has_activity(self) -> bool {
+        self.requested > 0
+            || self.computed > 0
+            || self.deferred > 0
+            || self.failed > 0
+            || self.budget_exhausted
+    }
+
+    fn add(&mut self, stats: Self) {
+        self.requested += stats.requested;
+        self.cache_hits += stats.cache_hits;
+        self.cache_misses += stats.cache_misses;
+        self.computed += stats.computed;
+        self.deferred += stats.deferred;
+        self.failed += stats.failed;
+        self.compute_us += stats.compute_us;
+        self.budget_exhausted |= stats.budget_exhausted;
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct GlyphRasterMissBudget {
+    max_compute_us: u128,
+    max_computes: usize,
+    stats: GlyphRasterBudgetStats,
+}
+
+impl GlyphRasterMissBudget {
+    pub(crate) fn visible() -> Self {
+        Self::new(
+            VISIBLE_GLYPH_RASTER_BUDGET_US,
+            VISIBLE_GLYPH_RASTER_BUDGET_COUNT,
+        )
+    }
+
+    pub(crate) fn read_ahead() -> Self {
+        Self::new(
+            READ_AHEAD_GLYPH_RASTER_BUDGET_US,
+            READ_AHEAD_GLYPH_RASTER_BUDGET_COUNT,
+        )
+    }
+
+    fn new(max_compute_us: u128, max_computes: usize) -> Self {
+        Self {
+            max_compute_us,
+            max_computes,
+            stats: GlyphRasterBudgetStats::default(),
+        }
+    }
+
+    pub(crate) fn record_cache_hit(&mut self) {
+        self.stats.requested += 1;
+        self.stats.cache_hits += 1;
+    }
+
+    pub(crate) fn record_cache_miss(&mut self) {
+        self.stats.requested += 1;
+        self.stats.cache_misses += 1;
+    }
+
+    pub(crate) fn allow_compute(&mut self) -> bool {
+        if self.stats.computed >= self.max_computes || self.stats.compute_us >= self.max_compute_us
+        {
+            self.stats.budget_exhausted = true;
+            return false;
+        }
+        true
+    }
+
+    pub(crate) fn record_compute(&mut self, elapsed: Duration) {
+        self.stats.computed += 1;
+        self.stats.compute_us += elapsed.as_micros();
+        if self.stats.computed >= self.max_computes || self.stats.compute_us >= self.max_compute_us
+        {
+            self.stats.budget_exhausted = true;
+        }
+    }
+
+    pub(crate) fn record_deferred(&mut self) {
+        self.stats.deferred += 1;
+        self.stats.budget_exhausted = true;
+    }
+
+    pub(crate) fn record_failed(&mut self, elapsed: Duration) {
+        self.stats.failed += 1;
+        self.stats.compute_us += elapsed.as_micros();
+    }
+
+    pub(crate) fn stats(self) -> GlyphRasterBudgetStats {
+        self.stats
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct ItemImageSourcePerfStats {
@@ -491,6 +639,32 @@ mod tests {
             ItemViewPerfPhase::Initial
         );
     }
+
+    #[test]
+    fn glyph_raster_miss_budget_tracks_hits_and_defers_over_budget() {
+        let mut budget = GlyphRasterMissBudget::new(10, 1);
+
+        budget.record_cache_hit();
+        budget.record_cache_miss();
+        assert!(budget.allow_compute());
+        budget.record_compute(Duration::from_micros(4));
+        assert!(!budget.allow_compute());
+        budget.record_deferred();
+
+        assert_eq!(
+            budget.stats(),
+            GlyphRasterBudgetStats {
+                requested: 2,
+                cache_hits: 1,
+                cache_misses: 1,
+                computed: 1,
+                deferred: 1,
+                failed: 0,
+                compute_us: 4,
+                budget_exhausted: true,
+            }
+        );
+    }
 }
 
 impl FikaApp {
@@ -561,6 +735,14 @@ impl FikaApp {
         self.item_view_perf.take_static_item_visual_stats(pane_id)
     }
 
+    pub(super) fn take_static_item_glyph_budget_stats(
+        &mut self,
+        pane_id: PaneId,
+    ) -> GlyphRasterBudgetStats {
+        self.item_view_perf
+            .take_static_item_glyph_budget_stats(pane_id)
+    }
+
     pub(super) fn take_item_image_perf_stats(&mut self, pane_id: PaneId) -> ItemImagePerfStats {
         self.item_view_perf.take_item_image_stats(pane_id)
     }
@@ -570,6 +752,13 @@ impl FikaApp {
         pane_id: PaneId,
     ) -> DetailsVisualPerfStats {
         self.item_view_perf.take_details_visual_stats(pane_id)
+    }
+
+    pub(super) fn take_details_glyph_budget_stats(
+        &mut self,
+        pane_id: PaneId,
+    ) -> GlyphRasterBudgetStats {
+        self.item_view_perf.take_details_glyph_budget_stats(pane_id)
     }
 
     pub(super) fn take_item_interaction_perf_stats(
@@ -597,6 +786,15 @@ impl FikaApp {
     ) {
         self.item_view_perf
             .record_static_item_visual_paint(pane_id, elapsed, count);
+    }
+
+    pub(super) fn record_static_item_glyph_budget_stats(
+        &mut self,
+        pane_id: PaneId,
+        stats: GlyphRasterBudgetStats,
+    ) {
+        self.item_view_perf
+            .record_static_item_glyph_budget_stats(pane_id, stats);
     }
 
     pub(super) fn record_item_image_prepaint(
@@ -638,6 +836,15 @@ impl FikaApp {
     ) {
         self.item_view_perf
             .record_details_visual_paint(pane_id, elapsed, count);
+    }
+
+    pub(super) fn record_details_glyph_budget_stats(
+        &mut self,
+        pane_id: PaneId,
+        stats: GlyphRasterBudgetStats,
+    ) {
+        self.item_view_perf
+            .record_details_glyph_budget_stats(pane_id, stats);
     }
 
     pub(super) fn record_item_interaction_prepaint(

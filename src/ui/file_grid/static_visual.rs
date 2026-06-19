@@ -16,7 +16,8 @@ use super::paint_slots::ItemPaintSnapshot;
 use super::renderer_policy::{item_paints_fallback_icon, item_uses_layer_visual_paint};
 use super::text::static_paint_single_line_text;
 use super::{
-    FileGridRenderSnapshot, ITEM_NAME_LINE_HEIGHT, ItemTileTextAlignment, TextShapeCacheStats,
+    FileGridRenderSnapshot, GlyphRasterMissBudget, ITEM_NAME_LINE_HEIGHT, ItemTileTextAlignment,
+    TextShapeCacheStats,
 };
 
 pub(super) struct StaticItemVisualPaintState {
@@ -328,6 +329,11 @@ impl Element for StaticItemVisualLayerElement {
         } else {
             super::item_view_perf_enabled().then(std::time::Instant::now)
         };
+        let mut glyph_budget = if self.warm_only {
+            GlyphRasterMissBudget::read_ahead()
+        } else {
+            GlyphRasterMissBudget::visible()
+        };
         let states = self
             .items
             .iter()
@@ -347,11 +353,23 @@ impl Element for StaticItemVisualLayerElement {
                     item.drop_target,
                     item.paint_fallback_icon,
                     self.app.clone(),
+                    &mut glyph_budget,
                     window,
                     cx,
                 )
             })
             .collect::<Vec<_>>();
+        if !self.warm_only {
+            let glyph_budget_stats = glyph_budget.stats();
+            if glyph_budget_stats.has_activity() {
+                let _ = self.app.update(cx, |this, cx| {
+                    this.record_static_item_glyph_budget_stats(self.pane_id, glyph_budget_stats);
+                    if glyph_budget_stats.deferred > 0 {
+                        cx.notify();
+                    }
+                });
+            }
+        }
         if let Some(started) = perf_started {
             let elapsed = started.elapsed();
             let count = states.len();
@@ -431,6 +449,7 @@ fn static_item_visual_prepaint(
     drop_target: bool,
     paint_fallback_icon: bool,
     app: WeakEntity<FikaApp>,
+    glyph_budget: &mut GlyphRasterMissBudget,
     window: &mut Window,
     cx: &mut App,
 ) -> StaticItemVisualPaintState {
@@ -464,6 +483,7 @@ fn static_item_visual_prepaint(
         item_bounds,
         &style,
         &app,
+        glyph_budget,
         window,
         cx,
     );
@@ -658,6 +678,7 @@ fn static_item_glyph_raster_prepaint(
     item_bounds: Bounds<Pixels>,
     style: &StaticItemTextShapeStyle,
     app: &WeakEntity<FikaApp>,
+    glyph_budget: &mut GlyphRasterMissBudget,
     window: &mut Window,
     cx: &mut App,
 ) -> StaticItemGlyphRasterPaintState {
@@ -678,6 +699,7 @@ fn static_item_glyph_raster_prepaint(
             TextAlign::Center,
             Some(icon_bounds.size.width),
             app,
+            glyph_budget,
             window,
             cx,
         )
@@ -700,6 +722,7 @@ fn static_item_glyph_raster_prepaint(
                     TextAlign::Left,
                     Some(text_bounds),
                     app,
+                    glyph_budget,
                     window,
                     cx,
                 ));
@@ -724,6 +747,7 @@ fn static_item_glyph_raster_prepaint(
                     TextAlign::Center,
                     Some(text_bounds.size.width),
                     app,
+                    glyph_budget,
                     window,
                     cx,
                 ));
@@ -747,6 +771,7 @@ fn static_item_shaped_glyph_raster(
     align: TextAlign,
     align_width: Option<Pixels>,
     app: &WeakEntity<FikaApp>,
+    glyph_budget: &mut GlyphRasterMissBudget,
     window: &mut Window,
     cx: &mut App,
 ) -> Option<Arc<gpui::GlyphRasterData>> {
@@ -758,27 +783,47 @@ fn static_item_shaped_glyph_raster(
         align_width,
         window.scale_factor(),
     );
-    app.update(cx, |this, _cx| {
-        this.static_item_text_shape_caches
-            .entry(pane_id)
-            .or_default()
-            .glyph_raster_for(&raster_key)
-    })
-    .ok()
-    .flatten()
-    .or_else(|| {
-        let raster_data = Arc::new(
-            line.compute_glyph_raster_data(origin, line_height, align, align_width, window, cx)
-                .ok()?,
-        );
-        let _ = app.update(cx, |this, _cx| {
+    let cached = app
+        .update(cx, |this, _cx| {
             this.static_item_text_shape_caches
                 .entry(pane_id)
                 .or_default()
-                .insert_glyph_raster(raster_key, raster_data.clone());
-        });
-        Some(raster_data)
-    })
+                .glyph_raster_for(&raster_key)
+        })
+        .ok()
+        .flatten();
+    if cached.is_some() {
+        glyph_budget.record_cache_hit();
+        return cached;
+    }
+
+    glyph_budget.record_cache_miss();
+    if !glyph_budget.allow_compute() {
+        glyph_budget.record_deferred();
+        return None;
+    }
+
+    let started = std::time::Instant::now();
+    let raster_data =
+        line.compute_glyph_raster_data(origin, line_height, align, align_width, window, cx);
+    let elapsed = started.elapsed();
+    let raster_data = match raster_data {
+        Ok(raster_data) => {
+            glyph_budget.record_compute(elapsed);
+            Arc::new(raster_data)
+        }
+        Err(_) => {
+            glyph_budget.record_failed(elapsed);
+            return None;
+        }
+    };
+    let _ = app.update(cx, |this, _cx| {
+        this.static_item_text_shape_caches
+            .entry(pane_id)
+            .or_default()
+            .insert_glyph_raster(raster_key, raster_data.clone());
+    });
+    Some(raster_data)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -792,6 +837,7 @@ fn static_item_wrapped_glyph_raster(
     align: TextAlign,
     bounds: Option<Bounds<Pixels>>,
     app: &WeakEntity<FikaApp>,
+    glyph_budget: &mut GlyphRasterMissBudget,
     window: &mut Window,
     cx: &mut App,
 ) -> Option<Arc<gpui::GlyphRasterData>> {
@@ -804,27 +850,47 @@ fn static_item_wrapped_glyph_raster(
         align_width,
         window.scale_factor(),
     );
-    app.update(cx, |this, _cx| {
-        this.static_item_text_shape_caches
-            .entry(pane_id)
-            .or_default()
-            .glyph_raster_for(&raster_key)
-    })
-    .ok()
-    .flatten()
-    .or_else(|| {
-        let raster_data = Arc::new(
-            line.compute_glyph_raster_data(origin, line_height, align, bounds, window, cx)
-                .ok()?,
-        );
-        let _ = app.update(cx, |this, _cx| {
+    let cached = app
+        .update(cx, |this, _cx| {
             this.static_item_text_shape_caches
                 .entry(pane_id)
                 .or_default()
-                .insert_glyph_raster(raster_key, raster_data.clone());
-        });
-        Some(raster_data)
-    })
+                .glyph_raster_for(&raster_key)
+        })
+        .ok()
+        .flatten();
+    if cached.is_some() {
+        glyph_budget.record_cache_hit();
+        return cached;
+    }
+
+    glyph_budget.record_cache_miss();
+    if !glyph_budget.allow_compute() {
+        glyph_budget.record_deferred();
+        return None;
+    }
+
+    let started = std::time::Instant::now();
+    let raster_data =
+        line.compute_glyph_raster_data(origin, line_height, align, bounds, window, cx);
+    let elapsed = started.elapsed();
+    let raster_data = match raster_data {
+        Ok(raster_data) => {
+            glyph_budget.record_compute(elapsed);
+            Arc::new(raster_data)
+        }
+        Err(_) => {
+            glyph_budget.record_failed(elapsed);
+            return None;
+        }
+    };
+    let _ = app.update(cx, |this, _cx| {
+        this.static_item_text_shape_caches
+            .entry(pane_id)
+            .or_default()
+            .insert_glyph_raster(raster_key, raster_data.clone());
+    });
+    Some(raster_data)
 }
 
 fn static_item_glyph_raster_cache_key(

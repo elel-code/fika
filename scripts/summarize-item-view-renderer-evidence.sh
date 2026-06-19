@@ -44,9 +44,11 @@ $summary
 Renderer decision follow-up:
 
 - Compact/Icons base visuals: keep or revisit custom paint using static visual,
-  item shape-cache, item glyph-cache, and custom paint maxima above.
+  item shape-cache, item glyph-cache, item glyph-budget, and custom paint maxima
+  above.
 - Compact/Icons image layer: keep or revisit custom paint using item image maxima, custom paint maxima, and the image_sources counters above.
-- Details visual layer: keep or revisit custom paint using details visual, shape-cache, and glyph-cache channels above.
+- Details visual layer: keep or revisit custom paint using details visual,
+  shape-cache, glyph-cache, and glyph-budget channels above.
 - Renderer surface counts: compare renderer_policy_frames against docs/ITEM_VIEW_RENDERER_DECISIONS.md.
 - Retained hitbox drag start: keep gpui_drag_shell=0 and validate behavior with the DnD smoke checklist, not perf logs alone.
 EOF

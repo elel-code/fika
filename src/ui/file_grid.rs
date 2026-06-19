@@ -45,8 +45,9 @@ pub(crate) use paint_slots::{
     DetailsPaintSnapshot, ItemPaintSlotCache, ItemPaintSlotStats, ItemPaintSnapshot,
 };
 pub(crate) use perf::{
-    DetailsVisualPerfStats, ItemImagePerfStats, ItemImageSourcePerfStats, ItemInteractionPerfStats,
-    ItemViewPerfState, StaticItemVisualPerfStats, item_view_perf_enabled,
+    DetailsVisualPerfStats, GlyphRasterBudgetStats, GlyphRasterMissBudget, ItemImagePerfStats,
+    ItemImageSourcePerfStats, ItemInteractionPerfStats, ItemViewPerfState,
+    StaticItemVisualPerfStats, item_view_perf_enabled,
 };
 pub(crate) use projection::{
     ContentItemHit, PaneLayoutProjection, PaneLayoutProjectionInput,

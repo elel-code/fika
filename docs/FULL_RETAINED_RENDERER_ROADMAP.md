@@ -71,6 +71,15 @@ or only Places must explain how the other side reuses the same model.
   glyph-raster paint data through the same cache primitive; this is the first
   consumer of the Fika GPUI fork's `ShapedLine::compute_glyph_raster_data` and
   `ShapedLine::paint_with_raster_data` hooks.
+- File-grid static text and Details text now advance retained glyph-raster
+  misses under a visible-layer frame budget. Cache hits paint retained raster
+  data directly; cache misses compute synchronously only while the budget
+  allows it; over-budget text falls back to GPUI normal text paint for that
+  frame and continues cache fill on subsequent frames. Static opposite-mode
+  warm/read-ahead is ordered after the real visible layer and uses a small
+  budget so it cannot steal the current visible glyph miss budget. The new
+  `[fika item-glyph-budget]` and `[fika details-glyph-budget]` channels are the
+  cold miss spike profile.
 - Places slot projection now wraps `RetainedSlotStats`, matching item-view slot
   delta accounting while keeping Places-specific row/section counts.
 - Direct thumbnail/theme image load helpers are private to `RetainedImageLayerState`;
@@ -211,8 +220,8 @@ Required evidence:
 - `/etc` and `~/Downloads` item-view logs with `FIKA_PERF_ITEM_VIEW=1`.
 - `/etc` item-view `FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll`.
 - Details mode runtime evidence with `[fika details-visual]`,
-  `[fika details-shape-cache]`, `[fika details-glyph-cache]`, and retained
-  interaction counts.
+  `[fika details-shape-cache]`, `[fika details-glyph-cache]`,
+  `[fika details-glyph-budget]`, and retained interaction counts.
 - DnD smoke with `FIKA_DEBUG_DND=1` covering pane item to pane directory,
   pane item to Places, Places to pane directory, and external path drop.
 - Places default full retained/custom targets, overflow, layout, hit-test,
@@ -229,6 +238,10 @@ First-priority retained-glyph work:
 - Keep the Places retained glyph-raster implementation as the reference.
 - File-grid Details text and Compact/Icons static labels/fallback markers now
   use the same retained shape plus glyph-raster model.
+- File-grid glyph-raster miss spikes must be proven bounded through
+  `[fika item-glyph-budget]` and `[fika details-glyph-budget]`: cold misses may
+  be `deferred`, but synchronous `compute=...us` must remain within a small
+  frame budget.
 - Do not claim this bypasses GPUI's backend. The target is Dolphin-style
   retained ownership above GPUI's text/image/window/render substrate.
 
@@ -331,6 +344,18 @@ Current default:
   `details_glyph_frames=12 hits=871 misses=563 max_entries=563`; warm paint
   maxima are `warm_static_visual_paint=1352us` and
   `warm_details_visual_paint=2674us`.
+- 2026-06-20 file-grid glyph-raster miss budget evidence:
+  `/tmp/fika-glyph-budget-v2-item-etc-zoom-scroll.log`,
+  `/tmp/fika-glyph-budget-v2-item-etc-icons-zoom-scroll.log`, and
+  `/tmp/fika-glyph-budget-v2-item-etc-details-zoom-scroll.log` pass the
+  standard item runtime gate. The combined summary reports
+  `item_glyph_budget_frames=27 ... computed=526 deferred=98 ...
+  max_compute=2165us` and `details_glyph_budget_frames=12 ... computed=528
+  deferred=188 ... max_compute=2006us`. This proves cold glyph-raster miss
+  spikes moved from one-frame full synchronous fill to small-budget synchronous
+  compute plus deferred fill on later frames; remaining cold prepaint spikes
+  should be split next as shape/layout/image-state costs rather than glyph
+  compute alone.
 - Interaction is retained-DnD for row/section target delivery and typed payload
   delivery. The completion gates now require `gpui_event_shells=0`,
   `gpui_row_section_event_shells=0`, `gpui_typed_dnd_payload_shells=0`,

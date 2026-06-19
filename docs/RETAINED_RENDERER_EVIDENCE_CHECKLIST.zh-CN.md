@@ -75,12 +75,14 @@ scripts/summarize-item-view-renderer-evidence.sh /tmp/fika-evidence-item-etc-zoo
 scripts/analyze-item-view-perf.sh --require-autosmoke --require-details --require-renderer-policy --require-interaction --expect-retained-item-policy --require-modes Details --require-renderer-policy-modes Details /tmp/fika-evidence-item-etc-details-zoom-scroll.log
 ```
 
-Details gate 要求 `[fika details-visual]`、`[fika details-shape-cache]` 和
-`[fika details-glyph-cache]`，从而分别观察 shape 复用和 retained
-glyph-raster 复用。
+Details gate 要求 `[fika details-visual]`、`[fika details-shape-cache]`、
+`[fika details-glyph-cache]` 和 `[fika details-glyph-budget]`，从而分别观察
+shape 复用、retained glyph-raster 复用，以及冷 glyph miss 是否被预算化和 deferred。
 标准 runtime gate 也要求 Compact/Icons text reuse evidence 包含
 `[fika static-item-visual]`、`[fika item-shape-cache]` 和
-`[fika item-glyph-cache]`。
+`[fika item-glyph-cache]`，并要求 `[fika item-glyph-budget]` 显示每帧
+glyph-raster miss 的 `computed`、`deferred`、`budget_exhausted` 和
+`compute=...us`。
 
 summary block 是写入 `docs/ITEM_VIEW_RENDERER_DECISIONS.md` 的首选证据片段。
 

@@ -22,7 +22,7 @@ use super::image_layer::{
 use super::paint_slots::DetailsPaintSnapshot;
 use super::renderer_policy::{DetailsRowVisualRenderer, details_row_renderer_policy};
 use super::text::static_paint_single_line_text;
-use super::{ITEM_NAME_LINE_HEIGHT, TextShapeCacheStats};
+use super::{GlyphRasterMissBudget, ITEM_NAME_LINE_HEIGHT, TextShapeCacheStats};
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(super) struct DetailsTextShapeCacheKey {
@@ -339,6 +339,7 @@ impl Element for DetailsVisualLayerElement {
         cx: &mut App,
     ) -> Self::PrepaintState {
         let perf_started = super::item_view_perf_enabled().then(std::time::Instant::now);
+        let mut glyph_budget = GlyphRasterMissBudget::visible();
         let (header, rows) = if let Some(id) = id {
             window.with_element_state::<RetainedImageLayerState, _>(id, |state, window| {
                 let mut state = state.unwrap_or_else(|| RetainedImageLayerState::new(cx));
@@ -348,6 +349,7 @@ impl Element for DetailsVisualLayerElement {
                     &self.header,
                     bounds,
                     &self.app,
+                    &mut glyph_budget,
                     window,
                     cx,
                 );
@@ -359,6 +361,7 @@ impl Element for DetailsVisualLayerElement {
                         bounds,
                         Some(&mut state),
                         &self.app,
+                        &mut glyph_budget,
                         Some(&mut ready_images),
                         window,
                         cx,
@@ -383,6 +386,7 @@ impl Element for DetailsVisualLayerElement {
                 &self.header,
                 bounds,
                 &self.app,
+                &mut glyph_budget,
                 window,
                 cx,
             );
@@ -396,6 +400,7 @@ impl Element for DetailsVisualLayerElement {
                         bounds,
                         None,
                         &self.app,
+                        &mut glyph_budget,
                         None,
                         window,
                         cx,
@@ -409,6 +414,15 @@ impl Element for DetailsVisualLayerElement {
             let count = rows.len();
             let _ = self.app.update(cx, |this, _cx| {
                 this.record_details_visual_prepaint(self.pane_id, elapsed, count);
+            });
+        }
+        let glyph_budget_stats = glyph_budget.stats();
+        if glyph_budget_stats.has_activity() {
+            let _ = self.app.update(cx, |this, cx| {
+                this.record_details_glyph_budget_stats(self.pane_id, glyph_budget_stats);
+                if glyph_budget_stats.deferred > 0 {
+                    cx.notify();
+                }
             });
         }
         DetailsVisualLayerPaintState { header, rows }
@@ -460,6 +474,7 @@ fn details_visual_prepaint_header(
     header: &DetailsVisualHeader,
     layer_bounds: Bounds<Pixels>,
     app: &WeakEntity<FikaApp>,
+    glyph_budget: &mut GlyphRasterMissBudget,
     window: &mut Window,
     cx: &mut App,
 ) -> DetailsVisualHeaderPaintState {
@@ -490,6 +505,7 @@ fn details_visual_prepaint_header(
                     line_height,
                     pane_id,
                     app,
+                    glyph_budget,
                     window,
                     cx,
                 ),
@@ -508,6 +524,7 @@ fn details_visual_prepaint_item(
     layer_bounds: Bounds<Pixels>,
     mut image_state: Option<&mut RetainedImageLayerState>,
     app: &WeakEntity<FikaApp>,
+    glyph_budget: &mut GlyphRasterMissBudget,
     mut ready_images: Option<&mut Vec<RetainedImageReady>>,
     window: &mut Window,
     cx: &mut App,
@@ -541,6 +558,7 @@ fn details_visual_prepaint_item(
                         line_height,
                         pane_id,
                         app,
+                        glyph_budget,
                         window,
                         cx,
                     ),
@@ -557,6 +575,7 @@ fn details_visual_prepaint_item(
                     line_height,
                     pane_id,
                     app,
+                    glyph_budget,
                     window,
                     cx,
                 ))
@@ -689,6 +708,7 @@ fn details_visual_text_prepaint(
     line_height: Pixels,
     pane_id: PaneId,
     app: &WeakEntity<FikaApp>,
+    glyph_budget: &mut GlyphRasterMissBudget,
     window: &mut Window,
     cx: &mut App,
 ) -> DetailsVisualTextPaintState {
@@ -712,7 +732,40 @@ fn details_visual_text_prepaint(
         align_width,
         window.scale_factor(),
     );
-    let raster_data = app
+    let raster_data = details_visual_glyph_raster(
+        pane_id,
+        raster_key,
+        &line,
+        origin,
+        line_height,
+        align_width,
+        app,
+        glyph_budget,
+        window,
+        cx,
+    );
+    DetailsVisualTextPaintState {
+        rect,
+        line,
+        raster_data,
+        line_height,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn details_visual_glyph_raster(
+    pane_id: PaneId,
+    raster_key: DetailsGlyphRasterCacheKey,
+    line: &gpui::ShapedLine,
+    origin: gpui::Point<Pixels>,
+    line_height: Pixels,
+    align_width: Option<Pixels>,
+    app: &WeakEntity<FikaApp>,
+    glyph_budget: &mut GlyphRasterMissBudget,
+    window: &mut Window,
+    cx: &mut App,
+) -> Option<Arc<gpui::GlyphRasterData>> {
+    let cached = app
         .update(cx, |this, _cx| {
             this.details_text_shape_caches
                 .entry(pane_id)
@@ -720,33 +773,45 @@ fn details_visual_text_prepaint(
                 .glyph_raster_for(&raster_key)
         })
         .ok()
-        .flatten()
-        .or_else(|| {
-            let raster_data = Arc::new(
-                line.compute_glyph_raster_data(
-                    origin,
-                    line_height,
-                    TextAlign::Left,
-                    align_width,
-                    window,
-                    cx,
-                )
-                .ok()?,
-            );
-            let _ = app.update(cx, |this, _cx| {
-                this.details_text_shape_caches
-                    .entry(pane_id)
-                    .or_default()
-                    .insert_glyph_raster(raster_key, raster_data.clone());
-            });
-            Some(raster_data)
-        });
-    DetailsVisualTextPaintState {
-        rect,
-        line,
-        raster_data,
-        line_height,
+        .flatten();
+    if cached.is_some() {
+        glyph_budget.record_cache_hit();
+        return cached;
     }
+
+    glyph_budget.record_cache_miss();
+    if !glyph_budget.allow_compute() {
+        glyph_budget.record_deferred();
+        return None;
+    }
+
+    let started = std::time::Instant::now();
+    let raster_data = line.compute_glyph_raster_data(
+        origin,
+        line_height,
+        TextAlign::Left,
+        align_width,
+        window,
+        cx,
+    );
+    let elapsed = started.elapsed();
+    let raster_data = match raster_data {
+        Ok(raster_data) => {
+            glyph_budget.record_compute(elapsed);
+            Arc::new(raster_data)
+        }
+        Err(_) => {
+            glyph_budget.record_failed(elapsed);
+            return None;
+        }
+    };
+    let _ = app.update(cx, |this, _cx| {
+        this.details_text_shape_caches
+            .entry(pane_id)
+            .or_default()
+            .insert_glyph_raster(raster_key, raster_data.clone());
+    });
+    Some(raster_data)
 }
 
 fn details_text_shape_cache_key(

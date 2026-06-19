@@ -14,15 +14,15 @@ Options:
       Fail if no [fika item-view] phase=steady frame is present.
 
   --require-details
-      Fail if Details-specific visual, shape-cache, and glyph-cache channels
-      are missing.
+      Fail if Details-specific visual, shape-cache, glyph-cache, and
+      glyph-budget channels are missing.
 
   --require-warm-details-visual
       Fail if Details-specific warmed visual paint timing is missing.
 
   --require-static-visual
       Fail if [fika static-item-visual] Compact/Icons paint timing or static
-      item shape/glyph cache evidence is missing.
+      item shape/glyph cache/budget evidence is missing.
 
   --require-static-modes A,B,C
       Fail if any comma-separated view mode is absent from static visual logs.
@@ -601,6 +601,25 @@ BEGIN {
     max_assign(single_max, "item_glyph_entries", field("entries") + 0)
 }
 
+/^\[fika item-glyph-budget\]/ {
+    item_glyph_budget_count++
+    note_mode(field("mode"))
+    item_glyph_budget_requested += field("requested") + 0
+    item_glyph_budget_hits += field("hits") + 0
+    item_glyph_budget_misses += field("misses") + 0
+    item_glyph_budget_computed += field("computed") + 0
+    item_glyph_budget_deferred += field("deferred") + 0
+    item_glyph_budget_failed += field("failed") + 0
+    max_assign(single_max, "item_glyph_budget_requested", field("requested") + 0)
+    max_assign(single_max, "item_glyph_budget_misses", field("misses") + 0)
+    max_assign(single_max, "item_glyph_budget_computed", field("computed") + 0)
+    max_assign(single_max, "item_glyph_budget_deferred", field("deferred") + 0)
+    max_assign(single_max, "item_glyph_budget_compute", us_field("compute"))
+    if (field("budget_exhausted") == "true") {
+        item_glyph_budget_exhausted++
+    }
+}
+
 /^\[fika item-image\]/ {
     image_count++
     note_mode(field("mode"))
@@ -652,6 +671,25 @@ BEGIN {
     details_glyph_misses += field("misses") + 0
     details_glyph_evicted += field("evicted") + 0
     max_assign(single_max, "details_glyph_entries", field("entries") + 0)
+}
+
+/^\[fika details-glyph-budget\]/ {
+    details_glyph_budget_count++
+    note_mode(field("mode"))
+    details_glyph_budget_requested += field("requested") + 0
+    details_glyph_budget_hits += field("hits") + 0
+    details_glyph_budget_misses += field("misses") + 0
+    details_glyph_budget_computed += field("computed") + 0
+    details_glyph_budget_deferred += field("deferred") + 0
+    details_glyph_budget_failed += field("failed") + 0
+    max_assign(single_max, "details_glyph_budget_requested", field("requested") + 0)
+    max_assign(single_max, "details_glyph_budget_misses", field("misses") + 0)
+    max_assign(single_max, "details_glyph_budget_computed", field("computed") + 0)
+    max_assign(single_max, "details_glyph_budget_deferred", field("deferred") + 0)
+    max_assign(single_max, "details_glyph_budget_compute", us_field("compute"))
+    if (field("budget_exhausted") == "true") {
+        details_glyph_budget_exhausted++
+    }
 }
 
 /^\[fika item-interaction\]/ {
@@ -813,6 +851,19 @@ END {
         " misses=" (item_glyph_misses + 0) \
         " evicted=" (item_glyph_evicted + 0) \
         " max_entries=" (("item_glyph_entries" in single_max) ? single_max["item_glyph_entries"] : 0)
+    print "  item_glyph_budget_frames: " (item_glyph_budget_count + 0) \
+        " requested=" (item_glyph_budget_requested + 0) \
+        " hits=" (item_glyph_budget_hits + 0) \
+        " misses=" (item_glyph_budget_misses + 0) \
+        " computed=" (item_glyph_budget_computed + 0) \
+        " deferred=" (item_glyph_budget_deferred + 0) \
+        " failed=" (item_glyph_budget_failed + 0) \
+        " budget_exhausted=" (item_glyph_budget_exhausted + 0) \
+        " max_requested=" (("item_glyph_budget_requested" in single_max) ? single_max["item_glyph_budget_requested"] : 0) \
+        " max_misses=" (("item_glyph_budget_misses" in single_max) ? single_max["item_glyph_budget_misses"] : 0) \
+        " max_computed=" (("item_glyph_budget_computed" in single_max) ? single_max["item_glyph_budget_computed"] : 0) \
+        " max_deferred=" (("item_glyph_budget_deferred" in single_max) ? single_max["item_glyph_budget_deferred"] : 0) \
+        " max_compute=" (("item_glyph_budget_compute" in single_max) ? single_max["item_glyph_budget_compute"] : 0) "us"
     print "  warm_static_visual_frames: " (warm_static_visual_count + 0) \
         " max_paint=" (("warm_static_visual_paint" in single_max) ? single_max["warm_static_visual_paint"] : 0) "us"
     print "  image_frames: " (image_count + 0) \
@@ -852,6 +903,19 @@ END {
         " misses=" (details_glyph_misses + 0) \
         " evicted=" (details_glyph_evicted + 0) \
         " max_entries=" (("details_glyph_entries" in single_max) ? single_max["details_glyph_entries"] : 0)
+    print "  details_glyph_budget_frames: " (details_glyph_budget_count + 0) \
+        " requested=" (details_glyph_budget_requested + 0) \
+        " hits=" (details_glyph_budget_hits + 0) \
+        " misses=" (details_glyph_budget_misses + 0) \
+        " computed=" (details_glyph_budget_computed + 0) \
+        " deferred=" (details_glyph_budget_deferred + 0) \
+        " failed=" (details_glyph_budget_failed + 0) \
+        " budget_exhausted=" (details_glyph_budget_exhausted + 0) \
+        " max_requested=" (("details_glyph_budget_requested" in single_max) ? single_max["details_glyph_budget_requested"] : 0) \
+        " max_misses=" (("details_glyph_budget_misses" in single_max) ? single_max["details_glyph_budget_misses"] : 0) \
+        " max_computed=" (("details_glyph_budget_computed" in single_max) ? single_max["details_glyph_budget_computed"] : 0) \
+        " max_deferred=" (("details_glyph_budget_deferred" in single_max) ? single_max["details_glyph_budget_deferred"] : 0) \
+        " max_compute=" (("details_glyph_budget_compute" in single_max) ? single_max["details_glyph_budget_compute"] : 0) "us"
     print "  interaction_frames: " (item_interaction_count + 0) \
         " max_prepaint_count=" (("interaction_prepaint_count" in single_max) ? single_max["interaction_prepaint_count"] : 0) \
         " max_paint_count=" (("interaction_paint_count" in single_max) ? single_max["interaction_paint_count"] : 0)
@@ -901,6 +965,9 @@ END {
     if (require_details == "true" && details_glyph_count == 0) {
         fail("missing [fika details-glyph-cache] lines")
     }
+    if (require_details == "true" && details_glyph_budget_count == 0) {
+        fail("missing [fika details-glyph-budget] lines")
+    }
     if (require_warm_details_visual == "true" && warm_details_visual_count == 0) {
         fail("missing warmed [fika details-visual] paint frames")
     }
@@ -912,6 +979,9 @@ END {
     }
     if (require_static_visual == "true" && item_glyph_count == 0) {
         fail("missing [fika item-glyph-cache] lines")
+    }
+    if (require_static_visual == "true" && item_glyph_budget_count == 0) {
+        fail("missing [fika item-glyph-budget] lines")
     }
     for (mode in required_static_mode) {
         if (!(mode in static_visual_modes)) {

@@ -22,6 +22,19 @@ caches may keep their Dolphin-style geometry reuse
 keys, but glyph-raster caches must use paint-geometry keys because GPUI raster
 data is tied to origin, line height, align width, and scale factor.
 
+The immediate first-priority follow-up is flattening glyph-raster miss spikes,
+not forcing every cold raster miss to complete in one frame. Static item text
+and Details text now use a visible-layer-first frame budget: cache hits paint
+with retained raster data, cache misses compute only while the frame budget
+allows it, and over-budget text falls back to GPUI normal text paint for that
+frame while `cx.notify()` schedules subsequent cache-fill frames. Opposite-mode
+warm/static read-ahead is ordered after the real visible layer and uses only a
+small budget, so it cannot steal the current visible miss budget. Evidence must
+track both cache totals and the budget profile: `[fika item-glyph-budget]` and
+`[fika details-glyph-budget]` report `computed`, `deferred`,
+`budget_exhausted`, and `compute=...us`, which are now the primary spike
+control signals.
+
 ## Current Replacement Matrix
 
 | Surface | Current state | Renderer | Remaining dependency |
@@ -91,10 +104,14 @@ cache keeps a real image available across pending reloads.
 - Compact/Icons text shape-cache channel: `[fika item-shape-cache]`
 - Compact/Icons text retained glyph-raster cache channel:
   `[fika item-glyph-cache]`
+- Compact/Icons text glyph-raster miss budget channel:
+  `[fika item-glyph-budget]`
 - Details visual paint channel: `[fika details-visual]`
 - Details text shape-cache channel: `[fika details-shape-cache]`
 - Details text retained glyph-raster cache channel:
   `[fika details-glyph-cache]`
+- Details text glyph-raster miss budget channel:
+  `[fika details-glyph-budget]`
 - Renderer surface count channel: `[fika renderer-policy]`
 - Runtime checklist: `docs/ITEM_VIEW_RUNTIME_SMOKE.md`
 - Per-surface decisions: `docs/ITEM_VIEW_RENDERER_DECISIONS.md`
@@ -366,7 +383,8 @@ execution must stay split into evidence-backed tracks:
    The same retained text/glyph paint-data model now covers Details cells/header
    and Compact/Icons labels/fallback markers. The evidence gate for each
    surface must include both the existing shape-cache channel and the
-   glyph-cache channel.
+   glyph-cache channel, plus the glyph-budget channel that proves cold miss
+   work is bounded and deferred instead of being forced into one prepaint pass.
 6. **Ownership track**: keep extracting orchestration from `src/main.rs` into
    Dolphin-aligned file-grid modules when the move is behavior-preserving. This
    includes role scheduling handoff, runtime evidence helpers, and eventually

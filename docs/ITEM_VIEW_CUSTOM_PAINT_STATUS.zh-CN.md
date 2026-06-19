@@ -20,6 +20,15 @@ cache 可以继续保留 Dolphin 风格的几何复用 key，但 glyph-raster ca
 paint-geometry key，因为 GPUI raster data 绑定 origin、line height、align width 和
 scale factor。
 
+当前第一优先级的后续约束是压平 glyph-raster miss 峰值，而不是追求冷帧一次性补齐
+所有 raster。Static item 和 Details text 现在使用可见层优先的帧预算：
+cache hit 直接走 retained raster paint；cache miss 只在预算内同步计算；超预算文本
+本帧回退到 GPUI normal text paint，并通过 `cx.notify()` 触发后续帧继续补齐。相反模式
+的 warm/static read-ahead 层排在真实可见层之后，并只使用小预算，不能抢当前可见内容的
+miss 预算。证据必须同时观察 cache 总量和预算画像：`[fika item-glyph-budget]` /
+`[fika details-glyph-budget]` 中的 `computed`、`deferred`、`budget_exhausted`
+和 `compute=...us` 是判断峰值是否受控的主指标。
+
 ## 当前替换矩阵
 
 | 表面 | 当前状态 | 渲染器 | 剩余依赖 |
@@ -58,6 +67,7 @@ retained cache 在 pending reload 期间保留已有真实 image。
   `src/ui/file_grid/interaction.rs`、`src/ui/file_grid/dnd.rs`
 - Compact/Icons text shape-cache 通道：`[fika item-shape-cache]`
 - Compact/Icons text retained glyph-raster cache 通道：`[fika item-glyph-cache]`
+- Compact/Icons text glyph-raster miss 预算通道：`[fika item-glyph-budget]`
 - 详情布局投影和行快照：`src/ui/file_grid/details.rs`
 - Details retained row hitbox/DnD 边界：
   `src/ui/file_grid/interaction.rs`、`src/ui/file_grid/dnd.rs`
@@ -65,6 +75,7 @@ retained cache 在 pending reload 期间保留已有真实 image。
 - 性能测量门和基线：`scripts/analyze-item-view-perf.sh`
 - Details text shape-cache 通道：`[fika details-shape-cache]`
 - Details text retained glyph-raster cache 通道：`[fika details-glyph-cache]`
+- Details text glyph-raster miss 预算通道：`[fika details-glyph-budget]`
 - 渲染器决策日志：`docs/ITEM_VIEW_RENDERER_DECISIONS.md`
 - Places 渲染器计划和基线：`docs/PLACES_RENDERER_PLAN.md`
 - Places 行目标决策和保留 hitbox 数据：`src/ui/places/interaction.rs`
@@ -80,7 +91,7 @@ retained cache 在 pending reload 期间保留已有真实 image。
 | 静态条目视觉的自定义内容级绘制器 | Compact/Icons 调整大小/全屏稳定路径的每帧 `[fika static-item-visual]` 日志 | 已满足 |
 | 缩略图的自定义图像绘制器 | `[fika item-image]` 每帧日志，验证图像源计数、保留同源图像和缩略图后备 | 已满足 |
 | 非重命名条目的保留悬停/光标 hitbox | `[fika interaction]` 每帧日志，显示 hitbox 计数和计时与 GPUI 悬停/cursor 路径的对比 | 已满足 |
-| 详情静态视觉的自定义内容级绘制器 | `[fika details-visual]`、`[fika details-shape-cache]` 和 `[fika details-glyph-cache]` 每帧日志 | 已满足 |
+| 详情静态视觉的自定义内容级绘制器 | `[fika details-visual]`、`[fika details-shape-cache]`、`[fika details-glyph-cache]` 和 `[fika details-glyph-budget]` 每帧日志 | 已满足 |
 | 详情的保留行 hit testing/controller | `[fika interaction]` 每帧日志，覆盖详情行计数 | 已满足 |
 | Places 默认渲染器 | GPUI 侧栏 `FIKA_PERF_PLACES_VIEW=1` 基线 | 已捕获 |
 | Places 可选行视觉绘制器 | 启用 `FIKA_CUSTOM_PLACES_ROWS=1` 时的 `[fika places-row-visual]` prepaint/paint 最大值 | 可选基准表面 |
@@ -100,6 +111,8 @@ retained cache 在 pending reload 期间保留已有真实 image。
 - `[fika interaction]` 覆盖 Compact、Icons 和 Details 的自定义 hitbox 计数
 - `[fika details-visual]`、`[fika details-shape-cache]` 和
   `[fika details-glyph-cache]` 存在且低于每帧最大值
+- `[fika item-glyph-budget]` 和 `[fika details-glyph-budget]` 存在；冷帧
+  miss 可以被 `deferred`，但 `compute=...us` 必须保持在小帧预算内，并由后续帧补齐
 - 可见条目/viewport 尺寸和有效缩放级别出现在 `[fika item-view]` 摘要中
 - 调整大小运行在 `phase=geometry-change` 之后最终产生 `phase=steady`
 - Compact、Icons 和 Details 模式切换出现并分别跟踪冷预热，与调整大小分开
@@ -226,7 +239,7 @@ paint-slot 内容/几何/视觉变化测试，以及运行时
 2. **绘制器轨道**：继续仅在绘制器消费保留快照且能匹配 Dolphin widget 行为的地方将视觉工作移入内容级绘制器。下一个绘制器工作是图像冷加载/缩放路径的稳定化和测量，而非盲目添加新的视觉表面。
 3. **Controller 轨道**：保持点击、菜单、悬停、光标、选择、pane 放置、条目放置和外部放置通过保留 viewport hit testing 路由。GPUI 每条目回调仅是临时的平台桥梁。
 4. **Shell 边界轨道**：通过 Fika GPUI retained-hitbox typed DnD patch 将 GPUI DnD shell 计数保持为 0。在行为矩阵覆盖文本输入和 IME 之前保持重命名在 GPUI 上。
-5. **Glyph-raster 轨道**：Places full rows 是参考实现；同一 retained text/glyph paint-data 模型现在已覆盖 Details cells/header 和 Compact/Icons labels/fallback markers。每个 surface 的 evidence gate 必须同时包含已有 shape-cache 通道和 glyph-cache 通道。
+5. **Glyph-raster 轨道**：Places full rows 是参考实现；同一 retained text/glyph paint-data 模型现在已覆盖 Details cells/header 和 Compact/Icons labels/fallback markers。每个 surface 的 evidence gate 必须同时包含已有 shape-cache 通道、glyph-cache 通道，以及证明冷 miss 工作被预算化和 deferred 而不是塞进单个 prepaint pass 的 glyph-budget 通道。
 6. **所有权轨道**：继续在行为保持时将编排从 `src/main.rs` 提取到 Dolphin 对齐的文件网格模块。这包括角色调度移交、运行时证据助手，以及最终的 shell 边界所有权。
 
 这是"完全转换"的实际含义：每个条目视图行为应由保留 model/布局/controller/painter 状态拥有，而任何剩余的 GPUI 渲染器是具有证据和移除门的显式平台边界。

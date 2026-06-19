@@ -208,10 +208,13 @@ Expected log properties:
   regression after shell-removal slices.
 - Compact/Icons runs should emit `[fika item-shape-cache]` and
   `[fika item-glyph-cache]` so retained label/fallback-marker shape and
-  glyph-raster reuse remain attributable.
+  glyph-raster reuse remain attributable. They should also emit
+  `[fika item-glyph-budget]` so cold miss work is visible as bounded
+  `computed` work or deferred fallback, not hidden inside prepaint time.
 - Details runs should emit `[fika details-visual]` and
-  `[fika details-shape-cache]` and `[fika details-glyph-cache]` so custom
-  painter, text-shape, and glyph-raster reuse costs remain attributable.
+  `[fika details-shape-cache]`, `[fika details-glyph-cache]`, and
+  `[fika details-glyph-budget]` so custom painter, text-shape, glyph-raster
+  reuse, and miss-budget costs remain attributable.
 - `[fika item-interaction]` hitbox count should match the visible retained
   interaction items for Compact/Icons and Details.
 - `[fika renderer-policy]` should appear for Compact, Icons, and Details and
@@ -223,9 +226,9 @@ Expected log properties:
 Use `scripts/analyze-item-view-perf.sh` as the first pass. It summarizes
 item-view phases and stage maxima (`raw`, `icon_sync`, `queue`, `convert`),
 file-grid build maxima, Compact/Icons static custom visual and text
-shape/glyph-cache activity, image paint activity when the directory exercises
-image-backed icons or thumbnails, aggregate custom paint maxima, Details
-visual/shape/glyph-cache activity, retained
+shape/glyph-cache/glyph-budget activity, image paint activity when the
+directory exercises image-backed icons or thumbnails, aggregate custom paint
+maxima, Details visual/shape/glyph-cache/glyph-budget activity, retained
 interaction hitbox activity, and renderer-policy surface counts. It rejects
 renderer-policy counts that cannot fit inside the logged item count. Human
 review is still required for whether the exercised mode switches, resizes,

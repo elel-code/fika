@@ -20,8 +20,8 @@ use super::viewport::{
     view_mode_for_snapshot, viewport_bounds_update_requires_notify,
 };
 use super::{
-    DetailsVisualPerfStats, FileGridProps, FileGridRenderSnapshot, ItemImagePerfStats,
-    ItemInteractionPerfStats, ItemTileTextAlignment, StaticItemVisualPerfStats,
+    DetailsVisualPerfStats, FileGridProps, FileGridRenderSnapshot, GlyphRasterBudgetStats,
+    ItemImagePerfStats, ItemInteractionPerfStats, ItemTileTextAlignment, StaticItemVisualPerfStats,
     TextShapeCacheStats,
 };
 use crate::ui::item_view::item_view_scrollbar_container;
@@ -109,12 +109,12 @@ pub(crate) fn file_grid(
                     warm_static_visual_snapshot.as_ref().and_then(|snapshot| {
                         static_item_visual_warm_layer_view(pane_id, snapshot, app.clone())
                     });
-                let content = if let Some(layer) = warm_static_visual_layer {
+                let content = if let Some(layer) = static_visual_layer {
                     content.child(layer)
                 } else {
                     content
                 };
-                let content = if let Some(layer) = static_visual_layer {
+                let content = if let Some(layer) = warm_static_visual_layer {
                     content.child(layer)
                 } else {
                     content
@@ -210,12 +210,12 @@ pub(crate) fn file_grid(
                     warm_static_visual_snapshot.as_ref().and_then(|snapshot| {
                         static_item_visual_warm_layer_view(pane_id, snapshot, app.clone())
                     });
-                let content = if let Some(layer) = warm_static_visual_layer {
+                let content = if let Some(layer) = static_visual_layer {
                     content.child(layer)
                 } else {
                     content
                 };
-                let content = if let Some(layer) = static_visual_layer {
+                let content = if let Some(layer) = warm_static_visual_layer {
                     content.child(layer)
                 } else {
                     content
@@ -309,8 +309,10 @@ pub(crate) fn file_grid(
             let mut details_shape_cache_stats = TextShapeCacheStats::default();
             let mut details_glyph_cache_stats = TextShapeCacheStats::default();
             let mut static_visual_stats = StaticItemVisualPerfStats::default();
+            let mut static_glyph_budget_stats = GlyphRasterBudgetStats::default();
             let mut image_stats = ItemImagePerfStats::default();
             let mut details_visual_stats = DetailsVisualPerfStats::default();
+            let mut details_glyph_budget_stats = GlyphRasterBudgetStats::default();
             let mut interaction_stats = ItemInteractionPerfStats::default();
             let _ = app.update(cx, |this, cx| {
                 let previous_view = this.panes.pane(pane_id).map(|pane| pane.view.clone());
@@ -342,8 +344,11 @@ pub(crate) fn file_grid(
                     details_glyph_cache_stats =
                         this.take_details_glyph_raster_cache_stats(pane_id);
                     static_visual_stats = this.take_static_item_visual_perf_stats(pane_id);
+                    static_glyph_budget_stats =
+                        this.take_static_item_glyph_budget_stats(pane_id);
                     image_stats = this.take_item_image_perf_stats(pane_id);
                     details_visual_stats = this.take_details_visual_perf_stats(pane_id);
+                    details_glyph_budget_stats = this.take_details_glyph_budget_stats(pane_id);
                     interaction_stats = this.take_item_interaction_perf_stats(pane_id);
                 }
             });
@@ -382,6 +387,21 @@ pub(crate) fn file_grid(
                         glyph_cache_stats.entries,
                     );
                 }
+                if static_glyph_budget_stats.has_activity() {
+                    eprintln!(
+                        "[fika item-glyph-budget] pane={} mode={:?} requested={} hits={} misses={} computed={} deferred={} failed={} budget_exhausted={} compute={}us",
+                        pane_id.0,
+                        view_mode,
+                        static_glyph_budget_stats.requested,
+                        static_glyph_budget_stats.cache_hits,
+                        static_glyph_budget_stats.cache_misses,
+                        static_glyph_budget_stats.computed,
+                        static_glyph_budget_stats.deferred,
+                        static_glyph_budget_stats.failed,
+                        static_glyph_budget_stats.budget_exhausted,
+                        static_glyph_budget_stats.compute_us,
+                    );
+                }
                 if details_shape_cache_stats.has_activity() {
                     eprintln!(
                         "[fika details-shape-cache] pane={} mode={:?} hits={} misses={} evicted={} entries={}",
@@ -402,6 +422,21 @@ pub(crate) fn file_grid(
                         details_glyph_cache_stats.misses,
                         details_glyph_cache_stats.evicted,
                         details_glyph_cache_stats.entries,
+                    );
+                }
+                if details_glyph_budget_stats.has_activity() {
+                    eprintln!(
+                        "[fika details-glyph-budget] pane={} mode={:?} requested={} hits={} misses={} computed={} deferred={} failed={} budget_exhausted={} compute={}us",
+                        pane_id.0,
+                        view_mode,
+                        details_glyph_budget_stats.requested,
+                        details_glyph_budget_stats.cache_hits,
+                        details_glyph_budget_stats.cache_misses,
+                        details_glyph_budget_stats.computed,
+                        details_glyph_budget_stats.deferred,
+                        details_glyph_budget_stats.failed,
+                        details_glyph_budget_stats.budget_exhausted,
+                        details_glyph_budget_stats.compute_us,
                     );
                 }
                 if static_visual_stats.has_activity() {

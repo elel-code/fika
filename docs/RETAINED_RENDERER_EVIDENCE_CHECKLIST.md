@@ -77,11 +77,14 @@ scripts/analyze-item-view-perf.sh --require-autosmoke --require-details --requir
 ```
 
 The Details gate requires `[fika details-visual]`,
-`[fika details-shape-cache]`, and `[fika details-glyph-cache]` so shape reuse
-and retained glyph-raster reuse remain separately visible.
+`[fika details-shape-cache]`, `[fika details-glyph-cache]`, and
+`[fika details-glyph-budget]` so shape reuse, retained glyph-raster reuse, and
+cold glyph miss budgeting/defer behavior remain separately visible.
 The standard runtime gate also requires `[fika static-item-visual]`,
-`[fika item-shape-cache]`, and `[fika item-glyph-cache]` for Compact/Icons text
-reuse evidence.
+`[fika item-shape-cache]`, `[fika item-glyph-cache]`, and
+`[fika item-glyph-budget]` for Compact/Icons text reuse and per-frame
+glyph-raster miss spike evidence. The budget channels report `computed`,
+`deferred`, `budget_exhausted`, and `compute=...us`.
 
 The summary block is the preferred evidence snippet for
 `docs/ITEM_VIEW_RENDERER_DECISIONS.md`.
