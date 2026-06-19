@@ -333,7 +333,7 @@ pub(crate) fn places_sidebar(
         PlacesSidebarScrollState::new()
     });
     let scroll_handle = state.read(cx).scroll_handle.clone();
-    let targeting_state = event_delivery_policy.retained_targeting_enabled().then(|| {
+    let targeting_state = event_delivery_policy.retained_pointer_enabled().then(|| {
         window.use_keyed_state("places-event-targeting", cx, |_, _| {
             PlacesEventTargetingState::new()
         })
@@ -349,6 +349,7 @@ pub(crate) fn places_sidebar(
             places.clone(),
             app.clone(),
             places_icon_image_cache,
+            targeting_state.clone(),
             paint_row_text,
             warm_row_text_shapes,
             paint_row_icon,

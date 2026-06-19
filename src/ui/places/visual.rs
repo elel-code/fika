@@ -12,13 +12,14 @@ use crate::FikaApp;
 use crate::ui::icons::{FileIconSnapshot, ThemeIconImageKey};
 use crate::ui::retained::RetainedImageLayerState;
 
+use super::event_layer::PlacesEventTargetingState;
 use super::perf::{
     PlacesRowTextShapeCachePerfLog, PlacesRowTextShapeCacheStats, PlacesRowVisualPerfLog,
     emit_places_row_text_shape_cache_perf_log, emit_places_row_visual_perf_log,
     places_perf_enabled,
 };
 use super::snapshot::PlaceSnapshot;
-use super::style::{place_row_background, place_row_border_color};
+use super::style::{place_row_background, place_row_border_color, place_row_hover_background};
 
 pub(super) const PLACE_ROW_HEIGHT: f32 = 30.0;
 pub(super) const PLACE_SECTION_HEADING_HEIGHT: f32 = 24.0;
@@ -34,6 +35,7 @@ pub(super) fn places_row_visual_layer(
     places: Arc<[PlaceSnapshot]>,
     app: WeakEntity<FikaApp>,
     icon_cache: Option<Entity<PlacesIconImageCache>>,
+    targeting_state: Option<Entity<PlacesEventTargetingState>>,
     paint_text: bool,
     warm_text_shapes: bool,
     paint_icon: bool,
@@ -51,6 +53,7 @@ pub(super) fn places_row_visual_layer(
                 total_rows,
                 app.clone(),
                 icon_cache.clone(),
+                targeting_state.clone(),
                 paint_text,
                 warm_text_shapes,
                 paint_icon,
@@ -91,6 +94,7 @@ pub(super) fn places_row_visual_layer(
 
 #[derive(Clone)]
 struct PlaceRowVisualState {
+    visible_index: usize,
     y: f32,
     label: SharedString,
     icon: PlaceRowIconVisualState,
@@ -123,9 +127,10 @@ impl PlaceSectionVisualState {
 }
 
 impl PlaceRowVisualState {
-    fn from_place(place: &PlaceSnapshot, y: f32) -> Self {
+    fn from_place(place: &PlaceSnapshot, visible_index: usize, y: f32) -> Self {
         let insert_target = place.insert_before || place.insert_after;
         Self {
+            visible_index,
             y,
             label: SharedString::from(place.label.as_str()),
             icon: PlaceRowIconVisualState::from_icon(&place.icon, place.active && !insert_target),
@@ -177,6 +182,7 @@ struct PlaceRowVisualPaintState {
     input: PlaceRowVisualState,
     line: Option<Arc<gpui::ShapedLine>>,
     line_height: Pixels,
+    hovered: bool,
     paint_icon: bool,
     icon_image: Option<Arc<RenderImage>>,
 }
@@ -266,6 +272,7 @@ fn places_row_visual_prepaint(
     total_rows: usize,
     app: WeakEntity<FikaApp>,
     icon_cache: Option<Entity<PlacesIconImageCache>>,
+    targeting_state: Option<Entity<PlacesEventTargetingState>>,
     paint_text: bool,
     warm_text_shapes: bool,
     paint_icon: bool,
@@ -274,6 +281,10 @@ fn places_row_visual_prepaint(
     cx: &mut App,
 ) -> PlaceRowVisualLayerPaintState {
     let started = Instant::now();
+    let hovered_visible_index = targeting_state
+        .as_ref()
+        .map(|state| state.read(cx).hovered_visible_index())
+        .unwrap_or_default();
     let sections =
         visible_place_section_visuals(sections, layer_bounds, window.content_mask().bounds)
             .into_iter()
@@ -284,11 +295,13 @@ fn places_row_visual_prepaint(
     let rows = visible_place_row_visuals(rows, layer_bounds, window.content_mask().bounds)
         .into_iter()
         .map(|input| {
+            let hovered = hovered_visible_index == Some(input.visible_index);
             place_row_visual_prepaint(
                 input,
                 paint_text,
                 warm_text_shapes,
                 paint_icon,
+                hovered,
                 &app,
                 icon_cache.as_ref(),
                 window,
@@ -385,6 +398,7 @@ fn place_row_visual_prepaint(
     paint_text: bool,
     warm_text_shapes: bool,
     paint_icon: bool,
+    hovered: bool,
     app: &WeakEntity<FikaApp>,
     icon_cache: Option<&Entity<PlacesIconImageCache>>,
     window: &mut Window,
@@ -422,6 +436,7 @@ fn place_row_visual_prepaint(
         None
     };
     PlaceRowVisualPaintState {
+        hovered: hovered && !input.insert_before && !input.insert_after,
         input,
         line: paint_text.then_some(line).flatten(),
         line_height: px(20.0),
@@ -490,8 +505,12 @@ fn paint_place_row_visual(
         point(layer_bounds.origin.x, layer_bounds.origin.y + px(input.y)),
         size(layer_bounds.size.width, px(PLACE_ROW_HEIGHT)),
     );
-    if input.active || input.drop_target {
-        let background = place_row_background(input.active, input.drop_target);
+    if input.active || input.drop_target || state.hovered {
+        let background = if state.hovered {
+            place_row_hover_background(input.active, input.drop_target)
+        } else {
+            place_row_background(input.active, input.drop_target)
+        };
         let border_color = place_row_border_color(input.active, input.drop_target);
         window.paint_quad(fill(row_bounds, background).corner_radii(px(6.0)));
         window.paint_quad(
@@ -683,7 +702,7 @@ fn place_row_visual_layer_rows_and_height(
     let mut sections = Vec::new();
     let mut current_group = None;
     let mut y = 0.0;
-    for place in places {
+    for (visible_index, place) in places.iter().enumerate() {
         if current_group != Some(place.group) {
             current_group = Some(place.group);
             if !place.group.is_empty() {
@@ -691,7 +710,7 @@ fn place_row_visual_layer_rows_and_height(
                 y += PLACE_SECTION_HEADING_HEIGHT;
             }
         }
-        rows.push(PlaceRowVisualState::from_place(place, y));
+        rows.push(PlaceRowVisualState::from_place(place, visible_index, y));
         y += PLACE_ROW_HEIGHT;
     }
     (rows, sections, y)
@@ -724,7 +743,7 @@ mod tests {
         place.active = true;
         place.drop_target = true;
         place.insert_before = true;
-        let state = PlaceRowVisualState::from_place(&place, 0.0);
+        let state = PlaceRowVisualState::from_place(&place, 0, 0.0);
         assert!(!state.active);
         assert!(!state.drop_target);
         assert!(state.insert_before);
@@ -735,7 +754,7 @@ mod tests {
         let mut place = test_place();
         place.trash_place = true;
         place.trash_has_items = true;
-        let state = PlaceRowVisualState::from_place(&place, 0.0);
+        let state = PlaceRowVisualState::from_place(&place, 0, 0.0);
         assert!(state.trash_place);
         assert!(state.trash_has_items);
     }
@@ -779,7 +798,7 @@ mod tests {
             .map(|index| {
                 let mut place = test_place();
                 place.label = format!("Place {index}");
-                PlaceRowVisualState::from_place(&place, index as f32 * PLACE_ROW_HEIGHT)
+                PlaceRowVisualState::from_place(&place, index, index as f32 * PLACE_ROW_HEIGHT)
             })
             .collect::<Vec<_>>();
         let layer_bounds = Bounds::new(point(px(10.0), px(20.0)), size(px(200.0), px(150.0)));
