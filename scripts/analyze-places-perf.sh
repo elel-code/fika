@@ -95,6 +95,13 @@ Options:
   --slot-project-us N
       Fail if any [fika places-slots] project exceeds N microseconds.
 
+  --row-visual-paint-us N
+      Fail if any [fika places-row-visual] paint exceeds N microseconds.
+
+  --row-visual-warm-paint-us N
+      Fail if any [fika places-row-visual] paint after the first two frames
+      exceeds N microseconds.
+
   -h, --help
       Show this help.
 EOF
@@ -117,6 +124,8 @@ expect_retained_event_policy=false
 snapshot_us=""
 sidebar_build_us=""
 slot_project_us=""
+row_visual_paint_us=""
+row_visual_warm_paint_us=""
 log_path=""
 
 while [[ $# -gt 0 ]]; do
@@ -199,6 +208,30 @@ while [[ $# -gt 0 ]]; do
         --slot-project-us=*)
             slot_project_us="${1#--slot-project-us=}"
             ;;
+        --row-visual-paint-us)
+            if [[ $# -lt 2 || "$2" == --* ]]; then
+                echo "--row-visual-paint-us requires a numeric value" >&2
+                usage >&2
+                exit 2
+            fi
+            row_visual_paint_us="$2"
+            shift
+            ;;
+        --row-visual-paint-us=*)
+            row_visual_paint_us="${1#--row-visual-paint-us=}"
+            ;;
+        --row-visual-warm-paint-us)
+            if [[ $# -lt 2 || "$2" == --* ]]; then
+                echo "--row-visual-warm-paint-us requires a numeric value" >&2
+                usage >&2
+                exit 2
+            fi
+            row_visual_warm_paint_us="$2"
+            shift
+            ;;
+        --row-visual-warm-paint-us=*)
+            row_visual_warm_paint_us="${1#--row-visual-warm-paint-us=}"
+            ;;
         -h|--help)
             usage
             exit 0
@@ -226,7 +259,7 @@ if [[ -z "$log_path" ]]; then
     exit 2
 fi
 
-for value_name in snapshot_us sidebar_build_us slot_project_us; do
+for value_name in snapshot_us sidebar_build_us slot_project_us row_visual_paint_us row_visual_warm_paint_us; do
     value="${!value_name}"
     if [[ -n "$value" && ! "$value" =~ ^[0-9]+$ ]]; then
         echo "--${value_name//_/-} must be an integer microsecond value" >&2
@@ -251,7 +284,9 @@ awk \
     -v expect_retained_event_policy="$expect_retained_event_policy" \
     -v snapshot_limit="$snapshot_us" \
     -v sidebar_build_limit="$sidebar_build_us" \
-    -v slot_project_limit="$slot_project_us" '
+    -v slot_project_limit="$slot_project_us" \
+    -v row_visual_paint_limit="$row_visual_paint_us" \
+    -v row_visual_warm_paint_limit="$row_visual_warm_paint_us" '
 function field(name,    prefix, i, value) {
     prefix = name "="
     for (i = 1; i <= NF; i++) {
@@ -917,6 +952,12 @@ END {
     }
     if (slot_project_limit != "" && max_values["slot_project"] > slot_project_limit) {
         fail("places slot projection exceeded threshold: " max_values["slot_project"] "us > " slot_project_limit "us")
+    }
+    if (row_visual_paint_limit != "" && max_values["row_visual_paint"] > row_visual_paint_limit) {
+        fail("places row visual paint exceeded threshold: " max_values["row_visual_paint"] "us > " row_visual_paint_limit "us")
+    }
+    if (row_visual_warm_paint_limit != "" && max_values["row_visual_warm_paint"] > row_visual_warm_paint_limit) {
+        fail("places warm row visual paint exceeded threshold: " max_values["row_visual_warm_paint"] "us > " row_visual_warm_paint_limit "us")
     }
     if (require_autosmoke == "true") {
         if (!autosmoke_start_seen || !autosmoke_complete_seen) {

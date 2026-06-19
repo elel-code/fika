@@ -147,6 +147,34 @@ if [[ "$full_summary" != *"max_row_gpui=0 max_row_visual_layer=11 max_icon_gpui=
     exit 1
 fi
 
+cat > "$tmpdir/custom-row-full-cold-then-warm.log" <<'EOF'
+[fika places-slots] rows=11 sections=2 entries=13 inserted=13 content=0 geometry=0 visual=0 unchanged=0 removed=0 project=25us
+[fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
+[fika places-view] source=11 visible=11 sections=2 snapshot=100us
+[fika places-sidebar] rows=11 sections=2 elements=13 build=240us
+[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=0 icon_gpui=0 retained_interaction=0 drag_shell=11 section_gpui=2 scrollbar_canvas=1 visual_kind=full
+[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=11
+[fika places-row-visual] rows=11 painted=11 prepaint=1200us paint=3500us
+[fika places-row-shape-cache] hits=0 misses=11 evicted=0 entries=11
+[fika places-row-visual] rows=11 painted=11 prepaint=40us paint=2600us
+[fika places-row-shape-cache] hits=11 misses=0 evicted=0 entries=11
+[fika places-row-visual] rows=11 painted=11 prepaint=30us paint=70us
+[fika places-row-shape-cache] hits=11 misses=0 evicted=0 entries=11
+EOF
+
+"$analyzer" \
+    --expect-custom-row-full-policy \
+    --row-visual-warm-paint-us 100 \
+    "$tmpdir/custom-row-full-cold-then-warm.log" >/dev/null
+
+if "$analyzer" \
+    --expect-custom-row-full-policy \
+    --row-visual-paint-us 1000 \
+    "$tmpdir/custom-row-full-cold-then-warm.log" >/dev/null 2>&1; then
+    echo "expected full custom Places cold paint gate to fail" >&2
+    exit 1
+fi
+
 cat > "$tmpdir/custom-row-chrome.log" <<'EOF'
 [fika places-slots] rows=11 sections=2 entries=13 inserted=13 content=0 geometry=0 visual=0 unchanged=0 removed=0 project=25us
 [fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us

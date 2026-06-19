@@ -1330,6 +1330,29 @@ tracks.
   with `max_warm_paint=48us`. Conclusion: full Places visual remains opt-in;
   the next performance target is the first two glyph/text paint frames, not row
   model, hit testing, icon drawing, or steady-state canvas paint.
+- [x] P16dz2: Add explicit Places row-visual paint promotion gates and record
+  the Dolphin-aligned ownership rule. Root cause: full Places visual can now
+  remove GPUI icon/text row elements, but passing `icon_gpui=0` is not enough;
+  it must also prove cold and warm row visual paint are both acceptable. This is
+  not waiting for a special GPUI prewarm API. Dolphin's cache behavior is an
+  application-level design: stable item identity, retained/static text and
+  pixmap state, and a handoff only after the resource is ready. Implementation:
+  `scripts/analyze-places-perf.sh` accepts `--row-visual-paint-us` and
+  `--row-visual-warm-paint-us`; `scripts/check-places-perf-analyzer.sh` covers
+  a synthetic case where warm paint passes but cold paint fails. Next gate:
+  implement Fika-owned retained Places text/image handoff so full custom rows
+  can pass both thresholds before default promotion.
+- [x] P16dz3: Audit GPUI's efficient `img()` path and record the custom-image
+  design rule. Root cause: GPUI image performance is not a hidden synchronous
+  drawing primitive; it comes from retained resource identity and deferred
+  atlas-backed painting. Implementation finding: `img()` resolves `Resource`
+  values through `ImageCache`; `RetainAllImageCache` keeps either a shared
+  background loading task or loaded `Arc<RenderImage>` keyed by resource hash
+  and notifies on the next frame; `Window::paint_image` uses
+  `(RenderImage.id, frame_index)` as the sprite atlas key. Follow-up: custom
+  Places/image work must use stable semantic keys, retained loaded resources,
+  visible-path-free decode/shape replacement, and ready-only handoff before it
+  can outperform the current GPUI image baseline.
 - [x] P16dz: Add the post-Places-chrome full retained renderer roadmap. The new
   `docs/FULL_RETAINED_RENDERER_ROADMAP.md` and zh-CN translation define the
   current baseline, explicit GPUI bridges, non-negotiable Dolphin-aligned
