@@ -2188,14 +2188,29 @@ tracks.
   `max_gpui_image_element=0`, and `theme_placeholder=0`;
   `/tmp/fika-common-icon-sync48-etc.log` reports `max_resolved=0` and
   `icon_sync max_total=33us`.
-- [ ] P16gbd: Continue GPUI `img()` internals alignment for pane images. Keep
-  the efficient bottom path (`Arc<RenderImage>` retained by Fika, painted via
-  `Window::paint_image` and GPUI sprite atlas), but move more upper-level
-  identity and prewarm decisions to Dolphin-style semantic keys. In particular,
-  review whether scalable SVG MIME/theme icons should keep size in the
-  readiness key or use size only for raster variant selection, because GPUI
-  `img(Resource::Path(svg))` creates one `RenderImage` and scales by paint
-  bounds rather than decoding a new image for every zoom size.
+- [x] P16gbd: Align pane SVG theme-image retention with GPUI `img()` internals.
+  Root cause: Fika's full custom path already used `Window::paint_image`, but
+  the retained theme image cache only indexed by `ThemeIconImageKey`, so the
+  same scalable SVG source could be materialized again when zoom produced a new
+  size key. GPUI `img(Resource::Path(svg))` creates one `Arc<RenderImage>` for
+  the resource and scales by paint bounds. Implementation:
+  `RetainedThemeIconImageCache` now keeps an additional
+  `source path -> RenderImage` index. Readiness remains size/scale-aware by
+  `ThemeIconImageKey`, but new semantic keys can be recorded from the retained
+  source image without another SVG read/render. Source reuse reports as
+  retained rather than decoded in `[fika item-image]`. Evidence:
+  `/tmp/fika-svg-source-retain-etc.log` reports `theme_decoded=0`,
+  `theme_retained=982`, `theme_placeholder=0`, `max_gpui_image_element=0`, and
+  `item-image max_prepaint=480us`; `/tmp/fika-svg-source-retain-downloads.log`
+  reports `theme_decoded=0`, `theme_retained=702`, `theme_placeholder=0`,
+  `max_gpui_image_element=0`, and `item-image max_prepaint=788us`.
+- [ ] P16gbf: Reduce remaining custom pane cold visual/text paint variance after
+  image/icon ownership is stable. Current `/etc` and Downloads logs have image
+  and icon-sync under budget, but `[fika static-item-visual]` can still show
+  multi-millisecond cold prepaint/paint. Compare this path with Dolphin item
+  text/pixmap caches and GPUI text shaping, then decide whether to add retained
+  text-shape/source prewarm, tighten paint invalidation, or introduce a more
+  Dolphin-like visible widget/state pool.
 
 ## Acceptance Gates
 

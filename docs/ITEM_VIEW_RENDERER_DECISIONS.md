@@ -784,6 +784,37 @@ max_total=235us`, `max_gpui_image_element=0`, and `theme_placeholder=0`.
 `/tmp/fika-common-icon-sync48-etc.log` reports `max_resolved=0` and
 `icon_sync max_total=33us`.
 
+## 2026-06-19 SVG Source RenderImage Retention
+
+Reviewing GPUI `img(Resource::Path(svg))` showed that GPUI does not decode a
+new SVG image for every layout size. The asset loader renders one
+`Arc<RenderImage>` for the resource and `Window::paint_image` scales it by
+paint bounds while the sprite atlas is keyed by `(RenderImage.id,
+frame_index)`. Fika's full custom path already used `paint_image`, but the
+theme image cache only indexed by `ThemeIconImageKey`, so the same scalable SVG
+source could be materialized again for a new zoom-size key.
+
+Implementation: `RetainedThemeIconImageCache` now keeps an additional
+`source path -> RenderImage` index. `ThemeIconImageKey` and readiness remain
+size/scale-aware, so a new zoom size still needs its own semantic ready key,
+but if the source SVG already has a retained `RenderImage`, Fika records the
+new key from that source image instead of reading and rendering the SVG again.
+The source reuse reports as retained, not decoded, so `[fika item-image]`
+telemetry distinguishes source-level reuse from real decode/materialization.
+
+Decision: this preserves the Dolphin-style upper model key
+(`iconName + size + scale + theme + mode`) while matching GPUI's efficient
+lower image ownership (`RenderImage -> paint_image -> atlas`). The resolved path
+still is not a readiness key and does not make unrelated semantic keys ready;
+it is only a retained image source.
+
+Evidence: `/tmp/fika-svg-source-retain-etc.log` reports
+`theme_decoded=0`, `theme_retained=982`, `theme_placeholder=0`,
+`max_gpui_image_element=0`, and `item-image max_prepaint=480us`.
+`/tmp/fika-svg-source-retain-downloads.log` reports `theme_decoded=0`,
+`theme_retained=702`, `theme_placeholder=0`, `max_gpui_image_element=0`, and
+`item-image max_prepaint=788us`.
+
 ## Next Renderer Decisions
 
 1. Keep the remaining drag-start shells until the GPUI API boundary changes.

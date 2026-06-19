@@ -881,12 +881,23 @@ Places chrome 默认之后的当前执行入口是
   `max_gpui_image_element=0`、`theme_placeholder=0`；
   `/tmp/fika-common-icon-sync48-etc.log` 报告 `max_resolved=0`、
   `icon_sync max_total=33us`。
-- [ ] P16gbd：继续对齐 GPUI `img()` internals 的 pane image 路径。保留高效下半部分
-  （Fika retained `Arc<RenderImage>`，通过 `Window::paint_image` 和 GPUI sprite atlas
-  绘制），但把更多上层 identity/prewarm 决策移动到 Dolphin 风格语义 key。特别要审查
-  scalable SVG MIME/theme icons 是否还应该在 readiness key 中携带 size，还是只把 size
-  用作 raster variant 选择；因为 GPUI `img(Resource::Path(svg))` 是生成一个
-  `RenderImage`，再通过 paint bounds 缩放，而不是每个 zoom size 都 decode 新 image。
+- [x] P16gbd：将 pane SVG theme-image retention 对齐 GPUI `img()` internals。根因：
+  Fika full custom 路径已经使用 `Window::paint_image`，但 retained theme image cache 只按
+  `ThemeIconImageKey` 索引，所以 zoom 产生新 size key 时，同一个 scalable SVG source 仍可能
+  重复 materialize。GPUI `img(Resource::Path(svg))` 是为 resource 创建一个
+  `Arc<RenderImage>`，再按 paint bounds 缩放。实现：`RetainedThemeIconImageCache` 现在额外维护
+  `source path -> RenderImage` 索引。Readiness 仍按 `ThemeIconImageKey` 保持 size/scale-aware，
+  但新的 semantic key 可以直接从 retained source image 记录，不再重新读取/渲染 SVG。source
+  复用在 `[fika item-image]` 中记为 retained，而不是 decoded。证据：
+  `/tmp/fika-svg-source-retain-etc.log` 报告 `theme_decoded=0`、`theme_retained=982`、
+  `theme_placeholder=0`、`max_gpui_image_element=0`、`item-image max_prepaint=480us`；
+  `/tmp/fika-svg-source-retain-downloads.log` 报告 `theme_decoded=0`、`theme_retained=702`、
+  `theme_placeholder=0`、`max_gpui_image_element=0`、`item-image max_prepaint=788us`。
+- [ ] P16gbf：在 image/icon ownership 稳定后，降低剩余 pane custom visual/text paint 冷帧方差。
+  当前 `/etc` 和 Downloads 日志中 image 与 icon-sync 已在预算内，但
+  `[fika static-item-visual]` 仍可能出现多毫秒级 cold prepaint/paint。继续对照 Dolphin item
+  text/pixmap caches 和 GPUI text shaping，判断下一步是 retained text-shape/source prewarm、
+  收紧 paint invalidation，还是引入更接近 Dolphin 的可见 widget/state pool。
 - [ ] P16q：在每个 P16 实现切片之后，单独提交并附带相关验证：仅文档切片需要 `git diff --check`；代码切片需要 `cargo fmt`、`cargo check`、`cargo test -q`、`scripts/check-item-view-perf-analyzer.sh`、`scripts/check-places-perf-analyzer.sh` 和 `git diff --check`。
 - [x] P16r：记录运行时自测试和突破记录规则。可重复的滚动、缩放、启动图标、调整大小、模式切换和 Places 目标回退应在依赖手动计时之前通过 autosmoke 日志和分析器脚本重现。任何确认的优化突破必须记录症状、Dolphin 比较边界、根本原因、实现、保存的日志/分析器命令和未来回归守卫在拥有的设计或决策文档中。
 

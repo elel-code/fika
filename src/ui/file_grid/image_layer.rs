@@ -448,6 +448,19 @@ impl FikaApp {
             return None;
         }
 
+        if let Some(image) = self
+            .theme_icon_images
+            .image_for_source_path(source_path.as_ref())
+        {
+            let retained =
+                self.theme_icon_images
+                    .record_loaded_from_retained_source(key, source_path, image);
+            return Some(RetainedImageLoad {
+                image: retained.image,
+                outcome: retained_theme_icon_load_outcome(retained.outcome),
+            });
+        }
+
         let image = load_svg_theme_icon_sync(source_path.as_ref(), cx)?;
         let retained = self
             .theme_icon_images

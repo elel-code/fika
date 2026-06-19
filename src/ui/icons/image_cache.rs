@@ -164,6 +164,7 @@ pub(crate) enum RetainedThemeIconImageLoadOutcome {
 #[derive(Clone, Debug)]
 pub(crate) struct RetainedThemeIconImageCache<T> {
     entries: HashMap<ThemeIconImageKey, RetainedThemeIconImage<T>>,
+    images_by_source_path: HashMap<PathBuf, T>,
     load_generation: u64,
 }
 
@@ -171,6 +172,7 @@ impl<T> Default for RetainedThemeIconImageCache<T> {
     fn default() -> Self {
         Self {
             entries: HashMap::new(),
+            images_by_source_path: HashMap::new(),
             load_generation: 0,
         }
     }
@@ -197,10 +199,40 @@ impl<T: Clone> RetainedThemeIconImageCache<T> {
             load_generation: self.load_generation,
             status: ThemeIconImageStatus::Loaded,
         };
+        if let Some(resolved_path) = &entry.resolved_path {
+            self.images_by_source_path
+                .insert(resolved_path.clone(), image.clone());
+        }
         self.entries.insert(key, entry);
         RetainedThemeIconImageLoad {
             image: Some(image),
             outcome: RetainedThemeIconImageLoadOutcome::Loaded { first_ready },
+        }
+    }
+
+    pub(crate) fn record_loaded_from_retained_source(
+        &mut self,
+        key: ThemeIconImageKey,
+        resolved_path: Arc<Path>,
+        image: T,
+    ) -> RetainedThemeIconImageLoad<T> {
+        self.load_generation += 1;
+        let resolved_path_buf = resolved_path.as_ref().to_path_buf();
+        self.images_by_source_path
+            .insert(resolved_path_buf.clone(), image.clone());
+        let entry = RetainedThemeIconImage {
+            key: key.clone(),
+            resolved_path: Some(resolved_path_buf),
+            image: Some(image.clone()),
+            load_generation: self.load_generation,
+            status: ThemeIconImageStatus::Loaded,
+        };
+        self.entries.insert(key, entry);
+        RetainedThemeIconImageLoad {
+            image: Some(image),
+            outcome: RetainedThemeIconImageLoadOutcome::Retained {
+                status: ThemeIconImageStatus::Loaded,
+            },
         }
     }
 
@@ -227,6 +259,10 @@ impl<T: Clone> RetainedThemeIconImageCache<T> {
 
     pub(crate) fn image_for_key(&self, key: &ThemeIconImageKey) -> Option<T> {
         self.entries.get(key).and_then(|entry| entry.image.clone())
+    }
+
+    pub(crate) fn image_for_source_path(&self, path: &Path) -> Option<T> {
+        self.images_by_source_path.get(path).cloned()
     }
 
     fn record_unready(
@@ -343,27 +379,25 @@ mod tests {
     }
 
     #[test]
-    fn cache_does_not_reuse_loaded_same_path_image_for_new_size_key() {
+    fn cache_reuses_loaded_same_source_image_for_new_size_key() {
         let key_48 = ThemeIconImageKey::new(Arc::from("text-x-generic"), 48, 1.0);
         let key_64 = ThemeIconImageKey::new(Arc::from("text-x-generic"), 64, 1.0);
         let path: Arc<Path> = Arc::from(Path::new("/theme/scalable/text-x-generic.svg"));
         let mut cache = RetainedThemeIconImageCache::default();
 
         cache.record_loaded(key_48, path.clone(), "image-scalable");
-        let pending_64 = cache.record_pending(key_64.clone(), path.clone());
-        let loaded_64 = cache.record_loaded(key_64, path, "image-scalable");
+        let image = cache
+            .image_for_source_path(path.as_ref())
+            .expect("source image should be retained");
+        let loaded_64 = cache.record_loaded_from_retained_source(key_64, path, image);
 
         assert_eq!(
-            pending_64.outcome,
-            RetainedThemeIconImageLoadOutcome::Missing {
-                status: ThemeIconImageStatus::Pending
+            loaded_64.outcome,
+            RetainedThemeIconImageLoadOutcome::Retained {
+                status: ThemeIconImageStatus::Loaded
             }
         );
-        assert_eq!(pending_64.image, None);
-        assert_eq!(
-            loaded_64.outcome,
-            RetainedThemeIconImageLoadOutcome::Loaded { first_ready: true }
-        );
+        assert_eq!(loaded_64.image, Some("image-scalable"));
     }
 
     #[test]

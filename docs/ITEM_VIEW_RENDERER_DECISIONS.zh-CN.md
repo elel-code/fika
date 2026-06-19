@@ -458,6 +458,31 @@ icon role。Painter 仍保持 full custom，并继续使用 retained `RenderImag
 `max_gpui_image_element=0`，`theme_placeholder=0`。`/tmp/fika-common-icon-sync48-etc.log`
 报告 `max_resolved=0`，`icon_sync max_total=33us`。
 
+## 2026-06-19 SVG Source RenderImage 保留
+
+重新审查 GPUI `img(Resource::Path(svg))` 后确认，GPUI 不会为每个 layout size 重新 decode
+SVG。asset loader 会为 resource 生成一个 `Arc<RenderImage>`，`Window::paint_image` 再按
+paint bounds 缩放；sprite atlas key 是 `(RenderImage.id, frame_index)`。Fika full custom
+已经使用 `paint_image`，但 theme image cache 只按 `ThemeIconImageKey` 索引，因此同一个
+scalable SVG source 在新的 zoom-size key 下仍可能重复 materialize。
+
+实现：`RetainedThemeIconImageCache` 现在额外维护 `source path -> RenderImage` 索引。
+`ThemeIconImageKey` 和 readiness 仍然 size/scale-aware，所以新的 zoom size 仍需要自己的
+语义 ready key；但如果 source SVG 已有 retained `RenderImage`，Fika 会直接用该 source image
+记录新 key，不再重新读取和渲染 SVG。source 复用在 telemetry 中记为 retained，而不是 decoded，
+因此 `[fika item-image]` 能区分 source-level reuse 和真实 decode/materialization。
+
+决策：这同时保留 Dolphin 风格的上层 model key
+（`iconName + size + scale + theme + mode`）和 GPUI 高效的下层 image ownership
+（`RenderImage -> paint_image -> atlas`）。Resolved path 仍不是 readiness key，也不会让无关
+semantic key ready；它只是 retained image source。
+
+证据：`/tmp/fika-svg-source-retain-etc.log` 报告 `theme_decoded=0`、
+`theme_retained=982`、`theme_placeholder=0`、`max_gpui_image_element=0`、
+`item-image max_prepaint=480us`。`/tmp/fika-svg-source-retain-downloads.log` 报告
+`theme_decoded=0`、`theme_retained=702`、`theme_placeholder=0`、
+`max_gpui_image_element=0`、`item-image max_prepaint=788us`。
+
 ## 下一批渲染器决策
 
 1. 保持剩余 drag-start shells 直到 GPUI API 边界变化。不要将 GPUI per-element `on_drag_move` 用作 pane self-drag 悬停的真实来源；active item-drag window tracker 拥有该路径。
