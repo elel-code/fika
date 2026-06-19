@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gpui::prelude::*;
@@ -101,7 +102,7 @@ pub(super) fn places_event_probe_layer(
                     paint_app.clone(),
                     places.clone(),
                     targeting_state,
-                    &paint_state.hitboxes,
+                    paint_state.hitboxes.clone(),
                     window,
                 );
             }
@@ -140,7 +141,7 @@ pub(super) fn places_event_probe_layer(
 struct PlacesEventProbePaintState {
     rows: usize,
     sections: usize,
-    hitboxes: Vec<PlacesEventProbeHitboxState>,
+    hitboxes: Arc<[PlacesEventProbeHitboxState]>,
     prepaint_elapsed: Duration,
 }
 
@@ -226,7 +227,7 @@ fn places_event_probe_prepaint(
     PlacesEventProbePaintState {
         rows: row_count,
         sections: section_count,
-        hitboxes,
+        hitboxes: hitboxes.into(),
         prepaint_elapsed: started.elapsed(),
     }
 }
@@ -246,10 +247,10 @@ fn install_places_event_targeting_handlers(
     app: WeakEntity<FikaApp>,
     places: Vec<PlaceSnapshot>,
     state: Entity<PlacesEventTargetingState>,
-    hitboxes: &[PlacesEventProbeHitboxState],
+    hitboxes: Arc<[PlacesEventProbeHitboxState]>,
     window: &mut Window,
 ) {
-    let left_down_hitboxes = hitboxes.to_vec();
+    let left_down_hitboxes = hitboxes.clone();
     let left_down_state = state.clone();
     window.on_mouse_event(
         move |event: &gpui::MouseDownEvent, phase, window, cx: &mut App| {
@@ -276,7 +277,7 @@ fn install_places_event_targeting_handlers(
         },
     );
 
-    let left_up_hitboxes = hitboxes.to_vec();
+    let left_up_hitboxes = hitboxes.clone();
     let left_up_places = places.clone();
     let left_up_app = app.clone();
     let left_up_state = state.clone();
@@ -327,7 +328,7 @@ fn install_places_event_targeting_handlers(
         },
     );
 
-    let context_hitboxes = hitboxes.to_vec();
+    let context_hitboxes = hitboxes;
     let context_app = app;
     window.on_mouse_event(
         move |event: &gpui::MouseDownEvent, phase, window, cx: &mut App| {
