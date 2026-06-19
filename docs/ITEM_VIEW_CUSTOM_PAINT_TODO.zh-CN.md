@@ -702,6 +702,19 @@ Places chrome 默认之后的当前执行入口是
   `places_row_visual max_paint=828us`、`max_warm_paint=828us`，低于最近同类
   full-overflow run 的约 `1.1-1.3ms`。这是直接的 Dolphin 风格 retained paint 优化：
   只绘制有状态的 row chrome，而不是为每个 item 重画静态父背景。
+- [x] P16gaq：将 Places retained event hitbox 过滤到可见 content mask。根因：
+  retained event layer 在 overflow 场景中仍会为所有 Places row 和 section 插入 hitbox，
+  但 pointer、click 和 context-menu delivery 只需要当前 viewport 的 hitbox。DnD
+  move/drop 仍继续使用完整 interaction geometry。实现：
+  `places_event_probe_prepaint()` 现在会先用 `Window::content_mask()` 和 row/section
+  y 范围求交，再调用 `Window::insert_hitbox()`；analyzer 将
+  `[fika places-event-probe] rows/sections` 视为可见 hitbox 计数，而 renderer-policy
+  计数仍表示 retained projection 容量。证据：
+  `/tmp/fika-places-full-overflow-visible-hitboxes.log` 通过带
+  `--require-event-probe` 的 full handoff overflow gate；overflow event hitboxes
+  从 retained projection 容量 `78` 降到可见集合 `32`，event paint 保持
+  `max_paint=52us`。这让 Places 进一步离开 per-row GPUI/event 工作，转向
+  viewport-owned retained hit testing。
 - [ ] P16q：在每个 P16 实现切片之后，单独提交并附带相关验证：仅文档切片需要 `git diff --check`；代码切片需要 `cargo fmt`、`cargo check`、`cargo test -q`、`scripts/check-item-view-perf-analyzer.sh`、`scripts/check-places-perf-analyzer.sh` 和 `git diff --check`。
 - [x] P16r：记录运行时自测试和突破记录规则。可重复的滚动、缩放、启动图标、调整大小、模式切换和 Places 目标回退应在依赖手动计时之前通过 autosmoke 日志和分析器脚本重现。任何确认的优化突破必须记录症状、Dolphin 比较边界、根本原因、实现、保存的日志/分析器命令和未来回归守卫在拥有的设计或决策文档中。
 

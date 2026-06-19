@@ -1956,6 +1956,22 @@ tracks.
   `1.1-1.3ms`. This is a direct Dolphin-style retained paint improvement:
   paint only stateful row chrome instead of repainting the static parent
   background per item.
+- [x] P16gaq: Filter Places retained event hitboxes to the visible content
+  mask. Root cause: the retained event layer still inserted hitboxes for every
+  Places row and section in overflow scenarios, even though pointer, click, and
+  context-menu delivery only need current viewport hitboxes. DnD move/drop
+  continues to use full interaction geometry. Implementation:
+  `places_event_probe_prepaint()` now intersects row/section y ranges with
+  `Window::content_mask()` before calling `Window::insert_hitbox()`, while the
+  analyzer treats `[fika places-event-probe] rows/sections` as visible hitbox
+  counts and keeps the renderer-policy count as the retained projection
+  capacity. Evidence:
+  `/tmp/fika-places-full-overflow-visible-hitboxes.log` passed the full
+  handoff overflow gate with `--require-event-probe`; overflow event hitboxes
+  dropped from the retained projection capacity of `78` to the visible set of
+  `32`, and event paint stayed at `max_paint=52us`. This moves Places further
+  away from per-row GPUI/event work and toward viewport-owned retained hit
+  testing.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

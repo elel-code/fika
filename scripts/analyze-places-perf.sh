@@ -784,7 +784,7 @@ function renderer_retained_interaction_for_policy(event_policy, rows, sections) 
     max_update("event_probe_dnd", dnd)
     max_update("event_probe_prepaint", prepaint)
     max_update("event_probe_paint", paint)
-    if (hitboxes != rows + sections) {
+    if (hitboxes != rows + sections || hitboxes < 1) {
         event_probe_invalid = 1
     }
 }
@@ -1257,10 +1257,10 @@ END {
             fail("missing [fika places-event-probe] logs")
         }
         if (event_probe_invalid) {
-            fail("Places event probe hitbox count does not match rows+sections")
+            fail("Places event probe visible hitbox count does not match visible rows+sections")
         }
-        if (max_values["event_probe_hitboxes"] != max_values["policy_retained_probe_hitboxes"]) {
-            fail("Places event probe hitbox count does not match retained-probe policy")
+        if (max_values["event_probe_hitboxes"] > max_values["policy_retained_probe_hitboxes"]) {
+            fail("Places event probe visible hitbox count exceeds retained-probe policy")
         }
     }
     if (exit_code) {

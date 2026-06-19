@@ -188,8 +188,14 @@ fn places_event_probe_prepaint(
     window: &mut Window,
 ) -> PlacesEventProbePaintState {
     let started = Instant::now();
+    let visible_y_range = places_event_probe_visible_y_range(bounds, window.content_mask().bounds);
     let mut hitboxes = Vec::with_capacity(geometry.entries());
+    let mut section_count = 0;
     for section in geometry.sections() {
+        if !places_event_probe_intersects_y_range(section.y, section.height, visible_y_range) {
+            continue;
+        }
+        section_count += 1;
         hitboxes.push(PlacesEventProbeHitboxState {
             hitbox: window.insert_hitbox(
                 places_event_probe_hitbox_bounds(bounds, section.y, section.height),
@@ -200,7 +206,12 @@ fn places_event_probe_prepaint(
             },
         });
     }
+    let mut row_count = 0;
     for row in geometry.rows() {
+        if !places_event_probe_intersects_y_range(row.y, row.height, visible_y_range) {
+            continue;
+        }
+        row_count += 1;
         hitboxes.push(PlacesEventProbeHitboxState {
             hitbox: window.insert_hitbox(
                 places_event_probe_hitbox_bounds(bounds, row.y, row.height),
@@ -213,8 +224,8 @@ fn places_event_probe_prepaint(
         });
     }
     PlacesEventProbePaintState {
-        rows: geometry.rows().len(),
-        sections: geometry.sections().len(),
+        rows: row_count,
+        sections: section_count,
         hitboxes,
         prepaint_elapsed: started.elapsed(),
     }
@@ -822,6 +833,32 @@ fn places_event_probe_hitbox_bounds(
     )
 }
 
+fn places_event_probe_visible_y_range(
+    layer_bounds: Bounds<Pixels>,
+    content_mask_bounds: Bounds<Pixels>,
+) -> Option<(f32, f32)> {
+    let visible_bounds = layer_bounds.intersect(&content_mask_bounds);
+    if visible_bounds.is_empty() {
+        return None;
+    }
+    let top = (visible_bounds.origin.y - layer_bounds.origin.y)
+        .as_f32()
+        .max(0.0);
+    let bottom = top + visible_bounds.size.height.as_f32().max(0.0);
+    Some((top, bottom))
+}
+
+fn places_event_probe_intersects_y_range(
+    y: f32,
+    height: f32,
+    visible_y_range: Option<(f32, f32)>,
+) -> bool {
+    let Some((top, bottom)) = visible_y_range else {
+        return false;
+    };
+    y < bottom && y + height > top
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -844,5 +881,27 @@ mod tests {
 
         assert_eq!(bounds.size.width, px(1.0));
         assert_eq!(bounds.size.height, px(1.0));
+    }
+
+    #[test]
+    fn event_probe_visible_y_range_is_layer_relative() {
+        let layer = Bounds::new(point(px(10.0), px(20.0)), size(px(180.0), px(300.0)));
+        let mask = Bounds::new(point(px(10.0), px(65.0)), size(px(180.0), px(60.0)));
+
+        assert_eq!(
+            places_event_probe_visible_y_range(layer, mask),
+            Some((45.0, 105.0))
+        );
+    }
+
+    #[test]
+    fn event_probe_y_range_intersection_filters_offscreen_entries() {
+        let visible = Some((45.0, 105.0));
+
+        assert!(!places_event_probe_intersects_y_range(0.0, 30.0, visible));
+        assert!(places_event_probe_intersects_y_range(30.0, 30.0, visible));
+        assert!(places_event_probe_intersects_y_range(90.0, 30.0, visible));
+        assert!(!places_event_probe_intersects_y_range(120.0, 30.0, visible));
+        assert!(!places_event_probe_intersects_y_range(0.0, 30.0, None));
     }
 }
