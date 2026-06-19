@@ -143,7 +143,7 @@ use ui::places::{
     places_sidebar_width_from_drag,
 };
 use ui::places::{
-    PLACES_SIDEBAR_DEFAULT_WIDTH, PlaceDrag, PlaceEntry, PlaceSnapshot, PlacesAutosmokeScenario,
+    PLACES_SIDEBAR_DEFAULT_WIDTH, PlaceDrag, PlaceEntry, PlacesAutosmokeScenario,
     PlacesLayoutAutosmokeState, PlacesRowTextShapeCache, PlacesSidebarResizeDrag, build_places,
     clamp_places_sidebar_width, places_panel_button, places_panel_icon_snapshot,
     places_sidebar_splitter, read_live_device_snapshot, start_places_autosmoke,
@@ -1857,77 +1857,6 @@ impl FikaApp {
             }
             DirectoryListerEvent::LoadingStarted { .. } => false,
         }
-    }
-
-    pub(crate) fn show_place_context_menu(
-        &mut self,
-        place: PlaceSnapshot,
-        position: gpui::Point<gpui::Pixels>,
-    ) {
-        let Some(pane_id) = self.panes.focused() else {
-            return;
-        };
-        self.set_context_menu(ContextMenuState {
-            pane_id,
-            target: ContextMenuTarget::Place {
-                label: place.label,
-                path: place.path,
-                device_id: place.device_id,
-                mounted: place.mounted,
-                device: place.device,
-                device_ejectable: place.device_ejectable,
-                device_can_power_off: place.device_can_power_off,
-                trash_place: place.trash_place,
-                trash_has_items: place.trash_has_items,
-                editable: place.editable,
-                removable: place.removable,
-            },
-            position: ViewPoint {
-                x: position.x.as_f32(),
-                y: position.y.as_f32(),
-            },
-            active_submenu: None,
-        });
-    }
-
-    pub(crate) fn show_place_section_context_menu(
-        &mut self,
-        group: &'static str,
-        position: gpui::Point<gpui::Pixels>,
-    ) {
-        if group.is_empty() || !self.places.iter().any(|place| place.group == group) {
-            return;
-        }
-        let Some(pane_id) = self.panes.focused() else {
-            return;
-        };
-        self.set_context_menu(ContextMenuState {
-            pane_id,
-            target: ContextMenuTarget::PlaceSection { group },
-            position: ViewPoint {
-                x: position.x.as_f32(),
-                y: position.y.as_f32(),
-            },
-            active_submenu: None,
-        });
-    }
-
-    pub(crate) fn show_places_blank_context_menu(&mut self, position: gpui::Point<gpui::Pixels>) {
-        let Some(pane_id) = self.panes.focused() else {
-            return;
-        };
-        self.set_context_menu(ContextMenuState {
-            pane_id,
-            target: ContextMenuTarget::PlacesBlank {
-                has_hidden_places: !self.hidden_place_sections.is_empty()
-                    || !self.hidden_places.is_empty(),
-            },
-            position: ViewPoint {
-                x: position.x.as_f32(),
-                y: position.y.as_f32(),
-            },
-            active_submenu: None,
-        });
     }
 
     pub(crate) fn open_directory_from_item(

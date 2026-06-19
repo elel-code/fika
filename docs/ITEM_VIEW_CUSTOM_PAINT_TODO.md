@@ -1739,6 +1739,9 @@ tracks.
   Places devices facade. `src/ui/places/devices.rs` now owns opening mounted
   places, mounting unmounted device places, and finishing mount/unmount/eject
   background operations.
+- [x] P16gai: Move app-facing Places context-menu target projection into the
+  Places sidebar facade. `src/ui/places/sidebar.rs` now owns converting place,
+  section, and blank-sidebar interactions into `ContextMenuTarget` values.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,
