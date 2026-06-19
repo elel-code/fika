@@ -2,9 +2,26 @@ use std::collections::BTreeSet;
 
 use fika_core::DeviceInfo;
 
+use crate::FikaApp;
+
 use super::model::{
     DEVICES_GROUP, PlaceEntry, REMOVABLE_DEVICES_GROUP, removable_device_place_entries,
 };
+
+impl FikaApp {
+    pub(crate) fn finish_device_refresh(&mut self, devices: Vec<DeviceInfo>) -> bool {
+        self.device_refresh_pending = false;
+        self.apply_device_snapshot(&devices)
+    }
+
+    pub(crate) fn apply_device_snapshot(&mut self, devices: &[DeviceInfo]) -> bool {
+        self.replace_removable_device_places(devices)
+    }
+
+    pub(crate) fn replace_removable_device_places(&mut self, devices: &[DeviceInfo]) -> bool {
+        replace_removable_device_places(&mut self.places, devices)
+    }
+}
 
 pub(crate) fn replace_removable_device_places(
     places: &mut Vec<PlaceEntry>,

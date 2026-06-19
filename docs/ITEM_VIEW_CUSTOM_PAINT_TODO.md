@@ -1682,6 +1682,12 @@ tracks.
   filtering, autosmoke extra rows, paint-slot projection, and Places snapshot
   perf logs. `src/main.rs` still asks for snapshots during render but no longer
   wires Places projection internals or evidence emission directly.
+- [x] P16fx: Move app-facing removable-device Places update methods into the
+  Places devices facade. `src/ui/places/devices.rs` now owns
+  `finish_device_refresh()`, `apply_device_snapshot()`, and the
+  `replace_removable_device_places()` app method, while `src/main.rs` keeps the
+  monitor scheduling/draining loop. The low-level device-section replacement
+  helper is no longer re-exported through the top-level Places facade.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

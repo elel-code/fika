@@ -15,7 +15,7 @@ use fika_core::{
     trash_selection_result_async, trash_view_operation_result_async, undo_record_result_async,
 };
 use fika_core::{
-    CreateUndoItem, CreatedItemKind, DeviceInfo, DeviceMonitorMessage, DevicePlaceOperation,
+    CreateUndoItem, CreatedItemKind, DeviceMonitorMessage, DevicePlaceOperation,
     DevicePlaceOperationResult, DirectoryCacheDebugSnapshot, DirectoryListerEvent, ItemId,
     ListingRequest, ListingWorker, LoadingPaneState, MetadataRoleScheduler, OperationQueue,
     OperationRuntime, OperationSnapshot, PaneController, PaneId, RefreshPair, RenameUndoItem,
@@ -33,8 +33,9 @@ use fika_core::{
 };
 #[cfg(test)]
 use fika_core::{
-    Generation, MetadataRoleResult, ServiceMenuAction, ThumbnailCandidate, ThumbnailProbeResult,
-    ThumbnailRequestPriority, ViewState, home_dir, is_network_root_path, network_root_path,
+    DeviceInfo, Generation, MetadataRoleResult, ServiceMenuAction, ThumbnailCandidate,
+    ThumbnailProbeResult, ThumbnailRequestPriority, ViewState, home_dir, is_network_root_path,
+    network_root_path,
 };
 use gpui::prelude::*;
 use gpui::{
@@ -1770,19 +1771,6 @@ impl FikaApp {
             },
         )
         .detach();
-    }
-
-    fn finish_device_refresh(&mut self, devices: Vec<DeviceInfo>) -> bool {
-        self.device_refresh_pending = false;
-        self.apply_device_snapshot(&devices)
-    }
-
-    fn apply_device_snapshot(&mut self, devices: &[DeviceInfo]) -> bool {
-        self.replace_removable_device_places(devices)
-    }
-
-    fn replace_removable_device_places(&mut self, devices: &[DeviceInfo]) -> bool {
-        ui::places::replace_removable_device_places(&mut self.places, devices)
     }
 
     fn set_trash_has_items(&mut self, has_items: bool) -> bool {

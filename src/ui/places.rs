@@ -18,7 +18,6 @@ mod visual;
 pub(crate) use autosmoke::{
     PlacesAutosmokeScenario, PlacesLayoutAutosmokeState, start_places_autosmoke,
 };
-pub(crate) use devices::replace_removable_device_places;
 pub(crate) use drag::PlaceDrag;
 #[cfg(test)]
 pub(crate) use model::{
