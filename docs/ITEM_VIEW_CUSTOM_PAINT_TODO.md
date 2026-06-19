@@ -1727,6 +1727,10 @@ tracks.
   cleanup, default label projection, editable-place lookup, draft creation, and
   status updates. `src/main.rs` keeps the network-drive draft startup for now
   because that path has separate network-auth semantics.
+- [x] P16gaf: Move app-facing Places drop-target state into the Places drag
+  facade. `src/ui/places/drag.rs` now owns setting, querying, clearing, and
+  pane-viewport ownership clearing for `PlaceDropTarget`; generic item/path-list
+  drop-target state remains outside Places.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

@@ -3145,16 +3145,6 @@ impl FikaApp {
         self.pane_at_window_position(position).is_some()
     }
 
-    pub(crate) fn clear_place_drop_target_if_window_position_is_in_pane_viewport(
-        &mut self,
-        position: gpui::Point<gpui::Pixels>,
-    ) -> Option<bool> {
-        if !self.window_position_is_in_pane_viewport(position) {
-            return None;
-        }
-        Some(self.clear_place_drop_target())
-    }
-
     fn clamped_content_point_from_window(
         &self,
         pane_id: PaneId,
@@ -4635,34 +4625,6 @@ impl FikaApp {
         path: &Path,
     ) -> bool {
         self.drop_targets.clear_item_for_directory(pane_id, path)
-    }
-
-    pub(crate) fn set_place_drag_drop_target_for_path(&mut self, path: PathBuf) -> bool {
-        self.drop_targets.set_place(PlaceDropTarget::Place { path })
-    }
-
-    pub(crate) fn set_place_drag_drop_target_for_insert(&mut self, index: usize) -> bool {
-        let index = self.user_place_insert_index(index);
-        self.drop_targets
-            .set_place(PlaceDropTarget::Insert { index })
-    }
-
-    pub(crate) fn current_place_drop_target_is_insert(&self) -> bool {
-        matches!(
-            self.drop_targets.place(),
-            Some(PlaceDropTarget::Insert { .. })
-        )
-    }
-
-    pub(crate) fn current_place_drop_target_matches_path(&self, path: &Path) -> bool {
-        matches!(
-            self.drop_targets.place(),
-            Some(PlaceDropTarget::Place { path: target_path }) if target_path == path
-        )
-    }
-
-    pub(crate) fn clear_place_drop_target(&mut self) -> bool {
-        self.drop_targets.clear_place()
     }
 
     pub(crate) fn clear_drag_drop_targets(&mut self) -> bool {

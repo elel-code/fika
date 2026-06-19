@@ -1,13 +1,14 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use gpui::prelude::*;
 use gpui::{Context, Div, IntoElement, ParentElement, Render, Stateful, Styled, div, px, rgb};
 
 use super::super::drag_drop::{
-    DragExportPayload, DragPreviewLayout, drag_preview_layout_for_cursor_offset,
+    DragExportPayload, DragPreviewLayout, PlaceDropTarget, drag_preview_layout_for_cursor_offset,
     place_drag_export_payload,
 };
+use crate::FikaApp;
 use crate::ui::icons::{FileIconSnapshot, cached_icon_or_fallback};
 
 use super::snapshot::PlaceSnapshot;
@@ -88,6 +89,46 @@ pub(crate) fn install_place_drag_start_shell(
 
 pub(crate) fn place_drag_is_movable(place: &PlaceSnapshot) -> bool {
     place.group.is_empty()
+}
+
+impl FikaApp {
+    pub(crate) fn set_place_drag_drop_target_for_path(&mut self, path: PathBuf) -> bool {
+        self.drop_targets.set_place(PlaceDropTarget::Place { path })
+    }
+
+    pub(crate) fn set_place_drag_drop_target_for_insert(&mut self, index: usize) -> bool {
+        let index = self.user_place_insert_index(index);
+        self.drop_targets
+            .set_place(PlaceDropTarget::Insert { index })
+    }
+
+    pub(crate) fn current_place_drop_target_is_insert(&self) -> bool {
+        matches!(
+            self.drop_targets.place(),
+            Some(PlaceDropTarget::Insert { .. })
+        )
+    }
+
+    pub(crate) fn current_place_drop_target_matches_path(&self, path: &Path) -> bool {
+        matches!(
+            self.drop_targets.place(),
+            Some(PlaceDropTarget::Place { path: target_path }) if target_path == path
+        )
+    }
+
+    pub(crate) fn clear_place_drop_target(&mut self) -> bool {
+        self.drop_targets.clear_place()
+    }
+
+    pub(crate) fn clear_place_drop_target_if_window_position_is_in_pane_viewport(
+        &mut self,
+        position: gpui::Point<gpui::Pixels>,
+    ) -> Option<bool> {
+        if !self.window_position_is_in_pane_viewport(position) {
+            return None;
+        }
+        Some(self.clear_place_drop_target())
+    }
 }
 
 pub(crate) struct PlaceDragPreview {
