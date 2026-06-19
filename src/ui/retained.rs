@@ -64,6 +64,7 @@ pub(crate) struct RetainedShapeCache<K, V> {
     entries: HashMap<K, RetainedShapeCacheEntry<V>>,
     stats: TextShapeCacheStats,
     max_entries: usize,
+    retention_frame_window: u64,
     retention_epoch: u64,
     retention_active: bool,
 }
@@ -79,10 +80,18 @@ where
     V: Clone,
 {
     pub(crate) fn new(max_entries: usize) -> Self {
+        Self::new_with_retention_frame_window(max_entries, 1)
+    }
+
+    pub(crate) fn new_with_retention_frame_window(
+        max_entries: usize,
+        retention_frame_window: u64,
+    ) -> Self {
         Self {
             entries: HashMap::new(),
             stats: TextShapeCacheStats::default(),
             max_entries,
+            retention_frame_window: retention_frame_window.max(1),
             retention_epoch: 0,
             retention_active: false,
         }
@@ -153,9 +162,13 @@ where
         }
 
         let epoch = self.retention_epoch;
+        let min_epoch = epoch
+            .saturating_sub(self.retention_frame_window.saturating_sub(1))
+            .max(1);
         let before_retain = self.entries.len();
-        self.entries
-            .retain(|_, entry| entry.last_used_epoch == epoch);
+        self.entries.retain(|_, entry| {
+            entry.last_used_epoch >= min_epoch && entry.last_used_epoch <= epoch
+        });
         self.stats.evicted += before_retain.saturating_sub(self.entries.len());
         self.retention_active = false;
     }
@@ -781,6 +794,40 @@ mod tests {
         assert_eq!(cache.get_or_insert_with(&1, |key| key * 10), 10);
         assert_eq!(cache.get_or_insert_with(&2, |key| key * 10), 20);
         let _ = cache.take_stats();
+
+        cache.begin_retention_frame();
+        assert_eq!(cache.get_or_insert_with(&2, |key| key * 100), 20);
+        assert_eq!(cache.get_or_insert_with(&3, |key| key * 10), 30);
+        cache.finish_retention_frame();
+
+        assert_eq!(cache.peek(&1), None);
+        assert_eq!(cache.peek(&2), Some(20));
+        assert_eq!(cache.peek(&3), Some(30));
+        let stats = cache.take_stats();
+        assert_eq!(stats.hits, 1);
+        assert_eq!(stats.misses, 1);
+        assert_eq!(stats.evicted, 1);
+        assert_eq!(stats.entries, 2);
+    }
+
+    #[test]
+    fn retained_shape_cache_can_keep_recent_retention_frames() {
+        let mut cache = RetainedShapeCache::new_with_retention_frame_window(8, 2);
+
+        cache.begin_retention_frame();
+        assert_eq!(cache.get_or_insert_with(&1, |key| key * 10), 10);
+        cache.finish_retention_frame();
+        let _ = cache.take_stats();
+
+        cache.begin_retention_frame();
+        assert_eq!(cache.get_or_insert_with(&2, |key| key * 10), 20);
+        cache.finish_retention_frame();
+
+        assert_eq!(cache.peek(&1), Some(10));
+        assert_eq!(cache.peek(&2), Some(20));
+        let stats = cache.take_stats();
+        assert_eq!(stats.evicted, 0);
+        assert_eq!(stats.entries, 2);
 
         cache.begin_retention_frame();
         assert_eq!(cache.get_or_insert_with(&2, |key| key * 100), 20);

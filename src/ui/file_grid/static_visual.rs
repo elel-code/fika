@@ -116,6 +116,7 @@ pub(crate) struct StaticItemTextShapeCache {
 impl StaticItemTextShapeCache {
     const MAX_ENTRIES: usize = 2048;
     const MAX_GLYPH_ENTRIES: usize = 8192;
+    const SHAPE_RETENTION_FRAMES: u64 = 6;
 
     fn shape_for(
         &mut self,
@@ -172,7 +173,10 @@ impl StaticItemTextShapeCache {
 impl Default for StaticItemTextShapeCache {
     fn default() -> Self {
         Self {
-            cache: RetainedShapeCache::new(Self::MAX_ENTRIES),
+            cache: RetainedShapeCache::new_with_retention_frame_window(
+                Self::MAX_ENTRIES,
+                Self::SHAPE_RETENTION_FRAMES,
+            ),
             glyph_cache: RetainedShapeCache::new(Self::MAX_GLYPH_ENTRIES),
         }
     }
