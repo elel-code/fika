@@ -130,23 +130,26 @@ timeout 8s env FIKA_PERF_PLACES_VIEW=1 FIKA_AUTOSMOKE_PLACES=dnd target/debug/fi
 分析日志：
 
 ```sh
-scripts/analyze-places-perf.sh --require-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-chrome-policy /tmp/fika-evidence-places-targets.log
-scripts/analyze-places-perf.sh --require-overflow-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-chrome-policy /tmp/fika-evidence-places-overflow.log
-scripts/analyze-places-perf.sh --require-layout-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-chrome-policy /tmp/fika-evidence-places-layout.log
-scripts/analyze-places-perf.sh --require-hit-test-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-chrome-policy /tmp/fika-evidence-places-hit-test.log
-scripts/analyze-places-perf.sh --require-retained-targeting-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-chrome-policy /tmp/fika-evidence-places-targeting.log
-scripts/analyze-places-perf.sh --require-retained-dnd-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-chrome-policy /tmp/fika-evidence-places-dnd.log
+scripts/analyze-places-perf.sh --require-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-full-policy /tmp/fika-evidence-places-targets.log
+scripts/analyze-places-perf.sh --require-overflow-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-full-policy /tmp/fika-evidence-places-overflow.log
+scripts/analyze-places-perf.sh --require-layout-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-full-policy /tmp/fika-evidence-places-layout.log
+scripts/analyze-places-perf.sh --require-hit-test-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-full-policy /tmp/fika-evidence-places-hit-test.log
+scripts/analyze-places-perf.sh --require-retained-targeting-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-full-policy /tmp/fika-evidence-places-targeting.log
+scripts/analyze-places-perf.sh --require-retained-dnd-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-full-policy --expect-retained-event-policy /tmp/fika-evidence-places-dnd.log
 ```
 
-当前默认 retained-DnD mixed policy 的 dnd summary 应显示：
+当前默认 retained-DnD policy 的 dnd summary 必须显示：
 
 ```text
+max_gpui_event_shells=0
 max_gpui_row_section_event_shells=0
-max_gpui_typed_dnd_payload_shells=1
+max_gpui_typed_dnd_payload_shells=0
+max_drag_shells=0
+max_drag_start_models=rows
 max_gpui_sidebar_leave_shells=0
 ```
 
-在 Track 4 移除 typed payload shell 前，完整 retained-event gate 应继续失败：
+完整 retained-event gate 现在是成功路径的一部分：
 
 ```sh
 scripts/analyze-places-perf.sh --expect-retained-event-policy /tmp/fika-evidence-places-dnd.log
@@ -194,9 +197,9 @@ Perf 日志不能替代以下行为审查：
 `kind=Some(Directory)`，且 drop 前目录高亮。
 
 对于经过或靠近 Places 侧栏的 pane drag，trace 也可能出现
-`places-dnd-leave kind=... changed=...`。这表示 sidebar typed payload bridge 拒绝了
-bounds 外的 capture-phase drag move，并且只清理 Places state。当 pointer 位于 pane 内时，
-这条日志不应伴随持续的 Places drop 高亮残留。
+`places-dnd-leave kind=... changed=...`。这表示 retained Places event layer 拒绝了
+bounds 外的 drag move，并且只清理 Places state。当 pointer 位于 pane 内时，这条日志
+不应伴随持续的 Places drop 高亮残留。
 
 如果 capture-phase bridge 在 pointer 位于 pane viewport 内时仍然收到 drag move，预期 trace 是
 `places-dnd-defer-to-pane kind=... changed=...`。这表示 pane viewport ownership 获胜，

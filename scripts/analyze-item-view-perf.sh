@@ -33,10 +33,11 @@ Options:
 
   --expect-retained-item-policy
       Fail if renderer-policy logs do not show retained item visual and
-      interaction surfaces, allowing only the known GPUI drag shell, rename
-      overlay, and image-element boundaries. Directory drop targets must be
-      retained, with no per-directory GPUI drag-move shell. Details headers
-      must be custom-painted when present.
+      interaction surfaces, allowing only rename overlay and image-element
+      fallback boundaries. Drag start and directory drop targets must be
+      retained, with no per-item GPUI drag-start shell and no per-directory
+      GPUI drag-move shell. Details headers must be custom-painted when
+      present.
 
   --require-paint-slots
       Fail if [fika item-paint-slots] retained slot activity logs are missing.
@@ -678,7 +679,7 @@ BEGIN {
     if (expect_retained_item_policy == "true") {
         if (visual_layer != items ||
             retained_interaction + rename_overlay != items ||
-            gpui_drag_shell != items ||
+            gpui_drag_shell != 0 ||
             gpui_directory_drop_shell != 0 ||
             gpui_details_header != 0 ||
             image_layer + gpui_image_element > items) {

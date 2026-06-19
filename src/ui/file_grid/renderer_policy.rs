@@ -38,7 +38,8 @@ pub(super) enum ItemInteractionRenderer {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum ItemDragStartRenderer {
-    GpuiShell,
+    RetainedHitbox,
+    Disabled,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -66,7 +67,7 @@ pub(super) enum DetailsRowInteractionRenderer {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum DetailsRowDragStartRenderer {
-    GpuiShell,
+    RetainedHitbox,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -128,7 +129,7 @@ fn item_renderer_policy_for_flags(
     };
     ItemRendererPolicy {
         // Compact/Icons base visuals live in content-level layers. Rename keeps
-        // only a local editor overlay and temporary drag shell.
+        // only a local editor overlay and disables item drag while text editing.
         base_visual: ItemBaseVisualRenderer::ContentLayer,
         image,
         interaction: if renaming {
@@ -136,7 +137,11 @@ fn item_renderer_policy_for_flags(
         } else {
             ItemInteractionRenderer::RetainedLayer
         },
-        drag_start: ItemDragStartRenderer::GpuiShell,
+        drag_start: if renaming {
+            ItemDragStartRenderer::Disabled
+        } else {
+            ItemDragStartRenderer::RetainedHitbox
+        },
         rename_editor: if renaming {
             ItemRenameEditorRenderer::GpuiOverlay
         } else {
@@ -151,7 +156,7 @@ pub(super) fn details_row_renderer_policy(
     DetailsRowRendererPolicy {
         visual: DetailsRowVisualRenderer::ContentLayer,
         interaction: DetailsRowInteractionRenderer::RetainedLayer,
-        drag_start: DetailsRowDragStartRenderer::GpuiShell,
+        drag_start: DetailsRowDragStartRenderer::RetainedHitbox,
     }
 }
 
@@ -190,9 +195,6 @@ where
         {
             stats.retained_directory_drop_target += 1;
         }
-        if matches!(policy.drag_start, ItemDragStartRenderer::GpuiShell) {
-            stats.gpui_drag_shell += 1;
-        }
         if matches!(policy.rename_editor, ItemRenameEditorRenderer::GpuiOverlay) {
             stats.rename_overlay += 1;
         }
@@ -223,9 +225,6 @@ pub(super) fn details_renderer_policy_stats(items: &[DetailsPaintSnapshot]) -> R
             )
         {
             stats.retained_directory_drop_target += 1;
-        }
-        if matches!(policy.drag_start, DetailsRowDragStartRenderer::GpuiShell) {
-            stats.gpui_drag_shell += 1;
         }
     }
     stats

@@ -179,35 +179,35 @@ fn content_layers_split_base_visuals_from_image_visuals() {
                 base_visual: ItemBaseVisualRenderer::ContentLayer,
                 image: ItemImageRenderer::None,
                 interaction: ItemInteractionRenderer::RetainedLayer,
-                drag_start: ItemDragStartRenderer::GpuiShell,
+                drag_start: ItemDragStartRenderer::RetainedHitbox,
                 rename_editor: ItemRenameEditorRenderer::None,
             },
             ItemRendererPolicy {
                 base_visual: ItemBaseVisualRenderer::ContentLayer,
                 image: ItemImageRenderer::ContentLayer,
                 interaction: ItemInteractionRenderer::RetainedLayer,
-                drag_start: ItemDragStartRenderer::GpuiShell,
+                drag_start: ItemDragStartRenderer::RetainedHitbox,
                 rename_editor: ItemRenameEditorRenderer::None,
             },
             ItemRendererPolicy {
                 base_visual: ItemBaseVisualRenderer::ContentLayer,
                 image: ItemImageRenderer::ContentLayer,
                 interaction: ItemInteractionRenderer::RetainedLayer,
-                drag_start: ItemDragStartRenderer::GpuiShell,
+                drag_start: ItemDragStartRenderer::RetainedHitbox,
                 rename_editor: ItemRenameEditorRenderer::None,
             },
             ItemRendererPolicy {
                 base_visual: ItemBaseVisualRenderer::ContentLayer,
                 image: ItemImageRenderer::None,
                 interaction: ItemInteractionRenderer::RenameShell,
-                drag_start: ItemDragStartRenderer::GpuiShell,
+                drag_start: ItemDragStartRenderer::Disabled,
                 rename_editor: ItemRenameEditorRenderer::GpuiOverlay,
             },
             ItemRendererPolicy {
                 base_visual: ItemBaseVisualRenderer::ContentLayer,
                 image: ItemImageRenderer::ContentLayer,
                 interaction: ItemInteractionRenderer::RenameShell,
-                drag_start: ItemDragStartRenderer::GpuiShell,
+                drag_start: ItemDragStartRenderer::Disabled,
                 rename_editor: ItemRenameEditorRenderer::GpuiOverlay,
             },
         ]
@@ -221,7 +221,7 @@ fn content_layers_split_base_visuals_from_image_visuals() {
             gpui_image_element: 0,
             retained_interaction: 3,
             retained_directory_drop_target: 0,
-            gpui_drag_shell: 5,
+            gpui_drag_shell: 0,
             gpui_directory_drop_shell: 0,
             details_header_visual_layer: 0,
             gpui_details_header: 0,
@@ -991,7 +991,7 @@ fn details_visual_layer_items_project_rows_and_cells() {
         DetailsRowRendererPolicy {
             visual: DetailsRowVisualRenderer::ContentLayer,
             interaction: DetailsRowInteractionRenderer::RetainedLayer,
-            drag_start: DetailsRowDragStartRenderer::GpuiShell,
+            drag_start: DetailsRowDragStartRenderer::RetainedHitbox,
         }
     );
     assert_eq!(
@@ -1003,7 +1003,7 @@ fn details_visual_layer_items_project_rows_and_cells() {
             gpui_image_element: 0,
             retained_interaction: 1,
             retained_directory_drop_target: 0,
-            gpui_drag_shell: 1,
+            gpui_drag_shell: 0,
             gpui_directory_drop_shell: 0,
             details_header_visual_layer: 0,
             gpui_details_header: 0,

@@ -4,8 +4,8 @@ use std::sync::Arc;
 use fika_core::PaneId;
 use gpui::prelude::*;
 use gpui::{
-    Context, Div, ExternalPaths, IntoElement, MouseMoveEvent, ParentElement, Render, Stateful,
-    Styled, WeakEntity, Window, div, px, rgb,
+    Context, Div, ExternalPaths, GlobalElementId, Hitbox, IntoElement, MouseMoveEvent,
+    ParentElement, Render, Stateful, Styled, WeakEntity, Window, div, px, rgb,
 };
 
 use crate::FikaApp;
@@ -105,28 +105,33 @@ pub(super) fn drag_preview_label(name: &str, selected: bool, selection_count: us
     }
 }
 
-pub(super) fn install_item_drag_start_shell(
-    shell: Stateful<Div>,
+pub(super) fn install_item_drag_start_hitbox(
+    global_id: &GlobalElementId,
+    hitbox: Hitbox,
     drag_value: ItemDrag,
     app: WeakEntity<FikaApp>,
-) -> Stateful<Div> {
-    // GPUI still owns drag initiation; this shell is the remaining platform
-    // boundary until custom elements can start drags directly.
-    shell.on_drag(drag_value, move |drag, cursor_offset, _, cx| {
-        let _ = app.update(cx, |this, _cx| {
-            this.begin_item_drag(drag.payload());
-            debug_dnd_log(|| {
-                format!(
-                    "item-start pane={} path={} selected={} selection_count={}",
-                    drag.pane_id.0,
-                    drag.path.display(),
-                    drag.selected,
-                    drag.selection_count
-                )
+    window: &mut Window,
+) {
+    window.on_hitbox_drag(
+        global_id,
+        hitbox,
+        drag_value,
+        move |drag, cursor_offset, _, cx| {
+            let _ = app.update(cx, |this, _cx| {
+                this.begin_item_drag(drag.payload());
+                debug_dnd_log(|| {
+                    format!(
+                        "item-start pane={} path={} selected={} selection_count={}",
+                        drag.pane_id.0,
+                        drag.path.display(),
+                        drag.selected,
+                        drag.selection_count
+                    )
+                });
             });
-        });
-        cx.new(|_| item_drag_preview(drag, cursor_offset, app.clone()))
-    })
+            cx.new(|_| item_drag_preview(drag, cursor_offset, app.clone()))
+        },
+    );
 }
 
 pub(super) fn install_active_item_drag_mouse_tracker(

@@ -49,14 +49,14 @@ Options:
 
   --expect-current-gpui-policy
       Fail unless [fika places-renderer-policy] matches the explicit GPUI row
-      and event-shell fallback baseline: row_gpui/icon_gpui/drag_shell equal rows,
+      and event-shell fallback baseline: row_gpui/icon_gpui equal rows,
       row_visual_layer=0, retained_interaction=0, section_gpui=sections, and
-      scrollbar_canvas=1.
+      drag_shell=0, scrollbar_canvas=1.
 
   --expect-custom-row-visual-policy
       Fail unless [fika places-renderer-policy] matches the opt-in
-      custom text policy: row_visual_layer/icon_gpui/drag_shell equal
-      rows, row_gpui=0, text_gpui=0, retained_interaction matching the
+      custom text policy: row_visual_layer/icon_gpui equal rows,
+      drag_shell=0, row_gpui=0, text_gpui=0, retained_interaction matching the
       selected event policy, section_gpui=0, scrollbar_canvas=1, and
       visual_kind=text. Also requires aggregated [fika places-row-visual] logs
       whose rows count matches the policy rows and row text shape-cache logs
@@ -64,7 +64,8 @@ Options:
 
   --expect-custom-row-full-policy
       Fail unless [fika places-renderer-policy] matches the opt-in
-      full custom row visual policy: row_visual_layer/drag_shell equal rows,
+      full custom row visual policy: row_visual_layer equal rows,
+      drag_shell=0,
       row_gpui=0, text_gpui=0, icon_gpui=0, retained_interaction matching the
       selected event policy, section_gpui=0, scrollbar_canvas=1, and
       visual_kind=full. Also requires aggregated [fika places-row-visual] logs
@@ -78,8 +79,8 @@ Options:
 
   --expect-custom-row-chrome-policy
       Fail unless [fika places-renderer-policy] matches the Dolphin-aligned
-      custom chrome policy: row_visual_layer/text_gpui/icon_gpui/drag_shell
-      equal rows, row_gpui=0, retained_interaction matching the selected event
+      custom chrome policy: row_visual_layer/text_gpui/icon_gpui equal rows,
+      drag_shell=0, row_gpui=0, retained_interaction matching the selected event
       policy, section_gpui=sections, scrollbar_canvas=1, and
       visual_kind=chrome. Also requires aggregated [fika places-row-visual]
       logs whose rows count matches the policy rows and rejects row text
@@ -89,7 +90,7 @@ Options:
       Fail unless [fika places-renderer-policy] and
       [fika places-interaction-policy] match the future retained event-delivery
       policy: retained interaction/hitboxes equal rows+sections,
-      gpui_event_shells=0, drag_shells=rows, and row visuals are either the
+      gpui_event_shells=0, drag_shells=0, and row visuals are either the
       current GPUI rows or the aggregated opt-in custom visual layer.
 
   --snapshot-us N
@@ -557,7 +558,7 @@ function renderer_retained_interaction_for_policy(event_policy, rows, sections) 
         policy_kind_other_seen = 1
     }
     if (expect_current_gpui_policy == "true") {
-        if (row_gpui != rows || text_gpui != rows || icon_gpui != rows || drag_shell != rows ||
+        if (row_gpui != rows || text_gpui != rows || icon_gpui != rows || drag_shell != 0 ||
             row_visual_layer != 0 || retained_interaction != 0 ||
             section_gpui != last_sidebar_sections || scrollbar_canvas != 1 ||
             visual_kind != "gpui") {
@@ -565,7 +566,7 @@ function renderer_retained_interaction_for_policy(event_policy, rows, sections) 
         }
     }
     if (expect_custom_row_visual_policy == "true") {
-        if (row_gpui != 0 || text_gpui != 0 || icon_gpui != rows || drag_shell != rows ||
+        if (row_gpui != 0 || text_gpui != 0 || icon_gpui != rows || drag_shell != 0 ||
             row_visual_layer != rows || retained_interaction != expected_retained_interaction ||
             section_gpui != 0 || scrollbar_canvas != 1 ||
             visual_kind != "text") {
@@ -573,7 +574,7 @@ function renderer_retained_interaction_for_policy(event_policy, rows, sections) 
         }
     }
     if (expect_custom_row_full_policy == "true") {
-        if (row_gpui != 0 || text_gpui != 0 || icon_gpui != 0 || drag_shell != rows ||
+        if (row_gpui != 0 || text_gpui != 0 || icon_gpui != 0 || drag_shell != 0 ||
             row_visual_layer != rows || retained_interaction != expected_retained_interaction ||
             section_gpui != 0 || scrollbar_canvas != 1 ||
             visual_kind != "full") {
@@ -582,7 +583,7 @@ function renderer_retained_interaction_for_policy(event_policy, rows, sections) 
     }
     if (expect_custom_row_handoff_policy == "true") {
         handoff_policy_shape_valid = row_gpui == 0 && row_visual_layer == rows &&
-            drag_shell == rows && retained_interaction == expected_retained_interaction &&
+            drag_shell == 0 && retained_interaction == expected_retained_interaction &&
             scrollbar_canvas == 1 && visual_kind == "full"
         if (!handoff_policy_shape_valid) {
             custom_handoff_policy_invalid = 1
@@ -596,7 +597,7 @@ function renderer_retained_interaction_for_policy(event_policy, rows, sections) 
         }
     }
     if (expect_custom_row_chrome_policy == "true") {
-        if (row_gpui != 0 || text_gpui != rows || icon_gpui != rows || drag_shell != rows ||
+        if (row_gpui != 0 || text_gpui != rows || icon_gpui != rows || drag_shell != 0 ||
             row_visual_layer != rows || retained_interaction != expected_retained_interaction ||
             section_gpui != last_sidebar_sections || scrollbar_canvas != 1 ||
             visual_kind != "chrome") {
@@ -616,7 +617,7 @@ function renderer_retained_interaction_for_policy(event_policy, rows, sections) 
                     visual_kind == "full")))
         if (!row_visual_policy_valid ||
             retained_interaction != rows + last_sidebar_sections ||
-            drag_shell != rows || scrollbar_canvas != 1) {
+            drag_shell != 0 || scrollbar_canvas != 1) {
             retained_event_renderer_policy_invalid = 1
         }
     }
@@ -675,7 +676,7 @@ function renderer_retained_interaction_for_policy(event_policy, rows, sections) 
     gpui_typed_dnd_payload_shells_field = field("gpui_typed_dnd_payload_shells")
     drag_start_models_field = field("drag_start_models")
     if (drag_start_models_field == "") {
-        drag_start_models = drag_shells
+        drag_start_models = rows
     } else {
         drag_start_models = drag_start_models_field + 0
     }
@@ -687,7 +688,7 @@ function renderer_retained_interaction_for_policy(event_policy, rows, sections) 
         retained_dnd == rows + sections) ? 0 : 3
     expected_gpui_row_section_event_shells = (expect_retained_event_policy == "true" ||
         retained_dnd == rows + sections) ? 0 : rows + sections
-    expected_gpui_typed_dnd_payload_shells = (expect_retained_event_policy == "true") ? 0 : ((retained_dnd == rows + sections && rows + sections > 0) ? 1 : 0)
+    expected_gpui_typed_dnd_payload_shells = 0
     if (gpui_row_section_event_shells_field == "") {
         gpui_row_section_event_shells = expected_gpui_row_section_event_shells
     } else {
@@ -718,16 +719,16 @@ function renderer_retained_interaction_for_policy(event_policy, rows, sections) 
     max_update("interaction_retained_targeting", retained_targeting)
     max_update("interaction_retained_dnd", retained_dnd)
     current_gpui_shell_boundary_valid = (gpui_event_shells == rows + sections && retained_dnd == 0)
-    current_single_dnd_shell_boundary_valid = (gpui_event_shells == 1 && retained_dnd == rows + sections)
+    current_retained_dnd_boundary_valid = (gpui_event_shells == 0 && retained_dnd == rows + sections)
     expected_retained_hitboxes = (retained_targeting == rows + sections || retained_dnd == rows + sections) ? rows + sections : 0
     if (row_target_decisions != rows ||
         section_target_decisions != sections ||
         retained_hitboxes != expected_retained_hitboxes ||
-        !(current_gpui_shell_boundary_valid || current_single_dnd_shell_boundary_valid) ||
+        !(current_gpui_shell_boundary_valid || current_retained_dnd_boundary_valid) ||
         gpui_event_shells != gpui_row_section_event_shells + gpui_typed_dnd_payload_shells ||
         gpui_row_section_event_shells != expected_gpui_row_section_event_shells ||
         gpui_typed_dnd_payload_shells != expected_gpui_typed_dnd_payload_shells ||
-        drag_shells != rows ||
+        drag_shells != 0 ||
         drag_start_models != rows ||
         gpui_sidebar_leave_shells != expected_gpui_sidebar_leave_shells) {
         current_interaction_policy_invalid = 1
@@ -738,7 +739,7 @@ function renderer_retained_interaction_for_policy(event_policy, rows, sections) 
         gpui_event_shells != 0 ||
         gpui_row_section_event_shells != 0 ||
         gpui_typed_dnd_payload_shells != 0 ||
-        drag_shells != rows ||
+        drag_shells != 0 ||
         drag_start_models != rows ||
         gpui_sidebar_leave_shells != 0) {
         retained_event_interaction_policy_invalid = 1

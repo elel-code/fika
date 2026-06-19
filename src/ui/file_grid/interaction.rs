@@ -8,7 +8,10 @@ use gpui::{
 
 use crate::FikaApp;
 
-use super::dnd::install_active_item_drag_mouse_tracker;
+use super::dnd::{
+    ItemDrag, install_active_item_drag_mouse_tracker, install_item_drag_start_hitbox,
+    item_drag_from_details_snapshot, item_drag_from_item_snapshot,
+};
 use super::paint_slots::{DetailsPaintSnapshot, ItemPaintSnapshot};
 use super::renderer_policy::{
     DetailsRowInteractionRenderer, details_row_renderer_policy, item_uses_layer_interaction,
@@ -31,7 +34,7 @@ pub(super) fn details_interaction_layer_view(
     height: f32,
     app: WeakEntity<FikaApp>,
 ) -> Option<ItemInteractionLayerElement> {
-    let items = details_interaction_layer_items(items, width);
+    let items = details_interaction_layer_items_impl(pane_id, items, width);
     (!items.is_empty()).then(|| {
         ItemInteractionLayerElement {
             pane_id,
@@ -52,18 +55,11 @@ pub(super) fn details_interaction_layer_items(
     items: &[DetailsPaintSnapshot],
     width: f32,
 ) -> Vec<ItemInteractionLayerItem> {
-    details_interaction_layer_items_impl(items, width)
-}
-
-#[cfg(not(test))]
-fn details_interaction_layer_items(
-    items: &[DetailsPaintSnapshot],
-    width: f32,
-) -> Vec<ItemInteractionLayerItem> {
-    details_interaction_layer_items_impl(items, width)
+    details_interaction_layer_items_impl(PaneId(0), items, width)
 }
 
 fn details_interaction_layer_items_impl(
+    pane_id: PaneId,
     items: &[DetailsPaintSnapshot],
     width: f32,
 ) -> Vec<ItemInteractionLayerItem> {
@@ -83,6 +79,7 @@ fn details_interaction_layer_items_impl(
                     width: width.max(1.0),
                     height: f32::from_bits(item.geometry.row_height).max(1.0),
                 },
+                drag_value: item_drag_from_details_snapshot(pane_id, item),
             })
         })
         .collect()
@@ -95,7 +92,7 @@ pub(super) fn item_interaction_layer_view(
     height: f32,
     app: WeakEntity<FikaApp>,
 ) -> Option<ItemInteractionLayerElement> {
-    let items = item_interaction_layer_items(items);
+    let items = item_interaction_layer_items_impl(pane_id, items);
     (!items.is_empty()).then(|| {
         ItemInteractionLayerElement {
             pane_id,
@@ -115,15 +112,13 @@ pub(super) fn item_interaction_layer_view(
 pub(super) fn item_interaction_layer_items(
     items: &[ItemPaintSnapshot],
 ) -> Vec<ItemInteractionLayerItem> {
-    item_interaction_layer_items_impl(items)
+    item_interaction_layer_items_impl(PaneId(0), items)
 }
 
-#[cfg(not(test))]
-fn item_interaction_layer_items(items: &[ItemPaintSnapshot]) -> Vec<ItemInteractionLayerItem> {
-    item_interaction_layer_items_impl(items)
-}
-
-fn item_interaction_layer_items_impl(items: &[ItemPaintSnapshot]) -> Vec<ItemInteractionLayerItem> {
+fn item_interaction_layer_items_impl(
+    pane_id: PaneId,
+    items: &[ItemPaintSnapshot],
+) -> Vec<ItemInteractionLayerItem> {
     items
         .iter()
         .filter_map(|item| {
@@ -133,6 +128,7 @@ fn item_interaction_layer_items_impl(items: &[ItemPaintSnapshot]) -> Vec<ItemInt
             item_uses_layer_interaction(item.content.as_ref()).then_some(ItemInteractionLayerItem {
                 item_id: item.item_id,
                 visual_rect: item.layout.visual_rect,
+                drag_value: item_drag_from_item_snapshot(pane_id, item),
             })
         })
         .collect()
@@ -141,6 +137,7 @@ fn item_interaction_layer_items_impl(items: &[ItemPaintSnapshot]) -> Vec<ItemInt
 pub(super) struct ItemInteractionLayerItem {
     pub(super) item_id: ItemId,
     pub(super) visual_rect: ViewRect,
+    pub(super) drag_value: ItemDrag,
 }
 
 pub(super) struct ItemInteractionLayerElement {
@@ -154,6 +151,7 @@ pub(super) struct ItemInteractionLayerElement {
 pub(super) struct ItemInteractionHitboxState {
     item_id: ItemId,
     hitbox: Hitbox,
+    drag_value: ItemDrag,
 }
 
 impl IntoElement for ItemInteractionLayerElement {
@@ -206,6 +204,7 @@ impl Element for ItemInteractionLayerElement {
             .iter()
             .map(|item| ItemInteractionHitboxState {
                 item_id: item.item_id,
+                drag_value: item.drag_value.clone(),
                 hitbox: window.insert_hitbox(
                     item_interaction_hitbox_bounds(bounds, item.visual_rect),
                     HitboxBehavior::Normal,
@@ -238,6 +237,12 @@ impl Element for ItemInteractionLayerElement {
         if let Some(state) = item_interaction_hovered_state(prepaint, window) {
             window.set_cursor_style(CursorStyle::PointingHand, &state.hitbox);
         }
+        install_item_interaction_drag_start_listeners(
+            self.pane_id,
+            self.app.clone(),
+            prepaint,
+            window,
+        );
         install_item_interaction_hover_listener(self.pane_id, self.app.clone(), prepaint, window);
         install_active_item_drag_mouse_tracker(self.pane_id, self.app.clone(), window);
         if let Some(started) = perf_started {
@@ -326,4 +331,27 @@ fn install_item_interaction_hover_listener(
             window.refresh();
         }
     });
+}
+
+fn install_item_interaction_drag_start_listeners(
+    pane_id: PaneId,
+    app: WeakEntity<FikaApp>,
+    states: &[ItemInteractionHitboxState],
+    window: &mut Window,
+) {
+    for state in states {
+        let element_id = ElementId::from(format!(
+            "item-hitbox-drag-{}-{}",
+            pane_id.0, state.item_id.0
+        ));
+        window.with_global_id(element_id, |global_id, window| {
+            install_item_drag_start_hitbox(
+                global_id,
+                state.hitbox.clone(),
+                state.drag_value.clone(),
+                app.clone(),
+                window,
+            );
+        });
+    }
 }

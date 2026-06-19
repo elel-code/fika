@@ -160,12 +160,13 @@ impl PlacesEventDeliveryPolicy {
     }
 
     fn gpui_typed_dnd_payload_shells(self, rows: usize, sections: usize) -> usize {
+        let _ = (rows, sections);
         match self {
-            Self::RetainedDnd => usize::from(rows + sections > 0),
             Self::GpuiShells
             | Self::RetainedProbe
             | Self::RetainedPointer
-            | Self::RetainedTargeting => 0,
+            | Self::RetainedTargeting
+            | Self::RetainedDnd => 0,
         }
     }
 
@@ -408,7 +409,7 @@ pub(crate) fn emit_places_renderer_policy_log(log: PlacesRendererPolicyLog) {
         text_gpui,
         icon_gpui,
         retained_interaction,
-        log.row_count,
+        0,
         section_gpui,
         log.scrollbar_canvas_count,
         log.row_visual_policy.visual_kind(),
@@ -501,7 +502,7 @@ impl PlacesInteractionPolicyLog {
     }
 
     pub(crate) fn drag_shells(self) -> usize {
-        self.row_count
+        0
     }
 
     pub(crate) fn drag_start_models(self) -> usize {
@@ -632,14 +633,14 @@ mod tests {
     }
 
     #[test]
-    fn places_event_delivery_default_uses_retained_dnd_mixed_policy() {
+    fn places_event_delivery_default_uses_full_retained_dnd_policy() {
         assert_eq!(
             DEFAULT_PLACES_EVENT_DELIVERY_POLICY,
             PlacesEventDeliveryPolicy::RetainedDnd
         );
         assert_eq!(
             DEFAULT_PLACES_EVENT_DELIVERY_POLICY.gpui_event_shells(11, 2),
-            1
+            0
         );
         assert_eq!(
             DEFAULT_PLACES_EVENT_DELIVERY_POLICY.retained_hitboxes(11, 2),
@@ -676,7 +677,7 @@ mod tests {
         assert_eq!(policy.gpui_row_section_event_shells(), 13);
         assert_eq!(policy.gpui_typed_dnd_payload_shells(), 0);
         assert_eq!(policy.gpui_sidebar_leave_shells(), 3);
-        assert_eq!(policy.drag_shells(), 11);
+        assert_eq!(policy.drag_shells(), 0);
         assert_eq!(policy.drag_start_models(), 11);
     }
 
@@ -698,7 +699,7 @@ mod tests {
         assert_eq!(policy.gpui_sidebar_leave_shells(), 0);
         assert_eq!(policy.retained_targeting(), 0);
         assert_eq!(policy.retained_dnd(), 0);
-        assert_eq!(policy.drag_shells(), 11);
+        assert_eq!(policy.drag_shells(), 0);
         assert_eq!(policy.drag_start_models(), 11);
     }
 
@@ -725,12 +726,12 @@ mod tests {
         assert_eq!(policy.gpui_sidebar_leave_shells(), 0);
         assert_eq!(policy.retained_targeting(), 13);
         assert_eq!(policy.retained_dnd(), 0);
-        assert_eq!(policy.drag_shells(), 11);
+        assert_eq!(policy.drag_shells(), 0);
         assert_eq!(policy.drag_start_models(), 11);
     }
 
     #[test]
-    fn places_interaction_dnd_policy_keeps_single_gpui_typed_drag_boundary_explicit() {
+    fn places_interaction_dnd_policy_uses_retained_hitbox_typed_dnd() {
         let policy = PlacesInteractionPolicyLog {
             row_count: 11,
             section_count: 2,
@@ -747,13 +748,13 @@ mod tests {
         );
         assert_eq!(policy.retained_hitboxes(), 13);
         assert_eq!(policy.retained_probe_hitboxes(), 13);
-        assert_eq!(policy.gpui_event_shells(), 1);
+        assert_eq!(policy.gpui_event_shells(), 0);
         assert_eq!(policy.gpui_row_section_event_shells(), 0);
-        assert_eq!(policy.gpui_typed_dnd_payload_shells(), 1);
+        assert_eq!(policy.gpui_typed_dnd_payload_shells(), 0);
         assert_eq!(policy.gpui_sidebar_leave_shells(), 0);
         assert_eq!(policy.retained_targeting(), 13);
         assert_eq!(policy.retained_dnd(), 13);
-        assert_eq!(policy.drag_shells(), 11);
+        assert_eq!(policy.drag_shells(), 0);
         assert_eq!(policy.drag_start_models(), 11);
     }
 
@@ -771,7 +772,7 @@ mod tests {
         assert_eq!(policy.gpui_row_section_event_shells(), 13);
         assert_eq!(policy.gpui_typed_dnd_payload_shells(), 0);
         assert_eq!(policy.gpui_sidebar_leave_shells(), 3);
-        assert_eq!(policy.drag_shells(), 11);
+        assert_eq!(policy.drag_shells(), 0);
         assert_eq!(policy.drag_start_models(), 11);
     }
 

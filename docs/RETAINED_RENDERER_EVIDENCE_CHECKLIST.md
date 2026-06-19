@@ -119,7 +119,7 @@ icon-sync tolerances versus the default GPUI image-element baseline.
 
 ## Places Baseline
 
-Capture the default Places chrome retained-DnD policy:
+Capture the default Places full retained-DnD policy:
 
 ```sh
 timeout 8s env FIKA_PERF_PLACES_VIEW=1 FIKA_AUTOSMOKE_PLACES=targets target/debug/fika /etc > /tmp/fika-evidence-places-targets.log 2>&1
@@ -133,24 +133,26 @@ timeout 8s env FIKA_PERF_PLACES_VIEW=1 FIKA_AUTOSMOKE_PLACES=dnd target/debug/fi
 Analyze the logs:
 
 ```sh
-scripts/analyze-places-perf.sh --require-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-chrome-policy /tmp/fika-evidence-places-targets.log
-scripts/analyze-places-perf.sh --require-overflow-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-chrome-policy /tmp/fika-evidence-places-overflow.log
-scripts/analyze-places-perf.sh --require-layout-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-chrome-policy /tmp/fika-evidence-places-layout.log
-scripts/analyze-places-perf.sh --require-hit-test-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-chrome-policy /tmp/fika-evidence-places-hit-test.log
-scripts/analyze-places-perf.sh --require-retained-targeting-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-chrome-policy /tmp/fika-evidence-places-targeting.log
-scripts/analyze-places-perf.sh --require-retained-dnd-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-chrome-policy /tmp/fika-evidence-places-dnd.log
+scripts/analyze-places-perf.sh --require-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-full-policy /tmp/fika-evidence-places-targets.log
+scripts/analyze-places-perf.sh --require-overflow-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-full-policy /tmp/fika-evidence-places-overflow.log
+scripts/analyze-places-perf.sh --require-layout-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-full-policy /tmp/fika-evidence-places-layout.log
+scripts/analyze-places-perf.sh --require-hit-test-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-full-policy /tmp/fika-evidence-places-hit-test.log
+scripts/analyze-places-perf.sh --require-retained-targeting-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-full-policy /tmp/fika-evidence-places-targeting.log
+scripts/analyze-places-perf.sh --require-retained-dnd-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-full-policy --expect-retained-event-policy /tmp/fika-evidence-places-dnd.log
 ```
 
-For the current default retained-DnD mixed policy, the dnd summary should show:
+For the current default retained-DnD policy, the dnd summary must show:
 
 ```text
+max_gpui_event_shells=0
 max_gpui_row_section_event_shells=0
-max_gpui_typed_dnd_payload_shells=1
+max_gpui_typed_dnd_payload_shells=0
+max_drag_shells=0
+max_drag_start_models=rows
 max_gpui_sidebar_leave_shells=0
 ```
 
-The full retained-event gate should still fail until the typed payload shell is
-removed through Track 4:
+The full retained-event gate is now part of the success path:
 
 ```sh
 scripts/analyze-places-perf.sh --expect-retained-event-policy /tmp/fika-evidence-places-dnd.log
@@ -204,9 +206,9 @@ drop.
 
 For pane drags that pass near or across the Places sidebar, the trace may also
 show `places-dnd-leave kind=... changed=...`. That line is evidence that the
-sidebar typed payload bridge rejected an out-of-bounds capture-phase drag move
-and cleared only Places state. It must not be accompanied by a persistent Places
-drop highlight while the pointer is inside the pane.
+retained Places event layer rejected an out-of-bounds drag move and cleared
+only Places state. It must not be accompanied by a persistent Places drop
+highlight while the pointer is inside the pane.
 
 If the capture-phase bridge still receives a drag move while the pointer is
 inside a pane viewport, the expected trace is

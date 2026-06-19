@@ -4,9 +4,9 @@
 # Places Retained 事件传递计划
 
 本文是 `docs/FULL_RETAINED_RENDERER_ROADMAP.zh-CN.md` 中 Track 3 的实现计划。
-它只覆盖事件传递，不改变 row 渲染器策略：Places row chrome 默认自绘；row 文本、
-图标、context menu 渲染、DnD preview 创建、typed drag payload delivery 和 drag start
-仍保留在 GPUI，除非后续 gate 证明可以替换。
+它只覆盖事件传递，不改变 row 渲染器策略。当前状态：Places full row visual、
+retained event delivery、typed DnD move/drop 和 drag start 已经在 Fika GPUI fork 上完成。
+本文较早的 mixed-policy 段落是历史实现记录，以“当前状态”和“TODO”中的完成态为准。
 
 ## Dolphin 边界
 
@@ -21,7 +21,8 @@ Fika 的等价边界是：
 - `places/interaction.rs` 拥有 row/section 几何、hit testing、drop-zone 映射和目标决策。
 - retained event layer 可以传递 pointer 和 DnD 事件，但必须调用现有 app 方法执行
   activation、context menu、drop 和 cursor update。
-- GPUI row shell 只为 drag start 保留，直到存在 retained-hitbox typed-drag API。
+- Drag start 和 typed DnD move/drop 通过 Fika GPUI fork 注册在 retained hitbox 上。
+  不得重新引入 GPUI row shell 作为交互所有者。
 
 ## 当前状态
 
@@ -30,41 +31,36 @@ Fika 的等价边界是：
 - `places_interaction_geometry()` 提供 retained row/section geometry。
 - `PlacesInteractionGeometry::hit_test_y()` 提供 retained row/section hit test。
 - item/external path drop 和 place reorder 的 retained target-decision helpers。
-- 显式 GPUI event-shell fallback、当前 retained-DnD mixed 默认和未来 full retained event
-  policy 的 analyzer 支持。
+- 显式 GPUI event-shell fallback 和当前 full retained event policy 的 analyzer 支持。
 - 显式的 `PlacesEventDeliveryPolicy`。默认现在是 `RetainedDnd`。
   `FIKA_PLACES_EVENT_DELIVERY_POLICY=gpui` 保留为显式 fallback。
   `FIKA_PLACES_EVENT_DELIVERY_POLICY=retained-probe` 只报告未来 retained layer
   需要覆盖的 row/section hitbox 计数；它仍保持 `retained_hitboxes=0` 和
   `gpui_event_shells=rows+sections`。
-- 默认 custom row chrome，同时 GPUI 保留文本/图标、一个 sidebar-level typed DnD payload
-  shell 和 row drag-start shell；row/section activation、context-menu 与 DnD target
-  delivery 由 retained layer 承担。
+- 默认 full custom row visual，同时 retained layer 承担 row/section activation、
+  context-menu、DnD target delivery、typed payload move/drop 和 row drag start。
 
-默认 mixed policy 形状：
+默认 policy 形状：
 
 ```text
 event_policy=retained-dnd
 retained_hitboxes=rows+sections
 retained_interaction=rows+sections
-gpui_event_shells=1
-drag_shells=rows
-drag_start_models=rows
-```
-
-Full retained event policy 形状：
-
-```text
-retained_hitboxes=rows+sections
-retained_interaction=rows+sections
 gpui_event_shells=0
-drag_shells=rows
+gpui_row_section_event_shells=0
+gpui_typed_dnd_payload_shells=0
+drag_shells=0
 drag_start_models=rows
 ```
 
-`drag_shells=rows` 是有意保留的 GPUI typed drag-start 边界，不代表事件传递失败。
 `drag_start_models=rows` 记录 payload、movable flag、export metadata 和 preview model
-由 Places drag 模块拥有；row shell 应该只调用 GPUI `on_drag` API。
+由 Places drag 模块拥有；drag source 注册基于 retained hitbox，`drag_shells` 必须为 0。
+
+## 历史实现记录
+
+下面的 phase notes 记录迁移到当前 retained-hitbox 实现之前的切片。凡是提到
+`gpui_event_shells=1`、`drag_shells=rows`、sidebar typed payload bridge 或 row
+drag-start shell 的段落，除非后续条目另有说明，均指 fork 落地前的中间状态。
 
 ## Retained Event Layer
 
@@ -446,49 +442,47 @@ rg -n "on_drag_move|on_drop|insert_hitbox|DragMoveEvent|DropEvent|ExternalPaths|
   日志里，且 probe 日志不能满足 retained-event policy gate。
 - [x] 添加 retained sidebar event probe layer，能插入 row/section hitboxes 并报告计数，
   但不改变行为。
-- [~] 将 hover/cursor/leave clearing 移到 retained layer。当前状态：
-  `retained-pointer` 将 pointer cursor ownership 和 active-drag leave clearing 移到
-  opt-in retained layer 后面；GPUI row/section shell 仍拥有 typed DnD move/drop delivery。
+- [x] 将 hover/cursor/leave clearing 移到 retained layer。当前状态：默认 retained-DnD
+  layer 拥有 pointer cursor ownership 和 active-drag leave clearing。
 - [x] 为带 scroll offset 的 content-local 坐标转换、section/row 边界添加单元覆盖。
-- [~] 将 activation/context-menu targeting 移到 retained layer。当前状态：
+- [x] 将 activation/context-menu targeting 移到 retained layer。当前状态：
   `retained-targeting` 拥有 row activation 和 row/section context menu targeting，
-  但 typed DnD move/drop 和 drag-start 仍需要 GPUI shell，因此该 policy 仍保持 opt-in。
-  非变更 targeting autosmoke 现在覆盖 activation-row、row context-menu 和 section
+  默认 retained-DnD policy 也包含这些路径。非变更 targeting autosmoke 覆盖 activation-row、row context-menu 和 section
   context-menu target classification。
 - [~] 添加 retained item/external/place drops 的隔离 DnD smoke。当前状态：
   `FIKA_AUTOSMOKE_PLACES=dnd` 在不改变用户 Places 的前提下验证 path-list 和 place drag
   对 row body、row edge、section target 的 retained target decision。它有意不执行
   destructive drop，因此完整隔离 drop/reorder smoke 仍未关闭。
-- [~] 将 drag-move/drop delivery 移到 retained layer。当前状态：
-  `retained-dnd` 在一个 sidebar-level GPUI typed drag shell 后面拥有 row/section 目标查找
-  和 drop dispatch。剩余 GPUI 边界是 payload delivery 和 drag-start，而不是 per-row/section
-  DnD target logic。
+- [x] 将 drag-move/drop delivery 移到 retained layer。当前状态：
+  `retained-dnd` 通过 retained sidebar content hitbox 拥有 typed payload move/drop；
+  `gpui_typed_dnd_payload_shells=0`。
 - [x] 将 Places drag-start source modeling 移出 row shell。当前状态：
-  `PlaceDragStartSource` 和 `install_place_drag_start_shell()` 位于 `places/drag.rs`，
-  且 analyzer 日志要求 `drag_start_models=rows`。
+  `PlaceDragStartSource` 和 `install_place_drag_start_hitbox()` 位于 `places/drag.rs`，
+  且 analyzer 日志要求 `drag_start_models=rows` 和 `drag_shells=0`。
 - [x] 在 policy 日志中区分 probe hitbox 与 retained target-delivery hitbox。当前状态：
   retained-targeting 和 retained-dnd 报告 `retained_hitboxes=rows+sections`，probe /
   pointer-only policy 不报告。
 - [x] 让 renderer `retained_interaction` 按 event policy 计数。当前状态：
   retained-targeting 和 retained-dnd 报告 rows+sections，probe/pointer 保持 0，并且
-  `gpui_event_shells=1` 时完整 retained-event policy 仍失败。
+  retained-DnD 在 `gpui_event_shells=0` 时通过完整 retained-event policy。
 - [x] 添加非变更 retained targeting autosmoke 和 analyzer gate。当前状态：
   `FIKA_AUTOSMOKE_PLACES=targeting` 会在不改变 app state、不打开菜单的前提下证明
   activation-row、context-row 和 context-section target classification。
-- [x] 将 Places event delivery 默认提升到 retained-DnD mixed policy。当前状态：
+- [x] 将 Places event delivery 默认提升到 retained-DnD policy。当前状态：
   默认日志显示 `event_policy=retained-dnd`、`retained_hitboxes=rows+sections`、
-  `gpui_event_shells=1` 和 `drag_start_models=rows`；显式 `gpui` 仍是 fallback。
+  `gpui_event_shells=0`、`drag_shells=0` 和 `drag_start_models=rows`；显式 `gpui`
+  仍是 fallback。
 - [x] 从 retained pointer policy 移除冗余 root sidebar GPUI leave-clear shell。当前状态：
   retained-pointer、retained-targeting 和 retained-DnD 报告
   `gpui_sidebar_leave_shells=0`；GPUI/probe policy 报告 `3`；analyzer 夹具会拒绝重新引入这些
   shell 的 retained-DnD 日志。
 - [x] 按边界类型拆分剩余 GPUI event-shell accounting。当前状态：retained-DnD 报告
-  `gpui_row_section_event_shells=0` 和 `gpui_typed_dnd_payload_shells=1`；fallback 状态显式报告
+  `gpui_row_section_event_shells=0` 和 `gpui_typed_dnd_payload_shells=0`；fallback 状态显式报告
   row/section shell；analyzer 夹具会拒绝重新引入 row/section GPUI event shell 的
   retained-DnD 日志。
 - [x] 从默认 target delivery 中移除 GPUI row/section event callbacks。当前状态：
-  retained-DnD 报告 `gpui_row_section_event_shells=0`；剩余完整 retained-event blocker 是单个
-  sidebar typed payload bridge，而不是 row/section activation、menu 或 DnD target ownership。
-- [ ] retained hitbox typed drag-move/drop API 存在，且完整 retained-event analyzer 与隔离
-  DnD smoke 通过后，移除 sidebar-level GPUI typed DnD payload bridge。
-- [ ] Track 4 解决 typed drag start 前，继续保留 GPUI row drag-start shells。
+  retained-DnD 报告 `gpui_row_section_event_shells=0`；retained activation、menu、DnD
+  target ownership、typed payload delivery 和 drag start 都在 retained hitbox 上。
+- [x] 添加 Fika GPUI retained-hitbox typed drag-move/drop API 后，移除 sidebar-level
+  GPUI typed DnD payload bridge。完整 retained-event analyzer 现在通过 retained-DnD。
+- [x] 使用 Fika GPUI retained-hitbox typed drag API 移除 GPUI row drag-start shells。

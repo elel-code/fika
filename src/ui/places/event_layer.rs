@@ -4,16 +4,16 @@ use std::time::{Duration, Instant};
 
 use gpui::prelude::*;
 use gpui::{
-    App, Bounds, Context, CursorStyle, Div, Entity, ExternalPaths, Hitbox, HitboxBehavior,
-    MouseButton, ParentElement, Pixels, Stateful, Styled, WeakEntity, Window, canvas, div, point,
-    px, size,
+    App, Bounds, Context, CursorStyle, Div, ElementId, Entity, ExternalPaths, Hitbox,
+    HitboxBehavior, MouseButton, ParentElement, Pixels, Stateful, Styled, WeakEntity, Window,
+    canvas, div, point, px, size,
 };
 
 use crate::FikaApp;
 use crate::ui::drag_drop::{debug_dnd_log, item_drop_reject_reason};
 use crate::ui::file_grid::ItemDrag;
 
-use super::drag::PlaceDrag;
+use super::drag::{PlaceDrag, PlaceDragStartSource, install_place_drag_start_hitbox};
 use super::interaction::{
     PlaceInteractionDecision, PlaceInteractionHit, PlaceInteractionTarget, PlaceRowTargetInput,
     PlacesInteractionGeometry, place_row_path_list_target, place_row_place_drag_target,
@@ -79,11 +79,12 @@ pub(super) fn places_event_probe_layer(
     targeting_state: Option<Entity<PlacesEventTargetingState>>,
 ) -> Stateful<Div> {
     let height = geometry.content_height().max(1.0);
+    let prepaint_geometry = geometry.clone();
     let paint_geometry = geometry.clone();
     let paint_app = app.clone();
     let paint_targeting_state = targeting_state.clone();
     let event_canvas = canvas(
-        move |bounds, window, _cx| places_event_probe_prepaint(&paint_geometry, bounds, window),
+        move |bounds, window, _cx| places_event_probe_prepaint(&prepaint_geometry, bounds, window),
         move |bounds, paint_state, window, _cx| {
             let paint_started = Instant::now();
             if mode.pointer_delivery_enabled() {
@@ -106,6 +107,22 @@ pub(super) fn places_event_probe_layer(
                     window,
                 );
             }
+            if mode.dnd_delivery_enabled()
+                && let Some(targeting_state) = paint_targeting_state.clone()
+            {
+                install_places_event_drag_start_handlers(
+                    places.clone(),
+                    paint_state.hitboxes.clone(),
+                    window,
+                );
+                install_places_event_dnd_handlers(
+                    paint_geometry.clone(),
+                    paint_app.clone(),
+                    targeting_state,
+                    paint_state.content_hitbox.clone(),
+                    window,
+                );
+            }
             if places_perf_enabled() {
                 emit_places_event_probe_perf_log(PlacesEventProbePerfLog {
                     rows: paint_state.rows,
@@ -122,23 +139,18 @@ pub(super) fn places_event_probe_layer(
         },
     )
     .size_full();
-    let mut layer = div()
+    div()
         .id("places-event-layer")
         .absolute()
         .left_0()
         .top_0()
         .w_full()
         .h(px(height))
-        .child(event_canvas);
-    if mode.dnd_delivery_enabled()
-        && let Some(targeting_state) = targeting_state
-    {
-        layer = install_places_event_dnd_handlers(layer, geometry, app, targeting_state);
-    }
-    layer
+        .child(event_canvas)
 }
 
 struct PlacesEventProbePaintState {
+    content_hitbox: Hitbox,
     rows: usize,
     sections: usize,
     hitboxes: Arc<[PlacesEventProbeHitboxState]>,
@@ -190,6 +202,7 @@ fn places_event_probe_prepaint(
 ) -> PlacesEventProbePaintState {
     let started = Instant::now();
     let visible_y_range = places_event_probe_visible_y_range(bounds, window.content_mask().bounds);
+    let content_hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
     let mut hitboxes = Vec::with_capacity(geometry.entries());
     let mut section_count = 0;
     for section in geometry.sections() {
@@ -225,6 +238,7 @@ fn places_event_probe_prepaint(
         });
     }
     PlacesEventProbePaintState {
+        content_hitbox,
         rows: row_count,
         sections: section_count,
         hitboxes: hitboxes.into(),
@@ -377,199 +391,208 @@ fn places_event_hovered_hitbox<'a>(
         .find(|state| state.hitbox.is_hovered(window))
 }
 
+fn install_places_event_drag_start_handlers(
+    places: Arc<[PlaceSnapshot]>,
+    hitboxes: Arc<[PlacesEventProbeHitboxState]>,
+    window: &mut Window,
+) {
+    for state in hitboxes.iter() {
+        let PlacesEventProbeHitboxTarget::Row { visible_index, .. } = state.target else {
+            continue;
+        };
+        let Some(place) = places.get(visible_index) else {
+            continue;
+        };
+        let element_id = ElementId::from(format!("place-hitbox-drag-{visible_index}"));
+        window.with_global_id(element_id, |global_id, window| {
+            install_place_drag_start_hitbox(
+                global_id,
+                state.hitbox.clone(),
+                PlaceDragStartSource::from_snapshot(place),
+                window,
+            );
+        });
+    }
+}
+
 fn install_places_event_dnd_handlers(
-    layer: Stateful<Div>,
     geometry: PlacesInteractionGeometry,
     app: WeakEntity<FikaApp>,
     state: Entity<PlacesEventTargetingState>,
-) -> Stateful<Div> {
-    layer
-        .on_drag_move::<ItemDrag>({
-            let geometry = geometry.clone();
-            let app = app.clone();
-            let state = state.clone();
-            move |event, window, cx| {
-                let position = window.mouse_position();
-                if !event.bounds.contains(&position) {
-                    let changed = app
-                        .update(cx, |this, cx| places_event_dnd_leave(this, &state, cx))
-                        .unwrap_or(false);
-                    debug_places_dnd_leave("item", position, changed);
-                    return;
-                }
-                if places_event_dnd_defer_to_pane(&app, &state, position, "item", cx) {
-                    return;
-                }
-                let payload = event.drag(cx).payload();
-                let local_y = places_event_drag_local_y(event.bounds, position);
-                let handled = app
-                    .update(cx, |this, cx| {
-                        let source_paths = this.item_drag_source_paths(&payload);
-                        places_event_path_list_drag_move(
-                            this,
-                            &geometry,
-                            &source_paths,
-                            local_y,
-                            &state,
-                            window,
-                            cx,
-                        )
-                    })
+    hitbox: Hitbox,
+    window: &mut Window,
+) {
+    window.on_hitbox_drag_move::<ItemDrag>(hitbox.clone(), {
+        let geometry = geometry.clone();
+        let app = app.clone();
+        let state = state.clone();
+        move |event, window, cx| {
+            let position = window.mouse_position();
+            if !event.bounds.contains(&position) {
+                let changed = app
+                    .update(cx, |this, cx| places_event_dnd_leave(this, &state, cx))
                     .unwrap_or(false);
-                if handled {
-                    cx.stop_propagation();
-                }
+                debug_places_dnd_leave("item", position, changed);
+                return;
             }
-        })
-        .on_drag_move::<ExternalPaths>({
-            let geometry = geometry.clone();
-            let app = app.clone();
-            let state = state.clone();
-            move |event, window, cx| {
-                let position = window.mouse_position();
-                if !event.bounds.contains(&position) {
-                    let changed = app
-                        .update(cx, |this, cx| places_event_dnd_leave(this, &state, cx))
-                        .unwrap_or(false);
-                    debug_places_dnd_leave("external", position, changed);
-                    return;
-                }
-                if places_event_dnd_defer_to_pane(&app, &state, position, "external", cx) {
-                    return;
-                }
-                let source_paths = event.drag(cx).paths().to_vec();
-                let local_y = places_event_drag_local_y(event.bounds, position);
-                let handled = app
-                    .update(cx, |this, cx| {
-                        let source_paths = this.external_drag_source_paths(&source_paths);
-                        places_event_path_list_drag_move(
-                            this,
-                            &geometry,
-                            &source_paths,
-                            local_y,
-                            &state,
-                            window,
-                            cx,
-                        )
-                    })
+            if places_event_dnd_defer_to_pane(&app, &state, position, "item", cx) {
+                return;
+            }
+            let payload = event.drag(cx).payload();
+            let local_y = places_event_drag_local_y(event.bounds, position);
+            let handled = app
+                .update(cx, |this, cx| {
+                    let source_paths = this.item_drag_source_paths(&payload);
+                    places_event_path_list_drag_move(
+                        this,
+                        &geometry,
+                        &source_paths,
+                        local_y,
+                        &state,
+                        window,
+                        cx,
+                    )
+                })
+                .unwrap_or(false);
+            if handled {
+                cx.stop_propagation();
+            }
+        }
+    });
+    window.on_hitbox_drag_move::<ExternalPaths>(hitbox.clone(), {
+        let geometry = geometry.clone();
+        let app = app.clone();
+        let state = state.clone();
+        move |event, window, cx| {
+            let position = window.mouse_position();
+            if !event.bounds.contains(&position) {
+                let changed = app
+                    .update(cx, |this, cx| places_event_dnd_leave(this, &state, cx))
                     .unwrap_or(false);
-                if handled {
-                    cx.stop_propagation();
-                }
+                debug_places_dnd_leave("external", position, changed);
+                return;
             }
-        })
-        .on_drag_move::<PlaceDrag>({
-            let geometry = geometry.clone();
-            let app = app.clone();
-            let state = state.clone();
-            move |event, window, cx| {
-                let position = window.mouse_position();
-                if !event.bounds.contains(&position) {
-                    let changed = app
-                        .update(cx, |this, cx| places_event_dnd_leave(this, &state, cx))
-                        .unwrap_or(false);
-                    debug_places_dnd_leave("place", position, changed);
-                    return;
-                }
-                if places_event_dnd_defer_to_pane(&app, &state, position, "place", cx) {
-                    return;
-                }
-                let drag = event.drag(cx);
-                let source_index = drag.source_index();
-                let movable = drag.movable();
-                let local_y = places_event_drag_local_y(event.bounds, position);
-                let handled = app
-                    .update(cx, |this, cx| {
-                        places_event_place_drag_move(
-                            this,
-                            &geometry,
-                            source_index,
-                            movable,
-                            local_y,
-                            &state,
-                            window,
-                            cx,
-                        )
-                    })
+            if places_event_dnd_defer_to_pane(&app, &state, position, "external", cx) {
+                return;
+            }
+            let source_paths = event.drag(cx).paths().to_vec();
+            let local_y = places_event_drag_local_y(event.bounds, position);
+            let handled = app
+                .update(cx, |this, cx| {
+                    let source_paths = this.external_drag_source_paths(&source_paths);
+                    places_event_path_list_drag_move(
+                        this,
+                        &geometry,
+                        &source_paths,
+                        local_y,
+                        &state,
+                        window,
+                        cx,
+                    )
+                })
+                .unwrap_or(false);
+            if handled {
+                cx.stop_propagation();
+            }
+        }
+    });
+    window.on_hitbox_drag_move::<PlaceDrag>(hitbox.clone(), {
+        let geometry = geometry.clone();
+        let app = app.clone();
+        let state = state.clone();
+        move |event, window, cx| {
+            let position = window.mouse_position();
+            if !event.bounds.contains(&position) {
+                let changed = app
+                    .update(cx, |this, cx| places_event_dnd_leave(this, &state, cx))
                     .unwrap_or(false);
-                if handled {
-                    cx.stop_propagation();
-                }
+                debug_places_dnd_leave("place", position, changed);
+                return;
             }
-        })
-        .can_drop({
-            let state = state.clone();
-            let app = app.clone();
-            move |_dragged, window, cx| {
-                state.read(cx).retained_dnd_target.is_some()
-                    && app
-                        .update(cx, |this, _cx| {
-                            !this.window_position_is_in_pane_viewport(window.mouse_position())
-                        })
-                        .unwrap_or(false)
+            if places_event_dnd_defer_to_pane(&app, &state, position, "place", cx) {
+                return;
             }
-        })
-        .on_drop::<ItemDrag>({
-            let app = app.clone();
-            let state = state.clone();
-            move |drag, window, cx| {
-                let target = state.update(cx, |state, _cx| state.retained_dnd_target.take());
-                let payload = drag.payload();
-                let position = window.mouse_position();
-                let handled = app
-                    .update(cx, |this, cx| {
-                        places_event_drop_item_drag(this, payload, target, position, cx)
-                    })
-                    .unwrap_or(false);
-                if handled {
-                    cx.stop_propagation();
-                }
+            let drag = event.drag(cx);
+            let source_index = drag.source_index();
+            let movable = drag.movable();
+            let local_y = places_event_drag_local_y(event.bounds, position);
+            let handled = app
+                .update(cx, |this, cx| {
+                    places_event_place_drag_move(
+                        this,
+                        &geometry,
+                        source_index,
+                        movable,
+                        local_y,
+                        &state,
+                        window,
+                        cx,
+                    )
+                })
+                .unwrap_or(false);
+            if handled {
+                cx.stop_propagation();
             }
-        })
-        .on_drop::<ExternalPaths>({
-            let app = app.clone();
-            let state = state.clone();
-            move |external_paths, window, cx| {
-                let target = state.update(cx, |state, _cx| state.retained_dnd_target.take());
-                let paths = external_paths.paths().to_vec();
-                let position = window.mouse_position();
-                let handled = app
-                    .update(cx, |this, cx| {
-                        places_event_drop_external_paths(this, paths, target, position, cx)
-                    })
-                    .unwrap_or(false);
-                if handled {
-                    cx.stop_propagation();
-                }
+        }
+    });
+    window.on_hitbox_drop::<ItemDrag>(hitbox.clone(), {
+        let app = app.clone();
+        let state = state.clone();
+        move |drag, window, cx| {
+            let target = state.update(cx, |state, _cx| state.retained_dnd_target.take());
+            let payload = drag.payload();
+            let position = window.mouse_position();
+            let handled = app
+                .update(cx, |this, cx| {
+                    places_event_drop_item_drag(this, payload, target, position, cx)
+                })
+                .unwrap_or(false);
+            if handled {
+                cx.stop_propagation();
             }
-        })
-        .on_drop::<PlaceDrag>({
-            let app = app.clone();
-            let state = state.clone();
-            move |drag, window, cx| {
-                state.update(cx, |state, _cx| {
-                    state.retained_dnd_target = None;
-                });
-                let source_index = drag.source_index();
-                let position = window.mouse_position();
-                let handled = app
-                    .update(cx, |this, cx| {
-                        let handled = this.drop_place_drag_to_current_place_target(
-                            source_index,
-                            position,
-                            cx,
-                        );
-                        if handled {
-                            cx.notify();
-                        }
-                        handled
-                    })
-                    .unwrap_or(false);
-                if handled {
-                    cx.stop_propagation();
-                }
+        }
+    });
+    window.on_hitbox_drop::<ExternalPaths>(hitbox.clone(), {
+        let app = app.clone();
+        let state = state.clone();
+        move |external_paths, window, cx| {
+            let target = state.update(cx, |state, _cx| state.retained_dnd_target.take());
+            let paths = external_paths.paths().to_vec();
+            let position = window.mouse_position();
+            let handled = app
+                .update(cx, |this, cx| {
+                    places_event_drop_external_paths(this, paths, target, position, cx)
+                })
+                .unwrap_or(false);
+            if handled {
+                cx.stop_propagation();
             }
-        })
+        }
+    });
+    window.on_hitbox_drop::<PlaceDrag>(hitbox, {
+        let app = app.clone();
+        let state = state.clone();
+        move |drag, window, cx| {
+            state.update(cx, |state, _cx| {
+                state.retained_dnd_target = None;
+            });
+            let source_index = drag.source_index();
+            let position = window.mouse_position();
+            let handled = app
+                .update(cx, |this, cx| {
+                    let handled =
+                        this.drop_place_drag_to_current_place_target(source_index, position, cx);
+                    if handled {
+                        cx.notify();
+                    }
+                    handled
+                })
+                .unwrap_or(false);
+            if handled {
+                cx.stop_propagation();
+            }
+        }
+    });
 }
 
 fn places_event_dnd_leave(

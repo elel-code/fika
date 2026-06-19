@@ -15,44 +15,44 @@ cat > "$tmpdir/complete.log" <<'EOF'
 [fika places-slots] rows=11 sections=2 entries=13 inserted=13 content=0 geometry=0 visual=0 unchanged=0 removed=0 project=25us
 [fika places-view] source=11 visible=11 sections=2 snapshot=4457us
 [fika places-sidebar] rows=11 sections=2 elements=13 build=232us
-[fika places-renderer-policy] rows=11 row_gpui=11 row_visual_layer=0 icon_gpui=11 retained_interaction=0 drag_shell=11 section_gpui=2 scrollbar_canvas=1
-[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=11
+[fika places-renderer-policy] rows=11 row_gpui=11 row_visual_layer=0 icon_gpui=11 retained_interaction=0 drag_shell=0 section_gpui=2 scrollbar_canvas=1
+[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=0
 [fika places-interaction-geometry] rows=11 sections=2 entries=13 content_height=378 hit_tests=2 project=5us
 [fika render] panes=1 viewport=1180x760 places=4457us tasks=30us snapshots=120us pane_elements=300us root=500us total=5400us
 [fika autosmoke] places start scenario=DropTargets
 [fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
 [fika places-view] source=11 visible=11 sections=2 snapshot=89us
 [fika places-sidebar] rows=11 sections=2 elements=13 build=186us
-[fika places-renderer-policy] rows=11 row_gpui=11 row_visual_layer=0 icon_gpui=11 retained_interaction=0 drag_shell=11 section_gpui=2 scrollbar_canvas=1
-[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=11
+[fika places-renderer-policy] rows=11 row_gpui=11 row_visual_layer=0 icon_gpui=11 retained_interaction=0 drag_shell=0 section_gpui=2 scrollbar_canvas=1
+[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=0
 [fika autosmoke] places snapshot=initial visible=11 sections=2 active=1 place_targets=0 insert_before=0 insert_after=0
 [fika autosmoke] places action=target-first-place target=/home/yk changed=true
 [fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=1 unchanged=12 removed=0 project=22us
 [fika places-view] source=11 visible=11 sections=2 snapshot=110us
 [fika places-sidebar] rows=11 sections=2 elements=13 build=220us
-[fika places-renderer-policy] rows=11 row_gpui=11 row_visual_layer=0 icon_gpui=11 retained_interaction=0 drag_shell=11 section_gpui=2 scrollbar_canvas=1
-[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=11
+[fika places-renderer-policy] rows=11 row_gpui=11 row_visual_layer=0 icon_gpui=11 retained_interaction=0 drag_shell=0 section_gpui=2 scrollbar_canvas=1
+[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=0
 [fika autosmoke] places snapshot=after-place-target visible=11 sections=2 active=1 place_targets=1 insert_before=0 insert_after=0
 [fika autosmoke] places action=target-insert-start index=0 changed=true
 [fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=1 unchanged=12 removed=0 project=40us
 [fika places-view] source=11 visible=11 sections=2 snapshot=185us
 [fika places-sidebar] rows=11 sections=2 elements=13 build=303us
-[fika places-renderer-policy] rows=11 row_gpui=11 row_visual_layer=0 icon_gpui=11 retained_interaction=0 drag_shell=11 section_gpui=2 scrollbar_canvas=1
-[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=11
+[fika places-renderer-policy] rows=11 row_gpui=11 row_visual_layer=0 icon_gpui=11 retained_interaction=0 drag_shell=0 section_gpui=2 scrollbar_canvas=1
+[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=0
 [fika autosmoke] places snapshot=after-insert-start visible=11 sections=2 active=1 place_targets=0 insert_before=1 insert_after=0
 [fika autosmoke] places action=target-insert-end index=11 changed=true
 [fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=2 unchanged=11 removed=0 project=30us
 [fika places-view] source=11 visible=11 sections=2 snapshot=120us
 [fika places-sidebar] rows=11 sections=2 elements=13 build=225us
-[fika places-renderer-policy] rows=11 row_gpui=11 row_visual_layer=0 icon_gpui=11 retained_interaction=0 drag_shell=11 section_gpui=2 scrollbar_canvas=1
-[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=11
+[fika places-renderer-policy] rows=11 row_gpui=11 row_visual_layer=0 icon_gpui=11 retained_interaction=0 drag_shell=0 section_gpui=2 scrollbar_canvas=1
+[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=0
 [fika autosmoke] places snapshot=after-insert-end visible=11 sections=2 active=1 place_targets=0 insert_before=0 insert_after=1
 [fika autosmoke] places action=clear-targets changed=true
 [fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=1 unchanged=12 removed=0 project=24us
 [fika places-view] source=11 visible=11 sections=2 snapshot=110us
 [fika places-sidebar] rows=11 sections=2 elements=13 build=224us
-[fika places-renderer-policy] rows=11 row_gpui=11 row_visual_layer=0 icon_gpui=11 retained_interaction=0 drag_shell=11 section_gpui=2 scrollbar_canvas=1
-[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=11
+[fika places-renderer-policy] rows=11 row_gpui=11 row_visual_layer=0 icon_gpui=11 retained_interaction=0 drag_shell=0 section_gpui=2 scrollbar_canvas=1
+[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=0
 [fika autosmoke] places snapshot=after-clear visible=11 sections=2 active=1 place_targets=0 insert_before=0 insert_after=0
 [fika autosmoke] places complete scenario=DropTargets
 EOF
@@ -88,7 +88,7 @@ if [[ "$summary" != *"places_autosmoke target=1 insert_start=1 insert_end=1 clea
     echo "expected Places autosmoke summary" >&2
     exit 1
 fi
-if [[ "$summary" != *"places_interaction_policy_frames=6 max_rows=11 max_sections=2 max_row_target_decisions=11 max_section_target_decisions=2 max_retained_hitboxes=0 max_gpui_event_shells=13 max_gpui_row_section_event_shells=13 max_gpui_typed_dnd_payload_shells=0 max_drag_shells=11"* ]]; then
+if [[ "$summary" != *"places_interaction_policy_frames=6 max_rows=11 max_sections=2 max_row_target_decisions=11 max_section_target_decisions=2 max_retained_hitboxes=0 max_gpui_event_shells=13 max_gpui_row_section_event_shells=13 max_gpui_typed_dnd_payload_shells=0 max_drag_shells=0"* ]]; then
     echo "expected Places interaction policy summary" >&2
     exit 1
 fi
@@ -114,8 +114,8 @@ cat > "$tmpdir/custom-row-visual.log" <<'EOF'
 [fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
 [fika places-view] source=11 visible=11 sections=2 snapshot=100us
 [fika places-sidebar] rows=11 sections=2 elements=13 build=240us
-[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 icon_gpui=11 retained_interaction=0 drag_shell=11 section_gpui=0 scrollbar_canvas=1
-[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=11
+[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 icon_gpui=11 retained_interaction=0 drag_shell=0 section_gpui=0 scrollbar_canvas=1
+[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=0
 [fika places-row-visual] rows=11 painted=11 prepaint=20us paint=31us
 [fika places-row-shape-cache] hits=11 misses=0 evicted=0 entries=11
 EOF
@@ -142,8 +142,8 @@ cat > "$tmpdir/custom-row-full.log" <<'EOF'
 [fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
 [fika places-view] source=11 visible=11 sections=2 snapshot=100us
 [fika places-sidebar] rows=11 sections=2 elements=13 build=240us
-[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=0 icon_gpui=0 retained_interaction=0 drag_shell=11 section_gpui=0 scrollbar_canvas=1 visual_kind=full
-[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=11
+[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=0 icon_gpui=0 retained_interaction=0 drag_shell=0 section_gpui=0 scrollbar_canvas=1 visual_kind=full
+[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=0
 [fika places-row-visual] rows=11 painted=11 prepaint=24us paint=35us
 [fika places-row-shape-cache] hits=11 misses=0 evicted=0 entries=11
 EOF
@@ -162,18 +162,18 @@ cat > "$tmpdir/custom-row-full-handoff.log" <<'EOF'
 [fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
 [fika places-view] source=11 visible=11 sections=2 snapshot=100us
 [fika places-sidebar] rows=11 sections=2 elements=13 build=240us
-[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=11 icon_gpui=11 retained_interaction=0 drag_shell=11 section_gpui=2 scrollbar_canvas=1 visual_kind=full
+[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=11 icon_gpui=11 retained_interaction=0 drag_shell=0 section_gpui=2 scrollbar_canvas=1 visual_kind=full
 [fika places-row-handoff] rows=11 enabled=1 ready=0 frames=1/2 paint_text=0 paint_icon=0 gpui_text=1 gpui_icon=1
-[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=11
+[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=0
 [fika places-row-visual] rows=11 painted=11 prepaint=20us paint=55us
-[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=11 icon_gpui=11 retained_interaction=0 drag_shell=11 section_gpui=2 scrollbar_canvas=1 visual_kind=full
+[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=11 icon_gpui=11 retained_interaction=0 drag_shell=0 section_gpui=2 scrollbar_canvas=1 visual_kind=full
 [fika places-row-handoff] rows=11 enabled=1 ready=0 frames=2/2 paint_text=0 paint_icon=0 gpui_text=1 gpui_icon=1
 [fika places-row-visual] rows=11 painted=11 prepaint=18us paint=50us
-[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=0 icon_gpui=0 retained_interaction=0 drag_shell=11 section_gpui=0 scrollbar_canvas=1 visual_kind=full
+[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=0 icon_gpui=0 retained_interaction=0 drag_shell=0 section_gpui=0 scrollbar_canvas=1 visual_kind=full
 [fika places-row-handoff] rows=11 enabled=1 ready=1 frames=2/2 paint_text=1 paint_icon=1 gpui_text=0 gpui_icon=0
 [fika places-row-visual] rows=11 painted=11 prepaint=260us paint=240us
 [fika places-row-shape-cache] hits=0 misses=11 evicted=0 entries=11
-[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=0 icon_gpui=0 retained_interaction=0 drag_shell=11 section_gpui=0 scrollbar_canvas=1 visual_kind=full
+[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=0 icon_gpui=0 retained_interaction=0 drag_shell=0 section_gpui=0 scrollbar_canvas=1 visual_kind=full
 [fika places-row-handoff] rows=11 enabled=1 ready=1 frames=2/2 paint_text=1 paint_icon=1 gpui_text=0 gpui_icon=0
 [fika places-row-visual] rows=11 painted=11 prepaint=35us paint=230us
 [fika places-row-shape-cache] hits=11 misses=0 evicted=0 entries=11
@@ -205,9 +205,9 @@ cat > "$tmpdir/custom-row-full-handoff-missing-ready.log" <<'EOF'
 [fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
 [fika places-view] source=11 visible=11 sections=2 snapshot=100us
 [fika places-sidebar] rows=11 sections=2 elements=13 build=240us
-[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=11 icon_gpui=11 retained_interaction=0 drag_shell=11 section_gpui=2 scrollbar_canvas=1 visual_kind=full
+[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=11 icon_gpui=11 retained_interaction=0 drag_shell=0 section_gpui=2 scrollbar_canvas=1 visual_kind=full
 [fika places-row-handoff] rows=11 enabled=1 ready=0 frames=1/2 paint_text=0 paint_icon=0 gpui_text=1 gpui_icon=1
-[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=11
+[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=0
 [fika places-row-visual] rows=11 painted=11 prepaint=20us paint=55us
 EOF
 
@@ -223,8 +223,8 @@ cat > "$tmpdir/custom-row-full-cold-then-warm.log" <<'EOF'
 [fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
 [fika places-view] source=11 visible=11 sections=2 snapshot=100us
 [fika places-sidebar] rows=11 sections=2 elements=13 build=240us
-[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=0 icon_gpui=0 retained_interaction=0 drag_shell=11 section_gpui=0 scrollbar_canvas=1 visual_kind=full
-[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=11
+[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=0 icon_gpui=0 retained_interaction=0 drag_shell=0 section_gpui=0 scrollbar_canvas=1 visual_kind=full
+[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=0
 [fika places-row-visual] rows=11 painted=11 prepaint=1200us paint=3500us
 [fika places-row-shape-cache] hits=0 misses=11 evicted=0 entries=11
 [fika places-row-visual] rows=11 painted=11 prepaint=40us paint=2600us
@@ -251,8 +251,8 @@ cat > "$tmpdir/custom-row-chrome.log" <<'EOF'
 [fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
 [fika places-view] source=11 visible=11 sections=2 snapshot=100us
 [fika places-sidebar] rows=11 sections=2 elements=13 build=240us
-[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=11 icon_gpui=11 retained_interaction=0 drag_shell=11 section_gpui=2 scrollbar_canvas=1 visual_kind=chrome
-[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=11
+[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=11 icon_gpui=11 retained_interaction=0 drag_shell=0 section_gpui=2 scrollbar_canvas=1 visual_kind=chrome
+[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=0
 [fika places-row-visual] rows=11 painted=11 prepaint=18us paint=24us
 EOF
 
@@ -274,25 +274,21 @@ cat > "$tmpdir/default-retained-dnd-chrome.log" <<'EOF'
 [fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
 [fika places-view] source=11 visible=11 sections=2 snapshot=100us
 [fika places-sidebar] rows=11 sections=2 elements=13 build=240us
-[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=11 icon_gpui=11 retained_interaction=13 drag_shell=11 section_gpui=2 scrollbar_canvas=1 visual_kind=chrome event_policy=retained-dnd retained_probe_hitboxes=13
-[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=13 retained_probe_hitboxes=13 gpui_event_shells=1 drag_shells=11 drag_start_models=11 event_policy=retained-dnd retained_targeting=13 retained_dnd=13
+[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=11 icon_gpui=11 retained_interaction=13 drag_shell=0 section_gpui=2 scrollbar_canvas=1 visual_kind=chrome event_policy=retained-dnd retained_probe_hitboxes=13
+[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=13 retained_probe_hitboxes=13 gpui_event_shells=0 drag_shells=0 drag_start_models=11 event_policy=retained-dnd retained_targeting=13 retained_dnd=13
 [fika places-row-visual] rows=11 painted=11 prepaint=18us paint=24us
 EOF
 
 default_retained_dnd_summary="$("$analyzer" \
     --require-interaction-policy \
     --expect-custom-row-chrome-policy \
+    --expect-retained-event-policy \
     "$tmpdir/default-retained-dnd-chrome.log")"
 
 if [[ "$default_retained_dnd_summary" != *"max_retained_interaction=13"* ||
-    "$default_retained_dnd_summary" != *"max_retained_hitboxes=13 max_gpui_event_shells=1 max_gpui_row_section_event_shells=0 max_gpui_typed_dnd_payload_shells=1 max_drag_shells=11"* ||
+    "$default_retained_dnd_summary" != *"max_retained_hitboxes=13 max_gpui_event_shells=0 max_gpui_row_section_event_shells=0 max_gpui_typed_dnd_payload_shells=0 max_drag_shells=0"* ||
     "$default_retained_dnd_summary" != *"max_retained_targeting=13 max_retained_dnd=13 max_drag_start_models=11"* ]]; then
     echo "expected default retained-DnD Places chrome policy summary" >&2
-    exit 1
-fi
-
-if "$analyzer" --expect-retained-event-policy "$tmpdir/default-retained-dnd-chrome.log" >/dev/null 2>&1; then
-    echo "expected default retained-DnD mixed policy to fail the full retained event gate" >&2
     exit 1
 fi
 
@@ -301,8 +297,8 @@ cat > "$tmpdir/bad-retained-dnd-sidebar-leave-shells.log" <<'EOF'
 [fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
 [fika places-view] source=11 visible=11 sections=2 snapshot=100us
 [fika places-sidebar] rows=11 sections=2 elements=13 build=240us
-[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=11 icon_gpui=11 retained_interaction=13 drag_shell=11 section_gpui=2 scrollbar_canvas=1 visual_kind=chrome event_policy=retained-dnd retained_probe_hitboxes=13
-[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=13 retained_probe_hitboxes=13 gpui_event_shells=1 drag_shells=11 drag_start_models=11 gpui_sidebar_leave_shells=3 event_policy=retained-dnd retained_targeting=13 retained_dnd=13
+[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=11 icon_gpui=11 retained_interaction=13 drag_shell=0 section_gpui=2 scrollbar_canvas=1 visual_kind=chrome event_policy=retained-dnd retained_probe_hitboxes=13
+[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=13 retained_probe_hitboxes=13 gpui_event_shells=0 drag_shells=0 drag_start_models=11 gpui_sidebar_leave_shells=3 event_policy=retained-dnd retained_targeting=13 retained_dnd=13
 [fika places-row-visual] rows=11 painted=11 prepaint=18us paint=24us
 EOF
 
@@ -316,8 +312,8 @@ cat > "$tmpdir/bad-retained-dnd-row-section-shells.log" <<'EOF'
 [fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
 [fika places-view] source=11 visible=11 sections=2 snapshot=100us
 [fika places-sidebar] rows=11 sections=2 elements=13 build=240us
-[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=11 icon_gpui=11 retained_interaction=13 drag_shell=11 section_gpui=2 scrollbar_canvas=1 visual_kind=chrome event_policy=retained-dnd retained_probe_hitboxes=13
-[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=13 retained_probe_hitboxes=13 gpui_event_shells=14 gpui_row_section_event_shells=13 gpui_typed_dnd_payload_shells=1 drag_shells=11 drag_start_models=11 gpui_sidebar_leave_shells=0 event_policy=retained-dnd retained_targeting=13 retained_dnd=13
+[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=11 icon_gpui=11 retained_interaction=13 drag_shell=0 section_gpui=2 scrollbar_canvas=1 visual_kind=chrome event_policy=retained-dnd retained_probe_hitboxes=13
+[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=13 retained_probe_hitboxes=13 gpui_event_shells=13 gpui_row_section_event_shells=13 gpui_typed_dnd_payload_shells=0 drag_shells=0 drag_start_models=11 gpui_sidebar_leave_shells=0 event_policy=retained-dnd retained_targeting=13 retained_dnd=13
 [fika places-row-visual] rows=11 painted=11 prepaint=18us paint=24us
 EOF
 
@@ -331,8 +327,8 @@ cat > "$tmpdir/custom-row-chrome-with-shape-cache.log" <<'EOF'
 [fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
 [fika places-view] source=11 visible=11 sections=2 snapshot=100us
 [fika places-sidebar] rows=11 sections=2 elements=13 build=240us
-[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=11 icon_gpui=11 retained_interaction=0 drag_shell=11 section_gpui=2 scrollbar_canvas=1 visual_kind=chrome
-[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=11
+[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=11 icon_gpui=11 retained_interaction=0 drag_shell=0 section_gpui=2 scrollbar_canvas=1 visual_kind=chrome
+[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=0
 [fika places-row-visual] rows=11 painted=11 prepaint=18us paint=24us
 [fika places-row-shape-cache] hits=1 misses=0 evicted=0 entries=1
 EOF
@@ -347,8 +343,8 @@ cat > "$tmpdir/retained-event-default-visual.log" <<'EOF'
 [fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
 [fika places-view] source=11 visible=11 sections=2 snapshot=100us
 [fika places-sidebar] rows=11 sections=2 elements=13 build=240us
-[fika places-renderer-policy] rows=11 row_gpui=11 row_visual_layer=0 icon_gpui=11 retained_interaction=13 drag_shell=11 section_gpui=2 scrollbar_canvas=1
-[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=13 gpui_event_shells=0 drag_shells=11
+[fika places-renderer-policy] rows=11 row_gpui=11 row_visual_layer=0 icon_gpui=11 retained_interaction=13 drag_shell=0 section_gpui=2 scrollbar_canvas=1
+[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=13 gpui_event_shells=0 drag_shells=0
 EOF
 
 retained_default_summary="$("$analyzer" \
@@ -360,7 +356,7 @@ if [[ "$retained_default_summary" != *"max_retained_interaction=13"* ]]; then
     echo "expected retained event renderer policy summary" >&2
     exit 1
 fi
-if [[ "$retained_default_summary" != *"max_retained_hitboxes=13 max_gpui_event_shells=0 max_gpui_row_section_event_shells=0 max_gpui_typed_dnd_payload_shells=0 max_drag_shells=11"* ]]; then
+if [[ "$retained_default_summary" != *"max_retained_hitboxes=13 max_gpui_event_shells=0 max_gpui_row_section_event_shells=0 max_gpui_typed_dnd_payload_shells=0 max_drag_shells=0"* ]]; then
     echo "expected retained event interaction policy summary" >&2
     exit 1
 fi
@@ -370,8 +366,8 @@ cat > "$tmpdir/retained-event-custom-visual.log" <<'EOF'
 [fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
 [fika places-view] source=11 visible=11 sections=2 snapshot=100us
 [fika places-sidebar] rows=11 sections=2 elements=13 build=240us
-[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=0 icon_gpui=11 retained_interaction=13 drag_shell=11 section_gpui=0 scrollbar_canvas=1 visual_kind=text
-[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=13 gpui_event_shells=0 drag_shells=11
+[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=0 icon_gpui=11 retained_interaction=13 drag_shell=0 section_gpui=0 scrollbar_canvas=1 visual_kind=text
+[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=13 gpui_event_shells=0 drag_shells=0
 [fika places-row-visual] rows=11 painted=11 prepaint=20us paint=31us
 [fika places-row-shape-cache] hits=11 misses=0 evicted=0 entries=11
 EOF
@@ -394,8 +390,8 @@ cat > "$tmpdir/retained-event-mixed-gpui-shell.log" <<'EOF'
 [fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
 [fika places-view] source=11 visible=11 sections=2 snapshot=100us
 [fika places-sidebar] rows=11 sections=2 elements=13 build=240us
-[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 icon_gpui=11 retained_interaction=0 drag_shell=11 section_gpui=0 scrollbar_canvas=1
-[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=11
+[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 icon_gpui=11 retained_interaction=0 drag_shell=0 section_gpui=0 scrollbar_canvas=1
+[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=0
 [fika places-row-visual] rows=11 painted=11 prepaint=20us paint=31us
 [fika places-row-shape-cache] hits=11 misses=0 evicted=0 entries=11
 EOF
@@ -410,8 +406,8 @@ cat > "$tmpdir/retained-event-probe.log" <<'EOF'
 [fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
 [fika places-view] source=11 visible=11 sections=2 snapshot=100us
 [fika places-sidebar] rows=11 sections=2 elements=13 build=240us
-[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=11 icon_gpui=11 retained_interaction=0 drag_shell=11 section_gpui=2 scrollbar_canvas=1 visual_kind=chrome event_policy=retained-probe retained_probe_hitboxes=13
-[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 retained_probe_hitboxes=13 gpui_event_shells=13 drag_shells=11 event_policy=retained-probe
+[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=11 icon_gpui=11 retained_interaction=0 drag_shell=0 section_gpui=2 scrollbar_canvas=1 visual_kind=chrome event_policy=retained-probe retained_probe_hitboxes=13
+[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 retained_probe_hitboxes=13 gpui_event_shells=13 drag_shells=0 event_policy=retained-probe
 [fika places-event-probe] rows=11 sections=2 hitboxes=13 hovered=1 pointer=0 prepaint=40us paint=3us
 [fika places-row-visual] rows=11 painted=11 prepaint=20us paint=31us
 EOF
@@ -440,8 +436,8 @@ cat > "$tmpdir/retained-event-pointer.log" <<'EOF'
 [fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
 [fika places-view] source=11 visible=11 sections=2 snapshot=100us
 [fika places-sidebar] rows=11 sections=2 elements=13 build=240us
-[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=11 icon_gpui=11 retained_interaction=0 drag_shell=11 section_gpui=2 scrollbar_canvas=1 visual_kind=chrome event_policy=retained-pointer retained_probe_hitboxes=13
-[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 retained_probe_hitboxes=13 gpui_event_shells=13 drag_shells=11 event_policy=retained-pointer
+[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=11 icon_gpui=11 retained_interaction=0 drag_shell=0 section_gpui=2 scrollbar_canvas=1 visual_kind=chrome event_policy=retained-pointer retained_probe_hitboxes=13
+[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 retained_probe_hitboxes=13 gpui_event_shells=13 drag_shells=0 event_policy=retained-pointer
 [fika places-event-probe] rows=11 sections=2 hitboxes=13 hovered=1 pointer=1 prepaint=44us paint=5us
 [fika places-row-visual] rows=11 painted=11 prepaint=20us paint=31us
 EOF
@@ -466,8 +462,8 @@ cat > "$tmpdir/retained-event-targeting.log" <<'EOF'
 [fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
 [fika places-view] source=11 visible=11 sections=2 snapshot=100us
 [fika places-sidebar] rows=11 sections=2 elements=13 build=240us
-[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=11 icon_gpui=11 retained_interaction=13 drag_shell=11 section_gpui=2 scrollbar_canvas=1 visual_kind=chrome event_policy=retained-targeting retained_probe_hitboxes=13
-[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=13 retained_probe_hitboxes=13 gpui_event_shells=13 drag_shells=11 event_policy=retained-targeting retained_targeting=13
+[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=11 icon_gpui=11 retained_interaction=13 drag_shell=0 section_gpui=2 scrollbar_canvas=1 visual_kind=chrome event_policy=retained-targeting retained_probe_hitboxes=13
+[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=13 retained_probe_hitboxes=13 gpui_event_shells=13 drag_shells=0 event_policy=retained-targeting retained_targeting=13
 [fika places-event-probe] rows=11 sections=2 hitboxes=13 hovered=1 pointer=1 targeting=1 prepaint=46us paint=6us
 [fika places-row-visual] rows=11 painted=11 prepaint=20us paint=31us
 EOF
@@ -496,8 +492,8 @@ cat > "$tmpdir/bad-retained-targeting-hitboxes.log" <<'EOF'
 [fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
 [fika places-view] source=11 visible=11 sections=2 snapshot=100us
 [fika places-sidebar] rows=11 sections=2 elements=13 build=240us
-[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=11 icon_gpui=11 retained_interaction=13 drag_shell=11 section_gpui=2 scrollbar_canvas=1 visual_kind=chrome event_policy=retained-targeting retained_probe_hitboxes=13
-[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 retained_probe_hitboxes=13 gpui_event_shells=13 drag_shells=11 event_policy=retained-targeting retained_targeting=13
+[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=11 icon_gpui=11 retained_interaction=13 drag_shell=0 section_gpui=2 scrollbar_canvas=1 visual_kind=chrome event_policy=retained-targeting retained_probe_hitboxes=13
+[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 retained_probe_hitboxes=13 gpui_event_shells=13 drag_shells=0 event_policy=retained-targeting retained_targeting=13
 EOF
 
 if "$analyzer" --require-interaction-policy "$tmpdir/bad-retained-targeting-hitboxes.log" >/dev/null 2>&1; then
@@ -510,8 +506,8 @@ cat > "$tmpdir/retained-event-dnd.log" <<'EOF'
 [fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
 [fika places-view] source=11 visible=11 sections=2 snapshot=100us
 [fika places-sidebar] rows=11 sections=2 elements=13 build=240us
-[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=11 icon_gpui=11 retained_interaction=13 drag_shell=11 section_gpui=2 scrollbar_canvas=1 visual_kind=chrome event_policy=retained-dnd retained_probe_hitboxes=13
-[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=13 retained_probe_hitboxes=13 gpui_event_shells=1 drag_shells=11 event_policy=retained-dnd retained_targeting=13 retained_dnd=13
+[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=11 icon_gpui=11 retained_interaction=13 drag_shell=0 section_gpui=2 scrollbar_canvas=1 visual_kind=chrome event_policy=retained-dnd retained_probe_hitboxes=13
+[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=13 retained_probe_hitboxes=13 gpui_event_shells=0 drag_shells=0 event_policy=retained-dnd retained_targeting=13 retained_dnd=13
 [fika places-event-probe] rows=11 sections=2 hitboxes=13 hovered=1 pointer=1 targeting=1 dnd=1 prepaint=48us paint=7us
 [fika places-row-visual] rows=11 painted=11 prepaint=20us paint=31us
 EOF
@@ -520,9 +516,10 @@ dnd_summary="$("$analyzer" \
     --require-interaction-policy \
     --require-event-probe \
     --expect-custom-row-chrome-policy \
+    --expect-retained-event-policy \
     "$tmpdir/retained-event-dnd.log")"
 
-if [[ "$dnd_summary" != *"max_retained_hitboxes=13 max_gpui_event_shells=1 max_gpui_row_section_event_shells=0 max_gpui_typed_dnd_payload_shells=1 max_drag_shells=11 max_retained_probe_hitboxes=13 max_retained_targeting=13 max_retained_dnd=13"* ]]; then
+if [[ "$dnd_summary" != *"max_retained_hitboxes=13 max_gpui_event_shells=0 max_gpui_row_section_event_shells=0 max_gpui_typed_dnd_payload_shells=0 max_drag_shells=0 max_retained_probe_hitboxes=13 max_retained_targeting=13 max_retained_dnd=13"* ]]; then
     echo "expected retained dnd interaction policy summary" >&2
     exit 1
 fi
@@ -530,18 +527,13 @@ if [[ "$dnd_summary" != *"places_event_probe_frames=1 max_rows=11 max_sections=2
     echo "expected retained dnd event layer summary" >&2
     exit 1
 fi
-if "$analyzer" --expect-retained-event-policy "$tmpdir/retained-event-dnd.log" >/dev/null 2>&1; then
-    echo "expected retained dnd event layer to fail the retained event policy gate" >&2
-    exit 1
-fi
-
 cat > "$tmpdir/custom-row-visual-per-row.log" <<'EOF'
 [fika places-slots] rows=11 sections=2 entries=13 inserted=13 content=0 geometry=0 visual=0 unchanged=0 removed=0 project=25us
 [fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
 [fika places-view] source=11 visible=11 sections=2 snapshot=100us
 [fika places-sidebar] rows=11 sections=2 elements=13 build=240us
-[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 icon_gpui=11 retained_interaction=0 drag_shell=11 section_gpui=0 scrollbar_canvas=1
-[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=11
+[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 icon_gpui=11 retained_interaction=0 drag_shell=0 section_gpui=0 scrollbar_canvas=1
+[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=0
 [fika places-row-visual] rows=1 painted=1 prepaint=20us paint=31us
 [fika places-row-shape-cache] hits=11 misses=0 evicted=0 entries=11
 EOF
@@ -556,8 +548,8 @@ cat > "$tmpdir/custom-row-visual-missing-shape-cache.log" <<'EOF'
 [fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
 [fika places-view] source=11 visible=11 sections=2 snapshot=100us
 [fika places-sidebar] rows=11 sections=2 elements=13 build=240us
-[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 icon_gpui=11 retained_interaction=0 drag_shell=11 section_gpui=0 scrollbar_canvas=1
-[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=11
+[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 icon_gpui=11 retained_interaction=0 drag_shell=0 section_gpui=0 scrollbar_canvas=1
+[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=0
 [fika places-row-visual] rows=11 painted=11 prepaint=20us paint=31us
 EOF
 
@@ -570,8 +562,8 @@ cat > "$tmpdir/overflow.log" <<'EOF'
 [fika places-slots] rows=75 sections=3 entries=78 inserted=78 content=0 geometry=0 visual=0 unchanged=0 removed=0 project=90us
 [fika places-view] source=11 visible=75 sections=3 snapshot=600us
 [fika places-sidebar] rows=75 sections=3 elements=78 build=1400us
-[fika places-renderer-policy] rows=75 row_gpui=75 row_visual_layer=0 icon_gpui=75 retained_interaction=0 drag_shell=75 section_gpui=3 scrollbar_canvas=1
-[fika places-interaction-policy] rows=75 sections=3 row_target_decisions=75 section_target_decisions=3 retained_hitboxes=0 gpui_event_shells=78 drag_shells=75
+[fika places-renderer-policy] rows=75 row_gpui=75 row_visual_layer=0 icon_gpui=75 retained_interaction=0 drag_shell=0 section_gpui=3 scrollbar_canvas=1
+[fika places-interaction-policy] rows=75 sections=3 row_target_decisions=75 section_target_decisions=3 retained_hitboxes=0 gpui_event_shells=78 drag_shells=0
 [fika places-scrollbar] visible=1 max_scroll_y=1420 thumb_height=118 track_height=620
 [fika autosmoke] places start scenario=Overflow
 [fika places-slots] rows=75 sections=3 entries=78 inserted=0 content=0 geometry=0 visual=0 unchanged=78 removed=0 project=72us
@@ -600,8 +592,8 @@ cat > "$tmpdir/layout.log" <<'EOF'
 [fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
 [fika places-view] source=11 visible=11 sections=2 snapshot=100us
 [fika places-sidebar] rows=11 sections=2 elements=13 build=200us
-[fika places-renderer-policy] rows=11 row_gpui=11 row_visual_layer=0 icon_gpui=11 retained_interaction=0 drag_shell=11 section_gpui=2 scrollbar_canvas=1
-[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=11
+[fika places-renderer-policy] rows=11 row_gpui=11 row_visual_layer=0 icon_gpui=11 retained_interaction=0 drag_shell=0 section_gpui=2 scrollbar_canvas=1
+[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=0
 [fika autosmoke] places start scenario=Layout
 [fika autosmoke] places action=layout-initial width=220.0 visible=true
 [fika autosmoke] places action=layout-hide width=220.0 visible=false changed=true
@@ -628,8 +620,8 @@ cat > "$tmpdir/hit-test.log" <<'EOF'
 [fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
 [fika places-view] source=11 visible=11 sections=2 snapshot=100us
 [fika places-sidebar] rows=11 sections=2 elements=13 build=200us
-[fika places-renderer-policy] rows=11 row_gpui=11 row_visual_layer=0 icon_gpui=11 retained_interaction=0 drag_shell=11 section_gpui=2 scrollbar_canvas=1
-[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=11
+[fika places-renderer-policy] rows=11 row_gpui=11 row_visual_layer=0 icon_gpui=11 retained_interaction=0 drag_shell=0 section_gpui=2 scrollbar_canvas=1
+[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=0
 [fika places-interaction-geometry] rows=11 sections=2 entries=13 content_height=378 hit_tests=2 project=5us
 [fika autosmoke] places start scenario=HitTest
 [fika autosmoke] places hit-test label=retained-hit-test sample=row-before y=19.0 kind=Row zone=InsertBefore visible_index=0 insert_index=0 ok=true
@@ -657,8 +649,8 @@ cat > "$tmpdir/bad-hit-test.log" <<'EOF'
 [fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
 [fika places-view] source=11 visible=11 sections=2 snapshot=100us
 [fika places-sidebar] rows=11 sections=2 elements=13 build=200us
-[fika places-renderer-policy] rows=11 row_gpui=11 row_visual_layer=0 icon_gpui=11 retained_interaction=0 drag_shell=11 section_gpui=2 scrollbar_canvas=1
-[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=11
+[fika places-renderer-policy] rows=11 row_gpui=11 row_visual_layer=0 icon_gpui=11 retained_interaction=0 drag_shell=0 section_gpui=2 scrollbar_canvas=1
+[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=0
 [fika places-interaction-geometry] rows=11 sections=2 entries=13 content_height=378 hit_tests=2 project=5us
 [fika autosmoke] places start scenario=HitTest
 [fika autosmoke] places hit-test label=retained-hit-test sample=row-before y=19.0 kind=Row zone=InsertBefore visible_index=0 insert_index=0 ok=true
@@ -679,8 +671,8 @@ cat > "$tmpdir/retained-targeting-autosmoke.log" <<'EOF'
 [fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
 [fika places-view] source=11 visible=11 sections=2 snapshot=100us
 [fika places-sidebar] rows=11 sections=2 elements=13 build=200us
-[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=11 icon_gpui=11 retained_interaction=13 drag_shell=11 section_gpui=2 scrollbar_canvas=1 visual_kind=chrome event_policy=retained-targeting retained_probe_hitboxes=13
-[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=13 retained_probe_hitboxes=13 gpui_event_shells=13 drag_shells=11 event_policy=retained-targeting retained_targeting=13
+[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=11 icon_gpui=11 retained_interaction=13 drag_shell=0 section_gpui=2 scrollbar_canvas=1 visual_kind=chrome event_policy=retained-targeting retained_probe_hitboxes=13
+[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=13 retained_probe_hitboxes=13 gpui_event_shells=13 drag_shells=0 event_policy=retained-targeting retained_targeting=13
 [fika places-interaction-geometry] rows=11 sections=2 entries=13 content_height=378 hit_tests=2 project=5us
 [fika autosmoke] places start scenario=RetainedTargeting
 [fika autosmoke] places targeting label=retained-targeting sample=activation-row y=36.0 target=ActivationRow visible_index=0 group= activatable=true ok=true
@@ -710,8 +702,8 @@ cat > "$tmpdir/bad-retained-targeting-autosmoke.log" <<'EOF'
 [fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
 [fika places-view] source=11 visible=11 sections=2 snapshot=100us
 [fika places-sidebar] rows=11 sections=2 elements=13 build=200us
-[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=11 icon_gpui=11 retained_interaction=13 drag_shell=11 section_gpui=2 scrollbar_canvas=1 visual_kind=chrome event_policy=retained-targeting retained_probe_hitboxes=13
-[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=13 retained_probe_hitboxes=13 gpui_event_shells=13 drag_shells=11 event_policy=retained-targeting retained_targeting=13
+[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=11 icon_gpui=11 retained_interaction=13 drag_shell=0 section_gpui=2 scrollbar_canvas=1 visual_kind=chrome event_policy=retained-targeting retained_probe_hitboxes=13
+[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=13 retained_probe_hitboxes=13 gpui_event_shells=13 drag_shells=0 event_policy=retained-targeting retained_targeting=13
 [fika autosmoke] places start scenario=RetainedTargeting
 [fika autosmoke] places targeting label=retained-targeting sample=activation-row y=36.0 target=ContextRow visible_index=0 group= activatable=true ok=false
 [fika autosmoke] places targeting label=retained-targeting sample=context-row y=36.0 target=ContextRow visible_index=0 group= activatable=true ok=true
@@ -730,8 +722,8 @@ cat > "$tmpdir/retained-dnd-autosmoke.log" <<'EOF'
 [fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
 [fika places-view] source=11 visible=11 sections=2 snapshot=100us
 [fika places-sidebar] rows=11 sections=2 elements=13 build=200us
-[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=11 icon_gpui=11 retained_interaction=13 drag_shell=11 section_gpui=2 scrollbar_canvas=1 visual_kind=chrome event_policy=retained-dnd retained_probe_hitboxes=13
-[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=13 retained_probe_hitboxes=13 gpui_event_shells=1 drag_shells=11 event_policy=retained-dnd retained_targeting=13 retained_dnd=13
+[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=11 icon_gpui=11 retained_interaction=13 drag_shell=0 section_gpui=2 scrollbar_canvas=1 visual_kind=chrome event_policy=retained-dnd retained_probe_hitboxes=13
+[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=13 retained_probe_hitboxes=13 gpui_event_shells=0 drag_shells=0 event_policy=retained-dnd retained_targeting=13 retained_dnd=13
 [fika places-interaction-geometry] rows=11 sections=2 entries=13 content_height=378 hit_tests=2 project=5us
 [fika autosmoke] places start scenario=RetainedDnd
 [fika autosmoke] places dnd label=retained-dnd sample=path-row-body drag=path-list y=36.0 target=Place cursor=DropMenu ok=true
@@ -761,8 +753,8 @@ cat > "$tmpdir/bad-retained-dnd-autosmoke.log" <<'EOF'
 [fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
 [fika places-view] source=11 visible=11 sections=2 snapshot=100us
 [fika places-sidebar] rows=11 sections=2 elements=13 build=200us
-[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=11 icon_gpui=11 retained_interaction=13 drag_shell=11 section_gpui=2 scrollbar_canvas=1 visual_kind=chrome event_policy=retained-dnd retained_probe_hitboxes=13
-[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=13 retained_probe_hitboxes=13 gpui_event_shells=1 drag_shells=11 event_policy=retained-dnd retained_targeting=13 retained_dnd=13
+[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=11 icon_gpui=11 retained_interaction=13 drag_shell=0 section_gpui=2 scrollbar_canvas=1 visual_kind=chrome event_policy=retained-dnd retained_probe_hitboxes=13
+[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=13 retained_probe_hitboxes=13 gpui_event_shells=0 drag_shells=0 event_policy=retained-dnd retained_targeting=13 retained_dnd=13
 [fika autosmoke] places start scenario=RetainedDnd
 [fika autosmoke] places dnd label=retained-dnd sample=path-row-body drag=path-list y=36.0 target=Insert cursor=Copy ok=false
 [fika autosmoke] places dnd label=retained-dnd sample=path-row-before drag=path-list y=19.0 target=Insert cursor=Copy ok=true
@@ -783,8 +775,8 @@ cat > "$tmpdir/bad-layout.log" <<'EOF'
 [fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
 [fika places-view] source=11 visible=11 sections=2 snapshot=100us
 [fika places-sidebar] rows=11 sections=2 elements=13 build=200us
-[fika places-renderer-policy] rows=11 row_gpui=11 row_visual_layer=0 icon_gpui=11 retained_interaction=0 drag_shell=11 section_gpui=2 scrollbar_canvas=1
-[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=11
+[fika places-renderer-policy] rows=11 row_gpui=11 row_visual_layer=0 icon_gpui=11 retained_interaction=0 drag_shell=0 section_gpui=2 scrollbar_canvas=1
+[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=0
 [fika autosmoke] places start scenario=Layout
 [fika autosmoke] places action=layout-initial width=220.0 visible=true
 [fika autosmoke] places action=layout-hide width=220.0 visible=false changed=true
@@ -804,7 +796,7 @@ fi
 cat > "$tmpdir/missing-slots.log" <<'EOF'
 [fika places-view] source=11 visible=11 sections=2 snapshot=100us
 [fika places-sidebar] rows=11 sections=2 elements=13 build=200us
-[fika places-renderer-policy] rows=11 row_gpui=11 row_visual_layer=0 icon_gpui=11 retained_interaction=0 drag_shell=11 section_gpui=2 scrollbar_canvas=1
+[fika places-renderer-policy] rows=11 row_gpui=11 row_visual_layer=0 icon_gpui=11 retained_interaction=0 drag_shell=0 section_gpui=2 scrollbar_canvas=1
 EOF
 
 if "$analyzer" "$tmpdir/missing-slots.log" >/dev/null 2>&1; then
@@ -816,7 +808,7 @@ cat > "$tmpdir/no-unchanged.log" <<'EOF'
 [fika places-slots] rows=11 sections=2 entries=13 inserted=13 content=0 geometry=0 visual=0 unchanged=0 removed=0 project=25us
 [fika places-view] source=11 visible=11 sections=2 snapshot=100us
 [fika places-sidebar] rows=11 sections=2 elements=13 build=200us
-[fika places-renderer-policy] rows=11 row_gpui=11 row_visual_layer=0 icon_gpui=11 retained_interaction=0 drag_shell=11 section_gpui=2 scrollbar_canvas=1
+[fika places-renderer-policy] rows=11 row_gpui=11 row_visual_layer=0 icon_gpui=11 retained_interaction=0 drag_shell=0 section_gpui=2 scrollbar_canvas=1
 EOF
 
 if "$analyzer" "$tmpdir/no-unchanged.log" >/dev/null 2>&1; then
@@ -829,7 +821,7 @@ cat > "$tmpdir/bad-policy.log" <<'EOF'
 [fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
 [fika places-view] source=11 visible=11 sections=2 snapshot=100us
 [fika places-sidebar] rows=11 sections=2 elements=13 build=200us
-[fika places-renderer-policy] rows=11 row_gpui=10 row_visual_layer=1 icon_gpui=11 retained_interaction=1 drag_shell=11 section_gpui=2 scrollbar_canvas=1
+[fika places-renderer-policy] rows=11 row_gpui=10 row_visual_layer=1 icon_gpui=11 retained_interaction=1 drag_shell=0 section_gpui=2 scrollbar_canvas=1
 EOF
 
 if "$analyzer" --expect-current-gpui-policy "$tmpdir/bad-policy.log" >/dev/null 2>&1; then
@@ -847,8 +839,8 @@ cat > "$tmpdir/bad-interaction-policy.log" <<'EOF'
 [fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
 [fika places-view] source=11 visible=11 sections=2 snapshot=100us
 [fika places-sidebar] rows=11 sections=2 elements=13 build=200us
-[fika places-renderer-policy] rows=11 row_gpui=11 row_visual_layer=0 icon_gpui=11 retained_interaction=0 drag_shell=11 section_gpui=2 scrollbar_canvas=1
-[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=10 section_target_decisions=2 retained_hitboxes=1 gpui_event_shells=12 drag_shells=11
+[fika places-renderer-policy] rows=11 row_gpui=11 row_visual_layer=0 icon_gpui=11 retained_interaction=0 drag_shell=0 section_gpui=2 scrollbar_canvas=1
+[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=10 section_target_decisions=2 retained_hitboxes=1 gpui_event_shells=12 drag_shells=0
 EOF
 
 if "$analyzer" --require-interaction-policy "$tmpdir/bad-interaction-policy.log" >/dev/null 2>&1; then
@@ -861,8 +853,8 @@ cat > "$tmpdir/bad-drag-start-model-policy.log" <<'EOF'
 [fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
 [fika places-view] source=11 visible=11 sections=2 snapshot=100us
 [fika places-sidebar] rows=11 sections=2 elements=13 build=200us
-[fika places-renderer-policy] rows=11 row_gpui=11 row_visual_layer=0 icon_gpui=11 retained_interaction=0 drag_shell=11 section_gpui=2 scrollbar_canvas=1
-[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=11 drag_start_models=10
+[fika places-renderer-policy] rows=11 row_gpui=11 row_visual_layer=0 icon_gpui=11 retained_interaction=0 drag_shell=0 section_gpui=2 scrollbar_canvas=1
+[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=0 drag_start_models=10
 EOF
 
 if "$analyzer" --require-interaction-policy "$tmpdir/bad-drag-start-model-policy.log" >/dev/null 2>&1; then
@@ -875,8 +867,8 @@ cat > "$tmpdir/bad-interaction-geometry.log" <<'EOF'
 [fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
 [fika places-view] source=11 visible=11 sections=2 snapshot=100us
 [fika places-sidebar] rows=11 sections=2 elements=13 build=200us
-[fika places-renderer-policy] rows=11 row_gpui=11 row_visual_layer=0 icon_gpui=11 retained_interaction=0 drag_shell=11 section_gpui=2 scrollbar_canvas=1
-[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=11
+[fika places-renderer-policy] rows=11 row_gpui=11 row_visual_layer=0 icon_gpui=11 retained_interaction=0 drag_shell=0 section_gpui=2 scrollbar_canvas=1
+[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=0
 [fika places-interaction-geometry] rows=10 sections=2 entries=11 content_height=0 hit_tests=0 project=5us
 EOF
 
@@ -890,7 +882,7 @@ cat > "$tmpdir/missing-autosmoke.log" <<'EOF'
 [fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
 [fika places-view] source=11 visible=11 sections=2 snapshot=100us
 [fika places-sidebar] rows=11 sections=2 elements=13 build=200us
-[fika places-renderer-policy] rows=11 row_gpui=11 row_visual_layer=0 icon_gpui=11 retained_interaction=0 drag_shell=11 section_gpui=2 scrollbar_canvas=1
+[fika places-renderer-policy] rows=11 row_gpui=11 row_visual_layer=0 icon_gpui=11 retained_interaction=0 drag_shell=0 section_gpui=2 scrollbar_canvas=1
 EOF
 
 if "$analyzer" --require-autosmoke "$tmpdir/missing-autosmoke.log" >/dev/null 2>&1; then

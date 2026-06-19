@@ -2,10 +2,11 @@
 
 This document is the implementation plan for Track 3 in
 `docs/FULL_RETAINED_RENDERER_ROADMAP.md`. It covers event delivery only. It does
-not change the row renderer policy: Places row chrome is custom by default,
-while row text, icons, context menu rendering, DnD preview creation, typed drag
-payload delivery, and drag start remain on GPUI unless a later gate proves
-otherwise.
+not change the row renderer policy. Current status: Places full row visual,
+retained event delivery, typed DnD move/drop, and drag start are complete on
+the Fika GPUI fork. Older mixed-policy sections in this document are historical
+implementation notes and are superseded by the "Current State" and "TODO"
+sections below.
 
 ## Dolphin Boundary
 
@@ -24,8 +25,9 @@ The Fika equivalent is:
 - A retained event layer may deliver pointer and DnD events, but it must call
   the existing app methods for activation, context menus, drops, and cursor
   updates.
-- GPUI row shells stay only for drag start until a retained-hitbox typed-drag
-  API exists.
+- Drag start and typed DnD move/drop are registered on retained hitboxes through
+  the Fika GPUI fork. GPUI row shells must not be reintroduced as interaction
+  owners.
 
 ## Current State
 
@@ -35,42 +37,41 @@ Already implemented:
 - Retained row/section hit tests through `PlacesInteractionGeometry::hit_test_y()`.
 - Retained target-decision helpers for item/external path drops and place
   reordering.
-- Analyzer support for the explicit GPUI event-shell fallback, the current
-  retained-DnD mixed default, and the future full retained event policy.
+- Analyzer support for the explicit GPUI event-shell fallback and the current
+  full retained event policy.
 - An explicit `PlacesEventDeliveryPolicy`. The default is now `RetainedDnd`.
   `FIKA_PLACES_EVENT_DELIVERY_POLICY=gpui` remains the explicit fallback.
   `FIKA_PLACES_EVENT_DELIVERY_POLICY=retained-probe` only reports the
   row/section hitbox count that a future retained layer would need; it keeps
   `retained_hitboxes=0` and `gpui_event_shells=rows+sections`.
-- Default custom row chrome with GPUI text/icons, retained row/section
-  activation/context-menu/DnD target delivery, one sidebar-level GPUI typed DnD
-  payload shell, and GPUI row drag-start shells.
+- Default full custom row visual with retained row/section
+  activation/context-menu/DnD target delivery, retained typed payload
+  move/drop, and retained row drag start.
 
-Default mixed policy shape:
+Default policy shape:
 
 ```text
 event_policy=retained-dnd
 retained_hitboxes=rows+sections
 retained_interaction=rows+sections
-gpui_event_shells=1
-drag_shells=rows
-drag_start_models=rows
-```
-
-Full retained event policy shape:
-
-```text
-retained_hitboxes=rows+sections
-retained_interaction=rows+sections
 gpui_event_shells=0
-drag_shells=rows
+gpui_row_section_event_shells=0
+gpui_typed_dnd_payload_shells=0
+drag_shells=0
 drag_start_models=rows
 ```
 
-`drag_shells=rows` remains intentional. It is the GPUI typed drag-start
-boundary, not an event-delivery failure. `drag_start_models=rows` records that
-the payload, movable flag, export metadata, and preview model are owned by the
-Places drag module; the row shell should only call GPUI's `on_drag` API.
+`drag_start_models=rows` records that the payload, movable flag, export
+metadata, and preview model are owned by the Places drag module. The drag source
+registration is retained-hitbox based; `drag_shells` must stay zero.
+
+## Historical Implementation Notes
+
+The phase notes below record the migration slices that led to the current
+retained-hitbox implementation. Mentions of `gpui_event_shells=1`,
+`drag_shells=rows`, sidebar typed payload bridges, or row drag-start shells
+refer to pre-fork intermediate states unless a later note explicitly says
+otherwise.
 
 ## Retained Event Layer
 
@@ -500,58 +501,59 @@ rg -n "on_drag_move|on_drop|insert_hitbox|DragMoveEvent|DropEvent|ExternalPaths|
   retained-event policy gate.
 - [x] Add a retained sidebar event probe layer that can insert row/section
   hitboxes and report counts without changing behavior.
-- [~] Move hover/cursor/leave clearing to the retained layer. Current status:
-  `retained-pointer` moves pointer cursor ownership and active-drag leave
-  clearing behind an opt-in retained layer, while GPUI row/section shells still
-  own typed DnD move/drop delivery.
+- [x] Move hover/cursor/leave clearing to the retained layer. Current status:
+  retained-DnD owns pointer cursor ownership and active-drag leave clearing in
+  the default retained layer.
 - [x] Add unit coverage for content-local coordinate conversion with scroll
   offsets and section/row boundaries.
-- [~] Move activation/context-menu targeting to the retained layer. Current
+- [x] Move activation/context-menu targeting to the retained layer. Current
   status: `retained-targeting` owns row activation and row/section context menu
-  targeting, but the policy remains opt-in while typed DnD move/drop and
-  drag-start still need GPUI shells. A non-mutating targeting autosmoke now
-  covers activation-row, row context-menu, and section context-menu target
-  classification.
+  targeting, and the default retained-DnD policy includes those paths. A
+  non-mutating targeting autosmoke covers activation-row, row context-menu, and
+  section context-menu target classification.
 - [~] Add isolated DnD smoke for retained item/external/place drops. Current
   status: `FIKA_AUTOSMOKE_PLACES=dnd` proves retained path-list and place drag
   target decisions for row body, row edge, and section targets without mutating
   user Places. It intentionally does not execute destructive drops, so full
   isolated drop/reorder smoke remains open.
-- [~] Move drag-move/drop delivery to the retained layer. Current status:
-  `retained-dnd` owns row/section target lookup and drop dispatch behind one
-  sidebar-level GPUI typed drag shell. The remaining GPUI boundary is payload
-  delivery and drag-start, not per-row/section DnD target logic.
+- [x] Move drag-move/drop delivery to the retained layer. Current status:
+  `retained-dnd` owns typed payload move/drop through the retained sidebar
+  content hitbox; `gpui_typed_dnd_payload_shells=0`.
 - [x] Move Places drag-start source modeling out of the row shell. Current
-  status: `PlaceDragStartSource` and `install_place_drag_start_shell()` live in
-  `places/drag.rs`, and analyzer logs require `drag_start_models=rows`.
+  status: `PlaceDragStartSource` and `install_place_drag_start_hitbox()` live in
+  `places/drag.rs`, and analyzer logs require `drag_start_models=rows` with
+  `drag_shells=0`.
 - [x] Distinguish probe hitboxes from retained target-delivery hitboxes in
   policy logs. Current status: retained-targeting and retained-dnd report
   `retained_hitboxes=rows+sections`, while probe/pointer-only policies do not.
 - [x] Make renderer `retained_interaction` event-policy aware. Current status:
   retained-targeting and retained-dnd report rows+sections, probe/pointer keep
-  zero, and full retained-event policy still fails while `gpui_event_shells=1`.
+  zero, and full retained-event policy passes for retained-DnD while
+  `gpui_event_shells=0`.
 - [x] Add non-mutating retained targeting autosmoke and analyzer gate. Current
   status: `FIKA_AUTOSMOKE_PLACES=targeting` proves activation-row,
   context-row, and context-section target classification without changing app
   state or opening menus.
-- [x] Promote Places event delivery default to retained-DnD mixed policy.
+- [x] Promote Places event delivery default to retained-DnD policy.
   Current status: default logs show `event_policy=retained-dnd`,
-  `retained_hitboxes=rows+sections`, `gpui_event_shells=1`, and
-  `drag_start_models=rows`; explicit `gpui` remains the fallback.
+  `retained_hitboxes=rows+sections`, `gpui_event_shells=0`,
+  `drag_shells=0`, and `drag_start_models=rows`; explicit `gpui` remains the
+  fallback.
 - [x] Remove redundant root sidebar GPUI leave-clear shells from retained
   pointer policies. Current status: retained-pointer, retained-targeting, and
   retained-DnD report `gpui_sidebar_leave_shells=0`; GPUI/probe policies report
   `3`; analyzer fixtures reject retained-DnD logs that reintroduce them.
 - [x] Split remaining GPUI event-shell accounting by boundary type. Current
   status: retained-DnD reports `gpui_row_section_event_shells=0` and
-  `gpui_typed_dnd_payload_shells=1`, while fallback states report row/section
+  `gpui_typed_dnd_payload_shells=0`, while fallback states report row/section
   shells explicitly; analyzer fixtures reject retained-DnD logs that reintroduce
   row/section GPUI event shells.
 - [x] Remove GPUI row/section event callbacks from default target delivery.
-  Current status: retained-DnD reports `gpui_row_section_event_shells=0`; the
-  remaining full retained-event blocker is the single sidebar typed payload
-  bridge, not row/section activation, menu, or DnD target ownership.
-- [ ] Remove the sidebar-level GPUI typed DnD payload bridge after a retained
-  hitbox typed drag-move/drop API exists and the full retained-event analyzer
-  plus isolated DnD smoke pass.
-- [ ] Keep GPUI row drag-start shells until Track 4 solves typed drag start.
+  Current status: retained-DnD reports `gpui_row_section_event_shells=0`;
+  retained activation, menu, DnD target ownership, typed payload delivery, and
+  drag start are all on retained hitboxes.
+- [x] Remove the sidebar-level GPUI typed DnD payload bridge after adding the
+  Fika GPUI retained-hitbox typed drag-move/drop API. The full retained-event
+  analyzer now passes for retained-DnD.
+- [x] Remove GPUI row drag-start shells using the Fika GPUI retained-hitbox
+  typed drag API.

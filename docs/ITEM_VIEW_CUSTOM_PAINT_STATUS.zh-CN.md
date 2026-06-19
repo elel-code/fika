@@ -16,17 +16,23 @@ Places chrome 默认之后的当前执行路线图是
 | Compact/Icons 条目 model 和几何 | 保留 | `DirectoryModel`、可见快照、slot 池 | 当前路径无 |
 | Compact/Icons 基础背景、选择、悬停、放置色调、标签 | 已替换 | 自定义内容级绘制器 | 运行时性能和 DnD smoke 证据必须保持最新 |
 | Compact/Icons 缩略图图像 | 已替换 | 自定义图像绘制器，使用 GPUI `RetainAllImageCache` 加上保留同缩略图图像 | 挂起/失败仍复用保留图像或绘制缩略图后备 |
-| Compact/Icons MIME/主题图标图像 | 保留 model，可见集合级 hybrid renderer | 当前可见集合中任意主题图标 key 未 ready 时整组继续使用 GPUI `img()` fallback；全部 ready 后同一组切到 custom image layer 绘制 retained image key | 由 `--gate-hybrid-default-promotion` 守卫；`FIKA_GPUI_THEME_ICONS=1` 保留 GPUI baseline，`FIKA_CUSTOM_THEME_ICONS=1` 仍是 full custom 压力路径 |
+| Compact/Icons MIME/主题图标图像 | 默认 full custom image layer 已替换 | retained image layer 使用 GPUI `RetainAllImageCache -> RenderImage -> Window::paint_image`；`FIKA_GPUI_THEME_ICONS=1` 保留 GPUI `img()` baseline | 修改 image renderer policy 前必须有同场景 image A/B 证据 |
 | Compact/Icons 点击、菜单、悬停、光标和放置 hit testing | 已替换 | 保留 viewport/自定义 hitbox 加上活动条目拖拽窗口跟踪器 | 绘制器更改后仍需要运行时 DnD smoke |
-| Compact/Icons 拖拽启动 | 未替换 | GPUI `Div::on_drag` shell | 公共 GPUI 自定义元素拖拽启动 API 或经过审计的 Fika GPUI patch |
+| Compact/Icons 拖拽启动 | 已替换 | 通过 Fika GPUI fork 的 retained hitbox typed drag | 保持 `gpui_drag_shell=0` 且 DnD smoke 通过 |
 | Compact/Icons 重命名编辑器 | 未替换 | GPUI 编辑器叠加层 | 仅在 caret、选择、IME 和文本输入行为被覆盖后才重新审视 |
 | 详情行 model 和几何 | 保留 | 详情绘制快照和行布局投影 | 当前路径无 |
 | 详情行背景、图标、文本单元格、回收站列 | 已替换 | 自定义内容级绘制器 | 详情图标使用相同的缓存/初步图标策略；运行时详情性能和 DnD smoke 证据必须保持最新 |
 | 详情点击、菜单、导航、悬停、光标、放置 hit testing | 已替换 | 保留行 hit testing/controller 状态加上活动条目拖拽窗口跟踪器 | 绘制器更改后仍需要运行时 DnD smoke |
-| 详情拖拽启动 | 未替换 | GPUI `Div::on_drag` 行 shell | 相同的拖拽启动 API 或经过审计的 GPUI patch 门 |
-| Places 行和侧栏滚动条 | 保留 model/slot/目标决策状态，默认 full row visual 和 row/section target delivery 已替换 | 默认 `FIKA_PLACES_ROW_VISUAL_POLICY=full` 用一个 sidebar-level 自定义层绘制 background/drop/insert/trash、行标签和 Places 图标，同时 `retained-dnd` 拥有 activation/context-menu targeting/DnD target lookup/drop dispatch；Places 图标使用 retained `RetainAllImageCache` 加 `paint_image` 路径，并保留稳定 fallback；GPUI 仍提供一个 typed payload bridge 加 row drag-start shell；`gpui`、`chrome`、`text` fallback 仍可用 | 完整 retained Places 仍需要 typed payload 和 drag-start GPUI 边界移除 |
+| 详情拖拽启动 | 已替换 | 通过 Fika GPUI fork 的 retained row hitbox typed drag | 保持 `gpui_drag_shell=0` 且 Details DnD smoke 通过 |
+| Places 行和侧栏滚动条 | 保留 model/slot/目标决策状态，默认 full row visual、retained event delivery 和 typed DnD 已替换 | 默认 `FIKA_PLACES_ROW_VISUAL_POLICY=full` 用一个 sidebar-level 自定义层绘制 background/drop/insert/trash、行标签、section heading 和 Places 图标，同时 `retained-dnd` 拥有 activation/context-menu targeting/DnD target lookup/drop dispatch；Places 图标使用 retained `RetainAllImageCache` 加 `paint_image` 路径，并保留稳定 fallback；drag start 和 typed payload delivery 使用 Fika GPUI fork 的 retained hitbox；`gpui`、`chrome`、`text` fallback 仍可用 | 保持 `gpui_event_shells=0`、`gpui_typed_dnd_payload_shells=0`、`drag_shells=0` 且 retained-event smoke 通过 |
 
-实际状态是：条目视图静态视觉和大多数应用侧 controller 路径已迁移到保留/自定义绘制架构。拖拽启动和重命名仍然是 GPUI 渲染器/平台契约边界。Places 现在默认使用自定义 full row visual 层加 retained-DnD row/section target delivery，因此行标签和行图标默认都不再是 GPUI text/image 子元素。Places 图标绘制复用 GPUI `img()` 高效的底层机制：缓存后的 `RenderImage` 通过 `window.paint_image` 提交，retained cache 在 pending reload 期间保留已有真实 image。剩余 Places GPUI 边界是 sidebar typed DnD payload bridge 和 row drag-start shell。
+实际状态是：条目视图静态视觉、image painting、hit testing、drop routing 和 drag start
+都已迁移到保留/自定义绘制架构。重命名仍然是 GPUI editor/platform-contract 边界。
+Places 现在默认使用自定义 full row visual 层加 retained-DnD row/section target delivery、
+typed payload delivery 和 drag start，因此行标签、section heading、行图标和 DnD
+交互默认都不需要 GPUI row 子元素。Places 图标绘制复用 GPUI `img()` 高效的底层机制：
+缓存后的 `RenderImage` 通过 `window.paint_image` 提交，retained cache 在 pending reload
+期间保留已有真实 image。
 
 ## 证据锚点
 
@@ -36,9 +42,12 @@ Places chrome 默认之后的当前执行路线图是
 - Compact/Icons 静态视觉绘制器：`src/ui/file_grid/painter.rs`
 - 保留交互/hitbox 层：`src/ui/file_grid/interaction.rs`
 - 保留条目/详情绘制 slot 状态：`src/ui/file_grid/paint_slots.rs`
-- 编辑器边界（重命名仍为 GPUI 编辑器叠加层）：`src/ui/file_grid/item_shell.rs`
+- Compact/Icons retained item hitbox/DnD 边界：
+  `src/ui/file_grid/interaction.rs`、`src/ui/file_grid/dnd.rs`
 - 详情布局投影和行快照：`src/ui/file_grid/details.rs`
-- 详情 shell 边界（拖拽启动）：`src/ui/file_grid/details_shell.rs`
+- Details retained row hitbox/DnD 边界：
+  `src/ui/file_grid/interaction.rs`、`src/ui/file_grid/dnd.rs`
+- 编辑器边界（重命名仍为 GPUI 编辑器叠加层）：`src/ui/file_grid/rename_overlay.rs`
 - 性能测量门和基线：`scripts/analyze-item-view-perf.sh`
 - 渲染器决策日志：`docs/ITEM_VIEW_RENDERER_DECISIONS.md`
 - Places 渲染器计划和基线：`docs/PLACES_RENDERER_PLAN.md`
@@ -103,15 +112,14 @@ Places chrome 默认之后的当前执行路线图是
 `StatefulInteractiveElement::on_drag` 暴露，它从交互元素 hitbox 构造类型化拖拽预览。
 GPUI 自定义元素可以使用 `Window::insert_hitbox()` 插入 hitbox，并可以通过
 `Window::on_mouse_event()` 观察鼠标事件，但没有公共 API 从任意保留绘制器 hitbox
-启动类型化拖拽。`App::has_active_drag()` 仅是已启动拖拽的观察器。因此实际边界不变：
-条目、详情和 Places 拖拽启动 shell 保持，直到 GPUI 暴露该钩子或 Fika 有意携带小型经过审计的
-patch。
+启动类型化拖拽。Fika 现在有意携带小型经过审计的 GPUI patch，并通过 retained hitbox
+注册条目、详情和 Places 的拖拽启动；这些路径不再需要 GPUI row/item drag-start shell。
 
 现在 shell 仅是拖拽启动边界。Pane 内部条目拖拽悬停不得依赖 GPUI 每元素 `on_drag_move`；运行时证据显示自拖拽可以在没有后续元素拖拽移动回调的情况下发出 `item-start`。Fika 通过保留交互层安装的窗口鼠标监听器跟踪活动条目拖拽，然后将窗口位置通过相同的保留 pane hit-test 路由，该 hit-test 由 Places 和外部放置使用。
 
 已接受的后备是拖拽预览重绘路径。GPUI 可能在指针移动时继续重绘拖拽预览，即使它不传递底层 pane 在同窗口条目拖拽中的拖拽移动回调。因此 Fika 使用预览渲染 pass 仅作为时钟来查询当前窗口鼠标位置并运行相同的保留 hit test。有效的 smoke 日志可以仅显示 `active-item-move via=preview`；所需信号是移动在放置前到达 `kind=Some(Directory)` 并且当光标在其上时目录条目高亮。
 
-2026-06-17 运行时追踪确认了这一确切路径：pane 自拖拽首先报告 `kind=Some(Pane)`，然后越过目录并报告 `kind=Some(Directory) changed=true` 通过 `via=preview`，无需每条目 `on_drag_move`。这意味着已接受的架构是保留 hit-testing 加上预览驱动 tick，直到 GPUI 暴露公共保留拖拽启动/移动 API 以替换剩余的 shell 边界。
+2026-06-17 运行时追踪确认了这一确切路径：pane 自拖拽首先报告 `kind=Some(Pane)`，然后越过目录并报告 `kind=Some(Directory) changed=true` 通过 `via=preview`，无需每条目 `on_drag_move`。当前已接受的架构是 retained hit-testing、retained hitbox drag start，加上预览驱动 tick；Analyzer gate 必须保持 `gpui_drag_shell=0`。
 
 ### R4：评估重命名边界
 
@@ -121,17 +129,16 @@ patch。
 
 ### R5：单独评估 Places 渲染器
 
-Places 是独立于 item-view 的渲染器决策。当前已接受的步骤是 Dolphin 对齐的
-chrome 拆分：默认自定义层绘制 row background/drop/insert/trash 状态，而 GPUI
-仍负责行文本/图标、sidebar typed payload bridge 和 drag-start shell；retained-DnD
-event layer 已经拥有 row/section activation、context-menu targeting、DnD target lookup、
-drop dispatch 和 sidebar leave clearing。
+Places 是独立于 item-view 的渲染器决策。当前默认已经是 Dolphin 对齐的 full path：
+默认自定义层绘制 row background/drop/insert/trash、标签、section heading 和图标；
+retained-DnD event layer 拥有 row/section activation、context-menu targeting、DnD
+target lookup、typed payload delivery、drop dispatch、sidebar leave clearing 和 drag start。
 
 继续扩展之前：
 
 - 保留滚动、重排、外部放置、条目放置、设备条目、隐藏 section 和右键菜单的
   GPUI fallback 基线
-- 在移除剩余 typed payload bridge 前保持 retained Places event-delivery smoke 最新
+- 保持 retained Places event-delivery smoke 最新，并要求 `--expect-retained-event-policy`
 - 只有在 retained/static cache 路径达到或超过 GPUI 时，才把文本或图标迁入自定义绘制
 
 `FIKA_CUSTOM_PLACES_ROWS=1` 仍是 opt-in full-text 基准表面。溢出证据通过
@@ -152,17 +159,16 @@ Places 作为 pane 放置悬停的行为参考仍然有用：将 Place 拖到 pa
 - Compact/Icons 使用可见 slot id 和保留绘制快照
 - 详情使用行绘制快照和形状缓存
 - 图像和文本形状缓存是 pane 本地且按 slot/内容键控的
-- 渲染器策略日志证明哪些表面保持为 GPUI shell
+- 渲染器策略日志证明哪些 fallback 表面仍由 GPUI-backed 路径承担
 
 当前条目视图复用已经遵循这个所有权规则。`VisibleItemSlotPool`
 将 `ItemId` 映射到 pane 本地 `slot_id`，通过有界 free-list 回收离屏
 slot，并在原始快照变成渲染快照之前分配这些 slot。随后
 `ItemPaintSlotCache` 按 `slot_id` 保留 Compact/Icons 的绘制内容、几何和
-视觉状态；详情按 `ItemId` 保留行绘制状态。GPUI id 仍然存在于剩余的
-shell 表面，但它们是保留 identity 的消费者，不是条目复用的来源。例如
-`item_shell.rs` 使用 `("item-slot", slot_id)`，GPUI 主题图标 image 元素也
-只用 `slot_id` 稳定当前 GPUI 渲染器表面；可复用条目状态仍然属于 slot 池
-和 paint-slot cache。
+视觉状态；详情按 `ItemId` 保留行绘制状态。GPUI id 可能仍存在于明确的
+fallback/baseline 表面，但它们是保留 identity 的消费者，不是条目复用的来源。
+Retained hitbox 和 full custom image layer 消费 `slot_id`/`ItemId` 状态；可复用条目状态
+仍然属于 slot 池和 paint-slot cache。
 
 证据锚点是保留测试：
 `visible_item_slot_pool_reuses_offscreen_slots`、
@@ -175,9 +181,9 @@ paint-slot 内容/几何/视觉变化测试，以及运行时
 条目的日志，并汇总 inserted、content、geometry、visual、unchanged、removed
 和 entries 最大值。`--expect-retained-item-policy` 是配套 renderer-policy 门：
 基础视觉必须覆盖每个条目的保留表面，保留交互加重命名叠加层必须覆盖每个
-条目，剩余 GPUI 拖拽/image 边界必须在策略计数中保持显式。
+条目，GPUI image baseline 和 rename 边界必须在策略计数中保持显式。
 
-此目标可以在拖拽启动和重命名保持在 GPUI 上的同时推进。池边界是保留条目/行状态，而非声称今天每个渲染器都是自定义绘制的。
+此目标现在要求拖拽启动保持 retained hitbox 路径；重命名仍保持在 GPUI 上。池边界是保留条目/行状态，而非声称今天每个渲染器都是自定义绘制的。
 
 ### R7：完整转换执行顺序
 
@@ -185,8 +191,8 @@ paint-slot 内容/几何/视觉变化测试，以及运行时
 
 1. 在 Dolphin 对齐的缩放图标视觉更新后冻结当前桌面会话证据。使用 `~/Downloads` 测试普通 MIME/缩略图行为，`/etc` 测试大型混合目录滚动，以及 `FIKA_DEBUG_DND=1` 测试 pane 自拖拽悬停。
 2. 在更改渲染器表面之前用证据更新 `docs/ITEM_VIEW_RENDERER_DECISIONS.md`。不要将通过的单元测试视为 DnD、调整大小、全屏或缩放视觉稳定性的足够证据。
-3. 从 GPUI 源或经过审计的本地 patch 解决拖拽启动平台边界。仅在保留 hitbox 可以在不丢失 payload、预览、光标偏移或外部放置行为的情况下启动拖拽后，才移除条目/详情拖拽 shell。
-4. 将 Places 视为其自己的迁移。它需要 GPUI 基线和一个 Places 特定的保留行绘制器计划，才能进行任何自定义绘制切换。
+3. 保持 Fika GPUI retained-hitbox typed DnD patch 紧跟 upstream。条目/详情/Places drag start 必须保持 retained-hitbox 路径，且不丢失 payload、预览、光标偏移或外部放置行为。
+4. 将 Places 视为其自己的迁移；默认 full row visual 和 retained-DnD 已完成，后续只在保留 GPUI/chrome/text fallback 基线的前提下调整。
 5. 在自定义编辑器覆盖焦点、caret hit testing、UTF-8 选择、验证、提交/取消、Tab 重命名下一个和 IME 之前，保持重命名为 GPUI 文本编辑边界。
 6. 继续收紧复用池证据：普通条目视图帧应显示保留视觉/图像/文本/交互所有权，仅保留显式接受的 GPUI 平台边界。
 
@@ -199,8 +205,8 @@ paint-slot 内容/几何/视觉变化测试，以及运行时
 1. **证据轨道**：继续刷新 `~/Downloads` 和 `/etc` 的桌面会话日志，包括调整大小、全屏、滚动、缩放、模式切换和 DnD。这些日志决定渲染器是否保持自定义绘制，而非仅凭架构偏好。对于图像闪烁和缩放尺寸调查，在更改当前图像渲染器之前，包括 `a3f5b0f` 的历史 GPUI 图像基线和转换检查点 `d497593`/`8d1198f`/`36da130`/`b0cac9a`。
 2. **绘制器轨道**：继续仅在绘制器消费保留快照且能匹配 Dolphin widget 行为的地方将视觉工作移入内容级绘制器。下一个绘制器工作是图像冷加载/缩放路径的稳定化和测量，而非盲目添加新的视觉表面。
 3. **Controller 轨道**：保持点击、菜单、悬停、光标、选择、pane 放置、条目放置和外部放置通过保留 viewport hit testing 路由。GPUI 每条目回调仅是临时的平台桥梁。
-4. **Shell 边界轨道**：仅在公共 GPUI 自定义元素拖拽启动 API 或经过审计的本地 GPUI patch 存在后才移除拖拽启动 shell。在行为矩阵覆盖文本输入和 IME 之前保持重命名在 GPUI 上。
-5. **Places 轨道**：将 Places 视为单独的渲染器迁移。其 model 和 DnD 状态可以先保留，但 GPUI 渲染器保持，直到 Places 特定的基线和绘制器设计被记录。
+4. **Shell 边界轨道**：通过 Fika GPUI retained-hitbox typed DnD patch 将 GPUI DnD shell 计数保持为 0。在行为矩阵覆盖文本输入和 IME 之前保持重命名在 GPUI 上。
+5. **Places 轨道**：将 Places 视为单独的渲染器迁移。默认 full row visual、retained event delivery 和 typed DnD 已完成；后续维护 fallback baseline 和 retained-event gate。
 6. **所有权轨道**：继续在行为保持时将编排从 `src/main.rs` 提取到 Dolphin 对齐的文件网格模块。这包括角色调度移交、运行时证据助手，以及最终的 shell 边界所有权。
 
 这是"完全转换"的实际含义：每个条目视图行为应由保留 model/布局/controller/painter 状态拥有，而任何剩余的 GPUI 渲染器是具有证据和移除门的显式平台边界。

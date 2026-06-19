@@ -16,26 +16,26 @@ The active post-Places-chrome execution roadmap is
 | Compact/Icons item model and geometry | retained | `DirectoryModel`, visible snapshots, slot pools | none for current path |
 | Compact/Icons base background, selection, hover, drop tint, labels | replaced | custom content-level painter | runtime perf and DnD smoke evidence must stay current |
 | Compact/Icons thumbnail images | replaced | custom image painter using GPUI `RetainAllImageCache` plus retained same-thumbnail images | pending/failure still reuses retained images or paints thumbnail fallback |
-| Compact/Icons MIME/theme-icon images | retained model, visible-cohort hybrid renderer | GPUI `img()` fallback while any visible theme-icon key is not ready, then a cohort handoff to the custom image layer for the ready retained image keys | guarded by `--gate-hybrid-default-promotion`; `FIKA_GPUI_THEME_ICONS=1` keeps the GPUI baseline and `FIKA_CUSTOM_THEME_ICONS=1` remains the full custom stress path |
+| Compact/Icons MIME/theme-icon images | replaced by default full custom image layer | retained image layer using GPUI `RetainAllImageCache -> RenderImage -> Window::paint_image`; `FIKA_GPUI_THEME_ICONS=1` remains the GPUI `img()` baseline | same-scenario image A/B evidence is required before changing image renderer policy |
 | Compact/Icons click, menu, hover, cursor, and drop hit testing | replaced | retained viewport/custom hitboxes plus active item-drag window tracker | runtime DnD smoke still required after painter changes |
-| Compact/Icons drag start | not replaced | GPUI `Div::on_drag` shell | public GPUI custom-element drag-start API or audited Fika GPUI patch |
+| Compact/Icons drag start | replaced | retained hitbox typed drag through the Fika GPUI fork | keep `gpui_drag_shell=0` and DnD smoke passing |
 | Compact/Icons rename editor | not replaced | GPUI editor overlay | only revisit after caret, selection, IME, and text input behavior are covered |
 | Details row model and geometry | retained | Details paint snapshots and row layout projection | none for current path |
 | Details row backgrounds, icons, text cells, Trash columns | replaced | custom content-level painter | Details icons use the same cached/preliminary icon policy; runtime Details perf and DnD smoke evidence must stay current |
 | Details click, menu, navigation, hover, cursor, drop hit testing | replaced | retained row hit testing/controller state plus active item-drag window tracker | runtime DnD smoke still required after painter changes |
-| Details drag start | not replaced | GPUI `Div::on_drag` row shell | same drag-start API or audited GPUI patch gate |
-| Places rows and sidebar scrollbar | retained model/slot/target-decision state, default full row visual and row/section target delivery replaced | Default `FIKA_PLACES_ROW_VISUAL_POLICY=full` paints background/drop/insert/trash, row labels, and Places icons in one sidebar-level custom layer while `retained-dnd` owns activation/context-menu targeting/DnD target lookup/drop dispatch; Places icons use a retained `RetainAllImageCache` plus `paint_image` path with stable fallback; GPUI still provides one typed payload bridge plus row drag-start shells; `gpui`, `chrome`, and `text` fallbacks remain available | full retained Places still needs typed payload and drag-start GPUI boundary removal |
+| Details drag start | replaced | retained row hitbox typed drag through the Fika GPUI fork | keep `gpui_drag_shell=0` and Details DnD smoke passing |
+| Places rows and sidebar scrollbar | retained model/slot/target-decision state, default full row visual, retained event delivery, and typed DnD replaced | Default `FIKA_PLACES_ROW_VISUAL_POLICY=full` paints background/drop/insert/trash, row labels, section headings, and Places icons in one sidebar-level custom layer while `retained-dnd` owns activation/context-menu targeting/DnD target lookup/drop dispatch; Places icons use a retained `RetainAllImageCache` plus `paint_image` path with stable fallback; drag start and typed payload delivery use retained hitboxes from the Fika GPUI fork; `gpui`, `chrome`, and `text` fallbacks remain available | keep `gpui_event_shells=0`, `gpui_typed_dnd_payload_shells=0`, `drag_shells=0`, and retained-event smoke passing |
 
-The practical state is: item-view static visuals and most app-side controller
-paths have moved to retained/custom-painted architecture. Drag-start and rename
-remain GPUI renderer/platform-contract boundaries. Places now defaults to a
-custom full row visual layer plus retained-DnD row/section target delivery, so
-row labels and row icons are no longer GPUI text/image child elements in the
-default path. Places icon painting uses the same underlying GPUI image mechanism
-that makes `img()` fast: cached `RenderImage` data is submitted through
-`window.paint_image`, while the retained cache keeps a real image available
-across pending reloads. The remaining Places GPUI boundaries are the sidebar
-typed DnD payload bridge and row drag-start shells.
+The practical state is: item-view static visuals, image painting, hit testing,
+drop routing, and drag start have moved to the retained/custom-painted
+architecture. Rename remains a GPUI editor/platform-contract boundary. Places
+now defaults to a custom full row visual layer plus retained-DnD row/section
+target delivery, typed payload delivery, and drag start, so row labels, section
+headings, row icons, and DnD interaction no longer require GPUI row children in
+the default path. Places icon painting uses the same underlying GPUI image
+mechanism that makes `img()` fast: cached `RenderImage` data is submitted
+through `window.paint_image`, while the retained cache keeps a real image
+available across pending reloads.
 
 ## Evidence Anchors
 
@@ -48,9 +48,11 @@ typed DnD payload bridge and row drag-start shells.
 - File icon cache and background resolve policy: `src/ui/icons/cache.rs`,
   `src/ui/file_grid/icon_work.rs`, and
   `RawFileGridSnapshot::queue_file_icon_resolve_candidates`
-- Compact/Icons transparent item shell boundary: `src/ui/file_grid/item_shell.rs`
+- Compact/Icons retained item hitbox/DnD boundary:
+  `src/ui/file_grid/interaction.rs`, `src/ui/file_grid/dnd.rs`
 - Details visual painter: `src/ui/file_grid/details_visual.rs`
-- Details transparent row shell boundary: `src/ui/file_grid/details_shell.rs`
+- Details retained row hitbox/DnD boundary:
+  `src/ui/file_grid/interaction.rs`, `src/ui/file_grid/dnd.rs`
 - GPUI rename overlay boundary: `src/ui/file_grid/rename_overlay.rs`
 - Shared visual style and item identity helpers: `src/ui/file_grid/style.rs`
 - File-grid root API snapshot/props/viewport types: `src/ui/file_grid/types.rs`
@@ -150,14 +152,14 @@ the render/prepaint path. Read-ahead and offscreen items remain scheduler-owned.
 Image-backed work follows the same visual stability rule. Thumbnail probe
 success and failure remain model roles, and the thumbnail paint layer keeps a
 real decoded thumbnail through transient GPUI image-cache misses whenever the
-semantic source still matches. MIME/theme icons now default to hybrid: the GPUI
-`img()` element remains the fallback while the current retained image key is not
-ready, and ready keys paint through the custom image layer. In either renderer,
-theme icon decoding stays on GPUI's image-cache path; render/prepaint code must
-not synchronously read or decode theme icon files. Thumbnails are retained only
-by exact thumbnail path and continue to use contained image bounds. Thumbnail
-fallback icons are still painted when no real image exists yet or the semantic
-source changed.
+semantic source still matches. MIME/theme icons now default to the full custom
+image layer over the retained image model; `FIKA_GPUI_THEME_ICONS=1` remains the
+same-scenario GPUI `img()` baseline. In either renderer, theme icon decoding
+stays on GPUI's image-cache path; render/prepaint code must not synchronously
+read or decode theme icon files. Thumbnails are retained only by exact
+thumbnail path and continue to use contained image bounds. Thumbnail fallback
+icons are still painted when no real image exists yet or the semantic source
+changed.
 
 The immediate non-GUI-safe work is to freeze fresh runtime evidence after the
 Dolphin-aligned zoom/icon visual update, then execute the P15 transition order.
@@ -167,20 +169,14 @@ modules.
 
 ### R3: Resolve Drag-Start Boundary
 
-Do not remove the remaining GPUI drag-start shells until one of these is true:
+The drag-start boundary is resolved through the Fika GPUI fork. Keep these as
+maintenance rules:
 
-- GPUI exposes a public custom-element drag-start API.
-- Fika carries a small audited GPUI patch that exposes drag start from retained
-  hitboxes, with runtime DnD evidence.
-
-Removing the shell before this gate would make the architecture less reliable,
-even if it looks closer to full custom paint.
-
-Current source audit, using GPUI `0.2.2` from Zed commit
-`69b602c797a62f09318916d24a98c930533fbdc8`, keeps this gate closed. Drag
-initiation is exposed through `Interactivity::on_drag` /
-`StatefulInteractiveElement::on_drag` in `crates/gpui/src/elements/div.rs`,
-which constructs the typed drag preview from an interactive element hitbox.
+- Fika pins `gpui` and `gpui_platform` to the fork revision
+  `572d53326f722e5634647b2276c42069d6b5b63d`.
+- Item, Details, and Places drag start must remain registered from retained
+  hitboxes, not layout-owning GPUI row/item `Div`s.
+- Analyzer gates must keep `gpui_drag_shell=0`.
 GPUI custom elements can insert hitboxes with `Window::insert_hitbox()` and can
 observe mouse events with `Window::on_mouse_event()`, but there is no public API
 that starts a typed drag from an arbitrary retained painter hitbox.
@@ -224,19 +220,19 @@ The concrete behavior matrix and Dolphin source comparison live in
 
 ### R5: Evaluate Places Renderer Separately
 
-Places is a separate renderer decision from item-view. The current accepted
-step is the Dolphin-aligned chrome split: the default custom layer paints row
-background/drop/insert/trash state, while the retained-DnD event layer owns
-row/section activation, context-menu targeting, DnD target lookup, drop
-dispatch, and sidebar leave clearing. GPUI still owns row text/icons, the
-sidebar typed payload bridge, and drag-start shells.
+Places is a separate renderer decision from item-view, but the current default
+is now the full Dolphin-aligned path: the custom layer paints row
+background/drop/insert/trash state, labels, section headings, and icons, while
+the retained-DnD event layer owns row/section activation, context-menu
+targeting, DnD target lookup, typed payload delivery, drop dispatch, sidebar
+leave clearing, and drag start.
 
 Before expanding it:
 
 - keep a GPUI fallback baseline for scroll, reorder, external drop, item drop,
   device entries, hidden sections, and context menus
-- keep the retained Places event-delivery smoke current before removing the
-  remaining typed payload bridge
+- keep the retained Places event-delivery smoke current and require
+  `--expect-retained-event-policy`
 - only move text or icons into custom painting after a retained/static cache
   path beats or matches GPUI
 
@@ -263,18 +259,17 @@ owned outside GPUI child identity:
 - Compact/Icons use visible slot ids and retained paint snapshots
 - Details use row paint snapshots and shape caches
 - image and text shaping caches are pane-local and slot/content keyed
-- renderer-policy logs prove which surfaces remain GPUI shells
+- renderer-policy logs prove which fallback surfaces remain GPUI-backed
 
 Current item-view reuse already follows that ownership rule. `VisibleItemSlotPool`
 maps `ItemId` to a pane-local `slot_id`, recycles offscreen slot ids through a
 bounded free list, and assigns those slots before raw snapshots become render
 snapshots. `ItemPaintSlotCache` then retains Compact/Icons paint content,
 geometry, and visual state by `slot_id`; Details retains row paint state by
-`ItemId`. GPUI ids still exist for the remaining shell surfaces, but they are
-consumers of retained identity, not the source of item reuse. For example,
-`item_shell.rs` uses `("item-slot", slot_id)` and the GPUI theme-icon image
-element uses `slot_id` only to stabilize the current GPUI renderer surface,
-while the reusable item state remains in the slot pool and paint-slot cache.
+`ItemId`. GPUI ids may still exist for explicit fallback/baseline surfaces, but
+they are consumers of retained identity, not the source of item reuse. Retained
+hitboxes and the full custom image layer consume `slot_id`/`ItemId` state while
+the reusable item state remains in the slot pool and paint-slot cache.
 
 The evidence anchors are the retained tests:
 `visible_item_slot_pool_reuses_offscreen_slots`,
@@ -307,10 +302,9 @@ The next transition work must follow this order:
 2. Update `docs/ITEM_VIEW_RENDERER_DECISIONS.md` with evidence before changing
    a renderer surface. Do not treat a passing unit test as enough evidence for
    DnD, resize, fullscreen, or zoom visual stability.
-3. Resolve the drag-start platform boundary from GPUI source or an audited
-   local patch. Remove item/details drag shells only after retained hitboxes can
-   start drags without losing payload, preview, cursor offset, or external drop
-   behavior.
+3. Keep the Fika GPUI retained-hitbox typed DnD patch current with upstream.
+   Item/details/Places drag start must stay retained-hitbox based without
+   losing payload, preview, cursor offset, or external drop behavior.
 4. Treat Places as its own migration. It needs a GPUI baseline and a
    Places-specific retained row painter plan before any custom-paint switch.
 5. Keep rename as a GPUI text-editing boundary until a custom editor covers
@@ -343,9 +337,9 @@ execution must stay split into evidence-backed tracks:
 3. **Controller track**: keep click, menu, hover, cursor, selection, pane drop,
    item drop, and external drop routed through retained viewport hit testing.
    GPUI per-item callbacks are only temporary platform bridges.
-4. **Shell-boundary track**: remove drag-start shells only after a public GPUI
-   custom-element drag-start API or an audited local GPUI patch exists. Keep
-   rename on GPUI until a behavior matrix covers text input and IME.
+4. **Shell-boundary track**: keep GPUI DnD shell counts at zero through the
+   Fika GPUI retained-hitbox typed DnD patch. Keep rename on GPUI until a
+   behavior matrix covers text input and IME.
 5. **Places track**: treat Places as a separate renderer migration. Its model
    and DnD state may be retained first, but the GPUI renderer stays until a
    Places-specific baseline and painter design are recorded.

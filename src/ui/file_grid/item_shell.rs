@@ -7,12 +7,10 @@ use gpui::{
 
 use crate::FikaApp;
 
-use super::dnd::{install_item_drag_start_shell, item_drag_from_item_snapshot};
 use super::rename_overlay::rename_text_view;
 use super::renderer_policy::{
-    ItemDragStartRenderer, ItemInteractionRenderer, ItemRenameEditorRenderer,
-    ItemRendererPolicyInput, item_renderer_policy_with_input,
-    item_uses_gpui_image_element_with_input,
+    ItemInteractionRenderer, ItemRenameEditorRenderer, ItemRendererPolicyInput,
+    item_renderer_policy_with_input, item_uses_gpui_image_element_with_input,
 };
 use super::{ItemPaintContent, ItemPaintSnapshot, ItemTileTextAlignment, item_identity_element_id};
 
@@ -21,7 +19,7 @@ pub(super) fn item_tile(
     item: ItemPaintSnapshot,
     text_alignment: ItemTileTextAlignment,
     renderer_policy_input: ItemRendererPolicyInput,
-    app: WeakEntity<FikaApp>,
+    _app: WeakEntity<FikaApp>,
     cx: &mut Context<FikaApp>,
 ) -> Stateful<Div> {
     let item_rect = item.layout.item_rect;
@@ -34,11 +32,7 @@ pub(super) fn item_tile(
         renderer_policy.interaction,
         ItemInteractionRenderer::RetainedLayer
     );
-    let drag_app = app.clone();
-    let drag_value = item_drag_from_item_snapshot(pane_id, &item);
 
-    // Temporary migration boundary: GPUI drag starts are still tied to a Div
-    // until a public custom-element drag-start API exists.
     let core = div()
         .id(item_identity_element_id("item-core", item_id))
         .absolute()
@@ -48,13 +42,6 @@ pub(super) fn item_tile(
         .h(px(visual.height))
         .rounded_md()
         .bg(rgba(0x00000000));
-    // Directory drop hover/drop is owned by the retained viewport hit-test path.
-    // The per-item GPUI shell below remains only for typed drag initiation.
-    let core = match renderer_policy.drag_start {
-        ItemDragStartRenderer::GpuiShell => {
-            install_item_drag_start_shell(core, drag_value, drag_app)
-        }
-    };
     let core = if use_layer_interaction {
         core
     } else {

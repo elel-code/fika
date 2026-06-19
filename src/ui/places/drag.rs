@@ -3,7 +3,10 @@ use std::sync::Arc;
 
 use fika_core::{PaneId, file_ops};
 use gpui::prelude::*;
-use gpui::{Context, Div, IntoElement, ParentElement, Render, Stateful, Styled, div, px, rgb};
+use gpui::{
+    Context, GlobalElementId, Hitbox, IntoElement, ParentElement, Render, Styled, Window, div, px,
+    rgb,
+};
 
 use super::super::drag_drop::{
     DragExportPayload, DragPreviewLayout, ItemDragPayload, PathListDropTargetKind, PlaceDropTarget,
@@ -79,13 +82,18 @@ impl PlaceDragStartSource {
     }
 }
 
-pub(crate) fn install_place_drag_start_shell(
-    row: Stateful<Div>,
+pub(crate) fn install_place_drag_start_hitbox(
+    global_id: &GlobalElementId,
+    hitbox: Hitbox,
     source: PlaceDragStartSource,
-) -> Stateful<Div> {
-    row.on_drag(source.into_drag(), |drag, cursor_offset, _, cx| {
-        cx.new(|_| PlaceDragPreview::from_drag(drag, cursor_offset))
-    })
+    window: &mut Window,
+) {
+    window.on_hitbox_drag(
+        global_id,
+        hitbox,
+        source.into_drag(),
+        |drag, cursor_offset, _, cx| cx.new(|_| PlaceDragPreview::from_drag(drag, cursor_offset)),
+    )
 }
 
 pub(crate) fn place_drag_is_movable(place: &PlaceSnapshot) -> bool {

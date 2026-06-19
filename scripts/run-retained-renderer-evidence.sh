@@ -340,7 +340,7 @@ if [[ "$capture_places" == true ]]; then
     run_gate "places hit-test" "$places_analyzer" --require-hit-test-autosmoke "${places_common[@]}" "$places_hit_test_log"
     run_gate "places targeting" "$places_analyzer" --require-retained-targeting-autosmoke "${places_common[@]}" "$places_targeting_log"
     run_gate "places dnd" "$places_analyzer" --require-retained-dnd-autosmoke "${places_common[@]}" "$places_dnd_log"
-    expect_gate_failure "places full retained-event still blocked by typed payload shell" \
+    run_gate "places full retained-event" \
         "$places_analyzer" --expect-retained-event-policy "$places_dnd_log"
 fi
 

@@ -24,12 +24,12 @@
 | Compact/Icons 缩略图图像 | custom image painter | image paint snapshots, pane-local thumbnail image cache, retained thumbnail image map, thumbnail scheduler roles | 保持 custom paint 用于缩略图，image decode/cache 使用 GPUI `RetainAllImageCache`；thumbnail pending/failure 行为保持 model-driven 且可绘制后备而不改变 MIME/theme icon 策略 | 日志含 `[fika item-image]` + `thumb_*` `image_sources`，prepaint 中无同步缩略图解码 |
 | Compact/Icons MIME/theme-icon 图像 | 默认 full custom image layer，`FIKA_GPUI_THEME_ICONS=1` 保留为 GPUI `img()` baseline | retained item slots、visible icon role/path cache、app-level `ThemeIconImageReadiness`、pane image layer、background file-icon resolve queue | 保持 full custom image layer 为默认。它仍使用 GPUI 高效的 `RetainAllImageCache -> RenderImage -> paint_image` 底层路径，但普通 pane 渲染器不再保留逐条目的 GPUI `img()` 子元素。`FIKA_GPUI_THEME_ICONS=1` 是同场景非自绘 image baseline | 默认路径日志必须保持 `gpui_image_element=0`、`theme_placeholder=0`、visible `theme_decoded=0`；修改 image layer 性能时必须和 `FIKA_GPUI_THEME_ICONS=1` 做同场景对比 |
 | Compact/Icons hover/cursor/click/menu/drop hit testing | retained viewport/custom hitboxes 加 active item-drag window tracker | viewport retained hit testing 和 `drag_drop` state | 保持 retained controller path。目录 item drop hover 由 retained window-position hit testing 解析，不再由 per-directory GPUI drag-move shell 解析。 | DnD 冒烟通过内部 item、pane、Places 和外部 drop；pane self-drags 应记录 `active-item-move`。Renderer policy 必须保持 `gpui_directory_drop_shell=0` |
-| Compact/Icons drag start | GPUI `Div::on_drag` shell | retained drag payload state 加临时 shell | 保持 GPUI shell 仅用于启动 | 不移除直到 GPUI 暴露公开 custom-element drag-start 或 Fika 携带经过审计的 GPUI patch |
+| Compact/Icons drag start | 通过 Fika GPUI fork 的 retained hitbox typed drag | retained drag payload state 和 retained item hitbox | 保持 retained hitbox drag start 为默认 | DnD 冒烟必须保持 Compact/Icons item drag 行为和 preview 位置稳定；renderer policy 必须保持 `gpui_drag_shell=0` |
 | Compact/Icons rename editor | GPUI text/editor subtree overlay | rename draft model 和 overlay geometry | 保持 GPUI overlay | rename 编辑器计划中列出的行为矩阵（`docs/RENAME_EDITOR_PLAN.md`） |
 | Details header、row 背景、图标、文本单元格、Trash 列 | custom content-level painter | Details paint snapshots, row layout projection, shape cache | 保持 custom paint。Header 背景、分隔线和标签由 Details visual layer 绘制，不再是 GPUI child element。 | 运行时 Details perf 和 DnD 冒烟证据必须保持最新；renderer policy 必须保持 `gpui_details_header=0` |
 | Details click/menu/navigation/hover/cursor/drop hit testing | retained row hit testing/controller state 加 active item-drag window tracker | viewport retained hit testing | 保持 retained controller path。目录 row drop hover 由 retained window-position hit testing 解析，不再由 per-directory GPUI drag-move shell 解析。 | painter 变更后 DnD 冒烟必须通过；renderer policy 必须保持 `gpui_directory_drop_shell=0` |
-| Details drag start | GPUI `Div::on_drag` row shell | retained drag payload state | 保持 GPUI shell | 与 Compact/Icons drag start 相同门 |
-| Places rows、section headings 和 sidebar scrollbar | 默认 full custom row/section visual layer、retained-DnD mixed event delivery、一个 sidebar typed DnD payload shell 和 GPUI row drag-start shell；`gpui`、`chrome`、`text` fallback policy 仍可用 | `places` model/projection、`places/interaction.rs`、retained event layer、retained Places icon image cache、text shape cache 和 `drag_drop` state | 保持 Dolphin 对齐的 retained model/controller/painter 拆分为默认。行文本、section heading 文本和 Places 图标现在由 Fika 自己 custom paint；Places 图标通过 retained `RetainAllImageCache` 使用 GPUI 高效的底层 `RenderImage`/`paint_image` 路径，符合 Dolphin pixmap-cache 原则，同时不再在 Places row 或 heading 中留下 GPUI text/image 子元素。Typed DnD payload delivery 和 drag start 仍是明确 GPUI/平台边界。 | 默认日志必须通过 `--expect-custom-row-full-policy` 和 `--require-interaction-policy`，并显示 `event_policy=retained-dnd`、`text_gpui=0`、`icon_gpui=0`、`section_gpui=0`、`visual_kind=full`、`retained_hitboxes=rows+sections`、`gpui_event_shells=1`、`gpui_row_section_event_shells=0`、`gpui_typed_dnd_payload_shells=1`、`gpui_sidebar_leave_shells=0`，且聚合 `[fika places-row-visual]` rows 匹配策略行数。GPUI/chrome fallback 保留 GPUI heading text，并继续作为 analyzer 覆盖的基准。 |
+| Details drag start | 通过 Fika GPUI fork 的 retained row hitbox typed drag | retained Details drag fields 和 retained row hitbox | 保持 retained hitbox drag start 为默认 | DnD 冒烟必须保持 Details item drag 行为和 preview 位置稳定；renderer policy 必须保持 `gpui_drag_shell=0` |
+| Places rows、section headings 和 sidebar scrollbar | 默认 full custom row/section visual layer，加 retained-hitbox event delivery、typed DnD move/drop 和 drag start；`gpui`、`chrome`、`text` fallback policy 仍可用 | `places` model/projection、`places/interaction.rs`、retained event layer、retained Places icon image cache、text shape cache 和 `drag_drop` state | 保持 Dolphin 对齐的 retained model/controller/painter 拆分为默认。行文本、section heading 文本和 Places 图标由 Fika 自己 custom paint；Places 图标通过 retained `RetainAllImageCache` 使用 GPUI 高效的底层 `RenderImage`/`paint_image` 路径，符合 Dolphin pixmap-cache 原则，同时不再在 Places row 或 heading 中留下 GPUI text/image 子元素。Typed DnD payload delivery 和 drag start 使用 Fika GPUI fork 提供的 retained-hitbox API。 | 默认日志必须通过 `--expect-custom-row-full-policy`、`--require-interaction-policy` 和 `--expect-retained-event-policy`，并显示 `event_policy=retained-dnd`、`text_gpui=0`、`icon_gpui=0`、`section_gpui=0`、`visual_kind=full`、`retained_hitboxes=rows+sections`、`gpui_event_shells=0`、`gpui_row_section_event_shells=0`、`gpui_typed_dnd_payload_shells=0`、`drag_shells=0`、`drag_start_models=rows`、`gpui_sidebar_leave_shells=0`，且聚合 `[fika places-row-visual]` rows 匹配策略行数。GPUI/chrome/text fallback 继续作为 analyzer 覆盖的基准。 |
 
 ## Perf 日志收集
 
@@ -292,7 +292,8 @@ scripts/analyze-places-perf.sh --require-overflow-autosmoke --require-interactio
 
 决策：默认 Places full visual 应与 `text_gpui=0`、`icon_gpui=0` 一起报告
 `section_gpui=0`。GPUI/chrome fallback 仍可以报告 `section_gpui=sections`；
-typed DnD payload 和 row drag-start shell 继续是明确的 GPUI/平台边界。
+默认 retained-DnD 路径必须让 typed payload delivery 和 row drag start 留在
+retained hitbox 上，并保持 GPUI DnD shell 为 0。
 
 保存的日志已经通过这些 gate。`/tmp/fika-places-section-full-targets.log` 报告
 `max_section_gpui=0`、`max_text_gpui=0`、`max_icon_gpui=0`、`visual_kinds=full`
@@ -597,7 +598,10 @@ source 引用消失时，同时 remove `RetainAllImageCache` 中的 `Resource::P
 
 ## 下一批渲染器决策
 
-1. 保持剩余 drag-start shells 直到 GPUI API 边界变化。不要将 GPUI per-element `on_drag_move` 用作 pane self-drag 悬停的真实来源；active item-drag window tracker 拥有该路径。
+1. 保持 Fika GPUI retained-hitbox typed DnD fork 紧跟 upstream，并把
+   `gpui_drag_shell=0` / `gpui_typed_dnd_payload_shells=0` 作为硬 gate。不要将
+   GPUI per-element `on_drag_move` 用作 pane self-drag 悬停的真实来源；retained
+   hitbox 和 active item-drag window tracker 拥有该路径。
 2. 使用运行时日志决定当前 custom-painted surface 是否保持 custom-paint 或回退到 GPUI 渲染器叠加在 retained model 上。
 3. 保留 `FIKA_GPUI_THEME_ICONS=1` 作为 GPUI baseline 路径。未来 MIME/theme icon
    renderer 变更必须保持默认 full-custom 日志中 `gpui_image_element=0`、

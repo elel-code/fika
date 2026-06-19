@@ -6,7 +6,6 @@ use gpui::{Context, Div, MouseButton, ParentElement, Stateful, Styled, div, px, 
 
 use dnd::{PlaceRowDndConfig, install_place_row_dnd};
 
-use super::super::drag::{PlaceDragStartSource, install_place_drag_start_shell};
 use super::super::icon_view::place_icon_view;
 use super::super::perf::PlacesRowVisualPolicy;
 use super::super::snapshot::PlaceSnapshot;
@@ -46,7 +45,6 @@ pub(super) fn place_row(
     let gpui_text = force_gpui_text || !row_visual_policy.paints_text();
     let gpui_icon = force_gpui_icon || !row_visual_policy.paints_icon();
     let row_id = format!("place-{visible_index}");
-    let place_drag_source = PlaceDragStartSource::from_snapshot(place);
     let insert_before_index = place.index;
     let insert_after_index = place.index + 1;
     let insert_target = place.insert_before || place.insert_after;
@@ -99,7 +97,7 @@ pub(super) fn place_row(
     } else {
         row.px_2().py_1()
     };
-    let mut row = install_place_drag_start_shell(row, place_drag_source);
+    let mut row = row;
 
     if row_shell_targeting_enabled {
         let path = place.path.clone();

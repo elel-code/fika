@@ -6,9 +6,7 @@ use crate::FikaApp;
 
 use super::details::details_columns;
 use super::details_visual::details_visual_layer_view;
-use super::dnd::{install_item_drag_start_shell, item_drag_from_details_snapshot};
 use super::interaction::details_interaction_layer_view;
-use super::renderer_policy::{DetailsRowDragStartRenderer, details_row_renderer_policy};
 use super::{DetailsLayoutMetrics, DetailsPaintSnapshot, item_identity_element_id};
 
 pub(super) fn details_table(
@@ -21,7 +19,7 @@ pub(super) fn details_table(
     metrics: DetailsLayoutMetrics,
     name_column_width: f32,
     app: WeakEntity<FikaApp>,
-    cx: &mut Context<FikaApp>,
+    _cx: &mut Context<FikaApp>,
 ) -> Div {
     let columns = details_columns(trash_view, name_column_width);
     let visual_layer = details_visual_layer_view(
@@ -50,7 +48,7 @@ pub(super) fn details_table(
         .children(
             items
                 .into_iter()
-                .map(|item| details_row(pane_id, item, content_width, cx)),
+                .map(|item| details_row(item, content_width)),
         )
         .when(row_count == 0, |table| {
             table.child(
@@ -70,20 +68,12 @@ pub(super) fn details_table(
         })
 }
 
-fn details_row(
-    pane_id: PaneId,
-    item: DetailsPaintSnapshot,
-    content_width: f32,
-    cx: &mut Context<FikaApp>,
-) -> Stateful<Div> {
+fn details_row(item: DetailsPaintSnapshot, content_width: f32) -> Stateful<Div> {
     let top = f32::from_bits(item.geometry.row_top);
     let row_height = f32::from_bits(item.geometry.row_height);
     let item_id = item.item_id;
-    let policy = details_row_renderer_policy(&item);
-    let drag_value = item_drag_from_details_snapshot(pane_id, &item);
-    let app = cx.weak_entity();
 
-    let row = div()
+    div()
         .id(item_identity_element_id("details-row", item_id))
         .absolute()
         .left_0()
@@ -92,14 +82,5 @@ fn details_row(
         .h(px(row_height))
         .flex()
         .items_center()
-        .bg(rgba(0x00000000));
-
-    // The viewport owns click/menu/navigation hit testing from retained
-    // geometry and directory drop targeting; this row remains only as GPUI's
-    // drag-start boundary.
-    match policy.drag_start {
-        DetailsRowDragStartRenderer::GpuiShell => {
-            install_item_drag_start_shell(row, drag_value, app)
-        }
-    }
+        .bg(rgba(0x00000000))
 }

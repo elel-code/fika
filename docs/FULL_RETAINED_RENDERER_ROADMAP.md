@@ -91,9 +91,19 @@ or only Places must explain how the other side reuses the same model.
   `/tmp/fika-core-final-retained-v3-places-targeting.log`,
   `/tmp/fika-core-final-retained-v3-places-dnd.log`) passed with
   `visual_kind=full`, `row_gpui=0`, `text_gpui=0`, and `icon_gpui=0`.
-  The retained-event analyzer still intentionally expects failure for the
-  typed payload shell because public GPUI drag/drop payload delivery remains an
-  interactive-element API.
+- Fika now carries a dedicated GPUI fork/branch for retained-hitbox typed DnD:
+  `ssh://git@github.com/elel-code/zed.git` at
+  `572d53326f722e5634647b2276c42069d6b5b63d`
+  (`fika/gpui-hitbox-dnd`). Fika pins both `gpui` and `gpui_platform` to that
+  revision.
+- The fork exposes hitbox-level typed drag/drop registration. Pane,
+  Details, and Places drag start now register against retained hitboxes instead
+  of per-item/per-row `Div::on_drag` shells. Places DnD move/drop target
+  delivery also registers against the retained sidebar content hitbox.
+- Current gates require zero GPUI DnD shells:
+  `gpui_drag_shell=0`, `drag_shells=0`,
+  `gpui_typed_dnd_payload_shells=0`, and retained Places DnD logs must pass
+  `--expect-retained-event-policy`.
 
 ## Current Baseline
 
@@ -108,7 +118,6 @@ Accepted retained/custom surfaces:
 
 Explicit GPUI bridges:
 
-- Compact/Icons and Details drag start use GPUI `Div::on_drag` shells.
 - Rename uses the GPUI editor overlay.
 - Compact/Icons MIME/theme icons use the full custom image layer by default.
   The painter still uses GPUI's efficient `RetainAllImageCache -> RenderImage
@@ -119,9 +128,9 @@ Explicit GPUI bridges:
 - Places uses full custom row visual by default for backgrounds, text, and
   icons. Icon image load/cache/readiness uses the shared retained image layer
   directly. Places row/section activation, context-menu targeting, DnD target
-  lookup, drop dispatch, and sidebar leave clearing now use the retained-DnD
-  event layer by default; one sidebar-level GPUI typed payload bridge and row
-  drag-start shells remain.
+  lookup, drop dispatch, and sidebar leave clearing now use retained hitboxes
+  by default. The default Places path has no GPUI row/section event shells, no
+  sidebar typed payload shell, and no GPUI row drag-start shells.
 
 These bridges are intentional platform or performance boundaries. They should
 be removed only through the tracks below.
@@ -143,10 +152,10 @@ and readiness contract before it can replace GPUI `img()` by default.
 
 Dolphin's Places panel is similarly a model/view/delegate loop:
 `DolphinPlacesModel` owns Places state and `KFilePlacesView` owns interaction
-delivery. Fika now has the Dolphin-complete Places core for row visuals,
-row/section hit testing, targeting, and target delivery: the default path is
-full row visual plus retained-DnD. The remaining typed payload and drag-start
-shells are explicit GPUI/platform bridges rather than row identity owners.
+delivery. Fika now has the Dolphin-complete Places path for row visuals,
+row/section hit testing, targeting, drag start, typed DnD payload delivery, and
+drop dispatch: the default path is full row visual plus retained-hitbox DnD
+with zero GPUI DnD shells.
 
 The practical conclusion is:
 
@@ -248,10 +257,11 @@ Current default:
 - `retained-dnd` owns row/section activation, context-menu targeting,
   on-place drop target, insert-before/after, drop dispatch, sidebar leave
   clearing, and cursor state through retained Places geometry.
-- A single sidebar-level GPUI typed payload bridge remains because GPUI still
-  exposes typed drag move/drop payloads through interactive elements.
-- GPUI drag-start shells remain until Track 4 unlocks retained drag start.
-- Default row chrome is custom; text/icons remain GPUI.
+- Retained hitbox DnD is provided by the Fika GPUI fork and owns typed payload
+  move/drop delivery without a sidebar-level GPUI payload bridge.
+- Places drag start registers on retained row hitboxes, not GPUI row shells.
+- Default row visual is full custom; text/icons/section headings are painted by
+  Fika.
 
 Default may change only when:
 
@@ -285,62 +295,51 @@ Current default:
   `/tmp/fika-core-final-retained-v3-places-*.log`.
 - Analyzer summaries show `visual_kinds=full`, row visual layer counts matching
   rows, `row_gpui=0`, `text_gpui=0`, and `icon_gpui=0`.
-- Interaction remains retained-DnD for row/section target delivery. The only
-  expected retained-event failure is the known sidebar typed payload shell,
-  because GPUI still exposes typed drag move/drop payloads through interactive
-  elements.
+- Interaction is retained-DnD for row/section target delivery and typed payload
+  delivery. The completion gates now require `gpui_event_shells=0`,
+  `gpui_row_section_event_shells=0`, `gpui_typed_dnd_payload_shells=0`,
+  `drag_shells=0`, and `drag_start_models=rows`.
 
 Decision:
 
 - Places full row visual is complete for the retained renderer transition and
   stays default.
-- The remaining Places work is not row visual migration. It is Track 4 typed
-  drag API work and future regression monitoring against the chrome/GPUI
-  fallback policies.
+- Places retained event delivery and typed DnD shell removal are complete on
+  the Fika GPUI fork. Future Places renderer work is regression monitoring
+  against the chrome/GPUI fallback policies and keeping the fork patch current
+  with upstream GPUI.
 
 ### Track 4: Typed Drag Boundary
 
-Purpose: remove temporary GPUI drag shells and typed payload bridges only if
-GPUI exposes or Fika carries an audited retained-hitbox typed drag API.
+Purpose: keep the Fika GPUI retained-hitbox typed DnD patch small, auditable,
+and synchronized with upstream GPUI while Fika uses it as the primary path.
 
-Next design step:
+Current implementation:
 
-- Current GPUI audit (`0.2.2`, Zed
-  `69b602c797a62f09318916d24a98c930533fbdc8`) still has no public retained
-  hitbox typed drag hook. `Interactivity::on_drag`,
-  `Interactivity::on_drag_move`, `Interactivity::on_drop`, and
-  `StatefulInteractiveElement::on_drag` are interactive-element APIs, while
-  `Window::insert_hitbox()` and `Window::on_mouse_event()` only provide retained
-  hit testing and ordinary mouse observation.
-- If using a GPUI patch, keep the API split and minimal:
-  `Window::on_hitbox_drag<T, W>(hitbox, value, preview_constructor)` starts a
-  typed drag from an existing retained hitbox with the same payload, preview
-  entity, cursor offset, accepted transfer modes, cancellation, and external
-  drop semantics as `Interactivity::on_drag`.
-- The matching target side is
-  `Window::on_hitbox_drag_move<T>(hitbox, listener)`,
-  `Window::can_drop_on_hitbox<T>(hitbox, predicate)`, and
-  `Window::on_hitbox_drop<T>(hitbox, listener)`. These callbacks must use the
-  same active-drag payload source and dispatch ordering as
-  `Interactivity::on_drag_move` / `Interactivity::on_drop`, but they must not
-  require a visible or layout-owning `Div`.
-- The API must be registered from retained paint/prepaint state against
-  `HitboxId`, not from row/item GPUI element identity. It must not require
-  recreating a visual GPUI row or item element as the drag source or target.
-- If no patch is accepted, keep drag-start shells and the Places sidebar typed
-  payload bridge, while continuing to reduce their visual/identity role to
-  zero.
+- Fork branch: `git@github.com:elel-code/zed.git`, branch
+  `fika/gpui-hitbox-dnd`, pinned revision
+  `572d53326f722e5634647b2276c42069d6b5b63d`.
+- Added GPUI APIs:
+  `Window::on_hitbox_drag`, `Window::on_hitbox_drag_with_cursor`,
+  `Window::on_hitbox_drag_move`, and `Window::on_hitbox_drop`.
+- Fika registers item, Details row, and Places row drag start from retained
+  hitboxes using stable element ids/global ids. Places registers typed
+  move/drop handlers on the retained sidebar content hitbox.
+- No visible or layout-owning GPUI row/item `Div` may be reintroduced just to
+  carry typed DnD.
 
-Default may change only when:
+Maintenance gates:
 
 - Compact/Icons, Details, and Places all pass DnD smoke.
 - Drag preview position remains stable across Compact, Icons, Details, and
   Places at different window sizes.
-- Renderer-policy logs show shell removal without losing retained interaction
-  counts.
-- Places full retained-event logs pass with `gpui_typed_dnd_payload_shells=0`,
-  and item/details policy logs show drag-start shell removal without adding
-  replacement visual GPUI rows.
+- Renderer-policy logs keep `gpui_drag_shell=0` without losing retained
+  interaction counts.
+- Places full retained-event logs pass with `gpui_event_shells=0`,
+  `gpui_row_section_event_shells=0`, `gpui_typed_dnd_payload_shells=0`,
+  `drag_shells=0`, and `drag_start_models=rows`.
+- The GPUI fork patch remains minimal and is rebased or forward-merged when
+  upstream GPUI changes the drag/drop internals.
 
 ### Track 5: Rename Editor
 
@@ -386,7 +385,8 @@ Acceptance:
    compare future image changes against `FIKA_GPUI_THEME_ICONS=1`.
 2. Keep `--places-full-handoff` as a chrome/full regression suite, not a
    default-promotion blocker.
-3. Re-audit GPUI drag-start API after dependency updates before Track 4.
+3. Keep the Fika GPUI retained-hitbox typed DnD fork rebased or forward-merged
+   after upstream GPUI dependency updates.
 4. Convert rename behavior matrix items into tests/smoke before Track 5.
 
 This queue is intentionally evidence-first. It moves the codebase toward full
