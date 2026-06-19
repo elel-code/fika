@@ -749,21 +749,6 @@ impl FikaApp {
         self.update_places_sidebar_width(width, cx)
     }
 
-    fn update_places_sidebar_layout_for_autosmoke(
-        &mut self,
-        width: f32,
-        visible: bool,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        let width_changed = self.set_places_sidebar_width(width);
-        let visible_changed = self.set_places_sidebar_visible(visible);
-        let changed = width_changed || visible_changed;
-        if changed {
-            self.schedule_app_settings_save(cx);
-        }
-        changed
-    }
-
     fn current_app_settings(&self) -> AppSettings {
         AppSettings {
             places_sidebar: PlacesSidebarSettings {

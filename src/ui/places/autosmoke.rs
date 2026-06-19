@@ -160,6 +160,23 @@ impl PlacesLayoutAutosmokeState {
     }
 }
 
+impl FikaApp {
+    fn update_places_sidebar_layout_for_autosmoke(
+        &mut self,
+        width: f32,
+        visible: bool,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let width_changed = self.set_places_sidebar_width(width);
+        let visible_changed = self.set_places_sidebar_visible(visible);
+        let changed = width_changed || visible_changed;
+        if changed {
+            self.schedule_app_settings_save(cx);
+        }
+        changed
+    }
+}
+
 impl PlacesAutosmokeScenario {
     pub(crate) fn from_env() -> Option<Self> {
         places_autosmoke_scenario_from_value(&env::var(AUTOSMOKE_PLACES_ENV).ok()?)

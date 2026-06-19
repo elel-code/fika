@@ -1664,6 +1664,12 @@ tracks.
   `src/main.rs` only reads the selected scenario and triggers the facade, so
   Places runtime evidence collection stays with the Places projection and
   interaction modules.
+- [x] P16fu: Move the Places autosmoke sidebar layout mutation helper into the
+  Places facade. `src/ui/places/autosmoke.rs` now owns the smoke-only
+  width/visibility update path used by layout evidence, while `src/main.rs`
+  keeps the regular sidebar commands and settings persistence scheduler as app
+  coordination. This reduces app-root knowledge of Places evidence mechanics
+  without changing persisted sidebar behavior.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,
