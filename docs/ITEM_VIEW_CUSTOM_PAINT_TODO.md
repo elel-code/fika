@@ -1639,6 +1639,10 @@ tracks.
   image TODO is to keep hybrid default until a future full-custom run beats the
   hybrid/default gate on `/etc` and a mixed directory without placeholder,
   zoom-decode, image-paint, or renderer-policy regressions.
+- [x] P16fq: Rename item-image comparison output from default log to baseline
+  log. `scripts/compare-item-image-renderers.sh` now describes its second log
+  as `BASELINE_LOG`, which matches the current hybrid default workflow where
+  `FIKA_GPUI_THEME_ICONS=1` supplies the GPUI image-element baseline.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

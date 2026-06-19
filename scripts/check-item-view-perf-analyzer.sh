@@ -122,8 +122,8 @@ if [[ "$image_renderer_evidence" != *"Custom-theme renderer state: custom-image-
     echo "expected custom image renderer state in comparison" >&2
     exit 1
 fi
-if [[ "$image_renderer_evidence" != *"Default renderer state: default-gpui-theme-icons"* ]]; then
-    echo "expected default GPUI theme-icon renderer state in comparison" >&2
+if [[ "$image_renderer_evidence" != *"Baseline renderer state: default-gpui-theme-icons"* ]]; then
+    echo "expected baseline GPUI theme-icon renderer state in comparison" >&2
     exit 1
 fi
 if [[ "$image_renderer_evidence" != *"theme placeholder | 48 | 0"* ]]; then

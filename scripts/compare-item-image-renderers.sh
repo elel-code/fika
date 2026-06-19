@@ -3,15 +3,16 @@ set -euo pipefail
 
 usage() {
     cat <<'EOF'
-Usage: compare-item-image-renderers.sh [--gate-default-promotion|--gate-hybrid-handoff|--gate-hybrid-default-promotion] CANDIDATE_LOG DEFAULT_LOG
+Usage: compare-item-image-renderers.sh [--gate-default-promotion|--gate-hybrid-handoff|--gate-hybrid-default-promotion] CANDIDATE_LOG BASELINE_LOG
 
 Compares two FIKA_PERF_ITEM_VIEW logs for Compact/Icons item image rendering:
 
   CANDIDATE_LOG: run with FIKA_CUSTOM_THEME_ICONS=1 or
                  FIKA_HYBRID_THEME_ICONS=1, depending on the gate.
-  DEFAULT_LOG:   default run, expected to route theme/MIME icons through
-                 GPUI img() children while thumbnails stay on the custom
-                 image layer.
+  BASELINE_LOG:  comparison baseline. For current hybrid-default work this
+                 should usually be a FIKA_GPUI_THEME_ICONS=1 run, expected to
+                 route theme/MIME icons through GPUI img() children while
+                 thumbnails stay on the custom image layer.
 
 This is a log comparison helper. It cannot judge subjective smoothness, but it
 does identify renderer-policy activation and custom image-layer placeholder,
@@ -74,12 +75,12 @@ if [[ $# -ne 2 || "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
 fi
 
 custom_log="$1"
-default_log="$2"
+baseline_log="$2"
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 analyzer="$root_dir/scripts/analyze-item-view-perf.sh"
 
 custom_summary="$("$analyzer" "$custom_log")"
-default_summary="$("$analyzer" "$default_log")"
+baseline_summary="$("$analyzer" "$baseline_log")"
 
 metric() {
     local summary="$1"
@@ -188,18 +189,18 @@ custom_theme_prewarm_pending="$(metric "$custom_summary" "image_sources:" "theme
 custom_thumb_fallback="$(metric "$custom_summary" "image_sources:" "thumb_fallback")"
 custom_image_paint="$(metric "$custom_summary" "image_frames:" "max_paint")"
 
-default_image_frames="$(metric "$default_summary" "image_frames:" "image_frames")"
-default_image_layer="$(metric "$default_summary" "renderer_policy_frames:" "max_image_layer")"
-default_gpui_image="$(metric "$default_summary" "renderer_policy_frames:" "max_gpui_image_element")"
-default_icon_sync="$(metric "$default_summary" "item_view_stage_max:" "icon_sync")"
-default_phase_initial="$(phase_metric "$default_summary" "initial" "max_total")"
-default_phase_content="$(phase_metric "$default_summary" "content-change" "max_total")"
-default_phase_geometry="$(phase_metric "$default_summary" "geometry-change" "max_total")"
-default_phase_steady="$(phase_metric "$default_summary" "steady" "max_total")"
-default_static_prepaint="$(metric "$default_summary" "static_visual_frames:" "max_prepaint")"
-default_static_paint="$(metric "$default_summary" "static_visual_frames:" "max_paint")"
-default_theme_placeholder="$(metric "$default_summary" "image_sources:" "theme_placeholder")"
-default_image_paint="$(metric "$default_summary" "image_frames:" "max_paint")"
+baseline_image_frames="$(metric "$baseline_summary" "image_frames:" "image_frames")"
+baseline_image_layer="$(metric "$baseline_summary" "renderer_policy_frames:" "max_image_layer")"
+baseline_gpui_image="$(metric "$baseline_summary" "renderer_policy_frames:" "max_gpui_image_element")"
+baseline_icon_sync="$(metric "$baseline_summary" "item_view_stage_max:" "icon_sync")"
+baseline_phase_initial="$(phase_metric "$baseline_summary" "initial" "max_total")"
+baseline_phase_content="$(phase_metric "$baseline_summary" "content-change" "max_total")"
+baseline_phase_geometry="$(phase_metric "$baseline_summary" "geometry-change" "max_total")"
+baseline_phase_steady="$(phase_metric "$baseline_summary" "steady" "max_total")"
+baseline_static_prepaint="$(metric "$baseline_summary" "static_visual_frames:" "max_prepaint")"
+baseline_static_paint="$(metric "$baseline_summary" "static_visual_frames:" "max_paint")"
+baseline_theme_placeholder="$(metric "$baseline_summary" "image_sources:" "theme_placeholder")"
+baseline_image_paint="$(metric "$baseline_summary" "image_frames:" "max_paint")"
 
 custom_renderer_state="unexpected"
 if (( custom_image_layer > 0 && custom_gpui_image == 0 )); then
@@ -211,7 +212,7 @@ elif (( custom_image_layer == 0 && custom_gpui_image > 0 && (custom_theme_prewar
 fi
 
 default_renderer_state="unexpected"
-if (( default_gpui_image > 0 )); then
+if (( baseline_gpui_image > 0 )); then
     default_renderer_state="default-gpui-theme-icons"
 fi
 
@@ -246,8 +247,8 @@ if [[ "$gate_mode" == "default-promotion" ]]; then
     if (( custom_theme_decoded > 0 )); then
         gate_reasons+=("custom log still has theme_decoded first-ready churn")
     fi
-    if (( default_theme_placeholder > 0 )); then
-        gate_reasons+=("default log unexpectedly has theme placeholders")
+    if (( baseline_theme_placeholder > 0 )); then
+        gate_reasons+=("baseline log unexpectedly has theme placeholders")
     fi
     if (( ${#gate_reasons[@]} > 0 )); then
         promotion_gate_state="fail"
@@ -278,8 +279,8 @@ elif [[ "$gate_mode" == "hybrid-handoff" || "$gate_mode" == "hybrid-default-prom
     if (( custom_theme_decoded > 0 )); then
         gate_reasons+=("hybrid visible paint still has theme_decoded first-ready churn")
     fi
-    if (( default_theme_placeholder > 0 )); then
-        gate_reasons+=("default log unexpectedly has theme placeholders")
+    if (( baseline_theme_placeholder > 0 )); then
+        gate_reasons+=("baseline log unexpectedly has theme placeholders")
     fi
     if (( ${#gate_reasons[@]} > 0 )); then
         hybrid_gate_state="fail"
@@ -289,14 +290,14 @@ elif [[ "$gate_mode" == "hybrid-handoff" || "$gate_mode" == "hybrid-default-prom
         if [[ "$hybrid_gate_state" == "fail" ]]; then
             hybrid_promotion_gate_state="fail"
         fi
-        require_within "icon_sync" "$custom_icon_sync" "$default_icon_sync" 125 1000 0
-        require_within "phase initial" "$custom_phase_initial" "$default_phase_initial" 125 500 1000
-        require_within "phase content-change" "$custom_phase_content" "$default_phase_content" 125 500 1000
-        require_within "phase geometry-change" "$custom_phase_geometry" "$default_phase_geometry" 125 500 1000
-        require_within "phase steady" "$custom_phase_steady" "$default_phase_steady" 125 500 1000
-        require_within "static visual prepaint" "$custom_static_prepaint" "$default_static_prepaint" 125 1000 0
-        require_within "static visual paint" "$custom_static_paint" "$default_static_paint" 125 1000 0
-        require_within "image paint" "$custom_image_paint" "$default_image_paint" 125 250 750
+        require_within "icon_sync" "$custom_icon_sync" "$baseline_icon_sync" 125 1000 0
+        require_within "phase initial" "$custom_phase_initial" "$baseline_phase_initial" 125 500 1000
+        require_within "phase content-change" "$custom_phase_content" "$baseline_phase_content" 125 500 1000
+        require_within "phase geometry-change" "$custom_phase_geometry" "$baseline_phase_geometry" 125 500 1000
+        require_within "phase steady" "$custom_phase_steady" "$baseline_phase_steady" 125 500 1000
+        require_within "static visual prepaint" "$custom_static_prepaint" "$baseline_static_prepaint" 125 1000 0
+        require_within "static visual paint" "$custom_static_paint" "$baseline_static_paint" 125 1000 0
+        require_within "image paint" "$custom_image_paint" "$baseline_image_paint" 125 250 750
         if (( ${#gate_reasons[@]} > 0 )); then
             hybrid_promotion_gate_state="fail"
         fi
@@ -313,25 +314,25 @@ cat <<EOF
 ## Item Image Renderer A/B Evidence
 
 - Candidate log: \`$custom_log\`
-- Default split-renderer log: \`$default_log\`
+- Baseline log: \`$baseline_log\`
 
-| Metric | Candidate theme-icons | Default split renderer |
+| Metric | Candidate theme-icons | Baseline |
 | --- | ---: | ---: |
-| renderer max image_layer | $custom_image_layer | $default_image_layer |
-| renderer max gpui_image_element | $custom_gpui_image | $default_gpui_image |
-| icon_sync max us | $custom_icon_sync | $default_icon_sync |
-| phase initial max total us | $custom_phase_initial | $default_phase_initial |
-| phase content-change max total us | $custom_phase_content | $default_phase_content |
-| phase geometry-change max total us | $custom_phase_geometry | $default_phase_geometry |
-| phase steady max total us | $custom_phase_steady | $default_phase_steady |
-| static visual max prepaint us | $custom_static_prepaint | $default_static_prepaint |
-| static visual max paint us | $custom_static_paint | $default_static_paint |
-| item-image frames | $custom_image_frames | $default_image_frames |
-| max item-image paint us | $custom_image_paint | $default_image_paint |
+| renderer max image_layer | $custom_image_layer | $baseline_image_layer |
+| renderer max gpui_image_element | $custom_gpui_image | $baseline_gpui_image |
+| icon_sync max us | $custom_icon_sync | $baseline_icon_sync |
+| phase initial max total us | $custom_phase_initial | $baseline_phase_initial |
+| phase content-change max total us | $custom_phase_content | $baseline_phase_content |
+| phase geometry-change max total us | $custom_phase_geometry | $baseline_phase_geometry |
+| phase steady max total us | $custom_phase_steady | $baseline_phase_steady |
+| static visual max prepaint us | $custom_static_prepaint | $baseline_static_prepaint |
+| static visual max paint us | $custom_static_paint | $baseline_static_paint |
+| item-image frames | $custom_image_frames | $baseline_image_frames |
+| max item-image paint us | $custom_image_paint | $baseline_image_paint |
 | theme loaded | $custom_theme_loaded | 0 |
 | theme decoded first-ready | $custom_theme_decoded | 0 |
 | theme retained | $custom_theme_retained | 0 |
-| theme placeholder | $custom_theme_placeholder | $default_theme_placeholder |
+| theme placeholder | $custom_theme_placeholder | $baseline_theme_placeholder |
 | theme prewarm loaded | $custom_theme_prewarm_loaded | 0 |
 | theme prewarm decoded first-ready | $custom_theme_prewarm_decoded | 0 |
 | theme prewarm retained | $custom_theme_prewarm_retained | 0 |
@@ -342,7 +343,7 @@ Automated interpretation:
 
 - Candidate renderer state: $custom_renderer_state
 - Custom-theme renderer state: $custom_renderer_state
-- Default renderer state: $default_renderer_state
+- Baseline renderer state: $default_renderer_state
 - Placeholder evidence: $placeholder_judgement
 - Decode evidence: $decode_judgement
 - Retained same-icon evidence: theme_retained=$custom_theme_retained
@@ -358,10 +359,10 @@ Candidate analyzer summary:
 $custom_summary
 \`\`\`
 
-Default split-renderer analyzer summary:
+Baseline analyzer summary:
 
 \`\`\`text
-$default_summary
+$baseline_summary
 \`\`\`
 EOF
 
