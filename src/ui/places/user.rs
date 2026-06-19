@@ -5,13 +5,12 @@ mod ordering;
 mod persistence;
 mod removal;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use fika_core::PaneId;
 
 use crate::FikaApp;
 
-pub(crate) use dropped::add_user_place_from_dropped_paths;
 pub(crate) use edit::commit_user_place_draft;
 pub(crate) use ordering::{
     MoveUserPlaceResult, move_user_place_to_insert_index, user_place_insert_index,
@@ -52,5 +51,24 @@ impl FikaApp {
             return;
         }
         self.set_pane_status(pane_id, result.status_message());
+    }
+
+    pub(crate) fn insert_place_from_dropped_paths(
+        &mut self,
+        pane_id: PaneId,
+        paths: Vec<PathBuf>,
+        index: usize,
+    ) {
+        let result = dropped::add_user_place_from_dropped_paths(&mut self.places, &paths, index);
+        let message = result.status_message();
+        if !result.added() {
+            self.set_pane_status(pane_id, message);
+            return;
+        }
+        if let Err(error) = self.save_user_places() {
+            self.set_pane_status(pane_id, error);
+            return;
+        }
+        self.set_pane_status(pane_id, message);
     }
 }

@@ -1704,6 +1704,12 @@ tracks.
   removable-place validation, draft cleanup, hidden-place cleanup, persistence,
   and status updates. The low-level `remove_user_place()` helper stays private
   to the user-place module instead of being re-exported through `ui::places`.
+- [x] P16gab: Move app-facing dropped-folder place insertion into the Places
+  user facade. `src/ui/places/user.rs` now owns
+  `insert_place_from_dropped_paths()` on `FikaApp`, including validation,
+  user-place insertion, persistence, and status updates. The low-level dropped
+  helper stays private to the user-place module instead of being re-exported
+  through `ui::places`.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

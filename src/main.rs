@@ -3634,25 +3634,6 @@ impl FikaApp {
         ui::places::user_place_insert_index(&self.places, index)
     }
 
-    fn insert_place_from_dropped_paths(
-        &mut self,
-        pane_id: PaneId,
-        paths: Vec<PathBuf>,
-        index: usize,
-    ) {
-        let result = ui::places::add_user_place_from_dropped_paths(&mut self.places, &paths, index);
-        let message = result.status_message();
-        if !result.added() {
-            self.set_pane_status(pane_id, message);
-            return;
-        }
-        if let Err(error) = self.save_user_places() {
-            self.set_pane_status(pane_id, error);
-            return;
-        }
-        self.set_pane_status(pane_id, message);
-    }
-
     pub(crate) fn update_location_edit_metrics(
         &mut self,
         pane_id: PaneId,
