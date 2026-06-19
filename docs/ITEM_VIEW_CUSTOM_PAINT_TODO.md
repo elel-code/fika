@@ -1611,6 +1611,12 @@ tracks.
   bounds. The retained Places typed payload bridge must bounds-gate move events,
   clear only Places state when the pointer leaves Places, and avoid clearing
   pane item targets owned by pane preview/window drag tracking.
+- [x] P16fm: Add the Places drag-bounds debug trace to the evidence checklist.
+  `docs/RETAINED_RENDERER_EVIDENCE_CHECKLIST.md` now says manual
+  `FIKA_DEBUG_DND=1` pane-drag traces may include `places-dnd-leave`; that line
+  proves the Places typed bridge rejected an out-of-bounds capture drag move,
+  and it must not coincide with persistent Places highlight while the pointer
+  is inside a pane.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

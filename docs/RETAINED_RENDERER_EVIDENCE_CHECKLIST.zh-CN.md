@@ -157,6 +157,11 @@ Perf 日志不能替代以下行为审查：
 `active-item-move via=preview`；必需信号是 retained hit test 到达
 `kind=Some(Directory)`，且 drop 前目录高亮。
 
+对于经过或靠近 Places 侧栏的 pane drag，trace 也可能出现
+`places-dnd-leave kind=... changed=...`。这表示 sidebar typed payload bridge 拒绝了
+bounds 外的 capture-phase drag move，并且只清理 Places state。当 pointer 位于 pane 内时，
+这条日志不应伴随持续的 Places drop 高亮残留。
+
 ## 记录规则
 
 当 renderer policy 变化时，所属 plan 或 decision 文档必须记录：

@@ -162,6 +162,12 @@ show `active-item-move via=preview`; the required signal is that the retained
 hit test reaches `kind=Some(Directory)` and the directory highlights before
 drop.
 
+For pane drags that pass near or across the Places sidebar, the trace may also
+show `places-dnd-leave kind=... changed=...`. That line is evidence that the
+sidebar typed payload bridge rejected an out-of-bounds capture-phase drag move
+and cleared only Places state. It must not be accompanied by a persistent Places
+drop highlight while the pointer is inside the pane.
+
 ## Recording Rule
 
 When a renderer policy changes, the owning plan or decision document must record:
