@@ -118,6 +118,7 @@ cat > "$tmpdir/custom-row-visual.log" <<'EOF'
 [fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=0
 [fika places-row-visual] rows=11 painted=11 prepaint=20us paint=31us
 [fika places-row-shape-cache] hits=11 misses=0 evicted=0 entries=11
+[fika places-row-glyph-cache] hits=11 misses=0 evicted=0 entries=11
 EOF
 
 custom_summary="$("$analyzer" \
@@ -136,6 +137,10 @@ if [[ "$custom_summary" != *"places_row_shape_cache_frames=1 max_hits=11 max_mis
     echo "expected Places row shape-cache summary" >&2
     exit 1
 fi
+if [[ "$custom_summary" != *"places_row_glyph_cache_frames=1 max_hits=11 max_misses=0 max_evicted=0 max_entries=11"* ]]; then
+    echo "expected Places row glyph-cache summary" >&2
+    exit 1
+fi
 
 cat > "$tmpdir/custom-row-full.log" <<'EOF'
 [fika places-slots] rows=11 sections=2 entries=13 inserted=13 content=0 geometry=0 visual=0 unchanged=0 removed=0 project=25us
@@ -146,6 +151,7 @@ cat > "$tmpdir/custom-row-full.log" <<'EOF'
 [fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=0
 [fika places-row-visual] rows=11 painted=11 prepaint=24us paint=35us
 [fika places-row-shape-cache] hits=11 misses=0 evicted=0 entries=11
+[fika places-row-glyph-cache] hits=11 misses=0 evicted=0 entries=11
 EOF
 
 full_summary="$("$analyzer" \
@@ -173,10 +179,12 @@ cat > "$tmpdir/custom-row-full-handoff.log" <<'EOF'
 [fika places-row-handoff] rows=11 enabled=1 ready=1 frames=2/2 paint_text=1 paint_icon=1 gpui_text=0 gpui_icon=0
 [fika places-row-visual] rows=11 painted=11 prepaint=260us paint=240us
 [fika places-row-shape-cache] hits=0 misses=11 evicted=0 entries=11
+[fika places-row-glyph-cache] hits=0 misses=11 evicted=0 entries=11
 [fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=0 icon_gpui=0 retained_interaction=0 drag_shell=0 section_gpui=0 scrollbar_canvas=1 visual_kind=full
 [fika places-row-handoff] rows=11 enabled=1 ready=1 frames=2/2 paint_text=1 paint_icon=1 gpui_text=0 gpui_icon=0
 [fika places-row-visual] rows=11 painted=11 prepaint=35us paint=230us
 [fika places-row-shape-cache] hits=11 misses=0 evicted=0 entries=11
+[fika places-row-glyph-cache] hits=11 misses=0 evicted=0 entries=11
 EOF
 
 handoff_summary="$("$analyzer" \
@@ -227,10 +235,13 @@ cat > "$tmpdir/custom-row-full-cold-then-warm.log" <<'EOF'
 [fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=0
 [fika places-row-visual] rows=11 painted=11 prepaint=1200us paint=3500us
 [fika places-row-shape-cache] hits=0 misses=11 evicted=0 entries=11
+[fika places-row-glyph-cache] hits=0 misses=11 evicted=0 entries=11
 [fika places-row-visual] rows=11 painted=11 prepaint=40us paint=2600us
 [fika places-row-shape-cache] hits=11 misses=0 evicted=0 entries=11
+[fika places-row-glyph-cache] hits=11 misses=0 evicted=0 entries=11
 [fika places-row-visual] rows=11 painted=11 prepaint=30us paint=70us
 [fika places-row-shape-cache] hits=11 misses=0 evicted=0 entries=11
+[fika places-row-glyph-cache] hits=11 misses=0 evicted=0 entries=11
 EOF
 
 "$analyzer" \
@@ -266,6 +277,10 @@ if [[ "$chrome_summary" != *"max_row_gpui=0 max_row_visual_layer=11"* || "$chrom
 fi
 if [[ "$chrome_summary" != *"places_row_shape_cache_frames=0"* ]]; then
     echo "expected Places chrome row policy without shape-cache summary" >&2
+    exit 1
+fi
+if [[ "$chrome_summary" != *"places_row_glyph_cache_frames=0"* ]]; then
+    echo "expected Places chrome row policy without glyph-cache summary" >&2
     exit 1
 fi
 
@@ -370,6 +385,7 @@ cat > "$tmpdir/retained-event-custom-visual.log" <<'EOF'
 [fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=13 gpui_event_shells=0 drag_shells=0
 [fika places-row-visual] rows=11 painted=11 prepaint=20us paint=31us
 [fika places-row-shape-cache] hits=11 misses=0 evicted=0 entries=11
+[fika places-row-glyph-cache] hits=11 misses=0 evicted=0 entries=11
 EOF
 
 retained_custom_summary="$("$analyzer" \
@@ -394,6 +410,7 @@ cat > "$tmpdir/retained-event-mixed-gpui-shell.log" <<'EOF'
 [fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=0
 [fika places-row-visual] rows=11 painted=11 prepaint=20us paint=31us
 [fika places-row-shape-cache] hits=11 misses=0 evicted=0 entries=11
+[fika places-row-glyph-cache] hits=11 misses=0 evicted=0 entries=11
 EOF
 
 if "$analyzer" --expect-retained-event-policy "$tmpdir/retained-event-mixed-gpui-shell.log" >/dev/null 2>&1; then
@@ -536,6 +553,7 @@ cat > "$tmpdir/custom-row-visual-per-row.log" <<'EOF'
 [fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=0
 [fika places-row-visual] rows=1 painted=1 prepaint=20us paint=31us
 [fika places-row-shape-cache] hits=11 misses=0 evicted=0 entries=11
+[fika places-row-glyph-cache] hits=11 misses=0 evicted=0 entries=11
 EOF
 
 if "$analyzer" --expect-custom-row-visual-policy "$tmpdir/custom-row-visual-per-row.log" >/dev/null 2>&1; then

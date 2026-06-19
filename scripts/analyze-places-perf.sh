@@ -828,6 +828,18 @@ function renderer_retained_interaction_for_policy(event_policy, rows, sections) 
     max_update("row_shape_entries", entries)
 }
 
+/^\[fika places-row-glyph-cache\]/ {
+    row_glyph_cache_frames++
+    hits = field("hits") + 0
+    misses = field("misses") + 0
+    evicted = field("evicted") + 0
+    entries = field("entries") + 0
+    max_update("row_glyph_hits", hits)
+    max_update("row_glyph_misses", misses)
+    max_update("row_glyph_evicted", evicted)
+    max_update("row_glyph_entries", entries)
+}
+
 /^\[fika places-scrollbar\]/ {
     scrollbar_frames++
     visible = field("visible") + 0
@@ -1060,6 +1072,9 @@ END {
         if (row_shape_cache_frames == 0) {
             fail("missing [fika places-row-shape-cache] logs for custom text row visual policy")
         }
+        if (row_glyph_cache_frames == 0) {
+            fail("missing [fika places-row-glyph-cache] logs for custom text row visual policy")
+        }
         if (max_values["row_visual_rows"] != max_values["policy_rows"]) {
             fail("custom text Places row visual layer is not aggregated to the policy row count")
         }
@@ -1073,6 +1088,9 @@ END {
         }
         if (row_shape_cache_frames == 0) {
             fail("missing [fika places-row-shape-cache] logs for full custom row visual policy")
+        }
+        if (row_glyph_cache_frames == 0) {
+            fail("missing [fika places-row-glyph-cache] logs for full custom row visual policy")
         }
         if (max_values["row_visual_rows"] != max_values["policy_rows"]) {
             fail("full custom Places row visual layer is not aggregated to the policy row count")
@@ -1099,6 +1117,9 @@ END {
         if (row_shape_cache_frames == 0) {
             fail("missing [fika places-row-shape-cache] logs for full custom row handoff policy")
         }
+        if (row_glyph_cache_frames == 0) {
+            fail("missing [fika places-row-glyph-cache] logs for full custom row handoff policy")
+        }
         if (max_values["row_visual_rows"] != max_values["policy_rows"]) {
             fail("handoff Places row visual layer is not aggregated to the policy row count")
         }
@@ -1112,6 +1133,9 @@ END {
         }
         if (row_shape_cache_frames != 0) {
             fail("custom row chrome policy must not emit Places row shape-cache logs")
+        }
+        if (row_glyph_cache_frames != 0) {
+            fail("custom row chrome policy must not emit Places row glyph-cache logs")
         }
         if (max_values["row_visual_rows"] != max_values["policy_rows"]) {
             fail("custom Places row chrome layer is not aggregated to the policy row count")
@@ -1134,8 +1158,14 @@ END {
             if ((policy_kind_text_seen || policy_kind_full_seen) && row_shape_cache_frames == 0) {
                 fail("missing [fika places-row-shape-cache] logs for retained custom row visual policy")
             }
+            if ((policy_kind_text_seen || policy_kind_full_seen) && row_glyph_cache_frames == 0) {
+                fail("missing [fika places-row-glyph-cache] logs for retained custom row visual policy")
+            }
             if (policy_kind_chrome_seen && row_shape_cache_frames != 0) {
                 fail("retained custom row chrome policy must not emit Places row shape-cache logs")
+            }
+            if (policy_kind_chrome_seen && row_glyph_cache_frames != 0) {
+                fail("retained custom row chrome policy must not emit Places row glyph-cache logs")
             }
             if (max_values["row_visual_rows"] != max_values["policy_rows"]) {
                 fail("retained custom Places row visual layer is not aggregated to the policy row count")
@@ -1421,6 +1451,12 @@ END {
         max_values["row_shape_misses"],
         max_values["row_shape_evicted"],
         max_values["row_shape_entries"])
+    printf("places_row_glyph_cache_frames=%d max_hits=%d max_misses=%d max_evicted=%d max_entries=%d\n",
+        row_glyph_cache_frames,
+        max_values["row_glyph_hits"],
+        max_values["row_glyph_misses"],
+        max_values["row_glyph_evicted"],
+        max_values["row_glyph_entries"])
     printf("places_scrollbar_frames=%d max_visible=%d max_scroll_y=%.1f max_thumb_height=%.1f max_track_height=%.1f\n",
         scrollbar_frames,
         max_values["scrollbar_visible"],

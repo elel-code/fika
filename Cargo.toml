@@ -12,8 +12,8 @@ name = "fika_core"
 compio = { version = "0.19", default-features = false, features = ["fs", "io", "io-uring", "macros", "runtime"] }
 futures-lite = "2"
 gio = "0.22"
-gpui = { git = "ssh://git@github.com/elel-code/zed.git", rev = "572d53326f722e5634647b2276c42069d6b5b63d", package = "gpui" }
-gpui_platform = { git = "ssh://git@github.com/elel-code/zed.git", rev = "572d53326f722e5634647b2276c42069d6b5b63d", package = "gpui_platform", features = ["wayland", "x11"] }
+gpui = { git = "ssh://git@github.com/elel-code/zed.git", rev = "d5c855b2f781998e6f063c1a821ada7f6d7190d6", package = "gpui" }
+gpui_platform = { git = "ssh://git@github.com/elel-code/zed.git", rev = "d5c855b2f781998e6f063c1a821ada7f6d7190d6", package = "gpui_platform", features = ["wayland", "x11"] }
 notify = "8"
 tokio = { version = "1", features = ["fs", "io-util", "macros", "process", "rt", "rt-multi-thread", "sync", "time"] }
 zbus = { version = "5", default-features = false }

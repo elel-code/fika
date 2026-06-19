@@ -24,6 +24,7 @@ pub(super) struct StaticItemVisualPaintState {
     layout: ItemLayout,
     marker_line_height: Pixels,
     shapes: Arc<StaticItemTextShapes>,
+    glyph_rasters: StaticItemGlyphRasterPaintState,
     label_line_height: Pixels,
     background: Option<Rgba>,
     paint_fallback_icon: bool,
@@ -35,6 +36,11 @@ struct StaticItemTextShapes {
     label: StaticItemLabelPaintState,
 }
 
+struct StaticItemGlyphRasterPaintState {
+    marker_line: Option<Arc<gpui::GlyphRasterData>>,
+    label: StaticItemLabelGlyphRasterPaintState,
+}
+
 enum StaticItemLabelPaintState {
     Start {
         lines: Arc<[gpui::WrappedLine]>,
@@ -43,6 +49,11 @@ enum StaticItemLabelPaintState {
     Center {
         lines: Arc<[gpui::ShapedLine]>,
     },
+}
+
+enum StaticItemLabelGlyphRasterPaintState {
+    Start(Vec<Option<Arc<gpui::GlyphRasterData>>>),
+    Center(Vec<Option<Arc<gpui::GlyphRasterData>>>),
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -70,6 +81,24 @@ pub(super) enum StaticItemLabelTextKey {
     Center(Vec<SharedString>),
 }
 
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub(super) struct StaticItemGlyphRasterCacheKey {
+    pub(super) text: StaticItemTextShapeCacheKey,
+    pub(super) segment: StaticItemGlyphRasterSegmentKey,
+    pub(super) origin_x_bits: u32,
+    pub(super) origin_y_bits: u32,
+    pub(super) line_height_bits: u32,
+    pub(super) align_width_bits: Option<u32>,
+    pub(super) scale_factor_bits: u32,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub(super) enum StaticItemGlyphRasterSegmentKey {
+    Marker,
+    StartLabel { line_index: usize },
+    CenterLabel { line_index: usize },
+}
+
 #[derive(Clone, Debug)]
 struct StaticItemTextShapeStyle {
     text_font: Font,
@@ -84,10 +113,12 @@ struct StaticItemTextShapeStyle {
 
 pub(crate) struct StaticItemTextShapeCache {
     cache: RetainedShapeCache<StaticItemTextShapeCacheKey, Arc<StaticItemTextShapes>>,
+    glyph_cache: RetainedShapeCache<StaticItemGlyphRasterCacheKey, Arc<gpui::GlyphRasterData>>,
 }
 
 impl StaticItemTextShapeCache {
     const MAX_ENTRIES: usize = 2048;
+    const MAX_GLYPH_ENTRIES: usize = 8192;
 
     fn shape_for(
         &mut self,
@@ -100,8 +131,27 @@ impl StaticItemTextShapeCache {
         })
     }
 
+    fn glyph_raster_for(
+        &mut self,
+        key: &StaticItemGlyphRasterCacheKey,
+    ) -> Option<Arc<gpui::GlyphRasterData>> {
+        self.glyph_cache.get(key)
+    }
+
+    fn insert_glyph_raster(
+        &mut self,
+        key: StaticItemGlyphRasterCacheKey,
+        raster_data: Arc<gpui::GlyphRasterData>,
+    ) {
+        self.glyph_cache.insert(key, raster_data);
+    }
+
     pub(super) fn take_stats(&mut self) -> TextShapeCacheStats {
         self.cache.take_stats()
+    }
+
+    pub(super) fn take_glyph_stats(&mut self) -> TextShapeCacheStats {
+        self.glyph_cache.take_stats()
     }
 }
 
@@ -109,6 +159,7 @@ impl Default for StaticItemTextShapeCache {
     fn default() -> Self {
         Self {
             cache: RetainedShapeCache::new(Self::MAX_ENTRIES),
+            glyph_cache: RetainedShapeCache::new(Self::MAX_GLYPH_ENTRIES),
         }
     }
 }
@@ -267,7 +318,7 @@ impl Element for StaticItemVisualLayerElement {
         &mut self,
         _id: Option<&GlobalElementId>,
         _inspector_id: Option<&InspectorElementId>,
-        _bounds: Bounds<Pixels>,
+        bounds: Bounds<Pixels>,
         _request_layout: &mut Self::RequestLayoutState,
         window: &mut Window,
         cx: &mut App,
@@ -283,6 +334,7 @@ impl Element for StaticItemVisualLayerElement {
             .map(|item| {
                 static_item_visual_prepaint(
                     self.pane_id,
+                    bounds,
                     item.visible,
                     item.display_name.clone(),
                     item.icon_name_lines.clone(),
@@ -366,6 +418,7 @@ pub(super) fn static_item_visual_warm_layer_element_id(pane_id: PaneId) -> (&'st
 
 fn static_item_visual_prepaint(
     pane_id: PaneId,
+    layer_bounds: Bounds<Pixels>,
     visible: bool,
     display_name: SharedString,
     icon_name_lines: Arc<[SharedString]>,
@@ -402,11 +455,24 @@ fn static_item_visual_prepaint(
         })
         .ok()
         .unwrap_or_else(|| Arc::new(shape_static_item_text(&key, &style, window)));
+    let item_bounds = static_item_item_bounds(layer_bounds, layout);
+    let glyph_rasters = static_item_glyph_raster_prepaint(
+        pane_id,
+        &key,
+        &shapes,
+        layout,
+        item_bounds,
+        &style,
+        &app,
+        window,
+        cx,
+    );
     StaticItemVisualPaintState {
         visible,
         layout,
         marker_line_height: style.marker_line_height,
         shapes,
+        glyph_rasters,
         label_line_height: style.label_line_height,
         background: (selected || drop_target || hovered)
             .then(|| super::item_tile_background(selected, drop_target, hovered)),
@@ -584,6 +650,202 @@ fn shape_static_item_text(
     StaticItemTextShapes { marker_line, label }
 }
 
+fn static_item_glyph_raster_prepaint(
+    pane_id: PaneId,
+    text_key: &StaticItemTextShapeCacheKey,
+    shapes: &StaticItemTextShapes,
+    layout: ItemLayout,
+    item_bounds: Bounds<Pixels>,
+    style: &StaticItemTextShapeStyle,
+    app: &WeakEntity<FikaApp>,
+    window: &mut Window,
+    cx: &mut App,
+) -> StaticItemGlyphRasterPaintState {
+    let icon_bounds = static_item_local_bounds(item_bounds, layout.visual_rect, layout.icon_rect);
+    let marker_line = shapes.marker_line.as_ref().and_then(|line| {
+        let marker_origin = point(
+            icon_bounds.origin.x,
+            icon_bounds.origin.y
+                + ((icon_bounds.size.height - style.marker_line_height).max(px(0.0)) / 2.0),
+        );
+        static_item_shaped_glyph_raster(
+            pane_id,
+            text_key,
+            StaticItemGlyphRasterSegmentKey::Marker,
+            line,
+            marker_origin,
+            style.marker_line_height,
+            TextAlign::Center,
+            Some(icon_bounds.size.width),
+            app,
+            window,
+            cx,
+        )
+    });
+
+    let text_bounds = static_item_local_bounds(item_bounds, layout.visual_rect, layout.text_rect);
+    let label = match &shapes.label {
+        StaticItemLabelPaintState::Start { lines, height } => {
+            let y_offset = ((text_bounds.size.height.as_f32() - *height).max(0.0) * 0.5).floor();
+            let mut y = text_bounds.origin.y + px(y_offset);
+            let mut rasters = Vec::with_capacity(lines.len());
+            for (line_index, line) in lines.iter().enumerate() {
+                rasters.push(static_item_wrapped_glyph_raster(
+                    pane_id,
+                    text_key,
+                    StaticItemGlyphRasterSegmentKey::StartLabel { line_index },
+                    line,
+                    point(text_bounds.origin.x, y),
+                    style.label_line_height,
+                    TextAlign::Left,
+                    Some(text_bounds),
+                    app,
+                    window,
+                    cx,
+                ));
+                y += line.size(style.label_line_height).height;
+            }
+            StaticItemLabelGlyphRasterPaintState::Start(rasters)
+        }
+        StaticItemLabelPaintState::Center { lines } => {
+            let height =
+                (lines.len() as f32 * ITEM_NAME_LINE_HEIGHT).min(text_bounds.size.height.as_f32());
+            let mut y = text_bounds.origin.y
+                + px(((text_bounds.size.height.as_f32() - height).max(0.0) * 0.5).floor());
+            let mut rasters = Vec::with_capacity(lines.len());
+            for (line_index, line) in lines.iter().enumerate() {
+                rasters.push(static_item_shaped_glyph_raster(
+                    pane_id,
+                    text_key,
+                    StaticItemGlyphRasterSegmentKey::CenterLabel { line_index },
+                    line,
+                    point(text_bounds.origin.x, y),
+                    style.label_line_height,
+                    TextAlign::Center,
+                    Some(text_bounds.size.width),
+                    app,
+                    window,
+                    cx,
+                ));
+                y += style.label_line_height;
+            }
+            StaticItemLabelGlyphRasterPaintState::Center(rasters)
+        }
+    };
+
+    StaticItemGlyphRasterPaintState { marker_line, label }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn static_item_shaped_glyph_raster(
+    pane_id: PaneId,
+    text_key: &StaticItemTextShapeCacheKey,
+    segment: StaticItemGlyphRasterSegmentKey,
+    line: &gpui::ShapedLine,
+    origin: gpui::Point<Pixels>,
+    line_height: Pixels,
+    align: TextAlign,
+    align_width: Option<Pixels>,
+    app: &WeakEntity<FikaApp>,
+    window: &mut Window,
+    cx: &mut App,
+) -> Option<Arc<gpui::GlyphRasterData>> {
+    let raster_key = static_item_glyph_raster_cache_key(
+        text_key.clone(),
+        segment,
+        origin,
+        line_height,
+        align_width,
+        window.scale_factor(),
+    );
+    app.update(cx, |this, _cx| {
+        this.static_item_text_shape_caches
+            .entry(pane_id)
+            .or_default()
+            .glyph_raster_for(&raster_key)
+    })
+    .ok()
+    .flatten()
+    .or_else(|| {
+        let raster_data = Arc::new(
+            line.compute_glyph_raster_data(origin, line_height, align, align_width, window, cx)
+                .ok()?,
+        );
+        let _ = app.update(cx, |this, _cx| {
+            this.static_item_text_shape_caches
+                .entry(pane_id)
+                .or_default()
+                .insert_glyph_raster(raster_key, raster_data.clone());
+        });
+        Some(raster_data)
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn static_item_wrapped_glyph_raster(
+    pane_id: PaneId,
+    text_key: &StaticItemTextShapeCacheKey,
+    segment: StaticItemGlyphRasterSegmentKey,
+    line: &gpui::WrappedLine,
+    origin: gpui::Point<Pixels>,
+    line_height: Pixels,
+    align: TextAlign,
+    bounds: Option<Bounds<Pixels>>,
+    app: &WeakEntity<FikaApp>,
+    window: &mut Window,
+    cx: &mut App,
+) -> Option<Arc<gpui::GlyphRasterData>> {
+    let align_width = bounds.map(|bounds| bounds.size.width);
+    let raster_key = static_item_glyph_raster_cache_key(
+        text_key.clone(),
+        segment,
+        origin,
+        line_height,
+        align_width,
+        window.scale_factor(),
+    );
+    app.update(cx, |this, _cx| {
+        this.static_item_text_shape_caches
+            .entry(pane_id)
+            .or_default()
+            .glyph_raster_for(&raster_key)
+    })
+    .ok()
+    .flatten()
+    .or_else(|| {
+        let raster_data = Arc::new(
+            line.compute_glyph_raster_data(origin, line_height, align, bounds, window, cx)
+                .ok()?,
+        );
+        let _ = app.update(cx, |this, _cx| {
+            this.static_item_text_shape_caches
+                .entry(pane_id)
+                .or_default()
+                .insert_glyph_raster(raster_key, raster_data.clone());
+        });
+        Some(raster_data)
+    })
+}
+
+fn static_item_glyph_raster_cache_key(
+    text: StaticItemTextShapeCacheKey,
+    segment: StaticItemGlyphRasterSegmentKey,
+    origin: gpui::Point<Pixels>,
+    line_height: Pixels,
+    align_width: Option<Pixels>,
+    scale_factor: f32,
+) -> StaticItemGlyphRasterCacheKey {
+    StaticItemGlyphRasterCacheKey {
+        text,
+        segment,
+        origin_x_bits: origin.x.as_f32().to_bits(),
+        origin_y_bits: origin.y.as_f32().to_bits(),
+        line_height_bits: line_height.as_f32().to_bits(),
+        align_width_bits: align_width.map(|width| width.as_f32().to_bits()),
+        scale_factor_bits: scale_factor.to_bits(),
+    }
+}
+
 fn static_item_visual_paint(
     bounds: Bounds<Pixels>,
     state: &StaticItemVisualPaintState,
@@ -603,16 +865,36 @@ fn static_item_visual_paint(
                 + ((icon_bounds.size.height - state.marker_line_height).max(px(0.0)) / 2.0),
         );
         if let Some(marker_line) = &state.shapes.marker_line {
-            marker_line
-                .paint(
-                    marker_origin,
-                    state.marker_line_height,
-                    TextAlign::Center,
-                    Some(icon_bounds.size.width),
-                    window,
-                    cx,
-                )
-                .ok();
+            let painted_with_raster =
+                state
+                    .glyph_rasters
+                    .marker_line
+                    .as_ref()
+                    .is_some_and(|raster_data| {
+                        marker_line
+                            .paint_with_raster_data(
+                                marker_origin,
+                                state.marker_line_height,
+                                TextAlign::Center,
+                                Some(icon_bounds.size.width),
+                                raster_data,
+                                window,
+                                cx,
+                            )
+                            .is_ok()
+                    });
+            if !painted_with_raster {
+                marker_line
+                    .paint(
+                        marker_origin,
+                        state.marker_line_height,
+                        TextAlign::Center,
+                        Some(icon_bounds.size.width),
+                        window,
+                        cx,
+                    )
+                    .ok();
+            }
         }
     }
 
@@ -620,41 +902,96 @@ fn static_item_visual_paint(
         static_item_local_bounds(bounds, state.layout.visual_rect, state.layout.text_rect);
     match &state.shapes.label {
         StaticItemLabelPaintState::Start { lines, height } => {
+            let rasters = match &state.glyph_rasters.label {
+                StaticItemLabelGlyphRasterPaintState::Start(rasters) => Some(rasters),
+                StaticItemLabelGlyphRasterPaintState::Center(_) => None,
+            };
             let y_offset = ((text_bounds.size.height.as_f32() - *height).max(0.0) * 0.5).floor();
             let mut y = text_bounds.origin.y + px(y_offset);
-            for line in lines.iter() {
+            for (line_index, line) in lines.iter().enumerate() {
                 let line_height = line.size(state.label_line_height).height;
-                line.paint(
-                    point(text_bounds.origin.x, y),
-                    state.label_line_height,
-                    TextAlign::Left,
-                    Some(text_bounds),
-                    window,
-                    cx,
-                )
-                .ok();
+                let origin = point(text_bounds.origin.x, y);
+                let painted_with_raster = rasters
+                    .and_then(|rasters| rasters.get(line_index))
+                    .and_then(Option::as_ref)
+                    .is_some_and(|raster_data| {
+                        line.paint_with_raster_data(
+                            origin,
+                            state.label_line_height,
+                            TextAlign::Left,
+                            Some(text_bounds),
+                            raster_data,
+                            window,
+                            cx,
+                        )
+                        .is_ok()
+                    });
+                if !painted_with_raster {
+                    line.paint(
+                        origin,
+                        state.label_line_height,
+                        TextAlign::Left,
+                        Some(text_bounds),
+                        window,
+                        cx,
+                    )
+                    .ok();
+                }
                 y += line_height;
             }
         }
         StaticItemLabelPaintState::Center { lines } => {
+            let rasters = match &state.glyph_rasters.label {
+                StaticItemLabelGlyphRasterPaintState::Center(rasters) => Some(rasters),
+                StaticItemLabelGlyphRasterPaintState::Start(_) => None,
+            };
             let height =
                 (lines.len() as f32 * ITEM_NAME_LINE_HEIGHT).min(text_bounds.size.height.as_f32());
             let mut y = text_bounds.origin.y
                 + px(((text_bounds.size.height.as_f32() - height).max(0.0) * 0.5).floor());
-            for line in lines.iter() {
-                line.paint(
-                    point(text_bounds.origin.x, y),
-                    state.label_line_height,
-                    TextAlign::Center,
-                    Some(text_bounds.size.width),
-                    window,
-                    cx,
-                )
-                .ok();
+            for (line_index, line) in lines.iter().enumerate() {
+                let origin = point(text_bounds.origin.x, y);
+                let painted_with_raster = rasters
+                    .and_then(|rasters| rasters.get(line_index))
+                    .and_then(Option::as_ref)
+                    .is_some_and(|raster_data| {
+                        line.paint_with_raster_data(
+                            origin,
+                            state.label_line_height,
+                            TextAlign::Center,
+                            Some(text_bounds.size.width),
+                            raster_data,
+                            window,
+                            cx,
+                        )
+                        .is_ok()
+                    });
+                if !painted_with_raster {
+                    line.paint(
+                        origin,
+                        state.label_line_height,
+                        TextAlign::Center,
+                        Some(text_bounds.size.width),
+                        window,
+                        cx,
+                    )
+                    .ok();
+                }
                 y += state.label_line_height;
             }
         }
     }
+}
+
+fn static_item_item_bounds(layer_bounds: Bounds<Pixels>, layout: ItemLayout) -> Bounds<Pixels> {
+    let visual = layout.visual_rect;
+    Bounds::new(
+        point(
+            layer_bounds.origin.x + px(visual.x),
+            layer_bounds.origin.y + px(visual.y),
+        ),
+        size(px(visual.width.max(1.0)), px(visual.height.max(1.0))),
+    )
 }
 
 fn static_item_local_bounds(

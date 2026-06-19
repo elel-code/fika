@@ -76,6 +76,13 @@ scripts/summarize-item-view-renderer-evidence.sh /tmp/fika-evidence-item-etc-zoo
 scripts/analyze-item-view-perf.sh --require-autosmoke --require-details --require-renderer-policy --require-interaction --expect-retained-item-policy --require-modes Details --require-renderer-policy-modes Details /tmp/fika-evidence-item-etc-details-zoom-scroll.log
 ```
 
+The Details gate requires `[fika details-visual]`,
+`[fika details-shape-cache]`, and `[fika details-glyph-cache]` so shape reuse
+and retained glyph-raster reuse remain separately visible.
+The standard runtime gate also requires `[fika static-item-visual]`,
+`[fika item-shape-cache]`, and `[fika item-glyph-cache]` for Compact/Icons text
+reuse evidence.
+
 The summary block is the preferred evidence snippet for
 `docs/ITEM_VIEW_RENDERER_DECISIONS.md`.
 
@@ -139,6 +146,13 @@ scripts/analyze-places-perf.sh --require-layout-autosmoke --require-interaction-
 scripts/analyze-places-perf.sh --require-hit-test-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-full-policy /tmp/fika-evidence-places-hit-test.log
 scripts/analyze-places-perf.sh --require-retained-targeting-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-full-policy /tmp/fika-evidence-places-targeting.log
 scripts/analyze-places-perf.sh --require-retained-dnd-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-full-policy --expect-retained-event-policy /tmp/fika-evidence-places-dnd.log
+```
+
+For full custom Places text, summaries must include both retained text caches:
+
+```text
+places_row_shape_cache_frames>0
+places_row_glyph_cache_frames>0
 ```
 
 For the current default retained-DnD policy, the dnd summary must show:

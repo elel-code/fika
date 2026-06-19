@@ -14,13 +14,15 @@ Options:
       Fail if no [fika item-view] phase=steady frame is present.
 
   --require-details
-      Fail if Details-specific visual and shape-cache channels are missing.
+      Fail if Details-specific visual, shape-cache, and glyph-cache channels
+      are missing.
 
   --require-warm-details-visual
       Fail if Details-specific warmed visual paint timing is missing.
 
   --require-static-visual
-      Fail if [fika static-item-visual] Compact/Icons paint timing is missing.
+      Fail if [fika static-item-visual] Compact/Icons paint timing or static
+      item shape/glyph cache evidence is missing.
 
   --require-static-modes A,B,C
       Fail if any comma-separated view mode is absent from static visual logs.
@@ -581,6 +583,24 @@ BEGIN {
     }
 }
 
+/^\[fika item-shape-cache\]/ {
+    item_shape_count++
+    note_mode(field("mode"))
+    item_shape_hits += field("hits") + 0
+    item_shape_misses += field("misses") + 0
+    item_shape_evicted += field("evicted") + 0
+    max_assign(single_max, "item_shape_entries", field("entries") + 0)
+}
+
+/^\[fika item-glyph-cache\]/ {
+    item_glyph_count++
+    note_mode(field("mode"))
+    item_glyph_hits += field("hits") + 0
+    item_glyph_misses += field("misses") + 0
+    item_glyph_evicted += field("evicted") + 0
+    max_assign(single_max, "item_glyph_entries", field("entries") + 0)
+}
+
 /^\[fika item-image\]/ {
     image_count++
     note_mode(field("mode"))
@@ -621,6 +641,17 @@ BEGIN {
     note_mode(field("mode"))
     details_shape_hits += field("hits") + 0
     details_shape_misses += field("misses") + 0
+    details_shape_evicted += field("evicted") + 0
+    max_assign(single_max, "details_shape_entries", field("entries") + 0)
+}
+
+/^\[fika details-glyph-cache\]/ {
+    details_glyph_count++
+    note_mode(field("mode"))
+    details_glyph_hits += field("hits") + 0
+    details_glyph_misses += field("misses") + 0
+    details_glyph_evicted += field("evicted") + 0
+    max_assign(single_max, "details_glyph_entries", field("entries") + 0)
 }
 
 /^\[fika item-interaction\]/ {
@@ -772,6 +803,16 @@ END {
     print "  static_visual_frames: " (static_visual_count + 0) \
         " max_prepaint=" (("static_visual_prepaint" in single_max) ? single_max["static_visual_prepaint"] : 0) "us" \
         " max_paint=" (("static_visual_paint" in single_max) ? single_max["static_visual_paint"] : 0) "us"
+    print "  item_shape_frames: " (item_shape_count + 0) \
+        " hits=" (item_shape_hits + 0) \
+        " misses=" (item_shape_misses + 0) \
+        " evicted=" (item_shape_evicted + 0) \
+        " max_entries=" (("item_shape_entries" in single_max) ? single_max["item_shape_entries"] : 0)
+    print "  item_glyph_frames: " (item_glyph_count + 0) \
+        " hits=" (item_glyph_hits + 0) \
+        " misses=" (item_glyph_misses + 0) \
+        " evicted=" (item_glyph_evicted + 0) \
+        " max_entries=" (("item_glyph_entries" in single_max) ? single_max["item_glyph_entries"] : 0)
     print "  warm_static_visual_frames: " (warm_static_visual_count + 0) \
         " max_paint=" (("warm_static_visual_paint" in single_max) ? single_max["warm_static_visual_paint"] : 0) "us"
     print "  image_frames: " (image_count + 0) \
@@ -802,7 +843,15 @@ END {
     print "  warm_details_visual_frames: " (warm_details_visual_count + 0) \
         " max_paint=" (("warm_details_visual_paint" in single_max) ? single_max["warm_details_visual_paint"] : 0) "us"
     print "  details_shape_frames: " (details_shape_count + 0) \
-        " hits=" (details_shape_hits + 0) " misses=" (details_shape_misses + 0)
+        " hits=" (details_shape_hits + 0) \
+        " misses=" (details_shape_misses + 0) \
+        " evicted=" (details_shape_evicted + 0) \
+        " max_entries=" (("details_shape_entries" in single_max) ? single_max["details_shape_entries"] : 0)
+    print "  details_glyph_frames: " (details_glyph_count + 0) \
+        " hits=" (details_glyph_hits + 0) \
+        " misses=" (details_glyph_misses + 0) \
+        " evicted=" (details_glyph_evicted + 0) \
+        " max_entries=" (("details_glyph_entries" in single_max) ? single_max["details_glyph_entries"] : 0)
     print "  interaction_frames: " (item_interaction_count + 0) \
         " max_prepaint_count=" (("interaction_prepaint_count" in single_max) ? single_max["interaction_prepaint_count"] : 0) \
         " max_paint_count=" (("interaction_paint_count" in single_max) ? single_max["interaction_paint_count"] : 0)
@@ -849,11 +898,20 @@ END {
     if (require_details == "true" && details_shape_count == 0) {
         fail("missing [fika details-shape-cache] lines")
     }
+    if (require_details == "true" && details_glyph_count == 0) {
+        fail("missing [fika details-glyph-cache] lines")
+    }
     if (require_warm_details_visual == "true" && warm_details_visual_count == 0) {
         fail("missing warmed [fika details-visual] paint frames")
     }
     if (require_static_visual == "true" && static_visual_count == 0) {
         fail("missing [fika static-item-visual] lines")
+    }
+    if (require_static_visual == "true" && item_shape_count == 0) {
+        fail("missing [fika item-shape-cache] lines")
+    }
+    if (require_static_visual == "true" && item_glyph_count == 0) {
+        fail("missing [fika item-glyph-cache] lines")
     }
     for (mode in required_static_mode) {
         if (!(mode in static_visual_modes)) {

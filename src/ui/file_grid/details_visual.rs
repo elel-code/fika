@@ -34,8 +34,19 @@ pub(super) struct DetailsTextShapeCacheKey {
     pub(super) color: u32,
 }
 
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub(super) struct DetailsGlyphRasterCacheKey {
+    pub(super) text: DetailsTextShapeCacheKey,
+    pub(super) origin_x_bits: u32,
+    pub(super) origin_y_bits: u32,
+    pub(super) line_height_bits: u32,
+    pub(super) align_width_bits: Option<u32>,
+    pub(super) scale_factor_bits: u32,
+}
+
 pub(crate) struct DetailsTextShapeCache {
     cache: RetainedShapeCache<DetailsTextShapeCacheKey, Arc<gpui::ShapedLine>>,
+    glyph_cache: RetainedShapeCache<DetailsGlyphRasterCacheKey, Arc<gpui::GlyphRasterData>>,
 }
 
 impl DetailsTextShapeCache {
@@ -50,8 +61,27 @@ impl DetailsTextShapeCache {
             .get_or_insert_with(key, |key| Arc::new(shape_details_visual_text(key, window)))
     }
 
+    fn glyph_raster_for(
+        &mut self,
+        key: &DetailsGlyphRasterCacheKey,
+    ) -> Option<Arc<gpui::GlyphRasterData>> {
+        self.glyph_cache.get(key)
+    }
+
+    fn insert_glyph_raster(
+        &mut self,
+        key: DetailsGlyphRasterCacheKey,
+        raster_data: Arc<gpui::GlyphRasterData>,
+    ) {
+        self.glyph_cache.insert(key, raster_data);
+    }
+
     pub(super) fn take_stats(&mut self) -> TextShapeCacheStats {
         self.cache.take_stats()
+    }
+
+    pub(super) fn take_glyph_stats(&mut self) -> TextShapeCacheStats {
+        self.glyph_cache.take_stats()
     }
 }
 
@@ -59,6 +89,7 @@ impl Default for DetailsTextShapeCache {
     fn default() -> Self {
         Self {
             cache: RetainedShapeCache::new(Self::MAX_ENTRIES),
+            glyph_cache: RetainedShapeCache::new(Self::MAX_ENTRIES),
         }
     }
 }
@@ -259,6 +290,7 @@ struct DetailsVisualIconPaintState {
 struct DetailsVisualTextPaintState {
     rect: ViewRect,
     line: Arc<gpui::ShapedLine>,
+    raster_data: Option<Arc<gpui::GlyphRasterData>>,
     line_height: Pixels,
 }
 
@@ -301,7 +333,7 @@ impl Element for DetailsVisualLayerElement {
         &mut self,
         id: Option<&GlobalElementId>,
         _inspector_id: Option<&InspectorElementId>,
-        _bounds: Bounds<Pixels>,
+        bounds: Bounds<Pixels>,
         _request_layout: &mut Self::RequestLayoutState,
         window: &mut Window,
         cx: &mut App,
@@ -314,6 +346,7 @@ impl Element for DetailsVisualLayerElement {
                 let header = details_visual_prepaint_header(
                     self.pane_id,
                     &self.header,
+                    bounds,
                     &self.app,
                     window,
                     cx,
@@ -323,6 +356,7 @@ impl Element for DetailsVisualLayerElement {
                     rows.push(details_visual_prepaint_item(
                         self.pane_id,
                         item,
+                        bounds,
                         Some(&mut state),
                         &self.app,
                         Some(&mut ready_images),
@@ -344,8 +378,14 @@ impl Element for DetailsVisualLayerElement {
                 ((header, rows), state)
             })
         } else {
-            let header =
-                details_visual_prepaint_header(self.pane_id, &self.header, &self.app, window, cx);
+            let header = details_visual_prepaint_header(
+                self.pane_id,
+                &self.header,
+                bounds,
+                &self.app,
+                window,
+                cx,
+            );
             let rows = self
                 .items
                 .iter()
@@ -353,6 +393,7 @@ impl Element for DetailsVisualLayerElement {
                     details_visual_prepaint_item(
                         self.pane_id,
                         item,
+                        bounds,
                         None,
                         &self.app,
                         None,
@@ -417,6 +458,7 @@ const DETAILS_HEADER_TEXT_LINE_HEIGHT: f32 = 16.0;
 fn details_visual_prepaint_header(
     pane_id: PaneId,
     header: &DetailsVisualHeader,
+    layer_bounds: Bounds<Pixels>,
     app: &WeakEntity<FikaApp>,
     window: &mut Window,
     cx: &mut App,
@@ -439,6 +481,7 @@ fn details_visual_prepaint_header(
                 x: column.x,
                 width: column.width,
                 title: details_visual_text_prepaint(
+                    layer_bounds,
                     text_rect,
                     column.title.clone(),
                     0x4b5563,
@@ -462,6 +505,7 @@ fn details_visual_prepaint_header(
 fn details_visual_prepaint_item(
     pane_id: PaneId,
     item: &DetailsVisualLayerItem,
+    layer_bounds: Bounds<Pixels>,
     mut image_state: Option<&mut RetainedImageLayerState>,
     app: &WeakEntity<FikaApp>,
     mut ready_images: Option<&mut Vec<RetainedImageReady>>,
@@ -488,6 +532,7 @@ fn details_visual_prepaint_item(
                         cx,
                     ),
                     text: details_visual_text_prepaint(
+                        layer_bounds,
                         text_rect,
                         name.clone(),
                         if item.selected { 0x0f172a } else { 0x1f2937 },
@@ -503,6 +548,7 @@ fn details_visual_prepaint_item(
             }
             DetailsVisualCellContent::Text { text } => {
                 DetailsVisualCellPaintState::Text(details_visual_text_prepaint(
+                    layer_bounds,
                     details_visual_text_rect(item, cell),
                     text.clone(),
                     0x4b5563,
@@ -634,6 +680,7 @@ fn details_visual_icon_fallback_prepaint(
 }
 
 fn details_visual_text_prepaint(
+    layer_bounds: Bounds<Pixels>,
     rect: ViewRect,
     text: SharedString,
     color: u32,
@@ -655,9 +702,49 @@ fn details_visual_text_prepaint(
         })
         .ok()
         .unwrap_or_else(|| Arc::new(shape_details_visual_text(&key, window)));
+    let text_bounds = details_visual_bounds(layer_bounds, rect);
+    let origin = point(text_bounds.origin.x, text_bounds.origin.y);
+    let align_width = Some(text_bounds.size.width);
+    let raster_key = details_glyph_raster_cache_key(
+        key,
+        origin,
+        line_height,
+        align_width,
+        window.scale_factor(),
+    );
+    let raster_data = app
+        .update(cx, |this, _cx| {
+            this.details_text_shape_caches
+                .entry(pane_id)
+                .or_default()
+                .glyph_raster_for(&raster_key)
+        })
+        .ok()
+        .flatten()
+        .or_else(|| {
+            let raster_data = Arc::new(
+                line.compute_glyph_raster_data(
+                    origin,
+                    line_height,
+                    TextAlign::Left,
+                    align_width,
+                    window,
+                    cx,
+                )
+                .ok()?,
+            );
+            let _ = app.update(cx, |this, _cx| {
+                this.details_text_shape_caches
+                    .entry(pane_id)
+                    .or_default()
+                    .insert_glyph_raster(raster_key, raster_data.clone());
+            });
+            Some(raster_data)
+        });
     DetailsVisualTextPaintState {
         rect,
         line,
+        raster_data,
         line_height,
     }
 }
@@ -698,6 +785,23 @@ fn shape_details_visual_text(
         &[run],
         None,
     )
+}
+
+fn details_glyph_raster_cache_key(
+    text: DetailsTextShapeCacheKey,
+    origin: gpui::Point<Pixels>,
+    line_height: Pixels,
+    align_width: Option<Pixels>,
+    scale_factor: f32,
+) -> DetailsGlyphRasterCacheKey {
+    DetailsGlyphRasterCacheKey {
+        text,
+        origin_x_bits: origin.x.as_f32().to_bits(),
+        origin_y_bits: origin.y.as_f32().to_bits(),
+        line_height_bits: line_height.as_f32().to_bits(),
+        align_width_bits: align_width.map(|width| width.as_f32().to_bits()),
+        scale_factor_bits: scale_factor.to_bits(),
+    }
 }
 
 fn details_visual_paint_item(
@@ -791,13 +895,32 @@ fn details_visual_paint_text(
     cx: &mut App,
 ) {
     let text_bounds = details_visual_bounds(layer_bounds, state.rect);
+    let origin = point(text_bounds.origin.x, text_bounds.origin.y);
+    let align_width = Some(text_bounds.size.width);
+    if let Some(raster_data) = &state.raster_data {
+        if state
+            .line
+            .paint_with_raster_data(
+                origin,
+                state.line_height,
+                TextAlign::Left,
+                align_width,
+                raster_data,
+                window,
+                cx,
+            )
+            .is_ok()
+        {
+            return;
+        }
+    }
     state
         .line
         .paint(
-            point(text_bounds.origin.x, text_bounds.origin.y),
+            origin,
             state.line_height,
             TextAlign::Left,
-            Some(text_bounds.size.width),
+            align_width,
             window,
             cx,
         )

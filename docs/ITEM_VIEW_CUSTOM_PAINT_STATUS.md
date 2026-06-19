@@ -9,22 +9,35 @@ becomes the default.
 The active post-Places-chrome execution roadmap is
 `docs/FULL_RETAINED_RENDERER_ROADMAP.md`.
 
+## Active First Priority
+
+The first-priority retained-glyph slice is now implemented across Places and
+file-grid text. Places is the reference
+implementation: Fika owns retained `ShapedLine` identity, retained
+`GlyphRasterData` lifetime, and the custom paint call site, while GPUI remains
+the text raster/backend substrate. The same contract has been applied to pane
+text in order: Details cells/header first, then Compact/Icons static labels and
+fallback markers. The next requirement is to keep runtime evidence fresh. Shape
+caches may keep their Dolphin-style geometry reuse
+keys, but glyph-raster caches must use paint-geometry keys because GPUI raster
+data is tied to origin, line height, align width, and scale factor.
+
 ## Current Replacement Matrix
 
 | Surface | Current state | Renderer | Remaining dependency |
 | --- | --- | --- | --- |
 | Compact/Icons item model and geometry | retained | `DirectoryModel`, visible snapshots, slot pools | none for current path |
-| Compact/Icons base background, selection, hover, drop tint, labels | replaced | custom content-level painter | runtime perf and DnD smoke evidence must stay current |
+| Compact/Icons base background, selection, hover, drop tint, labels | replaced | custom content-level painter with retained shape and glyph-raster text caches | runtime perf and DnD smoke evidence must stay current |
 | Compact/Icons thumbnail images | replaced | custom image painter using GPUI `RetainAllImageCache` plus retained same-thumbnail images | pending/failure still reuses retained images or paints thumbnail fallback |
 | Compact/Icons MIME/theme-icon images | replaced by default full custom image layer | retained image layer using GPUI `RetainAllImageCache -> RenderImage -> Window::paint_image`; `FIKA_GPUI_THEME_ICONS=1` remains the GPUI `img()` baseline | same-scenario image A/B evidence is required before changing image renderer policy |
 | Compact/Icons click, menu, hover, cursor, and drop hit testing | replaced | retained viewport/custom hitboxes plus active item-drag window tracker | runtime DnD smoke still required after painter changes |
 | Compact/Icons drag start | replaced | retained hitbox typed drag through the Fika GPUI fork | keep `gpui_drag_shell=0` and DnD smoke passing |
 | Compact/Icons rename editor | not replaced | GPUI editor overlay | only revisit after caret, selection, IME, and text input behavior are covered |
 | Details row model and geometry | retained | Details paint snapshots and row layout projection | none for current path |
-| Details row backgrounds, icons, text cells, Trash columns | replaced | custom content-level painter | Details icons use the same cached/preliminary icon policy; runtime Details perf and DnD smoke evidence must stay current |
+| Details row backgrounds, icons, text cells, Trash columns | replaced | custom content-level painter | Details icons use the same cached/preliminary icon policy; Details text retains both shape and glyph-raster paint data; runtime Details perf and DnD smoke evidence must stay current |
 | Details click, menu, navigation, hover, cursor, drop hit testing | replaced | retained row hit testing/controller state plus active item-drag window tracker | runtime DnD smoke still required after painter changes |
 | Details drag start | replaced | retained row hitbox typed drag through the Fika GPUI fork | keep `gpui_drag_shell=0` and Details DnD smoke passing |
-| Places rows and sidebar scrollbar | retained model/slot/target-decision state, default full row visual, retained event delivery, and typed DnD replaced | Default `FIKA_PLACES_ROW_VISUAL_POLICY=full` paints background/drop/insert/trash, row labels, section headings, and Places icons in one sidebar-level custom layer while `retained-dnd` owns activation/context-menu targeting/DnD target lookup/drop dispatch; Places icons use a retained `RetainAllImageCache` plus `paint_image` path with stable fallback; drag start and typed payload delivery use retained hitboxes from the Fika GPUI fork; `gpui`, `chrome`, and `text` fallbacks remain available | keep `gpui_event_shells=0`, `gpui_typed_dnd_payload_shells=0`, `drag_shells=0`, and retained-event smoke passing |
+| Places rows and sidebar scrollbar | retained model/slot/target-decision state, default full row visual, retained event delivery, and typed DnD replaced | Default `FIKA_PLACES_ROW_VISUAL_POLICY=full` paints background/drop/insert/trash, row labels, section headings, and Places icons in one sidebar-level custom layer while `retained-dnd` owns activation/context-menu targeting/DnD target lookup/drop dispatch; Places text retains both shaped lines and GPUI glyph-raster paint data; Places icons use a retained `RetainAllImageCache` plus `paint_image` path with stable fallback; drag start and typed payload delivery use retained hitboxes from the Fika GPUI fork; `gpui`, `chrome`, and `text` fallbacks remain available | keep `gpui_event_shells=0`, `gpui_typed_dnd_payload_shells=0`, `drag_shells=0`, and retained-event smoke passing |
 
 The practical state is: item-view static visuals, image painting, hit testing,
 drop routing, and drag start have moved to the retained/custom-painted
@@ -32,10 +45,11 @@ architecture. Rename remains a GPUI editor/platform-contract boundary. Places
 now defaults to a custom full row visual layer plus retained-DnD row/section
 target delivery, typed payload delivery, and drag start, so row labels, section
 headings, row icons, and DnD interaction no longer require GPUI row children in
-the default path. Places icon painting uses the same underlying GPUI image
-mechanism that makes `img()` fast: cached `RenderImage` data is submitted
-through `window.paint_image`, while the retained cache keeps a real image
-available across pending reloads.
+the default path. Places text painting uses GPUI's backend, but Fika owns the
+retained `ShapedLine` and glyph-raster paint-data lifetime. Places icon painting
+uses the same underlying GPUI image mechanism that makes `img()` fast: cached
+`RenderImage` data is submitted through `window.paint_image`, while the retained
+cache keeps a real image available across pending reloads.
 
 ## Evidence Anchors
 
@@ -74,7 +88,13 @@ available across pending reloads.
 - Compact/Icons image paint channel: `[fika item-image]`
   (`thumb_loaded`, `thumb_decoded`, `thumb_retained`, `thumb_fallback`;
   `theme_*` counters appear only in custom-theme A/B runs)
+- Compact/Icons text shape-cache channel: `[fika item-shape-cache]`
+- Compact/Icons text retained glyph-raster cache channel:
+  `[fika item-glyph-cache]`
 - Details visual paint channel: `[fika details-visual]`
+- Details text shape-cache channel: `[fika details-shape-cache]`
+- Details text retained glyph-raster cache channel:
+  `[fika details-glyph-cache]`
 - Renderer surface count channel: `[fika renderer-policy]`
 - Runtime checklist: `docs/ITEM_VIEW_RUNTIME_SMOKE.md`
 - Per-surface decisions: `docs/ITEM_VIEW_RENDERER_DECISIONS.md`
@@ -173,7 +193,7 @@ The drag-start boundary is resolved through the Fika GPUI fork. Keep these as
 maintenance rules:
 
 - Fika pins `gpui` and `gpui_platform` to the fork revision
-  `572d53326f722e5634647b2276c42069d6b5b63d`.
+  `02f256ffd7edfbcbb5354ad03db7a193def08590`.
 - Item, Details, and Places drag start must remain registered from retained
   hitboxes, not layout-owning GPUI row/item `Div`s.
 - Analyzer gates must keep `gpui_drag_shell=0`.
@@ -241,9 +261,9 @@ Overflow evidence is available through `FIKA_AUTOSMOKE_PLACES=overflow`, which
 adds non-persistent snapshot-only rows and validates
 `[fika places-scrollbar] visible=1`. The Places analyzer rejects the old per-row
 canvas shape by requiring `[fika places-row-visual] rows` to match the
-renderer-policy row count. The default full gate requires row shape-cache
-evidence and zero GPUI event/typed-payload/drag shell counts; chrome/text/GPUI
-policies remain comparison baselines.
+renderer-policy row count. The default full gate requires row shape-cache and
+glyph-cache evidence plus zero GPUI event/typed-payload/drag shell counts;
+chrome/text/GPUI policies remain comparison baselines.
 
 The concrete retained-row design and Dolphin source comparison live in
 `docs/PLACES_RENDERER_PLAN.md`.
@@ -306,8 +326,9 @@ The next transition work must follow this order:
 3. Keep the Fika GPUI retained-hitbox typed DnD patch current with upstream.
    Item/details/Places drag start must stay retained-hitbox based without
    losing payload, preview, cursor offset, or external drop behavior.
-4. Treat Places as its own migration. It needs a GPUI baseline and a
-   Places-specific retained row painter plan before any custom-paint switch.
+4. Treat Places as its own migration. Default full row visual and retained-DnD
+   are complete; future changes must keep GPUI/chrome/text baselines and
+   text/glyph cache evidence current.
 5. Keep rename as a GPUI text-editing boundary until a custom editor covers
    focus, caret hit testing, UTF-8 selection, validation, commit/cancel, Tab
    rename-next, and IME.
@@ -341,9 +362,11 @@ execution must stay split into evidence-backed tracks:
 4. **Shell-boundary track**: keep GPUI DnD shell counts at zero through the
    Fika GPUI retained-hitbox typed DnD patch. Keep rename on GPUI until a
    behavior matrix covers text input and IME.
-5. **Places track**: treat Places as a separate renderer migration. Its model
-   and DnD state may be retained first, but the GPUI renderer stays until a
-   Places-specific baseline and painter design are recorded.
+5. **Glyph-raster track**: Places full rows are the reference implementation.
+   The same retained text/glyph paint-data model now covers Details cells/header
+   and Compact/Icons labels/fallback markers. The evidence gate for each
+   surface must include both the existing shape-cache channel and the
+   glyph-cache channel.
 6. **Ownership track**: keep extracting orchestration from `src/main.rs` into
    Dolphin-aligned file-grid modules when the move is behavior-preserving. This
    includes role scheduling handoff, runtime evidence helpers, and eventually

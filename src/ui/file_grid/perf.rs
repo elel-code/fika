@@ -524,6 +524,16 @@ impl FikaApp {
             .unwrap_or_default()
     }
 
+    pub(super) fn take_static_item_glyph_raster_cache_stats(
+        &mut self,
+        pane_id: PaneId,
+    ) -> TextShapeCacheStats {
+        self.static_item_text_shape_caches
+            .get_mut(&pane_id)
+            .map(StaticItemTextShapeCache::take_glyph_stats)
+            .unwrap_or_default()
+    }
+
     pub(super) fn take_details_text_shape_cache_stats(
         &mut self,
         pane_id: PaneId,
@@ -531,6 +541,16 @@ impl FikaApp {
         self.details_text_shape_caches
             .get_mut(&pane_id)
             .map(DetailsTextShapeCache::take_stats)
+            .unwrap_or_default()
+    }
+
+    pub(super) fn take_details_glyph_raster_cache_stats(
+        &mut self,
+        pane_id: PaneId,
+    ) -> TextShapeCacheStats {
+        self.details_text_shape_caches
+            .get_mut(&pane_id)
+            .map(DetailsTextShapeCache::take_glyph_stats)
             .unwrap_or_default()
     }
 

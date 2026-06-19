@@ -305,7 +305,9 @@ pub(crate) fn file_grid(
             let mut bounds_changed = false;
             let mut notify_requested = false;
             let mut shape_cache_stats = TextShapeCacheStats::default();
+            let mut glyph_cache_stats = TextShapeCacheStats::default();
             let mut details_shape_cache_stats = TextShapeCacheStats::default();
+            let mut details_glyph_cache_stats = TextShapeCacheStats::default();
             let mut static_visual_stats = StaticItemVisualPerfStats::default();
             let mut image_stats = ItemImagePerfStats::default();
             let mut details_visual_stats = DetailsVisualPerfStats::default();
@@ -335,7 +337,10 @@ pub(crate) fn file_grid(
                 }
                 if perf_enabled {
                     shape_cache_stats = this.take_static_item_text_shape_cache_stats(pane_id);
+                    glyph_cache_stats = this.take_static_item_glyph_raster_cache_stats(pane_id);
                     details_shape_cache_stats = this.take_details_text_shape_cache_stats(pane_id);
+                    details_glyph_cache_stats =
+                        this.take_details_glyph_raster_cache_stats(pane_id);
                     static_visual_stats = this.take_static_item_visual_perf_stats(pane_id);
                     image_stats = this.take_item_image_perf_stats(pane_id);
                     details_visual_stats = this.take_details_visual_perf_stats(pane_id);
@@ -366,6 +371,17 @@ pub(crate) fn file_grid(
                         shape_cache_stats.entries,
                     );
                 }
+                if glyph_cache_stats.has_activity() {
+                    eprintln!(
+                        "[fika item-glyph-cache] pane={} mode={:?} hits={} misses={} evicted={} entries={}",
+                        pane_id.0,
+                        view_mode,
+                        glyph_cache_stats.hits,
+                        glyph_cache_stats.misses,
+                        glyph_cache_stats.evicted,
+                        glyph_cache_stats.entries,
+                    );
+                }
                 if details_shape_cache_stats.has_activity() {
                     eprintln!(
                         "[fika details-shape-cache] pane={} mode={:?} hits={} misses={} evicted={} entries={}",
@@ -375,6 +391,17 @@ pub(crate) fn file_grid(
                         details_shape_cache_stats.misses,
                         details_shape_cache_stats.evicted,
                         details_shape_cache_stats.entries,
+                    );
+                }
+                if details_glyph_cache_stats.has_activity() {
+                    eprintln!(
+                        "[fika details-glyph-cache] pane={} mode={:?} hits={} misses={} evicted={} entries={}",
+                        pane_id.0,
+                        view_mode,
+                        details_glyph_cache_stats.hits,
+                        details_glyph_cache_stats.misses,
+                        details_glyph_cache_stats.evicted,
+                        details_glyph_cache_stats.entries,
                     );
                 }
                 if static_visual_stats.has_activity() {

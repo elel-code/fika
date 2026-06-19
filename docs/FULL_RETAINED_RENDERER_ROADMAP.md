@@ -67,7 +67,10 @@ or only Places must explain how the other side reuses the same model.
 - Static item labels, Details cells/headers, and Places row labels now share
   `RetainedShapeCache` and `TextShapeCacheStats`. Surface modules still own
   their text keys and shape functions, but cache hit/miss/evict semantics are
-  retained-layer code instead of pane/Places copies.
+  retained-layer code instead of pane/Places copies. Places also retains GPUI
+  glyph-raster paint data through the same cache primitive; this is the first
+  consumer of the Fika GPUI fork's `ShapedLine::compute_glyph_raster_data` and
+  `ShapedLine::paint_with_raster_data` hooks.
 - Places slot projection now wraps `RetainedSlotStats`, matching item-view slot
   delta accounting while keeping Places-specific row/section counts.
 - Direct thumbnail/theme image load helpers are private to `RetainedImageLayerState`;
@@ -91,9 +94,10 @@ or only Places must explain how the other side reuses the same model.
   `/tmp/fika-core-final-retained-v3-places-targeting.log`,
   `/tmp/fika-core-final-retained-v3-places-dnd.log`) passed with
   `visual_kind=full`, `row_gpui=0`, `text_gpui=0`, and `icon_gpui=0`.
-- Fika now carries a dedicated GPUI fork/branch for retained-hitbox typed DnD:
+- Fika now carries a dedicated GPUI fork/branch for retained-hitbox typed DnD
+  and retained glyph-raster paint hooks:
   `ssh://git@github.com/elel-code/zed.git` at
-  `572d53326f722e5634647b2276c42069d6b5b63d`
+  `02f256ffd7edfbcbb5354ad03db7a193def08590`
   (`fika/gpui-hitbox-dnd`). Fika pins both `gpui` and `gpui_platform` to that
   revision.
 - The fork exposes hitbox-level typed drag/drop registration. Pane,
@@ -207,7 +211,8 @@ Required evidence:
 - `/etc` and `~/Downloads` item-view logs with `FIKA_PERF_ITEM_VIEW=1`.
 - `/etc` item-view `FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll`.
 - Details mode runtime evidence with `[fika details-visual]`,
-  `[fika details-shape-cache]`, and retained interaction counts.
+  `[fika details-shape-cache]`, `[fika details-glyph-cache]`, and retained
+  interaction counts.
 - DnD smoke with `FIKA_DEBUG_DND=1` covering pane item to pane directory,
   pane item to Places, Places to pane directory, and external path drop.
 - Places default full retained/custom targets, overflow, layout, hit-test,
@@ -218,6 +223,14 @@ Required evidence:
   thresholds.
 - Default full custom image path versus `FIKA_GPUI_THEME_ICONS=1` only when
   changing MIME/theme icon rendering.
+
+First-priority retained-glyph work:
+
+- Keep the Places retained glyph-raster implementation as the reference.
+- File-grid Details text and Compact/Icons static labels/fallback markers now
+  use the same retained shape plus glyph-raster model.
+- Do not claim this bypasses GPUI's backend. The target is Dolphin-style
+  retained ownership above GPUI's text/image/window/render substrate.
 
 Acceptance:
 
@@ -302,6 +315,22 @@ Current default:
   `/tmp/fika-core-final-retained-v3-places-*.log`.
 - Analyzer summaries show `visual_kinds=full`, row visual layer counts matching
   rows, `row_gpui=0`, `text_gpui=0`, and `icon_gpui=0`.
+- 2026-06-20 retained glyph-raster cache evidence:
+  `/tmp/fika-retained-glyph-raster-cache-v2-places-targets.log` and
+  `/tmp/fika-retained-glyph-raster-cache-v2-places-overflow.log`. Targets warm
+  row visual max is `prepaint=185us` / `paint=191us`; overflow warm row visual
+  max is `prepaint=324us` / `paint=580us`. `[fika places-row-glyph-cache]`
+  reaches `hits=13 misses=0` for 11-row targets and `hits=32 misses=0` for
+  overflow after geometry settles.
+- 2026-06-20 file-grid retained glyph-raster evidence:
+  `/tmp/fika-retained-glyph-file-grid-v2-item-etc-zoom-scroll.log`,
+  `/tmp/fika-retained-glyph-file-grid-v2-item-etc-icons-zoom-scroll.log`, and
+  `/tmp/fika-retained-glyph-file-grid-v2-item-etc-details-zoom-scroll.log`
+  pass the standard item runtime gate. The combined item summary reports
+  `item_glyph_frames=24 hits=1105 misses=1051 max_entries=435` and
+  `details_glyph_frames=12 hits=871 misses=563 max_entries=563`; warm paint
+  maxima are `warm_static_visual_paint=1352us` and
+  `warm_details_visual_paint=2674us`.
 - Interaction is retained-DnD for row/section target delivery and typed payload
   delivery. The completion gates now require `gpui_event_shells=0`,
   `gpui_row_section_event_shells=0`, `gpui_typed_dnd_payload_shells=0`,
@@ -309,8 +338,10 @@ Current default:
 
 Decision:
 
-- Places full row visual is complete for the retained renderer transition and
-  stays default.
+- Places full row visual and file-grid text retained glyph-raster paint are
+  complete for the retained renderer transition. Text still uses GPUI's
+  backend, but Fika owns retained line/glyph-raster lifetime and the custom
+  paint call sites.
 - Places retained event delivery and typed DnD shell removal are complete on
   the Fika GPUI fork. Future Places renderer work is regression monitoring
   against the chrome/GPUI fallback policies and keeping the fork patch current
@@ -325,10 +356,12 @@ Current implementation:
 
 - Fork branch: `git@github.com:elel-code/zed.git`, branch
   `fika/gpui-hitbox-dnd`, pinned revision
-  `572d53326f722e5634647b2276c42069d6b5b63d`.
+  `02f256ffd7edfbcbb5354ad03db7a193def08590`.
 - Added GPUI APIs:
   `Window::on_hitbox_drag`, `Window::on_hitbox_drag_with_cursor`,
-  `Window::on_hitbox_drag_move`, and `Window::on_hitbox_drop`.
+  `Window::on_hitbox_drag_move`, `Window::on_hitbox_drop`,
+  `ShapedLine::compute_glyph_raster_data`, and
+  `ShapedLine::paint_with_raster_data`.
 - Fika registers item, Details row, and Places row drag start from retained
   hitboxes using stable element ids/global ids. Places registers typed
   move/drop handlers on the retained sidebar content hitbox.
@@ -346,7 +379,7 @@ Maintenance gates:
   `gpui_row_section_event_shells=0`, `gpui_typed_dnd_payload_shells=0`,
   `drag_shells=0`, and `drag_start_models=rows`.
 - The GPUI fork patch remains minimal and is rebased or forward-merged when
-  upstream GPUI changes the drag/drop internals.
+  upstream GPUI changes drag/drop, text, or paint internals.
 
 ### Track 5: Rename Editor
 
@@ -388,13 +421,15 @@ Acceptance:
 
 ## Next Queue
 
-1. Keep the retained MIME/theme icon image cache on the full-custom default and
+1. Freeze fresh item-view evidence for Details and Compact/Icons now that
+   retained glyph-raster paint/cache covers both file-grid text paths.
+2. Keep the retained MIME/theme icon image cache on the full-custom default and
    compare future image changes against `FIKA_GPUI_THEME_ICONS=1`.
-2. Keep `--places-full-handoff` as a chrome/full regression suite, not a
+3. Keep `--places-full-handoff` as a chrome/full regression suite, not a
    default-promotion blocker.
-3. Keep the Fika GPUI retained-hitbox typed DnD fork rebased or forward-merged
-   after upstream GPUI dependency updates.
-4. Convert rename behavior matrix items into tests/smoke before Track 5.
+4. Keep the Fika GPUI retained-hitbox typed DnD/glyph-raster fork rebased or
+   forward-merged after upstream GPUI dependency updates.
+5. Convert rename behavior matrix items into tests/smoke before Track 5.
 
 This queue is intentionally evidence-first. It moves the codebase toward full
 retained reuse while preserving the current rule: custom paint only stays

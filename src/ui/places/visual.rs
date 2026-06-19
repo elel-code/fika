@@ -12,9 +12,10 @@ use crate::ui::icons::FileIconSnapshot;
 use crate::ui::retained::{RetainedImageLayerState, RetainedImageRequest, RetainedShapeCache};
 
 use super::perf::{
+    PlacesRowGlyphRasterCachePerfLog, PlacesRowGlyphRasterCacheStats,
     PlacesRowTextShapeCachePerfLog, PlacesRowTextShapeCacheStats, PlacesRowVisualPerfLog,
-    emit_places_row_text_shape_cache_perf_log, emit_places_row_visual_perf_log,
-    places_perf_enabled,
+    emit_places_row_glyph_raster_cache_perf_log, emit_places_row_text_shape_cache_perf_log,
+    emit_places_row_visual_perf_log, places_perf_enabled,
 };
 use super::snapshot::PlaceSnapshot;
 use super::style::{place_row_background, place_row_border_color};
@@ -76,6 +77,11 @@ pub(super) fn places_row_visual_layer(
                 if paint_state.shape_cache_stats.has_activity() {
                     emit_places_row_text_shape_cache_perf_log(PlacesRowTextShapeCachePerfLog {
                         stats: paint_state.shape_cache_stats,
+                    });
+                }
+                if paint_state.glyph_cache_stats.has_activity() {
+                    emit_places_row_glyph_raster_cache_perf_log(PlacesRowGlyphRasterCachePerfLog {
+                        stats: paint_state.glyph_cache_stats,
                     });
                 }
             }
@@ -170,11 +176,12 @@ struct PlaceRowVisualLayerPaintState {
     total_rows: usize,
     prepaint_elapsed: std::time::Duration,
     shape_cache_stats: PlacesRowTextShapeCacheStats,
+    glyph_cache_stats: PlacesRowGlyphRasterCacheStats,
 }
 
 struct PlaceRowVisualPaintState {
     input: PlaceRowVisualState,
-    line: Option<Arc<gpui::ShapedLine>>,
+    text: Option<PlaceTextVisualPaintState>,
     line_height: Pixels,
     paint_icon: bool,
     icon_image: Option<Arc<RenderImage>>,
@@ -182,8 +189,13 @@ struct PlaceRowVisualPaintState {
 
 struct PlaceSectionVisualPaintState {
     input: PlaceSectionVisualState,
-    line: Option<Arc<gpui::ShapedLine>>,
+    text: Option<PlaceTextVisualPaintState>,
     line_height: Pixels,
+}
+
+struct PlaceTextVisualPaintState {
+    line: Arc<gpui::ShapedLine>,
+    raster_data: Option<Arc<gpui::GlyphRasterData>>,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -196,6 +208,7 @@ pub(crate) struct PlacesRowTextShapeCacheKey {
 
 pub(crate) struct PlacesRowTextShapeCache {
     cache: RetainedShapeCache<PlacesRowTextShapeCacheKey, Arc<gpui::ShapedLine>>,
+    glyph_cache: RetainedShapeCache<PlacesRowGlyphRasterCacheKey, Arc<gpui::GlyphRasterData>>,
 }
 
 impl PlacesRowTextShapeCache {
@@ -214,14 +227,44 @@ impl PlacesRowTextShapeCache {
     pub(crate) fn take_stats(&mut self) -> PlacesRowTextShapeCacheStats {
         self.cache.take_stats()
     }
+
+    fn glyph_raster_for(
+        &mut self,
+        key: &PlacesRowGlyphRasterCacheKey,
+    ) -> Option<Arc<gpui::GlyphRasterData>> {
+        self.glyph_cache.get(key)
+    }
+
+    fn insert_glyph_raster(
+        &mut self,
+        key: PlacesRowGlyphRasterCacheKey,
+        raster_data: Arc<gpui::GlyphRasterData>,
+    ) {
+        self.glyph_cache.insert(key, raster_data);
+    }
+
+    pub(crate) fn take_glyph_stats(&mut self) -> PlacesRowGlyphRasterCacheStats {
+        self.glyph_cache.take_stats()
+    }
 }
 
 impl Default for PlacesRowTextShapeCache {
     fn default() -> Self {
         Self {
             cache: RetainedShapeCache::new(Self::MAX_ENTRIES),
+            glyph_cache: RetainedShapeCache::new(Self::MAX_ENTRIES),
         }
     }
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct PlacesRowGlyphRasterCacheKey {
+    text: PlacesRowTextShapeCacheKey,
+    origin_x_bits: u32,
+    origin_y_bits: u32,
+    line_height_bits: u32,
+    align_width_bits: Option<u32>,
+    scale_factor_bits: u32,
 }
 
 fn places_row_visual_prepaint(
@@ -242,7 +285,15 @@ fn places_row_visual_prepaint(
         visible_place_section_visuals(sections, layer_bounds, window.content_mask().bounds)
             .into_iter()
             .map(|input| {
-                place_section_visual_prepaint(input, paint_text, warm_text_shapes, &app, window, cx)
+                place_section_visual_prepaint(
+                    input,
+                    paint_text,
+                    warm_text_shapes,
+                    layer_bounds,
+                    &app,
+                    window,
+                    cx,
+                )
             })
             .collect();
     let rows = visible_place_row_visuals(rows, layer_bounds, window.content_mask().bounds)
@@ -253,6 +304,7 @@ fn places_row_visual_prepaint(
                 paint_text,
                 warm_text_shapes,
                 paint_icon,
+                layer_bounds,
                 &app,
                 icon_cache.as_ref(),
                 window,
@@ -264,12 +316,19 @@ fn places_row_visual_prepaint(
         .update(cx, |this, _cx| this.place_row_text_shape_cache.take_stats())
         .ok()
         .unwrap_or_default();
+    let glyph_cache_stats = app
+        .update(cx, |this, _cx| {
+            this.place_row_text_shape_cache.take_glyph_stats()
+        })
+        .ok()
+        .unwrap_or_default();
     PlaceRowVisualLayerPaintState {
         rows,
         sections,
         total_rows,
         prepaint_elapsed: started.elapsed(),
         shape_cache_stats,
+        glyph_cache_stats,
     }
 }
 
@@ -318,6 +377,7 @@ fn place_section_visual_prepaint(
     input: PlaceSectionVisualState,
     paint_text: bool,
     warm_text_shapes: bool,
+    layer_bounds: Bounds<Pixels>,
     app: &WeakEntity<FikaApp>,
     window: &mut Window,
     cx: &mut App,
@@ -331,15 +391,36 @@ fn place_section_visual_prepaint(
             font_size_bits: font_size.as_f32().to_bits(),
             text_color: 0x6b7280,
         };
-        app.update(cx, |this, _cx| {
-            this.place_row_text_shape_cache.shape_for(&key, window)
-        })
-        .ok()
-        .unwrap_or_else(|| Arc::new(shape_place_row_visual_text(&key, window)))
+        let line = app
+            .update(cx, |this, _cx| {
+                this.place_row_text_shape_cache.shape_for(&key, window)
+            })
+            .ok()
+            .unwrap_or_else(|| Arc::new(shape_place_row_visual_text(&key, window)));
+        (key, line)
     });
+    let text = if paint_text {
+        line.map(|(key, line)| {
+            let line_height = px(SECTION_LINE_HEIGHT);
+            let (origin, align_width) =
+                place_section_text_origin_and_width(layer_bounds, &input, line_height);
+            place_text_visual_paint_state(
+                key,
+                line,
+                origin,
+                line_height,
+                align_width,
+                app,
+                window,
+                cx,
+            )
+        })
+    } else {
+        None
+    };
     PlaceSectionVisualPaintState {
         input,
-        line: paint_text.then_some(line).flatten(),
+        text,
         line_height: px(SECTION_LINE_HEIGHT),
     }
 }
@@ -349,6 +430,7 @@ fn place_row_visual_prepaint(
     paint_text: bool,
     warm_text_shapes: bool,
     paint_icon: bool,
+    layer_bounds: Bounds<Pixels>,
     app: &WeakEntity<FikaApp>,
     icon_cache: Option<&Entity<RetainedImageLayerState>>,
     window: &mut Window,
@@ -370,12 +452,33 @@ fn place_row_visual_prepaint(
             font_size_bits: font_size.as_f32().to_bits(),
             text_color,
         };
-        app.update(cx, |this, _cx| {
-            this.place_row_text_shape_cache.shape_for(&key, window)
-        })
-        .ok()
-        .unwrap_or_else(|| Arc::new(shape_place_row_visual_text(&key, window)))
+        let line = app
+            .update(cx, |this, _cx| {
+                this.place_row_text_shape_cache.shape_for(&key, window)
+            })
+            .ok()
+            .unwrap_or_else(|| Arc::new(shape_place_row_visual_text(&key, window)));
+        (key, line)
     });
+    let text = if paint_text {
+        line.map(|(key, line)| {
+            let line_height = px(20.0);
+            let (origin, align_width) =
+                place_row_text_origin_and_width(layer_bounds, &input, line_height);
+            place_text_visual_paint_state(
+                key,
+                line,
+                origin,
+                line_height,
+                align_width,
+                app,
+                window,
+                cx,
+            )
+        })
+    } else {
+        None
+    };
     let icon_image = if paint_icon {
         icon_cache.and_then(|cache| {
             cache.update(cx, |cache, cx| {
@@ -387,7 +490,7 @@ fn place_row_visual_prepaint(
     };
     PlaceRowVisualPaintState {
         input,
-        line: paint_text.then_some(line).flatten(),
+        text,
         line_height: px(20.0),
         paint_icon,
         icon_image,
@@ -444,27 +547,12 @@ fn paint_place_section_visual(
     window: &mut Window,
     cx: &mut App,
 ) {
-    let Some(line) = &state.line else {
+    let Some(text) = &state.text else {
         return;
     };
-    let section_bounds = Bounds::new(
-        point(
-            layer_bounds.origin.x,
-            layer_bounds.origin.y + px(state.input.y),
-        ),
-        size(layer_bounds.size.width, px(PLACE_SECTION_HEADING_HEIGHT)),
-    );
-    let text_y = section_bounds.origin.y
-        + ((section_bounds.size.height - state.line_height).max(px(0.0)) / 2.0).floor();
-    line.paint(
-        point(section_bounds.origin.x + px(SECTION_TEXT_X), text_y),
-        state.line_height,
-        TextAlign::Left,
-        Some((section_bounds.size.width - px(SECTION_TEXT_X * 2.0)).max(px(1.0))),
-        window,
-        cx,
-    )
-    .ok();
+    let (origin, align_width) =
+        place_section_text_origin_and_width(layer_bounds, &state.input, state.line_height);
+    paint_place_visual_text(text, origin, state.line_height, align_width, window, cx);
 }
 
 fn paint_place_row_visual(
@@ -501,31 +589,10 @@ fn paint_place_row_visual(
         paint_place_row_visual_icon(icon_bounds, &input.icon, state.icon_image.as_ref(), window);
     }
 
-    if let Some(line) = &state.line {
-        let text_left = ROW_PADDING_X + ICON_SIZE + ICON_TEXT_GAP;
-        let reserved_right = if input.trash_place {
-            ROW_PADDING_X + TRASH_DOT_SIZE + ICON_TEXT_GAP
-        } else {
-            ROW_PADDING_X
-        };
-        let text_bounds = Bounds::new(
-            point(row_bounds.origin.x + px(text_left), row_bounds.origin.y),
-            size(
-                (row_bounds.size.width - px(text_left + reserved_right)).max(px(1.0)),
-                row_bounds.size.height,
-            ),
-        );
-        let text_y = text_bounds.origin.y
-            + ((row_bounds.size.height - state.line_height).max(px(0.0)) / 2.0).floor();
-        line.paint(
-            point(text_bounds.origin.x, text_y),
-            state.line_height,
-            TextAlign::Left,
-            Some(text_bounds.size.width),
-            window,
-            cx,
-        )
-        .ok();
+    if let Some(text) = &state.text {
+        let (origin, align_width) =
+            place_row_text_origin_and_width(layer_bounds, input, state.line_height);
+        paint_place_visual_text(text, origin, state.line_height, align_width, window, cx);
     }
 
     if input.trash_place {
@@ -567,6 +634,149 @@ fn paint_place_row_visual(
             )
             .corner_radii(px(1.0)),
         );
+    }
+}
+
+fn place_section_text_origin_and_width(
+    layer_bounds: Bounds<Pixels>,
+    input: &PlaceSectionVisualState,
+    line_height: Pixels,
+) -> (gpui::Point<Pixels>, Option<Pixels>) {
+    let section_bounds = Bounds::new(
+        point(layer_bounds.origin.x, layer_bounds.origin.y + px(input.y)),
+        size(layer_bounds.size.width, px(PLACE_SECTION_HEADING_HEIGHT)),
+    );
+    let text_y = section_bounds.origin.y
+        + ((section_bounds.size.height - line_height).max(px(0.0)) / 2.0).floor();
+    (
+        point(section_bounds.origin.x + px(SECTION_TEXT_X), text_y),
+        Some((section_bounds.size.width - px(SECTION_TEXT_X * 2.0)).max(px(1.0))),
+    )
+}
+
+fn place_row_text_origin_and_width(
+    layer_bounds: Bounds<Pixels>,
+    input: &PlaceRowVisualState,
+    line_height: Pixels,
+) -> (gpui::Point<Pixels>, Option<Pixels>) {
+    let row_bounds = Bounds::new(
+        point(layer_bounds.origin.x, layer_bounds.origin.y + px(input.y)),
+        size(layer_bounds.size.width, px(PLACE_ROW_HEIGHT)),
+    );
+    let text_left = ROW_PADDING_X + ICON_SIZE + ICON_TEXT_GAP;
+    let reserved_right = if input.trash_place {
+        ROW_PADDING_X + TRASH_DOT_SIZE + ICON_TEXT_GAP
+    } else {
+        ROW_PADDING_X
+    };
+    let text_bounds = Bounds::new(
+        point(row_bounds.origin.x + px(text_left), row_bounds.origin.y),
+        size(
+            (row_bounds.size.width - px(text_left + reserved_right)).max(px(1.0)),
+            row_bounds.size.height,
+        ),
+    );
+    let text_y =
+        text_bounds.origin.y + ((row_bounds.size.height - line_height).max(px(0.0)) / 2.0).floor();
+    (
+        point(text_bounds.origin.x, text_y),
+        Some(text_bounds.size.width),
+    )
+}
+
+fn place_text_visual_paint_state(
+    text_key: PlacesRowTextShapeCacheKey,
+    line: Arc<gpui::ShapedLine>,
+    origin: gpui::Point<Pixels>,
+    line_height: Pixels,
+    align_width: Option<Pixels>,
+    app: &WeakEntity<FikaApp>,
+    window: &mut Window,
+    cx: &mut App,
+) -> PlaceTextVisualPaintState {
+    let raster_key = places_row_glyph_raster_cache_key(
+        text_key,
+        origin,
+        line_height,
+        align_width,
+        window.scale_factor(),
+    );
+    let raster_data = app
+        .update(cx, |this, _cx| {
+            this.place_row_text_shape_cache
+                .glyph_raster_for(&raster_key)
+        })
+        .ok()
+        .flatten()
+        .or_else(|| {
+            let raster_data = Arc::new(
+                line.compute_glyph_raster_data(
+                    origin,
+                    line_height,
+                    TextAlign::Left,
+                    align_width,
+                    window,
+                    cx,
+                )
+                .ok()?,
+            );
+            let _ = app.update(cx, |this, _cx| {
+                this.place_row_text_shape_cache
+                    .insert_glyph_raster(raster_key, raster_data.clone());
+            });
+            Some(raster_data)
+        });
+    PlaceTextVisualPaintState { line, raster_data }
+}
+
+fn places_row_glyph_raster_cache_key(
+    text: PlacesRowTextShapeCacheKey,
+    origin: gpui::Point<Pixels>,
+    line_height: Pixels,
+    align_width: Option<Pixels>,
+    scale_factor: f32,
+) -> PlacesRowGlyphRasterCacheKey {
+    PlacesRowGlyphRasterCacheKey {
+        text,
+        origin_x_bits: origin.x.as_f32().to_bits(),
+        origin_y_bits: origin.y.as_f32().to_bits(),
+        line_height_bits: line_height.as_f32().to_bits(),
+        align_width_bits: align_width.map(|width| width.as_f32().to_bits()),
+        scale_factor_bits: scale_factor.to_bits(),
+    }
+}
+
+fn paint_place_visual_text(
+    text: &PlaceTextVisualPaintState,
+    origin: gpui::Point<Pixels>,
+    line_height: Pixels,
+    align_width: Option<Pixels>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    if let Some(raster_data) = &text.raster_data {
+        text.line
+            .paint_with_raster_data(
+                origin,
+                line_height,
+                TextAlign::Left,
+                align_width,
+                raster_data,
+                window,
+                cx,
+            )
+            .ok();
+    } else {
+        text.line
+            .paint(
+                origin,
+                line_height,
+                TextAlign::Left,
+                align_width,
+                window,
+                cx,
+            )
+            .ok();
     }
 }
 

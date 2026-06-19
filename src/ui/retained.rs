@@ -97,6 +97,24 @@ where
         value
     }
 
+    pub(crate) fn get(&mut self, key: &K) -> Option<V> {
+        if let Some(value) = self.entries.get(key) {
+            self.stats.hits += 1;
+            Some(value.clone())
+        } else {
+            self.stats.misses += 1;
+            None
+        }
+    }
+
+    pub(crate) fn insert(&mut self, key: K, value: V) {
+        if !self.entries.contains_key(&key) && self.entries.len() >= self.max_entries.max(1) {
+            self.stats.evicted += self.entries.len();
+            self.entries.clear();
+        }
+        self.entries.insert(key, value);
+    }
+
     pub(crate) fn take_stats(&mut self) -> TextShapeCacheStats {
         let mut stats = std::mem::take(&mut self.stats);
         stats.entries = self.entries.len();

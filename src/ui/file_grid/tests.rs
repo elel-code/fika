@@ -1,8 +1,8 @@
 use super::controller::item_mouse_down_opens_directory;
 use super::details::{DetailsItemSnapshot, DetailsLayoutMetrics, details_columns};
 use super::details_visual::{
-    DetailsTextShapeCacheKey, DetailsVisualCellContent, details_visual_header,
-    details_visual_layer_element_id, details_visual_layer_items,
+    DetailsGlyphRasterCacheKey, DetailsTextShapeCacheKey, DetailsVisualCellContent,
+    details_visual_header, details_visual_layer_element_id, details_visual_layer_items,
 };
 use super::dnd::{drag_preview_label, item_drag_from_details_snapshot};
 use super::image_layer::{
@@ -28,7 +28,8 @@ use super::renderer_policy::{
 };
 use super::snapshot::VisibleItemSnapshot;
 use super::static_visual::{
-    StaticItemLabelTextKey, StaticItemTextShapeCacheKey, static_item_visual_layer_element_id,
+    StaticItemGlyphRasterCacheKey, StaticItemGlyphRasterSegmentKey, StaticItemLabelTextKey,
+    StaticItemTextShapeCacheKey, static_item_visual_layer_element_id,
     static_item_visual_layer_items,
 };
 use super::style::{ItemTileTextAlignment, item_identity_element_id};
@@ -630,6 +631,61 @@ fn static_center_text_shape_cache_key_ignores_paint_only_text_bounds() {
 }
 
 #[test]
+fn static_item_glyph_raster_cache_key_tracks_segment_and_paint_geometry() {
+    let font = Font::default();
+    let text = StaticItemTextShapeCacheKey {
+        text_alignment: ItemTileTextAlignment::Start,
+        paint_fallback_icon: true,
+        text_font: font.clone(),
+        marker_font: font,
+        text_font_size_bits: 14.0f32.to_bits(),
+        marker_font_size_bits: 12.0f32.to_bits(),
+        label_line_height_bits: 20.0f32.to_bits(),
+        marker_line_height_bits: 20.0f32.to_bits(),
+        text_width_bits: 96.0f32.to_bits(),
+        text_height_bits: 40.0f32.to_bits(),
+        scale_factor_bits: 1.0f32.to_bits(),
+        text_color: 0x24292f,
+        fallback_fg: 0xffffff,
+        fallback_marker: SharedString::from("TXT"),
+        label: StaticItemLabelTextKey::Start(SharedString::from("alpha.txt")),
+    };
+    let key = StaticItemGlyphRasterCacheKey {
+        text: text.clone(),
+        segment: StaticItemGlyphRasterSegmentKey::StartLabel { line_index: 0 },
+        origin_x_bits: 10.0f32.to_bits(),
+        origin_y_bits: 20.0f32.to_bits(),
+        line_height_bits: 20.0f32.to_bits(),
+        align_width_bits: Some(96.0f32.to_bits()),
+        scale_factor_bits: 1.0f32.to_bits(),
+    };
+
+    let marker_segment = StaticItemGlyphRasterCacheKey {
+        segment: StaticItemGlyphRasterSegmentKey::Marker,
+        ..key.clone()
+    };
+    assert_ne!(key, marker_segment);
+
+    let moved = StaticItemGlyphRasterCacheKey {
+        origin_x_bits: 11.0f32.to_bits(),
+        ..key.clone()
+    };
+    assert_ne!(key, moved);
+
+    let resized = StaticItemGlyphRasterCacheKey {
+        align_width_bits: Some(112.0f32.to_bits()),
+        ..key.clone()
+    };
+    assert_ne!(key, resized);
+
+    let same_segment_and_geometry = StaticItemGlyphRasterCacheKey {
+        text,
+        ..key.clone()
+    };
+    assert_eq!(key, same_segment_and_geometry);
+}
+
+#[test]
 fn details_text_shape_cache_key_ignores_cell_geometry_for_resize_reuse() {
     let font = Font::default();
     let key = DetailsTextShapeCacheKey {
@@ -655,6 +711,45 @@ fn details_text_shape_cache_key_ignores_cell_geometry_for_resize_reuse() {
         ..key.clone()
     };
     assert_ne!(key, renamed_text);
+}
+
+#[test]
+fn details_glyph_raster_cache_key_tracks_paint_geometry() {
+    let font = Font::default();
+    let text = DetailsTextShapeCacheKey {
+        text: SharedString::from("alpha.txt"),
+        font,
+        font_size_bits: 14.0f32.to_bits(),
+        line_height_bits: 20.0f32.to_bits(),
+        scale_factor_bits: 1.0f32.to_bits(),
+        color: 0x1f2937,
+    };
+    let key = DetailsGlyphRasterCacheKey {
+        text: text.clone(),
+        origin_x_bits: 10.0f32.to_bits(),
+        origin_y_bits: 20.0f32.to_bits(),
+        line_height_bits: 20.0f32.to_bits(),
+        align_width_bits: Some(160.0f32.to_bits()),
+        scale_factor_bits: 1.0f32.to_bits(),
+    };
+
+    let moved = DetailsGlyphRasterCacheKey {
+        origin_y_bits: 21.0f32.to_bits(),
+        ..key.clone()
+    };
+    assert_ne!(key, moved);
+
+    let resized = DetailsGlyphRasterCacheKey {
+        align_width_bits: Some(180.0f32.to_bits()),
+        ..key.clone()
+    };
+    assert_ne!(key, resized);
+
+    let same_paint_geometry = DetailsGlyphRasterCacheKey {
+        text,
+        ..key.clone()
+    };
+    assert_eq!(key, same_paint_geometry);
 }
 
 #[test]

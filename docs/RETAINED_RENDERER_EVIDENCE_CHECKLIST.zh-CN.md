@@ -75,6 +75,13 @@ scripts/summarize-item-view-renderer-evidence.sh /tmp/fika-evidence-item-etc-zoo
 scripts/analyze-item-view-perf.sh --require-autosmoke --require-details --require-renderer-policy --require-interaction --expect-retained-item-policy --require-modes Details --require-renderer-policy-modes Details /tmp/fika-evidence-item-etc-details-zoom-scroll.log
 ```
 
+Details gate 要求 `[fika details-visual]`、`[fika details-shape-cache]` 和
+`[fika details-glyph-cache]`，从而分别观察 shape 复用和 retained
+glyph-raster 复用。
+标准 runtime gate 也要求 Compact/Icons text reuse evidence 包含
+`[fika static-item-visual]`、`[fika item-shape-cache]` 和
+`[fika item-glyph-cache]`。
+
 summary block 是写入 `docs/ITEM_VIEW_RENDERER_DECISIONS.md` 的首选证据片段。
 
 ## MIME/Theme Icon A/B
@@ -116,7 +123,7 @@ compare 脚本针对 phase、static visual、image paint 和 icon_sync 定义的
 
 ## Places 基线
 
-采集默认 Places chrome retained-DnD policy：
+采集默认 Places full retained-DnD policy：
 
 ```sh
 timeout 8s env FIKA_PERF_PLACES_VIEW=1 FIKA_AUTOSMOKE_PLACES=targets target/debug/fika /etc > /tmp/fika-evidence-places-targets.log 2>&1
@@ -136,6 +143,13 @@ scripts/analyze-places-perf.sh --require-layout-autosmoke --require-interaction-
 scripts/analyze-places-perf.sh --require-hit-test-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-full-policy /tmp/fika-evidence-places-hit-test.log
 scripts/analyze-places-perf.sh --require-retained-targeting-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-full-policy /tmp/fika-evidence-places-targeting.log
 scripts/analyze-places-perf.sh --require-retained-dnd-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-full-policy --expect-retained-event-policy /tmp/fika-evidence-places-dnd.log
+```
+
+对于 full custom Places text，summary 必须包含两个 retained text cache：
+
+```text
+places_row_shape_cache_frames>0
+places_row_glyph_cache_frames>0
 ```
 
 当前默认 retained-DnD policy 的 dnd summary 必须显示：
