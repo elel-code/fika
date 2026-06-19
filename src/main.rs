@@ -617,8 +617,18 @@ impl FikaApp {
     }
 
     fn start_common_file_icon_prewarm(&mut self, cx: &mut Context<Self>) {
-        let requests =
-            common_file_icon_resolve_requests_for_sizes(Self::common_file_icon_prewarm_sizes());
+        let default_size = fika_core::icon_size_for_zoom_level(fika_core::DEFAULT_ZOOM_LEVEL);
+        let default_results =
+            file_icon_resolve_results_for_requests(common_file_icon_resolve_requests_for_sizes([
+                default_size,
+            ]));
+        self.file_icons.finish_resolve_results(default_results);
+
+        let requests = common_file_icon_resolve_requests_for_sizes(
+            Self::common_file_icon_prewarm_sizes()
+                .into_iter()
+                .filter(|size| *size != default_size),
+        );
         if requests.is_empty() {
             return;
         }

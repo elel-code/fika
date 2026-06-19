@@ -755,6 +755,35 @@ MIME keys such as `application/x-tar` can be made cheap, but a first-visible
 resolve on the first content frame. That is a separate mixed-directory
 first-visible scheduling problem, not the `/etc` scroll regression fixed here.
 
+## 2026-06-19 Default-Size MIME Negative Cache
+
+The mixed-directory follow-up showed that detached prewarm alone is not enough
+for the first content frame. It can lose a race against visible `icon_sync`, and
+MIME keys whose theme lookup fails need to be cached as semantic negative
+results. Without that, a prewarmed `application/java-archive` miss does not
+protect the visible `.jar` entry; it scans the theme again.
+
+Implementation: common file-icon prewarm now resolves the default 48px semantic
+MIME table synchronously during app initialization, before loading the first
+pane. Remaining zoom sizes are still filled by detached background prewarm.
+`FileIconCache` also stores pathless MIME results in its `MIME + size` index.
+When a later file reuses that MIME entry, Fika keeps the resolved
+`iconName/path` identity but recomputes the fallback marker and colors from the
+current file kind, so a `.jar` fallback can still show `JAR` without another
+theme scan.
+
+Decision: this is closer to Dolphin's split than letting visible render
+conversion own first MIME icon lookup. The startup prewarm is semantic and
+bounded, not path-based; it prepares common model-level icon roles before the
+first pane snapshot needs them. The painter remains full custom and still uses
+retained `RenderImage -> Window::paint_image`.
+
+Evidence: `/tmp/fika-common-icon-sync48-downloads.log` reports
+`max_resolved=0`, no `[fika icon-sync-resolve]` lines, `icon_sync
+max_total=235us`, `max_gpui_image_element=0`, and `theme_placeholder=0`.
+`/tmp/fika-common-icon-sync48-etc.log` reports `max_resolved=0` and
+`icon_sync max_total=33us`.
+
 ## Next Renderer Decisions
 
 1. Keep the remaining drag-start shells until the GPUI API boundary changes.

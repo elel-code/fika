@@ -153,13 +153,20 @@ impl FileIconCache {
 
     fn cached_icon_for_mime(&self, key: &FileIconCacheKey) -> Option<FileIconSnapshot> {
         match &key.kind {
-            FileIconKind::Mime { mime, .. } => self
-                .resolved_by_mime
-                .get(&MimeIconCacheKey {
-                    mime: mime.clone(),
-                    size_px: key.size_px,
-                })
-                .cloned(),
+            FileIconKind::Mime { mime, .. } => {
+                let mut icon = self
+                    .resolved_by_mime
+                    .get(&MimeIconCacheKey {
+                        mime: mime.clone(),
+                        size_px: key.size_px,
+                    })
+                    .cloned()?;
+                let profile = file_icon_profile(&key.kind, &self.mime);
+                icon.fallback_marker = Arc::from(profile.marker);
+                icon.fallback_fg = profile.fg;
+                icon.fallback_bg = profile.bg;
+                Some(icon)
+            }
             _ => None,
         }
     }
@@ -211,16 +218,16 @@ impl FileIconCache {
     }
 
     fn insert_cached_icon(&mut self, key: FileIconCacheKey, icon: FileIconSnapshot) {
+        if let FileIconKind::Mime { mime, .. } = &key.kind {
+            self.resolved_by_mime.insert(
+                MimeIconCacheKey {
+                    mime: mime.clone(),
+                    size_px: key.size_px,
+                },
+                icon.clone(),
+            );
+        }
         if icon.path.is_some() {
-            if let FileIconKind::Mime { mime, .. } = &key.kind {
-                self.resolved_by_mime.insert(
-                    MimeIconCacheKey {
-                        mime: mime.clone(),
-                        size_px: key.size_px,
-                    },
-                    icon.clone(),
-                );
-            }
             self.resolved_by_kind.insert(key.clone(), icon.clone());
         }
         self.cached.insert(key, icon);
@@ -1607,16 +1614,16 @@ gtk-icon-theme-name=breeze\n"
                 )
                 .is_none()
         );
-        assert_eq!(
-            cache.cached_or_preliminary_icon_for(
-                Path::new("beta.txt"),
-                false,
-                Some(Arc::from("text/plain")),
-                true,
-                48.0,
-            ),
-            resolved
+        let reused = cache.cached_or_preliminary_icon_for(
+            Path::new("beta.txt"),
+            false,
+            Some(Arc::from("text/plain")),
+            true,
+            48.0,
         );
+        assert_eq!(reused.icon_name, resolved.icon_name);
+        assert_eq!(reused.path, resolved.path);
+        assert_eq!(reused.fallback_marker.as_ref(), "TXT");
         assert!(
             cache
                 .resolve_request_for(
@@ -1748,6 +1755,62 @@ gtk-icon-theme-name=breeze\n"
                 )
                 .is_none()
         );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn missing_mime_icon_reuses_negative_resolution_and_keeps_extension_marker() {
+        let root = test_dir("missing-mime-icon-reuse");
+        std::fs::create_dir_all(root.join("theme")).unwrap();
+        let mut cache = FileIconCache {
+            cached: HashMap::new(),
+            resolved_by_kind: HashMap::new(),
+            resolved_by_mime: HashMap::new(),
+            named_cached: HashMap::new(),
+            theme: IconThemeResolver {
+                roots: vec![root.clone()],
+                themes: vec!["theme".to_string()],
+                search_order: None,
+                inherits_cache: HashMap::new(),
+                path_cache: HashMap::new(),
+                dir_exists_cache: HashMap::new(),
+                renderable_file_cache: HashMap::new(),
+            },
+            mime: fika_core::MimeDatabase::from_maps(
+                HashMap::new(),
+                HashMap::new(),
+                HashMap::new(),
+            ),
+        };
+
+        assert!(cache.resolve_now_for(
+            Path::new("archive"),
+            false,
+            Some(Arc::from("application/java-archive")),
+            true,
+            48.0,
+        ));
+        assert!(
+            cache
+                .resolve_request_for(
+                    Path::new("payload.jar"),
+                    false,
+                    Some(Arc::from("application/java-archive")),
+                    true,
+                    48.0,
+                )
+                .is_none()
+        );
+
+        let icon = cache.cached_or_preliminary_icon_for(
+            Path::new("payload.jar"),
+            false,
+            Some(Arc::from("application/java-archive")),
+            true,
+            48.0,
+        );
+        assert_eq!(icon.path, None);
+        assert_eq!(icon.fallback_marker.as_ref(), "JAR");
         let _ = std::fs::remove_dir_all(root);
     }
 

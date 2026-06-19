@@ -870,6 +870,17 @@ Places chrome 默认之后的当前执行入口是
   `max_image_layer=64`、`max_gpui_image_element=0`、`theme_placeholder=0`。Downloads
   仍显示首个可见 `application/java-archive` 的竞态，因此混合目录 initial MIME prewarm
   仍是后续工作，不作为本次已修复项。
+- [x] P16gbe：移除混合目录首个可见 MIME icon 竞态。根因：detached common prewarm 可能输给
+  第一个 visible `icon_sync`，而 MIME theme lookup miss 没有写入 `MIME + size` 语义索引；
+  因此预热过的 `application/java-archive` miss 不能保护可见 `.jar` 条目。实现：app 初始化时、
+  第一个 pane load 前，同步解析默认 48px 常见语义 MIME 表；剩余 zoom size 继续由 detached
+  prewarm 补齐；并把 pathless MIME 结果写入 `FileIconCache::resolved_by_mime`。复用 MIME entry
+  时会按当前 file kind 重新计算 fallback marker/颜色，所以 `.jar` 仍显示 `JAR`，且不会重复
+  theme lookup。证据：`/tmp/fika-common-icon-sync48-downloads.log` 报告 `max_resolved=0`，
+  没有 `[fika icon-sync-resolve]` 行，`icon_sync max_total=235us`、
+  `max_gpui_image_element=0`、`theme_placeholder=0`；
+  `/tmp/fika-common-icon-sync48-etc.log` 报告 `max_resolved=0`、
+  `icon_sync max_total=33us`。
 - [ ] P16gbd：继续对齐 GPUI `img()` internals 的 pane image 路径。保留高效下半部分
   （Fika retained `Arc<RenderImage>`，通过 `Window::paint_image` 和 GPUI sprite atlas
   绘制），但把更多上层 identity/prewarm 决策移动到 Dolphin 风格语义 key。特别要审查

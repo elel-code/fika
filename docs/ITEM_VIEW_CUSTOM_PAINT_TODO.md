@@ -2173,6 +2173,21 @@ tracks.
   `theme_placeholder=0`. Downloads still shows a first-visible
   `application/java-archive` race, so mixed-directory initial MIME prewarm
   remains future work rather than claimed fixed.
+- [x] P16gbe: Remove the mixed-directory first-visible MIME icon race. Root
+  cause: detached common prewarm can lose the race against the first visible
+  `icon_sync`, and MIME theme lookup misses were not stored in the `MIME + size`
+  semantic index. A prewarmed `application/java-archive` miss therefore did not
+  protect a visible `.jar` entry. Implementation: resolve the default 48px
+  common semantic MIME table synchronously during app initialization before the
+  first pane load, keep detached prewarm for the remaining zoom sizes, and store
+  pathless MIME results in `FileIconCache::resolved_by_mime`. Reused MIME
+  entries recompute fallback marker/colors from the current file kind, so `.jar`
+  still shows `JAR` without repeating theme lookup. Evidence:
+  `/tmp/fika-common-icon-sync48-downloads.log` reports `max_resolved=0`, no
+  `[fika icon-sync-resolve]` lines, `icon_sync max_total=235us`,
+  `max_gpui_image_element=0`, and `theme_placeholder=0`;
+  `/tmp/fika-common-icon-sync48-etc.log` reports `max_resolved=0` and
+  `icon_sync max_total=33us`.
 - [ ] P16gbd: Continue GPUI `img()` internals alignment for pane images. Keep
   the efficient bottom path (`Arc<RenderImage>` retained by Fika, painted via
   `Window::paint_image` and GPUI sprite atlas), but move more upper-level
