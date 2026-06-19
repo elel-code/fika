@@ -2076,6 +2076,17 @@ tracks.
   renderer-policy and interaction gates with
   `max_retained_directory_drop_target=60` and
   `max_gpui_directory_drop_shell=0`.
+- [x] P16gax: Move the Details header into the custom Details visual layer.
+  Root cause: Details rows were custom-painted, but the header still used GPUI
+  `Div`/text children for background, separators, and labels. Implementation:
+  `details_visual_layer_view()` now carries a header projection, prepaints
+  header labels through `DetailsTextShapeCache`, and paints the header in the
+  same canvas as Details rows; `details_shell.rs` no longer builds the GPUI
+  `details_header()` subtree. Renderer-policy logs now expose
+  `details_header_visual_layer` and `gpui_details_header`, and
+  `--expect-retained-item-policy` rejects GPUI Details headers. Remaining
+  follow-up: add a dedicated Details-mode runtime autosmoke so this surface has
+  the same runtime evidence strength as Compact zoom/scroll.
 
 ## Acceptance Gates
 

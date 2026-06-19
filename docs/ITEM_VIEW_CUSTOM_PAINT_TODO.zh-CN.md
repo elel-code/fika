@@ -792,6 +792,16 @@ Places chrome 默认之后的当前执行入口是
   边界和 rename overlay。证据：`/tmp/fika-item-retained-directory-drop.log` 通过
   item-view autosmoke、renderer-policy 和 interaction gate，且报告
   `max_retained_directory_drop_target=60`、`max_gpui_directory_drop_shell=0`。
+- [x] P16gax：将 Details header 移入 custom Details visual layer。根因：
+  Details row 已经 custom paint，但 header 背景、列分隔线和标题仍是 GPUI `Div`/text
+  child，Details 模式里还残留静态 GPUI 视觉 surface。实现：
+  `details_visual_layer_view()` 现在携带 header projection，通过
+  `DetailsTextShapeCache` prepaint header label，并在与 Details row 相同的 canvas 中绘制
+  header；`details_shell.rs` 不再构建 GPUI `details_header()` 子树。
+  Renderer-policy 日志现在暴露 `details_header_visual_layer` 和 `gpui_details_header`，
+  `--expect-retained-item-policy` 会拒绝 GPUI Details header。剩余后续：补专门的
+  Details-mode runtime autosmoke，让这个 surface 拥有与 Compact zoom/scroll 相同强度的
+  运行时证据。
 - [ ] P16q：在每个 P16 实现切片之后，单独提交并附带相关验证：仅文档切片需要 `git diff --check`；代码切片需要 `cargo fmt`、`cargo check`、`cargo test -q`、`scripts/check-item-view-perf-analyzer.sh`、`scripts/check-places-perf-analyzer.sh` 和 `git diff --check`。
 - [x] P16r：记录运行时自测试和突破记录规则。可重复的滚动、缩放、启动图标、调整大小、模式切换和 Places 目标回退应在依赖手动计时之前通过 autosmoke 日志和分析器脚本重现。任何确认的优化突破必须记录症状、Dolphin 比较边界、根本原因、实现、保存的日志/分析器命令和未来回归守卫在拥有的设计或决策文档中。
 

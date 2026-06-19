@@ -1,8 +1,8 @@
 use super::controller::item_mouse_down_opens_directory;
 use super::details::{DetailsItemSnapshot, DetailsLayoutMetrics, details_columns};
 use super::details_visual::{
-    DetailsTextShapeCacheKey, DetailsVisualCellContent, details_visual_layer_element_id,
-    details_visual_layer_items,
+    DetailsTextShapeCacheKey, DetailsVisualCellContent, details_visual_header,
+    details_visual_layer_element_id, details_visual_layer_items,
 };
 use super::dnd::{drag_preview_label, item_drag_from_details_snapshot};
 use super::image_layer::{
@@ -222,6 +222,8 @@ fn content_layers_split_base_visuals_from_image_visuals() {
             retained_directory_drop_target: 0,
             gpui_drag_shell: 5,
             gpui_directory_drop_shell: 0,
+            details_header_visual_layer: 0,
+            gpui_details_header: 0,
             rename_overlay: 2,
         }
     );
@@ -860,6 +862,7 @@ fn details_visual_layer_items_project_rows_and_cells() {
         panic!("expected details render snapshot");
     };
     let columns = details_columns(false, 260.0);
+    let header = details_visual_header(&columns, metrics.header_height);
     let visual_items = details_visual_layer_items(&items, &columns);
     let policy = details_row_renderer_policy(&items[0]);
     let renderer_stats = details_renderer_policy_stats(&items);
@@ -883,10 +886,16 @@ fn details_visual_layer_items_project_rows_and_cells() {
             retained_directory_drop_target: 0,
             gpui_drag_shell: 1,
             gpui_directory_drop_shell: 0,
+            details_header_visual_layer: 0,
+            gpui_details_header: 0,
             rename_overlay: 0,
         }
     );
 
+    assert_eq!(header.columns.len(), 3);
+    assert_eq!(header.columns[0].title.as_ref(), "Name");
+    assert_eq!(header.columns[1].title.as_ref(), "Size");
+    assert_eq!(header.columns[2].title.as_ref(), "Modified");
     assert_eq!(visual_items.len(), 1);
     assert_eq!(visual_items[0].row_index, 2);
     assert_eq!(

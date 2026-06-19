@@ -32,7 +32,8 @@ Options:
       Fail if renderer-policy logs do not show retained item visual and
       interaction surfaces, allowing only the known GPUI drag shell, rename
       overlay, and image-element boundaries. Directory drop targets must be
-      retained, with no per-directory GPUI drag-move shell.
+      retained, with no per-directory GPUI drag-move shell. Details headers
+      must be custom-painted when present.
 
   --require-paint-slots
       Fail if [fika item-paint-slots] retained slot activity logs are missing.
@@ -499,6 +500,8 @@ BEGIN {
     retained_directory_drop_target = field("retained_directory_drop_target") + 0
     gpui_drag_shell = field("gpui_drag_shell") + 0
     gpui_directory_drop_shell = field("gpui_directory_drop_shell") + 0
+    details_header_visual_layer = field("details_header_visual_layer") + 0
+    gpui_details_header = field("gpui_details_header") + 0
     rename_overlay = field("rename_overlay") + 0
     note_mode(mode)
     if (mode != "") {
@@ -515,11 +518,15 @@ BEGIN {
     check_renderer_policy_count("gpui_drag_shell", items, gpui_drag_shell, mode)
     check_renderer_policy_count("gpui_directory_drop_shell", items, gpui_directory_drop_shell, mode)
     check_renderer_policy_count("rename_overlay", items, rename_overlay, mode)
+    if (details_header_visual_layer < 0 || gpui_details_header < 0) {
+        fail("renderer-policy details header count is negative in mode " mode)
+    }
     if (expect_retained_item_policy == "true") {
         if (visual_layer != items ||
             retained_interaction + rename_overlay != items ||
             gpui_drag_shell != items ||
             gpui_directory_drop_shell != 0 ||
+            gpui_details_header != 0 ||
             image_layer + gpui_image_element > items) {
             retained_item_policy_invalid = 1
         }
@@ -532,6 +539,8 @@ BEGIN {
     max_assign(single_max, "renderer_policy_retained_directory_drop_target", retained_directory_drop_target)
     max_assign(single_max, "renderer_policy_gpui_drag_shell", gpui_drag_shell)
     max_assign(single_max, "renderer_policy_gpui_directory_drop_shell", gpui_directory_drop_shell)
+    max_assign(single_max, "renderer_policy_details_header_visual_layer", details_header_visual_layer)
+    max_assign(single_max, "renderer_policy_gpui_details_header", gpui_details_header)
     max_assign(single_max, "renderer_policy_rename_overlay", rename_overlay)
 }
 
@@ -647,6 +656,8 @@ END {
         " max_retained_directory_drop_target=" (("renderer_policy_retained_directory_drop_target" in single_max) ? single_max["renderer_policy_retained_directory_drop_target"] : 0) \
         " max_gpui_drag_shell=" (("renderer_policy_gpui_drag_shell" in single_max) ? single_max["renderer_policy_gpui_drag_shell"] : 0) \
         " max_gpui_directory_drop_shell=" (("renderer_policy_gpui_directory_drop_shell" in single_max) ? single_max["renderer_policy_gpui_directory_drop_shell"] : 0) \
+        " max_details_header_visual_layer=" (("renderer_policy_details_header_visual_layer" in single_max) ? single_max["renderer_policy_details_header_visual_layer"] : 0) \
+        " max_gpui_details_header=" (("renderer_policy_gpui_details_header" in single_max) ? single_max["renderer_policy_gpui_details_header"] : 0) \
         " max_rename_overlay=" (("renderer_policy_rename_overlay" in single_max) ? single_max["renderer_policy_rename_overlay"] : 0)
     autosmoke_scenario = autosmoke_start_scenario != "" ? autosmoke_start_scenario : autosmoke_complete_scenario
     print "  autosmoke:" \

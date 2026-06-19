@@ -42,7 +42,7 @@ custom renderer can replace a GPUI surface.
 | Compact/Icons hover, cursor, click, menu, drop hit testing | retained viewport/custom hitboxes plus active item-drag window tracker | viewport retained hit testing and `drag_drop` state | Keep retained controller path. Directory item drop hover is resolved from retained window-position hit testing, not per-directory GPUI drag-move shells. | DnD smoke must pass across internal item, pane, Places, and external drops; pane self-drags should log `active-item-move`. Renderer policy must keep `gpui_directory_drop_shell=0`. |
 | Compact/Icons drag start | GPUI `Div::on_drag` shell | retained drag payload state plus temporary shell | Keep GPUI shell for initiation only. | Do not remove until GPUI exposes public custom-element drag-start or Fika carries an audited GPUI patch. |
 | Compact/Icons rename editor | GPUI text/editor subtree overlay | rename draft model and overlay geometry | Keep GPUI built-in editor. | Only revisit when text input, caret hit testing, selection, and IME behavior can stay behavior-complete. |
-| Details row backgrounds, icons, and text cells | custom content-level painter | Details paint slots, image cache, text shape cache, background file-icon resolve queue | Keep custom paint. Render frames use cached/preliminary icon snapshots only. | Logs must include `[fika details-visual]` and `[fika details-shape-cache]` with no steady build regression or synchronous icon-theme lookup spike. |
+| Details header, row backgrounds, icons, and text cells | custom content-level painter | Details paint slots, image cache, text shape cache, background file-icon resolve queue | Keep custom paint. Render frames use cached/preliminary icon snapshots only. The header background, separators, and labels are painted by the Details visual layer rather than GPUI child elements. | Logs must include `[fika details-visual]` and `[fika details-shape-cache]` with no steady build regression or synchronous icon-theme lookup spike. Renderer policy must keep `gpui_details_header=0`. |
 | Details row click, menu, navigation, drop, hover, cursor | retained viewport/custom hitboxes plus active item-drag window tracker | viewport retained hit testing and Details row snapshots | Keep retained controller path. Directory row drop hover is resolved from retained window-position hit testing, not per-directory GPUI drag-move shells. | Runtime smoke must cover Details item drag, directory drop, pane drop, and rename overlay. Renderer policy must keep `gpui_directory_drop_shell=0`. |
 | Details drag start | GPUI `Div::on_drag` row shell | retained Details drag fields plus temporary shell | Keep GPUI shell for initiation only. | Same public drag-start API or audited GPUI patch gate as Compact/Icons. |
 | Places rows, section headings, and sidebar scrollbar | Default full custom row/section visual layer, retained-DnD mixed event delivery, one sidebar typed DnD payload shell, and GPUI row drag-start shells; `gpui`, `chrome`, and `text` fallback policies remain available | `places` model/projection, `places/interaction.rs`, retained event layer, retained Places icon image cache, text shape cache, and `drag_drop` state | Keep the Dolphin-aligned retained model/controller/painter split as default. Row text, section heading text, and Places icons are now Fika-owned custom paint; Places icons use GPUI's efficient underlying `RenderImage`/`paint_image` path through a retained `RetainAllImageCache`, matching Dolphin's pixmap-cache principle without leaving GPUI text/image child elements in Places rows or headings. Typed DnD payload delivery and drag start remain explicit GPUI/platform boundaries. | Default logs must pass `--expect-custom-row-full-policy` and `--require-interaction-policy` with `event_policy=retained-dnd`, `text_gpui=0`, `icon_gpui=0`, `section_gpui=0`, `visual_kind=full`, `retained_hitboxes=rows+sections`, `gpui_event_shells=1`, `gpui_row_section_event_shells=0`, `gpui_typed_dnd_payload_shells=1`, `gpui_sidebar_leave_shells=0`, and aggregated `[fika places-row-visual]` rows matching policy rows. GPUI/chrome fallbacks keep GPUI heading text and remain analyzer-covered baselines. |
@@ -558,6 +558,25 @@ Evidence: `/tmp/fika-item-retained-directory-drop.log` passed
 summary reported `max_retained_directory_drop_target=60` and
 `max_gpui_directory_drop_shell=0`; item interaction hitboxes still matched the
 visible retained layer with `max_prepaint_count=64`.
+
+## 2026-06-19 Details Header Visual Ownership
+
+The Details header was still a GPUI `Div` tree with text children even though
+Details rows were already painted by the custom Details visual layer. That left
+a static GPUI visual surface in Details mode.
+
+Implementation: `details_visual_layer_view()` now owns a header projection in
+addition to row projections. It paints the header background, bottom border,
+column separators, and shaped column titles through the existing Details visual
+canvas and `DetailsTextShapeCache`. `details_shell.rs` no longer builds the
+GPUI `details_header()` subtree. Renderer-policy logs now report
+`details_header_visual_layer` and `gpui_details_header`, and the retained item
+policy rejects `gpui_details_header != 0`.
+
+Decision: Details header rendering is part of the custom Details painter.
+Runtime Details-mode smoke should be added as a later evidence improvement; this
+slice is covered by unit tests, `cargo check`, full test rerun of the previously
+flaky failing test, and analyzer guards.
 
 ## Next Renderer Decisions
 

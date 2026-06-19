@@ -246,7 +246,8 @@ pub(crate) fn file_grid(
                 let content_width = details_content_width(trash_view, name_column_width).max(1.0);
                 let content_height = details_content_height(row_count, metrics).max(1.0);
                 let visible_count = items.len();
-                let renderer_policy_stats = details_renderer_policy_stats(&items);
+                let mut renderer_policy_stats = details_renderer_policy_stats(&items);
+                renderer_policy_stats.details_header_visual_layer = 1;
                 let viewport =
                     file_grid_viewport_shell(pane_id, drop_target, mode, cx).child(details_table(
                         pane_id,
@@ -436,7 +437,7 @@ pub(crate) fn file_grid(
         ));
     if let Some(started) = build_started {
         eprintln!(
-            "[fika renderer-policy] pane={} mode={:?} items={} visual_layer={} image_layer={} gpui_image_element={} retained_interaction={} retained_directory_drop_target={} gpui_drag_shell={} gpui_directory_drop_shell={} rename_overlay={}",
+            "[fika renderer-policy] pane={} mode={:?} items={} visual_layer={} image_layer={} gpui_image_element={} retained_interaction={} retained_directory_drop_target={} gpui_drag_shell={} gpui_directory_drop_shell={} details_header_visual_layer={} gpui_details_header={} rename_overlay={}",
             pane_id.0,
             view_mode,
             renderer_policy_stats.items,
@@ -447,6 +448,8 @@ pub(crate) fn file_grid(
             renderer_policy_stats.retained_directory_drop_target,
             renderer_policy_stats.gpui_drag_shell,
             renderer_policy_stats.gpui_directory_drop_shell,
+            renderer_policy_stats.details_header_visual_layer,
+            renderer_policy_stats.gpui_details_header,
             renderer_policy_stats.rename_overlay,
         );
         eprintln!(

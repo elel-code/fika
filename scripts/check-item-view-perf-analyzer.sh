@@ -281,6 +281,16 @@ if "$analyzer" --expect-retained-item-policy "$tmpdir/invalid-directory-drop-she
     exit 1
 fi
 
+cat > "$tmpdir/invalid-details-header-policy.log" <<'EOF'
+[fika item-view] pane=1 mode=Details phase=steady items=48 visible=30 raw=50us icon_sync=2us queue=1us convert=40us total=120us
+[fika renderer-policy] pane=1 mode=Details items=30 visual_layer=30 image_layer=0 gpui_image_element=0 retained_interaction=30 retained_directory_drop_target=6 gpui_drag_shell=30 gpui_directory_drop_shell=0 details_header_visual_layer=0 gpui_details_header=1 rename_overlay=0
+EOF
+
+if "$analyzer" --expect-retained-item-policy "$tmpdir/invalid-details-header-policy.log" >/dev/null 2>&1; then
+    echo "expected retained item policy with GPUI Details header to fail" >&2
+    exit 1
+fi
+
 if "$analyzer" --require-modes Compact,Icons,Details "$tmpdir/missing-channels.log" >/dev/null 2>&1; then
     echo "expected missing required modes to fail" >&2
     exit 1

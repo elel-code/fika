@@ -4,7 +4,7 @@ use gpui::{Context, Div, ParentElement, Stateful, WeakEntity, div, px, rgb, rgba
 
 use crate::FikaApp;
 
-use super::details::{DetailsColumn, details_columns};
+use super::details::details_columns;
 use super::details_visual::details_visual_layer_view;
 use super::dnd::{install_item_drag_start_shell, item_drag_from_details_snapshot};
 use super::interaction::details_interaction_layer_view;
@@ -28,17 +28,14 @@ pub(super) fn details_table(
         pane_id,
         &items,
         &columns,
+        metrics.header_height,
         content_width,
         content_height,
         app.clone(),
     );
     let interaction_layer =
         details_interaction_layer_view(pane_id, &items, content_width, content_height, app.clone());
-    let table = div()
-        .relative()
-        .w(px(content_width))
-        .h(px(content_height))
-        .child(details_header(&columns, content_width, metrics));
+    let table = div().relative().w(px(content_width)).h(px(content_height));
     let table = if let Some(layer) = visual_layer {
         table.child(layer)
     } else {
@@ -71,38 +68,6 @@ pub(super) fn details_table(
                     .child("No items"),
             )
         })
-}
-
-fn details_header(
-    columns: &[DetailsColumn],
-    content_width: f32,
-    metrics: DetailsLayoutMetrics,
-) -> Div {
-    div()
-        .absolute()
-        .top_0()
-        .left_0()
-        .w(px(content_width))
-        .h(px(metrics.header_height))
-        .flex()
-        .items_center()
-        .border_b_1()
-        .border_color(rgb(0xd5d9df))
-        .bg(rgb(0xf3f5f8))
-        .children(columns.iter().map(|column| {
-            div()
-                .w(px(column.width))
-                .h_full()
-                .px_2()
-                .flex()
-                .items_center()
-                .text_xs()
-                .font_weight(gpui::FontWeight::SEMIBOLD)
-                .text_color(rgb(0x4b5563))
-                .border_r_1()
-                .border_color(rgb(0xe1e5eb))
-                .child(column.title)
-        }))
 }
 
 fn details_row(

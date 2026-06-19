@@ -75,15 +75,18 @@ pub(super) fn details_visual_layer_view(
     pane_id: PaneId,
     items: &[DetailsPaintSnapshot],
     columns: &[DetailsColumn],
+    header_height: f32,
     width: f32,
     height: f32,
     app: WeakEntity<FikaApp>,
 ) -> Option<DetailsVisualLayerElement> {
     let items = details_visual_layer_items(items, columns);
-    (!items.is_empty()).then(|| {
+    let header = details_visual_header(columns, header_height);
+    (!items.is_empty() || !header.columns.is_empty()).then(|| {
         DetailsVisualLayerElement {
             pane_id,
             app,
+            header,
             items,
             style: StyleRefinement::default(),
         }
@@ -93,6 +96,26 @@ pub(super) fn details_visual_layer_view(
         .w(px(width.max(1.0)))
         .h(px(height.max(1.0)))
     })
+}
+
+pub(super) fn details_visual_header(columns: &[DetailsColumn], height: f32) -> DetailsVisualHeader {
+    let mut x = 0.0;
+    let columns = columns
+        .iter()
+        .map(|column| {
+            let column_x = x;
+            x += column.width;
+            DetailsVisualHeaderColumn {
+                x: column_x,
+                width: column.width,
+                title: SharedString::from(column.title),
+            }
+        })
+        .collect();
+    DetailsVisualHeader {
+        height: height.max(1.0),
+        columns,
+    }
 }
 
 pub(super) fn details_visual_layer_items(
@@ -163,6 +186,19 @@ pub(super) struct DetailsVisualLayerItem {
 }
 
 #[derive(Clone)]
+pub(super) struct DetailsVisualHeader {
+    height: f32,
+    pub(super) columns: Vec<DetailsVisualHeaderColumn>,
+}
+
+#[derive(Clone)]
+pub(super) struct DetailsVisualHeaderColumn {
+    x: f32,
+    width: f32,
+    pub(super) title: SharedString,
+}
+
+#[derive(Clone)]
 pub(super) struct DetailsVisualCell {
     x: f32,
     width: f32,
@@ -183,8 +219,25 @@ pub(super) enum DetailsVisualCellContent {
 pub(super) struct DetailsVisualLayerElement {
     pane_id: PaneId,
     app: WeakEntity<FikaApp>,
+    header: DetailsVisualHeader,
     items: Vec<DetailsVisualLayerItem>,
     style: StyleRefinement,
+}
+
+pub(super) struct DetailsVisualLayerPaintState {
+    header: DetailsVisualHeaderPaintState,
+    rows: Vec<DetailsVisualPaintState>,
+}
+
+pub(super) struct DetailsVisualHeaderPaintState {
+    height: f32,
+    columns: Vec<DetailsVisualHeaderColumnPaintState>,
+}
+
+struct DetailsVisualHeaderColumnPaintState {
+    x: f32,
+    width: f32,
+    title: DetailsVisualTextPaintState,
 }
 
 pub(super) struct DetailsVisualPaintState {
@@ -227,7 +280,7 @@ impl IntoElement for DetailsVisualLayerElement {
 
 impl Element for DetailsVisualLayerElement {
     type RequestLayoutState = Style;
-    type PrepaintState = Vec<DetailsVisualPaintState>;
+    type PrepaintState = DetailsVisualLayerPaintState;
 
     fn id(&self) -> Option<ElementId> {
         Some(ElementId::from(details_visual_layer_element_id(
@@ -262,12 +315,19 @@ impl Element for DetailsVisualLayerElement {
         cx: &mut App,
     ) -> Self::PrepaintState {
         let perf_started = super::item_view_perf_enabled().then(std::time::Instant::now);
-        let states = if let Some(id) = id {
+        let (header, rows) = if let Some(id) = id {
             window.with_element_state::<RetainedImageLayerState, _>(id, |state, window| {
                 let mut state = state.unwrap_or_else(|| RetainedImageLayerState::new(cx));
-                let mut states = Vec::with_capacity(self.items.len());
+                let header = details_visual_prepaint_header(
+                    self.pane_id,
+                    &self.header,
+                    &self.app,
+                    window,
+                    cx,
+                );
+                let mut rows = Vec::with_capacity(self.items.len());
                 for item in &self.items {
-                    states.push(details_visual_prepaint_item(
+                    rows.push(details_visual_prepaint_item(
                         self.pane_id,
                         item,
                         Some(&mut state),
@@ -276,24 +336,28 @@ impl Element for DetailsVisualLayerElement {
                         cx,
                     ));
                 }
-                (states, state)
+                ((header, rows), state)
             })
         } else {
-            self.items
+            let header =
+                details_visual_prepaint_header(self.pane_id, &self.header, &self.app, window, cx);
+            let rows = self
+                .items
                 .iter()
                 .map(|item| {
                     details_visual_prepaint_item(self.pane_id, item, None, &self.app, window, cx)
                 })
-                .collect::<Vec<_>>()
+                .collect::<Vec<_>>();
+            (header, rows)
         };
         if let Some(started) = perf_started {
             let elapsed = started.elapsed();
-            let count = states.len();
+            let count = rows.len();
             let _ = self.app.update(cx, |this, _cx| {
                 this.record_details_visual_prepaint(self.pane_id, elapsed, count);
             });
         }
-        states
+        DetailsVisualLayerPaintState { header, rows }
     }
 
     fn paint(
@@ -307,9 +371,10 @@ impl Element for DetailsVisualLayerElement {
         cx: &mut App,
     ) {
         let perf_started = super::item_view_perf_enabled().then(std::time::Instant::now);
-        let count = prepaint.len();
+        let count = prepaint.rows.len();
         request_layout.paint(bounds, window, cx, |window, cx| {
-            for state in prepaint.iter() {
+            details_visual_paint_header(bounds, &prepaint.header, window, cx);
+            for state in prepaint.rows.iter() {
                 details_visual_paint_item(bounds, state, window, cx);
             }
         });
@@ -334,6 +399,52 @@ pub(super) fn details_visual_layer_element_id(pane_id: PaneId) -> (&'static str,
 
 const DETAILS_CELL_PADDING_X: f32 = 8.0;
 const DETAILS_NAME_ICON_GAP: f32 = 8.0;
+const DETAILS_HEADER_TEXT_LINE_HEIGHT: f32 = 16.0;
+
+fn details_visual_prepaint_header(
+    pane_id: PaneId,
+    header: &DetailsVisualHeader,
+    app: &WeakEntity<FikaApp>,
+    window: &mut Window,
+    cx: &mut App,
+) -> DetailsVisualHeaderPaintState {
+    let mut font = window.text_style().font();
+    font.weight = FontWeight::SEMIBOLD;
+    let font_size = px(window.rem_size().as_f32() * 0.75);
+    let line_height = px(DETAILS_HEADER_TEXT_LINE_HEIGHT);
+    let columns = header
+        .columns
+        .iter()
+        .map(|column| {
+            let text_rect = ViewRect {
+                x: column.x + DETAILS_CELL_PADDING_X,
+                y: ((header.height - DETAILS_HEADER_TEXT_LINE_HEIGHT).max(0.0) * 0.5).floor(),
+                width: (column.width - DETAILS_CELL_PADDING_X * 2.0).max(1.0),
+                height: DETAILS_HEADER_TEXT_LINE_HEIGHT,
+            };
+            DetailsVisualHeaderColumnPaintState {
+                x: column.x,
+                width: column.width,
+                title: details_visual_text_prepaint(
+                    text_rect,
+                    column.title.clone(),
+                    0x4b5563,
+                    font.clone(),
+                    font_size,
+                    line_height,
+                    pane_id,
+                    app,
+                    window,
+                    cx,
+                ),
+            }
+        })
+        .collect();
+    DetailsVisualHeaderPaintState {
+        height: header.height,
+        columns,
+    }
+}
 
 fn details_visual_prepaint_item(
     pane_id: PaneId,
@@ -596,6 +707,38 @@ fn details_visual_paint_item(
                 details_visual_paint_text(layer_bounds, text, window, cx);
             }
         }
+    }
+}
+
+fn details_visual_paint_header(
+    layer_bounds: Bounds<Pixels>,
+    state: &DetailsVisualHeaderPaintState,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let header_bounds = Bounds::new(
+        layer_bounds.origin,
+        size(layer_bounds.size.width, px(state.height.max(1.0))),
+    );
+    window.paint_quad(fill(header_bounds, rgb(0xf3f5f8)));
+    let bottom = header_bounds.origin.y + header_bounds.size.height - px(1.0);
+    window.paint_quad(fill(
+        Bounds::new(
+            point(header_bounds.origin.x, bottom),
+            size(header_bounds.size.width, px(1.0)),
+        ),
+        rgb(0xd5d9df),
+    ));
+    for column in &state.columns {
+        let right = layer_bounds.origin.x + px((column.x + column.width).round()) - px(1.0);
+        window.paint_quad(fill(
+            Bounds::new(
+                point(right, header_bounds.origin.y),
+                size(px(1.0), header_bounds.size.height),
+            ),
+            rgb(0xe1e5eb),
+        ));
+        details_visual_paint_text(layer_bounds, &column.title, window, cx);
     }
 }
 

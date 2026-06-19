@@ -77,6 +77,8 @@ pub(super) struct RendererPolicyStats {
     pub(super) retained_directory_drop_target: usize,
     pub(super) gpui_drag_shell: usize,
     pub(super) gpui_directory_drop_shell: usize,
+    pub(super) details_header_visual_layer: usize,
+    pub(super) gpui_details_header: usize,
     pub(super) rename_overlay: usize,
 }
 

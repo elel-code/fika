@@ -26,7 +26,7 @@
 | Compact/Icons hover/cursor/click/menu/drop hit testing | retained viewport/custom hitboxes 加 active item-drag window tracker | viewport retained hit testing 和 `drag_drop` state | 保持 retained controller path。目录 item drop hover 由 retained window-position hit testing 解析，不再由 per-directory GPUI drag-move shell 解析。 | DnD 冒烟通过内部 item、pane、Places 和外部 drop；pane self-drags 应记录 `active-item-move`。Renderer policy 必须保持 `gpui_directory_drop_shell=0` |
 | Compact/Icons drag start | GPUI `Div::on_drag` shell | retained drag payload state 加临时 shell | 保持 GPUI shell 仅用于启动 | 不移除直到 GPUI 暴露公开 custom-element drag-start 或 Fika 携带经过审计的 GPUI patch |
 | Compact/Icons rename editor | GPUI text/editor subtree overlay | rename draft model 和 overlay geometry | 保持 GPUI overlay | rename 编辑器计划中列出的行为矩阵（`docs/RENAME_EDITOR_PLAN.md`） |
-| Details row 背景、图标、文本单元格、Trash 列 | custom content-level painter | Details paint snapshots, row layout projection, shape cache | 保持 custom paint | 运行时 Details perf 和 DnD 冒烟证据必须保持最新 |
+| Details header、row 背景、图标、文本单元格、Trash 列 | custom content-level painter | Details paint snapshots, row layout projection, shape cache | 保持 custom paint。Header 背景、分隔线和标签由 Details visual layer 绘制，不再是 GPUI child element。 | 运行时 Details perf 和 DnD 冒烟证据必须保持最新；renderer policy 必须保持 `gpui_details_header=0` |
 | Details click/menu/navigation/hover/cursor/drop hit testing | retained row hit testing/controller state 加 active item-drag window tracker | viewport retained hit testing | 保持 retained controller path。目录 row drop hover 由 retained window-position hit testing 解析，不再由 per-directory GPUI drag-move shell 解析。 | painter 变更后 DnD 冒烟必须通过；renderer policy 必须保持 `gpui_directory_drop_shell=0` |
 | Details drag start | GPUI `Div::on_drag` row shell | retained drag payload state | 保持 GPUI shell | 与 Compact/Icons drag start 相同门 |
 | Places rows、section headings 和 sidebar scrollbar | 默认 full custom row/section visual layer、retained-DnD mixed event delivery、一个 sidebar typed DnD payload shell 和 GPUI row drag-start shell；`gpui`、`chrome`、`text` fallback policy 仍可用 | `places` model/projection、`places/interaction.rs`、retained event layer、retained Places icon image cache、text shape cache 和 `drag_drop` state | 保持 Dolphin 对齐的 retained model/controller/painter 拆分为默认。行文本、section heading 文本和 Places 图标现在由 Fika 自己 custom paint；Places 图标通过 retained `RetainAllImageCache` 使用 GPUI 高效的底层 `RenderImage`/`paint_image` 路径，符合 Dolphin pixmap-cache 原则，同时不再在 Places row 或 heading 中留下 GPUI text/image 子元素。Typed DnD payload delivery 和 drag start 仍是明确 GPUI/平台边界。 | 默认日志必须通过 `--expect-custom-row-full-policy` 和 `--require-interaction-policy`，并显示 `event_policy=retained-dnd`、`text_gpui=0`、`icon_gpui=0`、`section_gpui=0`、`visual_kind=full`、`retained_hitboxes=rows+sections`、`gpui_event_shells=1`、`gpui_row_section_event_shells=0`、`gpui_typed_dnd_payload_shells=1`、`gpui_sidebar_leave_shells=0`，且聚合 `[fika places-row-visual]` rows 匹配策略行数。GPUI/chrome fallback 保留 GPUI heading text，并继续作为 analyzer 覆盖的基准。 |
@@ -273,6 +273,21 @@ controller state 拥有。
 --require-interaction --expect-retained-item-policy`。其 renderer-policy 摘要报告
 `max_retained_directory_drop_target=60` 和 `max_gpui_directory_drop_shell=0`；
 item interaction hitbox 仍匹配可见 retained layer，`max_prepaint_count=64`。
+
+## 2026-06-19 Details Header 视觉所有权
+
+Details row 已经由 custom Details visual layer 绘制，但 Details header 仍是带 text
+child 的 GPUI `Div` 树。这让 Details 模式里还残留一个静态 GPUI 视觉 surface。
+
+实现：`details_visual_layer_view()` 现在除了 row projection 之外也拥有 header
+projection。它通过现有 Details visual canvas 和 `DetailsTextShapeCache` 绘制 header
+背景、底部分隔线、列分隔线和已 shape 的列标题。`details_shell.rs` 不再构建 GPUI
+`details_header()` 子树。Renderer-policy 日志现在报告 `details_header_visual_layer` 和
+`gpui_details_header`，retained item policy 会拒绝 `gpui_details_header != 0`。
+
+决策：Details header rendering 属于 custom Details painter。后续应补专门的
+Details-mode runtime smoke 作为更强证据；本切片由单元测试、`cargo check`、对刚才抖动
+失败测试的单独重跑，以及 analyzer guard 覆盖。
 
 ## 下一批渲染器决策
 
