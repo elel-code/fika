@@ -577,6 +577,8 @@ BEGIN {
         autosmoke_scroll_forward_seen++
     } else if (action == "scroll-back" && changed == "true") {
         autosmoke_scroll_back_seen++
+    } else if (action == "view-details") {
+        autosmoke_view_details_seen++
     }
 }
 
@@ -664,6 +666,7 @@ END {
         " start=" (autosmoke_start_seen + 0) \
         " complete=" (autosmoke_complete_seen + 0) \
         " scenario=" (autosmoke_scenario == "" ? "<none>" : autosmoke_scenario) \
+        " view_details=" (autosmoke_view_details_seen + 0) \
         " zoom_in=" (autosmoke_zoom_in_seen + 0) \
         " zoom_out=" (autosmoke_zoom_out_seen + 0) \
         " scroll_forward=" (autosmoke_scroll_forward_seen + 0) \
@@ -727,15 +730,23 @@ END {
         }
         if (autosmoke_scenario != "Zoom" &&
             autosmoke_scenario != "Scroll" &&
-            autosmoke_scenario != "ZoomScroll") {
+            autosmoke_scenario != "ZoomScroll" &&
+            autosmoke_scenario != "DetailsZoomScroll") {
             fail("unknown item-view autosmoke scenario " autosmoke_scenario)
         }
-        if (autosmoke_scenario == "Zoom" || autosmoke_scenario == "ZoomScroll") {
+        if (autosmoke_scenario == "DetailsZoomScroll" && autosmoke_view_details_seen == 0) {
+            fail("missing item-view autosmoke Details mode action marker")
+        }
+        if (autosmoke_scenario == "Zoom" ||
+            autosmoke_scenario == "ZoomScroll" ||
+            autosmoke_scenario == "DetailsZoomScroll") {
             if (autosmoke_zoom_in_seen == 0 || autosmoke_zoom_out_seen == 0) {
                 fail("missing item-view autosmoke zoom action markers")
             }
         }
-        if (autosmoke_scenario == "Scroll" || autosmoke_scenario == "ZoomScroll") {
+        if (autosmoke_scenario == "Scroll" ||
+            autosmoke_scenario == "ZoomScroll" ||
+            autosmoke_scenario == "DetailsZoomScroll") {
             if (autosmoke_scroll_forward_seen == 0 || autosmoke_scroll_back_seen == 0) {
                 fail("missing changed=true item-view autosmoke scroll action markers")
             }

@@ -251,6 +251,44 @@ if "$analyzer" --require-autosmoke "$tmpdir/missing-autosmoke-action.log" >/dev/
     exit 1
 fi
 
+cat > "$tmpdir/details-autosmoke.log" <<'EOF'
+[fika autosmoke] item-view start pane=1 scenario=DetailsZoomScroll
+[fika autosmoke] item-view action=view-details pane=1 mode=Details
+[fika item-view] pane=1 mode=Details phase=mode-switch items=48 visible=30 raw=50us icon_sync=2us queue=1us convert=40us total=120us
+[fika autosmoke] item-view action=zoom-in pane=1
+[fika autosmoke] item-view action=zoom-out pane=1
+[fika autosmoke] item-view action=scroll-forward pane=1 changed=true
+[fika autosmoke] item-view action=scroll-back pane=1 changed=true
+[fika details-visual] pane=1 mode=Details prepaint_count=30 prepaint=120us paint_count=30 paint=130us
+[fika details-shape-cache] pane=1 mode=Details hits=20 misses=2 evicted=0 entries=22
+[fika renderer-policy] pane=1 mode=Details items=30 visual_layer=30 image_layer=0 gpui_image_element=0 retained_interaction=30 retained_directory_drop_target=6 gpui_drag_shell=30 gpui_directory_drop_shell=0 details_header_visual_layer=1 gpui_details_header=0 rename_overlay=0
+[fika autosmoke] item-view complete pane=1 scenario=DetailsZoomScroll
+EOF
+
+"$analyzer" \
+    --require-autosmoke \
+    --require-details \
+    --require-renderer-policy \
+    --expect-retained-item-policy \
+    --require-modes Details \
+    --require-renderer-policy-modes Details \
+    "$tmpdir/details-autosmoke.log" >/dev/null
+
+cat > "$tmpdir/details-autosmoke-missing-view-action.log" <<'EOF'
+[fika autosmoke] item-view start pane=1 scenario=DetailsZoomScroll
+[fika item-view] pane=1 mode=Details phase=mode-switch items=48 visible=30 raw=50us icon_sync=2us queue=1us convert=40us total=120us
+[fika autosmoke] item-view action=zoom-in pane=1
+[fika autosmoke] item-view action=zoom-out pane=1
+[fika autosmoke] item-view action=scroll-forward pane=1 changed=true
+[fika autosmoke] item-view action=scroll-back pane=1 changed=true
+[fika autosmoke] item-view complete pane=1 scenario=DetailsZoomScroll
+EOF
+
+if "$analyzer" --require-autosmoke "$tmpdir/details-autosmoke-missing-view-action.log" >/dev/null 2>&1; then
+    echo "expected Details autosmoke without view-details action to fail" >&2
+    exit 1
+fi
+
 cat > "$tmpdir/invalid-renderer-policy-count.log" <<'EOF'
 [fika item-view] pane=1 mode=Compact phase=steady items=2 visible=2 raw=50us icon_sync=2us queue=1us convert=40us total=120us
 [fika renderer-policy] pane=1 mode=Compact items=2 visual_layer=3 image_layer=0 gpui_image_element=0 retained_interaction=2 gpui_drag_shell=2 rename_overlay=0

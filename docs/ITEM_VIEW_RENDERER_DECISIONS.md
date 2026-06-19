@@ -578,6 +578,21 @@ Runtime Details-mode smoke should be added as a later evidence improvement; this
 slice is covered by unit tests, `cargo check`, full test rerun of the previously
 flaky failing test, and analyzer guards.
 
+## 2026-06-19 Details Runtime Evidence Gate
+
+The Details painter now has its own unattended runtime path instead of relying
+on the default Compact zoom/scroll smoke. `FIKA_AUTOSMOKE_ITEM_VIEW=details-zoom-scroll`
+switches the active pane to Details, then runs the same zoom and scroll action
+sequence. The item-view analyzer accepts the `DetailsZoomScroll` scenario,
+requires the `view-details` marker, and can gate the log with
+`--require-details`, `--require-modes Details`,
+`--require-renderer-policy-modes Details`, and
+`--expect-retained-item-policy`.
+
+Decision: Details custom paint changes must use this gate when they touch row,
+header, text shaping, or retained interaction behavior. The retained renderer
+evidence runner captures it as `item-etc-details-zoom-scroll`.
+
 ## Next Renderer Decisions
 
 1. Keep the remaining drag-start shells until the GPUI API boundary changes.

@@ -1,7 +1,7 @@
 use std::env;
 use std::time::Duration;
 
-use fika_core::{PaneId, ZoomChange};
+use fika_core::{PaneId, ViewMode, ZoomChange};
 use gpui::{Context, ScrollDelta, point, px};
 
 use crate::FikaApp;
@@ -13,6 +13,7 @@ pub(crate) enum ItemViewAutosmokeScenario {
     Zoom,
     Scroll,
     ZoomScroll,
+    DetailsZoomScroll,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -24,6 +25,10 @@ pub(crate) enum ItemViewAutosmokeAction {
     Scroll {
         label: &'static str,
         delta: ScrollDelta,
+    },
+    ViewMode {
+        label: &'static str,
+        mode: ViewMode,
     },
 }
 
@@ -37,6 +42,7 @@ impl ItemViewAutosmokeScenario {
             Self::Zoom => "Zoom",
             Self::Scroll => "Scroll",
             Self::ZoomScroll => "ZoomScroll",
+            Self::DetailsZoomScroll => "DetailsZoomScroll",
         }
     }
 
@@ -52,7 +58,16 @@ impl ItemViewAutosmokeScenario {
 
     pub(crate) fn actions(self) -> Vec<ItemViewAutosmokeAction> {
         let mut actions = Vec::new();
-        if matches!(self, Self::Zoom | Self::ZoomScroll) {
+        if matches!(self, Self::DetailsZoomScroll) {
+            actions.push(ItemViewAutosmokeAction::ViewMode {
+                label: "view-details",
+                mode: ViewMode::Details,
+            });
+        }
+        if matches!(
+            self,
+            Self::Zoom | Self::ZoomScroll | Self::DetailsZoomScroll
+        ) {
             actions.extend([
                 ItemViewAutosmokeAction::Zoom {
                     label: "zoom-in",
@@ -72,7 +87,10 @@ impl ItemViewAutosmokeScenario {
                 },
             ]);
         }
-        if matches!(self, Self::Scroll | Self::ZoomScroll) {
+        if matches!(
+            self,
+            Self::Scroll | Self::ZoomScroll | Self::DetailsZoomScroll
+        ) {
             actions.extend([
                 ItemViewAutosmokeAction::Scroll {
                     label: "scroll-forward",
@@ -136,6 +154,18 @@ pub(crate) fn start_item_view_autosmoke(
                                 return;
                             }
                         }
+                        ItemViewAutosmokeAction::ViewMode { label, mode } => {
+                            if this
+                                .update(&mut cx, |app, cx| {
+                                    app.set_pane_view_mode(pane_id, mode);
+                                    emit_item_view_autosmoke_mode_action(label, pane_id, mode);
+                                    cx.notify();
+                                })
+                                .is_err()
+                            {
+                                return;
+                            }
+                        }
                     }
                     cx.background_executor()
                         .timer(scenario.action_delay())
@@ -179,10 +209,20 @@ fn emit_item_view_autosmoke_scroll_action(label: &'static str, pane_id: PaneId, 
     );
 }
 
+fn emit_item_view_autosmoke_mode_action(label: &'static str, pane_id: PaneId, mode: ViewMode) {
+    eprintln!(
+        "[fika autosmoke] item-view action={} pane={} mode={:?}",
+        label, pane_id.0, mode
+    );
+}
+
 fn item_view_autosmoke_scenario_from_value(value: &str) -> Option<ItemViewAutosmokeScenario> {
     match value.trim().to_ascii_lowercase().as_str() {
         "1" | "true" | "yes" | "on" | "zoom-scroll" | "scroll-zoom" => {
             Some(ItemViewAutosmokeScenario::ZoomScroll)
+        }
+        "details-zoom-scroll" | "details-scroll-zoom" | "details" => {
+            Some(ItemViewAutosmokeScenario::DetailsZoomScroll)
         }
         "zoom" => Some(ItemViewAutosmokeScenario::Zoom),
         "scroll" => Some(ItemViewAutosmokeScenario::Scroll),
@@ -199,6 +239,10 @@ mod tests {
         assert_eq!(
             item_view_autosmoke_scenario_from_value("zoom-scroll"),
             Some(ItemViewAutosmokeScenario::ZoomScroll)
+        );
+        assert_eq!(
+            item_view_autosmoke_scenario_from_value("details-zoom-scroll"),
+            Some(ItemViewAutosmokeScenario::DetailsZoomScroll)
         );
         assert_eq!(
             item_view_autosmoke_scenario_from_value("1"),
@@ -223,6 +267,10 @@ mod tests {
             ItemViewAutosmokeScenario::ZoomScroll.marker_label(),
             "ZoomScroll"
         );
+        assert_eq!(
+            ItemViewAutosmokeScenario::DetailsZoomScroll.marker_label(),
+            "DetailsZoomScroll"
+        );
     }
 
     #[test]
@@ -232,5 +280,21 @@ mod tests {
         assert_eq!(actions.len(), 8);
         assert!(matches!(actions[0], ItemViewAutosmokeAction::Zoom { .. }));
         assert!(matches!(actions[4], ItemViewAutosmokeAction::Scroll { .. }));
+    }
+
+    #[test]
+    fn details_zoom_scroll_scenario_switches_mode_before_actions() {
+        let actions = ItemViewAutosmokeScenario::DetailsZoomScroll.actions();
+
+        assert_eq!(actions.len(), 9);
+        assert!(matches!(
+            actions[0],
+            ItemViewAutosmokeAction::ViewMode {
+                mode: ViewMode::Details,
+                ..
+            }
+        ));
+        assert!(matches!(actions[1], ItemViewAutosmokeAction::Zoom { .. }));
+        assert!(matches!(actions[5], ItemViewAutosmokeAction::Scroll { .. }));
     }
 }

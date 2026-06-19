@@ -270,6 +270,7 @@ if [[ "$capture_items" == true ]]; then
     item_downloads_log="$(log_path item-downloads)"
     item_etc_log="$(log_path item-etc)"
     item_zoom_log="$(log_path item-etc-zoom-scroll)"
+    item_details_log="$(log_path item-etc-details-zoom-scroll)"
 
     run_capture "item downloads" "$item_downloads_log" \
         env FIKA_PERF_ITEM_VIEW=1 "$binary" "$downloads_dir"
@@ -277,11 +278,23 @@ if [[ "$capture_items" == true ]]; then
         env FIKA_PERF_ITEM_VIEW=1 "$binary" /etc
     run_capture "item etc zoom-scroll" "$item_zoom_log" \
         env FIKA_PERF_ITEM_VIEW=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll "$binary" /etc
+    run_capture "item etc details zoom-scroll" "$item_details_log" \
+        env FIKA_PERF_ITEM_VIEW=1 FIKA_AUTOSMOKE_ITEM_VIEW=details-zoom-scroll "$binary" /etc
 
     run_gate "item runtime" \
         "$root_dir/scripts/check-item-view-runtime-log.sh" "$item_zoom_log"
     run_gate "item renderer evidence summary" \
         "$root_dir/scripts/summarize-item-view-renderer-evidence.sh" "$item_zoom_log"
+    run_gate "item details renderer policy" \
+        "$root_dir/scripts/analyze-item-view-perf.sh" \
+        --require-autosmoke \
+        --require-details \
+        --require-renderer-policy \
+        --require-interaction \
+        --expect-retained-item-policy \
+        --require-modes Details \
+        --require-renderer-policy-modes Details \
+        "$item_details_log"
 fi
 
 if [[ "$capture_places" == true ]]; then

@@ -802,6 +802,15 @@ Places chrome 默认之后的当前执行入口是
   `--expect-retained-item-policy` 会拒绝 GPUI Details header。剩余后续：补专门的
   Details-mode runtime autosmoke，让这个 surface 拥有与 Compact zoom/scroll 相同强度的
   运行时证据。
+- [x] P16gay：添加专门的 Details-mode item-view runtime autosmoke gate。根因：
+  retained item-view smoke 只覆盖默认 Compact 路径，因此 Details header 迁入 visual
+  layer 后，Details custom paint 回归仍可能通过标准运行时证据。实现：
+  `FIKA_AUTOSMOKE_ITEM_VIEW=details-zoom-scroll` 现在会先把 active pane 切到 Details，
+  再运行 zoom/scroll action；item-view analyzer 识别 `DetailsZoomScroll` 并要求
+  `view-details` marker；retained renderer evidence 脚本会用 `--require-details`、
+  `--require-modes Details`、`--require-renderer-policy-modes Details` 和
+  `--expect-retained-item-policy` 跑 Details gate。这把 Details 视觉所有权变成后续 pane
+  painter 工作可重复的运行时证据。
 - [ ] P16q：在每个 P16 实现切片之后，单独提交并附带相关验证：仅文档切片需要 `git diff --check`；代码切片需要 `cargo fmt`、`cargo check`、`cargo test -q`、`scripts/check-item-view-perf-analyzer.sh`、`scripts/check-places-perf-analyzer.sh` 和 `git diff --check`。
 - [x] P16r：记录运行时自测试和突破记录规则。可重复的滚动、缩放、启动图标、调整大小、模式切换和 Places 目标回退应在依赖手动计时之前通过 autosmoke 日志和分析器脚本重现。任何确认的优化突破必须记录症状、Dolphin 比较边界、根本原因、实现、保存的日志/分析器命令和未来回归守卫在拥有的设计或决策文档中。
 

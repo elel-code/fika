@@ -2087,6 +2087,17 @@ tracks.
   `--expect-retained-item-policy` rejects GPUI Details headers. Remaining
   follow-up: add a dedicated Details-mode runtime autosmoke so this surface has
   the same runtime evidence strength as Compact zoom/scroll.
+- [x] P16gay: Add a dedicated Details-mode item-view runtime autosmoke gate.
+  Root cause: the retained item-view smoke only exercised the default Compact
+  path, so Details custom paint regressions could still pass the standard
+  runtime evidence even after the header moved into the visual layer.
+  Implementation: `FIKA_AUTOSMOKE_ITEM_VIEW=details-zoom-scroll` now switches
+  the active pane to Details before running zoom/scroll actions, the item-view
+  analyzer recognizes `DetailsZoomScroll` and requires its `view-details`
+  marker, and the retained renderer evidence script runs a Details gate with
+  `--require-details`, `--require-modes Details`, `--require-renderer-policy-modes
+  Details`, and `--expect-retained-item-policy`. This turns Details visual
+  ownership into repeatable runtime evidence for future pane painter work.
 
 ## Acceptance Gates
 

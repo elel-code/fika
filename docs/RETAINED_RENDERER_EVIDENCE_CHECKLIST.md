@@ -65,6 +65,7 @@ Capture unattended zoom/scroll evidence for `/etc`:
 
 ```sh
 timeout 8s env FIKA_PERF_ITEM_VIEW=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll target/debug/fika /etc > /tmp/fika-evidence-item-etc-zoom-scroll.log 2>&1
+timeout 8s env FIKA_PERF_ITEM_VIEW=1 FIKA_AUTOSMOKE_ITEM_VIEW=details-zoom-scroll target/debug/fika /etc > /tmp/fika-evidence-item-etc-details-zoom-scroll.log 2>&1
 ```
 
 Analyze at least the most complete log:
@@ -72,6 +73,7 @@ Analyze at least the most complete log:
 ```sh
 scripts/check-item-view-runtime-log.sh /tmp/fika-evidence-item-etc-zoom-scroll.log
 scripts/summarize-item-view-renderer-evidence.sh /tmp/fika-evidence-item-etc-zoom-scroll.log
+scripts/analyze-item-view-perf.sh --require-autosmoke --require-details --require-renderer-policy --require-interaction --expect-retained-item-policy --require-modes Details --require-renderer-policy-modes Details /tmp/fika-evidence-item-etc-details-zoom-scroll.log
 ```
 
 The summary block is the preferred evidence snippet for
