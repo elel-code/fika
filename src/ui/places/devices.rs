@@ -1,8 +1,14 @@
 use std::collections::BTreeSet;
+use std::path::PathBuf;
 
-use fika_core::DeviceInfo;
+use fika_core::{
+    DeviceInfo, DevicePlaceOperation, DevicePlaceOperationResult, PaneId, file_ops,
+    perform_device_place_operation,
+};
+use gpui::{AppContext, Context};
 
 use crate::FikaApp;
+use crate::ui::background_tasks::BackgroundTaskId;
 
 use super::model::{
     DEVICES_GROUP, PlaceEntry, REMOVABLE_DEVICES_GROUP, removable_device_place_entries,
@@ -20,6 +26,107 @@ impl FikaApp {
 
     pub(crate) fn replace_removable_device_places(&mut self, devices: &[DeviceInfo]) -> bool {
         replace_removable_device_places(&mut self.places, devices)
+    }
+
+    pub(crate) fn open_place(&mut self, path: PathBuf) {
+        let Some(pane_id) = self.panes.focused() else {
+            return;
+        };
+        if path == file_ops::trash_files_dir() {
+            let _ = file_ops::ensure_trash_dirs();
+        }
+        self.load_pane(pane_id, path);
+    }
+
+    pub(crate) fn activate_place(
+        &mut self,
+        path: PathBuf,
+        device_id: Option<String>,
+        label: String,
+        mounted: bool,
+        device: bool,
+        _network: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(pane_id) = self.panes.focused() else {
+            return;
+        };
+        if mounted {
+            self.open_place(path);
+        } else if device && let Some(device_id) = device_id {
+            self.run_device_place_operation(
+                pane_id,
+                device_id,
+                label,
+                DevicePlaceOperation::Mount,
+                cx,
+            );
+        }
+    }
+
+    pub(crate) fn run_device_place_operation(
+        &mut self,
+        pane_id: PaneId,
+        device_id: String,
+        label: String,
+        operation: DevicePlaceOperation,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(task_id) =
+            self.begin_pane_operation(pane_id, operation.in_progress_message(&label))
+        else {
+            return;
+        };
+        cx.spawn(
+            move |this: gpui::WeakEntity<FikaApp>, cx: &mut gpui::AsyncApp| {
+                let mut cx = cx.clone();
+                async move {
+                    let result = cx
+                        .background_spawn(async move {
+                            perform_device_place_operation(pane_id, device_id, label, operation)
+                                .await
+                        })
+                        .await;
+                    let _ = this.update(&mut cx, |app, cx| {
+                        app.finish_device_place_operation(task_id, result, cx);
+                        cx.notify();
+                    });
+                }
+            },
+        )
+        .detach();
+    }
+
+    fn finish_device_place_operation(
+        &mut self,
+        task_id: BackgroundTaskId,
+        result: DevicePlaceOperationResult,
+        cx: &mut Context<Self>,
+    ) {
+        match result.result {
+            Ok(Some(mount_point)) => {
+                self.finish_pane_operation(
+                    task_id,
+                    result.pane_id,
+                    result.operation.success_message(&result.label),
+                );
+                self.request_device_snapshot_refresh(cx);
+                self.load_pane(result.pane_id, mount_point);
+            }
+            Ok(None) => {
+                self.finish_pane_operation(
+                    task_id,
+                    result.pane_id,
+                    result.operation.success_message(&result.label),
+                );
+                self.request_device_snapshot_refresh(cx);
+            }
+            Err(error) => self.finish_pane_operation(
+                task_id,
+                result.pane_id,
+                result.operation.error_message(&result.label, &error),
+            ),
+        }
     }
 }
 

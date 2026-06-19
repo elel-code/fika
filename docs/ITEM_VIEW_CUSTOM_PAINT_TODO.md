@@ -1735,6 +1735,10 @@ tracks.
   facade. `src/ui/places/drag.rs` now owns dropping place drags, item drags, and
   external paths onto Places targets or insertion positions, while generic pane
   and filesystem transfer helpers remain outside Places.
+- [x] P16gah: Move app-facing Places activation and device operations into the
+  Places devices facade. `src/ui/places/devices.rs` now owns opening mounted
+  places, mounting unmounted device places, and finishing mount/unmount/eject
+  background operations.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,
