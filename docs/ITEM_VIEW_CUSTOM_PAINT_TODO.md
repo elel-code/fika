@@ -1408,6 +1408,21 @@ tracks.
   not include the GPUI text/icon subtree cost; the next evidence step is either
   total render/chrome-vs-full accounting or further retained custom text paint
   optimization before default promotion.
+- [x] P16dz7: Add total render accounting to the Places analyzer and capture
+  the first chrome-vs-full overflow render pair. Root cause: row-visual-only
+  evidence showed full custom text paint much higher than chrome, but chrome's
+  row visual layer intentionally excludes GPUI text/icon subtree work. The
+  analyzer now parses `[fika render]` lines and supports `--render-total-us`.
+  Evidence: with both `FIKA_PERF_ITEM_VIEW=1` and `FIKA_PERF_PLACES_VIEW=1`,
+  `/tmp/fika-places-chrome-overflow-render.log` and
+  `/tmp/fika-places-full-handoff-overflow-render.log` both pass their policy
+  gates. Row visual still favors chrome (`max_warm_paint=153us`) over full
+  handoff (`max_warm_paint=2041us` in this run), but ready-frame total render
+  does not scale with that gap: chrome steady frames reached `2035-4959us`,
+  while full handoff ready frames were `1463-2130us`. Decision: keep full
+  handoff opt-in until more repeated total-render evidence exists, but use total
+  render accounting as the promotion metric alongside row visual
+  prepaint/paint.
 - [x] P16dz: Add the post-Places-chrome full retained renderer roadmap. The new
   `docs/FULL_RETAINED_RENDERER_ROADMAP.md` and zh-CN translation define the
   current baseline, explicit GPUI bridges, non-negotiable Dolphin-aligned

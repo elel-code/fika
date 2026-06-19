@@ -115,6 +115,10 @@ Options:
       Fail if any [fika places-row-visual] prepaint after the first two frames
       exceeds N microseconds.
 
+  --render-total-us N
+      Fail if any [fika render] total exceeds N microseconds when render logs
+      are present.
+
   -h, --help
       Show this help.
 EOF
@@ -142,6 +146,7 @@ row_visual_paint_us=""
 row_visual_prepaint_us=""
 row_visual_warm_paint_us=""
 row_visual_warm_prepaint_us=""
+render_total_us=""
 log_path=""
 
 while [[ $# -gt 0 ]]; do
@@ -275,6 +280,18 @@ while [[ $# -gt 0 ]]; do
         --row-visual-warm-prepaint-us=*)
             row_visual_warm_prepaint_us="${1#--row-visual-warm-prepaint-us=}"
             ;;
+        --render-total-us)
+            if [[ $# -lt 2 || "$2" == --* ]]; then
+                echo "--render-total-us requires a numeric value" >&2
+                usage >&2
+                exit 2
+            fi
+            render_total_us="$2"
+            shift
+            ;;
+        --render-total-us=*)
+            render_total_us="${1#--render-total-us=}"
+            ;;
         -h|--help)
             usage
             exit 0
@@ -302,7 +319,7 @@ if [[ -z "$log_path" ]]; then
     exit 2
 fi
 
-for value_name in snapshot_us sidebar_build_us slot_project_us row_visual_paint_us row_visual_prepaint_us row_visual_warm_paint_us row_visual_warm_prepaint_us; do
+for value_name in snapshot_us sidebar_build_us slot_project_us row_visual_paint_us row_visual_prepaint_us row_visual_warm_paint_us row_visual_warm_prepaint_us render_total_us; do
     value="${!value_name}"
     if [[ -n "$value" && ! "$value" =~ ^[0-9]+$ ]]; then
         echo "--${value_name//_/-} must be an integer microsecond value" >&2
@@ -332,7 +349,8 @@ awk \
     -v row_visual_paint_limit="$row_visual_paint_us" \
     -v row_visual_prepaint_limit="$row_visual_prepaint_us" \
     -v row_visual_warm_paint_limit="$row_visual_warm_paint_us" \
-    -v row_visual_warm_prepaint_limit="$row_visual_warm_prepaint_us" '
+    -v row_visual_warm_prepaint_limit="$row_visual_warm_prepaint_us" \
+    -v render_total_limit="$render_total_us" '
 function field(name,    prefix, i, value) {
     prefix = name "="
     for (i = 1; i <= NF; i++) {
@@ -382,6 +400,24 @@ function renderer_retained_interaction_for_policy(event_policy, rows, sections) 
     max_update("source", source)
     max_update("visible", visible)
     max_update("sections", sections)
+}
+
+/^\[fika render\]/ {
+    render_frames++
+    panes = field("panes") + 0
+    places = field("places") + 0
+    tasks = field("tasks") + 0
+    snapshots = field("snapshots") + 0
+    pane_elements = field("pane_elements") + 0
+    root = field("root") + 0
+    total = field("total") + 0
+    max_update("render_panes", panes)
+    max_update("render_places", places)
+    max_update("render_tasks", tasks)
+    max_update("render_snapshots", snapshots)
+    max_update("render_pane_elements", pane_elements)
+    max_update("render_root", root)
+    max_update("render_total", total)
 }
 
 /^\[fika places-sidebar\]/ {
@@ -1089,6 +1125,9 @@ END {
     if (row_visual_warm_prepaint_limit != "" && max_values["row_visual_warm_prepaint"] > row_visual_warm_prepaint_limit) {
         fail("places warm row visual prepaint exceeded threshold: " max_values["row_visual_warm_prepaint"] "us > " row_visual_warm_prepaint_limit "us")
     }
+    if (render_total_limit != "" && max_values["render_total"] > render_total_limit) {
+        fail("render total exceeded threshold: " max_values["render_total"] "us > " render_total_limit "us")
+    }
     if (require_autosmoke == "true") {
         if (!autosmoke_start_seen || !autosmoke_complete_seen) {
             fail("missing Places autosmoke start/complete markers")
@@ -1219,6 +1258,15 @@ END {
         max_values["slot_unchanged"],
         max_values["slot_removed"],
         max_values["slot_project"])
+    printf("render_frames=%d max_panes=%d max_places=%dus max_tasks=%dus max_snapshots=%dus max_pane_elements=%dus max_root=%dus max_total=%dus\n",
+        render_frames,
+        max_values["render_panes"],
+        max_values["render_places"],
+        max_values["render_tasks"],
+        max_values["render_snapshots"],
+        max_values["render_pane_elements"],
+        max_values["render_root"],
+        max_values["render_total"])
     policy_kinds = ""
     if (policy_kind_gpui_seen) {
         policy_kinds = append_csv(policy_kinds, "gpui")

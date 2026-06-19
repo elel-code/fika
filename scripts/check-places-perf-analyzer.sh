@@ -18,6 +18,7 @@ cat > "$tmpdir/complete.log" <<'EOF'
 [fika places-renderer-policy] rows=11 row_gpui=11 row_visual_layer=0 icon_gpui=11 retained_interaction=0 drag_shell=11 section_gpui=2 scrollbar_canvas=1
 [fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=11
 [fika places-interaction-geometry] rows=11 sections=2 entries=13 content_height=378 hit_tests=2 project=5us
+[fika render] panes=1 viewport=1180x760 places=4457us tasks=30us snapshots=120us pane_elements=300us root=500us total=5400us
 [fika autosmoke] places start scenario=DropTargets
 [fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
 [fika places-view] source=11 visible=11 sections=2 snapshot=89us
@@ -64,6 +65,7 @@ summary="$("$analyzer" \
     --snapshot-us 5000 \
     --sidebar-build-us 1000 \
     --slot-project-us 100 \
+    --render-total-us 6000 \
     "$tmpdir/complete.log")"
 
 if [[ "$summary" != *"places_view_frames="* || "$summary" != *"max_snapshot=4457us"* ]]; then
@@ -72,6 +74,10 @@ if [[ "$summary" != *"places_view_frames="* || "$summary" != *"max_snapshot=4457
 fi
 if [[ "$summary" != *"places_slots_frames="* || "$summary" != *"max_visual=2"* ]]; then
     echo "expected places-slots summary" >&2
+    exit 1
+fi
+if [[ "$summary" != *"render_frames=1 max_panes=1 max_places=4457us max_tasks=30us max_snapshots=120us max_pane_elements=300us max_root=500us max_total=5400us"* ]]; then
+    echo "expected render summary" >&2
     exit 1
 fi
 if [[ "$summary" != *"places_autosmoke target=1 insert_start=1 insert_end=1 clear=1 snapshots=1,1,1,1,1"* ]]; then
