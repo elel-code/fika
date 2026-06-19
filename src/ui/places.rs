@@ -39,5 +39,4 @@ pub(crate) use user::{
     move_user_place_to_insert_index, primary_place_order, remove_user_place,
     user_place_insert_index, user_places,
 };
-pub(crate) use visibility::{hide_place, hide_place_section, show_hidden_places};
 pub(crate) use visual::PlacesRowTextShapeCache;

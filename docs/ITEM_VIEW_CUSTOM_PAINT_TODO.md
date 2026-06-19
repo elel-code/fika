@@ -1688,6 +1688,12 @@ tracks.
   `replace_removable_device_places()` app method, while `src/main.rs` keeps the
   monitor scheduling/draining loop. The low-level device-section replacement
   helper is no longer re-exported through the top-level Places facade.
+- [x] P16fy: Move app-facing hidden Places visibility commands into the Places
+  visibility facade. `src/ui/places/visibility.rs` now owns
+  `hide_place()`, `hide_place_section()`, and `show_hidden_places()` app
+  methods plus status updates, while the low-level visibility helpers stay
+  private to the Places visibility module instead of being re-exported through
+  the top-level Places facade.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

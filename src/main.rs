@@ -3675,28 +3675,6 @@ impl FikaApp {
         self.set_pane_status(pane_id, message);
     }
 
-    fn hide_place(&mut self, pane_id: PaneId, path: PathBuf) {
-        let message =
-            ui::places::hide_place(&self.places, &mut self.hidden_places, path).status_message();
-        self.set_pane_status(pane_id, message);
-    }
-
-    fn hide_place_section(&mut self, pane_id: PaneId, group: &'static str) {
-        let message =
-            ui::places::hide_place_section(&self.places, &mut self.hidden_place_sections, group)
-                .status_message();
-        self.set_pane_status(pane_id, message);
-    }
-
-    fn show_hidden_places(&mut self, pane_id: PaneId) {
-        let message = ui::places::show_hidden_places(
-            &mut self.hidden_places,
-            &mut self.hidden_place_sections,
-        )
-        .status_message();
-        self.set_pane_status(pane_id, message);
-    }
-
     fn user_places(&self) -> Vec<UserPlace> {
         ui::places::user_places(&self.places)
     }

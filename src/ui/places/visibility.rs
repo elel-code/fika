@@ -1,6 +1,10 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
+use fika_core::PaneId;
+
+use crate::FikaApp;
+
 use super::PlaceEntry;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -47,6 +51,25 @@ impl ShowHiddenPlacesResult {
             ShowHiddenPlacesResult::Shown => "Showing hidden places",
             ShowHiddenPlacesResult::NothingHidden => "No hidden places",
         }
+    }
+}
+
+impl FikaApp {
+    pub(crate) fn hide_place(&mut self, pane_id: PaneId, path: PathBuf) {
+        let message = hide_place(&self.places, &mut self.hidden_places, path).status_message();
+        self.set_pane_status(pane_id, message);
+    }
+
+    pub(crate) fn hide_place_section(&mut self, pane_id: PaneId, group: &'static str) {
+        let message = hide_place_section(&self.places, &mut self.hidden_place_sections, group)
+            .status_message();
+        self.set_pane_status(pane_id, message);
+    }
+
+    pub(crate) fn show_hidden_places(&mut self, pane_id: PaneId) {
+        let message = show_hidden_places(&mut self.hidden_places, &mut self.hidden_place_sections)
+            .status_message();
+        self.set_pane_status(pane_id, message);
     }
 }
 
