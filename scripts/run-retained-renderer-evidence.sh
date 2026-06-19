@@ -21,12 +21,12 @@ Options:
       Capture only Places evidence.
 
   --icons
-      Also capture MIME/theme icon GPUI-baseline-vs-full-custom A/B logs and
-      require the full-custom default gate to pass.
+      Obsolete. Ordinary MIME/theme icons no longer have a GPUI image-element
+      renderer branch; use --items-only and inspect gpui_image_element=0.
 
   --hybrid-icons
-      Capture MIME/theme icon GPUI-baseline-vs-explicit-hybrid readiness
-      handoff logs and require the hybrid-vs-GPUI-baseline gate to pass.
+      Obsolete. The GPUI-to-custom readiness handoff renderer branch was
+      removed for ordinary MIME/theme icons.
 
   --places-full-handoff
       Capture paired Places chrome-baseline vs full ready-only handoff logs
@@ -34,10 +34,7 @@ Options:
       this is a regression/baseline suite for the handoff path.
 
   --all
-      Same as --core --icons --hybrid-icons --places-full-handoff.
-
-      Note: --icons is intentionally strict. Use --hybrid-icons by itself
-      when validating staged readiness handoff work.
+      Same as --core --places-full-handoff.
 
   --analyze-only
       Do not launch Fika. Re-run analyzers against existing logs.
@@ -73,8 +70,6 @@ downloads_dir="${HOME:-}/Downloads"
 timeout_seconds=8
 capture_items=false
 capture_places=false
-capture_icons=false
-capture_hybrid_icons=false
 capture_places_full_handoff=false
 analyze_only=false
 skip_build=false
@@ -98,12 +93,12 @@ while [[ $# -gt 0 ]]; do
             capture_places=true
             ;;
         --icons)
-            explicit_selection=true
-            capture_icons=true
+            echo "--icons is obsolete: ordinary MIME/theme icons are always self-painted now" >&2
+            exit 2
             ;;
         --hybrid-icons)
-            explicit_selection=true
-            capture_hybrid_icons=true
+            echo "--hybrid-icons is obsolete: the MIME/theme readiness handoff renderer was removed" >&2
+            exit 2
             ;;
         --places-full-handoff)
             explicit_selection=true
@@ -113,8 +108,6 @@ while [[ $# -gt 0 ]]; do
             explicit_selection=true
             capture_items=true
             capture_places=true
-            capture_icons=true
-            capture_hybrid_icons=true
             capture_places_full_handoff=true
             ;;
         --analyze-only)
@@ -342,50 +335,6 @@ if [[ "$capture_places" == true ]]; then
     run_gate "places dnd" "$places_analyzer" --require-retained-dnd-autosmoke "${places_common[@]}" "$places_dnd_log"
     run_gate "places full retained-event" \
         "$places_analyzer" --expect-retained-event-policy "$places_dnd_log"
-fi
-
-if [[ "$capture_icons" == true ]]; then
-    icon_gpui_etc_log="$(log_path icon-gpui-baseline-etc)"
-    icon_custom_etc_log="$(log_path icon-custom-etc)"
-    icon_gpui_downloads_log="$(log_path icon-gpui-baseline-downloads)"
-    icon_custom_downloads_log="$(log_path icon-custom-downloads)"
-
-    run_capture "icon gpui baseline etc" "$icon_gpui_etc_log" \
-        env FIKA_PERF_ITEM_VIEW=1 FIKA_GPUI_THEME_ICONS=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll "$binary" /etc
-    run_capture "icon custom etc" "$icon_custom_etc_log" \
-        env FIKA_PERF_ITEM_VIEW=1 FIKA_CUSTOM_THEME_ICONS=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll "$binary" /etc
-    run_capture "icon gpui baseline downloads" "$icon_gpui_downloads_log" \
-        env FIKA_PERF_ITEM_VIEW=1 FIKA_GPUI_THEME_ICONS=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll "$binary" "$downloads_dir"
-    run_capture "icon custom downloads" "$icon_custom_downloads_log" \
-        env FIKA_PERF_ITEM_VIEW=1 FIKA_CUSTOM_THEME_ICONS=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll "$binary" "$downloads_dir"
-
-    compare="$root_dir/scripts/compare-item-image-renderers.sh"
-    run_gate "icon custom default gate etc" \
-        "$compare" --gate-default-promotion "$icon_custom_etc_log" "$icon_gpui_etc_log"
-    run_gate "icon custom default gate downloads" \
-        "$compare" --gate-default-promotion "$icon_custom_downloads_log" "$icon_gpui_downloads_log"
-fi
-
-if [[ "$capture_hybrid_icons" == true ]]; then
-    icon_gpui_etc_log="$(log_path icon-hybrid-gpui-baseline-etc)"
-    icon_hybrid_etc_log="$(log_path icon-hybrid-etc)"
-    icon_gpui_downloads_log="$(log_path icon-hybrid-gpui-baseline-downloads)"
-    icon_hybrid_downloads_log="$(log_path icon-hybrid-downloads)"
-
-    run_capture "icon hybrid gpui baseline etc" "$icon_gpui_etc_log" \
-        env FIKA_PERF_ITEM_VIEW=1 FIKA_GPUI_THEME_ICONS=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll "$binary" /etc
-    run_capture "icon hybrid etc" "$icon_hybrid_etc_log" \
-        env FIKA_PERF_ITEM_VIEW=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll "$binary" /etc
-    run_capture "icon hybrid gpui baseline downloads" "$icon_gpui_downloads_log" \
-        env FIKA_PERF_ITEM_VIEW=1 FIKA_GPUI_THEME_ICONS=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll "$binary" "$downloads_dir"
-    run_capture "icon hybrid downloads" "$icon_hybrid_downloads_log" \
-        env FIKA_PERF_ITEM_VIEW=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll "$binary" "$downloads_dir"
-
-    compare="$root_dir/scripts/compare-item-image-renderers.sh"
-    run_gate "icon hybrid gpui-baseline gate etc" \
-        "$compare" --gate-hybrid-default-promotion "$icon_hybrid_etc_log" "$icon_gpui_etc_log"
-    run_gate "icon hybrid gpui-baseline gate downloads" \
-        "$compare" --gate-hybrid-default-promotion "$icon_hybrid_downloads_log" "$icon_gpui_downloads_log"
 fi
 
 if [[ "$capture_places_full_handoff" == true ]]; then

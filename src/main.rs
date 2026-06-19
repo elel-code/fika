@@ -98,8 +98,8 @@ use ui::filter_bar::{
     cached_filtered_model_for_pane, filter_toggle_snapshot,
 };
 use ui::icons::{
-    FileIconCache, RetainedThemeIconImageCache, ThemeIconImageReadiness,
-    common_file_icon_resolve_requests_for_sizes, file_icon_resolve_results_for_requests,
+    FileIconCache, RetainedThemeIconImageCache, common_file_icon_resolve_requests_for_sizes,
+    file_icon_resolve_results_for_requests,
 };
 use ui::item_view::{
     ItemViewScrollState, begin_item_view_scrollbar_drag as begin_item_view_scrollbar_drag_state,
@@ -373,7 +373,6 @@ pub(crate) struct FikaApp {
     next_device_monitor_start_at: Instant,
     file_icons: FileIconCache,
     file_icon_resolve_queue: FileIconResolveQueue,
-    theme_icon_readiness: ThemeIconImageReadiness,
     theme_icon_images: RetainedThemeIconImageCache<Arc<RenderImage>>,
     mime_applications: MimeApplicationCache,
     space_info: SpaceInfoCache,
@@ -478,7 +477,6 @@ impl FikaApp {
             next_device_monitor_start_at: Instant::now(),
             file_icons: FileIconCache::default(),
             file_icon_resolve_queue: FileIconResolveQueue::default(),
-            theme_icon_readiness: ThemeIconImageReadiness::default(),
             theme_icon_images: RetainedThemeIconImageCache::default(),
             mime_applications: MimeApplicationCache::load(),
             space_info: SpaceInfoCache::default(),
@@ -1052,7 +1050,7 @@ impl FikaApp {
         true
     }
 
-    fn snapshots(&mut self, scale_factor: f32, cx: &mut Context<Self>) -> Vec<PaneSnapshot> {
+    fn snapshots(&mut self, _scale_factor: f32, cx: &mut Context<Self>) -> Vec<PaneSnapshot> {
         let focused_pane = self.panes.focused();
         let pane_ids = self.panes.pane_ids().to_vec();
         let perf_enabled = item_view_perf_enabled();
@@ -1119,12 +1117,6 @@ impl FikaApp {
                 if let Some(pane_started) = pane_started {
                     file_grid_frame.emit_perf_log(pane_id, view.view_mode, pane_started.elapsed());
                 }
-                let theme_icon_readiness = ui::file_grid::prewarm_visible_theme_icons_for_snapshot(
-                    &file_grid_frame.file_grid,
-                    self,
-                    scale_factor,
-                    cx,
-                );
                 Some(PaneSnapshot {
                     id: pane_id,
                     split_ratio,
@@ -1134,7 +1126,6 @@ impl FikaApp {
                     status_bar,
                     file_grid: file_grid_frame.file_grid,
                     warm_static_visual_file_grid: file_grid_frame.warm_static_visual_file_grid,
-                    theme_icon_readiness,
                     trash_view,
                     scroll_handle,
                     view,
@@ -15314,7 +15305,6 @@ text/plain=viewer.desktop;\n",
             next_device_monitor_start_at: Instant::now(),
             file_icons: FileIconCache::default(),
             file_icon_resolve_queue: FileIconResolveQueue::default(),
-            theme_icon_readiness: ThemeIconImageReadiness::default(),
             theme_icon_images: RetainedThemeIconImageCache::default(),
             mime_applications: MimeApplicationCache::empty(),
             space_info: SpaceInfoCache::default(),

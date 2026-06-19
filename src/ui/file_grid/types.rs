@@ -4,7 +4,6 @@ use gpui::ScrollHandle;
 use super::details::{DetailsItemSnapshot, DetailsLayoutMetrics};
 use super::paint_slots::{DetailsPaintSnapshot, ItemPaintSnapshot};
 use super::snapshot::VisibleItemSnapshot;
-use crate::ui::icons::ThemeIconImageReadinessSnapshot;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum FileGridMode {
@@ -16,7 +15,6 @@ pub(crate) struct FileGridProps {
     pub(crate) pane_id: PaneId,
     pub(crate) snapshot: FileGridRenderSnapshot,
     pub(crate) warm_static_visual_snapshot: Option<FileGridRenderSnapshot>,
-    pub(crate) theme_icon_readiness: ThemeIconImageReadinessSnapshot,
     pub(crate) trash_view: bool,
     pub(crate) scroll_handle: ScrollHandle,
     pub(crate) rubber_band: Option<ViewRect>,

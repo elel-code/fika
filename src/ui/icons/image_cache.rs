@@ -1,11 +1,10 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use super::FileIconSnapshot;
 
 const UNKNOWN_THEME_NAME: &str = "__fika_unknown_icon_theme__";
-const DEFAULT_THEME_ICON_READINESS_LIMIT: usize = 4096;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum IconColorScheme {
@@ -17,6 +16,9 @@ pub(crate) enum IconPaintMode {
     Normal,
 }
 
+// Pixmap identity, not file-role identity. Dolphin stores model data as
+// iconName, then KStandardItemListWidget::pixmapForIcon() keys QPixmapCache by
+// icon name, requested size, DPR, and mode.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct ThemeIconImageKey {
     pub(crate) icon_name: Arc<str>,
@@ -37,75 +39,6 @@ impl ThemeIconImageKey {
             color_scheme: IconColorScheme::Unknown,
             mode: IconPaintMode::Normal,
         }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct ThemeIconImageReadiness {
-    ready: Arc<HashSet<ThemeIconImageKey>>,
-    order: VecDeque<ThemeIconImageKey>,
-    max_entries: usize,
-}
-
-impl Default for ThemeIconImageReadiness {
-    fn default() -> Self {
-        Self {
-            ready: Arc::new(HashSet::new()),
-            order: VecDeque::new(),
-            max_entries: DEFAULT_THEME_ICON_READINESS_LIMIT,
-        }
-    }
-}
-
-impl ThemeIconImageReadiness {
-    pub(crate) fn snapshot(&self) -> ThemeIconImageReadinessSnapshot {
-        ThemeIconImageReadinessSnapshot {
-            ready: self.ready.clone(),
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn mark_ready(&mut self, key: ThemeIconImageKey) -> bool {
-        self.mark_ready_key(key)
-    }
-
-    pub(crate) fn mark_ready_path(&mut self, key: ThemeIconImageKey, _path: Arc<Path>) -> bool {
-        self.mark_ready_key(key)
-    }
-
-    fn mark_ready_key(&mut self, key: ThemeIconImageKey) -> bool {
-        if self.ready.contains(&key) {
-            return false;
-        }
-
-        Arc::make_mut(&mut self.ready).insert(key.clone());
-        self.order.push_back(key);
-        while self.ready.len() > self.max_entries {
-            let Some(evicted) = self.order.pop_front() else {
-                break;
-            };
-            Arc::make_mut(&mut self.ready).remove(&evicted);
-        }
-        true
-    }
-
-    #[cfg(test)]
-    fn with_max_entries(max_entries: usize) -> Self {
-        Self {
-            max_entries: max_entries.max(1),
-            ..Self::default()
-        }
-    }
-}
-
-#[derive(Clone, Debug, Default)]
-pub(crate) struct ThemeIconImageReadinessSnapshot {
-    ready: Arc<HashSet<ThemeIconImageKey>>,
-}
-
-impl ThemeIconImageReadinessSnapshot {
-    pub(crate) fn is_ready(&self, key: &ThemeIconImageKey) -> bool {
-        self.ready.contains(key)
     }
 }
 
@@ -170,7 +103,6 @@ pub(crate) enum RetainedThemeIconImageLoadOutcome {
 #[derive(Clone, Debug)]
 pub(crate) struct RetainedThemeIconImageCache<T> {
     entries: HashMap<ThemeIconImageKey, RetainedThemeIconImage<T>>,
-    images_by_source_path: HashMap<PathBuf, T>,
     load_generation: u64,
 }
 
@@ -178,7 +110,6 @@ impl<T> Default for RetainedThemeIconImageCache<T> {
     fn default() -> Self {
         Self {
             entries: HashMap::new(),
-            images_by_source_path: HashMap::new(),
             load_generation: 0,
         }
     }
@@ -210,40 +141,10 @@ impl<T: Clone> RetainedThemeIconImageCache<T> {
             load_generation: self.load_generation,
             status: ThemeIconImageStatus::Loaded,
         };
-        if let Some(resolved_path) = &entry.resolved_path {
-            self.images_by_source_path
-                .insert(resolved_path.clone(), image.clone());
-        }
         self.entries.insert(key, entry);
         RetainedThemeIconImageLoad {
             image: Some(image),
             outcome: RetainedThemeIconImageLoadOutcome::Loaded { first_ready },
-        }
-    }
-
-    pub(crate) fn record_loaded_from_retained_source(
-        &mut self,
-        key: ThemeIconImageKey,
-        resolved_path: Arc<Path>,
-        image: T,
-    ) -> RetainedThemeIconImageLoad<T> {
-        self.load_generation += 1;
-        let resolved_path_buf = resolved_path.as_ref().to_path_buf();
-        self.images_by_source_path
-            .insert(resolved_path_buf.clone(), image.clone());
-        let entry = RetainedThemeIconImage {
-            key: key.clone(),
-            resolved_path: Some(resolved_path_buf),
-            image: Some(image.clone()),
-            load_generation: self.load_generation,
-            status: ThemeIconImageStatus::Loaded,
-        };
-        self.entries.insert(key, entry);
-        RetainedThemeIconImageLoad {
-            image: Some(image),
-            outcome: RetainedThemeIconImageLoadOutcome::Retained {
-                status: ThemeIconImageStatus::Loaded,
-            },
         }
     }
 
@@ -277,12 +178,6 @@ impl<T: Clone> RetainedThemeIconImageCache<T> {
         Some(image)
     }
 
-    pub(crate) fn image_for_source_path(&mut self, path: &Path) -> Option<T> {
-        let image = self.images_by_source_path.get(path).cloned()?;
-        self.touch_source_path(path);
-        Some(image)
-    }
-
     pub(crate) fn prune_to_budget<F>(
         &mut self,
         max_bytes: usize,
@@ -293,8 +188,9 @@ impl<T: Clone> RetainedThemeIconImageCache<T> {
     {
         let max_bytes = max_bytes.max(1);
         let mut total_bytes = self
-            .images_by_source_path
+            .entries
             .values()
+            .filter_map(|entry| entry.image.as_ref())
             .map(&mut image_cost)
             .sum::<usize>();
         let mut evicted_images = Vec::new();
@@ -311,16 +207,7 @@ impl<T: Clone> RetainedThemeIconImageCache<T> {
                 continue;
             };
             if let Some(path) = evicted.resolved_path {
-                if self.source_path_is_retained_by_entry(&path) {
-                    continue;
-                }
-                if let Some(image) = self.images_by_source_path.remove(&path) {
-                    total_bytes = total_bytes.saturating_sub(image_cost(&image));
-                    evicted_images.push(EvictedThemeIconImage {
-                        resolved_path: Some(path),
-                        image,
-                    });
-                } else if let Some(image) = evicted.image {
+                if let Some(image) = evicted.image {
                     total_bytes = total_bytes.saturating_sub(image_cost(&image));
                     evicted_images.push(EvictedThemeIconImage {
                         resolved_path: Some(path),
@@ -384,21 +271,6 @@ impl<T: Clone> RetainedThemeIconImageCache<T> {
         if let Some(entry) = self.entries.get_mut(key) {
             entry.load_generation = self.load_generation;
         }
-    }
-
-    fn touch_source_path(&mut self, path: &Path) {
-        self.load_generation += 1;
-        for entry in self.entries.values_mut() {
-            if entry.resolved_path.as_deref() == Some(path) {
-                entry.load_generation = self.load_generation;
-            }
-        }
-    }
-
-    fn source_path_is_retained_by_entry(&self, path: &Path) -> bool {
-        self.entries
-            .values()
-            .any(|entry| entry.resolved_path.as_deref() == Some(path))
     }
 }
 
@@ -474,28 +346,6 @@ mod tests {
     }
 
     #[test]
-    fn cache_reuses_loaded_same_source_image_for_new_size_key() {
-        let key_48 = ThemeIconImageKey::new(Arc::from("text-x-generic"), 48, 1.0);
-        let key_64 = ThemeIconImageKey::new(Arc::from("text-x-generic"), 64, 1.0);
-        let path: Arc<Path> = Arc::from(Path::new("/theme/scalable/text-x-generic.svg"));
-        let mut cache = RetainedThemeIconImageCache::default();
-
-        cache.record_loaded(key_48, path.clone(), "image-scalable");
-        let image = cache
-            .image_for_source_path(path.as_ref())
-            .expect("source image should be retained");
-        let loaded_64 = cache.record_loaded_from_retained_source(key_64, path, image);
-
-        assert_eq!(
-            loaded_64.outcome,
-            RetainedThemeIconImageLoadOutcome::Retained {
-                status: ThemeIconImageStatus::Loaded
-            }
-        );
-        assert_eq!(loaded_64.image, Some("image-scalable"));
-    }
-
-    #[test]
     fn cache_reuses_same_key_image_during_stale_path_refresh() {
         let key = ThemeIconImageKey::new(Arc::from("text-x-generic"), 48, 1.0);
         let mut cache = RetainedThemeIconImageCache::default();
@@ -520,7 +370,7 @@ mod tests {
     }
 
     #[test]
-    fn cache_prunes_by_image_budget_and_releases_unreferenced_source_images() {
+    fn cache_prunes_by_image_budget_and_releases_least_recent_key_images() {
         let key_48 = ThemeIconImageKey::new(Arc::from("text-x-generic"), 48, 1.0);
         let key_64 = ThemeIconImageKey::new(Arc::from("text-x-generic"), 64, 1.0);
         let key_png = ThemeIconImageKey::new(Arc::from("image-png"), 48, 1.0);
@@ -528,64 +378,29 @@ mod tests {
         let png_path: Arc<Path> = Arc::from(Path::new("/theme/48/image-png.svg"));
         let mut cache = RetainedThemeIconImageCache::default();
 
-        cache.record_loaded(key_48.clone(), scalable_path.clone(), "image-scalable");
-        let image = cache
-            .image_for_source_path(scalable_path.as_ref())
-            .expect("source image should be retained");
-        cache.record_loaded_from_retained_source(key_64.clone(), scalable_path.clone(), image);
+        cache.record_loaded(key_48.clone(), scalable_path.clone(), "image-48");
+        cache.record_loaded(key_64.clone(), scalable_path.clone(), "image-64");
         cache.record_loaded(key_png.clone(), png_path.clone(), "image-png");
         assert_eq!(cache.len(), 3);
 
         let evicted = cache.prune_to_budget(2, |_| 2);
         assert_eq!(
             evicted,
-            vec![EvictedThemeIconImage {
-                resolved_path: Some(scalable_path.as_ref().to_path_buf()),
-                image: "image-scalable"
-            }]
+            vec![
+                EvictedThemeIconImage {
+                    resolved_path: Some(scalable_path.as_ref().to_path_buf()),
+                    image: "image-48"
+                },
+                EvictedThemeIconImage {
+                    resolved_path: Some(scalable_path.as_ref().to_path_buf()),
+                    image: "image-64"
+                }
+            ]
         );
         assert_eq!(cache.len(), 1);
         assert!(cache.image_for_key(&key_48).is_none());
         assert!(cache.image_for_key(&key_64).is_none());
         assert!(cache.image_for_key(&key_png).is_some());
-    }
-
-    #[test]
-    fn readiness_snapshot_tracks_ready_keys_and_eviction() {
-        let key_48 = ThemeIconImageKey::new(Arc::from("text-x-generic"), 48, 1.0);
-        let key_64 = ThemeIconImageKey::new(Arc::from("text-x-generic"), 64, 1.0);
-        let mut readiness = ThemeIconImageReadiness::with_max_entries(1);
-
-        assert!(readiness.mark_ready(key_48.clone()));
-        assert!(readiness.snapshot().is_ready(&key_48));
-        assert!(!readiness.mark_ready(key_48.clone()));
-
-        assert!(readiness.mark_ready(key_64.clone()));
-        let snapshot = readiness.snapshot();
-        assert!(!snapshot.is_ready(&key_48));
-        assert!(snapshot.is_ready(&key_64));
-    }
-
-    #[test]
-    fn readiness_snapshot_ignores_resource_paths() {
-        let key_48 = ThemeIconImageKey::new(Arc::from("text-x-generic"), 48, 1.0);
-        let key_64 = ThemeIconImageKey::new(Arc::from("image-png"), 48, 1.0);
-        let path_48: Arc<Path> = Arc::from(Path::new("/theme/48/text-x-generic.svg"));
-        let path_64: Arc<Path> = Arc::from(Path::new("/theme/48/image-png.svg"));
-        let mut readiness = ThemeIconImageReadiness::with_max_entries(1);
-
-        assert!(readiness.mark_ready_path(key_48.clone(), path_48.clone()));
-        assert!(readiness.snapshot().is_ready(&key_48));
-        assert!(!readiness.mark_ready_path(key_48, path_48.clone()));
-
-        assert!(readiness.mark_ready_path(key_64.clone(), path_64.clone()));
-        let snapshot = readiness.snapshot();
-        assert!(!snapshot.is_ready(&ThemeIconImageKey::new(
-            Arc::from("text-x-generic"),
-            48,
-            1.0
-        )));
-        assert!(snapshot.is_ready(&key_64));
     }
 
     fn icon_snapshot(icon_name: &str, path: &str) -> FileIconSnapshot {

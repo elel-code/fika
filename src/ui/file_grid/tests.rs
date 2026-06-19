@@ -10,8 +10,6 @@ use super::image_layer::{
     item_image_layer_items_with_theme_prewarm, item_image_load_failure_paints_fallback,
     item_image_paint_layer_element_id, item_image_pending_load_paints_fallback,
     item_image_pending_load_paints_marker, item_image_retained_request_for,
-    item_renderer_policy_input_for_theme_handoff, item_renderer_policy_input_for_theme_readiness,
-    visible_theme_icon_handoff_ready,
 };
 use super::interaction::{
     details_interaction_layer_items, item_interaction_hitbox_bounds,
@@ -38,7 +36,7 @@ use super::viewport::{
     measured_viewport_for_scrollbar_axis, viewport_bounds_update_requires_notify,
 };
 use crate::ui::drag_drop::drag_preview_content_origin_for_cursor_offset;
-use crate::ui::icons::{FileIconSnapshot, ThemeIconImageKey, ThemeIconImageReadiness};
+use crate::ui::icons::FileIconSnapshot;
 use crate::ui::item_view::ItemViewScrollbarAxis;
 use crate::ui::retained::RetainedImageRequestKind;
 use fika_core::{
@@ -328,120 +326,11 @@ fn retained_image_source_uses_size_aware_theme_icon_key() {
 }
 
 #[test]
-fn theme_icon_readiness_input_is_size_and_scale_aware() {
-    let mut cache = ItemPaintSlotCache::default();
-    let mut theme_icon_item =
-        test_visible_item(3, ItemId(9), "app.desktop", test_item_layout(192.0), false);
-    theme_icon_item.icon.path = Some(Arc::from(Path::new("/tmp/app.svg")));
-
-    let projection = cache.project_file_grid_snapshot(icons_snapshot(vec![theme_icon_item]), None);
-    let FileGridRenderSnapshot::Icons { items, .. } = projection.snapshot else {
-        panic!("expected icons snapshot");
-    };
-    let item = items.first().expect("item should be projected");
-    let mut readiness = ThemeIconImageReadiness::default();
-    readiness.mark_ready(ThemeIconImageKey::new(
-        item.content.icon.icon_name.clone(),
-        48,
-        1.0,
-    ));
-
-    assert!(
-        item_renderer_policy_input_for_theme_readiness(item, &readiness.snapshot(), 1.0)
-            .theme_icon_ready
-    );
-    assert!(
-        !item_renderer_policy_input_for_theme_readiness(item, &readiness.snapshot(), 2.0)
-            .theme_icon_ready
-    );
-}
-
-#[test]
-fn theme_icon_readiness_input_does_not_reuse_ready_resource_path_across_zoom() {
-    let mut cache = ItemPaintSlotCache::default();
-    let mut theme_icon_item =
-        test_visible_item(3, ItemId(9), "app.desktop", test_item_layout(192.0), false);
-    let icon_path: Arc<Path> = Arc::from(Path::new("/tmp/app.svg"));
-    theme_icon_item.icon.path = Some(icon_path.clone());
-
-    let projection = cache.project_file_grid_snapshot(icons_snapshot(vec![theme_icon_item]), None);
-    let FileGridRenderSnapshot::Icons { items, .. } = projection.snapshot else {
-        panic!("expected icons snapshot");
-    };
-    let item = items.first().expect("item should be projected");
-    let mut readiness = ThemeIconImageReadiness::default();
-    readiness.mark_ready_path(
-        ThemeIconImageKey::new(item.content.icon.icon_name.clone(), 48, 1.0),
-        icon_path,
-    );
-
-    assert!(
-        !item_renderer_policy_input_for_theme_readiness(item, &readiness.snapshot(), 2.0)
-            .theme_icon_ready
-    );
-}
-
-#[test]
-fn theme_icon_handoff_waits_for_visible_cohort() {
-    let mut cache = ItemPaintSlotCache::default();
-    let mut ready_item =
-        test_visible_item(1, ItemId(9), "ready.desktop", test_item_layout(0.0), false);
-    ready_item.icon.path = Some(Arc::from(Path::new("/tmp/ready.svg")));
-    ready_item.icon.icon_name = Arc::from("ready-icon");
-    let mut pending_item = test_visible_item(
-        2,
-        ItemId(10),
-        "pending.desktop",
-        test_item_layout(96.0),
-        false,
-    );
-    pending_item.icon.path = Some(Arc::from(Path::new("/tmp/pending.svg")));
-    pending_item.icon.icon_name = Arc::from("pending-icon");
-
-    let projection =
-        cache.project_file_grid_snapshot(icons_snapshot(vec![ready_item, pending_item]), None);
-    let FileGridRenderSnapshot::Icons { items, .. } = projection.snapshot else {
-        panic!("expected icons snapshot");
-    };
-    let mut readiness = ThemeIconImageReadiness::default();
-    readiness.mark_ready(ThemeIconImageKey::new(
-        items[0].content.icon.icon_name.clone(),
-        48,
-        1.0,
-    ));
-    let snapshot = readiness.snapshot();
-
-    assert!(!visible_theme_icon_handoff_ready(&items, &snapshot, 1.0));
-    assert!(
-        !item_renderer_policy_input_for_theme_handoff(&items[0], &snapshot, 1.0, false)
-            .theme_icon_ready
-    );
-
-    readiness.mark_ready(ThemeIconImageKey::new(
-        items[1].content.icon.icon_name.clone(),
-        48,
-        1.0,
-    ));
-    let snapshot = readiness.snapshot();
-
-    assert!(visible_theme_icon_handoff_ready(&items, &snapshot, 1.0));
-    assert!(
-        item_renderer_policy_input_for_theme_handoff(&items[0], &snapshot, 1.0, true)
-            .theme_icon_ready
-    );
-    assert!(
-        item_renderer_policy_input_for_theme_handoff(&items[1], &snapshot, 1.0, true)
-            .theme_icon_ready
-    );
-}
-
-#[test]
-fn theme_icon_handoff_accepts_ready_resource_paths_for_visible_cohort() {
+fn theme_icon_items_enter_image_layer_without_readiness_handoff() {
     let mut cache = ItemPaintSlotCache::default();
     let mut first_item =
         test_visible_item(1, ItemId(9), "first.desktop", test_item_layout(0.0), false);
-    let first_path: Arc<Path> = Arc::from(Path::new("/tmp/first.svg"));
-    first_item.icon.path = Some(first_path.clone());
+    first_item.icon.path = Some(Arc::from(Path::new("/tmp/first.svg")));
     first_item.icon.icon_name = Arc::from("first-icon");
     let mut second_item = test_visible_item(
         2,
@@ -450,8 +339,7 @@ fn theme_icon_handoff_accepts_ready_resource_paths_for_visible_cohort() {
         test_item_layout(96.0),
         false,
     );
-    let second_path: Arc<Path> = Arc::from(Path::new("/tmp/second.svg"));
-    second_item.icon.path = Some(second_path.clone());
+    second_item.icon.path = Some(Arc::from(Path::new("/tmp/second.svg")));
     second_item.icon.icon_name = Arc::from("second-icon");
 
     let projection =
@@ -459,25 +347,18 @@ fn theme_icon_handoff_accepts_ready_resource_paths_for_visible_cohort() {
     let FileGridRenderSnapshot::Icons { items, .. } = projection.snapshot else {
         panic!("expected icons snapshot");
     };
-    let mut readiness = ThemeIconImageReadiness::default();
-    readiness.mark_ready_path(
-        ThemeIconImageKey::new(items[0].content.icon.icon_name.clone(), 48, 2.0),
-        first_path,
-    );
-    readiness.mark_ready_path(
-        ThemeIconImageKey::new(items[1].content.icon.icon_name.clone(), 48, 2.0),
-        second_path,
-    );
-    let snapshot = readiness.snapshot();
+    let image_items = item_image_layer_items(&items);
 
-    assert!(visible_theme_icon_handoff_ready(&items, &snapshot, 2.0));
-    assert!(
-        item_renderer_policy_input_for_theme_handoff(&items[0], &snapshot, 2.0, true)
-            .theme_icon_ready
-    );
-    assert!(
-        item_renderer_policy_input_for_theme_handoff(&items[1], &snapshot, 2.0, true)
-            .theme_icon_ready
+    assert_eq!(image_items.len(), 2);
+    assert_eq!(
+        image_items
+            .iter()
+            .filter_map(item_image_layer_item_source_path)
+            .collect::<Vec<_>>(),
+        vec![
+            Arc::from(Path::new("/tmp/first.svg")),
+            Arc::from(Path::new("/tmp/second.svg"))
+        ]
     );
 }
 
@@ -556,7 +437,7 @@ fn item_interaction_hitbox_bounds_are_layer_relative_visual_rects() {
 }
 
 #[test]
-fn static_text_shape_cache_key_ignores_item_origin_for_resize_reuse() {
+fn static_start_text_shape_cache_key_tracks_label_width_not_origin() {
     let font = Font::default();
     let key = StaticItemTextShapeCacheKey {
         text_alignment: ItemTileTextAlignment::Start,
@@ -565,10 +446,7 @@ fn static_text_shape_cache_key_ignores_item_origin_for_resize_reuse() {
         marker_font: font,
         text_font_size_bits: 14.0f32.to_bits(),
         marker_font_size_bits: 12.0f32.to_bits(),
-        label_line_height_bits: 20.0f32.to_bits(),
-        marker_line_height_bits: 20.0f32.to_bits(),
         text_width_bits: 96.0f32.to_bits(),
-        text_height_bits: 20.0f32.to_bits(),
         scale_factor_bits: 1.0f32.to_bits(),
         text_color: 0x24292f,
         fallback_fg: 0xffffff,
@@ -602,10 +480,7 @@ fn static_center_text_shape_cache_key_ignores_paint_only_text_bounds() {
         marker_font: font,
         text_font_size_bits: 14.0f32.to_bits(),
         marker_font_size_bits: 12.0f32.to_bits(),
-        label_line_height_bits: 20.0f32.to_bits(),
-        marker_line_height_bits: 0,
         text_width_bits: 0,
-        text_height_bits: 0,
         scale_factor_bits: 1.0f32.to_bits(),
         text_color: 0x24292f,
         fallback_fg: 0,
@@ -618,7 +493,6 @@ fn static_center_text_shape_cache_key_ignores_paint_only_text_bounds() {
 
     let resized_paint_bounds = StaticItemTextShapeCacheKey {
         text_width_bits: 0,
-        text_height_bits: 0,
         ..key.clone()
     };
     assert_eq!(key, resized_paint_bounds);
@@ -640,10 +514,7 @@ fn static_item_glyph_raster_cache_key_tracks_segment_and_paint_geometry() {
         marker_font: font,
         text_font_size_bits: 14.0f32.to_bits(),
         marker_font_size_bits: 12.0f32.to_bits(),
-        label_line_height_bits: 20.0f32.to_bits(),
-        marker_line_height_bits: 20.0f32.to_bits(),
         text_width_bits: 96.0f32.to_bits(),
-        text_height_bits: 40.0f32.to_bits(),
         scale_factor_bits: 1.0f32.to_bits(),
         text_color: 0x24292f,
         fallback_fg: 0xffffff,
@@ -677,6 +548,12 @@ fn static_item_glyph_raster_cache_key_tracks_segment_and_paint_geometry() {
         ..key.clone()
     };
     assert_ne!(key, resized);
+
+    let taller_line = StaticItemGlyphRasterCacheKey {
+        line_height_bits: 24.0f32.to_bits(),
+        ..key.clone()
+    };
+    assert_ne!(key, taller_line);
 
     let same_segment_and_geometry = StaticItemGlyphRasterCacheKey {
         text,

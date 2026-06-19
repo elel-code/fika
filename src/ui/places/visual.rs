@@ -511,13 +511,6 @@ fn load_place_icon_or_retained(
         window.scale_factor(),
     )?;
     let load = retained_images.load_request_or_retained_with_outcome(request, app, window, cx);
-    if let Some(ready) = load.ready {
-        let _ = app.update(cx, |this, cx| {
-            if this.mark_retained_image_ready(ready) {
-                cx.notify();
-            }
-        });
-    }
     load.image
 }
 

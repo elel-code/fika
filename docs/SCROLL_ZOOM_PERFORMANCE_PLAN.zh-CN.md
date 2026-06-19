@@ -21,7 +21,7 @@
 
 - 文件图标主题路径解析不再在 raw-to-render snapshot 转换期间同步进行。帧路径调用 `FileIconCache::cached_or_preliminary_icon_for()`。可见图标预热使用 Dolphin `updateVisibleIcons()` 索引顺序，后台 batch 按 Dolphin `indexesToResolve()` 可见/预读顺序解析主题图标路径。
 - 当后台图标解析完成时，可见 item snapshot 缓存被失效，以便在下一帧替换初步 fallback 图标。
-- 缩略图和主题图标图片的 pending/failure 状态不再必须直接降级到 fallback。Compact/Icons 和 Details 维护一个 pane 本地 retained 图片映射：MIME/主题图标按 `iconName` 保留，缩略图按精确缩略图路径保留。因此缩放级别的路径变化可以在 GPUI 解码新资源期间继续绘制前一张真实的 MIME 图标，匹配 Dolphin 的 `KStandardItemListWidget::m_pixmap` 行为。当从未对该语义源解码过真实图片时，仍使用 fallback。
+- 缩略图和主题图标图片的 pending/failure 状态留在自绘 image layer 内处理。Compact/Icons 和 Details 通过 retained pixmap-key cache 绘制 MIME/主题图标，key 为 `ThemeIconImageKey`（`iconName`、请求图标尺寸、DPR/scale、theme/color/mode 哨兵），对齐 Dolphin `KStandardItemListWidget::pixmapForIcon()` + `QPixmapCache` 边界。缩略图仍按精确缩略图路径键控。当从未为该精确 pixmap key 解码过真实图片时，仍使用 fallback。
 - 预读条目保留在 raw/render snapshot 中用于调度器投影和缓存保留，但它们不再进入静态视觉或图片 prepaint。这匹配 Dolphin 的拆分：`KItemListView` 绘制可见 widget，`KFileItemModelRolesUpdater::indexesToResolve()` 处理 paint 帧外的预读角色工作。
 - 静态 item 和 Details 的文本/字形缓存现在只保留当前 paint 帧触达的条目。这个边界对齐 Dolphin 的 `KItemListView`
   `doLayout()`：可见 widget 只为 `firstVisibleIndex..lastVisibleIndex` 创建或复用，而预读仍留在
@@ -31,8 +31,8 @@
   `updateCompactLayoutTextCache()`，并把 Compact label 路径保持为每项一个 glyph 段。
 - 缩放精确尺寸主题图标未命中时，复用同文件图标类型已经解析出的稳定 theme path，并且不再为新尺寸排队另一个 exact-size path 请求。这镜像了 Dolphin 的视觉稳定性行为：不要仅因为新缩放级别改变了图标边界，就把真实可见图标替换为 fallback 标记或提交第二个 image identity。
 - 活动缩放现在镜像 Dolphin 的普通主题图标 paint 路径。Item layout 和 icon bounds 立即变更；一旦同一文件图标类型已有 resolved theme path，文件图标 role/path identity 保持稳定。Dolphin 的 300ms `triggerIconSizeUpdate()` timer 被视为 preview/role-updater 边界，而不是 Fika 主题图标的延迟第二次尺寸或路径提交。
-- 图片 paint 层现在在路径解析后也应用相同规则：如果 GPUI `RetainAllImageCache::load()` 返回新图标路径的 pending/error，painter 首先尝试同 MIME 图标名称的 retained 图片。这避免了滚动或缩放图片支持的 MIME 图标时出现的概率性 fallback 闪烁。
-- 主题图标文件解码不在 GPUI prepaint 中同步执行。解码保持在 GPUI 的 image-cache 路径上；paint 使用 retained 同 `iconName` 图片以避免可见的空白/标记回退。
+- 图片 paint layer 是普通 MIME/主题图标的唯一 renderer。当前路径已经删除 GPUI `img()` 子元素、visible-cohort readiness handoff 和 source-path decoded image reuse，使 cache identity 像 Dolphin `QPixmapCache` key 一样按尺寸区分。
+- 自绘 layer 第一次需要缺失的 pixmap key 时，SVG 主题图标可以同步 rasterize。这比延迟 item 几何或把 MIME/主题图标路由到 GPUI child element 更贴近 Dolphin 的普通 `QIcon::pixmap()` 路径。
 - 目录加载 MIME 图标稳定性现在遵循 Dolphin 的 visible-widget 边界。Dolphin 在 MIME 未知时避免在 `KFileItemModel::retrieveData()` 中进行昂贵的 `KFileItem::iconName()` 调用，但 `KFileItemModelRolesUpdater::startUpdating()` 调用 `updateVisibleIcons()`，且 `KFileItemListView::initializeItemListWidget()` 为实际创建的 widget 填充 `iconName`。Fika 镜像此行为：在排队后台 metadata 工作之前，在较小帧预算内同步解析可见的通用 MIME metadata；预读和离屏条目仍使用异步角色调度器。
 
 ### 2026-06-17 突破：MIME 图标加载、缩放和滚动稳定性
@@ -47,14 +47,14 @@
 
 根本原因：
 
-- 早期自定义 MIME/主题图标 painter 可能在 GPUI 图片缓存解码主题图标资源之前进入首次 paint。在历史 `/etc` A/B smoke 中记录了 `theme_placeholder=48`，匹配可见的占位符级联。当前默认 full custom 路径由 retained readiness/cache 证据守卫，必须保持 `theme_placeholder=0`。
+- 早期自定义 MIME/主题图标 painter 可能在图标 pixmap 第一次可用前进入首次 paint。在历史 `/etc` A/B smoke 中记录了 `theme_placeholder=48`，匹配可见的占位符级联。当前默认 self-painted 路径必须保持普通 pane `gpui_image_element=0`，并通过 pixmap-key cache 降低重复缺失。
 - Fika 最初将 Dolphin 的 300ms `triggerIconSizeUpdate()` 延迟视为图标尺寸防抖。Dolphin 仅在那里延迟 preview/role-updater 工作；普通的 `iconName` pixmap 是从 widget 当前 style option 图标尺寸生成的。因此延迟或冻结 Fika 主题图标尺寸在缩放期间产生了可见的第二次尺寸提交。
 - 可见图标同步重复了已为预读图标解析排队的工作。渲染器拆分后的第一次 autosmoke 在 geometry-change 帧上记录了 `icon_sync=28340us` 和 `total=29451us`。
 
 实现：
 
-- MIME/主题图标现在默认使用 retained custom image layer。它复用 GPUI `RetainAllImageCache -> RenderImage -> Window::paint_image`，但普通 pane 渲染必须保持 `gpui_image_element=0`。`FIKA_GPUI_THEME_ICONS=1` 是配对的 GPUI `img()` baseline。
-- 渲染转换仅使用缓存或初步图标 snapshot。主题图标路径扫描保持在可见图标同步和后台解析队列中，不在 GPUI prepaint 或渲染转换中。
+- MIME/主题图标现在始终使用 retained custom image layer，对齐 Dolphin 的 widget 自绘路径。普通 pane 渲染必须保持 `gpui_image_element=0`；旧的 GPUI image-element 和 hybrid handoff 运行时开关不再属于当前架构。
+- 渲染转换仅使用缓存或初步图标 snapshot。主题图标路径扫描保持在可见图标同步和后台解析队列中，不在渲染转换中。
 - 可见图标同步跳过已在 `FileIconResolveQueue` 中排队或 pending 的请求，保留 Dolphin 的可见优先例外而不在滚动帧中重做预读扫描。可见/预读工作队列会先于可见图标同步建立，因此新进入可见区的图标 miss 会排入后台解析器，而不是在滚动帧中同步解析。
 - 缩放立即提交当前 layout 图标边界；MIME/主题图标 path 在同一文件图标类型首次解析后保持稳定，不再因新缩放尺寸同步或排队 exact-size path 请求。Preview/thumbnail role 工作可能仍然合并，但主题图标几何不得使用延迟的第二次尺寸。
 - 目录加载在排队离屏 metadata/图标工作之前，在有界的 visible-widget 预算内解析可见通用 MIME metadata 和可见主题图标路径。
@@ -83,11 +83,24 @@ after queued/pending skip:
   autosmoke scroll_x=2303.5 max_scroll_x=2303.5
   icon_sync scroll frame: queued=3 resolved=0 total=70us
   debug smaps_rollup after ScrollEnd: Private_Dirty=60336 kB
+
+2026-06-20 静态文本 shape key 高度清理，`/etc` zoom-scroll:
+  Compact Start label 的 shaped text key 不再包含 line/text height；glyph
+  raster key 仍单独区分 paint line height。
+  item_shape max_entries=99 evicted=3, repeated zoom/scroll-back misses=0
+  icon_sync max_total=19us, warm_custom_paint max_paint=1080us
+  theme_decoded=5 theme_retained=545 theme_placeholder=0 gpui_image_element=0
+
+2026-06-20 Dolphin-style icon cache 右端内存样本，`/etc` scroll-end:
+  autosmoke scroll_x=2303.5 max_scroll_x=2303.5
+  icon_sync max_total=195us
+  theme_decoded=6 theme_retained=280 theme_placeholder=0 gpui_image_element=0
+  debug smaps_rollup after ScrollEnd: Private_Dirty=60520 kB
 ```
 
 回退防护：
 
-- 对于渲染器更改，使用 `scripts/compare-item-image-renderers.sh` 比较默认 full custom 路径和 `FIKA_GPUI_THEME_ICONS=1` baseline 日志。
+- 对于渲染器更改，确认默认 self-painted 路径保持 `gpui_image_element=0`，且主题图标 cache 行为按 `ThemeIconImageKey` 键控，而不是 visible-cohort readiness 或 source-path reuse。
 - 对于滚动/缩放更改，运行
   `FIKA_PERF_ITEM_VIEW=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll target/debug/fika /etc`
   并使用 `scripts/analyze-item-view-perf.sh` 汇总。

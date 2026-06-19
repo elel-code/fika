@@ -61,10 +61,7 @@ pub(super) struct StaticItemTextShapeCacheKey {
     pub(super) marker_font: Font,
     pub(super) text_font_size_bits: u32,
     pub(super) marker_font_size_bits: u32,
-    pub(super) label_line_height_bits: u32,
-    pub(super) marker_line_height_bits: u32,
     pub(super) text_width_bits: u32,
-    pub(super) text_height_bits: u32,
     pub(super) scale_factor_bits: u32,
     pub(super) text_color: u32,
     pub(super) fallback_fg: u32,
@@ -661,12 +658,9 @@ fn static_item_text_shape_cache_key(
             StaticItemLabelTextKey::Center(lines)
         }
     };
-    let (text_width_bits, text_height_bits) = match text_alignment {
-        ItemTileTextAlignment::Start => (
-            layout.text_rect.width.to_bits(),
-            layout.text_rect.height.to_bits(),
-        ),
-        ItemTileTextAlignment::Center => (0, 0),
+    let text_width_bits = match text_alignment {
+        ItemTileTextAlignment::Start => layout.text_rect.width.to_bits(),
+        ItemTileTextAlignment::Center => 0,
     };
     StaticItemTextShapeCacheKey {
         text_alignment,
@@ -675,14 +669,7 @@ fn static_item_text_shape_cache_key(
         marker_font: style.marker_font.clone(),
         text_font_size_bits: style.text_font_size.as_f32().to_bits(),
         marker_font_size_bits: style.marker_font_size.as_f32().to_bits(),
-        label_line_height_bits: style.label_line_height.as_f32().to_bits(),
-        marker_line_height_bits: if paint_fallback_icon {
-            style.marker_line_height.as_f32().to_bits()
-        } else {
-            0
-        },
         text_width_bits,
-        text_height_bits,
         scale_factor_bits: window.scale_factor().to_bits(),
         text_color: style.text_color,
         fallback_fg: if paint_fallback_icon {

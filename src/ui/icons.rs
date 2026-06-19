@@ -8,7 +8,6 @@ pub(crate) use cache::{
 };
 pub(crate) use image_cache::{
     EvictedThemeIconImage, RetainedThemeIconImageCache, RetainedThemeIconImageLoadOutcome,
-    ThemeIconImageKey, ThemeIconImageReadiness, ThemeIconImageReadinessSnapshot,
-    theme_icon_image_key_for_snapshot, theme_icon_image_size_px,
+    ThemeIconImageKey, theme_icon_image_key_for_snapshot, theme_icon_image_size_px,
 };
 pub(crate) use view::cached_icon_or_fallback;

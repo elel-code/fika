@@ -36,14 +36,14 @@ the render frame.
   theme icon paths in Dolphin `indexesToResolve()` visible/read-ahead order.
 - When background icon resolve completes, visible item snapshot caches are
   invalidated so preliminary fallback icons are replaced on the next frame.
-- Thumbnail and theme-icon image pending/failure states no longer have to drop
-  directly to fallback. Compact/Icons and Details keep a pane-local retained
-  image map: MIME/theme icons are retained by `iconName`, while thumbnails are
-  retained by exact thumbnail path. A zoom-level path change can therefore keep
-  painting the previous real MIME icon until GPUI finishes decoding the new
-  resource, matching Dolphin's `KStandardItemListWidget::m_pixmap` behavior.
-  Fallback is still used when no real image has ever been decoded for that
-  semantic source.
+- Thumbnail and theme-icon image pending/failure states stay inside the
+  self-painted image layer. Compact/Icons and Details paint MIME/theme icons
+  through a retained pixmap-key cache keyed by `ThemeIconImageKey`
+  (`iconName`, requested icon size, DPR/scale, theme/color/mode sentinels),
+  mirroring Dolphin's `KStandardItemListWidget::pixmapForIcon()` +
+  `QPixmapCache` boundary. Thumbnails remain keyed by exact thumbnail path.
+  Fallback is still used when no pixmap for that exact key has ever been
+  decoded.
 - Read-ahead items stay in raw/render snapshots for scheduler projection and
   cache retention, but they no longer enter static visual or image prepaint.
   This matches Dolphin's split where `KItemListView` paints visible widgets and
@@ -70,14 +70,14 @@ the render frame.
   stable once the same file-icon kind has a resolved theme path. Dolphin's 300ms
   `triggerIconSizeUpdate()` timer is treated as a preview/role-updater boundary,
   not as a delayed second size or path commit for Fika theme icons.
-- The image paint layer now applies the same rule after path resolution too:
-  if GPUI `RetainAllImageCache::load()` returns pending/error for a new icon
-  path, the painter first tries a retained image for the same MIME icon name.
-  This avoids the probabilistic fallback flash seen while scrolling or zooming
-  image-backed MIME icons.
-- Theme icon file decoding is not performed synchronously in GPUI prepaint.
-  Decoding stays on GPUI's image-cache path; paint uses retained same-`iconName`
-  images to avoid visible blank/marker regression.
+- The image paint layer is the only ordinary MIME/theme icon renderer. GPUI
+  `img()` children, visible-cohort readiness handoff, and source-path decoded
+  image reuse have been removed from the current path so the cache identity is
+  size-specific like Dolphin's `QPixmapCache` key.
+- SVG theme icons may be synchronously rasterized when the self-painted layer
+  first needs a missing pixmap key. That matches Dolphin's ordinary
+  `QIcon::pixmap()` path more closely than delaying item geometry or routing
+  MIME/theme icons through GPUI child elements.
 - Directory-load MIME icon stability now follows Dolphin's visible-widget
   boundary. Dolphin avoids expensive `KFileItem::iconName()` in
   `KFileItemModel::retrieveData()` when MIME is unknown, but
@@ -105,10 +105,10 @@ Symptoms:
 Root causes:
 
 - The early custom MIME/theme icon painter could enter the first paint before
-  GPUI's image cache had decoded the theme icon resource. In the historical
-  `/etc` A/B smoke it logged `theme_placeholder=48`, matching the visible
-  placeholder cascade. The current default full custom path is guarded by
-  retained readiness/cache evidence and must keep `theme_placeholder=0`.
+  an icon pixmap was first available. In the historical `/etc` A/B smoke it
+  logged `theme_placeholder=48`, matching the visible placeholder cascade. The
+  current default self-painted path is guarded by retained pixmap-key cache
+  evidence and must keep `gpui_image_element=0` and `theme_placeholder=0`.
 - Fika initially treated Dolphin's 300ms `triggerIconSizeUpdate()` delay as an
   icon-size debounce. Dolphin only delays preview/role-updater work there;
   ordinary `iconName` pixmaps are generated from the widget's current style
@@ -120,13 +120,13 @@ Root causes:
 
 Implementation:
 
-- MIME/theme icons now default to the retained custom image layer. It reuses
-  GPUI `RetainAllImageCache -> RenderImage -> Window::paint_image`, but ordinary
-  pane rendering must keep `gpui_image_element=0`. `FIKA_GPUI_THEME_ICONS=1`
-  is the paired GPUI `img()` baseline.
+- MIME/theme icons now always use the retained custom image layer, matching
+  Dolphin's self-painted widget path. Ordinary pane rendering must keep
+  `gpui_image_element=0`; the previous GPUI image-element and hybrid handoff
+  runtime switches are no longer part of the active architecture.
 - Render conversion uses cached or preliminary icon snapshots only. Theme icon
-  path scanning stays in visible icon sync and the background resolve queue, not
-  in GPUI prepaint or render conversion.
+  path scanning stays in visible icon sync and the background resolve queue,
+  not in render conversion.
 - Visible icon sync skips requests already queued or pending in
   `FileIconResolveQueue`, preserving Dolphin's visible-first exception without
   redoing read-ahead scans in the scroll frame. The visible/read-ahead work
@@ -166,12 +166,26 @@ after queued/pending skip:
   autosmoke scroll_x=2303.5 max_scroll_x=2303.5
   icon_sync scroll frame: queued=3 resolved=0 total=70us
   debug smaps_rollup after ScrollEnd: Private_Dirty=60336 kB
+
+2026-06-20 static text shape key height cleanup, `/etc` zoom-scroll:
+  Compact Start labels no longer key shaped text by line/text height; glyph
+  rasters still key paint line height separately.
+  item_shape max_entries=99 evicted=3, repeated zoom/scroll-back misses=0
+  icon_sync max_total=19us, warm_custom_paint max_paint=1080us
+  theme_decoded=5 theme_retained=545 theme_placeholder=0 gpui_image_element=0
+
+2026-06-20 Dolphin-style icon cache right-edge memory sample, `/etc` scroll-end:
+  autosmoke scroll_x=2303.5 max_scroll_x=2303.5
+  icon_sync max_total=195us
+  theme_decoded=6 theme_retained=280 theme_placeholder=0 gpui_image_element=0
+  debug smaps_rollup after ScrollEnd: Private_Dirty=60520 kB
 ```
 
 Regression guard:
 
-- For renderer changes, compare the default full custom path against
-  `FIKA_GPUI_THEME_ICONS=1` with `scripts/compare-item-image-renderers.sh`.
+- For renderer changes, verify the default self-painted path keeps
+  `gpui_image_element=0` and that theme icon cache behavior is keyed by
+  `ThemeIconImageKey`, not by visible-cohort readiness or source-path reuse.
 - For scroll/zoom changes, run
   `FIKA_PERF_ITEM_VIEW=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll target/debug/fika /etc`
   and summarize with `scripts/analyze-item-view-perf.sh`.

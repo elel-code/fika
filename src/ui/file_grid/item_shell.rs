@@ -1,18 +1,15 @@
 use fika_core::PaneId;
 use gpui::prelude::*;
-use gpui::{
-    AnyElement, Context, Div, FontWeight, ParentElement, SharedString, Stateful, WeakEntity, div,
-    img, px, rgb, rgba,
-};
+use gpui::{Context, Div, ParentElement, SharedString, Stateful, WeakEntity, div, px, rgba};
 
 use crate::FikaApp;
 
 use super::rename_overlay::rename_text_view;
 use super::renderer_policy::{
     ItemInteractionRenderer, ItemRenameEditorRenderer, ItemRendererPolicyInput,
-    item_renderer_policy_with_input, item_uses_gpui_image_element_with_input,
+    item_renderer_policy_with_input,
 };
-use super::{ItemPaintContent, ItemPaintSnapshot, ItemTileTextAlignment, item_identity_element_id};
+use super::{ItemPaintSnapshot, ItemTileTextAlignment, item_identity_element_id};
 
 pub(super) fn item_tile(
     pane_id: PaneId,
@@ -57,15 +54,6 @@ pub(super) fn item_tile(
                 }
             }))
     };
-    let core = if item_uses_gpui_image_element_with_input(content, renderer_policy_input) {
-        if let Some(image) = gpui_item_image_view(item.slot_id, content, item.layout) {
-            core.child(image)
-        } else {
-            core
-        }
-    } else {
-        core
-    };
     let core = match renderer_policy.rename_editor {
         ItemRenameEditorRenderer::None => core,
         ItemRenameEditorRenderer::GpuiOverlay => {
@@ -96,77 +84,4 @@ pub(super) fn item_tile(
         .w(px(item_rect.width))
         .h(px(item_rect.height))
         .child(core)
-}
-
-fn gpui_item_image_view(
-    slot_id: u64,
-    content: &ItemPaintContent,
-    layout: fika_core::ItemLayout,
-) -> Option<Div> {
-    let visual = layout.visual_rect;
-    let icon = layout.icon_rect;
-    let icon_left = (icon.x - visual.x).round();
-    let icon_top = (icon.y - visual.y).round();
-    let icon_width = icon.width.round().max(1.0);
-    let icon_height = icon.height.round().max(1.0);
-    let thumbnail_path = content.thumbnail_path.clone();
-    let icon_snapshot = content.icon.clone();
-    let source_path = thumbnail_path
-        .clone()
-        .or_else(|| icon_snapshot.path.clone())?;
-    let image = img(source_path)
-        .id(gpui_item_image_element_id(slot_id))
-        .size_full();
-    let image = if thumbnail_path.is_some() {
-        image.into_any_element()
-    } else {
-        let fallback_fg = icon_snapshot.fallback_fg;
-        let fallback_bg = icon_snapshot.fallback_bg;
-        let fallback_marker = content.fallback_marker.clone();
-        image
-            .with_fallback(move || {
-                fallback_icon_element(fallback_marker.clone(), fallback_fg, fallback_bg)
-            })
-            .into_any_element()
-    };
-    let icon_container = div()
-        .absolute()
-        .left(px(icon_left))
-        .top(px(icon_top))
-        .w(px(icon_width))
-        .h(px(icon_height))
-        .flex()
-        .items_center()
-        .justify_center();
-
-    Some(if thumbnail_path.is_some() {
-        icon_container.child(
-            div()
-                .size_full()
-                .rounded_md()
-                .overflow_hidden()
-                .child(image),
-        )
-    } else {
-        icon_container.child(image)
-    })
-}
-
-fn gpui_item_image_element_id(slot_id: u64) -> (&'static str, u64) {
-    ("item-gpui-image", slot_id)
-}
-
-fn fallback_icon_element(marker: SharedString, fg: u32, bg: u32) -> AnyElement {
-    div()
-        .size_full()
-        .rounded_md()
-        .flex()
-        .items_center()
-        .justify_center()
-        .text_xs()
-        .font_weight(FontWeight::SEMIBOLD)
-        .text_color(rgb(fg))
-        .bg(rgb(bg))
-        .child(marker)
-        .into_any_element()
 }

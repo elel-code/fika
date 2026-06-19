@@ -20,6 +20,9 @@ pub(crate) use work_order::{
     visit_visible_work_items_by_index,
 };
 
+// Dolphin keeps ordinary MIME/theme icon pixmaps in QPixmapCache from
+// KStandardItemListWidget::pixmapForIcon(), keyed by icon name, size, DPR, and
+// mode. This is the GPUI custom-paint equivalent for decoded theme images.
 const THEME_ICON_PIXMAP_CACHE_LIMIT_KB: usize = 10 * 1024;
 const RETAINED_THUMBNAIL_CACHE_LIMIT_KB: usize = 64 * 1024;
 
@@ -284,7 +287,6 @@ impl<T: Clone> RetainedThumbnailCache<T> {
 pub(crate) struct RetainedImageLoad {
     pub(crate) image: Option<Arc<RenderImage>>,
     pub(crate) outcome: RetainedImageLoadOutcome,
-    pub(crate) ready: Option<RetainedImageReady>,
 }
 
 #[derive(Clone, Debug)]
@@ -302,20 +304,6 @@ pub(crate) enum RetainedImageRequest {
 pub(crate) enum RetainedImageRequestKind {
     Thumbnail,
     ThemeIcon,
-}
-
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub(crate) enum RetainedImageReady {
-    ThemeIcon {
-        source_path: Arc<Path>,
-        key: ThemeIconImageKey,
-    },
-}
-
-impl RetainedImageReady {
-    pub(crate) fn theme_icon(source_path: Arc<Path>, key: ThemeIconImageKey) -> Self {
-        Self::ThemeIcon { source_path, key }
-    }
 }
 
 impl RetainedImageRequest {
@@ -383,16 +371,6 @@ impl RetainedImageRequest {
             Self::Thumbnail { .. } => None,
         }
     }
-
-    pub(crate) fn ready_state(&self) -> Option<RetainedImageReady> {
-        match self {
-            Self::ThemeIcon { source_path, key } => Some(RetainedImageReady::theme_icon(
-                source_path.clone(),
-                key.clone(),
-            )),
-            Self::Thumbnail { .. } => None,
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -427,7 +405,6 @@ impl RetainedImageLayerState {
                 RetainedImageLoad {
                     image: Some(image),
                     outcome: RetainedImageLoadOutcome::CacheReady { first_ready },
-                    ready: None,
                 }
             }
             _ => {
@@ -437,11 +414,7 @@ impl RetainedImageLayerState {
                 } else {
                     RetainedImageLoadOutcome::Missing
                 };
-                RetainedImageLoad {
-                    image,
-                    outcome,
-                    ready: None,
-                }
+                RetainedImageLoad { image, outcome }
             }
         }
     }
@@ -472,14 +445,13 @@ impl RetainedImageLayerState {
         window: &mut Window,
         cx: &mut App,
     ) -> RetainedImageLoad {
-        let ready = request.ready_state();
         match request {
-            RetainedImageRequest::Thumbnail { source_path } => self
-                .load_thumbnail_or_retained_with_outcome(source_path, window, cx)
-                .with_ready_state(ready),
-            RetainedImageRequest::ThemeIcon { source_path, key } => self
-                .load_theme_icon_or_retained_with_outcome(source_path, key, app, window, cx)
-                .with_ready_state(ready),
+            RetainedImageRequest::Thumbnail { source_path } => {
+                self.load_thumbnail_or_retained_with_outcome(source_path, window, cx)
+            }
+            RetainedImageRequest::ThemeIcon { source_path, key } => {
+                self.load_theme_icon_or_retained_with_outcome(source_path, key, app, window, cx)
+            }
         }
     }
 
@@ -514,7 +486,6 @@ impl RetainedImageLayerState {
             .unwrap_or(RetainedImageLoad {
                 image: None,
                 outcome: RetainedImageLoadOutcome::Missing,
-                ready: None,
             });
         self.prune_retained_theme_icon_images(app, window, cx);
         load
@@ -545,15 +516,7 @@ impl Default for RetainedImageLoad {
         Self {
             image: None,
             outcome: RetainedImageLoadOutcome::Missing,
-            ready: None,
         }
-    }
-}
-
-impl RetainedImageLoad {
-    fn with_ready_state(mut self, ready: Option<RetainedImageReady>) -> Self {
-        self.ready = self.image.is_some().then_some(ready).flatten();
-        self
     }
 }
 
@@ -584,14 +547,6 @@ fn load_svg_theme_icon_sync(path: &Path, cx: &mut App) -> Option<Arc<RenderImage
 }
 
 impl FikaApp {
-    pub(crate) fn mark_retained_image_ready(&mut self, ready: RetainedImageReady) -> bool {
-        match ready {
-            RetainedImageReady::ThemeIcon { source_path, key } => {
-                self.theme_icon_readiness.mark_ready_path(key, source_path)
-            }
-        }
-    }
-
     pub(crate) fn load_retained_or_sync_svg_theme_icon(
         &mut self,
         source_path: Arc<Path>,
@@ -603,26 +558,11 @@ impl FikaApp {
             return Some(RetainedImageLoad {
                 image: Some(image),
                 outcome: RetainedImageLoadOutcome::Retained,
-                ready: None,
             });
         }
 
         if !is_svg_icon_path(source_path.as_ref()) {
             return None;
-        }
-
-        if let Some(image) = self
-            .theme_icon_images
-            .image_for_source_path(source_path.as_ref())
-        {
-            let retained =
-                self.theme_icon_images
-                    .record_loaded_from_retained_source(key, source_path, image);
-            return Some(RetainedImageLoad {
-                image: retained.image,
-                outcome: retained_theme_icon_load_outcome(retained.outcome),
-                ready: None,
-            });
         }
 
         let image = load_svg_theme_icon_sync(source_path.as_ref(), cx)?;
@@ -635,7 +575,6 @@ impl FikaApp {
         Some(RetainedImageLoad {
             image: retained.image,
             outcome: retained_theme_icon_load_outcome(retained.outcome),
-            ready: None,
         })
     }
 
@@ -655,7 +594,6 @@ impl FikaApp {
         RetainedImageLoad {
             image: retained.image,
             outcome: retained_theme_icon_load_outcome(retained.outcome),
-            ready: None,
         }
     }
 
@@ -863,25 +801,6 @@ mod tests {
         assert_eq!(stats.misses, 0);
         assert_eq!(stats.evicted, 1);
         assert_eq!(stats.entries, 1);
-    }
-
-    #[test]
-    fn retained_image_load_ready_state_requires_loaded_image() {
-        let ready = RetainedImageReady::theme_icon(
-            thumbnail_path("/theme/48/text-x-generic.svg"),
-            ThemeIconImageKey::new(Arc::from("text-x-generic"), 48, 1.0),
-        );
-
-        let missing = RetainedImageLoad::default().with_ready_state(Some(ready.clone()));
-        assert_eq!(missing.ready, None);
-
-        let loaded = RetainedImageLoad {
-            image: Some(Arc::new(RenderImage::new(Vec::new()))),
-            outcome: RetainedImageLoadOutcome::Retained,
-            ready: None,
-        }
-        .with_ready_state(Some(ready.clone()));
-        assert_eq!(loaded.ready, Some(ready));
     }
 
     #[test]

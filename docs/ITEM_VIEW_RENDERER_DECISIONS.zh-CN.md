@@ -22,7 +22,7 @@
 | --- | --- | --- | --- | --- |
 | Compact/Icons 基础背景和标签 | custom content-level painter | visible item snapshots, paint slots, text shape cache | 保持 custom paint | 运行时日志 snapshot 转换保持亚毫秒，static visual paint/build 在预算内 |
 | Compact/Icons 缩略图图像 | custom image painter | image paint snapshots, pane-local thumbnail image cache, retained thumbnail image map, thumbnail scheduler roles | 保持 custom paint 用于缩略图，image decode/cache 使用 GPUI `RetainAllImageCache`；thumbnail pending/failure 行为保持 model-driven 且可绘制后备而不改变 MIME/theme icon 策略 | 日志含 `[fika item-image]` + `thumb_*` `image_sources`，prepaint 中无同步缩略图解码 |
-| Compact/Icons MIME/theme-icon 图像 | 默认 full custom image layer，`FIKA_GPUI_THEME_ICONS=1` 保留为 GPUI `img()` baseline | retained item slots、visible icon role/path cache、app-level `ThemeIconImageReadiness`、pane image layer、background file-icon resolve queue | 保持 full custom image layer 为默认。它仍使用 GPUI 高效的 `RetainAllImageCache -> RenderImage -> paint_image` 底层路径，但普通 pane 渲染器不再保留逐条目的 GPUI `img()` 子元素。`FIKA_GPUI_THEME_ICONS=1` 是同场景非自绘 image baseline | 默认路径日志必须保持 `gpui_image_element=0`、`theme_placeholder=0`、visible `theme_decoded=0`；修改 image layer 性能时必须和 `FIKA_GPUI_THEME_ICONS=1` 做同场景对比 |
+| Compact/Icons MIME/theme-icon 图像 | Dolphin-style self-painted image layer | retained item slots、visible icon role/path cache、`ThemeIconImageKey` pixmap cache、pane image layer、background file-icon resolve queue | 保持 self-painted image layer 为默认。普通 MIME/theme icon 不再创建逐条目的 GPUI `img()` 子元素，也不再有 readiness-handoff renderer 分支；cache key 对齐 Dolphin 的 icon name、请求尺寸、DPR/scale 和 mode 边界。 | 默认路径日志必须保持 `gpui_image_element=0`、`theme_placeholder=0`，并避免可见 zoom-time decode churn。Renderer 变更必须先对照本地 Dolphin 源码和 retained pixmap-key cache 行为。 |
 | Compact/Icons hover/cursor/click/menu/drop hit testing | retained viewport/custom hitboxes 加 active item-drag window tracker | viewport retained hit testing 和 `drag_drop` state | 保持 retained controller path。目录 item drop hover 由 retained window-position hit testing 解析，不再由 per-directory GPUI drag-move shell 解析。 | DnD 冒烟通过内部 item、pane、Places 和外部 drop；pane self-drags 应记录 `active-item-move`。Renderer policy 必须保持 `gpui_directory_drop_shell=0` |
 | Compact/Icons drag start | 通过 Fika GPUI fork 的 retained hitbox typed drag | retained drag payload state 和 retained item hitbox | 保持 retained hitbox drag start 为默认 | DnD 冒烟必须保持 Compact/Icons item drag 行为和 preview 位置稳定；renderer policy 必须保持 `gpui_drag_shell=0` |
 | Compact/Icons rename editor | GPUI text/editor subtree overlay | rename draft model 和 overlay geometry | 保持 GPUI overlay | rename 编辑器计划中列出的行为矩阵（`docs/RENAME_EDITOR_PLAN.md`） |
@@ -33,7 +33,11 @@
 
 ## Perf 日志收集
 
-## 2026-06-19 默认 Full 与 GPUI Baseline 对比
+## 2026-06-19 默认 Full 与 GPUI Baseline 对比（历史）
+
+注意：本节记录 2026-06-19 的旧 pane image renderer A/B。普通
+MIME/theme icon 的 GPUI image-element 和 hybrid readiness-handoff 运行时分支已在
+2026-06-20 删除；当前 evidence 不再使用这些 env switch。
 
 Places 当前默认就是 full custom row visual：
 `DEFAULT_PLACES_ROW_VISUAL_POLICY = CustomFull`。GPUI row 路径只作为
@@ -96,17 +100,17 @@ item-view autosmoke marker surface 现在由 `src/ui/file_grid/autosmoke.rs` 拥
 
 该日志中剩余的可见成本是静态文本/背景绘制：`static_visual max_prepaint=5794us`、`max_paint=12043us`，仅当新条目进入 retained visible set 时出现形状缓存 miss。将未来工作视为静态视觉 painter/cache 工作，而非 MIME/theme icon 渲染器工作。
 
-对于绘制层调查，比较 `[fika static-item-visual]` 和 `[fika item-image]` 的 prepaint 计数与可见条目计数，而非原始 read-ahead 工作计数。Read-ahead 属于 scheduler projection 和 retained caches；它不应向当前绘制 prepass 添加 image-cache 加载或文本形状。分析器的 `image_sources` 行分离了缩略图首次就绪 GPUI 解码结果（`thumb_decoded`）、已就绪缓存加载（`thumb_loaded`）、retained 回退到最后真实图像路径（`thumb_retained`）和可见后备路径（`thumb_fallback`）。Theme `image_sources` 计数器现在用于默认 full custom MIME/theme icon 路径；`FIKA_GPUI_THEME_ICONS=1` 是同场景 GPUI image baseline。
+对于绘制层调查，比较 `[fika static-item-visual]` 和 `[fika item-image]` 的 prepaint 计数与可见条目计数，而非原始 read-ahead 工作计数。Read-ahead 属于 scheduler projection 和 retained caches；它不应向当前绘制 prepass 添加 image-cache 加载或文本形状。分析器的 `image_sources` 行分离了缩略图首次就绪 GPUI 解码结果（`thumb_decoded`）、已就绪缓存加载（`thumb_loaded`）、retained 回退到最后真实图像路径（`thumb_retained`）和可见后备路径（`thumb_fallback`）。Theme `image_sources` 计数器现在用于默认 full custom MIME/theme icon 路径；普通 pane 渲染必须保持 `gpui_image_element=0`。
 
 ## MIME 图标闪烁与缩放对齐
 
-对于 MIME 图标闪烁调查，对比 Dolphin 的 `KStandardItemListWidget::updatePixmap()` 和 `pixmapForIcon()`：Dolphin 保持 widget-local `m_pixmap` 并按 icon name/size 使用 `QPixmapCache`，因此已加载的真实图标不会在相同图标资源刷新时被标记替换。Fika 当前默认 full custom 路径通过 retained semantic `ThemeIconImageKey`、app-level readiness/cache、source-image reuse 和有界预算保持相同行为；`FIKA_HYBRID_THEME_ICONS=1` 只保留为显式过渡 handoff 路径。缩略图 retention 保持按精确缩略图路径键控。Fika 不会通过在普通 paint/prepaint 中无界读取和解码 SVG 来复制 Dolphin 的 `QIcon::pixmap()`；底层 image loading/atlas 仍复用 GPUI 的 `RenderImage -> Window::paint_image` 路径。中性无标记占位符仅可作为 true first-load/失败后备，而非已加载真实图标的退化。详细 retained image-cache 设计见 `docs/RETAINED_ICON_IMAGE_CACHE_PLAN.zh-CN.md`；默认 MIME/theme renderer 由最终 core evidence 和 `FIKA_GPUI_THEME_ICONS=1` baseline 对比守卫。
+对于 MIME 图标闪烁调查，对比 Dolphin 的 `KStandardItemListWidget::updatePixmap()` 和 `pixmapForIcon()`：Dolphin 保持 widget-local `m_pixmap` 并按 icon name/size 使用 `QPixmapCache`，因此已加载的真实图标不会在相同图标资源刷新时被标记替换。Fika 当前默认 full custom 路径通过 retained semantic `ThemeIconImageKey` cache 和有界预算保持相同行为；visible-cohort readiness handoff 与 source-image decoded reuse 已删除，使当前 cache identity 像 Dolphin `QPixmapCache` key 一样按尺寸区分。缩略图 retention 保持按精确缩略图路径键控。Fika 不再把普通 MIME/theme icon 路由到 GPUI `img()` 子元素；缺失 pixmap key 的 SVG 图标可以同步 rasterize，这比 renderer handoff 更贴近 Dolphin 的 `QIcon::pixmap()` 行为。中性无标记占位符仅可作为 true first-load/失败后备，而非已加载真实图标的退化。详细 retained image-cache 设计见 `docs/RETAINED_ICON_IMAGE_CACHE_PLAN.zh-CN.md`。
 
-GPUI 高效的 `img()` 路径本质上也是这个架构形状，而不是特殊的同步绘制 API：`img()` 将 `Resource` 交给 `ImageCache`；`RetainAllImageCache` 以 resource hash 为 key 保存共享后台加载任务或已加载的 `Arc<RenderImage>`，加载完成后通知下一帧；`Window::paint_image` 再按稳定的 `(RenderImage.id, frame_index)` 放入 sprite atlas 并提交 sprite primitive。Fika 的 custom image/text 路径需要模仿的是这些应用层约束：稳定语义 key、retained loaded resource、可见路径不重复 decode/shape replacement，以及 retained resource ready 后才 handoff。
+GPUI 高效的 `img()` 路径本质上也是这个架构形状，而不是特殊的同步绘制 API：`img()` 将 `Resource` 交给 `ImageCache`；`RetainAllImageCache` 以 resource hash 为 key 保存共享后台加载任务或已加载的 `Arc<RenderImage>`，加载完成后通知下一帧；`Window::paint_image` 再按稳定的 `(RenderImage.id, frame_index)` 放入 sprite atlas 并提交 sprite primitive。Fika 的 custom image/text 路径需要模仿的是这些应用层约束：稳定语义 key、retained loaded image、可见路径不重复 decode/shape replacement；普通 MIME/theme icon 当前直接走 self-painted layer，不再通过 renderer handoff 离开 GPUI child element。
 
 对于缩放调查，对比 `KFileItemListView::triggerIconSizeUpdate()` 和 `updateIconSize()`：Dolphin 立即更新条目几何但暂停 `KFileItemModelRolesUpdater`，在 `LongInterval`（300ms）后重新启动 preview/visible-range role work。Dolphin 的普通 `iconName` pixmap 路径不同：`pixmapForIcon()` 使用 widget 的当前 style-option icon size，但 item role 仍是稳定 `iconName`。因此 Fika 立即改变 layout/icon bounds；同一文件图标类型首次解析出 MIME/theme icon path 后，path identity 保持稳定，且不得为 theme icons 安排延迟的第二次 icon-size 或 path 提交。
 
-对于目录加载时的 MIME 图标切换，对比 `KFileItemModel::retrieveData()`、`KFileItemModelRolesUpdater::updateVisibleIcons()` 和 `KFileItemListView::initializeItemListWidget()`：Dolphin 不会同步解析所有 model role，但在异步 `ResolveAll` pass 遍历其余部分之前确实给已创建的可见 widget 一个 `iconName`。Fika 应保持相同分离：可见通用 MIME metadata 和可见 theme-icon path 可在有界预算内同步解析；read-ahead/offscreen metadata 和 icon path 保持排队。Zoom 是单独情况：同一文件图标类型已有任意 resolved theme path 后，Fika 复用该稳定 path，而不是再排队另一个 exact-size path 请求。这复制了 Dolphin 的 `iconName` 加 `pixmapForIcon()` 路径，而不将 read-ahead icon-theme 扫描移入渲染转换，也不在 zoom 时提交第二个 image identity。图像解码本身保持在 scheduler/image-cache 路径上；默认 theme icons 由 full custom layer 绘制，但下层仍使用 GPUI `RenderImage`/`paint_image` 后端。
+对于目录加载时的 MIME 图标切换，对比 `KFileItemModel::retrieveData()`、`KFileItemModelRolesUpdater::updateVisibleIcons()` 和 `KFileItemListView::initializeItemListWidget()`：Dolphin 不会同步解析所有 model role，但在异步 `ResolveAll` pass 遍历其余部分之前确实给已创建的可见 widget 一个 `iconName`。Fika 应保持相同分离：可见通用 MIME metadata 和可见 theme-icon path 可在有界预算内同步解析；read-ahead/offscreen metadata 和 icon path 保持排队。Zoom 是单独情况：同一文件图标类型已有任意 resolved theme path 后，Fika 复用该稳定 path，而不是再排队另一个 exact-size path 请求。这复制了 Dolphin 的 `iconName` 加 `pixmapForIcon()` 路径，而不将 read-ahead icon-theme 扫描移入渲染转换，也不在 zoom 时提交第二个 image identity。默认 theme icons 由 full custom layer 绘制；缺失 pixmap key 可同步 rasterize SVG，非 SVG resource 仍可使用 GPUI image-cache，最终都通过 `RenderImage`/`paint_image` 绘制。
 
 2026-06-18 `/etc` 成对证据未通过 default-promotion gate：
 `/tmp/fika-icon-custom-etc-p16k2.log` 有 `theme_placeholder=118` 和
@@ -386,8 +390,8 @@ resolver 找到的加载入口，不应该成为上层 ready/cache 主 key。
 
 实现：
 
-- pane MIME/theme icon 默认改为 full custom image layer；`FIKA_GPUI_THEME_ICONS=1` 仅作为
-  GPUI baseline，`FIKA_HYBRID_THEME_ICONS=1` 降为显式过渡路径。
+- pane MIME/theme icon 在该切片改为 full custom image layer。GPUI image-element 和
+  hybrid readiness-handoff 运行时分支后来已在 2026-06-20 删除。
 - `ThemeIconImageReadiness` 只记录 `ThemeIconImageKey(iconName, size, scale, theme,
   color-scheme, mode)`，不再记录 ready resource path。
 - `RetainedThemeIconImageCache` 不再用 `images_by_path` 为新 size key 复用旧 image。相同
@@ -603,9 +607,8 @@ source 引用消失时，同时 remove `RetainAllImageCache` 中的 `Resource::P
    GPUI per-element `on_drag_move` 用作 pane self-drag 悬停的真实来源；retained
    hitbox 和 active item-drag window tracker 拥有该路径。
 2. 使用运行时日志决定当前 custom-painted surface 是否保持 custom-paint 或回退到 GPUI 渲染器叠加在 retained model 上。
-3. 保留 `FIKA_GPUI_THEME_ICONS=1` 作为 GPUI baseline 路径。未来 MIME/theme icon
-   renderer 变更必须保持默认 full-custom 日志中 `gpui_image_element=0`、
-   `theme_placeholder=0`、visible `theme_decoded=0`；只有显式修改 transitional handoff
-   路径时才使用 hybrid gate。
+3. 未来 MIME/theme icon renderer 变更必须保持默认 self-painted 日志中
+   `gpui_image_element=0`、`theme_placeholder=0`，避免可见 zoom-time decode churn，并用本地
+   Dolphin 源码核对 pixmap-key cache 行为。
 4. Places row visual 默认保持 `CustomFull`；`FIKA_PLACES_ROW_VISUAL_POLICY=gpui` 和
    `chrome` 仅作为 A/B baseline 与回退路径。

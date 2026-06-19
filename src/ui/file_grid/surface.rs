@@ -5,14 +5,11 @@ use crate::FikaApp;
 
 use super::details::{details_content_height, details_content_width};
 use super::details_shell::details_table;
-use super::image_layer::{
-    item_image_layer_view, item_renderer_policy_input_for_theme_handoff,
-    visible_theme_icon_handoff_ready,
-};
+use super::image_layer::item_image_layer_view;
 use super::interaction::item_interaction_layer_view;
 use super::item_shell::item_tile;
 use super::renderer_policy::{
-    details_renderer_policy_stats, item_renderer_policy_stats_with_input,
+    ItemRendererPolicyInput, details_renderer_policy_stats, item_renderer_policy_stats,
 };
 use super::static_visual::{static_item_visual_layer_view, static_item_visual_warm_layer_view};
 use super::viewport::{
@@ -37,7 +34,6 @@ pub(crate) fn file_grid(
         pane_id,
         snapshot,
         warm_static_visual_snapshot,
-        theme_icon_readiness,
         trash_view,
         scroll_handle,
         rubber_band,
@@ -45,7 +41,6 @@ pub(crate) fn file_grid(
         mode,
     } = props;
     let app = cx.weak_entity();
-    let scale_factor = window.scale_factor();
     let scrollbar_axis = scrollbar_axis_for_snapshot(&snapshot);
     let view_mode = view_mode_for_snapshot(&snapshot);
 
@@ -62,20 +57,7 @@ pub(crate) fn file_grid(
                     .cloned()
                     .collect::<Vec<_>>();
                 let visible_count = visible_items.len();
-                let theme_icon_handoff_ready = visible_theme_icon_handoff_ready(
-                    &visible_items,
-                    &theme_icon_readiness,
-                    scale_factor,
-                );
-                let renderer_policy_stats =
-                    item_renderer_policy_stats_with_input(&visible_items, |item| {
-                        item_renderer_policy_input_for_theme_handoff(
-                            item,
-                            &theme_icon_readiness,
-                            scale_factor,
-                            theme_icon_handoff_ready,
-                        )
-                    });
+                let renderer_policy_stats = item_renderer_policy_stats(&visible_items);
                 let warm_static_visual_layer =
                     warm_static_visual_snapshot.as_ref().and_then(|snapshot| {
                         static_item_visual_warm_layer_view(pane_id, snapshot, app.clone())
@@ -94,9 +76,6 @@ pub(crate) fn file_grid(
                     &items,
                     content_size.width,
                     content_size.height,
-                    &theme_icon_readiness,
-                    scale_factor,
-                    theme_icon_handoff_ready,
                     app.clone(),
                 );
                 let interaction_layer = item_interaction_layer_view(
@@ -132,17 +111,11 @@ pub(crate) fn file_grid(
                 };
                 let viewport = file_grid_viewport_shell(pane_id, drop_target, mode, cx).child(
                     content.children(visible_items.into_iter().map(|item| {
-                        let renderer_policy_input = item_renderer_policy_input_for_theme_handoff(
-                            &item,
-                            &theme_icon_readiness,
-                            scale_factor,
-                            theme_icon_handoff_ready,
-                        );
                         item_tile(
                             pane_id,
                             item,
                             ItemTileTextAlignment::Center,
-                            renderer_policy_input,
+                            ItemRendererPolicyInput::default(),
                             app.clone(),
                             cx,
                         )
@@ -164,20 +137,7 @@ pub(crate) fn file_grid(
                     .cloned()
                     .collect::<Vec<_>>();
                 let visible_count = visible_items.len();
-                let theme_icon_handoff_ready = visible_theme_icon_handoff_ready(
-                    &visible_items,
-                    &theme_icon_readiness,
-                    scale_factor,
-                );
-                let renderer_policy_stats =
-                    item_renderer_policy_stats_with_input(&visible_items, |item| {
-                        item_renderer_policy_input_for_theme_handoff(
-                            item,
-                            &theme_icon_readiness,
-                            scale_factor,
-                            theme_icon_handoff_ready,
-                        )
-                    });
+                let renderer_policy_stats = item_renderer_policy_stats(&visible_items);
                 let warm_static_visual_layer =
                     warm_static_visual_snapshot.as_ref().and_then(|snapshot| {
                         static_item_visual_warm_layer_view(pane_id, snapshot, app.clone())
@@ -196,9 +156,6 @@ pub(crate) fn file_grid(
                     &items,
                     content_size.width,
                     content_size.height,
-                    &theme_icon_readiness,
-                    scale_factor,
-                    theme_icon_handoff_ready,
                     app.clone(),
                 );
                 let interaction_layer = item_interaction_layer_view(
@@ -234,17 +191,11 @@ pub(crate) fn file_grid(
                 };
                 let viewport = file_grid_viewport_shell(pane_id, drop_target, mode, cx).child(
                     content.children(visible_items.into_iter().map(|item| {
-                        let renderer_policy_input = item_renderer_policy_input_for_theme_handoff(
-                            &item,
-                            &theme_icon_readiness,
-                            scale_factor,
-                            theme_icon_handoff_ready,
-                        );
                         item_tile(
                             pane_id,
                             item,
                             ItemTileTextAlignment::Start,
-                            renderer_policy_input,
+                            ItemRendererPolicyInput::default(),
                             app.clone(),
                             cx,
                         )

@@ -10,9 +10,7 @@ use gpui::{
 
 use crate::FikaApp;
 use crate::ui::icons::{FileIconSnapshot, theme_icon_image_size_px};
-use crate::ui::retained::{
-    RetainedImageLayerState, RetainedImageReady, RetainedImageRequest, RetainedShapeCache,
-};
+use crate::ui::retained::{RetainedImageLayerState, RetainedImageRequest, RetainedShapeCache};
 
 use super::details::{DetailsColumn, DetailsColumnKind};
 use super::image_layer::{
@@ -356,7 +354,6 @@ impl Element for DetailsVisualLayerElement {
         let (header, rows) = if let Some(id) = id {
             window.with_element_state::<RetainedImageLayerState, _>(id, |state, window| {
                 let mut state = state.unwrap_or_else(|| RetainedImageLayerState::new(cx));
-                let mut ready_images = Vec::new();
                 let header = details_visual_prepaint_header(
                     self.pane_id,
                     &self.header,
@@ -375,21 +372,9 @@ impl Element for DetailsVisualLayerElement {
                         Some(&mut state),
                         &self.app,
                         &mut glyph_budget,
-                        Some(&mut ready_images),
                         window,
                         cx,
                     ));
-                }
-                if !ready_images.is_empty() {
-                    let _ = self.app.update(cx, |this, cx| {
-                        let mut readiness_changed = false;
-                        for ready in ready_images {
-                            readiness_changed |= this.mark_retained_image_ready(ready);
-                        }
-                        if readiness_changed {
-                            cx.notify();
-                        }
-                    });
                 }
                 ((header, rows), state)
             })
@@ -414,7 +399,6 @@ impl Element for DetailsVisualLayerElement {
                         None,
                         &self.app,
                         &mut glyph_budget,
-                        None,
                         window,
                         cx,
                     )
@@ -541,7 +525,6 @@ fn details_visual_prepaint_item(
     mut image_state: Option<&mut RetainedImageLayerState>,
     app: &WeakEntity<FikaApp>,
     glyph_budget: &mut GlyphRasterMissBudget,
-    mut ready_images: Option<&mut Vec<RetainedImageReady>>,
     window: &mut Window,
     cx: &mut App,
 ) -> DetailsVisualPaintState {
@@ -560,7 +543,6 @@ fn details_visual_prepaint_item(
                         icon,
                         image_state.as_mut().map(|state| &mut **state),
                         app,
-                        ready_images.as_deref_mut(),
                         window,
                         cx,
                     ),
@@ -649,7 +631,6 @@ fn details_visual_icon_prepaint(
     icon: &FileIconSnapshot,
     image_state: Option<&mut RetainedImageLayerState>,
     app: &WeakEntity<FikaApp>,
-    mut ready_images: Option<&mut Vec<RetainedImageReady>>,
     window: &mut Window,
     cx: &mut App,
 ) -> DetailsVisualIconPaintState {
@@ -662,11 +643,6 @@ fn details_visual_icon_prepaint(
         )?;
         debug_assert_eq!(request.source_path(), path);
         let load = state.load_request_or_retained_with_outcome(request, app, window, cx);
-        if let Some(ready) = load.ready {
-            if let Some(ready_images) = ready_images.as_deref_mut() {
-                ready_images.push(ready);
-            }
-        }
         load.image
     });
     let fallback = image.is_none().then(|| {
