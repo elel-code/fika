@@ -35,14 +35,16 @@ pub(super) fn place_row(
     visible_index: usize,
     place: PlaceSnapshot,
     row_visual_policy: PlacesRowVisualPolicy,
+    force_gpui_text: bool,
+    force_gpui_icon: bool,
     row_shell_cursor_enabled: bool,
     row_shell_targeting_enabled: bool,
     row_shell_dnd_enabled: bool,
     cx: &mut Context<FikaApp>,
 ) -> Stateful<Div> {
     let custom_chrome = row_visual_policy.custom_layer_enabled();
-    let gpui_text = !row_visual_policy.paints_text();
-    let gpui_icon = !row_visual_policy.paints_icon();
+    let gpui_text = force_gpui_text || !row_visual_policy.paints_text();
+    let gpui_icon = force_gpui_icon || !row_visual_policy.paints_icon();
     let row_id = format!("place-{visible_index}");
     let path = place.path.clone();
     let place_drag_source = PlaceDragStartSource::from_snapshot(&place);

@@ -7,6 +7,7 @@ use super::paint_slots::PlacePaintSlotPerfLog;
 const PERF_PLACES_VIEW_ENV: &str = "FIKA_PERF_PLACES_VIEW";
 const CUSTOM_PLACES_ROWS_ENV: &str = "FIKA_CUSTOM_PLACES_ROWS";
 const PLACES_ROW_VISUAL_POLICY_ENV: &str = "FIKA_PLACES_ROW_VISUAL_POLICY";
+const PLACES_ROW_VISUAL_HANDOFF_ENV: &str = "FIKA_PLACES_ROW_VISUAL_HANDOFF";
 const PLACES_EVENT_DELIVERY_POLICY_ENV: &str = "FIKA_PLACES_EVENT_DELIVERY_POLICY";
 const DEFAULT_PLACES_EVENT_DELIVERY_POLICY: PlacesEventDeliveryPolicy =
     PlacesEventDeliveryPolicy::RetainedDnd;
@@ -15,7 +16,7 @@ pub(crate) fn places_perf_enabled() -> bool {
     env::var(PERF_PLACES_VIEW_ENV).is_ok_and(|value| env_flag_is_truthy(&value))
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum PlacesRowVisualPolicy {
     Gpui,
     CustomChrome,
@@ -68,6 +69,10 @@ pub(crate) fn places_row_visual_policy() -> PlacesRowVisualPolicy {
             _ => None,
         })
         .unwrap_or(PlacesRowVisualPolicy::CustomChrome)
+}
+
+pub(crate) fn places_row_visual_handoff_enabled() -> bool {
+    env::var(PLACES_ROW_VISUAL_HANDOFF_ENV).is_ok_and(|value| env_flag_is_truthy(&value))
 }
 
 pub(crate) fn env_flag_is_truthy(value: &str) -> bool {
@@ -375,6 +380,8 @@ pub(crate) struct PlacesRendererPolicyLog {
     pub(crate) row_count: usize,
     pub(crate) section_count: usize,
     pub(crate) row_visual_policy: PlacesRowVisualPolicy,
+    pub(crate) row_visual_paints_text: bool,
+    pub(crate) row_visual_paints_icon: bool,
     pub(crate) event_delivery_policy: PlacesEventDeliveryPolicy,
     pub(crate) scrollbar_canvas_count: usize,
 }
@@ -390,12 +397,12 @@ pub(crate) fn emit_places_renderer_policy_log(log: PlacesRendererPolicyLog) {
     } else {
         0
     };
-    let text_gpui = if log.row_visual_policy.paints_text() {
+    let text_gpui = if log.row_visual_paints_text {
         0
     } else {
         log.row_count
     };
-    let icon_gpui = if log.row_visual_policy.paints_icon() {
+    let icon_gpui = if log.row_visual_paints_icon {
         0
     } else {
         log.row_count
@@ -420,6 +427,34 @@ pub(crate) fn emit_places_renderer_policy_log(log: PlacesRendererPolicyLog) {
         log.row_visual_policy.visual_kind(),
         log.event_delivery_policy.kind(),
         retained_probe_hitboxes,
+    );
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlacesRowVisualHandoffPerfLog {
+    pub(crate) rows: usize,
+    pub(crate) enabled: bool,
+    pub(crate) ready: bool,
+    pub(crate) warmup_frames_seen: u8,
+    pub(crate) required_warmup_frames: u8,
+    pub(crate) paint_text: bool,
+    pub(crate) paint_icon: bool,
+    pub(crate) gpui_text: bool,
+    pub(crate) gpui_icon: bool,
+}
+
+pub(crate) fn emit_places_row_visual_handoff_perf_log(log: PlacesRowVisualHandoffPerfLog) {
+    eprintln!(
+        "[fika places-row-handoff] rows={} enabled={} ready={} frames={}/{} paint_text={} paint_icon={} gpui_text={} gpui_icon={}",
+        log.rows,
+        usize::from(log.enabled),
+        usize::from(log.ready),
+        log.warmup_frames_seen,
+        log.required_warmup_frames,
+        usize::from(log.paint_text),
+        usize::from(log.paint_icon),
+        usize::from(log.gpui_text),
+        usize::from(log.gpui_icon),
     );
 }
 

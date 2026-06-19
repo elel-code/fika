@@ -70,6 +70,12 @@ Options:
       visual_kind=full. Also requires aggregated [fika places-row-visual] logs
       whose rows count matches the policy rows and row text shape-cache logs.
 
+  --expect-custom-row-handoff-policy
+      Fail unless [fika places-renderer-policy] and [fika places-row-handoff]
+      prove the opt-in ready-only full visual handoff: initial full-policy frames
+      keep GPUI text/icons while the custom layer paints chrome only, then a
+      ready frame switches text_gpui/icon_gpui to 0 and paints full custom rows.
+
   --expect-custom-row-chrome-policy
       Fail unless [fika places-renderer-policy] matches the Dolphin-aligned
       custom chrome policy: row_visual_layer/text_gpui/icon_gpui/drag_shell
@@ -119,6 +125,7 @@ require_event_probe=false
 expect_current_gpui_policy=false
 expect_custom_row_visual_policy=false
 expect_custom_row_full_policy=false
+expect_custom_row_handoff_policy=false
 expect_custom_row_chrome_policy=false
 expect_retained_event_policy=false
 snapshot_us=""
@@ -165,6 +172,9 @@ while [[ $# -gt 0 ]]; do
             ;;
         --expect-custom-row-full-policy)
             expect_custom_row_full_policy=true
+            ;;
+        --expect-custom-row-handoff-policy)
+            expect_custom_row_handoff_policy=true
             ;;
         --expect-custom-row-chrome-policy)
             expect_custom_row_chrome_policy=true
@@ -280,6 +290,7 @@ awk \
     -v expect_current_gpui_policy="$expect_current_gpui_policy" \
     -v expect_custom_row_visual_policy="$expect_custom_row_visual_policy" \
     -v expect_custom_row_full_policy="$expect_custom_row_full_policy" \
+    -v expect_custom_row_handoff_policy="$expect_custom_row_handoff_policy" \
     -v expect_custom_row_chrome_policy="$expect_custom_row_chrome_policy" \
     -v expect_retained_event_policy="$expect_retained_event_policy" \
     -v snapshot_limit="$snapshot_us" \
@@ -464,6 +475,21 @@ function renderer_retained_interaction_for_policy(event_policy, rows, sections) 
             custom_full_policy_invalid = 1
         }
     }
+    if (expect_custom_row_handoff_policy == "true") {
+        handoff_policy_shape_valid = row_gpui == 0 && row_visual_layer == rows &&
+            drag_shell == rows && retained_interaction == expected_retained_interaction &&
+            section_gpui == last_sidebar_sections && scrollbar_canvas == 1 &&
+            visual_kind == "full"
+        if (!handoff_policy_shape_valid) {
+            custom_handoff_policy_invalid = 1
+        } else if (text_gpui == rows && icon_gpui == rows) {
+            handoff_policy_fallback_seen = 1
+        } else if (text_gpui == 0 && icon_gpui == 0) {
+            handoff_policy_ready_seen = 1
+        } else {
+            custom_handoff_policy_invalid = 1
+        }
+    }
     if (expect_custom_row_chrome_policy == "true") {
         if (row_gpui != 0 || text_gpui != rows || icon_gpui != rows || drag_shell != rows ||
             row_visual_layer != rows || retained_interaction != expected_retained_interaction ||
@@ -485,6 +511,44 @@ function renderer_retained_interaction_for_policy(event_policy, rows, sections) 
             scrollbar_canvas != 1) {
             retained_event_renderer_policy_invalid = 1
         }
+    }
+}
+
+/^\[fika places-row-handoff\]/ {
+    row_handoff_frames++
+    rows = field("rows") + 0
+    enabled = field("enabled") + 0
+    ready = field("ready") + 0
+    frames_field = field("frames")
+    split(frames_field, frame_parts, "/")
+    frames_seen = frame_parts[1] + 0
+    required_frames = frame_parts[2] + 0
+    paint_text = field("paint_text") + 0
+    paint_icon = field("paint_icon") + 0
+    gpui_text = field("gpui_text") + 0
+    gpui_icon = field("gpui_icon") + 0
+    max_update("row_handoff_rows", rows)
+    max_update("row_handoff_frames_seen", frames_seen)
+    max_update("row_handoff_required_frames", required_frames)
+    max_update("row_handoff_paint_text", paint_text)
+    max_update("row_handoff_paint_icon", paint_icon)
+    max_update("row_handoff_gpui_text", gpui_text)
+    max_update("row_handoff_gpui_icon", gpui_icon)
+    if (enabled) {
+        row_handoff_enabled_seen = 1
+    }
+    if (ready) {
+        row_handoff_ready_seen = 1
+    } else {
+        row_handoff_fallback_seen = 1
+    }
+    if (enabled && !ready && paint_text == 0 && paint_icon == 0 &&
+        gpui_text == 1 && gpui_icon == 1) {
+        row_handoff_valid_fallback_seen = 1
+    }
+    if (enabled && ready && paint_text == 1 && paint_icon == 1 &&
+        gpui_text == 0 && gpui_icon == 0) {
+        row_handoff_valid_ready_seen = 1
     }
 }
 
@@ -905,6 +969,31 @@ END {
             fail("full custom Places row visual layer is not aggregated to the policy row count")
         }
     }
+    if (expect_custom_row_handoff_policy == "true") {
+        if (custom_handoff_policy_invalid) {
+            fail("places renderer policy does not match opt-in full custom row handoff policy")
+        }
+        if (!handoff_policy_fallback_seen || !handoff_policy_ready_seen) {
+            fail("missing renderer-policy fallback or ready frame for Places row handoff")
+        }
+        if (row_handoff_frames == 0) {
+            fail("missing [fika places-row-handoff] logs")
+        }
+        if (!row_handoff_enabled_seen ||
+            !row_handoff_valid_fallback_seen ||
+            !row_handoff_valid_ready_seen) {
+            fail("Places row handoff did not prove GPUI fallback followed by ready full custom paint")
+        }
+        if (row_visual_frames == 0) {
+            fail("missing [fika places-row-visual] logs for full custom row handoff policy")
+        }
+        if (row_shape_cache_frames == 0) {
+            fail("missing [fika places-row-shape-cache] logs for full custom row handoff policy")
+        }
+        if (max_values["row_visual_rows"] != max_values["policy_rows"]) {
+            fail("handoff Places row visual layer is not aggregated to the policy row count")
+        }
+    }
     if (expect_custom_row_chrome_policy == "true") {
         if (custom_chrome_policy_invalid) {
             fail("places renderer policy does not match custom row chrome policy")
@@ -1162,6 +1251,20 @@ END {
         row_visual_warm_frames,
         max_values["row_visual_warm_prepaint"],
         max_values["row_visual_warm_paint"])
+    printf("places_row_handoff_frames=%d max_rows=%d enabled=%d fallback=%d ready=%d valid_fallback=%d valid_ready=%d max_frames_seen=%d max_required_frames=%d max_paint_text=%d max_paint_icon=%d max_gpui_text=%d max_gpui_icon=%d\n",
+        row_handoff_frames,
+        max_values["row_handoff_rows"],
+        row_handoff_enabled_seen,
+        row_handoff_fallback_seen,
+        row_handoff_ready_seen,
+        row_handoff_valid_fallback_seen,
+        row_handoff_valid_ready_seen,
+        max_values["row_handoff_frames_seen"],
+        max_values["row_handoff_required_frames"],
+        max_values["row_handoff_paint_text"],
+        max_values["row_handoff_paint_icon"],
+        max_values["row_handoff_gpui_text"],
+        max_values["row_handoff_gpui_icon"])
     printf("places_row_shape_cache_frames=%d max_hits=%d max_misses=%d max_evicted=%d max_entries=%d\n",
         row_shape_cache_frames,
         max_values["row_shape_hits"],

@@ -15,6 +15,8 @@ use gpui::{
 use crate::ui::background_tasks::{BackgroundTasksSnapshot, background_tasks_panel};
 use crate::ui::file_grid::ItemDrag;
 use crate::ui::icons::{FileIconCache, FileIconSnapshot, cached_icon_or_fallback};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::time::Instant;
 
 use super::drag::PlaceDrag;
@@ -24,10 +26,12 @@ use super::event_layer::{
 use super::interaction::places_interaction_geometry;
 use super::perf::{
     PlacesInteractionGeometryPerfLog, PlacesInteractionPolicyLog, PlacesRendererPolicyLog,
-    PlacesScrollbarPerfLog, PlacesSidebarPerfLog, emit_places_interaction_geometry_perf_log,
-    emit_places_interaction_policy_log, emit_places_renderer_policy_log,
+    PlacesRowVisualHandoffPerfLog, PlacesScrollbarPerfLog, PlacesSidebarPerfLog,
+    emit_places_interaction_geometry_perf_log, emit_places_interaction_policy_log,
+    emit_places_renderer_policy_log, emit_places_row_visual_handoff_perf_log,
     emit_places_scrollbar_perf_log, emit_places_sidebar_perf_log, places_event_delivery_policy,
-    places_perf_enabled, places_row_visual_policy, places_section_count,
+    places_perf_enabled, places_row_visual_handoff_enabled, places_row_visual_policy,
+    places_section_count,
 };
 use super::snapshot::PlaceSnapshot;
 use super::visual::places_row_visual_layer;
@@ -43,6 +47,7 @@ pub(crate) const PLACES_SIDEBAR_MIN_WIDTH: f32 = 160.0;
 pub(crate) const PLACES_SIDEBAR_MAX_WIDTH: f32 = 420.0;
 const PLACES_SIDEBAR_SPLITTER_WIDTH: f32 = 1.0;
 const PLACES_SIDEBAR_SPLITTER_HITBOX_WIDTH: f32 = 8.0;
+const PLACES_ROW_VISUAL_HANDOFF_WARMUP_FRAMES: u8 = 2;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PlacesSidebarResizeDrag;
@@ -316,6 +321,10 @@ pub(crate) fn places_sidebar(
     });
     let row_visual_policy = places_row_visual_policy();
     let custom_row_visuals = row_visual_policy.custom_layer_enabled();
+    let row_visual_handoff =
+        places_row_visual_handoff_state(row_visual_policy, &places, row_count, window, cx);
+    let paint_row_text = row_visual_policy.paints_text() && !row_visual_handoff.force_gpui_text;
+    let paint_row_icon = row_visual_policy.paints_icon() && !row_visual_handoff.force_gpui_icon;
     let state = window.use_keyed_state("places-sidebar-scrollbar", cx, |_, _| {
         PlacesSidebarScrollState::new()
     });
@@ -327,12 +336,7 @@ pub(crate) fn places_sidebar(
     });
     let app = cx.weak_entity();
     let row_visual_layer = custom_row_visuals.then(|| {
-        places_row_visual_layer(
-            places.clone(),
-            app.clone(),
-            row_visual_policy.paints_text(),
-            row_visual_policy.paints_icon(),
-        )
+        places_row_visual_layer(places.clone(), app.clone(), paint_row_text, paint_row_icon)
     });
     let event_probe_layer = event_delivery_policy
         .retained_event_layer_enabled()
@@ -380,6 +384,8 @@ pub(crate) fn places_sidebar(
             index,
             place,
             row_visual_policy,
+            row_visual_handoff.force_gpui_text,
+            row_visual_handoff.force_gpui_icon,
             !event_delivery_policy.retained_pointer_enabled(),
             !event_delivery_policy.retained_targeting_enabled(),
             !event_delivery_policy.retained_dnd_enabled(),
@@ -397,8 +403,21 @@ pub(crate) fn places_sidebar(
             row_count,
             section_count,
             row_visual_policy,
+            row_visual_paints_text: paint_row_text,
+            row_visual_paints_icon: paint_row_icon,
             event_delivery_policy,
             scrollbar_canvas_count: 1,
+        });
+        emit_places_row_visual_handoff_perf_log(PlacesRowVisualHandoffPerfLog {
+            rows: row_count,
+            enabled: row_visual_handoff.enabled,
+            ready: row_visual_handoff.ready,
+            warmup_frames_seen: row_visual_handoff.frames_seen,
+            required_warmup_frames: PLACES_ROW_VISUAL_HANDOFF_WARMUP_FRAMES,
+            paint_text: paint_row_text,
+            paint_icon: paint_row_icon,
+            gpui_text: row_visual_handoff.force_gpui_text || !row_visual_policy.paints_text(),
+            gpui_icon: row_visual_handoff.force_gpui_icon || !row_visual_policy.paints_icon(),
         });
         emit_places_interaction_policy_log(PlacesInteractionPolicyLog {
             row_count,
@@ -538,6 +557,92 @@ pub(crate) fn places_sidebar(
         .when_some(background_tasks, |sidebar, tasks| {
             sidebar.child(background_tasks_panel(tasks, cx))
         })
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct PlacesRowVisualHandoffEffectiveState {
+    enabled: bool,
+    ready: bool,
+    frames_seen: u8,
+    force_gpui_text: bool,
+    force_gpui_icon: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct PlacesRowVisualHandoffState {
+    key: Option<u64>,
+    frames_seen: u8,
+}
+
+impl PlacesRowVisualHandoffState {
+    fn advance(&mut self, key: u64) -> (bool, u8) {
+        if self.key != Some(key) {
+            self.key = Some(key);
+            self.frames_seen = 0;
+        }
+
+        let ready = self.frames_seen >= PLACES_ROW_VISUAL_HANDOFF_WARMUP_FRAMES;
+        if !ready {
+            self.frames_seen = self
+                .frames_seen
+                .saturating_add(1)
+                .min(PLACES_ROW_VISUAL_HANDOFF_WARMUP_FRAMES);
+        }
+        (ready, self.frames_seen)
+    }
+}
+
+fn places_row_visual_handoff_state(
+    row_visual_policy: super::perf::PlacesRowVisualPolicy,
+    places: &[PlaceSnapshot],
+    row_count: usize,
+    window: &mut Window,
+    cx: &mut Context<FikaApp>,
+) -> PlacesRowVisualHandoffEffectiveState {
+    let enabled = places_row_visual_handoff_enabled() && row_visual_policy.paints_text();
+    if !enabled || row_count == 0 {
+        return PlacesRowVisualHandoffEffectiveState {
+            enabled,
+            ready: true,
+            ..Default::default()
+        };
+    }
+
+    let key = places_row_visual_handoff_key(row_visual_policy, places);
+    let state = window.use_keyed_state("places-row-visual-handoff", cx, |_, _| {
+        PlacesRowVisualHandoffState::default()
+    });
+    let (ready, frames_seen) = state.update(cx, |state, _cx| state.advance(key));
+    if !ready {
+        cx.on_next_frame(window, |_this, _window, cx| cx.notify());
+    }
+
+    PlacesRowVisualHandoffEffectiveState {
+        enabled,
+        ready,
+        frames_seen,
+        force_gpui_text: !ready,
+        force_gpui_icon: !ready && row_visual_policy.paints_icon(),
+    }
+}
+
+fn places_row_visual_handoff_key(
+    row_visual_policy: super::perf::PlacesRowVisualPolicy,
+    places: &[PlaceSnapshot],
+) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    row_visual_policy.hash(&mut hasher);
+    for place in places {
+        place.index.hash(&mut hasher);
+        place.label.as_str().hash(&mut hasher);
+        place.active.hash(&mut hasher);
+        place.mounted.hash(&mut hasher);
+        place.icon.icon_name.as_ref().hash(&mut hasher);
+        place.icon.fallback_marker.as_ref().hash(&mut hasher);
+        place.trash_place.hash(&mut hasher);
+        place.trash_has_items.hash(&mut hasher);
+    }
+    hasher.finish()
 }
 
 fn places_interaction_geometry_hit_test_samples(

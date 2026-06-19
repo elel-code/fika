@@ -1353,6 +1353,25 @@ tracks.
   Places/image work must use stable semantic keys, retained loaded resources,
   visible-path-free decode/shape replacement, and ready-only handoff before it
   can outperform the current GPUI image baseline.
+- [x] P16dz4: Add the first opt-in ready-only handoff for full custom Places
+  rows. Root cause: the previous full path hid GPUI text/icons immediately, so
+  the first visible custom frame paid text/glyph cold paint while the user saw
+  the transition. Implementation: `FIKA_PLACES_ROW_VISUAL_HANDOFF=1` keeps GPUI
+  text/icons for two warmup frames while the custom layer paints chrome only,
+  then switches to full custom text+icon paint once the retained row visual
+  path is ready. `scripts/analyze-places-perf.sh` now has
+  `--expect-custom-row-handoff-policy` and emits `[fika places-row-handoff]`
+  summaries; the analyzer fixture covers both successful fallback-to-ready
+  handoff and a missing-ready failure. Evidence:
+  `/tmp/fika-places-full-handoff.log` passes
+  `--expect-custom-row-handoff-policy --row-visual-paint-us 1000
+  --row-visual-warm-paint-us 1000`; first fallback frames paint chrome at
+  roughly `50-59us`, ready full-custom frames paint at roughly `230-286us`, and
+  the old 5-6ms full cold paint spike is no longer on the visible handoff path.
+  Remaining work before default promotion: reduce the ready-frame text-shape
+  prepaint miss (`max_prepaint=1175us` in this run), cover overflow/layout
+  handoff evidence, and extend the same stable-key/ready-only pattern to real
+  image resources instead of only fallback vector Places icons.
 - [x] P16dz: Add the post-Places-chrome full retained renderer roadmap. The new
   `docs/FULL_RETAINED_RENDERER_ROADMAP.md` and zh-CN translation define the
   current baseline, explicit GPUI bridges, non-negotiable Dolphin-aligned

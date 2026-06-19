@@ -147,6 +147,57 @@ if [[ "$full_summary" != *"max_row_gpui=0 max_row_visual_layer=11 max_icon_gpui=
     exit 1
 fi
 
+cat > "$tmpdir/custom-row-full-handoff.log" <<'EOF'
+[fika places-slots] rows=11 sections=2 entries=13 inserted=13 content=0 geometry=0 visual=0 unchanged=0 removed=0 project=25us
+[fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
+[fika places-view] source=11 visible=11 sections=2 snapshot=100us
+[fika places-sidebar] rows=11 sections=2 elements=13 build=240us
+[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=11 icon_gpui=11 retained_interaction=0 drag_shell=11 section_gpui=2 scrollbar_canvas=1 visual_kind=full
+[fika places-row-handoff] rows=11 enabled=1 ready=0 frames=1/2 paint_text=0 paint_icon=0 gpui_text=1 gpui_icon=1
+[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=11
+[fika places-row-visual] rows=11 painted=11 prepaint=20us paint=55us
+[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=11 icon_gpui=11 retained_interaction=0 drag_shell=11 section_gpui=2 scrollbar_canvas=1 visual_kind=full
+[fika places-row-handoff] rows=11 enabled=1 ready=0 frames=2/2 paint_text=0 paint_icon=0 gpui_text=1 gpui_icon=1
+[fika places-row-visual] rows=11 painted=11 prepaint=18us paint=50us
+[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=0 icon_gpui=0 retained_interaction=0 drag_shell=11 section_gpui=2 scrollbar_canvas=1 visual_kind=full
+[fika places-row-handoff] rows=11 enabled=1 ready=1 frames=2/2 paint_text=1 paint_icon=1 gpui_text=0 gpui_icon=0
+[fika places-row-visual] rows=11 painted=11 prepaint=260us paint=240us
+[fika places-row-shape-cache] hits=0 misses=11 evicted=0 entries=11
+[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=0 icon_gpui=0 retained_interaction=0 drag_shell=11 section_gpui=2 scrollbar_canvas=1 visual_kind=full
+[fika places-row-handoff] rows=11 enabled=1 ready=1 frames=2/2 paint_text=1 paint_icon=1 gpui_text=0 gpui_icon=0
+[fika places-row-visual] rows=11 painted=11 prepaint=35us paint=230us
+[fika places-row-shape-cache] hits=11 misses=0 evicted=0 entries=11
+EOF
+
+handoff_summary="$("$analyzer" \
+    --expect-custom-row-handoff-policy \
+    --row-visual-paint-us 1000 \
+    --row-visual-warm-paint-us 1000 \
+    "$tmpdir/custom-row-full-handoff.log")"
+
+if [[ "$handoff_summary" != *"places_row_handoff_frames=4 max_rows=11 enabled=1 fallback=1 ready=1 valid_fallback=1 valid_ready=1 max_frames_seen=2 max_required_frames=2 max_paint_text=1 max_paint_icon=1 max_gpui_text=1 max_gpui_icon=1"* ]]; then
+    echo "expected full custom Places row handoff summary" >&2
+    exit 1
+fi
+
+cat > "$tmpdir/custom-row-full-handoff-missing-ready.log" <<'EOF'
+[fika places-slots] rows=11 sections=2 entries=13 inserted=13 content=0 geometry=0 visual=0 unchanged=0 removed=0 project=25us
+[fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
+[fika places-view] source=11 visible=11 sections=2 snapshot=100us
+[fika places-sidebar] rows=11 sections=2 elements=13 build=240us
+[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=11 icon_gpui=11 retained_interaction=0 drag_shell=11 section_gpui=2 scrollbar_canvas=1 visual_kind=full
+[fika places-row-handoff] rows=11 enabled=1 ready=0 frames=1/2 paint_text=0 paint_icon=0 gpui_text=1 gpui_icon=1
+[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=11
+[fika places-row-visual] rows=11 painted=11 prepaint=20us paint=55us
+EOF
+
+if "$analyzer" \
+    --expect-custom-row-handoff-policy \
+    "$tmpdir/custom-row-full-handoff-missing-ready.log" >/dev/null 2>&1; then
+    echo "expected full custom Places handoff gate to reject missing ready frame" >&2
+    exit 1
+fi
+
 cat > "$tmpdir/custom-row-full-cold-then-warm.log" <<'EOF'
 [fika places-slots] rows=11 sections=2 entries=13 inserted=13 content=0 geometry=0 visual=0 unchanged=0 removed=0 project=25us
 [fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
