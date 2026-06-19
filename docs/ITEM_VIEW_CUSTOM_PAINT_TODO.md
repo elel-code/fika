@@ -2098,6 +2098,23 @@ tracks.
   `--require-details`, `--require-modes Details`, `--require-renderer-policy-modes
   Details`, and `--expect-retained-item-policy`. This turns Details visual
   ownership into repeatable runtime evidence for future pane painter work.
+- [x] P16gaz: Reuse ready MIME/theme icon resource paths across zoom handoff.
+  Root cause: pane image handoff was exact-size-key ready only. During zoom, a
+  theme icon with the same loaded `Resource::Path` but a new size/scale key
+  could briefly fall back to GPUI or be counted as a new visible custom decode,
+  causing the second icon identity adjustment the Dolphin comparison was meant
+  to avoid. Implementation: `ThemeIconImageReadiness` now tracks both ready
+  semantic keys and ready resource paths; the visible-cohort handoff accepts a
+  visible icon when either its exact key or resource path is ready. The retained
+  theme icon cache also indexes loaded images by path, so a new size key with
+  the same path is treated as retained reuse rather than first-ready decode.
+  Evidence: `/tmp/fika-path-ready-hybrid-downloads.log` passed
+  `--gate-hybrid-default-promotion` against
+  `/tmp/fika-path-ready-gpui-downloads.log` with `theme_placeholder=0` and
+  visible `theme_decoded=0`. `/tmp/fika-path-ready-hybrid-etc-r2.log` passed
+  the handoff portion and removed visible decode churn (`theme_decoded=0`),
+  though full default promotion still failed on `/etc` icon-sync/content-change
+  variance outside the image handoff path.
 
 ## Acceptance Gates
 
@@ -2121,8 +2138,9 @@ tracks.
   should also show that
   cold theme-icon work no longer appears as a synchronous render conversion
   spike after the first frame has switched to preliminary icons. Current
-  `/etc` autosmoke satisfies the Compact/Icons zoom-scroll icon-sync part;
-  Details and full DnD runtime smoke still need a desktop-session refresh.
+  `/etc` autosmoke satisfies the Compact/Icons zoom-scroll icon-sync part, and
+  `details-zoom-scroll` now covers Details visual/header runtime evidence. Full
+  DnD runtime smoke still needs a desktop-session refresh.
 - [x] Cold mode switch cost is tracked separately from resize cost: `[fika
   item-view]` now includes `phase=initial|mode-switch|content-change|
   geometry-change|visual-change|steady`, with unit coverage proving mode

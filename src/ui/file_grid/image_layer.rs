@@ -143,8 +143,7 @@ pub(super) fn item_renderer_policy_input_for_theme_handoff(
     ItemRendererPolicyInput {
         theme_icon_ready: theme_icon_handoff_ready
             && content.thumbnail_path.is_none()
-            && item_theme_icon_image_key(content, item.layout, scale_factor)
-                .is_some_and(|key| theme_icon_readiness.is_ready(&key)),
+            && item_theme_icon_ready(content, item.layout, theme_icon_readiness, scale_factor),
     }
 }
 
@@ -159,15 +158,30 @@ pub(super) fn visible_theme_icon_handoff_ready(
         if content.thumbnail_path.is_some() || content.icon.path.is_none() {
             continue;
         }
-        let Some(key) = item_theme_icon_image_key(content, item.layout, scale_factor) else {
+        let Some(_key) = item_theme_icon_image_key(content, item.layout, scale_factor) else {
             continue;
         };
         has_theme_icon = true;
-        if !theme_icon_readiness.is_ready(&key) {
+        if !item_theme_icon_ready(content, item.layout, theme_icon_readiness, scale_factor) {
             return false;
         }
     }
     has_theme_icon
+}
+
+fn item_theme_icon_ready(
+    content: &super::ItemPaintContent,
+    layout: ItemLayout,
+    theme_icon_readiness: &ThemeIconImageReadinessSnapshot,
+    scale_factor: f32,
+) -> bool {
+    item_theme_icon_image_key(content, layout, scale_factor)
+        .is_some_and(|key| theme_icon_readiness.is_ready(&key))
+        || content
+            .icon
+            .path
+            .as_ref()
+            .is_some_and(|path| theme_icon_readiness.is_path_ready(path.as_ref()))
 }
 
 fn item_theme_icon_image_key(
@@ -466,8 +480,8 @@ impl Element for ItemImageLayerElement {
                 let count = states.len();
                 let _ = self.app.update(cx, |this, _cx| {
                     let mut readiness_changed = false;
-                    for key in ready_theme_icons {
-                        readiness_changed |= this.mark_theme_icon_image_ready(key);
+                    for (key, path) in ready_theme_icons {
+                        readiness_changed |= this.mark_theme_icon_image_path_ready(key, path);
                     }
                     if let Some(elapsed) = elapsed {
                         this.record_item_image_prepaint(self.pane_id, elapsed, count, source_stats);
@@ -524,7 +538,7 @@ fn item_image_layer_prepaint_item(
     item: &ItemImageLayerItem,
     state: &mut RetainedImageLayerState,
     source_stats: &mut ItemImageSourcePerfStats,
-    ready_theme_icons: &mut Vec<ThemeIconImageKey>,
+    ready_theme_icons: &mut Vec<(ThemeIconImageKey, Arc<Path>)>,
     window: &mut Window,
     cx: &mut App,
 ) -> Option<ItemImagePaintState> {
@@ -544,10 +558,10 @@ fn item_image_layer_prepaint_item(
     };
     let load = match (kind, retained_source) {
         (ItemImagePaintKind::Thumbnail, ItemImageRetainedSource::Thumbnail(_)) => {
-            state.load_thumbnail_or_retained_with_outcome(source_path, window, cx)
+            state.load_thumbnail_or_retained_with_outcome(source_path.clone(), window, cx)
         }
         (ItemImagePaintKind::ThemeIcon, ItemImageRetainedSource::ThemeIcon(key)) => {
-            state.load_theme_icon_or_retained_with_outcome(source_path, key, window, cx)
+            state.load_theme_icon_or_retained_with_outcome(source_path.clone(), key, window, cx)
         }
         _ => return None,
     };
@@ -555,7 +569,7 @@ fn item_image_layer_prepaint_item(
         && load.image.is_some()
         && let Some(key) = ready_theme_key
     {
-        ready_theme_icons.push(key);
+        ready_theme_icons.push((key, source_path.clone()));
     }
     let paint = matches!(item.role, ItemImageLayerRole::Paint);
     record_item_image_source_stats(source_stats, kind, load.outcome, paint);

@@ -4,7 +4,7 @@ This plan covers ordinary MIME/theme icons in Compact/Icons and Details. It
 does not replace thumbnail handling. Thumbnails already use thumbnail-path
 identity and the custom image layer; ordinary theme icons now use the hybrid
 renderer by default, keeping GPUI `img()` as fallback until a retained
-same-key image is ready.
+same-key or same-resource image is ready.
 
 The purpose of this plan is to define and guard the cache boundary required for
 that hybrid default, while keeping `FIKA_CUSTOM_THEME_ICONS=1` as a full custom
@@ -32,8 +32,9 @@ placeholder after a real same-key image has already loaded.
 
 Current accepted renderer policy:
 
-- MIME/theme icons default to hybrid: GPUI `img()` for not-yet-ready keys and
-  the custom image layer for ready retained image keys.
+- MIME/theme icons default to hybrid: GPUI `img()` for not-yet-ready resources
+  and the custom image layer for ready retained image keys or ready resource
+  paths.
 - Thumbnail images use the custom item image layer and retained same-thumbnail
   image fallback.
 - `FIKA_CUSTOM_THEME_ICONS=1` forces theme icons through the custom image layer
@@ -44,9 +45,10 @@ Current accepted renderer policy:
   than creating another exact-size path request. Fika does not use a delayed
   second icon-size or path commit.
 
-The missing piece is a retained same-theme-icon image cache that gives the
-custom theme-icon path the same stability that Dolphin gets from widget-local
-pixmaps plus `QPixmapCache`.
+The retained cache must give the custom theme-icon path the same stability that
+Dolphin gets from widget-local pixmaps plus `QPixmapCache`: exact semantic keys
+remain size/scale aware, while an already loaded resource path may be reused
+when zoom creates a new size key for the same file.
 
 ## Cache Key
 
@@ -90,16 +92,16 @@ struct RetainedThemeIconImage {
 ```
 
 The exact GPUI image type may differ. The important rule is that the custom
-painter can reuse the last loaded same-key real image while a refresh or decode
-is pending.
+painter can reuse the last loaded same-key or same-resource real image while a
+refresh or decode is pending.
 
 Status values:
 
 - `Loaded`: draw the retained image.
-- `Pending`: draw retained same-key image if present, otherwise draw neutral
-  fallback.
-- `Failed`: draw retained same-key image if present, otherwise draw neutral
-  fallback.
+- `Pending`: draw retained same-key or same-resource image if present,
+  otherwise draw neutral fallback.
+- `Failed`: draw retained same-key or same-resource image if present, otherwise
+  draw neutral fallback.
 - `StalePath`: keep drawing retained same-key image while a new resolved path is
   queued.
 
@@ -124,8 +126,8 @@ Worker orchestration remains visible-first:
    size.
 3. Theme path resolve remains background/batched and visible-first.
 4. Image decode/load remains GPUI image-cache backed.
-5. Retained image cache records loaded same-key images and exposes them to the
-   custom painter.
+5. Retained image cache records loaded same-key and same-resource images and
+   exposes them to the custom painter.
 
 The prepaint path must not scan the icon theme, read SVG/PNG files directly, or
 decode image data synchronously.
@@ -205,8 +207,9 @@ Hybrid readiness handoff foundation from 2026-06-18:
   renderer path so renderer-policy stats, item shells, and the image layer all
   use the same decision input.
 - Hybrid is now the default. Visible MIME/theme icons stay on GPUI `img()` until
-  the exact current `(iconName, icon_size_px, scale)` key is ready; ready keys
-  may hand off to the custom image painter.
+  the exact current `(iconName, icon_size_px, scale)` key or the resolved
+  resource path is ready; ready keys/resources may hand off to the custom image
+  painter.
 - `FIKA_HYBRID_THEME_ICONS=0` disables hybrid handoff, and
   `FIKA_GPUI_THEME_ICONS=1` forces the old GPUI baseline for paired evidence.
 
@@ -229,6 +232,22 @@ Hybrid `/etc` smoke evidence from 2026-06-18:
   promotion. The run still shows a visible-item `icon_sync` spike around 24ms
   when scrolling into new `/etc` entries, and the mixed user-directory evidence
   is still missing.
+
+Path-ready handoff update from 2026-06-19:
+
+- `ThemeIconImageReadiness` now records both ready size/scale-aware semantic
+  keys and ready `Resource::Path` values.
+- `RetainedThemeIconImageCache` indexes loaded images by resolved path as well
+  as by `ThemeIconImageKey`. If zoom creates a new size key for the same loaded
+  path, the custom painter treats it as retained reuse instead of a new
+  first-ready decode.
+- Evidence: `/tmp/fika-path-ready-hybrid-downloads.log` passed
+  `--gate-hybrid-default-promotion` against
+  `/tmp/fika-path-ready-gpui-downloads.log` with `theme_placeholder=0` and
+  visible `theme_decoded=0`. `/tmp/fika-path-ready-hybrid-etc-r2.log` passed
+  the handoff portion and removed visible decode churn (`theme_decoded=0`), but
+  full default promotion still failed on `/etc` icon-sync/content-change
+  variance outside image handoff.
 
 Paired hybrid evidence from 2026-06-19:
 

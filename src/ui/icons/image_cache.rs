@@ -43,7 +43,9 @@ impl ThemeIconImageKey {
 #[derive(Clone, Debug)]
 pub(crate) struct ThemeIconImageReadiness {
     ready: Arc<HashSet<ThemeIconImageKey>>,
+    ready_paths: Arc<HashSet<PathBuf>>,
     order: VecDeque<ThemeIconImageKey>,
+    path_order: VecDeque<PathBuf>,
     max_entries: usize,
 }
 
@@ -51,7 +53,9 @@ impl Default for ThemeIconImageReadiness {
     fn default() -> Self {
         Self {
             ready: Arc::new(HashSet::new()),
+            ready_paths: Arc::new(HashSet::new()),
             order: VecDeque::new(),
+            path_order: VecDeque::new(),
             max_entries: DEFAULT_THEME_ICON_READINESS_LIMIT,
         }
     }
@@ -61,21 +65,56 @@ impl ThemeIconImageReadiness {
     pub(crate) fn snapshot(&self) -> ThemeIconImageReadinessSnapshot {
         ThemeIconImageReadinessSnapshot {
             ready: self.ready.clone(),
+            ready_paths: self.ready_paths.clone(),
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn mark_ready(&mut self, key: ThemeIconImageKey) -> bool {
+        self.mark_ready_for_path(key, None)
+    }
+
+    pub(crate) fn mark_ready_path(&mut self, key: ThemeIconImageKey, path: Arc<Path>) -> bool {
+        self.mark_ready_for_path(key, Some(path.as_ref()))
+    }
+
+    fn mark_ready_for_path(&mut self, key: ThemeIconImageKey, path: Option<&Path>) -> bool {
+        let mut changed = false;
         if self.ready.contains(&key) {
-            return false;
+            if let Some(path) = path {
+                changed |= self.mark_path_ready(path);
+            }
+            return changed;
         }
 
         Arc::make_mut(&mut self.ready).insert(key.clone());
         self.order.push_back(key);
+        changed = true;
+        if let Some(path) = path {
+            changed |= self.mark_path_ready(path);
+        }
         while self.ready.len() > self.max_entries {
             let Some(evicted) = self.order.pop_front() else {
                 break;
             };
             Arc::make_mut(&mut self.ready).remove(&evicted);
+        }
+        changed
+    }
+
+    fn mark_path_ready(&mut self, path: &Path) -> bool {
+        let path = path.to_path_buf();
+        if self.ready_paths.contains(&path) {
+            return false;
+        }
+
+        Arc::make_mut(&mut self.ready_paths).insert(path.clone());
+        self.path_order.push_back(path);
+        while self.ready_paths.len() > self.max_entries {
+            let Some(evicted) = self.path_order.pop_front() else {
+                break;
+            };
+            Arc::make_mut(&mut self.ready_paths).remove(&evicted);
         }
         true
     }
@@ -92,11 +131,16 @@ impl ThemeIconImageReadiness {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ThemeIconImageReadinessSnapshot {
     ready: Arc<HashSet<ThemeIconImageKey>>,
+    ready_paths: Arc<HashSet<PathBuf>>,
 }
 
 impl ThemeIconImageReadinessSnapshot {
     pub(crate) fn is_ready(&self, key: &ThemeIconImageKey) -> bool {
         self.ready.contains(key)
+    }
+
+    pub(crate) fn is_path_ready(&self, path: &Path) -> bool {
+        self.ready_paths.contains(path)
     }
 }
 
@@ -155,6 +199,7 @@ pub(crate) enum RetainedThemeIconImageLoadOutcome {
 #[derive(Clone, Debug)]
 pub(crate) struct RetainedThemeIconImageCache<T> {
     entries: HashMap<ThemeIconImageKey, RetainedThemeIconImage<T>>,
+    images_by_path: HashMap<PathBuf, T>,
     load_generation: u64,
 }
 
@@ -162,6 +207,7 @@ impl<T> Default for RetainedThemeIconImageCache<T> {
     fn default() -> Self {
         Self {
             entries: HashMap::new(),
+            images_by_path: HashMap::new(),
             load_generation: 0,
         }
     }
@@ -175,14 +221,18 @@ impl<T: Clone> RetainedThemeIconImageCache<T> {
         image: T,
     ) -> RetainedThemeIconImageLoad<T> {
         self.load_generation += 1;
+        let resolved_path_buf = resolved_path.as_ref().to_path_buf();
         let first_ready = self
             .entries
             .get(&key)
             .and_then(|entry| entry.image.as_ref())
-            .is_none();
+            .is_none()
+            && !self.images_by_path.contains_key(&resolved_path_buf);
+        self.images_by_path
+            .insert(resolved_path_buf.clone(), image.clone());
         let entry = RetainedThemeIconImage {
             key: key.clone(),
-            resolved_path: Some(resolved_path.as_ref().to_path_buf()),
+            resolved_path: Some(resolved_path_buf),
             image: Some(image.clone()),
             load_generation: self.load_generation,
             status: ThemeIconImageStatus::Loaded,
@@ -223,13 +273,14 @@ impl<T: Clone> RetainedThemeIconImageCache<T> {
     ) -> RetainedThemeIconImageLoad<T> {
         self.load_generation += 1;
         let resolved_path_buf = resolved_path.as_ref().to_path_buf();
+        let path_image = self.images_by_path.get(&resolved_path_buf).cloned();
         let entry = self
             .entries
             .entry(key.clone())
             .or_insert_with(|| RetainedThemeIconImage {
                 key,
                 resolved_path: Some(resolved_path_buf.clone()),
-                image: None,
+                image: path_image.clone(),
                 load_generation: self.load_generation,
                 status: requested_status,
             });
@@ -247,6 +298,9 @@ impl<T: Clone> RetainedThemeIconImageCache<T> {
         entry.load_generation = self.load_generation;
         entry.status = status;
 
+        if entry.image.is_none() {
+            entry.image = path_image;
+        }
         let image = entry.image.clone();
         let outcome = if image.is_some() {
             RetainedThemeIconImageLoadOutcome::Retained { status }
@@ -329,6 +383,30 @@ mod tests {
     }
 
     #[test]
+    fn cache_reuses_loaded_same_path_image_for_new_size_key() {
+        let key_48 = ThemeIconImageKey::new(Arc::from("text-x-generic"), 48, 1.0);
+        let key_64 = ThemeIconImageKey::new(Arc::from("text-x-generic"), 64, 1.0);
+        let path: Arc<Path> = Arc::from(Path::new("/theme/scalable/text-x-generic.svg"));
+        let mut cache = RetainedThemeIconImageCache::default();
+
+        cache.record_loaded(key_48, path.clone(), "image-scalable");
+        let pending_64 = cache.record_pending(key_64.clone(), path.clone());
+        let loaded_64 = cache.record_loaded(key_64, path, "image-scalable");
+
+        assert_eq!(
+            pending_64.outcome,
+            RetainedThemeIconImageLoadOutcome::Retained {
+                status: ThemeIconImageStatus::Pending
+            }
+        );
+        assert_eq!(pending_64.image, Some("image-scalable"));
+        assert_eq!(
+            loaded_64.outcome,
+            RetainedThemeIconImageLoadOutcome::Loaded { first_ready: false }
+        );
+    }
+
+    #[test]
     fn cache_reuses_same_key_image_during_stale_path_refresh() {
         let key = ThemeIconImageKey::new(Arc::from("text-x-generic"), 48, 1.0);
         let mut cache = RetainedThemeIconImageCache::default();
@@ -366,6 +444,24 @@ mod tests {
         let snapshot = readiness.snapshot();
         assert!(!snapshot.is_ready(&key_48));
         assert!(snapshot.is_ready(&key_64));
+    }
+
+    #[test]
+    fn readiness_snapshot_tracks_ready_resource_paths() {
+        let key_48 = ThemeIconImageKey::new(Arc::from("text-x-generic"), 48, 1.0);
+        let key_64 = ThemeIconImageKey::new(Arc::from("image-png"), 48, 1.0);
+        let path_48: Arc<Path> = Arc::from(Path::new("/theme/48/text-x-generic.svg"));
+        let path_64: Arc<Path> = Arc::from(Path::new("/theme/48/image-png.svg"));
+        let mut readiness = ThemeIconImageReadiness::with_max_entries(1);
+
+        assert!(readiness.mark_ready_path(key_48.clone(), path_48.clone()));
+        assert!(readiness.snapshot().is_path_ready(path_48.as_ref()));
+        assert!(!readiness.mark_ready_path(key_48, path_48.clone()));
+
+        assert!(readiness.mark_ready_path(key_64, path_64.clone()));
+        let snapshot = readiness.snapshot();
+        assert!(!snapshot.is_path_ready(path_48.as_ref()));
+        assert!(snapshot.is_path_ready(path_64.as_ref()));
     }
 
     fn icon_snapshot(icon_name: &str, path: &str) -> FileIconSnapshot {

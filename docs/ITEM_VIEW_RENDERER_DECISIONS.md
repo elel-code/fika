@@ -593,6 +593,33 @@ Decision: Details custom paint changes must use this gate when they touch row,
 header, text shaping, or retained interaction behavior. The retained renderer
 evidence runner captures it as `item-etc-details-zoom-scroll`.
 
+## 2026-06-19 Pane Icon Path-Ready Handoff
+
+The pane MIME/theme icon handoff still had one exact-key artifact: zoom changes
+produce a new size/scale `ThemeIconImageKey`, so a visible icon whose
+`Resource::Path` was already loaded could briefly return to GPUI fallback or be
+counted as a new first-ready custom decode. That is not Dolphin-like; Dolphin's
+pixmap path is keyed by semantic icon data while loaded resources remain
+available to the widget when style size changes.
+
+Implementation: `ThemeIconImageReadiness` now tracks both ready semantic keys
+and ready resource paths. The visible-cohort handoff accepts a theme icon when
+either its exact key or its resource path is ready. `RetainedThemeIconImageCache`
+also indexes loaded images by path, so a new size key with the same path is
+treated as retained reuse rather than a first-ready decode.
+
+Decision: keep the cohort handoff, but allow same-resource custom paint across
+zoom. This applies the Places full-image lesson to pane images without forcing
+unknown paths into custom placeholders.
+
+Evidence: `/tmp/fika-path-ready-hybrid-downloads.log` passed
+`scripts/compare-item-image-renderers.sh --gate-hybrid-default-promotion`
+against `/tmp/fika-path-ready-gpui-downloads.log` with `theme_placeholder=0`
+and visible `theme_decoded=0`. `/tmp/fika-path-ready-hybrid-etc-r2.log` passed
+the handoff portion and removed visible decode churn (`theme_decoded=0`), while
+full default promotion still failed on `/etc` icon-sync/content-change variance
+outside the image handoff path.
+
 ## Next Renderer Decisions
 
 1. Keep the remaining drag-start shells until the GPUI API boundary changes.

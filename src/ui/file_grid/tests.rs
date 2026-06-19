@@ -346,6 +346,31 @@ fn theme_icon_readiness_input_is_size_and_scale_aware() {
 }
 
 #[test]
+fn theme_icon_readiness_input_reuses_ready_resource_path_across_zoom() {
+    let mut cache = ItemPaintSlotCache::default();
+    let mut theme_icon_item =
+        test_visible_item(3, ItemId(9), "app.desktop", test_item_layout(192.0), false);
+    let icon_path: Arc<Path> = Arc::from(Path::new("/tmp/app.svg"));
+    theme_icon_item.icon.path = Some(icon_path.clone());
+
+    let projection = cache.project_file_grid_snapshot(icons_snapshot(vec![theme_icon_item]), None);
+    let FileGridRenderSnapshot::Icons { items, .. } = projection.snapshot else {
+        panic!("expected icons snapshot");
+    };
+    let item = items.first().expect("item should be projected");
+    let mut readiness = ThemeIconImageReadiness::default();
+    readiness.mark_ready_path(
+        ThemeIconImageKey::new(item.content.icon.icon_name.clone(), 48, 1.0),
+        icon_path,
+    );
+
+    assert!(
+        item_renderer_policy_input_for_theme_readiness(item, &readiness.snapshot(), 2.0)
+            .theme_icon_ready
+    );
+}
+
+#[test]
 fn theme_icon_handoff_waits_for_visible_cohort() {
     let mut cache = ItemPaintSlotCache::default();
     let mut ready_item =
@@ -395,6 +420,52 @@ fn theme_icon_handoff_waits_for_visible_cohort() {
     );
     assert!(
         item_renderer_policy_input_for_theme_handoff(&items[1], &snapshot, 1.0, true)
+            .theme_icon_ready
+    );
+}
+
+#[test]
+fn theme_icon_handoff_accepts_ready_resource_paths_for_visible_cohort() {
+    let mut cache = ItemPaintSlotCache::default();
+    let mut first_item =
+        test_visible_item(1, ItemId(9), "first.desktop", test_item_layout(0.0), false);
+    let first_path: Arc<Path> = Arc::from(Path::new("/tmp/first.svg"));
+    first_item.icon.path = Some(first_path.clone());
+    first_item.icon.icon_name = Arc::from("first-icon");
+    let mut second_item = test_visible_item(
+        2,
+        ItemId(10),
+        "second.desktop",
+        test_item_layout(96.0),
+        false,
+    );
+    let second_path: Arc<Path> = Arc::from(Path::new("/tmp/second.svg"));
+    second_item.icon.path = Some(second_path.clone());
+    second_item.icon.icon_name = Arc::from("second-icon");
+
+    let projection =
+        cache.project_file_grid_snapshot(icons_snapshot(vec![first_item, second_item]), None);
+    let FileGridRenderSnapshot::Icons { items, .. } = projection.snapshot else {
+        panic!("expected icons snapshot");
+    };
+    let mut readiness = ThemeIconImageReadiness::default();
+    readiness.mark_ready_path(
+        ThemeIconImageKey::new(items[0].content.icon.icon_name.clone(), 48, 1.0),
+        first_path,
+    );
+    readiness.mark_ready_path(
+        ThemeIconImageKey::new(items[1].content.icon.icon_name.clone(), 48, 1.0),
+        second_path,
+    );
+    let snapshot = readiness.snapshot();
+
+    assert!(visible_theme_icon_handoff_ready(&items, &snapshot, 2.0));
+    assert!(
+        item_renderer_policy_input_for_theme_handoff(&items[0], &snapshot, 2.0, true)
+            .theme_icon_ready
+    );
+    assert!(
+        item_renderer_policy_input_for_theme_handoff(&items[1], &snapshot, 2.0, true)
             .theme_icon_ready
     );
 }

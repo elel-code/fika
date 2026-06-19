@@ -5,8 +5,8 @@
 
 本计划覆盖 Compact/Icons 和 Details 中的普通 MIME/theme 图标，不替换缩略图处理。
 缩略图已经使用 thumbnail-path identity 和 custom image layer；普通 theme icon
-现在默认使用 hybrid renderer，在 retained same-key image ready 前继续用 GPUI `img()`
-作为 fallback。
+现在默认使用 hybrid renderer，在 retained same-key 或 same-resource image ready 前继续用
+GPUI `img()` 作为 fallback。
 
 本计划的目的，是定义并守住这个 hybrid 默认所需的 cache 边界，同时保留
 `FIKA_CUSTOM_THEME_ICONS=1` 作为 full custom 压力路径，`FIKA_GPUI_THEME_ICONS=1`
@@ -30,8 +30,8 @@ marker placeholder。
 
 当前已接受的 renderer policy：
 
-- MIME/theme icon 默认使用 hybrid：尚未 ready 的 key 走 GPUI `img()`，ready 的 retained
-  image key 走 custom image layer。
+- MIME/theme icon 默认使用 hybrid：尚未 ready 的 resource 走 GPUI `img()`，ready 的
+  retained image key 或 ready resource path 走 custom image layer。
 - Thumbnail image 使用 custom item image layer 和 retained same-thumbnail image fallback。
 - `FIKA_CUSTOM_THEME_ICONS=1` 只为 A/B 证据强制 theme icon 走 custom image layer。
 - `FIKA_GPUI_THEME_ICONS=1` 强制旧 GPUI `img()` baseline。
@@ -39,8 +39,9 @@ marker placeholder。
   resolved theme path 后，zoom 会复用该稳定 path，而不是创建另一个 exact-size path
   request。Fika 不使用延迟的第二次 icon-size 或 path commit。
 
-缺失的是 retained same-theme-icon image cache，它让 custom theme-icon 路径获得
-Dolphin 从 widget-local pixmap 和 `QPixmapCache` 中得到的稳定性。
+Retained cache 必须让 custom theme-icon 路径获得 Dolphin 从 widget-local pixmap 和
+`QPixmapCache` 中得到的稳定性：exact semantic key 仍区分 size/scale，但 zoom 为同一文件
+创建新 size key 时，已加载的 resource path 可以被复用。
 
 ## Cache Key
 
@@ -82,13 +83,15 @@ struct RetainedThemeIconImage {
 ```
 
 具体 GPUI image 类型可以调整。关键规则是：refresh 或 decode pending 时，custom painter
-可以复用上一次同 key 已加载的真实图像。
+可以复用上一次同 key 或同 resource 已加载的真实图像。
 
 状态值：
 
 - `Loaded`：绘制 retained image。
-- `Pending`：如果有 retained same-key image 就绘制它，否则绘制中性 fallback。
-- `Failed`：如果有 retained same-key image 就绘制它，否则绘制中性 fallback。
+- `Pending`：如果有 retained same-key 或 same-resource image 就绘制它，否则绘制中性
+  fallback。
+- `Failed`：如果有 retained same-key 或 same-resource image 就绘制它，否则绘制中性
+  fallback。
 - `StalePath`：新 resolved path 排队期间继续绘制 retained same-key image。
 
 当前 cache 生命周期中，某个 key 一旦加载过真实图像，就不允许再退回文字 marker fallback。
@@ -108,7 +111,8 @@ Worker orchestration 保持 visible-first：
 2. `FileIconCache` 用当前 layout size 返回 cached/preliminary icon snapshot。
 3. Theme path resolve 继续后台批处理，并 visible-first。
 4. Image decode/load 继续由 GPUI image cache 支撑。
-5. Retained image cache 记录 loaded same-key image，并暴露给 custom painter。
+5. Retained image cache 记录 loaded same-key 和 same-resource image，并暴露给 custom
+   painter。
 
 Prepaint 路径不得扫描 icon theme、直接读取 SVG/PNG 文件或同步 decode image data。
 
@@ -181,8 +185,8 @@ full custom icon 路径强行通过 `--gate-default-promotion`。
 - `PaneSnapshot`/`FileGridProps` 传递轻量 readiness snapshot，因此 renderer-policy
   统计、item shell 和 image layer 使用同一份决策输入。
 - Hybrid 现在是默认路径。可见 MIME/theme icon 会继续走 GPUI `img()`，直到当前精确
-  `(iconName, icon_size_px, scale)` key ready；ready key 才允许 handoff 到 custom image
-  painter。
+  `(iconName, icon_size_px, scale)` key 或 resolved resource path ready；ready key/resource
+  才允许 handoff 到 custom image painter。
 - `FIKA_HYBRID_THEME_ICONS=0` 会关闭 hybrid handoff，`FIKA_GPUI_THEME_ICONS=1` 会强制旧
   GPUI baseline 以便采集配对证据。
 
@@ -202,6 +206,20 @@ full custom icon 路径强行通过 `--gate-default-promotion`。
 - 决策：readiness handoff 在机制上成立，并在这次 `/etc` smoke 中避免了可见
   placeholder/decode churn，但仍不是默认提升。该运行在滚动到新的 `/etc` 可见条目时仍有约
   24ms 的 visible-item `icon_sync` spike，混合用户目录证据也还没有补齐。
+
+2026-06-19 path-ready handoff 更新：
+
+- `ThemeIconImageReadiness` 现在同时记录 ready size/scale-aware semantic key 和 ready
+  `Resource::Path`。
+- `RetainedThemeIconImageCache` 除了按 `ThemeIconImageKey` 索引，也按 resolved path 索引
+  loaded image。若 zoom 为同一个 loaded path 创建新的 size key，custom painter 会把它视为
+  retained reuse，而不是新的 first-ready decode。
+- 证据：`/tmp/fika-path-ready-hybrid-downloads.log` 相对
+  `/tmp/fika-path-ready-gpui-downloads.log` 通过
+  `--gate-hybrid-default-promotion`，且 `theme_placeholder=0`、visible
+  `theme_decoded=0`。`/tmp/fika-path-ready-hybrid-etc-r2.log` 通过 handoff 部分并移除
+  visible decode churn（`theme_decoded=0`），但完整 default promotion 仍因 `/etc`
+  icon-sync/content-change 方差失败；该失败点不在 image handoff 路径。
 
 2026-06-19 成对 hybrid 证据：
 

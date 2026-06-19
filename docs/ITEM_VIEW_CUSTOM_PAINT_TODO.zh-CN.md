@@ -811,6 +811,20 @@ Places chrome 默认之后的当前执行入口是
   `--require-modes Details`、`--require-renderer-policy-modes Details` 和
   `--expect-retained-item-policy` 跑 Details gate。这把 Details 视觉所有权变成后续 pane
   painter 工作可重复的运行时证据。
+- [x] P16gaz：在 zoom handoff 中复用已 ready 的 MIME/theme icon resource path。根因：
+  pane image handoff 只按 exact-size key 判断 ready。Zoom 时，同一个已加载
+  `Resource::Path` 如果对应新的 size/scale key，仍可能短暂退回 GPUI，或在 custom
+  visible paint 中被统计为新的 first-ready decode，从而产生 Dolphin 对照中要避免的第二次
+  icon identity 调整。实现：`ThemeIconImageReadiness` 现在同时记录 ready semantic key
+  和 ready resource path；visible-cohort handoff 接受 exact key ready 或 resource path
+  ready 的可见图标。Retained theme icon cache 也按 path 建立 loaded image 索引，同一路径的
+  新 size key 会被视为 retained reuse，而不是 first-ready decode。证据：
+  `/tmp/fika-path-ready-hybrid-downloads.log` 相对
+  `/tmp/fika-path-ready-gpui-downloads.log` 通过
+  `--gate-hybrid-default-promotion`，且 `theme_placeholder=0`、visible
+  `theme_decoded=0`。`/tmp/fika-path-ready-hybrid-etc-r2.log` 通过 handoff 部分并移除
+  visible decode churn（`theme_decoded=0`），但完整 default promotion 仍因 `/etc`
+  icon-sync/content-change 方差失败；该失败点不在 image handoff 路径。
 - [ ] P16q：在每个 P16 实现切片之后，单独提交并附带相关验证：仅文档切片需要 `git diff --check`；代码切片需要 `cargo fmt`、`cargo check`、`cargo test -q`、`scripts/check-item-view-perf-analyzer.sh`、`scripts/check-places-perf-analyzer.sh` 和 `git diff --check`。
 - [x] P16r：记录运行时自测试和突破记录规则。可重复的滚动、缩放、启动图标、调整大小、模式切换和 Places 目标回退应在依赖手动计时之前通过 autosmoke 日志和分析器脚本重现。任何确认的优化突破必须记录症状、Dolphin 比较边界、根本原因、实现、保存的日志/分析器命令和未来回归守卫在拥有的设计或决策文档中。
 
@@ -818,7 +832,7 @@ Places chrome 默认之后的当前执行入口是
 
 - [~] 重命名、选择、右键菜单、条目 DnD、places DnD 和外部放置路径无行为回退：单元覆盖现在包括一个跨 Compact、Icons 和 Details 的保留行为矩阵，用于应用侧 hit testing、选择、条目菜单、重命名 draft 路由、条目拖拽源状态、外部路径归一化/放置目标菜单，以及条目/place 放置目标移交。在每次 shell 移除或绘制器扩展切片后，保持此部分直到完整的 `cargo test` 和运行时 DnD smoke 都被刷新。
 - [x] `cargo test` 保持绿色。
-- [~] 性能日志显示调整大小稳定路径对条目快照转换保持亚毫秒级，没有新的大型 `file-grid build` 回退，Compact/Icons 自定义视觉成本通过 `[fika static-item-visual]` 可见，存在图像支持的图标/缩略图时图像绘制成本通过 `[fika item-image]` 可见，条目图像源计数显示帧是否使用了解码主题图标、保留同 `iconName` 图像、首帧加载占位符或缩略图后备，聚合自定义绘制成本被汇总，详情自定义视觉/文本形状成本通过 `[fika details-visual]` 和 `[fika details-shape-cache]` 分开可见。滚动/缩放证据还应显示，在第一帧切换到初步图标后，冷主题图标工作不再出现为同步渲染转换尖峰。当前 `/etc` autosmoke 满足 Compact/Icons 缩放-滚动图标同步部分；详情和完整 DnD 运行时 smoke 仍需要桌面会话刷新。
+- [~] 性能日志显示调整大小稳定路径对条目快照转换保持亚毫秒级，没有新的大型 `file-grid build` 回退，Compact/Icons 自定义视觉成本通过 `[fika static-item-visual]` 可见，存在图像支持的图标/缩略图时图像绘制成本通过 `[fika item-image]` 可见，条目图像源计数显示帧是否使用了解码主题图标、保留同 `iconName` 图像、首帧加载占位符或缩略图后备，聚合自定义绘制成本被汇总，详情自定义视觉/文本形状成本通过 `[fika details-visual]` 和 `[fika details-shape-cache]` 分开可见。滚动/缩放证据还应显示，在第一帧切换到初步图标后，冷主题图标工作不再出现为同步渲染转换尖峰。当前 `/etc` autosmoke 满足 Compact/Icons 缩放-滚动图标同步部分，`details-zoom-scroll` 已覆盖 Details visual/header 运行时证据；完整 DnD runtime smoke 仍需要桌面会话刷新。
 - [x] 冷模式切换成本与调整大小成本分开跟踪：`[fika item-view]` 现在包括 `phase=initial|mode-switch|content-change|geometry-change|visual-change|steady`，具有单元覆盖证明模式切换不被分类为调整大小/几何更改。
 - [ ] 任何自定义绘制扩展保持 Dolphin 的 model/controller/painter 划分，并且仅当在该表面上性能中性或优于 GPUI 内置路径时才保留。
 - [ ] 如果自定义绘制表面在性能或行为完整性上输给 GPUI 内置元素，保持 Dolphin 对齐的保留 model，但将该表面保留在 GPUI 渲染器上，直到迁移可以被收窄或被证明合理。
