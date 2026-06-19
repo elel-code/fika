@@ -2046,6 +2046,20 @@ tracks.
   `theme_placeholder=0`, and visible `theme_decoded=0`;
   `/tmp/fika-icon-batch128-default-downloads-r2.log` passed the same gate
   against `/tmp/fika-icon-batch128-gpui-downloads-r2.log`.
+- [x] P16gav: Move Places section heading labels into the default full visual
+  layer. Root cause: after Places rows and row icons became full custom by
+  default, group headings still used GPUI text children, so the default full
+  policy could not honestly report complete Places text visual ownership.
+  Implementation: `places_row_visual_layer` now projects section headings from
+  the same snapshot as rows, prepaints visible heading labels through
+  `PlacesRowTextShapeCache`, and paints them in the sidebar visual canvas;
+  `group_heading` keeps the section targeting/DnD shell but omits the label
+  child when custom visual text is active. Evidence:
+  `/tmp/fika-places-section-full-targets.log` and
+  `/tmp/fika-places-section-full-overflow.log` passed
+  `--expect-custom-row-full-policy` with `section_gpui=0`; targets warm row
+  paint was `247us`, and overflow kept visible event hitboxes clipped to `32`
+  with warm row paint `785us`.
 
 ## Acceptance Gates
 

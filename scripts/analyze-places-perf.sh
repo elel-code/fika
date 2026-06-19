@@ -57,7 +57,7 @@ Options:
       Fail unless [fika places-renderer-policy] matches the opt-in
       custom text policy: row_visual_layer/icon_gpui/drag_shell equal
       rows, row_gpui=0, text_gpui=0, retained_interaction matching the
-      selected event policy, section_gpui=sections, scrollbar_canvas=1, and
+      selected event policy, section_gpui=0, scrollbar_canvas=1, and
       visual_kind=text. Also requires aggregated [fika places-row-visual] logs
       whose rows count matches the policy rows and row text shape-cache logs
       for the opt-in visual path.
@@ -66,7 +66,7 @@ Options:
       Fail unless [fika places-renderer-policy] matches the opt-in
       full custom row visual policy: row_visual_layer/drag_shell equal rows,
       row_gpui=0, text_gpui=0, icon_gpui=0, retained_interaction matching the
-      selected event policy, section_gpui=sections, scrollbar_canvas=1, and
+      selected event policy, section_gpui=0, scrollbar_canvas=1, and
       visual_kind=full. Also requires aggregated [fika places-row-visual] logs
       whose rows count matches the policy rows and row text shape-cache logs.
 
@@ -535,6 +535,7 @@ function renderer_retained_interaction_for_policy(event_policy, rows, sections) 
     }
     expected_retained_interaction = renderer_retained_interaction_for_policy(event_policy, rows, last_sidebar_sections)
     max_update("policy_rows", rows)
+    max_update("policy_sections", last_sidebar_sections)
     max_update("policy_row_gpui", row_gpui)
     max_update("policy_row_visual_layer", row_visual_layer)
     max_update("policy_text_gpui", text_gpui)
@@ -566,7 +567,7 @@ function renderer_retained_interaction_for_policy(event_policy, rows, sections) 
     if (expect_custom_row_visual_policy == "true") {
         if (row_gpui != 0 || text_gpui != 0 || icon_gpui != rows || drag_shell != rows ||
             row_visual_layer != rows || retained_interaction != expected_retained_interaction ||
-            section_gpui != last_sidebar_sections || scrollbar_canvas != 1 ||
+            section_gpui != 0 || scrollbar_canvas != 1 ||
             visual_kind != "text") {
             custom_policy_invalid = 1
         }
@@ -574,7 +575,7 @@ function renderer_retained_interaction_for_policy(event_policy, rows, sections) 
     if (expect_custom_row_full_policy == "true") {
         if (row_gpui != 0 || text_gpui != 0 || icon_gpui != 0 || drag_shell != rows ||
             row_visual_layer != rows || retained_interaction != expected_retained_interaction ||
-            section_gpui != last_sidebar_sections || scrollbar_canvas != 1 ||
+            section_gpui != 0 || scrollbar_canvas != 1 ||
             visual_kind != "full") {
             custom_full_policy_invalid = 1
         }
@@ -582,13 +583,13 @@ function renderer_retained_interaction_for_policy(event_policy, rows, sections) 
     if (expect_custom_row_handoff_policy == "true") {
         handoff_policy_shape_valid = row_gpui == 0 && row_visual_layer == rows &&
             drag_shell == rows && retained_interaction == expected_retained_interaction &&
-            section_gpui == last_sidebar_sections && scrollbar_canvas == 1 &&
-            visual_kind == "full"
+            scrollbar_canvas == 1 && visual_kind == "full"
         if (!handoff_policy_shape_valid) {
             custom_handoff_policy_invalid = 1
-        } else if (text_gpui == rows && icon_gpui == rows) {
+        } else if (text_gpui == rows && icon_gpui == rows &&
+            section_gpui == last_sidebar_sections) {
             handoff_policy_fallback_seen = 1
-        } else if (text_gpui == 0 && icon_gpui == 0) {
+        } else if (text_gpui == 0 && icon_gpui == 0 && section_gpui == 0) {
             handoff_policy_ready_seen = 1
         } else {
             custom_handoff_policy_invalid = 1
@@ -604,15 +605,18 @@ function renderer_retained_interaction_for_policy(event_policy, rows, sections) 
     }
     if (expect_retained_event_policy == "true") {
         row_visual_policy_valid = (row_gpui == rows && row_visual_layer == 0 &&
-            text_gpui == rows && visual_kind == "gpui") ||
+            text_gpui == rows && section_gpui == last_sidebar_sections &&
+            visual_kind == "gpui") ||
             (row_gpui == 0 && row_visual_layer == rows &&
-                ((text_gpui == rows && visual_kind == "chrome") ||
-                 (text_gpui == 0 && icon_gpui == rows && visual_kind == "text") ||
-                 (text_gpui == 0 && icon_gpui == 0 && visual_kind == "full")))
+                ((text_gpui == rows && section_gpui == last_sidebar_sections &&
+                    visual_kind == "chrome") ||
+                 (text_gpui == 0 && icon_gpui == rows && section_gpui == 0 &&
+                    visual_kind == "text") ||
+                 (text_gpui == 0 && icon_gpui == 0 && section_gpui == 0 &&
+                    visual_kind == "full")))
         if (!row_visual_policy_valid ||
             retained_interaction != rows + last_sidebar_sections ||
-            drag_shell != rows || section_gpui != last_sidebar_sections ||
-            scrollbar_canvas != 1) {
+            drag_shell != rows || scrollbar_canvas != 1) {
             retained_event_renderer_policy_invalid = 1
         }
     }
@@ -1248,7 +1252,7 @@ END {
             fail("Places interaction geometry does not match retained row/section projection counts")
         }
         if (max_values["interaction_geometry_rows"] != max_values["policy_rows"] ||
-            max_values["interaction_geometry_sections"] != max_values["policy_section_gpui"]) {
+            max_values["interaction_geometry_sections"] != max_values["policy_sections"]) {
             fail("Places interaction geometry count does not match renderer policy")
         }
     }
@@ -1338,9 +1342,10 @@ END {
     if (policy_kind_other_seen) {
         policy_kinds = append_csv(policy_kinds, "other")
     }
-    printf("places_renderer_policy_frames=%d max_rows=%d max_row_gpui=%d max_row_visual_layer=%d max_icon_gpui=%d max_retained_interaction=%d max_drag_shell=%d max_section_gpui=%d max_scrollbar_canvas=%d max_text_gpui=%d visual_kinds=%s max_retained_probe_hitboxes=%d\n",
+    printf("places_renderer_policy_frames=%d max_rows=%d max_sections=%d max_row_gpui=%d max_row_visual_layer=%d max_icon_gpui=%d max_retained_interaction=%d max_drag_shell=%d max_section_gpui=%d max_scrollbar_canvas=%d max_text_gpui=%d visual_kinds=%s max_retained_probe_hitboxes=%d\n",
         policy_frames,
         max_values["policy_rows"],
+        max_values["policy_sections"],
         max_values["policy_row_gpui"],
         max_values["policy_row_visual_layer"],
         max_values["policy_icon_gpui"],

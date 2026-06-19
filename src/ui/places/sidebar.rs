@@ -390,6 +390,7 @@ pub(crate) fn places_sidebar(
                     place.group,
                     place.index,
                     custom_row_visuals,
+                    paint_row_text,
                     !event_delivery_policy.retained_targeting_enabled(),
                     !event_delivery_policy.retained_dnd_enabled(),
                     cx,
@@ -421,6 +422,7 @@ pub(crate) fn places_sidebar(
             row_visual_policy,
             row_visual_paints_text: paint_row_text,
             row_visual_paints_icon: paint_row_icon,
+            section_visual_paints_text: paint_row_text,
             event_delivery_policy,
             scrollbar_canvas_count: 1,
         });

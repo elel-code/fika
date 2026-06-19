@@ -28,6 +28,8 @@ const ICON_SIZE: f32 = 22.0;
 const ICON_TEXT_GAP: f32 = 8.0;
 const TRASH_DOT_SIZE: f32 = 7.0;
 const INSERT_INDICATOR_HEIGHT: f32 = 2.0;
+const SECTION_TEXT_X: f32 = 8.0;
+const SECTION_LINE_HEIGHT: f32 = 16.0;
 
 pub(super) fn places_row_visual_layer(
     places: Arc<[PlaceSnapshot]>,
@@ -37,14 +39,16 @@ pub(super) fn places_row_visual_layer(
     warm_text_shapes: bool,
     paint_icon: bool,
 ) -> impl IntoElement {
-    let (rows, height) = place_row_visual_layer_rows_and_height(places.as_ref());
+    let (rows, sections, height) = place_row_visual_layer_rows_and_height(places.as_ref());
     let rows = Arc::new(rows);
+    let sections = Arc::new(sections);
     let total_rows = rows.len();
     let height = height.max(1.0);
     canvas(
         move |bounds, window, cx| {
             places_row_visual_prepaint(
                 rows.as_ref(),
+                sections.as_ref(),
                 total_rows,
                 app.clone(),
                 icon_cache.clone(),
@@ -58,6 +62,9 @@ pub(super) fn places_row_visual_layer(
         },
         move |bounds, paint_state, window, cx| {
             let paint_started = Instant::now();
+            for section in &paint_state.sections {
+                paint_place_section_visual(bounds, section, window, cx);
+            }
             for row in &paint_state.rows {
                 paint_place_row_visual(bounds, row, window, cx);
             }
@@ -95,6 +102,25 @@ struct PlaceRowVisualState {
     insert_after: bool,
     trash_place: bool,
     trash_has_items: bool,
+}
+
+#[derive(Clone)]
+struct PlaceSectionVisualState {
+    y: f32,
+    label: SharedString,
+}
+
+impl PlaceSectionVisualState {
+    fn new(label: &'static str, y: f32) -> Self {
+        Self {
+            y,
+            label: SharedString::from(label),
+        }
+    }
+
+    fn intersects_y_range(&self, top: f32, bottom: f32) -> bool {
+        self.y < bottom && self.y + PLACE_SECTION_HEADING_HEIGHT > top
+    }
 }
 
 impl PlaceRowVisualState {
@@ -142,6 +168,7 @@ impl PlaceRowIconVisualState {
 
 struct PlaceRowVisualLayerPaintState {
     rows: Vec<PlaceRowVisualPaintState>,
+    sections: Vec<PlaceSectionVisualPaintState>,
     total_rows: usize,
     prepaint_elapsed: std::time::Duration,
     shape_cache_stats: PlacesRowTextShapeCacheStats,
@@ -153,6 +180,12 @@ struct PlaceRowVisualPaintState {
     line_height: Pixels,
     paint_icon: bool,
     icon_image: Option<Arc<RenderImage>>,
+}
+
+struct PlaceSectionVisualPaintState {
+    input: PlaceSectionVisualState,
+    line: Option<Arc<gpui::ShapedLine>>,
+    line_height: Pixels,
 }
 
 #[derive(Default)]
@@ -242,6 +275,7 @@ impl PlacesRowTextShapeCache {
 
 fn places_row_visual_prepaint(
     rows: &[PlaceRowVisualState],
+    sections: &[PlaceSectionVisualState],
     total_rows: usize,
     app: WeakEntity<FikaApp>,
     icon_cache: Option<Entity<PlacesIconImageCache>>,
@@ -253,6 +287,13 @@ fn places_row_visual_prepaint(
     cx: &mut App,
 ) -> PlaceRowVisualLayerPaintState {
     let started = Instant::now();
+    let sections =
+        visible_place_section_visuals(sections, layer_bounds, window.content_mask().bounds)
+            .into_iter()
+            .map(|input| {
+                place_section_visual_prepaint(input, paint_text, warm_text_shapes, &app, window, cx)
+            })
+            .collect();
     let rows = visible_place_row_visuals(rows, layer_bounds, window.content_mask().bounds)
         .into_iter()
         .map(|input| {
@@ -274,10 +315,32 @@ fn places_row_visual_prepaint(
         .unwrap_or_default();
     PlaceRowVisualLayerPaintState {
         rows,
+        sections,
         total_rows,
         prepaint_elapsed: started.elapsed(),
         shape_cache_stats,
     }
+}
+
+fn visible_place_section_visuals(
+    sections: &[PlaceSectionVisualState],
+    layer_bounds: Bounds<Pixels>,
+    content_mask_bounds: Bounds<Pixels>,
+) -> Vec<PlaceSectionVisualState> {
+    let visible_bounds = layer_bounds.intersect(&content_mask_bounds);
+    if visible_bounds.is_empty() {
+        return Vec::new();
+    }
+
+    let visible_top = (visible_bounds.origin.y - layer_bounds.origin.y)
+        .as_f32()
+        .max(0.0);
+    let visible_bottom = visible_top + visible_bounds.size.height.as_f32().max(0.0);
+    sections
+        .iter()
+        .filter(|section| section.intersects_y_range(visible_top, visible_bottom))
+        .cloned()
+        .collect()
 }
 
 fn visible_place_row_visuals(
@@ -298,6 +361,36 @@ fn visible_place_row_visuals(
         .filter(|row| row.intersects_y_range(visible_top, visible_bottom))
         .cloned()
         .collect()
+}
+
+fn place_section_visual_prepaint(
+    input: PlaceSectionVisualState,
+    paint_text: bool,
+    warm_text_shapes: bool,
+    app: &WeakEntity<FikaApp>,
+    window: &mut Window,
+    cx: &mut App,
+) -> PlaceSectionVisualPaintState {
+    let line = (paint_text || warm_text_shapes).then(|| {
+        let text_style = window.text_style();
+        let font_size = px(window.rem_size().as_f32() * 0.75);
+        let key = PlacesRowTextShapeCacheKey {
+            label: input.label.clone(),
+            font: text_style.font(),
+            font_size_bits: font_size.as_f32().to_bits(),
+            text_color: 0x6b7280,
+        };
+        app.update(cx, |this, _cx| {
+            this.place_row_text_shape_cache.shape_for(&key, window)
+        })
+        .ok()
+        .unwrap_or_else(|| Arc::new(shape_place_row_visual_text(&key, window)))
+    });
+    PlaceSectionVisualPaintState {
+        input,
+        line: paint_text.then_some(line).flatten(),
+        line_height: px(SECTION_LINE_HEIGHT),
+    }
 }
 
 fn place_row_visual_prepaint(
@@ -368,6 +461,35 @@ fn shape_place_row_visual_text(
         &[run],
         None,
     )
+}
+
+fn paint_place_section_visual(
+    layer_bounds: Bounds<Pixels>,
+    state: &PlaceSectionVisualPaintState,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let Some(line) = &state.line else {
+        return;
+    };
+    let section_bounds = Bounds::new(
+        point(
+            layer_bounds.origin.x,
+            layer_bounds.origin.y + px(state.input.y),
+        ),
+        size(layer_bounds.size.width, px(PLACE_SECTION_HEADING_HEIGHT)),
+    );
+    let text_y = section_bounds.origin.y
+        + ((section_bounds.size.height - state.line_height).max(px(0.0)) / 2.0).floor();
+    line.paint(
+        point(section_bounds.origin.x + px(SECTION_TEXT_X), text_y),
+        state.line_height,
+        TextAlign::Left,
+        Some((section_bounds.size.width - px(SECTION_TEXT_X * 2.0)).max(px(1.0))),
+        window,
+        cx,
+    )
+    .ok();
 }
 
 fn paint_place_row_visual(
@@ -569,21 +691,23 @@ fn paint_place_trash_icon(bounds: Bounds<Pixels>, fg: u32, window: &mut Window) 
 
 fn place_row_visual_layer_rows_and_height(
     places: &[PlaceSnapshot],
-) -> (Vec<PlaceRowVisualState>, f32) {
+) -> (Vec<PlaceRowVisualState>, Vec<PlaceSectionVisualState>, f32) {
     let mut rows = Vec::with_capacity(places.len());
+    let mut sections = Vec::new();
     let mut current_group = None;
     let mut y = 0.0;
     for place in places {
         if current_group != Some(place.group) {
             current_group = Some(place.group);
             if !place.group.is_empty() {
+                sections.push(PlaceSectionVisualState::new(place.group, y));
                 y += PLACE_SECTION_HEADING_HEIGHT;
             }
         }
         rows.push(PlaceRowVisualState::from_place(place, y));
         y += PLACE_ROW_HEIGHT;
     }
-    (rows, y)
+    (rows, sections, y)
 }
 
 #[cfg(test)]
@@ -592,8 +716,13 @@ fn place_row_visual_layer_rows(places: &[PlaceSnapshot]) -> Vec<PlaceRowVisualSt
 }
 
 #[cfg(test)]
-fn places_row_visual_content_height(places: &[PlaceSnapshot]) -> f32 {
+fn place_row_visual_layer_sections(places: &[PlaceSnapshot]) -> Vec<PlaceSectionVisualState> {
     place_row_visual_layer_rows_and_height(places).1
+}
+
+#[cfg(test)]
+fn places_row_visual_content_height(places: &[PlaceSnapshot]) -> f32 {
+    place_row_visual_layer_rows_and_height(places).2
 }
 
 #[cfg(test)]
@@ -632,11 +761,16 @@ mod tests {
         let mut second = test_place();
         second.group = "Devices";
         second.label = "Root".to_string();
-        let rows = place_row_visual_layer_rows(&[first, second]);
+        let places = [first, second];
+        let rows = place_row_visual_layer_rows(&places);
+        let sections = place_row_visual_layer_sections(&places);
 
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].y, 0.0);
         assert_eq!(rows[1].y, PLACE_ROW_HEIGHT + PLACE_SECTION_HEADING_HEIGHT);
+        assert_eq!(sections.len(), 1);
+        assert_eq!(sections[0].label.as_ref(), "Devices");
+        assert_eq!(sections[0].y, PLACE_ROW_HEIGHT);
     }
 
     #[test]

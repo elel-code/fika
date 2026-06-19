@@ -45,7 +45,7 @@ custom renderer can replace a GPUI surface.
 | Details row backgrounds, icons, and text cells | custom content-level painter | Details paint slots, image cache, text shape cache, background file-icon resolve queue | Keep custom paint. Render frames use cached/preliminary icon snapshots only. | Logs must include `[fika details-visual]` and `[fika details-shape-cache]` with no steady build regression or synchronous icon-theme lookup spike. |
 | Details row click, menu, navigation, drop, hover, cursor | retained viewport/custom hitboxes plus active item-drag window tracker | viewport retained hit testing and Details row snapshots | Keep retained controller path. | Runtime smoke must cover Details item drag, directory drop, pane drop, and rename overlay. |
 | Details drag start | GPUI `Div::on_drag` row shell | retained Details drag fields plus temporary shell | Keep GPUI shell for initiation only. | Same public drag-start API or audited GPUI patch gate as Compact/Icons. |
-| Places rows and sidebar scrollbar | Default full custom row visual layer, retained-DnD mixed event delivery, one sidebar typed DnD payload shell, and GPUI row drag-start shells; `gpui`, `chrome`, and `text` fallback policies remain available | `places` model/projection, `places/interaction.rs`, retained event layer, retained Places icon image cache, and `drag_drop` state | Keep the Dolphin-aligned retained model/controller/painter split as default. Row text and Places icons are now Fika-owned custom paint; Places icons use GPUI's efficient underlying `RenderImage`/`paint_image` path through a retained `RetainAllImageCache`, matching Dolphin's pixmap-cache principle without leaving GPUI `img()` child elements in rows. Typed DnD payload delivery and drag start remain explicit GPUI/platform boundaries. | Default logs must pass `--expect-custom-row-full-policy` and `--require-interaction-policy` with `event_policy=retained-dnd`, `text_gpui=0`, `icon_gpui=0`, `visual_kind=full`, `retained_hitboxes=rows+sections`, `gpui_event_shells=1`, `gpui_row_section_event_shells=0`, `gpui_typed_dnd_payload_shells=1`, `gpui_sidebar_leave_shells=0`, and aggregated `[fika places-row-visual]` rows matching policy rows. GPUI/chrome/text fallbacks remain analyzer-covered baselines. |
+| Places rows, section headings, and sidebar scrollbar | Default full custom row/section visual layer, retained-DnD mixed event delivery, one sidebar typed DnD payload shell, and GPUI row drag-start shells; `gpui`, `chrome`, and `text` fallback policies remain available | `places` model/projection, `places/interaction.rs`, retained event layer, retained Places icon image cache, text shape cache, and `drag_drop` state | Keep the Dolphin-aligned retained model/controller/painter split as default. Row text, section heading text, and Places icons are now Fika-owned custom paint; Places icons use GPUI's efficient underlying `RenderImage`/`paint_image` path through a retained `RetainAllImageCache`, matching Dolphin's pixmap-cache principle without leaving GPUI text/image child elements in Places rows or headings. Typed DnD payload delivery and drag start remain explicit GPUI/platform boundaries. | Default logs must pass `--expect-custom-row-full-policy` and `--require-interaction-policy` with `event_policy=retained-dnd`, `text_gpui=0`, `icon_gpui=0`, `section_gpui=0`, `visual_kind=full`, `retained_hitboxes=rows+sections`, `gpui_event_shells=1`, `gpui_row_section_event_shells=0`, `gpui_typed_dnd_payload_shells=1`, `gpui_sidebar_leave_shells=0`, and aggregated `[fika places-row-visual]` rows matching policy rows. GPUI/chrome fallbacks keep GPUI heading text and remain analyzer-covered baselines. |
 
 ## Historical GPUI Image Baseline
 
@@ -496,6 +496,39 @@ full path therefore has a substantive first-frame breakthrough: the old
 8-14ms chrome icon spike is gone. It is still opt-in because promotion now
 depends on repeated total-render evidence for row visual, pane elements, and
 root cost rather than the solved chrome icon owner.
+
+## 2026-06-19 Places Section Heading Ownership
+
+After Places full visual became the default, section heading labels were still
+GPUI text children. That left a small but real ownership mismatch: row text and
+icons were retained/custom, while group headings were still shaped and painted
+through GPUI elements.
+
+Implementation: the Places visual layer now projects section heading geometry
+with the same snapshot used for rows, prepaints visible section labels through
+`PlacesRowTextShapeCache`, and paints them in the same canvas before rows.
+`group_heading` remains as a shell for section targeting/DnD boundaries, but it
+omits the GPUI label child whenever the custom visual layer paints text.
+
+Evidence:
+
+```sh
+timeout 8s env FIKA_PERF_PLACES_VIEW=1 FIKA_AUTOSMOKE_PLACES=targets target/debug/fika /etc > /tmp/fika-places-section-full-targets.log 2>&1
+scripts/analyze-places-perf.sh --require-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-full-policy /tmp/fika-places-section-full-targets.log
+timeout 8s env FIKA_PERF_PLACES_VIEW=1 FIKA_AUTOSMOKE_PLACES=overflow target/debug/fika /etc > /tmp/fika-places-section-full-overflow.log 2>&1
+scripts/analyze-places-perf.sh --require-overflow-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-full-policy /tmp/fika-places-section-full-overflow.log
+```
+
+Decision: default Places full visual should report `section_gpui=0` alongside
+`text_gpui=0` and `icon_gpui=0`. GPUI/chrome fallbacks may still report
+`section_gpui=sections`; typed DnD payload and row drag-start shells remain the
+explicit GPUI/platform boundaries.
+
+The saved logs passed those gates. `/tmp/fika-places-section-full-targets.log`
+reported `max_section_gpui=0`, `max_text_gpui=0`, `max_icon_gpui=0`,
+`visual_kinds=full`, and warm row paint `247us`. The overflow log reported
+`max_rows=75`, `max_sections=3`, `max_section_gpui=0`, visible event hitboxes
+clipped to `32`, and warm row paint `785us`.
 
 ## Next Renderer Decisions
 

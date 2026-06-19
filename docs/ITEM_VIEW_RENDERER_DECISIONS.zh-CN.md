@@ -29,7 +29,7 @@
 | Details row 背景、图标、文本单元格、Trash 列 | custom content-level painter | Details paint snapshots, row layout projection, shape cache | 保持 custom paint | 运行时 Details perf 和 DnD 冒烟证据必须保持最新 |
 | Details click/menu/navigation/hover/cursor/drop hit testing | retained row hit testing/controller state 加 active item-drag window tracker | viewport retained hit testing | 保持 retained controller path | painter 变更后 DnD 冒烟必须通过 |
 | Details drag start | GPUI `Div::on_drag` row shell | retained drag payload state | 保持 GPUI shell | 与 Compact/Icons drag start 相同门 |
-| Places rows 和 sidebar scrollbar | 默认 full custom row visual layer、retained-DnD mixed event delivery、一个 sidebar typed DnD payload shell 和 GPUI row drag-start shell；`gpui`、`chrome`、`text` fallback policy 仍可用 | `places` model/projection、`places/interaction.rs`、retained event layer、retained Places icon image cache 和 `drag_drop` state | 保持 Dolphin 对齐的 retained model/controller/painter 拆分为默认。行文本和 Places 图标现在由 Fika 自己 custom paint；Places 图标通过 retained `RetainAllImageCache` 使用 GPUI 高效的底层 `RenderImage`/`paint_image` 路径，符合 Dolphin pixmap-cache 原则，同时不再在 row 中留下 GPUI `img()` 子元素。Typed DnD payload delivery 和 drag start 仍是明确 GPUI/平台边界。 | 默认日志必须通过 `--expect-custom-row-full-policy` 和 `--require-interaction-policy`，并显示 `event_policy=retained-dnd`、`text_gpui=0`、`icon_gpui=0`、`visual_kind=full`、`retained_hitboxes=rows+sections`、`gpui_event_shells=1`、`gpui_row_section_event_shells=0`、`gpui_typed_dnd_payload_shells=1`、`gpui_sidebar_leave_shells=0`，且聚合 `[fika places-row-visual]` rows 匹配策略行数。GPUI/chrome/text fallback 继续作为 analyzer 覆盖的基准。 |
+| Places rows、section headings 和 sidebar scrollbar | 默认 full custom row/section visual layer、retained-DnD mixed event delivery、一个 sidebar typed DnD payload shell 和 GPUI row drag-start shell；`gpui`、`chrome`、`text` fallback policy 仍可用 | `places` model/projection、`places/interaction.rs`、retained event layer、retained Places icon image cache、text shape cache 和 `drag_drop` state | 保持 Dolphin 对齐的 retained model/controller/painter 拆分为默认。行文本、section heading 文本和 Places 图标现在由 Fika 自己 custom paint；Places 图标通过 retained `RetainAllImageCache` 使用 GPUI 高效的底层 `RenderImage`/`paint_image` 路径，符合 Dolphin pixmap-cache 原则，同时不再在 Places row 或 heading 中留下 GPUI text/image 子元素。Typed DnD payload delivery 和 drag start 仍是明确 GPUI/平台边界。 | 默认日志必须通过 `--expect-custom-row-full-policy` 和 `--require-interaction-policy`，并显示 `event_policy=retained-dnd`、`text_gpui=0`、`icon_gpui=0`、`section_gpui=0`、`visual_kind=full`、`retained_hitboxes=rows+sections`、`gpui_event_shells=1`、`gpui_row_section_event_shells=0`、`gpui_typed_dnd_payload_shells=1`、`gpui_sidebar_leave_shells=0`，且聚合 `[fika places-row-visual]` rows 匹配策略行数。GPUI/chrome fallback 保留 GPUI heading text，并继续作为 analyzer 覆盖的基准。 |
 
 ## Perf 日志收集
 
@@ -220,6 +220,35 @@ chrome targets `12us`、full targets `6us`、chrome overflow `10us`、full overf
 突破：旧的 8-14ms chrome icon 尖峰已经消失。它仍保持 opt-in，因为默认提升现在取决于
 row visual、pane elements 和 root cost 的重复 total-render 证据，而不是已经解决的
 chrome icon owner。
+
+## 2026-06-19 Places Section Heading 所有权
+
+Places full visual 成为默认后，section heading label 仍然是 GPUI text child。这留下了一个
+很小但真实的所有权不一致：row text 和 icon 已经是 retained/custom，而 group heading
+仍由 GPUI element shape/paint。
+
+实现：Places visual layer 现在使用与 row 相同的 snapshot 投影 section heading geometry，
+通过 `PlacesRowTextShapeCache` prepaint 可见 section label，并在同一个 canvas 中先于
+row 绘制它们。`group_heading` 仍作为 section targeting/DnD 边界 shell 存在，但当
+custom visual layer 绘制文本时不再挂载 GPUI label child。
+
+证据：
+
+```sh
+timeout 8s env FIKA_PERF_PLACES_VIEW=1 FIKA_AUTOSMOKE_PLACES=targets target/debug/fika /etc > /tmp/fika-places-section-full-targets.log 2>&1
+scripts/analyze-places-perf.sh --require-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-full-policy /tmp/fika-places-section-full-targets.log
+timeout 8s env FIKA_PERF_PLACES_VIEW=1 FIKA_AUTOSMOKE_PLACES=overflow target/debug/fika /etc > /tmp/fika-places-section-full-overflow.log 2>&1
+scripts/analyze-places-perf.sh --require-overflow-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-full-policy /tmp/fika-places-section-full-overflow.log
+```
+
+决策：默认 Places full visual 应与 `text_gpui=0`、`icon_gpui=0` 一起报告
+`section_gpui=0`。GPUI/chrome fallback 仍可以报告 `section_gpui=sections`；
+typed DnD payload 和 row drag-start shell 继续是明确的 GPUI/平台边界。
+
+保存的日志已经通过这些 gate。`/tmp/fika-places-section-full-targets.log` 报告
+`max_section_gpui=0`、`max_text_gpui=0`、`max_icon_gpui=0`、`visual_kinds=full`
+和 warm row paint `247us`。overflow 日志报告 `max_rows=75`、`max_sections=3`、
+`max_section_gpui=0`，visible event hitboxes 裁到 `32`，warm row paint 为 `785us`。
 
 ## 下一批渲染器决策
 

@@ -114,7 +114,7 @@ cat > "$tmpdir/custom-row-visual.log" <<'EOF'
 [fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
 [fika places-view] source=11 visible=11 sections=2 snapshot=100us
 [fika places-sidebar] rows=11 sections=2 elements=13 build=240us
-[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 icon_gpui=11 retained_interaction=0 drag_shell=11 section_gpui=2 scrollbar_canvas=1
+[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 icon_gpui=11 retained_interaction=0 drag_shell=11 section_gpui=0 scrollbar_canvas=1
 [fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=11
 [fika places-row-visual] rows=11 painted=11 prepaint=20us paint=31us
 [fika places-row-shape-cache] hits=11 misses=0 evicted=0 entries=11
@@ -142,7 +142,7 @@ cat > "$tmpdir/custom-row-full.log" <<'EOF'
 [fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
 [fika places-view] source=11 visible=11 sections=2 snapshot=100us
 [fika places-sidebar] rows=11 sections=2 elements=13 build=240us
-[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=0 icon_gpui=0 retained_interaction=0 drag_shell=11 section_gpui=2 scrollbar_canvas=1 visual_kind=full
+[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=0 icon_gpui=0 retained_interaction=0 drag_shell=11 section_gpui=0 scrollbar_canvas=1 visual_kind=full
 [fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=11
 [fika places-row-visual] rows=11 painted=11 prepaint=24us paint=35us
 [fika places-row-shape-cache] hits=11 misses=0 evicted=0 entries=11
@@ -169,11 +169,11 @@ cat > "$tmpdir/custom-row-full-handoff.log" <<'EOF'
 [fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=11 icon_gpui=11 retained_interaction=0 drag_shell=11 section_gpui=2 scrollbar_canvas=1 visual_kind=full
 [fika places-row-handoff] rows=11 enabled=1 ready=0 frames=2/2 paint_text=0 paint_icon=0 gpui_text=1 gpui_icon=1
 [fika places-row-visual] rows=11 painted=11 prepaint=18us paint=50us
-[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=0 icon_gpui=0 retained_interaction=0 drag_shell=11 section_gpui=2 scrollbar_canvas=1 visual_kind=full
+[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=0 icon_gpui=0 retained_interaction=0 drag_shell=11 section_gpui=0 scrollbar_canvas=1 visual_kind=full
 [fika places-row-handoff] rows=11 enabled=1 ready=1 frames=2/2 paint_text=1 paint_icon=1 gpui_text=0 gpui_icon=0
 [fika places-row-visual] rows=11 painted=11 prepaint=260us paint=240us
 [fika places-row-shape-cache] hits=0 misses=11 evicted=0 entries=11
-[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=0 icon_gpui=0 retained_interaction=0 drag_shell=11 section_gpui=2 scrollbar_canvas=1 visual_kind=full
+[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=0 icon_gpui=0 retained_interaction=0 drag_shell=11 section_gpui=0 scrollbar_canvas=1 visual_kind=full
 [fika places-row-handoff] rows=11 enabled=1 ready=1 frames=2/2 paint_text=1 paint_icon=1 gpui_text=0 gpui_icon=0
 [fika places-row-visual] rows=11 painted=11 prepaint=35us paint=230us
 [fika places-row-shape-cache] hits=11 misses=0 evicted=0 entries=11
@@ -223,7 +223,7 @@ cat > "$tmpdir/custom-row-full-cold-then-warm.log" <<'EOF'
 [fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
 [fika places-view] source=11 visible=11 sections=2 snapshot=100us
 [fika places-sidebar] rows=11 sections=2 elements=13 build=240us
-[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=0 icon_gpui=0 retained_interaction=0 drag_shell=11 section_gpui=2 scrollbar_canvas=1 visual_kind=full
+[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=0 icon_gpui=0 retained_interaction=0 drag_shell=11 section_gpui=0 scrollbar_canvas=1 visual_kind=full
 [fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=11
 [fika places-row-visual] rows=11 painted=11 prepaint=1200us paint=3500us
 [fika places-row-shape-cache] hits=0 misses=11 evicted=0 entries=11
@@ -370,7 +370,7 @@ cat > "$tmpdir/retained-event-custom-visual.log" <<'EOF'
 [fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
 [fika places-view] source=11 visible=11 sections=2 snapshot=100us
 [fika places-sidebar] rows=11 sections=2 elements=13 build=240us
-[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 icon_gpui=11 retained_interaction=13 drag_shell=11 section_gpui=2 scrollbar_canvas=1
+[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=0 icon_gpui=11 retained_interaction=13 drag_shell=11 section_gpui=0 scrollbar_canvas=1 visual_kind=text
 [fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=13 gpui_event_shells=0 drag_shells=11
 [fika places-row-visual] rows=11 painted=11 prepaint=20us paint=31us
 [fika places-row-shape-cache] hits=11 misses=0 evicted=0 entries=11
@@ -394,7 +394,7 @@ cat > "$tmpdir/retained-event-mixed-gpui-shell.log" <<'EOF'
 [fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
 [fika places-view] source=11 visible=11 sections=2 snapshot=100us
 [fika places-sidebar] rows=11 sections=2 elements=13 build=240us
-[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 icon_gpui=11 retained_interaction=0 drag_shell=11 section_gpui=2 scrollbar_canvas=1
+[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 icon_gpui=11 retained_interaction=0 drag_shell=11 section_gpui=0 scrollbar_canvas=1
 [fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=11
 [fika places-row-visual] rows=11 painted=11 prepaint=20us paint=31us
 [fika places-row-shape-cache] hits=11 misses=0 evicted=0 entries=11
@@ -540,7 +540,7 @@ cat > "$tmpdir/custom-row-visual-per-row.log" <<'EOF'
 [fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
 [fika places-view] source=11 visible=11 sections=2 snapshot=100us
 [fika places-sidebar] rows=11 sections=2 elements=13 build=240us
-[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 icon_gpui=11 retained_interaction=0 drag_shell=11 section_gpui=2 scrollbar_canvas=1
+[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 icon_gpui=11 retained_interaction=0 drag_shell=11 section_gpui=0 scrollbar_canvas=1
 [fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=11
 [fika places-row-visual] rows=1 painted=1 prepaint=20us paint=31us
 [fika places-row-shape-cache] hits=11 misses=0 evicted=0 entries=11
@@ -556,7 +556,7 @@ cat > "$tmpdir/custom-row-visual-missing-shape-cache.log" <<'EOF'
 [fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
 [fika places-view] source=11 visible=11 sections=2 snapshot=100us
 [fika places-sidebar] rows=11 sections=2 elements=13 build=240us
-[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 icon_gpui=11 retained_interaction=0 drag_shell=11 section_gpui=2 scrollbar_canvas=1
+[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 icon_gpui=11 retained_interaction=0 drag_shell=11 section_gpui=0 scrollbar_canvas=1
 [fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=11
 [fika places-row-visual] rows=11 painted=11 prepaint=20us paint=31us
 EOF

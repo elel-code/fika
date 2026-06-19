@@ -380,6 +380,7 @@ pub(crate) struct PlacesRendererPolicyLog {
     pub(crate) row_visual_policy: PlacesRowVisualPolicy,
     pub(crate) row_visual_paints_text: bool,
     pub(crate) row_visual_paints_icon: bool,
+    pub(crate) section_visual_paints_text: bool,
     pub(crate) event_delivery_policy: PlacesEventDeliveryPolicy,
     pub(crate) scrollbar_canvas_count: usize,
 }
@@ -405,6 +406,11 @@ pub(crate) fn emit_places_renderer_policy_log(log: PlacesRendererPolicyLog) {
     } else {
         log.row_count
     };
+    let section_gpui = if log.section_visual_paints_text {
+        0
+    } else {
+        log.section_count
+    };
     let retained_interaction = log
         .event_delivery_policy
         .retained_interaction(log.row_count, log.section_count);
@@ -420,7 +426,7 @@ pub(crate) fn emit_places_renderer_policy_log(log: PlacesRendererPolicyLog) {
         icon_gpui,
         retained_interaction,
         log.row_count,
-        log.section_count,
+        section_gpui,
         log.scrollbar_canvas_count,
         log.row_visual_policy.visual_kind(),
         log.event_delivery_policy.kind(),
