@@ -555,41 +555,28 @@ tracks.
   to model/projection, retained slot state, custom element paint, or the
   custom image layer. Compare these with Dolphin
   `KStandardItemListWidget::updatePixmapCache()` / `pixmapForIcon()` before
-  changing the current image renderer. Current-code A/B support is available
-  through `FIKA_CUSTOM_THEME_ICONS=1`, which keeps retained item state but
-  forces MIME/theme icons through the custom item-image layer for
-  desktop-session comparison against the default GPUI theme-icon renderer.
-  `scripts/compare-item-image-renderers.sh` now standardizes the paired-log
-  comparison, and the 2026-06-17 `/etc` smoke evidence is recorded in
-  `docs/ITEM_VIEW_RENDERER_DECISIONS.md`.
+  changing the current image renderer. This historical baseline evolved into
+  the current `FIKA_GPUI_THEME_ICONS=1` same-scenario GPUI image baseline; the
+  default path is now the full custom image layer.
+  `scripts/compare-item-image-renderers.sh` continues to standardize paired-log
+  comparison.
 - [x] P16k: Decide the Compact/Icons theme-icon renderer from evidence:
-  default now uses GPUI `img()` elements for MIME/theme icons and keeps
-  thumbnails on the custom image layer. Keep this split unless paired
-  default-vs-`FIKA_CUSTOM_THEME_ICONS=1` zoom/scroll logs prove the custom
-  theme-icon painter is neutral or better without first-load placeholders,
-  zoom-time `theme_decoded` churn, or size jumps.
-- [~] P16k1: Design and implement a retained MIME/theme icon image cache before
-  making custom theme-icon paint the default. The cache should be keyed by at
-  least `(iconName, icon_size_px)` plus theme/scale/color-scheme inputs when
-  those affect the selected path. It must retain the last real same-key image
-  during refresh, keep thumbnail retention separate by thumbnail path, and never
-  synchronously decode theme icon files during prepaint. Design is now captured
-  in `docs/RETAINED_ICON_IMAGE_CACHE_PLAN.md`; the foundation is implemented,
-  while paired runtime evidence and analyzer gates remain pending.
-- [ ] P16k2: Add paired default-vs-custom autosmoke evidence for the future
-  MIME/theme icon renderer. Required scenarios: `/etc` and a mixed user
-  directory, startup plus `FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll`, default GPUI
-  `img()` versus `FIKA_CUSTOM_THEME_ICONS=1` or a future retained-icon-cache
-  flag. The offline comparison gate exists as
-  `scripts/compare-item-image-renderers.sh --gate-default-promotion`; runtime
-  logs still need to pass. 2026-06-18 `/etc` logs were captured at
-  `/tmp/fika-icon-default-etc-p16k2.log` and
-  `/tmp/fika-icon-custom-etc-p16k2.log`; the gate failed because the custom path
-  still had `theme_placeholder=118` and `theme_decoded=5`. The custom path must
-  show no steady `theme_placeholder` churn, no zoom-time `theme_decoded` burst,
-  no visible size jump, and `icon_sync` within the Dolphin-style visible-first
-  budget before the default renderer can change.
-- [~] P16k2a: Build the prewarm/hybrid bridge before reconsidering default
+  the historical GPUI split was kept first, then prewarm/hybrid handoff,
+  semantic key caching, source-image reuse, app-level prewarm, and cache
+  budgeting moved the default to the full custom image layer.
+  `FIKA_GPUI_THEME_ICONS=1` remains the GPUI baseline.
+- [x] P16k1: The retained MIME/theme icon image cache is implemented and is now
+  the default path. It is keyed by semantic `ThemeIconImageKey`, keeps thumbnail
+  retention separate by thumbnail path, and avoids unbounded synchronous decode
+  in ordinary render/prepaint. Design and completion evidence are recorded in
+  `docs/RETAINED_ICON_IMAGE_CACHE_PLAN.md`.
+- [x] P16k2: Paired default-full-custom versus GPUI-baseline runtime evidence is
+  covered by later runners and final core evidence.
+  `scripts/run-retained-renderer-evidence.sh --core --skip-build --prefix
+  fika-core-final-retained-v3` covers Compact/Icons/Details; item summaries
+  show `gpui_image_element=0`, `theme_placeholder=0`, visible
+  `theme_decoded=0`, max image paint `373us`, and warm image max paint `363us`.
+- [x] P16k2a: Build the prewarm/hybrid bridge before reconsidering default
   custom theme icons. `FIKA_PREWARM_THEME_ICONS=1` now prewarms retained
   theme-icon images while leaving visible theme icons on GPUI `img()`. The
   2026-06-18 `/tmp/fika-icon-prewarm-etc-p16k2.log` smoke kept
@@ -604,14 +591,14 @@ tracks.
   `/tmp/fika-icon-hybrid-etc-readiness.log` confirms the `/etc` handoff has
   `theme_placeholder=0`, `theme_decoded=0`, and `max_paint=383us` while the
   default comparison `/tmp/fika-etc-zoom-scroll.log` remains
-  `max_image_layer=0`/`max_gpui_image_element=64`. Runtime default-vs-hybrid
-  evidence still needs to pass before any default promotion because `/etc`
-  still has a visible-item `icon_sync` spike around 24ms and the mixed-directory
-  run is still missing.
-- [ ] P16k3: Only after P16k1/P16k2 pass, reconsider the Compact/Icons
-  MIME/theme icon renderer policy in `docs/ITEM_VIEW_RENDERER_DECISIONS.md`.
-  Until then, keep the current split: thumbnails on the custom image layer and
-  ordinary MIME/theme icons on GPUI `img()` over retained item shells.
+  `max_image_layer=0`/`max_gpui_image_element=64`. Later paired evidence passed,
+  and the path was superseded by the full custom default after semantic cache,
+  source-image reuse, app-level prewarm, and cache budgeting landed.
+- [x] P16k3: `docs/ITEM_VIEW_RENDERER_DECISIONS.md` now records the reconsidered
+  Compact/Icons MIME/theme icon renderer policy: thumbnails and ordinary
+  MIME/theme icons both use the retained/custom image layer; `FIKA_GPUI_THEME_ICONS=1`
+  is only the GPUI baseline, and `FIKA_HYBRID_THEME_ICONS=1` is only the
+  explicit transitional handoff path.
 - [x] P16l: Establish the Places GPUI sidebar baseline before any retained row
   painter work. `FIKA_PERF_PLACES_VIEW=1` now logs snapshot time, sidebar build
   time, and the current renderer-policy surface counts for the GPUI row path;
@@ -1651,7 +1638,7 @@ tracks.
   and Places desktop-session captures, runs the matching analyzer gates, and
   verifies that the current Places full-retained gate still fails until the
   typed DnD payload shell is removed. MIME/theme icon A/B evidence is available
-  behind `--icons` so the current non-promotable custom icon path does not block
+  behind `--icons` so the then-non-promotable custom icon path did not block
   every baseline freeze.
 - [x] P16fa: Document the cross-surface Dolphin retained-renderer alignment
   contract. `docs/DOLPHIN_RETAINED_RENDERER_ALIGNMENT.md` records why full
@@ -1671,7 +1658,7 @@ tracks.
   `FIKA_HYBRID_THEME_ICONS=1` zoom-scroll logs for `/etc` and the mixed user
   directory, then runs `scripts/compare-item-image-renderers.sh
   --gate-hybrid-handoff`. This makes the next image-readiness step measurable
-  without forcing the current non-promotable full custom icon path through
+  without forcing the then-non-promotable full custom icon path through
   `--gate-default-promotion`.
 - [x] P16fd: Make retained-renderer evidence runner selection explicit.
   The script now enables core item+Places capture only when no selection
@@ -1681,9 +1668,9 @@ tracks.
   mixed user directory. `scripts/run-retained-renderer-evidence.sh
   --hybrid-icons --skip-build --prefix fika-hybrid-icons-20260619` passed
   `--gate-hybrid-handoff` for both `/etc` and Downloads with
-  `theme_placeholder=0` and visible `theme_decoded=0`. The result supports
-  continuing toward a default hybrid renderer; P16ff adds the stricter gate and
-  P16fg switches the default.
+  `theme_placeholder=0` and visible `theme_decoded=0`. The result supported the
+  intermediate handoff step; later full custom work superseded hybrid as the
+  default.
 - [x] P16ff: Add a strict hybrid icon default-promotion gate.
   `scripts/compare-item-image-renderers.sh --gate-hybrid-default-promotion`
   now extends the handoff gate with explicit tolerances for `icon_sync`,
@@ -2018,19 +2005,19 @@ tracks.
   Root cause: forcing `FIKA_CUSTOM_THEME_ICONS=1` as a cold default still
   exposes first-load custom image placeholders and decode completion churn
   (`/tmp/fika-pane-full-custom-etc.log`: `theme_placeholder=52`, visible
-  `theme_decoded=5`). Implementation: the default hybrid renderer now uses a
-  visible-cohort handoff. While any visible theme-icon key is not ready, all
-  visible theme icons remain on GPUI `img()` and the item image layer only
-  prewarms retained images; when the cohort is ready, all visible theme icons
-  switch to the retained custom image layer together. Evidence:
+  `theme_decoded=5`). Implementation at that stage: the default hybrid renderer
+  used a visible-cohort handoff. While any visible theme-icon key was not ready,
+  all visible theme icons remained on GPUI `img()` and the item image layer only
+  prewarmed retained images; when the cohort was ready, all visible theme icons
+  switched to the retained custom image layer together. Evidence:
   `/tmp/fika-pane-cohort-default-downloads.log` passed
   `--gate-hybrid-default-promotion` against
   `/tmp/fika-pane-cohort-gpui-downloads.log` with `theme_placeholder=0` and
   visible `theme_decoded=0`. `/tmp/fika-pane-cohort-default-etc-r2.log` kept
   those image stability counters clean, but the full promotion gate still
-  failed on `/etc` icon-sync/content-change variance, so the next pane image
-  target is reducing `/etc` `icon_sync` cost rather than changing placeholder
-  behavior.
+  failed on `/etc` icon-sync/content-change variance. Later semantic cache,
+  prewarm, source-image reuse, and budget work moved the default beyond this
+  handoff stage to full custom.
 - [x] P16gau: Remove the same-kind icon cache scan from pane `icon_sync` and
   widen background icon resolve batches. Root cause: after visible-cohort
   handoff, `/etc` still showed 7-13ms `icon_sync` frames even when most

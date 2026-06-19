@@ -68,13 +68,14 @@ change:
   icon name/height.
 - Historical Fika GPUI path: `a3f5b0f` / early transition commits rely on GPUI
   `img()` loading and element fallback behavior.
-- Custom-theme override: run with `FIKA_CUSTOM_THEME_ICONS=1` to force
-  theme/MIME icons back through the custom item-image paint layer.
-- Current default path: run without image renderer overrides. Thumbnails stay
-  on the custom image layer, while MIME/theme icons use the hybrid renderer:
-  not-yet-ready keys stay on GPUI `img()` children and ready keys paint through
-  the retained custom image layer. Renderer-policy logs may show both
-  `gpui_image_element>0` and `image_layer>0` depending on readiness.
+- Current full custom path: run without image renderer overrides, or with
+  `FIKA_CUSTOM_THEME_ICONS=1` when a test needs to make the default explicit.
+  Thumbnails and MIME/theme icons both paint through the custom image layer.
+- Current GPUI image baseline: run with `FIKA_GPUI_THEME_ICONS=1`. This moves
+  ordinary MIME/theme icons back to GPUI `img()` children while keeping the
+  retained item model, base visuals, and interaction path.
+- Transitional handoff path: run with `FIKA_HYBRID_THEME_ICONS=1` when
+  investigating the older readiness-handoff policy.
 
 Decision rule: if the custom image layer keeps showing visible first-load
 placeholders or zoom-time decode/size churn while the GPUI `img()` baseline is
@@ -321,18 +322,17 @@ paint prepass. The analyzer's `image_sources` line separates thumbnail
 first-ready GPUI decode results (`thumb_decoded`), already-ready cache loads
 (`thumb_loaded`), retained fallback-to-last-real-image paths
 (`thumb_retained`), and visible fallback paths (`thumb_fallback`). Theme
-`image_sources` counters appear only when `FIKA_CUSTOM_THEME_ICONS=1` routes
-MIME/theme icons through the custom image layer for A/B evidence.
+`image_sources` counters now cover the default full custom MIME/theme icon
+path; `FIKA_GPUI_THEME_ICONS=1` is the same-scenario GPUI image baseline.
 
 For MIME icon flicker investigations, compare against Dolphin's
 `KStandardItemListWidget::updatePixmap()` and `pixmapForIcon()`: Dolphin keeps a
 widget-local `m_pixmap` and uses `QPixmapCache` by icon name/size, so a loaded
 real icon is not replaced by a marker while a same-icon resource is refreshed.
-Fika's default hybrid path preserves that behavior by keeping MIME/theme icons
-on GPUI `img()` until the current retained image key is ready, then painting the
-ready key through the custom image layer. If `FIKA_CUSTOM_THEME_ICONS=1` is used,
-the custom image painter must preserve the same behavior with retained images
-keyed by MIME/theme `iconName`.
+Fika's current default full custom path preserves that behavior with retained
+semantic `ThemeIconImageKey` readiness/cache state, app-level prewarm,
+source-image reuse, and bounded eviction. `FIKA_HYBRID_THEME_ICONS=1` remains
+available only as the explicit transitional handoff path.
 Thumbnail retention remains keyed by the exact thumbnail path. Fika does not
 mirror Dolphin's synchronous `QIcon::pixmap()` by reading and decoding SVGs in
 GPUI prepaint; GPUI image loading remains the decode path. A neutral markerless
@@ -373,26 +373,23 @@ file-icon kind has any resolved theme path, Fika reuses that stable path rather
 than enqueueing another exact-size path request. This mirrors Dolphin's
 `iconName` plus `pixmapForIcon()` path without moving read-ahead icon-theme
 scans into render conversion or committing a second image identity during zoom.
-Image decoding itself stays on the scheduler/image-cache path;
-default theme icons decode through GPUI `img()`, while the custom-theme A/B
-paint layer may retain a previous same-`iconName` image but must not
-synchronously decode theme icon files during prepaint.
+Image decoding itself stays on the scheduler/image-cache path; default theme
+icons are painted by the full custom layer while the lower image backend
+remains GPUI `RenderImage`/`paint_image`.
 
-## Future MIME/Theme Icon Custom Renderer
+## MIME/Theme Icon Renderer Guardrail
 
-The current default is hybrid: Compact/Icons MIME/theme icons stay on GPUI
-`img()` until the retained image for the current key is ready, then hand off to
-the custom image layer. A future full-custom renderer is allowed only as a
-separate work stream, because the retained model/slot architecture is already
-in place and the remaining risk is image-resource readiness, not item identity.
-The detailed retained image-cache design is
+Compact/Icons MIME/theme icons now default to the full custom image layer. This
+is not a separate image primitive from GPUI `img()`: both routes end at
+`Window::paint_image`; the difference is that Fika now owns the Dolphin-style
+semantic key, readiness, retention, and visible-first work ordering. The
+detailed retained image-cache design is
 `docs/RETAINED_ICON_IMAGE_CACHE_PLAN.md`.
-The implementation foundation now exists in `src/ui/icons/image_cache.rs`;
-`FIKA_GPUI_THEME_ICONS=1` keeps the old GPUI baseline and
-`FIKA_CUSTOM_THEME_ICONS=1` remains the full custom stress path.
+`FIKA_GPUI_THEME_ICONS=1` keeps the old GPUI image baseline, and
+`FIKA_HYBRID_THEME_ICONS=1` keeps the transitional readiness-handoff path.
 
-The full-custom target architecture should mirror Dolphin's pixmap stability
-rather than the custom-theme A/B path:
+The full-custom architecture mirrors Dolphin's pixmap stability rather than
+the old custom-theme A/B path:
 
 - Add an explicit retained MIME/theme icon image cache keyed by at least
   `(iconName, icon_size_px)`. Include theme identity, scale factor, or color
@@ -411,20 +408,12 @@ rather than the custom-theme A/B path:
   stable once the same file-icon kind has a resolved theme path. Any custom
   renderer must paint in the same icon bounds used by layout without forcing a
   new path/decode identity on every zoom step.
-- Keep the hybrid handoff rule unless a future full-custom run beats it:
-  not-yet-ready visible icons stay on GPUI `img()`, and a visible icon routes
-  through the custom image layer only when the retained image for its current
-  `(iconName, size)` key is ready or when the fallback is a true first-load
-  placeholder.
-
-The default renderer policy may switch from hybrid to a full custom
-MIME/theme image layer only after paired desktop-session evidence proves all of
-the following for `/etc` and a mixed user directory:
+Future image-renderer or cache changes must keep paired desktop-session
+evidence green for `/etc` and a mixed user directory:
 
 - Default and custom runs both pass
   `FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll` analyzer gates.
-- `scripts/compare-item-image-renderers.sh --gate-default-promotion` passes.
-- The custom run has no steady-state `theme_placeholder` churn, no zoom-time
+- The default full-custom path has no steady-state `theme_placeholder` churn, no zoom-time
   `theme_decoded` burst, and no visible icon size jump.
 - `icon_sync` remains within the Dolphin-style visible-first budget; read-ahead
   icon path work must not re-enter render conversion.
@@ -435,7 +424,7 @@ the following for `/etc` and a mixed user directory:
   load, zoom, scroll, and mode switching are visually no worse than the GPUI
   baseline.
 
-2026-06-18 `/etc` paired evidence did not pass this gate:
+Historical note: 2026-06-18 `/etc` paired evidence did not pass this gate:
 `/tmp/fika-icon-custom-etc-p16k2.log` had `theme_placeholder=118` and
 `theme_decoded=5`, while `/tmp/fika-icon-default-etc-p16k2.log` kept ordinary
 MIME/theme icons on GPUI `img()` with no item-image placeholder/decode churn.
@@ -450,15 +439,13 @@ does not expose custom theme placeholders (`theme_placeholder=0`,
 a readiness handoff so visible icons leave GPUI only after their retained image
 for the current key is ready.
 
-The readiness handoff foundation now exists behind
+The readiness handoff foundation then existed behind
 `FIKA_HYBRID_THEME_ICONS=1`. The app owns a size/scale-aware
 `ThemeIconImageReadiness` snapshot; the image layer marks keys ready only after a
 real `RenderImage` is available; renderer policy, item shells, and the image
-layer all consume the same readiness input. This still does not change the
-default renderer. Hybrid must produce paired `/etc` and mixed-directory
-zoom/scroll evidence with no placeholders, no zoom-time decode burst, and no
-paint regression before this decision table can promote MIME/theme icons away
-from GPUI `img()`.
+layer all consume the same readiness input. This was the intermediate step that
+allowed MIME/theme icons to move away from GPUI `img()` without placeholder or
+decode churn.
 
 The first `/etc` hybrid smoke is recorded at
 `/tmp/fika-icon-hybrid-etc-readiness.log` with the default comparison at
@@ -478,11 +465,11 @@ logs, and both passed `scripts/compare-item-image-renderers.sh
 `theme_placeholder=0`, `theme_decoded=0`, `theme_prewarm_pending=52`, and
 `max_paint=504us`; Downloads hybrid reported `theme_loaded=310`,
 `theme_placeholder=0`, `theme_decoded=0`, `theme_prewarm_pending=44`, and
-`max_paint=378us`. This supports a follow-up default-policy code slice: ordinary
-MIME/theme icons can move to the hybrid renderer by default if the code change
-preserves the same gate pass and keeps GPUI fallback for not-yet-ready keys.
+`max_paint=378us`. This supported the next default-policy code slice. The final
+default later moved further to full custom once retained semantic caching,
+source-image reuse, prewarm, and budgeting were in place.
 
-The default-policy code slice was validated with
+The handoff default-policy code slice was validated with
 `scripts/run-retained-renderer-evidence.sh --hybrid-icons --skip-build --prefix
 fika-hybrid-default-20260619`. Candidate logs used the default renderer policy
 with no `FIKA_HYBRID_THEME_ICONS` override, baseline logs used
@@ -490,15 +477,17 @@ with no `FIKA_HYBRID_THEME_ICONS` override, baseline logs used
 `--gate-hybrid-default-promotion` with `theme_placeholder=0` and visible
 `theme_decoded=0`.
 
-## 2026-06-19 Places Full Handoff A/B
+## 2026-06-19 Places Full Row Visual Default
 
-The full Places row visual path now has a real opt-in breakthrough, but not a
-default-promotion decision.
+The full Places row visual path is now the default, not an opt-in promotion
+candidate.
 
 The current full path is:
 
-- `FIKA_PLACES_ROW_VISUAL_POLICY=full` for text plus vector-icon painting in
-  the retained row visual layer.
+- `DEFAULT_PLACES_ROW_VISUAL_POLICY = CustomFull`, or
+  `FIKA_PLACES_ROW_VISUAL_POLICY=full` when tests want to make the default
+  explicit.
+- Text plus vector-icon painting lives in the retained row visual layer.
 - `FIKA_PLACES_ROW_VISUAL_HANDOFF=1` for ready-only handoff: GPUI text/icons
   stay visible during warmup frames, `PlacesRowTextShapeCache` is prewarmed,
   and the row switches to full custom paint only after retained resources are
@@ -521,12 +510,9 @@ Key logs:
 - `/tmp/fika-places-full-handoff-runner-20260619-places-handoff-full-layout.log`
   passed with warm row paint at `724us`.
 
-Decision: keep default Places rows on custom chrome plus GPUI text/icons for
-now. The blocker is no longer cold row visual paint by itself; it is the
-whole-frame startup/target total-render variance when full handoff is enabled.
-Future promotion work should separate Places snapshot, pane item, root, and row
-visual ownership in the first-frame total, then reduce full-specific variance
-before lowering the full path's 30ms total-render guard.
+Decision: keep Places rows on default `CustomFull`. Chrome, text, and GPUI row
+policies remain as analyzer-covered fallback/A-B paths. Core evidence now gates
+the default full policy directly with `--expect-custom-row-full-policy`.
 
 Follow-up owner accounting in
 `/tmp/fika-places-full-owner-20260619-places-handoff-full-targets.log` reduced
@@ -549,9 +535,9 @@ fika-places-chrome-prewarm-20260619` passed all handoff gates and reduced
 `chrome_icons` to chrome targets `12us`, full targets `6us`, chrome overflow
 `10us`, full overflow `9us`, chrome layout `7us`, and full layout `7us`. The
 full path therefore has a substantive first-frame breakthrough: the old
-8-14ms chrome icon spike is gone. It is still opt-in because promotion now
-depends on repeated total-render evidence for row visual, pane elements, and
-root cost rather than the solved chrome icon owner.
+8-14ms chrome icon spike is gone. That owner cleanup is one of the reasons the
+later core evidence can gate `CustomFull` as the default rather than treating it
+as an opt-in handoff experiment.
 
 ## 2026-06-19 Places Section Heading Ownership
 
@@ -958,9 +944,11 @@ frame-byte budget. When the last source reference is gone, it removes the
 2. Use runtime logs to decide whether any currently custom-painted surface
    should stay custom-painted or fall back to a GPUI renderer over the retained
    model.
-3. Keep `FIKA_GPUI_THEME_ICONS=1` as the GPUI baseline path and use
-   `--gate-hybrid-default-promotion` for future MIME/theme icon renderer
-   changes.
+3. Keep `FIKA_GPUI_THEME_ICONS=1` as the GPUI baseline path. Future MIME/theme
+   icon renderer changes must keep the default full-custom logs at
+   `gpui_image_element=0`, `theme_placeholder=0`, visible `theme_decoded=0`,
+   and use the hybrid gate only when explicitly changing the transitional
+   handoff path.
 4. Keep Places row visual defaulted to `CustomFull`; use
    `FIKA_PLACES_ROW_VISUAL_POLICY=gpui` and `chrome` only as A/B baselines and
    fallback paths.

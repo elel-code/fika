@@ -213,12 +213,12 @@ Places chrome 默认之后的当前执行入口是
 - [x] P16g：将下一个行为保留的条目视图编排边界移出 `src/main.rs`。候选：运行时条目视图性能/证据收集访问器，因为绘制器性能状态已经存在于 `file_grid/perf.rs` 下。已完成：`FIKA_PERF_ITEM_VIEW` 标志和文件网格性能层调用者由 `src/ui/file_grid/perf.rs` 拥有；条目视图性能帧分类和性能状态清理由 `src/ui/file_grid/perf.rs` 拥有；帧状态和绘制器性能统计存储现在位于 `src/ui/file_grid/perf.rs` 中的 `ItemViewPerfState` 后面；条目视图性能摘要发出现在由 `src/ui/file_grid/perf.rs` 拥有；autosmoke 场景解析和操作排序现在位于 `src/ui/file_grid/autosmoke.rs` 中。
 - [x] P16h：在更改 Places 渲染之前起草保留 Places 行绘制器设计。设计必须覆盖行组、隐藏 section、设备行、重排/放置插入、右键菜单和侧栏滚动。结果：`docs/PLACES_RENDERER_PLAN.md` 将 Dolphin 的 `DolphinPlacesModel + KFilePlacesView` 划分与 Fika 当前的 `places/model`、`projection`、`sidebar/row`、`drag` 和自定义滚动条模块进行比较，然后将任何保留行绘制器门控于 Places 特定性能日志、运行时 smoke 和渲染器策略证据之后。
 - [x] P16i：在更改 GPUI 重命名叠加层之前起草重命名自定义编辑器行为矩阵。它必须覆盖焦点、caret hit testing、UTF-8 选择、验证帮助文本、提交/取消、Tab 重命名下一个和 IME。结果：`docs/RENAME_EDITOR_PLAN.md` 将 Dolphin 的 `DolphinView::renameSelectedItems()`、`KItemListView::editRole()` 和 `KItemListRoleEditor` 路径与 Fika 的 `RenameDraft`、快捷键路由和 GPUI 叠加层进行比较。该矩阵将叠加层保留为默认值，直到 IME、焦点/失焦、鼠标选择、可访问性和运行时 smoke 被覆盖。
-- [x] P16j：在下一次 MIME/主题图标闪烁修复之前建立历史图像渲染器基线。使用 `a3f5b0f` 作为预保留/自定义绘制 GPUI `img()` 基线，并使用 `d497593`、`8d1198f`、`36da130` 和 `b0cac9a` 作为转换检查点，以决定回归属于 model/投影、保留 slot 状态、自定义元素绘制还是自定义图像层。在更改当前图像渲染器之前将其与 Dolphin `KStandardItemListWidget::updatePixmapCache()` / `pixmapForIcon()` 进行比较。当前代码的 A/B 支持通过 `FIKA_CUSTOM_THEME_ICONS=1` 可用，它保留条目状态但强制 MIME/主题图标通过自定义条目图像层，以便与默认 GPUI 主题图标渲染器进行桌面会话比较。`scripts/compare-item-image-renderers.sh` 现在标准化了配对日志比较，2026-06-17 的 `/etc` smoke 证据记录在 `docs/ITEM_VIEW_RENDERER_DECISIONS.md` 中。
-- [x] P16k：从证据中决定 Compact/Icons 主题图标渲染器：默认现在使用 GPUI `img()` 元素处理 MIME/主题图标，并将缩略图保留在自定义图像层上。保持此划分，除非配对的默认 vs `FIKA_CUSTOM_THEME_ICONS=1` 缩放/滚动日志证明自定义主题图标绘制器在没有首帧加载占位符、缩放时 `theme_decoded` 变动或尺寸跳跃的情况下是中性或更好的。
-- [~] P16k1：在将自定义主题图标绘制设为默认之前，设计并实现 retained MIME/theme icon image cache。cache 至少应以 `(iconName, icon_size_px)` 为 key；当主题、scale factor 或 color scheme 会影响选中路径时也要进入 key。它必须在刷新期间保留上一个同 key 真实图像，缩略图仍按 thumbnail path 独立保留，并且绝不在 prepaint 同步解码主题图标文件。设计已记录在 `docs/RETAINED_ICON_IMAGE_CACHE_PLAN.zh-CN.md`；基础实现已完成，配对运行时证据和 analyzer gate 仍待完成。
-- [ ] P16k2：为后续 MIME/theme icon renderer 添加默认 vs 自定义的成对 autosmoke 证据。必测场景：`/etc` 和混合类型用户目录，覆盖启动和 `FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll`，比较默认 GPUI `img()` 与 `FIKA_CUSTOM_THEME_ICONS=1` 或未来 retained-icon-cache flag。离线比较 gate 已作为 `scripts/compare-item-image-renderers.sh --gate-default-promotion` 存在；真实运行时日志仍需通过。2026-06-18 `/etc` 日志已采集到 `/tmp/fika-icon-default-etc-p16k2.log` 和 `/tmp/fika-icon-custom-etc-p16k2.log`；gate 因 custom 仍有 `theme_placeholder=118` 和 `theme_decoded=5` 失败。自定义路径必须没有稳定态 `theme_placeholder` 抖动、没有缩放时 `theme_decoded` burst、没有可见尺寸跳变，并且 `icon_sync` 保持在 Dolphin-style visible-first budget 内，才能考虑切默认。
-- [~] P16k2a：在重新考虑默认 custom theme icon 前构建 prewarm/hybrid bridge。`FIKA_PREWARM_THEME_ICONS=1` 现在会在可见 theme icon 仍由 GPUI `img()` 绘制时预热 retained theme-icon image。2026-06-18 `/tmp/fika-icon-prewarm-etc-p16k2.log` smoke 保持 `max_image_layer=0`、`max_gpui_image_element=64`、`theme_placeholder=0` 和 `paint_count=0`，同时把预热工作暴露为 `theme_prewarm_loaded=598`、`theme_prewarm_decoded=5` 和 `theme_prewarm_pending=118`。这验证了无可见 placeholder 的 bridge。readiness handoff 基础现已实现：app-level `ThemeIconImageReadiness` 只在真实 `RenderImage` 存在后记录精确 size/scale theme key，`PaneSnapshot`/`FileGridProps` 将该 snapshot 传给 renderer policy，opt-in `FIKA_HYBRID_THEME_ICONS=1` 会让可见 icon 在当前 key ready 前继续停留在 GPUI。`/tmp/fika-icon-hybrid-etc-readiness.log` 确认 `/etc` handoff 具有 `theme_placeholder=0`、`theme_decoded=0` 和 `max_paint=383us`，默认对照 `/tmp/fika-etc-zoom-scroll.log` 仍保持 `max_image_layer=0`/`max_gpui_image_element=64`。任何默认提升前仍需通过 default-vs-hybrid 运行时证据，因为 `/etc` 仍有约 24ms 的 visible-item `icon_sync` spike，混合目录运行也还没补齐。
-- [ ] P16k3：只有 P16k1/P16k2 通过后，才重新评估 `docs/ITEM_VIEW_RENDERER_DECISIONS.md` 中的 Compact/Icons MIME/theme icon renderer policy。在此之前保持当前划分：缩略图走自定义 image layer，普通 MIME/theme icon 走 retained item shell 上的 GPUI `img()`。
+- [x] P16j：在 MIME/主题图标闪烁修复之前建立历史图像渲染器基线。使用 `a3f5b0f` 作为预保留/自定义绘制 GPUI `img()` 基线，并使用 `d497593`、`8d1198f`、`36da130` 和 `b0cac9a` 作为转换检查点，以决定回归属于 model/投影、保留 slot 状态、自定义元素绘制还是自定义图像层。该历史基线后来演进为当前的 `FIKA_GPUI_THEME_ICONS=1` 同场景 GPUI image baseline；默认路径已经是 full custom image layer。`scripts/compare-item-image-renderers.sh` 继续标准化配对日志比较。
+- [x] P16k：从证据中决定 Compact/Icons 主题图标渲染器。历史阶段先保留 GPUI `img()`，随后经过 prewarm/hybrid handoff、semantic key cache、source-image reuse、app-level prewarm 和 cache budget，默认已推进到 full custom image layer；`FIKA_GPUI_THEME_ICONS=1` 保留为 GPUI baseline。
+- [x] P16k1：retained MIME/theme icon image cache 已实现并成为默认路径。cache 以 semantic `ThemeIconImageKey` 为主；当主题、scale factor 或 color scheme 会影响选中路径时使用稳定输入/哨兵；缩略图仍按 thumbnail path 独立保留；普通渲染/prepaint 不做无界同步解码。设计和完成证据记录在 `docs/RETAINED_ICON_IMAGE_CACHE_PLAN.zh-CN.md`。
+- [x] P16k2：默认 full-custom vs GPUI baseline 的成对 runtime evidence 已由后续 runner 和最终 core evidence 覆盖。`scripts/run-retained-renderer-evidence.sh --core --skip-build --prefix fika-core-final-retained-v3` 覆盖 Compact/Icons/Details；item summary 显示 `gpui_image_element=0`、`theme_placeholder=0`、visible `theme_decoded=0`，image max paint `373us`，warm image max paint `363us`。
+- [x] P16k2a：在重新考虑默认 custom theme icon 前构建 prewarm/hybrid bridge。`FIKA_PREWARM_THEME_ICONS=1` 会在可见 theme icon 仍由 GPUI `img()` 绘制时预热 retained theme-icon image。2026-06-18 `/tmp/fika-icon-prewarm-etc-p16k2.log` smoke 保持 `max_image_layer=0`、`max_gpui_image_element=64`、`theme_placeholder=0` 和 `paint_count=0`，同时把预热工作暴露为 `theme_prewarm_loaded=598`、`theme_prewarm_decoded=5` 和 `theme_prewarm_pending=118`。这验证了无可见 placeholder 的 bridge。readiness handoff 基础随后实现，并被后续成对证据验证；该路径最终被 semantic cache、source-image reuse、app-level prewarm 和 cache budget 后的 full custom 默认取代。
+- [x] P16k3：`docs/ITEM_VIEW_RENDERER_DECISIONS.md` 已重新评估 Compact/Icons MIME/theme icon renderer policy。当前划分为：缩略图和普通 MIME/theme icon 都走 retained/custom image layer，`FIKA_GPUI_THEME_ICONS=1` 仅作为 GPUI baseline，`FIKA_HYBRID_THEME_ICONS=1` 仅作为显式过渡 handoff 路径。
 - [x] P16l：在任何保留行绘制器工作之前建立 Places GPUI 侧栏基线。`FIKA_PERF_PLACES_VIEW=1` 现在记录快照时间、侧栏构建时间和 GPUI 行路径的当前渲染器策略表面计数；`docs/PLACES_RENDERER_PLAN.md` 记录了 2026-06-17 桌面会话基线。
 - [x] P16m：在任何保留行绘制器工作之前添加非破坏性 Places 运行时 smoke 路径。`FIKA_AUTOSMOKE_PLACES=targets` 现在驱动 place 目标、插入开始、插入结束、清除和快照日志，而不重排或持久化书签。完整的重排/放置变异 smoke 仍然门控于隔离的用户 place 配置或手动审查。
 - [x] P16n：在不改变可见渲染的情况下添加保留 Places 绘制 slot 和统计。`PlacePaintSlotCache` 通过稳定的语义 identity 保留 section 标题和 place 行，对设备行优选设备 id，对普通行优选路径/组。`[fika places-slots]` 现在报告当前 GPUI 侧栏的插入/内容/几何/视觉/未更改/已移除 slot 活动。
@@ -491,24 +491,24 @@ Places chrome 默认之后的当前执行入口是
 - [x] P16fe：采集 `/etc` 和混合用户目录的成对 hybrid MIME/theme icon 证据。
   `scripts/run-retained-renderer-evidence.sh --hybrid-icons --skip-build --prefix fika-hybrid-icons-20260619`
   在 `/etc` 和 Downloads 都通过了 `--gate-hybrid-handoff`，并且
-  `theme_placeholder=0`、visible `theme_decoded=0`。结果支持继续向默认 hybrid
-  renderer 推进；P16ff 添加更严格的 gate，P16fg 切换默认策略。
+  `theme_placeholder=0`、visible `theme_decoded=0`。结果支持了中间 handoff 步骤；
+  后续 full custom 工作已经取代 hybrid 成为默认。
 - [x] P16ff：添加严格的 hybrid icon 默认提升 gate。
   `scripts/compare-item-image-renderers.sh --gate-hybrid-default-promotion`
   现在在 handoff gate 之上，用显式容差比较 `icon_sync`、item-view phase max total、
   static visual prepaint/paint 和 image paint 与 GPUI baseline。2026-06-19 的 `/etc` 和
-  Downloads hybrid 日志都通过了这个更严格的 gate，因此下一段代码切片可以尝试默认 hybrid
-  renderer policy，并重新运行同一 gate。
-- [x] P16fg：将普通 MIME/theme icon 默认切到 hybrid renderer。
+  Downloads hybrid 日志都通过了这个更严格的 gate，因此下一段代码切片当时可以尝试默认
+  hybrid renderer policy；该路径后来被 full custom 默认取代。
+- [x] P16fg：将普通 MIME/theme icon 默认切到 hybrid renderer，作为 full custom 前的中间态。
   `FIKA_GPUI_THEME_ICONS=1` 现在强制旧 GPUI `img()` baseline；默认路径会让尚未 ready 的
   theme-icon key 继续走 GPUI，并把 ready key 交给 retained custom image layer。证据
   runner 现在用 `FIKA_GPUI_THEME_ICONS=1` 采集 baseline 日志，而默认候选不再需要 hybrid env。
   证据：`scripts/run-retained-renderer-evidence.sh --hybrid-icons --skip-build --prefix fika-hybrid-default-20260619`
   在 `/etc` 和 Downloads 都通过了 `--gate-hybrid-default-promotion`。
-- [x] P16fh：默认 hybrid 切换后同步顶层 roadmap 和状态文档。
+- [x] P16fh：默认 hybrid 中间态切换后同步顶层 roadmap 和状态文档。
   `docs/FULL_RETAINED_RENDERER_ROADMAP.md`、`docs/ITEM_VIEW_CUSTOM_PAINT_STATUS.md`
-  和 `docs/RETAINED_ICON_IMAGE_CACHE_PLAN.md` 现在把当前 MIME/theme icon 状态描述为
-  hybrid-by-default，并明确 `FIKA_GPUI_THEME_ICONS=1` 是 baseline override。
+  和 `docs/RETAINED_ICON_IMAGE_CACHE_PLAN.md` 当时把 MIME/theme icon 状态描述为
+  hybrid-by-default，并明确 `FIKA_GPUI_THEME_ICONS=1` 是 baseline override；后续文档已更新为 full custom 默认。
 - [x] P16fi：记录剩余 Places typed DnD payload bridge 边界。
   `docs/PLACES_RETAINED_EVENT_DELIVERY_PLAN.zh-CN.md` 现在区分默认 row/section event
   callback 移除与仍然需要的 sidebar typed payload bridge。默认 retained-DnD 必须显示
@@ -744,10 +744,12 @@ Places chrome 默认之后的当前执行入口是
   直接把 `FIKA_CUSTOM_THEME_ICONS=1` full-custom 压力路径作为冷启动默认仍会暴露
   首次加载 custom image placeholder 和 decode completion churn
   （`/tmp/fika-pane-full-custom-etc.log`：`theme_placeholder=52`、visible
-  `theme_decoded=5`）。实现：默认 hybrid renderer 现在使用可见集合级 handoff。
+  `theme_decoded=5`）。当时实现：默认 hybrid renderer 使用可见集合级 handoff。
   当前可见集合中任意 theme-icon key 未 ready 时，所有可见 theme icons 都继续使用
   GPUI `img()`，item image layer 只预热 retained images；当这组 key 全部 ready 后，
-  所有可见 theme icons 同一批切到 retained custom image layer。证据：
+  所有可见 theme icons 同一批切到 retained custom image layer。该阶段后来被
+  semantic cache、source-image reuse、app-level prewarm 和 cache budget 后的 full custom
+  默认取代。证据：
   `/tmp/fika-pane-cohort-default-downloads.log` 相对
   `/tmp/fika-pane-cohort-gpui-downloads.log` 通过
   `--gate-hybrid-default-promotion`，且 `theme_placeholder=0`、visible

@@ -80,11 +80,11 @@ Places chrome 默认之后的当前执行路线图是
 - `[fika renderer-policy]` 日志显示自定义绘制、保留交互和 GPUI shell 边界的合理表面计数分布
 - `scripts/check-item-view-perf-analyzer.sh` 通过（分析器自检门）
 
-当前状态：`/etc` 自动 smoke 满足 Compact/Icons 缩放-滚动图标同步部分。详情和完整 DnD 运行时 smoke 仍需要桌面会话刷新。下一个 shell 移除或绘制器扩展切片在证据被冻结之前不得继续进行。
+当前状态：最终 core evidence 已冻结并通过。`scripts/run-retained-renderer-evidence.sh --core --skip-build --prefix fika-core-final-retained-v3` 覆盖 Compact、Icons、Details 以及 Places targets/overflow/layout/hit-test/targeting/dnd。下一个 shell 移除切片仍受 GPUI drag-start/typed payload API 边界约束。
 
 ### R2：图像和主题图标视觉稳定性
 
-在 P8 自定义图像绘制层被接受后，主题图标渲染对首帧加载占位符抖动很敏感。默认 hybrid 路径会在当前 retained image key ready 前继续使用 GPUI `img()`，ready 后再把图标交给 custom image layer；`FIKA_GPUI_THEME_ICONS=1` 保留旧 GPUI baseline，`FIKA_CUSTOM_THEME_ICONS=1` 保留 full custom 压力路径。在任一渲染器中，主题图标解码保持在 GPUI 的图像缓存路径上；渲染/prepaint 代码不得同步读取或解码主题图标文件。缩略图仅按精确缩略图路径保留，并继续使用容纳的图像边界。缩略图后备图标仍然在没有真实图像存在或语义源更改时绘制。
+在 P8 自定义图像绘制层被接受后，主题图标渲染对首帧加载占位符抖动很敏感。当前默认路径已经推进到 full custom image layer：pane MIME/theme icon 通过 retained semantic key、app-level readiness/cache、source-image reuse 和有界预算绘制，底层仍复用 GPUI `RetainAllImageCache -> RenderImage -> Window::paint_image`。`FIKA_GPUI_THEME_ICONS=1` 保留旧 GPUI baseline，`FIKA_HYBRID_THEME_ICONS=1` 保留过渡 handoff 路径。在任一渲染器中，主题图标解码保持在 GPUI 的图像缓存/RenderImage 路径上；普通渲染/prepaint 代码不得无界同步读取或解码主题图标文件。缩略图仅按精确缩略图路径保留，并继续使用容纳的图像边界。缩略图后备图标仍然在没有真实图像存在或语义源更改时绘制。
 
 即时非 GUI 安全的工作是在 Dolphin 对齐的缩放/图标视觉更新后冻结新的运行时证据，然后执行 P15 转换顺序。大型文件网格渲染器/controller 模块已拆分为聚焦的 model/投影、controller/hit-test、painter 和 renderer-policy 模块。
 

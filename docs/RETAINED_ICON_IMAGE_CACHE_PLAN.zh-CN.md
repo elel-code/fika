@@ -253,14 +253,14 @@ scripts/run-retained-renderer-evidence.sh --hybrid-icons
   `theme_loaded=310`、`theme_placeholder=0`、`theme_decoded=0`、
   `theme_prewarm_pending=44`、`max_paint=378us`。
 - 决策：成对证据补齐了之前缺失的混合目录部分，并通过了显式 hybrid 默认提升 gate。
-  它支持后续代码切片把默认 renderer policy 改成 hybrid，同时对尚未 ready 的 icon key 继续保留
-  GPUI fallback。
+  它支持了后续代码切片；最终默认值在 retained semantic cache、prewarm 和预算控制落地后
+  继续推进到 full custom。
 
-2026-06-19 默认 hybrid 代码切片证据：
+2026-06-19 默认 handoff 代码切片证据：
 
 - Runner：`scripts/run-retained-renderer-evidence.sh --hybrid-icons --skip-build --prefix fika-hybrid-default-20260619`。
-- Candidate 日志使用默认 renderer policy，不设置 `FIKA_HYBRID_THEME_ICONS`；baseline 日志使用
-  `FIKA_GPUI_THEME_ICONS=1`。
+- Candidate 日志使用当时的默认 renderer policy，不设置 `FIKA_HYBRID_THEME_ICONS`；
+  baseline 日志使用 `FIKA_GPUI_THEME_ICONS=1`。
 - `/etc` 日志：
   `/tmp/fika-hybrid-default-20260619-icon-hybrid-default-etc.log` 和
   `/tmp/fika-hybrid-default-20260619-icon-hybrid-etc.log`。
@@ -269,6 +269,25 @@ scripts/run-retained-renderer-evidence.sh --hybrid-icons
   `/tmp/fika-hybrid-default-20260619-icon-hybrid-downloads.log`。
 - 两组都通过了 `--gate-hybrid-default-promotion`，且 `theme_placeholder=0`、visible
   `theme_decoded=0`。
+
+2026-06-19 默认 full-custom 完成证据：
+
+- Full custom 现在是 pane MIME/theme icon 默认 renderer：
+  `custom_theme_icons_enabled()` 默认返回 true，`FIKA_GPUI_THEME_ICONS=1` 强制
+  GPUI baseline，`FIKA_HYBRID_THEME_ICONS=1` 是显式过渡路径。
+- 最终 core evidence：
+  `scripts/run-retained-renderer-evidence.sh --core --skip-build --prefix
+  fika-core-final-retained-v3`。
+- Item 证据覆盖 Compact、Icons 和 Details：
+  `/tmp/fika-core-final-retained-v3-item-etc-zoom-scroll.log`、
+  `/tmp/fika-core-final-retained-v3-item-etc-icons-zoom-scroll.log`、
+  `/tmp/fika-core-final-retained-v3-item-etc-details-zoom-scroll.log`。
+- Analyzer summary：modes 为 `Details,Icons,Compact`，warm steady max total
+  `1108us`，file-grid max build `1344us`，image max paint `373us`，warm image
+  max paint `363us`，warm static visual max paint `2546us`，warm custom/details
+  visual max paint `3309us`。
+- Renderer policy 证明 image transition 已完成：
+  `gpui_image_element=0`、`gpui_directory_drop_shell=0`、`gpui_details_header=0`。
 
 2026-06-19 Dolphin model consolidation：
 
@@ -314,16 +333,16 @@ scripts/run-retained-renderer-evidence.sh --hybrid-icons
   painting 不慢于默认 GPUI image element 路径，才能考虑任何默认提升。
   2026-06-18 `/etc` 证据已通过 placeholder/decode 部分，但由于 `icon_sync` spike 和混合目录运行仍需跟进，尚未达到完整提升标准。首选 runner：
   `scripts/run-retained-renderer-evidence.sh --hybrid-icons`。
-- [x] 在切换默认 renderer 前添加更严格的 hybrid 默认提升 gate。当前
-  `--gate-hybrid-handoff` 证明 GPUI fallback、prewarm、ready-key handoff 和没有可见
-  placeholder/decode churn；默认切换还需要为 item-view phase maxima、image paint、
-  static visual variance 和 renderer-policy 分布定义明确性能阈值。
-- [x] 只有在代码切片继续让 `/etc` 和混合用户目录通过同一 gate 后，才把默认 MIME/theme
-  icon renderer policy 改成 hybrid。
-- [x] 在 hybrid 默认切换后更新 renderer decisions。
-  `docs/ITEM_VIEW_RENDERER_DECISIONS.zh-CN.md` 现在记录默认 hybrid policy、
-  `FIKA_GPUI_THEME_ICONS=1` 作为旧 GPUI baseline，以及 `FIKA_CUSTOM_THEME_ICONS=1`
-  作为 full custom 压力路径。
+- [x] 在切换 renderer policy 前添加更严格的 handoff/default-promotion gate。
+  该 gate 证明 GPUI fallback、prewarm、ready-key handoff、没有可见 placeholder/decode
+  churn、明确性能阈值和 renderer-policy 分布。
+- [x] 以 hybrid readiness handoff 作为中间提升步骤，并在 retained semantic cache、
+  source-image reuse、app-level prewarm 和 cache budget 通过证据后，将默认 MIME/theme
+  icon renderer 推进到 full custom。
+- [x] 在 full-custom 默认切换后更新 renderer decisions。
+  `docs/ITEM_VIEW_RENDERER_DECISIONS.zh-CN.md` 现在记录默认 full custom policy、
+  `FIKA_GPUI_THEME_ICONS=1` 作为旧 GPUI baseline，以及
+  `FIKA_HYBRID_THEME_ICONS=1` 作为显式过渡路径。
 - [x] 统一 pane/Details/Places 的 retained image request/load/ready 模型，并移除 Places
   专属 image cache 壳。
 - [x] 将 thumbnail retained fallback 改为有界 LRU，并把 Dolphin role-updater read-ahead
@@ -331,6 +350,6 @@ scripts/run-retained-renderer-evidence.sh --hybrid-icons
 - [x] 在 pane 与 Places 之间共享 retained text shape cache/stat 机制和 retained slot delta
   stats。
 - [x] 将 thumbnail/theme retained image 的直接加载入口收束到 `RetainedImageRequest` 后面。
-- [ ] 在未来 full-custom 运行能在 `/etc` 和混合用户目录中击败 hybrid/default gate，且没有
-  placeholder churn、zoom-time decode burst、image-paint 回归或 renderer-policy 漂移前，
-  保持 hybrid MIME/theme icon renderer 为默认。
+- [x] 在最终 core evidence gate 下保持 full-custom MIME/theme icon renderer 为默认。
+  未来变更必须与 `FIKA_GPUI_THEME_ICONS=1` 对比，并继续保持 placeholder churn、
+  zoom-time decode burst、image-paint 回归和 renderer-policy 漂移为零。
