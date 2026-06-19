@@ -360,6 +360,44 @@ with no `FIKA_HYBRID_THEME_ICONS` override, baseline logs used
 `--gate-hybrid-default-promotion` with `theme_placeholder=0` and visible
 `theme_decoded=0`.
 
+## 2026-06-19 Places Full Handoff A/B
+
+The full Places row visual path now has a real opt-in breakthrough, but not a
+default-promotion decision.
+
+The current full path is:
+
+- `FIKA_PLACES_ROW_VISUAL_POLICY=full` for text plus vector-icon painting in
+  the retained row visual layer.
+- `FIKA_PLACES_ROW_VISUAL_HANDOFF=1` for ready-only handoff: GPUI text/icons
+  stay visible during warmup frames, `PlacesRowTextShapeCache` is prewarmed,
+  and the row switches to full custom paint only after retained resources are
+  ready.
+
+Evidence was captured with:
+
+```sh
+scripts/run-retained-renderer-evidence.sh --places-full-handoff --skip-build --prefix fika-places-full-handoff-runner-20260619
+scripts/run-retained-renderer-evidence.sh --places-full-handoff --analyze-only --skip-build --prefix fika-places-full-handoff-runner-20260619
+```
+
+Key logs:
+
+- `/tmp/fika-places-full-handoff-runner-20260619-places-handoff-full-targets.log`
+  passed the full-handoff row-visual gates. Ready/warm row paint stayed at
+  `379us`, while first-frame `[fika render] total` reached `27268us`.
+- `/tmp/fika-places-full-handoff-runner-20260619-places-handoff-full-overflow.log`
+  passed with 75 rows, 29 painted rows, and warm row paint at `1090us`.
+- `/tmp/fika-places-full-handoff-runner-20260619-places-handoff-full-layout.log`
+  passed with warm row paint at `724us`.
+
+Decision: keep default Places rows on custom chrome plus GPUI text/icons for
+now. The blocker is no longer cold row visual paint by itself; it is the
+whole-frame startup/target total-render variance when full handoff is enabled.
+Future promotion work should separate Places snapshot, pane item, root, and row
+visual ownership in the first-frame total, then reduce full-specific variance
+before lowering the full path's 30ms total-render guard.
+
 ## Next Renderer Decisions
 
 1. Keep the remaining drag-start shells until the GPUI API boundary changes.
@@ -371,5 +409,6 @@ with no `FIKA_HYBRID_THEME_ICONS` override, baseline logs used
 3. Keep `FIKA_GPUI_THEME_ICONS=1` as the GPUI baseline path and use
    `--gate-hybrid-default-promotion` for future MIME/theme icon renderer
    changes.
-4. Do not start a Places custom-paint migration until item-view runtime DnD and
-   perf gates are refreshed.
+4. Continue Places full-row visual work through the `--places-full-handoff`
+   A/B gate. Do not promote full rows until row-visual cost and whole-frame
+   `[fika render] total=` are neutral or better than the default chrome policy.

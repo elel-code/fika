@@ -102,10 +102,46 @@ fika-hybrid-default-20260619` 验证。Candidate 日志使用默认 renderer pol
 Downloads 都通过了 `--gate-hybrid-default-promotion`，且 `theme_placeholder=0`、visible
 `theme_decoded=0`。
 
+## 2026-06-19 Places Full Handoff A/B
+
+Places full row visual 路径现在有真实的 opt-in 突破，但还不是默认提升决策。
+
+当前 full 路径是：
+
+- `FIKA_PLACES_ROW_VISUAL_POLICY=full`：在 retained row visual layer 中绘制文本和
+  vector icon。
+- `FIKA_PLACES_ROW_VISUAL_HANDOFF=1`：ready-only handoff。warmup 帧继续显示 GPUI
+  text/icons，预热 `PlacesRowTextShapeCache`，只有 retained 资源 ready 后 row 才切到
+  full custom paint。
+
+证据采集命令：
+
+```sh
+scripts/run-retained-renderer-evidence.sh --places-full-handoff --skip-build --prefix fika-places-full-handoff-runner-20260619
+scripts/run-retained-renderer-evidence.sh --places-full-handoff --analyze-only --skip-build --prefix fika-places-full-handoff-runner-20260619
+```
+
+关键日志：
+
+- `/tmp/fika-places-full-handoff-runner-20260619-places-handoff-full-targets.log`
+  通过 full-handoff row-visual gate。ready/warm row paint 为 `379us`，但首帧
+  `[fika render] total` 达到 `27268us`。
+- `/tmp/fika-places-full-handoff-runner-20260619-places-handoff-full-overflow.log`
+  在 75 行、29 个 painted rows 下通过，warm row paint 为 `1090us`。
+- `/tmp/fika-places-full-handoff-runner-20260619-places-handoff-full-layout.log`
+  通过，warm row paint 为 `724us`。
+
+决策：当前默认继续保持 Places custom chrome 加 GPUI text/icons。阻塞点已经不是 cold row
+visual paint 本身，而是启用 full handoff 时整帧 startup/target total-render 波动。后续默认提升
+工作需要把首帧 total 中的 Places snapshot、pane item、root 和 row visual owner 分开，再降低
+full 专属波动，之后才能下调 full 路径的 30ms total-render guard。
+
 ## 下一批渲染器决策
 
 1. 保持剩余 drag-start shells 直到 GPUI API 边界变化。不要将 GPUI per-element `on_drag_move` 用作 pane self-drag 悬停的真实来源；active item-drag window tracker 拥有该路径。
 2. 使用运行时日志决定当前 custom-painted surface 是否保持 custom-paint 或回退到 GPUI 渲染器叠加在 retained model 上。
 3. 保留 `FIKA_GPUI_THEME_ICONS=1` 作为 GPUI baseline 路径，并在未来 MIME/theme icon
    renderer 变更时继续使用 `--gate-hybrid-default-promotion`。
-4. 在 item-view 运行时 DnD 和 perf 门刷新之前不启动 Places custom-paint 迁移。
+4. 通过 `--places-full-handoff` A/B gate 继续推进 Places full-row visual；只有当
+   row-visual cost 和整帧 `[fika render] total=` 对比默认 chrome policy 达到中性或更优后，
+   才能提升 full rows 默认值。

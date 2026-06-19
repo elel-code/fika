@@ -635,6 +635,17 @@ Places chrome 默认之后的当前执行入口是
 - [x] P16gaj：将面向 app 的 place-draft lifecycle wrapper 移入 place-draft facade。
   `src/ui/place_draft.rs` 现在拥有 `PlaceDraft` 的 pane-scoped 清理、dismiss 和 focus 切换；
   draft 创建和提交仍留在对应的 Places user/network 路径中。
+- [x] P16gak：记录 Places full-row visual handoff 的突破和默认提升阻塞。突破点不是
+  原始 full custom paint，而是 ready-only handoff 加 `PlacesRowTextShapeCache` 预热：
+  warmup 帧继续显示 GPUI text/icons，资源 ready 后才切到 retained full row painting。
+  `scripts/run-retained-renderer-evidence.sh --places-full-handoff --skip-build --prefix
+  fika-places-full-handoff-runner-20260619` 的证据显示 full targets warm row paint 为
+  `379us`，overflow 在 75 行/29 painted rows 下 warm row paint 为 `1090us`，layout
+  warm row paint 为 `724us`；同一组 analyze-only runner 通过 row-visual gate。默认提升
+  仍被阻塞，因为 targets full 运行首帧 `[fika render] total` 仍达到 `27268us`，所以剩余工作是
+  首帧 owner accounting 和 total-render 波动，而不是 cold row visual paint 本身。roadmap、
+  renderer decisions 和 evidence checklist 现在要求在修改 Places full-row visual 默认值前采集
+  `--places-full-handoff` A/B 证据。
 - [ ] P16q：在每个 P16 实现切片之后，单独提交并附带相关验证：仅文档切片需要 `git diff --check`；代码切片需要 `cargo fmt`、`cargo check`、`cargo test -q`、`scripts/check-item-view-perf-analyzer.sh`、`scripts/check-places-perf-analyzer.sh` 和 `git diff --check`。
 - [x] P16r：记录运行时自测试和突破记录规则。可重复的滚动、缩放、启动图标、调整大小、模式切换和 Places 目标回退应在依赖手动计时之前通过 autosmoke 日志和分析器脚本重现。任何确认的优化突破必须记录症状、Dolphin 比较边界、根本原因、实现、保存的日志/分析器命令和未来回归守卫在拥有的设计或决策文档中。
 

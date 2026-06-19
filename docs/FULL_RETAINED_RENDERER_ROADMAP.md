@@ -117,6 +117,10 @@ Required evidence:
 - DnD smoke with `FIKA_DEBUG_DND=1` covering pane item to pane directory,
   pane item to Places, Places to pane directory, and external path drop.
 - Places default chrome targets, overflow, layout, and hit-test autosmoke logs.
+- Places default-chrome versus full-handoff A/B logs with
+  `scripts/run-retained-renderer-evidence.sh --places-full-handoff` when
+  changing Places full-row visual policy, text-shape handoff, or promotion
+  thresholds.
 - Default GPUI image path versus `FIKA_CUSTOM_THEME_ICONS=1` only when changing
   MIME/theme icon rendering.
 
@@ -176,6 +180,53 @@ Default may change only when:
 - Context menus still distinguish blank sidebar, section, bookmark, trash, and
   device rows.
 - Internal reorder and item/external drop behavior remain unchanged.
+
+### Track 3a: Places Full Row Visual Handoff
+
+Purpose: move Places text and vector-icon painting toward a fully retained row
+visual path without promoting it before it is neutral or better than the
+current chrome split.
+
+Current opt-in state:
+
+- `FIKA_PLACES_ROW_VISUAL_POLICY=full` paints full row text and vector icons in
+  the custom row visual layer.
+- `FIKA_PLACES_ROW_VISUAL_HANDOFF=1` keeps GPUI text/icons for the warmup
+  frames, prewarms `PlacesRowTextShapeCache`, and hands off only after the
+  retained row visual resources are ready.
+- The handoff path is analyzer-backed through
+  `scripts/run-retained-renderer-evidence.sh --places-full-handoff`, which
+  captures targets, overflow, and layout logs for both default chrome and full
+  handoff.
+
+2026-06-19 evidence:
+
+- `/tmp/fika-places-full-handoff-runner-20260619-places-handoff-full-targets.log`
+  passed the full-handoff row-visual gates with warm row paint at `379us`, but
+  first-frame `[fika render] total` reached `27268us`.
+- `/tmp/fika-places-full-handoff-runner-20260619-places-handoff-full-overflow.log`
+  passed with 75 rows, 29 painted rows, and warm row paint at `1090us`.
+- `/tmp/fika-places-full-handoff-runner-20260619-places-handoff-full-layout.log`
+  passed with warm row paint at `724us`.
+
+Decision:
+
+- The full path has a real architectural breakthrough: ready-only handoff and
+  text-shape prewarming remove the earlier cold row-paint blocker, and the
+  retained custom row visual path is measurable under repeatable gates.
+- It is not default yet. The remaining blocker is whole-frame startup/target
+  total-render variance, not row visual painting alone. Continue comparing
+  row-visual cost and `[fika render] total=` before promotion.
+
+Next design step:
+
+- Split first-frame Places snapshot, item-pane work, root work, and full row
+  visual work clearly enough that the default-promotion gate can identify which
+  owner caused a total-render spike.
+- Reduce or amortize any full-handoff-specific first-frame work before lowering
+  the full path's 30ms total-render guard.
+- Keep the default chrome policy until full handoff matches or beats chrome in
+  the same targets/overflow/layout A/B suite.
 
 ### Track 4: Typed Drag Boundary
 
@@ -249,7 +300,8 @@ Next candidates:
 
 - Runtime evidence helper ownership that still lives in app root.
 - Remaining pane render orchestration that can become file-grid facade methods.
-- Places event-delivery lifecycle once Track 3 starts.
+- Places full-handoff evidence and promotion helpers that still live outside
+  the Places renderer facade.
 
 Acceptance:
 
@@ -260,10 +312,10 @@ Acceptance:
 
 ## Next Queue
 
-1. Implement the retained MIME/theme icon image cache foundation from
+1. Keep the retained MIME/theme icon image cache foundation aligned with
    `docs/RETAINED_ICON_IMAGE_CACHE_PLAN.md`.
-2. Start the opt-in retained Places event layer from
-   `docs/PLACES_RETAINED_EVENT_DELIVERY_PLAN.md`.
+2. Continue Track 3a by reducing full-handoff first-frame total-render
+   variance and keeping `--places-full-handoff` A/B evidence current.
 3. Re-audit GPUI drag-start API after dependency updates before Track 4.
 4. Convert rename behavior matrix items into tests/smoke before Track 5.
 

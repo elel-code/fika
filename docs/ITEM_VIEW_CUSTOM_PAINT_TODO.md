@@ -1868,6 +1868,21 @@ tracks.
   place-draft facade. `src/ui/place_draft.rs` now owns pane-scoped clearing,
   dismiss, and focus changes for `PlaceDraft`, while draft creation and commit
   remain in the owning Places user/network paths.
+- [x] P16gak: Record the Places full-row visual handoff breakthrough and
+  default-promotion blocker. The breakthrough is not raw full custom paint; it
+  is ready-only handoff plus `PlacesRowTextShapeCache` prewarming, which keeps
+  GPUI text/icons visible during warmup and switches to retained full row
+  painting only after resources are ready. Evidence from
+  `scripts/run-retained-renderer-evidence.sh --places-full-handoff --skip-build --prefix
+  fika-places-full-handoff-runner-20260619` shows full targets warm row paint
+  at `379us`, overflow warm row paint at `1090us` for 75 rows/29 painted rows,
+  and layout warm row paint at `724us`; the same analyze-only runner passes
+  the row-visual gates. Default promotion remains blocked because the targets
+  full run still reached `27268us` first-frame `[fika render] total`, so the
+  remaining work is first-frame owner accounting and total-render variance, not
+  cold row visual paint alone. The roadmap, renderer decisions, and evidence
+  checklist now require `--places-full-handoff` A/B evidence before changing
+  the Places full-row visual default.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

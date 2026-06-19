@@ -105,6 +105,9 @@ path 后，才能成为默认。
 - `FIKA_DEBUG_DND=1` DnD smoke，覆盖 pane item 到 pane 目录、pane item 到
   Places、Places 到 pane 目录，以及外部路径 drop。
 - Places 默认 chrome 的 targets、overflow、layout 和 hit-test autosmoke。
+- 当修改 Places full-row visual policy、text-shape handoff 或默认提升阈值时，使用
+  `scripts/run-retained-renderer-evidence.sh --places-full-handoff` 采集
+  Places 默认 chrome 与 full handoff 的 A/B 日志。
 - 仅在更改 MIME/theme icon renderer 时，采集默认 GPUI image 路径和
   `FIKA_CUSTOM_THEME_ICONS=1` 的对比日志。
 
@@ -158,6 +161,47 @@ renderer policy。
   `scripts/analyze-places-perf.sh --expect-retained-event-policy`。
 - 右键菜单仍区分空白侧栏、section、bookmark、trash 和 device 行。
 - 内部 reorder 和 item/external drop 行为不变。
+
+### Track 3a：Places Full Row Visual Handoff
+
+目的：将 Places 文本和 vector icon 绘制推进到完整 retained row visual 路径，但在它对比
+当前 chrome split 达到性能中性或更优前，不提升为默认。
+
+当前 opt-in 状态：
+
+- `FIKA_PLACES_ROW_VISUAL_POLICY=full` 在 custom row visual layer 中绘制完整 row
+  文本和 vector icon。
+- `FIKA_PLACES_ROW_VISUAL_HANDOFF=1` 在 warmup 帧继续使用 GPUI text/icons，
+  预热 `PlacesRowTextShapeCache`，并且只有 retained row visual 资源 ready 后才 handoff。
+- handoff 路径已经由 `scripts/run-retained-renderer-evidence.sh --places-full-handoff`
+  提供 analyzer-backed 证据；该脚本会为默认 chrome 和 full handoff 分别采集
+  targets、overflow 和 layout 日志。
+
+2026-06-19 证据：
+
+- `/tmp/fika-places-full-handoff-runner-20260619-places-handoff-full-targets.log`
+  通过 full-handoff row-visual gate，warm row paint 为 `379us`，但首帧
+  `[fika render] total` 达到 `27268us`。
+- `/tmp/fika-places-full-handoff-runner-20260619-places-handoff-full-overflow.log`
+  在 75 行、29 个 painted rows 下通过，warm row paint 为 `1090us`。
+- `/tmp/fika-places-full-handoff-runner-20260619-places-handoff-full-layout.log`
+  通过，warm row paint 为 `724us`。
+
+决策：
+
+- full 路径已经有真实架构突破：ready-only handoff 和 text-shape 预热移除了之前的
+  cold row-paint blocker，retained custom row visual 路径也能被可重复 gate 度量。
+- 但它还不是默认。剩余阻塞是整帧 startup/target total-render 波动，而不是 row
+  visual painting 本身。默认提升前必须继续同时比较 row-visual cost 和
+  `[fika render] total=`。
+
+下一步设计：
+
+- 将首帧 Places snapshot、pane item work、root work 和 full row visual work 拆分得足够清楚，
+  让默认提升 gate 能识别 total-render 尖峰属于哪个 owner。
+- 在降低 full 路径 30ms total-render guard 前，减少或摊销 full-handoff 专属首帧工作。
+- 保持默认 chrome policy，直到 full handoff 在同一 targets/overflow/layout A/B suite 中
+  匹配或超过 chrome。
 
 ### Track 4：Typed Drag 边界
 
@@ -221,7 +265,7 @@ file-grid 和 Places facade。
 
 - 仍在 app root 中的 runtime evidence helper ownership。
 - 可变为 file-grid facade method 的剩余 pane render orchestration。
-- Track 3 开始后的 Places event-delivery lifecycle。
+- 仍在 Places renderer facade 外部的 Places full-handoff 证据和默认提升 helper。
 
 验收：
 
@@ -231,10 +275,10 @@ file-grid 和 Places facade。
 
 ## 下一批队列
 
-1. 按 `docs/RETAINED_ICON_IMAGE_CACHE_PLAN.zh-CN.md` 实现 retained MIME/theme icon
-   image cache 基础。
-2. 按 `docs/PLACES_RETAINED_EVENT_DELIVERY_PLAN.zh-CN.md` 启动 opt-in retained
-   Places event layer。
+1. 继续让 retained MIME/theme icon image cache 基础与
+   `docs/RETAINED_ICON_IMAGE_CACHE_PLAN.zh-CN.md` 对齐。
+2. 继续 Track 3a：降低 full-handoff 首帧 total-render 波动，并保持
+   `--places-full-handoff` A/B 证据最新。
 3. 在依赖更新后重新审计 GPUI drag-start API，再进入 Track 4。
 4. 在 Track 5 前，把 rename 行为矩阵转为测试/smoke。
 
