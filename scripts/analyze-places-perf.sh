@@ -601,6 +601,11 @@ function renderer_retained_interaction_for_policy(event_policy, rows, sections) 
     max_update("row_visual_painted", painted)
     max_update("row_visual_prepaint", prepaint)
     max_update("row_visual_paint", paint)
+    if (row_visual_frames > 2) {
+        row_visual_warm_frames++
+        max_update("row_visual_warm_prepaint", prepaint)
+        max_update("row_visual_warm_paint", paint)
+    }
 }
 
 /^\[fika places-row-shape-cache\]/ {
@@ -1107,12 +1112,15 @@ END {
         max_values["event_probe_paint"],
         max_values["event_probe_targeting"],
         max_values["event_probe_dnd"])
-    printf("places_row_visual_frames=%d max_rows=%d max_painted=%d max_prepaint=%dus max_paint=%dus\n",
+    printf("places_row_visual_frames=%d max_rows=%d max_painted=%d max_prepaint=%dus max_paint=%dus warm_frames=%d max_warm_prepaint=%dus max_warm_paint=%dus\n",
         row_visual_frames,
         max_values["row_visual_rows"],
         max_values["row_visual_painted"],
         max_values["row_visual_prepaint"],
-        max_values["row_visual_paint"])
+        max_values["row_visual_paint"],
+        row_visual_warm_frames,
+        max_values["row_visual_warm_prepaint"],
+        max_values["row_visual_warm_paint"])
     printf("places_row_shape_cache_frames=%d max_hits=%d max_misses=%d max_evicted=%d max_entries=%d\n",
         row_shape_cache_frames,
         max_values["row_shape_hits"],

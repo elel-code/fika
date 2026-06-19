@@ -1315,6 +1315,21 @@ tracks.
   versus default chrome's microsecond-level row visual paint (`max_paint=63us`).
   Next gate: solve Places custom text cold-start/warmup or keep GPUI text as the
   Dolphin-aligned default boundary.
+- [x] P16dz1: Separate Places full custom-text cold paint from warm paint and
+  remove the per-label clip layer in the opt-in path. Root cause: `max_paint`
+  alone mixed the first two glyph/text paint frames with steady-state row
+  painting, making it hard to judge whether the path was fundamentally slow or
+  cold-start bound. Implementation: `scripts/analyze-places-perf.sh` now reports
+  `warm_frames`, `max_warm_prepaint`, and `max_warm_paint` after skipping the
+  first two `[fika places-row-visual]` frames; the opt-in Places custom-text
+  painter now paints `ShapedLine`s directly with a max width instead of wrapping
+  every label in its own `paint_layer`. Evidence:
+  `/tmp/fika-places-full-direct-text.log` passes `--expect-custom-row-full-policy`
+  with `max_icon_gpui=0`, `max_paint=5941us`, and `max_warm_paint=667us`;
+  default `/tmp/fika-places-chrome-direct-text-check.log` passes the chrome gate
+  with `max_warm_paint=48us`. Conclusion: full Places visual remains opt-in;
+  the next performance target is the first two glyph/text paint frames, not row
+  model, hit testing, icon drawing, or steady-state canvas paint.
 - [x] P16dz: Add the post-Places-chrome full retained renderer roadmap. The new
   `docs/FULL_RETAINED_RENDERER_ROADMAP.md` and zh-CN translation define the
   current baseline, explicit GPUI bridges, non-negotiable Dolphin-aligned

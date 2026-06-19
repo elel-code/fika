@@ -342,17 +342,15 @@ fn paint_place_row_visual(
         );
         let text_y = text_bounds.origin.y
             + ((row_bounds.size.height - state.line_height).max(px(0.0)) / 2.0).floor();
-        window.paint_layer(text_bounds, |window| {
-            line.paint(
-                point(text_bounds.origin.x, text_y),
-                state.line_height,
-                TextAlign::Left,
-                Some(text_bounds.size.width),
-                window,
-                cx,
-            )
-            .ok();
-        });
+        line.paint(
+            point(text_bounds.origin.x, text_y),
+            state.line_height,
+            TextAlign::Left,
+            Some(text_bounds.size.width),
+            window,
+            cx,
+        )
+        .ok();
     }
 
     if input.trash_place {
