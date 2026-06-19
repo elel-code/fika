@@ -2,6 +2,10 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use fika_core::load_app_settings;
+use gpui::Context;
+
+use crate::FikaApp;
 use crate::ui::icons::FileIconSnapshot;
 
 use super::interaction::{
@@ -260,14 +264,213 @@ impl PlacesAutosmokeScenario {
     }
 }
 
-pub(crate) fn emit_places_autosmoke_start(scenario: PlacesAutosmokeScenario) {
+pub(crate) fn start_places_autosmoke(scenario: PlacesAutosmokeScenario, cx: &mut Context<FikaApp>) {
+    cx.spawn(
+        move |this: gpui::WeakEntity<FikaApp>, cx: &mut gpui::AsyncApp| {
+            let mut cx = cx.clone();
+            async move {
+                emit_places_autosmoke_start(scenario);
+                cx.background_executor().timer(scenario.start_delay()).await;
+
+                for action in scenario.actions() {
+                    if this
+                        .update(&mut cx, |app, cx| {
+                            if app.apply_places_autosmoke_action(action, cx) {
+                                cx.notify();
+                            }
+                        })
+                        .is_err()
+                    {
+                        return;
+                    }
+                    cx.background_executor()
+                        .timer(scenario.action_delay())
+                        .await;
+                }
+
+                emit_places_autosmoke_complete(scenario);
+            }
+        },
+    )
+    .detach();
+}
+
+impl FikaApp {
+    fn apply_places_autosmoke_action(
+        &mut self,
+        action: PlacesAutosmokeAction,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        match action {
+            PlacesAutosmokeAction::Snapshot { label } => {
+                emit_places_autosmoke_snapshot(label, &self.place_snapshots());
+                false
+            }
+            PlacesAutosmokeAction::TargetFirstPlace { label } => {
+                let target = places_autosmoke_first_target_path(&self.place_snapshots());
+                let changed = if let Some(path) = target.as_ref() {
+                    self.set_place_drag_drop_target_for_path(path.clone())
+                } else {
+                    false
+                };
+                emit_places_autosmoke_place_target_action(label, target.as_deref(), changed);
+                changed
+            }
+            PlacesAutosmokeAction::TargetInsertStart { label } => {
+                let changed = self.set_place_drag_drop_target_for_insert(0);
+                emit_places_autosmoke_insert_target_action(label, 0, changed);
+                changed
+            }
+            PlacesAutosmokeAction::TargetInsertEnd { label } => {
+                let index = self.places.len();
+                let changed = self.set_place_drag_drop_target_for_insert(index);
+                emit_places_autosmoke_insert_target_action(label, index, changed);
+                changed
+            }
+            PlacesAutosmokeAction::ClearTargets { label } => {
+                let changed = self.clear_place_drop_target();
+                emit_places_autosmoke_clear_targets_action(label, changed);
+                changed
+            }
+            PlacesAutosmokeAction::CaptureLayout { label } => {
+                let original = *self.places_layout_autosmoke_original.get_or_insert(
+                    PlacesLayoutAutosmokeState::new(
+                        self.places_sidebar_width,
+                        self.places_sidebar_visible,
+                    ),
+                );
+                emit_places_autosmoke_layout_capture(label, original);
+                false
+            }
+            PlacesAutosmokeAction::HideSidebar { label } => {
+                let changed = self.update_places_sidebar_layout_for_autosmoke(
+                    self.places_sidebar_width,
+                    false,
+                    cx,
+                );
+                emit_places_autosmoke_layout_update(
+                    label,
+                    PlacesLayoutAutosmokeState::new(
+                        self.places_sidebar_width,
+                        self.places_sidebar_visible,
+                    ),
+                    changed,
+                );
+                changed
+            }
+            PlacesAutosmokeAction::ShowSidebar { label } => {
+                let changed = self.update_places_sidebar_layout_for_autosmoke(
+                    self.places_sidebar_width,
+                    true,
+                    cx,
+                );
+                emit_places_autosmoke_layout_update(
+                    label,
+                    PlacesLayoutAutosmokeState::new(
+                        self.places_sidebar_width,
+                        self.places_sidebar_visible,
+                    ),
+                    changed,
+                );
+                changed
+            }
+            PlacesAutosmokeAction::ResizeSidebar { label } => {
+                let target_width = places_autosmoke_resize_target_width(self.places_sidebar_width);
+                let changed =
+                    self.update_places_sidebar_layout_for_autosmoke(target_width, true, cx);
+                emit_places_autosmoke_layout_resize(
+                    label,
+                    PlacesLayoutAutosmokeState::new(
+                        self.places_sidebar_width,
+                        self.places_sidebar_visible,
+                    ),
+                    target_width,
+                    changed,
+                );
+                changed
+            }
+            PlacesAutosmokeAction::ResetSidebar { label } => {
+                let changed = self.update_places_sidebar_layout_for_autosmoke(
+                    super::PLACES_SIDEBAR_DEFAULT_WIDTH,
+                    true,
+                    cx,
+                );
+                emit_places_autosmoke_layout_update(
+                    label,
+                    PlacesLayoutAutosmokeState::new(
+                        self.places_sidebar_width,
+                        self.places_sidebar_visible,
+                    ),
+                    changed,
+                );
+                changed
+            }
+            PlacesAutosmokeAction::RestoreLayout { label } => {
+                let original = self.places_layout_autosmoke_original.unwrap_or(
+                    PlacesLayoutAutosmokeState::new(
+                        self.places_sidebar_width,
+                        self.places_sidebar_visible,
+                    ),
+                );
+                let changed = self.update_places_sidebar_layout_for_autosmoke(
+                    original.width,
+                    original.visible,
+                    cx,
+                );
+                emit_places_autosmoke_layout_update(
+                    label,
+                    PlacesLayoutAutosmokeState::new(
+                        self.places_sidebar_width,
+                        self.places_sidebar_visible,
+                    ),
+                    changed,
+                );
+                changed
+            }
+            PlacesAutosmokeAction::VerifyLayoutSettings { label } => {
+                let settings = load_app_settings(&self.app_settings_path).ok();
+                let saved_width = settings
+                    .as_ref()
+                    .and_then(|settings| settings.places_sidebar.width);
+                let saved_visible = settings
+                    .as_ref()
+                    .and_then(|settings| settings.places_sidebar.visible);
+                emit_places_autosmoke_layout_settings_verification(
+                    label,
+                    PlacesLayoutAutosmokeState::new(
+                        self.places_sidebar_width,
+                        self.places_sidebar_visible,
+                    ),
+                    saved_width,
+                    saved_visible,
+                    &self.app_settings_path,
+                );
+                false
+            }
+            PlacesAutosmokeAction::HitTest { label } => {
+                emit_places_retained_hit_test_autosmoke(label, &self.place_snapshots());
+                false
+            }
+            PlacesAutosmokeAction::RetainedTargeting { label } => {
+                emit_places_retained_targeting_autosmoke(label, &self.place_snapshots());
+                false
+            }
+            PlacesAutosmokeAction::RetainedDnd { label } => {
+                emit_places_retained_dnd_autosmoke(label, &self.place_snapshots());
+                false
+            }
+        }
+    }
+}
+
+fn emit_places_autosmoke_start(scenario: PlacesAutosmokeScenario) {
     eprintln!(
         "[fika autosmoke] places start scenario={}",
         scenario.marker_label()
     );
 }
 
-pub(crate) fn emit_places_autosmoke_complete(scenario: PlacesAutosmokeScenario) {
+fn emit_places_autosmoke_complete(scenario: PlacesAutosmokeScenario) {
     eprintln!(
         "[fika autosmoke] places complete scenario={}",
         scenario.marker_label()

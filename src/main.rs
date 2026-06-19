@@ -141,20 +141,13 @@ use ui::places::{
     build_places_with_devices, place_is_mounted,
 };
 use ui::places::{
-    PLACES_SIDEBAR_DEFAULT_WIDTH, PlaceDrag, PlaceEntry, PlaceSnapshot, PlacesAutosmokeAction,
-    PlacesAutosmokeScenario, PlacesLayoutAutosmokeState, PlacesRowTextShapeCache,
-    PlacesSidebarResizeDrag, PlacesSnapshotPerfLog, build_places, clamp_places_sidebar_width,
-    default_place_label, emit_place_paint_slot_perf_log,
-    emit_places_autosmoke_clear_targets_action, emit_places_autosmoke_complete,
-    emit_places_autosmoke_insert_target_action, emit_places_autosmoke_layout_capture,
-    emit_places_autosmoke_layout_resize, emit_places_autosmoke_layout_settings_verification,
-    emit_places_autosmoke_layout_update, emit_places_autosmoke_place_target_action,
-    emit_places_autosmoke_snapshot, emit_places_autosmoke_start,
-    emit_places_retained_dnd_autosmoke, emit_places_retained_hit_test_autosmoke,
-    emit_places_retained_targeting_autosmoke, emit_places_snapshot_perf_log, place_snapshots_for,
-    places_autosmoke_first_target_path, places_autosmoke_resize_target_width, places_panel_button,
-    places_panel_icon_snapshot, places_perf_enabled, places_section_count, places_sidebar_splitter,
-    places_sidebar_width_from_drag, read_live_device_snapshot,
+    PLACES_SIDEBAR_DEFAULT_WIDTH, PlaceDrag, PlaceEntry, PlaceSnapshot, PlacesAutosmokeScenario,
+    PlacesLayoutAutosmokeState, PlacesRowTextShapeCache, PlacesSidebarResizeDrag,
+    PlacesSnapshotPerfLog, build_places, clamp_places_sidebar_width, default_place_label,
+    emit_place_paint_slot_perf_log, emit_places_snapshot_perf_log, place_snapshots_for,
+    places_panel_button, places_panel_icon_snapshot, places_perf_enabled, places_section_count,
+    places_sidebar_splitter, places_sidebar_width_from_drag, read_live_device_snapshot,
+    start_places_autosmoke,
 };
 use ui::places::{PlacePaintSlotCache, PlacePaintSlotPerfLog};
 use ui::properties_dialog::{
@@ -550,7 +543,7 @@ impl FikaApp {
             start_item_view_autosmoke(first, scenario, cx);
         }
         if let Some(scenario) = PlacesAutosmokeScenario::from_env() {
-            Self::start_places_autosmoke(scenario, cx);
+            start_places_autosmoke(scenario, cx);
         }
         cx.spawn(
             move |this: gpui::WeakEntity<FikaApp>, cx: &mut gpui::AsyncApp| {
@@ -596,203 +589,6 @@ impl FikaApp {
         )
         .detach();
         app
-    }
-
-    fn start_places_autosmoke(scenario: PlacesAutosmokeScenario, cx: &mut Context<Self>) {
-        cx.spawn(
-            move |this: gpui::WeakEntity<FikaApp>, cx: &mut gpui::AsyncApp| {
-                let mut cx = cx.clone();
-                async move {
-                    emit_places_autosmoke_start(scenario);
-                    cx.background_executor().timer(scenario.start_delay()).await;
-
-                    for action in scenario.actions() {
-                        if this
-                            .update(&mut cx, |app, cx| {
-                                if app.apply_places_autosmoke_action(action, cx) {
-                                    cx.notify();
-                                }
-                            })
-                            .is_err()
-                        {
-                            return;
-                        }
-                        cx.background_executor()
-                            .timer(scenario.action_delay())
-                            .await;
-                    }
-
-                    emit_places_autosmoke_complete(scenario);
-                }
-            },
-        )
-        .detach();
-    }
-
-    fn apply_places_autosmoke_action(
-        &mut self,
-        action: PlacesAutosmokeAction,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        match action {
-            PlacesAutosmokeAction::Snapshot { label } => {
-                emit_places_autosmoke_snapshot(label, &self.place_snapshots());
-                false
-            }
-            PlacesAutosmokeAction::TargetFirstPlace { label } => {
-                let target = places_autosmoke_first_target_path(&self.place_snapshots());
-                let changed = if let Some(path) = target.as_ref() {
-                    self.set_place_drag_drop_target_for_path(path.clone())
-                } else {
-                    false
-                };
-                emit_places_autosmoke_place_target_action(label, target.as_deref(), changed);
-                changed
-            }
-            PlacesAutosmokeAction::TargetInsertStart { label } => {
-                let changed = self.set_place_drag_drop_target_for_insert(0);
-                emit_places_autosmoke_insert_target_action(label, 0, changed);
-                changed
-            }
-            PlacesAutosmokeAction::TargetInsertEnd { label } => {
-                let index = self.places.len();
-                let changed = self.set_place_drag_drop_target_for_insert(index);
-                emit_places_autosmoke_insert_target_action(label, index, changed);
-                changed
-            }
-            PlacesAutosmokeAction::ClearTargets { label } => {
-                let changed = self.clear_place_drop_target();
-                emit_places_autosmoke_clear_targets_action(label, changed);
-                changed
-            }
-            PlacesAutosmokeAction::CaptureLayout { label } => {
-                let original = *self.places_layout_autosmoke_original.get_or_insert(
-                    PlacesLayoutAutosmokeState::new(
-                        self.places_sidebar_width,
-                        self.places_sidebar_visible,
-                    ),
-                );
-                emit_places_autosmoke_layout_capture(label, original);
-                false
-            }
-            PlacesAutosmokeAction::HideSidebar { label } => {
-                let changed = self.update_places_sidebar_layout_for_autosmoke(
-                    self.places_sidebar_width,
-                    false,
-                    cx,
-                );
-                emit_places_autosmoke_layout_update(
-                    label,
-                    PlacesLayoutAutosmokeState::new(
-                        self.places_sidebar_width,
-                        self.places_sidebar_visible,
-                    ),
-                    changed,
-                );
-                changed
-            }
-            PlacesAutosmokeAction::ShowSidebar { label } => {
-                let changed = self.update_places_sidebar_layout_for_autosmoke(
-                    self.places_sidebar_width,
-                    true,
-                    cx,
-                );
-                emit_places_autosmoke_layout_update(
-                    label,
-                    PlacesLayoutAutosmokeState::new(
-                        self.places_sidebar_width,
-                        self.places_sidebar_visible,
-                    ),
-                    changed,
-                );
-                changed
-            }
-            PlacesAutosmokeAction::ResizeSidebar { label } => {
-                let target_width = places_autosmoke_resize_target_width(self.places_sidebar_width);
-                let changed =
-                    self.update_places_sidebar_layout_for_autosmoke(target_width, true, cx);
-                emit_places_autosmoke_layout_resize(
-                    label,
-                    PlacesLayoutAutosmokeState::new(
-                        self.places_sidebar_width,
-                        self.places_sidebar_visible,
-                    ),
-                    target_width,
-                    changed,
-                );
-                changed
-            }
-            PlacesAutosmokeAction::ResetSidebar { label } => {
-                let changed = self.update_places_sidebar_layout_for_autosmoke(
-                    PLACES_SIDEBAR_DEFAULT_WIDTH,
-                    true,
-                    cx,
-                );
-                emit_places_autosmoke_layout_update(
-                    label,
-                    PlacesLayoutAutosmokeState::new(
-                        self.places_sidebar_width,
-                        self.places_sidebar_visible,
-                    ),
-                    changed,
-                );
-                changed
-            }
-            PlacesAutosmokeAction::RestoreLayout { label } => {
-                let original = self.places_layout_autosmoke_original.unwrap_or(
-                    PlacesLayoutAutosmokeState::new(
-                        self.places_sidebar_width,
-                        self.places_sidebar_visible,
-                    ),
-                );
-                let changed = self.update_places_sidebar_layout_for_autosmoke(
-                    original.width,
-                    original.visible,
-                    cx,
-                );
-                emit_places_autosmoke_layout_update(
-                    label,
-                    PlacesLayoutAutosmokeState::new(
-                        self.places_sidebar_width,
-                        self.places_sidebar_visible,
-                    ),
-                    changed,
-                );
-                changed
-            }
-            PlacesAutosmokeAction::VerifyLayoutSettings { label } => {
-                let settings = load_app_settings(&self.app_settings_path).ok();
-                let saved_width = settings
-                    .as_ref()
-                    .and_then(|settings| settings.places_sidebar.width);
-                let saved_visible = settings
-                    .as_ref()
-                    .and_then(|settings| settings.places_sidebar.visible);
-                emit_places_autosmoke_layout_settings_verification(
-                    label,
-                    PlacesLayoutAutosmokeState::new(
-                        self.places_sidebar_width,
-                        self.places_sidebar_visible,
-                    ),
-                    saved_width,
-                    saved_visible,
-                    &self.app_settings_path,
-                );
-                false
-            }
-            PlacesAutosmokeAction::HitTest { label } => {
-                emit_places_retained_hit_test_autosmoke(label, &self.place_snapshots());
-                false
-            }
-            PlacesAutosmokeAction::RetainedTargeting { label } => {
-                emit_places_retained_targeting_autosmoke(label, &self.place_snapshots());
-                false
-            }
-            PlacesAutosmokeAction::RetainedDnd { label } => {
-                emit_places_retained_dnd_autosmoke(label, &self.place_snapshots());
-                false
-            }
-        }
     }
 
     fn filtered_model_for_pane(

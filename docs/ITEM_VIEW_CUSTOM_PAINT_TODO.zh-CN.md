@@ -562,6 +562,11 @@ Places chrome 默认之后的当前执行入口是
   `src/ui/file_grid/autosmoke.rs` 现在拥有 `FIKA_AUTOSMOKE_ITEM_VIEW` 的异步 action loop 和
   marker emission，`src/main.rs` 只读取选中的 scenario 并触发 facade。这让运行时证据收集跟随
   item-view controller/perf surface，而不是把 action orchestration 留在 app root。
+- [x] P16ft：将 Places autosmoke runner 和 action application 移入 Places facade。
+  `src/ui/places/autosmoke.rs` 现在拥有 `FIKA_AUTOSMOKE_PLACES` 的异步 loop、target/layout
+  action dispatch、settings verification marker emission，以及 retained targeting/DnD smoke
+  调用。`src/main.rs` 只读取选中的 scenario 并触发 facade，因此 Places 运行时证据收集跟随
+  Places projection 和 interaction 模块。
 - [ ] P16q：在每个 P16 实现切片之后，单独提交并附带相关验证：仅文档切片需要 `git diff --check`；代码切片需要 `cargo fmt`、`cargo check`、`cargo test -q`、`scripts/check-item-view-perf-analyzer.sh`、`scripts/check-places-perf-analyzer.sh` 和 `git diff --check`。
 - [x] P16r：记录运行时自测试和突破记录规则。可重复的滚动、缩放、启动图标、调整大小、模式切换和 Places 目标回退应在依赖手动计时之前通过 autosmoke 日志和分析器脚本重现。任何确认的优化突破必须记录症状、Dolphin 比较边界、根本原因、实现、保存的日志/分析器命令和未来回归守卫在拥有的设计或决策文档中。
 

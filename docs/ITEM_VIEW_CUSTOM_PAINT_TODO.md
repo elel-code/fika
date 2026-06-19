@@ -1657,6 +1657,13 @@ tracks.
   `src/main.rs` only reads the selected scenario and triggers the facade. This
   keeps runtime evidence collection with the item-view controller/perf surface
   instead of leaving action orchestration in the app root.
+- [x] P16ft: Move Places autosmoke runner and action application into the
+  Places facade. `src/ui/places/autosmoke.rs` now owns the async
+  `FIKA_AUTOSMOKE_PLACES` loop, target/layout action dispatch, settings
+  verification marker emission, and retained targeting/DnD smoke calls.
+  `src/main.rs` only reads the selected scenario and triggers the facade, so
+  Places runtime evidence collection stays with the Places projection and
+  interaction modules.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,
