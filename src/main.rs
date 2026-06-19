@@ -138,7 +138,7 @@ use ui::place_draft::{
 #[cfg(test)]
 use ui::places::{
     DEVICES_GROUP, NETWORK_GROUP, REMOVABLE_DEVICES_GROUP, active_place_index,
-    build_places_with_devices, place_is_mounted,
+    build_places_with_devices, place_is_mounted, places_sidebar_width_from_drag,
 };
 use ui::places::{
     PLACES_SIDEBAR_DEFAULT_WIDTH, PlaceDrag, PlaceEntry, PlaceSnapshot, PlacesAutosmokeScenario,
@@ -146,8 +146,7 @@ use ui::places::{
     PlacesSnapshotPerfLog, build_places, clamp_places_sidebar_width, default_place_label,
     emit_place_paint_slot_perf_log, emit_places_snapshot_perf_log, place_snapshots_for,
     places_panel_button, places_panel_icon_snapshot, places_perf_enabled, places_section_count,
-    places_sidebar_splitter, places_sidebar_width_from_drag, read_live_device_snapshot,
-    start_places_autosmoke,
+    places_sidebar_splitter, read_live_device_snapshot, start_places_autosmoke,
 };
 use ui::places::{PlacePaintSlotCache, PlacePaintSlotPerfLog};
 use ui::properties_dialog::{
@@ -694,59 +693,6 @@ impl FikaApp {
         } else {
             self.close_pane(pane_id);
         }
-    }
-
-    pub(crate) fn toggle_places_sidebar_from_button(&mut self, cx: &mut Context<Self>) {
-        self.toggle_places_sidebar_from_shortcut(cx);
-    }
-
-    fn toggle_places_sidebar_from_shortcut(&mut self, cx: &mut Context<Self>) {
-        if self.toggle_places_sidebar_visibility() {
-            self.schedule_app_settings_save(cx);
-        }
-    }
-
-    fn set_places_sidebar_visible(&mut self, visible: bool) -> bool {
-        if self.places_sidebar_visible == visible {
-            return false;
-        }
-        self.places_sidebar_visible = visible;
-        true
-    }
-
-    fn toggle_places_sidebar_visibility(&mut self) -> bool {
-        self.set_places_sidebar_visible(!self.places_sidebar_visible)
-    }
-
-    pub(crate) fn reset_places_sidebar_width(&mut self, cx: &mut Context<Self>) -> bool {
-        self.update_places_sidebar_width(PLACES_SIDEBAR_DEFAULT_WIDTH, cx)
-    }
-
-    fn set_places_sidebar_width(&mut self, width: f32) -> bool {
-        let width = clamp_places_sidebar_width(width);
-        if width_value_eq(self.places_sidebar_width, width) {
-            return false;
-        }
-        self.places_sidebar_width = width;
-        true
-    }
-
-    fn update_places_sidebar_width(&mut self, width: f32, cx: &mut Context<Self>) -> bool {
-        if !self.set_places_sidebar_width(width) {
-            return false;
-        }
-        self.schedule_app_settings_save(cx);
-        true
-    }
-
-    fn resize_places_sidebar_from_row_drag(
-        &mut self,
-        pointer_x: f32,
-        row_x: f32,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        let width = places_sidebar_width_from_drag(pointer_x, row_x);
-        self.update_places_sidebar_width(width, cx)
     }
 
     fn current_app_settings(&self) -> AppSettings {

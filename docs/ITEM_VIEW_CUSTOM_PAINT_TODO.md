@@ -1670,6 +1670,12 @@ tracks.
   keeps the regular sidebar commands and settings persistence scheduler as app
   coordination. This reduces app-root knowledge of Places evidence mechanics
   without changing persisted sidebar behavior.
+- [x] P16fv: Move regular Places sidebar width/visibility commands into the
+  Places sidebar facade. `src/ui/places/sidebar.rs` now owns toggling,
+  resetting, drag-resizing, clamping, and app-settings save handoff for sidebar
+  layout state. `src/main.rs` still stores the app-level persisted fields and
+  calls the facade from shortcuts/render closures, but no longer owns the
+  sidebar mutation policy.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

@@ -56,6 +56,61 @@ pub(crate) fn places_sidebar_width_from_drag(pointer_x: f32, row_x: f32) -> f32 
     (pointer_x - row_x).floor()
 }
 
+impl FikaApp {
+    pub(crate) fn toggle_places_sidebar_from_button(&mut self, cx: &mut Context<Self>) {
+        self.toggle_places_sidebar_from_shortcut(cx);
+    }
+
+    pub(crate) fn toggle_places_sidebar_from_shortcut(&mut self, cx: &mut Context<Self>) {
+        if self.toggle_places_sidebar_visibility() {
+            self.schedule_app_settings_save(cx);
+        }
+    }
+
+    pub(crate) fn set_places_sidebar_visible(&mut self, visible: bool) -> bool {
+        if self.places_sidebar_visible == visible {
+            return false;
+        }
+        self.places_sidebar_visible = visible;
+        true
+    }
+
+    pub(crate) fn toggle_places_sidebar_visibility(&mut self) -> bool {
+        self.set_places_sidebar_visible(!self.places_sidebar_visible)
+    }
+
+    pub(crate) fn reset_places_sidebar_width(&mut self, cx: &mut Context<Self>) -> bool {
+        self.update_places_sidebar_width(PLACES_SIDEBAR_DEFAULT_WIDTH, cx)
+    }
+
+    pub(crate) fn set_places_sidebar_width(&mut self, width: f32) -> bool {
+        let width = clamp_places_sidebar_width(width);
+        if crate::width_value_eq(self.places_sidebar_width, width) {
+            return false;
+        }
+        self.places_sidebar_width = width;
+        true
+    }
+
+    fn update_places_sidebar_width(&mut self, width: f32, cx: &mut Context<Self>) -> bool {
+        if !self.set_places_sidebar_width(width) {
+            return false;
+        }
+        self.schedule_app_settings_save(cx);
+        true
+    }
+
+    pub(crate) fn resize_places_sidebar_from_row_drag(
+        &mut self,
+        pointer_x: f32,
+        row_x: f32,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let width = places_sidebar_width_from_drag(pointer_x, row_x);
+        self.update_places_sidebar_width(width, cx)
+    }
+}
+
 pub(crate) fn places_panel_icon_snapshot(
     cache: &mut FileIconCache,
     visible: bool,

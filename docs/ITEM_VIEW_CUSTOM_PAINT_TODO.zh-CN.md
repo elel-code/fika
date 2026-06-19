@@ -571,6 +571,10 @@ Places chrome 默认之后的当前执行入口是
   `src/ui/places/autosmoke.rs` 现在拥有 layout 证据使用的 smoke-only 宽度/可见性更新路径，
   `src/main.rs` 保留常规 sidebar 命令和 settings 持久化调度作为 app coordination。这减少了
   app root 对 Places 证据机制的了解，同时不改变持久化 sidebar 行为。
+- [x] P16fv：将常规 Places sidebar 宽度/可见性命令移入 Places sidebar facade。
+  `src/ui/places/sidebar.rs` 现在拥有 sidebar layout state 的切换、重置、拖拽调整、
+  clamp 和 app-settings 保存移交。`src/main.rs` 仍保存 app-level 持久化字段，并从快捷键/
+  render closure 调用 facade，但不再拥有 sidebar mutation policy。
 - [ ] P16q：在每个 P16 实现切片之后，单独提交并附带相关验证：仅文档切片需要 `git diff --check`；代码切片需要 `cargo fmt`、`cargo check`、`cargo test -q`、`scripts/check-item-view-perf-analyzer.sh`、`scripts/check-places-perf-analyzer.sh` 和 `git diff --check`。
 - [x] P16r：记录运行时自测试和突破记录规则。可重复的滚动、缩放、启动图标、调整大小、模式切换和 Places 目标回退应在依赖手动计时之前通过 autosmoke 日志和分析器脚本重现。任何确认的优化突破必须记录症状、Dolphin 比较边界、根本原因、实现、保存的日志/分析器命令和未来回归守卫在拥有的设计或决策文档中。
 
