@@ -36,16 +36,16 @@ cat > "$tmpdir/complete.log" <<'EOF'
 [fika item-paint-slots] pane=1 mode=Details inserted=30 content=0 geometry=0 visual=0 unchanged=0 removed=40 entries=30
 [fika static-item-visual] pane=1 mode=Compact prepaint_count=32 prepaint=180us paint_count=32 paint=160us
 [fika static-item-visual] pane=1 mode=Icons prepaint_count=40 prepaint=210us paint_count=40 paint=190us
-[fika item-shape-cache] pane=1 mode=Compact hits=30 misses=2 evicted=0 entries=32
+[fika item-shape-cache] pane=1 mode=Compact hits=30 misses=2 evicted=0 compute=40us entries=32
 [fika item-glyph-cache] pane=1 mode=Compact hits=28 misses=4 evicted=0 entries=32
 [fika item-glyph-budget] pane=1 mode=Compact requested=32 hits=28 misses=4 computed=4 deferred=0 failed=0 budget_exhausted=false compute=80us
-[fika item-shape-cache] pane=1 mode=Icons hits=38 misses=2 evicted=0 entries=40
+[fika item-shape-cache] pane=1 mode=Icons hits=38 misses=2 evicted=0 compute=45us entries=40
 [fika item-glyph-cache] pane=1 mode=Icons hits=36 misses=4 evicted=0 entries=40
 [fika item-glyph-budget] pane=1 mode=Icons requested=40 hits=36 misses=4 computed=4 deferred=0 failed=0 budget_exhausted=false compute=90us
 [fika item-image] pane=1 mode=Icons prepaint_count=8 prepaint=70us paint_count=8 paint=80us theme_loaded=4 theme_decoded=2 theme_retained=1 theme_placeholder=1 theme_prewarm_loaded=3 theme_prewarm_decoded=1 theme_prewarm_retained=2 theme_prewarm_pending=4 thumb_loaded=2 thumb_decoded=1 thumb_retained=0 thumb_fallback=0
 [fika details-visual] pane=1 mode=Details prepaint_count=48 prepaint=120us paint_count=48 paint=130us
 [fika details-visual] pane=1 mode=Details prepaint_count=48 prepaint=110us paint_count=48 paint=120us
-[fika details-shape-cache] pane=1 mode=Details hits=20 misses=2 evicted=0 entries=22
+[fika details-shape-cache] pane=1 mode=Details hits=20 misses=2 evicted=0 compute=50us entries=22
 [fika details-glyph-cache] pane=1 mode=Details hits=18 misses=4 evicted=0 entries=22
 [fika details-glyph-budget] pane=1 mode=Details requested=22 hits=18 misses=4 computed=4 deferred=0 failed=0 budget_exhausted=false compute=110us
 [fika item-interaction] pane=1 mode=Details prepaint_count=48 prepaint=60us paint_count=48 paint=50us
@@ -274,7 +274,7 @@ cat > "$tmpdir/details-autosmoke.log" <<'EOF'
 [fika autosmoke] item-view action=scroll-forward pane=1 changed=true
 [fika autosmoke] item-view action=scroll-back pane=1 changed=true
 [fika details-visual] pane=1 mode=Details prepaint_count=30 prepaint=120us paint_count=30 paint=130us
-[fika details-shape-cache] pane=1 mode=Details hits=20 misses=2 evicted=0 entries=22
+[fika details-shape-cache] pane=1 mode=Details hits=20 misses=2 evicted=0 compute=50us entries=22
 [fika details-glyph-cache] pane=1 mode=Details hits=18 misses=4 evicted=0 entries=22
 [fika details-glyph-budget] pane=1 mode=Details requested=22 hits=18 misses=4 computed=4 deferred=0 failed=0 budget_exhausted=false compute=110us
 [fika renderer-policy] pane=1 mode=Details items=30 visual_layer=30 image_layer=0 gpui_image_element=0 retained_interaction=30 retained_directory_drop_target=6 gpui_drag_shell=0 gpui_directory_drop_shell=0 details_header_visual_layer=1 gpui_details_header=0 rename_overlay=0
@@ -453,7 +453,7 @@ cat > "$tmpdir/icons-autosmoke.log" <<'EOF'
 [fika autosmoke] item-view action=scroll-forward pane=1 changed=true
 [fika autosmoke] item-view action=scroll-back pane=1 changed=true
 [fika static-item-visual] pane=1 mode=Icons prepaint_count=40 prepaint=210us paint_count=40 paint=190us
-[fika item-shape-cache] pane=1 mode=Icons hits=38 misses=2 evicted=0 entries=40
+[fika item-shape-cache] pane=1 mode=Icons hits=38 misses=2 evicted=0 compute=45us entries=40
 [fika item-glyph-cache] pane=1 mode=Icons hits=36 misses=4 evicted=0 entries=40
 [fika item-glyph-budget] pane=1 mode=Icons requested=40 hits=36 misses=4 computed=4 deferred=0 failed=0 budget_exhausted=false compute=90us
 [fika renderer-policy] pane=1 mode=Icons items=48 visual_layer=48 image_layer=8 gpui_image_element=0 retained_interaction=48 gpui_drag_shell=0 rename_overlay=0

@@ -133,11 +133,11 @@ if [[ "$custom_summary" != *"places_row_visual_frames=1 max_rows=11 max_painted=
     echo "expected Places row visual paint summary" >&2
     exit 1
 fi
-if [[ "$custom_summary" != *"places_row_shape_cache_frames=1 max_hits=11 max_misses=0 max_evicted=0 max_entries=11"* ]]; then
+if [[ "$custom_summary" != *"places_row_shape_cache_frames=1 max_hits=11 max_misses=0 max_evicted=0 max_compute=0us max_entries=11"* ]]; then
     echo "expected Places row shape-cache summary" >&2
     exit 1
 fi
-if [[ "$custom_summary" != *"places_row_glyph_cache_frames=1 max_hits=11 max_misses=0 max_evicted=0 max_entries=11"* ]]; then
+if [[ "$custom_summary" != *"places_row_glyph_cache_frames=1 max_hits=11 max_misses=0 max_evicted=0 max_compute=0us max_entries=11"* ]]; then
     echo "expected Places row glyph-cache summary" >&2
     exit 1
 fi

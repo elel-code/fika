@@ -67,19 +67,21 @@ or only Places must explain how the other side reuses the same model.
 - Static item labels, Details cells/headers, and Places row labels now share
   `RetainedShapeCache` and `TextShapeCacheStats`. Surface modules still own
   their text keys and shape functions, but cache hit/miss/evict semantics are
-  retained-layer code instead of pane/Places copies. Places also retains GPUI
-  glyph-raster paint data through the same cache primitive; this is the first
-  consumer of the Fika GPUI fork's `ShapedLine::compute_glyph_raster_data` and
+  retained-layer code instead of pane/Places copies. Shape-cache stats now also
+  include `compute=...us`, and both pane item-view and Places analyzers surface
+  that field as `max_compute`. Places also retains GPUI glyph-raster paint data
+  through the same cache primitive; this is the first consumer of the Fika GPUI
+  fork's `ShapedLine::compute_glyph_raster_data` and
   `ShapedLine::paint_with_raster_data` hooks.
 - File-grid static text and Details text now advance retained glyph-raster
   misses under a visible-layer frame budget. Cache hits paint retained raster
   data directly; cache misses compute synchronously only while the budget
   allows it; over-budget text falls back to GPUI normal text paint for that
   frame and continues cache fill on subsequent frames. Static opposite-mode
-  warm/read-ahead is ordered after the real visible layer and uses a small
-  budget so it cannot steal the current visible glyph miss budget. The new
-  `[fika item-glyph-budget]` and `[fika details-glyph-budget]` channels are the
-  cold miss spike profile.
+  warm/read-ahead is ordered after the real visible layer, probes shape cache
+  hits only, and uses a small glyph budget so it cannot steal current visible
+  shape or glyph miss budget. The `[fika item-glyph-budget]` and
+  `[fika details-glyph-budget]` channels are the cold glyph miss spike profile.
 - Places slot projection now wraps `RetainedSlotStats`, matching item-view slot
   delta accounting while keeping Places-specific row/section counts.
 - Direct thumbnail/theme image load helpers are private to `RetainedImageLayerState`;
@@ -356,6 +358,25 @@ Current default:
   compute plus deferred fill on later frames; remaining cold prepaint spikes
   should be split next as shape/layout/image-state costs rather than glyph
   compute alone.
+- 2026-06-20 shape compute attribution evidence:
+  `/tmp/fika-shape-attribution-v1-item-etc-zoom-scroll.log`,
+  `/tmp/fika-shape-attribution-v1-item-etc-icons-zoom-scroll.log`, and
+  `/tmp/fika-shape-attribution-v1-item-etc-details-zoom-scroll.log` add
+  `compute=...us` to shape-cache logs. The combined summary reports
+  `item_shape_frames ... max_compute=7184us` and `details_shape_frames ...
+  max_compute=9208us`, with Details visual prepaint still peaking at
+  `19240us`. `/tmp/fika-shape-hitonly-v2-item-etc-zoom-scroll.log`,
+  `/tmp/fika-shape-hitonly-v2-item-etc-icons-zoom-scroll.log`, and
+  `/tmp/fika-shape-hitonly-v2-item-etc-details-zoom-scroll.log` then pass the
+  item runtime gate after static opposite-mode warm prepaint became
+  shape-cache-hit-only and started reporting its read-ahead glyph budget. The
+  combined v2 summary reports `item_shape ... max_compute=5888us`, but Details
+  remains the largest cold shape source (`details_shape ... max_compute=13442us`
+  and `details_visual max_prepaint=17353us`). Places v2 evidence also carries
+  the same shape compute field (`places_row_shape_cache ... max_compute=3617us`
+  in overflow). The next completion-grade step is a Details
+  warm-only/read-ahead text channel or an explicit column/row shape deferral
+  design, not more glyph-raster work.
 - Interaction is retained-DnD for row/section target delivery and typed payload
   delivery. The completion gates now require `gpui_event_shells=0`,
   `gpui_row_section_event_shells=0`, `gpui_typed_dnd_payload_shells=0`,

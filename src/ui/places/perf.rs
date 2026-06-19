@@ -307,8 +307,8 @@ pub(crate) struct PlacesRowTextShapeCachePerfLog {
 pub(crate) fn emit_places_row_text_shape_cache_perf_log(log: PlacesRowTextShapeCachePerfLog) {
     let stats = log.stats;
     eprintln!(
-        "[fika places-row-shape-cache] hits={} misses={} evicted={} entries={}",
-        stats.hits, stats.misses, stats.evicted, stats.entries,
+        "[fika places-row-shape-cache] hits={} misses={} evicted={} compute={}us entries={}",
+        stats.hits, stats.misses, stats.evicted, stats.compute_us, stats.entries,
     );
 }
 
@@ -320,8 +320,8 @@ pub(crate) struct PlacesRowGlyphRasterCachePerfLog {
 pub(crate) fn emit_places_row_glyph_raster_cache_perf_log(log: PlacesRowGlyphRasterCachePerfLog) {
     let stats = log.stats;
     eprintln!(
-        "[fika places-row-glyph-cache] hits={} misses={} evicted={} entries={}",
-        stats.hits, stats.misses, stats.evicted, stats.entries,
+        "[fika places-row-glyph-cache] hits={} misses={} evicted={} compute={}us entries={}",
+        stats.hits, stats.misses, stats.evicted, stats.compute_us, stats.entries,
     );
 }
 

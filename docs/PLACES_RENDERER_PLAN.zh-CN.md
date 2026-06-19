@@ -400,7 +400,7 @@ prepaint 过程中仍然为每行标签重新计算形状，即使相同的 `Pla
 运行时日志包含：
 
 ```text
-[fika places-row-shape-cache] hits=... misses=... evicted=... entries=...
+[fika places-row-shape-cache] hits=... misses=... evicted=... compute=...us entries=...
 ```
 
 `--expect-custom-row-full-policy` 要求默认 full row 路径有此 shape-cache channel，

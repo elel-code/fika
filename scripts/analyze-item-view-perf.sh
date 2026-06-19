@@ -589,6 +589,7 @@ BEGIN {
     item_shape_hits += field("hits") + 0
     item_shape_misses += field("misses") + 0
     item_shape_evicted += field("evicted") + 0
+    max_assign(single_max, "item_shape_compute", us_field("compute"))
     max_assign(single_max, "item_shape_entries", field("entries") + 0)
 }
 
@@ -661,6 +662,7 @@ BEGIN {
     details_shape_hits += field("hits") + 0
     details_shape_misses += field("misses") + 0
     details_shape_evicted += field("evicted") + 0
+    max_assign(single_max, "details_shape_compute", us_field("compute"))
     max_assign(single_max, "details_shape_entries", field("entries") + 0)
 }
 
@@ -845,6 +847,7 @@ END {
         " hits=" (item_shape_hits + 0) \
         " misses=" (item_shape_misses + 0) \
         " evicted=" (item_shape_evicted + 0) \
+        " max_compute=" (("item_shape_compute" in single_max) ? single_max["item_shape_compute"] : 0) "us" \
         " max_entries=" (("item_shape_entries" in single_max) ? single_max["item_shape_entries"] : 0)
     print "  item_glyph_frames: " (item_glyph_count + 0) \
         " hits=" (item_glyph_hits + 0) \
@@ -897,6 +900,7 @@ END {
         " hits=" (details_shape_hits + 0) \
         " misses=" (details_shape_misses + 0) \
         " evicted=" (details_shape_evicted + 0) \
+        " max_compute=" (("details_shape_compute" in single_max) ? single_max["details_shape_compute"] : 0) "us" \
         " max_entries=" (("details_shape_entries" in single_max) ? single_max["details_shape_entries"] : 0)
     print "  details_glyph_frames: " (details_glyph_count + 0) \
         " hits=" (details_glyph_hits + 0) \

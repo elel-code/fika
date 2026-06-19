@@ -593,7 +593,7 @@ used by the default `full` retained/custom path; the `chrome` baseline keeps
 text on GPUI and must not emit this channel. Runtime logs include:
 
 ```text
-[fika places-row-shape-cache] hits=... misses=... evicted=... entries=...
+[fika places-row-shape-cache] hits=... misses=... evicted=... compute=...us entries=...
 ```
 
 `--expect-custom-row-full-policy` requires this shape-cache channel for the

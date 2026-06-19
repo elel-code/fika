@@ -3,6 +3,7 @@ use std::fs;
 use std::hash::Hash;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Instant;
 
 use gpui::{App, Entity, RenderImage, Resource, RetainAllImageCache, Window};
 
@@ -49,12 +50,13 @@ pub(crate) struct TextShapeCacheStats {
     pub(crate) hits: usize,
     pub(crate) misses: usize,
     pub(crate) evicted: usize,
+    pub(crate) compute_us: u128,
     pub(crate) entries: usize,
 }
 
 impl TextShapeCacheStats {
     pub(crate) fn has_activity(self) -> bool {
-        self.hits > 0 || self.misses > 0 || self.evicted > 0
+        self.hits > 0 || self.misses > 0 || self.evicted > 0 || self.compute_us > 0
     }
 }
 
@@ -92,7 +94,9 @@ where
             self.entries.clear();
         }
 
+        let started = Instant::now();
         let value = shape(key);
+        self.stats.compute_us += started.elapsed().as_micros();
         self.entries.insert(key.clone(), value.clone());
         value
     }
@@ -105,6 +109,10 @@ where
             self.stats.misses += 1;
             None
         }
+    }
+
+    pub(crate) fn peek(&self, key: &K) -> Option<V> {
+        self.entries.get(key).cloned()
     }
 
     pub(crate) fn insert(&mut self, key: K, value: V) {
@@ -670,6 +678,14 @@ mod tests {
             }
             .has_activity()
         );
+        assert!(
+            TextShapeCacheStats {
+                compute_us: 1,
+                entries: 4,
+                ..Default::default()
+            }
+            .has_activity()
+        );
     }
 
     #[test]
@@ -680,26 +696,35 @@ mod tests {
         assert_eq!(cache.get_or_insert_with(&1, |key| key * 100), 10);
         assert_eq!(cache.get_or_insert_with(&2, |key| key * 10), 20);
 
-        assert_eq!(
-            cache.take_stats(),
-            TextShapeCacheStats {
-                hits: 1,
-                misses: 2,
-                evicted: 0,
-                entries: 2,
-            }
-        );
+        let stats = cache.take_stats();
+        assert_eq!(stats.hits, 1);
+        assert_eq!(stats.misses, 2);
+        assert_eq!(stats.evicted, 0);
+        assert_eq!(stats.entries, 2);
 
         assert_eq!(cache.get_or_insert_with(&3, |key| key * 10), 30);
-        assert_eq!(
-            cache.take_stats(),
-            TextShapeCacheStats {
-                hits: 0,
-                misses: 1,
-                evicted: 2,
-                entries: 1,
-            }
-        );
+        let stats = cache.take_stats();
+        assert_eq!(stats.hits, 0);
+        assert_eq!(stats.misses, 1);
+        assert_eq!(stats.evicted, 2);
+        assert_eq!(stats.entries, 1);
+    }
+
+    #[test]
+    fn retained_shape_cache_peek_does_not_record_cache_activity() {
+        let mut cache = RetainedShapeCache::new(2);
+
+        assert_eq!(cache.get_or_insert_with(&1, |key| key * 10), 10);
+        let _ = cache.take_stats();
+
+        assert_eq!(cache.peek(&1), Some(10));
+        assert_eq!(cache.peek(&2), None);
+
+        let stats = cache.take_stats();
+        assert_eq!(stats.hits, 0);
+        assert_eq!(stats.misses, 0);
+        assert_eq!(stats.evicted, 0);
+        assert_eq!(stats.entries, 1);
     }
 
     #[test]

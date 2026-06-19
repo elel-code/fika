@@ -78,6 +78,8 @@ scripts/analyze-item-view-perf.sh --require-autosmoke --require-details --requir
 Details gate 要求 `[fika details-visual]`、`[fika details-shape-cache]`、
 `[fika details-glyph-cache]` 和 `[fika details-glyph-budget]`，从而分别观察
 shape 复用、retained glyph-raster 复用，以及冷 glyph miss 是否被预算化和 deferred。
+Shape-cache channel 必须包含 `compute=...us`；analyzer summary 会汇总为
+`max_compute`，这样剩余 cold shape/layout 峰值不会被 glyph-raster budget 掩盖。
 标准 runtime gate 也要求 Compact/Icons text reuse evidence 包含
 `[fika static-item-visual]`、`[fika item-shape-cache]` 和
 `[fika item-glyph-cache]`，并要求 `[fika item-glyph-budget]` 显示每帧

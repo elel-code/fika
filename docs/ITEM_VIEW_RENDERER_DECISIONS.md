@@ -936,6 +936,40 @@ frame-byte budget. When the last source reference is gone, it removes the
 `Resource::Path` from `RetainAllImageCache` and calls
 `cx.drop_image(image, Some(window))`.
 
+## 2026-06-20 Shape Compute Attribution And Warm Hit-Only Prepaint
+
+After glyph-raster miss budgeting, the remaining cold spikes were not glyph
+raster work. The item-view logs now include shape-cache `compute=...us` for
+Compact/Icons and Details, and the Places row shape/glyph cache logs use the
+same field so pane and Places evidence are comparable. The attribution run
+(`/tmp/fika-shape-attribution-v1-*`) showed `item_shape max_compute=7184us`
+and `details_shape max_compute=9208us`; Details visual prepaint still peaked at
+`19240us` even though glyph-raster compute was capped near 2ms.
+
+Implementation: static opposite-mode warm prepaint now calls `peek()` through
+`shape_if_cached()` and only warms glyph raster data when a shape already
+exists. `RetainedShapeCache::peek()` deliberately does not record hits or
+misses, so read-ahead evidence stays separate from visible shape pressure. The
+warm-only layer now also records its read-ahead glyph budget stats instead of
+dropping them before returning.
+
+Evidence: `/tmp/fika-shape-hitonly-v2-item-etc-zoom-scroll.log`,
+`/tmp/fika-shape-hitonly-v2-item-etc-icons-zoom-scroll.log`, and
+`/tmp/fika-shape-hitonly-v2-item-etc-details-zoom-scroll.log` pass the item
+runtime gate. The combined summary reports `item_shape max_compute=5888us`,
+`item_glyph_budget max_compute=2061us`, `details_glyph_budget
+max_compute=2164us`, and `details_shape max_compute=13442us`. Places evidence
+with the same log shape also passes (`/tmp/fika-shape-hitonly-v2-places-*`);
+overflow reports `places_row_shape_cache ... max_compute=3617us`.
+
+Decision: do not claim a full shape-miss budget until the text fallback is
+designed. Details rows currently have transparent GPUI shells; the Details
+visual layer owns all row/header text, so skipping a shape miss would skip the
+text unless a separate fallback/handoff layer is introduced. The next real
+completion step is a Details warm-only/read-ahead text path, or an explicit
+column/row deferral design that keeps visible content correct while splitting
+shape misses across frames.
+
 ## Next Renderer Decisions
 
 1. Keep the Fika GPUI retained-hitbox typed DnD fork current with upstream and

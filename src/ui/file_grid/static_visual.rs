@@ -132,6 +132,13 @@ impl StaticItemTextShapeCache {
         })
     }
 
+    fn shape_if_cached(
+        &self,
+        key: &StaticItemTextShapeCacheKey,
+    ) -> Option<Arc<StaticItemTextShapes>> {
+        self.cache.peek(key)
+    }
+
     fn glyph_raster_for(
         &mut self,
         key: &StaticItemGlyphRasterCacheKey,
@@ -324,16 +331,39 @@ impl Element for StaticItemVisualLayerElement {
         window: &mut Window,
         cx: &mut App,
     ) -> Self::PrepaintState {
-        let perf_started = if self.warm_only {
-            None
-        } else {
-            super::item_view_perf_enabled().then(std::time::Instant::now)
-        };
-        let mut glyph_budget = if self.warm_only {
-            GlyphRasterMissBudget::read_ahead()
-        } else {
-            GlyphRasterMissBudget::visible()
-        };
+        if self.warm_only {
+            let mut glyph_budget = GlyphRasterMissBudget::read_ahead();
+            for item in &self.items {
+                static_item_visual_warm_prepaint(
+                    self.pane_id,
+                    bounds,
+                    item.display_name.clone(),
+                    item.icon_name_lines.clone(),
+                    item.icon.clone(),
+                    item.fallback_marker.clone(),
+                    item.layout,
+                    item.text_alignment,
+                    item.selected,
+                    item.paint_fallback_icon,
+                    self.app.clone(),
+                    &mut glyph_budget,
+                    window,
+                    cx,
+                );
+            }
+            let glyph_budget_stats = glyph_budget.stats();
+            if glyph_budget_stats.has_activity() {
+                let _ = self.app.update(cx, |this, cx| {
+                    this.record_static_item_glyph_budget_stats(self.pane_id, glyph_budget_stats);
+                    if glyph_budget_stats.deferred > 0 {
+                        cx.notify();
+                    }
+                });
+            }
+            return Vec::new();
+        }
+        let perf_started = super::item_view_perf_enabled().then(std::time::Instant::now);
+        let mut glyph_budget = GlyphRasterMissBudget::visible();
         let states = self
             .items
             .iter()
@@ -359,16 +389,14 @@ impl Element for StaticItemVisualLayerElement {
                 )
             })
             .collect::<Vec<_>>();
-        if !self.warm_only {
-            let glyph_budget_stats = glyph_budget.stats();
-            if glyph_budget_stats.has_activity() {
-                let _ = self.app.update(cx, |this, cx| {
-                    this.record_static_item_glyph_budget_stats(self.pane_id, glyph_budget_stats);
-                    if glyph_budget_stats.deferred > 0 {
-                        cx.notify();
-                    }
-                });
-            }
+        let glyph_budget_stats = glyph_budget.stats();
+        if glyph_budget_stats.has_activity() {
+            let _ = self.app.update(cx, |this, cx| {
+                this.record_static_item_glyph_budget_stats(self.pane_id, glyph_budget_stats);
+                if glyph_budget_stats.deferred > 0 {
+                    cx.notify();
+                }
+            });
         }
         if let Some(started) = perf_started {
             let elapsed = started.elapsed();
@@ -432,6 +460,62 @@ pub(super) fn static_item_visual_layer_element_id(pane_id: PaneId) -> (&'static 
 
 pub(super) fn static_item_visual_warm_layer_element_id(pane_id: PaneId) -> (&'static str, u64) {
     ("static-item-visual-warm-layer", pane_id.0)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn static_item_visual_warm_prepaint(
+    pane_id: PaneId,
+    layer_bounds: Bounds<Pixels>,
+    display_name: SharedString,
+    icon_name_lines: Arc<[SharedString]>,
+    icon: FileIconSnapshot,
+    fallback_marker: SharedString,
+    layout: ItemLayout,
+    text_alignment: ItemTileTextAlignment,
+    selected: bool,
+    paint_fallback_icon: bool,
+    app: WeakEntity<FikaApp>,
+    glyph_budget: &mut GlyphRasterMissBudget,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let style = static_item_text_shape_style(layout, selected, &icon, window);
+    let key = static_item_text_shape_cache_key(
+        display_name,
+        icon_name_lines,
+        fallback_marker,
+        paint_fallback_icon,
+        &icon,
+        layout,
+        text_alignment,
+        &style,
+        window,
+    );
+    let Some(shapes) = app
+        .update(cx, |this, _cx| {
+            this.static_item_text_shape_caches
+                .entry(pane_id)
+                .or_default()
+                .shape_if_cached(&key)
+        })
+        .ok()
+        .flatten()
+    else {
+        return;
+    };
+    let item_bounds = static_item_item_bounds(layer_bounds, layout);
+    let _ = static_item_glyph_raster_prepaint(
+        pane_id,
+        &key,
+        &shapes,
+        layout,
+        item_bounds,
+        &style,
+        &app,
+        glyph_budget,
+        window,
+        cx,
+    );
 }
 
 fn static_item_visual_prepaint(

@@ -367,12 +367,13 @@ pub(crate) fn file_grid(
                 );
                 if shape_cache_stats.has_activity() {
                     eprintln!(
-                        "[fika item-shape-cache] pane={} mode={:?} hits={} misses={} evicted={} entries={}",
+                        "[fika item-shape-cache] pane={} mode={:?} hits={} misses={} evicted={} compute={}us entries={}",
                         pane_id.0,
                         view_mode,
                         shape_cache_stats.hits,
                         shape_cache_stats.misses,
                         shape_cache_stats.evicted,
+                        shape_cache_stats.compute_us,
                         shape_cache_stats.entries,
                     );
                 }
@@ -404,12 +405,13 @@ pub(crate) fn file_grid(
                 }
                 if details_shape_cache_stats.has_activity() {
                     eprintln!(
-                        "[fika details-shape-cache] pane={} mode={:?} hits={} misses={} evicted={} entries={}",
+                        "[fika details-shape-cache] pane={} mode={:?} hits={} misses={} evicted={} compute={}us entries={}",
                         pane_id.0,
                         view_mode,
                         details_shape_cache_stats.hits,
                         details_shape_cache_stats.misses,
                         details_shape_cache_stats.evicted,
+                        details_shape_cache_stats.compute_us,
                         details_shape_cache_stats.entries,
                     );
                 }

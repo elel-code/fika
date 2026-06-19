@@ -208,13 +208,17 @@ Expected log properties:
   regression after shell-removal slices.
 - Compact/Icons runs should emit `[fika item-shape-cache]` and
   `[fika item-glyph-cache]` so retained label/fallback-marker shape and
-  glyph-raster reuse remain attributable. They should also emit
+  glyph-raster reuse remain attributable. Shape-cache logs should include
+  `compute=...us` so cold shape misses are visible separately from glyph
+  raster misses. They should also emit
   `[fika item-glyph-budget]` so cold miss work is visible as bounded
   `computed` work or deferred fallback, not hidden inside prepaint time.
 - Details runs should emit `[fika details-visual]` and
   `[fika details-shape-cache]`, `[fika details-glyph-cache]`, and
   `[fika details-glyph-budget]` so custom painter, text-shape, glyph-raster
-  reuse, and miss-budget costs remain attributable.
+  reuse, and miss-budget costs remain attributable. The Details shape-cache
+  `compute=...us` field is the current signal for remaining cold prepaint
+  pressure after glyph-raster misses are budgeted.
 - `[fika item-interaction]` hitbox count should match the visible retained
   interaction items for Compact/Icons and Details.
 - `[fika renderer-policy]` should appear for Compact, Icons, and Details and

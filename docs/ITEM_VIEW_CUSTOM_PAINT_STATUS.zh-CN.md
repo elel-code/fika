@@ -20,14 +20,16 @@ cache 可以继续保留 Dolphin 风格的几何复用 key，但 glyph-raster ca
 paint-geometry key，因为 GPUI raster data 绑定 origin、line height、align width 和
 scale factor。
 
-当前第一优先级的后续约束是压平 glyph-raster miss 峰值，而不是追求冷帧一次性补齐
-所有 raster。Static item 和 Details text 现在使用可见层优先的帧预算：
-cache hit 直接走 retained raster paint；cache miss 只在预算内同步计算；超预算文本
-本帧回退到 GPUI normal text paint，并通过 `cx.notify()` 触发后续帧继续补齐。相反模式
-的 warm/static read-ahead 层排在真实可见层之后，并只使用小预算，不能抢当前可见内容的
-miss 预算。证据必须同时观察 cache 总量和预算画像：`[fika item-glyph-budget]` /
-`[fika details-glyph-budget]` 中的 `computed`、`deferred`、`budget_exhausted`
-和 `compute=...us` 是判断峰值是否受控的主指标。
+glyph-raster miss 峰值现在已经预算化。当前第一优先级的后续约束是剩余 cold
+shape/layout 峰值，尤其是 Details text shape miss。Static item 和 Details text 使用
+可见层优先的 glyph 预算：cache hit 直接走 retained raster paint；cache miss 只在预算内
+同步计算；超预算 glyph 工作本帧回退到 GPUI normal text paint，并通过 `cx.notify()`
+触发后续帧继续补齐。相反模式的 warm/static read-ahead 层排在真实可见层之后，只使用
+已有 shape-cache hit，并使用自己的小 glyph 预算。证据必须同时观察 cache 总量和预算
+画像：`[fika item-shape-cache]`、`[fika details-shape-cache]` 和
+`[fika places-row-shape-cache]` 输出 `compute=...us`；`[fika item-glyph-budget]` /
+`[fika details-glyph-budget]` 输出 `computed`、`deferred`、`budget_exhausted`
+和 glyph `compute=...us`。
 
 ## 当前替换矩阵
 
@@ -66,6 +68,7 @@ retained cache 在 pending reload 期间保留已有真实 image。
 - Compact/Icons retained item hitbox/DnD 边界：
   `src/ui/file_grid/interaction.rs`、`src/ui/file_grid/dnd.rs`
 - Compact/Icons text shape-cache 通道：`[fika item-shape-cache]`
+  （`compute=...us`）
 - Compact/Icons text retained glyph-raster cache 通道：`[fika item-glyph-cache]`
 - Compact/Icons text glyph-raster miss 预算通道：`[fika item-glyph-budget]`
 - 详情布局投影和行快照：`src/ui/file_grid/details.rs`
@@ -74,6 +77,7 @@ retained cache 在 pending reload 期间保留已有真实 image。
 - 编辑器边界（重命名仍为 GPUI 编辑器叠加层）：`src/ui/file_grid/rename_overlay.rs`
 - 性能测量门和基线：`scripts/analyze-item-view-perf.sh`
 - Details text shape-cache 通道：`[fika details-shape-cache]`
+  （`compute=...us`）
 - Details text retained glyph-raster cache 通道：`[fika details-glyph-cache]`
 - Details text glyph-raster miss 预算通道：`[fika details-glyph-budget]`
 - 渲染器决策日志：`docs/ITEM_VIEW_RENDERER_DECISIONS.md`
@@ -239,7 +243,7 @@ paint-slot 内容/几何/视觉变化测试，以及运行时
 2. **绘制器轨道**：继续仅在绘制器消费保留快照且能匹配 Dolphin widget 行为的地方将视觉工作移入内容级绘制器。下一个绘制器工作是图像冷加载/缩放路径的稳定化和测量，而非盲目添加新的视觉表面。
 3. **Controller 轨道**：保持点击、菜单、悬停、光标、选择、pane 放置、条目放置和外部放置通过保留 viewport hit testing 路由。GPUI 每条目回调仅是临时的平台桥梁。
 4. **Shell 边界轨道**：通过 Fika GPUI retained-hitbox typed DnD patch 将 GPUI DnD shell 计数保持为 0。在行为矩阵覆盖文本输入和 IME 之前保持重命名在 GPUI 上。
-5. **Glyph-raster 轨道**：Places full rows 是参考实现；同一 retained text/glyph paint-data 模型现在已覆盖 Details cells/header 和 Compact/Icons labels/fallback markers。每个 surface 的 evidence gate 必须同时包含已有 shape-cache 通道、glyph-cache 通道，以及证明冷 miss 工作被预算化和 deferred 而不是塞进单个 prepaint pass 的 glyph-budget 通道。
+5. **Glyph-raster 轨道**：Places full rows 是参考实现；同一 retained text/glyph paint-data 模型现在已覆盖 Details cells/header 和 Compact/Icons labels/fallback markers。每个 surface 的 evidence gate 必须同时包含已有 shape-cache 通道、glyph-cache 通道，以及证明冷 glyph miss 工作被预算化和 deferred 而不是塞进单个 prepaint pass 的 glyph-budget 通道。Shape-cache `compute=...us` 是下一项 cold-frame 压力指标；Details 需要 warm-only/read-ahead 或显式 deferral 设计后，才能无保留地宣称完成。
 6. **所有权轨道**：继续在行为保持时将编排从 `src/main.rs` 提取到 Dolphin 对齐的文件网格模块。这包括角色调度移交、运行时证据助手，以及最终的 shell 边界所有权。
 
 这是"完全转换"的实际含义：每个条目视图行为应由保留 model/布局/controller/painter 状态拥有，而任何剩余的 GPUI 渲染器是具有证据和移除门的显式平台边界。

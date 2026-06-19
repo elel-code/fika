@@ -22,18 +22,19 @@ caches may keep their Dolphin-style geometry reuse
 keys, but glyph-raster caches must use paint-geometry keys because GPUI raster
 data is tied to origin, line height, align width, and scale factor.
 
-The immediate first-priority follow-up is flattening glyph-raster miss spikes,
-not forcing every cold raster miss to complete in one frame. Static item text
-and Details text now use a visible-layer-first frame budget: cache hits paint
-with retained raster data, cache misses compute only while the frame budget
-allows it, and over-budget text falls back to GPUI normal text paint for that
-frame while `cx.notify()` schedules subsequent cache-fill frames. Opposite-mode
-warm/static read-ahead is ordered after the real visible layer and uses only a
-small budget, so it cannot steal the current visible miss budget. Evidence must
-track both cache totals and the budget profile: `[fika item-glyph-budget]` and
-`[fika details-glyph-budget]` report `computed`, `deferred`,
-`budget_exhausted`, and `compute=...us`, which are now the primary spike
-control signals.
+The glyph-raster miss spike is now budgeted. The immediate first-priority
+follow-up is the remaining cold shape/layout spike, especially Details text
+shape misses. Static item text and Details text use a visible-layer-first glyph
+budget: cache hits paint with retained raster data, cache misses compute only
+while the frame budget allows it, and over-budget glyph work falls back to GPUI
+normal text paint for that frame while `cx.notify()` schedules subsequent
+cache-fill frames. Opposite-mode warm/static read-ahead is ordered after the
+real visible layer, uses shape-cache hits only, and has its own small glyph
+budget. Evidence must track both cache totals and budget profiles:
+`[fika item-shape-cache]`, `[fika details-shape-cache]`, and
+`[fika places-row-shape-cache]` report `compute=...us`, while
+`[fika item-glyph-budget]` and `[fika details-glyph-budget]` report
+`computed`, `deferred`, `budget_exhausted`, and glyph `compute=...us`.
 
 ## Current Replacement Matrix
 
@@ -102,12 +103,14 @@ cache keeps a real image available across pending reloads.
   (`thumb_loaded`, `thumb_decoded`, `thumb_retained`, `thumb_fallback`;
   `theme_*` counters appear only in custom-theme A/B runs)
 - Compact/Icons text shape-cache channel: `[fika item-shape-cache]`
+  (`compute=...us`)
 - Compact/Icons text retained glyph-raster cache channel:
   `[fika item-glyph-cache]`
 - Compact/Icons text glyph-raster miss budget channel:
   `[fika item-glyph-budget]`
 - Details visual paint channel: `[fika details-visual]`
 - Details text shape-cache channel: `[fika details-shape-cache]`
+  (`compute=...us`)
 - Details text retained glyph-raster cache channel:
   `[fika details-glyph-cache]`
 - Details text glyph-raster miss budget channel:
@@ -383,8 +386,11 @@ execution must stay split into evidence-backed tracks:
    The same retained text/glyph paint-data model now covers Details cells/header
    and Compact/Icons labels/fallback markers. The evidence gate for each
    surface must include both the existing shape-cache channel and the
-   glyph-cache channel, plus the glyph-budget channel that proves cold miss
-   work is bounded and deferred instead of being forced into one prepaint pass.
+   glyph-cache channel, plus the glyph-budget channel that proves cold glyph
+   miss work is bounded and deferred instead of being forced into one prepaint
+   pass. Shape-cache `compute=...us` is now the next cold-frame pressure metric;
+   Details requires a warm-only/read-ahead or explicit deferral design before
+   this can be called complete without qualification.
 6. **Ownership track**: keep extracting orchestration from `src/main.rs` into
    Dolphin-aligned file-grid modules when the move is behavior-preserving. This
    includes role scheduling handoff, runtime evidence helpers, and eventually

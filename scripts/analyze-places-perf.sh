@@ -821,10 +821,12 @@ function renderer_retained_interaction_for_policy(event_policy, rows, sections) 
     hits = field("hits") + 0
     misses = field("misses") + 0
     evicted = field("evicted") + 0
+    compute = field("compute") + 0
     entries = field("entries") + 0
     max_update("row_shape_hits", hits)
     max_update("row_shape_misses", misses)
     max_update("row_shape_evicted", evicted)
+    max_update("row_shape_compute", compute)
     max_update("row_shape_entries", entries)
 }
 
@@ -833,10 +835,12 @@ function renderer_retained_interaction_for_policy(event_policy, rows, sections) 
     hits = field("hits") + 0
     misses = field("misses") + 0
     evicted = field("evicted") + 0
+    compute = field("compute") + 0
     entries = field("entries") + 0
     max_update("row_glyph_hits", hits)
     max_update("row_glyph_misses", misses)
     max_update("row_glyph_evicted", evicted)
+    max_update("row_glyph_compute", compute)
     max_update("row_glyph_entries", entries)
 }
 
@@ -1445,17 +1449,19 @@ END {
         max_values["row_handoff_paint_icon"],
         max_values["row_handoff_gpui_text"],
         max_values["row_handoff_gpui_icon"])
-    printf("places_row_shape_cache_frames=%d max_hits=%d max_misses=%d max_evicted=%d max_entries=%d\n",
+    printf("places_row_shape_cache_frames=%d max_hits=%d max_misses=%d max_evicted=%d max_compute=%dus max_entries=%d\n",
         row_shape_cache_frames,
         max_values["row_shape_hits"],
         max_values["row_shape_misses"],
         max_values["row_shape_evicted"],
+        max_values["row_shape_compute"],
         max_values["row_shape_entries"])
-    printf("places_row_glyph_cache_frames=%d max_hits=%d max_misses=%d max_evicted=%d max_entries=%d\n",
+    printf("places_row_glyph_cache_frames=%d max_hits=%d max_misses=%d max_evicted=%d max_compute=%dus max_entries=%d\n",
         row_glyph_cache_frames,
         max_values["row_glyph_hits"],
         max_values["row_glyph_misses"],
         max_values["row_glyph_evicted"],
+        max_values["row_glyph_compute"],
         max_values["row_glyph_entries"])
     printf("places_scrollbar_frames=%d max_visible=%d max_scroll_y=%.1f max_thumb_height=%.1f max_track_height=%.1f\n",
         scrollbar_frames,
