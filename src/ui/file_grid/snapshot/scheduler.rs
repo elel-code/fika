@@ -6,6 +6,9 @@ use fika_core::{
 };
 
 use crate::ui::icons::FileIconCache;
+use crate::ui::retained::{
+    visit_dolphin_visible_work_files_first, visit_visible_work_items_by_index,
+};
 
 use super::super::icon_work::{
     FileIconResolveQueue, queue_file_icon_resolve_work_for_raw_grid_sizes,
@@ -132,23 +135,17 @@ impl RawFileGridSnapshot {
                     .visible_layout_range_and_count()
                     .map(|(range, _)| range);
 
-                visit_visible_icon_items_files_first(items, |item| {
-                    queued |= queue(file_icon_request_for_item(item, file_icon_size));
-                    true
-                });
-
-                if let Some(visible_range) = visible_range {
-                    for item in items.iter().filter(|item| {
-                        !item.visible && item.layout.model_index >= visible_range.end
-                    }) {
+                visit_dolphin_visible_work_files_first(
+                    items,
+                    visible_range,
+                    |item| item.visible,
+                    |item| item.layout.model_index,
+                    |item| item.is_dir,
+                    |item| {
                         queued |= queue(file_icon_request_for_item(item, file_icon_size));
-                    }
-                    for item in items.iter().rev().filter(|item| {
-                        !item.visible && item.layout.model_index < visible_range.start
-                    }) {
-                        queued |= queue(file_icon_request_for_item(item, file_icon_size));
-                    }
-                }
+                        true
+                    },
+                );
             }
             Self::Details { items, .. } => {
                 for item in items.iter().filter(|item| !item.is_dir) {
@@ -183,9 +180,11 @@ impl RawFileGridSnapshot {
     {
         match self {
             Self::Compact { items, .. } | Self::Icons { items, .. } => {
-                visit_visible_icon_items_by_index(items, |item| {
-                    visit(file_icon_request_for_item(item, file_icon_size))
-                });
+                visit_visible_work_items_by_index(
+                    items,
+                    |item| item.visible,
+                    |item| visit(file_icon_request_for_item(item, file_icon_size)),
+                );
             }
             Self::Details { items, .. } => {
                 for item in items.iter().filter(|item| !item.is_dir) {
@@ -211,33 +210,6 @@ impl RawFileGridSnapshot {
                     }
                 }
             }
-        }
-    }
-}
-
-fn visit_visible_icon_items_by_index<F>(items: &[RawVisibleItemSnapshot], mut visit: F)
-where
-    F: FnMut(&RawVisibleItemSnapshot) -> bool,
-{
-    for item in items.iter().filter(|item| item.visible) {
-        if !visit(item) {
-            return;
-        }
-    }
-}
-
-fn visit_visible_icon_items_files_first<F>(items: &[RawVisibleItemSnapshot], mut visit: F)
-where
-    F: FnMut(&RawVisibleItemSnapshot) -> bool,
-{
-    for item in items.iter().filter(|item| item.visible && !item.is_dir) {
-        if !visit(item) {
-            return;
-        }
-    }
-    for item in items.iter().filter(|item| item.visible && item.is_dir) {
-        if !visit(item) {
-            return;
         }
     }
 }

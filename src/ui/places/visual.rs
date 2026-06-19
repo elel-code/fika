@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
@@ -9,8 +8,8 @@ use gpui::{
 };
 
 use crate::FikaApp;
-use crate::ui::icons::{FileIconSnapshot, ThemeIconImageKey};
-use crate::ui::retained::RetainedImageLayerState;
+use crate::ui::icons::FileIconSnapshot;
+use crate::ui::retained::{RetainedImageLayerState, RetainedImageRequest, RetainedShapeCache};
 
 use super::perf::{
     PlacesRowTextShapeCachePerfLog, PlacesRowTextShapeCacheStats, PlacesRowVisualPerfLog,
@@ -33,7 +32,7 @@ const SECTION_LINE_HEIGHT: f32 = 16.0;
 pub(super) fn places_row_visual_layer(
     places: Arc<[PlaceSnapshot]>,
     app: WeakEntity<FikaApp>,
-    icon_cache: Option<Entity<PlacesIconImageCache>>,
+    icon_cache: Option<Entity<RetainedImageLayerState>>,
     paint_text: bool,
     warm_text_shapes: bool,
     paint_icon: bool,
@@ -187,34 +186,6 @@ struct PlaceSectionVisualPaintState {
     line_height: Pixels,
 }
 
-#[derive(Default)]
-pub(crate) struct PlacesIconImageCache {
-    retained_images: Option<RetainedImageLayerState>,
-}
-
-impl PlacesIconImageCache {
-    fn load_icon_or_retained(
-        &mut self,
-        icon: &PlaceRowIconVisualState,
-        app: &WeakEntity<FikaApp>,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> Option<Arc<RenderImage>> {
-        let Some(path) = icon.path.clone() else {
-            return None;
-        };
-        let key = ThemeIconImageKey::new(
-            icon.icon_name.clone(),
-            ICON_SIZE.round() as u32,
-            window.scale_factor(),
-        );
-        let retained_images = self
-            .retained_images
-            .get_or_insert_with(|| RetainedImageLayerState::new(cx));
-        retained_images.load_theme_icon_or_retained(path, key, app, window, cx)
-    }
-}
-
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct PlacesRowTextShapeCacheKey {
     label: SharedString,
@@ -223,10 +194,8 @@ pub(crate) struct PlacesRowTextShapeCacheKey {
     text_color: u32,
 }
 
-#[derive(Default)]
 pub(crate) struct PlacesRowTextShapeCache {
-    entries: HashMap<PlacesRowTextShapeCacheKey, Arc<gpui::ShapedLine>>,
-    stats: PlacesRowTextShapeCacheStats,
+    cache: RetainedShapeCache<PlacesRowTextShapeCacheKey, Arc<gpui::ShapedLine>>,
 }
 
 impl PlacesRowTextShapeCache {
@@ -237,26 +206,21 @@ impl PlacesRowTextShapeCache {
         key: &PlacesRowTextShapeCacheKey,
         window: &mut Window,
     ) -> Arc<gpui::ShapedLine> {
-        if let Some(line) = self.entries.get(key) {
-            self.stats.hits += 1;
-            return line.clone();
-        }
-
-        self.stats.misses += 1;
-        if self.entries.len() >= Self::MAX_ENTRIES {
-            self.stats.evicted += self.entries.len();
-            self.entries.clear();
-        }
-
-        let line = Arc::new(shape_place_row_visual_text(key, window));
-        self.entries.insert(key.clone(), line.clone());
-        line
+        self.cache.get_or_insert_with(key, |key| {
+            Arc::new(shape_place_row_visual_text(key, window))
+        })
     }
 
     pub(crate) fn take_stats(&mut self) -> PlacesRowTextShapeCacheStats {
-        let mut stats = std::mem::take(&mut self.stats);
-        stats.entries = self.entries.len();
-        stats
+        self.cache.take_stats()
+    }
+}
+
+impl Default for PlacesRowTextShapeCache {
+    fn default() -> Self {
+        Self {
+            cache: RetainedShapeCache::new(Self::MAX_ENTRIES),
+        }
     }
 }
 
@@ -265,7 +229,7 @@ fn places_row_visual_prepaint(
     sections: &[PlaceSectionVisualState],
     total_rows: usize,
     app: WeakEntity<FikaApp>,
-    icon_cache: Option<Entity<PlacesIconImageCache>>,
+    icon_cache: Option<Entity<RetainedImageLayerState>>,
     paint_text: bool,
     warm_text_shapes: bool,
     paint_icon: bool,
@@ -386,7 +350,7 @@ fn place_row_visual_prepaint(
     warm_text_shapes: bool,
     paint_icon: bool,
     app: &WeakEntity<FikaApp>,
-    icon_cache: Option<&Entity<PlacesIconImageCache>>,
+    icon_cache: Option<&Entity<RetainedImageLayerState>>,
     window: &mut Window,
     cx: &mut App,
 ) -> PlaceRowVisualPaintState {
@@ -415,7 +379,7 @@ fn place_row_visual_prepaint(
     let icon_image = if paint_icon {
         icon_cache.and_then(|cache| {
             cache.update(cx, |cache, cx| {
-                cache.load_icon_or_retained(&input.icon, app, window, cx)
+                load_place_icon_or_retained(cache, &input.icon, app, window, cx)
             })
         })
     } else {
@@ -428,6 +392,30 @@ fn place_row_visual_prepaint(
         paint_icon,
         icon_image,
     }
+}
+
+fn load_place_icon_or_retained(
+    retained_images: &mut RetainedImageLayerState,
+    icon: &PlaceRowIconVisualState,
+    app: &WeakEntity<FikaApp>,
+    window: &mut Window,
+    cx: &mut App,
+) -> Option<Arc<RenderImage>> {
+    let request = RetainedImageRequest::theme_icon_for_parts(
+        icon.path.clone(),
+        icon.icon_name.clone(),
+        ICON_SIZE.round() as u32,
+        window.scale_factor(),
+    )?;
+    let load = retained_images.load_request_or_retained_with_outcome(request, app, window, cx);
+    if let Some(ready) = load.ready {
+        let _ = app.update(cx, |this, cx| {
+            if this.mark_retained_image_ready(ready) {
+                cx.notify();
+            }
+        });
+    }
+    load.image
 }
 
 fn shape_place_row_visual_text(

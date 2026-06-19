@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use fika_core::{ItemId, ItemLayout, PaneId, ViewRect};
@@ -11,6 +10,7 @@ use gpui::{
 
 use crate::FikaApp;
 use crate::ui::icons::FileIconSnapshot;
+use crate::ui::retained::RetainedShapeCache;
 
 use super::paint_slots::ItemPaintSnapshot;
 use super::renderer_policy::{item_paints_fallback_icon, item_uses_layer_visual_paint};
@@ -82,10 +82,8 @@ struct StaticItemTextShapeStyle {
     fallback_fg: u32,
 }
 
-#[derive(Default)]
 pub(crate) struct StaticItemTextShapeCache {
-    entries: HashMap<StaticItemTextShapeCacheKey, Arc<StaticItemTextShapes>>,
-    stats: TextShapeCacheStats,
+    cache: RetainedShapeCache<StaticItemTextShapeCacheKey, Arc<StaticItemTextShapes>>,
 }
 
 impl StaticItemTextShapeCache {
@@ -97,26 +95,21 @@ impl StaticItemTextShapeCache {
         style: &StaticItemTextShapeStyle,
         window: &mut Window,
     ) -> Arc<StaticItemTextShapes> {
-        if let Some(shapes) = self.entries.get(key) {
-            self.stats.hits += 1;
-            return shapes.clone();
-        }
-
-        self.stats.misses += 1;
-        if self.entries.len() >= Self::MAX_ENTRIES {
-            self.stats.evicted += self.entries.len();
-            self.entries.clear();
-        }
-
-        let shapes = Arc::new(shape_static_item_text(key, style, window));
-        self.entries.insert(key.clone(), shapes.clone());
-        shapes
+        self.cache.get_or_insert_with(key, |key| {
+            Arc::new(shape_static_item_text(key, style, window))
+        })
     }
 
     pub(super) fn take_stats(&mut self) -> TextShapeCacheStats {
-        let mut stats = std::mem::take(&mut self.stats);
-        stats.entries = self.entries.len();
-        stats
+        self.cache.take_stats()
+    }
+}
+
+impl Default for StaticItemTextShapeCache {
+    fn default() -> Self {
+        Self {
+            cache: RetainedShapeCache::new(Self::MAX_ENTRIES),
+        }
     }
 }
 
@@ -625,7 +618,7 @@ fn static_item_visual_paint(
 
     let text_bounds =
         static_item_local_bounds(bounds, state.layout.visual_rect, state.layout.text_rect);
-    window.paint_layer(text_bounds, |window| match &state.shapes.label {
+    match &state.shapes.label {
         StaticItemLabelPaintState::Start { lines, height } => {
             let y_offset = ((text_bounds.size.height.as_f32() - *height).max(0.0) * 0.5).floor();
             let mut y = text_bounds.origin.y + px(y_offset);
@@ -661,7 +654,7 @@ fn static_item_visual_paint(
                 y += state.label_line_height;
             }
         }
-    });
+    }
 }
 
 fn static_item_local_bounds(

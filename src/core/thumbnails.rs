@@ -21,7 +21,6 @@ pub use scheduler::{
     ThumbnailCandidate, ThumbnailProbeBatch, ThumbnailProbeCancelHandle, ThumbnailProbeResult,
     ThumbnailScheduler, ThumbnailWorkKey, apply_thumbnail_probe_result_to_model,
     thumbnail_candidate_failure_is_cached, thumbnail_probe_results_for_requests,
-    thumbnail_read_ahead_indexes,
 };
 
 const THUMBNAILS_DIR: &str = "thumbnails";

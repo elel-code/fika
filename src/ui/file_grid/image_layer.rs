@@ -17,7 +17,10 @@ use crate::ui::icons::{
     FileIconSnapshot, ThemeIconImageKey, ThemeIconImageReadinessSnapshot,
     theme_icon_image_key_for_snapshot, theme_icon_image_size_px,
 };
-use crate::ui::retained::{RetainedImageLayerState, RetainedImageLoadOutcome, env_flag_is_truthy};
+use crate::ui::retained::{
+    RetainedImageLayerState, RetainedImageLoadOutcome, RetainedImageReady, RetainedImageRequest,
+    RetainedImageRequestKind, env_flag_is_truthy,
+};
 
 use super::ITEM_NAME_LINE_HEIGHT;
 use super::paint_slots::ItemPaintSnapshot;
@@ -111,7 +114,8 @@ fn prewarm_visible_theme_icons_for_policy(
     for (key, path) in theme_icons {
         let load = app.load_retained_or_sync_svg_theme_icon(path.clone(), key.clone(), cx, None);
         if load.is_some_and(|load| load.image.is_some()) {
-            readiness_changed |= app.mark_theme_icon_image_path_ready(key, path);
+            readiness_changed |=
+                app.mark_retained_image_ready(RetainedImageReady::theme_icon(path, key));
         }
     }
     if readiness_changed {
@@ -265,6 +269,7 @@ enum ItemImageLayerRole {
     PrewarmThemeIcon,
 }
 
+#[cfg(test)]
 pub(super) fn item_image_layer_item_source_path(item: &ItemImageLayerItem) -> Option<Arc<Path>> {
     item.thumbnail_path
         .clone()
@@ -286,32 +291,26 @@ pub(super) fn item_image_pending_load_paints_marker(item: &ItemImageLayerItem) -
     item.thumbnail_path.is_some()
 }
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub(super) enum ItemImageRetainedSource {
-    Thumbnail(Arc<Path>),
-    ThemeIcon(ThemeIconImageKey),
-}
-
-pub(super) fn item_image_retained_source_for(
-    thumbnail_path: Option<&Arc<Path>>,
+pub(super) fn item_image_retained_request_for(
+    thumbnail_path: Option<Arc<Path>>,
     icon: &FileIconSnapshot,
     icon_size_px: u32,
     scale_factor: f32,
-) -> Option<ItemImageRetainedSource> {
-    if let Some(thumbnail_path) = thumbnail_path {
-        return Some(ItemImageRetainedSource::Thumbnail(thumbnail_path.clone()));
-    }
-
-    theme_icon_image_key_for_snapshot(icon, icon_size_px, scale_factor)
-        .map(ItemImageRetainedSource::ThemeIcon)
+) -> Option<RetainedImageRequest> {
+    RetainedImageRequest::thumbnail_or_theme_icon_for_snapshot(
+        thumbnail_path,
+        icon,
+        icon_size_px,
+        scale_factor,
+    )
 }
 
-fn item_image_layer_retained_source(
+fn item_image_layer_retained_request(
     item: &ItemImageLayerItem,
     scale_factor: f32,
-) -> Option<ItemImageRetainedSource> {
-    item_image_retained_source_for(
-        item.thumbnail_path.as_ref(),
+) -> Option<RetainedImageRequest> {
+    item_image_retained_request_for(
+        item.thumbnail_path.clone(),
         &item.icon,
         item_image_theme_icon_size_px(item),
         scale_factor,
@@ -408,7 +407,7 @@ impl Element for ItemImageLayerElement {
         window.with_element_state::<RetainedImageLayerState, _>(id, |state, window| {
             let mut state = state.unwrap_or_else(|| RetainedImageLayerState::new(cx));
             let mut source_stats = ItemImageSourcePerfStats::default();
-            let mut ready_theme_icons = Vec::new();
+            let mut ready_images = Vec::new();
             let states = self
                 .items
                 .iter()
@@ -418,19 +417,19 @@ impl Element for ItemImageLayerElement {
                         &mut state,
                         &self.app,
                         &mut source_stats,
-                        &mut ready_theme_icons,
+                        &mut ready_images,
                         window,
                         cx,
                     )
                 })
                 .collect::<Vec<_>>();
-            if perf_started.is_some() || !ready_theme_icons.is_empty() {
+            if perf_started.is_some() || !ready_images.is_empty() {
                 let elapsed = perf_started.map(|started| started.elapsed());
                 let count = states.len();
                 let _ = self.app.update(cx, |this, _cx| {
                     let mut readiness_changed = false;
-                    for (key, path) in ready_theme_icons {
-                        readiness_changed |= this.mark_theme_icon_image_path_ready(key, path);
+                    for ready in ready_images {
+                        readiness_changed |= this.mark_retained_image_ready(ready);
                     }
                     if let Some(elapsed) = elapsed {
                         this.record_item_image_prepaint(self.pane_id, elapsed, count, source_stats);
@@ -488,37 +487,18 @@ fn item_image_layer_prepaint_item(
     state: &mut RetainedImageLayerState,
     app: &WeakEntity<FikaApp>,
     source_stats: &mut ItemImageSourcePerfStats,
-    ready_theme_icons: &mut Vec<(ThemeIconImageKey, Arc<Path>)>,
+    ready_images: &mut Vec<RetainedImageReady>,
     window: &mut Window,
     cx: &mut App,
 ) -> Option<ItemImagePaintState> {
     if !item.visible {
         return None;
     }
-    let source_path = item_image_layer_item_source_path(item)?;
-    let retained_source = item_image_layer_retained_source(item, window.scale_factor())?;
-    let kind = if item.thumbnail_path.is_some() {
-        ItemImagePaintKind::Thumbnail
-    } else {
-        ItemImagePaintKind::ThemeIcon
-    };
-    let ready_theme_key = match &retained_source {
-        ItemImageRetainedSource::ThemeIcon(key) => Some(key.clone()),
-        ItemImageRetainedSource::Thumbnail(_) => None,
-    };
-    let load = match (kind, retained_source) {
-        (ItemImagePaintKind::Thumbnail, ItemImageRetainedSource::Thumbnail(_)) => {
-            state.load_thumbnail_or_retained_with_outcome(source_path.clone(), window, cx)
-        }
-        (ItemImagePaintKind::ThemeIcon, ItemImageRetainedSource::ThemeIcon(key)) => state
-            .load_theme_icon_or_retained_with_outcome(source_path.clone(), key, app, window, cx),
-        _ => return None,
-    };
-    if kind == ItemImagePaintKind::ThemeIcon
-        && load.image.is_some()
-        && let Some(key) = ready_theme_key
-    {
-        ready_theme_icons.push((key, source_path.clone()));
+    let request = item_image_layer_retained_request(item, window.scale_factor())?;
+    let kind = item_image_paint_kind_for_request(&request);
+    let load = state.load_request_or_retained_with_outcome(request, app, window, cx);
+    if let Some(ready) = load.ready.clone() {
+        ready_images.push(ready);
     }
     let paint = matches!(item.role, ItemImageLayerRole::Paint);
     record_item_image_source_stats(source_stats, kind, load.outcome, paint);
@@ -548,6 +528,13 @@ fn item_image_layer_prepaint_item(
         image,
         fallback,
     })
+}
+
+fn item_image_paint_kind_for_request(request: &RetainedImageRequest) -> ItemImagePaintKind {
+    match request.kind() {
+        RetainedImageRequestKind::Thumbnail => ItemImagePaintKind::Thumbnail,
+        RetainedImageRequestKind::ThemeIcon => ItemImagePaintKind::ThemeIcon,
+    }
 }
 
 fn record_item_image_source_stats(

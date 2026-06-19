@@ -18,6 +18,74 @@
 每个像素都自绘。只有当 retained 所有权清晰，且运行时证据证明行为完整、性能持平
 或优于 GPUI built-in 路径时，某个 surface 才能切到 custom paint。
 
+## 第一优先级：Dolphin 实现模型，GPUI 只负责绘制出口
+
+当前最高优先级是把文件视图和 Places 的热路径全面转向 Dolphin 的实现模型：
+
+```text
+model roles -> visible-first role updater -> retained slot/cache -> thin custom painter
+```
+
+GPUI `img()` / `image()` 不能继续作为 item image 生命周期、可见范围调度、cache key
+或 readiness handoff 的架构中心。它只保留为明确的 bridge、baseline 或 fallback。最终绘制
+仍使用 GPUI custom element/canvas 的 `Window::paint_image()`、`paint_quad()` 和文本绘制；
+性能收益来自 Dolphin 式生命周期与 cache 边界，而不是来自替换 image 绘制 primitive。
+
+源码级对照：
+
+| 责任 | Dolphin 源码模型 | GPUI `img()` 源码模型 | Fika 第一优先级 |
+|---|---|---|---|
+| Role/preview 调度 | `KFileItemModelRolesUpdater::startUpdating()` 先 `updateVisibleIcons()`，再 `indexesToResolve()`；`MaxBlockTimeout=200ms`，`ReadAheadPages=5`，`ResolveAllItemsLimit=500` | 每个 `Img` 在 `request_layout()` 中 `source.use_data()`，按 element 生命周期触发 loading/fallback | 建立共享 RoleUpdater/ImageResolver，pane 和 Places 共用 visible-first/read-ahead/size-dpr 失效策略 |
+| 图像 cache key | `KStandardItemListWidget::pixmapForIcon()` key = icon name + icon height + DPR + mode | `RetainAllImageCache` key = `Resource` hash；`Img` 自己决定何时使用 cache | theme icon key 必须是 semantic key：icon name + size + DPR + theme + color scheme + mode；thumbnail key 独立 |
+| Widget/item 本地状态 | `updatePixmapCache()` 维护 widget-local `m_pixmap`、`m_scaledPixmapSize`、`m_pixmapPos` | `ImgState` 保存 frame/loading state，不知道 item role/read-ahead | retained slot 保存 content/geometry/visual/image/text dirty，paint state 只消费 resolved state |
+| 绘制 | `KStandardItemListWidget::paint()` 只画背景、pixmap、text；hover 背景在 `KItemListWidget::paint()` | `Img::paint()` 最终也是 `window.paint_image()` | custom element 只画背景/hover/selection/image/fallback/text/indicator，不做 theme scan、MIME probe 或 decode |
+| Places | `DolphinPlacesModel` + `KFilePlacesView` 拥有 model/view/delegate 闭环 | per-row GPUI element 容易把事件和视觉绑回 element identity | Places 与 pane 共享 retained slot、image request、cache/readiness 语义；row shell 只保留明确 bridge |
+
+因此后续优化排序必须改变：先补 Dolphin 式 RoleUpdater、shared image model、bounded retained cache
+和 slot dirty state，再考虑删除剩余 GPUI bridge。任何只优化 pane 或只优化 Places 的 image/hover/cache
+切片，都必须同时说明另一侧如何复用同一模型。
+
+2026-06-19 实现进展：
+
+- pane 与 Places 已共用 `RetainedImageRequest`、`RetainedImageLoad`、`RetainedImageReady`
+  和 `RetainedImageLayerState`。Places 不再有专属 image cache 壳，sidebar keyed state
+  直接持有 shared retained image layer。
+- theme icon ready 事件现在跟随 shared load result 产生；Compact/Icons、Details 和
+  Places 都消费同一 ready 语义，不再各自推导 image readiness。
+- thumbnail retained fallback 已从无界 `HashMap` 改为按字节预算的 LRU cache；驱逐时同步
+  移除 GPUI `RetainAllImageCache` resource 并 `drop_image`。
+- Dolphin `ReadAheadPages=5` / `ResolveAllItemsLimit=500` 的 role-updater 索引顺序已移到
+  `ui::retained::work_order`，thumbnail deferred work 和 file-icon resolve 不再各自维护
+  分叉顺序。
+- Static item label、Details cell/header 和 Places row label 现在共用
+  `RetainedShapeCache` 与 `TextShapeCacheStats`。各 surface 仍然拥有自己的 text key 和
+  shape 函数，但 cache hit/miss/evict 语义已经是 retained 层代码，不再由 pane/Places
+  各自复制。
+- Places slot projection 现在包装 `RetainedSlotStats`，与 item-view slot delta accounting
+  使用同一 retained 语义，同时保留 Places 专属 rows/sections 计数。
+- thumbnail/theme image 的直接 load helper 已收回到 `RetainedImageLayerState` 私有实现；
+  pane、Details 和 Places 必须通过 `RetainedImageRequest` 入口。
+- 最终 core evidence 已全绿。`scripts/run-retained-renderer-evidence.sh
+  --core --skip-build --prefix fika-core-final-retained-v3` 完成并输出
+  `retained renderer evidence complete`。item 日志覆盖 Compact、Icons 和 Details
+  （`/tmp/fika-core-final-retained-v3-item-etc-zoom-scroll.log`、
+  `/tmp/fika-core-final-retained-v3-item-etc-icons-zoom-scroll.log`、
+  `/tmp/fika-core-final-retained-v3-item-etc-details-zoom-scroll.log`）：warm steady
+  max total 为 `1108us`，file-grid max build 为 `1344us`，image max paint 为
+  `373us`，warm static visual max paint 为 `2546us`，warm custom/details visual
+  max paint 为 `3309us`。Renderer policy 保持 retained：
+  `gpui_image_element=0`、`gpui_directory_drop_shell=0`、`gpui_details_header=0`。
+- 最终 Places 日志
+  （`/tmp/fika-core-final-retained-v3-places-targets.log`、
+  `/tmp/fika-core-final-retained-v3-places-overflow.log`、
+  `/tmp/fika-core-final-retained-v3-places-layout.log`、
+  `/tmp/fika-core-final-retained-v3-places-hit-test.log`、
+  `/tmp/fika-core-final-retained-v3-places-targeting.log`、
+  `/tmp/fika-core-final-retained-v3-places-dnd.log`）在默认 full policy 下通过：
+  `visual_kind=full`、`row_gpui=0`、`text_gpui=0`、`icon_gpui=0`。retained-event
+  analyzer 对 typed payload shell 仍保留预期失败，因为 GPUI 公开的 typed
+  drag/drop payload delivery 仍是 interactive-element API。
+
 ## 当前基线
 
 已接受的 retained/custom surface：
@@ -33,9 +101,13 @@
 
 - Compact/Icons 和 Details drag start 使用 GPUI `Div::on_drag` shell。
 - Rename 使用 GPUI editor overlay。
-- Compact/Icons MIME/theme icon 默认使用 hybrid renderer：尚未 ready 的 key 继续以
-  GPUI `img()` 作为 fallback，ready 的 retained image key 通过 custom image layer 绘制。
-- Places 文本/图标仍由 GPUI 渲染。Places row/section activation、context-menu
+- Compact/Icons MIME/theme icon 默认使用 full custom image layer。Painter 仍复用
+  GPUI 高效的 `RetainAllImageCache -> RenderImage -> Window::paint_image`
+  后端，但普通 pane 渲染路径不再保留逐 item 的 GPUI `img()` 子元素。
+  `FIKA_GPUI_THEME_ICONS=1` 是明确的旧 GPUI baseline，
+  `FIKA_HYBRID_THEME_ICONS=1` 只保留为过渡 readiness-handoff 路径。
+- Places 默认使用 full custom row visual 绘制背景、文本和图标；图标 image load/cache/readiness
+  直接使用 shared retained image layer。Places row/section activation、context-menu
   targeting、DnD target lookup、drop dispatch 和 sidebar leave clearing 默认已经通过
   retained-DnD event layer；仍保留一个 sidebar-level GPUI typed payload bridge 和 row
   drag-start shell。
@@ -56,11 +128,10 @@ icon height、device pixel ratio 和 mode 组成 cache key。Zoom 立即更新 i
 cache 和 readiness 契约，才能默认替换 GPUI `img()`。
 
 Dolphin Places panel 也是 model/view/delegate 闭环：`DolphinPlacesModel` 拥有
-Places state，`KFilePlacesView` 拥有 interaction delivery。Fika Places renderer 只有在
-row/section hit testing 和 event delivery 都变成 viewport-level retained state，并且剩余
-typed payload / drag-start 平台 bridge 都显式后，才算 Dolphin-complete。默认 retained-DnD
-已经把 row/section GPUI event shell 从 target delivery 中移除；完整 retained Places 仍被单个
-sidebar typed payload bridge 和 drag-start shell 阻挡。只自绘 row chrome 不是终点。
+Places state，`KFilePlacesView` 拥有 interaction delivery。Fika 现在已经具备
+row visual、row/section hit testing、targeting 和 target delivery 的 Dolphin-complete
+Places core：默认路径是 full row visual 加 retained-DnD。剩余 typed payload 和
+drag-start shell 是明确的 GPUI/平台 bridge，不再拥有 row identity。
 
 实际结论：
 
@@ -108,8 +179,8 @@ path 后，才能成为默认。
 - 当修改 Places full-row visual policy、text-shape handoff 或默认提升阈值时，使用
   `scripts/run-retained-renderer-evidence.sh --places-full-handoff` 采集
   Places 默认 chrome 与 full handoff 的 A/B 日志。
-- 仅在更改 MIME/theme icon renderer 时，采集默认 GPUI image 路径和
-  `FIKA_CUSTOM_THEME_ICONS=1` 的对比日志。
+- 仅在更改 MIME/theme icon renderer 时，采集默认 full custom image 路径和
+  `FIKA_GPUI_THEME_ICONS=1` 的对比日志。
 
 验收：
 
@@ -131,10 +202,10 @@ path 后，才能成为默认。
 - Thumbnail retention 继续按 thumbnail path，而不是 icon name。
 - 除非替代方案胜出，否则 GPUI image cache 仍是 decode backend。
 
-默认值现在是 hybrid。未来 icon renderer 变更必须继续满足：
+默认值现在是 retained image model 上的 full custom。未来 icon renderer 变更必须继续满足：
 
-- 默认 hybrid 与 `FIKA_GPUI_THEME_ICONS=1` baseline 的配对日志在 `/etc` 与混合用户目录通过。
-- Hybrid/custom 日志没有稳态 `theme_placeholder` 抖动、没有 zoom-time
+- 默认 full custom 与 `FIKA_GPUI_THEME_ICONS=1` baseline 的配对日志在 `/etc` 与混合用户目录通过。
+- 默认/custom 日志没有稳态 `theme_placeholder` 抖动、没有 zoom-time
   `theme_decoded` burst、没有可见图标大小二次跳变、没有同步 icon work 回归。
 - `docs/ITEM_VIEW_RENDERER_DECISIONS.zh-CN.md` 记录证据。
 
@@ -162,46 +233,35 @@ renderer policy。
 - 右键菜单仍区分空白侧栏、section、bookmark、trash 和 device 行。
 - 内部 reorder 和 item/external drop 行为不变。
 
-### Track 3a：Places Full Row Visual Handoff
+### Track 3a：Places Full Row Visual Default
 
-目的：将 Places 文本和 vector icon 绘制推进到完整 retained row visual 路径，但在它对比
-当前 chrome split 达到性能中性或更优前，不提升为默认。
+目的：让 Places row/section visual 与 pane item 使用同一 Dolphin retained 模型：
+共享 retained image request、image readiness/cache、text-shape cache 机制、retained
+slot stats，以及薄 row visual painter。
 
-当前 opt-in 状态：
+当前默认：
 
-- `FIKA_PLACES_ROW_VISUAL_POLICY=full` 在 custom row visual layer 中绘制完整 row
-  文本和 vector icon。
-- `FIKA_PLACES_ROW_VISUAL_HANDOFF=1` 在 warmup 帧继续使用 GPUI text/icons，
-  预热 `PlacesRowTextShapeCache`，并且只有 retained row visual 资源 ready 后才 handoff。
-- handoff 路径已经由 `scripts/run-retained-renderer-evidence.sh --places-full-handoff`
-  提供 analyzer-backed 证据；该脚本会为默认 chrome 和 full handoff 分别采集
-  targets、overflow 和 layout 日志。
+- `DEFAULT_PLACES_ROW_VISUAL_POLICY = CustomFull`。
+- Places row text、section text 和 icon 都由 custom row visual layer 绘制。
+  `FIKA_PLACES_ROW_VISUAL_POLICY=gpui`、`chrome`、`text` 只保留为明确 fallback/A-B policy。
+- `FIKA_PLACES_ROW_VISUAL_HANDOFF=1` 仍可作为 ready-only handoff 的回归 suite；
+  它已经不是 full rows 成为默认值的前置条件。
 
-2026-06-19 证据：
+2026-06-19 最终证据：
 
-- `/tmp/fika-places-full-handoff-runner-20260619-places-handoff-full-targets.log`
-  通过 full-handoff row-visual gate，warm row paint 为 `379us`，但首帧
-  `[fika render] total` 达到 `27268us`。
-- `/tmp/fika-places-full-handoff-runner-20260619-places-handoff-full-overflow.log`
-  在 75 行、29 个 painted rows 下通过，warm row paint 为 `1090us`。
-- `/tmp/fika-places-full-handoff-runner-20260619-places-handoff-full-layout.log`
-  通过，warm row paint 为 `724us`。
+- core runner 在默认 full policy 下通过 Places targets、overflow、layout、hit-test、
+  targeting 和 DnD 日志：`/tmp/fika-core-final-retained-v3-places-*.log`。
+- analyzer summary 显示 `visual_kinds=full`、row visual layer 计数匹配 rows、
+  `row_gpui=0`、`text_gpui=0`、`icon_gpui=0`。
+- row/section target delivery 保持 retained-DnD。唯一预期 retained-event 失败是已知的
+  sidebar typed payload shell，因为 GPUI 仍只通过 interactive element 暴露 typed
+  drag move/drop payload。
 
 决策：
 
-- full 路径已经有真实架构突破：ready-only handoff 和 text-shape 预热移除了之前的
-  cold row-paint blocker，retained custom row visual 路径也能被可重复 gate 度量。
-- 但它还不是默认。剩余阻塞是整帧 startup/target total-render 波动，而不是 row
-  visual painting 本身。默认提升前必须继续同时比较 row-visual cost 和
-  `[fika render] total=`。
-
-下一步设计：
-
-- 将首帧 Places snapshot、pane item work、root work 和 full row visual work 拆分得足够清楚，
-  让默认提升 gate 能识别 total-render 尖峰属于哪个 owner。
-- 在降低 full 路径 30ms total-render guard 前，减少或摊销 full-handoff 专属首帧工作。
-- 保持默认 chrome policy，直到 full handoff 在同一 targets/overflow/layout A/B suite 中
-  匹配或超过 chrome。
+- Places full row visual 对 retained renderer transition 来说已经完成，并保持默认。
+- 剩余 Places 工作不是 row visual 迁移，而是 Track 4 typed drag API 和针对
+  chrome/GPUI fallback policy 的未来回归监控。
 
 ### Track 4：Typed Drag 边界
 
@@ -275,10 +335,9 @@ file-grid 和 Places facade。
 
 ## 下一批队列
 
-1. 继续让 retained MIME/theme icon image cache 基础与
-   `docs/RETAINED_ICON_IMAGE_CACHE_PLAN.zh-CN.md` 对齐。
-2. 继续 Track 3a：降低 full-handoff 首帧 total-render 波动，并保持
-   `--places-full-handoff` A/B 证据最新。
+1. 保持 retained MIME/theme icon image cache 的 full-custom 默认，并在未来 image
+   变更时与 `FIKA_GPUI_THEME_ICONS=1` 对比。
+2. 将 `--places-full-handoff` 作为 chrome/full 回归 suite 保留，而不是默认提升 blocker。
 3. 在依赖更新后重新审计 GPUI drag-start API，再进入 Track 4。
 4. 在 Track 5 前，把 rename 行为矩阵转为测试/smoke。
 

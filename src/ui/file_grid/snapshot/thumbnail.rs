@@ -3,12 +3,12 @@ use std::sync::Arc;
 
 use fika_core::{
     DirectoryModel, FilteredModel, ItemId, ThumbnailCandidate, ThumbnailRequestPriority,
-    is_network_path, mime_magic_resolution_required, thumbnail_read_ahead_indexes,
-    thumbnail_request_may_have_preview,
+    is_network_path, mime_magic_resolution_required, thumbnail_request_may_have_preview,
 };
 
 use super::super::layout::model_index_for_layout_index;
 use super::RawFileGridSnapshot;
+use crate::ui::retained::dolphin_read_ahead_indexes;
 
 pub(crate) fn visible_item_thumbnail_path(entry: &fika_core::ModelEntry) -> Option<PathBuf> {
     if entry.is_dir {
@@ -28,7 +28,7 @@ pub(crate) fn deferred_thumbnail_candidates_for_model<'a>(
         .visible_layout_range_and_count()
         .into_iter()
         .flat_map(move |(visible_range, visible_count)| {
-            thumbnail_read_ahead_indexes(visible_range, item_count, visible_count)
+            dolphin_read_ahead_indexes(visible_range, item_count, visible_count)
         })
         .filter_map(move |layout_index| {
             let model_index = model_index_for_layout_index(filtered, layout_index)?;

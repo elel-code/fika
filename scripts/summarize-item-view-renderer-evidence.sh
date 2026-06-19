@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
     cat <<'EOF'
-Usage: summarize-item-view-renderer-evidence.sh LOG
+Usage: summarize-item-view-renderer-evidence.sh LOG [LOG ...]
 
 Runs the standard item-view runtime perf-log gate, then prints a Markdown
 evidence block that can be copied into docs/ITEM_VIEW_RENDERER_DECISIONS.md.
@@ -12,7 +12,7 @@ still be recorded by a human reviewer.
 EOF
 }
 
-if [[ $# -ne 1 || "$1" == "-h" || "$1" == "--help" ]]; then
+if [[ $# -lt 1 || "$1" == "-h" || "$1" == "--help" ]]; then
     usage
     if [[ $# -eq 1 && ( "$1" == "-h" || "$1" == "--help" ) ]]; then
         exit 0
@@ -20,17 +20,21 @@ if [[ $# -ne 1 || "$1" == "-h" || "$1" == "--help" ]]; then
     exit 2
 fi
 
-log_path="$1"
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 runtime_gate="$root_dir/scripts/check-item-view-runtime-log.sh"
 
-summary="$("$runtime_gate" "$log_path")"
+summary="$("$runtime_gate" "$@")"
+log_list=""
+for log_path in "$@"; do
+    log_list="${log_list}- \`$log_path\`
+"
+done
 
 cat <<EOF
 ## Item View Renderer Evidence
 
-- Log: \`$log_path\`
-- Perf gate: \`scripts/check-item-view-runtime-log.sh $log_path\`
+- Logs:
+$log_list- Perf gate: \`scripts/check-item-view-runtime-log.sh $*\`
 - Manual review still required: DnD and rename checklist from \`docs/ITEM_VIEW_RUNTIME_SMOKE.md\`
 
 \`\`\`text

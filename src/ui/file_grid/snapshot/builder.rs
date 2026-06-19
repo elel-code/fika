@@ -17,6 +17,7 @@ use super::{
 };
 use crate::ui::drag_drop::{ItemDropTarget, item_drop_target_matches_directory};
 use crate::ui::rename::RenameDraft;
+use crate::ui::retained::visible_work_range;
 
 use fika_core::{DirectoryModel, FilteredModel, ItemLayout, PaneId, SelectionState, ViewMode};
 
@@ -235,22 +236,10 @@ fn visible_layout_index_range(items: impl IntoIterator<Item = ItemLayout>) -> Op
 }
 
 fn item_view_work_range(visible_range: Range<usize>, item_count: usize) -> Range<usize> {
-    if item_count == 0 || visible_range.is_empty() {
-        return 0..0;
-    }
-
-    let visible_start = visible_range.start.min(item_count);
-    let visible_end = visible_range.end.min(item_count).max(visible_start);
-    if visible_start >= visible_end {
-        return 0..0;
-    }
-
-    let visible_count = visible_end - visible_start;
-    let max_extra_each_side = ITEM_VIEW_MAX_WORK_ITEMS
-        .saturating_sub(visible_count)
-        .saturating_div(2);
-    let read_ahead = visible_count
-        .saturating_mul(ITEM_VIEW_WORK_READ_AHEAD_PAGES)
-        .min(max_extra_each_side);
-    visible_start.saturating_sub(read_ahead)..(visible_end + read_ahead).min(item_count)
+    visible_work_range(
+        visible_range,
+        item_count,
+        ITEM_VIEW_WORK_READ_AHEAD_PAGES,
+        ITEM_VIEW_MAX_WORK_ITEMS,
+    )
 }

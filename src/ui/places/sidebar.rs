@@ -15,6 +15,7 @@ use gpui::{
 use crate::ui::background_tasks::{BackgroundTasksSnapshot, background_tasks_panel};
 use crate::ui::file_grid::ItemDrag;
 use crate::ui::icons::{FileIconCache, FileIconSnapshot, cached_icon_or_fallback};
+use crate::ui::retained::RetainedImageLayerState;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -35,7 +36,7 @@ use super::perf::{
     places_section_count,
 };
 use super::snapshot::PlaceSnapshot;
-use super::visual::{PlacesIconImageCache, places_row_visual_layer};
+use super::visual::places_row_visual_layer;
 use row::place_row;
 use section::group_heading;
 
@@ -340,8 +341,8 @@ pub(crate) fn places_sidebar(
     });
     let app = cx.weak_entity();
     let places_icon_image_cache = paint_row_icon.then(|| {
-        window.use_keyed_state("places-icon-image-cache", cx, |_, _| {
-            PlacesIconImageCache::default()
+        window.use_keyed_state("places-icon-image-cache", cx, |_, cx| {
+            RetainedImageLayerState::new(cx)
         })
     });
     let row_visual_layer = custom_row_visuals.then(|| {

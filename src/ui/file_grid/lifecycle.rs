@@ -1,20 +1,8 @@
-use std::path::Path;
-use std::sync::Arc;
-
 use fika_core::PaneId;
 
 use crate::FikaApp;
-use crate::ui::icons::ThemeIconImageKey;
 
 impl FikaApp {
-    pub(super) fn mark_theme_icon_image_path_ready(
-        &mut self,
-        key: ThemeIconImageKey,
-        path: Arc<Path>,
-    ) -> bool {
-        self.theme_icon_readiness.mark_ready_path(key, path)
-    }
-
     pub(crate) fn clear_file_grid_projection_state(&mut self, pane_id: PaneId) {
         self.visible_item_slots.remove(&pane_id);
         self.item_paint_slots.remove(&pane_id);

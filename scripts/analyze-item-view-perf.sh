@@ -16,6 +16,9 @@ Options:
   --require-details
       Fail if Details-specific visual and shape-cache channels are missing.
 
+  --require-warm-details-visual
+      Fail if Details-specific warmed visual paint timing is missing.
+
   --require-static-visual
       Fail if [fika static-item-visual] Compact/Icons paint timing is missing.
 
@@ -50,6 +53,11 @@ Options:
   --steady-total-us N
       Fail if any item-view phase=steady total exceeds N microseconds.
 
+  --warm-steady-total-us N
+      Fail if any warmed non-empty item-view phase=steady total exceeds N
+      microseconds. The first non-empty steady frame per mode is treated as
+      retained-model warmup and remains reported in the all-frame phase maxima.
+
   --file-grid-build-us N
       Fail if any [fika file-grid] build exceeds N microseconds.
 
@@ -62,6 +70,17 @@ Options:
   --custom-paint-us N
       Fail if any custom paint channel exceeds N microseconds.
 
+  --warm-static-visual-paint-us N
+      Fail if any warmed [fika static-item-visual] paint exceeds N microseconds.
+      The first non-zero paint per mode is treated as cold glyph/image-raster
+      warmup and remains reported in the all-frame maxima.
+
+  --warm-image-paint-us N
+      Fail if any warmed [fika item-image] paint exceeds N microseconds.
+
+  --warm-custom-paint-us N
+      Fail if any warmed custom paint channel exceeds N microseconds.
+
   -h, --help
       Show this help.
 EOF
@@ -69,6 +88,7 @@ EOF
 
 require_steady=false
 require_details=false
+require_warm_details_visual=false
 require_static_visual=false
 require_interaction=false
 require_renderer_policy=false
@@ -79,10 +99,14 @@ required_modes=""
 required_static_modes=""
 required_renderer_policy_modes=""
 steady_total_us=""
+warm_steady_total_us=""
 file_grid_build_us=""
 static_visual_paint_us=""
 image_paint_us=""
 custom_paint_us=""
+warm_static_visual_paint_us=""
+warm_image_paint_us=""
+warm_custom_paint_us=""
 log_path=""
 
 while [[ $# -gt 0 ]]; do
@@ -92,6 +116,9 @@ while [[ $# -gt 0 ]]; do
             ;;
         --require-details)
             require_details=true
+            ;;
+        --require-warm-details-visual)
+            require_warm_details_visual=true
             ;;
         --require-static-visual)
             require_static_visual=true
@@ -159,6 +186,18 @@ while [[ $# -gt 0 ]]; do
         --steady-total-us=*)
             steady_total_us="${1#--steady-total-us=}"
             ;;
+        --warm-steady-total-us)
+            if [[ $# -lt 2 || "$2" == --* ]]; then
+                echo "--warm-steady-total-us requires a numeric value" >&2
+                usage >&2
+                exit 2
+            fi
+            warm_steady_total_us="$2"
+            shift
+            ;;
+        --warm-steady-total-us=*)
+            warm_steady_total_us="${1#--warm-steady-total-us=}"
+            ;;
         --file-grid-build-us)
             if [[ $# -lt 2 || "$2" == --* ]]; then
                 echo "--file-grid-build-us requires a numeric value" >&2
@@ -207,6 +246,42 @@ while [[ $# -gt 0 ]]; do
         --custom-paint-us=*)
             custom_paint_us="${1#--custom-paint-us=}"
             ;;
+        --warm-static-visual-paint-us)
+            if [[ $# -lt 2 || "$2" == --* ]]; then
+                echo "--warm-static-visual-paint-us requires a numeric value" >&2
+                usage >&2
+                exit 2
+            fi
+            warm_static_visual_paint_us="$2"
+            shift
+            ;;
+        --warm-static-visual-paint-us=*)
+            warm_static_visual_paint_us="${1#--warm-static-visual-paint-us=}"
+            ;;
+        --warm-image-paint-us)
+            if [[ $# -lt 2 || "$2" == --* ]]; then
+                echo "--warm-image-paint-us requires a numeric value" >&2
+                usage >&2
+                exit 2
+            fi
+            warm_image_paint_us="$2"
+            shift
+            ;;
+        --warm-image-paint-us=*)
+            warm_image_paint_us="${1#--warm-image-paint-us=}"
+            ;;
+        --warm-custom-paint-us)
+            if [[ $# -lt 2 || "$2" == --* ]]; then
+                echo "--warm-custom-paint-us requires a numeric value" >&2
+                usage >&2
+                exit 2
+            fi
+            warm_custom_paint_us="$2"
+            shift
+            ;;
+        --warm-custom-paint-us=*)
+            warm_custom_paint_us="${1#--warm-custom-paint-us=}"
+            ;;
         -h|--help)
             usage
             exit 0
@@ -239,6 +314,11 @@ if [[ -n "$steady_total_us" && ! "$steady_total_us" =~ ^[0-9]+$ ]]; then
     exit 2
 fi
 
+if [[ -n "$warm_steady_total_us" && ! "$warm_steady_total_us" =~ ^[0-9]+$ ]]; then
+    echo "--warm-steady-total-us must be an integer microsecond value" >&2
+    exit 2
+fi
+
 if [[ -n "$file_grid_build_us" && ! "$file_grid_build_us" =~ ^[0-9]+$ ]]; then
     echo "--file-grid-build-us must be an integer microsecond value" >&2
     exit 2
@@ -259,9 +339,25 @@ if [[ -n "$custom_paint_us" && ! "$custom_paint_us" =~ ^[0-9]+$ ]]; then
     exit 2
 fi
 
+if [[ -n "$warm_static_visual_paint_us" && ! "$warm_static_visual_paint_us" =~ ^[0-9]+$ ]]; then
+    echo "--warm-static-visual-paint-us must be an integer microsecond value" >&2
+    exit 2
+fi
+
+if [[ -n "$warm_image_paint_us" && ! "$warm_image_paint_us" =~ ^[0-9]+$ ]]; then
+    echo "--warm-image-paint-us must be an integer microsecond value" >&2
+    exit 2
+fi
+
+if [[ -n "$warm_custom_paint_us" && ! "$warm_custom_paint_us" =~ ^[0-9]+$ ]]; then
+    echo "--warm-custom-paint-us must be an integer microsecond value" >&2
+    exit 2
+fi
+
 awk \
     -v require_steady="$require_steady" \
     -v require_details="$require_details" \
+    -v require_warm_details_visual="$require_warm_details_visual" \
     -v require_static_visual="$require_static_visual" \
     -v require_interaction="$require_interaction" \
     -v require_renderer_policy="$require_renderer_policy" \
@@ -272,10 +368,14 @@ awk \
     -v required_static_modes="$required_static_modes" \
     -v required_renderer_policy_modes="$required_renderer_policy_modes" \
     -v steady_total_limit="$steady_total_us" \
+    -v warm_steady_total_limit="$warm_steady_total_us" \
     -v file_grid_build_limit="$file_grid_build_us" \
     -v static_visual_paint_limit="$static_visual_paint_us" \
     -v image_paint_limit="$image_paint_us" \
-    -v custom_paint_limit="$custom_paint_us" '
+    -v custom_paint_limit="$custom_paint_us" \
+    -v warm_static_visual_paint_limit="$warm_static_visual_paint_us" \
+    -v warm_image_paint_limit="$warm_image_paint_us" \
+    -v warm_custom_paint_limit="$warm_custom_paint_us" '
 function trim(value) {
     sub(/^[[:space:]]+/, "", value)
     sub(/[[:space:]]+$/, "", value)
@@ -317,12 +417,51 @@ function fail(message) {
     failures++
 }
 
-function record_custom_paint(prepaint, paint) {
+function reset_process_warm_state(    key) {
+    for (key in painted_once) {
+        delete painted_once[key]
+    }
+    for (key in steady_once) {
+        delete steady_once[key]
+    }
+}
+
+function record_custom_paint(channel, mode, prepaint, paint,    key, warm) {
     custom_paint_count++
     max_assign(single_max, "custom_paint_prepaint", prepaint)
     max_assign(single_max, "custom_paint_paint", paint)
     if (custom_paint_limit != "" && paint > custom_paint_limit + 0) {
         custom_paint_over_limit++
+    }
+    key = channel SUBSEP mode
+    warm = paint > 0 && painted_once[key] > 0
+    if (paint > 0) {
+        painted_once[key]++
+    }
+    if (!warm) {
+        return
+    }
+
+    warm_custom_paint_count++
+    max_assign(single_max, "warm_custom_paint_paint", paint)
+    if (warm_custom_paint_limit != "" && paint > warm_custom_paint_limit + 0) {
+        warm_custom_paint_over_limit++
+    }
+    if (channel == "static") {
+        warm_static_visual_count++
+        max_assign(single_max, "warm_static_visual_paint", paint)
+        if (warm_static_visual_paint_limit != "" && paint > warm_static_visual_paint_limit + 0) {
+            warm_static_visual_over_limit++
+        }
+    } else if (channel == "image") {
+        warm_image_count++
+        max_assign(single_max, "warm_image_paint", paint)
+        if (warm_image_paint_limit != "" && paint > warm_image_paint_limit + 0) {
+            warm_image_over_limit++
+        }
+    } else if (channel == "details") {
+        warm_details_visual_count++
+        max_assign(single_max, "warm_details_visual_paint", paint)
     }
 }
 
@@ -356,6 +495,10 @@ BEGIN {
     parse_required_list(required_renderer_policy_modes, required_renderer_policy_mode, "--require-renderer-policy-modes")
 }
 
+/^\[fika analyzer\] log-boundary / {
+    reset_process_warm_state()
+}
+
 /^\[fika item-view\]/ {
     item_view_count++
     mode = field("mode")
@@ -381,6 +524,17 @@ BEGIN {
         steady_count++
         if (steady_total_limit != "" && total > steady_total_limit + 0) {
             steady_over_limit++
+        }
+        if (visible > 0) {
+            steady_key = mode
+            if (steady_once[steady_key] > 0) {
+                warm_steady_count++
+                max_assign(single_max, "warm_steady_total", total)
+                if (warm_steady_total_limit != "" && total > warm_steady_total_limit + 0) {
+                    warm_steady_over_limit++
+                }
+            }
+            steady_once[steady_key]++
         }
     }
 }
@@ -420,7 +574,7 @@ BEGIN {
     prepaint = us_field("prepaint")
     max_assign(single_max, "static_visual_prepaint", prepaint)
     max_assign(single_max, "static_visual_paint", paint)
-    record_custom_paint(prepaint, paint)
+    record_custom_paint("static", mode, prepaint, paint)
     if (static_visual_paint_limit != "" && paint > static_visual_paint_limit + 0) {
         static_visual_over_limit++
     }
@@ -445,7 +599,7 @@ BEGIN {
     image_thumb_fallback += field("thumb_fallback") + 0
     max_assign(single_max, "image_prepaint", prepaint)
     max_assign(single_max, "image_paint", paint)
-    record_custom_paint(prepaint, paint)
+    record_custom_paint("image", field("mode"), prepaint, paint)
     if (image_paint_limit != "" && paint > image_paint_limit + 0) {
         image_over_limit++
     }
@@ -458,7 +612,7 @@ BEGIN {
     paint = us_field("paint")
     max_assign(single_max, "details_visual_prepaint", prepaint)
     max_assign(single_max, "details_visual_paint", paint)
-    record_custom_paint(prepaint, paint)
+    record_custom_paint("details", field("mode"), prepaint, paint)
 }
 
 /^\[fika details-shape-cache\]/ {
@@ -598,6 +752,8 @@ END {
         " icon_sync=" (("item_view_icon_sync" in single_max) ? single_max["item_view_icon_sync"] : 0) "us" \
         " queue=" (("item_view_queue" in single_max) ? single_max["item_view_queue"] : 0) "us" \
         " convert=" (("item_view_convert" in single_max) ? single_max["item_view_convert"] : 0) "us"
+    print "  warm_steady_frames: " (warm_steady_count + 0) \
+        " max_total=" (("warm_steady_total" in single_max) ? single_max["warm_steady_total"] : 0) "us"
     print "  icon_sync_frames: " (icon_sync_count + 0) \
         " max_candidates=" (("icon_sync_candidates" in single_max) ? single_max["icon_sync_candidates"] : 0) \
         " max_cached=" (("icon_sync_cached" in single_max) ? single_max["icon_sync_cached"] : 0) \
@@ -615,9 +771,13 @@ END {
     print "  static_visual_frames: " (static_visual_count + 0) \
         " max_prepaint=" (("static_visual_prepaint" in single_max) ? single_max["static_visual_prepaint"] : 0) "us" \
         " max_paint=" (("static_visual_paint" in single_max) ? single_max["static_visual_paint"] : 0) "us"
+    print "  warm_static_visual_frames: " (warm_static_visual_count + 0) \
+        " max_paint=" (("warm_static_visual_paint" in single_max) ? single_max["warm_static_visual_paint"] : 0) "us"
     print "  image_frames: " (image_count + 0) \
         " max_prepaint=" (("image_prepaint" in single_max) ? single_max["image_prepaint"] : 0) "us" \
         " max_paint=" (("image_paint" in single_max) ? single_max["image_paint"] : 0) "us"
+    print "  warm_image_frames: " (warm_image_count + 0) \
+        " max_paint=" (("warm_image_paint" in single_max) ? single_max["warm_image_paint"] : 0) "us"
     print "  image_sources: theme_loaded=" (image_theme_loaded + 0) \
         " theme_decoded=" (image_theme_decoded + 0) \
         " theme_retained=" (image_theme_retained + 0) \
@@ -633,9 +793,13 @@ END {
     print "  custom_paint_frames: " (custom_paint_count + 0) \
         " max_prepaint=" (("custom_paint_prepaint" in single_max) ? single_max["custom_paint_prepaint"] : 0) "us" \
         " max_paint=" (("custom_paint_paint" in single_max) ? single_max["custom_paint_paint"] : 0) "us"
+    print "  warm_custom_paint_frames: " (warm_custom_paint_count + 0) \
+        " max_paint=" (("warm_custom_paint_paint" in single_max) ? single_max["warm_custom_paint_paint"] : 0) "us"
     print "  details_visual_frames: " (details_visual_count + 0) \
         " max_prepaint=" (("details_visual_prepaint" in single_max) ? single_max["details_visual_prepaint"] : 0) "us" \
         " max_paint=" (("details_visual_paint" in single_max) ? single_max["details_visual_paint"] : 0) "us"
+    print "  warm_details_visual_frames: " (warm_details_visual_count + 0) \
+        " max_paint=" (("warm_details_visual_paint" in single_max) ? single_max["warm_details_visual_paint"] : 0) "us"
     print "  details_shape_frames: " (details_shape_count + 0) \
         " hits=" (details_shape_hits + 0) " misses=" (details_shape_misses + 0)
     print "  interaction_frames: " (item_interaction_count + 0) \
@@ -684,6 +848,9 @@ END {
     if (require_details == "true" && details_shape_count == 0) {
         fail("missing [fika details-shape-cache] lines")
     }
+    if (require_warm_details_visual == "true" && warm_details_visual_count == 0) {
+        fail("missing warmed [fika details-visual] paint frames")
+    }
     if (require_static_visual == "true" && static_visual_count == 0) {
         fail("missing [fika static-item-visual] lines")
     }
@@ -731,6 +898,7 @@ END {
         if (autosmoke_scenario != "Zoom" &&
             autosmoke_scenario != "Scroll" &&
             autosmoke_scenario != "ZoomScroll" &&
+            autosmoke_scenario != "IconsZoomScroll" &&
             autosmoke_scenario != "DetailsZoomScroll") {
             fail("unknown item-view autosmoke scenario " autosmoke_scenario)
         }
@@ -739,6 +907,7 @@ END {
         }
         if (autosmoke_scenario == "Zoom" ||
             autosmoke_scenario == "ZoomScroll" ||
+            autosmoke_scenario == "IconsZoomScroll" ||
             autosmoke_scenario == "DetailsZoomScroll") {
             if (autosmoke_zoom_in_seen == 0 || autosmoke_zoom_out_seen == 0) {
                 fail("missing item-view autosmoke zoom action markers")
@@ -746,6 +915,7 @@ END {
         }
         if (autosmoke_scenario == "Scroll" ||
             autosmoke_scenario == "ZoomScroll" ||
+            autosmoke_scenario == "IconsZoomScroll" ||
             autosmoke_scenario == "DetailsZoomScroll") {
             if (autosmoke_scroll_forward_seen == 0 || autosmoke_scroll_back_seen == 0) {
                 fail("missing changed=true item-view autosmoke scroll action markers")
@@ -765,6 +935,9 @@ END {
     if (steady_over_limit > 0) {
         fail(steady_over_limit " steady item-view frame(s) exceeded " steady_total_limit "us")
     }
+    if (warm_steady_over_limit > 0) {
+        fail(warm_steady_over_limit " warmed steady item-view frame(s) exceeded " warm_steady_total_limit "us")
+    }
     if (file_grid_over_limit > 0) {
         fail(file_grid_over_limit " file-grid build frame(s) exceeded " file_grid_build_limit "us")
     }
@@ -776,6 +949,15 @@ END {
     }
     if (custom_paint_over_limit > 0) {
         fail(custom_paint_over_limit " custom paint frame(s) exceeded " custom_paint_limit "us")
+    }
+    if (warm_static_visual_over_limit > 0) {
+        fail(warm_static_visual_over_limit " warmed static visual paint frame(s) exceeded " warm_static_visual_paint_limit "us")
+    }
+    if (warm_image_over_limit > 0) {
+        fail(warm_image_over_limit " warmed item image paint frame(s) exceeded " warm_image_paint_limit "us")
+    }
+    if (warm_custom_paint_over_limit > 0) {
+        fail(warm_custom_paint_over_limit " warmed custom paint frame(s) exceeded " warm_custom_paint_limit "us")
     }
 
     exit failures > 0 ? 1 : 0

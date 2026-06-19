@@ -38,6 +38,7 @@ cat > "$tmpdir/complete.log" <<'EOF'
 [fika static-item-visual] pane=1 mode=Icons prepaint_count=40 prepaint=210us paint_count=40 paint=190us
 [fika item-image] pane=1 mode=Icons prepaint_count=8 prepaint=70us paint_count=8 paint=80us theme_loaded=4 theme_decoded=2 theme_retained=1 theme_placeholder=1 theme_prewarm_loaded=3 theme_prewarm_decoded=1 theme_prewarm_retained=2 theme_prewarm_pending=4 thumb_loaded=2 thumb_decoded=1 thumb_retained=0 thumb_fallback=0
 [fika details-visual] pane=1 mode=Details prepaint_count=48 prepaint=120us paint_count=48 paint=130us
+[fika details-visual] pane=1 mode=Details prepaint_count=48 prepaint=110us paint_count=48 paint=120us
 [fika details-shape-cache] pane=1 mode=Details hits=20 misses=2 evicted=0 entries=22
 [fika item-interaction] pane=1 mode=Details prepaint_count=48 prepaint=60us paint_count=48 paint=50us
 [fika renderer-policy] pane=1 mode=Compact items=48 visual_layer=48 image_layer=8 gpui_image_element=0 retained_interaction=48 gpui_drag_shell=48 rename_overlay=0
@@ -191,6 +192,11 @@ EOF
 
 if "$analyzer" --require-details --require-interaction "$tmpdir/missing-channels.log" >/dev/null 2>&1; then
     echo "expected missing details/interaction channels to fail" >&2
+    exit 1
+fi
+
+if "$analyzer" --require-warm-details-visual "$tmpdir/missing-channels.log" >/dev/null 2>&1; then
+    echo "expected missing warmed details visual channel to fail" >&2
     exit 1
 fi
 
@@ -349,6 +355,26 @@ if "$analyzer" --steady-total-us 100 "$tmpdir/complete.log" >/dev/null 2>&1; the
     exit 1
 fi
 
+cat > "$tmpdir/warm-steady.log" <<'EOF'
+[fika item-view] pane=1 mode=Compact phase=steady items=48 visible=32 raw=50us icon_sync=2us queue=1us convert=40us total=5000us
+[fika item-view] pane=1 mode=Compact phase=steady items=48 visible=32 raw=50us icon_sync=2us queue=1us convert=40us total=900us
+[fika analyzer] log-boundary path=/tmp/next.log
+[fika item-view] pane=1 mode=Compact phase=steady items=48 visible=32 raw=50us icon_sync=2us queue=1us convert=40us total=4000us
+[fika item-view] pane=1 mode=Compact phase=steady items=48 visible=32 raw=50us icon_sync=2us queue=1us convert=40us total=800us
+EOF
+
+"$analyzer" --warm-steady-total-us 1000 "$tmpdir/warm-steady.log" >/dev/null
+
+if "$analyzer" --steady-total-us 1000 "$tmpdir/warm-steady.log" >/dev/null 2>&1; then
+    echo "expected all-frame steady threshold to still fail on warmup frame" >&2
+    exit 1
+fi
+
+if "$analyzer" --warm-steady-total-us 700 "$tmpdir/warm-steady.log" >/dev/null 2>&1; then
+    echo "expected warm steady threshold violation to fail" >&2
+    exit 1
+fi
+
 if "$analyzer" --static-visual-paint-us 100 "$tmpdir/complete.log" >/dev/null 2>&1; then
     echo "expected static visual paint threshold violation to fail" >&2
     exit 1
@@ -363,6 +389,63 @@ if "$analyzer" --custom-paint-us 100 "$tmpdir/complete.log" >/dev/null 2>&1; the
     echo "expected custom paint threshold violation to fail" >&2
     exit 1
 fi
+
+cat > "$tmpdir/warm-paint.log" <<'EOF'
+[fika item-view] pane=1 mode=Compact phase=steady items=48 visible=32 raw=50us icon_sync=2us queue=1us convert=40us total=120us
+[fika static-item-visual] pane=1 mode=Compact prepaint_count=32 prepaint=180us paint_count=32 paint=5000us
+[fika static-item-visual] pane=1 mode=Compact prepaint_count=32 prepaint=160us paint_count=32 paint=900us
+[fika item-image] pane=1 mode=Compact prepaint_count=32 prepaint=80us paint_count=32 paint=4000us theme_loaded=0 theme_decoded=0 theme_retained=32 theme_placeholder=0 thumb_loaded=0 thumb_decoded=0 thumb_retained=0 thumb_fallback=0
+[fika item-image] pane=1 mode=Compact prepaint_count=32 prepaint=70us paint_count=32 paint=700us theme_loaded=0 theme_decoded=0 theme_retained=32 theme_placeholder=0 thumb_loaded=0 thumb_decoded=0 thumb_retained=0 thumb_fallback=0
+EOF
+
+"$analyzer" \
+    --warm-static-visual-paint-us 1000 \
+    --warm-image-paint-us 1000 \
+    --warm-custom-paint-us 1000 \
+    "$tmpdir/warm-paint.log" >/dev/null
+
+if "$analyzer" --static-visual-paint-us 1000 "$tmpdir/warm-paint.log" >/dev/null 2>&1; then
+    echo "expected all-frame static visual threshold to still fail on cold paint" >&2
+    exit 1
+fi
+
+if "$analyzer" --warm-static-visual-paint-us 800 "$tmpdir/warm-paint.log" >/dev/null 2>&1; then
+    echo "expected warm static visual threshold violation to fail" >&2
+    exit 1
+fi
+
+if "$analyzer" --warm-image-paint-us 600 "$tmpdir/warm-paint.log" >/dev/null 2>&1; then
+    echo "expected warm item image threshold violation to fail" >&2
+    exit 1
+fi
+
+if "$analyzer" --warm-custom-paint-us 800 "$tmpdir/warm-paint.log" >/dev/null 2>&1; then
+    echo "expected warm custom paint threshold violation to fail" >&2
+    exit 1
+fi
+
+cat > "$tmpdir/icons-autosmoke.log" <<'EOF'
+[fika autosmoke] item-view start pane=1 scenario=IconsZoomScroll
+[fika autosmoke] item-view action=view-icons pane=1 mode=Icons
+[fika item-view] pane=1 mode=Icons phase=mode-switch items=48 visible=40 raw=50us icon_sync=2us queue=1us convert=40us total=120us
+[fika autosmoke] item-view action=zoom-in pane=1
+[fika autosmoke] item-view action=zoom-out pane=1
+[fika autosmoke] item-view action=scroll-forward pane=1 changed=true
+[fika autosmoke] item-view action=scroll-back pane=1 changed=true
+[fika static-item-visual] pane=1 mode=Icons prepaint_count=40 prepaint=210us paint_count=40 paint=190us
+[fika renderer-policy] pane=1 mode=Icons items=48 visual_layer=48 image_layer=8 gpui_image_element=0 retained_interaction=48 gpui_drag_shell=48 rename_overlay=0
+[fika autosmoke] item-view complete pane=1 scenario=IconsZoomScroll
+EOF
+
+"$analyzer" \
+    --require-autosmoke \
+    --require-static-visual \
+    --require-renderer-policy \
+    --expect-retained-item-policy \
+    --require-modes Icons \
+    --require-static-modes Icons \
+    --require-renderer-policy-modes Icons \
+    "$tmpdir/icons-autosmoke.log" >/dev/null
 
 : > "$tmpdir/empty.log"
 if "$analyzer" "$tmpdir/empty.log" >/dev/null 2>&1; then

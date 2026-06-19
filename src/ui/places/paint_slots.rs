@@ -1,9 +1,11 @@
 use std::collections::HashMap;
+use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use crate::ui::icons::FileIconSnapshot;
+use crate::ui::retained::RetainedSlotStats;
 
 use super::PlaceSnapshot;
 
@@ -11,13 +13,21 @@ use super::PlaceSnapshot;
 pub(crate) struct PlacePaintSlotStats {
     pub(crate) rows: usize,
     pub(crate) sections: usize,
-    pub(crate) entries: usize,
-    pub(crate) inserted: usize,
-    pub(crate) content_changed: usize,
-    pub(crate) geometry_changed: usize,
-    pub(crate) visual_changed: usize,
-    pub(crate) unchanged: usize,
-    pub(crate) removed: usize,
+    retained: RetainedSlotStats,
+}
+
+impl Deref for PlacePaintSlotStats {
+    type Target = RetainedSlotStats;
+
+    fn deref(&self) -> &Self::Target {
+        &self.retained
+    }
+}
+
+impl DerefMut for PlacePaintSlotStats {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.retained
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -237,6 +247,21 @@ mod tests {
         let second = cache.project_snapshots(&places);
         assert_eq!(second.unchanged, 3);
         assert_eq!(second.entries, 3);
+    }
+
+    #[test]
+    fn place_paint_slot_stats_wrap_retained_slot_delta_stats() {
+        let mut stats = PlacePaintSlotStats::default();
+
+        stats.inserted += 1;
+        stats.content_changed += 2;
+        stats.entries = 3;
+
+        assert_eq!(stats.rows, 0);
+        assert_eq!(stats.sections, 0);
+        assert_eq!(stats.inserted, 1);
+        assert_eq!(stats.content_changed, 2);
+        assert_eq!(stats.entries, 3);
     }
 
     #[test]

@@ -6,10 +6,10 @@ use super::details_visual::{
 };
 use super::dnd::{drag_preview_label, item_drag_from_details_snapshot};
 use super::image_layer::{
-    ItemImageRetainedSource, item_image_layer_item_source_path, item_image_layer_items,
+    item_image_layer_item_source_path, item_image_layer_items,
     item_image_layer_items_with_theme_prewarm, item_image_load_failure_paints_fallback,
     item_image_paint_layer_element_id, item_image_pending_load_paints_fallback,
-    item_image_pending_load_paints_marker, item_image_retained_source_for,
+    item_image_pending_load_paints_marker, item_image_retained_request_for,
     item_renderer_policy_input_for_theme_handoff, item_renderer_policy_input_for_theme_readiness,
     visible_theme_icon_handoff_ready,
 };
@@ -39,6 +39,7 @@ use super::viewport::{
 use crate::ui::drag_drop::drag_preview_content_origin_for_cursor_offset;
 use crate::ui::icons::{FileIconSnapshot, ThemeIconImageKey, ThemeIconImageReadiness};
 use crate::ui::item_view::ItemViewScrollbarAxis;
+use crate::ui::retained::RetainedImageRequestKind;
 use fika_core::{
     CompactLayout, CompactLayoutOptions, IconsLayout, IconsLayoutOptions, ItemId, ItemLayout,
     ViewRect, ViewState,
@@ -300,21 +301,29 @@ fn retained_image_source_uses_size_aware_theme_icon_key() {
         fallback_fg: 0xffffff,
         fallback_bg: 0x2563eb,
     };
-    let first = item_image_retained_source_for(None, &icon, 48, 1.0);
+    let first = item_image_retained_request_for(None, &icon, 48, 1.0);
 
     icon.path = Some(Arc::from(Path::new(
         "/theme/64/mimetypes/text-x-generic.svg",
     )));
-    let same_size_new_path = item_image_retained_source_for(None, &icon, 48, 1.0);
-    let zoomed = item_image_retained_source_for(None, &icon, 64, 1.0);
+    let same_size_new_path = item_image_retained_request_for(None, &icon, 48, 1.0);
+    let zoomed = item_image_retained_request_for(None, &icon, 64, 1.0);
 
-    let Some(ItemImageRetainedSource::ThemeIcon(key)) = first.as_ref() else {
+    let Some(key) = first.as_ref().and_then(|request| request.theme_icon_key()) else {
         panic!("expected theme icon retained source");
     };
     assert_eq!(key.icon_name.as_ref(), "text-x-generic");
     assert_eq!(key.icon_size_px, 48);
-    assert_eq!(first, same_size_new_path);
-    assert_ne!(first, zoomed);
+    assert_eq!(
+        first.as_ref().and_then(|request| request.theme_icon_key()),
+        same_size_new_path
+            .as_ref()
+            .and_then(|request| request.theme_icon_key())
+    );
+    assert_ne!(
+        first.as_ref().and_then(|request| request.theme_icon_key()),
+        zoomed.as_ref().and_then(|request| request.theme_icon_key())
+    );
 }
 
 #[test]
@@ -473,7 +482,7 @@ fn theme_icon_handoff_accepts_ready_resource_paths_for_visible_cohort() {
 
 #[test]
 fn retained_image_source_uses_thumbnail_path_before_icon_name() {
-    let thumbnail = Arc::from(Path::new("/tmp/thumbs/photo.png"));
+    let thumbnail: Arc<Path> = Arc::from(Path::new("/tmp/thumbs/photo.png"));
     let icon = FileIconSnapshot {
         icon_name: Arc::from("image-png"),
         path: Some(Arc::from(Path::new("/theme/48/mimetypes/image-png.svg"))),
@@ -482,10 +491,11 @@ fn retained_image_source_uses_thumbnail_path_before_icon_name() {
         fallback_bg: 0x2563eb,
     };
 
-    assert_eq!(
-        item_image_retained_source_for(Some(&thumbnail), &icon, 48, 1.0),
-        Some(ItemImageRetainedSource::Thumbnail(thumbnail))
-    );
+    let request = item_image_retained_request_for(Some(thumbnail.clone()), &icon, 48, 1.0)
+        .expect("thumbnail request should be retained");
+    assert_eq!(request.kind(), RetainedImageRequestKind::Thumbnail);
+    assert!(request.theme_icon_key().is_none());
+    assert_eq!(request.source_path(), &thumbnail);
 }
 
 #[test]

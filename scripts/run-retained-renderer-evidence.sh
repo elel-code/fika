@@ -21,24 +21,22 @@ Options:
       Capture only Places evidence.
 
   --icons
-      Also capture MIME/theme icon default-vs-custom A/B logs and require the
-      default-promotion gate to pass. Use this only when testing an image
-      renderer candidate that is expected to be promotable.
+      Also capture MIME/theme icon GPUI-baseline-vs-full-custom A/B logs and
+      require the default-promotion gate to pass.
 
   --hybrid-icons
-      Capture MIME/theme icon default-vs-hybrid readiness handoff logs and
-      require the hybrid default-promotion gate to pass.
+      Capture MIME/theme icon GPUI-baseline-vs-explicit-hybrid readiness
+      handoff logs and require the hybrid default-promotion gate to pass.
 
   --places-full-handoff
-      Capture paired default-chrome vs full Places ready-only handoff logs for
-      targets, overflow, and layout. This is a promotion-evidence input only;
-      it does not make full Places rows the default.
+      Capture paired Places chrome-baseline vs full ready-only handoff logs
+      for targets, overflow, and layout. Full rows are already the default;
+      this is a regression/baseline suite for the handoff path.
 
   --all
       Same as --core --icons --hybrid-icons --places-full-handoff.
 
-      Note: --icons is intentionally strict and may fail for the current
-      non-promotable full custom theme-icon path. Use --hybrid-icons by itself
+      Note: --icons is intentionally strict. Use --hybrid-icons by itself
       when validating staged readiness handoff work.
 
   --analyze-only
@@ -270,6 +268,7 @@ if [[ "$capture_items" == true ]]; then
     item_downloads_log="$(log_path item-downloads)"
     item_etc_log="$(log_path item-etc)"
     item_zoom_log="$(log_path item-etc-zoom-scroll)"
+    item_icons_log="$(log_path item-etc-icons-zoom-scroll)"
     item_details_log="$(log_path item-etc-details-zoom-scroll)"
 
     run_capture "item downloads" "$item_downloads_log" \
@@ -278,13 +277,28 @@ if [[ "$capture_items" == true ]]; then
         env FIKA_PERF_ITEM_VIEW=1 "$binary" /etc
     run_capture "item etc zoom-scroll" "$item_zoom_log" \
         env FIKA_PERF_ITEM_VIEW=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll "$binary" /etc
+    run_capture "item etc icons zoom-scroll" "$item_icons_log" \
+        env FIKA_PERF_ITEM_VIEW=1 FIKA_AUTOSMOKE_ITEM_VIEW=icons-zoom-scroll "$binary" /etc
     run_capture "item etc details zoom-scroll" "$item_details_log" \
         env FIKA_PERF_ITEM_VIEW=1 FIKA_AUTOSMOKE_ITEM_VIEW=details-zoom-scroll "$binary" /etc
 
     run_gate "item runtime" \
-        "$root_dir/scripts/check-item-view-runtime-log.sh" "$item_zoom_log"
+        "$root_dir/scripts/check-item-view-runtime-log.sh" \
+        "$item_zoom_log" "$item_icons_log" "$item_details_log"
     run_gate "item renderer evidence summary" \
-        "$root_dir/scripts/summarize-item-view-renderer-evidence.sh" "$item_zoom_log"
+        "$root_dir/scripts/summarize-item-view-renderer-evidence.sh" \
+        "$item_zoom_log" "$item_icons_log" "$item_details_log"
+    run_gate "item icons renderer policy" \
+        "$root_dir/scripts/analyze-item-view-perf.sh" \
+        --require-autosmoke \
+        --require-static-visual \
+        --require-renderer-policy \
+        --require-interaction \
+        --expect-retained-item-policy \
+        --require-modes Icons \
+        --require-static-modes Icons \
+        --require-renderer-policy-modes Icons \
+        "$item_icons_log"
     run_gate "item details renderer policy" \
         "$root_dir/scripts/analyze-item-view-perf.sh" \
         --require-autosmoke \
@@ -384,15 +398,15 @@ if [[ "$capture_places_full_handoff" == true ]]; then
     places_handoff_full_layout_log="$(log_path places-handoff-full-layout)"
 
     run_capture "places handoff chrome targets" "$places_handoff_chrome_targets_log" \
-        env FIKA_PERF_ITEM_VIEW=1 FIKA_PERF_PLACES_VIEW=1 FIKA_AUTOSMOKE_PLACES=targets "$binary" /etc
+        env FIKA_PERF_ITEM_VIEW=1 FIKA_PERF_PLACES_VIEW=1 FIKA_PLACES_ROW_VISUAL_POLICY=chrome FIKA_AUTOSMOKE_PLACES=targets "$binary" /etc
     run_capture "places handoff full targets" "$places_handoff_full_targets_log" \
         env FIKA_PERF_ITEM_VIEW=1 FIKA_PERF_PLACES_VIEW=1 FIKA_PLACES_ROW_VISUAL_POLICY=full FIKA_PLACES_ROW_VISUAL_HANDOFF=1 FIKA_AUTOSMOKE_PLACES=targets "$binary" /etc
     run_capture "places handoff chrome overflow" "$places_handoff_chrome_overflow_log" \
-        env FIKA_PERF_ITEM_VIEW=1 FIKA_PERF_PLACES_VIEW=1 FIKA_AUTOSMOKE_PLACES=overflow "$binary" /etc
+        env FIKA_PERF_ITEM_VIEW=1 FIKA_PERF_PLACES_VIEW=1 FIKA_PLACES_ROW_VISUAL_POLICY=chrome FIKA_AUTOSMOKE_PLACES=overflow "$binary" /etc
     run_capture "places handoff full overflow" "$places_handoff_full_overflow_log" \
         env FIKA_PERF_ITEM_VIEW=1 FIKA_PERF_PLACES_VIEW=1 FIKA_PLACES_ROW_VISUAL_POLICY=full FIKA_PLACES_ROW_VISUAL_HANDOFF=1 FIKA_AUTOSMOKE_PLACES=overflow "$binary" /etc
     run_capture "places handoff chrome layout" "$places_handoff_chrome_layout_log" \
-        env FIKA_PERF_ITEM_VIEW=1 FIKA_PERF_PLACES_VIEW=1 FIKA_AUTOSMOKE_PLACES=layout "$binary" /etc
+        env FIKA_PERF_ITEM_VIEW=1 FIKA_PERF_PLACES_VIEW=1 FIKA_PLACES_ROW_VISUAL_POLICY=chrome FIKA_AUTOSMOKE_PLACES=layout "$binary" /etc
     run_capture "places handoff full layout" "$places_handoff_full_layout_log" \
         env FIKA_PERF_ITEM_VIEW=1 FIKA_PERF_PLACES_VIEW=1 FIKA_PLACES_ROW_VISUAL_POLICY=full FIKA_PLACES_ROW_VISUAL_HANDOFF=1 FIKA_AUTOSMOKE_PLACES=layout "$binary" /etc
 

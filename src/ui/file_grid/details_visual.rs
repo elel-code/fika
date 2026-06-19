@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use fika_core::{PaneId, ViewRect};
@@ -10,10 +9,10 @@ use gpui::{
 };
 
 use crate::FikaApp;
-use crate::ui::icons::{
-    FileIconSnapshot, theme_icon_image_key_for_snapshot, theme_icon_image_size_px,
+use crate::ui::icons::{FileIconSnapshot, theme_icon_image_size_px};
+use crate::ui::retained::{
+    RetainedImageLayerState, RetainedImageReady, RetainedImageRequest, RetainedShapeCache,
 };
-use crate::ui::retained::RetainedImageLayerState;
 
 use super::details::{DetailsColumn, DetailsColumnKind};
 use super::image_layer::{
@@ -35,10 +34,8 @@ pub(super) struct DetailsTextShapeCacheKey {
     pub(super) color: u32,
 }
 
-#[derive(Default)]
 pub(crate) struct DetailsTextShapeCache {
-    entries: HashMap<DetailsTextShapeCacheKey, Arc<gpui::ShapedLine>>,
-    stats: TextShapeCacheStats,
+    cache: RetainedShapeCache<DetailsTextShapeCacheKey, Arc<gpui::ShapedLine>>,
 }
 
 impl DetailsTextShapeCache {
@@ -49,26 +46,20 @@ impl DetailsTextShapeCache {
         key: &DetailsTextShapeCacheKey,
         window: &mut Window,
     ) -> Arc<gpui::ShapedLine> {
-        if let Some(line) = self.entries.get(key) {
-            self.stats.hits += 1;
-            return line.clone();
-        }
-
-        self.stats.misses += 1;
-        if self.entries.len() >= Self::MAX_ENTRIES {
-            self.stats.evicted += self.entries.len();
-            self.entries.clear();
-        }
-
-        let line = Arc::new(shape_details_visual_text(key, window));
-        self.entries.insert(key.clone(), line.clone());
-        line
+        self.cache
+            .get_or_insert_with(key, |key| Arc::new(shape_details_visual_text(key, window)))
     }
 
     pub(super) fn take_stats(&mut self) -> TextShapeCacheStats {
-        let mut stats = std::mem::take(&mut self.stats);
-        stats.entries = self.entries.len();
-        stats
+        self.cache.take_stats()
+    }
+}
+
+impl Default for DetailsTextShapeCache {
+    fn default() -> Self {
+        Self {
+            cache: RetainedShapeCache::new(Self::MAX_ENTRIES),
+        }
     }
 }
 
@@ -319,6 +310,7 @@ impl Element for DetailsVisualLayerElement {
         let (header, rows) = if let Some(id) = id {
             window.with_element_state::<RetainedImageLayerState, _>(id, |state, window| {
                 let mut state = state.unwrap_or_else(|| RetainedImageLayerState::new(cx));
+                let mut ready_images = Vec::new();
                 let header = details_visual_prepaint_header(
                     self.pane_id,
                     &self.header,
@@ -333,9 +325,21 @@ impl Element for DetailsVisualLayerElement {
                         item,
                         Some(&mut state),
                         &self.app,
+                        Some(&mut ready_images),
                         window,
                         cx,
                     ));
+                }
+                if !ready_images.is_empty() {
+                    let _ = self.app.update(cx, |this, cx| {
+                        let mut readiness_changed = false;
+                        for ready in ready_images {
+                            readiness_changed |= this.mark_retained_image_ready(ready);
+                        }
+                        if readiness_changed {
+                            cx.notify();
+                        }
+                    });
                 }
                 ((header, rows), state)
             })
@@ -346,7 +350,15 @@ impl Element for DetailsVisualLayerElement {
                 .items
                 .iter()
                 .map(|item| {
-                    details_visual_prepaint_item(self.pane_id, item, None, &self.app, window, cx)
+                    details_visual_prepaint_item(
+                        self.pane_id,
+                        item,
+                        None,
+                        &self.app,
+                        None,
+                        window,
+                        cx,
+                    )
                 })
                 .collect::<Vec<_>>();
             (header, rows)
@@ -452,6 +464,7 @@ fn details_visual_prepaint_item(
     item: &DetailsVisualLayerItem,
     mut image_state: Option<&mut RetainedImageLayerState>,
     app: &WeakEntity<FikaApp>,
+    mut ready_images: Option<&mut Vec<RetainedImageReady>>,
     window: &mut Window,
     cx: &mut App,
 ) -> DetailsVisualPaintState {
@@ -470,6 +483,7 @@ fn details_visual_prepaint_item(
                         icon,
                         image_state.as_mut().map(|state| &mut **state),
                         app,
+                        ready_images.as_deref_mut(),
                         window,
                         cx,
                     ),
@@ -554,17 +568,25 @@ fn details_visual_icon_prepaint(
     icon: &FileIconSnapshot,
     image_state: Option<&mut RetainedImageLayerState>,
     app: &WeakEntity<FikaApp>,
+    mut ready_images: Option<&mut Vec<RetainedImageReady>>,
     window: &mut Window,
     cx: &mut App,
 ) -> DetailsVisualIconPaintState {
     let image = icon.path.as_ref().and_then(|path| {
         let state = image_state?;
-        let key = theme_icon_image_key_for_snapshot(
+        let request = RetainedImageRequest::theme_icon_for_snapshot(
             icon,
             theme_icon_image_size_px(rect.width, rect.height),
             window.scale_factor(),
         )?;
-        state.load_theme_icon_or_retained(path.clone(), key, app, window, cx)
+        debug_assert_eq!(request.source_path(), path);
+        let load = state.load_request_or_retained_with_outcome(request, app, window, cx);
+        if let Some(ready) = load.ready {
+            if let Some(ready_images) = ready_images.as_deref_mut() {
+                ready_images.push(ready);
+            }
+        }
+        load.image
     });
     let fallback = image.is_none().then(|| {
         if icon.path.is_some() {
@@ -769,19 +791,17 @@ fn details_visual_paint_text(
     cx: &mut App,
 ) {
     let text_bounds = details_visual_bounds(layer_bounds, state.rect);
-    window.paint_layer(text_bounds, |window| {
-        state
-            .line
-            .paint(
-                point(text_bounds.origin.x, text_bounds.origin.y),
-                state.line_height,
-                TextAlign::Left,
-                Some(text_bounds.size.width),
-                window,
-                cx,
-            )
-            .ok();
-    });
+    state
+        .line
+        .paint(
+            point(text_bounds.origin.x, text_bounds.origin.y),
+            state.line_height,
+            TextAlign::Left,
+            Some(text_bounds.size.width),
+            window,
+            cx,
+        )
+        .ok();
 }
 
 fn details_visual_bounds(layer_bounds: Bounds<Pixels>, rect: ViewRect) -> Bounds<Pixels> {

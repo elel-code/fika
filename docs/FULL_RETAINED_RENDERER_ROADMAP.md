@@ -18,6 +18,83 @@ only moves to custom paint when retained ownership is clear and runtime
 evidence shows it is behavior-complete and neutral or better than the GPUI
 built-in path.
 
+## First Priority: Dolphin Implementation Model, GPUI As Paint Backend
+
+The current top priority is to move file-grid and Places hot paths to the
+Dolphin implementation model:
+
+```text
+model roles -> visible-first role updater -> retained slot/cache -> thin custom painter
+```
+
+GPUI `img()` / `image()` must not remain the architectural owner for item image
+lifetime, visible-range scheduling, cache keys, or readiness handoff. It remains
+only as an explicit bridge, baseline, or fallback. Final drawing still uses
+GPUI custom elements/canvas through `Window::paint_image()`, `paint_quad()`, and
+text painting; the performance win comes from Dolphin-style lifetime and cache
+boundaries, not from replacing the image drawing primitive.
+
+Source-level comparison:
+
+| Responsibility | Dolphin source model | GPUI `img()` source model | Fika priority |
+|---|---|---|---|
+| Role/preview scheduling | `KFileItemModelRolesUpdater::startUpdating()` runs `updateVisibleIcons()` first, then `indexesToResolve()`; `MaxBlockTimeout=200ms`, `ReadAheadPages=5`, `ResolveAllItemsLimit=500` | Each `Img` calls `source.use_data()` from `request_layout()` and drives loading/fallback from element lifetime | Build a shared RoleUpdater/ImageResolver used by pane and Places with visible-first/read-ahead/size-DPR invalidation |
+| Image cache key | `KStandardItemListWidget::pixmapForIcon()` keys by icon name + icon height + DPR + mode | `RetainAllImageCache` keys by `Resource` hash; `Img` decides when to use it | Theme icon key must be semantic: icon name + size + DPR + theme + color scheme + mode; thumbnail keys stay separate |
+| Widget/item local state | `updatePixmapCache()` maintains widget-local `m_pixmap`, `m_scaledPixmapSize`, and `m_pixmapPos` | `ImgState` stores frame/loading state without item role/read-ahead ownership | Retained slots store content/geometry/visual/image/text dirty state; paint state only consumes resolved state |
+| Painting | `KStandardItemListWidget::paint()` paints background, pixmap, and text; hover background is in `KItemListWidget::paint()` | `Img::paint()` ultimately calls `window.paint_image()` | Custom elements only paint background/hover/selection/image/fallback/text/indicator, with no theme scan, MIME probe, or decode |
+| Places | `DolphinPlacesModel` + `KFilePlacesView` own the model/view/delegate loop | Per-row GPUI elements tend to bind events and visuals back to element identity | Places and pane share retained slot, image request, cache/readiness semantics; row shells are explicit bridges only |
+
+This changes optimization order: implement Dolphin-style RoleUpdater, shared
+image model, bounded retained cache, and slot dirty state before removing the
+remaining GPUI bridges. Any slice that optimizes image/hover/cache for only pane
+or only Places must explain how the other side reuses the same model.
+
+2026-06-19 implementation progress:
+
+- Pane and Places now share `RetainedImageRequest`, `RetainedImageLoad`,
+  `RetainedImageReady`, and `RetainedImageLayerState`. Places no longer has a
+  surface-specific image cache wrapper; the sidebar keyed state owns the shared
+  retained image layer directly.
+- Theme-icon ready events are produced by the shared load result. Compact/Icons,
+  Details, and Places consume the same readiness contract instead of deriving it
+  independently.
+- Thumbnail retained fallback moved from an unbounded `HashMap` to a byte-budget
+  LRU cache; eviction also removes the GPUI `RetainAllImageCache` resource and
+  drops the render image.
+- Dolphin `ReadAheadPages=5` / `ResolveAllItemsLimit=500` role-updater ordering
+  now lives in `ui::retained::work_order`, so thumbnail deferred work and
+  file-icon resolve no longer maintain separate ordering code.
+- Static item labels, Details cells/headers, and Places row labels now share
+  `RetainedShapeCache` and `TextShapeCacheStats`. Surface modules still own
+  their text keys and shape functions, but cache hit/miss/evict semantics are
+  retained-layer code instead of pane/Places copies.
+- Places slot projection now wraps `RetainedSlotStats`, matching item-view slot
+  delta accounting while keeping Places-specific row/section counts.
+- Direct thumbnail/theme image load helpers are private to `RetainedImageLayerState`;
+  pane, Details, and Places must enter through `RetainedImageRequest`.
+- Final core evidence is green. `scripts/run-retained-renderer-evidence.sh
+  --core --skip-build --prefix fika-core-final-retained-v3` completed with
+  `retained renderer evidence complete`. The item logs cover Compact, Icons,
+  and Details (`/tmp/fika-core-final-retained-v3-item-etc-zoom-scroll.log`,
+  `/tmp/fika-core-final-retained-v3-item-etc-icons-zoom-scroll.log`,
+  `/tmp/fika-core-final-retained-v3-item-etc-details-zoom-scroll.log`) with
+  warm steady max total `1108us`, max file-grid build `1344us`, max image paint
+  `373us`, warm static visual max paint `2546us`, and warm custom/details
+  visual max paint `3309us`. Renderer policy stayed retained:
+  `gpui_image_element=0`, `gpui_directory_drop_shell=0`, and
+  `gpui_details_header=0`.
+- The final Places logs
+  (`/tmp/fika-core-final-retained-v3-places-targets.log`,
+  `/tmp/fika-core-final-retained-v3-places-overflow.log`,
+  `/tmp/fika-core-final-retained-v3-places-layout.log`,
+  `/tmp/fika-core-final-retained-v3-places-hit-test.log`,
+  `/tmp/fika-core-final-retained-v3-places-targeting.log`,
+  `/tmp/fika-core-final-retained-v3-places-dnd.log`) passed with
+  `visual_kind=full`, `row_gpui=0`, `text_gpui=0`, and `icon_gpui=0`.
+  The retained-event analyzer still intentionally expects failure for the
+  typed payload shell because public GPUI drag/drop payload delivery remains an
+  interactive-element API.
+
 ## Current Baseline
 
 Accepted retained/custom surfaces:
@@ -33,13 +110,18 @@ Explicit GPUI bridges:
 
 - Compact/Icons and Details drag start use GPUI `Div::on_drag` shells.
 - Rename uses the GPUI editor overlay.
-- Compact/Icons MIME/theme icons use the hybrid renderer by default: GPUI
-  `img()` remains the fallback for not-yet-ready keys, while ready retained
-  image keys paint through the custom image layer.
-- Places text/icons remain GPUI-rendered. Places row/section activation,
-  context-menu targeting, DnD target lookup, drop dispatch, and sidebar leave
-  clearing now use the retained-DnD event layer by default; one sidebar-level
-  GPUI typed payload bridge and row drag-start shells remain.
+- Compact/Icons MIME/theme icons use the full custom image layer by default.
+  The painter still uses GPUI's efficient `RetainAllImageCache -> RenderImage
+  -> Window::paint_image` backend, but ordinary pane rendering no longer keeps
+  per-item GPUI `img()` children. `FIKA_GPUI_THEME_ICONS=1` is the explicit
+  old GPUI baseline, and `FIKA_HYBRID_THEME_ICONS=1` remains only as a
+  transitional readiness-handoff path.
+- Places uses full custom row visual by default for backgrounds, text, and
+  icons. Icon image load/cache/readiness uses the shared retained image layer
+  directly. Places row/section activation, context-menu targeting, DnD target
+  lookup, drop dispatch, and sidebar leave clearing now use the retained-DnD
+  event layer by default; one sidebar-level GPUI typed payload bridge and row
+  drag-start shells remain.
 
 These bridges are intentional platform or performance boundaries. They should
 be removed only through the tracks below.
@@ -61,13 +143,10 @@ and readiness contract before it can replace GPUI `img()` by default.
 
 Dolphin's Places panel is similarly a model/view/delegate loop:
 `DolphinPlacesModel` owns Places state and `KFilePlacesView` owns interaction
-delivery. A Fika Places renderer becomes Dolphin-complete only when row/section
-hit testing and event delivery are viewport-level retained state and the
-remaining typed payload / drag-start platform bridges are explicit. Default
-retained-DnD has removed row/section GPUI event shells from target delivery;
-full retained Places is still blocked by the single sidebar typed payload
-bridge and drag-start shells. Row chrome custom paint alone is not the finish
-line.
+delivery. Fika now has the Dolphin-complete Places core for row visuals,
+row/section hit testing, targeting, and target delivery: the default path is
+full row visual plus retained-DnD. The remaining typed payload and drag-start
+shells are explicit GPUI/platform bridges rather than row identity owners.
 
 The practical conclusion is:
 
@@ -121,8 +200,8 @@ Required evidence:
   `scripts/run-retained-renderer-evidence.sh --places-full-handoff` when
   changing Places full-row visual policy, text-shape handoff, or promotion
   thresholds.
-- Default GPUI image path versus `FIKA_CUSTOM_THEME_ICONS=1` only when changing
-  MIME/theme icon rendering.
+- Default full custom image path versus `FIKA_GPUI_THEME_ICONS=1` only when
+  changing MIME/theme icon rendering.
 
 Acceptance:
 
@@ -147,11 +226,12 @@ Next design step:
 - Keep thumbnail retention keyed by thumbnail path, not icon name.
 - Keep GPUI image cache as the decode backend unless a replacement beats it.
 
-The default is now hybrid. Future icon-renderer changes must keep:
+The default is now full custom over the retained image model. Future
+icon-renderer changes must keep:
 
-- Paired default hybrid and `FIKA_GPUI_THEME_ICONS=1` baseline logs passing for
-  `/etc` and a mixed user directory.
-- Hybrid/custom logs free of steady `theme_placeholder` churn, zoom-time
+- Paired default full-custom and `FIKA_GPUI_THEME_ICONS=1` baseline logs
+  passing for `/etc` and a mixed user directory.
+- Default/custom logs free of steady `theme_placeholder` churn, zoom-time
   `theme_decoded` burst, visible icon size second-jump, and synchronous icon
   work regression.
 - `docs/ITEM_VIEW_RENDERER_DECISIONS.md` updated with the evidence.
@@ -181,52 +261,42 @@ Default may change only when:
   device rows.
 - Internal reorder and item/external drop behavior remain unchanged.
 
-### Track 3a: Places Full Row Visual Handoff
+### Track 3a: Places Full Row Visual Default
 
-Purpose: move Places text and vector-icon painting toward a fully retained row
-visual path without promoting it before it is neutral or better than the
-current chrome split.
+Purpose: keep Places row/section visuals on the same Dolphin retained model as
+pane items: shared retained image requests, shared image readiness/cache,
+shared text-shape cache machinery, retained slot stats, and a thin row visual
+painter.
 
-Current opt-in state:
+Current default:
 
-- `FIKA_PLACES_ROW_VISUAL_POLICY=full` paints full row text and vector icons in
-  the custom row visual layer.
-- `FIKA_PLACES_ROW_VISUAL_HANDOFF=1` keeps GPUI text/icons for the warmup
-  frames, prewarms `PlacesRowTextShapeCache`, and hands off only after the
-  retained row visual resources are ready.
-- The handoff path is analyzer-backed through
-  `scripts/run-retained-renderer-evidence.sh --places-full-handoff`, which
-  captures targets, overflow, and layout logs for both default chrome and full
-  handoff.
+- `DEFAULT_PLACES_ROW_VISUAL_POLICY = CustomFull`.
+- Places row text, section text, and icons are painted by the custom row visual
+  layer. `FIKA_PLACES_ROW_VISUAL_POLICY=gpui`, `chrome`, and `text` remain as
+  explicit fallback/A-B policies only.
+- `FIKA_PLACES_ROW_VISUAL_HANDOFF=1` is still available as a regression suite
+  for ready-only handoff; it is no longer a prerequisite for making full rows
+  the default.
 
-2026-06-19 evidence:
+2026-06-19 final evidence:
 
-- `/tmp/fika-places-full-handoff-runner-20260619-places-handoff-full-targets.log`
-  passed the full-handoff row-visual gates with warm row paint at `379us`, but
-  first-frame `[fika render] total` reached `27268us`.
-- `/tmp/fika-places-full-handoff-runner-20260619-places-handoff-full-overflow.log`
-  passed with 75 rows, 29 painted rows, and warm row paint at `1090us`.
-- `/tmp/fika-places-full-handoff-runner-20260619-places-handoff-full-layout.log`
-  passed with warm row paint at `724us`.
+- The core runner passed targets, overflow, layout, hit-test, targeting, and
+  DnD Places logs under the default full policy:
+  `/tmp/fika-core-final-retained-v3-places-*.log`.
+- Analyzer summaries show `visual_kinds=full`, row visual layer counts matching
+  rows, `row_gpui=0`, `text_gpui=0`, and `icon_gpui=0`.
+- Interaction remains retained-DnD for row/section target delivery. The only
+  expected retained-event failure is the known sidebar typed payload shell,
+  because GPUI still exposes typed drag move/drop payloads through interactive
+  elements.
 
 Decision:
 
-- The full path has a real architectural breakthrough: ready-only handoff and
-  text-shape prewarming remove the earlier cold row-paint blocker, and the
-  retained custom row visual path is measurable under repeatable gates.
-- It is not default yet. The remaining blocker is whole-frame startup/target
-  total-render variance, not row visual painting alone. Continue comparing
-  row-visual cost and `[fika render] total=` before promotion.
-
-Next design step:
-
-- Split first-frame Places snapshot, item-pane work, root work, and full row
-  visual work clearly enough that the default-promotion gate can identify which
-  owner caused a total-render spike.
-- Reduce or amortize any full-handoff-specific first-frame work before lowering
-  the full path's 30ms total-render guard.
-- Keep the default chrome policy until full handoff matches or beats chrome in
-  the same targets/overflow/layout A/B suite.
+- Places full row visual is complete for the retained renderer transition and
+  stays default.
+- The remaining Places work is not row visual migration. It is Track 4 typed
+  drag API work and future regression monitoring against the chrome/GPUI
+  fallback policies.
 
 ### Track 4: Typed Drag Boundary
 
@@ -312,10 +382,10 @@ Acceptance:
 
 ## Next Queue
 
-1. Keep the retained MIME/theme icon image cache foundation aligned with
-   `docs/RETAINED_ICON_IMAGE_CACHE_PLAN.md`.
-2. Continue Track 3a by reducing full-handoff first-frame total-render
-   variance and keeping `--places-full-handoff` A/B evidence current.
+1. Keep the retained MIME/theme icon image cache on the full-custom default and
+   compare future image changes against `FIKA_GPUI_THEME_ICONS=1`.
+2. Keep `--places-full-handoff` as a chrome/full regression suite, not a
+   default-promotion blocker.
 3. Re-audit GPUI drag-start API after dependency updates before Track 4.
 4. Convert rename behavior matrix items into tests/smoke before Track 5.
 

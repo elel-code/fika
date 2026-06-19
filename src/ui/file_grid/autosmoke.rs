@@ -31,6 +31,9 @@ pub(crate) enum ItemViewAutosmokeAction {
         label: &'static str,
         mode: ViewMode,
     },
+    Settle {
+        label: &'static str,
+    },
 }
 
 impl ItemViewAutosmokeScenario {
@@ -55,7 +58,7 @@ impl ItemViewAutosmokeScenario {
 
     pub(crate) fn action_delay(self) -> Duration {
         let _ = self;
-        Duration::from_millis(180)
+        Duration::from_millis(350)
     }
 
     pub(crate) fn actions(self) -> Vec<ItemViewAutosmokeAction> {
@@ -70,6 +73,9 @@ impl ItemViewAutosmokeScenario {
             actions.push(ItemViewAutosmokeAction::ViewMode {
                 label: "view-details",
                 mode: ViewMode::Details,
+            });
+            actions.push(ItemViewAutosmokeAction::Settle {
+                label: "settle-details",
             });
         }
         if matches!(
@@ -115,6 +121,16 @@ impl ItemViewAutosmokeScenario {
                 ItemViewAutosmokeAction::Scroll {
                     label: "scroll-back",
                     delta: ScrollDelta::Pixels(point(px(0.0), px(260.0))),
+                },
+            ]);
+        }
+        if matches!(self, Self::DetailsZoomScroll) {
+            actions.extend([
+                ItemViewAutosmokeAction::Settle {
+                    label: "settle-details",
+                },
+                ItemViewAutosmokeAction::Settle {
+                    label: "settle-details",
                 },
             ]);
         }
@@ -174,6 +190,17 @@ pub(crate) fn start_item_view_autosmoke(
                                 return;
                             }
                         }
+                        ItemViewAutosmokeAction::Settle { label } => {
+                            if this
+                                .update(&mut cx, |_app, cx| {
+                                    emit_item_view_autosmoke_settle_action(label, pane_id);
+                                    cx.notify();
+                                })
+                                .is_err()
+                            {
+                                return;
+                            }
+                        }
                     }
                     cx.background_executor()
                         .timer(scenario.action_delay())
@@ -221,6 +248,13 @@ fn emit_item_view_autosmoke_mode_action(label: &'static str, pane_id: PaneId, mo
     eprintln!(
         "[fika autosmoke] item-view action={} pane={} mode={:?}",
         label, pane_id.0, mode
+    );
+}
+
+fn emit_item_view_autosmoke_settle_action(label: &'static str, pane_id: PaneId) {
+    eprintln!(
+        "[fika autosmoke] item-view action={} pane={}",
+        label, pane_id.0
     );
 }
 
@@ -305,7 +339,7 @@ mod tests {
     fn details_zoom_scroll_scenario_switches_mode_before_actions() {
         let actions = ItemViewAutosmokeScenario::DetailsZoomScroll.actions();
 
-        assert_eq!(actions.len(), 9);
+        assert_eq!(actions.len(), 12);
         assert!(matches!(
             actions[0],
             ItemViewAutosmokeAction::ViewMode {
@@ -313,8 +347,17 @@ mod tests {
                 ..
             }
         ));
-        assert!(matches!(actions[1], ItemViewAutosmokeAction::Zoom { .. }));
-        assert!(matches!(actions[5], ItemViewAutosmokeAction::Scroll { .. }));
+        assert!(matches!(actions[1], ItemViewAutosmokeAction::Settle { .. }));
+        assert!(matches!(actions[2], ItemViewAutosmokeAction::Zoom { .. }));
+        assert!(matches!(actions[6], ItemViewAutosmokeAction::Scroll { .. }));
+        assert!(matches!(
+            actions[10],
+            ItemViewAutosmokeAction::Settle { .. }
+        ));
+        assert!(matches!(
+            actions[11],
+            ItemViewAutosmokeAction::Settle { .. }
+        ));
     }
 
     #[test]
