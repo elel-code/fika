@@ -79,6 +79,7 @@ pub(super) fn places_event_probe_layer(
     targeting_state: Option<Entity<PlacesEventTargetingState>>,
 ) -> Stateful<Div> {
     let height = geometry.content_height().max(1.0);
+    let places: Arc<[PlaceSnapshot]> = places.into();
     let paint_geometry = geometry.clone();
     let paint_app = app.clone();
     let paint_targeting_state = targeting_state.clone();
@@ -245,7 +246,7 @@ fn apply_places_event_pointer_cursor(state: &PlacesEventProbePaintState, window:
 
 fn install_places_event_targeting_handlers(
     app: WeakEntity<FikaApp>,
-    places: Vec<PlaceSnapshot>,
+    places: Arc<[PlaceSnapshot]>,
     state: Entity<PlacesEventTargetingState>,
     hitboxes: Arc<[PlacesEventProbeHitboxState]>,
     window: &mut Window,
@@ -329,6 +330,7 @@ fn install_places_event_targeting_handlers(
     );
 
     let context_hitboxes = hitboxes;
+    let context_places = places;
     let context_app = app;
     window.on_mouse_event(
         move |event: &gpui::MouseDownEvent, phase, window, cx: &mut App| {
@@ -340,7 +342,7 @@ fn install_places_event_targeting_handlers(
             };
             let handled = match hitbox.target {
                 PlacesEventProbeHitboxTarget::Row { visible_index, .. } => {
-                    let Some(place) = places.get(visible_index).cloned() else {
+                    let Some(place) = context_places.get(visible_index).cloned() else {
                         return;
                     };
                     context_app
