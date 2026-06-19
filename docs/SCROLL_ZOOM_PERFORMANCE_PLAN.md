@@ -56,6 +56,10 @@ the render frame.
   `KFileItemModelRolesUpdater::indexesToResolve()` rather than keeping stale
   paint-cache entries resident after scrolling through large directories such
   as `/etc`.
+- Compact item labels use a single no-wrap shaped line and the Dolphin-style
+  middle elision helper instead of `shape_text()` wrapping. This follows
+  Dolphin's `QTextOption::NoWrap` + `updateCompactLayoutTextCache()` behavior
+  and keeps the Compact label path to one glyph segment per item.
 - Zoom exact-size theme-icon misses now reuse an already resolved icon path for
   the same file-icon kind and do not enqueue another exact-size path request.
   This mirrors Dolphin's visual-stability behavior: do not replace a real
@@ -125,7 +129,10 @@ Implementation:
   in GPUI prepaint or render conversion.
 - Visible icon sync skips requests already queued or pending in
   `FileIconResolveQueue`, preserving Dolphin's visible-first exception without
-  redoing read-ahead scans in the scroll frame.
+  redoing read-ahead scans in the scroll frame. The visible/read-ahead work
+  queue is built before visible icon sync, so newly visible icon misses are
+  queued for the background resolver rather than resolved synchronously in the
+  scroll frame.
 - Zoom commits the current layout icon bounds immediately. MIME/theme icon
   paths stay stable after the same file-icon kind has resolved once, so zoom no
   longer synchronously resolves or queues an exact-size path request. Preview
@@ -151,7 +158,14 @@ after queued/pending skip:
   item_shape max_entries=64 evicted=104
   item_glyph max_entries=64 evicted=358
   icon_sync max_total=37us, warm_custom_paint max_paint=1323us
-  debug smaps_rollup sample: Private_Dirty=53960 kB
+
+2026-06-20 Compact NoWrap + queue-before-sync, `/etc` zoom-scroll:
+  icon_sync max_total=26us, warm_custom_paint max_paint=1126us
+
+2026-06-20 right-edge memory sample, `/etc` scroll-end:
+  autosmoke scroll_x=2303.5 max_scroll_x=2303.5
+  icon_sync scroll frame: queued=3 resolved=0 total=70us
+  debug smaps_rollup after ScrollEnd: Private_Dirty=60336 kB
 ```
 
 Regression guard:
@@ -161,6 +175,10 @@ Regression guard:
 - For scroll/zoom changes, run
   `FIKA_PERF_ITEM_VIEW=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll target/debug/fika /etc`
   and summarize with `scripts/analyze-item-view-perf.sh`.
+- For `/etc` memory changes, use the right-edge sample:
+  `FIKA_AUTOSMOKE_ITEM_VIEW=scroll-end target/debug/fika /etc`, wait for
+  `scenario=ScrollEnd`, verify `scroll_x == max_scroll_x`, then read
+  `/proc/$pid/smaps_rollup` `Private_Dirty`.
 - If `icon_sync` returns to multi-ms values, inspect visible/read-ahead icon
   queue ownership before changing the renderer.
 - If `icon_sync` stays low but the frame is still slow, inspect static visual

@@ -635,6 +635,21 @@ impl FikaApp {
         perf_enabled: bool,
         cx: &mut Context<Self>,
     ) -> Option<FileGridVisibleWorkFrame> {
+        let queue_started = perf_enabled.then(Instant::now);
+        let queued_file_grid_model_work = self.queue_file_grid_model_work_for_raw_grid(
+            pane_id,
+            generation,
+            view_mode,
+            model_data_generation,
+            source_revision,
+            item_count,
+            raw_file_grid,
+            file_icon_size,
+            file_icon_resolve_sizes,
+            filtered,
+        )?;
+        let queue_elapsed = queue_started.map(|started| started.elapsed());
+
         let icon_sync_started = perf_enabled.then(Instant::now);
         let icon_sync_stats =
             self.resolve_visible_file_icons_for_raw_grid(pane_id, raw_file_grid, file_icon_size);
@@ -656,20 +671,6 @@ impl FikaApp {
             );
         }
 
-        let queue_started = perf_enabled.then(Instant::now);
-        let queued_file_grid_model_work = self.queue_file_grid_model_work_for_raw_grid(
-            pane_id,
-            generation,
-            view_mode,
-            model_data_generation,
-            source_revision,
-            item_count,
-            raw_file_grid,
-            file_icon_size,
-            file_icon_resolve_sizes,
-            filtered,
-        )?;
-        let queue_elapsed = queue_started.map(|started| started.elapsed());
         self.start_queued_file_grid_model_work(queued_file_grid_model_work, cx);
 
         Some(FileGridVisibleWorkFrame {

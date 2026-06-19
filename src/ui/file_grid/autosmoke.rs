@@ -12,6 +12,7 @@ const AUTOSMOKE_ITEM_VIEW_ENV: &str = "FIKA_AUTOSMOKE_ITEM_VIEW";
 pub(crate) enum ItemViewAutosmokeScenario {
     Zoom,
     Scroll,
+    ScrollEnd,
     ZoomScroll,
     IconsZoomScroll,
     DetailsZoomScroll,
@@ -45,6 +46,7 @@ impl ItemViewAutosmokeScenario {
         match self {
             Self::Zoom => "Zoom",
             Self::Scroll => "Scroll",
+            Self::ScrollEnd => "ScrollEnd",
             Self::ZoomScroll => "ZoomScroll",
             Self::IconsZoomScroll => "IconsZoomScroll",
             Self::DetailsZoomScroll => "DetailsZoomScroll",
@@ -124,6 +126,20 @@ impl ItemViewAutosmokeScenario {
                 },
             ]);
         }
+        if matches!(self, Self::ScrollEnd) {
+            actions.extend([
+                ItemViewAutosmokeAction::Scroll {
+                    label: "scroll-forward",
+                    delta: ScrollDelta::Pixels(point(px(0.0), px(-1_000_000.0))),
+                },
+                ItemViewAutosmokeAction::Settle {
+                    label: "settle-scroll-end",
+                },
+                ItemViewAutosmokeAction::Settle {
+                    label: "settle-scroll-end",
+                },
+            ]);
+        }
         if matches!(self, Self::DetailsZoomScroll) {
             actions.extend([
                 ItemViewAutosmokeAction::Settle {
@@ -168,7 +184,12 @@ pub(crate) fn start_item_view_autosmoke(
                             if this
                                 .update(&mut cx, |app, cx| {
                                     let changed = app.scroll_pane_from_wheel(pane_id, delta);
-                                    emit_item_view_autosmoke_scroll_action(label, pane_id, changed);
+                                    emit_item_view_autosmoke_scroll_action(
+                                        label,
+                                        pane_id,
+                                        changed,
+                                        app.item_view_scroll_position_for_pane(pane_id),
+                                    );
                                     if changed {
                                         cx.notify();
                                     }
@@ -237,11 +258,23 @@ fn emit_item_view_autosmoke_zoom_action(label: &'static str, pane_id: PaneId) {
     );
 }
 
-fn emit_item_view_autosmoke_scroll_action(label: &'static str, pane_id: PaneId, changed: bool) {
-    eprintln!(
-        "[fika autosmoke] item-view action={} pane={} changed={}",
-        label, pane_id.0, changed
-    );
+fn emit_item_view_autosmoke_scroll_action(
+    label: &'static str,
+    pane_id: PaneId,
+    changed: bool,
+    scroll_position: Option<(f32, f32, f32, f32)>,
+) {
+    if let Some((scroll_x, scroll_y, max_scroll_x, max_scroll_y)) = scroll_position {
+        eprintln!(
+            "[fika autosmoke] item-view action={} pane={} changed={} scroll_x={} scroll_y={} max_scroll_x={} max_scroll_y={}",
+            label, pane_id.0, changed, scroll_x, scroll_y, max_scroll_x, max_scroll_y
+        );
+    } else {
+        eprintln!(
+            "[fika autosmoke] item-view action={} pane={} changed={}",
+            label, pane_id.0, changed
+        );
+    }
 }
 
 fn emit_item_view_autosmoke_mode_action(label: &'static str, pane_id: PaneId, mode: ViewMode) {
@@ -262,6 +295,9 @@ fn item_view_autosmoke_scenario_from_value(value: &str) -> Option<ItemViewAutosm
     match value.trim().to_ascii_lowercase().as_str() {
         "1" | "true" | "yes" | "on" | "zoom-scroll" | "scroll-zoom" => {
             Some(ItemViewAutosmokeScenario::ZoomScroll)
+        }
+        "scroll-end" | "end-scroll" | "scroll-to-end" | "right-edge" => {
+            Some(ItemViewAutosmokeScenario::ScrollEnd)
         }
         "details-zoom-scroll" | "details-scroll-zoom" | "details" => {
             Some(ItemViewAutosmokeScenario::DetailsZoomScroll)
@@ -298,6 +334,10 @@ mod tests {
             Some(ItemViewAutosmokeScenario::ZoomScroll)
         );
         assert_eq!(
+            item_view_autosmoke_scenario_from_value("scroll-end"),
+            Some(ItemViewAutosmokeScenario::ScrollEnd)
+        );
+        assert_eq!(
             item_view_autosmoke_scenario_from_value("zoom"),
             Some(ItemViewAutosmokeScenario::Zoom)
         );
@@ -312,6 +352,10 @@ mod tests {
     fn scenario_marker_labels_match_runtime_markers() {
         assert_eq!(ItemViewAutosmokeScenario::Zoom.marker_label(), "Zoom");
         assert_eq!(ItemViewAutosmokeScenario::Scroll.marker_label(), "Scroll");
+        assert_eq!(
+            ItemViewAutosmokeScenario::ScrollEnd.marker_label(),
+            "ScrollEnd"
+        );
         assert_eq!(
             ItemViewAutosmokeScenario::ZoomScroll.marker_label(),
             "ZoomScroll"
@@ -333,6 +377,16 @@ mod tests {
         assert_eq!(actions.len(), 8);
         assert!(matches!(actions[0], ItemViewAutosmokeAction::Zoom { .. }));
         assert!(matches!(actions[4], ItemViewAutosmokeAction::Scroll { .. }));
+    }
+
+    #[test]
+    fn scroll_end_scenario_scrolls_once_and_settles() {
+        let actions = ItemViewAutosmokeScenario::ScrollEnd.actions();
+
+        assert_eq!(actions.len(), 3);
+        assert!(matches!(actions[0], ItemViewAutosmokeAction::Scroll { .. }));
+        assert!(matches!(actions[1], ItemViewAutosmokeAction::Settle { .. }));
+        assert!(matches!(actions[2], ItemViewAutosmokeAction::Settle { .. }));
     }
 
     #[test]

@@ -26,6 +26,9 @@
 - 静态 item 和 Details 的文本/字形缓存现在只保留当前 paint 帧触达的条目。这个边界对齐 Dolphin 的 `KItemListView`
   `doLayout()`：可见 widget 只为 `firstVisibleIndex..lastVisibleIndex` 创建或复用，而预读仍留在
   `KFileItemModelRolesUpdater::indexesToResolve()`，避免滚过 `/etc` 这类大目录后把陈旧 paint-cache 条目长期驻留。
+- Compact item label 使用单条 no-wrap shaped line 和 Dolphin 风格中间省略 helper，不再走
+  `shape_text()` wrapping。这对齐 Dolphin 的 `QTextOption::NoWrap` +
+  `updateCompactLayoutTextCache()`，并把 Compact label 路径保持为每项一个 glyph 段。
 - 缩放精确尺寸主题图标未命中时，复用同文件图标类型已经解析出的稳定 theme path，并且不再为新尺寸排队另一个 exact-size path 请求。这镜像了 Dolphin 的视觉稳定性行为：不要仅因为新缩放级别改变了图标边界，就把真实可见图标替换为 fallback 标记或提交第二个 image identity。
 - 活动缩放现在镜像 Dolphin 的普通主题图标 paint 路径。Item layout 和 icon bounds 立即变更；一旦同一文件图标类型已有 resolved theme path，文件图标 role/path identity 保持稳定。Dolphin 的 300ms `triggerIconSizeUpdate()` timer 被视为 preview/role-updater 边界，而不是 Fika 主题图标的延迟第二次尺寸或路径提交。
 - 图片 paint 层现在在路径解析后也应用相同规则：如果 GPUI `RetainAllImageCache::load()` 返回新图标路径的 pending/error，painter 首先尝试同 MIME 图标名称的 retained 图片。这避免了滚动或缩放图片支持的 MIME 图标时出现的概率性 fallback 闪烁。
@@ -52,7 +55,7 @@
 
 - MIME/主题图标现在默认使用 retained custom image layer。它复用 GPUI `RetainAllImageCache -> RenderImage -> Window::paint_image`，但普通 pane 渲染必须保持 `gpui_image_element=0`。`FIKA_GPUI_THEME_ICONS=1` 是配对的 GPUI `img()` baseline。
 - 渲染转换仅使用缓存或初步图标 snapshot。主题图标路径扫描保持在可见图标同步和后台解析队列中，不在 GPUI prepaint 或渲染转换中。
-- 可见图标同步跳过已在 `FileIconResolveQueue` 中排队或 pending 的请求，保留 Dolphin 的可见优先例外而不在滚动帧中重做预读扫描。
+- 可见图标同步跳过已在 `FileIconResolveQueue` 中排队或 pending 的请求，保留 Dolphin 的可见优先例外而不在滚动帧中重做预读扫描。可见/预读工作队列会先于可见图标同步建立，因此新进入可见区的图标 miss 会排入后台解析器，而不是在滚动帧中同步解析。
 - 缩放立即提交当前 layout 图标边界；MIME/主题图标 path 在同一文件图标类型首次解析后保持稳定，不再因新缩放尺寸同步或排队 exact-size path 请求。Preview/thumbnail role 工作可能仍然合并，但主题图标几何不得使用延迟的第二次尺寸。
 - 目录加载在排队离屏 metadata/图标工作之前，在有界的 visible-widget 预算内解析可见通用 MIME metadata 和可见主题图标路径。
 
@@ -72,7 +75,14 @@ after queued/pending skip:
   item_shape max_entries=64 evicted=104
   item_glyph max_entries=64 evicted=358
   icon_sync max_total=37us, warm_custom_paint max_paint=1323us
-  debug smaps_rollup sample: Private_Dirty=53960 kB
+
+2026-06-20 Compact NoWrap + queue-before-sync，`/etc` zoom-scroll:
+  icon_sync max_total=26us, warm_custom_paint max_paint=1126us
+
+2026-06-20 右端内存样本，`/etc` scroll-end:
+  autosmoke scroll_x=2303.5 max_scroll_x=2303.5
+  icon_sync scroll frame: queued=3 resolved=0 total=70us
+  debug smaps_rollup after ScrollEnd: Private_Dirty=60336 kB
 ```
 
 回退防护：
@@ -81,6 +91,10 @@ after queued/pending skip:
 - 对于滚动/缩放更改，运行
   `FIKA_PERF_ITEM_VIEW=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll target/debug/fika /etc`
   并使用 `scripts/analyze-item-view-perf.sh` 汇总。
+- 对于 `/etc` 内存更改，使用右端样本：
+  `FIKA_AUTOSMOKE_ITEM_VIEW=scroll-end target/debug/fika /etc`，等待
+  `scenario=ScrollEnd`，确认 `scroll_x == max_scroll_x`，再读取
+  `/proc/$pid/smaps_rollup` 的 `Private_Dirty`。
 - 如果 `icon_sync` 回到多毫秒值，在更改渲染器之前检查可见/预读图标队列所有权。
 - 如果 `icon_sync` 保持低位但帧仍然缓慢，检查静态视觉 paint、文本塑形或 GPUI image-cache 行为，而不是归咎于 MIME 图标路径查找。
 

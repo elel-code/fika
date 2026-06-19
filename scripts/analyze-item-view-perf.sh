@@ -1030,6 +1030,7 @@ END {
         }
         if (autosmoke_scenario != "Zoom" &&
             autosmoke_scenario != "Scroll" &&
+            autosmoke_scenario != "ScrollEnd" &&
             autosmoke_scenario != "ZoomScroll" &&
             autosmoke_scenario != "IconsZoomScroll" &&
             autosmoke_scenario != "DetailsZoomScroll") {
@@ -1053,6 +1054,9 @@ END {
             if (autosmoke_scroll_forward_seen == 0 || autosmoke_scroll_back_seen == 0) {
                 fail("missing changed=true item-view autosmoke scroll action markers")
             }
+        }
+        if (autosmoke_scenario == "ScrollEnd" && autosmoke_scroll_forward_seen == 0) {
+            fail("missing changed=true item-view autosmoke scroll-end action marker")
         }
     }
     for (mode in required_renderer_policy_mode) {

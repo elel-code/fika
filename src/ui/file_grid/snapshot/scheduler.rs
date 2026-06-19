@@ -252,10 +252,12 @@ mod tests {
 
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
+    use std::time::Duration;
 
     use fika_core::{DirectoryModel, IconsLayout, ItemId, ItemLayout, SelectionState, ViewState};
 
     use super::super::super::CompactColumnWidthCache;
+    use super::super::super::icon_work::resolve_visible_file_icons_for_raw_grid_with_stats;
     use super::super::{RawDetailsItemSnapshot, RawFileGridSnapshotInput, raw_file_grid_snapshot};
 
     #[test]
@@ -646,6 +648,36 @@ mod tests {
             paths,
             vec!["visible-file.txt", "visible-dir", "visible-second-file.txt"]
         );
+    }
+
+    #[test]
+    fn visible_icon_sync_counts_queued_visible_misses_without_resolving() {
+        let raw_file_grid = RawFileGridSnapshot::Icons {
+            layout: IconsLayout::new(1, fika_core::IconsLayoutOptions::default()),
+            items: vec![test_raw_visible_item(1, "visible-file.txt", 0)],
+        };
+        let mut file_icons = FileIconCache::default();
+        let mut icon_queue = FileIconResolveQueue::default();
+
+        assert!(queue_file_icon_resolve_work_for_raw_grid_sizes(
+            &file_icons,
+            &mut icon_queue,
+            &raw_file_grid,
+            &[48.0],
+        ));
+        let stats = resolve_visible_file_icons_for_raw_grid_with_stats(
+            &mut file_icons,
+            &icon_queue,
+            &raw_file_grid,
+            48.0,
+            Duration::from_millis(200),
+        );
+
+        assert_eq!(stats.candidates, 1);
+        assert_eq!(stats.cached, 0);
+        assert_eq!(stats.queued, 1);
+        assert_eq!(stats.resolved, 0);
+        assert_eq!(stats.changed, 0);
     }
 
     #[test]

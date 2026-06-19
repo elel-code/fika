@@ -12,6 +12,7 @@ use crate::FikaApp;
 use crate::ui::icons::FileIconSnapshot;
 use crate::ui::retained::RetainedShapeCache;
 
+use super::layout::elide_middle_text_for_width;
 use super::paint_slots::ItemPaintSnapshot;
 use super::renderer_policy::{item_paints_fallback_icon, item_uses_layer_visual_paint};
 use super::text::static_paint_single_line_text;
@@ -43,17 +44,12 @@ struct StaticItemGlyphRasterPaintState {
 }
 
 enum StaticItemLabelPaintState {
-    Start {
-        lines: Arc<[gpui::WrappedLine]>,
-        height: f32,
-    },
-    Center {
-        lines: Arc<[gpui::ShapedLine]>,
-    },
+    Start { line: gpui::ShapedLine },
+    Center { lines: Arc<[gpui::ShapedLine]> },
 }
 
 enum StaticItemLabelGlyphRasterPaintState {
-    Start(Vec<Option<Arc<gpui::GlyphRasterData>>>),
+    Start(Option<Arc<gpui::GlyphRasterData>>),
     Center(Vec<Option<Arc<gpui::GlyphRasterData>>>),
 }
 
@@ -723,6 +719,10 @@ fn shape_static_item_text(
     });
     let label = match &key.label {
         StaticItemLabelTextKey::Start(display_name) => {
+            let max_width = f32::from_bits(key.text_width_bits).max(1.0);
+            let display_name = static_paint_single_line_text(display_name.clone());
+            let display_name =
+                SharedString::from(elide_middle_text_for_width(&display_name, max_width));
             let run = TextRun {
                 len: display_name.len(),
                 font: style.text_font.clone(),
@@ -731,30 +731,11 @@ fn shape_static_item_text(
                 underline: None,
                 strikethrough: None,
             };
-            let lines = window
-                .text_system()
-                .shape_text(
-                    display_name.clone(),
-                    style.text_font_size,
-                    &[run],
-                    Some(px(f32::from_bits(key.text_width_bits).max(1.0))),
-                    Some(
-                        (f32::from_bits(key.text_height_bits) / ITEM_NAME_LINE_HEIGHT)
-                            .round()
-                            .max(1.0) as usize,
-                    ),
-                )
-                .map(|lines| lines.into_iter().collect::<Vec<_>>())
-                .unwrap_or_default();
-            let height = static_paint_wrapped_lines_height(
-                &lines,
-                style.label_line_height,
-                f32::from_bits(key.text_height_bits),
-            );
-            StaticItemLabelPaintState::Start {
-                lines: lines.into(),
-                height,
-            }
+            let line =
+                window
+                    .text_system()
+                    .shape_line(display_name, style.text_font_size, &[run], None);
+            StaticItemLabelPaintState::Start { line }
         }
         StaticItemLabelTextKey::Center(label_texts) => {
             let lines = label_texts
@@ -820,28 +801,23 @@ fn static_item_glyph_raster_prepaint(
 
     let text_bounds = static_item_local_bounds(item_bounds, layout.visual_rect, layout.text_rect);
     let label = match &shapes.label {
-        StaticItemLabelPaintState::Start { lines, height } => {
-            let y_offset = ((text_bounds.size.height.as_f32() - *height).max(0.0) * 0.5).floor();
-            let mut y = text_bounds.origin.y + px(y_offset);
-            let mut rasters = Vec::with_capacity(lines.len());
-            for (line_index, line) in lines.iter().enumerate() {
-                rasters.push(static_item_wrapped_glyph_raster(
-                    pane_id,
-                    text_key,
-                    StaticItemGlyphRasterSegmentKey::StartLabel { line_index },
-                    line,
-                    point(text_bounds.origin.x, y),
-                    style.label_line_height,
-                    TextAlign::Left,
-                    Some(text_bounds),
-                    app,
-                    glyph_budget,
-                    window,
-                    cx,
-                ));
-                y += line.size(style.label_line_height).height;
-            }
-            StaticItemLabelGlyphRasterPaintState::Start(rasters)
+        StaticItemLabelPaintState::Start { line } => {
+            let origin = static_item_start_label_origin(text_bounds, style.label_line_height);
+            let raster = static_item_shaped_glyph_raster(
+                pane_id,
+                text_key,
+                StaticItemGlyphRasterSegmentKey::StartLabel { line_index: 0 },
+                line,
+                origin,
+                style.label_line_height,
+                TextAlign::Left,
+                Some(text_bounds.size.width),
+                app,
+                glyph_budget,
+                window,
+                cx,
+            );
+            StaticItemLabelGlyphRasterPaintState::Start(raster)
         }
         StaticItemLabelPaintState::Center { lines } => {
             let height =
@@ -939,73 +915,6 @@ fn static_item_shaped_glyph_raster(
     Some(raster_data)
 }
 
-#[allow(clippy::too_many_arguments)]
-fn static_item_wrapped_glyph_raster(
-    pane_id: PaneId,
-    text_key: &StaticItemTextShapeCacheKey,
-    segment: StaticItemGlyphRasterSegmentKey,
-    line: &gpui::WrappedLine,
-    origin: gpui::Point<Pixels>,
-    line_height: Pixels,
-    align: TextAlign,
-    bounds: Option<Bounds<Pixels>>,
-    app: &WeakEntity<FikaApp>,
-    glyph_budget: &mut GlyphRasterMissBudget,
-    window: &mut Window,
-    cx: &mut App,
-) -> Option<Arc<gpui::GlyphRasterData>> {
-    let align_width = bounds.map(|bounds| bounds.size.width);
-    let raster_key = static_item_glyph_raster_cache_key(
-        text_key.clone(),
-        segment,
-        origin,
-        line_height,
-        align_width,
-        window.scale_factor(),
-    );
-    let cached = app
-        .update(cx, |this, _cx| {
-            this.static_item_text_shape_caches
-                .entry(pane_id)
-                .or_default()
-                .glyph_raster_for(&raster_key)
-        })
-        .ok()
-        .flatten();
-    if cached.is_some() {
-        glyph_budget.record_cache_hit();
-        return cached;
-    }
-
-    glyph_budget.record_cache_miss();
-    if !glyph_budget.allow_compute() {
-        glyph_budget.record_deferred();
-        return None;
-    }
-
-    let started = std::time::Instant::now();
-    let raster_data =
-        line.compute_glyph_raster_data(origin, line_height, align, bounds, window, cx);
-    let elapsed = started.elapsed();
-    let raster_data = match raster_data {
-        Ok(raster_data) => {
-            glyph_budget.record_compute(elapsed);
-            Arc::new(raster_data)
-        }
-        Err(_) => {
-            glyph_budget.record_failed(elapsed);
-            return None;
-        }
-    };
-    let _ = app.update(cx, |this, _cx| {
-        this.static_item_text_shape_caches
-            .entry(pane_id)
-            .or_default()
-            .insert_glyph_raster(raster_key, raster_data.clone());
-    });
-    Some(raster_data)
-}
-
 fn static_item_glyph_raster_cache_key(
     text: StaticItemTextShapeCacheKey,
     segment: StaticItemGlyphRasterSegmentKey,
@@ -1080,43 +989,34 @@ fn static_item_visual_paint(
     let text_bounds =
         static_item_local_bounds(bounds, state.layout.visual_rect, state.layout.text_rect);
     match &state.shapes.label {
-        StaticItemLabelPaintState::Start { lines, height } => {
-            let rasters = match &state.glyph_rasters.label {
-                StaticItemLabelGlyphRasterPaintState::Start(rasters) => Some(rasters),
+        StaticItemLabelPaintState::Start { line } => {
+            let raster = match &state.glyph_rasters.label {
+                StaticItemLabelGlyphRasterPaintState::Start(raster) => raster.as_ref(),
                 StaticItemLabelGlyphRasterPaintState::Center(_) => None,
             };
-            let y_offset = ((text_bounds.size.height.as_f32() - *height).max(0.0) * 0.5).floor();
-            let mut y = text_bounds.origin.y + px(y_offset);
-            for (line_index, line) in lines.iter().enumerate() {
-                let line_height = line.size(state.label_line_height).height;
-                let origin = point(text_bounds.origin.x, y);
-                let painted_with_raster = rasters
-                    .and_then(|rasters| rasters.get(line_index))
-                    .and_then(Option::as_ref)
-                    .is_some_and(|raster_data| {
-                        line.paint_with_raster_data(
-                            origin,
-                            state.label_line_height,
-                            TextAlign::Left,
-                            Some(text_bounds),
-                            raster_data,
-                            window,
-                            cx,
-                        )
-                        .is_ok()
-                    });
-                if !painted_with_raster {
-                    line.paint(
-                        origin,
-                        state.label_line_height,
-                        TextAlign::Left,
-                        Some(text_bounds),
-                        window,
-                        cx,
-                    )
-                    .ok();
-                }
-                y += line_height;
+            let origin = static_item_start_label_origin(text_bounds, state.label_line_height);
+            let painted_with_raster = raster.is_some_and(|raster_data| {
+                line.paint_with_raster_data(
+                    origin,
+                    state.label_line_height,
+                    TextAlign::Left,
+                    Some(text_bounds.size.width),
+                    raster_data,
+                    window,
+                    cx,
+                )
+                .is_ok()
+            });
+            if !painted_with_raster {
+                line.paint(
+                    origin,
+                    state.label_line_height,
+                    TextAlign::Left,
+                    Some(text_bounds.size.width),
+                    window,
+                    cx,
+                )
+                .ok();
             }
         }
         StaticItemLabelPaintState::Center { lines } => {
@@ -1162,6 +1062,15 @@ fn static_item_visual_paint(
     }
 }
 
+fn static_item_start_label_origin(
+    text_bounds: Bounds<Pixels>,
+    line_height: Pixels,
+) -> gpui::Point<Pixels> {
+    let y_offset =
+        ((text_bounds.size.height.as_f32() - line_height.as_f32()).max(0.0) * 0.5).floor();
+    point(text_bounds.origin.x, text_bounds.origin.y + px(y_offset))
+}
+
 fn static_item_item_bounds(layer_bounds: Bounds<Pixels>, layout: ItemLayout) -> Bounds<Pixels> {
     let visual = layout.visual_rect;
     Bounds::new(
@@ -1185,16 +1094,4 @@ fn static_item_local_bounds(
         ),
         size(px(rect.width.max(1.0)), px(rect.height.max(1.0))),
     )
-}
-
-fn static_paint_wrapped_lines_height(
-    lines: &[gpui::WrappedLine],
-    line_height: Pixels,
-    max_height: f32,
-) -> f32 {
-    lines
-        .iter()
-        .map(|line| line.size(line_height).height.as_f32())
-        .sum::<f32>()
-        .min(max_height)
 }

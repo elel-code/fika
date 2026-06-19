@@ -2498,6 +2498,20 @@ impl FikaApp {
         )
     }
 
+    pub(crate) fn item_view_scroll_position_for_pane(
+        &self,
+        pane_id: PaneId,
+    ) -> Option<(f32, f32, f32, f32)> {
+        self.panes.pane(pane_id).map(|pane| {
+            (
+                pane.view.scroll_x,
+                pane.view.scroll_y,
+                pane.view.max_scroll_x,
+                pane.view.max_scroll_y,
+            )
+        })
+    }
+
     #[cfg(test)]
     pub(crate) fn set_zoom_level(&mut self, pane_id: PaneId, level: i32) {
         self.set_zoom_level_impl(pane_id, level);

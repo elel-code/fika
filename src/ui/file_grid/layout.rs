@@ -320,7 +320,7 @@ fn visible_item_name_text(text: &str) -> String {
         .collect()
 }
 
-fn elide_middle_text_for_width(text: &str, available_text_width: f32) -> String {
+pub(crate) fn elide_middle_text_for_width(text: &str, available_text_width: f32) -> String {
     let available_text_width = available_text_width.max(1.0);
     let visible = visible_item_name_text(text);
     if estimated_text_width(&visible) <= available_text_width {
