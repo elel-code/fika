@@ -725,6 +725,21 @@ Places chrome 默认之后的当前执行入口是
   `max_total=3198us`，event probe `max_paint=15us`。这让 Places 更接近 retained
   model/painter 拆分：一份投影 snapshot 同时喂给所有 viewport layer，而不是按 surface
   重复 clone。
+- [x] P16gas：将 Places 默认推进到 full retained visual，并用 retained image cache
+  替换 row 内 GPUI 图标元素。根因：仅把默认从 chrome 推到 text 仍会把 Places 图标留在
+  GPUI `img()` 子元素里，不满足 Dolphin 风格 model/controller/painter 拆分。实现：
+  默认 `places_row_visual_policy()` 现在为 `CustomFull`；Places visual layer 拥有
+  keyed `PlacesIconImageCache`，内部使用 GPUI `RetainAllImageCache` 加
+  `window.paint_image()` 绘制真实主题图标，pending/failed 时保留稳定 fallback，不再用
+  fallback marker 冒充已完成 image 路径。证据：
+  `/tmp/fika-places-default-full-targets-scale.log` 通过
+  `--expect-custom-row-full-policy`，显示 `visual_kinds=full`、`text_gpui=0`、
+  `icon_gpui=0`、`max_total=2247us`、warm row paint `395us`；
+  `/tmp/fika-places-default-full-overflow.log` 通过 overflow full gate，75 行策略下
+  viewport event hitbox 裁到 `32`，`max_total=2162us`、warm row paint `655us`。冷帧
+  row paint 仍有首次 image atlas/text paint 成本（targets `5179us`、overflow
+  `8263us`），下一步要继续预热或平摊冷帧，但默认 Places 行文本和图标已经不再依赖
+  GPUI 子元素。
 - [ ] P16q：在每个 P16 实现切片之后，单独提交并附带相关验证：仅文档切片需要 `git diff --check`；代码切片需要 `cargo fmt`、`cargo check`、`cargo test -q`、`scripts/check-item-view-perf-analyzer.sh`、`scripts/check-places-perf-analyzer.sh` 和 `git diff --check`。
 - [x] P16r：记录运行时自测试和突破记录规则。可重复的滚动、缩放、启动图标、调整大小、模式切换和 Places 目标回退应在依赖手动计时之前通过 autosmoke 日志和分析器脚本重现。任何确认的优化突破必须记录症状、Dolphin 比较边界、根本原因、实现、保存的日志/分析器命令和未来回归守卫在拥有的设计或决策文档中。
 

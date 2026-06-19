@@ -24,9 +24,9 @@ Places chrome 默认之后的当前执行路线图是
 | 详情行背景、图标、文本单元格、回收站列 | 已替换 | 自定义内容级绘制器 | 详情图标使用相同的缓存/初步图标策略；运行时详情性能和 DnD smoke 证据必须保持最新 |
 | 详情点击、菜单、导航、悬停、光标、放置 hit testing | 已替换 | 保留行 hit testing/controller 状态加上活动条目拖拽窗口跟踪器 | 绘制器更改后仍需要运行时 DnD smoke |
 | 详情拖拽启动 | 未替换 | GPUI `Div::on_drag` 行 shell | 相同的拖拽启动 API 或经过审计的 GPUI patch 门 |
-| Places 行和侧栏滚动条 | 保留 model/slot/目标决策状态，默认 row chrome 和 row/section target delivery 已替换 | 默认 `FIKA_PLACES_ROW_VISUAL_POLICY=chrome` 用一个 sidebar-level 自定义层绘制 background/drop/insert/trash，同时 `retained-dnd` 拥有 activation/context-menu targeting/DnD target lookup/drop dispatch；GPUI 仍渲染文本/图标，并提供一个 typed payload bridge 加 row drag-start shell；`gpui` fallback、`FIKA_CUSTOM_PLACES_ROWS=1` text-only 基准路径，以及 opt-in `FIKA_PLACES_ROW_VISUAL_POLICY=full` text+vector-icon 基准路径仍可用 | 完整 retained Places 仍需要移除 typed payload 和 drag-start GPUI 边界；full text+icon 自定义绘制暂不默认，因为 `/tmp/fika-places-full-direct-text.log` 仍显示前两帧 text/glyph 冷 paint 尖峰（`max_paint=5941us`），虽然 warm paint 已明显降低（`max_warm_paint=667us`） |
+| Places 行和侧栏滚动条 | 保留 model/slot/目标决策状态，默认 full row visual 和 row/section target delivery 已替换 | 默认 `FIKA_PLACES_ROW_VISUAL_POLICY=full` 用一个 sidebar-level 自定义层绘制 background/drop/insert/trash、行标签和 Places 图标，同时 `retained-dnd` 拥有 activation/context-menu targeting/DnD target lookup/drop dispatch；Places 图标使用 retained `RetainAllImageCache` 加 `paint_image` 路径，并保留稳定 fallback；GPUI 仍提供一个 typed payload bridge 加 row drag-start shell；`gpui`、`chrome`、`text` fallback 仍可用 | 完整 retained Places 仍需要 typed payload 和 drag-start GPUI 边界移除 |
 
-实际状态是：条目视图静态视觉和大多数应用侧 controller 路径已迁移到保留/自定义绘制架构。拖拽启动和重命名仍然是 GPUI 渲染器/平台契约边界。Places 现在默认使用自定义 row chrome 层加 retained-DnD row/section target delivery。行文本/图标默认仍由 GPUI 渲染；opt-in full Places visual 路径已经可以移除 GPUI 行文本和图标元素（`icon_gpui=0`），但当前证据显示自定义文本绘制仍有冷启动尖峰，因此继续保留在 flag 后面。剩余 Places GPUI 边界是 sidebar typed DnD payload bridge 和 row drag-start shell。
+实际状态是：条目视图静态视觉和大多数应用侧 controller 路径已迁移到保留/自定义绘制架构。拖拽启动和重命名仍然是 GPUI 渲染器/平台契约边界。Places 现在默认使用自定义 full row visual 层加 retained-DnD row/section target delivery，因此行标签和行图标默认都不再是 GPUI text/image 子元素。Places 图标绘制复用 GPUI `img()` 高效的底层机制：缓存后的 `RenderImage` 通过 `window.paint_image` 提交，retained cache 在 pending reload 期间保留已有真实 image。剩余 Places GPUI 边界是 sidebar typed DnD payload bridge 和 row drag-start shell。
 
 ## 证据锚点
 

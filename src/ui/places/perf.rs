@@ -11,6 +11,7 @@ const PLACES_ROW_VISUAL_HANDOFF_ENV: &str = "FIKA_PLACES_ROW_VISUAL_HANDOFF";
 const PLACES_EVENT_DELIVERY_POLICY_ENV: &str = "FIKA_PLACES_EVENT_DELIVERY_POLICY";
 const DEFAULT_PLACES_EVENT_DELIVERY_POLICY: PlacesEventDeliveryPolicy =
     PlacesEventDeliveryPolicy::RetainedDnd;
+const DEFAULT_PLACES_ROW_VISUAL_POLICY: PlacesRowVisualPolicy = PlacesRowVisualPolicy::CustomFull;
 
 pub(crate) fn places_perf_enabled() -> bool {
     env::var(PERF_PLACES_VIEW_ENV).is_ok_and(|value| env_flag_is_truthy(&value))
@@ -59,16 +60,13 @@ pub(crate) fn places_row_visual_policy() -> PlacesRowVisualPolicy {
         .ok()
         .and_then(|value| match value.trim().to_ascii_lowercase().as_str() {
             "gpui" | "off" | "0" => Some(PlacesRowVisualPolicy::Gpui),
-            "chrome" | "hybrid" | "default" | "1" | "true" | "yes" | "on" => {
-                Some(PlacesRowVisualPolicy::CustomChrome)
-            }
+            "chrome" | "hybrid" => Some(PlacesRowVisualPolicy::CustomChrome),
             "text" | "custom-text" | "full-text" => Some(PlacesRowVisualPolicy::CustomText),
-            "full" | "custom" | "full-icon" | "full-icons" => {
-                Some(PlacesRowVisualPolicy::CustomFull)
-            }
+            "full" | "custom" | "full-icon" | "full-icons" | "default" | "1" | "true" | "yes"
+            | "on" => Some(PlacesRowVisualPolicy::CustomFull),
             _ => None,
         })
-        .unwrap_or(PlacesRowVisualPolicy::CustomChrome)
+        .unwrap_or(DEFAULT_PLACES_ROW_VISUAL_POLICY)
 }
 
 pub(crate) fn places_row_visual_handoff_enabled() -> bool {

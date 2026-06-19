@@ -35,7 +35,7 @@ use super::perf::{
     places_section_count,
 };
 use super::snapshot::PlaceSnapshot;
-use super::visual::places_row_visual_layer;
+use super::visual::{PlacesIconImageCache, places_row_visual_layer};
 use row::place_row;
 use section::group_heading;
 
@@ -339,10 +339,16 @@ pub(crate) fn places_sidebar(
         })
     });
     let app = cx.weak_entity();
+    let places_icon_image_cache = paint_row_icon.then(|| {
+        window.use_keyed_state("places-icon-image-cache", cx, |_, _| {
+            PlacesIconImageCache::default()
+        })
+    });
     let row_visual_layer = custom_row_visuals.then(|| {
         places_row_visual_layer(
             places.clone(),
             app.clone(),
+            places_icon_image_cache,
             paint_row_text,
             warm_row_text_shapes,
             paint_row_icon,

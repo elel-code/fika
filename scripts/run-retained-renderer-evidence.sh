@@ -306,7 +306,7 @@ if [[ "$capture_places" == true ]]; then
         env FIKA_PERF_PLACES_VIEW=1 FIKA_AUTOSMOKE_PLACES=dnd "$binary" /etc
 
     places_analyzer="$root_dir/scripts/analyze-places-perf.sh"
-    places_common=(--require-interaction-policy --require-interaction-geometry --expect-custom-row-chrome-policy)
+    places_common=(--require-interaction-policy --require-interaction-geometry --expect-custom-row-full-policy)
     run_gate "places targets" "$places_analyzer" --require-autosmoke "${places_common[@]}" "$places_targets_log"
     run_gate "places overflow" "$places_analyzer" --require-overflow-autosmoke "${places_common[@]}" "$places_overflow_log"
     run_gate "places layout" "$places_analyzer" --require-layout-autosmoke "${places_common[@]}" "$places_layout_log"

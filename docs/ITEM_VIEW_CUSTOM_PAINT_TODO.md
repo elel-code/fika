@@ -1996,6 +1996,23 @@ tracks.
   record the symptom, Dolphin comparison boundary, root cause, implementation,
   saved log/analyzer command, and future regression guard in the owning design
   or decision document.
+- [x] P16gas: Promote Places default visual ownership to full retained paint and
+  replace row GPUI icon elements with retained image painting. Root cause:
+  moving the default from chrome to text would still leave Places icons as GPUI
+  `img()` row children, which is not the Dolphin-style model/controller/painter
+  split. Implementation: `places_row_visual_policy()` now defaults to
+  `CustomFull`; the Places visual layer owns a keyed `PlacesIconImageCache` that
+  uses GPUI `RetainAllImageCache` plus `window.paint_image()` for real theme
+  icons, with stable fallback during pending/failed loads. Evidence:
+  `/tmp/fika-places-default-full-targets-scale.log` passes
+  `--expect-custom-row-full-policy` with `visual_kinds=full`, `text_gpui=0`,
+  `icon_gpui=0`, `max_total=2247us`, and warm row paint `395us`.
+  `/tmp/fika-places-default-full-overflow.log` passes the overflow full gate;
+  at 75 policy rows, viewport event hitboxes are clipped to `32`,
+  `max_total=2162us`, and warm row paint is `655us`. Cold row paint still
+  includes first-use image-atlas/text cost (targets `5179us`, overflow
+  `8263us`), so the next step is cold-frame prewarm or amortization, but default
+  Places row text and icons no longer depend on GPUI child elements.
 
 ## Acceptance Gates
 

@@ -1,14 +1,16 @@
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
 use gpui::{
-    App, Bounds, Font, IntoElement, Pixels, SharedString, Styled, TextAlign, TextRun, WeakEntity,
-    Window, canvas, fill, point, px, rgb, rgba, size,
+    App, Bounds, Corners, Entity, Font, IntoElement, Pixels, RenderImage, Resource,
+    RetainAllImageCache, SharedString, Styled, TextAlign, TextRun, WeakEntity, Window, canvas,
+    fill, point, px, rgb, rgba, size,
 };
 
 use crate::FikaApp;
-use crate::ui::icons::FileIconSnapshot;
+use crate::ui::icons::{FileIconSnapshot, RetainedThemeIconImageCache, ThemeIconImageKey};
 
 use super::perf::{
     PlacesRowTextShapeCachePerfLog, PlacesRowTextShapeCacheStats, PlacesRowVisualPerfLog,
@@ -30,6 +32,7 @@ const INSERT_INDICATOR_HEIGHT: f32 = 2.0;
 pub(super) fn places_row_visual_layer(
     places: Arc<[PlaceSnapshot]>,
     app: WeakEntity<FikaApp>,
+    icon_cache: Option<Entity<PlacesIconImageCache>>,
     paint_text: bool,
     warm_text_shapes: bool,
     paint_icon: bool,
@@ -44,6 +47,7 @@ pub(super) fn places_row_visual_layer(
                 rows.as_ref(),
                 total_rows,
                 app.clone(),
+                icon_cache.clone(),
                 paint_text,
                 warm_text_shapes,
                 paint_icon,
@@ -117,6 +121,8 @@ impl PlaceRowVisualState {
 
 #[derive(Clone)]
 struct PlaceRowIconVisualState {
+    icon_name: Arc<str>,
+    path: Option<Arc<Path>>,
     marker: SharedString,
     fallback_fg: u32,
     fallback_bg: u32,
@@ -125,6 +131,8 @@ struct PlaceRowIconVisualState {
 impl PlaceRowIconVisualState {
     fn from_icon(icon: &FileIconSnapshot, active: bool) -> Self {
         Self {
+            icon_name: icon.icon_name.clone(),
+            path: icon.path.clone(),
             marker: SharedString::from(icon.fallback_marker.as_ref()),
             fallback_fg: if active { 0x1f4fbf } else { icon.fallback_fg },
             fallback_bg: if active { 0xeaf1ff } else { icon.fallback_bg },
@@ -144,6 +152,47 @@ struct PlaceRowVisualPaintState {
     line: Option<Arc<gpui::ShapedLine>>,
     line_height: Pixels,
     paint_icon: bool,
+    icon_image: Option<Arc<RenderImage>>,
+}
+
+#[derive(Default)]
+pub(crate) struct PlacesIconImageCache {
+    image_cache: Option<Entity<RetainAllImageCache>>,
+    retained_theme_icons: RetainedThemeIconImageCache<Arc<RenderImage>>,
+}
+
+impl PlacesIconImageCache {
+    fn load_icon_or_retained(
+        &mut self,
+        icon: &PlaceRowIconVisualState,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Option<Arc<RenderImage>> {
+        let Some(path) = icon.path.clone() else {
+            return None;
+        };
+        let key = ThemeIconImageKey::new(
+            icon.icon_name.clone(),
+            ICON_SIZE.round() as u32,
+            window.scale_factor(),
+        );
+        let image_cache = self
+            .image_cache
+            .get_or_insert_with(|| RetainAllImageCache::new(cx))
+            .clone();
+        let load_result = image_cache.update(cx, |cache, cx| {
+            cache.load(&Resource::Path(path.clone()), window, cx)
+        });
+        match load_result {
+            Some(Ok(image)) => {
+                self.retained_theme_icons
+                    .record_loaded(key, path, image)
+                    .image
+            }
+            Some(Err(_)) => self.retained_theme_icons.record_failed(key, path).image,
+            None => self.retained_theme_icons.record_pending(key, path).image,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -195,6 +244,7 @@ fn places_row_visual_prepaint(
     rows: &[PlaceRowVisualState],
     total_rows: usize,
     app: WeakEntity<FikaApp>,
+    icon_cache: Option<Entity<PlacesIconImageCache>>,
     paint_text: bool,
     warm_text_shapes: bool,
     paint_icon: bool,
@@ -212,6 +262,7 @@ fn places_row_visual_prepaint(
                 warm_text_shapes,
                 paint_icon,
                 &app,
+                icon_cache.as_ref(),
                 window,
                 cx,
             )
@@ -255,6 +306,7 @@ fn place_row_visual_prepaint(
     warm_text_shapes: bool,
     paint_icon: bool,
     app: &WeakEntity<FikaApp>,
+    icon_cache: Option<&Entity<PlacesIconImageCache>>,
     window: &mut Window,
     cx: &mut App,
 ) -> PlaceRowVisualPaintState {
@@ -280,11 +332,21 @@ fn place_row_visual_prepaint(
         .ok()
         .unwrap_or_else(|| Arc::new(shape_place_row_visual_text(&key, window)))
     });
+    let icon_image = if paint_icon {
+        icon_cache.and_then(|cache| {
+            cache.update(cx, |cache, cx| {
+                cache.load_icon_or_retained(&input.icon, window, cx)
+            })
+        })
+    } else {
+        None
+    };
     PlaceRowVisualPaintState {
         input,
         line: paint_text.then_some(line).flatten(),
         line_height: px(20.0),
         paint_icon,
+        icon_image,
     }
 }
 
@@ -339,7 +401,7 @@ fn paint_place_row_visual(
             ),
             size(px(ICON_SIZE), px(ICON_SIZE)),
         );
-        paint_place_row_visual_icon(icon_bounds, &input.icon, window);
+        paint_place_row_visual_icon(icon_bounds, &input.icon, state.icon_image.as_ref(), window);
     }
 
     if let Some(line) = &state.line {
@@ -414,8 +476,20 @@ fn paint_place_row_visual(
 fn paint_place_row_visual_icon(
     icon_bounds: Bounds<Pixels>,
     icon: &PlaceRowIconVisualState,
+    image: Option<&Arc<RenderImage>>,
     window: &mut Window,
 ) {
+    if let Some(image) = image
+        && image.frame_count() > 0
+        && u32::from(image.size(0).width) > 0
+        && u32::from(image.size(0).height) > 0
+    {
+        window
+            .paint_image(icon_bounds, Corners::all(px(6.0)), image.clone(), 0, false)
+            .ok();
+        return;
+    }
+
     window.paint_quad(fill(icon_bounds, rgb(icon.fallback_bg)).corner_radii(px(6.0)));
     match icon.marker.as_ref() {
         "T" => paint_place_trash_icon(icon_bounds, icon.fallback_fg, window),
