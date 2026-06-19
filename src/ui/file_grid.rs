@@ -69,9 +69,9 @@ pub(crate) use viewport::{
     pane_at_window_position,
 };
 
+use crate::ui::retained::TextShapeCacheStats;
 use style::{
-    ItemTileTextAlignment, TextShapeCacheStats, details_row_background, item_identity_element_id,
-    item_tile_background,
+    ItemTileTextAlignment, details_row_background, item_identity_element_id, item_tile_background,
 };
 
 use paint_slots::ItemPaintContent;

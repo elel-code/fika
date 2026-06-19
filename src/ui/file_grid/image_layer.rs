@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::env;
-use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -8,17 +7,17 @@ use std::sync::OnceLock;
 use fika_core::{ItemLayout, PaneId, ViewRect};
 use gpui::prelude::*;
 use gpui::{
-    App, Bounds, Context, Corners, Element, ElementId, Entity, FontWeight, GlobalElementId,
-    InspectorElementId, IntoElement, LayoutId, ObjectFit, Pixels, RenderImage, Resource,
-    RetainAllImageCache, SharedString, Style, StyleRefinement, Styled, TextAlign, TextRun,
-    WeakEntity, Window, fill, point, px, rgb, size,
+    App, Bounds, Context, Corners, Element, ElementId, FontWeight, GlobalElementId,
+    InspectorElementId, IntoElement, LayoutId, ObjectFit, Pixels, RenderImage, SharedString, Style,
+    StyleRefinement, Styled, TextAlign, TextRun, WeakEntity, Window, fill, point, px, rgb, size,
 };
 
 use crate::FikaApp;
 use crate::ui::icons::{
-    EvictedThemeIconImage, FileIconSnapshot, RetainedThemeIconImageLoadOutcome, ThemeIconImageKey,
-    ThemeIconImageReadinessSnapshot, theme_icon_image_key_for_snapshot, theme_icon_image_size_px,
+    FileIconSnapshot, ThemeIconImageKey, ThemeIconImageReadinessSnapshot,
+    theme_icon_image_key_for_snapshot, theme_icon_image_size_px,
 };
+use crate::ui::retained::{RetainedImageLayerState, RetainedImageLoadOutcome, env_flag_is_truthy};
 
 use super::ITEM_NAME_LINE_HEIGHT;
 use super::paint_slots::ItemPaintSnapshot;
@@ -28,8 +27,6 @@ use super::renderer_policy::{
 };
 use super::text::static_paint_single_line_text;
 use super::{FileGridRenderSnapshot, ItemImageSourcePerfStats};
-
-const THEME_ICON_PIXMAP_CACHE_LIMIT_KB: usize = 10 * 1024;
 
 pub(super) fn item_image_layer_view(
     pane_id: PaneId,
@@ -325,259 +322,6 @@ fn item_image_theme_icon_size_px(item: &ItemImageLayerItem) -> u32 {
     theme_icon_image_size_px(item.layout.icon_rect.width, item.layout.icon_rect.height)
 }
 
-pub(super) struct RetainedImageLayerState {
-    image_cache: Entity<RetainAllImageCache>,
-    retained_thumbnails: HashMap<Arc<Path>, Arc<RenderImage>>,
-}
-
-pub(super) struct RetainedImageLoad {
-    image: Option<Arc<RenderImage>>,
-    outcome: RetainedImageLoadOutcome,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum RetainedImageLoadOutcome {
-    CacheReady { first_ready: bool },
-    Retained,
-    Missing,
-}
-
-impl RetainedImageLayerState {
-    pub(super) fn new(cx: &mut App) -> Self {
-        Self {
-            image_cache: RetainAllImageCache::new(cx),
-            retained_thumbnails: HashMap::new(),
-        }
-    }
-
-    fn load_thumbnail_or_retained_with_outcome(
-        &mut self,
-        source_path: Arc<Path>,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> RetainedImageLoad {
-        let resource = Resource::Path(source_path.clone());
-        let load_result = self
-            .image_cache
-            .update(cx, |cache, cx| cache.load(&resource, window, cx));
-        match load_result {
-            Some(Ok(image)) => {
-                let first_ready = !self.retained_thumbnails.contains_key(&source_path);
-                self.retained_thumbnails.insert(source_path, image.clone());
-                RetainedImageLoad {
-                    image: Some(image),
-                    outcome: RetainedImageLoadOutcome::CacheReady { first_ready },
-                }
-            }
-            _ => {
-                let image = self.retained_thumbnails.get(&source_path).cloned();
-                let outcome = if image.is_some() {
-                    RetainedImageLoadOutcome::Retained
-                } else {
-                    RetainedImageLoadOutcome::Missing
-                };
-                RetainedImageLoad { image, outcome }
-            }
-        }
-    }
-
-    pub(super) fn load_theme_icon_or_retained(
-        &mut self,
-        source_path: Arc<Path>,
-        key: ThemeIconImageKey,
-        app: &WeakEntity<FikaApp>,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> Option<Arc<RenderImage>> {
-        self.load_theme_icon_or_retained_with_outcome(source_path, key, app, window, cx)
-            .image
-    }
-
-    fn load_theme_icon_or_retained_with_outcome(
-        &mut self,
-        source_path: Arc<Path>,
-        key: ThemeIconImageKey,
-        app: &WeakEntity<FikaApp>,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> RetainedImageLoad {
-        if let Ok(Some(retained)) = app.update(cx, |this, cx| {
-            this.load_retained_or_sync_svg_theme_icon(
-                source_path.clone(),
-                key.clone(),
-                cx,
-                Some(window),
-            )
-        }) {
-            self.prune_retained_theme_icon_images(app, window, cx);
-            return retained;
-        }
-
-        let resource = Resource::Path(source_path.clone());
-        let load_result = self
-            .image_cache
-            .update(cx, |cache, cx| cache.load(&resource, window, cx));
-        let load = app
-            .update(cx, |this, _cx| {
-                this.record_theme_icon_resource_load_result(
-                    source_path,
-                    key,
-                    load_result,
-                    window,
-                    _cx,
-                )
-            })
-            .unwrap_or(RetainedImageLoad {
-                image: None,
-                outcome: RetainedImageLoadOutcome::Missing,
-            });
-        self.prune_retained_theme_icon_images(app, window, cx);
-        load
-    }
-
-    fn prune_retained_theme_icon_images(
-        &mut self,
-        app: &WeakEntity<FikaApp>,
-        window: &mut Window,
-        cx: &mut App,
-    ) {
-        let evicted = app
-            .update(cx, |this, cx| {
-                this.prune_retained_theme_icon_images(Some(window), cx)
-            })
-            .unwrap_or_default();
-        for evicted in evicted {
-            if let Some(path) = evicted.resolved_path {
-                let resource = Resource::Path(Arc::<Path>::from(path.into_boxed_path()));
-                self.image_cache
-                    .update(cx, |cache, cx| cache.remove(&resource, window, cx));
-            }
-            cx.drop_image(evicted.image, Some(window));
-        }
-    }
-}
-
-fn render_image_cache_cost_bytes(image: &Arc<RenderImage>) -> usize {
-    (0..image.frame_count())
-        .filter_map(|frame_index| image.as_bytes(frame_index).map(|bytes| bytes.len()))
-        .sum::<usize>()
-        .max(1)
-}
-
-fn theme_icon_pixmap_cache_limit_bytes() -> usize {
-    THEME_ICON_PIXMAP_CACHE_LIMIT_KB * 1024
-}
-
-impl Default for RetainedImageLoad {
-    fn default() -> Self {
-        Self {
-            image: None,
-            outcome: RetainedImageLoadOutcome::Missing,
-        }
-    }
-}
-
-fn is_svg_icon_path(path: &Path) -> bool {
-    path.extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("svg"))
-}
-
-fn load_svg_theme_icon_sync(path: &Path, cx: &mut App) -> Option<Arc<RenderImage>> {
-    let bytes = fs::read(path).ok()?;
-    cx.svg_renderer().render_single_frame(&bytes, 1.0).ok()
-}
-
-impl FikaApp {
-    fn load_retained_or_sync_svg_theme_icon(
-        &mut self,
-        source_path: Arc<Path>,
-        key: ThemeIconImageKey,
-        cx: &mut App,
-        window: Option<&mut Window>,
-    ) -> Option<RetainedImageLoad> {
-        if let Some(image) = self.theme_icon_images.image_for_key(&key) {
-            return Some(RetainedImageLoad {
-                image: Some(image),
-                outcome: RetainedImageLoadOutcome::Retained,
-            });
-        }
-
-        if !is_svg_icon_path(source_path.as_ref()) {
-            return None;
-        }
-
-        if let Some(image) = self
-            .theme_icon_images
-            .image_for_source_path(source_path.as_ref())
-        {
-            let retained =
-                self.theme_icon_images
-                    .record_loaded_from_retained_source(key, source_path, image);
-            return Some(RetainedImageLoad {
-                image: retained.image,
-                outcome: retained_theme_icon_load_outcome(retained.outcome),
-            });
-        }
-
-        let image = load_svg_theme_icon_sync(source_path.as_ref(), cx)?;
-        let retained = self
-            .theme_icon_images
-            .record_loaded(key, source_path, image);
-        if window.is_none() {
-            let _ = self.prune_retained_theme_icon_images(None, cx);
-        }
-        Some(RetainedImageLoad {
-            image: retained.image,
-            outcome: retained_theme_icon_load_outcome(retained.outcome),
-        })
-    }
-
-    fn record_theme_icon_resource_load_result(
-        &mut self,
-        source_path: Arc<Path>,
-        key: ThemeIconImageKey,
-        load_result: Option<Result<Arc<RenderImage>, gpui::ImageCacheError>>,
-        _window: &mut Window,
-        _cx: &mut App,
-    ) -> RetainedImageLoad {
-        let retained = match load_result {
-            Some(Ok(image)) => self
-                .theme_icon_images
-                .record_loaded(key, source_path, image),
-            Some(Err(_)) => self.theme_icon_images.record_failed(key, source_path),
-            None => self.theme_icon_images.record_pending(key, source_path),
-        };
-        RetainedImageLoad {
-            image: retained.image,
-            outcome: retained_theme_icon_load_outcome(retained.outcome),
-        }
-    }
-
-    fn prune_retained_theme_icon_images(
-        &mut self,
-        _window: Option<&mut Window>,
-        _cx: &mut App,
-    ) -> Vec<EvictedThemeIconImage<Arc<RenderImage>>> {
-        self.theme_icon_images.prune_to_budget(
-            theme_icon_pixmap_cache_limit_bytes(),
-            render_image_cache_cost_bytes,
-        )
-    }
-}
-
-fn retained_theme_icon_load_outcome(
-    outcome: RetainedThemeIconImageLoadOutcome,
-) -> RetainedImageLoadOutcome {
-    match outcome {
-        RetainedThemeIconImageLoadOutcome::Loaded { first_ready } => {
-            RetainedImageLoadOutcome::CacheReady { first_ready }
-        }
-        RetainedThemeIconImageLoadOutcome::Retained { .. } => RetainedImageLoadOutcome::Retained,
-        RetainedThemeIconImageLoadOutcome::Missing { .. } => RetainedImageLoadOutcome::Missing,
-    }
-}
-
 pub(super) struct ItemImageLayerElement {
     pane_id: PaneId,
     app: WeakEntity<FikaApp>,
@@ -863,11 +607,6 @@ fn theme_icon_prewarm_enabled() -> bool {
     *ENABLED.get_or_init(|| {
         env::var("FIKA_PREWARM_THEME_ICONS").is_ok_and(|value| env_flag_is_truthy(&value))
     })
-}
-
-fn env_flag_is_truthy(value: &str) -> bool {
-    let normalized = value.trim().to_ascii_lowercase();
-    !normalized.is_empty() && normalized != "0" && normalized != "false" && normalized != "no"
 }
 
 fn item_image_marker_fallback_prepaint(

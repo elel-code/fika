@@ -7,20 +7,6 @@ pub(super) enum ItemTileTextAlignment {
     Center,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(super) struct TextShapeCacheStats {
-    pub(super) hits: usize,
-    pub(super) misses: usize,
-    pub(super) evicted: usize,
-    pub(super) entries: usize,
-}
-
-impl TextShapeCacheStats {
-    pub(super) fn has_activity(self) -> bool {
-        self.hits > 0 || self.misses > 0 || self.evicted > 0
-    }
-}
-
 pub(super) fn item_identity_element_id(
     prefix: &'static str,
     item_id: ItemId,

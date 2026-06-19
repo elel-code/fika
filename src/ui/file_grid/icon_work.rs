@@ -4,6 +4,7 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use crate::ui::icons::{FileIconCache, FileIconResolveCoverKey, FileIconResolveRequest};
+use crate::ui::retained::env_flag_is_truthy;
 
 use super::snapshot::RawFileGridSnapshot;
 
@@ -189,11 +190,6 @@ fn debug_icon_sync_enabled() -> bool {
     *ENABLED.get_or_init(|| {
         env::var("FIKA_DEBUG_ICON_SYNC").is_ok_and(|value| env_flag_is_truthy(&value))
     })
-}
-
-fn env_flag_is_truthy(value: &str) -> bool {
-    let normalized = value.trim().to_ascii_lowercase();
-    !normalized.is_empty() && normalized != "0" && normalized != "false" && normalized != "no"
 }
 
 #[cfg(test)]

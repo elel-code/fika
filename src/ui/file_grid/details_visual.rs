@@ -13,11 +13,12 @@ use crate::FikaApp;
 use crate::ui::icons::{
     FileIconSnapshot, theme_icon_image_key_for_snapshot, theme_icon_image_size_px,
 };
+use crate::ui::retained::RetainedImageLayerState;
 
 use super::details::{DetailsColumn, DetailsColumnKind};
 use super::image_layer::{
-    ItemImageFallbackPaintState, RetainedImageLayerState, paint_item_image_fallback,
-    paint_theme_icon_image, theme_icon_placeholder_fallback,
+    ItemImageFallbackPaintState, paint_item_image_fallback, paint_theme_icon_image,
+    theme_icon_placeholder_fallback,
 };
 use super::paint_slots::DetailsPaintSnapshot;
 use super::renderer_policy::{DetailsRowVisualRenderer, details_row_renderer_policy};

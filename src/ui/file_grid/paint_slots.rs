@@ -6,32 +6,13 @@ use fika_core::{ItemId, ItemLayout};
 use gpui::SharedString;
 
 use crate::ui::icons::FileIconSnapshot;
+use crate::ui::retained::RetainedSlotStats;
 
 use super::details::{DetailsItemSnapshot, DetailsLayoutMetrics};
 use super::snapshot::VisibleItemSnapshot;
 use super::{FileGridRenderSnapshot, FileGridSnapshot};
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct ItemPaintSlotStats {
-    pub(crate) inserted: usize,
-    pub(crate) content_changed: usize,
-    pub(crate) geometry_changed: usize,
-    pub(crate) visual_changed: usize,
-    pub(crate) unchanged: usize,
-    pub(crate) removed: usize,
-    pub(crate) entries: usize,
-}
-
-impl ItemPaintSlotStats {
-    pub(crate) fn has_activity(self) -> bool {
-        self.inserted > 0
-            || self.content_changed > 0
-            || self.geometry_changed > 0
-            || self.visual_changed > 0
-            || self.unchanged > 0
-            || self.removed > 0
-    }
-}
+pub(crate) type ItemPaintSlotStats = RetainedSlotStats;
 
 #[derive(Default)]
 pub(crate) struct ItemPaintSlotCache {

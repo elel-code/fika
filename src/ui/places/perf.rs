@@ -1,6 +1,8 @@
 use std::env;
 use std::time::Duration;
 
+use crate::ui::retained::{TextShapeCacheStats, env_flag_is_truthy};
+
 use super::PlaceSnapshot;
 use super::paint_slots::PlacePaintSlotPerfLog;
 
@@ -71,13 +73,6 @@ pub(crate) fn places_row_visual_policy() -> PlacesRowVisualPolicy {
 
 pub(crate) fn places_row_visual_handoff_enabled() -> bool {
     env::var(PLACES_ROW_VISUAL_HANDOFF_ENV).is_ok_and(|value| env_flag_is_truthy(&value))
-}
-
-pub(crate) fn env_flag_is_truthy(value: &str) -> bool {
-    matches!(
-        value.trim().to_ascii_lowercase().as_str(),
-        "1" | "true" | "yes" | "on"
-    )
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -300,19 +295,7 @@ pub(crate) fn emit_places_row_visual_perf_log(log: PlacesRowVisualPerfLog) {
     );
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct PlacesRowTextShapeCacheStats {
-    pub(crate) hits: usize,
-    pub(crate) misses: usize,
-    pub(crate) evicted: usize,
-    pub(crate) entries: usize,
-}
-
-impl PlacesRowTextShapeCacheStats {
-    pub(crate) fn has_activity(self) -> bool {
-        self.hits > 0 || self.misses > 0 || self.evicted > 0
-    }
-}
+pub(crate) type PlacesRowTextShapeCacheStats = TextShapeCacheStats;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PlacesRowTextShapeCachePerfLog {

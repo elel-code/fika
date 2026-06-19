@@ -1,6 +1,8 @@
 use std::env;
 use std::sync::OnceLock;
 
+use crate::ui::retained::env_flag_is_truthy;
+
 use super::{DetailsPaintSnapshot, ItemPaintContent, ItemPaintSnapshot};
 
 const CUSTOM_THEME_ICONS_ENV: &str = "FIKA_CUSTOM_THEME_ICONS";
@@ -305,11 +307,6 @@ fn force_gpui_theme_icons_enabled() -> bool {
     *ENABLED.get_or_init(|| {
         env::var(GPUI_THEME_ICONS_ENV).is_ok_and(|value| env_flag_is_truthy(&value))
     })
-}
-
-fn env_flag_is_truthy(value: &str) -> bool {
-    let normalized = value.trim().to_ascii_lowercase();
-    !normalized.is_empty() && normalized != "0" && normalized != "false" && normalized != "no"
 }
 
 #[cfg(test)]

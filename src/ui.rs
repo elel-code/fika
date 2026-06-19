@@ -16,6 +16,7 @@ pub(crate) mod place_draft;
 pub(crate) mod places;
 pub(crate) mod properties_dialog;
 pub(crate) mod rename;
+pub(crate) mod retained;
 pub(crate) mod rubber_band;
 pub(crate) mod shortcuts;
 pub(crate) mod status_bar;
