@@ -34,13 +34,13 @@ pub(super) fn places_row_visual_layer(
     warm_text_shapes: bool,
     paint_icon: bool,
 ) -> impl IntoElement {
-    let rows = place_row_visual_layer_rows(&places);
+    let rows = Arc::new(place_row_visual_layer_rows(&places));
     let total_rows = rows.len();
     let height = places_row_visual_content_height(&places).max(1.0);
     canvas(
         move |bounds, window, cx| {
             places_row_visual_prepaint(
-                rows.clone(),
+                rows.as_ref(),
                 total_rows,
                 app.clone(),
                 paint_text,
@@ -191,7 +191,7 @@ impl PlacesRowTextShapeCache {
 }
 
 fn places_row_visual_prepaint(
-    rows: Vec<PlaceRowVisualState>,
+    rows: &[PlaceRowVisualState],
     total_rows: usize,
     app: WeakEntity<FikaApp>,
     paint_text: bool,
@@ -229,7 +229,7 @@ fn places_row_visual_prepaint(
 }
 
 fn visible_place_row_visuals(
-    rows: Vec<PlaceRowVisualState>,
+    rows: &[PlaceRowVisualState],
     layer_bounds: Bounds<Pixels>,
     content_mask_bounds: Bounds<Pixels>,
 ) -> Vec<PlaceRowVisualState> {
@@ -242,8 +242,9 @@ fn visible_place_row_visuals(
         .as_f32()
         .max(0.0);
     let visible_bottom = visible_top + visible_bounds.size.height.as_f32().max(0.0);
-    rows.into_iter()
+    rows.iter()
         .filter(|row| row.intersects_y_range(visible_top, visible_bottom))
+        .cloned()
         .collect()
 }
 
@@ -591,7 +592,7 @@ mod tests {
         let layer_bounds = Bounds::new(point(px(10.0), px(20.0)), size(px(200.0), px(150.0)));
         let content_mask_bounds = Bounds::new(point(px(10.0), px(50.0)), size(px(200.0), px(60.0)));
 
-        let visible = visible_place_row_visuals(rows, layer_bounds, content_mask_bounds);
+        let visible = visible_place_row_visuals(&rows, layer_bounds, content_mask_bounds);
 
         assert_eq!(visible.len(), 2);
         assert_eq!(visible[0].label.as_ref(), "Place 1");
