@@ -83,6 +83,16 @@ impl DetailsTextShapeCache {
     pub(super) fn take_glyph_stats(&mut self) -> TextShapeCacheStats {
         self.glyph_cache.take_stats()
     }
+
+    pub(super) fn begin_retention_frame(&mut self) {
+        self.cache.begin_retention_frame();
+        self.glyph_cache.begin_retention_frame();
+    }
+
+    pub(super) fn finish_retention_frame(&mut self) {
+        self.cache.finish_retention_frame();
+        self.glyph_cache.finish_retention_frame();
+    }
 }
 
 impl Default for DetailsTextShapeCache {
@@ -338,6 +348,9 @@ impl Element for DetailsVisualLayerElement {
         window: &mut Window,
         cx: &mut App,
     ) -> Self::PrepaintState {
+        let _ = self.app.update(cx, |this, _cx| {
+            this.begin_details_text_shape_cache_retention_frame(self.pane_id);
+        });
         let perf_started = super::item_view_perf_enabled().then(std::time::Instant::now);
         let mut glyph_budget = GlyphRasterMissBudget::visible();
         let (header, rows) = if let Some(id) = id {
@@ -425,6 +438,9 @@ impl Element for DetailsVisualLayerElement {
                 }
             });
         }
+        let _ = self.app.update(cx, |this, _cx| {
+            this.finish_details_text_shape_cache_retention_frame(self.pane_id);
+        });
         DetailsVisualLayerPaintState { header, rows }
     }
 

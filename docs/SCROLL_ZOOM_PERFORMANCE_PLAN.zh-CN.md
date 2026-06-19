@@ -23,6 +23,9 @@
 - 当后台图标解析完成时，可见 item snapshot 缓存被失效，以便在下一帧替换初步 fallback 图标。
 - 缩略图和主题图标图片的 pending/failure 状态不再必须直接降级到 fallback。Compact/Icons 和 Details 维护一个 pane 本地 retained 图片映射：MIME/主题图标按 `iconName` 保留，缩略图按精确缩略图路径保留。因此缩放级别的路径变化可以在 GPUI 解码新资源期间继续绘制前一张真实的 MIME 图标，匹配 Dolphin 的 `KStandardItemListWidget::m_pixmap` 行为。当从未对该语义源解码过真实图片时，仍使用 fallback。
 - 预读条目保留在 raw/render snapshot 中用于调度器投影和缓存保留，但它们不再进入静态视觉或图片 prepaint。这匹配 Dolphin 的拆分：`KItemListView` 绘制可见 widget，`KFileItemModelRolesUpdater::indexesToResolve()` 处理 paint 帧外的预读角色工作。
+- 静态 item 和 Details 的文本/字形缓存现在只保留当前 paint 帧触达的条目。这个边界对齐 Dolphin 的 `KItemListView`
+  `doLayout()`：可见 widget 只为 `firstVisibleIndex..lastVisibleIndex` 创建或复用，而预读仍留在
+  `KFileItemModelRolesUpdater::indexesToResolve()`，避免滚过 `/etc` 这类大目录后把陈旧 paint-cache 条目长期驻留。
 - 缩放精确尺寸主题图标未命中时，复用同文件图标类型已经解析出的稳定 theme path，并且不再为新尺寸排队另一个 exact-size path 请求。这镜像了 Dolphin 的视觉稳定性行为：不要仅因为新缩放级别改变了图标边界，就把真实可见图标替换为 fallback 标记或提交第二个 image identity。
 - 活动缩放现在镜像 Dolphin 的普通主题图标 paint 路径。Item layout 和 icon bounds 立即变更；一旦同一文件图标类型已有 resolved theme path，文件图标 role/path identity 保持稳定。Dolphin 的 300ms `triggerIconSizeUpdate()` timer 被视为 preview/role-updater 边界，而不是 Fika 主题图标的延迟第二次尺寸或路径提交。
 - 图片 paint 层现在在路径解析后也应用相同规则：如果 GPUI `RetainAllImageCache::load()` 返回新图标路径的 pending/error，painter 首先尝试同 MIME 图标名称的 retained 图片。这避免了滚动或缩放图片支持的 MIME 图标时出现的概率性 fallback 闪烁。
@@ -64,6 +67,12 @@ before queued/pending skip:
 
 after queued/pending skip:
   icon_sync=173us, geometry-change max_total=1635us
+
+2026-06-20 retained 文本/字形缓存保留策略，`/etc` zoom-scroll:
+  item_shape max_entries=64 evicted=104
+  item_glyph max_entries=64 evicted=358
+  icon_sync max_total=37us, warm_custom_paint max_paint=1323us
+  debug smaps_rollup sample: Private_Dirty=53960 kB
 ```
 
 回退防护：

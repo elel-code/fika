@@ -76,12 +76,17 @@ pub(crate) fn file_grid(
                             theme_icon_handoff_ready,
                         )
                     });
+                let warm_static_visual_layer =
+                    warm_static_visual_snapshot.as_ref().and_then(|snapshot| {
+                        static_item_visual_warm_layer_view(pane_id, snapshot, app.clone())
+                    });
                 let static_visual_layer = static_item_visual_layer_view(
                     pane_id,
                     &items,
                     content_size.width,
                     content_size.height,
                     ItemTileTextAlignment::Center,
+                    true,
                     app.clone(),
                 );
                 let image_layer = item_image_layer_view(
@@ -105,10 +110,6 @@ pub(crate) fn file_grid(
                     .relative()
                     .w(px(content_size.width))
                     .h(px(content_size.height));
-                let warm_static_visual_layer =
-                    warm_static_visual_snapshot.as_ref().and_then(|snapshot| {
-                        static_item_visual_warm_layer_view(pane_id, snapshot, app.clone())
-                    });
                 let content = if let Some(layer) = static_visual_layer {
                     content.child(layer)
                 } else {
@@ -177,12 +178,17 @@ pub(crate) fn file_grid(
                             theme_icon_handoff_ready,
                         )
                     });
+                let warm_static_visual_layer =
+                    warm_static_visual_snapshot.as_ref().and_then(|snapshot| {
+                        static_item_visual_warm_layer_view(pane_id, snapshot, app.clone())
+                    });
                 let static_visual_layer = static_item_visual_layer_view(
                     pane_id,
                     &items,
                     content_size.width,
                     content_size.height,
                     ItemTileTextAlignment::Start,
+                    true,
                     app.clone(),
                 );
                 let image_layer = item_image_layer_view(
@@ -206,10 +212,6 @@ pub(crate) fn file_grid(
                     .relative()
                     .w(px(content_size.width))
                     .h(px(content_size.height));
-                let warm_static_visual_layer =
-                    warm_static_visual_snapshot.as_ref().and_then(|snapshot| {
-                        static_item_visual_warm_layer_view(pane_id, snapshot, app.clone())
-                    });
                 let content = if let Some(layer) = static_visual_layer {
                     content.child(layer)
                 } else {

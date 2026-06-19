@@ -688,6 +688,32 @@ impl FikaApp {
         self.item_view_perf.clear_layer_stats(pane_id);
     }
 
+    pub(super) fn begin_static_item_text_shape_cache_retention_frame(&mut self, pane_id: PaneId) {
+        self.static_item_text_shape_caches
+            .entry(pane_id)
+            .or_default()
+            .begin_retention_frame();
+    }
+
+    pub(super) fn begin_details_text_shape_cache_retention_frame(&mut self, pane_id: PaneId) {
+        self.details_text_shape_caches
+            .entry(pane_id)
+            .or_default()
+            .begin_retention_frame();
+    }
+
+    pub(super) fn finish_static_item_text_shape_cache_retention_frame(&mut self, pane_id: PaneId) {
+        if let Some(cache) = self.static_item_text_shape_caches.get_mut(&pane_id) {
+            cache.finish_retention_frame();
+        }
+    }
+
+    pub(super) fn finish_details_text_shape_cache_retention_frame(&mut self, pane_id: PaneId) {
+        if let Some(cache) = self.details_text_shape_caches.get_mut(&pane_id) {
+            cache.finish_retention_frame();
+        }
+    }
+
     pub(super) fn take_static_item_text_shape_cache_stats(
         &mut self,
         pane_id: PaneId,

@@ -49,6 +49,13 @@ the render frame.
   This matches Dolphin's split where `KItemListView` paints visible widgets and
   `KFileItemModelRolesUpdater::indexesToResolve()` handles read-ahead role
   work outside the paint frame.
+- Static item and Details text/glyph caches now retain only entries touched by
+  the current paint frame. The boundary follows Dolphin's `KItemListView`
+  `doLayout()` behavior: visible widgets are created or recycled for
+  `firstVisibleIndex..lastVisibleIndex`, while read-ahead remains in
+  `KFileItemModelRolesUpdater::indexesToResolve()` rather than keeping stale
+  paint-cache entries resident after scrolling through large directories such
+  as `/etc`.
 - Zoom exact-size theme-icon misses now reuse an already resolved icon path for
   the same file-icon kind and do not enqueue another exact-size path request.
   This mirrors Dolphin's visual-stability behavior: do not replace a real
@@ -139,6 +146,12 @@ before queued/pending skip:
 
 after queued/pending skip:
   icon_sync=173us, geometry-change max_total=1635us
+
+2026-06-20 retained text/glyph cache retention, `/etc` zoom-scroll:
+  item_shape max_entries=64 evicted=104
+  item_glyph max_entries=64 evicted=358
+  icon_sync max_total=37us, warm_custom_paint max_paint=1323us
+  debug smaps_rollup sample: Private_Dirty=53960 kB
 ```
 
 Regression guard:

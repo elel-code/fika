@@ -133,10 +133,10 @@ impl StaticItemTextShapeCache {
     }
 
     fn shape_if_cached(
-        &self,
+        &mut self,
         key: &StaticItemTextShapeCacheKey,
     ) -> Option<Arc<StaticItemTextShapes>> {
-        self.cache.peek(key)
+        self.cache.peek_and_touch(key)
     }
 
     fn glyph_raster_for(
@@ -161,6 +161,16 @@ impl StaticItemTextShapeCache {
     pub(super) fn take_glyph_stats(&mut self) -> TextShapeCacheStats {
         self.glyph_cache.take_stats()
     }
+
+    pub(super) fn begin_retention_frame(&mut self) {
+        self.cache.begin_retention_frame();
+        self.glyph_cache.begin_retention_frame();
+    }
+
+    pub(super) fn finish_retention_frame(&mut self) {
+        self.cache.finish_retention_frame();
+        self.glyph_cache.finish_retention_frame();
+    }
 }
 
 impl Default for StaticItemTextShapeCache {
@@ -178,6 +188,7 @@ pub(super) fn static_item_visual_layer_view(
     width: f32,
     height: f32,
     text_alignment: ItemTileTextAlignment,
+    finish_retention_after_prepaint: bool,
     app: WeakEntity<FikaApp>,
 ) -> Option<StaticItemVisualLayerElement> {
     let items = static_item_visual_layer_items(items, text_alignment);
@@ -187,6 +198,7 @@ pub(super) fn static_item_visual_layer_view(
             app,
             items,
             warm_only: false,
+            finish_retention_after_prepaint,
             style: StyleRefinement::default(),
         }
         .absolute()
@@ -224,6 +236,7 @@ pub(super) fn static_item_visual_warm_layer_view(
             app,
             items,
             warm_only: true,
+            finish_retention_after_prepaint: true,
             style: StyleRefinement::default(),
         }
         .absolute()
@@ -282,6 +295,7 @@ pub(super) struct StaticItemVisualLayerElement {
     app: WeakEntity<FikaApp>,
     items: Vec<StaticItemVisualLayerItem>,
     warm_only: bool,
+    finish_retention_after_prepaint: bool,
     style: StyleRefinement,
 }
 
@@ -331,6 +345,11 @@ impl Element for StaticItemVisualLayerElement {
         window: &mut Window,
         cx: &mut App,
     ) -> Self::PrepaintState {
+        if !self.warm_only {
+            let _ = self.app.update(cx, |this, _cx| {
+                this.begin_static_item_text_shape_cache_retention_frame(self.pane_id);
+            });
+        }
         if self.warm_only {
             let mut glyph_budget = GlyphRasterMissBudget::read_ahead();
             for item in &self.items {
@@ -358,6 +377,11 @@ impl Element for StaticItemVisualLayerElement {
                     if glyph_budget_stats.deferred > 0 {
                         cx.notify();
                     }
+                });
+            }
+            if self.finish_retention_after_prepaint {
+                let _ = self.app.update(cx, |this, _cx| {
+                    this.finish_static_item_text_shape_cache_retention_frame(self.pane_id);
                 });
             }
             return Vec::new();
@@ -403,6 +427,11 @@ impl Element for StaticItemVisualLayerElement {
             let count = states.len();
             let _ = self.app.update(cx, |this, _cx| {
                 this.record_static_item_visual_prepaint(self.pane_id, elapsed, count);
+            });
+        }
+        if self.finish_retention_after_prepaint {
+            let _ = self.app.update(cx, |this, _cx| {
+                this.finish_static_item_text_shape_cache_retention_frame(self.pane_id);
             });
         }
         states
