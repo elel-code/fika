@@ -376,7 +376,7 @@ pub(crate) fn places_sidebar(
     let mut rows = Vec::new();
     let mut current_group = None;
 
-    for (index, place) in places.iter().cloned().enumerate() {
+    for (index, place) in places.iter().enumerate() {
         if current_group != Some(place.group) {
             current_group = Some(place.group);
             if !place.group.is_empty() {

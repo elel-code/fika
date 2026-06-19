@@ -33,7 +33,7 @@ fn place_row_highlight(active: bool, drop_target: bool, insert_target: bool) -> 
 
 pub(super) fn place_row(
     visible_index: usize,
-    place: PlaceSnapshot,
+    place: &PlaceSnapshot,
     row_visual_policy: PlacesRowVisualPolicy,
     force_gpui_text: bool,
     force_gpui_icon: bool,
@@ -46,9 +46,7 @@ pub(super) fn place_row(
     let gpui_text = force_gpui_text || !row_visual_policy.paints_text();
     let gpui_icon = force_gpui_icon || !row_visual_policy.paints_icon();
     let row_id = format!("place-{visible_index}");
-    let path = place.path.clone();
-    let place_drag_source = PlaceDragStartSource::from_snapshot(&place);
-    let context_place = place.clone();
+    let place_drag_source = PlaceDragStartSource::from_snapshot(place);
     let insert_before_index = place.index;
     let insert_after_index = place.index + 1;
     let insert_target = place.insert_before || place.insert_after;
@@ -58,8 +56,6 @@ pub(super) fn place_row(
     let mounted = place.mounted;
     let device = place.device;
     let network = place.network;
-    let device_id = place.device_id.clone();
-    let label = place.label.clone();
 
     let row = div()
         .id(row_id)
@@ -97,6 +93,10 @@ pub(super) fn place_row(
     let mut row = install_place_drag_start_shell(row, place_drag_source);
 
     if row_shell_targeting_enabled {
+        let path = place.path.clone();
+        let device_id = place.device_id.clone();
+        let label = place.label.clone();
+        let context_place = place.clone();
         row = row
             .on_click(cx.listener(move |this, _event, _window, cx| {
                 this.activate_place(
@@ -121,16 +121,17 @@ pub(super) fn place_row(
             );
     }
     let mut row = if row_shell_dnd_enabled {
+        let path = place.path.clone();
         install_place_row_dnd(
             row,
             PlaceRowDndConfig {
                 mounted,
                 insert_before_index,
                 insert_after_index,
-                path_for_internal_target: place.path.clone(),
-                path_for_internal_drop: place.path.clone(),
-                path_for_external_target: place.path.clone(),
-                path_for_external_drop: place.path.clone(),
+                path_for_internal_target: path.clone(),
+                path_for_internal_drop: path.clone(),
+                path_for_external_target: path.clone(),
+                path_for_external_drop: path,
             },
             cx,
         )
