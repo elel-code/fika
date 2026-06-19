@@ -1623,6 +1623,14 @@ tracks.
   --require-retained-dnd-autosmoke` requires it. This guards drag-time target
   isolation in the unattended smoke while the manual `places-dnd-leave` trace
   remains the GUI bounds proof.
+- [x] P16fo: Synchronize top-level Places status after the retained-DnD default.
+  `docs/FULL_RETAINED_RENDERER_ROADMAP.md`,
+  `docs/ITEM_VIEW_CUSTOM_PAINT_STATUS.md`, and
+  `docs/DOLPHIN_RETAINED_RENDERER_ALIGNMENT.md` now describe Places as custom
+  row chrome plus retained row/section target delivery, with only text/icons,
+  the sidebar typed payload bridge, and row drag-start shells remaining on
+  GPUI. The full retained Places gate still requires typed payload and
+  drag-start boundary removal.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

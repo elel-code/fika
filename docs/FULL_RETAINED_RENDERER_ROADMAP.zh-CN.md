@@ -35,7 +35,10 @@
 - Rename 使用 GPUI editor overlay。
 - Compact/Icons MIME/theme icon 默认使用 hybrid renderer：尚未 ready 的 key 继续以
   GPUI `img()` 作为 fallback，ready 的 retained image key 通过 custom image layer 绘制。
-- Places 文本、图标、事件传递、右键菜单、DnD shell 和 drag start 仍是 GPUI。
+- Places 文本/图标仍由 GPUI 渲染。Places row/section activation、context-menu
+  targeting、DnD target lookup、drop dispatch 和 sidebar leave clearing 默认已经通过
+  retained-DnD event layer；仍保留一个 sidebar-level GPUI typed payload bridge 和 row
+  drag-start shell。
 
 这些 bridge 是有意保留的平台或性能边界。只能通过下面的轨道移除。
 
@@ -54,8 +57,10 @@ cache 和 readiness 契约，才能默认替换 GPUI `img()`。
 
 Dolphin Places panel 也是 model/view/delegate 闭环：`DolphinPlacesModel` 拥有
 Places state，`KFilePlacesView` 拥有 interaction delivery。Fika Places renderer 只有在
-row/section hit testing 和 event delivery 都变成 viewport-level retained state，而不是
-per-row GPUI event shell 后，才算 Dolphin-complete。只自绘 row chrome 不是终点。
+row/section hit testing 和 event delivery 都变成 viewport-level retained state，并且剩余
+typed payload / drag-start 平台 bridge 都显式后，才算 Dolphin-complete。默认 retained-DnD
+已经把 row/section GPUI event shell 从 target delivery 中移除；完整 retained Places 仍被单个
+sidebar typed payload bridge 和 drag-start shell 阻挡。只自绘 row chrome 不是终点。
 
 实际结论：
 
@@ -137,10 +142,13 @@ renderer policy。
 
 详细设计：`docs/PLACES_RETAINED_EVENT_DELIVERY_PLAN.zh-CN.md`。
 
-下一步设计：
+当前默认：
 
-- 为 activation、context menu、on-place drop target、insert-before/after、
-  sidebar leave clearing 和 cursor state 添加 retained row/section hitbox delivery。
+- `retained-dnd` 通过 retained Places geometry 拥有 row/section activation、
+  context-menu targeting、on-place drop target、insert-before/after、drop dispatch、
+  sidebar leave clearing 和 cursor state。
+- 仍保留一个 sidebar-level GPUI typed payload bridge，因为 GPUI 仍然只通过 interactive
+  element 暴露 typed drag move/drop payload。
 - 在 Track 4 解锁 retained drag start 前，继续保留 GPUI drag-start shell。
 - 默认 row chrome 继续自绘，文本/图标继续 GPUI。
 

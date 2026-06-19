@@ -77,7 +77,8 @@ surface 还没有形成完整的 Dolphin 风格闭环。
 - Viewport-level hit testing 拥有 hover、cursor、activation target、context-menu target
   和 drop target selection。
 - 一旦 policy 声明完整 retained events，Places row/section shell 不允许再被计为 retained
-  event delivery。
+  event delivery。当前默认 retained-DnD 已经把它们从 target delivery 中移除；剩余 typed
+  payload bridge 单独追踪。
 - Typed drag start 与 event delivery 分开追踪，因为当前 GPUI 把它暴露为平台 bridge。
 
 ## 默认提升规则
@@ -100,7 +101,7 @@ Dolphin 对齐。
 
 1. 用 `scripts/run-retained-renderer-evidence.sh --core` 冻结证据。
 2. 在更改默认 icon renderer 前，完成 MIME/theme icon hybrid 证据。
-3. 在声明完整 Places retained 行为前，完成 Places retained event delivery。
+3. 在声明完整 Places retained 行为前，完成 Places typed payload 和 drag-start 边界工作。
 4. 依赖更新后重新审计 GPUI typed drag-start 支持。
 5. Rename 只有在 editor 行为矩阵具有测试或 runtime smoke 覆盖后才转换。
 6. 每个已接受切片都更新相关 plan/TODO，并单独提交。

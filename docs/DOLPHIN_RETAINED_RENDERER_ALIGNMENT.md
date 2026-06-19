@@ -86,7 +86,9 @@ complete Dolphin-style loop.
 - Viewport-level hit testing owns hover, cursor, activation target, context-menu
   target and drop target selection.
 - Places row/section shells are not allowed to be counted as retained event
-  delivery once the policy claims full retained events.
+  delivery once the policy claims full retained events. Current default
+  retained-DnD has removed them from target delivery; the remaining typed
+  payload bridge is tracked separately.
 - Typed drag start is tracked separately from event delivery because current
   GPUI exposes it as a platform bridge.
 
@@ -113,8 +115,8 @@ Dolphin-aligned when the bridge is explicit and evidence-backed.
 1. Freeze evidence with `scripts/run-retained-renderer-evidence.sh --core`.
 2. Finish MIME/theme icon hybrid evidence before changing the default icon
    renderer.
-3. Finish Places retained event delivery before claiming full Places retained
-   behavior.
+3. Finish the Places typed payload and drag-start boundary work before claiming
+   full Places retained behavior.
 4. Re-audit GPUI typed drag-start support after dependency updates.
 5. Convert rename only after its editor behavior matrix has tests or runtime
    smoke coverage.

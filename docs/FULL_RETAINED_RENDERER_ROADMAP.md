@@ -36,8 +36,10 @@ Explicit GPUI bridges:
 - Compact/Icons MIME/theme icons use the hybrid renderer by default: GPUI
   `img()` remains the fallback for not-yet-ready keys, while ready retained
   image keys paint through the custom image layer.
-- Places text, icons, event delivery, context menus, DnD shells, and drag start
-  remain GPUI.
+- Places text/icons remain GPUI-rendered. Places row/section activation,
+  context-menu targeting, DnD target lookup, drop dispatch, and sidebar leave
+  clearing now use the retained-DnD event layer by default; one sidebar-level
+  GPUI typed payload bridge and row drag-start shells remain.
 
 These bridges are intentional platform or performance boundaries. They should
 be removed only through the tracks below.
@@ -60,8 +62,12 @@ and readiness contract before it can replace GPUI `img()` by default.
 Dolphin's Places panel is similarly a model/view/delegate loop:
 `DolphinPlacesModel` owns Places state and `KFilePlacesView` owns interaction
 delivery. A Fika Places renderer becomes Dolphin-complete only when row/section
-hit testing and event delivery are viewport-level retained state, not per-row
-GPUI event shells. Row chrome custom paint alone is not the finish line.
+hit testing and event delivery are viewport-level retained state and the
+remaining typed payload / drag-start platform bridges are explicit. Default
+retained-DnD has removed row/section GPUI event shells from target delivery;
+full retained Places is still blocked by the single sidebar typed payload
+bridge and drag-start shells. Row chrome custom paint alone is not the finish
+line.
 
 The practical conclusion is:
 
@@ -153,13 +159,15 @@ changing text/icon renderer policy.
 
 Detailed design: `docs/PLACES_RETAINED_EVENT_DELIVERY_PLAN.md`.
 
-Next design step:
+Current default:
 
-- Add retained row/section hitbox delivery for activation, context menu,
-  on-place drop target, insert-before/after, sidebar leave clearing, and cursor
-  state.
-- Keep GPUI drag-start shells until Track 4 unlocks retained drag start.
-- Keep default row chrome custom and text/icons GPUI.
+- `retained-dnd` owns row/section activation, context-menu targeting,
+  on-place drop target, insert-before/after, drop dispatch, sidebar leave
+  clearing, and cursor state through retained Places geometry.
+- A single sidebar-level GPUI typed payload bridge remains because GPUI still
+  exposes typed drag move/drop payloads through interactive elements.
+- GPUI drag-start shells remain until Track 4 unlocks retained drag start.
+- Default row chrome is custom; text/icons remain GPUI.
 
 Default may change only when:
 

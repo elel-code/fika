@@ -533,6 +533,13 @@ Places chrome 默认之后的当前执行入口是
   `path-outside` 样本，并且 `scripts/analyze-places-perf.sh
   --require-retained-dnd-autosmoke` 会强制要求它存在。这在无人值守 smoke 中守住拖拽中的
   target isolation；手动 `places-dnd-leave` trace 仍然是 GUI bounds 证据。
+- [x] P16fo：在 retained-DnD 默认后同步顶层 Places 状态。
+  `docs/FULL_RETAINED_RENDERER_ROADMAP.zh-CN.md`、
+  `docs/ITEM_VIEW_CUSTOM_PAINT_STATUS.zh-CN.md` 和
+  `docs/DOLPHIN_RETAINED_RENDERER_ALIGNMENT.zh-CN.md` 现在把 Places 描述为 custom row
+  chrome 加 retained row/section target delivery；仍在 GPUI 上的只剩 text/icons、
+  sidebar typed payload bridge 和 row drag-start shell。完整 retained Places gate 仍要求移除
+  typed payload 和 drag-start 边界。
 - [ ] P16q：在每个 P16 实现切片之后，单独提交并附带相关验证：仅文档切片需要 `git diff --check`；代码切片需要 `cargo fmt`、`cargo check`、`cargo test -q`、`scripts/check-item-view-perf-analyzer.sh`、`scripts/check-places-perf-analyzer.sh` 和 `git diff --check`。
 - [x] P16r：记录运行时自测试和突破记录规则。可重复的滚动、缩放、启动图标、调整大小、模式切换和 Places 目标回退应在依赖手动计时之前通过 autosmoke 日志和分析器脚本重现。任何确认的优化突破必须记录症状、Dolphin 比较边界、根本原因、实现、保存的日志/分析器命令和未来回归守卫在拥有的设计或决策文档中。
 
