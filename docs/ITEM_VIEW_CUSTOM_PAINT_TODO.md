@@ -2204,6 +2204,23 @@ tracks.
   `item-image max_prepaint=480us`; `/tmp/fika-svg-source-retain-downloads.log`
   reports `theme_decoded=0`, `theme_retained=702`, `theme_placeholder=0`,
   `max_gpui_image_element=0`, and `item-image max_prepaint=788us`.
+- [x] P16gbd1: Add a Dolphin/Qt QPixmapCache-style budget to the pane retained
+  theme icon image cache. Root cause: Dolphin `pixmapForIcon()` uses a
+  `name + size + dpr + mode` `QPixmapCache` key and relies on global pixmap
+  cache budgeting; GPUI `img()` also has element/global image cache lifecycle.
+  Fika's full custom path directly owns `Arc<RenderImage>` values, and
+  `RetainedThemeIconImageCache` plus the source-path map previously had no
+  limit, so visiting many directories could grow retained images without
+  pruning. Implementation: cache hits refresh a generation; `prune_to_budget()`
+  evicts least-recently-used semantic keys against a 10MB budget calculated from
+  retained `RenderImage` frame bytes, not a coarse entry count. When the last
+  key for a source path is removed, the `source path -> RenderImage` entry is
+  released. Paint-path pruning also calls
+  `RetainAllImageCache::remove(Resource::Path)` and
+  `cx.drop_image(image, Some(window))`, so GPUI's resource cache or atlas cannot
+  keep owning the same image. Acceptance: the user verifies with debug `/etc`
+  USS/private-memory measurement; RSS, release builds, and current GPUI
+  fallback are not substitutes for that evidence.
 - [~] P16gbf: Reduce remaining custom pane cold visual/text paint variance after
   image/icon ownership is stable. Current `/etc` and Downloads logs have image
   and icon-sync under budget, but `[fika static-item-visual]` can still show

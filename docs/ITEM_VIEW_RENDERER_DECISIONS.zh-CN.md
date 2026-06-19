@@ -562,12 +562,33 @@ prepaint 为 93-254us。剩余风险由 `/tmp/fika-full-icons-keyed-downloads-r2
 首次 Icons 切换仍报告 `hits=1 misses=39`、`static-item-visual prepaint=52840us`，第一次
 text paint frame 达到 `17698us`。
 
+## 2026-06-19 Retained Theme Icon Cache Budget
+
+对照 Dolphin 和 GPUI 后确认，当前 full 自绘路径的内存风险不在 semantic key，而在生命周期。
+Dolphin `KStandardItemListWidget::pixmapForIcon()` 使用
+`KStandardItemListWidget:{name}:{height}@{dpr}:{mode}` 作为 `QPixmapCache` key，
+每个可见 widget 只持有自己的 `m_pixmap`；全局 `QPixmapCache` 负责预算和淘汰。GPUI
+`img()` 默认走 ancestor/global image cache，而 Fika full custom path 直接持有
+`Arc<RenderImage>` 并使用 `RetainAllImageCache`/retained map，因此不会自动继承
+`img()` element lifecycle。
+
+实现：`RetainedThemeIconImageCache` 现在在 find/hit 时刷新 generation，并提供
+`prune_to_budget()`。预算按 retained `RenderImage` 的实际 frame bytes 计算，而不是按 entry
+数量粗略限制；默认预算采用 Qt `QPixmapCache` 同量级的 10MB。Pane theme icon full path
+在每次加载/记录 theme icon 后裁剪最近最少使用的 semantic key。当最后一个 key 不再引用某个
+source path 时，释放 `source path -> RenderImage` entry；有 `Window` 的 paint path 还会
+同步调用 `RetainAllImageCache::remove(Resource::Path)` 和 `cx.drop_image(image, Some(window))`，
+避免 GPUI 底层 resource cache 或 atlas 继续持有同一图像。
+
+决策：这条路径要按 Dolphin/Qt 的 bounded pixmap cache 做，而不是 Fika 自己无限 retained。
+USS 回归由用户侧按 debug `/etc` 私有占用验证；这里不再把 RSS、release build 或当前 GPUI
+fallback 作为替代证据。
+
 ## 下一批渲染器决策
 
 1. 保持剩余 drag-start shells 直到 GPUI API 边界变化。不要将 GPUI per-element `on_drag_move` 用作 pane self-drag 悬停的真实来源；active item-drag window tracker 拥有该路径。
 2. 使用运行时日志决定当前 custom-painted surface 是否保持 custom-paint 或回退到 GPUI 渲染器叠加在 retained model 上。
 3. 保留 `FIKA_GPUI_THEME_ICONS=1` 作为 GPUI baseline 路径，并在未来 MIME/theme icon
    renderer 变更时继续使用 `--gate-hybrid-default-promotion`。
-4. 通过 `--places-full-handoff` A/B gate 继续推进 Places full-row visual；只有当
-   row-visual cost 和整帧 `[fika render] total=` 对比默认 chrome policy 达到中性或更优后，
-   才能提升 full rows 默认值。
+4. Places row visual 默认保持 `CustomFull`；`FIKA_PLACES_ROW_VISUAL_POLICY=gpui` 和
+   `chrome` 仅作为 A/B baseline 与回退路径。

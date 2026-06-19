@@ -893,6 +893,17 @@ Places chrome 默认之后的当前执行入口是
   `theme_placeholder=0`、`max_gpui_image_element=0`、`item-image max_prepaint=480us`；
   `/tmp/fika-svg-source-retain-downloads.log` 报告 `theme_decoded=0`、`theme_retained=702`、
   `theme_placeholder=0`、`max_gpui_image_element=0`、`item-image max_prepaint=788us`。
+- [x] P16gbd1：为 pane retained theme icon image cache 加 Dolphin/Qt QPixmapCache 式预算。根因：
+  Dolphin `pixmapForIcon()` 使用 `name + size + dpr + mode` 的 `QPixmapCache` key，并依赖
+  全局 pixmap cache 预算淘汰；GPUI `img()` 也有 element/global image cache 生命周期。
+  Fika full custom path 直接持有 `Arc<RenderImage>`，之前 `RetainedThemeIconImageCache`
+  和 source-path map 没有上限，长期访问大量目录会只增不裁剪。实现：cache hit 会刷新
+  generation；`prune_to_budget()` 按 retained `RenderImage` frame bytes 做 10MB 预算淘汰，
+  而不是按 entry 数量粗略限制；最后一个引用某 source path 的 key 被裁剪时释放
+  `source path -> RenderImage`。有 `Window` 的 paint path 还会同步
+  `RetainAllImageCache::remove(Resource::Path)` 和 `cx.drop_image(image, Some(window))`，
+  避免 GPUI resource cache 或 atlas 继续持有。验收：由用户侧用 debug `/etc` USS/私有占用
+  测量确认；不要用 RSS、release build 或当前 GPUI fallback 替代该证据。
 - [~] P16gbf：在 image/icon ownership 稳定后，降低剩余 pane custom visual/text paint 冷帧方差。
   当前 `/etc` 和 Downloads 日志中 image 与 icon-sync 已在预算内，但
   `[fika static-item-visual]` 仍可能出现多毫秒级 cold prepaint/paint。继续对照 Dolphin item

@@ -906,6 +906,34 @@ zoom prepaint at 93-254us. Remaining risk is documented by
 `hits=1 misses=39`, `static-item-visual prepaint=52840us`, and the first text
 paint frame reaches `17698us`.
 
+## 2026-06-19 Retained Theme Icon Cache Budget
+
+Comparing Dolphin and GPUI showed that the current full custom path's memory
+risk is lifecycle, not the semantic key. Dolphin
+`KStandardItemListWidget::pixmapForIcon()` uses
+`KStandardItemListWidget:{name}:{height}@{dpr}:{mode}` as the `QPixmapCache`
+key, while each visible widget only owns its current `m_pixmap`; the global
+`QPixmapCache` owns budgeting and eviction. GPUI `img()` normally uses an
+ancestor/global image cache, but Fika's full custom path directly retains
+`Arc<RenderImage>` values through `RetainAllImageCache` and retained maps, so it
+does not inherit the `img()` element lifecycle automatically.
+
+Implementation: `RetainedThemeIconImageCache` now refreshes a generation on
+find/hit and exposes `prune_to_budget()`. The budget is calculated from the
+retained `RenderImage` frame bytes rather than from a coarse entry count; the
+default budget matches Qt `QPixmapCache`'s order of magnitude at 10MB. The pane
+theme-icon full path prunes least-recently-used semantic keys after each theme
+icon load/record. When the last key for a source path is evicted, the
+`source path -> RenderImage` entry is released; paint-path pruning also calls
+`RetainAllImageCache::remove(Resource::Path)` and
+`cx.drop_image(image, Some(window))` so GPUI's resource cache and atlas do not
+continue to own the same image.
+
+Decision: this path should follow Dolphin/Qt's bounded pixmap cache, not Fika's
+own unbounded retained image map. USS regression evidence is supplied by the
+user's debug `/etc` private-memory measurement; RSS, release builds, and current
+GPUI fallback are not substitutes for that evidence.
+
 ## Next Renderer Decisions
 
 1. Keep the remaining drag-start shells until the GPUI API boundary changes.
@@ -917,6 +945,6 @@ paint frame reaches `17698us`.
 3. Keep `FIKA_GPUI_THEME_ICONS=1` as the GPUI baseline path and use
    `--gate-hybrid-default-promotion` for future MIME/theme icon renderer
    changes.
-4. Continue Places full-row visual work through the `--places-full-handoff`
-   A/B gate. Do not promote full rows until row-visual cost and whole-frame
-   `[fika render] total=` are neutral or better than the default chrome policy.
+4. Keep Places row visual defaulted to `CustomFull`; use
+   `FIKA_PLACES_ROW_VISUAL_POLICY=gpui` and `chrome` only as A/B baselines and
+   fallback paths.

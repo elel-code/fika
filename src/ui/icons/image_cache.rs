@@ -154,6 +154,12 @@ pub(crate) struct RetainedThemeIconImageLoad<T> {
     pub(crate) outcome: RetainedThemeIconImageLoadOutcome,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct EvictedThemeIconImage<T> {
+    pub(crate) resolved_path: Option<PathBuf>,
+    pub(crate) image: T,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RetainedThemeIconImageLoadOutcome {
     Loaded { first_ready: bool },
@@ -179,6 +185,11 @@ impl<T> Default for RetainedThemeIconImageCache<T> {
 }
 
 impl<T: Clone> RetainedThemeIconImageCache<T> {
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.entries.len()
+    }
+
     pub(crate) fn record_loaded(
         &mut self,
         key: ThemeIconImageKey,
@@ -257,12 +268,74 @@ impl<T: Clone> RetainedThemeIconImageCache<T> {
         self.entries.get(key)
     }
 
-    pub(crate) fn image_for_key(&self, key: &ThemeIconImageKey) -> Option<T> {
-        self.entries.get(key).and_then(|entry| entry.image.clone())
+    pub(crate) fn image_for_key(&mut self, key: &ThemeIconImageKey) -> Option<T> {
+        let image = self
+            .entries
+            .get(key)
+            .and_then(|entry| entry.image.clone())?;
+        self.touch_key(key);
+        Some(image)
     }
 
-    pub(crate) fn image_for_source_path(&self, path: &Path) -> Option<T> {
-        self.images_by_source_path.get(path).cloned()
+    pub(crate) fn image_for_source_path(&mut self, path: &Path) -> Option<T> {
+        let image = self.images_by_source_path.get(path).cloned()?;
+        self.touch_source_path(path);
+        Some(image)
+    }
+
+    pub(crate) fn prune_to_budget<F>(
+        &mut self,
+        max_bytes: usize,
+        mut image_cost: F,
+    ) -> Vec<EvictedThemeIconImage<T>>
+    where
+        F: FnMut(&T) -> usize,
+    {
+        let max_bytes = max_bytes.max(1);
+        let mut total_bytes = self
+            .images_by_source_path
+            .values()
+            .map(&mut image_cost)
+            .sum::<usize>();
+        let mut evicted_images = Vec::new();
+        while total_bytes > max_bytes {
+            let Some(evicted_key) = self
+                .entries
+                .iter()
+                .min_by_key(|(_, entry)| entry.load_generation)
+                .map(|(key, _)| key.clone())
+            else {
+                break;
+            };
+            let Some(evicted) = self.entries.remove(&evicted_key) else {
+                continue;
+            };
+            if let Some(path) = evicted.resolved_path {
+                if self.source_path_is_retained_by_entry(&path) {
+                    continue;
+                }
+                if let Some(image) = self.images_by_source_path.remove(&path) {
+                    total_bytes = total_bytes.saturating_sub(image_cost(&image));
+                    evicted_images.push(EvictedThemeIconImage {
+                        resolved_path: Some(path),
+                        image,
+                    });
+                } else if let Some(image) = evicted.image {
+                    total_bytes = total_bytes.saturating_sub(image_cost(&image));
+                    evicted_images.push(EvictedThemeIconImage {
+                        resolved_path: Some(path),
+                        image,
+                    });
+                }
+            } else if let Some(image) = evicted.image {
+                total_bytes = total_bytes.saturating_sub(image_cost(&image));
+                evicted_images.push(EvictedThemeIconImage {
+                    resolved_path: None,
+                    image,
+                });
+            }
+        }
+        evicted_images
     }
 
     fn record_unready(
@@ -304,6 +377,28 @@ impl<T: Clone> RetainedThemeIconImageCache<T> {
             RetainedThemeIconImageLoadOutcome::Missing { status }
         };
         RetainedThemeIconImageLoad { image, outcome }
+    }
+
+    fn touch_key(&mut self, key: &ThemeIconImageKey) {
+        self.load_generation += 1;
+        if let Some(entry) = self.entries.get_mut(key) {
+            entry.load_generation = self.load_generation;
+        }
+    }
+
+    fn touch_source_path(&mut self, path: &Path) {
+        self.load_generation += 1;
+        for entry in self.entries.values_mut() {
+            if entry.resolved_path.as_deref() == Some(path) {
+                entry.load_generation = self.load_generation;
+            }
+        }
+    }
+
+    fn source_path_is_retained_by_entry(&self, path: &Path) -> bool {
+        self.entries
+            .values()
+            .any(|entry| entry.resolved_path.as_deref() == Some(path))
     }
 }
 
@@ -422,6 +517,37 @@ mod tests {
             }
         );
         assert_eq!(pending.image, Some("old-image"));
+    }
+
+    #[test]
+    fn cache_prunes_by_image_budget_and_releases_unreferenced_source_images() {
+        let key_48 = ThemeIconImageKey::new(Arc::from("text-x-generic"), 48, 1.0);
+        let key_64 = ThemeIconImageKey::new(Arc::from("text-x-generic"), 64, 1.0);
+        let key_png = ThemeIconImageKey::new(Arc::from("image-png"), 48, 1.0);
+        let scalable_path: Arc<Path> = Arc::from(Path::new("/theme/scalable/text-x-generic.svg"));
+        let png_path: Arc<Path> = Arc::from(Path::new("/theme/48/image-png.svg"));
+        let mut cache = RetainedThemeIconImageCache::default();
+
+        cache.record_loaded(key_48.clone(), scalable_path.clone(), "image-scalable");
+        let image = cache
+            .image_for_source_path(scalable_path.as_ref())
+            .expect("source image should be retained");
+        cache.record_loaded_from_retained_source(key_64.clone(), scalable_path.clone(), image);
+        cache.record_loaded(key_png.clone(), png_path.clone(), "image-png");
+        assert_eq!(cache.len(), 3);
+
+        let evicted = cache.prune_to_budget(2, |_| 2);
+        assert_eq!(
+            evicted,
+            vec![EvictedThemeIconImage {
+                resolved_path: Some(scalable_path.as_ref().to_path_buf()),
+                image: "image-scalable"
+            }]
+        );
+        assert_eq!(cache.len(), 1);
+        assert!(cache.image_for_key(&key_48).is_none());
+        assert!(cache.image_for_key(&key_64).is_none());
+        assert!(cache.image_for_key(&key_png).is_some());
     }
 
     #[test]
