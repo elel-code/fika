@@ -6,7 +6,7 @@ use crate::ui::icons::{FileIconCache, FileIconResolveRequest};
 use super::snapshot::RawFileGridSnapshot;
 
 pub(crate) const DOLPHIN_VISIBLE_ICON_SYNC_BUDGET: Duration = Duration::from_millis(200);
-pub(crate) const FILE_ICON_RESOLVE_BATCH_SIZE: usize = 64;
+pub(crate) const FILE_ICON_RESOLVE_BATCH_SIZE: usize = 128;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct FileIconSyncStats {

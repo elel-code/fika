@@ -147,6 +147,47 @@ reintroducing visible placeholders. Do not promote the `FIKA_CUSTOM_THEME_ICONS`
 stress path to default yet. The next pane image work should target `/etc`
 `icon_sync` variance and then rerun default-vs-GPUI promotion evidence.
 
+### 2026-06-19 File Icon Kind Index And Wider Background Batch
+
+The next `/etc` blocker was not image painting. The cohort handoff kept
+`theme_placeholder=0` and visible `theme_decoded=0`, but paired runs still
+failed when `icon_sync` spent 7-13ms handling visible icon candidates. The
+structured logs showed many frames such as `candidates=64 cached=64` with only
+one or two changed icons, which pointed at cache lookup overhead rather than
+custom image painting.
+
+Root cause: `FileIconCache::cached_icon_for_kind()` found a same-kind resolved
+theme icon by scanning the whole exact-size cache. During resize/fullscreen or
+scroll, visible sync performed that scan once per visible candidate. This was
+not Dolphin-like enough: Dolphin's item widget keeps direct pixmap/icon role
+state, so reusing a resolved icon name/pixmap is an indexed lookup rather than a
+per-frame cache walk.
+
+Implementation:
+
+- `FileIconCache` now maintains `resolved_by_kind`, keyed by `FileIconKind`, for
+  pathful resolved icons. Exact-size `cached` entries still own exact results
+  and negative exact lookups; the kind index only accelerates reuse of real
+  resolved theme paths across same MIME/icon kind and zoom size.
+- The background file-icon resolve batch increased from 64 to 128 so the bounded
+  visible/read-ahead work range is more likely to finish before resize or scroll
+  brings additional items into view.
+
+Evidence:
+
+- `/tmp/fika-icon-batch128-default-etc.log` against
+  `/tmp/fika-icon-batch128-gpui-etc.log` passed
+  `--gate-hybrid-default-promotion`. Candidate `icon_sync` max was `103us`,
+  with `theme_placeholder=0` and visible `theme_decoded=0`.
+- `/tmp/fika-icon-batch128-default-downloads-r2.log` against
+  `/tmp/fika-icon-batch128-gpui-downloads-r2.log` passed the same gate.
+
+Decision: keep the kind index and wider background batch. This preserves the
+visible-first Dolphin contract while moving repeated same-kind icon reuse out of
+the render-frame hot path. Remaining image work should now target replacing the
+remaining GPUI `img()` fallback boundary or reducing cold first-resolve cost,
+not cached same-kind lookup.
+
 ## Post-P11e Evidence To Collect
 
 Run `FIKA_PERF_ITEM_VIEW=1 cargo run -- ~/Downloads` from a desktop compositor

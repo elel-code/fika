@@ -755,6 +755,20 @@ Places chrome 默认之后的当前执行入口是
   稳定指标干净，但完整 promotion gate 仍因 `/etc` 的 icon-sync/content-change
   波动失败，因此下一步 pane image 目标是降低 `/etc` `icon_sync` 成本，而不是继续调整
   placeholder 行为。
+- [x] P16gau：移除 pane `icon_sync` 中同 kind 图标 cache 扫描，并扩大后台 icon
+  resolve batch。根因：可见集合级 handoff 后，`/etc` 仍出现 7-13ms `icon_sync` 帧，
+  即使大多数 candidates 被统计为 cached；原因是
+  `FileIconCache::cached_icon_for_kind()` 为了找到可复用的 resolved theme path，会对每个
+  可见 candidate 扫描 exact-size cache。实现：`FileIconCache` 现在为 pathful
+  `FileIconKind` 结果维护 `resolved_by_kind` 索引，同时保留 exact-size 和 negative
+  exact cache entries；file icon 后台 resolve batch 提高到 128 个请求，让 bounded
+  read-ahead 更可能在 resize/scroll 让这些 item 进入可见区域前完成。证据：
+  `/tmp/fika-icon-batch128-default-etc.log` 相对
+  `/tmp/fika-icon-batch128-gpui-etc.log` 通过
+  `--gate-hybrid-default-promotion`，candidate `icon_sync=103us`、
+  `theme_placeholder=0`、visible `theme_decoded=0`；
+  `/tmp/fika-icon-batch128-default-downloads-r2.log` 相对
+  `/tmp/fika-icon-batch128-gpui-downloads-r2.log` 通过同一 gate。
 - [ ] P16q：在每个 P16 实现切片之后，单独提交并附带相关验证：仅文档切片需要 `git diff --check`；代码切片需要 `cargo fmt`、`cargo check`、`cargo test -q`、`scripts/check-item-view-perf-analyzer.sh`、`scripts/check-places-perf-analyzer.sh` 和 `git diff --check`。
 - [x] P16r：记录运行时自测试和突破记录规则。可重复的滚动、缩放、启动图标、调整大小、模式切换和 Places 目标回退应在依赖手动计时之前通过 autosmoke 日志和分析器脚本重现。任何确认的优化突破必须记录症状、Dolphin 比较边界、根本原因、实现、保存的日志/分析器命令和未来回归守卫在拥有的设计或决策文档中。
 

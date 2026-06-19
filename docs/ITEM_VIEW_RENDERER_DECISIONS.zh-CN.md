@@ -132,6 +132,40 @@ GPUI/custom 混切，这是局部尺寸/绘制跳变的高风险来源。
 暂不把 `FIKA_CUSTOM_THEME_ICONS=1` 压力路径提升为默认。下一步 pane image 工作应继续压
 `/etc` 的 `icon_sync` 波动，然后重新跑 default-vs-GPUI promotion 证据。
 
+## 2026-06-19 File Icon Kind 索引和更宽后台批次
+
+下一个 `/etc` 阻塞点不是 image painting。可见集合级 handoff 已经保持
+`theme_placeholder=0` 和 visible `theme_decoded=0`，但配对运行仍会因为
+`icon_sync` 在可见 icon candidates 上花 7-13ms 而失败。结构化日志里常见
+`candidates=64 cached=64`，实际只有一两个 changed icon，这说明热点更像 cache lookup
+开销，而不是 custom image 绘制。
+
+根因：`FileIconCache::cached_icon_for_kind()` 为了复用同 kind 的 resolved theme icon，
+每次都会扫描整个 exact-size cache。resize/fullscreen 或 scroll 时，visible sync 会对每个
+可见 candidate 做一次这种扫描。这还不够 Dolphin-like：Dolphin 的 item widget 持有直接的
+pixmap/icon role 状态，复用已解析 iconName/pixmap 是索引查找，而不是每帧 cache walk。
+
+实现：
+
+- `FileIconCache` 新增 `resolved_by_kind`，按 `FileIconKind` 索引 pathful resolved icons。
+  exact-size `cached` 仍然拥有精确 size 结果和 negative exact lookup；kind 索引只用于同
+  MIME/icon kind、跨 zoom size 复用真实 resolved theme path。
+- 后台 file-icon resolve batch 从 64 提到 128，让 bounded visible/read-ahead work range
+  更可能在 resize 或 scroll 让额外 item 进入可见区域之前完成。
+
+证据：
+
+- `/tmp/fika-icon-batch128-default-etc.log` 相对
+  `/tmp/fika-icon-batch128-gpui-etc.log` 通过
+  `--gate-hybrid-default-promotion`。Candidate `icon_sync` 最大值为 `103us`，
+  且 `theme_placeholder=0`、visible `theme_decoded=0`。
+- `/tmp/fika-icon-batch128-default-downloads-r2.log` 相对
+  `/tmp/fika-icon-batch128-gpui-downloads-r2.log` 通过同一 gate。
+
+决策：保留 kind 索引和更宽后台批次。它保留 Dolphin visible-first 契约，同时把同 kind
+图标复用从 render-frame 热路径移出去。后续 image 工作应转向替换剩余 GPUI `img()`
+fallback 边界或降低 cold first-resolve 成本，而不是继续处理 cached same-kind lookup。
+
 ## 2026-06-19 Places Full Handoff A/B
 
 Places full row visual 路径现在有真实的 opt-in 突破，但还不是默认提升决策。

@@ -54,6 +54,7 @@ pub(crate) struct FileIconResolveResult {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct FileIconCache {
     cached: HashMap<FileIconCacheKey, FileIconSnapshot>,
+    resolved_by_kind: HashMap<FileIconKind, FileIconSnapshot>,
     named_cached: HashMap<NamedIconCacheKey, FileIconSnapshot>,
     theme: IconThemeResolver,
     mime: fika_core::MimeDatabase,
@@ -75,7 +76,7 @@ impl FileIconCache {
         }
 
         let icon = file_icon_snapshot(&key.kind, key.size_px, &mut self.theme, &self.mime);
-        self.cached.insert(key, icon.clone());
+        self.insert_cached_icon(key, icon.clone());
         icon
     }
 
@@ -96,11 +97,7 @@ impl FileIconCache {
     }
 
     fn cached_icon_for_kind(&self, key: &FileIconCacheKey) -> Option<FileIconSnapshot> {
-        self.cached
-            .iter()
-            .filter(|(candidate_key, icon)| candidate_key.kind.eq(&key.kind) && icon.path.is_some())
-            .min_by_key(|(candidate_key, _)| candidate_key.size_px.abs_diff(key.size_px))
-            .map(|(_, icon)| icon.clone())
+        self.resolved_by_kind.get(&key.kind).cloned()
     }
 
     fn has_resolved_icon_for_kind(&self, key: &FileIconCacheKey) -> bool {
@@ -133,7 +130,7 @@ impl FileIconCache {
         }
 
         let icon = file_icon_snapshot(&key.kind, key.size_px, &mut self.theme, &self.mime);
-        self.cached.insert(key, icon);
+        self.insert_cached_icon(key, icon);
         true
     }
 
@@ -143,10 +140,17 @@ impl FileIconCache {
             if self.cached.get(&result.request.key) == Some(&result.icon) {
                 continue;
             }
-            self.cached.insert(result.request.key, result.icon);
+            self.insert_cached_icon(result.request.key, result.icon);
             changed = true;
         }
         changed
+    }
+
+    fn insert_cached_icon(&mut self, key: FileIconCacheKey, icon: FileIconSnapshot) {
+        if icon.path.is_some() {
+            self.resolved_by_kind.insert(key.kind.clone(), icon.clone());
+        }
+        self.cached.insert(key, icon);
     }
 
     pub(crate) fn named_icon(
@@ -1131,6 +1135,7 @@ gtk-icon-theme-name=breeze\n"
         std::fs::write(root.join("theme/48x48/mimetypes/text-rust.svg"), test_svg()).unwrap();
         let mut cache = FileIconCache {
             cached: HashMap::new(),
+            resolved_by_kind: HashMap::new(),
             named_cached: HashMap::new(),
             theme: IconThemeResolver {
                 roots: vec![root.clone()],
@@ -1198,6 +1203,7 @@ gtk-icon-theme-name=breeze\n"
         .unwrap();
         let mut cache = FileIconCache {
             cached: HashMap::new(),
+            resolved_by_kind: HashMap::new(),
             named_cached: HashMap::new(),
             theme: IconThemeResolver {
                 roots: vec![root.clone()],
@@ -1245,6 +1251,7 @@ gtk-icon-theme-name=breeze\n"
         std::fs::write(&resolved_path, test_svg()).unwrap();
         let mut cache = FileIconCache {
             cached: HashMap::new(),
+            resolved_by_kind: HashMap::new(),
             named_cached: HashMap::new(),
             theme: IconThemeResolver {
                 roots: vec![root.clone()],
@@ -1324,6 +1331,7 @@ gtk-icon-theme-name=breeze\n"
         std::fs::write(&resolved_path, test_svg()).unwrap();
         let mut cache = FileIconCache {
             cached: HashMap::new(),
+            resolved_by_kind: HashMap::new(),
             named_cached: HashMap::new(),
             theme: IconThemeResolver {
                 roots: vec![root.clone()],
@@ -1383,6 +1391,7 @@ gtk-icon-theme-name=breeze\n"
         std::fs::create_dir_all(root.join("theme")).unwrap();
         let mut cache = FileIconCache {
             cached: HashMap::new(),
+            resolved_by_kind: HashMap::new(),
             named_cached: HashMap::new(),
             theme: IconThemeResolver {
                 roots: vec![root.clone()],
@@ -1439,6 +1448,7 @@ gtk-icon-theme-name=breeze\n"
         std::fs::write(&resolved_64, test_svg()).unwrap();
         let mut cache = FileIconCache {
             cached: HashMap::new(),
+            resolved_by_kind: HashMap::new(),
             named_cached: HashMap::new(),
             theme: IconThemeResolver {
                 roots: vec![root.clone()],
@@ -1526,6 +1536,7 @@ gtk-icon-theme-name=breeze\n"
         .unwrap();
         let mut cache = FileIconCache {
             cached: HashMap::new(),
+            resolved_by_kind: HashMap::new(),
             named_cached: HashMap::new(),
             theme: IconThemeResolver {
                 roots: vec![root.clone()],
@@ -1586,6 +1597,7 @@ gtk-icon-theme-name=breeze\n"
         let icon_name = icon_path.to_string_lossy().into_owned();
         let mut cache = FileIconCache {
             cached: HashMap::new(),
+            resolved_by_kind: HashMap::new(),
             named_cached: HashMap::new(),
             theme: IconThemeResolver {
                 roots: vec![root.clone()],

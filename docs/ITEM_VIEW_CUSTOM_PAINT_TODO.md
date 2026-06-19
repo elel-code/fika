@@ -2030,6 +2030,22 @@ tracks.
   failed on `/etc` icon-sync/content-change variance, so the next pane image
   target is reducing `/etc` `icon_sync` cost rather than changing placeholder
   behavior.
+- [x] P16gau: Remove the same-kind icon cache scan from pane `icon_sync` and
+  widen background icon resolve batches. Root cause: after visible-cohort
+  handoff, `/etc` still showed 7-13ms `icon_sync` frames even when most
+  candidates were counted as cached, because `FileIconCache::cached_icon_for_kind()`
+  scanned the exact-size cache once per visible candidate to find a reusable
+  resolved theme path. Implementation: `FileIconCache` now keeps a
+  `resolved_by_kind` index for pathful `FileIconKind` results while preserving
+  exact-size and negative exact cache entries; file icon background resolve
+  batches now process up to 128 requests so bounded read-ahead is more likely
+  to finish before resize/scroll makes those items visible. Evidence:
+  `/tmp/fika-icon-batch128-default-etc.log` passed
+  `--gate-hybrid-default-promotion` against
+  `/tmp/fika-icon-batch128-gpui-etc.log` with candidate `icon_sync=103us`,
+  `theme_placeholder=0`, and visible `theme_decoded=0`;
+  `/tmp/fika-icon-batch128-default-downloads-r2.log` passed the same gate
+  against `/tmp/fika-icon-batch128-gpui-downloads-r2.log`.
 
 ## Acceptance Gates
 
