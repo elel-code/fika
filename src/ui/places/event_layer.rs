@@ -73,13 +73,12 @@ enum PlacesEventDndDropTarget {
 
 pub(super) fn places_event_probe_layer(
     geometry: PlacesInteractionGeometry,
-    places: Vec<PlaceSnapshot>,
+    places: Arc<[PlaceSnapshot]>,
     app: WeakEntity<FikaApp>,
     mode: PlacesEventLayerMode,
     targeting_state: Option<Entity<PlacesEventTargetingState>>,
 ) -> Stateful<Div> {
     let height = geometry.content_height().max(1.0);
-    let places: Arc<[PlaceSnapshot]> = places.into();
     let paint_geometry = geometry.clone();
     let paint_app = app.clone();
     let paint_targeting_state = targeting_state.clone();

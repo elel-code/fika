@@ -17,6 +17,7 @@ use crate::ui::file_grid::ItemDrag;
 use crate::ui::icons::{FileIconCache, FileIconSnapshot, cached_icon_or_fallback};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 use std::time::Instant;
 
 use super::drag::PlaceDrag;
@@ -307,22 +308,23 @@ pub(crate) fn places_sidebar(
     window: &mut Window,
     cx: &mut Context<FikaApp>,
 ) -> Stateful<Div> {
+    let places: Arc<[PlaceSnapshot]> = places.into();
     let perf_enabled = places_perf_enabled();
     let build_started = perf_enabled.then(Instant::now);
     let row_count = places.len();
-    let section_count = places_section_count(&places);
+    let section_count = places_section_count(places.as_ref());
     let event_delivery_policy = places_event_delivery_policy();
     let needs_interaction_geometry =
         perf_enabled || event_delivery_policy.retained_event_layer_enabled();
     let interaction_geometry = needs_interaction_geometry.then(|| {
         let started = Instant::now();
-        let geometry = places_interaction_geometry(&places);
+        let geometry = places_interaction_geometry(places.as_ref());
         (geometry, started.elapsed())
     });
     let row_visual_policy = places_row_visual_policy();
     let custom_row_visuals = row_visual_policy.custom_layer_enabled();
     let row_visual_handoff =
-        places_row_visual_handoff_state(row_visual_policy, &places, row_count, window, cx);
+        places_row_visual_handoff_state(row_visual_policy, places.as_ref(), row_count, window, cx);
     let paint_row_text = row_visual_policy.paints_text() && !row_visual_handoff.force_gpui_text;
     let warm_row_text_shapes =
         row_visual_policy.paints_text() && row_visual_handoff.force_gpui_text;
@@ -364,7 +366,7 @@ pub(crate) fn places_sidebar(
                 interaction_geometry
                     .as_ref()
                     .map(|(geometry, _elapsed)| geometry.clone())
-                    .unwrap_or_else(|| places_interaction_geometry(&places)),
+                    .unwrap_or_else(|| places_interaction_geometry(places.as_ref())),
                 places.clone(),
                 app.clone(),
                 mode,
@@ -374,7 +376,7 @@ pub(crate) fn places_sidebar(
     let mut rows = Vec::new();
     let mut current_group = None;
 
-    for (index, place) in places.into_iter().enumerate() {
+    for (index, place) in places.iter().cloned().enumerate() {
         if current_group != Some(place.group) {
             current_group = Some(place.group);
             if !place.group.is_empty() {

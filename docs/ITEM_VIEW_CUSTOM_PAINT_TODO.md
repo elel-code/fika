@@ -1972,6 +1972,18 @@ tracks.
   `32`, and event paint stayed at `max_paint=52us`. This moves Places further
   away from per-row GPUI/event work and toward viewport-owned retained hit
   testing.
+- [x] P16gar: Share Places snapshots across sidebar visual and event layers.
+  Root cause: `places_sidebar()` cloned the full `Vec<PlaceSnapshot>` separately
+  for the visual layer and event layer, then consumed the original vector to
+  build remaining row shells. Implementation: the sidebar now moves the input
+  vector into `Arc<[PlaceSnapshot]>`; the visual layer and event layer share
+  that snapshot slice, while row-shell construction clones only the row being
+  handed to the remaining GPUI drag-start boundary. Evidence:
+  `/tmp/fika-places-full-overflow-shared-snapshots.log` passed the full
+  handoff overflow gate with `--require-event-probe`, `max_build=1112us`,
+  `max_total=3198us`, and event probe `max_paint=15us`. This moves Places
+  closer to a retained model/painter split: one projected snapshot feeds all
+  viewport layers instead of cloning per surface.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

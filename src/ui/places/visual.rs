@@ -28,13 +28,13 @@ const TRASH_DOT_SIZE: f32 = 7.0;
 const INSERT_INDICATOR_HEIGHT: f32 = 2.0;
 
 pub(super) fn places_row_visual_layer(
-    places: Vec<PlaceSnapshot>,
+    places: Arc<[PlaceSnapshot]>,
     app: WeakEntity<FikaApp>,
     paint_text: bool,
     warm_text_shapes: bool,
     paint_icon: bool,
 ) -> impl IntoElement {
-    let (rows, height) = place_row_visual_layer_rows_and_height(&places);
+    let (rows, height) = place_row_visual_layer_rows_and_height(places.as_ref());
     let rows = Arc::new(rows);
     let total_rows = rows.len();
     let height = height.max(1.0);

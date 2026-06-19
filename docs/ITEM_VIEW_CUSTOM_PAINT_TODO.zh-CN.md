@@ -715,6 +715,16 @@ Places chrome 默认之后的当前执行入口是
   从 retained projection 容量 `78` 降到可见集合 `32`，event paint 保持
   `max_paint=52us`。这让 Places 进一步离开 per-row GPUI/event 工作，转向
   viewport-owned retained hit testing。
+- [x] P16gar：在 sidebar visual 和 event layer 之间共享 Places snapshot。根因：
+  `places_sidebar()` 会分别为 visual layer 和 event layer clone 一整份
+  `Vec<PlaceSnapshot>`，然后再消费原 vector 构建剩余 row shell。实现：sidebar 现在将
+  输入 vector 移入 `Arc<[PlaceSnapshot]>`；visual layer 和 event layer 共享同一份
+  snapshot slice，row-shell 构建只为仍然交给 GPUI drag-start 边界的单行 clone。证据：
+  `/tmp/fika-places-full-overflow-shared-snapshots.log` 通过带
+  `--require-event-probe` 的 full handoff overflow gate，`max_build=1112us`、
+  `max_total=3198us`，event probe `max_paint=15us`。这让 Places 更接近 retained
+  model/painter 拆分：一份投影 snapshot 同时喂给所有 viewport layer，而不是按 surface
+  重复 clone。
 - [ ] P16q：在每个 P16 实现切片之后，单独提交并附带相关验证：仅文档切片需要 `git diff --check`；代码切片需要 `cargo fmt`、`cargo check`、`cargo test -q`、`scripts/check-item-view-perf-analyzer.sh`、`scripts/check-places-perf-analyzer.sh` 和 `git diff --check`。
 - [x] P16r：记录运行时自测试和突破记录规则。可重复的滚动、缩放、启动图标、调整大小、模式切换和 Places 目标回退应在依赖手动计时之前通过 autosmoke 日志和分析器脚本重现。任何确认的优化突破必须记录症状、Dolphin 比较边界、根本原因、实现、保存的日志/分析器命令和未来回归守卫在拥有的设计或决策文档中。
 
