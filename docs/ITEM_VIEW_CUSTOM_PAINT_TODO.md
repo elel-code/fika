@@ -1898,6 +1898,20 @@ tracks.
   full targets `7817us`, chrome overflow `8768us`, full overflow `7832us`,
   chrome layout `7824us`, and full layout `8638us`. This moves the next
   optimization from row visual paint to toolbar/chrome icon/input preparation.
+- [x] P16gam: Split `chrome_inputs` into state and icon owners. The previous
+  owner accounting narrowed the total-frame spike to `chrome_inputs`, but it
+  still mixed cheap render state projection with synchronous named icon
+  resolution for toolbar/chrome controls. Implementation: `[fika render]` now
+  reports `chrome_state` and `chrome_icons`; `scripts/analyze-places-perf.sh`
+  keeps `chrome_inputs` as the normalized sum so old logs still parse.
+  Evidence:
+  `scripts/run-retained-renderer-evidence.sh --places-full-handoff --skip-build --prefix
+  fika-places-chrome-split-20260619` passed all full handoff gates and showed
+  `chrome_state` at only `2-7us` while `chrome_icons` dominated the max-total
+  frame: chrome targets `8380us`, full targets `8360us`, chrome overflow
+  `14626us`, full overflow `10708us`, chrome layout `11679us`, and full layout
+  `9101us`. The next optimization target is now specifically first-frame
+  named toolbar/chrome icon resolution.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

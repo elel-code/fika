@@ -410,6 +410,11 @@ function renderer_retained_interaction_for_policy(event_policy, rows, sections) 
     tasks = field("tasks") + 0
     snapshots = field("snapshots") + 0
     chrome_inputs = field("chrome_inputs") + 0
+    chrome_state = field("chrome_state") + 0
+    chrome_icons = field("chrome_icons") + 0
+    if (chrome_inputs == 0) {
+        chrome_inputs = chrome_state + chrome_icons
+    }
     pane_elements = field("pane_elements") + 0
     overlays = field("overlays") + 0
     root = field("root") + 0
@@ -422,6 +427,8 @@ function renderer_retained_interaction_for_policy(event_policy, rows, sections) 
     max_update("render_tasks", tasks)
     max_update("render_snapshots", snapshots)
     max_update("render_chrome_inputs", chrome_inputs)
+    max_update("render_chrome_state", chrome_state)
+    max_update("render_chrome_icons", chrome_icons)
     max_update("render_pane_elements", pane_elements)
     max_update("render_overlays", overlays)
     max_update("render_root", root)
@@ -436,6 +443,8 @@ function renderer_retained_interaction_for_policy(event_policy, rows, sections) 
         render_at_max_tasks = tasks
         render_at_max_snapshots = snapshots
         render_at_max_chrome_inputs = chrome_inputs
+        render_at_max_chrome_state = chrome_state
+        render_at_max_chrome_icons = chrome_icons
         render_at_max_pane_elements = pane_elements
         render_at_max_overlays = overlays
         render_at_max_root = root
@@ -1282,7 +1291,7 @@ END {
         max_values["slot_unchanged"],
         max_values["slot_removed"],
         max_values["slot_project"])
-    printf("render_frames=%d max_panes=%d max_window_setup=%dus max_places=%dus max_tasks=%dus max_snapshots=%dus max_chrome_inputs=%dus max_pane_elements=%dus max_overlays=%dus max_root=%dus max_total=%dus\n",
+    printf("render_frames=%d max_panes=%d max_window_setup=%dus max_places=%dus max_tasks=%dus max_snapshots=%dus max_chrome_inputs=%dus max_chrome_state=%dus max_chrome_icons=%dus max_pane_elements=%dus max_overlays=%dus max_root=%dus max_total=%dus\n",
         render_frames,
         max_values["render_panes"],
         max_values["render_window_setup"],
@@ -1290,11 +1299,13 @@ END {
         max_values["render_tasks"],
         max_values["render_snapshots"],
         max_values["render_chrome_inputs"],
+        max_values["render_chrome_state"],
+        max_values["render_chrome_icons"],
         max_values["render_pane_elements"],
         max_values["render_overlays"],
         max_values["render_root"],
         max_values["render_total"])
-    printf("render_at_max_total panes=%d total=%dus window_setup=%dus places=%dus tasks=%dus snapshots=%dus chrome_inputs=%dus pane_elements=%dus overlays=%dus root=%dus accounted=%dus residual=%dus max_accounted=%dus max_residual=%dus\n",
+    printf("render_at_max_total panes=%d total=%dus window_setup=%dus places=%dus tasks=%dus snapshots=%dus chrome_inputs=%dus chrome_state=%dus chrome_icons=%dus pane_elements=%dus overlays=%dus root=%dus accounted=%dus residual=%dus max_accounted=%dus max_residual=%dus\n",
         render_at_max_panes,
         render_at_max_total,
         render_at_max_window_setup,
@@ -1302,6 +1313,8 @@ END {
         render_at_max_tasks,
         render_at_max_snapshots,
         render_at_max_chrome_inputs,
+        render_at_max_chrome_state,
+        render_at_max_chrome_icons,
         render_at_max_pane_elements,
         render_at_max_overlays,
         render_at_max_root,

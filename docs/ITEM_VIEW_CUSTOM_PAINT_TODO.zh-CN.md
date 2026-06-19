@@ -658,6 +658,17 @@ Places chrome 默认之后的当前执行入口是
   full targets `7817us`、chrome overflow `8768us`、full overflow `7832us`、
   chrome layout `7824us`、full layout `8638us`。这把下一步优化目标从 row visual paint
   收窄到 toolbar/chrome icon/input preparation。
+- [x] P16gam：将 `chrome_inputs` 拆成 state 和 icon owner。上一轮 owner accounting
+  将整帧尖峰收窄到 `chrome_inputs`，但它仍混合了廉价 render state projection 与
+  toolbar/chrome 控件的同步命名图标解析。实现：`[fika render]` 现在输出
+  `chrome_state` 和 `chrome_icons`；`scripts/analyze-places-perf.sh` 继续把
+  `chrome_inputs` 作为归一化总和，因此旧日志仍可解析。证据：
+  `scripts/run-retained-renderer-evidence.sh --places-full-handoff --skip-build --prefix
+  fika-places-chrome-split-20260619` 通过所有 full handoff gate，并显示 `chrome_state`
+  只有 `2-7us`，而 `chrome_icons` 主导 max-total 帧：chrome targets `8380us`、
+  full targets `8360us`、chrome overflow `14626us`、full overflow `10708us`、
+  chrome layout `11679us`、full layout `9101us`。下一步优化目标已经明确为首帧
+  named toolbar/chrome icon resolution。
 - [ ] P16q：在每个 P16 实现切片之后，单独提交并附带相关验证：仅文档切片需要 `git diff --check`；代码切片需要 `cargo fmt`、`cargo check`、`cargo test -q`、`scripts/check-item-view-perf-analyzer.sh`、`scripts/check-places-perf-analyzer.sh` 和 `git diff --check`。
 - [x] P16r：记录运行时自测试和突破记录规则。可重复的滚动、缩放、启动图标、调整大小、模式切换和 Places 目标回退应在依赖手动计时之前通过 autosmoke 日志和分析器脚本重现。任何确认的优化突破必须记录症状、Dolphin 比较边界、根本原因、实现、保存的日志/分析器命令和未来回归守卫在拥有的设计或决策文档中。
 

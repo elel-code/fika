@@ -142,6 +142,11 @@ residual 降到 `4us`，并显示同一帧主要 owner 是 `chrome_inputs=7817us
 painting。因此下一步优化目标是 toolbar/chrome icon/input preparation，然后再重新评估 row
 visual 默认提升阈值。
 
+后续拆分在
+`/tmp/fika-places-chrome-split-20260619-places-handoff-full-targets.log` 中显示 max total
+帧为 `chrome_state=2us`、`chrome_icons=8360us`。这确认剩余首帧目标是 named
+toolbar/chrome icon resolution，而不是一般 render state projection。
+
 ## 下一批渲染器决策
 
 1. 保持剩余 drag-start shells 直到 GPUI API 边界变化。不要将 GPUI per-element `on_drag_move` 用作 pane self-drag 悬停的真实来源；active item-drag window tracker 拥有该路径。

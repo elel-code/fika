@@ -7014,7 +7014,7 @@ impl Render for FikaApp {
         let snapshots_started = perf_enabled.then(Instant::now);
         let snapshots = self.snapshots(cx);
         let snapshots_elapsed = snapshots_started.map(|started| started.elapsed());
-        let chrome_inputs_started = perf_enabled.then(Instant::now);
+        let chrome_state_started = perf_enabled.then(Instant::now);
         let file_grid_mode =
             self.chooser
                 .as_ref()
@@ -7035,21 +7035,23 @@ impl Render for FikaApp {
                 .get(&pane_id)
                 .is_some_and(|filter| filter.visible)
         });
+        let chooser_accept_label = self
+            .chooser
+            .as_ref()
+            .map(|chooser| chooser.accept_label.clone());
+        let chrome_state_elapsed = chrome_state_started.map(|started| started.elapsed());
+        let chrome_icons_started = perf_enabled.then(Instant::now);
         let focused_filter_toggle = focused_pane.map(|pane_id| {
             (
                 pane_id,
                 filter_toggle_snapshot(&mut self.file_icons, focused_filter_active),
             )
         });
-        let chooser_accept_label = self
-            .chooser
-            .as_ref()
-            .map(|chooser| chooser.accept_label.clone());
         let split_icon = pane_split_icon_snapshot(&mut self.file_icons);
         let close_icon = pane_close_icon_snapshot(&mut self.file_icons);
         let places_panel_icon =
             places_panel_icon_snapshot(&mut self.file_icons, places_sidebar_visible);
-        let chrome_inputs_elapsed = chrome_inputs_started.map(|started| started.elapsed());
+        let chrome_icons_elapsed = chrome_icons_started.map(|started| started.elapsed());
         let pane_elements_started = perf_enabled.then(Instant::now);
         let mut pane_elements = Vec::with_capacity(pane_ids.len().saturating_mul(2));
         for (index, snapshot) in snapshots.into_iter().enumerate() {
@@ -7300,7 +7302,7 @@ impl Render for FikaApp {
             });
         if let Some(started) = render_started {
             eprintln!(
-                "[fika render] panes={} viewport={}x{} window_setup={}us places={}us tasks={}us snapshots={}us chrome_inputs={}us pane_elements={}us overlays={}us root={}us total={}us",
+                "[fika render] panes={} viewport={}x{} window_setup={}us places={}us tasks={}us snapshots={}us chrome_state={}us chrome_icons={}us pane_elements={}us overlays={}us root={}us total={}us",
                 pane_count,
                 viewport_size.width.as_f32(),
                 viewport_size.height.as_f32(),
@@ -7308,7 +7310,8 @@ impl Render for FikaApp {
                 places_elapsed.map_or(0, |elapsed| elapsed.as_micros()),
                 background_tasks_elapsed.map_or(0, |elapsed| elapsed.as_micros()),
                 snapshots_elapsed.map_or(0, |elapsed| elapsed.as_micros()),
-                chrome_inputs_elapsed.map_or(0, |elapsed| elapsed.as_micros()),
+                chrome_state_elapsed.map_or(0, |elapsed| elapsed.as_micros()),
+                chrome_icons_elapsed.map_or(0, |elapsed| elapsed.as_micros()),
                 pane_elements_elapsed.map_or(0, |elapsed| elapsed.as_micros()),
                 overlays_elapsed.map_or(0, |elapsed| elapsed.as_micros()),
                 root_started.map_or(0, |started| started.elapsed().as_micros()),

@@ -405,6 +405,12 @@ the max-total residual to `4us` and showed the dominant same-frame owner was
 therefore toolbar/chrome icon/input preparation before revisiting row visual
 default promotion thresholds.
 
+The follow-up split in
+`/tmp/fika-places-chrome-split-20260619-places-handoff-full-targets.log` showed
+`chrome_state=2us` and `chrome_icons=8360us` at max total. This confirms the
+remaining first-frame target is named toolbar/chrome icon resolution, not
+general render state projection.
+
 ## Next Renderer Decisions
 
 1. Keep the remaining drag-start shells until the GPUI API boundary changes.
