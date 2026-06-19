@@ -383,6 +383,9 @@ fn install_places_event_dnd_handlers(
                     debug_places_dnd_leave("item", event.event.position, changed);
                     return;
                 }
+                if places_event_dnd_defer_to_pane(&app, &state, event.event.position, "item", cx) {
+                    return;
+                }
                 let payload = event.drag(cx).payload();
                 let local_y = places_event_drag_local_y(event.bounds, event.event.position);
                 let handled = app
@@ -414,6 +417,15 @@ fn install_places_event_dnd_handlers(
                         .update(cx, |this, cx| places_event_dnd_leave(this, &state, cx))
                         .unwrap_or(false);
                     debug_places_dnd_leave("external", event.event.position, changed);
+                    return;
+                }
+                if places_event_dnd_defer_to_pane(
+                    &app,
+                    &state,
+                    event.event.position,
+                    "external",
+                    cx,
+                ) {
                     return;
                 }
                 let source_paths = event.drag(cx).paths().to_vec();
@@ -449,6 +461,9 @@ fn install_places_event_dnd_handlers(
                     debug_places_dnd_leave("place", event.event.position, changed);
                     return;
                 }
+                if places_event_dnd_defer_to_pane(&app, &state, event.event.position, "place", cx) {
+                    return;
+                }
                 let drag = event.drag(cx);
                 let source_index = drag.source_index();
                 let movable = drag.movable();
@@ -474,7 +489,15 @@ fn install_places_event_dnd_handlers(
         })
         .can_drop({
             let state = state.clone();
-            move |_dragged, _window, cx| state.read(cx).retained_dnd_target.is_some()
+            let app = app.clone();
+            move |_dragged, window, cx| {
+                state.read(cx).retained_dnd_target.is_some()
+                    && app
+                        .update(cx, |this, _cx| {
+                            !this.window_position_is_in_pane_viewport(window.mouse_position())
+                        })
+                        .unwrap_or(false)
+            }
         })
         .on_drop::<ItemDrag>({
             let app = app.clone();
@@ -552,6 +575,41 @@ fn places_event_dnd_leave(
         cx.notify();
     }
     changed
+}
+
+fn places_event_dnd_defer_to_pane(
+    app: &WeakEntity<FikaApp>,
+    state: &Entity<PlacesEventTargetingState>,
+    position: gpui::Point<Pixels>,
+    kind: &'static str,
+    cx: &mut App,
+) -> bool {
+    let (deferred, changed) = app
+        .update(cx, |this, cx| {
+            let Some(changed) =
+                this.clear_place_drop_target_if_window_position_is_in_pane_viewport(position)
+            else {
+                return (false, false);
+            };
+            state.update(cx, |state, _cx| state.retained_dnd_target = None);
+            if changed {
+                cx.notify();
+            }
+            (true, changed)
+        })
+        .unwrap_or((false, false));
+    if deferred {
+        debug_dnd_log(|| {
+            format!(
+                "places-dnd-defer-to-pane kind={} pos=({:.1},{:.1}) changed={}",
+                kind,
+                position.x.as_f32(),
+                position.y.as_f32(),
+                changed
+            )
+        });
+    }
+    deferred
 }
 
 fn debug_places_dnd_leave(kind: &'static str, position: gpui::Point<Pixels>, changed: bool) {

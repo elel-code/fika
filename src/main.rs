@@ -3521,6 +3521,23 @@ impl FikaApp {
         )
     }
 
+    pub(crate) fn window_position_is_in_pane_viewport(
+        &self,
+        position: gpui::Point<gpui::Pixels>,
+    ) -> bool {
+        self.pane_at_window_position(position).is_some()
+    }
+
+    pub(crate) fn clear_place_drop_target_if_window_position_is_in_pane_viewport(
+        &mut self,
+        position: gpui::Point<gpui::Pixels>,
+    ) -> Option<bool> {
+        if !self.window_position_is_in_pane_viewport(position) {
+            return None;
+        }
+        Some(self.clear_place_drop_target())
+    }
+
     fn clamped_content_point_from_window(
         &self,
         pane_id: PaneId,
@@ -15191,6 +15208,56 @@ text/plain=viewer.desktop;\n",
             assert!(app.active_item_drag.is_none());
             assert!(app.clear_drag_drop_targets());
         }
+
+        let _ = std::fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn pane_viewport_position_takes_ownership_from_places_during_drag() {
+        let temp = test_dir("pane-dnd-owns-place-target");
+        let target_dir = temp.join("target");
+        let source_file = temp.join("source.txt");
+        std::fs::create_dir_all(&target_dir).unwrap();
+        std::fs::write(&source_file, "source").unwrap();
+        let mut app = test_app_with_entries(temp.to_str().unwrap(), &[]);
+        let pane_id = app.panes.focused().unwrap();
+        app.panes.pane_mut(pane_id).unwrap().model.replace_listing(
+            temp.clone(),
+            Arc::new(vec![
+                test_directory_entry("target"),
+                test_entry("source.txt"),
+            ]),
+        );
+        configure_retained_hit_test_view(&mut app, pane_id, ViewMode::Icons);
+
+        let pane_point = retained_hit_test_item_window_point(&mut app, pane_id, 0);
+        assert!(app.window_position_is_in_pane_viewport(pane_point));
+        assert!(app.set_place_drag_drop_target_for_path(target_dir.clone()));
+        assert!(place_drop_target_matches_place(
+            app.drop_targets.place(),
+            &target_dir
+        ));
+
+        assert_eq!(
+            app.clear_place_drop_target_if_window_position_is_in_pane_viewport(pane_point),
+            Some(true)
+        );
+        assert!(app.drop_targets.place().is_none());
+        assert_eq!(
+            app.clear_place_drop_target_if_window_position_is_in_pane_viewport(pane_point),
+            Some(false)
+        );
+
+        assert!(app.set_place_drag_drop_target_for_path(target_dir.clone()));
+        let outside_pane = gpui::point(px(10.0), px(10.0));
+        assert_eq!(
+            app.clear_place_drop_target_if_window_position_is_in_pane_viewport(outside_pane),
+            None
+        );
+        assert!(place_drop_target_matches_place(
+            app.drop_targets.place(),
+            &target_dir
+        ));
 
         let _ = std::fs::remove_dir_all(temp);
     }
