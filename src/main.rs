@@ -82,15 +82,14 @@ use ui::drag_drop::{
 };
 use ui::file_grid::{
     CompactColumnWidthCache, ContentItemHit, DetailsTextShapeCache, FileIconResolveQueue, ItemDrag,
-    ItemPaintSlotCache, ItemViewAutosmokeAction, ItemViewAutosmokeScenario, ItemViewPerfState,
-    PaneLayoutProjection, PaneLayoutProjectionInput, PaneViewportGeometry, PaneVisibleWorkKey,
-    RetainedHoveredItem, StaticItemTextShapeCache, VisibleItemSlotPool, VisibleItemSnapshotCache,
+    ItemPaintSlotCache, ItemViewAutosmokeScenario, ItemViewPerfState, PaneLayoutProjection,
+    PaneLayoutProjectionInput, PaneViewportGeometry, PaneVisibleWorkKey, RetainedHoveredItem,
+    StaticItemTextShapeCache, VisibleItemSlotPool, VisibleItemSnapshotCache,
     clamped_content_point_from_window_position, compact_text_width, compact_text_width_for_name,
-    content_point_from_window_position, emit_item_view_autosmoke_complete,
-    emit_item_view_autosmoke_scroll_action, emit_item_view_autosmoke_start,
-    emit_item_view_autosmoke_zoom_action, item_view_perf_enabled, pane_at_window_position,
+    content_point_from_window_position, item_view_perf_enabled, pane_at_window_position,
     pane_content_item_hit_at_point, pane_layout_projection,
     pane_model_indexes_intersecting_visual_rect, rename_editor_required_text_width,
+    start_item_view_autosmoke,
 };
 #[cfg(test)]
 use ui::file_grid::{RawFileGridSnapshot, THUMBNAIL_PROBE_BATCH_SIZE};
@@ -548,7 +547,7 @@ impl FikaApp {
         app.maybe_start_device_monitor(cx);
         Self::start_listing_result_monitor(listing_results_rx, cx);
         if let Some(scenario) = ItemViewAutosmokeScenario::from_env() {
-            Self::start_item_view_autosmoke(first, scenario, cx);
+            start_item_view_autosmoke(first, scenario, cx);
         }
         if let Some(scenario) = PlacesAutosmokeScenario::from_env() {
             Self::start_places_autosmoke(scenario, cx);
@@ -597,61 +596,6 @@ impl FikaApp {
         )
         .detach();
         app
-    }
-
-    fn start_item_view_autosmoke(
-        pane_id: PaneId,
-        scenario: ItemViewAutosmokeScenario,
-        cx: &mut Context<Self>,
-    ) {
-        cx.spawn(
-            move |this: gpui::WeakEntity<FikaApp>, cx: &mut gpui::AsyncApp| {
-                let mut cx = cx.clone();
-                async move {
-                    emit_item_view_autosmoke_start(pane_id, scenario);
-                    cx.background_executor().timer(scenario.start_delay()).await;
-
-                    for action in scenario.actions() {
-                        match action {
-                            ItemViewAutosmokeAction::Zoom { label, change } => {
-                                if this
-                                    .update(&mut cx, |app, cx| {
-                                        emit_item_view_autosmoke_zoom_action(label, pane_id);
-                                        app.apply_zoom_change_with_context(pane_id, change, cx);
-                                        cx.notify();
-                                    })
-                                    .is_err()
-                                {
-                                    return;
-                                }
-                            }
-                            ItemViewAutosmokeAction::Scroll { label, delta } => {
-                                if this
-                                    .update(&mut cx, |app, cx| {
-                                        let changed = app.scroll_pane_from_wheel(pane_id, delta);
-                                        emit_item_view_autosmoke_scroll_action(
-                                            label, pane_id, changed,
-                                        );
-                                        if changed {
-                                            cx.notify();
-                                        }
-                                    })
-                                    .is_err()
-                                {
-                                    return;
-                                }
-                            }
-                        }
-                        cx.background_executor()
-                            .timer(scenario.action_delay())
-                            .await;
-                    }
-
-                    emit_item_view_autosmoke_complete(pane_id, scenario);
-                }
-            },
-        )
-        .detach();
     }
 
     fn start_places_autosmoke(scenario: PlacesAutosmokeScenario, cx: &mut Context<Self>) {
@@ -3051,7 +2995,7 @@ impl FikaApp {
         self.apply_zoom_change_impl(pane_id, change);
     }
 
-    fn apply_zoom_change_with_context(
+    pub(crate) fn apply_zoom_change_with_context(
         &mut self,
         pane_id: PaneId,
         change: ZoomChange,

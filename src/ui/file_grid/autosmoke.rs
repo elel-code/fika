@@ -2,7 +2,9 @@ use std::env;
 use std::time::Duration;
 
 use fika_core::{PaneId, ZoomChange};
-use gpui::{ScrollDelta, point, px};
+use gpui::{Context, ScrollDelta, point, px};
+
+use crate::FikaApp;
 
 const AUTOSMOKE_ITEM_VIEW_ENV: &str = "FIKA_AUTOSMOKE_ITEM_VIEW";
 
@@ -94,7 +96,60 @@ impl ItemViewAutosmokeScenario {
     }
 }
 
-pub(crate) fn emit_item_view_autosmoke_start(pane_id: PaneId, scenario: ItemViewAutosmokeScenario) {
+pub(crate) fn start_item_view_autosmoke(
+    pane_id: PaneId,
+    scenario: ItemViewAutosmokeScenario,
+    cx: &mut Context<FikaApp>,
+) {
+    cx.spawn(
+        move |this: gpui::WeakEntity<FikaApp>, cx: &mut gpui::AsyncApp| {
+            let mut cx = cx.clone();
+            async move {
+                emit_item_view_autosmoke_start(pane_id, scenario);
+                cx.background_executor().timer(scenario.start_delay()).await;
+
+                for action in scenario.actions() {
+                    match action {
+                        ItemViewAutosmokeAction::Zoom { label, change } => {
+                            if this
+                                .update(&mut cx, |app, cx| {
+                                    emit_item_view_autosmoke_zoom_action(label, pane_id);
+                                    app.apply_zoom_change_with_context(pane_id, change, cx);
+                                    cx.notify();
+                                })
+                                .is_err()
+                            {
+                                return;
+                            }
+                        }
+                        ItemViewAutosmokeAction::Scroll { label, delta } => {
+                            if this
+                                .update(&mut cx, |app, cx| {
+                                    let changed = app.scroll_pane_from_wheel(pane_id, delta);
+                                    emit_item_view_autosmoke_scroll_action(label, pane_id, changed);
+                                    if changed {
+                                        cx.notify();
+                                    }
+                                })
+                                .is_err()
+                            {
+                                return;
+                            }
+                        }
+                    }
+                    cx.background_executor()
+                        .timer(scenario.action_delay())
+                        .await;
+                }
+
+                emit_item_view_autosmoke_complete(pane_id, scenario);
+            }
+        },
+    )
+    .detach();
+}
+
+fn emit_item_view_autosmoke_start(pane_id: PaneId, scenario: ItemViewAutosmokeScenario) {
     eprintln!(
         "[fika autosmoke] item-view start pane={} scenario={}",
         pane_id.0,
@@ -102,10 +157,7 @@ pub(crate) fn emit_item_view_autosmoke_start(pane_id: PaneId, scenario: ItemView
     );
 }
 
-pub(crate) fn emit_item_view_autosmoke_complete(
-    pane_id: PaneId,
-    scenario: ItemViewAutosmokeScenario,
-) {
+fn emit_item_view_autosmoke_complete(pane_id: PaneId, scenario: ItemViewAutosmokeScenario) {
     eprintln!(
         "[fika autosmoke] item-view complete pane={} scenario={}",
         pane_id.0,
@@ -113,18 +165,14 @@ pub(crate) fn emit_item_view_autosmoke_complete(
     );
 }
 
-pub(crate) fn emit_item_view_autosmoke_zoom_action(label: &'static str, pane_id: PaneId) {
+fn emit_item_view_autosmoke_zoom_action(label: &'static str, pane_id: PaneId) {
     eprintln!(
         "[fika autosmoke] item-view action={} pane={}",
         label, pane_id.0
     );
 }
 
-pub(crate) fn emit_item_view_autosmoke_scroll_action(
-    label: &'static str,
-    pane_id: PaneId,
-    changed: bool,
-) {
+fn emit_item_view_autosmoke_scroll_action(label: &'static str, pane_id: PaneId, changed: bool) {
     eprintln!(
         "[fika autosmoke] item-view action={} pane={} changed={}",
         label, pane_id.0, changed

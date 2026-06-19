@@ -1651,6 +1651,12 @@ tracks.
   pointer is inside a pane. The required runtime trace is
   `places-dnd-defer-to-pane`, and stale Places highlights must not survive
   while pane retained hit testing owns an item drop target.
+- [x] P16fs: Move item-view autosmoke runner ownership into the file-grid
+  facade. `src/ui/file_grid/autosmoke.rs` now owns the async
+  `FIKA_AUTOSMOKE_ITEM_VIEW` action loop and marker emission, while
+  `src/main.rs` only reads the selected scenario and triggers the facade. This
+  keeps runtime evidence collection with the item-view controller/perf surface
+  instead of leaving action orchestration in the app root.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

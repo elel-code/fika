@@ -26,11 +26,7 @@ mod text;
 mod types;
 mod viewport;
 
-pub(crate) use autosmoke::{
-    ItemViewAutosmokeAction, ItemViewAutosmokeScenario, emit_item_view_autosmoke_complete,
-    emit_item_view_autosmoke_scroll_action, emit_item_view_autosmoke_start,
-    emit_item_view_autosmoke_zoom_action,
-};
+pub(crate) use autosmoke::{ItemViewAutosmokeScenario, start_item_view_autosmoke};
 pub(crate) use details::DetailsLayoutMetrics;
 pub(crate) use details_visual::DetailsTextShapeCache;
 pub(crate) use dnd::ItemDrag;
