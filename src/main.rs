@@ -3522,28 +3522,6 @@ impl FikaApp {
         self.set_pane_status(pane_id, "Editing place");
     }
 
-    fn remove_place(&mut self, pane_id: PaneId, path: &Path) {
-        let result = ui::places::remove_user_place(&mut self.places, path);
-        let Some(removed_path) = result.removed_path() else {
-            self.set_pane_status(pane_id, result.status_message());
-            return;
-        };
-        if self
-            .place_draft
-            .as_ref()
-            .and_then(|draft| draft.editing_path.as_deref())
-            == Some(removed_path)
-        {
-            self.place_draft = None;
-        }
-        self.hidden_places.remove(removed_path);
-        if let Err(error) = self.save_user_places() {
-            self.set_pane_status(pane_id, error);
-            return;
-        }
-        self.set_pane_status(pane_id, result.status_message());
-    }
-
     fn handle_place_draft_keystroke(&mut self, keystroke: &gpui::Keystroke) -> bool {
         let Some(draft_pane_id) = self.place_draft.as_ref().map(|draft| draft.pane_id) else {
             return false;

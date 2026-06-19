@@ -5,6 +5,10 @@ mod ordering;
 mod persistence;
 mod removal;
 
+use std::path::Path;
+
+use fika_core::PaneId;
+
 use crate::FikaApp;
 
 pub(crate) use dropped::add_user_place_from_dropped_paths;
@@ -12,7 +16,6 @@ pub(crate) use edit::commit_user_place_draft;
 pub(crate) use ordering::{
     MoveUserPlaceResult, move_user_place_to_insert_index, user_place_insert_index,
 };
-pub(crate) use removal::remove_user_place;
 
 impl FikaApp {
     pub(crate) fn user_places(&self) -> Vec<fika_core::UserPlace> {
@@ -27,5 +30,27 @@ impl FikaApp {
             &place_order_path,
             &persistence::primary_place_order(&self.places),
         )
+    }
+
+    pub(crate) fn remove_place(&mut self, pane_id: PaneId, path: &Path) {
+        let result = removal::remove_user_place(&mut self.places, path);
+        let Some(removed_path) = result.removed_path() else {
+            self.set_pane_status(pane_id, result.status_message());
+            return;
+        };
+        if self
+            .place_draft
+            .as_ref()
+            .and_then(|draft| draft.editing_path.as_deref())
+            == Some(removed_path)
+        {
+            self.place_draft = None;
+        }
+        self.hidden_places.remove(removed_path);
+        if let Err(error) = self.save_user_places() {
+            self.set_pane_status(pane_id, error);
+            return;
+        }
+        self.set_pane_status(pane_id, result.status_message());
     }
 }

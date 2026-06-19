@@ -1699,6 +1699,11 @@ tracks.
   `save_user_places()` on `FikaApp`, including user bookmark export and primary
   place order persistence. `src/main.rs` still calls the save facade from
   add/edit/remove/reorder paths but no longer owns the persistence wiring.
+- [x] P16gaa: Move app-facing user-place removal into the Places user facade.
+  `src/ui/places/user.rs` now owns `remove_place()` on `FikaApp`, including
+  removable-place validation, draft cleanup, hidden-place cleanup, persistence,
+  and status updates. The low-level `remove_user_place()` helper stays private
+  to the user-place module instead of being re-exported through `ui::places`.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,
