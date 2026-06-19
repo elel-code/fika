@@ -893,11 +893,29 @@ Places chrome 默认之后的当前执行入口是
   `theme_placeholder=0`、`max_gpui_image_element=0`、`item-image max_prepaint=480us`；
   `/tmp/fika-svg-source-retain-downloads.log` 报告 `theme_decoded=0`、`theme_retained=702`、
   `theme_placeholder=0`、`max_gpui_image_element=0`、`item-image max_prepaint=788us`。
-- [ ] P16gbf：在 image/icon ownership 稳定后，降低剩余 pane custom visual/text paint 冷帧方差。
+- [~] P16gbf：在 image/icon ownership 稳定后，降低剩余 pane custom visual/text paint 冷帧方差。
   当前 `/etc` 和 Downloads 日志中 image 与 icon-sync 已在预算内，但
   `[fika static-item-visual]` 仍可能出现多毫秒级 cold prepaint/paint。继续对照 Dolphin item
   text/pixmap caches 和 GPUI text shaping，判断下一步是 retained text-shape/source prewarm、
   收紧 paint invalidation，还是引入更接近 Dolphin 的可见 widget/state pool。
+- [x] P16gbf1：收紧 pane static text/visual 在 Icons zoom 中的复用。根因：
+  static item text shape cache 以前按 `item_id` 以及 Icons 居中标签的 paint-only text bounds
+  建 key，所以 zoom/resize 即使实际 shaped label lines 不变也可能 miss。实现：
+  `StaticItemTextShapeCacheKey` 移除 item identity；Center/Icons 标签在已计算分行后不再把
+  text rect 宽高作为 key 维度；没有 fallback marker 时不再把 marker line height 放进 key；
+  普通未选中/未悬停条目不再提交透明 background quad；新增
+  `FIKA_AUTOSMOKE_ITEM_VIEW=icons-zoom-scroll`。证据：
+  `/tmp/fika-full-icons-keyed-etc.log` 覆盖 `modes: Icons,Compact`，
+  `max_gpui_image_element=0`、`theme_placeholder=0`、`theme_decoded=0`；初次切入
+  Icons 后，zoom 帧出现 `hits=24 misses=0`、`hits=28 misses=0`、`hits=40 misses=0`，
+  重复 zoom 的 `[fika static-item-visual]` prepaint 降到 93-254us。
+- [ ] P16gbf2：移除 Icons/Compact full custom visual paint 剩余的首次进入冷文本/glyph
+  尖峰。当前证据显示下一个根因：Downloads 仍有稳定的首次 Icons 切换 cold shape 尖峰
+  （`/tmp/fika-full-icons-keyed-downloads-r2.log`，`hits=1 misses=39`，
+  `static-item-visual prepaint=52840us`）和第一次 text paint 尖峰（`paint=17698us`），
+  尽管 image/icon 路径已经干净。下一切片应加入 Dolphin 风格 retained text warmup/state
+  pool，让目标模式 label shape 和 glyph paint 在 handoff 前被预热，类似 Places row text
+  handoff 模型，而不是把全部 cold shaping 放进第一个可见 custom visual frame。
 - [ ] P16q：在每个 P16 实现切片之后，单独提交并附带相关验证：仅文档切片需要 `git diff --check`；代码切片需要 `cargo fmt`、`cargo check`、`cargo test -q`、`scripts/check-item-view-perf-analyzer.sh`、`scripts/check-places-perf-analyzer.sh` 和 `git diff --check`。
 - [x] P16r：记录运行时自测试和突破记录规则。可重复的滚动、缩放、启动图标、调整大小、模式切换和 Places 目标回退应在依赖手动计时之前通过 autosmoke 日志和分析器脚本重现。任何确认的优化突破必须记录症状、Dolphin 比较边界、根本原因、实现、保存的日志/分析器命令和未来回归守卫在拥有的设计或决策文档中。
 

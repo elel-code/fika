@@ -23,7 +23,7 @@ pub(super) struct StaticItemVisualPaintState {
     marker_line_height: Pixels,
     shapes: Arc<StaticItemTextShapes>,
     label_line_height: Pixels,
-    background: Rgba,
+    background: Option<Rgba>,
     paint_fallback_icon: bool,
     fallback_bg: u32,
 }
@@ -45,7 +45,6 @@ enum StaticItemLabelPaintState {
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(super) struct StaticItemTextShapeCacheKey {
-    pub(super) item_id: ItemId,
     pub(super) text_alignment: ItemTileTextAlignment,
     pub(super) paint_fallback_icon: bool,
     pub(super) text_font: Font,
@@ -171,6 +170,7 @@ pub(super) fn static_item_visual_layer_items(
 }
 
 pub(super) struct StaticItemVisualLayerItem {
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(super) item_id: ItemId,
     visible: bool,
     display_name: SharedString,
@@ -243,7 +243,6 @@ impl Element for StaticItemVisualLayerElement {
             .map(|item| {
                 static_item_visual_prepaint(
                     self.pane_id,
-                    item.item_id,
                     item.visible,
                     item.display_name.clone(),
                     item.icon_name_lines.clone(),
@@ -320,7 +319,6 @@ pub(super) fn static_item_visual_layer_element_id(pane_id: PaneId) -> (&'static 
 
 fn static_item_visual_prepaint(
     pane_id: PaneId,
-    item_id: ItemId,
     visible: bool,
     display_name: SharedString,
     icon_name_lines: Arc<[SharedString]>,
@@ -338,7 +336,6 @@ fn static_item_visual_prepaint(
 ) -> StaticItemVisualPaintState {
     let style = static_item_text_shape_style(layout, selected, &icon, window);
     let key = static_item_text_shape_cache_key(
-        item_id,
         display_name,
         icon_name_lines,
         fallback_marker,
@@ -364,7 +361,8 @@ fn static_item_visual_prepaint(
         marker_line_height: style.marker_line_height,
         shapes,
         label_line_height: style.label_line_height,
-        background: super::item_tile_background(selected, drop_target, hovered),
+        background: (selected || drop_target || hovered)
+            .then(|| super::item_tile_background(selected, drop_target, hovered)),
         paint_fallback_icon,
         fallback_bg: icon.fallback_bg,
     }
@@ -393,7 +391,6 @@ fn static_item_text_shape_style(
 }
 
 fn static_item_text_shape_cache_key(
-    item_id: ItemId,
     display_name: SharedString,
     icon_name_lines: Arc<[SharedString]>,
     fallback_marker: SharedString,
@@ -418,8 +415,14 @@ fn static_item_text_shape_cache_key(
             StaticItemLabelTextKey::Center(lines)
         }
     };
+    let (text_width_bits, text_height_bits) = match text_alignment {
+        ItemTileTextAlignment::Start => (
+            layout.text_rect.width.to_bits(),
+            layout.text_rect.height.to_bits(),
+        ),
+        ItemTileTextAlignment::Center => (0, 0),
+    };
     StaticItemTextShapeCacheKey {
-        item_id,
         text_alignment,
         paint_fallback_icon,
         text_font: style.text_font.clone(),
@@ -427,9 +430,13 @@ fn static_item_text_shape_cache_key(
         text_font_size_bits: style.text_font_size.as_f32().to_bits(),
         marker_font_size_bits: style.marker_font_size.as_f32().to_bits(),
         label_line_height_bits: style.label_line_height.as_f32().to_bits(),
-        marker_line_height_bits: style.marker_line_height.as_f32().to_bits(),
-        text_width_bits: layout.text_rect.width.to_bits(),
-        text_height_bits: layout.text_rect.height.to_bits(),
+        marker_line_height_bits: if paint_fallback_icon {
+            style.marker_line_height.as_f32().to_bits()
+        } else {
+            0
+        },
+        text_width_bits,
+        text_height_bits,
         scale_factor_bits: window.scale_factor().to_bits(),
         text_color: style.text_color,
         fallback_fg: if paint_fallback_icon {
@@ -536,7 +543,9 @@ fn static_item_visual_paint(
     window: &mut Window,
     cx: &mut App,
 ) {
-    window.paint_quad(fill(bounds, state.background).corner_radii(px(6.0)));
+    if let Some(background) = state.background {
+        window.paint_quad(fill(bounds, background).corner_radii(px(6.0)));
+    }
     let icon_bounds =
         static_item_local_bounds(bounds, state.layout.visual_rect, state.layout.icon_rect);
     if state.paint_fallback_icon {

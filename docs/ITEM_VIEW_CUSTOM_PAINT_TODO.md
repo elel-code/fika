@@ -2204,13 +2204,38 @@ tracks.
   `item-image max_prepaint=480us`; `/tmp/fika-svg-source-retain-downloads.log`
   reports `theme_decoded=0`, `theme_retained=702`, `theme_placeholder=0`,
   `max_gpui_image_element=0`, and `item-image max_prepaint=788us`.
-- [ ] P16gbf: Reduce remaining custom pane cold visual/text paint variance after
+- [~] P16gbf: Reduce remaining custom pane cold visual/text paint variance after
   image/icon ownership is stable. Current `/etc` and Downloads logs have image
   and icon-sync under budget, but `[fika static-item-visual]` can still show
   multi-millisecond cold prepaint/paint. Compare this path with Dolphin item
   text/pixmap caches and GPUI text shaping, then decide whether to add retained
   text-shape/source prewarm, tighten paint invalidation, or introduce a more
   Dolphin-like visible widget/state pool.
+- [x] P16gbf1: Tighten pane static text/visual reuse for Icons zoom. Root cause:
+  static item text shapes were keyed by `item_id` and by paint-only text bounds
+  in center-aligned Icons mode, so a zoom/resize could miss even when the
+  actual shaped label lines were unchanged. Implementation: remove item identity
+  from `StaticItemTextShapeCacheKey`, ignore text rect width/height for
+  center-aligned labels after line selection has been computed, ignore fallback
+  marker line height when no fallback marker is painted, skip transparent
+  background quads for ordinary items, and add
+  `FIKA_AUTOSMOKE_ITEM_VIEW=icons-zoom-scroll`. Evidence:
+  `/tmp/fika-full-icons-keyed-etc.log` covers `modes: Icons,Compact` with
+  `max_gpui_image_element=0`, `theme_placeholder=0`, `theme_decoded=0`; after
+  the initial Icons switch, zoom frames show `hits=24 misses=0`,
+  `hits=28 misses=0`, and `hits=40 misses=0`, with
+  `[fika static-item-visual]` prepaint dropping to 93-254us on repeated zoom
+  frames.
+- [ ] P16gbf2: Remove the remaining first-enter cold text/glyph spike for
+  Icons/Compact full custom visual paint. Current evidence shows the next root
+  cause: Downloads still reports a stable first Icons switch cold shape spike
+  (`/tmp/fika-full-icons-keyed-downloads-r2.log`, `hits=1 misses=39`,
+  `static-item-visual prepaint=52840us`) and a first text paint spike
+  (`paint=17698us`) even though image/icon work is clean. The next cut should
+  add a Dolphin-style retained text warmup/state pool so target-mode label
+  shapes and glyph paint are warmed before handoff, similar to the Places row
+  text handoff model, instead of shifting all cold shaping into the first
+  visible custom visual frame.
 
 ## Acceptance Gates
 

@@ -13,6 +13,7 @@ pub(crate) enum ItemViewAutosmokeScenario {
     Zoom,
     Scroll,
     ZoomScroll,
+    IconsZoomScroll,
     DetailsZoomScroll,
 }
 
@@ -42,6 +43,7 @@ impl ItemViewAutosmokeScenario {
             Self::Zoom => "Zoom",
             Self::Scroll => "Scroll",
             Self::ZoomScroll => "ZoomScroll",
+            Self::IconsZoomScroll => "IconsZoomScroll",
             Self::DetailsZoomScroll => "DetailsZoomScroll",
         }
     }
@@ -58,6 +60,12 @@ impl ItemViewAutosmokeScenario {
 
     pub(crate) fn actions(self) -> Vec<ItemViewAutosmokeAction> {
         let mut actions = Vec::new();
+        if matches!(self, Self::IconsZoomScroll) {
+            actions.push(ItemViewAutosmokeAction::ViewMode {
+                label: "view-icons",
+                mode: ViewMode::Icons,
+            });
+        }
         if matches!(self, Self::DetailsZoomScroll) {
             actions.push(ItemViewAutosmokeAction::ViewMode {
                 label: "view-details",
@@ -66,7 +74,7 @@ impl ItemViewAutosmokeScenario {
         }
         if matches!(
             self,
-            Self::Zoom | Self::ZoomScroll | Self::DetailsZoomScroll
+            Self::Zoom | Self::ZoomScroll | Self::IconsZoomScroll | Self::DetailsZoomScroll
         ) {
             actions.extend([
                 ItemViewAutosmokeAction::Zoom {
@@ -89,7 +97,7 @@ impl ItemViewAutosmokeScenario {
         }
         if matches!(
             self,
-            Self::Scroll | Self::ZoomScroll | Self::DetailsZoomScroll
+            Self::Scroll | Self::ZoomScroll | Self::IconsZoomScroll | Self::DetailsZoomScroll
         ) {
             actions.extend([
                 ItemViewAutosmokeAction::Scroll {
@@ -224,6 +232,9 @@ fn item_view_autosmoke_scenario_from_value(value: &str) -> Option<ItemViewAutosm
         "details-zoom-scroll" | "details-scroll-zoom" | "details" => {
             Some(ItemViewAutosmokeScenario::DetailsZoomScroll)
         }
+        "icons-zoom-scroll" | "icons-scroll-zoom" | "icons" => {
+            Some(ItemViewAutosmokeScenario::IconsZoomScroll)
+        }
         "zoom" => Some(ItemViewAutosmokeScenario::Zoom),
         "scroll" => Some(ItemViewAutosmokeScenario::Scroll),
         _ => None,
@@ -243,6 +254,10 @@ mod tests {
         assert_eq!(
             item_view_autosmoke_scenario_from_value("details-zoom-scroll"),
             Some(ItemViewAutosmokeScenario::DetailsZoomScroll)
+        );
+        assert_eq!(
+            item_view_autosmoke_scenario_from_value("icons-zoom-scroll"),
+            Some(ItemViewAutosmokeScenario::IconsZoomScroll)
         );
         assert_eq!(
             item_view_autosmoke_scenario_from_value("1"),
@@ -268,6 +283,10 @@ mod tests {
             "ZoomScroll"
         );
         assert_eq!(
+            ItemViewAutosmokeScenario::IconsZoomScroll.marker_label(),
+            "IconsZoomScroll"
+        );
+        assert_eq!(
             ItemViewAutosmokeScenario::DetailsZoomScroll.marker_label(),
             "DetailsZoomScroll"
         );
@@ -291,6 +310,22 @@ mod tests {
             actions[0],
             ItemViewAutosmokeAction::ViewMode {
                 mode: ViewMode::Details,
+                ..
+            }
+        ));
+        assert!(matches!(actions[1], ItemViewAutosmokeAction::Zoom { .. }));
+        assert!(matches!(actions[5], ItemViewAutosmokeAction::Scroll { .. }));
+    }
+
+    #[test]
+    fn icons_zoom_scroll_scenario_switches_mode_before_actions() {
+        let actions = ItemViewAutosmokeScenario::IconsZoomScroll.actions();
+
+        assert_eq!(actions.len(), 9);
+        assert!(matches!(
+            actions[0],
+            ItemViewAutosmokeAction::ViewMode {
+                mode: ViewMode::Icons,
                 ..
             }
         ));

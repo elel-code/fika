@@ -483,6 +483,34 @@ semantic key ready；它只是 retained image source。
 `theme_decoded=0`、`theme_retained=702`、`theme_placeholder=0`、
 `max_gpui_image_element=0`、`item-image max_prepaint=788us`。
 
+## 2026-06-19 Pane Static Text Shape 复用
+
+image/icon ownership 移出热路径后，剩余 full custom 方差转移到
+`[fika static-item-visual]`。对照 GPUI text element 后确认，GPUI 在 layout 阶段 shape
+文本，prepaint 只记录 bounds；Fika custom layer 则在 prepaint 中 shape 全部可见 item
+label。因此冷模式切换和首个可见帧会把文本 shaping 成本压到 custom painter，除非 retained
+cache 已经预热。
+
+实现：static item text shape 现在按真实 text/style 输入缓存，而不是按 item identity 缓存。
+`StaticItemTextShapeCacheKey` 移除 `item_id`。Center/Icons 标签在已经选定可见 label lines
+之后，不再把 text rect 宽高作为 key 维度，因为这些 bounds 只影响 paint 对齐/裁剪，不改变
+`shape_line`。没有绘制 fallback marker 时，也不再把 fallback marker line height 放进 key。
+static painter 还会跳过普通未选中/未悬停条目的透明 background quad。
+`FIKA_AUTOSMOKE_ITEM_VIEW=icons-zoom-scroll` 现在会先切到 Icons 再执行 zoom/scroll，使这条
+路径能被运行时证据覆盖。
+
+决策：这是正确方向，但不是最终文本方案。它比 item-local key 更接近 Dolphin 的
+content/style/layout-keyed retention，并消除了 Icons 后续 zoom 的重复 miss；但它还没有移除
+首次进入模式时的冷文本/glyph 尖峰。下一步应复用 Places text handoff 思路：在某个模式的
+第一个 full custom visual frame 前，用 retained state pool 预热目标模式 label shapes/glyphs。
+
+证据：`/tmp/fika-full-icons-keyed-etc.log` 覆盖 `modes: Icons,Compact`，
+`max_gpui_image_element=0`、`theme_placeholder=0`、`theme_decoded=0`。初次切入 Icons 后，
+zoom 帧报告 `hits=24 misses=0`、`hits=28 misses=0`、`hits=40 misses=0`，重复 zoom 的
+prepaint 为 93-254us。剩余风险由 `/tmp/fika-full-icons-keyed-downloads-r2.log` 记录：
+首次 Icons 切换仍报告 `hits=1 misses=39`、`static-item-visual prepaint=52840us`，第一次
+text paint frame 达到 `17698us`。
+
 ## 下一批渲染器决策
 
 1. 保持剩余 drag-start shells 直到 GPUI API 边界变化。不要将 GPUI per-element `on_drag_move` 用作 pane self-drag 悬停的真实来源；active item-drag window tracker 拥有该路径。

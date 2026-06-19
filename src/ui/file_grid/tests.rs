@@ -548,7 +548,6 @@ fn item_interaction_hitbox_bounds_are_layer_relative_visual_rects() {
 fn static_text_shape_cache_key_ignores_item_origin_for_resize_reuse() {
     let font = Font::default();
     let key = StaticItemTextShapeCacheKey {
-        item_id: ItemId(7),
         text_alignment: ItemTileTextAlignment::Start,
         paint_fallback_icon: true,
         text_font: font.clone(),
@@ -580,6 +579,44 @@ fn static_text_shape_cache_key_ignores_item_origin_for_resize_reuse() {
         ..key.clone()
     };
     assert_ne!(key, renamed_label);
+}
+
+#[test]
+fn static_center_text_shape_cache_key_ignores_paint_only_text_bounds() {
+    let font = Font::default();
+    let key = StaticItemTextShapeCacheKey {
+        text_alignment: ItemTileTextAlignment::Center,
+        paint_fallback_icon: false,
+        text_font: font.clone(),
+        marker_font: font,
+        text_font_size_bits: 14.0f32.to_bits(),
+        marker_font_size_bits: 12.0f32.to_bits(),
+        label_line_height_bits: 20.0f32.to_bits(),
+        marker_line_height_bits: 0,
+        text_width_bits: 0,
+        text_height_bits: 0,
+        scale_factor_bits: 1.0f32.to_bits(),
+        text_color: 0x24292f,
+        fallback_fg: 0,
+        fallback_marker: SharedString::from(""),
+        label: StaticItemLabelTextKey::Center(vec![
+            SharedString::from("alpha"),
+            SharedString::from("txt"),
+        ]),
+    };
+
+    let resized_paint_bounds = StaticItemTextShapeCacheKey {
+        text_width_bits: 0,
+        text_height_bits: 0,
+        ..key.clone()
+    };
+    assert_eq!(key, resized_paint_bounds);
+
+    let changed_center_lines = StaticItemTextShapeCacheKey {
+        label: StaticItemLabelTextKey::Center(vec![SharedString::from("alpha.txt")]),
+        ..key.clone()
+    };
+    assert_ne!(key, changed_center_lines);
 }
 
 #[test]

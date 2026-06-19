@@ -815,6 +815,41 @@ Evidence: `/tmp/fika-svg-source-retain-etc.log` reports
 `theme_retained=702`, `theme_placeholder=0`, `max_gpui_image_element=0`, and
 `item-image max_prepaint=788us`.
 
+## 2026-06-19 Pane Static Text Shape Reuse
+
+After image/icon ownership moved out of the hot path, the remaining full custom
+variance moved to `[fika static-item-visual]`. Comparing GPUI text elements
+showed that GPUI shapes text during layout and only records bounds during
+prepaint; Fika's custom layer shapes all visible item labels in prepaint. That
+makes cold mode switches and first visible frames pay text shaping cost in the
+custom painter unless the retained cache is already warm.
+
+Implementation: static item text shapes are now keyed by actual text/style
+inputs rather than item identity. `StaticItemTextShapeCacheKey` no longer
+includes `item_id`. Center-aligned Icons labels ignore text rect width/height
+after the visible label lines have been selected, because those bounds only
+affect paint alignment/clipping and do not change `shape_line`. Fallback marker
+line height is ignored when no fallback marker is painted. The static painter
+also skips transparent background quads for ordinary unselected/unhovered
+items. `FIKA_AUTOSMOKE_ITEM_VIEW=icons-zoom-scroll` now switches to Icons before
+running zoom/scroll so this path is covered by runtime evidence.
+
+Decision: this is the correct direction but not the final text solution. It
+matches Dolphin's content/style/layout-keyed retention better than item-local
+keys and removes repeated Icons zoom misses, but it does not eliminate the
+first-enter cold text/glyph spike. The next step should mirror the Places text
+handoff: warm target-mode label shapes/glyphs in a retained state pool before
+the first full custom visual frame for that mode.
+
+Evidence: `/tmp/fika-full-icons-keyed-etc.log` covers `modes: Icons,Compact`
+with `max_gpui_image_element=0`, `theme_placeholder=0`, and
+`theme_decoded=0`. After the initial Icons switch, zoom frames report
+`hits=24 misses=0`, `hits=28 misses=0`, and `hits=40 misses=0`, with repeated
+zoom prepaint at 93-254us. Remaining risk is documented by
+`/tmp/fika-full-icons-keyed-downloads-r2.log`: first Icons switch still reports
+`hits=1 misses=39`, `static-item-visual prepaint=52840us`, and the first text
+paint frame reaches `17698us`.
+
 ## Next Renderer Decisions
 
 1. Keep the remaining drag-start shells until the GPUI API boundary changes.
