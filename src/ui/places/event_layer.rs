@@ -376,18 +376,19 @@ fn install_places_event_dnd_handlers(
             let app = app.clone();
             let state = state.clone();
             move |event, window, cx| {
-                if !event.bounds.contains(&event.event.position) {
+                let position = window.mouse_position();
+                if !event.bounds.contains(&position) {
                     let changed = app
                         .update(cx, |this, cx| places_event_dnd_leave(this, &state, cx))
                         .unwrap_or(false);
-                    debug_places_dnd_leave("item", event.event.position, changed);
+                    debug_places_dnd_leave("item", position, changed);
                     return;
                 }
-                if places_event_dnd_defer_to_pane(&app, &state, event.event.position, "item", cx) {
+                if places_event_dnd_defer_to_pane(&app, &state, position, "item", cx) {
                     return;
                 }
                 let payload = event.drag(cx).payload();
-                let local_y = places_event_drag_local_y(event.bounds, event.event.position);
+                let local_y = places_event_drag_local_y(event.bounds, position);
                 let handled = app
                     .update(cx, |this, cx| {
                         let source_paths = this.item_drag_source_paths(&payload);
@@ -412,24 +413,19 @@ fn install_places_event_dnd_handlers(
             let app = app.clone();
             let state = state.clone();
             move |event, window, cx| {
-                if !event.bounds.contains(&event.event.position) {
+                let position = window.mouse_position();
+                if !event.bounds.contains(&position) {
                     let changed = app
                         .update(cx, |this, cx| places_event_dnd_leave(this, &state, cx))
                         .unwrap_or(false);
-                    debug_places_dnd_leave("external", event.event.position, changed);
+                    debug_places_dnd_leave("external", position, changed);
                     return;
                 }
-                if places_event_dnd_defer_to_pane(
-                    &app,
-                    &state,
-                    event.event.position,
-                    "external",
-                    cx,
-                ) {
+                if places_event_dnd_defer_to_pane(&app, &state, position, "external", cx) {
                     return;
                 }
                 let source_paths = event.drag(cx).paths().to_vec();
-                let local_y = places_event_drag_local_y(event.bounds, event.event.position);
+                let local_y = places_event_drag_local_y(event.bounds, position);
                 let handled = app
                     .update(cx, |this, cx| {
                         let source_paths = this.external_drag_source_paths(&source_paths);
@@ -454,20 +450,21 @@ fn install_places_event_dnd_handlers(
             let app = app.clone();
             let state = state.clone();
             move |event, window, cx| {
-                if !event.bounds.contains(&event.event.position) {
+                let position = window.mouse_position();
+                if !event.bounds.contains(&position) {
                     let changed = app
                         .update(cx, |this, cx| places_event_dnd_leave(this, &state, cx))
                         .unwrap_or(false);
-                    debug_places_dnd_leave("place", event.event.position, changed);
+                    debug_places_dnd_leave("place", position, changed);
                     return;
                 }
-                if places_event_dnd_defer_to_pane(&app, &state, event.event.position, "place", cx) {
+                if places_event_dnd_defer_to_pane(&app, &state, position, "place", cx) {
                     return;
                 }
                 let drag = event.drag(cx);
                 let source_index = drag.source_index();
                 let movable = drag.movable();
-                let local_y = places_event_drag_local_y(event.bounds, event.event.position);
+                let local_y = places_event_drag_local_y(event.bounds, position);
                 let handled = app
                     .update(cx, |this, cx| {
                         places_event_place_drag_move(
