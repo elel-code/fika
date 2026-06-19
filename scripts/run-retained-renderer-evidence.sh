@@ -29,8 +29,13 @@ Options:
       Capture MIME/theme icon default-vs-hybrid readiness handoff logs and
       require the hybrid default-promotion gate to pass.
 
+  --places-full-handoff
+      Capture paired default-chrome vs full Places ready-only handoff logs for
+      targets, overflow, and layout. This is a promotion-evidence input only;
+      it does not make full Places rows the default.
+
   --all
-      Same as --core --icons --hybrid-icons.
+      Same as --core --icons --hybrid-icons --places-full-handoff.
 
       Note: --icons is intentionally strict and may fail for the current
       non-promotable full custom theme-icon path. Use --hybrid-icons by itself
@@ -72,6 +77,7 @@ capture_items=false
 capture_places=false
 capture_icons=false
 capture_hybrid_icons=false
+capture_places_full_handoff=false
 analyze_only=false
 skip_build=false
 explicit_selection=false
@@ -101,12 +107,17 @@ while [[ $# -gt 0 ]]; do
             explicit_selection=true
             capture_hybrid_icons=true
             ;;
+        --places-full-handoff)
+            explicit_selection=true
+            capture_places_full_handoff=true
+            ;;
         --all)
             explicit_selection=true
             capture_items=true
             capture_places=true
             capture_icons=true
             capture_hybrid_icons=true
+            capture_places_full_handoff=true
             ;;
         --analyze-only)
             analyze_only=true
@@ -348,6 +359,45 @@ if [[ "$capture_hybrid_icons" == true ]]; then
         "$compare" --gate-hybrid-default-promotion "$icon_hybrid_etc_log" "$icon_default_etc_log"
     run_gate "icon hybrid default promotion downloads" \
         "$compare" --gate-hybrid-default-promotion "$icon_hybrid_downloads_log" "$icon_default_downloads_log"
+fi
+
+if [[ "$capture_places_full_handoff" == true ]]; then
+    places_analyzer="$root_dir/scripts/analyze-places-perf.sh"
+    places_handoff_chrome_targets_log="$(log_path places-handoff-chrome-targets)"
+    places_handoff_full_targets_log="$(log_path places-handoff-full-targets)"
+    places_handoff_chrome_overflow_log="$(log_path places-handoff-chrome-overflow)"
+    places_handoff_full_overflow_log="$(log_path places-handoff-full-overflow)"
+    places_handoff_chrome_layout_log="$(log_path places-handoff-chrome-layout)"
+    places_handoff_full_layout_log="$(log_path places-handoff-full-layout)"
+
+    run_capture "places handoff chrome targets" "$places_handoff_chrome_targets_log" \
+        env FIKA_PERF_ITEM_VIEW=1 FIKA_PERF_PLACES_VIEW=1 FIKA_AUTOSMOKE_PLACES=targets "$binary" /etc
+    run_capture "places handoff full targets" "$places_handoff_full_targets_log" \
+        env FIKA_PERF_ITEM_VIEW=1 FIKA_PERF_PLACES_VIEW=1 FIKA_PLACES_ROW_VISUAL_POLICY=full FIKA_PLACES_ROW_VISUAL_HANDOFF=1 FIKA_AUTOSMOKE_PLACES=targets "$binary" /etc
+    run_capture "places handoff chrome overflow" "$places_handoff_chrome_overflow_log" \
+        env FIKA_PERF_ITEM_VIEW=1 FIKA_PERF_PLACES_VIEW=1 FIKA_AUTOSMOKE_PLACES=overflow "$binary" /etc
+    run_capture "places handoff full overflow" "$places_handoff_full_overflow_log" \
+        env FIKA_PERF_ITEM_VIEW=1 FIKA_PERF_PLACES_VIEW=1 FIKA_PLACES_ROW_VISUAL_POLICY=full FIKA_PLACES_ROW_VISUAL_HANDOFF=1 FIKA_AUTOSMOKE_PLACES=overflow "$binary" /etc
+    run_capture "places handoff chrome layout" "$places_handoff_chrome_layout_log" \
+        env FIKA_PERF_ITEM_VIEW=1 FIKA_PERF_PLACES_VIEW=1 FIKA_AUTOSMOKE_PLACES=layout "$binary" /etc
+    run_capture "places handoff full layout" "$places_handoff_full_layout_log" \
+        env FIKA_PERF_ITEM_VIEW=1 FIKA_PERF_PLACES_VIEW=1 FIKA_PLACES_ROW_VISUAL_POLICY=full FIKA_PLACES_ROW_VISUAL_HANDOFF=1 FIKA_AUTOSMOKE_PLACES=layout "$binary" /etc
+
+    places_handoff_chrome_common=(--require-interaction-policy --require-interaction-geometry --expect-custom-row-chrome-policy --render-total-us 25000)
+    places_handoff_full_common=(--require-interaction-policy --require-interaction-geometry --expect-custom-row-handoff-policy --row-visual-prepaint-us 1000 --row-visual-paint-us 3000 --row-visual-warm-prepaint-us 500 --row-visual-warm-paint-us 3000 --render-total-us 30000)
+
+    run_gate "places handoff chrome targets" \
+        "$places_analyzer" --require-autosmoke "${places_handoff_chrome_common[@]}" "$places_handoff_chrome_targets_log"
+    run_gate "places handoff full targets" \
+        "$places_analyzer" --require-autosmoke "${places_handoff_full_common[@]}" "$places_handoff_full_targets_log"
+    run_gate "places handoff chrome overflow" \
+        "$places_analyzer" --require-overflow-autosmoke "${places_handoff_chrome_common[@]}" "$places_handoff_chrome_overflow_log"
+    run_gate "places handoff full overflow" \
+        "$places_analyzer" --require-overflow-autosmoke "${places_handoff_full_common[@]}" "$places_handoff_full_overflow_log"
+    run_gate "places handoff chrome layout" \
+        "$places_analyzer" --require-layout-autosmoke "${places_handoff_chrome_common[@]}" "$places_handoff_chrome_layout_log"
+    run_gate "places handoff full layout" \
+        "$places_analyzer" --require-layout-autosmoke "${places_handoff_full_common[@]}" "$places_handoff_full_layout_log"
 fi
 
 echo "retained renderer evidence complete"

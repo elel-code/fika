@@ -36,6 +36,13 @@ scripts/run-retained-renderer-evidence.sh --icons
 scripts/run-retained-renderer-evidence.sh --hybrid-icons
 ```
 
+验证 opt-in full Places row handoff 相对默认 chrome policy 的证据时，使用
+`--places-full-handoff`：
+
+```sh
+scripts/run-retained-renderer-evidence.sh --places-full-handoff
+```
+
 下面各节展示脚本运行的命令，以及仍需人工审查的手动检查。
 
 ## 构建
@@ -142,6 +149,33 @@ max_gpui_sidebar_leave_shells=0
 ```sh
 scripts/analyze-places-perf.sh --expect-retained-event-policy /tmp/fika-evidence-places-dnd.log
 ```
+
+## Places Full Handoff A/B
+
+只有在修改 Places full-row visual policy、text-shape handoff 或默认提升阈值时需要：
+
+```sh
+timeout 8s env FIKA_PERF_ITEM_VIEW=1 FIKA_PERF_PLACES_VIEW=1 FIKA_AUTOSMOKE_PLACES=targets target/debug/fika /etc > /tmp/fika-evidence-places-handoff-chrome-targets.log 2>&1
+timeout 8s env FIKA_PERF_ITEM_VIEW=1 FIKA_PERF_PLACES_VIEW=1 FIKA_PLACES_ROW_VISUAL_POLICY=full FIKA_PLACES_ROW_VISUAL_HANDOFF=1 FIKA_AUTOSMOKE_PLACES=targets target/debug/fika /etc > /tmp/fika-evidence-places-handoff-full-targets.log 2>&1
+timeout 8s env FIKA_PERF_ITEM_VIEW=1 FIKA_PERF_PLACES_VIEW=1 FIKA_AUTOSMOKE_PLACES=overflow target/debug/fika /etc > /tmp/fika-evidence-places-handoff-chrome-overflow.log 2>&1
+timeout 8s env FIKA_PERF_ITEM_VIEW=1 FIKA_PERF_PLACES_VIEW=1 FIKA_PLACES_ROW_VISUAL_POLICY=full FIKA_PLACES_ROW_VISUAL_HANDOFF=1 FIKA_AUTOSMOKE_PLACES=overflow target/debug/fika /etc > /tmp/fika-evidence-places-handoff-full-overflow.log 2>&1
+timeout 8s env FIKA_PERF_ITEM_VIEW=1 FIKA_PERF_PLACES_VIEW=1 FIKA_AUTOSMOKE_PLACES=layout target/debug/fika /etc > /tmp/fika-evidence-places-handoff-chrome-layout.log 2>&1
+timeout 8s env FIKA_PERF_ITEM_VIEW=1 FIKA_PERF_PLACES_VIEW=1 FIKA_PLACES_ROW_VISUAL_POLICY=full FIKA_PLACES_ROW_VISUAL_HANDOFF=1 FIKA_AUTOSMOKE_PLACES=layout target/debug/fika /etc > /tmp/fika-evidence-places-handoff-full-layout.log 2>&1
+```
+
+自动 runner 会执行同一组采集和 gate：
+
+```sh
+scripts/run-retained-renderer-evidence.sh --places-full-handoff
+```
+
+这组证据只是默认提升输入，不是默认提升决定本身。修改默认 Places row visual
+policy 前，需要同时审查 row-visual prepaint/paint 和 `[fika render] total=`。
+
+runner 对 full handoff 的 row-visual gate 仍然比启动期整帧 gate 更严格。当前
+target 运行里，首帧可能把 Places snapshot、pane item 和 root work 计入总耗时，
+而不只是 full row visual painting。因此 full 路径使用 30ms total-render guard，
+同时继续要求 warm row-visual prepaint/paint 维持在亚毫秒/低毫秒预算内。
 
 ## 仍需手动 Smoke
 

@@ -36,6 +36,13 @@ handoff path:
 scripts/run-retained-renderer-evidence.sh --hybrid-icons
 ```
 
+Use `--places-full-handoff` when validating opt-in full Places row handoff
+evidence against the default chrome policy:
+
+```sh
+scripts/run-retained-renderer-evidence.sh --places-full-handoff
+```
+
 The sections below show the commands that the script runs and the manual checks
 that still need human review.
 
@@ -146,6 +153,37 @@ removed through Track 4:
 ```sh
 scripts/analyze-places-perf.sh --expect-retained-event-policy /tmp/fika-evidence-places-dnd.log
 ```
+
+## Places Full Handoff A/B
+
+Only required when changing Places full-row visual policy, text-shape handoff,
+or default-promotion thresholds:
+
+```sh
+timeout 8s env FIKA_PERF_ITEM_VIEW=1 FIKA_PERF_PLACES_VIEW=1 FIKA_AUTOSMOKE_PLACES=targets target/debug/fika /etc > /tmp/fika-evidence-places-handoff-chrome-targets.log 2>&1
+timeout 8s env FIKA_PERF_ITEM_VIEW=1 FIKA_PERF_PLACES_VIEW=1 FIKA_PLACES_ROW_VISUAL_POLICY=full FIKA_PLACES_ROW_VISUAL_HANDOFF=1 FIKA_AUTOSMOKE_PLACES=targets target/debug/fika /etc > /tmp/fika-evidence-places-handoff-full-targets.log 2>&1
+timeout 8s env FIKA_PERF_ITEM_VIEW=1 FIKA_PERF_PLACES_VIEW=1 FIKA_AUTOSMOKE_PLACES=overflow target/debug/fika /etc > /tmp/fika-evidence-places-handoff-chrome-overflow.log 2>&1
+timeout 8s env FIKA_PERF_ITEM_VIEW=1 FIKA_PERF_PLACES_VIEW=1 FIKA_PLACES_ROW_VISUAL_POLICY=full FIKA_PLACES_ROW_VISUAL_HANDOFF=1 FIKA_AUTOSMOKE_PLACES=overflow target/debug/fika /etc > /tmp/fika-evidence-places-handoff-full-overflow.log 2>&1
+timeout 8s env FIKA_PERF_ITEM_VIEW=1 FIKA_PERF_PLACES_VIEW=1 FIKA_AUTOSMOKE_PLACES=layout target/debug/fika /etc > /tmp/fika-evidence-places-handoff-chrome-layout.log 2>&1
+timeout 8s env FIKA_PERF_ITEM_VIEW=1 FIKA_PERF_PLACES_VIEW=1 FIKA_PLACES_ROW_VISUAL_POLICY=full FIKA_PLACES_ROW_VISUAL_HANDOFF=1 FIKA_AUTOSMOKE_PLACES=layout target/debug/fika /etc > /tmp/fika-evidence-places-handoff-full-layout.log 2>&1
+```
+
+The automated runner performs the same captures and gates:
+
+```sh
+scripts/run-retained-renderer-evidence.sh --places-full-handoff
+```
+
+This evidence is a default-promotion input, not a default-promotion decision by
+itself. Review both row-visual prepaint/paint and `[fika render] total=` before
+changing the default Places row visual policy.
+
+The runner keeps full handoff row-visual gates tighter than the startup
+whole-frame gate. A current target run can spend more time in first-frame
+Places snapshot, pane item, and root work than in full row visual painting, so
+the full path uses a 30ms total-render guard while still requiring warm
+row-visual prepaint/paint to remain within sub-millisecond/low-millisecond
+budgets.
 
 ## Manual Smoke Still Required
 
