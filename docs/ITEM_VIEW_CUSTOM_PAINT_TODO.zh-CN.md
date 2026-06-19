@@ -528,6 +528,11 @@ Places chrome 默认之后的当前执行入口是
   `FIKA_DEBUG_DND=1` pane-drag trace 可以包含 `places-dnd-leave`；这行日志证明 Places
   typed bridge 拒绝了 bounds 外的 capture drag move，并且当 pointer 位于 pane 内时，它不应伴随
   持续的 Places 高亮残留。
+- [x] P16fn：给 retained Places DnD autosmoke 增加 no-target clear 路径。
+  `FIKA_AUTOSMOKE_PLACES=dnd` 现在会输出一个预期为 `Clear`/`NotAllowed` 的
+  `path-outside` 样本，并且 `scripts/analyze-places-perf.sh
+  --require-retained-dnd-autosmoke` 会强制要求它存在。这在无人值守 smoke 中守住拖拽中的
+  target isolation；手动 `places-dnd-leave` trace 仍然是 GUI bounds 证据。
 - [ ] P16q：在每个 P16 实现切片之后，单独提交并附带相关验证：仅文档切片需要 `git diff --check`；代码切片需要 `cargo fmt`、`cargo check`、`cargo test -q`、`scripts/check-item-view-perf-analyzer.sh`、`scripts/check-places-perf-analyzer.sh` 和 `git diff --check`。
 - [x] P16r：记录运行时自测试和突破记录规则。可重复的滚动、缩放、启动图标、调整大小、模式切换和 Places 目标回退应在依赖手动计时之前通过 autosmoke 日志和分析器脚本重现。任何确认的优化突破必须记录症状、Dolphin 比较边界、根本原因、实现、保存的日志/分析器命令和未来回归守卫在拥有的设计或决策文档中。
 

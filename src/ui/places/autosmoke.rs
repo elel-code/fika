@@ -793,6 +793,14 @@ fn retained_dnd_autosmoke_report(snapshots: &[PlaceSnapshot]) -> PlacesRetainedD
             &geometry,
         ));
     }
+    samples.push(retained_dnd_path_list_sample(
+        "path-outside",
+        geometry.content_height() + 8.0,
+        "Clear",
+        PlaceInteractionCursor::NotAllowed,
+        true,
+        &geometry,
+    ));
 
     PlacesRetainedDndAutosmokeReport {
         rows: geometry.rows().len(),
@@ -1272,6 +1280,7 @@ mod tests {
                 ("path-row-before", "path-list", "Insert", "Copy"),
                 ("path-section", "path-list", "Insert", "Copy"),
                 ("place-row-body", "place", "Insert", "Move"),
+                ("path-outside", "path-list", "Clear", "NotAllowed"),
             ]
         );
     }

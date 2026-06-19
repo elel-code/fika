@@ -1617,6 +1617,12 @@ tracks.
   proves the Places typed bridge rejected an out-of-bounds capture drag move,
   and it must not coincide with persistent Places highlight while the pointer
   is inside a pane.
+- [x] P16fn: Extend retained Places DnD autosmoke with a no-target clear path.
+  `FIKA_AUTOSMOKE_PLACES=dnd` now emits a `path-outside` sample expecting
+  `Clear`/`NotAllowed`, and `scripts/analyze-places-perf.sh
+  --require-retained-dnd-autosmoke` requires it. This guards drag-time target
+  isolation in the unattended smoke while the manual `places-dnd-leave` trace
+  remains the GUI bounds proof.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

@@ -619,6 +619,7 @@ cat > "$tmpdir/retained-dnd-autosmoke.log" <<'EOF'
 [fika autosmoke] places dnd label=retained-dnd sample=path-row-before drag=path-list y=19.0 target=Insert cursor=Copy ok=true
 [fika autosmoke] places dnd label=retained-dnd sample=path-section drag=path-list y=61.0 target=Insert cursor=Copy ok=true
 [fika autosmoke] places dnd label=retained-dnd sample=place-row-body drag=place y=92.0 target=Insert cursor=Move ok=true
+[fika autosmoke] places dnd label=retained-dnd sample=path-outside drag=path-list y=386.0 target=Clear cursor=NotAllowed ok=true
 [fika autosmoke] places dnd-summary label=retained-dnd rows=11 sections=2 ok=true
 [fika autosmoke] places complete scenario=RetainedDnd
 [fika places-row-visual] rows=11 painted=11 prepaint=20us paint=31us
@@ -631,7 +632,7 @@ retained_dnd_autosmoke_summary="$("$analyzer" \
     --expect-custom-row-chrome-policy \
     "$tmpdir/retained-dnd-autosmoke.log")"
 
-if [[ "$retained_dnd_autosmoke_summary" != *"places_retained_dnd_autosmoke start=1 complete=1 path_row_body=1 path_row_before=1 path_section=1 place_row_body=1 summary=1 max_rows=11 max_sections=2"* ]]; then
+if [[ "$retained_dnd_autosmoke_summary" != *"places_retained_dnd_autosmoke start=1 complete=1 path_row_body=1 path_row_before=1 path_section=1 place_row_body=1 path_outside=1 summary=1 max_rows=11 max_sections=2"* ]]; then
     echo "expected Places retained DnD autosmoke summary" >&2
     exit 1
 fi
@@ -648,6 +649,7 @@ cat > "$tmpdir/bad-retained-dnd-autosmoke.log" <<'EOF'
 [fika autosmoke] places dnd label=retained-dnd sample=path-row-before drag=path-list y=19.0 target=Insert cursor=Copy ok=true
 [fika autosmoke] places dnd label=retained-dnd sample=path-section drag=path-list y=61.0 target=Insert cursor=Copy ok=true
 [fika autosmoke] places dnd label=retained-dnd sample=place-row-body drag=place y=92.0 target=Insert cursor=Move ok=true
+[fika autosmoke] places dnd label=retained-dnd sample=path-outside drag=path-list y=386.0 target=Clear cursor=NotAllowed ok=true
 [fika autosmoke] places dnd-summary label=retained-dnd rows=11 sections=2 ok=false
 [fika autosmoke] places complete scenario=RetainedDnd
 EOF

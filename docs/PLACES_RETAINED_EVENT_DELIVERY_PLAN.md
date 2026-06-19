@@ -272,6 +272,20 @@ Retained DnD autosmoke slice:
   next drag-start / GPUI-shell-removal slices a non-destructive regression
   guard before any destructive reorder/drop smoke is added.
 
+2026-06-19 retained DnD clear-path autosmoke slice:
+
+- `FIKA_AUTOSMOKE_PLACES=dnd` now also samples a path-list drag outside the
+  retained Places content geometry. The expected decision is `Clear` with a
+  `NotAllowed` cursor.
+- `scripts/analyze-places-perf.sh --require-retained-dnd-autosmoke` now
+  requires the `path-outside` sample. This keeps the smoke from proving only
+  positive row/section targets while missing the drag-time no-target path that
+  prevents stale Places highlights.
+- This is still non-destructive and does not replace the manual
+  `FIKA_DEBUG_DND=1` bounds trace. The GUI trace remains the proof that the
+  sidebar typed payload bridge rejected out-of-bounds capture-phase drag moves
+  and cleared only Places state during pane-internal drags.
+
 Retained drag-start source-model slice:
 
 - Local GPUI source at Zed commit

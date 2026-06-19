@@ -252,6 +252,17 @@ retained DnD autosmoke 切片：
   geometry 的 summary。这给后续 drag-start / GPUI shell 移除切片提供了非破坏性回归守卫；
   真正执行 reorder/drop 的 destructive smoke 仍需隔离配置后再添加。
 
+2026-06-19 retained DnD clear-path autosmoke 切片：
+
+- `FIKA_AUTOSMOKE_PLACES=dnd` 现在还会采样一次位于 retained Places content geometry
+  外的 path-list drag。预期 decision 是 `Clear`，cursor 是 `NotAllowed`。
+- `scripts/analyze-places-perf.sh --require-retained-dnd-autosmoke` 现在要求
+  `path-outside` 样本存在。这避免 smoke 只证明 row/section 的正向 target，却漏掉拖拽中防止
+  Places 高亮残留所需的 no-target 路径。
+- 这仍然是非破坏性 smoke，不能替代手动 `FIKA_DEBUG_DND=1` bounds trace。GUI trace
+  仍然是证明 sidebar typed payload bridge 在 pane-internal drag 中拒绝 bounds 外
+  capture-phase drag move，并且只清 Places state 的证据。
+
 retained drag-start source-model 切片：
 
 - 本地 GPUI 源码在 Zed commit

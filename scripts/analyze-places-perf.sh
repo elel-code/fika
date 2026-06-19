@@ -749,6 +749,8 @@ function renderer_retained_interaction_for_policy(event_policy, rows, sections) 
         retained_dnd_path_section_seen = 1
     } else if (sample == "place-row-body" && drag == "place" && target == "Insert" && cursor == "Move" && ok == "true") {
         retained_dnd_place_row_body_seen = 1
+    } else if (sample == "path-outside" && drag == "path-list" && target == "Clear" && cursor == "NotAllowed" && ok == "true") {
+        retained_dnd_path_outside_seen = 1
     }
 }
 
@@ -934,7 +936,7 @@ END {
         }
         if (!retained_dnd_path_row_body_seen || !retained_dnd_path_row_before_seen ||
             !retained_dnd_path_section_seen || !retained_dnd_place_row_body_seen ||
-            !retained_dnd_summary_seen) {
+            !retained_dnd_path_outside_seen || !retained_dnd_summary_seen) {
             fail("missing or invalid Places retained DnD autosmoke markers")
         }
     }
@@ -1112,13 +1114,14 @@ END {
         retained_targeting_summary_seen,
         max_values["retained_targeting_rows"],
         max_values["retained_targeting_sections"])
-    printf("places_retained_dnd_autosmoke start=%d complete=%d path_row_body=%d path_row_before=%d path_section=%d place_row_body=%d summary=%d max_rows=%d max_sections=%d\n",
+    printf("places_retained_dnd_autosmoke start=%d complete=%d path_row_body=%d path_row_before=%d path_section=%d place_row_body=%d path_outside=%d summary=%d max_rows=%d max_sections=%d\n",
         retained_dnd_autosmoke_start_seen,
         retained_dnd_autosmoke_complete_seen,
         retained_dnd_path_row_body_seen,
         retained_dnd_path_row_before_seen,
         retained_dnd_path_section_seen,
         retained_dnd_place_row_body_seen,
+        retained_dnd_path_outside_seen,
         retained_dnd_summary_seen,
         max_values["retained_dnd_rows"],
         max_values["retained_dnd_sections"])
