@@ -147,6 +147,16 @@ visual 默认提升阈值。
 帧为 `chrome_state=2us`、`chrome_icons=8360us`。这确认剩余首帧目标是 named
 toolbar/chrome icon resolution，而不是一般 render state projection。
 
+chrome icon prewarm 切片随后把这个 owner 从默认 chrome 和 full handoff 两条路径都移除了。
+`FikaApp::new()` 现在会在首帧 render 前解析固定 toolbar/sidebar snapshot。证据来自
+`scripts/run-retained-renderer-evidence.sh --places-full-handoff --skip-build --prefix
+fika-places-chrome-prewarm-20260619`：所有 handoff gate 通过，`chrome_icons` 降到
+chrome targets `12us`、full targets `6us`、chrome overflow `10us`、full overflow
+`9us`、chrome layout `7us`、full layout `7us`。因此 full 路径确实有首帧层面的实质
+突破：旧的 8-14ms chrome icon 尖峰已经消失。它仍保持 opt-in，因为默认提升现在取决于
+row visual、pane elements 和 root cost 的重复 total-render 证据，而不是已经解决的
+chrome icon owner。
+
 ## 下一批渲染器决策
 
 1. 保持剩余 drag-start shells 直到 GPUI API 边界变化。不要将 GPUI per-element `on_drag_move` 用作 pane self-drag 悬停的真实来源；active item-drag window tracker 拥有该路径。

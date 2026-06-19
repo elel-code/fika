@@ -669,6 +669,20 @@ Places chrome 默认之后的当前执行入口是
   full targets `8360us`、chrome overflow `14626us`、full overflow `10708us`、
   chrome layout `11679us`、full layout `9101us`。下一步优化目标已经明确为首帧
   named toolbar/chrome icon resolution。
+- [x] P16gan：在首帧 render 前预热固定 chrome 图标 snapshot。根因：默认 chrome 和
+  full handoff 两条路径都会在第一帧为 toolbar/sidebar 固定控件同步解析 named icon
+  snapshot，所以剩余的 full-path 尖峰不是 row visual painting。实现：
+  `FikaApp::new()` 现在会在替换设备 place 之前调用 `prewarm_chrome_icon_cache()`，
+  将 filter toggle、pane split/close 和 Places panel 图标 snapshot 解析进共享
+  file-icon cache。证据：
+  `scripts/run-retained-renderer-evidence.sh --places-full-handoff --skip-build --prefix
+  fika-places-chrome-prewarm-20260619` 通过所有 full handoff gate。`chrome_icons`
+  最大 owner 从 split run 的 targets `8380us`/`8360us`、overflow
+  `14626us`/`10708us`、layout `11679us`/`9101us` 降到 chrome targets
+  `12us`、full targets `6us`、chrome overflow `10us`、full overflow `9us`、
+  chrome layout `7us`、full layout `7us`。这是 full 路径的实质突破，因为它移除了
+  共享的首帧 chrome icon 尖峰；默认提升仍要看后续 row-visual/root/pane
+  total-render 的重复证据，而不是只看这个 owner。
 - [ ] P16q：在每个 P16 实现切片之后，单独提交并附带相关验证：仅文档切片需要 `git diff --check`；代码切片需要 `cargo fmt`、`cargo check`、`cargo test -q`、`scripts/check-item-view-perf-analyzer.sh`、`scripts/check-places-perf-analyzer.sh` 和 `git diff --check`。
 - [x] P16r：记录运行时自测试和突破记录规则。可重复的滚动、缩放、启动图标、调整大小、模式切换和 Places 目标回退应在依赖手动计时之前通过 autosmoke 日志和分析器脚本重现。任何确认的优化突破必须记录症状、Dolphin 比较边界、根本原因、实现、保存的日志/分析器命令和未来回归守卫在拥有的设计或决策文档中。
 

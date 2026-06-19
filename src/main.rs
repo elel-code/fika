@@ -524,6 +524,7 @@ impl FikaApp {
             background_task_history: VecDeque::new(),
             background_task_detail_dialog: None,
         };
+        app.prewarm_chrome_icon_cache();
         app.replace_removable_device_places(&initial_devices);
         app._keystroke_subscription = Some(cx.observe_keystrokes(|this, event, _window, cx| {
             if this.handle_keystroke(event, cx) {
@@ -599,6 +600,16 @@ impl FikaApp {
             self.panes.pane(pane_id).map(|pane| &pane.model),
         )
     }
+
+    fn prewarm_chrome_icon_cache(&mut self) {
+        let _ = filter_toggle_snapshot(&mut self.file_icons, false);
+        let _ = filter_toggle_snapshot(&mut self.file_icons, true);
+        let _ = pane_split_icon_snapshot(&mut self.file_icons);
+        let _ = pane_close_icon_snapshot(&mut self.file_icons);
+        let _ = places_panel_icon_snapshot(&mut self.file_icons, true);
+        let _ = places_panel_icon_snapshot(&mut self.file_icons, false);
+    }
+
     fn filter_bar_snapshot(
         &self,
         pane_id: PaneId,

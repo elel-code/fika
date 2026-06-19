@@ -1912,6 +1912,23 @@ tracks.
   `14626us`, full overflow `10708us`, chrome layout `11679us`, and full layout
   `9101us`. The next optimization target is now specifically first-frame
   named toolbar/chrome icon resolution.
+- [x] P16gan: Prewarm fixed chrome icon snapshots before the first render.
+  Root cause: both default chrome and full handoff were paying synchronous
+  named icon snapshot resolution for fixed toolbar/sidebar controls on the
+  first rendered frame, so the residual full-path spike was not row visual
+  painting. Implementation: `FikaApp::new()` now calls
+  `prewarm_chrome_icon_cache()` before device place replacement, resolving the
+  filter toggle, pane split/close, and Places panel icon snapshots into the
+  shared file-icon cache. Evidence:
+  `scripts/run-retained-renderer-evidence.sh --places-full-handoff --skip-build --prefix
+  fika-places-chrome-prewarm-20260619` passed all full handoff gates. The
+  max `chrome_icons` owner dropped from the split run's `8380us`/`8360us`
+  targets, `14626us`/`10708us` overflow, and `11679us`/`9101us` layout to
+  chrome targets `12us`, full targets `6us`, chrome overflow `10us`, full
+  overflow `9us`, chrome layout `7us`, and full layout `7us`. This is a real
+  full-path breakthrough because it removes the shared first-frame chrome icon
+  spike; default promotion is still gated on repeated row-visual/root/pane
+  total-render evidence rather than this owner alone.
 - [ ] P16q: After every P16 implementation slice, commit separately with the
   relevant verification: docs-only slices need `git diff --check`; code slices
   need `cargo fmt`, `cargo check`, `cargo test -q`,

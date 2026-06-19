@@ -411,6 +411,18 @@ The follow-up split in
 remaining first-frame target is named toolbar/chrome icon resolution, not
 general render state projection.
 
+The chrome icon prewarm slice then removed that owner from both default chrome
+and full handoff. `FikaApp::new()` now resolves the fixed toolbar/sidebar
+snapshots before the first render. Evidence from
+`scripts/run-retained-renderer-evidence.sh --places-full-handoff --skip-build --prefix
+fika-places-chrome-prewarm-20260619` passed all handoff gates and reduced
+`chrome_icons` to chrome targets `12us`, full targets `6us`, chrome overflow
+`10us`, full overflow `9us`, chrome layout `7us`, and full layout `7us`. The
+full path therefore has a substantive first-frame breakthrough: the old
+8-14ms chrome icon spike is gone. It is still opt-in because promotion now
+depends on repeated total-render evidence for row visual, pane elements, and
+root cost rather than the solved chrome icon owner.
+
 ## Next Renderer Decisions
 
 1. Keep the remaining drag-start shells until the GPUI API boundary changes.
