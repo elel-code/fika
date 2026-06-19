@@ -358,7 +358,7 @@ GPUI shell 拥有：
 2. **原始 snapshot 和 role 调度** (`src/ui/file_grid/snapshot/`)：原始可见/工作范围一次性投影，然后 metadata、thumbnail 和 file-icon 解析工作在绘制路径之外排队。
 3. **Slot 和绘制状态** (`src/ui/file_grid/slots.rs`、`src/ui/file_grid/paint_slots.rs`)：可见可视 identity 和保留条目/details 绘制器内容在仅几何变化时复用。
 4. **自定义可视/图像绘制器** (`static_visual.rs`、`image_layer.rs`、`details_visual.rs`)：背景、标签、fallback 图标、主题图标和缩略图从保留 snapshot 绘制。主题图标文件不在 GPUI prepaint 中同步解码；图像解码保持在 GPUI 的 `RetainAllImageCache` 路径上，带有同源保留 fallback。
-5. **交互和平台边界** (`interaction.rs`、`dnd.rs`、`item_shell.rs`、`details_shell.rs`、`rename_overlay.rs`)：hover/cursor、click/menu/drop hit testing 和活跃条目拖拽 hover 被保留。GPUI 条目/行 shell 仅在 drag start 时保留，rename 仍为 GPUI 文本编辑 overlay，直到这些平台契约可被替换。
+5. **交互和平台边界** (`interaction.rs`、`dnd.rs`、`item_shell.rs`、`details_shell.rs`、`rename_overlay.rs`)：hover/cursor、click/menu/drop hit testing、typed drag start 和活跃条目拖拽 hover 均走 retained hitbox/controller 路径。GPUI 条目/行 DnD shell 计数必须保持为 0；rename 仍为 GPUI 文本编辑 overlay，直到该平台契约可被替换。
 
 活跃 inline rename draft 向 compact 列 metrics 添加 pane-local text-width override。Snapshot 生成、条目 hit-testing、rubber-band 可视交集和 rename caret 放置均消费同一扩展布局，因此长 draft 名称可以扩宽编辑器而不使鼠标几何不同步。
 

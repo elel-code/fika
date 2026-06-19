@@ -88,14 +88,16 @@ Symptoms:
 - Loading `/etc` showed a visible blank/placeholder-to-MIME-icon cascade.
 - Zoom could show a second icon-size adjustment after the item geometry had
   already changed.
-- Initial `/etc` scroll/zoom autosmoke produced intermittent hitches even after
-  MIME/theme icons moved away from the custom image painter.
+- Initial `/etc` scroll/zoom autosmoke produced intermittent hitches in the
+  early custom theme-icon painter before retained readiness/cache promotion.
 
 Root causes:
 
-- The custom MIME/theme icon painter could enter the first paint before GPUI's
-  image cache had decoded the theme icon resource. In the `/etc` A/B smoke it
-  logged `theme_placeholder=48`, matching the visible placeholder cascade.
+- The early custom MIME/theme icon painter could enter the first paint before
+  GPUI's image cache had decoded the theme icon resource. In the historical
+  `/etc` A/B smoke it logged `theme_placeholder=48`, matching the visible
+  placeholder cascade. The current default full custom path is guarded by
+  retained readiness/cache evidence and must keep `theme_placeholder=0`.
 - Fika initially treated Dolphin's 300ms `triggerIconSizeUpdate()` delay as an
   icon-size debounce. Dolphin only delays preview/role-updater work there;
   ordinary `iconName` pixmaps are generated from the widget's current style
@@ -107,9 +109,10 @@ Root causes:
 
 Implementation:
 
-- MIME/theme icons now default to GPUI `img()` elements over retained item
-  shells. The custom theme-icon image painter remains available only through
-  `FIKA_CUSTOM_THEME_ICONS=1` for paired A/B evidence.
+- MIME/theme icons now default to the retained custom image layer. It reuses
+  GPUI `RetainAllImageCache -> RenderImage -> Window::paint_image`, but ordinary
+  pane rendering must keep `gpui_image_element=0`. `FIKA_GPUI_THEME_ICONS=1`
+  is the paired GPUI `img()` baseline.
 - Render conversion uses cached or preliminary icon snapshots only. Theme icon
   path scanning stays in visible icon sync and the background resolve queue, not
   in GPUI prepaint or render conversion.
@@ -128,8 +131,8 @@ Implementation:
 Evidence:
 
 ```text
-custom-theme /etc A/B: theme_placeholder=48, gpui_image_element=0
-default /etc A/B:      theme_placeholder=0,  gpui_image_element=48
+historical custom-theme /etc A/B: theme_placeholder=48, gpui_image_element=0
+historical GPUI baseline /etc A/B: theme_placeholder=0,  gpui_image_element=48
 
 before queued/pending skip:
   icon_sync=28340us, geometry-change total=29451us
@@ -140,8 +143,8 @@ after queued/pending skip:
 
 Regression guard:
 
-- For renderer changes, compare default and `FIKA_CUSTOM_THEME_ICONS=1` logs
-  with `scripts/compare-item-image-renderers.sh`.
+- For renderer changes, compare the default full custom path against
+  `FIKA_GPUI_THEME_ICONS=1` with `scripts/compare-item-image-renderers.sh`.
 - For scroll/zoom changes, run
   `FIKA_PERF_ITEM_VIEW=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll target/debug/fika /etc`
   and summarize with `scripts/analyze-item-view-perf.sh`.

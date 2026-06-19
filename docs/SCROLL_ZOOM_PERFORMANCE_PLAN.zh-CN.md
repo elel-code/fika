@@ -41,13 +41,13 @@
 
 根本原因：
 
-- 自定义 MIME/主题图标 painter 可能在 GPUI 图片缓存解码主题图标资源之前进入首次 paint。在 `/etc` A/B smoke 中记录了 `theme_placeholder=48`，匹配可见的占位符级联。
+- 早期自定义 MIME/主题图标 painter 可能在 GPUI 图片缓存解码主题图标资源之前进入首次 paint。在历史 `/etc` A/B smoke 中记录了 `theme_placeholder=48`，匹配可见的占位符级联。当前默认 full custom 路径由 retained readiness/cache 证据守卫，必须保持 `theme_placeholder=0`。
 - Fika 最初将 Dolphin 的 300ms `triggerIconSizeUpdate()` 延迟视为图标尺寸防抖。Dolphin 仅在那里延迟 preview/role-updater 工作；普通的 `iconName` pixmap 是从 widget 当前 style option 图标尺寸生成的。因此延迟或冻结 Fika 主题图标尺寸在缩放期间产生了可见的第二次尺寸提交。
 - 可见图标同步重复了已为预读图标解析排队的工作。渲染器拆分后的第一次 autosmoke 在 geometry-change 帧上记录了 `icon_sync=28340us` 和 `total=29451us`。
 
 实现：
 
-- MIME/主题图标现在默认使用 GPUI `img()` 元素而非 retained item shell。自定义主题图标图片 painter 仅通过 `FIKA_CUSTOM_THEME_ICONS=1` 保持可用，用于配对的 A/B 证据。
+- MIME/主题图标现在默认使用 retained custom image layer。它复用 GPUI `RetainAllImageCache -> RenderImage -> Window::paint_image`，但普通 pane 渲染必须保持 `gpui_image_element=0`。`FIKA_GPUI_THEME_ICONS=1` 是配对的 GPUI `img()` baseline。
 - 渲染转换仅使用缓存或初步图标 snapshot。主题图标路径扫描保持在可见图标同步和后台解析队列中，不在 GPUI prepaint 或渲染转换中。
 - 可见图标同步跳过已在 `FileIconResolveQueue` 中排队或 pending 的请求，保留 Dolphin 的可见优先例外而不在滚动帧中重做预读扫描。
 - 缩放立即提交当前 layout 图标边界；MIME/主题图标 path 在同一文件图标类型首次解析后保持稳定，不再因新缩放尺寸同步或排队 exact-size path 请求。Preview/thumbnail role 工作可能仍然合并，但主题图标几何不得使用延迟的第二次尺寸。
@@ -56,8 +56,8 @@
 证据：
 
 ```text
-custom-theme /etc A/B: theme_placeholder=48, gpui_image_element=0
-default /etc A/B:      theme_placeholder=0,  gpui_image_element=48
+历史 custom-theme /etc A/B: theme_placeholder=48, gpui_image_element=0
+历史 GPUI baseline /etc A/B: theme_placeholder=0,  gpui_image_element=48
 
 before queued/pending skip:
   icon_sync=28340us, geometry-change total=29451us
@@ -68,7 +68,7 @@ after queued/pending skip:
 
 回退防护：
 
-- 对于渲染器更改，使用 `scripts/compare-item-image-renderers.sh` 比较默认和 `FIKA_CUSTOM_THEME_ICONS=1` 日志。
+- 对于渲染器更改，使用 `scripts/compare-item-image-renderers.sh` 比较默认 full custom 路径和 `FIKA_GPUI_THEME_ICONS=1` baseline 日志。
 - 对于滚动/缩放更改，运行
   `FIKA_PERF_ITEM_VIEW=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll target/debug/fika /etc`
   并使用 `scripts/analyze-item-view-perf.sh` 汇总。

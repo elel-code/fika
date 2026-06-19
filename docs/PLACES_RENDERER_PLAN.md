@@ -50,8 +50,10 @@ Current ownership is already close to the Dolphin split:
 - Snapshot projection: `src/ui/places/projection.rs` maps active, hidden,
   drop-target, insert-indicator, trash, device, and icon state into
   `PlaceSnapshot`.
-- GPUI row shell: `src/ui/places/sidebar/row.rs` builds row visuals, context
-  menu routing, activation, drag start, and row-level DnD shell wiring.
+- Retained row surface: `src/ui/places/visual.rs`,
+  `src/ui/places/event_layer.rs`, and `src/ui/places/drag.rs` own default row
+  visuals, activation/context-menu targeting, drag start, typed DnD target
+  delivery, and row/section hitboxes.
 - DnD geometry and preview: `src/ui/places/drag.rs` owns insert zones, reorder
   indices, export payload, and cursor-offset-compensated preview layout.
 - Sidebar scroll: `src/ui/places/sidebar.rs` owns the GPUI scroll container and
@@ -59,40 +61,38 @@ Current ownership is already close to the Dolphin split:
 
 ## Proposed Retained Design
 
-Do not replace the GPUI Places row renderer in one step. The target design is a
-retained Places row surface with the same separations as file-grid:
+The retained Places row surface now follows the same separations as file-grid.
+The old GPUI/chrome/text policies remain as explicit baselines, not as the
+default path:
 
 - `places/paint_slots.rs`: retain `PlacePaintSlot` and section-heading slots.
   A place slot key should be stable by semantic identity, preferring device id
   for device rows and path/group for normal places. Slot stats should separate
   inserted, content changed, geometry changed, visual changed, unchanged, and
   removed rows.
-- `places/interaction.rs`: retain row hitboxes for activation, context menu,
-  drop target lookup, insert zones, and hover/cursor. Drag start remains a GPUI
-  shell until the GPUI drag-start boundary changes.
-- `places/visual.rs`: paint row background, active/drop states, label, trash
-  marker, and insert indicators from retained snapshots. Icon rendering remains
-  a separate renderer-policy decision; GPUI theme-icon elements may stay if they
-  remain faster or more stable than custom image painting.
+- `places/event_layer.rs` and `places/drag.rs`: retain row/section hitboxes for
+  activation, context menu, drop target lookup, insert zones, hover/cursor,
+  typed move/drop delivery, and drag start through the Fika GPUI fork.
+- `places/visual.rs`: paint row background, active/drop states, label, icon,
+  section heading, trash marker, and insert indicators from retained snapshots.
+  Places icons share the retained image-cache/readiness model with pane images.
 - `places/renderer_policy.rs`: log how many rows are custom-painted, GPUI icon
   elements, retained interaction hitboxes, drag-start shells, section headings,
   and scrollbar surfaces. This mirrors item-view renderer-policy logs.
-- `places/perf.rs`: add `FIKA_PERF_PLACES_VIEW=1` timing for snapshot
+- `places/perf.rs`: keep `FIKA_PERF_PLACES_VIEW=1` timing for snapshot
   projection, slot projection, row visual prepaint/paint, icon path, scrollbar
   paint, and total sidebar build.
 - `places-interaction-policy`: log retained row/section target-decision counts
-  separately from GPUI event-shell and drag-start shell counts. The current
-  state has retained target decisions but `retained_hitboxes=0`; this is the
-  evidence boundary that must change when activation, context menus, or DnD
-  event delivery move out of GPUI rows.
+  separately from GPUI event-shell, typed-payload shell, and drag-start shell
+  counts. The default retained-DnD state requires retained hitboxes for
+  rows+sections and zero GPUI DnD shell counts.
 - `places_interaction_geometry()`: project row and section y/height data from
-  the same row/section constants as the opt-in visual layer. It is not yet the
-  event delivery path; it is the retained geometry boundary that later row
-  hitboxes must consume.
+  the same row/section constants as the visual layer. It is the retained
+  geometry boundary consumed by row/section hitboxes.
 - `PlacesInteractionGeometry::hit_test_y()`: convert content-local y
   coordinates into retained row/section hits. Row hits reuse the same
-  edge/body `PlaceDropZone` rule as the current GPUI row DnD handlers, so the
-  later retained hitbox layer can preserve insertion and on-place semantics.
+  edge/body `PlaceDropZone` rule as the legacy GPUI row DnD handlers, so the
+  retained hitbox layer preserves insertion and on-place semantics.
 - `src/ui/places/autosmoke.rs`: own retained hit-test autosmoke reporting and
   sample expectations. `src/main.rs` only supplies the current `PlaceSnapshot`
   projection, so runtime evidence stays beside the Places interaction model
@@ -157,8 +157,8 @@ scripts/analyze-places-perf.sh --require-layout-autosmoke --require-interaction-
 
 ## Migration Order
 
-1. Add Places perf and renderer-policy logs around the current GPUI sidebar.
-   This is the baseline. No default renderer change is allowed before this.
+1. Add Places perf and renderer-policy logs around the historical GPUI sidebar
+   baseline. No default renderer change was allowed before this.
    Current implementation uses `FIKA_PERF_PLACES_VIEW=1` to emit
    `[fika places-view]`, `[fika places-sidebar]`, and
    `[fika places-renderer-policy]` for the existing GPUI sidebar.
@@ -176,29 +176,30 @@ scripts/analyze-places-perf.sh --require-layout-autosmoke --require-interaction-
    `[fika places-slots]` with row/section entries plus inserted/content/
    geometry/visual/unchanged/removed counts. It does not change the GPUI row
    renderer.
-4. Move hover/drop hit testing into retained Places interaction while keeping
-   GPUI drag-start shells. Verify item-to-place, place-to-pane, external
-   path-to-place, and reorder targets.
-   Current implementation has `places/interaction.rs` owning the row/section
-   target decision for item/external path drops and place reorders. GPUI row and
-   section shells still provide event delivery and bounds, so
-   `retained_interaction=0` remains correct until row hitboxes move out of GPUI.
-   `[fika places-interaction-policy]` is the explicit bridge log: target
-   decisions are retained today, while activation, context menu, drag/drop event
-   delivery, and drag start still route through GPUI event shells.
+4. Move hover/drop hit testing and typed DnD into retained Places interaction.
+   Verify item-to-place, place-to-pane, external path-to-place, and reorder
+   targets.
+   Current implementation has retained row/section hitboxes owning activation,
+   context-menu targeting, drag start, typed move/drop delivery, and target
+   decisions for item/external path drops and place reorders. GPUI row/section
+   event and DnD shell counts must remain zero.
+   `[fika places-interaction-policy]` is the retained policy log: target
+   decisions, activation/context-menu targeting, drag/drop event delivery, and
+   drag start are retained in the default path.
    `[fika places-interaction-geometry]` is the companion retained geometry
-   projection. It must match row/section counts before the GPUI shells can be
-   replaced with retained hitboxes.
+   projection. It must match row/section counts, and analyzer gates reject
+   non-zero GPUI event, typed-payload, or drag shell counts for the default
+   retained-DnD policy.
 5. Add a custom row visual painter behind a renderer policy and compare against
    the GPUI row path for scroll and DnD.
-   Current implementation has three policies: `gpui` keeps the fallback row
-   renderer, default `chrome` custom-paints row background, active/drop state,
-   trash marker, and insert indicator while keeping GPUI text/icons/event
-   shells, and `FIKA_CUSTOM_PLACES_ROWS=1` / `full` keeps the full custom-text
-   benchmark path.
+   Current implementation defaults to the full retained/custom row visual path:
+   row background, active/drop state, trash marker, insert indicator, text,
+   icons, event delivery, and DnD are retained/custom. `gpui`, `chrome`, and
+   `text` policies remain explicit comparison baselines.
 6. Expand beyond chrome only if the retained row painter is behavior-complete
-   and perf-neutral or better. Otherwise keep the Dolphin-aligned
-   model/projection and leave text, icons, and event delivery on GPUI.
+   and perf-neutral or better. This has been accepted for the default full path;
+   future regressions should keep the Dolphin-aligned model/projection and use
+   fallback renderer policies only as measured baselines.
 
 ## Runtime Evidence Rule
 
@@ -215,20 +216,20 @@ visible symptom, the Dolphin Places source boundary used for comparison, the
 root cause in Fika, the implementation change, the saved log/analyzer command,
 and the regression guard that future Places work must run.
 
-## Current Baseline Smoke
+## Historical GPUI Baseline Smoke
 
-2026-06-17 desktop-session command:
+2026-06-17 desktop-session GPUI-baseline command:
 
 ```bash
 timeout 5s env FIKA_PERF_PLACES_VIEW=1 target/debug/fika /etc > /tmp/fika-places-baseline.log 2>&1
 scripts/analyze-places-perf.sh --require-interaction-policy --require-interaction-geometry --expect-current-gpui-policy /tmp/fika-places-baseline.log
 ```
 
-The current GPUI sidebar logs `source=11 visible=11 sections=2`, with
+That historical GPUI sidebar logged `source=11 visible=11 sections=2`, with
 `rows=11 sections=2 elements=13`. Repeated cold first snapshots were around
 `4.3ms`; steady snapshot frames were roughly `58-133us`. Sidebar row build was
 usually `185-270us`, with occasional frames around `0.5-0.6ms`.
-Renderer-policy logs showed the expected current state: `row_gpui=11`,
+Renderer-policy logs showed the expected historical state: `row_gpui=11`,
 `row_visual_layer=0`, `icon_gpui=11`, `retained_interaction=0`,
 `drag_shell=11`, `section_gpui=2`, and `scrollbar_canvas=1`.
 
@@ -239,9 +240,9 @@ After the retained slot cache landed, the same perf run also emits
 2026-06-17 desktop session. Target-projection smoke should show visual changes
 for drop or insert state without content or geometry churn.
 
-## Current Autosmoke
+## Historical Target Autosmoke
 
-2026-06-17 desktop-session command:
+2026-06-17 desktop-session GPUI-baseline command:
 
 ```bash
 timeout 5s env FIKA_PERF_PLACES_VIEW=1 FIKA_AUTOSMOKE_PLACES=targets target/debug/fika /etc > /tmp/fika-places-targets.log 2>&1
@@ -267,7 +268,7 @@ This smoke is deliberately non-destructive. A later Places smoke can cover
 actual reorder/drop persistence only after it can run with isolated user-place
 configuration or an explicit test fixture.
 
-The analyzer summary for the current GPUI baseline should include:
+The analyzer summary for the historical GPUI baseline should include:
 
 ```text
 places_slots_frames=... max_inserted=13 max_content=0 max_geometry=0 max_visual=2 max_unchanged=13 max_removed=0
@@ -320,15 +321,15 @@ For non-destructive retained row/section hit-test evidence, run:
 
 ```bash
 timeout 8s env FIKA_PERF_PLACES_VIEW=1 FIKA_AUTOSMOKE_PLACES=hit-test target/debug/fika /etc > /tmp/fika-places-retained-hit-test.log 2>&1
-scripts/analyze-places-perf.sh --require-hit-test-autosmoke --require-interaction-policy --require-interaction-geometry --expect-current-gpui-policy /tmp/fika-places-retained-hit-test.log
+scripts/analyze-places-perf.sh --require-hit-test-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-full-policy --expect-retained-event-policy /tmp/fika-places-retained-hit-test.log
 ```
 
-For the opt-in row visual policy, add `FIKA_CUSTOM_PLACES_ROWS=1` and switch
-the analyzer policy:
+For an explicit full-row stress path, add `FIKA_CUSTOM_PLACES_ROWS=1` and keep
+the same retained-event analyzer policy:
 
 ```bash
 timeout 8s env FIKA_PERF_PLACES_VIEW=1 FIKA_CUSTOM_PLACES_ROWS=1 FIKA_AUTOSMOKE_PLACES=hit-test target/debug/fika /etc > /tmp/fika-places-custom-retained-hit-test.log 2>&1
-scripts/analyze-places-perf.sh --require-hit-test-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-visual-policy /tmp/fika-places-custom-retained-hit-test.log
+scripts/analyze-places-perf.sh --require-hit-test-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-full-policy --expect-retained-event-policy /tmp/fika-places-custom-retained-hit-test.log
 ```
 
 Expected markers:
@@ -349,8 +350,8 @@ The analyzer summary should include:
 places_hit_test_autosmoke start=1 complete=1 row_before=1 row_body=1 row_after=1 section=1 summary=1
 ```
 
-This is the retained geometry acceptance gate before any row/section event
-delivery moves out of GPUI shells.
+This is the retained geometry acceptance gate for the current row/section
+event-delivery path.
 
 2026-06-18 evidence:
 
@@ -371,46 +372,19 @@ delivery moves out of GPUI shells.
 
 ## Retained Event Delivery Plan
 
-Places event delivery is a separate migration from row visual painting. The
-current opt-in row visual layer can paint row backgrounds, labels, trash
-markers, and insert indicators, but GPUI row/section shells still own
+Places event delivery was a separate migration from row visual painting. It is
+now complete in the default retained-DnD path: retained row/section hitboxes own
 activation clicks, context-menu targeting, drag move/drop callbacks, row hover,
-cursor state, and drag start. This is intentional: Dolphin's
-`KFilePlacesView` keeps model/order/device semantics outside the delegate
-renderer, so Fika should move event ownership only after the retained
-interaction geometry and behavior evidence are explicit.
+cursor state, and drag start. Dolphin's `KFilePlacesView` keeps
+model/order/device semantics outside the delegate renderer; Fika mirrors that by
+keeping behavior in retained model/interaction state and rendering from
+snapshots.
 
 The implementation-level plan now lives in
-`docs/PLACES_RETAINED_EVENT_DELIVERY_PLAN.md`. Keep this section as the summary
-and use that document for phased code work and TODO tracking.
+`docs/PLACES_RETAINED_EVENT_DELIVERY_PLAN.md`. Keep this section as the current
+summary and use that document for historical phased notes.
 
-The next retained Places event-delivery work should move in this order:
-
-1. Add a renderer-policy/analyzer gate for the future retained-hitbox policy
-   before changing default delivery. The future accepted shape is
-   `retained_hitboxes=rows+sections`, `gpui_event_shells=0`, and
-   `drag_shells=rows`; drag shells remain because GPUI still owns typed drag
-   initiation. The current accepted shape remains `retained_hitboxes=0` and
-   `gpui_event_shells=rows+sections`.
-2. Route hover and cursor through retained row/section hitboxes first. This is
-   non-mutating and should prove sidebar-leave clearing, row body hover,
-   section hover, and insert-zone cursor behavior without changing activation,
-   context menus, or drops.
-3. Move activation and context-menu target selection to retained hitboxes while
-   keeping the existing context-menu overlay and action execution path. This
-   must preserve blank sidebar, section header, normal place, editable bookmark,
-   trash, and device row menu distinctions.
-4. Move drag-move and drop target delivery to retained hitboxes, using
-   `PlacesInteractionGeometry::hit_test_y()` and the existing
-   `place_drop_zone_for_y()` edge/body rule. This must preserve item/external
-   path drops, place reorder insert-before/after targets, place-to-pane drops,
-   and clearing on sidebar leave.
-5. Remove GPUI row/section event shells only after the current GPUI policy and
-   opt-in visual policy both pass the retained event-delivery smoke. The GPUI
-   drag-start shell stays until the item-view drag-start API boundary is solved
-   globally.
-
-Required evidence before step 5:
+Required evidence for the default retained policy:
 
 ```text
 scripts/analyze-places-perf.sh --require-hit-test-autosmoke --require-interaction-policy --require-interaction-geometry --expect-retained-event-policy ...
@@ -419,11 +393,11 @@ scripts/analyze-places-perf.sh --require-overflow-autosmoke --require-interactio
 scripts/analyze-places-perf.sh --require-layout-autosmoke --require-interaction-policy --require-interaction-geometry --expect-retained-event-policy ...
 ```
 
-`--expect-retained-event-policy` is available in
-`scripts/analyze-places-perf.sh` before the retained event-delivery code lands.
-It rejects mixed claims where row visuals are custom-painted but event delivery
-still depends on GPUI row shells, and it continues to require GPUI drag shells
-until typed drag initiation can start from retained hitboxes.
+`--expect-retained-event-policy` rejects mixed claims where row visuals are
+custom-painted but event delivery or typed DnD still depends on GPUI row shells.
+The accepted default requires `gpui_event_shells=0`,
+`gpui_row_section_event_shells=0`, `gpui_typed_dnd_payload_shells=0`,
+`drag_shells=0`, and retained hitbox drag-start models for rows.
 
 ## Overflow Autosmoke
 
@@ -431,7 +405,7 @@ For Places scroll/overflow evidence, run:
 
 ```bash
 timeout 5s env FIKA_PERF_PLACES_VIEW=1 FIKA_AUTOSMOKE_PLACES=overflow target/debug/fika /etc > /tmp/fika-places-overflow-default.log 2>&1
-scripts/analyze-places-perf.sh --require-overflow-autosmoke --require-interaction-policy --require-interaction-geometry --expect-current-gpui-policy /tmp/fika-places-overflow-default.log
+scripts/analyze-places-perf.sh --require-overflow-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-full-policy --expect-retained-event-policy /tmp/fika-places-overflow-default.log
 ```
 
 `FIKA_AUTOSMOKE_PLACES=overflow` appends 64 non-persistent test rows at the
@@ -439,7 +413,7 @@ snapshot layer. It does not write user Places configuration or mutate
 `self.places`. The expected evidence is `visible=75`, an extra `Autosmoke`
 section, `[fika places-scrollbar] visible=1`, and `max_scroll_y>0`.
 
-2026-06-17 default GPUI overflow evidence:
+2026-06-17 historical GPUI overflow evidence:
 
 ```text
 places_sidebar_frames=7 max_rows=75 max_sections=3 max_elements=78 max_build=3083us
@@ -457,18 +431,18 @@ an isolated config directory:
 XDG_CONFIG_HOME=/tmp/fika-places-layout-config \
   timeout 6s env FIKA_PERF_PLACES_VIEW=1 FIKA_AUTOSMOKE_PLACES=layout \
   target/debug/fika /etc > /tmp/fika-places-layout.log 2>&1
-scripts/analyze-places-perf.sh --require-layout-autosmoke --require-interaction-policy --require-interaction-geometry --expect-current-gpui-policy /tmp/fika-places-layout.log
+scripts/analyze-places-perf.sh --require-layout-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-full-policy --expect-retained-event-policy /tmp/fika-places-layout.log
 ```
 
-For the opt-in row visual policy, add `FIKA_CUSTOM_PLACES_ROWS=1` and switch
-the analyzer policy:
+For the explicit full-row stress path, add `FIKA_CUSTOM_PLACES_ROWS=1` and keep
+the same analyzer policy:
 
 ```bash
 XDG_CONFIG_HOME=/tmp/fika-places-layout-custom-config \
   timeout 6s env FIKA_PERF_PLACES_VIEW=1 FIKA_CUSTOM_PLACES_ROWS=1 \
   FIKA_AUTOSMOKE_PLACES=layout target/debug/fika /etc \
   > /tmp/fika-places-layout-custom.log 2>&1
-scripts/analyze-places-perf.sh --require-layout-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-visual-policy /tmp/fika-places-layout-custom.log
+scripts/analyze-places-perf.sh --require-layout-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-full-policy --expect-retained-event-policy /tmp/fika-places-layout-custom.log
 ```
 
 `FIKA_AUTOSMOKE_PLACES=layout` does not mutate user Places ordering. It captures
@@ -534,11 +508,11 @@ places_renderer_policy_frames=... max_row_gpui=0 max_row_visual_layer=11 max_ico
 places_row_visual_frames=... max_rows=11 max_prepaint=...us max_paint=...us
 ```
 
-`max_rows` must match the renderer-policy row count. The current opt-in
-implementation paints row backgrounds, active/drop state, label, trash marker,
-and insert indicators through one sidebar-level visual layer, while GPUI still
-owns icons, row event delivery, context menus, DnD, and drag-start shells. The
-analyzer rejects custom row visual logs that fall back to one canvas per row.
+`max_rows` must match the renderer-policy row count. In this historical opt-in
+implementation, one sidebar-level visual layer painted row backgrounds,
+active/drop state, label, trash marker, and insert indicators while GPUI still
+owned icons, row event delivery, context menus, DnD, and drag-start shells. The
+analyzer rejected custom row visual logs that fell back to one canvas per row.
 
 2026-06-17 first opt-in desktop-session evidence:
 
@@ -551,9 +525,9 @@ custom: places_row_visual_frames=110 max_rows=1 max_prepaint=148us max_paint=921
 The opt-in path passed the non-destructive target/insert/clear autosmoke and
 proved the renderer-policy split, but it is not default-ready. The high
 per-row `max_paint` came from the first cold frames; later rows in the same log
-were typically around `14-33us` paint each. Before replacing the default GPUI
-row renderer, collect scroll/DnD behavior evidence and decide whether per-row
-canvas overhead should be collapsed into a retained sidebar visual layer.
+were typically around `14-33us` paint each. This was evidence for collapsing
+per-row canvas overhead into a retained sidebar visual layer before the later
+full retained/custom default was accepted.
 
 2026-06-17 opt-in overflow evidence:
 
@@ -615,15 +589,15 @@ aggregated layer still reshaped every row label during each prepaint pass even
 when the same `PlaceSnapshot` labels, font, and visual text color were stable.
 Fika now mirrors the item-view text-cache pattern with an app-level
 `PlacesRowTextShapeCache`, keyed by label/font/font-size/color. The cache is
-only used by `FIKA_CUSTOM_PLACES_ROWS=1` / `full`; the default chrome policy
-keeps text on GPUI and must not emit this channel. Runtime logs include:
+used by the default `full` retained/custom path; the `chrome` baseline keeps
+text on GPUI and must not emit this channel. Runtime logs include:
 
 ```text
 [fika places-row-shape-cache] hits=... misses=... evicted=... entries=...
 ```
 
-`--expect-custom-row-visual-policy` requires this shape-cache channel for the
-opt-in custom row path, so future Places row painter changes cannot silently
+`--expect-custom-row-full-policy` requires this shape-cache channel for the
+default full row path, so future Places row painter changes cannot silently
 return to per-frame row label shaping without runtime evidence.
 
 2026-06-18 opt-in row text shape-cache evidence:
@@ -700,24 +674,26 @@ frames still show glyph/raster cold-start paint spikes around `7-8ms` and must
 be eliminated or proven neutral against the GPUI baseline before default
 switching.
 
-2026-06-18 Dolphin-aligned Places chrome policy update:
+2026-06-18 Dolphin-aligned Places chrome policy update, superseded by the
+2026-06-19 full retained/custom default:
 
 The previous full custom row visual layer was not Dolphin-like enough to become
 the default because it moved text into GPUI canvas painting and reintroduced
 font/glyph cold-start spikes. Dolphin keeps item widgets visible-only and uses
-static text and pixmap caches; Fika does not yet expose an equivalent public
-static-text raster cache for the custom Places canvas. The default policy is
-therefore the narrower custom chrome path:
+static text and pixmap caches. This evidence led to the retained Places text
+shape cache and icon cache work; after that work, the default policy moved to
+the full retained/custom path. The narrower custom chrome path remains a
+baseline:
 
-- `FIKA_PLACES_ROW_VISUAL_POLICY=chrome` is the default.
+- `FIKA_PLACES_ROW_VISUAL_POLICY=full` is the default.
 - The custom layer paints row background, active/drop border, insert
-  indicators, and trash state.
-- GPUI still paints row text and theme icons, so the row shape-cache channel
-  must stay absent in chrome logs.
+  indicators, trash state, labels, section headings, and icons.
+- `chrome` still paints only chrome while GPUI paints row text/icons, so the row
+  shape-cache channel must stay absent in chrome logs.
 - `FIKA_PLACES_ROW_VISUAL_POLICY=gpui` remains the baseline fallback.
-- `FIKA_CUSTOM_PLACES_ROWS=1` remains the full custom-text benchmark path.
+- `FIKA_CUSTOM_PLACES_ROWS=1` remains an alias/stress path for full custom rows.
 
-Runtime evidence:
+Historical runtime evidence:
 
 ```bash
 timeout 6s env FIKA_PERF_PLACES_VIEW=1 FIKA_AUTOSMOKE_PLACES=targets target/debug/fika /etc > /tmp/fika-places-chrome-targets.log 2>&1
@@ -730,10 +706,10 @@ timeout 6s env FIKA_PERF_PLACES_VIEW=1 FIKA_PLACES_ROW_VISUAL_POLICY=gpui FIKA_A
 scripts/analyze-places-perf.sh --require-autosmoke --require-interaction-policy --require-interaction-geometry --expect-current-gpui-policy /tmp/fika-places-gpui-targets.log
 
 timeout 6s env FIKA_PERF_PLACES_VIEW=1 FIKA_CUSTOM_PLACES_ROWS=1 FIKA_AUTOSMOKE_PLACES=targets target/debug/fika /etc > /tmp/fika-places-full-targets.log 2>&1
-scripts/analyze-places-perf.sh --require-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-visual-policy /tmp/fika-places-full-targets.log
+scripts/analyze-places-perf.sh --require-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-full-policy --expect-retained-event-policy /tmp/fika-places-full-targets.log
 ```
 
-Default chrome targets summary:
+Historical chrome targets summary:
 
 ```text
 places_renderer_policy_frames=10 max_rows=11 max_row_gpui=0 max_row_visual_layer=11 max_text_gpui=11 visual_kinds=chrome
@@ -741,7 +717,7 @@ places_row_visual_frames=10 max_rows=11 max_painted=11 max_prepaint=23us max_pai
 places_row_shape_cache_frames=0
 ```
 
-Default chrome overflow summary:
+Historical chrome overflow summary:
 
 ```text
 places_renderer_policy_frames=6 max_rows=75 max_row_gpui=0 max_row_visual_layer=75 max_text_gpui=75 visual_kinds=chrome
@@ -749,7 +725,7 @@ places_row_visual_frames=6 max_rows=75 max_painted=29 max_prepaint=28us max_pain
 places_row_shape_cache_frames=0
 ```
 
-Full custom-text comparison:
+Historical full custom-text comparison:
 
 ```text
 places_renderer_policy_frames=10 max_rows=11 max_row_gpui=0 max_row_visual_layer=11 max_text_gpui=0 visual_kinds=full
@@ -757,7 +733,7 @@ places_row_visual_frames=10 max_rows=11 max_painted=11 max_prepaint=1046us max_p
 places_row_shape_cache_frames=10 max_hits=11 max_misses=11 max_entries=11
 ```
 
-Additional default chrome guards passed:
+Additional historical chrome guards passed:
 
 ```bash
 scripts/analyze-places-perf.sh --require-layout-autosmoke --require-interaction-policy --require-interaction-geometry --expect-custom-row-chrome-policy /tmp/fika-places-chrome-layout.log
@@ -776,7 +752,7 @@ scripts/analyze-places-perf.sh --require-hit-test-autosmoke --require-interactio
 - Runtime smoke covers row activation, reorder insert-before/after, item drop
   to place, external path drop to place, place drag to pane directory, device
   teardown action visibility, and sidebar leave clearing.
-- Scroll/paint evidence shows no regression against the current GPUI sidebar
+- Scroll/paint evidence shows no regression against the explicit GPUI sidebar
   baseline. A custom Places painter that loses to GPUI must stay behind an
   opt-in flag or be removed.
 - Sidebar width/visibility changes remeasure pane viewports without resetting

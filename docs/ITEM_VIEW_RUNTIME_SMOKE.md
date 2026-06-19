@@ -122,14 +122,15 @@ Expected DnD debug interpretation:
   the directory highlight updates while hovering.
 - `viewport-place-move`: Places-to-pane drag is using the viewport retained
   hit-test path.
-- `directory-shell-hit`: a visible directory shell asserted a positive target;
-  this is helpful but not sufficient for pane self-drag hover because GPUI may
-  skip per-element drag-move callbacks after drag start.
+- legacy `directory-shell-hit`: a visible directory shell asserted a positive
+  target in older builds; this was helpful but not sufficient for pane
+  self-drag hover because GPUI may skip per-element drag-move callbacks after
+  drag start. Current acceptance uses the retained `active-item-move` target.
 
 Pane item self-drag root cause:
 
-- The remaining GPUI `Div::on_drag` shell is a drag initiation boundary, not the
-  owner of hover state after the drag starts.
+- Retained hitbox drag start creates the item drag payload through the Fika GPUI
+  fork, but it is not the owner of hover state after the drag starts.
 - Places-to-pane drag stays responsive because the viewport drag-move path keeps
   delivering target updates while the drag is moving.
 - Pane-item-to-pane-directory drag is different: after the same-window item
@@ -155,13 +156,13 @@ Verified pane self-drag trace from 2026-06-17:
 ```
 
 This trace is the important distinction between the broken and fixed states.
-The drag start shell created the payload, but no pane/item element move callback
-was required after that. While the cursor was over blank pane space, the
-retained hit-test returned `kind=Some(Pane)`. As soon as the preview repaint
-queried the current mouse position over the directory bounds, the same retained
-hit-test returned `kind=Some(Directory)` with `changed=true`; later moves over
-the same directory correctly stayed `changed=false` because the active target
-was already installed.
+The retained hitbox drag-start path created the payload, and no pane/item
+element move callback was required after that. While the cursor was over blank
+pane space, the retained hit-test returned `kind=Some(Pane)`. As soon as the
+preview repaint queried the current mouse position over the directory bounds,
+the same retained hit-test returned `kind=Some(Directory)` with `changed=true`;
+later moves over the same directory correctly stayed `changed=false` because the
+active target was already installed.
 
 The earlier visible symptom, "directory highlights only at drop time", was
 therefore not caused by wrong directory geometry, wrong drop-target styling, or
@@ -212,7 +213,7 @@ Expected log properties:
   interaction items for Compact/Icons and Details.
 - `[fika renderer-policy]` should appear for Compact, Icons, and Details and
   show how many visible surfaces are using the visual layer, image layer,
-  retained interaction layer, GPUI drag-start shell, and rename overlay for
+  retained interaction layer, zero GPUI drag-start shells, and rename overlay for
   each exercised mode. Each surface count must be internally consistent with
   the logged item count; impossible counts are not valid renderer evidence.
 
@@ -254,19 +255,19 @@ changing MIME/theme icon rendering. If `static_visual max_prepaint` or
 `max_paint` dominates while `icon_sync` stays low, the next issue is text/base
 visual paint caching rather than theme-icon lookup.
 
-For MIME/theme-icon image renderer A/B, repeat the same `~/Downloads` and
-`/etc` runs with `FIKA_CUSTOM_THEME_ICONS=1`. The default run keeps retained
-item snapshots and controller routing while rendering MIME/theme icons through
-GPUI `img()` children; the override forces MIME/theme icons back through the
-custom item-image layer. Compare `renderer-policy gpui_image_element` counts
-and the absence or presence of theme-icon `[fika item-image]` source churn.
+For MIME/theme-icon image renderer A/B, compare the default full custom image
+layer against the explicit GPUI image-element baseline. The default run keeps
+retained item snapshots, retained controller routing, and paints MIME/theme
+icons through `[fika item-image]`; `FIKA_GPUI_THEME_ICONS=1` forces the old GPUI
+`img()` baseline. Compare `renderer-policy gpui_image_element` counts and the
+absence or presence of theme-icon `[fika item-image]` source churn.
 
 Use `scripts/compare-item-image-renderers.sh` for this comparison:
 
 ```sh
-FIKA_PERF_ITEM_VIEW=1 FIKA_CUSTOM_THEME_ICONS=1 cargo run -- /etc 2>&1 | tee /tmp/fika-etc-custom-theme.log
-FIKA_PERF_ITEM_VIEW=1 cargo run -- /etc 2>&1 | tee /tmp/fika-etc-default.log
-scripts/compare-item-image-renderers.sh /tmp/fika-etc-custom-theme.log /tmp/fika-etc-default.log
+FIKA_PERF_ITEM_VIEW=1 cargo run -- /etc 2>&1 | tee /tmp/fika-etc-custom-default.log
+FIKA_PERF_ITEM_VIEW=1 FIKA_GPUI_THEME_ICONS=1 cargo run -- /etc 2>&1 | tee /tmp/fika-etc-gpui-baseline.log
+scripts/compare-item-image-renderers.sh --gate-default-promotion /tmp/fika-etc-custom-default.log /tmp/fika-etc-gpui-baseline.log
 ```
 
 For non-destructive Places target-projection smoke, run:

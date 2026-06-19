@@ -7,12 +7,13 @@ Usage: compare-item-image-renderers.sh [--gate-default-promotion|--gate-hybrid-h
 
 Compares two FIKA_PERF_ITEM_VIEW logs for Compact/Icons item image rendering:
 
-  CANDIDATE_LOG: run with FIKA_CUSTOM_THEME_ICONS=1 or
-                 FIKA_HYBRID_THEME_ICONS=1, depending on the gate.
-  BASELINE_LOG:  comparison baseline. For current hybrid-default work this
-                 should usually be a FIKA_GPUI_THEME_ICONS=1 run, expected to
-                 route theme/MIME icons through GPUI img() children while
-                 thumbnails stay on the custom image layer.
+  CANDIDATE_LOG: run with the default full custom image renderer, explicit
+                 FIKA_CUSTOM_THEME_ICONS=1, or FIKA_HYBRID_THEME_ICONS=1,
+                 depending on the gate.
+  BASELINE_LOG:  comparison baseline. This should usually be a
+                 FIKA_GPUI_THEME_ICONS=1 run, expected to route theme/MIME
+                 icons through GPUI img() children while thumbnails stay on the
+                 custom image layer.
 
 This is a log comparison helper. It cannot judge subjective smoothness, but it
 does identify renderer-policy activation and custom image-layer placeholder,
@@ -20,8 +21,8 @@ decode, and retained-image churn.
 
 Options:
   --gate-default-promotion
-      Exit non-zero unless the custom theme-icon path is clean enough to be
-      considered for becoming the default renderer.
+      Exit non-zero unless the full custom theme-icon path is clean enough to
+      remain or become the default renderer against the GPUI image baseline.
   --gate-hybrid-handoff
       Exit non-zero unless the hybrid path proves GPUI fallback, prewarm
       activity, ready-key custom painting, and no theme placeholder/decode
@@ -29,7 +30,7 @@ Options:
   --gate-hybrid-default-promotion
       Exit non-zero unless the hybrid path passes the handoff gate and stays
       within explicit item-view, static-visual, image-paint, and icon-sync
-      tolerances versus the default GPUI image-element baseline.
+      tolerances versus the explicit GPUI image-element baseline.
 EOF
 }
 

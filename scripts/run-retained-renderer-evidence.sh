@@ -22,11 +22,11 @@ Options:
 
   --icons
       Also capture MIME/theme icon GPUI-baseline-vs-full-custom A/B logs and
-      require the default-promotion gate to pass.
+      require the full-custom default gate to pass.
 
   --hybrid-icons
       Capture MIME/theme icon GPUI-baseline-vs-explicit-hybrid readiness
-      handoff logs and require the hybrid default-promotion gate to pass.
+      handoff logs and require the hybrid-vs-GPUI-baseline gate to pass.
 
   --places-full-handoff
       Capture paired Places chrome-baseline vs full ready-only handoff logs
@@ -345,47 +345,47 @@ if [[ "$capture_places" == true ]]; then
 fi
 
 if [[ "$capture_icons" == true ]]; then
-    icon_default_etc_log="$(log_path icon-default-etc)"
+    icon_gpui_etc_log="$(log_path icon-gpui-baseline-etc)"
     icon_custom_etc_log="$(log_path icon-custom-etc)"
-    icon_default_downloads_log="$(log_path icon-default-downloads)"
+    icon_gpui_downloads_log="$(log_path icon-gpui-baseline-downloads)"
     icon_custom_downloads_log="$(log_path icon-custom-downloads)"
 
-    run_capture "icon default etc" "$icon_default_etc_log" \
+    run_capture "icon gpui baseline etc" "$icon_gpui_etc_log" \
         env FIKA_PERF_ITEM_VIEW=1 FIKA_GPUI_THEME_ICONS=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll "$binary" /etc
     run_capture "icon custom etc" "$icon_custom_etc_log" \
         env FIKA_PERF_ITEM_VIEW=1 FIKA_CUSTOM_THEME_ICONS=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll "$binary" /etc
-    run_capture "icon default downloads" "$icon_default_downloads_log" \
+    run_capture "icon gpui baseline downloads" "$icon_gpui_downloads_log" \
         env FIKA_PERF_ITEM_VIEW=1 FIKA_GPUI_THEME_ICONS=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll "$binary" "$downloads_dir"
     run_capture "icon custom downloads" "$icon_custom_downloads_log" \
         env FIKA_PERF_ITEM_VIEW=1 FIKA_CUSTOM_THEME_ICONS=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll "$binary" "$downloads_dir"
 
     compare="$root_dir/scripts/compare-item-image-renderers.sh"
-    run_gate "icon default promotion etc" \
-        "$compare" --gate-default-promotion "$icon_custom_etc_log" "$icon_default_etc_log"
-    run_gate "icon default promotion downloads" \
-        "$compare" --gate-default-promotion "$icon_custom_downloads_log" "$icon_default_downloads_log"
+    run_gate "icon custom default gate etc" \
+        "$compare" --gate-default-promotion "$icon_custom_etc_log" "$icon_gpui_etc_log"
+    run_gate "icon custom default gate downloads" \
+        "$compare" --gate-default-promotion "$icon_custom_downloads_log" "$icon_gpui_downloads_log"
 fi
 
 if [[ "$capture_hybrid_icons" == true ]]; then
-    icon_default_etc_log="$(log_path icon-hybrid-default-etc)"
+    icon_gpui_etc_log="$(log_path icon-hybrid-gpui-baseline-etc)"
     icon_hybrid_etc_log="$(log_path icon-hybrid-etc)"
-    icon_default_downloads_log="$(log_path icon-hybrid-default-downloads)"
+    icon_gpui_downloads_log="$(log_path icon-hybrid-gpui-baseline-downloads)"
     icon_hybrid_downloads_log="$(log_path icon-hybrid-downloads)"
 
-    run_capture "icon hybrid gpui baseline etc" "$icon_default_etc_log" \
+    run_capture "icon hybrid gpui baseline etc" "$icon_gpui_etc_log" \
         env FIKA_PERF_ITEM_VIEW=1 FIKA_GPUI_THEME_ICONS=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll "$binary" /etc
     run_capture "icon hybrid etc" "$icon_hybrid_etc_log" \
         env FIKA_PERF_ITEM_VIEW=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll "$binary" /etc
-    run_capture "icon hybrid gpui baseline downloads" "$icon_default_downloads_log" \
+    run_capture "icon hybrid gpui baseline downloads" "$icon_gpui_downloads_log" \
         env FIKA_PERF_ITEM_VIEW=1 FIKA_GPUI_THEME_ICONS=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll "$binary" "$downloads_dir"
     run_capture "icon hybrid downloads" "$icon_hybrid_downloads_log" \
         env FIKA_PERF_ITEM_VIEW=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll "$binary" "$downloads_dir"
 
     compare="$root_dir/scripts/compare-item-image-renderers.sh"
-    run_gate "icon hybrid default promotion etc" \
-        "$compare" --gate-hybrid-default-promotion "$icon_hybrid_etc_log" "$icon_default_etc_log"
-    run_gate "icon hybrid default promotion downloads" \
-        "$compare" --gate-hybrid-default-promotion "$icon_hybrid_downloads_log" "$icon_default_downloads_log"
+    run_gate "icon hybrid gpui-baseline gate etc" \
+        "$compare" --gate-hybrid-default-promotion "$icon_hybrid_etc_log" "$icon_gpui_etc_log"
+    run_gate "icon hybrid gpui-baseline gate downloads" \
+        "$compare" --gate-hybrid-default-promotion "$icon_hybrid_downloads_log" "$icon_gpui_downloads_log"
 fi
 
 if [[ "$capture_places_full_handoff" == true ]]; then

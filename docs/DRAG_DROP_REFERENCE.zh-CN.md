@@ -35,7 +35,7 @@ Fika 的拖放路径遵循 Dolphin 的 item-view controller 模型：选择和 h
 
 稳定行为：内部 item/place 拖拽（pane↔pane、pane↔Places），GPUI `ExternalPaths` 外部 drop，Copy/Move/Link drop menu，目录 drop target 琥珀色高亮，Places 插入线 bookmark insert/reorder，精确 leave 清理，3s lease timeout 兜底。
 
-同窗口拖拽期间，pane viewport ownership 优先。如果 retained Places typed payload bridge 收到一个 capture-phase drag move，但该 window position 位于任意 pane viewport 内，它必须只清自己的 Places target，在 `FIKA_DEBUG_DND=1` 下输出 `places-dnd-defer-to-pane`，并让 pane retained hit-test 保持或更新 item drop target。stale Places target 不允许对 pane 坐标通过 `can_drop`。
+同窗口拖拽期间，pane viewport ownership 优先。如果 retained Places DnD layer 收到一个 drag move，但该 window position 位于任意 pane viewport 内，它必须只清自己的 Places target，在 `FIKA_DEBUG_DND=1` 下输出 `places-dnd-defer-to-pane`，并让 pane retained hit-test 保持或更新 item drop target。stale Places target 不允许对 pane 坐标通过 `can_drop`。
 
 正在处理：`DragExportPayload`（`text/uri-list` + `text/plain`）已构造，但 GPUI/backend 尚未提供从 app 内部 drag source 向外部应用发布 MIME 的 API。
 

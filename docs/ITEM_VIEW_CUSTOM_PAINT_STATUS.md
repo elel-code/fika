@@ -233,16 +233,17 @@ Before expanding it:
   device entries, hidden sections, and context menus
 - keep the retained Places event-delivery smoke current and require
   `--expect-retained-event-policy`
-- only move text or icons into custom painting after a retained/static cache
-  path beats or matches GPUI
+- keep text and icons on the default full retained/custom path only while the
+  retained text/image caches continue to beat or match the GPUI baselines
 
-`FIKA_CUSTOM_PLACES_ROWS=1` remains an opt-in full-text benchmark surface.
+`FIKA_CUSTOM_PLACES_ROWS=1` remains an explicit full-row stress alias.
 Overflow evidence is available through `FIKA_AUTOSMOKE_PLACES=overflow`, which
 adds non-persistent snapshot-only rows and validates
 `[fika places-scrollbar] visible=1`. The Places analyzer rejects the old per-row
 canvas shape by requiring `[fika places-row-visual] rows` to match the
-renderer-policy row count, and the default chrome gate rejects row
-shape-cache logs because text must remain GPUI-rendered.
+renderer-policy row count. The default full gate requires row shape-cache
+evidence and zero GPUI event/typed-payload/drag shell counts; chrome/text/GPUI
+policies remain comparison baselines.
 
 The concrete retained-row design and Dolphin source comparison live in
 `docs/PLACES_RENDERER_PLAN.md`.

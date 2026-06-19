@@ -12,12 +12,13 @@ Fika item views should converge on Dolphin's `KItemListView` model:
 - layout identity belongs to Rust-side projection and visible slot state
 - UI hitboxes are stable interaction surfaces
 - static item visuals are custom painted instead of rebuilt as GPUI child trees
-- thumbnail images are painted by retained content-level image layers backed by
-  GPUI's image cache; MIME/theme icons default to GPUI `img()` elements over
-  retained item shells because that path currently has better first-load
-  evidence
-- rename editors and drag-start initiation can remain specialized GPUI child
-  paths until their platform contracts are replaceable
+- thumbnail images and MIME/theme icons are painted by retained content-level
+  image layers backed by GPUI's `RetainAllImageCache -> RenderImage ->
+  Window::paint_image` path; GPUI `img()` is an explicit baseline/fallback, not
+  the default image architecture
+- rename editors can remain specialized GPUI child paths until their platform
+  contracts are replaceable; drag-start initiation is now retained-hitbox owned
+  through the Fika GPUI fork
 
 The practical target is not merely lower latency. The target is a retained item
 view where resize, scroll, selection, hover, and metadata updates patch stable
@@ -55,13 +56,13 @@ The migration is model-first. Renderer choice is deliberately replaceable.
 
 Renderer policy:
 
-- Prefer GPUI built-ins where GPUI owns a hard platform contract, such as
-  text editing, public drag-start, or an image/cache path that outperforms a
-  custom layer.
+- Prefer GPUI built-ins where GPUI owns a hard platform contract, such as text
+  editing or a measured image/cache path that outperforms a custom layer.
 - Prefer custom paint only where retained snapshots reduce per-frame element
   work and `FIKA_PERF_ITEM_VIEW=1` logs show neutral or better steady behavior.
-- Keep model, layout, interaction, and painter data split even when the current
-  renderer for a surface remains a GPUI `Div`, `img()`, or text editor subtree.
+- Keep model, layout, interaction, and painter data split even when a deliberate
+  baseline/fallback renderer for a surface remains a GPUI `Div`, `img()`, or
+  text editor subtree.
 
 Renderer baseline gate:
 
@@ -109,9 +110,10 @@ Historical baseline gate:
   `a3f5b0f` (`Refactor file_grid drop type and optimize cache retention`) as
   the pre-retained/custom-paint code baseline. That commit still rendered
   thumbnail/theme-icon images through GPUI `img()` children and the root
-  `image_cache(retain_all(...))` provider. Current code keeps that renderer
-  direction for MIME/theme icons while thumbnails remain on the custom image
-  paint layer.
+  `image_cache(retain_all(...))` provider. Current code defaults thumbnails and
+  MIME/theme icons to the retained custom image paint layer; set
+  `FIKA_GPUI_THEME_ICONS=1` only when capturing the old GPUI image-element
+  baseline.
 - Treat `d497593`, `8d1198f`, `36da130`, and `b0cac9a` as transition
   checkpoints: retained paint slot/text cache, retained hover state, dedicated
   custom element, and content-level fallback painting. They are useful for
@@ -126,8 +128,8 @@ Historical baseline gate:
   `theme_placeholder` frames, or zoom-time `theme_decoded` churn that the GPUI
   `img()` baseline does not show, the renderer decision is open again. The
   retained model/controller boundary should stay, but theme-icon rendering may
-  return to a GPUI image element or gain an equivalent retained pixmap strategy
-  instead of preserving custom paint for its own sake.
+  temporarily return to a GPUI image element or gain an equivalent retained
+  pixmap strategy instead of preserving custom paint for its own sake.
 
 ## Full-Transition Design Rule
 
@@ -149,14 +151,15 @@ true while leaving an explicit GPUI platform bridge in place.
 
 The current non-negotiable boundaries are:
 
-- drag start: GPUI `Div::on_drag` remains until custom elements can initiate a
-  drag with the same payload, preview, cursor offset, and drop behavior;
+- drag start: retained hitboxes initiate typed drags through the Fika GPUI fork,
+  and analyzer/runtime gates must keep GPUI drag shell counts at zero;
 - rename editing: GPUI text input remains until focus, caret, selection,
   validation, commit/cancel, Tab rename-next, and IME are covered;
 - image decode: GPUI image cache remains the decode path unless a replacement
   beats it on cold load, zoom, memory, and SVG/theme behavior;
-- Places renderer: GPUI stays until a Places-specific retained painter plan and
-  baseline are captured.
+- Places renderer: the default is full retained/custom row visual plus
+  retained-hitbox event/DnD delivery; GPUI/chrome/text policies remain only as
+  explicit baselines.
 
 When in doubt, align the owner first and the renderer second.
 
@@ -181,7 +184,8 @@ Fika equivalent:
 - `VisibleItemSlotPool` owns stable visual slot identity.
 - `VisibleItemSnapshotCache` owns stable per-item content.
 - custom-painted item visuals consume snapshots and paint quads/text/thumbnail
-  images; GPUI `img()` theme icons still consume retained item snapshots.
+  and MIME/theme images; GPUI `img()` theme icons are reserved for the explicit
+  baseline/handoff renderer.
 
 ## Current Role/Update Policy
 
@@ -202,9 +206,10 @@ file roles inside the painter:
   so the next frame can replace preliminary icons with resolved theme images.
 - thumbnail role success/failure remains model-driven, and the image paint
   layer paints a fallback only after a same-thumbnail retained image has been
-  tried. MIME/theme icons default to GPUI `img()` elements over retained item
-  shells; `FIKA_CUSTOM_THEME_ICONS=1` can still force theme icons through the
-  custom image layer for A/B evidence, but that is not the default renderer.
+  tried. MIME/theme icons default to the same retained custom image layer;
+  `FIKA_GPUI_THEME_ICONS=1` forces the old GPUI `img()` baseline, and
+  `FIKA_HYBRID_THEME_ICONS=1` keeps the explicit readiness-handoff comparison
+  path.
 - zoom mirrors Dolphin's ordinary icon paint path: item geometry changes
   immediately, and MIME/theme icon snapshots resolve against the current layout
   icon size, just as `KStandardItemListWidget::pixmapForIcon()` uses the
@@ -272,12 +277,14 @@ Paint layer must not:
 
 ### Interaction Layer
 
-Temporarily keep one GPUI `Div` per visible item for:
+Non-renaming item and Details interactions are retained-hitbox owned:
 
-- stable `id(("item-slot", slot_id))`
-- non-renaming drag source while GPUI lacks a public custom-element drag-start
-  API
-- rename hover/cursor/input until rename moves to an overlay boundary
+- stable hitboxes are inserted from retained Compact/Icons visual rects and
+  Details row rects
+- hover, cursor, click/menu/drop targeting, and typed drag start route through
+  retained interaction layers
+- the remaining item slot `Div` is a layout/overlay carrier for explicit GPUI
+  image baselines and rename editing, not a DnD/event shell
 
 Viewport-level hit testing remains authoritative for normal click, context menu,
 middle click, rubber band, and drop target routing.
@@ -289,16 +296,17 @@ therefore installs a window mouse tracker while an `ActiveItemDrag` exists. That
 tracker routes the current window position through the retained pane hit-test
 and updates the same `ItemDropTarget` state used by Places-to-pane and external
 path drops. When the platform/backend does not deliver the underlying move
-callback during a same-window active item drag, the GPUI drag preview repaint
-uses the current window mouse position to run the same retained hit-test update.
-GPUI item shells remain responsible for drag initiation and preview ownership
-only.
+callback during a same-window active item drag, the drag preview repaint uses
+the current window mouse position to run the same retained hit-test update.
+Drag initiation is now registered on retained hitboxes through the Fika GPUI
+fork, so per-item GPUI drag-start shells are not part of the current renderer
+contract.
 
 #### Same-window Item Drag Hover Root Cause
 
 The 2026-06-17 runtime trace isolated the pane-internal hover miss:
 
-- `item-start` was emitted, so the GPUI drag-start shell created the
+- `item-start` was emitted, so the retained hitbox drag-start path created the
   `ItemDragPayload` and Fika populated `ActiveItemDrag`.
 - No `active-item-move via=window` or viewport `on_drag_move::<ItemDrag>` path
   followed in the failing build, so the retained hit-test state was not being
@@ -310,23 +318,23 @@ The 2026-06-17 runtime trace isolated the pane-internal hover miss:
   reliable active-drag tick reached them.
 
 The concrete cause was therefore not stale item geometry, directory rejection,
-or drop-target painting. It was the event source: during same-window GPUI item
-drags, the underlying pane/item drag-move callbacks may not be delivered after
-drag start. The drag preview is still repainted to follow the pointer, so it is
-currently the stable runtime tick for pane self-drag hover until Fika owns drag
-start in a custom element or GPUI exposes a stronger active-drag callback.
+or drop-target painting. It was the event source: during same-window
+app-internal item drags, the underlying pane/item drag-move callbacks may not be
+delivered after drag start. The retained-hitbox path now owns drag start; the
+drag preview repaint remains the accepted fallback tick for pane self-drag hover
+when the backend does not deliver a stronger active-drag move callback.
 
 Rename items keep the existing editor subtree. Before Phase 8, thumbnail and
 theme-icon items used slot-stable retained `img()` elements under a pane-local
-image cache. Phase 8 moved thumbnails behind the custom paint layer, while
-MIME/theme icons now default back to GPUI `img()` elements because the custom
-theme-icon layer showed first-load placeholder churn in `/etc` logs.
+image cache. Phase 8 moved thumbnails behind the custom paint layer, and the
+later retained icon cache work moved MIME/theme icons to the same full custom
+image layer by default.
 
-Current Compact/Icons item shells live in `src/ui/file_grid/item_shell.rs` and
-no longer contain per-item static text visual children. They are transparent
-drag-start/rename boundaries; base visuals and thumbnails are owned by
-content-level custom paint layers, and MIME/theme icon `img()` children are an
-explicit renderer-policy bridge over retained item state.
+Current Compact/Icons item slots live in `src/ui/file_grid/item_shell.rs` and
+no longer contain per-item static text visual children, default image elements,
+or DnD/event handlers. Base visuals, thumbnails, and MIME/theme icons are owned
+by content-level custom paint layers by default; the slot remains for explicit
+GPUI image baselines and the rename overlay.
 
 ## Migration Phases
 
@@ -445,7 +453,9 @@ layer for Compact and Icons:
 - build a filtered static paint list from retained `ItemPaintSnapshot` values
 - paint all non-renaming, non-thumbnail, non-theme-icon fallback items in one
   custom element
-- keep each item slot as a transparent interaction and drag shell
+- at this phase each item slot stayed as a transparent interaction/drag
+  boundary; current code has moved interaction and drag start to retained
+  hitboxes
 - keep thumbnail image, theme-icon renderer, and rename paths as specialized
   child paths
 
@@ -469,7 +479,9 @@ Move all non-renaming Compact and Icons base visuals into content-level layers:
   retained visual slot id for this phase; Phase 8 replaces that thumbnail layer
   with direct custom image painting, while theme-icon rendering remains a
   renderer-policy decision
-- each non-renaming item slot remains a transparent interaction/drag shell
+- at this phase each non-renaming item slot still carried the transparent
+  interaction/drag boundary; current code keeps only the slot carrier while
+  interaction and drag start are retained-hitbox owned
 - rename items keep the current child subtree and editor behavior
 
 Acceptance:
@@ -483,13 +495,13 @@ Acceptance:
 ### Phase 8: Direct Image Paint Layer
 
 Replace the content-level thumbnail `img()` layer with a custom paint element;
-theme icons may use this path only for A/B evidence:
+MIME/theme icons now use this retained image layer by default:
 
 - keep using GPUI's `ImageAssetLoader` and pane-local `RetainAllImageCache` for
   thumbnail path loading, image decode, and render-image lifetime
-- for default MIME/theme icons, keep GPUI `img()` children over retained item
-  shells; if `FIKA_CUSTOM_THEME_ICONS=1` is enabled, keep the same GPUI
-  image-cache decode path and retain by `iconName` for comparison
+- for MIME/theme icons, keep the same GPUI image-cache decode path but retain
+  by semantic icon key and paint through `Window::paint_image`; use
+  `FIKA_GPUI_THEME_ICONS=1` only for the old GPUI `img()` baseline
 - draw loaded images from the custom layer with `Window::paint_image`
 - keep thumbnail fallback marker painting in the image layer; custom-theme A/B
   mode uses a neutral markerless placeholder only before any same-icon image has
@@ -502,16 +514,17 @@ Acceptance:
 - non-renaming thumbnail items no longer allocate per-image `img()` elements
 - thumbnail image loads still happen asynchronously and notify the pane on
   completion
-- default theme icons use GPUI `img()` elements; custom-theme A/B runs must not
-  replace an already loaded same-`iconName` image with a marker, blank rect, or
-  unrelated fallback
+- default theme icons use the retained custom image layer; custom image runs
+  must not replace an already loaded same-`iconName` image with a marker, blank
+  rect, or unrelated fallback
 - loaded image bounds match GPUI `ObjectFit::Contain`
 - image cache state remains pane-local and is released with the pane/layer
 
 ### Phase 9: Painted Interaction Hitboxes
 
-Move item interaction out of per-item `Div` shells in two steps, matching the
-current GPUI public API boundary.
+Move item interaction out of per-item `Div` shells in two steps: first retained
+hover/cursor hitboxes, then retained drag-start hitboxes through the Fika GPUI
+fork.
 
 #### Phase 9a: Retained Hover/Cursor Hitboxes
 
@@ -520,7 +533,7 @@ element:
 
 - custom element inserts one stable hitbox per visible item visual rect
 - hover and cursor route through the retained slot table
-- per-item shell stays only as the GPUI drag source boundary
+- before P9b, the per-item shell stayed only as the GPUI drag source boundary
 - viewport hit testing remains the source of truth for click/menu/drop behavior
 - drag preview offset continues to use GPUI's cursor offset, independent of item
   geometry
@@ -535,16 +548,18 @@ Acceptance:
 - item drag payload and preview behavior remain unchanged
 - perf logs do not show a new steady render/build regression; cold mode-switch
   cache warm-up remains tracked separately from resize/fullscreen steady paths
-- P9a perf evidence is not permission to remove drag shells; P9b still requires
-  a public GPUI drag-start API or an audited GPUI patch
+- P9a perf evidence is not permission to change drag behavior alone; retained
+  hitbox drag start stays gated by DnD smoke and `gpui_drag_shell=0`
 
 #### Phase 9b: Drag Source Hitboxes
 
-Remove the remaining non-renaming per-item drag shells only after GPUI exposes a
-public custom-element drag-start API or Fika carries a small audited GPUI patch:
+Remove the remaining non-renaming per-item drag shells through the audited Fika
+GPUI retained-hitbox patch:
 
 - drag source starts from retained hitboxes
-- Compact/Icons non-renaming items allocate no per-item element at all
+- Compact/Icons non-renaming items allocate no per-item GPUI DnD/event shell;
+  the remaining slot carrier is limited to explicit image baselines and rename
+  overlay support
 - internal item DnD, pane DnD, Places DnD, and external drop behavior remain
   unchanged
 
@@ -575,12 +590,12 @@ After Compact/Icons are fully retained, move Details rows to the same model:
   feeds the existing GPUI row subtree from retained content/geometry/visual
   snapshots. This is a bridge only; it does not claim a custom-paint win.
 - P11b moves row backgrounds, icons, and text cells into a content-level custom
-  visual layer. Row shells remain only as the GPUI drag-start boundary until
-  drag-start can be safely moved without losing behavior or perf evidence.
+  visual layer. Drag start has since moved safely to retained row hitboxes and
+  is guarded by behavior/perf evidence.
 - P11c keeps retained Details row data explicit: path, directory flag,
-  name/icon, selection count, and drop-target state are projected from retained
-  row snapshots and covered by tests. Row shells consume only the drag-start
-  fields. Trash-only columns are also projected into visual layer cells.
+  name/icon, selection count, drop-target state, and drag-start fields are
+  projected from retained row snapshots and covered by tests. Trash-only columns
+  are also projected into visual layer cells.
 - P11d gives the Details visual layer a dedicated perf channel so custom paint
   expansion can be judged independently from Compact/Icons static visuals.
 - Details text shaping uses a pane-local cache keyed by text and text style; its
@@ -598,11 +613,12 @@ Acceptance:
 - P11b proves Details row visuals are projected into painter data and no longer
   build per-cell GPUI visual children.
 - P11c proves Trash visual columns survive the painter migration and retained
-  Details row data still carries the fields needed by the remaining drag-start
-  boundary.
+  Details row data still carries the fields needed by retained hitbox
+  drag-start registration.
 - P11d keeps Details paint timing attributable through `[fika details-visual]`
   and Details text cache activity attributable through
-  `[fika details-shape-cache]` before removing any remaining row-shell behavior.
+  `[fika details-shape-cache]` while retained-hitbox interaction and DnD stay
+  covered by analyzer gates.
 - Details steady render no longer builds one visual row subtree per visible item
 - selection, context menu, drag/drop, and Trash columns retain behavior
 - Compact/Icons and Details share slot/image/text cache concepts where practical
@@ -615,22 +631,19 @@ row-local handlers.
 
 The remaining item-local surfaces are intentional:
 
-- Compact/Icons non-renaming item shells: GPUI `Div::on_drag` drag-start
-  boundary only. They do not carry GPUI `img()` or static text visual children.
-  Their visuals, images, hover/cursor, click/menu/drop hit testing, and
-  drag-over state are retained/painter driven.
-- Details row shells: `src/ui/file_grid/details_shell.rs` owns the GPUI
-  `Div::on_drag` drag-start boundary only. Row visuals, drop dispatch, and row
-  hover/click/menu/navigation are retained/painter or viewport driven.
+- Compact/Icons retained item hitboxes own drag start through the Fika GPUI
+  fork. They do not carry GPUI `img()` or static text visual children. Their
+  visuals, images, hover/cursor, click/menu/drop hit testing, and drag-over
+  state are retained/painter driven.
+- Details retained row hitboxes own drag start through the Fika GPUI fork. Row
+  visuals, drop dispatch, and row hover/click/menu/navigation are
+  retained/painter or viewport driven.
 - Rename overlay: text-editing boundary for caret hit testing, selection,
   warning/error helper text, and cursor text behavior.
 
-Local GPUI 0.2.2 exposes drag initiation through `Div::on_drag`, while custom
-elements expose `Window::insert_hitbox` plus `Window::on_mouse_event` for mouse
-hit testing. P9b therefore remains blocked on either a public custom-element
-drag-start API or a small audited GPUI patch. Until then, removing these last
-drag shells would risk regressing DnD behavior instead of improving the retained
-architecture.
+The Fika GPUI fork adds the retained-hitbox typed drag/drop hooks required for
+this boundary. Future changes must keep `gpui_drag_shell=0` and avoid
+reintroducing visible GPUI row/item elements solely for typed DnD.
 
 ## Invariants
 

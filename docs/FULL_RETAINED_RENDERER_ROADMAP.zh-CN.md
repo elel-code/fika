@@ -189,10 +189,11 @@ path 后，才能成为默认。
   `[fika details-shape-cache]` 和 retained interaction 计数。
 - `FIKA_DEBUG_DND=1` DnD smoke，覆盖 pane item 到 pane 目录、pane item 到
   Places、Places 到 pane 目录，以及外部路径 drop。
-- Places 默认 chrome 的 targets、overflow、layout 和 hit-test autosmoke。
-- 当修改 Places full-row visual policy、text-shape handoff 或默认提升阈值时，使用
+- Places 默认 full retained/custom 的 targets、overflow、layout、hit-test、
+  targeting 和 DnD autosmoke。
+- 当修改 Places full-row visual policy、text-shape handoff 或 fallback 阈值时，才使用
   `scripts/run-retained-renderer-evidence.sh --places-full-handoff` 采集
-  Places 默认 chrome 与 full handoff 的 A/B 日志。
+  Places GPUI/chrome/text fallback 对照日志。
 - 仅在更改 MIME/theme icon renderer 时，采集默认 full custom image 路径和
   `FIKA_GPUI_THEME_ICONS=1` 的对比日志。
 

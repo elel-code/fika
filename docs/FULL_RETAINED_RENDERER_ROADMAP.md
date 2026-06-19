@@ -210,10 +210,11 @@ Required evidence:
   `[fika details-shape-cache]`, and retained interaction counts.
 - DnD smoke with `FIKA_DEBUG_DND=1` covering pane item to pane directory,
   pane item to Places, Places to pane directory, and external path drop.
-- Places default chrome targets, overflow, layout, and hit-test autosmoke logs.
-- Places default-chrome versus full-handoff A/B logs with
-  `scripts/run-retained-renderer-evidence.sh --places-full-handoff` when
-  changing Places full-row visual policy, text-shape handoff, or promotion
+- Places default full retained/custom targets, overflow, layout, hit-test,
+  targeting, and DnD autosmoke logs.
+- Places GPUI/chrome/text fallback comparisons with
+  `scripts/run-retained-renderer-evidence.sh --places-full-handoff` only when
+  changing Places full-row visual policy, text-shape handoff, or fallback
   thresholds.
 - Default full custom image path versus `FIKA_GPUI_THEME_ICONS=1` only when
   changing MIME/theme icon rendering.
