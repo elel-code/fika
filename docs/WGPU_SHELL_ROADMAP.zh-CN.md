@@ -120,8 +120,10 @@ Shell 拥有：
 - 右键 context targeting 现在也通过 shell-owned retained hit testing 路由。右键未选中的
   item 会先把 selection 同步到该 item；右键已选中的 item 会保留 multi-selection，同时把
   focus 移到点击的 model index；右键 content 空白区域会记录 blank directory target，
-  且不会启动 rubber-band selection。shell 现在保存轻量 context target snapshot，并输出
-  context target counters；popup rendering 和 action dispatch 仍留到 Phase 4。
+  且不会启动 rubber-band selection。shell 现在保存轻量 context target snapshot，为
+  item/blank target 打开 clamp 后的 shell-owned context menu overlay，更新 row hover，
+  支持 Esc 或外部点击关闭，记录 action 命中，并输出 context target/menu counters；
+  文件操作 action dispatch 仍留到 Phase 4。
 - 空白区域左键拖动现在通过同一 retained Icons geometry 执行 rubber-band selection。
   普通拖动替换 selection，Shift 追加，Ctrl/Meta 会相对按下时的 base selection 做
   toggle，并用 clipped GPU overlay 绘制框选矩形。
@@ -160,7 +162,7 @@ Shell 拥有：
   会通过同一 projection 保留或裁剪。
 - `[fika-wgpu]` 日志包含 view mode、path、entry count、visible item count、quad count、draw
   batch count、selected count、hovered item index、active rubber-band state、
-  context target kind、hit-test/selection/keyboard navigation/rubber-band/view-switch/path-change/reload/location/filter/hidden counters、zoom percent
+  context target kind、context menu state、hit-test/selection/keyboard navigation/rubber-band/view-switch/path-change/reload/location/filter/hidden counters、zoom percent
   和 zoom-change counters、icon count、icon cache hit/miss count、icon cache bytes、icon atlas bytes、
   icon resolve/raster time、text label count、text cache hit/miss count、text cache bytes、text atlas bytes、
   render reason、layout time、text raster time、render time 和 `scroll_x` / `scroll_y`
@@ -221,8 +223,8 @@ drag/drop target lookup 移到 shell-owned hit testing。
 
 验收：
 
-- [~] Pane item/blank 右键 context target selection 已由 file view shell-owned。Places
-  context targets 以及 popup/action routing 仍待完成。
+- [~] Pane item/blank 右键 context target selection 以及第一版 shell-owned context menu
+  overlay 已进入 file view。Places context targets 以及文件操作 action dispatch 仍待完成。
 - Pane item 到 pane directory、pane item 到 Places、Places 到 pane、external path drop
   和 URI-list clipboard path 由自动或隔离 smoke 覆盖。
 - DnD hover 不依赖 per-row 或 per-item widget callback。
@@ -235,9 +237,8 @@ context menus、dialogs 和 chooser mode。
 
 当前 checkpoint：第一批 chrome slice 包含底部最小 status bar、`Ctrl/Meta+F` 最小
 filter bar、`Ctrl/Meta+L`/`Ctrl/Meta+D`/`F6` 最小 location edit mode，以及用于 file-view
-item/blank 右键的轻量 context target snapshot。Filter/location 文本编辑暂时保持窄实现，
-完整 IME/caret/selection 文本边界仍待迁移；popup context menu rendering 和 action
-dispatch 仍待完成。
+item/blank 右键的轻量 context menu overlay。Filter/location 文本编辑暂时保持窄实现，
+完整 IME/caret/selection 文本边界仍待迁移；context menu action dispatch 仍待完成。
 
 验收：
 

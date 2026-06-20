@@ -61,6 +61,9 @@ const NAV_RELOAD_BUTTON_WIDTH: f32 = 58.0;
 const NAV_HIDDEN_BUTTON_WIDTH: f32 = 58.0;
 const NAV_BUTTON_HEIGHT: f32 = 24.0;
 const NAV_BUTTON_GAP: f32 = 6.0;
+const CONTEXT_MENU_WIDTH: f32 = 184.0;
+const CONTEXT_MENU_ROW_HEIGHT: f32 = 28.0;
+const CONTEXT_MENU_MARGIN: f32 = 6.0;
 const PATH_HISTORY_LIMIT: usize = 128;
 const ZOOM_STEP_MIN: i32 = -3;
 const ZOOM_STEP_MAX: i32 = 4;
@@ -420,6 +423,14 @@ impl ApplicationHandler for FikaWgpuApp {
                 };
                 let shortcut =
                     self.modifiers.state().control_key() || self.modifiers.state().meta_key();
+                if self.scene.is_context_menu_open() && escape_requested_for_key_event(&event) {
+                    if self.scene.close_context_menu()
+                        && let Some(window) = self.window.as_ref()
+                    {
+                        window.request_redraw();
+                    }
+                    return;
+                }
                 if let Some(command) = location_command_for_key_event(
                     &event,
                     shortcut,
@@ -541,7 +552,7 @@ impl ApplicationHandler for FikaWgpuApp {
                 };
                 if mouse_button == MouseButton::Right {
                     if state == ElementState::Pressed
-                        && self.scene.open_context_target(point, renderer.size)
+                        && self.scene.open_context_menu(point, renderer.size)
                         && let Some(window) = self.window.as_ref()
                     {
                         window.request_redraw();
@@ -549,6 +560,16 @@ impl ApplicationHandler for FikaWgpuApp {
                     return;
                 }
                 if mouse_button != MouseButton::Left {
+                    return;
+                }
+                if state == ElementState::Pressed && self.scene.is_context_menu_open() {
+                    if self
+                        .scene
+                        .activate_or_close_context_menu(point, renderer.size)
+                        && let Some(window) = self.window.as_ref()
+                    {
+                        window.request_redraw();
+                    }
                     return;
                 }
                 if state == ElementState::Pressed
@@ -749,6 +770,12 @@ fn scroll_delta_y(delta: MouseScrollDelta) -> f32 {
 
 fn is_activation_key(key: &Key) -> bool {
     matches!(key, Key::Named(NamedKey::Enter))
+}
+
+fn escape_requested_for_key_event(event: &KeyEvent) -> bool {
+    matches!(event.physical_key, PhysicalKey::Code(KeyCode::Escape))
+        || matches!(event.logical_key, Key::Named(NamedKey::Escape))
+        || matches!(event.key_without_modifiers, Key::Named(NamedKey::Escape))
 }
 
 fn path_navigation_action_for_key(key: &Key, alt: bool) -> Option<PathNavigationAction> {
@@ -1370,6 +1397,91 @@ impl ShellContextTarget {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ShellContextMenuAction {
+    Open,
+    OpenInNewPane,
+    CopyLocation,
+    Rename,
+    MoveToTrash,
+    CreateNew,
+    Paste,
+    SelectAll,
+    Refresh,
+    Properties,
+}
+
+impl ShellContextMenuAction {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Open => "Open",
+            Self::OpenInNewPane => "Open in New Pane",
+            Self::CopyLocation => "Copy Location",
+            Self::Rename => "Rename",
+            Self::MoveToTrash => "Move to Trash",
+            Self::CreateNew => "Create New",
+            Self::Paste => "Paste",
+            Self::SelectAll => "Select All",
+            Self::Refresh => "Refresh",
+            Self::Properties => "Properties",
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::OpenInNewPane => "open-in-new-pane",
+            Self::CopyLocation => "copy-location",
+            Self::Rename => "rename",
+            Self::MoveToTrash => "move-to-trash",
+            Self::CreateNew => "create-new",
+            Self::Paste => "paste",
+            Self::SelectAll => "select-all",
+            Self::Refresh => "refresh",
+            Self::Properties => "properties",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct ShellContextMenu {
+    target: ShellContextTarget,
+    position: ViewPoint,
+    hovered_row: Option<usize>,
+}
+
+impl ShellContextMenu {
+    fn new(target: ShellContextTarget, position: ViewPoint) -> Self {
+        Self {
+            target,
+            position,
+            hovered_row: None,
+        }
+    }
+}
+
+fn context_menu_actions(target: &ShellContextTarget) -> &'static [ShellContextMenuAction] {
+    const ITEM_ACTIONS: &[ShellContextMenuAction] = &[
+        ShellContextMenuAction::Open,
+        ShellContextMenuAction::OpenInNewPane,
+        ShellContextMenuAction::CopyLocation,
+        ShellContextMenuAction::Rename,
+        ShellContextMenuAction::MoveToTrash,
+        ShellContextMenuAction::Properties,
+    ];
+    const BLANK_ACTIONS: &[ShellContextMenuAction] = &[
+        ShellContextMenuAction::CreateNew,
+        ShellContextMenuAction::Paste,
+        ShellContextMenuAction::SelectAll,
+        ShellContextMenuAction::Refresh,
+        ShellContextMenuAction::Properties,
+    ];
+    match target {
+        ShellContextTarget::Item { .. } => ITEM_ACTIONS,
+        ShellContextTarget::Blank { .. } => BLANK_ACTIONS,
+    }
+}
+
 struct ShellScene {
     path: PathBuf,
     view_mode: ShellViewMode,
@@ -1389,10 +1501,12 @@ struct ShellScene {
     history: PathHistory,
     selection: ShellSelection,
     context_target: Option<ShellContextTarget>,
+    context_menu: Option<ShellContextMenu>,
     rubber_band: Option<RubberBand>,
     hit_tests: u64,
     selection_changes: u64,
     context_target_changes: u64,
+    context_menu_actions: u64,
     keyboard_navigation: u64,
     rubber_band_updates: u64,
     view_switches: u64,
@@ -1451,10 +1565,12 @@ impl ShellScene {
             history: PathHistory::default(),
             selection: ShellSelection::default(),
             context_target: None,
+            context_menu: None,
             rubber_band: None,
             hit_tests: 0,
             selection_changes: 0,
             context_target_changes: 0,
+            context_menu_actions: 0,
             keyboard_navigation: 0,
             rubber_band_updates: 0,
             view_switches: 0,
@@ -1596,6 +1712,7 @@ impl ShellScene {
         self.location_draft = None;
         self.selection = ShellSelection::default();
         self.context_target = None;
+        self.context_menu = None;
         self.rubber_band = None;
         self.last_primary_click = None;
         self.path_changes += 1;
@@ -2063,6 +2180,100 @@ impl ShellScene {
             || old_rubber_band_active
     }
 
+    fn is_context_menu_open(&self) -> bool {
+        self.context_menu.is_some()
+    }
+
+    fn open_context_menu(&mut self, point: ViewPoint, size: PhysicalSize<u32>) -> bool {
+        let changed = self.open_context_target(point, size);
+        let old_menu = self.context_menu.clone();
+        self.context_menu = self
+            .context_target
+            .clone()
+            .map(|target| ShellContextMenu::new(target, point));
+        let menu_changed = old_menu != self.context_menu;
+        if menu_changed {
+            eprintln!(
+                "[fika-wgpu] context-menu open={} target={} actions={}",
+                self.context_menu.is_some() as u8,
+                self.context_target
+                    .as_ref()
+                    .map(ShellContextTarget::kind)
+                    .unwrap_or("none"),
+                self.context_menu
+                    .as_ref()
+                    .map(|menu| context_menu_actions(&menu.target).len())
+                    .unwrap_or(0)
+            );
+        }
+        changed || menu_changed
+    }
+
+    fn close_context_menu(&mut self) -> bool {
+        if self.context_menu.take().is_none() {
+            return false;
+        }
+        eprintln!("[fika-wgpu] context-menu open=0");
+        true
+    }
+
+    fn activate_or_close_context_menu(
+        &mut self,
+        point: ViewPoint,
+        size: PhysicalSize<u32>,
+    ) -> bool {
+        let action = self.context_menu_action_at_screen_point(point, size);
+        let menu_was_open = self.context_menu.take().is_some();
+        if let Some(action) = action {
+            self.context_menu_actions += 1;
+            eprintln!(
+                "[fika-wgpu] context-menu action={} target={} actions={}",
+                action.as_str(),
+                self.context_target
+                    .as_ref()
+                    .map(ShellContextTarget::kind)
+                    .unwrap_or("none"),
+                self.context_menu_actions
+            );
+        } else if menu_was_open {
+            eprintln!("[fika-wgpu] context-menu open=0");
+        }
+        menu_was_open
+    }
+
+    fn context_menu_action_at_screen_point(
+        &self,
+        point: ViewPoint,
+        size: PhysicalSize<u32>,
+    ) -> Option<ShellContextMenuAction> {
+        let menu = self.context_menu.as_ref()?;
+        let rect = context_menu_rect(menu, size);
+        if !rect.contains(point) {
+            return None;
+        }
+        let row = ((point.y - rect.y) / CONTEXT_MENU_ROW_HEIGHT).floor() as usize;
+        context_menu_actions(&menu.target).get(row).copied()
+    }
+
+    fn update_context_menu_hover(&mut self, point: ViewPoint, size: PhysicalSize<u32>) -> bool {
+        let hovered_row = self.context_menu.as_ref().and_then(|menu| {
+            let rect = context_menu_rect(menu, size);
+            rect.contains(point).then(|| {
+                ((point.y - rect.y) / CONTEXT_MENU_ROW_HEIGHT)
+                    .floor()
+                    .max(0.0) as usize
+            })
+        });
+        let Some(menu) = self.context_menu.as_mut() else {
+            return false;
+        };
+        let row_count = context_menu_actions(&menu.target).len();
+        let hovered_row = hovered_row.filter(|row| *row < row_count);
+        let changed = menu.hovered_row != hovered_row;
+        menu.hovered_row = hovered_row;
+        changed
+    }
+
     fn log_context_target(&self) {
         match self.context_target.as_ref() {
             Some(ShellContextTarget::Item {
@@ -2358,6 +2569,7 @@ impl ShellScene {
         }
         self.push_rubber_band(&mut vertices, content_clip, size);
         self.push_status_bar(&mut vertices, text, size, visible_items, status_bar);
+        self.push_context_menu_overlay(&mut vertices, text, size);
 
         SceneFrame {
             layout_us: layout_start.elapsed().as_micros(),
@@ -2832,6 +3044,55 @@ impl ShellScene {
         );
     }
 
+    fn push_context_menu_overlay(
+        &self,
+        vertices: &mut Vec<QuadVertex>,
+        text: &mut TextFrameBuilder<'_>,
+        size: PhysicalSize<u32>,
+    ) {
+        let Some(menu) = self.context_menu.as_ref() else {
+            return;
+        };
+        let rect = context_menu_rect(menu, size);
+        let clip = ViewRect {
+            x: 0.0,
+            y: 0.0,
+            width: size.width.max(1) as f32,
+            height: size.height.max(1) as f32,
+        };
+        push_rect(vertices, rect, [0.118, 0.128, 0.140, 0.98], size);
+        push_clipped_rect_outline(vertices, rect, clip, 1.0, [0.28, 0.32, 0.36, 1.0], size);
+
+        for (row, action) in context_menu_actions(&menu.target).iter().enumerate() {
+            let row_rect = ViewRect {
+                x: rect.x,
+                y: rect.y + row as f32 * CONTEXT_MENU_ROW_HEIGHT,
+                width: rect.width,
+                height: CONTEXT_MENU_ROW_HEIGHT,
+            };
+            if menu.hovered_row == Some(row) {
+                push_rect(vertices, row_rect, [0.19, 0.33, 0.50, 0.88], size);
+            } else if row % 2 == 1 {
+                push_rect(vertices, row_rect, [0.105, 0.114, 0.126, 0.44], size);
+            }
+            text.push_label(
+                action.label(),
+                ViewRect {
+                    x: row_rect.x + 12.0,
+                    y: row_rect.y + 6.0,
+                    width: (row_rect.width - 24.0).max(1.0),
+                    height: 18.0,
+                },
+                rect,
+                if menu.hovered_row == Some(row) {
+                    TextColor::rgb(246, 250, 252)
+                } else {
+                    TextColor::rgb(218, 226, 234)
+                },
+            );
+        }
+    }
+
     fn content_to_screen(&self, rect: ViewRect) -> ViewRect {
         ViewRect {
             x: rect.x - self.scroll_x,
@@ -2928,6 +3189,9 @@ impl ShellScene {
 
     fn set_pointer(&mut self, point: ViewPoint, size: PhysicalSize<u32>) -> bool {
         self.pointer = Some(point);
+        if self.context_menu.is_some() {
+            return self.update_context_menu_hover(point, size);
+        }
         if self.rubber_band.is_some() {
             return self.update_rubber_band(point, size);
         }
@@ -3688,7 +3952,7 @@ impl WgpuState {
             || self.last_log.elapsed() >= Duration::from_secs(1)
         {
             eprintln!(
-                "[fika-wgpu] frame={} reason={} view={} zoom={} zoom_changes={} path={} entries={} filtered={} show_hidden={} hidden_changes={} location_active={} location_changes={} filter_active={} filter_changes={} visible={} selected={} hover={} context={} context_changes={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} path_changes={} reloads={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_cache={}/{} entries={} bytes={} batches={} scroll_x={:.1} scroll_y={:.1} layout={}us text_raster={}us text_atlas={}x{}:{}b render={}us",
+                "[fika-wgpu] frame={} reason={} view={} zoom={} zoom_changes={} path={} entries={} filtered={} show_hidden={} hidden_changes={} location_active={} location_changes={} filter_active={} filter_changes={} visible={} selected={} hover={} context={} context_menu={} context_changes={} context_actions={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} path_changes={} reloads={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_cache={}/{} entries={} bytes={} batches={} scroll_x={:.1} scroll_y={:.1} layout={}us text_raster={}us text_atlas={}x{}:{}b render={}us",
                 self.frame_count,
                 reason,
                 scene.view_mode.as_str(),
@@ -3711,7 +3975,9 @@ impl WgpuState {
                     .as_ref()
                     .map(ShellContextTarget::kind)
                     .unwrap_or("none"),
+                scene.context_menu.is_some() as u8,
                 scene.context_target_changes,
+                scene.context_menu_actions,
                 scene.rubber_band.as_ref().is_some_and(|band| band.active) as u8,
                 scene.hit_tests,
                 scene.selection_changes,
@@ -6308,6 +6574,25 @@ fn status_bar_rect(size: PhysicalSize<u32>) -> ViewRect {
     }
 }
 
+fn context_menu_rect(menu: &ShellContextMenu, size: PhysicalSize<u32>) -> ViewRect {
+    let width = size.width.max(1) as f32;
+    let height = size.height.max(1) as f32;
+    let menu_width = CONTEXT_MENU_WIDTH
+        .min((width - CONTEXT_MENU_MARGIN * 2.0).max(1.0))
+        .max(1.0);
+    let menu_height = (context_menu_actions(&menu.target).len() as f32 * CONTEXT_MENU_ROW_HEIGHT)
+        .min((height - CONTEXT_MENU_MARGIN * 2.0).max(1.0))
+        .max(1.0);
+    let max_x = (width - menu_width - CONTEXT_MENU_MARGIN).max(CONTEXT_MENU_MARGIN);
+    let max_y = (height - menu_height - CONTEXT_MENU_MARGIN).max(CONTEXT_MENU_MARGIN);
+    ViewRect {
+        x: menu.position.x.max(CONTEXT_MENU_MARGIN).min(max_x),
+        y: menu.position.y.max(CONTEXT_MENU_MARGIN).min(max_y),
+        width: menu_width,
+        height: menu_height,
+    }
+}
+
 fn entry_index_by_name(entries: &[Entry], name: &str) -> Option<usize> {
     entries.iter().position(|entry| entry.name.as_ref() == name)
 }
@@ -6414,10 +6699,12 @@ mod tests {
             history: PathHistory::default(),
             selection: ShellSelection::default(),
             context_target: None,
+            context_menu: None,
             rubber_band: None,
             hit_tests: 0,
             selection_changes: 0,
             context_target_changes: 0,
+            context_menu_actions: 0,
             keyboard_navigation: 0,
             rubber_band_updates: 0,
             view_switches: 0,
@@ -6601,6 +6888,92 @@ mod tests {
         };
         assert!(scene.open_context_target(status_point, size));
         assert_eq!(scene.context_target, None);
+    }
+
+    #[test]
+    fn context_menu_opens_item_actions_and_records_action_hits() {
+        let mut scene = test_scene(vec![test_entry("folder", true)], ShellViewMode::Icons);
+        let size = PhysicalSize::new(420, 260);
+        let item = scene.layout(size).item(0).expect("item should layout");
+        let point = ViewPoint {
+            x: item.visual_rect.x + 2.0,
+            y: item.visual_rect.y + scene.content_origin_y() + 2.0,
+        };
+
+        assert!(scene.open_context_menu(point, size));
+        let menu = scene
+            .context_menu
+            .as_ref()
+            .expect("context menu should open");
+        assert!(matches!(
+            menu.target,
+            ShellContextTarget::Item {
+                index: 0,
+                is_dir: true,
+                ..
+            }
+        ));
+        assert_eq!(
+            context_menu_actions(&menu.target).first().copied(),
+            Some(ShellContextMenuAction::Open)
+        );
+
+        let rect = context_menu_rect(menu, size);
+        let first_row = ViewPoint {
+            x: rect.x + 8.0,
+            y: rect.y + 8.0,
+        };
+        assert_eq!(
+            scene.context_menu_action_at_screen_point(first_row, size),
+            Some(ShellContextMenuAction::Open)
+        );
+        assert!(scene.set_pointer(first_row, size));
+        assert_eq!(
+            scene
+                .context_menu
+                .as_ref()
+                .and_then(|menu| menu.hovered_row),
+            Some(0)
+        );
+        assert!(scene.activate_or_close_context_menu(first_row, size));
+        assert!(scene.context_menu.is_none());
+        assert_eq!(scene.context_menu_actions, 1);
+    }
+
+    #[test]
+    fn context_menu_clamps_blank_actions_inside_window() {
+        let mut scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
+        let size = PhysicalSize::new(240, 180);
+        let point = ViewPoint {
+            x: size.width as f32 - 2.0,
+            y: status_bar_rect(size).y - 2.0,
+        };
+
+        assert!(scene.open_context_menu(point, size));
+        let menu = scene
+            .context_menu
+            .as_ref()
+            .expect("blank context menu should open");
+        assert!(matches!(menu.target, ShellContextTarget::Blank { .. }));
+        assert_eq!(
+            context_menu_actions(&menu.target).first().copied(),
+            Some(ShellContextMenuAction::CreateNew)
+        );
+        let rect = context_menu_rect(menu, size);
+        assert!(rect.x >= CONTEXT_MENU_MARGIN);
+        assert!(rect.y >= CONTEXT_MENU_MARGIN);
+        assert!(rect.right() <= size.width as f32 - CONTEXT_MENU_MARGIN + f32::EPSILON);
+        assert!(rect.bottom() <= size.height as f32 - CONTEXT_MENU_MARGIN + f32::EPSILON);
+
+        assert!(scene.activate_or_close_context_menu(
+            ViewPoint {
+                x: CONTEXT_MENU_MARGIN,
+                y: CONTEXT_MENU_MARGIN,
+            },
+            size,
+        ));
+        assert!(scene.context_menu.is_none());
+        assert_eq!(scene.context_menu_actions, 0);
     }
 
     #[test]
