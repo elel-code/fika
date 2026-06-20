@@ -168,9 +168,11 @@ Current checkpoint:
   network bookmarks, and Root from public core APIs, keeps retained row
   geometry, uses longest-prefix active-place projection, updates sidebar hover
   independently from item hover, and dispatches left-click place navigation
-  through the same `load_path`/history path as file-view navigation. Dynamic
-  devices, Places context menus, hide/edit/remove/bookmark actions, DnD/drop
-  targets, resizing, and sidebar scrolling remain Phase 4 work.
+  through the same `load_path`/history path as file-view navigation. Places
+  right-click now creates a shell-owned place context target and a minimal
+  context menu that dispatches Open, Copy Location, and Properties. Dynamic
+  devices, richer Places actions such as hide/edit/remove/bookmark and Trash
+  actions, DnD/drop targets, resizing, and sidebar scrolling remain Phase 4 work.
 - Blank-space left-drag now runs rubber-band selection through the same
   retained Icons geometry. Plain drag replaces the selection, Shift extends it,
   Ctrl/Meta toggles it against the press-time base selection, and the band is
@@ -293,9 +295,10 @@ Places hover, and drag/drop target lookup into shell-owned hit testing.
 Acceptance:
 
 - [~] Pane item/blank right-click context target selection and the first
-  shell-owned context menu overlay are in the file view. Places row hover and
-  left-click navigation are shell-owned. Places context targets and broader
-  file-operation action dispatch remain pending.
+  shell-owned context menu overlay are in the file view. Places row hover,
+  left-click navigation, right-click context targets, and the minimal
+  Open/Copy Location/Properties place menu are shell-owned. Device/place edit
+  action dispatch and DnD target lookup remain pending.
 - Pane item to pane directory, pane item to Places, Places to pane, external
   path drop, and URI-list clipboard paths are covered by automated or isolated
   smoke runs.
@@ -308,7 +311,8 @@ Implement the surrounding UI needed to make the shell usable: Places, toolbar,
 location bar, filter bar, status bar, context menus, dialogs, and chooser mode.
 
 Current checkpoint: the first chrome slices are a minimal shell-owned Places
-sidebar with left-click navigation, a minimal bottom status bar with
+sidebar with left-click navigation and a minimal Open/Copy Location/Properties
+row context menu, a minimal bottom status bar with
 directory/selection/view/zoom summary, a minimal `Ctrl/Meta+F` filter bar, a
 minimal `Ctrl/Meta+L`/`Ctrl/Meta+D`/`F6` location edit mode, and a lightweight
 file-view context menu overlay for item/blank right-clicks. Properties opens a
@@ -322,10 +326,11 @@ mutation. Filter, location, create-name, and rename-name text editing remain
 intentionally narrow until the full IME/caret/selection text boundary is
 migrated; context menu dispatch currently covers Open directory, Refresh,
 Select All, Properties, minimal Create New, minimal Rename, minimal Move to
-Trash, Copy/Cut/Copy Location, and Paste, while Places context menus/devices/DnD,
-Trash view restore/delete/empty flows, undo, richer properties, full inline
-rename, full Create New submenus/templates, Open With/default-app selection, and
-new-pane actions remain pending.
+Trash, Copy/Cut/Copy Location, Paste, and the minimal Places row Open/Copy
+Location/Properties menu, while richer Places actions/devices/DnD, Trash view
+restore/delete/empty flows, undo, richer properties, full inline rename, full
+Create New submenus/templates, Open With/default-app selection, and new-pane
+actions remain pending.
 
 Acceptance:
 

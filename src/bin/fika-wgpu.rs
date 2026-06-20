@@ -1997,6 +1997,16 @@ enum ShellContextTarget {
     Blank {
         path: PathBuf,
     },
+    Place {
+        index: usize,
+        label: String,
+        path: PathBuf,
+        group: &'static str,
+        network: bool,
+        trash: bool,
+        root: bool,
+        editable: bool,
+    },
 }
 
 impl ShellContextTarget {
@@ -2004,12 +2014,13 @@ impl ShellContextTarget {
         match self {
             Self::Item { .. } => "item",
             Self::Blank { .. } => "blank",
+            Self::Place { .. } => "place",
         }
     }
 
     fn log_path(&self) -> &Path {
         match self {
-            Self::Item { path, .. } | Self::Blank { path } => path,
+            Self::Item { path, .. } | Self::Blank { path } | Self::Place { path, .. } => path,
         }
     }
 }
@@ -2101,9 +2112,15 @@ fn context_menu_actions(target: &ShellContextTarget) -> &'static [ShellContextMe
         ShellContextMenuAction::Refresh,
         ShellContextMenuAction::Properties,
     ];
+    const PLACE_ACTIONS: &[ShellContextMenuAction] = &[
+        ShellContextMenuAction::Open,
+        ShellContextMenuAction::CopyLocation,
+        ShellContextMenuAction::Properties,
+    ];
     match target {
         ShellContextTarget::Item { .. } => ITEM_ACTIONS,
         ShellContextTarget::Blank { .. } => BLANK_ACTIONS,
+        ShellContextTarget::Place { .. } => PLACE_ACTIONS,
     }
 }
 
@@ -3035,6 +3052,19 @@ impl ShellScene {
         point: ViewPoint,
         size: PhysicalSize<u32>,
     ) -> Option<ShellContextTarget> {
+        if let Some(index) = self.place_index_at_screen_point(point, size) {
+            let place = self.places.get(index)?;
+            return Some(ShellContextTarget::Place {
+                index,
+                label: place.label.clone(),
+                path: place.path.clone(),
+                group: place.group,
+                network: place.network,
+                trash: place.trash,
+                root: place.root,
+                editable: place.editable,
+            });
+        }
         if !self.content_screen_rect(size).contains(point) {
             return None;
         }
@@ -3065,10 +3095,14 @@ impl ShellScene {
         let rubber_band_cleared = self.rubber_band.take().is_some();
         let hover = target.as_ref().and_then(|target| match target {
             ShellContextTarget::Item { index, .. } => Some(*index),
-            ShellContextTarget::Blank { .. } => None,
+            ShellContextTarget::Blank { .. } | ShellContextTarget::Place { .. } => None,
         });
         let hover_changed = self.set_hovered_index(hover);
-        let place_hover_changed = self.set_hovered_place(None);
+        let place_hover = target.as_ref().and_then(|target| match target {
+            ShellContextTarget::Place { index, .. } => Some(*index),
+            ShellContextTarget::Item { .. } | ShellContextTarget::Blank { .. } => None,
+        });
+        let place_hover_changed = self.set_hovered_place(place_hover);
 
         let mut selection_changed = false;
         if let Some(ShellContextTarget::Item { index, .. }) = target.as_ref() {
@@ -3212,6 +3246,26 @@ impl ShellScene {
                 path.display(),
                 self.context_target_changes
             ),
+            Some(ShellContextTarget::Place {
+                index,
+                label,
+                path,
+                network,
+                trash,
+                root,
+                editable,
+                ..
+            }) => eprintln!(
+                "[fika-wgpu] context-target kind=place index={} label={:?} network={} trash={} root={} editable={} path={} changes={}",
+                index,
+                label,
+                *network as u8,
+                *trash as u8,
+                *root as u8,
+                *editable as u8,
+                path.display(),
+                self.context_target_changes
+            ),
             None => eprintln!(
                 "[fika-wgpu] context-target kind=none changes={}",
                 self.context_target_changes
@@ -3230,6 +3284,7 @@ impl ShellScene {
             ShellContextTarget::Item { index, is_dir, .. } if *is_dir => {
                 self.directory_path_for_index(*index)
             }
+            ShellContextTarget::Place { path, .. } => Some(path.clone()),
             _ => None,
         }
     }
@@ -3265,10 +3320,12 @@ impl ShellScene {
 
     fn context_target_copy_location_request(&self) -> Option<CopyLocationRequest> {
         match self.context_target.as_ref()? {
-            ShellContextTarget::Item { path, .. } => Some(CopyLocationRequest {
-                path: path.clone(),
-                text: copy_location_text_for_path(path),
-            }),
+            ShellContextTarget::Item { path, .. } | ShellContextTarget::Place { path, .. } => {
+                Some(CopyLocationRequest {
+                    path: path.clone(),
+                    text: copy_location_text_for_path(path),
+                })
+            }
             ShellContextTarget::Blank { .. } => None,
         }
     }
@@ -3403,7 +3460,9 @@ impl ShellScene {
                     Ok(Some(vec![path.clone()]))
                 }
             }
-            Some(ShellContextTarget::Blank { .. }) | None => Ok(None),
+            Some(ShellContextTarget::Blank { .. })
+            | Some(ShellContextTarget::Place { .. })
+            | None => Ok(None),
         }
     }
 
@@ -3951,6 +4010,35 @@ impl ShellScene {
                             .to_string(),
                     ),
                     property_row("Path", path.display().to_string()),
+                ],
+            }),
+            ShellContextTarget::Place {
+                label,
+                path,
+                group,
+                network,
+                trash,
+                root,
+                editable,
+                ..
+            } => Some(ShellPropertiesOverlay {
+                title: format!("Properties - {label}"),
+                rows: vec![
+                    property_row("Name", label.clone()),
+                    property_row("Type", "Place".to_string()),
+                    property_row(
+                        "Section",
+                        if group.is_empty() {
+                            "Places".to_string()
+                        } else {
+                            (*group).to_string()
+                        },
+                    ),
+                    property_row("Path", path.display().to_string()),
+                    property_row("Network", yes_no(*network)),
+                    property_row("Trash", yes_no(*trash)),
+                    property_row("Root", yes_no(*root)),
+                    property_row("Editable", yes_no(*editable)),
                 ],
             }),
         }
@@ -8872,6 +8960,10 @@ fn property_row(label: &'static str, value: String) -> ShellPropertyRow {
     ShellPropertyRow { label, value }
 }
 
+fn yes_no(value: bool) -> String {
+    if value { "Yes" } else { "No" }.to_string()
+}
+
 fn launch_uri_for_path(path: &Path) -> String {
     network_uri_from_path(path).unwrap_or_else(|| gio::File::for_path(path).uri().to_string())
 }
@@ -9287,6 +9379,63 @@ mod tests {
     }
 
     #[test]
+    fn places_context_menu_opens_row_actions_without_selecting_items() {
+        let mut scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
+        scene.selection.apply_navigation(0, false);
+        let size = PhysicalSize::new(700, 320);
+        let root_row = scene.place_row_rects(size)[1].1;
+        let point = ViewPoint {
+            x: root_row.x + 5.0,
+            y: root_row.y + 5.0,
+        };
+
+        assert!(scene.open_context_menu(point, size));
+        assert_eq!(scene.selection.len(), 1);
+        assert_eq!(scene.hovered_place, Some(1));
+        assert_eq!(scene.hovered_index, None);
+        assert_eq!(scene.context_target_changes, 1);
+        assert_eq!(
+            scene.context_target,
+            Some(ShellContextTarget::Place {
+                index: 1,
+                label: "Root".to_string(),
+                path: PathBuf::from("/"),
+                group: "Devices",
+                network: false,
+                trash: false,
+                root: true,
+                editable: false,
+            })
+        );
+
+        let menu = scene.context_menu.as_ref().expect("menu should open");
+        assert_eq!(
+            context_menu_actions(&menu.target),
+            &[
+                ShellContextMenuAction::Open,
+                ShellContextMenuAction::CopyLocation,
+                ShellContextMenuAction::Properties,
+            ]
+        );
+        assert_eq!(
+            scene.context_target_directory_path(),
+            Some(PathBuf::from("/"))
+        );
+
+        let rect = context_menu_rect(menu, size);
+        let copy_location_row = ViewPoint {
+            x: rect.x + 8.0,
+            y: rect.y + CONTEXT_MENU_ROW_HEIGHT + 8.0,
+        };
+        assert_eq!(
+            scene.activate_or_close_context_menu(copy_location_row, size),
+            Some(ShellContextMenuAction::CopyLocation)
+        );
+        assert_eq!(scene.context_menu_actions, 1);
+        assert!(scene.context_menu.is_none());
+    }
+
+    #[test]
     fn selection_click_supports_single_toggle_and_range() {
         let mut selection = ShellSelection::default();
 
@@ -9618,6 +9767,21 @@ mod tests {
             path: PathBuf::from("/tmp"),
         });
         assert_eq!(scene.context_target_directory_path(), None);
+
+        scene.context_target = Some(ShellContextTarget::Place {
+            index: 1,
+            label: "Root".to_string(),
+            path: PathBuf::from("/"),
+            group: "Devices",
+            network: false,
+            trash: false,
+            root: true,
+            editable: false,
+        });
+        assert_eq!(
+            scene.context_target_directory_path(),
+            Some(PathBuf::from("/"))
+        );
     }
 
     #[test]
@@ -9675,7 +9839,7 @@ mod tests {
     }
 
     #[test]
-    fn copy_location_request_uses_item_display_path() {
+    fn copy_location_request_uses_target_display_path() {
         let mut scene = test_scene(vec![test_entry("plain.txt", false)], ShellViewMode::Icons);
         scene.context_target = Some(ShellContextTarget::Blank {
             path: PathBuf::from("/tmp"),
@@ -9701,6 +9865,24 @@ mod tests {
 
         scene.record_copy_location(&request);
         assert_eq!(scene.copy_location_changes, 1);
+
+        scene.context_target = Some(ShellContextTarget::Place {
+            index: 1,
+            label: "Root".to_string(),
+            path: PathBuf::from("/"),
+            group: "Devices",
+            network: false,
+            trash: false,
+            root: true,
+            editable: false,
+        });
+        assert_eq!(
+            scene.context_target_copy_location_request(),
+            Some(CopyLocationRequest {
+                path: PathBuf::from("/"),
+                text: "/".to_string(),
+            })
+        );
     }
 
     #[test]
@@ -9938,6 +10120,53 @@ mod tests {
         assert!(scene.close_properties_overlay_if_outside(ViewPoint { x: 1.0, y: 1.0 }, size,));
         assert!(scene.properties_overlay.is_none());
         assert_eq!(scene.properties_changes, 2);
+    }
+
+    #[test]
+    fn properties_overlay_builds_place_metadata_from_context_target() {
+        let mut scene = test_scene(Vec::new(), ShellViewMode::Icons);
+        scene.context_target = Some(ShellContextTarget::Place {
+            index: 1,
+            label: "Root".to_string(),
+            path: PathBuf::from("/"),
+            group: "Devices",
+            network: false,
+            trash: false,
+            root: true,
+            editable: false,
+        });
+
+        assert!(scene.open_properties_overlay_from_context());
+        let overlay = scene
+            .properties_overlay
+            .as_ref()
+            .expect("properties overlay should open");
+        assert_eq!(overlay.title, "Properties - Root");
+        assert!(
+            overlay
+                .rows
+                .iter()
+                .any(|row| row.label == "Type" && row.value == "Place")
+        );
+        assert!(
+            overlay
+                .rows
+                .iter()
+                .any(|row| row.label == "Section" && row.value == "Devices")
+        );
+        assert!(
+            overlay
+                .rows
+                .iter()
+                .any(|row| row.label == "Root" && row.value == "Yes")
+        );
+        assert!(
+            overlay
+                .rows
+                .iter()
+                .any(|row| row.label == "Path" && row.value == "/")
+        );
+        assert_eq!(scene.properties_changes, 1);
     }
 
     #[test]

@@ -144,8 +144,10 @@ Shell 拥有：
   Home、已存在的 XDG directories、Trash、Fika user places、Network root、network
   bookmarks 和 Root，保留 row geometry，用最长路径前缀决定 active place，Places
   hover 与 item hover 分离，并将左键 place navigation 分派到与文件视图相同的
-  `load_path`/history path。动态 devices、Places context menus、hide/edit/remove/bookmark
-  actions、DnD/drop targets、resize 和 sidebar scrolling 仍留到 Phase 4。
+  `load_path`/history path。Places 右键现在会创建 shell-owned place context target，
+  并打开最小 context menu，分派 Open、Copy Location 和 Properties。动态 devices、
+  更完整 Places actions（hide/edit/remove/bookmark 和 Trash actions）、DnD/drop targets、
+  resize 和 sidebar scrolling 仍留到 Phase 4。
 - 空白区域左键拖动现在通过同一 retained Icons geometry 执行 rubber-band selection。
   普通拖动替换 selection，Shift 追加，Ctrl/Meta 会相对按下时的 base selection 做
   toggle，并用 clipped GPU overlay 绘制框选矩形。
@@ -246,8 +248,9 @@ drag/drop target lookup 移到 shell-owned hit testing。
 验收：
 
 - [~] Pane item/blank 右键 context target selection 以及第一版 shell-owned context menu
-  overlay 已进入 file view。Places row hover 和左键 navigation 已由 shell-owned
-  hit testing 处理。Places context targets 以及更完整的文件操作 action dispatch 仍待完成。
+  overlay 已进入 file view。Places row hover、左键 navigation、右键 context targets
+  和最小 Open/Copy Location/Properties place menu 已由 shell-owned hit testing 处理。
+  Device/place edit action dispatch 和 DnD target lookup 仍待完成。
 - Pane item 到 pane directory、pane item 到 Places、Places 到 pane、external path drop
   和 URI-list clipboard path 由自动或隔离 smoke 覆盖。
 - DnD hover 不依赖 per-row 或 per-item widget callback。
@@ -258,8 +261,9 @@ drag/drop target lookup 移到 shell-owned hit testing。
 实现可用 shell 所需外围 UI：Places、toolbar、location bar、filter bar、status bar、
 context menus、dialogs 和 chooser mode。
 
-当前 checkpoint：第一批 chrome slice 包含最小 shell-owned Places 侧栏和左键 navigation、
-底部最小 status bar、`Ctrl/Meta+F` 最小 filter bar、
+当前 checkpoint：第一批 chrome slice 包含最小 shell-owned Places 侧栏、左键 navigation
+和最小 Open/Copy Location/Properties row context menu、底部最小 status bar、
+`Ctrl/Meta+F` 最小 filter bar、
 `Ctrl/Meta+L`/`Ctrl/Meta+D`/`F6` 最小 location edit mode，以及用于 file-view
 item/blank 右键的轻量 context menu overlay。Properties 会为 item 和 blank-directory
 targets 打开最小 metadata overlay。Create New 会为 blank-directory targets 打开最小
@@ -270,9 +274,10 @@ targets，并在执行文件系统修改前拒绝 remote paths。Filter、locati
 rename-name 文本编辑暂时保持窄实现，完整 IME/caret/selection 文本边界仍待迁移；
 context menu dispatch 当前覆盖 Open directory、Refresh、Select All、Properties、最小
 Create New、最小 Rename、最小 Move to Trash、Copy/Cut/Copy Location 和 Paste；
-Places context menus/devices/DnD、Trash view restore/delete/empty flows、undo、更完整
-properties、完整 inline rename、完整 Create New 子菜单/模板、Open With/default-app
-selection 和 new-pane actions 仍待完成。
+最小 Places row Open/Copy Location/Properties menu 也已接入；更完整 Places
+actions/devices/DnD、Trash view restore/delete/empty flows、undo、更完整 properties、
+完整 inline rename、完整 Create New 子菜单/模板、Open With/default-app selection 和
+new-pane actions 仍待完成。
 
 验收：
 
