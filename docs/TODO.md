@@ -99,8 +99,9 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
   全选当前目录 entries，`Esc` 清空 selection 并取消任何 transient rubber-band；目录激活已走
   shell-owned input path，Enter 打开当前 focus/selected 目录，双击通过 retained
   hit testing 打开目录，Backspace 或 Alt+Up 加载父目录；Top bar 已有 Back/Forward/Up
-  控制，Alt+Left/Alt+Right 走同一有界 history stack，普通新导航只在读取成功后写入
-  back stack 并清空 forward history，并在加载新 path 时重置 scroll/selection/rubber-band
+  控制，Alt+Left/Alt+Right 走同一有界 history stack，Top-bar Reload 以及 `F5` /
+  `Ctrl/Meta+R` 可刷新当前目录且不写 history，并在 entry 仍存在时按名称保留
+  selection/focus；普通新导航只在读取成功后写入 back stack 并清空 forward history，并在加载新 path 时重置 scroll/selection/rubber-band
   transient state、刷新 hover、更新窗口标题且立即 present；初版 projection zoom 已由
   shell-owned retained geometry 驱动，`Ctrl/Meta + +`、`Ctrl/Meta + -` 和 `Ctrl/Meta + 0`
   调整/重置有界 zoom step，Icons/Compact 更新 item/icon/text slot metrics，Details 更新
@@ -130,7 +131,7 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
 - [~] Phase 1：Compact、Icons 和 Details scene projection 已开始接入。`/etc` 已可通过
   `--view` 在三种模式下渲染首帧；Compact 走 core `CompactLayout`，Details 走 shell-owned
   row projection。滚动、hover、keyboard navigation、directory activation/history navigation、
-  runtime mode switching、projection zoom、selection 和全选/清空快捷键已通过 shared
+  runtime mode switching、projection zoom、reload、selection 和全选/清空快捷键已通过 shared
   `ShellLayout` abstraction 走 retained geometry；
   glyph-level text zoom policy、`~/Downloads` smoke、手动交互 smoke
   和更完整 Details column/metadata parity 仍待完成。

@@ -147,7 +147,10 @@ Current checkpoint:
   the focused selected directory, double-click opens a directory resolved from
   retained hit testing, and Backspace or Alt+Up loads the parent directory. The
   top bar also has shell-owned Back/Forward/Up controls, with Alt+Left and
-  Alt+Right mapped to the same history stack. Loading a new path reuses
+  Alt+Right mapped to the same history stack. A top-bar Reload control plus
+  `F5` and `Ctrl/Meta+R` refresh the current directory without writing history,
+  preserving selection/focus by entry name when those entries still exist.
+  Loading a new path reuses
   `read_entries_sync`, records normal navigation in a bounded back stack,
   clears forward history only after successful new navigation, resets
   scroll/selection/rubber-band transient state, refreshes hover from retained
@@ -165,7 +168,7 @@ Current checkpoint:
 - `[fika-wgpu]` logs include view mode, path, entry count, visible item count,
   quad count, selected count, hovered item index, active rubber-band state,
   hit-test/selection/keyboard navigation/rubber-band/view-switch/path-change
-  counters, zoom percent and zoom-change counters, icon count, icon cache
+  counters, reload counters, zoom percent and zoom-change counters, icon count, icon cache
   hit/miss count, icon cache bytes, icon atlas bytes, icon resolve/raster time,
   text label count, text cache hit/miss count, text cache bytes, text atlas
   bytes, draw batch count, render reason, layout time, text raster time, render
@@ -205,8 +208,8 @@ Acceptance:
 - [~] `/etc` renders in Compact, Icons, and Details via `--view`; `~/Downloads`
   and manual interaction smokes remain pending.
 - [~] Scroll, hover, keyboard navigation, runtime mode switching, projection
-  zoom, selection, and select-all/clear shortcuts work from retained geometry
-  for the initial projections. Glyph-level text zoom policy remains pending.
+  zoom, reload, selection, and select-all/clear shortcuts work from retained
+  geometry for the initial projections. Glyph-level text zoom policy remains pending.
 - [~] Layout/hit-test/paint share the same shell layout abstraction for Icons,
   Compact, and Details.
 - No synchronous theme scan, MIME magic read, thumbnail decode, or text shaping

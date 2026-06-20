@@ -55,6 +55,7 @@ const VIEW_MODE_STRIPE_HEIGHT: f32 = 8.0;
 const VIEW_MODE_RAIL_WIDTH: f32 = 6.0;
 const NAV_BUTTON_WIDTH: f32 = 28.0;
 const NAV_UP_BUTTON_WIDTH: f32 = 36.0;
+const NAV_RELOAD_BUTTON_WIDTH: f32 = 58.0;
 const NAV_BUTTON_HEIGHT: f32 = 24.0;
 const NAV_BUTTON_GAP: f32 = 6.0;
 const PATH_HISTORY_LIMIT: usize = 128;
@@ -189,6 +190,7 @@ enum PathNavigationAction {
     Back,
     Forward,
     Parent,
+    Reload,
 }
 
 impl PathNavigationAction {
@@ -197,6 +199,7 @@ impl PathNavigationAction {
             Self::Back => "<",
             Self::Forward => ">",
             Self::Parent => "Up",
+            Self::Reload => "Reload",
         }
     }
 
@@ -205,6 +208,7 @@ impl PathNavigationAction {
             Self::Back => "history-back",
             Self::Forward => "history-forward",
             Self::Parent => "parent-directory",
+            Self::Reload => "reload-directory",
         }
     }
 }
@@ -415,6 +419,10 @@ impl ApplicationHandler for FikaWgpuApp {
                     }
                     return;
                 }
+                if reload_requested_for_key_event(&event, shortcut) {
+                    self.reload_scene_path(event_loop);
+                    return;
+                }
                 if is_activation_key(&event.logical_key) {
                     if let Some(path) = self.scene.selected_directory_path() {
                         self.load_scene_path(event_loop, path, "activate-directory");
@@ -556,11 +564,23 @@ impl FikaWgpuApp {
             PathNavigationAction::Back => self.scene.go_history_back(size),
             PathNavigationAction::Forward => self.scene.go_history_forward(size),
             PathNavigationAction::Parent => self.scene.go_parent_directory(size),
+            PathNavigationAction::Reload => self.scene.reload_current_path(size),
         };
         match result {
             Ok(true) => self.present_scene_change(event_loop, action.reason()),
             Ok(false) => {}
             Err(error) => eprintln!("[fika-wgpu] navigation-error {error}"),
+        }
+    }
+
+    fn reload_scene_path(&mut self, event_loop: &dyn ActiveEventLoop) {
+        let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
+            return;
+        };
+        match self.scene.reload_current_path(size) {
+            Ok(true) => self.present_scene_change(event_loop, "reload-directory"),
+            Ok(false) => {}
+            Err(error) => eprintln!("[fika-wgpu] reload-error {error}"),
         }
     }
 
@@ -686,6 +706,33 @@ fn selection_command_for_key_parts(
         return Some(SelectionCommand::SelectAll);
     }
     None
+}
+
+fn reload_requested_for_key_event(event: &KeyEvent, shortcut: bool) -> bool {
+    reload_requested_for_key_parts(
+        shortcut,
+        &event.physical_key,
+        &event.logical_key,
+        &event.key_without_modifiers,
+    )
+}
+
+fn reload_requested_for_key_parts(
+    shortcut: bool,
+    physical_key: &PhysicalKey,
+    logical_key: &Key,
+    key_without_modifiers: &Key,
+) -> bool {
+    if matches!(physical_key, PhysicalKey::Code(KeyCode::F5))
+        || matches!(logical_key, Key::Named(NamedKey::F5))
+        || matches!(key_without_modifiers, Key::Named(NamedKey::F5))
+    {
+        return true;
+    }
+    shortcut
+        && (matches!(physical_key, PhysicalKey::Code(KeyCode::KeyR))
+            || key_character_eq(logical_key, "r")
+            || key_character_eq(key_without_modifiers, "r"))
 }
 
 fn key_character_eq(key: &Key, expected: &str) -> bool {
@@ -1040,6 +1087,7 @@ struct ShellScene {
     rubber_band_updates: u64,
     view_switches: u64,
     path_changes: u64,
+    directory_reloads: u64,
     zoom_changes: u64,
 }
 
@@ -1089,6 +1137,7 @@ impl ShellScene {
             rubber_band_updates: 0,
             view_switches: 0,
             path_changes: 0,
+            directory_reloads: 0,
             zoom_changes: 0,
         })
     }
@@ -1115,6 +1164,37 @@ impl ShellScene {
         self.apply_loaded_path(path, entries, dir_count, size);
 
         self.log_loaded_path(dir_count, &preview, elapsed);
+        Ok(true)
+    }
+
+    fn reload_current_path(&mut self, size: PhysicalSize<u32>) -> Result<bool, String> {
+        let load_start = Instant::now();
+        let entries = read_entries_sync(&self.path)
+            .map_err(|error| format!("read directory {}: {error}", self.path.display()))?;
+        let elapsed = load_start.elapsed();
+        let dir_count = entries.iter().filter(|entry| entry.is_dir).count();
+        let preview = entries
+            .iter()
+            .take(8)
+            .map(|entry| entry.name.as_ref())
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let previous_selection = self.selection.clone();
+        let remapped_selection = self.selection_for_reloaded_entries(&entries);
+        let selection_changed = previous_selection != remapped_selection;
+
+        self.entries = entries;
+        self.dir_count = dir_count;
+        self.selection = remapped_selection;
+        self.rubber_band = None;
+        self.last_primary_click = None;
+        self.directory_reloads += 1;
+        if selection_changed {
+            self.selection_changes += 1;
+        }
+        self.clamp_scroll(size);
+        self.log_reloaded_path(dir_count, &preview, elapsed, selection_changed);
         Ok(true)
     }
 
@@ -1207,6 +1287,29 @@ impl ShellScene {
         }
     }
 
+    fn log_reloaded_path(
+        &self,
+        dir_count: usize,
+        preview: &str,
+        elapsed: Duration,
+        selection_changed: bool,
+    ) {
+        eprintln!(
+            "[fika-wgpu] reload path={} entries={} dirs={} files={} load={}us reloads={} selected={} selection_changed={}",
+            self.path.display(),
+            self.entries.len(),
+            dir_count,
+            self.entries.len().saturating_sub(dir_count),
+            elapsed.as_micros(),
+            self.directory_reloads,
+            self.selection.len(),
+            selection_changed as u8
+        );
+        if !preview.is_empty() {
+            eprintln!("[fika-wgpu] first-entries={preview}");
+        }
+    }
+
     fn set_view_mode(&mut self, view_mode: ShellViewMode, size: PhysicalSize<u32>) -> bool {
         if self.view_mode == view_mode {
             return false;
@@ -1276,6 +1379,58 @@ impl ShellScene {
         selection_changed || rubber_band_changed
     }
 
+    fn selection_for_reloaded_entries(&self, entries: &[Entry]) -> ShellSelection {
+        if self.selection.selected.is_empty() {
+            return ShellSelection::default();
+        }
+
+        let selected_names = self
+            .selection
+            .selected
+            .iter()
+            .filter_map(|index| self.entries.get(*index))
+            .map(|entry| entry.name.to_string())
+            .collect::<BTreeSet<_>>();
+        let anchor_name = self
+            .selection
+            .anchor
+            .and_then(|index| self.entries.get(index))
+            .map(|entry| entry.name.to_string());
+        let focus_name = self
+            .selection
+            .focus
+            .and_then(|index| self.entries.get(index))
+            .map(|entry| entry.name.to_string());
+
+        let selected = entries
+            .iter()
+            .enumerate()
+            .filter_map(|(index, entry)| {
+                selected_names
+                    .contains(entry.name.as_ref())
+                    .then_some(index)
+            })
+            .collect::<BTreeSet<_>>();
+        if selected.is_empty() {
+            return ShellSelection::default();
+        }
+
+        let anchor = anchor_name
+            .and_then(|name| entry_index_by_name(entries, &name))
+            .filter(|index| selected.contains(index))
+            .or_else(|| selected.iter().next().copied());
+        let focus = focus_name
+            .and_then(|name| entry_index_by_name(entries, &name))
+            .filter(|index| selected.contains(index))
+            .or_else(|| selected.iter().next_back().copied());
+
+        ShellSelection {
+            selected,
+            anchor,
+            focus,
+        }
+    }
+
     fn view_mode_at_screen_point(
         &self,
         point: ViewPoint,
@@ -1304,6 +1459,7 @@ impl ShellScene {
             PathNavigationAction::Back => self.history.can_go_back(),
             PathNavigationAction::Forward => self.history.can_go_forward(),
             PathNavigationAction::Parent => self.parent_directory_path().is_some(),
+            PathNavigationAction::Reload => true,
         }
     }
 
@@ -2301,7 +2457,7 @@ impl RubberBandMode {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 struct ShellSelection {
     selected: BTreeSet<usize>,
     anchor: Option<usize>,
@@ -2735,7 +2891,7 @@ impl WgpuState {
             || self.last_log.elapsed() >= Duration::from_secs(1)
         {
             eprintln!(
-                "[fika-wgpu] frame={} reason={} view={} zoom={} zoom_changes={} path={} entries={} visible={} selected={} hover={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} path_changes={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_cache={}/{} entries={} bytes={} batches={} scroll_x={:.1} scroll_y={:.1} layout={}us text_raster={}us text_atlas={}x{}:{}b render={}us",
+                "[fika-wgpu] frame={} reason={} view={} zoom={} zoom_changes={} path={} entries={} visible={} selected={} hover={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} path_changes={} reloads={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_cache={}/{} entries={} bytes={} batches={} scroll_x={:.1} scroll_y={:.1} layout={}us text_raster={}us text_atlas={}x{}:{}b render={}us",
                 self.frame_count,
                 reason,
                 scene.view_mode.as_str(),
@@ -2753,6 +2909,7 @@ impl WgpuState {
                 scene.rubber_band_updates,
                 scene.view_switches,
                 scene.path_changes,
+                scene.directory_reloads,
                 scene_frame.quad_count,
                 scene_frame.content_size.width,
                 scene_frame.content_size.height,
@@ -5177,7 +5334,7 @@ fn view_mode_button_rects(surface_width: f32) -> [(ShellViewMode, ViewRect); 3] 
     ]
 }
 
-fn path_navigation_button_rects() -> [(PathNavigationAction, ViewRect); 3] {
+fn path_navigation_button_rects() -> [(PathNavigationAction, ViewRect); 4] {
     let x = 16.0;
     [
         (
@@ -5207,12 +5364,23 @@ fn path_navigation_button_rects() -> [(PathNavigationAction, ViewRect); 3] {
                 height: NAV_BUTTON_HEIGHT,
             },
         ),
+        (
+            PathNavigationAction::Reload,
+            ViewRect {
+                x: x + (NAV_BUTTON_WIDTH + NAV_BUTTON_GAP) * 2.0
+                    + NAV_UP_BUTTON_WIDTH
+                    + NAV_BUTTON_GAP,
+                y: 14.0,
+                width: NAV_RELOAD_BUTTON_WIDTH,
+                height: NAV_BUTTON_HEIGHT,
+            },
+        ),
     ]
 }
 
 fn path_bar_start_x() -> f32 {
-    let parent = path_navigation_button_rects()[2].1;
-    parent.right() + 10.0
+    let reload = path_navigation_button_rects()[3].1;
+    reload.right() + 10.0
 }
 
 fn push_limited_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
@@ -5314,6 +5482,10 @@ fn status_bar_rect(size: PhysicalSize<u32>) -> ViewRect {
     }
 }
 
+fn entry_index_by_name(entries: &[Entry], name: &str) -> Option<usize> {
+    entries.iter().position(|entry| entry.name.as_ref() == name)
+}
+
 #[cfg(test)]
 fn content_height(size: PhysicalSize<u32>) -> f32 {
     (size.height as f32 - TOP_BAR_HEIGHT - STATUS_BAR_HEIGHT).max(1.0)
@@ -5389,6 +5561,7 @@ mod tests {
             rubber_band_updates: 0,
             view_switches: 0,
             path_changes: 0,
+            directory_reloads: 0,
             zoom_changes: 0,
         }
     }
@@ -5588,6 +5761,43 @@ mod tests {
     }
 
     #[test]
+    fn reload_current_path_preserves_history_and_selection_by_name() {
+        let unique = format!(
+            "fika-wgpu-reload-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let root = env::temp_dir().join(unique);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("keep.txt"), b"keep").unwrap();
+
+        let size = PhysicalSize::new(360, 240);
+        let mut scene = ShellScene::load(root.clone(), ShellViewMode::Compact).unwrap();
+        let keep_index = entry_index_by_name(&scene.entries, "keep.txt").unwrap();
+        assert!(scene.selection.apply_navigation(keep_index, false));
+        scene.history.push_back(PathBuf::from("/tmp/previous"));
+        scene.history.push_forward(PathBuf::from("/tmp/next"));
+
+        fs::write(root.join("aaa.txt"), b"new").unwrap();
+        assert!(scene.reload_current_path(size).unwrap());
+
+        let new_keep_index = entry_index_by_name(&scene.entries, "keep.txt").unwrap();
+        assert!(scene.selection.contains(new_keep_index));
+        assert_eq!(scene.selection.len(), 1);
+        assert_eq!(scene.selection.focus, Some(new_keep_index));
+        assert_eq!(scene.history.back, vec![PathBuf::from("/tmp/previous")]);
+        assert_eq!(scene.history.forward, vec![PathBuf::from("/tmp/next")]);
+        assert_eq!(scene.path, root);
+        assert_eq!(scene.path_changes, 0);
+        assert_eq!(scene.directory_reloads, 1);
+
+        fs::remove_dir_all(scene.path).unwrap();
+    }
+
+    #[test]
     fn screen_to_content_point_rejects_top_bar() {
         let offset = ViewPoint { x: 0.0, y: 40.0 };
         assert_eq!(
@@ -5670,6 +5880,37 @@ mod tests {
             path_navigation_action_for_key(&Key::Named(NamedKey::ArrowLeft), false),
             None
         );
+    }
+
+    #[test]
+    fn reload_shortcuts_accept_f5_and_ctrl_r() {
+        let unidentified = PhysicalKey::Unidentified(winit::keyboard::NativeKeyCode::Unidentified);
+        let no_key = Key::Unidentified(winit::keyboard::NativeKey::Unidentified);
+
+        assert!(reload_requested_for_key_parts(
+            false,
+            &PhysicalKey::Code(KeyCode::F5),
+            &no_key,
+            &no_key,
+        ));
+        assert!(reload_requested_for_key_parts(
+            true,
+            &PhysicalKey::Code(KeyCode::KeyR),
+            &no_key,
+            &no_key,
+        ));
+        assert!(reload_requested_for_key_parts(
+            true,
+            &unidentified,
+            &Key::Character("R".into()),
+            &no_key,
+        ));
+        assert!(!reload_requested_for_key_parts(
+            false,
+            &PhysicalKey::Code(KeyCode::KeyR),
+            &Key::Character("r".into()),
+            &Key::Character("r".into()),
+        ));
     }
 
     #[test]
@@ -5765,6 +6006,7 @@ mod tests {
         let back_rect = path_navigation_button_rects()[0].1;
         let forward_rect = path_navigation_button_rects()[1].1;
         let parent_rect = path_navigation_button_rects()[2].1;
+        let reload_rect = path_navigation_button_rects()[3].1;
 
         assert_eq!(
             scene.path_navigation_action_at_screen_point(
@@ -5785,6 +6027,16 @@ mod tests {
                 size
             ),
             Some(PathNavigationAction::Parent)
+        );
+        assert_eq!(
+            scene.path_navigation_action_at_screen_point(
+                ViewPoint {
+                    x: reload_rect.x + 2.0,
+                    y: reload_rect.y + 2.0
+                },
+                size
+            ),
+            Some(PathNavigationAction::Reload)
         );
 
         scene.history.push_back(PathBuf::from("/tmp/previous"));
