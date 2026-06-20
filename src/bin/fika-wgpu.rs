@@ -14,8 +14,8 @@ use cosmic_text::{
 };
 use fika_core::{
     CompactLayout, CompactLayoutOptions, Entry, IconsLayout, IconsLayoutOptions, NameFilter,
-    ViewPoint, ViewRect, ViewSize, complete_location_input, format_modified_secs, format_size,
-    read_entries_sync, resolve_location_input,
+    ViewPoint, ViewRect, ViewSize, complete_location_input, file_ops, format_modified_secs,
+    format_size, is_network_path, read_entries_sync, resolve_location_input,
 };
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
@@ -838,9 +838,9 @@ impl FikaWgpuApp {
                     window.request_redraw();
                 }
             }
+            ShellContextMenuAction::MoveToTrash => self.move_context_target_to_trash(event_loop),
             ShellContextMenuAction::OpenInNewPane
             | ShellContextMenuAction::CopyLocation
-            | ShellContextMenuAction::MoveToTrash
             | ShellContextMenuAction::Paste => {
                 eprintln!(
                     "[fika-wgpu] context-action-pending action={} target={}",
@@ -851,6 +851,28 @@ impl FikaWgpuApp {
                         .map(ShellContextTarget::kind)
                         .unwrap_or("none")
                 );
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+            }
+        }
+    }
+
+    fn move_context_target_to_trash(&mut self, event_loop: &dyn ActiveEventLoop) {
+        let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
+            return;
+        };
+        match self.scene.move_context_target_to_trash(size) {
+            Ok(result) if result.changed() => {
+                self.present_scene_change(event_loop, "move-to-trash")
+            }
+            Ok(_) => {
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+            }
+            Err(error) => {
+                eprintln!("[fika-wgpu] trash-error {error}");
                 if let Some(window) = self.window.as_ref() {
                     window.request_redraw();
                 }
@@ -1967,6 +1989,19 @@ struct RenameEntryRequest {
     is_dir: bool,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ShellTrashResult {
+    success_count: usize,
+    failure_count: usize,
+    trash_pairs: Vec<(PathBuf, PathBuf)>,
+}
+
+impl ShellTrashResult {
+    fn changed(&self) -> bool {
+        self.success_count > 0
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RenameDialogClick {
     Outside,
@@ -2006,6 +2041,7 @@ struct ShellScene {
     properties_changes: u64,
     create_changes: u64,
     rename_changes: u64,
+    trash_changes: u64,
     keyboard_navigation: u64,
     rubber_band_updates: u64,
     view_switches: u64,
@@ -2076,6 +2112,7 @@ impl ShellScene {
             properties_changes: 0,
             create_changes: 0,
             rename_changes: 0,
+            trash_changes: 0,
             keyboard_navigation: 0,
             rubber_band_updates: 0,
             view_switches: 0,
@@ -2823,6 +2860,81 @@ impl ShellScene {
             }
             _ => None,
         }
+    }
+
+    fn context_target_trash_paths(&self) -> Result<Vec<PathBuf>, String> {
+        match self.context_target.as_ref() {
+            Some(ShellContextTarget::Item {
+                index,
+                path,
+                selection_count,
+                ..
+            }) => {
+                if *selection_count > 1 && self.selection.contains(*index) {
+                    let paths = self
+                        .selection
+                        .selected
+                        .iter()
+                        .filter_map(|index| self.entry_path_for_index(*index))
+                        .collect::<Vec<_>>();
+                    if paths.is_empty() {
+                        return Err("selected trash target no longer exists".to_string());
+                    }
+                    Ok(paths)
+                } else {
+                    Ok(vec![path.clone()])
+                }
+            }
+            Some(ShellContextTarget::Blank { .. }) => {
+                Err("blank target cannot be moved to trash".to_string())
+            }
+            None => Err("no context target to move to trash".to_string()),
+        }
+    }
+
+    fn move_context_target_to_trash(
+        &mut self,
+        size: PhysicalSize<u32>,
+    ) -> Result<ShellTrashResult, String> {
+        let paths = self.context_target_trash_paths()?;
+        if paths.iter().any(|path| is_network_path(path)) {
+            return Err("remote trash is not available yet".to_string());
+        }
+
+        let summary = file_ops::trash_paths(&paths);
+        let result = ShellTrashResult {
+            success_count: summary.successes.len(),
+            failure_count: summary.failures.len(),
+            trash_pairs: summary
+                .successes
+                .iter()
+                .map(|record| (record.original_path.clone(), record.trash_path.clone()))
+                .collect(),
+        };
+        self.trash_changes += 1;
+        eprintln!(
+            "[fika-wgpu] trash paths={} success={} failure={} changes={}",
+            paths.len(),
+            result.success_count,
+            result.failure_count,
+            self.trash_changes
+        );
+        for failure in &summary.failures {
+            eprintln!("[fika-wgpu] trash-failure {failure}");
+        }
+
+        if !result.changed() {
+            return Ok(result);
+        }
+
+        self.context_target = None;
+        self.context_menu = None;
+        self.properties_overlay = None;
+        self.create_dialog = None;
+        self.rename_dialog = None;
+        self.rubber_band = None;
+        self.reload_current_path(size)?;
+        Ok(result)
     }
 
     fn is_properties_overlay_open(&self) -> bool {
@@ -5284,7 +5396,7 @@ impl WgpuState {
             || self.last_log.elapsed() >= Duration::from_secs(1)
         {
             eprintln!(
-                "[fika-wgpu] frame={} reason={} view={} zoom={} zoom_changes={} path={} entries={} filtered={} show_hidden={} hidden_changes={} location_active={} location_changes={} filter_active={} filter_changes={} visible={} selected={} hover={} context={} context_menu={} context_changes={} context_actions={} properties={} properties_changes={} create_dialog={} create_changes={} rename_dialog={} rename_changes={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} path_changes={} reloads={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_cache={}/{} entries={} bytes={} batches={} scroll_x={:.1} scroll_y={:.1} layout={}us text_raster={}us text_atlas={}x{}:{}b render={}us",
+                "[fika-wgpu] frame={} reason={} view={} zoom={} zoom_changes={} path={} entries={} filtered={} show_hidden={} hidden_changes={} location_active={} location_changes={} filter_active={} filter_changes={} visible={} selected={} hover={} context={} context_menu={} context_changes={} context_actions={} properties={} properties_changes={} create_dialog={} create_changes={} rename_dialog={} rename_changes={} trash_changes={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} path_changes={} reloads={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_cache={}/{} entries={} bytes={} batches={} scroll_x={:.1} scroll_y={:.1} layout={}us text_raster={}us text_atlas={}x{}:{}b render={}us",
                 self.frame_count,
                 reason,
                 scene.view_mode.as_str(),
@@ -5316,6 +5428,7 @@ impl WgpuState {
                 scene.create_changes,
                 scene.rename_dialog.is_some() as u8,
                 scene.rename_changes,
+                scene.trash_changes,
                 scene.rubber_band.as_ref().is_some_and(|band| band.active) as u8,
                 scene.hit_tests,
                 scene.selection_changes,
@@ -8236,6 +8349,7 @@ mod tests {
             properties_changes: 0,
             create_changes: 0,
             rename_changes: 0,
+            trash_changes: 0,
             keyboard_navigation: 0,
             rubber_band_updates: 0,
             view_switches: 0,
@@ -8882,6 +8996,76 @@ mod tests {
         assert!(scene.rename_dialog.is_none());
         assert_eq!(scene.directory_reloads, 1);
 
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn trash_context_target_uses_multi_selection_and_rejects_remote_paths() {
+        let mut scene = test_scene(
+            vec![
+                test_entry("one.txt", false),
+                test_entry("two.txt", false),
+                test_entry("remote", false),
+            ],
+            ShellViewMode::Icons,
+        );
+        scene.context_target = Some(ShellContextTarget::Item {
+            index: 1,
+            path: PathBuf::from("/tmp/two.txt"),
+            is_dir: false,
+            selection_count: 2,
+        });
+        scene.selection.select_indexes(&[0, 1]);
+
+        assert_eq!(
+            scene.context_target_trash_paths().unwrap(),
+            vec![PathBuf::from("/tmp/one.txt"), PathBuf::from("/tmp/two.txt")]
+        );
+
+        scene.context_target = Some(ShellContextTarget::Item {
+            index: 2,
+            path: PathBuf::from("sftp://example.test/home/remote"),
+            is_dir: false,
+            selection_count: 1,
+        });
+        assert!(
+            scene
+                .move_context_target_to_trash(PhysicalSize::new(420, 260))
+                .unwrap_err()
+                .contains("remote trash")
+        );
+        assert_eq!(scene.trash_changes, 0);
+    }
+
+    #[test]
+    fn move_to_trash_moves_context_target_reloads_and_clears_selection() {
+        let root = test_dir("trash-file");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("remove.txt"), b"remove").unwrap();
+        fs::write(root.join("keep.txt"), b"keep").unwrap();
+        let size = PhysicalSize::new(420, 260);
+        let mut scene = ShellScene::load(root.clone(), ShellViewMode::Icons).unwrap();
+        let remove_index = entry_index_by_name(&scene.entries, "remove.txt").unwrap();
+        scene.selection.select_indexes(&[remove_index]);
+        scene.context_target = Some(ShellContextTarget::Item {
+            index: remove_index,
+            path: root.join("remove.txt"),
+            is_dir: false,
+            selection_count: 1,
+        });
+
+        let result = scene.move_context_target_to_trash(size).unwrap();
+        assert_eq!(result.success_count, 1);
+        assert_eq!(result.failure_count, 0);
+        assert_eq!(scene.trash_changes, 1);
+        assert_eq!(scene.directory_reloads, 1);
+        assert!(!root.join("remove.txt").exists());
+        assert!(root.join("keep.txt").exists());
+        assert!(entry_index_by_name(&scene.entries, "remove.txt").is_none());
+        assert_eq!(scene.selection.len(), 0);
+        assert!(scene.context_target.is_none());
+
+        file_ops::undo_trash(&result.trash_pairs).unwrap();
         fs::remove_dir_all(root).unwrap();
     }
 

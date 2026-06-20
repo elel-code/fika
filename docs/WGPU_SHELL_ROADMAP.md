@@ -150,8 +150,12 @@ Current checkpoint:
   `create_dir` / `create_new` filesystem actions, reload, and selection of the
   created entry. Item Rename now opens a minimal shell-owned modal with plain
   text name capture, validation, real `rename`, reload, and selection of the
-  renamed entry. Clipboard, trash, richer properties, full inline rename, full
-  Create New submenus/templates, and new-pane dispatch remain Phase 4 work.
+  renamed entry. Move to Trash now resolves the context target to either the
+  clicked item or the active multi-selection, rejects remote paths explicitly,
+  calls core XDG trash handling, reloads the pane, and clears stale context
+  state. Clipboard, Trash view restore/delete/empty flows, undo, richer
+  properties, full inline rename, full Create New submenus/templates, and
+  new-pane dispatch remain Phase 4 work.
 - Blank-space left-drag now runs rubber-band selection through the same
   retained Icons geometry. Plain drag replaces the selection, Shift extends it,
   Ctrl/Meta toggles it against the press-time base selection, and the band is
@@ -295,12 +299,15 @@ minimal metadata overlay for item and blank-directory targets. Create New opens
 a minimal shell-owned modal for blank-directory targets and performs real
 folder/file creation followed by reload and selection. Rename opens a minimal
 shell-owned modal for item targets and performs real filesystem rename followed
-by reload and selection. Filter, location, create-name, and rename-name text
-editing remain intentionally narrow until the full IME/caret/selection text
-boundary is migrated; context menu dispatch currently covers Open directory,
-Refresh, Select All, Properties, minimal Create New, and minimal Rename, while
-clipboard, trash, richer properties, full inline rename, full Create New
-submenus/templates, and new-pane actions remain pending.
+by reload and selection. Move to Trash handles item or selected item targets
+through core trash operations, with remote paths rejected before filesystem
+mutation. Filter, location, create-name, and rename-name text editing remain
+intentionally narrow until the full IME/caret/selection text boundary is
+migrated; context menu dispatch currently covers Open directory, Refresh,
+Select All, Properties, minimal Create New, minimal Rename, and minimal Move to
+Trash, while clipboard, Trash view restore/delete/empty flows, undo, richer
+properties, full inline rename, full Create New submenus/templates, and
+new-pane actions remain pending.
 
 Acceptance:
 
