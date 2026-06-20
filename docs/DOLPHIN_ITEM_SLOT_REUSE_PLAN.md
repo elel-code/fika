@@ -1,7 +1,8 @@
 # Dolphin-style Item Slot Reuse Plan
 
-> Archived Slint-era slot-reuse investigation. Future UI work targets GPUI and should
-> follow `docs/TODO.md`, `docs/DESIGN.md`, and `docs/GPUI_DOLPHIN_MIGRATION_PLAN.md`.
+> Archived Slint-era slot-reuse investigation. Future UI work targets the
+> winit/wgpu shell and should follow `docs/WGPU_SHELL_ROADMAP.md`,
+> `docs/TODO.md`, and `docs/DESIGN.md`.
 
 ## Verdict
 

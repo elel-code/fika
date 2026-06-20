@@ -140,13 +140,13 @@
 ## 参考文档目录
 
 ### 架构与规划
-- [DESIGN.md](DESIGN.md) — 当前 GPUI/core 架构
+- [WGPU_SHELL_ROADMAP.md](WGPU_SHELL_ROADMAP.md) — 活跃 Linux-only winit/wgpu shell 目标
+- [DESIGN.md](DESIGN.md) — 当前 GPUI/core 基线架构
 - [TODO.md](TODO.md) — 剩余任务板
-- [ITEM_VIEW_CUSTOM_PAINT_DESIGN.md](ITEM_VIEW_CUSTOM_PAINT_DESIGN.md) — 活跃的保留 item-view 架构
-- [ITEM_VIEW_CUSTOM_PAINT_TODO.md](ITEM_VIEW_CUSTOM_PAINT_TODO.md) — 活跃的 item-view custom-paint 任务板
-- [ITEM_VIEW_RENDERER_DECISIONS.md](ITEM_VIEW_RENDERER_DECISIONS.md) — 各 surface 渲染器选择和门
+- [ITEM_VIEW_CUSTOM_PAINT_DESIGN.md](ITEM_VIEW_CUSTOM_PAINT_DESIGN.md) — GPUI retained item-view 基线证据
+- [ITEM_VIEW_CUSTOM_PAINT_TODO.md](ITEM_VIEW_CUSTOM_PAINT_TODO.md) — 历史 item-view custom-paint 任务板
+- [ITEM_VIEW_RENDERER_DECISIONS.md](ITEM_VIEW_RENDERER_DECISIONS.md) — GPUI 各 surface 渲染器选择和门
 - [ITEM_VIEW_RUNTIME_SMOKE.md](ITEM_VIEW_RUNTIME_SMOKE.md) — 运行时 DnD、rename 和 perf-log 冒烟检查表
-- [GPUI_DOLPHIN_MIGRATION_PLAN.md](GPUI_DOLPHIN_MIGRATION_PLAN.md) — 原始切换计划
 - [DOLPHIN_ITEM_SLOT_REUSE_PLAN.md](DOLPHIN_ITEM_SLOT_REUSE_PLAN.md) — 已归档的 slot 复用笔记
 - [SCROLL_ZOOM_PERFORMANCE_PLAN.md](SCROLL_ZOOM_PERFORMANCE_PLAN.md) — 已归档的滚动/缩放笔记
 - [OPTIMIZATION.md](OPTIMIZATION.md) — 已归档的优化笔记

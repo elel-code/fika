@@ -1,7 +1,9 @@
-# Fika TODO: GPUI Mainline
+# Fika TODO: winit/wgpu Shell Mainline
 
-本文档是当前任务板。仓库已切到单包 GPUI 主线；后续任务只应进入
-`src/` 下的 core modules、GPUI UI modules、`src/main.rs` 和 `src/bin/`。
+本文档是当前任务板。当前可运行应用仍是 GPUI 基线，但长期 UI 主线已经转向
+Linux-only、Fika 专用的 `winit + wgpu` shell。新 UI runtime 工作以
+`docs/WGPU_SHELL_ROADMAP.md` 为准；GPUI 代码保留为兼容实现、行为基线和必要
+fallback。
 
 状态说明：
 
@@ -12,13 +14,13 @@
 
 ## Hard Rules
 
-- [!] **P0：全面转向 Dolphin item-view 实现模型，再用 GPUI custom element/canvas 绘制。** 文件视图和 Places 的热路径必须优先收敛到 Dolphin 的 `model role -> visible-first role updater -> retained slot/cache -> thin painter` 闭环；GPUI `img()` 只能作为 bridge/baseline/fallback，不能继续作为 item image 生命周期、缓存、调度或可见范围策略的架构中心。Places 和 pane 的 image、hover、slot、cache、readiness、调度优化必须共用同一模型，禁止后续只改一边。
+- [!] **P0：新增 Fika 专用 winit/wgpu shell，并把 GPUI 降级为基线/fallback。** 新 UI 工作必须优先进入独立 `fika-wgpu` spike：复用 `fika-core`，使用 iced/COSMIC 路径中的 `winit` 和 `wgpu`，但不采用 libcosmic/iced widget tree。文件视图和 Places 的热路径必须直接拥有 retained geometry、hit-test、paint command、texture/glyph cache 和 DnD routing。GPUI retained renderer 文档只作为历史证据和迁移输入。
 - [x] Dolphin 是第一参考目标。目录加载、刷新、删除、rename、undo 后刷新必须先确认 Dolphin 源码执行流，再实现 Fika 对应层。
 - [x] 每个 pane 必须有稳定 `PaneId`。所有 lister、watcher、async result、selection、thumbnail、file operation result 都按 `PaneId + generation` 路由。
-- [x] 主构建路径只保留 GPUI/core package。
-- [x] GPUI 从 Zed 官方仓库通过 git 依赖获取，不写 concrete crate release、branch 或 revision。
+- [~] 当前主构建路径仍保留 GPUI/core package；新增 shell 应先作为独立实验二进制并与 GPUI 并存。
+- [~] GPUI 从 Zed 仓库通过 git 依赖获取，仅用于当前二进制和 fallback；新 shell 依赖策略以 `docs/WGPU_SHELL_ROADMAP.md` 为准。
 - [x] 直接 crates.io 依赖不使用 `*`。版本声明保持最新稳定大版本范围，不锁到 patch/minor。
-- [x] 新实现不得把 UI widget identity 当作文件模型 identity。GPUI view/entity 是渲染层，文件身份属于 core model。
+- [x] 新实现不得把 UI widget identity 当作文件模型 identity。文件身份属于 core model；新 shell 的 slot、hitbox、atlas 和 draw resources 只能消费 core/retained identity。
 - [x] 功能提炼与集成：Dolphin 是 UI 行为和文件操作流程的第一参考；cosmic-files 是纯 Rust 系统集成的参考源。两个源码库中提炼的功能统一集成到 `fika-core`，UI 层只做渲染和输入路由。
 - [x] Dolphin 分层模型对齐：渲染层不做数据决策，模型层不持有 UI 句柄，交互层不直接操作文件系统。
 - [x] 文件拆分：`src/main.rs` 只保留 app 状态编排和跨模块路由。所有功能模块已拆入 `src/core/`（domain logic）和 `src/ui/`（rendering），子职责继续按目录式模块拆分。
@@ -72,9 +74,59 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
 
 ## Remaining Work
 
-### Item View 自绘 / Dolphin retained item 对齐
+### winit/wgpu Shell 迁移
 
-详细设计和迁移任务见：
+详细目标和阶段见：
+
+- `docs/WGPU_SHELL_ROADMAP.md`
+- `docs/WGPU_SHELL_ROADMAP.zh-CN.md`
+
+- [~] Phase 0：新增独立 `fika-wgpu` spike，不删除 GPUI binary。当前已能打开独立
+  winit/wgpu shell、接受可选 path 参数、通过 `fika_core::read_entries_sync`
+  读取目录、用 `IconsLayout` 投影 retained geometry，并用 solid quad batch
+  渲染 path bar、可见 item 背景和 icon fallback 形状；真实文件名通过
+  `cosmic-text` shaping/rasterization 进入 bounded label raster cache，再上传到
+  临时 per-frame RGBA text atlas 绘制；真实 MIME/theme icon 已按 XDG/GTK/KDE
+  theme 解析，PNG/WebP/JPEG/BMP/GIF/ICO 通过 `image` 光栅化，SVG 通过
+  `usvg/resvg` 光栅化，visible icon 打包到 per-frame RGBA icon atlas，并保留
+  bounded icon raster cache；pointer move/leave 和左键点击已通过 shell-owned
+  retained hit testing 路由，支持 hovered item、单选、Ctrl/Meta toggle selection
+  和 Shift range selection，并从同一 slot projection 绘制 hover/selection 状态；
+  空白区域左键拖动已通过同一 retained Icons geometry 支持 rubber-band selection，
+  普通拖动替换 selection，Shift 追加，Ctrl/Meta 相对按下时的 base selection 做
+  toggle；keyboard navigation 已通过同一 retained selection state 处理 Arrow、
+  Home/End 和 Page Up/Down，Shift 扩展 range，focus item 会滚入视口。日志已输出
+  `--view icons|compact|details`，默认仍是 Icons baseline，Compact 使用 core
+  `CompactLayout`，Details 已有 shell-owned row projection、固定 header 和
+  Name/Size/Modified 三列；运行时可用 `1/2/3`、`Ctrl/Meta+1/2/3` 或 fallback
+  `F1/F2/F3` 切换三种模式，切换会 clamp active scroll axis、清理 transient
+  rubber-band state、刷新 hover、更新窗口标题，并立即输出 `[fika-wgpu] view-mode=...`
+  日志。
+  日志已输出 view mode、path、entry count、visible count、
+  selected/hover/rubber-band state、
+  hit-test/selection/keyboard/rubber-band/view-switch counters、quad/icon/text/batch count、
+  icon/text cache hit/miss/bytes、layout/icon-resolve/icon-raster/text-raster/render
+  time、icon/text atlas bytes 和 `scroll_x` / `scroll_y` offsets；本地目标 desktop
+  session 的 `timeout 4s target/debug/fika-wgpu --view icons|compact|details /etc`
+  smoke 均已到达 `shell-ready` 和 `frame=1`，并输出真实 icon/text atlas counters。
+  仍待接入 glyph-level cache/atlas retention、DnD targeting、手动打开/关闭/交互 smoke，
+  以及确认 Phase 0 默认 Compact/Icons 视图。
+- [~] Phase 1：Compact、Icons 和 Details scene projection 已开始接入。`/etc` 已可通过
+  `--view` 在三种模式下渲染首帧；Compact 走 core `CompactLayout`，Details 走 shell-owned
+  row projection。滚动、hover、keyboard navigation、runtime mode switching 和 selection 已通过 shared
+  `ShellLayout` abstraction 走 retained geometry；zoom、`~/Downloads` smoke、手动交互 smoke
+  和更完整 Details column/metadata parity 仍待完成。
+- [ ] Phase 2：把 Phase 0 初版 icon atlas 提升为预算化 semantic icon work，并实现 thumbnail texture retention、text shaping cache、glyph atlas policy 和 eviction telemetry。Cold glyph/icon work 必须 visible-first 且预算化。
+- [ ] Phase 3：把剩余 pointer routing、context target selection、directory hover、Places hover 和 drag/drop target lookup 移到 shell-owned hit testing。
+- [ ] Phase 4：实现 Places、toolbar、location bar、filter bar、status bar、context menus、dialogs 和 chooser mode，使常见文件管理器工作流不需要启动 GPUI shell。
+- [ ] Phase 5：同场景证据证明行为对齐，且 frame cost 比 GPUI Fika 和相关 cosmic-files 基线更好或更可预测后，再把新 shell 提升为默认。
+
+### GPUI Item View 自绘 / Dolphin retained item 对齐（历史基线）
+
+以下工作已形成当前 GPUI 基线和性能证据。它们不再是长期 UI 主线；迁移新 shell 时应复用
+其中的 retained model、cache 语义和 smoke 经验。
+
+历史设计和迁移任务见：
 
 - `docs/ITEM_VIEW_CUSTOM_PAINT_DESIGN.md`
 - `docs/ITEM_VIEW_CUSTOM_PAINT_TODO.md`

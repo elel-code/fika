@@ -1,7 +1,10 @@
 > 本文是 [FULL_RETAINED_RENDERER_ROADMAP.md](FULL_RETAINED_RENDERER_ROADMAP.md)
 > 的简体中文翻译。
 
-# 全面 Retained 渲染器路线图
+# 全面 Retained 渲染器路线图（历史 GPUI 基线）
+
+本文记录已经完成的 GPUI retained-renderer 工作及其运行时证据。它不再是活跃 UI
+架构路线图。新的 shell 工作应遵循 `docs/WGPU_SHELL_ROADMAP.zh-CN.md`。
 
 本文是 Places chrome 默认之后的执行入口。它补充：
 

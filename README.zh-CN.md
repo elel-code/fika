@@ -3,11 +3,14 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Rust Edition](https://img.shields.io/badge/rust-2024-orange.svg)](https://doc.rust-lang.org/edition-guide/rust-2024/index.html)
 
-Fika 是一个面向 Linux 桌面的 Rust 文件管理器 shell。当前实现是 GPUI
+Fika 是一个面向 Linux 桌面的 Rust 文件管理器 shell。当前可运行应用是 GPUI
 package，围绕 UI-neutral core 和参考 Dolphin 的 directory lister/model 执行流构建。
+当前活跃 UI 架构方向已经转为 Linux-only、Fika 专用的 `winit + wgpu` shell；
+GPUI 应用在新 shell 被证明之前保留为兼容实现和行为/性能基线。
 
-GPUI 依赖来自 Zed 官方仓库：`https://github.com/zed-industries/zed`。manifest
-没有把 GPUI 固定到 crates.io 包发布、具体分支、具体提交或具体数字版本。
+新 shell 将使用 iced/COSMIC windowing 路径（本地 COSMIC 参考使用的
+`pop-os/winit`）和 `wgpu`，但不采用 libcosmic/iced 作为通用 widget tree。
+当前二进制和 fallback 路径仍继续使用来自 Zed 仓库的 GPUI。
 
 > [English version](README.md)
 
@@ -61,7 +64,7 @@ GPUI 依赖来自 Zed 官方仓库：`https://github.com/zed-industries/zed`。m
   cancel/pause/progress，运行时级 `BTreeMap<OperationId, OperationHandle>`
   跟踪。
 
-### UI (GPUI)
+### 当前 UI (GPUI 基线)
 
 - Manager 窗口：目录 pane、pane 外壳、toolbar、header。
 - 动态分屏（通过快捷键 Split / Close Pane）。
@@ -100,19 +103,20 @@ GPUI 依赖来自 Zed 官方仓库：`https://github.com/zed-industries/zed`。m
 
 ### 二进制与集成
 
-- `fika` — 主 GPUI 应用和 chooser shell。
+- `fika` — 当前 GPUI 应用和 chooser shell。
 - `fika-xdp-filechooser` — XDG Desktop Portal FileChooser 后端。
 - `fika-privileged-helper` — 受保护操作的系统总线 helper。
 - `data/` 下 D-Bus service 文件、Polkit policy 和 portal metadata。
 
-旧 UI 实现已经从主代码树移除。GPUI package 中不存在的能力都应视为后续实现任务，而不是当前功能。
+旧 UI 实现已经从主代码树移除。新的 UI runtime 工作应面向 winit/wgpu shell 路线图，
+而不是继续把 GPUI 扩展为长期 framework 依赖。
 
 ## 布局
 
 ```text
 src/
   lib.rs                         UI-neutral core 模块导出
-  main.rs                        GPUI 应用和 chooser shell
+  main.rs                        当前 GPUI 应用和 chooser shell
   core.rs                        Core 模块重导出
   cli.rs                         CLI 参数解析入口
   cli/
@@ -332,9 +336,9 @@ scripts/check-runtime-integration.sh
 
 ### 架构与规划
 
-- [docs/DESIGN.md](docs/DESIGN.md) — 当前 GPUI/core 架构和子系统边界。
+- [docs/WGPU_SHELL_ROADMAP.md](docs/WGPU_SHELL_ROADMAP.md) — 活跃 Linux-only winit/wgpu shell 目标、阶段和性能门。
+- [docs/DESIGN.md](docs/DESIGN.md) — 当前 GPUI/core 基线架构和子系统边界。
 - [docs/TODO.md](docs/TODO.md) — 剩余实现任务和活跃阻塞项。
-- [docs/GPUI_DOLPHIN_MIGRATION_PLAN.md](docs/GPUI_DOLPHIN_MIGRATION_PLAN.md) — 从旧 UI 到 GPUI 的原始切换计划。
 - [docs/DOLPHIN_ITEM_SLOT_REUSE_PLAN.md](docs/DOLPHIN_ITEM_SLOT_REUSE_PLAN.md) — 已归档的 slot 复用设计笔记。
 - [docs/SCROLL_ZOOM_PERFORMANCE_PLAN.md](docs/SCROLL_ZOOM_PERFORMANCE_PLAN.md) — 已归档的滚动/缩放性能计划。
 - [docs/OPTIMIZATION.md](docs/OPTIMIZATION.md) — 已归档的优化笔记。

@@ -3,8 +3,9 @@
 
 # Retained Renderer 证据清单
 
-在更改默认 renderer policy 或移除 GPUI bridge 前使用这份清单。它把
-`docs/FULL_RETAINED_RENDERER_ROADMAP.md` 的 Track 1 变成可重复执行的桌面会话流程。
+这份清单用于保留或对比 GPUI 基线。在更改 GPUI 默认 renderer policy 或移除 GPUI bridge
+前使用它。它把 `docs/FULL_RETAINED_RENDERER_ROADMAP.md` 的 Track 1 变成可重复执行的
+桌面会话流程。
 
 GUI 命令必须在真实桌面会话中运行。沙箱或 headless shell 可能返回 GPUI
 `NoCompositor`，这种结果不是有效运行时证据。优先使用已构建的 binary，而不是

@@ -3,8 +3,8 @@
 
 # Places Retained 事件传递计划
 
-本文是 `docs/FULL_RETAINED_RENDERER_ROADMAP.zh-CN.md` 中 Track 3 的实现计划。
-它只覆盖事件传递，不改变 row 渲染器策略。当前状态：Places full row visual、
+本文是 `docs/FULL_RETAINED_RENDERER_ROADMAP.zh-CN.md` 中 Track 3 的历史 GPUI 基线证据。
+它只覆盖事件传递，不定义新的 winit/wgpu shell 路线。当前状态：Places full row visual、
 retained event delivery、typed DnD move/drop 和 drag start 已经在 Fika GPUI fork 上完成。
 本文较早的 mixed-policy 段落是历史实现记录，以“当前状态”和“TODO”中的完成态为准。
 

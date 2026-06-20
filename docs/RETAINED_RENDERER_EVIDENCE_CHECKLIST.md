@@ -1,8 +1,9 @@
 # Retained Renderer Evidence Checklist
 
-Use this checklist before changing a default renderer policy or removing a GPUI
-bridge. It turns Track 1 of `docs/FULL_RETAINED_RENDERER_ROADMAP.md` into a
-repeatable desktop-session procedure.
+This checklist is for preserving or comparing the GPUI baseline. Use it before
+changing a GPUI default renderer policy or removing a GPUI bridge. It turns
+Track 1 of `docs/FULL_RETAINED_RENDERER_ROADMAP.md` into a repeatable
+desktop-session procedure.
 
 Run GUI commands from a real desktop session. A sandbox or headless shell can
 return GPUI `NoCompositor`, which is not valid runtime evidence. Prefer a built

@@ -1,4 +1,8 @@
-# Full Retained Renderer Roadmap
+# Full Retained Renderer Roadmap (Historical GPUI Baseline)
+
+This document records the completed GPUI retained-renderer effort and its
+runtime evidence. It is no longer the active UI architecture roadmap. New shell
+work should follow `docs/WGPU_SHELL_ROADMAP.md`.
 
 This document is the execution entry point for the post-Places-chrome direction.
 It complements:

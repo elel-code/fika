@@ -1,6 +1,7 @@
 # Item View Custom Paint TODO
 
-This is the active task board for the GPUI item view custom-paint migration.
+This is the historical task board for the completed GPUI item view custom-paint
+migration. New UI runtime work should follow `docs/WGPU_SHELL_ROADMAP.md`.
 
 ## P0: Preparation
 
@@ -472,9 +473,9 @@ pretending that every remaining GPUI boundary can be removed safely today.
 This phase turns the accepted direction into an executable queue. It is ordered
 by risk and evidence, not by how custom-painted a surface looks.
 
-The current post-Places-chrome execution entry point is
-`docs/FULL_RETAINED_RENDERER_ROADMAP.md`; keep this backlog aligned with its
-tracks.
+The post-Places-chrome GPUI retained execution record is
+`docs/FULL_RETAINED_RENDERER_ROADMAP.md`. This backlog is retained as evidence
+and implementation history; it is not the active shell roadmap.
 
 - [x] P16a: Record the full-transition tracks in the planning, design, and TODO
   docs: evidence, painter, controller, shell boundary, Places, and ownership.

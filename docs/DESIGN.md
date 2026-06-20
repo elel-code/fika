@@ -1,14 +1,26 @@
-# Fika Design: GPUI Architecture
+# Fika Design: GPUI Baseline and Shell Direction
 
-本文档描述当前 GPUI 主线架构。实现边界以根 Cargo package 和 `src/` 源码目录为准；Dolphin 源码执行流仍是目录加载、刷新、model signal 和 current-directory-removed 行为的第一参考。
+This document describes the current runnable GPUI baseline. It is no longer the
+long-term UI architecture target. New shell architecture work should follow
+`docs/WGPU_SHELL_ROADMAP.md`: a Linux-only, Fika-specific `winit + wgpu`
+runtime using the iced/COSMIC windowing path while avoiding a generic
+libcosmic/iced widget tree.
 
-## Goals
+The boundaries below still matter because the GPUI app is the compatibility
+implementation and behavior baseline. The implementation boundary is the root
+Cargo package and the `src/` source tree. Dolphin source flow remains the first
+reference for directory loading, refresh, model signals, and
+current-directory-removed behavior.
 
-- 用 GPUI 承载窗口、pane、输入路由和渲染。
+## Baseline Goals
+
+- Keep the current GPUI application working as the compatibility shell and
+  behavior/performance baseline.
 - 保持 `fika-core` UI-neutral：core 不依赖 GPUI、窗口句柄或 UI model 类型。
 - 每个 pane 都有稳定 identity：`PaneId + generation` 是 lister、watcher、async result 和 UI event 的路由边界。
 - 目录变化通过 lister event 进入 `DirectoryModel`，GPUI 层只渲染 snapshot 并派发 action。
-- 旧 UI 主路径不再存在；新功能只进入 GPUI/core 主路径。
+- New UI runtime work targets the winit/wgpu shell, while feature fixes for the
+  current binary may still land in the GPUI baseline.
 - 新增 UI 功能优先采用现代 Rust 目录式模块（`feature.rs` 入口 + `feature/*.rs` 子职责），`src/main.rs` 只保留 app 状态编排和跨模块路由。
 
 ## Non-Goals
@@ -17,6 +29,8 @@
 - 不保留旧 slot、focused-pane fallback 或 reload queue。
 - 不一次性复制 Dolphin 的所有 KDE/KIO 后端。当前主线先保住本地目录、pane identity、portal/helper 边界。
 - 不在 GPUI render/input 路径中执行阻塞 I/O。
+- Do not treat further GPUI retained-renderer work as the active long-term
+  architecture unless it is needed to keep the current baseline usable.
 
 ## Reference Priority
 
@@ -24,7 +38,9 @@
 2. Linux desktop specifications and services used by Dolphin-like behavior:
    XDG trash, freedesktop thumbnails, MIME apps, service menus, GIO/GVfs, Polkit.
 3. Existing `fika-core` modules when they preserve the Dolphin-style flow.
-4. GPUI idioms for entity, view, state, and input composition.
+4. `docs/WGPU_SHELL_ROADMAP.md` for new UI runtime ownership, performance
+   gates, and migration phases.
+5. GPUI idioms for maintaining the current baseline.
 
 ## Source Layout
 
@@ -560,7 +576,7 @@ Undo follows the same rule: filesystem change first, affected pane refresh secon
 
 ## Historical Docs
 
-Active retained item-view work is tracked in
+GPUI retained item-view baseline evidence is tracked in
 `docs/ITEM_VIEW_CUSTOM_PAINT_DESIGN.md`,
 `docs/ITEM_VIEW_CUSTOM_PAINT_TODO.md`,
 `docs/ITEM_VIEW_RENDERER_DECISIONS.md`, and
@@ -568,10 +584,9 @@ Active retained item-view work is tracked in
 
 The archived optimization documents (`docs/OPTIMIZATION.md`,
 `docs/SCROLL_ZOOM_PERFORMANCE_PLAN.md`,
-`docs/DOLPHIN_ITEM_SLOT_REUSE_PLAN.md`,
-`docs/GPUI_DOLPHIN_MIGRATION_PLAN.md`) describe earlier planning phases and
-should be read only for behavior notes and design history. They are not
-architecture input for new code.
+`docs/DOLPHIN_ITEM_SLOT_REUSE_PLAN.md`) describe earlier planning phases and
+should be read only for behavior notes and design history. New architecture
+work should instead start from `docs/WGPU_SHELL_ROADMAP.md`.
 
 ## Acceptance Definition
 

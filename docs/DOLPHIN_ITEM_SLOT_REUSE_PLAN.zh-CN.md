@@ -2,7 +2,8 @@
 
 # Dolphin 风格 Item Slot 复用计划
 
-> 已归档的 Slint 时代 slot 复用调查。后续 UI 工作针对 GPUI，应参考 `docs/TODO.md`、`docs/DESIGN.md` 和 `docs/GPUI_DOLPHIN_MIGRATION_PLAN.md`。
+> 已归档的 Slint 时代 slot 复用调查。后续 UI 工作针对 winit/wgpu shell，应参考
+> `docs/WGPU_SHELL_ROADMAP.md`、`docs/TODO.md` 和 `docs/DESIGN.md`。
 
 ## 结论
 

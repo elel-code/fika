@@ -3,13 +3,17 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Rust Edition](https://img.shields.io/badge/rust-2024-orange.svg)](https://doc.rust-lang.org/edition-guide/rust-2024/index.html)
 
-Fika is a Rust file-manager shell for Linux desktops. The active implementation
-is a GPUI package built around a UI-neutral core and Dolphin-inspired directory
-lister/model flow.
+Fika is a Rust file-manager shell for Linux desktops. The current runnable
+application is a GPUI package built around a UI-neutral core and
+Dolphin-inspired directory lister/model flow. The active UI architecture
+direction is now a Linux-only, Fika-specific `winit + wgpu` shell; the GPUI app
+remains the compatibility implementation and behavior/performance baseline
+while that shell is proved out.
 
-GPUI is pulled from the official Zed repository:
-`https://github.com/zed-industries/zed`. The manifest does not pin GPUI to a
-crate release, branch, revision, or concrete numeric version.
+The new shell will use the iced/COSMIC windowing path (`pop-os/winit`, as used
+by the local COSMIC reference) and `wgpu`, without adopting libcosmic/iced as a
+general widget tree. GPUI is still pulled from the Zed repository for the
+current binary and fallback path.
 
 > [中文版 / Chinese](README.zh-CN.md)
 
@@ -68,7 +72,7 @@ The current cutover build contains:
   with cancel/pause/progress, and `BTreeMap<OperationId, OperationHandle>`
   runtime-level tracking.
 
-### UI (GPUI)
+### Current UI (GPUI baseline)
 
 - Manager window with directory pane, pane shell, toolbar, and header.
 - Dynamic split panes (`Split` / `Close Pane` via keyboard shortcut).
@@ -111,21 +115,21 @@ The current cutover build contains:
 
 ### Binaries and Integration
 
-- `fika` — main GPUI application and chooser shell.
+- `fika` — current GPUI application and chooser shell.
 - `fika-xdp-filechooser` — XDG Desktop Portal FileChooser backend.
 - `fika-privileged-helper` — system-bus helper for protected operations.
 - D-Bus service files, Polkit policy, and portal metadata under `data/`.
 
-The older UI implementation has been removed from the main tree. Work that is
-not present in the GPUI package should be treated as future implementation, not
-an active feature.
+The older UI implementation has been removed from the main tree. New UI runtime
+work should target the winit/wgpu shell roadmap rather than expanding GPUI as a
+long-term framework dependency.
 
 ## Layout
 
 ```text
 src/
   lib.rs                         UI-neutral core module exports
-  main.rs                        GPUI application and chooser shell
+  main.rs                        Current GPUI application and chooser shell
   core.rs                        Core module re-exports
   cli.rs                         CLI argument parsing entry point
   cli/
@@ -346,9 +350,9 @@ FileChooser backend, opt in through `xdg-desktop-portal` configuration. See
 
 ### Architecture and Planning
 
-- [docs/DESIGN.md](docs/DESIGN.md) — Current GPUI/core architecture and subsystem boundaries.
+- [docs/WGPU_SHELL_ROADMAP.md](docs/WGPU_SHELL_ROADMAP.md) — Active Linux-only winit/wgpu shell target, phases, and performance gates.
+- [docs/DESIGN.md](docs/DESIGN.md) — Current GPUI/core baseline architecture and subsystem boundaries.
 - [docs/TODO.md](docs/TODO.md) — Remaining implementation tasks and active blockers.
-- [docs/GPUI_DOLPHIN_MIGRATION_PLAN.md](docs/GPUI_DOLPHIN_MIGRATION_PLAN.md) — Original cutover plan from removed UI to GPUI.
 - [docs/DOLPHIN_ITEM_SLOT_REUSE_PLAN.md](docs/DOLPHIN_ITEM_SLOT_REUSE_PLAN.md) — Archived slot-reuse design notes.
 - [docs/SCROLL_ZOOM_PERFORMANCE_PLAN.md](docs/SCROLL_ZOOM_PERFORMANCE_PLAN.md) — Archived scroll/zoom performance plan.
 - [docs/OPTIMIZATION.md](docs/OPTIMIZATION.md) — Archived optimization notes.

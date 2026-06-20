@@ -1,8 +1,8 @@
 # Places Retained Event Delivery Plan
 
-This document is the implementation plan for Track 3 in
+This document is historical GPUI baseline evidence for Track 3 in
 `docs/FULL_RETAINED_RENDERER_ROADMAP.md`. It covers event delivery only. It does
-not change the row renderer policy. Current status: Places full row visual,
+not define the new winit/wgpu shell route. Current status: Places full row visual,
 retained event delivery, typed DnD move/drop, and drag start are complete on
 the Fika GPUI fork. Older mixed-policy sections in this document are historical
 implementation notes and are superseded by the "Current State" and "TODO"
