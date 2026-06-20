@@ -171,6 +171,13 @@ Current checkpoint:
   Esc clears/deactivates it. Layout, hit testing, hover, selection, select-all, and
   keyboard navigation all route through the filtered model-index projection.
   Full IME/caret/selection editing remains Phase 4 text-boundary work.
+- A minimal shell-owned location edit mode is now available from `Ctrl/Meta+L`,
+  `Ctrl/Meta+D`, `F6`, or clicking the top path bar. It reuses core
+  `resolve_location_input` and `complete_location_input`: first typed input
+  replaces the current path draft, Backspace edits the draft, Tab completes
+  filesystem paths, Enter commits through the retained navigation/history path,
+  and Esc cancels. Caret movement, selection editing, and IME remain Phase 4
+  text-boundary work.
 - Dotfile visibility is now shell-owned. Hidden entries are excluded from the
   retained projection by default; `Ctrl/Meta+H` or the top-bar `Hidden` toggle
   shows them. Selection is retained or pruned through the same projection when
@@ -178,7 +185,7 @@ Current checkpoint:
 - `[fika-wgpu]` logs include view mode, path, entry count, visible item count,
   quad count, selected count, hovered item index, active rubber-band state,
   hit-test/selection/keyboard navigation/rubber-band/view-switch/path-change
-  counters, reload/filter/hidden counters, zoom percent and zoom-change counters, icon count, icon cache
+  counters, reload/location/filter/hidden counters, zoom percent and zoom-change counters, icon count, icon cache
   hit/miss count, icon cache bytes, icon atlas bytes, icon resolve/raster time,
   text label count, text cache hit/miss count, text cache bytes, text atlas
   bytes, draw batch count, render reason, layout time, text raster time, render
@@ -218,7 +225,7 @@ Acceptance:
 - [~] `/etc` renders in Compact, Icons, and Details via `--view`; `~/Downloads`
   and manual interaction smokes remain pending.
 - [~] Scroll, hover, keyboard navigation, runtime mode switching, projection
-  zoom, reload, filtering, hidden-file visibility, selection, and
+  zoom, reload, location editing, filtering, hidden-file visibility, selection, and
   select-all/clear shortcuts work from retained geometry for the initial
   projections. Glyph-level text zoom policy remains pending.
 - [~] Layout/hit-test/paint share the same shell layout abstraction for Icons,

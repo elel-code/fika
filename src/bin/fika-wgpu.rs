@@ -14,7 +14,8 @@ use cosmic_text::{
 };
 use fika_core::{
     CompactLayout, CompactLayoutOptions, Entry, IconsLayout, IconsLayoutOptions, NameFilter,
-    ViewPoint, ViewRect, ViewSize, format_modified_secs, format_size, read_entries_sync,
+    ViewPoint, ViewRect, ViewSize, complete_location_input, format_modified_secs, format_size,
+    read_entries_sync, resolve_location_input,
 };
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
@@ -249,6 +250,17 @@ enum FilterCommand {
     Deactivate,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum LocationCommand {
+    Activate,
+    Insert(String),
+    Backspace,
+    Cancel,
+    Commit,
+    Complete,
+    Ignore,
+}
+
 fn window_title(scene: &ShellScene) -> String {
     format!(
         "Fika wgpu shell [{}] - {}",
@@ -408,6 +420,20 @@ impl ApplicationHandler for FikaWgpuApp {
                 };
                 let shortcut =
                     self.modifiers.state().control_key() || self.modifiers.state().meta_key();
+                if let Some(command) = location_command_for_key_event(
+                    &event,
+                    shortcut,
+                    self.scene.is_location_editing(),
+                ) {
+                    if command == LocationCommand::Commit {
+                        self.commit_location_draft(event_loop);
+                    } else if self.scene.apply_location_command(command, renderer.size)
+                        && let Some(window) = self.window.as_ref()
+                    {
+                        window.request_redraw();
+                    }
+                    return;
+                }
                 if let Some(command) =
                     filter_command_for_key_event(&event, shortcut, self.scene.filter_active)
                 {
@@ -514,6 +540,20 @@ impl ApplicationHandler for FikaWgpuApp {
                     y: position.y as f32,
                 };
                 if state == ElementState::Pressed
+                    && self
+                        .scene
+                        .path_bar_contains_screen_point(point, renderer.size)
+                {
+                    if self
+                        .scene
+                        .apply_location_command(LocationCommand::Activate, renderer.size)
+                        && let Some(window) = self.window.as_ref()
+                    {
+                        window.request_redraw();
+                    }
+                    return;
+                }
+                if state == ElementState::Pressed
                     && let Some(action) = self
                         .scene
                         .path_navigation_action_at_screen_point(point, renderer.size)
@@ -612,6 +652,32 @@ impl FikaWgpuApp {
             Ok(true) => self.present_scene_change(event_loop, "reload-directory"),
             Ok(false) => {}
             Err(error) => eprintln!("[fika-wgpu] reload-error {error}"),
+        }
+    }
+
+    fn commit_location_draft(&mut self, event_loop: &dyn ActiveEventLoop) {
+        let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
+            return;
+        };
+        let input = self.scene.location_draft_value().unwrap_or("").to_string();
+        let Some(path) = self.scene.resolved_location_draft() else {
+            eprintln!("[fika-wgpu] location-error input={input:?} error=empty");
+            return;
+        };
+        let closed = self.scene.close_location_draft(size);
+        match self.scene.load_path(path, size) {
+            Ok(true) => self.present_scene_change(event_loop, "location-commit"),
+            Ok(false) => {
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+            }
+            Err(error) => {
+                eprintln!("[fika-wgpu] location-error input={input:?} error={error}");
+                if closed && let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+            }
         }
     }
 
@@ -785,6 +851,77 @@ fn hidden_toggle_requested_for_key_parts(
         && (matches!(physical_key, PhysicalKey::Code(KeyCode::KeyH))
             || key_character_eq(logical_key, "h")
             || key_character_eq(key_without_modifiers, "h"))
+}
+
+fn location_command_for_key_event(
+    event: &KeyEvent,
+    shortcut: bool,
+    location_active: bool,
+) -> Option<LocationCommand> {
+    location_command_for_key_parts(
+        shortcut,
+        location_active,
+        &event.physical_key,
+        &event.logical_key,
+        &event.key_without_modifiers,
+    )
+}
+
+fn location_command_for_key_parts(
+    shortcut: bool,
+    location_active: bool,
+    physical_key: &PhysicalKey,
+    logical_key: &Key,
+    key_without_modifiers: &Key,
+) -> Option<LocationCommand> {
+    if matches!(physical_key, PhysicalKey::Code(KeyCode::F6))
+        || matches!(logical_key, Key::Named(NamedKey::F6))
+        || matches!(key_without_modifiers, Key::Named(NamedKey::F6))
+        || (shortcut
+            && (matches!(physical_key, PhysicalKey::Code(KeyCode::KeyL))
+                || matches!(physical_key, PhysicalKey::Code(KeyCode::KeyD))
+                || key_character_eq(logical_key, "l")
+                || key_character_eq(key_without_modifiers, "l")
+                || key_character_eq(logical_key, "d")
+                || key_character_eq(key_without_modifiers, "d")))
+    {
+        return Some(LocationCommand::Activate);
+    }
+    if !location_active {
+        return None;
+    }
+    if matches!(physical_key, PhysicalKey::Code(KeyCode::Escape))
+        || matches!(logical_key, Key::Named(NamedKey::Escape))
+        || matches!(key_without_modifiers, Key::Named(NamedKey::Escape))
+    {
+        return Some(LocationCommand::Cancel);
+    }
+    if matches!(logical_key, Key::Named(NamedKey::Enter))
+        || matches!(key_without_modifiers, Key::Named(NamedKey::Enter))
+    {
+        return Some(LocationCommand::Commit);
+    }
+    if matches!(physical_key, PhysicalKey::Code(KeyCode::Tab))
+        || matches!(logical_key, Key::Named(NamedKey::Tab))
+        || matches!(key_without_modifiers, Key::Named(NamedKey::Tab))
+    {
+        return Some(LocationCommand::Complete);
+    }
+    if matches!(physical_key, PhysicalKey::Code(KeyCode::Backspace))
+        || matches!(logical_key, Key::Named(NamedKey::Backspace))
+        || matches!(key_without_modifiers, Key::Named(NamedKey::Backspace))
+    {
+        return Some(LocationCommand::Backspace);
+    }
+    if shortcut {
+        return Some(LocationCommand::Ignore);
+    }
+    match logical_key {
+        Key::Character(value) if !value.chars().any(char::is_control) => {
+            Some(LocationCommand::Insert(value.to_string()))
+        }
+        _ => Some(LocationCommand::Ignore),
+    }
 }
 
 fn filter_command_for_key_event(
@@ -1178,12 +1315,28 @@ impl PathHistory {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct LocationDraft {
+    value: String,
+    replace_on_insert: bool,
+}
+
+impl LocationDraft {
+    fn new(value: String) -> Self {
+        Self {
+            value,
+            replace_on_insert: true,
+        }
+    }
+}
+
 struct ShellScene {
     path: PathBuf,
     view_mode: ShellViewMode,
     entries: Vec<Entry>,
     dir_count: usize,
     filtered_indexes: Vec<usize>,
+    location_draft: Option<LocationDraft>,
     filter_active: bool,
     filter_pattern: String,
     show_hidden: bool,
@@ -1203,6 +1356,7 @@ struct ShellScene {
     view_switches: u64,
     path_changes: u64,
     directory_reloads: u64,
+    location_changes: u64,
     filter_changes: u64,
     hidden_changes: u64,
     zoom_changes: u64,
@@ -1242,6 +1396,7 @@ impl ShellScene {
             entries,
             dir_count,
             filtered_indexes,
+            location_draft: None,
             filter_active: false,
             filter_pattern: String::new(),
             show_hidden: false,
@@ -1261,6 +1416,7 @@ impl ShellScene {
             view_switches: 0,
             path_changes: 0,
             directory_reloads: 0,
+            location_changes: 0,
             filter_changes: 0,
             hidden_changes: 0,
             zoom_changes: 0,
@@ -1393,6 +1549,7 @@ impl ShellScene {
         self.rebuild_filtered_indexes();
         self.scroll_x = 0.0;
         self.scroll_y = 0.0;
+        self.location_draft = None;
         self.selection = ShellSelection::default();
         self.rubber_band = None;
         self.last_primary_click = None;
@@ -1505,6 +1662,102 @@ impl ShellScene {
             );
         }
         selection_changed || rubber_band_changed
+    }
+
+    fn is_location_editing(&self) -> bool {
+        self.location_draft.is_some()
+    }
+
+    fn location_draft_value(&self) -> Option<&str> {
+        self.location_draft
+            .as_ref()
+            .map(|draft| draft.value.as_str())
+    }
+
+    fn resolved_location_draft(&self) -> Option<PathBuf> {
+        let value = self.location_draft_value()?;
+        resolve_location_input(&self.path, value)
+    }
+
+    fn close_location_draft(&mut self, size: PhysicalSize<u32>) -> bool {
+        if self.location_draft.take().is_none() {
+            return false;
+        }
+        self.location_changes += 1;
+        self.rubber_band = None;
+        self.clamp_scroll(size);
+        eprintln!(
+            "[fika-wgpu] location active=0 value=\"\" changes={}",
+            self.location_changes
+        );
+        true
+    }
+
+    fn apply_location_command(
+        &mut self,
+        command: LocationCommand,
+        size: PhysicalSize<u32>,
+    ) -> bool {
+        let old_draft = self.location_draft.clone();
+        let old_filter_active = self.filter_active;
+
+        match command {
+            LocationCommand::Activate => {
+                self.location_draft = Some(LocationDraft::new(self.path.display().to_string()));
+                self.filter_active = false;
+            }
+            LocationCommand::Insert(value) => {
+                let Some(draft) = self.location_draft.as_mut() else {
+                    return false;
+                };
+                if draft.replace_on_insert {
+                    draft.value.clear();
+                    draft.replace_on_insert = false;
+                }
+                draft.value.push_str(&value);
+            }
+            LocationCommand::Backspace => {
+                let Some(draft) = self.location_draft.as_mut() else {
+                    return false;
+                };
+                if draft.replace_on_insert {
+                    draft.value.clear();
+                    draft.replace_on_insert = false;
+                } else {
+                    draft.value.pop();
+                }
+            }
+            LocationCommand::Cancel => {
+                self.location_draft = None;
+            }
+            LocationCommand::Complete => {
+                let Some(draft) = self.location_draft.as_mut() else {
+                    return false;
+                };
+                let Some(completed) = complete_location_input(&self.path, &draft.value) else {
+                    return false;
+                };
+                draft.value = completed;
+                draft.replace_on_insert = false;
+            }
+            LocationCommand::Commit | LocationCommand::Ignore => return false,
+        }
+
+        let changed = old_draft != self.location_draft || old_filter_active != self.filter_active;
+        if !changed {
+            return false;
+        }
+
+        self.location_changes += 1;
+        self.rubber_band = None;
+        self.clamp_scroll(size);
+        eprintln!(
+            "[fika-wgpu] location active={} value={:?} changes={}",
+            self.location_draft.is_some() as u8,
+            self.location_draft_value().unwrap_or(""),
+            self.location_changes
+        );
+        true
     }
 
     fn apply_filter_command(&mut self, command: FilterCommand, size: PhysicalSize<u32>) -> bool {
@@ -1653,6 +1906,28 @@ impl ShellScene {
         view_mode_button_rects(size.width.max(1) as f32)
             .into_iter()
             .find_map(|(mode, rect)| rect.contains(point).then_some(mode))
+    }
+
+    fn path_bar_rect(&self, size: PhysicalSize<u32>) -> Option<ViewRect> {
+        let width = size.width.max(1) as f32;
+        let path_x = path_bar_start_x();
+        let path_width = if self.is_location_editing() {
+            path_bar_available_width(width, path_x)
+        } else {
+            path_placeholder_width(&self.path, width, path_x)
+        };
+        let rect = ViewRect {
+            x: path_x,
+            y: 14.0,
+            width: path_width,
+            height: 24.0,
+        };
+        (rect.width > 24.0).then_some(rect)
+    }
+
+    fn path_bar_contains_screen_point(&self, point: ViewPoint, size: PhysicalSize<u32>) -> bool {
+        self.path_bar_rect(size)
+            .is_some_and(|rect| rect.contains(point))
     }
 
     fn path_navigation_action_at_screen_point(
@@ -1841,17 +2116,25 @@ impl ShellScene {
             size,
         );
         self.push_path_navigation_buttons(&mut vertices, text, size);
-        let path_x = path_bar_start_x();
-        let path_rect = ViewRect {
-            x: path_x,
-            y: 14.0,
-            width: path_placeholder_width(&self.path, width, path_x),
-            height: 24.0,
-        };
-        if path_rect.width > 24.0 {
-            push_rect(&mut vertices, path_rect, [0.170, 0.184, 0.198, 1.0], size);
+        if let Some(path_rect) = self.path_bar_rect(size) {
+            let location_active = self.is_location_editing();
+            push_rect(
+                &mut vertices,
+                path_rect,
+                if location_active {
+                    [0.190, 0.225, 0.252, 1.0]
+                } else {
+                    [0.170, 0.184, 0.198, 1.0]
+                },
+                size,
+            );
+            let path_label = self
+                .location_draft
+                .as_ref()
+                .map(|draft| format!("{}|", draft.value))
+                .unwrap_or_else(|| self.path.display().to_string());
             text.push_label(
-                &self.path.display().to_string(),
+                &path_label,
                 ViewRect {
                     x: path_rect.x + 12.0,
                     y: path_rect.y + 3.0,
@@ -2373,6 +2656,9 @@ impl ShellScene {
         );
         if self.show_hidden {
             status.push_str(" | hidden");
+        }
+        if let Some(value) = self.location_draft_value() {
+            status.push_str(&format!(" | location {:?}", value));
         }
         if self.filter_active || !self.filter_pattern.is_empty() {
             status.push_str(&format!(
@@ -3235,7 +3521,7 @@ impl WgpuState {
             || self.last_log.elapsed() >= Duration::from_secs(1)
         {
             eprintln!(
-                "[fika-wgpu] frame={} reason={} view={} zoom={} zoom_changes={} path={} entries={} filtered={} show_hidden={} hidden_changes={} filter_active={} filter_changes={} visible={} selected={} hover={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} path_changes={} reloads={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_cache={}/{} entries={} bytes={} batches={} scroll_x={:.1} scroll_y={:.1} layout={}us text_raster={}us text_atlas={}x{}:{}b render={}us",
+                "[fika-wgpu] frame={} reason={} view={} zoom={} zoom_changes={} path={} entries={} filtered={} show_hidden={} hidden_changes={} location_active={} location_changes={} filter_active={} filter_changes={} visible={} selected={} hover={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} path_changes={} reloads={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_cache={}/{} entries={} bytes={} batches={} scroll_x={:.1} scroll_y={:.1} layout={}us text_raster={}us text_atlas={}x{}:{}b render={}us",
                 self.frame_count,
                 reason,
                 scene.view_mode.as_str(),
@@ -3246,6 +3532,8 @@ impl WgpuState {
                 scene.filtered_entry_count(),
                 scene.show_hidden as u8,
                 scene.hidden_changes,
+                scene.is_location_editing() as u8,
+                scene.location_changes,
                 scene.filter_active as u8,
                 scene.filter_changes,
                 scene_frame.visible_items,
@@ -5827,9 +6115,12 @@ fn file_color(entry: &Entry) -> [f32; 4] {
 
 fn path_placeholder_width(path: &std::path::Path, surface_width: f32, path_x: f32) -> f32 {
     let display_width = path.display().to_string().chars().count() as f32 * 7.5 + 28.0;
+    display_width.min(path_bar_available_width(surface_width, path_x))
+}
+
+fn path_bar_available_width(surface_width: f32, path_x: f32) -> f32 {
     let first_button_x = view_mode_button_rects(surface_width)[0].1.x;
-    let max_width = (first_button_x - path_x - 10.0).max(0.0);
-    display_width.min(max_width)
+    (first_button_x - path_x - 10.0).max(0.0)
 }
 
 fn status_bar_rect(size: PhysicalSize<u32>) -> ViewRect {
@@ -5920,6 +6211,14 @@ mod tests {
         })
     }
 
+    fn test_dir(name: &str) -> PathBuf {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("fika-wgpu-{name}-{unique}"))
+    }
+
     fn test_scene(entries: Vec<Entry>, view_mode: ShellViewMode) -> ShellScene {
         let dir_count = entries.iter().filter(|entry| entry.is_dir).count();
         let filtered_indexes = filtered_indexes_for_entries(&entries, false, "");
@@ -5929,6 +6228,7 @@ mod tests {
             entries,
             dir_count,
             filtered_indexes,
+            location_draft: None,
             filter_active: false,
             filter_pattern: String::new(),
             show_hidden: false,
@@ -5948,6 +6248,7 @@ mod tests {
             view_switches: 0,
             path_changes: 0,
             directory_reloads: 0,
+            location_changes: 0,
             filter_changes: 0,
             hidden_changes: 0,
             zoom_changes: 0,
@@ -6323,6 +6624,134 @@ mod tests {
             &PhysicalKey::Code(KeyCode::KeyH),
             &Key::Character("h".into()),
             &Key::Character("h".into()),
+        ));
+    }
+
+    #[test]
+    fn location_shortcuts_activate_and_capture_text_when_active() {
+        let unidentified = PhysicalKey::Unidentified(winit::keyboard::NativeKeyCode::Unidentified);
+        let no_key = Key::Unidentified(winit::keyboard::NativeKey::Unidentified);
+
+        assert_eq!(
+            location_command_for_key_parts(
+                true,
+                false,
+                &PhysicalKey::Code(KeyCode::KeyL),
+                &no_key,
+                &no_key,
+            ),
+            Some(LocationCommand::Activate)
+        );
+        assert_eq!(
+            location_command_for_key_parts(
+                true,
+                false,
+                &PhysicalKey::Code(KeyCode::KeyD),
+                &no_key,
+                &no_key,
+            ),
+            Some(LocationCommand::Activate)
+        );
+        assert_eq!(
+            location_command_for_key_parts(
+                false,
+                false,
+                &PhysicalKey::Code(KeyCode::F6),
+                &no_key,
+                &no_key,
+            ),
+            Some(LocationCommand::Activate)
+        );
+        assert_eq!(
+            location_command_for_key_parts(
+                false,
+                true,
+                &unidentified,
+                &Key::Character("/".into()),
+                &no_key,
+            ),
+            Some(LocationCommand::Insert("/".to_string()))
+        );
+        assert_eq!(
+            location_command_for_key_parts(
+                false,
+                true,
+                &PhysicalKey::Code(KeyCode::Tab),
+                &no_key,
+                &no_key,
+            ),
+            Some(LocationCommand::Complete)
+        );
+        assert_eq!(
+            location_command_for_key_parts(
+                false,
+                true,
+                &PhysicalKey::Code(KeyCode::Escape),
+                &no_key,
+                &no_key,
+            ),
+            Some(LocationCommand::Cancel)
+        );
+        assert_eq!(
+            location_command_for_key_parts(
+                true,
+                true,
+                &PhysicalKey::Code(KeyCode::KeyR),
+                &Key::Character("r".into()),
+                &Key::Character("r".into()),
+            ),
+            Some(LocationCommand::Ignore)
+        );
+    }
+
+    #[test]
+    fn location_draft_replaces_completes_and_cancels() {
+        let temp = test_dir("location-draft");
+        std::fs::create_dir_all(temp.join("alpha")).unwrap();
+
+        let mut scene = test_scene(vec![test_entry("alpha", true)], ShellViewMode::Icons);
+        scene.path = temp.clone();
+        let size = PhysicalSize::new(420, 260);
+
+        assert!(scene.apply_location_command(LocationCommand::Activate, size));
+        let initial_value = temp.display().to_string();
+        assert_eq!(scene.location_draft_value(), Some(initial_value.as_str()));
+
+        assert!(scene.apply_location_command(LocationCommand::Insert("a".to_string()), size));
+        assert_eq!(scene.location_draft_value(), Some("a"));
+
+        assert!(scene.apply_location_command(LocationCommand::Complete, size));
+        assert_eq!(scene.location_draft_value(), Some("alpha/"));
+        assert_eq!(scene.resolved_location_draft(), Some(temp.join("alpha/")));
+
+        assert!(scene.apply_location_command(LocationCommand::Cancel, size));
+        assert_eq!(scene.location_draft_value(), None);
+        assert!(!scene.is_location_editing());
+
+        let _ = std::fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn location_editing_expands_path_bar_hit_target() {
+        let mut scene = test_scene(vec![test_entry("alpha", false)], ShellViewMode::Icons);
+        scene.path = PathBuf::from("/x");
+        let size = PhysicalSize::new(900, 360);
+
+        let inactive = scene
+            .path_bar_rect(size)
+            .expect("inactive path bar should be visible");
+        assert!(scene.apply_location_command(LocationCommand::Activate, size));
+        let active = scene
+            .path_bar_rect(size)
+            .expect("active path bar should be visible");
+
+        assert!(active.width > inactive.width);
+        assert!(scene.path_bar_contains_screen_point(
+            ViewPoint {
+                x: active.right() - 2.0,
+                y: active.y + 2.0,
+            },
+            size
         ));
     }
 

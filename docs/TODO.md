@@ -113,7 +113,10 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
   Esc 清空并关闭，layout/hit-test/hover/selection/select-all/keyboard navigation 均通过
   filtered model-index projection 路由；dotfile visibility 已进入 shell-owned retained
   projection，默认隐藏 hidden entries，`Ctrl/Meta+H` 或 top-bar `Hidden` toggle 可显示，
-  selection 会随可见性切换保留或裁剪。
+  selection 会随可见性切换保留或裁剪；最小 shell-owned location edit mode 已可用，
+  `Ctrl/Meta+L`、`Ctrl/Meta+D`、`F6` 或点击 top path bar 激活，首次输入替换当前 path
+  draft，Backspace 编辑，Tab 复用 core `complete_location_input()` 补全，Enter 复用
+  core `resolve_location_input()` 并通过 retained navigation/history path 提交，Esc 取消。
   日志已输出
   `--view icons|compact|details`，默认仍是 Icons baseline，Compact 使用 core
   `CompactLayout`，Details 已有 shell-owned row projection、固定 header 和
@@ -136,13 +139,13 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
 - [~] Phase 1：Compact、Icons 和 Details scene projection 已开始接入。`/etc` 已可通过
   `--view` 在三种模式下渲染首帧；Compact 走 core `CompactLayout`，Details 走 shell-owned
   row projection。滚动、hover、keyboard navigation、directory activation/history navigation、
-  runtime mode switching、projection zoom、reload、filtering、hidden-file visibility、selection 和全选/清空快捷键已通过 shared
+  runtime mode switching、projection zoom、reload、location editing、filtering、hidden-file visibility、selection 和全选/清空快捷键已通过 shared
   `ShellLayout` abstraction 走 retained geometry；
   glyph-level text zoom policy、`~/Downloads` smoke、手动交互 smoke
   和更完整 Details column/metadata parity 仍待完成。
 - [ ] Phase 2：把 Phase 0 初版 icon atlas 提升为预算化 semantic icon work，并实现 thumbnail texture retention、text shaping cache、glyph atlas policy 和 eviction telemetry。Cold glyph/icon work 必须 visible-first 且预算化。
 - [ ] Phase 3：把剩余 pointer routing、context target selection、directory hover、Places hover 和 drag/drop target lookup 移到 shell-owned hit testing。
-- [~] Phase 4：实现 Places、toolbar、location bar、filter bar、status bar、context menus、dialogs 和 chooser mode，使常见文件管理器工作流不需要启动 GPUI shell。当前已有底部最小 status bar 和窄实现 filter bar；Places、toolbar、location bar、完整 filter 文本边界、menus、dialogs 和 chooser mode 仍待迁移。
+- [~] Phase 4：实现 Places、toolbar、location bar、filter bar、status bar、context menus、dialogs 和 chooser mode，使常见文件管理器工作流不需要启动 GPUI shell。当前已有底部最小 status bar、窄实现 filter bar 和窄实现 location edit mode；Places、toolbar、完整 location/filter 文本边界、menus、dialogs 和 chooser mode 仍待迁移。
 - [ ] Phase 5：同场景证据证明行为对齐，且 frame cost 比 GPUI Fika 和相关 cosmic-files 基线更好或更可预测后，再把新 shell 提升为默认。
 
 ### GPUI Item View 自绘 / Dolphin retained item 对齐（历史基线）
