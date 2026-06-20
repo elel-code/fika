@@ -9,11 +9,10 @@ use gpui::{
 };
 
 use crate::FikaApp;
-use crate::ui::icons::{FileIconSnapshot, theme_icon_image_size_px};
+use crate::ui::icons::{FileIconSnapshot, IconPaintMode, theme_icon_image_size_px};
 use crate::ui::retained::{RetainedImageLayerState, RetainedImageRequest, RetainedShapeCache};
 
 use super::details::{DetailsColumn, DetailsColumnKind};
-use super::image_layer::icon_paint_mode_for_selected;
 use super::image_layer::{
     ItemImageFallbackPaintState, paint_item_image_fallback, paint_theme_icon_image,
     theme_icon_placeholder_fallback,
@@ -542,7 +541,6 @@ fn details_visual_prepaint_item(
                     icon: details_visual_icon_prepaint(
                         icon_rect,
                         icon,
-                        item.selected,
                         image_state.as_mut().map(|state| &mut **state),
                         app,
                         window,
@@ -631,7 +629,6 @@ fn details_visual_text_rect(item: &DetailsVisualLayerItem, cell: &DetailsVisualC
 fn details_visual_icon_prepaint(
     rect: ViewRect,
     icon: &FileIconSnapshot,
-    selected: bool,
     image_state: Option<&mut RetainedImageLayerState>,
     app: &WeakEntity<FikaApp>,
     window: &mut Window,
@@ -643,7 +640,7 @@ fn details_visual_icon_prepaint(
             icon,
             theme_icon_image_size_px(rect.width, rect.height),
             window.scale_factor(),
-            icon_paint_mode_for_selected(selected),
+            IconPaintMode::Normal,
         )?;
         debug_assert_eq!(request.source_path(), path);
         let load = state.load_request_or_retained_with_outcome(request, app, window, cx);

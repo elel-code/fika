@@ -2,12 +2,12 @@ use gpui::prelude::*;
 use gpui::{Context, Div, ParentElement, Stateful, Window, div, px};
 
 use crate::FikaApp;
-use crate::ui::icons::theme_icon_image_size_px;
+use crate::ui::icons::{IconPaintMode, theme_icon_image_size_px};
 use crate::ui::retained::{RetainedImageRequest, RetainedThemeIconCacheRefreshStats};
 
 use super::details::{details_content_height, details_content_width};
 use super::details_shell::details_table;
-use super::image_layer::{icon_paint_mode_for_selected, item_image_layer_view};
+use super::image_layer::item_image_layer_view;
 use super::interaction::item_interaction_layer_view;
 use super::item_shell::item_tile;
 use super::renderer_policy::{
@@ -587,7 +587,7 @@ pub(super) fn item_theme_icon_cache_refresh_request(
         &content.icon,
         theme_icon_image_size_px(item.layout.icon_rect.width, item.layout.icon_rect.height),
         scale_factor,
-        icon_paint_mode_for_selected(item.visual.selected),
+        IconPaintMode::Normal,
     )
 }
 
@@ -606,6 +606,6 @@ pub(super) fn details_theme_icon_cache_refresh_request(
             f32::from_bits(item.geometry.icon_size),
         ),
         scale_factor,
-        icon_paint_mode_for_selected(item.visual.selected),
+        IconPaintMode::Normal,
     )
 }

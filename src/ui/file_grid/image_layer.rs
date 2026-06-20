@@ -72,7 +72,7 @@ pub(super) fn item_image_layer_items_for_policy(
                 thumbnail_path: content.thumbnail_path.clone(),
                 icon: content.icon.clone(),
                 fallback_marker: content.fallback_marker.clone(),
-                mode: icon_paint_mode_for_selected(item.visual.selected),
+                mode: IconPaintMode::Normal,
             })
         })
         .collect()
@@ -136,14 +136,6 @@ fn item_image_layer_retained_request(
         scale_factor,
         item.mode,
     )
-}
-
-pub(super) fn icon_paint_mode_for_selected(selected: bool) -> IconPaintMode {
-    if selected {
-        IconPaintMode::Selected
-    } else {
-        IconPaintMode::Normal
-    }
 }
 
 fn item_image_theme_icon_size_px(item: &ItemImageLayerItem) -> u32 {

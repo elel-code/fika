@@ -358,6 +358,32 @@ fn theme_icon_items_enter_image_layer_without_readiness_handoff() {
 }
 
 #[test]
+fn selected_item_theme_icon_request_uses_normal_mode() {
+    let mut cache = ItemPaintSlotCache::default();
+    let mut item = test_visible_item(
+        1,
+        ItemId(9),
+        "selected.desktop",
+        test_item_layout(0.0),
+        true,
+    );
+    item.icon.path = Some(Arc::from(Path::new("/tmp/selected.svg")));
+    item.icon.icon_name = Arc::from("selected-icon");
+
+    let projection = cache.project_file_grid_snapshot(icons_snapshot(vec![item]), None);
+    let FileGridRenderSnapshot::Icons { items, .. } = projection.snapshot else {
+        panic!("expected icons snapshot");
+    };
+    let request = item_theme_icon_cache_refresh_request(&items[0], 1.0)
+        .expect("selected theme icon should have retained request");
+
+    assert_eq!(
+        request.theme_icon_key().map(|key| key.mode),
+        Some(IconPaintMode::Normal)
+    );
+}
+
+#[test]
 fn retained_image_source_uses_thumbnail_path_before_icon_name() {
     let thumbnail: Arc<Path> = Arc::from(Path::new("/tmp/thumbs/photo.png"));
     let icon = FileIconSnapshot {

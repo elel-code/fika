@@ -15,6 +15,7 @@ pub(crate) enum IconColorScheme {
 pub(crate) enum IconPaintMode {
     Normal,
     Active,
+    #[allow(dead_code)]
     Selected,
 }
 
