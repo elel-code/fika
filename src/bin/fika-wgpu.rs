@@ -14,13 +14,14 @@ use cosmic_text::{
 };
 use fika_core::{
     CompactLayout, CompactLayoutOptions, Entry, FileClipboardRole, FileTransferMode, IconsLayout,
-    IconsLayoutOptions, NETWORK_ROOT_LABEL, NameFilter, PaneId, TransferTaskResult, UserPlace,
-    ViewPoint, ViewRect, ViewSize, complete_location_input, decode_file_clipboard_text,
-    default_user_places_path, encode_file_clipboard_text, file_ops, format_modified_secs,
-    format_size, home_dir, is_network_path, load_place_order, load_user_places, network_root_path,
-    network_uri_from_path, paste_text_result, place_order_path_for_user_places_path,
-    read_entries_sync, resolve_location_input, save_place_order, save_user_places,
-    transfer_paths_result,
+    IconsLayoutOptions, NETWORK_ROOT_LABEL, NameFilter, PaneId, TransferTaskResult,
+    TrashViewOperation, TrashViewOperationResult, UserPlace, ViewPoint, ViewRect, ViewSize,
+    complete_location_input, decode_file_clipboard_text, default_user_places_path,
+    encode_file_clipboard_text, file_ops, format_modified_secs, format_size, home_dir,
+    is_network_path, load_place_order, load_user_places, network_root_path, network_uri_from_path,
+    paste_text_result, place_order_path_for_user_places_path, read_entries_sync,
+    resolve_location_input, save_place_order, save_user_places, transfer_paths_result,
+    trash_view_operation_result,
 };
 use gio::prelude::FileExt;
 use raw_window_handle::{HasDisplayHandle, RawDisplayHandle};
@@ -944,6 +945,11 @@ impl FikaWgpuApp {
             }
             ShellContextMenuAction::AddToPlaces => self.add_context_target_to_places(event_loop),
             ShellContextMenuAction::RemovePlace => self.remove_context_place(event_loop),
+            ShellContextMenuAction::RestoreFromTrash
+            | ShellContextMenuAction::DeletePermanently
+            | ShellContextMenuAction::EmptyTrash => {
+                self.perform_trash_view_context_action(event_loop, action)
+            }
             ShellContextMenuAction::MoveToTrash => self.move_context_target_to_trash(event_loop),
             ShellContextMenuAction::Copy | ShellContextMenuAction::Cut => {
                 match self.scene.context_target_file_clipboard_request(action) {
@@ -1001,6 +1007,35 @@ impl FikaWgpuApp {
                         .as_ref()
                         .map(ShellContextTarget::kind)
                         .unwrap_or("none")
+                );
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+            }
+        }
+    }
+
+    fn perform_trash_view_context_action(
+        &mut self,
+        event_loop: &dyn ActiveEventLoop,
+        action: ShellContextMenuAction,
+    ) {
+        let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
+            return;
+        };
+        match self.scene.perform_trash_view_context_action(action, size) {
+            Ok(result) if result.success_count > 0 => {
+                self.present_scene_change(event_loop, action.as_str())
+            }
+            Ok(_) => {
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+            }
+            Err(error) => {
+                eprintln!(
+                    "[fika-wgpu] trash-view-error action={} {error}",
+                    action.as_str()
                 );
                 if let Some(window) = self.window.as_ref() {
                     window.request_redraw();
@@ -2087,6 +2122,9 @@ enum ShellContextMenuAction {
     CopyLocation,
     Rename,
     MoveToTrash,
+    RestoreFromTrash,
+    DeletePermanently,
+    EmptyTrash,
     AddToPlaces,
     CreateNew,
     Paste,
@@ -2106,6 +2144,9 @@ impl ShellContextMenuAction {
             Self::CopyLocation => "Copy Location",
             Self::Rename => "Rename",
             Self::MoveToTrash => "Move to Trash",
+            Self::RestoreFromTrash => "Restore From Trash",
+            Self::DeletePermanently => "Delete Permanently",
+            Self::EmptyTrash => "Empty Trash",
             Self::AddToPlaces => "Add to Places",
             Self::CreateNew => "Create New",
             Self::Paste => "Paste",
@@ -2125,6 +2166,9 @@ impl ShellContextMenuAction {
             Self::CopyLocation => "copy-location",
             Self::Rename => "rename",
             Self::MoveToTrash => "move-to-trash",
+            Self::RestoreFromTrash => "restore-from-trash",
+            Self::DeletePermanently => "delete-permanently",
+            Self::EmptyTrash => "empty-trash",
             Self::AddToPlaces => "add-to-places",
             Self::CreateNew => "create-new",
             Self::Paste => "paste",
@@ -2175,6 +2219,12 @@ fn context_menu_actions(target: &ShellContextTarget) -> &'static [ShellContextMe
         ShellContextMenuAction::MoveToTrash,
         ShellContextMenuAction::Properties,
     ];
+    const TRASH_ITEM_ACTIONS: &[ShellContextMenuAction] = &[
+        ShellContextMenuAction::RestoreFromTrash,
+        ShellContextMenuAction::Copy,
+        ShellContextMenuAction::DeletePermanently,
+        ShellContextMenuAction::Properties,
+    ];
     const BLANK_ACTIONS: &[ShellContextMenuAction] = &[
         ShellContextMenuAction::CreateNew,
         ShellContextMenuAction::AddToPlaces,
@@ -2183,8 +2233,20 @@ fn context_menu_actions(target: &ShellContextTarget) -> &'static [ShellContextMe
         ShellContextMenuAction::Refresh,
         ShellContextMenuAction::Properties,
     ];
+    const TRASH_BLANK_ACTIONS: &[ShellContextMenuAction] = &[
+        ShellContextMenuAction::EmptyTrash,
+        ShellContextMenuAction::SelectAll,
+        ShellContextMenuAction::Refresh,
+        ShellContextMenuAction::Properties,
+    ];
     const PLACE_ACTIONS: &[ShellContextMenuAction] = &[
         ShellContextMenuAction::Open,
+        ShellContextMenuAction::CopyLocation,
+        ShellContextMenuAction::Properties,
+    ];
+    const TRASH_PLACE_ACTIONS: &[ShellContextMenuAction] = &[
+        ShellContextMenuAction::Open,
+        ShellContextMenuAction::EmptyTrash,
         ShellContextMenuAction::CopyLocation,
         ShellContextMenuAction::Properties,
     ];
@@ -2195,9 +2257,16 @@ fn context_menu_actions(target: &ShellContextTarget) -> &'static [ShellContextMe
         ShellContextMenuAction::Properties,
     ];
     match target {
+        ShellContextTarget::Item { path, .. } if file_ops::is_in_trash_files_dir(path) => {
+            TRASH_ITEM_ACTIONS
+        }
         ShellContextTarget::Item { is_dir: true, .. } => ITEM_DIR_ACTIONS,
         ShellContextTarget::Item { .. } => ITEM_FILE_ACTIONS,
+        ShellContextTarget::Blank { path } if file_ops::is_trash_files_dir(path) => {
+            TRASH_BLANK_ACTIONS
+        }
         ShellContextTarget::Blank { .. } => BLANK_ACTIONS,
+        ShellContextTarget::Place { trash: true, .. } => TRASH_PLACE_ACTIONS,
         ShellContextTarget::Place { editable: true, .. } => EDITABLE_PLACE_ACTIONS,
         ShellContextTarget::Place { .. } => PLACE_ACTIONS,
     }
@@ -3710,6 +3779,95 @@ impl ShellScene {
     fn context_target_trash_paths(&self) -> Result<Vec<PathBuf>, String> {
         self.context_target_item_paths()?
             .ok_or_else(|| "no item context target to move to trash".to_string())
+    }
+
+    fn context_target_trash_view_operation(
+        &self,
+        action: ShellContextMenuAction,
+    ) -> Result<(TrashViewOperation, Vec<PathBuf>), String> {
+        match action {
+            ShellContextMenuAction::RestoreFromTrash => Ok((
+                TrashViewOperation::Restore {
+                    conflict_policy: file_ops::TrashRestoreConflictPolicy::Skip,
+                },
+                self.context_target_trash_view_item_paths()?,
+            )),
+            ShellContextMenuAction::DeletePermanently => Ok((
+                TrashViewOperation::DeletePermanently,
+                self.context_target_trash_view_item_paths()?,
+            )),
+            ShellContextMenuAction::EmptyTrash => {
+                if self.context_target_can_empty_trash() {
+                    Ok((TrashViewOperation::Empty, Vec::new()))
+                } else {
+                    Err("Empty Trash is only available from Trash".to_string())
+                }
+            }
+            _ => Err(format!(
+                "action {} is not a Trash view action",
+                action.as_str()
+            )),
+        }
+    }
+
+    fn context_target_trash_view_item_paths(&self) -> Result<Vec<PathBuf>, String> {
+        let paths = self
+            .context_target_item_paths()?
+            .ok_or_else(|| "no Trash item context target".to_string())?;
+        if paths.is_empty() {
+            return Err("no Trash item context target".to_string());
+        }
+        if paths.iter().any(|path| {
+            file_ops::is_trash_files_dir(path) || !file_ops::is_in_trash_files_dir(path)
+        }) {
+            return Err("Trash item action is only available for items inside Trash".to_string());
+        }
+        Ok(paths)
+    }
+
+    fn context_target_can_empty_trash(&self) -> bool {
+        match self.context_target.as_ref() {
+            Some(ShellContextTarget::Blank { path }) => file_ops::is_trash_files_dir(path),
+            Some(ShellContextTarget::Place { trash, .. }) => *trash,
+            _ => false,
+        }
+    }
+
+    fn perform_trash_view_context_action(
+        &mut self,
+        action: ShellContextMenuAction,
+        size: PhysicalSize<u32>,
+    ) -> Result<TrashViewOperationResult, String> {
+        let (operation, paths) = self.context_target_trash_view_operation(action)?;
+        let result = trash_view_operation_result(WGPU_SHELL_PANE_ID, operation, paths);
+        self.trash_changes += 1;
+        eprintln!(
+            "[fika-wgpu] trash-view action={} success={} failure={} conflicts={} changes={}",
+            action.as_str(),
+            result.success_count,
+            result.failure_count,
+            result.restore_conflicts.len(),
+            self.trash_changes
+        );
+        for conflict in &result.restore_conflicts {
+            eprintln!(
+                "[fika-wgpu] trash-restore-conflict original={} trash={}",
+                conflict.original_path.display(),
+                conflict.trash_path.display()
+            );
+        }
+
+        if result.success_count > 0 {
+            self.context_target = None;
+            self.context_menu = None;
+            self.properties_overlay = None;
+            self.create_dialog = None;
+            self.rename_dialog = None;
+            self.rubber_band = None;
+            self.selection.clear();
+            self.reload_current_path(size)?;
+        }
+        Ok(result)
     }
 
     fn move_context_target_to_trash(
@@ -9963,6 +10121,63 @@ mod tests {
     }
 
     #[test]
+    fn trash_context_menu_uses_restore_delete_and_empty_actions() {
+        let trash_item = ShellContextTarget::Item {
+            index: 0,
+            path: file_ops::trash_files_dir().join("trashed.txt"),
+            is_dir: false,
+            selection_count: 1,
+        };
+        assert_eq!(
+            context_menu_actions(&trash_item),
+            &[
+                ShellContextMenuAction::RestoreFromTrash,
+                ShellContextMenuAction::Copy,
+                ShellContextMenuAction::DeletePermanently,
+                ShellContextMenuAction::Properties,
+            ]
+        );
+
+        let trash_blank = ShellContextTarget::Blank {
+            path: file_ops::trash_files_dir(),
+        };
+        assert_eq!(
+            context_menu_actions(&trash_blank),
+            &[
+                ShellContextMenuAction::EmptyTrash,
+                ShellContextMenuAction::SelectAll,
+                ShellContextMenuAction::Refresh,
+                ShellContextMenuAction::Properties,
+            ]
+        );
+
+        let trash_place = ShellContextTarget::Place {
+            index: 0,
+            label: "Trash".to_string(),
+            path: file_ops::trash_files_dir(),
+            group: "",
+            network: false,
+            trash: true,
+            root: false,
+            editable: false,
+        };
+        assert_eq!(
+            context_menu_actions(&trash_place),
+            &[
+                ShellContextMenuAction::Open,
+                ShellContextMenuAction::EmptyTrash,
+                ShellContextMenuAction::CopyLocation,
+                ShellContextMenuAction::Properties,
+            ]
+        );
+
+        let normal_blank = ShellContextTarget::Blank {
+            path: PathBuf::from("/tmp"),
+        };
+        assert!(!context_menu_actions(&normal_blank).contains(&ShellContextMenuAction::EmptyTrash));
+    }
+
+    #[test]
     fn build_shell_places_applies_persistent_primary_order() {
         let root = test_dir("build-shell-places-order");
         let places_path = root.join("places.xbel");
@@ -11116,6 +11331,125 @@ mod tests {
                 .contains("remote trash")
         );
         assert_eq!(scene.trash_changes, 0);
+    }
+
+    #[test]
+    fn trash_view_operation_requests_validate_context_targets() {
+        let mut scene = test_scene(vec![test_entry("plain.txt", false)], ShellViewMode::Icons);
+        let trash_path = file_ops::trash_files_dir().join("plain.txt");
+        scene.context_target = Some(ShellContextTarget::Item {
+            index: 0,
+            path: trash_path.clone(),
+            is_dir: false,
+            selection_count: 1,
+        });
+        let (operation, paths) = scene
+            .context_target_trash_view_operation(ShellContextMenuAction::RestoreFromTrash)
+            .unwrap();
+        assert!(matches!(operation, TrashViewOperation::Restore { .. }));
+        assert_eq!(paths, vec![trash_path.clone()]);
+
+        let (operation, paths) = scene
+            .context_target_trash_view_operation(ShellContextMenuAction::DeletePermanently)
+            .unwrap();
+        assert_eq!(operation, TrashViewOperation::DeletePermanently);
+        assert_eq!(paths, vec![trash_path]);
+
+        scene.context_target = Some(ShellContextTarget::Blank {
+            path: file_ops::trash_files_dir(),
+        });
+        let (operation, paths) = scene
+            .context_target_trash_view_operation(ShellContextMenuAction::EmptyTrash)
+            .unwrap();
+        assert_eq!(operation, TrashViewOperation::Empty);
+        assert!(paths.is_empty());
+
+        scene.context_target = Some(ShellContextTarget::Item {
+            index: 0,
+            path: PathBuf::from("/tmp/plain.txt"),
+            is_dir: false,
+            selection_count: 1,
+        });
+        assert!(
+            scene
+                .context_target_trash_view_operation(ShellContextMenuAction::RestoreFromTrash)
+                .unwrap_err()
+                .contains("inside Trash")
+        );
+    }
+
+    #[test]
+    fn restore_trash_view_action_restores_test_file_and_reloads() {
+        let root = test_dir("restore-trash-view");
+        fs::create_dir_all(&root).unwrap();
+        let source = root.join("restore-me.txt");
+        fs::write(&source, b"restore").unwrap();
+        let summary = file_ops::trash_paths(std::slice::from_ref(&source));
+        assert_eq!(summary.successes.len(), 1);
+        let trash_path = summary.successes[0].trash_path.clone();
+        let size = PhysicalSize::new(420, 260);
+        let mut scene =
+            ShellScene::load(file_ops::trash_files_dir(), ShellViewMode::Icons).unwrap();
+        scene.context_target = Some(ShellContextTarget::Item {
+            index: 0,
+            path: trash_path.clone(),
+            is_dir: false,
+            selection_count: 1,
+        });
+        scene.context_menu = Some(ShellContextMenu::new(
+            scene.context_target.clone().unwrap(),
+            ViewPoint { x: 8.0, y: 8.0 },
+        ));
+        scene.selection.select_indexes(&[0]);
+
+        let result = scene
+            .perform_trash_view_context_action(ShellContextMenuAction::RestoreFromTrash, size)
+            .unwrap();
+
+        assert_eq!(result.success_count, 1);
+        assert_eq!(result.failure_count, 0);
+        assert!(source.is_file());
+        assert!(!trash_path.exists());
+        assert!(scene.context_target.is_none());
+        assert!(scene.context_menu.is_none());
+        assert_eq!(scene.selection.len(), 0);
+        assert_eq!(scene.trash_changes, 1);
+        assert_eq!(scene.directory_reloads, 1);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn delete_permanently_trash_view_action_deletes_test_file_and_reloads() {
+        let root = test_dir("delete-trash-view");
+        fs::create_dir_all(&root).unwrap();
+        let source = root.join("delete-me.txt");
+        fs::write(&source, b"delete").unwrap();
+        let summary = file_ops::trash_paths(std::slice::from_ref(&source));
+        assert_eq!(summary.successes.len(), 1);
+        let trash_path = summary.successes[0].trash_path.clone();
+        let size = PhysicalSize::new(420, 260);
+        let mut scene =
+            ShellScene::load(file_ops::trash_files_dir(), ShellViewMode::Icons).unwrap();
+        scene.context_target = Some(ShellContextTarget::Item {
+            index: 0,
+            path: trash_path.clone(),
+            is_dir: false,
+            selection_count: 1,
+        });
+
+        let result = scene
+            .perform_trash_view_context_action(ShellContextMenuAction::DeletePermanently, size)
+            .unwrap();
+
+        assert_eq!(result.success_count, 1);
+        assert_eq!(result.failure_count, 0);
+        assert!(!source.exists());
+        assert!(!trash_path.exists());
+        assert_eq!(scene.trash_changes, 1);
+        assert_eq!(scene.directory_reloads, 1);
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

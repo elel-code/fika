@@ -108,8 +108,9 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
   并选中新建条目；item Rename 会打开最小 shell-owned modal，支持 name capture、
   校验、真实 rename/reload 并选中重命名后的条目；item Move to Trash 会解析 clicked
   item 或 multi-selection，拒绝 remote paths，调用 core XDG trash handling 并 reload；
-  item Cut 和 Paste 会拒绝 remote paths；Open With chooser/default-app selection、
-  Open in New Pane、多 MIME `text/uri-list` clipboard export/import 等
+  Trash view context menu 会通过 core `TrashViewOperation` 分派 Restore From Trash、
+  Delete Permanently 和 Empty Trash，并 reload Trash view；item Cut 和 Paste 会拒绝
+  remote paths；Open With chooser/default-app selection、Open in New Pane、多 MIME `text/uri-list` clipboard export/import 等
   其余 action 先记录 pending 日志；
   空白区域左键拖动已通过同一 retained Icons geometry 支持 rubber-band selection，
   普通拖动替换 selection，Shift 追加，Ctrl/Meta 相对按下时的 base selection 做
@@ -175,7 +176,7 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
   和更完整 Details column/metadata parity 仍待完成。
 - [ ] Phase 2：把 Phase 0 初版 icon atlas 提升为预算化 semantic icon work，并实现 thumbnail texture retention、text shaping cache、glyph atlas policy 和 eviction telemetry。Cold glyph/icon work 必须 visible-first 且预算化。
 - [~] Phase 3：把剩余 pointer routing、context target selection、directory hover、Places hover 和 drag/drop target lookup 移到 shell-owned hit testing。当前 file view pane item/blank 右键 context target selection、菜单 row hit testing、Places row hover/left navigation/right-click target/sidebar scrolling 和最小 place menu（含 editable user place Remove）已由 wgpu shell-owned；directory hover、device/place edit/hide/add action dispatch 和 DnD target lookup 仍待迁移。
-- [~] Phase 4：实现 Places、toolbar、location bar、filter bar、status bar、context menus、dialogs 和 chooser mode，使常见文件管理器工作流不需要启动 GPUI shell。当前已有最小 shell-owned Places 侧栏/左键 navigation/独立 sidebar scrolling/最小 Open-Copy Location-Properties-Remove row menu、底部最小 status bar、窄实现 filter bar、窄实现 location edit mode、轻量 item/blank context menu overlay、最小 properties metadata overlay、最小 Create New modal、最小 Rename modal、最小 Move to Trash dispatch、file Open 默认应用分发、item Copy Location Wayland text clipboard 分发、item Copy/Cut 的 Fika URI-list text clipboard 导出，以及 blank Paste 的本地文件/纯文本执行；Open directory、Open file、Copy、Cut、Paste、Copy Location、Refresh、Select All、Properties、最小 Create New、最小 Rename、最小 Move to Trash 已接入 dispatch。更完整 Places actions/devices/DnD、toolbar、完整 location/filter/create-name/rename-name 文本边界、多 MIME `text/uri-list` clipboard export/import、remote paste、Trash view restore/delete/empty、undo、更完整 properties、完整 inline rename、完整 Create New 子菜单/模板、Open With chooser/default-app selection、new-pane actions、dialogs 和 chooser mode 仍待迁移。
+- [~] Phase 4：实现 Places、toolbar、location bar、filter bar、status bar、context menus、dialogs 和 chooser mode，使常见文件管理器工作流不需要启动 GPUI shell。当前已有最小 shell-owned Places 侧栏/左键 navigation/独立 sidebar scrolling/最小 Open-Copy Location-Properties-Remove row menu、底部最小 status bar、窄实现 filter bar、窄实现 location edit mode、轻量 item/blank context menu overlay、最小 properties metadata overlay、最小 Create New modal、最小 Rename modal、最小 Move to Trash dispatch、最小 Trash view Restore/Delete Permanently/Empty Trash dispatch、file Open 默认应用分发、item Copy Location Wayland text clipboard 分发、item Copy/Cut 的 Fika URI-list text clipboard 导出，以及 blank Paste 的本地文件/纯文本执行；Open directory、Open file、Copy、Cut、Paste、Copy Location、Refresh、Select All、Properties、最小 Create New、最小 Rename、最小 Move to Trash、最小 Trash view actions 已接入 dispatch。更完整 Places actions/devices/DnD、toolbar、完整 location/filter/create-name/rename-name 文本边界、多 MIME `text/uri-list` clipboard export/import、remote paste、Trash restore conflict replacement/confirmation、undo、更完整 properties、完整 inline rename、完整 Create New 子菜单/模板、Open With chooser/default-app selection、new-pane actions、dialogs 和 chooser mode 仍待迁移。
 - [ ] Phase 5：同场景证据证明行为对齐，且 frame cost 比 GPUI Fika 和相关 cosmic-files 基线更好或更可预测后，再把新 shell 提升为默认。
 
 ### GPUI Item View 自绘 / Dolphin retained item 对齐（历史基线）

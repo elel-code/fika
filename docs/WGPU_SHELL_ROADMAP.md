@@ -161,11 +161,14 @@ Current checkpoint:
   reload, and selection of the renamed entry. Move to Trash now resolves the
   context target to either the clicked item or the active multi-selection,
   rejects remote paths explicitly, calls core XDG trash handling, reloads the
-  pane, and clears stale context state. Cut and Paste reject remote paths
-  explicitly. Open With chooser/default-application
-  selection, multi-MIME `text/uri-list` clipboard export/import, Trash view
-  restore/delete/empty flows, undo, richer properties, full inline rename, full
-  Create New submenus/templates, and new-pane dispatch remain Phase 4 work.
+  pane, and clears stale context state. Trash view context menus now dispatch
+  Restore From Trash, Delete Permanently, and Empty Trash through the core
+  `TrashViewOperation` path, then reload the Trash view and clear stale context
+  and selection state. Cut and Paste reject remote paths explicitly. Open With
+  chooser/default-application selection, multi-MIME `text/uri-list` clipboard
+  export/import, Trash restore conflict replacement/confirmation, undo, richer
+  properties, full inline rename, full Create New submenus/templates, and
+  new-pane dispatch remain Phase 4 work.
 - A first shell-owned Places sidebar is now drawn below the top bar. It builds
   Home, existing XDG directories, Trash, Fika user places, primary
   `places-order.xml`, Network root, network bookmarks, and Root from public
@@ -334,11 +337,12 @@ mutation. Filter, location, create-name, and rename-name text editing remain
 intentionally narrow until the full IME/caret/selection text boundary is
 migrated; context menu dispatch currently covers Open directory, Refresh,
 Select All, Properties, minimal Create New, minimal Rename, minimal Move to
-Trash, Copy/Cut/Copy Location, Paste, and the minimal Places row Open/Copy
-Location/Properties/Remove menu, while richer Places actions/devices/DnD, Trash
-view restore/delete/empty flows, undo, richer properties, full inline rename,
-full Create New submenus/templates, Open With/default-app selection, and
-new-pane actions remain pending.
+Trash, Trash view Restore/Delete Permanently/Empty Trash, Copy/Cut/Copy
+Location, Paste, and the minimal Places row Open/Copy Location/Properties/Remove
+menu, while richer Places actions/devices/DnD, Trash restore conflict
+replacement/confirmation, undo, richer properties, full inline rename, full
+Create New submenus/templates, Open With/default-app selection, and new-pane
+actions remain pending.
 
 Acceptance:
 
