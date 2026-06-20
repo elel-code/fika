@@ -1,0 +1,225 @@
+> 本文是 [WGPU_SHELL_ROADMAP.md](WGPU_SHELL_ROADMAP.md) 的简体中文版本。
+
+# Fika winit/wgpu Shell 路线图
+
+本文档是 Fika 当前活跃 UI 方向。GPUI 应用保留为兼容实现和行为基线，新 Linux
+专用 shell 经过验证后再提升为默认。新的 UI 架构工作应面向 Fika 专用的
+`winit + wgpu` runtime，而不是继续扩展 GPUI element-tree 迁移。
+
+目标不是采用另一个通用 widget toolkit。Fika 应借用 iced/COSMIC 生态正在验证的
+Linux windowing 栈，然后围绕自己的 retained 数据建立窄口径文件管理器 renderer、
+scene model、input router 和 cache policy。
+
+## 决策
+
+Fika 是 Linux 独占应用。这样就失去了在热路径保留跨平台 UI framework 的主要理由。
+文件视图、Places 侧栏、selection、hover、drag/drop routing、zoom、thumbnail、
+icon/text cache 都足够专用；继续通过 GPUI 模仿 Dolphin 的成本已经高于拥有一套
+专用 runtime。
+
+新的 shell 应使用：
+
+- iced/COSMIC 栈中的 `winit`，而不是随意选择上游 windowing 依赖。本地 COSMIC
+  参考通过 `pop-os/winit` tag `cosmic-0.14` 解析 `winit`。
+- 官方 crates.io `wgpu` 作为 render backend。COSMIC 解析到的 `wgpu` 版本可作为兼容性
+  参考，但 Fika 应直接依赖上游 `wgpu`，而不是继承 framework 或 editor fork。
+- 现有 Fika core modules：listing、operations、thumbnails、MIME、Places、
+  devices、trash、portal 和 privileged-helper 行为。
+- 现有 retained file-grid 和 Places model 作为迁移输入，而不是作为 GPUI 专属设计约束。
+
+不要把主 shell 做成 libcosmic/iced widget tree。它们对 Linux windowing、Wayland、
+DnD、clipboard、text 和 theme integration 很有参考价值，但 Fika 的主 UI 应是专用
+文件管理器 surface。
+
+选择 iced/COSMIC 这条 `winit` 路径是有意为之。对 Fika 的目标环境来说，它比单独跟随
+上游 `winit` 更有价值，因为它被真实 Linux 桌面应用持续验证，并承载 iced/libcosmic
+runtime 所需的集成假设：Wayland window 和 popup 行为、clipboard 和 drag/drop 管线、
+raw-window-handle/wgpu surface 集成，以及桌面会话边界情况。Fika 应复用这层经过验证的
+windowing layer，同时避开其上方的通用 widget tree。
+
+## 为什么它有机会超过 GPUI 和 cosmic-files
+
+Fika 的问题比通用桌面 UI framework 更窄：
+
+- 文件网格可以按可见 slot 做少量 GPU batch，而不是构建大量独立 row/item widget。
+- Layout、hit testing、paint command generation 和 input routing 可以共享同一份
+  retained geometry projection。
+- Scroll 和 zoom 可以先更新 viewport state，再把 thumbnail、icon、text-shape 和
+  glyph 等昂贵工作按 visible-first 预算推进。
+- MIME/theme icon、thumbnail 和 glyph atlas 可以按文件管理器语义键控，而不是按
+  widget/image handle 生命周期键控。
+- Places、Compact、Icons 和 Details 可以共享 slot、dirty-state、cache 和 hit-test
+  primitive。
+- Linux-only clipboard、URI-list、Wayland DnD、portal、GIO/GVfs 和 XDG 行为可以保持
+  窄实现并直接测试。
+
+代价是显式所有权。Fika 必须拥有 frame scheduling、GPU resources、text cache policy、
+focus、IME 边界、popup、clipboard、DnD 和 accessibility 规划。这个代价可以接受，
+因为这些部分都可以围绕 Fika 的文件管理器工作流实现，而不需要服务通用 toolkit。
+
+## 架构目标
+
+```text
+core model -> retained UI model -> scene projection -> GPU command batches
+          \-> input/hit-test routing -> file-manager actions
+```
+
+Core 保持 UI-neutral。它不能依赖 `winit`、`wgpu`、window handle 或 renderer resource。
+
+Shell 拥有：
+
+- Window lifecycle 和 event-loop integration。
+- Pane、Places、overlay、popup 和 chooser scene state。
+- File slot、Details row、Places row、scrollbar、rubber-band selection、splitter
+  和 context target 的 retained geometry。
+- Hit testing 和 pointer/keyboard routing。
+- Draw command generation、batching、clipping、transform 和 invalidation。
+- Icon、thumbnail、mask 和 UI asset 的 texture atlas。
+- 通过成熟 text crates 集成 text shaping/raster cache。不要自己实现 Unicode shaping、
+  bidi、fallback 或 IME 文本编辑。
+- 用 shell-native frame、cache、atlas、batch 和 hit-test counters 替代 GPUI
+  renderer-policy logs。
+
+## 迁移阶段
+
+### Phase 0：Shell Spike
+
+新增独立实验二进制，暂定 `fika-wgpu`，不删除 GPUI binary。它应打开窗口、初始化
+`wgpu`、驱动现有 directory listing model，并用最小 Compact view 渲染 `/etc`。
+
+当前 checkpoint：
+
+- `src/bin/fika-wgpu.rs` 已作为独立 binary 存在。
+- 接受可选 path 参数，默认使用当前目录。
+- 通过 `fika_core::read_entries_sync` 读取目录 entries。
+- 通过现有 `IconsLayout` retained geometry 投影条目。
+- 渲染顶部 path bar、可见 item 背景、active XDG icon theme 可解析时的真实文件/文件夹
+  theme icon、miss 时的 fallback 文件/文件夹 icon 形状，以及真实可见文件名。文字通过
+  `cosmic-text` 做 shaping/rasterization，再上传临时 per-frame RGBA atlas，由一个
+  `wgpu` textured quad batch 绘制。
+- 为可见文件名/path text 保留 bounded persistent label raster cache，按 text、size 和
+  color 键控。per-frame atlas 现在打包 cached label raster，不再每次 redraw 都重新
+  shape/rasterize 所有可见 label。
+- 从 XDG、GTK 和 KDE theme settings 解析 MIME/theme icon；PNG/WebP/JPEG/BMP/GIF/ICO
+  通过 `image` 光栅化，SVG 通过 `usvg/resvg` 光栅化；可见 icon 打包到 per-frame RGBA
+  icon atlas，并按 theme icon file path 和 size 保留 bounded persistent icon raster cache。
+- 鼠标滚轮更新 retained viewport state。
+- 实验 binary 支持 `--view icons|compact|details`。Icons 仍是默认 baseline；
+  Compact 使用 core `CompactLayout`；Details 现在有 shell-owned row projection、
+  固定 header，以及 Name/Size/Modified 三列。同一组模式也可用 `1/2/3`、
+  `Ctrl/Meta+1/2/3` 或 fallback `F1/F2/F3` 在运行时切换；切换时会 clamp 当前
+  scroll axis、清理 transient rubber-band state、从 retained geometry 刷新 hover、
+  更新窗口标题，并立即输出 `[fika-wgpu] view-mode=...` 日志。
+- Pointer move/leave 和左键点击现在通过 shell-owned retained hit testing 路由。Spike
+  按 model index 跟踪 hovered item、单选、Ctrl/Meta toggle selection 和 Shift range
+  selection，并从同一 slot projection 绘制 hover/selection 状态。
+- 空白区域左键拖动现在通过同一 retained Icons geometry 执行 rubber-band selection。
+  普通拖动替换 selection，Shift 追加，Ctrl/Meta 会相对按下时的 base selection 做
+  toggle，并用 clipped GPU overlay 绘制框选矩形。
+- Keyboard navigation 现在通过同一 retained selection state 处理 Arrow、Home/End 和
+  Page Up/Down。Shift 会扩展当前 range，focus item 会滚入视口。
+- `[fika-wgpu]` 日志包含 view mode、path、entry count、visible item count、quad count、draw
+  batch count、selected count、hovered item index、active rubber-band state、
+  hit-test/selection/keyboard navigation/rubber-band/view-switch counters、icon count、icon
+  cache hit/miss count、icon cache bytes、icon atlas bytes、icon resolve/raster time、
+  text label count、text cache hit/miss count、text cache bytes、text atlas bytes、
+  layout time、text raster time、render time 和 `scroll_x` / `scroll_y` offsets。
+- 本地目标 desktop session 中，`timeout 4s target/debug/fika-wgpu --view
+  icons|compact|details /etc` smoke 已到达 `shell-ready`，并在 Vulkan 上输出
+  `frame=1` 以及真实 icon/text atlas counters。自动 smoke 的 timeout exit 符合预期。
+
+Phase 0 仍待完成：glyph-level cache/atlas retention、手动打开/关闭/交互 smoke
+证据、DnD targeting，以及初始默认使用 Compact 还是 Icons 的最终选择。
+
+验收：
+
+- [x] 不改变现有 GPUI app 的构建。
+- [~] 能在目标 Linux desktop session 中打开窗口，并在自动 timeout smoke 中到达首个
+  rendered frame。手动关闭和交互 smoke 仍待完成。
+- [~] 能渲染可见目录 slot、可用时的真实 theme icons、miss 时的 fallback icons，以及
+  通过 texture atlas 绘制的真实文件名。
+- [~] 基本 pointer hover、鼠标 selection、keyboard navigation 和 rubber-band selection
+  已通过 retained geometry 路由。DnD targeting 仍待完成。
+- [~] 输出 frame timing、visible range、draw-command counters、临时 text-atlas counters
+  和 icon/text atlas counters、retained hit-test counters、bounded icon/label-cache
+  counters；glyph-level 以及 thumbnail atlas counters 会在对应 resource retention 层接入后开始。
+
+### Phase 1：文件视图核心对齐
+
+从现有 Fika model 实现 Compact、Icons 和 Details scene projection。
+
+验收：
+
+- [~] `/etc` 已可通过 `--view` 在 Compact、Icons 和 Details 中渲染；`~/Downloads`
+  和手动交互 smoke 仍待完成。
+- [~] 初版 projection 的 scroll、hover、keyboard navigation、runtime mode switching 和
+  selection 走 retained geometry。Zoom 仍待完成。
+- [~] Icons、Compact 和 Details 的 layout/hit-test/paint 已共享同一 shell layout
+  abstraction。
+- Steady render pass 不执行同步 theme scan、MIME magic read、thumbnail decode 或
+  text shaping。
+
+### Phase 2：Cache 和 Text Pipeline
+
+把 Phase 0 的初版 icon atlas 提升为预算化 semantic icon work，然后加入 thumbnail
+texture retention、text shaping cache、glyph atlas policy 和 eviction telemetry。
+
+验收：
+
+- Zoom 不会让已加载的同语义 icon 失效，除非 size/DPI 需要新的 raster。
+- Cold glyph/icon work 按 visible-first 预算推进。
+- 已缓存 thumbnail 在首个合格 frame 显示。
+- Cache logs 显示 hit/miss/evict/bytes 和每帧 compute time。
+
+### Phase 3：交互和 DnD
+
+把剩余 pointer routing、context target selection、directory hover、Places hover 和
+drag/drop target lookup 移到 shell-owned hit testing。
+
+验收：
+
+- Pane item 到 pane directory、pane item 到 Places、Places 到 pane、external path drop
+  和 URI-list clipboard path 由自动或隔离 smoke 覆盖。
+- DnD hover 不依赖 per-row 或 per-item widget callback。
+- Drag cursor/action state 遵循 Copy/Move/Link 语义。
+
+### Phase 4：Chrome、Overlays 和 Chooser
+
+实现可用 shell 所需外围 UI：Places、toolbar、location bar、filter bar、status bar、
+context menus、dialogs 和 chooser mode。
+
+验收：
+
+- 常见文件管理器工作流不需要启动 GPUI shell。
+- Rename、location、filter 和 application search 的文本编辑边界有明确的
+  IME/caret/selection 覆盖。
+- Portal file chooser 输出保持与现有后端兼容。
+
+### Phase 5：默认提升
+
+只有在同场景证据证明行为对齐，并且 frame cost 比 GPUI Fika 和相关 cosmic-files
+基线更好或更可预测后，才能把新 shell 提升为默认。
+
+验收：
+
+- 提升窗口期内 GPUI 保留为 fallback。
+- `/etc`、`~/Downloads`、大型本地目录、混合 thumbnail 目录、removable devices、
+  trash 和 network roots 有 smoke 覆盖。
+- 性能门覆盖 frame build time、GPU submission count、draw batches、texture bytes、
+  glyph/icon/thumbnail cache behavior 和 input latency。
+
+## 文档策略
+
+GPUI retained-renderer 文档现在是历史证据和迁移输入，不再是活跃架构目标。
+
+保留：
+
+- Dolphin 行为参考。
+- Core/system integration 参考。
+- 能提供基线数字或行为覆盖的 GPUI performance evidence。
+
+删除或重写：
+
+- 唯一目的为从旧 UI 迁移到 GPUI 的已完成计划。
+- 把“继续 GPUI retained migration”描述为活跃未来方向的文档。
+- 当 evidence 已汇总到本路线图或 shell 专项实现笔记后，删除重复 TODO slice。
