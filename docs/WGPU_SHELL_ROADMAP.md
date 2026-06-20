@@ -164,11 +164,13 @@ Current checkpoint:
   pane, and clears stale context state. Trash view context menus now dispatch
   Restore From Trash, Delete Permanently, and Empty Trash through the core
   `TrashViewOperation` path, then reload the Trash view and clear stale context
-  and selection state. Cut and Paste reject remote paths explicitly. Open With
-  chooser/default-application selection, multi-MIME `text/uri-list` clipboard
-  export/import, Trash restore conflict replacement/confirmation, undo, richer
-  properties, full inline rename, full Create New submenus/templates, and
-  new-pane dispatch remain Phase 4 work.
+  and selection state. Restore conflicts now open a shell-owned confirmation
+  overlay; Replace reruns the restore through core `TrashViewOperation` with the
+  replace policy, then reloads Trash. Cut and Paste reject remote paths
+  explicitly. Open With chooser/default-application selection, multi-MIME
+  `text/uri-list` clipboard export/import, richer multi-conflict handling,
+  undo, richer properties, full inline rename, full Create New
+  submenus/templates, and new-pane dispatch remain Phase 4 work.
 - A first shell-owned Places sidebar is now drawn below the top bar. It builds
   Home, existing XDG directories, Trash, Fika user places, primary
   `places-order.xml`, Network root, network bookmarks, and Root from public
@@ -339,10 +341,9 @@ migrated; context menu dispatch currently covers Open directory, Refresh,
 Select All, Properties, minimal Create New, minimal Rename, minimal Move to
 Trash, Trash view Restore/Delete Permanently/Empty Trash, Copy/Cut/Copy
 Location, Paste, and the minimal Places row Open/Copy Location/Properties/Remove
-menu, while richer Places actions/devices/DnD, Trash restore conflict
-replacement/confirmation, undo, richer properties, full inline rename, full
-Create New submenus/templates, Open With/default-app selection, and new-pane
-actions remain pending.
+menu, while richer Places actions/devices/DnD, richer Trash conflict handling,
+undo, richer properties, full inline rename, full Create New submenus/templates,
+Open With/default-app selection, and new-pane actions remain pending.
 
 Acceptance:
 

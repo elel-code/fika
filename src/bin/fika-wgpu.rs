@@ -98,6 +98,10 @@ const RENAME_DIALOG_WIDTH: f32 = 420.0;
 const RENAME_DIALOG_HEIGHT: f32 = 168.0;
 const RENAME_DIALOG_MARGIN: f32 = 18.0;
 const RENAME_DIALOG_TITLE_HEIGHT: f32 = 42.0;
+const TRASH_CONFLICT_DIALOG_WIDTH: f32 = 520.0;
+const TRASH_CONFLICT_DIALOG_HEIGHT: f32 = 212.0;
+const TRASH_CONFLICT_DIALOG_MARGIN: f32 = 18.0;
+const TRASH_CONFLICT_DIALOG_TITLE_HEIGHT: f32 = 42.0;
 const PATH_HISTORY_LIMIT: usize = 128;
 const ZOOM_STEP_MIN: i32 = -3;
 const ZOOM_STEP_MAX: i32 = 4;
@@ -539,6 +543,16 @@ impl ApplicationHandler for FikaWgpuApp {
                 };
                 let shortcut =
                     self.modifiers.state().control_key() || self.modifiers.state().meta_key();
+                if self.scene.is_trash_conflict_dialog_open() {
+                    if escape_requested_for_key_event(&event) {
+                        if self.scene.close_trash_conflict_dialog()
+                            && let Some(window) = self.window.as_ref()
+                        {
+                            window.request_redraw();
+                        }
+                    }
+                    return;
+                }
                 if self.scene.is_rename_dialog_open() {
                     match rename_command_for_key_event(&event, shortcut) {
                         RenameCommand::Commit => self.commit_rename_dialog(event_loop),
@@ -709,6 +723,28 @@ impl ApplicationHandler for FikaWgpuApp {
                 let Some(mouse_button) = button.mouse_button() else {
                     return;
                 };
+                if self.scene.is_trash_conflict_dialog_open() {
+                    if state == ElementState::Pressed && mouse_button == MouseButton::Left {
+                        match self
+                            .scene
+                            .trash_conflict_dialog_click_at_screen_point(point, renderer.size)
+                        {
+                            TrashConflictDialogClick::Outside
+                            | TrashConflictDialogClick::Cancel => {
+                                if self.scene.close_trash_conflict_dialog()
+                                    && let Some(window) = self.window.as_ref()
+                                {
+                                    window.request_redraw();
+                                }
+                            }
+                            TrashConflictDialogClick::Replace => {
+                                self.replace_trash_restore_conflicts(event_loop)
+                            }
+                            TrashConflictDialogClick::Inside => {}
+                        }
+                    }
+                    return;
+                }
                 if self.scene.is_rename_dialog_open() {
                     if state == ElementState::Pressed && mouse_button == MouseButton::Left {
                         match self
@@ -1037,6 +1073,28 @@ impl FikaWgpuApp {
                     "[fika-wgpu] trash-view-error action={} {error}",
                     action.as_str()
                 );
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+            }
+        }
+    }
+
+    fn replace_trash_restore_conflicts(&mut self, event_loop: &dyn ActiveEventLoop) {
+        let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
+            return;
+        };
+        match self.scene.replace_trash_restore_conflicts(size) {
+            Ok(result) if result.success_count > 0 => {
+                self.present_scene_change(event_loop, "replace-trash-conflicts")
+            }
+            Ok(_) => {
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+            }
+            Err(error) => {
+                eprintln!("[fika-wgpu] trash-conflict-error {error}");
                 if let Some(window) = self.window.as_ref() {
                     window.request_redraw();
                 }
@@ -2451,6 +2509,29 @@ enum RenameDialogClick {
     Commit,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ShellTrashConflictDialog {
+    conflicts: Vec<file_ops::TrashRestoreConflict>,
+}
+
+impl ShellTrashConflictDialog {
+    fn new(conflicts: Vec<file_ops::TrashRestoreConflict>) -> Option<Self> {
+        (!conflicts.is_empty()).then_some(Self { conflicts })
+    }
+
+    fn first_conflict(&self) -> Option<&file_ops::TrashRestoreConflict> {
+        self.conflicts.first()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TrashConflictDialogClick {
+    Outside,
+    Inside,
+    Cancel,
+    Replace,
+}
+
 struct ShellScene {
     path: PathBuf,
     view_mode: ShellViewMode,
@@ -2477,6 +2558,7 @@ struct ShellScene {
     properties_overlay: Option<ShellPropertiesOverlay>,
     create_dialog: Option<ShellCreateDialog>,
     rename_dialog: Option<ShellRenameDialog>,
+    trash_conflict_dialog: Option<ShellTrashConflictDialog>,
     rubber_band: Option<RubberBand>,
     hit_tests: u64,
     selection_changes: u64,
@@ -2559,6 +2641,7 @@ impl ShellScene {
             properties_overlay: None,
             create_dialog: None,
             rename_dialog: None,
+            trash_conflict_dialog: None,
             rubber_band: None,
             hit_tests: 0,
             selection_changes: 0,
@@ -2719,6 +2802,7 @@ impl ShellScene {
         self.properties_overlay = None;
         self.create_dialog = None;
         self.rename_dialog = None;
+        self.trash_conflict_dialog = None;
         self.rubber_band = None;
         self.last_primary_click = None;
         self.path_changes += 1;
@@ -3840,10 +3924,46 @@ impl ShellScene {
     ) -> Result<TrashViewOperationResult, String> {
         let (operation, paths) = self.context_target_trash_view_operation(action)?;
         let result = trash_view_operation_result(WGPU_SHELL_PANE_ID, operation, paths);
+        self.apply_trash_view_result(action.as_str(), &result, size)?;
+        Ok(result)
+    }
+
+    fn replace_trash_restore_conflicts(
+        &mut self,
+        size: PhysicalSize<u32>,
+    ) -> Result<TrashViewOperationResult, String> {
+        let Some(dialog) = self.trash_conflict_dialog.take() else {
+            return Err("no Trash restore conflicts to replace".to_string());
+        };
+        let paths = dialog
+            .conflicts
+            .into_iter()
+            .map(|conflict| conflict.trash_path)
+            .collect::<Vec<_>>();
+        if paths.is_empty() {
+            return Err("no Trash restore conflicts to replace".to_string());
+        }
+        let result = trash_view_operation_result(
+            WGPU_SHELL_PANE_ID,
+            TrashViewOperation::Restore {
+                conflict_policy: file_ops::TrashRestoreConflictPolicy::Replace,
+            },
+            paths,
+        );
+        self.apply_trash_view_result("replace-trash-conflicts", &result, size)?;
+        Ok(result)
+    }
+
+    fn apply_trash_view_result(
+        &mut self,
+        action: &str,
+        result: &TrashViewOperationResult,
+        size: PhysicalSize<u32>,
+    ) -> Result<(), String> {
         self.trash_changes += 1;
         eprintln!(
             "[fika-wgpu] trash-view action={} success={} failure={} conflicts={} changes={}",
-            action.as_str(),
+            action,
             result.success_count,
             result.failure_count,
             result.restore_conflicts.len(),
@@ -3857,6 +3977,21 @@ impl ShellScene {
             );
         }
 
+        if let Some(dialog) = ShellTrashConflictDialog::new(result.restore_conflicts.clone()) {
+            self.trash_conflict_dialog = Some(dialog);
+            self.context_target = None;
+            self.context_menu = None;
+            self.properties_overlay = None;
+            self.create_dialog = None;
+            self.rename_dialog = None;
+            self.rubber_band = None;
+            eprintln!(
+                "[fika-wgpu] trash-conflict open=1 conflicts={} changes={}",
+                result.restore_conflicts.len(),
+                self.trash_changes
+            );
+        }
+
         if result.success_count > 0 {
             self.context_target = None;
             self.context_menu = None;
@@ -3867,7 +4002,7 @@ impl ShellScene {
             self.selection.clear();
             self.reload_current_path(size)?;
         }
-        Ok(result)
+        Ok(())
     }
 
     fn move_context_target_to_trash(
@@ -3913,6 +4048,43 @@ impl ShellScene {
         self.rubber_band = None;
         self.reload_current_path(size)?;
         Ok(result)
+    }
+
+    fn is_trash_conflict_dialog_open(&self) -> bool {
+        self.trash_conflict_dialog.is_some()
+    }
+
+    fn close_trash_conflict_dialog(&mut self) -> bool {
+        if self.trash_conflict_dialog.take().is_none() {
+            return false;
+        }
+        self.trash_changes += 1;
+        eprintln!(
+            "[fika-wgpu] trash-conflict open=0 changes={}",
+            self.trash_changes
+        );
+        true
+    }
+
+    fn trash_conflict_dialog_click_at_screen_point(
+        &self,
+        point: ViewPoint,
+        size: PhysicalSize<u32>,
+    ) -> TrashConflictDialogClick {
+        let Some(dialog) = self.trash_conflict_dialog.as_ref() else {
+            return TrashConflictDialogClick::Outside;
+        };
+        let rect = trash_conflict_dialog_rect(dialog, size);
+        if !rect.contains(point) {
+            return TrashConflictDialogClick::Outside;
+        }
+        if trash_conflict_dialog_cancel_button_rect(rect).contains(point) {
+            return TrashConflictDialogClick::Cancel;
+        }
+        if trash_conflict_dialog_replace_button_rect(rect).contains(point) {
+            return TrashConflictDialogClick::Replace;
+        }
+        TrashConflictDialogClick::Inside
     }
 
     fn is_properties_overlay_open(&self) -> bool {
@@ -4712,6 +4884,7 @@ impl ShellScene {
         self.push_properties_overlay(&mut vertices, text, size);
         self.push_create_dialog_overlay(&mut vertices, text, size);
         self.push_rename_dialog_overlay(&mut vertices, text, size);
+        self.push_trash_conflict_dialog_overlay(&mut vertices, text, size);
 
         SceneFrame {
             layout_us: layout_start.elapsed().as_micros(),
@@ -5278,6 +5451,9 @@ impl ShellScene {
         if let Some(dialog) = self.rename_dialog.as_ref() {
             status.push_str(&format!(" | rename {:?}", dialog.name));
         }
+        if let Some(dialog) = self.trash_conflict_dialog.as_ref() {
+            status.push_str(&format!(" | trash conflicts {}", dialog.conflicts.len()));
+        }
         if let Some(target) = self.context_target.as_ref() {
             status.push_str(&format!(
                 " | context {} {}",
@@ -5652,6 +5828,112 @@ impl ShellScene {
                 },
                 rect,
                 TextColor::rgb(238, 244, 249),
+            );
+        }
+    }
+
+    fn push_trash_conflict_dialog_overlay(
+        &self,
+        vertices: &mut Vec<QuadVertex>,
+        text: &mut TextFrameBuilder<'_>,
+        size: PhysicalSize<u32>,
+    ) {
+        let Some(dialog) = self.trash_conflict_dialog.as_ref() else {
+            return;
+        };
+        let screen = ViewRect {
+            x: 0.0,
+            y: 0.0,
+            width: size.width.max(1) as f32,
+            height: size.height.max(1) as f32,
+        };
+        push_rect(vertices, screen, [0.0, 0.0, 0.0, 0.48], size);
+        let rect = trash_conflict_dialog_rect(dialog, size);
+        push_rect(vertices, rect, [0.118, 0.128, 0.140, 0.99], size);
+        push_clipped_rect_outline(vertices, rect, screen, 1.0, [0.42, 0.36, 0.25, 1.0], size);
+        push_rect(
+            vertices,
+            ViewRect {
+                x: rect.x,
+                y: rect.y,
+                width: rect.width,
+                height: TRASH_CONFLICT_DIALOG_TITLE_HEIGHT,
+            },
+            [0.180, 0.150, 0.105, 1.0],
+            size,
+        );
+        text.push_label(
+            "Restore Conflict",
+            ViewRect {
+                x: rect.x + 16.0,
+                y: rect.y + 12.0,
+                width: (rect.width - 32.0).max(1.0),
+                height: 18.0,
+            },
+            rect,
+            TextColor::rgb(248, 242, 232),
+        );
+
+        let count = dialog.conflicts.len();
+        text.push_label(
+            &format!("{count} item(s) already exist at the original location."),
+            ViewRect {
+                x: rect.x + 16.0,
+                y: rect.y + TRASH_CONFLICT_DIALOG_TITLE_HEIGHT + 18.0,
+                width: (rect.width - 32.0).max(1.0),
+                height: 18.0,
+            },
+            rect,
+            TextColor::rgb(226, 218, 206),
+        );
+        if let Some(conflict) = dialog.first_conflict() {
+            text.push_label(
+                &format!("Original: {}", conflict.original_path.display()),
+                ViewRect {
+                    x: rect.x + 16.0,
+                    y: rect.y + TRASH_CONFLICT_DIALOG_TITLE_HEIGHT + 48.0,
+                    width: (rect.width - 32.0).max(1.0),
+                    height: 18.0,
+                },
+                rect,
+                TextColor::rgb(192, 202, 212),
+            );
+            text.push_label(
+                &format!("Trash: {}", conflict.trash_path.display()),
+                ViewRect {
+                    x: rect.x + 16.0,
+                    y: rect.y + TRASH_CONFLICT_DIALOG_TITLE_HEIGHT + 76.0,
+                    width: (rect.width - 32.0).max(1.0),
+                    height: 18.0,
+                },
+                rect,
+                TextColor::rgb(192, 202, 212),
+            );
+        }
+
+        let cancel = trash_conflict_dialog_cancel_button_rect(rect);
+        let replace = trash_conflict_dialog_replace_button_rect(rect);
+        for (label, button, active) in [("Cancel", cancel, false), ("Replace", replace, true)] {
+            push_rect(
+                vertices,
+                button,
+                if active {
+                    [0.58, 0.36, 0.18, 1.0]
+                } else {
+                    [0.150, 0.162, 0.176, 1.0]
+                },
+                size,
+            );
+            text.push_label(
+                label,
+                ViewRect {
+                    x: button.x + 10.0,
+                    y: button.y + 4.0,
+                    width: (button.width - 20.0).max(1.0),
+                    height: 18.0,
+                },
+                rect,
+                TextColor::rgb(248, 244, 238),
             );
         }
     }
@@ -9393,6 +9675,46 @@ fn rename_dialog_commit_button_rect(dialog_rect: ViewRect) -> ViewRect {
     }
 }
 
+fn trash_conflict_dialog_rect(
+    _dialog: &ShellTrashConflictDialog,
+    size: PhysicalSize<u32>,
+) -> ViewRect {
+    let width = size.width.max(1) as f32;
+    let height = size.height.max(1) as f32;
+    let dialog_width = TRASH_CONFLICT_DIALOG_WIDTH
+        .min((width - TRASH_CONFLICT_DIALOG_MARGIN * 2.0).max(1.0))
+        .max(1.0);
+    let dialog_height = TRASH_CONFLICT_DIALOG_HEIGHT
+        .min((height - TRASH_CONFLICT_DIALOG_MARGIN * 2.0).max(1.0))
+        .max(1.0);
+    ViewRect {
+        x: ((width - dialog_width) / 2.0).max(TRASH_CONFLICT_DIALOG_MARGIN),
+        y: ((height - dialog_height) / 2.0).max(TRASH_CONFLICT_DIALOG_MARGIN),
+        width: dialog_width,
+        height: dialog_height,
+    }
+}
+
+fn trash_conflict_dialog_cancel_button_rect(dialog_rect: ViewRect) -> ViewRect {
+    let right = dialog_rect.right() - 16.0;
+    ViewRect {
+        x: right - CREATE_DIALOG_BUTTON_WIDTH * 2.0 - CREATE_DIALOG_BUTTON_GAP,
+        y: dialog_rect.bottom() - 16.0 - CREATE_DIALOG_BUTTON_HEIGHT,
+        width: CREATE_DIALOG_BUTTON_WIDTH,
+        height: CREATE_DIALOG_BUTTON_HEIGHT,
+    }
+}
+
+fn trash_conflict_dialog_replace_button_rect(dialog_rect: ViewRect) -> ViewRect {
+    let right = dialog_rect.right() - 16.0;
+    ViewRect {
+        x: right - CREATE_DIALOG_BUTTON_WIDTH,
+        y: dialog_rect.bottom() - 16.0 - CREATE_DIALOG_BUTTON_HEIGHT,
+        width: CREATE_DIALOG_BUTTON_WIDTH,
+        height: CREATE_DIALOG_BUTTON_HEIGHT,
+    }
+}
+
 fn property_row(label: &'static str, value: String) -> ShellPropertyRow {
     ShellPropertyRow { label, value }
 }
@@ -9807,6 +10129,7 @@ mod tests {
             properties_overlay: None,
             create_dialog: None,
             rename_dialog: None,
+            trash_conflict_dialog: None,
             rubber_band: None,
             hit_tests: 0,
             selection_changes: 0,
@@ -11414,6 +11737,68 @@ mod tests {
         assert!(scene.context_menu.is_none());
         assert_eq!(scene.selection.len(), 0);
         assert_eq!(scene.trash_changes, 1);
+        assert_eq!(scene.directory_reloads, 1);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn trash_restore_conflict_dialog_replaces_existing_destination() {
+        let root = test_dir("trash-restore-conflict");
+        fs::create_dir_all(&root).unwrap();
+        let source = root.join("conflict.txt");
+        fs::write(&source, b"old").unwrap();
+        let summary = file_ops::trash_paths(std::slice::from_ref(&source));
+        assert_eq!(summary.successes.len(), 1);
+        let trash_path = summary.successes[0].trash_path.clone();
+        fs::write(&source, b"new").unwrap();
+
+        let size = PhysicalSize::new(520, 300);
+        let mut scene =
+            ShellScene::load(file_ops::trash_files_dir(), ShellViewMode::Icons).unwrap();
+        scene.context_target = Some(ShellContextTarget::Item {
+            index: 0,
+            path: trash_path.clone(),
+            is_dir: false,
+            selection_count: 1,
+        });
+
+        let result = scene
+            .perform_trash_view_context_action(ShellContextMenuAction::RestoreFromTrash, size)
+            .unwrap();
+
+        assert_eq!(result.success_count, 0);
+        assert_eq!(result.restore_conflicts.len(), 1);
+        assert_eq!(fs::read(&source).unwrap(), b"new");
+        assert!(trash_path.exists());
+        assert!(scene.trash_conflict_dialog.is_some());
+        assert_eq!(scene.trash_changes, 1);
+        assert_eq!(scene.directory_reloads, 0);
+
+        let rect = trash_conflict_dialog_rect(scene.trash_conflict_dialog.as_ref().unwrap(), size);
+        assert_eq!(
+            scene.trash_conflict_dialog_click_at_screen_point(
+                ViewPoint {
+                    x: trash_conflict_dialog_replace_button_rect(rect).x + 2.0,
+                    y: trash_conflict_dialog_replace_button_rect(rect).y + 2.0,
+                },
+                size,
+            ),
+            TrashConflictDialogClick::Replace
+        );
+        assert_eq!(
+            scene.trash_conflict_dialog_click_at_screen_point(ViewPoint { x: 1.0, y: 1.0 }, size),
+            TrashConflictDialogClick::Outside
+        );
+
+        let replace = scene.replace_trash_restore_conflicts(size).unwrap();
+
+        assert_eq!(replace.success_count, 1);
+        assert_eq!(replace.failure_count, 0);
+        assert_eq!(fs::read(&source).unwrap(), b"old");
+        assert!(!trash_path.exists());
+        assert!(scene.trash_conflict_dialog.is_none());
+        assert_eq!(scene.trash_changes, 2);
         assert_eq!(scene.directory_reloads, 1);
 
         fs::remove_dir_all(root).unwrap();
