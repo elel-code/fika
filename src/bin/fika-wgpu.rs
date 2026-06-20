@@ -13,9 +13,10 @@ use cosmic_text::{
     Wrap,
 };
 use fika_core::{
-    CompactLayout, CompactLayoutOptions, Entry, IconsLayout, IconsLayoutOptions, NameFilter,
-    ViewPoint, ViewRect, ViewSize, complete_location_input, file_ops, format_modified_secs,
-    format_size, is_network_path, network_uri_from_path, read_entries_sync, resolve_location_input,
+    CompactLayout, CompactLayoutOptions, Entry, FileClipboardRole, IconsLayout, IconsLayoutOptions,
+    NameFilter, ViewPoint, ViewRect, ViewSize, complete_location_input, encode_file_clipboard_text,
+    file_ops, format_modified_secs, format_size, is_network_path, network_uri_from_path,
+    read_entries_sync, resolve_location_input,
 };
 use gio::prelude::FileExt;
 use raw_window_handle::{HasDisplayHandle, RawDisplayHandle};
@@ -912,6 +913,33 @@ impl FikaWgpuApp {
                 }
             }
             ShellContextMenuAction::MoveToTrash => self.move_context_target_to_trash(event_loop),
+            ShellContextMenuAction::Copy | ShellContextMenuAction::Cut => {
+                match self.scene.context_target_file_clipboard_request(action) {
+                    Ok(Some(request)) => {
+                        if let Some(clipboard) = self.clipboard.as_ref() {
+                            clipboard.store_text(&request.text);
+                            self.scene.record_file_clipboard_export(&request);
+                        } else {
+                            eprintln!(
+                                "[fika-wgpu] clipboard-export-error role={} paths={} error=clipboard-unavailable",
+                                file_clipboard_role_as_str(request.role),
+                                request.paths.len()
+                            );
+                        }
+                    }
+                    Ok(None) => eprintln!(
+                        "[fika-wgpu] clipboard-export-error role={} target=none",
+                        action.as_str()
+                    ),
+                    Err(error) => eprintln!(
+                        "[fika-wgpu] clipboard-export-error role={} {error}",
+                        action.as_str()
+                    ),
+                }
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+            }
             ShellContextMenuAction::CopyLocation => {
                 match self.scene.context_target_copy_location_request() {
                     Some(request) => {
@@ -1882,6 +1910,8 @@ impl ShellContextTarget {
 enum ShellContextMenuAction {
     Open,
     OpenInNewPane,
+    Copy,
+    Cut,
     CopyLocation,
     Rename,
     MoveToTrash,
@@ -1897,6 +1927,8 @@ impl ShellContextMenuAction {
         match self {
             Self::Open => "Open",
             Self::OpenInNewPane => "Open in New Pane",
+            Self::Copy => "Copy",
+            Self::Cut => "Cut",
             Self::CopyLocation => "Copy Location",
             Self::Rename => "Rename",
             Self::MoveToTrash => "Move to Trash",
@@ -1912,6 +1944,8 @@ impl ShellContextMenuAction {
         match self {
             Self::Open => "open",
             Self::OpenInNewPane => "open-in-new-pane",
+            Self::Copy => "copy",
+            Self::Cut => "cut",
             Self::CopyLocation => "copy-location",
             Self::Rename => "rename",
             Self::MoveToTrash => "move-to-trash",
@@ -1945,6 +1979,8 @@ fn context_menu_actions(target: &ShellContextTarget) -> &'static [ShellContextMe
     const ITEM_ACTIONS: &[ShellContextMenuAction] = &[
         ShellContextMenuAction::Open,
         ShellContextMenuAction::OpenInNewPane,
+        ShellContextMenuAction::Copy,
+        ShellContextMenuAction::Cut,
         ShellContextMenuAction::CopyLocation,
         ShellContextMenuAction::Rename,
         ShellContextMenuAction::MoveToTrash,
@@ -2092,6 +2128,13 @@ struct CopyLocationRequest {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+struct FileClipboardExportRequest {
+    role: FileClipboardRole,
+    paths: Vec<PathBuf>,
+    text: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct ShellTrashResult {
     success_count: usize,
     failure_count: usize,
@@ -2145,6 +2188,7 @@ struct ShellScene {
     rename_changes: u64,
     open_changes: u64,
     copy_location_changes: u64,
+    file_clipboard_changes: u64,
     trash_changes: u64,
     keyboard_navigation: u64,
     rubber_band_updates: u64,
@@ -2218,6 +2262,7 @@ impl ShellScene {
             rename_changes: 0,
             open_changes: 0,
             copy_location_changes: 0,
+            file_clipboard_changes: 0,
             trash_changes: 0,
             keyboard_navigation: 0,
             rubber_band_updates: 0,
@@ -3017,7 +3062,37 @@ impl ShellScene {
         );
     }
 
-    fn context_target_trash_paths(&self) -> Result<Vec<PathBuf>, String> {
+    fn context_target_file_clipboard_request(
+        &self,
+        action: ShellContextMenuAction,
+    ) -> Result<Option<FileClipboardExportRequest>, String> {
+        let role = match action {
+            ShellContextMenuAction::Copy => FileClipboardRole::Copy,
+            ShellContextMenuAction::Cut => FileClipboardRole::Cut,
+            _ => return Ok(None),
+        };
+        let Some(paths) = self.context_target_item_paths()? else {
+            return Ok(None);
+        };
+        if role == FileClipboardRole::Cut && paths.iter().any(|path| is_network_path(path)) {
+            return Err("remote cut is not available yet".to_string());
+        }
+        let text = encode_file_clipboard_text(role, &paths);
+        Ok(Some(FileClipboardExportRequest { role, paths, text }))
+    }
+
+    fn record_file_clipboard_export(&mut self, request: &FileClipboardExportRequest) {
+        self.file_clipboard_changes += 1;
+        eprintln!(
+            "[fika-wgpu] clipboard-export role={} paths={} bytes={} changes={}",
+            file_clipboard_role_as_str(request.role),
+            request.paths.len(),
+            request.text.len(),
+            self.file_clipboard_changes
+        );
+    }
+
+    fn context_target_item_paths(&self) -> Result<Option<Vec<PathBuf>>, String> {
         match self.context_target.as_ref() {
             Some(ShellContextTarget::Item {
                 index,
@@ -3033,18 +3108,20 @@ impl ShellScene {
                         .filter_map(|index| self.entry_path_for_index(*index))
                         .collect::<Vec<_>>();
                     if paths.is_empty() {
-                        return Err("selected trash target no longer exists".to_string());
+                        return Err("selected context target no longer exists".to_string());
                     }
-                    Ok(paths)
+                    Ok(Some(paths))
                 } else {
-                    Ok(vec![path.clone()])
+                    Ok(Some(vec![path.clone()]))
                 }
             }
-            Some(ShellContextTarget::Blank { .. }) => {
-                Err("blank target cannot be moved to trash".to_string())
-            }
-            None => Err("no context target to move to trash".to_string()),
+            Some(ShellContextTarget::Blank { .. }) | None => Ok(None),
         }
+    }
+
+    fn context_target_trash_paths(&self) -> Result<Vec<PathBuf>, String> {
+        self.context_target_item_paths()?
+            .ok_or_else(|| "no item context target to move to trash".to_string())
     }
 
     fn move_context_target_to_trash(
@@ -5551,7 +5628,7 @@ impl WgpuState {
             || self.last_log.elapsed() >= Duration::from_secs(1)
         {
             eprintln!(
-                "[fika-wgpu] frame={} reason={} view={} zoom={} zoom_changes={} path={} entries={} filtered={} show_hidden={} hidden_changes={} location_active={} location_changes={} filter_active={} filter_changes={} visible={} selected={} hover={} context={} context_menu={} context_changes={} context_actions={} properties={} properties_changes={} create_dialog={} create_changes={} rename_dialog={} rename_changes={} open_changes={} copy_location_changes={} trash_changes={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} path_changes={} reloads={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_cache={}/{} entries={} bytes={} batches={} scroll_x={:.1} scroll_y={:.1} layout={}us text_raster={}us text_atlas={}x{}:{}b render={}us",
+                "[fika-wgpu] frame={} reason={} view={} zoom={} zoom_changes={} path={} entries={} filtered={} show_hidden={} hidden_changes={} location_active={} location_changes={} filter_active={} filter_changes={} visible={} selected={} hover={} context={} context_menu={} context_changes={} context_actions={} properties={} properties_changes={} create_dialog={} create_changes={} rename_dialog={} rename_changes={} open_changes={} copy_location_changes={} file_clipboard_changes={} trash_changes={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} path_changes={} reloads={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_cache={}/{} entries={} bytes={} batches={} scroll_x={:.1} scroll_y={:.1} layout={}us text_raster={}us text_atlas={}x{}:{}b render={}us",
                 self.frame_count,
                 reason,
                 scene.view_mode.as_str(),
@@ -5585,6 +5662,7 @@ impl WgpuState {
                 scene.rename_changes,
                 scene.open_changes,
                 scene.copy_location_changes,
+                scene.file_clipboard_changes,
                 scene.trash_changes,
                 scene.rubber_band.as_ref().is_some_and(|band| band.active) as u8,
                 scene.hit_tests,
@@ -8348,6 +8426,13 @@ fn copy_location_text_for_path(path: &Path) -> String {
     path.display().to_string()
 }
 
+fn file_clipboard_role_as_str(role: FileClipboardRole) -> &'static str {
+    match role {
+        FileClipboardRole::Copy => "copy",
+        FileClipboardRole::Cut => "cut",
+    }
+}
+
 fn create_entry_on_disk(request: &CreateEntryRequest) -> Result<(), String> {
     match request.kind {
         CreateEntryKind::Folder => fs::create_dir(&request.path)
@@ -8528,6 +8613,7 @@ mod tests {
             rename_changes: 0,
             open_changes: 0,
             copy_location_changes: 0,
+            file_clipboard_changes: 0,
             trash_changes: 0,
             keyboard_navigation: 0,
             rubber_band_updates: 0,
@@ -8956,6 +9042,55 @@ mod tests {
 
         scene.record_copy_location(&request);
         assert_eq!(scene.copy_location_changes, 1);
+    }
+
+    #[test]
+    fn file_clipboard_request_uses_multi_selection_and_rejects_remote_cut() {
+        let mut scene = test_scene(
+            vec![
+                test_entry("one.txt", false),
+                test_entry("two.txt", false),
+                test_entry("remote.txt", false),
+            ],
+            ShellViewMode::Icons,
+        );
+        scene.context_target = Some(ShellContextTarget::Item {
+            index: 1,
+            path: PathBuf::from("/tmp/two.txt"),
+            is_dir: false,
+            selection_count: 2,
+        });
+        scene.selection.select_indexes(&[0, 1]);
+
+        let request = scene
+            .context_target_file_clipboard_request(ShellContextMenuAction::Copy)
+            .unwrap()
+            .expect("selected item target should produce clipboard request");
+        assert_eq!(request.role, FileClipboardRole::Copy);
+        assert_eq!(
+            request.paths,
+            vec![PathBuf::from("/tmp/one.txt"), PathBuf::from("/tmp/two.txt")]
+        );
+        assert_eq!(
+            request.text,
+            encode_file_clipboard_text(FileClipboardRole::Copy, &request.paths)
+        );
+
+        scene.record_file_clipboard_export(&request);
+        assert_eq!(scene.file_clipboard_changes, 1);
+
+        scene.context_target = Some(ShellContextTarget::Item {
+            index: 2,
+            path: PathBuf::from("sftp://example.test/home/yk/remote.txt"),
+            is_dir: false,
+            selection_count: 1,
+        });
+        assert!(
+            scene
+                .context_target_file_clipboard_request(ShellContextMenuAction::Cut)
+                .unwrap_err()
+                .contains("remote cut")
+        );
     }
 
     #[test]
