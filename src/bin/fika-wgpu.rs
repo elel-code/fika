@@ -15,8 +15,9 @@ use cosmic_text::{
 use fika_core::{
     CompactLayout, CompactLayoutOptions, Entry, IconsLayout, IconsLayoutOptions, NameFilter,
     ViewPoint, ViewRect, ViewSize, complete_location_input, file_ops, format_modified_secs,
-    format_size, is_network_path, read_entries_sync, resolve_location_input,
+    format_size, is_network_path, network_uri_from_path, read_entries_sync, resolve_location_input,
 };
+use gio::prelude::FileExt;
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
 use winit::event::{ElementState, KeyEvent, Modifiers, MouseButton, MouseScrollDelta, WindowEvent};
@@ -802,9 +803,24 @@ impl FikaWgpuApp {
                 if let Some(path) = self.scene.context_target_directory_path() {
                     self.load_scene_path(event_loop, path, "context-open");
                 } else {
-                    eprintln!("[fika-wgpu] context-action-pending action=open target=file");
-                    if let Some(window) = self.window.as_ref() {
-                        window.request_redraw();
+                    match self.scene.open_context_target_file_with_default_app() {
+                        Ok(true) => {
+                            if let Some(window) = self.window.as_ref() {
+                                window.request_redraw();
+                            }
+                        }
+                        Ok(false) => {
+                            eprintln!("[fika-wgpu] context-action-pending action=open target=none");
+                            if let Some(window) = self.window.as_ref() {
+                                window.request_redraw();
+                            }
+                        }
+                        Err(error) => {
+                            eprintln!("[fika-wgpu] open-error {error}");
+                            if let Some(window) = self.window.as_ref() {
+                                window.request_redraw();
+                            }
+                        }
                     }
                 }
             }
@@ -1990,6 +2006,12 @@ struct RenameEntryRequest {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+struct OpenFileRequest {
+    path: PathBuf,
+    uri: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct ShellTrashResult {
     success_count: usize,
     failure_count: usize,
@@ -2041,6 +2063,7 @@ struct ShellScene {
     properties_changes: u64,
     create_changes: u64,
     rename_changes: u64,
+    open_changes: u64,
     trash_changes: u64,
     keyboard_navigation: u64,
     rubber_band_updates: u64,
@@ -2112,6 +2135,7 @@ impl ShellScene {
             properties_changes: 0,
             create_changes: 0,
             rename_changes: 0,
+            open_changes: 0,
             trash_changes: 0,
             keyboard_navigation: 0,
             rubber_band_updates: 0,
@@ -2860,6 +2884,35 @@ impl ShellScene {
             }
             _ => None,
         }
+    }
+
+    fn context_target_open_file_request(&self) -> Option<OpenFileRequest> {
+        match self.context_target.as_ref()? {
+            ShellContextTarget::Item {
+                path,
+                is_dir: false,
+                ..
+            } => Some(OpenFileRequest {
+                path: path.clone(),
+                uri: launch_uri_for_path(path),
+            }),
+            _ => None,
+        }
+    }
+
+    fn open_context_target_file_with_default_app(&mut self) -> Result<bool, String> {
+        let Some(request) = self.context_target_open_file_request() else {
+            return Ok(false);
+        };
+        launch_file_with_default_app(&request)?;
+        self.open_changes += 1;
+        eprintln!(
+            "[fika-wgpu] open path={} uri={} changes={}",
+            request.path.display(),
+            request.uri,
+            self.open_changes
+        );
+        Ok(true)
     }
 
     fn context_target_trash_paths(&self) -> Result<Vec<PathBuf>, String> {
@@ -5396,7 +5449,7 @@ impl WgpuState {
             || self.last_log.elapsed() >= Duration::from_secs(1)
         {
             eprintln!(
-                "[fika-wgpu] frame={} reason={} view={} zoom={} zoom_changes={} path={} entries={} filtered={} show_hidden={} hidden_changes={} location_active={} location_changes={} filter_active={} filter_changes={} visible={} selected={} hover={} context={} context_menu={} context_changes={} context_actions={} properties={} properties_changes={} create_dialog={} create_changes={} rename_dialog={} rename_changes={} trash_changes={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} path_changes={} reloads={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_cache={}/{} entries={} bytes={} batches={} scroll_x={:.1} scroll_y={:.1} layout={}us text_raster={}us text_atlas={}x{}:{}b render={}us",
+                "[fika-wgpu] frame={} reason={} view={} zoom={} zoom_changes={} path={} entries={} filtered={} show_hidden={} hidden_changes={} location_active={} location_changes={} filter_active={} filter_changes={} visible={} selected={} hover={} context={} context_menu={} context_changes={} context_actions={} properties={} properties_changes={} create_dialog={} create_changes={} rename_dialog={} rename_changes={} open_changes={} trash_changes={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} path_changes={} reloads={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_cache={}/{} entries={} bytes={} batches={} scroll_x={:.1} scroll_y={:.1} layout={}us text_raster={}us text_atlas={}x{}:{}b render={}us",
                 self.frame_count,
                 reason,
                 scene.view_mode.as_str(),
@@ -5428,6 +5481,7 @@ impl WgpuState {
                 scene.create_changes,
                 scene.rename_dialog.is_some() as u8,
                 scene.rename_changes,
+                scene.open_changes,
                 scene.trash_changes,
                 scene.rubber_band.as_ref().is_some_and(|band| band.active) as u8,
                 scene.hit_tests,
@@ -8171,6 +8225,22 @@ fn property_row(label: &'static str, value: String) -> ShellPropertyRow {
     ShellPropertyRow { label, value }
 }
 
+fn launch_uri_for_path(path: &Path) -> String {
+    network_uri_from_path(path).unwrap_or_else(|| gio::File::for_path(path).uri().to_string())
+}
+
+fn launch_file_with_default_app(request: &OpenFileRequest) -> Result<(), String> {
+    gio::AppInfo::launch_default_for_uri(&request.uri, None::<&gio::AppLaunchContext>).map_err(
+        |error| {
+            format!(
+                "launch default app for {} ({}): {error}",
+                request.path.display(),
+                request.uri
+            )
+        },
+    )
+}
+
 fn create_entry_on_disk(request: &CreateEntryRequest) -> Result<(), String> {
     match request.kind {
         CreateEntryKind::Folder => fs::create_dir(&request.path)
@@ -8349,6 +8419,7 @@ mod tests {
             properties_changes: 0,
             create_changes: 0,
             rename_changes: 0,
+            open_changes: 0,
             trash_changes: 0,
             keyboard_navigation: 0,
             rubber_band_updates: 0,
@@ -8694,6 +8765,60 @@ mod tests {
             path: PathBuf::from("/tmp"),
         });
         assert_eq!(scene.context_target_directory_path(), None);
+    }
+
+    #[test]
+    fn open_file_request_only_resolves_file_context_targets() {
+        let mut scene = test_scene(
+            vec![test_entry("folder", true), test_entry("plain.txt", false)],
+            ShellViewMode::Icons,
+        );
+        scene.context_target = Some(ShellContextTarget::Blank {
+            path: PathBuf::from("/tmp"),
+        });
+        assert_eq!(scene.context_target_open_file_request(), None);
+
+        scene.context_target = Some(ShellContextTarget::Item {
+            index: 0,
+            path: PathBuf::from("/tmp/folder"),
+            is_dir: true,
+            selection_count: 1,
+        });
+        assert_eq!(scene.context_target_open_file_request(), None);
+
+        scene.context_target = Some(ShellContextTarget::Item {
+            index: 1,
+            path: PathBuf::from("/tmp/Fika Test/plain.txt"),
+            is_dir: false,
+            selection_count: 1,
+        });
+        assert_eq!(
+            scene.context_target_open_file_request(),
+            Some(OpenFileRequest {
+                path: PathBuf::from("/tmp/Fika Test/plain.txt"),
+                uri: "file:///tmp/Fika%20Test/plain.txt".to_string(),
+            })
+        );
+        assert_eq!(scene.open_changes, 0);
+    }
+
+    #[test]
+    fn open_file_request_preserves_network_uri_targets() {
+        let mut scene = test_scene(vec![test_entry("remote.txt", false)], ShellViewMode::Icons);
+        scene.context_target = Some(ShellContextTarget::Item {
+            index: 0,
+            path: PathBuf::from("sftp://example.test/home/yk/remote.txt"),
+            is_dir: false,
+            selection_count: 1,
+        });
+
+        assert_eq!(
+            scene.context_target_open_file_request(),
+            Some(OpenFileRequest {
+                path: PathBuf::from("sftp://example.test/home/yk/remote.txt"),
+                uri: "sftp://example.test/home/yk/remote.txt".to_string(),
+            })
+        );
     }
 
     #[test]
