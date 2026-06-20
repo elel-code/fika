@@ -108,7 +108,9 @@ Current checkpoint:
   icons when the active XDG icon theme can resolve them, fallback file/folder
   icon shapes for misses, and real visible file names. Text uses
   `cosmic-text` for shaping/rasterization, then uploads a temporary per-frame
-  RGBA atlas for a textured quad batch.
+  RGBA atlas for a textured quad batch. The wgpu shell now uses a larger
+  14px/18px baseline text metric so file labels and chrome are closer to the
+  current GPUI Fika scale.
 - It keeps a bounded persistent label raster cache for visible file/path text,
   keyed by text, size, and color. The per-frame atlas now packs cached label
   rasters instead of reshaping/rasterizing every visible label on every redraw.
@@ -116,7 +118,11 @@ Current checkpoint:
   PNG/WebP/JPEG/BMP/GIF/ICO through `image` and SVG through `usvg/resvg`;
   packs visible icons into a per-frame RGBA icon atlas; and keeps a bounded
   persistent icon raster cache keyed by theme icon file path and size.
-- Mouse-wheel scrolling updates retained viewport state.
+- Mouse-wheel scrolling updates retained viewport state. File content now
+  reserves and draws shell-owned item-view scrollbars: Icons/Details use a
+  vertical right-side track and Compact uses a horizontal bottom track. The
+  frame log includes `content_scrollbar=0|1`; scrollbar drag/click interaction
+  remains follow-up work.
 - The experimental binary accepts `--view icons|compact|details`. Icons remains
   the default baseline; Compact uses core `CompactLayout`; Details now has a
   shell-owned row projection with a fixed header and Name/Size/Modified columns.

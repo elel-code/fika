@@ -96,14 +96,17 @@ Shell 拥有：
 - 渲染顶部 path bar、可见 item 背景、active XDG icon theme 可解析时的真实文件/文件夹
   theme icon、miss 时的 fallback 文件/文件夹 icon 形状，以及真实可见文件名。文字通过
   `cosmic-text` 做 shaping/rasterization，再上传临时 per-frame RGBA atlas，由一个
-  `wgpu` textured quad batch 绘制。
+  `wgpu` textured quad batch 绘制。wgpu shell 现在使用更大的 14px/18px
+  baseline text metric，使文件名和 shell chrome 更接近当前 GPUI Fika 的视觉尺寸。
 - 为可见文件名/path text 保留 bounded persistent label raster cache，按 text、size 和
   color 键控。per-frame atlas 现在打包 cached label raster，不再每次 redraw 都重新
   shape/rasterize 所有可见 label。
 - 从 XDG、GTK 和 KDE theme settings 解析 MIME/theme icon；PNG/WebP/JPEG/BMP/GIF/ICO
   通过 `image` 光栅化，SVG 通过 `usvg/resvg` 光栅化；可见 icon 打包到 per-frame RGBA
   icon atlas，并按 theme icon file path 和 size 保留 bounded persistent icon raster cache。
-- 鼠标滚轮更新 retained viewport state。
+- 鼠标滚轮更新 retained viewport state。文件内容区现在会预留并绘制 shell-owned
+  item-view scrollbar：Icons/Details 使用右侧竖向 track，Compact 使用底部横向 track。
+  frame log 会输出 `content_scrollbar=0|1`；scrollbar drag/click 交互仍是后续工作。
 - 实验 binary 支持 `--view icons|compact|details`。Icons 仍是默认 baseline；
   Compact 使用 core `CompactLayout`；Details 现在有 shell-owned row projection、
   固定 header，以及 Name/Size/Modified 三列。同一组模式也可用 top-bar `Icons /

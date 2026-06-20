@@ -86,7 +86,8 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
   读取目录、用 `IconsLayout` 投影 retained geometry，并用 solid quad batch
   渲染 path bar、可见 item 背景和 icon fallback 形状；真实文件名通过
   `cosmic-text` shaping/rasterization 进入 bounded label raster cache，再上传到
-  临时 per-frame RGBA text atlas 绘制；真实 MIME/theme icon 已按 XDG/GTK/KDE
+  临时 per-frame RGBA text atlas 绘制，当前 baseline text metric 已提高到
+  14px/18px 以贴近 GPUI Fika 视觉尺寸；真实 MIME/theme icon 已按 XDG/GTK/KDE
   theme 解析，PNG/WebP/JPEG/BMP/GIF/ICO 通过 `image` 光栅化，SVG 通过
   `usvg/resvg` 光栅化，visible icon 打包到 per-frame RGBA icon atlas，并保留
   bounded icon raster cache；pointer move/leave 和左键点击已通过 shell-owned
@@ -115,6 +116,9 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
   已通过 core `MimeApplicationCache` 和 systemd-user launch plan 接入；Open With
   default-app selection、Open in New Pane、多 MIME `text/uri-list` clipboard export/import 等
   其余 action 先记录 pending 日志；
+  文件内容区现在预留并绘制 shell-owned item-view scrollbar，Icons/Details 为右侧竖向
+  track，Compact 为底部横向 track，frame log 输出 `content_scrollbar=0|1`；scrollbar
+  drag/click 交互仍待接入；
   空白区域左键拖动已通过同一 retained Icons geometry 支持 rubber-band selection，
   普通拖动替换 selection，Shift 追加，Ctrl/Meta 相对按下时的 base selection 做
   toggle；keyboard navigation 已通过同一 retained selection state 处理 Arrow、
@@ -179,7 +183,7 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
   和更完整 Details column/metadata parity 仍待完成。
 - [ ] Phase 2：把 Phase 0 初版 icon atlas 提升为预算化 semantic icon work，并实现 thumbnail texture retention、text shaping cache、glyph atlas policy 和 eviction telemetry。Cold glyph/icon work 必须 visible-first 且预算化。
 - [~] Phase 3：把剩余 pointer routing、context target selection、directory hover、Places hover 和 drag/drop target lookup 移到 shell-owned hit testing。当前 file view pane item/blank 右键 context target selection、菜单 row hit testing、Places row hover/left navigation/right-click target/sidebar scrolling 和最小 place menu（含 editable user place Remove）已由 wgpu shell-owned；directory hover、device/place edit/hide/add action dispatch 和 DnD target lookup 仍待迁移。
-- [~] Phase 4：实现 Places、toolbar、location bar、filter bar、status bar、context menus、dialogs 和 chooser mode，使常见文件管理器工作流不需要启动 GPUI shell。当前已有最小 shell-owned Places 侧栏/左键 navigation/独立 sidebar scrolling/最小 Open-Copy Location-Properties-Remove row menu、底部最小 status bar、窄实现 filter bar、窄实现 location edit mode、轻量 item/blank context menu overlay、最小 properties metadata overlay、最小 Create New modal、最小 Rename modal、最小 Move to Trash dispatch、最小 Trash view Restore/Delete Permanently/Empty Trash dispatch、最小 Trash restore conflict Replace overlay、file Open 默认应用分发、最小 Open With chooser/systemd-user launch plan 分发、item Copy Location Wayland text clipboard 分发、item Copy/Cut 的 Fika URI-list text clipboard 导出，以及 blank Paste 的本地文件/纯文本执行；Open directory、Open file、Open With chooser、Copy、Cut、Paste、Copy Location、Refresh、Select All、Properties、最小 Create New、最小 Rename、最小 Move to Trash、最小 Trash view actions 已接入 dispatch。更完整 Places actions/devices/DnD、toolbar、完整 location/filter/create-name/rename-name/application-search 文本边界、多 MIME `text/uri-list` clipboard export/import、remote paste、更完整 Trash multi-conflict handling、undo、更完整 properties、完整 inline rename、完整 Create New 子菜单/模板、Open With default-app selection、new-pane actions、dialogs 和 chooser mode 仍待迁移。
+- [~] Phase 4：实现 Places、toolbar、location bar、filter bar、status bar、context menus、dialogs 和 chooser mode，使常见文件管理器工作流不需要启动 GPUI shell。当前已有最小 shell-owned Places 侧栏/左键 navigation/独立 sidebar scrolling/最小 Open-Copy Location-Properties-Remove row menu、文件内容区 item-view scrollbar 显示/scroll offset 同步、底部最小 status bar、窄实现 filter bar、窄实现 location edit mode、轻量 item/blank context menu overlay、最小 properties metadata overlay、最小 Create New modal、最小 Rename modal、最小 Move to Trash dispatch、最小 Trash view Restore/Delete Permanently/Empty Trash dispatch、最小 Trash restore conflict Replace overlay、file Open 默认应用分发、最小 Open With chooser/systemd-user launch plan 分发、item Copy Location Wayland text clipboard 分发、item Copy/Cut 的 Fika URI-list text clipboard 导出，以及 blank Paste 的本地文件/纯文本执行；Open directory、Open file、Open With chooser、Copy、Cut、Paste、Copy Location、Refresh、Select All、Properties、最小 Create New、最小 Rename、最小 Move to Trash、最小 Trash view actions 已接入 dispatch。更完整 Places actions/devices/DnD、toolbar、scrollbar drag/click、完整 location/filter/create-name/rename-name/application-search 文本边界、多 MIME `text/uri-list` clipboard export/import、remote paste、更完整 Trash multi-conflict handling、undo、更完整 properties、完整 inline rename、完整 Create New 子菜单/模板、Open With default-app selection、new-pane actions、dialogs 和 chooser mode 仍待迁移。
 - [ ] Phase 5：同场景证据证明行为对齐，且 frame cost 比 GPUI Fika 和相关 cosmic-files 基线更好或更可预测后，再把新 shell 提升为默认。
 
 ### GPUI Item View 自绘 / Dolphin retained item 对齐（历史基线）

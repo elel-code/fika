@@ -50,8 +50,8 @@ const DETAILS_SIZE_WIDTH: f32 = 104.0;
 const DETAILS_MODIFIED_WIDTH: f32 = 164.0;
 const SCROLL_LINE_PX: f32 = 56.0;
 const TEXT_ATLAS_WIDTH: u32 = 2048;
-const TEXT_FONT_SIZE: f32 = 13.0;
-const TEXT_LINE_HEIGHT: f32 = 16.0;
+const TEXT_FONT_SIZE: f32 = 14.0;
+const TEXT_LINE_HEIGHT: f32 = 18.0;
 const TEXT_PADDING: u32 = 2;
 const TEXT_LABEL_CACHE_MAX_BYTES: usize = 8 * 1024 * 1024;
 const ICON_ATLAS_WIDTH: u32 = 1024;
@@ -81,6 +81,9 @@ const PLACES_ICON_SIZE: f32 = 18.0;
 const PLACES_SCROLLBAR_WIDTH: f32 = 3.0;
 const PLACES_SCROLLBAR_MARGIN: f32 = 4.0;
 const PLACES_SCROLLBAR_MIN_THUMB_HEIGHT: f32 = 28.0;
+const CONTENT_SCROLLBAR_RESERVED_EXTENT: f32 = 14.0;
+const CONTENT_SCROLLBAR_PADDING: f32 = 4.0;
+const CONTENT_SCROLLBAR_MIN_THUMB_SIZE: f32 = 25.0;
 const CONTEXT_MENU_WIDTH: f32 = 184.0;
 const CONTEXT_MENU_ROW_HEIGHT: f32 = 28.0;
 const CONTEXT_MENU_MARGIN: f32 = 6.0;
@@ -238,6 +241,12 @@ impl ShellViewMode {
             Self::Details => Self::Icons,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ContentScrollbarAxis {
+    Horizontal,
+    Vertical,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -5399,6 +5408,7 @@ impl ShellScene {
             }
         }
         self.push_rubber_band(&mut vertices, content_clip, size);
+        self.push_content_scrollbar(&mut vertices, size);
         self.push_status_bar(&mut vertices, text, size, visible_items, status_bar);
         self.push_context_menu_overlay(&mut vertices, text, size);
         self.push_properties_overlay(&mut vertices, text, size);
@@ -6007,6 +6017,14 @@ impl ShellScene {
             rect,
             TextColor::rgb(178, 188, 198),
         );
+    }
+
+    fn push_content_scrollbar(&self, vertices: &mut Vec<QuadVertex>, size: PhysicalSize<u32>) {
+        let Some((track, thumb)) = self.content_scrollbar_rects(size) else {
+            return;
+        };
+        push_rect(vertices, track, [0.20, 0.22, 0.25, 0.40], size);
+        push_rect(vertices, thumb, [0.53, 0.57, 0.64, 1.0], size);
     }
 
     fn push_context_menu_overlay(
@@ -6751,11 +6769,28 @@ impl ShellScene {
     }
 
     fn content_width(&self, size: PhysicalSize<u32>) -> f32 {
-        (size.width as f32 - self.content_origin_x(size)).max(1.0)
+        let reserved = if self.content_scrollbar_axis() == ContentScrollbarAxis::Vertical {
+            CONTENT_SCROLLBAR_RESERVED_EXTENT
+        } else {
+            0.0
+        };
+        (size.width as f32 - self.content_origin_x(size) - reserved).max(1.0)
     }
 
     fn viewport_height(&self, size: PhysicalSize<u32>) -> f32 {
-        (size.height as f32 - self.content_origin_y() - STATUS_BAR_HEIGHT).max(1.0)
+        let reserved = if self.content_scrollbar_axis() == ContentScrollbarAxis::Horizontal {
+            CONTENT_SCROLLBAR_RESERVED_EXTENT
+        } else {
+            0.0
+        };
+        (size.height as f32 - self.content_origin_y() - STATUS_BAR_HEIGHT - reserved).max(1.0)
+    }
+
+    fn content_scrollbar_axis(&self) -> ContentScrollbarAxis {
+        match self.view_mode {
+            ShellViewMode::Compact => ContentScrollbarAxis::Horizontal,
+            ShellViewMode::Icons | ShellViewMode::Details => ContentScrollbarAxis::Vertical,
+        }
     }
 
     fn content_screen_rect(&self, size: PhysicalSize<u32>) -> ViewRect {
@@ -6832,6 +6867,79 @@ impl ShellScene {
     fn max_scroll_y(&self, size: PhysicalSize<u32>) -> f32 {
         let layout = self.layout(size);
         (layout.content_size().height - self.viewport_height(size)).max(0.0)
+    }
+
+    fn content_scrollbar_rects(&self, size: PhysicalSize<u32>) -> Option<(ViewRect, ViewRect)> {
+        match self.content_scrollbar_axis() {
+            ContentScrollbarAxis::Vertical => {
+                let max_scroll = self.max_scroll_y(size);
+                if max_scroll <= f32::EPSILON {
+                    return None;
+                }
+                let viewport_extent = self.viewport_height(size);
+                let slot = ViewRect {
+                    x: self.content_origin_x(size) + self.content_width(size),
+                    y: self.content_origin_y(),
+                    width: CONTENT_SCROLLBAR_RESERVED_EXTENT
+                        .min((size.width as f32 - self.content_origin_x(size)).max(1.0)),
+                    height: viewport_extent,
+                };
+                let track = inset_content_scrollbar_slot(slot)?;
+                let content_extent = viewport_extent + max_scroll;
+                let thumb_extent = (track.height * (viewport_extent / content_extent)).clamp(
+                    CONTENT_SCROLLBAR_MIN_THUMB_SIZE.min(track.height),
+                    track.height,
+                );
+                if thumb_extent >= track.height {
+                    return None;
+                }
+                let travel = (track.height - thumb_extent).max(0.0);
+                let thumb_y = track.y + (self.scroll_y / max_scroll).clamp(0.0, 1.0) * travel;
+                Some((
+                    track,
+                    ViewRect {
+                        x: track.x,
+                        y: thumb_y,
+                        width: track.width,
+                        height: thumb_extent,
+                    },
+                ))
+            }
+            ContentScrollbarAxis::Horizontal => {
+                let max_scroll = self.max_scroll_x(size);
+                if max_scroll <= f32::EPSILON {
+                    return None;
+                }
+                let viewport_extent = self.content_width(size);
+                let slot = ViewRect {
+                    x: self.content_origin_x(size),
+                    y: self.content_origin_y() + self.viewport_height(size),
+                    width: viewport_extent,
+                    height: CONTENT_SCROLLBAR_RESERVED_EXTENT
+                        .min((size.height as f32 - self.content_origin_y()).max(1.0)),
+                };
+                let track = inset_content_scrollbar_slot(slot)?;
+                let content_extent = viewport_extent + max_scroll;
+                let thumb_extent = (track.width * (viewport_extent / content_extent)).clamp(
+                    CONTENT_SCROLLBAR_MIN_THUMB_SIZE.min(track.width),
+                    track.width,
+                );
+                if thumb_extent >= track.width {
+                    return None;
+                }
+                let travel = (track.width - thumb_extent).max(0.0);
+                let thumb_x = track.x + (self.scroll_x / max_scroll).clamp(0.0, 1.0) * travel;
+                Some((
+                    track,
+                    ViewRect {
+                        x: thumb_x,
+                        y: track.y,
+                        width: thumb_extent,
+                        height: track.height,
+                    },
+                ))
+            }
+        }
     }
 
     fn set_pointer(&mut self, point: ViewPoint, size: PhysicalSize<u32>) -> bool {
@@ -7626,7 +7734,7 @@ impl WgpuState {
             || self.last_log.elapsed() >= Duration::from_secs(1)
         {
             eprintln!(
-                "[fika-wgpu] frame={} reason={} view={} zoom={} zoom_changes={} path={} entries={} filtered={} show_hidden={} hidden_changes={} location_active={} location_changes={} filter_active={} filter_changes={} places={} place_hover={} places_changes={} places_scroll_y={:.1} places_scroll_changes={} visible={} selected={} hover={} context={} context_menu={} context_changes={} context_actions={} properties={} properties_changes={} create_dialog={} create_changes={} rename_dialog={} rename_changes={} open_with={} open_with_changes={} open_changes={} copy_location_changes={} file_clipboard_changes={} paste_changes={} trash_changes={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} path_changes={} reloads={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_cache={}/{} entries={} bytes={} batches={} scroll_x={:.1} scroll_y={:.1} layout={}us text_raster={}us text_atlas={}x{}:{}b render={}us",
+                "[fika-wgpu] frame={} reason={} view={} zoom={} zoom_changes={} path={} entries={} filtered={} show_hidden={} hidden_changes={} location_active={} location_changes={} filter_active={} filter_changes={} places={} place_hover={} places_changes={} places_scroll_y={:.1} places_scroll_changes={} content_scrollbar={} visible={} selected={} hover={} context={} context_menu={} context_changes={} context_actions={} properties={} properties_changes={} create_dialog={} create_changes={} rename_dialog={} rename_changes={} open_with={} open_with_changes={} open_changes={} copy_location_changes={} file_clipboard_changes={} paste_changes={} trash_changes={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} path_changes={} reloads={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_cache={}/{} entries={} bytes={} batches={} scroll_x={:.1} scroll_y={:.1} layout={}us text_raster={}us text_atlas={}x{}:{}b render={}us",
                 self.frame_count,
                 reason,
                 scene.view_mode.as_str(),
@@ -7646,6 +7754,7 @@ impl WgpuState {
                 scene.places_changes,
                 scene.places_scroll_y,
                 scene.places_scroll_changes,
+                scene.content_scrollbar_rects(self.size).is_some() as u8,
                 scene_frame.visible_items,
                 scene.selection.len(),
                 scene.hovered_index.map(|index| index as i64).unwrap_or(-1),
@@ -9974,6 +10083,18 @@ fn intersect_rect(rect: ViewRect, clip: ViewRect) -> Option<ViewRect> {
     })
 }
 
+fn inset_content_scrollbar_slot(slot: ViewRect) -> Option<ViewRect> {
+    let inset = CONTENT_SCROLLBAR_PADDING;
+    let width = slot.width - inset * 2.0;
+    let height = slot.height - inset * 2.0;
+    (width > 0.0 && height > 0.0).then_some(ViewRect {
+        x: slot.x + inset,
+        y: slot.y + inset,
+        width,
+        height,
+    })
+}
+
 fn screen_to_content_point(
     point: ViewPoint,
     scroll_offset: ViewPoint,
@@ -11194,6 +11315,59 @@ mod tests {
     }
 
     #[test]
+    fn content_scrollbar_reserves_vertical_track_for_icons() {
+        let scene = test_scene(
+            (0..80)
+                .map(|index| test_entry(&format!("entry-{index:02}.txt"), false))
+                .collect(),
+            ShellViewMode::Icons,
+        );
+        let size = PhysicalSize::new(420, 260);
+        let content = scene.content_screen_rect(size);
+        let (track, thumb) = scene
+            .content_scrollbar_rects(size)
+            .expect("icons view should need vertical scrollbar");
+
+        assert_eq!(
+            scene.content_scrollbar_axis(),
+            ContentScrollbarAxis::Vertical
+        );
+        assert!(track.x >= content.right());
+        assert!(track.width > 0.0);
+        assert!(thumb.height >= CONTENT_SCROLLBAR_MIN_THUMB_SIZE.min(track.height));
+        assert!(!content.contains(ViewPoint {
+            x: track.x,
+            y: track.y,
+        }));
+    }
+
+    #[test]
+    fn compact_content_scrollbar_uses_horizontal_offset() {
+        let mut scene = test_scene(
+            (0..80)
+                .map(|index| test_entry(&format!("entry-{index:02}.txt"), false))
+                .collect(),
+            ShellViewMode::Compact,
+        );
+        let size = PhysicalSize::new(420, 260);
+        let (start_track, start_thumb) = scene
+            .content_scrollbar_rects(size)
+            .expect("compact view should need horizontal scrollbar");
+        scene.scroll_x = scene.max_scroll_x(size) / 2.0;
+        let (middle_track, middle_thumb) = scene
+            .content_scrollbar_rects(size)
+            .expect("compact view should keep horizontal scrollbar");
+
+        assert_eq!(
+            scene.content_scrollbar_axis(),
+            ContentScrollbarAxis::Horizontal
+        );
+        assert_eq!(start_track.y, middle_track.y);
+        assert!(middle_thumb.x > start_thumb.x);
+        assert_eq!(start_thumb.height, middle_thumb.height);
+    }
+
+    #[test]
     fn place_activation_records_target_path_and_hover() {
         let mut scene = test_scene(Vec::new(), ShellViewMode::Icons);
         scene.places = vec![
@@ -11893,8 +12067,9 @@ text/plain=writer.desktop;\n",
             mode: RubberBandMode::Replace,
             base_selection: scene.selection.clone(),
         });
+        let content = scene.content_screen_rect(size);
         let point = ViewPoint {
-            x: size.width as f32 - 4.0,
+            x: content.right() - 4.0,
             y: scene.content_origin_y() + 4.0,
         };
 
@@ -11979,9 +12154,10 @@ text/plain=writer.desktop;\n",
     fn context_menu_clamps_blank_actions_inside_window() {
         let mut scene = test_scene(Vec::new(), ShellViewMode::Icons);
         let size = PhysicalSize::new(240, 180);
+        let content = scene.content_screen_rect(size);
         let point = ViewPoint {
-            x: size.width as f32 - 2.0,
-            y: status_bar_rect(size).y - 2.0,
+            x: content.right() - 2.0,
+            y: content.bottom() - 2.0,
         };
 
         assert!(scene.open_context_menu(point, size));
@@ -12018,8 +12194,9 @@ text/plain=writer.desktop;\n",
     fn context_menu_blank_actions_can_hit_select_all_and_refresh() {
         let mut scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
         let size = PhysicalSize::new(420, 260);
+        let content = scene.content_screen_rect(size);
         let point = ViewPoint {
-            x: size.width as f32 - 4.0,
+            x: content.right() - 4.0,
             y: scene.content_origin_y() + 4.0,
         };
 
