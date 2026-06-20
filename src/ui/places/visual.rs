@@ -8,7 +8,7 @@ use gpui::{
 };
 
 use crate::FikaApp;
-use crate::ui::icons::FileIconSnapshot;
+use crate::ui::icons::{FileIconSnapshot, IconPaintMode};
 use crate::ui::retained::{RetainedImageLayerState, RetainedImageRequest, RetainedShapeCache};
 
 use super::perf::{
@@ -156,6 +156,7 @@ struct PlaceRowIconVisualState {
     marker: SharedString,
     fallback_fg: u32,
     fallback_bg: u32,
+    mode: IconPaintMode,
 }
 
 impl PlaceRowIconVisualState {
@@ -166,6 +167,11 @@ impl PlaceRowIconVisualState {
             marker: SharedString::from(icon.fallback_marker.as_ref()),
             fallback_fg: if active { 0x1f4fbf } else { icon.fallback_fg },
             fallback_bg: if active { 0xeaf1ff } else { icon.fallback_bg },
+            mode: if active {
+                IconPaintMode::Active
+            } else {
+                IconPaintMode::Normal
+            },
         }
     }
 }
@@ -504,11 +510,12 @@ fn load_place_icon_or_retained(
     window: &mut Window,
     cx: &mut App,
 ) -> Option<Arc<RenderImage>> {
-    let request = RetainedImageRequest::theme_icon_for_parts(
+    let request = RetainedImageRequest::theme_icon_for_parts_with_mode(
         icon.path.clone(),
         icon.icon_name.clone(),
         PLACE_ROW_ICON_SIZE.round() as u32,
         window.scale_factor(),
+        icon.mode,
     )?;
     let load = retained_images.load_request_or_retained_with_outcome(request, app, window, cx);
     load.image

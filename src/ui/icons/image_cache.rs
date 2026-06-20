@@ -14,6 +14,8 @@ pub(crate) enum IconColorScheme {
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum IconPaintMode {
     Normal,
+    Active,
+    Selected,
 }
 
 // Pixmap identity, not file-role identity. Dolphin stores model data as
@@ -30,14 +32,24 @@ pub(crate) struct ThemeIconImageKey {
 }
 
 impl ThemeIconImageKey {
+    #[cfg(test)]
     pub(crate) fn new(icon_name: Arc<str>, icon_size_px: u32, scale_factor: f32) -> Self {
+        Self::new_with_mode(icon_name, icon_size_px, scale_factor, IconPaintMode::Normal)
+    }
+
+    pub(crate) fn new_with_mode(
+        icon_name: Arc<str>,
+        icon_size_px: u32,
+        scale_factor: f32,
+        mode: IconPaintMode,
+    ) -> Self {
         Self {
             icon_name,
             icon_size_px: icon_size_px.clamp(1, 1024),
             scale_bits: stable_scale_bits(scale_factor),
             theme_name: Arc::from(UNKNOWN_THEME_NAME),
             color_scheme: IconColorScheme::Unknown,
-            mode: IconPaintMode::Normal,
+            mode,
         }
     }
 
@@ -46,14 +58,29 @@ impl ThemeIconImageKey {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn theme_icon_image_key_for_snapshot(
     icon: &FileIconSnapshot,
     icon_size_px: u32,
     scale_factor: f32,
 ) -> Option<ThemeIconImageKey> {
-    icon.path
-        .as_ref()
-        .map(|_| ThemeIconImageKey::new(icon.icon_name.clone(), icon_size_px, scale_factor))
+    theme_icon_image_key_for_snapshot_with_mode(
+        icon,
+        icon_size_px,
+        scale_factor,
+        IconPaintMode::Normal,
+    )
+}
+
+pub(crate) fn theme_icon_image_key_for_snapshot_with_mode(
+    icon: &FileIconSnapshot,
+    icon_size_px: u32,
+    scale_factor: f32,
+    mode: IconPaintMode,
+) -> Option<ThemeIconImageKey> {
+    icon.path.as_ref().map(|_| {
+        ThemeIconImageKey::new_with_mode(icon.icon_name.clone(), icon_size_px, scale_factor, mode)
+    })
 }
 
 pub(crate) fn theme_icon_image_size_px(width: f32, height: f32) -> u32 {
@@ -243,6 +270,19 @@ impl<T: Clone> RetainedThemeIconImageCache<T> {
         evicted_images
     }
 
+    pub(crate) fn drain_loaded(&mut self) -> Vec<EvictedThemeIconImage<T>> {
+        let mut evicted_images = Vec::new();
+        for (_, entry) in self.entries.drain() {
+            if let Some(image) = entry.image {
+                evicted_images.push(EvictedThemeIconImage {
+                    resolved_path: entry.resolved_path,
+                    image,
+                });
+            }
+        }
+        evicted_images
+    }
+
     fn record_unready(
         &mut self,
         key: ThemeIconImageKey,
@@ -318,6 +358,19 @@ mod tests {
         assert_eq!(one, near_one);
         assert_ne!(one, scaled);
         assert_eq!(scaled.scale_factor(), 1.25);
+    }
+
+    #[test]
+    fn key_keeps_icon_mode_in_identity() {
+        let normal =
+            ThemeIconImageKey::new_with_mode(Arc::from("folder"), 48, 1.0, IconPaintMode::Normal);
+        let active =
+            ThemeIconImageKey::new_with_mode(Arc::from("folder"), 48, 1.0, IconPaintMode::Active);
+        let selected =
+            ThemeIconImageKey::new_with_mode(Arc::from("folder"), 48, 1.0, IconPaintMode::Selected);
+
+        assert_ne!(normal, active);
+        assert_ne!(active, selected);
     }
 
     #[test]
@@ -430,6 +483,24 @@ mod tests {
         assert!(cache.image_for_key(&key_48).is_none());
         assert!(cache.image_for_key(&key_64).is_none());
         assert!(cache.image_for_key(&key_png).is_some());
+    }
+
+    #[test]
+    fn cache_drain_loaded_removes_all_loaded_images() {
+        let key_48 = ThemeIconImageKey::new(Arc::from("text-x-generic"), 48, 1.0);
+        let key_64 = ThemeIconImageKey::new(Arc::from("text-x-generic"), 64, 1.0);
+        let path_48: Arc<Path> = Arc::from(Path::new("/theme/48/text-x-generic.svg"));
+        let path_64: Arc<Path> = Arc::from(Path::new("/theme/64/text-x-generic.svg"));
+        let mut cache = RetainedThemeIconImageCache::default();
+
+        cache.record_loaded(key_48.clone(), path_48.clone(), "image-48");
+        cache.record_loaded(key_64.clone(), path_64.clone(), "image-64");
+
+        let drained = cache.drain_loaded();
+        assert_eq!(drained.len(), 2);
+        assert_eq!(cache.len(), 0);
+        assert!(cache.image_for_key(&key_48).is_none());
+        assert!(cache.image_for_key(&key_64).is_none());
     }
 
     fn icon_snapshot(icon_name: &str, path: &str) -> FileIconSnapshot {

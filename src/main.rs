@@ -98,7 +98,7 @@ use ui::filter_bar::{
     cached_filtered_model_for_pane, filter_toggle_snapshot,
 };
 use ui::icons::{
-    FileIconCache, RetainedThemeIconImageCache, ThemeIconImageKey,
+    FileIconCache, IconThemeCacheSignature, RetainedThemeIconImageCache, ThemeIconImageKey,
     common_file_icon_resolve_requests_for_sizes, file_icon_resolve_results_for_requests,
 };
 use ui::item_view::{
@@ -227,8 +227,11 @@ fn listing_cache_debug_summary(
     )
 }
 const VISIBLE_METADATA_ROLE_SYNC_BUDGET: Duration = Duration::from_millis(12);
+const THEME_ICON_VISIBLE_DECODE_BUDGET: usize = 6;
 const THEME_ICON_READ_AHEAD_DECODE_BUDGET: usize = 1;
 const THEME_ICON_READ_AHEAD_REQUEST_BUDGET: usize = 64;
+const THEME_ICON_READ_AHEAD_STEADY_FRAME_DELAY: u8 = 3;
+const THEME_ICON_CACHE_SIGNATURE_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 const PANE_HORIZONTAL_BORDER_EXTENT: f32 = 2.0;
 
 const CONTEXT_SUBMENU_HIDE_DELAY: Duration = Duration::from_millis(300);
@@ -260,6 +263,17 @@ fn background_task_state_for_message(message: &str) -> BackgroundTaskState {
         || message.contains("canceled")
         || message.contains(" stale")
     {
+        BackgroundTaskState::Failed
+    } else {
+        BackgroundTaskState::Complete
+    }
+}
+
+fn background_task_state_for_counts(
+    _success_count: usize,
+    failure_count: usize,
+) -> BackgroundTaskState {
+    if failure_count > 0 {
         BackgroundTaskState::Failed
     } else {
         BackgroundTaskState::Complete
@@ -376,6 +390,8 @@ pub(crate) struct FikaApp {
     next_device_monitor_start_at: Instant,
     file_icons: FileIconCache,
     file_icon_resolve_queue: FileIconResolveQueue,
+    theme_icon_cache_signature: IconThemeCacheSignature,
+    next_theme_icon_cache_signature_check_at: Instant,
     theme_icon_images: RetainedThemeIconImageCache<Arc<RenderImage>>,
     pending_theme_icon_prewarm_requests: Vec<RetainedImageRequest>,
     priority_deferred_theme_icon_prewarm_requests: Vec<RetainedImageRequest>,
@@ -383,6 +399,7 @@ pub(crate) struct FikaApp {
     theme_icon_read_ahead_prewarm_queue: VecDeque<RetainedImageRequest>,
     theme_icon_read_ahead_prewarm_keys: HashSet<ThemeIconImageKey>,
     theme_icon_read_ahead_prewarm_allowed: bool,
+    theme_icon_read_ahead_steady_frames: u8,
     mime_applications: MimeApplicationCache,
     space_info: SpaceInfoCache,
     status_summaries: HashMap<PaneId, StatusSummaryCacheEntry>,
@@ -486,6 +503,9 @@ impl FikaApp {
             next_device_monitor_start_at: Instant::now(),
             file_icons: FileIconCache::default(),
             file_icon_resolve_queue: FileIconResolveQueue::default(),
+            theme_icon_cache_signature: IconThemeCacheSignature::current(),
+            next_theme_icon_cache_signature_check_at: Instant::now()
+                + THEME_ICON_CACHE_SIGNATURE_CHECK_INTERVAL,
             theme_icon_images: RetainedThemeIconImageCache::default(),
             pending_theme_icon_prewarm_requests: Vec::new(),
             priority_deferred_theme_icon_prewarm_requests: Vec::new(),
@@ -493,6 +513,7 @@ impl FikaApp {
             theme_icon_read_ahead_prewarm_queue: VecDeque::new(),
             theme_icon_read_ahead_prewarm_keys: HashSet::new(),
             theme_icon_read_ahead_prewarm_allowed: true,
+            theme_icon_read_ahead_steady_frames: 0,
             mime_applications: MimeApplicationCache::load(),
             space_info: SpaceInfoCache::default(),
             status_summaries: HashMap::new(),
@@ -1429,10 +1450,23 @@ impl FikaApp {
         message: impl Into<String>,
     ) {
         let message = message.into();
-        self.record_background_task_result(task_id, &message, &message);
+        let state = background_task_state_for_message(&message);
+        self.finish_pane_operation_with_state(task_id, pane_id, message, state);
+    }
+
+    fn finish_pane_operation_with_state(
+        &mut self,
+        task_id: BackgroundTaskId,
+        pane_id: PaneId,
+        message: impl Into<String>,
+        state: BackgroundTaskState,
+    ) {
+        let message = message.into();
+        self.record_background_task_result(task_id, &message, &message, state);
         self.set_pane_status(pane_id, message);
     }
 
+    #[cfg(test)]
     fn finish_pane_operation_with_detail(
         &mut self,
         task_id: BackgroundTaskId,
@@ -1442,7 +1476,21 @@ impl FikaApp {
     ) {
         let message = message.into();
         let detail = detail.into();
-        self.record_background_task_result(task_id, &message, &detail);
+        let state = background_task_state_for_message(&message);
+        self.finish_pane_operation_with_detail_and_state(task_id, pane_id, message, detail, state);
+    }
+
+    fn finish_pane_operation_with_detail_and_state(
+        &mut self,
+        task_id: BackgroundTaskId,
+        pane_id: PaneId,
+        message: impl Into<String>,
+        detail: impl Into<String>,
+        state: BackgroundTaskState,
+    ) {
+        let message = message.into();
+        let detail = detail.into();
+        self.record_background_task_result(task_id, &message, &detail, state);
         self.set_pane_status(pane_id, message);
     }
 
@@ -1468,7 +1516,14 @@ impl FikaApp {
                 result.title, result.success_count, result.failure_count
             ),
         };
-        self.finish_pane_operation_with_detail(task_id, result.pane_id, status, result.detail);
+        let state = background_task_state_for_counts(result.success_count, result.failure_count);
+        self.finish_pane_operation_with_detail_and_state(
+            task_id,
+            result.pane_id,
+            status,
+            result.detail,
+            state,
+        );
     }
 
     fn run_privileged_commands(
@@ -1578,6 +1633,7 @@ impl FikaApp {
         task_id: BackgroundTaskId,
         message: &str,
         detail: &str,
+        state: BackgroundTaskState,
     ) {
         let title = OperationRuntime::shared()
             .ok()
@@ -1588,7 +1644,7 @@ impl FikaApp {
             .push_front(BackgroundTaskHistoryRecord {
                 title,
                 detail: detail.to_string(),
-                state: background_task_state_for_message(message),
+                state,
             });
         while self.background_task_history.len() > BACKGROUND_TASK_HISTORY_LIMIT {
             self.background_task_history.pop_back();
@@ -3905,10 +3961,11 @@ impl FikaApp {
             }
             Err(err) => {
                 self.clear_pending_rename_next_for_pane(result.pane_id);
-                self.finish_pane_operation(
+                self.finish_pane_operation_with_state(
                     task_id,
                     result.pane_id,
                     format!("Cannot rename {}: {err}", result.original_path.display()),
+                    BackgroundTaskState::Failed,
                 );
             }
         }
@@ -4039,13 +4096,14 @@ impl FikaApp {
                 );
             }
             Err(err) => {
-                self.finish_pane_operation(
+                self.finish_pane_operation_with_state(
                     task_id,
                     result.pane_id,
                     format!(
                         "Cannot create {}: {err}",
                         created_item_label(result.kind).to_ascii_lowercase()
                     ),
+                    BackgroundTaskState::Failed,
                 );
             }
         }
@@ -4892,10 +4950,11 @@ impl FikaApp {
             self.refresh_affected_dirs(&refresh_dirs);
         }
 
-        self.finish_pane_operation(
+        self.finish_pane_operation_with_state(
             task_id,
             pane_id,
             action_status(&format!("{label} complete"), success_count, failure_count),
+            background_task_state_for_counts(success_count, failure_count),
         );
     }
 
@@ -4987,10 +5046,11 @@ impl FikaApp {
             let _ = self.panes.clear_selection(result.pane_id);
         }
 
-        self.finish_pane_operation(
+        self.finish_pane_operation_with_state(
             task_id,
             result.pane_id,
             action_status("Moved to trash", result.success_count, result.failure_count),
+            background_task_state_for_counts(result.success_count, result.failure_count),
         );
     }
 
@@ -5121,7 +5181,7 @@ impl FikaApp {
             });
         }
         let failure_count = result.failure_count + restore_conflict_count;
-        self.finish_pane_operation(
+        self.finish_pane_operation_with_state(
             task_id,
             result.pane_id,
             action_status(
@@ -5129,6 +5189,7 @@ impl FikaApp {
                 result.success_count,
                 failure_count,
             ),
+            background_task_state_for_counts(result.success_count, failure_count),
         );
     }
 
@@ -5187,7 +5248,12 @@ impl FikaApp {
                     .take_latest_undo(result.record.serial)
                     .is_none()
                 {
-                    self.finish_pane_operation(task_id, pane_id, "Undo result is stale");
+                    self.finish_pane_operation_with_state(
+                        task_id,
+                        pane_id,
+                        "Undo result is stale",
+                        BackgroundTaskState::Failed,
+                    );
                     return;
                 }
                 self.refresh_affected_dirs(&result.record.affected_dirs);
@@ -5198,10 +5264,11 @@ impl FikaApp {
                 );
             }
             Err(err) => {
-                self.finish_pane_operation(
+                self.finish_pane_operation_with_state(
                     task_id,
                     pane_id,
                     format!("Cannot undo {}: {err}", result.record.label),
+                    BackgroundTaskState::Failed,
                 );
             }
         }
@@ -7121,6 +7188,38 @@ impl FikaApp {
         }
     }
 
+    fn maybe_refresh_icon_theme_caches(&mut self, cx: &mut App, window: &mut Window) -> bool {
+        let now = Instant::now();
+        if now < self.next_theme_icon_cache_signature_check_at {
+            return false;
+        }
+        self.next_theme_icon_cache_signature_check_at =
+            now + THEME_ICON_CACHE_SIGNATURE_CHECK_INTERVAL;
+        let signature = IconThemeCacheSignature::current();
+        if signature == self.theme_icon_cache_signature {
+            return false;
+        }
+
+        self.theme_icon_cache_signature = signature;
+        self.file_icons.reset_theme_caches();
+        self.file_icon_resolve_queue.clear();
+        self.pending_theme_icon_prewarm_requests.clear();
+        self.priority_deferred_theme_icon_prewarm_requests.clear();
+        self.deferred_theme_icon_prewarm_requests.clear();
+        self.theme_icon_read_ahead_prewarm_queue.clear();
+        self.theme_icon_read_ahead_prewarm_keys.clear();
+        self.theme_icon_read_ahead_steady_frames = 0;
+        let stats = self.clear_retained_theme_icon_cache(cx, window);
+        self.invalidate_all_file_grid_visible_snapshot_caches();
+        if item_view_perf_enabled() {
+            eprintln!(
+                "[fika theme-icon-cache-reset] evicted={} entries={} bytes={}",
+                stats.evicted, stats.entries, stats.bytes
+            );
+        }
+        true
+    }
+
     fn refresh_theme_icon_read_ahead_prewarm_queue(
         &mut self,
         cx: &mut App,
@@ -7187,11 +7286,18 @@ impl Render for FikaApp {
         let background_tasks = self.background_tasks_snapshot(Instant::now());
         let background_tasks_elapsed = background_tasks_started.map(|started| started.elapsed());
         let snapshots_started = perf_enabled.then(Instant::now);
+        self.maybe_refresh_icon_theme_caches(cx, window);
         self.pending_theme_icon_prewarm_requests.clear();
         self.priority_deferred_theme_icon_prewarm_requests.clear();
         self.deferred_theme_icon_prewarm_requests.clear();
         self.theme_icon_read_ahead_prewarm_allowed = true;
         let snapshots = self.snapshots(scale_factor, cx);
+        if self.theme_icon_read_ahead_prewarm_allowed {
+            self.theme_icon_read_ahead_steady_frames =
+                self.theme_icon_read_ahead_steady_frames.saturating_add(1);
+        } else {
+            self.theme_icon_read_ahead_steady_frames = 0;
+        }
         let snapshots_elapsed = snapshots_started.map(|started| started.elapsed());
         let theme_icon_prewarm_started = perf_enabled.then(Instant::now);
         let mut theme_icon_prewarm_requests =
@@ -7202,8 +7308,11 @@ impl Render for FikaApp {
                 scale_factor,
             ));
         }
-        let theme_icon_prewarm_stats =
-            self.refresh_retained_theme_icon_requests(theme_icon_prewarm_requests, cx, window);
+        let theme_icon_prewarm_stats = self.refresh_visible_retained_theme_icon_requests(
+            theme_icon_prewarm_requests,
+            cx,
+            window,
+        );
         let priority_read_ahead_theme_icon_prewarm_requests =
             std::mem::take(&mut self.priority_deferred_theme_icon_prewarm_requests);
         self.enqueue_theme_icon_read_ahead_prewarm_requests(
@@ -7216,7 +7325,9 @@ impl Render for FikaApp {
             read_ahead_theme_icon_prewarm_requests,
             false,
         );
-        let read_ahead_theme_icon_prewarm_stats = if self.theme_icon_read_ahead_prewarm_allowed {
+        let read_ahead_theme_icon_prewarm_stats = if self.theme_icon_read_ahead_prewarm_allowed
+            && self.theme_icon_read_ahead_steady_frames >= THEME_ICON_READ_AHEAD_STEADY_FRAME_DELAY
+        {
             self.refresh_theme_icon_read_ahead_prewarm_queue(cx, window)
         } else {
             RetainedThemeIconCacheRefreshStats::default()
@@ -15456,6 +15567,9 @@ text/plain=viewer.desktop;\n",
             next_device_monitor_start_at: Instant::now(),
             file_icons: FileIconCache::default(),
             file_icon_resolve_queue: FileIconResolveQueue::default(),
+            theme_icon_cache_signature: IconThemeCacheSignature::current(),
+            next_theme_icon_cache_signature_check_at: Instant::now()
+                + THEME_ICON_CACHE_SIGNATURE_CHECK_INTERVAL,
             theme_icon_images: RetainedThemeIconImageCache::default(),
             pending_theme_icon_prewarm_requests: Vec::new(),
             priority_deferred_theme_icon_prewarm_requests: Vec::new(),
@@ -15463,6 +15577,7 @@ text/plain=viewer.desktop;\n",
             theme_icon_read_ahead_prewarm_queue: VecDeque::new(),
             theme_icon_read_ahead_prewarm_keys: HashSet::new(),
             theme_icon_read_ahead_prewarm_allowed: true,
+            theme_icon_read_ahead_steady_frames: 0,
             mime_applications: MimeApplicationCache::empty(),
             space_info: SpaceInfoCache::default(),
             status_summaries: HashMap::new(),

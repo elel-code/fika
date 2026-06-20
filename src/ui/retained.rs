@@ -11,8 +11,8 @@ use gpui::{
 
 use crate::FikaApp;
 use crate::ui::icons::{
-    EvictedThemeIconImage, FileIconSnapshot, RetainedThemeIconImageLoadOutcome, ThemeIconImageKey,
-    theme_icon_image_key_for_snapshot,
+    EvictedThemeIconImage, FileIconSnapshot, IconPaintMode, RetainedThemeIconImageLoadOutcome,
+    ThemeIconImageKey, theme_icon_image_key_for_snapshot_with_mode,
 };
 
 mod work_order;
@@ -374,16 +374,17 @@ impl RetainedImageRequest {
         Self::ThemeIcon { source_path, key }
     }
 
-    pub(crate) fn theme_icon_for_parts(
+    pub(crate) fn theme_icon_for_parts_with_mode(
         source_path: Option<Arc<Path>>,
         icon_name: Arc<str>,
         icon_size_px: u32,
         scale_factor: f32,
+        mode: IconPaintMode,
     ) -> Option<Self> {
         let source_path = source_path?;
         Some(Self::theme_icon(
             source_path,
-            ThemeIconImageKey::new(icon_name, icon_size_px, scale_factor),
+            ThemeIconImageKey::new_with_mode(icon_name, icon_size_px, scale_factor, mode),
         ))
     }
 
@@ -392,22 +393,38 @@ impl RetainedImageRequest {
         icon_size_px: u32,
         scale_factor: f32,
     ) -> Option<Self> {
+        Self::theme_icon_for_snapshot_with_mode(
+            icon,
+            icon_size_px,
+            scale_factor,
+            IconPaintMode::Normal,
+        )
+    }
+
+    pub(crate) fn theme_icon_for_snapshot_with_mode(
+        icon: &FileIconSnapshot,
+        icon_size_px: u32,
+        scale_factor: f32,
+        mode: IconPaintMode,
+    ) -> Option<Self> {
         let source_path = icon.path.clone()?;
-        let key = theme_icon_image_key_for_snapshot(icon, icon_size_px, scale_factor)?;
+        let key =
+            theme_icon_image_key_for_snapshot_with_mode(icon, icon_size_px, scale_factor, mode)?;
         Some(Self::theme_icon(source_path, key))
     }
 
-    pub(crate) fn thumbnail_or_theme_icon_for_snapshot(
+    pub(crate) fn thumbnail_or_theme_icon_for_snapshot_with_mode(
         thumbnail_path: Option<Arc<Path>>,
         icon: &FileIconSnapshot,
         icon_size_px: u32,
         scale_factor: f32,
+        mode: IconPaintMode,
     ) -> Option<Self> {
         if let Some(source_path) = thumbnail_path {
             return Some(Self::thumbnail(source_path));
         }
 
-        Self::theme_icon_for_snapshot(icon, icon_size_px, scale_factor)
+        Self::theme_icon_for_snapshot_with_mode(icon, icon_size_px, scale_factor, mode)
     }
 
     pub(crate) fn source_path(&self) -> &Arc<Path> {
@@ -725,9 +742,33 @@ impl FikaApp {
         })
     }
 
-    pub(crate) fn refresh_retained_theme_icon_requests(
+    pub(crate) fn refresh_visible_retained_theme_icon_requests(
         &mut self,
         requests: impl IntoIterator<Item = RetainedImageRequest>,
+        cx: &mut App,
+        window: &mut Window,
+    ) -> RetainedThemeIconCacheRefreshStats {
+        self.refresh_retained_theme_icon_requests_with_decode_budget(
+            requests,
+            crate::THEME_ICON_VISIBLE_DECODE_BUDGET,
+            cx,
+            window,
+        )
+    }
+
+    pub(crate) fn refresh_retained_theme_icon_requests_retained_only(
+        &mut self,
+        requests: impl IntoIterator<Item = RetainedImageRequest>,
+        cx: &mut App,
+        window: &mut Window,
+    ) -> RetainedThemeIconCacheRefreshStats {
+        self.refresh_retained_theme_icon_requests_with_decode_budget(requests, 0, cx, window)
+    }
+
+    pub(crate) fn refresh_retained_theme_icon_requests_with_decode_budget(
+        &mut self,
+        requests: impl IntoIterator<Item = RetainedImageRequest>,
+        decode_budget: usize,
         cx: &mut App,
         window: &mut Window,
     ) -> RetainedThemeIconCacheRefreshStats {
@@ -737,6 +778,15 @@ impl FikaApp {
             let Some((source_path, key)) = request.into_theme_icon_parts() else {
                 continue;
             };
+            if let Some(retained) = self.retained_theme_icon_image_for_key(&key) {
+                stats.requested += 1;
+                stats.record_load(Some(retained));
+                continue;
+            }
+            if stats.decoded >= decode_budget && is_svg_icon_path(source_path.as_ref()) {
+                continue;
+            }
+
             stats.requested += 1;
             stats.record_load(self.refresh_retained_theme_icon_cache(source_path, key, cx));
         }
@@ -800,6 +850,25 @@ impl FikaApp {
         let mut stats = self.retained_theme_icon_cache_stats();
         stats.evicted = evicted_count;
         stats
+    }
+
+    pub(crate) fn clear_retained_theme_icon_cache(
+        &mut self,
+        cx: &mut App,
+        window: &mut Window,
+    ) -> RetainedThemeIconPruneStats {
+        let evicted = self.theme_icon_images.drain_loaded();
+        let evicted_count = evicted.len();
+        for evicted in evicted {
+            cx.drop_image(evicted.image, Some(window));
+        }
+        RetainedThemeIconPruneStats {
+            evicted: evicted_count,
+            entries: self.theme_icon_images.len(),
+            bytes: self
+                .theme_icon_images
+                .loaded_cost(render_image_cache_cost_bytes),
+        }
     }
 }
 

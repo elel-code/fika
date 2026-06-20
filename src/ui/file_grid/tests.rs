@@ -37,7 +37,7 @@ use super::viewport::{
     measured_viewport_for_scrollbar_axis, viewport_bounds_update_requires_notify,
 };
 use crate::ui::drag_drop::drag_preview_content_origin_for_cursor_offset;
-use crate::ui::icons::FileIconSnapshot;
+use crate::ui::icons::{FileIconSnapshot, IconPaintMode};
 use crate::ui::item_view::ItemViewScrollbarAxis;
 use crate::ui::retained::RetainedImageRequestKind;
 use fika_core::{
@@ -294,13 +294,14 @@ fn retained_image_source_uses_size_aware_theme_icon_key() {
         fallback_fg: 0xffffff,
         fallback_bg: 0x2563eb,
     };
-    let first = item_image_retained_request_for(None, &icon, 48, 1.0);
+    let first = item_image_retained_request_for(None, &icon, 48, 1.0, IconPaintMode::Normal);
 
     icon.path = Some(Arc::from(Path::new(
         "/theme/64/mimetypes/text-x-generic.svg",
     )));
-    let same_size_new_path = item_image_retained_request_for(None, &icon, 48, 1.0);
-    let zoomed = item_image_retained_request_for(None, &icon, 64, 1.0);
+    let same_size_new_path =
+        item_image_retained_request_for(None, &icon, 48, 1.0, IconPaintMode::Normal);
+    let zoomed = item_image_retained_request_for(None, &icon, 64, 1.0, IconPaintMode::Normal);
 
     let Some(key) = first.as_ref().and_then(|request| request.theme_icon_key()) else {
         panic!("expected theme icon retained source");
@@ -367,8 +368,14 @@ fn retained_image_source_uses_thumbnail_path_before_icon_name() {
         fallback_bg: 0x2563eb,
     };
 
-    let request = item_image_retained_request_for(Some(thumbnail.clone()), &icon, 48, 1.0)
-        .expect("thumbnail request should be retained");
+    let request = item_image_retained_request_for(
+        Some(thumbnail.clone()),
+        &icon,
+        48,
+        1.0,
+        IconPaintMode::Normal,
+    )
+    .expect("thumbnail request should be retained");
     assert_eq!(request.kind(), RetainedImageRequestKind::Thumbnail);
     assert!(request.theme_icon_key().is_none());
     assert_eq!(request.source_path(), &thumbnail);

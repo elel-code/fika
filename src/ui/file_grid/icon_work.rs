@@ -79,6 +79,13 @@ impl FileIconResolveQueue {
         }
     }
 
+    pub(crate) fn clear(&mut self) {
+        self.queued.clear();
+        self.seen.clear();
+        self.covered.clear();
+        self.pending = false;
+    }
+
     pub(crate) fn contains(&self, request: &FileIconResolveRequest) -> bool {
         self.seen.contains(request)
     }

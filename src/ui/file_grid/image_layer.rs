@@ -10,7 +10,7 @@ use gpui::{
 };
 
 use crate::FikaApp;
-use crate::ui::icons::{FileIconSnapshot, theme_icon_image_size_px};
+use crate::ui::icons::{FileIconSnapshot, IconPaintMode, theme_icon_image_size_px};
 use crate::ui::retained::{
     RetainedImageLayerState, RetainedImageLoadOutcome, RetainedImageRequest,
     RetainedImageRequestKind,
@@ -72,6 +72,7 @@ pub(super) fn item_image_layer_items_for_policy(
                 thumbnail_path: content.thumbnail_path.clone(),
                 icon: content.icon.clone(),
                 fallback_marker: content.fallback_marker.clone(),
+                mode: icon_paint_mode_for_selected(item.visual.selected),
             })
         })
         .collect()
@@ -83,6 +84,7 @@ pub(super) struct ItemImageLayerItem {
     thumbnail_path: Option<Arc<Path>>,
     icon: FileIconSnapshot,
     fallback_marker: SharedString,
+    mode: IconPaintMode,
 }
 
 #[cfg(test)]
@@ -112,12 +114,14 @@ pub(super) fn item_image_retained_request_for(
     icon: &FileIconSnapshot,
     icon_size_px: u32,
     scale_factor: f32,
+    mode: IconPaintMode,
 ) -> Option<RetainedImageRequest> {
-    RetainedImageRequest::thumbnail_or_theme_icon_for_snapshot(
+    RetainedImageRequest::thumbnail_or_theme_icon_for_snapshot_with_mode(
         thumbnail_path,
         icon,
         icon_size_px,
         scale_factor,
+        mode,
     )
 }
 
@@ -130,7 +134,16 @@ fn item_image_layer_retained_request(
         &item.icon,
         item_image_theme_icon_size_px(item),
         scale_factor,
+        item.mode,
     )
+}
+
+pub(super) fn icon_paint_mode_for_selected(selected: bool) -> IconPaintMode {
+    if selected {
+        IconPaintMode::Selected
+    } else {
+        IconPaintMode::Normal
+    }
 }
 
 fn item_image_theme_icon_size_px(item: &ItemImageLayerItem) -> u32 {
@@ -754,6 +767,7 @@ mod tests {
                 fallback_bg: 0x222222,
             },
             fallback_marker: SharedString::from("IMG"),
+            mode: IconPaintMode::Normal,
         }
     }
 }

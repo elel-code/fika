@@ -14,7 +14,7 @@ use gpui::{
 
 use crate::ui::background_tasks::{BackgroundTasksSnapshot, background_tasks_panel};
 use crate::ui::file_grid::ItemDrag;
-use crate::ui::icons::{FileIconCache, FileIconSnapshot, cached_icon_or_fallback};
+use crate::ui::icons::{FileIconCache, FileIconSnapshot, IconPaintMode, cached_icon_or_fallback};
 use crate::ui::retained::{
     RetainedImageLayerState, RetainedImageRequest, RetainedThemeIconCacheRefreshStats,
 };
@@ -642,7 +642,7 @@ fn refresh_places_icon_cache(
     cx: &mut Context<FikaApp>,
 ) -> RetainedThemeIconCacheRefreshStats {
     let scale_factor = window.scale_factor();
-    app_state.refresh_retained_theme_icon_requests(
+    app_state.refresh_retained_theme_icon_requests_retained_only(
         places_theme_icon_cache_requests(places, scale_factor),
         cx,
         window,
@@ -654,11 +654,16 @@ pub(crate) fn places_theme_icon_cache_requests(
     scale_factor: f32,
 ) -> impl Iterator<Item = RetainedImageRequest> + '_ {
     places.iter().filter_map(move |place| {
-        RetainedImageRequest::theme_icon_for_parts(
+        RetainedImageRequest::theme_icon_for_parts_with_mode(
             place.icon.path.clone(),
             place.icon.icon_name.clone(),
             PLACE_ROW_ICON_SIZE.round() as u32,
             scale_factor,
+            if place.active {
+                IconPaintMode::Active
+            } else {
+                IconPaintMode::Normal
+            },
         )
     })
 }

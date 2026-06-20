@@ -7,7 +7,7 @@ use crate::ui::retained::{RetainedImageRequest, RetainedThemeIconCacheRefreshSta
 
 use super::details::{details_content_height, details_content_width};
 use super::details_shell::details_table;
-use super::image_layer::item_image_layer_view;
+use super::image_layer::{icon_paint_mode_for_selected, item_image_layer_view};
 use super::interaction::item_interaction_layer_view;
 use super::item_shell::item_tile;
 use super::renderer_policy::{
@@ -541,7 +541,7 @@ fn refresh_visible_item_theme_icon_cache(
     cx: &mut Context<FikaApp>,
 ) -> RetainedThemeIconCacheRefreshStats {
     let scale_factor = window.scale_factor();
-    app_state.refresh_retained_theme_icon_requests(
+    app_state.refresh_retained_theme_icon_requests_retained_only(
         items
             .iter()
             .filter_map(|item| item_theme_icon_cache_refresh_request(item, scale_factor)),
@@ -557,7 +557,7 @@ fn refresh_visible_details_theme_icon_cache(
     cx: &mut Context<FikaApp>,
 ) -> RetainedThemeIconCacheRefreshStats {
     let scale_factor = window.scale_factor();
-    app_state.refresh_retained_theme_icon_requests(
+    app_state.refresh_retained_theme_icon_requests_retained_only(
         items
             .iter()
             .filter_map(|item| details_theme_icon_cache_refresh_request(item, scale_factor)),
@@ -583,10 +583,11 @@ pub(super) fn item_theme_icon_cache_refresh_request(
     if !item_uses_image_layer_with_input(content, ItemRendererPolicyInput::default()) {
         return None;
     }
-    RetainedImageRequest::theme_icon_for_snapshot(
+    RetainedImageRequest::theme_icon_for_snapshot_with_mode(
         &content.icon,
         theme_icon_image_size_px(item.layout.icon_rect.width, item.layout.icon_rect.height),
         scale_factor,
+        icon_paint_mode_for_selected(item.visual.selected),
     )
 }
 
@@ -598,12 +599,13 @@ pub(super) fn details_theme_icon_cache_refresh_request(
     if !matches!(policy.visual, DetailsRowVisualRenderer::ContentLayer) {
         return None;
     }
-    RetainedImageRequest::theme_icon_for_snapshot(
+    RetainedImageRequest::theme_icon_for_snapshot_with_mode(
         &item.content.icon,
         theme_icon_image_size_px(
             f32::from_bits(item.geometry.icon_size),
             f32::from_bits(item.geometry.icon_size),
         ),
         scale_factor,
+        icon_paint_mode_for_selected(item.visual.selected),
     )
 }

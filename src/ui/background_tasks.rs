@@ -4,6 +4,13 @@ use gpui::prelude::*;
 use gpui::{Context, Div, MouseButton, ParentElement, Stateful, Styled, div, px, rgb, rgba};
 
 pub(crate) type BackgroundTaskId = OperationId;
+type BackgroundTaskSummary = (
+    String,
+    String,
+    Option<u8>,
+    Option<BackgroundTaskId>,
+    Option<BackgroundTaskState>,
+);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct BackgroundTasksSnapshot {
@@ -56,7 +63,7 @@ pub(crate) fn background_tasks_panel(
     let summary = background_tasks_summary(&active)
         .or_else(|| history.first().map(background_task_history_summary_labels));
 
-    let Some((title, detail, percent, task_id)) = summary else {
+    let Some((title, detail, percent, task_id, state)) = summary else {
         return div().id("background-tasks-empty");
     };
 
@@ -74,7 +81,7 @@ pub(crate) fn background_tasks_panel(
         .child(summary_header(
             title.clone(),
             detail.clone(),
-            None,
+            state,
             task_id,
             cx,
         ))
@@ -270,9 +277,7 @@ pub(crate) fn background_task_detail_dialog_overlay(
         )
 }
 
-fn background_tasks_summary(
-    active: &[BackgroundTaskSnapshot],
-) -> Option<(String, String, Option<u8>, Option<BackgroundTaskId>)> {
+fn background_tasks_summary(active: &[BackgroundTaskSnapshot]) -> Option<BackgroundTaskSummary> {
     let first = active.first()?;
     if active.len() == 1 {
         return Some((
@@ -280,6 +285,7 @@ fn background_tasks_summary(
             first.detail.clone(),
             first.percent,
             first.cancellable.then_some(first.id),
+            None,
         ));
     }
     Some((
@@ -287,12 +293,13 @@ fn background_tasks_summary(
         first.title.clone(),
         None,
         None,
+        None,
     ))
 }
 
 fn background_task_history_summary_labels(
     snapshot: &BackgroundTaskHistorySnapshot,
-) -> (String, String, Option<u8>, Option<BackgroundTaskId>) {
+) -> BackgroundTaskSummary {
     (
         snapshot.title.clone(),
         snapshot.detail.clone(),
@@ -301,6 +308,7 @@ fn background_task_history_summary_labels(
             BackgroundTaskState::Failed => 100,
         }),
         None,
+        Some(snapshot.state),
     )
 }
 

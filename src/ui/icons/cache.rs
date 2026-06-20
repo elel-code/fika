@@ -3,6 +3,7 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::UNIX_EPOCH;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct FileIconSnapshot {
@@ -98,6 +99,39 @@ pub(crate) struct FileIconResolveResult {
     icon: FileIconSnapshot,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct IconThemeCacheSignature {
+    roots: Vec<PathBuf>,
+    themes: Vec<String>,
+    config_files: Vec<IconThemePathStamp>,
+    root_dirs: Vec<IconThemePathStamp>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct IconThemePathStamp {
+    path: PathBuf,
+    len: Option<u64>,
+    modified_nanos: Option<u128>,
+}
+
+impl IconThemeCacheSignature {
+    pub(crate) fn current() -> Self {
+        let roots = icon_theme_roots();
+        let themes = icon_theme_names();
+        let config_files = icon_theme_config_paths()
+            .into_iter()
+            .map(icon_theme_path_stamp)
+            .collect();
+        let root_dirs = roots.iter().cloned().map(icon_theme_path_stamp).collect();
+        Self {
+            roots,
+            themes,
+            config_files,
+            root_dirs,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub(crate) struct FileIconCache {
     cached: HashMap<FileIconCacheKey, FileIconSnapshot>,
@@ -109,6 +143,14 @@ pub(crate) struct FileIconCache {
 }
 
 impl FileIconCache {
+    pub(crate) fn reset_theme_caches(&mut self) {
+        self.cached.clear();
+        self.resolved_by_kind.clear();
+        self.resolved_by_mime.clear();
+        self.named_cached.clear();
+        self.theme = IconThemeResolver::default();
+    }
+
     #[cfg(test)]
     pub(crate) fn icon_for(
         &mut self,
@@ -903,6 +945,20 @@ fn icon_theme_config_paths() -> Vec<PathBuf> {
     paths
 }
 
+fn icon_theme_path_stamp(path: PathBuf) -> IconThemePathStamp {
+    let metadata = fs::metadata(&path).ok();
+    let len = metadata.as_ref().map(fs::Metadata::len);
+    let modified_nanos = metadata
+        .and_then(|metadata| metadata.modified().ok())
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_nanos());
+    IconThemePathStamp {
+        path,
+        len,
+        modified_nanos,
+    }
+}
+
 fn parse_configured_icon_theme_names(contents: &str) -> Vec<String> {
     let mut themes = Vec::new();
     let mut in_icons_section = false;
@@ -1291,6 +1347,53 @@ gtk-icon-theme-name=breeze\n"
             parse_configured_icon_theme_names("gtk-icon-theme-name=\"Papirus-Dark\"\n"),
             vec!["Papirus-Dark".to_string()]
         );
+    }
+
+    #[test]
+    fn file_icon_cache_reset_clears_resolved_and_named_icons() {
+        let root = test_dir("file-icon-cache-reset");
+        std::fs::create_dir_all(root.join("breeze/48x48/mimetypes")).unwrap();
+        std::fs::create_dir_all(root.join("breeze/48x48/places")).unwrap();
+        std::fs::write(
+            root.join("breeze/48x48/mimetypes/text-plain.svg"),
+            test_svg(),
+        )
+        .unwrap();
+        std::fs::write(root.join("breeze/48x48/places/folder.svg"), test_svg()).unwrap();
+        let mut cache = FileIconCache {
+            cached: HashMap::new(),
+            resolved_by_kind: HashMap::new(),
+            resolved_by_mime: HashMap::new(),
+            named_cached: HashMap::new(),
+            theme: IconThemeResolver {
+                roots: vec![root],
+                themes: vec!["breeze".to_string()],
+                search_order: None,
+                inherits_cache: HashMap::new(),
+                path_cache: HashMap::new(),
+                dir_exists_cache: HashMap::new(),
+                renderable_file_cache: HashMap::new(),
+            },
+            mime: fika_core::MimeDatabase::default(),
+        };
+
+        let _ = cache.icon_for(
+            Path::new("/tmp/report.txt"),
+            false,
+            Some(Arc::from("text/plain")),
+            true,
+            48.0,
+        );
+        let _ = cache.named_icon("folder", &["folder"], "DIR", 0, 0, 48.0);
+        assert!(!cache.cached.is_empty());
+        assert!(!cache.named_cached.is_empty());
+
+        cache.reset_theme_caches();
+
+        assert!(cache.cached.is_empty());
+        assert!(cache.resolved_by_kind.is_empty());
+        assert!(cache.resolved_by_mime.is_empty());
+        assert!(cache.named_cached.is_empty());
     }
 
     #[test]
