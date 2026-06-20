@@ -46,6 +46,13 @@ const ICON_ATLAS_WIDTH: u32 = 1024;
 const ICON_PADDING: u32 = 2;
 const ICON_CACHE_MAX_BYTES: usize = 32 * 1024 * 1024;
 const RUBBER_BAND_START_THRESHOLD: f32 = 4.0;
+const VIEW_SWITCH_REDRAW_FRAMES: u8 = 6;
+const VIEW_MODE_BUTTON_WIDTH: f32 = 86.0;
+const VIEW_MODE_BUTTON_HEIGHT: f32 = 24.0;
+const VIEW_MODE_BUTTON_GAP: f32 = 6.0;
+const VIEW_MODE_STRIPE_HEIGHT: f32 = 8.0;
+const VIEW_MODE_RAIL_WIDTH: f32 = 6.0;
+const AUTO_CYCLE_INTERVAL: Duration = Duration::from_secs(1);
 
 fn main() -> Result<(), Box<dyn Error>> {
     let Some(options) = parse_start_options()? else {
@@ -56,7 +63,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Wait);
 
-    let app = FikaWgpuApp::new(scene);
+    let app = FikaWgpuApp::new(scene, options.auto_cycle_views);
     event_loop.run_app(app)?;
     Ok(())
 }
@@ -64,6 +71,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 struct StartupOptions {
     path: PathBuf,
     view_mode: ShellViewMode,
+    auto_cycle_views: bool,
 }
 
 fn parse_start_options() -> Result<Option<StartupOptions>, String> {
@@ -74,16 +82,21 @@ fn parse_start_options() -> Result<Option<StartupOptions>, String> {
         .unwrap_or_else(|| "fika-wgpu".to_string());
 
     let mut view_mode = ShellViewMode::Icons;
+    let mut auto_cycle_views = false;
     let mut path = None;
     while let Some(arg) = args.next() {
         if arg == "--help" || arg == "-h" {
-            println!("Usage: {program} [--view icons|compact|details] [PATH]");
+            println!("Usage: {program} [--view icons|compact|details] [--auto-cycle-views] [PATH]");
             return Ok(None);
+        }
+        if arg == "--auto-cycle-views" {
+            auto_cycle_views = true;
+            continue;
         }
         if arg == "--view" {
             let Some(value) = args.next() else {
                 return Err(format!(
-                    "usage: {program} [--view icons|compact|details] [PATH]"
+                    "usage: {program} [--view icons|compact|details] [--auto-cycle-views] [PATH]"
                 ));
             };
             let value = value
@@ -101,7 +114,7 @@ fn parse_start_options() -> Result<Option<StartupOptions>, String> {
         }
         if path.replace(PathBuf::from(arg)).is_some() {
             return Err(format!(
-                "usage: {program} [--view icons|compact|details] [PATH]"
+                "usage: {program} [--view icons|compact|details] [--auto-cycle-views] [PATH]"
             ));
         }
     }
@@ -110,7 +123,11 @@ fn parse_start_options() -> Result<Option<StartupOptions>, String> {
         Some(path) => path,
         None => env::current_dir().map_err(|error| format!("current directory: {error}"))?,
     };
-    Ok(Some(StartupOptions { path, view_mode }))
+    Ok(Some(StartupOptions {
+        path,
+        view_mode,
+        auto_cycle_views,
+    }))
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -138,6 +155,22 @@ impl ShellViewMode {
             Self::Details => "details",
         }
     }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Icons => "Icons",
+            Self::Compact => "Compact",
+            Self::Details => "Details",
+        }
+    }
+
+    fn next(self) -> Self {
+        match self {
+            Self::Icons => Self::Compact,
+            Self::Compact => Self::Details,
+            Self::Details => Self::Icons,
+        }
+    }
 }
 
 fn window_title(scene: &ShellScene) -> String {
@@ -155,15 +188,21 @@ struct FikaWgpuApp {
     // must be dropped before the window.
     renderer: Option<WgpuState>,
     window: Option<Box<dyn Window>>,
+    pending_redraw_frames: u8,
+    auto_cycle_views: bool,
+    next_auto_cycle: Instant,
 }
 
 impl FikaWgpuApp {
-    fn new(scene: ShellScene) -> Self {
+    fn new(scene: ShellScene, auto_cycle_views: bool) -> Self {
         Self {
             scene,
             modifiers: Modifiers::default(),
             renderer: None,
             window: None,
+            pending_redraw_frames: 0,
+            auto_cycle_views,
+            next_auto_cycle: Instant::now() + AUTO_CYCLE_INTERVAL,
         }
     }
 }
@@ -212,12 +251,38 @@ impl ApplicationHandler for FikaWgpuApp {
         }
     }
 
-    fn about_to_wait(&mut self, _event_loop: &dyn ActiveEventLoop) {
-        if self.renderer.as_ref().is_some_and(|renderer| {
-            renderer.frame_count == 0 || renderer.rendered_view_switches != self.scene.view_switches
-        }) && let Some(window) = self.window.as_ref()
-        {
+    fn about_to_wait(&mut self, event_loop: &dyn ActiveEventLoop) {
+        if self.auto_cycle_views && Instant::now() >= self.next_auto_cycle {
+            self.next_auto_cycle = Instant::now() + AUTO_CYCLE_INTERVAL;
+            if let Some(renderer) = self.renderer.as_ref() {
+                let next = self.scene.view_mode.next();
+                if self.scene.set_view_mode(next, renderer.size) {
+                    self.pending_redraw_frames = VIEW_SWITCH_REDRAW_FRAMES;
+                    if let Some(window) = self.window.as_ref() {
+                        window.set_title(&window_title(&self.scene));
+                        window.request_redraw();
+                    }
+                    self.render_now(event_loop, "auto-cycle", true);
+                }
+            }
+        }
+
+        let needs_redraw = self.renderer.as_ref().is_some_and(|renderer| {
+            renderer.frame_count == 0
+                || renderer.rendered_view_switches != self.scene.view_switches
+                || self.pending_redraw_frames > 0
+        });
+
+        if needs_redraw && let Some(window) = self.window.as_ref() {
             window.request_redraw();
+        }
+
+        if needs_redraw {
+            event_loop.set_control_flow(ControlFlow::Poll);
+        } else if self.auto_cycle_views {
+            event_loop.set_control_flow(ControlFlow::WaitUntil(self.next_auto_cycle));
+        } else {
+            event_loop.set_control_flow(ControlFlow::Wait);
         }
     }
 
@@ -268,11 +333,13 @@ impl ApplicationHandler for FikaWgpuApp {
                 let shortcut =
                     self.modifiers.state().control_key() || self.modifiers.state().meta_key();
                 if let Some(view_mode) = view_mode_for_key_event(&event, shortcut) {
-                    if self.scene.set_view_mode(view_mode, renderer.size)
-                        && let Some(window) = self.window.as_ref()
-                    {
-                        window.set_title(&window_title(&self.scene));
-                        window.request_redraw();
+                    if self.scene.set_view_mode(view_mode, renderer.size) {
+                        self.pending_redraw_frames = VIEW_SWITCH_REDRAW_FRAMES;
+                        if let Some(window) = self.window.as_ref() {
+                            window.set_title(&window_title(&self.scene));
+                            window.request_redraw();
+                        }
+                        self.render_now(event_loop, "switch-immediate", true);
                     }
                     return;
                 }
@@ -323,6 +390,20 @@ impl ApplicationHandler for FikaWgpuApp {
                     x: position.x as f32,
                     y: position.y as f32,
                 };
+                if state == ElementState::Pressed
+                    && let Some(view_mode) =
+                        self.scene.view_mode_at_screen_point(point, renderer.size)
+                {
+                    if self.scene.set_view_mode(view_mode, renderer.size) {
+                        self.pending_redraw_frames = VIEW_SWITCH_REDRAW_FRAMES;
+                        if let Some(window) = self.window.as_ref() {
+                            window.set_title(&window_title(&self.scene));
+                            window.request_redraw();
+                        }
+                        self.render_now(event_loop, "mode-click", true);
+                    }
+                    return;
+                }
                 let changed = match state {
                     ElementState::Pressed => {
                         let selection = SelectionClick {
@@ -350,17 +431,34 @@ impl ApplicationHandler for FikaWgpuApp {
                 }
             }
             WindowEvent::RedrawRequested => {
-                let Some(window) = self.window.as_ref() else {
-                    return;
-                };
-                let Some(renderer) = self.renderer.as_mut() else {
-                    return;
-                };
-
-                window.pre_present_notify();
-                renderer.render(window.as_ref(), event_loop, &self.scene);
+                let force_log = self.pending_redraw_frames > 0;
+                let reason = if force_log { "switch-redraw" } else { "redraw" };
+                self.render_now(event_loop, reason, force_log);
             }
             _ => {}
+        }
+    }
+}
+
+impl FikaWgpuApp {
+    fn render_now(
+        &mut self,
+        event_loop: &dyn ActiveEventLoop,
+        reason: &'static str,
+        force_log: bool,
+    ) {
+        let Some(window) = self.window.as_ref() else {
+            return;
+        };
+        let Some(renderer) = self.renderer.as_mut() else {
+            return;
+        };
+
+        window.pre_present_notify();
+        if renderer.render(window.as_ref(), event_loop, &self.scene, reason, force_log)
+            && self.pending_redraw_frames > 0
+        {
+            self.pending_redraw_frames -= 1;
         }
     }
 }
@@ -733,6 +831,16 @@ impl ShellScene {
         true
     }
 
+    fn view_mode_at_screen_point(
+        &self,
+        point: ViewPoint,
+        size: PhysicalSize<u32>,
+    ) -> Option<ShellViewMode> {
+        view_mode_button_rects(size.width.max(1) as f32)
+            .into_iter()
+            .find_map(|(mode, rect)| rect.contains(point).then_some(mode))
+    }
+
     fn layout(&self, size: PhysicalSize<u32>) -> ShellLayout {
         match self.view_mode {
             ShellViewMode::Icons => ShellLayout::Icons(IconsLayout::new(
@@ -807,7 +915,7 @@ impl ShellScene {
                 width,
                 height,
             },
-            [0.070, 0.074, 0.079, 1.0],
+            view_mode_surface_color(self.view_mode),
             size,
         );
         push_rect(
@@ -844,6 +952,7 @@ impl ShellScene {
             },
             TextColor::rgb(222, 228, 232),
         );
+        self.push_view_mode_buttons(&mut vertices, text, size);
         push_rect(
             &mut vertices,
             ViewRect {
@@ -852,7 +961,29 @@ impl ShellScene {
                 width,
                 height: (height - TOP_BAR_HEIGHT).max(1.0),
             },
-            [0.083, 0.088, 0.094, 1.0],
+            view_mode_content_color(self.view_mode),
+            size,
+        );
+        push_rect(
+            &mut vertices,
+            ViewRect {
+                x: 0.0,
+                y: TOP_BAR_HEIGHT,
+                width: VIEW_MODE_RAIL_WIDTH,
+                height: (height - TOP_BAR_HEIGHT).max(1.0),
+            },
+            view_mode_badge_color(self.view_mode),
+            size,
+        );
+        push_rect(
+            &mut vertices,
+            ViewRect {
+                x: 0.0,
+                y: content_origin,
+                width,
+                height: VIEW_MODE_STRIPE_HEIGHT,
+            },
+            view_mode_badge_color(self.view_mode),
             size,
         );
         if self.view_mode == ShellViewMode::Details {
@@ -860,6 +991,9 @@ impl ShellScene {
         }
 
         let layout = self.layout(size);
+        let content_size = layout.content_size();
+        let visible_layout_items = layout.visible_items();
+        let first_item_rect = visible_layout_items.first().map(|item| item.item_rect);
         let content_clip = ViewRect {
             x: 0.0,
             y: content_origin,
@@ -867,7 +1001,7 @@ impl ShellScene {
             height: viewport_h,
         };
         let mut visible_items = 0usize;
-        for item in layout.visible_items() {
+        for item in visible_layout_items {
             visible_items += 1;
             match self.view_mode {
                 ShellViewMode::Icons | ShellViewMode::Compact => {
@@ -884,9 +1018,54 @@ impl ShellScene {
             layout_us: layout_start.elapsed().as_micros(),
             visible_items,
             quad_count: vertices.len() / 6,
+            content_size,
+            first_item_rect,
             vertices,
             text_stats: TextFrameStats::default(),
             icon_stats: IconFrameStats::default(),
+        }
+    }
+
+    fn push_view_mode_buttons(
+        &self,
+        vertices: &mut Vec<QuadVertex>,
+        text: &mut TextFrameBuilder<'_>,
+        size: PhysicalSize<u32>,
+    ) {
+        let width = size.width.max(1) as f32;
+        let clip = ViewRect {
+            x: 0.0,
+            y: 0.0,
+            width,
+            height: TOP_BAR_HEIGHT,
+        };
+        for (mode, rect) in view_mode_button_rects(width) {
+            let active = mode == self.view_mode;
+            push_rect(
+                vertices,
+                rect,
+                if active {
+                    view_mode_badge_color(mode)
+                } else {
+                    [0.145, 0.154, 0.164, 1.0]
+                },
+                size,
+            );
+            text.push_label(
+                mode.label(),
+                ViewRect {
+                    x: rect.x + 10.0,
+                    y: rect.y + 3.0,
+                    width: (rect.width - 20.0).max(1.0),
+                    height: 18.0,
+                },
+                clip,
+                if active {
+                    TextColor::rgb(246, 250, 252)
+                } else {
+                    TextColor::rgb(176, 187, 198)
+                },
+            );
         }
     }
 
@@ -1613,6 +1792,8 @@ struct SceneFrame {
     vertices: Vec<QuadVertex>,
     visible_items: usize,
     quad_count: usize,
+    content_size: ViewSize,
+    first_item_rect: Option<ViewRect>,
     layout_us: u128,
     text_stats: TextFrameStats,
     icon_stats: IconFrameStats,
@@ -1728,8 +1909,16 @@ impl WgpuState {
     }
 
     fn resize(&mut self, size: PhysicalSize<u32>) {
+        self.configure_surface(size, false);
+    }
+
+    fn force_reconfigure(&mut self, size: PhysicalSize<u32>) {
+        self.configure_surface(size, true);
+    }
+
+    fn configure_surface(&mut self, size: PhysicalSize<u32>, force: bool) {
         let size = nonzero_size(size);
-        if self.size == size {
+        if self.size == size && !force {
             return;
         }
 
@@ -1738,8 +1927,10 @@ impl WgpuState {
         self.config.height = size.height;
         self.surface.configure(&self.device, &self.config);
         eprintln!(
-            "[fika-wgpu] resize width={} height={}",
-            size.width, size.height
+            "[fika-wgpu] {} width={} height={}",
+            if force { "reconfigure" } else { "resize" },
+            size.width,
+            size.height
         );
     }
 
@@ -1748,26 +1939,71 @@ impl WgpuState {
         window: &dyn Window,
         event_loop: &dyn ActiveEventLoop,
         scene: &ShellScene,
-    ) {
+        reason: &'static str,
+        force_log: bool,
+    ) -> bool {
         let frame_start = Instant::now();
         let frame = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame) => frame,
             wgpu::CurrentSurfaceTexture::Suboptimal(frame) => {
-                self.resize(window.surface_size());
+                self.force_reconfigure(window.surface_size());
                 frame
             }
             wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
-                self.resize(window.surface_size());
-                window.request_redraw();
-                return;
+                if force_log {
+                    eprintln!(
+                        "[fika-wgpu] frame-retry reason={} view={} surface=reconfigure",
+                        reason,
+                        scene.view_mode.as_str()
+                    );
+                }
+                self.force_reconfigure(window.surface_size());
+                match self.surface.get_current_texture() {
+                    wgpu::CurrentSurfaceTexture::Success(frame)
+                    | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
+                    wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
+                        if force_log {
+                            eprintln!(
+                                "[fika-wgpu] frame-skip reason={} view={} surface=reconfigure-pending",
+                                reason,
+                                scene.view_mode.as_str()
+                            );
+                        }
+                        window.request_redraw();
+                        return false;
+                    }
+                    wgpu::CurrentSurfaceTexture::Timeout
+                    | wgpu::CurrentSurfaceTexture::Occluded => {
+                        if force_log {
+                            eprintln!(
+                                "[fika-wgpu] frame-skip reason={} view={} surface=not-ready",
+                                reason,
+                                scene.view_mode.as_str()
+                            );
+                        }
+                        return false;
+                    }
+                    wgpu::CurrentSurfaceTexture::Validation => {
+                        eprintln!("[fika-wgpu] surface validation error");
+                        event_loop.exit();
+                        return false;
+                    }
+                }
             }
             wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
-                return;
+                if force_log {
+                    eprintln!(
+                        "[fika-wgpu] frame-skip reason={} view={} surface=not-ready",
+                        reason,
+                        scene.view_mode.as_str()
+                    );
+                }
+                return false;
             }
             wgpu::CurrentSurfaceTexture::Validation => {
                 eprintln!("[fika-wgpu] surface validation error");
                 event_loop.exit();
-                return;
+                return false;
             }
         };
 
@@ -1798,12 +2034,7 @@ impl WgpuState {
                     view: &view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.055,
-                            g: 0.062,
-                            b: 0.070,
-                            a: 1.0,
-                        }),
+                        load: wgpu::LoadOp::Clear(view_mode_clear_color(scene.view_mode)),
                         store: wgpu::StoreOp::Store,
                     },
                     depth_slice: None,
@@ -1825,11 +2056,13 @@ impl WgpuState {
         self.frame_count += 1;
         if self.frame_count == 1
             || view_switch_rendered
+            || force_log
             || self.last_log.elapsed() >= Duration::from_secs(1)
         {
             eprintln!(
-                "[fika-wgpu] frame={} view={} path={} entries={} visible={} selected={} hover={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} quads={} icons={} icon_quads={} icon_fallbacks={} icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_cache={}/{} entries={} bytes={} batches={} scroll_x={:.1} scroll_y={:.1} layout={}us text_raster={}us text_atlas={}x{}:{}b render={}us",
+                "[fika-wgpu] frame={} reason={} view={} path={} entries={} visible={} selected={} hover={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_cache={}/{} entries={} bytes={} batches={} scroll_x={:.1} scroll_y={:.1} layout={}us text_raster={}us text_atlas={}x{}:{}b render={}us",
                 self.frame_count,
+                reason,
                 scene.view_mode.as_str(),
                 scene.path.display(),
                 scene.entries.len(),
@@ -1843,6 +2076,24 @@ impl WgpuState {
                 scene.rubber_band_updates,
                 scene.view_switches,
                 scene_frame.quad_count,
+                scene_frame.content_size.width,
+                scene_frame.content_size.height,
+                scene_frame
+                    .first_item_rect
+                    .map(|rect| rect.x)
+                    .unwrap_or(-1.0),
+                scene_frame
+                    .first_item_rect
+                    .map(|rect| rect.y)
+                    .unwrap_or(-1.0),
+                scene_frame
+                    .first_item_rect
+                    .map(|rect| rect.width)
+                    .unwrap_or(-1.0),
+                scene_frame
+                    .first_item_rect
+                    .map(|rect| rect.height)
+                    .unwrap_or(-1.0),
                 scene_frame.icon_stats.icons,
                 scene_frame.icon_stats.quads,
                 scene_frame.icon_stats.fallbacks,
@@ -1876,6 +2127,7 @@ impl WgpuState {
             self.last_log = Instant::now();
         }
         self.rendered_view_switches = scene.view_switches;
+        true
     }
 }
 
@@ -4180,6 +4432,74 @@ fn details_row_background_color(selected: bool, hovered: bool, index: usize) -> 
     }
 }
 
+fn view_mode_clear_color(view_mode: ShellViewMode) -> wgpu::Color {
+    let [r, g, b, a] = view_mode_surface_color(view_mode);
+    wgpu::Color {
+        r: r as f64,
+        g: g as f64,
+        b: b as f64,
+        a: a as f64,
+    }
+}
+
+fn view_mode_surface_color(view_mode: ShellViewMode) -> [f32; 4] {
+    match view_mode {
+        ShellViewMode::Icons => [0.060, 0.073, 0.087, 1.0],
+        ShellViewMode::Compact => [0.056, 0.082, 0.067, 1.0],
+        ShellViewMode::Details => [0.076, 0.061, 0.086, 1.0],
+    }
+}
+
+fn view_mode_content_color(view_mode: ShellViewMode) -> [f32; 4] {
+    match view_mode {
+        ShellViewMode::Icons => [0.080, 0.096, 0.113, 1.0],
+        ShellViewMode::Compact => [0.070, 0.104, 0.083, 1.0],
+        ShellViewMode::Details => [0.090, 0.076, 0.104, 1.0],
+    }
+}
+
+fn view_mode_badge_color(view_mode: ShellViewMode) -> [f32; 4] {
+    match view_mode {
+        ShellViewMode::Icons => [0.20, 0.38, 0.58, 1.0],
+        ShellViewMode::Compact => [0.28, 0.42, 0.30, 1.0],
+        ShellViewMode::Details => [0.42, 0.30, 0.52, 1.0],
+    }
+}
+
+fn view_mode_button_rects(surface_width: f32) -> [(ShellViewMode, ViewRect); 3] {
+    let total_width = VIEW_MODE_BUTTON_WIDTH * 3.0 + VIEW_MODE_BUTTON_GAP * 2.0;
+    let start_x = (surface_width - total_width - 16.0).max(16.0);
+    [
+        (
+            ShellViewMode::Icons,
+            ViewRect {
+                x: start_x,
+                y: 14.0,
+                width: VIEW_MODE_BUTTON_WIDTH,
+                height: VIEW_MODE_BUTTON_HEIGHT,
+            },
+        ),
+        (
+            ShellViewMode::Compact,
+            ViewRect {
+                x: start_x + VIEW_MODE_BUTTON_WIDTH + VIEW_MODE_BUTTON_GAP,
+                y: 14.0,
+                width: VIEW_MODE_BUTTON_WIDTH,
+                height: VIEW_MODE_BUTTON_HEIGHT,
+            },
+        ),
+        (
+            ShellViewMode::Details,
+            ViewRect {
+                x: start_x + (VIEW_MODE_BUTTON_WIDTH + VIEW_MODE_BUTTON_GAP) * 2.0,
+                y: 14.0,
+                width: VIEW_MODE_BUTTON_WIDTH,
+                height: VIEW_MODE_BUTTON_HEIGHT,
+            },
+        ),
+    ]
+}
+
 fn details_size_label(entry: &Entry) -> String {
     if entry.is_dir {
         "Folder".to_string()
@@ -4251,7 +4571,9 @@ fn file_color(entry: &Entry) -> [f32; 4] {
 
 fn path_placeholder_width(path: &std::path::Path, surface_width: f32) -> f32 {
     let display_width = path.display().to_string().chars().count() as f32 * 7.5 + 28.0;
-    display_width.clamp(120.0, (surface_width - 32.0).max(120.0))
+    let first_button_x = view_mode_button_rects(surface_width)[0].1.x;
+    let max_width = (first_button_x - 32.0).max(120.0);
+    display_width.clamp(120.0, max_width)
 }
 
 #[cfg(test)]
@@ -4389,6 +4711,28 @@ mod tests {
                 &Key::Character("1".into()),
             ),
             Some(ShellViewMode::Icons)
+        );
+    }
+
+    #[test]
+    fn top_bar_view_mode_buttons_are_hit_tested() {
+        let scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
+        let size = PhysicalSize::new(420, 240);
+        for (mode, rect) in view_mode_button_rects(size.width as f32) {
+            assert_eq!(
+                scene.view_mode_at_screen_point(
+                    ViewPoint {
+                        x: rect.x + 2.0,
+                        y: rect.y + 2.0
+                    },
+                    size
+                ),
+                Some(mode)
+            );
+        }
+        assert_eq!(
+            scene.view_mode_at_screen_point(ViewPoint { x: 8.0, y: 8.0 }, size),
+            None
         );
     }
 

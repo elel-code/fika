@@ -98,15 +98,18 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
   Home/End 和 Page Up/Down，Shift 扩展 range，focus item 会滚入视口。日志已输出
   `--view icons|compact|details`，默认仍是 Icons baseline，Compact 使用 core
   `CompactLayout`，Details 已有 shell-owned row projection、固定 header 和
-  Name/Size/Modified 三列；运行时可用 `1/2/3`、`Ctrl/Meta+1/2/3` 或 fallback
-  `F1/F2/F3` 切换三种模式，切换会 clamp active scroll axis、清理 transient
-  rubber-band state、刷新 hover、更新窗口标题，并立即输出 `[fika-wgpu] view-mode=...`
-  日志。
+  Name/Size/Modified 三列；运行时可用 top-bar `Icons / Compact / Details` 按钮、
+  `1/2/3`、`Ctrl/Meta+1/2/3` 或 fallback `F1/F2/F3` 切换三种模式，
+  `--auto-cycle-views` 可每秒自动切换一次以调试 compositor/render。切换会 clamp
+  active scroll axis、清理 transient rubber-band state、刷新 hover、更新窗口标题，
+  立即输出 `[fika-wgpu] view-mode=...` 日志，并保持短 redraw burst 直到切换后的
+  scene 被 present；top bar active segment 和全宽 mode color stripe 便于直接确认当前
+  projection。
   日志已输出 view mode、path、entry count、visible count、
   selected/hover/rubber-band state、
   hit-test/selection/keyboard/rubber-band/view-switch counters、quad/icon/text/batch count、
   icon/text cache hit/miss/bytes、layout/icon-resolve/icon-raster/text-raster/render
-  time、icon/text atlas bytes 和 `scroll_x` / `scroll_y` offsets；本地目标 desktop
+  reason/time、icon/text atlas bytes 和 `scroll_x` / `scroll_y` offsets；本地目标 desktop
   session 的 `timeout 4s target/debug/fika-wgpu --view icons|compact|details /etc`
   smoke 均已到达 `shell-ready` 和 `frame=1`，并输出真实 icon/text atlas counters。
   仍待接入 glyph-level cache/atlas retention、DnD targeting、手动打开/关闭/交互 smoke，

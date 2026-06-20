@@ -106,10 +106,14 @@ Shell 拥有：
 - 鼠标滚轮更新 retained viewport state。
 - 实验 binary 支持 `--view icons|compact|details`。Icons 仍是默认 baseline；
   Compact 使用 core `CompactLayout`；Details 现在有 shell-owned row projection、
-  固定 header，以及 Name/Size/Modified 三列。同一组模式也可用 `1/2/3`、
-  `Ctrl/Meta+1/2/3` 或 fallback `F1/F2/F3` 在运行时切换；切换时会 clamp 当前
-  scroll axis、清理 transient rubber-band state、从 retained geometry 刷新 hover、
-  更新窗口标题，并立即输出 `[fika-wgpu] view-mode=...` 日志。
+  固定 header，以及 Name/Size/Modified 三列。同一组模式也可用 top-bar `Icons /
+  Compact / Details` 按钮、`1/2/3`、`Ctrl/Meta+1/2/3` 或 fallback `F1/F2/F3`
+  在运行时切换；`--auto-cycle-views` 会每秒自动切换一次，用于在没有输入的情况下
+  调试 compositor/render。切换时会 clamp 当前 scroll axis、清理 transient
+  rubber-band state、从 retained geometry 刷新 hover、更新窗口标题，立即输出
+  `[fika-wgpu] view-mode=...` 日志，并保持一个短 redraw burst，直到切换后的 scene
+  被 present。Top bar active segment 和全宽 mode color stripe 让当前 projection
+  直接可见，即使目录内容在不同 mode 下看起来接近。
 - Pointer move/leave 和左键点击现在通过 shell-owned retained hit testing 路由。Spike
   按 model index 跟踪 hovered item、单选、Ctrl/Meta toggle selection 和 Shift range
   selection，并从同一 slot projection 绘制 hover/selection 状态。
@@ -123,7 +127,8 @@ Shell 拥有：
   hit-test/selection/keyboard navigation/rubber-band/view-switch counters、icon count、icon
   cache hit/miss count、icon cache bytes、icon atlas bytes、icon resolve/raster time、
   text label count、text cache hit/miss count、text cache bytes、text atlas bytes、
-  layout time、text raster time、render time 和 `scroll_x` / `scroll_y` offsets。
+  render reason、layout time、text raster time、render time 和 `scroll_x` / `scroll_y`
+  offsets。
 - 本地目标 desktop session 中，`timeout 4s target/debug/fika-wgpu --view
   icons|compact|details /etc` smoke 已到达 `shell-ready`，并在 Vulkan 上输出
   `frame=1` 以及真实 icon/text atlas counters。自动 smoke 的 timeout exit 符合预期。

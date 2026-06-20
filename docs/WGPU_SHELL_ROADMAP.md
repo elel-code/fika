@@ -120,11 +120,16 @@ Current checkpoint:
 - The experimental binary accepts `--view icons|compact|details`. Icons remains
   the default baseline; Compact uses core `CompactLayout`; Details now has a
   shell-owned row projection with a fixed header and Name/Size/Modified columns.
-  The same modes can be switched at runtime with `1/2/3`, `Ctrl/Meta+1/2/3`,
-  or the fallback `F1/F2/F3` keys; switching clamps the active scroll axis,
-  clears transient rubber-band state, refreshes hover from retained geometry,
-  updates the window title, and emits an immediate `[fika-wgpu] view-mode=...`
-  log line.
+  The same modes can be switched at runtime with top-bar `Icons / Compact /
+  Details` buttons, `1/2/3`, `Ctrl/Meta+1/2/3`, or fallback `F1/F2/F3` keys.
+  `--auto-cycle-views` switches modes once per second for compositor/render
+  debugging without any input. Switching clamps the active scroll axis, clears
+  transient rubber-band state, refreshes hover from retained geometry, updates
+  the window title, emits an immediate `[fika-wgpu] view-mode=...` log line,
+  and keeps a short redraw burst active until the switched scene has been
+  presented. The active top-bar segment and a full-width mode color stripe make
+  the current projection visible even when a directory's file content looks
+  similar across modes.
 - Pointer move/leave and left-click events now route through shell-owned
   retained hit testing. The spike tracks hovered item, single selection,
   Ctrl/Meta toggle selection, and Shift range selection by model index, then
@@ -141,8 +146,8 @@ Current checkpoint:
   hit-test/selection/keyboard navigation/rubber-band/view-switch counters, icon
   count, icon cache hit/miss count, icon cache bytes, icon atlas bytes, icon
   resolve/raster time, text label count, text cache hit/miss count, text cache
-  bytes, text atlas bytes, draw batch count, layout time, text raster time,
-  render time, and `scroll_x` / `scroll_y` offsets.
+  bytes, text atlas bytes, draw batch count, render reason, layout time, text
+  raster time, render time, and `scroll_x` / `scroll_y` offsets.
 - Local target-session smokes with `timeout 4s target/debug/fika-wgpu --view
   icons|compact|details /etc` reached `shell-ready` and emitted `frame=1` on
   Vulkan with real icon/text atlas counters. The timeout exits are expected for
