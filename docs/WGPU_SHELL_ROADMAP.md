@@ -141,10 +141,20 @@ Current checkpoint:
 - Keyboard navigation now handles Arrow, Home/End, and Page Up/Down keys
   through the same retained selection state. Shift extends the current range,
   and the focused item is scrolled into view.
+- Directory activation now stays inside the shell-owned input path: Enter opens
+  the focused selected directory, double-click opens a directory resolved from
+  retained hit testing, and Backspace or Alt+Up loads the parent directory. The
+  top bar also has shell-owned Back/Forward/Up controls, with Alt+Left and
+  Alt+Right mapped to the same history stack. Loading a new path reuses
+  `read_entries_sync`, records normal navigation in a bounded back stack,
+  clears forward history only after successful new navigation, resets
+  scroll/selection/rubber-band transient state, refreshes hover from retained
+  geometry, updates the title, and presents the new scene through the same
+  redraw burst path used by view switching.
 - `[fika-wgpu]` logs include view mode, path, entry count, visible item count,
   quad count, selected count, hovered item index, active rubber-band state,
-  hit-test/selection/keyboard navigation/rubber-band/view-switch counters, icon
-  count, icon cache hit/miss count, icon cache bytes, icon atlas bytes, icon
+  hit-test/selection/keyboard navigation/rubber-band/view-switch/path-change
+  counters, icon count, icon cache hit/miss count, icon cache bytes, icon atlas bytes, icon
   resolve/raster time, text label count, text cache hit/miss count, text cache
   bytes, text atlas bytes, draw batch count, render reason, layout time, text
   raster time, render time, and `scroll_x` / `scroll_y` offsets.

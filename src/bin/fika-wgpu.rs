@@ -52,7 +52,14 @@ const VIEW_MODE_BUTTON_HEIGHT: f32 = 24.0;
 const VIEW_MODE_BUTTON_GAP: f32 = 6.0;
 const VIEW_MODE_STRIPE_HEIGHT: f32 = 8.0;
 const VIEW_MODE_RAIL_WIDTH: f32 = 6.0;
+const NAV_BUTTON_WIDTH: f32 = 28.0;
+const NAV_UP_BUTTON_WIDTH: f32 = 36.0;
+const NAV_BUTTON_HEIGHT: f32 = 24.0;
+const NAV_BUTTON_GAP: f32 = 6.0;
+const PATH_HISTORY_LIMIT: usize = 128;
 const AUTO_CYCLE_INTERVAL: Duration = Duration::from_secs(1);
+const DOUBLE_CLICK_MAX_INTERVAL: Duration = Duration::from_millis(500);
+const DOUBLE_CLICK_MAX_DISTANCE: f32 = 6.0;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let Some(options) = parse_start_options()? else {
@@ -169,6 +176,31 @@ impl ShellViewMode {
             Self::Icons => Self::Compact,
             Self::Compact => Self::Details,
             Self::Details => Self::Icons,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PathNavigationAction {
+    Back,
+    Forward,
+    Parent,
+}
+
+impl PathNavigationAction {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Back => "<",
+            Self::Forward => ">",
+            Self::Parent => "Up",
+        }
+    }
+
+    fn reason(self) -> &'static str {
+        match self {
+            Self::Back => "history-back",
+            Self::Forward => "history-forward",
+            Self::Parent => "parent-directory",
         }
     }
 }
@@ -343,6 +375,19 @@ impl ApplicationHandler for FikaWgpuApp {
                     }
                     return;
                 }
+                if is_activation_key(&event.logical_key) {
+                    if let Some(path) = self.scene.selected_directory_path() {
+                        self.load_scene_path(event_loop, path, "activate-directory");
+                    }
+                    return;
+                }
+                if let Some(action) = path_navigation_action_for_key(
+                    &event.logical_key,
+                    self.modifiers.state().alt_key(),
+                ) {
+                    self.perform_path_navigation(event_loop, action);
+                    return;
+                }
                 let Some(action) = navigation_action_for_key(&event.logical_key) else {
                     return;
                 };
@@ -391,6 +436,14 @@ impl ApplicationHandler for FikaWgpuApp {
                     y: position.y as f32,
                 };
                 if state == ElementState::Pressed
+                    && let Some(action) = self
+                        .scene
+                        .path_navigation_action_at_screen_point(point, renderer.size)
+                {
+                    self.perform_path_navigation(event_loop, action);
+                    return;
+                }
+                if state == ElementState::Pressed
                     && let Some(view_mode) =
                         self.scene.view_mode_at_screen_point(point, renderer.size)
                 {
@@ -402,6 +455,16 @@ impl ApplicationHandler for FikaWgpuApp {
                         }
                         self.render_now(event_loop, "mode-click", true);
                     }
+                    return;
+                }
+                if state == ElementState::Pressed
+                    && let Some(path) = self.scene.directory_activation_for_primary_press(
+                        point,
+                        renderer.size,
+                        Instant::now(),
+                    )
+                {
+                    self.load_scene_path(event_loop, path, "double-click-directory");
                     return;
                 }
                 let changed = match state {
@@ -441,6 +504,51 @@ impl ApplicationHandler for FikaWgpuApp {
 }
 
 impl FikaWgpuApp {
+    fn perform_path_navigation(
+        &mut self,
+        event_loop: &dyn ActiveEventLoop,
+        action: PathNavigationAction,
+    ) {
+        let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
+            return;
+        };
+        let result = match action {
+            PathNavigationAction::Back => self.scene.go_history_back(size),
+            PathNavigationAction::Forward => self.scene.go_history_forward(size),
+            PathNavigationAction::Parent => self.scene.go_parent_directory(size),
+        };
+        match result {
+            Ok(true) => self.present_scene_change(event_loop, action.reason()),
+            Ok(false) => {}
+            Err(error) => eprintln!("[fika-wgpu] navigation-error {error}"),
+        }
+    }
+
+    fn load_scene_path(
+        &mut self,
+        event_loop: &dyn ActiveEventLoop,
+        path: PathBuf,
+        reason: &'static str,
+    ) {
+        let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
+            return;
+        };
+        match self.scene.load_path(path, size) {
+            Ok(true) => self.present_scene_change(event_loop, reason),
+            Ok(false) => {}
+            Err(error) => eprintln!("[fika-wgpu] navigation-error {error}"),
+        }
+    }
+
+    fn present_scene_change(&mut self, event_loop: &dyn ActiveEventLoop, reason: &'static str) {
+        self.pending_redraw_frames = VIEW_SWITCH_REDRAW_FRAMES;
+        if let Some(window) = self.window.as_ref() {
+            window.set_title(&window_title(&self.scene));
+            window.request_redraw();
+        }
+        self.render_now(event_loop, reason, true);
+    }
+
     fn render_now(
         &mut self,
         event_loop: &dyn ActiveEventLoop,
@@ -467,6 +575,25 @@ fn scroll_delta_y(delta: MouseScrollDelta) -> f32 {
     match delta {
         MouseScrollDelta::LineDelta(_, y) => -y * SCROLL_LINE_PX,
         MouseScrollDelta::PixelDelta(position) => -position.y as f32,
+    }
+}
+
+fn is_activation_key(key: &Key) -> bool {
+    matches!(key, Key::Named(NamedKey::Enter))
+}
+
+fn path_navigation_action_for_key(key: &Key, alt: bool) -> Option<PathNavigationAction> {
+    if matches!(key, Key::Named(NamedKey::Backspace)) {
+        return Some(PathNavigationAction::Parent);
+    }
+    if !alt {
+        return None;
+    }
+    match key {
+        Key::Named(NamedKey::ArrowLeft) => Some(PathNavigationAction::Back),
+        Key::Named(NamedKey::ArrowRight) => Some(PathNavigationAction::Forward),
+        Key::Named(NamedKey::ArrowUp) => Some(PathNavigationAction::Parent),
+        _ => None,
     }
 }
 
@@ -752,6 +879,41 @@ impl DetailsLayout {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+struct PrimaryClick {
+    index: usize,
+    point: ViewPoint,
+    time: Instant,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct PathHistory {
+    back: Vec<PathBuf>,
+    forward: Vec<PathBuf>,
+}
+
+impl PathHistory {
+    fn can_go_back(&self) -> bool {
+        !self.back.is_empty()
+    }
+
+    fn can_go_forward(&self) -> bool {
+        !self.forward.is_empty()
+    }
+
+    fn push_back(&mut self, path: PathBuf) {
+        push_limited_path(&mut self.back, path);
+    }
+
+    fn push_forward(&mut self, path: PathBuf) {
+        push_limited_path(&mut self.forward, path);
+    }
+
+    fn clear_forward(&mut self) {
+        self.forward.clear();
+    }
+}
+
 struct ShellScene {
     path: PathBuf,
     view_mode: ShellViewMode,
@@ -760,6 +922,8 @@ struct ShellScene {
     scroll_y: f32,
     pointer: Option<ViewPoint>,
     hovered_index: Option<usize>,
+    last_primary_click: Option<PrimaryClick>,
+    history: PathHistory,
     selection: ShellSelection,
     rubber_band: Option<RubberBand>,
     hit_tests: u64,
@@ -767,6 +931,7 @@ struct ShellScene {
     keyboard_navigation: u64,
     rubber_band_updates: u64,
     view_switches: u64,
+    path_changes: u64,
 }
 
 impl ShellScene {
@@ -803,6 +968,8 @@ impl ShellScene {
             scroll_y: 0.0,
             pointer: None,
             hovered_index: None,
+            last_primary_click: None,
+            history: PathHistory::default(),
             selection: ShellSelection::default(),
             rubber_band: None,
             hit_tests: 0,
@@ -810,7 +977,115 @@ impl ShellScene {
             keyboard_navigation: 0,
             rubber_band_updates: 0,
             view_switches: 0,
+            path_changes: 0,
         })
+    }
+
+    fn load_path(&mut self, path: PathBuf, size: PhysicalSize<u32>) -> Result<bool, String> {
+        if path == self.path {
+            return Ok(false);
+        }
+        let load_start = Instant::now();
+        let entries = read_entries_sync(&path)
+            .map_err(|error| format!("read directory {}: {error}", path.display()))?;
+        let elapsed = load_start.elapsed();
+        let dir_count = entries.iter().filter(|entry| entry.is_dir).count();
+        let preview = entries
+            .iter()
+            .take(8)
+            .map(|entry| entry.name.as_ref())
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let previous_path = self.path.clone();
+        self.history.push_back(previous_path);
+        self.history.clear_forward();
+        self.apply_loaded_path(path, entries, size);
+
+        self.log_loaded_path(dir_count, &preview, elapsed);
+        Ok(true)
+    }
+
+    fn go_parent_directory(&mut self, size: PhysicalSize<u32>) -> Result<bool, String> {
+        let Some(path) = self.parent_directory_path() else {
+            return Ok(false);
+        };
+        self.load_path(path, size)
+    }
+
+    fn go_history_back(&mut self, size: PhysicalSize<u32>) -> Result<bool, String> {
+        let Some(path) = self.history.back.last().cloned() else {
+            return Ok(false);
+        };
+        let load_start = Instant::now();
+        let entries = read_entries_sync(&path)
+            .map_err(|error| format!("read directory {}: {error}", path.display()))?;
+        let elapsed = load_start.elapsed();
+        let dir_count = entries.iter().filter(|entry| entry.is_dir).count();
+        let preview = entries
+            .iter()
+            .take(8)
+            .map(|entry| entry.name.as_ref())
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let current_path = self.path.clone();
+        self.history.back.pop();
+        self.history.push_forward(current_path);
+        self.apply_loaded_path(path, entries, size);
+        self.log_loaded_path(dir_count, &preview, elapsed);
+        Ok(true)
+    }
+
+    fn go_history_forward(&mut self, size: PhysicalSize<u32>) -> Result<bool, String> {
+        let Some(path) = self.history.forward.last().cloned() else {
+            return Ok(false);
+        };
+        let load_start = Instant::now();
+        let entries = read_entries_sync(&path)
+            .map_err(|error| format!("read directory {}: {error}", path.display()))?;
+        let elapsed = load_start.elapsed();
+        let dir_count = entries.iter().filter(|entry| entry.is_dir).count();
+        let preview = entries
+            .iter()
+            .take(8)
+            .map(|entry| entry.name.as_ref())
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let current_path = self.path.clone();
+        self.history.forward.pop();
+        self.history.push_back(current_path);
+        self.apply_loaded_path(path, entries, size);
+        self.log_loaded_path(dir_count, &preview, elapsed);
+        Ok(true)
+    }
+
+    fn apply_loaded_path(&mut self, path: PathBuf, entries: Vec<Entry>, size: PhysicalSize<u32>) {
+        self.path = path;
+        self.entries = entries;
+        self.scroll_x = 0.0;
+        self.scroll_y = 0.0;
+        self.selection = ShellSelection::default();
+        self.rubber_band = None;
+        self.last_primary_click = None;
+        self.path_changes += 1;
+        self.clamp_scroll(size);
+    }
+
+    fn log_loaded_path(&self, dir_count: usize, preview: &str, elapsed: Duration) {
+        eprintln!(
+            "[fika-wgpu] path={} entries={} dirs={} files={} load={}us changes={}",
+            self.path.display(),
+            self.entries.len(),
+            dir_count,
+            self.entries.len().saturating_sub(dir_count),
+            elapsed.as_micros(),
+            self.path_changes
+        );
+        if !preview.is_empty() {
+            eprintln!("[fika-wgpu] first-entries={preview}");
+        }
     }
 
     fn set_view_mode(&mut self, view_mode: ShellViewMode, size: PhysicalSize<u32>) -> bool {
@@ -839,6 +1114,77 @@ impl ShellScene {
         view_mode_button_rects(size.width.max(1) as f32)
             .into_iter()
             .find_map(|(mode, rect)| rect.contains(point).then_some(mode))
+    }
+
+    fn path_navigation_action_at_screen_point(
+        &self,
+        point: ViewPoint,
+        _size: PhysicalSize<u32>,
+    ) -> Option<PathNavigationAction> {
+        path_navigation_button_rects()
+            .into_iter()
+            .find_map(|(action, rect)| {
+                (rect.contains(point) && self.path_navigation_action_enabled(action))
+                    .then_some(action)
+            })
+    }
+
+    fn path_navigation_action_enabled(&self, action: PathNavigationAction) -> bool {
+        match action {
+            PathNavigationAction::Back => self.history.can_go_back(),
+            PathNavigationAction::Forward => self.history.can_go_forward(),
+            PathNavigationAction::Parent => self.parent_directory_path().is_some(),
+        }
+    }
+
+    fn selected_directory_path(&self) -> Option<PathBuf> {
+        self.selection
+            .focus_or_first_selected()
+            .and_then(|index| self.directory_path_for_index(index))
+    }
+
+    fn parent_directory_path(&self) -> Option<PathBuf> {
+        self.path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .map(Path::to_path_buf)
+    }
+
+    fn directory_path_for_index(&self, index: usize) -> Option<PathBuf> {
+        let entry = self.entries.get(index)?;
+        entry.is_dir.then(|| {
+            entry
+                .target_path
+                .clone()
+                .unwrap_or_else(|| self.path.join(entry.name.as_ref()))
+        })
+    }
+
+    fn directory_activation_for_primary_press(
+        &mut self,
+        point: ViewPoint,
+        size: PhysicalSize<u32>,
+        now: Instant,
+    ) -> Option<PathBuf> {
+        let Some(index) = self.hit_test_screen_point(point, size) else {
+            self.last_primary_click = None;
+            return None;
+        };
+
+        let double_click = self.last_primary_click.is_some_and(|click| {
+            click.index == index
+                && now.duration_since(click.time) <= DOUBLE_CLICK_MAX_INTERVAL
+                && point_distance(click.point, point) <= DOUBLE_CLICK_MAX_DISTANCE
+        });
+        self.last_primary_click = Some(PrimaryClick {
+            index,
+            point,
+            time: now,
+        });
+
+        double_click
+            .then(|| self.directory_path_for_index(index))
+            .flatten()
     }
 
     fn layout(&self, size: PhysicalSize<u32>) -> ShellLayout {
@@ -929,29 +1275,33 @@ impl ShellScene {
             [0.105, 0.112, 0.120, 1.0],
             size,
         );
+        self.push_path_navigation_buttons(&mut vertices, text, size);
+        let path_x = path_bar_start_x();
         let path_rect = ViewRect {
-            x: 16.0,
+            x: path_x,
             y: 14.0,
-            width: path_placeholder_width(&self.path, width),
+            width: path_placeholder_width(&self.path, width, path_x),
             height: 24.0,
         };
-        push_rect(&mut vertices, path_rect, [0.170, 0.184, 0.198, 1.0], size);
-        text.push_label(
-            &self.path.display().to_string(),
-            ViewRect {
-                x: path_rect.x + 12.0,
-                y: path_rect.y + 3.0,
-                width: (path_rect.width - 24.0).max(1.0),
-                height: 18.0,
-            },
-            ViewRect {
-                x: 0.0,
-                y: 0.0,
-                width,
-                height: TOP_BAR_HEIGHT,
-            },
-            TextColor::rgb(222, 228, 232),
-        );
+        if path_rect.width > 24.0 {
+            push_rect(&mut vertices, path_rect, [0.170, 0.184, 0.198, 1.0], size);
+            text.push_label(
+                &self.path.display().to_string(),
+                ViewRect {
+                    x: path_rect.x + 12.0,
+                    y: path_rect.y + 3.0,
+                    width: (path_rect.width - 24.0).max(1.0),
+                    height: 18.0,
+                },
+                ViewRect {
+                    x: 0.0,
+                    y: 0.0,
+                    width,
+                    height: TOP_BAR_HEIGHT,
+                },
+                TextColor::rgb(222, 228, 232),
+            );
+        }
         self.push_view_mode_buttons(&mut vertices, text, size);
         push_rect(
             &mut vertices,
@@ -1023,6 +1373,49 @@ impl ShellScene {
             vertices,
             text_stats: TextFrameStats::default(),
             icon_stats: IconFrameStats::default(),
+        }
+    }
+
+    fn push_path_navigation_buttons(
+        &self,
+        vertices: &mut Vec<QuadVertex>,
+        text: &mut TextFrameBuilder<'_>,
+        size: PhysicalSize<u32>,
+    ) {
+        let width = size.width.max(1) as f32;
+        let clip = ViewRect {
+            x: 0.0,
+            y: 0.0,
+            width,
+            height: TOP_BAR_HEIGHT,
+        };
+        for (action, rect) in path_navigation_button_rects() {
+            let enabled = self.path_navigation_action_enabled(action);
+            push_rect(
+                vertices,
+                rect,
+                if enabled {
+                    [0.145, 0.154, 0.164, 1.0]
+                } else {
+                    [0.095, 0.101, 0.108, 1.0]
+                },
+                size,
+            );
+            text.push_label(
+                action.label(),
+                ViewRect {
+                    x: rect.x + 7.0,
+                    y: rect.y + 3.0,
+                    width: (rect.width - 14.0).max(1.0),
+                    height: 18.0,
+                },
+                clip,
+                if enabled {
+                    TextColor::rgb(222, 228, 232)
+                } else {
+                    TextColor::rgb(105, 115, 124)
+                },
+            );
         }
     }
 
@@ -2060,7 +2453,7 @@ impl WgpuState {
             || self.last_log.elapsed() >= Duration::from_secs(1)
         {
             eprintln!(
-                "[fika-wgpu] frame={} reason={} view={} path={} entries={} visible={} selected={} hover={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_cache={}/{} entries={} bytes={} batches={} scroll_x={:.1} scroll_y={:.1} layout={}us text_raster={}us text_atlas={}x{}:{}b render={}us",
+                "[fika-wgpu] frame={} reason={} view={} path={} entries={} visible={} selected={} hover={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} path_changes={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_cache={}/{} entries={} bytes={} batches={} scroll_x={:.1} scroll_y={:.1} layout={}us text_raster={}us text_atlas={}x{}:{}b render={}us",
                 self.frame_count,
                 reason,
                 scene.view_mode.as_str(),
@@ -2075,6 +2468,7 @@ impl WgpuState {
                 scene.keyboard_navigation,
                 scene.rubber_band_updates,
                 scene.view_switches,
+                scene.path_changes,
                 scene_frame.quad_count,
                 scene_frame.content_size.width,
                 scene_frame.content_size.height,
@@ -4413,6 +4807,10 @@ fn rect_from_points(start: ViewPoint, current: ViewPoint) -> ViewRect {
     }
 }
 
+fn point_distance(left: ViewPoint, right: ViewPoint) -> f32 {
+    ((left.x - right.x).powi(2) + (left.y - right.y).powi(2)).sqrt()
+}
+
 fn item_background_color(selected: bool, hovered: bool) -> [f32; 4] {
     match (selected, hovered) {
         (true, true) => [0.20, 0.37, 0.58, 0.92],
@@ -4500,6 +4898,55 @@ fn view_mode_button_rects(surface_width: f32) -> [(ShellViewMode, ViewRect); 3] 
     ]
 }
 
+fn path_navigation_button_rects() -> [(PathNavigationAction, ViewRect); 3] {
+    let x = 16.0;
+    [
+        (
+            PathNavigationAction::Back,
+            ViewRect {
+                x,
+                y: 14.0,
+                width: NAV_BUTTON_WIDTH,
+                height: NAV_BUTTON_HEIGHT,
+            },
+        ),
+        (
+            PathNavigationAction::Forward,
+            ViewRect {
+                x: x + NAV_BUTTON_WIDTH + NAV_BUTTON_GAP,
+                y: 14.0,
+                width: NAV_BUTTON_WIDTH,
+                height: NAV_BUTTON_HEIGHT,
+            },
+        ),
+        (
+            PathNavigationAction::Parent,
+            ViewRect {
+                x: x + (NAV_BUTTON_WIDTH + NAV_BUTTON_GAP) * 2.0,
+                y: 14.0,
+                width: NAV_UP_BUTTON_WIDTH,
+                height: NAV_BUTTON_HEIGHT,
+            },
+        ),
+    ]
+}
+
+fn path_bar_start_x() -> f32 {
+    let parent = path_navigation_button_rects()[2].1;
+    parent.right() + 10.0
+}
+
+fn push_limited_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
+    if paths.last().is_some_and(|existing| existing == &path) {
+        return;
+    }
+    paths.push(path);
+    if paths.len() > PATH_HISTORY_LIMIT {
+        let overflow = paths.len() - PATH_HISTORY_LIMIT;
+        paths.drain(0..overflow);
+    }
+}
+
 fn details_size_label(entry: &Entry) -> String {
     if entry.is_dir {
         "Folder".to_string()
@@ -4569,11 +5016,11 @@ fn file_color(entry: &Entry) -> [f32; 4] {
     }
 }
 
-fn path_placeholder_width(path: &std::path::Path, surface_width: f32) -> f32 {
+fn path_placeholder_width(path: &std::path::Path, surface_width: f32, path_x: f32) -> f32 {
     let display_width = path.display().to_string().chars().count() as f32 * 7.5 + 28.0;
     let first_button_x = view_mode_button_rects(surface_width)[0].1.x;
-    let max_width = (first_button_x - 32.0).max(120.0);
-    display_width.clamp(120.0, max_width)
+    let max_width = (first_button_x - path_x - 10.0).max(0.0);
+    display_width.min(max_width)
 }
 
 #[cfg(test)]
@@ -4609,6 +5056,26 @@ mod tests {
         })
     }
 
+    fn test_entry_with_target(name: &str, is_dir: bool, target_path: PathBuf) -> Entry {
+        Entry::new(fika_core::EntryData {
+            name: Arc::from(name),
+            name_width_units: name.len() as u16,
+            target_path: Some(target_path),
+            size_bytes: 0,
+            modified_secs: None,
+            metadata_complete: true,
+            mime_type: Some(Arc::from(if is_dir {
+                "inode/directory"
+            } else {
+                "text/plain"
+            })),
+            mime_magic_checked: true,
+            trash_original_path: None,
+            trash_deletion_time: None,
+            is_dir,
+        })
+    }
+
     fn test_scene(entries: Vec<Entry>, view_mode: ShellViewMode) -> ShellScene {
         ShellScene {
             path: PathBuf::from("/tmp"),
@@ -4618,6 +5085,8 @@ mod tests {
             scroll_y: 0.0,
             pointer: None,
             hovered_index: None,
+            last_primary_click: None,
+            history: PathHistory::default(),
             selection: ShellSelection::default(),
             rubber_band: None,
             hit_tests: 0,
@@ -4625,6 +5094,7 @@ mod tests {
             keyboard_navigation: 0,
             rubber_band_updates: 0,
             view_switches: 0,
+            path_changes: 0,
         }
     }
 
@@ -4651,6 +5121,142 @@ mod tests {
         assert!(selection.apply_click(None, false, false));
         assert_eq!(selection.len(), 0);
         assert_eq!(selection.anchor, None);
+    }
+
+    #[test]
+    fn selected_directory_path_uses_focus_and_target_path() {
+        let target = PathBuf::from("/run/user/1000/gvfs/sftp:host=example");
+        let mut scene = test_scene(
+            vec![
+                test_entry_with_target("remote", true, target.clone()),
+                test_entry("plain.txt", false),
+            ],
+            ShellViewMode::Icons,
+        );
+
+        assert_eq!(scene.selected_directory_path(), None);
+        assert!(scene.selection.apply_navigation(0, false));
+        assert_eq!(scene.selected_directory_path(), Some(target));
+        assert!(scene.selection.apply_navigation(1, false));
+        assert_eq!(scene.selected_directory_path(), None);
+    }
+
+    #[test]
+    fn double_click_directory_activation_uses_retained_hit_test() {
+        let mut scene = test_scene(vec![test_entry("folder", true)], ShellViewMode::Icons);
+        let size = PhysicalSize::new(360, 240);
+        let item = scene.layout(size).item(0).expect("test item should layout");
+        let point = ViewPoint {
+            x: item.visual_rect.x + 4.0,
+            y: item.visual_rect.y + TOP_BAR_HEIGHT + 4.0,
+        };
+        let now = Instant::now();
+
+        assert_eq!(
+            scene.directory_activation_for_primary_press(point, size, now),
+            None
+        );
+        assert_eq!(
+            scene.directory_activation_for_primary_press(
+                point,
+                size,
+                now + Duration::from_millis(120)
+            ),
+            Some(PathBuf::from("/tmp/folder"))
+        );
+    }
+
+    #[test]
+    fn load_path_replaces_entries_and_resets_transient_state() {
+        let unique = format!(
+            "fika-wgpu-load-path-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let root = env::temp_dir().join(unique);
+        let child = root.join("child");
+        fs::create_dir_all(&child).unwrap();
+        fs::write(child.join("nested.txt"), b"nested").unwrap();
+
+        let size = PhysicalSize::new(360, 240);
+        let mut scene = ShellScene::load(root.clone(), ShellViewMode::Compact).unwrap();
+        scene.scroll_x = 128.0;
+        scene.scroll_y = 64.0;
+        scene.pointer = Some(ViewPoint {
+            x: 12.0,
+            y: TOP_BAR_HEIGHT + 12.0,
+        });
+        assert!(scene.selection.apply_navigation(0, false));
+        scene.rubber_band = Some(RubberBand::new(
+            ViewPoint { x: 0.0, y: 0.0 },
+            RubberBandMode::Replace,
+            ShellSelection::default(),
+        ));
+
+        scene.load_path(child.clone(), size).unwrap();
+
+        assert_eq!(scene.path, child);
+        assert_eq!(scene.entries.len(), 1);
+        assert_eq!(scene.entries[0].name.as_ref(), "nested.txt");
+        assert_eq!(scene.scroll_x, 0.0);
+        assert_eq!(scene.scroll_y, 0.0);
+        assert_eq!(scene.selection.len(), 0);
+        assert!(scene.rubber_band.is_none());
+        assert_eq!(scene.path_changes, 1);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn path_history_tracks_back_forward_and_clears_forward_on_new_navigation() {
+        let unique = format!(
+            "fika-wgpu-history-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let root = env::temp_dir().join(unique);
+        let first = root.join("first");
+        let second = first.join("second");
+        let sibling = root.join("sibling");
+        fs::create_dir_all(&second).unwrap();
+        fs::create_dir_all(&sibling).unwrap();
+
+        let size = PhysicalSize::new(360, 240);
+        let mut scene = ShellScene::load(root.clone(), ShellViewMode::Compact).unwrap();
+
+        assert!(scene.load_path(first.clone(), size).unwrap());
+        assert_eq!(scene.path, first);
+        assert_eq!(scene.history.back, vec![root.clone()]);
+        assert!(scene.history.forward.is_empty());
+
+        assert!(scene.load_path(second.clone(), size).unwrap());
+        assert_eq!(scene.path, second);
+        assert_eq!(scene.history.back, vec![root.clone(), first.clone()]);
+
+        assert!(scene.go_history_back(size).unwrap());
+        assert_eq!(scene.path, first);
+        assert_eq!(scene.history.back, vec![root.clone()]);
+        assert_eq!(scene.history.forward, vec![second.clone()]);
+
+        assert!(scene.go_history_forward(size).unwrap());
+        assert_eq!(scene.path, second);
+        assert_eq!(scene.history.back, vec![root.clone(), first.clone()]);
+        assert!(scene.history.forward.is_empty());
+
+        assert!(scene.go_history_back(size).unwrap());
+        assert_eq!(scene.path, first);
+        assert!(scene.load_path(sibling.clone(), size).unwrap());
+        assert_eq!(scene.path, sibling);
+        assert!(scene.history.forward.is_empty());
+        assert_eq!(scene.history.back, vec![root.clone(), first]);
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -4715,6 +5321,30 @@ mod tests {
     }
 
     #[test]
+    fn path_navigation_shortcuts_use_back_forward_and_parent_keys() {
+        assert_eq!(
+            path_navigation_action_for_key(&Key::Named(NamedKey::Backspace), false),
+            Some(PathNavigationAction::Parent)
+        );
+        assert_eq!(
+            path_navigation_action_for_key(&Key::Named(NamedKey::ArrowLeft), true),
+            Some(PathNavigationAction::Back)
+        );
+        assert_eq!(
+            path_navigation_action_for_key(&Key::Named(NamedKey::ArrowRight), true),
+            Some(PathNavigationAction::Forward)
+        );
+        assert_eq!(
+            path_navigation_action_for_key(&Key::Named(NamedKey::ArrowUp), true),
+            Some(PathNavigationAction::Parent)
+        );
+        assert_eq!(
+            path_navigation_action_for_key(&Key::Named(NamedKey::ArrowLeft), false),
+            None
+        );
+    }
+
+    #[test]
     fn top_bar_view_mode_buttons_are_hit_tested() {
         let scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
         let size = PhysicalSize::new(420, 240);
@@ -4733,6 +5363,59 @@ mod tests {
         assert_eq!(
             scene.view_mode_at_screen_point(ViewPoint { x: 8.0, y: 8.0 }, size),
             None
+        );
+    }
+
+    #[test]
+    fn top_bar_path_navigation_buttons_respect_enabled_state() {
+        let mut scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
+        let size = PhysicalSize::new(420, 240);
+        let back_rect = path_navigation_button_rects()[0].1;
+        let forward_rect = path_navigation_button_rects()[1].1;
+        let parent_rect = path_navigation_button_rects()[2].1;
+
+        assert_eq!(
+            scene.path_navigation_action_at_screen_point(
+                ViewPoint {
+                    x: back_rect.x + 2.0,
+                    y: back_rect.y + 2.0
+                },
+                size
+            ),
+            None
+        );
+        assert_eq!(
+            scene.path_navigation_action_at_screen_point(
+                ViewPoint {
+                    x: parent_rect.x + 2.0,
+                    y: parent_rect.y + 2.0
+                },
+                size
+            ),
+            Some(PathNavigationAction::Parent)
+        );
+
+        scene.history.push_back(PathBuf::from("/tmp/previous"));
+        scene.history.push_forward(PathBuf::from("/tmp/next"));
+        assert_eq!(
+            scene.path_navigation_action_at_screen_point(
+                ViewPoint {
+                    x: back_rect.x + 2.0,
+                    y: back_rect.y + 2.0
+                },
+                size
+            ),
+            Some(PathNavigationAction::Back)
+        );
+        assert_eq!(
+            scene.path_navigation_action_at_screen_point(
+                ViewPoint {
+                    x: forward_rect.x + 2.0,
+                    y: forward_rect.y + 2.0
+                },
+                size
+            ),
+            Some(PathNavigationAction::Forward)
         );
     }
 

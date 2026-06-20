@@ -122,10 +122,17 @@ Shell 拥有：
   toggle，并用 clipped GPU overlay 绘制框选矩形。
 - Keyboard navigation 现在通过同一 retained selection state 处理 Arrow、Home/End 和
   Page Up/Down。Shift 会扩展当前 range，focus item 会滚入视口。
+- 目录激活现在也留在 shell-owned input path 内：Enter 打开当前 focus/selected
+  目录，双击通过 retained hit testing 解析并打开目录，Backspace 或 Alt+Up 加载父目录。
+  Top bar 也提供 shell-owned Back/Forward/Up 控制，Alt+Left 和 Alt+Right 映射到同一
+  history stack。加载新 path 复用 `read_entries_sync`，普通导航会写入有界 back stack，
+  且只在成功的新导航后清空 forward history；随后重置 scroll/selection/rubber-band
+  transient state，从 retained geometry 刷新 hover，更新窗口标题，并通过与 view
+  switching 相同的 redraw burst present 新 scene。
 - `[fika-wgpu]` 日志包含 view mode、path、entry count、visible item count、quad count、draw
   batch count、selected count、hovered item index、active rubber-band state、
-  hit-test/selection/keyboard navigation/rubber-band/view-switch counters、icon count、icon
-  cache hit/miss count、icon cache bytes、icon atlas bytes、icon resolve/raster time、
+  hit-test/selection/keyboard navigation/rubber-band/view-switch/path-change counters、icon
+  count、icon cache hit/miss count、icon cache bytes、icon atlas bytes、icon resolve/raster time、
   text label count、text cache hit/miss count、text cache bytes、text atlas bytes、
   render reason、layout time、text raster time、render time 和 `scroll_x` / `scroll_y`
   offsets。

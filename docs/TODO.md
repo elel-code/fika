@@ -95,7 +95,13 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
   空白区域左键拖动已通过同一 retained Icons geometry 支持 rubber-band selection，
   普通拖动替换 selection，Shift 追加，Ctrl/Meta 相对按下时的 base selection 做
   toggle；keyboard navigation 已通过同一 retained selection state 处理 Arrow、
-  Home/End 和 Page Up/Down，Shift 扩展 range，focus item 会滚入视口。日志已输出
+  Home/End 和 Page Up/Down，Shift 扩展 range，focus item 会滚入视口；目录激活已走
+  shell-owned input path，Enter 打开当前 focus/selected 目录，双击通过 retained
+  hit testing 打开目录，Backspace 或 Alt+Up 加载父目录；Top bar 已有 Back/Forward/Up
+  控制，Alt+Left/Alt+Right 走同一有界 history stack，普通新导航只在读取成功后写入
+  back stack 并清空 forward history，并在加载新 path 时重置 scroll/selection/rubber-band
+  transient state、刷新 hover、更新窗口标题且立即 present。
+  日志已输出
   `--view icons|compact|details`，默认仍是 Icons baseline，Compact 使用 core
   `CompactLayout`，Details 已有 shell-owned row projection、固定 header 和
   Name/Size/Modified 三列；运行时可用 top-bar `Icons / Compact / Details` 按钮、
@@ -107,7 +113,7 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
   projection。
   日志已输出 view mode、path、entry count、visible count、
   selected/hover/rubber-band state、
-  hit-test/selection/keyboard/rubber-band/view-switch counters、quad/icon/text/batch count、
+  hit-test/selection/keyboard/rubber-band/view-switch/path-change counters、quad/icon/text/batch count、
   icon/text cache hit/miss/bytes、layout/icon-resolve/icon-raster/text-raster/render
   reason/time、icon/text atlas bytes 和 `scroll_x` / `scroll_y` offsets；本地目标 desktop
   session 的 `timeout 4s target/debug/fika-wgpu --view icons|compact|details /etc`
@@ -116,8 +122,9 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
   以及确认 Phase 0 默认 Compact/Icons 视图。
 - [~] Phase 1：Compact、Icons 和 Details scene projection 已开始接入。`/etc` 已可通过
   `--view` 在三种模式下渲染首帧；Compact 走 core `CompactLayout`，Details 走 shell-owned
-  row projection。滚动、hover、keyboard navigation、runtime mode switching 和 selection 已通过 shared
-  `ShellLayout` abstraction 走 retained geometry；zoom、`~/Downloads` smoke、手动交互 smoke
+  row projection。滚动、hover、keyboard navigation、directory activation/history navigation、
+  runtime mode switching 和 selection 已通过 shared `ShellLayout` abstraction 走 retained geometry；
+  zoom、`~/Downloads` smoke、手动交互 smoke
   和更完整 Details column/metadata parity 仍待完成。
 - [ ] Phase 2：把 Phase 0 初版 icon atlas 提升为预算化 semantic icon work，并实现 thumbnail texture retention、text shaping cache、glyph atlas policy 和 eviction telemetry。Cold glyph/icon work 必须 visible-first 且预算化。
 - [ ] Phase 3：把剩余 pointer routing、context target selection、directory hover、Places hover 和 drag/drop target lookup 移到 shell-owned hit testing。
