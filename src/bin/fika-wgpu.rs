@@ -13,8 +13,8 @@ use cosmic_text::{
     Wrap,
 };
 use fika_core::{
-    CompactLayout, CompactLayoutOptions, Entry, IconsLayout, IconsLayoutOptions, ViewPoint,
-    ViewRect, ViewSize, format_modified_secs, format_size, read_entries_sync,
+    CompactLayout, CompactLayoutOptions, Entry, IconsLayout, IconsLayoutOptions, NameFilter,
+    ViewPoint, ViewRect, ViewSize, format_modified_secs, format_size, read_entries_sync,
 };
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
@@ -24,6 +24,7 @@ use winit::keyboard::{Key, KeyCode, NamedKey, PhysicalKey};
 use winit::window::{Window, WindowAttributes, WindowId};
 
 const TOP_BAR_HEIGHT: f32 = 52.0;
+const FILTER_BAR_HEIGHT: f32 = 30.0;
 const STATUS_BAR_HEIGHT: f32 = 28.0;
 const ICONS_ITEM_WIDTH: f32 = 116.0;
 const ICONS_ITEM_HEIGHT: f32 = 106.0;
@@ -235,6 +236,15 @@ impl SelectionCommand {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum FilterCommand {
+    Activate,
+    Insert(String),
+    Backspace,
+    ClearAndDeactivate,
+    Deactivate,
+}
+
 fn window_title(scene: &ShellScene) -> String {
     format!(
         "Fika wgpu shell [{}] - {}",
@@ -394,6 +404,16 @@ impl ApplicationHandler for FikaWgpuApp {
                 };
                 let shortcut =
                     self.modifiers.state().control_key() || self.modifiers.state().meta_key();
+                if let Some(command) =
+                    filter_command_for_key_event(&event, shortcut, self.scene.filter_active)
+                {
+                    if self.scene.apply_filter_command(command, renderer.size)
+                        && let Some(window) = self.window.as_ref()
+                    {
+                        window.request_redraw();
+                    }
+                    return;
+                }
                 if let Some(view_mode) = view_mode_for_key_event(&event, shortcut) {
                     if self.scene.set_view_mode(view_mode, renderer.size) {
                         self.pending_redraw_frames = VIEW_SWITCH_REDRAW_FRAMES;
@@ -735,6 +755,65 @@ fn reload_requested_for_key_parts(
             || key_character_eq(key_without_modifiers, "r"))
 }
 
+fn filter_command_for_key_event(
+    event: &KeyEvent,
+    shortcut: bool,
+    filter_active: bool,
+) -> Option<FilterCommand> {
+    filter_command_for_key_parts(
+        shortcut,
+        filter_active,
+        &event.physical_key,
+        &event.logical_key,
+        &event.key_without_modifiers,
+    )
+}
+
+fn filter_command_for_key_parts(
+    shortcut: bool,
+    filter_active: bool,
+    physical_key: &PhysicalKey,
+    logical_key: &Key,
+    key_without_modifiers: &Key,
+) -> Option<FilterCommand> {
+    if shortcut
+        && (matches!(physical_key, PhysicalKey::Code(KeyCode::KeyF))
+            || key_character_eq(logical_key, "f")
+            || key_character_eq(key_without_modifiers, "f"))
+    {
+        return Some(FilterCommand::Activate);
+    }
+    if !filter_active {
+        return None;
+    }
+    if matches!(physical_key, PhysicalKey::Code(KeyCode::Escape))
+        || matches!(logical_key, Key::Named(NamedKey::Escape))
+        || matches!(key_without_modifiers, Key::Named(NamedKey::Escape))
+    {
+        return Some(FilterCommand::ClearAndDeactivate);
+    }
+    if matches!(logical_key, Key::Named(NamedKey::Enter))
+        || matches!(key_without_modifiers, Key::Named(NamedKey::Enter))
+    {
+        return Some(FilterCommand::Deactivate);
+    }
+    if matches!(physical_key, PhysicalKey::Code(KeyCode::Backspace))
+        || matches!(logical_key, Key::Named(NamedKey::Backspace))
+        || matches!(key_without_modifiers, Key::Named(NamedKey::Backspace))
+    {
+        return Some(FilterCommand::Backspace);
+    }
+    if shortcut {
+        return None;
+    }
+    match logical_key {
+        Key::Character(value) if !value.chars().any(char::is_control) => {
+            Some(FilterCommand::Insert(value.to_string()))
+        }
+        _ => None,
+    }
+}
+
 fn key_character_eq(key: &Key, expected: &str) -> bool {
     matches!(key, Key::Character(value) if value.as_str().eq_ignore_ascii_case(expected))
 }
@@ -1072,6 +1151,9 @@ struct ShellScene {
     view_mode: ShellViewMode,
     entries: Vec<Entry>,
     dir_count: usize,
+    filtered_indexes: Vec<usize>,
+    filter_active: bool,
+    filter_pattern: String,
     zoom_step: i32,
     scroll_x: f32,
     scroll_y: f32,
@@ -1088,6 +1170,7 @@ struct ShellScene {
     view_switches: u64,
     path_changes: u64,
     directory_reloads: u64,
+    filter_changes: u64,
     zoom_changes: u64,
 }
 
@@ -1117,11 +1200,16 @@ impl ShellScene {
             eprintln!("[fika-wgpu] first-entries={preview}");
         }
 
+        let filtered_indexes = all_entry_indexes(entries.len());
+
         Ok(Self {
             path,
             view_mode,
             entries,
             dir_count,
+            filtered_indexes,
+            filter_active: false,
+            filter_pattern: String::new(),
             zoom_step: 0,
             scroll_x: 0.0,
             scroll_y: 0.0,
@@ -1138,6 +1226,7 @@ impl ShellScene {
             view_switches: 0,
             path_changes: 0,
             directory_reloads: 0,
+            filter_changes: 0,
             zoom_changes: 0,
         })
     }
@@ -1180,17 +1269,19 @@ impl ShellScene {
             .collect::<Vec<_>>()
             .join(", ");
 
-        let previous_selection = self.selection.clone();
         let remapped_selection = self.selection_for_reloaded_entries(&entries);
-        let selection_changed = previous_selection != remapped_selection;
+        let previous_selection = self.selection.clone();
 
         self.entries = entries;
         self.dir_count = dir_count;
         self.selection = remapped_selection;
+        self.rebuild_filtered_indexes();
+        let pruned_selection = self.selection.retain_indexes(&self.filtered_indexes);
+        let selection_changed = previous_selection != self.selection;
         self.rubber_band = None;
         self.last_primary_click = None;
         self.directory_reloads += 1;
-        if selection_changed {
+        if selection_changed || pruned_selection {
             self.selection_changes += 1;
         }
         self.clamp_scroll(size);
@@ -1263,6 +1354,7 @@ impl ShellScene {
         self.path = path;
         self.entries = entries;
         self.dir_count = dir_count;
+        self.rebuild_filtered_indexes();
         self.scroll_x = 0.0;
         self.scroll_y = 0.0;
         self.selection = ShellSelection::default();
@@ -1362,7 +1454,7 @@ impl ShellScene {
     fn apply_selection_command(&mut self, command: SelectionCommand) -> bool {
         let rubber_band_changed = self.rubber_band.take().is_some();
         let selection_changed = match command {
-            SelectionCommand::SelectAll => self.selection.select_all(self.entries.len()),
+            SelectionCommand::SelectAll => self.selection.select_indexes(&self.filtered_indexes),
             SelectionCommand::Clear => self.selection.clear(),
         };
         if selection_changed {
@@ -1377,6 +1469,81 @@ impl ShellScene {
             );
         }
         selection_changed || rubber_band_changed
+    }
+
+    fn apply_filter_command(&mut self, command: FilterCommand, size: PhysicalSize<u32>) -> bool {
+        let old_active = self.filter_active;
+        let old_pattern = self.filter_pattern.clone();
+
+        match command {
+            FilterCommand::Activate => {
+                self.filter_active = true;
+            }
+            FilterCommand::Insert(value) => {
+                self.filter_active = true;
+                self.filter_pattern.push_str(&value);
+            }
+            FilterCommand::Backspace => {
+                self.filter_active = true;
+                self.filter_pattern.pop();
+            }
+            FilterCommand::ClearAndDeactivate => {
+                self.filter_active = false;
+                self.filter_pattern.clear();
+            }
+            FilterCommand::Deactivate => {
+                self.filter_active = false;
+            }
+        }
+
+        let filter_changed = old_active != self.filter_active || old_pattern != self.filter_pattern;
+        if !filter_changed {
+            return false;
+        }
+
+        self.filter_changes += 1;
+        self.rubber_band = None;
+        self.rebuild_filtered_indexes();
+        let selection_changed = self.selection.retain_indexes(&self.filtered_indexes);
+        if selection_changed {
+            self.selection_changes += 1;
+        }
+        self.clamp_scroll(size);
+        eprintln!(
+            "[fika-wgpu] filter active={} pattern={:?} matches={} changes={} selection_changed={}",
+            self.filter_active as u8,
+            self.filter_pattern,
+            self.filtered_indexes.len(),
+            self.filter_changes,
+            selection_changed as u8
+        );
+        true
+    }
+
+    fn rebuild_filtered_indexes(&mut self) {
+        if self.filter_pattern.is_empty() {
+            self.filtered_indexes = all_entry_indexes(self.entries.len());
+            return;
+        }
+        let filter = NameFilter::plain_text(self.filter_pattern.clone());
+        self.filtered_indexes = self
+            .entries
+            .iter()
+            .enumerate()
+            .filter_map(|(index, entry)| filter.matches_name(entry.name.as_ref()).then_some(index))
+            .collect();
+    }
+
+    fn filtered_entry_count(&self) -> usize {
+        self.filtered_indexes.len()
+    }
+
+    fn model_index_for_layout_index(&self, layout_index: usize) -> Option<usize> {
+        self.filtered_indexes.get(layout_index).copied()
+    }
+
+    fn layout_index_for_model_index(&self, model_index: usize) -> Option<usize> {
+        self.filtered_indexes.binary_search(&model_index).ok()
     }
 
     fn selection_for_reloaded_entries(&self, entries: &[Entry]) -> ShellSelection {
@@ -1514,17 +1681,16 @@ impl ShellScene {
     }
 
     fn layout(&self, size: PhysicalSize<u32>) -> ShellLayout {
+        let item_count = self.filtered_entry_count();
         match self.view_mode {
-            ShellViewMode::Icons => ShellLayout::Icons(IconsLayout::new(
-                self.entries.len(),
-                self.icons_options(size),
-            )),
-            ShellViewMode::Compact => ShellLayout::Compact(CompactLayout::new(
-                self.entries.len(),
-                self.compact_options(size),
-            )),
+            ShellViewMode::Icons => {
+                ShellLayout::Icons(IconsLayout::new(item_count, self.icons_options(size)))
+            }
+            ShellViewMode::Compact => {
+                ShellLayout::Compact(CompactLayout::new(item_count, self.compact_options(size)))
+            }
             ShellViewMode::Details => ShellLayout::Details(DetailsLayout::new(
-                self.entries.len(),
+                item_count,
                 size.width as f32,
                 self.viewport_height(size),
                 self.scroll_y,
@@ -1665,6 +1831,7 @@ impl ShellScene {
             view_mode_content_color(self.view_mode),
             size,
         );
+        self.push_filter_bar(&mut vertices, text, size);
         push_rect(
             &mut vertices,
             ViewRect {
@@ -1821,9 +1988,10 @@ impl ShellScene {
         size: PhysicalSize<u32>,
     ) {
         let width = size.width.max(1) as f32;
+        let y = self.details_header_y();
         let header = ViewRect {
             x: 0.0,
-            y: TOP_BAR_HEIGHT,
+            y,
             width,
             height: DETAILS_HEADER_HEIGHT,
         };
@@ -1853,7 +2021,7 @@ impl ShellScene {
                 label,
                 ViewRect {
                     x,
-                    y: TOP_BAR_HEIGHT + 6.0,
+                    y: header.y + 6.0,
                     width: width.max(1.0),
                     height: 18.0,
                 },
@@ -1861,6 +2029,56 @@ impl ShellScene {
                 TextColor::rgb(170, 181, 192),
             );
         }
+    }
+
+    fn push_filter_bar(
+        &self,
+        vertices: &mut Vec<QuadVertex>,
+        text: &mut TextFrameBuilder<'_>,
+        size: PhysicalSize<u32>,
+    ) {
+        let Some(rect) = self.filter_bar_rect(size) else {
+            return;
+        };
+        push_rect(vertices, rect, [0.112, 0.122, 0.132, 1.0], size);
+        push_rect(
+            vertices,
+            ViewRect {
+                x: 0.0,
+                y: rect.bottom() - 1.0,
+                width: rect.width,
+                height: 1.0,
+            },
+            [0.22, 0.25, 0.28, 1.0],
+            size,
+        );
+        text.push_label(
+            "Filter:",
+            ViewRect {
+                x: 12.0,
+                y: rect.y + 6.0,
+                width: 54.0,
+                height: 18.0,
+            },
+            rect,
+            TextColor::rgb(176, 187, 198),
+        );
+        let pattern = if self.filter_pattern.is_empty() {
+            ""
+        } else {
+            self.filter_pattern.as_str()
+        };
+        text.push_label(
+            pattern,
+            ViewRect {
+                x: 66.0,
+                y: rect.y + 6.0,
+                width: (rect.width - 78.0).max(1.0),
+                height: 18.0,
+            },
+            rect,
+            TextColor::rgb(230, 236, 241),
+        );
     }
 
     fn push_item(
@@ -1872,15 +2090,18 @@ impl ShellScene {
         content_clip: ViewRect,
         size: PhysicalSize<u32>,
     ) {
-        let Some(entry) = self.entries.get(item.model_index) else {
+        let Some(entry_index) = self.model_index_for_layout_index(item.model_index) else {
+            return;
+        };
+        let Some(entry) = self.entries.get(entry_index) else {
             return;
         };
         let item_rect = self.content_to_screen(item.item_rect);
         let visual_rect = self.content_to_screen(item.visual_rect);
         let icon_rect = self.content_to_screen(item.icon_rect);
         let text_rect = self.content_to_screen(item.text_rect);
-        let selected = self.selection.contains(item.model_index);
-        let hovered = self.hovered_index == Some(item.model_index);
+        let selected = self.selection.contains(entry_index);
+        let hovered = self.hovered_index == Some(entry_index);
 
         push_clipped_rect(
             vertices,
@@ -1977,20 +2198,23 @@ impl ShellScene {
         content_clip: ViewRect,
         size: PhysicalSize<u32>,
     ) {
-        let Some(entry) = self.entries.get(item.model_index) else {
+        let Some(entry_index) = self.model_index_for_layout_index(item.model_index) else {
+            return;
+        };
+        let Some(entry) = self.entries.get(entry_index) else {
             return;
         };
         let row_rect = self.content_to_screen(item.item_rect);
         let icon_rect = self.content_to_screen(item.icon_rect);
         let name_rect = self.content_to_screen(item.text_rect);
-        let selected = self.selection.contains(item.model_index);
-        let hovered = self.hovered_index == Some(item.model_index);
+        let selected = self.selection.contains(entry_index);
+        let hovered = self.hovered_index == Some(entry_index);
 
         push_clipped_rect(
             vertices,
             row_rect,
             content_clip,
-            details_row_background_color(selected, hovered, item.model_index),
+            details_row_background_color(selected, hovered, entry_index),
             size,
         );
         if selected {
@@ -2084,7 +2308,7 @@ impl ShellScene {
             size,
         );
 
-        let status = format!(
+        let mut status = format!(
             "{} entries ({} dirs, {} files) | {} selected | {} visible | {} | {}%",
             self.entries.len(),
             self.dir_count,
@@ -2094,6 +2318,13 @@ impl ShellScene {
             self.view_mode.label(),
             self.zoom_percent()
         );
+        if self.filter_active || !self.filter_pattern.is_empty() {
+            status.push_str(&format!(
+                " | filter {:?} ({})",
+                self.filter_pattern,
+                self.filtered_entry_count()
+            ));
+        }
         text.push_label(
             &status,
             ViewRect {
@@ -2117,12 +2348,34 @@ impl ShellScene {
     }
 
     fn content_origin_y(&self) -> f32 {
-        TOP_BAR_HEIGHT
+        self.details_header_y()
             + if self.view_mode == ShellViewMode::Details {
                 DETAILS_HEADER_HEIGHT
             } else {
                 0.0
             }
+    }
+
+    fn details_header_y(&self) -> f32 {
+        TOP_BAR_HEIGHT + self.filter_bar_height()
+    }
+
+    fn filter_bar_height(&self) -> f32 {
+        if self.filter_active || !self.filter_pattern.is_empty() {
+            FILTER_BAR_HEIGHT
+        } else {
+            0.0
+        }
+    }
+
+    fn filter_bar_rect(&self, size: PhysicalSize<u32>) -> Option<ViewRect> {
+        let height = self.filter_bar_height();
+        (height > 0.0).then(|| ViewRect {
+            x: 0.0,
+            y: TOP_BAR_HEIGHT,
+            width: size.width.max(1) as f32,
+            height,
+        })
     }
 
     fn viewport_height(&self, size: PhysicalSize<u32>) -> f32 {
@@ -2281,11 +2534,12 @@ impl ShellScene {
         layout
             .indexes_intersecting(rect)
             .iter()
-            .copied()
-            .filter(|index| {
+            .filter_map(|layout_index| {
                 layout
-                    .item(*index)
+                    .item(*layout_index)
                     .is_some_and(|item| item.visual_rect.intersects(rect))
+                    .then(|| self.model_index_for_layout_index(*layout_index))
+                    .flatten()
             })
             .collect()
     }
@@ -2296,15 +2550,24 @@ impl ShellScene {
         extend: bool,
         size: PhysicalSize<u32>,
     ) -> bool {
-        if self.entries.is_empty() {
+        if self.filtered_entry_count() == 0 {
             return false;
         }
 
         let old_scroll_y = self.scroll_y;
         let old_hovered = self.hovered_index;
-        let current = self.selection.focus_or_first_selected().unwrap_or(0);
+        let current = self
+            .selection
+            .focus_or_first_selected()
+            .and_then(|index| self.layout_index_for_model_index(index))
+            .unwrap_or(0);
         let layout = self.layout(size);
-        let Some(target) = navigation_target(action, current, self.entries.len(), &layout) else {
+        let Some(target_layout_index) =
+            navigation_target(action, current, self.filtered_entry_count(), &layout)
+        else {
+            return false;
+        };
+        let Some(target) = self.model_index_for_layout_index(target_layout_index) else {
             return false;
         };
 
@@ -2344,14 +2607,20 @@ impl ShellScene {
         let content_point =
             screen_to_content_point(point, self.scroll_offset(), self.content_origin_y())?;
         let layout = self.layout(size);
-        let index = layout.hit_test_content_point(content_point)?;
-        let item = layout.item(index)?;
-        item.visual_rect.contains(content_point).then_some(index)
+        let layout_index = layout.hit_test_content_point(content_point)?;
+        let item = layout.item(layout_index)?;
+        item.visual_rect
+            .contains(content_point)
+            .then(|| self.model_index_for_layout_index(layout_index))
+            .flatten()
     }
 
     fn ensure_index_visible(&mut self, index: usize, size: PhysicalSize<u32>) {
         let layout = self.layout(size);
-        let Some(item) = layout.item(index) else {
+        let Some(layout_index) = self.layout_index_for_model_index(index) else {
+            return;
+        };
+        let Some(item) = layout.item(layout_index) else {
             return;
         };
         let viewport_h = self.viewport_height(size);
@@ -2477,14 +2746,33 @@ impl ShellSelection {
         self.focus.or_else(|| self.selected.iter().next().copied())
     }
 
-    fn select_all(&mut self, item_count: usize) -> bool {
+    fn select_indexes(&mut self, indexes: &[usize]) -> bool {
         let old_selected = self.selected.clone();
         let old_anchor = self.anchor;
         let old_focus = self.focus;
 
-        self.selected = (0..item_count).collect();
-        self.anchor = (item_count > 0).then_some(0);
-        self.focus = item_count.checked_sub(1);
+        self.selected = indexes.iter().copied().collect();
+        self.anchor = indexes.first().copied();
+        self.focus = indexes.last().copied();
+
+        old_selected != self.selected || old_anchor != self.anchor || old_focus != self.focus
+    }
+
+    fn retain_indexes(&mut self, indexes: &[usize]) -> bool {
+        let old_selected = self.selected.clone();
+        let old_anchor = self.anchor;
+        let old_focus = self.focus;
+
+        self.selected
+            .retain(|index| indexes.binary_search(index).is_ok());
+        self.anchor = self
+            .anchor
+            .filter(|index| self.selected.contains(index))
+            .or_else(|| self.selected.iter().next().copied());
+        self.focus = self
+            .focus
+            .filter(|index| self.selected.contains(index))
+            .or_else(|| self.selected.iter().next_back().copied());
 
         old_selected != self.selected || old_anchor != self.anchor || old_focus != self.focus
     }
@@ -2891,7 +3179,7 @@ impl WgpuState {
             || self.last_log.elapsed() >= Duration::from_secs(1)
         {
             eprintln!(
-                "[fika-wgpu] frame={} reason={} view={} zoom={} zoom_changes={} path={} entries={} visible={} selected={} hover={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} path_changes={} reloads={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_cache={}/{} entries={} bytes={} batches={} scroll_x={:.1} scroll_y={:.1} layout={}us text_raster={}us text_atlas={}x{}:{}b render={}us",
+                "[fika-wgpu] frame={} reason={} view={} zoom={} zoom_changes={} path={} entries={} filtered={} filter_active={} filter_changes={} visible={} selected={} hover={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} path_changes={} reloads={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_cache={}/{} entries={} bytes={} batches={} scroll_x={:.1} scroll_y={:.1} layout={}us text_raster={}us text_atlas={}x{}:{}b render={}us",
                 self.frame_count,
                 reason,
                 scene.view_mode.as_str(),
@@ -2899,6 +3187,9 @@ impl WgpuState {
                 scene.zoom_changes,
                 scene.path.display(),
                 scene.entries.len(),
+                scene.filtered_entry_count(),
+                scene.filter_active as u8,
+                scene.filter_changes,
                 scene_frame.visible_items,
                 scene.selection.len(),
                 scene.hovered_index.map(|index| index as i64).unwrap_or(-1),
@@ -5486,6 +5777,10 @@ fn entry_index_by_name(entries: &[Entry], name: &str) -> Option<usize> {
     entries.iter().position(|entry| entry.name.as_ref() == name)
 }
 
+fn all_entry_indexes(len: usize) -> Vec<usize> {
+    (0..len).collect()
+}
+
 #[cfg(test)]
 fn content_height(size: PhysicalSize<u32>) -> f32 {
     (size.height as f32 - TOP_BAR_HEIGHT - STATUS_BAR_HEIGHT).max(1.0)
@@ -5541,11 +5836,15 @@ mod tests {
 
     fn test_scene(entries: Vec<Entry>, view_mode: ShellViewMode) -> ShellScene {
         let dir_count = entries.iter().filter(|entry| entry.is_dir).count();
+        let filtered_indexes = all_entry_indexes(entries.len());
         ShellScene {
             path: PathBuf::from("/tmp"),
             view_mode,
             entries,
             dir_count,
+            filtered_indexes,
+            filter_active: false,
+            filter_pattern: String::new(),
             zoom_step: 0,
             scroll_x: 0.0,
             scroll_y: 0.0,
@@ -5562,6 +5861,7 @@ mod tests {
             view_switches: 0,
             path_changes: 0,
             directory_reloads: 0,
+            filter_changes: 0,
             zoom_changes: 0,
         }
     }
@@ -5975,6 +6275,108 @@ mod tests {
             ),
             Some(SelectionCommand::Clear)
         );
+    }
+
+    #[test]
+    fn filter_shortcuts_activate_and_capture_text_when_active() {
+        let unidentified = PhysicalKey::Unidentified(winit::keyboard::NativeKeyCode::Unidentified);
+        let no_key = Key::Unidentified(winit::keyboard::NativeKey::Unidentified);
+
+        assert_eq!(
+            filter_command_for_key_parts(
+                true,
+                false,
+                &PhysicalKey::Code(KeyCode::KeyF),
+                &no_key,
+                &no_key,
+            ),
+            Some(FilterCommand::Activate)
+        );
+        assert_eq!(
+            filter_command_for_key_parts(
+                false,
+                true,
+                &unidentified,
+                &Key::Character("1".into()),
+                &no_key,
+            ),
+            Some(FilterCommand::Insert("1".to_string()))
+        );
+        assert_eq!(
+            filter_command_for_key_parts(
+                false,
+                true,
+                &PhysicalKey::Code(KeyCode::Backspace),
+                &no_key,
+                &no_key,
+            ),
+            Some(FilterCommand::Backspace)
+        );
+        assert_eq!(
+            filter_command_for_key_parts(
+                false,
+                true,
+                &PhysicalKey::Code(KeyCode::Escape),
+                &no_key,
+                &no_key,
+            ),
+            Some(FilterCommand::ClearAndDeactivate)
+        );
+        assert_eq!(
+            filter_command_for_key_parts(
+                false,
+                false,
+                &unidentified,
+                &Key::Character("a".into()),
+                &no_key,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn filter_updates_layout_hit_testing_and_select_all() {
+        let mut scene = test_scene(
+            vec![
+                test_entry("alpha.txt", false),
+                test_entry("beta.txt", false),
+                test_entry("alphabet.txt", false),
+            ],
+            ShellViewMode::Icons,
+        );
+        let size = PhysicalSize::new(420, 260);
+
+        assert!(scene.apply_filter_command(FilterCommand::Activate, size));
+        assert!(scene.apply_filter_command(FilterCommand::Insert("alp".to_string()), size));
+        assert_eq!(scene.filtered_indexes, vec![0, 2]);
+        assert_eq!(scene.filtered_entry_count(), 2);
+        assert_eq!(scene.filter_changes, 2);
+
+        let layout = scene.layout(size);
+        assert!(layout.item(2).is_none());
+        let second = layout.item(1).expect("second filtered item should layout");
+        let point = ViewPoint {
+            x: second.visual_rect.x + 2.0,
+            y: second.visual_rect.y + scene.content_origin_y() + 2.0,
+        };
+        assert_eq!(scene.hit_test_screen_point(point, size), Some(2));
+
+        assert!(scene.apply_selection_command(SelectionCommand::SelectAll));
+        assert_eq!(
+            scene.selection.selected.iter().copied().collect::<Vec<_>>(),
+            vec![0, 2]
+        );
+
+        assert!(scene.apply_filter_command(FilterCommand::Backspace, size));
+        assert_eq!(scene.filter_pattern, "al");
+        assert!(scene.apply_filter_command(FilterCommand::Deactivate, size));
+        assert!(!scene.filter_active);
+        assert_eq!(scene.filter_pattern, "al");
+        assert_eq!(scene.filtered_entry_count(), 2);
+        assert!(scene.apply_filter_command(FilterCommand::ClearAndDeactivate, size));
+        assert!(!scene.filter_active);
+        assert!(scene.filter_pattern.is_empty());
+        assert_eq!(scene.filtered_entry_count(), 3);
     }
 
     #[test]

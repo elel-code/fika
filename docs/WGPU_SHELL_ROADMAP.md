@@ -165,10 +165,16 @@ Current checkpoint:
 - A minimal shell-owned status bar is now drawn at the bottom of the window. It
   summarizes entry, directory, file, selection, visible-item, view-mode, and zoom
   state, reserves content viewport height, and is excluded from item hit testing.
+- A minimal shell-owned filter bar is now available with `Ctrl/Meta+F`.
+  Character input updates a retained plain-text name filter, Backspace edits the
+  pattern, Enter keeps the pattern applied while leaving text-capture mode, and
+  Esc clears/deactivates it. Layout, hit testing, hover, selection, select-all, and
+  keyboard navigation all route through the filtered model-index projection.
+  Full IME/caret/selection editing remains Phase 4 text-boundary work.
 - `[fika-wgpu]` logs include view mode, path, entry count, visible item count,
   quad count, selected count, hovered item index, active rubber-band state,
   hit-test/selection/keyboard navigation/rubber-band/view-switch/path-change
-  counters, reload counters, zoom percent and zoom-change counters, icon count, icon cache
+  counters, reload/filter counters, zoom percent and zoom-change counters, icon count, icon cache
   hit/miss count, icon cache bytes, icon atlas bytes, icon resolve/raster time,
   text label count, text cache hit/miss count, text cache bytes, text atlas
   bytes, draw batch count, render reason, layout time, text raster time, render
@@ -208,8 +214,9 @@ Acceptance:
 - [~] `/etc` renders in Compact, Icons, and Details via `--view`; `~/Downloads`
   and manual interaction smokes remain pending.
 - [~] Scroll, hover, keyboard navigation, runtime mode switching, projection
-  zoom, reload, selection, and select-all/clear shortcuts work from retained
-  geometry for the initial projections. Glyph-level text zoom policy remains pending.
+  zoom, reload, filtering, selection, and select-all/clear shortcuts work from
+  retained geometry for the initial projections. Glyph-level text zoom policy
+  remains pending.
 - [~] Layout/hit-test/paint share the same shell layout abstraction for Icons,
   Compact, and Details.
 - No synchronous theme scan, MIME magic read, thumbnail decode, or text shaping
@@ -247,8 +254,10 @@ Acceptance:
 Implement the surrounding UI needed to make the shell usable: Places, toolbar,
 location bar, filter bar, status bar, context menus, dialogs, and chooser mode.
 
-Current checkpoint: the first chrome slice is a minimal bottom status bar with
-directory/selection/view/zoom summary and a reserved content viewport.
+Current checkpoint: the first chrome slices are a minimal bottom status bar with
+directory/selection/view/zoom summary and a minimal `Ctrl/Meta+F` filter bar.
+Filter text editing is intentionally narrow until the full IME/caret/selection
+text boundary is migrated.
 
 Acceptance:
 
