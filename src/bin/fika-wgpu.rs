@@ -17,8 +17,10 @@ use fika_core::{
     IconsLayoutOptions, NETWORK_ROOT_LABEL, NameFilter, PaneId, TransferTaskResult, UserPlace,
     ViewPoint, ViewRect, ViewSize, complete_location_input, decode_file_clipboard_text,
     default_user_places_path, encode_file_clipboard_text, file_ops, format_modified_secs,
-    format_size, home_dir, is_network_path, network_root_path, network_uri_from_path,
-    paste_text_result, read_entries_sync, resolve_location_input, transfer_paths_result,
+    format_size, home_dir, is_network_path, load_place_order, load_user_places, network_root_path,
+    network_uri_from_path, paste_text_result, place_order_path_for_user_places_path,
+    read_entries_sync, resolve_location_input, save_place_order, save_user_places,
+    transfer_paths_result,
 };
 use gio::prelude::FileExt;
 use raw_window_handle::{HasDisplayHandle, RawDisplayHandle};
@@ -937,6 +939,7 @@ impl FikaWgpuApp {
                     window.request_redraw();
                 }
             }
+            ShellContextMenuAction::RemovePlace => self.remove_context_place(event_loop),
             ShellContextMenuAction::MoveToTrash => self.move_context_target_to_trash(event_loop),
             ShellContextMenuAction::Copy | ShellContextMenuAction::Cut => {
                 match self.scene.context_target_file_clipboard_request(action) {
@@ -995,6 +998,29 @@ impl FikaWgpuApp {
                         .map(ShellContextTarget::kind)
                         .unwrap_or("none")
                 );
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+            }
+        }
+    }
+
+    fn remove_context_place(&mut self, event_loop: &dyn ActiveEventLoop) {
+        let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
+            return;
+        };
+        match self
+            .scene
+            .remove_context_place(&default_user_places_path(), size)
+        {
+            Ok(true) => self.present_scene_change(event_loop, "remove-place"),
+            Ok(false) => {
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+            }
+            Err(error) => {
+                eprintln!("[fika-wgpu] remove-place-error {error}");
                 if let Some(window) = self.window.as_ref() {
                     window.request_redraw();
                 }
@@ -2039,6 +2065,7 @@ enum ShellContextMenuAction {
     SelectAll,
     Refresh,
     Properties,
+    RemovePlace,
 }
 
 impl ShellContextMenuAction {
@@ -2056,6 +2083,7 @@ impl ShellContextMenuAction {
             Self::SelectAll => "Select All",
             Self::Refresh => "Refresh",
             Self::Properties => "Properties",
+            Self::RemovePlace => "Remove",
         }
     }
 
@@ -2073,6 +2101,7 @@ impl ShellContextMenuAction {
             Self::SelectAll => "select-all",
             Self::Refresh => "refresh",
             Self::Properties => "properties",
+            Self::RemovePlace => "remove-place",
         }
     }
 }
@@ -2117,9 +2146,16 @@ fn context_menu_actions(target: &ShellContextTarget) -> &'static [ShellContextMe
         ShellContextMenuAction::CopyLocation,
         ShellContextMenuAction::Properties,
     ];
+    const EDITABLE_PLACE_ACTIONS: &[ShellContextMenuAction] = &[
+        ShellContextMenuAction::Open,
+        ShellContextMenuAction::CopyLocation,
+        ShellContextMenuAction::RemovePlace,
+        ShellContextMenuAction::Properties,
+    ];
     match target {
         ShellContextTarget::Item { .. } => ITEM_ACTIONS,
         ShellContextTarget::Blank { .. } => BLANK_ACTIONS,
+        ShellContextTarget::Place { editable: true, .. } => EDITABLE_PLACE_ACTIONS,
         ShellContextTarget::Place { .. } => PLACE_ACTIONS,
     }
 }
@@ -3338,6 +3374,52 @@ impl ShellScene {
             request.text,
             self.copy_location_changes
         );
+    }
+
+    fn remove_context_place(
+        &mut self,
+        user_places_path: &Path,
+        size: PhysicalSize<u32>,
+    ) -> Result<bool, String> {
+        let Some(ShellContextTarget::Place {
+            label,
+            path,
+            editable,
+            ..
+        }) = self.context_target.as_ref()
+        else {
+            return Err("no place context target to remove".to_string());
+        };
+        if !editable {
+            return Err(format!("place {label:?} is not removable"));
+        }
+        let label = label.clone();
+        let path = path.clone();
+        if !remove_user_place_at_path(user_places_path, &path)? {
+            eprintln!(
+                "[fika-wgpu] remove-place label={:?} path={} removed=0 changes={}",
+                label,
+                path.display(),
+                self.places_changes
+            );
+            return Ok(false);
+        }
+
+        self.places = build_shell_places_from(user_places_path);
+        self.context_target = None;
+        self.context_menu = None;
+        self.properties_overlay = None;
+        self.rubber_band = None;
+        self.places_changes += 1;
+        self.refresh_hover(size);
+        eprintln!(
+            "[fika-wgpu] remove-place label={:?} path={} removed=1 places={} changes={}",
+            label,
+            path.display(),
+            self.places.len(),
+            self.places_changes
+        );
+        Ok(true)
     }
 
     fn context_target_file_clipboard_request(
@@ -9056,6 +9138,10 @@ fn entry_index_by_name(entries: &[Entry], name: &str) -> Option<usize> {
 }
 
 fn build_shell_places() -> Vec<ShellPlace> {
+    build_shell_places_from(&default_user_places_path())
+}
+
+fn build_shell_places_from(user_places_path: &Path) -> Vec<ShellPlace> {
     const NETWORK_GROUP: &str = "Network";
     const DEVICES_GROUP: &str = "Devices";
 
@@ -9084,7 +9170,7 @@ fn build_shell_places() -> Vec<ShellPlace> {
         .chain(std::iter::once(network_root_path()))
         .collect::<BTreeSet<_>>();
     let mut network_places = Vec::new();
-    for place in fika_core::load_user_places(&default_user_places_path()).unwrap_or_default() {
+    for place in load_user_places(user_places_path).unwrap_or_default() {
         if built_in_paths.contains(&place.path) {
             continue;
         }
@@ -9115,6 +9201,25 @@ fn build_shell_places() -> Vec<ShellPlace> {
         false,
     );
     places
+}
+
+fn remove_user_place_at_path(user_places_path: &Path, path: &Path) -> Result<bool, String> {
+    let mut places = load_user_places(user_places_path)?;
+    let old_len = places.len();
+    places.retain(|place| place.path.as_path() != path);
+    if places.len() == old_len {
+        return Ok(false);
+    }
+    save_user_places(user_places_path, &places)?;
+
+    let order_path = place_order_path_for_user_places_path(user_places_path);
+    let mut order = load_place_order(&order_path)?;
+    let old_order_len = order.len();
+    order.retain(|ordered_path| ordered_path.as_path() != path);
+    if order.len() != old_order_len {
+        save_place_order(&order_path, &order)?;
+    }
+    Ok(true)
 }
 
 fn push_existing_shell_place(
@@ -9433,6 +9538,117 @@ mod tests {
         );
         assert_eq!(scene.context_menu_actions, 1);
         assert!(scene.context_menu.is_none());
+    }
+
+    #[test]
+    fn editable_places_context_menu_includes_remove_action() {
+        let mut scene = test_scene(Vec::new(), ShellViewMode::Icons);
+        scene.places = vec![
+            ShellPlace::new("", "H", "Home", PathBuf::from("/tmp"), false),
+            ShellPlace::new("", "B", "Project", PathBuf::from("/tmp/project"), true),
+        ];
+        let size = PhysicalSize::new(700, 320);
+        let project_row = scene.place_row_rects(size)[1].1;
+        let point = ViewPoint {
+            x: project_row.x + 6.0,
+            y: project_row.y + 6.0,
+        };
+
+        assert!(scene.open_context_menu(point, size));
+        let menu = scene.context_menu.as_ref().expect("menu should open");
+        assert_eq!(
+            context_menu_actions(&menu.target),
+            &[
+                ShellContextMenuAction::Open,
+                ShellContextMenuAction::CopyLocation,
+                ShellContextMenuAction::RemovePlace,
+                ShellContextMenuAction::Properties,
+            ]
+        );
+        let rect = context_menu_rect(menu, size);
+        let remove_row = ViewPoint {
+            x: rect.x + 8.0,
+            y: rect.y + CONTEXT_MENU_ROW_HEIGHT * 2.0 + 8.0,
+        };
+        assert_eq!(
+            scene.activate_or_close_context_menu(remove_row, size),
+            Some(ShellContextMenuAction::RemovePlace)
+        );
+    }
+
+    #[test]
+    fn remove_user_place_at_path_updates_xbel_and_order() {
+        let root = test_dir("remove-user-place");
+        let places_path = root.join("places.xbel");
+        let keep = PathBuf::from("/tmp/keep-place");
+        let remove = PathBuf::from("/tmp/remove-place");
+        save_user_places(
+            &places_path,
+            &[
+                UserPlace::new("Keep".to_string(), keep.clone()),
+                UserPlace::new("Remove".to_string(), remove.clone()),
+            ],
+        )
+        .unwrap();
+        let order_path = place_order_path_for_user_places_path(&places_path);
+        save_place_order(&order_path, &[remove.clone(), keep.clone()]).unwrap();
+
+        assert!(remove_user_place_at_path(&places_path, &remove).unwrap());
+        assert_eq!(
+            load_user_places(&places_path).unwrap(),
+            vec![UserPlace::new("Keep".to_string(), keep.clone())]
+        );
+        assert_eq!(load_place_order(&order_path).unwrap(), vec![keep]);
+        assert!(!remove_user_place_at_path(&places_path, &remove).unwrap());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn remove_context_place_reloads_places_and_clears_context_state() {
+        let root = test_dir("remove-context-place");
+        let places_path = root.join("places.xbel");
+        let remove = PathBuf::from("/tmp/remove-context-place-target");
+        save_user_places(
+            &places_path,
+            &[UserPlace::new("Remove Me".to_string(), remove.clone())],
+        )
+        .unwrap();
+        let size = PhysicalSize::new(700, 320);
+        let mut scene = test_scene(Vec::new(), ShellViewMode::Icons);
+        scene.places = build_shell_places_from(&places_path);
+        assert!(scene.places.iter().any(|place| place.path == remove));
+        scene.context_target = Some(ShellContextTarget::Place {
+            index: 1,
+            label: "Remove Me".to_string(),
+            path: remove.clone(),
+            group: "",
+            network: false,
+            trash: false,
+            root: false,
+            editable: true,
+        });
+        scene.context_menu = Some(ShellContextMenu::new(
+            scene.context_target.clone().unwrap(),
+            ViewPoint { x: 8.0, y: 8.0 },
+        ));
+        scene.properties_overlay = Some(ShellPropertiesOverlay {
+            title: "stale".to_string(),
+            rows: Vec::new(),
+        });
+
+        assert!(scene.remove_context_place(&places_path, size).unwrap());
+        assert!(!scene.places.iter().any(|place| place.path == remove));
+        assert!(scene.context_target.is_none());
+        assert!(scene.context_menu.is_none());
+        assert!(scene.properties_overlay.is_none());
+        assert_eq!(scene.places_changes, 1);
+        assert_eq!(
+            load_user_places(&places_path).unwrap(),
+            Vec::<UserPlace>::new()
+        );
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
