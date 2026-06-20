@@ -125,8 +125,11 @@ Shell 拥有：
   支持 Esc 或外部点击关闭，并将 directory item 的 Open、blank menu 的 Refresh 和
   Select All 分派到现有 shell navigation/reload/selection path；其余 pending action 会记录
   日志，并输出 context target/menu counters。Properties 现在会为 item 和 blank-directory
-  target 打开轻量 shell-owned metadata overlay。Clipboard、rename、trash、create-new、
-  更完整 properties 和 new-pane dispatch 仍留到 Phase 4。
+  target 打开轻量 shell-owned metadata overlay。Blank-menu Create New 现在会打开
+  shell-owned modal，支持 folder/file 选择、plain text name capture、校验、真实
+  `create_dir` / `create_new` 文件系统动作、reload，并选中新建条目。Clipboard、rename、
+  trash、更完整 properties、完整 Create New 子菜单/模板和 new-pane dispatch 仍留到
+  Phase 4。
 - 空白区域左键拖动现在通过同一 retained Icons geometry 执行 rubber-band selection。
   普通拖动替换 selection，Shift 追加，Ctrl/Meta 会相对按下时的 base selection 做
   toggle，并用 clipped GPU overlay 绘制框选矩形。
@@ -241,10 +244,12 @@ context menus、dialogs 和 chooser mode。
 当前 checkpoint：第一批 chrome slice 包含底部最小 status bar、`Ctrl/Meta+F` 最小
 filter bar、`Ctrl/Meta+L`/`Ctrl/Meta+D`/`F6` 最小 location edit mode，以及用于 file-view
 item/blank 右键的轻量 context menu overlay。Properties 会为 item 和 blank-directory
-targets 打开最小 metadata overlay。Filter/location 文本编辑暂时保持窄实现，完整
-IME/caret/selection 文本边界仍待迁移；context menu dispatch 当前覆盖 Open directory、
-Refresh、Select All 和 Properties，clipboard、rename、trash、create-new、更完整
-properties 和 new-pane actions 仍待完成。
+targets 打开最小 metadata overlay。Create New 会为 blank-directory targets 打开最小
+shell-owned modal，并执行真实 folder/file 创建、reload 和选中新建条目。Filter、
+location 和 create-name 文本编辑暂时保持窄实现，完整 IME/caret/selection 文本边界仍待
+迁移；context menu dispatch 当前覆盖 Open directory、Refresh、Select All、Properties
+和最小 Create New，clipboard、rename、trash、更完整 properties、完整 Create New 子菜单/模板
+和 new-pane actions 仍待完成。
 
 验收：
 

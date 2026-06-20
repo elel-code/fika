@@ -145,8 +145,11 @@ Current checkpoint:
   and Select All through existing shell navigation/reload/selection paths, logs
   remaining pending action hits, and emits context target/menu counters.
   Properties now opens a lightweight shell-owned metadata overlay for item and
-  blank-directory targets. Clipboard, rename, trash, create-new, richer
-  properties, and new-pane dispatch remain Phase 4 work.
+  blank-directory targets. Blank-menu Create New now opens a shell-owned modal
+  with folder/file selection, plain text name capture, validation, real
+  `create_dir` / `create_new` filesystem actions, reload, and selection of the
+  created entry. Clipboard, rename, trash, richer properties, full Create New
+  submenus/templates, and new-pane dispatch remain Phase 4 work.
 - Blank-space left-drag now runs rubber-band selection through the same
   retained Icons geometry. Plain drag replaces the selection, Shift extends it,
   Ctrl/Meta toggles it against the press-time base selection, and the band is
@@ -286,12 +289,14 @@ Current checkpoint: the first chrome slices are a minimal bottom status bar with
 directory/selection/view/zoom summary, a minimal `Ctrl/Meta+F` filter bar, a
 minimal `Ctrl/Meta+L`/`Ctrl/Meta+D`/`F6` location edit mode, and a lightweight
 file-view context menu overlay for item/blank right-clicks. Properties opens a
-minimal metadata overlay for item and blank-directory targets. Filter and
-location text editing remain intentionally narrow until the full
+minimal metadata overlay for item and blank-directory targets. Create New opens
+a minimal shell-owned modal for blank-directory targets and performs real
+folder/file creation followed by reload and selection. Filter, location, and
+create-name text editing remain intentionally narrow until the full
 IME/caret/selection text boundary is migrated; context menu dispatch currently
-covers Open directory, Refresh, Select All, and Properties, while clipboard,
-rename, trash, create-new, richer properties, and new-pane actions remain
-pending.
+covers Open directory, Refresh, Select All, Properties, and minimal Create New,
+while clipboard, rename, trash, richer properties, full Create New
+submenus/templates, and new-pane actions remain pending.
 
 Acceptance:
 

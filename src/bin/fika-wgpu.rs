@@ -68,6 +68,13 @@ const PROPERTIES_OVERLAY_WIDTH: f32 = 440.0;
 const PROPERTIES_OVERLAY_MARGIN: f32 = 18.0;
 const PROPERTIES_TITLE_HEIGHT: f32 = 42.0;
 const PROPERTIES_ROW_HEIGHT: f32 = 24.0;
+const CREATE_DIALOG_WIDTH: f32 = 420.0;
+const CREATE_DIALOG_HEIGHT: f32 = 196.0;
+const CREATE_DIALOG_MARGIN: f32 = 18.0;
+const CREATE_DIALOG_TITLE_HEIGHT: f32 = 42.0;
+const CREATE_DIALOG_BUTTON_WIDTH: f32 = 84.0;
+const CREATE_DIALOG_BUTTON_HEIGHT: f32 = 24.0;
+const CREATE_DIALOG_BUTTON_GAP: f32 = 8.0;
 const PATH_HISTORY_LIMIT: usize = 128;
 const ZOOM_STEP_MIN: i32 = -3;
 const ZOOM_STEP_MAX: i32 = 4;
@@ -268,6 +275,16 @@ enum LocationCommand {
     Ignore,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum CreateCommand {
+    Insert(String),
+    Backspace,
+    Cancel,
+    Commit,
+    SetKind(CreateEntryKind),
+    Ignore,
+}
+
 fn window_title(scene: &ShellScene) -> String {
     format!(
         "Fika wgpu shell [{}] - {}",
@@ -427,6 +444,20 @@ impl ApplicationHandler for FikaWgpuApp {
                 };
                 let shortcut =
                     self.modifiers.state().control_key() || self.modifiers.state().meta_key();
+                if self.scene.is_create_dialog_open() {
+                    match create_command_for_key_event(&event, shortcut) {
+                        CreateCommand::Commit => self.commit_create_dialog(event_loop),
+                        CreateCommand::Ignore => {}
+                        command => {
+                            if self.scene.apply_create_command(command, renderer.size)
+                                && let Some(window) = self.window.as_ref()
+                            {
+                                window.request_redraw();
+                            }
+                        }
+                    }
+                    return;
+                }
                 if self.scene.is_properties_overlay_open() && escape_requested_for_key_event(&event)
                 {
                     if self.scene.close_properties_overlay()
@@ -534,6 +565,9 @@ impl ApplicationHandler for FikaWgpuApp {
                     x: position.x as f32,
                     y: position.y as f32,
                 };
+                if self.scene.is_create_dialog_open() {
+                    return;
+                }
                 if self.scene.set_pointer(point, renderer.size)
                     && let Some(window) = self.window.as_ref()
                 {
@@ -563,6 +597,34 @@ impl ApplicationHandler for FikaWgpuApp {
                 let Some(mouse_button) = button.mouse_button() else {
                     return;
                 };
+                if self.scene.is_create_dialog_open() {
+                    if state == ElementState::Pressed && mouse_button == MouseButton::Left {
+                        match self
+                            .scene
+                            .create_dialog_click_at_screen_point(point, renderer.size)
+                        {
+                            CreateDialogClick::Outside | CreateDialogClick::Cancel => {
+                                if self.scene.close_create_dialog()
+                                    && let Some(window) = self.window.as_ref()
+                                {
+                                    window.request_redraw();
+                                }
+                            }
+                            CreateDialogClick::Commit => self.commit_create_dialog(event_loop),
+                            CreateDialogClick::Kind(kind) => {
+                                if self.scene.apply_create_command(
+                                    CreateCommand::SetKind(kind),
+                                    renderer.size,
+                                ) && let Some(window) = self.window.as_ref()
+                                {
+                                    window.request_redraw();
+                                }
+                            }
+                            CreateDialogClick::Inside => {}
+                        }
+                    }
+                    return;
+                }
                 if self.scene.is_properties_overlay_open() {
                     if state == ElementState::Pressed
                         && mouse_button == MouseButton::Left
@@ -713,11 +775,17 @@ impl FikaWgpuApp {
                     window.request_redraw();
                 }
             }
+            ShellContextMenuAction::CreateNew => {
+                if self.scene.open_create_dialog_from_context()
+                    && let Some(window) = self.window.as_ref()
+                {
+                    window.request_redraw();
+                }
+            }
             ShellContextMenuAction::OpenInNewPane
             | ShellContextMenuAction::CopyLocation
             | ShellContextMenuAction::Rename
             | ShellContextMenuAction::MoveToTrash
-            | ShellContextMenuAction::CreateNew
             | ShellContextMenuAction::Paste => {
                 eprintln!(
                     "[fika-wgpu] context-action-pending action={} target={}",
@@ -728,6 +796,46 @@ impl FikaWgpuApp {
                         .map(ShellContextTarget::kind)
                         .unwrap_or("none")
                 );
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+            }
+        }
+    }
+
+    fn commit_create_dialog(&mut self, event_loop: &dyn ActiveEventLoop) {
+        let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
+            return;
+        };
+        let request = match self.scene.create_entry_request() {
+            Ok(request) => request,
+            Err(error) => {
+                if self.scene.set_create_dialog_error(error)
+                    && let Some(window) = self.window.as_ref()
+                {
+                    window.request_redraw();
+                }
+                return;
+            }
+        };
+
+        if let Err(error) = create_entry_on_disk(&request) {
+            if self.scene.set_create_dialog_error(error)
+                && let Some(window) = self.window.as_ref()
+            {
+                window.request_redraw();
+            }
+            return;
+        }
+
+        self.scene.close_create_dialog_after_success(&request);
+        match self.scene.reload_current_path(size) {
+            Ok(_) => {
+                self.scene.select_entry_by_name(&request.name, size);
+                self.present_scene_change(event_loop, "create-new");
+            }
+            Err(error) => {
+                eprintln!("[fika-wgpu] create-new-reload-error {error}");
                 if let Some(window) = self.window.as_ref() {
                     window.request_redraw();
                 }
@@ -1099,6 +1207,49 @@ fn filter_command_for_key_parts(
             Some(FilterCommand::Insert(value.to_string()))
         }
         _ => None,
+    }
+}
+
+fn create_command_for_key_event(event: &KeyEvent, shortcut: bool) -> CreateCommand {
+    create_command_for_key_parts(
+        shortcut,
+        &event.physical_key,
+        &event.logical_key,
+        &event.key_without_modifiers,
+    )
+}
+
+fn create_command_for_key_parts(
+    shortcut: bool,
+    physical_key: &PhysicalKey,
+    logical_key: &Key,
+    key_without_modifiers: &Key,
+) -> CreateCommand {
+    if matches!(physical_key, PhysicalKey::Code(KeyCode::Escape))
+        || matches!(logical_key, Key::Named(NamedKey::Escape))
+        || matches!(key_without_modifiers, Key::Named(NamedKey::Escape))
+    {
+        return CreateCommand::Cancel;
+    }
+    if matches!(logical_key, Key::Named(NamedKey::Enter))
+        || matches!(key_without_modifiers, Key::Named(NamedKey::Enter))
+    {
+        return CreateCommand::Commit;
+    }
+    if matches!(physical_key, PhysicalKey::Code(KeyCode::Backspace))
+        || matches!(logical_key, Key::Named(NamedKey::Backspace))
+        || matches!(key_without_modifiers, Key::Named(NamedKey::Backspace))
+    {
+        return CreateCommand::Backspace;
+    }
+    if shortcut {
+        return CreateCommand::Ignore;
+    }
+    match logical_key {
+        Key::Character(value) if !value.chars().any(char::is_control) => {
+            CreateCommand::Insert(value.to_string())
+        }
+        _ => CreateCommand::Ignore,
     }
 }
 
@@ -1574,6 +1725,74 @@ struct ShellPropertiesOverlay {
     rows: Vec<ShellPropertyRow>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CreateEntryKind {
+    Folder,
+    File,
+}
+
+impl CreateEntryKind {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Folder => "Folder",
+            Self::File => "File",
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Folder => "folder",
+            Self::File => "file",
+        }
+    }
+
+    fn default_name(self) -> &'static str {
+        match self {
+            Self::Folder => "New Folder",
+            Self::File => "New File",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ShellCreateDialog {
+    parent: PathBuf,
+    kind: CreateEntryKind,
+    name: String,
+    error: Option<String>,
+    replace_on_insert: bool,
+}
+
+impl ShellCreateDialog {
+    fn new(parent: PathBuf, kind: CreateEntryKind) -> Self {
+        let name = unique_child_name(&parent, kind.default_name());
+        Self {
+            parent,
+            kind,
+            name,
+            error: None,
+            replace_on_insert: true,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct CreateEntryRequest {
+    parent: PathBuf,
+    path: PathBuf,
+    kind: CreateEntryKind,
+    name: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CreateDialogClick {
+    Outside,
+    Inside,
+    Cancel,
+    Commit,
+    Kind(CreateEntryKind),
+}
+
 struct ShellScene {
     path: PathBuf,
     view_mode: ShellViewMode,
@@ -1595,12 +1814,14 @@ struct ShellScene {
     context_target: Option<ShellContextTarget>,
     context_menu: Option<ShellContextMenu>,
     properties_overlay: Option<ShellPropertiesOverlay>,
+    create_dialog: Option<ShellCreateDialog>,
     rubber_band: Option<RubberBand>,
     hit_tests: u64,
     selection_changes: u64,
     context_target_changes: u64,
     context_menu_actions: u64,
     properties_changes: u64,
+    create_changes: u64,
     keyboard_navigation: u64,
     rubber_band_updates: u64,
     view_switches: u64,
@@ -1661,12 +1882,14 @@ impl ShellScene {
             context_target: None,
             context_menu: None,
             properties_overlay: None,
+            create_dialog: None,
             rubber_band: None,
             hit_tests: 0,
             selection_changes: 0,
             context_target_changes: 0,
             context_menu_actions: 0,
             properties_changes: 0,
+            create_changes: 0,
             keyboard_navigation: 0,
             rubber_band_updates: 0,
             view_switches: 0,
@@ -1810,6 +2033,7 @@ impl ShellScene {
         self.context_target = None;
         self.context_menu = None;
         self.properties_overlay = None;
+        self.create_dialog = None;
         self.rubber_band = None;
         self.last_primary_click = None;
         self.path_changes += 1;
@@ -2465,6 +2689,211 @@ impl ShellScene {
         self.close_properties_overlay()
     }
 
+    fn is_create_dialog_open(&self) -> bool {
+        self.create_dialog.is_some()
+    }
+
+    fn open_create_dialog_from_context(&mut self) -> bool {
+        let Some(ShellContextTarget::Blank { path }) = self.context_target.as_ref() else {
+            eprintln!(
+                "[fika-wgpu] create-new-error target={}",
+                self.context_target
+                    .as_ref()
+                    .map(ShellContextTarget::kind)
+                    .unwrap_or("none")
+            );
+            return false;
+        };
+        let dialog = ShellCreateDialog::new(path.clone(), CreateEntryKind::Folder);
+        let changed = self.create_dialog.as_ref() != Some(&dialog);
+        self.create_dialog = Some(dialog);
+        self.properties_overlay = None;
+        self.rubber_band = None;
+        if changed {
+            self.create_changes += 1;
+            if let Some(dialog) = self.create_dialog.as_ref() {
+                eprintln!(
+                    "[fika-wgpu] create-new open=1 kind={} parent={} name={:?} changes={}",
+                    dialog.kind.as_str(),
+                    dialog.parent.display(),
+                    dialog.name,
+                    self.create_changes
+                );
+            }
+        }
+        changed
+    }
+
+    fn apply_create_command(&mut self, command: CreateCommand, _size: PhysicalSize<u32>) -> bool {
+        let old_dialog = self.create_dialog.clone();
+        match command {
+            CreateCommand::Insert(value) => {
+                let Some(dialog) = self.create_dialog.as_mut() else {
+                    return false;
+                };
+                if dialog.replace_on_insert {
+                    dialog.name.clear();
+                    dialog.replace_on_insert = false;
+                }
+                dialog.name.push_str(&value);
+                dialog.error = None;
+            }
+            CreateCommand::Backspace => {
+                let Some(dialog) = self.create_dialog.as_mut() else {
+                    return false;
+                };
+                if dialog.replace_on_insert {
+                    dialog.name.clear();
+                    dialog.replace_on_insert = false;
+                } else {
+                    dialog.name.pop();
+                }
+                dialog.error = None;
+            }
+            CreateCommand::Cancel => {
+                return self.close_create_dialog();
+            }
+            CreateCommand::SetKind(kind) => {
+                let Some(dialog) = self.create_dialog.as_mut() else {
+                    return false;
+                };
+                if dialog.kind == kind {
+                    return false;
+                }
+                dialog.kind = kind;
+                dialog.name = unique_child_name(&dialog.parent, kind.default_name());
+                dialog.error = None;
+                dialog.replace_on_insert = true;
+            }
+            CreateCommand::Commit | CreateCommand::Ignore => return false,
+        }
+
+        let changed = old_dialog != self.create_dialog;
+        if changed {
+            self.create_changes += 1;
+            self.log_create_dialog_state();
+        }
+        changed
+    }
+
+    fn create_entry_request(&self) -> Result<CreateEntryRequest, String> {
+        let dialog = self
+            .create_dialog
+            .as_ref()
+            .ok_or_else(|| "create dialog is not open".to_string())?;
+        let name = dialog.name.trim();
+        validate_create_name(name)?;
+        let path = dialog.parent.join(name);
+        if path.exists() {
+            return Err(format!("{} already exists", path.display()));
+        }
+        Ok(CreateEntryRequest {
+            parent: dialog.parent.clone(),
+            path,
+            kind: dialog.kind,
+            name: name.to_string(),
+        })
+    }
+
+    fn set_create_dialog_error(&mut self, error: String) -> bool {
+        let Some(dialog) = self.create_dialog.as_mut() else {
+            eprintln!("[fika-wgpu] create-new-error {error}");
+            return false;
+        };
+        if dialog.error.as_ref() == Some(&error) {
+            return false;
+        }
+        dialog.error = Some(error);
+        dialog.replace_on_insert = false;
+        self.create_changes += 1;
+        self.log_create_dialog_state();
+        true
+    }
+
+    fn close_create_dialog(&mut self) -> bool {
+        if self.create_dialog.take().is_none() {
+            return false;
+        }
+        self.create_changes += 1;
+        eprintln!(
+            "[fika-wgpu] create-new open=0 changes={}",
+            self.create_changes
+        );
+        true
+    }
+
+    fn close_create_dialog_after_success(&mut self, request: &CreateEntryRequest) -> bool {
+        if self.create_dialog.take().is_none() {
+            return false;
+        }
+        self.create_changes += 1;
+        eprintln!(
+            "[fika-wgpu] create-new created kind={} path={} changes={}",
+            request.kind.as_str(),
+            request.path.display(),
+            self.create_changes
+        );
+        true
+    }
+
+    fn create_dialog_click_at_screen_point(
+        &self,
+        point: ViewPoint,
+        size: PhysicalSize<u32>,
+    ) -> CreateDialogClick {
+        let Some(dialog) = self.create_dialog.as_ref() else {
+            return CreateDialogClick::Outside;
+        };
+        let rect = create_dialog_rect(dialog, size);
+        if !rect.contains(point) {
+            return CreateDialogClick::Outside;
+        }
+        for kind in [CreateEntryKind::Folder, CreateEntryKind::File] {
+            if create_kind_button_rect(rect, kind).contains(point) {
+                return CreateDialogClick::Kind(kind);
+            }
+        }
+        if create_dialog_cancel_button_rect(rect).contains(point) {
+            return CreateDialogClick::Cancel;
+        }
+        if create_dialog_commit_button_rect(rect).contains(point) {
+            return CreateDialogClick::Commit;
+        }
+        CreateDialogClick::Inside
+    }
+
+    fn select_entry_by_name(&mut self, name: &str, size: PhysicalSize<u32>) -> bool {
+        let Some(index) = entry_index_by_name(&self.entries, name) else {
+            return false;
+        };
+        if self.filtered_indexes.binary_search(&index).is_err() {
+            return false;
+        }
+        let changed = self.selection.apply_navigation(index, false);
+        if changed {
+            self.selection_changes += 1;
+        }
+        self.ensure_index_visible(index, size);
+        changed
+    }
+
+    fn log_create_dialog_state(&self) {
+        match self.create_dialog.as_ref() {
+            Some(dialog) => eprintln!(
+                "[fika-wgpu] create-new open=1 kind={} parent={} name={:?} error={:?} changes={}",
+                dialog.kind.as_str(),
+                dialog.parent.display(),
+                dialog.name,
+                dialog.error,
+                self.create_changes
+            ),
+            None => eprintln!(
+                "[fika-wgpu] create-new open=0 changes={}",
+                self.create_changes
+            ),
+        }
+    }
+
     fn properties_overlay_for_context_target(&self) -> Option<ShellPropertiesOverlay> {
         match self.context_target.as_ref()? {
             ShellContextTarget::Item {
@@ -2793,6 +3222,7 @@ impl ShellScene {
         self.push_status_bar(&mut vertices, text, size, visible_items, status_bar);
         self.push_context_menu_overlay(&mut vertices, text, size);
         self.push_properties_overlay(&mut vertices, text, size);
+        self.push_create_dialog_overlay(&mut vertices, text, size);
 
         SceneFrame {
             layout_us: layout_start.elapsed().as_micros(),
@@ -3240,6 +3670,13 @@ impl ShellScene {
         if let Some(value) = self.location_draft_value() {
             status.push_str(&format!(" | location {:?}", value));
         }
+        if let Some(dialog) = self.create_dialog.as_ref() {
+            status.push_str(&format!(
+                " | create {} {:?}",
+                dialog.kind.as_str(),
+                dialog.name
+            ));
+        }
         if let Some(target) = self.context_target.as_ref() {
             status.push_str(&format!(
                 " | context {} {}",
@@ -3382,6 +3819,135 @@ impl ShellScene {
                 },
                 rect,
                 TextColor::rgb(222, 230, 238),
+            );
+        }
+    }
+
+    fn push_create_dialog_overlay(
+        &self,
+        vertices: &mut Vec<QuadVertex>,
+        text: &mut TextFrameBuilder<'_>,
+        size: PhysicalSize<u32>,
+    ) {
+        let Some(dialog) = self.create_dialog.as_ref() else {
+            return;
+        };
+        let screen = ViewRect {
+            x: 0.0,
+            y: 0.0,
+            width: size.width.max(1) as f32,
+            height: size.height.max(1) as f32,
+        };
+        push_rect(vertices, screen, [0.0, 0.0, 0.0, 0.44], size);
+        let rect = create_dialog_rect(dialog, size);
+        push_rect(vertices, rect, [0.118, 0.128, 0.140, 0.99], size);
+        push_clipped_rect_outline(vertices, rect, screen, 1.0, [0.34, 0.38, 0.43, 1.0], size);
+        push_rect(
+            vertices,
+            ViewRect {
+                x: rect.x,
+                y: rect.y,
+                width: rect.width,
+                height: CREATE_DIALOG_TITLE_HEIGHT,
+            },
+            [0.145, 0.158, 0.174, 1.0],
+            size,
+        );
+        text.push_label(
+            "Create New",
+            ViewRect {
+                x: rect.x + 16.0,
+                y: rect.y + 12.0,
+                width: (rect.width - 32.0).max(1.0),
+                height: 18.0,
+            },
+            rect,
+            TextColor::rgb(238, 244, 249),
+        );
+
+        for kind in [CreateEntryKind::Folder, CreateEntryKind::File] {
+            let button = create_kind_button_rect(rect, kind);
+            let active = dialog.kind == kind;
+            push_rect(
+                vertices,
+                button,
+                if active {
+                    view_mode_badge_color(self.view_mode)
+                } else {
+                    [0.150, 0.162, 0.176, 1.0]
+                },
+                size,
+            );
+            text.push_label(
+                kind.label(),
+                ViewRect {
+                    x: button.x + 10.0,
+                    y: button.y + 4.0,
+                    width: (button.width - 20.0).max(1.0),
+                    height: 18.0,
+                },
+                rect,
+                if active {
+                    TextColor::rgb(246, 250, 252)
+                } else {
+                    TextColor::rgb(196, 207, 218)
+                },
+            );
+        }
+
+        let input = create_dialog_input_rect(rect);
+        push_rect(vertices, input, [0.078, 0.086, 0.096, 1.0], size);
+        push_clipped_rect_outline(vertices, input, rect, 1.0, [0.26, 0.31, 0.36, 1.0], size);
+        let draft = format!("{}|", dialog.name);
+        text.push_label(
+            &draft,
+            ViewRect {
+                x: input.x + 10.0,
+                y: input.y + 7.0,
+                width: (input.width - 20.0).max(1.0),
+                height: 18.0,
+            },
+            input,
+            TextColor::rgb(230, 236, 241),
+        );
+
+        if let Some(error) = dialog.error.as_ref() {
+            text.push_label(
+                error,
+                ViewRect {
+                    x: rect.x + 16.0,
+                    y: input.bottom() + 8.0,
+                    width: (rect.width - 32.0).max(1.0),
+                    height: 18.0,
+                },
+                rect,
+                TextColor::rgb(238, 132, 122),
+            );
+        }
+
+        let cancel = create_dialog_cancel_button_rect(rect);
+        let commit = create_dialog_commit_button_rect(rect);
+        for (label, button, active) in [("Cancel", cancel, false), ("Create", commit, true)] {
+            push_rect(
+                vertices,
+                button,
+                if active {
+                    [0.22, 0.42, 0.62, 1.0]
+                } else {
+                    [0.150, 0.162, 0.176, 1.0]
+                },
+                size,
+            );
+            text.push_label(
+                label,
+                ViewRect {
+                    x: button.x + 10.0,
+                    y: button.y + 4.0,
+                    width: (button.width - 20.0).max(1.0),
+                    height: 18.0,
+                },
+                rect,
+                TextColor::rgb(238, 244, 249),
             );
         }
     }
@@ -4245,7 +4811,7 @@ impl WgpuState {
             || self.last_log.elapsed() >= Duration::from_secs(1)
         {
             eprintln!(
-                "[fika-wgpu] frame={} reason={} view={} zoom={} zoom_changes={} path={} entries={} filtered={} show_hidden={} hidden_changes={} location_active={} location_changes={} filter_active={} filter_changes={} visible={} selected={} hover={} context={} context_menu={} context_changes={} context_actions={} properties={} properties_changes={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} path_changes={} reloads={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_cache={}/{} entries={} bytes={} batches={} scroll_x={:.1} scroll_y={:.1} layout={}us text_raster={}us text_atlas={}x{}:{}b render={}us",
+                "[fika-wgpu] frame={} reason={} view={} zoom={} zoom_changes={} path={} entries={} filtered={} show_hidden={} hidden_changes={} location_active={} location_changes={} filter_active={} filter_changes={} visible={} selected={} hover={} context={} context_menu={} context_changes={} context_actions={} properties={} properties_changes={} create_dialog={} create_changes={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} path_changes={} reloads={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_cache={}/{} entries={} bytes={} batches={} scroll_x={:.1} scroll_y={:.1} layout={}us text_raster={}us text_atlas={}x{}:{}b render={}us",
                 self.frame_count,
                 reason,
                 scene.view_mode.as_str(),
@@ -4273,6 +4839,8 @@ impl WgpuState {
                 scene.context_menu_actions,
                 scene.properties_overlay.is_some() as u8,
                 scene.properties_changes,
+                scene.create_dialog.is_some() as u8,
+                scene.create_changes,
                 scene.rubber_band.as_ref().is_some_and(|band| band.active) as u8,
                 scene.hit_tests,
                 scene.selection_changes,
@@ -6906,8 +7474,109 @@ fn properties_overlay_rect(overlay: &ShellPropertiesOverlay, size: PhysicalSize<
     }
 }
 
+fn create_dialog_rect(_dialog: &ShellCreateDialog, size: PhysicalSize<u32>) -> ViewRect {
+    let width = size.width.max(1) as f32;
+    let height = size.height.max(1) as f32;
+    let dialog_width = CREATE_DIALOG_WIDTH
+        .min((width - CREATE_DIALOG_MARGIN * 2.0).max(1.0))
+        .max(1.0);
+    let dialog_height = CREATE_DIALOG_HEIGHT
+        .min((height - CREATE_DIALOG_MARGIN * 2.0).max(1.0))
+        .max(1.0);
+    ViewRect {
+        x: ((width - dialog_width) / 2.0).max(CREATE_DIALOG_MARGIN),
+        y: ((height - dialog_height) / 2.0).max(CREATE_DIALOG_MARGIN),
+        width: dialog_width,
+        height: dialog_height,
+    }
+}
+
+fn create_kind_button_rect(dialog_rect: ViewRect, kind: CreateEntryKind) -> ViewRect {
+    let x = match kind {
+        CreateEntryKind::Folder => dialog_rect.x + 16.0,
+        CreateEntryKind::File => dialog_rect.x + 16.0 + 96.0,
+    };
+    ViewRect {
+        x,
+        y: dialog_rect.y + CREATE_DIALOG_TITLE_HEIGHT + 14.0,
+        width: 88.0,
+        height: CREATE_DIALOG_BUTTON_HEIGHT,
+    }
+}
+
+fn create_dialog_input_rect(dialog_rect: ViewRect) -> ViewRect {
+    ViewRect {
+        x: dialog_rect.x + 16.0,
+        y: dialog_rect.y + CREATE_DIALOG_TITLE_HEIGHT + 60.0,
+        width: (dialog_rect.width - 32.0).max(1.0),
+        height: 30.0,
+    }
+}
+
+fn create_dialog_cancel_button_rect(dialog_rect: ViewRect) -> ViewRect {
+    let right = dialog_rect.right() - 16.0;
+    ViewRect {
+        x: right - CREATE_DIALOG_BUTTON_WIDTH * 2.0 - CREATE_DIALOG_BUTTON_GAP,
+        y: dialog_rect.bottom() - 16.0 - CREATE_DIALOG_BUTTON_HEIGHT,
+        width: CREATE_DIALOG_BUTTON_WIDTH,
+        height: CREATE_DIALOG_BUTTON_HEIGHT,
+    }
+}
+
+fn create_dialog_commit_button_rect(dialog_rect: ViewRect) -> ViewRect {
+    let right = dialog_rect.right() - 16.0;
+    ViewRect {
+        x: right - CREATE_DIALOG_BUTTON_WIDTH,
+        y: dialog_rect.bottom() - 16.0 - CREATE_DIALOG_BUTTON_HEIGHT,
+        width: CREATE_DIALOG_BUTTON_WIDTH,
+        height: CREATE_DIALOG_BUTTON_HEIGHT,
+    }
+}
+
 fn property_row(label: &'static str, value: String) -> ShellPropertyRow {
     ShellPropertyRow { label, value }
+}
+
+fn create_entry_on_disk(request: &CreateEntryRequest) -> Result<(), String> {
+    match request.kind {
+        CreateEntryKind::Folder => fs::create_dir(&request.path)
+            .map_err(|error| format!("create folder {}: {error}", request.path.display())),
+        CreateEntryKind::File => fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&request.path)
+            .map(drop)
+            .map_err(|error| format!("create file {}: {error}", request.path.display())),
+    }
+}
+
+fn validate_create_name(name: &str) -> Result<(), String> {
+    if name.is_empty() {
+        return Err("name is empty".to_string());
+    }
+    if name == "." || name == ".." {
+        return Err("name must not be . or ..".to_string());
+    }
+    if name.contains('/') {
+        return Err("name must not contain /".to_string());
+    }
+    if name.contains('\0') {
+        return Err("name must not contain NUL".to_string());
+    }
+    Ok(())
+}
+
+fn unique_child_name(parent: &Path, base: &str) -> String {
+    if !parent.join(base).exists() {
+        return base.to_string();
+    }
+    for suffix in 2..1000 {
+        let candidate = format!("{base} {suffix}");
+        if !parent.join(&candidate).exists() {
+            return candidate;
+        }
+    }
+    base.to_string()
 }
 
 fn path_name_or_display(path: &Path) -> String {
@@ -7026,12 +7695,14 @@ mod tests {
             context_target: None,
             context_menu: None,
             properties_overlay: None,
+            create_dialog: None,
             rubber_band: None,
             hit_tests: 0,
             selection_changes: 0,
             context_target_changes: 0,
             context_menu_actions: 0,
             properties_changes: 0,
+            create_changes: 0,
             keyboard_navigation: 0,
             rubber_band_updates: 0,
             view_switches: 0,
@@ -7472,6 +8143,116 @@ mod tests {
         assert!(scene.close_properties_overlay_if_outside(ViewPoint { x: 1.0, y: 1.0 }, size,));
         assert!(scene.properties_overlay.is_none());
         assert_eq!(scene.properties_changes, 2);
+    }
+
+    #[test]
+    fn create_dialog_opens_from_blank_context_and_accepts_text() {
+        let mut scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
+        let size = PhysicalSize::new(420, 260);
+        let root = test_dir("create-dialog");
+        scene.context_target = Some(ShellContextTarget::Blank { path: root });
+
+        assert!(scene.open_create_dialog_from_context());
+        let dialog = scene
+            .create_dialog
+            .as_ref()
+            .expect("create dialog should open");
+        assert_eq!(dialog.kind, CreateEntryKind::Folder);
+        assert_eq!(dialog.name, "New Folder");
+        assert_eq!(scene.create_changes, 1);
+
+        assert!(scene.apply_create_command(CreateCommand::Insert("custom".to_string()), size));
+        assert_eq!(scene.create_dialog.as_ref().unwrap().name, "custom");
+        assert!(scene.apply_create_command(CreateCommand::SetKind(CreateEntryKind::File), size));
+        let dialog = scene.create_dialog.as_ref().unwrap();
+        assert_eq!(dialog.kind, CreateEntryKind::File);
+        assert_eq!(dialog.name, "New File");
+        assert_eq!(
+            scene.create_dialog_click_at_screen_point(ViewPoint { x: 1.0, y: 1.0 }, size),
+            CreateDialogClick::Outside
+        );
+        let rect = create_dialog_rect(dialog, size);
+        assert_eq!(
+            scene.create_dialog_click_at_screen_point(
+                ViewPoint {
+                    x: create_dialog_commit_button_rect(rect).x + 2.0,
+                    y: create_dialog_commit_button_rect(rect).y + 2.0,
+                },
+                size,
+            ),
+            CreateDialogClick::Commit
+        );
+    }
+
+    #[test]
+    fn create_entry_request_rejects_invalid_names_and_records_error() {
+        let mut scene = test_scene(vec![], ShellViewMode::Icons);
+        scene.context_target = Some(ShellContextTarget::Blank {
+            path: PathBuf::from("/tmp"),
+        });
+        assert!(scene.open_create_dialog_from_context());
+        scene.create_dialog.as_mut().unwrap().name = "../bad".to_string();
+
+        let error = scene.create_entry_request().unwrap_err();
+        assert!(error.contains('/'));
+        assert!(scene.set_create_dialog_error(error));
+        let dialog = scene.create_dialog.as_ref().unwrap();
+        assert!(dialog.error.as_ref().unwrap().contains('/'));
+        assert_eq!(scene.create_changes, 2);
+    }
+
+    #[test]
+    fn create_new_folder_creates_on_disk_reloads_and_selects_entry() {
+        let root = test_dir("create-folder");
+        fs::create_dir_all(&root).unwrap();
+        let size = PhysicalSize::new(420, 260);
+        let mut scene = ShellScene::load(root.clone(), ShellViewMode::Icons).unwrap();
+        scene.context_target = Some(ShellContextTarget::Blank { path: root.clone() });
+
+        assert!(scene.open_create_dialog_from_context());
+        scene.create_dialog.as_mut().unwrap().name = "made".to_string();
+        scene.create_dialog.as_mut().unwrap().replace_on_insert = false;
+        let request = scene.create_entry_request().unwrap();
+        assert_eq!(request.kind, CreateEntryKind::Folder);
+        create_entry_on_disk(&request).unwrap();
+        assert!(root.join("made").is_dir());
+        assert!(scene.close_create_dialog_after_success(&request));
+        assert!(scene.reload_current_path(size).unwrap());
+        assert!(scene.select_entry_by_name("made", size));
+
+        let index = entry_index_by_name(&scene.entries, "made").unwrap();
+        assert!(scene.entries[index].is_dir);
+        assert!(scene.selection.contains(index));
+        assert!(scene.create_dialog.is_none());
+        assert_eq!(scene.directory_reloads, 1);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn create_new_file_uses_create_new_and_unique_default_name() {
+        let root = test_dir("create-file");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("New File"), b"existing").unwrap();
+        let mut dialog = ShellCreateDialog::new(root.clone(), CreateEntryKind::File);
+        assert_eq!(dialog.name, "New File 2");
+        dialog.name = "note.txt".to_string();
+        let request = CreateEntryRequest {
+            parent: root.clone(),
+            path: root.join("note.txt"),
+            kind: CreateEntryKind::File,
+            name: "note.txt".to_string(),
+        };
+
+        create_entry_on_disk(&request).unwrap();
+        assert!(root.join("note.txt").is_file());
+        assert!(
+            create_entry_on_disk(&request)
+                .unwrap_err()
+                .contains("create file")
+        );
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -8034,6 +8815,58 @@ mod tests {
                 &no_key,
             ),
             None
+        );
+    }
+
+    #[test]
+    fn create_dialog_key_input_captures_text_and_commit_controls() {
+        let unidentified = PhysicalKey::Unidentified(winit::keyboard::NativeKeyCode::Unidentified);
+        let no_key = Key::Unidentified(winit::keyboard::NativeKey::Unidentified);
+
+        assert_eq!(
+            create_command_for_key_parts(
+                false,
+                &unidentified,
+                &Key::Character("x".into()),
+                &no_key,
+            ),
+            CreateCommand::Insert("x".to_string())
+        );
+        assert_eq!(
+            create_command_for_key_parts(
+                false,
+                &PhysicalKey::Code(KeyCode::Backspace),
+                &no_key,
+                &no_key,
+            ),
+            CreateCommand::Backspace
+        );
+        assert_eq!(
+            create_command_for_key_parts(
+                false,
+                &unidentified,
+                &Key::Named(NamedKey::Enter),
+                &no_key,
+            ),
+            CreateCommand::Commit
+        );
+        assert_eq!(
+            create_command_for_key_parts(
+                false,
+                &PhysicalKey::Code(KeyCode::Escape),
+                &no_key,
+                &no_key,
+            ),
+            CreateCommand::Cancel
+        );
+        assert_eq!(
+            create_command_for_key_parts(
+                true,
+                &PhysicalKey::Code(KeyCode::KeyA),
+                &Key::Character("a".into()),
+                &Key::Character("a".into()),
+            ),
+            CreateCommand::Ignore
         );
     }
 
