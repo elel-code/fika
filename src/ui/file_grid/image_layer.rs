@@ -52,14 +52,6 @@ pub(super) fn item_image_layer_items(items: &[ItemPaintSnapshot]) -> Vec<ItemIma
     item_image_layer_items_for_policy(items)
 }
 
-#[cfg(test)]
-pub(super) fn item_image_layer_items_with_theme_prewarm(
-    items: &[ItemPaintSnapshot],
-    _prewarm_theme_icons: bool,
-) -> Vec<ItemImageLayerItem> {
-    item_image_layer_items_for_policy(items)
-}
-
 pub(super) fn item_image_layer_items_for_policy(
     items: &[ItemPaintSnapshot],
 ) -> Vec<ItemImageLayerItem> {
@@ -729,7 +721,6 @@ mod tests {
         assert_eq!(stats.theme_decoded, 1);
         assert_eq!(stats.theme_retained, 1);
         assert_eq!(stats.theme_placeholder, 1);
-        assert_eq!(stats.theme_prewarm_pending, 0);
         assert_eq!(stats.thumbnail_loaded, 1);
         assert_eq!(stats.thumbnail_decoded, 0);
         assert_eq!(stats.thumbnail_retained, 0);

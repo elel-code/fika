@@ -1,7 +1,11 @@
+use std::time::Instant;
+
 use gpui::prelude::*;
 use gpui::{Context, Div, ParentElement, Stateful, Window, div, px};
 
 use crate::FikaApp;
+use crate::ui::icons::theme_icon_image_size_px;
+use crate::ui::retained::{RetainedImageLoad, RetainedImageLoadOutcome, RetainedImageRequest};
 
 use super::details::{details_content_height, details_content_width};
 use super::details_shell::details_table;
@@ -9,7 +13,9 @@ use super::image_layer::item_image_layer_view;
 use super::interaction::item_interaction_layer_view;
 use super::item_shell::item_tile;
 use super::renderer_policy::{
-    ItemRendererPolicyInput, details_renderer_policy_stats, item_renderer_policy_stats,
+    DetailsRowVisualRenderer, ItemRendererPolicyInput, details_renderer_policy_stats,
+    details_row_renderer_policy, item_renderer_policy_stats, item_uses_image_layer_with_input,
+    item_uses_layer_visual_paint,
 };
 use super::static_visual::{static_item_visual_layer_view, static_item_visual_warm_layer_view};
 use super::viewport::{
@@ -25,6 +31,7 @@ use crate::ui::item_view::item_view_scrollbar_container;
 
 pub(crate) fn file_grid(
     props: FileGridProps,
+    app_state: &mut FikaApp,
     window: &mut Window,
     cx: &mut Context<FikaApp>,
 ) -> Stateful<Div> {
@@ -44,204 +51,219 @@ pub(crate) fn file_grid(
     let scrollbar_axis = scrollbar_axis_for_snapshot(&snapshot);
     let view_mode = view_mode_for_snapshot(&snapshot);
 
-    let (content_width, content_height, visible_count, renderer_policy_stats, viewport) =
-        match snapshot {
-            FileGridRenderSnapshot::Icons {
-                layout: icons_layout,
-                items,
-            } => {
-                let content_size = icons_layout.content_size();
-                let visible_items = items
-                    .iter()
-                    .filter(|item| item.visible)
-                    .cloned()
-                    .collect::<Vec<_>>();
-                let visible_count = visible_items.len();
-                let renderer_policy_stats = item_renderer_policy_stats(&visible_items);
-                let warm_static_visual_layer =
-                    warm_static_visual_snapshot.as_ref().and_then(|snapshot| {
-                        static_item_visual_warm_layer_view(pane_id, snapshot, app.clone())
-                    });
-                let static_visual_layer = static_item_visual_layer_view(
-                    pane_id,
-                    &items,
-                    content_size.width,
-                    content_size.height,
-                    ItemTileTextAlignment::Center,
-                    true,
-                    app.clone(),
-                );
-                let image_layer = item_image_layer_view(
-                    pane_id,
-                    &items,
-                    content_size.width,
-                    content_size.height,
-                    app.clone(),
-                );
-                let interaction_layer = item_interaction_layer_view(
-                    pane_id,
-                    &visible_items,
-                    content_size.width,
-                    content_size.height,
-                    app.clone(),
-                );
-                let content = div()
-                    .relative()
-                    .w(px(content_size.width))
-                    .h(px(content_size.height));
-                let content = if let Some(layer) = static_visual_layer {
-                    content.child(layer)
-                } else {
-                    content
-                };
-                let content = if let Some(layer) = warm_static_visual_layer {
-                    content.child(layer)
-                } else {
-                    content
-                };
-                let content = if let Some(layer) = image_layer {
-                    content.child(layer)
-                } else {
-                    content
-                };
-                let content = if let Some(layer) = interaction_layer {
-                    content.child(layer)
-                } else {
-                    content
-                };
-                let viewport = file_grid_viewport_shell(pane_id, drop_target, mode, cx).child(
-                    content.children(visible_items.into_iter().map(|item| {
-                        item_tile(
-                            pane_id,
-                            item,
-                            ItemTileTextAlignment::Center,
-                            ItemRendererPolicyInput::default(),
-                            app.clone(),
-                            cx,
-                        )
-                    })),
-                );
-                (
-                    content_size.width,
-                    content_size.height,
-                    visible_count,
-                    renderer_policy_stats,
-                    viewport,
-                )
-            }
-            FileGridRenderSnapshot::Compact { layout, items } => {
-                let content_size = layout.content_size();
-                let visible_items = items
-                    .iter()
-                    .filter(|item| item.visible)
-                    .cloned()
-                    .collect::<Vec<_>>();
-                let visible_count = visible_items.len();
-                let renderer_policy_stats = item_renderer_policy_stats(&visible_items);
-                let warm_static_visual_layer =
-                    warm_static_visual_snapshot.as_ref().and_then(|snapshot| {
-                        static_item_visual_warm_layer_view(pane_id, snapshot, app.clone())
-                    });
-                let static_visual_layer = static_item_visual_layer_view(
-                    pane_id,
-                    &items,
-                    content_size.width,
-                    content_size.height,
-                    ItemTileTextAlignment::Start,
-                    true,
-                    app.clone(),
-                );
-                let image_layer = item_image_layer_view(
-                    pane_id,
-                    &items,
-                    content_size.width,
-                    content_size.height,
-                    app.clone(),
-                );
-                let interaction_layer = item_interaction_layer_view(
-                    pane_id,
-                    &visible_items,
-                    content_size.width,
-                    content_size.height,
-                    app.clone(),
-                );
-                let content = div()
-                    .relative()
-                    .w(px(content_size.width))
-                    .h(px(content_size.height));
-                let content = if let Some(layer) = static_visual_layer {
-                    content.child(layer)
-                } else {
-                    content
-                };
-                let content = if let Some(layer) = warm_static_visual_layer {
-                    content.child(layer)
-                } else {
-                    content
-                };
-                let content = if let Some(layer) = image_layer {
-                    content.child(layer)
-                } else {
-                    content
-                };
-                let content = if let Some(layer) = interaction_layer {
-                    content.child(layer)
-                } else {
-                    content
-                };
-                let viewport = file_grid_viewport_shell(pane_id, drop_target, mode, cx).child(
-                    content.children(visible_items.into_iter().map(|item| {
-                        item_tile(
-                            pane_id,
-                            item,
-                            ItemTileTextAlignment::Start,
-                            ItemRendererPolicyInput::default(),
-                            app.clone(),
-                            cx,
-                        )
-                    })),
-                );
-                (
-                    content_size.width,
-                    content_size.height,
-                    visible_count,
-                    renderer_policy_stats,
-                    viewport,
-                )
-            }
-            FileGridRenderSnapshot::Details {
-                items,
-                row_count,
-                metrics,
-                name_column_width,
-            } => {
-                let content_width = details_content_width(trash_view, name_column_width).max(1.0);
-                let content_height = details_content_height(row_count, metrics).max(1.0);
-                let visible_count = items.len();
-                let mut renderer_policy_stats = details_renderer_policy_stats(&items);
-                renderer_policy_stats.details_header_visual_layer = 1;
-                let viewport =
-                    file_grid_viewport_shell(pane_id, drop_target, mode, cx).child(details_table(
+    let (
+        content_width,
+        content_height,
+        visible_count,
+        renderer_policy_stats,
+        viewport,
+        theme_icon_cache_refresh_stats,
+    ) = match snapshot {
+        FileGridRenderSnapshot::Icons {
+            layout: icons_layout,
+            items,
+        } => {
+            let content_size = icons_layout.content_size();
+            let visible_items = items
+                .iter()
+                .filter(|item| item.visible)
+                .cloned()
+                .collect::<Vec<_>>();
+            let visible_count = visible_items.len();
+            let renderer_policy_stats = item_renderer_policy_stats(&visible_items);
+            let theme_icon_cache_refresh_stats =
+                refresh_visible_item_theme_icon_cache(app_state, &items, window, cx);
+            let warm_static_visual_layer =
+                warm_static_visual_snapshot.as_ref().and_then(|snapshot| {
+                    static_item_visual_warm_layer_view(pane_id, snapshot, app.clone())
+                });
+            let static_visual_layer = static_item_visual_layer_view(
+                pane_id,
+                &items,
+                content_size.width,
+                content_size.height,
+                ItemTileTextAlignment::Center,
+                true,
+                app.clone(),
+            );
+            let image_layer = item_image_layer_view(
+                pane_id,
+                &items,
+                content_size.width,
+                content_size.height,
+                app.clone(),
+            );
+            let interaction_layer = item_interaction_layer_view(
+                pane_id,
+                &visible_items,
+                content_size.width,
+                content_size.height,
+                app.clone(),
+            );
+            let content = div()
+                .relative()
+                .w(px(content_size.width))
+                .h(px(content_size.height));
+            let content = if let Some(layer) = static_visual_layer {
+                content.child(layer)
+            } else {
+                content
+            };
+            let content = if let Some(layer) = warm_static_visual_layer {
+                content.child(layer)
+            } else {
+                content
+            };
+            let content = if let Some(layer) = image_layer {
+                content.child(layer)
+            } else {
+                content
+            };
+            let content = if let Some(layer) = interaction_layer {
+                content.child(layer)
+            } else {
+                content
+            };
+            let viewport = file_grid_viewport_shell(pane_id, drop_target, mode, cx).child(
+                content.children(visible_items.into_iter().map(|item| {
+                    item_tile(
                         pane_id,
-                        items,
-                        row_count,
-                        trash_view,
-                        content_width,
-                        content_height,
-                        metrics,
-                        name_column_width,
+                        item,
+                        ItemTileTextAlignment::Center,
+                        ItemRendererPolicyInput::default(),
                         app.clone(),
                         cx,
-                    ));
-                (
+                    )
+                })),
+            );
+            (
+                content_size.width,
+                content_size.height,
+                visible_count,
+                renderer_policy_stats,
+                viewport,
+                theme_icon_cache_refresh_stats,
+            )
+        }
+        FileGridRenderSnapshot::Compact { layout, items } => {
+            let content_size = layout.content_size();
+            let visible_items = items
+                .iter()
+                .filter(|item| item.visible)
+                .cloned()
+                .collect::<Vec<_>>();
+            let visible_count = visible_items.len();
+            let renderer_policy_stats = item_renderer_policy_stats(&visible_items);
+            let theme_icon_cache_refresh_stats =
+                refresh_visible_item_theme_icon_cache(app_state, &items, window, cx);
+            let warm_static_visual_layer =
+                warm_static_visual_snapshot.as_ref().and_then(|snapshot| {
+                    static_item_visual_warm_layer_view(pane_id, snapshot, app.clone())
+                });
+            let static_visual_layer = static_item_visual_layer_view(
+                pane_id,
+                &items,
+                content_size.width,
+                content_size.height,
+                ItemTileTextAlignment::Start,
+                true,
+                app.clone(),
+            );
+            let image_layer = item_image_layer_view(
+                pane_id,
+                &items,
+                content_size.width,
+                content_size.height,
+                app.clone(),
+            );
+            let interaction_layer = item_interaction_layer_view(
+                pane_id,
+                &visible_items,
+                content_size.width,
+                content_size.height,
+                app.clone(),
+            );
+            let content = div()
+                .relative()
+                .w(px(content_size.width))
+                .h(px(content_size.height));
+            let content = if let Some(layer) = static_visual_layer {
+                content.child(layer)
+            } else {
+                content
+            };
+            let content = if let Some(layer) = warm_static_visual_layer {
+                content.child(layer)
+            } else {
+                content
+            };
+            let content = if let Some(layer) = image_layer {
+                content.child(layer)
+            } else {
+                content
+            };
+            let content = if let Some(layer) = interaction_layer {
+                content.child(layer)
+            } else {
+                content
+            };
+            let viewport = file_grid_viewport_shell(pane_id, drop_target, mode, cx).child(
+                content.children(visible_items.into_iter().map(|item| {
+                    item_tile(
+                        pane_id,
+                        item,
+                        ItemTileTextAlignment::Start,
+                        ItemRendererPolicyInput::default(),
+                        app.clone(),
+                        cx,
+                    )
+                })),
+            );
+            (
+                content_size.width,
+                content_size.height,
+                visible_count,
+                renderer_policy_stats,
+                viewport,
+                theme_icon_cache_refresh_stats,
+            )
+        }
+        FileGridRenderSnapshot::Details {
+            items,
+            row_count,
+            metrics,
+            name_column_width,
+        } => {
+            let content_width = details_content_width(trash_view, name_column_width).max(1.0);
+            let content_height = details_content_height(row_count, metrics).max(1.0);
+            let visible_count = items.len();
+            let mut renderer_policy_stats = details_renderer_policy_stats(&items);
+            renderer_policy_stats.details_header_visual_layer = 1;
+            let theme_icon_cache_refresh_stats =
+                refresh_visible_details_theme_icon_cache(app_state, &items, window, cx);
+            let viewport =
+                file_grid_viewport_shell(pane_id, drop_target, mode, cx).child(details_table(
+                    pane_id,
+                    items,
+                    row_count,
+                    trash_view,
                     content_width,
                     content_height,
-                    visible_count,
-                    renderer_policy_stats,
-                    viewport,
-                )
-            }
-        };
+                    metrics,
+                    name_column_width,
+                    app.clone(),
+                    cx,
+                ));
+            (
+                content_width,
+                content_height,
+                visible_count,
+                renderer_policy_stats,
+                viewport,
+                theme_icon_cache_refresh_stats,
+            )
+        }
+    };
 
     let root = div()
         .on_children_prepainted(move |bounds, _window, cx| {
@@ -418,7 +440,7 @@ pub(crate) fn file_grid(
                 }
                 if image_stats.has_activity() {
                     eprintln!(
-                        "[fika item-image] pane={} mode={:?} prepaint_count={} prepaint={}us paint_count={} paint={}us theme_loaded={} theme_decoded={} theme_retained={} theme_placeholder={} theme_prewarm_loaded={} theme_prewarm_decoded={} theme_prewarm_retained={} theme_prewarm_pending={} thumb_loaded={} thumb_decoded={} thumb_retained={} thumb_fallback={}",
+                        "[fika item-image] pane={} mode={:?} prepaint_count={} prepaint={}us paint_count={} paint={}us theme_loaded={} theme_decoded={} theme_retained={} theme_placeholder={} thumb_loaded={} thumb_decoded={} thumb_retained={} thumb_fallback={}",
                         pane_id.0,
                         view_mode,
                         image_stats.prepaint_count,
@@ -429,10 +451,6 @@ pub(crate) fn file_grid(
                         image_stats.sources.theme_decoded,
                         image_stats.sources.theme_retained,
                         image_stats.sources.theme_placeholder,
-                        image_stats.sources.theme_prewarm_loaded,
-                        image_stats.sources.theme_prewarm_decoded,
-                        image_stats.sources.theme_prewarm_retained,
-                        image_stats.sources.theme_prewarm_pending,
                         image_stats.sources.thumbnail_loaded,
                         image_stats.sources.thumbnail_decoded,
                         image_stats.sources.thumbnail_retained,
@@ -472,6 +490,20 @@ pub(crate) fn file_grid(
             cx,
         ));
     if let Some(started) = build_started {
+        if theme_icon_cache_refresh_stats.has_activity() {
+            eprintln!(
+                "[fika item-image-cache-refresh] pane={} mode={:?} requested={} retained={} loaded={} decoded={} missing={} non_svg={} total={}us",
+                pane_id.0,
+                view_mode,
+                theme_icon_cache_refresh_stats.requested,
+                theme_icon_cache_refresh_stats.retained,
+                theme_icon_cache_refresh_stats.loaded,
+                theme_icon_cache_refresh_stats.decoded,
+                theme_icon_cache_refresh_stats.missing,
+                theme_icon_cache_refresh_stats.non_svg,
+                theme_icon_cache_refresh_stats.elapsed_us,
+            );
+        }
         eprintln!(
             "[fika renderer-policy] pane={} mode={:?} items={} visual_layer={} image_layer={} gpui_image_element={} retained_interaction={} retained_directory_drop_target={} gpui_drag_shell={} gpui_directory_drop_shell={} details_header_visual_layer={} gpui_details_header={} rename_overlay={}",
             pane_id.0,
@@ -499,4 +531,142 @@ pub(crate) fn file_grid(
         );
     }
     root
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct ThemeIconCacheRefreshStats {
+    requested: usize,
+    retained: usize,
+    loaded: usize,
+    decoded: usize,
+    missing: usize,
+    non_svg: usize,
+    elapsed_us: u128,
+}
+
+impl ThemeIconCacheRefreshStats {
+    fn has_activity(self) -> bool {
+        self.requested > 0
+            || self.retained > 0
+            || self.loaded > 0
+            || self.missing > 0
+            || self.non_svg > 0
+    }
+
+    fn record_load(&mut self, load: Option<RetainedImageLoad>) {
+        match load.map(|load| load.outcome) {
+            Some(RetainedImageLoadOutcome::CacheReady { first_ready }) => {
+                self.loaded += 1;
+                if first_ready {
+                    self.decoded += 1;
+                }
+            }
+            Some(RetainedImageLoadOutcome::Retained) => {
+                self.retained += 1;
+            }
+            Some(RetainedImageLoadOutcome::Missing) => {
+                self.missing += 1;
+            }
+            None => {
+                self.non_svg += 1;
+            }
+        }
+    }
+}
+
+fn refresh_visible_item_theme_icon_cache(
+    app_state: &mut FikaApp,
+    items: &[super::ItemPaintSnapshot],
+    window: &mut Window,
+    cx: &mut Context<FikaApp>,
+) -> ThemeIconCacheRefreshStats {
+    let started = Instant::now();
+    let scale_factor = window.scale_factor();
+    let mut stats = ThemeIconCacheRefreshStats::default();
+    for item in items {
+        let Some(request) = item_theme_icon_cache_refresh_request(item, scale_factor) else {
+            continue;
+        };
+        stats.requested += 1;
+        stats.record_load(refresh_theme_icon_cache_request(app_state, request, cx));
+    }
+    if stats.requested > 0 {
+        app_state.prune_retained_theme_icon_cache(cx, window);
+        stats.elapsed_us = started.elapsed().as_micros();
+    }
+    stats
+}
+
+fn refresh_visible_details_theme_icon_cache(
+    app_state: &mut FikaApp,
+    items: &[super::DetailsPaintSnapshot],
+    window: &mut Window,
+    cx: &mut Context<FikaApp>,
+) -> ThemeIconCacheRefreshStats {
+    let started = Instant::now();
+    let scale_factor = window.scale_factor();
+    let mut stats = ThemeIconCacheRefreshStats::default();
+    for item in items {
+        let Some(request) = details_theme_icon_cache_refresh_request(item, scale_factor) else {
+            continue;
+        };
+        stats.requested += 1;
+        stats.record_load(refresh_theme_icon_cache_request(app_state, request, cx));
+    }
+    if stats.requested > 0 {
+        app_state.prune_retained_theme_icon_cache(cx, window);
+        stats.elapsed_us = started.elapsed().as_micros();
+    }
+    stats
+}
+
+pub(super) fn item_theme_icon_cache_refresh_request(
+    item: &super::ItemPaintSnapshot,
+    scale_factor: f32,
+) -> Option<RetainedImageRequest> {
+    if !item.visible {
+        return None;
+    }
+    let content = item.content.as_ref();
+    if content.thumbnail_path.is_some() {
+        return None;
+    }
+    if !item_uses_layer_visual_paint(content) {
+        return None;
+    }
+    if !item_uses_image_layer_with_input(content, ItemRendererPolicyInput::default()) {
+        return None;
+    }
+    RetainedImageRequest::theme_icon_for_snapshot(
+        &content.icon,
+        theme_icon_image_size_px(item.layout.icon_rect.width, item.layout.icon_rect.height),
+        scale_factor,
+    )
+}
+
+pub(super) fn details_theme_icon_cache_refresh_request(
+    item: &super::DetailsPaintSnapshot,
+    scale_factor: f32,
+) -> Option<RetainedImageRequest> {
+    let policy = details_row_renderer_policy(item);
+    if !matches!(policy.visual, DetailsRowVisualRenderer::ContentLayer) {
+        return None;
+    }
+    RetainedImageRequest::theme_icon_for_snapshot(
+        &item.content.icon,
+        theme_icon_image_size_px(
+            f32::from_bits(item.geometry.icon_size),
+            f32::from_bits(item.geometry.icon_size),
+        ),
+        scale_factor,
+    )
+}
+
+fn refresh_theme_icon_cache_request(
+    app_state: &mut FikaApp,
+    request: RetainedImageRequest,
+    cx: &mut Context<FikaApp>,
+) -> Option<RetainedImageLoad> {
+    let (source_path, key) = request.into_theme_icon_parts()?;
+    app_state.refresh_retained_theme_icon_cache(source_path, key, cx)
 }

@@ -364,6 +364,13 @@ impl RetainedImageRequest {
         }
     }
 
+    pub(crate) fn into_theme_icon_parts(self) -> Option<(Arc<Path>, ThemeIconImageKey)> {
+        match self {
+            Self::ThemeIcon { source_path, key } => Some((source_path, key)),
+            Self::Thumbnail { .. } => None,
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn theme_icon_key(&self) -> Option<&ThemeIconImageKey> {
         match self {
@@ -463,16 +470,14 @@ impl RetainedImageLayerState {
         window: &mut Window,
         cx: &mut App,
     ) -> RetainedImageLoad {
-        if let Ok(Some(retained)) = app.update(cx, |this, cx| {
-            this.load_retained_or_sync_svg_theme_icon(
-                source_path.clone(),
-                key.clone(),
-                cx,
-                Some(window),
-            )
-        }) {
-            self.prune_retained_theme_icon_images(app, window, cx);
+        if let Ok(Some(retained)) =
+            app.update(cx, |this, _cx| this.retained_theme_icon_image_for_key(&key))
+        {
             return retained;
+        }
+
+        if is_svg_icon_path(source_path.as_ref()) {
+            return RetainedImageLoad::default();
         }
 
         let resource = Resource::Path(source_path.clone());
@@ -547,31 +552,38 @@ fn load_svg_theme_icon_sync(path: &Path, cx: &mut App) -> Option<Arc<RenderImage
 }
 
 impl FikaApp {
-    pub(crate) fn load_retained_or_sync_svg_theme_icon(
+    pub(crate) fn retained_theme_icon_image_for_key(
+        &mut self,
+        key: &ThemeIconImageKey,
+    ) -> Option<RetainedImageLoad> {
+        self.theme_icon_images
+            .image_for_key(key)
+            .map(|image| RetainedImageLoad {
+                image: Some(image),
+                outcome: RetainedImageLoadOutcome::Retained,
+            })
+    }
+
+    pub(crate) fn refresh_retained_theme_icon_cache(
         &mut self,
         source_path: Arc<Path>,
         key: ThemeIconImageKey,
         cx: &mut App,
-        window: Option<&mut Window>,
     ) -> Option<RetainedImageLoad> {
-        if let Some(image) = self.theme_icon_images.image_for_key(&key) {
-            return Some(RetainedImageLoad {
-                image: Some(image),
-                outcome: RetainedImageLoadOutcome::Retained,
-            });
+        if let Some(retained) = self.retained_theme_icon_image_for_key(&key) {
+            return Some(retained);
         }
 
         if !is_svg_icon_path(source_path.as_ref()) {
             return None;
         }
 
-        let image = load_svg_theme_icon_sync(source_path.as_ref(), cx)?;
-        let retained = self
-            .theme_icon_images
-            .record_loaded(key, source_path, image);
-        if window.is_none() {
-            let _ = self.prune_retained_theme_icon_images(cx);
-        }
+        let retained = if let Some(image) = load_svg_theme_icon_sync(source_path.as_ref(), cx) {
+            self.theme_icon_images
+                .record_loaded(key, source_path, image)
+        } else {
+            self.theme_icon_images.record_failed(key, source_path)
+        };
         Some(RetainedImageLoad {
             image: retained.image,
             outcome: retained_theme_icon_load_outcome(retained.outcome),
@@ -605,6 +617,12 @@ impl FikaApp {
             theme_icon_pixmap_cache_limit_bytes(),
             render_image_cache_cost_bytes,
         )
+    }
+
+    pub(crate) fn prune_retained_theme_icon_cache(&mut self, cx: &mut App, window: &mut Window) {
+        for evicted in self.prune_retained_theme_icon_images(cx) {
+            cx.drop_image(evicted.image, Some(window));
+        }
     }
 }
 

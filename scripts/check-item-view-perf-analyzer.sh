@@ -42,7 +42,8 @@ cat > "$tmpdir/complete.log" <<'EOF'
 [fika item-shape-cache] pane=1 mode=Icons hits=38 misses=2 evicted=0 compute=45us entries=40
 [fika item-glyph-cache] pane=1 mode=Icons hits=36 misses=4 evicted=0 entries=40
 [fika item-glyph-budget] pane=1 mode=Icons requested=40 hits=36 misses=4 computed=4 deferred=0 failed=0 budget_exhausted=false compute=90us
-[fika item-image] pane=1 mode=Icons prepaint_count=8 prepaint=70us paint_count=8 paint=80us theme_loaded=4 theme_decoded=2 theme_retained=1 theme_placeholder=1 theme_prewarm_loaded=3 theme_prewarm_decoded=1 theme_prewarm_retained=2 theme_prewarm_pending=4 thumb_loaded=2 thumb_decoded=1 thumb_retained=0 thumb_fallback=0
+[fika item-image-cache-refresh] pane=1 mode=Icons requested=8 retained=5 loaded=3 decoded=1 missing=0 non_svg=0 total=95us
+[fika item-image] pane=1 mode=Icons prepaint_count=8 prepaint=70us paint_count=8 paint=80us theme_loaded=0 theme_decoded=0 theme_retained=8 theme_placeholder=0 thumb_loaded=2 thumb_decoded=1 thumb_retained=0 thumb_fallback=0
 [fika details-visual] pane=1 mode=Details prepaint_count=48 prepaint=120us paint_count=48 paint=130us
 [fika details-visual] pane=1 mode=Details prepaint_count=48 prepaint=110us paint_count=48 paint=120us
 [fika details-shape-cache] pane=1 mode=Details hits=20 misses=2 evicted=0 compute=50us entries=22
@@ -85,7 +86,7 @@ if [[ "$evidence" != *"custom_paint_frames"* ]]; then
     echo "expected renderer evidence to include analyzer summary" >&2
     exit 1
 fi
-if [[ "$evidence" != *"image_sources"* || "$evidence" != *"theme_placeholder=1"* || "$evidence" != *"theme_prewarm_pending=4"* ]]; then
+if [[ "$evidence" != *"image_sources"* || "$evidence" != *"theme_retained=8"* || "$evidence" != *"image_cache_refresh_frames"* ]]; then
     echo "expected renderer evidence to include image source summary" >&2
     exit 1
 fi
@@ -131,7 +132,7 @@ if [[ "$image_renderer_evidence" != *"Custom-theme renderer state: custom-image-
     echo "expected custom image renderer state in comparison" >&2
     exit 1
 fi
-if [[ "$image_renderer_evidence" != *"Baseline renderer state: default-gpui-theme-icons"* ]]; then
+if [[ "$image_renderer_evidence" != *"Baseline renderer state: gpui-theme-icons"* ]]; then
     echo "expected baseline GPUI theme-icon renderer state in comparison" >&2
     exit 1
 fi
@@ -156,31 +157,8 @@ if [[ "$image_renderer_gate_evidence" != *"Default-promotion gate: pass"* ]]; th
     exit 1
 fi
 
-cat > "$tmpdir/hybrid-theme.log" <<'EOF'
-[fika item-view] pane=1 mode=Compact phase=initial items=197 visible=48 raw=187us icon_sync=99us queue=180us convert=196us total=770us
-[fika renderer-policy] pane=1 mode=Compact items=48 visual_layer=48 image_layer=0 gpui_image_element=48 retained_interaction=48 gpui_drag_shell=0 rename_overlay=0
-[fika item-image] pane=1 mode=Compact prepaint_count=48 prepaint=180us paint_count=0 paint=0us theme_loaded=0 theme_decoded=0 theme_retained=0 theme_placeholder=0 theme_prewarm_loaded=0 theme_prewarm_decoded=0 theme_prewarm_retained=0 theme_prewarm_pending=48 thumb_loaded=0 thumb_decoded=0 thumb_retained=0 thumb_fallback=0
-[fika item-view] pane=1 mode=Compact phase=steady items=197 visible=48 raw=90us icon_sync=22us queue=2us convert=118us total=260us
-[fika renderer-policy] pane=1 mode=Compact items=48 visual_layer=48 image_layer=48 gpui_image_element=0 retained_interaction=48 gpui_drag_shell=0 rename_overlay=0
-[fika item-image] pane=1 mode=Compact prepaint_count=48 prepaint=160us paint_count=48 paint=320us theme_loaded=48 theme_decoded=0 theme_retained=0 theme_placeholder=0 theme_prewarm_loaded=0 theme_prewarm_decoded=0 theme_prewarm_retained=0 theme_prewarm_pending=0 thumb_loaded=0 thumb_decoded=0 thumb_retained=0 thumb_fallback=0
-EOF
-
-hybrid_gate_evidence="$("$image_renderer_compare" --gate-hybrid-handoff "$tmpdir/hybrid-theme.log" "$tmpdir/default-split.log")"
-if [[ "$hybrid_gate_evidence" != *"Candidate renderer state: hybrid-readiness-handoff"* ]]; then
-    echo "expected hybrid renderer state in comparison" >&2
-    exit 1
-fi
-if [[ "$hybrid_gate_evidence" != *"Hybrid-handoff gate: pass"* ]]; then
-    echo "expected clean hybrid/default comparison to pass hybrid-handoff gate" >&2
-    exit 1
-fi
-if [[ "$hybrid_gate_evidence" != *"theme prewarm pending | 48 | 0"* ]]; then
-    echo "expected hybrid comparison to include prewarm evidence" >&2
-    exit 1
-fi
-
 if "$image_renderer_compare" --gate-hybrid-handoff "$tmpdir/custom-theme-clean.log" "$tmpdir/default-split.log" >/dev/null 2>&1; then
-    echo "expected hybrid handoff gate to fail when GPUI fallback/prewarm are absent" >&2
+    echo "expected obsolete hybrid handoff gate to fail" >&2
     exit 1
 fi
 

@@ -37,6 +37,7 @@ pub(crate) struct PaneProps {
 
 pub(crate) fn pane_view(
     props: PaneProps,
+    app_state: &mut FikaApp,
     window: &mut Window,
     cx: &mut Context<FikaApp>,
 ) -> Stateful<Div> {
@@ -141,6 +142,7 @@ pub(crate) fn pane_view(
                 drop_target,
                 mode: file_grid_mode,
             },
+            app_state,
             window,
             cx,
         ))

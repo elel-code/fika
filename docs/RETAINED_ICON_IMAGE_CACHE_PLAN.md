@@ -5,9 +5,9 @@ does not replace thumbnail handling. Thumbnails already use thumbnail-path
 identity and the custom image layer; ordinary theme icons now use the full
 custom image layer by default over the retained image model. The painter draws
 `RenderImage` values with `Window::paint_image`; images can come from the
-retained pixmap-key cache, SVG rasterization for a missing key, or GPUI's image
-cache for non-SVG resources. Item rendering no longer keeps per-item GPUI
-`img()` children.
+retained pixmap-key cache, cache-refresh SVG rasterization for a missing key,
+or GPUI's image cache for non-SVG resources. Item rendering no longer keeps
+per-item GPUI `img()` children.
 
 The purpose of this plan is to define and guard the cache boundary required for
 that full custom default. As of 2026-06-20, the GPUI image-element and hybrid
@@ -19,6 +19,10 @@ icons; `gpui_image_element=0` is the required normal pane state.
 Dolphin's ordinary item icon path is custom-painted, but it is not a per-frame
 decode path:
 
+- `KStandardItemListWidget::paint()` begins by calling
+  `triggerCacheRefreshing()` before the actual item paint body.
+- `triggerCacheRefreshing()` refreshes widget content, text cache, and pixmap
+  cache, then clears the dirty flags.
 - `KStandardItemListWidget::updatePixmapCache()` owns widget-local pixmap
   refresh.
 - `KStandardItemListWidget::pixmapForIcon()` looks up the themed pixmap through
@@ -29,9 +33,10 @@ decode path:
   refresh.
 
 The Fika equivalent is therefore retained pixmap identity plus self paint.
-SVG/theme files may be rasterized when a missing pixmap key is first needed,
-matching Dolphin's synchronous `QIcon::pixmap()` behavior; the guard is that a
-real same-key image must not regress to a marker placeholder.
+SVG/theme files may be rasterized when a missing pixmap key is first needed in
+the visible cache-refresh step, matching Dolphin's synchronous
+`QIcon::pixmap()` cache-refresh behavior; the guard is that a real same-key
+image must not regress to a marker placeholder.
 
 ## Source-Level Comparison And Target Boundary
 
@@ -50,6 +55,10 @@ Current accepted renderer policy:
 - MIME/theme icons default to the custom image layer. Full custom painting is
   backed by retained `ThemeIconImageKey` pixmap keys and a bounded cache; it
   must keep `gpui_image_element=0` in normal pane logs.
+- Visible SVG theme-icon pixmap-key misses are refreshed before constructing
+  the image/details visual layers. This is the Fika equivalent of Dolphin's
+  `paint() -> triggerCacheRefreshing() -> updatePixmapCache()` boundary: the
+  paint/prepaint body only consumes the retained image for SVG theme icons.
 - Thumbnail images use the custom item image layer and retained same-thumbnail
   image fallback.
 - There is no current runtime renderer switch for ordinary MIME/theme icons.
@@ -140,9 +149,13 @@ Worker orchestration remains visible-first:
 2. `FileIconCache` returns cached/preliminary icon snapshots with current layout
    size.
 3. Theme path resolve remains background/batched and visible-first.
-4. Image decode/load uses the retained pixmap-key cache first, then SVG
-   rasterization or GPUI image-cache loading for a missing key.
-5. Retained image cache records loaded same-key images and exposes them to the
+4. Surface build runs visible SVG theme-icon cache refresh against the retained
+   pixmap-key cache before image/details visual prepaint. SVG rasterization is
+   allowed in this refresh step for a missing key.
+5. Image/details visual prepaint reads the retained pixmap-key cache for SVG
+   theme icons. It must not synchronously scan or rasterize SVG theme icons in
+   the drawing prepass.
+6. Retained image cache records loaded same-key images and exposes them to the
    custom painter.
 
 The prepaint path must not scan the icon theme. SVG rasterization is allowed
@@ -171,6 +184,34 @@ The default full custom path remains acceptable only if analyzer output proves:
 The staged GPUI/hybrid readiness-handoff paths are historical only. Current
 runtime evidence must not use image-renderer env switches for ordinary
 MIME/theme icons.
+
+Cold cache-refresh alignment evidence from 2026-06-20:
+
+- Dolphin source checked locally:
+  `/home/yk/Code/dolphin/src/kitemviews/kstandarditemlistwidget.cpp`.
+  The relevant functions are `KStandardItemListWidget::paint()`,
+  `triggerCacheRefreshing()`, `updatePixmapCache()`, and `pixmapForIcon()`.
+- Old Fika SVG cold path:
+  `/tmp/fika-dolphin-icon-cache-zoom-scroll.log` showed
+  `item-image max_prepaint=7437us`, with `theme_decoded=5` in the image
+  prepaint path.
+- Current Dolphin-style cache-refresh path:
+  `/tmp/fika-dolphin-cold-cache-refresh-zoom-scroll.log` showed
+  `item-image max_prepaint=156us`, `theme_loaded=0`, `theme_decoded=0`,
+  `theme_retained=550`, `theme_placeholder=0`, and
+  `renderer_policy max_gpui_image_element=0`.
+- The same cold work is now visible as
+  `image_cache_refresh_frames=12 requested=550 retained=545 loaded=5
+  decoded=5 max_total=8904us`; this is intentionally in the cache-refresh/build
+  boundary rather than the image prepaint/draw boundary.
+- Scroll-end memory was measured after moving from the left edge to the right
+  edge:
+  `/tmp/fika-dolphin-cold-cache-refresh-scroll-end-memory-rerun.log` and
+  `/tmp/fika-dolphin-cold-cache-refresh-scroll-end-memory-rerun.mem` showed
+  `scroll_x=2303.5 max_scroll_x=2303.5`, `RSS=295372 kB`, and
+  `Private_Dirty=60328 kB`. The analyzer for that run kept
+  `gpui_image_element=0`, `theme_placeholder=0`, and
+  `image_sources theme_retained=286`.
 
 Current `/etc` evidence from 2026-06-18:
 
@@ -391,3 +432,7 @@ Dolphin model consolidation from 2026-06-19:
   final core evidence gate. Future changes must keep `gpui_image_element=0`,
   placeholder churn, zoom-time decode bursts, image-paint regressions, and
   renderer-policy drift at zero.
+- [x] Move visible SVG theme-icon cold loads out of image/details visual
+  prepaint and into the Dolphin-style cache-refresh/build boundary. Current
+  evidence must use `[fika item-image-cache-refresh]` for cold decode work and
+  keep `[fika item-image] theme_decoded=0` on the default self-painted path.

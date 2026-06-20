@@ -7152,6 +7152,7 @@ impl Render for FikaApp {
                     snapshot,
                     file_grid_mode,
                 },
+                self,
                 window,
                 cx,
             ));

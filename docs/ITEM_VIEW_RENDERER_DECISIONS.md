@@ -63,9 +63,11 @@ As of 2026-06-20, ordinary MIME/theme icons no longer have runtime GPUI image
 element or hybrid readiness-handoff switches. The active path is Dolphin-style
 self paint: file roles resolve `iconName`/theme path, then the item image layer
 paints a retained pixmap keyed by `ThemeIconImageKey` (icon name, requested
-size, DPR/scale, mode sentinels). Historical GPUI and hybrid logs below remain
-useful archaeology, but those env-driven renderer paths are not part of the
-current architecture.
+size, DPR/scale, mode sentinels). Visible SVG cache misses are handled in
+`[fika item-image-cache-refresh]` before the image/details visual prepaint,
+matching Dolphin's `paint() -> triggerCacheRefreshing() -> updatePixmapCache()`
+boundary. Historical GPUI and hybrid logs below remain useful archaeology, but
+those env-driven renderer paths are not part of the current architecture.
 
 For startup MIME blank, zoom size jump, and `/etc` zoom smoothness
 investigations, compare the current path against Dolphin source before
@@ -73,7 +75,8 @@ accepting another custom image-layer change:
 
 - Dolphin source: `KStandardItemListWidget::updatePixmapCache()` and
   `pixmapForIcon()` synchronously produce a current-size pixmap and cache it by
-  icon name/height.
+  icon name/height; `paint()` triggers that cache refresh before consuming
+  `m_pixmap` in the paint body.
 - Historical Fika GPUI path: `a3f5b0f` / early transition commits rely on GPUI
   `img()` loading and element fallback behavior.
 - Current self-painted path: run without image renderer overrides. Thumbnails
@@ -84,6 +87,25 @@ Decision rule: if the self-painted path keeps showing visible first-load
 placeholders or zoom-time decode/size churn, keep the retained
 model/projection/controller split and fix the pixmap-key cache or visible-first
 role updater before reintroducing GPUI image children.
+
+2026-06-20 cold-frame check:
+
+- Previous self-painted SVG load path:
+  `/tmp/fika-dolphin-icon-cache-zoom-scroll.log` had
+  `item-image max_prepaint=7437us` and visible image-prepaint
+  `theme_decoded=5`.
+- Current cache-refresh path:
+  `/tmp/fika-dolphin-cold-cache-refresh-zoom-scroll.log` had
+  `item-image max_prepaint=156us`, `theme_loaded=0`, `theme_decoded=0`,
+  `theme_retained=550`, `theme_placeholder=0`, and
+  `renderer_policy max_gpui_image_element=0`.
+- The cold work moved to `item-image-cache-refresh`, with
+  `requested=550 retained=545 loaded=5 decoded=5 max_total=8904us`, which is
+  the intended Dolphin-style cache-refresh/build boundary rather than an image
+  prepaint delay.
+- Scroll-end memory was sampled after `scroll_x=2303.5 max_scroll_x=2303.5` in
+  `/tmp/fika-dolphin-cold-cache-refresh-scroll-end-memory-rerun.log`:
+  `RSS=295372 kB`, `Private_Dirty=60328 kB`.
 
 ### 2026-06-17 `/etc` Image Renderer A/B Smoke
 
@@ -401,9 +423,11 @@ the old custom-theme A/B path:
   resource refresh is pending. A markerless placeholder is acceptable only for
   true first-load or permanent failure, never as a replacement for an already
   loaded real icon.
-- Do not synchronously decode SVGs or raster theme icon files during GPUI
-  prepaint. Path resolution may use the existing visible-first bounded
-  `icon_sync` policy; image decode must stay on the image-cache/scheduler path.
+- Do not synchronously decode SVGs or raster theme icon files during
+  image/details visual prepaint. Path resolution may use the existing
+  visible-first bounded `icon_sync` policy; SVG decode is allowed only in the
+  visible cache-refresh/build boundary after the concrete theme path and
+  `ThemeIconImageKey` are known.
 - Prevent zoom-time second commits: ordinary MIME/theme icons must update icon
   bounds with layout immediately, but their path/image identity should remain
   stable once the same file-icon kind has a resolved theme path. Any custom
@@ -718,15 +742,19 @@ the retained `RenderImage` cache inside the image-layer element meant cold SVG
 work could only happen during element prepaint, so the first custom frame was
 placeholder-free but still paid decode cost in `[fika item-image]`.
 
-Implementation: `FikaApp` now owns the pane theme `RenderImage` cache. During
-`PaneSnapshot` construction, after the visible `FileGridRenderSnapshot` is
-known and before `theme_icon_readiness` is handed to pane rendering, Fika
-collects visible custom-theme `ThemeIconImageKey`s, deduplicates them by
-`iconName + size + scale + theme + mode`, synchronously materializes SVG
-`RenderImage`s through GPUI's `svg_renderer`, records them in the app cache,
-and marks those semantic keys ready. The file-grid surface no longer performs
-model updates or uses a separate prewarm element; it consumes the refreshed
-readiness snapshot and paints retained images through `Window::paint_image`.
+Implementation at that point: `FikaApp` owned the pane theme `RenderImage`
+cache. During `PaneSnapshot` construction, after the visible
+`FileGridRenderSnapshot` was known and before `theme_icon_readiness` was handed
+to pane rendering, Fika collected visible custom-theme `ThemeIconImageKey`s,
+deduplicated them by `iconName + size + scale + theme + mode`, synchronously
+materialized SVG `RenderImage`s through GPUI's `svg_renderer`, recorded them in
+the app cache, and marked those semantic keys ready.
+
+This 2026-06-19 snapshot-prewarm boundary was replaced on 2026-06-20 by the
+file-grid surface cache-refresh boundary. The cache is still app-owned, but
+the current surface refreshes visible SVG theme-icon keys before constructing
+image/details visual layers; the visual prepaint body only consumes retained
+images through `Window::paint_image`.
 
 Decision: early theme-icon preparation belongs to the Fika model/snapshot stage,
 not to an image element prepaint. This matches the Dolphin split more closely:

@@ -566,6 +566,24 @@ BEGIN {
     }
 }
 
+/^\[fika item-image-cache-refresh\]/ {
+    image_cache_refresh_count++
+    note_mode(field("mode"))
+    image_cache_refresh_requested += field("requested") + 0
+    image_cache_refresh_retained += field("retained") + 0
+    image_cache_refresh_loaded += field("loaded") + 0
+    image_cache_refresh_decoded += field("decoded") + 0
+    image_cache_refresh_missing += field("missing") + 0
+    image_cache_refresh_non_svg += field("non_svg") + 0
+    max_assign(single_max, "image_cache_refresh_requested", field("requested") + 0)
+    max_assign(single_max, "image_cache_refresh_retained", field("retained") + 0)
+    max_assign(single_max, "image_cache_refresh_loaded", field("loaded") + 0)
+    max_assign(single_max, "image_cache_refresh_decoded", field("decoded") + 0)
+    max_assign(single_max, "image_cache_refresh_missing", field("missing") + 0)
+    max_assign(single_max, "image_cache_refresh_non_svg", field("non_svg") + 0)
+    max_assign(single_max, "image_cache_refresh_total", us_field("total"))
+}
+
 /^\[fika static-item-visual\]/ {
     static_visual_count++
     mode = field("mode")
@@ -630,10 +648,6 @@ BEGIN {
     image_theme_decoded += field("theme_decoded") + 0
     image_theme_retained += field("theme_retained") + 0
     image_theme_placeholder += field("theme_placeholder") + 0
-    image_theme_prewarm_loaded += field("theme_prewarm_loaded") + 0
-    image_theme_prewarm_decoded += field("theme_prewarm_decoded") + 0
-    image_theme_prewarm_retained += field("theme_prewarm_retained") + 0
-    image_theme_prewarm_pending += field("theme_prewarm_pending") + 0
     image_thumb_loaded += field("thumb_loaded") + 0
     image_thumb_decoded += field("thumb_decoded") + 0
     image_thumb_retained += field("thumb_retained") + 0
@@ -874,14 +888,24 @@ END {
         " max_paint=" (("image_paint" in single_max) ? single_max["image_paint"] : 0) "us"
     print "  warm_image_frames: " (warm_image_count + 0) \
         " max_paint=" (("warm_image_paint" in single_max) ? single_max["warm_image_paint"] : 0) "us"
+    print "  image_cache_refresh_frames: " (image_cache_refresh_count + 0) \
+        " requested=" (image_cache_refresh_requested + 0) \
+        " retained=" (image_cache_refresh_retained + 0) \
+        " loaded=" (image_cache_refresh_loaded + 0) \
+        " decoded=" (image_cache_refresh_decoded + 0) \
+        " missing=" (image_cache_refresh_missing + 0) \
+        " non_svg=" (image_cache_refresh_non_svg + 0) \
+        " max_requested=" (("image_cache_refresh_requested" in single_max) ? single_max["image_cache_refresh_requested"] : 0) \
+        " max_retained=" (("image_cache_refresh_retained" in single_max) ? single_max["image_cache_refresh_retained"] : 0) \
+        " max_loaded=" (("image_cache_refresh_loaded" in single_max) ? single_max["image_cache_refresh_loaded"] : 0) \
+        " max_decoded=" (("image_cache_refresh_decoded" in single_max) ? single_max["image_cache_refresh_decoded"] : 0) \
+        " max_missing=" (("image_cache_refresh_missing" in single_max) ? single_max["image_cache_refresh_missing"] : 0) \
+        " max_non_svg=" (("image_cache_refresh_non_svg" in single_max) ? single_max["image_cache_refresh_non_svg"] : 0) \
+        " max_total=" (("image_cache_refresh_total" in single_max) ? single_max["image_cache_refresh_total"] : 0) "us"
     print "  image_sources: theme_loaded=" (image_theme_loaded + 0) \
         " theme_decoded=" (image_theme_decoded + 0) \
         " theme_retained=" (image_theme_retained + 0) \
         " theme_placeholder=" (image_theme_placeholder + 0) \
-        " theme_prewarm_loaded=" (image_theme_prewarm_loaded + 0) \
-        " theme_prewarm_decoded=" (image_theme_prewarm_decoded + 0) \
-        " theme_prewarm_retained=" (image_theme_prewarm_retained + 0) \
-        " theme_prewarm_pending=" (image_theme_prewarm_pending + 0) \
         " thumb_loaded=" (image_thumb_loaded + 0) \
         " thumb_decoded=" (image_thumb_decoded + 0) \
         " thumb_retained=" (image_thumb_retained + 0) \

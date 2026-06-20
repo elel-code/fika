@@ -7,8 +7,8 @@
 缩略图已经使用 thumbnail-path identity 和 custom image layer；普通 theme icon
 现在默认使用 retained image model 上的 full custom image layer。Painter 通过
 `Window::paint_image` 绘制 `RenderImage`；image 可来自 retained pixmap-key cache、
-缺失 key 的 SVG rasterization，或非 SVG resource 的 GPUI image cache。Item 渲染不再
-保留逐 item 的 GPUI `img()` 子元素。
+cache-refresh 阶段的缺失 key SVG rasterization，或非 SVG resource 的 GPUI image cache。
+Item 渲染不再保留逐 item 的 GPUI `img()` 子元素。
 
 本计划的目的，是定义并守住这个 full custom 默认所需的 cache 边界。截至
 2026-06-20，普通 MIME/theme icon 已移除 GPUI image-element 和 hybrid
@@ -18,6 +18,10 @@ readiness-handoff 运行时开关；`gpui_image_element=0` 是普通 pane 的必
 
 Dolphin 的普通 item icon 路径是自绘的，但不是每帧 decode：
 
+- `KStandardItemListWidget::paint()` 开头先调用 `triggerCacheRefreshing()`，
+  然后才进入真正的 item paint body。
+- `triggerCacheRefreshing()` 刷新 widget content、text cache 和 pixmap cache，
+  再清 dirty flag。
 - `KStandardItemListWidget::updatePixmapCache()` 拥有 widget-local pixmap refresh。
 - `KStandardItemListWidget::pixmapForIcon()` 通过 `QPixmapCache` 查 themed pixmap。
 - Cache key 包含 icon identity、请求尺寸、device pixel ratio，以及 icon
@@ -25,7 +29,9 @@ Dolphin 的普通 item icon 路径是自绘的，但不是每帧 decode：
 - Widget 保留当前 pixmap，直到 content/role/layout 变化需要刷新。
 
 因此 Fika 等价路径是 retained pixmap identity 加自绘。缺失 pixmap key 第一次需要时
-可以 rasterize SVG/theme 文件，这贴近 Dolphin 同步 `QIcon::pixmap()` 行为；防护点是已加载同 key 真实图像后不能退回 marker placeholder。
+可以在 visible cache-refresh 步骤 rasterize SVG/theme 文件，这贴近 Dolphin 同步
+`QIcon::pixmap()` cache-refresh 行为；防护点是已加载同 key 真实图像后不能退回
+marker placeholder。
 
 ## 源码级对照与目标边界
 
@@ -44,6 +50,9 @@ Dolphin 的普通 item icon 路径是自绘的，但不是每帧 decode：
 - MIME/theme icon 默认使用 custom image layer。Full custom painting 由 retained
   `ThemeIconImageKey` pixmap key 和有界 cache 支撑；普通 pane 日志必须保持
   `gpui_image_element=0`。
+- 可见 SVG theme-icon pixmap-key miss 会在构造 image/details visual layer 前刷新。
+  这是 Fika 对 Dolphin `paint() -> triggerCacheRefreshing() -> updatePixmapCache()`
+  边界的对应实现：SVG theme icon 的 paint/prepaint body 只消费 retained image。
 - Thumbnail image 使用 custom item image layer 和 retained same-thumbnail image fallback。
 - 普通 MIME/theme icon 当前没有 runtime renderer switch。GPUI `img()` 子元素和
   hybrid readiness handoff 只属于历史路径。
@@ -121,9 +130,12 @@ Worker orchestration 保持 visible-first：
 1. Raw snapshot 决定 visible 和 read-ahead icon request。
 2. `FileIconCache` 用当前 layout size 返回 cached/preliminary icon snapshot。
 3. Theme path resolve 继续后台批处理，并 visible-first。
-4. Image decode/load 先查 retained pixmap-key cache，缺失 key 再进行 SVG rasterization
-   或 GPUI image-cache load。
-5. Retained image cache 记录 loaded same-key image，并暴露给 custom painter。
+4. Surface build 在 image/details visual prepaint 前，对 visible SVG theme icon 运行
+   retained pixmap-key cache refresh。缺失 key 的 SVG rasterization 只允许发生在这个
+   refresh 步骤。
+5. Image/details visual prepaint 对 SVG theme icon 只读取 retained pixmap-key cache，
+   不得在绘制 prepass 中同步扫描或 rasterize SVG theme icon。
+6. Retained image cache 记录 loaded same-key image，并暴露给 custom painter。
 
 Prepaint 路径不得扫描 icon theme。只有 role/cache 层已为请求的 pixmap key 解析出具体
 theme icon path 后，才允许 SVG rasterization。
@@ -148,6 +160,32 @@ FIKA_PERF_ITEM_VIEW=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll target/debug/fika ~/D
 
 分阶段 GPUI/hybrid readiness-handoff 路径只属于历史记录。当前 runtime evidence 不得为
 普通 MIME/theme icon 使用 image-renderer env switch。
+
+2026-06-20 cold cache-refresh 对齐证据：
+
+- 已对照本地 Dolphin 源码：
+  `/home/yk/Code/dolphin/src/kitemviews/kstandarditemlistwidget.cpp`。
+  相关函数是 `KStandardItemListWidget::paint()`、`triggerCacheRefreshing()`、
+  `updatePixmapCache()` 和 `pixmapForIcon()`。
+- 旧 Fika SVG cold 路径：
+  `/tmp/fika-dolphin-icon-cache-zoom-scroll.log` 显示
+  `item-image max_prepaint=7437us`，并在 image prepaint 路径中出现
+  `theme_decoded=5`。
+- 当前 Dolphin-style cache-refresh 路径：
+  `/tmp/fika-dolphin-cold-cache-refresh-zoom-scroll.log` 显示
+  `item-image max_prepaint=156us`、`theme_loaded=0`、`theme_decoded=0`、
+  `theme_retained=550`、`theme_placeholder=0`，且 renderer policy 保持
+  `max_gpui_image_element=0`。
+- 同一批 cold work 现在单独体现在
+  `image_cache_refresh_frames=12 requested=550 retained=545 loaded=5 decoded=5
+  max_total=8904us`；这有意归属 cache-refresh/build 边界，而不是 image
+  prepaint/draw 边界。
+- 内存按“从左侧滚动到最右侧后”采样：
+  `/tmp/fika-dolphin-cold-cache-refresh-scroll-end-memory-rerun.log` 和
+  `/tmp/fika-dolphin-cold-cache-refresh-scroll-end-memory-rerun.mem` 显示
+  `scroll_x=2303.5 max_scroll_x=2303.5`、`RSS=295372 kB`、
+  `Private_Dirty=60328 kB`。该 run 的 analyzer 仍保持 `gpui_image_element=0`、
+  `theme_placeholder=0`，且 `image_sources theme_retained=286`。
 
 2026-06-18 当前 `/etc` 证据：
 
@@ -339,3 +377,7 @@ FIKA_PERF_ITEM_VIEW=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll target/debug/fika ~/D
 - [x] 在最终 core evidence gate 下保持 full-custom MIME/theme icon renderer 为默认。
   未来变更必须继续保持 `gpui_image_element=0`、placeholder churn、zoom-time decode
   burst、image-paint 回归和 renderer-policy 漂移为零。
+- [x] 将可见 SVG theme-icon cold load 从 image/details visual prepaint 移到
+  Dolphin-style cache-refresh/build 边界。当前证据必须用
+  `[fika item-image-cache-refresh]` 记录 cold decode work，并让默认 self-painted 路径的
+  `[fika item-image] theme_decoded=0`。
