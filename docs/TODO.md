@@ -111,7 +111,9 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
   hit testing 中排除；最小 shell-owned filter bar 已可用，`Ctrl/Meta+F` 激活，
   字符输入更新 retained plain-text name filter，Backspace 编辑，Enter 保留 pattern/filter 结果但停止继续吃文本，
   Esc 清空并关闭，layout/hit-test/hover/selection/select-all/keyboard navigation 均通过
-  filtered model-index projection 路由。
+  filtered model-index projection 路由；dotfile visibility 已进入 shell-owned retained
+  projection，默认隐藏 hidden entries，`Ctrl/Meta+H` 或 top-bar `Hidden` toggle 可显示，
+  selection 会随可见性切换保留或裁剪。
   日志已输出
   `--view icons|compact|details`，默认仍是 Icons baseline，Compact 使用 core
   `CompactLayout`，Details 已有 shell-owned row projection、固定 header 和
@@ -134,7 +136,7 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
 - [~] Phase 1：Compact、Icons 和 Details scene projection 已开始接入。`/etc` 已可通过
   `--view` 在三种模式下渲染首帧；Compact 走 core `CompactLayout`，Details 走 shell-owned
   row projection。滚动、hover、keyboard navigation、directory activation/history navigation、
-  runtime mode switching、projection zoom、reload、filtering、selection 和全选/清空快捷键已通过 shared
+  runtime mode switching、projection zoom、reload、filtering、hidden-file visibility、selection 和全选/清空快捷键已通过 shared
   `ShellLayout` abstraction 走 retained geometry；
   glyph-level text zoom policy、`~/Downloads` smoke、手动交互 smoke
   和更完整 Details column/metadata parity 仍待完成。

@@ -171,10 +171,14 @@ Current checkpoint:
   Esc clears/deactivates it. Layout, hit testing, hover, selection, select-all, and
   keyboard navigation all route through the filtered model-index projection.
   Full IME/caret/selection editing remains Phase 4 text-boundary work.
+- Dotfile visibility is now shell-owned. Hidden entries are excluded from the
+  retained projection by default; `Ctrl/Meta+H` or the top-bar `Hidden` toggle
+  shows them. Selection is retained or pruned through the same projection when
+  the visibility mode changes.
 - `[fika-wgpu]` logs include view mode, path, entry count, visible item count,
   quad count, selected count, hovered item index, active rubber-band state,
   hit-test/selection/keyboard navigation/rubber-band/view-switch/path-change
-  counters, reload/filter counters, zoom percent and zoom-change counters, icon count, icon cache
+  counters, reload/filter/hidden counters, zoom percent and zoom-change counters, icon count, icon cache
   hit/miss count, icon cache bytes, icon atlas bytes, icon resolve/raster time,
   text label count, text cache hit/miss count, text cache bytes, text atlas
   bytes, draw batch count, render reason, layout time, text raster time, render
@@ -214,9 +218,9 @@ Acceptance:
 - [~] `/etc` renders in Compact, Icons, and Details via `--view`; `~/Downloads`
   and manual interaction smokes remain pending.
 - [~] Scroll, hover, keyboard navigation, runtime mode switching, projection
-  zoom, reload, filtering, selection, and select-all/clear shortcuts work from
-  retained geometry for the initial projections. Glyph-level text zoom policy
-  remains pending.
+  zoom, reload, filtering, hidden-file visibility, selection, and
+  select-all/clear shortcuts work from retained geometry for the initial
+  projections. Glyph-level text zoom policy remains pending.
 - [~] Layout/hit-test/paint share the same shell layout abstraction for Icons,
   Compact, and Details.
 - No synchronous theme scan, MIME magic read, thumbnail decode, or text shaping

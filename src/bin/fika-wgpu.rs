@@ -57,6 +57,7 @@ const VIEW_MODE_RAIL_WIDTH: f32 = 6.0;
 const NAV_BUTTON_WIDTH: f32 = 28.0;
 const NAV_UP_BUTTON_WIDTH: f32 = 36.0;
 const NAV_RELOAD_BUTTON_WIDTH: f32 = 58.0;
+const NAV_HIDDEN_BUTTON_WIDTH: f32 = 58.0;
 const NAV_BUTTON_HEIGHT: f32 = 24.0;
 const NAV_BUTTON_GAP: f32 = 6.0;
 const PATH_HISTORY_LIMIT: usize = 128;
@@ -192,6 +193,7 @@ enum PathNavigationAction {
     Forward,
     Parent,
     Reload,
+    ToggleHidden,
 }
 
 impl PathNavigationAction {
@@ -201,6 +203,7 @@ impl PathNavigationAction {
             Self::Forward => ">",
             Self::Parent => "Up",
             Self::Reload => "Reload",
+            Self::ToggleHidden => "Hidden",
         }
     }
 
@@ -210,6 +213,7 @@ impl PathNavigationAction {
             Self::Forward => "history-forward",
             Self::Parent => "parent-directory",
             Self::Reload => "reload-directory",
+            Self::ToggleHidden => "toggle-hidden",
         }
     }
 }
@@ -443,6 +447,12 @@ impl ApplicationHandler for FikaWgpuApp {
                     self.reload_scene_path(event_loop);
                     return;
                 }
+                if hidden_toggle_requested_for_key_event(&event, shortcut) {
+                    if self.scene.toggle_hidden_visibility(renderer.size) {
+                        self.present_scene_change(event_loop, "toggle-hidden");
+                    }
+                    return;
+                }
                 if is_activation_key(&event.logical_key) {
                     if let Some(path) = self.scene.selected_directory_path() {
                         self.load_scene_path(event_loop, path, "activate-directory");
@@ -585,6 +595,7 @@ impl FikaWgpuApp {
             PathNavigationAction::Forward => self.scene.go_history_forward(size),
             PathNavigationAction::Parent => self.scene.go_parent_directory(size),
             PathNavigationAction::Reload => self.scene.reload_current_path(size),
+            PathNavigationAction::ToggleHidden => Ok(self.scene.toggle_hidden_visibility(size)),
         };
         match result {
             Ok(true) => self.present_scene_change(event_loop, action.reason()),
@@ -753,6 +764,27 @@ fn reload_requested_for_key_parts(
         && (matches!(physical_key, PhysicalKey::Code(KeyCode::KeyR))
             || key_character_eq(logical_key, "r")
             || key_character_eq(key_without_modifiers, "r"))
+}
+
+fn hidden_toggle_requested_for_key_event(event: &KeyEvent, shortcut: bool) -> bool {
+    hidden_toggle_requested_for_key_parts(
+        shortcut,
+        &event.physical_key,
+        &event.logical_key,
+        &event.key_without_modifiers,
+    )
+}
+
+fn hidden_toggle_requested_for_key_parts(
+    shortcut: bool,
+    physical_key: &PhysicalKey,
+    logical_key: &Key,
+    key_without_modifiers: &Key,
+) -> bool {
+    shortcut
+        && (matches!(physical_key, PhysicalKey::Code(KeyCode::KeyH))
+            || key_character_eq(logical_key, "h")
+            || key_character_eq(key_without_modifiers, "h"))
 }
 
 fn filter_command_for_key_event(
@@ -1154,6 +1186,7 @@ struct ShellScene {
     filtered_indexes: Vec<usize>,
     filter_active: bool,
     filter_pattern: String,
+    show_hidden: bool,
     zoom_step: i32,
     scroll_x: f32,
     scroll_y: f32,
@@ -1171,6 +1204,7 @@ struct ShellScene {
     path_changes: u64,
     directory_reloads: u64,
     filter_changes: u64,
+    hidden_changes: u64,
     zoom_changes: u64,
 }
 
@@ -1200,7 +1234,7 @@ impl ShellScene {
             eprintln!("[fika-wgpu] first-entries={preview}");
         }
 
-        let filtered_indexes = all_entry_indexes(entries.len());
+        let filtered_indexes = filtered_indexes_for_entries(&entries, false, "");
 
         Ok(Self {
             path,
@@ -1210,6 +1244,7 @@ impl ShellScene {
             filtered_indexes,
             filter_active: false,
             filter_pattern: String::new(),
+            show_hidden: false,
             zoom_step: 0,
             scroll_x: 0.0,
             scroll_y: 0.0,
@@ -1227,6 +1262,7 @@ impl ShellScene {
             path_changes: 0,
             directory_reloads: 0,
             filter_changes: 0,
+            hidden_changes: 0,
             zoom_changes: 0,
         })
     }
@@ -1520,18 +1556,29 @@ impl ShellScene {
         true
     }
 
-    fn rebuild_filtered_indexes(&mut self) {
-        if self.filter_pattern.is_empty() {
-            self.filtered_indexes = all_entry_indexes(self.entries.len());
-            return;
+    fn toggle_hidden_visibility(&mut self, size: PhysicalSize<u32>) -> bool {
+        self.show_hidden = !self.show_hidden;
+        self.hidden_changes += 1;
+        self.rubber_band = None;
+        self.rebuild_filtered_indexes();
+        let selection_changed = self.selection.retain_indexes(&self.filtered_indexes);
+        if selection_changed {
+            self.selection_changes += 1;
         }
-        let filter = NameFilter::plain_text(self.filter_pattern.clone());
-        self.filtered_indexes = self
-            .entries
-            .iter()
-            .enumerate()
-            .filter_map(|(index, entry)| filter.matches_name(entry.name.as_ref()).then_some(index))
-            .collect();
+        self.clamp_scroll(size);
+        eprintln!(
+            "[fika-wgpu] hidden show={} visible={} changes={} selection_changed={}",
+            self.show_hidden as u8,
+            self.filtered_entry_count(),
+            self.hidden_changes,
+            selection_changed as u8
+        );
+        true
+    }
+
+    fn rebuild_filtered_indexes(&mut self) {
+        self.filtered_indexes =
+            filtered_indexes_for_entries(&self.entries, self.show_hidden, &self.filter_pattern);
     }
 
     fn filtered_entry_count(&self) -> usize {
@@ -1627,6 +1674,7 @@ impl ShellScene {
             PathNavigationAction::Forward => self.history.can_go_forward(),
             PathNavigationAction::Parent => self.parent_directory_path().is_some(),
             PathNavigationAction::Reload => true,
+            PathNavigationAction::ToggleHidden => true,
         }
     }
 
@@ -1910,10 +1958,13 @@ impl ShellScene {
         };
         for (action, rect) in path_navigation_button_rects() {
             let enabled = self.path_navigation_action_enabled(action);
+            let active = matches!(action, PathNavigationAction::ToggleHidden) && self.show_hidden;
             push_rect(
                 vertices,
                 rect,
-                if enabled {
+                if active {
+                    view_mode_badge_color(self.view_mode)
+                } else if enabled {
                     [0.145, 0.154, 0.164, 1.0]
                 } else {
                     [0.095, 0.101, 0.108, 1.0]
@@ -1929,7 +1980,9 @@ impl ShellScene {
                     height: 18.0,
                 },
                 clip,
-                if enabled {
+                if active {
+                    TextColor::rgb(246, 250, 252)
+                } else if enabled {
                     TextColor::rgb(222, 228, 232)
                 } else {
                     TextColor::rgb(105, 115, 124)
@@ -2318,6 +2371,9 @@ impl ShellScene {
             self.view_mode.label(),
             self.zoom_percent()
         );
+        if self.show_hidden {
+            status.push_str(" | hidden");
+        }
         if self.filter_active || !self.filter_pattern.is_empty() {
             status.push_str(&format!(
                 " | filter {:?} ({})",
@@ -3179,7 +3235,7 @@ impl WgpuState {
             || self.last_log.elapsed() >= Duration::from_secs(1)
         {
             eprintln!(
-                "[fika-wgpu] frame={} reason={} view={} zoom={} zoom_changes={} path={} entries={} filtered={} filter_active={} filter_changes={} visible={} selected={} hover={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} path_changes={} reloads={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_cache={}/{} entries={} bytes={} batches={} scroll_x={:.1} scroll_y={:.1} layout={}us text_raster={}us text_atlas={}x{}:{}b render={}us",
+                "[fika-wgpu] frame={} reason={} view={} zoom={} zoom_changes={} path={} entries={} filtered={} show_hidden={} hidden_changes={} filter_active={} filter_changes={} visible={} selected={} hover={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} path_changes={} reloads={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_cache={}/{} entries={} bytes={} batches={} scroll_x={:.1} scroll_y={:.1} layout={}us text_raster={}us text_atlas={}x{}:{}b render={}us",
                 self.frame_count,
                 reason,
                 scene.view_mode.as_str(),
@@ -3188,6 +3244,8 @@ impl WgpuState {
                 scene.path.display(),
                 scene.entries.len(),
                 scene.filtered_entry_count(),
+                scene.show_hidden as u8,
+                scene.hidden_changes,
                 scene.filter_active as u8,
                 scene.filter_changes,
                 scene_frame.visible_items,
@@ -5625,7 +5683,7 @@ fn view_mode_button_rects(surface_width: f32) -> [(ShellViewMode, ViewRect); 3] 
     ]
 }
 
-fn path_navigation_button_rects() -> [(PathNavigationAction, ViewRect); 4] {
+fn path_navigation_button_rects() -> [(PathNavigationAction, ViewRect); 5] {
     let x = 16.0;
     [
         (
@@ -5666,12 +5724,25 @@ fn path_navigation_button_rects() -> [(PathNavigationAction, ViewRect); 4] {
                 height: NAV_BUTTON_HEIGHT,
             },
         ),
+        (
+            PathNavigationAction::ToggleHidden,
+            ViewRect {
+                x: x + (NAV_BUTTON_WIDTH + NAV_BUTTON_GAP) * 2.0
+                    + NAV_UP_BUTTON_WIDTH
+                    + NAV_BUTTON_GAP
+                    + NAV_RELOAD_BUTTON_WIDTH
+                    + NAV_BUTTON_GAP,
+                y: 14.0,
+                width: NAV_HIDDEN_BUTTON_WIDTH,
+                height: NAV_BUTTON_HEIGHT,
+            },
+        ),
     ]
 }
 
 fn path_bar_start_x() -> f32 {
-    let reload = path_navigation_button_rects()[3].1;
-    reload.right() + 10.0
+    let hidden = path_navigation_button_rects()[4].1;
+    hidden.right() + 10.0
 }
 
 fn push_limited_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
@@ -5777,8 +5848,23 @@ fn entry_index_by_name(entries: &[Entry], name: &str) -> Option<usize> {
     entries.iter().position(|entry| entry.name.as_ref() == name)
 }
 
-fn all_entry_indexes(len: usize) -> Vec<usize> {
-    (0..len).collect()
+fn filtered_indexes_for_entries(entries: &[Entry], show_hidden: bool, pattern: &str) -> Vec<usize> {
+    let filter = (!pattern.is_empty()).then(|| NameFilter::plain_text(pattern.to_string()));
+    entries
+        .iter()
+        .enumerate()
+        .filter_map(|(index, entry)| {
+            let visible = show_hidden || !is_hidden_entry(entry);
+            let matches_filter = filter
+                .as_ref()
+                .is_none_or(|filter| filter.matches_name(entry.name.as_ref()));
+            (visible && matches_filter).then_some(index)
+        })
+        .collect()
+}
+
+fn is_hidden_entry(entry: &Entry) -> bool {
+    entry.name.as_ref().starts_with('.')
 }
 
 #[cfg(test)]
@@ -5836,7 +5922,7 @@ mod tests {
 
     fn test_scene(entries: Vec<Entry>, view_mode: ShellViewMode) -> ShellScene {
         let dir_count = entries.iter().filter(|entry| entry.is_dir).count();
-        let filtered_indexes = all_entry_indexes(entries.len());
+        let filtered_indexes = filtered_indexes_for_entries(&entries, false, "");
         ShellScene {
             path: PathBuf::from("/tmp"),
             view_mode,
@@ -5845,6 +5931,7 @@ mod tests {
             filtered_indexes,
             filter_active: false,
             filter_pattern: String::new(),
+            show_hidden: false,
             zoom_step: 0,
             scroll_x: 0.0,
             scroll_y: 0.0,
@@ -5862,6 +5949,7 @@ mod tests {
             path_changes: 0,
             directory_reloads: 0,
             filter_changes: 0,
+            hidden_changes: 0,
             zoom_changes: 0,
         }
     }
@@ -6214,6 +6302,31 @@ mod tests {
     }
 
     #[test]
+    fn hidden_shortcut_requires_ctrl_h() {
+        let unidentified = PhysicalKey::Unidentified(winit::keyboard::NativeKeyCode::Unidentified);
+        let no_key = Key::Unidentified(winit::keyboard::NativeKey::Unidentified);
+
+        assert!(hidden_toggle_requested_for_key_parts(
+            true,
+            &PhysicalKey::Code(KeyCode::KeyH),
+            &no_key,
+            &no_key,
+        ));
+        assert!(hidden_toggle_requested_for_key_parts(
+            true,
+            &unidentified,
+            &Key::Character("H".into()),
+            &no_key,
+        ));
+        assert!(!hidden_toggle_requested_for_key_parts(
+            false,
+            &PhysicalKey::Code(KeyCode::KeyH),
+            &Key::Character("h".into()),
+            &Key::Character("h".into()),
+        ));
+    }
+
+    #[test]
     fn zoom_shortcuts_accept_common_characters() {
         assert_eq!(
             zoom_action_for_key(&Key::Character("+".into())),
@@ -6380,6 +6493,35 @@ mod tests {
     }
 
     #[test]
+    fn hidden_toggle_updates_filtered_projection_and_prunes_selection() {
+        let mut scene = test_scene(
+            vec![
+                test_entry("alpha.txt", false),
+                test_entry(".secret", false),
+                test_entry("bravo.txt", false),
+            ],
+            ShellViewMode::Icons,
+        );
+        let size = PhysicalSize::new(420, 260);
+
+        assert_eq!(scene.filtered_indexes, vec![0, 2]);
+        assert_eq!(scene.filtered_entry_count(), 2);
+        assert!(scene.selection.apply_navigation(1, false));
+
+        assert!(scene.toggle_hidden_visibility(size));
+        assert!(scene.show_hidden);
+        assert_eq!(scene.filtered_indexes, vec![0, 1, 2]);
+        assert_eq!(scene.hidden_changes, 1);
+        assert!(scene.selection.contains(1));
+
+        assert!(scene.toggle_hidden_visibility(size));
+        assert!(!scene.show_hidden);
+        assert_eq!(scene.filtered_indexes, vec![0, 2]);
+        assert_eq!(scene.selection.len(), 0);
+        assert_eq!(scene.selection_changes, 1);
+    }
+
+    #[test]
     fn top_bar_view_mode_buttons_are_hit_tested() {
         let scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
         let size = PhysicalSize::new(420, 240);
@@ -6409,6 +6551,7 @@ mod tests {
         let forward_rect = path_navigation_button_rects()[1].1;
         let parent_rect = path_navigation_button_rects()[2].1;
         let reload_rect = path_navigation_button_rects()[3].1;
+        let hidden_rect = path_navigation_button_rects()[4].1;
 
         assert_eq!(
             scene.path_navigation_action_at_screen_point(
@@ -6439,6 +6582,16 @@ mod tests {
                 size
             ),
             Some(PathNavigationAction::Reload)
+        );
+        assert_eq!(
+            scene.path_navigation_action_at_screen_point(
+                ViewPoint {
+                    x: hidden_rect.x + 2.0,
+                    y: hidden_rect.y + 2.0
+                },
+                size
+            ),
+            Some(PathNavigationAction::ToggleHidden)
         );
 
         scene.history.push_back(PathBuf::from("/tmp/previous"));
