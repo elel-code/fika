@@ -57,6 +57,9 @@ const NAV_UP_BUTTON_WIDTH: f32 = 36.0;
 const NAV_BUTTON_HEIGHT: f32 = 24.0;
 const NAV_BUTTON_GAP: f32 = 6.0;
 const PATH_HISTORY_LIMIT: usize = 128;
+const ZOOM_STEP_MIN: i32 = -3;
+const ZOOM_STEP_MAX: i32 = 4;
+const ZOOM_STEP_SCALE: f32 = 0.12;
 const AUTO_CYCLE_INTERVAL: Duration = Duration::from_secs(1);
 const DOUBLE_CLICK_MAX_INTERVAL: Duration = Duration::from_millis(500);
 const DOUBLE_CLICK_MAX_DISTANCE: f32 = 6.0;
@@ -203,6 +206,13 @@ impl PathNavigationAction {
             Self::Parent => "parent-directory",
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ZoomAction {
+    In,
+    Out,
+    Reset,
 }
 
 fn window_title(scene: &ShellScene) -> String {
@@ -372,6 +382,12 @@ impl ApplicationHandler for FikaWgpuApp {
                             window.request_redraw();
                         }
                         self.render_now(event_loop, "switch-immediate", true);
+                    }
+                    return;
+                }
+                if shortcut && let Some(zoom_action) = zoom_action_for_key_event(&event) {
+                    if self.scene.zoom(zoom_action, renderer.size) {
+                        self.present_scene_change(event_loop, "zoom");
                     }
                     return;
                 }
@@ -597,6 +613,24 @@ fn path_navigation_action_for_key(key: &Key, alt: bool) -> Option<PathNavigation
     }
 }
 
+fn zoom_action_for_key_event(event: &KeyEvent) -> Option<ZoomAction> {
+    zoom_action_for_key(&event.key_without_modifiers)
+        .or_else(|| zoom_action_for_key(&event.logical_key))
+}
+
+fn zoom_action_for_key(key: &Key) -> Option<ZoomAction> {
+    match key {
+        Key::Character(value) if value.as_str() == "+" || value.as_str() == "=" => {
+            Some(ZoomAction::In)
+        }
+        Key::Character(value) if value.as_str() == "-" || value.as_str() == "_" => {
+            Some(ZoomAction::Out)
+        }
+        Key::Character(value) if value.as_str() == "0" => Some(ZoomAction::Reset),
+        _ => None,
+    }
+}
+
 fn navigation_action_for_key(key: &Key) -> Option<NavigationAction> {
     match key {
         Key::Named(NamedKey::ArrowLeft) => Some(NavigationAction::Left),
@@ -790,23 +824,34 @@ struct DetailsLayout {
     viewport_height: f32,
     scroll_y: f32,
     content_width: f32,
+    row_height: f32,
+    icon_size: f32,
 }
 
 impl DetailsLayout {
-    fn new(item_count: usize, viewport_width: f32, viewport_height: f32, scroll_y: f32) -> Self {
+    fn new(
+        item_count: usize,
+        viewport_width: f32,
+        viewport_height: f32,
+        scroll_y: f32,
+        row_height: f32,
+        icon_size: f32,
+    ) -> Self {
         Self {
             item_count,
             viewport_height,
             scroll_y,
             content_width: (DETAILS_NAME_WIDTH + DETAILS_SIZE_WIDTH + DETAILS_MODIFIED_WIDTH)
                 .max(viewport_width),
+            row_height,
+            icon_size,
         }
     }
 
     fn content_size(&self) -> ViewSize {
         ViewSize {
             width: self.content_width,
-            height: (self.item_count as f32 * DETAILS_ROW_HEIGHT).max(1.0),
+            height: (self.item_count as f32 * self.row_height).max(1.0),
         }
     }
 
@@ -814,18 +859,18 @@ impl DetailsLayout {
         if index >= self.item_count {
             return None;
         }
-        let y = index as f32 * DETAILS_ROW_HEIGHT;
+        let y = index as f32 * self.row_height;
         let item_rect = ViewRect {
             x: 0.0,
             y,
             width: self.content_width,
-            height: DETAILS_ROW_HEIGHT,
+            height: self.row_height,
         };
         let icon_rect = ViewRect {
             x: 8.0,
-            y: y + (DETAILS_ROW_HEIGHT - DETAILS_ICON_SIZE) / 2.0,
-            width: DETAILS_ICON_SIZE,
-            height: DETAILS_ICON_SIZE,
+            y: y + (self.row_height - self.icon_size) / 2.0,
+            width: self.icon_size,
+            height: self.icon_size,
         };
         Some(fika_core::ItemLayout {
             model_index: index,
@@ -835,10 +880,10 @@ impl DetailsLayout {
             visual_rect: item_rect,
             icon_rect,
             text_rect: ViewRect {
-                x: 34.0,
-                y,
+                x: 14.0 + self.icon_size,
+                y: y + (self.row_height - 18.0).max(0.0) / 2.0,
                 width: (DETAILS_NAME_WIDTH - 42.0).max(1.0),
-                height: DETAILS_ROW_HEIGHT,
+                height: 18.0,
             },
         })
     }
@@ -853,7 +898,7 @@ impl DetailsLayout {
         if point.x < 0.0 || point.x >= self.content_width || point.y < 0.0 {
             return None;
         }
-        let index = (point.y / DETAILS_ROW_HEIGHT).floor() as usize;
+        let index = (point.y / self.row_height).floor() as usize;
         (index < self.item_count).then_some(index)
     }
 
@@ -861,8 +906,8 @@ impl DetailsLayout {
         if self.item_count == 0 || rect.right() <= 0.0 || rect.x >= self.content_width {
             return Vec::new();
         }
-        let start = (rect.y / DETAILS_ROW_HEIGHT).floor().max(0.0) as usize;
-        let end = (rect.bottom() / DETAILS_ROW_HEIGHT).ceil().max(0.0) as usize;
+        let start = (rect.y / self.row_height).floor().max(0.0) as usize;
+        let end = (rect.bottom() / self.row_height).ceil().max(0.0) as usize;
         (start..end.min(self.item_count)).collect()
     }
 
@@ -870,8 +915,8 @@ impl DetailsLayout {
         if self.item_count == 0 {
             return 0..0;
         }
-        let start = (self.scroll_y / DETAILS_ROW_HEIGHT).floor().max(0.0) as usize;
-        let end = ((self.scroll_y + self.viewport_height) / DETAILS_ROW_HEIGHT)
+        let start = (self.scroll_y / self.row_height).floor().max(0.0) as usize;
+        let end = ((self.scroll_y + self.viewport_height) / self.row_height)
             .ceil()
             .max(0.0) as usize
             + 1;
@@ -918,6 +963,7 @@ struct ShellScene {
     path: PathBuf,
     view_mode: ShellViewMode,
     entries: Vec<Entry>,
+    zoom_step: i32,
     scroll_x: f32,
     scroll_y: f32,
     pointer: Option<ViewPoint>,
@@ -932,6 +978,7 @@ struct ShellScene {
     rubber_band_updates: u64,
     view_switches: u64,
     path_changes: u64,
+    zoom_changes: u64,
 }
 
 impl ShellScene {
@@ -964,6 +1011,7 @@ impl ShellScene {
             path,
             view_mode,
             entries,
+            zoom_step: 0,
             scroll_x: 0.0,
             scroll_y: 0.0,
             pointer: None,
@@ -978,6 +1026,7 @@ impl ShellScene {
             rubber_band_updates: 0,
             view_switches: 0,
             path_changes: 0,
+            zoom_changes: 0,
         })
     }
 
@@ -1106,6 +1155,37 @@ impl ShellScene {
         true
     }
 
+    fn zoom(&mut self, action: ZoomAction, size: PhysicalSize<u32>) -> bool {
+        let next_step = match action {
+            ZoomAction::In => self.zoom_step + 1,
+            ZoomAction::Out => self.zoom_step - 1,
+            ZoomAction::Reset => 0,
+        }
+        .clamp(ZOOM_STEP_MIN, ZOOM_STEP_MAX);
+
+        if next_step == self.zoom_step {
+            return false;
+        }
+
+        self.zoom_step = next_step;
+        self.rubber_band = None;
+        self.zoom_changes += 1;
+        if let Some(index) = self.selection.focus_or_first_selected() {
+            self.ensure_index_visible(index, size);
+        } else {
+            self.clamp_scroll(size);
+        }
+        eprintln!(
+            "[fika-wgpu] zoom step={} percent={} changes={} scroll_x={:.1} scroll_y={:.1}",
+            self.zoom_step,
+            self.zoom_percent(),
+            self.zoom_changes,
+            self.scroll_x,
+            self.scroll_y
+        );
+        true
+    }
+
     fn view_mode_at_screen_point(
         &self,
         point: ViewPoint,
@@ -1202,42 +1282,66 @@ impl ShellScene {
                 size.width as f32,
                 self.viewport_height(size),
                 self.scroll_y,
+                self.details_row_height(),
+                self.details_icon_size(),
             )),
         }
     }
 
     fn icons_options(&self, size: PhysicalSize<u32>) -> IconsLayoutOptions {
+        let factor = self.zoom_factor();
         IconsLayoutOptions {
             viewport_width: size.width as f32,
             viewport_height: self.viewport_height(size),
             reserved_bottom: 0.0,
             scroll_x: self.scroll_x,
             scroll_y: self.scroll_y,
-            padding: 8.0,
-            gap: 12.0,
-            item_width: ICONS_ITEM_WIDTH,
-            item_height: ICONS_ITEM_HEIGHT,
-            icon_size: ICONS_ICON_SIZE,
-            text_height: 18.0,
+            padding: (8.0 * factor).round().clamp(6.0, 14.0),
+            gap: (12.0 * factor).round().clamp(8.0, 22.0),
+            item_width: (ICONS_ITEM_WIDTH * factor).round().clamp(82.0, 188.0),
+            item_height: (ICONS_ITEM_HEIGHT * factor).round().clamp(76.0, 172.0),
+            icon_size: (ICONS_ICON_SIZE * factor).round().clamp(28.0, 92.0),
+            text_height: (18.0 * factor).round().clamp(16.0, 30.0),
         }
     }
 
     fn compact_options(&self, size: PhysicalSize<u32>) -> CompactLayoutOptions {
+        let factor = self.zoom_factor();
         CompactLayoutOptions {
             viewport_width: size.width as f32,
             viewport_height: self.viewport_height(size),
             reserved_bottom: 0.0,
             scroll_x: self.scroll_x,
             scroll_y: 0.0,
-            padding: 6.0,
-            side_padding: 8.0,
-            gap: 8.0,
-            text_gap: 8.0,
-            item_width: COMPACT_ITEM_WIDTH,
-            item_height: COMPACT_ITEM_HEIGHT,
-            icon_size: COMPACT_ICON_SIZE,
-            text_height: 18.0,
+            padding: (6.0 * factor).round().clamp(4.0, 10.0),
+            side_padding: (8.0 * factor).round().clamp(6.0, 14.0),
+            gap: (8.0 * factor).round().clamp(6.0, 14.0),
+            text_gap: (8.0 * factor).round().clamp(6.0, 14.0),
+            item_width: (COMPACT_ITEM_WIDTH * factor).round().clamp(168.0, 360.0),
+            item_height: (COMPACT_ITEM_HEIGHT * factor).round().clamp(34.0, 72.0),
+            icon_size: (COMPACT_ICON_SIZE * factor).round().clamp(20.0, 56.0),
+            text_height: (18.0 * factor).round().clamp(16.0, 26.0),
         }
+    }
+
+    fn zoom_factor(&self) -> f32 {
+        (1.0 + self.zoom_step as f32 * ZOOM_STEP_SCALE).clamp(0.64, 1.64)
+    }
+
+    fn zoom_percent(&self) -> i32 {
+        (self.zoom_factor() * 100.0).round() as i32
+    }
+
+    fn details_row_height(&self) -> f32 {
+        (DETAILS_ROW_HEIGHT * self.zoom_factor())
+            .round()
+            .clamp(22.0, 44.0)
+    }
+
+    fn details_icon_size(&self) -> f32 {
+        (DETAILS_ICON_SIZE * self.zoom_factor())
+            .round()
+            .clamp(16.0, 34.0)
     }
 
     fn build_frame(
@@ -1662,11 +1766,12 @@ impl ShellScene {
             TextColor::rgb(202, 211, 220)
         };
         text.push_label(entry.name.as_ref(), name_rect, content_clip, text_color);
+        let metadata_y = row_rect.y + (row_rect.height - 18.0).max(0.0) / 2.0;
         text.push_label(
             &details_size_label(entry),
             ViewRect {
                 x: DETAILS_NAME_WIDTH + 8.0 - self.scroll_x,
-                y: row_rect.y + 4.0,
+                y: metadata_y,
                 width: DETAILS_SIZE_WIDTH - 16.0,
                 height: 18.0,
             },
@@ -1677,7 +1782,7 @@ impl ShellScene {
             &format_modified_secs(entry.modified_secs),
             ViewRect {
                 x: DETAILS_NAME_WIDTH + DETAILS_SIZE_WIDTH + 8.0 - self.scroll_x,
-                y: row_rect.y + 4.0,
+                y: metadata_y,
                 width: DETAILS_MODIFIED_WIDTH - 16.0,
                 height: 18.0,
             },
@@ -2453,10 +2558,12 @@ impl WgpuState {
             || self.last_log.elapsed() >= Duration::from_secs(1)
         {
             eprintln!(
-                "[fika-wgpu] frame={} reason={} view={} path={} entries={} visible={} selected={} hover={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} path_changes={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_cache={}/{} entries={} bytes={} batches={} scroll_x={:.1} scroll_y={:.1} layout={}us text_raster={}us text_atlas={}x{}:{}b render={}us",
+                "[fika-wgpu] frame={} reason={} view={} zoom={} zoom_changes={} path={} entries={} visible={} selected={} hover={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} path_changes={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_cache={}/{} entries={} bytes={} batches={} scroll_x={:.1} scroll_y={:.1} layout={}us text_raster={}us text_atlas={}x{}:{}b render={}us",
                 self.frame_count,
                 reason,
                 scene.view_mode.as_str(),
+                scene.zoom_percent(),
+                scene.zoom_changes,
                 scene.path.display(),
                 scene.entries.len(),
                 scene_frame.visible_items,
@@ -2794,7 +2901,7 @@ impl<'a> IconFrameBuilder<'a> {
 
         self.icons += 1;
         let resolve_start = Instant::now();
-        let icon_size = rect.width.max(rect.height).clamp(16.0, ICONS_ICON_SIZE);
+        let icon_size = rect.width.max(rect.height).clamp(16.0, 256.0);
         let snapshot = self.resolver.resolve_entry(directory, entry, icon_size);
         self.resolve_us += resolve_start.elapsed().as_micros();
 
@@ -5081,6 +5188,7 @@ mod tests {
             path: PathBuf::from("/tmp"),
             view_mode,
             entries,
+            zoom_step: 0,
             scroll_x: 0.0,
             scroll_y: 0.0,
             pointer: None,
@@ -5095,6 +5203,7 @@ mod tests {
             rubber_band_updates: 0,
             view_switches: 0,
             path_changes: 0,
+            zoom_changes: 0,
         }
     }
 
@@ -5345,6 +5454,27 @@ mod tests {
     }
 
     #[test]
+    fn zoom_shortcuts_accept_common_characters() {
+        assert_eq!(
+            zoom_action_for_key(&Key::Character("+".into())),
+            Some(ZoomAction::In)
+        );
+        assert_eq!(
+            zoom_action_for_key(&Key::Character("=".into())),
+            Some(ZoomAction::In)
+        );
+        assert_eq!(
+            zoom_action_for_key(&Key::Character("-".into())),
+            Some(ZoomAction::Out)
+        );
+        assert_eq!(
+            zoom_action_for_key(&Key::Character("0".into())),
+            Some(ZoomAction::Reset)
+        );
+        assert_eq!(zoom_action_for_key(&Key::Character("x".into())), None);
+    }
+
+    #[test]
     fn top_bar_view_mode_buttons_are_hit_tested() {
         let scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
         let size = PhysicalSize::new(420, 240);
@@ -5445,6 +5575,57 @@ mod tests {
 
         assert!(!scene.set_view_mode(ShellViewMode::Details, size));
         assert_eq!(scene.view_switches, 1);
+    }
+
+    #[test]
+    fn zoom_updates_layout_metrics_for_all_view_modes() {
+        let mut scene = test_scene(
+            (0..80)
+                .map(|index| test_entry(&format!("entry-{index}.txt"), index % 5 == 0))
+                .collect(),
+            ShellViewMode::Icons,
+        );
+        let size = PhysicalSize::new(420, 260);
+        let icons_before = match scene.layout(size) {
+            ShellLayout::Icons(layout) => layout.item(0).unwrap(),
+            _ => unreachable!(),
+        };
+
+        assert!(scene.zoom(ZoomAction::In, size));
+        assert_eq!(scene.zoom_changes, 1);
+        assert!(scene.zoom_percent() > 100);
+        let icons_after = match scene.layout(size) {
+            ShellLayout::Icons(layout) => layout.item(0).unwrap(),
+            _ => unreachable!(),
+        };
+        assert!(icons_after.icon_rect.width > icons_before.icon_rect.width);
+        assert!(icons_after.item_rect.height > icons_before.item_rect.height);
+
+        assert!(scene.set_view_mode(ShellViewMode::Compact, size));
+        let compact_zoomed = match scene.layout(size) {
+            ShellLayout::Compact(layout) => layout.item(0).unwrap(),
+            _ => unreachable!(),
+        };
+        assert!(scene.zoom(ZoomAction::Reset, size));
+        let compact_reset = match scene.layout(size) {
+            ShellLayout::Compact(layout) => layout.item(0).unwrap(),
+            _ => unreachable!(),
+        };
+        assert!(compact_zoomed.icon_rect.width > compact_reset.icon_rect.width);
+        assert!(compact_zoomed.item_rect.height > compact_reset.item_rect.height);
+
+        assert!(scene.set_view_mode(ShellViewMode::Details, size));
+        let details_before = match scene.layout(size) {
+            ShellLayout::Details(layout) => layout.item(0).unwrap(),
+            _ => unreachable!(),
+        };
+        assert!(scene.zoom(ZoomAction::Out, size));
+        let details_after = match scene.layout(size) {
+            ShellLayout::Details(layout) => layout.item(0).unwrap(),
+            _ => unreachable!(),
+        };
+        assert!(details_after.item_rect.height < details_before.item_rect.height);
+        assert!(details_after.icon_rect.width <= details_before.icon_rect.width);
     }
 
     #[test]

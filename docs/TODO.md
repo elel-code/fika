@@ -100,7 +100,11 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
   hit testing 打开目录，Backspace 或 Alt+Up 加载父目录；Top bar 已有 Back/Forward/Up
   控制，Alt+Left/Alt+Right 走同一有界 history stack，普通新导航只在读取成功后写入
   back stack 并清空 forward history，并在加载新 path 时重置 scroll/selection/rubber-band
-  transient state、刷新 hover、更新窗口标题且立即 present。
+  transient state、刷新 hover、更新窗口标题且立即 present；初版 projection zoom 已由
+  shell-owned retained geometry 驱动，`Ctrl/Meta + +`、`Ctrl/Meta + -` 和 `Ctrl/Meta + 0`
+  调整/重置有界 zoom step，Icons/Compact 更新 item/icon/text slot metrics，Details 更新
+  row/icon metrics，scroll 会被 clamp，focus item 保持可见，icon resolver 按 zoom 后的
+  slot size 请求 raster。
   日志已输出
   `--view icons|compact|details`，默认仍是 Icons baseline，Compact 使用 core
   `CompactLayout`，Details 已有 shell-owned row projection、固定 header 和
@@ -113,7 +117,7 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
   projection。
   日志已输出 view mode、path、entry count、visible count、
   selected/hover/rubber-band state、
-  hit-test/selection/keyboard/rubber-band/view-switch/path-change counters、quad/icon/text/batch count、
+  hit-test/selection/keyboard/rubber-band/view-switch/path-change/zoom counters、quad/icon/text/batch count、
   icon/text cache hit/miss/bytes、layout/icon-resolve/icon-raster/text-raster/render
   reason/time、icon/text atlas bytes 和 `scroll_x` / `scroll_y` offsets；本地目标 desktop
   session 的 `timeout 4s target/debug/fika-wgpu --view icons|compact|details /etc`
@@ -123,8 +127,8 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
 - [~] Phase 1：Compact、Icons 和 Details scene projection 已开始接入。`/etc` 已可通过
   `--view` 在三种模式下渲染首帧；Compact 走 core `CompactLayout`，Details 走 shell-owned
   row projection。滚动、hover、keyboard navigation、directory activation/history navigation、
-  runtime mode switching 和 selection 已通过 shared `ShellLayout` abstraction 走 retained geometry；
-  zoom、`~/Downloads` smoke、手动交互 smoke
+  runtime mode switching、projection zoom 和 selection 已通过 shared `ShellLayout` abstraction 走 retained geometry；
+  glyph-level text zoom policy、`~/Downloads` smoke、手动交互 smoke
   和更完整 Details column/metadata parity 仍待完成。
 - [ ] Phase 2：把 Phase 0 初版 icon atlas 提升为预算化 semantic icon work，并实现 thumbnail texture retention、text shaping cache、glyph atlas policy 和 eviction telemetry。Cold glyph/icon work 必须 visible-first 且预算化。
 - [ ] Phase 3：把剩余 pointer routing、context target selection、directory hover、Places hover 和 drag/drop target lookup 移到 shell-owned hit testing。

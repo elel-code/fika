@@ -151,13 +151,20 @@ Current checkpoint:
   scroll/selection/rubber-band transient state, refreshes hover from retained
   geometry, updates the title, and presents the new scene through the same
   redraw burst path used by view switching.
+- Initial view zoom is shell-owned and retained-geometry driven. `Ctrl/Meta + +`,
+  `Ctrl/Meta + -`, and `Ctrl/Meta + 0` adjust or reset a bounded zoom step.
+  Icons and Compact update item/icon/text slot metrics, Details updates row and
+  icon metrics, scroll is clamped, the focused item is kept visible, and the icon
+  resolver now requests rasters at the zoomed slot size. Glyph-level text sizing
+  and long-lived glyph atlas policy remain Phase 2 work.
 - `[fika-wgpu]` logs include view mode, path, entry count, visible item count,
   quad count, selected count, hovered item index, active rubber-band state,
   hit-test/selection/keyboard navigation/rubber-band/view-switch/path-change
-  counters, icon count, icon cache hit/miss count, icon cache bytes, icon atlas bytes, icon
-  resolve/raster time, text label count, text cache hit/miss count, text cache
-  bytes, text atlas bytes, draw batch count, render reason, layout time, text
-  raster time, render time, and `scroll_x` / `scroll_y` offsets.
+  counters, zoom percent and zoom-change counters, icon count, icon cache
+  hit/miss count, icon cache bytes, icon atlas bytes, icon resolve/raster time,
+  text label count, text cache hit/miss count, text cache bytes, text atlas
+  bytes, draw batch count, render reason, layout time, text raster time, render
+  time, and `scroll_x` / `scroll_y` offsets.
 - Local target-session smokes with `timeout 4s target/debug/fika-wgpu --view
   icons|compact|details /etc` reached `shell-ready` and emitted `frame=1` on
   Vulkan with real icon/text atlas counters. The timeout exits are expected for
@@ -192,8 +199,9 @@ Acceptance:
 
 - [~] `/etc` renders in Compact, Icons, and Details via `--view`; `~/Downloads`
   and manual interaction smokes remain pending.
-- [~] Scroll, hover, keyboard navigation, runtime mode switching, and selection
-  work from retained geometry for the initial projections. Zoom remains pending.
+- [~] Scroll, hover, keyboard navigation, runtime mode switching, projection
+  zoom, and selection work from retained geometry for the initial projections.
+  Glyph-level text zoom policy remains pending.
 - [~] Layout/hit-test/paint share the same shell layout abstraction for Icons,
   Compact, and Details.
 - No synchronous theme scan, MIME magic read, thumbnail decode, or text shaping
