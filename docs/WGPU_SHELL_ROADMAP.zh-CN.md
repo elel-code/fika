@@ -134,21 +134,23 @@ Shell 拥有：
   shell-owned modal，支持 folder/file 选择、plain text name capture、校验、真实
   `create_dir` / `create_new` 文件系统动作、reload，并选中新建条目。Item Rename 现在会
   打开最小 shell-owned modal，支持 plain text name capture、校验、真实 `rename`、
-  reload，并选中重命名后的条目。Move to Trash 现在会把 context target 解析为点击条目
-  或当前 multi-selection，显式拒绝 remote paths，调用 core XDG trash handling，reload
+  reload，并选中重命名后的条目。Directory item 和 blank-directory context menu 现在
+  支持 Add to Places，会写入 Fika `places.xbel`、重建 sidebar projection，并持久化
+  primary place order。Move to Trash 现在会把 context target 解析为点击条目或当前
+  multi-selection，显式拒绝 remote paths，调用 core XDG trash handling，reload
   pane，并清理 stale context state。Cut 和 Paste 会显式拒绝 remote paths。Open With
   chooser/default-application selection、多 MIME `text/uri-list` clipboard export/import、Trash view
   restore/delete/empty flows、undo、更完整 properties、完整 inline rename、完整 Create New
   子菜单/模板和 new-pane dispatch 仍留到 Phase 4。
 - 第一版 shell-owned Places 侧栏已在 top bar 下方绘制。它通过公开 core API 构建
-  Home、已存在的 XDG directories、Trash、Fika user places、Network root、network
-  bookmarks 和 Root，保留 row geometry，用最长路径前缀决定 active place，Places
+  Home、已存在的 XDG directories、Trash、Fika user places、primary
+  `places-order.xml`、Network root、network bookmarks 和 Root，保留 row geometry，用最长路径前缀决定 active place，Places
   hover 与 item hover 分离，并将左键 place navigation 分派到与文件视图相同的
   `load_path`/history path。Places 右键现在会创建 shell-owned place context target，
   并打开最小 context menu，分派 Open、Copy Location、Properties，以及 editable user
   places 的 Remove。Remove 会写回 Fika `places.xbel`，裁剪对应 place-order 条目，
   reload sidebar projection，并清理 stale place context state。动态 devices、更完整
-  Places actions（edit/hide/add bookmark 和 Trash actions）、DnD/drop targets、resize 和
+  Places actions（sidebar add/edit/hide 和 Trash actions）、DnD/drop targets、resize 和
   sidebar scrolling 仍留到 Phase 4。
 - 空白区域左键拖动现在通过同一 retained Icons geometry 执行 rubber-band selection。
   普通拖动替换 selection，Shift 追加，Ctrl/Meta 会相对按下时的 base selection 做

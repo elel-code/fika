@@ -137,13 +137,15 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
   draft，Backspace 编辑，Tab 复用 core `complete_location_input()` 补全，Enter 复用
   core `resolve_location_input()` 并通过 retained navigation/history path 提交，Esc 取消；
   第一版 shell-owned Places 侧栏已在 top bar 下方绘制，通过公开 core API 构建
-  Home、已存在的 XDG directories、Trash、Fika user places、Network root、network
-  bookmarks 和 Root，保留 row geometry，用最长路径前缀决定 active place，Places hover
-  与 item hover 分离，并将左键 place navigation 分派到同一 `load_path`/history path；
-  Places 右键现在会创建 shell-owned place context target，并打开最小 context menu，
-  分派 Open、Copy Location、Properties，以及 editable user places 的 Remove；Remove
-  会写回 Fika `places.xbel`，裁剪对应 place-order 条目，reload sidebar projection，并
-  清理 stale place context state。
+  Home、已存在的 XDG directories、Trash、Fika user places、primary
+  `places-order.xml`、Network root、network bookmarks 和 Root，保留 row geometry，用
+  最长路径前缀决定 active place，Places hover 与 item hover 分离，并将左键 place
+  navigation 分派到同一 `load_path`/history path；directory item 和 blank-directory
+  context menu 现在支持 Add to Places，会写回 Fika `places.xbel`、reload sidebar
+  projection，并持久化 primary place order；Places 右键现在会创建 shell-owned place
+  context target，并打开最小 context menu，分派 Open、Copy Location、Properties，以及
+  editable user places 的 Remove；Remove 会写回 Fika `places.xbel`，裁剪对应
+  place-order 条目，reload sidebar projection，并清理 stale place context state。
   日志已输出
   `--view icons|compact|details`，默认仍是 Icons baseline，Compact 使用 core
   `CompactLayout`，Details 已有 shell-owned row projection、固定 header 和

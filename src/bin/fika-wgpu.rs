@@ -939,6 +939,7 @@ impl FikaWgpuApp {
                     window.request_redraw();
                 }
             }
+            ShellContextMenuAction::AddToPlaces => self.add_context_target_to_places(event_loop),
             ShellContextMenuAction::RemovePlace => self.remove_context_place(event_loop),
             ShellContextMenuAction::MoveToTrash => self.move_context_target_to_trash(event_loop),
             ShellContextMenuAction::Copy | ShellContextMenuAction::Cut => {
@@ -998,6 +999,29 @@ impl FikaWgpuApp {
                         .map(ShellContextTarget::kind)
                         .unwrap_or("none")
                 );
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+            }
+        }
+    }
+
+    fn add_context_target_to_places(&mut self, event_loop: &dyn ActiveEventLoop) {
+        let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
+            return;
+        };
+        match self
+            .scene
+            .add_context_target_to_places(&default_user_places_path(), size)
+        {
+            Ok(true) => self.present_scene_change(event_loop, "add-place"),
+            Ok(false) => {
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+            }
+            Err(error) => {
+                eprintln!("[fika-wgpu] add-place-error {error}");
                 if let Some(window) = self.window.as_ref() {
                     window.request_redraw();
                 }
@@ -2060,6 +2084,7 @@ enum ShellContextMenuAction {
     CopyLocation,
     Rename,
     MoveToTrash,
+    AddToPlaces,
     CreateNew,
     Paste,
     SelectAll,
@@ -2078,6 +2103,7 @@ impl ShellContextMenuAction {
             Self::CopyLocation => "Copy Location",
             Self::Rename => "Rename",
             Self::MoveToTrash => "Move to Trash",
+            Self::AddToPlaces => "Add to Places",
             Self::CreateNew => "Create New",
             Self::Paste => "Paste",
             Self::SelectAll => "Select All",
@@ -2096,6 +2122,7 @@ impl ShellContextMenuAction {
             Self::CopyLocation => "copy-location",
             Self::Rename => "rename",
             Self::MoveToTrash => "move-to-trash",
+            Self::AddToPlaces => "add-to-places",
             Self::CreateNew => "create-new",
             Self::Paste => "paste",
             Self::SelectAll => "select-all",
@@ -2124,7 +2151,7 @@ impl ShellContextMenu {
 }
 
 fn context_menu_actions(target: &ShellContextTarget) -> &'static [ShellContextMenuAction] {
-    const ITEM_ACTIONS: &[ShellContextMenuAction] = &[
+    const ITEM_FILE_ACTIONS: &[ShellContextMenuAction] = &[
         ShellContextMenuAction::Open,
         ShellContextMenuAction::OpenInNewPane,
         ShellContextMenuAction::Copy,
@@ -2134,8 +2161,20 @@ fn context_menu_actions(target: &ShellContextTarget) -> &'static [ShellContextMe
         ShellContextMenuAction::MoveToTrash,
         ShellContextMenuAction::Properties,
     ];
+    const ITEM_DIR_ACTIONS: &[ShellContextMenuAction] = &[
+        ShellContextMenuAction::Open,
+        ShellContextMenuAction::OpenInNewPane,
+        ShellContextMenuAction::AddToPlaces,
+        ShellContextMenuAction::Copy,
+        ShellContextMenuAction::Cut,
+        ShellContextMenuAction::CopyLocation,
+        ShellContextMenuAction::Rename,
+        ShellContextMenuAction::MoveToTrash,
+        ShellContextMenuAction::Properties,
+    ];
     const BLANK_ACTIONS: &[ShellContextMenuAction] = &[
         ShellContextMenuAction::CreateNew,
+        ShellContextMenuAction::AddToPlaces,
         ShellContextMenuAction::Paste,
         ShellContextMenuAction::SelectAll,
         ShellContextMenuAction::Refresh,
@@ -2153,7 +2192,8 @@ fn context_menu_actions(target: &ShellContextTarget) -> &'static [ShellContextMe
         ShellContextMenuAction::Properties,
     ];
     match target {
-        ShellContextTarget::Item { .. } => ITEM_ACTIONS,
+        ShellContextTarget::Item { is_dir: true, .. } => ITEM_DIR_ACTIONS,
+        ShellContextTarget::Item { .. } => ITEM_FILE_ACTIONS,
         ShellContextTarget::Blank { .. } => BLANK_ACTIONS,
         ShellContextTarget::Place { editable: true, .. } => EDITABLE_PLACE_ACTIONS,
         ShellContextTarget::Place { .. } => PLACE_ACTIONS,
@@ -3374,6 +3414,67 @@ impl ShellScene {
             request.text,
             self.copy_location_changes
         );
+    }
+
+    fn context_target_add_place_candidate(&self) -> Result<(String, PathBuf), String> {
+        match self.context_target.as_ref() {
+            Some(ShellContextTarget::Item {
+                path, is_dir: true, ..
+            })
+            | Some(ShellContextTarget::Blank { path }) => {
+                Ok((default_shell_place_label(path), path.clone()))
+            }
+            Some(ShellContextTarget::Item { is_dir: false, .. }) => {
+                Err("only directories can be added to Places".to_string())
+            }
+            Some(ShellContextTarget::Place { .. }) => {
+                Err("place context targets cannot be added to Places".to_string())
+            }
+            None => Err("no context target to add to Places".to_string()),
+        }
+    }
+
+    fn add_context_target_to_places(
+        &mut self,
+        user_places_path: &Path,
+        size: PhysicalSize<u32>,
+    ) -> Result<bool, String> {
+        let (label, path) = self.context_target_add_place_candidate()?;
+        if self.places.iter().any(|place| place.path == path) {
+            eprintln!(
+                "[fika-wgpu] add-place label={:?} path={} added=0 duplicate=1 changes={}",
+                label,
+                path.display(),
+                self.places_changes
+            );
+            return Ok(false);
+        }
+        if !add_user_place_at_path(user_places_path, &path, label.clone())? {
+            eprintln!(
+                "[fika-wgpu] add-place label={:?} path={} added=0 duplicate=1 changes={}",
+                label,
+                path.display(),
+                self.places_changes
+            );
+            return Ok(false);
+        }
+
+        self.places = build_shell_places_from(user_places_path);
+        save_shell_primary_place_order(user_places_path, &self.places)?;
+        self.context_target = None;
+        self.context_menu = None;
+        self.properties_overlay = None;
+        self.rubber_band = None;
+        self.places_changes += 1;
+        self.refresh_hover(size);
+        eprintln!(
+            "[fika-wgpu] add-place label={:?} path={} added=1 places={} changes={}",
+            label,
+            path.display(),
+            self.places.len(),
+            self.places_changes
+        );
+        Ok(true)
     }
 
     fn remove_context_place(
@@ -9180,6 +9281,9 @@ fn build_shell_places_from(user_places_path: &Path) -> Vec<ShellPlace> {
             push_user_shell_place(&mut places, "", place);
         }
     }
+    let place_order_path = place_order_path_for_user_places_path(user_places_path);
+    let place_order = load_place_order(&place_order_path).unwrap_or_default();
+    apply_primary_shell_place_order(&mut places, &place_order);
 
     push_shell_place(
         &mut places,
@@ -9203,6 +9307,63 @@ fn build_shell_places_from(user_places_path: &Path) -> Vec<ShellPlace> {
     places
 }
 
+fn apply_primary_shell_place_order(places: &mut Vec<ShellPlace>, order: &[PathBuf]) {
+    if order.is_empty() {
+        return;
+    }
+
+    let first_grouped = places
+        .iter()
+        .position(|place| !place.group.is_empty())
+        .unwrap_or(places.len());
+    let mut primary_places = places.drain(..first_grouped).collect::<Vec<_>>();
+    let mut ordered_places = Vec::with_capacity(primary_places.len());
+
+    for path in order {
+        if let Some(index) = primary_places
+            .iter()
+            .position(|place| place.path.as_path() == path.as_path())
+        {
+            ordered_places.push(primary_places.remove(index));
+        }
+    }
+    ordered_places.append(&mut primary_places);
+    places.splice(0..0, ordered_places);
+}
+
+fn save_shell_primary_place_order(
+    user_places_path: &Path,
+    places: &[ShellPlace],
+) -> Result<(), String> {
+    let order = places
+        .iter()
+        .filter(|place| place.group.is_empty())
+        .map(|place| place.path.clone())
+        .collect::<Vec<_>>();
+    save_place_order(
+        &place_order_path_for_user_places_path(user_places_path),
+        &order,
+    )
+}
+
+fn add_user_place_at_path(
+    user_places_path: &Path,
+    path: &Path,
+    label: String,
+) -> Result<bool, String> {
+    let label = label.trim();
+    if label.is_empty() {
+        return Err("place label cannot be empty".to_string());
+    }
+    let mut places = load_user_places(user_places_path)?;
+    if places.iter().any(|place| place.path.as_path() == path) {
+        return Ok(false);
+    }
+    places.push(UserPlace::new(label.to_string(), path.to_path_buf()));
+    save_user_places(user_places_path, &places)?;
+    Ok(true)
+}
+
 fn remove_user_place_at_path(user_places_path: &Path, path: &Path) -> Result<bool, String> {
     let mut places = load_user_places(user_places_path)?;
     let old_len = places.len();
@@ -9220,6 +9381,14 @@ fn remove_user_place_at_path(user_places_path: &Path, path: &Path) -> Result<boo
         save_place_order(&order_path, &order)?;
     }
     Ok(true)
+}
+
+fn default_shell_place_label(path: &Path) -> String {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| path.display().to_string())
 }
 
 fn push_existing_shell_place(
@@ -9574,6 +9743,134 @@ mod tests {
             scene.activate_or_close_context_menu(remove_row, size),
             Some(ShellContextMenuAction::RemovePlace)
         );
+    }
+
+    #[test]
+    fn directory_context_menu_includes_add_to_places_action() {
+        let folder_target = ShellContextTarget::Item {
+            index: 0,
+            path: PathBuf::from("/tmp/folder"),
+            is_dir: true,
+            selection_count: 1,
+        };
+        assert!(
+            context_menu_actions(&folder_target).contains(&ShellContextMenuAction::AddToPlaces)
+        );
+
+        let file_target = ShellContextTarget::Item {
+            index: 0,
+            path: PathBuf::from("/tmp/plain.txt"),
+            is_dir: false,
+            selection_count: 1,
+        };
+        assert!(!context_menu_actions(&file_target).contains(&ShellContextMenuAction::AddToPlaces));
+
+        let blank_target = ShellContextTarget::Blank {
+            path: PathBuf::from("/tmp"),
+        };
+        assert!(context_menu_actions(&blank_target).contains(&ShellContextMenuAction::AddToPlaces));
+    }
+
+    #[test]
+    fn build_shell_places_applies_persistent_primary_order() {
+        let root = test_dir("build-shell-places-order");
+        let places_path = root.join("places.xbel");
+        let alpha = root.join("alpha");
+        let beta = root.join("beta");
+        fs::create_dir_all(&alpha).unwrap();
+        fs::create_dir_all(&beta).unwrap();
+        save_user_places(
+            &places_path,
+            &[
+                UserPlace::new("Alpha".to_string(), alpha.clone()),
+                UserPlace::new("Beta".to_string(), beta.clone()),
+            ],
+        )
+        .unwrap();
+        save_place_order(
+            &place_order_path_for_user_places_path(&places_path),
+            &[beta.clone(), alpha.clone()],
+        )
+        .unwrap();
+
+        let places = build_shell_places_from(&places_path);
+        let beta_index = places
+            .iter()
+            .position(|place| place.path == beta)
+            .expect("beta place should be loaded");
+        let alpha_index = places
+            .iter()
+            .position(|place| place.path == alpha)
+            .expect("alpha place should be loaded");
+
+        assert!(beta_index < alpha_index);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn add_user_place_at_path_updates_xbel_and_rejects_duplicates() {
+        let root = test_dir("add-user-place");
+        let places_path = root.join("places.xbel");
+        let target = root.join("project");
+        fs::create_dir_all(&target).unwrap();
+
+        assert!(add_user_place_at_path(&places_path, &target, "Project".to_string()).unwrap());
+        assert_eq!(
+            load_user_places(&places_path).unwrap(),
+            vec![UserPlace::new("Project".to_string(), target.clone())]
+        );
+        assert!(!add_user_place_at_path(&places_path, &target, "Again".to_string()).unwrap());
+        assert_eq!(
+            load_user_places(&places_path).unwrap(),
+            vec![UserPlace::new("Project".to_string(), target.clone())]
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn add_context_target_to_places_reloads_places_and_persists_order() {
+        let root = test_dir("add-context-place");
+        let places_path = root.join("places.xbel");
+        let project = root.join("project");
+        fs::create_dir_all(&project).unwrap();
+        let size = PhysicalSize::new(700, 320);
+        let mut scene = test_scene(Vec::new(), ShellViewMode::Icons);
+        scene.context_target = Some(ShellContextTarget::Blank {
+            path: project.clone(),
+        });
+        scene.context_menu = Some(ShellContextMenu::new(
+            scene.context_target.clone().unwrap(),
+            ViewPoint { x: 8.0, y: 8.0 },
+        ));
+        scene.properties_overlay = Some(ShellPropertiesOverlay {
+            title: "stale".to_string(),
+            rows: Vec::new(),
+        });
+
+        assert!(
+            scene
+                .add_context_target_to_places(&places_path, size)
+                .unwrap()
+        );
+        assert!(scene.places.iter().any(|place| place.path == project));
+        assert!(scene.context_target.is_none());
+        assert!(scene.context_menu.is_none());
+        assert!(scene.properties_overlay.is_none());
+        assert_eq!(scene.places_changes, 1);
+        assert_eq!(
+            load_user_places(&places_path).unwrap(),
+            vec![UserPlace::new("project".to_string(), project.clone())]
+        );
+        assert!(
+            load_place_order(&place_order_path_for_user_places_path(&places_path))
+                .unwrap()
+                .iter()
+                .any(|path| path == &project)
+        );
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -9933,7 +10230,7 @@ mod tests {
         let rect = context_menu_rect(scene.context_menu.as_ref().unwrap(), size);
         let select_all_row = ViewPoint {
             x: rect.x + 8.0,
-            y: rect.y + CONTEXT_MENU_ROW_HEIGHT * 2.0 + 8.0,
+            y: rect.y + CONTEXT_MENU_ROW_HEIGHT * 3.0 + 8.0,
         };
         assert_eq!(
             scene.activate_or_close_context_menu(select_all_row, size),
@@ -9945,7 +10242,7 @@ mod tests {
         let rect = context_menu_rect(scene.context_menu.as_ref().unwrap(), size);
         let refresh_row = ViewPoint {
             x: rect.x + 8.0,
-            y: rect.y + CONTEXT_MENU_ROW_HEIGHT * 3.0 + 8.0,
+            y: rect.y + CONTEXT_MENU_ROW_HEIGHT * 4.0 + 8.0,
         };
         assert_eq!(
             scene.activate_or_close_context_menu(refresh_row, size),
