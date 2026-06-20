@@ -17,6 +17,7 @@ use crate::FikaApp;
 use crate::ui::drag_drop::ItemDropTarget;
 use crate::ui::icons::{FileIconSnapshot, file_icon_resolve_results_for_requests};
 use crate::ui::rename::RenameDraft;
+use crate::ui::retained::RetainedImageRequest;
 use fika_core::{
     FilteredModel, Generation, MAX_ZOOM_LEVEL, MIN_ZOOM_LEVEL, MetadataRoleResult, PaneId,
     ThumbnailProbeResult, ViewMode, ViewState, apply_metadata_role_result_to_model,
@@ -63,6 +64,10 @@ pub(crate) struct PaneFileGridRenderFrame {
 }
 
 impl PaneFileGridRenderFrame {
+    pub(crate) fn allows_theme_icon_read_ahead_prewarm(&self) -> bool {
+        matches!(self.item_view_perf_phase, Some(ItemViewPerfPhase::Steady))
+    }
+
     pub(crate) fn emit_perf_log(&self, pane_id: PaneId, mode: ViewMode, total_elapsed: Duration) {
         emit_item_view_perf_log(ItemViewPerfLogFrame {
             pane_id,
@@ -250,7 +255,7 @@ impl FikaApp {
         file_icon_size: f32,
         view_mode: ViewMode,
         item_count: usize,
-        perf_enabled: bool,
+        _perf_enabled: bool,
     ) -> RetainedFileGridFrame {
         let visible_count = raw_file_grid
             .visible_layout_range_and_count()
@@ -264,17 +269,13 @@ impl FikaApp {
             file_icon_size,
         );
         let item_paint_slot_stats = projection.slot_stats;
-        let item_view_perf_phase = if perf_enabled {
-            Some(self.record_item_view_perf_frame(
-                pane_id,
-                view_mode,
-                item_count,
-                visible_count,
-                item_paint_slot_stats,
-            ))
-        } else {
-            None
-        };
+        let item_view_perf_phase = Some(self.record_item_view_perf_frame(
+            pane_id,
+            view_mode,
+            item_count,
+            visible_count,
+            item_paint_slot_stats,
+        ));
 
         RetainedFileGridFrame {
             file_grid: projection.snapshot,
@@ -296,6 +297,7 @@ impl FikaApp {
         rename_draft: Option<&RenameDraft>,
         item_drop_target: Option<&ItemDropTarget>,
         metadata_budget: Duration,
+        scale_factor: f32,
         perf_enabled: bool,
         cx: &mut Context<Self>,
     ) -> Option<PaneFileGridRenderFrame> {
@@ -334,6 +336,12 @@ impl FikaApp {
             perf_enabled,
             cx,
         )?;
+        self.queue_file_grid_theme_icon_prewarm_requests_for_raw_grid(
+            &raw_file_grid,
+            file_icon_size,
+            &file_icon_resolve_sizes,
+            scale_factor,
+        );
 
         let convert_started = perf_enabled.then(Instant::now);
         let retained_file_grid_frame = self.project_retained_file_grid_frame_for_pane(
@@ -442,6 +450,77 @@ impl FikaApp {
             self.invalidate_file_grid_visible_snapshot_cache(pane_id);
         }
         stats
+    }
+
+    pub(crate) fn queue_file_grid_theme_icon_prewarm_requests_for_raw_grid(
+        &mut self,
+        raw_file_grid: &RawFileGridSnapshot,
+        file_icon_size: f32,
+        file_icon_resolve_sizes: &[f32],
+        scale_factor: f32,
+    ) {
+        let icon_size_px = file_icon_size.round().clamp(1.0, 1024.0) as u32;
+        raw_file_grid.for_each_visible_file_icon_resolve_candidate(file_icon_size, |request| {
+            let icon = self.icon_snapshot_for_model_item(
+                request.path,
+                request.is_dir,
+                request.mime_type.clone(),
+                request.mime_magic_checked,
+                request.icon_size,
+            );
+            if let Some(request) =
+                RetainedImageRequest::theme_icon_for_snapshot(&icon, icon_size_px, scale_factor)
+            {
+                self.pending_theme_icon_prewarm_requests.push(request);
+            }
+            true
+        });
+        for prewarm_size in file_icon_resolve_sizes
+            .iter()
+            .filter(|prewarm_size| (**prewarm_size - file_icon_size).abs() >= f32::EPSILON)
+        {
+            let icon_size_px = prewarm_size.round().clamp(1.0, 1024.0) as u32;
+            raw_file_grid.for_each_visible_file_icon_resolve_candidate(*prewarm_size, |request| {
+                let icon = self.icon_snapshot_for_model_item(
+                    request.path,
+                    request.is_dir,
+                    request.mime_type.clone(),
+                    request.mime_magic_checked,
+                    request.icon_size,
+                );
+                if let Some(request) =
+                    RetainedImageRequest::theme_icon_for_snapshot(&icon, icon_size_px, scale_factor)
+                {
+                    self.priority_deferred_theme_icon_prewarm_requests
+                        .push(request);
+                }
+                true
+            });
+        }
+        for prewarm_size in file_icon_resolve_sizes {
+            let icon_size_px = prewarm_size.round().clamp(1.0, 1024.0) as u32;
+            let current_icon_size = (*prewarm_size - file_icon_size).abs() < f32::EPSILON;
+            raw_file_grid.for_each_dolphin_file_icon_resolve_candidate(*prewarm_size, |request| {
+                let icon = self.icon_snapshot_for_model_item(
+                    request.path,
+                    request.is_dir,
+                    request.mime_type.clone(),
+                    request.mime_magic_checked,
+                    request.icon_size,
+                );
+                if let Some(request) =
+                    RetainedImageRequest::theme_icon_for_snapshot(&icon, icon_size_px, scale_factor)
+                {
+                    if current_icon_size {
+                        self.priority_deferred_theme_icon_prewarm_requests
+                            .push(request);
+                    } else {
+                        self.deferred_theme_icon_prewarm_requests.push(request);
+                    }
+                }
+                true
+            });
+        }
     }
 
     pub(crate) fn finish_metadata_role_results(
@@ -635,21 +714,6 @@ impl FikaApp {
         perf_enabled: bool,
         cx: &mut Context<Self>,
     ) -> Option<FileGridVisibleWorkFrame> {
-        let queue_started = perf_enabled.then(Instant::now);
-        let queued_file_grid_model_work = self.queue_file_grid_model_work_for_raw_grid(
-            pane_id,
-            generation,
-            view_mode,
-            model_data_generation,
-            source_revision,
-            item_count,
-            raw_file_grid,
-            file_icon_size,
-            file_icon_resolve_sizes,
-            filtered,
-        )?;
-        let queue_elapsed = queue_started.map(|started| started.elapsed());
-
         let icon_sync_started = perf_enabled.then(Instant::now);
         let icon_sync_stats =
             self.resolve_visible_file_icons_for_raw_grid(pane_id, raw_file_grid, file_icon_size);
@@ -670,6 +734,21 @@ impl FikaApp {
                 elapsed.as_micros(),
             );
         }
+
+        let queue_started = perf_enabled.then(Instant::now);
+        let queued_file_grid_model_work = self.queue_file_grid_model_work_for_raw_grid(
+            pane_id,
+            generation,
+            view_mode,
+            model_data_generation,
+            source_revision,
+            item_count,
+            raw_file_grid,
+            file_icon_size,
+            file_icon_resolve_sizes,
+            filtered,
+        )?;
+        let queue_elapsed = queue_started.map(|started| started.elapsed());
 
         self.start_queued_file_grid_model_work(queued_file_grid_model_work, cx);
 

@@ -7,11 +7,17 @@ use fika_core::{
     metadata_role_result_for_request, mime_magic_resolution_required,
 };
 
+use crate::ui::retained::visit_dolphin_visible_work_files_first;
+
 use super::RawFileGridSnapshot;
 
 impl RawFileGridSnapshot {
     pub(crate) fn visible_metadata_role_candidates(&self) -> Vec<MetadataRoleCandidate> {
         visible_metadata_role_candidates(self)
+    }
+
+    pub(crate) fn dolphin_metadata_role_candidates(&self) -> Vec<MetadataRoleCandidate> {
+        dolphin_metadata_role_candidates(self)
     }
 }
 
@@ -117,6 +123,34 @@ fn visible_metadata_role_candidates(
     }
 }
 
+fn dolphin_metadata_role_candidates(
+    raw_file_grid: &RawFileGridSnapshot,
+) -> Vec<MetadataRoleCandidate> {
+    match raw_file_grid {
+        RawFileGridSnapshot::Compact { items, .. } | RawFileGridSnapshot::Icons { items, .. } => {
+            let visible_range = raw_file_grid
+                .visible_layout_range_and_count()
+                .map(|(range, _)| range);
+            let mut candidates = Vec::new();
+            visit_dolphin_visible_work_files_first(
+                items,
+                visible_range,
+                |item| item.visible,
+                |item| item.layout.model_index,
+                |item| item.is_dir,
+                |item| {
+                    if let Some(candidate) = metadata_role_candidate_for_item(item) {
+                        candidates.push(candidate);
+                    }
+                    true
+                },
+            );
+            candidates
+        }
+        RawFileGridSnapshot::Details { items, .. } => metadata_role_candidates_for_items(items),
+    }
+}
+
 fn metadata_role_candidates_for_items<'a, T>(
     items: impl IntoIterator<Item = &'a T>,
 ) -> Vec<MetadataRoleCandidate>
@@ -125,23 +159,28 @@ where
 {
     items
         .into_iter()
-        .filter(|item| {
-            metadata_role_update_needed(
-                item.is_dir(),
-                item.size_bytes(),
-                item.mime_type().map(Arc::as_ref),
-                item.mime_magic_checked(),
-            )
-        })
-        .map(|item| MetadataRoleCandidate {
-            item_id: item.item_id(),
-            path: item.path().clone(),
-            size_bytes: item.size_bytes(),
-            modified_secs: item.modified_secs(),
-            mime_type: item.mime_type().map(|mime| mime.to_string()),
-            mime_magic_checked: item.mime_magic_checked(),
-        })
+        .filter_map(metadata_role_candidate_for_item)
         .collect()
+}
+
+fn metadata_role_candidate_for_item<T>(item: &T) -> Option<MetadataRoleCandidate>
+where
+    T: MetadataRoleCandidateSource,
+{
+    metadata_role_update_needed(
+        item.is_dir(),
+        item.size_bytes(),
+        item.mime_type().map(Arc::as_ref),
+        item.mime_magic_checked(),
+    )
+    .then(|| MetadataRoleCandidate {
+        item_id: item.item_id(),
+        path: item.path().clone(),
+        size_bytes: item.size_bytes(),
+        modified_secs: item.modified_secs(),
+        mime_type: item.mime_type().map(|mime| mime.to_string()),
+        mime_magic_checked: item.mime_magic_checked(),
+    })
 }
 
 fn metadata_role_update_needed(

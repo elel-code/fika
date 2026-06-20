@@ -28,7 +28,8 @@ impl PaneVisibleWorkKey {
         raw_file_grid: &RawFileGridSnapshot,
     ) -> Self {
         let (visible_range, visible_count) = raw_file_grid
-            .visible_work_range_and_count()
+            .visible_layout_range_and_count()
+            .or_else(|| raw_file_grid.visible_work_range_and_count())
             .unwrap_or((0..0, 0));
         Self {
             generation,

@@ -3,32 +3,6 @@ use std::ops::Range;
 const DOLPHIN_READ_AHEAD_PAGES: usize = 5;
 const DOLPHIN_RESOLVE_ALL_ITEMS_LIMIT: usize = 500;
 
-pub(crate) fn visible_work_range(
-    visible_range: Range<usize>,
-    item_count: usize,
-    read_ahead_pages: usize,
-    max_work_items: usize,
-) -> Range<usize> {
-    if item_count == 0 || visible_range.is_empty() {
-        return 0..0;
-    }
-
-    let visible_start = visible_range.start.min(item_count);
-    let visible_end = visible_range.end.min(item_count).max(visible_start);
-    if visible_start >= visible_end {
-        return 0..0;
-    }
-
-    let visible_count = visible_end - visible_start;
-    let max_extra_each_side = max_work_items
-        .saturating_sub(visible_count)
-        .saturating_div(2);
-    let read_ahead = visible_count
-        .saturating_mul(read_ahead_pages)
-        .min(max_extra_each_side);
-    visible_start.saturating_sub(read_ahead)..(visible_end + read_ahead).min(item_count)
-}
-
 pub(crate) fn dolphin_read_ahead_indexes(
     visible_indexes: Range<usize>,
     item_count: usize,
@@ -136,6 +110,51 @@ impl Iterator for DolphinReadAheadIndexes {
 
 impl ExactSizeIterator for DolphinReadAheadIndexes {}
 
+pub(crate) fn dolphin_visible_work_indexes(
+    visible_indexes: Range<usize>,
+    item_count: usize,
+    maximum_visible_items: usize,
+) -> Vec<usize> {
+    if item_count == 0 || visible_indexes.is_empty() {
+        return Vec::new();
+    }
+
+    let visible_start = visible_indexes.start.min(item_count);
+    let visible_end = visible_indexes.end.min(item_count).max(visible_start);
+    if visible_start >= visible_end {
+        return Vec::new();
+    }
+
+    let maximum_visible_items = maximum_visible_items.max(1);
+    let mut result = (visible_start..visible_end).collect::<Vec<_>>();
+    let read_ahead_items =
+        (DOLPHIN_READ_AHEAD_PAGES * maximum_visible_items).min(DOLPHIN_RESOLVE_ALL_ITEMS_LIMIT / 2);
+    let last_visible = visible_end - 1;
+    let end_extended = (last_visible + read_ahead_items).min(item_count - 1);
+    result.extend(visible_end..end_extended + 1);
+
+    let begin_extended = visible_start.saturating_sub(read_ahead_items);
+    result.extend((begin_extended..visible_start).rev());
+
+    let begin_last_page = (end_extended + 1).max(item_count.saturating_sub(maximum_visible_items));
+    result.extend(begin_last_page..item_count);
+
+    let end_first_page = begin_extended.min(maximum_visible_items);
+    result.extend(0..end_first_page);
+
+    let mut remaining = DOLPHIN_RESOLVE_ALL_ITEMS_LIMIT.saturating_sub(result.len());
+    let rest_after_start = end_extended + 1;
+    let rest_after_end = begin_last_page;
+    let rest_after_len = rest_after_end
+        .saturating_sub(rest_after_start)
+        .min(remaining);
+    result.extend((rest_after_start..rest_after_end).take(rest_after_len));
+    remaining = remaining.saturating_sub(rest_after_len);
+
+    result.extend((end_first_page..begin_extended).rev().take(remaining));
+    result
+}
+
 pub(crate) fn visit_visible_work_items_by_index<T, IsVisible, Visit>(
     items: &[T],
     mut is_visible: IsVisible,
@@ -213,14 +232,6 @@ mod tests {
     }
 
     #[test]
-    fn visible_work_range_adds_bounded_read_ahead_around_visible_range() {
-        assert_eq!(visible_work_range(10..20, 100, 2, 100), 0..40);
-        assert_eq!(visible_work_range(50..60, 200, 2, 30), 40..70);
-        assert_eq!(visible_work_range(0..0, 100, 2, 100), 0..0);
-        assert_eq!(visible_work_range(0..5, 0, 2, 100), 0..0);
-    }
-
-    #[test]
     fn dolphin_read_ahead_indexes_follow_roles_updater_order() {
         assert_eq!(
             dolphin_read_ahead_indexes(10..20, 100, 10).collect::<Vec<_>>(),
@@ -240,6 +251,24 @@ mod tests {
         );
         assert_eq!(dolphin_read_ahead_indexes(0..0, 10, 2).len(), 0);
         assert_eq!(dolphin_read_ahead_indexes(0..2, 0, 2).len(), 0);
+    }
+
+    #[test]
+    fn dolphin_visible_work_indexes_include_visible_then_read_ahead() {
+        assert_eq!(
+            dolphin_visible_work_indexes(10..20, 100, 10),
+            (10..20)
+                .chain(20..=69)
+                .chain((0..10).rev())
+                .chain(90..100)
+                .chain(70..90)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            dolphin_visible_work_indexes(0..2, 5, 2),
+            vec![0, 1, 2, 3, 4]
+        );
+        assert!(dolphin_visible_work_indexes(0..0, 10, 2).is_empty());
     }
 
     #[test]

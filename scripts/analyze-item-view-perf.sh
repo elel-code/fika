@@ -575,12 +575,16 @@ BEGIN {
     image_cache_refresh_decoded += field("decoded") + 0
     image_cache_refresh_missing += field("missing") + 0
     image_cache_refresh_non_svg += field("non_svg") + 0
+    image_cache_refresh_evicted += field("evicted") + 0
     max_assign(single_max, "image_cache_refresh_requested", field("requested") + 0)
     max_assign(single_max, "image_cache_refresh_retained", field("retained") + 0)
     max_assign(single_max, "image_cache_refresh_loaded", field("loaded") + 0)
     max_assign(single_max, "image_cache_refresh_decoded", field("decoded") + 0)
     max_assign(single_max, "image_cache_refresh_missing", field("missing") + 0)
     max_assign(single_max, "image_cache_refresh_non_svg", field("non_svg") + 0)
+    max_assign(single_max, "image_cache_refresh_entries", field("entries") + 0)
+    max_assign(single_max, "image_cache_refresh_bytes", field("bytes") + 0)
+    max_assign(single_max, "image_cache_refresh_evicted", field("evicted") + 0)
     max_assign(single_max, "image_cache_refresh_total", us_field("total"))
 }
 
@@ -901,6 +905,10 @@ END {
         " max_decoded=" (("image_cache_refresh_decoded" in single_max) ? single_max["image_cache_refresh_decoded"] : 0) \
         " max_missing=" (("image_cache_refresh_missing" in single_max) ? single_max["image_cache_refresh_missing"] : 0) \
         " max_non_svg=" (("image_cache_refresh_non_svg" in single_max) ? single_max["image_cache_refresh_non_svg"] : 0) \
+        " evicted=" (image_cache_refresh_evicted + 0) \
+        " max_entries=" (("image_cache_refresh_entries" in single_max) ? single_max["image_cache_refresh_entries"] : 0) \
+        " max_bytes=" (("image_cache_refresh_bytes" in single_max) ? single_max["image_cache_refresh_bytes"] : 0) \
+        " max_evicted=" (("image_cache_refresh_evicted" in single_max) ? single_max["image_cache_refresh_evicted"] : 0) \
         " max_total=" (("image_cache_refresh_total" in single_max) ? single_max["image_cache_refresh_total"] : 0) "us"
     print "  image_sources: theme_loaded=" (image_theme_loaded + 0) \
         " theme_decoded=" (image_theme_decoded + 0) \

@@ -17,12 +17,9 @@ use super::{
 };
 use crate::ui::drag_drop::{ItemDropTarget, item_drop_target_matches_directory};
 use crate::ui::rename::RenameDraft;
-use crate::ui::retained::visible_work_range;
+use crate::ui::retained::dolphin_visible_work_indexes;
 
 use fika_core::{DirectoryModel, FilteredModel, ItemLayout, PaneId, SelectionState, ViewMode};
-
-const ITEM_VIEW_WORK_READ_AHEAD_PAGES: usize = 2;
-const ITEM_VIEW_MAX_WORK_ITEMS: usize = 100;
 
 pub(crate) fn raw_file_grid_snapshot(input: RawFileGridSnapshotInput<'_>) -> RawFileGridSnapshot {
     let RawFileGridSnapshotInput {
@@ -61,9 +58,10 @@ pub(crate) fn raw_file_grid_snapshot(input: RawFileGridSnapshotInput<'_>) -> Raw
             let viewport = layout.viewport_rect();
             let work_range = visible_range
                 .as_ref()
-                .map(|range| item_view_work_range(range.clone(), item_count))
-                .unwrap_or(0..0);
+                .map(|range| item_view_work_indexes(range.clone(), item_count))
+                .unwrap_or_default();
             let items = work_range
+                .into_iter()
                 .filter_map(|layout_index| {
                     let model_index = model_index_for_layout_index(filtered, layout_index)?;
                     let entry = model.get(model_index)?;
@@ -94,9 +92,10 @@ pub(crate) fn raw_file_grid_snapshot(input: RawFileGridSnapshotInput<'_>) -> Raw
             let viewport = layout.viewport_rect();
             let work_range = visible_range
                 .as_ref()
-                .map(|range| item_view_work_range(range.clone(), item_count))
-                .unwrap_or(0..0);
+                .map(|range| item_view_work_indexes(range.clone(), item_count))
+                .unwrap_or_default();
             let items = work_range
+                .into_iter()
                 .filter_map(|layout_index| {
                     let model_index = model_index_for_layout_index(filtered, layout_index)?;
                     let entry = model.get(model_index)?;
@@ -235,11 +234,6 @@ fn visible_layout_index_range(items: impl IntoIterator<Item = ItemLayout>) -> Op
     Some(start..end + 1)
 }
 
-fn item_view_work_range(visible_range: Range<usize>, item_count: usize) -> Range<usize> {
-    visible_work_range(
-        visible_range,
-        item_count,
-        ITEM_VIEW_WORK_READ_AHEAD_PAGES,
-        ITEM_VIEW_MAX_WORK_ITEMS,
-    )
+fn item_view_work_indexes(visible_range: Range<usize>, item_count: usize) -> Vec<usize> {
+    dolphin_visible_work_indexes(visible_range.clone(), item_count, visible_range.len())
 }

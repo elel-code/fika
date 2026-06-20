@@ -1,11 +1,9 @@
-use std::time::Instant;
-
 use gpui::prelude::*;
 use gpui::{Context, Div, ParentElement, Stateful, Window, div, px};
 
 use crate::FikaApp;
 use crate::ui::icons::theme_icon_image_size_px;
-use crate::ui::retained::{RetainedImageLoad, RetainedImageLoadOutcome, RetainedImageRequest};
+use crate::ui::retained::{RetainedImageRequest, RetainedThemeIconCacheRefreshStats};
 
 use super::details::{details_content_height, details_content_width};
 use super::details_shell::details_table;
@@ -492,7 +490,7 @@ pub(crate) fn file_grid(
     if let Some(started) = build_started {
         if theme_icon_cache_refresh_stats.has_activity() {
             eprintln!(
-                "[fika item-image-cache-refresh] pane={} mode={:?} requested={} retained={} loaded={} decoded={} missing={} non_svg={} total={}us",
+                "[fika item-image-cache-refresh] pane={} mode={:?} requested={} retained={} loaded={} decoded={} missing={} non_svg={} total={}us entries={} bytes={} evicted={}",
                 pane_id.0,
                 view_mode,
                 theme_icon_cache_refresh_stats.requested,
@@ -502,6 +500,9 @@ pub(crate) fn file_grid(
                 theme_icon_cache_refresh_stats.missing,
                 theme_icon_cache_refresh_stats.non_svg,
                 theme_icon_cache_refresh_stats.elapsed_us,
+                theme_icon_cache_refresh_stats.cache_entries,
+                theme_icon_cache_refresh_stats.cache_bytes,
+                theme_icon_cache_refresh_stats.evicted,
             );
         }
         eprintln!(
@@ -533,68 +534,20 @@ pub(crate) fn file_grid(
     root
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-struct ThemeIconCacheRefreshStats {
-    requested: usize,
-    retained: usize,
-    loaded: usize,
-    decoded: usize,
-    missing: usize,
-    non_svg: usize,
-    elapsed_us: u128,
-}
-
-impl ThemeIconCacheRefreshStats {
-    fn has_activity(self) -> bool {
-        self.requested > 0
-            || self.retained > 0
-            || self.loaded > 0
-            || self.missing > 0
-            || self.non_svg > 0
-    }
-
-    fn record_load(&mut self, load: Option<RetainedImageLoad>) {
-        match load.map(|load| load.outcome) {
-            Some(RetainedImageLoadOutcome::CacheReady { first_ready }) => {
-                self.loaded += 1;
-                if first_ready {
-                    self.decoded += 1;
-                }
-            }
-            Some(RetainedImageLoadOutcome::Retained) => {
-                self.retained += 1;
-            }
-            Some(RetainedImageLoadOutcome::Missing) => {
-                self.missing += 1;
-            }
-            None => {
-                self.non_svg += 1;
-            }
-        }
-    }
-}
-
 fn refresh_visible_item_theme_icon_cache(
     app_state: &mut FikaApp,
     items: &[super::ItemPaintSnapshot],
     window: &mut Window,
     cx: &mut Context<FikaApp>,
-) -> ThemeIconCacheRefreshStats {
-    let started = Instant::now();
+) -> RetainedThemeIconCacheRefreshStats {
     let scale_factor = window.scale_factor();
-    let mut stats = ThemeIconCacheRefreshStats::default();
-    for item in items {
-        let Some(request) = item_theme_icon_cache_refresh_request(item, scale_factor) else {
-            continue;
-        };
-        stats.requested += 1;
-        stats.record_load(refresh_theme_icon_cache_request(app_state, request, cx));
-    }
-    if stats.requested > 0 {
-        app_state.prune_retained_theme_icon_cache(cx, window);
-        stats.elapsed_us = started.elapsed().as_micros();
-    }
-    stats
+    app_state.refresh_retained_theme_icon_requests(
+        items
+            .iter()
+            .filter_map(|item| item_theme_icon_cache_refresh_request(item, scale_factor)),
+        cx,
+        window,
+    )
 }
 
 fn refresh_visible_details_theme_icon_cache(
@@ -602,22 +555,15 @@ fn refresh_visible_details_theme_icon_cache(
     items: &[super::DetailsPaintSnapshot],
     window: &mut Window,
     cx: &mut Context<FikaApp>,
-) -> ThemeIconCacheRefreshStats {
-    let started = Instant::now();
+) -> RetainedThemeIconCacheRefreshStats {
     let scale_factor = window.scale_factor();
-    let mut stats = ThemeIconCacheRefreshStats::default();
-    for item in items {
-        let Some(request) = details_theme_icon_cache_refresh_request(item, scale_factor) else {
-            continue;
-        };
-        stats.requested += 1;
-        stats.record_load(refresh_theme_icon_cache_request(app_state, request, cx));
-    }
-    if stats.requested > 0 {
-        app_state.prune_retained_theme_icon_cache(cx, window);
-        stats.elapsed_us = started.elapsed().as_micros();
-    }
-    stats
+    app_state.refresh_retained_theme_icon_requests(
+        items
+            .iter()
+            .filter_map(|item| details_theme_icon_cache_refresh_request(item, scale_factor)),
+        cx,
+        window,
+    )
 }
 
 pub(super) fn item_theme_icon_cache_refresh_request(
@@ -660,13 +606,4 @@ pub(super) fn details_theme_icon_cache_refresh_request(
         ),
         scale_factor,
     )
-}
-
-fn refresh_theme_icon_cache_request(
-    app_state: &mut FikaApp,
-    request: RetainedImageRequest,
-    cx: &mut Context<FikaApp>,
-) -> Option<RetainedImageLoad> {
-    let (source_path, key) = request.into_theme_icon_parts()?;
-    app_state.refresh_retained_theme_icon_cache(source_path, key, cx)
 }

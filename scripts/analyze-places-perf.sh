@@ -476,6 +476,9 @@ function renderer_retained_interaction_for_policy(event_policy, rows, sections) 
     decoded = field("decoded") + 0
     missing = field("missing") + 0
     non_svg = field("non_svg") + 0
+    entries = field("entries") + 0
+    bytes = field("bytes") + 0
+    evicted = field("evicted") + 0
     total = field("total") + 0
     icon_cache_refresh_requested += requested
     icon_cache_refresh_retained += retained
@@ -483,6 +486,7 @@ function renderer_retained_interaction_for_policy(event_policy, rows, sections) 
     icon_cache_refresh_decoded += decoded
     icon_cache_refresh_missing += missing
     icon_cache_refresh_non_svg += non_svg
+    icon_cache_refresh_evicted += evicted
     max_update("icon_cache_refresh_rows", rows)
     max_update("icon_cache_refresh_requested", requested)
     max_update("icon_cache_refresh_retained", retained)
@@ -490,6 +494,9 @@ function renderer_retained_interaction_for_policy(event_policy, rows, sections) 
     max_update("icon_cache_refresh_decoded", decoded)
     max_update("icon_cache_refresh_missing", missing)
     max_update("icon_cache_refresh_non_svg", non_svg)
+    max_update("icon_cache_refresh_entries", entries)
+    max_update("icon_cache_refresh_bytes", bytes)
+    max_update("icon_cache_refresh_evicted", evicted)
     max_update("icon_cache_refresh_total", total)
 }
 
@@ -1475,7 +1482,7 @@ END {
         max_values["row_handoff_paint_icon"],
         max_values["row_handoff_gpui_text"],
         max_values["row_handoff_gpui_icon"])
-    printf("places_icon_cache_refresh_frames=%d max_rows=%d requested=%d retained=%d loaded=%d decoded=%d missing=%d non_svg=%d max_requested=%d max_retained=%d max_loaded=%d max_decoded=%d max_missing=%d max_non_svg=%d max_total=%dus\n",
+    printf("places_icon_cache_refresh_frames=%d max_rows=%d requested=%d retained=%d loaded=%d decoded=%d missing=%d non_svg=%d max_requested=%d max_retained=%d max_loaded=%d max_decoded=%d max_missing=%d max_non_svg=%d max_total=%dus evicted=%d max_entries=%d max_bytes=%d max_evicted=%d\n",
         icon_cache_refresh_frames,
         max_values["icon_cache_refresh_rows"],
         icon_cache_refresh_requested,
@@ -1490,7 +1497,11 @@ END {
         max_values["icon_cache_refresh_decoded"],
         max_values["icon_cache_refresh_missing"],
         max_values["icon_cache_refresh_non_svg"],
-        max_values["icon_cache_refresh_total"])
+        max_values["icon_cache_refresh_total"],
+        icon_cache_refresh_evicted,
+        max_values["icon_cache_refresh_entries"],
+        max_values["icon_cache_refresh_bytes"],
+        max_values["icon_cache_refresh_evicted"])
     printf("places_row_shape_cache_frames=%d max_hits=%d max_misses=%d max_evicted=%d max_compute=%dus max_entries=%d\n",
         row_shape_cache_frames,
         max_values["row_shape_hits"],

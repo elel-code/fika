@@ -40,6 +40,10 @@ impl ThemeIconImageKey {
             mode: IconPaintMode::Normal,
         }
     }
+
+    pub(crate) fn scale_factor(&self) -> f32 {
+        f32::from_bits(self.scale_bits)
+    }
 }
 
 pub(crate) fn theme_icon_image_key_for_snapshot(
@@ -58,7 +62,7 @@ pub(crate) fn theme_icon_image_size_px(width: f32, height: f32) -> u32 {
 
 fn stable_scale_bits(scale_factor: f32) -> u32 {
     if scale_factor.is_finite() && scale_factor > 0.0 {
-        scale_factor.to_bits()
+        ((scale_factor * 64.0).round() / 64.0).to_bits()
     } else {
         1.0f32.to_bits()
     }
@@ -116,9 +120,23 @@ impl<T> Default for RetainedThemeIconImageCache<T> {
 }
 
 impl<T: Clone> RetainedThemeIconImageCache<T> {
-    #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.entries.len()
+    }
+
+    pub(crate) fn contains_key(&self, key: &ThemeIconImageKey) -> bool {
+        self.entries.contains_key(key)
+    }
+
+    pub(crate) fn loaded_cost<F>(&self, mut image_cost: F) -> usize
+    where
+        F: FnMut(&T) -> usize,
+    {
+        self.entries
+            .values()
+            .filter_map(|entry| entry.image.as_ref())
+            .map(&mut image_cost)
+            .sum()
     }
 
     pub(crate) fn record_loaded(
@@ -289,6 +307,17 @@ mod tests {
         assert_eq!(size_48.icon_name.as_ref(), "text-x-generic");
         assert_ne!(size_48, size_64);
         assert_ne!(size_48, scaled);
+    }
+
+    #[test]
+    fn key_quantizes_near_identical_scale_factors() {
+        let one = ThemeIconImageKey::new(Arc::from("text-x-generic"), 48, 1.0);
+        let near_one = ThemeIconImageKey::new(Arc::from("text-x-generic"), 48, 1.0001);
+        let scaled = ThemeIconImageKey::new(Arc::from("text-x-generic"), 48, 1.25);
+
+        assert_eq!(one, near_one);
+        assert_ne!(one, scaled);
+        assert_eq!(scaled.scale_factor(), 1.25);
     }
 
     #[test]

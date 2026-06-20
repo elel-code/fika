@@ -95,7 +95,7 @@ impl RawFileGridSnapshot {
         pane_id: PaneId,
         generation: Generation,
     ) -> bool {
-        scheduler.queue_candidates(pane_id, generation, self.visible_metadata_role_candidates())
+        scheduler.queue_candidates(pane_id, generation, self.dolphin_metadata_role_candidates())
     }
 
     pub(crate) fn queue_thumbnail_candidates(
@@ -129,6 +129,20 @@ impl RawFileGridSnapshot {
         F: for<'a> FnMut(FileGridIconRequest<'a>) -> bool,
     {
         let mut queued = false;
+        self.for_each_dolphin_file_icon_resolve_candidate(file_icon_size, |request| {
+            queued |= queue(request);
+            true
+        });
+        queued
+    }
+
+    pub(crate) fn for_each_dolphin_file_icon_resolve_candidate<F>(
+        &self,
+        file_icon_size: f32,
+        mut visit: F,
+    ) where
+        F: for<'a> FnMut(FileGridIconRequest<'a>) -> bool,
+    {
         match self {
             Self::Compact { items, .. } | Self::Icons { items, .. } => {
                 let visible_range = self
@@ -141,34 +155,34 @@ impl RawFileGridSnapshot {
                     |item| item.visible,
                     |item| item.layout.model_index,
                     |item| item.is_dir,
-                    |item| {
-                        queued |= queue(file_icon_request_for_item(item, file_icon_size));
-                        true
-                    },
+                    |item| visit(file_icon_request_for_item(item, file_icon_size)),
                 );
             }
             Self::Details { items, .. } => {
                 for item in items.iter().filter(|item| !item.is_dir) {
-                    queued |= queue(FileGridIconRequest {
+                    if !visit(FileGridIconRequest {
                         path: &item.path,
                         is_dir: item.is_dir,
                         mime_type: item.mime_type.clone(),
                         mime_magic_checked: item.mime_magic_checked,
                         icon_size: file_icon_size,
-                    });
+                    }) {
+                        return;
+                    }
                 }
                 for item in items.iter().filter(|item| item.is_dir) {
-                    queued |= queue(FileGridIconRequest {
+                    if !visit(FileGridIconRequest {
                         path: &item.path,
                         is_dir: item.is_dir,
                         mime_type: item.mime_type.clone(),
                         mime_magic_checked: item.mime_magic_checked,
                         icon_size: file_icon_size,
-                    });
+                    }) {
+                        return;
+                    }
                 }
             }
         }
-        queued
     }
 
     pub(crate) fn for_each_visible_file_icon_resolve_candidate<F>(
@@ -516,6 +530,37 @@ mod tests {
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].item_id, ItemId(5));
         assert_eq!(candidates[0].path, PathBuf::from("/tmp/visible.bin"));
+    }
+
+    #[test]
+    fn metadata_role_queue_includes_dolphin_read_ahead_items() {
+        let mut visible = test_raw_visible_item(5, "visible.bin", 4);
+        visible.metadata_complete = true;
+        visible.size_bytes = 12;
+        visible.mime_type = Some(Arc::from("application/octet-stream"));
+        visible.mime_magic_checked = false;
+        let mut read_ahead = test_raw_visible_item(6, "ahead.bin", 5);
+        read_ahead.visible = false;
+        read_ahead.metadata_complete = true;
+        read_ahead.size_bytes = 12;
+        read_ahead.mime_type = Some(Arc::from("application/octet-stream"));
+        read_ahead.mime_magic_checked = false;
+        let raw_file_grid = RawFileGridSnapshot::Icons {
+            layout: IconsLayout::new(6, fika_core::IconsLayoutOptions::default()),
+            items: vec![visible, read_ahead],
+        };
+        let mut scheduler = MetadataRoleScheduler::default();
+
+        assert!(raw_file_grid.queue_metadata_role_candidates(
+            &mut scheduler,
+            PaneId(1),
+            Generation(1)
+        ));
+        let batch = scheduler.start_role_batch(8).unwrap();
+
+        assert_eq!(batch.requests.len(), 2);
+        assert_eq!(batch.requests[0].item_id(), ItemId(5));
+        assert_eq!(batch.requests[1].item_id(), ItemId(6));
     }
 
     #[test]

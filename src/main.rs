@@ -98,8 +98,8 @@ use ui::filter_bar::{
     cached_filtered_model_for_pane, filter_toggle_snapshot,
 };
 use ui::icons::{
-    FileIconCache, RetainedThemeIconImageCache, common_file_icon_resolve_requests_for_sizes,
-    file_icon_resolve_results_for_requests,
+    FileIconCache, RetainedThemeIconImageCache, ThemeIconImageKey,
+    common_file_icon_resolve_requests_for_sizes, file_icon_resolve_results_for_requests,
 };
 use ui::item_view::{
     ItemViewScrollState, begin_item_view_scrollbar_drag as begin_item_view_scrollbar_drag_state,
@@ -154,6 +154,7 @@ use ui::properties_dialog::{
     PropertiesDialogState, properties_dialog_overlay, properties_for_path, properties_for_selection,
 };
 use ui::rename::{RENAME_TEXT_INSET_X, RenameDraft};
+use ui::retained::{RetainedImageRequest, RetainedThemeIconCacheRefreshStats};
 use ui::rubber_band::RubberBandController;
 #[cfg(test)]
 use ui::shortcuts::PlaceInputAction;
@@ -226,6 +227,8 @@ fn listing_cache_debug_summary(
     )
 }
 const VISIBLE_METADATA_ROLE_SYNC_BUDGET: Duration = Duration::from_millis(12);
+const THEME_ICON_READ_AHEAD_DECODE_BUDGET: usize = 1;
+const THEME_ICON_READ_AHEAD_REQUEST_BUDGET: usize = 64;
 const PANE_HORIZONTAL_BORDER_EXTENT: f32 = 2.0;
 
 const CONTEXT_SUBMENU_HIDE_DELAY: Duration = Duration::from_millis(300);
@@ -374,6 +377,12 @@ pub(crate) struct FikaApp {
     file_icons: FileIconCache,
     file_icon_resolve_queue: FileIconResolveQueue,
     theme_icon_images: RetainedThemeIconImageCache<Arc<RenderImage>>,
+    pending_theme_icon_prewarm_requests: Vec<RetainedImageRequest>,
+    priority_deferred_theme_icon_prewarm_requests: Vec<RetainedImageRequest>,
+    deferred_theme_icon_prewarm_requests: Vec<RetainedImageRequest>,
+    theme_icon_read_ahead_prewarm_queue: VecDeque<RetainedImageRequest>,
+    theme_icon_read_ahead_prewarm_keys: HashSet<ThemeIconImageKey>,
+    theme_icon_read_ahead_prewarm_allowed: bool,
     mime_applications: MimeApplicationCache,
     space_info: SpaceInfoCache,
     status_summaries: HashMap<PaneId, StatusSummaryCacheEntry>,
@@ -478,6 +487,12 @@ impl FikaApp {
             file_icons: FileIconCache::default(),
             file_icon_resolve_queue: FileIconResolveQueue::default(),
             theme_icon_images: RetainedThemeIconImageCache::default(),
+            pending_theme_icon_prewarm_requests: Vec::new(),
+            priority_deferred_theme_icon_prewarm_requests: Vec::new(),
+            deferred_theme_icon_prewarm_requests: Vec::new(),
+            theme_icon_read_ahead_prewarm_queue: VecDeque::new(),
+            theme_icon_read_ahead_prewarm_keys: HashSet::new(),
+            theme_icon_read_ahead_prewarm_allowed: true,
             mime_applications: MimeApplicationCache::load(),
             space_info: SpaceInfoCache::default(),
             status_summaries: HashMap::new(),
@@ -1050,7 +1065,7 @@ impl FikaApp {
         true
     }
 
-    fn snapshots(&mut self, _scale_factor: f32, cx: &mut Context<Self>) -> Vec<PaneSnapshot> {
+    fn snapshots(&mut self, scale_factor: f32, cx: &mut Context<Self>) -> Vec<PaneSnapshot> {
         let focused_pane = self.panes.focused();
         let pane_ids = self.panes.pane_ids().to_vec();
         let perf_enabled = item_view_perf_enabled();
@@ -1105,9 +1120,12 @@ impl FikaApp {
                     rename_draft.as_ref(),
                     item_drop_target.as_ref(),
                     VISIBLE_METADATA_ROLE_SYNC_BUDGET,
+                    scale_factor,
                     perf_enabled,
                     cx,
                 )?;
+                self.theme_icon_read_ahead_prewarm_allowed &=
+                    file_grid_frame.allows_theme_icon_read_ahead_prewarm();
                 let item_count = file_grid_frame.item_count;
                 let rubber_band = self
                     .rubber_band
@@ -7075,6 +7093,71 @@ impl FikaApp {
         }
         changed
     }
+
+    fn enqueue_theme_icon_read_ahead_prewarm_requests(
+        &mut self,
+        requests: impl IntoIterator<Item = RetainedImageRequest>,
+        priority: bool,
+    ) {
+        let mut priority_requests = Vec::new();
+        for request in requests {
+            let Some(key) = request.theme_icon_key().cloned() else {
+                continue;
+            };
+            if self.theme_icon_images.contains_key(&key)
+                || self.theme_icon_read_ahead_prewarm_keys.contains(&key)
+            {
+                continue;
+            }
+            self.theme_icon_read_ahead_prewarm_keys.insert(key);
+            if priority {
+                priority_requests.push(request);
+            } else {
+                self.theme_icon_read_ahead_prewarm_queue.push_back(request);
+            }
+        }
+        for request in priority_requests.into_iter().rev() {
+            self.theme_icon_read_ahead_prewarm_queue.push_front(request);
+        }
+    }
+
+    fn refresh_theme_icon_read_ahead_prewarm_queue(
+        &mut self,
+        cx: &mut App,
+        window: &mut Window,
+    ) -> RetainedThemeIconCacheRefreshStats {
+        let started = Instant::now();
+        let mut stats = RetainedThemeIconCacheRefreshStats::default();
+        let mut processed = 0usize;
+        while processed < THEME_ICON_READ_AHEAD_REQUEST_BUDGET {
+            let Some(request) = self.theme_icon_read_ahead_prewarm_queue.pop_front() else {
+                break;
+            };
+            let Some((source_path, key)) = request.into_theme_icon_parts() else {
+                continue;
+            };
+            self.theme_icon_read_ahead_prewarm_keys.remove(&key);
+            processed += 1;
+            if self.theme_icon_images.contains_key(&key) {
+                continue;
+            }
+            if stats.decoded >= THEME_ICON_READ_AHEAD_DECODE_BUDGET {
+                self.theme_icon_read_ahead_prewarm_keys.insert(key.clone());
+                self.theme_icon_read_ahead_prewarm_queue
+                    .push_front(RetainedImageRequest::theme_icon(source_path, key));
+                break;
+            }
+
+            stats.requested += 1;
+            stats.record_load(self.refresh_retained_theme_icon_cache(source_path, key, cx));
+        }
+        if stats.requested > 0 {
+            let prune_stats = self.prune_retained_theme_icon_cache(cx, window);
+            stats.record_prune(prune_stats);
+            stats.elapsed_us = started.elapsed().as_micros();
+        }
+        stats
+    }
 }
 
 impl Render for FikaApp {
@@ -7096,6 +7179,7 @@ impl Render for FikaApp {
         let window_setup_elapsed = window_setup_started.map(|started| started.elapsed());
         let places_sidebar_visible = self.places_sidebar_visible;
         let places_sidebar_width = self.places_sidebar_width;
+        let scale_factor = window.scale_factor();
         let places_started = perf_enabled.then(Instant::now);
         let places = self.place_snapshots();
         let places_elapsed = places_started.map(|started| started.elapsed());
@@ -7103,8 +7187,72 @@ impl Render for FikaApp {
         let background_tasks = self.background_tasks_snapshot(Instant::now());
         let background_tasks_elapsed = background_tasks_started.map(|started| started.elapsed());
         let snapshots_started = perf_enabled.then(Instant::now);
-        let snapshots = self.snapshots(window.scale_factor(), cx);
+        self.pending_theme_icon_prewarm_requests.clear();
+        self.priority_deferred_theme_icon_prewarm_requests.clear();
+        self.deferred_theme_icon_prewarm_requests.clear();
+        self.theme_icon_read_ahead_prewarm_allowed = true;
+        let snapshots = self.snapshots(scale_factor, cx);
         let snapshots_elapsed = snapshots_started.map(|started| started.elapsed());
+        let theme_icon_prewarm_started = perf_enabled.then(Instant::now);
+        let mut theme_icon_prewarm_requests =
+            std::mem::take(&mut self.pending_theme_icon_prewarm_requests);
+        if places_sidebar_visible {
+            theme_icon_prewarm_requests.extend(ui::places::places_theme_icon_cache_requests(
+                &places,
+                scale_factor,
+            ));
+        }
+        let theme_icon_prewarm_stats =
+            self.refresh_retained_theme_icon_requests(theme_icon_prewarm_requests, cx, window);
+        let priority_read_ahead_theme_icon_prewarm_requests =
+            std::mem::take(&mut self.priority_deferred_theme_icon_prewarm_requests);
+        self.enqueue_theme_icon_read_ahead_prewarm_requests(
+            priority_read_ahead_theme_icon_prewarm_requests,
+            true,
+        );
+        let read_ahead_theme_icon_prewarm_requests =
+            std::mem::take(&mut self.deferred_theme_icon_prewarm_requests);
+        self.enqueue_theme_icon_read_ahead_prewarm_requests(
+            read_ahead_theme_icon_prewarm_requests,
+            false,
+        );
+        let read_ahead_theme_icon_prewarm_stats = if self.theme_icon_read_ahead_prewarm_allowed {
+            self.refresh_theme_icon_read_ahead_prewarm_queue(cx, window)
+        } else {
+            RetainedThemeIconCacheRefreshStats::default()
+        };
+        let theme_icon_prewarm_elapsed =
+            theme_icon_prewarm_started.map(|started| started.elapsed());
+        if perf_enabled && theme_icon_prewarm_stats.has_activity() {
+            eprintln!(
+                "[fika theme-icon-prewarm] requested={} retained={} loaded={} decoded={} missing={} non_svg={} total={}us entries={} bytes={} evicted={}",
+                theme_icon_prewarm_stats.requested,
+                theme_icon_prewarm_stats.retained,
+                theme_icon_prewarm_stats.loaded,
+                theme_icon_prewarm_stats.decoded,
+                theme_icon_prewarm_stats.missing,
+                theme_icon_prewarm_stats.non_svg,
+                theme_icon_prewarm_stats.elapsed_us,
+                theme_icon_prewarm_stats.cache_entries,
+                theme_icon_prewarm_stats.cache_bytes,
+                theme_icon_prewarm_stats.evicted,
+            );
+        }
+        if perf_enabled && read_ahead_theme_icon_prewarm_stats.has_activity() {
+            eprintln!(
+                "[fika theme-icon-read-ahead-prewarm] requested={} retained={} loaded={} decoded={} missing={} non_svg={} total={}us entries={} bytes={} evicted={}",
+                read_ahead_theme_icon_prewarm_stats.requested,
+                read_ahead_theme_icon_prewarm_stats.retained,
+                read_ahead_theme_icon_prewarm_stats.loaded,
+                read_ahead_theme_icon_prewarm_stats.decoded,
+                read_ahead_theme_icon_prewarm_stats.missing,
+                read_ahead_theme_icon_prewarm_stats.non_svg,
+                read_ahead_theme_icon_prewarm_stats.elapsed_us,
+                read_ahead_theme_icon_prewarm_stats.cache_entries,
+                read_ahead_theme_icon_prewarm_stats.cache_bytes,
+                read_ahead_theme_icon_prewarm_stats.evicted,
+            );
+        }
         let chrome_state_started = perf_enabled.then(Instant::now);
         let file_grid_mode =
             self.chooser
@@ -7395,7 +7543,7 @@ impl Render for FikaApp {
             });
         if let Some(started) = render_started {
             eprintln!(
-                "[fika render] panes={} viewport={}x{} window_setup={}us places={}us tasks={}us snapshots={}us chrome_state={}us chrome_icons={}us pane_elements={}us overlays={}us root={}us total={}us",
+                "[fika render] panes={} viewport={}x{} window_setup={}us places={}us tasks={}us snapshots={}us theme_icon_prewarm={}us chrome_state={}us chrome_icons={}us pane_elements={}us overlays={}us root={}us total={}us",
                 pane_count,
                 viewport_size.width.as_f32(),
                 viewport_size.height.as_f32(),
@@ -7403,6 +7551,7 @@ impl Render for FikaApp {
                 places_elapsed.map_or(0, |elapsed| elapsed.as_micros()),
                 background_tasks_elapsed.map_or(0, |elapsed| elapsed.as_micros()),
                 snapshots_elapsed.map_or(0, |elapsed| elapsed.as_micros()),
+                theme_icon_prewarm_elapsed.map_or(0, |elapsed| elapsed.as_micros()),
                 chrome_state_elapsed.map_or(0, |elapsed| elapsed.as_micros()),
                 chrome_icons_elapsed.map_or(0, |elapsed| elapsed.as_micros()),
                 pane_elements_elapsed.map_or(0, |elapsed| elapsed.as_micros()),
@@ -15308,6 +15457,12 @@ text/plain=viewer.desktop;\n",
             file_icons: FileIconCache::default(),
             file_icon_resolve_queue: FileIconResolveQueue::default(),
             theme_icon_images: RetainedThemeIconImageCache::default(),
+            pending_theme_icon_prewarm_requests: Vec::new(),
+            priority_deferred_theme_icon_prewarm_requests: Vec::new(),
+            deferred_theme_icon_prewarm_requests: Vec::new(),
+            theme_icon_read_ahead_prewarm_queue: VecDeque::new(),
+            theme_icon_read_ahead_prewarm_keys: HashSet::new(),
+            theme_icon_read_ahead_prewarm_allowed: true,
             mime_applications: MimeApplicationCache::empty(),
             space_info: SpaceInfoCache::default(),
             status_summaries: HashMap::new(),

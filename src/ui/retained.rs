@@ -5,7 +5,9 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
-use gpui::{App, Entity, RenderImage, Resource, RetainAllImageCache, Window};
+use gpui::{
+    App, Entity, RenderImage, Resource, RetainAllImageCache, SMOOTH_SVG_SCALE_FACTOR, Window,
+};
 
 use crate::FikaApp;
 use crate::ui::icons::{
@@ -16,8 +18,8 @@ use crate::ui::icons::{
 mod work_order;
 
 pub(crate) use work_order::{
-    dolphin_read_ahead_indexes, visible_work_range, visit_dolphin_visible_work_files_first,
-    visit_visible_work_items_by_index,
+    dolphin_read_ahead_indexes, dolphin_visible_work_indexes,
+    visit_dolphin_visible_work_files_first, visit_visible_work_items_by_index,
 };
 
 // Dolphin keeps ordinary MIME/theme icon pixmaps in QPixmapCache from
@@ -55,6 +57,63 @@ pub(crate) struct TextShapeCacheStats {
     pub(crate) evicted: usize,
     pub(crate) compute_us: u128,
     pub(crate) entries: usize,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct RetainedThemeIconPruneStats {
+    pub(crate) evicted: usize,
+    pub(crate) entries: usize,
+    pub(crate) bytes: usize,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct RetainedThemeIconCacheRefreshStats {
+    pub(crate) requested: usize,
+    pub(crate) retained: usize,
+    pub(crate) loaded: usize,
+    pub(crate) decoded: usize,
+    pub(crate) missing: usize,
+    pub(crate) non_svg: usize,
+    pub(crate) evicted: usize,
+    pub(crate) cache_entries: usize,
+    pub(crate) cache_bytes: usize,
+    pub(crate) elapsed_us: u128,
+}
+
+impl RetainedThemeIconCacheRefreshStats {
+    pub(crate) fn has_activity(self) -> bool {
+        self.requested > 0
+            || self.retained > 0
+            || self.loaded > 0
+            || self.missing > 0
+            || self.non_svg > 0
+    }
+
+    pub(crate) fn record_load(&mut self, load: Option<RetainedImageLoad>) {
+        match load.map(|load| load.outcome) {
+            Some(RetainedImageLoadOutcome::CacheReady { first_ready }) => {
+                self.loaded += 1;
+                if first_ready {
+                    self.decoded += 1;
+                }
+            }
+            Some(RetainedImageLoadOutcome::Retained) => {
+                self.retained += 1;
+            }
+            Some(RetainedImageLoadOutcome::Missing) => {
+                self.missing += 1;
+            }
+            None => {
+                self.non_svg += 1;
+            }
+        }
+    }
+
+    pub(crate) fn record_prune(&mut self, prune: RetainedThemeIconPruneStats) {
+        self.evicted = prune.evicted;
+        self.cache_entries = prune.entries;
+        self.cache_bytes = prune.bytes;
+    }
 }
 
 impl TextShapeCacheStats {
@@ -371,7 +430,6 @@ impl RetainedImageRequest {
         }
     }
 
-    #[cfg(test)]
     pub(crate) fn theme_icon_key(&self) -> Option<&ThemeIconImageKey> {
         match self {
             Self::ThemeIcon { key, .. } => Some(key),
@@ -546,9 +604,85 @@ fn is_svg_icon_path(path: &Path) -> bool {
         .is_some_and(|extension| extension.eq_ignore_ascii_case("svg"))
 }
 
-fn load_svg_theme_icon_sync(path: &Path, cx: &mut App) -> Option<Arc<RenderImage>> {
+fn load_svg_theme_icon_sync(
+    path: &Path,
+    key: &ThemeIconImageKey,
+    cx: &mut App,
+) -> Option<Arc<RenderImage>> {
     let bytes = fs::read(path).ok()?;
-    cx.svg_renderer().render_single_frame(&bytes, 1.0).ok()
+    let scale_factor = svg_theme_icon_render_scale(&bytes, key);
+    cx.svg_renderer()
+        .render_single_frame(&bytes, scale_factor)
+        .ok()
+}
+
+fn svg_theme_icon_render_scale(bytes: &[u8], key: &ThemeIconImageKey) -> f32 {
+    let source_width = svg_intrinsic_width(bytes)
+        .filter(|width| width.is_finite() && *width > 0.0)
+        .unwrap_or(key.icon_size_px as f32);
+    let target_device_px = ((key.icon_size_px as f32) * key.scale_factor())
+        .round()
+        .clamp(1.0, 4096.0);
+    (target_device_px / source_width / SMOOTH_SVG_SCALE_FACTOR).clamp(0.01, 128.0)
+}
+
+fn svg_intrinsic_width(bytes: &[u8]) -> Option<f32> {
+    let text = std::str::from_utf8(bytes).ok()?;
+    let start = text.find("<svg")?;
+    let rest = &text[start..];
+    let end = rest.find('>')?;
+    let tag = &rest[..end];
+    svg_attribute(tag, "width")
+        .and_then(parse_svg_dimension)
+        .or_else(|| svg_view_box_width(tag))
+}
+
+fn svg_view_box_width(tag: &str) -> Option<f32> {
+    let view_box = svg_attribute(tag, "viewBox").or_else(|| svg_attribute(tag, "viewbox"))?;
+    view_box
+        .split(|ch: char| ch.is_ascii_whitespace() || ch == ',')
+        .filter(|part| !part.is_empty())
+        .nth(2)
+        .and_then(parse_svg_dimension)
+}
+
+fn svg_attribute<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
+    let mut offset = 0;
+    while let Some(found) = tag[offset..].find(name) {
+        let start = offset + found;
+        let before = tag[..start].chars().next_back();
+        if before.is_some_and(|ch| !(ch.is_ascii_whitespace() || ch == '<')) {
+            offset = start + name.len();
+            continue;
+        }
+        let mut rest = tag[start + name.len()..].trim_start();
+        if !rest.starts_with('=') {
+            offset = start + name.len();
+            continue;
+        }
+        rest = rest[1..].trim_start();
+        let quote = rest.chars().next()?;
+        if quote != '"' && quote != '\'' {
+            return None;
+        }
+        let value_start = quote.len_utf8();
+        let value_end = rest[value_start..].find(quote)?;
+        return Some(&rest[value_start..value_start + value_end]);
+    }
+    None
+}
+
+fn parse_svg_dimension(value: &str) -> Option<f32> {
+    let value = value.trim();
+    if value.ends_with('%') {
+        return None;
+    }
+    let end = value
+        .char_indices()
+        .take_while(|(_, ch)| ch.is_ascii_digit() || matches!(ch, '.' | '+' | '-'))
+        .map(|(index, ch)| index + ch.len_utf8())
+        .last()?;
+    value[..end].parse::<f32>().ok()
 }
 
 impl FikaApp {
@@ -578,7 +712,8 @@ impl FikaApp {
             return None;
         }
 
-        let retained = if let Some(image) = load_svg_theme_icon_sync(source_path.as_ref(), cx) {
+        let retained = if let Some(image) = load_svg_theme_icon_sync(source_path.as_ref(), &key, cx)
+        {
             self.theme_icon_images
                 .record_loaded(key, source_path, image)
         } else {
@@ -588,6 +723,29 @@ impl FikaApp {
             image: retained.image,
             outcome: retained_theme_icon_load_outcome(retained.outcome),
         })
+    }
+
+    pub(crate) fn refresh_retained_theme_icon_requests(
+        &mut self,
+        requests: impl IntoIterator<Item = RetainedImageRequest>,
+        cx: &mut App,
+        window: &mut Window,
+    ) -> RetainedThemeIconCacheRefreshStats {
+        let started = Instant::now();
+        let mut stats = RetainedThemeIconCacheRefreshStats::default();
+        for request in requests {
+            let Some((source_path, key)) = request.into_theme_icon_parts() else {
+                continue;
+            };
+            stats.requested += 1;
+            stats.record_load(self.refresh_retained_theme_icon_cache(source_path, key, cx));
+        }
+        if stats.requested > 0 {
+            let prune_stats = self.prune_retained_theme_icon_cache(cx, window);
+            stats.record_prune(prune_stats);
+            stats.elapsed_us = started.elapsed().as_micros();
+        }
+        stats
     }
 
     fn record_theme_icon_resource_load_result(
@@ -619,10 +777,29 @@ impl FikaApp {
         )
     }
 
-    pub(crate) fn prune_retained_theme_icon_cache(&mut self, cx: &mut App, window: &mut Window) {
-        for evicted in self.prune_retained_theme_icon_images(cx) {
+    pub(crate) fn retained_theme_icon_cache_stats(&self) -> RetainedThemeIconPruneStats {
+        RetainedThemeIconPruneStats {
+            entries: self.theme_icon_images.len(),
+            bytes: self
+                .theme_icon_images
+                .loaded_cost(render_image_cache_cost_bytes),
+            evicted: 0,
+        }
+    }
+
+    pub(crate) fn prune_retained_theme_icon_cache(
+        &mut self,
+        cx: &mut App,
+        window: &mut Window,
+    ) -> RetainedThemeIconPruneStats {
+        let evicted = self.prune_retained_theme_icon_images(cx);
+        let evicted_count = evicted.len();
+        for evicted in evicted {
             cx.drop_image(evicted.image, Some(window));
         }
+        let mut stats = self.retained_theme_icon_cache_stats();
+        stats.evicted = evicted_count;
+        stats
     }
 }
 
@@ -656,6 +833,33 @@ mod tests {
         assert!(!env_flag_is_truthy("0"));
         assert!(!env_flag_is_truthy("false"));
         assert!(!env_flag_is_truthy("disabled"));
+    }
+
+    #[test]
+    fn svg_intrinsic_width_prefers_width_then_view_box() {
+        assert_eq!(
+            svg_intrinsic_width(br#"<svg width="22" height="22" viewBox="0 0 48 48"></svg>"#),
+            Some(22.0)
+        );
+        assert_eq!(
+            svg_intrinsic_width(br#"<svg viewBox="0 0 48 48"></svg>"#),
+            Some(48.0)
+        );
+        assert_eq!(
+            svg_intrinsic_width(br#"<svg width="24px" height="24px"></svg>"#),
+            Some(24.0)
+        );
+    }
+
+    #[test]
+    fn svg_theme_icon_render_scale_targets_requested_device_pixels() {
+        let key = ThemeIconImageKey::new(Arc::from("folder"), 22, 1.0);
+        let scale = svg_theme_icon_render_scale(br#"<svg width="44" height="44"></svg>"#, &key);
+        assert!((scale - 0.25).abs() < f32::EPSILON);
+
+        let key = ThemeIconImageKey::new(Arc::from("folder"), 22, 2.0);
+        let scale = svg_theme_icon_render_scale(br#"<svg width="22" height="22"></svg>"#, &key);
+        assert!((scale - 1.0).abs() < f32::EPSILON);
     }
 
     #[test]
