@@ -7254,6 +7254,7 @@ impl Render for FikaApp {
                             places,
                             background_tasks,
                             places_sidebar_width,
+                            self,
                             window,
                             cx,
                         ))

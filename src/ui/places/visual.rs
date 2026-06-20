@@ -21,10 +21,10 @@ use super::snapshot::PlaceSnapshot;
 use super::style::{place_row_background, place_row_border_color};
 
 pub(super) const PLACE_ROW_HEIGHT: f32 = 30.0;
+pub(super) const PLACE_ROW_ICON_SIZE: f32 = 22.0;
 pub(super) const PLACE_SECTION_HEADING_HEIGHT: f32 = 24.0;
 
 const ROW_PADDING_X: f32 = 8.0;
-const ICON_SIZE: f32 = 22.0;
 const ICON_TEXT_GAP: f32 = 8.0;
 const TRASH_DOT_SIZE: f32 = 7.0;
 const INSERT_INDICATOR_HEIGHT: f32 = 2.0;
@@ -507,7 +507,7 @@ fn load_place_icon_or_retained(
     let request = RetainedImageRequest::theme_icon_for_parts(
         icon.path.clone(),
         icon.icon_name.clone(),
-        ICON_SIZE.round() as u32,
+        PLACE_ROW_ICON_SIZE.round() as u32,
         window.scale_factor(),
     )?;
     let load = retained_images.load_request_or_retained_with_outcome(request, app, window, cx);
@@ -575,9 +575,10 @@ fn paint_place_row_visual(
         let icon_bounds = Bounds::new(
             point(
                 row_bounds.origin.x + px(ROW_PADDING_X),
-                row_bounds.origin.y + ((row_bounds.size.height - px(ICON_SIZE)) / 2.0).floor(),
+                row_bounds.origin.y
+                    + ((row_bounds.size.height - px(PLACE_ROW_ICON_SIZE)) / 2.0).floor(),
             ),
-            size(px(ICON_SIZE), px(ICON_SIZE)),
+            size(px(PLACE_ROW_ICON_SIZE), px(PLACE_ROW_ICON_SIZE)),
         );
         paint_place_row_visual_icon(icon_bounds, &input.icon, state.icon_image.as_ref(), window);
     }
@@ -656,7 +657,7 @@ fn place_row_text_origin_and_width(
         point(layer_bounds.origin.x, layer_bounds.origin.y + px(input.y)),
         size(layer_bounds.size.width, px(PLACE_ROW_HEIGHT)),
     );
-    let text_left = ROW_PADDING_X + ICON_SIZE + ICON_TEXT_GAP;
+    let text_left = ROW_PADDING_X + PLACE_ROW_ICON_SIZE + ICON_TEXT_GAP;
     let reserved_right = if input.trash_place {
         ROW_PADDING_X + TRASH_DOT_SIZE + ICON_TEXT_GAP
     } else {

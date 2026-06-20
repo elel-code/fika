@@ -15,7 +15,9 @@ use gpui::{
 use crate::ui::background_tasks::{BackgroundTasksSnapshot, background_tasks_panel};
 use crate::ui::file_grid::ItemDrag;
 use crate::ui::icons::{FileIconCache, FileIconSnapshot, cached_icon_or_fallback};
-use crate::ui::retained::RetainedImageLayerState;
+use crate::ui::retained::{
+    RetainedImageLayerState, RetainedImageLoad, RetainedImageLoadOutcome, RetainedImageRequest,
+};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -36,7 +38,7 @@ use super::perf::{
     places_section_count,
 };
 use super::snapshot::PlaceSnapshot;
-use super::visual::places_row_visual_layer;
+use super::visual::{PLACE_ROW_ICON_SIZE, places_row_visual_layer};
 use row::place_row;
 use section::group_heading;
 
@@ -306,6 +308,7 @@ pub(crate) fn places_sidebar(
     places: Vec<PlaceSnapshot>,
     background_tasks: Option<BackgroundTasksSnapshot>,
     width: f32,
+    app_state: &mut FikaApp,
     window: &mut Window,
     cx: &mut Context<FikaApp>,
 ) -> Stateful<Div> {
@@ -330,6 +333,11 @@ pub(crate) fn places_sidebar(
     let warm_row_text_shapes =
         row_visual_policy.paints_text() && row_visual_handoff.force_gpui_text;
     let paint_row_icon = row_visual_policy.paints_icon() && !row_visual_handoff.force_gpui_icon;
+    let places_icon_cache_refresh_stats = if paint_row_icon {
+        refresh_places_icon_cache(app_state, places.as_ref(), window, cx)
+    } else {
+        PlacesIconCacheRefreshStats::default()
+    };
     let state = window.use_keyed_state("places-sidebar-scrollbar", cx, |_, _| {
         PlacesSidebarScrollState::new()
     });
@@ -417,6 +425,19 @@ pub(crate) fn places_sidebar(
             element_count: rows.len(),
             build_elapsed: started.elapsed(),
         });
+        if places_icon_cache_refresh_stats.has_activity() {
+            eprintln!(
+                "[fika places-icon-cache-refresh] rows={} requested={} retained={} loaded={} decoded={} missing={} non_svg={} total={}us",
+                row_count,
+                places_icon_cache_refresh_stats.requested,
+                places_icon_cache_refresh_stats.retained,
+                places_icon_cache_refresh_stats.loaded,
+                places_icon_cache_refresh_stats.decoded,
+                places_icon_cache_refresh_stats.missing,
+                places_icon_cache_refresh_stats.non_svg,
+                places_icon_cache_refresh_stats.elapsed_us,
+            );
+        }
         emit_places_renderer_policy_log(PlacesRendererPolicyLog {
             row_count,
             section_count,
@@ -609,6 +630,79 @@ impl PlacesRowVisualHandoffState {
         }
         (ready, self.frames_seen)
     }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct PlacesIconCacheRefreshStats {
+    requested: usize,
+    retained: usize,
+    loaded: usize,
+    decoded: usize,
+    missing: usize,
+    non_svg: usize,
+    elapsed_us: u128,
+}
+
+impl PlacesIconCacheRefreshStats {
+    fn has_activity(self) -> bool {
+        self.requested > 0
+            || self.retained > 0
+            || self.loaded > 0
+            || self.missing > 0
+            || self.non_svg > 0
+    }
+
+    fn record_load(&mut self, load: Option<RetainedImageLoad>) {
+        match load.map(|load| load.outcome) {
+            Some(RetainedImageLoadOutcome::CacheReady { first_ready }) => {
+                self.loaded += 1;
+                if first_ready {
+                    self.decoded += 1;
+                }
+            }
+            Some(RetainedImageLoadOutcome::Retained) => {
+                self.retained += 1;
+            }
+            Some(RetainedImageLoadOutcome::Missing) => {
+                self.missing += 1;
+            }
+            None => {
+                self.non_svg += 1;
+            }
+        }
+    }
+}
+
+fn refresh_places_icon_cache(
+    app_state: &mut FikaApp,
+    places: &[PlaceSnapshot],
+    window: &mut Window,
+    cx: &mut Context<FikaApp>,
+) -> PlacesIconCacheRefreshStats {
+    let started = Instant::now();
+    let scale_factor = window.scale_factor();
+    let mut stats = PlacesIconCacheRefreshStats::default();
+    for place in places {
+        let Some(request) = RetainedImageRequest::theme_icon_for_parts(
+            place.icon.path.clone(),
+            place.icon.icon_name.clone(),
+            PLACE_ROW_ICON_SIZE.round() as u32,
+            scale_factor,
+        ) else {
+            continue;
+        };
+        stats.requested += 1;
+        let (source_path, key) = match request.into_theme_icon_parts() {
+            Some(parts) => parts,
+            None => continue,
+        };
+        stats.record_load(app_state.refresh_retained_theme_icon_cache(source_path, key, cx));
+    }
+    if stats.requested > 0 {
+        app_state.prune_retained_theme_icon_cache(cx, window);
+        stats.elapsed_us = started.elapsed().as_micros();
+    }
+    stats
 }
 
 fn places_row_visual_handoff_state(

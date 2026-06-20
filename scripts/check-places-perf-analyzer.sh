@@ -104,6 +104,10 @@ if [[ "$summary" != *"places_row_visual_frames=0"* ]]; then
     echo "expected default Places row visual summary" >&2
     exit 1
 fi
+if [[ "$summary" != *"places_icon_cache_refresh_frames=0"* ]]; then
+    echo "expected default Places icon cache-refresh summary" >&2
+    exit 1
+fi
 if [[ "$summary" != *"places_scrollbar_frames=0"* ]]; then
     echo "expected default Places scrollbar summary" >&2
     exit 1
@@ -147,6 +151,7 @@ cat > "$tmpdir/custom-row-full.log" <<'EOF'
 [fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
 [fika places-view] source=11 visible=11 sections=2 snapshot=100us
 [fika places-sidebar] rows=11 sections=2 elements=13 build=240us
+[fika places-icon-cache-refresh] rows=11 requested=11 retained=9 loaded=2 decoded=2 missing=0 non_svg=0 total=120us
 [fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=0 icon_gpui=0 retained_interaction=0 drag_shell=0 section_gpui=0 scrollbar_canvas=1 visual_kind=full
 [fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=0
 [fika places-row-visual] rows=11 painted=11 prepaint=24us paint=35us
@@ -160,6 +165,10 @@ full_summary="$("$analyzer" \
 
 if [[ "$full_summary" != *"max_row_gpui=0 max_row_visual_layer=11 max_icon_gpui=0"* || "$full_summary" != *"max_text_gpui=0 visual_kinds=full"* ]]; then
     echo "expected full custom Places row policy summary" >&2
+    exit 1
+fi
+if [[ "$full_summary" != *"places_icon_cache_refresh_frames=1 max_rows=11 requested=11 retained=9 loaded=2 decoded=2 missing=0 non_svg=0 max_requested=11 max_retained=9 max_loaded=2 max_decoded=2 max_missing=0 max_non_svg=0 max_total=120us"* ]]; then
+    echo "expected full custom Places icon cache-refresh summary" >&2
     exit 1
 fi
 
