@@ -142,8 +142,10 @@ Current checkpoint:
   stores a lightweight context target snapshot, opens a clamped shell-owned
   context menu overlay for item/blank targets, updates row hover, closes on Esc
   or outside click, dispatches Open for directory items, dispatches Open for file
-  items through GIO default-application URI launch, dispatches item Copy
-  Location to a shell-owned Wayland text clipboard provider, dispatches item
+  items through GIO default-application URI launch, opens a minimal
+  shell-owned Open With chooser for file items using core `MimeApplicationCache`
+  and systemd-user launch plans, dispatches item Copy Location to a shell-owned
+  Wayland text clipboard provider, dispatches item
   Copy/Cut to the same provider using Fika's URI-list text encoding, dispatches
   blank-menu Paste by reading the Wayland text clipboard, decoding Fika/GNOME
   URI-list text or plain text, executing local core transfer/text-paste helpers,
@@ -167,7 +169,7 @@ Current checkpoint:
   and selection state. Restore conflicts now open a shell-owned confirmation
   overlay; Replace reruns the restore through core `TrashViewOperation` with the
   replace policy, then reloads Trash. Cut and Paste reject remote paths
-  explicitly. Open With chooser/default-application selection, multi-MIME
+  explicitly. Open With default-application selection, multi-MIME
   `text/uri-list` clipboard export/import, richer multi-conflict handling,
   undo, richer properties, full inline rename, full Create New
   submenus/templates, and new-pane dispatch remain Phase 4 work.
@@ -343,7 +345,7 @@ Trash, Trash view Restore/Delete Permanently/Empty Trash, Copy/Cut/Copy
 Location, Paste, and the minimal Places row Open/Copy Location/Properties/Remove
 menu, while richer Places actions/devices/DnD, richer Trash conflict handling,
 undo, richer properties, full inline rename, full Create New submenus/templates,
-Open With/default-app selection, and new-pane actions remain pending.
+Open With default-app selection, and new-pane actions remain pending.
 
 Acceptance:
 

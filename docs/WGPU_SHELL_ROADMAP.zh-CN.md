@@ -123,8 +123,9 @@ Shell 拥有：
   且不会启动 rubber-band selection。shell 现在保存轻量 context target snapshot，为
   item/blank target 打开 clamp 后的 shell-owned context menu overlay，更新 row hover，
   支持 Esc 或外部点击关闭，并将 directory item 的 Open、file item 的 Open（通过 GIO
-  default-application URI launch）、item Copy Location（通过 shell-owned Wayland text
-  clipboard provider）、item Copy/Cut（通过同一 provider 写入 Fika URI-list text encoding）
+  default-application URI launch）、file item 的最小 shell-owned Open With chooser（使用
+  core `MimeApplicationCache` 和 systemd-user launch plan）、item Copy Location（通过
+  shell-owned Wayland text clipboard provider）、item Copy/Cut（通过同一 provider 写入 Fika URI-list text encoding）
   以及 blank menu Paste（读取 Wayland text clipboard，解码 Fika/GNOME URI-list text 或
   plain text，调用本地 core transfer/text-paste helper，reload 目录，并在 Cut 成功后清空
   clipboard）和 Refresh、
@@ -143,7 +144,7 @@ Shell 拥有：
   Trash，随后 reload Trash view 并清理 stale context/selection state。Restore conflict
   现在会打开 shell-owned confirmation overlay；Replace 会用 replace policy 重新通过 core
   `TrashViewOperation` restore，然后 reload Trash。Cut 和 Paste 会显式拒绝 remote paths。
-  Open With chooser/default-application selection、多 MIME `text/uri-list` clipboard
+  Open With default-application selection、多 MIME `text/uri-list` clipboard
   export/import、更完整 multi-conflict handling、undo、更完整 properties、完整 inline
   rename、完整 Create New 子菜单/模板和 new-pane dispatch 仍留到 Phase 4。
 - 第一版 shell-owned Places 侧栏已在 top bar 下方绘制。它通过公开 core API 构建
@@ -286,7 +287,7 @@ Create New、最小 Rename、最小 Move to Trash、Trash view Restore/Delete Pe
 Trash、Copy/Cut/Copy Location 和 Paste；最小 Places row Open/Copy
 Location/Properties/Remove menu 也已接入；更完整 Places actions/devices/DnD、更完整
 Trash conflict handling、undo、更完整 properties、完整 inline rename、完整 Create New
-子菜单/模板、Open With/default-app selection 和 new-pane actions 仍待完成。
+子菜单/模板、Open With default-app selection 和 new-pane actions 仍待完成。
 
 验收：
 

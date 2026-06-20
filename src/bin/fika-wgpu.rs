@@ -13,15 +13,16 @@ use cosmic_text::{
     Wrap,
 };
 use fika_core::{
-    CompactLayout, CompactLayoutOptions, Entry, FileClipboardRole, FileTransferMode, IconsLayout,
-    IconsLayoutOptions, NETWORK_ROOT_LABEL, NameFilter, PaneId, TransferTaskResult,
+    CompactLayout, CompactLayoutOptions, DesktopLaunchPlan, Entry, FileClipboardRole,
+    FileTransferMode, IconsLayout, IconsLayoutOptions, MimeApplication, MimeApplicationCache,
+    NETWORK_ROOT_LABEL, NameFilter, OpenWithLaunchResult, PaneId, TransferTaskResult,
     TrashViewOperation, TrashViewOperationResult, UserPlace, ViewPoint, ViewRect, ViewSize,
     complete_location_input, decode_file_clipboard_text, default_user_places_path,
     encode_file_clipboard_text, file_ops, format_modified_secs, format_size, home_dir,
-    is_network_path, load_place_order, load_user_places, network_root_path, network_uri_from_path,
-    paste_text_result, place_order_path_for_user_places_path, read_entries_sync,
-    resolve_location_input, save_place_order, save_user_places, transfer_paths_result,
-    trash_view_operation_result,
+    is_network_path, launch_with_systemd_user, load_place_order, load_user_places,
+    network_root_path, network_uri_from_path, paste_text_result,
+    place_order_path_for_user_places_path, read_entries_sync, resolve_location_input,
+    save_place_order, save_user_places, transfer_paths_result, trash_view_operation_result,
 };
 use gio::prelude::FileExt;
 use raw_window_handle::{HasDisplayHandle, RawDisplayHandle};
@@ -98,6 +99,15 @@ const RENAME_DIALOG_WIDTH: f32 = 420.0;
 const RENAME_DIALOG_HEIGHT: f32 = 168.0;
 const RENAME_DIALOG_MARGIN: f32 = 18.0;
 const RENAME_DIALOG_TITLE_HEIGHT: f32 = 42.0;
+const OPEN_WITH_CHOOSER_WIDTH: f32 = 560.0;
+const OPEN_WITH_CHOOSER_MARGIN: f32 = 18.0;
+const OPEN_WITH_CHOOSER_TITLE_HEIGHT: f32 = 42.0;
+const OPEN_WITH_CHOOSER_QUERY_HEIGHT: f32 = 30.0;
+const OPEN_WITH_CHOOSER_ROW_HEIGHT: f32 = 38.0;
+const OPEN_WITH_CHOOSER_MAX_ROWS: usize = 8;
+const OPEN_WITH_CHOOSER_BUTTON_WIDTH: f32 = 92.0;
+const OPEN_WITH_CHOOSER_BUTTON_HEIGHT: f32 = 24.0;
+const OPEN_WITH_CHOOSER_BUTTON_GAP: f32 = 8.0;
 const TRASH_CONFLICT_DIALOG_WIDTH: f32 = 520.0;
 const TRASH_CONFLICT_DIALOG_HEIGHT: f32 = 212.0;
 const TRASH_CONFLICT_DIALOG_MARGIN: f32 = 18.0;
@@ -322,6 +332,17 @@ enum RenameCommand {
     Ignore,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum OpenWithCommand {
+    Insert(String),
+    Backspace,
+    Cancel,
+    Commit,
+    MoveUp,
+    MoveDown,
+    Ignore,
+}
+
 fn window_title(scene: &ShellScene) -> String {
     format!(
         "Fika wgpu shell [{}] - {}",
@@ -373,6 +394,7 @@ impl ShellClipboard {
 
 struct FikaWgpuApp {
     scene: ShellScene,
+    mime_applications: MimeApplicationCache,
     modifiers: Modifiers,
     // Drop order matters: renderer and clipboard borrow display/window handles,
     // so they must be dropped before the window.
@@ -388,6 +410,7 @@ impl FikaWgpuApp {
     fn new(scene: ShellScene, auto_cycle_views: bool) -> Self {
         Self {
             scene,
+            mime_applications: MimeApplicationCache::load(),
             modifiers: Modifiers::default(),
             renderer: None,
             clipboard: None,
@@ -543,6 +566,20 @@ impl ApplicationHandler for FikaWgpuApp {
                 };
                 let shortcut =
                     self.modifiers.state().control_key() || self.modifiers.state().meta_key();
+                if self.scene.is_open_with_chooser_open() {
+                    match open_with_command_for_key_event(&event, shortcut) {
+                        OpenWithCommand::Commit => self.commit_open_with_chooser(),
+                        OpenWithCommand::Ignore => {}
+                        command => {
+                            if self.scene.apply_open_with_command(command)
+                                && let Some(window) = self.window.as_ref()
+                            {
+                                window.request_redraw();
+                            }
+                        }
+                    }
+                    return;
+                }
                 if self.scene.is_trash_conflict_dialog_open() {
                     if escape_requested_for_key_event(&event) {
                         if self.scene.close_trash_conflict_dialog()
@@ -688,6 +725,9 @@ impl ApplicationHandler for FikaWgpuApp {
                     x: position.x as f32,
                     y: position.y as f32,
                 };
+                if self.scene.is_open_with_chooser_open() {
+                    return;
+                }
                 if self.scene.is_rename_dialog_open() {
                     return;
                 }
@@ -723,6 +763,32 @@ impl ApplicationHandler for FikaWgpuApp {
                 let Some(mouse_button) = button.mouse_button() else {
                     return;
                 };
+                if self.scene.is_open_with_chooser_open() {
+                    if state == ElementState::Pressed && mouse_button == MouseButton::Left {
+                        match self
+                            .scene
+                            .open_with_chooser_click_at_screen_point(point, renderer.size)
+                        {
+                            OpenWithChooserClick::Outside | OpenWithChooserClick::Cancel => {
+                                if self.scene.close_open_with_chooser()
+                                    && let Some(window) = self.window.as_ref()
+                                {
+                                    window.request_redraw();
+                                }
+                            }
+                            OpenWithChooserClick::Open => self.commit_open_with_chooser(),
+                            OpenWithChooserClick::Row(row) => {
+                                if self.scene.select_open_with_filtered_row(row)
+                                    && let Some(window) = self.window.as_ref()
+                                {
+                                    window.request_redraw();
+                                }
+                            }
+                            OpenWithChooserClick::Inside => {}
+                        }
+                    }
+                    return;
+                }
                 if self.scene.is_trash_conflict_dialog_open() {
                     if state == ElementState::Pressed && mouse_button == MouseButton::Left {
                         match self
@@ -946,6 +1012,16 @@ impl FikaWgpuApp {
                                 window.request_redraw();
                             }
                         }
+                    }
+                }
+            }
+            ShellContextMenuAction::OpenWith => {
+                if self
+                    .scene
+                    .open_open_with_chooser_from_context(&self.mime_applications)
+                {
+                    if let Some(window) = self.window.as_ref() {
+                        window.request_redraw();
                     }
                 }
             }
@@ -1289,6 +1365,39 @@ impl FikaWgpuApp {
                     window.request_redraw();
                 }
             }
+        }
+    }
+
+    fn commit_open_with_chooser(&mut self) {
+        let request = match self.scene.open_with_launch_request(&self.mime_applications) {
+            Ok(request) => request,
+            Err(error) => {
+                if self.scene.set_open_with_chooser_error(error)
+                    && let Some(window) = self.window.as_ref()
+                {
+                    window.request_redraw();
+                }
+                return;
+            }
+        };
+
+        self.scene.close_open_with_chooser_after_success(&request);
+        let path = request.path.clone();
+        let app_name = request.app_name.clone();
+        std::thread::spawn(move || {
+            let result = pollster::block_on(launch_with_systemd_user(request.plan));
+            let status = OpenWithLaunchResult {
+                pane_id: WGPU_SHELL_PANE_ID,
+                path,
+                app_name,
+                result,
+            }
+            .status_message();
+            eprintln!("[fika-wgpu] open-with-finished {status}");
+        });
+
+        if let Some(window) = self.window.as_ref() {
+            window.request_redraw();
         }
     }
 
@@ -1749,6 +1858,61 @@ fn rename_command_for_key_parts(
     }
 }
 
+fn open_with_command_for_key_event(event: &KeyEvent, shortcut: bool) -> OpenWithCommand {
+    open_with_command_for_key_parts(
+        shortcut,
+        &event.physical_key,
+        &event.logical_key,
+        &event.key_without_modifiers,
+    )
+}
+
+fn open_with_command_for_key_parts(
+    shortcut: bool,
+    physical_key: &PhysicalKey,
+    logical_key: &Key,
+    key_without_modifiers: &Key,
+) -> OpenWithCommand {
+    if matches!(physical_key, PhysicalKey::Code(KeyCode::Escape))
+        || matches!(logical_key, Key::Named(NamedKey::Escape))
+        || matches!(key_without_modifiers, Key::Named(NamedKey::Escape))
+    {
+        return OpenWithCommand::Cancel;
+    }
+    if matches!(logical_key, Key::Named(NamedKey::Enter))
+        || matches!(key_without_modifiers, Key::Named(NamedKey::Enter))
+    {
+        return OpenWithCommand::Commit;
+    }
+    if matches!(physical_key, PhysicalKey::Code(KeyCode::ArrowUp))
+        || matches!(logical_key, Key::Named(NamedKey::ArrowUp))
+        || matches!(key_without_modifiers, Key::Named(NamedKey::ArrowUp))
+    {
+        return OpenWithCommand::MoveUp;
+    }
+    if matches!(physical_key, PhysicalKey::Code(KeyCode::ArrowDown))
+        || matches!(logical_key, Key::Named(NamedKey::ArrowDown))
+        || matches!(key_without_modifiers, Key::Named(NamedKey::ArrowDown))
+    {
+        return OpenWithCommand::MoveDown;
+    }
+    if matches!(physical_key, PhysicalKey::Code(KeyCode::Backspace))
+        || matches!(logical_key, Key::Named(NamedKey::Backspace))
+        || matches!(key_without_modifiers, Key::Named(NamedKey::Backspace))
+    {
+        return OpenWithCommand::Backspace;
+    }
+    if shortcut {
+        return OpenWithCommand::Ignore;
+    }
+    match logical_key {
+        Key::Character(value) if !value.chars().any(char::is_control) => {
+            OpenWithCommand::Insert(value.to_string())
+        }
+        _ => OpenWithCommand::Ignore,
+    }
+}
+
 fn key_character_eq(key: &Key, expected: &str) -> bool {
     matches!(key, Key::Character(value) if value.as_str().eq_ignore_ascii_case(expected))
 }
@@ -2174,6 +2338,7 @@ impl ShellContextTarget {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ShellContextMenuAction {
     Open,
+    OpenWith,
     OpenInNewPane,
     Copy,
     Cut,
@@ -2196,6 +2361,7 @@ impl ShellContextMenuAction {
     fn label(self) -> &'static str {
         match self {
             Self::Open => "Open",
+            Self::OpenWith => "Open With...",
             Self::OpenInNewPane => "Open in New Pane",
             Self::Copy => "Copy",
             Self::Cut => "Cut",
@@ -2218,6 +2384,7 @@ impl ShellContextMenuAction {
     fn as_str(self) -> &'static str {
         match self {
             Self::Open => "open",
+            Self::OpenWith => "open-with",
             Self::OpenInNewPane => "open-in-new-pane",
             Self::Copy => "copy",
             Self::Cut => "cut",
@@ -2258,6 +2425,7 @@ impl ShellContextMenu {
 fn context_menu_actions(target: &ShellContextTarget) -> &'static [ShellContextMenuAction] {
     const ITEM_FILE_ACTIONS: &[ShellContextMenuAction] = &[
         ShellContextMenuAction::Open,
+        ShellContextMenuAction::OpenWith,
         ShellContextMenuAction::OpenInNewPane,
         ShellContextMenuAction::Copy,
         ShellContextMenuAction::Cut,
@@ -2447,6 +2615,146 @@ struct RenameEntryRequest {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+struct ShellOpenWithChooser {
+    path: PathBuf,
+    mime_type: Option<Arc<str>>,
+    applications: Vec<MimeApplication>,
+    query: String,
+    selected_index: usize,
+    scroll_row: usize,
+    error: Option<String>,
+}
+
+impl ShellOpenWithChooser {
+    fn new(path: PathBuf, mime_type: Option<Arc<str>>, applications: Vec<MimeApplication>) -> Self {
+        let mut chooser = Self {
+            path,
+            mime_type,
+            selected_index: applications
+                .iter()
+                .position(|application| application.is_default)
+                .unwrap_or(0),
+            applications,
+            query: String::new(),
+            scroll_row: 0,
+            error: None,
+        };
+        chooser.ensure_selected_visible();
+        chooser
+    }
+
+    fn filtered_indexes(&self) -> Vec<usize> {
+        open_with_filtered_application_indexes(&self.applications, &self.query)
+    }
+
+    fn filtered_count(&self) -> usize {
+        self.filtered_indexes().len()
+    }
+
+    fn visible_filtered_indexes(&self) -> Vec<usize> {
+        let indexes = self.filtered_indexes();
+        indexes
+            .into_iter()
+            .skip(self.scroll_row)
+            .take(OPEN_WITH_CHOOSER_MAX_ROWS)
+            .collect()
+    }
+
+    fn selected_application(&self) -> Option<&MimeApplication> {
+        let indexes = self.filtered_indexes();
+        let selected = self.selected_index.min(indexes.len().saturating_sub(1));
+        let app_index = *indexes.get(selected)?;
+        self.applications.get(app_index)
+    }
+
+    fn apply_command(&mut self, command: OpenWithCommand) -> bool {
+        let old = self.clone();
+        match command {
+            OpenWithCommand::Insert(value) => {
+                self.query.push_str(&value);
+                self.selected_index = 0;
+                self.scroll_row = 0;
+                self.error = None;
+            }
+            OpenWithCommand::Backspace => {
+                self.query.pop();
+                self.selected_index = 0;
+                self.scroll_row = 0;
+                self.error = None;
+            }
+            OpenWithCommand::Cancel => return false,
+            OpenWithCommand::MoveUp => self.move_selection(-1),
+            OpenWithCommand::MoveDown => self.move_selection(1),
+            OpenWithCommand::Commit | OpenWithCommand::Ignore => return false,
+        }
+        self.ensure_selected_visible();
+        old != *self
+    }
+
+    fn select_filtered_row(&mut self, row: usize) -> bool {
+        let count = self.filtered_count();
+        if count == 0 {
+            return false;
+        }
+        let old_selected = self.selected_index;
+        let old_scroll = self.scroll_row;
+        self.selected_index = row.min(count - 1);
+        self.error = None;
+        self.ensure_selected_visible();
+        old_selected != self.selected_index || old_scroll != self.scroll_row
+    }
+
+    fn move_selection(&mut self, delta: isize) {
+        let count = self.filtered_count();
+        if count == 0 {
+            self.selected_index = 0;
+            self.scroll_row = 0;
+            return;
+        }
+        let current = self.selected_index.min(count - 1);
+        self.selected_index = if delta < 0 {
+            current.saturating_sub(delta.unsigned_abs())
+        } else {
+            (current + delta as usize).min(count - 1)
+        };
+    }
+
+    fn ensure_selected_visible(&mut self) {
+        let count = self.filtered_count();
+        if count == 0 {
+            self.selected_index = 0;
+            self.scroll_row = 0;
+            return;
+        }
+        self.selected_index = self.selected_index.min(count - 1);
+        if self.selected_index < self.scroll_row {
+            self.scroll_row = self.selected_index;
+        } else if self.selected_index >= self.scroll_row + OPEN_WITH_CHOOSER_MAX_ROWS {
+            self.scroll_row = self.selected_index + 1 - OPEN_WITH_CHOOSER_MAX_ROWS;
+        }
+        self.scroll_row = self
+            .scroll_row
+            .min(count.saturating_sub(OPEN_WITH_CHOOSER_MAX_ROWS));
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct OpenWithLaunchRequest {
+    path: PathBuf,
+    app_name: String,
+    plan: DesktopLaunchPlan,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum OpenWithChooserClick {
+    Outside,
+    Inside,
+    Cancel,
+    Open,
+    Row(usize),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct OpenFileRequest {
     path: PathBuf,
     uri: String,
@@ -2558,6 +2866,7 @@ struct ShellScene {
     properties_overlay: Option<ShellPropertiesOverlay>,
     create_dialog: Option<ShellCreateDialog>,
     rename_dialog: Option<ShellRenameDialog>,
+    open_with_chooser: Option<ShellOpenWithChooser>,
     trash_conflict_dialog: Option<ShellTrashConflictDialog>,
     rubber_band: Option<RubberBand>,
     hit_tests: u64,
@@ -2567,6 +2876,7 @@ struct ShellScene {
     properties_changes: u64,
     create_changes: u64,
     rename_changes: u64,
+    open_with_changes: u64,
     open_changes: u64,
     copy_location_changes: u64,
     file_clipboard_changes: u64,
@@ -2641,6 +2951,7 @@ impl ShellScene {
             properties_overlay: None,
             create_dialog: None,
             rename_dialog: None,
+            open_with_chooser: None,
             trash_conflict_dialog: None,
             rubber_band: None,
             hit_tests: 0,
@@ -2650,6 +2961,7 @@ impl ShellScene {
             properties_changes: 0,
             create_changes: 0,
             rename_changes: 0,
+            open_with_changes: 0,
             open_changes: 0,
             copy_location_changes: 0,
             file_clipboard_changes: 0,
@@ -2802,6 +3114,7 @@ impl ShellScene {
         self.properties_overlay = None;
         self.create_dialog = None;
         self.rename_dialog = None;
+        self.open_with_chooser = None;
         self.trash_conflict_dialog = None;
         self.rubber_band = None;
         self.last_primary_click = None;
@@ -3601,6 +3914,213 @@ impl ShellScene {
             self.open_changes
         );
         Ok(true)
+    }
+
+    fn open_open_with_chooser_from_context(&mut self, cache: &MimeApplicationCache) -> bool {
+        let chooser = match self.open_with_chooser_for_context(cache) {
+            Ok(chooser) => chooser,
+            Err(error) => {
+                eprintln!("[fika-wgpu] open-with-error {error}");
+                return false;
+            }
+        };
+        let changed = self.open_with_chooser.as_ref() != Some(&chooser);
+        self.open_with_chooser = Some(chooser);
+        self.context_menu = None;
+        self.properties_overlay = None;
+        self.create_dialog = None;
+        self.rename_dialog = None;
+        self.trash_conflict_dialog = None;
+        self.rubber_band = None;
+        if changed {
+            self.open_with_changes += 1;
+            self.log_open_with_chooser_state();
+        }
+        changed
+    }
+
+    fn open_with_chooser_for_context(
+        &self,
+        cache: &MimeApplicationCache,
+    ) -> Result<ShellOpenWithChooser, String> {
+        let Some(ShellContextTarget::Item {
+            index,
+            path,
+            is_dir: false,
+            ..
+        }) = self.context_target.as_ref()
+        else {
+            return Err(format!(
+                "target={} is not a file item",
+                self.context_target
+                    .as_ref()
+                    .map(ShellContextTarget::kind)
+                    .unwrap_or("none")
+            ));
+        };
+        if file_ops::is_in_trash_files_dir(path) {
+            return Err("Open With is not available inside Trash".to_string());
+        }
+        let entry = self
+            .entries
+            .get(*index)
+            .ok_or_else(|| format!("entry index {index} is out of range"))?;
+        let applications =
+            open_with_applications_for_mime(cache, entry.mime_type.as_ref().map(|mime| &**mime));
+        if applications.is_empty() {
+            return Err("no desktop applications found".to_string());
+        }
+        Ok(ShellOpenWithChooser::new(
+            path.clone(),
+            entry.mime_type.clone(),
+            applications,
+        ))
+    }
+
+    fn is_open_with_chooser_open(&self) -> bool {
+        self.open_with_chooser.is_some()
+    }
+
+    fn apply_open_with_command(&mut self, command: OpenWithCommand) -> bool {
+        if command == OpenWithCommand::Cancel {
+            return self.close_open_with_chooser();
+        }
+        let Some(chooser) = self.open_with_chooser.as_mut() else {
+            return false;
+        };
+        if chooser.apply_command(command) {
+            self.open_with_changes += 1;
+            self.log_open_with_chooser_state();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn select_open_with_filtered_row(&mut self, row: usize) -> bool {
+        let Some(chooser) = self.open_with_chooser.as_mut() else {
+            return false;
+        };
+        if chooser.select_filtered_row(row) {
+            self.open_with_changes += 1;
+            self.log_open_with_chooser_state();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn open_with_launch_request(
+        &self,
+        cache: &MimeApplicationCache,
+    ) -> Result<OpenWithLaunchRequest, String> {
+        let chooser = self
+            .open_with_chooser
+            .as_ref()
+            .ok_or_else(|| "Open With chooser is not open".to_string())?;
+        let selected = chooser
+            .selected_application()
+            .ok_or_else(|| "no application is selected".to_string())?;
+        let app = cache
+            .application(&selected.id)
+            .ok_or_else(|| format!("application not found: {}", selected.id))?;
+        let plan = app
+            .launch_plan(std::slice::from_ref(&chooser.path))
+            .ok_or_else(|| format!("{} did not produce a launch command", app.name))?;
+        Ok(OpenWithLaunchRequest {
+            path: chooser.path.clone(),
+            app_name: plan.app_name.clone(),
+            plan,
+        })
+    }
+
+    fn set_open_with_chooser_error(&mut self, error: String) -> bool {
+        let Some(chooser) = self.open_with_chooser.as_mut() else {
+            eprintln!("[fika-wgpu] open-with-error {error}");
+            return false;
+        };
+        if chooser.error.as_ref() == Some(&error) {
+            return false;
+        }
+        chooser.error = Some(error);
+        self.open_with_changes += 1;
+        self.log_open_with_chooser_state();
+        true
+    }
+
+    fn close_open_with_chooser(&mut self) -> bool {
+        if self.open_with_chooser.take().is_none() {
+            return false;
+        }
+        self.open_with_changes += 1;
+        eprintln!(
+            "[fika-wgpu] open-with open=0 changes={}",
+            self.open_with_changes
+        );
+        true
+    }
+
+    fn close_open_with_chooser_after_success(&mut self, request: &OpenWithLaunchRequest) -> bool {
+        if self.open_with_chooser.take().is_none() {
+            return false;
+        }
+        self.open_with_changes += 1;
+        eprintln!(
+            "[fika-wgpu] open-with path={} app={:?} changes={}",
+            request.path.display(),
+            request.app_name,
+            self.open_with_changes
+        );
+        true
+    }
+
+    fn open_with_chooser_click_at_screen_point(
+        &self,
+        point: ViewPoint,
+        size: PhysicalSize<u32>,
+    ) -> OpenWithChooserClick {
+        let Some(chooser) = self.open_with_chooser.as_ref() else {
+            return OpenWithChooserClick::Outside;
+        };
+        let rect = open_with_chooser_rect(chooser, size);
+        if !rect.contains(point) {
+            return OpenWithChooserClick::Outside;
+        }
+        if open_with_chooser_cancel_button_rect(rect).contains(point) {
+            return OpenWithChooserClick::Cancel;
+        }
+        if open_with_chooser_open_button_rect(rect).contains(point) {
+            return OpenWithChooserClick::Open;
+        }
+        let list = open_with_chooser_list_rect(rect, chooser);
+        if list.contains(point) {
+            let visible_row = ((point.y - list.y) / OPEN_WITH_CHOOSER_ROW_HEIGHT).floor() as usize;
+            let row = chooser.scroll_row + visible_row;
+            if row < chooser.filtered_count() {
+                return OpenWithChooserClick::Row(row);
+            }
+        }
+        OpenWithChooserClick::Inside
+    }
+
+    fn log_open_with_chooser_state(&self) {
+        match self.open_with_chooser.as_ref() {
+            Some(chooser) => eprintln!(
+                "[fika-wgpu] open-with open=1 path={} mime={} apps={} filtered={} selected={} query={:?} error={:?} changes={}",
+                chooser.path.display(),
+                chooser.mime_type.as_deref().unwrap_or("unknown"),
+                chooser.applications.len(),
+                chooser.filtered_count(),
+                chooser.selected_index,
+                chooser.query,
+                chooser.error,
+                self.open_with_changes
+            ),
+            None => eprintln!(
+                "[fika-wgpu] open-with open=0 changes={}",
+                self.open_with_changes
+            ),
+        }
     }
 
     fn context_target_copy_location_request(&self) -> Option<CopyLocationRequest> {
@@ -4884,6 +5404,7 @@ impl ShellScene {
         self.push_properties_overlay(&mut vertices, text, size);
         self.push_create_dialog_overlay(&mut vertices, text, size);
         self.push_rename_dialog_overlay(&mut vertices, text, size);
+        self.push_open_with_chooser_overlay(&mut vertices, text, size);
         self.push_trash_conflict_dialog_overlay(&mut vertices, text, size);
 
         SceneFrame {
@@ -5451,6 +5972,13 @@ impl ShellScene {
         if let Some(dialog) = self.rename_dialog.as_ref() {
             status.push_str(&format!(" | rename {:?}", dialog.name));
         }
+        if let Some(chooser) = self.open_with_chooser.as_ref() {
+            status.push_str(&format!(
+                " | open-with {} apps {:?}",
+                chooser.filtered_count(),
+                chooser.query
+            ));
+        }
         if let Some(dialog) = self.trash_conflict_dialog.as_ref() {
             status.push_str(&format!(" | trash conflicts {}", dialog.conflicts.len()));
         }
@@ -5808,6 +6336,241 @@ impl ShellScene {
         let cancel = rename_dialog_cancel_button_rect(rect);
         let commit = rename_dialog_commit_button_rect(rect);
         for (label, button, active) in [("Cancel", cancel, false), ("Rename", commit, true)] {
+            push_rect(
+                vertices,
+                button,
+                if active {
+                    [0.22, 0.42, 0.62, 1.0]
+                } else {
+                    [0.150, 0.162, 0.176, 1.0]
+                },
+                size,
+            );
+            text.push_label(
+                label,
+                ViewRect {
+                    x: button.x + 10.0,
+                    y: button.y + 4.0,
+                    width: (button.width - 20.0).max(1.0),
+                    height: 18.0,
+                },
+                rect,
+                TextColor::rgb(238, 244, 249),
+            );
+        }
+    }
+
+    fn push_open_with_chooser_overlay(
+        &self,
+        vertices: &mut Vec<QuadVertex>,
+        text: &mut TextFrameBuilder<'_>,
+        size: PhysicalSize<u32>,
+    ) {
+        let Some(chooser) = self.open_with_chooser.as_ref() else {
+            return;
+        };
+        let screen = ViewRect {
+            x: 0.0,
+            y: 0.0,
+            width: size.width.max(1) as f32,
+            height: size.height.max(1) as f32,
+        };
+        push_rect(vertices, screen, [0.0, 0.0, 0.0, 0.46], size);
+        let rect = open_with_chooser_rect(chooser, size);
+        push_rect(vertices, rect, [0.118, 0.128, 0.140, 0.99], size);
+        push_clipped_rect_outline(vertices, rect, screen, 1.0, [0.34, 0.38, 0.43, 1.0], size);
+        push_rect(
+            vertices,
+            ViewRect {
+                x: rect.x,
+                y: rect.y,
+                width: rect.width,
+                height: OPEN_WITH_CHOOSER_TITLE_HEIGHT,
+            },
+            [0.145, 0.158, 0.174, 1.0],
+            size,
+        );
+        text.push_label(
+            &format!("Open With - {}", path_name_or_display(&chooser.path)),
+            ViewRect {
+                x: rect.x + 16.0,
+                y: rect.y + 8.0,
+                width: (rect.width - 32.0).max(1.0),
+                height: 18.0,
+            },
+            rect,
+            TextColor::rgb(238, 244, 249),
+        );
+        text.push_label(
+            chooser.mime_type.as_deref().unwrap_or("unknown MIME"),
+            ViewRect {
+                x: rect.x + 16.0,
+                y: rect.y + 25.0,
+                width: (rect.width - 32.0).max(1.0),
+                height: 14.0,
+            },
+            rect,
+            TextColor::rgb(162, 176, 188),
+        );
+
+        let query = open_with_chooser_query_rect(rect);
+        push_rect(vertices, query, [0.078, 0.086, 0.096, 1.0], size);
+        push_clipped_rect_outline(vertices, query, rect, 1.0, [0.26, 0.31, 0.36, 1.0], size);
+        let query_label = if chooser.query.is_empty() {
+            "Search applications|".to_string()
+        } else {
+            format!("{}|", chooser.query)
+        };
+        text.push_label(
+            &query_label,
+            ViewRect {
+                x: query.x + 10.0,
+                y: query.y + 7.0,
+                width: (query.width - 20.0).max(1.0),
+                height: 18.0,
+            },
+            query,
+            if chooser.query.is_empty() {
+                TextColor::rgb(132, 146, 158)
+            } else {
+                TextColor::rgb(230, 236, 241)
+            },
+        );
+
+        let list = open_with_chooser_list_rect(rect, chooser);
+        push_rect(vertices, list, [0.090, 0.100, 0.112, 1.0], size);
+        push_clipped_rect_outline(vertices, list, rect, 1.0, [0.23, 0.27, 0.31, 1.0], size);
+        let visible = chooser.visible_filtered_indexes();
+        if visible.is_empty() {
+            text.push_label(
+                "No matching applications",
+                ViewRect {
+                    x: list.x + 12.0,
+                    y: list.y + 10.0,
+                    width: (list.width - 24.0).max(1.0),
+                    height: 18.0,
+                },
+                list,
+                TextColor::rgb(178, 188, 198),
+            );
+        } else {
+            for (visible_row, app_index) in visible.iter().copied().enumerate() {
+                let row = chooser.scroll_row + visible_row;
+                let Some(application) = chooser.applications.get(app_index) else {
+                    continue;
+                };
+                let row_rect = ViewRect {
+                    x: list.x,
+                    y: list.y + visible_row as f32 * OPEN_WITH_CHOOSER_ROW_HEIGHT,
+                    width: list.width,
+                    height: OPEN_WITH_CHOOSER_ROW_HEIGHT,
+                };
+                let selected = row == chooser.selected_index;
+                push_rect(
+                    vertices,
+                    row_rect,
+                    if selected {
+                        [0.19, 0.33, 0.50, 0.90]
+                    } else if application.is_default {
+                        [0.15, 0.18, 0.16, 0.88]
+                    } else if visible_row % 2 == 1 {
+                        [0.105, 0.114, 0.126, 0.76]
+                    } else {
+                        [0.095, 0.104, 0.116, 0.72]
+                    },
+                    size,
+                );
+                let marker = ViewRect {
+                    x: row_rect.x + 10.0,
+                    y: row_rect.y + 11.0,
+                    width: 16.0,
+                    height: 16.0,
+                };
+                push_rect(
+                    vertices,
+                    marker,
+                    if application.is_default {
+                        [0.42, 0.58, 0.34, 1.0]
+                    } else {
+                        [0.38, 0.48, 0.58, 1.0]
+                    },
+                    size,
+                );
+                let name = if application.is_default {
+                    format!("{} (default)", application.name)
+                } else {
+                    application.name.clone()
+                };
+                text.push_label(
+                    &name,
+                    ViewRect {
+                        x: row_rect.x + 36.0,
+                        y: row_rect.y + 4.0,
+                        width: (row_rect.width - 48.0).max(1.0),
+                        height: 18.0,
+                    },
+                    row_rect,
+                    if selected {
+                        TextColor::rgb(246, 250, 252)
+                    } else {
+                        TextColor::rgb(222, 230, 238)
+                    },
+                );
+                text.push_label(
+                    &application.id,
+                    ViewRect {
+                        x: row_rect.x + 36.0,
+                        y: row_rect.y + 20.0,
+                        width: (row_rect.width - 48.0).max(1.0),
+                        height: 14.0,
+                    },
+                    row_rect,
+                    if selected {
+                        TextColor::rgb(198, 214, 228)
+                    } else {
+                        TextColor::rgb(146, 160, 174)
+                    },
+                );
+            }
+        }
+
+        if chooser.filtered_count() > OPEN_WITH_CHOOSER_MAX_ROWS {
+            let end = (chooser.scroll_row + visible.len()).min(chooser.filtered_count());
+            text.push_label(
+                &format!(
+                    "{}-{} of {}",
+                    chooser.scroll_row + 1,
+                    end,
+                    chooser.filtered_count()
+                ),
+                ViewRect {
+                    x: rect.x + 16.0,
+                    y: list.bottom() + 5.0,
+                    width: 120.0,
+                    height: 18.0,
+                },
+                rect,
+                TextColor::rgb(146, 160, 174),
+            );
+        }
+
+        if let Some(error) = chooser.error.as_ref() {
+            text.push_label(
+                error,
+                ViewRect {
+                    x: rect.x + 16.0,
+                    y: list.bottom() + 5.0,
+                    width: (rect.width - 32.0).max(1.0),
+                    height: 18.0,
+                },
+                rect,
+                TextColor::rgb(238, 132, 122),
+            );
+        }
+
+        let cancel = open_with_chooser_cancel_button_rect(rect);
+        let open = open_with_chooser_open_button_rect(rect);
+        for (label, button, active) in [("Cancel", cancel, false), ("Open", open, true)] {
             push_rect(
                 vertices,
                 button,
@@ -6863,7 +7626,7 @@ impl WgpuState {
             || self.last_log.elapsed() >= Duration::from_secs(1)
         {
             eprintln!(
-                "[fika-wgpu] frame={} reason={} view={} zoom={} zoom_changes={} path={} entries={} filtered={} show_hidden={} hidden_changes={} location_active={} location_changes={} filter_active={} filter_changes={} places={} place_hover={} places_changes={} places_scroll_y={:.1} places_scroll_changes={} visible={} selected={} hover={} context={} context_menu={} context_changes={} context_actions={} properties={} properties_changes={} create_dialog={} create_changes={} rename_dialog={} rename_changes={} open_changes={} copy_location_changes={} file_clipboard_changes={} paste_changes={} trash_changes={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} path_changes={} reloads={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_cache={}/{} entries={} bytes={} batches={} scroll_x={:.1} scroll_y={:.1} layout={}us text_raster={}us text_atlas={}x{}:{}b render={}us",
+                "[fika-wgpu] frame={} reason={} view={} zoom={} zoom_changes={} path={} entries={} filtered={} show_hidden={} hidden_changes={} location_active={} location_changes={} filter_active={} filter_changes={} places={} place_hover={} places_changes={} places_scroll_y={:.1} places_scroll_changes={} visible={} selected={} hover={} context={} context_menu={} context_changes={} context_actions={} properties={} properties_changes={} create_dialog={} create_changes={} rename_dialog={} rename_changes={} open_with={} open_with_changes={} open_changes={} copy_location_changes={} file_clipboard_changes={} paste_changes={} trash_changes={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} path_changes={} reloads={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_cache={}/{} entries={} bytes={} batches={} scroll_x={:.1} scroll_y={:.1} layout={}us text_raster={}us text_atlas={}x{}:{}b render={}us",
                 self.frame_count,
                 reason,
                 scene.view_mode.as_str(),
@@ -6900,6 +7663,8 @@ impl WgpuState {
                 scene.create_changes,
                 scene.rename_dialog.is_some() as u8,
                 scene.rename_changes,
+                scene.open_with_chooser.is_some() as u8,
+                scene.open_with_changes,
                 scene.open_changes,
                 scene.copy_location_changes,
                 scene.file_clipboard_changes,
@@ -9675,6 +10440,77 @@ fn rename_dialog_commit_button_rect(dialog_rect: ViewRect) -> ViewRect {
     }
 }
 
+fn open_with_chooser_rect(chooser: &ShellOpenWithChooser, size: PhysicalSize<u32>) -> ViewRect {
+    let width = size.width.max(1) as f32;
+    let height = size.height.max(1) as f32;
+    let dialog_width = OPEN_WITH_CHOOSER_WIDTH
+        .min((width - OPEN_WITH_CHOOSER_MARGIN * 2.0).max(1.0))
+        .max(1.0);
+    let rows = open_with_chooser_visible_row_count(chooser).max(1);
+    let error_height = if chooser.error.is_some() { 26.0 } else { 0.0 };
+    let dialog_height = (OPEN_WITH_CHOOSER_TITLE_HEIGHT
+        + 16.0
+        + OPEN_WITH_CHOOSER_QUERY_HEIGHT
+        + 12.0
+        + rows as f32 * OPEN_WITH_CHOOSER_ROW_HEIGHT
+        + error_height
+        + 54.0)
+        .min((height - OPEN_WITH_CHOOSER_MARGIN * 2.0).max(1.0))
+        .max(1.0);
+    ViewRect {
+        x: ((width - dialog_width) / 2.0).max(OPEN_WITH_CHOOSER_MARGIN),
+        y: ((height - dialog_height) / 2.0).max(OPEN_WITH_CHOOSER_MARGIN),
+        width: dialog_width,
+        height: dialog_height,
+    }
+}
+
+fn open_with_chooser_visible_row_count(chooser: &ShellOpenWithChooser) -> usize {
+    chooser
+        .filtered_count()
+        .min(OPEN_WITH_CHOOSER_MAX_ROWS)
+        .max(1)
+}
+
+fn open_with_chooser_query_rect(dialog_rect: ViewRect) -> ViewRect {
+    ViewRect {
+        x: dialog_rect.x + 16.0,
+        y: dialog_rect.y + OPEN_WITH_CHOOSER_TITLE_HEIGHT + 16.0,
+        width: (dialog_rect.width - 32.0).max(1.0),
+        height: OPEN_WITH_CHOOSER_QUERY_HEIGHT,
+    }
+}
+
+fn open_with_chooser_list_rect(dialog_rect: ViewRect, chooser: &ShellOpenWithChooser) -> ViewRect {
+    let query = open_with_chooser_query_rect(dialog_rect);
+    ViewRect {
+        x: dialog_rect.x + 16.0,
+        y: query.bottom() + 12.0,
+        width: (dialog_rect.width - 32.0).max(1.0),
+        height: open_with_chooser_visible_row_count(chooser) as f32 * OPEN_WITH_CHOOSER_ROW_HEIGHT,
+    }
+}
+
+fn open_with_chooser_cancel_button_rect(dialog_rect: ViewRect) -> ViewRect {
+    let right = dialog_rect.right() - 16.0;
+    ViewRect {
+        x: right - OPEN_WITH_CHOOSER_BUTTON_WIDTH * 2.0 - OPEN_WITH_CHOOSER_BUTTON_GAP,
+        y: dialog_rect.bottom() - 16.0 - OPEN_WITH_CHOOSER_BUTTON_HEIGHT,
+        width: OPEN_WITH_CHOOSER_BUTTON_WIDTH,
+        height: OPEN_WITH_CHOOSER_BUTTON_HEIGHT,
+    }
+}
+
+fn open_with_chooser_open_button_rect(dialog_rect: ViewRect) -> ViewRect {
+    let right = dialog_rect.right() - 16.0;
+    ViewRect {
+        x: right - OPEN_WITH_CHOOSER_BUTTON_WIDTH,
+        y: dialog_rect.bottom() - 16.0 - OPEN_WITH_CHOOSER_BUTTON_HEIGHT,
+        width: OPEN_WITH_CHOOSER_BUTTON_WIDTH,
+        height: OPEN_WITH_CHOOSER_BUTTON_HEIGHT,
+    }
+}
+
 fn trash_conflict_dialog_rect(
     _dialog: &ShellTrashConflictDialog,
     size: PhysicalSize<u32>,
@@ -9717,6 +10553,65 @@ fn trash_conflict_dialog_replace_button_rect(dialog_rect: ViewRect) -> ViewRect 
 
 fn property_row(label: &'static str, value: String) -> ShellPropertyRow {
     ShellPropertyRow { label, value }
+}
+
+fn open_with_applications_for_mime(
+    cache: &MimeApplicationCache,
+    mime: Option<&str>,
+) -> Vec<MimeApplication> {
+    let mut applications = Vec::new();
+    let mut seen = BTreeSet::new();
+    let associated = mime
+        .map(|mime| cache.applications_for_mime(mime))
+        .unwrap_or_default();
+    for application in associated.into_iter().chain(cache.all_applications()) {
+        if seen.insert(application.id.clone()) {
+            applications.push(application);
+        }
+    }
+    applications
+}
+
+fn open_with_filtered_application_indexes(
+    applications: &[MimeApplication],
+    query: &str,
+) -> Vec<usize> {
+    let terms = query
+        .split_whitespace()
+        .map(|term| term.to_ascii_lowercase())
+        .collect::<Vec<_>>();
+    applications
+        .iter()
+        .enumerate()
+        .filter(|(_, application)| open_with_application_matches_terms(application, &terms))
+        .map(|(index, _)| index)
+        .collect()
+}
+
+fn open_with_application_matches_terms(application: &MimeApplication, terms: &[String]) -> bool {
+    if terms.is_empty() {
+        return true;
+    }
+    let haystacks = [
+        application.name.to_ascii_lowercase(),
+        application.id.to_ascii_lowercase(),
+        application.exec.to_ascii_lowercase(),
+        application
+            .desktop_file
+            .display()
+            .to_string()
+            .to_ascii_lowercase(),
+        application
+            .icon
+            .clone()
+            .unwrap_or_default()
+            .to_ascii_lowercase(),
+    ];
+    terms.iter().all(|term| {
+        haystacks
+            .iter()
+            .any(|haystack| haystack.contains(term.as_str()))
+    })
 }
 
 fn yes_no(value: bool) -> String {
@@ -10097,6 +10992,23 @@ mod tests {
         std::env::temp_dir().join(format!("fika-wgpu-{name}-{unique}"))
     }
 
+    fn test_desktop_application(
+        id: &str,
+        name: &str,
+        exec: &str,
+        mime_types: &[&str],
+    ) -> fika_core::DesktopApplication {
+        fika_core::DesktopApplication {
+            id: id.to_string(),
+            desktop_file: PathBuf::from(format!("/apps/{id}")),
+            name: name.to_string(),
+            exec: exec.to_string(),
+            icon: None,
+            mime_types: mime_types.iter().map(|mime| mime.to_string()).collect(),
+            actions: Vec::new(),
+        }
+    }
+
     fn test_scene(entries: Vec<Entry>, view_mode: ShellViewMode) -> ShellScene {
         let dir_count = entries.iter().filter(|entry| entry.is_dir).count();
         let filtered_indexes = filtered_indexes_for_entries(&entries, false, "");
@@ -10129,6 +11041,7 @@ mod tests {
             properties_overlay: None,
             create_dialog: None,
             rename_dialog: None,
+            open_with_chooser: None,
             trash_conflict_dialog: None,
             rubber_band: None,
             hit_tests: 0,
@@ -10138,6 +11051,7 @@ mod tests {
             properties_changes: 0,
             create_changes: 0,
             rename_changes: 0,
+            open_with_changes: 0,
             open_changes: 0,
             copy_location_changes: 0,
             file_clipboard_changes: 0,
@@ -10436,11 +11350,165 @@ mod tests {
             selection_count: 1,
         };
         assert!(!context_menu_actions(&file_target).contains(&ShellContextMenuAction::AddToPlaces));
+        assert!(context_menu_actions(&file_target).contains(&ShellContextMenuAction::OpenWith));
 
         let blank_target = ShellContextTarget::Blank {
             path: PathBuf::from("/tmp"),
         };
         assert!(context_menu_actions(&blank_target).contains(&ShellContextMenuAction::AddToPlaces));
+    }
+
+    #[test]
+    fn open_with_chooser_opens_from_file_context_and_filters_applications() {
+        let mut scene = test_scene(vec![test_entry("note.txt", false)], ShellViewMode::Icons);
+        scene.context_target = Some(ShellContextTarget::Item {
+            index: 0,
+            path: PathBuf::from("/tmp/note.txt"),
+            is_dir: false,
+            selection_count: 1,
+        });
+        let list = fika_core::parse_mimeapps_list(
+            "\
+[Default Applications]\n\
+text/plain=writer.desktop;\n",
+        );
+        let cache = MimeApplicationCache::from_applications_and_mimeapps(
+            vec![
+                test_desktop_application("viewer.desktop", "Viewer", "viewer %f", &["text/plain"]),
+                test_desktop_application("writer.desktop", "Writer", "writer %f", &["text/plain"]),
+                test_desktop_application("paint.desktop", "Paint", "paint %f", &["image/png"]),
+            ],
+            &[list],
+        );
+
+        assert!(scene.open_open_with_chooser_from_context(&cache));
+        let chooser = scene
+            .open_with_chooser
+            .as_ref()
+            .expect("chooser should open");
+        assert_eq!(chooser.path, PathBuf::from("/tmp/note.txt"));
+        assert_eq!(chooser.mime_type.as_deref(), Some("text/plain"));
+        assert_eq!(
+            chooser
+                .applications
+                .iter()
+                .map(|application| application.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["writer.desktop", "viewer.desktop", "paint.desktop"]
+        );
+        assert_eq!(
+            chooser.selected_application().map(|app| app.id.as_str()),
+            Some("writer.desktop")
+        );
+
+        assert!(scene.apply_open_with_command(OpenWithCommand::Insert("paint".to_string())));
+        let chooser = scene.open_with_chooser.as_ref().unwrap();
+        assert_eq!(chooser.filtered_count(), 1);
+        assert_eq!(
+            chooser.selected_application().map(|app| app.id.as_str()),
+            Some("paint.desktop")
+        );
+    }
+
+    #[test]
+    fn open_with_chooser_click_selects_row_and_buttons_close_or_commit() {
+        let mut scene = test_scene(vec![test_entry("note.txt", false)], ShellViewMode::Icons);
+        scene.open_with_chooser = Some(ShellOpenWithChooser::new(
+            PathBuf::from("/tmp/note.txt"),
+            Some(Arc::from("text/plain")),
+            vec![
+                MimeApplication {
+                    id: "viewer.desktop".to_string(),
+                    desktop_file: PathBuf::from("/apps/viewer.desktop"),
+                    name: "Viewer".to_string(),
+                    exec: "viewer %f".to_string(),
+                    icon: None,
+                    is_default: false,
+                },
+                MimeApplication {
+                    id: "writer.desktop".to_string(),
+                    desktop_file: PathBuf::from("/apps/writer.desktop"),
+                    name: "Writer".to_string(),
+                    exec: "writer %f".to_string(),
+                    icon: None,
+                    is_default: false,
+                },
+            ],
+        ));
+        let size = PhysicalSize::new(640, 420);
+        let rect = open_with_chooser_rect(scene.open_with_chooser.as_ref().unwrap(), size);
+        let list = open_with_chooser_list_rect(rect, scene.open_with_chooser.as_ref().unwrap());
+
+        assert_eq!(
+            scene.open_with_chooser_click_at_screen_point(
+                ViewPoint {
+                    x: list.x + 4.0,
+                    y: list.y + OPEN_WITH_CHOOSER_ROW_HEIGHT + 4.0,
+                },
+                size,
+            ),
+            OpenWithChooserClick::Row(1)
+        );
+        assert!(scene.select_open_with_filtered_row(1));
+        assert_eq!(
+            scene
+                .open_with_chooser
+                .as_ref()
+                .unwrap()
+                .selected_application()
+                .map(|application| application.id.as_str()),
+            Some("writer.desktop")
+        );
+        assert_eq!(
+            scene.open_with_chooser_click_at_screen_point(
+                ViewPoint {
+                    x: open_with_chooser_open_button_rect(rect).x + 2.0,
+                    y: open_with_chooser_open_button_rect(rect).y + 2.0,
+                },
+                size,
+            ),
+            OpenWithChooserClick::Open
+        );
+        assert_eq!(
+            scene.open_with_chooser_click_at_screen_point(ViewPoint { x: 1.0, y: 1.0 }, size),
+            OpenWithChooserClick::Outside
+        );
+    }
+
+    #[test]
+    fn open_with_chooser_builds_launch_plan_for_selected_application() {
+        let mut scene = test_scene(vec![test_entry("note.txt", false)], ShellViewMode::Icons);
+        scene.open_with_chooser = Some(ShellOpenWithChooser::new(
+            PathBuf::from("/tmp/note.txt"),
+            Some(Arc::from("text/plain")),
+            vec![MimeApplication {
+                id: "writer.desktop".to_string(),
+                desktop_file: PathBuf::from("/apps/writer.desktop"),
+                name: "Writer".to_string(),
+                exec: "writer %f".to_string(),
+                icon: None,
+                is_default: true,
+            }],
+        ));
+        let cache = MimeApplicationCache::from_applications_and_mimeapps(
+            vec![test_desktop_application(
+                "writer.desktop",
+                "Writer",
+                "writer --line %f",
+                &["text/plain"],
+            )],
+            &[],
+        );
+
+        let request = scene.open_with_launch_request(&cache).unwrap();
+
+        assert_eq!(request.path, PathBuf::from("/tmp/note.txt"));
+        assert_eq!(request.app_name, "Writer");
+        assert_eq!(request.plan.commands[0].program, "writer");
+        assert_eq!(
+            request.plan.commands[0].args,
+            vec!["--line", "/tmp/note.txt"]
+        );
     }
 
     #[test]
