@@ -140,7 +140,9 @@ Current checkpoint:
   painted as a clipped GPU overlay.
 - Keyboard navigation now handles Arrow, Home/End, and Page Up/Down keys
   through the same retained selection state. Shift extends the current range,
-  and the focused item is scrolled into view.
+  and the focused item is scrolled into view. `Ctrl/Meta+A` selects all current
+  directory entries, and `Esc` clears selection while canceling any transient
+  rubber-band operation.
 - Directory activation now stays inside the shell-owned input path: Enter opens
   the focused selected directory, double-click opens a directory resolved from
   retained hit testing, and Backspace or Alt+Up loads the parent directory. The
@@ -182,9 +184,9 @@ Acceptance:
   pending.
 - [~] Renders visible directory slots with real theme icons when available,
   fallback icons for misses, and real file-name text via texture atlases.
-- [~] Routes basic pointer hover, mouse selection, keyboard navigation, and
-  rubber-band selection through retained geometry. DnD targeting remains
-  pending.
+- [~] Routes basic pointer hover, mouse selection, keyboard navigation,
+  select-all/clear shortcuts, and rubber-band selection through retained
+  geometry. DnD targeting remains pending.
 - [~] Emits frame timing, visible range, draw-command counters, temporary
   icon/text atlas counters, retained hit-test counters, and bounded
   icon/label-cache counters. Glyph-level and thumbnail atlas counters will
@@ -200,8 +202,8 @@ Acceptance:
 - [~] `/etc` renders in Compact, Icons, and Details via `--view`; `~/Downloads`
   and manual interaction smokes remain pending.
 - [~] Scroll, hover, keyboard navigation, runtime mode switching, projection
-  zoom, and selection work from retained geometry for the initial projections.
-  Glyph-level text zoom policy remains pending.
+  zoom, selection, and select-all/clear shortcuts work from retained geometry
+  for the initial projections. Glyph-level text zoom policy remains pending.
 - [~] Layout/hit-test/paint share the same shell layout abstraction for Icons,
   Compact, and Details.
 - No synchronous theme scan, MIME magic read, thumbnail decode, or text shaping

@@ -215,6 +215,21 @@ enum ZoomAction {
     Reset,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SelectionCommand {
+    SelectAll,
+    Clear,
+}
+
+impl SelectionCommand {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::SelectAll => "select-all",
+            Self::Clear => "clear",
+        }
+    }
+}
+
 fn window_title(scene: &ShellScene) -> String {
     format!(
         "Fika wgpu shell [{}] - {}",
@@ -388,6 +403,14 @@ impl ApplicationHandler for FikaWgpuApp {
                 if shortcut && let Some(zoom_action) = zoom_action_for_key_event(&event) {
                     if self.scene.zoom(zoom_action, renderer.size) {
                         self.present_scene_change(event_loop, "zoom");
+                    }
+                    return;
+                }
+                if let Some(command) = selection_command_for_key_event(&event, shortcut) {
+                    if self.scene.apply_selection_command(command)
+                        && let Some(window) = self.window.as_ref()
+                    {
+                        window.request_redraw();
                     }
                     return;
                 }
@@ -629,6 +652,43 @@ fn zoom_action_for_key(key: &Key) -> Option<ZoomAction> {
         Key::Character(value) if value.as_str() == "0" => Some(ZoomAction::Reset),
         _ => None,
     }
+}
+
+fn selection_command_for_key_event(event: &KeyEvent, shortcut: bool) -> Option<SelectionCommand> {
+    selection_command_for_key_parts(
+        shortcut,
+        &event.physical_key,
+        &event.logical_key,
+        &event.key_without_modifiers,
+    )
+}
+
+fn selection_command_for_key_parts(
+    shortcut: bool,
+    physical_key: &PhysicalKey,
+    logical_key: &Key,
+    key_without_modifiers: &Key,
+) -> Option<SelectionCommand> {
+    if matches!(physical_key, PhysicalKey::Code(KeyCode::Escape))
+        || matches!(logical_key, Key::Named(NamedKey::Escape))
+        || matches!(key_without_modifiers, Key::Named(NamedKey::Escape))
+    {
+        return Some(SelectionCommand::Clear);
+    }
+    if !shortcut {
+        return None;
+    }
+    if matches!(physical_key, PhysicalKey::Code(KeyCode::KeyA))
+        || key_character_eq(logical_key, "a")
+        || key_character_eq(key_without_modifiers, "a")
+    {
+        return Some(SelectionCommand::SelectAll);
+    }
+    None
+}
+
+fn key_character_eq(key: &Key, expected: &str) -> bool {
+    matches!(key, Key::Character(value) if value.as_str().eq_ignore_ascii_case(expected))
 }
 
 fn navigation_action_for_key(key: &Key) -> Option<NavigationAction> {
@@ -1184,6 +1244,26 @@ impl ShellScene {
             self.scroll_y
         );
         true
+    }
+
+    fn apply_selection_command(&mut self, command: SelectionCommand) -> bool {
+        let rubber_band_changed = self.rubber_band.take().is_some();
+        let selection_changed = match command {
+            SelectionCommand::SelectAll => self.selection.select_all(self.entries.len()),
+            SelectionCommand::Clear => self.selection.clear(),
+        };
+        if selection_changed {
+            self.selection_changes += 1;
+        }
+        if selection_changed || rubber_band_changed {
+            eprintln!(
+                "[fika-wgpu] selection command={} selected={} changes={}",
+                command.as_str(),
+                self.selection.len(),
+                self.selection_changes
+            );
+        }
+        selection_changed || rubber_band_changed
     }
 
     fn view_mode_at_screen_point(
@@ -2166,6 +2246,30 @@ impl ShellSelection {
 
     fn focus_or_first_selected(&self) -> Option<usize> {
         self.focus.or_else(|| self.selected.iter().next().copied())
+    }
+
+    fn select_all(&mut self, item_count: usize) -> bool {
+        let old_selected = self.selected.clone();
+        let old_anchor = self.anchor;
+        let old_focus = self.focus;
+
+        self.selected = (0..item_count).collect();
+        self.anchor = (item_count > 0).then_some(0);
+        self.focus = item_count.checked_sub(1);
+
+        old_selected != self.selected || old_anchor != self.anchor || old_focus != self.focus
+    }
+
+    fn clear(&mut self) -> bool {
+        let old_selected = self.selected.clone();
+        let old_anchor = self.anchor;
+        let old_focus = self.focus;
+
+        self.selected.clear();
+        self.anchor = None;
+        self.focus = None;
+
+        old_selected != self.selected || old_anchor != self.anchor || old_focus != self.focus
     }
 
     fn apply_click(&mut self, hit: Option<usize>, extend: bool, toggle: bool) -> bool {
@@ -5233,6 +5337,39 @@ mod tests {
     }
 
     #[test]
+    fn selection_commands_select_all_and_clear_scene_state() {
+        let mut scene = test_scene(
+            vec![
+                test_entry("alpha.txt", false),
+                test_entry("bravo.txt", false),
+                test_entry("charlie.txt", false),
+            ],
+            ShellViewMode::Icons,
+        );
+
+        assert!(scene.apply_selection_command(SelectionCommand::SelectAll));
+        assert_eq!(scene.selection.len(), 3);
+        assert_eq!(scene.selection.anchor, Some(0));
+        assert_eq!(scene.selection.focus, Some(2));
+        assert_eq!(scene.selection_changes, 1);
+        assert!(!scene.apply_selection_command(SelectionCommand::SelectAll));
+        assert_eq!(scene.selection_changes, 1);
+
+        scene.rubber_band = Some(RubberBand::new(
+            ViewPoint { x: 0.0, y: 0.0 },
+            RubberBandMode::Replace,
+            scene.selection.clone(),
+        ));
+        assert!(scene.apply_selection_command(SelectionCommand::Clear));
+        assert_eq!(scene.selection.len(), 0);
+        assert_eq!(scene.selection.anchor, None);
+        assert_eq!(scene.selection.focus, None);
+        assert!(scene.rubber_band.is_none());
+        assert_eq!(scene.selection_changes, 2);
+        assert!(!scene.apply_selection_command(SelectionCommand::Clear));
+    }
+
+    #[test]
     fn selected_directory_path_uses_focus_and_target_path() {
         let target = PathBuf::from("/run/user/1000/gvfs/sftp:host=example");
         let mut scene = test_scene(
@@ -5472,6 +5609,49 @@ mod tests {
             Some(ZoomAction::Reset)
         );
         assert_eq!(zoom_action_for_key(&Key::Character("x".into())), None);
+    }
+
+    #[test]
+    fn selection_shortcuts_accept_ctrl_a_and_escape() {
+        let unidentified = PhysicalKey::Unidentified(winit::keyboard::NativeKeyCode::Unidentified);
+        let no_key = Key::Unidentified(winit::keyboard::NativeKey::Unidentified);
+
+        assert_eq!(
+            selection_command_for_key_parts(
+                true,
+                &PhysicalKey::Code(KeyCode::KeyA),
+                &no_key,
+                &no_key,
+            ),
+            Some(SelectionCommand::SelectAll)
+        );
+        assert_eq!(
+            selection_command_for_key_parts(
+                true,
+                &unidentified,
+                &Key::Character("A".into()),
+                &no_key,
+            ),
+            Some(SelectionCommand::SelectAll)
+        );
+        assert_eq!(
+            selection_command_for_key_parts(
+                false,
+                &PhysicalKey::Code(KeyCode::KeyA),
+                &Key::Character("a".into()),
+                &Key::Character("a".into()),
+            ),
+            None
+        );
+        assert_eq!(
+            selection_command_for_key_parts(
+                false,
+                &PhysicalKey::Code(KeyCode::Escape),
+                &no_key,
+                &no_key,
+            ),
+            Some(SelectionCommand::Clear)
+        );
     }
 
     #[test]

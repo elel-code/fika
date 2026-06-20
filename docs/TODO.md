@@ -95,7 +95,8 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
   空白区域左键拖动已通过同一 retained Icons geometry 支持 rubber-band selection，
   普通拖动替换 selection，Shift 追加，Ctrl/Meta 相对按下时的 base selection 做
   toggle；keyboard navigation 已通过同一 retained selection state 处理 Arrow、
-  Home/End 和 Page Up/Down，Shift 扩展 range，focus item 会滚入视口；目录激活已走
+  Home/End 和 Page Up/Down，Shift 扩展 range，focus item 会滚入视口，`Ctrl/Meta+A`
+  全选当前目录 entries，`Esc` 清空 selection 并取消任何 transient rubber-band；目录激活已走
   shell-owned input path，Enter 打开当前 focus/selected 目录，双击通过 retained
   hit testing 打开目录，Backspace 或 Alt+Up 加载父目录；Top bar 已有 Back/Forward/Up
   控制，Alt+Left/Alt+Right 走同一有界 history stack，普通新导航只在读取成功后写入
@@ -127,7 +128,8 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
 - [~] Phase 1：Compact、Icons 和 Details scene projection 已开始接入。`/etc` 已可通过
   `--view` 在三种模式下渲染首帧；Compact 走 core `CompactLayout`，Details 走 shell-owned
   row projection。滚动、hover、keyboard navigation、directory activation/history navigation、
-  runtime mode switching、projection zoom 和 selection 已通过 shared `ShellLayout` abstraction 走 retained geometry；
+  runtime mode switching、projection zoom、selection 和全选/清空快捷键已通过 shared
+  `ShellLayout` abstraction 走 retained geometry；
   glyph-level text zoom policy、`~/Downloads` smoke、手动交互 smoke
   和更完整 Details column/metadata parity 仍待完成。
 - [ ] Phase 2：把 Phase 0 初版 icon atlas 提升为预算化 semantic icon work，并实现 thumbnail texture retention、text shaping cache、glyph atlas policy 和 eviction telemetry。Cold glyph/icon work 必须 visible-first 且预算化。
