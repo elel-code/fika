@@ -141,8 +141,11 @@ Current checkpoint:
   blank directory target without starting rubber-band selection. The shell now
   stores a lightweight context target snapshot, opens a clamped shell-owned
   context menu overlay for item/blank targets, updates row hover, closes on Esc
-  or outside click, logs action hits, and emits context target/menu counters.
-  File operation action dispatch remains Phase 4 work.
+  or outside click, dispatches Open for directory items plus blank-menu Refresh
+  and Select All through existing shell navigation/reload/selection paths, logs
+  remaining pending action hits, and emits context target/menu counters.
+  Clipboard, rename, trash, create-new, properties, and new-pane dispatch remain
+  Phase 4 work.
 - Blank-space left-drag now runs rubber-band selection through the same
   retained Icons geometry. Plain drag replaces the selection, Shift extends it,
   Ctrl/Meta toggles it against the press-time base selection, and the band is
@@ -266,7 +269,7 @@ Acceptance:
 
 - [~] Pane item/blank right-click context target selection and the first
   shell-owned context menu overlay are in the file view. Places context targets
-  and file-operation action dispatch remain pending.
+  and broader file-operation action dispatch remain pending.
 - Pane item to pane directory, pane item to Places, Places to pane, external
   path drop, and URI-list clipboard paths are covered by automated or isolated
   smoke runs.
@@ -283,7 +286,9 @@ directory/selection/view/zoom summary, a minimal `Ctrl/Meta+F` filter bar, a
 minimal `Ctrl/Meta+L`/`Ctrl/Meta+D`/`F6` location edit mode, and a lightweight
 file-view context menu overlay for item/blank right-clicks. Filter and location
 text editing remain intentionally narrow until the full IME/caret/selection
-text boundary is migrated; context menu action dispatch remains pending.
+text boundary is migrated; context menu dispatch currently covers Open
+directory, Refresh, and Select All, while clipboard, rename, trash, create-new,
+properties, and new-pane actions remain pending.
 
 Acceptance:
 

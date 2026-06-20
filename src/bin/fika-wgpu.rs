@@ -563,11 +563,12 @@ impl ApplicationHandler for FikaWgpuApp {
                     return;
                 }
                 if state == ElementState::Pressed && self.scene.is_context_menu_open() {
-                    if self
+                    let action = self
                         .scene
-                        .activate_or_close_context_menu(point, renderer.size)
-                        && let Some(window) = self.window.as_ref()
-                    {
+                        .activate_or_close_context_menu(point, renderer.size);
+                    if let Some(action) = action {
+                        self.perform_context_menu_action(event_loop, action);
+                    } else if let Some(window) = self.window.as_ref() {
                         window.request_redraw();
                     }
                     return;
@@ -655,6 +656,54 @@ impl ApplicationHandler for FikaWgpuApp {
 }
 
 impl FikaWgpuApp {
+    fn perform_context_menu_action(
+        &mut self,
+        event_loop: &dyn ActiveEventLoop,
+        action: ShellContextMenuAction,
+    ) {
+        match action {
+            ShellContextMenuAction::Open => {
+                if let Some(path) = self.scene.context_target_directory_path() {
+                    self.load_scene_path(event_loop, path, "context-open");
+                } else {
+                    eprintln!("[fika-wgpu] context-action-pending action=open target=file");
+                    if let Some(window) = self.window.as_ref() {
+                        window.request_redraw();
+                    }
+                }
+            }
+            ShellContextMenuAction::Refresh => self.reload_scene_path(event_loop),
+            ShellContextMenuAction::SelectAll => {
+                let _ = self
+                    .scene
+                    .apply_selection_command(SelectionCommand::SelectAll);
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+            }
+            ShellContextMenuAction::OpenInNewPane
+            | ShellContextMenuAction::CopyLocation
+            | ShellContextMenuAction::Rename
+            | ShellContextMenuAction::MoveToTrash
+            | ShellContextMenuAction::CreateNew
+            | ShellContextMenuAction::Paste
+            | ShellContextMenuAction::Properties => {
+                eprintln!(
+                    "[fika-wgpu] context-action-pending action={} target={}",
+                    action.as_str(),
+                    self.scene
+                        .context_target
+                        .as_ref()
+                        .map(ShellContextTarget::kind)
+                        .unwrap_or("none")
+                );
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+            }
+        }
+    }
+
     fn perform_path_navigation(
         &mut self,
         event_loop: &dyn ActiveEventLoop,
@@ -2221,7 +2270,7 @@ impl ShellScene {
         &mut self,
         point: ViewPoint,
         size: PhysicalSize<u32>,
-    ) -> bool {
+    ) -> Option<ShellContextMenuAction> {
         let action = self.context_menu_action_at_screen_point(point, size);
         let menu_was_open = self.context_menu.take().is_some();
         if let Some(action) = action {
@@ -2235,10 +2284,11 @@ impl ShellScene {
                     .unwrap_or("none"),
                 self.context_menu_actions
             );
+            return Some(action);
         } else if menu_was_open {
             eprintln!("[fika-wgpu] context-menu open=0");
         }
-        menu_was_open
+        None
     }
 
     fn context_menu_action_at_screen_point(
@@ -2305,6 +2355,15 @@ impl ShellScene {
         self.selection
             .focus_or_first_selected()
             .and_then(|index| self.directory_path_for_index(index))
+    }
+
+    fn context_target_directory_path(&self) -> Option<PathBuf> {
+        match self.context_target.as_ref()? {
+            ShellContextTarget::Item { index, is_dir, .. } if *is_dir => {
+                self.directory_path_for_index(*index)
+            }
+            _ => None,
+        }
     }
 
     fn parent_directory_path(&self) -> Option<PathBuf> {
@@ -6935,9 +6994,16 @@ mod tests {
                 .and_then(|menu| menu.hovered_row),
             Some(0)
         );
-        assert!(scene.activate_or_close_context_menu(first_row, size));
+        assert_eq!(
+            scene.activate_or_close_context_menu(first_row, size),
+            Some(ShellContextMenuAction::Open)
+        );
         assert!(scene.context_menu.is_none());
         assert_eq!(scene.context_menu_actions, 1);
+        assert_eq!(
+            scene.context_target_directory_path(),
+            Some(PathBuf::from("/tmp/folder"))
+        );
     }
 
     #[test]
@@ -6965,15 +7031,83 @@ mod tests {
         assert!(rect.right() <= size.width as f32 - CONTEXT_MENU_MARGIN + f32::EPSILON);
         assert!(rect.bottom() <= size.height as f32 - CONTEXT_MENU_MARGIN + f32::EPSILON);
 
-        assert!(scene.activate_or_close_context_menu(
-            ViewPoint {
-                x: CONTEXT_MENU_MARGIN,
-                y: CONTEXT_MENU_MARGIN,
-            },
-            size,
-        ));
+        assert_eq!(
+            scene.activate_or_close_context_menu(
+                ViewPoint {
+                    x: CONTEXT_MENU_MARGIN,
+                    y: CONTEXT_MENU_MARGIN,
+                },
+                size,
+            ),
+            None
+        );
         assert!(scene.context_menu.is_none());
         assert_eq!(scene.context_menu_actions, 0);
+    }
+
+    #[test]
+    fn context_menu_blank_actions_can_hit_select_all_and_refresh() {
+        let mut scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
+        let size = PhysicalSize::new(420, 260);
+        let point = ViewPoint {
+            x: size.width as f32 - 4.0,
+            y: scene.content_origin_y() + 4.0,
+        };
+
+        assert!(scene.open_context_menu(point, size));
+        let rect = context_menu_rect(scene.context_menu.as_ref().unwrap(), size);
+        let select_all_row = ViewPoint {
+            x: rect.x + 8.0,
+            y: rect.y + CONTEXT_MENU_ROW_HEIGHT * 2.0 + 8.0,
+        };
+        assert_eq!(
+            scene.activate_or_close_context_menu(select_all_row, size),
+            Some(ShellContextMenuAction::SelectAll)
+        );
+        assert_eq!(scene.context_menu_actions, 1);
+
+        assert!(scene.open_context_menu(point, size));
+        let rect = context_menu_rect(scene.context_menu.as_ref().unwrap(), size);
+        let refresh_row = ViewPoint {
+            x: rect.x + 8.0,
+            y: rect.y + CONTEXT_MENU_ROW_HEIGHT * 3.0 + 8.0,
+        };
+        assert_eq!(
+            scene.activate_or_close_context_menu(refresh_row, size),
+            Some(ShellContextMenuAction::Refresh)
+        );
+        assert_eq!(scene.context_menu_actions, 2);
+    }
+
+    #[test]
+    fn context_target_directory_path_only_resolves_directory_items() {
+        let mut scene = test_scene(
+            vec![test_entry("folder", true), test_entry("plain.txt", false)],
+            ShellViewMode::Icons,
+        );
+        scene.context_target = Some(ShellContextTarget::Item {
+            index: 0,
+            path: PathBuf::from("/tmp/folder"),
+            is_dir: true,
+            selection_count: 1,
+        });
+        assert_eq!(
+            scene.context_target_directory_path(),
+            Some(PathBuf::from("/tmp/folder"))
+        );
+
+        scene.context_target = Some(ShellContextTarget::Item {
+            index: 1,
+            path: PathBuf::from("/tmp/plain.txt"),
+            is_dir: false,
+            selection_count: 1,
+        });
+        assert_eq!(scene.context_target_directory_path(), None);
+
+        scene.context_target = Some(ShellContextTarget::Blank {
+            path: PathBuf::from("/tmp"),
+        });
+        assert_eq!(scene.context_target_directory_path(), None);
     }
 
     #[test]

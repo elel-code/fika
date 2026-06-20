@@ -122,8 +122,10 @@ Shell 拥有：
   focus 移到点击的 model index；右键 content 空白区域会记录 blank directory target，
   且不会启动 rubber-band selection。shell 现在保存轻量 context target snapshot，为
   item/blank target 打开 clamp 后的 shell-owned context menu overlay，更新 row hover，
-  支持 Esc 或外部点击关闭，记录 action 命中，并输出 context target/menu counters；
-  文件操作 action dispatch 仍留到 Phase 4。
+  支持 Esc 或外部点击关闭，并将 directory item 的 Open、blank menu 的 Refresh 和
+  Select All 分派到现有 shell navigation/reload/selection path；其余 pending action 会记录
+  日志，并输出 context target/menu counters。Clipboard、rename、trash、create-new、
+  properties 和 new-pane dispatch 仍留到 Phase 4。
 - 空白区域左键拖动现在通过同一 retained Icons geometry 执行 rubber-band selection。
   普通拖动替换 selection，Shift 追加，Ctrl/Meta 会相对按下时的 base selection 做
   toggle，并用 clipped GPU overlay 绘制框选矩形。
@@ -224,7 +226,7 @@ drag/drop target lookup 移到 shell-owned hit testing。
 验收：
 
 - [~] Pane item/blank 右键 context target selection 以及第一版 shell-owned context menu
-  overlay 已进入 file view。Places context targets 以及文件操作 action dispatch 仍待完成。
+  overlay 已进入 file view。Places context targets 以及更完整的文件操作 action dispatch 仍待完成。
 - Pane item 到 pane directory、pane item 到 Places、Places 到 pane、external path drop
   和 URI-list clipboard path 由自动或隔离 smoke 覆盖。
 - DnD hover 不依赖 per-row 或 per-item widget callback。
@@ -238,7 +240,9 @@ context menus、dialogs 和 chooser mode。
 当前 checkpoint：第一批 chrome slice 包含底部最小 status bar、`Ctrl/Meta+F` 最小
 filter bar、`Ctrl/Meta+L`/`Ctrl/Meta+D`/`F6` 最小 location edit mode，以及用于 file-view
 item/blank 右键的轻量 context menu overlay。Filter/location 文本编辑暂时保持窄实现，
-完整 IME/caret/selection 文本边界仍待迁移；context menu action dispatch 仍待完成。
+完整 IME/caret/selection 文本边界仍待迁移；context menu dispatch 当前覆盖 Open
+directory、Refresh 和 Select All，clipboard、rename、trash、create-new、properties 和
+new-pane actions 仍待完成。
 
 验收：
 
