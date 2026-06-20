@@ -123,7 +123,8 @@ Shell 拥有：
   且不会启动 rubber-band selection。shell 现在保存轻量 context target snapshot，为
   item/blank target 打开 clamp 后的 shell-owned context menu overlay，更新 row hover，
   支持 Esc 或外部点击关闭，并将 directory item 的 Open、file item 的 Open（通过 GIO
-  default-application URI launch）以及 blank menu 的 Refresh 和
+  default-application URI launch）、item Copy Location（通过 shell-owned Wayland text
+  clipboard provider）以及 blank menu 的 Refresh 和
   Select All 分派到现有 shell navigation/reload/selection path；其余 pending action 会记录
   日志，并输出 context target/menu counters。Properties 现在会为 item 和 blank-directory
   target 打开轻量 shell-owned metadata overlay。Blank-menu Create New 现在会打开
@@ -133,8 +134,9 @@ Shell 拥有：
   reload，并选中重命名后的条目。Move to Trash 现在会把 context target 解析为点击条目
   或当前 multi-selection，显式拒绝 remote paths，调用 core XDG trash handling，reload
   pane，并清理 stale context state。Open With chooser/default-application selection、
-  clipboard、Trash view restore/delete/empty flows、undo、更完整 properties、完整 inline
-  rename、完整 Create New 子菜单/模板和 new-pane dispatch 仍留到 Phase 4。
+  文件 copy/cut/paste clipboard flows、URI-list clipboard import/export、Trash view
+  restore/delete/empty flows、undo、更完整 properties、完整 inline rename、完整 Create New
+  子菜单/模板和 new-pane dispatch 仍留到 Phase 4。
 - 空白区域左键拖动现在通过同一 retained Icons geometry 执行 rubber-band selection。
   普通拖动替换 selection，Shift 追加，Ctrl/Meta 会相对按下时的 base selection 做
   toggle，并用 clipped GPU overlay 绘制框选矩形。
@@ -173,7 +175,7 @@ Shell 拥有：
   会通过同一 projection 保留或裁剪。
 - `[fika-wgpu]` 日志包含 view mode、path、entry count、visible item count、quad count、draw
   batch count、selected count、hovered item index、active rubber-band state、
-  context target kind、context menu state、properties overlay state、hit-test/selection/keyboard navigation/rubber-band/view-switch/path-change/open/reload/location/filter/hidden counters、zoom percent
+  context target kind、context menu state、properties overlay state、hit-test/selection/keyboard navigation/rubber-band/view-switch/path-change/open/copy-location/reload/location/filter/hidden counters、zoom percent
   和 zoom-change counters、icon count、icon cache hit/miss count、icon cache bytes、icon atlas bytes、
   icon resolve/raster time、text label count、text cache hit/miss count、text cache bytes、text atlas bytes、
   render reason、layout time、text raster time、render time 和 `scroll_x` / `scroll_y`

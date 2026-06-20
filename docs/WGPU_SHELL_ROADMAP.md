@@ -142,8 +142,9 @@ Current checkpoint:
   stores a lightweight context target snapshot, opens a clamped shell-owned
   context menu overlay for item/blank targets, updates row hover, closes on Esc
   or outside click, dispatches Open for directory items, dispatches Open for file
-  items through GIO default-application URI launch, plus blank-menu Refresh
-  and Select All through existing shell navigation/reload/selection paths, logs
+  items through GIO default-application URI launch, dispatches item Copy
+  Location to a shell-owned Wayland text clipboard provider, plus blank-menu
+  Refresh and Select All through existing shell navigation/reload/selection paths, logs
   remaining pending action hits, and emits context target/menu counters.
   Properties now opens a lightweight shell-owned metadata overlay for item and
   blank-directory targets. Blank-menu Create New now opens a shell-owned modal
@@ -154,7 +155,8 @@ Current checkpoint:
   renamed entry. Move to Trash now resolves the context target to either the
   clicked item or the active multi-selection, rejects remote paths explicitly,
   calls core XDG trash handling, reloads the pane, and clears stale context
-  state. Open With chooser/default-application selection, clipboard, Trash view
+  state. Open With chooser/default-application selection, file copy/cut/paste
+  clipboard flows, URI-list clipboard import/export, Trash view
   restore/delete/empty flows, undo, richer properties, full inline rename, full
   Create New submenus/templates, and new-pane dispatch remain Phase 4 work.
 - Blank-space left-drag now runs rubber-band selection through the same
@@ -207,7 +209,7 @@ Current checkpoint:
   the visibility mode changes.
 - `[fika-wgpu]` logs include view mode, path, entry count, visible item count,
   quad count, selected count, hovered item index, active rubber-band state,
-  context target kind, context menu state, properties overlay state, hit-test/selection/keyboard navigation/rubber-band/view-switch/path-change/open
+  context target kind, context menu state, properties overlay state, hit-test/selection/keyboard navigation/rubber-band/view-switch/path-change/open/copy-location
   counters, reload/location/filter/hidden counters, zoom percent and zoom-change counters, icon count, icon cache
   hit/miss count, icon cache bytes, icon atlas bytes, icon resolve/raster time,
   text label count, text cache hit/miss count, text cache bytes, text atlas

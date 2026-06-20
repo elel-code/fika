@@ -18,6 +18,7 @@ use fika_core::{
     format_size, is_network_path, network_uri_from_path, read_entries_sync, resolve_location_input,
 };
 use gio::prelude::FileExt;
+use raw_window_handle::{HasDisplayHandle, RawDisplayHandle};
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
 use winit::event::{ElementState, KeyEvent, Modifiers, MouseButton, MouseScrollDelta, WindowEvent};
@@ -307,12 +308,48 @@ fn window_title(scene: &ShellScene) -> String {
     )
 }
 
+enum ShellClipboard {
+    Wayland(smithay_clipboard::Clipboard),
+}
+
+impl ShellClipboard {
+    fn from_window(window: &dyn Window) -> Result<Option<Self>, String> {
+        let display = window
+            .display_handle()
+            .map_err(|error| format!("display handle: {error}"))?;
+        match display.as_raw() {
+            RawDisplayHandle::Wayland(handle) => {
+                let clipboard = unsafe {
+                    // The pointer comes from winit's live Wayland display handle.
+                    // Fika drops ShellClipboard before dropping the window.
+                    smithay_clipboard::Clipboard::new(handle.display.as_ptr())
+                };
+                Ok(Some(Self::Wayland(clipboard)))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    fn backend(&self) -> &'static str {
+        match self {
+            Self::Wayland(_) => "wayland",
+        }
+    }
+
+    fn store_text(&self, text: &str) {
+        match self {
+            Self::Wayland(clipboard) => clipboard.store(text.to_string()),
+        }
+    }
+}
+
 struct FikaWgpuApp {
     scene: ShellScene,
     modifiers: Modifiers,
-    // Drop order matters: the surface borrows the window handle, so renderer
-    // must be dropped before the window.
+    // Drop order matters: renderer and clipboard borrow display/window handles,
+    // so they must be dropped before the window.
     renderer: Option<WgpuState>,
+    clipboard: Option<ShellClipboard>,
     window: Option<Box<dyn Window>>,
     pending_redraw_frames: u8,
     auto_cycle_views: bool,
@@ -325,6 +362,7 @@ impl FikaWgpuApp {
             scene,
             modifiers: Modifiers::default(),
             renderer: None,
+            clipboard: None,
             window: None,
             pending_redraw_frames: 0,
             auto_cycle_views,
@@ -360,6 +398,23 @@ impl ApplicationHandler for FikaWgpuApp {
                 return;
             }
         };
+        let clipboard = match ShellClipboard::from_window(window.as_ref()) {
+            Ok(Some(clipboard)) => {
+                eprintln!(
+                    "[fika-wgpu] clipboard-ready backend={}",
+                    clipboard.backend()
+                );
+                Some(clipboard)
+            }
+            Ok(None) => {
+                eprintln!("[fika-wgpu] clipboard-unavailable backend=unsupported");
+                None
+            }
+            Err(error) => {
+                eprintln!("[fika-wgpu] clipboard-unavailable error={error}");
+                None
+            }
+        };
 
         eprintln!(
             "[fika-wgpu] shell-ready size={}x{} scale={:.2}",
@@ -370,6 +425,7 @@ impl ApplicationHandler for FikaWgpuApp {
 
         self.scene.clamp_scroll(renderer.size);
         self.renderer = Some(renderer);
+        self.clipboard = clipboard;
         self.window = Some(window);
 
         if let Some(window) = self.window.as_ref() {
@@ -421,6 +477,7 @@ impl ApplicationHandler for FikaWgpuApp {
         match event {
             WindowEvent::CloseRequested => {
                 self.renderer = None;
+                self.clipboard = None;
                 self.window = None;
                 event_loop.exit();
             }
@@ -855,9 +912,26 @@ impl FikaWgpuApp {
                 }
             }
             ShellContextMenuAction::MoveToTrash => self.move_context_target_to_trash(event_loop),
-            ShellContextMenuAction::OpenInNewPane
-            | ShellContextMenuAction::CopyLocation
-            | ShellContextMenuAction::Paste => {
+            ShellContextMenuAction::CopyLocation => {
+                match self.scene.context_target_copy_location_request() {
+                    Some(request) => {
+                        if let Some(clipboard) = self.clipboard.as_ref() {
+                            clipboard.store_text(&request.text);
+                            self.scene.record_copy_location(&request);
+                        } else {
+                            eprintln!(
+                                "[fika-wgpu] copy-location-error path={} error=clipboard-unavailable",
+                                request.path.display()
+                            );
+                        }
+                    }
+                    None => eprintln!("[fika-wgpu] copy-location-error target=none"),
+                }
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+            }
+            ShellContextMenuAction::OpenInNewPane | ShellContextMenuAction::Paste => {
                 eprintln!(
                     "[fika-wgpu] context-action-pending action={} target={}",
                     action.as_str(),
@@ -2012,6 +2086,12 @@ struct OpenFileRequest {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+struct CopyLocationRequest {
+    path: PathBuf,
+    text: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct ShellTrashResult {
     success_count: usize,
     failure_count: usize,
@@ -2064,6 +2144,7 @@ struct ShellScene {
     create_changes: u64,
     rename_changes: u64,
     open_changes: u64,
+    copy_location_changes: u64,
     trash_changes: u64,
     keyboard_navigation: u64,
     rubber_band_updates: u64,
@@ -2136,6 +2217,7 @@ impl ShellScene {
             create_changes: 0,
             rename_changes: 0,
             open_changes: 0,
+            copy_location_changes: 0,
             trash_changes: 0,
             keyboard_navigation: 0,
             rubber_band_updates: 0,
@@ -2913,6 +2995,26 @@ impl ShellScene {
             self.open_changes
         );
         Ok(true)
+    }
+
+    fn context_target_copy_location_request(&self) -> Option<CopyLocationRequest> {
+        match self.context_target.as_ref()? {
+            ShellContextTarget::Item { path, .. } => Some(CopyLocationRequest {
+                path: path.clone(),
+                text: copy_location_text_for_path(path),
+            }),
+            ShellContextTarget::Blank { .. } => None,
+        }
+    }
+
+    fn record_copy_location(&mut self, request: &CopyLocationRequest) {
+        self.copy_location_changes += 1;
+        eprintln!(
+            "[fika-wgpu] copy-location path={} text={:?} changes={}",
+            request.path.display(),
+            request.text,
+            self.copy_location_changes
+        );
     }
 
     fn context_target_trash_paths(&self) -> Result<Vec<PathBuf>, String> {
@@ -5449,7 +5551,7 @@ impl WgpuState {
             || self.last_log.elapsed() >= Duration::from_secs(1)
         {
             eprintln!(
-                "[fika-wgpu] frame={} reason={} view={} zoom={} zoom_changes={} path={} entries={} filtered={} show_hidden={} hidden_changes={} location_active={} location_changes={} filter_active={} filter_changes={} visible={} selected={} hover={} context={} context_menu={} context_changes={} context_actions={} properties={} properties_changes={} create_dialog={} create_changes={} rename_dialog={} rename_changes={} open_changes={} trash_changes={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} path_changes={} reloads={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_cache={}/{} entries={} bytes={} batches={} scroll_x={:.1} scroll_y={:.1} layout={}us text_raster={}us text_atlas={}x{}:{}b render={}us",
+                "[fika-wgpu] frame={} reason={} view={} zoom={} zoom_changes={} path={} entries={} filtered={} show_hidden={} hidden_changes={} location_active={} location_changes={} filter_active={} filter_changes={} visible={} selected={} hover={} context={} context_menu={} context_changes={} context_actions={} properties={} properties_changes={} create_dialog={} create_changes={} rename_dialog={} rename_changes={} open_changes={} copy_location_changes={} trash_changes={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} path_changes={} reloads={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_cache={}/{} entries={} bytes={} batches={} scroll_x={:.1} scroll_y={:.1} layout={}us text_raster={}us text_atlas={}x{}:{}b render={}us",
                 self.frame_count,
                 reason,
                 scene.view_mode.as_str(),
@@ -5482,6 +5584,7 @@ impl WgpuState {
                 scene.rename_dialog.is_some() as u8,
                 scene.rename_changes,
                 scene.open_changes,
+                scene.copy_location_changes,
                 scene.trash_changes,
                 scene.rubber_band.as_ref().is_some_and(|band| band.active) as u8,
                 scene.hit_tests,
@@ -8241,6 +8344,10 @@ fn launch_file_with_default_app(request: &OpenFileRequest) -> Result<(), String>
     )
 }
 
+fn copy_location_text_for_path(path: &Path) -> String {
+    path.display().to_string()
+}
+
 fn create_entry_on_disk(request: &CreateEntryRequest) -> Result<(), String> {
     match request.kind {
         CreateEntryKind::Folder => fs::create_dir(&request.path)
@@ -8420,6 +8527,7 @@ mod tests {
             create_changes: 0,
             rename_changes: 0,
             open_changes: 0,
+            copy_location_changes: 0,
             trash_changes: 0,
             keyboard_navigation: 0,
             rubber_band_updates: 0,
@@ -8819,6 +8927,35 @@ mod tests {
                 uri: "sftp://example.test/home/yk/remote.txt".to_string(),
             })
         );
+    }
+
+    #[test]
+    fn copy_location_request_uses_item_display_path() {
+        let mut scene = test_scene(vec![test_entry("plain.txt", false)], ShellViewMode::Icons);
+        scene.context_target = Some(ShellContextTarget::Blank {
+            path: PathBuf::from("/tmp"),
+        });
+        assert_eq!(scene.context_target_copy_location_request(), None);
+
+        scene.context_target = Some(ShellContextTarget::Item {
+            index: 0,
+            path: PathBuf::from("/tmp/Fika Test/plain.txt"),
+            is_dir: false,
+            selection_count: 1,
+        });
+        let request = scene
+            .context_target_copy_location_request()
+            .expect("item target should produce copy location request");
+        assert_eq!(
+            request,
+            CopyLocationRequest {
+                path: PathBuf::from("/tmp/Fika Test/plain.txt"),
+                text: "/tmp/Fika Test/plain.txt".to_string(),
+            }
+        );
+
+        scene.record_copy_location(&request);
+        assert_eq!(scene.copy_location_changes, 1);
     }
 
     #[test]
