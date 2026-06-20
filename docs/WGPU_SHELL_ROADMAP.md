@@ -108,9 +108,11 @@ Current checkpoint:
   icons when the active XDG icon theme can resolve them, fallback file/folder
   icon shapes for misses, and real visible file names. Text uses
   `cosmic-text` for shaping/rasterization, then uploads a temporary per-frame
-  RGBA atlas for a textured quad batch. The wgpu shell now uses a larger
-  14px/18px baseline text metric so file labels and chrome are closer to the
-  current GPUI Fika scale.
+  RGBA atlas for a textured quad batch. The wgpu shell now applies the window
+  scale factor to shell metrics before layout/rasterization, so the default
+  Icons icon remains 48 logical px (for example 72 physical px at 1.5x scale)
+  and the 14px/18px baseline text metric matches the current GPUI Fika scale
+  more closely.
 - It keeps a bounded persistent label raster cache for visible file/path text,
   keyed by text, size, and color. The per-frame atlas now packs cached label
   rasters instead of reshaping/rasterizing every visible label on every redraw.
@@ -126,6 +128,8 @@ Current checkpoint:
 - The experimental binary accepts `--view icons|compact|details`. Icons remains
   the default baseline; Compact uses core `CompactLayout`; Details now has a
   shell-owned row projection with a fixed header and Name/Size/Modified columns.
+  Compact now only paints item highlight/background for hover or selection, so
+  plain unhovered rows no longer look pre-highlighted.
   The same modes can be switched at runtime with top-bar `Icons / Compact /
   Details` buttons, `1/2/3`, `Ctrl/Meta+1/2/3`, or fallback `F1/F2/F3` keys.
   `--auto-cycle-views` switches modes once per second for compositor/render
@@ -242,7 +246,8 @@ Current checkpoint:
   retained projection by default; `Ctrl/Meta+H` or the top-bar `Hidden` toggle
   shows them. Selection is retained or pruned through the same projection when
   the visibility mode changes.
-- `[fika-wgpu]` logs include view mode, path, entry count, visible item count,
+- `[fika-wgpu]` logs include view mode, window/UI scale, path, entry count,
+  visible item count,
   Places count/hover/change/scroll counters, quad count, selected count, hovered item index, active rubber-band state,
   context target kind, context menu state, properties overlay state, hit-test/selection/keyboard navigation/rubber-band/view-switch/path-change/open/copy-location/file-clipboard/paste
   counters, reload/location/filter/hidden counters, zoom percent and zoom-change counters, icon count, icon cache

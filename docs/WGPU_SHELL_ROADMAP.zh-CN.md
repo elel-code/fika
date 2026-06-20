@@ -96,8 +96,9 @@ Shell 拥有：
 - 渲染顶部 path bar、可见 item 背景、active XDG icon theme 可解析时的真实文件/文件夹
   theme icon、miss 时的 fallback 文件/文件夹 icon 形状，以及真实可见文件名。文字通过
   `cosmic-text` 做 shaping/rasterization，再上传临时 per-frame RGBA atlas，由一个
-  `wgpu` textured quad batch 绘制。wgpu shell 现在使用更大的 14px/18px
-  baseline text metric，使文件名和 shell chrome 更接近当前 GPUI Fika 的视觉尺寸。
+  `wgpu` textured quad batch 绘制。wgpu shell 现在会在 layout/rasterization 前应用
+  window scale factor，所以默认 Icons 图标仍是 48 逻辑 px（例如 1.5x scale 下为 72
+  物理 px），14px/18px baseline text metric 也更接近当前 GPUI Fika 的视觉尺寸。
 - 为可见文件名/path text 保留 bounded persistent label raster cache，按 text、size 和
   color 键控。per-frame atlas 现在打包 cached label raster，不再每次 redraw 都重新
   shape/rasterize 所有可见 label。
@@ -109,7 +110,8 @@ Shell 拥有：
   frame log 会输出 `content_scrollbar=0|1`；scrollbar drag/click 交互仍是后续工作。
 - 实验 binary 支持 `--view icons|compact|details`。Icons 仍是默认 baseline；
   Compact 使用 core `CompactLayout`；Details 现在有 shell-owned row projection、
-  固定 header，以及 Name/Size/Modified 三列。同一组模式也可用 top-bar `Icons /
+  固定 header，以及 Name/Size/Modified 三列。Compact 现在只在 hover 或 selection 时绘制
+  item highlight/background，普通未悬停行不再像被预高亮。同一组模式也可用 top-bar `Icons /
   Compact / Details` 按钮、`1/2/3`、`Ctrl/Meta+1/2/3` 或 fallback `F1/F2/F3`
   在运行时切换；`--auto-cycle-views` 会每秒自动切换一次，用于在没有输入的情况下
   调试 compositor/render。切换时会 clamp 当前 scroll axis、清理 transient
@@ -197,7 +199,7 @@ Shell 拥有：
 - Dotfile 可见性现在也由 shell-owned retained projection 管理。默认不显示 hidden
   entries；`Ctrl/Meta+H` 或 top-bar `Hidden` toggle 会显示它们。切换可见性时 selection
   会通过同一 projection 保留或裁剪。
-- `[fika-wgpu]` 日志包含 view mode、path、entry count、visible item count、quad count、draw
+- `[fika-wgpu]` 日志包含 view mode、window/UI scale、path、entry count、visible item count、quad count、draw
   batch count、Places count/hover/change/scroll counters、selected count、hovered item index、active rubber-band state、
   context target kind、context menu state、properties overlay state、hit-test/selection/keyboard navigation/rubber-band/view-switch/path-change/open/copy-location/file-clipboard/paste/reload/location/filter/hidden counters、zoom percent
   和 zoom-change counters、icon count、icon cache hit/miss count、icon cache bytes、icon atlas bytes、

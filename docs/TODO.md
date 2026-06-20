@@ -86,8 +86,9 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
   读取目录、用 `IconsLayout` 投影 retained geometry，并用 solid quad batch
   渲染 path bar、可见 item 背景和 icon fallback 形状；真实文件名通过
   `cosmic-text` shaping/rasterization 进入 bounded label raster cache，再上传到
-  临时 per-frame RGBA text atlas 绘制，当前 baseline text metric 已提高到
-  14px/18px 以贴近 GPUI Fika 视觉尺寸；真实 MIME/theme icon 已按 XDG/GTK/KDE
+  临时 per-frame RGBA text atlas 绘制，当前 shell metrics 会应用 window scale
+  factor，默认 Icons 图标保持 48 逻辑 px（1.5x 下为 72 物理 px），baseline text
+  metric 为 14px/18px 以贴近 GPUI Fika 视觉尺寸；真实 MIME/theme icon 已按 XDG/GTK/KDE
   theme 解析，PNG/WebP/JPEG/BMP/GIF/ICO 通过 `image` 光栅化，SVG 通过
   `usvg/resvg` 光栅化，visible icon 打包到 per-frame RGBA icon atlas，并保留
   bounded icon raster cache；pointer move/leave 和左键点击已通过 shell-owned
@@ -117,8 +118,9 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
   default-app selection、Open in New Pane、多 MIME `text/uri-list` clipboard export/import 等
   其余 action 先记录 pending 日志；
   文件内容区现在预留并绘制 shell-owned item-view scrollbar，Icons/Details 为右侧竖向
-  track，Compact 为底部横向 track，frame log 输出 `content_scrollbar=0|1`；scrollbar
-  drag/click 交互仍待接入；
+  track，Compact 为底部横向 track，frame log 输出 `scale=...` 和
+  `content_scrollbar=0|1`；Compact 普通未 hover/未 selection item 不再绘制默认
+  highlight/background；scrollbar drag/click 交互仍待接入；
   空白区域左键拖动已通过同一 retained Icons geometry 支持 rubber-band selection，
   普通拖动替换 selection，Shift 追加，Ctrl/Meta 相对按下时的 base selection 做
   toggle；keyboard navigation 已通过同一 retained selection state 处理 Arrow、

@@ -476,6 +476,9 @@ impl ApplicationHandler for FikaWgpuApp {
             }
         };
 
+        self.scene
+            .set_scale_factor(window.scale_factor() as f32, renderer.size);
+
         eprintln!(
             "[fika-wgpu] shell-ready size={}x{} scale={:.2}",
             renderer.size.width,
@@ -555,7 +558,8 @@ impl ApplicationHandler for FikaWgpuApp {
                     (self.renderer.as_mut(), self.window.as_ref())
                 {
                     renderer.resize(window.surface_size());
-                    self.scene.clamp_scroll(renderer.size);
+                    self.scene
+                        .set_scale_factor(window.scale_factor() as f32, renderer.size);
                     window.request_redraw();
                 }
             }
@@ -976,7 +980,8 @@ impl ApplicationHandler for FikaWgpuApp {
                 let Some(renderer) = self.renderer.as_ref() else {
                     return;
                 };
-                if self.scene.scroll_by(scroll_delta_y(delta), renderer.size) {
+                let delta_y = scroll_delta_y(delta, self.scene.ui_scale());
+                if self.scene.scroll_by(delta_y, renderer.size) {
                     if let Some(window) = self.window.as_ref() {
                         window.request_redraw();
                     }
@@ -1520,9 +1525,9 @@ impl FikaWgpuApp {
     }
 }
 
-fn scroll_delta_y(delta: MouseScrollDelta) -> f32 {
+fn scroll_delta_y(delta: MouseScrollDelta, scale_factor: f32) -> f32 {
     match delta {
-        MouseScrollDelta::LineDelta(_, y) => -y * SCROLL_LINE_PX,
+        MouseScrollDelta::LineDelta(_, y) => -y * SCROLL_LINE_PX * scale_factor,
         MouseScrollDelta::PixelDelta(position) => -position.y as f32,
     }
 }
@@ -2121,6 +2126,9 @@ struct DetailsLayout {
     content_width: f32,
     row_height: f32,
     icon_size: f32,
+    scale_factor: f32,
+    name_width: f32,
+    text_height: f32,
 }
 
 impl DetailsLayout {
@@ -2131,15 +2139,22 @@ impl DetailsLayout {
         scroll_y: f32,
         row_height: f32,
         icon_size: f32,
+        scale_factor: f32,
+        name_width: f32,
+        size_width: f32,
+        modified_width: f32,
+        text_height: f32,
     ) -> Self {
         Self {
             item_count,
             viewport_height,
             scroll_y,
-            content_width: (DETAILS_NAME_WIDTH + DETAILS_SIZE_WIDTH + DETAILS_MODIFIED_WIDTH)
-                .max(viewport_width),
+            content_width: (name_width + size_width + modified_width).max(viewport_width),
             row_height,
             icon_size,
+            scale_factor,
+            name_width,
+            text_height,
         }
     }
 
@@ -2161,8 +2176,11 @@ impl DetailsLayout {
             width: self.content_width,
             height: self.row_height,
         };
+        let icon_padding = (8.0 * self.scale_factor).round().max(1.0);
+        let text_gap = (8.0 * self.scale_factor).round().max(1.0);
+        let text_x = icon_padding + self.icon_size + text_gap;
         let icon_rect = ViewRect {
-            x: 8.0,
+            x: icon_padding,
             y: y + (self.row_height - self.icon_size) / 2.0,
             width: self.icon_size,
             height: self.icon_size,
@@ -2175,10 +2193,10 @@ impl DetailsLayout {
             visual_rect: item_rect,
             icon_rect,
             text_rect: ViewRect {
-                x: 14.0 + self.icon_size,
-                y: y + (self.row_height - 18.0).max(0.0) / 2.0,
-                width: (DETAILS_NAME_WIDTH - 42.0).max(1.0),
-                height: 18.0,
+                x: text_x,
+                y: y + (self.row_height - self.text_height).max(0.0) / 2.0,
+                width: (self.name_width - text_x - text_gap).max(1.0),
+                height: self.text_height,
             },
         })
     }
@@ -2878,6 +2896,7 @@ struct ShellScene {
     open_with_chooser: Option<ShellOpenWithChooser>,
     trash_conflict_dialog: Option<ShellTrashConflictDialog>,
     rubber_band: Option<RubberBand>,
+    scale_factor: f32,
     hit_tests: u64,
     selection_changes: u64,
     context_target_changes: u64,
@@ -2963,6 +2982,7 @@ impl ShellScene {
             open_with_chooser: None,
             trash_conflict_dialog: None,
             rubber_band: None,
+            scale_factor: 1.0,
             hit_tests: 0,
             selection_changes: 0,
             context_target_changes: 0,
@@ -3412,6 +3432,81 @@ impl ShellScene {
         self.filtered_indexes.len()
     }
 
+    fn set_scale_factor(&mut self, scale_factor: f32, size: PhysicalSize<u32>) -> bool {
+        let next = normalized_scale_factor(scale_factor);
+        if (self.scale_factor - next).abs() <= 0.01 {
+            self.scale_factor = next;
+            self.clamp_scroll(size);
+            return false;
+        }
+
+        let old_ui_scale = self.ui_scale();
+        self.scale_factor = next;
+        let next_ui_scale = self.ui_scale();
+        if old_ui_scale > f32::EPSILON {
+            let ratio = next_ui_scale / old_ui_scale;
+            self.scroll_x *= ratio;
+            self.scroll_y *= ratio;
+            self.places_scroll_y *= ratio;
+        }
+        self.clamp_scroll(size);
+        eprintln!(
+            "[fika-wgpu] scale-factor={:.2} ui_scale={:.2} scroll_x={:.1} scroll_y={:.1}",
+            self.scale_factor,
+            self.ui_scale(),
+            self.scroll_x,
+            self.scroll_y
+        );
+        true
+    }
+
+    fn ui_scale(&self) -> f32 {
+        normalized_scale_factor(self.scale_factor).max(1.0)
+    }
+
+    fn scale_metric(&self, value: f32) -> f32 {
+        (value * self.ui_scale()).round().max(1.0)
+    }
+
+    fn zoomed_metric(&self, value: f32, min: f32, max: f32) -> f32 {
+        let scale = self.ui_scale();
+        (value * self.zoom_factor() * scale)
+            .round()
+            .clamp(min * scale, max * scale)
+    }
+
+    fn text_line_height(&self) -> f32 {
+        self.scale_metric(TEXT_LINE_HEIGHT)
+    }
+
+    fn small_text_line_height(&self) -> f32 {
+        self.scale_metric(14.0)
+    }
+
+    fn top_bar_height(&self) -> f32 {
+        self.scale_metric(TOP_BAR_HEIGHT)
+    }
+
+    fn status_bar_height(&self) -> f32 {
+        self.scale_metric(STATUS_BAR_HEIGHT)
+    }
+
+    fn details_header_height(&self) -> f32 {
+        self.scale_metric(DETAILS_HEADER_HEIGHT)
+    }
+
+    fn details_name_width(&self) -> f32 {
+        self.scale_metric(DETAILS_NAME_WIDTH)
+    }
+
+    fn details_size_width(&self) -> f32 {
+        self.scale_metric(DETAILS_SIZE_WIDTH)
+    }
+
+    fn details_modified_width(&self) -> f32 {
+        self.scale_metric(DETAILS_MODIFIED_WIDTH)
+    }
+
     fn model_index_for_layout_index(&self, layout_index: usize) -> Option<usize> {
         self.filtered_indexes.get(layout_index).copied()
     }
@@ -3477,26 +3572,27 @@ impl ShellScene {
         point: ViewPoint,
         size: PhysicalSize<u32>,
     ) -> Option<ShellViewMode> {
-        view_mode_button_rects(size.width.max(1) as f32)
+        view_mode_button_rects(size.width.max(1) as f32, self.ui_scale())
             .into_iter()
             .find_map(|(mode, rect)| rect.contains(point).then_some(mode))
     }
 
     fn path_bar_rect(&self, size: PhysicalSize<u32>) -> Option<ViewRect> {
         let width = size.width.max(1) as f32;
-        let path_x = path_bar_start_x();
+        let scale = self.ui_scale();
+        let path_x = path_bar_start_x(scale);
         let path_width = if self.is_location_editing() {
-            path_bar_available_width(width, path_x)
+            path_bar_available_width(width, path_x, scale)
         } else {
-            path_placeholder_width(&self.path, width, path_x)
+            path_placeholder_width(&self.path, width, path_x, scale)
         };
         let rect = ViewRect {
             x: path_x,
-            y: 14.0,
+            y: self.scale_metric(14.0),
             width: path_width,
-            height: 24.0,
+            height: self.scale_metric(24.0),
         };
-        (rect.width > 24.0).then_some(rect)
+        (rect.width > self.scale_metric(24.0)).then_some(rect)
     }
 
     fn path_bar_contains_screen_point(&self, point: ViewPoint, size: PhysicalSize<u32>) -> bool {
@@ -3509,7 +3605,7 @@ impl ShellScene {
         point: ViewPoint,
         _size: PhysicalSize<u32>,
     ) -> Option<PathNavigationAction> {
-        path_navigation_button_rects()
+        path_navigation_button_rects(self.ui_scale())
             .into_iter()
             .find_map(|(action, rect)| {
                 (rect.contains(point) && self.path_navigation_action_enabled(action))
@@ -3573,53 +3669,63 @@ impl ShellScene {
             return Vec::new();
         }
         let mut rows = Vec::with_capacity(self.places.len());
-        let mut y = sidebar.y + PLACES_SIDEBAR_TOP_PADDING - self.places_scroll_y;
+        let top_padding = self.scale_metric(PLACES_SIDEBAR_TOP_PADDING);
+        let padding_x = self.scale_metric(PLACES_SIDEBAR_PADDING_X);
+        let section_height = self.scale_metric(PLACES_SECTION_HEIGHT);
+        let row_height = self.scale_metric(PLACES_ROW_HEIGHT);
+        let row_gap = self.scale_metric(PLACES_ROW_GAP);
+        let mut y = sidebar.y + top_padding - self.places_scroll_y;
         let mut previous_group = None;
         for (index, place) in self.places.iter().enumerate() {
             if !place.group.is_empty() && previous_group != Some(place.group) {
-                y += PLACES_SECTION_HEIGHT;
+                y += section_height;
             }
             let rect = ViewRect {
-                x: sidebar.x + PLACES_SIDEBAR_PADDING_X,
+                x: sidebar.x + padding_x,
                 y,
-                width: (sidebar.width - PLACES_SIDEBAR_PADDING_X * 2.0).max(1.0),
-                height: PLACES_ROW_HEIGHT,
+                width: (sidebar.width - padding_x * 2.0).max(1.0),
+                height: row_height,
             };
             if rect.y < sidebar.bottom() && rect.bottom() > sidebar.y {
                 rows.push((index, rect));
             }
-            y += PLACES_ROW_HEIGHT + PLACES_ROW_GAP;
+            y += row_height + row_gap;
             previous_group = Some(place.group);
         }
         rows
     }
 
     fn places_sidebar_rect(&self, size: PhysicalSize<u32>) -> ViewRect {
-        let width = places_sidebar_width(size);
-        let height = (size.height as f32 - TOP_BAR_HEIGHT - STATUS_BAR_HEIGHT).max(0.0);
+        let width = self.places_sidebar_width(size);
+        let top_bar_height = self.top_bar_height();
+        let height = (size.height as f32 - top_bar_height - self.status_bar_height()).max(0.0);
         ViewRect {
             x: 0.0,
-            y: TOP_BAR_HEIGHT,
+            y: top_bar_height,
             width,
             height,
         }
     }
 
     fn places_content_height(&self) -> f32 {
+        let top_padding = self.scale_metric(PLACES_SIDEBAR_TOP_PADDING);
+        let section_height = self.scale_metric(PLACES_SECTION_HEIGHT);
+        let row_height = self.scale_metric(PLACES_ROW_HEIGHT);
+        let row_gap = self.scale_metric(PLACES_ROW_GAP);
         if self.places.is_empty() {
-            return PLACES_SIDEBAR_TOP_PADDING * 2.0;
+            return top_padding * 2.0;
         }
 
-        let mut height = PLACES_SIDEBAR_TOP_PADDING;
+        let mut height = top_padding;
         let mut previous_group = None;
         for place in &self.places {
             if !place.group.is_empty() && previous_group != Some(place.group) {
-                height += PLACES_SECTION_HEIGHT;
+                height += section_height;
             }
-            height += PLACES_ROW_HEIGHT + PLACES_ROW_GAP;
+            height += row_height + row_gap;
             previous_group = Some(place.group);
         }
-        height - PLACES_ROW_GAP + PLACES_SIDEBAR_TOP_PADDING
+        height - row_gap + top_padding
     }
 
     fn max_places_scroll_y(&self, size: PhysicalSize<u32>) -> f32 {
@@ -3634,12 +3740,13 @@ impl ShellScene {
             return None;
         }
 
-        let track_height = (sidebar.height - PLACES_SCROLLBAR_MARGIN * 2.0).max(1.0);
+        let scrollbar_margin = self.scale_metric(PLACES_SCROLLBAR_MARGIN);
+        let scrollbar_width = self.scale_metric(PLACES_SCROLLBAR_WIDTH);
+        let min_thumb_height = self.scale_metric(PLACES_SCROLLBAR_MIN_THUMB_HEIGHT);
+        let track_height = (sidebar.height - scrollbar_margin * 2.0).max(1.0);
         let content_height = self.places_content_height().max(sidebar.height);
-        let thumb_height = (sidebar.height / content_height * track_height).clamp(
-            PLACES_SCROLLBAR_MIN_THUMB_HEIGHT.min(track_height),
-            track_height,
-        );
+        let thumb_height = (sidebar.height / content_height * track_height)
+            .clamp(min_thumb_height.min(track_height), track_height);
         let travel = (track_height - thumb_height).max(0.0);
         let scroll_ratio = if max_scroll <= f32::EPSILON {
             0.0
@@ -3647,9 +3754,9 @@ impl ShellScene {
             (self.places_scroll_y / max_scroll).clamp(0.0, 1.0)
         };
         Some(ViewRect {
-            x: sidebar.right() - PLACES_SCROLLBAR_MARGIN - PLACES_SCROLLBAR_WIDTH,
-            y: sidebar.y + PLACES_SCROLLBAR_MARGIN + travel * scroll_ratio,
-            width: PLACES_SCROLLBAR_WIDTH,
+            x: sidebar.right() - scrollbar_margin - scrollbar_width,
+            y: sidebar.y + scrollbar_margin + travel * scroll_ratio,
+            width: scrollbar_width,
             height: thumb_height,
         })
     }
@@ -5212,43 +5319,46 @@ impl ShellScene {
                 self.scroll_y,
                 self.details_row_height(),
                 self.details_icon_size(),
+                self.ui_scale(),
+                self.details_name_width(),
+                self.details_size_width(),
+                self.details_modified_width(),
+                self.text_line_height(),
             )),
         }
     }
 
     fn icons_options(&self, size: PhysicalSize<u32>) -> IconsLayoutOptions {
-        let factor = self.zoom_factor();
         IconsLayoutOptions {
             viewport_width: self.content_width(size),
             viewport_height: self.viewport_height(size),
             reserved_bottom: 0.0,
             scroll_x: self.scroll_x,
             scroll_y: self.scroll_y,
-            padding: (8.0 * factor).round().clamp(6.0, 14.0),
-            gap: (12.0 * factor).round().clamp(8.0, 22.0),
-            item_width: (ICONS_ITEM_WIDTH * factor).round().clamp(82.0, 188.0),
-            item_height: (ICONS_ITEM_HEIGHT * factor).round().clamp(76.0, 172.0),
-            icon_size: (ICONS_ICON_SIZE * factor).round().clamp(28.0, 92.0),
-            text_height: (18.0 * factor).round().clamp(16.0, 30.0),
+            padding: self.zoomed_metric(8.0, 6.0, 14.0),
+            gap: self.zoomed_metric(12.0, 8.0, 22.0),
+            item_width: self.zoomed_metric(ICONS_ITEM_WIDTH, 82.0, 188.0),
+            item_height: self.zoomed_metric(ICONS_ITEM_HEIGHT, 76.0, 172.0),
+            icon_size: self.zoomed_metric(ICONS_ICON_SIZE, 28.0, 92.0),
+            text_height: self.zoomed_metric(TEXT_LINE_HEIGHT, 16.0, 30.0),
         }
     }
 
     fn compact_options(&self, size: PhysicalSize<u32>) -> CompactLayoutOptions {
-        let factor = self.zoom_factor();
         CompactLayoutOptions {
             viewport_width: self.content_width(size),
             viewport_height: self.viewport_height(size),
             reserved_bottom: 0.0,
             scroll_x: self.scroll_x,
             scroll_y: 0.0,
-            padding: (6.0 * factor).round().clamp(4.0, 10.0),
-            side_padding: (8.0 * factor).round().clamp(6.0, 14.0),
-            gap: (8.0 * factor).round().clamp(6.0, 14.0),
-            text_gap: (8.0 * factor).round().clamp(6.0, 14.0),
-            item_width: (COMPACT_ITEM_WIDTH * factor).round().clamp(168.0, 360.0),
-            item_height: (COMPACT_ITEM_HEIGHT * factor).round().clamp(34.0, 72.0),
-            icon_size: (COMPACT_ICON_SIZE * factor).round().clamp(20.0, 56.0),
-            text_height: (18.0 * factor).round().clamp(16.0, 26.0),
+            padding: self.zoomed_metric(6.0, 4.0, 10.0),
+            side_padding: self.zoomed_metric(8.0, 6.0, 14.0),
+            gap: self.zoomed_metric(8.0, 6.0, 14.0),
+            text_gap: self.zoomed_metric(8.0, 6.0, 14.0),
+            item_width: self.zoomed_metric(COMPACT_ITEM_WIDTH, 168.0, 360.0),
+            item_height: self.zoomed_metric(COMPACT_ITEM_HEIGHT, 34.0, 72.0),
+            icon_size: self.zoomed_metric(COMPACT_ICON_SIZE, 20.0, 56.0),
+            text_height: self.zoomed_metric(TEXT_LINE_HEIGHT, 16.0, 26.0),
         }
     }
 
@@ -5261,15 +5371,11 @@ impl ShellScene {
     }
 
     fn details_row_height(&self) -> f32 {
-        (DETAILS_ROW_HEIGHT * self.zoom_factor())
-            .round()
-            .clamp(22.0, 44.0)
+        self.zoomed_metric(DETAILS_ROW_HEIGHT, 22.0, 44.0)
     }
 
     fn details_icon_size(&self) -> f32 {
-        (DETAILS_ICON_SIZE * self.zoom_factor())
-            .round()
-            .clamp(16.0, 34.0)
+        self.zoomed_metric(DETAILS_ICON_SIZE, 16.0, 34.0)
     }
 
     fn build_frame(
@@ -5282,11 +5388,12 @@ impl ShellScene {
         let mut vertices = Vec::with_capacity(64);
         let width = size.width.max(1) as f32;
         let height = size.height.max(1) as f32;
+        let top_bar_height = self.top_bar_height();
         let content_origin_x = self.content_origin_x(size);
         let content_origin_y = self.content_origin_y();
         let content_width = self.content_width(size);
         let viewport_h = self.viewport_height(size);
-        let status_bar = status_bar_rect(size);
+        let status_bar = self.status_bar_rect(size);
 
         push_rect(
             &mut vertices,
@@ -5305,7 +5412,7 @@ impl ShellScene {
                 x: 0.0,
                 y: 0.0,
                 width,
-                height: TOP_BAR_HEIGHT,
+                height: top_bar_height,
             },
             [0.105, 0.112, 0.120, 1.0],
             size,
@@ -5331,16 +5438,16 @@ impl ShellScene {
             text.push_label(
                 &path_label,
                 ViewRect {
-                    x: path_rect.x + 12.0,
-                    y: path_rect.y + 3.0,
-                    width: (path_rect.width - 24.0).max(1.0),
-                    height: 18.0,
+                    x: path_rect.x + self.scale_metric(12.0),
+                    y: path_rect.y + self.scale_metric(3.0),
+                    width: (path_rect.width - self.scale_metric(24.0)).max(1.0),
+                    height: self.text_line_height(),
                 },
                 ViewRect {
                     x: 0.0,
                     y: 0.0,
                     width,
-                    height: TOP_BAR_HEIGHT,
+                    height: top_bar_height,
                 },
                 TextColor::rgb(222, 228, 232),
             );
@@ -5351,9 +5458,9 @@ impl ShellScene {
             &mut vertices,
             ViewRect {
                 x: content_origin_x,
-                y: TOP_BAR_HEIGHT,
+                y: top_bar_height,
                 width: content_width,
-                height: (height - TOP_BAR_HEIGHT).max(1.0),
+                height: (height - top_bar_height).max(1.0),
             },
             view_mode_content_color(self.view_mode),
             size,
@@ -5363,9 +5470,9 @@ impl ShellScene {
             &mut vertices,
             ViewRect {
                 x: content_origin_x,
-                y: TOP_BAR_HEIGHT,
-                width: VIEW_MODE_RAIL_WIDTH,
-                height: (height - TOP_BAR_HEIGHT).max(1.0),
+                y: top_bar_height,
+                width: self.scale_metric(VIEW_MODE_RAIL_WIDTH),
+                height: (height - top_bar_height).max(1.0),
             },
             view_mode_badge_color(self.view_mode),
             size,
@@ -5376,7 +5483,7 @@ impl ShellScene {
                 x: content_origin_x,
                 y: content_origin_y,
                 width: content_width,
-                height: VIEW_MODE_STRIPE_HEIGHT,
+                height: self.scale_metric(VIEW_MODE_STRIPE_HEIGHT),
             },
             view_mode_badge_color(self.view_mode),
             size,
@@ -5445,7 +5552,7 @@ impl ShellScene {
             ViewRect {
                 x: sidebar.right(),
                 y: sidebar.y,
-                width: PLACES_SIDEBAR_SPLITTER_WIDTH,
+                width: self.scale_metric(PLACES_SIDEBAR_SPLITTER_WIDTH),
                 height: sidebar.height,
             },
             [0.18, 0.20, 0.22, 1.0],
@@ -5453,27 +5560,35 @@ impl ShellScene {
         );
 
         let active_place = active_shell_place_index(&self.places, &self.path);
-        let mut y = sidebar.y + PLACES_SIDEBAR_TOP_PADDING - self.places_scroll_y;
+        let top_padding = self.scale_metric(PLACES_SIDEBAR_TOP_PADDING);
+        let padding_x = self.scale_metric(PLACES_SIDEBAR_PADDING_X);
+        let section_height = self.scale_metric(PLACES_SECTION_HEIGHT);
+        let row_height = self.scale_metric(PLACES_ROW_HEIGHT);
+        let row_gap = self.scale_metric(PLACES_ROW_GAP);
+        let icon_size = self.scale_metric(PLACES_ICON_SIZE);
+        let text_height = self.text_line_height();
+        let small_text_height = self.small_text_line_height();
+        let mut y = sidebar.y + top_padding - self.places_scroll_y;
         let mut previous_group = None;
         for (index, place) in self.places.iter().enumerate() {
             if !place.group.is_empty() && previous_group != Some(place.group) {
                 let section = ViewRect {
-                    x: sidebar.x + PLACES_SIDEBAR_PADDING_X + 4.0,
-                    y: y + 4.0,
-                    width: (sidebar.width - PLACES_SIDEBAR_PADDING_X * 2.0 - 8.0).max(1.0),
-                    height: 16.0,
+                    x: sidebar.x + padding_x + self.scale_metric(4.0),
+                    y: y + self.scale_metric(4.0),
+                    width: (sidebar.width - padding_x * 2.0 - self.scale_metric(8.0)).max(1.0),
+                    height: small_text_height,
                 };
                 if section.y < sidebar.bottom() && section.bottom() > sidebar.y {
                     text.push_label(place.group, section, sidebar, TextColor::rgb(136, 148, 160));
                 }
-                y += PLACES_SECTION_HEIGHT;
+                y += section_height;
             }
 
             let row = ViewRect {
-                x: sidebar.x + PLACES_SIDEBAR_PADDING_X,
+                x: sidebar.x + padding_x,
                 y,
-                width: (sidebar.width - PLACES_SIDEBAR_PADDING_X * 2.0).max(1.0),
-                height: PLACES_ROW_HEIGHT,
+                width: (sidebar.width - padding_x * 2.0).max(1.0),
+                height: row_height,
             };
             if row.y < sidebar.bottom() && row.bottom() > sidebar.y {
                 let active = active_place == Some(index);
@@ -5486,19 +5601,19 @@ impl ShellScene {
                     size,
                 );
                 let icon = ViewRect {
-                    x: row.x + 8.0,
-                    y: row.y + (row.height - PLACES_ICON_SIZE) / 2.0,
-                    width: PLACES_ICON_SIZE,
-                    height: PLACES_ICON_SIZE,
+                    x: row.x + self.scale_metric(8.0),
+                    y: row.y + (row.height - icon_size) / 2.0,
+                    width: icon_size,
+                    height: icon_size,
                 };
                 push_clipped_rect(vertices, icon, sidebar, place_marker_color(place), size);
                 text.push_label(
                     place.marker,
                     ViewRect {
-                        x: icon.x + 3.0,
-                        y: icon.y + 1.0,
-                        width: (icon.width - 6.0).max(1.0),
-                        height: 14.0,
+                        x: icon.x + self.scale_metric(3.0),
+                        y: icon.y + self.scale_metric(1.0),
+                        width: (icon.width - self.scale_metric(6.0)).max(1.0),
+                        height: small_text_height,
                     },
                     sidebar,
                     TextColor::rgb(248, 250, 252),
@@ -5506,10 +5621,10 @@ impl ShellScene {
                 text.push_label(
                     &place.label,
                     ViewRect {
-                        x: row.x + 34.0,
-                        y: row.y + 6.0,
-                        width: (row.width - 42.0).max(1.0),
-                        height: 18.0,
+                        x: row.x + self.scale_metric(34.0),
+                        y: row.y + (row.height - text_height) / 2.0,
+                        width: (row.width - self.scale_metric(42.0)).max(1.0),
+                        height: text_height,
                     },
                     sidebar,
                     if active {
@@ -5520,16 +5635,17 @@ impl ShellScene {
                 );
             }
 
-            y += PLACES_ROW_HEIGHT + PLACES_ROW_GAP;
+            y += row_height + row_gap;
             previous_group = Some(place.group);
         }
 
         if let Some(thumb) = self.places_scrollbar_thumb_rect(size) {
+            let scrollbar_margin = self.scale_metric(PLACES_SCROLLBAR_MARGIN);
             let track = ViewRect {
                 x: thumb.x,
-                y: sidebar.y + PLACES_SCROLLBAR_MARGIN,
+                y: sidebar.y + scrollbar_margin,
                 width: thumb.width,
-                height: (sidebar.height - PLACES_SCROLLBAR_MARGIN * 2.0).max(1.0),
+                height: (sidebar.height - scrollbar_margin * 2.0).max(1.0),
             };
             push_rect(vertices, track, [0.12, 0.135, 0.15, 1.0], size);
             push_rect(vertices, thumb, [0.48, 0.54, 0.60, 1.0], size);
@@ -5543,13 +5659,14 @@ impl ShellScene {
         size: PhysicalSize<u32>,
     ) {
         let width = size.width.max(1) as f32;
+        let top_bar_height = self.top_bar_height();
         let clip = ViewRect {
             x: 0.0,
             y: 0.0,
             width,
-            height: TOP_BAR_HEIGHT,
+            height: top_bar_height,
         };
-        for (action, rect) in path_navigation_button_rects() {
+        for (action, rect) in path_navigation_button_rects(self.ui_scale()) {
             let enabled = self.path_navigation_action_enabled(action);
             let active = matches!(action, PathNavigationAction::ToggleHidden) && self.show_hidden;
             push_rect(
@@ -5567,10 +5684,10 @@ impl ShellScene {
             text.push_label(
                 action.label(),
                 ViewRect {
-                    x: rect.x + 7.0,
-                    y: rect.y + 3.0,
-                    width: (rect.width - 14.0).max(1.0),
-                    height: 18.0,
+                    x: rect.x + self.scale_metric(7.0),
+                    y: rect.y + self.scale_metric(3.0),
+                    width: (rect.width - self.scale_metric(14.0)).max(1.0),
+                    height: self.text_line_height(),
                 },
                 clip,
                 if active {
@@ -5591,13 +5708,14 @@ impl ShellScene {
         size: PhysicalSize<u32>,
     ) {
         let width = size.width.max(1) as f32;
+        let top_bar_height = self.top_bar_height();
         let clip = ViewRect {
             x: 0.0,
             y: 0.0,
             width,
-            height: TOP_BAR_HEIGHT,
+            height: top_bar_height,
         };
-        for (mode, rect) in view_mode_button_rects(width) {
+        for (mode, rect) in view_mode_button_rects(width, self.ui_scale()) {
             let active = mode == self.view_mode;
             push_rect(
                 vertices,
@@ -5612,10 +5730,10 @@ impl ShellScene {
             text.push_label(
                 mode.label(),
                 ViewRect {
-                    x: rect.x + 10.0,
-                    y: rect.y + 3.0,
-                    width: (rect.width - 20.0).max(1.0),
-                    height: 18.0,
+                    x: rect.x + self.scale_metric(10.0),
+                    y: rect.y + self.scale_metric(3.0),
+                    width: (rect.width - self.scale_metric(20.0)).max(1.0),
+                    height: self.text_line_height(),
                 },
                 clip,
                 if active {
@@ -5640,7 +5758,7 @@ impl ShellScene {
             x,
             y,
             width,
-            height: DETAILS_HEADER_HEIGHT,
+            height: self.details_header_height(),
         };
         push_rect(vertices, header, [0.100, 0.108, 0.117, 1.0], size);
         push_rect(
@@ -5654,13 +5772,24 @@ impl ShellScene {
             [0.20, 0.22, 0.24, 1.0],
             size,
         );
+        let name_width = self.details_name_width();
+        let size_width = self.details_size_width();
+        let modified_width = self.details_modified_width();
         let columns = [
-            ("Name", 34.0, DETAILS_NAME_WIDTH - 42.0),
-            ("Size", DETAILS_NAME_WIDTH + 8.0, DETAILS_SIZE_WIDTH - 16.0),
+            (
+                "Name",
+                self.scale_metric(34.0),
+                name_width - self.scale_metric(42.0),
+            ),
+            (
+                "Size",
+                name_width + self.scale_metric(8.0),
+                size_width - self.scale_metric(16.0),
+            ),
             (
                 "Modified",
-                DETAILS_NAME_WIDTH + DETAILS_SIZE_WIDTH + 8.0,
-                DETAILS_MODIFIED_WIDTH - 16.0,
+                name_width + size_width + self.scale_metric(8.0),
+                modified_width - self.scale_metric(16.0),
             ),
         ];
         for (label, x, width) in columns {
@@ -5668,9 +5797,9 @@ impl ShellScene {
                 label,
                 ViewRect {
                     x: header.x + x,
-                    y: header.y + 6.0,
+                    y: header.y + self.scale_metric(6.0),
                     width: width.max(1.0),
-                    height: 18.0,
+                    height: self.text_line_height(),
                 },
                 header,
                 TextColor::rgb(170, 181, 192),
@@ -5702,10 +5831,10 @@ impl ShellScene {
         text.push_label(
             "Filter:",
             ViewRect {
-                x: rect.x + 12.0,
-                y: rect.y + 6.0,
-                width: 54.0,
-                height: 18.0,
+                x: rect.x + self.scale_metric(12.0),
+                y: rect.y + self.scale_metric(6.0),
+                width: self.scale_metric(54.0),
+                height: self.text_line_height(),
             },
             rect,
             TextColor::rgb(176, 187, 198),
@@ -5718,10 +5847,10 @@ impl ShellScene {
         text.push_label(
             pattern,
             ViewRect {
-                x: rect.x + 66.0,
-                y: rect.y + 6.0,
-                width: (rect.width - 78.0).max(1.0),
-                height: 18.0,
+                x: rect.x + self.scale_metric(66.0),
+                y: rect.y + self.scale_metric(6.0),
+                width: (rect.width - self.scale_metric(78.0)).max(1.0),
+                height: self.text_line_height(),
             },
             rect,
             TextColor::rgb(230, 236, 241),
@@ -5750,13 +5879,15 @@ impl ShellScene {
         let selected = self.selection.contains(entry_index);
         let hovered = self.hovered_index == Some(entry_index);
 
-        push_clipped_rect(
-            vertices,
-            visual_rect,
-            content_clip,
-            item_background_color(selected, hovered),
-            size,
-        );
+        if selected || hovered || self.view_mode != ShellViewMode::Compact {
+            push_clipped_rect(
+                vertices,
+                visual_rect,
+                content_clip,
+                item_background_color(selected, hovered),
+                size,
+            );
+        }
         if selected {
             push_clipped_rect_outline(
                 vertices,
@@ -5817,23 +5948,26 @@ impl ShellScene {
         };
         text.push_label(entry.name.as_ref(), text_rect, content_clip, text_color);
 
-        let index_marker = ViewRect {
-            x: item_rect.x + 7.0,
-            y: item_rect.y + 7.0,
-            width: 5.0,
-            height: 5.0,
-        };
-        push_clipped_rect(
-            vertices,
-            index_marker,
-            content_clip,
-            if entry.is_dir {
-                [0.55, 0.80, 0.54, 1.0]
-            } else {
-                [0.42, 0.62, 0.84, 1.0]
-            },
-            size,
-        );
+        if selected || hovered || self.view_mode != ShellViewMode::Compact {
+            let marker_size = self.scale_metric(5.0);
+            let index_marker = ViewRect {
+                x: item_rect.x + self.scale_metric(7.0),
+                y: item_rect.y + self.scale_metric(7.0),
+                width: marker_size,
+                height: marker_size,
+            };
+            push_clipped_rect(
+                vertices,
+                index_marker,
+                content_clip,
+                if entry.is_dir {
+                    [0.55, 0.80, 0.54, 1.0]
+                } else {
+                    [0.42, 0.62, 0.84, 1.0]
+                },
+                size,
+            );
+        }
     }
 
     fn push_details_item(
@@ -5885,14 +6019,18 @@ impl ShellScene {
             TextColor::rgb(202, 211, 220)
         };
         text.push_label(entry.name.as_ref(), name_rect, content_clip, text_color);
-        let metadata_y = row_rect.y + (row_rect.height - 18.0).max(0.0) / 2.0;
+        let text_height = self.text_line_height();
+        let name_width = self.details_name_width();
+        let size_width = self.details_size_width();
+        let metadata_y = row_rect.y + (row_rect.height - text_height).max(0.0) / 2.0;
         text.push_label(
             &details_size_label(entry),
             ViewRect {
-                x: self.content_origin_x(size) + DETAILS_NAME_WIDTH + 8.0 - self.scroll_x,
+                x: self.content_origin_x(size) + name_width + self.scale_metric(8.0)
+                    - self.scroll_x,
                 y: metadata_y,
-                width: DETAILS_SIZE_WIDTH - 16.0,
-                height: 18.0,
+                width: size_width - self.scale_metric(16.0),
+                height: text_height,
             },
             content_clip,
             TextColor::rgb(170, 181, 192),
@@ -5900,11 +6038,11 @@ impl ShellScene {
         text.push_label(
             &format_modified_secs(entry.modified_secs),
             ViewRect {
-                x: self.content_origin_x(size) + DETAILS_NAME_WIDTH + DETAILS_SIZE_WIDTH + 8.0
+                x: self.content_origin_x(size) + name_width + size_width + self.scale_metric(8.0)
                     - self.scroll_x,
                 y: metadata_y,
-                width: DETAILS_MODIFIED_WIDTH - 16.0,
-                height: 18.0,
+                width: self.details_modified_width() - self.scale_metric(16.0),
+                height: text_height,
             },
             content_clip,
             TextColor::rgb(170, 181, 192),
@@ -6009,10 +6147,10 @@ impl ShellScene {
         text.push_label(
             &status,
             ViewRect {
-                x: 12.0,
-                y: rect.y + 5.0,
-                width: (rect.width - 24.0).max(1.0),
-                height: 18.0,
+                x: self.scale_metric(12.0),
+                y: rect.y + self.scale_metric(5.0),
+                width: (rect.width - self.scale_metric(24.0)).max(1.0),
+                height: self.text_line_height(),
             },
             rect,
             TextColor::rgb(178, 188, 198),
@@ -6729,30 +6867,30 @@ impl ShellScene {
     }
 
     fn content_origin_x(&self, size: PhysicalSize<u32>) -> f32 {
-        let sidebar_width = places_sidebar_width(size);
+        let sidebar_width = self.places_sidebar_width(size);
         if sidebar_width <= 0.0 {
             0.0
         } else {
-            sidebar_width + PLACES_SIDEBAR_SPLITTER_WIDTH
+            sidebar_width + self.scale_metric(PLACES_SIDEBAR_SPLITTER_WIDTH)
         }
     }
 
     fn content_origin_y(&self) -> f32 {
         self.details_header_y()
             + if self.view_mode == ShellViewMode::Details {
-                DETAILS_HEADER_HEIGHT
+                self.details_header_height()
             } else {
                 0.0
             }
     }
 
     fn details_header_y(&self) -> f32 {
-        TOP_BAR_HEIGHT + self.filter_bar_height()
+        self.top_bar_height() + self.filter_bar_height()
     }
 
     fn filter_bar_height(&self) -> f32 {
         if self.filter_active || !self.filter_pattern.is_empty() {
-            FILTER_BAR_HEIGHT
+            self.scale_metric(FILTER_BAR_HEIGHT)
         } else {
             0.0
         }
@@ -6762,7 +6900,7 @@ impl ShellScene {
         let height = self.filter_bar_height();
         (height > 0.0).then(|| ViewRect {
             x: self.content_origin_x(size),
-            y: TOP_BAR_HEIGHT,
+            y: self.top_bar_height(),
             width: self.content_width(size),
             height,
         })
@@ -6770,7 +6908,7 @@ impl ShellScene {
 
     fn content_width(&self, size: PhysicalSize<u32>) -> f32 {
         let reserved = if self.content_scrollbar_axis() == ContentScrollbarAxis::Vertical {
-            CONTENT_SCROLLBAR_RESERVED_EXTENT
+            self.scale_metric(CONTENT_SCROLLBAR_RESERVED_EXTENT)
         } else {
             0.0
         };
@@ -6779,11 +6917,20 @@ impl ShellScene {
 
     fn viewport_height(&self, size: PhysicalSize<u32>) -> f32 {
         let reserved = if self.content_scrollbar_axis() == ContentScrollbarAxis::Horizontal {
-            CONTENT_SCROLLBAR_RESERVED_EXTENT
+            self.scale_metric(CONTENT_SCROLLBAR_RESERVED_EXTENT)
         } else {
             0.0
         };
-        (size.height as f32 - self.content_origin_y() - STATUS_BAR_HEIGHT - reserved).max(1.0)
+        (size.height as f32 - self.content_origin_y() - self.status_bar_height() - reserved)
+            .max(1.0)
+    }
+
+    fn places_sidebar_width(&self, size: PhysicalSize<u32>) -> f32 {
+        let width = size.width.max(1) as f32;
+        let responsive_width = (width * 0.42).max(self.scale_metric(128.0));
+        self.scale_metric(PLACES_SIDEBAR_WIDTH)
+            .min(responsive_width)
+            .min((width - self.scale_metric(120.0)).max(0.0))
     }
 
     fn content_scrollbar_axis(&self) -> ContentScrollbarAxis {
@@ -6799,6 +6946,18 @@ impl ShellScene {
             y: self.content_origin_y(),
             width: self.content_width(size),
             height: self.viewport_height(size),
+        }
+    }
+
+    fn status_bar_rect(&self, size: PhysicalSize<u32>) -> ViewRect {
+        let width = size.width.max(1) as f32;
+        let height = size.height.max(1) as f32;
+        let bar_height = self.status_bar_height().min(height);
+        ViewRect {
+            x: 0.0,
+            y: height - bar_height,
+            width,
+            height: bar_height,
         }
     }
 
@@ -6880,16 +7039,16 @@ impl ShellScene {
                 let slot = ViewRect {
                     x: self.content_origin_x(size) + self.content_width(size),
                     y: self.content_origin_y(),
-                    width: CONTENT_SCROLLBAR_RESERVED_EXTENT
+                    width: self
+                        .scale_metric(CONTENT_SCROLLBAR_RESERVED_EXTENT)
                         .min((size.width as f32 - self.content_origin_x(size)).max(1.0)),
                     height: viewport_extent,
                 };
-                let track = inset_content_scrollbar_slot(slot)?;
+                let track = inset_content_scrollbar_slot(slot, self.ui_scale())?;
                 let content_extent = viewport_extent + max_scroll;
-                let thumb_extent = (track.height * (viewport_extent / content_extent)).clamp(
-                    CONTENT_SCROLLBAR_MIN_THUMB_SIZE.min(track.height),
-                    track.height,
-                );
+                let min_thumb_size = self.scale_metric(CONTENT_SCROLLBAR_MIN_THUMB_SIZE);
+                let thumb_extent = (track.height * (viewport_extent / content_extent))
+                    .clamp(min_thumb_size.min(track.height), track.height);
                 if thumb_extent >= track.height {
                     return None;
                 }
@@ -6915,15 +7074,15 @@ impl ShellScene {
                     x: self.content_origin_x(size),
                     y: self.content_origin_y() + self.viewport_height(size),
                     width: viewport_extent,
-                    height: CONTENT_SCROLLBAR_RESERVED_EXTENT
+                    height: self
+                        .scale_metric(CONTENT_SCROLLBAR_RESERVED_EXTENT)
                         .min((size.height as f32 - self.content_origin_y()).max(1.0)),
                 };
-                let track = inset_content_scrollbar_slot(slot)?;
+                let track = inset_content_scrollbar_slot(slot, self.ui_scale())?;
                 let content_extent = viewport_extent + max_scroll;
-                let thumb_extent = (track.width * (viewport_extent / content_extent)).clamp(
-                    CONTENT_SCROLLBAR_MIN_THUMB_SIZE.min(track.width),
-                    track.width,
-                );
+                let min_thumb_size = self.scale_metric(CONTENT_SCROLLBAR_MIN_THUMB_SIZE);
+                let thumb_extent = (track.width * (viewport_extent / content_extent))
+                    .clamp(min_thumb_size.min(track.width), track.width);
                 if thumb_extent >= track.width {
                     return None;
                 }
@@ -7734,10 +7893,11 @@ impl WgpuState {
             || self.last_log.elapsed() >= Duration::from_secs(1)
         {
             eprintln!(
-                "[fika-wgpu] frame={} reason={} view={} zoom={} zoom_changes={} path={} entries={} filtered={} show_hidden={} hidden_changes={} location_active={} location_changes={} filter_active={} filter_changes={} places={} place_hover={} places_changes={} places_scroll_y={:.1} places_scroll_changes={} content_scrollbar={} visible={} selected={} hover={} context={} context_menu={} context_changes={} context_actions={} properties={} properties_changes={} create_dialog={} create_changes={} rename_dialog={} rename_changes={} open_with={} open_with_changes={} open_changes={} copy_location_changes={} file_clipboard_changes={} paste_changes={} trash_changes={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} path_changes={} reloads={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_cache={}/{} entries={} bytes={} batches={} scroll_x={:.1} scroll_y={:.1} layout={}us text_raster={}us text_atlas={}x{}:{}b render={}us",
+                "[fika-wgpu] frame={} reason={} view={} scale={:.2} zoom={} zoom_changes={} path={} entries={} filtered={} show_hidden={} hidden_changes={} location_active={} location_changes={} filter_active={} filter_changes={} places={} place_hover={} places_changes={} places_scroll_y={:.1} places_scroll_changes={} content_scrollbar={} visible={} selected={} hover={} context={} context_menu={} context_changes={} context_actions={} properties={} properties_changes={} create_dialog={} create_changes={} rename_dialog={} rename_changes={} open_with={} open_with_changes={} open_changes={} copy_location_changes={} file_clipboard_changes={} paste_changes={} trash_changes={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} path_changes={} reloads={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_cache={}/{} entries={} bytes={} batches={} scroll_x={:.1} scroll_y={:.1} layout={}us text_raster={}us text_atlas={}x{}:{}b render={}us",
                 self.frame_count,
                 reason,
                 scene.view_mode.as_str(),
+                scene.ui_scale(),
                 scene.zoom_percent(),
                 scene.zoom_changes,
                 scene.path.display(),
@@ -8540,6 +8700,8 @@ struct TextFrameBuilder<'a> {
     text_buffer: &'a mut Buffer,
     label_cache: &'a mut LabelRasterCache,
     surface_size: PhysicalSize<u32>,
+    max_font_size: f32,
+    max_line_height: f32,
     pixels: Vec<u8>,
     draws: Vec<TextDraw>,
     width: u32,
@@ -8560,8 +8722,11 @@ impl<'a> TextFrameBuilder<'a> {
         text_buffer: &'a mut Buffer,
         label_cache: &'a mut LabelRasterCache,
         surface_size: PhysicalSize<u32>,
+        text_scale_factor: f32,
     ) -> Self {
-        text_buffer.set_metrics(Metrics::new(TEXT_FONT_SIZE, TEXT_LINE_HEIGHT));
+        let max_line_height = (TEXT_LINE_HEIGHT * text_scale_factor).round().max(1.0);
+        let max_font_size = (TEXT_FONT_SIZE * max_line_height / TEXT_LINE_HEIGHT).max(1.0);
+        text_buffer.set_metrics(Metrics::new(max_font_size, max_line_height));
         text_buffer.set_wrap(Wrap::WordOrGlyph);
         Self {
             font_system,
@@ -8569,6 +8734,8 @@ impl<'a> TextFrameBuilder<'a> {
             text_buffer,
             label_cache,
             surface_size,
+            max_font_size,
+            max_line_height,
             pixels: vec![0; (TEXT_ATLAS_WIDTH * 4) as usize],
             draws: Vec::with_capacity(64),
             width: TEXT_ATLAS_WIDTH,
@@ -8671,8 +8838,9 @@ impl<'a> TextFrameBuilder<'a> {
     ) -> Vec<u8> {
         let mut pixels = vec![0; (label_width * label_height * 4) as usize];
         let attrs = Attrs::new().family(Family::SansSerif);
-        self.text_buffer
-            .set_metrics(Metrics::new(TEXT_FONT_SIZE, TEXT_LINE_HEIGHT));
+        let metrics =
+            text_metrics_for_label_height(label_height, self.max_font_size, self.max_line_height);
+        self.text_buffer.set_metrics(metrics);
         self.text_buffer.set_wrap(Wrap::WordOrGlyph);
         self.text_buffer
             .set_size(Some(label_width as f32), Some(label_height as f32));
@@ -8947,6 +9115,7 @@ fn prepare_scene_frame(
             &mut text_renderer.text_buffer,
             &mut text_renderer.label_cache,
             size,
+            scene.ui_scale() * scene.zoom_factor(),
         );
         let mut icon_builder = IconFrameBuilder::new(
             &mut icon_renderer.resolver,
@@ -10083,8 +10252,8 @@ fn intersect_rect(rect: ViewRect, clip: ViewRect) -> Option<ViewRect> {
     })
 }
 
-fn inset_content_scrollbar_slot(slot: ViewRect) -> Option<ViewRect> {
-    let inset = CONTENT_SCROLLBAR_PADDING;
+fn inset_content_scrollbar_slot(slot: ViewRect, scale_factor: f32) -> Option<ViewRect> {
+    let inset = (CONTENT_SCROLLBAR_PADDING * scale_factor).round().max(1.0);
     let width = slot.width - inset * 2.0;
     let height = slot.height - inset * 2.0;
     (width > 0.0 && height > 0.0).then_some(ViewRect {
@@ -10213,100 +10382,110 @@ fn view_mode_badge_color(view_mode: ShellViewMode) -> [f32; 4] {
     }
 }
 
-fn view_mode_button_rects(surface_width: f32) -> [(ShellViewMode, ViewRect); 3] {
-    let total_width = VIEW_MODE_BUTTON_WIDTH * 3.0 + VIEW_MODE_BUTTON_GAP * 2.0;
-    let start_x = (surface_width - total_width - 16.0).max(16.0);
+fn view_mode_button_rects(surface_width: f32, scale_factor: f32) -> [(ShellViewMode, ViewRect); 3] {
+    let button_width = (VIEW_MODE_BUTTON_WIDTH * scale_factor).round().max(1.0);
+    let button_height = (VIEW_MODE_BUTTON_HEIGHT * scale_factor).round().max(1.0);
+    let button_gap = (VIEW_MODE_BUTTON_GAP * scale_factor).round().max(1.0);
+    let margin = (16.0 * scale_factor).round().max(1.0);
+    let y = (14.0 * scale_factor).round().max(1.0);
+    let total_width = button_width * 3.0 + button_gap * 2.0;
+    let start_x = (surface_width - total_width - margin).max(margin);
     [
         (
             ShellViewMode::Icons,
             ViewRect {
                 x: start_x,
-                y: 14.0,
-                width: VIEW_MODE_BUTTON_WIDTH,
-                height: VIEW_MODE_BUTTON_HEIGHT,
+                y,
+                width: button_width,
+                height: button_height,
             },
         ),
         (
             ShellViewMode::Compact,
             ViewRect {
-                x: start_x + VIEW_MODE_BUTTON_WIDTH + VIEW_MODE_BUTTON_GAP,
-                y: 14.0,
-                width: VIEW_MODE_BUTTON_WIDTH,
-                height: VIEW_MODE_BUTTON_HEIGHT,
+                x: start_x + button_width + button_gap,
+                y,
+                width: button_width,
+                height: button_height,
             },
         ),
         (
             ShellViewMode::Details,
             ViewRect {
-                x: start_x + (VIEW_MODE_BUTTON_WIDTH + VIEW_MODE_BUTTON_GAP) * 2.0,
-                y: 14.0,
-                width: VIEW_MODE_BUTTON_WIDTH,
-                height: VIEW_MODE_BUTTON_HEIGHT,
+                x: start_x + (button_width + button_gap) * 2.0,
+                y,
+                width: button_width,
+                height: button_height,
             },
         ),
     ]
 }
 
-fn path_navigation_button_rects() -> [(PathNavigationAction, ViewRect); 5] {
-    let x = 16.0;
+fn path_navigation_button_rects(scale_factor: f32) -> [(PathNavigationAction, ViewRect); 5] {
+    let x = (16.0 * scale_factor).round().max(1.0);
+    let y = (14.0 * scale_factor).round().max(1.0);
+    let button_width = (NAV_BUTTON_WIDTH * scale_factor).round().max(1.0);
+    let up_button_width = (NAV_UP_BUTTON_WIDTH * scale_factor).round().max(1.0);
+    let reload_button_width = (NAV_RELOAD_BUTTON_WIDTH * scale_factor).round().max(1.0);
+    let hidden_button_width = (NAV_HIDDEN_BUTTON_WIDTH * scale_factor).round().max(1.0);
+    let button_height = (NAV_BUTTON_HEIGHT * scale_factor).round().max(1.0);
+    let gap = (NAV_BUTTON_GAP * scale_factor).round().max(1.0);
     [
         (
             PathNavigationAction::Back,
             ViewRect {
                 x,
-                y: 14.0,
-                width: NAV_BUTTON_WIDTH,
-                height: NAV_BUTTON_HEIGHT,
+                y,
+                width: button_width,
+                height: button_height,
             },
         ),
         (
             PathNavigationAction::Forward,
             ViewRect {
-                x: x + NAV_BUTTON_WIDTH + NAV_BUTTON_GAP,
-                y: 14.0,
-                width: NAV_BUTTON_WIDTH,
-                height: NAV_BUTTON_HEIGHT,
+                x: x + button_width + gap,
+                y,
+                width: button_width,
+                height: button_height,
             },
         ),
         (
             PathNavigationAction::Parent,
             ViewRect {
-                x: x + (NAV_BUTTON_WIDTH + NAV_BUTTON_GAP) * 2.0,
-                y: 14.0,
-                width: NAV_UP_BUTTON_WIDTH,
-                height: NAV_BUTTON_HEIGHT,
+                x: x + (button_width + gap) * 2.0,
+                y,
+                width: up_button_width,
+                height: button_height,
             },
         ),
         (
             PathNavigationAction::Reload,
             ViewRect {
-                x: x + (NAV_BUTTON_WIDTH + NAV_BUTTON_GAP) * 2.0
-                    + NAV_UP_BUTTON_WIDTH
-                    + NAV_BUTTON_GAP,
-                y: 14.0,
-                width: NAV_RELOAD_BUTTON_WIDTH,
-                height: NAV_BUTTON_HEIGHT,
+                x: x + (button_width + gap) * 2.0 + up_button_width + gap,
+                y,
+                width: reload_button_width,
+                height: button_height,
             },
         ),
         (
             PathNavigationAction::ToggleHidden,
             ViewRect {
-                x: x + (NAV_BUTTON_WIDTH + NAV_BUTTON_GAP) * 2.0
-                    + NAV_UP_BUTTON_WIDTH
-                    + NAV_BUTTON_GAP
-                    + NAV_RELOAD_BUTTON_WIDTH
-                    + NAV_BUTTON_GAP,
-                y: 14.0,
-                width: NAV_HIDDEN_BUTTON_WIDTH,
-                height: NAV_BUTTON_HEIGHT,
+                x: x + (button_width + gap) * 2.0
+                    + up_button_width
+                    + gap
+                    + reload_button_width
+                    + gap,
+                y,
+                width: hidden_button_width,
+                height: button_height,
             },
         ),
     ]
 }
 
-fn path_bar_start_x() -> f32 {
-    let hidden = path_navigation_button_rects()[4].1;
-    hidden.right() + 10.0
+fn path_bar_start_x(scale_factor: f32) -> f32 {
+    let hidden = path_navigation_button_rects(scale_factor)[4].1;
+    hidden.right() + (10.0 * scale_factor).round().max(1.0)
 }
 
 fn push_limited_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
@@ -10389,24 +10568,27 @@ fn file_color(entry: &Entry) -> [f32; 4] {
     }
 }
 
-fn path_placeholder_width(path: &std::path::Path, surface_width: f32, path_x: f32) -> f32 {
-    let display_width = path.display().to_string().chars().count() as f32 * 7.5 + 28.0;
-    display_width.min(path_bar_available_width(surface_width, path_x))
+fn path_placeholder_width(
+    path: &std::path::Path,
+    surface_width: f32,
+    path_x: f32,
+    scale_factor: f32,
+) -> f32 {
+    let display_width = path.display().to_string().chars().count() as f32 * 7.5 * scale_factor
+        + 28.0 * scale_factor;
+    display_width.min(path_bar_available_width(
+        surface_width,
+        path_x,
+        scale_factor,
+    ))
 }
 
-fn path_bar_available_width(surface_width: f32, path_x: f32) -> f32 {
-    let first_button_x = view_mode_button_rects(surface_width)[0].1.x;
-    (first_button_x - path_x - 10.0).max(0.0)
+fn path_bar_available_width(surface_width: f32, path_x: f32, scale_factor: f32) -> f32 {
+    let first_button_x = view_mode_button_rects(surface_width, scale_factor)[0].1.x;
+    (first_button_x - path_x - 10.0 * scale_factor).max(0.0)
 }
 
-fn places_sidebar_width(size: PhysicalSize<u32>) -> f32 {
-    let width = size.width.max(1) as f32;
-    let responsive_width = (width * 0.42).max(128.0);
-    PLACES_SIDEBAR_WIDTH
-        .min(responsive_width)
-        .min((width - 120.0).max(0.0))
-}
-
+#[cfg(test)]
 fn status_bar_rect(size: PhysicalSize<u32>) -> ViewRect {
     let width = size.width.max(1) as f32;
     let height = size.height.max(1) as f32;
@@ -11061,6 +11243,24 @@ fn nonzero_size(size: PhysicalSize<u32>) -> PhysicalSize<u32> {
     PhysicalSize::new(size.width.max(1), size.height.max(1))
 }
 
+fn normalized_scale_factor(scale_factor: f32) -> f32 {
+    if scale_factor.is_finite() {
+        scale_factor.clamp(0.5, 4.0)
+    } else {
+        1.0
+    }
+}
+
+fn text_metrics_for_label_height(
+    label_height: u32,
+    max_font_size: f32,
+    max_line_height: f32,
+) -> Metrics {
+    let line_height = (label_height as f32).max(1.0).min(max_line_height.max(1.0));
+    let font_size = (max_font_size * line_height / max_line_height.max(1.0)).clamp(8.0, 64.0);
+    Metrics::new(font_size, line_height)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -11165,6 +11365,7 @@ mod tests {
             open_with_chooser: None,
             trash_conflict_dialog: None,
             rubber_band: None,
+            scale_factor: 1.0,
             hit_tests: 0,
             selection_changes: 0,
             context_target_changes: 0,
@@ -13876,7 +14077,7 @@ text/plain=writer.desktop;\n",
     fn top_bar_view_mode_buttons_are_hit_tested() {
         let scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
         let size = PhysicalSize::new(420, 240);
-        for (mode, rect) in view_mode_button_rects(size.width as f32) {
+        for (mode, rect) in view_mode_button_rects(size.width as f32, 1.0) {
             assert_eq!(
                 scene.view_mode_at_screen_point(
                     ViewPoint {
@@ -13898,11 +14099,11 @@ text/plain=writer.desktop;\n",
     fn top_bar_path_navigation_buttons_respect_enabled_state() {
         let mut scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
         let size = PhysicalSize::new(420, 240);
-        let back_rect = path_navigation_button_rects()[0].1;
-        let forward_rect = path_navigation_button_rects()[1].1;
-        let parent_rect = path_navigation_button_rects()[2].1;
-        let reload_rect = path_navigation_button_rects()[3].1;
-        let hidden_rect = path_navigation_button_rects()[4].1;
+        let back_rect = path_navigation_button_rects(1.0)[0].1;
+        let forward_rect = path_navigation_button_rects(1.0)[1].1;
+        let parent_rect = path_navigation_button_rects(1.0)[2].1;
+        let reload_rect = path_navigation_button_rects(1.0)[3].1;
+        let hidden_rect = path_navigation_button_rects(1.0)[4].1;
 
         assert_eq!(
             scene.path_navigation_action_at_screen_point(
@@ -14046,6 +14247,41 @@ text/plain=writer.desktop;\n",
         };
         assert!(details_after.item_rect.height < details_before.item_rect.height);
         assert!(details_after.icon_rect.width <= details_before.icon_rect.width);
+    }
+
+    #[test]
+    fn window_scale_factor_scales_default_shell_metrics() {
+        let mut scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
+        let size = PhysicalSize::new(900, 600);
+
+        assert!(scene.set_scale_factor(1.5, size));
+        assert_eq!(scene.top_bar_height(), 78.0);
+        assert_eq!(scene.text_line_height(), 27.0);
+
+        let icons_item = match scene.layout(size) {
+            ShellLayout::Icons(layout) => layout.item(0).unwrap(),
+            _ => unreachable!(),
+        };
+        assert_eq!(scene.icons_options(size).text_height, 27.0);
+        assert_eq!(icons_item.icon_rect.width, 72.0);
+        assert!(icons_item.text_rect.height >= 27.0);
+
+        assert!(scene.set_view_mode(ShellViewMode::Compact, size));
+        let compact_item = match scene.layout(size) {
+            ShellLayout::Compact(layout) => layout.item(0).unwrap(),
+            _ => unreachable!(),
+        };
+        assert_eq!(scene.compact_options(size).text_height, 27.0);
+        assert_eq!(compact_item.icon_rect.width, 42.0);
+        assert!(compact_item.text_rect.height >= 27.0);
+
+        assert!(scene.set_view_mode(ShellViewMode::Details, size));
+        let details_item = match scene.layout(size) {
+            ShellLayout::Details(layout) => layout.item(0).unwrap(),
+            _ => unreachable!(),
+        };
+        assert_eq!(details_item.icon_rect.width, 27.0);
+        assert_eq!(details_item.text_rect.height, 27.0);
     }
 
     #[test]
