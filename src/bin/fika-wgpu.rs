@@ -75,6 +75,10 @@ const CREATE_DIALOG_TITLE_HEIGHT: f32 = 42.0;
 const CREATE_DIALOG_BUTTON_WIDTH: f32 = 84.0;
 const CREATE_DIALOG_BUTTON_HEIGHT: f32 = 24.0;
 const CREATE_DIALOG_BUTTON_GAP: f32 = 8.0;
+const RENAME_DIALOG_WIDTH: f32 = 420.0;
+const RENAME_DIALOG_HEIGHT: f32 = 168.0;
+const RENAME_DIALOG_MARGIN: f32 = 18.0;
+const RENAME_DIALOG_TITLE_HEIGHT: f32 = 42.0;
 const PATH_HISTORY_LIMIT: usize = 128;
 const ZOOM_STEP_MIN: i32 = -3;
 const ZOOM_STEP_MAX: i32 = 4;
@@ -285,6 +289,15 @@ enum CreateCommand {
     Ignore,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum RenameCommand {
+    Insert(String),
+    Backspace,
+    Cancel,
+    Commit,
+    Ignore,
+}
+
 fn window_title(scene: &ShellScene) -> String {
     format!(
         "Fika wgpu shell [{}] - {}",
@@ -444,6 +457,20 @@ impl ApplicationHandler for FikaWgpuApp {
                 };
                 let shortcut =
                     self.modifiers.state().control_key() || self.modifiers.state().meta_key();
+                if self.scene.is_rename_dialog_open() {
+                    match rename_command_for_key_event(&event, shortcut) {
+                        RenameCommand::Commit => self.commit_rename_dialog(event_loop),
+                        RenameCommand::Ignore => {}
+                        command => {
+                            if self.scene.apply_rename_command(command)
+                                && let Some(window) = self.window.as_ref()
+                            {
+                                window.request_redraw();
+                            }
+                        }
+                    }
+                    return;
+                }
                 if self.scene.is_create_dialog_open() {
                     match create_command_for_key_event(&event, shortcut) {
                         CreateCommand::Commit => self.commit_create_dialog(event_loop),
@@ -565,6 +592,9 @@ impl ApplicationHandler for FikaWgpuApp {
                     x: position.x as f32,
                     y: position.y as f32,
                 };
+                if self.scene.is_rename_dialog_open() {
+                    return;
+                }
                 if self.scene.is_create_dialog_open() {
                     return;
                 }
@@ -597,6 +627,25 @@ impl ApplicationHandler for FikaWgpuApp {
                 let Some(mouse_button) = button.mouse_button() else {
                     return;
                 };
+                if self.scene.is_rename_dialog_open() {
+                    if state == ElementState::Pressed && mouse_button == MouseButton::Left {
+                        match self
+                            .scene
+                            .rename_dialog_click_at_screen_point(point, renderer.size)
+                        {
+                            RenameDialogClick::Outside | RenameDialogClick::Cancel => {
+                                if self.scene.close_rename_dialog()
+                                    && let Some(window) = self.window.as_ref()
+                                {
+                                    window.request_redraw();
+                                }
+                            }
+                            RenameDialogClick::Commit => self.commit_rename_dialog(event_loop),
+                            RenameDialogClick::Inside => {}
+                        }
+                    }
+                    return;
+                }
                 if self.scene.is_create_dialog_open() {
                     if state == ElementState::Pressed && mouse_button == MouseButton::Left {
                         match self
@@ -782,9 +831,15 @@ impl FikaWgpuApp {
                     window.request_redraw();
                 }
             }
+            ShellContextMenuAction::Rename => {
+                if self.scene.open_rename_dialog_from_context()
+                    && let Some(window) = self.window.as_ref()
+                {
+                    window.request_redraw();
+                }
+            }
             ShellContextMenuAction::OpenInNewPane
             | ShellContextMenuAction::CopyLocation
-            | ShellContextMenuAction::Rename
             | ShellContextMenuAction::MoveToTrash
             | ShellContextMenuAction::Paste => {
                 eprintln!(
@@ -796,6 +851,46 @@ impl FikaWgpuApp {
                         .map(ShellContextTarget::kind)
                         .unwrap_or("none")
                 );
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+            }
+        }
+    }
+
+    fn commit_rename_dialog(&mut self, event_loop: &dyn ActiveEventLoop) {
+        let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
+            return;
+        };
+        let request = match self.scene.rename_entry_request() {
+            Ok(request) => request,
+            Err(error) => {
+                if self.scene.set_rename_dialog_error(error)
+                    && let Some(window) = self.window.as_ref()
+                {
+                    window.request_redraw();
+                }
+                return;
+            }
+        };
+
+        if let Err(error) = rename_entry_on_disk(&request) {
+            if self.scene.set_rename_dialog_error(error)
+                && let Some(window) = self.window.as_ref()
+            {
+                window.request_redraw();
+            }
+            return;
+        }
+
+        self.scene.close_rename_dialog_after_success(&request);
+        match self.scene.reload_current_path(size) {
+            Ok(_) => {
+                self.scene.select_entry_by_name(&request.name, size);
+                self.present_scene_change(event_loop, "rename");
+            }
+            Err(error) => {
+                eprintln!("[fika-wgpu] rename-reload-error {error}");
                 if let Some(window) = self.window.as_ref() {
                     window.request_redraw();
                 }
@@ -1250,6 +1345,49 @@ fn create_command_for_key_parts(
             CreateCommand::Insert(value.to_string())
         }
         _ => CreateCommand::Ignore,
+    }
+}
+
+fn rename_command_for_key_event(event: &KeyEvent, shortcut: bool) -> RenameCommand {
+    rename_command_for_key_parts(
+        shortcut,
+        &event.physical_key,
+        &event.logical_key,
+        &event.key_without_modifiers,
+    )
+}
+
+fn rename_command_for_key_parts(
+    shortcut: bool,
+    physical_key: &PhysicalKey,
+    logical_key: &Key,
+    key_without_modifiers: &Key,
+) -> RenameCommand {
+    if matches!(physical_key, PhysicalKey::Code(KeyCode::Escape))
+        || matches!(logical_key, Key::Named(NamedKey::Escape))
+        || matches!(key_without_modifiers, Key::Named(NamedKey::Escape))
+    {
+        return RenameCommand::Cancel;
+    }
+    if matches!(logical_key, Key::Named(NamedKey::Enter))
+        || matches!(key_without_modifiers, Key::Named(NamedKey::Enter))
+    {
+        return RenameCommand::Commit;
+    }
+    if matches!(physical_key, PhysicalKey::Code(KeyCode::Backspace))
+        || matches!(logical_key, Key::Named(NamedKey::Backspace))
+        || matches!(key_without_modifiers, Key::Named(NamedKey::Backspace))
+    {
+        return RenameCommand::Backspace;
+    }
+    if shortcut {
+        return RenameCommand::Ignore;
+    }
+    match logical_key {
+        Key::Character(value) if !value.chars().any(char::is_control) => {
+            RenameCommand::Insert(value.to_string())
+        }
+        _ => RenameCommand::Ignore,
     }
 }
 
@@ -1793,6 +1931,50 @@ enum CreateDialogClick {
     Kind(CreateEntryKind),
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ShellRenameDialog {
+    source: PathBuf,
+    parent: PathBuf,
+    original_name: String,
+    name: String,
+    is_dir: bool,
+    error: Option<String>,
+    replace_on_insert: bool,
+}
+
+impl ShellRenameDialog {
+    fn new(source: PathBuf, is_dir: bool) -> Option<Self> {
+        let parent = source.parent()?.to_path_buf();
+        let original_name = source.file_name()?.to_string_lossy().to_string();
+        Some(Self {
+            source,
+            parent,
+            name: original_name.clone(),
+            original_name,
+            is_dir,
+            error: None,
+            replace_on_insert: true,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct RenameEntryRequest {
+    source: PathBuf,
+    target: PathBuf,
+    original_name: String,
+    name: String,
+    is_dir: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RenameDialogClick {
+    Outside,
+    Inside,
+    Cancel,
+    Commit,
+}
+
 struct ShellScene {
     path: PathBuf,
     view_mode: ShellViewMode,
@@ -1815,6 +1997,7 @@ struct ShellScene {
     context_menu: Option<ShellContextMenu>,
     properties_overlay: Option<ShellPropertiesOverlay>,
     create_dialog: Option<ShellCreateDialog>,
+    rename_dialog: Option<ShellRenameDialog>,
     rubber_band: Option<RubberBand>,
     hit_tests: u64,
     selection_changes: u64,
@@ -1822,6 +2005,7 @@ struct ShellScene {
     context_menu_actions: u64,
     properties_changes: u64,
     create_changes: u64,
+    rename_changes: u64,
     keyboard_navigation: u64,
     rubber_band_updates: u64,
     view_switches: u64,
@@ -1883,6 +2067,7 @@ impl ShellScene {
             context_menu: None,
             properties_overlay: None,
             create_dialog: None,
+            rename_dialog: None,
             rubber_band: None,
             hit_tests: 0,
             selection_changes: 0,
@@ -1890,6 +2075,7 @@ impl ShellScene {
             context_menu_actions: 0,
             properties_changes: 0,
             create_changes: 0,
+            rename_changes: 0,
             keyboard_navigation: 0,
             rubber_band_updates: 0,
             view_switches: 0,
@@ -2034,6 +2220,7 @@ impl ShellScene {
         self.context_menu = None;
         self.properties_overlay = None;
         self.create_dialog = None;
+        self.rename_dialog = None;
         self.rubber_band = None;
         self.last_primary_click = None;
         self.path_changes += 1;
@@ -2894,6 +3081,185 @@ impl ShellScene {
         }
     }
 
+    fn is_rename_dialog_open(&self) -> bool {
+        self.rename_dialog.is_some()
+    }
+
+    fn open_rename_dialog_from_context(&mut self) -> bool {
+        let Some(ShellContextTarget::Item { path, is_dir, .. }) = self.context_target.as_ref()
+        else {
+            eprintln!(
+                "[fika-wgpu] rename-error target={}",
+                self.context_target
+                    .as_ref()
+                    .map(ShellContextTarget::kind)
+                    .unwrap_or("none")
+            );
+            return false;
+        };
+        let Some(dialog) = ShellRenameDialog::new(path.clone(), *is_dir) else {
+            eprintln!(
+                "[fika-wgpu] rename-error path={} error=no-file-name",
+                path.display()
+            );
+            return false;
+        };
+        let changed = self.rename_dialog.as_ref() != Some(&dialog);
+        self.rename_dialog = Some(dialog);
+        self.properties_overlay = None;
+        self.create_dialog = None;
+        self.rubber_band = None;
+        if changed {
+            self.rename_changes += 1;
+            if let Some(dialog) = self.rename_dialog.as_ref() {
+                eprintln!(
+                    "[fika-wgpu] rename open=1 source={} name={:?} dir={} changes={}",
+                    dialog.source.display(),
+                    dialog.name,
+                    dialog.is_dir as u8,
+                    self.rename_changes
+                );
+            }
+        }
+        changed
+    }
+
+    fn apply_rename_command(&mut self, command: RenameCommand) -> bool {
+        let old_dialog = self.rename_dialog.clone();
+        match command {
+            RenameCommand::Insert(value) => {
+                let Some(dialog) = self.rename_dialog.as_mut() else {
+                    return false;
+                };
+                if dialog.replace_on_insert {
+                    dialog.name.clear();
+                    dialog.replace_on_insert = false;
+                }
+                dialog.name.push_str(&value);
+                dialog.error = None;
+            }
+            RenameCommand::Backspace => {
+                let Some(dialog) = self.rename_dialog.as_mut() else {
+                    return false;
+                };
+                if dialog.replace_on_insert {
+                    dialog.name.clear();
+                    dialog.replace_on_insert = false;
+                } else {
+                    dialog.name.pop();
+                }
+                dialog.error = None;
+            }
+            RenameCommand::Cancel => {
+                return self.close_rename_dialog();
+            }
+            RenameCommand::Commit | RenameCommand::Ignore => return false,
+        }
+
+        let changed = old_dialog != self.rename_dialog;
+        if changed {
+            self.rename_changes += 1;
+            self.log_rename_dialog_state();
+        }
+        changed
+    }
+
+    fn rename_entry_request(&self) -> Result<RenameEntryRequest, String> {
+        let dialog = self
+            .rename_dialog
+            .as_ref()
+            .ok_or_else(|| "rename dialog is not open".to_string())?;
+        let name = dialog.name.trim();
+        validate_create_name(name)?;
+        if name == dialog.original_name {
+            return Err("name is unchanged".to_string());
+        }
+        let target = dialog.parent.join(name);
+        if target.exists() {
+            return Err(format!("{} already exists", target.display()));
+        }
+        Ok(RenameEntryRequest {
+            source: dialog.source.clone(),
+            target,
+            original_name: dialog.original_name.clone(),
+            name: name.to_string(),
+            is_dir: dialog.is_dir,
+        })
+    }
+
+    fn set_rename_dialog_error(&mut self, error: String) -> bool {
+        let Some(dialog) = self.rename_dialog.as_mut() else {
+            eprintln!("[fika-wgpu] rename-error {error}");
+            return false;
+        };
+        if dialog.error.as_ref() == Some(&error) {
+            return false;
+        }
+        dialog.error = Some(error);
+        dialog.replace_on_insert = false;
+        self.rename_changes += 1;
+        self.log_rename_dialog_state();
+        true
+    }
+
+    fn close_rename_dialog(&mut self) -> bool {
+        if self.rename_dialog.take().is_none() {
+            return false;
+        }
+        self.rename_changes += 1;
+        eprintln!("[fika-wgpu] rename open=0 changes={}", self.rename_changes);
+        true
+    }
+
+    fn close_rename_dialog_after_success(&mut self, request: &RenameEntryRequest) -> bool {
+        if self.rename_dialog.take().is_none() {
+            return false;
+        }
+        self.rename_changes += 1;
+        eprintln!(
+            "[fika-wgpu] rename source={} target={} dir={} changes={}",
+            request.source.display(),
+            request.target.display(),
+            request.is_dir as u8,
+            self.rename_changes
+        );
+        true
+    }
+
+    fn rename_dialog_click_at_screen_point(
+        &self,
+        point: ViewPoint,
+        size: PhysicalSize<u32>,
+    ) -> RenameDialogClick {
+        let Some(dialog) = self.rename_dialog.as_ref() else {
+            return RenameDialogClick::Outside;
+        };
+        let rect = rename_dialog_rect(dialog, size);
+        if !rect.contains(point) {
+            return RenameDialogClick::Outside;
+        }
+        if rename_dialog_cancel_button_rect(rect).contains(point) {
+            return RenameDialogClick::Cancel;
+        }
+        if rename_dialog_commit_button_rect(rect).contains(point) {
+            return RenameDialogClick::Commit;
+        }
+        RenameDialogClick::Inside
+    }
+
+    fn log_rename_dialog_state(&self) {
+        match self.rename_dialog.as_ref() {
+            Some(dialog) => eprintln!(
+                "[fika-wgpu] rename open=1 source={} name={:?} error={:?} changes={}",
+                dialog.source.display(),
+                dialog.name,
+                dialog.error,
+                self.rename_changes
+            ),
+            None => eprintln!("[fika-wgpu] rename open=0 changes={}", self.rename_changes),
+        }
+    }
+
     fn properties_overlay_for_context_target(&self) -> Option<ShellPropertiesOverlay> {
         match self.context_target.as_ref()? {
             ShellContextTarget::Item {
@@ -3223,6 +3589,7 @@ impl ShellScene {
         self.push_context_menu_overlay(&mut vertices, text, size);
         self.push_properties_overlay(&mut vertices, text, size);
         self.push_create_dialog_overlay(&mut vertices, text, size);
+        self.push_rename_dialog_overlay(&mut vertices, text, size);
 
         SceneFrame {
             layout_us: layout_start.elapsed().as_micros(),
@@ -3677,6 +4044,9 @@ impl ShellScene {
                 dialog.name
             ));
         }
+        if let Some(dialog) = self.rename_dialog.as_ref() {
+            status.push_str(&format!(" | rename {:?}", dialog.name));
+        }
         if let Some(target) = self.context_target.as_ref() {
             status.push_str(&format!(
                 " | context {} {}",
@@ -3928,6 +4298,109 @@ impl ShellScene {
         let cancel = create_dialog_cancel_button_rect(rect);
         let commit = create_dialog_commit_button_rect(rect);
         for (label, button, active) in [("Cancel", cancel, false), ("Create", commit, true)] {
+            push_rect(
+                vertices,
+                button,
+                if active {
+                    [0.22, 0.42, 0.62, 1.0]
+                } else {
+                    [0.150, 0.162, 0.176, 1.0]
+                },
+                size,
+            );
+            text.push_label(
+                label,
+                ViewRect {
+                    x: button.x + 10.0,
+                    y: button.y + 4.0,
+                    width: (button.width - 20.0).max(1.0),
+                    height: 18.0,
+                },
+                rect,
+                TextColor::rgb(238, 244, 249),
+            );
+        }
+    }
+
+    fn push_rename_dialog_overlay(
+        &self,
+        vertices: &mut Vec<QuadVertex>,
+        text: &mut TextFrameBuilder<'_>,
+        size: PhysicalSize<u32>,
+    ) {
+        let Some(dialog) = self.rename_dialog.as_ref() else {
+            return;
+        };
+        let screen = ViewRect {
+            x: 0.0,
+            y: 0.0,
+            width: size.width.max(1) as f32,
+            height: size.height.max(1) as f32,
+        };
+        push_rect(vertices, screen, [0.0, 0.0, 0.0, 0.44], size);
+        let rect = rename_dialog_rect(dialog, size);
+        push_rect(vertices, rect, [0.118, 0.128, 0.140, 0.99], size);
+        push_clipped_rect_outline(vertices, rect, screen, 1.0, [0.34, 0.38, 0.43, 1.0], size);
+        push_rect(
+            vertices,
+            ViewRect {
+                x: rect.x,
+                y: rect.y,
+                width: rect.width,
+                height: RENAME_DIALOG_TITLE_HEIGHT,
+            },
+            [0.145, 0.158, 0.174, 1.0],
+            size,
+        );
+        text.push_label(
+            if dialog.is_dir {
+                "Rename Folder"
+            } else {
+                "Rename File"
+            },
+            ViewRect {
+                x: rect.x + 16.0,
+                y: rect.y + 12.0,
+                width: (rect.width - 32.0).max(1.0),
+                height: 18.0,
+            },
+            rect,
+            TextColor::rgb(238, 244, 249),
+        );
+
+        let input = rename_dialog_input_rect(rect);
+        push_rect(vertices, input, [0.078, 0.086, 0.096, 1.0], size);
+        push_clipped_rect_outline(vertices, input, rect, 1.0, [0.26, 0.31, 0.36, 1.0], size);
+        let draft = format!("{}|", dialog.name);
+        text.push_label(
+            &draft,
+            ViewRect {
+                x: input.x + 10.0,
+                y: input.y + 7.0,
+                width: (input.width - 20.0).max(1.0),
+                height: 18.0,
+            },
+            input,
+            TextColor::rgb(230, 236, 241),
+        );
+
+        if let Some(error) = dialog.error.as_ref() {
+            text.push_label(
+                error,
+                ViewRect {
+                    x: rect.x + 16.0,
+                    y: input.bottom() + 8.0,
+                    width: (rect.width - 32.0).max(1.0),
+                    height: 18.0,
+                },
+                rect,
+                TextColor::rgb(238, 132, 122),
+            );
+        }
+
+        let cancel = rename_dialog_cancel_button_rect(rect);
+        let commit = rename_dialog_commit_button_rect(rect);
+        for (label, button, active) in [("Cancel", cancel, false), ("Rename", commit, true)] {
             push_rect(
                 vertices,
                 button,
@@ -4811,7 +5284,7 @@ impl WgpuState {
             || self.last_log.elapsed() >= Duration::from_secs(1)
         {
             eprintln!(
-                "[fika-wgpu] frame={} reason={} view={} zoom={} zoom_changes={} path={} entries={} filtered={} show_hidden={} hidden_changes={} location_active={} location_changes={} filter_active={} filter_changes={} visible={} selected={} hover={} context={} context_menu={} context_changes={} context_actions={} properties={} properties_changes={} create_dialog={} create_changes={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} path_changes={} reloads={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_cache={}/{} entries={} bytes={} batches={} scroll_x={:.1} scroll_y={:.1} layout={}us text_raster={}us text_atlas={}x{}:{}b render={}us",
+                "[fika-wgpu] frame={} reason={} view={} zoom={} zoom_changes={} path={} entries={} filtered={} show_hidden={} hidden_changes={} location_active={} location_changes={} filter_active={} filter_changes={} visible={} selected={} hover={} context={} context_menu={} context_changes={} context_actions={} properties={} properties_changes={} create_dialog={} create_changes={} rename_dialog={} rename_changes={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} path_changes={} reloads={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_cache={}/{} entries={} bytes={} batches={} scroll_x={:.1} scroll_y={:.1} layout={}us text_raster={}us text_atlas={}x{}:{}b render={}us",
                 self.frame_count,
                 reason,
                 scene.view_mode.as_str(),
@@ -4841,6 +5314,8 @@ impl WgpuState {
                 scene.properties_changes,
                 scene.create_dialog.is_some() as u8,
                 scene.create_changes,
+                scene.rename_dialog.is_some() as u8,
+                scene.rename_changes,
                 scene.rubber_band.as_ref().is_some_and(|band| band.active) as u8,
                 scene.hit_tests,
                 scene.selection_changes,
@@ -7533,6 +8008,52 @@ fn create_dialog_commit_button_rect(dialog_rect: ViewRect) -> ViewRect {
     }
 }
 
+fn rename_dialog_rect(_dialog: &ShellRenameDialog, size: PhysicalSize<u32>) -> ViewRect {
+    let width = size.width.max(1) as f32;
+    let height = size.height.max(1) as f32;
+    let dialog_width = RENAME_DIALOG_WIDTH
+        .min((width - RENAME_DIALOG_MARGIN * 2.0).max(1.0))
+        .max(1.0);
+    let dialog_height = RENAME_DIALOG_HEIGHT
+        .min((height - RENAME_DIALOG_MARGIN * 2.0).max(1.0))
+        .max(1.0);
+    ViewRect {
+        x: ((width - dialog_width) / 2.0).max(RENAME_DIALOG_MARGIN),
+        y: ((height - dialog_height) / 2.0).max(RENAME_DIALOG_MARGIN),
+        width: dialog_width,
+        height: dialog_height,
+    }
+}
+
+fn rename_dialog_input_rect(dialog_rect: ViewRect) -> ViewRect {
+    ViewRect {
+        x: dialog_rect.x + 16.0,
+        y: dialog_rect.y + RENAME_DIALOG_TITLE_HEIGHT + 18.0,
+        width: (dialog_rect.width - 32.0).max(1.0),
+        height: 30.0,
+    }
+}
+
+fn rename_dialog_cancel_button_rect(dialog_rect: ViewRect) -> ViewRect {
+    let right = dialog_rect.right() - 16.0;
+    ViewRect {
+        x: right - CREATE_DIALOG_BUTTON_WIDTH * 2.0 - CREATE_DIALOG_BUTTON_GAP,
+        y: dialog_rect.bottom() - 16.0 - CREATE_DIALOG_BUTTON_HEIGHT,
+        width: CREATE_DIALOG_BUTTON_WIDTH,
+        height: CREATE_DIALOG_BUTTON_HEIGHT,
+    }
+}
+
+fn rename_dialog_commit_button_rect(dialog_rect: ViewRect) -> ViewRect {
+    let right = dialog_rect.right() - 16.0;
+    ViewRect {
+        x: right - CREATE_DIALOG_BUTTON_WIDTH,
+        y: dialog_rect.bottom() - 16.0 - CREATE_DIALOG_BUTTON_HEIGHT,
+        width: CREATE_DIALOG_BUTTON_WIDTH,
+        height: CREATE_DIALOG_BUTTON_HEIGHT,
+    }
+}
+
 fn property_row(label: &'static str, value: String) -> ShellPropertyRow {
     ShellPropertyRow { label, value }
 }
@@ -7548,6 +8069,16 @@ fn create_entry_on_disk(request: &CreateEntryRequest) -> Result<(), String> {
             .map(drop)
             .map_err(|error| format!("create file {}: {error}", request.path.display())),
     }
+}
+
+fn rename_entry_on_disk(request: &RenameEntryRequest) -> Result<(), String> {
+    fs::rename(&request.source, &request.target).map_err(|error| {
+        format!(
+            "rename {} to {}: {error}",
+            request.source.display(),
+            request.target.display()
+        )
+    })
 }
 
 fn validate_create_name(name: &str) -> Result<(), String> {
@@ -7696,6 +8227,7 @@ mod tests {
             context_menu: None,
             properties_overlay: None,
             create_dialog: None,
+            rename_dialog: None,
             rubber_band: None,
             hit_tests: 0,
             selection_changes: 0,
@@ -7703,6 +8235,7 @@ mod tests {
             context_menu_actions: 0,
             properties_changes: 0,
             create_changes: 0,
+            rename_changes: 0,
             keyboard_navigation: 0,
             rubber_band_updates: 0,
             view_switches: 0,
@@ -8251,6 +8784,103 @@ mod tests {
                 .unwrap_err()
                 .contains("create file")
         );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rename_dialog_opens_from_item_context_and_accepts_text() {
+        let mut scene = test_scene(vec![test_entry("plain.txt", false)], ShellViewMode::Icons);
+        let size = PhysicalSize::new(420, 260);
+        scene.context_target = Some(ShellContextTarget::Item {
+            index: 0,
+            path: PathBuf::from("/tmp/plain.txt"),
+            is_dir: false,
+            selection_count: 1,
+        });
+
+        assert!(scene.open_rename_dialog_from_context());
+        let dialog = scene
+            .rename_dialog
+            .as_ref()
+            .expect("rename dialog should open");
+        assert_eq!(dialog.original_name, "plain.txt");
+        assert_eq!(dialog.name, "plain.txt");
+        assert!(!dialog.is_dir);
+        assert_eq!(scene.rename_changes, 1);
+
+        assert!(scene.apply_rename_command(RenameCommand::Insert("renamed.txt".to_string())));
+        assert_eq!(scene.rename_dialog.as_ref().unwrap().name, "renamed.txt");
+        let rect = rename_dialog_rect(scene.rename_dialog.as_ref().unwrap(), size);
+        assert_eq!(
+            scene.rename_dialog_click_at_screen_point(
+                ViewPoint {
+                    x: rename_dialog_commit_button_rect(rect).x + 2.0,
+                    y: rename_dialog_commit_button_rect(rect).y + 2.0,
+                },
+                size,
+            ),
+            RenameDialogClick::Commit
+        );
+        assert_eq!(
+            scene.rename_dialog_click_at_screen_point(ViewPoint { x: 1.0, y: 1.0 }, size),
+            RenameDialogClick::Outside
+        );
+    }
+
+    #[test]
+    fn rename_entry_request_rejects_unchanged_and_invalid_names() {
+        let mut scene = test_scene(vec![test_entry("plain.txt", false)], ShellViewMode::Icons);
+        scene.context_target = Some(ShellContextTarget::Item {
+            index: 0,
+            path: PathBuf::from("/tmp/plain.txt"),
+            is_dir: false,
+            selection_count: 1,
+        });
+        assert!(scene.open_rename_dialog_from_context());
+
+        let unchanged = scene.rename_entry_request().unwrap_err();
+        assert!(unchanged.contains("unchanged"));
+        assert!(scene.set_rename_dialog_error(unchanged));
+        assert!(scene.apply_rename_command(RenameCommand::Insert("../bad".to_string())));
+        let invalid = scene.rename_entry_request().unwrap_err();
+        assert!(invalid.contains('/'));
+        assert!(scene.set_rename_dialog_error(invalid));
+        assert!(scene.rename_dialog.as_ref().unwrap().error.is_some());
+    }
+
+    #[test]
+    fn rename_file_creates_request_renames_on_disk_reloads_and_selects_entry() {
+        let root = test_dir("rename-file");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("old.txt"), b"old").unwrap();
+        let size = PhysicalSize::new(420, 260);
+        let mut scene = ShellScene::load(root.clone(), ShellViewMode::Icons).unwrap();
+        let old_index = entry_index_by_name(&scene.entries, "old.txt").unwrap();
+        scene.context_target = Some(ShellContextTarget::Item {
+            index: old_index,
+            path: root.join("old.txt"),
+            is_dir: false,
+            selection_count: 1,
+        });
+
+        assert!(scene.open_rename_dialog_from_context());
+        scene.rename_dialog.as_mut().unwrap().name = "new.txt".to_string();
+        scene.rename_dialog.as_mut().unwrap().replace_on_insert = false;
+        let request = scene.rename_entry_request().unwrap();
+        assert_eq!(request.original_name, "old.txt");
+        assert_eq!(request.name, "new.txt");
+        rename_entry_on_disk(&request).unwrap();
+        assert!(!root.join("old.txt").exists());
+        assert!(root.join("new.txt").is_file());
+        assert!(scene.close_rename_dialog_after_success(&request));
+        assert!(scene.reload_current_path(size).unwrap());
+        assert!(scene.select_entry_by_name("new.txt", size));
+
+        let new_index = entry_index_by_name(&scene.entries, "new.txt").unwrap();
+        assert!(scene.selection.contains(new_index));
+        assert!(scene.rename_dialog.is_none());
+        assert_eq!(scene.directory_reloads, 1);
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -8867,6 +9497,58 @@ mod tests {
                 &Key::Character("a".into()),
             ),
             CreateCommand::Ignore
+        );
+    }
+
+    #[test]
+    fn rename_dialog_key_input_captures_text_and_commit_controls() {
+        let unidentified = PhysicalKey::Unidentified(winit::keyboard::NativeKeyCode::Unidentified);
+        let no_key = Key::Unidentified(winit::keyboard::NativeKey::Unidentified);
+
+        assert_eq!(
+            rename_command_for_key_parts(
+                false,
+                &unidentified,
+                &Key::Character("x".into()),
+                &no_key,
+            ),
+            RenameCommand::Insert("x".to_string())
+        );
+        assert_eq!(
+            rename_command_for_key_parts(
+                false,
+                &PhysicalKey::Code(KeyCode::Backspace),
+                &no_key,
+                &no_key,
+            ),
+            RenameCommand::Backspace
+        );
+        assert_eq!(
+            rename_command_for_key_parts(
+                false,
+                &unidentified,
+                &Key::Named(NamedKey::Enter),
+                &no_key,
+            ),
+            RenameCommand::Commit
+        );
+        assert_eq!(
+            rename_command_for_key_parts(
+                false,
+                &PhysicalKey::Code(KeyCode::Escape),
+                &no_key,
+                &no_key,
+            ),
+            RenameCommand::Cancel
+        );
+        assert_eq!(
+            rename_command_for_key_parts(
+                true,
+                &PhysicalKey::Code(KeyCode::KeyA),
+                &Key::Character("a".into()),
+                &Key::Character("a".into()),
+            ),
+            RenameCommand::Ignore
         );
     }
 

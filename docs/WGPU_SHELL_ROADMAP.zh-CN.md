@@ -127,9 +127,10 @@ Shell 拥有：
   日志，并输出 context target/menu counters。Properties 现在会为 item 和 blank-directory
   target 打开轻量 shell-owned metadata overlay。Blank-menu Create New 现在会打开
   shell-owned modal，支持 folder/file 选择、plain text name capture、校验、真实
-  `create_dir` / `create_new` 文件系统动作、reload，并选中新建条目。Clipboard、rename、
-  trash、更完整 properties、完整 Create New 子菜单/模板和 new-pane dispatch 仍留到
-  Phase 4。
+  `create_dir` / `create_new` 文件系统动作、reload，并选中新建条目。Item Rename 现在会
+  打开最小 shell-owned modal，支持 plain text name capture、校验、真实 `rename`、
+  reload，并选中重命名后的条目。Clipboard、trash、更完整 properties、完整 inline
+  rename、完整 Create New 子菜单/模板和 new-pane dispatch 仍留到 Phase 4。
 - 空白区域左键拖动现在通过同一 retained Icons geometry 执行 rubber-band selection。
   普通拖动替换 selection，Shift 追加，Ctrl/Meta 会相对按下时的 base selection 做
   toggle，并用 clipped GPU overlay 绘制框选矩形。
@@ -245,11 +246,13 @@ context menus、dialogs 和 chooser mode。
 filter bar、`Ctrl/Meta+L`/`Ctrl/Meta+D`/`F6` 最小 location edit mode，以及用于 file-view
 item/blank 右键的轻量 context menu overlay。Properties 会为 item 和 blank-directory
 targets 打开最小 metadata overlay。Create New 会为 blank-directory targets 打开最小
-shell-owned modal，并执行真实 folder/file 创建、reload 和选中新建条目。Filter、
-location 和 create-name 文本编辑暂时保持窄实现，完整 IME/caret/selection 文本边界仍待
-迁移；context menu dispatch 当前覆盖 Open directory、Refresh、Select All、Properties
-和最小 Create New，clipboard、rename、trash、更完整 properties、完整 Create New 子菜单/模板
-和 new-pane actions 仍待完成。
+shell-owned modal，并执行真实 folder/file 创建、reload 和选中新建条目。Rename 会为
+item targets 打开最小 shell-owned modal，并执行真实 filesystem rename、reload 和选中
+重命名后的条目。Filter、location、create-name 和 rename-name 文本编辑暂时保持窄实现，
+完整 IME/caret/selection 文本边界仍待迁移；context menu dispatch 当前覆盖 Open
+directory、Refresh、Select All、Properties、最小 Create New 和最小 Rename，clipboard、
+trash、更完整 properties、完整 inline rename、完整 Create New 子菜单/模板和 new-pane
+actions 仍待完成。
 
 验收：
 
