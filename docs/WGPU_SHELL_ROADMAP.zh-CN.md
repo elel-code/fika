@@ -124,8 +124,9 @@ Shell 拥有：
   item/blank target 打开 clamp 后的 shell-owned context menu overlay，更新 row hover，
   支持 Esc 或外部点击关闭，并将 directory item 的 Open、blank menu 的 Refresh 和
   Select All 分派到现有 shell navigation/reload/selection path；其余 pending action 会记录
-  日志，并输出 context target/menu counters。Clipboard、rename、trash、create-new、
-  properties 和 new-pane dispatch 仍留到 Phase 4。
+  日志，并输出 context target/menu counters。Properties 现在会为 item 和 blank-directory
+  target 打开轻量 shell-owned metadata overlay。Clipboard、rename、trash、create-new、
+  更完整 properties 和 new-pane dispatch 仍留到 Phase 4。
 - 空白区域左键拖动现在通过同一 retained Icons geometry 执行 rubber-band selection。
   普通拖动替换 selection，Shift 追加，Ctrl/Meta 会相对按下时的 base selection 做
   toggle，并用 clipped GPU overlay 绘制框选矩形。
@@ -164,7 +165,7 @@ Shell 拥有：
   会通过同一 projection 保留或裁剪。
 - `[fika-wgpu]` 日志包含 view mode、path、entry count、visible item count、quad count、draw
   batch count、selected count、hovered item index、active rubber-band state、
-  context target kind、context menu state、hit-test/selection/keyboard navigation/rubber-band/view-switch/path-change/reload/location/filter/hidden counters、zoom percent
+  context target kind、context menu state、properties overlay state、hit-test/selection/keyboard navigation/rubber-band/view-switch/path-change/reload/location/filter/hidden counters、zoom percent
   和 zoom-change counters、icon count、icon cache hit/miss count、icon cache bytes、icon atlas bytes、
   icon resolve/raster time、text label count、text cache hit/miss count、text cache bytes、text atlas bytes、
   render reason、layout time、text raster time、render time 和 `scroll_x` / `scroll_y`
@@ -239,10 +240,11 @@ context menus、dialogs 和 chooser mode。
 
 当前 checkpoint：第一批 chrome slice 包含底部最小 status bar、`Ctrl/Meta+F` 最小
 filter bar、`Ctrl/Meta+L`/`Ctrl/Meta+D`/`F6` 最小 location edit mode，以及用于 file-view
-item/blank 右键的轻量 context menu overlay。Filter/location 文本编辑暂时保持窄实现，
-完整 IME/caret/selection 文本边界仍待迁移；context menu dispatch 当前覆盖 Open
-directory、Refresh 和 Select All，clipboard、rename、trash、create-new、properties 和
-new-pane actions 仍待完成。
+item/blank 右键的轻量 context menu overlay。Properties 会为 item 和 blank-directory
+targets 打开最小 metadata overlay。Filter/location 文本编辑暂时保持窄实现，完整
+IME/caret/selection 文本边界仍待迁移；context menu dispatch 当前覆盖 Open directory、
+Refresh、Select All 和 Properties，clipboard、rename、trash、create-new、更完整
+properties 和 new-pane actions 仍待完成。
 
 验收：
 

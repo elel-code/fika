@@ -64,6 +64,10 @@ const NAV_BUTTON_GAP: f32 = 6.0;
 const CONTEXT_MENU_WIDTH: f32 = 184.0;
 const CONTEXT_MENU_ROW_HEIGHT: f32 = 28.0;
 const CONTEXT_MENU_MARGIN: f32 = 6.0;
+const PROPERTIES_OVERLAY_WIDTH: f32 = 440.0;
+const PROPERTIES_OVERLAY_MARGIN: f32 = 18.0;
+const PROPERTIES_TITLE_HEIGHT: f32 = 42.0;
+const PROPERTIES_ROW_HEIGHT: f32 = 24.0;
 const PATH_HISTORY_LIMIT: usize = 128;
 const ZOOM_STEP_MIN: i32 = -3;
 const ZOOM_STEP_MAX: i32 = 4;
@@ -423,6 +427,15 @@ impl ApplicationHandler for FikaWgpuApp {
                 };
                 let shortcut =
                     self.modifiers.state().control_key() || self.modifiers.state().meta_key();
+                if self.scene.is_properties_overlay_open() && escape_requested_for_key_event(&event)
+                {
+                    if self.scene.close_properties_overlay()
+                        && let Some(window) = self.window.as_ref()
+                    {
+                        window.request_redraw();
+                    }
+                    return;
+                }
                 if self.scene.is_context_menu_open() && escape_requested_for_key_event(&event) {
                     if self.scene.close_context_menu()
                         && let Some(window) = self.window.as_ref()
@@ -550,6 +563,18 @@ impl ApplicationHandler for FikaWgpuApp {
                 let Some(mouse_button) = button.mouse_button() else {
                     return;
                 };
+                if self.scene.is_properties_overlay_open() {
+                    if state == ElementState::Pressed
+                        && mouse_button == MouseButton::Left
+                        && self
+                            .scene
+                            .close_properties_overlay_if_outside(point, renderer.size)
+                        && let Some(window) = self.window.as_ref()
+                    {
+                        window.request_redraw();
+                    }
+                    return;
+                }
                 if mouse_button == MouseButton::Right {
                     if state == ElementState::Pressed
                         && self.scene.open_context_menu(point, renderer.size)
@@ -681,13 +706,19 @@ impl FikaWgpuApp {
                     window.request_redraw();
                 }
             }
+            ShellContextMenuAction::Properties => {
+                if self.scene.open_properties_overlay_from_context()
+                    && let Some(window) = self.window.as_ref()
+                {
+                    window.request_redraw();
+                }
+            }
             ShellContextMenuAction::OpenInNewPane
             | ShellContextMenuAction::CopyLocation
             | ShellContextMenuAction::Rename
             | ShellContextMenuAction::MoveToTrash
             | ShellContextMenuAction::CreateNew
-            | ShellContextMenuAction::Paste
-            | ShellContextMenuAction::Properties => {
+            | ShellContextMenuAction::Paste => {
                 eprintln!(
                     "[fika-wgpu] context-action-pending action={} target={}",
                     action.as_str(),
@@ -1531,6 +1562,18 @@ fn context_menu_actions(target: &ShellContextTarget) -> &'static [ShellContextMe
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ShellPropertyRow {
+    label: &'static str,
+    value: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ShellPropertiesOverlay {
+    title: String,
+    rows: Vec<ShellPropertyRow>,
+}
+
 struct ShellScene {
     path: PathBuf,
     view_mode: ShellViewMode,
@@ -1551,11 +1594,13 @@ struct ShellScene {
     selection: ShellSelection,
     context_target: Option<ShellContextTarget>,
     context_menu: Option<ShellContextMenu>,
+    properties_overlay: Option<ShellPropertiesOverlay>,
     rubber_band: Option<RubberBand>,
     hit_tests: u64,
     selection_changes: u64,
     context_target_changes: u64,
     context_menu_actions: u64,
+    properties_changes: u64,
     keyboard_navigation: u64,
     rubber_band_updates: u64,
     view_switches: u64,
@@ -1615,11 +1660,13 @@ impl ShellScene {
             selection: ShellSelection::default(),
             context_target: None,
             context_menu: None,
+            properties_overlay: None,
             rubber_band: None,
             hit_tests: 0,
             selection_changes: 0,
             context_target_changes: 0,
             context_menu_actions: 0,
+            properties_changes: 0,
             keyboard_navigation: 0,
             rubber_band_updates: 0,
             view_switches: 0,
@@ -1762,6 +1809,7 @@ impl ShellScene {
         self.selection = ShellSelection::default();
         self.context_target = None;
         self.context_menu = None;
+        self.properties_overlay = None;
         self.rubber_band = None;
         self.last_primary_click = None;
         self.path_changes += 1;
@@ -2366,6 +2414,121 @@ impl ShellScene {
         }
     }
 
+    fn is_properties_overlay_open(&self) -> bool {
+        self.properties_overlay.is_some()
+    }
+
+    fn open_properties_overlay_from_context(&mut self) -> bool {
+        let Some(overlay) = self.properties_overlay_for_context_target() else {
+            eprintln!("[fika-wgpu] properties-error target=none");
+            return false;
+        };
+        let changed = self.properties_overlay.as_ref() != Some(&overlay);
+        self.properties_overlay = Some(overlay);
+        if changed {
+            self.properties_changes += 1;
+            if let Some(overlay) = self.properties_overlay.as_ref() {
+                eprintln!(
+                    "[fika-wgpu] properties open=1 title={:?} rows={} changes={}",
+                    overlay.title,
+                    overlay.rows.len(),
+                    self.properties_changes
+                );
+            }
+        }
+        changed
+    }
+
+    fn close_properties_overlay(&mut self) -> bool {
+        if self.properties_overlay.take().is_none() {
+            return false;
+        }
+        self.properties_changes += 1;
+        eprintln!(
+            "[fika-wgpu] properties open=0 changes={}",
+            self.properties_changes
+        );
+        true
+    }
+
+    fn close_properties_overlay_if_outside(
+        &mut self,
+        point: ViewPoint,
+        size: PhysicalSize<u32>,
+    ) -> bool {
+        let Some(overlay) = self.properties_overlay.as_ref() else {
+            return false;
+        };
+        if properties_overlay_rect(overlay, size).contains(point) {
+            return false;
+        }
+        self.close_properties_overlay()
+    }
+
+    fn properties_overlay_for_context_target(&self) -> Option<ShellPropertiesOverlay> {
+        match self.context_target.as_ref()? {
+            ShellContextTarget::Item {
+                index,
+                path,
+                is_dir,
+                selection_count,
+            } => {
+                let entry = self.entries.get(*index)?;
+                let title_name = entry.name.as_ref().to_string();
+                let location = path
+                    .parent()
+                    .filter(|parent| !parent.as_os_str().is_empty())
+                    .map(|parent| parent.display().to_string())
+                    .unwrap_or_else(|| "-".to_string());
+                let mut rows = vec![
+                    property_row("Name", title_name.clone()),
+                    property_row("Type", if *is_dir { "Folder" } else { "File" }.to_string()),
+                    property_row("Location", location),
+                    property_row(
+                        "Size",
+                        if *is_dir {
+                            "-".to_string()
+                        } else {
+                            format_size(entry.size_bytes)
+                        },
+                    ),
+                    property_row("Modified", format_modified_secs(entry.modified_secs)),
+                    property_row("Path", path.display().to_string()),
+                ];
+                if *selection_count > 1 {
+                    rows.push(property_row(
+                        "Selection",
+                        format!("{selection_count} items"),
+                    ));
+                }
+                if let Some(mime) = entry.mime_type.as_ref() {
+                    rows.push(property_row("MIME", mime.to_string()));
+                }
+                Some(ShellPropertiesOverlay {
+                    title: format!("Properties - {title_name}"),
+                    rows,
+                })
+            }
+            ShellContextTarget::Blank { path } => Some(ShellPropertiesOverlay {
+                title: format!("Properties - {}", path.display()),
+                rows: vec![
+                    property_row("Name", path_name_or_display(path)),
+                    property_row("Type", "Folder".to_string()),
+                    property_row("Entries", self.entries.len().to_string()),
+                    property_row("Folders", self.dir_count.to_string()),
+                    property_row(
+                        "Files",
+                        self.entries
+                            .len()
+                            .saturating_sub(self.dir_count)
+                            .to_string(),
+                    ),
+                    property_row("Path", path.display().to_string()),
+                ],
+            }),
+        }
+    }
+
     fn parent_directory_path(&self) -> Option<PathBuf> {
         self.path
             .parent()
@@ -2629,6 +2792,7 @@ impl ShellScene {
         self.push_rubber_band(&mut vertices, content_clip, size);
         self.push_status_bar(&mut vertices, text, size, visible_items, status_bar);
         self.push_context_menu_overlay(&mut vertices, text, size);
+        self.push_properties_overlay(&mut vertices, text, size);
 
         SceneFrame {
             layout_us: layout_start.elapsed().as_micros(),
@@ -3148,6 +3312,76 @@ impl ShellScene {
                 } else {
                     TextColor::rgb(218, 226, 234)
                 },
+            );
+        }
+    }
+
+    fn push_properties_overlay(
+        &self,
+        vertices: &mut Vec<QuadVertex>,
+        text: &mut TextFrameBuilder<'_>,
+        size: PhysicalSize<u32>,
+    ) {
+        let Some(overlay) = self.properties_overlay.as_ref() else {
+            return;
+        };
+        let screen = ViewRect {
+            x: 0.0,
+            y: 0.0,
+            width: size.width.max(1) as f32,
+            height: size.height.max(1) as f32,
+        };
+        push_rect(vertices, screen, [0.0, 0.0, 0.0, 0.40], size);
+        let rect = properties_overlay_rect(overlay, size);
+        push_rect(vertices, rect, [0.118, 0.128, 0.140, 0.99], size);
+        push_clipped_rect_outline(vertices, rect, screen, 1.0, [0.34, 0.38, 0.43, 1.0], size);
+        push_rect(
+            vertices,
+            ViewRect {
+                x: rect.x,
+                y: rect.y,
+                width: rect.width,
+                height: PROPERTIES_TITLE_HEIGHT,
+            },
+            [0.145, 0.158, 0.174, 1.0],
+            size,
+        );
+        text.push_label(
+            &overlay.title,
+            ViewRect {
+                x: rect.x + 16.0,
+                y: rect.y + 12.0,
+                width: (rect.width - 32.0).max(1.0),
+                height: 18.0,
+            },
+            rect,
+            TextColor::rgb(238, 244, 249),
+        );
+
+        let rows_y = rect.y + PROPERTIES_TITLE_HEIGHT + 10.0;
+        for (index, row) in overlay.rows.iter().enumerate() {
+            let y = rows_y + index as f32 * PROPERTIES_ROW_HEIGHT;
+            text.push_label(
+                row.label,
+                ViewRect {
+                    x: rect.x + 16.0,
+                    y,
+                    width: 92.0,
+                    height: 18.0,
+                },
+                rect,
+                TextColor::rgb(164, 176, 188),
+            );
+            text.push_label(
+                &row.value,
+                ViewRect {
+                    x: rect.x + 116.0,
+                    y,
+                    width: (rect.width - 132.0).max(1.0),
+                    height: 18.0,
+                },
+                rect,
+                TextColor::rgb(222, 230, 238),
             );
         }
     }
@@ -4011,7 +4245,7 @@ impl WgpuState {
             || self.last_log.elapsed() >= Duration::from_secs(1)
         {
             eprintln!(
-                "[fika-wgpu] frame={} reason={} view={} zoom={} zoom_changes={} path={} entries={} filtered={} show_hidden={} hidden_changes={} location_active={} location_changes={} filter_active={} filter_changes={} visible={} selected={} hover={} context={} context_menu={} context_changes={} context_actions={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} path_changes={} reloads={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_cache={}/{} entries={} bytes={} batches={} scroll_x={:.1} scroll_y={:.1} layout={}us text_raster={}us text_atlas={}x{}:{}b render={}us",
+                "[fika-wgpu] frame={} reason={} view={} zoom={} zoom_changes={} path={} entries={} filtered={} show_hidden={} hidden_changes={} location_active={} location_changes={} filter_active={} filter_changes={} visible={} selected={} hover={} context={} context_menu={} context_changes={} context_actions={} properties={} properties_changes={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} path_changes={} reloads={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_cache={}/{} entries={} bytes={} batches={} scroll_x={:.1} scroll_y={:.1} layout={}us text_raster={}us text_atlas={}x{}:{}b render={}us",
                 self.frame_count,
                 reason,
                 scene.view_mode.as_str(),
@@ -4037,6 +4271,8 @@ impl WgpuState {
                 scene.context_menu.is_some() as u8,
                 scene.context_target_changes,
                 scene.context_menu_actions,
+                scene.properties_overlay.is_some() as u8,
+                scene.properties_changes,
                 scene.rubber_band.as_ref().is_some_and(|band| band.active) as u8,
                 scene.hit_tests,
                 scene.selection_changes,
@@ -6652,6 +6888,36 @@ fn context_menu_rect(menu: &ShellContextMenu, size: PhysicalSize<u32>) -> ViewRe
     }
 }
 
+fn properties_overlay_rect(overlay: &ShellPropertiesOverlay, size: PhysicalSize<u32>) -> ViewRect {
+    let width = size.width.max(1) as f32;
+    let height = size.height.max(1) as f32;
+    let overlay_width = PROPERTIES_OVERLAY_WIDTH
+        .min((width - PROPERTIES_OVERLAY_MARGIN * 2.0).max(1.0))
+        .max(1.0);
+    let overlay_height =
+        (PROPERTIES_TITLE_HEIGHT + 22.0 + overlay.rows.len() as f32 * PROPERTIES_ROW_HEIGHT)
+            .min((height - PROPERTIES_OVERLAY_MARGIN * 2.0).max(1.0))
+            .max(1.0);
+    ViewRect {
+        x: ((width - overlay_width) / 2.0).max(PROPERTIES_OVERLAY_MARGIN),
+        y: ((height - overlay_height) / 2.0).max(PROPERTIES_OVERLAY_MARGIN),
+        width: overlay_width,
+        height: overlay_height,
+    }
+}
+
+fn property_row(label: &'static str, value: String) -> ShellPropertyRow {
+    ShellPropertyRow { label, value }
+}
+
+fn path_name_or_display(path: &Path) -> String {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| path.display().to_string())
+}
+
 fn entry_index_by_name(entries: &[Entry], name: &str) -> Option<usize> {
     entries.iter().position(|entry| entry.name.as_ref() == name)
 }
@@ -6759,11 +7025,13 @@ mod tests {
             selection: ShellSelection::default(),
             context_target: None,
             context_menu: None,
+            properties_overlay: None,
             rubber_band: None,
             hit_tests: 0,
             selection_changes: 0,
             context_target_changes: 0,
             context_menu_actions: 0,
+            properties_changes: 0,
             keyboard_navigation: 0,
             rubber_band_updates: 0,
             view_switches: 0,
@@ -7108,6 +7376,102 @@ mod tests {
             path: PathBuf::from("/tmp"),
         });
         assert_eq!(scene.context_target_directory_path(), None);
+    }
+
+    #[test]
+    fn properties_overlay_builds_item_metadata_from_context_target() {
+        let mut scene = test_scene(
+            vec![test_entry("folder", true), test_entry("plain.txt", false)],
+            ShellViewMode::Icons,
+        );
+        scene.context_target = Some(ShellContextTarget::Item {
+            index: 1,
+            path: PathBuf::from("/tmp/plain.txt"),
+            is_dir: false,
+            selection_count: 2,
+        });
+
+        assert!(scene.open_properties_overlay_from_context());
+        let overlay = scene
+            .properties_overlay
+            .as_ref()
+            .expect("properties overlay should open");
+        assert_eq!(overlay.title, "Properties - plain.txt");
+        assert!(
+            overlay
+                .rows
+                .iter()
+                .any(|row| row.label == "Name" && row.value == "plain.txt")
+        );
+        assert!(
+            overlay
+                .rows
+                .iter()
+                .any(|row| row.label == "Type" && row.value == "File")
+        );
+        assert!(
+            overlay
+                .rows
+                .iter()
+                .any(|row| row.label == "Selection" && row.value == "2 items")
+        );
+        assert!(
+            overlay
+                .rows
+                .iter()
+                .any(|row| row.label == "Path" && row.value == "/tmp/plain.txt")
+        );
+        assert_eq!(scene.properties_changes, 1);
+    }
+
+    #[test]
+    fn properties_overlay_builds_blank_directory_summary_and_closes_outside() {
+        let mut scene = test_scene(
+            vec![test_entry("folder", true), test_entry("plain.txt", false)],
+            ShellViewMode::Icons,
+        );
+        scene.context_target = Some(ShellContextTarget::Blank {
+            path: PathBuf::from("/tmp"),
+        });
+        let size = PhysicalSize::new(360, 240);
+
+        assert!(scene.open_properties_overlay_from_context());
+        let overlay = scene
+            .properties_overlay
+            .as_ref()
+            .expect("properties overlay should open");
+        assert_eq!(overlay.title, "Properties - /tmp");
+        assert!(
+            overlay
+                .rows
+                .iter()
+                .any(|row| row.label == "Entries" && row.value == "2")
+        );
+        assert!(
+            overlay
+                .rows
+                .iter()
+                .any(|row| row.label == "Folders" && row.value == "1")
+        );
+        assert!(
+            overlay
+                .rows
+                .iter()
+                .any(|row| row.label == "Files" && row.value == "1")
+        );
+        let rect = properties_overlay_rect(overlay, size);
+        assert!(rect.x >= PROPERTIES_OVERLAY_MARGIN);
+        assert!(rect.y >= PROPERTIES_OVERLAY_MARGIN);
+        assert!(!scene.close_properties_overlay_if_outside(
+            ViewPoint {
+                x: rect.x + 2.0,
+                y: rect.y + 2.0,
+            },
+            size,
+        ));
+        assert!(scene.close_properties_overlay_if_outside(ViewPoint { x: 1.0, y: 1.0 }, size,));
+        assert!(scene.properties_overlay.is_none());
+        assert_eq!(scene.properties_changes, 2);
     }
 
     #[test]

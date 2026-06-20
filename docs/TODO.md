@@ -97,7 +97,8 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
   blank directory target 且不启动 rubber-band；第一版 shell-owned context menu overlay
   已接入 item/blank targets，菜单会 clamp 到窗口内，支持 row hover、Esc/外部点击关闭，
   并将 directory item 的 Open、blank menu 的 Refresh 和 Select All 分派到现有
-  shell navigation/reload/selection path，其余 action 先记录 pending 日志；
+  shell navigation/reload/selection path；Properties 会为 item 和 blank-directory targets
+  打开轻量 shell-owned metadata overlay，其余 action 先记录 pending 日志；
   空白区域左键拖动已通过同一 retained Icons geometry 支持 rubber-band selection，
   普通拖动替换 selection，Shift 追加，Ctrl/Meta 相对按下时的 base selection 做
   toggle；keyboard navigation 已通过同一 retained selection state 处理 Arrow、
@@ -134,8 +135,8 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
   scene 被 present；top bar active segment 和全宽 mode color stripe 便于直接确认当前
   projection。
   日志已输出 view mode、path、entry count、visible count、
-  selected/hover/context/context-menu/rubber-band state、
-  hit-test/selection/context/context-menu-action/keyboard/rubber-band/view-switch/path-change/zoom counters、quad/icon/text/batch count、
+  selected/hover/context/context-menu/properties/rubber-band state、
+  hit-test/selection/context/context-menu-action/properties/keyboard/rubber-band/view-switch/path-change/zoom counters、quad/icon/text/batch count、
   icon/text cache hit/miss/bytes、layout/icon-resolve/icon-raster/text-raster/render
   reason/time、icon/text atlas bytes 和 `scroll_x` / `scroll_y` offsets；本地目标 desktop
   session 的 `timeout 4s target/debug/fika-wgpu --view icons|compact|details /etc`
@@ -151,7 +152,7 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
   和更完整 Details column/metadata parity 仍待完成。
 - [ ] Phase 2：把 Phase 0 初版 icon atlas 提升为预算化 semantic icon work，并实现 thumbnail texture retention、text shaping cache、glyph atlas policy 和 eviction telemetry。Cold glyph/icon work 必须 visible-first 且预算化。
 - [~] Phase 3：把剩余 pointer routing、context target selection、directory hover、Places hover 和 drag/drop target lookup 移到 shell-owned hit testing。当前 file view pane item/blank 右键 context target selection 和菜单 row hit testing 已由 wgpu shell-owned；Places context targets、directory hover 和 DnD target lookup 仍待迁移。
-- [~] Phase 4：实现 Places、toolbar、location bar、filter bar、status bar、context menus、dialogs 和 chooser mode，使常见文件管理器工作流不需要启动 GPUI shell。当前已有底部最小 status bar、窄实现 filter bar、窄实现 location edit mode 和轻量 item/blank context menu overlay；Open directory、Refresh、Select All 已接入 dispatch。Places、toolbar、完整 location/filter 文本边界、clipboard/rename/trash/create-new/properties/new-pane actions、dialogs 和 chooser mode 仍待迁移。
+- [~] Phase 4：实现 Places、toolbar、location bar、filter bar、status bar、context menus、dialogs 和 chooser mode，使常见文件管理器工作流不需要启动 GPUI shell。当前已有底部最小 status bar、窄实现 filter bar、窄实现 location edit mode、轻量 item/blank context menu overlay 和最小 properties metadata overlay；Open directory、Refresh、Select All、Properties 已接入 dispatch。Places、toolbar、完整 location/filter 文本边界、clipboard/rename/trash/create-new/更完整 properties/new-pane actions、dialogs 和 chooser mode 仍待迁移。
 - [ ] Phase 5：同场景证据证明行为对齐，且 frame cost 比 GPUI Fika 和相关 cosmic-files 基线更好或更可预测后，再把新 shell 提升为默认。
 
 ### GPUI Item View 自绘 / Dolphin retained item 对齐（历史基线）

@@ -144,8 +144,9 @@ Current checkpoint:
   or outside click, dispatches Open for directory items plus blank-menu Refresh
   and Select All through existing shell navigation/reload/selection paths, logs
   remaining pending action hits, and emits context target/menu counters.
-  Clipboard, rename, trash, create-new, properties, and new-pane dispatch remain
-  Phase 4 work.
+  Properties now opens a lightweight shell-owned metadata overlay for item and
+  blank-directory targets. Clipboard, rename, trash, create-new, richer
+  properties, and new-pane dispatch remain Phase 4 work.
 - Blank-space left-drag now runs rubber-band selection through the same
   retained Icons geometry. Plain drag replaces the selection, Shift extends it,
   Ctrl/Meta toggles it against the press-time base selection, and the band is
@@ -196,7 +197,7 @@ Current checkpoint:
   the visibility mode changes.
 - `[fika-wgpu]` logs include view mode, path, entry count, visible item count,
   quad count, selected count, hovered item index, active rubber-band state,
-  context target kind, context menu state, hit-test/selection/keyboard navigation/rubber-band/view-switch/path-change
+  context target kind, context menu state, properties overlay state, hit-test/selection/keyboard navigation/rubber-band/view-switch/path-change
   counters, reload/location/filter/hidden counters, zoom percent and zoom-change counters, icon count, icon cache
   hit/miss count, icon cache bytes, icon atlas bytes, icon resolve/raster time,
   text label count, text cache hit/miss count, text cache bytes, text atlas
@@ -284,11 +285,13 @@ location bar, filter bar, status bar, context menus, dialogs, and chooser mode.
 Current checkpoint: the first chrome slices are a minimal bottom status bar with
 directory/selection/view/zoom summary, a minimal `Ctrl/Meta+F` filter bar, a
 minimal `Ctrl/Meta+L`/`Ctrl/Meta+D`/`F6` location edit mode, and a lightweight
-file-view context menu overlay for item/blank right-clicks. Filter and location
-text editing remain intentionally narrow until the full IME/caret/selection
-text boundary is migrated; context menu dispatch currently covers Open
-directory, Refresh, and Select All, while clipboard, rename, trash, create-new,
-properties, and new-pane actions remain pending.
+file-view context menu overlay for item/blank right-clicks. Properties opens a
+minimal metadata overlay for item and blank-directory targets. Filter and
+location text editing remain intentionally narrow until the full
+IME/caret/selection text boundary is migrated; context menu dispatch currently
+covers Open directory, Refresh, Select All, and Properties, while clipboard,
+rename, trash, create-new, richer properties, and new-pane actions remain
+pending.
 
 Acceptance:
 
