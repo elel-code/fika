@@ -145,13 +145,14 @@ Shell 拥有：
 - 第一版 shell-owned Places 侧栏已在 top bar 下方绘制。它通过公开 core API 构建
   Home、已存在的 XDG directories、Trash、Fika user places、primary
   `places-order.xml`、Network root、network bookmarks 和 Root，保留 row geometry，用最长路径前缀决定 active place，Places
-  hover 与 item hover 分离，并将左键 place navigation 分派到与文件视图相同的
+  hover 与 item hover 分离，拥有独立 sidebar scroll offset、clipped row rendering 和窄
+  scrollbar thumb，并将左键 place navigation 分派到与文件视图相同的
   `load_path`/history path。Places 右键现在会创建 shell-owned place context target，
   并打开最小 context menu，分派 Open、Copy Location、Properties，以及 editable user
   places 的 Remove。Remove 会写回 Fika `places.xbel`，裁剪对应 place-order 条目，
   reload sidebar projection，并清理 stale place context state。动态 devices、更完整
-  Places actions（sidebar add/edit/hide 和 Trash actions）、DnD/drop targets、resize 和
-  sidebar scrolling 仍留到 Phase 4。
+  Places actions（sidebar add/edit/hide 和 Trash actions）、DnD/drop targets 和 resize
+  仍留到 Phase 4。
 - 空白区域左键拖动现在通过同一 retained Icons geometry 执行 rubber-band selection。
   普通拖动替换 selection，Shift 追加，Ctrl/Meta 会相对按下时的 base selection 做
   toggle，并用 clipped GPU overlay 绘制框选矩形。
@@ -189,7 +190,7 @@ Shell 拥有：
   entries；`Ctrl/Meta+H` 或 top-bar `Hidden` toggle 会显示它们。切换可见性时 selection
   会通过同一 projection 保留或裁剪。
 - `[fika-wgpu]` 日志包含 view mode、path、entry count、visible item count、quad count、draw
-  batch count、Places count/hover/change counters、selected count、hovered item index、active rubber-band state、
+  batch count、Places count/hover/change/scroll counters、selected count、hovered item index、active rubber-band state、
   context target kind、context menu state、properties overlay state、hit-test/selection/keyboard navigation/rubber-band/view-switch/path-change/open/copy-location/file-clipboard/paste/reload/location/filter/hidden counters、zoom percent
   和 zoom-change counters、icon count、icon cache hit/miss count、icon cache bytes、icon atlas bytes、
   icon resolve/raster time、text label count、text cache hit/miss count、text cache bytes、text atlas bytes、

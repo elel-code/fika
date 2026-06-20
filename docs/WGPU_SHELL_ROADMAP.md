@@ -170,16 +170,17 @@ Current checkpoint:
   Home, existing XDG directories, Trash, Fika user places, primary
   `places-order.xml`, Network root, network bookmarks, and Root from public
   core APIs, keeps retained row geometry, uses longest-prefix active-place
-  projection, updates sidebar hover independently from item hover, and
-  dispatches left-click place navigation through the same `load_path`/history
-  path as file-view navigation. Places
+  projection, updates sidebar hover independently from item hover, owns an
+  independent sidebar scroll offset with clipped row rendering and a narrow
+  scrollbar thumb, and dispatches left-click place navigation through the same
+  `load_path`/history path as file-view navigation. Places
   right-click now creates a shell-owned place context target and a minimal
   context menu that dispatches Open, Copy Location, Properties, and Remove for
   editable user places. Remove writes Fika's `places.xbel`, prunes matching
   place-order entries, reloads the sidebar projection, and clears stale place
   context state. Dynamic devices, richer Places actions such as sidebar
-  add/edit/hide and Trash actions, DnD/drop targets, resizing, and sidebar
-  scrolling remain Phase 4 work.
+  add/edit/hide and Trash actions, DnD/drop targets, and resizing remain Phase
+  4 work.
 - Blank-space left-drag now runs rubber-band selection through the same
   retained Icons geometry. Plain drag replaces the selection, Shift extends it,
   Ctrl/Meta toggles it against the press-time base selection, and the band is
@@ -229,7 +230,7 @@ Current checkpoint:
   shows them. Selection is retained or pruned through the same projection when
   the visibility mode changes.
 - `[fika-wgpu]` logs include view mode, path, entry count, visible item count,
-  Places count/hover/change counters, quad count, selected count, hovered item index, active rubber-band state,
+  Places count/hover/change/scroll counters, quad count, selected count, hovered item index, active rubber-band state,
   context target kind, context menu state, properties overlay state, hit-test/selection/keyboard navigation/rubber-band/view-switch/path-change/open/copy-location/file-clipboard/paste
   counters, reload/location/filter/hidden counters, zoom percent and zoom-change counters, icon count, icon cache
   hit/miss count, icon cache bytes, icon atlas bytes, icon resolve/raster time,

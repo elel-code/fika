@@ -76,6 +76,9 @@ const PLACES_SECTION_HEIGHT: f32 = 24.0;
 const PLACES_ROW_HEIGHT: f32 = 30.0;
 const PLACES_ROW_GAP: f32 = 2.0;
 const PLACES_ICON_SIZE: f32 = 18.0;
+const PLACES_SCROLLBAR_WIDTH: f32 = 3.0;
+const PLACES_SCROLLBAR_MARGIN: f32 = 4.0;
+const PLACES_SCROLLBAR_MIN_THUMB_HEIGHT: f32 = 28.0;
 const CONTEXT_MENU_WIDTH: f32 = 184.0;
 const CONTEXT_MENU_ROW_HEIGHT: f32 = 28.0;
 const CONTEXT_MENU_MARGIN: f32 = 6.0;
@@ -2393,6 +2396,7 @@ struct ShellScene {
     zoom_step: i32,
     scroll_x: f32,
     scroll_y: f32,
+    places_scroll_y: f32,
     pointer: Option<ViewPoint>,
     hovered_index: Option<usize>,
     hovered_place: Option<usize>,
@@ -2418,6 +2422,7 @@ struct ShellScene {
     paste_changes: u64,
     trash_changes: u64,
     places_changes: u64,
+    places_scroll_changes: u64,
     keyboard_navigation: u64,
     rubber_band_updates: u64,
     view_switches: u64,
@@ -2473,6 +2478,7 @@ impl ShellScene {
             zoom_step: 0,
             scroll_x: 0.0,
             scroll_y: 0.0,
+            places_scroll_y: 0.0,
             pointer: None,
             hovered_index: None,
             hovered_place: None,
@@ -2498,6 +2504,7 @@ impl ShellScene {
             paste_changes: 0,
             trash_changes: 0,
             places_changes: 0,
+            places_scroll_changes: 0,
             keyboard_navigation: 0,
             rubber_band_updates: 0,
             view_switches: 0,
@@ -3091,7 +3098,7 @@ impl ShellScene {
             return Vec::new();
         }
         let mut rows = Vec::with_capacity(self.places.len());
-        let mut y = sidebar.y + PLACES_SIDEBAR_TOP_PADDING;
+        let mut y = sidebar.y + PLACES_SIDEBAR_TOP_PADDING - self.places_scroll_y;
         let mut previous_group = None;
         for (index, place) in self.places.iter().enumerate() {
             if !place.group.is_empty() && previous_group != Some(place.group) {
@@ -3121,6 +3128,55 @@ impl ShellScene {
             width,
             height,
         }
+    }
+
+    fn places_content_height(&self) -> f32 {
+        if self.places.is_empty() {
+            return PLACES_SIDEBAR_TOP_PADDING * 2.0;
+        }
+
+        let mut height = PLACES_SIDEBAR_TOP_PADDING;
+        let mut previous_group = None;
+        for place in &self.places {
+            if !place.group.is_empty() && previous_group != Some(place.group) {
+                height += PLACES_SECTION_HEIGHT;
+            }
+            height += PLACES_ROW_HEIGHT + PLACES_ROW_GAP;
+            previous_group = Some(place.group);
+        }
+        height - PLACES_ROW_GAP + PLACES_SIDEBAR_TOP_PADDING
+    }
+
+    fn max_places_scroll_y(&self, size: PhysicalSize<u32>) -> f32 {
+        let sidebar = self.places_sidebar_rect(size);
+        (self.places_content_height() - sidebar.height).max(0.0)
+    }
+
+    fn places_scrollbar_thumb_rect(&self, size: PhysicalSize<u32>) -> Option<ViewRect> {
+        let sidebar = self.places_sidebar_rect(size);
+        let max_scroll = self.max_places_scroll_y(size);
+        if sidebar.width <= 0.0 || sidebar.height <= 0.0 || max_scroll <= f32::EPSILON {
+            return None;
+        }
+
+        let track_height = (sidebar.height - PLACES_SCROLLBAR_MARGIN * 2.0).max(1.0);
+        let content_height = self.places_content_height().max(sidebar.height);
+        let thumb_height = (sidebar.height / content_height * track_height).clamp(
+            PLACES_SCROLLBAR_MIN_THUMB_HEIGHT.min(track_height),
+            track_height,
+        );
+        let travel = (track_height - thumb_height).max(0.0);
+        let scroll_ratio = if max_scroll <= f32::EPSILON {
+            0.0
+        } else {
+            (self.places_scroll_y / max_scroll).clamp(0.0, 1.0)
+        };
+        Some(ViewRect {
+            x: sidebar.right() - PLACES_SCROLLBAR_MARGIN - PLACES_SCROLLBAR_WIDTH,
+            y: sidebar.y + PLACES_SCROLLBAR_MARGIN + travel * scroll_ratio,
+            width: PLACES_SCROLLBAR_WIDTH,
+            height: thumb_height,
+        })
     }
 
     fn context_target_for_screen_point(
@@ -3461,6 +3517,7 @@ impl ShellScene {
 
         self.places = build_shell_places_from(user_places_path);
         save_shell_primary_place_order(user_places_path, &self.places)?;
+        self.clamp_places_scroll(size);
         self.context_target = None;
         self.context_menu = None;
         self.properties_overlay = None;
@@ -3507,6 +3564,7 @@ impl ShellScene {
         }
 
         self.places = build_shell_places_from(user_places_path);
+        self.clamp_places_scroll(size);
         self.context_target = None;
         self.context_menu = None;
         self.properties_overlay = None;
@@ -4533,21 +4591,19 @@ impl ShellScene {
         );
 
         let active_place = active_shell_place_index(&self.places, &self.path);
-        let mut y = sidebar.y + PLACES_SIDEBAR_TOP_PADDING;
+        let mut y = sidebar.y + PLACES_SIDEBAR_TOP_PADDING - self.places_scroll_y;
         let mut previous_group = None;
         for (index, place) in self.places.iter().enumerate() {
             if !place.group.is_empty() && previous_group != Some(place.group) {
-                text.push_label(
-                    place.group,
-                    ViewRect {
-                        x: sidebar.x + PLACES_SIDEBAR_PADDING_X + 4.0,
-                        y: y + 4.0,
-                        width: (sidebar.width - PLACES_SIDEBAR_PADDING_X * 2.0 - 8.0).max(1.0),
-                        height: 16.0,
-                    },
-                    sidebar,
-                    TextColor::rgb(136, 148, 160),
-                );
+                let section = ViewRect {
+                    x: sidebar.x + PLACES_SIDEBAR_PADDING_X + 4.0,
+                    y: y + 4.0,
+                    width: (sidebar.width - PLACES_SIDEBAR_PADDING_X * 2.0 - 8.0).max(1.0),
+                    height: 16.0,
+                };
+                if section.y < sidebar.bottom() && section.bottom() > sidebar.y {
+                    text.push_label(place.group, section, sidebar, TextColor::rgb(136, 148, 160));
+                }
                 y += PLACES_SECTION_HEIGHT;
             }
 
@@ -4560,9 +4616,10 @@ impl ShellScene {
             if row.y < sidebar.bottom() && row.bottom() > sidebar.y {
                 let active = active_place == Some(index);
                 let hovered = self.hovered_place == Some(index);
-                push_rect(
+                push_clipped_rect(
                     vertices,
                     row,
+                    sidebar,
                     place_row_background_color(active, hovered),
                     size,
                 );
@@ -4572,7 +4629,7 @@ impl ShellScene {
                     width: PLACES_ICON_SIZE,
                     height: PLACES_ICON_SIZE,
                 };
-                push_rect(vertices, icon, place_marker_color(place), size);
+                push_clipped_rect(vertices, icon, sidebar, place_marker_color(place), size);
                 text.push_label(
                     place.marker,
                     ViewRect {
@@ -4603,6 +4660,17 @@ impl ShellScene {
 
             y += PLACES_ROW_HEIGHT + PLACES_ROW_GAP;
             previous_group = Some(place.group);
+        }
+
+        if let Some(thumb) = self.places_scrollbar_thumb_rect(size) {
+            let track = ViewRect {
+                x: thumb.x,
+                y: sidebar.y + PLACES_SCROLLBAR_MARGIN,
+                width: thumb.width,
+                height: (sidebar.height - PLACES_SCROLLBAR_MARGIN * 2.0).max(1.0),
+            };
+            push_rect(vertices, track, [0.12, 0.135, 0.15, 1.0], size);
+            push_rect(vertices, thumb, [0.48, 0.54, 0.60, 1.0], size);
         }
     }
 
@@ -5505,10 +5573,18 @@ impl ShellScene {
         if self.view_mode == ShellViewMode::Compact {
             self.scroll_y = 0.0;
         }
+        self.clamp_places_scroll(size);
         self.refresh_hover(size);
     }
 
     fn scroll_by(&mut self, delta_y: f32, size: PhysicalSize<u32>) -> bool {
+        if self
+            .pointer
+            .is_some_and(|point| self.places_sidebar_rect(size).contains(point))
+        {
+            return self.scroll_places_by(delta_y, size);
+        }
+
         let old_x = self.scroll_x;
         let old_y = self.scroll_y;
         match self.view_mode {
@@ -5523,6 +5599,24 @@ impl ShellScene {
         }
         let scrolled = (self.scroll_x - old_x).abs() > f32::EPSILON
             || (self.scroll_y - old_y).abs() > f32::EPSILON;
+        let hover_changed = self.refresh_hover(size);
+        scrolled || hover_changed
+    }
+
+    fn clamp_places_scroll(&mut self, size: PhysicalSize<u32>) {
+        self.places_scroll_y = self
+            .places_scroll_y
+            .clamp(0.0, self.max_places_scroll_y(size));
+    }
+
+    fn scroll_places_by(&mut self, delta_y: f32, size: PhysicalSize<u32>) -> bool {
+        let old_y = self.places_scroll_y;
+        self.places_scroll_y =
+            (self.places_scroll_y + delta_y).clamp(0.0, self.max_places_scroll_y(size));
+        let scrolled = (self.places_scroll_y - old_y).abs() > f32::EPSILON;
+        if scrolled {
+            self.places_scroll_changes += 1;
+        }
         let hover_changed = self.refresh_hover(size);
         scrolled || hover_changed
     }
@@ -6329,7 +6423,7 @@ impl WgpuState {
             || self.last_log.elapsed() >= Duration::from_secs(1)
         {
             eprintln!(
-                "[fika-wgpu] frame={} reason={} view={} zoom={} zoom_changes={} path={} entries={} filtered={} show_hidden={} hidden_changes={} location_active={} location_changes={} filter_active={} filter_changes={} places={} place_hover={} places_changes={} visible={} selected={} hover={} context={} context_menu={} context_changes={} context_actions={} properties={} properties_changes={} create_dialog={} create_changes={} rename_dialog={} rename_changes={} open_changes={} copy_location_changes={} file_clipboard_changes={} paste_changes={} trash_changes={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} path_changes={} reloads={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_cache={}/{} entries={} bytes={} batches={} scroll_x={:.1} scroll_y={:.1} layout={}us text_raster={}us text_atlas={}x{}:{}b render={}us",
+                "[fika-wgpu] frame={} reason={} view={} zoom={} zoom_changes={} path={} entries={} filtered={} show_hidden={} hidden_changes={} location_active={} location_changes={} filter_active={} filter_changes={} places={} place_hover={} places_changes={} places_scroll_y={:.1} places_scroll_changes={} visible={} selected={} hover={} context={} context_menu={} context_changes={} context_actions={} properties={} properties_changes={} create_dialog={} create_changes={} rename_dialog={} rename_changes={} open_changes={} copy_location_changes={} file_clipboard_changes={} paste_changes={} trash_changes={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} path_changes={} reloads={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_cache={}/{} entries={} bytes={} batches={} scroll_x={:.1} scroll_y={:.1} layout={}us text_raster={}us text_atlas={}x{}:{}b render={}us",
                 self.frame_count,
                 reason,
                 scene.view_mode.as_str(),
@@ -6347,6 +6441,8 @@ impl WgpuState {
                 scene.places.len(),
                 scene.hovered_place.map(|index| index as i64).unwrap_or(-1),
                 scene.places_changes,
+                scene.places_scroll_y,
+                scene.places_scroll_changes,
                 scene_frame.visible_items,
                 scene.selection.len(),
                 scene.hovered_index.map(|index| index as i64).unwrap_or(-1),
@@ -9541,6 +9637,7 @@ mod tests {
             zoom_step: 0,
             scroll_x: 0.0,
             scroll_y: 0.0,
+            places_scroll_y: 0.0,
             pointer: None,
             hovered_index: None,
             hovered_place: None,
@@ -9566,6 +9663,7 @@ mod tests {
             paste_changes: 0,
             trash_changes: 0,
             places_changes: 0,
+            places_scroll_changes: 0,
             keyboard_navigation: 0,
             rubber_band_updates: 0,
             view_switches: 0,
@@ -9605,6 +9703,99 @@ mod tests {
         assert!(scene.set_pointer(item_point, size));
         assert_eq!(scene.hovered_place, None);
         assert_eq!(scene.hovered_index, Some(0));
+    }
+
+    #[test]
+    fn places_sidebar_scroll_is_independent_from_file_content_scroll() {
+        let entries = (0..80)
+            .map(|index| test_entry(&format!("entry-{index:02}.txt"), false))
+            .collect::<Vec<_>>();
+        let mut scene = test_scene(entries, ShellViewMode::Icons);
+        scene.places = (0..28)
+            .map(|index| {
+                ShellPlace::new(
+                    "",
+                    "B",
+                    format!("Place {index:02}"),
+                    PathBuf::from(format!("/tmp/place-{index:02}")),
+                    true,
+                )
+            })
+            .collect();
+        let size = PhysicalSize::new(700, 220);
+        assert!(scene.max_places_scroll_y(size) > 0.0);
+        assert!(scene.max_scroll_y(size) > 0.0);
+
+        scene.pointer = Some(ViewPoint {
+            x: PLACES_SIDEBAR_PADDING_X + 2.0,
+            y: TOP_BAR_HEIGHT + 10.0,
+        });
+        assert!(scene.scroll_by(90.0, size));
+        assert!(scene.places_scroll_y > 0.0);
+        assert_eq!(scene.scroll_y, 0.0);
+        assert_eq!(scene.places_scroll_changes, 1);
+
+        scene.pointer = Some(ViewPoint {
+            x: scene.content_origin_x(size) + 10.0,
+            y: scene.content_origin_y() + 10.0,
+        });
+        assert!(scene.scroll_by(90.0, size));
+        assert!(scene.scroll_y > 0.0);
+        assert_eq!(scene.places_scroll_changes, 1);
+    }
+
+    #[test]
+    fn places_row_hit_testing_follows_sidebar_scroll_offset() {
+        let mut scene = test_scene(Vec::new(), ShellViewMode::Icons);
+        scene.places = (0..16)
+            .map(|index| {
+                ShellPlace::new(
+                    "",
+                    "B",
+                    format!("Place {index:02}"),
+                    PathBuf::from(format!("/tmp/place-{index:02}")),
+                    true,
+                )
+            })
+            .collect();
+        let size = PhysicalSize::new(700, 160);
+        let point = ViewPoint {
+            x: PLACES_SIDEBAR_PADDING_X + 6.0,
+            y: TOP_BAR_HEIGHT + PLACES_SIDEBAR_TOP_PADDING + 6.0,
+        };
+
+        assert_eq!(scene.place_index_at_screen_point(point, size), Some(0));
+        assert!(scene.scroll_places_by(PLACES_ROW_HEIGHT + PLACES_ROW_GAP, size));
+        assert_eq!(scene.place_index_at_screen_point(point, size), Some(1));
+    }
+
+    #[test]
+    fn places_scrollbar_thumb_moves_with_sidebar_scroll() {
+        let mut scene = test_scene(Vec::new(), ShellViewMode::Icons);
+        scene.places = (0..24)
+            .map(|index| {
+                ShellPlace::new(
+                    "",
+                    "B",
+                    format!("Place {index:02}"),
+                    PathBuf::from(format!("/tmp/place-{index:02}")),
+                    true,
+                )
+            })
+            .collect();
+        let size = PhysicalSize::new(700, 220);
+        let before = scene
+            .places_scrollbar_thumb_rect(size)
+            .expect("overflowing places should show a scrollbar thumb");
+
+        assert!(scene.scroll_places_by(96.0, size));
+        let after = scene
+            .places_scrollbar_thumb_rect(size)
+            .expect("scrollbar thumb should remain visible");
+
+        assert!(after.y > before.y);
+        assert_eq!(after.x, before.x);
+        assert_eq!(after.width, before.width);
     }
 
     #[test]
