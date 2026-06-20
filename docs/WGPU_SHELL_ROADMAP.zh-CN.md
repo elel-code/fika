@@ -125,7 +125,9 @@ Shell 拥有：
   支持 Esc 或外部点击关闭，并将 directory item 的 Open、file item 的 Open（通过 GIO
   default-application URI launch）、item Copy Location（通过 shell-owned Wayland text
   clipboard provider）、item Copy/Cut（通过同一 provider 写入 Fika URI-list text encoding）
-  以及 blank menu 的 Refresh 和
+  以及 blank menu Paste（读取 Wayland text clipboard，解码 Fika/GNOME URI-list text 或
+  plain text，调用本地 core transfer/text-paste helper，reload 目录，并在 Cut 成功后清空
+  clipboard）和 Refresh、
   Select All 分派到现有 shell navigation/reload/selection path；其余 pending action 会记录
   日志，并输出 context target/menu counters。Properties 现在会为 item 和 blank-directory
   target 打开轻量 shell-owned metadata overlay。Blank-menu Create New 现在会打开
@@ -134,9 +136,8 @@ Shell 拥有：
   打开最小 shell-owned modal，支持 plain text name capture、校验、真实 `rename`、
   reload，并选中重命名后的条目。Move to Trash 现在会把 context target 解析为点击条目
   或当前 multi-selection，显式拒绝 remote paths，调用 core XDG trash handling，reload
-  pane，并清理 stale context state。Cut 会显式拒绝 remote paths。Open With
-  chooser/default-application selection、clipboard read/Paste 执行、多 MIME `text/uri-list`
-  clipboard export/import、Trash view
+  pane，并清理 stale context state。Cut 和 Paste 会显式拒绝 remote paths。Open With
+  chooser/default-application selection、多 MIME `text/uri-list` clipboard export/import、Trash view
   restore/delete/empty flows、undo、更完整 properties、完整 inline rename、完整 Create New
   子菜单/模板和 new-pane dispatch 仍留到 Phase 4。
 - 空白区域左键拖动现在通过同一 retained Icons geometry 执行 rubber-band selection。
@@ -177,7 +178,7 @@ Shell 拥有：
   会通过同一 projection 保留或裁剪。
 - `[fika-wgpu]` 日志包含 view mode、path、entry count、visible item count、quad count、draw
   batch count、selected count、hovered item index、active rubber-band state、
-  context target kind、context menu state、properties overlay state、hit-test/selection/keyboard navigation/rubber-band/view-switch/path-change/open/copy-location/file-clipboard/reload/location/filter/hidden counters、zoom percent
+  context target kind、context menu state、properties overlay state、hit-test/selection/keyboard navigation/rubber-band/view-switch/path-change/open/copy-location/file-clipboard/paste/reload/location/filter/hidden counters、zoom percent
   和 zoom-change counters、icon count、icon cache hit/miss count、icon cache bytes、icon atlas bytes、
   icon resolve/raster time、text label count、text cache hit/miss count、text cache bytes、text atlas bytes、
   render reason、layout time、text raster time、render time 和 `scroll_x` / `scroll_y`

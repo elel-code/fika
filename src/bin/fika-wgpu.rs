@@ -13,10 +13,11 @@ use cosmic_text::{
     Wrap,
 };
 use fika_core::{
-    CompactLayout, CompactLayoutOptions, Entry, FileClipboardRole, IconsLayout, IconsLayoutOptions,
-    NameFilter, ViewPoint, ViewRect, ViewSize, complete_location_input, encode_file_clipboard_text,
-    file_ops, format_modified_secs, format_size, is_network_path, network_uri_from_path,
-    read_entries_sync, resolve_location_input,
+    CompactLayout, CompactLayoutOptions, Entry, FileClipboardRole, FileTransferMode, IconsLayout,
+    IconsLayoutOptions, NameFilter, PaneId, TransferTaskResult, ViewPoint, ViewRect, ViewSize,
+    complete_location_input, decode_file_clipboard_text, encode_file_clipboard_text, file_ops,
+    format_modified_secs, format_size, is_network_path, network_uri_from_path, paste_text_result,
+    read_entries_sync, resolve_location_input, transfer_paths_result,
 };
 use gio::prelude::FileExt;
 use raw_window_handle::{HasDisplayHandle, RawDisplayHandle};
@@ -89,6 +90,7 @@ const ZOOM_STEP_SCALE: f32 = 0.12;
 const AUTO_CYCLE_INTERVAL: Duration = Duration::from_secs(1);
 const DOUBLE_CLICK_MAX_INTERVAL: Duration = Duration::from_millis(500);
 const DOUBLE_CLICK_MAX_DISTANCE: f32 = 6.0;
+const WGPU_SHELL_PANE_ID: PaneId = PaneId(1);
 
 fn main() -> Result<(), Box<dyn Error>> {
     let Some(options) = parse_start_options()? else {
@@ -340,6 +342,12 @@ impl ShellClipboard {
     fn store_text(&self, text: &str) {
         match self {
             Self::Wayland(clipboard) => clipboard.store(text.to_string()),
+        }
+    }
+
+    fn load_text(&self) -> Result<String, String> {
+        match self {
+            Self::Wayland(clipboard) => clipboard.load().map_err(|error| error.to_string()),
         }
     }
 }
@@ -959,7 +967,8 @@ impl FikaWgpuApp {
                     window.request_redraw();
                 }
             }
-            ShellContextMenuAction::OpenInNewPane | ShellContextMenuAction::Paste => {
+            ShellContextMenuAction::Paste => self.paste_from_clipboard(event_loop),
+            ShellContextMenuAction::OpenInNewPane => {
                 eprintln!(
                     "[fika-wgpu] context-action-pending action={} target={}",
                     action.as_str(),
@@ -991,6 +1000,48 @@ impl FikaWgpuApp {
             }
             Err(error) => {
                 eprintln!("[fika-wgpu] trash-error {error}");
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+            }
+        }
+    }
+
+    fn paste_from_clipboard(&mut self, event_loop: &dyn ActiveEventLoop) {
+        let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
+            return;
+        };
+        let Some(clipboard) = self.clipboard.as_ref() else {
+            eprintln!("[fika-wgpu] paste-error error=clipboard-unavailable");
+            if let Some(window) = self.window.as_ref() {
+                window.request_redraw();
+            }
+            return;
+        };
+        let text = match clipboard.load_text() {
+            Ok(text) => text,
+            Err(error) => {
+                eprintln!("[fika-wgpu] paste-error load={error}");
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+                return;
+            }
+        };
+        match self.scene.paste_clipboard_text_from_context(&text, size) {
+            Ok(result) if result.changed() => {
+                if result.clear_clipboard && result.failure_count == 0 {
+                    clipboard.store_text("");
+                }
+                self.present_scene_change(event_loop, "paste");
+            }
+            Ok(_) => {
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+            }
+            Err(error) => {
+                eprintln!("[fika-wgpu] paste-error {error}");
                 if let Some(window) = self.window.as_ref() {
                     window.request_redraw();
                 }
@@ -2134,6 +2185,29 @@ struct FileClipboardExportRequest {
     text: String,
 }
 
+#[derive(Clone, Debug)]
+struct ShellPasteResult {
+    mode: FileTransferMode,
+    success_count: usize,
+    failure_count: usize,
+    clear_clipboard: bool,
+}
+
+impl ShellPasteResult {
+    fn from_transfer(result: &TransferTaskResult) -> Self {
+        Self {
+            mode: result.mode,
+            success_count: result.success_count,
+            failure_count: result.failure_count,
+            clear_clipboard: result.clear_clipboard,
+        }
+    }
+
+    fn changed(&self) -> bool {
+        self.success_count > 0
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct ShellTrashResult {
     success_count: usize,
@@ -2189,6 +2263,7 @@ struct ShellScene {
     open_changes: u64,
     copy_location_changes: u64,
     file_clipboard_changes: u64,
+    paste_changes: u64,
     trash_changes: u64,
     keyboard_navigation: u64,
     rubber_band_updates: u64,
@@ -2263,6 +2338,7 @@ impl ShellScene {
             open_changes: 0,
             copy_location_changes: 0,
             file_clipboard_changes: 0,
+            paste_changes: 0,
             trash_changes: 0,
             keyboard_navigation: 0,
             rubber_band_updates: 0,
@@ -3090,6 +3166,73 @@ impl ShellScene {
             request.text.len(),
             self.file_clipboard_changes
         );
+    }
+
+    fn context_target_paste_directory(&self) -> Option<PathBuf> {
+        match self.context_target.as_ref()? {
+            ShellContextTarget::Blank { path } => Some(path.clone()),
+            _ => None,
+        }
+    }
+
+    fn paste_clipboard_text_from_context(
+        &mut self,
+        clipboard_text: &str,
+        size: PhysicalSize<u32>,
+    ) -> Result<ShellPasteResult, String> {
+        let target_dir = self
+            .context_target_paste_directory()
+            .unwrap_or_else(|| self.path.clone());
+        if is_network_path(&target_dir) {
+            return Err("remote paste target is not available yet".to_string());
+        }
+        if clipboard_text.trim().is_empty() {
+            return Err("clipboard is empty".to_string());
+        }
+
+        let transfer = if let Some(payload) = decode_file_clipboard_text(clipboard_text) {
+            if payload.paths.iter().any(|path| is_network_path(path)) {
+                return Err("remote paste source is not available yet".to_string());
+            }
+            let mode = match payload.role {
+                FileClipboardRole::Copy => FileTransferMode::Copy,
+                FileClipboardRole::Cut => FileTransferMode::Move,
+            };
+            transfer_paths_result(
+                WGPU_SHELL_PANE_ID,
+                target_dir.clone(),
+                mode,
+                payload.paths,
+                "Paste",
+                payload.role == FileClipboardRole::Cut,
+                None,
+            )
+        } else {
+            paste_text_result(WGPU_SHELL_PANE_ID, target_dir.clone(), clipboard_text)
+        };
+
+        let result = ShellPasteResult::from_transfer(&transfer);
+        self.paste_changes += 1;
+        eprintln!(
+            "[fika-wgpu] paste mode={} target={} success={} failure={} clear_clipboard={} changes={}",
+            result.mode.label(),
+            target_dir.display(),
+            result.success_count,
+            result.failure_count,
+            result.clear_clipboard as u8,
+            self.paste_changes
+        );
+
+        if result.changed() {
+            self.context_target = None;
+            self.context_menu = None;
+            self.properties_overlay = None;
+            self.create_dialog = None;
+            self.rename_dialog = None;
+            self.rubber_band = None;
+            self.reload_current_path(size)?;
+        }
+        Ok(result)
     }
 
     fn context_target_item_paths(&self) -> Result<Option<Vec<PathBuf>>, String> {
@@ -5628,7 +5771,7 @@ impl WgpuState {
             || self.last_log.elapsed() >= Duration::from_secs(1)
         {
             eprintln!(
-                "[fika-wgpu] frame={} reason={} view={} zoom={} zoom_changes={} path={} entries={} filtered={} show_hidden={} hidden_changes={} location_active={} location_changes={} filter_active={} filter_changes={} visible={} selected={} hover={} context={} context_menu={} context_changes={} context_actions={} properties={} properties_changes={} create_dialog={} create_changes={} rename_dialog={} rename_changes={} open_changes={} copy_location_changes={} file_clipboard_changes={} trash_changes={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} path_changes={} reloads={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_cache={}/{} entries={} bytes={} batches={} scroll_x={:.1} scroll_y={:.1} layout={}us text_raster={}us text_atlas={}x{}:{}b render={}us",
+                "[fika-wgpu] frame={} reason={} view={} zoom={} zoom_changes={} path={} entries={} filtered={} show_hidden={} hidden_changes={} location_active={} location_changes={} filter_active={} filter_changes={} visible={} selected={} hover={} context={} context_menu={} context_changes={} context_actions={} properties={} properties_changes={} create_dialog={} create_changes={} rename_dialog={} rename_changes={} open_changes={} copy_location_changes={} file_clipboard_changes={} paste_changes={} trash_changes={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} path_changes={} reloads={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_cache={}/{} entries={} bytes={} batches={} scroll_x={:.1} scroll_y={:.1} layout={}us text_raster={}us text_atlas={}x{}:{}b render={}us",
                 self.frame_count,
                 reason,
                 scene.view_mode.as_str(),
@@ -5663,6 +5806,7 @@ impl WgpuState {
                 scene.open_changes,
                 scene.copy_location_changes,
                 scene.file_clipboard_changes,
+                scene.paste_changes,
                 scene.trash_changes,
                 scene.rubber_band.as_ref().is_some_and(|band| band.active) as u8,
                 scene.hit_tests,
@@ -8614,6 +8758,7 @@ mod tests {
             open_changes: 0,
             copy_location_changes: 0,
             file_clipboard_changes: 0,
+            paste_changes: 0,
             trash_changes: 0,
             keyboard_navigation: 0,
             rubber_band_updates: 0,
@@ -9091,6 +9236,98 @@ mod tests {
                 .unwrap_err()
                 .contains("remote cut")
         );
+    }
+
+    #[test]
+    fn paste_file_clipboard_copies_files_reloads_and_keeps_clipboard() {
+        let source_root = test_dir("paste-file-source");
+        let target_root = test_dir("paste-file-target");
+        fs::create_dir_all(&source_root).unwrap();
+        fs::create_dir_all(&target_root).unwrap();
+        fs::write(source_root.join("source.txt"), b"source").unwrap();
+        let size = PhysicalSize::new(420, 260);
+        let mut scene = ShellScene::load(target_root.clone(), ShellViewMode::Icons).unwrap();
+        scene.context_target = Some(ShellContextTarget::Blank {
+            path: target_root.clone(),
+        });
+        let clipboard_text =
+            encode_file_clipboard_text(FileClipboardRole::Copy, &[source_root.join("source.txt")]);
+
+        let result = scene
+            .paste_clipboard_text_from_context(&clipboard_text, size)
+            .unwrap();
+
+        assert_eq!(result.mode, FileTransferMode::Copy);
+        assert_eq!(result.success_count, 1);
+        assert_eq!(result.failure_count, 0);
+        assert!(!result.clear_clipboard);
+        assert_eq!(scene.paste_changes, 1);
+        assert_eq!(scene.directory_reloads, 1);
+        assert!(target_root.join("source.txt").is_file());
+        assert_eq!(fs::read(target_root.join("source.txt")).unwrap(), b"source");
+        assert!(entry_index_by_name(&scene.entries, "source.txt").is_some());
+
+        fs::remove_dir_all(source_root).unwrap();
+        fs::remove_dir_all(target_root).unwrap();
+    }
+
+    #[test]
+    fn paste_cut_file_moves_file_and_requests_clipboard_clear() {
+        let source_root = test_dir("paste-cut-source");
+        let target_root = test_dir("paste-cut-target");
+        fs::create_dir_all(&source_root).unwrap();
+        fs::create_dir_all(&target_root).unwrap();
+        fs::write(source_root.join("move.txt"), b"move").unwrap();
+        let size = PhysicalSize::new(420, 260);
+        let mut scene = ShellScene::load(target_root.clone(), ShellViewMode::Icons).unwrap();
+        scene.context_target = Some(ShellContextTarget::Blank {
+            path: target_root.clone(),
+        });
+        let clipboard_text =
+            encode_file_clipboard_text(FileClipboardRole::Cut, &[source_root.join("move.txt")]);
+
+        let result = scene
+            .paste_clipboard_text_from_context(&clipboard_text, size)
+            .unwrap();
+
+        assert_eq!(result.mode, FileTransferMode::Move);
+        assert_eq!(result.success_count, 1);
+        assert_eq!(result.failure_count, 0);
+        assert!(result.clear_clipboard);
+        assert!(!source_root.join("move.txt").exists());
+        assert!(target_root.join("move.txt").is_file());
+        assert_eq!(scene.paste_changes, 1);
+        assert_eq!(scene.directory_reloads, 1);
+
+        fs::remove_dir_all(source_root).unwrap();
+        fs::remove_dir_all(target_root).unwrap();
+    }
+
+    #[test]
+    fn paste_plain_text_creates_unique_text_file() {
+        let root = test_dir("paste-text");
+        fs::create_dir_all(&root).unwrap();
+        let size = PhysicalSize::new(420, 260);
+        let mut scene = ShellScene::load(root.clone(), ShellViewMode::Icons).unwrap();
+        scene.context_target = Some(ShellContextTarget::Blank { path: root.clone() });
+
+        let result = scene
+            .paste_clipboard_text_from_context("hello from clipboard", size)
+            .unwrap();
+
+        assert_eq!(result.mode, FileTransferMode::Copy);
+        assert_eq!(result.success_count, 1);
+        assert_eq!(result.failure_count, 0);
+        assert!(!result.clear_clipboard);
+        assert_eq!(scene.paste_changes, 1);
+        assert_eq!(scene.directory_reloads, 1);
+        assert_eq!(
+            fs::read_to_string(root.join("Pasted Text.txt")).unwrap(),
+            "hello from clipboard"
+        );
+        assert!(entry_index_by_name(&scene.entries, "Pasted Text.txt").is_some());
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
