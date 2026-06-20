@@ -66,6 +66,10 @@ pub(crate) fn background_tasks_panel(
     let Some((title, detail, percent, task_id, state)) = summary else {
         return div().id("background-tasks-empty");
     };
+    let summary_view_id = task_id.map_or_else(
+        || "background-task-view-summary-history".to_string(),
+        |task_id| format!("background-task-view-summary-{}", task_id.0),
+    );
 
     div()
         .id("background-tasks-panel")
@@ -83,6 +87,7 @@ pub(crate) fn background_tasks_panel(
             detail.clone(),
             state,
             task_id,
+            summary_view_id,
             cx,
         ))
         .when(has_active, |panel| panel.child(progress_bar(percent)))
@@ -137,7 +142,12 @@ pub(crate) fn background_tasks_panel(
         .when(expanded, |panel| {
             panel
                 .children(active.into_iter().map(|task| active_row(task, cx)))
-                .children(history.into_iter().map(|task| history_row(task, cx)))
+                .children(
+                    history
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, task)| history_row(index, task, cx)),
+                )
         })
 }
 
@@ -317,6 +327,7 @@ fn summary_header(
     detail: String,
     state: Option<BackgroundTaskState>,
     task_id: Option<BackgroundTaskId>,
+    view_id: String,
     cx: &mut Context<FikaApp>,
 ) -> Div {
     let detail_title = title.clone();
@@ -338,7 +349,7 @@ fn summary_header(
         )
         .child(
             div()
-                .id("background-task-view")
+                .id(view_id)
                 .flex_none()
                 .px_2()
                 .py_1()
@@ -347,17 +358,16 @@ fn summary_header(
                 .text_color(rgb(0x2f6fed))
                 .hover(|button| button.bg(rgb(0xeaf1ff)))
                 .cursor_pointer()
-                .on_click(
-                    cx.listener(move |this, event: &gpui::ClickEvent, _window, cx| {
-                        if event.standard_click() {
-                            this.show_background_task_detail_dialog(
-                                detail_title.clone(),
-                                detail_body.clone(),
-                                state,
-                            );
-                            cx.stop_propagation();
-                            cx.notify();
-                        }
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _event: &gpui::MouseDownEvent, _window, cx| {
+                        this.show_background_task_detail_dialog(
+                            detail_title.clone(),
+                            detail_body.clone(),
+                            state,
+                        );
+                        cx.stop_propagation();
+                        cx.notify();
                     }),
                 )
                 .child("View"),
@@ -420,7 +430,11 @@ fn task_detail_text(text: String) -> Div {
         .child(text)
 }
 
-fn history_row(snapshot: BackgroundTaskHistorySnapshot, cx: &mut Context<FikaApp>) -> Div {
+fn history_row(
+    index: usize,
+    snapshot: BackgroundTaskHistorySnapshot,
+    cx: &mut Context<FikaApp>,
+) -> Div {
     let color = match snapshot.state {
         BackgroundTaskState::Complete => rgb(0x276749),
         BackgroundTaskState::Failed => rgb(0x9b1c1c),
@@ -440,6 +454,7 @@ fn history_row(snapshot: BackgroundTaskHistorySnapshot, cx: &mut Context<FikaApp
                 snapshot.detail.clone(),
                 Some(state),
                 None,
+                format!("background-task-view-history-{index}"),
                 cx,
             )
             .text_color(color),
@@ -483,19 +498,17 @@ fn active_row(snapshot: BackgroundTaskSnapshot, cx: &mut Context<FikaApp>) -> Di
                         .text_color(rgb(0x2f6fed))
                         .hover(|button| button.bg(rgb(0xeaf1ff)))
                         .cursor_pointer()
-                        .on_click({
+                        .on_mouse_down(MouseButton::Left, {
                             let title = snapshot.title.clone();
                             let detail = snapshot.detail.clone();
-                            cx.listener(move |this, event: &gpui::ClickEvent, _window, cx| {
-                                if event.standard_click() {
-                                    this.show_background_task_detail_dialog(
-                                        title.clone(),
-                                        detail.clone(),
-                                        None,
-                                    );
-                                    cx.stop_propagation();
-                                    cx.notify();
-                                }
+                            cx.listener(move |this, _event: &gpui::MouseDownEvent, _window, cx| {
+                                this.show_background_task_detail_dialog(
+                                    title.clone(),
+                                    detail.clone(),
+                                    None,
+                                );
+                                cx.stop_propagation();
+                                cx.notify();
                             })
                         })
                         .child("View"),
