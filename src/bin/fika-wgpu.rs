@@ -529,9 +529,6 @@ impl ApplicationHandler for FikaWgpuApp {
                 button,
                 ..
             } => {
-                if button.mouse_button() != Some(MouseButton::Left) {
-                    return;
-                }
                 let Some(renderer) = self.renderer.as_ref() else {
                     return;
                 };
@@ -539,6 +536,21 @@ impl ApplicationHandler for FikaWgpuApp {
                     x: position.x as f32,
                     y: position.y as f32,
                 };
+                let Some(mouse_button) = button.mouse_button() else {
+                    return;
+                };
+                if mouse_button == MouseButton::Right {
+                    if state == ElementState::Pressed
+                        && self.scene.open_context_target(point, renderer.size)
+                        && let Some(window) = self.window.as_ref()
+                    {
+                        window.request_redraw();
+                    }
+                    return;
+                }
+                if mouse_button != MouseButton::Left {
+                    return;
+                }
                 if state == ElementState::Pressed
                     && self
                         .scene
@@ -1330,6 +1342,34 @@ impl LocationDraft {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum ShellContextTarget {
+    Item {
+        index: usize,
+        path: PathBuf,
+        is_dir: bool,
+        selection_count: usize,
+    },
+    Blank {
+        path: PathBuf,
+    },
+}
+
+impl ShellContextTarget {
+    fn kind(&self) -> &'static str {
+        match self {
+            Self::Item { .. } => "item",
+            Self::Blank { .. } => "blank",
+        }
+    }
+
+    fn log_path(&self) -> &Path {
+        match self {
+            Self::Item { path, .. } | Self::Blank { path } => path,
+        }
+    }
+}
+
 struct ShellScene {
     path: PathBuf,
     view_mode: ShellViewMode,
@@ -1348,9 +1388,11 @@ struct ShellScene {
     last_primary_click: Option<PrimaryClick>,
     history: PathHistory,
     selection: ShellSelection,
+    context_target: Option<ShellContextTarget>,
     rubber_band: Option<RubberBand>,
     hit_tests: u64,
     selection_changes: u64,
+    context_target_changes: u64,
     keyboard_navigation: u64,
     rubber_band_updates: u64,
     view_switches: u64,
@@ -1408,9 +1450,11 @@ impl ShellScene {
             last_primary_click: None,
             history: PathHistory::default(),
             selection: ShellSelection::default(),
+            context_target: None,
             rubber_band: None,
             hit_tests: 0,
             selection_changes: 0,
+            context_target_changes: 0,
             keyboard_navigation: 0,
             rubber_band_updates: 0,
             view_switches: 0,
@@ -1551,6 +1595,7 @@ impl ShellScene {
         self.scroll_y = 0.0;
         self.location_draft = None;
         self.selection = ShellSelection::default();
+        self.context_target = None;
         self.rubber_band = None;
         self.last_primary_click = None;
         self.path_changes += 1;
@@ -1953,6 +1998,98 @@ impl ShellScene {
         }
     }
 
+    fn context_target_for_screen_point(
+        &self,
+        point: ViewPoint,
+        size: PhysicalSize<u32>,
+    ) -> Option<ShellContextTarget> {
+        if !self.content_screen_rect(size).contains(point) {
+            return None;
+        }
+        if let Some(index) = self.hit_test_screen_point(point, size) {
+            let entry = self.entries.get(index)?;
+            let selection_count = if self.selection.contains(index) {
+                self.selection.len().max(1)
+            } else {
+                1
+            };
+            return Some(ShellContextTarget::Item {
+                index,
+                path: self.entry_path_for_index(index)?,
+                is_dir: entry.is_dir,
+                selection_count,
+            });
+        }
+        Some(ShellContextTarget::Blank {
+            path: self.path.clone(),
+        })
+    }
+
+    fn open_context_target(&mut self, point: ViewPoint, size: PhysicalSize<u32>) -> bool {
+        self.pointer = Some(point);
+        let target = self.context_target_for_screen_point(point, size);
+        let old_target = self.context_target.clone();
+        let old_rubber_band_active = self.rubber_band.as_ref().is_some_and(|band| band.active);
+        let rubber_band_cleared = self.rubber_band.take().is_some();
+        let hover = target.as_ref().and_then(|target| match target {
+            ShellContextTarget::Item { index, .. } => Some(*index),
+            ShellContextTarget::Blank { .. } => None,
+        });
+        let hover_changed = self.set_hovered_index(hover);
+
+        let mut selection_changed = false;
+        if let Some(ShellContextTarget::Item { index, .. }) = target.as_ref() {
+            selection_changed = if self.selection.contains(*index) {
+                self.selection.focus_selected(*index)
+            } else {
+                self.selection.apply_click(Some(*index), false, false)
+            };
+            if selection_changed {
+                self.selection_changes += 1;
+            }
+        }
+
+        let target_changed = old_target != target;
+        self.context_target = target;
+        if target_changed {
+            self.context_target_changes += 1;
+            self.log_context_target();
+        }
+
+        target_changed
+            || hover_changed
+            || selection_changed
+            || rubber_band_cleared
+            || old_rubber_band_active
+    }
+
+    fn log_context_target(&self) {
+        match self.context_target.as_ref() {
+            Some(ShellContextTarget::Item {
+                index,
+                path,
+                is_dir,
+                selection_count,
+            }) => eprintln!(
+                "[fika-wgpu] context-target kind=item index={} dir={} selection={} path={} changes={}",
+                index,
+                *is_dir as u8,
+                selection_count,
+                path.display(),
+                self.context_target_changes
+            ),
+            Some(ShellContextTarget::Blank { path }) => eprintln!(
+                "[fika-wgpu] context-target kind=blank path={} changes={}",
+                path.display(),
+                self.context_target_changes
+            ),
+            None => eprintln!(
+                "[fika-wgpu] context-target kind=none changes={}",
+                self.context_target_changes
+            ),
+        }
+    }
+
     fn selected_directory_path(&self) -> Option<PathBuf> {
         self.selection
             .focus_or_first_selected()
@@ -1968,12 +2105,20 @@ impl ShellScene {
 
     fn directory_path_for_index(&self, index: usize) -> Option<PathBuf> {
         let entry = self.entries.get(index)?;
-        entry.is_dir.then(|| {
+        entry
+            .is_dir
+            .then(|| self.entry_path_for_index(index))
+            .flatten()
+    }
+
+    fn entry_path_for_index(&self, index: usize) -> Option<PathBuf> {
+        let entry = self.entries.get(index)?;
+        Some(
             entry
                 .target_path
                 .clone()
-                .unwrap_or_else(|| self.path.join(entry.name.as_ref()))
-        })
+                .unwrap_or_else(|| self.path.join(entry.name.as_ref())),
+        )
     }
 
     fn directory_activation_for_primary_press(
@@ -2660,6 +2805,13 @@ impl ShellScene {
         if let Some(value) = self.location_draft_value() {
             status.push_str(&format!(" | location {:?}", value));
         }
+        if let Some(target) = self.context_target.as_ref() {
+            status.push_str(&format!(
+                " | context {} {}",
+                target.kind(),
+                target.log_path().display()
+            ));
+        }
         if self.filter_active || !self.filter_pattern.is_empty() {
             status.push_str(&format!(
                 " | filter {:?} ({})",
@@ -3131,6 +3283,21 @@ impl ShellSelection {
         old_selected != self.selected || old_anchor != self.anchor || old_focus != self.focus
     }
 
+    fn focus_selected(&mut self, index: usize) -> bool {
+        if !self.selected.contains(&index) {
+            return false;
+        }
+        let old_anchor = self.anchor;
+        let old_focus = self.focus;
+
+        if self.anchor.is_none() {
+            self.anchor = Some(index);
+        }
+        self.focus = Some(index);
+
+        old_anchor != self.anchor || old_focus != self.focus
+    }
+
     fn apply_click(&mut self, hit: Option<usize>, extend: bool, toggle: bool) -> bool {
         let old_selected = self.selected.clone();
         let old_anchor = self.anchor;
@@ -3521,7 +3688,7 @@ impl WgpuState {
             || self.last_log.elapsed() >= Duration::from_secs(1)
         {
             eprintln!(
-                "[fika-wgpu] frame={} reason={} view={} zoom={} zoom_changes={} path={} entries={} filtered={} show_hidden={} hidden_changes={} location_active={} location_changes={} filter_active={} filter_changes={} visible={} selected={} hover={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} path_changes={} reloads={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_cache={}/{} entries={} bytes={} batches={} scroll_x={:.1} scroll_y={:.1} layout={}us text_raster={}us text_atlas={}x{}:{}b render={}us",
+                "[fika-wgpu] frame={} reason={} view={} zoom={} zoom_changes={} path={} entries={} filtered={} show_hidden={} hidden_changes={} location_active={} location_changes={} filter_active={} filter_changes={} visible={} selected={} hover={} context={} context_changes={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} path_changes={} reloads={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_cache={}/{} entries={} bytes={} batches={} scroll_x={:.1} scroll_y={:.1} layout={}us text_raster={}us text_atlas={}x{}:{}b render={}us",
                 self.frame_count,
                 reason,
                 scene.view_mode.as_str(),
@@ -3539,6 +3706,12 @@ impl WgpuState {
                 scene_frame.visible_items,
                 scene.selection.len(),
                 scene.hovered_index.map(|index| index as i64).unwrap_or(-1),
+                scene
+                    .context_target
+                    .as_ref()
+                    .map(ShellContextTarget::kind)
+                    .unwrap_or("none"),
+                scene.context_target_changes,
                 scene.rubber_band.as_ref().is_some_and(|band| band.active) as u8,
                 scene.hit_tests,
                 scene.selection_changes,
@@ -6240,9 +6413,11 @@ mod tests {
             last_primary_click: None,
             history: PathHistory::default(),
             selection: ShellSelection::default(),
+            context_target: None,
             rubber_band: None,
             hit_tests: 0,
             selection_changes: 0,
+            context_target_changes: 0,
             keyboard_navigation: 0,
             rubber_band_updates: 0,
             view_switches: 0,
@@ -6311,6 +6486,121 @@ mod tests {
         assert!(scene.rubber_band.is_none());
         assert_eq!(scene.selection_changes, 2);
         assert!(!scene.apply_selection_command(SelectionCommand::Clear));
+    }
+
+    #[test]
+    fn context_target_selects_unselected_item_from_retained_hit_test() {
+        let mut scene = test_scene(
+            vec![
+                test_entry("alpha.txt", false),
+                test_entry("bravo.txt", false),
+                test_entry("charlie.txt", true),
+            ],
+            ShellViewMode::Icons,
+        );
+        let size = PhysicalSize::new(420, 260);
+        let item = scene
+            .layout(size)
+            .item(2)
+            .expect("third item should layout");
+        let point = ViewPoint {
+            x: item.visual_rect.x + 2.0,
+            y: item.visual_rect.y + scene.content_origin_y() + 2.0,
+        };
+
+        assert!(scene.open_context_target(point, size));
+        assert_eq!(
+            scene.selection.selected.iter().copied().collect::<Vec<_>>(),
+            vec![2]
+        );
+        assert_eq!(scene.selection.focus, Some(2));
+        assert_eq!(scene.hovered_index, Some(2));
+        assert_eq!(scene.selection_changes, 1);
+        assert_eq!(scene.context_target_changes, 1);
+        assert_eq!(
+            scene.context_target,
+            Some(ShellContextTarget::Item {
+                index: 2,
+                path: PathBuf::from("/tmp/charlie.txt"),
+                is_dir: true,
+                selection_count: 1,
+            })
+        );
+    }
+
+    #[test]
+    fn context_target_preserves_multi_selection_for_selected_item() {
+        let mut scene = test_scene(
+            vec![
+                test_entry("alpha.txt", false),
+                test_entry("bravo.txt", false),
+                test_entry("charlie.txt", false),
+            ],
+            ShellViewMode::Icons,
+        );
+        let size = PhysicalSize::new(420, 260);
+        assert!(scene.selection.select_indexes(&[0, 2]));
+        let item = scene
+            .layout(size)
+            .item(0)
+            .expect("first item should layout");
+        let point = ViewPoint {
+            x: item.visual_rect.x + 2.0,
+            y: item.visual_rect.y + scene.content_origin_y() + 2.0,
+        };
+
+        assert!(scene.open_context_target(point, size));
+        assert_eq!(
+            scene.selection.selected.iter().copied().collect::<Vec<_>>(),
+            vec![0, 2]
+        );
+        assert_eq!(scene.selection.focus, Some(0));
+        assert_eq!(
+            scene.context_target,
+            Some(ShellContextTarget::Item {
+                index: 0,
+                path: PathBuf::from("/tmp/alpha.txt"),
+                is_dir: false,
+                selection_count: 2,
+            })
+        );
+    }
+
+    #[test]
+    fn context_target_uses_blank_content_without_rubber_band() {
+        let mut scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
+        let size = PhysicalSize::new(420, 260);
+        assert!(scene.selection.apply_navigation(0, false));
+        scene.rubber_band = Some(RubberBand {
+            start: ViewPoint { x: 0.0, y: 0.0 },
+            current: ViewPoint { x: 12.0, y: 12.0 },
+            active: true,
+            mode: RubberBandMode::Replace,
+            base_selection: scene.selection.clone(),
+        });
+        let point = ViewPoint {
+            x: size.width as f32 - 4.0,
+            y: scene.content_origin_y() + 4.0,
+        };
+
+        assert!(scene.open_context_target(point, size));
+        assert_eq!(scene.selection.len(), 1);
+        assert!(scene.selection.contains(0));
+        assert_eq!(scene.hovered_index, None);
+        assert!(scene.rubber_band.is_none());
+        assert_eq!(
+            scene.context_target,
+            Some(ShellContextTarget::Blank {
+                path: PathBuf::from("/tmp"),
+            })
+        );
+
+        let status_point = ViewPoint {
+            x: 10.0,
+            y: status_bar_rect(size).y + 2.0,
+        };
+        assert!(scene.open_context_target(status_point, size));
+        assert_eq!(scene.context_target, None);
     }
 
     #[test]

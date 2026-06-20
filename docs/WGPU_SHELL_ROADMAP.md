@@ -134,6 +134,13 @@ Current checkpoint:
   retained hit testing. The spike tracks hovered item, single selection,
   Ctrl/Meta toggle selection, and Shift range selection by model index, then
   paints hover/selection state from the same slot projection.
+- Right-click context targeting now also routes through shell-owned retained
+  hit testing. Right-clicking an unselected item syncs selection to that item,
+  right-clicking an already-selected item preserves the multi-selection while
+  focusing the clicked model index, and right-clicking blank content records a
+  blank directory target without starting rubber-band selection. The shell now
+  stores a lightweight context target snapshot and logs context target counters;
+  popup rendering and action dispatch remain Phase 4 work.
 - Blank-space left-drag now runs rubber-band selection through the same
   retained Icons geometry. Plain drag replaces the selection, Shift extends it,
   Ctrl/Meta toggles it against the press-time base selection, and the band is
@@ -184,7 +191,7 @@ Current checkpoint:
   the visibility mode changes.
 - `[fika-wgpu]` logs include view mode, path, entry count, visible item count,
   quad count, selected count, hovered item index, active rubber-band state,
-  hit-test/selection/keyboard navigation/rubber-band/view-switch/path-change
+  context target kind, hit-test/selection/keyboard navigation/rubber-band/view-switch/path-change
   counters, reload/location/filter/hidden counters, zoom percent and zoom-change counters, icon count, icon cache
   hit/miss count, icon cache bytes, icon atlas bytes, icon resolve/raster time,
   text label count, text cache hit/miss count, text cache bytes, text atlas
@@ -208,8 +215,9 @@ Acceptance:
 - [~] Renders visible directory slots with real theme icons when available,
   fallback icons for misses, and real file-name text via texture atlases.
 - [~] Routes basic pointer hover, mouse selection, keyboard navigation,
-  select-all/clear shortcuts, and rubber-band selection through retained
-  geometry. DnD targeting remains pending.
+  select-all/clear shortcuts, right-click context target selection, and
+  rubber-band selection through retained geometry. DnD targeting remains
+  pending.
 - [~] Emits frame timing, visible range, draw-command counters, temporary
   icon/text atlas counters, retained hit-test counters, and bounded
   icon/label-cache counters. Glyph-level and thumbnail atlas counters will
@@ -254,6 +262,8 @@ Places hover, and drag/drop target lookup into shell-owned hit testing.
 
 Acceptance:
 
+- [~] Pane item/blank right-click context target selection is shell-owned for
+  the file view. Places context targets and popup/action routing remain pending.
 - Pane item to pane directory, pane item to Places, Places to pane, external
   path drop, and URI-list clipboard paths are covered by automated or isolated
   smoke runs.
@@ -266,9 +276,12 @@ Implement the surrounding UI needed to make the shell usable: Places, toolbar,
 location bar, filter bar, status bar, context menus, dialogs, and chooser mode.
 
 Current checkpoint: the first chrome slices are a minimal bottom status bar with
-directory/selection/view/zoom summary and a minimal `Ctrl/Meta+F` filter bar.
-Filter text editing is intentionally narrow until the full IME/caret/selection
-text boundary is migrated.
+directory/selection/view/zoom summary, a minimal `Ctrl/Meta+F` filter bar, a
+minimal `Ctrl/Meta+L`/`Ctrl/Meta+D`/`F6` location edit mode, and a lightweight
+file-view context target snapshot for item/blank right-clicks. Filter and
+location text editing remain intentionally narrow until the full
+IME/caret/selection text boundary is migrated; popup context menu rendering and
+action dispatch remain pending.
 
 Acceptance:
 
