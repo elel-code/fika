@@ -24,6 +24,7 @@ use winit::keyboard::{Key, KeyCode, NamedKey, PhysicalKey};
 use winit::window::{Window, WindowAttributes, WindowId};
 
 const TOP_BAR_HEIGHT: f32 = 52.0;
+const STATUS_BAR_HEIGHT: f32 = 28.0;
 const ICONS_ITEM_WIDTH: f32 = 116.0;
 const ICONS_ITEM_HEIGHT: f32 = 106.0;
 const ICONS_ICON_SIZE: f32 = 48.0;
@@ -1023,6 +1024,7 @@ struct ShellScene {
     path: PathBuf,
     view_mode: ShellViewMode,
     entries: Vec<Entry>,
+    dir_count: usize,
     zoom_step: i32,
     scroll_x: f32,
     scroll_y: f32,
@@ -1071,6 +1073,7 @@ impl ShellScene {
             path,
             view_mode,
             entries,
+            dir_count,
             zoom_step: 0,
             scroll_x: 0.0,
             scroll_y: 0.0,
@@ -1109,7 +1112,7 @@ impl ShellScene {
         let previous_path = self.path.clone();
         self.history.push_back(previous_path);
         self.history.clear_forward();
-        self.apply_loaded_path(path, entries, size);
+        self.apply_loaded_path(path, entries, dir_count, size);
 
         self.log_loaded_path(dir_count, &preview, elapsed);
         Ok(true)
@@ -1141,7 +1144,7 @@ impl ShellScene {
         let current_path = self.path.clone();
         self.history.back.pop();
         self.history.push_forward(current_path);
-        self.apply_loaded_path(path, entries, size);
+        self.apply_loaded_path(path, entries, dir_count, size);
         self.log_loaded_path(dir_count, &preview, elapsed);
         Ok(true)
     }
@@ -1165,14 +1168,21 @@ impl ShellScene {
         let current_path = self.path.clone();
         self.history.forward.pop();
         self.history.push_back(current_path);
-        self.apply_loaded_path(path, entries, size);
+        self.apply_loaded_path(path, entries, dir_count, size);
         self.log_loaded_path(dir_count, &preview, elapsed);
         Ok(true)
     }
 
-    fn apply_loaded_path(&mut self, path: PathBuf, entries: Vec<Entry>, size: PhysicalSize<u32>) {
+    fn apply_loaded_path(
+        &mut self,
+        path: PathBuf,
+        entries: Vec<Entry>,
+        dir_count: usize,
+        size: PhysicalSize<u32>,
+    ) {
         self.path = path;
         self.entries = entries;
+        self.dir_count = dir_count;
         self.scroll_x = 0.0;
         self.scroll_y = 0.0;
         self.selection = ShellSelection::default();
@@ -1436,6 +1446,7 @@ impl ShellScene {
         let height = size.height.max(1) as f32;
         let content_origin = self.content_origin_y();
         let viewport_h = self.viewport_height(size);
+        let status_bar = status_bar_rect(size);
 
         push_rect(
             &mut vertices,
@@ -1547,6 +1558,7 @@ impl ShellScene {
             }
         }
         self.push_rubber_band(&mut vertices, content_clip, size);
+        self.push_status_bar(&mut vertices, text, size, visible_items, status_bar);
 
         SceneFrame {
             layout_us: layout_start.elapsed().as_micros(),
@@ -1892,6 +1904,53 @@ impl ShellScene {
         );
     }
 
+    fn push_status_bar(
+        &self,
+        vertices: &mut Vec<QuadVertex>,
+        text: &mut TextFrameBuilder<'_>,
+        size: PhysicalSize<u32>,
+        visible_items: usize,
+        rect: ViewRect,
+    ) {
+        if rect.height <= 0.0 {
+            return;
+        }
+        push_rect(vertices, rect, [0.088, 0.096, 0.104, 1.0], size);
+        push_rect(
+            vertices,
+            ViewRect {
+                x: 0.0,
+                y: rect.y,
+                width: rect.width,
+                height: 1.0,
+            },
+            [0.19, 0.21, 0.23, 1.0],
+            size,
+        );
+
+        let status = format!(
+            "{} entries ({} dirs, {} files) | {} selected | {} visible | {} | {}%",
+            self.entries.len(),
+            self.dir_count,
+            self.entries.len().saturating_sub(self.dir_count),
+            self.selection.len(),
+            visible_items,
+            self.view_mode.label(),
+            self.zoom_percent()
+        );
+        text.push_label(
+            &status,
+            ViewRect {
+                x: 12.0,
+                y: rect.y + 5.0,
+                width: (rect.width - 24.0).max(1.0),
+                height: 18.0,
+            },
+            rect,
+            TextColor::rgb(178, 188, 198),
+        );
+    }
+
     fn content_to_screen(&self, rect: ViewRect) -> ViewRect {
         ViewRect {
             x: rect.x - self.scroll_x,
@@ -1911,7 +1970,16 @@ impl ShellScene {
     }
 
     fn viewport_height(&self, size: PhysicalSize<u32>) -> f32 {
-        (size.height as f32 - self.content_origin_y()).max(1.0)
+        (size.height as f32 - self.content_origin_y() - STATUS_BAR_HEIGHT).max(1.0)
+    }
+
+    fn content_screen_rect(&self, size: PhysicalSize<u32>) -> ViewRect {
+        ViewRect {
+            x: 0.0,
+            y: self.content_origin_y(),
+            width: size.width.max(1) as f32,
+            height: self.viewport_height(size),
+        }
     }
 
     fn clamp_scroll(&mut self, size: PhysicalSize<u32>) {
@@ -1984,6 +2052,9 @@ impl ShellScene {
             }
             return hover_changed || selection_changed;
         }
+        if !self.content_screen_rect(size).contains(click.point) {
+            return hover_changed;
+        }
 
         let Some(start) =
             screen_to_content_point(click.point, self.scroll_offset(), self.content_origin_y())
@@ -2020,8 +2091,7 @@ impl ShellScene {
         let current = clamped_screen_to_content_point(
             point,
             self.scroll_offset(),
-            self.content_origin_y(),
-            size,
+            self.content_screen_rect(size),
         );
         let Some(band) = self.rubber_band.as_mut() else {
             return self.refresh_hover(size);
@@ -2112,6 +2182,9 @@ impl ShellScene {
     }
 
     fn hit_test_screen_point(&self, point: ViewPoint, size: PhysicalSize<u32>) -> Option<usize> {
+        if !self.content_screen_rect(size).contains(point) {
+            return None;
+        }
         let content_point =
             screen_to_content_point(point, self.scroll_offset(), self.content_origin_y())?;
         let layout = self.layout(size);
@@ -4993,17 +5066,12 @@ fn screen_to_content_point(
 fn clamped_screen_to_content_point(
     point: ViewPoint,
     scroll_offset: ViewPoint,
-    content_origin_y: f32,
-    size: PhysicalSize<u32>,
+    content_rect: ViewRect,
 ) -> ViewPoint {
-    let width = size.width.max(1) as f32;
-    let height = size.height.max(1) as f32;
-    let y = point
-        .y
-        .clamp(content_origin_y, height.max(content_origin_y));
+    let y = point.y.clamp(content_rect.y, content_rect.bottom());
     ViewPoint {
-        x: point.x.clamp(0.0, width) + scroll_offset.x,
-        y: y - content_origin_y + scroll_offset.y,
+        x: point.x.clamp(content_rect.x, content_rect.right()) + scroll_offset.x,
+        y: y - content_rect.y + scroll_offset.y,
     }
 }
 
@@ -5234,9 +5302,21 @@ fn path_placeholder_width(path: &std::path::Path, surface_width: f32, path_x: f3
     display_width.min(max_width)
 }
 
+fn status_bar_rect(size: PhysicalSize<u32>) -> ViewRect {
+    let width = size.width.max(1) as f32;
+    let height = size.height.max(1) as f32;
+    let bar_height = STATUS_BAR_HEIGHT.min(height);
+    ViewRect {
+        x: 0.0,
+        y: height - bar_height,
+        width,
+        height: bar_height,
+    }
+}
+
 #[cfg(test)]
 fn content_height(size: PhysicalSize<u32>) -> f32 {
-    (size.height as f32 - TOP_BAR_HEIGHT).max(1.0)
+    (size.height as f32 - TOP_BAR_HEIGHT - STATUS_BAR_HEIGHT).max(1.0)
 }
 
 fn nonzero_size(size: PhysicalSize<u32>) -> PhysicalSize<u32> {
@@ -5288,10 +5368,12 @@ mod tests {
     }
 
     fn test_scene(entries: Vec<Entry>, view_mode: ShellViewMode) -> ShellScene {
+        let dir_count = entries.iter().filter(|entry| entry.is_dir).count();
         ShellScene {
             path: PathBuf::from("/tmp"),
             view_mode,
             entries,
+            dir_count,
             zoom_step: 0,
             scroll_x: 0.0,
             scroll_y: 0.0,
@@ -5829,6 +5911,47 @@ mod tests {
     }
 
     #[test]
+    fn status_bar_reserves_viewport_and_blocks_selection_hits() {
+        let mut scene = test_scene(
+            vec![
+                test_entry("alpha.txt", false),
+                test_entry("bravo.txt", false),
+            ],
+            ShellViewMode::Icons,
+        );
+        let size = PhysicalSize::new(360, 240);
+        let status_bar = status_bar_rect(size);
+
+        assert_eq!(scene.viewport_height(size), 160.0);
+        assert_eq!(status_bar.y, 212.0);
+        assert_eq!(
+            scene.hit_test_screen_point(
+                ViewPoint {
+                    x: 16.0,
+                    y: status_bar.y + 4.0,
+                },
+                size,
+            ),
+            None
+        );
+
+        assert!(scene.selection.apply_navigation(0, false));
+        assert!(!scene.begin_primary_pointer(
+            SelectionClick {
+                point: ViewPoint {
+                    x: 16.0,
+                    y: status_bar.y + 4.0,
+                },
+                extend: false,
+                toggle: false,
+            },
+            size,
+        ));
+        assert_eq!(scene.selection.len(), 1);
+        assert!(scene.selection.contains(0));
+    }
+
+    #[test]
     fn keyboard_navigation_uses_icons_columns_and_page_stride() {
         let size = PhysicalSize::new(360, 240);
         let layout = IconsLayout::new(
@@ -6048,6 +6171,12 @@ mod tests {
 
     #[test]
     fn clamped_screen_to_content_point_stays_inside_content_viewport() {
+        let content_rect = ViewRect {
+            x: 0.0,
+            y: TOP_BAR_HEIGHT,
+            width: 320.0,
+            height: 160.0,
+        };
         assert_eq!(
             clamped_screen_to_content_point(
                 ViewPoint {
@@ -6055,8 +6184,7 @@ mod tests {
                     y: TOP_BAR_HEIGHT - 20.0,
                 },
                 ViewPoint { x: 0.0, y: 40.0 },
-                TOP_BAR_HEIGHT,
-                PhysicalSize::new(320, 240),
+                content_rect,
             ),
             ViewPoint { x: 0.0, y: 40.0 }
         );
@@ -6064,10 +6192,9 @@ mod tests {
             clamped_screen_to_content_point(
                 ViewPoint { x: 500.0, y: 500.0 },
                 ViewPoint { x: 0.0, y: 40.0 },
-                TOP_BAR_HEIGHT,
-                PhysicalSize::new(320, 240),
+                content_rect,
             ),
-            ViewPoint { x: 320.0, y: 228.0 }
+            ViewPoint { x: 320.0, y: 200.0 }
         );
     }
 }

@@ -159,6 +159,9 @@ Current checkpoint:
   icon metrics, scroll is clamped, the focused item is kept visible, and the icon
   resolver now requests rasters at the zoomed slot size. Glyph-level text sizing
   and long-lived glyph atlas policy remain Phase 2 work.
+- A minimal shell-owned status bar is now drawn at the bottom of the window. It
+  summarizes entry, directory, file, selection, visible-item, view-mode, and zoom
+  state, reserves content viewport height, and is excluded from item hit testing.
 - `[fika-wgpu]` logs include view mode, path, entry count, visible item count,
   quad count, selected count, hovered item index, active rubber-band state,
   hit-test/selection/keyboard navigation/rubber-band/view-switch/path-change
@@ -240,6 +243,9 @@ Acceptance:
 
 Implement the surrounding UI needed to make the shell usable: Places, toolbar,
 location bar, filter bar, status bar, context menus, dialogs, and chooser mode.
+
+Current checkpoint: the first chrome slice is a minimal bottom status bar with
+directory/selection/view/zoom summary and a reserved content viewport.
 
 Acceptance:
 

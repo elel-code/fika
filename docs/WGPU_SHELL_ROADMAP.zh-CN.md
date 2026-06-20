@@ -135,6 +135,9 @@ Shell 拥有：
   会更新 item/icon/text slot metrics，Details 会更新 row 和 icon metrics，scroll 会被
   clamp，focus item 会保持可见，icon resolver 现在会按 zoom 后的 slot size 请求 raster。
   glyph-level text sizing 和长期 glyph atlas policy 仍留到 Phase 2。
+- 底部最小 shell-owned status bar 已开始绘制。它汇总 entry、directory、file、
+  selection、visible item、view mode 和 zoom 状态，会预留 content viewport 高度，并从
+  item hit testing 中排除。
 - `[fika-wgpu]` 日志包含 view mode、path、entry count、visible item count、quad count、draw
   batch count、selected count、hovered item index、active rubber-band state、
   hit-test/selection/keyboard navigation/rubber-band/view-switch/path-change counters、zoom percent
@@ -206,6 +209,9 @@ drag/drop target lookup 移到 shell-owned hit testing。
 
 实现可用 shell 所需外围 UI：Places、toolbar、location bar、filter bar、status bar、
 context menus、dialogs 和 chooser mode。
+
+当前 checkpoint：第一个 chrome slice 是底部最小 status bar，显示目录、selection、
+view 和 zoom 摘要，并为内容区域预留 viewport。
 
 验收：
 
