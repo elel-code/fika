@@ -14,10 +14,11 @@ use cosmic_text::{
 };
 use fika_core::{
     CompactLayout, CompactLayoutOptions, Entry, FileClipboardRole, FileTransferMode, IconsLayout,
-    IconsLayoutOptions, NameFilter, PaneId, TransferTaskResult, ViewPoint, ViewRect, ViewSize,
-    complete_location_input, decode_file_clipboard_text, encode_file_clipboard_text, file_ops,
-    format_modified_secs, format_size, is_network_path, network_uri_from_path, paste_text_result,
-    read_entries_sync, resolve_location_input, transfer_paths_result,
+    IconsLayoutOptions, NETWORK_ROOT_LABEL, NameFilter, PaneId, TransferTaskResult, UserPlace,
+    ViewPoint, ViewRect, ViewSize, complete_location_input, decode_file_clipboard_text,
+    default_user_places_path, encode_file_clipboard_text, file_ops, format_modified_secs,
+    format_size, home_dir, is_network_path, network_root_path, network_uri_from_path,
+    paste_text_result, read_entries_sync, resolve_location_input, transfer_paths_result,
 };
 use gio::prelude::FileExt;
 use raw_window_handle::{HasDisplayHandle, RawDisplayHandle};
@@ -65,6 +66,14 @@ const NAV_RELOAD_BUTTON_WIDTH: f32 = 58.0;
 const NAV_HIDDEN_BUTTON_WIDTH: f32 = 58.0;
 const NAV_BUTTON_HEIGHT: f32 = 24.0;
 const NAV_BUTTON_GAP: f32 = 6.0;
+const PLACES_SIDEBAR_WIDTH: f32 = 216.0;
+const PLACES_SIDEBAR_SPLITTER_WIDTH: f32 = 1.0;
+const PLACES_SIDEBAR_PADDING_X: f32 = 8.0;
+const PLACES_SIDEBAR_TOP_PADDING: f32 = 8.0;
+const PLACES_SECTION_HEIGHT: f32 = 24.0;
+const PLACES_ROW_HEIGHT: f32 = 30.0;
+const PLACES_ROW_GAP: f32 = 2.0;
+const PLACES_ICON_SIZE: f32 = 18.0;
 const CONTEXT_MENU_WIDTH: f32 = 184.0;
 const CONTEXT_MENU_ROW_HEIGHT: f32 = 28.0;
 const CONTEXT_MENU_MARGIN: f32 = 6.0;
@@ -813,6 +822,14 @@ impl ApplicationHandler for FikaWgpuApp {
                     return;
                 }
                 if state == ElementState::Pressed
+                    && let Some(path) = self
+                        .scene
+                        .place_activation_for_primary_press(point, renderer.size)
+                {
+                    self.load_scene_path(event_loop, path, "place-open");
+                    return;
+                }
+                if state == ElementState::Pressed
                     && let Some(path) = self.scene.directory_activation_for_primary_press(
                         point,
                         renderer.size,
@@ -1199,7 +1216,11 @@ impl FikaWgpuApp {
         };
         match self.scene.load_path(path, size) {
             Ok(true) => self.present_scene_change(event_loop, reason),
-            Ok(false) => {}
+            Ok(false) => {
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+            }
             Err(error) => eprintln!("[fika-wgpu] navigation-error {error}"),
         }
     }
@@ -1930,6 +1951,42 @@ impl LocationDraft {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+struct ShellPlace {
+    group: &'static str,
+    marker: &'static str,
+    label: String,
+    path: PathBuf,
+    network: bool,
+    trash: bool,
+    root: bool,
+    editable: bool,
+}
+
+impl ShellPlace {
+    fn new(
+        group: &'static str,
+        marker: &'static str,
+        label: impl Into<String>,
+        path: PathBuf,
+        editable: bool,
+    ) -> Self {
+        let trash = file_ops::is_trash_files_dir(&path);
+        let network = is_network_path(&path);
+        let root = path == PathBuf::from("/");
+        Self {
+            group,
+            marker,
+            label: label.into(),
+            path,
+            network,
+            trash,
+            root,
+            editable,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 enum ShellContextTarget {
     Item {
         index: usize,
@@ -2234,6 +2291,7 @@ struct ShellScene {
     view_mode: ShellViewMode,
     entries: Vec<Entry>,
     dir_count: usize,
+    places: Vec<ShellPlace>,
     filtered_indexes: Vec<usize>,
     location_draft: Option<LocationDraft>,
     filter_active: bool,
@@ -2244,6 +2302,7 @@ struct ShellScene {
     scroll_y: f32,
     pointer: Option<ViewPoint>,
     hovered_index: Option<usize>,
+    hovered_place: Option<usize>,
     last_primary_click: Option<PrimaryClick>,
     history: PathHistory,
     selection: ShellSelection,
@@ -2265,6 +2324,7 @@ struct ShellScene {
     file_clipboard_changes: u64,
     paste_changes: u64,
     trash_changes: u64,
+    places_changes: u64,
     keyboard_navigation: u64,
     rubber_band_updates: u64,
     view_switches: u64,
@@ -2302,6 +2362,8 @@ impl ShellScene {
             eprintln!("[fika-wgpu] first-entries={preview}");
         }
 
+        let places = build_shell_places();
+        eprintln!("[fika-wgpu] places entries={}", places.len());
         let filtered_indexes = filtered_indexes_for_entries(&entries, false, "");
 
         Ok(Self {
@@ -2309,6 +2371,7 @@ impl ShellScene {
             view_mode,
             entries,
             dir_count,
+            places,
             filtered_indexes,
             location_draft: None,
             filter_active: false,
@@ -2319,6 +2382,7 @@ impl ShellScene {
             scroll_y: 0.0,
             pointer: None,
             hovered_index: None,
+            hovered_place: None,
             last_primary_click: None,
             history: PathHistory::default(),
             selection: ShellSelection::default(),
@@ -2340,6 +2404,7 @@ impl ShellScene {
             file_clipboard_changes: 0,
             paste_changes: 0,
             trash_changes: 0,
+            places_changes: 0,
             keyboard_navigation: 0,
             rubber_band_updates: 0,
             view_switches: 0,
@@ -2887,6 +2952,84 @@ impl ShellScene {
         }
     }
 
+    fn place_activation_for_primary_press(
+        &mut self,
+        point: ViewPoint,
+        size: PhysicalSize<u32>,
+    ) -> Option<PathBuf> {
+        let index = self.place_index_at_screen_point(point, size)?;
+        self.pointer = Some(point);
+        let hover_changed = self.set_hovered_place(Some(index));
+        let item_hover_changed = self.set_hovered_index(None);
+        self.rubber_band = None;
+        self.last_primary_click = None;
+        self.context_target = None;
+        self.context_menu = None;
+        let place = self.places.get(index)?;
+        self.places_changes += 1;
+        eprintln!(
+            "[fika-wgpu] place-open index={} label={:?} path={} hover_changed={} item_hover_changed={} changes={}",
+            index,
+            place.label,
+            place.path.display(),
+            hover_changed as u8,
+            item_hover_changed as u8,
+            self.places_changes
+        );
+        Some(place.path.clone())
+    }
+
+    fn place_index_at_screen_point(
+        &self,
+        point: ViewPoint,
+        size: PhysicalSize<u32>,
+    ) -> Option<usize> {
+        if !self.places_sidebar_rect(size).contains(point) {
+            return None;
+        }
+        self.place_row_rects(size)
+            .into_iter()
+            .find_map(|(index, rect)| rect.contains(point).then_some(index))
+    }
+
+    fn place_row_rects(&self, size: PhysicalSize<u32>) -> Vec<(usize, ViewRect)> {
+        let sidebar = self.places_sidebar_rect(size);
+        if sidebar.width <= 0.0 || sidebar.height <= 0.0 {
+            return Vec::new();
+        }
+        let mut rows = Vec::with_capacity(self.places.len());
+        let mut y = sidebar.y + PLACES_SIDEBAR_TOP_PADDING;
+        let mut previous_group = None;
+        for (index, place) in self.places.iter().enumerate() {
+            if !place.group.is_empty() && previous_group != Some(place.group) {
+                y += PLACES_SECTION_HEIGHT;
+            }
+            let rect = ViewRect {
+                x: sidebar.x + PLACES_SIDEBAR_PADDING_X,
+                y,
+                width: (sidebar.width - PLACES_SIDEBAR_PADDING_X * 2.0).max(1.0),
+                height: PLACES_ROW_HEIGHT,
+            };
+            if rect.y < sidebar.bottom() && rect.bottom() > sidebar.y {
+                rows.push((index, rect));
+            }
+            y += PLACES_ROW_HEIGHT + PLACES_ROW_GAP;
+            previous_group = Some(place.group);
+        }
+        rows
+    }
+
+    fn places_sidebar_rect(&self, size: PhysicalSize<u32>) -> ViewRect {
+        let width = places_sidebar_width(size);
+        let height = (size.height as f32 - TOP_BAR_HEIGHT - STATUS_BAR_HEIGHT).max(0.0);
+        ViewRect {
+            x: 0.0,
+            y: TOP_BAR_HEIGHT,
+            width,
+            height,
+        }
+    }
+
     fn context_target_for_screen_point(
         &self,
         point: ViewPoint,
@@ -2925,6 +3068,7 @@ impl ShellScene {
             ShellContextTarget::Blank { .. } => None,
         });
         let hover_changed = self.set_hovered_index(hover);
+        let place_hover_changed = self.set_hovered_place(None);
 
         let mut selection_changed = false;
         if let Some(ShellContextTarget::Item { index, .. }) = target.as_ref() {
@@ -2947,6 +3091,7 @@ impl ShellScene {
 
         target_changed
             || hover_changed
+            || place_hover_changed
             || selection_changed
             || rubber_band_cleared
             || old_rubber_band_active
@@ -3874,7 +4019,7 @@ impl ShellScene {
             }
             ShellViewMode::Details => ShellLayout::Details(DetailsLayout::new(
                 item_count,
-                size.width as f32,
+                self.content_width(size),
                 self.viewport_height(size),
                 self.scroll_y,
                 self.details_row_height(),
@@ -3886,7 +4031,7 @@ impl ShellScene {
     fn icons_options(&self, size: PhysicalSize<u32>) -> IconsLayoutOptions {
         let factor = self.zoom_factor();
         IconsLayoutOptions {
-            viewport_width: size.width as f32,
+            viewport_width: self.content_width(size),
             viewport_height: self.viewport_height(size),
             reserved_bottom: 0.0,
             scroll_x: self.scroll_x,
@@ -3903,7 +4048,7 @@ impl ShellScene {
     fn compact_options(&self, size: PhysicalSize<u32>) -> CompactLayoutOptions {
         let factor = self.zoom_factor();
         CompactLayoutOptions {
-            viewport_width: size.width as f32,
+            viewport_width: self.content_width(size),
             viewport_height: self.viewport_height(size),
             reserved_bottom: 0.0,
             scroll_x: self.scroll_x,
@@ -3949,7 +4094,9 @@ impl ShellScene {
         let mut vertices = Vec::with_capacity(64);
         let width = size.width.max(1) as f32;
         let height = size.height.max(1) as f32;
-        let content_origin = self.content_origin_y();
+        let content_origin_x = self.content_origin_x(size);
+        let content_origin_y = self.content_origin_y();
+        let content_width = self.content_width(size);
         let viewport_h = self.viewport_height(size);
         let status_bar = status_bar_rect(size);
 
@@ -4011,12 +4158,13 @@ impl ShellScene {
             );
         }
         self.push_view_mode_buttons(&mut vertices, text, size);
+        self.push_places_sidebar(&mut vertices, text, size);
         push_rect(
             &mut vertices,
             ViewRect {
-                x: 0.0,
+                x: content_origin_x,
                 y: TOP_BAR_HEIGHT,
-                width,
+                width: content_width,
                 height: (height - TOP_BAR_HEIGHT).max(1.0),
             },
             view_mode_content_color(self.view_mode),
@@ -4026,7 +4174,7 @@ impl ShellScene {
         push_rect(
             &mut vertices,
             ViewRect {
-                x: 0.0,
+                x: content_origin_x,
                 y: TOP_BAR_HEIGHT,
                 width: VIEW_MODE_RAIL_WIDTH,
                 height: (height - TOP_BAR_HEIGHT).max(1.0),
@@ -4037,9 +4185,9 @@ impl ShellScene {
         push_rect(
             &mut vertices,
             ViewRect {
-                x: 0.0,
-                y: content_origin,
-                width,
+                x: content_origin_x,
+                y: content_origin_y,
+                width: content_width,
                 height: VIEW_MODE_STRIPE_HEIGHT,
             },
             view_mode_badge_color(self.view_mode),
@@ -4054,9 +4202,9 @@ impl ShellScene {
         let visible_layout_items = layout.visible_items();
         let first_item_rect = visible_layout_items.first().map(|item| item.item_rect);
         let content_clip = ViewRect {
-            x: 0.0,
-            y: content_origin,
-            width,
+            x: content_origin_x,
+            y: content_origin_y,
+            width: content_width,
             height: viewport_h,
         };
         let mut visible_items = 0usize;
@@ -4087,6 +4235,103 @@ impl ShellScene {
             vertices,
             text_stats: TextFrameStats::default(),
             icon_stats: IconFrameStats::default(),
+        }
+    }
+
+    fn push_places_sidebar(
+        &self,
+        vertices: &mut Vec<QuadVertex>,
+        text: &mut TextFrameBuilder<'_>,
+        size: PhysicalSize<u32>,
+    ) {
+        let sidebar = self.places_sidebar_rect(size);
+        if sidebar.width <= 0.0 || sidebar.height <= 0.0 {
+            return;
+        }
+        push_rect(vertices, sidebar, [0.074, 0.082, 0.091, 1.0], size);
+        push_rect(
+            vertices,
+            ViewRect {
+                x: sidebar.right(),
+                y: sidebar.y,
+                width: PLACES_SIDEBAR_SPLITTER_WIDTH,
+                height: sidebar.height,
+            },
+            [0.18, 0.20, 0.22, 1.0],
+            size,
+        );
+
+        let active_place = active_shell_place_index(&self.places, &self.path);
+        let mut y = sidebar.y + PLACES_SIDEBAR_TOP_PADDING;
+        let mut previous_group = None;
+        for (index, place) in self.places.iter().enumerate() {
+            if !place.group.is_empty() && previous_group != Some(place.group) {
+                text.push_label(
+                    place.group,
+                    ViewRect {
+                        x: sidebar.x + PLACES_SIDEBAR_PADDING_X + 4.0,
+                        y: y + 4.0,
+                        width: (sidebar.width - PLACES_SIDEBAR_PADDING_X * 2.0 - 8.0).max(1.0),
+                        height: 16.0,
+                    },
+                    sidebar,
+                    TextColor::rgb(136, 148, 160),
+                );
+                y += PLACES_SECTION_HEIGHT;
+            }
+
+            let row = ViewRect {
+                x: sidebar.x + PLACES_SIDEBAR_PADDING_X,
+                y,
+                width: (sidebar.width - PLACES_SIDEBAR_PADDING_X * 2.0).max(1.0),
+                height: PLACES_ROW_HEIGHT,
+            };
+            if row.y < sidebar.bottom() && row.bottom() > sidebar.y {
+                let active = active_place == Some(index);
+                let hovered = self.hovered_place == Some(index);
+                push_rect(
+                    vertices,
+                    row,
+                    place_row_background_color(active, hovered),
+                    size,
+                );
+                let icon = ViewRect {
+                    x: row.x + 8.0,
+                    y: row.y + (row.height - PLACES_ICON_SIZE) / 2.0,
+                    width: PLACES_ICON_SIZE,
+                    height: PLACES_ICON_SIZE,
+                };
+                push_rect(vertices, icon, place_marker_color(place), size);
+                text.push_label(
+                    place.marker,
+                    ViewRect {
+                        x: icon.x + 3.0,
+                        y: icon.y + 1.0,
+                        width: (icon.width - 6.0).max(1.0),
+                        height: 14.0,
+                    },
+                    sidebar,
+                    TextColor::rgb(248, 250, 252),
+                );
+                text.push_label(
+                    &place.label,
+                    ViewRect {
+                        x: row.x + 34.0,
+                        y: row.y + 6.0,
+                        width: (row.width - 42.0).max(1.0),
+                        height: 18.0,
+                    },
+                    sidebar,
+                    if active {
+                        TextColor::rgb(244, 249, 252)
+                    } else {
+                        TextColor::rgb(194, 204, 214)
+                    },
+                );
+            }
+
+            y += PLACES_ROW_HEIGHT + PLACES_ROW_GAP;
+            previous_group = Some(place.group);
         }
     }
 
@@ -4187,10 +4432,11 @@ impl ShellScene {
         text: &mut TextFrameBuilder<'_>,
         size: PhysicalSize<u32>,
     ) {
-        let width = size.width.max(1) as f32;
+        let x = self.content_origin_x(size);
+        let width = self.content_width(size);
         let y = self.details_header_y();
         let header = ViewRect {
-            x: 0.0,
+            x,
             y,
             width,
             height: DETAILS_HEADER_HEIGHT,
@@ -4199,7 +4445,7 @@ impl ShellScene {
         push_rect(
             vertices,
             ViewRect {
-                x: 0.0,
+                x,
                 y: header.bottom() - 1.0,
                 width,
                 height: 1.0,
@@ -4220,7 +4466,7 @@ impl ShellScene {
             text.push_label(
                 label,
                 ViewRect {
-                    x,
+                    x: header.x + x,
                     y: header.y + 6.0,
                     width: width.max(1.0),
                     height: 18.0,
@@ -4244,7 +4490,7 @@ impl ShellScene {
         push_rect(
             vertices,
             ViewRect {
-                x: 0.0,
+                x: rect.x,
                 y: rect.bottom() - 1.0,
                 width: rect.width,
                 height: 1.0,
@@ -4255,7 +4501,7 @@ impl ShellScene {
         text.push_label(
             "Filter:",
             ViewRect {
-                x: 12.0,
+                x: rect.x + 12.0,
                 y: rect.y + 6.0,
                 width: 54.0,
                 height: 18.0,
@@ -4271,7 +4517,7 @@ impl ShellScene {
         text.push_label(
             pattern,
             ViewRect {
-                x: 66.0,
+                x: rect.x + 66.0,
                 y: rect.y + 6.0,
                 width: (rect.width - 78.0).max(1.0),
                 height: 18.0,
@@ -4296,10 +4542,10 @@ impl ShellScene {
         let Some(entry) = self.entries.get(entry_index) else {
             return;
         };
-        let item_rect = self.content_to_screen(item.item_rect);
-        let visual_rect = self.content_to_screen(item.visual_rect);
-        let icon_rect = self.content_to_screen(item.icon_rect);
-        let text_rect = self.content_to_screen(item.text_rect);
+        let item_rect = self.content_to_screen(item.item_rect, size);
+        let visual_rect = self.content_to_screen(item.visual_rect, size);
+        let icon_rect = self.content_to_screen(item.icon_rect, size);
+        let text_rect = self.content_to_screen(item.text_rect, size);
         let selected = self.selection.contains(entry_index);
         let hovered = self.hovered_index == Some(entry_index);
 
@@ -4404,9 +4650,9 @@ impl ShellScene {
         let Some(entry) = self.entries.get(entry_index) else {
             return;
         };
-        let row_rect = self.content_to_screen(item.item_rect);
-        let icon_rect = self.content_to_screen(item.icon_rect);
-        let name_rect = self.content_to_screen(item.text_rect);
+        let row_rect = self.content_to_screen(item.item_rect, size);
+        let icon_rect = self.content_to_screen(item.icon_rect, size);
+        let name_rect = self.content_to_screen(item.text_rect, size);
         let selected = self.selection.contains(entry_index);
         let hovered = self.hovered_index == Some(entry_index);
 
@@ -4442,7 +4688,7 @@ impl ShellScene {
         text.push_label(
             &details_size_label(entry),
             ViewRect {
-                x: DETAILS_NAME_WIDTH + 8.0 - self.scroll_x,
+                x: self.content_origin_x(size) + DETAILS_NAME_WIDTH + 8.0 - self.scroll_x,
                 y: metadata_y,
                 width: DETAILS_SIZE_WIDTH - 16.0,
                 height: 18.0,
@@ -4453,7 +4699,8 @@ impl ShellScene {
         text.push_label(
             &format_modified_secs(entry.modified_secs),
             ViewRect {
-                x: DETAILS_NAME_WIDTH + DETAILS_SIZE_WIDTH + 8.0 - self.scroll_x,
+                x: self.content_origin_x(size) + DETAILS_NAME_WIDTH + DETAILS_SIZE_WIDTH + 8.0
+                    - self.scroll_x,
                 y: metadata_y,
                 width: DETAILS_MODIFIED_WIDTH - 16.0,
                 height: 18.0,
@@ -4472,7 +4719,7 @@ impl ShellScene {
         let Some(rect) = self.rubber_band.as_ref().and_then(RubberBand::active_rect) else {
             return;
         };
-        let rect = self.content_to_screen(rect);
+        let rect = self.content_to_screen(rect, size);
         push_clipped_rect(vertices, rect, content_clip, [0.28, 0.58, 0.92, 0.18], size);
         push_clipped_rect_outline(
             vertices,
@@ -4912,12 +5159,21 @@ impl ShellScene {
         }
     }
 
-    fn content_to_screen(&self, rect: ViewRect) -> ViewRect {
+    fn content_to_screen(&self, rect: ViewRect, size: PhysicalSize<u32>) -> ViewRect {
         ViewRect {
-            x: rect.x - self.scroll_x,
+            x: rect.x - self.scroll_x + self.content_origin_x(size),
             y: rect.y - self.scroll_y + self.content_origin_y(),
             width: rect.width,
             height: rect.height,
+        }
+    }
+
+    fn content_origin_x(&self, size: PhysicalSize<u32>) -> f32 {
+        let sidebar_width = places_sidebar_width(size);
+        if sidebar_width <= 0.0 {
+            0.0
+        } else {
+            sidebar_width + PLACES_SIDEBAR_SPLITTER_WIDTH
         }
     }
 
@@ -4945,11 +5201,15 @@ impl ShellScene {
     fn filter_bar_rect(&self, size: PhysicalSize<u32>) -> Option<ViewRect> {
         let height = self.filter_bar_height();
         (height > 0.0).then(|| ViewRect {
-            x: 0.0,
+            x: self.content_origin_x(size),
             y: TOP_BAR_HEIGHT,
-            width: size.width.max(1) as f32,
+            width: self.content_width(size),
             height,
         })
+    }
+
+    fn content_width(&self, size: PhysicalSize<u32>) -> f32 {
+        (size.width as f32 - self.content_origin_x(size)).max(1.0)
     }
 
     fn viewport_height(&self, size: PhysicalSize<u32>) -> f32 {
@@ -4958,9 +5218,9 @@ impl ShellScene {
 
     fn content_screen_rect(&self, size: PhysicalSize<u32>) -> ViewRect {
         ViewRect {
-            x: 0.0,
+            x: self.content_origin_x(size),
             y: self.content_origin_y(),
-            width: size.width.max(1) as f32,
+            width: self.content_width(size),
             height: self.viewport_height(size),
         }
     }
@@ -4998,7 +5258,7 @@ impl ShellScene {
 
     fn max_scroll_x(&self, size: PhysicalSize<u32>) -> f32 {
         let layout = self.layout(size);
-        (layout.content_size().width - size.width as f32).max(0.0)
+        (layout.content_size().width - self.content_width(size)).max(0.0)
     }
 
     fn max_scroll_y(&self, size: PhysicalSize<u32>) -> f32 {
@@ -5019,7 +5279,7 @@ impl ShellScene {
 
     fn clear_pointer(&mut self) -> bool {
         self.pointer = None;
-        let changed = self.hovered_index.take().is_some();
+        let changed = self.hovered_index.take().is_some() || self.hovered_place.take().is_some();
         if changed {
             self.hit_tests += 1;
         }
@@ -5042,9 +5302,11 @@ impl ShellScene {
             return hover_changed;
         }
 
-        let Some(start) =
-            screen_to_content_point(click.point, self.scroll_offset(), self.content_origin_y())
-        else {
+        let Some(start) = screen_to_content_point(
+            click.point,
+            self.scroll_offset(),
+            self.content_screen_rect(size),
+        ) else {
             return hover_changed;
         };
         self.rubber_band = Some(RubberBand::new(
@@ -5133,6 +5395,7 @@ impl ShellScene {
 
         let old_scroll_y = self.scroll_y;
         let old_hovered = self.hovered_index;
+        let old_hovered_place = self.hovered_place;
         let current = self
             .selection
             .focus_or_first_selected()
@@ -5154,20 +5417,35 @@ impl ShellScene {
         }
         self.keyboard_navigation += 1;
         self.ensure_index_visible(target, size);
+        self.hovered_place = self
+            .pointer
+            .and_then(|point| self.place_index_at_screen_point(point, size));
         self.hovered_index = self
             .pointer
+            .filter(|_| self.hovered_place.is_none())
             .and_then(|point| self.hit_test_screen_point(point, size));
 
         selection_changed
             || (self.scroll_y - old_scroll_y).abs() > f32::EPSILON
             || self.hovered_index != old_hovered
+            || self.hovered_place != old_hovered_place
     }
 
     fn refresh_hover(&mut self, size: PhysicalSize<u32>) -> bool {
-        let hit = self
+        let place_hit = self
             .pointer
-            .and_then(|point| self.hit_test_screen_point(point, size));
-        self.set_hovered_index(hit)
+            .and_then(|point| self.place_index_at_screen_point(point, size));
+        let item_hit = if place_hit.is_none() {
+            self.pointer
+                .and_then(|point| self.hit_test_screen_point(point, size))
+        } else {
+            None
+        };
+        self.hit_tests += 1;
+        let changed = self.hovered_place != place_hit || self.hovered_index != item_hit;
+        self.hovered_place = place_hit;
+        self.hovered_index = item_hit;
+        changed
     }
 
     fn set_hovered_index(&mut self, hovered_index: Option<usize>) -> bool {
@@ -5177,12 +5455,19 @@ impl ShellScene {
         changed
     }
 
+    fn set_hovered_place(&mut self, hovered_place: Option<usize>) -> bool {
+        self.hit_tests += 1;
+        let changed = self.hovered_place != hovered_place;
+        self.hovered_place = hovered_place;
+        changed
+    }
+
     fn hit_test_screen_point(&self, point: ViewPoint, size: PhysicalSize<u32>) -> Option<usize> {
         if !self.content_screen_rect(size).contains(point) {
             return None;
         }
         let content_point =
-            screen_to_content_point(point, self.scroll_offset(), self.content_origin_y())?;
+            screen_to_content_point(point, self.scroll_offset(), self.content_screen_rect(size))?;
         let layout = self.layout(size);
         let layout_index = layout.hit_test_content_point(content_point)?;
         let item = layout.item(layout_index)?;
@@ -5206,8 +5491,10 @@ impl ShellScene {
             ShellViewMode::Compact => {
                 if item.visual_rect.x < self.scroll_x + padding {
                     self.scroll_x = (item.visual_rect.x - padding).max(0.0);
-                } else if item.visual_rect.right() > self.scroll_x + size.width as f32 - padding {
-                    self.scroll_x = item.visual_rect.right() - size.width as f32 + padding;
+                } else if item.visual_rect.right()
+                    > self.scroll_x + self.content_width(size) - padding
+                {
+                    self.scroll_x = item.visual_rect.right() - self.content_width(size) + padding;
                 }
             }
             ShellViewMode::Icons | ShellViewMode::Details => {
@@ -5771,7 +6058,7 @@ impl WgpuState {
             || self.last_log.elapsed() >= Duration::from_secs(1)
         {
             eprintln!(
-                "[fika-wgpu] frame={} reason={} view={} zoom={} zoom_changes={} path={} entries={} filtered={} show_hidden={} hidden_changes={} location_active={} location_changes={} filter_active={} filter_changes={} visible={} selected={} hover={} context={} context_menu={} context_changes={} context_actions={} properties={} properties_changes={} create_dialog={} create_changes={} rename_dialog={} rename_changes={} open_changes={} copy_location_changes={} file_clipboard_changes={} paste_changes={} trash_changes={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} path_changes={} reloads={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_cache={}/{} entries={} bytes={} batches={} scroll_x={:.1} scroll_y={:.1} layout={}us text_raster={}us text_atlas={}x{}:{}b render={}us",
+                "[fika-wgpu] frame={} reason={} view={} zoom={} zoom_changes={} path={} entries={} filtered={} show_hidden={} hidden_changes={} location_active={} location_changes={} filter_active={} filter_changes={} places={} place_hover={} places_changes={} visible={} selected={} hover={} context={} context_menu={} context_changes={} context_actions={} properties={} properties_changes={} create_dialog={} create_changes={} rename_dialog={} rename_changes={} open_changes={} copy_location_changes={} file_clipboard_changes={} paste_changes={} trash_changes={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} path_changes={} reloads={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_cache={}/{} entries={} bytes={} batches={} scroll_x={:.1} scroll_y={:.1} layout={}us text_raster={}us text_atlas={}x{}:{}b render={}us",
                 self.frame_count,
                 reason,
                 scene.view_mode.as_str(),
@@ -5786,6 +6073,9 @@ impl WgpuState {
                 scene.location_changes,
                 scene.filter_active as u8,
                 scene.filter_changes,
+                scene.places.len(),
+                scene.hovered_place.map(|index| index as i64).unwrap_or(-1),
+                scene.places_changes,
                 scene_frame.visible_items,
                 scene.selection.len(),
                 scene.hovered_index.map(|index| index as i64).unwrap_or(-1),
@@ -8115,14 +8405,14 @@ fn intersect_rect(rect: ViewRect, clip: ViewRect) -> Option<ViewRect> {
 fn screen_to_content_point(
     point: ViewPoint,
     scroll_offset: ViewPoint,
-    content_origin_y: f32,
+    content_rect: ViewRect,
 ) -> Option<ViewPoint> {
-    if point.y < content_origin_y {
+    if !content_rect.contains(point) {
         return None;
     }
     Some(ViewPoint {
-        x: point.x + scroll_offset.x,
-        y: point.y - content_origin_y + scroll_offset.y,
+        x: point.x - content_rect.x + scroll_offset.x,
+        y: point.y - content_rect.y + scroll_offset.y,
     })
 }
 
@@ -8132,8 +8422,9 @@ fn clamped_screen_to_content_point(
     content_rect: ViewRect,
 ) -> ViewPoint {
     let y = point.y.clamp(content_rect.y, content_rect.bottom());
+    let x = point.x.clamp(content_rect.x, content_rect.right());
     ViewPoint {
-        x: point.x.clamp(content_rect.x, content_rect.right()) + scroll_offset.x,
+        x: x - content_rect.x + scroll_offset.x,
         y: y - content_rect.y + scroll_offset.y,
     }
 }
@@ -8151,6 +8442,29 @@ fn rect_from_points(start: ViewPoint, current: ViewPoint) -> ViewRect {
 
 fn point_distance(left: ViewPoint, right: ViewPoint) -> f32 {
     ((left.x - right.x).powi(2) + (left.y - right.y).powi(2)).sqrt()
+}
+
+fn place_row_background_color(active: bool, hovered: bool) -> [f32; 4] {
+    match (active, hovered) {
+        (true, true) => [0.20, 0.37, 0.58, 0.96],
+        (true, false) => [0.16, 0.30, 0.48, 0.90],
+        (false, true) => [0.16, 0.18, 0.20, 0.90],
+        (false, false) => [0.095, 0.104, 0.114, 0.22],
+    }
+}
+
+fn place_marker_color(place: &ShellPlace) -> [f32; 4] {
+    if place.trash {
+        [0.68, 0.36, 0.32, 1.0]
+    } else if place.network {
+        [0.32, 0.48, 0.72, 1.0]
+    } else if place.root {
+        [0.45, 0.46, 0.50, 1.0]
+    } else if place.editable {
+        [0.34, 0.54, 0.42, 1.0]
+    } else {
+        [0.72, 0.50, 0.22, 1.0]
+    }
 }
 
 fn item_background_color(selected: bool, hovered: bool) -> [f32; 4] {
@@ -8390,6 +8704,14 @@ fn path_placeholder_width(path: &std::path::Path, surface_width: f32, path_x: f3
 fn path_bar_available_width(surface_width: f32, path_x: f32) -> f32 {
     let first_button_x = view_mode_button_rects(surface_width)[0].1.x;
     (first_button_x - path_x - 10.0).max(0.0)
+}
+
+fn places_sidebar_width(size: PhysicalSize<u32>) -> f32 {
+    let width = size.width.max(1) as f32;
+    let responsive_width = (width * 0.42).max(128.0);
+    PLACES_SIDEBAR_WIDTH
+        .min(responsive_width)
+        .min((width - 120.0).max(0.0))
 }
 
 fn status_bar_rect(size: PhysicalSize<u32>) -> ViewRect {
@@ -8641,6 +8963,118 @@ fn entry_index_by_name(entries: &[Entry], name: &str) -> Option<usize> {
     entries.iter().position(|entry| entry.name.as_ref() == name)
 }
 
+fn build_shell_places() -> Vec<ShellPlace> {
+    const NETWORK_GROUP: &str = "Network";
+    const DEVICES_GROUP: &str = "Devices";
+
+    let home = home_dir();
+    let mut places = Vec::new();
+    push_shell_place(&mut places, "", "H", "Home", home.clone(), false);
+    push_existing_shell_place(&mut places, "", "Desk", "Desktop", home.join("Desktop"));
+    push_existing_shell_place(&mut places, "", "Doc", "Documents", home.join("Documents"));
+    push_existing_shell_place(&mut places, "", "Down", "Downloads", home.join("Downloads"));
+    push_existing_shell_place(&mut places, "", "Mus", "Music", home.join("Music"));
+    push_existing_shell_place(&mut places, "", "Pic", "Pictures", home.join("Pictures"));
+    push_existing_shell_place(&mut places, "", "Vid", "Videos", home.join("Videos"));
+    push_shell_place(
+        &mut places,
+        "",
+        "Tr",
+        "Trash",
+        file_ops::trash_files_dir(),
+        false,
+    );
+
+    let built_in_paths = places
+        .iter()
+        .map(|place| place.path.clone())
+        .chain(std::iter::once(PathBuf::from("/")))
+        .chain(std::iter::once(network_root_path()))
+        .collect::<BTreeSet<_>>();
+    let mut network_places = Vec::new();
+    for place in fika_core::load_user_places(&default_user_places_path()).unwrap_or_default() {
+        if built_in_paths.contains(&place.path) {
+            continue;
+        }
+        if is_network_path(&place.path) {
+            network_places.push(place);
+        } else {
+            push_user_shell_place(&mut places, "", place);
+        }
+    }
+
+    push_shell_place(
+        &mut places,
+        NETWORK_GROUP,
+        "Net",
+        NETWORK_ROOT_LABEL,
+        network_root_path(),
+        false,
+    );
+    for place in network_places {
+        push_user_shell_place(&mut places, NETWORK_GROUP, place);
+    }
+    push_shell_place(
+        &mut places,
+        DEVICES_GROUP,
+        "/",
+        "Root",
+        PathBuf::from("/"),
+        false,
+    );
+    places
+}
+
+fn push_existing_shell_place(
+    places: &mut Vec<ShellPlace>,
+    group: &'static str,
+    marker: &'static str,
+    label: &'static str,
+    path: PathBuf,
+) {
+    if path.is_dir() {
+        push_shell_place(places, group, marker, label, path, false);
+    }
+}
+
+fn push_user_shell_place(places: &mut Vec<ShellPlace>, group: &'static str, place: UserPlace) {
+    push_shell_place(places, group, "B", place.label, place.path, true);
+}
+
+fn push_shell_place(
+    places: &mut Vec<ShellPlace>,
+    group: &'static str,
+    marker: &'static str,
+    label: impl Into<String>,
+    path: PathBuf,
+    editable: bool,
+) {
+    if places.iter().any(|place| place.path == path) {
+        return;
+    }
+    places.push(ShellPlace::new(group, marker, label, path, editable));
+}
+
+fn active_shell_place_index(places: &[ShellPlace], current_path: &Path) -> Option<usize> {
+    let mut best = None;
+    let mut best_components = 0usize;
+    for (index, place) in places.iter().enumerate() {
+        if !shell_place_matches_current(place, current_path) {
+            continue;
+        }
+        let components = place.path.components().count();
+        if best.is_none() || components > best_components {
+            best = Some(index);
+            best_components = components;
+        }
+    }
+    best
+}
+
+fn shell_place_matches_current(place: &ShellPlace, current_path: &Path) -> bool {
+    current_path == place.path || current_path.starts_with(&place.path)
+}
+
 fn filtered_indexes_for_entries(entries: &[Entry], show_hidden: bool, pattern: &str) -> Vec<usize> {
     let filter = (!pattern.is_empty()).then(|| NameFilter::plain_text(pattern.to_string()));
     entries
@@ -8729,6 +9163,10 @@ mod tests {
             view_mode,
             entries,
             dir_count,
+            places: vec![
+                ShellPlace::new("", "H", "Home", PathBuf::from("/tmp"), false),
+                ShellPlace::new("Devices", "/", "Root", PathBuf::from("/"), false),
+            ],
             filtered_indexes,
             location_draft: None,
             filter_active: false,
@@ -8739,6 +9177,7 @@ mod tests {
             scroll_y: 0.0,
             pointer: None,
             hovered_index: None,
+            hovered_place: None,
             last_primary_click: None,
             history: PathHistory::default(),
             selection: ShellSelection::default(),
@@ -8760,6 +9199,7 @@ mod tests {
             file_clipboard_changes: 0,
             paste_changes: 0,
             trash_changes: 0,
+            places_changes: 0,
             keyboard_navigation: 0,
             rubber_band_updates: 0,
             view_switches: 0,
@@ -8770,6 +9210,80 @@ mod tests {
             hidden_changes: 0,
             zoom_changes: 0,
         }
+    }
+
+    #[test]
+    fn places_hit_testing_is_separate_from_file_content() {
+        let mut scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
+        let size = PhysicalSize::new(700, 320);
+        let place_row = scene.place_row_rects(size)[0].1;
+        let place_point = ViewPoint {
+            x: place_row.x + 4.0,
+            y: place_row.y + 4.0,
+        };
+
+        assert_eq!(
+            scene.place_index_at_screen_point(place_point, size),
+            Some(0)
+        );
+        assert_eq!(scene.hit_test_screen_point(place_point, size), None);
+        assert!(scene.set_pointer(place_point, size));
+        assert_eq!(scene.hovered_place, Some(0));
+        assert_eq!(scene.hovered_index, None);
+
+        let item = scene.layout(size).item(0).expect("item should layout");
+        let item_point = ViewPoint {
+            x: scene.content_origin_x(size) + item.visual_rect.x + 2.0,
+            y: scene.content_origin_y() + item.visual_rect.y + 2.0,
+        };
+        assert!(scene.set_pointer(item_point, size));
+        assert_eq!(scene.hovered_place, None);
+        assert_eq!(scene.hovered_index, Some(0));
+    }
+
+    #[test]
+    fn place_activation_records_target_path_and_hover() {
+        let mut scene = test_scene(Vec::new(), ShellViewMode::Icons);
+        scene.places = vec![
+            ShellPlace::new("", "H", "Home", PathBuf::from("/tmp"), false),
+            ShellPlace::new("", "P", "Projects", PathBuf::from("/tmp/projects"), true),
+        ];
+        let size = PhysicalSize::new(700, 320);
+        let projects_row = scene.place_row_rects(size)[1].1;
+        let point = ViewPoint {
+            x: projects_row.x + 6.0,
+            y: projects_row.y + 6.0,
+        };
+
+        assert_eq!(
+            scene.place_activation_for_primary_press(point, size),
+            Some(PathBuf::from("/tmp/projects"))
+        );
+        assert_eq!(scene.hovered_place, Some(1));
+        assert_eq!(scene.hovered_index, None);
+        assert_eq!(scene.places_changes, 1);
+    }
+
+    #[test]
+    fn active_place_prefers_longest_matching_prefix() {
+        let places = vec![
+            ShellPlace::new("Devices", "/", "Root", PathBuf::from("/"), false),
+            ShellPlace::new("", "H", "Home", PathBuf::from("/home/yk"), false),
+            ShellPlace::new("", "D", "Docs", PathBuf::from("/home/yk/Documents"), true),
+        ];
+
+        assert_eq!(
+            active_shell_place_index(&places, Path::new("/home/yk/Documents/fika")),
+            Some(2)
+        );
+        assert_eq!(
+            active_shell_place_index(&places, Path::new("/home/yk/Code")),
+            Some(1)
+        );
+        assert_eq!(
+            active_shell_place_index(&places, Path::new("/etc")),
+            Some(0)
+        );
     }
 
     #[test]
@@ -8843,28 +9357,28 @@ mod tests {
         let size = PhysicalSize::new(420, 260);
         let item = scene
             .layout(size)
-            .item(2)
-            .expect("third item should layout");
+            .item(1)
+            .expect("second item should layout");
         let point = ViewPoint {
-            x: item.visual_rect.x + 2.0,
+            x: scene.content_origin_x(size) + item.visual_rect.x + 2.0,
             y: item.visual_rect.y + scene.content_origin_y() + 2.0,
         };
 
         assert!(scene.open_context_target(point, size));
         assert_eq!(
             scene.selection.selected.iter().copied().collect::<Vec<_>>(),
-            vec![2]
+            vec![1]
         );
-        assert_eq!(scene.selection.focus, Some(2));
-        assert_eq!(scene.hovered_index, Some(2));
+        assert_eq!(scene.selection.focus, Some(1));
+        assert_eq!(scene.hovered_index, Some(1));
         assert_eq!(scene.selection_changes, 1);
         assert_eq!(scene.context_target_changes, 1);
         assert_eq!(
             scene.context_target,
             Some(ShellContextTarget::Item {
-                index: 2,
-                path: PathBuf::from("/tmp/charlie.txt"),
-                is_dir: true,
+                index: 1,
+                path: PathBuf::from("/tmp/bravo.txt"),
+                is_dir: false,
                 selection_count: 1,
             })
         );
@@ -8887,7 +9401,7 @@ mod tests {
             .item(0)
             .expect("first item should layout");
         let point = ViewPoint {
-            x: item.visual_rect.x + 2.0,
+            x: scene.content_origin_x(size) + item.visual_rect.x + 2.0,
             y: item.visual_rect.y + scene.content_origin_y() + 2.0,
         };
 
@@ -8951,7 +9465,7 @@ mod tests {
         let size = PhysicalSize::new(420, 260);
         let item = scene.layout(size).item(0).expect("item should layout");
         let point = ViewPoint {
-            x: item.visual_rect.x + 2.0,
+            x: scene.content_origin_x(size) + item.visual_rect.x + 2.0,
             y: item.visual_rect.y + scene.content_origin_y() + 2.0,
         };
 
@@ -9004,7 +9518,7 @@ mod tests {
 
     #[test]
     fn context_menu_clamps_blank_actions_inside_window() {
-        let mut scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
+        let mut scene = test_scene(Vec::new(), ShellViewMode::Icons);
         let size = PhysicalSize::new(240, 180);
         let point = ViewPoint {
             x: size.width as f32 - 2.0,
@@ -9727,7 +10241,7 @@ mod tests {
         let size = PhysicalSize::new(360, 240);
         let item = scene.layout(size).item(0).expect("test item should layout");
         let point = ViewPoint {
-            x: item.visual_rect.x + 4.0,
+            x: scene.content_origin_x(size) + item.visual_rect.x + 4.0,
             y: item.visual_rect.y + TOP_BAR_HEIGHT + 4.0,
         };
         let now = Instant::now();
@@ -9879,18 +10393,35 @@ mod tests {
     #[test]
     fn screen_to_content_point_rejects_top_bar() {
         let offset = ViewPoint { x: 0.0, y: 40.0 };
+        let content_rect = ViewRect {
+            x: 180.0,
+            y: TOP_BAR_HEIGHT,
+            width: 320.0,
+            height: 160.0,
+        };
         assert_eq!(
-            screen_to_content_point(ViewPoint { x: 12.0, y: 10.0 }, offset, TOP_BAR_HEIGHT),
+            screen_to_content_point(ViewPoint { x: 190.0, y: 10.0 }, offset, content_rect),
             None
         );
         assert_eq!(
             screen_to_content_point(
                 ViewPoint {
-                    x: 12.0,
+                    x: content_rect.x - 1.0,
                     y: TOP_BAR_HEIGHT + 5.0
                 },
                 offset,
-                TOP_BAR_HEIGHT
+                content_rect
+            ),
+            None
+        );
+        assert_eq!(
+            screen_to_content_point(
+                ViewPoint {
+                    x: 192.0,
+                    y: TOP_BAR_HEIGHT + 5.0
+                },
+                offset,
+                content_rect
             ),
             Some(ViewPoint { x: 12.0, y: 45.0 })
         );
@@ -10392,7 +10923,7 @@ mod tests {
         assert!(layout.item(2).is_none());
         let second = layout.item(1).expect("second filtered item should layout");
         let point = ViewPoint {
-            x: second.visual_rect.x + 2.0,
+            x: scene.content_origin_x(size) + second.visual_rect.x + 2.0,
             y: second.visual_rect.y + scene.content_origin_y() + 2.0,
         };
         assert_eq!(scene.hit_test_screen_point(point, size), Some(2));
@@ -10628,13 +11159,13 @@ mod tests {
         let item = layout.item(0).expect("test item should layout");
 
         let visual_point = ViewPoint {
-            x: item.visual_rect.x + 1.0,
+            x: scene.content_origin_x(size) + item.visual_rect.x + 1.0,
             y: item.visual_rect.y + TOP_BAR_HEIGHT + 1.0,
         };
         assert_eq!(scene.hit_test_screen_point(visual_point, size), Some(0));
 
         let top_bar_point = ViewPoint {
-            x: item.item_rect.x + 1.0,
+            x: scene.content_origin_x(size) + item.item_rect.x + 1.0,
             y: TOP_BAR_HEIGHT - 1.0,
         };
         assert_eq!(scene.hit_test_screen_point(top_bar_point, size), None);
@@ -10779,13 +11310,13 @@ mod tests {
         );
         let size = PhysicalSize::new(420, 220);
         let header_point = ViewPoint {
-            x: 12.0,
+            x: scene.content_origin_x(size) + 12.0,
             y: TOP_BAR_HEIGHT + 4.0,
         };
         assert_eq!(scene.hit_test_screen_point(header_point, size), None);
 
         let row_point = ViewPoint {
-            x: 12.0,
+            x: scene.content_origin_x(size) + 12.0,
             y: TOP_BAR_HEIGHT + DETAILS_HEADER_HEIGHT + 4.0,
         };
         assert_eq!(scene.hit_test_screen_point(row_point, size), Some(0));
@@ -10876,12 +11407,12 @@ mod tests {
         let layout = scene.layout(size);
         let item = layout.item(0).expect("test item should layout");
         let start = ViewPoint {
-            x: 0.0,
-            y: TOP_BAR_HEIGHT + 1.0,
+            x: scene.content_origin_x(size) + scene.content_width(size) - 2.0,
+            y: scene.content_origin_y() + 1.0,
         };
         let current = ViewPoint {
-            x: item.visual_rect.right() - 1.0,
-            y: item.visual_rect.bottom() - scene.scroll_y + TOP_BAR_HEIGHT - 1.0,
+            x: scene.content_origin_x(size) + item.visual_rect.right() - 1.0,
+            y: item.visual_rect.bottom() - scene.scroll_y + scene.content_origin_y() - 1.0,
         };
 
         assert!(!scene.begin_primary_pointer(

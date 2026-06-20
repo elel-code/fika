@@ -163,6 +163,14 @@ Current checkpoint:
   selection, multi-MIME `text/uri-list` clipboard export/import, Trash view
   restore/delete/empty flows, undo, richer properties, full inline rename, full
   Create New submenus/templates, and new-pane dispatch remain Phase 4 work.
+- A first shell-owned Places sidebar is now drawn below the top bar. It builds
+  Home, existing XDG directories, Trash, Fika user places, Network root,
+  network bookmarks, and Root from public core APIs, keeps retained row
+  geometry, uses longest-prefix active-place projection, updates sidebar hover
+  independently from item hover, and dispatches left-click place navigation
+  through the same `load_path`/history path as file-view navigation. Dynamic
+  devices, Places context menus, hide/edit/remove/bookmark actions, DnD/drop
+  targets, resizing, and sidebar scrolling remain Phase 4 work.
 - Blank-space left-drag now runs rubber-band selection through the same
   retained Icons geometry. Plain drag replaces the selection, Shift extends it,
   Ctrl/Meta toggles it against the press-time base selection, and the band is
@@ -212,7 +220,7 @@ Current checkpoint:
   shows them. Selection is retained or pruned through the same projection when
   the visibility mode changes.
 - `[fika-wgpu]` logs include view mode, path, entry count, visible item count,
-  quad count, selected count, hovered item index, active rubber-band state,
+  Places count/hover/change counters, quad count, selected count, hovered item index, active rubber-band state,
   context target kind, context menu state, properties overlay state, hit-test/selection/keyboard navigation/rubber-band/view-switch/path-change/open/copy-location/file-clipboard/paste
   counters, reload/location/filter/hidden counters, zoom percent and zoom-change counters, icon count, icon cache
   hit/miss count, icon cache bytes, icon atlas bytes, icon resolve/raster time,
@@ -285,8 +293,9 @@ Places hover, and drag/drop target lookup into shell-owned hit testing.
 Acceptance:
 
 - [~] Pane item/blank right-click context target selection and the first
-  shell-owned context menu overlay are in the file view. Places context targets
-  and broader file-operation action dispatch remain pending.
+  shell-owned context menu overlay are in the file view. Places row hover and
+  left-click navigation are shell-owned. Places context targets and broader
+  file-operation action dispatch remain pending.
 - Pane item to pane directory, pane item to Places, Places to pane, external
   path drop, and URI-list clipboard paths are covered by automated or isolated
   smoke runs.
@@ -298,7 +307,8 @@ Acceptance:
 Implement the surrounding UI needed to make the shell usable: Places, toolbar,
 location bar, filter bar, status bar, context menus, dialogs, and chooser mode.
 
-Current checkpoint: the first chrome slices are a minimal bottom status bar with
+Current checkpoint: the first chrome slices are a minimal shell-owned Places
+sidebar with left-click navigation, a minimal bottom status bar with
 directory/selection/view/zoom summary, a minimal `Ctrl/Meta+F` filter bar, a
 minimal `Ctrl/Meta+L`/`Ctrl/Meta+D`/`F6` location edit mode, and a lightweight
 file-view context menu overlay for item/blank right-clicks. Properties opens a
@@ -311,9 +321,10 @@ through core trash operations, with remote paths rejected before filesystem
 mutation. Filter, location, create-name, and rename-name text editing remain
 intentionally narrow until the full IME/caret/selection text boundary is
 migrated; context menu dispatch currently covers Open directory, Refresh,
-Select All, Properties, minimal Create New, minimal Rename, and minimal Move to
-Trash, while clipboard, Trash view restore/delete/empty flows, undo, richer
-properties, full inline rename, full Create New submenus/templates, and
+Select All, Properties, minimal Create New, minimal Rename, minimal Move to
+Trash, Copy/Cut/Copy Location, and Paste, while Places context menus/devices/DnD,
+Trash view restore/delete/empty flows, undo, richer properties, full inline
+rename, full Create New submenus/templates, Open With/default-app selection, and
 new-pane actions remain pending.
 
 Acceptance:

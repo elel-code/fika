@@ -135,7 +135,11 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
   selection 会随可见性切换保留或裁剪；最小 shell-owned location edit mode 已可用，
   `Ctrl/Meta+L`、`Ctrl/Meta+D`、`F6` 或点击 top path bar 激活，首次输入替换当前 path
   draft，Backspace 编辑，Tab 复用 core `complete_location_input()` 补全，Enter 复用
-  core `resolve_location_input()` 并通过 retained navigation/history path 提交，Esc 取消。
+  core `resolve_location_input()` 并通过 retained navigation/history path 提交，Esc 取消；
+  第一版 shell-owned Places 侧栏已在 top bar 下方绘制，通过公开 core API 构建
+  Home、已存在的 XDG directories、Trash、Fika user places、Network root、network
+  bookmarks 和 Root，保留 row geometry，用最长路径前缀决定 active place，Places hover
+  与 item hover 分离，并将左键 place navigation 分派到同一 `load_path`/history path。
   日志已输出
   `--view icons|compact|details`，默认仍是 Icons baseline，Compact 使用 core
   `CompactLayout`，Details 已有 shell-owned row projection、固定 header 和
@@ -147,8 +151,8 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
   scene 被 present；top bar active segment 和全宽 mode color stripe 便于直接确认当前
   projection。
   日志已输出 view mode、path、entry count、visible count、
-  selected/hover/context/context-menu/properties/rubber-band state、
-  hit-test/selection/context/context-menu-action/properties/keyboard/rubber-band/view-switch/path-change/open/copy-location/file-clipboard/paste/zoom counters、quad/icon/text/batch count、
+  selected/hover/places/context/context-menu/properties/rubber-band state、
+  hit-test/selection/context/context-menu-action/properties/keyboard/rubber-band/view-switch/path-change/open/copy-location/file-clipboard/paste/places/zoom counters、quad/icon/text/batch count、
   icon/text cache hit/miss/bytes、layout/icon-resolve/icon-raster/text-raster/render
   reason/time、icon/text atlas bytes 和 `scroll_x` / `scroll_y` offsets；本地目标 desktop
   session 的 `timeout 4s target/debug/fika-wgpu --view icons|compact|details /etc`
@@ -163,8 +167,8 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
   glyph-level text zoom policy、`~/Downloads` smoke、手动交互 smoke
   和更完整 Details column/metadata parity 仍待完成。
 - [ ] Phase 2：把 Phase 0 初版 icon atlas 提升为预算化 semantic icon work，并实现 thumbnail texture retention、text shaping cache、glyph atlas policy 和 eviction telemetry。Cold glyph/icon work 必须 visible-first 且预算化。
-- [~] Phase 3：把剩余 pointer routing、context target selection、directory hover、Places hover 和 drag/drop target lookup 移到 shell-owned hit testing。当前 file view pane item/blank 右键 context target selection 和菜单 row hit testing 已由 wgpu shell-owned；Places context targets、directory hover 和 DnD target lookup 仍待迁移。
-- [~] Phase 4：实现 Places、toolbar、location bar、filter bar、status bar、context menus、dialogs 和 chooser mode，使常见文件管理器工作流不需要启动 GPUI shell。当前已有底部最小 status bar、窄实现 filter bar、窄实现 location edit mode、轻量 item/blank context menu overlay、最小 properties metadata overlay、最小 Create New modal、最小 Rename modal、最小 Move to Trash dispatch、file Open 默认应用分发、item Copy Location Wayland text clipboard 分发、item Copy/Cut 的 Fika URI-list text clipboard 导出，以及 blank Paste 的本地文件/纯文本执行；Open directory、Open file、Copy、Cut、Paste、Copy Location、Refresh、Select All、Properties、最小 Create New、最小 Rename、最小 Move to Trash 已接入 dispatch。Places、toolbar、完整 location/filter/create-name/rename-name 文本边界、多 MIME `text/uri-list` clipboard export/import、remote paste、Trash view restore/delete/empty、undo、更完整 properties、完整 inline rename、完整 Create New 子菜单/模板、Open With chooser/default-app selection、new-pane actions、dialogs 和 chooser mode 仍待迁移。
+- [~] Phase 3：把剩余 pointer routing、context target selection、directory hover、Places hover 和 drag/drop target lookup 移到 shell-owned hit testing。当前 file view pane item/blank 右键 context target selection、菜单 row hit testing、Places row hover 和左键 navigation 已由 wgpu shell-owned；Places context targets、directory hover 和 DnD target lookup 仍待迁移。
+- [~] Phase 4：实现 Places、toolbar、location bar、filter bar、status bar、context menus、dialogs 和 chooser mode，使常见文件管理器工作流不需要启动 GPUI shell。当前已有最小 shell-owned Places 侧栏/左键 navigation、底部最小 status bar、窄实现 filter bar、窄实现 location edit mode、轻量 item/blank context menu overlay、最小 properties metadata overlay、最小 Create New modal、最小 Rename modal、最小 Move to Trash dispatch、file Open 默认应用分发、item Copy Location Wayland text clipboard 分发、item Copy/Cut 的 Fika URI-list text clipboard 导出，以及 blank Paste 的本地文件/纯文本执行；Open directory、Open file、Copy、Cut、Paste、Copy Location、Refresh、Select All、Properties、最小 Create New、最小 Rename、最小 Move to Trash 已接入 dispatch。Places context menus/devices/DnD、toolbar、完整 location/filter/create-name/rename-name 文本边界、多 MIME `text/uri-list` clipboard export/import、remote paste、Trash view restore/delete/empty、undo、更完整 properties、完整 inline rename、完整 Create New 子菜单/模板、Open With chooser/default-app selection、new-pane actions、dialogs 和 chooser mode 仍待迁移。
 - [ ] Phase 5：同场景证据证明行为对齐，且 frame cost 比 GPUI Fika 和相关 cosmic-files 基线更好或更可预测后，再把新 shell 提升为默认。
 
 ### GPUI Item View 自绘 / Dolphin retained item 对齐（历史基线）
