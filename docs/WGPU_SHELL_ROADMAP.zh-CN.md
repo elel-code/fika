@@ -92,7 +92,8 @@ Shell 拥有：
 - `src/bin/fika-wgpu.rs` 已作为独立 binary 存在。
 - 接受可选 path 参数，默认使用当前目录。
 - 通过 `fika_core::read_entries_sync` 读取目录 entries。
-- 通过现有 `IconsLayout` retained geometry 投影条目。
+- 通过现有 `IconsLayout` retained geometry 投影条目；Compact 由 shell-owned projection
+  按每一列可见名称中的最长项决定列宽。
 - 渲染顶部 path bar、可见 item 背景、active XDG icon theme 可解析时的真实文件/文件夹
   theme icon、miss 时的 fallback 文件/文件夹 icon 形状，以及真实可见文件名。文字通过
   `cosmic-text` 做 shaping/rasterization，再上传临时 per-frame RGBA atlas，由一个
@@ -110,8 +111,9 @@ Shell 拥有：
   frame log 会输出 `content_scrollbar=0|1`；scrollbar drag/click 交互仍是后续工作。
 - 实验 binary 支持 `--view icons|compact|details`。Icons 仍是默认 baseline；
   Compact 使用 core `CompactLayout`；Details 现在有 shell-owned row projection、
-  固定 header，以及 Name/Size/Modified 三列。Compact 现在只在 hover 或 selection 时绘制
-  item highlight/background，普通未悬停行不再像被预高亮。同一组模式也可用 top-bar `Icons /
+  固定 header，以及 Name/Size/Modified 三列。Icons 和 Compact 现在只在 hover 或 selection
+  时绘制 item highlight/background，普通未悬停项不再像被预高亮。Compact label 左对齐，
+  每个 Compact item 的高亮宽度按该项自己的文本宽度收缩，而不是填满整列。同一组模式也可用 top-bar `Icons /
   Compact / Details` 按钮、`1/2/3`、`Ctrl/Meta+1/2/3` 或 fallback `F1/F2/F3`
   在运行时切换；`--auto-cycle-views` 会每秒自动切换一次，用于在没有输入的情况下
   调试 compositor/render。切换时会 clamp 当前 scroll axis、清理 transient

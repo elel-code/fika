@@ -103,7 +103,9 @@ Current checkpoint:
 - `src/bin/fika-wgpu.rs` exists as an independent binary.
 - It accepts an optional path argument and defaults to the current directory.
 - It reads directory entries through `fika_core::read_entries_sync`.
-- It projects entries through the existing `IconsLayout` retained geometry.
+- It projects entries through the existing `IconsLayout` retained geometry and
+  a shell-owned Compact projection that derives each column width from the
+  longest visible name in that column.
 - It renders a top path bar, visible item backgrounds, real theme file/folder
   icons when the active XDG icon theme can resolve them, fallback file/folder
   icon shapes for misses, and real visible file names. Text uses
@@ -128,8 +130,10 @@ Current checkpoint:
 - The experimental binary accepts `--view icons|compact|details`. Icons remains
   the default baseline; Compact uses core `CompactLayout`; Details now has a
   shell-owned row projection with a fixed header and Name/Size/Modified columns.
-  Compact now only paints item highlight/background for hover or selection, so
-  plain unhovered rows no longer look pre-highlighted.
+  Icons and Compact now only paint item highlight/background for hover or
+  selection, so plain unhovered items no longer look pre-highlighted. Compact
+  labels are left-aligned, and each Compact item's highlight width follows that
+  item's own text width rather than filling the whole column.
   The same modes can be switched at runtime with top-bar `Icons / Compact /
   Details` buttons, `1/2/3`, `Ctrl/Meta+1/2/3`, or fallback `F1/F2/F3` keys.
   `--auto-cycle-views` switches modes once per second for compositor/render

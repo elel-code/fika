@@ -39,7 +39,7 @@ const STATUS_BAR_HEIGHT: f32 = 28.0;
 const ICONS_ITEM_WIDTH: f32 = 116.0;
 const ICONS_ITEM_HEIGHT: f32 = 106.0;
 const ICONS_ICON_SIZE: f32 = 48.0;
-const COMPACT_ITEM_WIDTH: f32 = 236.0;
+const COMPACT_MIN_TEXT_WIDTH: f32 = 24.0;
 const COMPACT_ITEM_HEIGHT: f32 = 44.0;
 const COMPACT_ICON_SIZE: f32 = 28.0;
 const DETAILS_HEADER_HEIGHT: f32 = 28.0;
@@ -2031,7 +2031,7 @@ fn navigation_target(
         ShellLayout::Compact(layout) => {
             let rows = layout.rows_per_column().max(1);
             let row = current % rows;
-            let page_stride = layout.visible_items().count().max(rows).max(1);
+            let page_stride = layout.visible_items().len().max(rows).max(1);
             Some(match action {
                 NavigationAction::Left => current.saturating_sub(rows),
                 NavigationAction::Right => (current + rows).min(last),
@@ -2072,7 +2072,7 @@ fn navigation_target(
 #[derive(Clone, Debug)]
 enum ShellLayout {
     Icons(IconsLayout),
-    Compact(CompactLayout),
+    Compact(ShellCompactLayout),
     Details(DetailsLayout),
 }
 
@@ -2096,7 +2096,7 @@ impl ShellLayout {
     fn visible_items(&self) -> Vec<fika_core::ItemLayout> {
         match self {
             Self::Icons(layout) => layout.visible_items().collect(),
-            Self::Compact(layout) => layout.visible_items().collect(),
+            Self::Compact(layout) => layout.visible_items(),
             Self::Details(layout) => layout.visible_items(),
         }
     }
@@ -2112,9 +2112,52 @@ impl ShellLayout {
     fn indexes_intersecting(&self, rect: ViewRect) -> Vec<usize> {
         match self {
             Self::Icons(layout) => layout.indexes_intersecting(rect).indexes().to_vec(),
-            Self::Compact(layout) => layout.indexes_intersecting(rect).indexes().to_vec(),
+            Self::Compact(layout) => layout.indexes_intersecting(rect),
             Self::Details(layout) => layout.indexes_intersecting(rect),
         }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct ShellCompactLayout {
+    layout: CompactLayout,
+    text_widths: Arc<[f32]>,
+}
+
+impl ShellCompactLayout {
+    fn new(layout: CompactLayout, text_widths: Vec<f32>) -> Self {
+        Self {
+            layout,
+            text_widths: Arc::from(text_widths),
+        }
+    }
+
+    fn content_size(&self) -> ViewSize {
+        self.layout.content_size()
+    }
+
+    fn rows_per_column(&self) -> usize {
+        self.layout.rows_per_column()
+    }
+
+    fn item(&self, index: usize) -> Option<fika_core::ItemLayout> {
+        self.layout
+            .item_with_required_text_width(index, self.text_widths.get(index).copied())
+    }
+
+    fn visible_items(&self) -> Vec<fika_core::ItemLayout> {
+        self.layout
+            .visible_items()
+            .filter_map(|item| self.item(item.model_index))
+            .collect()
+    }
+
+    fn hit_test_content_point(&self, point: ViewPoint) -> Option<usize> {
+        self.layout.hit_test_content_point(point)
+    }
+
+    fn indexes_intersecting(&self, rect: ViewRect) -> Vec<usize> {
+        self.layout.indexes_intersecting(rect).indexes().to_vec()
     }
 }
 
@@ -5309,9 +5352,7 @@ impl ShellScene {
             ShellViewMode::Icons => {
                 ShellLayout::Icons(IconsLayout::new(item_count, self.icons_options(size)))
             }
-            ShellViewMode::Compact => {
-                ShellLayout::Compact(CompactLayout::new(item_count, self.compact_options(size)))
-            }
+            ShellViewMode::Compact => ShellLayout::Compact(self.compact_layout(size)),
             ShellViewMode::Details => ShellLayout::Details(DetailsLayout::new(
                 item_count,
                 self.content_width(size),
@@ -5326,6 +5367,33 @@ impl ShellScene {
                 self.text_line_height(),
             )),
         }
+    }
+
+    fn compact_layout(&self, size: PhysicalSize<u32>) -> ShellCompactLayout {
+        let item_count = self.filtered_entry_count();
+        let options = self.compact_options(size);
+        let rows_per_column = CompactLayout::rows_per_column_for_options(options);
+        let column_count = item_count.div_ceil(rows_per_column);
+        let mut text_widths = Vec::with_capacity(item_count);
+        let mut column_widths = vec![options.item_width; column_count];
+        for layout_index in 0..item_count {
+            let Some(entry_index) = self.model_index_for_layout_index(layout_index) else {
+                text_widths.push(0.0);
+                continue;
+            };
+            let Some(entry) = self.entries.get(entry_index) else {
+                text_widths.push(0.0);
+                continue;
+            };
+            let text_width = compact_entry_text_width(entry, self.ui_scale() * self.zoom_factor());
+            text_widths.push(text_width);
+            let column = layout_index / rows_per_column;
+            if let Some(width) = column_widths.get_mut(column) {
+                *width = width.max(required_compact_item_width(options, text_width));
+            }
+        }
+        let layout = CompactLayout::new_with_column_widths(item_count, options, column_widths);
+        ShellCompactLayout::new(layout, text_widths)
     }
 
     fn icons_options(&self, size: PhysicalSize<u32>) -> IconsLayoutOptions {
@@ -5345,19 +5413,25 @@ impl ShellScene {
     }
 
     fn compact_options(&self, size: PhysicalSize<u32>) -> CompactLayoutOptions {
+        let padding = self.zoomed_metric(6.0, 4.0, 10.0);
+        let side_padding = self.zoomed_metric(8.0, 6.0, 14.0);
+        let gap = self.zoomed_metric(8.0, 6.0, 14.0);
+        let text_gap = self.zoomed_metric(8.0, 6.0, 14.0);
+        let icon_size = self.zoomed_metric(COMPACT_ICON_SIZE, 20.0, 56.0);
+        let min_text_width = self.zoomed_metric(COMPACT_MIN_TEXT_WIDTH, 16.0, 48.0);
         CompactLayoutOptions {
             viewport_width: self.content_width(size),
             viewport_height: self.viewport_height(size),
             reserved_bottom: 0.0,
             scroll_x: self.scroll_x,
             scroll_y: 0.0,
-            padding: self.zoomed_metric(6.0, 4.0, 10.0),
-            side_padding: self.zoomed_metric(8.0, 6.0, 14.0),
-            gap: self.zoomed_metric(8.0, 6.0, 14.0),
-            text_gap: self.zoomed_metric(8.0, 6.0, 14.0),
-            item_width: self.zoomed_metric(COMPACT_ITEM_WIDTH, 168.0, 360.0),
+            padding,
+            side_padding,
+            gap,
+            text_gap,
+            item_width: (padding * 2.0 + icon_size + text_gap + min_text_width).round(),
             item_height: self.zoomed_metric(COMPACT_ITEM_HEIGHT, 34.0, 72.0),
-            icon_size: self.zoomed_metric(COMPACT_ICON_SIZE, 20.0, 56.0),
+            icon_size,
             text_height: self.zoomed_metric(TEXT_LINE_HEIGHT, 16.0, 26.0),
         }
     }
@@ -5879,7 +5953,7 @@ impl ShellScene {
         let selected = self.selection.contains(entry_index);
         let hovered = self.hovered_index == Some(entry_index);
 
-        if selected || hovered || self.view_mode != ShellViewMode::Compact {
+        if selected || hovered {
             push_clipped_rect(
                 vertices,
                 visual_rect,
@@ -5946,9 +6020,19 @@ impl ShellScene {
         } else {
             TextColor::rgb(194, 202, 212)
         };
-        text.push_label(entry.name.as_ref(), text_rect, content_clip, text_color);
+        if self.view_mode == ShellViewMode::Compact {
+            text.push_label_aligned(
+                entry.name.as_ref(),
+                text_rect,
+                content_clip,
+                text_color,
+                LabelAlignment::Start,
+            );
+        } else {
+            text.push_label(entry.name.as_ref(), text_rect, content_clip, text_color);
+        }
 
-        if selected || hovered || self.view_mode != ShellViewMode::Compact {
+        if selected || hovered {
             let marker_size = self.scale_metric(5.0);
             let index_marker = ViewRect {
                 x: item_rect.x + self.scale_metric(7.0),
@@ -8607,12 +8691,28 @@ struct TextDraw {
     atlas: AtlasRect,
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum LabelAlignment {
+    Start,
+    Center,
+}
+
+impl LabelAlignment {
+    fn cosmic_align(self) -> Align {
+        match self {
+            Self::Start => Align::Left,
+            Self::Center => Align::Center,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct LabelCacheKey {
     text: String,
     width: u32,
     height: u32,
     color: TextColor,
+    alignment: LabelAlignment,
 }
 
 #[derive(Clone, Debug)]
@@ -8751,6 +8851,17 @@ impl<'a> TextFrameBuilder<'a> {
     }
 
     fn push_label(&mut self, label: &str, rect: ViewRect, clip: ViewRect, color: TextColor) {
+        self.push_label_aligned(label, rect, clip, color, LabelAlignment::Center);
+    }
+
+    fn push_label_aligned(
+        &mut self,
+        label: &str,
+        rect: ViewRect,
+        clip: ViewRect,
+        color: TextColor,
+        alignment: LabelAlignment,
+    ) {
         if label.is_empty() || rect.width <= 0.0 || rect.height <= 0.0 {
             return;
         }
@@ -8766,6 +8877,7 @@ impl<'a> TextFrameBuilder<'a> {
             width: label_width,
             height: label_height,
             color,
+            alignment,
         };
         let label_pixels = if let Some(pixels) = self.label_cache.get(&key) {
             self.cache_hits += 1;
@@ -8773,7 +8885,8 @@ impl<'a> TextFrameBuilder<'a> {
         } else {
             self.cache_misses += 1;
             let raster_start = Instant::now();
-            let label_pixels = self.rasterize_label(label, label_width, label_height, color);
+            let label_pixels =
+                self.rasterize_label(label, label_width, label_height, color, alignment);
             self.raster_us += raster_start.elapsed().as_micros();
             self.label_cache.insert(key, label_pixels)
         };
@@ -8835,6 +8948,7 @@ impl<'a> TextFrameBuilder<'a> {
         label_width: u32,
         label_height: u32,
         color: TextColor,
+        alignment: LabelAlignment,
     ) -> Vec<u8> {
         let mut pixels = vec![0; (label_width * label_height * 4) as usize];
         let attrs = Attrs::new().family(Family::SansSerif);
@@ -8844,8 +8958,12 @@ impl<'a> TextFrameBuilder<'a> {
         self.text_buffer.set_wrap(Wrap::WordOrGlyph);
         self.text_buffer
             .set_size(Some(label_width as f32), Some(label_height as f32));
-        self.text_buffer
-            .set_text(label, &attrs, Shaping::Advanced, Some(Align::Center));
+        self.text_buffer.set_text(
+            label,
+            &attrs,
+            Shaping::Advanced,
+            Some(alignment.cosmic_align()),
+        );
         self.text_buffer.draw(
             self.font_system,
             self.swash_cache,
@@ -10565,6 +10683,34 @@ fn file_color(entry: &Entry) -> [f32; 4] {
         [0.38, 0.60, 0.84, 1.0]
     } else {
         [0.55, 0.60, 0.68, 1.0]
+    }
+}
+
+fn required_compact_item_width(options: CompactLayoutOptions, text_width: f32) -> f32 {
+    (options.padding * 2.0 + options.icon_size + options.text_gap + text_width).round()
+}
+
+fn compact_entry_text_width(entry: &Entry, scale_factor: f32) -> f32 {
+    let unit_width = f32::from(entry.name_width_units) * 8.5;
+    let estimated_width = entry
+        .name
+        .chars()
+        .map(estimated_name_char_width)
+        .sum::<f32>();
+    unit_width.max(estimated_width) * scale_factor
+}
+
+fn estimated_name_char_width(ch: char) -> f32 {
+    match ch {
+        '\u{200B}' => 0.0,
+        '\u{2026}' => 8.0,
+        'i' | 'l' | 'I' | '!' | '.' | ',' | ':' | ';' | '\'' | '`' | '|' => 4.0,
+        ' ' | '-' | '_' => 5.0,
+        'm' | 'w' | 'M' | 'W' | '@' | '%' | '#' => 11.0,
+        'A'..='Z' => 9.0,
+        '0'..='9' => 8.0,
+        ch if ch.is_ascii() => 7.5,
+        _ => 14.0,
     }
 }
 
@@ -14394,7 +14540,7 @@ text/plain=writer.desktop;\n",
     #[test]
     fn compact_navigation_uses_column_major_rows() {
         let size = PhysicalSize::new(320, 180);
-        let layout = ShellLayout::Compact(CompactLayout::new(
+        let compact = CompactLayout::new(
             20,
             CompactLayoutOptions {
                 viewport_width: size.width as f32,
@@ -14406,12 +14552,13 @@ text/plain=writer.desktop;\n",
                 side_padding: 8.0,
                 gap: 8.0,
                 text_gap: 8.0,
-                item_width: COMPACT_ITEM_WIDTH,
+                item_width: 236.0,
                 item_height: COMPACT_ITEM_HEIGHT,
                 icon_size: COMPACT_ICON_SIZE,
                 text_height: 18.0,
             },
-        ));
+        );
+        let layout = ShellLayout::Compact(ShellCompactLayout::new(compact, vec![0.0; 20]));
         let rows = match &layout {
             ShellLayout::Compact(layout) => layout.rows_per_column(),
             _ => unreachable!(),
@@ -14429,6 +14576,37 @@ text/plain=writer.desktop;\n",
             navigation_target(NavigationAction::Left, rows, 20, &layout),
             Some(0)
         );
+    }
+
+    #[test]
+    fn compact_layout_uses_longest_name_per_column_and_per_item_visual_width() {
+        let scene = test_scene(
+            vec![
+                test_entry("a", false),
+                test_entry("very-wide-filename.txt", false),
+                test_entry("b", false),
+                test_entry("c", false),
+            ],
+            ShellViewMode::Compact,
+        );
+        let size = PhysicalSize::new(700, 190);
+        let layout = match scene.layout(size) {
+            ShellLayout::Compact(layout) => layout,
+            _ => unreachable!(),
+        };
+
+        assert_eq!(layout.rows_per_column(), 2);
+        let short_first_column = layout.item(0).unwrap();
+        let long_first_column = layout.item(1).unwrap();
+        let short_second_column = layout.item(2).unwrap();
+
+        assert_eq!(
+            short_first_column.item_rect.width,
+            long_first_column.item_rect.width
+        );
+        assert!(long_first_column.item_rect.width > short_second_column.item_rect.width);
+        assert!(short_first_column.visual_rect.width < long_first_column.visual_rect.width);
+        assert!(short_first_column.visual_rect.width < short_first_column.item_rect.width);
     }
 
     #[test]

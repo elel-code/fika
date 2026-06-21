@@ -83,8 +83,9 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
 
 - [~] Phase 0：新增独立 `fika-wgpu` spike，不删除 GPUI binary。当前已能打开独立
   winit/wgpu shell、接受可选 path 参数、通过 `fika_core::read_entries_sync`
-  读取目录、用 `IconsLayout` 投影 retained geometry，并用 solid quad batch
-  渲染 path bar、可见 item 背景和 icon fallback 形状；真实文件名通过
+  读取目录、用 `IconsLayout` 投影 retained geometry，Compact projection 会按每列
+  可见名称中的最长项决定列宽，并用 solid quad batch 渲染 path bar、可见 item
+  背景和 icon fallback 形状；真实文件名通过
   `cosmic-text` shaping/rasterization 进入 bounded label raster cache，再上传到
   临时 per-frame RGBA text atlas 绘制，当前 shell metrics 会应用 window scale
   factor，默认 Icons 图标保持 48 逻辑 px（1.5x 下为 72 物理 px），baseline text
@@ -119,8 +120,9 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
   其余 action 先记录 pending 日志；
   文件内容区现在预留并绘制 shell-owned item-view scrollbar，Icons/Details 为右侧竖向
   track，Compact 为底部横向 track，frame log 输出 `scale=...` 和
-  `content_scrollbar=0|1`；Compact 普通未 hover/未 selection item 不再绘制默认
-  highlight/background；scrollbar drag/click 交互仍待接入；
+  `content_scrollbar=0|1`；Icons/Compact 普通未 hover/未 selection item 不再绘制默认
+  highlight/background，Compact label 左对齐且每项高亮宽度按该项文本宽度收缩；
+  scrollbar drag/click 交互仍待接入；
   空白区域左键拖动已通过同一 retained Icons geometry 支持 rubber-band selection，
   普通拖动替换 selection，Shift 追加，Ctrl/Meta 相对按下时的 base selection 做
   toggle；keyboard navigation 已通过同一 retained selection state 处理 Arrow、
