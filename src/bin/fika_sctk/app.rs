@@ -18,6 +18,7 @@ use smithay_client_toolkit::{
 };
 use wayland_client::Connection;
 use wayland_client::globals::registry_queue_init;
+use wayland_client::protocol::wl_pointer;
 
 use super::options::StartupOptions;
 use super::renderer::WgpuRenderer;
@@ -49,6 +50,7 @@ pub(crate) fn run(options: StartupOptions) -> Result<(), Box<dyn Error>> {
         registry_state: RegistryState::new(&globals),
         seat_state: SeatState::new(&globals, &qh),
         output_state: OutputState::new(&globals, &qh),
+        pointer: None,
         exit: false,
         ready_logged: false,
         width: DEFAULT_WIDTH,
@@ -73,13 +75,13 @@ pub(crate) struct FikaSctkApp {
     pub(crate) registry_state: RegistryState,
     pub(crate) seat_state: SeatState,
     pub(crate) output_state: OutputState,
+    pub(crate) pointer: Option<wl_pointer::WlPointer>,
     pub(crate) exit: bool,
     ready_logged: bool,
     width: u32,
     height: u32,
     renderer: WgpuRenderer,
-    #[allow(dead_code)]
-    window: Window,
+    pub(crate) window: Window,
     scene: SctkScene,
 }
 
@@ -109,6 +111,44 @@ impl FikaSctkApp {
         } else {
             eprintln!("[fika-sctk] configure size={}x{}", self.width, self.height);
         }
-        self.renderer.render_clear_frame();
+        self.render_scene("configure");
+    }
+
+    pub(crate) fn render_scene(&mut self, reason: &str) {
+        let frame = self.scene.render_frame(self.width, self.height);
+        self.renderer.render_scene_frame(frame, reason);
+    }
+
+    pub(crate) fn set_pointer(&mut self, x: f64, y: f64) {
+        if self
+            .scene
+            .set_pointer(crate::fika_sctk::quad::point(x, y), self.width, self.height)
+        {
+            self.render_scene("pointer-hover");
+        }
+    }
+
+    pub(crate) fn clear_pointer(&mut self) {
+        if self.scene.clear_pointer() {
+            self.render_scene("pointer-leave");
+        }
+    }
+
+    pub(crate) fn press_primary(&mut self, x: f64, y: f64) {
+        if self
+            .scene
+            .press_primary(crate::fika_sctk::quad::point(x, y), self.width, self.height)
+        {
+            self.render_scene("select");
+        }
+    }
+
+    pub(crate) fn scroll(&mut self, horizontal: f32, vertical: f32) {
+        if self
+            .scene
+            .scroll(horizontal, vertical, self.width, self.height)
+        {
+            self.render_scene("scroll");
+        }
     }
 }

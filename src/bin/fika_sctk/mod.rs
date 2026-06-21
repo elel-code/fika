@@ -1,7 +1,9 @@
 use std::error::Error;
 
 mod app;
+mod metrics;
 mod options;
+mod quad;
 mod renderer;
 mod scene;
 mod wayland;

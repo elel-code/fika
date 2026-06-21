@@ -7,11 +7,17 @@ use raw_window_handle::{
 use smithay_client_toolkit::shell::{WaylandSurface, xdg::window::Window};
 use wayland_client::{Connection, Proxy};
 
+use super::quad::QuadRenderer;
+use super::scene::SceneFrame;
+
 pub(crate) struct WgpuRenderer {
     adapter: wgpu::Adapter,
     surface: wgpu::Surface<'static>,
     device: wgpu::Device,
     queue: wgpu::Queue,
+    format: Option<wgpu::TextureFormat>,
+    quad_renderer: Option<QuadRenderer>,
+    frame_count: u64,
 }
 
 impl WgpuRenderer {
@@ -64,10 +70,17 @@ impl WgpuRenderer {
             surface,
             device,
             queue,
+            format: None,
+            quad_renderer: None,
+            frame_count: 0,
         })
     }
 
-    pub(crate) fn configure_surface(&self, width: u32, height: u32) -> wgpu::SurfaceConfiguration {
+    pub(crate) fn configure_surface(
+        &mut self,
+        width: u32,
+        height: u32,
+    ) -> wgpu::SurfaceConfiguration {
         let capabilities = self.surface.get_capabilities(&self.adapter);
         let format = capabilities
             .formats
@@ -105,10 +118,14 @@ impl WgpuRenderer {
             view_formats: vec![],
         };
         self.surface.configure(&self.device, &config);
+        if self.format != Some(format) {
+            self.quad_renderer = Some(QuadRenderer::new(&self.device, format));
+            self.format = Some(format);
+        }
         config
     }
 
-    pub(crate) fn render_clear_frame(&self) {
+    pub(crate) fn render_scene_frame(&mut self, frame_scene: SceneFrame, reason: &str) {
         let frame = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame)
             | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
@@ -127,11 +144,14 @@ impl WgpuRenderer {
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("fika-sctk-clear-frame"),
+                label: Some("fika-sctk-scene-frame"),
             });
+        if let Some(quad_renderer) = self.quad_renderer.as_mut() {
+            quad_renderer.upload(&self.device, &self.queue, frame_scene.batch.vertices());
+        }
         {
-            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("fika-sctk-clear-pass"),
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("fika-sctk-scene-pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
                     resolve_target: None,
@@ -151,8 +171,29 @@ impl WgpuRenderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
+            if let Some(quad_renderer) = self.quad_renderer.as_ref() {
+                quad_renderer.draw(&mut pass);
+            }
         }
         self.queue.submit(Some(encoder.finish()));
         frame.present();
+        self.frame_count = self.frame_count.wrapping_add(1);
+        eprintln!(
+            "[fika-sctk] frame={} reason={} quads={} visible={} selected={} hover={} scroll_x={:.1} scroll_y={:.1}",
+            self.frame_count,
+            reason,
+            frame_scene.quads,
+            frame_scene.visible_items,
+            frame_scene
+                .selected
+                .map(|index| index.to_string())
+                .unwrap_or_else(|| "-1".to_string()),
+            frame_scene
+                .hover
+                .map(|index| index.to_string())
+                .unwrap_or_else(|| "-1".to_string()),
+            frame_scene.scroll_x,
+            frame_scene.scroll_y,
+        );
     }
 }

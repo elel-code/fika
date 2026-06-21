@@ -109,19 +109,18 @@ Current checkpoint:
 - `src/bin/fika-sctk.rs` exists as the new backend spike. It connects to the
   Wayland session through SCTK/wayland-client, creates an xdg-window, builds a
   `wgpu` surface from raw Wayland handles, reads the requested directory through
-  `fika_core::read_entries_sync`, routes the Wayland event queue through
-  calloop `WaylandSource`, logs entry counts, and clears configured frames.
-  This is the target host for the retained scene. Its entry point is now only a
-  thin binary wrapper; startup options, app/calloop orchestration, wgpu surface
-  rendering, the initial directory scene snapshot, and Wayland handlers live
-  under `src/bin/fika_sctk/`. `SctkScene` is the current replacement boundary
-  for moving the winit-backed `fika-wgpu` retained scene into SCTK/calloop. The
-  SCTK startup path now accepts `--view icons|compact|details`, stores the core
-  `ViewMode` in `SctkScene`, and reports it in startup/ready logs.
-- The first `fika-wgpu` debt split has started: CLI/view-mode parsing now lives
-  in `src/bin/fika_wgpu/options.rs`, shell visual/performance metrics live in
-  `src/bin/fika_wgpu/metrics.rs`, and the spike uses core `ViewMode` instead of
-  a wgpu-only duplicate enum.
+  `fika_core::read_entries_sync`, and routes the Wayland event queue through
+  calloop `WaylandSource`. This is now more than a clear-frame host: `SctkScene`
+  owns startup directory entries, core `ViewMode`, retained scroll/hover/selection
+  state, Icons/Compact/Details layout projection, and scene quad frame building.
+  The SCTK renderer uploads and draws those quads, while Wayland pointer handling
+  routes hover, left-click selection, and wheel scroll through the retained
+  scene hit-test path. Its entry point is a thin binary wrapper; startup options,
+  app/calloop orchestration, wgpu surface rendering, metrics, quad drawing, the
+  directory scene, and Wayland handlers live under `src/bin/fika_sctk/`.
+- New shell work should land in `src/bin/fika_sctk/`. The older
+  winit-backed `fika-wgpu` spike is a history/reference baseline only and should
+  not receive new shell behavior.
 - `src/bin/fika-wgpu.rs` exists as the older winit-backed renderer spike.
 - It accepts an optional path argument and defaults to the current directory.
 - It reads directory entries through `fika_core::read_entries_sync`.

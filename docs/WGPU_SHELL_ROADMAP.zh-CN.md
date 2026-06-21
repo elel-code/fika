@@ -96,18 +96,16 @@ Shell 拥有：
 
 - `src/bin/fika-sctk.rs` 已作为新的 backend spike 存在。它通过
   SCTK/wayland-client 连接 Wayland session，创建 xdg-window，用 raw Wayland handle
-  建立 `wgpu` surface，通过 `fika_core::read_entries_sync` 读取目标目录，输出 entry
-  计数，把 Wayland event queue 接入 calloop `WaylandSource`，并在 configure 后清屏绘制。
-  这是 retained scene 的目标承载层。入口现在只是很薄的 binary wrapper；启动参数、
-  app/calloop 编排、wgpu surface rendering、初始目录 scene snapshot 和 Wayland handlers
-  已拆到 `src/bin/fika_sctk/`。`SctkScene` 是当前把 winit-backed `fika-wgpu`
-  retained scene 迁入 SCTK/calloop 的替换边界。SCTK startup path 现在接受
-  `--view icons|compact|details`，把 core `ViewMode` 存入 `SctkScene`，并在
-  startup/ready 日志中输出 view。
-- 第一轮 `fika-wgpu` 工程债拆分已经开始：CLI/view-mode parsing 已移到
-  `src/bin/fika_wgpu/options.rs`，shell 视觉/性能尺寸常量已移到
-  `src/bin/fika_wgpu/metrics.rs`，spike 使用 core `ViewMode`，不再保留 wgpu-only
-  duplicate enum。
+  建立 `wgpu` surface，通过 `fika_core::read_entries_sync` 读取目标目录，把 Wayland
+  event queue 接入 calloop `WaylandSource`。它现在已经不是 clear-frame host：
+  `SctkScene` 拥有启动目录 entries、core `ViewMode`、retained scroll/hover/selection
+  状态、Icons/Compact/Details layout projection 和 scene quad frame 构建。SCTK renderer
+  会上传并绘制这些 quads；Wayland pointer handling 已把 hover、左键 selection 和
+  wheel scroll 路由到同一 retained scene hit-test path。入口现在只是很薄的 binary
+  wrapper；启动参数、app/calloop 编排、wgpu surface rendering、metrics、quad drawing、
+  directory scene 和 Wayland handlers 已拆到 `src/bin/fika_sctk/`。
+- 后续新 shell 工作只应落入 `src/bin/fika_sctk/`。较早的 winit-backed `fika-wgpu`
+  spike 只作为历史/参考基线，不再承接新的 shell 行为。
 - `src/bin/fika-wgpu.rs` 是较早的 winit-backed renderer spike。
 - 接受可选 path 参数，默认使用当前目录。
 - 通过 `fika_core::read_entries_sync` 读取目录 entries。
