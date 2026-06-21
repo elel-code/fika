@@ -1,10 +1,14 @@
 use std::borrow::Cow;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::env;
 use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    mpsc::{self, Receiver, Sender},
+};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use bytemuck::{Pod, Zeroable};
@@ -61,6 +65,7 @@ const TEXT_LABEL_CACHE_MAX_BYTES: usize = 8 * 1024 * 1024;
 const ICON_ATLAS_WIDTH: u32 = 1024;
 const ICON_PADDING: u32 = 2;
 const ICON_CACHE_MAX_BYTES: usize = 32 * 1024 * 1024;
+const ICON_RASTER_MISS_BUDGET_PER_FRAME: usize = 2;
 const RUBBER_BAND_START_THRESHOLD: f32 = 4.0;
 const VIEW_SWITCH_REDRAW_FRAMES: u8 = 6;
 const PLACES_SIDEBAR_WIDTH: f32 = 228.0;
@@ -10187,6 +10192,12 @@ impl WgpuState {
             scene,
             self.size,
         );
+        let icon_work_pending = scene_frame.icon_stats.deferred > 0
+            || scene_frame.icon_stats.raster_deferred > 0
+            || self.icon_renderer.resolver.has_pending();
+        if icon_work_pending {
+            window.request_redraw();
+        }
         self.quad_renderer
             .upload(&self.device, &self.queue, &scene_frame.vertices);
         self.overlay_quad_renderer
@@ -10236,7 +10247,7 @@ impl WgpuState {
             || self.last_log.elapsed() >= Duration::from_secs(1)
         {
             eprintln!(
-                "[fika-wgpu] frame={} reason={} view={} scale={:.2} zoom={} zoom_changes={} path={} entries={} filtered={} show_hidden={} hidden_changes={} location_active={} location_changes={} filter_active={} filter_changes={} places={} places_visible={} places_width={:.1} place_hover={} places_changes={} places_resize_changes={} places_scroll_y={:.1} places_scroll_changes={} split_pane={} split_changes={} split_path={} content_scrollbar={} visible={} thumbnails={} slots={}/{} slot_reused={} slot_recycled={} slot_allocated={} selected={} hover={} dnd_hover={} dnd_hover_changes={} dnd_drop_requests={} context={} context_menu={} context_changes={} context_actions={} properties={} properties_changes={} create_dialog={} create_changes={} rename_dialog={} rename_changes={} open_with={} open_with_changes={} open_changes={} copy_location_changes={} file_clipboard_changes={} paste_changes={} trash_changes={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} path_changes={} reloads={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_cache={}/{} entries={} bytes={} batches={} scroll_x={:.1} scroll_y={:.1} layout={}us text_raster={}us text_atlas={}x{}:{}b render={}us",
+                "[fika-wgpu] frame={} reason={} view={} scale={:.2} zoom={} zoom_changes={} path={} entries={} filtered={} show_hidden={} hidden_changes={} location_active={} location_changes={} filter_active={} filter_changes={} places={} places_visible={} places_width={:.1} place_hover={} places_changes={} places_resize_changes={} places_scroll_y={:.1} places_scroll_changes={} split_pane={} split_changes={} split_path={} content_scrollbar={} visible={} thumbnails={} slots={}/{} slot_reused={} slot_recycled={} slot_allocated={} selected={} hover={} dnd_hover={} dnd_hover_changes={} dnd_drop_requests={} context={} context_menu={} context_changes={} context_actions={} properties={} properties_changes={} create_dialog={} create_changes={} rename_dialog={} rename_changes={} open_with={} open_with_changes={} open_changes={} copy_location_changes={} file_clipboard_changes={} paste_changes={} trash_changes={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} path_changes={} reloads={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_deferred={} icon_raster_deferred={} icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_cache={}/{} entries={} bytes={} batches={} scroll_x={:.1} scroll_y={:.1} layout={}us text_raster={}us text_atlas={}x{}:{}b render={}us",
                 self.frame_count,
                 reason,
                 scene.view_mode.as_str(),
@@ -10335,6 +10346,8 @@ impl WgpuState {
                 scene_frame.icon_stats.icons,
                 scene_frame.icon_stats.quads,
                 scene_frame.icon_stats.fallbacks,
+                scene_frame.icon_stats.deferred,
+                scene_frame.icon_stats.raster_deferred,
                 scene_frame.icon_stats.cache_hits,
                 scene_frame.icon_stats.cache_misses,
                 scene_frame.icon_stats.cache_entries,
@@ -10461,11 +10474,13 @@ struct IconFrameStats {
     icons: usize,
     quads: usize,
     fallbacks: usize,
+    deferred: usize,
     atlas_width: u32,
     atlas_height: u32,
     atlas_bytes: usize,
     cache_hits: usize,
     cache_misses: usize,
+    raster_deferred: usize,
     cache_entries: usize,
     cache_bytes: usize,
     resolve_us: u128,
@@ -10593,6 +10608,9 @@ struct IconFrameBuilder<'a> {
     fallbacks: usize,
     cache_hits: usize,
     cache_misses: usize,
+    deferred: usize,
+    raster_deferred: usize,
+    raster_miss_budget: usize,
     resolve_us: u128,
     raster_us: u128,
 }
@@ -10618,6 +10636,9 @@ impl<'a> IconFrameBuilder<'a> {
             fallbacks: 0,
             cache_hits: 0,
             cache_misses: 0,
+            deferred: 0,
+            raster_deferred: 0,
+            raster_miss_budget: ICON_RASTER_MISS_BUDGET_PER_FRAME,
             resolve_us: 0,
             raster_us: 0,
         }
@@ -10641,7 +10662,12 @@ impl<'a> IconFrameBuilder<'a> {
         self.icons += 1;
         let resolve_start = Instant::now();
         let icon_size = rect.width.max(rect.height).clamp(16.0, 256.0);
-        let snapshot = self.resolver.resolve_entry(directory, entry, icon_size);
+        let Some(snapshot) = self.resolver.resolve_entry(directory, entry, icon_size) else {
+            self.resolve_us += resolve_start.elapsed().as_micros();
+            self.deferred += 1;
+            self.fallbacks += 1;
+            return false;
+        };
         self.resolve_us += resolve_start.elapsed().as_micros();
 
         let Some(path) = snapshot.path else {
@@ -10655,6 +10681,12 @@ impl<'a> IconFrameBuilder<'a> {
             raster
         } else {
             self.cache_misses += 1;
+            if self.raster_miss_budget == 0 {
+                self.raster_deferred += 1;
+                self.fallbacks += 1;
+                return false;
+            }
+            self.raster_miss_budget -= 1;
             let raster_start = Instant::now();
             let Some(raster) = rasterize_icon(&key.path, size_px as u32) else {
                 self.raster_us += raster_start.elapsed().as_micros();
@@ -10714,11 +10746,13 @@ impl<'a> IconFrameBuilder<'a> {
                 icons: self.icons,
                 quads: self.draws.len(),
                 fallbacks: self.fallbacks,
+                deferred: self.deferred,
                 atlas_width: self.width,
                 atlas_height: height,
                 atlas_bytes,
                 cache_hits: self.cache_hits,
                 cache_misses: self.cache_misses,
+                raster_deferred: self.raster_deferred,
                 cache_entries,
                 cache_bytes,
                 resolve_us: self.resolve_us,
@@ -12079,17 +12113,38 @@ struct ResolvedFileIcon {
     path: Option<PathBuf>,
 }
 
-#[derive(Debug)]
 struct FileIconResolver {
     cached: HashMap<FileIconCacheKey, ResolvedFileIcon>,
-    theme: IconThemeResolver,
+    pending: HashSet<FileIconCacheKey>,
+    request_tx: Option<Sender<IconResolveRequest>>,
+    result_rx: Receiver<IconResolveResult>,
+}
+
+#[derive(Clone, Debug)]
+struct IconResolveRequest {
+    key: FileIconCacheKey,
+}
+
+#[derive(Clone, Debug)]
+struct IconResolveResult {
+    key: FileIconCacheKey,
+    icon: ResolvedFileIcon,
 }
 
 impl FileIconResolver {
     fn new() -> Self {
+        let (request_tx, request_rx) = mpsc::channel::<IconResolveRequest>();
+        let (result_tx, result_rx) = mpsc::channel::<IconResolveResult>();
+        let request_tx = thread::Builder::new()
+            .name("fika-wgpu-icon-resolver".to_string())
+            .spawn(move || icon_resolve_worker(request_rx, result_tx))
+            .ok()
+            .map(|_| request_tx);
         Self {
             cached: HashMap::new(),
-            theme: IconThemeResolver::default(),
+            pending: HashSet::new(),
+            request_tx,
+            result_rx,
         }
     }
 
@@ -12098,7 +12153,8 @@ impl FileIconResolver {
         directory: &Path,
         entry: &Entry,
         icon_size: f32,
-    ) -> ResolvedFileIcon {
+    ) -> Option<ResolvedFileIcon> {
+        self.drain_results();
         let path = directory.join(entry.name.as_ref());
         let key = file_icon_cache_key(
             &path,
@@ -12108,17 +12164,53 @@ impl FileIconResolver {
             icon_size,
         );
         if let Some(icon) = self.cached.get(&key) {
-            return icon.clone();
+            return Some(icon.clone());
         }
 
-        let icon = file_icon_snapshot(
-            &key.kind,
-            key.size_px,
-            &mut self.theme,
-            fika_core::MimeDatabase::shared(),
-        );
-        self.cached.insert(key, icon.clone());
-        icon
+        if self.pending.insert(key.clone())
+            && self
+                .request_tx
+                .as_ref()
+                .is_none_or(|tx| tx.send(IconResolveRequest { key }).is_err())
+        {
+            self.pending.clear();
+        }
+        None
+    }
+
+    fn drain_results(&mut self) -> usize {
+        let mut changed = 0usize;
+        while let Ok(result) = self.result_rx.try_recv() {
+            self.pending.remove(&result.key);
+            self.cached.insert(result.key, result.icon);
+            changed += 1;
+        }
+        changed
+    }
+
+    fn has_pending(&mut self) -> bool {
+        self.drain_results();
+        !self.pending.is_empty()
+    }
+}
+
+fn icon_resolve_worker(
+    request_rx: Receiver<IconResolveRequest>,
+    result_tx: Sender<IconResolveResult>,
+) {
+    let mut theme = IconThemeResolver::default();
+    let mime = fika_core::MimeDatabase::shared();
+    while let Ok(request) = request_rx.recv() {
+        let icon = file_icon_snapshot(&request.key.kind, request.key.size_px, &mut theme, mime);
+        if result_tx
+            .send(IconResolveResult {
+                key: request.key,
+                icon,
+            })
+            .is_err()
+        {
+            break;
+        }
     }
 }
 

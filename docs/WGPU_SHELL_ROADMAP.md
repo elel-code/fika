@@ -121,7 +121,11 @@ Current checkpoint:
 - It resolves MIME/theme icons from XDG, GTK, and KDE theme settings; rasterizes
   PNG/WebP/JPEG/BMP/GIF/ICO through `image` and SVG through `usvg/resvg`;
   packs visible icons into a per-frame RGBA icon atlas; and keeps a bounded
-  persistent icon raster cache keyed by theme icon file path and size.
+  persistent icon raster cache keyed by theme icon file path and size. Semantic
+  theme-icon path resolution is no longer allowed to block the frame path:
+  uncached file-icon roles are queued to a background resolver and the current
+  frame paints a fallback until the resolved path is ready. New icon rasters are
+  also capped per frame, following Dolphin's visible-first role updater model.
 - Mouse-wheel scrolling updates retained viewport state. File content now
   reserves and draws shell-owned item-view scrollbars: Icons/Details use a
   vertical right-side track and Compact uses a horizontal bottom track. The
@@ -276,7 +280,7 @@ Current checkpoint:
   active/free/reuse/recycle/allocation counters,
   Places count/hover/change/scroll counters, quad count, selected count, hovered item index, active rubber-band state,
   context target kind, context menu state, properties overlay state, hit-test/selection/keyboard navigation/rubber-band/view-switch/path-change/open/copy-location/file-clipboard/paste
-  counters, reload/location/filter/hidden counters, DnD hover/drop-request counters, zoom percent and zoom-change counters, icon count, icon cache
+  counters, reload/location/filter/hidden counters, DnD hover/drop-request counters, zoom percent and zoom-change counters, icon count, icon deferred/raster-deferred count, icon cache
   hit/miss count, icon cache bytes, icon atlas bytes, icon resolve/raster time,
   text label count, text cache hit/miss count, text cache bytes, text atlas
   bytes, draw batch count, render reason, layout time, text raster time, render

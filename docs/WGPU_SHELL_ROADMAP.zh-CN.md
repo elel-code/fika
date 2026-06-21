@@ -106,6 +106,9 @@ Shell 拥有：
 - 从 XDG、GTK 和 KDE theme settings 解析 MIME/theme icon；PNG/WebP/JPEG/BMP/GIF/ICO
   通过 `image` 光栅化，SVG 通过 `usvg/resvg` 光栅化；可见 icon 打包到 per-frame RGBA
   icon atlas，并按 theme icon file path 和 size 保留 bounded persistent icon raster cache。
+  semantic theme-icon path resolve 不再允许阻塞 frame path：未缓存的 file-icon role
+  会进入后台 resolver，当前 frame 先绘制 fallback，等 resolved path 就绪后再补齐。新的
+  icon raster 也按每帧预算推进，对齐 Dolphin visible-first role updater 模型。
 - 鼠标滚轮更新 retained viewport state。文件内容区现在会预留并绘制 shell-owned
   item-view scrollbar：Icons/Details 使用右侧竖向 track，Compact 使用底部横向 track。
   track 和 thumb 均为圆角，并支持 thumb drag 与 track click-to-drag 更新同一 retained
@@ -216,7 +219,7 @@ Shell 拥有：
   retained visible slot active/free/reuse/recycle/allocation counters、quad count、draw
   batch count、Places count/hover/change/scroll counters、selected count、hovered item index、active rubber-band state、
   context target kind、context menu state、properties overlay state、hit-test/selection/keyboard navigation/rubber-band/view-switch/path-change/open/copy-location/file-clipboard/paste/reload/location/filter/hidden counters、zoom percent
-  和 zoom-change counters、DnD hover/drop-request counters、icon count、icon cache hit/miss count、icon cache bytes、icon atlas bytes、
+  和 zoom-change counters、DnD hover/drop-request counters、icon count、icon deferred/raster-deferred count、icon cache hit/miss count、icon cache bytes、icon atlas bytes、
   icon resolve/raster time、text label count、text cache hit/miss count、text cache bytes、text atlas bytes、
   render reason、layout time、text raster time、render time 和 `scroll_x` / `scroll_y`
   offsets。
