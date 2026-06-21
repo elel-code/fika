@@ -206,15 +206,15 @@ fn window_title(scene: &ShellScene) -> String {
     if let Some(split_pane) = scene.split_pane.as_ref() {
         format!(
             "Fika wgpu shell [{}] - {} | {}",
-            scene.primary_pane.view_mode.as_str(),
-            scene.primary_pane.path.display(),
+            scene.left_pane.view_mode.as_str(),
+            scene.left_pane.path.display(),
             split_pane.path.display()
         )
     } else {
         format!(
             "Fika wgpu shell [{}] - {}",
-            scene.primary_pane.view_mode.as_str(),
-            scene.primary_pane.path.display()
+            scene.left_pane.view_mode.as_str(),
+            scene.left_pane.path.display()
         )
     }
 }
@@ -334,7 +334,7 @@ impl ApplicationHandler for FikaWgpuApp {
         if self.auto_cycle_views && Instant::now() >= self.next_auto_cycle {
             self.next_auto_cycle = Instant::now() + AUTO_CYCLE_INTERVAL;
             if let Some(renderer) = self.renderer.as_ref() {
-                let next = self.scene.primary_pane.view_mode.next();
+                let next = self.scene.left_pane.view_mode.next();
                 if self.scene.set_view_mode(next, renderer.size) {
                     self.pending_redraw_frames = VIEW_SWITCH_REDRAW_FRAMES;
                     if let Some(window) = self.window.as_ref() {
@@ -778,9 +778,7 @@ impl ApplicationHandler for FikaWgpuApp {
                     return;
                 }
                 if path_bar_hit {
-                    if self
-                        .scene
-                        .apply_location_command(LocationCommand::Activate, size)
+                    if self.scene.activate_path_bar_at_screen_point(point, size)
                         && let Some(window) = self.window.as_ref()
                     {
                         window.request_redraw();
@@ -809,19 +807,17 @@ impl ApplicationHandler for FikaWgpuApp {
                     return;
                 }
                 if state == ElementState::Pressed
-                    && let Some(path) = self.scene.place_activation_for_primary_press(point, size)
+                    && let Some((pane, path)) = self.scene.place_activation_for_press(point, size)
                 {
-                    self.load_scene_path(event_loop, path, "place-open");
+                    self.load_path_into_pane(event_loop, pane, path, "place-open");
                     return;
                 }
                 if state == ElementState::Pressed
-                    && let Some(path) = self.scene.directory_activation_for_primary_press(
-                        point,
-                        size,
-                        Instant::now(),
-                    )
+                    && let Some((pane, path)) =
+                        self.scene
+                            .directory_activation_for_press(point, size, Instant::now())
                 {
-                    self.load_scene_path(event_loop, path, "double-click-directory");
+                    self.load_path_into_pane(event_loop, pane, path, "double-click-directory");
                     return;
                 }
                 let changed = match state {
@@ -832,9 +828,9 @@ impl ApplicationHandler for FikaWgpuApp {
                             toggle: self.modifiers.state().control_key()
                                 || self.modifiers.state().meta_key(),
                         };
-                        self.scene.begin_primary_pointer(selection, size)
+                        self.scene.begin_pane_pointer(selection, size)
                     }
-                    ElementState::Released => self.scene.end_primary_pointer(point, size),
+                    ElementState::Released => self.scene.end_pane_pointer(point, size),
                 };
                 self.update_window_cursor_for_scene(size);
                 if (changed || location_blur_changed)
@@ -1499,6 +1495,27 @@ impl FikaWgpuApp {
         }
     }
 
+    fn load_path_into_pane(
+        &mut self,
+        event_loop: &dyn ActiveEventLoop,
+        pane: ShellPaneKind,
+        path: PathBuf,
+        reason: &'static str,
+    ) {
+        let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
+            return;
+        };
+        match self.scene.load_path_for_pane(pane, path, size) {
+            Ok(true) => self.present_scene_change(event_loop, reason),
+            Ok(false) => {
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+            }
+            Err(error) => eprintln!("[fika-wgpu] navigation-error {error}"),
+        }
+    }
+
     fn present_scene_change(&mut self, event_loop: &dyn ActiveEventLoop, reason: &'static str) {
         self.pending_redraw_frames = VIEW_SWITCH_REDRAW_FRAMES;
         if let Some(window) = self.window.as_ref() {
@@ -2053,10 +2070,17 @@ fn function_key_view_mode(key: &Key) -> Option<ShellViewMode> {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct PrimaryClick {
+struct PaneClick {
+    pane: ShellPaneKind,
     index: usize,
     point: ViewPoint,
     time: Instant,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ShellPaneItemTarget {
+    pane: ShellPaneKind,
+    index: usize,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -2113,12 +2137,14 @@ impl ShellPlace {
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum ShellContextTarget {
     Item {
+        pane: ShellPaneKind,
         index: usize,
         path: PathBuf,
         is_dir: bool,
         selection_count: usize,
     },
     Blank {
+        pane: ShellPaneKind,
         path: PathBuf,
     },
     Place {
@@ -3421,7 +3447,8 @@ impl ShellDropTarget {
 }
 
 struct ShellScene {
-    primary_pane: ShellPaneState,
+    left_pane: ShellPaneState,
+    active_pane: ShellPaneKind,
     places: Vec<ShellPlace>,
     location_draft: Option<LocationDraft>,
     filter_active: bool,
@@ -3433,11 +3460,10 @@ struct ShellScene {
     places_scroll_y: f32,
     scrollbar_drag: Option<ScrollbarDrag>,
     pointer: Option<ViewPoint>,
-    hovered_index: Option<usize>,
+    hovered_item: Option<ShellPaneItemTarget>,
     hovered_place: Option<usize>,
-    last_primary_click: Option<PrimaryClick>,
+    last_item_click: Option<PaneClick>,
     history: PathHistory,
-    selection: ShellSelection,
     context_target: Option<ShellContextTarget>,
     context_menu: Option<ShellContextMenu>,
     properties_overlay: Option<ShellPropertiesOverlay>,
@@ -3447,7 +3473,7 @@ struct ShellScene {
     trash_conflict_dialog: Option<ShellTrashConflictDialog>,
     split_pane: Option<ShellPaneState>,
     split_pane_left_fraction: f32,
-    primary_visible_slots: ShellVisibleItemSlotPool,
+    left_visible_slots: ShellVisibleItemSlotPool,
     split_visible_slots: ShellVisibleItemSlotPool,
     visible_slot_stats: ShellVisibleItemSlotStats,
     internal_drag: Option<ShellInternalDrag>,
@@ -3511,12 +3537,13 @@ impl ShellScene {
             eprintln!("[fika-wgpu] first-entries={preview}");
         }
 
-        let primary_pane = ShellPaneState::from_entries(path, view_mode, entries, false, "");
+        let left_pane = ShellPaneState::from_entries(path, view_mode, entries, false, "");
         let places = build_shell_places();
         eprintln!("[fika-wgpu] places entries={}", places.len());
 
         Ok(Self {
-            primary_pane,
+            left_pane,
+            active_pane: ShellPaneKind::Left,
             places,
             location_draft: None,
             filter_active: false,
@@ -3528,11 +3555,10 @@ impl ShellScene {
             places_scroll_y: 0.0,
             scrollbar_drag: None,
             pointer: None,
-            hovered_index: None,
+            hovered_item: None,
             hovered_place: None,
-            last_primary_click: None,
+            last_item_click: None,
             history: PathHistory::default(),
-            selection: ShellSelection::default(),
             context_target: None,
             context_menu: None,
             properties_overlay: None,
@@ -3542,7 +3568,7 @@ impl ShellScene {
             trash_conflict_dialog: None,
             split_pane: None,
             split_pane_left_fraction: 0.5,
-            primary_visible_slots: ShellVisibleItemSlotPool::default(),
+            left_visible_slots: ShellVisibleItemSlotPool::default(),
             split_visible_slots: ShellVisibleItemSlotPool::default(),
             visible_slot_stats: ShellVisibleItemSlotStats::default(),
             internal_drag: None,
@@ -3582,7 +3608,7 @@ impl ShellScene {
     }
 
     fn load_path(&mut self, path: PathBuf, size: PhysicalSize<u32>) -> Result<bool, String> {
-        if path == self.primary_pane.path {
+        if path == self.left_pane.path {
             return Ok(false);
         }
         let load_start = Instant::now();
@@ -3597,7 +3623,7 @@ impl ShellScene {
             .collect::<Vec<_>>()
             .join(", ");
 
-        let previous_path = self.primary_pane.path.clone();
+        let previous_path = self.left_pane.path.clone();
         self.history.push_back(previous_path);
         self.history.clear_forward();
         self.apply_loaded_path(path, entries, dir_count, size);
@@ -3606,13 +3632,78 @@ impl ShellScene {
         Ok(true)
     }
 
+    fn load_path_for_pane(
+        &mut self,
+        pane: ShellPaneKind,
+        path: PathBuf,
+        size: PhysicalSize<u32>,
+    ) -> Result<bool, String> {
+        match self.normalized_pane_kind(pane) {
+            ShellPaneKind::Left => self.load_path(path, size),
+            ShellPaneKind::Split => self.load_split_pane_path(path, size),
+        }
+    }
+
+    fn load_split_pane_path(
+        &mut self,
+        path: PathBuf,
+        size: PhysicalSize<u32>,
+    ) -> Result<bool, String> {
+        let Some(current) = self.split_pane.as_ref() else {
+            return self.load_path(path, size);
+        };
+        if path == current.path {
+            return Ok(false);
+        }
+
+        let view_mode = current.view_mode;
+        let load_start = Instant::now();
+        let entries = read_entries_sync(&path)
+            .map_err(|error| format!("read split pane directory {}: {error}", path.display()))?;
+        let elapsed = load_start.elapsed();
+        let dir_count = entries.iter().filter(|entry| entry.is_dir).count();
+        self.split_pane = Some(ShellPaneState::from_entries(
+            path,
+            view_mode,
+            entries,
+            self.show_hidden,
+            "",
+        ));
+        self.split_visible_slots.clear();
+        self.active_pane = ShellPaneKind::Split;
+        self.context_target = None;
+        self.context_menu = None;
+        self.properties_overlay = None;
+        self.create_dialog = None;
+        self.rename_dialog = None;
+        self.open_with_chooser = None;
+        self.trash_conflict_dialog = None;
+        self.internal_drag = None;
+        self.pending_drop_request = None;
+        self.clear_dnd_hover_target();
+        self.rubber_band = None;
+        self.scrollbar_drag = None;
+        self.last_item_click = None;
+        self.split_pane_changes += 1;
+        self.clamp_scroll(size);
+        if let Some(split) = self.split_pane.as_ref() {
+            eprintln!(
+                "[fika-wgpu] split-pane path={} entries={} dirs={} files={} load={}us changes={}",
+                split.path.display(),
+                split.entries.len(),
+                dir_count,
+                split.entries.len().saturating_sub(dir_count),
+                elapsed.as_micros(),
+                self.split_pane_changes
+            );
+        }
+        Ok(true)
+    }
+
     fn reload_current_path(&mut self, size: PhysicalSize<u32>) -> Result<bool, String> {
         let load_start = Instant::now();
-        let entries = read_entries_sync(&self.primary_pane.path).map_err(|error| {
-            format!(
-                "read directory {}: {error}",
-                self.primary_pane.path.display()
-            )
+        let entries = read_entries_sync(&self.left_pane.path).map_err(|error| {
+            format!("read directory {}: {error}", self.left_pane.path.display())
         })?;
         let elapsed = load_start.elapsed();
         let dir_count = entries.iter().filter(|entry| entry.is_dir).count();
@@ -3624,19 +3715,16 @@ impl ShellScene {
             .join(", ");
 
         let remapped_selection = self.selection_for_reloaded_entries(&entries);
-        let previous_selection = self.selection.clone();
+        let previous_selection = self.left_pane.selection.clone();
 
-        self.primary_pane.entries = entries;
-        self.primary_pane.dir_count = dir_count;
-        self.selection = remapped_selection;
-        self.rebuild_filtered_indexes();
-        let pruned_selection = self
-            .selection
-            .retain_indexes(&self.primary_pane.filtered_indexes);
-        let selection_changed = previous_selection != self.selection;
+        self.left_pane.entries = entries;
+        self.left_pane.dir_count = dir_count;
+        self.left_pane.selection = remapped_selection;
+        let pruned_selection = self.rebuild_filtered_indexes();
+        let selection_changed = previous_selection != self.left_pane.selection;
         self.rubber_band = None;
         self.scrollbar_drag = None;
-        self.last_primary_click = None;
+        self.last_item_click = None;
         self.directory_reloads += 1;
         if selection_changed || pruned_selection {
             self.selection_changes += 1;
@@ -3669,7 +3757,7 @@ impl ShellScene {
             .collect::<Vec<_>>()
             .join(", ");
 
-        let current_path = self.primary_pane.path.clone();
+        let current_path = self.left_pane.path.clone();
         self.history.back.pop();
         self.history.push_forward(current_path);
         self.apply_loaded_path(path, entries, dir_count, size);
@@ -3693,7 +3781,7 @@ impl ShellScene {
             .collect::<Vec<_>>()
             .join(", ");
 
-        let current_path = self.primary_pane.path.clone();
+        let current_path = self.left_pane.path.clone();
         self.history.forward.pop();
         self.history.push_back(current_path);
         self.apply_loaded_path(path, entries, dir_count, size);
@@ -3708,18 +3796,17 @@ impl ShellScene {
         _dir_count: usize,
         size: PhysicalSize<u32>,
     ) {
-        self.primary_pane = ShellPaneState::from_entries(
+        self.left_pane = ShellPaneState::from_entries(
             path,
-            self.primary_pane.view_mode,
+            self.left_pane.view_mode,
             entries,
             self.show_hidden,
             &self.filter_pattern,
         );
-        self.primary_visible_slots.clear();
-        self.primary_pane.scroll_x = 0.0;
-        self.primary_pane.scroll_y = 0.0;
+        self.left_visible_slots.clear();
+        self.left_pane.scroll_x = 0.0;
+        self.left_pane.scroll_y = 0.0;
         self.location_draft = None;
-        self.selection = ShellSelection::default();
         self.context_target = None;
         self.context_menu = None;
         self.properties_overlay = None;
@@ -3732,7 +3819,7 @@ impl ShellScene {
         self.clear_dnd_hover_target();
         self.rubber_band = None;
         self.scrollbar_drag = None;
-        self.last_primary_click = None;
+        self.last_item_click = None;
         self.path_changes += 1;
         self.clamp_scroll(size);
     }
@@ -3740,10 +3827,10 @@ impl ShellScene {
     fn log_loaded_path(&self, dir_count: usize, preview: &str, elapsed: Duration) {
         eprintln!(
             "[fika-wgpu] path={} entries={} dirs={} files={} load={}us changes={}",
-            self.primary_pane.path.display(),
-            self.primary_pane.entries.len(),
+            self.left_pane.path.display(),
+            self.left_pane.entries.len(),
             dir_count,
-            self.primary_pane.entries.len().saturating_sub(dir_count),
+            self.left_pane.entries.len().saturating_sub(dir_count),
             elapsed.as_micros(),
             self.path_changes
         );
@@ -3761,13 +3848,13 @@ impl ShellScene {
     ) {
         eprintln!(
             "[fika-wgpu] reload path={} entries={} dirs={} files={} load={}us reloads={} selected={} selection_changed={}",
-            self.primary_pane.path.display(),
-            self.primary_pane.entries.len(),
+            self.left_pane.path.display(),
+            self.left_pane.entries.len(),
             dir_count,
-            self.primary_pane.entries.len().saturating_sub(dir_count),
+            self.left_pane.entries.len().saturating_sub(dir_count),
             elapsed.as_micros(),
             self.directory_reloads,
-            self.selection.len(),
+            self.left_pane.selection.len(),
             selection_changed as u8
         );
         if !preview.is_empty() {
@@ -3776,10 +3863,10 @@ impl ShellScene {
     }
 
     fn set_view_mode(&mut self, view_mode: ShellViewMode, size: PhysicalSize<u32>) -> bool {
-        if self.primary_pane.view_mode == view_mode {
+        if self.left_pane.view_mode == view_mode {
             return false;
         }
-        for kind in [ShellPaneKind::Primary, ShellPaneKind::Split] {
+        for kind in [ShellPaneKind::Left, ShellPaneKind::Split] {
             if let Some(pane) = self.pane_state_mut(kind) {
                 pane.view_mode = view_mode;
                 pane.scroll_x = 0.0;
@@ -3792,10 +3879,10 @@ impl ShellScene {
         self.clamp_scroll(size);
         eprintln!(
             "[fika-wgpu] view-mode={} switches={} scroll_x={:.1} scroll_y={:.1}",
-            self.primary_pane.view_mode.as_str(),
+            self.left_pane.view_mode.as_str(),
             self.view_switches,
-            self.primary_pane.scroll_x,
-            self.primary_pane.scroll_y
+            self.left_pane.scroll_x,
+            self.left_pane.scroll_y
         );
         true
     }
@@ -3816,8 +3903,12 @@ impl ShellScene {
         self.rubber_band = None;
         self.scrollbar_drag = None;
         self.zoom_changes += 1;
-        if let Some(index) = self.selection.focus_or_first_selected() {
-            self.ensure_index_visible(index, size);
+        let active_pane = self.active_pane();
+        if let Some(index) = self
+            .pane_selection(active_pane)
+            .and_then(ShellSelection::focus_or_first_selected)
+        {
+            self.ensure_index_visible_in_pane(active_pane, index, size);
         } else {
             self.clamp_scroll(size);
         }
@@ -3826,19 +3917,26 @@ impl ShellScene {
             self.zoom_step,
             self.zoom_percent(),
             self.zoom_changes,
-            self.primary_pane.scroll_x,
-            self.primary_pane.scroll_y
+            self.left_pane.scroll_x,
+            self.left_pane.scroll_y
         );
         true
     }
 
     fn apply_selection_command(&mut self, command: SelectionCommand) -> bool {
         let rubber_band_changed = self.rubber_band.take().is_some();
+        let active_pane = self.active_pane();
+        let filtered_indexes = self
+            .pane_state(active_pane)
+            .map(|pane| pane.filtered_indexes.clone())
+            .unwrap_or_default();
         let selection_changed = match command {
             SelectionCommand::SelectAll => self
-                .selection
-                .select_indexes(&self.primary_pane.filtered_indexes),
-            SelectionCommand::Clear => self.selection.clear(),
+                .pane_selection_mut(active_pane)
+                .is_some_and(|selection| selection.select_indexes(&filtered_indexes)),
+            SelectionCommand::Clear => self
+                .pane_selection_mut(active_pane)
+                .is_some_and(ShellSelection::clear),
         };
         if selection_changed {
             self.selection_changes += 1;
@@ -3847,7 +3945,7 @@ impl ShellScene {
             eprintln!(
                 "[fika-wgpu] selection command={} selected={} changes={}",
                 command.as_str(),
-                self.selection.len(),
+                self.active_selection_len(),
                 self.selection_changes
             );
         }
@@ -3866,7 +3964,7 @@ impl ShellScene {
 
     fn resolved_location_draft(&self) -> Option<PathBuf> {
         let value = self.location_draft_value()?;
-        resolve_location_input(&self.primary_pane.path, value)
+        resolve_location_input(&self.left_pane.path, value)
     }
 
     fn close_location_draft(&mut self, size: PhysicalSize<u32>) -> bool {
@@ -3888,10 +3986,31 @@ impl ShellScene {
         point: ViewPoint,
         size: PhysicalSize<u32>,
     ) -> bool {
-        if !self.is_location_editing() || self.path_bar_contains_screen_point(point, size) {
+        if !self.is_location_editing()
+            || self
+                .pane_path_bar_rect(ShellPaneKind::Left, size)
+                .is_some_and(|rect| rect.contains(point))
+        {
             return false;
         }
         self.close_location_draft(size)
+    }
+
+    fn activate_path_bar_at_screen_point(
+        &mut self,
+        point: ViewPoint,
+        size: PhysicalSize<u32>,
+    ) -> bool {
+        let Some(pane) = self.path_bar_pane_at_screen_point(point, size) else {
+            return false;
+        };
+        let old_pane = self.active_pane();
+        self.active_pane = self.normalized_pane_kind(pane);
+        if self.active_pane() == ShellPaneKind::Left {
+            return self.apply_location_command(LocationCommand::Activate, size)
+                || old_pane != self.active_pane();
+        }
+        self.close_location_draft(size) || old_pane != self.active_pane()
     }
 
     fn apply_location_command(
@@ -3905,7 +4024,7 @@ impl ShellScene {
         match command {
             LocationCommand::Activate => {
                 self.location_draft = Some(LocationDraft::new(
-                    self.primary_pane.path.display().to_string(),
+                    self.left_pane.path.display().to_string(),
                 ));
                 self.filter_active = false;
             }
@@ -3958,8 +4077,7 @@ impl ShellScene {
                 let Some(draft) = self.location_draft.as_mut() else {
                     return false;
                 };
-                let Some(completed) =
-                    complete_location_input(&self.primary_pane.path, &draft.value)
+                let Some(completed) = complete_location_input(&self.left_pane.path, &draft.value)
                 else {
                     return false;
                 };
@@ -4017,10 +4135,7 @@ impl ShellScene {
 
         self.filter_changes += 1;
         self.rubber_band = None;
-        self.rebuild_filtered_indexes();
-        let selection_changed = self
-            .selection
-            .retain_indexes(&self.primary_pane.filtered_indexes);
+        let selection_changed = self.rebuild_filtered_indexes();
         if selection_changed {
             self.selection_changes += 1;
         }
@@ -4029,7 +4144,7 @@ impl ShellScene {
             "[fika-wgpu] filter active={} pattern={:?} matches={} changes={} selection_changed={}",
             self.filter_active as u8,
             self.filter_pattern,
-            self.primary_pane.filtered_indexes.len(),
+            self.left_pane.filtered_indexes.len(),
             self.filter_changes,
             selection_changed as u8
         );
@@ -4040,13 +4155,10 @@ impl ShellScene {
         self.show_hidden = !self.show_hidden;
         self.hidden_changes += 1;
         self.rubber_band = None;
-        self.rebuild_filtered_indexes();
+        let mut selection_changed = self.rebuild_filtered_indexes();
         if let Some(split_pane) = self.split_pane.as_mut() {
-            split_pane.rebuild_filtered_indexes(self.show_hidden);
+            selection_changed |= split_pane.rebuild_filtered_indexes(self.show_hidden);
         }
-        let selection_changed = self
-            .selection
-            .retain_indexes(&self.primary_pane.filtered_indexes);
         if selection_changed {
             self.selection_changes += 1;
         }
@@ -4064,17 +4176,18 @@ impl ShellScene {
     fn open_split_pane_from_context(&mut self, size: PhysicalSize<u32>) -> Result<bool, String> {
         let path = self
             .context_target_split_pane_path()
-            .unwrap_or_else(|| self.primary_pane.path.clone());
+            .unwrap_or_else(|| self.left_pane.path.clone());
         self.open_split_pane(path, size)
     }
 
     fn open_split_pane(&mut self, path: PathBuf, size: PhysicalSize<u32>) -> Result<bool, String> {
         let mut split_pane =
-            ShellPaneState::load(path, self.primary_pane.view_mode, self.show_hidden)?;
+            ShellPaneState::load(path, self.left_pane.view_mode, self.show_hidden)?;
         split_pane.scroll_x = 0.0;
         split_pane.scroll_y = 0.0;
         self.split_pane = Some(split_pane);
         self.split_visible_slots.clear();
+        self.active_pane = ShellPaneKind::Split;
         self.split_pane_left_fraction = 0.5;
         self.split_pane_changes += 1;
         self.context_target = None;
@@ -4093,7 +4206,7 @@ impl ShellScene {
         eprintln!(
             "[fika-wgpu] split-pane open=1 changes={} left={} right={}",
             self.split_pane_changes,
-            self.primary_pane.path.display(),
+            self.left_pane.path.display(),
             self.split_pane
                 .as_ref()
                 .map(|pane| pane.path.display().to_string())
@@ -4109,20 +4222,20 @@ impl ShellScene {
                 .parent()
                 .filter(|parent| !parent.as_os_str().is_empty())
                 .map(Path::to_path_buf)
-                .or_else(|| Some(self.primary_pane.path.clone())),
+                .or_else(|| Some(self.left_pane.path.clone())),
             ShellContextTarget::Blank { path, .. } | ShellContextTarget::Place { path, .. } => {
                 Some(path.clone())
             }
         }
     }
 
-    fn rebuild_filtered_indexes(&mut self) {
-        self.primary_pane
-            .rebuild_filtered_indexes_with_pattern(self.show_hidden, &self.filter_pattern);
+    fn rebuild_filtered_indexes(&mut self) -> bool {
+        self.left_pane
+            .rebuild_filtered_indexes_with_pattern(self.show_hidden, &self.filter_pattern)
     }
 
     fn filtered_entry_count(&self) -> usize {
-        self.primary_pane.filtered_indexes.len()
+        self.left_pane.filtered_indexes.len()
     }
 
     fn set_scale_factor(&mut self, scale_factor: f32, size: PhysicalSize<u32>) -> bool {
@@ -4138,8 +4251,8 @@ impl ShellScene {
         let next_ui_scale = self.ui_scale();
         if old_ui_scale > f32::EPSILON {
             let ratio = next_ui_scale / old_ui_scale;
-            self.primary_pane.scroll_x *= ratio;
-            self.primary_pane.scroll_y *= ratio;
+            self.left_pane.scroll_x *= ratio;
+            self.left_pane.scroll_y *= ratio;
             self.places_scroll_y *= ratio;
         }
         self.clamp_scroll(size);
@@ -4147,8 +4260,8 @@ impl ShellScene {
             "[fika-wgpu] scale-factor={:.2} ui_scale={:.2} scroll_x={:.1} scroll_y={:.1}",
             self.scale_factor,
             self.ui_scale(),
-            self.primary_pane.scroll_x,
-            self.primary_pane.scroll_y
+            self.left_pane.scroll_x,
+            self.left_pane.scroll_y
         );
         true
     }
@@ -4216,41 +4329,30 @@ impl ShellScene {
         self.scale_metric(DETAILS_MODIFIED_WIDTH)
     }
 
-    fn model_index_for_layout_index(&self, layout_index: usize) -> Option<usize> {
-        self.primary_pane
-            .filtered_indexes
-            .get(layout_index)
-            .copied()
-    }
-
-    fn layout_index_for_model_index(&self, model_index: usize) -> Option<usize> {
-        self.primary_pane
-            .filtered_indexes
-            .binary_search(&model_index)
-            .ok()
-    }
-
     fn selection_for_reloaded_entries(&self, entries: &[Entry]) -> ShellSelection {
-        if self.selection.selected.is_empty() {
+        if self.left_pane.selection.selected.is_empty() {
             return ShellSelection::default();
         }
 
         let selected_names = self
+            .left_pane
             .selection
             .selected
             .iter()
-            .filter_map(|index| self.primary_pane.entries.get(*index))
+            .filter_map(|index| self.left_pane.entries.get(*index))
             .map(|entry| entry.name.to_string())
             .collect::<BTreeSet<_>>();
         let anchor_name = self
+            .left_pane
             .selection
             .anchor
-            .and_then(|index| self.primary_pane.entries.get(index))
+            .and_then(|index| self.left_pane.entries.get(index))
             .map(|entry| entry.name.to_string());
         let focus_name = self
+            .left_pane
             .selection
             .focus
-            .and_then(|index| self.primary_pane.entries.get(index))
+            .and_then(|index| self.left_pane.entries.get(index))
             .map(|entry| entry.name.to_string());
 
         let selected = entries
@@ -4291,23 +4393,44 @@ impl ShellScene {
         None
     }
 
-    fn path_bar_rect(&self, size: PhysicalSize<u32>) -> Option<ViewRect> {
-        let pane = self.pane_rect(size);
+    fn pane_path_bar_rect(&self, kind: ShellPaneKind, size: PhysicalSize<u32>) -> Option<ViewRect> {
+        let pane = self.pane_state(kind)?;
+        let geometry = match kind {
+            ShellPaneKind::Left => self.left_pane_geometry(size),
+            ShellPaneKind::Split => self.split_pane_geometry(size)?,
+        };
         let margin = self.scale_metric(8.0);
-        let path_x = pane.x + margin;
-        let available_width = (pane.right() - path_x - margin).max(0.0);
+        let path_x = geometry.pane.x + margin;
+        let available_width = (geometry.pane.right() - path_x - margin).max(0.0);
         let rect = ViewRect {
             x: path_x,
-            y: self.pane_top_y() + self.scale_metric(4.0),
+            y: geometry.pane.y + self.scale_metric(4.0),
             width: available_width,
             height: self.scale_metric(28.0),
         };
+        let _ = pane;
         (rect.width > self.scale_metric(24.0)).then_some(rect)
     }
 
+    fn path_bar_rect(&self, size: PhysicalSize<u32>) -> Option<ViewRect> {
+        self.pane_path_bar_rect(ShellPaneKind::Left, size)
+    }
+
     fn path_bar_contains_screen_point(&self, point: ViewPoint, size: PhysicalSize<u32>) -> bool {
-        self.path_bar_rect(size)
-            .is_some_and(|rect| rect.contains(point))
+        self.path_bar_pane_at_screen_point(point, size).is_some()
+    }
+
+    fn path_bar_pane_at_screen_point(
+        &self,
+        point: ViewPoint,
+        size: PhysicalSize<u32>,
+    ) -> Option<ShellPaneKind> {
+        [ShellPaneKind::Left, ShellPaneKind::Split]
+            .into_iter()
+            .find(|kind| {
+                self.pane_path_bar_rect(*kind, size)
+                    .is_some_and(|rect| rect.contains(point))
+            })
     }
 
     fn path_navigation_action_at_screen_point(
@@ -4356,7 +4479,7 @@ impl ShellScene {
         self.scrollbar_drag = None;
         self.rubber_band = None;
         self.hovered_place = None;
-        self.last_primary_click = None;
+        self.last_item_click = None;
         self.clamp_scroll(size);
         eprintln!(
             "[fika-wgpu] places visible={} width={:.1} changes={}",
@@ -4436,18 +4559,19 @@ impl ShellScene {
         }
     }
 
-    fn place_activation_for_primary_press(
+    fn place_activation_for_press(
         &mut self,
         point: ViewPoint,
         size: PhysicalSize<u32>,
-    ) -> Option<PathBuf> {
+    ) -> Option<(ShellPaneKind, PathBuf)> {
         let index = self.place_index_at_screen_point(point, size)?;
+        let target_pane = self.active_pane();
         self.pointer = Some(point);
         let hover_changed = self.set_hovered_place(Some(index));
-        let item_hover_changed = self.set_hovered_index(None);
+        let item_hover_changed = self.set_hovered_item(None);
         self.rubber_band = None;
         self.internal_drag = None;
-        self.last_primary_click = None;
+        self.last_item_click = None;
         self.context_target = None;
         self.context_menu = None;
         let place = self.places.get(index)?;
@@ -4464,15 +4588,16 @@ impl ShellScene {
         }
         self.places_changes += 1;
         eprintln!(
-            "[fika-wgpu] place-open index={} label={:?} path={} hover_changed={} item_hover_changed={} changes={}",
+            "[fika-wgpu] place-open index={} label={:?} target_pane={} path={} hover_changed={} item_hover_changed={} changes={}",
             index,
             place.label,
+            target_pane.as_str(),
             place.path.display(),
             hover_changed as u8,
             item_hover_changed as u8,
             self.places_changes
         );
-        Some(place.path.clone())
+        Some((target_pane, place.path.clone()))
     }
 
     fn place_index_at_screen_point(
@@ -4644,26 +4769,32 @@ impl ShellScene {
                 editable: place.editable,
             });
         }
-        if !self.content_screen_rect(size).contains(point) {
-            return None;
-        }
-        if let Some(index) = self.hit_test_screen_point(point, size) {
-            let entry = self.primary_pane.entries.get(index)?;
-            let selection_count = if self.selection.contains(index) {
-                self.selection.len().max(1)
-            } else {
-                1
-            };
-            return Some(ShellContextTarget::Item {
-                index,
-                path: self.entry_path_for_index(index)?,
-                is_dir: entry.is_dir,
-                selection_count,
+        for geometry in self.pane_geometries(size) {
+            if !geometry.content.contains(point) {
+                continue;
+            }
+            let pane = self.pane_view(geometry.kind)?;
+            if let Some(index) = self.pane_hit_test_screen_point(pane, geometry, point) {
+                let entry = pane.entries.get(index)?;
+                let selection_count = if pane.selection.contains(index) {
+                    pane.selection.len().max(1)
+                } else {
+                    1
+                };
+                return Some(ShellContextTarget::Item {
+                    pane: geometry.kind,
+                    index,
+                    path: self.entry_path_for_pane_view(pane, index)?,
+                    is_dir: entry.is_dir,
+                    selection_count,
+                });
+            }
+            return Some(ShellContextTarget::Blank {
+                pane: geometry.kind,
+                path: pane.path.to_path_buf(),
             });
         }
-        Some(ShellContextTarget::Blank {
-            path: self.primary_pane.path.clone(),
-        })
+        None
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -4726,33 +4857,39 @@ impl ShellScene {
         changed
     }
 
-    fn primary_drag_paths_for_index(&self, index: usize) -> Vec<PathBuf> {
-        if self.selection.contains(index) {
+    fn pane_drag_paths_for_index(&self, pane_kind: ShellPaneKind, index: usize) -> Vec<PathBuf> {
+        let Some(pane) = self.pane_view(pane_kind) else {
+            return Vec::new();
+        };
+        if pane.selection.contains(index) {
             let paths = self
-                .selection
-                .selected
-                .iter()
-                .filter_map(|index| self.entry_path_for_index(*index))
+                .pane_selection(pane_kind)
+                .into_iter()
+                .flat_map(|selection| selection.selected.iter())
+                .copied()
+                .filter_map(|index| self.entry_path_for_pane_view(pane, index))
                 .collect::<Vec<_>>();
             if !paths.is_empty() {
                 return paths;
             }
         }
-        self.entry_path_for_index(index).into_iter().collect()
+        self.entry_path_for_pane_view(pane, index)
+            .into_iter()
+            .collect()
     }
 
-    fn begin_internal_drag_for_primary_item(&mut self, index: usize, point: ViewPoint) -> bool {
-        let paths = self.primary_drag_paths_for_index(index);
+    fn begin_internal_drag_for_pane_item(
+        &mut self,
+        pane: ShellPaneKind,
+        index: usize,
+        point: ViewPoint,
+    ) -> bool {
+        let paths = self.pane_drag_paths_for_index(pane, index);
         if paths.is_empty() {
             self.internal_drag = None;
             return false;
         }
-        self.internal_drag = Some(ShellInternalDrag::new(
-            ShellPaneKind::Primary,
-            index,
-            paths,
-            point,
-        ));
+        self.internal_drag = Some(ShellInternalDrag::new(pane, index, paths, point));
         true
     }
 
@@ -4826,10 +4963,13 @@ impl ShellScene {
         let old_rubber_band_active = self.rubber_band.as_ref().is_some_and(|band| band.active);
         let rubber_band_cleared = self.rubber_band.take().is_some();
         let hover = target.as_ref().and_then(|target| match target {
-            ShellContextTarget::Item { index, .. } => Some(*index),
+            ShellContextTarget::Item { pane, index, .. } => Some(ShellPaneItemTarget {
+                pane: *pane,
+                index: *index,
+            }),
             ShellContextTarget::Blank { .. } | ShellContextTarget::Place { .. } => None,
         });
-        let hover_changed = self.set_hovered_index(hover);
+        let hover_changed = self.set_hovered_item(hover);
         let place_hover = target.as_ref().and_then(|target| match target {
             ShellContextTarget::Place { index, .. } => Some(*index),
             ShellContextTarget::Item { .. } | ShellContextTarget::Blank { .. } => None,
@@ -4837,11 +4977,16 @@ impl ShellScene {
         let place_hover_changed = self.set_hovered_place(place_hover);
 
         let mut selection_changed = false;
-        if let Some(ShellContextTarget::Item { index, .. }) = target.as_ref() {
-            selection_changed = if self.selection.contains(*index) {
-                self.selection.focus_selected(*index)
+        if let Some(ShellContextTarget::Item { pane, index, .. }) = target.as_ref() {
+            selection_changed = if self
+                .pane_selection(*pane)
+                .is_some_and(|selection| selection.contains(*index))
+            {
+                self.pane_selection_mut(*pane)
+                    .is_some_and(|selection| selection.focus_selected(*index))
             } else {
-                self.selection.apply_click(Some(*index), false, false)
+                self.pane_selection_mut(*pane)
+                    .is_some_and(|selection| selection.apply_click(Some(*index), false, false))
             };
             if selection_changed {
                 self.selection_changes += 1;
@@ -4909,15 +5054,15 @@ impl ShellScene {
     ) -> (Vec<MimeApplication>, Vec<ServiceMenuAction>) {
         match target {
             ShellContextTarget::Item {
+                pane,
                 index,
                 path,
                 is_dir,
                 ..
             } => {
                 let mime_type = self
-                    .primary_pane
-                    .entries
-                    .get(*index)
+                    .pane_state(*pane)
+                    .and_then(|pane| pane.entries.get(*index))
                     .and_then(|entry| entry.mime_type.as_deref());
                 let open_with_apps = if *is_dir || file_ops::is_in_trash_files_dir(path) {
                     Vec::new()
@@ -4928,12 +5073,14 @@ impl ShellScene {
                     Vec::new()
                 } else {
                     cache.service_actions_for_targets(
-                        &self.service_menu_targets_for_context_item(*index, *is_dir, mime_type),
+                        &self.service_menu_targets_for_context_item(
+                            *pane, *index, *is_dir, mime_type,
+                        ),
                     )
                 };
                 (open_with_apps, service_actions)
             }
-            ShellContextTarget::Blank { path } => {
+            ShellContextTarget::Blank { path, .. } => {
                 let open_with_apps = if file_ops::is_trash_files_dir(&path) {
                     Vec::new()
                 } else {
@@ -4955,16 +5102,24 @@ impl ShellScene {
 
     fn service_menu_targets_for_context_item(
         &self,
+        pane_kind: ShellPaneKind,
         index: usize,
         is_dir: bool,
         mime_type: Option<&str>,
     ) -> Vec<ServiceMenuTarget> {
-        if self.selection.contains(index) {
+        let Some(pane) = self.pane_view(pane_kind) else {
+            return vec![ServiceMenuTarget::new(
+                mime_type.or_else(|| is_dir.then_some("inode/directory")),
+                is_dir,
+            )];
+        };
+        if pane.selection.contains(index) {
             let targets = self
-                .selection
-                .selected
-                .iter()
-                .filter_map(|selected| self.primary_pane.entries.get(*selected))
+                .pane_selection(pane_kind)
+                .into_iter()
+                .flat_map(|selection| selection.selected.iter())
+                .copied()
+                .filter_map(|selected| pane.entries.get(selected))
                 .map(|entry| {
                     ServiceMenuTarget::new(
                         entry
@@ -5106,21 +5261,24 @@ impl ShellScene {
     fn log_context_target(&self) {
         match self.context_target.as_ref() {
             Some(ShellContextTarget::Item {
+                pane,
                 index,
                 path,
                 is_dir,
                 selection_count,
                 ..
             }) => eprintln!(
-                "[fika-wgpu] context-target kind=item index={} dir={} selection={} path={} changes={}",
+                "[fika-wgpu] context-target kind=item pane={} index={} dir={} selection={} path={} changes={}",
+                pane.as_str(),
                 index,
                 *is_dir as u8,
                 selection_count,
                 path.display(),
                 self.context_target_changes
             ),
-            Some(ShellContextTarget::Blank { path, .. }) => eprintln!(
-                "[fika-wgpu] context-target kind=blank path={} changes={}",
+            Some(ShellContextTarget::Blank { pane, path, .. }) => eprintln!(
+                "[fika-wgpu] context-target kind=blank pane={} path={} changes={}",
+                pane.as_str(),
                 path.display(),
                 self.context_target_changes
             ),
@@ -5157,16 +5315,20 @@ impl ShellScene {
     }
 
     fn selected_directory_path(&self) -> Option<PathBuf> {
-        self.selection
+        let pane = self.active_pane();
+        self.pane_selection(pane)?
             .focus_or_first_selected()
-            .and_then(|index| self.directory_path_for_index(index))
+            .and_then(|index| self.directory_path_for_pane_index(pane, index))
     }
 
     fn context_target_directory_path(&self) -> Option<PathBuf> {
         match self.context_target.as_ref()? {
-            ShellContextTarget::Item { index, is_dir, .. } if *is_dir => {
-                self.directory_path_for_index(*index)
-            }
+            ShellContextTarget::Item {
+                pane,
+                index,
+                is_dir,
+                ..
+            } if *is_dir => self.directory_path_for_pane_index(*pane, *index),
             ShellContextTarget::Place { path, device, .. }
                 if device.as_ref().is_none_or(|device| device.mounted) =>
             {
@@ -5179,6 +5341,7 @@ impl ShellScene {
     fn context_target_open_file_request(&self) -> Option<OpenFileRequest> {
         match self.context_target.as_ref()? {
             ShellContextTarget::Item {
+                pane: ShellPaneKind::Left,
                 path,
                 is_dir: false,
                 ..
@@ -5233,6 +5396,7 @@ impl ShellScene {
         cache: &MimeApplicationCache,
     ) -> Result<ShellOpenWithChooser, String> {
         let Some(ShellContextTarget::Item {
+            pane,
             index,
             path,
             is_dir: false,
@@ -5251,9 +5415,8 @@ impl ShellScene {
             return Err("Open With is not available inside Trash".to_string());
         }
         let entry = self
-            .primary_pane
-            .entries
-            .get(*index)
+            .pane_state(*pane)
+            .and_then(|pane| pane.entries.get(*index))
             .ok_or_else(|| format!("entry index {index} is out of range"))?;
         let applications =
             open_with_applications_for_mime(cache, entry.mime_type.as_ref().map(|mime| &**mime));
@@ -5331,6 +5494,7 @@ impl ShellScene {
     ) -> Result<OpenWithLaunchRequest, String> {
         let path = match self.context_target.as_ref() {
             Some(ShellContextTarget::Item {
+                pane: ShellPaneKind::Left,
                 path,
                 is_dir: false,
                 ..
@@ -5564,7 +5728,7 @@ impl ShellScene {
         }
 
         self.places = rebuild_shell_places_for_user_path(user_places_path);
-        save_shell_primary_place_order(user_places_path, &self.places)?;
+        save_shell_place_order(user_places_path, &self.places)?;
         self.clamp_places_scroll(size);
         self.context_target = None;
         self.context_menu = None;
@@ -5673,7 +5837,7 @@ impl ShellScene {
     ) -> Result<ShellPasteResult, String> {
         let target_dir = self
             .context_target_paste_directory()
-            .unwrap_or_else(|| self.primary_pane.path.clone());
+            .unwrap_or_else(|| self.left_pane.path.clone());
         if is_network_path(&target_dir) {
             return Err("remote paste target is not available yet".to_string());
         }
@@ -5729,17 +5893,22 @@ impl ShellScene {
     fn context_target_item_paths(&self) -> Result<Option<Vec<PathBuf>>, String> {
         match self.context_target.as_ref() {
             Some(ShellContextTarget::Item {
+                pane,
                 index,
                 path,
                 selection_count,
                 ..
             }) => {
-                if *selection_count > 1 && self.selection.contains(*index) {
+                let Some(pane_view) = self.pane_view(*pane) else {
+                    return Err("context target pane no longer exists".to_string());
+                };
+                if *selection_count > 1 && pane_view.selection.contains(*index) {
                     let paths = self
-                        .selection
-                        .selected
-                        .iter()
-                        .filter_map(|index| self.entry_path_for_index(*index))
+                        .pane_selection(*pane)
+                        .into_iter()
+                        .flat_map(|selection| selection.selected.iter())
+                        .copied()
+                        .filter_map(|index| self.entry_path_for_pane_view(pane_view, index))
                         .collect::<Vec<_>>();
                     if paths.is_empty() {
                         return Err("selected context target no longer exists".to_string());
@@ -5888,13 +6057,20 @@ impl ShellScene {
         }
 
         if result.success_count > 0 {
+            let pane_to_clear = match self.context_target.as_ref() {
+                Some(ShellContextTarget::Item { pane, .. })
+                | Some(ShellContextTarget::Blank { pane, .. }) => *pane,
+                Some(ShellContextTarget::Place { .. }) | None => self.active_pane(),
+            };
             self.context_target = None;
             self.context_menu = None;
             self.properties_overlay = None;
             self.create_dialog = None;
             self.rename_dialog = None;
             self.rubber_band = None;
-            self.selection.clear();
+            if let Some(selection) = self.pane_selection_mut(pane_to_clear) {
+                selection.clear();
+            }
             self.reload_current_path(size)?;
         }
         Ok(())
@@ -6213,22 +6389,23 @@ impl ShellScene {
     }
 
     fn select_entry_by_name(&mut self, name: &str, size: PhysicalSize<u32>) -> bool {
-        let Some(index) = entry_index_by_name(&self.primary_pane.entries, name) else {
+        let pane_kind = self.active_pane();
+        let Some(pane) = self.pane_state(pane_kind) else {
             return false;
         };
-        if self
-            .primary_pane
-            .filtered_indexes
-            .binary_search(&index)
-            .is_err()
-        {
+        let Some(index) = entry_index_by_name(&pane.entries, name) else {
+            return false;
+        };
+        if pane.filtered_indexes.binary_search(&index).is_err() {
             return false;
         }
-        let changed = self.selection.apply_navigation(index, false);
+        let changed = self
+            .pane_selection_mut(pane_kind)
+            .is_some_and(|selection| selection.apply_navigation(index, false));
         if changed {
             self.selection_changes += 1;
         }
-        self.ensure_index_visible(index, size);
+        self.ensure_index_visible_in_pane(pane_kind, index, size);
         changed
     }
 
@@ -6432,13 +6609,14 @@ impl ShellScene {
     fn properties_overlay_for_context_target(&self) -> Option<ShellPropertiesOverlay> {
         match self.context_target.as_ref()? {
             ShellContextTarget::Item {
+                pane,
                 index,
                 path,
                 is_dir,
                 selection_count,
                 ..
             } => {
-                let entry = self.primary_pane.entries.get(*index)?;
+                let entry = self.pane_state(*pane)?.entries.get(*index)?;
                 let title_name = entry.name.as_ref().to_string();
                 let location = path
                     .parent()
@@ -6474,24 +6652,26 @@ impl ShellScene {
                     rows,
                 })
             }
-            ShellContextTarget::Blank { path, .. } => Some(ShellPropertiesOverlay {
-                title: format!("Properties - {}", path.display()),
-                rows: vec![
-                    property_row("Name", path_name_or_display(path)),
-                    property_row("Type", "Folder".to_string()),
-                    property_row("Entries", self.primary_pane.entries.len().to_string()),
-                    property_row("Folders", self.primary_pane.dir_count.to_string()),
-                    property_row(
-                        "Files",
-                        self.primary_pane
-                            .entries
-                            .len()
-                            .saturating_sub(self.primary_pane.dir_count)
-                            .to_string(),
-                    ),
-                    property_row("Path", path.display().to_string()),
-                ],
-            }),
+            ShellContextTarget::Blank { pane, path, .. } => {
+                let pane = self.pane_state(*pane)?;
+                Some(ShellPropertiesOverlay {
+                    title: format!("Properties - {}", path.display()),
+                    rows: vec![
+                        property_row("Name", path_name_or_display(path)),
+                        property_row("Type", "Folder".to_string()),
+                        property_row("Entries", pane.entries.len().to_string()),
+                        property_row("Folders", pane.dir_count.to_string()),
+                        property_row(
+                            "Files",
+                            pane.entries
+                                .len()
+                                .saturating_sub(pane.dir_count)
+                                .to_string(),
+                        ),
+                        property_row("Path", path.display().to_string()),
+                    ],
+                })
+            }
             ShellContextTarget::Place {
                 label,
                 path,
@@ -6525,23 +6705,24 @@ impl ShellScene {
     }
 
     fn parent_directory_path(&self) -> Option<PathBuf> {
-        self.primary_pane
+        self.left_pane
             .path
             .parent()
             .filter(|parent| !parent.as_os_str().is_empty())
             .map(Path::to_path_buf)
     }
 
-    fn directory_path_for_index(&self, index: usize) -> Option<PathBuf> {
-        let entry = self.primary_pane.entries.get(index)?;
+    fn directory_path_for_pane_index(
+        &self,
+        pane_kind: ShellPaneKind,
+        index: usize,
+    ) -> Option<PathBuf> {
+        let pane = self.pane_view(pane_kind)?;
+        let entry = pane.entries.get(index)?;
         entry
             .is_dir
-            .then(|| self.entry_path_for_index(index))
+            .then(|| self.entry_path_for_pane_view(pane, index))
             .flatten()
-    }
-
-    fn entry_path_for_index(&self, index: usize) -> Option<PathBuf> {
-        self.entry_path_for_pane_view(self.primary_pane_view(), index)
     }
 
     fn entry_path_for_pane_view(&self, pane: ShellPaneView<'_>, index: usize) -> Option<PathBuf> {
@@ -6556,47 +6737,86 @@ impl ShellScene {
 
     fn pane_state(&self, kind: ShellPaneKind) -> Option<&ShellPaneState> {
         match kind {
-            ShellPaneKind::Primary => Some(&self.primary_pane),
+            ShellPaneKind::Left => Some(&self.left_pane),
             ShellPaneKind::Split => self.split_pane.as_ref(),
         }
     }
 
     fn pane_state_mut(&mut self, kind: ShellPaneKind) -> Option<&mut ShellPaneState> {
         match kind {
-            ShellPaneKind::Primary => Some(&mut self.primary_pane),
+            ShellPaneKind::Left => Some(&mut self.left_pane),
             ShellPaneKind::Split => self.split_pane.as_mut(),
         }
     }
 
-    fn directory_activation_for_primary_press(
+    fn pane_selection(&self, kind: ShellPaneKind) -> Option<&ShellSelection> {
+        self.pane_state(kind).map(|pane| &pane.selection)
+    }
+
+    fn pane_selection_mut(&mut self, kind: ShellPaneKind) -> Option<&mut ShellSelection> {
+        self.pane_state_mut(kind).map(|pane| &mut pane.selection)
+    }
+
+    fn active_selection_len(&self) -> usize {
+        self.pane_selection(self.active_pane())
+            .map(ShellSelection::len)
+            .unwrap_or(0)
+    }
+
+    fn normalized_pane_kind(&self, kind: ShellPaneKind) -> ShellPaneKind {
+        match kind {
+            ShellPaneKind::Left => ShellPaneKind::Left,
+            ShellPaneKind::Split if self.split_pane.is_some() => ShellPaneKind::Split,
+            ShellPaneKind::Split => ShellPaneKind::Left,
+        }
+    }
+
+    fn active_pane(&self) -> ShellPaneKind {
+        self.normalized_pane_kind(self.active_pane)
+    }
+
+    fn focus_pane_at_screen_point(&mut self, point: ViewPoint, size: PhysicalSize<u32>) -> bool {
+        let Some(kind) = self.pane_kind_at_screen_point(point, size) else {
+            return false;
+        };
+        let kind = self.normalized_pane_kind(kind);
+        let old = self.active_pane();
+        self.active_pane = kind;
+        old != kind
+    }
+
+    fn directory_activation_for_press(
         &mut self,
         point: ViewPoint,
         size: PhysicalSize<u32>,
         now: Instant,
-    ) -> Option<PathBuf> {
-        let Some(index) = self.hit_test_screen_point(point, size) else {
-            self.last_primary_click = None;
+    ) -> Option<(ShellPaneKind, PathBuf)> {
+        let Some(target) = self.pane_item_at_screen_point(point, size) else {
+            self.last_item_click = None;
             return None;
         };
 
-        let double_click = self.last_primary_click.is_some_and(|click| {
-            click.index == index
+        let double_click = self.last_item_click.is_some_and(|click| {
+            click.pane == target.pane
+                && click.index == target.index
                 && now.duration_since(click.time) <= DOUBLE_CLICK_MAX_INTERVAL
                 && point_distance(click.point, point) <= DOUBLE_CLICK_MAX_DISTANCE
         });
-        self.last_primary_click = Some(PrimaryClick {
-            index,
+        self.last_item_click = Some(PaneClick {
+            pane: target.pane,
+            index: target.index,
             point,
             time: now,
         });
 
         double_click
-            .then(|| self.directory_path_for_index(index))
+            .then(|| self.directory_path_for_pane_index(target.pane, target.index))
             .flatten()
+            .map(|path| (target.pane, path))
     }
 
-    fn primary_pane_view(&self) -> ShellPaneView<'_> {
-        ShellPaneView::from_state(&self.primary_pane)
+    fn left_pane_view(&self) -> ShellPaneView<'_> {
+        ShellPaneView::from_state(&self.left_pane)
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -6604,10 +6824,10 @@ impl ShellScene {
         self.pane_state(kind).map(ShellPaneView::from_state)
     }
 
-    fn primary_pane_geometry(&self, size: PhysicalSize<u32>) -> ShellPaneGeometry {
+    fn left_pane_geometry(&self, size: PhysicalSize<u32>) -> ShellPaneGeometry {
         let pane = self.pane_rect(size);
         ShellPaneGeometry {
-            kind: ShellPaneKind::Primary,
+            kind: ShellPaneKind::Left,
             pane,
             top_bar: ViewRect {
                 x: pane.x,
@@ -6638,6 +6858,20 @@ impl ShellScene {
             } else {
                 0.0
             };
+        let reserved_right = if scrollbar_axis_for_view_mode(split_pane.view_mode)
+            == ContentScrollbarAxis::Vertical
+        {
+            self.scale_metric(CONTENT_SCROLLBAR_RESERVED_EXTENT)
+        } else {
+            0.0
+        };
+        let reserved_bottom = if scrollbar_axis_for_view_mode(split_pane.view_mode)
+            == ContentScrollbarAxis::Horizontal
+        {
+            self.scale_metric(CONTENT_SCROLLBAR_RESERVED_EXTENT)
+        } else {
+            0.0
+        };
         Some(ShellPaneGeometry {
             kind: ShellPaneKind::Split,
             pane,
@@ -6650,8 +6884,8 @@ impl ShellScene {
             content: ViewRect {
                 x: pane.x,
                 y: content_y,
-                width: pane.width,
-                height: (status_bar.y - content_y).max(1.0),
+                width: (pane.width - reserved_right).max(1.0),
+                height: (status_bar.y - content_y - reserved_bottom).max(1.0),
             },
             status_bar,
         })
@@ -6660,18 +6894,18 @@ impl ShellScene {
     #[cfg_attr(not(test), allow(dead_code))]
     fn pane_geometries(&self, size: PhysicalSize<u32>) -> Vec<ShellPaneGeometry> {
         let mut geometries = Vec::with_capacity(2);
-        geometries.push(self.primary_pane_geometry(size));
+        geometries.push(self.left_pane_geometry(size));
         if let Some(geometry) = self.split_pane_geometry(size) {
             geometries.push(geometry);
         }
         geometries
     }
 
-    fn primary_pane_projection(&self, size: PhysicalSize<u32>) -> ShellPaneProjection<'_> {
+    fn left_pane_projection(&self, size: PhysicalSize<u32>) -> ShellPaneProjection<'_> {
         self.pane_projection_from_geometry(
-            self.primary_pane_view(),
-            self.primary_pane_geometry(size),
-            &self.primary_visible_slots,
+            self.left_pane_view(),
+            self.left_pane_geometry(size),
+            &self.left_visible_slots,
         )
     }
 
@@ -6682,11 +6916,11 @@ impl ShellScene {
     ) -> Option<ShellPaneProjection<'_>> {
         let view = self.pane_view(kind)?;
         let geometry = match kind {
-            ShellPaneKind::Primary => self.primary_pane_geometry(size),
+            ShellPaneKind::Left => self.left_pane_geometry(size),
             ShellPaneKind::Split => self.split_pane_geometry(size)?,
         };
         let slots = match kind {
-            ShellPaneKind::Primary => &self.primary_visible_slots,
+            ShellPaneKind::Left => &self.left_visible_slots,
             ShellPaneKind::Split => &self.split_visible_slots,
         };
         Some(self.pane_projection_from_geometry(view, geometry, slots))
@@ -6721,10 +6955,10 @@ impl ShellScene {
         }
     }
 
-    fn primary_pane_scroll_metrics(&self, size: PhysicalSize<u32>) -> ShellPaneScrollMetrics {
-        let geometry = self.primary_pane_geometry(size);
+    fn left_pane_scroll_metrics(&self, size: PhysicalSize<u32>) -> ShellPaneScrollMetrics {
+        let geometry = self.left_pane_geometry(size);
         let layout = self.pane_layout(
-            self.primary_pane_view(),
+            self.left_pane_view(),
             geometry.content.width,
             geometry.content.height,
         );
@@ -6749,13 +6983,11 @@ impl ShellScene {
     }
 
     fn update_visible_slot_pools(&mut self, size: PhysicalSize<u32>) -> ShellVisibleItemSlotStats {
-        let primary_paths = self.visible_paths_for_pane_projection(
-            self.primary_pane_view(),
-            self.primary_pane_geometry(size),
+        let left_paths = self.visible_paths_for_pane_projection(
+            self.left_pane_view(),
+            self.left_pane_geometry(size),
         );
-        let primary_stats = self
-            .primary_visible_slots
-            .update_visible_items(primary_paths);
+        let left_stats = self.left_visible_slots.update_visible_items(left_paths);
         let split_stats = if let Some(split_view) = self.pane_view(ShellPaneKind::Split)
             && let Some(split_geometry) = self.split_pane_geometry(size)
         {
@@ -6765,14 +6997,15 @@ impl ShellScene {
             self.split_visible_slots.clear();
             ShellVisibleItemSlotStats::default()
         };
-        let stats = primary_stats.merged(split_stats);
+        let stats = left_stats.merged(split_stats);
         self.visible_slot_stats = stats;
         stats
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     fn layout(&self, size: PhysicalSize<u32>) -> ShellLayout {
         self.pane_layout(
-            self.primary_pane_view(),
+            self.left_pane_view(),
             self.content_width(size),
             self.viewport_height(size),
         )
@@ -6847,8 +7080,8 @@ impl ShellScene {
     fn icons_options(&self, size: PhysicalSize<u32>) -> IconsLayoutOptions {
         let mut options =
             self.icons_options_for_viewport(self.content_width(size), self.viewport_height(size));
-        options.scroll_x = self.primary_pane.scroll_x;
-        options.scroll_y = self.primary_pane.scroll_y;
+        options.scroll_x = self.left_pane.scroll_x;
+        options.scroll_y = self.left_pane.scroll_y;
         options
     }
 
@@ -6876,7 +7109,7 @@ impl ShellScene {
     fn compact_options(&self, size: PhysicalSize<u32>) -> CompactLayoutOptions {
         let mut options =
             self.compact_options_for_viewport(self.content_width(size), self.viewport_height(size));
-        options.scroll_x = self.primary_pane.scroll_x;
+        options.scroll_x = self.left_pane.scroll_x;
         options
     }
 
@@ -6940,8 +7173,8 @@ impl ShellScene {
         let pane = self.pane_rect(size);
         let top_bar_height = self.top_bar_height();
         let status_bar = self.status_bar_rect(size);
-        let primary_projection = self.primary_pane_projection(size);
-        let content_clip = primary_projection.geometry.content;
+        let left_projection = self.left_pane_projection(size);
+        let content_clip = left_projection.geometry.content;
 
         push_rect(
             &mut vertices,
@@ -6951,7 +7184,7 @@ impl ShellScene {
                 width,
                 height,
             },
-            view_mode_surface_color(self.primary_pane.view_mode),
+            view_mode_surface_color(self.left_pane.view_mode),
             size,
         );
         self.push_app_toolbar(&mut vertices, size);
@@ -6968,7 +7201,8 @@ impl ShellScene {
             size,
         );
         if let Some(path_rect) = self.path_bar_rect(size) {
-            let location_active = self.is_location_editing();
+            let location_active =
+                self.is_location_editing() || self.active_pane() == ShellPaneKind::Left;
             let location_clip = ViewRect {
                 x: pane.x,
                 y: pane.y,
@@ -6979,7 +7213,7 @@ impl ShellScene {
                 .location_draft
                 .as_ref()
                 .map(|draft| draft.value.clone())
-                .unwrap_or_else(|| self.primary_pane.path.display().to_string());
+                .unwrap_or_else(|| self.left_pane.path.display().to_string());
             let path_cursor = self.location_draft.as_ref().map(|draft| draft.cursor);
             self.push_location_bar(
                 &mut vertices,
@@ -6997,37 +7231,36 @@ impl ShellScene {
         push_rect(
             &mut vertices,
             pane_body,
-            view_mode_content_color(self.primary_pane.view_mode),
+            view_mode_content_color(self.left_pane.view_mode),
             size,
         );
         self.push_filter_bar(&mut vertices, text, size);
-        if self.primary_pane.view_mode == ShellViewMode::Details {
+        if self.left_pane.view_mode == ShellViewMode::Details {
             self.push_details_header(&mut vertices, text, size);
         }
 
-        let content_size = primary_projection.scroll_metrics.content_size;
-        let first_item_rect = primary_projection
+        let content_size = left_projection.scroll_metrics.content_size;
+        let first_item_rect = left_projection
             .visible_items
             .first()
             .map(|item| item.layout.item_rect);
-        let visible_items = primary_projection.visible_items.len();
-        let thumbnail_candidates = self
-            .thumbnail_candidate_count_for_projection(&primary_projection)
+        let visible_items = left_projection.visible_items.len();
+        let thumbnail_candidates = self.thumbnail_candidate_count_for_projection(&left_projection)
             + self
                 .pane_projection(ShellPaneKind::Split, size)
                 .as_ref()
                 .map(|projection| self.thumbnail_candidate_count_for_projection(projection))
                 .unwrap_or(0);
-        for item in primary_projection.visible_items.iter().copied() {
-            self.push_pane_item(&mut vertices, text, icons, &primary_projection, item, size);
+        for item in left_projection.visible_items.iter().copied() {
+            self.push_pane_item(&mut vertices, text, icons, &left_projection, item, size);
         }
         self.push_rubber_band(&mut vertices, content_clip, size);
         let content_scrollbar_visible =
-            self.push_content_scrollbar_for_projection(&mut vertices, &primary_projection, size);
+            self.push_content_scrollbar_for_projection(&mut vertices, &left_projection, size);
         self.push_status_bar(&mut vertices, text, size, visible_items, status_bar);
         self.push_pane_borders(&mut vertices, size);
         self.push_split_pane(&mut vertices, text, icons, size);
-        self.queue_thumbnail_read_ahead_for_projection(&primary_projection, icons);
+        self.queue_thumbnail_read_ahead_for_projection(&left_projection, icons);
         if let Some(split_projection) = self.pane_projection(ShellPaneKind::Split, size) {
             self.queue_thumbnail_read_ahead_for_projection(&split_projection, icons);
         }
@@ -7128,7 +7361,7 @@ impl ShellScene {
             TextColor::rgb(36, 41, 47),
             LabelAlignment::Start,
         );
-        if active {
+        if active && cursor.is_some() {
             let caret_width = self.scale_metric(1.25);
             let caret_height = self
                 .scale_metric(17.0)
@@ -7180,9 +7413,12 @@ impl ShellScene {
         let visual_rect = pane_content_rect_to_screen(layout.visual_rect, projection);
         let icon_rect = pane_content_rect_to_screen(layout.icon_rect, projection);
         let text_rect = pane_content_rect_to_screen(layout.text_rect, projection);
-        let primary = projection.geometry.kind == ShellPaneKind::Primary;
-        let selected = primary && self.selection.contains(entry_index);
-        let hovered = primary && self.hovered_index == Some(entry_index);
+        let selected = projection.view.selection.contains(entry_index);
+        let hovered = self.hovered_item
+            == Some(ShellPaneItemTarget {
+                pane: projection.geometry.kind,
+                index: entry_index,
+            });
 
         if projection.view.view_mode == ShellViewMode::Details {
             push_clipped_rect(
@@ -7432,6 +7668,7 @@ impl ShellScene {
             width: (pane.width - margin * 2.0).max(1.0),
             height: self.scale_metric(28.0),
         };
+        let location_active = self.active_pane() == ShellPaneKind::Split;
         self.push_location_bar(
             vertices,
             text,
@@ -7439,7 +7676,7 @@ impl ShellScene {
             path_rect,
             projection.geometry.top_bar,
             &split_view.path.display().to_string(),
-            false,
+            location_active,
             None,
         );
         push_rect(
@@ -7574,7 +7811,7 @@ impl ShellScene {
         push_rect(
             vertices,
             toolbar,
-            view_mode_surface_color(self.primary_pane.view_mode),
+            view_mode_surface_color(self.left_pane.view_mode),
             size,
         );
 
@@ -7689,7 +7926,7 @@ impl ShellScene {
             size,
         );
 
-        let active_place = active_shell_place_index(&self.places, &self.primary_pane.path);
+        let active_place = active_shell_place_index(&self.places, &self.left_pane.path);
         let top_padding = self.scale_metric(PLACES_SIDEBAR_TOP_PADDING);
         let title_height = self.scale_metric(PLACES_TITLE_HEIGHT);
         let padding_x = self.scale_metric(PLACES_SIDEBAR_PADDING_X);
@@ -7981,15 +8218,15 @@ impl ShellScene {
 
         let mut status = format!(
             "{} entries ({} dirs, {} files) | {} selected | {} visible | {} | {}%",
-            self.primary_pane.entries.len(),
-            self.primary_pane.dir_count,
-            self.primary_pane
+            self.left_pane.entries.len(),
+            self.left_pane.dir_count,
+            self.left_pane
                 .entries
                 .len()
-                .saturating_sub(self.primary_pane.dir_count),
-            self.selection.len(),
+                .saturating_sub(self.left_pane.dir_count),
+            self.left_pane.selection.len(),
             visible_items,
-            self.primary_pane.view_mode.label(),
+            self.left_pane.view_mode.label(),
             self.zoom_percent()
         );
         if self.show_hidden {
@@ -8419,7 +8656,7 @@ impl ShellScene {
                 vertices,
                 button,
                 if active {
-                    view_mode_badge_color(self.primary_pane.view_mode)
+                    view_mode_badge_color(self.left_pane.view_mode)
                 } else {
                     [0.150, 0.162, 0.176, 1.0]
                 },
@@ -8955,8 +9192,8 @@ impl ShellScene {
 
     fn content_to_screen(&self, rect: ViewRect, size: PhysicalSize<u32>) -> ViewRect {
         ViewRect {
-            x: rect.x - self.primary_pane.scroll_x + self.content_origin_x(size),
-            y: rect.y - self.primary_pane.scroll_y + self.content_origin_y(),
+            x: rect.x - self.left_pane.scroll_x + self.content_origin_x(size),
+            y: rect.y - self.left_pane.scroll_y + self.content_origin_y(),
             width: rect.width,
             height: rect.height,
         }
@@ -8975,7 +9212,7 @@ impl ShellScene {
 
     fn content_origin_y(&self) -> f32 {
         self.details_header_y()
-            + if self.primary_pane.view_mode == ShellViewMode::Details {
+            + if self.left_pane.view_mode == ShellViewMode::Details {
                 self.details_header_height()
             } else {
                 0.0
@@ -9181,7 +9418,7 @@ impl ShellScene {
     }
 
     fn content_scrollbar_axis(&self) -> ContentScrollbarAxis {
-        scrollbar_axis_for_view_mode(self.primary_pane.view_mode)
+        scrollbar_axis_for_view_mode(self.left_pane.view_mode)
     }
 
     fn pane_content_scrollbar_axis(&self, kind: ShellPaneKind) -> Option<ContentScrollbarAxis> {
@@ -9212,7 +9449,7 @@ impl ShellScene {
     }
 
     fn clamp_scroll(&mut self, size: PhysicalSize<u32>) {
-        self.clamp_pane_scroll(ShellPaneKind::Primary, size);
+        self.clamp_pane_scroll(ShellPaneKind::Left, size);
         self.clamp_pane_scroll(ShellPaneKind::Split, size);
         self.clamp_places_scroll(size);
         self.refresh_hover(size);
@@ -9229,10 +9466,12 @@ impl ShellScene {
         let pane = self
             .pointer
             .and_then(|point| self.pane_kind_at_screen_point(point, size))
-            .unwrap_or(ShellPaneKind::Primary);
+            .unwrap_or(ShellPaneKind::Left);
+        let old_active = self.active_pane();
+        self.active_pane = self.normalized_pane_kind(pane);
         let scrolled = self.scroll_pane_by(pane, delta_y, size);
         let hover_changed = self.refresh_hover(size);
-        scrolled || hover_changed
+        scrolled || hover_changed || old_active != self.active_pane()
     }
 
     fn pane_kind_at_screen_point(
@@ -9285,7 +9524,7 @@ impl ShellScene {
         size: PhysicalSize<u32>,
     ) -> Option<ShellPaneScrollMetrics> {
         match kind {
-            ShellPaneKind::Primary => Some(self.primary_pane_scroll_metrics(size)),
+            ShellPaneKind::Left => Some(self.left_pane_scroll_metrics(size)),
             ShellPaneKind::Split => {
                 let geometry = self.split_pane_geometry(size)?;
                 let view = self.pane_view(ShellPaneKind::Split)?;
@@ -9349,17 +9588,17 @@ impl ShellScene {
 
     #[cfg_attr(not(test), allow(dead_code))]
     fn max_scroll_x(&self, size: PhysicalSize<u32>) -> f32 {
-        self.primary_pane_scroll_metrics(size).max_scroll_x
+        self.left_pane_scroll_metrics(size).max_scroll_x
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
     fn max_scroll_y(&self, size: PhysicalSize<u32>) -> f32 {
-        self.primary_pane_scroll_metrics(size).max_scroll_y
+        self.left_pane_scroll_metrics(size).max_scroll_y
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
     fn content_scrollbar_rects(&self, size: PhysicalSize<u32>) -> Option<(ViewRect, ViewRect)> {
-        self.pane_content_scrollbar_rects(ShellPaneKind::Primary, size)
+        self.pane_content_scrollbar_rects(ShellPaneKind::Left, size)
     }
 
     fn pane_content_scrollbar_rects(
@@ -9525,7 +9764,7 @@ impl ShellScene {
         point: ViewPoint,
         size: PhysicalSize<u32>,
     ) -> Option<(ShellPaneKind, ContentScrollbarAxis, ViewRect, ViewRect)> {
-        for kind in [ShellPaneKind::Primary, ShellPaneKind::Split] {
+        for kind in [ShellPaneKind::Left, ShellPaneKind::Split] {
             let Some(axis) = self.pane_content_scrollbar_axis(kind) else {
                 continue;
             };
@@ -9543,8 +9782,8 @@ impl ShellScene {
         let Some(drag) = self.scrollbar_drag else {
             return false;
         };
-        let old_x = self.primary_pane.scroll_x;
-        let old_y = self.primary_pane.scroll_y;
+        let old_x = self.left_pane.scroll_x;
+        let old_y = self.left_pane.scroll_y;
         let old_split_scroll = self
             .split_pane
             .as_ref()
@@ -9615,8 +9854,8 @@ impl ShellScene {
         }
 
         self.clamp_scroll(size);
-        let content_changed = (self.primary_pane.scroll_x - old_x).abs() > f32::EPSILON
-            || (self.primary_pane.scroll_y - old_y).abs() > f32::EPSILON;
+        let content_changed = (self.left_pane.scroll_x - old_x).abs() > f32::EPSILON
+            || (self.left_pane.scroll_y - old_y).abs() > f32::EPSILON;
         let split_content_changed = old_split_scroll
             .zip(
                 self.split_pane
@@ -9680,7 +9919,7 @@ impl ShellScene {
 
     fn clear_pointer(&mut self) -> bool {
         self.pointer = None;
-        let changed = self.hovered_index.take().is_some()
+        let changed = self.hovered_item.take().is_some()
             || self.hovered_place.take().is_some()
             || self.internal_drag.take().is_some()
             || self.clear_dnd_hover_target();
@@ -9690,46 +9929,61 @@ impl ShellScene {
         changed
     }
 
-    fn begin_primary_pointer(&mut self, click: SelectionClick, size: PhysicalSize<u32>) -> bool {
+    fn begin_pane_pointer(&mut self, click: SelectionClick, size: PhysicalSize<u32>) -> bool {
         self.rubber_band = None;
         self.pointer = Some(click.point);
-        let hit = self.hit_test_screen_point(click.point, size);
-        let hover_changed = self.set_hovered_index(hit);
-        if let Some(index) = hit {
+        let active_changed = self.focus_pane_at_screen_point(click.point, size);
+        let hit = self.pane_item_at_screen_point(click.point, size);
+        let hover_changed = self.set_hovered_item(hit);
+        if let Some(target) = hit {
             let drag_started = !click.extend
                 && !click.toggle
-                && self.begin_internal_drag_for_primary_item(index, click.point);
-            let selection_changed = self.selection.apply_click(hit, click.extend, click.toggle);
+                && self.begin_internal_drag_for_pane_item(target.pane, target.index, click.point);
+            let selection_changed = self
+                .pane_selection_mut(target.pane)
+                .is_some_and(|selection| {
+                    selection.apply_click(Some(target.index), click.extend, click.toggle)
+                });
             if selection_changed {
                 self.selection_changes += 1;
             }
-            return hover_changed || selection_changed || drag_started;
+            return active_changed || hover_changed || selection_changed || drag_started;
         }
         self.internal_drag = None;
-        if !self.content_screen_rect(size).contains(click.point) {
-            return hover_changed;
+        let pane_kind = self.active_pane();
+        let Some(projection) = self.pane_projection(pane_kind, size) else {
+            return active_changed || hover_changed;
+        };
+        if !projection.geometry.content.contains(click.point) {
+            return active_changed || hover_changed;
         }
 
         let Some(start) = screen_to_content_point(
             click.point,
-            self.scroll_offset(),
-            self.content_screen_rect(size),
+            ViewPoint {
+                x: projection.view.scroll_x,
+                y: projection.view.scroll_y,
+            },
+            projection.geometry.content,
         ) else {
-            return hover_changed;
+            return active_changed || hover_changed;
         };
+        let base_selection = projection.view.selection.clone();
         self.rubber_band = Some(RubberBand::new(
             start,
             RubberBandMode::from_modifiers(click.extend, click.toggle),
-            self.selection.clone(),
+            base_selection,
         ));
-        let selection_changed = self.selection.apply_click(hit, click.extend, click.toggle);
+        let selection_changed = self
+            .pane_selection_mut(pane_kind)
+            .is_some_and(|selection| selection.apply_click(None, click.extend, click.toggle));
         if selection_changed {
             self.selection_changes += 1;
         }
-        hover_changed || selection_changed
+        active_changed || hover_changed || selection_changed
     }
 
-    fn end_primary_pointer(&mut self, point: ViewPoint, size: PhysicalSize<u32>) -> bool {
+    fn end_pane_pointer(&mut self, point: ViewPoint, size: PhysicalSize<u32>) -> bool {
         self.pointer = Some(point);
         if let Some(drag) = self.internal_drag.as_ref() {
             let was_active = drag.active;
@@ -9750,31 +10004,46 @@ impl ShellScene {
     }
 
     fn update_rubber_band(&mut self, point: ViewPoint, size: PhysicalSize<u32>) -> bool {
-        let current = clamped_screen_to_content_point(
-            point,
-            self.scroll_offset(),
-            self.content_screen_rect(size),
-        );
-        let Some(band) = self.rubber_band.as_mut() else {
+        let pane_kind = self.active_pane();
+        let Some(projection) = self.pane_projection(pane_kind, size) else {
             return self.refresh_hover(size);
         };
-        let old_active_rect = band.active_rect();
-        band.update(current);
-        let active_rect = band.active_rect();
-        let mode = band.mode;
-        let base_selection = band.base_selection.clone();
-        let rect_changed = old_active_rect != active_rect;
-        let active_rect = active_rect.filter(|rect| rect.width > 0.0 && rect.height > 0.0);
+        let current = clamped_screen_to_content_point(
+            point,
+            ViewPoint {
+                x: projection.view.scroll_x,
+                y: projection.view.scroll_y,
+            },
+            projection.geometry.content,
+        );
+        let Some((active_rect, mode, base_selection, rect_changed)) = ({
+            let Some(band) = self.rubber_band.as_mut() else {
+                return self.refresh_hover(size);
+            };
+            let old_active_rect = band.active_rect();
+            band.update(current);
+            let active_rect = band
+                .active_rect()
+                .filter(|rect| rect.width > 0.0 && rect.height > 0.0);
+            Some((
+                active_rect,
+                band.mode,
+                band.base_selection.clone(),
+                old_active_rect != active_rect,
+            ))
+        }) else {
+            return self.refresh_hover(size);
+        };
 
         let hover_changed = self.refresh_hover(size);
         let Some(rect) = active_rect else {
             return hover_changed || rect_changed;
         };
 
-        let indexes = self.rubber_band_indexes(rect, size);
+        let indexes = self.rubber_band_indexes_for_pane(pane_kind, rect, size);
         let selection_changed = self
-            .selection
-            .apply_rubber_band(&base_selection, &indexes, mode);
+            .pane_selection_mut(pane_kind)
+            .is_some_and(|selection| selection.apply_rubber_band(&base_selection, &indexes, mode));
         if selection_changed {
             self.selection_changes += 1;
         }
@@ -9782,8 +10051,20 @@ impl ShellScene {
         hover_changed || rect_changed || selection_changed
     }
 
-    fn rubber_band_indexes(&self, rect: ViewRect, size: PhysicalSize<u32>) -> Vec<usize> {
-        let layout = self.layout(size);
+    fn rubber_band_indexes_for_pane(
+        &self,
+        pane_kind: ShellPaneKind,
+        rect: ViewRect,
+        size: PhysicalSize<u32>,
+    ) -> Vec<usize> {
+        let Some(projection) = self.pane_projection(pane_kind, size) else {
+            return Vec::new();
+        };
+        let layout = self.pane_layout(
+            projection.view,
+            projection.geometry.content.width,
+            projection.geometry.content.height,
+        );
         layout
             .indexes_intersecting(rect)
             .iter()
@@ -9791,7 +10072,7 @@ impl ShellScene {
                 layout
                     .item(*layout_index)
                     .is_some_and(|item| item.visual_rect.intersects(rect))
-                    .then(|| self.model_index_for_layout_index(*layout_index))
+                    .then(|| projection.view.filtered_indexes.get(*layout_index).copied())
                     .flatten()
             })
             .collect()
@@ -9803,45 +10084,66 @@ impl ShellScene {
         extend: bool,
         size: PhysicalSize<u32>,
     ) -> bool {
-        if self.filtered_entry_count() == 0 {
+        let pane_kind = self.active_pane();
+        let Some(projection) = self.pane_projection(pane_kind, size) else {
+            return false;
+        };
+        if projection.view.filtered_entry_count() == 0 {
             return false;
         }
 
-        let old_scroll_y = self.primary_pane.scroll_y;
-        let old_hovered = self.hovered_index;
+        let old_scroll = self.pane_scroll_offset(pane_kind).unwrap_or((0.0, 0.0));
+        let old_hovered = self.hovered_item;
         let old_hovered_place = self.hovered_place;
-        let current = self
+        let current = projection
+            .view
             .selection
             .focus_or_first_selected()
-            .and_then(|index| self.layout_index_for_model_index(index))
+            .and_then(|index| projection.view.filtered_indexes.binary_search(&index).ok())
             .unwrap_or(0);
-        let layout = self.layout(size);
-        let Some(target_layout_index) =
-            navigation_target(action, current, self.filtered_entry_count(), &layout)
+        let layout = self.pane_layout(
+            projection.view,
+            projection.geometry.content.width,
+            projection.geometry.content.height,
+        );
+        let Some(target_layout_index) = navigation_target(
+            action,
+            current,
+            projection.view.filtered_entry_count(),
+            &layout,
+        ) else {
+            return false;
+        };
+        let Some(target) = projection
+            .view
+            .filtered_indexes
+            .get(target_layout_index)
+            .copied()
         else {
             return false;
         };
-        let Some(target) = self.model_index_for_layout_index(target_layout_index) else {
-            return false;
-        };
 
-        let selection_changed = self.selection.apply_navigation(target, extend);
+        let selection_changed = self
+            .pane_selection_mut(pane_kind)
+            .is_some_and(|selection| selection.apply_navigation(target, extend));
         if selection_changed {
             self.selection_changes += 1;
         }
         self.keyboard_navigation += 1;
-        self.ensure_index_visible(target, size);
+        self.ensure_index_visible_in_pane(pane_kind, target, size);
         self.hovered_place = self
             .pointer
             .and_then(|point| self.place_index_at_screen_point(point, size));
-        self.hovered_index = self
+        self.hovered_item = self
             .pointer
             .filter(|_| self.hovered_place.is_none())
-            .and_then(|point| self.hit_test_screen_point(point, size));
+            .and_then(|point| self.pane_item_at_screen_point(point, size));
+        let new_scroll = self.pane_scroll_offset(pane_kind).unwrap_or((0.0, 0.0));
 
         selection_changed
-            || (self.primary_pane.scroll_y - old_scroll_y).abs() > f32::EPSILON
-            || self.hovered_index != old_hovered
+            || (new_scroll.0 - old_scroll.0).abs() > f32::EPSILON
+            || (new_scroll.1 - old_scroll.1).abs() > f32::EPSILON
+            || self.hovered_item != old_hovered
             || self.hovered_place != old_hovered_place
     }
 
@@ -9851,21 +10153,21 @@ impl ShellScene {
             .and_then(|point| self.place_index_at_screen_point(point, size));
         let item_hit = if place_hit.is_none() {
             self.pointer
-                .and_then(|point| self.hit_test_screen_point(point, size))
+                .and_then(|point| self.pane_item_at_screen_point(point, size))
         } else {
             None
         };
         self.hit_tests += 1;
-        let changed = self.hovered_place != place_hit || self.hovered_index != item_hit;
+        let changed = self.hovered_place != place_hit || self.hovered_item != item_hit;
         self.hovered_place = place_hit;
-        self.hovered_index = item_hit;
+        self.hovered_item = item_hit;
         changed
     }
 
-    fn set_hovered_index(&mut self, hovered_index: Option<usize>) -> bool {
+    fn set_hovered_item(&mut self, hovered_item: Option<ShellPaneItemTarget>) -> bool {
         self.hit_tests += 1;
-        let changed = self.hovered_index != hovered_index;
-        self.hovered_index = hovered_index;
+        let changed = self.hovered_item != hovered_item;
+        self.hovered_item = hovered_item;
         changed
     }
 
@@ -9876,12 +10178,28 @@ impl ShellScene {
         changed
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     fn hit_test_screen_point(&self, point: ViewPoint, size: PhysicalSize<u32>) -> Option<usize> {
-        self.pane_hit_test_screen_point(
-            self.primary_pane_view(),
-            self.primary_pane_geometry(size),
-            point,
-        )
+        self.pane_hit_test_screen_point(self.left_pane_view(), self.left_pane_geometry(size), point)
+    }
+
+    fn pane_item_at_screen_point(
+        &self,
+        point: ViewPoint,
+        size: PhysicalSize<u32>,
+    ) -> Option<ShellPaneItemTarget> {
+        for geometry in self.pane_geometries(size) {
+            if !geometry.content.contains(point) {
+                continue;
+            }
+            let pane = self.pane_view(geometry.kind)?;
+            let index = self.pane_hit_test_screen_point(pane, geometry, point)?;
+            return Some(ShellPaneItemTarget {
+                pane: geometry.kind,
+                index,
+            });
+        }
+        None
     }
 
     fn pane_hit_test_screen_point(
@@ -9910,45 +10228,54 @@ impl ShellScene {
             .flatten()
     }
 
-    fn ensure_index_visible(&mut self, index: usize, size: PhysicalSize<u32>) {
-        let layout = self.layout(size);
-        let Some(layout_index) = self.layout_index_for_model_index(index) else {
+    fn ensure_index_visible_in_pane(
+        &mut self,
+        pane_kind: ShellPaneKind,
+        index: usize,
+        size: PhysicalSize<u32>,
+    ) {
+        let Some(projection) = self.pane_projection(pane_kind, size) else {
             return;
         };
+        let Some(layout_index) = projection.view.filtered_indexes.binary_search(&index).ok() else {
+            return;
+        };
+        let layout = self.pane_layout(
+            projection.view,
+            projection.geometry.content.width,
+            projection.geometry.content.height,
+        );
         let Some(item) = layout.item(layout_index) else {
             return;
         };
-        let viewport_h = self.viewport_height(size);
         let padding = 8.0;
-        match self.primary_pane.view_mode {
+        let mut next_scroll = self.pane_scroll_offset(pane_kind).unwrap_or((0.0, 0.0));
+        match projection.view.view_mode {
             ShellViewMode::Compact => {
-                if item.visual_rect.x < self.primary_pane.scroll_x + padding {
-                    self.primary_pane.scroll_x = (item.visual_rect.x - padding).max(0.0);
+                if item.visual_rect.x < projection.view.scroll_x + padding {
+                    next_scroll.0 = (item.visual_rect.x - padding).max(0.0);
                 } else if item.visual_rect.right()
-                    > self.primary_pane.scroll_x + self.content_width(size) - padding
+                    > projection.view.scroll_x + projection.geometry.content.width - padding
                 {
-                    self.primary_pane.scroll_x =
-                        item.visual_rect.right() - self.content_width(size) + padding;
+                    next_scroll.0 =
+                        item.visual_rect.right() - projection.geometry.content.width + padding;
                 }
+                next_scroll.1 = 0.0;
             }
             ShellViewMode::Icons | ShellViewMode::Details => {
-                if item.visual_rect.y < self.primary_pane.scroll_y + padding {
-                    self.primary_pane.scroll_y = (item.visual_rect.y - padding).max(0.0);
+                if item.visual_rect.y < projection.view.scroll_y + padding {
+                    next_scroll.1 = (item.visual_rect.y - padding).max(0.0);
                 } else if item.visual_rect.bottom()
-                    > self.primary_pane.scroll_y + viewport_h - padding
+                    > projection.view.scroll_y + projection.geometry.content.height - padding
                 {
-                    self.primary_pane.scroll_y = item.visual_rect.bottom() - viewport_h + padding;
+                    next_scroll.1 =
+                        item.visual_rect.bottom() - projection.geometry.content.height + padding;
                 }
+                next_scroll.0 = 0.0;
             }
         }
+        self.set_pane_scroll_offset(pane_kind, next_scroll.0, next_scroll.1);
         self.clamp_scroll(size);
-    }
-
-    fn scroll_offset(&self) -> ViewPoint {
-        ViewPoint {
-            x: self.primary_pane.scroll_x,
-            y: self.primary_pane.scroll_y,
-        }
     }
 }
 
@@ -9987,7 +10314,7 @@ impl WgpuState {
     fn new(window: &dyn Window) -> Result<Self, String> {
         let size = nonzero_size(window.surface_size());
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::PRIMARY,
+            backends: wgpu::Backends::VULKAN | wgpu::Backends::GL,
             flags: wgpu::InstanceFlags::default(),
             backend_options: wgpu::BackendOptions::default(),
             memory_budget_thresholds: wgpu::MemoryBudgetThresholds::default(),
@@ -10131,7 +10458,7 @@ impl WgpuState {
                     eprintln!(
                         "[fika-wgpu] frame-retry reason={} view={} surface=reconfigure",
                         reason,
-                        scene.primary_pane.view_mode.as_str()
+                        scene.left_pane.view_mode.as_str()
                     );
                 }
                 self.force_reconfigure(window.surface_size());
@@ -10143,7 +10470,7 @@ impl WgpuState {
                             eprintln!(
                                 "[fika-wgpu] frame-skip reason={} view={} surface=reconfigure-pending",
                                 reason,
-                                scene.primary_pane.view_mode.as_str()
+                                scene.left_pane.view_mode.as_str()
                             );
                         }
                         window.request_redraw();
@@ -10155,7 +10482,7 @@ impl WgpuState {
                             eprintln!(
                                 "[fika-wgpu] frame-skip reason={} view={} surface=not-ready",
                                 reason,
-                                scene.primary_pane.view_mode.as_str()
+                                scene.left_pane.view_mode.as_str()
                             );
                         }
                         return false;
@@ -10172,7 +10499,7 @@ impl WgpuState {
                     eprintln!(
                         "[fika-wgpu] frame-skip reason={} view={} surface=not-ready",
                         reason,
-                        scene.primary_pane.view_mode.as_str()
+                        scene.left_pane.view_mode.as_str()
                     );
                 }
                 return false;
@@ -10222,9 +10549,7 @@ impl WgpuState {
                     view: &view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(view_mode_clear_color(
-                            scene.primary_pane.view_mode,
-                        )),
+                        load: wgpu::LoadOp::Clear(view_mode_clear_color(scene.left_pane.view_mode)),
                         store: wgpu::StoreOp::Store,
                     },
                     depth_slice: None,
@@ -10256,12 +10581,12 @@ impl WgpuState {
                 "[fika-wgpu] frame={} reason={} view={} scale={:.2} zoom={} zoom_changes={} path={} entries={} filtered={} show_hidden={} hidden_changes={} location_active={} location_changes={} filter_active={} filter_changes={} places={} places_visible={} places_width={:.1} place_hover={} places_changes={} places_resize_changes={} places_scroll_y={:.1} places_scroll_changes={} split_pane={} split_changes={} split_path={} content_scrollbar={} visible={} thumbnails={} slots={}/{} slot_reused={} slot_recycled={} slot_allocated={} selected={} hover={} dnd_hover={} dnd_hover_changes={} dnd_drop_requests={} context={} context_menu={} context_changes={} context_actions={} properties={} properties_changes={} create_dialog={} create_changes={} rename_dialog={} rename_changes={} open_with={} open_with_changes={} open_changes={} copy_location_changes={} file_clipboard_changes={} paste_changes={} trash_changes={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} path_changes={} reloads={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_deferred={} icon_raster_deferred={} thumb_loaded={} thumb_quads={} thumb_deferred={} thumb_read_ahead={} thumb_ready={}/{}b icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_cache={}/{} entries={} bytes={} batches={} scroll_x={:.1} scroll_y={:.1} layout={}us text_raster={}us text_atlas={}x{}:{}b render={}us",
                 self.frame_count,
                 reason,
-                scene.primary_pane.view_mode.as_str(),
+                scene.left_pane.view_mode.as_str(),
                 scene.ui_scale(),
                 scene.zoom_percent(),
                 scene.zoom_changes,
-                scene.primary_pane.path.display(),
-                scene.primary_pane.entries.len(),
+                scene.left_pane.path.display(),
+                scene.left_pane.entries.len(),
                 scene.filtered_entry_count(),
                 scene.show_hidden as u8,
                 scene.hidden_changes,
@@ -10292,8 +10617,11 @@ impl WgpuState {
                 scene.visible_slot_stats.reused,
                 scene.visible_slot_stats.recycled,
                 scene.visible_slot_stats.allocated,
-                scene.selection.len(),
-                scene.hovered_index.map(|index| index as i64).unwrap_or(-1),
+                scene.active_selection_len(),
+                scene
+                    .hovered_item
+                    .map(|item| format!("{}:{}", item.pane.as_str(), item.index))
+                    .unwrap_or_else(|| "-".to_string()),
                 scene
                     .dnd_hover_target
                     .as_ref()
@@ -10380,8 +10708,8 @@ impl WgpuState {
                     + self.icon_renderer.batch_count()
                     + self.text_renderer.batch_count()
                     + self.overlay_text_renderer.batch_count(),
-                scene.primary_pane.scroll_x,
-                scene.primary_pane.scroll_y,
+                scene.left_pane.scroll_x,
+                scene.left_pane.scroll_y,
                 scene_frame.layout_us,
                 scene_frame.text_stats.raster_us,
                 scene_frame.text_stats.atlas_width,
@@ -15009,7 +15337,7 @@ fn build_shell_places_from_with_devices(
     }
     let place_order_path = place_order_path_for_user_places_path(user_places_path);
     let place_order = load_place_order(&place_order_path).unwrap_or_default();
-    apply_primary_shell_place_order(&mut places, &place_order);
+    apply_left_shell_place_order(&mut places, &place_order);
 
     push_shell_place(
         &mut places,
@@ -15070,7 +15398,7 @@ fn push_device_shell_places(
     }
 }
 
-fn apply_primary_shell_place_order(places: &mut Vec<ShellPlace>, order: &[PathBuf]) {
+fn apply_left_shell_place_order(places: &mut Vec<ShellPlace>, order: &[PathBuf]) {
     if order.is_empty() {
         return;
     }
@@ -15079,25 +15407,22 @@ fn apply_primary_shell_place_order(places: &mut Vec<ShellPlace>, order: &[PathBu
         .iter()
         .position(|place| !place.group.is_empty())
         .unwrap_or(places.len());
-    let mut primary_places = places.drain(..first_grouped).collect::<Vec<_>>();
-    let mut ordered_places = Vec::with_capacity(primary_places.len());
+    let mut left_places = places.drain(..first_grouped).collect::<Vec<_>>();
+    let mut ordered_places = Vec::with_capacity(left_places.len());
 
     for path in order {
-        if let Some(index) = primary_places
+        if let Some(index) = left_places
             .iter()
             .position(|place| place.path.as_path() == path.as_path())
         {
-            ordered_places.push(primary_places.remove(index));
+            ordered_places.push(left_places.remove(index));
         }
     }
-    ordered_places.append(&mut primary_places);
+    ordered_places.append(&mut left_places);
     places.splice(0..0, ordered_places);
 }
 
-fn save_shell_primary_place_order(
-    user_places_path: &Path,
-    places: &[ShellPlace],
-) -> Result<(), String> {
+fn save_shell_place_order(user_places_path: &Path, places: &[ShellPlace]) -> Result<(), String> {
     let order = places
         .iter()
         .filter(|place| place.group.is_empty())
@@ -15397,13 +15722,14 @@ mod tests {
 
     fn test_scene(entries: Vec<Entry>, view_mode: ShellViewMode) -> ShellScene {
         ShellScene {
-            primary_pane: ShellPaneState::from_entries(
+            left_pane: ShellPaneState::from_entries(
                 PathBuf::from("/tmp"),
                 view_mode,
                 entries,
                 false,
                 "",
             ),
+            active_pane: ShellPaneKind::Left,
             places: vec![
                 ShellPlace::new("", "H", "Home", PathBuf::from("/tmp"), false),
                 ShellPlace::new("Devices", "/", "Root", PathBuf::from("/"), false),
@@ -15418,11 +15744,10 @@ mod tests {
             places_scroll_y: 0.0,
             scrollbar_drag: None,
             pointer: None,
-            hovered_index: None,
+            hovered_item: None,
             hovered_place: None,
-            last_primary_click: None,
+            last_item_click: None,
             history: PathHistory::default(),
-            selection: ShellSelection::default(),
             context_target: None,
             context_menu: None,
             properties_overlay: None,
@@ -15432,7 +15757,7 @@ mod tests {
             trash_conflict_dialog: None,
             split_pane: None,
             split_pane_left_fraction: 0.5,
-            primary_visible_slots: ShellVisibleItemSlotPool::default(),
+            left_visible_slots: ShellVisibleItemSlotPool::default(),
             split_visible_slots: ShellVisibleItemSlotPool::default(),
             visible_slot_stats: ShellVisibleItemSlotStats::default(),
             internal_drag: None,
@@ -15488,7 +15813,7 @@ mod tests {
         assert_eq!(scene.hit_test_screen_point(place_point, size), None);
         assert!(scene.set_pointer(place_point, size));
         assert_eq!(scene.hovered_place, Some(0));
-        assert_eq!(scene.hovered_index, None);
+        assert_eq!(scene.hovered_item, None);
 
         let item = scene.layout(size).item(0).expect("item should layout");
         let item_point = ViewPoint {
@@ -15497,7 +15822,13 @@ mod tests {
         };
         assert!(scene.set_pointer(item_point, size));
         assert_eq!(scene.hovered_place, None);
-        assert_eq!(scene.hovered_index, Some(0));
+        assert_eq!(
+            scene.hovered_item,
+            Some(ShellPaneItemTarget {
+                pane: ShellPaneKind::Left,
+                index: 0,
+            })
+        );
     }
 
     #[test]
@@ -15713,6 +16044,7 @@ mod tests {
             dir_count: 1,
             filtered_indexes: filtered_indexes_for_entries(&split_entries, false, ""),
             entries: split_entries,
+            selection: ShellSelection::default(),
             scroll_x: 0.0,
             scroll_y: 0.0,
         });
@@ -15782,11 +16114,11 @@ mod tests {
         });
         assert!(scene.scroll_by(90.0, size));
         assert_eq!(scene.places_scroll_y, 0.0);
-        assert!(scene.primary_pane.scroll_y > 0.0);
+        assert!(scene.left_pane.scroll_y > 0.0);
     }
 
     #[test]
-    fn drop_target_lookup_resolves_places_primary_blank_and_split_items() {
+    fn drop_target_lookup_resolves_places_left_blank_and_split_items() {
         let mut scene = test_scene(
             vec![test_entry("alpha", true), test_entry("note.txt", false)],
             ShellViewMode::Icons,
@@ -15798,6 +16130,7 @@ mod tests {
             dir_count: 1,
             filtered_indexes: filtered_indexes_for_entries(&split_entries, false, ""),
             entries: split_entries,
+            selection: ShellSelection::default(),
             scroll_x: 0.0,
             scroll_y: 0.0,
         });
@@ -15830,18 +16163,18 @@ mod tests {
             Some(ShellDropTarget::PlacesBlank)
         );
 
-        let primary_geometry = scene.primary_pane_geometry(size);
-        let primary_item = scene.layout(size).item(0).unwrap();
+        let left_geometry = scene.left_pane_geometry(size);
+        let left_item = scene.layout(size).item(0).unwrap();
         assert_eq!(
             scene.drop_target_at_screen_point(
                 ViewPoint {
-                    x: primary_geometry.content.x + primary_item.visual_rect.x + 4.0,
-                    y: primary_geometry.content.y + primary_item.visual_rect.y + 4.0,
+                    x: left_geometry.content.x + left_item.visual_rect.x + 4.0,
+                    y: left_geometry.content.y + left_item.visual_rect.y + 4.0,
                 },
                 size,
             ),
             Some(ShellDropTarget::PaneItem {
-                pane: ShellPaneKind::Primary,
+                pane: ShellPaneKind::Left,
                 index: 0,
                 path: PathBuf::from("/tmp/alpha"),
                 is_dir: true,
@@ -15850,13 +16183,13 @@ mod tests {
         assert_eq!(
             scene.drop_target_at_screen_point(
                 ViewPoint {
-                    x: primary_geometry.content.right() - 2.0,
-                    y: primary_geometry.content.bottom() - 2.0,
+                    x: left_geometry.content.right() - 2.0,
+                    y: left_geometry.content.bottom() - 2.0,
                 },
                 size,
             ),
             Some(ShellDropTarget::PaneBlank {
-                pane: ShellPaneKind::Primary,
+                pane: ShellPaneKind::Left,
                 path: PathBuf::from("/tmp"),
             })
         );
@@ -15893,7 +16226,7 @@ mod tests {
             ShellViewMode::Icons,
         );
         let size = PhysicalSize::new(700, 320);
-        let projection = scene.primary_pane_projection(size);
+        let projection = scene.left_pane_projection(size);
         let content = projection.geometry.content;
         let item = projection.visible_items[0];
         let item_point = ViewPoint {
@@ -15926,7 +16259,7 @@ mod tests {
     }
 
     #[test]
-    fn internal_drag_to_primary_blank_creates_copy_drop_request() {
+    fn internal_drag_to_left_blank_creates_copy_drop_request() {
         let mut scene = test_scene(
             vec![
                 test_entry("alpha.txt", false),
@@ -15935,7 +16268,7 @@ mod tests {
             ShellViewMode::Icons,
         );
         let size = PhysicalSize::new(700, 320);
-        let projection = scene.primary_pane_projection(size);
+        let projection = scene.left_pane_projection(size);
         let item = projection.visible_items[0];
         let start = ViewPoint {
             x: projection.geometry.content.x + item.layout.visual_rect.x + 6.0,
@@ -15946,7 +16279,7 @@ mod tests {
             y: projection.geometry.content.bottom() - 4.0,
         };
 
-        assert!(scene.begin_primary_pointer(
+        assert!(scene.begin_pane_pointer(
             SelectionClick {
                 point: start,
                 extend: false,
@@ -15956,7 +16289,7 @@ mod tests {
         ));
         assert!(scene.set_pointer(blank, size));
         assert!(scene.internal_drag.as_ref().is_some_and(|drag| drag.active));
-        assert!(scene.end_primary_pointer(blank, size));
+        assert!(scene.end_pane_pointer(blank, size));
 
         let request = scene
             .pending_drop_request
@@ -15967,7 +16300,7 @@ mod tests {
         assert_eq!(
             request.target,
             ShellDropTarget::PaneBlank {
-                pane: ShellPaneKind::Primary,
+                pane: ShellPaneKind::Left,
                 path: PathBuf::from("/tmp"),
             }
         );
@@ -15984,7 +16317,7 @@ mod tests {
             ShellViewMode::Icons,
         );
         let size = PhysicalSize::new(700, 320);
-        let projection = scene.primary_pane_projection(size);
+        let projection = scene.left_pane_projection(size);
         let folder = projection.visible_items[0];
         let note = projection.visible_items[1];
         let start = ViewPoint {
@@ -15996,7 +16329,7 @@ mod tests {
             y: projection.geometry.content.y + folder.layout.visual_rect.y + 6.0,
         };
 
-        assert!(scene.begin_primary_pointer(
+        assert!(scene.begin_pane_pointer(
             SelectionClick {
                 point: start,
                 extend: false,
@@ -16005,7 +16338,7 @@ mod tests {
             size,
         ));
         assert!(scene.set_pointer(target, size));
-        assert!(scene.end_primary_pointer(target, size));
+        assert!(scene.end_pane_pointer(target, size));
 
         let request = scene
             .pending_drop_request
@@ -16016,7 +16349,7 @@ mod tests {
         assert_eq!(
             request.target,
             ShellDropTarget::PaneItem {
-                pane: ShellPaneKind::Primary,
+                pane: ShellPaneKind::Left,
                 index: 0,
                 path: PathBuf::from("/tmp/folder"),
                 is_dir: true,
@@ -16029,7 +16362,7 @@ mod tests {
     fn internal_drag_below_threshold_finishes_as_plain_click() {
         let mut scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
         let size = PhysicalSize::new(700, 320);
-        let projection = scene.primary_pane_projection(size);
+        let projection = scene.left_pane_projection(size);
         let item = projection.visible_items[0];
         let start = ViewPoint {
             x: projection.geometry.content.x + item.layout.visual_rect.x + 6.0,
@@ -16040,7 +16373,7 @@ mod tests {
             y: start.y + 1.0,
         };
 
-        assert!(scene.begin_primary_pointer(
+        assert!(scene.begin_pane_pointer(
             SelectionClick {
                 point: start,
                 extend: false,
@@ -16050,10 +16383,10 @@ mod tests {
         ));
         assert!(scene.set_pointer(end, size));
         assert!(!scene.internal_drag.as_ref().is_some_and(|drag| drag.active));
-        assert!(!scene.end_primary_pointer(end, size));
+        assert!(!scene.end_pane_pointer(end, size));
         assert!(scene.pending_drop_request.is_none());
         assert_eq!(scene.dnd_drop_requests, 0);
-        assert!(scene.selection.contains(0));
+        assert!(scene.left_pane.selection.contains(0));
     }
 
     #[test]
@@ -16066,7 +16399,7 @@ mod tests {
             ShellViewMode::Icons,
         );
         let size = PhysicalSize::new(700, 320);
-        let projection = scene.primary_pane_projection(size);
+        let projection = scene.left_pane_projection(size);
         let source = projection.visible_items[0];
         let target = projection.visible_items[1];
         let start = ViewPoint {
@@ -16078,7 +16411,7 @@ mod tests {
             y: projection.geometry.content.y + target.layout.visual_rect.y + 6.0,
         };
 
-        assert!(scene.begin_primary_pointer(
+        assert!(scene.begin_pane_pointer(
             SelectionClick {
                 point: start,
                 extend: false,
@@ -16091,14 +16424,14 @@ mod tests {
             scene.dnd_hover_target.as_ref().map(ShellDropTarget::kind),
             Some("pane-item")
         );
-        assert!(scene.end_primary_pointer(end, size));
+        assert!(scene.end_pane_pointer(end, size));
         assert!(scene.pending_drop_request.is_none());
         assert_eq!(scene.dnd_drop_requests, 0);
         assert!(scene.dnd_hover_target.is_none());
     }
 
     #[test]
-    fn primary_and_split_panes_share_reusable_state_accessors() {
+    fn left_and_split_panes_share_reusable_state_accessors() {
         let mut scene = test_scene(vec![test_entry("alpha", true)], ShellViewMode::Icons);
         let split_entries = vec![test_entry("right", true)];
         scene.split_pane = Some(ShellPaneState {
@@ -16107,12 +16440,13 @@ mod tests {
             dir_count: 1,
             filtered_indexes: filtered_indexes_for_entries(&split_entries, false, ""),
             entries: split_entries,
+            selection: ShellSelection::default(),
             scroll_x: 0.0,
             scroll_y: 0.0,
         });
 
         assert_eq!(
-            scene.pane_state(ShellPaneKind::Primary).unwrap().path,
+            scene.pane_state(ShellPaneKind::Left).unwrap().path,
             PathBuf::from("/tmp")
         );
         assert_eq!(
@@ -16120,20 +16454,148 @@ mod tests {
             PathBuf::from("/right-root")
         );
 
-        scene
-            .pane_state_mut(ShellPaneKind::Primary)
-            .unwrap()
-            .scroll_y = 42.0;
+        scene.pane_state_mut(ShellPaneKind::Left).unwrap().scroll_y = 42.0;
         scene.pane_state_mut(ShellPaneKind::Split).unwrap().scroll_y = 24.0;
 
         assert_eq!(
-            scene.pane_scroll_offset(ShellPaneKind::Primary),
+            scene.pane_scroll_offset(ShellPaneKind::Left),
             Some((0.0, 42.0))
         );
         assert_eq!(
             scene.pane_scroll_offset(ShellPaneKind::Split),
             Some((0.0, 24.0))
         );
+    }
+
+    #[test]
+    fn split_pane_click_updates_active_pane_for_reused_routing() {
+        let mut scene = test_scene(vec![test_entry("alpha", true)], ShellViewMode::Icons);
+        let split_entries = vec![test_entry("right", true)];
+        scene.split_pane = Some(ShellPaneState {
+            path: PathBuf::from("/right-root"),
+            view_mode: ShellViewMode::Icons,
+            dir_count: 1,
+            filtered_indexes: filtered_indexes_for_entries(&split_entries, false, ""),
+            entries: split_entries,
+            selection: ShellSelection::default(),
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+        });
+        let size = PhysicalSize::new(900, 360);
+        let split_content = scene.split_pane_geometry(size).unwrap().content;
+        let point = ViewPoint {
+            x: split_content.x + 6.0,
+            y: split_content.y + 6.0,
+        };
+
+        assert_eq!(scene.active_pane(), ShellPaneKind::Left);
+        assert!(scene.focus_pane_at_screen_point(point, size));
+        assert_eq!(scene.active_pane(), ShellPaneKind::Split);
+        assert!(!scene.focus_pane_at_screen_point(point, size));
+    }
+
+    #[test]
+    fn split_pane_hover_tracks_pane_item_target() {
+        let mut scene = test_scene(vec![test_entry("alpha", true)], ShellViewMode::Icons);
+        let split_entries = vec![test_entry("right", true), test_entry("other", false)];
+        scene.split_pane = Some(ShellPaneState {
+            path: PathBuf::from("/right-root"),
+            view_mode: ShellViewMode::Icons,
+            dir_count: 1,
+            filtered_indexes: filtered_indexes_for_entries(&split_entries, false, ""),
+            entries: split_entries,
+            selection: ShellSelection::default(),
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+        });
+        let size = PhysicalSize::new(900, 360);
+        let projection = scene.pane_projection(ShellPaneKind::Split, size).unwrap();
+        let item = projection.visible_items[0].layout.visual_rect;
+        let point = ViewPoint {
+            x: projection.geometry.content.x + item.x + 4.0,
+            y: projection.geometry.content.y + item.y + 4.0,
+        };
+
+        assert!(scene.set_pointer(point, size));
+        assert_eq!(
+            scene.hovered_item,
+            Some(ShellPaneItemTarget {
+                pane: ShellPaneKind::Split,
+                index: 0,
+            })
+        );
+    }
+
+    #[test]
+    fn split_pane_path_bar_click_focuses_without_location_editor() {
+        let mut scene = test_scene(vec![test_entry("alpha", true)], ShellViewMode::Icons);
+        scene.split_pane = Some(ShellPaneState {
+            path: PathBuf::from("/right-root"),
+            view_mode: ShellViewMode::Icons,
+            dir_count: 0,
+            filtered_indexes: Vec::new(),
+            entries: Vec::new(),
+            selection: ShellSelection::default(),
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+        });
+        let size = PhysicalSize::new(900, 360);
+        let rect = scene
+            .pane_path_bar_rect(ShellPaneKind::Split, size)
+            .expect("split path bar should be visible");
+        let point = ViewPoint {
+            x: rect.x + 8.0,
+            y: rect.y + rect.height / 2.0,
+        };
+
+        assert!(scene.activate_path_bar_at_screen_point(point, size));
+        assert_eq!(scene.active_pane(), ShellPaneKind::Split);
+        assert!(!scene.is_location_editing());
+    }
+
+    #[test]
+    fn places_open_into_active_split_pane() {
+        let root = test_dir("places-active-split");
+        let target = root.join("target");
+        fs::create_dir_all(&target).unwrap();
+        fs::write(target.join("child.txt"), "split").unwrap();
+
+        let mut scene = test_scene(vec![test_entry("left", true)], ShellViewMode::Icons);
+        scene.left_pane.path = root.clone();
+        scene.split_pane = Some(ShellPaneState {
+            path: root.join("old-split"),
+            view_mode: ShellViewMode::Icons,
+            dir_count: 0,
+            filtered_indexes: Vec::new(),
+            entries: Vec::new(),
+            selection: ShellSelection::default(),
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+        });
+        scene.active_pane = ShellPaneKind::Split;
+        scene.places = vec![ShellPlace::new("", "T", "Target", target.clone(), true)];
+        let size = PhysicalSize::new(900, 360);
+        let row = scene.place_row_rects(size)[0].1;
+        let (pane, path) = scene
+            .place_activation_for_press(
+                ViewPoint {
+                    x: row.x + 4.0,
+                    y: row.y + 4.0,
+                },
+                size,
+            )
+            .expect("place should activate");
+
+        assert_eq!(pane, ShellPaneKind::Split);
+        assert_eq!(path, target);
+        assert!(scene.load_path_for_pane(pane, path, size).unwrap());
+        assert_eq!(scene.left_pane.path, root);
+        let split = scene.split_pane.as_ref().unwrap();
+        assert_eq!(split.path, target);
+        assert_eq!(split.entries.len(), 1);
+        assert_eq!(split.entries[0].name.as_ref(), "child.txt");
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -16153,25 +16615,20 @@ mod tests {
             dir_count: split_entries.iter().filter(|entry| entry.is_dir).count(),
             filtered_indexes: filtered_indexes_for_entries(&split_entries, false, ""),
             entries: split_entries,
+            selection: ShellSelection::default(),
             scroll_x: 0.0,
             scroll_y: 0.0,
         });
         let size = PhysicalSize::new(900, 360);
 
-        let primary = scene.primary_pane_projection(size);
-        assert_eq!(primary.geometry.kind, ShellPaneKind::Primary);
+        let left = scene.left_pane_projection(size);
+        assert_eq!(left.geometry.kind, ShellPaneKind::Left);
         assert_eq!(
-            primary.visible_items.len(),
+            left.visible_items.len(),
             scene.layout(size).visible_items().len()
         );
-        assert_eq!(
-            primary.scroll_metrics.max_scroll_x,
-            scene.max_scroll_x(size)
-        );
-        assert_eq!(
-            primary.scroll_metrics.max_scroll_y,
-            scene.max_scroll_y(size)
-        );
+        assert_eq!(left.scroll_metrics.max_scroll_x, scene.max_scroll_x(size));
+        assert_eq!(left.scroll_metrics.max_scroll_y, scene.max_scroll_y(size));
 
         let split = scene.pane_projection(ShellPaneKind::Split, size).unwrap();
         assert_eq!(split.geometry.kind, ShellPaneKind::Split);
@@ -16193,7 +16650,7 @@ mod tests {
         let first_stats = scene.update_visible_slot_pools(size);
         assert!(first_stats.active > 0);
         assert_eq!(first_stats.allocated, first_stats.active);
-        let first_projection = scene.primary_pane_projection(size);
+        let first_projection = scene.left_pane_projection(size);
         let first_slot = first_projection.visible_items[0].slot_id;
         assert_ne!(first_slot, 0);
         assert!(
@@ -16205,7 +16662,7 @@ mod tests {
 
         let second_stats = scene.update_visible_slot_pools(size);
         assert_eq!(second_stats.reused, second_stats.active);
-        let second_projection = scene.primary_pane_projection(size);
+        let second_projection = scene.left_pane_projection(size);
         assert_eq!(second_projection.visible_items[0].slot_id, first_slot);
     }
 
@@ -16220,7 +16677,7 @@ mod tests {
             ShellViewMode::Icons,
         );
         let size = PhysicalSize::new(700, 320);
-        let projection = scene.primary_pane_projection(size);
+        let projection = scene.left_pane_projection(size);
 
         assert_eq!(
             scene.thumbnail_candidate_count_for_projection(&projection),
@@ -16423,6 +16880,7 @@ mod tests {
             dir_count: 0,
             filtered_indexes: filtered_indexes_for_entries(&split_entries, false, ""),
             entries: split_entries,
+            selection: ShellSelection::default(),
             scroll_x: 0.0,
             scroll_y: 0.0,
         });
@@ -16434,7 +16892,7 @@ mod tests {
         });
 
         assert!(scene.scroll_by(120.0, size));
-        assert_eq!(scene.primary_pane.scroll_y, 0.0);
+        assert_eq!(scene.left_pane.scroll_y, 0.0);
         assert!(scene.split_pane.as_ref().unwrap().scroll_y > 0.0);
     }
 
@@ -16455,6 +16913,7 @@ mod tests {
             dir_count: 0,
             filtered_indexes: filtered_indexes_for_entries(&split_entries, false, ""),
             entries: split_entries,
+            selection: ShellSelection::default(),
             scroll_x: 0.0,
             scroll_y: 0.0,
         });
@@ -16480,7 +16939,7 @@ mod tests {
             })
         );
         assert!(scene.set_pointer(drag_to, size));
-        assert_eq!(scene.primary_pane.scroll_y, 0.0);
+        assert_eq!(scene.left_pane.scroll_y, 0.0);
         assert!(scene.split_pane.as_ref().unwrap().scroll_y > 0.0);
         let _ = scene.end_scrollbar_drag(drag_to, size);
         assert!(scene.scrollbar_drag.is_none());
@@ -16513,7 +16972,7 @@ mod tests {
         });
         assert!(scene.scroll_by(90.0, size));
         assert!(scene.places_scroll_y > 0.0);
-        assert_eq!(scene.primary_pane.scroll_y, 0.0);
+        assert_eq!(scene.left_pane.scroll_y, 0.0);
         assert_eq!(scene.places_scroll_changes, 1);
 
         scene.pointer = Some(ViewPoint {
@@ -16521,7 +16980,7 @@ mod tests {
             y: scene.content_origin_y() + 10.0,
         });
         assert!(scene.scroll_by(90.0, size));
-        assert!(scene.primary_pane.scroll_y > 0.0);
+        assert!(scene.left_pane.scroll_y > 0.0);
         assert_eq!(scene.places_scroll_changes, 1);
     }
 
@@ -16619,7 +17078,7 @@ mod tests {
         let (start_track, start_thumb) = scene
             .content_scrollbar_rects(size)
             .expect("compact view should need horizontal scrollbar");
-        scene.primary_pane.scroll_x = scene.max_scroll_x(size) / 2.0;
+        scene.left_pane.scroll_x = scene.max_scroll_x(size) / 2.0;
         let (middle_track, middle_thumb) = scene
             .content_scrollbar_rects(size)
             .expect("compact view should keep horizontal scrollbar");
@@ -16657,8 +17116,8 @@ mod tests {
         assert!(scene.begin_scrollbar_drag(press, size).is_some());
         assert!(scene.scrollbar_drag.is_some());
         assert!(scene.set_pointer(drag_to, size));
-        assert!(scene.primary_pane.scroll_y > 0.0);
-        assert_eq!(scene.primary_pane.scroll_x, 0.0);
+        assert!(scene.left_pane.scroll_y > 0.0);
+        assert_eq!(scene.left_pane.scroll_x, 0.0);
         let _ = scene.end_scrollbar_drag(drag_to, size);
         assert!(scene.scrollbar_drag.is_none());
     }
@@ -16686,8 +17145,8 @@ mod tests {
 
         assert!(scene.begin_scrollbar_drag(press, size).is_some());
         assert!(scene.set_pointer(drag_to, size));
-        assert!(scene.primary_pane.scroll_x > 0.0);
-        assert_eq!(scene.primary_pane.scroll_y, 0.0);
+        assert!(scene.left_pane.scroll_x > 0.0);
+        assert_eq!(scene.left_pane.scroll_y, 0.0);
         let _ = scene.end_scrollbar_drag(drag_to, size);
         assert!(scene.scrollbar_drag.is_none());
     }
@@ -16722,7 +17181,7 @@ mod tests {
         assert!(scene.begin_scrollbar_drag(press, size).is_some());
         assert!(scene.set_pointer(drag_to, size));
         assert!(scene.places_scroll_y > 0.0);
-        assert_eq!(scene.primary_pane.scroll_y, 0.0);
+        assert_eq!(scene.left_pane.scroll_y, 0.0);
         assert!(scene.places_scroll_changes > 0);
         let _ = scene.end_scrollbar_drag(drag_to, size);
         assert!(scene.scrollbar_drag.is_none());
@@ -16743,11 +17202,11 @@ mod tests {
         };
 
         assert_eq!(
-            scene.place_activation_for_primary_press(point, size),
-            Some(PathBuf::from("/tmp/projects"))
+            scene.place_activation_for_press(point, size),
+            Some((ShellPaneKind::Left, PathBuf::from("/tmp/projects")))
         );
         assert_eq!(scene.hovered_place, Some(1));
-        assert_eq!(scene.hovered_index, None);
+        assert_eq!(scene.hovered_item, None);
         assert_eq!(scene.places_changes, 1);
     }
 
@@ -16776,7 +17235,7 @@ mod tests {
     #[test]
     fn places_context_menu_opens_row_actions_without_selecting_items() {
         let mut scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
-        scene.selection.apply_navigation(0, false);
+        scene.left_pane.selection.apply_navigation(0, false);
         let size = PhysicalSize::new(700, 320);
         let root_row = scene.place_row_rects(size)[1].1;
         let point = ViewPoint {
@@ -16785,9 +17244,9 @@ mod tests {
         };
 
         assert!(scene.open_context_menu(point, size));
-        assert_eq!(scene.selection.len(), 1);
+        assert_eq!(scene.left_pane.selection.len(), 1);
         assert_eq!(scene.hovered_place, Some(1));
-        assert_eq!(scene.hovered_index, None);
+        assert_eq!(scene.hovered_item, None);
         assert_eq!(scene.context_target_changes, 1);
         assert_eq!(
             scene.context_target,
@@ -16872,6 +17331,7 @@ mod tests {
     #[test]
     fn directory_context_menu_includes_add_to_places_action() {
         let folder_target = ShellContextTarget::Item {
+            pane: ShellPaneKind::Left,
             index: 0,
             path: PathBuf::from("/tmp/folder"),
             is_dir: true,
@@ -16882,6 +17342,7 @@ mod tests {
         );
 
         let file_target = ShellContextTarget::Item {
+            pane: ShellPaneKind::Left,
             index: 0,
             path: PathBuf::from("/tmp/plain.txt"),
             is_dir: false,
@@ -16891,6 +17352,7 @@ mod tests {
         assert!(context_menu_actions(&file_target).contains(&ShellContextMenuAction::OpenWith));
 
         let blank_target = ShellContextTarget::Blank {
+            pane: ShellPaneKind::Left,
             path: PathBuf::from("/tmp"),
         };
         assert!(context_menu_actions(&blank_target).contains(&ShellContextMenuAction::AddToPlaces));
@@ -16912,6 +17374,7 @@ mod tests {
     #[test]
     fn context_menu_items_offer_open_with_submenu_applications() {
         let target = ShellContextTarget::Item {
+            pane: ShellPaneKind::Left,
             index: 0,
             path: PathBuf::from("/tmp/plain.txt"),
             is_dir: false,
@@ -16953,6 +17416,7 @@ mod tests {
     #[test]
     fn context_menu_items_offer_service_root_more_and_group_submenus() {
         let target = ShellContextTarget::Item {
+            pane: ShellPaneKind::Left,
             index: 0,
             path: PathBuf::from("/tmp/archive.zip"),
             is_dir: false,
@@ -17151,8 +17615,9 @@ mod tests {
         fs::write(right.join("child.txt"), "split").unwrap();
 
         let mut scene = test_scene(vec![test_entry("right", true)], ShellViewMode::Icons);
-        scene.primary_pane.path = root.clone();
+        scene.left_pane.path = root.clone();
         scene.context_target = Some(ShellContextTarget::Item {
+            pane: ShellPaneKind::Left,
             index: 0,
             path: right.clone(),
             is_dir: true,
@@ -17200,6 +17665,7 @@ mod tests {
     fn open_with_chooser_opens_from_file_context_and_filters_applications() {
         let mut scene = test_scene(vec![test_entry("note.txt", false)], ShellViewMode::Icons);
         scene.context_target = Some(ShellContextTarget::Item {
+            pane: ShellPaneKind::Left,
             index: 0,
             path: PathBuf::from("/tmp/note.txt"),
             is_dir: false,
@@ -17352,6 +17818,7 @@ text/plain=writer.desktop;\n",
     #[test]
     fn trash_context_menu_uses_restore_delete_and_empty_actions() {
         let trash_item = ShellContextTarget::Item {
+            pane: ShellPaneKind::Left,
             index: 0,
             path: file_ops::trash_files_dir().join("trashed.txt"),
             is_dir: false,
@@ -17368,6 +17835,7 @@ text/plain=writer.desktop;\n",
         );
 
         let trash_blank = ShellContextTarget::Blank {
+            pane: ShellPaneKind::Left,
             path: file_ops::trash_files_dir(),
         };
         assert_eq!(
@@ -17403,13 +17871,14 @@ text/plain=writer.desktop;\n",
         );
 
         let normal_blank = ShellContextTarget::Blank {
+            pane: ShellPaneKind::Left,
             path: PathBuf::from("/tmp"),
         };
         assert!(!context_menu_actions(&normal_blank).contains(&ShellContextMenuAction::EmptyTrash));
     }
 
     #[test]
-    fn build_shell_places_applies_persistent_primary_order() {
+    fn build_shell_places_applies_persistent_left_order() {
         let root = test_dir("build-shell-places-order");
         let places_path = root.join("places.xbel");
         let alpha = root.join("alpha");
@@ -17618,6 +18087,7 @@ text/plain=writer.desktop;\n",
         let size = PhysicalSize::new(700, 320);
         let mut scene = test_scene(Vec::new(), ShellViewMode::Icons);
         scene.context_target = Some(ShellContextTarget::Blank {
+            pane: ShellPaneKind::Left,
             path: project.clone(),
         });
         scene.context_menu = Some(ShellContextMenu::new(
@@ -17766,9 +18236,9 @@ text/plain=writer.desktop;\n",
         );
 
         assert!(scene.apply_selection_command(SelectionCommand::SelectAll));
-        assert_eq!(scene.selection.len(), 3);
-        assert_eq!(scene.selection.anchor, Some(0));
-        assert_eq!(scene.selection.focus, Some(2));
+        assert_eq!(scene.left_pane.selection.len(), 3);
+        assert_eq!(scene.left_pane.selection.anchor, Some(0));
+        assert_eq!(scene.left_pane.selection.focus, Some(2));
         assert_eq!(scene.selection_changes, 1);
         assert!(!scene.apply_selection_command(SelectionCommand::SelectAll));
         assert_eq!(scene.selection_changes, 1);
@@ -17776,12 +18246,12 @@ text/plain=writer.desktop;\n",
         scene.rubber_band = Some(RubberBand::new(
             ViewPoint { x: 0.0, y: 0.0 },
             RubberBandMode::Replace,
-            scene.selection.clone(),
+            scene.left_pane.selection.clone(),
         ));
         assert!(scene.apply_selection_command(SelectionCommand::Clear));
-        assert_eq!(scene.selection.len(), 0);
-        assert_eq!(scene.selection.anchor, None);
-        assert_eq!(scene.selection.focus, None);
+        assert_eq!(scene.left_pane.selection.len(), 0);
+        assert_eq!(scene.left_pane.selection.anchor, None);
+        assert_eq!(scene.left_pane.selection.focus, None);
         assert!(scene.rubber_band.is_none());
         assert_eq!(scene.selection_changes, 2);
         assert!(!scene.apply_selection_command(SelectionCommand::Clear));
@@ -17809,16 +18279,29 @@ text/plain=writer.desktop;\n",
 
         assert!(scene.open_context_target(point, size));
         assert_eq!(
-            scene.selection.selected.iter().copied().collect::<Vec<_>>(),
+            scene
+                .left_pane
+                .selection
+                .selected
+                .iter()
+                .copied()
+                .collect::<Vec<_>>(),
             vec![1]
         );
-        assert_eq!(scene.selection.focus, Some(1));
-        assert_eq!(scene.hovered_index, Some(1));
+        assert_eq!(scene.left_pane.selection.focus, Some(1));
+        assert_eq!(
+            scene.hovered_item,
+            Some(ShellPaneItemTarget {
+                pane: ShellPaneKind::Left,
+                index: 1,
+            })
+        );
         assert_eq!(scene.selection_changes, 1);
         assert_eq!(scene.context_target_changes, 1);
         assert_eq!(
             scene.context_target,
             Some(ShellContextTarget::Item {
+                pane: ShellPaneKind::Left,
                 index: 1,
                 path: PathBuf::from("/tmp/bravo.txt"),
                 is_dir: false,
@@ -17838,7 +18321,7 @@ text/plain=writer.desktop;\n",
             ShellViewMode::Icons,
         );
         let size = PhysicalSize::new(420, 260);
-        assert!(scene.selection.select_indexes(&[0, 2]));
+        assert!(scene.left_pane.selection.select_indexes(&[0, 2]));
         let item = scene
             .layout(size)
             .item(0)
@@ -17850,13 +18333,20 @@ text/plain=writer.desktop;\n",
 
         assert!(scene.open_context_target(point, size));
         assert_eq!(
-            scene.selection.selected.iter().copied().collect::<Vec<_>>(),
+            scene
+                .left_pane
+                .selection
+                .selected
+                .iter()
+                .copied()
+                .collect::<Vec<_>>(),
             vec![0, 2]
         );
-        assert_eq!(scene.selection.focus, Some(0));
+        assert_eq!(scene.left_pane.selection.focus, Some(0));
         assert_eq!(
             scene.context_target,
             Some(ShellContextTarget::Item {
+                pane: ShellPaneKind::Left,
                 index: 0,
                 path: PathBuf::from("/tmp/alpha.txt"),
                 is_dir: false,
@@ -17869,13 +18359,13 @@ text/plain=writer.desktop;\n",
     fn context_target_uses_blank_content_without_rubber_band() {
         let mut scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
         let size = PhysicalSize::new(420, 260);
-        assert!(scene.selection.apply_navigation(0, false));
+        assert!(scene.left_pane.selection.apply_navigation(0, false));
         scene.rubber_band = Some(RubberBand {
             start: ViewPoint { x: 0.0, y: 0.0 },
             current: ViewPoint { x: 12.0, y: 12.0 },
             active: true,
             mode: RubberBandMode::Replace,
-            base_selection: scene.selection.clone(),
+            base_selection: scene.left_pane.selection.clone(),
         });
         let content = scene.content_screen_rect(size);
         let point = ViewPoint {
@@ -17884,13 +18374,14 @@ text/plain=writer.desktop;\n",
         };
 
         assert!(scene.open_context_target(point, size));
-        assert_eq!(scene.selection.len(), 1);
-        assert!(scene.selection.contains(0));
-        assert_eq!(scene.hovered_index, None);
+        assert_eq!(scene.left_pane.selection.len(), 1);
+        assert!(scene.left_pane.selection.contains(0));
+        assert_eq!(scene.hovered_item, None);
         assert!(scene.rubber_band.is_none());
         assert_eq!(
             scene.context_target,
             Some(ShellContextTarget::Blank {
+                pane: ShellPaneKind::Left,
                 path: PathBuf::from("/tmp"),
             })
         );
@@ -17921,6 +18412,7 @@ text/plain=writer.desktop;\n",
         assert!(matches!(
             menu.target,
             ShellContextTarget::Item {
+                pane: ShellPaneKind::Left,
                 index: 0,
                 is_dir: true,
                 ..
@@ -18003,6 +18495,7 @@ text/plain=writer.desktop;\n",
     #[test]
     fn context_menu_uses_original_metrics_and_flips_near_edges() {
         let target = ShellContextTarget::Blank {
+            pane: ShellPaneKind::Left,
             path: PathBuf::from("/tmp"),
         };
         let menu = ShellContextMenu::new(target, ViewPoint { x: 390.0, y: 280.0 });
@@ -18024,6 +18517,7 @@ text/plain=writer.desktop;\n",
     #[test]
     fn context_menu_hit_testing_respects_vertical_padding() {
         let target = ShellContextTarget::Blank {
+            pane: ShellPaneKind::Left,
             path: PathBuf::from("/tmp"),
         };
         let menu = ShellContextMenu::new(target, ViewPoint { x: 40.0, y: 40.0 });
@@ -18071,6 +18565,7 @@ text/plain=writer.desktop;\n",
     #[test]
     fn context_menu_separator_rows_match_original_grouping() {
         let blank = ShellContextTarget::Blank {
+            pane: ShellPaneKind::Left,
             path: PathBuf::from("/tmp"),
         };
         let blank_actions = context_menu_actions(&blank);
@@ -18103,6 +18598,7 @@ text/plain=writer.desktop;\n",
         assert!(context_menu_separator_before(&blank, properties_row));
 
         let item = ShellContextTarget::Item {
+            pane: ShellPaneKind::Left,
             index: 0,
             path: PathBuf::from("/tmp/file.txt"),
             is_dir: false,
@@ -18170,6 +18666,7 @@ text/plain=writer.desktop;\n",
             ShellViewMode::Icons,
         );
         scene.context_target = Some(ShellContextTarget::Item {
+            pane: ShellPaneKind::Left,
             index: 0,
             path: PathBuf::from("/tmp/folder"),
             is_dir: true,
@@ -18181,6 +18678,7 @@ text/plain=writer.desktop;\n",
         );
 
         scene.context_target = Some(ShellContextTarget::Item {
+            pane: ShellPaneKind::Left,
             index: 1,
             path: PathBuf::from("/tmp/plain.txt"),
             is_dir: false,
@@ -18189,6 +18687,7 @@ text/plain=writer.desktop;\n",
         assert_eq!(scene.context_target_directory_path(), None);
 
         scene.context_target = Some(ShellContextTarget::Blank {
+            pane: ShellPaneKind::Left,
             path: PathBuf::from("/tmp"),
         });
         assert_eq!(scene.context_target_directory_path(), None);
@@ -18217,11 +18716,13 @@ text/plain=writer.desktop;\n",
             ShellViewMode::Icons,
         );
         scene.context_target = Some(ShellContextTarget::Blank {
+            pane: ShellPaneKind::Left,
             path: PathBuf::from("/tmp"),
         });
         assert_eq!(scene.context_target_open_file_request(), None);
 
         scene.context_target = Some(ShellContextTarget::Item {
+            pane: ShellPaneKind::Left,
             index: 0,
             path: PathBuf::from("/tmp/folder"),
             is_dir: true,
@@ -18230,6 +18731,7 @@ text/plain=writer.desktop;\n",
         assert_eq!(scene.context_target_open_file_request(), None);
 
         scene.context_target = Some(ShellContextTarget::Item {
+            pane: ShellPaneKind::Left,
             index: 1,
             path: PathBuf::from("/tmp/Fika Test/plain.txt"),
             is_dir: false,
@@ -18249,6 +18751,7 @@ text/plain=writer.desktop;\n",
     fn open_file_request_preserves_network_uri_targets() {
         let mut scene = test_scene(vec![test_entry("remote.txt", false)], ShellViewMode::Icons);
         scene.context_target = Some(ShellContextTarget::Item {
+            pane: ShellPaneKind::Left,
             index: 0,
             path: PathBuf::from("sftp://example.test/home/yk/remote.txt"),
             is_dir: false,
@@ -18268,11 +18771,13 @@ text/plain=writer.desktop;\n",
     fn copy_location_request_uses_target_display_path() {
         let mut scene = test_scene(vec![test_entry("plain.txt", false)], ShellViewMode::Icons);
         scene.context_target = Some(ShellContextTarget::Blank {
+            pane: ShellPaneKind::Left,
             path: PathBuf::from("/tmp"),
         });
         assert_eq!(scene.context_target_copy_location_request(), None);
 
         scene.context_target = Some(ShellContextTarget::Item {
+            pane: ShellPaneKind::Left,
             index: 0,
             path: PathBuf::from("/tmp/Fika Test/plain.txt"),
             is_dir: false,
@@ -18323,12 +18828,13 @@ text/plain=writer.desktop;\n",
             ShellViewMode::Icons,
         );
         scene.context_target = Some(ShellContextTarget::Item {
+            pane: ShellPaneKind::Left,
             index: 1,
             path: PathBuf::from("/tmp/two.txt"),
             is_dir: false,
             selection_count: 2,
         });
-        scene.selection.select_indexes(&[0, 1]);
+        scene.left_pane.selection.select_indexes(&[0, 1]);
 
         let request = scene
             .context_target_file_clipboard_request(ShellContextMenuAction::Copy)
@@ -18348,6 +18854,7 @@ text/plain=writer.desktop;\n",
         assert_eq!(scene.file_clipboard_changes, 1);
 
         scene.context_target = Some(ShellContextTarget::Item {
+            pane: ShellPaneKind::Left,
             index: 2,
             path: PathBuf::from("sftp://example.test/home/yk/remote.txt"),
             is_dir: false,
@@ -18371,6 +18878,7 @@ text/plain=writer.desktop;\n",
         let size = PhysicalSize::new(420, 260);
         let mut scene = ShellScene::load(target_root.clone(), ShellViewMode::Icons).unwrap();
         scene.context_target = Some(ShellContextTarget::Blank {
+            pane: ShellPaneKind::Left,
             path: target_root.clone(),
         });
         let clipboard_text =
@@ -18388,7 +18896,7 @@ text/plain=writer.desktop;\n",
         assert_eq!(scene.directory_reloads, 1);
         assert!(target_root.join("source.txt").is_file());
         assert_eq!(fs::read(target_root.join("source.txt")).unwrap(), b"source");
-        assert!(entry_index_by_name(&scene.primary_pane.entries, "source.txt").is_some());
+        assert!(entry_index_by_name(&scene.left_pane.entries, "source.txt").is_some());
 
         fs::remove_dir_all(source_root).unwrap();
         fs::remove_dir_all(target_root).unwrap();
@@ -18404,6 +18912,7 @@ text/plain=writer.desktop;\n",
         let size = PhysicalSize::new(420, 260);
         let mut scene = ShellScene::load(target_root.clone(), ShellViewMode::Icons).unwrap();
         scene.context_target = Some(ShellContextTarget::Blank {
+            pane: ShellPaneKind::Left,
             path: target_root.clone(),
         });
         let clipboard_text =
@@ -18432,7 +18941,10 @@ text/plain=writer.desktop;\n",
         fs::create_dir_all(&root).unwrap();
         let size = PhysicalSize::new(420, 260);
         let mut scene = ShellScene::load(root.clone(), ShellViewMode::Icons).unwrap();
-        scene.context_target = Some(ShellContextTarget::Blank { path: root.clone() });
+        scene.context_target = Some(ShellContextTarget::Blank {
+            pane: ShellPaneKind::Left,
+            path: root.clone(),
+        });
 
         let result = scene
             .paste_clipboard_text_from_context("hello from clipboard", size)
@@ -18448,7 +18960,7 @@ text/plain=writer.desktop;\n",
             fs::read_to_string(root.join("Pasted Text.txt")).unwrap(),
             "hello from clipboard"
         );
-        assert!(entry_index_by_name(&scene.primary_pane.entries, "Pasted Text.txt").is_some());
+        assert!(entry_index_by_name(&scene.left_pane.entries, "Pasted Text.txt").is_some());
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -18460,6 +18972,7 @@ text/plain=writer.desktop;\n",
             ShellViewMode::Icons,
         );
         scene.context_target = Some(ShellContextTarget::Item {
+            pane: ShellPaneKind::Left,
             index: 1,
             path: PathBuf::from("/tmp/plain.txt"),
             is_dir: false,
@@ -18506,6 +19019,7 @@ text/plain=writer.desktop;\n",
             ShellViewMode::Icons,
         );
         scene.context_target = Some(ShellContextTarget::Blank {
+            pane: ShellPaneKind::Left,
             path: PathBuf::from("/tmp"),
         });
         let size = PhysicalSize::new(360, 240);
@@ -18602,7 +19116,10 @@ text/plain=writer.desktop;\n",
         let mut scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
         let size = PhysicalSize::new(420, 260);
         let root = test_dir("create-dialog");
-        scene.context_target = Some(ShellContextTarget::Blank { path: root });
+        scene.context_target = Some(ShellContextTarget::Blank {
+            pane: ShellPaneKind::Left,
+            path: root,
+        });
 
         assert!(scene.open_create_dialog_from_context());
         let dialog = scene
@@ -18640,6 +19157,7 @@ text/plain=writer.desktop;\n",
     fn create_entry_request_rejects_invalid_names_and_records_error() {
         let mut scene = test_scene(vec![], ShellViewMode::Icons);
         scene.context_target = Some(ShellContextTarget::Blank {
+            pane: ShellPaneKind::Left,
             path: PathBuf::from("/tmp"),
         });
         assert!(scene.open_create_dialog_from_context());
@@ -18659,7 +19177,10 @@ text/plain=writer.desktop;\n",
         fs::create_dir_all(&root).unwrap();
         let size = PhysicalSize::new(420, 260);
         let mut scene = ShellScene::load(root.clone(), ShellViewMode::Icons).unwrap();
-        scene.context_target = Some(ShellContextTarget::Blank { path: root.clone() });
+        scene.context_target = Some(ShellContextTarget::Blank {
+            pane: ShellPaneKind::Left,
+            path: root.clone(),
+        });
 
         assert!(scene.open_create_dialog_from_context());
         scene.create_dialog.as_mut().unwrap().name = "made".to_string();
@@ -18672,9 +19193,9 @@ text/plain=writer.desktop;\n",
         assert!(scene.reload_current_path(size).unwrap());
         assert!(scene.select_entry_by_name("made", size));
 
-        let index = entry_index_by_name(&scene.primary_pane.entries, "made").unwrap();
-        assert!(scene.primary_pane.entries[index].is_dir);
-        assert!(scene.selection.contains(index));
+        let index = entry_index_by_name(&scene.left_pane.entries, "made").unwrap();
+        assert!(scene.left_pane.entries[index].is_dir);
+        assert!(scene.left_pane.selection.contains(index));
         assert!(scene.create_dialog.is_none());
         assert_eq!(scene.directory_reloads, 1);
 
@@ -18712,6 +19233,7 @@ text/plain=writer.desktop;\n",
         let mut scene = test_scene(vec![test_entry("plain.txt", false)], ShellViewMode::Icons);
         let size = PhysicalSize::new(420, 260);
         scene.context_target = Some(ShellContextTarget::Item {
+            pane: ShellPaneKind::Left,
             index: 0,
             path: PathBuf::from("/tmp/plain.txt"),
             is_dir: false,
@@ -18751,6 +19273,7 @@ text/plain=writer.desktop;\n",
     fn rename_entry_request_rejects_unchanged_and_invalid_names() {
         let mut scene = test_scene(vec![test_entry("plain.txt", false)], ShellViewMode::Icons);
         scene.context_target = Some(ShellContextTarget::Item {
+            pane: ShellPaneKind::Left,
             index: 0,
             path: PathBuf::from("/tmp/plain.txt"),
             is_dir: false,
@@ -18775,8 +19298,9 @@ text/plain=writer.desktop;\n",
         fs::write(root.join("old.txt"), b"old").unwrap();
         let size = PhysicalSize::new(420, 260);
         let mut scene = ShellScene::load(root.clone(), ShellViewMode::Icons).unwrap();
-        let old_index = entry_index_by_name(&scene.primary_pane.entries, "old.txt").unwrap();
+        let old_index = entry_index_by_name(&scene.left_pane.entries, "old.txt").unwrap();
         scene.context_target = Some(ShellContextTarget::Item {
+            pane: ShellPaneKind::Left,
             index: old_index,
             path: root.join("old.txt"),
             is_dir: false,
@@ -18796,8 +19320,8 @@ text/plain=writer.desktop;\n",
         assert!(scene.reload_current_path(size).unwrap());
         assert!(scene.select_entry_by_name("new.txt", size));
 
-        let new_index = entry_index_by_name(&scene.primary_pane.entries, "new.txt").unwrap();
-        assert!(scene.selection.contains(new_index));
+        let new_index = entry_index_by_name(&scene.left_pane.entries, "new.txt").unwrap();
+        assert!(scene.left_pane.selection.contains(new_index));
         assert!(scene.rename_dialog.is_none());
         assert_eq!(scene.directory_reloads, 1);
 
@@ -18815,12 +19339,13 @@ text/plain=writer.desktop;\n",
             ShellViewMode::Icons,
         );
         scene.context_target = Some(ShellContextTarget::Item {
+            pane: ShellPaneKind::Left,
             index: 1,
             path: PathBuf::from("/tmp/two.txt"),
             is_dir: false,
             selection_count: 2,
         });
-        scene.selection.select_indexes(&[0, 1]);
+        scene.left_pane.selection.select_indexes(&[0, 1]);
 
         assert_eq!(
             scene.context_target_trash_paths().unwrap(),
@@ -18828,6 +19353,7 @@ text/plain=writer.desktop;\n",
         );
 
         scene.context_target = Some(ShellContextTarget::Item {
+            pane: ShellPaneKind::Left,
             index: 2,
             path: PathBuf::from("sftp://example.test/home/remote"),
             is_dir: false,
@@ -18847,6 +19373,7 @@ text/plain=writer.desktop;\n",
         let mut scene = test_scene(vec![test_entry("plain.txt", false)], ShellViewMode::Icons);
         let trash_path = file_ops::trash_files_dir().join("plain.txt");
         scene.context_target = Some(ShellContextTarget::Item {
+            pane: ShellPaneKind::Left,
             index: 0,
             path: trash_path.clone(),
             is_dir: false,
@@ -18865,6 +19392,7 @@ text/plain=writer.desktop;\n",
         assert_eq!(paths, vec![trash_path]);
 
         scene.context_target = Some(ShellContextTarget::Blank {
+            pane: ShellPaneKind::Left,
             path: file_ops::trash_files_dir(),
         });
         let (operation, paths) = scene
@@ -18874,6 +19402,7 @@ text/plain=writer.desktop;\n",
         assert!(paths.is_empty());
 
         scene.context_target = Some(ShellContextTarget::Item {
+            pane: ShellPaneKind::Left,
             index: 0,
             path: PathBuf::from("/tmp/plain.txt"),
             is_dir: false,
@@ -18900,6 +19429,7 @@ text/plain=writer.desktop;\n",
         let mut scene =
             ShellScene::load(file_ops::trash_files_dir(), ShellViewMode::Icons).unwrap();
         scene.context_target = Some(ShellContextTarget::Item {
+            pane: ShellPaneKind::Left,
             index: 0,
             path: trash_path.clone(),
             is_dir: false,
@@ -18909,7 +19439,7 @@ text/plain=writer.desktop;\n",
             scene.context_target.clone().unwrap(),
             ViewPoint { x: 8.0, y: 8.0 },
         ));
-        scene.selection.select_indexes(&[0]);
+        scene.left_pane.selection.select_indexes(&[0]);
 
         let result = scene
             .perform_trash_view_context_action(ShellContextMenuAction::RestoreFromTrash, size)
@@ -18921,7 +19451,7 @@ text/plain=writer.desktop;\n",
         assert!(!trash_path.exists());
         assert!(scene.context_target.is_none());
         assert!(scene.context_menu.is_none());
-        assert_eq!(scene.selection.len(), 0);
+        assert_eq!(scene.left_pane.selection.len(), 0);
         assert_eq!(scene.trash_changes, 1);
         assert_eq!(scene.directory_reloads, 1);
 
@@ -18943,6 +19473,7 @@ text/plain=writer.desktop;\n",
         let mut scene =
             ShellScene::load(file_ops::trash_files_dir(), ShellViewMode::Icons).unwrap();
         scene.context_target = Some(ShellContextTarget::Item {
+            pane: ShellPaneKind::Left,
             index: 0,
             path: trash_path.clone(),
             is_dir: false,
@@ -19003,6 +19534,7 @@ text/plain=writer.desktop;\n",
         let mut scene =
             ShellScene::load(file_ops::trash_files_dir(), ShellViewMode::Icons).unwrap();
         scene.context_target = Some(ShellContextTarget::Item {
+            pane: ShellPaneKind::Left,
             index: 0,
             path: trash_path.clone(),
             is_dir: false,
@@ -19031,9 +19563,10 @@ text/plain=writer.desktop;\n",
         fs::write(root.join("keep.txt"), b"keep").unwrap();
         let size = PhysicalSize::new(420, 260);
         let mut scene = ShellScene::load(root.clone(), ShellViewMode::Icons).unwrap();
-        let remove_index = entry_index_by_name(&scene.primary_pane.entries, "remove.txt").unwrap();
-        scene.selection.select_indexes(&[remove_index]);
+        let remove_index = entry_index_by_name(&scene.left_pane.entries, "remove.txt").unwrap();
+        scene.left_pane.selection.select_indexes(&[remove_index]);
         scene.context_target = Some(ShellContextTarget::Item {
+            pane: ShellPaneKind::Left,
             index: remove_index,
             path: root.join("remove.txt"),
             is_dir: false,
@@ -19047,8 +19580,8 @@ text/plain=writer.desktop;\n",
         assert_eq!(scene.directory_reloads, 1);
         assert!(!root.join("remove.txt").exists());
         assert!(root.join("keep.txt").exists());
-        assert!(entry_index_by_name(&scene.primary_pane.entries, "remove.txt").is_none());
-        assert_eq!(scene.selection.len(), 0);
+        assert!(entry_index_by_name(&scene.left_pane.entries, "remove.txt").is_none());
+        assert_eq!(scene.left_pane.selection.len(), 0);
         assert!(scene.context_target.is_none());
 
         file_ops::undo_trash(&result.trash_pairs).unwrap();
@@ -19067,9 +19600,9 @@ text/plain=writer.desktop;\n",
         );
 
         assert_eq!(scene.selected_directory_path(), None);
-        assert!(scene.selection.apply_navigation(0, false));
+        assert!(scene.left_pane.selection.apply_navigation(0, false));
         assert_eq!(scene.selected_directory_path(), Some(target));
-        assert!(scene.selection.apply_navigation(1, false));
+        assert!(scene.left_pane.selection.apply_navigation(1, false));
         assert_eq!(scene.selected_directory_path(), None);
     }
 
@@ -19084,17 +19617,10 @@ text/plain=writer.desktop;\n",
         };
         let now = Instant::now();
 
+        assert_eq!(scene.directory_activation_for_press(point, size, now), None);
         assert_eq!(
-            scene.directory_activation_for_primary_press(point, size, now),
-            None
-        );
-        assert_eq!(
-            scene.directory_activation_for_primary_press(
-                point,
-                size,
-                now + Duration::from_millis(120)
-            ),
-            Some(PathBuf::from("/tmp/folder"))
+            scene.directory_activation_for_press(point, size, now + Duration::from_millis(120)),
+            Some((ShellPaneKind::Left, PathBuf::from("/tmp/folder")))
         );
     }
 
@@ -19115,13 +19641,13 @@ text/plain=writer.desktop;\n",
 
         let size = PhysicalSize::new(360, 240);
         let mut scene = ShellScene::load(root.clone(), ShellViewMode::Compact).unwrap();
-        scene.primary_pane.scroll_x = 128.0;
-        scene.primary_pane.scroll_y = 64.0;
+        scene.left_pane.scroll_x = 128.0;
+        scene.left_pane.scroll_y = 64.0;
         scene.pointer = Some(ViewPoint {
             x: 12.0,
             y: TOP_BAR_HEIGHT + 12.0,
         });
-        assert!(scene.selection.apply_navigation(0, false));
+        assert!(scene.left_pane.selection.apply_navigation(0, false));
         scene.rubber_band = Some(RubberBand::new(
             ViewPoint { x: 0.0, y: 0.0 },
             RubberBandMode::Replace,
@@ -19130,12 +19656,12 @@ text/plain=writer.desktop;\n",
 
         scene.load_path(child.clone(), size).unwrap();
 
-        assert_eq!(scene.primary_pane.path, child);
-        assert_eq!(scene.primary_pane.entries.len(), 1);
-        assert_eq!(scene.primary_pane.entries[0].name.as_ref(), "nested.txt");
-        assert_eq!(scene.primary_pane.scroll_x, 0.0);
-        assert_eq!(scene.primary_pane.scroll_y, 0.0);
-        assert_eq!(scene.selection.len(), 0);
+        assert_eq!(scene.left_pane.path, child);
+        assert_eq!(scene.left_pane.entries.len(), 1);
+        assert_eq!(scene.left_pane.entries[0].name.as_ref(), "nested.txt");
+        assert_eq!(scene.left_pane.scroll_x, 0.0);
+        assert_eq!(scene.left_pane.scroll_y, 0.0);
+        assert_eq!(scene.left_pane.selection.len(), 0);
         assert!(scene.rubber_band.is_none());
         assert_eq!(scene.path_changes, 1);
 
@@ -19163,28 +19689,28 @@ text/plain=writer.desktop;\n",
         let mut scene = ShellScene::load(root.clone(), ShellViewMode::Compact).unwrap();
 
         assert!(scene.load_path(first.clone(), size).unwrap());
-        assert_eq!(scene.primary_pane.path, first);
+        assert_eq!(scene.left_pane.path, first);
         assert_eq!(scene.history.back, vec![root.clone()]);
         assert!(scene.history.forward.is_empty());
 
         assert!(scene.load_path(second.clone(), size).unwrap());
-        assert_eq!(scene.primary_pane.path, second);
+        assert_eq!(scene.left_pane.path, second);
         assert_eq!(scene.history.back, vec![root.clone(), first.clone()]);
 
         assert!(scene.go_history_back(size).unwrap());
-        assert_eq!(scene.primary_pane.path, first);
+        assert_eq!(scene.left_pane.path, first);
         assert_eq!(scene.history.back, vec![root.clone()]);
         assert_eq!(scene.history.forward, vec![second.clone()]);
 
         assert!(scene.go_history_forward(size).unwrap());
-        assert_eq!(scene.primary_pane.path, second);
+        assert_eq!(scene.left_pane.path, second);
         assert_eq!(scene.history.back, vec![root.clone(), first.clone()]);
         assert!(scene.history.forward.is_empty());
 
         assert!(scene.go_history_back(size).unwrap());
-        assert_eq!(scene.primary_pane.path, first);
+        assert_eq!(scene.left_pane.path, first);
         assert!(scene.load_path(sibling.clone(), size).unwrap());
-        assert_eq!(scene.primary_pane.path, sibling);
+        assert_eq!(scene.left_pane.path, sibling);
         assert!(scene.history.forward.is_empty());
         assert_eq!(scene.history.back, vec![root.clone(), first]);
 
@@ -19207,25 +19733,30 @@ text/plain=writer.desktop;\n",
 
         let size = PhysicalSize::new(360, 240);
         let mut scene = ShellScene::load(root.clone(), ShellViewMode::Compact).unwrap();
-        let keep_index = entry_index_by_name(&scene.primary_pane.entries, "keep.txt").unwrap();
-        assert!(scene.selection.apply_navigation(keep_index, false));
+        let keep_index = entry_index_by_name(&scene.left_pane.entries, "keep.txt").unwrap();
+        assert!(
+            scene
+                .left_pane
+                .selection
+                .apply_navigation(keep_index, false)
+        );
         scene.history.push_back(PathBuf::from("/tmp/previous"));
         scene.history.push_forward(PathBuf::from("/tmp/next"));
 
         fs::write(root.join("aaa.txt"), b"new").unwrap();
         assert!(scene.reload_current_path(size).unwrap());
 
-        let new_keep_index = entry_index_by_name(&scene.primary_pane.entries, "keep.txt").unwrap();
-        assert!(scene.selection.contains(new_keep_index));
-        assert_eq!(scene.selection.len(), 1);
-        assert_eq!(scene.selection.focus, Some(new_keep_index));
+        let new_keep_index = entry_index_by_name(&scene.left_pane.entries, "keep.txt").unwrap();
+        assert!(scene.left_pane.selection.contains(new_keep_index));
+        assert_eq!(scene.left_pane.selection.len(), 1);
+        assert_eq!(scene.left_pane.selection.focus, Some(new_keep_index));
         assert_eq!(scene.history.back, vec![PathBuf::from("/tmp/previous")]);
         assert_eq!(scene.history.forward, vec![PathBuf::from("/tmp/next")]);
-        assert_eq!(scene.primary_pane.path, root);
+        assert_eq!(scene.left_pane.path, root);
         assert_eq!(scene.path_changes, 0);
         assert_eq!(scene.directory_reloads, 1);
 
-        fs::remove_dir_all(scene.primary_pane.path).unwrap();
+        fs::remove_dir_all(scene.left_pane.path).unwrap();
     }
 
     #[test]
@@ -19519,7 +20050,7 @@ text/plain=writer.desktop;\n",
         std::fs::create_dir_all(temp.join("alpha")).unwrap();
 
         let mut scene = test_scene(vec![test_entry("alpha", true)], ShellViewMode::Icons);
-        scene.primary_pane.path = temp.clone();
+        scene.left_pane.path = temp.clone();
         let size = PhysicalSize::new(420, 260);
 
         assert!(scene.apply_location_command(LocationCommand::Activate, size));
@@ -19543,7 +20074,7 @@ text/plain=writer.desktop;\n",
     #[test]
     fn location_draft_cursor_edits_at_caret() {
         let mut scene = test_scene(vec![test_entry("alpha", false)], ShellViewMode::Icons);
-        scene.primary_pane.path = PathBuf::from("/tmp");
+        scene.left_pane.path = PathBuf::from("/tmp");
         let size = PhysicalSize::new(420, 260);
 
         assert!(scene.apply_location_command(LocationCommand::Activate, size));
@@ -19579,7 +20110,7 @@ text/plain=writer.desktop;\n",
     #[test]
     fn location_draft_blurs_outside_path_bar_without_committing() {
         let mut scene = test_scene(vec![test_entry("alpha", false)], ShellViewMode::Icons);
-        scene.primary_pane.path = PathBuf::from("/tmp");
+        scene.left_pane.path = PathBuf::from("/tmp");
         let size = PhysicalSize::new(600, 320);
 
         assert!(scene.apply_location_command(LocationCommand::Activate, size));
@@ -19607,7 +20138,7 @@ text/plain=writer.desktop;\n",
         };
         assert!(scene.close_location_draft_if_outside(blank, size));
         assert_eq!(scene.location_draft_value(), None);
-        assert_eq!(scene.primary_pane.path, PathBuf::from("/tmp"));
+        assert_eq!(scene.left_pane.path, PathBuf::from("/tmp"));
         assert_eq!(scene.location_changes, 3);
     }
 
@@ -19657,7 +20188,7 @@ text/plain=writer.desktop;\n",
     #[test]
     fn location_bar_keeps_full_width_hit_target_when_editing() {
         let mut scene = test_scene(vec![test_entry("alpha", false)], ShellViewMode::Icons);
-        scene.primary_pane.path = PathBuf::from("/x");
+        scene.left_pane.path = PathBuf::from("/x");
         let size = PhysicalSize::new(900, 360);
 
         let inactive = scene
@@ -19921,7 +20452,7 @@ text/plain=writer.desktop;\n",
 
         assert!(scene.apply_filter_command(FilterCommand::Activate, size));
         assert!(scene.apply_filter_command(FilterCommand::Insert("alp".to_string()), size));
-        assert_eq!(scene.primary_pane.filtered_indexes, vec![0, 2]);
+        assert_eq!(scene.left_pane.filtered_indexes, vec![0, 2]);
         assert_eq!(scene.filtered_entry_count(), 2);
         assert_eq!(scene.filter_changes, 2);
 
@@ -19936,7 +20467,13 @@ text/plain=writer.desktop;\n",
 
         assert!(scene.apply_selection_command(SelectionCommand::SelectAll));
         assert_eq!(
-            scene.selection.selected.iter().copied().collect::<Vec<_>>(),
+            scene
+                .left_pane
+                .selection
+                .selected
+                .iter()
+                .copied()
+                .collect::<Vec<_>>(),
             vec![0, 2]
         );
 
@@ -19964,20 +20501,20 @@ text/plain=writer.desktop;\n",
         );
         let size = PhysicalSize::new(420, 260);
 
-        assert_eq!(scene.primary_pane.filtered_indexes, vec![0, 2]);
+        assert_eq!(scene.left_pane.filtered_indexes, vec![0, 2]);
         assert_eq!(scene.filtered_entry_count(), 2);
-        assert!(scene.selection.apply_navigation(1, false));
+        assert!(scene.left_pane.selection.apply_navigation(1, false));
 
         assert!(scene.toggle_hidden_visibility(size));
         assert!(scene.show_hidden);
-        assert_eq!(scene.primary_pane.filtered_indexes, vec![0, 1, 2]);
+        assert_eq!(scene.left_pane.filtered_indexes, vec![0, 1, 2]);
         assert_eq!(scene.hidden_changes, 1);
-        assert!(scene.selection.contains(1));
+        assert!(scene.left_pane.selection.contains(1));
 
         assert!(scene.toggle_hidden_visibility(size));
         assert!(!scene.show_hidden);
-        assert_eq!(scene.primary_pane.filtered_indexes, vec![0, 2]);
-        assert_eq!(scene.selection.len(), 0);
+        assert_eq!(scene.left_pane.filtered_indexes, vec![0, 2]);
+        assert_eq!(scene.left_pane.selection.len(), 0);
         assert_eq!(scene.selection_changes, 1);
     }
 
@@ -20006,8 +20543,8 @@ text/plain=writer.desktop;\n",
             ShellViewMode::Compact,
         );
         let size = PhysicalSize::new(260, 180);
-        scene.primary_pane.scroll_x = 10_000.0;
-        scene.primary_pane.scroll_y = 500.0;
+        scene.left_pane.scroll_x = 10_000.0;
+        scene.left_pane.scroll_y = 500.0;
         scene.rubber_band = Some(RubberBand::new(
             ViewPoint { x: 0.0, y: 0.0 },
             RubberBandMode::Replace,
@@ -20015,9 +20552,9 @@ text/plain=writer.desktop;\n",
         ));
 
         assert!(scene.set_view_mode(ShellViewMode::Details, size));
-        assert_eq!(scene.primary_pane.view_mode, ShellViewMode::Details);
-        assert_eq!(scene.primary_pane.scroll_x, 0.0);
-        assert!(scene.primary_pane.scroll_y >= 0.0);
+        assert_eq!(scene.left_pane.view_mode, ShellViewMode::Details);
+        assert_eq!(scene.left_pane.scroll_x, 0.0);
+        assert!(scene.left_pane.scroll_y >= 0.0);
         assert!(scene.rubber_band.is_none());
         assert_eq!(scene.view_switches, 1);
 
@@ -20156,8 +20693,8 @@ text/plain=writer.desktop;\n",
             None
         );
 
-        assert!(scene.selection.apply_navigation(0, false));
-        assert!(!scene.begin_primary_pointer(
+        assert!(scene.left_pane.selection.apply_navigation(0, false));
+        assert!(!scene.begin_pane_pointer(
             SelectionClick {
                 point: ViewPoint {
                     x: status_bar.x + 16.0,
@@ -20168,8 +20705,8 @@ text/plain=writer.desktop;\n",
             },
             size,
         ));
-        assert_eq!(scene.selection.len(), 1);
-        assert!(scene.selection.contains(0));
+        assert_eq!(scene.left_pane.selection.len(), 1);
+        assert!(scene.left_pane.selection.contains(0));
     }
 
     #[test]
@@ -20404,11 +20941,11 @@ text/plain=writer.desktop;\n",
         };
         let current = ViewPoint {
             x: scene.content_origin_x(size) + item.visual_rect.right() - 1.0,
-            y: item.visual_rect.bottom() - scene.primary_pane.scroll_y + scene.content_origin_y()
+            y: item.visual_rect.bottom() - scene.left_pane.scroll_y + scene.content_origin_y()
                 - 1.0,
         };
 
-        assert!(!scene.begin_primary_pointer(
+        assert!(!scene.begin_pane_pointer(
             SelectionClick {
                 point: start,
                 extend: false,
@@ -20417,9 +20954,9 @@ text/plain=writer.desktop;\n",
             size,
         ));
         assert!(scene.set_pointer(current, size));
-        assert!(scene.selection.contains(0));
+        assert!(scene.left_pane.selection.contains(0));
         assert!(scene.rubber_band.as_ref().is_some_and(|band| band.active));
-        assert!(scene.end_primary_pointer(current, size));
+        assert!(scene.end_pane_pointer(current, size));
         assert!(scene.rubber_band.is_none());
     }
 

@@ -4,12 +4,23 @@ use std::time::Instant;
 
 use fika_core::{Entry, ItemLayout, ViewRect, ViewSize, read_entries_sync};
 
-use crate::{filtered_indexes_for_entries, wgpu_options::ShellViewMode};
+use crate::{
+    filtered_indexes_for_entries, wgpu_options::ShellViewMode, wgpu_selection::ShellSelection,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ShellPaneKind {
-    Primary,
+    Left,
     Split,
+}
+
+impl ShellPaneKind {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Left => "left",
+            Self::Split => "split",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -28,6 +39,7 @@ pub(crate) struct ShellPaneState {
     pub(crate) entries: Vec<Entry>,
     pub(crate) dir_count: usize,
     pub(crate) filtered_indexes: Vec<usize>,
+    pub(crate) selection: ShellSelection,
     pub(crate) scroll_x: f32,
     pub(crate) scroll_y: f32,
 }
@@ -48,6 +60,7 @@ impl ShellPaneState {
             entries,
             dir_count,
             filtered_indexes,
+            selection: ShellSelection::default(),
             scroll_x: 0.0,
             scroll_y: 0.0,
         }
@@ -79,6 +92,7 @@ impl ShellPaneState {
             entries,
             dir_count,
             filtered_indexes,
+            selection: ShellSelection::default(),
             scroll_x: 0.0,
             scroll_y: 0.0,
         })
@@ -89,17 +103,19 @@ impl ShellPaneState {
         self.filtered_indexes.len()
     }
 
-    pub(crate) fn rebuild_filtered_indexes(&mut self, show_hidden: bool) {
+    pub(crate) fn rebuild_filtered_indexes(&mut self, show_hidden: bool) -> bool {
         self.filtered_indexes = filtered_indexes_for_entries(&self.entries, show_hidden, "");
+        self.selection.retain_indexes(&self.filtered_indexes)
     }
 
     pub(crate) fn rebuild_filtered_indexes_with_pattern(
         &mut self,
         show_hidden: bool,
         filter_pattern: &str,
-    ) {
+    ) -> bool {
         self.filtered_indexes =
             filtered_indexes_for_entries(&self.entries, show_hidden, filter_pattern);
+        self.selection.retain_indexes(&self.filtered_indexes)
     }
 }
 
@@ -110,6 +126,7 @@ pub(crate) struct ShellPaneView<'a> {
     pub(crate) entries: &'a [Entry],
     pub(crate) dir_count: usize,
     pub(crate) filtered_indexes: &'a [usize],
+    pub(crate) selection: &'a ShellSelection,
     pub(crate) scroll_x: f32,
     pub(crate) scroll_y: f32,
 }
@@ -122,6 +139,7 @@ impl<'a> ShellPaneView<'a> {
             entries: &state.entries,
             dir_count: state.dir_count,
             filtered_indexes: &state.filtered_indexes,
+            selection: &state.selection,
             scroll_x: state.scroll_x,
             scroll_y: state.scroll_y,
         }
