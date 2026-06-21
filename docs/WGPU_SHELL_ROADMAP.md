@@ -115,7 +115,13 @@ Current checkpoint:
   thin binary wrapper; startup options, app/calloop orchestration, wgpu surface
   rendering, the initial directory scene snapshot, and Wayland handlers live
   under `src/bin/fika_sctk/`. `SctkScene` is the current replacement boundary
-  for moving the winit-backed `fika-wgpu` retained scene into SCTK/calloop.
+  for moving the winit-backed `fika-wgpu` retained scene into SCTK/calloop. The
+  SCTK startup path now accepts `--view icons|compact|details`, stores the core
+  `ViewMode` in `SctkScene`, and reports it in startup/ready logs.
+- The first `fika-wgpu` debt split has started: CLI/view-mode parsing now lives
+  in `src/bin/fika_wgpu/options.rs`, shell visual/performance metrics live in
+  `src/bin/fika_wgpu/metrics.rs`, and the spike uses core `ViewMode` instead of
+  a wgpu-only duplicate enum.
 - `src/bin/fika-wgpu.rs` exists as the older winit-backed renderer spike.
 - It accepts an optional path argument and defaults to the current directory.
 - It reads directory entries through `fika_core::read_entries_sync`.

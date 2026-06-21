@@ -27,7 +27,7 @@ const DEFAULT_WIDTH: u32 = 1100;
 const DEFAULT_HEIGHT: u32 = 720;
 
 pub(crate) fn run(options: StartupOptions) -> Result<(), Box<dyn Error>> {
-    let scene = SctkScene::load(options.path)?;
+    let scene = SctkScene::load(options.path, options.view_mode)?;
     scene.log_startup();
 
     let conn = Connection::connect_to_env()?;
@@ -95,11 +95,12 @@ impl FikaSctkApp {
         let config = self.renderer.configure_surface(self.width, self.height);
         if !self.ready_logged {
             eprintln!(
-                "[fika-sctk] shell-ready size={}x{} format={:?} path={} entries={} dirs={} files={}",
+                "[fika-sctk] shell-ready size={}x{} format={:?} path={} view={} entries={} dirs={} files={}",
                 self.width,
                 self.height,
                 config.format,
                 self.scene.path().display(),
+                self.scene.view_mode().as_str(),
                 self.scene.entry_count(),
                 self.scene.dir_count(),
                 self.scene.file_count()

@@ -87,7 +87,12 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
   wgpu surface、把 Wayland event queue 接入 calloop `WaylandSource`、读取可选 path
   并输出目录统计；`src/bin/fika-sctk.rs` 已降为 8 行入口，实际代码拆入
   `src/bin/fika_sctk/{options,app,renderer,scene,wayland}.rs`；`SctkScene`
-  现在拥有启动目录快照和目录统计，是后续承接 `fika-wgpu` retained scene 的边界。
+  现在拥有启动目录快照、core `ViewMode` 和目录统计，是后续承接 `fika-wgpu`
+  retained scene 的边界。`fika-sctk` 已接受同一 `--view icons|compact|details`
+  参数并在 startup/shell-ready 日志输出 view。`fika-wgpu` 工程债开始收口：
+  CLI/view-mode parsing 已拆到 `src/bin/fika_wgpu/options.rs`，视觉/性能尺寸常量已拆到
+  `src/bin/fika_wgpu/metrics.rs`，view mode 语义收敛到 core `ViewMode`，不再保留
+  wgpu-only duplicate enum。
   后续新增 SCTK shell 能力必须落入这些模块或继续按职责拆分。下一步是把 `fika-wgpu` 的
   `ShellScene`/renderer/input projection 搬到 SCTK/calloop 事件循环下。历史 `fika-wgpu`
   winit-backed spike 只作为迁移源和测试基线，不再承接新的 shell 功能；它已能打开独立窗口、接受可选 path 参数、通过 `fika_core::read_entries_sync`

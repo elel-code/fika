@@ -101,7 +101,13 @@ Shell 拥有：
   这是 retained scene 的目标承载层。入口现在只是很薄的 binary wrapper；启动参数、
   app/calloop 编排、wgpu surface rendering、初始目录 scene snapshot 和 Wayland handlers
   已拆到 `src/bin/fika_sctk/`。`SctkScene` 是当前把 winit-backed `fika-wgpu`
-  retained scene 迁入 SCTK/calloop 的替换边界。
+  retained scene 迁入 SCTK/calloop 的替换边界。SCTK startup path 现在接受
+  `--view icons|compact|details`，把 core `ViewMode` 存入 `SctkScene`，并在
+  startup/ready 日志中输出 view。
+- 第一轮 `fika-wgpu` 工程债拆分已经开始：CLI/view-mode parsing 已移到
+  `src/bin/fika_wgpu/options.rs`，shell 视觉/性能尺寸常量已移到
+  `src/bin/fika_wgpu/metrics.rs`，spike 使用 core `ViewMode`，不再保留 wgpu-only
+  duplicate enum。
 - `src/bin/fika-wgpu.rs` 是较早的 winit-backed renderer spike。
 - 接受可选 path 参数，默认使用当前目录。
 - 通过 `fika_core::read_entries_sync` 读取目录 entries。

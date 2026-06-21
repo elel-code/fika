@@ -7,5 +7,8 @@ mod scene;
 mod wayland;
 
 pub(crate) fn run() -> Result<(), Box<dyn Error>> {
-    app::run(options::StartupOptions::parse()?)
+    let Some(options) = options::StartupOptions::parse()? else {
+        return Ok(());
+    };
+    app::run(options)
 }

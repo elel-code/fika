@@ -308,6 +308,41 @@ pub enum ViewMode {
     Details,
 }
 
+impl ViewMode {
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "icons" => Ok(Self::Icons),
+            "compact" => Ok(Self::Compact),
+            "details" => Ok(Self::Details),
+            _ => Err(format!("unknown view mode: {value}")),
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Icons => "icons",
+            Self::Compact => "compact",
+            Self::Details => "details",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Icons => "Icons",
+            Self::Compact => "Compact",
+            Self::Details => "Details",
+        }
+    }
+
+    pub fn next(self) -> Self {
+        match self {
+            Self::Icons => Self::Compact,
+            Self::Compact => Self::Details,
+            Self::Details => Self::Icons,
+        }
+    }
+}
+
 pub const MIN_ZOOM_LEVEL: i32 = 0;
 pub const MAX_ZOOM_LEVEL: i32 = 16;
 pub const DEFAULT_ZOOM_LEVEL: i32 = 3;

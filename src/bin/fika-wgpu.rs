@@ -20,13 +20,13 @@ use cosmic_text::{
 use fika_core::{
     CompactLayout, CompactLayoutOptions, DesktopLaunchPlan, DeviceInfo, Entry, FileClipboardRole,
     FileTransferMode, Generation, IconsLayout, IconsLayoutOptions, ItemId, MimeApplication,
-    MimeApplicationCache, NETWORK_ROOT_LABEL, NameFilter, OpenWithLaunchResult, PaneId,
-    ServiceMenuAction, ServiceMenuLaunchResult, ServiceMenuPriority, ServiceMenuTarget,
-    ThumbnailRequest, ThumbnailRequestPriority, ThumbnailerRegistry, TransferTaskResult,
-    TrashViewOperation, TrashViewOperationResult, UserPlace, ViewPoint, ViewRect, ViewSize,
-    complete_location_input, decode_file_clipboard_text, default_thumbnail_cache_root,
-    default_user_places_path, encode_file_clipboard_text, file_ops, format_modified_secs,
-    format_size, generate_thumbnail_with_external_thumbnailer_registry, home_dir, is_network_path,
+    MimeApplicationCache, NETWORK_ROOT_LABEL, NameFilter, OpenWithLaunchResult, ServiceMenuAction,
+    ServiceMenuLaunchResult, ServiceMenuPriority, ServiceMenuTarget, ThumbnailRequest,
+    ThumbnailRequestPriority, ThumbnailerRegistry, TransferTaskResult, TrashViewOperation,
+    TrashViewOperationResult, UserPlace, ViewPoint, ViewRect, ViewSize, complete_location_input,
+    decode_file_clipboard_text, default_thumbnail_cache_root, default_user_places_path,
+    encode_file_clipboard_text, file_ops, format_modified_secs, format_size,
+    generate_thumbnail_with_external_thumbnailer_registry, home_dir, is_network_path,
     launch_with_systemd_user, load_place_order, load_user_places, mime_magic_resolution_required,
     network_root_path, network_uri_from_path, paste_text_result,
     place_order_path_for_user_places_path, read_entries_sync, read_gio_devices,
@@ -43,106 +43,13 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, KeyCode, NamedKey, PhysicalKey};
 use winit::window::{Window, WindowAttributes, WindowId};
 
-const APP_TOOLBAR_HEIGHT: f32 = 36.0;
-const PANE_MARGIN: f32 = 8.0;
-const TOP_BAR_HEIGHT: f32 = 36.0;
-const FILTER_BAR_HEIGHT: f32 = 30.0;
-const STATUS_BAR_HEIGHT: f32 = 28.0;
-const ICONS_ITEM_WIDTH: f32 = 116.0;
-const ICONS_ITEM_HEIGHT: f32 = 106.0;
-const ICONS_ICON_SIZE: f32 = 48.0;
-const COMPACT_MIN_TEXT_WIDTH: f32 = 24.0;
-const COMPACT_ITEM_HEIGHT: f32 = 44.0;
-const COMPACT_ICON_SIZE: f32 = 28.0;
-const DETAILS_HEADER_HEIGHT: f32 = 28.0;
-const DETAILS_ROW_HEIGHT: f32 = 26.0;
-const DETAILS_ICON_SIZE: f32 = 18.0;
-const DETAILS_NAME_WIDTH: f32 = 360.0;
-const DETAILS_SIZE_WIDTH: f32 = 104.0;
-const DETAILS_MODIFIED_WIDTH: f32 = 164.0;
-const SCROLL_LINE_PX: f32 = 56.0;
-const TEXT_ATLAS_WIDTH: u32 = 2048;
-const TEXT_FONT_SIZE: f32 = 14.0;
-const TEXT_LINE_HEIGHT: f32 = 18.0;
-const TEXT_PADDING: u32 = 2;
-const TEXT_LABEL_CACHE_MAX_BYTES: usize = 8 * 1024 * 1024;
-const ICON_ATLAS_WIDTH: u32 = 1024;
-const ICON_PADDING: u32 = 2;
-const ICON_CACHE_MAX_BYTES: usize = 32 * 1024 * 1024;
-const ICON_RASTER_MISS_BUDGET_PER_FRAME: usize = 2;
-const THUMBNAIL_READY_CACHE_MAX_BYTES: usize = 32 * 1024 * 1024;
-const THUMBNAIL_READ_AHEAD_PAGES: usize = 5;
-const THUMBNAIL_READ_AHEAD_RESOLVE_LIMIT: usize = 500;
-const THUMBNAIL_READ_AHEAD_QUEUE_BUDGET_PER_FRAME: usize = 32;
-const RUBBER_BAND_START_THRESHOLD: f32 = 4.0;
-const VIEW_SWITCH_REDRAW_FRAMES: u8 = 6;
-const PLACES_SIDEBAR_WIDTH: f32 = 228.0;
-const PLACES_SIDEBAR_MIN_WIDTH: f32 = 128.0;
-const PLACES_SIDEBAR_MAX_WIDTH_RATIO: f32 = 0.42;
-const PLACES_SIDEBAR_RIGHT_RESERVE: f32 = 120.0;
-const PLACES_SIDEBAR_SPLITTER_WIDTH: f32 = 1.0;
-const PLACES_RESIZE_HANDLE_WIDTH: f32 = 16.0;
-const PLACES_TO_PANE_GAP: f32 = 8.0;
-const PLACES_SIDEBAR_PANEL_MARGIN_X: f32 = 8.0;
-const PLACES_SIDEBAR_PANEL_MARGIN_BOTTOM: f32 = 8.0;
-const PLACES_SIDEBAR_PADDING_X: f32 = 8.0;
-const PLACES_SIDEBAR_TOP_PADDING: f32 = 8.0;
-const PLACES_TITLE_HEIGHT: f32 = 28.0;
-const PLACES_SECTION_HEIGHT: f32 = 24.0;
-const PLACES_ROW_HEIGHT: f32 = 30.0;
-const PLACES_ROW_GAP: f32 = 0.0;
-const PLACES_ICON_SIZE: f32 = 22.0;
-const PLACES_SCROLLBAR_WIDTH: f32 = 3.0;
-const PLACES_SCROLLBAR_MARGIN: f32 = 4.0;
-const PLACES_SCROLLBAR_MIN_THUMB_HEIGHT: f32 = 28.0;
-const CONTENT_SCROLLBAR_RESERVED_EXTENT: f32 = 14.0;
-const CONTENT_SCROLLBAR_PADDING: f32 = 4.0;
-const CONTENT_SCROLLBAR_MIN_THUMB_SIZE: f32 = 25.0;
-const SPLIT_PANE_DIVIDER_WIDTH: f32 = 1.0;
-const SPLIT_PANE_RESIZE_HANDLE_WIDTH: f32 = 10.0;
-const SPLIT_PANE_MIN_WIDTH: f32 = 180.0;
-const CONTEXT_MENU_WIDTH: f32 = 196.0;
-const CONTEXT_MENU_ROW_HEIGHT: f32 = 28.0;
-const CONTEXT_MENU_VERTICAL_PADDING: f32 = 4.0;
-const CONTEXT_MENU_VIEWPORT_MARGIN: f32 = 8.0;
-const CONTEXT_MENU_ICON_SIZE: f32 = 18.0;
-const CONTEXT_MENU_TEXT_LINE_HEIGHT: f32 = 20.0;
-const PROPERTIES_OVERLAY_WIDTH: f32 = 440.0;
-const PROPERTIES_OVERLAY_MARGIN: f32 = 18.0;
-const PROPERTIES_TITLE_HEIGHT: f32 = 42.0;
-const PROPERTIES_ROW_HEIGHT: f32 = 24.0;
-const CREATE_DIALOG_WIDTH: f32 = 420.0;
-const CREATE_DIALOG_HEIGHT: f32 = 196.0;
-const CREATE_DIALOG_MARGIN: f32 = 18.0;
-const CREATE_DIALOG_TITLE_HEIGHT: f32 = 42.0;
-const CREATE_DIALOG_BUTTON_WIDTH: f32 = 84.0;
-const CREATE_DIALOG_BUTTON_HEIGHT: f32 = 24.0;
-const CREATE_DIALOG_BUTTON_GAP: f32 = 8.0;
-const RENAME_DIALOG_WIDTH: f32 = 420.0;
-const RENAME_DIALOG_HEIGHT: f32 = 168.0;
-const RENAME_DIALOG_MARGIN: f32 = 18.0;
-const RENAME_DIALOG_TITLE_HEIGHT: f32 = 42.0;
-const OPEN_WITH_CHOOSER_WIDTH: f32 = 560.0;
-const OPEN_WITH_CHOOSER_MARGIN: f32 = 18.0;
-const OPEN_WITH_CHOOSER_TITLE_HEIGHT: f32 = 42.0;
-const OPEN_WITH_CHOOSER_QUERY_HEIGHT: f32 = 30.0;
-const OPEN_WITH_CHOOSER_ROW_HEIGHT: f32 = 38.0;
-const OPEN_WITH_CHOOSER_MAX_ROWS: usize = 8;
-const OPEN_WITH_CHOOSER_BUTTON_WIDTH: f32 = 92.0;
-const OPEN_WITH_CHOOSER_BUTTON_HEIGHT: f32 = 24.0;
-const OPEN_WITH_CHOOSER_BUTTON_GAP: f32 = 8.0;
-const TRASH_CONFLICT_DIALOG_WIDTH: f32 = 520.0;
-const TRASH_CONFLICT_DIALOG_HEIGHT: f32 = 212.0;
-const TRASH_CONFLICT_DIALOG_MARGIN: f32 = 18.0;
-const TRASH_CONFLICT_DIALOG_TITLE_HEIGHT: f32 = 42.0;
-const PATH_HISTORY_LIMIT: usize = 128;
-const ZOOM_STEP_MIN: i32 = -3;
-const ZOOM_STEP_MAX: i32 = 4;
-const ZOOM_STEP_SCALE: f32 = 0.12;
-const AUTO_CYCLE_INTERVAL: Duration = Duration::from_secs(1);
-const DOUBLE_CLICK_MAX_INTERVAL: Duration = Duration::from_millis(500);
-const DOUBLE_CLICK_MAX_DISTANCE: f32 = 6.0;
-const WGPU_SHELL_PANE_ID: PaneId = PaneId(1);
+#[path = "fika_wgpu/metrics.rs"]
+mod wgpu_metrics;
+#[path = "fika_wgpu/options.rs"]
+mod wgpu_options;
+
+use wgpu_metrics::*;
+use wgpu_options::{ShellViewMode, parse_start_options};
 
 fn main() -> Result<(), Box<dyn Error>> {
     let Some(options) = parse_start_options()? else {
@@ -156,111 +63,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     let app = FikaWgpuApp::new(scene, options.auto_cycle_views);
     event_loop.run_app(app)?;
     Ok(())
-}
-
-struct StartupOptions {
-    path: PathBuf,
-    view_mode: ShellViewMode,
-    auto_cycle_views: bool,
-}
-
-fn parse_start_options() -> Result<Option<StartupOptions>, String> {
-    let mut args = env::args_os();
-    let program = args
-        .next()
-        .and_then(|value| value.into_string().ok())
-        .unwrap_or_else(|| "fika-wgpu".to_string());
-
-    let mut view_mode = ShellViewMode::Icons;
-    let mut auto_cycle_views = false;
-    let mut path = None;
-    while let Some(arg) = args.next() {
-        if arg == "--help" || arg == "-h" {
-            println!("Usage: {program} [--view icons|compact|details] [--auto-cycle-views] [PATH]");
-            return Ok(None);
-        }
-        if arg == "--auto-cycle-views" {
-            auto_cycle_views = true;
-            continue;
-        }
-        if arg == "--view" {
-            let Some(value) = args.next() else {
-                return Err(format!(
-                    "usage: {program} [--view icons|compact|details] [--auto-cycle-views] [PATH]"
-                ));
-            };
-            let value = value
-                .to_str()
-                .ok_or_else(|| "--view value must be valid UTF-8".to_string())?;
-            view_mode = ShellViewMode::parse(value)?;
-            continue;
-        }
-        if let Some(value) = arg.to_str().and_then(|arg| arg.strip_prefix("--view=")) {
-            view_mode = ShellViewMode::parse(value)?;
-            continue;
-        }
-        if arg.to_str().is_some_and(|arg| arg.starts_with("--")) {
-            return Err(format!("unknown option: {}", arg.to_string_lossy()));
-        }
-        if path.replace(PathBuf::from(arg)).is_some() {
-            return Err(format!(
-                "usage: {program} [--view icons|compact|details] [--auto-cycle-views] [PATH]"
-            ));
-        }
-    }
-
-    let path = match path {
-        Some(path) => path,
-        None => env::current_dir().map_err(|error| format!("current directory: {error}"))?,
-    };
-    Ok(Some(StartupOptions {
-        path,
-        view_mode,
-        auto_cycle_views,
-    }))
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-enum ShellViewMode {
-    #[default]
-    Icons,
-    Compact,
-    Details,
-}
-
-impl ShellViewMode {
-    fn parse(value: &str) -> Result<Self, String> {
-        match value {
-            "icons" => Ok(Self::Icons),
-            "compact" => Ok(Self::Compact),
-            "details" => Ok(Self::Details),
-            _ => Err(format!("unknown view mode: {value}")),
-        }
-    }
-
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Icons => "icons",
-            Self::Compact => "compact",
-            Self::Details => "details",
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::Icons => "Icons",
-            Self::Compact => "Compact",
-            Self::Details => "Details",
-        }
-    }
-
-    fn next(self) -> Self {
-        match self {
-            Self::Icons => Self::Compact,
-            Self::Compact => Self::Details,
-            Self::Details => Self::Icons,
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
