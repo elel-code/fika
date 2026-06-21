@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::ops::{Index, IndexMut};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -18,6 +19,13 @@ impl ShellPaneId {
     pub(crate) const FIRST: Self = Self::First;
     pub(crate) const SECOND: Self = Self::Second;
     pub(crate) const ALL: [Self; 2] = [Self::FIRST, Self::SECOND];
+
+    pub(crate) fn index(self) -> usize {
+        match self {
+            Self::First => 0,
+            Self::Second => 1,
+        }
+    }
 
     pub(crate) fn as_str(self) -> &'static str {
         match self {
@@ -120,6 +128,49 @@ impl ShellPaneState {
         self.filtered_indexes =
             filtered_indexes_for_entries(&self.entries, show_hidden, filter_pattern);
         self.selection.retain_indexes(&self.filtered_indexes)
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ShellPaneStates {
+    panes: [Option<ShellPaneState>; 2],
+}
+
+impl ShellPaneStates {
+    pub(crate) fn new(first: ShellPaneState) -> Self {
+        Self {
+            panes: [Some(first), None],
+        }
+    }
+
+    pub(crate) fn get(&self, pane: ShellPaneId) -> Option<&ShellPaneState> {
+        self.panes[pane.index()].as_ref()
+    }
+
+    pub(crate) fn get_mut(&mut self, pane: ShellPaneId) -> Option<&mut ShellPaneState> {
+        self.panes[pane.index()].as_mut()
+    }
+
+    pub(crate) fn set(&mut self, pane: ShellPaneId, state: ShellPaneState) {
+        self.panes[pane.index()] = Some(state);
+    }
+
+    pub(crate) fn is_open(&self, pane: ShellPaneId) -> bool {
+        self.panes[pane.index()].is_some()
+    }
+}
+
+impl Index<ShellPaneId> for ShellPaneStates {
+    type Output = ShellPaneState;
+
+    fn index(&self, pane: ShellPaneId) -> &Self::Output {
+        self.get(pane).expect("pane slot is not open")
+    }
+}
+
+impl IndexMut<ShellPaneId> for ShellPaneStates {
+    fn index_mut(&mut self, pane: ShellPaneId) -> &mut Self::Output {
+        self.get_mut(pane).expect("pane slot is not open")
     }
 }
 
@@ -306,9 +357,71 @@ impl ShellVisibleItemSlotPool {
     }
 }
 
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ShellPaneVisibleSlotPools {
+    pools: [ShellVisibleItemSlotPool; 2],
+}
+
+impl ShellPaneVisibleSlotPools {
+    pub(crate) fn get(&self, pane: ShellPaneId) -> &ShellVisibleItemSlotPool {
+        &self.pools[pane.index()]
+    }
+
+    pub(crate) fn update_visible_items(
+        &mut self,
+        pane: ShellPaneId,
+        visible_paths: impl IntoIterator<Item = PathBuf>,
+    ) -> ShellVisibleItemSlotStats {
+        self.pools[pane.index()].update_visible_items(visible_paths)
+    }
+
+    pub(crate) fn clear(&mut self, pane: ShellPaneId) {
+        self.pools[pane.index()].clear();
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct ShellPaneSplitMetrics {
     pub(crate) divider: ViewRect,
     pub(crate) right_pane: ViewRect,
     pub(crate) left_width: f32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pane_visible_slot_pools_are_addressed_by_pane_id() {
+        let path = PathBuf::from("/tmp/shared-name");
+        let mut pools = ShellPaneVisibleSlotPools::default();
+
+        let first_stats = pools.update_visible_items(ShellPaneId::FIRST, [path.clone()]);
+        assert_eq!(first_stats.active, 1);
+        assert!(pools.get(ShellPaneId::FIRST).slot_for_path(&path).is_some());
+        assert!(
+            pools
+                .get(ShellPaneId::SECOND)
+                .slot_for_path(&path)
+                .is_none()
+        );
+
+        let second_stats = pools.update_visible_items(ShellPaneId::SECOND, [path.clone()]);
+        assert_eq!(second_stats.active, 1);
+        assert!(
+            pools
+                .get(ShellPaneId::SECOND)
+                .slot_for_path(&path)
+                .is_some()
+        );
+
+        pools.clear(ShellPaneId::SECOND);
+        assert!(pools.get(ShellPaneId::FIRST).slot_for_path(&path).is_some());
+        assert!(
+            pools
+                .get(ShellPaneId::SECOND)
+                .slot_for_path(&path)
+                .is_none()
+        );
+    }
 }

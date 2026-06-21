@@ -139,7 +139,7 @@ fn print_help() {
     println!(
         "Usage: fika [--chooser] [START_DIR]\n\n\
          Options:\n\
-           --chooser                 Start the GPUI file chooser shell.\n\
+           --chooser                 Start the file chooser shell.\n\
            --chooser-directory       Select folders instead of files.\n\
            --chooser-multiple        Select more than one path before confirmation.\n\
            --chooser-title TITLE     Use TITLE as the chooser window title.\n\

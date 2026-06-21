@@ -72,7 +72,7 @@ operation flow, while using the local XDG Trash layout as the backing store.
     changes the visible order, the model emits a reset rather than reporting
     changed roles at stale indexes.
 - UI actions:
-  - `src/main.rs` routes Delete in normal directories to move-to-trash.
+  - `src/bin/fika-wgpu.rs` routes Delete in normal directories to move-to-trash.
   - Trash view context menus provide Restore, Delete Permanently, and Empty
     Trash actions.
   - Restore conflicts are reported as structured `TrashRestoreConflict`
@@ -86,16 +86,15 @@ operation flow, while using the local XDG Trash layout as the backing store.
   - Completion refreshes the Trash directory and restored original directories
     through the lister path, keeping `PaneId + generation` routing.
 - Places:
-  - `src/main.rs` exposes a Trash place that navigates to the Trash files
-    directory.
-  - `FikaApp` owns the Trash empty/non-empty state, similar to Dolphin's
-    Places model caching `Trash::emptinessChanged`. It initializes the state
+  - `src/core/places.rs` defines the Trash place that navigates to the Trash
+    files directory.
+  - `src/bin/fika-wgpu.rs` owns the Trash empty/non-empty state, initializes it
     once, refreshes it after Trash-affecting operations, updates it from Trash
     pane lister events, and drains the core `TrashEmptinessMonitor` singleton
     watcher for external changes when no Trash pane is open. Places projection
     consumes that state and does not poll the filesystem.
-  - `src/ui/places.rs` renders the Trash state with a state dot and marker
-    color.
+  - The winit/wgpu Places renderer displays the Trash state with the current
+    shell marker style.
   - The Trash place context menu offers Open, Empty Trash, Copy Location, and
     Properties; Empty Trash uses the same app-owned state for enablement and
     runs through the focused pane's pane-local operation status.
