@@ -110,17 +110,20 @@ Current checkpoint:
   Wayland session through SCTK/wayland-client, creates an xdg-window, builds a
   `wgpu` surface from raw Wayland handles, reads the requested directory through
   `fika_core::read_entries_sync`, and routes the Wayland event queue through
-  calloop `WaylandSource`. This is now more than a clear-frame host: `SctkScene`
+  calloop `WaylandSource`. This is now more than a clear-frame host: `SctkPane`
   owns startup directory entries, core `ViewMode`, retained scroll/hover/selection
-  state, Icons/Compact/Details layout projection, and scene quad frame building.
+  state, Icons/Compact/Details layout projection, item painting, content
+  scrollbar drawing, pane-local chrome, and pane hit testing, while `SctkScene`
+  owns app chrome, Places, and routes pointer/scroll events into the active pane
+  geometry.
   The SCTK renderer uploads and draws those quads, while Wayland pointer handling
   routes hover, left-click selection, and wheel scroll through the retained
   scene hit-test path. Text is also rendered in SCTK now: `src/bin/fika_sctk/text.rs`
   uses `cosmic-text` to shape/rasterize path, Places, status, item, and Details
   labels into a per-frame RGBA atlas, then draws a textured quad pass after the
   solid scene pass. Its entry point is a thin binary wrapper; startup options,
-  app/calloop orchestration, wgpu surface rendering, metrics, quad drawing, text
-  drawing, the directory scene, and Wayland handlers live under
+  app/calloop orchestration, wgpu surface rendering, metrics, pane projection,
+  quad drawing, text drawing, the directory scene, and Wayland handlers live under
   `src/bin/fika_sctk/`.
 - New shell work should land in `src/bin/fika_sctk/`. The older
   winit-backed `fika-wgpu` spike is a history/reference baseline only and should

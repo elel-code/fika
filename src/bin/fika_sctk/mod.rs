@@ -3,6 +3,7 @@ use std::error::Error;
 mod app;
 mod metrics;
 mod options;
+mod pane;
 mod quad;
 mod renderer;
 mod scene;

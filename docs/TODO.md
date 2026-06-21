@@ -83,7 +83,7 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
 
 - [~] Phase 0：`fika-sctk` 是唯一继续迁入新 shell 能力的目标。现状：
   `src/bin/fika-sctk.rs` 仍是薄入口；实际实现拆入
-  `src/bin/fika_sctk/{options,app,renderer,scene,wayland,metrics,quad,text}.rs`。
+  `src/bin/fika_sctk/{options,app,renderer,scene,pane,wayland,metrics,quad,text}.rs`。
   它通过 `smithay-client-toolkit`/`wayland-client` 创建 xdg-window，用 raw Wayland
   handle 初始化官方 crates.io `wgpu` surface，并通过 calloop `WaylandSource`
   驱动 Wayland event queue。`fika-wgpu` 只保留为历史迁移输入和必要编译基线，
@@ -104,12 +104,15 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
   `text_labels/text_quads/text_atlas` counters。下一步要把该第一版 per-frame atlas
   提升为 retained glyph/label cache，补 eviction telemetry，避免 steady scroll 反复
   rasterize 可见 label。
-- [ ] Phase 3：继续 pane 可复用化。当前 SCTK 仍是单 pane 场景对象；下一步要把
-  `SctkScene` 拆成可复用 pane model/projection/painter/input router，使 primary/split
-  pane 共享同一个 layout、visible range、scrollbar、selection、focus、status 和
-  file-operation routing。split view、pane focus、目录激活、keyboard navigation、
-  rubber-band、scrollbar drag、view switching、hidden toggle、filter/location edit
-  都还需要在 SCTK 路径重新落地。
+- [~] Phase 3：继续 pane 可复用化。当前增量已新增
+  `src/bin/fika_sctk/pane.rs`，把 pane path/view/entries/dir_count、scroll、hover、
+  selection、Icons/Compact/Details layout projection、item painter、content scrollbar、
+  status bar、pane-local location bar、hit-test、left-click selection 和 wheel scroll
+  从 app scene 中抽到 `SctkPane`。`SctkScene` 现在只负责 app 背景、toolbar band、
+  Places panel 以及把 pointer/scroll 路由到 active pane geometry。下一步要把
+  `SctkPane` 扩成 primary/split pane 共享的 component，并继续补 pane focus、目录激活、
+  keyboard navigation、rubber-band、scrollbar drag、view switching、hidden toggle、
+  filter/location edit 和 file-operation routing。
 - [ ] Phase 4：迁入资产和系统集成热路径。MIME/theme icon atlas、Dolphin-style
   visible-first icon resolve、thumbnail worker/read-ahead、device/Places 动态数据、
   context menu、Open With、service menu、clipboard、Trash actions、file operations、

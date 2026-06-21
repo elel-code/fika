@@ -98,15 +98,17 @@ retained scene/renderer 行为。
   SCTK/wayland-client 连接 Wayland session，创建 xdg-window，用 raw Wayland handle
   建立 `wgpu` surface，通过 `fika_core::read_entries_sync` 读取目标目录，把 Wayland
   event queue 接入 calloop `WaylandSource`。它现在已经不是 clear-frame host：
-  `SctkScene` 拥有启动目录 entries、core `ViewMode`、retained scroll/hover/selection
-  状态、Icons/Compact/Details layout projection 和 scene quad frame 构建。SCTK renderer
-  会上传并绘制这些 quads；Wayland pointer handling 已把 hover、左键 selection 和
-  wheel scroll 路由到同一 retained scene hit-test path。真实文本也已进入 SCTK：
+  `SctkPane` 拥有启动目录 entries、core `ViewMode`、retained scroll/hover/selection
+  状态、Icons/Compact/Details layout projection、item painting、content scrollbar、
+  pane-local chrome 和 pane hit testing；`SctkScene` 拥有 app chrome、Places，
+  并把 pointer/scroll 事件路由到 active pane geometry。SCTK renderer 会上传并绘制
+  这些 quads；Wayland pointer handling 已把 hover、左键 selection 和 wheel scroll
+  路由到同一 retained pane hit-test path。真实文本也已进入 SCTK：
   `src/bin/fika_sctk/text.rs` 使用 `cosmic-text` shape/rasterize 地址栏、Places、
   status、item 和 Details label，打包到 per-frame RGBA atlas，并在 solid scene pass
   后用 textured quad pass 绘制。入口现在只是很薄的 binary wrapper；启动参数、
-  app/calloop 编排、wgpu surface rendering、metrics、quad drawing、text drawing、
-  directory scene 和 Wayland handlers 已拆到 `src/bin/fika_sctk/`。
+  app/calloop 编排、wgpu surface rendering、metrics、pane projection、quad drawing、
+  text drawing、directory scene 和 Wayland handlers 已拆到 `src/bin/fika_sctk/`。
 - 后续新 shell 工作只应落入 `src/bin/fika_sctk/`。较早的 winit-backed `fika-wgpu`
   spike 只作为历史/参考基线，不再承接新的 shell 行为。
 
