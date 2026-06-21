@@ -86,8 +86,8 @@ Shell 拥有：
 ### Phase 0：Shell Spike
 
 新增独立实验二进制 `fika-sctk`，不删除 GPUI binary。它应打开 SCTK xdg-window、
-通过 raw Wayland handle 初始化 `wgpu`、驱动现有 directory listing model，然后承载
-当前已在 `fika-wgpu` 中验证的 retained scene/renderer code。
+通过 raw Wayland handle 初始化 `wgpu`、驱动现有 directory listing model，然后迁入
+retained scene/renderer 行为。
 
 现有 `fika-wgpu` binary 保留为 renderer、layout、hit-test 和 cache 行为的迁移来源，
 但不再是目标 window/event backend。新的 shell 工作应从中迁出代码，而不是继续往其中追加行为。
@@ -101,11 +101,17 @@ Shell 拥有：
   `SctkScene` 拥有启动目录 entries、core `ViewMode`、retained scroll/hover/selection
   状态、Icons/Compact/Details layout projection 和 scene quad frame 构建。SCTK renderer
   会上传并绘制这些 quads；Wayland pointer handling 已把 hover、左键 selection 和
-  wheel scroll 路由到同一 retained scene hit-test path。入口现在只是很薄的 binary
-  wrapper；启动参数、app/calloop 编排、wgpu surface rendering、metrics、quad drawing、
+  wheel scroll 路由到同一 retained scene hit-test path。真实文本也已进入 SCTK：
+  `src/bin/fika_sctk/text.rs` 使用 `cosmic-text` shape/rasterize 地址栏、Places、
+  status、item 和 Details label，打包到 per-frame RGBA atlas，并在 solid scene pass
+  后用 textured quad pass 绘制。入口现在只是很薄的 binary wrapper；启动参数、
+  app/calloop 编排、wgpu surface rendering、metrics、quad drawing、text drawing、
   directory scene 和 Wayland handlers 已拆到 `src/bin/fika_sctk/`。
 - 后续新 shell 工作只应落入 `src/bin/fika_sctk/`。较早的 winit-backed `fika-wgpu`
   spike 只作为历史/参考基线，不再承接新的 shell 行为。
+
+以下为只读历史迁移输入，除共享编译修复外不应再改动：
+
 - `src/bin/fika-wgpu.rs` 是较早的 winit-backed renderer spike。
 - 接受可选 path 参数，默认使用当前目录。
 - 通过 `fika_core::read_entries_sync` 读取目录 entries。

@@ -81,149 +81,46 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
 - `docs/WGPU_SHELL_ROADMAP.md`
 - `docs/WGPU_SHELL_ROADMAP.zh-CN.md`
 
-- [~] Phase 0：新增独立 `fika-sctk` spike，不删除 GPUI binary，并把现有 `fika-wgpu`
-  作为 scene/renderer 迁移输入而不是长期窗口层。当前 `fika-sctk` 已通过
-  `smithay-client-toolkit` 创建 Wayland xdg-window、用 raw Wayland handle 初始化
-  wgpu surface、把 Wayland event queue 接入 calloop `WaylandSource`、读取可选 path
-  并输出目录统计；`src/bin/fika-sctk.rs` 已降为 8 行入口，实际代码拆入
-  `src/bin/fika_sctk/{options,app,renderer,scene,wayland,metrics,quad}.rs`；
-  `SctkScene` 现在拥有启动目录快照、core `ViewMode`、retained scroll/hover/selection
-  状态、Icons/Compact/Details 三种 layout projection 和 scene quad frame 构建。
-  `fika-sctk` 已接受 `--view icons|compact|details`，并在 startup/shell-ready/frame
-  日志输出 view、quad、visible item、selection、hover 和 scroll telemetry。SCTK renderer
-  已从 clear-frame 升级为上传/绘制 scene quads；Wayland pointer capability 已接入
-  hover、left-click selection 和 wheel scroll，并由同一 retained hit-test 路由。
-  后续新增 shell 能力只落入 `src/bin/fika_sctk/` 或继续按职责拆分；`fika-wgpu`
-  只作为历史参考和必要编译基线，不再承接新 shell 功能。
-  历史 `fika-wgpu`
-  winit-backed spike 已能打开独立窗口、接受可选 path 参数、通过 `fika_core::read_entries_sync`
-  读取目录、用 `IconsLayout` 投影 retained geometry，Compact projection 会按每列
-  可见名称中的最长项决定列宽，并用 solid quad batch 渲染 path bar、可见 item
-  背景和 icon fallback 形状；真实文件名通过
-  `cosmic-text` shaping/rasterization 进入 bounded label raster cache，再上传到
-  临时 per-frame RGBA text atlas 绘制，当前 shell metrics 会应用 window scale
-  factor，默认 Icons 图标保持 48 逻辑 px（1.5x 下为 72 物理 px），baseline text
-  metric 为 14px/18px 以贴近 GPUI Fika 视觉尺寸；真实 MIME/theme icon 已按 XDG/GTK/KDE
-  theme 解析，PNG/WebP/JPEG/BMP/GIF/ICO 通过 `image` 光栅化，SVG 通过
-  `usvg/resvg` 光栅化，visible icon 打包到 per-frame RGBA icon atlas，并保留
-  bounded icon raster cache；semantic icon path resolve 已移出 frame path，未缓存
-  file-icon role 进入后台 resolver，当前 frame 先绘制 fallback，ready 后自动 redraw
-  补齐；新 icon raster 也有每帧预算；pointer move/leave 和左键点击已通过 shell-owned
-  retained hit testing 路由，支持 hovered item、单选、Ctrl/Meta toggle selection
-  和 Shift range selection，并从同一 slot projection 绘制 hover/selection 状态；
-  右键 context targeting 已通过同一 retained hit testing 路由，右键未选 item 会先同步
-  selection，右键已选 item 会保留 multi-selection 并更新 focus，右键 content 空白区域会记录
-  blank directory target 且不启动 rubber-band；第一版 shell-owned context menu overlay
-  已接入 item/blank targets，菜单会 clamp 到窗口内，支持 row hover、Esc/外部点击关闭，
-  现在使用不透明浅色 surface，并将 directory item 的 Open、file item 的 Open（通过 GIO default-application URI
-  launch）、item Copy Location（通过 shell-owned Wayland text clipboard provider）
-  和 item Copy/Cut（通过同一 provider 写入 Fika URI-list text encoding）以及 blank menu 的
-  Paste（读取 Wayland text clipboard，解码 Fika/GNOME URI-list text 或 plain text，调用本地
-  core transfer/text-paste helper，reload 目录，并在 Cut 成功后清空 clipboard）、Refresh
-  和 Select All 分派到现有
-  shell navigation/reload/selection path；Properties 会为 item 和 blank-directory targets
-  打开轻量 shell-owned metadata overlay；blank menu 的 Create New 会打开最小
-  shell-owned modal，支持 folder/file 选择、name capture、校验、真实 create/reload
-  并选中新建条目；item Rename 会打开最小 shell-owned modal，支持 name capture、
-  校验、真实 rename/reload 并选中重命名后的条目；item Move to Trash 会解析 clicked
-  item 或 multi-selection，拒绝 remote paths，调用 core XDG trash handling 并 reload；
-  Trash view context menu 会通过 core `TrashViewOperation` 分派 Restore From Trash、
-  Delete Permanently 和 Empty Trash，并 reload Trash view；Restore conflict 会打开
-  shell-owned confirmation overlay，Replace 会用 replace policy 通过 core restore 后 reload；
-  item Cut 和 Paste 会拒绝 remote paths；file item 的最小 shell-owned Open With chooser
-  已通过 core `MimeApplicationCache` 和 systemd-user launch plan 接入；Open With
-  default-app selection、Open in New Pane、多 MIME `text/uri-list` clipboard export/import 等
-  其余 action 先记录 pending 日志；
-  文件内容区现在预留并绘制 shell-owned item-view scrollbar，Icons/Details 为右侧竖向
-  track，Compact 为底部横向 track，scrollbar track/thumb 使用圆角绘制，并支持
-  thumb drag 与 track click-to-drag 更新 retained scroll offset；frame log 输出 `scale=...` 和
-  `content_scrollbar=0|1`；Icons/Compact 普通未 hover/未 selection item 不再绘制默认
-  highlight/background，Compact label 左对齐且每项高亮宽度按该项文本宽度收缩；
-  空白区域左键拖动已通过同一 retained Icons geometry 支持 rubber-band selection，
-  普通拖动替换 selection，Shift 追加，Ctrl/Meta 相对按下时的 base selection 做
-  toggle；keyboard navigation 已通过同一 retained selection state 处理 Arrow、
-  Home/End 和 Page Up/Down，Shift 扩展 range，focus item 会滚入视口，`Ctrl/Meta+A`
-  全选当前目录 entries，`Esc` 清空 selection 并取消任何 transient rubber-band；目录激活已走
-  shell-owned input path，Enter 打开当前 focus/selected 目录，双击通过 retained
-  hit testing 打开目录，Backspace 或 Alt+Up 加载父目录；Alt+Left/Alt+Right
-  走同一有界 history stack，`F5` / `Ctrl/Meta+R` 可刷新当前目录且不写 history，并在 entry 仍存在时按名称保留
-  selection/focus，history/reload 的 app-level mouse controls 仍待 toolbar 迁移；
-  普通新导航只在读取成功后写入 back stack 并清空 forward history，并在加载新 path 时重置 scroll/selection/rubber-band
-  transient state、刷新 hover、更新窗口标题且立即 present；初版 projection zoom 已由
-  shell-owned retained geometry 驱动，`Ctrl/Meta + +`、`Ctrl/Meta + -` 和 `Ctrl/Meta + 0`
-  调整/重置有界 zoom step，`Ctrl/Meta + wheel` 也映射到同一 zoom path，Icons/Compact 更新 item/icon/text slot metrics，Details 更新
-  row/icon metrics，scroll 会被 clamp，focus item 保持可见，icon resolver 按 zoom 后的
-  slot size 请求 raster；底部最小 shell-owned status bar 已开始绘制在 content pane 内，
-  不再跨过 Places sidebar，显示 entries/dirs/files/selected/visible/view/zoom 摘要，并从
-  content viewport 和 item hit testing 中排除；最小 shell-owned filter bar 已可用，`Ctrl/Meta+F` 激活，
-  字符输入更新 retained plain-text name filter，Backspace 编辑，Enter 保留 pattern/filter 结果但停止继续吃文本，
-  Esc 清空并关闭，layout/hit-test/hover/selection/select-all/keyboard navigation 均通过
-  filtered model-index projection 路由；dotfile visibility 已进入 shell-owned retained
-  projection，默认隐藏 hidden entries，`Ctrl/Meta+H` 可显示，selection 会随可见性切换保留或裁剪，
-  app-level Hidden toggle 仍待 toolbar 迁移；最小 shell-owned pane-local location edit mode 已可用，
-  `Ctrl/Meta+L`、`Ctrl/Meta+D`、`F6` 或点击 top path bar 激活，首次输入替换当前 path
-  draft，Backspace/Delete 通过真实 caret 编辑，Arrow/Home/End 移动 caret，caret x 现在由
-  `cosmic-text` shaped glyph layout 测量且 path label no-wrap，点击 path bar 外空白会安全取消 draft
-  并恢复当前真实 path，Tab 复用 core `complete_location_input()` 补全，Enter 复用 core
-  `resolve_location_input()` 并通过 retained navigation/history path 提交，Esc 取消；
-  第一版 shell-owned Places 侧栏已作为顶部与 app-level toolbar 下方 pane 起点对齐的圆角 panel 绘制，通过公开 core API 构建
-  Home、已存在的 XDG directories、Trash、Fika user places、primary
-  `places-order.xml`、Network root、network bookmarks、Root，以及 app 启动时从 GIO
-  snapshot 投影出的 mounted local devices，保留 row geometry，用
-  最长路径前缀决定 active place，Places hover 与 item hover 分离，并将左键 place
-  navigation 分派到同一 `load_path`/history path；Places sidebar 现在拥有独立 scroll
-  offset、clipped row rendering、圆角 active/hover row background、圆角窄 scrollbar
-  track/thumb，并支持 sidebar scrollbar thumb drag / track click-to-drag；Places 与 pane
-  之间保留 splitter+gap，Places panel 右侧也保留内边距，避免贴紧 pane；directory item 和 blank-directory
-  context menu 现在支持 Add to Places，会写回 Fika `places.xbel`、reload sidebar
-  projection，并持久化 primary place order；Places 右键现在会创建 shell-owned place
-  context target，并打开最小 context menu，分派 Open、Copy Location、Properties，以及
-  editable user places 的 Remove；Remove 会写回 Fika `places.xbel`，裁剪对应
-  place-order 条目，reload sidebar projection，并清理 stale place context state。
-  日志已输出
-  `--view icons|compact|details`，默认仍是 Icons baseline，Compact 使用 core
-  `CompactLayout`，Details 已有 shell-owned row projection、固定 header 和
-  Name/Size/Modified 三列；运行时可用 `1/2/3`、`Ctrl/Meta+1/2/3` 或 fallback `F1/F2/F3` 切换三种模式，
-  临时 top-bar mode buttons 已移除以贴近原版 app toolbar，真实 toolbar controls 仍待迁移，
-  `--auto-cycle-views` 可每秒自动切换一次以调试 compositor/render。切换会 clamp
-  active scroll axis、清理 transient rubber-band state、刷新 hover、更新窗口标题，
-  立即输出 `[fika-wgpu] view-mode=...` 日志，并保持短 redraw burst 直到切换后的
-  scene 被 present。
-  日志已输出 view mode、path、entry count、visible count、thumbnail candidate count、
-  retained visible slot active/free/reuse/recycle/allocation counters、
-  selected/hover/places/context/context-menu/properties/rubber-band state、
-  hit-test/selection/context/context-menu-action/properties/keyboard/rubber-band/view-switch/path-change/open/copy-location/file-clipboard/paste/places/zoom/DnD counters、quad/icon/text/batch count、
-  icon/text cache hit/miss/bytes、icon deferred/raster-deferred、layout/icon-resolve/icon-raster/text-raster/render
-  reason/time、icon/text atlas bytes 和 `scroll_x` / `scroll_y` offsets；本地目标 desktop
-  session 的 `timeout 4s target/debug/fika-wgpu --view icons|compact|details /etc`
-  smoke 均已到达 `shell-ready` 和 `frame=1`，输出 `surface-format=Rgba8Unorm srgb=0`
-  以及真实 icon/text atlas counters。
-  仍待接入 glyph-level cache/atlas retention、真实 Wayland DnD hover/export/drop 执行、手动打开/关闭/交互 smoke，
-  以及确认 Phase 0 默认 Compact/Icons 视图。
-- [~] Phase 1：Compact、Icons 和 Details scene projection 已开始接入。`/etc` 已可通过
-  `--view` 在三种模式下渲染首帧；Compact 走 core `CompactLayout`，Details 走 shell-owned
-  row projection。滚动、hover、keyboard navigation、directory activation/history navigation、
-  runtime mode switching、projection zoom、reload、location editing、filtering、hidden-file visibility、selection 和全选/清空快捷键已通过 shared
-  `ShellLayout` abstraction 走 retained geometry；
-  primary/split pane 现在开始通过 `ShellPaneProjection` 共享 pane view、geometry、visible
-  item、item painter、scroll metrics 和 path-keyed visible slot pool/reuse list；split pane
-  scrollbar/滚轮路由现在会更新目标 pane，frame log 不再为了 content scrollbar telemetry 重新计算一次主 pane layout；
-  glyph-level text zoom policy、`~/Downloads` smoke、手动交互 smoke
-  和更完整 Details column/metadata parity 仍待完成。
-- [~] Phase 2：把 Phase 0 初版 icon atlas 提升为预算化 semantic icon work，并实现 thumbnail texture retention、text shaping cache、glyph atlas policy 和 eviction telemetry。当前 semantic icon path resolve 已按 Dolphin role updater 思路移到后台 worker，frame 只消费 ready 结果并用 fallback 占位，new raster 每帧预算化；thumbnail candidates 已从可见 retained pane items 投影并输出 telemetry，第一版 wgpu thumbnail worker 已在 frame 外复用 core freedesktop cache/failure marker/thumbnailer registry 并把 ready PNG 光栅化进 icon atlas path；visible thumbnail 请求会优先于 deferred work，且每帧会按 Dolphin 顺序排入有界 read-ahead queue，ready read-ahead raster 会先进有上限的 resolver cache，日志输出 `thumb_read_ahead` 和 `thumb_ready` 计数。model role writeback、长期 thumbnail atlas retention、glyph policy 和 eviction telemetry 仍待完成。Cold glyph/icon/thumbnail work 必须 visible-first 且预算化。
-- [~] Phase 3：把剩余 pointer routing、context target selection、directory hover、Places hover 和 drag/drop target lookup 移到 shell-owned hit testing。当前 file view pane item/blank 右键 context target selection、菜单 row hit testing、Places row hover/left navigation/right-click target/sidebar scrolling 和最小 place menu（含 editable user place Remove）已由 wgpu shell-owned；mounted/unmounted devices metadata 已从 GIO snapshot 投影进 Places，并能生成 Mount/Unmount/Eject/Safely Remove context rows，device operation 执行仍待接 core；第一版 `ShellDropTarget` lookup 已可区分 primary/split pane item、pane blank、place row 和 Places blank，用同一 `ShellPaneView`/pane geometry 路径命中。主 pane item drag 已有内部 drag session，超过阈值后更新 retained drop hover，release 时为有效 pane/place target 生成 retained Copy request；真实 Wayland DnD hover/drop/export、执行该请求、directory hover、device monitor/actions、place edit/hide/add action dispatch 仍待迁移。
-- [~] Phase 4：实现 Places、toolbar、location bar、filter bar、status bar、context menus、dialogs 和 chooser mode，使常见文件管理器工作流不需要启动 GPUI shell。当前已有独立 app-level toolbar（移除临时 Back/Forward/Reload/Hidden/view-mode 鼠标按钮，仅保留原版 Places toggle 形态，相关 keyboard commands 仍可用；Places toggle 现在可实际隐藏/恢复 sidebar）、从 toolbar 下方带 margin 开始的 pane、顶部与 pane 起点对齐且补齐原版 title/row/icon 尺寸的圆角 shell-owned Places panel/左键 navigation/独立 sidebar scrolling/最小 Open-Copy Location-Properties-Remove row menu、mounted/unmounted device rows 和 Mount/Unmount/Eject/Safely Remove 菜单入口、Places splitter 拖拽改宽并有 `ColResize` cursor 提示、split-pane divider 拖拽改宽并有相同 cursor 提示、文件内容区 item-view scrollbar 显示/scroll offset 同步、内容区与 Places scrollbar 圆角 track/thumb 和 drag/click-to-drag 交互、pane-local 底部 status bar、窄实现 filter bar、28px pane-local location edit mode、不透明浅色 item/blank context menu overlay（原版 196px 宽度、28px row、4px vertical padding、8px viewport margin、edge flip/clamp 定位、18px icon slot、shadow、row separators、几何 fallback 图标，overlay quads/text 独立顶层 pass，避免底层 item text 透出，并用同一 padding-aware row hit-test 驱动 hover/点击）、最小 properties metadata overlay、最小 Create New modal、最小 Rename modal、最小 Move to Trash dispatch、最小 Trash view Restore/Delete Permanently/Empty Trash dispatch、最小 Trash restore conflict Replace overlay、file Open 默认应用分发、最小 Open With chooser/systemd-user launch plan 分发、item Copy Location Wayland text clipboard 分发、item Copy/Cut 的 Fika URI-list text clipboard 导出，以及 blank Paste 的本地文件/纯文本执行；Open directory、Open file、Open With chooser、Copy、Cut、Paste、Copy Location、Refresh、Select All、Properties、最小 Create New、最小 Rename、最小 Move to Trash、最小 Trash view actions 已接入 dispatch。更完整 Places actions/device monitor/device action execution/DnD、toolbar、完整 location/filter/create-name/rename-name/application-search 文本边界、多 MIME `text/uri-list` clipboard export/import、remote paste、更完整 Trash multi-conflict handling、undo、更完整 properties、完整 inline rename、完整 Create New 子菜单/模板、Open With default-app selection、new-pane actions、dialogs 和 chooser mode 仍待迁移。
-  当前增量：blank context menu 已接入 Show/Hide Hidden Files 和 Split View；
-  directory/place 的 Open in New Pane 会加载右侧 split pane 的真实目录内容；file-view
-  item hover/selection 改为圆角高亮；location bar 改为白底、细边框、leading folder
-  glyph、active focus ring 和垂直居中的真实 caret，并支持 Arrow/Home/End/Delete 光标编辑；
-  Places 与 pane 之间加入明确间距，pane 硬蓝/灰外框弱化为更贴近背景的细分隔线；Places sidebar 可通过 toolbar toggle 隐藏并释放 pane 宽度，也可拖拽 splitter 调整宽度；Places splitter 命中区已向 Places 内侧扩宽，且 Places scrollbar 在重叠区域优先于 splitter resize；地址栏 hover 显示 text cursor，Places splitter 和 split-pane divider hover/drag 均有 `ColResize` cursor 提示；Trash place 在为空时不再显示蓝色状态圆点。
-  Open With 直接应用子菜单、KDE/Fika service-menu TopLevel/More Actions/`X-KDE-Submenu` 子菜单和 service action systemd-user launch plan 已接入 wgpu context menu；application/service `Icon=` 现在会按 named theme icon 异步解析到 wgpu overlay icon pass，未解析成功时仍回退到紧凑 glyph。Properties/Create/Rename/Open With/Trash conflict overlay geometry 与 hit-test 现在按 window DPI factor 缩放。Thumbnail 工作已推进到 frame 外 core cache/thumbnailer probe、visible-priority dispatch、有界 Dolphin-order read-ahead queue、有界 resolver ready cache、background raster 和 mtime-keyed failure handling；完整 Dolphin/KIO PreviewJob cancellation、model-role writeback、长期 atlas retention 仍待完成。
-  当前 split pane 在交互焦点和 file operations 上仍是最小可见骨架，但 divider resize、content scrollbar 和滚轮路由已接入；pane 可复用化继续推进：
-  主 pane 与右侧 pane 现在可投影为同一个 `ShellPaneView`，并通过共享 `pane_layout(...)`
-  生成 Icons/Compact/Details layout；主/右 pane geometry 与 item hit-test 已抽到共享路径，primary/split pane item paint 已共用 `ShellPaneProjection` + generic pane item painter，scrollbar metrics 和 visible slot pool/reuse 也从同一 projection/metrics 路径读取。下一步必须继续把 pane focus 和 file-operation routing
-  接入同一个可复用 pane component，而不是继续堆 split-only 特例。
-- [ ] Phase 5：同场景证据证明行为对齐，且 frame cost 比 GPUI Fika 和相关 cosmic-files 基线更好或更可预测后，再把新 shell 提升为默认。默认化前必须有：`/etc`、`~/Downloads`、large-dir、split-pane 和 hidden-file smoke；GPUI fallback binary/launch path 保留；主线 binary 命名/desktop file/CLI default 选择清楚；scroll/zoom/context/location/Places/DnD 交互 smoke 有记录；性能日志至少覆盖 cold icon/text、steady scroll、view switch 和 split pane。
+- [~] Phase 0：`fika-sctk` 是唯一继续迁入新 shell 能力的目标。现状：
+  `src/bin/fika-sctk.rs` 仍是薄入口；实际实现拆入
+  `src/bin/fika_sctk/{options,app,renderer,scene,wayland,metrics,quad,text}.rs`。
+  它通过 `smithay-client-toolkit`/`wayland-client` 创建 xdg-window，用 raw Wayland
+  handle 初始化官方 crates.io `wgpu` surface，并通过 calloop `WaylandSource`
+  驱动 Wayland event queue。`fika-wgpu` 只保留为历史迁移输入和必要编译基线，
+  后续不得继续承接新 shell 行为。
+- [~] Phase 1：目录场景已经迁到 SCTK 基线。`SctkScene` 读取
+  `fika_core::read_entries_sync` 快照，持有 `ViewMode`、scroll、hover、selection，
+  用 core `IconsLayout`/`CompactLayout` 和 shell-owned Details rows 投影
+  `icons|compact|details` 三种 view。renderer 已从 clear-frame 升级为上传/绘制
+  quad batches，并绘制 app 背景、Places 面板、pane、地址栏、item fallback icon、
+  hover/selection 圆角高亮、content scrollbar、status bar 和 Details header。
+  Wayland pointer capability 已接入 hover、左键单选和滚轮 scroll，全部走同一
+  retained hit-test/scroll path。
+- [~] Phase 2：真实文本渲染已进入 SCTK。新增 `src/bin/fika_sctk/text.rs`，
+  使用 `cosmic-text` shaping/rasterization，把地址栏 path、Places 标题/行、status
+  summary、Icons/Compact 文件名、Details header/name/size/modified label 打包进
+  per-frame RGBA text atlas，并在 quad pass 后用 textured quad pass 绘制。`/etc`
+  三种 view smoke 均已到达 `shell-ready`/`frame=1`，并输出非零
+  `text_labels/text_quads/text_atlas` counters。下一步要把该第一版 per-frame atlas
+  提升为 retained glyph/label cache，补 eviction telemetry，避免 steady scroll 反复
+  rasterize 可见 label。
+- [ ] Phase 3：继续 pane 可复用化。当前 SCTK 仍是单 pane 场景对象；下一步要把
+  `SctkScene` 拆成可复用 pane model/projection/painter/input router，使 primary/split
+  pane 共享同一个 layout、visible range、scrollbar、selection、focus、status 和
+  file-operation routing。split view、pane focus、目录激活、keyboard navigation、
+  rubber-band、scrollbar drag、view switching、hidden toggle、filter/location edit
+  都还需要在 SCTK 路径重新落地。
+- [ ] Phase 4：迁入资产和系统集成热路径。MIME/theme icon atlas、Dolphin-style
+  visible-first icon resolve、thumbnail worker/read-ahead、device/Places 动态数据、
+  context menu、Open With、service menu、clipboard、Trash actions、file operations、
+  dialogs 和 chooser mode 仍未接到 SCTK shell。迁移时优先复用已有 core 能力，
+  UI 层只负责 retained geometry、hit-test、overlay state 和 GPU batches。
+- [ ] Phase 5：Wayland DnD 和主线化。需要完成 SCTK data-device export/drop、
+  internal pane/place drop target、copy/move/link drop menu、drag preview/hover、
+  外部 `text/uri-list` 互操作；然后用 `/etc`、`~/Downloads`、large-dir、
+  split-pane、hidden-file、thumbnail、context menu、DnD、scroll/zoom/location smoke
+  证明行为稳定，再决定把 `fika-sctk` 提升为默认。GPUI 保留为兼容 fallback，
+  `fika-wgpu` 只保留到迁移输入不再需要时删除。
 
 ### GPUI Item View 自绘 / Dolphin retained item 对齐（历史基线）
 

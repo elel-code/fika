@@ -97,8 +97,8 @@ The shell owns:
 
 Add a separate experimental binary, `fika-sctk`, without deleting the GPUI
 binary. It should open an SCTK xdg-window, initialize `wgpu` from raw Wayland
-handles, drive the existing directory listing model, and then host the retained
-scene/renderer code currently proven in `fika-wgpu`.
+handles, drive the existing directory listing model, and then migrate the
+retained scene/renderer behavior into the SCTK shell.
 
 The existing `fika-wgpu` binary remains a migration source for renderer,
 layout, hit-test, and cache behavior, but not the target window/event backend.
@@ -115,12 +115,19 @@ Current checkpoint:
   state, Icons/Compact/Details layout projection, and scene quad frame building.
   The SCTK renderer uploads and draws those quads, while Wayland pointer handling
   routes hover, left-click selection, and wheel scroll through the retained
-  scene hit-test path. Its entry point is a thin binary wrapper; startup options,
-  app/calloop orchestration, wgpu surface rendering, metrics, quad drawing, the
-  directory scene, and Wayland handlers live under `src/bin/fika_sctk/`.
+  scene hit-test path. Text is also rendered in SCTK now: `src/bin/fika_sctk/text.rs`
+  uses `cosmic-text` to shape/rasterize path, Places, status, item, and Details
+  labels into a per-frame RGBA atlas, then draws a textured quad pass after the
+  solid scene pass. Its entry point is a thin binary wrapper; startup options,
+  app/calloop orchestration, wgpu surface rendering, metrics, quad drawing, text
+  drawing, the directory scene, and Wayland handlers live under
+  `src/bin/fika_sctk/`.
 - New shell work should land in `src/bin/fika_sctk/`. The older
   winit-backed `fika-wgpu` spike is a history/reference baseline only and should
   not receive new shell behavior.
+
+Legacy migration input, read-only unless shared build breakage requires a fix:
+
 - `src/bin/fika-wgpu.rs` exists as the older winit-backed renderer spike.
 - It accepts an optional path argument and defaults to the current directory.
 - It reads directory entries through `fika_core::read_entries_sync`.

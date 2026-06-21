@@ -9,6 +9,7 @@ use wayland_client::{Connection, Proxy};
 
 use super::quad::QuadRenderer;
 use super::scene::SceneFrame;
+use super::text::TextRenderer;
 
 pub(crate) struct WgpuRenderer {
     adapter: wgpu::Adapter,
@@ -17,6 +18,7 @@ pub(crate) struct WgpuRenderer {
     queue: wgpu::Queue,
     format: Option<wgpu::TextureFormat>,
     quad_renderer: Option<QuadRenderer>,
+    text_renderer: Option<TextRenderer>,
     frame_count: u64,
 }
 
@@ -72,6 +74,7 @@ impl WgpuRenderer {
             queue,
             format: None,
             quad_renderer: None,
+            text_renderer: None,
             frame_count: 0,
         })
     }
@@ -120,6 +123,7 @@ impl WgpuRenderer {
         self.surface.configure(&self.device, &config);
         if self.format != Some(format) {
             self.quad_renderer = Some(QuadRenderer::new(&self.device, format));
+            self.text_renderer = Some(TextRenderer::new(&self.device, format));
             self.format = Some(format);
         }
         config
@@ -149,6 +153,18 @@ impl WgpuRenderer {
         if let Some(quad_renderer) = self.quad_renderer.as_mut() {
             quad_renderer.upload(&self.device, &self.queue, frame_scene.batch.vertices());
         }
+        let text_stats = if let Some(text_renderer) = self.text_renderer.as_mut() {
+            text_renderer.upload(
+                &self.device,
+                &self.queue,
+                &frame_scene.text,
+                frame.texture.width(),
+                frame.texture.height(),
+            );
+            text_renderer.stats()
+        } else {
+            Default::default()
+        };
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("fika-sctk-scene-pass"),
@@ -174,12 +190,15 @@ impl WgpuRenderer {
             if let Some(quad_renderer) = self.quad_renderer.as_ref() {
                 quad_renderer.draw(&mut pass);
             }
+            if let Some(text_renderer) = self.text_renderer.as_ref() {
+                text_renderer.draw(&mut pass);
+            }
         }
         self.queue.submit(Some(encoder.finish()));
         frame.present();
         self.frame_count = self.frame_count.wrapping_add(1);
         eprintln!(
-            "[fika-sctk] frame={} reason={} quads={} visible={} selected={} hover={} scroll_x={:.1} scroll_y={:.1}",
+            "[fika-sctk] frame={} reason={} quads={} visible={} selected={} hover={} text_labels={} text_quads={} text_atlas={}x{}:{}b scroll_x={:.1} scroll_y={:.1}",
             self.frame_count,
             reason,
             frame_scene.quads,
@@ -192,6 +211,11 @@ impl WgpuRenderer {
                 .hover
                 .map(|index| index.to_string())
                 .unwrap_or_else(|| "-1".to_string()),
+            text_stats.labels,
+            text_stats.quads,
+            text_stats.atlas_width,
+            text_stats.atlas_height,
+            text_stats.atlas_bytes,
             frame_scene.scroll_x,
             frame_scene.scroll_y,
         );

@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use fika_core::{
     CompactLayout, CompactLayoutOptions, Entry, IconsLayout, IconsLayoutOptions, ItemLayout,
-    ViewMode, ViewPoint, ViewRect, read_entries_sync,
+    ViewMode, ViewPoint, ViewRect, format_modified_secs, format_size, read_entries_sync,
 };
 
 use super::metrics::{
@@ -12,9 +12,18 @@ use super::metrics::{
     DETAILS_HEADER_HEIGHT, DETAILS_ICON_SIZE, DETAILS_ROW_HEIGHT, ICONS_ICON_SIZE,
     ICONS_ITEM_HEIGHT, ICONS_ITEM_WIDTH, PANE_MARGIN, PLACES_ICON_SIZE, PLACES_PANEL_MARGIN_BOTTOM,
     PLACES_PANEL_MARGIN_X, PLACES_ROW_HEIGHT, PLACES_TITLE_HEIGHT, PLACES_TO_PANE_GAP,
-    PLACES_WIDTH, STATUS_BAR_HEIGHT, TOP_BAR_HEIGHT,
+    PLACES_WIDTH, STATUS_BAR_HEIGHT, TEXT_FONT_SIZE, TEXT_LINE_HEIGHT, TOP_BAR_HEIGHT,
 };
 use super::quad::{QuadBatch, inset};
+use super::text::TextBatch;
+
+const DETAIL_NAME_COLUMN_WIDTH: f32 = 360.0;
+const DETAIL_SIZE_COLUMN_WIDTH: f32 = 110.0;
+const DETAIL_MODIFIED_COLUMN_WIDTH: f32 = 180.0;
+const TEXT_PRIMARY: [u8; 4] = [36, 41, 47, 255];
+const TEXT_MUTED: [u8; 4] = [89, 99, 110, 255];
+const TEXT_SELECTED: [u8; 4] = [255, 255, 255, 255];
+const TEXT_DIRECTORY: [u8; 4] = [31, 79, 191, 255];
 
 pub(crate) struct SctkScene {
     path: PathBuf,
@@ -80,14 +89,22 @@ impl SctkScene {
         self.clamp_scroll(width, height);
         let geometry = self.geometry(width, height);
         let mut batch = QuadBatch::default();
-        self.push_chrome(&mut batch, geometry, width, height);
+        let mut text = TextBatch::default();
+        self.push_chrome(&mut batch, &mut text, geometry, width, height);
         let visible_items = match self.view_mode {
             ViewMode::Icons => {
                 let layout = self.icons_layout(geometry.content);
                 let items: Vec<_> = layout.visible_items().collect();
                 let visible_items = items.len();
                 for item in items {
-                    self.push_item(&mut batch, &item, geometry.content, width, height);
+                    self.push_item(
+                        &mut batch,
+                        &mut text,
+                        &item,
+                        geometry.content,
+                        width,
+                        height,
+                    );
                 }
                 visible_items
             }
@@ -96,19 +113,28 @@ impl SctkScene {
                 let items: Vec<_> = layout.visible_items().collect();
                 let visible_items = items.len();
                 for item in items {
-                    self.push_item(&mut batch, &item, geometry.content, width, height);
+                    self.push_item(
+                        &mut batch,
+                        &mut text,
+                        &item,
+                        geometry.content,
+                        width,
+                        height,
+                    );
                 }
                 visible_items
             }
             ViewMode::Details => {
-                self.push_details_items(&mut batch, geometry.content, width, height)
+                self.push_details_items(&mut batch, &mut text, geometry.content, width, height)
             }
         };
+        self.push_status_text(&mut text, geometry.pane, visible_items);
         self.push_content_scrollbar(&mut batch, geometry.content, width, height);
 
         let quads = batch.len();
         SceneFrame {
             batch,
+            text,
             quads,
             visible_items,
             selected: self.selected,
@@ -184,7 +210,14 @@ impl SctkScene {
         }
     }
 
-    fn push_chrome(&self, batch: &mut QuadBatch, geometry: SceneGeometry, width: u32, height: u32) {
+    fn push_chrome(
+        &self,
+        batch: &mut QuadBatch,
+        text: &mut TextBatch,
+        geometry: SceneGeometry,
+        width: u32,
+        height: u32,
+    ) {
         let window = ViewRect {
             x: 0.0,
             y: 0.0,
@@ -224,7 +257,20 @@ impl SctkScene {
                 width,
                 height,
             );
-            self.push_places_rows(batch, places, width, height);
+            text.push(
+                "Places",
+                ViewRect {
+                    x: places.x + 14.0,
+                    y: places.y + 7.0,
+                    width: places.width - 28.0,
+                    height: TEXT_LINE_HEIGHT,
+                },
+                places,
+                TEXT_FONT_SIZE,
+                TEXT_LINE_HEIGHT,
+                TEXT_MUTED,
+            );
+            self.push_places_rows(batch, text, places, width, height);
         }
 
         batch.push_clipped_rounded_rect(
@@ -234,6 +280,40 @@ impl SctkScene {
             [0.975, 0.98, 0.985, 1.0],
             width,
             height,
+        );
+        let location_bar = ViewRect {
+            x: geometry.pane.x + 12.0,
+            y: geometry.pane.y + 5.0,
+            width: (geometry.pane.width - 24.0).max(1.0),
+            height: (TOP_BAR_HEIGHT - 10.0).max(1.0),
+        };
+        batch.push_clipped_rounded_rect(
+            location_bar,
+            window,
+            6.0,
+            [1.0, 1.0, 1.0, 1.0],
+            width,
+            height,
+        );
+        let location_icon = ViewRect {
+            x: location_bar.x + 9.0,
+            y: location_bar.y + (location_bar.height - 14.0) / 2.0,
+            width: 14.0,
+            height: 14.0,
+        };
+        self.push_folder_glyph(batch, location_icon, location_bar, width, height);
+        text.push_no_wrap(
+            self.path.display().to_string(),
+            ViewRect {
+                x: location_icon.right() + 8.0,
+                y: location_bar.y + (location_bar.height - TEXT_LINE_HEIGHT) / 2.0,
+                width: (location_bar.right() - location_icon.right() - 16.0).max(1.0),
+                height: TEXT_LINE_HEIGHT,
+            },
+            location_bar,
+            TEXT_FONT_SIZE,
+            TEXT_LINE_HEIGHT,
+            TEXT_PRIMARY,
         );
         batch.push_rect(
             ViewRect {
@@ -280,10 +360,18 @@ impl SctkScene {
                 width,
                 height,
             );
+            self.push_details_header_text(text, geometry.content);
         }
     }
 
-    fn push_places_rows(&self, batch: &mut QuadBatch, places: ViewRect, width: u32, height: u32) {
+    fn push_places_rows(
+        &self,
+        batch: &mut QuadBatch,
+        text: &mut TextBatch,
+        places: ViewRect,
+        width: u32,
+        height: u32,
+    ) {
         let clip = inset(places, 6.0);
         let rows = [
             ("Home", true),
@@ -293,7 +381,7 @@ impl SctkScene {
             ("Trash", false),
             ("Root", self.path == PathBuf::from("/")),
         ];
-        for (row, (_, active)) in rows.iter().enumerate() {
+        for (row, (label, active)) in rows.iter().enumerate() {
             let y = places.y + PLACES_TITLE_HEIGHT + 8.0 + row as f32 * PLACES_ROW_HEIGHT;
             let rect = ViewRect {
                 x: places.x + 8.0,
@@ -325,12 +413,26 @@ impl SctkScene {
                 width,
                 height,
             );
+            text.push_no_wrap(
+                *label,
+                ViewRect {
+                    x: icon.right() + 9.0,
+                    y: rect.y + (rect.height - TEXT_LINE_HEIGHT) / 2.0,
+                    width: (rect.right() - icon.right() - 17.0).max(1.0),
+                    height: TEXT_LINE_HEIGHT,
+                },
+                clip,
+                TEXT_FONT_SIZE,
+                TEXT_LINE_HEIGHT,
+                if *active { TEXT_PRIMARY } else { TEXT_MUTED },
+            );
         }
     }
 
     fn push_item(
         &self,
         batch: &mut QuadBatch,
+        text: &mut TextBatch,
         item: &ItemLayout,
         content: ViewRect,
         width: u32,
@@ -341,7 +443,7 @@ impl SctkScene {
         };
         let visual = self.to_screen_rect(item.visual_rect, content);
         let icon = self.to_screen_rect(item.icon_rect, content);
-        let text = self.to_screen_rect(item.text_rect, content);
+        let text_rect = self.to_screen_rect(item.text_rect, content);
         let selected = self.selected == Some(item.model_index);
         let hovered = self.hover == Some(item.model_index);
         if selected || hovered {
@@ -360,23 +462,32 @@ impl SctkScene {
         }
 
         self.push_icon(batch, icon, content, entry.is_dir, width, height);
-        batch.push_clipped_rounded_rect(
-            text,
-            content,
-            3.0,
-            if selected {
-                [0.17, 0.33, 0.55, 0.55]
-            } else {
-                [0.74, 0.78, 0.82, 0.45]
-            },
-            width,
-            height,
-        );
+        let color = item_text_color(entry, selected, self.view_mode);
+        match self.view_mode {
+            ViewMode::Icons => text.push_centered(
+                entry.name.as_ref(),
+                text_rect,
+                content,
+                TEXT_FONT_SIZE,
+                TEXT_LINE_HEIGHT,
+                color,
+            ),
+            ViewMode::Compact => text.push_no_wrap(
+                entry.name.as_ref(),
+                text_rect,
+                content,
+                TEXT_FONT_SIZE,
+                TEXT_LINE_HEIGHT,
+                color,
+            ),
+            ViewMode::Details => {}
+        }
     }
 
     fn push_details_items(
         &self,
         batch: &mut QuadBatch,
+        text: &mut TextBatch,
         content: ViewRect,
         width: u32,
         height: u32,
@@ -422,18 +533,46 @@ impl SctkScene {
                 height: DETAILS_ICON_SIZE,
             };
             self.push_icon(batch, icon, content, entry.is_dir, width, height);
-            batch.push_clipped_rounded_rect(
+            let name_rect = ViewRect {
+                x: icon.right() + 8.0,
+                y: row_rect.y + (row_rect.height - TEXT_LINE_HEIGHT) / 2.0,
+                width: (DETAIL_NAME_COLUMN_WIDTH - icon.width - 24.0).max(1.0),
+                height: TEXT_LINE_HEIGHT,
+            };
+            text.push_no_wrap(
+                entry.name.as_ref(),
+                name_rect,
+                content,
+                TEXT_FONT_SIZE,
+                TEXT_LINE_HEIGHT,
+                item_text_color(entry, self.selected == Some(index), self.view_mode),
+            );
+            let metadata_y = row_rect.y + (row_rect.height - TEXT_LINE_HEIGHT) / 2.0;
+            text.push_no_wrap(
+                details_size_label(entry),
                 ViewRect {
-                    x: icon.right() + 8.0,
-                    y: row_rect.y + 7.0,
-                    width: row_rect.width.min(260.0),
-                    height: 10.0,
+                    x: content.x + DETAIL_NAME_COLUMN_WIDTH + 8.0,
+                    y: metadata_y,
+                    width: DETAIL_SIZE_COLUMN_WIDTH - 16.0,
+                    height: TEXT_LINE_HEIGHT,
                 },
                 content,
-                2.0,
-                [0.62, 0.66, 0.70, 0.70],
-                width,
-                height,
+                TEXT_FONT_SIZE,
+                TEXT_LINE_HEIGHT,
+                TEXT_MUTED,
+            );
+            text.push_no_wrap(
+                format_modified_secs(entry.modified_secs),
+                ViewRect {
+                    x: content.x + DETAIL_NAME_COLUMN_WIDTH + DETAIL_SIZE_COLUMN_WIDTH + 8.0,
+                    y: metadata_y,
+                    width: DETAIL_MODIFIED_COLUMN_WIDTH - 16.0,
+                    height: TEXT_LINE_HEIGHT,
+                },
+                content,
+                TEXT_FONT_SIZE,
+                TEXT_LINE_HEIGHT,
+                TEXT_MUTED,
             );
         }
         visible
@@ -495,6 +634,42 @@ impl SctkScene {
                 height,
             );
         }
+    }
+
+    fn push_folder_glyph(
+        &self,
+        batch: &mut QuadBatch,
+        icon: ViewRect,
+        clip: ViewRect,
+        width: u32,
+        height: u32,
+    ) {
+        batch.push_clipped_rounded_rect(
+            ViewRect {
+                x: icon.x + icon.width * 0.10,
+                y: icon.y + icon.height * 0.18,
+                width: icon.width * 0.44,
+                height: icon.height * 0.24,
+            },
+            clip,
+            2.0,
+            [0.96, 0.70, 0.26, 1.0],
+            width,
+            height,
+        );
+        batch.push_clipped_rounded_rect(
+            ViewRect {
+                x: icon.x,
+                y: icon.y + icon.height * 0.32,
+                width: icon.width,
+                height: icon.height * 0.58,
+            },
+            clip,
+            3.0,
+            [0.90, 0.58, 0.18, 1.0],
+            width,
+            height,
+        );
     }
 
     fn push_content_scrollbar(
@@ -623,6 +798,81 @@ impl SctkScene {
         )
     }
 
+    fn push_details_header_text(&self, text: &mut TextBatch, content: ViewRect) {
+        let y = content.y + (DETAILS_HEADER_HEIGHT - TEXT_LINE_HEIGHT) / 2.0;
+        text.push_no_wrap(
+            "Name",
+            ViewRect {
+                x: content.x + 34.0,
+                y,
+                width: DETAIL_NAME_COLUMN_WIDTH - 42.0,
+                height: TEXT_LINE_HEIGHT,
+            },
+            content,
+            TEXT_FONT_SIZE,
+            TEXT_LINE_HEIGHT,
+            TEXT_MUTED,
+        );
+        text.push_no_wrap(
+            "Size",
+            ViewRect {
+                x: content.x + DETAIL_NAME_COLUMN_WIDTH + 8.0,
+                y,
+                width: DETAIL_SIZE_COLUMN_WIDTH - 16.0,
+                height: TEXT_LINE_HEIGHT,
+            },
+            content,
+            TEXT_FONT_SIZE,
+            TEXT_LINE_HEIGHT,
+            TEXT_MUTED,
+        );
+        text.push_no_wrap(
+            "Modified",
+            ViewRect {
+                x: content.x + DETAIL_NAME_COLUMN_WIDTH + DETAIL_SIZE_COLUMN_WIDTH + 8.0,
+                y,
+                width: DETAIL_MODIFIED_COLUMN_WIDTH - 16.0,
+                height: TEXT_LINE_HEIGHT,
+            },
+            content,
+            TEXT_FONT_SIZE,
+            TEXT_LINE_HEIGHT,
+            TEXT_MUTED,
+        );
+    }
+
+    fn status_text(&self, visible_items: usize) -> String {
+        let selected = self
+            .selected
+            .map(|_| ", 1 selected".to_string())
+            .unwrap_or_default();
+        format!(
+            "{} items, {} folders, {} files, {} visible, {}{}",
+            self.entries.len(),
+            self.dir_count(),
+            self.file_count(),
+            visible_items,
+            self.view_mode.as_str(),
+            selected,
+        )
+    }
+
+    fn push_status_text(&self, text: &mut TextBatch, pane: ViewRect, visible_items: usize) {
+        text.push_no_wrap(
+            self.status_text(visible_items),
+            ViewRect {
+                x: pane.x + 12.0,
+                y: pane.bottom() - STATUS_BAR_HEIGHT + (STATUS_BAR_HEIGHT - TEXT_LINE_HEIGHT) / 2.0,
+                width: (pane.width - 24.0).max(1.0),
+                height: TEXT_LINE_HEIGHT,
+            },
+            pane,
+            TEXT_FONT_SIZE,
+            TEXT_LINE_HEIGHT,
+            TEXT_MUTED,
+        );
+    }
+
     fn geometry(&self, width: u32, height: u32) -> SceneGeometry {
         let window_width = width as f32;
         let window_height = height as f32;
@@ -709,12 +959,33 @@ struct SceneGeometry {
 
 pub(crate) struct SceneFrame {
     pub(crate) batch: QuadBatch,
+    pub(crate) text: TextBatch,
     pub(crate) quads: usize,
     pub(crate) visible_items: usize,
     pub(crate) selected: Option<usize>,
     pub(crate) hover: Option<usize>,
     pub(crate) scroll_x: f32,
     pub(crate) scroll_y: f32,
+}
+
+fn item_text_color(entry: &Entry, selected: bool, view_mode: ViewMode) -> [u8; 4] {
+    if selected {
+        TEXT_SELECTED
+    } else if view_mode != ViewMode::Details && entry.is_dir {
+        TEXT_DIRECTORY
+    } else {
+        TEXT_PRIMARY
+    }
+}
+
+fn details_size_label(entry: &Entry) -> String {
+    if entry.is_dir {
+        "Folder".to_string()
+    } else if !entry.metadata_complete && entry.size_bytes == 0 && entry.modified_secs.is_none() {
+        "-".to_string()
+    } else {
+        format_size(entry.size_bytes)
+    }
 }
 
 #[cfg(test)]
@@ -774,6 +1045,7 @@ mod tests {
                 frame.visible_items > 0,
                 "{mode:?} should project visible items"
             );
+            assert!(frame.text.len() > 0, "{mode:?} should paint real labels");
         }
     }
 

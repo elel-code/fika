@@ -6,6 +6,7 @@ mod options;
 mod quad;
 mod renderer;
 mod scene;
+mod text;
 mod wayland;
 
 pub(crate) fn run() -> Result<(), Box<dyn Error>> {
