@@ -210,7 +210,9 @@ Current checkpoint:
   context menu that dispatches Open, Copy Location, Properties, and Remove for
   editable user places. Remove writes Fika's `places.xbel`, prunes matching
   place-order entries, reloads the sidebar projection, and clears stale place
-  context state. Dynamic devices, richer Places actions such as sidebar
+  context state. The app-start Places projection now also consumes a GIO
+  `DeviceInfo` snapshot and adds mounted local devices under Devices. Live
+  device monitoring, mount/eject actions, richer Places actions such as sidebar
   add/edit and Trash actions, and real Wayland DnD hover/drop/export remain
   Phase 4 work.
 - Blank-space left-drag now runs rubber-band selection through the same
@@ -270,10 +272,11 @@ Current checkpoint:
   retained or pruned through the same projection when the visibility mode
   changes. The app-level Hidden toggle remains toolbar migration work.
 - `[fika-wgpu]` logs include view mode, window/UI scale, path, entry count,
-  visible item count,
+  visible item count, thumbnail candidate count, retained visible slot
+  active/free/reuse/recycle/allocation counters,
   Places count/hover/change/scroll counters, quad count, selected count, hovered item index, active rubber-band state,
   context target kind, context menu state, properties overlay state, hit-test/selection/keyboard navigation/rubber-band/view-switch/path-change/open/copy-location/file-clipboard/paste
-  counters, reload/location/filter/hidden counters, zoom percent and zoom-change counters, icon count, icon cache
+  counters, reload/location/filter/hidden counters, DnD hover/drop-request counters, zoom percent and zoom-change counters, icon count, icon cache
   hit/miss count, icon cache bytes, icon atlas bytes, icon resolve/raster time,
   text label count, text cache hit/miss count, text cache bytes, text atlas
   bytes, draw batch count, render reason, layout time, text raster time, render
@@ -298,12 +301,15 @@ Acceptance:
 - [~] Routes basic pointer hover, mouse selection, keyboard navigation,
   select-all/clear shortcuts, right-click context target selection, and
   rubber-band selection through retained geometry. Basic DnD target lookup now
-  resolves pane/place targets; real Wayland DnD hover/drop/export remains
-  pending.
+  resolves pane/place targets, and primary-pane item drags can create an
+  internal retained copy drop request for pane blanks, directory items, and
+  Places. Real Wayland DnD hover/drop/export and executing the requested
+  operation remain pending.
 - [~] Emits frame timing, visible range, draw-command counters, temporary
-  icon/text atlas counters, retained hit-test counters, and bounded
-  icon/label-cache counters. Glyph-level and thumbnail atlas counters will
-  start once those resource retention layers exist.
+  icon/text atlas counters, retained hit-test counters, bounded
+  icon/label-cache counters, visible slot reuse counters, and thumbnail
+  candidate counters. Glyph-level and thumbnail atlas counters will start once
+  those resource retention layers exist.
 
 ### Phase 1: File View Parity Core
 
@@ -319,7 +325,10 @@ Acceptance:
   select-all/clear shortcuts work from retained geometry for the initial
   projections. Glyph-level text zoom policy remains pending.
 - [~] Layout/hit-test/paint share the same shell layout abstraction for Icons,
-  Compact, and Details.
+  Compact, and Details. Primary and split panes now share `ShellPaneView`,
+  `ShellPaneProjection`, generic item paint, scrollbar metrics, and a
+  path-keyed visible slot pool/reuse list modeled after the existing Dolphin
+  retained item-view work.
 - No synchronous theme scan, MIME magic read, thumbnail decode, or text shaping
   occurs in the steady render pass.
 
@@ -334,7 +343,8 @@ Acceptance:
 - Zoom does not invalidate loaded same-semantic icons except when size/DPI
   requires a new raster.
 - Cold glyph/icon work is budgeted and visible-first.
-- Cached thumbnails appear on the first eligible frame.
+- Thumbnail candidates are projected from the visible retained pane items;
+  cached thumbnail decode/upload and atlas retention remain the next step.
 - Cache logs show hit/miss/evict/bytes and per-frame compute time.
 
 ### Phase 3: Interaction and DnD
@@ -347,11 +357,15 @@ Acceptance:
 - [~] Pane item/blank right-click context target selection and the first
   shell-owned context menu overlay are in the file view. Places row hover,
   left-click navigation, right-click context targets, and the minimal
-  Open/Copy Location/Properties/Remove place menu are shell-owned. Device/place
-  edit/hide/add action dispatch remains pending. The first `ShellDropTarget`
+  Open/Copy Location/Properties/Remove place menu are shell-owned. Mounted
+  devices are projected into Places from a GIO snapshot; live device monitoring
+  and device/place edit/hide/add action dispatch remain pending. The first `ShellDropTarget`
   lookup now resolves primary/split pane items, pane blanks, place rows, and
-  Places blanks through shared `ShellPaneView`/pane geometry; real Wayland DnD
-  hover/drop/export wiring remains pending.
+  Places blanks through shared `ShellPaneView`/pane geometry. Primary-pane item
+  drags now enter an internal drag session, update retained drop hover after
+  the movement threshold, and produce a retained Copy request on release for
+  valid pane/place targets; real Wayland DnD hover/drop/export wiring and
+  executing that request remain pending.
 - Pane item to pane directory, pane item to Places, Places to pane, external
   path drop, and URI-list clipboard paths are covered by automated or isolated
   smoke runs.
@@ -413,22 +427,26 @@ and split-pane divider both show `ColResize` cursor feedback while hovered or
 dragged, and the location bar now shows a text cursor on hover. The Places
 splitter hit target is wider toward the Places side while the Places scrollbar
 keeps priority where the two overlap. Empty Trash no longer paints the blue
-status dot. The split pane is intentionally still a minimal visible skeleton:
-focus, split-pane scrollbars, real DnD, and file operations still target the
-primary pane, but its divider now supports retained drag-resize. Multi-pane work
-now projects both the primary and right-hand pane through `ShellPaneView`, shares
-`pane_layout(...)` for Icons, Compact, and Details, shares pane geometry/item
-hit-testing, and has started using `ShellPaneProjection` for primary/split item
-paint plus shared scroll metrics. The next step must continue that extraction
-through pane focus, scrollbar, and file-operation routing instead of adding more
-split-only paths. The first DnD preparation layer is in place through
-`ShellDropTarget` lookup for primary/split pane items, pane blanks, place rows,
-and Places blanks; retained DnD hover state/telemetry now exists, but regular
-pointer movement does not run extra drop hit-testing until real Wayland DnD
-events are wired. Real Wayland DnD hover/drop/export wiring remains pending.
-Richer Places actions/devices/DnD, richer Trash conflict handling, undo, richer properties, full inline
-rename, full Create New submenus/templates, and Open With default-app selection
-remain pending.
+status dot. The split pane is still a visible skeleton for focus and file
+operations, but its divider supports retained drag-resize and its own content
+scrollbar/wheel routing now updates the targeted pane instead of the primary
+pane. Multi-pane work now projects both the primary and right-hand pane through
+`ShellPaneView`, shares `pane_layout(...)` for Icons, Compact, and Details,
+shares pane geometry/item hit-testing, uses `ShellPaneProjection` for
+primary/split item paint plus shared scroll metrics, and maintains a retained
+visible slot pool with active/free/reused/recycled/allocation telemetry. The
+next step must continue that extraction through pane focus and file-operation
+routing instead of adding more split-only paths. The first DnD preparation layer
+has advanced from target lookup to a basic internal primary-item drag session:
+movement past the threshold updates retained drop hover and release creates a
+Copy `ShellDropOperationRequest` for valid pane/place targets. Real Wayland
+DnD hover/drop/export wiring and executing those requests remain pending. The
+Places Devices section now includes mounted GIO devices at app startup; live
+device monitoring and mount/eject actions remain pending. Thumbnail work has a
+visible-item candidate projection and frame telemetry, but decode/upload and
+atlas retention are still pending. Richer Places actions/DnD, richer Trash
+conflict handling, undo, richer properties, full inline rename, full Create New
+submenus/templates, and Open With default-app selection remain pending.
 
 Acceptance:
 
