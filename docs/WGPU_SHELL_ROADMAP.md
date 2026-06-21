@@ -106,7 +106,7 @@ Current checkpoint:
 - It projects entries through the existing `IconsLayout` retained geometry and
   a shell-owned Compact projection that derives each column width from the
   longest visible name in that column.
-- It renders a top path bar, visible item backgrounds, real theme file/folder
+- It renders a pane-local path bar, visible item backgrounds, real theme file/folder
   icons when the active XDG icon theme can resolve them, fallback file/folder
   icon shapes for misses, and real visible file names. Text uses
   `cosmic-text` for shaping/rasterization, then uploads a temporary per-frame
@@ -155,7 +155,8 @@ Current checkpoint:
   blank directory target without starting rubber-band selection. The shell now
   stores a lightweight context target snapshot, opens a clamped shell-owned
   context menu overlay for item/blank targets, updates row hover, closes on Esc
-  or outside click, dispatches Open for directory items, dispatches Open for file
+  or outside click, paints an opaque light menu surface instead of the earlier
+  translucent dark overlay, dispatches Open for directory items, dispatches Open for file
   items through GIO default-application URI launch, opens a minimal
   shell-owned Open With chooser for file items using core `MimeApplicationCache`
   and systemd-user launch plans, dispatches item Copy Location to a shell-owned
@@ -187,14 +188,16 @@ Current checkpoint:
   `text/uri-list` clipboard export/import, richer multi-conflict handling,
   undo, richer properties, full inline rename, full Create New
   submenus/templates, and new-pane dispatch remain Phase 4 work.
-- A first shell-owned Places sidebar is now drawn below the top bar. It builds
-  Home, existing XDG directories, Trash, Fika user places, primary
+- A first shell-owned Places sidebar is now drawn as a rounded light panel whose
+  top edge aligns with the content pane body below the pane-local header. It builds Home, existing XDG
+  directories, Trash, Fika user places, primary
   `places-order.xml`, Network root, network bookmarks, and Root from public
   core APIs, keeps retained row geometry, uses longest-prefix active-place
   projection, updates sidebar hover independently from item hover, owns an
   independent sidebar scroll offset with clipped row rendering and a narrow
-  scrollbar thumb, and dispatches left-click place navigation through the same
-  `load_path`/history path as file-view navigation. Places
+  scrollbar thumb, paints rounded active/hovered row backgrounds, and dispatches
+  left-click place navigation through the same `load_path`/history path as
+  file-view navigation. Places
   right-click now creates a shell-owned place context target and a minimal
   context menu that dispatches Open, Copy Location, Properties, and Remove for
   editable user places. Remove writes Fika's `places.xbel`, prunes matching
@@ -230,7 +233,11 @@ Current checkpoint:
   icon metrics, scroll is clamped, the focused item is kept visible, and the icon
   resolver now requests rasters at the zoomed slot size. Glyph-level text sizing
   and long-lived glyph atlas policy remain Phase 2 work.
-- A minimal shell-owned status bar is now drawn at the bottom of the window. It
+- The shell now prefers a non-sRGB surface format when the compositor offers one,
+  because its UI colors and icon/text atlases are already authored in display
+  byte space; this avoids the earlier washed-out sRGB double-conversion look.
+- A minimal shell-owned status bar is now drawn at the bottom of the content
+  pane, not across the Places sidebar. It
   summarizes entry, directory, file, selection, visible-item, view-mode, and zoom
   state, reserves content viewport height, and is excluded from item hit testing.
 - A minimal shell-owned filter bar is now available with `Ctrl/Meta+F`.
@@ -239,7 +246,7 @@ Current checkpoint:
   Esc clears/deactivates it. Layout, hit testing, hover, selection, select-all, and
   keyboard navigation all route through the filtered model-index projection.
   Full IME/caret/selection editing remains Phase 4 text-boundary work.
-- A minimal shell-owned location edit mode is now available from `Ctrl/Meta+L`,
+- A minimal shell-owned pane-local location edit mode is now available from `Ctrl/Meta+L`,
   `Ctrl/Meta+D`, `F6`, or clicking the top path bar. It reuses core
   `resolve_location_input` and `complete_location_input`: first typed input
   replaces the current path draft, Backspace edits the draft, Tab completes
@@ -261,8 +268,8 @@ Current checkpoint:
   time, and `scroll_x` / `scroll_y` offsets.
 - Local target-session smokes with `timeout 4s target/debug/fika-wgpu --view
   icons|compact|details /etc` reached `shell-ready` and emitted `frame=1` on
-  Vulkan with real icon/text atlas counters. The timeout exits are expected for
-  the automated smokes.
+  Vulkan with `surface-format=Rgba8Unorm srgb=0` and real icon/text atlas
+  counters. The timeout exits are expected for the automated smokes.
 
 Still pending in Phase 0: glyph-level cache/atlas retention, manual
 open/close/interaction smoke evidence, DnD targeting, and the final choice of
@@ -340,12 +347,12 @@ Acceptance:
 Implement the surrounding UI needed to make the shell usable: Places, toolbar,
 location bar, filter bar, status bar, context menus, dialogs, and chooser mode.
 
-Current checkpoint: the first chrome slices are a minimal shell-owned Places
-sidebar with left-click navigation and a minimal Open/Copy
-Location/Properties/Remove row context menu, a minimal bottom status bar with
-directory/selection/view/zoom summary, a minimal `Ctrl/Meta+F` filter bar, a
-minimal `Ctrl/Meta+L`/`Ctrl/Meta+D`/`F6` location edit mode, and a lightweight
-file-view context menu overlay for item/blank right-clicks. Properties opens a
+Current checkpoint: the first chrome slices are a minimal shell-owned rounded
+Places panel aligned to the pane content/body area with left-click navigation and a minimal
+Open/Copy Location/Properties/Remove row context menu, a pane-local bottom
+status bar with directory/selection/view/zoom summary, a minimal `Ctrl/Meta+F`
+filter bar, a pane-local `Ctrl/Meta+L`/`Ctrl/Meta+D`/`F6` location edit mode, and a lightweight
+opaque light file-view context menu overlay for item/blank right-clicks. Properties opens a
 minimal metadata overlay for item and blank-directory targets. Create New opens
 a minimal shell-owned modal for blank-directory targets and performs real
 folder/file creation followed by reload and selection. Rename opens a minimal

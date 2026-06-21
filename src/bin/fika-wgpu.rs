@@ -62,8 +62,6 @@ const VIEW_SWITCH_REDRAW_FRAMES: u8 = 6;
 const VIEW_MODE_BUTTON_WIDTH: f32 = 86.0;
 const VIEW_MODE_BUTTON_HEIGHT: f32 = 24.0;
 const VIEW_MODE_BUTTON_GAP: f32 = 6.0;
-const VIEW_MODE_STRIPE_HEIGHT: f32 = 8.0;
-const VIEW_MODE_RAIL_WIDTH: f32 = 6.0;
 const NAV_BUTTON_WIDTH: f32 = 28.0;
 const NAV_UP_BUTTON_WIDTH: f32 = 36.0;
 const NAV_RELOAD_BUTTON_WIDTH: f32 = 58.0;
@@ -72,6 +70,8 @@ const NAV_BUTTON_HEIGHT: f32 = 24.0;
 const NAV_BUTTON_GAP: f32 = 6.0;
 const PLACES_SIDEBAR_WIDTH: f32 = 216.0;
 const PLACES_SIDEBAR_SPLITTER_WIDTH: f32 = 1.0;
+const PLACES_SIDEBAR_PANEL_MARGIN_X: f32 = 8.0;
+const PLACES_SIDEBAR_PANEL_MARGIN_BOTTOM: f32 = 8.0;
 const PLACES_SIDEBAR_PADDING_X: f32 = 8.0;
 const PLACES_SIDEBAR_TOP_PADDING: f32 = 8.0;
 const PLACES_SECTION_HEIGHT: f32 = 24.0;
@@ -3615,19 +3615,24 @@ impl ShellScene {
         point: ViewPoint,
         size: PhysicalSize<u32>,
     ) -> Option<ShellViewMode> {
-        view_mode_button_rects(size.width.max(1) as f32, self.ui_scale())
-            .into_iter()
-            .find_map(|(mode, rect)| rect.contains(point).then_some(mode))
+        view_mode_button_rects(
+            size.width.max(1) as f32,
+            self.ui_scale(),
+            self.content_origin_x(size),
+        )
+        .into_iter()
+        .find_map(|(mode, rect)| rect.contains(point).then_some(mode))
     }
 
     fn path_bar_rect(&self, size: PhysicalSize<u32>) -> Option<ViewRect> {
         let width = size.width.max(1) as f32;
         let scale = self.ui_scale();
-        let path_x = path_bar_start_x(scale);
+        let origin_x = self.content_origin_x(size);
+        let path_x = path_bar_start_x(scale, origin_x);
         let path_width = if self.is_location_editing() {
-            path_bar_available_width(width, path_x, scale)
+            path_bar_available_width(width, path_x, scale, origin_x)
         } else {
-            path_placeholder_width(&self.path, width, path_x, scale)
+            path_placeholder_width(&self.path, width, path_x, scale, origin_x)
         };
         let rect = ViewRect {
             x: path_x,
@@ -3646,9 +3651,9 @@ impl ShellScene {
     fn path_navigation_action_at_screen_point(
         &self,
         point: ViewPoint,
-        _size: PhysicalSize<u32>,
+        size: PhysicalSize<u32>,
     ) -> Option<PathNavigationAction> {
-        path_navigation_button_rects(self.ui_scale())
+        path_navigation_button_rects(self.ui_scale(), self.content_origin_x(size))
             .into_iter()
             .find_map(|(action, rect)| {
                 (rect.contains(point) && self.path_navigation_action_enabled(action))
@@ -3707,8 +3712,8 @@ impl ShellScene {
     }
 
     fn place_row_rects(&self, size: PhysicalSize<u32>) -> Vec<(usize, ViewRect)> {
-        let sidebar = self.places_sidebar_rect(size);
-        if sidebar.width <= 0.0 || sidebar.height <= 0.0 {
+        let panel = self.places_panel_rect(size);
+        if panel.width <= 0.0 || panel.height <= 0.0 {
             return Vec::new();
         }
         let mut rows = Vec::with_capacity(self.places.len());
@@ -3717,19 +3722,19 @@ impl ShellScene {
         let section_height = self.scale_metric(PLACES_SECTION_HEIGHT);
         let row_height = self.scale_metric(PLACES_ROW_HEIGHT);
         let row_gap = self.scale_metric(PLACES_ROW_GAP);
-        let mut y = sidebar.y + top_padding - self.places_scroll_y;
+        let mut y = panel.y + top_padding - self.places_scroll_y;
         let mut previous_group = None;
         for (index, place) in self.places.iter().enumerate() {
             if !place.group.is_empty() && previous_group != Some(place.group) {
                 y += section_height;
             }
             let rect = ViewRect {
-                x: sidebar.x + padding_x,
+                x: panel.x + padding_x,
                 y,
-                width: (sidebar.width - padding_x * 2.0).max(1.0),
+                width: (panel.width - padding_x * 2.0).max(1.0),
                 height: row_height,
             };
-            if rect.y < sidebar.bottom() && rect.bottom() > sidebar.y {
+            if rect.y < panel.bottom() && rect.bottom() > panel.y {
                 rows.push((index, rect));
             }
             y += row_height + row_gap;
@@ -3740,13 +3745,29 @@ impl ShellScene {
 
     fn places_sidebar_rect(&self, size: PhysicalSize<u32>) -> ViewRect {
         let width = self.places_sidebar_width(size);
-        let top_bar_height = self.top_bar_height();
-        let height = (size.height as f32 - top_bar_height - self.status_bar_height()).max(0.0);
+        let height = size.height as f32;
         ViewRect {
             x: 0.0,
-            y: top_bar_height,
+            y: 0.0,
             width,
             height,
+        }
+    }
+
+    fn places_panel_rect(&self, size: PhysicalSize<u32>) -> ViewRect {
+        let sidebar = self.places_sidebar_rect(size);
+        let margin_x = self
+            .scale_metric(PLACES_SIDEBAR_PANEL_MARGIN_X)
+            .min(sidebar.width / 3.0);
+        let margin_bottom = self
+            .scale_metric(PLACES_SIDEBAR_PANEL_MARGIN_BOTTOM)
+            .min(sidebar.height / 3.0);
+        let y = sidebar.y + self.top_bar_height();
+        ViewRect {
+            x: sidebar.x + margin_x,
+            y,
+            width: (sidebar.width - margin_x * 2.0).max(1.0),
+            height: (sidebar.bottom() - y - margin_bottom).max(1.0),
         }
     }
 
@@ -3772,23 +3793,23 @@ impl ShellScene {
     }
 
     fn max_places_scroll_y(&self, size: PhysicalSize<u32>) -> f32 {
-        let sidebar = self.places_sidebar_rect(size);
-        (self.places_content_height() - sidebar.height).max(0.0)
+        let panel = self.places_panel_rect(size);
+        (self.places_content_height() - panel.height).max(0.0)
     }
 
     fn places_scrollbar_thumb_rect(&self, size: PhysicalSize<u32>) -> Option<ViewRect> {
-        let sidebar = self.places_sidebar_rect(size);
+        let panel = self.places_panel_rect(size);
         let max_scroll = self.max_places_scroll_y(size);
-        if sidebar.width <= 0.0 || sidebar.height <= 0.0 || max_scroll <= f32::EPSILON {
+        if panel.width <= 0.0 || panel.height <= 0.0 || max_scroll <= f32::EPSILON {
             return None;
         }
 
         let scrollbar_margin = self.scale_metric(PLACES_SCROLLBAR_MARGIN);
         let scrollbar_width = self.scale_metric(PLACES_SCROLLBAR_WIDTH);
         let min_thumb_height = self.scale_metric(PLACES_SCROLLBAR_MIN_THUMB_HEIGHT);
-        let track_height = (sidebar.height - scrollbar_margin * 2.0).max(1.0);
-        let content_height = self.places_content_height().max(sidebar.height);
-        let thumb_height = (sidebar.height / content_height * track_height)
+        let track_height = (panel.height - scrollbar_margin * 2.0).max(1.0);
+        let content_height = self.places_content_height().max(panel.height);
+        let thumb_height = (panel.height / content_height * track_height)
             .clamp(min_thumb_height.min(track_height), track_height);
         let travel = (track_height - thumb_height).max(0.0);
         let scroll_ratio = if max_scroll <= f32::EPSILON {
@@ -3797,8 +3818,8 @@ impl ShellScene {
             (self.places_scroll_y / max_scroll).clamp(0.0, 1.0)
         };
         Some(ViewRect {
-            x: sidebar.right() - scrollbar_margin - scrollbar_width,
-            y: sidebar.y + scrollbar_margin + travel * scroll_ratio,
+            x: panel.right() - scrollbar_margin - scrollbar_width,
+            y: panel.y + scrollbar_margin + travel * scroll_ratio,
             width: scrollbar_width,
             height: thumb_height,
         })
@@ -5483,12 +5504,12 @@ impl ShellScene {
         push_rect(
             &mut vertices,
             ViewRect {
-                x: 0.0,
+                x: content_origin_x,
                 y: 0.0,
-                width,
+                width: self.pane_width(size),
                 height: top_bar_height,
             },
-            [0.105, 0.112, 0.120, 1.0],
+            chrome_color(),
             size,
         );
         self.push_path_navigation_buttons(&mut vertices, text, size);
@@ -5498,10 +5519,23 @@ impl ShellScene {
                 &mut vertices,
                 path_rect,
                 if location_active {
-                    [0.190, 0.225, 0.252, 1.0]
+                    [0.918, 0.953, 1.000, 1.0]
                 } else {
-                    [0.170, 0.184, 0.198, 1.0]
+                    [1.000, 1.000, 1.000, 1.0]
                 },
+                size,
+            );
+            push_clipped_rect_outline(
+                &mut vertices,
+                path_rect,
+                ViewRect {
+                    x: content_origin_x,
+                    y: 0.0,
+                    width: self.pane_width(size),
+                    height: top_bar_height,
+                },
+                1.0,
+                [0.784, 0.808, 0.839, 1.0],
                 size,
             );
             let path_label = self
@@ -5518,50 +5552,24 @@ impl ShellScene {
                     height: self.text_line_height(),
                 },
                 ViewRect {
-                    x: 0.0,
+                    x: content_origin_x,
                     y: 0.0,
-                    width,
+                    width: self.pane_width(size),
                     height: top_bar_height,
                 },
-                TextColor::rgb(222, 228, 232),
+                TextColor::rgb(36, 41, 47),
             );
         }
         self.push_view_mode_buttons(&mut vertices, text, size);
         self.push_places_sidebar(&mut vertices, text, size);
+        let pane_body = self.pane_body_rect(size);
         push_rect(
             &mut vertices,
-            ViewRect {
-                x: content_origin_x,
-                y: top_bar_height,
-                width: content_width,
-                height: (height - top_bar_height).max(1.0),
-            },
+            pane_body,
             view_mode_content_color(self.view_mode),
             size,
         );
         self.push_filter_bar(&mut vertices, text, size);
-        push_rect(
-            &mut vertices,
-            ViewRect {
-                x: content_origin_x,
-                y: top_bar_height,
-                width: self.scale_metric(VIEW_MODE_RAIL_WIDTH),
-                height: (height - top_bar_height).max(1.0),
-            },
-            view_mode_badge_color(self.view_mode),
-            size,
-        );
-        push_rect(
-            &mut vertices,
-            ViewRect {
-                x: content_origin_x,
-                y: content_origin_y,
-                width: content_width,
-                height: self.scale_metric(VIEW_MODE_STRIPE_HEIGHT),
-            },
-            view_mode_badge_color(self.view_mode),
-            size,
-        );
         if self.view_mode == ShellViewMode::Details {
             self.push_details_header(&mut vertices, text, size);
         }
@@ -5591,6 +5599,7 @@ impl ShellScene {
         self.push_rubber_band(&mut vertices, content_clip, size);
         self.push_content_scrollbar(&mut vertices, size);
         self.push_status_bar(&mut vertices, text, size, visible_items, status_bar);
+        self.push_pane_borders(&mut vertices, size);
         self.push_context_menu_overlay(&mut vertices, text, size);
         self.push_properties_overlay(&mut vertices, text, size);
         self.push_create_dialog_overlay(&mut vertices, text, size);
@@ -5620,7 +5629,26 @@ impl ShellScene {
         if sidebar.width <= 0.0 || sidebar.height <= 0.0 {
             return;
         }
-        push_rect(vertices, sidebar, [0.074, 0.082, 0.091, 1.0], size);
+        let panel = self.places_panel_rect(size);
+        let panel_radius = self.scale_metric(12.0);
+        push_clipped_rounded_rect(
+            vertices,
+            panel,
+            sidebar,
+            panel_radius,
+            [0.784, 0.808, 0.839, 1.0],
+            size,
+        );
+        if let Some(inner_panel) = inset_rect(panel, self.scale_metric(1.0)) {
+            push_clipped_rounded_rect(
+                vertices,
+                inner_panel,
+                sidebar,
+                (panel_radius - self.scale_metric(1.0)).max(1.0),
+                sidebar_color(),
+                size,
+            );
+        }
         push_rect(
             vertices,
             ViewRect {
@@ -5629,7 +5657,7 @@ impl ShellScene {
                 width: self.scale_metric(PLACES_SIDEBAR_SPLITTER_WIDTH),
                 height: sidebar.height,
             },
-            [0.18, 0.20, 0.22, 1.0],
+            [0.784, 0.808, 0.839, 1.0],
             size,
         );
 
@@ -5642,45 +5670,67 @@ impl ShellScene {
         let icon_size = self.scale_metric(PLACES_ICON_SIZE);
         let text_height = self.text_line_height();
         let small_text_height = self.small_text_line_height();
-        let mut y = sidebar.y + top_padding - self.places_scroll_y;
+        let mut y = panel.y + top_padding - self.places_scroll_y;
         let mut previous_group = None;
         for (index, place) in self.places.iter().enumerate() {
             if !place.group.is_empty() && previous_group != Some(place.group) {
                 let section = ViewRect {
-                    x: sidebar.x + padding_x + self.scale_metric(4.0),
+                    x: panel.x + padding_x + self.scale_metric(4.0),
                     y: y + self.scale_metric(4.0),
-                    width: (sidebar.width - padding_x * 2.0 - self.scale_metric(8.0)).max(1.0),
+                    width: (panel.width - padding_x * 2.0 - self.scale_metric(8.0)).max(1.0),
                     height: small_text_height,
                 };
-                if section.y < sidebar.bottom() && section.bottom() > sidebar.y {
-                    text.push_label(place.group, section, sidebar, TextColor::rgb(136, 148, 160));
+                if section.y < panel.bottom() && section.bottom() > panel.y {
+                    text.push_label(place.group, section, panel, TextColor::rgb(136, 148, 160));
                 }
                 y += section_height;
             }
 
             let row = ViewRect {
-                x: sidebar.x + padding_x,
+                x: panel.x + padding_x,
                 y,
-                width: (sidebar.width - padding_x * 2.0).max(1.0),
+                width: (panel.width - padding_x * 2.0).max(1.0),
                 height: row_height,
             };
-            if row.y < sidebar.bottom() && row.bottom() > sidebar.y {
+            if row.y < panel.bottom() && row.bottom() > panel.y {
                 let active = active_place == Some(index);
                 let hovered = self.hovered_place == Some(index);
-                push_clipped_rect(
-                    vertices,
-                    row,
-                    sidebar,
-                    place_row_background_color(active, hovered),
-                    size,
-                );
+                if active {
+                    push_clipped_rounded_rect(
+                        vertices,
+                        row,
+                        panel,
+                        self.scale_metric(8.0),
+                        [0.749, 0.859, 0.996, 1.0],
+                        size,
+                    );
+                    if let Some(inner_row) = inset_rect(row, self.scale_metric(1.0)) {
+                        push_clipped_rounded_rect(
+                            vertices,
+                            inner_row,
+                            panel,
+                            self.scale_metric(7.0),
+                            place_row_background_color(active, hovered),
+                            size,
+                        );
+                    }
+                } else if hovered {
+                    push_clipped_rounded_rect(
+                        vertices,
+                        row,
+                        panel,
+                        self.scale_metric(8.0),
+                        place_row_background_color(active, hovered),
+                        size,
+                    );
+                }
                 let icon = ViewRect {
                     x: row.x + self.scale_metric(8.0),
                     y: row.y + (row.height - icon_size) / 2.0,
                     width: icon_size,
                     height: icon_size,
                 };
-                push_clipped_rect(vertices, icon, sidebar, place_marker_color(place), size);
+                push_clipped_rect(vertices, icon, panel, place_marker_color(place), size);
                 text.push_label(
                     place.marker,
                     ViewRect {
@@ -5689,7 +5739,7 @@ impl ShellScene {
                         width: (icon.width - self.scale_metric(6.0)).max(1.0),
                         height: small_text_height,
                     },
-                    sidebar,
+                    panel,
                     TextColor::rgb(248, 250, 252),
                 );
                 text.push_label(
@@ -5700,11 +5750,11 @@ impl ShellScene {
                         width: (row.width - self.scale_metric(42.0)).max(1.0),
                         height: text_height,
                     },
-                    sidebar,
+                    panel,
                     if active {
-                        TextColor::rgb(244, 249, 252)
+                        TextColor::rgb(31, 79, 191)
                     } else {
-                        TextColor::rgb(194, 204, 214)
+                        TextColor::rgb(36, 41, 47)
                     },
                 );
             }
@@ -5717,12 +5767,12 @@ impl ShellScene {
             let scrollbar_margin = self.scale_metric(PLACES_SCROLLBAR_MARGIN);
             let track = ViewRect {
                 x: thumb.x,
-                y: sidebar.y + scrollbar_margin,
+                y: panel.y + scrollbar_margin,
                 width: thumb.width,
-                height: (sidebar.height - scrollbar_margin * 2.0).max(1.0),
+                height: (panel.height - scrollbar_margin * 2.0).max(1.0),
             };
-            push_rect(vertices, track, [0.12, 0.135, 0.15, 1.0], size);
-            push_rect(vertices, thumb, [0.48, 0.54, 0.60, 1.0], size);
+            push_rect(vertices, track, [0.902, 0.922, 0.945, 1.0], size);
+            push_rect(vertices, thumb, [0.596, 0.647, 0.714, 1.0], size);
         }
     }
 
@@ -5732,26 +5782,39 @@ impl ShellScene {
         text: &mut TextFrameBuilder<'_>,
         size: PhysicalSize<u32>,
     ) {
-        let width = size.width.max(1) as f32;
         let top_bar_height = self.top_bar_height();
         let clip = ViewRect {
-            x: 0.0,
+            x: self.content_origin_x(size),
             y: 0.0,
-            width,
+            width: self.pane_width(size),
             height: top_bar_height,
         };
-        for (action, rect) in path_navigation_button_rects(self.ui_scale()) {
+        for (action, rect) in
+            path_navigation_button_rects(self.ui_scale(), self.content_origin_x(size))
+        {
             let enabled = self.path_navigation_action_enabled(action);
             let active = matches!(action, PathNavigationAction::ToggleHidden) && self.show_hidden;
             push_rect(
                 vertices,
                 rect,
                 if active {
-                    view_mode_badge_color(self.view_mode)
+                    [0.918, 0.953, 1.000, 1.0]
                 } else if enabled {
-                    [0.145, 0.154, 0.164, 1.0]
+                    [1.000, 1.000, 1.000, 1.0]
                 } else {
-                    [0.095, 0.101, 0.108, 1.0]
+                    [0.933, 0.945, 0.960, 1.0]
+                },
+                size,
+            );
+            push_clipped_rect_outline(
+                vertices,
+                rect,
+                clip,
+                1.0,
+                if active {
+                    [0.561, 0.773, 0.992, 1.0]
+                } else {
+                    [0.784, 0.808, 0.839, 1.0]
                 },
                 size,
             );
@@ -5765,11 +5828,11 @@ impl ShellScene {
                 },
                 clip,
                 if active {
-                    TextColor::rgb(246, 250, 252)
+                    TextColor::rgb(31, 79, 191)
                 } else if enabled {
-                    TextColor::rgb(222, 228, 232)
+                    TextColor::rgb(36, 41, 47)
                 } else {
-                    TextColor::rgb(105, 115, 124)
+                    TextColor::rgb(122, 132, 148)
                 },
             );
         }
@@ -5784,20 +5847,34 @@ impl ShellScene {
         let width = size.width.max(1) as f32;
         let top_bar_height = self.top_bar_height();
         let clip = ViewRect {
-            x: 0.0,
+            x: self.content_origin_x(size),
             y: 0.0,
-            width,
+            width: self.pane_width(size),
             height: top_bar_height,
         };
-        for (mode, rect) in view_mode_button_rects(width, self.ui_scale()) {
+        for (mode, rect) in
+            view_mode_button_rects(width, self.ui_scale(), self.content_origin_x(size))
+        {
             let active = mode == self.view_mode;
             push_rect(
                 vertices,
                 rect,
                 if active {
-                    view_mode_badge_color(mode)
+                    [0.918, 0.953, 1.000, 1.0]
                 } else {
-                    [0.145, 0.154, 0.164, 1.0]
+                    [1.000, 1.000, 1.000, 1.0]
+                },
+                size,
+            );
+            push_clipped_rect_outline(
+                vertices,
+                rect,
+                clip,
+                1.0,
+                if active {
+                    [0.561, 0.773, 0.992, 1.0]
+                } else {
+                    [0.784, 0.808, 0.839, 1.0]
                 },
                 size,
             );
@@ -5811,9 +5888,9 @@ impl ShellScene {
                 },
                 clip,
                 if active {
-                    TextColor::rgb(246, 250, 252)
+                    TextColor::rgb(31, 79, 191)
                 } else {
-                    TextColor::rgb(176, 187, 198)
+                    TextColor::rgb(89, 99, 110)
                 },
             );
         }
@@ -5834,7 +5911,7 @@ impl ShellScene {
             width,
             height: self.details_header_height(),
         };
-        push_rect(vertices, header, [0.100, 0.108, 0.117, 1.0], size);
+        push_rect(vertices, header, [0.953, 0.961, 0.973, 1.0], size);
         push_rect(
             vertices,
             ViewRect {
@@ -5843,7 +5920,7 @@ impl ShellScene {
                 width,
                 height: 1.0,
             },
-            [0.20, 0.22, 0.24, 1.0],
+            [0.784, 0.808, 0.839, 1.0],
             size,
         );
         let name_width = self.details_name_width();
@@ -5876,7 +5953,7 @@ impl ShellScene {
                     height: self.text_line_height(),
                 },
                 header,
-                TextColor::rgb(170, 181, 192),
+                TextColor::rgb(89, 99, 110),
             );
         }
     }
@@ -5890,7 +5967,7 @@ impl ShellScene {
         let Some(rect) = self.filter_bar_rect(size) else {
             return;
         };
-        push_rect(vertices, rect, [0.112, 0.122, 0.132, 1.0], size);
+        push_rect(vertices, rect, [0.973, 0.976, 0.984, 1.0], size);
         push_rect(
             vertices,
             ViewRect {
@@ -5899,7 +5976,7 @@ impl ShellScene {
                 width: rect.width,
                 height: 1.0,
             },
-            [0.22, 0.25, 0.28, 1.0],
+            [0.784, 0.808, 0.839, 1.0],
             size,
         );
         text.push_label(
@@ -5911,7 +5988,7 @@ impl ShellScene {
                 height: self.text_line_height(),
             },
             rect,
-            TextColor::rgb(176, 187, 198),
+            TextColor::rgb(89, 99, 110),
         );
         let pattern = if self.filter_pattern.is_empty() {
             ""
@@ -5927,7 +6004,7 @@ impl ShellScene {
                 height: self.text_line_height(),
             },
             rect,
-            TextColor::rgb(230, 236, 241),
+            TextColor::rgb(36, 41, 47),
         );
     }
 
@@ -6014,11 +6091,11 @@ impl ShellScene {
         }
 
         let text_color = if selected {
-            TextColor::rgb(242, 248, 252)
+            TextColor::rgb(15, 23, 42)
         } else if entry.is_dir {
-            TextColor::rgb(222, 205, 163)
+            TextColor::rgb(31, 79, 191)
         } else {
-            TextColor::rgb(194, 202, 212)
+            TextColor::rgb(36, 41, 47)
         };
         if self.view_mode == ShellViewMode::Compact {
             text.push_label_aligned(
@@ -6098,9 +6175,9 @@ impl ShellScene {
         }
 
         let text_color = if selected {
-            TextColor::rgb(242, 248, 252)
+            TextColor::rgb(15, 23, 42)
         } else {
-            TextColor::rgb(202, 211, 220)
+            TextColor::rgb(36, 41, 47)
         };
         text.push_label(entry.name.as_ref(), name_rect, content_clip, text_color);
         let text_height = self.text_line_height();
@@ -6117,7 +6194,7 @@ impl ShellScene {
                 height: text_height,
             },
             content_clip,
-            TextColor::rgb(170, 181, 192),
+            TextColor::rgb(89, 99, 110),
         );
         text.push_label(
             &format_modified_secs(entry.modified_secs),
@@ -6129,7 +6206,7 @@ impl ShellScene {
                 height: text_height,
             },
             content_clip,
-            TextColor::rgb(170, 181, 192),
+            TextColor::rgb(89, 99, 110),
         );
     }
 
@@ -6165,16 +6242,16 @@ impl ShellScene {
         if rect.height <= 0.0 {
             return;
         }
-        push_rect(vertices, rect, [0.088, 0.096, 0.104, 1.0], size);
+        push_rect(vertices, rect, [1.000, 1.000, 1.000, 1.0], size);
         push_rect(
             vertices,
             ViewRect {
-                x: 0.0,
+                x: rect.x,
                 y: rect.y,
                 width: rect.width,
                 height: 1.0,
             },
-            [0.19, 0.21, 0.23, 1.0],
+            [0.784, 0.808, 0.839, 1.0],
             size,
         );
 
@@ -6231,13 +6308,40 @@ impl ShellScene {
         text.push_label(
             &status,
             ViewRect {
-                x: self.scale_metric(12.0),
+                x: rect.x + self.scale_metric(12.0),
                 y: rect.y + self.scale_metric(5.0),
                 width: (rect.width - self.scale_metric(24.0)).max(1.0),
                 height: self.text_line_height(),
             },
             rect,
-            TextColor::rgb(178, 188, 198),
+            TextColor::rgb(89, 99, 110),
+        );
+    }
+
+    fn push_pane_borders(&self, vertices: &mut Vec<QuadVertex>, size: PhysicalSize<u32>) {
+        let screen = ViewRect {
+            x: 0.0,
+            y: 0.0,
+            width: size.width.max(1) as f32,
+            height: size.height.max(1) as f32,
+        };
+        let pane = self.pane_rect(size);
+        let body = self.pane_body_rect(size);
+        push_clipped_rect_outline(
+            vertices,
+            pane,
+            screen,
+            1.0,
+            [0.184, 0.435, 0.929, 1.0],
+            size,
+        );
+        push_clipped_rect_outline(
+            vertices,
+            body,
+            screen,
+            1.0,
+            [0.835, 0.851, 0.875, 1.0],
+            size,
         );
     }
 
@@ -6245,8 +6349,8 @@ impl ShellScene {
         let Some((track, thumb)) = self.content_scrollbar_rects(size) else {
             return;
         };
-        push_rect(vertices, track, [0.20, 0.22, 0.25, 0.40], size);
-        push_rect(vertices, thumb, [0.53, 0.57, 0.64, 1.0], size);
+        push_rect(vertices, track, [0.902, 0.922, 0.945, 1.0], size);
+        push_rect(vertices, thumb, [0.596, 0.647, 0.714, 1.0], size);
     }
 
     fn push_context_menu_overlay(
@@ -6265,8 +6369,8 @@ impl ShellScene {
             width: size.width.max(1) as f32,
             height: size.height.max(1) as f32,
         };
-        push_rect(vertices, rect, [0.118, 0.128, 0.140, 0.98], size);
-        push_clipped_rect_outline(vertices, rect, clip, 1.0, [0.28, 0.32, 0.36, 1.0], size);
+        push_rect(vertices, rect, [1.000, 1.000, 1.000, 1.0], size);
+        push_clipped_rect_outline(vertices, rect, clip, 1.0, [0.784, 0.808, 0.839, 1.0], size);
 
         for (row, action) in context_menu_actions(&menu.target).iter().enumerate() {
             let row_rect = ViewRect {
@@ -6276,9 +6380,9 @@ impl ShellScene {
                 height: CONTEXT_MENU_ROW_HEIGHT,
             };
             if menu.hovered_row == Some(row) {
-                push_rect(vertices, row_rect, [0.19, 0.33, 0.50, 0.88], size);
+                push_rect(vertices, row_rect, [0.918, 0.945, 1.000, 1.0], size);
             } else if row % 2 == 1 {
-                push_rect(vertices, row_rect, [0.105, 0.114, 0.126, 0.44], size);
+                push_rect(vertices, row_rect, [0.973, 0.980, 0.988, 1.0], size);
             }
             text.push_label(
                 action.label(),
@@ -6290,9 +6394,9 @@ impl ShellScene {
                 },
                 rect,
                 if menu.hovered_row == Some(row) {
-                    TextColor::rgb(246, 250, 252)
+                    TextColor::rgb(31, 79, 191)
                 } else {
-                    TextColor::rgb(218, 226, 234)
+                    TextColor::rgb(36, 41, 47)
                 },
             );
         }
@@ -6999,6 +7103,31 @@ impl ShellScene {
         (size.width as f32 - self.content_origin_x(size) - reserved).max(1.0)
     }
 
+    fn pane_width(&self, size: PhysicalSize<u32>) -> f32 {
+        (size.width as f32 - self.content_origin_x(size)).max(1.0)
+    }
+
+    fn pane_rect(&self, size: PhysicalSize<u32>) -> ViewRect {
+        ViewRect {
+            x: self.content_origin_x(size),
+            y: 0.0,
+            width: self.pane_width(size),
+            height: size.height.max(1) as f32,
+        }
+    }
+
+    fn pane_body_rect(&self, size: PhysicalSize<u32>) -> ViewRect {
+        let pane = self.pane_rect(size);
+        let status_bar = self.status_bar_rect(size);
+        let y = self.top_bar_height();
+        ViewRect {
+            x: pane.x,
+            y,
+            width: pane.width,
+            height: (status_bar.y - y).max(1.0),
+        }
+    }
+
     fn viewport_height(&self, size: PhysicalSize<u32>) -> f32 {
         let reserved = if self.content_scrollbar_axis() == ContentScrollbarAxis::Horizontal {
             self.scale_metric(CONTENT_SCROLLBAR_RESERVED_EXTENT)
@@ -7034,13 +7163,13 @@ impl ShellScene {
     }
 
     fn status_bar_rect(&self, size: PhysicalSize<u32>) -> ViewRect {
-        let width = size.width.max(1) as f32;
         let height = size.height.max(1) as f32;
         let bar_height = self.status_bar_height().min(height);
+        let x = self.content_origin_x(size);
         ViewRect {
-            x: 0.0,
+            x,
             y: height - bar_height,
-            width,
+            width: self.pane_width(size),
             height: bar_height,
         }
     }
@@ -7778,7 +7907,7 @@ impl WgpuState {
             .formats
             .iter()
             .copied()
-            .find(|format| format.is_srgb())
+            .find(|format| !format.is_srgb())
             .or_else(|| capabilities.formats.first().copied())
             .ok_or_else(|| "surface has no supported formats".to_string())?;
         let present_mode = capabilities
@@ -7792,6 +7921,10 @@ impl WgpuState {
             .first()
             .copied()
             .unwrap_or(wgpu::CompositeAlphaMode::Auto);
+        eprintln!(
+            "[fika-wgpu] surface-format={format:?} srgb={}",
+            format.is_srgb() as u8
+        );
 
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -9401,6 +9534,67 @@ fn push_clipped_rect(
     }
 }
 
+fn push_clipped_rounded_rect(
+    vertices: &mut Vec<QuadVertex>,
+    rect: ViewRect,
+    clip: ViewRect,
+    radius: f32,
+    color: [f32; 4],
+    size: PhysicalSize<u32>,
+) {
+    if rect.width <= 0.0 || rect.height <= 0.0 || color[3] <= 0.0 {
+        return;
+    }
+    let radius = radius.min(rect.width / 2.0).min(rect.height / 2.0).max(0.0);
+    if radius <= 1.0 {
+        push_clipped_rect(vertices, rect, clip, color, size);
+        return;
+    }
+
+    let middle_height = (rect.height - radius * 2.0).max(0.0);
+    if middle_height > 0.0 {
+        push_clipped_rect(
+            vertices,
+            ViewRect {
+                x: rect.x,
+                y: rect.y + radius,
+                width: rect.width,
+                height: middle_height,
+            },
+            clip,
+            color,
+            size,
+        );
+    }
+
+    let steps = radius.ceil().clamp(4.0, 16.0) as usize;
+    let step_height = radius / steps as f32;
+    for step in 0..steps {
+        let y = rect.y + step as f32 * step_height;
+        let midpoint_y = y + step_height / 2.0;
+        let dy = rect.y + radius - midpoint_y;
+        let inset = radius - (radius * radius - dy * dy).max(0.0).sqrt();
+        let strip_width = rect.width - inset * 2.0;
+        if strip_width <= 0.0 {
+            continue;
+        }
+        let top = ViewRect {
+            x: rect.x + inset,
+            y,
+            width: strip_width,
+            height: step_height,
+        };
+        let bottom = ViewRect {
+            x: rect.x + inset,
+            y: rect.bottom() - (step + 1) as f32 * step_height,
+            width: strip_width,
+            height: step_height,
+        };
+        push_clipped_rect(vertices, top, clip, color, size);
+        push_clipped_rect(vertices, bottom, clip, color, size);
+    }
+}
+
 fn push_clipped_rect_outline(
     vertices: &mut Vec<QuadVertex>,
     rect: ViewRect,
@@ -10370,6 +10564,18 @@ fn intersect_rect(rect: ViewRect, clip: ViewRect) -> Option<ViewRect> {
     })
 }
 
+fn inset_rect(rect: ViewRect, inset: f32) -> Option<ViewRect> {
+    let inset = inset.max(0.0);
+    let width = rect.width - inset * 2.0;
+    let height = rect.height - inset * 2.0;
+    (width > 0.0 && height > 0.0).then_some(ViewRect {
+        x: rect.x + inset,
+        y: rect.y + inset,
+        width,
+        height,
+    })
+}
+
 fn inset_content_scrollbar_slot(slot: ViewRect, scale_factor: f32) -> Option<ViewRect> {
     let inset = (CONTENT_SCROLLBAR_PADDING * scale_factor).round().max(1.0);
     let width = slot.width - inset * 2.0;
@@ -10426,10 +10632,10 @@ fn point_distance(left: ViewPoint, right: ViewPoint) -> f32 {
 
 fn place_row_background_color(active: bool, hovered: bool) -> [f32; 4] {
     match (active, hovered) {
-        (true, true) => [0.20, 0.37, 0.58, 0.96],
-        (true, false) => [0.16, 0.30, 0.48, 0.90],
-        (false, true) => [0.16, 0.18, 0.20, 0.90],
-        (false, false) => [0.095, 0.104, 0.114, 0.22],
+        (true, true) => [0.918, 0.945, 1.000, 1.0],
+        (true, false) => [0.918, 0.945, 1.000, 1.0],
+        (false, true) => [0.933, 0.953, 0.973, 1.0],
+        (false, false) => [0.0, 0.0, 0.0, 0.0],
     }
 }
 
@@ -10449,20 +10655,20 @@ fn place_marker_color(place: &ShellPlace) -> [f32; 4] {
 
 fn item_background_color(selected: bool, hovered: bool) -> [f32; 4] {
     match (selected, hovered) {
-        (true, true) => [0.20, 0.37, 0.58, 0.92],
-        (true, false) => [0.16, 0.30, 0.49, 0.86],
-        (false, true) => [0.19, 0.21, 0.23, 0.72],
-        (false, false) => [0.135, 0.145, 0.155, 0.34],
+        (true, true) => [0.812, 0.890, 1.000, 1.0],
+        (true, false) => [0.859, 0.918, 0.996, 1.0],
+        (false, true) => [0.918, 0.945, 1.000, 1.0],
+        (false, false) => [0.0, 0.0, 0.0, 0.0],
     }
 }
 
 fn details_row_background_color(selected: bool, hovered: bool, index: usize) -> [f32; 4] {
     match (selected, hovered, index % 2 == 0) {
-        (true, true, _) => [0.20, 0.37, 0.58, 0.92],
-        (true, false, _) => [0.16, 0.30, 0.49, 0.86],
-        (false, true, _) => [0.18, 0.20, 0.22, 0.82],
-        (false, false, true) => [0.105, 0.112, 0.120, 0.55],
-        (false, false, false) => [0.086, 0.092, 0.100, 0.55],
+        (true, true, _) => [0.812, 0.890, 1.000, 1.0],
+        (true, false, _) => [0.859, 0.918, 0.996, 1.0],
+        (false, true, _) => [0.918, 0.945, 1.000, 1.0],
+        (false, false, true) => [1.000, 1.000, 1.000, 1.0],
+        (false, false, false) => [0.973, 0.980, 0.988, 1.0],
     }
 }
 
@@ -10477,37 +10683,40 @@ fn view_mode_clear_color(view_mode: ShellViewMode) -> wgpu::Color {
 }
 
 fn view_mode_surface_color(view_mode: ShellViewMode) -> [f32; 4] {
-    match view_mode {
-        ShellViewMode::Icons => [0.060, 0.073, 0.087, 1.0],
-        ShellViewMode::Compact => [0.056, 0.082, 0.067, 1.0],
-        ShellViewMode::Details => [0.076, 0.061, 0.086, 1.0],
-    }
+    let _ = view_mode;
+    [0.973, 0.976, 0.984, 1.0]
 }
 
 fn view_mode_content_color(view_mode: ShellViewMode) -> [f32; 4] {
-    match view_mode {
-        ShellViewMode::Icons => [0.080, 0.096, 0.113, 1.0],
-        ShellViewMode::Compact => [0.070, 0.104, 0.083, 1.0],
-        ShellViewMode::Details => [0.090, 0.076, 0.104, 1.0],
-    }
+    let _ = view_mode;
+    [1.000, 1.000, 1.000, 1.0]
 }
 
 fn view_mode_badge_color(view_mode: ShellViewMode) -> [f32; 4] {
-    match view_mode {
-        ShellViewMode::Icons => [0.20, 0.38, 0.58, 1.0],
-        ShellViewMode::Compact => [0.28, 0.42, 0.30, 1.0],
-        ShellViewMode::Details => [0.42, 0.30, 0.52, 1.0],
-    }
+    let _ = view_mode;
+    [0.184, 0.435, 0.929, 1.0]
 }
 
-fn view_mode_button_rects(surface_width: f32, scale_factor: f32) -> [(ShellViewMode, ViewRect); 3] {
+fn chrome_color() -> [f32; 4] {
+    [0.973, 0.976, 0.984, 1.0]
+}
+
+fn sidebar_color() -> [f32; 4] {
+    [0.973, 0.976, 0.984, 1.0]
+}
+
+fn view_mode_button_rects(
+    surface_width: f32,
+    scale_factor: f32,
+    content_origin_x: f32,
+) -> [(ShellViewMode, ViewRect); 3] {
     let button_width = (VIEW_MODE_BUTTON_WIDTH * scale_factor).round().max(1.0);
     let button_height = (VIEW_MODE_BUTTON_HEIGHT * scale_factor).round().max(1.0);
     let button_gap = (VIEW_MODE_BUTTON_GAP * scale_factor).round().max(1.0);
     let margin = (16.0 * scale_factor).round().max(1.0);
     let y = (14.0 * scale_factor).round().max(1.0);
     let total_width = button_width * 3.0 + button_gap * 2.0;
-    let start_x = (surface_width - total_width - margin).max(margin);
+    let start_x = (surface_width - total_width - margin).max(content_origin_x + margin);
     [
         (
             ShellViewMode::Icons,
@@ -10539,8 +10748,11 @@ fn view_mode_button_rects(surface_width: f32, scale_factor: f32) -> [(ShellViewM
     ]
 }
 
-fn path_navigation_button_rects(scale_factor: f32) -> [(PathNavigationAction, ViewRect); 5] {
-    let x = (16.0 * scale_factor).round().max(1.0);
+fn path_navigation_button_rects(
+    scale_factor: f32,
+    content_origin_x: f32,
+) -> [(PathNavigationAction, ViewRect); 5] {
+    let x = content_origin_x + (16.0 * scale_factor).round().max(1.0);
     let y = (14.0 * scale_factor).round().max(1.0);
     let button_width = (NAV_BUTTON_WIDTH * scale_factor).round().max(1.0);
     let up_button_width = (NAV_UP_BUTTON_WIDTH * scale_factor).round().max(1.0);
@@ -10601,8 +10813,8 @@ fn path_navigation_button_rects(scale_factor: f32) -> [(PathNavigationAction, Vi
     ]
 }
 
-fn path_bar_start_x(scale_factor: f32) -> f32 {
-    let hidden = path_navigation_button_rects(scale_factor)[4].1;
+fn path_bar_start_x(scale_factor: f32, content_origin_x: f32) -> f32 {
+    let hidden = path_navigation_button_rects(scale_factor, content_origin_x)[4].1;
     hidden.right() + (10.0 * scale_factor).round().max(1.0)
 }
 
@@ -10719,6 +10931,7 @@ fn path_placeholder_width(
     surface_width: f32,
     path_x: f32,
     scale_factor: f32,
+    content_origin_x: f32,
 ) -> f32 {
     let display_width = path.display().to_string().chars().count() as f32 * 7.5 * scale_factor
         + 28.0 * scale_factor;
@@ -10726,25 +10939,20 @@ fn path_placeholder_width(
         surface_width,
         path_x,
         scale_factor,
+        content_origin_x,
     ))
 }
 
-fn path_bar_available_width(surface_width: f32, path_x: f32, scale_factor: f32) -> f32 {
-    let first_button_x = view_mode_button_rects(surface_width, scale_factor)[0].1.x;
+fn path_bar_available_width(
+    surface_width: f32,
+    path_x: f32,
+    scale_factor: f32,
+    content_origin_x: f32,
+) -> f32 {
+    let first_button_x = view_mode_button_rects(surface_width, scale_factor, content_origin_x)[0]
+        .1
+        .x;
     (first_button_x - path_x - 10.0 * scale_factor).max(0.0)
-}
-
-#[cfg(test)]
-fn status_bar_rect(size: PhysicalSize<u32>) -> ViewRect {
-    let width = size.width.max(1) as f32;
-    let height = size.height.max(1) as f32;
-    let bar_height = STATUS_BAR_HEIGHT.min(height);
-    ViewRect {
-        x: 0.0,
-        y: height - bar_height,
-        width,
-        height: bar_height,
-    }
 }
 
 fn context_menu_rect(menu: &ShellContextMenu, size: PhysicalSize<u32>) -> ViewRect {
@@ -11622,9 +11830,10 @@ mod tests {
             })
             .collect();
         let size = PhysicalSize::new(700, 160);
+        let first_row = scene.place_row_rects(size)[0].1;
         let point = ViewPoint {
-            x: PLACES_SIDEBAR_PADDING_X + 6.0,
-            y: TOP_BAR_HEIGHT + PLACES_SIDEBAR_TOP_PADDING + 6.0,
+            x: first_row.x + 6.0,
+            y: first_row.y + 6.0,
         };
 
         assert_eq!(scene.place_index_at_screen_point(point, size), Some(0));
@@ -12433,8 +12642,8 @@ text/plain=writer.desktop;\n",
         );
 
         let status_point = ViewPoint {
-            x: 10.0,
-            y: status_bar_rect(size).y + 2.0,
+            x: scene.status_bar_rect(size).x + 10.0,
+            y: scene.status_bar_rect(size).y + 2.0,
         };
         assert!(scene.open_context_target(status_point, size));
         assert_eq!(scene.context_target, None);
@@ -14223,7 +14432,9 @@ text/plain=writer.desktop;\n",
     fn top_bar_view_mode_buttons_are_hit_tested() {
         let scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
         let size = PhysicalSize::new(420, 240);
-        for (mode, rect) in view_mode_button_rects(size.width as f32, 1.0) {
+        for (mode, rect) in
+            view_mode_button_rects(size.width as f32, 1.0, scene.content_origin_x(size))
+        {
             assert_eq!(
                 scene.view_mode_at_screen_point(
                     ViewPoint {
@@ -14245,11 +14456,12 @@ text/plain=writer.desktop;\n",
     fn top_bar_path_navigation_buttons_respect_enabled_state() {
         let mut scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
         let size = PhysicalSize::new(420, 240);
-        let back_rect = path_navigation_button_rects(1.0)[0].1;
-        let forward_rect = path_navigation_button_rects(1.0)[1].1;
-        let parent_rect = path_navigation_button_rects(1.0)[2].1;
-        let reload_rect = path_navigation_button_rects(1.0)[3].1;
-        let hidden_rect = path_navigation_button_rects(1.0)[4].1;
+        let navigation_rects = path_navigation_button_rects(1.0, scene.content_origin_x(size));
+        let back_rect = navigation_rects[0].1;
+        let forward_rect = navigation_rects[1].1;
+        let parent_rect = navigation_rects[2].1;
+        let reload_rect = navigation_rects[3].1;
+        let hidden_rect = navigation_rects[4].1;
 
         assert_eq!(
             scene.path_navigation_action_at_screen_point(
@@ -14460,14 +14672,14 @@ text/plain=writer.desktop;\n",
             ShellViewMode::Icons,
         );
         let size = PhysicalSize::new(360, 240);
-        let status_bar = status_bar_rect(size);
+        let status_bar = scene.status_bar_rect(size);
 
         assert_eq!(scene.viewport_height(size), 160.0);
         assert_eq!(status_bar.y, 212.0);
         assert_eq!(
             scene.hit_test_screen_point(
                 ViewPoint {
-                    x: 16.0,
+                    x: status_bar.x + 16.0,
                     y: status_bar.y + 4.0,
                 },
                 size,
@@ -14479,7 +14691,7 @@ text/plain=writer.desktop;\n",
         assert!(!scene.begin_primary_pointer(
             SelectionClick {
                 point: ViewPoint {
-                    x: 16.0,
+                    x: status_bar.x + 16.0,
                     y: status_bar.y + 4.0,
                 },
                 extend: false,

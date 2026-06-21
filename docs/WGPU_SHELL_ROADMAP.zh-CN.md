@@ -129,7 +129,7 @@ Shell 拥有：
   focus 移到点击的 model index；右键 content 空白区域会记录 blank directory target，
   且不会启动 rubber-band selection。shell 现在保存轻量 context target snapshot，为
   item/blank target 打开 clamp 后的 shell-owned context menu overlay，更新 row hover，
-  支持 Esc 或外部点击关闭，并将 directory item 的 Open、file item 的 Open（通过 GIO
+  支持 Esc 或外部点击关闭，菜单 surface 已从早期半透明深色改为不透明浅色，并将 directory item 的 Open、file item 的 Open（通过 GIO
   default-application URI launch）、file item 的最小 shell-owned Open With chooser（使用
   core `MimeApplicationCache` 和 systemd-user launch plan）、item Copy Location（通过
   shell-owned Wayland text clipboard provider）、item Copy/Cut（通过同一 provider 写入 Fika URI-list text encoding）
@@ -154,11 +154,11 @@ Shell 拥有：
   Open With default-application selection、多 MIME `text/uri-list` clipboard
   export/import、更完整 multi-conflict handling、undo、更完整 properties、完整 inline
   rename、完整 Create New 子菜单/模板和 new-pane dispatch 仍留到 Phase 4。
-- 第一版 shell-owned Places 侧栏已在 top bar 下方绘制。它通过公开 core API 构建
-  Home、已存在的 XDG directories、Trash、Fika user places、primary
+- 第一版 shell-owned Places 侧栏现在作为圆角浅色 panel 绘制，顶部与右侧 pane-local
+  顶栏下方的 content/body 区起点对齐。它通过公开 core API 构建 Home、已存在的 XDG directories、Trash、Fika user places、primary
   `places-order.xml`、Network root、network bookmarks 和 Root，保留 row geometry，用最长路径前缀决定 active place，Places
   hover 与 item hover 分离，拥有独立 sidebar scroll offset、clipped row rendering 和窄
-  scrollbar thumb，并将左键 place navigation 分派到与文件视图相同的
+  scrollbar thumb，active/hover row 会绘制圆角背景，并将左键 place navigation 分派到与文件视图相同的
   `load_path`/history path。Places 右键现在会创建 shell-owned place context target，
   并打开最小 context menu，分派 Open、Copy Location、Properties，以及 editable user
   places 的 Remove。Remove 会写回 Fika `places.xbel`，裁剪对应 place-order 条目，
@@ -185,15 +185,17 @@ Shell 拥有：
   会更新 item/icon/text slot metrics，Details 会更新 row 和 icon metrics，scroll 会被
   clamp，focus item 会保持可见，icon resolver 现在会按 zoom 后的 slot size 请求 raster。
   glyph-level text sizing 和长期 glyph atlas policy 仍留到 Phase 2。
-- 底部最小 shell-owned status bar 已开始绘制。它汇总 entry、directory、file、
-  selection、visible item、view mode 和 zoom 状态，会预留 content viewport 高度，并从
-  item hit testing 中排除。
+- shell 现在会在 compositor 提供时优先选择 non-sRGB surface format，因为 UI 颜色以及
+  icon/text atlas 已按显示字节空间生成；这避免了之前 sRGB target 二次提亮造成的灰浅感。
+- 底部最小 shell-owned status bar 已开始绘制在 content pane 内，不再跨过 Places
+  sidebar。它汇总 entry、directory、file、selection、visible item、view mode 和 zoom 状态，
+  会预留 content viewport 高度，并从 item hit testing 中排除。
 - 最小 shell-owned filter bar 已可用，快捷键为 `Ctrl/Meta+F`。字符输入会更新 retained
   plain-text name filter，Backspace 编辑 pattern，Enter 保留 pattern/filter 结果但停止继续吃文本，
   Esc 清空并关闭 filter。Layout、hit testing、hover、selection、select-all 和 keyboard
   navigation 都会通过 filtered model-index projection 路由。完整 IME/caret/selection
   文本编辑边界仍留到 Phase 4。
-- 最小 shell-owned location edit mode 已可用，可通过 `Ctrl/Meta+L`、`Ctrl/Meta+D`、
+- 最小 shell-owned pane-local location edit mode 已可用，可通过 `Ctrl/Meta+L`、`Ctrl/Meta+D`、
   `F6` 或点击顶部 path bar 激活。它复用 core `resolve_location_input` 和
   `complete_location_input`：首次输入会替换当前 path draft，Backspace 编辑 draft，Tab
   补全 filesystem path，Enter 通过 retained navigation/history path 提交，Esc 取消。
@@ -210,7 +212,8 @@ Shell 拥有：
   offsets。
 - 本地目标 desktop session 中，`timeout 4s target/debug/fika-wgpu --view
   icons|compact|details /etc` smoke 已到达 `shell-ready`，并在 Vulkan 上输出
-  `frame=1` 以及真实 icon/text atlas counters。自动 smoke 的 timeout exit 符合预期。
+  `surface-format=Rgba8Unorm srgb=0`、`frame=1` 以及真实 icon/text atlas counters。
+  自动 smoke 的 timeout exit 符合预期。
 
 Phase 0 仍待完成：glyph-level cache/atlas retention、手动打开/关闭/交互 smoke
 证据、DnD targeting，以及初始默认使用 Compact 还是 Icons 的最终选择。
@@ -278,11 +281,11 @@ drag/drop target lookup 移到 shell-owned hit testing。
 实现可用 shell 所需外围 UI：Places、toolbar、location bar、filter bar、status bar、
 context menus、dialogs 和 chooser mode。
 
-当前 checkpoint：第一批 chrome slice 包含最小 shell-owned Places 侧栏、左键 navigation
-和最小 Open/Copy Location/Properties/Remove row context menu、底部最小 status bar、
+当前 checkpoint：第一批 chrome slice 包含顶部与 pane content/body 区对齐的圆角 shell-owned Places panel、
+左键 navigation 和最小 Open/Copy Location/Properties/Remove row context menu、pane-local 底部 status bar、
 `Ctrl/Meta+F` 最小 filter bar、
-`Ctrl/Meta+L`/`Ctrl/Meta+D`/`F6` 最小 location edit mode，以及用于 file-view
-item/blank 右键的轻量 context menu overlay。Properties 会为 item 和 blank-directory
+`Ctrl/Meta+L`/`Ctrl/Meta+D`/`F6` pane-local 最小 location edit mode，以及用于 file-view
+item/blank 右键的不透明浅色 context menu overlay。Properties 会为 item 和 blank-directory
 targets 打开最小 metadata overlay。Create New 会为 blank-directory targets 打开最小
 shell-owned modal，并执行真实 folder/file 创建、reload 和选中新建条目。Rename 会为
 item targets 打开最小 shell-owned modal，并执行真实 filesystem rename、reload 和选中
