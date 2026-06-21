@@ -102,6 +102,7 @@ scene/renderer code currently proven in `fika-wgpu`.
 
 The existing `fika-wgpu` binary remains a migration source for renderer,
 layout, hit-test, and cache behavior, but not the target window/event backend.
+New shell work should move code out of it rather than add more behavior to it.
 
 Current checkpoint:
 
@@ -110,7 +111,9 @@ Current checkpoint:
   `wgpu` surface from raw Wayland handles, reads the requested directory through
   `fika_core::read_entries_sync`, routes the Wayland event queue through
   calloop `WaylandSource`, logs entry counts, and clears configured frames.
-  This is the target host for the retained scene.
+  This is the target host for the retained scene. Its entry point is now only a
+  thin binary wrapper; startup options, app/calloop orchestration, wgpu surface
+  rendering, and Wayland handlers live under `src/bin/fika_sctk/`.
 - `src/bin/fika-wgpu.rs` exists as the older winit-backed renderer spike.
 - It accepts an optional path argument and defaults to the current directory.
 - It reads directory entries through `fika_core::read_entries_sync`.

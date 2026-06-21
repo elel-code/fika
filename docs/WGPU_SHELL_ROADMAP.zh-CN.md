@@ -90,7 +90,7 @@ Shell 拥有：
 当前已在 `fika-wgpu` 中验证的 retained scene/renderer code。
 
 现有 `fika-wgpu` binary 保留为 renderer、layout、hit-test 和 cache 行为的迁移来源，
-但不再是目标 window/event backend。
+但不再是目标 window/event backend。新的 shell 工作应从中迁出代码，而不是继续往其中追加行为。
 
 当前 checkpoint：
 
@@ -98,7 +98,9 @@ Shell 拥有：
   SCTK/wayland-client 连接 Wayland session，创建 xdg-window，用 raw Wayland handle
   建立 `wgpu` surface，通过 `fika_core::read_entries_sync` 读取目标目录，输出 entry
   计数，把 Wayland event queue 接入 calloop `WaylandSource`，并在 configure 后清屏绘制。
-  这是 retained scene 的目标承载层。
+  这是 retained scene 的目标承载层。入口现在只是很薄的 binary wrapper；启动参数、
+  app/calloop 编排、wgpu surface rendering 和 Wayland handlers 已拆到
+  `src/bin/fika_sctk/`。
 - `src/bin/fika-wgpu.rs` 是较早的 winit-backed renderer spike。
 - 接受可选 path 参数，默认使用当前目录。
 - 通过 `fika_core::read_entries_sync` 读取目录 entries。
