@@ -1255,6 +1255,26 @@ impl FikaWgpuApp {
                     window.request_redraw();
                 }
             }
+            ShellContextMenuAction::MountDevice
+            | ShellContextMenuAction::UnmountDevice
+            | ShellContextMenuAction::EjectDevice
+            | ShellContextMenuAction::SafelyRemoveDevice => {
+                match self.scene.context_target_device_action(action) {
+                    Some(request) => eprintln!(
+                        "[fika-wgpu] device-action-pending action={} id={:?} label={:?}",
+                        action.as_str(),
+                        request.id,
+                        request.label
+                    ),
+                    None => eprintln!(
+                        "[fika-wgpu] device-action-error action={} target=none",
+                        action.as_str()
+                    ),
+                }
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+            }
             ShellContextMenuAction::Paste => self.paste_from_clipboard(event_loop),
         }
     }
@@ -2680,10 +2700,19 @@ struct ShellPlace {
     marker: &'static str,
     label: String,
     path: PathBuf,
+    device: Option<ShellDevicePlace>,
     network: bool,
     trash: bool,
     root: bool,
     editable: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ShellDevicePlace {
+    id: String,
+    mounted: bool,
+    ejectable: bool,
+    can_power_off: bool,
 }
 
 impl ShellPlace {
@@ -2702,11 +2731,17 @@ impl ShellPlace {
             marker,
             label: label.into(),
             path,
+            device: None,
             network,
             trash,
             root,
             editable,
         }
+    }
+
+    fn with_device(mut self, device: ShellDevicePlace) -> Self {
+        self.device = Some(device);
+        self
     }
 }
 
@@ -2726,6 +2761,7 @@ enum ShellContextTarget {
         label: String,
         path: PathBuf,
         group: &'static str,
+        device: Option<ShellDevicePlace>,
         network: bool,
         trash: bool,
         root: bool,
@@ -2853,6 +2889,10 @@ enum ShellContextMenuAction {
     Refresh,
     Properties,
     RemovePlace,
+    MountDevice,
+    UnmountDevice,
+    EjectDevice,
+    SafelyRemoveDevice,
 }
 
 impl ShellContextMenuAction {
@@ -2878,6 +2918,10 @@ impl ShellContextMenuAction {
             Self::Refresh => "Refresh",
             Self::Properties => "Properties",
             Self::RemovePlace => "Remove",
+            Self::MountDevice => "Mount",
+            Self::UnmountDevice => "Unmount",
+            Self::EjectDevice => "Eject",
+            Self::SafelyRemoveDevice => "Safely Remove",
         }
     }
 
@@ -2911,6 +2955,10 @@ impl ShellContextMenuAction {
             Self::Refresh => "refresh",
             Self::Properties => "properties",
             Self::RemovePlace => "remove-place",
+            Self::MountDevice => "mount-device",
+            Self::UnmountDevice => "unmount-device",
+            Self::EjectDevice => "eject-device",
+            Self::SafelyRemoveDevice => "safely-remove-device",
         }
     }
 }
@@ -3036,6 +3084,18 @@ fn context_menu_icon_style(
             [0.725, 0.110, 0.110, 1.0],
             [1.000, 0.910, 0.910, 1.0],
         ),
+        ShellContextMenuAction::MountDevice => (
+            ContextMenuGlyph::Restore,
+            [0.016, 0.471, 0.341, 1.0],
+            [0.906, 0.973, 0.937, 1.0],
+        ),
+        ShellContextMenuAction::UnmountDevice
+        | ShellContextMenuAction::EjectDevice
+        | ShellContextMenuAction::SafelyRemoveDevice => (
+            ContextMenuGlyph::Open,
+            [0.706, 0.325, 0.035, 1.0],
+            [1.000, 0.953, 0.875, 1.0],
+        ),
     }
 }
 
@@ -3125,7 +3185,7 @@ impl ShellContextMenu {
     }
 }
 
-fn context_menu_builtin_actions(target: &ShellContextTarget) -> &'static [ShellContextMenuAction] {
+fn context_menu_builtin_actions(target: &ShellContextTarget) -> Vec<ShellContextMenuAction> {
     const ITEM_FILE_ACTIONS: &[ShellContextMenuAction] = &[
         ShellContextMenuAction::Open,
         ShellContextMenuAction::OpenWith,
@@ -3192,17 +3252,41 @@ fn context_menu_builtin_actions(target: &ShellContextTarget) -> &'static [ShellC
     ];
     match target {
         ShellContextTarget::Item { path, .. } if file_ops::is_in_trash_files_dir(path) => {
-            TRASH_ITEM_ACTIONS
+            TRASH_ITEM_ACTIONS.to_vec()
         }
-        ShellContextTarget::Item { is_dir: true, .. } => ITEM_DIR_ACTIONS,
-        ShellContextTarget::Item { .. } => ITEM_FILE_ACTIONS,
+        ShellContextTarget::Item { is_dir: true, .. } => ITEM_DIR_ACTIONS.to_vec(),
+        ShellContextTarget::Item { .. } => ITEM_FILE_ACTIONS.to_vec(),
         ShellContextTarget::Blank { path, .. } if file_ops::is_trash_files_dir(path) => {
-            TRASH_BLANK_ACTIONS
+            TRASH_BLANK_ACTIONS.to_vec()
         }
-        ShellContextTarget::Blank { .. } => BLANK_ACTIONS,
-        ShellContextTarget::Place { trash: true, .. } => TRASH_PLACE_ACTIONS,
-        ShellContextTarget::Place { editable: true, .. } => EDITABLE_PLACE_ACTIONS,
-        ShellContextTarget::Place { .. } => PLACE_ACTIONS,
+        ShellContextTarget::Blank { .. } => BLANK_ACTIONS.to_vec(),
+        ShellContextTarget::Place { trash: true, .. } => TRASH_PLACE_ACTIONS.to_vec(),
+        ShellContextTarget::Place {
+            device: Some(device),
+            ..
+        } => {
+            let mut actions = Vec::new();
+            if device.mounted {
+                actions.extend([
+                    ShellContextMenuAction::Open,
+                    ShellContextMenuAction::OpenInNewPane,
+                    ShellContextMenuAction::CopyLocation,
+                    ShellContextMenuAction::UnmountDevice,
+                ]);
+            } else {
+                actions.push(ShellContextMenuAction::MountDevice);
+            }
+            if device.ejectable {
+                actions.push(ShellContextMenuAction::EjectDevice);
+            }
+            if device.can_power_off {
+                actions.push(ShellContextMenuAction::SafelyRemoveDevice);
+            }
+            actions.push(ShellContextMenuAction::Properties);
+            actions
+        }
+        ShellContextTarget::Place { editable: true, .. } => EDITABLE_PLACE_ACTIONS.to_vec(),
+        ShellContextTarget::Place { .. } => PLACE_ACTIONS.to_vec(),
     }
 }
 
@@ -3406,6 +3490,14 @@ fn context_menu_separator_before(target: &ShellContextTarget, row: usize) -> boo
                 || action == ShellContextMenuAction::ToggleHiddenFiles
                 || action == ShellContextMenuAction::Properties
         }
+        ShellContextTarget::Place {
+            device: Some(_), ..
+        } => matches!(
+            action,
+            ShellContextMenuAction::MountDevice
+                | ShellContextMenuAction::UnmountDevice
+                | ShellContextMenuAction::Properties
+        ),
         ShellContextTarget::Place { .. } => action == ShellContextMenuAction::Properties,
     }
 }
@@ -3803,6 +3895,13 @@ struct OpenFileRequest {
 struct CopyLocationRequest {
     path: PathBuf,
     text: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct DeviceActionRequest {
+    id: String,
+    label: String,
+    action: ShellContextMenuAction,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -5224,6 +5323,17 @@ impl ShellScene {
         self.context_target = None;
         self.context_menu = None;
         let place = self.places.get(index)?;
+        if place.device.as_ref().is_some_and(|device| !device.mounted) {
+            self.places_changes += 1;
+            eprintln!(
+                "[fika-wgpu] place-open index={} label={:?} mounted=0 path={} changes={}",
+                index,
+                place.label,
+                place.path.display(),
+                self.places_changes
+            );
+            return None;
+        }
         self.places_changes += 1;
         eprintln!(
             "[fika-wgpu] place-open index={} label={:?} path={} hover_changed={} item_hover_changed={} changes={}",
@@ -5399,6 +5509,7 @@ impl ShellScene {
                 label: place.label.clone(),
                 path: place.path.clone(),
                 group: place.group,
+                device: place.device.clone(),
                 network: place.network,
                 trash: place.trash,
                 root: place.root,
@@ -5888,15 +5999,20 @@ impl ShellScene {
                 index,
                 label,
                 path,
+                device,
                 network,
                 trash,
                 root,
                 editable,
                 ..
             }) => eprintln!(
-                "[fika-wgpu] context-target kind=place index={} label={:?} network={} trash={} root={} editable={} path={} changes={}",
+                "[fika-wgpu] context-target kind=place index={} label={:?} device={} mounted={} ejectable={} poweroff={} network={} trash={} root={} editable={} path={} changes={}",
                 index,
                 label,
+                device.is_some() as u8,
+                device.as_ref().is_none_or(|device| device.mounted) as u8,
+                device.as_ref().is_some_and(|device| device.ejectable) as u8,
+                device.as_ref().is_some_and(|device| device.can_power_off) as u8,
                 *network as u8,
                 *trash as u8,
                 *root as u8,
@@ -5922,7 +6038,11 @@ impl ShellScene {
             ShellContextTarget::Item { index, is_dir, .. } if *is_dir => {
                 self.directory_path_for_index(*index)
             }
-            ShellContextTarget::Place { path, .. } => Some(path.clone()),
+            ShellContextTarget::Place { path, device, .. }
+                if device.as_ref().is_none_or(|device| device.mounted) =>
+            {
+                Some(path.clone())
+            }
             _ => None,
         }
     }
@@ -6230,6 +6350,34 @@ impl ShellScene {
             }
             ShellContextTarget::Blank { .. } => None,
         }
+    }
+
+    fn context_target_device_action(
+        &self,
+        action: ShellContextMenuAction,
+    ) -> Option<DeviceActionRequest> {
+        if !matches!(
+            action,
+            ShellContextMenuAction::MountDevice
+                | ShellContextMenuAction::UnmountDevice
+                | ShellContextMenuAction::EjectDevice
+                | ShellContextMenuAction::SafelyRemoveDevice
+        ) {
+            return None;
+        }
+        let ShellContextTarget::Place {
+            label,
+            device: Some(device),
+            ..
+        } = self.context_target.as_ref()?
+        else {
+            return None;
+        };
+        Some(DeviceActionRequest {
+            id: device.id.clone(),
+            label: label.clone(),
+            action,
+        })
     }
 
     fn record_copy_location(&mut self, request: &CopyLocationRequest) {
@@ -16049,17 +16197,33 @@ fn push_device_shell_places(
     devices: &[DeviceInfo],
 ) {
     for device in devices {
-        if !device.mounted {
+        if device.mounted
+            && !device
+                .mount_point
+                .as_ref()
+                .is_some_and(|path| path.is_dir())
+        {
             continue;
         }
-        let Some(path) = device.mount_point.as_ref().filter(|path| path.is_dir()) else {
+        if !device.mounted && !device.ejectable && !device.can_power_off {
             continue;
-        };
+        }
+        let path = device
+            .mount_point
+            .clone()
+            .unwrap_or_else(|| PathBuf::from(&device.id));
         let label = device
             .label
             .clone()
-            .unwrap_or_else(|| path_name_or_display(path));
-        push_shell_place(places, devices_group, "D", label, path.clone(), false);
+            .unwrap_or_else(|| path_name_or_display(&path));
+        let place =
+            ShellPlace::new(devices_group, "D", label, path, false).with_device(ShellDevicePlace {
+                id: device.id.clone(),
+                mounted: device.mounted,
+                ejectable: device.ejectable,
+                can_power_off: device.can_power_off,
+            });
+        places.push(place);
     }
 }
 
@@ -17752,6 +17916,7 @@ mod tests {
                 label: "Root".to_string(),
                 path: PathBuf::from("/"),
                 group: "Devices",
+                device: None,
                 network: false,
                 trash: false,
                 root: true,
@@ -18340,6 +18505,7 @@ text/plain=writer.desktop;\n",
             label: "Trash".to_string(),
             path: file_ops::trash_files_dir(),
             group: "",
+            device: None,
             network: false,
             trash: true,
             root: false,
@@ -18439,10 +18605,107 @@ text/plain=writer.desktop;\n",
                 && place.marker == "D"
                 && place.label == "USB Drive"
                 && place.path == usb
+                && place.device.as_ref().is_some_and(|device| device.mounted)
         }));
-        assert!(!places.iter().any(|place| place.label == "Unmounted"));
+        assert!(places.iter().any(|place| {
+            place.group == "Devices"
+                && place.marker == "D"
+                && place.label == "Unmounted"
+                && place.path == PathBuf::from("unmounted")
+                && place
+                    .device
+                    .as_ref()
+                    .is_some_and(|device| !device.mounted && device.ejectable)
+        }));
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn device_place_context_menu_uses_mount_and_eject_actions() {
+        let mounted = ShellContextTarget::Place {
+            index: 0,
+            label: "USB Drive".to_string(),
+            path: PathBuf::from("/run/media/USB"),
+            group: "Devices",
+            device: Some(ShellDevicePlace {
+                id: "mounted-usb".to_string(),
+                mounted: true,
+                ejectable: true,
+                can_power_off: true,
+            }),
+            network: false,
+            trash: false,
+            root: false,
+            editable: false,
+        };
+        assert_eq!(
+            context_menu_actions(&mounted),
+            &[
+                ShellContextMenuAction::Open,
+                ShellContextMenuAction::OpenInNewPane,
+                ShellContextMenuAction::CopyLocation,
+                ShellContextMenuAction::UnmountDevice,
+                ShellContextMenuAction::EjectDevice,
+                ShellContextMenuAction::SafelyRemoveDevice,
+                ShellContextMenuAction::Properties,
+            ]
+        );
+
+        let unmounted = ShellContextTarget::Place {
+            index: 1,
+            label: "USB Drive".to_string(),
+            path: PathBuf::from("gio:volume:usb"),
+            group: "Devices",
+            device: Some(ShellDevicePlace {
+                id: "gio:volume:usb".to_string(),
+                mounted: false,
+                ejectable: true,
+                can_power_off: false,
+            }),
+            network: false,
+            trash: false,
+            root: false,
+            editable: false,
+        };
+        assert_eq!(
+            context_menu_actions(&unmounted),
+            &[
+                ShellContextMenuAction::MountDevice,
+                ShellContextMenuAction::EjectDevice,
+                ShellContextMenuAction::Properties,
+            ]
+        );
+    }
+
+    #[test]
+    fn context_target_device_action_preserves_device_id() {
+        let mut scene = test_scene(Vec::new(), ShellViewMode::Icons);
+        scene.context_target = Some(ShellContextTarget::Place {
+            index: 1,
+            label: "USB Drive".to_string(),
+            path: PathBuf::from("gio:volume:usb"),
+            group: "Devices",
+            device: Some(ShellDevicePlace {
+                id: "gio:volume:usb".to_string(),
+                mounted: false,
+                ejectable: true,
+                can_power_off: false,
+            }),
+            network: false,
+            trash: false,
+            root: false,
+            editable: false,
+        });
+
+        assert_eq!(
+            scene.context_target_device_action(ShellContextMenuAction::MountDevice),
+            Some(DeviceActionRequest {
+                id: "gio:volume:usb".to_string(),
+                label: "USB Drive".to_string(),
+                action: ShellContextMenuAction::MountDevice,
+            })
+        );
     }
 
     #[test]
@@ -18557,6 +18820,7 @@ text/plain=writer.desktop;\n",
             label: "Remove Me".to_string(),
             path: remove.clone(),
             group: "",
+            device: None,
             network: false,
             trash: false,
             root: false,
@@ -19054,6 +19318,7 @@ text/plain=writer.desktop;\n",
             label: "Root".to_string(),
             path: PathBuf::from("/"),
             group: "Devices",
+            device: None,
             network: false,
             trash: false,
             root: true,
@@ -19152,6 +19417,7 @@ text/plain=writer.desktop;\n",
             label: "Root".to_string(),
             path: PathBuf::from("/"),
             group: "Devices",
+            device: None,
             network: false,
             trash: false,
             root: true,
@@ -19411,6 +19677,7 @@ text/plain=writer.desktop;\n",
             label: "Root".to_string(),
             path: PathBuf::from("/"),
             group: "Devices",
+            device: None,
             network: false,
             trash: false,
             root: true,

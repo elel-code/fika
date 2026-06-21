@@ -177,9 +177,10 @@ Shell 拥有：
   并打开最小 context menu，分派 Open、Copy Location、Properties，以及 editable user
   places 的 Remove。Remove 会写回 Fika `places.xbel`，裁剪对应 place-order 条目，
   reload sidebar projection，并清理 stale place context state。app 启动时的 Places
-  projection 现在也会消费 GIO `DeviceInfo` snapshot，并把已挂载本地设备加入 Devices。
-  实时 device monitoring、mount/eject actions、更完整 Places actions（sidebar add/edit
-  和 Trash actions）以及真实 Wayland DnD hover/drop/export 仍留到 Phase 4。
+  projection 现在也会消费 GIO `DeviceInfo` snapshot，在 Devices 中保留 mounted 和
+  unmounted device metadata，并从这些 metadata 投影 Mount/Unmount/Eject/Safely Remove
+  place context rows。执行这些 device operations、实时 device monitoring、更完整
+  Places actions（sidebar add/edit 和 Trash actions）以及真实 Wayland DnD hover/drop/export 仍留到 Phase 4。
 - 空白区域左键拖动现在通过同一 retained Icons geometry 执行 rubber-band selection。
   普通拖动替换 selection，Shift 追加，Ctrl/Meta 会相对按下时的 base selection 做
   toggle，并用 clipped GPU overlay 绘制框选矩形。
@@ -375,8 +376,9 @@ retained visible slot pool，输出 active/free/reused/recycled/allocation telem
 第一层 DnD 已从 target lookup 推进到基本内部主 pane item drag session：超过阈值后更新
 retained drop hover，release 时为有效 pane/place target 生成 Copy `ShellDropOperationRequest`。
 真实 Wayland DnD hover/drop/export wiring 以及执行这些请求仍待接入。Places Devices
-section 现在会在 app 启动时包含已挂载 GIO devices；实时 device monitoring 和 mount/eject
-actions 仍待完成。thumbnail 工作已有 visible-item candidate projection、frame 外 core
+section 现在会在 app 启动时包含 mounted/unmounted GIO device metadata，并投影
+Mount/Unmount/Eject/Safely Remove context rows；执行这些 device operations 和实时
+device monitoring 仍待完成。thumbnail 工作已有 visible-item candidate projection、frame 外 core
 thumbnail cache/thumbnailer probing、background rasterization、mtime-keyed failure
 handling 和 frame telemetry；visible-priority dispatch 与有界 Dolphin-order read-ahead
 已接入，ready read-ahead raster 在可见消费前已有预算上限，model role writeback 和长期

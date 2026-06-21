@@ -222,10 +222,11 @@ Current checkpoint:
   editable user places. Remove writes Fika's `places.xbel`, prunes matching
   place-order entries, reloads the sidebar projection, and clears stale place
   context state. The app-start Places projection now also consumes a GIO
-  `DeviceInfo` snapshot and adds mounted local devices under Devices. Live
-  device monitoring, mount/eject actions, richer Places actions such as sidebar
-  add/edit and Trash actions, and real Wayland DnD hover/drop/export remain
-  Phase 4 work.
+  `DeviceInfo` snapshot, keeps mounted and unmounted device metadata in
+  Devices, and exposes Mount/Unmount/Eject/Safely Remove place context rows
+  from that metadata. Executing those device operations, live device
+  monitoring, richer Places actions such as sidebar add/edit and Trash actions,
+  and real Wayland DnD hover/drop/export remain Phase 4 work.
 - Blank-space left-drag now runs rubber-band selection through the same
   retained Icons geometry. Plain drag replaces the selection, Shift extends it,
   Ctrl/Meta toggles it against the press-time base selection, and the band is
@@ -478,8 +479,9 @@ has advanced from target lookup to a basic internal primary-item drag session:
 movement past the threshold updates retained drop hover and release creates a
 Copy `ShellDropOperationRequest` for valid pane/place targets. Real Wayland
 DnD hover/drop/export wiring and executing those requests remain pending. The
-Places Devices section now includes mounted GIO devices at app startup; live
-device monitoring and mount/eject actions remain pending. Thumbnail work has a
+Places Devices section now includes mounted/unmounted GIO device metadata at app
+startup and projects Mount/Unmount/Eject/Safely Remove context rows; executing
+those device operations and live device monitoring remain pending. Thumbnail work has a
 visible-item candidate projection, off-frame core thumbnail cache/thumbnailer
 probing, background rasterization, mtime-keyed failure handling, and frame
 telemetry; visible-priority dispatch and bounded Dolphin-order read-ahead are
