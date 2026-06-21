@@ -146,9 +146,10 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
   projection，默认隐藏 hidden entries，`Ctrl/Meta+H` 可显示，selection 会随可见性切换保留或裁剪，
   app-level Hidden toggle 仍待 toolbar 迁移；最小 shell-owned pane-local location edit mode 已可用，
   `Ctrl/Meta+L`、`Ctrl/Meta+D`、`F6` 或点击 top path bar 激活，首次输入替换当前 path
-  draft，Backspace/Delete 通过真实 caret 编辑，Arrow/Home/End 移动 caret，Tab 复用 core
-  `complete_location_input()` 补全，Enter 复用 core `resolve_location_input()` 并通过
-  retained navigation/history path 提交，Esc 取消；
+  draft，Backspace/Delete 通过真实 caret 编辑，Arrow/Home/End 移动 caret，caret x 现在由
+  `cosmic-text` shaped glyph layout 测量且 path label no-wrap，点击 path bar 外空白会安全取消 draft
+  并恢复当前真实 path，Tab 复用 core `complete_location_input()` 补全，Enter 复用 core
+  `resolve_location_input()` 并通过 retained navigation/history path 提交，Esc 取消；
   第一版 shell-owned Places 侧栏已作为顶部与 app-level toolbar 下方 pane 起点对齐的圆角 panel 绘制，通过公开 core API 构建
   Home、已存在的 XDG directories、Trash、Fika user places、primary
   `places-order.xml`、Network root、network bookmarks 和 Root，保留 row geometry，用
@@ -195,10 +196,11 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
   directory/place 的 Open in New Pane 会加载右侧 split pane 的真实目录内容；file-view
   item hover/selection 改为圆角高亮；location bar 改为白底、细边框、leading folder
   glyph、active focus ring 和垂直居中的真实 caret，并支持 Arrow/Home/End/Delete 光标编辑；
-  Places 与 pane 之间加入明确间距，pane 硬蓝/灰外框弱化为更贴近背景的细分隔线；Trash place 在为空时不再显示蓝色状态圆点。当前 split pane
-  仍是最小可见骨架，交互焦点仍在主 pane；下一步必须把 pane state/layout/paint/hit-test
-  抽成可复用 pane component，再把主 pane 与右侧 pane 统一接入，而不是继续堆 split-only
-  特例。
+  Places 与 pane 之间加入明确间距，pane 硬蓝/灰外框弱化为更贴近背景的细分隔线；Trash place 在为空时不再显示蓝色状态圆点。
+  当前 split pane 仍是最小可见骨架，交互焦点仍在主 pane；pane 可复用化已迈出第一步：
+  主 pane 与右侧 pane 现在可投影为同一个 `ShellPaneView`，并通过共享 `pane_layout(...)`
+  生成 Icons/Compact/Details layout。下一步必须继续把 pane paint/hit-test/event routing
+  接入同一个可复用 pane component，而不是继续堆 split-only 特例。
 - [ ] Phase 5：同场景证据证明行为对齐，且 frame cost 比 GPUI Fika 和相关 cosmic-files 基线更好或更可预测后，再把新 shell 提升为默认。
 
 ### GPUI Item View 自绘 / Dolphin retained item 对齐（历史基线）

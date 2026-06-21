@@ -9,8 +9,8 @@ use std::time::{Duration, Instant};
 
 use bytemuck::{Pod, Zeroable};
 use cosmic_text::{
-    Align, Attrs, Buffer, Color as TextColor, Family, FontSystem, Metrics, Shaping, SwashCache,
-    Wrap,
+    Align, Attrs, Buffer, Color as TextColor, Cursor, Family, FontSystem, Metrics, Shaping,
+    SwashCache, Wrap,
 };
 use fika_core::{
     CompactLayout, CompactLayoutOptions, DesktopLaunchPlan, Entry, FileClipboardRole,
@@ -907,6 +907,15 @@ impl ApplicationHandler for FikaWgpuApp {
                 if mouse_button != MouseButton::Left {
                     return;
                 }
+                let path_bar_hit = state == ElementState::Pressed
+                    && self
+                        .scene
+                        .path_bar_contains_screen_point(point, renderer.size);
+                let location_blur_changed = state == ElementState::Pressed
+                    && !path_bar_hit
+                    && self
+                        .scene
+                        .close_location_draft_if_outside(point, renderer.size);
                 if state == ElementState::Released && self.scene.is_scrollbar_dragging() {
                     let changed = self.scene.end_scrollbar_drag(point, renderer.size);
                     if changed && let Some(window) = self.window.as_ref() {
@@ -928,16 +937,14 @@ impl ApplicationHandler for FikaWgpuApp {
                 if state == ElementState::Pressed
                     && let Some(changed) = self.scene.begin_scrollbar_drag(point, renderer.size)
                 {
-                    if changed && let Some(window) = self.window.as_ref() {
+                    if (changed || location_blur_changed)
+                        && let Some(window) = self.window.as_ref()
+                    {
                         window.request_redraw();
                     }
                     return;
                 }
-                if state == ElementState::Pressed
-                    && self
-                        .scene
-                        .path_bar_contains_screen_point(point, renderer.size)
-                {
+                if path_bar_hit {
                     if self
                         .scene
                         .apply_location_command(LocationCommand::Activate, renderer.size)
@@ -999,7 +1006,9 @@ impl ApplicationHandler for FikaWgpuApp {
                     }
                     ElementState::Released => self.scene.end_primary_pointer(point, renderer.size),
                 };
-                if changed && let Some(window) = self.window.as_ref() {
+                if (changed || location_blur_changed)
+                    && let Some(window) = self.window.as_ref()
+                {
                     window.request_redraw();
                 }
             }
@@ -3310,12 +3319,42 @@ impl ShellPaneState {
         })
     }
 
+    #[cfg(test)]
     fn filtered_entry_count(&self) -> usize {
         self.filtered_indexes.len()
     }
 
     fn rebuild_filtered_indexes(&mut self, show_hidden: bool) {
         self.filtered_indexes = filtered_indexes_for_entries(&self.entries, show_hidden, "");
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ShellPaneView<'a> {
+    path: &'a Path,
+    view_mode: ShellViewMode,
+    entries: &'a [Entry],
+    dir_count: usize,
+    filtered_indexes: &'a [usize],
+    scroll_x: f32,
+    scroll_y: f32,
+}
+
+impl<'a> ShellPaneView<'a> {
+    fn from_state(state: &'a ShellPaneState) -> Self {
+        Self {
+            path: &state.path,
+            view_mode: state.view_mode,
+            entries: &state.entries,
+            dir_count: state.dir_count,
+            filtered_indexes: &state.filtered_indexes,
+            scroll_x: state.scroll_x,
+            scroll_y: state.scroll_y,
+        }
+    }
+
+    fn filtered_entry_count(self) -> usize {
+        self.filtered_indexes.len()
     }
 }
 
@@ -3759,6 +3798,17 @@ impl ShellScene {
             self.location_changes
         );
         true
+    }
+
+    fn close_location_draft_if_outside(
+        &mut self,
+        point: ViewPoint,
+        size: PhysicalSize<u32>,
+    ) -> bool {
+        if !self.is_location_editing() || self.path_bar_contains_screen_point(point, size) {
+            return false;
+        }
+        self.close_location_draft(size)
     }
 
     fn apply_location_command(
@@ -5869,18 +5919,50 @@ impl ShellScene {
             .flatten()
     }
 
+    fn primary_pane_view(&self) -> ShellPaneView<'_> {
+        ShellPaneView {
+            path: &self.path,
+            view_mode: self.view_mode,
+            entries: &self.entries,
+            dir_count: self.dir_count,
+            filtered_indexes: &self.filtered_indexes,
+            scroll_x: self.scroll_x,
+            scroll_y: self.scroll_y,
+        }
+    }
+
     fn layout(&self, size: PhysicalSize<u32>) -> ShellLayout {
-        let item_count = self.filtered_entry_count();
-        match self.view_mode {
+        self.pane_layout(
+            self.primary_pane_view(),
+            self.content_width(size),
+            self.viewport_height(size),
+        )
+    }
+
+    fn pane_layout(
+        &self,
+        pane: ShellPaneView<'_>,
+        content_width: f32,
+        viewport_height: f32,
+    ) -> ShellLayout {
+        let item_count = pane.filtered_entry_count();
+        match pane.view_mode {
             ShellViewMode::Icons => {
-                ShellLayout::Icons(IconsLayout::new(item_count, self.icons_options(size)))
+                let mut options = self.icons_options_for_viewport(content_width, viewport_height);
+                options.scroll_x = pane.scroll_x;
+                options.scroll_y = pane.scroll_y;
+                ShellLayout::Icons(IconsLayout::new(item_count, options))
             }
-            ShellViewMode::Compact => ShellLayout::Compact(self.compact_layout(size)),
+            ShellViewMode::Compact => {
+                let mut options = self.compact_options_for_viewport(content_width, viewport_height);
+                options.scroll_x = pane.scroll_x;
+                ShellLayout::Compact(self.pane_compact_layout(pane, options))
+            }
             ShellViewMode::Details => ShellLayout::Details(DetailsLayout::new(
                 item_count,
-                self.content_width(size),
-                self.viewport_height(size),
-                self.scroll_y,
+                content_width,
+                viewport_height,
+                pane.scroll_y,
                 self.details_row_height(),
                 self.details_icon_size(),
                 self.ui_scale(),
@@ -5892,19 +5974,22 @@ impl ShellScene {
         }
     }
 
-    fn compact_layout(&self, size: PhysicalSize<u32>) -> ShellCompactLayout {
-        let item_count = self.filtered_entry_count();
-        let options = self.compact_options(size);
+    fn pane_compact_layout(
+        &self,
+        pane: ShellPaneView<'_>,
+        options: CompactLayoutOptions,
+    ) -> ShellCompactLayout {
+        let item_count = pane.filtered_entry_count();
         let rows_per_column = CompactLayout::rows_per_column_for_options(options);
         let column_count = item_count.div_ceil(rows_per_column);
         let mut text_widths = Vec::with_capacity(item_count);
         let mut column_widths = vec![options.item_width; column_count];
         for layout_index in 0..item_count {
-            let Some(entry_index) = self.model_index_for_layout_index(layout_index) else {
+            let Some(entry_index) = pane.filtered_indexes.get(layout_index).copied() else {
                 text_widths.push(0.0);
                 continue;
             };
-            let Some(entry) = self.entries.get(entry_index) else {
+            let Some(entry) = pane.entries.get(entry_index) else {
                 text_widths.push(0.0);
                 continue;
             };
@@ -5919,6 +6004,7 @@ impl ShellScene {
         ShellCompactLayout::new(layout, text_widths)
     }
 
+    #[cfg(test)]
     fn icons_options(&self, size: PhysicalSize<u32>) -> IconsLayoutOptions {
         let mut options =
             self.icons_options_for_viewport(self.content_width(size), self.viewport_height(size));
@@ -5947,6 +6033,7 @@ impl ShellScene {
         }
     }
 
+    #[cfg(test)]
     fn compact_options(&self, size: PhysicalSize<u32>) -> CompactLayoutOptions {
         let mut options =
             self.compact_options_for_viewport(self.content_width(size), self.viewport_height(size));
@@ -6186,7 +6273,16 @@ impl ShellScene {
             width: (rect.right() - text_x - self.scale_metric(8.0)).max(1.0),
             height: self.text_line_height(),
         };
-        text.push_label_aligned(
+        let cursor_x = cursor.map(|cursor| {
+            text.measure_label_cursor_x(
+                label,
+                text_rect,
+                cursor,
+                LabelAlignment::Start,
+                LabelWrap::None,
+            )
+        });
+        text.push_label_aligned_no_wrap(
             label,
             text_rect,
             clip,
@@ -6194,17 +6290,14 @@ impl ShellScene {
             LabelAlignment::Start,
         );
         if active {
-            let cursor = normalized_text_cursor(label, cursor.unwrap_or(label.len()));
-            let before_cursor = &label[..cursor];
             let caret_width = self.scale_metric(1.25);
             let caret_height = self
                 .scale_metric(17.0)
                 .min((rect.height - self.scale_metric(10.0)).max(1.0));
-            let caret_x = (text_rect.x + estimated_text_width(before_cursor, self.ui_scale()))
-                .clamp(
-                    text_rect.x,
-                    (text_rect.right() - caret_width).max(text_rect.x),
-                );
+            let caret_x = (text_rect.x + cursor_x.unwrap_or(0.0)).clamp(
+                text_rect.x,
+                (text_rect.right() - caret_width).max(text_rect.x),
+            );
             push_clipped_rounded_rect(
                 vertices,
                 ViewRect {
@@ -6231,6 +6324,7 @@ impl ShellScene {
         let Some(split_pane) = self.split_pane.as_ref() else {
             return;
         };
+        let split_view = ShellPaneView::from_state(split_pane);
         let Some(metrics) = self.split_pane_metrics(size) else {
             return;
         };
@@ -6288,7 +6382,7 @@ impl ShellScene {
                 width: pane.width,
                 height: top_bar_height,
             },
-            &split_pane.path.display().to_string(),
+            &split_view.path.display().to_string(),
             false,
             None,
         );
@@ -6307,13 +6401,13 @@ impl ShellScene {
             self.push_split_details_header(vertices, text, pane, size);
         }
 
-        let layout = self.split_pane_layout(split_pane, content_clip.width, content_clip.height);
+        let layout = self.pane_layout(split_view, content_clip.width, content_clip.height);
         let mut visible_items = 0usize;
         for item in layout.visible_items() {
             visible_items += 1;
             self.push_split_item(vertices, text, icons, split_pane, item, content_clip, size);
         }
-        self.push_split_status_bar(vertices, text, split_pane, status_bar, visible_items, size);
+        self.push_split_status_bar(vertices, text, split_view, status_bar, visible_items, size);
     }
 
     fn push_split_details_header(
@@ -6461,7 +6555,7 @@ impl ShellScene {
         &self,
         vertices: &mut Vec<QuadVertex>,
         text: &mut TextFrameBuilder<'_>,
-        split_pane: &ShellPaneState,
+        pane: ShellPaneView<'_>,
         rect: ViewRect,
         visible_items: usize,
         size: PhysicalSize<u32>,
@@ -6480,14 +6574,11 @@ impl ShellScene {
         );
         let status = format!(
             "{} entries ({} dirs, {} files) | {} visible | {}",
-            split_pane.entries.len(),
-            split_pane.dir_count,
-            split_pane
-                .entries
-                .len()
-                .saturating_sub(split_pane.dir_count),
+            pane.entries.len(),
+            pane.dir_count,
+            pane.entries.len().saturating_sub(pane.dir_count),
             visible_items,
-            split_pane.view_mode.label()
+            pane.view_mode.label()
         );
         text.push_label(
             &status,
@@ -6500,63 +6591,6 @@ impl ShellScene {
             rect,
             TextColor::rgb(89, 99, 110),
         );
-    }
-
-    fn split_pane_layout(
-        &self,
-        split_pane: &ShellPaneState,
-        content_width: f32,
-        viewport_height: f32,
-    ) -> ShellLayout {
-        let item_count = split_pane.filtered_entry_count();
-        match split_pane.view_mode {
-            ShellViewMode::Icons => ShellLayout::Icons(IconsLayout::new(
-                item_count,
-                self.icons_options_for_viewport(content_width, viewport_height),
-            )),
-            ShellViewMode::Compact => {
-                let options = self.compact_options_for_viewport(content_width, viewport_height);
-                let rows_per_column = CompactLayout::rows_per_column_for_options(options);
-                let column_count = item_count.div_ceil(rows_per_column);
-                let mut text_widths = Vec::with_capacity(item_count);
-                let mut column_widths = vec![options.item_width; column_count];
-                for layout_index in 0..item_count {
-                    let Some(entry_index) = split_pane.filtered_indexes.get(layout_index).copied()
-                    else {
-                        text_widths.push(0.0);
-                        continue;
-                    };
-                    let Some(entry) = split_pane.entries.get(entry_index) else {
-                        text_widths.push(0.0);
-                        continue;
-                    };
-                    let text_width =
-                        compact_entry_text_width(entry, self.ui_scale() * self.zoom_factor());
-                    text_widths.push(text_width);
-                    let column = layout_index / rows_per_column;
-                    if let Some(width) = column_widths.get_mut(column) {
-                        *width = width.max(required_compact_item_width(options, text_width));
-                    }
-                }
-                ShellLayout::Compact(ShellCompactLayout::new(
-                    CompactLayout::new_with_column_widths(item_count, options, column_widths),
-                    text_widths,
-                ))
-            }
-            ShellViewMode::Details => ShellLayout::Details(DetailsLayout::new(
-                item_count,
-                content_width,
-                viewport_height,
-                split_pane.scroll_y,
-                self.details_row_height(),
-                self.details_icon_size(),
-                self.ui_scale(),
-                self.details_name_width(),
-                self.details_size_width(),
-                self.details_modified_width(),
-                self.text_line_height(),
-            )),
-        }
     }
 
     fn push_app_toolbar(&self, vertices: &mut Vec<QuadVertex>, size: PhysicalSize<u32>) {
@@ -9992,6 +10026,21 @@ impl LabelAlignment {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum LabelWrap {
+    None,
+    WordOrGlyph,
+}
+
+impl LabelWrap {
+    const fn cosmic_wrap(self) -> Wrap {
+        match self {
+            Self::None => Wrap::None,
+            Self::WordOrGlyph => Wrap::WordOrGlyph,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct LabelCacheKey {
     text: String,
@@ -9999,6 +10048,7 @@ struct LabelCacheKey {
     height: u32,
     color: TextColor,
     alignment: LabelAlignment,
+    wrap: LabelWrap,
 }
 
 #[derive(Clone, Debug)]
@@ -10148,6 +10198,36 @@ impl<'a> TextFrameBuilder<'a> {
         color: TextColor,
         alignment: LabelAlignment,
     ) {
+        self.push_label_aligned_wrapped(
+            label,
+            rect,
+            clip,
+            color,
+            alignment,
+            LabelWrap::WordOrGlyph,
+        );
+    }
+
+    fn push_label_aligned_no_wrap(
+        &mut self,
+        label: &str,
+        rect: ViewRect,
+        clip: ViewRect,
+        color: TextColor,
+        alignment: LabelAlignment,
+    ) {
+        self.push_label_aligned_wrapped(label, rect, clip, color, alignment, LabelWrap::None);
+    }
+
+    fn push_label_aligned_wrapped(
+        &mut self,
+        label: &str,
+        rect: ViewRect,
+        clip: ViewRect,
+        color: TextColor,
+        alignment: LabelAlignment,
+        wrap: LabelWrap,
+    ) {
         if label.is_empty() || rect.width <= 0.0 || rect.height <= 0.0 {
             return;
         }
@@ -10164,6 +10244,7 @@ impl<'a> TextFrameBuilder<'a> {
             height: label_height,
             color,
             alignment,
+            wrap,
         };
         let label_pixels = if let Some(pixels) = self.label_cache.get(&key) {
             self.cache_hits += 1;
@@ -10172,7 +10253,7 @@ impl<'a> TextFrameBuilder<'a> {
             self.cache_misses += 1;
             let raster_start = Instant::now();
             let label_pixels =
-                self.rasterize_label(label, label_width, label_height, color, alignment);
+                self.rasterize_label(label, label_width, label_height, color, alignment, wrap);
             self.raster_us += raster_start.elapsed().as_micros();
             self.label_cache.insert(key, label_pixels)
         };
@@ -10190,6 +10271,44 @@ impl<'a> TextFrameBuilder<'a> {
         };
         self.draws.push(TextDraw { screen, atlas });
         self.labels += 1;
+    }
+
+    fn measure_label_cursor_x(
+        &mut self,
+        label: &str,
+        rect: ViewRect,
+        cursor: usize,
+        alignment: LabelAlignment,
+        wrap: LabelWrap,
+    ) -> f32 {
+        if label.is_empty() || rect.width <= 0.0 || rect.height <= 0.0 {
+            return 0.0;
+        }
+        let max_label_width = self.width.saturating_sub(TEXT_PADDING * 2).max(1);
+        let label_width = (rect.width.ceil().max(1.0) as u32).min(max_label_width);
+        let label_height = rect.height.ceil().max(1.0) as u32;
+        let attrs = Attrs::new().family(Family::SansSerif);
+        let metrics =
+            text_metrics_for_label_height(label_height, self.max_font_size, self.max_line_height);
+        self.text_buffer.set_metrics(metrics);
+        self.text_buffer.set_wrap(wrap.cosmic_wrap());
+        self.text_buffer
+            .set_size(Some(label_width as f32), Some(label_height as f32));
+        self.text_buffer.set_text(
+            label,
+            &attrs,
+            Shaping::Advanced,
+            Some(alignment.cosmic_align()),
+        );
+        self.text_buffer.shape_until_scroll(self.font_system, false);
+        let cursor = Cursor::new(0, normalized_text_cursor(label, cursor));
+        let measured_x = self
+            .text_buffer
+            .cursor_position(&cursor)
+            .map(|(x, _)| x)
+            .or_else(|| self.text_buffer.layout_runs().next().map(|run| run.line_w))
+            .unwrap_or(0.0);
+        measured_x / (label_width as f32 / rect.width.max(1.0))
     }
 
     fn finish(self) -> TextFrame {
@@ -10235,13 +10354,14 @@ impl<'a> TextFrameBuilder<'a> {
         label_height: u32,
         color: TextColor,
         alignment: LabelAlignment,
+        wrap: LabelWrap,
     ) -> Vec<u8> {
         let mut pixels = vec![0; (label_width * label_height * 4) as usize];
         let attrs = Attrs::new().family(Family::SansSerif);
         let metrics =
             text_metrics_for_label_height(label_height, self.max_font_size, self.max_line_height);
         self.text_buffer.set_metrics(metrics);
-        self.text_buffer.set_wrap(Wrap::WordOrGlyph);
+        self.text_buffer.set_wrap(wrap.cosmic_wrap());
         self.text_buffer
             .set_size(Some(label_width as f32), Some(label_height as f32));
         self.text_buffer.set_text(
@@ -12388,10 +12508,6 @@ fn compact_entry_text_width(entry: &Entry, scale_factor: f32) -> f32 {
     unit_width.max(estimated_width) * scale_factor
 }
 
-fn estimated_text_width(value: &str, scale_factor: f32) -> f32 {
-    value.chars().map(estimated_name_char_width).sum::<f32>() * scale_factor
-}
-
 fn estimated_name_char_width(ch: char) -> f32 {
     match ch {
         '\u{200B}' => 0.0,
@@ -13762,6 +13878,25 @@ mod tests {
             .expect("split pane should expose geometry");
         assert!(scene.pane_width(size) < (size.width as f32 - scene.content_origin_x(size)));
         assert!(metrics.right_pane.x > scene.pane_rect(size).x);
+
+        {
+            let pane = scene.split_pane.as_mut().expect("split pane should load");
+            pane.view_mode = ShellViewMode::Compact;
+            pane.scroll_x = 12.0;
+        }
+        let pane = scene.split_pane.as_ref().expect("split pane should load");
+        let view = ShellPaneView::from_state(pane);
+        assert_eq!(view.path, right.as_path());
+        assert_eq!(view.dir_count, 0);
+        assert_eq!(view.scroll_x, 12.0);
+        let layout = scene.pane_layout(view, metrics.right_pane.width, metrics.right_pane.height);
+        match layout {
+            ShellLayout::Compact(layout) => {
+                assert_eq!(layout.visible_items().len(), 1);
+                assert!(layout.content_size().width > 0.0);
+            }
+            _ => panic!("split pane view mode should drive reusable compact layout"),
+        }
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -15996,6 +16131,84 @@ text/plain=writer.desktop;\n",
         assert_eq!(scene.location_draft.as_ref().unwrap().cursor, 2);
         assert!(scene.apply_location_command(LocationCommand::MoveHome, size));
         assert_eq!(scene.location_draft.as_ref().unwrap().cursor, 0);
+    }
+
+    #[test]
+    fn location_draft_blurs_outside_path_bar_without_committing() {
+        let mut scene = test_scene(vec![test_entry("alpha", false)], ShellViewMode::Icons);
+        scene.path = PathBuf::from("/tmp");
+        let size = PhysicalSize::new(600, 320);
+
+        assert!(scene.apply_location_command(LocationCommand::Activate, size));
+        assert!(
+            scene.apply_location_command(
+                LocationCommand::Insert("/does-not-exist".to_string()),
+                size
+            )
+        );
+        assert_eq!(scene.location_draft_value(), Some("/does-not-exist"));
+
+        let path_bar = scene.path_bar_rect(size).unwrap();
+        assert!(!scene.close_location_draft_if_outside(
+            ViewPoint {
+                x: path_bar.x + 4.0,
+                y: path_bar.y + 4.0,
+            },
+            size
+        ));
+        assert!(scene.is_location_editing());
+
+        let blank = ViewPoint {
+            x: scene.content_origin_x(size) + scene.content_width(size) - 4.0,
+            y: scene.content_origin_y() + 4.0,
+        };
+        assert!(scene.close_location_draft_if_outside(blank, size));
+        assert_eq!(scene.location_draft_value(), None);
+        assert_eq!(scene.path, PathBuf::from("/tmp"));
+        assert_eq!(scene.location_changes, 3);
+    }
+
+    #[test]
+    fn shaped_label_cursor_measurement_tracks_glyph_layout() {
+        let mut font_system = FontSystem::new();
+        let mut swash_cache = SwashCache::new();
+        let mut text_buffer = Buffer::new_empty(Metrics::new(TEXT_FONT_SIZE, TEXT_LINE_HEIGHT));
+        let mut label_cache = LabelRasterCache::new(1024 * 1024);
+        let mut text = TextFrameBuilder::new(
+            &mut font_system,
+            &mut swash_cache,
+            &mut text_buffer,
+            &mut label_cache,
+            PhysicalSize::new(320, 120),
+            1.0,
+        );
+        let rect = ViewRect {
+            x: 0.0,
+            y: 0.0,
+            width: 220.0,
+            height: TEXT_LINE_HEIGHT,
+        };
+
+        let one =
+            text.measure_label_cursor_x("abcdef", rect, 1, LabelAlignment::Start, LabelWrap::None);
+        let end = text.measure_label_cursor_x(
+            "abcdef",
+            rect,
+            "abcdef".len(),
+            LabelAlignment::Start,
+            LabelWrap::None,
+        );
+        let wide = text.measure_label_cursor_x(
+            "mmmmmm",
+            rect,
+            "mmmmmm".len(),
+            LabelAlignment::Start,
+            LabelWrap::None,
+        );
+
+        assert!(one > 0.0);
+        assert!(end > one);
+        assert!(wide > end);
     }
 
     #[test]

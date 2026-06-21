@@ -254,9 +254,12 @@ Current checkpoint:
   `Ctrl/Meta+D`, `F6`, or clicking the top path bar. It reuses core
   `resolve_location_input` and `complete_location_input`: first typed input
   replaces the current path draft, Backspace/Delete edit at the real caret,
-  Arrow/Home/End move the caret, Tab completes filesystem paths, Enter commits
-  through the retained navigation/history path, and Esc cancels. Selection
-  editing and IME remain Phase 4
+  Arrow/Home/End move the caret, caret x is now measured from the same
+  `cosmic-text` shaped glyph layout used to rasterize the no-wrap path label,
+  clicking outside the path bar safely cancels the draft and restores the real
+  current path, Tab completes filesystem paths, Enter commits through the
+  retained navigation/history path, and Esc cancels. Selection editing and IME
+  remain Phase 4
   text-boundary work.
 - Dotfile visibility is now shell-owned. Hidden entries are excluded from the
   retained projection by default; `Ctrl/Meta+H` shows them. Selection is
@@ -390,15 +393,19 @@ directory/place Open in New Pane loads a real right-hand pane with its own
 location bar/content/status paint, item hover/selection backgrounds are rounded,
 the location bar uses a white bordered original-style treatment with a leading
 folder glyph, a vertically centered real caret, and Arrow/Home/End/Delete cursor
-editing. The Places panel now keeps visible breathing room before the pane, and
+editing. The caret is positioned from shaped text metrics instead of hand-written
+character estimates, and clicking blank space outside the path bar cancels the
+location draft without committing an invalid path. The Places panel now keeps
+visible breathing room before the pane, and
 the pane chrome drops the earlier hard blue/gray outer border in favor of subtle
 separators that blend into the shell background. Empty Trash no longer paints
 the blue status dot. The split pane is intentionally a minimal visible skeleton:
 focus, pointer routing,
 scrollbars, DnD, and file operations still target the primary pane. The next
-multi-pane step must extract pane state/layout/paint/hit-test into a reusable
-pane component and then plug both the primary and right-hand panes into that
-component instead of adding more split-only paths. Richer Places
+multi-pane work has started by projecting both the primary and right-hand pane
+through `ShellPaneView` and a shared `pane_layout(...)` for Icons, Compact, and
+Details. The next step must continue that extraction through pane paint,
+hit-test, and event routing instead of adding more split-only paths. Richer Places
 actions/devices/DnD, richer Trash conflict handling, undo, richer properties, full inline
 rename, full Create New submenus/templates, and Open With default-app selection
 remain pending.

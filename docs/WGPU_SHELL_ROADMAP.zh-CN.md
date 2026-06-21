@@ -200,8 +200,9 @@ Shell 拥有：
 - 最小 shell-owned pane-local location edit mode 已可用，可通过 `Ctrl/Meta+L`、`Ctrl/Meta+D`、
   `F6` 或点击顶部 path bar 激活。它复用 core `resolve_location_input` 和
   `complete_location_input`：首次输入会替换当前 path draft，Backspace/Delete 通过真实
-  caret 编辑 draft，Arrow/Home/End 移动 caret，Tab 补全 filesystem path，Enter 通过
-  retained navigation/history path 提交，Esc 取消。Selection editing 和 IME 仍留到 Phase 4
+  caret 编辑 draft，Arrow/Home/End 移动 caret，caret x 现在由同一套 `cosmic-text`
+  shaped glyph layout 测量，path label 明确 no-wrap，点击 path bar 外部空白会安全取消
+  draft 并恢复当前真实 path，Tab 补全 filesystem path，Enter 通过 retained navigation/history path 提交，Esc 取消。Selection editing 和 IME 仍留到 Phase 4
   文本边界。
 - Dotfile 可见性现在也由 shell-owned retained projection 管理。默认不显示 hidden
   entries；`Ctrl/Meta+H` 会显示它们。切换可见性时 selection 会通过同一 projection
@@ -312,11 +313,13 @@ Location/Properties/Remove menu 也已接入。Blank context menu 现在提供 S
 Hidden Files 和 Split View；directory/place 的 Open in New Pane 会加载真实右侧
 pane，并绘制自己的 location bar/content/status；file-view item hover/selection
 背景已改为圆角；location bar 改成白底、细边框、leading folder glyph 和 active focus
-ring，并绘制垂直居中的真实 caret，支持 Arrow/Home/End/Delete 光标编辑；Places 与
+ring，并绘制垂直居中的真实 caret，支持 Arrow/Home/End/Delete 光标编辑；caret 现在用
+shaped text metrics 定位，不再依赖手写字符宽度估算，点击 path bar 外空白会取消 draft 且不提交无效路径；Places 与
 pane 之间保留明确间距，pane 硬蓝/灰外框弱化为更贴近背景的细分隔线；Trash 为空时不再绘制蓝色状态圆点。当前 split pane 仍是最小可见骨架：focus、
 pointer routing、scrollbar、DnD 和 file operations 仍作用于主 pane。下一步 multi-pane
-工作必须先把 pane state/layout/paint/hit-test 抽成可复用 pane component，再让主 pane
-和右侧 pane 都接入该 component，不能继续追加 split-only 特例。更完整 Places
+工作已先把主 pane 与右侧 pane 投影为同一个 `ShellPaneView`，并通过共享
+`pane_layout(...)` 生成 Icons/Compact/Details layout；下一步必须继续把 pane
+paint/hit-test/event routing 接入同一个可复用 pane component，不能继续追加 split-only 特例。更完整 Places
 actions/devices/DnD、更完整 Trash conflict handling、undo、更完整 properties、完整 inline
 rename、完整 Create New 子菜单/模板和 Open With default-app selection 仍待完成。
 
