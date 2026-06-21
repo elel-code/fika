@@ -996,7 +996,7 @@ impl ApplicationHandler for FikaWgpuApp {
                     }
                     return;
                 }
-                if state == ElementState::Released && self.scene.internal_drag_source_place() {
+                if state == ElementState::Released && self.scene.place_pointer_active() {
                     let (changed, activation) = self.scene.end_place_pointer(point, size);
                     if let Some((pane, path)) = activation {
                         self.load_path_into_pane(event_loop, pane, path, "place-open");
@@ -3929,6 +3929,12 @@ impl ShellInternalDrag {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ShellPlacePress {
+    index: usize,
+    point: ViewPoint,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct ShellDropOperationRequest {
     sources: Vec<PathBuf>,
@@ -3979,6 +3985,7 @@ struct ShellScene {
     visible_slots: ShellPaneVisibleSlotPools,
     visible_slot_stats: ShellVisibleItemSlotStats,
     internal_drag: Option<ShellInternalDrag>,
+    place_press: Option<ShellPlacePress>,
     dnd_hover_target: Option<ShellDropTarget>,
     pending_drop_request: Option<ShellDropOperationRequest>,
     rubber_band: Option<RubberBand>,
@@ -4082,6 +4089,7 @@ impl ShellScene {
             visible_slots: ShellPaneVisibleSlotPools::default(),
             visible_slot_stats: ShellVisibleItemSlotStats::default(),
             internal_drag: None,
+            place_press: None,
             dnd_hover_target: None,
             pending_drop_request: None,
             rubber_band: None,
@@ -4341,6 +4349,7 @@ impl ShellScene {
         self.open_with_chooser = None;
         self.trash_conflict_dialog = None;
         self.internal_drag = None;
+        self.place_press = None;
         self.pending_drop_request = None;
         self.clear_dnd_hover_target();
     }
@@ -4798,6 +4807,7 @@ impl ShellScene {
         self.open_with_chooser = None;
         self.trash_conflict_dialog = None;
         self.internal_drag = None;
+        self.place_press = None;
         self.pending_drop_request = None;
         self.clear_dnd_hover_target();
         self.rubber_band = None;
@@ -4872,6 +4882,7 @@ impl ShellScene {
         self.open_with_chooser = None;
         self.trash_conflict_dialog = None;
         self.internal_drag = None;
+        self.place_press = None;
         self.pending_drop_request = None;
         self.clear_dnd_hover_target();
         self.rubber_band = None;
@@ -5300,6 +5311,7 @@ impl ShellScene {
         let item_hover_changed = self.set_hovered_item(None);
         self.rubber_band = None;
         self.internal_drag = None;
+        self.place_press = None;
         self.last_item_click = None;
         self.context_target = None;
         self.context_menu = None;
@@ -5340,15 +5352,23 @@ impl ShellScene {
         self.context_target = None;
         self.context_menu = None;
         self.drop_menu = None;
-        let drag_started = self.begin_internal_drag_for_place(index, point);
+        self.place_press = Some(ShellPlacePress { index, point });
+        let drag_started = if self.place_participates_in_dnd(index) {
+            self.begin_internal_drag_for_place(index, point)
+        } else {
+            self.internal_drag = None;
+            false
+        };
         Some(hover_changed || item_hover_changed || drag_started)
     }
 
-    fn internal_drag_source_place(&self) -> bool {
-        self.internal_drag
-            .as_ref()
-            .and_then(ShellInternalDrag::source_place_index)
-            .is_some()
+    fn place_pointer_active(&self) -> bool {
+        self.place_press.is_some()
+            || self
+                .internal_drag
+                .as_ref()
+                .and_then(ShellInternalDrag::source_place_index)
+                .is_some()
     }
 
     fn end_place_pointer(
@@ -5361,20 +5381,30 @@ impl ShellScene {
             .internal_drag
             .as_ref()
             .and_then(ShellInternalDrag::source_place_index)
+            .or_else(|| self.place_press.as_ref().map(|press| press.index))
         else {
             return (self.refresh_hover(size), None);
         };
         if self.internal_drag.as_ref().is_some_and(|drag| drag.active) {
+            self.place_press = None;
             let drop_changed = self.finish_internal_drag(point, size);
             let hover_changed = self.refresh_hover(size);
             return (drop_changed || hover_changed, None);
         }
 
+        let press = self.place_press.take();
         let drag_cleared = self.internal_drag.take().is_some();
         let _ = self.clear_dnd_hover_target();
-        let activation = (self.place_index_at_screen_point(point, size) == Some(source_index))
-            .then(|| self.activate_place_index(source_index, point))
-            .flatten();
+        let within_click_distance = press
+            .as_ref()
+            .is_none_or(|press| point_distance(press.point, point) < RUBBER_BAND_START_THRESHOLD);
+        let activation = if within_click_distance
+            && self.place_index_at_screen_point(point, size) == Some(source_index)
+        {
+            self.activate_place_index(source_index, point)
+        } else {
+            None
+        };
         let hover_changed = self.refresh_hover(size);
         (
             drag_cleared || hover_changed || activation.is_some(),
@@ -5393,6 +5423,39 @@ impl ShellScene {
         self.place_row_rects(size)
             .into_iter()
             .find_map(|(index, rect)| rect.contains(point).then_some(index))
+    }
+
+    fn place_participates_in_dnd(&self, index: usize) -> bool {
+        self.places
+            .get(index)
+            .is_some_and(|place| place.group.is_empty() && !place.network && place.device.is_none())
+    }
+
+    fn place_dnd_gap_index_is_valid(&self, index: usize) -> bool {
+        let Some(first_index) = self
+            .places
+            .iter()
+            .enumerate()
+            .find_map(|(place_index, _place)| {
+                self.place_participates_in_dnd(place_index)
+                    .then_some(place_index)
+            })
+        else {
+            return false;
+        };
+        let Some(last_index) =
+            self.places
+                .iter()
+                .enumerate()
+                .rev()
+                .find_map(|(place_index, _place)| {
+                    self.place_participates_in_dnd(place_index)
+                        .then_some(place_index)
+                })
+        else {
+            return false;
+        };
+        index >= first_index && index <= last_index.saturating_add(1)
     }
 
     fn place_row_rects(&self, size: PhysicalSize<u32>) -> Vec<(usize, ViewRect)> {
@@ -5434,11 +5497,15 @@ impl ShellScene {
             return Vec::new();
         }
         let rows = self.place_row_rects(size);
-        let Some((first_index, first_rect)) = rows.first().copied() else {
+        let dnd_rows = rows
+            .into_iter()
+            .filter(|(index, _rect)| self.place_participates_in_dnd(*index))
+            .collect::<Vec<_>>();
+        let Some((first_index, first_rect)) = dnd_rows.first().copied() else {
             return Vec::new();
         };
         let gap_height = self.scale_metric(8.0).max(4.0);
-        let mut gaps = Vec::with_capacity(rows.len() + 1);
+        let mut gaps = Vec::with_capacity(dnd_rows.len() + 1);
         let mut push_gap = |index: usize, center_y: f32, row: ViewRect| {
             let rect = ViewRect {
                 x: row.x,
@@ -5451,12 +5518,12 @@ impl ShellScene {
             }
         };
         push_gap(first_index, first_rect.y, first_rect);
-        for pair in rows.windows(2) {
+        for pair in dnd_rows.windows(2) {
             let (index, rect) = pair[1];
             let (_, previous) = pair[0];
             push_gap(index, (previous.bottom() + rect.y) / 2.0, rect);
         }
-        if let Some((last_index, last_rect)) = rows.last().copied() {
+        if let Some((last_index, last_rect)) = dnd_rows.last().copied() {
             push_gap(last_index + 1, last_rect.bottom(), last_rect);
         }
         gaps
@@ -5694,14 +5761,22 @@ impl ShellScene {
             ShellDropTarget::PlacesGap { index } => match &drag.source {
                 ShellInternalDragSource::Place {
                     index: source_index,
-                } => *index != *source_index && *index != source_index.saturating_add(1),
-                ShellInternalDragSource::PaneItem { is_dir: true, .. } => {
-                    drag.pane_source_directory_path().is_some()
+                } => {
+                    self.place_dnd_gap_index_is_valid(*index)
+                        && self.place_participates_in_dnd(*source_index)
+                        && *index != *source_index
+                        && *index != source_index.saturating_add(1)
                 }
+                ShellInternalDragSource::PaneItem {
+                    is_dir: true,
+                    source_path,
+                    ..
+                } => drag.pane_source_directory_path().is_some() && !is_network_path(source_path),
                 ShellInternalDragSource::PaneItem { is_dir: false, .. } => false,
             },
-            ShellDropTarget::Place { .. } => {
-                matches!(&drag.source, ShellInternalDragSource::PaneItem { .. })
+            ShellDropTarget::Place { index, .. } => {
+                self.place_participates_in_dnd(*index)
+                    && matches!(&drag.source, ShellInternalDragSource::PaneItem { .. })
             }
             ShellDropTarget::PaneItem { is_dir, path, .. } if *is_dir => {
                 !drag.paths.iter().any(|source| source == path)
@@ -5814,6 +5889,10 @@ impl ShellScene {
     }
 
     fn begin_internal_drag_for_place(&mut self, index: usize, point: ViewPoint) -> bool {
+        if !self.place_participates_in_dnd(index) {
+            self.internal_drag = None;
+            return false;
+        }
         let Some(place) = self.places.get(index) else {
             self.internal_drag = None;
             return false;
@@ -5933,6 +6012,8 @@ impl ShellScene {
     ) -> Result<bool, String> {
         if source_index >= self.places.len()
             || gap_index > self.places.len()
+            || !self.place_participates_in_dnd(source_index)
+            || !self.place_dnd_gap_index_is_valid(gap_index)
             || gap_index == source_index
             || gap_index == source_index.saturating_add(1)
         {
@@ -5976,7 +6057,13 @@ impl ShellScene {
         user_places_path: &Path,
         size: PhysicalSize<u32>,
     ) -> Result<bool, String> {
+        if is_network_path(&path) {
+            return Ok(false);
+        }
         if let Some(existing_index) = self.places.iter().position(|place| place.path == path) {
+            if !self.place_participates_in_dnd(existing_index) {
+                return Ok(false);
+            }
             return self.move_place_to_gap(existing_index, gap_index, user_places_path, size);
         }
         let label = default_shell_place_label(&path);
@@ -11713,6 +11800,7 @@ impl ShellScene {
         let changed = self.hovered_item.take().is_some()
             || self.hovered_place.take().is_some()
             || self.internal_drag.take().is_some()
+            || self.place_press.take().is_some()
             || self.clear_dnd_hover_target();
         if changed {
             self.hit_tests += 1;
@@ -11722,6 +11810,7 @@ impl ShellScene {
 
     fn begin_pane_pointer(&mut self, click: SelectionClick, size: PhysicalSize<u32>) -> bool {
         self.rubber_band = None;
+        self.place_press = None;
         self.pointer = Some(click.point);
         let active_changed = self.focus_pane_at_screen_point(click.point, size);
         let hit = self.pane_item_at_screen_point(click.point, size);
@@ -11741,6 +11830,7 @@ impl ShellScene {
             return active_changed || hover_changed || selection_changed || drag_started;
         }
         self.internal_drag = None;
+        self.place_press = None;
         let pane_id = self.active_pane();
         let Some(projection) = self.pane_projection(pane_id, size) else {
             return active_changed || hover_changed;
@@ -17695,6 +17785,7 @@ mod tests {
             visible_slots: ShellPaneVisibleSlotPools::default(),
             visible_slot_stats: ShellVisibleItemSlotStats::default(),
             internal_drag: None,
+            place_press: None,
             dnd_hover_target: None,
             pending_drop_request: None,
             rubber_band: None,
@@ -18578,6 +18669,88 @@ mod tests {
                 .any(|place| place.path == project)
         );
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn device_and_network_places_do_not_participate_in_internal_dnd() {
+        let mut scene = test_scene(vec![test_entry("note.txt", false)], ShellViewMode::Icons);
+        scene.places = vec![
+            ShellPlace::new("", "H", "Home", PathBuf::from("/tmp/home"), false),
+            ShellPlace::new("Network", "Net", "Network", network_root_path(), false),
+            ShellPlace::new("Devices", "/", "Root", PathBuf::from("/"), false),
+            ShellPlace::new(
+                "Devices",
+                "D",
+                "Disk",
+                PathBuf::from("/run/media/disk"),
+                false,
+            )
+            .with_device(ShellDevicePlace {
+                id: "disk".to_string(),
+                mounted: true,
+                ejectable: true,
+                can_power_off: false,
+            }),
+        ];
+        let size = PhysicalSize::new(760, 520);
+
+        assert!(!scene.begin_internal_drag_for_place(1, ViewPoint { x: 0.0, y: 0.0 }));
+        assert!(!scene.begin_internal_drag_for_place(2, ViewPoint { x: 0.0, y: 0.0 }));
+        assert!(!scene.begin_internal_drag_for_place(3, ViewPoint { x: 0.0, y: 0.0 }));
+
+        let network_row = scene.place_row_rects(size)[1].1;
+        let network_point = ViewPoint {
+            x: network_row.x + 6.0,
+            y: network_row.y + 6.0,
+        };
+        assert_eq!(scene.begin_place_pointer(network_point, size), Some(true));
+        assert!(scene.internal_drag.is_none());
+        let (_changed, activation) = scene.end_place_pointer(network_point, size);
+        assert_eq!(activation, Some((ShellPaneId::FIRST, network_root_path())));
+
+        let projection = scene.pane_projection(ShellPaneId::FIRST, size).unwrap();
+        let item = projection.visible_items[0];
+        let start = ViewPoint {
+            x: projection.geometry.content.x + item.layout.visual_rect.x + 6.0,
+            y: projection.geometry.content.y + item.layout.visual_rect.y + 6.0,
+        };
+        let device_row = scene.place_row_rects(size)[3].1;
+        let device_point = ViewPoint {
+            x: device_row.x + device_row.width / 2.0,
+            y: device_row.y + device_row.height / 2.0,
+        };
+
+        assert!(scene.begin_internal_drag_for_pane_item(ShellPaneId::FIRST, 0, start));
+        assert!(scene.set_pointer(device_point, size));
+        assert_eq!(scene.dnd_hover_target, None);
+        assert!(!scene.finish_internal_drag(device_point, size));
+        assert!(scene.drop_menu.is_none());
+    }
+
+    #[test]
+    fn last_places_gap_stays_attached_to_trash_before_network_section() {
+        let mut scene = test_scene(Vec::new(), ShellViewMode::Icons);
+        scene.places = vec![
+            ShellPlace::new("", "H", "Home", PathBuf::from("/tmp/home"), false),
+            ShellPlace::new("", "Tr", "Trash", file_ops::trash_files_dir(), false),
+            ShellPlace::new("Network", "Net", "Network", network_root_path(), false),
+            ShellPlace::new("Devices", "/", "Root", PathBuf::from("/"), false),
+        ];
+        let size = PhysicalSize::new(760, 520);
+        let rows = scene.place_row_rects(size);
+        let trash_rect = rows[1].1;
+        let network_rect = rows[2].1;
+        let last_left_gap = scene
+            .place_gap_rect_for_index(2, size)
+            .expect("gap after Trash should be visible");
+
+        assert!(
+            (last_left_gap.y + last_left_gap.height / 2.0 - trash_rect.bottom()).abs()
+                < f32::EPSILON
+        );
+        assert!(last_left_gap.bottom() < network_rect.y);
+        assert!(scene.place_gap_rect_for_index(3, size).is_none());
+        assert!(scene.place_gap_rect_for_index(4, size).is_none());
     }
 
     #[test]
