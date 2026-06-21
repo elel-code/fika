@@ -11,6 +11,7 @@ name = "fika_core"
 [dependencies]
 bytemuck = { version = "1", features = ["derive"] }
 calloop = "0.14"
+calloop-wayland-source = "0.4"
 compio = { version = "0.19", default-features = false, features = ["fs", "io", "io-uring", "macros", "runtime"] }
 cosmic-text = "0.19"
 futures-lite = "2"

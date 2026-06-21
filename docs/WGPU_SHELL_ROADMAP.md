@@ -108,8 +108,9 @@ Current checkpoint:
 - `src/bin/fika-sctk.rs` exists as the new backend spike. It connects to the
   Wayland session through SCTK/wayland-client, creates an xdg-window, builds a
   `wgpu` surface from raw Wayland handles, reads the requested directory through
-  `fika_core::read_entries_sync`, logs entry counts, and clears the first
-  configured frame. This is the target host for the retained scene.
+  `fika_core::read_entries_sync`, routes the Wayland event queue through
+  calloop `WaylandSource`, logs entry counts, and clears configured frames.
+  This is the target host for the retained scene.
 - `src/bin/fika-wgpu.rs` exists as the older winit-backed renderer spike.
 - It accepts an optional path argument and defaults to the current directory.
 - It reads directory entries through `fika_core::read_entries_sync`.

@@ -1853,6 +1853,7 @@ version = "0.0.0"
 dependencies = [
  "bytemuck",
  "calloop",
+ "calloop-wayland-source",
  "compio",
  "cosmic-text",
  "futures-lite",

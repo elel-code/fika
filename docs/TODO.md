@@ -84,7 +84,8 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
 - [~] Phase 0：新增独立 `fika-sctk` spike，不删除 GPUI binary，并把现有 `fika-wgpu`
   作为 scene/renderer 迁移输入而不是长期窗口层。当前 `fika-sctk` 已通过
   `smithay-client-toolkit` 创建 Wayland xdg-window、用 raw Wayland handle 初始化
-  wgpu surface、读取可选 path 并输出目录统计；下一步是把 `fika-wgpu` 的
+  wgpu surface、把 Wayland event queue 接入 calloop `WaylandSource`、读取可选 path
+  并输出目录统计；下一步是把 `fika-wgpu` 的
   `ShellScene`/renderer/input projection 搬到 SCTK/calloop 事件循环下。历史 `fika-wgpu`
   winit-backed spike 已能打开独立窗口、接受可选 path 参数、通过 `fika_core::read_entries_sync`
   读取目录、用 `IconsLayout` 投影 retained geometry，Compact projection 会按每列

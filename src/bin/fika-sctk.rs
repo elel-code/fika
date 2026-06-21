@@ -4,6 +4,8 @@ use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::ptr::NonNull;
 
+use calloop::EventLoop;
+use calloop_wayland_source::WaylandSource;
 use fika_core::read_entries_sync;
 use raw_window_handle::{
     RawDisplayHandle, RawWindowHandle, WaylandDisplayHandle, WaylandWindowHandle,
@@ -49,7 +51,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     );
 
     let conn = Connection::connect_to_env()?;
-    let (globals, mut event_queue) = registry_queue_init(&conn)?;
+    let (globals, event_queue) = registry_queue_init(&conn)?;
     let qh = event_queue.handle();
 
     let compositor = CompositorState::bind(&globals, &qh)?;
@@ -119,8 +121,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         queue,
     };
 
+    let mut event_loop = EventLoop::<FikaSctkApp>::try_new()?;
+    WaylandSource::new(conn.clone(), event_queue).insert(event_loop.handle())?;
     while !app.exit {
-        event_queue.blocking_dispatch(&mut app)?;
+        event_loop.dispatch(None, &mut app)?;
     }
 
     drop(app.surface);
