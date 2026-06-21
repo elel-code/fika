@@ -421,9 +421,15 @@ Create New、最小 Rename、最小 Move to Trash、Trash view Restore/Delete Pe
 Trash、Copy/Cut/Copy Location、Paste、Open With 直接应用启动、KDE/Fika service-menu
 actions 和子菜单；最小 Places row Open/Copy
 Location/Properties/Remove menu 也已接入迁移输入。当前 SCTK 路径中，第一条直接
-file-operation route 是 active pane selection 的 Delete-to-Trash；context-menu 入口、
-Trash view operations、rename/create dialogs、clipboard transfer、Open With 和 service-menu
-dispatch 仍待迁入。Blank context menu 现在提供 Show/Hide
+file-operation route 是 active pane selection 的 Delete-to-Trash；第一版 shell-owned
+context-menu 边界也已进入 SCTK。Wayland right-click 现在会创建 item/blank/place
+retained target，绘制不透明浅色 overlay，Esc 或外部点击会关闭；item target 会按
+Dolphin 语义把未选中项切为单选后再打开菜单。当前 SCTK menu dispatch 覆盖 Open
+directory/place、Open in Split Pane、通过 core trash operations 的 Move to Trash、Toggle
+Hidden、Split View、Select All 和 Refresh。Create、Rename、Properties 和 Copy Location
+目前会进入明确的 pane-local pending status，等待 SCTK dialogs 或 Wayland clipboard provider
+迁入。Trash view operations、完整 rename/create dialogs、Wayland clipboard transfer、
+Open With 和 service-menu dispatch 仍待迁入。Blank context menu 现在提供 Show/Hide
 Hidden Files 和 Split View；directory/place 的 Open in New Pane 会加载真实右侧
 pane，并绘制自己的 location bar/content/status；file-view item hover/selection
 背景已改为圆角；location bar 改成白底、细边框、leading folder glyph 和 active focus

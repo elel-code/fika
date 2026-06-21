@@ -46,6 +46,18 @@ pub(crate) struct SctkPane {
     scroll_y: f32,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum PaneContextTarget {
+    Item {
+        path: PathBuf,
+        is_dir: bool,
+        selection_count: usize,
+    },
+    Blank {
+        path: PathBuf,
+    },
+}
+
 impl SctkPane {
     pub(crate) fn load(path: PathBuf, view_mode: ViewMode) -> Result<Self, Box<dyn Error>> {
         let entries = read_entries_sync(&path)?;
@@ -224,6 +236,34 @@ impl SctkPane {
     pub(crate) fn press_primary(&mut self, point: ViewPoint, geometry: PaneGeometry) -> bool {
         let hit = self.hit_test(point, geometry);
         self.replace_selection(hit)
+    }
+
+    pub(crate) fn prepare_context_target(
+        &mut self,
+        point: ViewPoint,
+        geometry: PaneGeometry,
+    ) -> Option<(PaneContextTarget, bool)> {
+        let hit = self.hit_test(point, geometry);
+        let before = (self.selected, self.selected_entries.clone());
+        let target = match hit {
+            Some(index) => {
+                let path = self.entry_path(index)?;
+                let is_dir = self.entries.get(index)?.is_dir;
+                if !self.selected_entries.contains(&index) {
+                    self.replace_selection(Some(index));
+                }
+                PaneContextTarget::Item {
+                    path,
+                    is_dir,
+                    selection_count: self.selected_count(),
+                }
+            }
+            None => PaneContextTarget::Blank {
+                path: self.path.clone(),
+            },
+        };
+        let changed = before != (self.selected, self.selected_entries.clone());
+        Some((target, changed))
     }
 
     pub(crate) fn set_status(&mut self, message: impl Into<String>) -> bool {

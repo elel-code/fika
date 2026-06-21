@@ -6,13 +6,17 @@ use fika_core::{
     home_dir, is_network_path, trash_selection_result,
 };
 
+use super::context_menu::{
+    ContextAction, ContextPane, ContextTarget, SctkContextMenu, push_context_menu,
+};
 use super::metrics::{
     APP_TOOLBAR_HEIGHT, PANE_MARGIN, PLACES_ICON_SIZE, PLACES_PANEL_MARGIN_BOTTOM,
     PLACES_PANEL_MARGIN_X, PLACES_ROW_HEIGHT, PLACES_TITLE_HEIGHT, PLACES_TO_PANE_GAP,
     PLACES_WIDTH, SPLIT_PANE_GAP, TEXT_FONT_SIZE, TEXT_LINE_HEIGHT,
 };
 use super::pane::{
-    FilterEdit, LocationEdit, PaneGeometry, PaneScrollbarDrag, PaneSelectionMove, SctkPane,
+    FilterEdit, LocationEdit, PaneContextTarget, PaneGeometry, PaneScrollbarDrag,
+    PaneSelectionMove, SctkPane,
 };
 use super::quad::{QuadBatch, inset};
 use super::text::TextBatch;
@@ -27,6 +31,7 @@ pub(crate) struct SctkScene {
     active: PaneSlot,
     places_visible: bool,
     pointer_capture: Option<PointerCapture>,
+    context_menu: Option<SctkContextMenu>,
     operations: OperationQueue,
 }
 
@@ -45,6 +50,7 @@ impl SctkScene {
             active: PaneSlot::Primary,
             places_visible: true,
             pointer_capture: None,
+            context_menu: None,
             operations: OperationQueue::new(),
         })
     }
@@ -149,6 +155,17 @@ impl SctkScene {
             PaneSlot::Split => split_stats.unwrap_or(primary_stats),
         };
         self.push_pointer_capture_overlay(&mut batch, geometry, window, width, height);
+        if let Some(menu) = &self.context_menu {
+            push_context_menu(
+                menu,
+                &mut batch,
+                &mut text,
+                self.context_menu_show_hidden(menu),
+                self.split_enabled(),
+                width,
+                height,
+            );
+        }
         let visible_items = primary_stats.visible_items
             + split_stats
                 .map(|stats| stats.visible_items)
@@ -173,6 +190,9 @@ impl SctkScene {
 
     pub(crate) fn set_pointer(&mut self, point: ViewPoint, width: u32, height: u32) -> bool {
         let geometry = self.geometry(width, height);
+        if let Some(menu) = self.context_menu.as_mut() {
+            return menu.set_pointer(point, width, height);
+        }
         if let Some(capture) = self.pointer_capture {
             return match capture {
                 PointerCapture::Scrollbar { pane, drag } => {
@@ -214,11 +234,25 @@ impl SctkScene {
 
     pub(crate) fn clear_pointer(&mut self) -> bool {
         let captured = self.pointer_capture.take().is_some();
+        let menu_hover = self.context_menu.as_mut().is_some_and(|menu| {
+            let changed = menu.hover.is_some();
+            menu.hover = None;
+            changed
+        });
         let primary = self.primary.clear_pointer();
-        captured | primary | self.clear_split_pointer()
+        captured | menu_hover | primary | self.clear_split_pointer()
     }
 
     pub(crate) fn press_primary(&mut self, point: ViewPoint, width: u32, height: u32) -> bool {
+        if self.context_menu.is_some() {
+            return match self.activate_context_menu_at(point, width, height) {
+                Ok(changed) => changed,
+                Err(error) => {
+                    eprintln!("[fika-sctk] context-menu-action-error error={error}");
+                    true
+                }
+            };
+        }
         let geometry = self.geometry(width, height);
         if let Some(place) = self.place_at(point, geometry) {
             self.pointer_capture = None;
@@ -337,8 +371,58 @@ impl SctkScene {
         }
     }
 
+    pub(crate) fn press_secondary(&mut self, point: ViewPoint, width: u32, height: u32) -> bool {
+        self.pointer_capture = None;
+        let mut changed = self.close_context_menu();
+        let geometry = self.geometry(width, height);
+        if let Some(place) = self.place_at(point, geometry) {
+            let target = ContextTarget::Place {
+                label: place.label,
+                path: place.path,
+            };
+            self.context_menu = Some(SctkContextMenu::new(target, point));
+            changed |= self.primary.clear_pointer();
+            changed |= self.clear_split_pointer();
+            return true | changed;
+        }
+        let previous_active = self.active;
+        let target = match geometry.pane_at(point) {
+            Some(PaneSlot::Primary) => {
+                self.active = PaneSlot::Primary;
+                let Some((target, selection_changed)) =
+                    self.primary.prepare_context_target(point, geometry.primary)
+                else {
+                    return changed | (self.active != previous_active);
+                };
+                changed |= selection_changed;
+                context_target_for_pane(PaneSlot::Primary, target)
+            }
+            Some(PaneSlot::Split) => {
+                self.active = PaneSlot::Split;
+                let Some((target, selection_changed)) = self
+                    .split
+                    .as_mut()
+                    .zip(geometry.split)
+                    .and_then(|(split, geometry)| split.prepare_context_target(point, geometry))
+                else {
+                    return changed | (self.active != previous_active);
+                };
+                changed |= selection_changed;
+                context_target_for_pane(PaneSlot::Split, target)
+            }
+            None => return changed,
+        };
+        self.context_menu = Some(SctkContextMenu::new(target, point));
+        changed |= self.clear_pointer();
+        true | changed | (self.active != previous_active)
+    }
+
     pub(crate) fn release_primary(&mut self) -> bool {
         self.pointer_capture.take().is_some()
+    }
+
+    pub(crate) fn close_context_menu(&mut self) -> bool {
+        self.context_menu.take().is_some()
     }
 
     pub(crate) fn scroll_at(
@@ -349,6 +433,9 @@ impl SctkScene {
         width: u32,
         height: u32,
     ) -> bool {
+        if self.close_context_menu() {
+            return true;
+        }
         let geometry = self.geometry(width, height);
         match geometry.pane_at(point).unwrap_or(self.active) {
             PaneSlot::Primary => {
@@ -371,17 +458,20 @@ impl SctkScene {
         width: u32,
         height: u32,
     ) -> Result<bool, Box<dyn Error>> {
+        let menu_changed = self.close_context_menu();
         if command == SceneCommand::ToggleSplit {
-            return self.toggle_split();
+            return self.toggle_split().map(|changed| changed | menu_changed);
         }
         if command == SceneCommand::TrashSelection {
-            return self.trash_active_selection();
+            return self
+                .trash_active_selection()
+                .map(|changed| changed | menu_changed);
         }
         if command == SceneCommand::DeleteSelectionPermanently {
-            return Ok(self.defer_permanent_delete());
+            return Ok(self.defer_permanent_delete() | menu_changed);
         }
         let geometry = self.geometry(width, height);
-        match self.active {
+        let changed = match self.active {
             PaneSlot::Primary => {
                 Self::apply_pane_command(&mut self.primary, geometry.primary, command)
             }
@@ -391,7 +481,8 @@ impl SctkScene {
                 .zip(geometry.split)
                 .map(|(split, geometry)| Self::apply_pane_command(split, geometry, command))
                 .unwrap_or(Ok(false)),
-        }
+        }?;
+        Ok(changed | menu_changed)
     }
 
     pub(crate) fn handle_location_edit(
@@ -688,6 +779,161 @@ impl SctkScene {
             changed = true;
         }
         Ok(changed)
+    }
+
+    fn activate_context_menu_at(
+        &mut self,
+        point: ViewPoint,
+        width: u32,
+        height: u32,
+    ) -> Result<bool, Box<dyn Error>> {
+        let Some(menu) = self.context_menu.take() else {
+            return Ok(false);
+        };
+        let show_hidden = self.context_menu_show_hidden(&menu);
+        let split_enabled = self.split_enabled();
+        let Some(action) = menu.action_at(point, show_hidden, split_enabled, width, height) else {
+            return Ok(true);
+        };
+        self.dispatch_context_action(menu.target, action, width, height)
+            .map(|changed| changed | true)
+    }
+
+    fn dispatch_context_action(
+        &mut self,
+        target: ContextTarget,
+        action: ContextAction,
+        width: u32,
+        height: u32,
+    ) -> Result<bool, Box<dyn Error>> {
+        if let Some(pane) = context_target_pane(&target) {
+            self.active = pane;
+        }
+        match action {
+            ContextAction::Open => self.open_context_target(target),
+            ContextAction::OpenInSplit => self.open_context_target_in_split(target),
+            ContextAction::MoveToTrash => {
+                if matches!(target, ContextTarget::Item { .. }) {
+                    self.trash_active_selection()
+                } else {
+                    Ok(self.set_context_status(&target, "Nothing to move to trash"))
+                }
+            }
+            ContextAction::CopyLocation => {
+                let status = context_target_path(&target)
+                    .map(|path| {
+                        format!("Copy Location needs Wayland clipboard: {}", path.display())
+                    })
+                    .unwrap_or_else(|| "Copy Location needs a target".to_string());
+                Ok(self.set_context_status(&target, status))
+            }
+            ContextAction::Rename => {
+                Ok(self.set_context_status(&target, "Rename needs the SCTK rename dialog"))
+            }
+            ContextAction::CreateFolder => {
+                Ok(self.set_context_status(&target, "Create Folder needs the SCTK create dialog"))
+            }
+            ContextAction::CreateFile => {
+                Ok(self
+                    .set_context_status(&target, "Create Text File needs the SCTK create dialog"))
+            }
+            ContextAction::Properties => {
+                Ok(self.set_context_status(&target, "Properties needs the SCTK properties dialog"))
+            }
+            ContextAction::ToggleHidden => {
+                self.handle_command(SceneCommand::ToggleHidden, width, height)
+            }
+            ContextAction::SplitView => self.toggle_split(),
+            ContextAction::SelectAll => self.handle_command(SceneCommand::SelectAll, width, height),
+            ContextAction::Refresh => self.handle_command(SceneCommand::Reload, width, height),
+        }
+    }
+
+    fn open_context_target(&mut self, target: ContextTarget) -> Result<bool, Box<dyn Error>> {
+        match target {
+            ContextTarget::Place { label, path } => {
+                if label == "Trash" {
+                    file_ops::ensure_trash_dirs()?;
+                }
+                self.active_pane_mut().open_path(path)
+            }
+            ContextTarget::Item {
+                pane,
+                path,
+                is_dir: true,
+                ..
+            } => self.open_path_in_pane(context_pane_to_slot(pane), path),
+            ContextTarget::Item { pane, path, .. } => Ok(self.set_pane_status(
+                context_pane_to_slot(pane),
+                format!("Open file needs launcher wiring: {}", path.display()),
+            )),
+            ContextTarget::Blank { .. } => Ok(false),
+        }
+    }
+
+    fn open_context_target_in_split(
+        &mut self,
+        target: ContextTarget,
+    ) -> Result<bool, Box<dyn Error>> {
+        let Some(path) = context_target_directory(&target) else {
+            return Ok(self.set_context_status(&target, "Open in Split Pane needs a directory"));
+        };
+        if target_is_trash(&target) {
+            file_ops::ensure_trash_dirs()?;
+        }
+        let view_mode = self.active_pane().view_mode();
+        let show_hidden = self.active_pane().show_hidden();
+        if self.split.is_none() {
+            let mut split = SctkPane::load(path, view_mode)?;
+            split.set_show_hidden(show_hidden);
+            self.split = Some(split);
+            self.active = PaneSlot::Split;
+            return Ok(true);
+        }
+        self.active = PaneSlot::Split;
+        self.open_path_in_pane(PaneSlot::Split, path)
+    }
+
+    fn open_path_in_pane(&mut self, pane: PaneSlot, path: PathBuf) -> Result<bool, Box<dyn Error>> {
+        match pane {
+            PaneSlot::Primary => self.primary.open_path(path),
+            PaneSlot::Split if self.split.is_some() => self.split.as_mut().unwrap().open_path(path),
+            PaneSlot::Split => {
+                let mut split = SctkPane::load(path, self.primary.view_mode())?;
+                split.set_show_hidden(self.primary.show_hidden());
+                self.split = Some(split);
+                self.active = PaneSlot::Split;
+                Ok(true)
+            }
+        }
+    }
+
+    fn set_context_status(&mut self, target: &ContextTarget, message: impl Into<String>) -> bool {
+        let pane = context_target_pane(target).unwrap_or(self.active);
+        self.set_pane_status(pane, message)
+    }
+
+    fn set_pane_status(&mut self, pane: PaneSlot, message: impl Into<String>) -> bool {
+        match pane {
+            PaneSlot::Primary => self.primary.set_status(message),
+            PaneSlot::Split if self.split.is_some() => {
+                self.split.as_mut().unwrap().set_status(message)
+            }
+            PaneSlot::Split => self.primary.set_status(message),
+        }
+    }
+
+    fn context_menu_show_hidden(&self, menu: &SctkContextMenu) -> bool {
+        context_target_pane(&menu.target)
+            .map(|pane| match pane {
+                PaneSlot::Primary => self.primary.show_hidden(),
+                PaneSlot::Split => self
+                    .split
+                    .as_ref()
+                    .map(SctkPane::show_hidden)
+                    .unwrap_or_else(|| self.primary.show_hidden()),
+            })
+            .unwrap_or_else(|| self.active_pane().show_hidden())
     }
 
     fn place_rows(&self) -> Vec<PlaceRow> {
@@ -1008,6 +1254,63 @@ fn path_matches_place(path: &Path, place: &Path) -> bool {
     }
 }
 
+fn context_target_for_pane(pane: PaneSlot, target: PaneContextTarget) -> ContextTarget {
+    let pane = pane.to_context_pane();
+    match target {
+        PaneContextTarget::Item {
+            path,
+            is_dir,
+            selection_count,
+        } => ContextTarget::Item {
+            pane,
+            path,
+            is_dir,
+            selection_count,
+        },
+        PaneContextTarget::Blank { path } => ContextTarget::Blank { pane, path },
+    }
+}
+
+fn context_pane_to_slot(pane: ContextPane) -> PaneSlot {
+    if pane == ContextPane::SPLIT {
+        PaneSlot::Split
+    } else {
+        PaneSlot::Primary
+    }
+}
+
+fn context_target_pane(target: &ContextTarget) -> Option<PaneSlot> {
+    match target {
+        ContextTarget::Item { pane, .. } | ContextTarget::Blank { pane, .. } => {
+            Some(context_pane_to_slot(*pane))
+        }
+        ContextTarget::Place { .. } => None,
+    }
+}
+
+fn context_target_path(target: &ContextTarget) -> Option<&Path> {
+    match target {
+        ContextTarget::Item { path, .. }
+        | ContextTarget::Blank { path, .. }
+        | ContextTarget::Place { path, .. } => Some(path.as_path()),
+    }
+}
+
+fn context_target_directory(target: &ContextTarget) -> Option<PathBuf> {
+    match target {
+        ContextTarget::Item {
+            path, is_dir: true, ..
+        }
+        | ContextTarget::Blank { path, .. }
+        | ContextTarget::Place { path, .. } => Some(path.clone()),
+        ContextTarget::Item { .. } => None,
+    }
+}
+
+fn target_is_trash(target: &ContextTarget) -> bool {
+    matches!(target, ContextTarget::Place { label, .. } if label == "Trash")
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PaneSlot {
     Primary,
@@ -1026,6 +1329,13 @@ impl PaneSlot {
         match self {
             Self::Primary => PaneId(1),
             Self::Split => PaneId(2),
+        }
+    }
+
+    fn to_context_pane(self) -> ContextPane {
+        match self {
+            Self::Primary => ContextPane::PRIMARY,
+            Self::Split => ContextPane::SPLIT,
         }
     }
 }
@@ -1068,6 +1378,7 @@ mod tests {
 
     use fika_core::{Entry, EntryData};
 
+    use crate::fika_sctk::context_menu::{ContextAction, menu_rect};
     use crate::fika_sctk::metrics::{
         DETAILS_HEADER_HEIGHT, DETAILS_ROW_HEIGHT, FILTER_BAR_HEIGHT, SCROLL_LINE_PX,
     };
@@ -1102,6 +1413,7 @@ mod tests {
             active: PaneSlot::Primary,
             places_visible: true,
             pointer_capture: None,
+            context_menu: None,
             operations: OperationQueue::new(),
         }
     }
@@ -1123,6 +1435,7 @@ mod tests {
             active: PaneSlot::Primary,
             places_visible: true,
             pointer_capture: None,
+            context_menu: None,
             operations: OperationQueue::new(),
         }
     }
@@ -1341,6 +1654,7 @@ mod tests {
                 active: PaneSlot::Split,
                 places_visible: true,
                 pointer_capture: None,
+                context_menu: None,
                 operations: OperationQueue::new(),
             };
             let geometry = scene.geometry(1000, 640);
@@ -1376,6 +1690,85 @@ mod tests {
         });
 
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn context_menu_move_to_trash_uses_right_clicked_item_target() {
+        let root = test_dir("context-trash");
+        let xdg = root.join("xdg");
+        std::fs::create_dir_all(&root).unwrap();
+        let doomed = root.join("doomed.txt");
+        std::fs::write(&doomed, b"doomed").unwrap();
+
+        with_xdg_data_home(&xdg, || {
+            let mut scene = SctkScene {
+                primary: SctkPane::load(root.clone(), ViewMode::Details).unwrap(),
+                split: None,
+                active: PaneSlot::Primary,
+                places_visible: true,
+                pointer_capture: None,
+                context_menu: None,
+                operations: OperationQueue::new(),
+            };
+            let geometry = scene.geometry(900, 640).primary;
+            let item_point = ViewPoint {
+                x: geometry.content.x + 40.0,
+                y: geometry.content.y + DETAILS_HEADER_HEIGHT + DETAILS_ROW_HEIGHT / 2.0,
+            };
+            assert!(scene.press_secondary(item_point, 900, 640));
+            assert!(scene.context_menu.is_some());
+            assert_eq!(scene.primary.selected_count(), 1);
+
+            let menu = scene.context_menu.as_ref().unwrap();
+            let actions = menu.actions(scene.context_menu_show_hidden(menu), scene.split_enabled());
+            let trash_row = actions
+                .iter()
+                .position(|row| row.action == ContextAction::MoveToTrash)
+                .expect("trash row");
+            let rect = menu_rect(menu.position, actions.len(), 900, 640);
+            let click = ViewPoint {
+                x: rect.x + 24.0,
+                y: rect.y + 4.0 + trash_row as f32 * 28.0 + 14.0,
+            };
+
+            assert!(scene.press_primary(click, 900, 640));
+            assert!(scene.context_menu.is_none());
+            assert!(!doomed.exists());
+            assert!(file_ops::trash_files_dir().join("doomed.txt").exists());
+            assert!(scene.operations.latest_undo().is_some());
+        });
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn blank_context_menu_toggle_hidden_routes_to_target_split_pane() {
+        let mut scene = split_scene(ViewMode::Details, 5);
+        let geometry = scene.geometry(1000, 640);
+        let split = geometry.split.unwrap();
+        let point = ViewPoint {
+            x: split.content.x + 12.0,
+            y: split.content.y + DETAILS_HEADER_HEIGHT + DETAILS_ROW_HEIGHT * 6.0,
+        };
+
+        assert!(scene.press_secondary(point, 1000, 640));
+        assert_eq!(scene.active, PaneSlot::Split);
+        let menu = scene.context_menu.as_ref().unwrap();
+        let actions = menu.actions(scene.context_menu_show_hidden(menu), scene.split_enabled());
+        let hidden_row = actions
+            .iter()
+            .position(|row| row.action == ContextAction::ToggleHidden)
+            .expect("hidden row");
+        let rect = menu_rect(menu.position, actions.len(), 1000, 640);
+        let click = ViewPoint {
+            x: rect.x + 24.0,
+            y: rect.y + 4.0 + hidden_row as f32 * 28.0 + 14.0,
+        };
+
+        assert!(scene.press_primary(click, 1000, 640));
+        assert!(!scene.primary.show_hidden());
+        assert!(scene.split.as_ref().unwrap().show_hidden());
+        assert!(scene.context_menu.is_none());
     }
 
     #[test]

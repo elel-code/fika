@@ -19,7 +19,7 @@ use smithay_client_toolkit::{
     seat::{
         Capability, SeatHandler, SeatState,
         keyboard::{KeyEvent, KeyboardHandler, Keysym, Modifiers, RawModifiers},
-        pointer::{BTN_LEFT, PointerEvent, PointerEventKind, PointerHandler},
+        pointer::{BTN_LEFT, BTN_RIGHT, PointerEvent, PointerEventKind, PointerHandler},
     },
     shell::{
         WaylandSurface,
@@ -278,6 +278,9 @@ impl PointerHandler for FikaSctkApp {
                 Leave { .. } => self.clear_pointer(),
                 Press { button, .. } if button == BTN_LEFT => {
                     self.press_primary(event.position.0, event.position.1);
+                }
+                Press { button, .. } if button == BTN_RIGHT => {
+                    self.press_secondary(event.position.0, event.position.1);
                 }
                 Release { button, .. } if button == BTN_LEFT => {
                     self.release_primary();

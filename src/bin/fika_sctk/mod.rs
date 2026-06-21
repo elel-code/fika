@@ -1,6 +1,7 @@
 use std::error::Error;
 
 mod app;
+mod context_menu;
 mod metrics;
 mod options;
 mod pane;

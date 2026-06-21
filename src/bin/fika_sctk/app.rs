@@ -274,6 +274,11 @@ impl FikaSctkApp {
         if !self.keyboard_focus {
             return;
         }
+        if event.keysym == Keysym::Escape && self.scene.close_context_menu() {
+            eprintln!("[fika-sctk] context-menu-close reason={reason}");
+            self.render_scene(reason);
+            return;
+        }
         if self.scene.location_editing() {
             let Some(edit) =
                 location_edit_command(event.keysym, self.modifiers, event.utf8.as_deref())
@@ -347,6 +352,15 @@ impl FikaSctkApp {
             .press_primary(crate::fika_sctk::quad::point(x, y), self.width, self.height)
         {
             self.render_scene("select");
+        }
+    }
+
+    pub(crate) fn press_secondary(&mut self, x: f64, y: f64) {
+        if self
+            .scene
+            .press_secondary(crate::fika_sctk::quad::point(x, y), self.width, self.height)
+        {
+            self.render_scene("context-menu");
         }
     }
 

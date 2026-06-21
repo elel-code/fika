@@ -532,9 +532,17 @@ Location, Paste, Open With direct application launch, KDE/Fika service-menu
 actions and submenus, and the minimal Places row Open/Copy Location/Properties/Remove
 menu in the migration input. In the current SCTK path, the first direct
 file-operation route is Delete-to-Trash from the active pane selection; the
-context-menu entry points, Trash view operations, rename/create dialogs,
-clipboard transfer, Open With, and service-menu dispatch still need to be moved
-over. The blank context menu now exposes Show/Hide Hidden Files and Split View,
+first shell-owned context-menu boundary is also in place. Wayland right-click
+now creates retained item/blank/place targets, paints an opaque light overlay,
+closes on Esc or outside click, and item targets follow Dolphin-style right-click
+selection by making an unselected item the sole selection before opening the
+menu. The current SCTK menu dispatch covers Open directory/place, Open in Split
+Pane, Move to Trash through core trash operations, Toggle Hidden, Split View,
+Select All, and Refresh. Create, Rename, Properties, and Copy Location currently
+report explicit pane-local pending status until their SCTK dialogs or clipboard
+provider are migrated. Trash view operations, full rename/create dialogs,
+Wayland clipboard transfer, Open With, and service-menu dispatch still need to
+be moved over. The blank context menu now exposes Show/Hide Hidden Files and Split View,
 directory/place Open in New Pane loads a real right-hand pane with its own
 location bar/content/status paint, item hover/selection backgrounds are rounded,
 the location bar uses a white bordered original-style treatment with a leading

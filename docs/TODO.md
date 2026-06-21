@@ -146,12 +146,17 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
   selected path 投影，`Delete` 会把 active pane selection 通过 core XDG Trash 操作移入
   Trash、注册 undo payload、刷新受影响 primary/split pane、清空 stale selection，并在 pane-local
   status bar 显示结果；remote trash 会显式拒绝。`Shift+Delete` 现在只进入“需要确认对话框”
-  状态，不执行永久删除。下一步继续补 toolbar split UI、context-menu 文件操作入口、
-  IME/text-selection、rename/create/dialogs、clipboard 和 DnD data-device。
+  状态，不执行永久删除。SCTK 现在也拥有第一版 shell-owned context menu 边界：
+  Wayland right-click 会生成 item/blank/place retained target，绘制不透明浅色 overlay，
+  Esc/外部点击会关闭，item target 会按 Dolphin 语义把未选中项切为单选；菜单动作已接
+  Open directory/place、Open in Split Pane、Move to Trash、Toggle Hidden、Split View、
+  Select All 和 Refresh，Create/Rename/Properties/Copy Location 先进入明确的 pane-local
+  pending status。下一步继续补 toolbar split UI、IME/text-selection、rename/create/dialogs、
+  Wayland clipboard、Open With/service-menu dispatch 和 DnD data-device。
 - [ ] Phase 4：迁入资产和系统集成热路径。MIME/theme icon atlas、Dolphin-style
   visible-first icon resolve、thumbnail worker/read-ahead、device/Places 动态数据、
-  context menu、Open With、service menu、clipboard、更完整 Trash actions、rename/create/transfer
-  file operations、
+  更完整 context menu、Open With、service menu、clipboard、更完整 Trash actions、
+  rename/create/transfer file operations、
   dialogs 和 chooser mode 仍未接到 SCTK shell。迁移时优先复用已有 core 能力，
   UI 层只负责 retained geometry、hit-test、overlay state 和 GPU batches。
 - [ ] Phase 5：Wayland DnD 和主线化。需要完成 SCTK data-device export/drop、
