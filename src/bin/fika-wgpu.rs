@@ -1,8 +1,9 @@
 use std::borrow::Cow;
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::env;
 use std::error::Error;
 use std::fs;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::{
     Arc,
@@ -69,6 +70,9 @@ const ICON_ATLAS_WIDTH: u32 = 1024;
 const ICON_PADDING: u32 = 2;
 const ICON_CACHE_MAX_BYTES: usize = 32 * 1024 * 1024;
 const ICON_RASTER_MISS_BUDGET_PER_FRAME: usize = 2;
+const THUMBNAIL_READ_AHEAD_PAGES: usize = 5;
+const THUMBNAIL_READ_AHEAD_RESOLVE_LIMIT: usize = 500;
+const THUMBNAIL_READ_AHEAD_QUEUE_BUDGET_PER_FRAME: usize = 32;
 const RUBBER_BAND_START_THRESHOLD: f32 = 4.0;
 const VIEW_SWITCH_REDRAW_FRAMES: u8 = 6;
 const PLACES_SIDEBAR_WIDTH: f32 = 228.0;
@@ -7718,6 +7722,10 @@ impl ShellScene {
         self.push_status_bar(&mut vertices, text, size, visible_items, status_bar);
         self.push_pane_borders(&mut vertices, size);
         self.push_split_pane(&mut vertices, text, icons, size);
+        self.queue_thumbnail_read_ahead_for_projection(&primary_projection, icons);
+        if let Some(split_projection) = self.pane_projection(ShellPaneKind::Split, size) {
+            self.queue_thumbnail_read_ahead_for_projection(&split_projection, icons);
+        }
         self.push_context_menu_overlay(&mut overlay_vertices, overlay_text, size);
         self.push_properties_overlay(&mut overlay_vertices, overlay_text, size);
         self.push_create_dialog_overlay(&mut overlay_vertices, overlay_text, size);
@@ -8005,26 +8013,91 @@ impl ShellScene {
             .visible_items
             .iter()
             .filter(|item| {
-                let Some(entry_index) = projection
+                projection
                     .view
                     .filtered_indexes
                     .get(item.layout.model_index)
                     .copied()
-                else {
-                    return false;
-                };
-                let Some(entry) = projection.view.entries.get(entry_index) else {
-                    return false;
-                };
-                if entry.is_dir {
-                    return false;
-                }
-                self.entry_path_for_pane_view(projection.view, entry_index)
-                    .is_some_and(|path| {
-                        thumbnail_request_may_have_preview(&path, entry.mime_type.as_deref())
+                    .and_then(|entry_index| {
+                        self.thumbnail_candidate_for_pane_entry(projection.view, entry_index)
                     })
+                    .is_some()
             })
             .count()
+    }
+
+    fn queue_thumbnail_read_ahead_for_projection(
+        &self,
+        projection: &ShellPaneProjection<'_>,
+        icons: &mut IconFrameBuilder<'_>,
+    ) {
+        let Some(visible_range) = visible_layout_range_for_projection(projection) else {
+            return;
+        };
+        let size_px = self.thumbnail_read_ahead_size_px(projection.view.view_mode);
+        if size_px < 32 {
+            return;
+        }
+        let item_count = projection.view.filtered_entry_count();
+        for layout_index in shell_dolphin_read_ahead_indexes(
+            visible_range,
+            item_count,
+            projection.visible_items.len(),
+        )
+        .into_iter()
+        .take(THUMBNAIL_READ_AHEAD_QUEUE_BUDGET_PER_FRAME)
+        {
+            let Some(entry_index) = projection.view.filtered_indexes.get(layout_index).copied()
+            else {
+                continue;
+            };
+            if let Some(candidate) =
+                self.thumbnail_candidate_for_pane_entry(projection.view, entry_index)
+            {
+                icons.queue_thumbnail_read_ahead(candidate, size_px);
+            }
+        }
+    }
+
+    fn thumbnail_read_ahead_size_px(&self, view_mode: ShellViewMode) -> u16 {
+        let icon_size = match view_mode {
+            ShellViewMode::Icons => self.zoomed_metric(ICONS_ICON_SIZE, 28.0, 92.0),
+            ShellViewMode::Compact => self.zoomed_metric(COMPACT_ICON_SIZE, 20.0, 56.0),
+            ShellViewMode::Details => self.details_icon_size(),
+        };
+        icon_cache_size(icon_size)
+    }
+
+    fn thumbnail_candidate_for_pane_entry(
+        &self,
+        view: ShellPaneView<'_>,
+        entry_index: usize,
+    ) -> Option<ShellThumbnailCandidate> {
+        let entry = view.entries.get(entry_index)?;
+        if entry.is_dir || !entry.metadata_complete {
+            return None;
+        }
+        let modified_secs = entry.modified_secs?;
+        let path = self.entry_path_for_pane_view(view, entry_index)?;
+        if is_network_path(&path)
+            || mime_magic_resolution_required(
+                entry.is_dir,
+                entry.size_bytes,
+                entry.mime_type.as_deref(),
+                entry.mime_magic_checked,
+            )
+            || !thumbnail_request_may_have_preview(&path, entry.mime_type.as_deref())
+        {
+            return None;
+        }
+        Some(ShellThumbnailCandidate {
+            path,
+            modified_secs,
+            mime_type: entry
+                .mime_type
+                .as_deref()
+                .map(std::borrow::ToOwned::to_owned),
+        })
     }
 
     fn push_split_pane(
@@ -11130,7 +11203,7 @@ impl WgpuState {
             || self.last_log.elapsed() >= Duration::from_secs(1)
         {
             eprintln!(
-                "[fika-wgpu] frame={} reason={} view={} scale={:.2} zoom={} zoom_changes={} path={} entries={} filtered={} show_hidden={} hidden_changes={} location_active={} location_changes={} filter_active={} filter_changes={} places={} places_visible={} places_width={:.1} place_hover={} places_changes={} places_resize_changes={} places_scroll_y={:.1} places_scroll_changes={} split_pane={} split_changes={} split_path={} content_scrollbar={} visible={} thumbnails={} slots={}/{} slot_reused={} slot_recycled={} slot_allocated={} selected={} hover={} dnd_hover={} dnd_hover_changes={} dnd_drop_requests={} context={} context_menu={} context_changes={} context_actions={} properties={} properties_changes={} create_dialog={} create_changes={} rename_dialog={} rename_changes={} open_with={} open_with_changes={} open_changes={} copy_location_changes={} file_clipboard_changes={} paste_changes={} trash_changes={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} path_changes={} reloads={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_deferred={} icon_raster_deferred={} thumb_loaded={} thumb_quads={} thumb_deferred={} icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_cache={}/{} entries={} bytes={} batches={} scroll_x={:.1} scroll_y={:.1} layout={}us text_raster={}us text_atlas={}x{}:{}b render={}us",
+                "[fika-wgpu] frame={} reason={} view={} scale={:.2} zoom={} zoom_changes={} path={} entries={} filtered={} show_hidden={} hidden_changes={} location_active={} location_changes={} filter_active={} filter_changes={} places={} places_visible={} places_width={:.1} place_hover={} places_changes={} places_resize_changes={} places_scroll_y={:.1} places_scroll_changes={} split_pane={} split_changes={} split_path={} content_scrollbar={} visible={} thumbnails={} slots={}/{} slot_reused={} slot_recycled={} slot_allocated={} selected={} hover={} dnd_hover={} dnd_hover_changes={} dnd_drop_requests={} context={} context_menu={} context_changes={} context_actions={} properties={} properties_changes={} create_dialog={} create_changes={} rename_dialog={} rename_changes={} open_with={} open_with_changes={} open_changes={} copy_location_changes={} file_clipboard_changes={} paste_changes={} trash_changes={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} path_changes={} reloads={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_deferred={} icon_raster_deferred={} thumb_loaded={} thumb_quads={} thumb_deferred={} thumb_read_ahead={} icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_cache={}/{} entries={} bytes={} batches={} scroll_x={:.1} scroll_y={:.1} layout={}us text_raster={}us text_atlas={}x{}:{}b render={}us",
                 self.frame_count,
                 reason,
                 scene.view_mode.as_str(),
@@ -11234,6 +11307,7 @@ impl WgpuState {
                 scene_frame.icon_stats.thumbnails,
                 scene_frame.icon_stats.thumbnail_quads,
                 scene_frame.icon_stats.thumbnail_deferred,
+                scene_frame.icon_stats.thumbnail_read_ahead_queued,
                 scene_frame.icon_stats.cache_hits,
                 scene_frame.icon_stats.cache_misses,
                 scene_frame.icon_stats.cache_entries,
@@ -11364,6 +11438,7 @@ struct IconFrameStats {
     thumbnails: usize,
     thumbnail_quads: usize,
     thumbnail_deferred: usize,
+    thumbnail_read_ahead_queued: usize,
     atlas_width: u32,
     atlas_height: u32,
     atlas_bytes: usize,
@@ -11477,6 +11552,10 @@ impl IconRasterCache {
         Some(entry.raster.clone())
     }
 
+    fn contains(&self, key: &IconRasterCacheKey) -> bool {
+        self.entries.contains_key(key)
+    }
+
     fn insert(&mut self, key: IconRasterCacheKey, raster: IconRaster) -> IconRaster {
         let bytes = raster.pixels.len();
         if let Some(old) = self.entries.insert(
@@ -11524,6 +11603,7 @@ impl IconRasterCache {
 struct ThumbnailRasterRequest {
     key: IconRasterCacheKey,
     mime_type: Option<String>,
+    priority: ThumbnailRequestPriority,
 }
 
 #[derive(Clone, Debug)]
@@ -11542,7 +11622,7 @@ enum ThumbnailResolveState {
 struct ThumbnailRasterResolver {
     ready: HashMap<IconRasterCacheKey, Option<IconRaster>>,
     failed: HashSet<ThumbnailProbeCacheKey>,
-    pending: HashSet<IconRasterCacheKey>,
+    pending: HashMap<IconRasterCacheKey, ThumbnailRequestPriority>,
     request_tx: Option<Sender<ThumbnailRasterRequest>>,
     result_rx: Receiver<ThumbnailRasterResult>,
 }
@@ -11563,7 +11643,7 @@ impl ThumbnailRasterResolver {
         Self {
             ready: HashMap::new(),
             failed: HashSet::new(),
-            pending: HashSet::new(),
+            pending: HashMap::new(),
             request_tx,
             result_rx,
         }
@@ -11587,25 +11667,70 @@ impl ThumbnailRasterResolver {
         if self.failed.contains(&failure_key) {
             return ThumbnailResolveState::Failed;
         }
-        if self.pending.contains(&key) {
-            return ThumbnailResolveState::Pending;
+        match self.pending.get(&key).copied() {
+            Some(ThumbnailRequestPriority::Visible) => return ThumbnailResolveState::Pending,
+            Some(ThumbnailRequestPriority::Deferred) | None => {}
         }
+        if self.send_request(
+            key,
+            mime_type,
+            ThumbnailRequestPriority::Visible,
+            failure_key,
+        ) {
+            ThumbnailResolveState::Pending
+        } else {
+            ThumbnailResolveState::Failed
+        }
+    }
+
+    fn queue_deferred(
+        &mut self,
+        path: &Path,
+        modified_secs: u64,
+        mime_type: Option<String>,
+        size_px: u16,
+    ) -> bool {
+        self.drain_results();
+        let key = IconRasterCacheKey::thumbnail(path.to_path_buf(), size_px, modified_secs);
+        let failure_key = ThumbnailProbeCacheKey::new(path.to_path_buf(), modified_secs);
+        if self.ready.contains_key(&key)
+            || self.failed.contains(&failure_key)
+            || self.pending.contains_key(&key)
+        {
+            return false;
+        }
+        self.send_request(
+            key,
+            mime_type,
+            ThumbnailRequestPriority::Deferred,
+            failure_key,
+        )
+    }
+
+    fn send_request(
+        &mut self,
+        key: IconRasterCacheKey,
+        mime_type: Option<String>,
+        priority: ThumbnailRequestPriority,
+        failure_key: ThumbnailProbeCacheKey,
+    ) -> bool {
         let Some(tx) = self.request_tx.as_ref() else {
             self.failed.insert(failure_key);
-            return ThumbnailResolveState::Failed;
+            return false;
         };
         if tx
             .send(ThumbnailRasterRequest {
                 key: key.clone(),
                 mime_type,
+                priority,
             })
             .is_err()
         {
             self.failed.insert(failure_key);
-            return ThumbnailResolveState::Failed;
+            return false;
         }
-        self.pending.insert(key);
-        ThumbnailResolveState::Pending
+        self.pending.insert(key, priority);
+        true
     }
 
     fn drain_results(&mut self) -> usize {
@@ -11634,7 +11759,12 @@ fn thumbnail_raster_worker(
     result_tx: Sender<ThumbnailRasterResult>,
 ) {
     let thumbnailers = ThumbnailerRegistry::shared_system();
-    while let Ok(request) = request_rx.recv() {
+    let mut visible = VecDeque::new();
+    let mut deferred = VecDeque::new();
+    let mut queued = HashMap::new();
+    while let Some(request) =
+        thumbnail_worker_next_request(&request_rx, &mut visible, &mut deferred, &mut queued)
+    {
         let raster = thumbnail_request_from_raster_request(&request)
             .and_then(|thumbnail_request| {
                 generate_thumbnail_with_external_thumbnailer_registry(
@@ -11658,6 +11788,57 @@ fn thumbnail_raster_worker(
     }
 }
 
+fn thumbnail_worker_next_request(
+    request_rx: &Receiver<ThumbnailRasterRequest>,
+    visible: &mut VecDeque<ThumbnailRasterRequest>,
+    deferred: &mut VecDeque<ThumbnailRasterRequest>,
+    queued: &mut HashMap<IconRasterCacheKey, ThumbnailRequestPriority>,
+) -> Option<ThumbnailRasterRequest> {
+    loop {
+        while let Ok(request) = request_rx.try_recv() {
+            thumbnail_worker_queue_request(request, visible, deferred, queued);
+        }
+
+        if let Some(request) = visible.pop_front().or_else(|| deferred.pop_front()) {
+            queued.remove(&request.key);
+            return Some(request);
+        }
+
+        match request_rx.recv() {
+            Ok(request) => thumbnail_worker_queue_request(request, visible, deferred, queued),
+            Err(_) => return None,
+        }
+    }
+}
+
+fn thumbnail_worker_queue_request(
+    request: ThumbnailRasterRequest,
+    visible: &mut VecDeque<ThumbnailRasterRequest>,
+    deferred: &mut VecDeque<ThumbnailRasterRequest>,
+    queued: &mut HashMap<IconRasterCacheKey, ThumbnailRequestPriority>,
+) {
+    let key = request.key.clone();
+    match queued.get(&key).copied() {
+        Some(ThumbnailRequestPriority::Visible) => {}
+        Some(ThumbnailRequestPriority::Deferred)
+            if request.priority == ThumbnailRequestPriority::Visible =>
+        {
+            deferred.retain(|queued| queued.key != key);
+            queued.insert(key, ThumbnailRequestPriority::Visible);
+            visible.push_back(request);
+        }
+        Some(ThumbnailRequestPriority::Deferred) => {}
+        None => {
+            let priority = request.priority;
+            queued.insert(key, priority);
+            match priority {
+                ThumbnailRequestPriority::Visible => visible.push_back(request),
+                ThumbnailRequestPriority::Deferred => deferred.push_back(request),
+            }
+        }
+    }
+}
+
 fn thumbnail_request_from_raster_request(
     request: &ThumbnailRasterRequest,
 ) -> Option<ThumbnailRequest> {
@@ -11668,7 +11849,7 @@ fn thumbnail_request_from_raster_request(
         request.key.path.clone(),
         request.key.stamp?,
         request.mime_type.clone(),
-        ThumbnailRequestPriority::Visible,
+        request.priority,
     )
 }
 
@@ -11677,6 +11858,13 @@ fn entry_path_for_thumbnail(directory: &Path, entry: &Entry) -> PathBuf {
         .target_path
         .clone()
         .unwrap_or_else(|| directory.join(entry.name.as_ref()))
+}
+
+#[derive(Clone, Debug)]
+struct ShellThumbnailCandidate {
+    path: PathBuf,
+    modified_secs: u64,
+    mime_type: Option<String>,
 }
 
 struct IconFrameBuilder<'a> {
@@ -11696,6 +11884,7 @@ struct IconFrameBuilder<'a> {
     thumbnails_loaded: usize,
     thumbnail_quads: usize,
     thumbnail_deferred: usize,
+    thumbnail_read_ahead_queued: usize,
     cache_hits: usize,
     cache_misses: usize,
     deferred: usize,
@@ -11729,6 +11918,7 @@ impl<'a> IconFrameBuilder<'a> {
             thumbnails_loaded: 0,
             thumbnail_quads: 0,
             thumbnail_deferred: 0,
+            thumbnail_read_ahead_queued: 0,
             cache_hits: 0,
             cache_misses: 0,
             deferred: 0,
@@ -11870,6 +12060,22 @@ impl<'a> IconFrameBuilder<'a> {
         true
     }
 
+    fn queue_thumbnail_read_ahead(&mut self, candidate: ShellThumbnailCandidate, size_px: u16) {
+        let key =
+            IconRasterCacheKey::thumbnail(candidate.path.clone(), size_px, candidate.modified_secs);
+        if self.raster_cache.contains(&key) {
+            return;
+        }
+        if self.thumbnails.queue_deferred(
+            &candidate.path,
+            candidate.modified_secs,
+            candidate.mime_type,
+            size_px,
+        ) {
+            self.thumbnail_read_ahead_queued += 1;
+        }
+    }
+
     fn copy_raster_to_atlas(&mut self, raster: IconRaster, rect: ViewRect, screen: ViewRect) {
         let atlas = self.allocate(raster.width, raster.height);
         self.copy_icon_pixels(atlas, &raster);
@@ -11923,6 +12129,7 @@ impl<'a> IconFrameBuilder<'a> {
                 thumbnails: self.thumbnails_loaded,
                 thumbnail_quads: self.thumbnail_quads,
                 thumbnail_deferred: self.thumbnail_deferred,
+                thumbnail_read_ahead_queued: self.thumbnail_read_ahead_queued,
                 atlas_width: self.width,
                 atlas_height: height,
                 atlas_bytes,
@@ -15739,6 +15946,65 @@ fn normalized_scale_factor(scale_factor: f32) -> f32 {
     }
 }
 
+fn visible_layout_range_for_projection(
+    projection: &ShellPaneProjection<'_>,
+) -> Option<Range<usize>> {
+    let start = projection
+        .visible_items
+        .iter()
+        .map(|item| item.layout.model_index)
+        .min()?;
+    let end = projection
+        .visible_items
+        .iter()
+        .map(|item| item.layout.model_index)
+        .max()?
+        + 1;
+    (start < end).then_some(start..end)
+}
+
+fn shell_dolphin_read_ahead_indexes(
+    visible_indexes: Range<usize>,
+    item_count: usize,
+    maximum_visible_items: usize,
+) -> Vec<usize> {
+    if item_count == 0 || visible_indexes.is_empty() {
+        return Vec::new();
+    }
+
+    let visible_start = visible_indexes.start.min(item_count);
+    let visible_end = visible_indexes.end.min(item_count).max(visible_start);
+    if visible_start >= visible_end {
+        return Vec::new();
+    }
+
+    let maximum_visible_items = maximum_visible_items.max(1);
+    let read_ahead_items = (THUMBNAIL_READ_AHEAD_PAGES * maximum_visible_items)
+        .min(THUMBNAIL_READ_AHEAD_RESOLVE_LIMIT / 2);
+    let last_visible = visible_end - 1;
+    let end_extended = (last_visible + read_ahead_items).min(item_count - 1);
+    let begin_extended = visible_start.saturating_sub(read_ahead_items);
+
+    let mut result = Vec::new();
+    result.extend(visible_end..end_extended + 1);
+    result.extend((begin_extended..visible_start).rev());
+
+    let last_page_start = (end_extended + 1).max(item_count.saturating_sub(maximum_visible_items));
+    result.extend(last_page_start..item_count);
+
+    let first_page_end = begin_extended.min(maximum_visible_items);
+    result.extend(0..first_page_end);
+
+    let mut remaining = THUMBNAIL_READ_AHEAD_RESOLVE_LIMIT.saturating_sub(result.len());
+    let rest_after_visible = (end_extended + 1)..last_page_start;
+    let rest_after_len = rest_after_visible.len().min(remaining);
+    result.extend(rest_after_visible.take(rest_after_len));
+    remaining = remaining.saturating_sub(rest_after_len);
+
+    result.extend((first_page_end..begin_extended).rev().take(remaining));
+    result
+}
+
 fn text_metrics_for_label_height(
     label_height: u32,
     max_font_size: f32,
@@ -15766,12 +16032,21 @@ mod tests {
     }
 
     fn test_entry_with_mime(name: &str, is_dir: bool, mime_type: &'static str) -> Entry {
+        test_entry_with_mime_and_modified(name, is_dir, mime_type, None)
+    }
+
+    fn test_entry_with_mime_and_modified(
+        name: &str,
+        is_dir: bool,
+        mime_type: &'static str,
+        modified_secs: Option<u64>,
+    ) -> Entry {
         Entry::new(fika_core::EntryData {
             name: Arc::from(name),
             name_width_units: name.len() as u16,
             target_path: None,
             size_bytes: 0,
-            modified_secs: None,
+            modified_secs,
             metadata_complete: true,
             mime_type: Some(Arc::from(mime_type)),
             mime_magic_checked: true,
@@ -16607,8 +16882,8 @@ mod tests {
     fn thumbnail_candidates_are_projected_from_visible_previewable_files() {
         let scene = test_scene(
             vec![
-                test_entry_with_mime("photo.png", false, "image/png"),
-                test_entry_with_mime("notes.txt", false, "text/plain"),
+                test_entry_with_mime_and_modified("photo.png", false, "image/png", Some(42)),
+                test_entry_with_mime_and_modified("notes.txt", false, "text/plain", Some(42)),
                 test_entry("folder", true),
             ],
             ShellViewMode::Icons,
@@ -16619,6 +16894,18 @@ mod tests {
         assert_eq!(
             scene.thumbnail_candidate_count_for_projection(&projection),
             1
+        );
+    }
+
+    #[test]
+    fn thumbnail_read_ahead_indexes_follow_dolphin_order() {
+        let indexes = shell_dolphin_read_ahead_indexes(4..7, 16, 3);
+
+        assert_eq!(&indexes[..6], &[7, 8, 9, 10, 11, 12]);
+        assert!(!indexes.iter().any(|index| (4..7).contains(index)));
+        assert_eq!(
+            indexes.iter().copied().collect::<BTreeSet<_>>().len(),
+            indexes.len()
         );
     }
 

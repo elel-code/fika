@@ -287,10 +287,13 @@ Current checkpoint:
   previewable local files, probes the freedesktop thumbnail cache and failure
   markers, uses the core `ThumbnailerRegistry` fallback commands off the render
   thread, rasterizes the cached/generated PNG in that worker, and then feeds an
-  mtime-keyed raster into the shell icon atlas. Failed probes are cached in the
-  resolver so steady redraws do not repeatedly requeue impossible thumbnails.
-  This is still an initial visible-item path, not full Dolphin/KIO PreviewJob
-  parity or read-ahead scheduler integration.
+  mtime-keyed raster into the shell icon atlas. Visible requests are promoted
+  ahead of deferred work, and each frame queues a bounded Dolphin-order
+  read-ahead set after visible items so scrolling into nearby images can reuse
+  already-started work. Failed probes are cached in the resolver so steady
+  redraws do not repeatedly requeue impossible thumbnails. This is still an
+  initial shell-local path, not full Dolphin/KIO PreviewJob parity or model-role
+  writeback.
 - `[fika-wgpu]` logs include view mode, window/UI scale, path, entry count,
   visible item count, thumbnail candidate count, retained visible slot
   active/free/reuse/recycle/allocation counters,
@@ -298,7 +301,7 @@ Current checkpoint:
   context target kind, context menu state, properties overlay state, hit-test/selection/keyboard navigation/rubber-band/view-switch/path-change/open/copy-location/file-clipboard/paste
   counters, reload/location/filter/hidden counters, DnD hover/drop-request counters, zoom percent and zoom-change counters, icon count, icon deferred/raster-deferred count, icon cache
   hit/miss count, icon cache bytes, icon atlas bytes, icon resolve/raster time,
-  thumbnail loaded/quad/deferred counters,
+  thumbnail loaded/quad/deferred/read-ahead counters,
   text label count, text cache hit/miss count, text cache bytes, text atlas
   bytes, draw batch count, render reason, layout time, text raster time, render
   time, and `scroll_x` / `scroll_y` offsets.
@@ -329,9 +332,9 @@ Acceptance:
 - [~] Emits frame timing, visible range, draw-command counters, temporary
   icon/text atlas counters, retained hit-test counters, bounded
   icon/label-cache counters, visible slot reuse counters, thumbnail candidate
-  counters, and the first thumbnail loaded/quad/deferred counters. Glyph-level
-  and long-lived thumbnail atlas eviction counters will start once those
-  resource retention layers exist.
+  counters, and the first thumbnail loaded/quad/deferred/read-ahead counters.
+  Glyph-level and long-lived thumbnail atlas eviction counters will start once
+  those resource retention layers exist.
 
 ### Phase 1: File View Parity Core
 
@@ -368,9 +371,11 @@ Acceptance:
 - Thumbnail candidates are projected from the visible retained pane items. The
   first wgpu thumbnail worker now reuses core freedesktop cache lookup,
   failure-cache checks, and thumbnailer registry commands off-frame, then
-  rasterizes ready thumbnails into the per-frame atlas path. Full
-  Dolphin/KIO-style preview job cancellation, read-ahead scheduling, model role
-  writeback, and long-lived thumbnail atlas retention remain the next step.
+  rasterizes ready thumbnails into the per-frame atlas path. Visible requests
+  are prioritized over deferred work, and a bounded Dolphin-order read-ahead
+  queue now covers nearby offscreen thumbnails. Full Dolphin/KIO-style preview
+  job cancellation, model role writeback, and long-lived thumbnail atlas
+  retention remain the next step.
 - Cache logs show hit/miss/evict/bytes and per-frame compute time.
 
 ### Phase 3: Interaction and DnD
@@ -472,8 +477,9 @@ Places Devices section now includes mounted GIO devices at app startup; live
 device monitoring and mount/eject actions remain pending. Thumbnail work has a
 visible-item candidate projection, off-frame core thumbnail cache/thumbnailer
 probing, background rasterization, mtime-keyed failure handling, and frame
-telemetry; read-ahead scheduling, model role writeback, and long-lived atlas
-retention remain pending. The properties, create, rename, Open With, and Trash
+telemetry; visible-priority dispatch and bounded Dolphin-order read-ahead are
+now in place, while model role writeback and long-lived atlas retention remain
+pending. The properties, create, rename, Open With, and Trash
 conflict overlay rectangles and hit tests now scale with the window DPI factor.
 Richer Places actions/DnD, richer Trash conflict handling, undo, richer
 properties, full inline rename, full Create New templates, and setting Open
