@@ -146,15 +146,17 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
   projection，默认隐藏 hidden entries，`Ctrl/Meta+H` 可显示，selection 会随可见性切换保留或裁剪，
   app-level Hidden toggle 仍待 toolbar 迁移；最小 shell-owned pane-local location edit mode 已可用，
   `Ctrl/Meta+L`、`Ctrl/Meta+D`、`F6` 或点击 top path bar 激活，首次输入替换当前 path
-  draft，Backspace 编辑，Tab 复用 core `complete_location_input()` 补全，Enter 复用
-  core `resolve_location_input()` 并通过 retained navigation/history path 提交，Esc 取消；
+  draft，Backspace/Delete 通过真实 caret 编辑，Arrow/Home/End 移动 caret，Tab 复用 core
+  `complete_location_input()` 补全，Enter 复用 core `resolve_location_input()` 并通过
+  retained navigation/history path 提交，Esc 取消；
   第一版 shell-owned Places 侧栏已作为顶部与 app-level toolbar 下方 pane 起点对齐的圆角 panel 绘制，通过公开 core API 构建
   Home、已存在的 XDG directories、Trash、Fika user places、primary
   `places-order.xml`、Network root、network bookmarks 和 Root，保留 row geometry，用
   最长路径前缀决定 active place，Places hover 与 item hover 分离，并将左键 place
   navigation 分派到同一 `load_path`/history path；Places sidebar 现在拥有独立 scroll
   offset、clipped row rendering、圆角 active/hover row background、圆角窄 scrollbar
-  track/thumb，并支持 sidebar scrollbar thumb drag / track click-to-drag；directory item 和 blank-directory
+  track/thumb，并支持 sidebar scrollbar thumb drag / track click-to-drag；Places 与 pane
+  之间保留 splitter+gap，Places panel 右侧也保留内边距，避免贴紧 pane；directory item 和 blank-directory
   context menu 现在支持 Add to Places，会写回 Fika `places.xbel`、reload sidebar
   projection，并持久化 primary place order；Places 右键现在会创建 shell-owned place
   context target，并打开最小 context menu，分派 Open、Copy Location、Properties，以及
@@ -192,7 +194,8 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
   当前增量：blank context menu 已接入 Show/Hide Hidden Files 和 Split View；
   directory/place 的 Open in New Pane 会加载右侧 split pane 的真实目录内容；file-view
   item hover/selection 改为圆角高亮；location bar 改为白底、细边框、leading folder
-  glyph 和 active focus ring；Trash place 在为空时不再显示蓝色状态圆点。当前 split pane
+  glyph、active focus ring 和垂直居中的真实 caret，并支持 Arrow/Home/End/Delete 光标编辑；
+  Places 与 pane 之间加入明确间距，pane 硬蓝/灰外框弱化为更贴近背景的细分隔线；Trash place 在为空时不再显示蓝色状态圆点。当前 split pane
   仍是最小可见骨架，交互焦点仍在主 pane；下一步必须把 pane state/layout/paint/hit-test
   抽成可复用 pane component，再把主 pane 与右侧 pane 统一接入，而不是继续堆 split-only
   特例。

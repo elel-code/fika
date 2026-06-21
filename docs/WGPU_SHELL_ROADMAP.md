@@ -198,7 +198,8 @@ Current checkpoint:
   projection, updates sidebar hover independently from item hover, owns an
   independent sidebar scroll offset with clipped row rendering and a rounded
   narrow scrollbar track/thumb that supports thumb drag and track click-to-drag,
-  paints rounded active/hovered row backgrounds, and dispatches
+  leaves a visible splitter/gap before the file pane instead of sitting flush
+  against it, paints rounded active/hovered row backgrounds, and dispatches
   left-click place navigation through the same `load_path`/history path as
   file-view navigation. Places
   right-click now creates a shell-owned place context target and a minimal
@@ -252,9 +253,10 @@ Current checkpoint:
 - A minimal shell-owned pane-local location edit mode is now available from `Ctrl/Meta+L`,
   `Ctrl/Meta+D`, `F6`, or clicking the top path bar. It reuses core
   `resolve_location_input` and `complete_location_input`: first typed input
-  replaces the current path draft, Backspace edits the draft, Tab completes
-  filesystem paths, Enter commits through the retained navigation/history path,
-  and Esc cancels. Caret movement, selection editing, and IME remain Phase 4
+  replaces the current path draft, Backspace/Delete edit at the real caret,
+  Arrow/Home/End move the caret, Tab completes filesystem paths, Enter commits
+  through the retained navigation/history path, and Esc cancels. Selection
+  editing and IME remain Phase 4
   text-boundary work.
 - Dotfile visibility is now shell-owned. Hidden entries are excluded from the
   retained projection by default; `Ctrl/Meta+H` shows them. Selection is
@@ -387,8 +389,12 @@ menu. The blank context menu now exposes Show/Hide Hidden Files and Split View,
 directory/place Open in New Pane loads a real right-hand pane with its own
 location bar/content/status paint, item hover/selection backgrounds are rounded,
 the location bar uses a white bordered original-style treatment with a leading
-folder glyph, and empty Trash no longer paints the blue status dot. The split
-pane is intentionally a minimal visible skeleton: focus, pointer routing,
+folder glyph, a vertically centered real caret, and Arrow/Home/End/Delete cursor
+editing. The Places panel now keeps visible breathing room before the pane, and
+the pane chrome drops the earlier hard blue/gray outer border in favor of subtle
+separators that blend into the shell background. Empty Trash no longer paints
+the blue status dot. The split pane is intentionally a minimal visible skeleton:
+focus, pointer routing,
 scrollbars, DnD, and file operations still target the primary pane. The next
 multi-pane step must extract pane state/layout/paint/hit-test into a reusable
 pane component and then plug both the primary and right-hand panes into that

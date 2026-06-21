@@ -63,6 +63,7 @@ const RUBBER_BAND_START_THRESHOLD: f32 = 4.0;
 const VIEW_SWITCH_REDRAW_FRAMES: u8 = 6;
 const PLACES_SIDEBAR_WIDTH: f32 = 228.0;
 const PLACES_SIDEBAR_SPLITTER_WIDTH: f32 = 1.0;
+const PLACES_TO_PANE_GAP: f32 = 8.0;
 const PLACES_SIDEBAR_PANEL_MARGIN_X: f32 = 8.0;
 const PLACES_SIDEBAR_PANEL_MARGIN_BOTTOM: f32 = 8.0;
 const PLACES_SIDEBAR_PADDING_X: f32 = 8.0;
@@ -313,6 +314,11 @@ enum LocationCommand {
     Activate,
     Insert(String),
     Backspace,
+    Delete,
+    MoveLeft,
+    MoveRight,
+    MoveHome,
+    MoveEnd,
     Cancel,
     Commit,
     Complete,
@@ -1776,6 +1782,36 @@ fn location_command_for_key_parts(
     {
         return Some(LocationCommand::Backspace);
     }
+    if matches!(physical_key, PhysicalKey::Code(KeyCode::Delete))
+        || matches!(logical_key, Key::Named(NamedKey::Delete))
+        || matches!(key_without_modifiers, Key::Named(NamedKey::Delete))
+    {
+        return Some(LocationCommand::Delete);
+    }
+    if matches!(physical_key, PhysicalKey::Code(KeyCode::ArrowLeft))
+        || matches!(logical_key, Key::Named(NamedKey::ArrowLeft))
+        || matches!(key_without_modifiers, Key::Named(NamedKey::ArrowLeft))
+    {
+        return Some(LocationCommand::MoveLeft);
+    }
+    if matches!(physical_key, PhysicalKey::Code(KeyCode::ArrowRight))
+        || matches!(logical_key, Key::Named(NamedKey::ArrowRight))
+        || matches!(key_without_modifiers, Key::Named(NamedKey::ArrowRight))
+    {
+        return Some(LocationCommand::MoveRight);
+    }
+    if matches!(physical_key, PhysicalKey::Code(KeyCode::Home))
+        || matches!(logical_key, Key::Named(NamedKey::Home))
+        || matches!(key_without_modifiers, Key::Named(NamedKey::Home))
+    {
+        return Some(LocationCommand::MoveHome);
+    }
+    if matches!(physical_key, PhysicalKey::Code(KeyCode::End))
+        || matches!(logical_key, Key::Named(NamedKey::End))
+        || matches!(key_without_modifiers, Key::Named(NamedKey::End))
+    {
+        return Some(LocationCommand::MoveEnd);
+    }
     if shortcut {
         return Some(LocationCommand::Ignore);
     }
@@ -2370,16 +2406,119 @@ impl PathHistory {
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct LocationDraft {
     value: String,
+    cursor: usize,
     replace_on_insert: bool,
 }
 
 impl LocationDraft {
     fn new(value: String) -> Self {
         Self {
+            cursor: value.len(),
             value,
             replace_on_insert: true,
         }
     }
+
+    fn insert(&mut self, value: &str) {
+        self.prepare_for_edit();
+        self.value.insert_str(self.cursor, value);
+        self.cursor += value.len();
+    }
+
+    fn backspace(&mut self) {
+        if self.replace_on_insert {
+            self.value.clear();
+            self.cursor = 0;
+            self.replace_on_insert = false;
+            return;
+        }
+        let Some(previous) = previous_char_boundary(&self.value, self.cursor) else {
+            return;
+        };
+        self.value.drain(previous..self.cursor);
+        self.cursor = previous;
+    }
+
+    fn delete(&mut self) {
+        self.replace_on_insert = false;
+        let cursor = normalized_text_cursor(&self.value, self.cursor);
+        let Some(next) = next_char_boundary(&self.value, cursor) else {
+            self.cursor = cursor;
+            return;
+        };
+        self.value.drain(cursor..next);
+        self.cursor = cursor;
+    }
+
+    fn move_left(&mut self) {
+        self.replace_on_insert = false;
+        if let Some(previous) = previous_char_boundary(&self.value, self.cursor) {
+            self.cursor = previous;
+        }
+    }
+
+    fn move_right(&mut self) {
+        self.replace_on_insert = false;
+        if let Some(next) = next_char_boundary(&self.value, self.cursor) {
+            self.cursor = next;
+        }
+    }
+
+    fn move_home(&mut self) {
+        self.replace_on_insert = false;
+        self.cursor = 0;
+    }
+
+    fn move_end(&mut self) {
+        self.replace_on_insert = false;
+        self.cursor = self.value.len();
+    }
+
+    fn set_completed(&mut self, value: String) {
+        self.value = value;
+        self.cursor = self.value.len();
+        self.replace_on_insert = false;
+    }
+
+    fn prepare_for_edit(&mut self) {
+        if self.replace_on_insert {
+            self.value.clear();
+            self.cursor = 0;
+            self.replace_on_insert = false;
+        }
+        self.cursor = self.cursor.min(self.value.len());
+        while !self.value.is_char_boundary(self.cursor) {
+            self.cursor -= 1;
+        }
+    }
+}
+
+fn previous_char_boundary(value: &str, cursor: usize) -> Option<usize> {
+    let cursor = normalized_text_cursor(value, cursor);
+    value[..cursor]
+        .char_indices()
+        .last()
+        .map(|(index, _)| index)
+}
+
+fn next_char_boundary(value: &str, cursor: usize) -> Option<usize> {
+    let cursor = normalized_text_cursor(value, cursor);
+    if cursor >= value.len() {
+        return None;
+    }
+    value[cursor..]
+        .char_indices()
+        .nth(1)
+        .map(|(index, _)| cursor + index)
+        .or(Some(value.len()))
+}
+
+fn normalized_text_cursor(value: &str, cursor: usize) -> usize {
+    let mut cursor = cursor.min(value.len());
+    while !value.is_char_boundary(cursor) {
+        cursor -= 1;
+    }
+    cursor
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -3639,22 +3778,43 @@ impl ShellScene {
                 let Some(draft) = self.location_draft.as_mut() else {
                     return false;
                 };
-                if draft.replace_on_insert {
-                    draft.value.clear();
-                    draft.replace_on_insert = false;
-                }
-                draft.value.push_str(&value);
+                draft.insert(&value);
             }
             LocationCommand::Backspace => {
                 let Some(draft) = self.location_draft.as_mut() else {
                     return false;
                 };
-                if draft.replace_on_insert {
-                    draft.value.clear();
-                    draft.replace_on_insert = false;
-                } else {
-                    draft.value.pop();
-                }
+                draft.backspace();
+            }
+            LocationCommand::Delete => {
+                let Some(draft) = self.location_draft.as_mut() else {
+                    return false;
+                };
+                draft.delete();
+            }
+            LocationCommand::MoveLeft => {
+                let Some(draft) = self.location_draft.as_mut() else {
+                    return false;
+                };
+                draft.move_left();
+            }
+            LocationCommand::MoveRight => {
+                let Some(draft) = self.location_draft.as_mut() else {
+                    return false;
+                };
+                draft.move_right();
+            }
+            LocationCommand::MoveHome => {
+                let Some(draft) = self.location_draft.as_mut() else {
+                    return false;
+                };
+                draft.move_home();
+            }
+            LocationCommand::MoveEnd => {
+                let Some(draft) = self.location_draft.as_mut() else {
+                    return false;
+                };
+                draft.move_end();
             }
             LocationCommand::Cancel => {
                 self.location_draft = None;
@@ -3666,8 +3826,7 @@ impl ShellScene {
                 let Some(completed) = complete_location_input(&self.path, &draft.value) else {
                     return false;
                 };
-                draft.value = completed;
-                draft.replace_on_insert = false;
+                draft.set_completed(completed);
             }
             LocationCommand::Commit | LocationCommand::Ignore => return false,
         }
@@ -4104,7 +4263,7 @@ impl ShellScene {
         ViewRect {
             x: sidebar.x + margin_x,
             y,
-            width: (sidebar.width - margin_x).max(1.0),
+            width: (sidebar.width - margin_x * 2.0).max(1.0),
             height: (sidebar.bottom() - y - margin_bottom).max(1.0),
         }
     }
@@ -5894,8 +6053,9 @@ impl ShellScene {
             let path_label = self
                 .location_draft
                 .as_ref()
-                .map(|draft| format!("{}|", draft.value))
+                .map(|draft| draft.value.clone())
                 .unwrap_or_else(|| self.path.display().to_string());
+            let path_cursor = self.location_draft.as_ref().map(|draft| draft.cursor);
             self.push_location_bar(
                 &mut vertices,
                 text,
@@ -5904,6 +6064,7 @@ impl ShellScene {
                 location_clip,
                 &path_label,
                 location_active,
+                path_cursor,
             );
         }
         self.push_places_sidebar(&mut vertices, text, size);
@@ -5975,6 +6136,7 @@ impl ShellScene {
         clip: ViewRect,
         label: &str,
         active: bool,
+        cursor: Option<usize>,
     ) {
         let radius = self.scale_metric(7.0);
         let border_color = if active {
@@ -6018,18 +6180,45 @@ impl ShellScene {
             size,
         );
         let text_x = separator_x + self.scale_metric(9.0);
+        let text_rect = ViewRect {
+            x: text_x,
+            y: rect.y + (rect.height - self.text_line_height()) / 2.0,
+            width: (rect.right() - text_x - self.scale_metric(8.0)).max(1.0),
+            height: self.text_line_height(),
+        };
         text.push_label_aligned(
             label,
-            ViewRect {
-                x: text_x,
-                y: rect.y + (rect.height - self.text_line_height()) / 2.0,
-                width: (rect.right() - text_x - self.scale_metric(8.0)).max(1.0),
-                height: self.text_line_height(),
-            },
+            text_rect,
             clip,
             TextColor::rgb(36, 41, 47),
             LabelAlignment::Start,
         );
+        if active {
+            let cursor = normalized_text_cursor(label, cursor.unwrap_or(label.len()));
+            let before_cursor = &label[..cursor];
+            let caret_width = self.scale_metric(1.25);
+            let caret_height = self
+                .scale_metric(17.0)
+                .min((rect.height - self.scale_metric(10.0)).max(1.0));
+            let caret_x = (text_rect.x + estimated_text_width(before_cursor, self.ui_scale()))
+                .clamp(
+                    text_rect.x,
+                    (text_rect.right() - caret_width).max(text_rect.x),
+                );
+            push_clipped_rounded_rect(
+                vertices,
+                ViewRect {
+                    x: caret_x,
+                    y: rect.y + (rect.height - caret_height) / 2.0,
+                    width: caret_width,
+                    height: caret_height,
+                },
+                clip,
+                caret_width / 2.0,
+                [0.122, 0.310, 0.749, 1.0],
+                size,
+            );
+        }
     }
 
     fn push_split_pane(
@@ -6101,6 +6290,7 @@ impl ShellScene {
             },
             &split_pane.path.display().to_string(),
             false,
+            None,
         );
         push_rect(
             vertices,
@@ -6124,19 +6314,6 @@ impl ShellScene {
             self.push_split_item(vertices, text, icons, split_pane, item, content_clip, size);
         }
         self.push_split_status_bar(vertices, text, split_pane, status_bar, visible_items, size);
-        push_clipped_rect_outline(
-            vertices,
-            pane,
-            ViewRect {
-                x: 0.0,
-                y: 0.0,
-                width: size.width.max(1) as f32,
-                height: size.height.max(1) as f32,
-            },
-            1.0,
-            [0.835, 0.851, 0.875, 1.0],
-            size,
-        );
     }
 
     fn push_split_details_header(
@@ -7066,28 +7243,16 @@ impl ShellScene {
     }
 
     fn push_pane_borders(&self, vertices: &mut Vec<QuadVertex>, size: PhysicalSize<u32>) {
-        let screen = ViewRect {
-            x: 0.0,
-            y: 0.0,
-            width: size.width.max(1) as f32,
-            height: size.height.max(1) as f32,
-        };
-        let pane = self.pane_rect(size);
         let body = self.pane_body_rect(size);
-        push_clipped_rect_outline(
+        push_rect(
             vertices,
-            pane,
-            screen,
-            1.0,
-            [0.184, 0.435, 0.929, 1.0],
-            size,
-        );
-        push_clipped_rect_outline(
-            vertices,
-            body,
-            screen,
-            1.0,
-            [0.835, 0.851, 0.875, 1.0],
+            ViewRect {
+                x: body.x,
+                y: body.y,
+                width: body.width,
+                height: 1.0,
+            },
+            [0.875, 0.890, 0.910, 1.0],
             size,
         );
     }
@@ -7848,7 +8013,9 @@ impl ShellScene {
         if sidebar_width <= 0.0 {
             0.0
         } else {
-            sidebar_width + self.scale_metric(PLACES_SIDEBAR_SPLITTER_WIDTH)
+            sidebar_width
+                + self.scale_metric(PLACES_SIDEBAR_SPLITTER_WIDTH)
+                + self.scale_metric(PLACES_TO_PANE_GAP)
         }
     }
 
@@ -12221,6 +12388,10 @@ fn compact_entry_text_width(entry: &Entry, scale_factor: f32) -> f32 {
     unit_width.max(estimated_width) * scale_factor
 }
 
+fn estimated_text_width(value: &str, scale_factor: f32) -> f32 {
+    value.chars().map(estimated_name_char_width).sum::<f32>() * scale_factor
+}
+
 fn estimated_name_char_width(ch: char) -> f32 {
     match ch {
         '\u{200B}' => 0.0,
@@ -13119,6 +13290,19 @@ mod tests {
         assert_eq!(sidebar.y, pane.y);
         assert_eq!(panel.y, pane.y);
         assert_eq!(sidebar.bottom(), pane.bottom());
+        assert!(
+            scene.content_origin_x(size) > sidebar.right(),
+            "file pane should leave a visual gap after Places"
+        );
+        assert_eq!(
+            scene.content_origin_x(size) - sidebar.right(),
+            scene.scale_metric(PLACES_SIDEBAR_SPLITTER_WIDTH)
+                + scene.scale_metric(PLACES_TO_PANE_GAP)
+        );
+        assert!(
+            panel.right() < sidebar.right(),
+            "Places panel should keep right padding inside the sidebar"
+        );
         assert!(scene.app_toolbar_height() < pane.y);
         assert!(!sidebar.contains(ViewPoint {
             x: sidebar.x + 8.0,
@@ -15683,6 +15867,56 @@ text/plain=writer.desktop;\n",
             location_command_for_key_parts(
                 false,
                 true,
+                &PhysicalKey::Code(KeyCode::Delete),
+                &no_key,
+                &no_key,
+            ),
+            Some(LocationCommand::Delete)
+        );
+        assert_eq!(
+            location_command_for_key_parts(
+                false,
+                true,
+                &PhysicalKey::Code(KeyCode::ArrowLeft),
+                &no_key,
+                &no_key,
+            ),
+            Some(LocationCommand::MoveLeft)
+        );
+        assert_eq!(
+            location_command_for_key_parts(
+                false,
+                true,
+                &PhysicalKey::Code(KeyCode::ArrowRight),
+                &no_key,
+                &no_key,
+            ),
+            Some(LocationCommand::MoveRight)
+        );
+        assert_eq!(
+            location_command_for_key_parts(
+                false,
+                true,
+                &PhysicalKey::Code(KeyCode::Home),
+                &no_key,
+                &no_key,
+            ),
+            Some(LocationCommand::MoveHome)
+        );
+        assert_eq!(
+            location_command_for_key_parts(
+                false,
+                true,
+                &PhysicalKey::Code(KeyCode::End),
+                &no_key,
+                &no_key,
+            ),
+            Some(LocationCommand::MoveEnd)
+        );
+        assert_eq!(
+            location_command_for_key_parts(
+                false,
+                true,
                 &PhysicalKey::Code(KeyCode::Escape),
                 &no_key,
                 &no_key,
@@ -15726,6 +15960,42 @@ text/plain=writer.desktop;\n",
         assert!(!scene.is_location_editing());
 
         let _ = std::fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn location_draft_cursor_edits_at_caret() {
+        let mut scene = test_scene(vec![test_entry("alpha", false)], ShellViewMode::Icons);
+        scene.path = PathBuf::from("/tmp");
+        let size = PhysicalSize::new(420, 260);
+
+        assert!(scene.apply_location_command(LocationCommand::Activate, size));
+        let draft = scene.location_draft.as_ref().unwrap();
+        assert_eq!(draft.cursor, draft.value.len());
+
+        assert!(scene.apply_location_command(LocationCommand::Insert("abc".to_string()), size));
+        assert_eq!(scene.location_draft_value(), Some("abc"));
+        assert_eq!(scene.location_draft.as_ref().unwrap().cursor, 3);
+
+        assert!(scene.apply_location_command(LocationCommand::MoveLeft, size));
+        assert_eq!(scene.location_draft.as_ref().unwrap().cursor, 2);
+        assert!(scene.apply_location_command(LocationCommand::Backspace, size));
+        assert_eq!(scene.location_draft_value(), Some("ac"));
+        assert_eq!(scene.location_draft.as_ref().unwrap().cursor, 1);
+
+        assert!(scene.apply_location_command(LocationCommand::Insert("β".to_string()), size));
+        assert_eq!(scene.location_draft_value(), Some("aβc"));
+        assert_eq!(scene.location_draft.as_ref().unwrap().cursor, "aβ".len());
+
+        assert!(scene.apply_location_command(LocationCommand::MoveLeft, size));
+        assert_eq!(scene.location_draft.as_ref().unwrap().cursor, "a".len());
+        assert!(scene.apply_location_command(LocationCommand::Delete, size));
+        assert_eq!(scene.location_draft_value(), Some("ac"));
+        assert_eq!(scene.location_draft.as_ref().unwrap().cursor, 1);
+
+        assert!(scene.apply_location_command(LocationCommand::MoveEnd, size));
+        assert_eq!(scene.location_draft.as_ref().unwrap().cursor, 2);
+        assert!(scene.apply_location_command(LocationCommand::MoveHome, size));
+        assert_eq!(scene.location_draft.as_ref().unwrap().cursor, 0);
     }
 
     #[test]

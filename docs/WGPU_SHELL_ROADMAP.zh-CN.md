@@ -160,7 +160,8 @@ Shell 拥有：
   `places-order.xml`、Network root、network bookmarks 和 Root，保留 row geometry，用最长路径前缀决定 active place，Places
   hover 与 item hover 分离，拥有独立 sidebar scroll offset、clipped row rendering 和窄
   圆角窄 scrollbar track/thumb，并支持 thumb drag 与 track click-to-drag；active/hover row 会绘制圆角背景，并将左键 place navigation 分派到与文件视图相同的
-  `load_path`/history path。Places 右键现在会创建 shell-owned place context target，
+  `load_path`/history path。Places 与文件 pane 之间现在保留可见 splitter/gap，不再贴紧。
+  Places 右键现在会创建 shell-owned place context target，
   并打开最小 context menu，分派 Open、Copy Location、Properties，以及 editable user
   places 的 Remove。Remove 会写回 Fika `places.xbel`，裁剪对应 place-order 条目，
   reload sidebar projection，并清理 stale place context state。动态 devices、更完整
@@ -198,9 +199,10 @@ Shell 拥有：
   文本编辑边界仍留到 Phase 4。
 - 最小 shell-owned pane-local location edit mode 已可用，可通过 `Ctrl/Meta+L`、`Ctrl/Meta+D`、
   `F6` 或点击顶部 path bar 激活。它复用 core `resolve_location_input` 和
-  `complete_location_input`：首次输入会替换当前 path draft，Backspace 编辑 draft，Tab
-  补全 filesystem path，Enter 通过 retained navigation/history path 提交，Esc 取消。
-  caret movement、selection editing 和 IME 仍留到 Phase 4 文本边界。
+  `complete_location_input`：首次输入会替换当前 path draft，Backspace/Delete 通过真实
+  caret 编辑 draft，Arrow/Home/End 移动 caret，Tab 补全 filesystem path，Enter 通过
+  retained navigation/history path 提交，Esc 取消。Selection editing 和 IME 仍留到 Phase 4
+  文本边界。
 - Dotfile 可见性现在也由 shell-owned retained projection 管理。默认不显示 hidden
   entries；`Ctrl/Meta+H` 会显示它们。切换可见性时 selection 会通过同一 projection
   保留或裁剪；app-level Hidden toggle 仍是 toolbar 迁移工作。
@@ -310,7 +312,8 @@ Location/Properties/Remove menu 也已接入。Blank context menu 现在提供 S
 Hidden Files 和 Split View；directory/place 的 Open in New Pane 会加载真实右侧
 pane，并绘制自己的 location bar/content/status；file-view item hover/selection
 背景已改为圆角；location bar 改成白底、细边框、leading folder glyph 和 active focus
-ring；Trash 为空时不再绘制蓝色状态圆点。当前 split pane 仍是最小可见骨架：focus、
+ring，并绘制垂直居中的真实 caret，支持 Arrow/Home/End/Delete 光标编辑；Places 与
+pane 之间保留明确间距，pane 硬蓝/灰外框弱化为更贴近背景的细分隔线；Trash 为空时不再绘制蓝色状态圆点。当前 split pane 仍是最小可见骨架：focus、
 pointer routing、scrollbar、DnD 和 file operations 仍作用于主 pane。下一步 multi-pane
 工作必须先把 pane state/layout/paint/hit-test 抽成可复用 pane component，再让主 pane
 和右侧 pane 都接入该 component，不能继续追加 split-only 特例。更完整 Places
