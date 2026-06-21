@@ -18,18 +18,20 @@ use cosmic_text::{
     SwashCache, Wrap,
 };
 use fika_core::{
-    AppSettings, CompactLayout, CompactLayoutOptions, DesktopLaunchPlan, DeviceInfo, Entry,
-    FileClipboardRole, FileTransferMode, Generation, IconsLayout, IconsLayoutOptions, ItemId,
-    MimeApplication, MimeApplicationCache, NETWORK_ROOT_LABEL, NameFilter, OpenWithLaunchResult,
-    ServiceMenuAction, ServiceMenuLaunchResult, ServiceMenuPriority, ServiceMenuTarget,
-    ThumbnailRequest, ThumbnailRequestPriority, ThumbnailerRegistry, TransferTaskResult,
-    TrashViewOperation, TrashViewOperationResult, UserPlace, ViewPoint, ViewRect, ViewSize,
-    complete_location_input, decode_file_clipboard_text, default_app_settings_path,
-    default_thumbnail_cache_root, default_user_places_path, encode_file_clipboard_text, file_ops,
-    format_modified_secs, format_size, generate_thumbnail_with_external_thumbnailer_registry,
-    home_dir, is_network_path, launch_with_systemd_user, load_app_settings, load_place_order,
-    load_user_places, mime_magic_resolution_required, network_root_path, network_uri_from_path,
-    paste_text_result, place_order_path_for_user_places_path, read_entries_sync, read_gio_devices,
+    AppSettings, CompactLayout, CompactLayoutOptions, DesktopLaunchPlan, DeviceInfo,
+    DevicePlaceOperation, DevicePlaceOperationResult, Entry, FileClipboardRole, FileTransferMode,
+    Generation, IconsLayout, IconsLayoutOptions, ItemId, MimeApplication, MimeApplicationCache,
+    NETWORK_ROOT_LABEL, NameFilter, OpenWithLaunchResult, ServiceMenuAction,
+    ServiceMenuLaunchResult, ServiceMenuPriority, ServiceMenuTarget, ThumbnailRequest,
+    ThumbnailRequestPriority, ThumbnailerRegistry, TransferTaskResult, TrashViewOperation,
+    TrashViewOperationResult, UserPlace, ViewPoint, ViewRect, ViewSize, complete_location_input,
+    decode_file_clipboard_text, default_app_settings_path, default_thumbnail_cache_root,
+    default_user_places_path, encode_file_clipboard_text, file_ops, format_modified_secs,
+    format_size, generate_thumbnail_with_external_thumbnailer_registry, home_dir, is_network_path,
+    launch_with_systemd_user, load_app_settings, load_place_order, load_user_places,
+    mime_magic_resolution_required, network_parent_path, network_root_path, network_uri_from_path,
+    paste_text_result, perform_device_place_operation, place_order_path_for_user_places_path,
+    read_entries_sync, read_gio_devices, read_network_entry_batches_sync_cancellable,
     resolve_location_input, save_app_settings, save_place_order, save_user_places,
     service_menu_target_label, thumbnail_request_may_have_preview, transfer_paths_result,
     trash_view_operation_result,
@@ -135,6 +137,29 @@ fn save_show_hidden_setting(settings_path: &Path, show_hidden: bool) -> Result<(
     settings.view.show_hidden = Some(show_hidden);
     save_app_settings(settings_path, &settings)
         .map_err(|error| format!("save settings {}: {error}", settings_path.display()))
+}
+
+fn read_shell_entries_sync(path: &Path) -> Result<Vec<Entry>, String> {
+    if is_network_path(path) {
+        let mut entries = Vec::new();
+        let completed = read_network_entry_batches_sync_cancellable(
+            path,
+            usize::MAX,
+            || false,
+            |mut batch| entries.append(&mut batch),
+        )
+        .map_err(|error| format!("read network directory {}: {error}", path.display()))?;
+        if completed.is_none() {
+            return Err(format!(
+                "read network directory {}: cancelled",
+                path.display()
+            ));
+        }
+        Ok(entries)
+    } else {
+        read_entries_sync(path)
+            .map_err(|error| format!("read directory {}: {error}", path.display()))
+    }
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -998,8 +1023,15 @@ impl ApplicationHandler for FikaWgpuApp {
                 }
                 if state == ElementState::Released && self.scene.place_pointer_active() {
                     let (changed, activation) = self.scene.end_place_pointer(point, size);
-                    if let Some((pane, path)) = activation {
-                        self.load_path_into_pane(event_loop, pane, path, "place-open");
+                    if let Some(activation) = activation {
+                        match activation {
+                            ShellPlaceActivation::Open { pane, path } => {
+                                self.load_path_into_pane(event_loop, pane, path, "place-open");
+                            }
+                            ShellPlaceActivation::DeviceAction(request) => {
+                                self.perform_device_action_request(event_loop, request);
+                            }
+                        }
                         return;
                     }
                     if (changed || location_blur_changed)
@@ -1244,21 +1276,7 @@ impl FikaWgpuApp {
             | ShellContextMenuAction::UnmountDevice
             | ShellContextMenuAction::EjectDevice
             | ShellContextMenuAction::SafelyRemoveDevice => {
-                match self.scene.context_target_device_action(action) {
-                    Some(request) => fika_log!(
-                        "[fika-wgpu] device-action-pending action={} id={:?} label={:?}",
-                        action.as_str(),
-                        request.id,
-                        request.label
-                    ),
-                    None => fika_log!(
-                        "[fika-wgpu] device-action-error action={} target=none",
-                        action.as_str()
-                    ),
-                }
-                if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
+                self.perform_device_context_action(event_loop, action)
             }
             ShellContextMenuAction::Paste => self.paste_from_clipboard(event_loop),
         }
@@ -1358,6 +1376,82 @@ impl FikaWgpuApp {
         });
         if let Some(window) = self.window.as_ref() {
             window.request_redraw();
+        }
+    }
+
+    fn perform_device_context_action(
+        &mut self,
+        event_loop: &dyn ActiveEventLoop,
+        action: ShellContextMenuAction,
+    ) {
+        let Some(request) = self.scene.context_target_device_action(action) else {
+            fika_log!(
+                "[fika-wgpu] device-action-error action={} target=none",
+                action.as_str()
+            );
+            if let Some(window) = self.window.as_ref() {
+                window.request_redraw();
+            }
+            return;
+        };
+        self.perform_device_action_request(event_loop, request);
+    }
+
+    fn perform_device_action_request(
+        &mut self,
+        event_loop: &dyn ActiveEventLoop,
+        request: DeviceActionRequest,
+    ) {
+        let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
+            return;
+        };
+        fika_log!(
+            "[fika-wgpu] device-action-start action={} id={:?} label={:?}",
+            request.action.as_str(),
+            request.id,
+            request.label
+        );
+        let result = pollster::block_on(perform_device_place_operation(
+            WGPU_SHELL_PANE_ID,
+            request.id.clone(),
+            request.label.clone(),
+            request.operation,
+        ));
+        let mount_point = match &result.result {
+            Ok(Some(path)) => Some(path.clone()),
+            Ok(None) => None,
+            Err(error) => {
+                fika_log!(
+                    "[fika-wgpu] device-action-error action={} id={:?} label={:?} error={error}",
+                    request.action.as_str(),
+                    request.id,
+                    request.label
+                );
+                None
+            }
+        };
+
+        match self
+            .scene
+            .apply_device_place_operation_result(&request, &result, size)
+        {
+            Ok(()) => {
+                if let Some(path) = mount_point {
+                    self.load_path_into_pane(event_loop, request.pane, path, "device-mount");
+                } else {
+                    self.present_scene_change(event_loop, "device-action");
+                }
+            }
+            Err(error) => {
+                fika_log!(
+                    "[fika-wgpu] device-action-refresh-error action={} id={:?} error={error}",
+                    request.action.as_str(),
+                    request.id
+                );
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+            }
         }
     }
 
@@ -2733,6 +2827,18 @@ impl ShellContextMenuAction {
     }
 }
 
+fn device_place_operation_for_context_action(
+    action: ShellContextMenuAction,
+) -> Option<DevicePlaceOperation> {
+    match action {
+        ShellContextMenuAction::MountDevice => Some(DevicePlaceOperation::Mount),
+        ShellContextMenuAction::UnmountDevice => Some(DevicePlaceOperation::Unmount),
+        ShellContextMenuAction::EjectDevice => Some(DevicePlaceOperation::Eject),
+        ShellContextMenuAction::SafelyRemoveDevice => Some(DevicePlaceOperation::SafelyRemove),
+        _ => None,
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ContextMenuGlyph {
     Open,
@@ -3759,6 +3865,15 @@ struct DeviceActionRequest {
     id: String,
     label: String,
     action: ShellContextMenuAction,
+    operation: DevicePlaceOperation,
+    pane: ShellPaneId,
+    path: PathBuf,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum ShellPlaceActivation {
+    Open { pane: ShellPaneId, path: PathBuf },
+    DeviceAction(DeviceActionRequest),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -4032,8 +4147,7 @@ impl ShellScene {
         show_hidden: bool,
     ) -> Result<Self, String> {
         let load_start = Instant::now();
-        let entries = read_entries_sync(&path)
-            .map_err(|error| format!("read directory {}: {error}", path.display()))?;
+        let entries = read_shell_entries_sync(&path)?;
         let elapsed = load_start.elapsed();
         let dir_count = entries.iter().filter(|entry| entry.is_dir).count();
         let preview = entries
@@ -4145,8 +4259,7 @@ impl ShellScene {
             return Ok(false);
         }
         let load_start = Instant::now();
-        let entries = read_entries_sync(&path)
-            .map_err(|error| format!("read directory {}: {error}", path.display()))?;
+        let entries = read_shell_entries_sync(&path)?;
         let elapsed = load_start.elapsed();
         let dir_count = entries.iter().filter(|entry| entry.is_dir).count();
         let preview = entries
@@ -4193,8 +4306,7 @@ impl ShellScene {
         let view_mode = current.view_mode;
         let path = current.path.clone();
         let load_start = Instant::now();
-        let entries = read_entries_sync(&path)
-            .map_err(|error| format!("read directory {}: {error}", path.display()))?;
+        let entries = read_shell_entries_sync(&path)?;
         let elapsed = load_start.elapsed();
         let dir_count = entries.iter().filter(|entry| entry.is_dir).count();
         let preview = entries
@@ -5295,7 +5407,7 @@ impl ShellScene {
         &mut self,
         point: ViewPoint,
         size: PhysicalSize<u32>,
-    ) -> Option<(ShellPaneId, PathBuf)> {
+    ) -> Option<ShellPlaceActivation> {
         let index = self.place_index_at_screen_point(point, size)?;
         self.activate_place_index(index, point)
     }
@@ -5304,7 +5416,7 @@ impl ShellScene {
         &mut self,
         index: usize,
         point: ViewPoint,
-    ) -> Option<(ShellPaneId, PathBuf)> {
+    ) -> Option<ShellPlaceActivation> {
         let target_pane = self.active_pane();
         self.pointer = Some(point);
         let hover_changed = self.set_hovered_place(Some(index));
@@ -5318,15 +5430,24 @@ impl ShellScene {
         self.drop_menu = None;
         let place = self.places.get(index)?;
         if place.device.as_ref().is_some_and(|device| !device.mounted) {
+            let device = place.device.as_ref()?;
             self.places_changes += 1;
             fika_log!(
-                "[fika-wgpu] place-open index={} label={:?} mounted=0 path={} changes={}",
+                "[fika-wgpu] place-mount index={} label={:?} target_pane={} path={} changes={}",
                 index,
                 place.label,
+                target_pane.as_str(),
                 place.path.display(),
                 self.places_changes
             );
-            return None;
+            return Some(ShellPlaceActivation::DeviceAction(DeviceActionRequest {
+                id: device.id.clone(),
+                label: place.label.clone(),
+                action: ShellContextMenuAction::MountDevice,
+                operation: DevicePlaceOperation::Mount,
+                pane: target_pane,
+                path: place.path.clone(),
+            }));
         }
         self.places_changes += 1;
         fika_log!(
@@ -5339,7 +5460,10 @@ impl ShellScene {
             item_hover_changed as u8,
             self.places_changes
         );
-        Some((target_pane, place.path.clone()))
+        Some(ShellPlaceActivation::Open {
+            pane: target_pane,
+            path: place.path.clone(),
+        })
     }
 
     fn begin_place_pointer(&mut self, point: ViewPoint, size: PhysicalSize<u32>) -> Option<bool> {
@@ -5375,7 +5499,7 @@ impl ShellScene {
         &mut self,
         point: ViewPoint,
         size: PhysicalSize<u32>,
-    ) -> (bool, Option<(ShellPaneId, PathBuf)>) {
+    ) -> (bool, Option<ShellPlaceActivation>) {
         self.pointer = Some(point);
         let Some(source_index) = self
             .internal_drag
@@ -6972,17 +7096,10 @@ impl ShellScene {
         &self,
         action: ShellContextMenuAction,
     ) -> Option<DeviceActionRequest> {
-        if !matches!(
-            action,
-            ShellContextMenuAction::MountDevice
-                | ShellContextMenuAction::UnmountDevice
-                | ShellContextMenuAction::EjectDevice
-                | ShellContextMenuAction::SafelyRemoveDevice
-        ) {
-            return None;
-        }
+        let operation = device_place_operation_for_context_action(action)?;
         let ShellContextTarget::Place {
             label,
+            path,
             device: Some(device),
             ..
         } = self.context_target.as_ref()?
@@ -6993,7 +7110,79 @@ impl ShellScene {
             id: device.id.clone(),
             label: label.clone(),
             action,
+            operation,
+            pane: self
+                .context_target_pane()
+                .unwrap_or_else(|| self.active_pane()),
+            path: path.clone(),
         })
+    }
+
+    fn apply_device_place_operation_result(
+        &mut self,
+        request: &DeviceActionRequest,
+        result: &DevicePlaceOperationResult,
+        size: PhysicalSize<u32>,
+    ) -> Result<(), String> {
+        self.places = build_shell_places();
+        self.clamp_places_scroll(size);
+        self.context_target = None;
+        self.context_menu = None;
+        self.drop_menu = None;
+        self.properties_overlay = None;
+        self.rubber_band = None;
+        self.internal_drag = None;
+        self.place_press = None;
+        self.places_changes += 1;
+        self.refresh_hover(size);
+        match &result.result {
+            Ok(mount_point) => fika_log!(
+                "[fika-wgpu] device-action-finished action={} id={:?} label={:?} mount={} changes={}",
+                request.action.as_str(),
+                result.device_id,
+                result.label,
+                mount_point
+                    .as_ref()
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_else(|| "-".to_string()),
+                self.places_changes
+            ),
+            Err(error) => fika_log!(
+                "[fika-wgpu] device-action-finished action={} id={:?} label={:?} error={error} changes={}",
+                request.action.as_str(),
+                result.device_id,
+                result.label,
+                self.places_changes
+            ),
+        }
+
+        if result.result.is_ok() && !matches!(request.operation, DevicePlaceOperation::Mount) {
+            self.leave_device_path_after_unmount(request, size)?;
+        }
+        Ok(())
+    }
+
+    fn leave_device_path_after_unmount(
+        &mut self,
+        request: &DeviceActionRequest,
+        size: PhysicalSize<u32>,
+    ) -> Result<(), String> {
+        if is_network_path(&request.path) || !request.path.is_absolute() {
+            return Ok(());
+        }
+        let home = home_dir();
+        let pane_ids = ShellPaneId::ALL
+            .into_iter()
+            .filter(|pane| {
+                self.pane_state(*pane).is_some_and(|state| {
+                    state.path == request.path || state.path.starts_with(&request.path)
+                })
+            })
+            .collect::<Vec<_>>();
+        for pane in pane_ids {
+            self.load_path_in_pane(pane, home.clone(), size, true)?;
+        }
+        Ok(())
     }
 
     fn record_copy_location(&mut self, request: &CopyLocationRequest) {
@@ -8222,11 +8411,14 @@ impl ShellScene {
     }
 
     fn parent_directory_path_for_pane(&self, pane: ShellPaneId) -> Option<PathBuf> {
-        self.pane_state(pane)?
-            .path
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-            .map(Path::to_path_buf)
+        let path = &self.pane_state(pane)?.path;
+        if is_network_path(path) {
+            network_parent_path(path)
+        } else {
+            path.parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+                .map(Path::to_path_buf)
+        }
     }
 
     fn directory_path_for_pane_index(&self, pane_id: ShellPaneId, index: usize) -> Option<PathBuf> {
@@ -18706,7 +18898,13 @@ mod tests {
         assert_eq!(scene.begin_place_pointer(network_point, size), Some(true));
         assert!(scene.internal_drag.is_none());
         let (_changed, activation) = scene.end_place_pointer(network_point, size);
-        assert_eq!(activation, Some((ShellPaneId::FIRST, network_root_path())));
+        assert_eq!(
+            activation,
+            Some(ShellPlaceActivation::Open {
+                pane: ShellPaneId::FIRST,
+                path: network_root_path()
+            })
+        );
 
         let projection = scene.pane_projection(ShellPaneId::FIRST, size).unwrap();
         let item = projection.visible_items[0];
@@ -19077,7 +19275,7 @@ mod tests {
         scene.places = vec![ShellPlace::new("", "T", "Target", target.clone(), true)];
         let size = PhysicalSize::new(900, 360);
         let row = scene.place_row_rects(size)[0].1;
-        let (pane, path) = scene
+        let activation = scene
             .place_activation_for_press(
                 ViewPoint {
                     x: row.x + 4.0,
@@ -19086,6 +19284,9 @@ mod tests {
                 size,
             )
             .expect("place should activate");
+        let ShellPlaceActivation::Open { pane, path } = activation else {
+            panic!("place should open a path");
+        };
 
         assert_eq!(pane, ShellPaneId::SECOND);
         assert_eq!(path, target);
@@ -19829,7 +20030,10 @@ mod tests {
 
         assert_eq!(
             scene.place_activation_for_press(point, size),
-            Some((ShellPaneId::FIRST, PathBuf::from("/tmp/projects")))
+            Some(ShellPlaceActivation::Open {
+                pane: ShellPaneId::FIRST,
+                path: PathBuf::from("/tmp/projects")
+            })
         );
         assert_eq!(scene.hovered_place, Some(1));
         assert_eq!(scene.hovered_item, None);
@@ -20758,8 +20962,97 @@ text/plain=writer.desktop;\n",
                 id: "gio:volume:usb".to_string(),
                 label: "USB Drive".to_string(),
                 action: ShellContextMenuAction::MountDevice,
+                operation: DevicePlaceOperation::Mount,
+                pane: ShellPaneId::FIRST,
+                path: PathBuf::from("gio:volume:usb"),
             })
         );
+    }
+
+    #[test]
+    fn unmounted_device_place_activation_requests_mount() {
+        let mut scene = test_scene(Vec::new(), ShellViewMode::Icons);
+        scene.places = vec![
+            ShellPlace::new("", "H", "Home", PathBuf::from("/tmp/home"), false),
+            ShellPlace::new(
+                "Devices",
+                "D",
+                "USB Drive",
+                PathBuf::from("gio:volume:usb"),
+                false,
+            )
+            .with_device(ShellDevicePlace {
+                id: "gio:volume:usb".to_string(),
+                mounted: false,
+                ejectable: true,
+                can_power_off: false,
+            }),
+        ];
+        let size = PhysicalSize::new(700, 320);
+        let row = scene.place_row_rects(size)[1].1;
+        let point = ViewPoint {
+            x: row.x + 6.0,
+            y: row.y + 6.0,
+        };
+
+        assert_eq!(
+            scene.place_activation_for_press(point, size),
+            Some(ShellPlaceActivation::DeviceAction(DeviceActionRequest {
+                id: "gio:volume:usb".to_string(),
+                label: "USB Drive".to_string(),
+                action: ShellContextMenuAction::MountDevice,
+                operation: DevicePlaceOperation::Mount,
+                pane: ShellPaneId::FIRST,
+                path: PathBuf::from("gio:volume:usb"),
+            }))
+        );
+        assert_eq!(scene.places_changes, 1);
+    }
+
+    #[test]
+    fn shell_reader_and_parent_navigation_support_network_paths() {
+        let entries = read_shell_entries_sync(&network_root_path()).unwrap();
+        assert!(entries.iter().all(|entry| entry.is_dir));
+
+        let mut scene = test_scene(Vec::new(), ShellViewMode::Icons);
+        scene.panes[ShellPaneId::FIRST].path =
+            PathBuf::from("smb://server.example/share/folder/child/");
+        assert_eq!(
+            scene.parent_directory_path_for_pane(ShellPaneId::FIRST),
+            Some(PathBuf::from("smb://server.example/share/folder/"))
+        );
+    }
+
+    #[test]
+    fn applying_device_operation_refreshes_places_and_leaves_unmounted_path() {
+        let mut scene = test_scene(Vec::new(), ShellViewMode::Icons);
+        let size = PhysicalSize::new(700, 360);
+        let device_path = PathBuf::from("/run/media/usb");
+        scene.panes[ShellPaneId::FIRST].path = device_path.join("folder");
+        let request = DeviceActionRequest {
+            id: "gio:mount:usb".to_string(),
+            label: "USB".to_string(),
+            action: ShellContextMenuAction::UnmountDevice,
+            operation: DevicePlaceOperation::Unmount,
+            pane: ShellPaneId::FIRST,
+            path: device_path,
+        };
+        let result = DevicePlaceOperationResult {
+            pane_id: WGPU_SHELL_PANE_ID,
+            device_id: request.id.clone(),
+            label: request.label.clone(),
+            operation: request.operation,
+            result: Ok(None),
+        };
+
+        scene
+            .apply_device_place_operation_result(&request, &result, size)
+            .unwrap();
+
+        assert_eq!(scene.places_changes, 1);
+        assert_eq!(scene.panes[ShellPaneId::FIRST].path, home_dir());
+        assert!(scene.context_target.is_none());
+        assert!(scene.context_menu.is_none());
     }
 
     #[test]
