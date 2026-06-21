@@ -120,10 +120,14 @@ Current checkpoint:
   share `SctkPane`, and pointer hover, primary selection, and positioned wheel
   scroll route to the hit pane. SCTK keyboard capability is now registered on
   the Wayland seat; `F1/F2/F3`, `1/2/3`, arrows, Home/End, PageUp/PageDown,
-  Enter, Esc, `Ctrl/Meta+H`, and `F5`/`Ctrl/Meta+R` are translated into
+  Enter, Esc, `Ctrl/Meta+H`, `Ctrl/Meta+L`, and `F5`/`Ctrl/Meta+R` are translated into
   `SceneCommand`s and dispatched to the active pane. `SctkPane` now owns the
   hidden-file visible-index projection, runtime view switching, keyboard
-  navigation, directory activation, and reload paths. `F4` or
+  navigation, directory activation, reload paths, and pane-local location edit.
+  The location bar can be focused by `Ctrl/Meta+L` or by clicking the active
+  pane's location bar; it accepts UTF-8 text insertion, Backspace/Delete,
+  arrows/Home/End, Enter-to-navigate, and Escape/outside-click cancellation
+  that restores the current path. `F4` or
   `Ctrl/Meta+Shift+S` toggles split view from the scene layer, reusing the same
   `SctkPane` component for the new pane. The active pane now draws a lightweight
   focus marker, and content scrollbar thumb/track dragging is routed through a

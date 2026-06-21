@@ -34,6 +34,9 @@ pub(crate) struct SctkPane {
     hover: Option<usize>,
     selected: Option<usize>,
     selected_entries: BTreeSet<usize>,
+    location_active: bool,
+    location_text: String,
+    location_cursor: usize,
     scroll_x: f32,
     scroll_y: f32,
 }
@@ -46,6 +49,8 @@ impl SctkPane {
 
     pub(crate) fn from_entries(path: PathBuf, view_mode: ViewMode, entries: Vec<Entry>) -> Self {
         let dir_count = entries.iter().filter(|entry| entry.is_dir).count();
+        let location_text = path.display().to_string();
+        let location_cursor = location_text.len();
         let mut pane = Self {
             path,
             view_mode,
@@ -56,6 +61,9 @@ impl SctkPane {
             hover: None,
             selected: None,
             selected_entries: BTreeSet::new(),
+            location_active: false,
+            location_text,
+            location_cursor,
             scroll_x: 0.0,
             scroll_y: 0.0,
         };
@@ -95,6 +103,10 @@ impl SctkPane {
         self.selected_entries.len()
     }
 
+    pub(crate) fn location_active(&self) -> bool {
+        self.location_active
+    }
+
     #[cfg(test)]
     pub(crate) fn hover(&self) -> Option<usize> {
         self.hover
@@ -103,6 +115,16 @@ impl SctkPane {
     #[cfg(test)]
     pub(crate) fn selected(&self) -> Option<usize> {
         self.selected
+    }
+
+    #[cfg(test)]
+    pub(crate) fn location_text(&self) -> &str {
+        &self.location_text
+    }
+
+    #[cfg(test)]
+    pub(crate) fn location_cursor(&self) -> usize {
+        self.location_cursor
     }
 
     pub(crate) fn render(
@@ -171,6 +193,128 @@ impl SctkPane {
     pub(crate) fn press_primary(&mut self, point: ViewPoint, geometry: PaneGeometry) -> bool {
         let hit = self.hit_test(point, geometry);
         self.replace_selection(hit)
+    }
+
+    pub(crate) fn focus_location(&mut self) -> bool {
+        let before = (
+            self.location_active,
+            self.location_text.clone(),
+            self.location_cursor,
+        );
+        self.location_active = true;
+        self.location_text = self.path.display().to_string();
+        self.location_cursor = self.location_text.len();
+        before
+            != (
+                self.location_active,
+                self.location_text.clone(),
+                self.location_cursor,
+            )
+    }
+
+    pub(crate) fn focus_location_if_hit(
+        &mut self,
+        point: ViewPoint,
+        geometry: PaneGeometry,
+    ) -> Option<bool> {
+        if !location_bar_rect(geometry.pane).contains(point) {
+            return None;
+        }
+        let before = (
+            self.location_active,
+            self.location_text.clone(),
+            self.location_cursor,
+        );
+        if !self.location_active {
+            self.location_text = self.path.display().to_string();
+        }
+        self.location_active = true;
+        self.location_cursor = cursor_for_location_point(point, geometry.pane, &self.location_text);
+        Some(
+            before
+                != (
+                    self.location_active,
+                    self.location_text.clone(),
+                    self.location_cursor,
+                ),
+        )
+    }
+
+    pub(crate) fn cancel_location_edit(&mut self) -> bool {
+        if !self.location_active {
+            return false;
+        }
+        self.location_active = false;
+        self.sync_location_text();
+        true
+    }
+
+    pub(crate) fn edit_location(&mut self, edit: LocationEdit) -> Result<bool, Box<dyn Error>> {
+        if !self.location_active {
+            return Ok(false);
+        }
+        let before = (
+            self.location_active,
+            self.location_text.clone(),
+            self.location_cursor,
+            self.path.clone(),
+        );
+        self.location_cursor = clamp_to_char_boundary(&self.location_text, self.location_cursor);
+        match edit {
+            LocationEdit::Insert(text) => {
+                let text = text
+                    .chars()
+                    .filter(|character| !character.is_control())
+                    .collect::<String>();
+                if !text.is_empty() {
+                    self.location_text.insert_str(self.location_cursor, &text);
+                    self.location_cursor += text.len();
+                }
+            }
+            LocationEdit::Backspace => {
+                if let Some(previous) =
+                    previous_char_boundary(&self.location_text, self.location_cursor)
+                {
+                    self.location_text.drain(previous..self.location_cursor);
+                    self.location_cursor = previous;
+                }
+            }
+            LocationEdit::Delete => {
+                if let Some(next) = next_char_boundary(&self.location_text, self.location_cursor) {
+                    self.location_text.drain(self.location_cursor..next);
+                }
+            }
+            LocationEdit::MoveLeft => {
+                if let Some(previous) =
+                    previous_char_boundary(&self.location_text, self.location_cursor)
+                {
+                    self.location_cursor = previous;
+                }
+            }
+            LocationEdit::MoveRight => {
+                if let Some(next) = next_char_boundary(&self.location_text, self.location_cursor) {
+                    self.location_cursor = next;
+                }
+            }
+            LocationEdit::MoveHome => self.location_cursor = 0,
+            LocationEdit::MoveEnd => self.location_cursor = self.location_text.len(),
+            LocationEdit::Commit => {
+                let target = PathBuf::from(self.location_text.trim());
+                self.load_path(target)?;
+                self.location_active = false;
+            }
+            LocationEdit::Cancel => {
+                self.location_active = false;
+                self.sync_location_text();
+            }
+        }
+        Ok(before
+            != (
+                self.location_active,
+                self.location_text.clone(),
+                self.location_cursor,
+                self.path.clone(),
+            ))
     }
 
     pub(crate) fn set_view_mode(&mut self, view_mode: ViewMode, geometry: PaneGeometry) -> bool {
@@ -525,20 +669,29 @@ impl SctkPane {
         if active {
             push_focus_ring(batch, geometry.pane, window_clip, width, height);
         }
-        let location_bar = ViewRect {
-            x: geometry.pane.x + 12.0,
-            y: geometry.pane.y + 5.0,
-            width: (geometry.pane.width - 24.0).max(1.0),
-            height: (TOP_BAR_HEIGHT - 10.0).max(1.0),
-        };
+        let location_bar = location_bar_rect(geometry.pane);
         batch.push_clipped_rounded_rect(
             location_bar,
             window_clip,
             6.0,
-            [1.0, 1.0, 1.0, 1.0],
+            if self.location_active {
+                [0.985, 0.995, 1.0, 1.0]
+            } else {
+                [1.0, 1.0, 1.0, 1.0]
+            },
             width,
             height,
         );
+        if self.location_active {
+            batch.push_clipped_rounded_rect(
+                inset(location_bar, 1.0),
+                window_clip,
+                5.0,
+                [0.22, 0.49, 0.82, 0.10],
+                width,
+                height,
+            );
+        }
         let location_icon = ViewRect {
             x: location_bar.x + 9.0,
             y: location_bar.y + (location_bar.height - 14.0) / 2.0,
@@ -546,19 +699,37 @@ impl SctkPane {
             height: 14.0,
         };
         push_folder_glyph(batch, location_icon, location_bar, width, height);
+        let location_text = if self.location_active {
+            self.location_text.clone()
+        } else {
+            self.path.display().to_string()
+        };
+        let text_rect = location_text_rect(geometry.pane);
         text.push_no_wrap(
-            self.path.display().to_string(),
-            ViewRect {
-                x: location_icon.right() + 8.0,
-                y: location_bar.y + (location_bar.height - TEXT_LINE_HEIGHT) / 2.0,
-                width: (location_bar.right() - location_icon.right() - 16.0).max(1.0),
-                height: TEXT_LINE_HEIGHT,
-            },
+            location_text,
+            text_rect,
             location_bar,
             TEXT_FONT_SIZE,
             TEXT_LINE_HEIGHT,
             TEXT_PRIMARY,
         );
+        if self.location_active {
+            let cursor_x = (text_rect.x
+                + cursor_visual_advance(&self.location_text, self.location_cursor))
+            .clamp(text_rect.x, text_rect.right() - 1.0);
+            batch.push_clipped_rect(
+                ViewRect {
+                    x: cursor_x,
+                    y: text_rect.y + 2.0,
+                    width: 1.0,
+                    height: (text_rect.height - 4.0).max(1.0),
+                },
+                location_bar,
+                [0.12, 0.30, 0.62, 1.0],
+                width,
+                height,
+            );
+        }
         batch.push_rect(
             ViewRect {
                 x: geometry.pane.x,
@@ -1064,9 +1235,16 @@ impl SctkPane {
         self.hover = None;
         self.selected = None;
         self.selected_entries.clear();
+        self.location_active = false;
+        self.sync_location_text();
         self.scroll_x = 0.0;
         self.scroll_y = 0.0;
         Ok(())
+    }
+
+    fn sync_location_text(&mut self) {
+        self.location_text = self.path.display().to_string();
+        self.location_cursor = self.location_text.len();
     }
 
     fn rebuild_visible_indices(&mut self) {
@@ -1265,6 +1443,19 @@ pub(crate) enum PaneSelectionMove {
     PageDown,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum LocationEdit {
+    Insert(String),
+    Backspace,
+    Delete,
+    MoveLeft,
+    MoveRight,
+    MoveHome,
+    MoveEnd,
+    Commit,
+    Cancel,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PaneScrollbarAxis {
     Horizontal,
@@ -1358,6 +1549,72 @@ fn push_focus_ring(batch: &mut QuadBatch, pane: ViewRect, clip: ViewRect, width:
         width,
         height,
     );
+}
+
+fn location_bar_rect(pane: ViewRect) -> ViewRect {
+    ViewRect {
+        x: pane.x + 12.0,
+        y: pane.y + 5.0,
+        width: (pane.width - 24.0).max(1.0),
+        height: (TOP_BAR_HEIGHT - 10.0).max(1.0),
+    }
+}
+
+fn location_text_rect(pane: ViewRect) -> ViewRect {
+    let bar = location_bar_rect(pane);
+    let icon_right = bar.x + 9.0 + 14.0;
+    ViewRect {
+        x: icon_right + 8.0,
+        y: bar.y + (bar.height - TEXT_LINE_HEIGHT) / 2.0,
+        width: (bar.right() - icon_right - 16.0).max(1.0),
+        height: TEXT_LINE_HEIGHT,
+    }
+}
+
+fn cursor_for_location_point(point: ViewPoint, pane: ViewRect, text: &str) -> usize {
+    let text_rect = location_text_rect(pane);
+    let average_char_width = location_average_char_width();
+    let target = ((point.x - text_rect.x).max(0.0) / average_char_width).round() as usize;
+    byte_index_after_chars(text, target)
+}
+
+fn cursor_visual_advance(text: &str, cursor: usize) -> f32 {
+    let cursor = clamp_to_char_boundary(text, cursor);
+    text[..cursor].chars().count() as f32 * location_average_char_width()
+}
+
+fn location_average_char_width() -> f32 {
+    TEXT_FONT_SIZE * 0.56
+}
+
+fn byte_index_after_chars(text: &str, count: usize) -> usize {
+    text.char_indices()
+        .map(|(index, _)| index)
+        .chain(std::iter::once(text.len()))
+        .nth(count)
+        .unwrap_or(text.len())
+}
+
+fn clamp_to_char_boundary(text: &str, mut cursor: usize) -> usize {
+    cursor = cursor.min(text.len());
+    while cursor > 0 && !text.is_char_boundary(cursor) {
+        cursor -= 1;
+    }
+    cursor
+}
+
+fn previous_char_boundary(text: &str, cursor: usize) -> Option<usize> {
+    let cursor = clamp_to_char_boundary(text, cursor);
+    text[..cursor].char_indices().last().map(|(index, _)| index)
+}
+
+fn next_char_boundary(text: &str, cursor: usize) -> Option<usize> {
+    let cursor = clamp_to_char_boundary(text, cursor);
+    text[cursor..]
+        .char_indices()
+        .nth(1)
+        .map(|(offset, _)| cursor + offset)
+        .or_else(|| (cursor < text.len()).then_some(text.len()))
 }
 
 fn clipped_band_rect(origin: ViewPoint, current: ViewPoint, clip: ViewRect) -> ViewRect {
@@ -1573,6 +1830,63 @@ mod tests {
         assert!(pane.move_selection(PaneSelectionMove::Down, geometry()));
         assert!(pane.activate_selected().unwrap());
         assert_eq!(pane.path(), &child);
+        assert_eq!(pane.visible_entry_count(), 1);
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn location_edit_inserts_and_deletes_at_utf8_boundaries() {
+        let mut pane = SctkPane::from_entries(PathBuf::from("/tmp"), ViewMode::Details, vec![]);
+
+        assert!(pane.focus_location());
+        assert!(
+            pane.edit_location(LocationEdit::Insert("/目录".to_string()))
+                .unwrap()
+        );
+        assert!(pane.location_text().ends_with("/目录"));
+        assert_eq!(pane.location_cursor(), pane.location_text().len());
+        assert!(pane.edit_location(LocationEdit::Backspace).unwrap());
+        assert!(pane.location_text().ends_with("/目"));
+        assert!(
+            pane.location_text()
+                .is_char_boundary(pane.location_cursor())
+        );
+    }
+
+    #[test]
+    fn location_cancel_restores_current_path() {
+        let mut pane = SctkPane::from_entries(PathBuf::from("/tmp"), ViewMode::Details, vec![]);
+
+        assert!(pane.focus_location());
+        assert!(
+            pane.edit_location(LocationEdit::Insert("/bad".to_string()))
+                .unwrap()
+        );
+        assert!(pane.cancel_location_edit());
+        assert!(!pane.location_active());
+        assert_eq!(pane.location_text(), "/tmp");
+    }
+
+    #[test]
+    fn location_commit_loads_target_directory() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("fika-sctk-location-{stamp}"));
+        let child = root.join("child");
+        std::fs::create_dir_all(&child).unwrap();
+        std::fs::write(child.join("nested.txt"), b"nested").unwrap();
+
+        let mut pane = SctkPane::load(root.clone(), ViewMode::Details).unwrap();
+        assert!(pane.focus_location());
+        pane.location_text = child.display().to_string();
+        pane.location_cursor = pane.location_text.len();
+        assert!(pane.edit_location(LocationEdit::Commit).unwrap());
+        assert_eq!(pane.path(), &child);
+        assert!(!pane.location_active());
+        assert_eq!(pane.location_text(), child.display().to_string());
         assert_eq!(pane.visible_entry_count(), 1);
 
         std::fs::remove_dir_all(root).unwrap();

@@ -32,7 +32,7 @@ use wayland_client::globals::registry_queue_init;
 use wayland_client::protocol::{wl_keyboard, wl_pointer, wl_surface};
 
 use super::options::StartupOptions;
-use super::pane::PaneSelectionMove;
+use super::pane::{LocationEdit, PaneSelectionMove};
 use super::renderer::{WgpuRenderer, surface_extent};
 use super::scene::{SceneCommand, SctkScene};
 
@@ -274,6 +274,30 @@ impl FikaSctkApp {
         if !self.keyboard_focus {
             return;
         }
+        if self.scene.location_editing() {
+            let Some(edit) =
+                location_edit_command(event.keysym, self.modifiers, event.utf8.as_deref())
+            else {
+                return;
+            };
+            match self.scene.handle_location_edit(edit.clone()) {
+                Ok(true) => {
+                    eprintln!(
+                        "[fika-sctk] location-edit={edit:?} reason={reason} active_pane={} path={}",
+                        self.scene.active_pane_name(),
+                        self.scene.active_path().display()
+                    );
+                    self.render_scene(reason);
+                }
+                Ok(false) => {}
+                Err(error) => {
+                    eprintln!(
+                        "[fika-sctk] location-edit-error edit={edit:?} reason={reason} error={error}"
+                    );
+                }
+            }
+            return;
+        }
         let Some(command) = key_command(event.keysym, self.modifiers) else {
             return;
         };
@@ -378,6 +402,9 @@ fn key_command(keysym: Keysym, modifiers: Modifiers) -> Option<SceneCommand> {
     if shortcut && (keysym == Keysym::a || keysym == Keysym::A) {
         return Some(SceneCommand::SelectAll);
     }
+    if shortcut && (keysym == Keysym::l || keysym == Keysym::L) {
+        return Some(SceneCommand::FocusLocation);
+    }
     if keysym == Keysym::F5 || (shortcut && (keysym == Keysym::r || keysym == Keysym::R)) {
         return Some(SceneCommand::Reload);
     }
@@ -399,6 +426,32 @@ fn key_command(keysym: Keysym, modifiers: Modifiers) -> Option<SceneCommand> {
         Keysym::Escape => Some(SceneCommand::ClearSelection),
         _ => None,
     }
+}
+
+fn location_edit_command(
+    keysym: Keysym,
+    modifiers: Modifiers,
+    utf8: Option<&str>,
+) -> Option<LocationEdit> {
+    match keysym {
+        Keysym::Return | Keysym::KP_Enter => return Some(LocationEdit::Commit),
+        Keysym::Escape => return Some(LocationEdit::Cancel),
+        Keysym::BackSpace => return Some(LocationEdit::Backspace),
+        Keysym::Delete | Keysym::KP_Delete => return Some(LocationEdit::Delete),
+        Keysym::Left => return Some(LocationEdit::MoveLeft),
+        Keysym::Right => return Some(LocationEdit::MoveRight),
+        Keysym::Home | Keysym::KP_Home => return Some(LocationEdit::MoveHome),
+        Keysym::End | Keysym::KP_End => return Some(LocationEdit::MoveEnd),
+        _ => {}
+    }
+    if modifiers.ctrl || modifiers.logo || modifiers.alt {
+        return None;
+    }
+    let text = utf8?
+        .chars()
+        .filter(|character| !character.is_control())
+        .collect::<String>();
+    (!text.is_empty()).then_some(LocationEdit::Insert(text))
 }
 
 #[cfg(test)]
@@ -433,6 +486,10 @@ mod tests {
         );
         assert_eq!(key_command(Keysym::a, ctrl), Some(SceneCommand::SelectAll));
         assert_eq!(
+            key_command(Keysym::l, ctrl),
+            Some(SceneCommand::FocusLocation)
+        );
+        assert_eq!(
             key_command(Keysym::F5, Modifiers::default()),
             Some(SceneCommand::Reload)
         );
@@ -447,6 +504,33 @@ mod tests {
         assert_eq!(
             key_command(Keysym::F4, Modifiers::default()),
             Some(SceneCommand::ToggleSplit)
+        );
+    }
+
+    #[test]
+    fn location_edit_command_prefers_editor_keys_and_utf8_text() {
+        assert_eq!(
+            location_edit_command(Keysym::BackSpace, Modifiers::default(), None),
+            Some(LocationEdit::Backspace)
+        );
+        assert_eq!(
+            location_edit_command(Keysym::Return, Modifiers::default(), None),
+            Some(LocationEdit::Commit)
+        );
+        assert_eq!(
+            location_edit_command(Keysym::a, Modifiers::default(), Some("a")),
+            Some(LocationEdit::Insert("a".to_string()))
+        );
+        assert_eq!(
+            location_edit_command(
+                Keysym::a,
+                Modifiers {
+                    ctrl: true,
+                    ..Modifiers::default()
+                },
+                Some("a")
+            ),
+            None
         );
     }
 }
