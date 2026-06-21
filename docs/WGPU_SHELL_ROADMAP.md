@@ -104,7 +104,8 @@ Expected cleanup:
 - First extraction is in place: `src/bin/fika_wgpu/clipboard.rs` owns the
   shell clipboard wrapper, and `src/bin/fika_wgpu/location.rs` owns
   `PathHistory`, `LocationDraft`, and UTF-8 cursor normalization for location
-  editing.
+  editing. `src/bin/fika_wgpu/selection.rs` now owns selection state,
+  keyboard navigation actions, click context, and rubber-band state.
 - Extract app/window/event loop, renderer, scene, pane, Places, context menu,
   dialogs, icons, thumbnails, text, DnD, and telemetry modules.
 - Keep behavior changes small while moving code, so regressions remain easy to
