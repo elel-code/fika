@@ -18,16 +18,19 @@ use cosmic_text::{
 };
 use fika_core::{
     CompactLayout, CompactLayoutOptions, DesktopLaunchPlan, DeviceInfo, Entry, FileClipboardRole,
-    FileTransferMode, IconsLayout, IconsLayoutOptions, MimeApplication, MimeApplicationCache,
-    NETWORK_ROOT_LABEL, NameFilter, OpenWithLaunchResult, PaneId, TransferTaskResult,
+    FileTransferMode, Generation, IconsLayout, IconsLayoutOptions, ItemId, MimeApplication,
+    MimeApplicationCache, NETWORK_ROOT_LABEL, NameFilter, OpenWithLaunchResult, PaneId,
+    ServiceMenuAction, ServiceMenuLaunchResult, ServiceMenuPriority, ServiceMenuTarget,
+    ThumbnailRequest, ThumbnailRequestPriority, ThumbnailerRegistry, TransferTaskResult,
     TrashViewOperation, TrashViewOperationResult, UserPlace, ViewPoint, ViewRect, ViewSize,
-    complete_location_input, decode_file_clipboard_text, default_user_places_path,
-    encode_file_clipboard_text, file_ops, format_modified_secs, format_size, home_dir,
-    is_network_path, launch_with_systemd_user, load_place_order, load_user_places,
+    complete_location_input, decode_file_clipboard_text, default_thumbnail_cache_root,
+    default_user_places_path, encode_file_clipboard_text, file_ops, format_modified_secs,
+    format_size, generate_thumbnail_with_external_thumbnailer_registry, home_dir, is_network_path,
+    launch_with_systemd_user, load_place_order, load_user_places, mime_magic_resolution_required,
     network_root_path, network_uri_from_path, paste_text_result,
     place_order_path_for_user_places_path, read_entries_sync, read_gio_devices,
-    resolve_location_input, save_place_order, save_user_places, thumbnail_request_may_have_preview,
-    transfer_paths_result, trash_view_operation_result,
+    resolve_location_input, save_place_order, save_user_places, service_menu_target_label,
+    thumbnail_request_may_have_preview, transfer_paths_result, trash_view_operation_result,
 };
 use gio::prelude::FileExt;
 use raw_window_handle::{HasDisplayHandle, RawDisplayHandle};
@@ -928,7 +931,11 @@ impl ApplicationHandler for FikaWgpuApp {
                 }
                 if mouse_button == MouseButton::Right {
                     if state == ElementState::Pressed
-                        && self.scene.open_context_menu(point, size)
+                        && self.scene.open_context_menu_with_cache(
+                            point,
+                            size,
+                            &self.mime_applications,
+                        )
                         && let Some(window) = self.window.as_ref()
                     {
                         window.request_redraw();
@@ -952,7 +959,9 @@ impl ApplicationHandler for FikaWgpuApp {
                     return;
                 }
                 if state == ElementState::Pressed && self.scene.is_context_menu_open() {
-                    let action = self.scene.activate_or_close_context_menu(point, size);
+                    let action = self
+                        .scene
+                        .activate_or_close_context_menu_command(point, size);
                     if let Some(action) = action {
                         self.perform_context_menu_action(event_loop, action);
                     } else if let Some(window) = self.window.as_ref() {
@@ -1083,8 +1092,33 @@ impl FikaWgpuApp {
     fn perform_context_menu_action(
         &mut self,
         event_loop: &dyn ActiveEventLoop,
-        action: ShellContextMenuAction,
+        command: ShellContextMenuCommand,
     ) {
+        let action = match command {
+            ShellContextMenuCommand::Builtin(action) => action,
+            ShellContextMenuCommand::CreateEntry(kind) => {
+                if self.scene.open_create_dialog_from_context_with_kind(kind)
+                    && let Some(window) = self.window.as_ref()
+                {
+                    window.request_redraw();
+                }
+                return;
+            }
+            ShellContextMenuCommand::RunServiceMenuAction { action_id } => {
+                self.run_context_service_menu_action(action_id);
+                return;
+            }
+            ShellContextMenuCommand::OpenWithApplication { desktop_id } => {
+                self.open_context_target_with_application(desktop_id);
+                return;
+            }
+            ShellContextMenuCommand::OpenSubmenu(_) => {
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+                return;
+            }
+        };
         match action {
             ShellContextMenuAction::Open => {
                 if let Some(path) = self.scene.context_target_directory_path() {
@@ -1217,6 +1251,70 @@ impl FikaWgpuApp {
                 }
             }
             ShellContextMenuAction::Paste => self.paste_from_clipboard(event_loop),
+        }
+    }
+
+    fn run_context_service_menu_action(&mut self, action_id: String) {
+        let request = match self
+            .scene
+            .service_menu_launch_request(&self.mime_applications, &action_id)
+        {
+            Ok(request) => request,
+            Err(error) => {
+                eprintln!("[fika-wgpu] service-menu-error action={action_id:?} {error}");
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+                return;
+            }
+        };
+        let paths = request.paths.clone();
+        let app_name = request.app_name.clone();
+        std::thread::spawn(move || {
+            let result = pollster::block_on(launch_with_systemd_user(request.plan));
+            let status = ServiceMenuLaunchResult {
+                pane_id: WGPU_SHELL_PANE_ID,
+                target_label: service_menu_target_label(&paths),
+                app_name,
+                result,
+            }
+            .status_message();
+            eprintln!("[fika-wgpu] service-menu-finished {status}");
+        });
+        if let Some(window) = self.window.as_ref() {
+            window.request_redraw();
+        }
+    }
+
+    fn open_context_target_with_application(&mut self, desktop_id: String) {
+        let request = match self
+            .scene
+            .open_with_launch_request_for_context_application(&self.mime_applications, &desktop_id)
+        {
+            Ok(request) => request,
+            Err(error) => {
+                eprintln!("[fika-wgpu] open-with-error app={desktop_id:?} {error}");
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+                return;
+            }
+        };
+        let path = request.path.clone();
+        let app_name = request.app_name.clone();
+        std::thread::spawn(move || {
+            let result = pollster::block_on(launch_with_systemd_user(request.plan));
+            let status = OpenWithLaunchResult {
+                pane_id: WGPU_SHELL_PANE_ID,
+                path,
+                app_name,
+                result,
+            }
+            .status_message();
+            eprintln!("[fika-wgpu] open-with-finished {status}");
+        });
+        if let Some(window) = self.window.as_ref() {
+            window.request_redraw();
         }
     }
 
@@ -2641,7 +2739,89 @@ impl ShellContextTarget {
 
     fn log_path(&self) -> &Path {
         match self {
-            Self::Item { path, .. } | Self::Blank { path } | Self::Place { path, .. } => path,
+            Self::Item { path, .. } | Self::Blank { path, .. } | Self::Place { path, .. } => path,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum ShellContextMenuCommand {
+    Builtin(ShellContextMenuAction),
+    CreateEntry(CreateEntryKind),
+    RunServiceMenuAction { action_id: String },
+    OpenWithApplication { desktop_id: String },
+    OpenSubmenu(ShellContextSubmenu),
+}
+
+impl ShellContextMenuCommand {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::Builtin(action) => action.as_str(),
+            Self::CreateEntry(kind) => kind.as_str(),
+            Self::RunServiceMenuAction { .. } => "run-service-menu-action",
+            Self::OpenWithApplication { .. } => "open-with-application",
+            Self::OpenSubmenu(submenu) => submenu.as_str(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ShellContextSubmenu {
+    CreateNew,
+    OpenWith,
+    ServiceMenu,
+    ServiceMenuGroup(usize),
+}
+
+impl ShellContextSubmenu {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::CreateNew => "submenu-create-new",
+            Self::OpenWith => "submenu-open-with",
+            Self::ServiceMenu => "submenu-service-menu",
+            Self::ServiceMenuGroup(_) => "submenu-service-menu-group",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ShellContextMenuItem {
+    command: ShellContextMenuCommand,
+    label: String,
+    separator_before: bool,
+    submenu: Option<ShellContextSubmenu>,
+    icon: ShellContextMenuIcon,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum ShellContextMenuIcon {
+    Builtin(ShellContextMenuAction),
+    Service(Option<String>),
+    Application(Option<String>),
+}
+
+impl ShellContextMenuItem {
+    fn builtin(action: ShellContextMenuAction) -> Self {
+        Self {
+            command: ShellContextMenuCommand::Builtin(action),
+            label: action.label().to_string(),
+            separator_before: false,
+            submenu: None,
+            icon: ShellContextMenuIcon::Builtin(action),
+        }
+    }
+
+    fn builtin_submenu(
+        action: ShellContextMenuAction,
+        label: impl Into<String>,
+        submenu: ShellContextSubmenu,
+    ) -> Self {
+        Self {
+            command: ShellContextMenuCommand::OpenSubmenu(submenu),
+            label: label.into(),
+            separator_before: false,
+            submenu: Some(submenu),
+            icon: ShellContextMenuIcon::Builtin(action),
         }
     }
 }
@@ -2854,24 +3034,77 @@ fn context_menu_icon_style(
     }
 }
 
+fn context_menu_item_label(item: &ShellContextMenuItem, show_hidden: bool) -> String {
+    match item.command {
+        ShellContextMenuCommand::Builtin(action) => {
+            action.label_for_hidden_state(show_hidden).to_string()
+        }
+        _ => item.label.clone(),
+    }
+}
+
+fn context_menu_item_icon_style(
+    item: &ShellContextMenuItem,
+) -> (ContextMenuGlyph, [f32; 4], [f32; 4]) {
+    match &item.icon {
+        ShellContextMenuIcon::Builtin(action) => context_menu_icon_style(*action),
+        ShellContextMenuIcon::Service(_) => (
+            ContextMenuGlyph::Properties,
+            [0.216, 0.255, 0.318, 1.0],
+            [0.933, 0.945, 0.961, 1.0],
+        ),
+        ShellContextMenuIcon::Application(_) => (
+            ContextMenuGlyph::OpenWith,
+            [0.263, 0.220, 0.792, 1.0],
+            [0.933, 0.929, 1.000, 1.0],
+        ),
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 struct ShellContextMenu {
     target: ShellContextTarget,
     position: ViewPoint,
+    open_with_apps: Vec<MimeApplication>,
+    service_actions: Vec<ServiceMenuAction>,
     hovered_row: Option<usize>,
+    active_submenu: Option<ShellContextSubmenu>,
+    hovered_submenu_row: Option<usize>,
 }
 
 impl ShellContextMenu {
+    #[cfg(test)]
     fn new(target: ShellContextTarget, position: ViewPoint) -> Self {
         Self {
             target,
             position,
+            open_with_apps: Vec::new(),
+            service_actions: Vec::new(),
             hovered_row: None,
+            active_submenu: None,
+            hovered_submenu_row: None,
+        }
+    }
+
+    fn with_dynamic(
+        target: ShellContextTarget,
+        position: ViewPoint,
+        open_with_apps: Vec<MimeApplication>,
+        service_actions: Vec<ServiceMenuAction>,
+    ) -> Self {
+        Self {
+            target,
+            position,
+            open_with_apps,
+            service_actions,
+            hovered_row: None,
+            active_submenu: None,
+            hovered_submenu_row: None,
         }
     }
 }
 
-fn context_menu_actions(target: &ShellContextTarget) -> &'static [ShellContextMenuAction] {
+fn context_menu_builtin_actions(target: &ShellContextTarget) -> &'static [ShellContextMenuAction] {
     const ITEM_FILE_ACTIONS: &[ShellContextMenuAction] = &[
         ShellContextMenuAction::Open,
         ShellContextMenuAction::OpenWith,
@@ -2942,7 +3175,7 @@ fn context_menu_actions(target: &ShellContextTarget) -> &'static [ShellContextMe
         }
         ShellContextTarget::Item { is_dir: true, .. } => ITEM_DIR_ACTIONS,
         ShellContextTarget::Item { .. } => ITEM_FILE_ACTIONS,
-        ShellContextTarget::Blank { path } if file_ops::is_trash_files_dir(path) => {
+        ShellContextTarget::Blank { path, .. } if file_ops::is_trash_files_dir(path) => {
             TRASH_BLANK_ACTIONS
         }
         ShellContextTarget::Blank { .. } => BLANK_ACTIONS,
@@ -2952,8 +3185,185 @@ fn context_menu_actions(target: &ShellContextTarget) -> &'static [ShellContextMe
     }
 }
 
+fn context_menu_items(menu: &ShellContextMenu) -> Vec<ShellContextMenuItem> {
+    context_menu_items_for_target(&menu.target, &menu.service_actions)
+}
+
+fn context_menu_items_for_target(
+    target: &ShellContextTarget,
+    service_actions: &[ServiceMenuAction],
+) -> Vec<ShellContextMenuItem> {
+    let mut items = context_menu_builtin_actions(target)
+        .iter()
+        .copied()
+        .map(|action| {
+            let mut item = match action {
+                ShellContextMenuAction::OpenWith => ShellContextMenuItem::builtin_submenu(
+                    action,
+                    action.label(),
+                    ShellContextSubmenu::OpenWith,
+                ),
+                ShellContextMenuAction::CreateNew => ShellContextMenuItem::builtin_submenu(
+                    action,
+                    action.label(),
+                    ShellContextSubmenu::CreateNew,
+                ),
+                _ => ShellContextMenuItem::builtin(action),
+            };
+            item.separator_before = context_menu_separator_before_builtin(target, action);
+            item
+        })
+        .collect::<Vec<_>>();
+
+    if !service_actions.is_empty() {
+        let insert_at = items
+            .iter()
+            .position(|item| {
+                matches!(
+                    item.command,
+                    ShellContextMenuCommand::Builtin(ShellContextMenuAction::Copy)
+                        | ShellContextMenuCommand::Builtin(ShellContextMenuAction::SelectAll)
+                )
+            })
+            .unwrap_or(items.len());
+        let mut service_items = service_menu_root_items(service_actions);
+        if service_menu_has_more_actions(service_actions) {
+            let mut more = ShellContextMenuItem::builtin_submenu(
+                ShellContextMenuAction::Properties,
+                "More Actions",
+                ShellContextSubmenu::ServiceMenu,
+            );
+            more.icon = ShellContextMenuIcon::Service(None);
+            more.separator_before = service_items.is_empty();
+            service_items.push(more);
+        }
+        if !service_items.is_empty() {
+            if let Some(first) = service_items.first_mut() {
+                first.separator_before = true;
+            }
+            items.splice(insert_at..insert_at, service_items);
+        }
+    }
+
+    items
+}
+
+#[cfg(test)]
+fn context_menu_actions(target: &ShellContextTarget) -> Vec<ShellContextMenuAction> {
+    context_menu_items_for_target(target, &[])
+        .into_iter()
+        .filter_map(|item| match (&item.command, &item.icon) {
+            (ShellContextMenuCommand::Builtin(action), _) => Some(*action),
+            (_, ShellContextMenuIcon::Builtin(action)) => Some(*action),
+            _ => None,
+        })
+        .collect()
+}
+
+fn context_submenu_actions(
+    submenu: ShellContextSubmenu,
+    menu: &ShellContextMenu,
+) -> Vec<ShellContextMenuItem> {
+    match submenu {
+        ShellContextSubmenu::CreateNew => vec![
+            ShellContextMenuItem {
+                command: ShellContextMenuCommand::CreateEntry(CreateEntryKind::Folder),
+                label: "Folder".to_string(),
+                separator_before: false,
+                submenu: None,
+                icon: ShellContextMenuIcon::Builtin(ShellContextMenuAction::CreateNew),
+            },
+            ShellContextMenuItem {
+                command: ShellContextMenuCommand::CreateEntry(CreateEntryKind::File),
+                label: "Text File".to_string(),
+                separator_before: false,
+                submenu: None,
+                icon: ShellContextMenuIcon::Builtin(ShellContextMenuAction::CreateNew),
+            },
+        ],
+        ShellContextSubmenu::OpenWith => {
+            let apps = menu.open_with_apps.as_slice();
+            if apps.is_empty() {
+                return vec![ShellContextMenuItem {
+                    command: ShellContextMenuCommand::Builtin(ShellContextMenuAction::OpenWith),
+                    label: "Other Application...".to_string(),
+                    separator_before: false,
+                    submenu: None,
+                    icon: ShellContextMenuIcon::Builtin(ShellContextMenuAction::OpenWith),
+                }];
+            }
+            let mut items = apps
+                .iter()
+                .take(12)
+                .map(|app| ShellContextMenuItem {
+                    command: ShellContextMenuCommand::OpenWithApplication {
+                        desktop_id: app.id.clone(),
+                    },
+                    label: if app.is_default {
+                        format!("{} (default)", app.name)
+                    } else {
+                        app.name.clone()
+                    },
+                    separator_before: false,
+                    submenu: None,
+                    icon: ShellContextMenuIcon::Application(app.icon.clone()),
+                })
+                .collect::<Vec<_>>();
+            items.push(ShellContextMenuItem {
+                command: ShellContextMenuCommand::Builtin(ShellContextMenuAction::OpenWith),
+                label: "Other Application...".to_string(),
+                separator_before: !items.is_empty(),
+                submenu: None,
+                icon: ShellContextMenuIcon::Builtin(ShellContextMenuAction::OpenWith),
+            });
+            items
+        }
+        ShellContextSubmenu::ServiceMenu => {
+            let mut items = service_menu_more_items(&menu.service_actions);
+            if items.is_empty() {
+                items.push(ShellContextMenuItem {
+                    command: ShellContextMenuCommand::OpenSubmenu(ShellContextSubmenu::ServiceMenu),
+                    label: "No Actions".to_string(),
+                    separator_before: false,
+                    submenu: None,
+                    icon: ShellContextMenuIcon::Service(None),
+                });
+            }
+            items
+        }
+        ShellContextSubmenu::ServiceMenuGroup(group_index) => {
+            let mut items = service_menu_group_items(&menu.service_actions, group_index);
+            if items.is_empty() {
+                items.push(ShellContextMenuItem {
+                    command: ShellContextMenuCommand::OpenSubmenu(
+                        ShellContextSubmenu::ServiceMenuGroup(group_index),
+                    ),
+                    label: "No Actions".to_string(),
+                    separator_before: false,
+                    submenu: None,
+                    icon: ShellContextMenuIcon::Service(None),
+                });
+            }
+            items
+        }
+    }
+}
+
+fn context_menu_separator_before_builtin(
+    target: &ShellContextTarget,
+    action: ShellContextMenuAction,
+) -> bool {
+    let Some(row) = context_menu_builtin_actions(target)
+        .iter()
+        .position(|candidate| *candidate == action)
+    else {
+        return false;
+    };
+    context_menu_separator_before(target, row)
+}
+
 fn context_menu_separator_before(target: &ShellContextTarget, row: usize) -> bool {
-    let Some(action) = context_menu_actions(target).get(row).copied() else {
+    let Some(action) = context_menu_builtin_actions(target).get(row).copied() else {
         return false;
     };
     match target {
@@ -2965,7 +3375,7 @@ fn context_menu_separator_before(target: &ShellContextTarget, row: usize) -> boo
                 || action == ShellContextMenuAction::Rename
                 || action == ShellContextMenuAction::Properties
         }
-        ShellContextTarget::Blank { path } if file_ops::is_trash_files_dir(path) => {
+        ShellContextTarget::Blank { path, .. } if file_ops::is_trash_files_dir(path) => {
             action == ShellContextMenuAction::SelectAll
                 || action == ShellContextMenuAction::Properties
         }
@@ -2976,6 +3386,126 @@ fn context_menu_separator_before(target: &ShellContextTarget, row: usize) -> boo
                 || action == ShellContextMenuAction::Properties
         }
         ShellContextTarget::Place { .. } => action == ShellContextMenuAction::Properties,
+    }
+}
+
+fn service_menu_root_items(actions: &[ServiceMenuAction]) -> Vec<ShellContextMenuItem> {
+    actions
+        .iter()
+        .filter(|action| service_menu_action_promoted(action, actions.len()))
+        .map(service_menu_action_item)
+        .collect()
+}
+
+fn service_menu_has_more_actions(actions: &[ServiceMenuAction]) -> bool {
+    actions
+        .iter()
+        .any(|action| !service_menu_action_promoted(action, actions.len()))
+}
+
+fn service_menu_more_items(actions: &[ServiceMenuAction]) -> Vec<ShellContextMenuItem> {
+    let more = actions
+        .iter()
+        .filter(|action| !service_menu_action_promoted(action, actions.len()))
+        .collect::<Vec<_>>();
+    let (ungrouped, groups) = service_menu_partition_grouped_actions(more);
+    let mut items = ungrouped
+        .into_iter()
+        .map(service_menu_action_item)
+        .collect::<Vec<_>>();
+    for (group_index, (label, _)) in groups.iter().enumerate() {
+        let mut item = ShellContextMenuItem::builtin_submenu(
+            ShellContextMenuAction::Properties,
+            label.clone(),
+            ShellContextSubmenu::ServiceMenuGroup(group_index),
+        );
+        item.command = ShellContextMenuCommand::OpenSubmenu(ShellContextSubmenu::ServiceMenuGroup(
+            group_index,
+        ));
+        item.icon = ShellContextMenuIcon::Service(None);
+        item.separator_before = !items.is_empty() && group_index == 0;
+        items.push(item);
+    }
+    items
+}
+
+fn service_menu_group_items(
+    actions: &[ServiceMenuAction],
+    group_index: usize,
+) -> Vec<ShellContextMenuItem> {
+    let more = actions
+        .iter()
+        .filter(|action| !service_menu_action_promoted(action, actions.len()))
+        .collect::<Vec<_>>();
+    let (_, groups) = service_menu_partition_grouped_actions(more);
+    groups
+        .into_iter()
+        .nth(group_index)
+        .map(|(_, group_actions)| {
+            group_actions
+                .into_iter()
+                .map(service_menu_action_item)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn service_menu_partition_grouped_actions<'a>(
+    actions: Vec<&'a ServiceMenuAction>,
+) -> (
+    Vec<&'a ServiceMenuAction>,
+    Vec<(String, Vec<&'a ServiceMenuAction>)>,
+) {
+    let mut grouped: Vec<(String, Vec<&ServiceMenuAction>)> = Vec::new();
+    let ungrouped = actions
+        .iter()
+        .copied()
+        .filter(|action| action.submenu.is_none())
+        .collect::<Vec<_>>();
+    for action in actions
+        .into_iter()
+        .filter(|action| action.submenu.is_some())
+    {
+        let group = action.submenu.as_deref().unwrap_or_default().to_string();
+        if let Some((_, group_actions)) = grouped
+            .iter_mut()
+            .find(|(existing, _)| existing.eq_ignore_ascii_case(&group))
+        {
+            group_actions.push(action);
+        } else {
+            grouped.push((group, vec![action]));
+        }
+    }
+    (ungrouped, grouped)
+}
+
+fn service_menu_action_promoted(action: &ServiceMenuAction, action_count: usize) -> bool {
+    if action.priority == ServiceMenuPriority::TopLevel {
+        return true;
+    }
+    if action.submenu.is_some() {
+        return false;
+    }
+    if action_count <= 4 {
+        return true;
+    }
+    let label = action.label.to_ascii_lowercase();
+    [
+        "compress", "extract", "archive", "terminal", "send to", "copy to", "move to",
+    ]
+    .iter()
+    .any(|keyword| label.contains(keyword))
+}
+
+fn service_menu_action_item(action: &ServiceMenuAction) -> ShellContextMenuItem {
+    ShellContextMenuItem {
+        command: ShellContextMenuCommand::RunServiceMenuAction {
+            action_id: action.id.clone(),
+        },
+        label: action.label.clone(),
+        separator_before: false,
+        submenu: None,
+        icon: ShellContextMenuIcon::Service(action.icon.clone()),
     }
 }
 
@@ -3222,6 +3752,13 @@ impl ShellOpenWithChooser {
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct OpenWithLaunchRequest {
     path: PathBuf,
+    app_name: String,
+    plan: DesktopLaunchPlan,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ServiceMenuLaunchRequest {
+    paths: Vec<PathBuf>,
     app_name: String,
     plan: DesktopLaunchPlan,
 }
@@ -4331,7 +4868,7 @@ impl ShellScene {
                 .filter(|parent| !parent.as_os_str().is_empty())
                 .map(Path::to_path_buf)
                 .or_else(|| Some(self.path.clone())),
-            ShellContextTarget::Blank { path } | ShellContextTarget::Place { path, .. } => {
+            ShellContextTarget::Blank { path, .. } | ShellContextTarget::Place { path, .. } => {
                 Some(path.clone())
             }
         }
@@ -5070,13 +5607,23 @@ impl ShellScene {
         self.context_menu.is_some()
     }
 
+    #[cfg(test)]
     fn open_context_menu(&mut self, point: ViewPoint, size: PhysicalSize<u32>) -> bool {
+        self.open_context_menu_with_cache(point, size, &MimeApplicationCache::empty())
+    }
+
+    fn open_context_menu_with_cache(
+        &mut self,
+        point: ViewPoint,
+        size: PhysicalSize<u32>,
+        cache: &MimeApplicationCache,
+    ) -> bool {
         let changed = self.open_context_target(point, size);
         let old_menu = self.context_menu.clone();
-        self.context_menu = self
-            .context_target
-            .clone()
-            .map(|target| ShellContextMenu::new(target, point));
+        self.context_menu = self.context_target.clone().map(|target| {
+            let (open_with_apps, service_actions) = self.context_menu_dynamic_data(&target, cache);
+            ShellContextMenu::with_dynamic(target, point, open_with_apps, service_actions)
+        });
         let menu_changed = old_menu != self.context_menu;
         if menu_changed {
             eprintln!(
@@ -5088,11 +5635,93 @@ impl ShellScene {
                     .unwrap_or("none"),
                 self.context_menu
                     .as_ref()
-                    .map(|menu| context_menu_actions(&menu.target).len())
+                    .map(|menu| context_menu_items(menu).len())
                     .unwrap_or(0)
             );
         }
         changed || menu_changed
+    }
+
+    fn context_menu_dynamic_data(
+        &self,
+        target: &ShellContextTarget,
+        cache: &MimeApplicationCache,
+    ) -> (Vec<MimeApplication>, Vec<ServiceMenuAction>) {
+        match target {
+            ShellContextTarget::Item {
+                index,
+                path,
+                is_dir,
+                ..
+            } => {
+                let mime_type = self
+                    .entries
+                    .get(*index)
+                    .and_then(|entry| entry.mime_type.as_deref());
+                let open_with_apps = if *is_dir || file_ops::is_in_trash_files_dir(path) {
+                    Vec::new()
+                } else {
+                    open_with_applications_for_mime(cache, mime_type)
+                };
+                let service_actions = if file_ops::is_in_trash_files_dir(path) {
+                    Vec::new()
+                } else {
+                    cache.service_actions_for_targets(
+                        &self.service_menu_targets_for_context_item(*index, *is_dir, mime_type),
+                    )
+                };
+                (open_with_apps, service_actions)
+            }
+            ShellContextTarget::Blank { path } => {
+                let open_with_apps = if file_ops::is_trash_files_dir(&path) {
+                    Vec::new()
+                } else {
+                    open_with_applications_for_mime(cache, Some("inode/directory"))
+                };
+                let service_actions = if file_ops::is_trash_files_dir(&path) {
+                    Vec::new()
+                } else {
+                    cache.service_actions_for_targets(&[ServiceMenuTarget::new(
+                        Some("inode/directory"),
+                        true,
+                    )])
+                };
+                (open_with_apps, service_actions)
+            }
+            ShellContextTarget::Place { .. } => (Vec::new(), Vec::new()),
+        }
+    }
+
+    fn service_menu_targets_for_context_item(
+        &self,
+        index: usize,
+        is_dir: bool,
+        mime_type: Option<&str>,
+    ) -> Vec<ServiceMenuTarget> {
+        if self.selection.contains(index) {
+            let targets = self
+                .selection
+                .selected
+                .iter()
+                .filter_map(|selected| self.entries.get(*selected))
+                .map(|entry| {
+                    ServiceMenuTarget::new(
+                        entry
+                            .mime_type
+                            .as_deref()
+                            .or_else(|| entry.is_dir.then_some("inode/directory")),
+                        entry.is_dir,
+                    )
+                })
+                .collect::<Vec<_>>();
+            if !targets.is_empty() {
+                return targets;
+            }
+        }
+        vec![ServiceMenuTarget::new(
+            mime_type.or_else(|| is_dir.then_some("inode/directory")),
+            is_dir,
+        )]
     }
 
     fn close_context_menu(&mut self) -> bool {
@@ -5103,12 +5732,12 @@ impl ShellScene {
         true
     }
 
-    fn activate_or_close_context_menu(
+    fn activate_or_close_context_menu_command(
         &mut self,
         point: ViewPoint,
         size: PhysicalSize<u32>,
-    ) -> Option<ShellContextMenuAction> {
-        let action = self.context_menu_action_at_screen_point(point, size);
+    ) -> Option<ShellContextMenuCommand> {
+        let action = self.context_menu_command_at_screen_point(point, size);
         let menu_was_open = self.context_menu.take().is_some();
         if let Some(action) = action {
             self.context_menu_actions += 1;
@@ -5128,28 +5757,88 @@ impl ShellScene {
         None
     }
 
+    #[cfg(test)]
+    fn activate_or_close_context_menu(
+        &mut self,
+        point: ViewPoint,
+        size: PhysicalSize<u32>,
+    ) -> Option<ShellContextMenuAction> {
+        self.activate_or_close_context_menu_command(point, size)
+            .and_then(|command| match command {
+                ShellContextMenuCommand::Builtin(action) => Some(action),
+                _ => None,
+            })
+    }
+
+    fn context_menu_command_at_screen_point(
+        &self,
+        point: ViewPoint,
+        size: PhysicalSize<u32>,
+    ) -> Option<ShellContextMenuCommand> {
+        let menu = self.context_menu.as_ref()?;
+        if let Some(submenu) = menu.active_submenu
+            && let Some(row) =
+                context_submenu_row_at_screen_point(menu, submenu, point, size, self.ui_scale())
+        {
+            return context_submenu_actions(submenu, menu)
+                .get(row)
+                .map(|item| item.command.clone());
+        }
+        let row = context_menu_row_at_screen_point(menu, point, size, self.ui_scale())?;
+        context_menu_items(menu)
+            .get(row)
+            .map(|item| item.command.clone())
+    }
+
+    #[cfg(test)]
     fn context_menu_action_at_screen_point(
         &self,
         point: ViewPoint,
         size: PhysicalSize<u32>,
     ) -> Option<ShellContextMenuAction> {
-        let menu = self.context_menu.as_ref()?;
-        let row = context_menu_row_at_screen_point(menu, point, size, self.ui_scale())?;
-        context_menu_actions(&menu.target).get(row).copied()
+        self.context_menu_command_at_screen_point(point, size)
+            .and_then(|command| match command {
+                ShellContextMenuCommand::Builtin(action) => Some(action),
+                _ => None,
+            })
     }
 
     fn update_context_menu_hover(&mut self, point: ViewPoint, size: PhysicalSize<u32>) -> bool {
-        let hovered_row = self
-            .context_menu
-            .as_ref()
-            .and_then(|menu| context_menu_row_at_screen_point(menu, point, size, self.ui_scale()));
+        let Some(snapshot) = self.context_menu.clone() else {
+            return false;
+        };
+        let scale = self.ui_scale();
+        let hovered_submenu_row = snapshot.active_submenu.and_then(|submenu| {
+            context_submenu_row_at_screen_point(&snapshot, submenu, point, size, scale)
+        });
+        let hovered_row = if hovered_submenu_row.is_some()
+            && context_menu_submenu_rect(&snapshot, size, scale)
+                .is_some_and(|rect| rect.contains(point))
+        {
+            snapshot.hovered_row
+        } else {
+            context_menu_row_at_screen_point(&snapshot, point, size, scale)
+        };
+        let root_items = context_menu_items(&snapshot);
+        let hovered_row = hovered_row.filter(|row| *row < root_items.len());
+        let active_submenu = hovered_row
+            .and_then(|row| root_items.get(row))
+            .and_then(|item| item.submenu)
+            .or_else(|| {
+                hovered_submenu_row
+                    .is_some()
+                    .then_some(snapshot.active_submenu)
+                    .flatten()
+            });
         let Some(menu) = self.context_menu.as_mut() else {
             return false;
         };
-        let row_count = context_menu_actions(&menu.target).len();
-        let hovered_row = hovered_row.filter(|row| *row < row_count);
-        let changed = menu.hovered_row != hovered_row;
+        let changed = menu.hovered_row != hovered_row
+            || menu.hovered_submenu_row != hovered_submenu_row
+            || menu.active_submenu != active_submenu;
         menu.hovered_row = hovered_row;
+        menu.hovered_submenu_row = hovered_submenu_row;
+        menu.active_submenu = active_submenu;
         changed
     }
 
@@ -5160,6 +5849,7 @@ impl ShellScene {
                 path,
                 is_dir,
                 selection_count,
+                ..
             }) => eprintln!(
                 "[fika-wgpu] context-target kind=item index={} dir={} selection={} path={} changes={}",
                 index,
@@ -5168,7 +5858,7 @@ impl ShellScene {
                 path.display(),
                 self.context_target_changes
             ),
-            Some(ShellContextTarget::Blank { path }) => eprintln!(
+            Some(ShellContextTarget::Blank { path, .. }) => eprintln!(
                 "[fika-wgpu] context-target kind=blank path={} changes={}",
                 path.display(),
                 self.context_target_changes
@@ -5363,6 +6053,60 @@ impl ShellScene {
         })
     }
 
+    fn open_with_launch_request_for_context_application(
+        &self,
+        cache: &MimeApplicationCache,
+        desktop_id: &str,
+    ) -> Result<OpenWithLaunchRequest, String> {
+        let path = match self.context_target.as_ref() {
+            Some(ShellContextTarget::Item {
+                path,
+                is_dir: false,
+                ..
+            }) => path.clone(),
+            Some(ShellContextTarget::Blank { path, .. }) => path.clone(),
+            _ => return Err("Open With application requires a file or folder target".to_string()),
+        };
+        let app = cache
+            .application(desktop_id)
+            .ok_or_else(|| format!("application not found: {desktop_id}"))?;
+        let plan = app
+            .launch_plan(std::slice::from_ref(&path))
+            .ok_or_else(|| format!("{} did not produce a launch command", app.name))?;
+        Ok(OpenWithLaunchRequest {
+            path,
+            app_name: plan.app_name.clone(),
+            plan,
+        })
+    }
+
+    fn service_menu_launch_request(
+        &self,
+        cache: &MimeApplicationCache,
+        action_id: &str,
+    ) -> Result<ServiceMenuLaunchRequest, String> {
+        let paths = self
+            .context_target_service_menu_paths()?
+            .ok_or_else(|| "no service menu target paths".to_string())?;
+        let plan = cache
+            .service_action_launch_plan(action_id, &paths)
+            .ok_or_else(|| format!("service action not found or unsupported: {action_id}"))?;
+        Ok(ServiceMenuLaunchRequest {
+            paths,
+            app_name: plan.app_name.clone(),
+            plan,
+        })
+    }
+
+    fn context_target_service_menu_paths(&self) -> Result<Option<Vec<PathBuf>>, String> {
+        match self.context_target.as_ref() {
+            Some(ShellContextTarget::Item { .. }) => self.context_target_item_paths(),
+            Some(ShellContextTarget::Blank { path, .. }) => Ok(Some(vec![path.clone()])),
+            Some(ShellContextTarget::Place { path, .. }) => Ok(Some(vec![path.clone()])),
+            None => Ok(None),
+        }
+    }
+
     fn set_open_with_chooser_error(&mut self, error: String) -> bool {
         let Some(chooser) = self.open_with_chooser.as_mut() else {
             eprintln!("[fika-wgpu] open-with-error {error}");
@@ -5411,19 +6155,22 @@ impl ShellScene {
         let Some(chooser) = self.open_with_chooser.as_ref() else {
             return OpenWithChooserClick::Outside;
         };
-        let rect = open_with_chooser_rect(chooser, size);
+        let scale = self.ui_scale();
+        let rect = open_with_chooser_rect_scaled(chooser, size, scale);
         if !rect.contains(point) {
             return OpenWithChooserClick::Outside;
         }
-        if open_with_chooser_cancel_button_rect(rect).contains(point) {
+        if open_with_chooser_cancel_button_rect_scaled(rect, scale).contains(point) {
             return OpenWithChooserClick::Cancel;
         }
-        if open_with_chooser_open_button_rect(rect).contains(point) {
+        if open_with_chooser_open_button_rect_scaled(rect, scale).contains(point) {
             return OpenWithChooserClick::Open;
         }
-        let list = open_with_chooser_list_rect(rect, chooser);
+        let list = open_with_chooser_list_rect_scaled(rect, chooser, scale);
         if list.contains(point) {
-            let visible_row = ((point.y - list.y) / OPEN_WITH_CHOOSER_ROW_HEIGHT).floor() as usize;
+            let visible_row = ((point.y - list.y)
+                / scaled_dialog_metric(OPEN_WITH_CHOOSER_ROW_HEIGHT, scale))
+            .floor() as usize;
             let row = chooser.scroll_row + visible_row;
             if row < chooser.filtered_count() {
                 return OpenWithChooserClick::Row(row);
@@ -5479,7 +6226,7 @@ impl ShellScene {
             Some(ShellContextTarget::Item {
                 path, is_dir: true, ..
             })
-            | Some(ShellContextTarget::Blank { path }) => {
+            | Some(ShellContextTarget::Blank { path, .. }) => {
                 Ok((default_shell_place_label(path), path.clone()))
             }
             Some(ShellContextTarget::Item { is_dir: false, .. }) => {
@@ -5615,7 +6362,7 @@ impl ShellScene {
 
     fn context_target_paste_directory(&self) -> Option<PathBuf> {
         match self.context_target.as_ref()? {
-            ShellContextTarget::Blank { path } => Some(path.clone()),
+            ShellContextTarget::Blank { path, .. } => Some(path.clone()),
             _ => None,
         }
     }
@@ -5760,7 +6507,7 @@ impl ShellScene {
 
     fn context_target_can_empty_trash(&self) -> bool {
         match self.context_target.as_ref() {
-            Some(ShellContextTarget::Blank { path }) => file_ops::is_trash_files_dir(path),
+            Some(ShellContextTarget::Blank { path, .. }) => file_ops::is_trash_files_dir(path),
             Some(ShellContextTarget::Place { trash, .. }) => *trash,
             _ => false,
         }
@@ -5923,14 +6670,15 @@ impl ShellScene {
         let Some(dialog) = self.trash_conflict_dialog.as_ref() else {
             return TrashConflictDialogClick::Outside;
         };
-        let rect = trash_conflict_dialog_rect(dialog, size);
+        let scale = self.ui_scale();
+        let rect = trash_conflict_dialog_rect_scaled(dialog, size, scale);
         if !rect.contains(point) {
             return TrashConflictDialogClick::Outside;
         }
-        if trash_conflict_dialog_cancel_button_rect(rect).contains(point) {
+        if trash_conflict_dialog_cancel_button_rect_scaled(rect, scale).contains(point) {
             return TrashConflictDialogClick::Cancel;
         }
-        if trash_conflict_dialog_replace_button_rect(rect).contains(point) {
+        if trash_conflict_dialog_replace_button_rect_scaled(rect, scale).contains(point) {
             return TrashConflictDialogClick::Replace;
         }
         TrashConflictDialogClick::Inside
@@ -5981,7 +6729,7 @@ impl ShellScene {
         let Some(overlay) = self.properties_overlay.as_ref() else {
             return false;
         };
-        if properties_overlay_rect(overlay, size).contains(point) {
+        if properties_overlay_rect_scaled(overlay, size, self.ui_scale()).contains(point) {
             return false;
         }
         self.close_properties_overlay()
@@ -5992,7 +6740,11 @@ impl ShellScene {
     }
 
     fn open_create_dialog_from_context(&mut self) -> bool {
-        let Some(ShellContextTarget::Blank { path }) = self.context_target.as_ref() else {
+        self.open_create_dialog_from_context_with_kind(CreateEntryKind::Folder)
+    }
+
+    fn open_create_dialog_from_context_with_kind(&mut self, kind: CreateEntryKind) -> bool {
+        let Some(ShellContextTarget::Blank { path, .. }) = self.context_target.as_ref() else {
             eprintln!(
                 "[fika-wgpu] create-new-error target={}",
                 self.context_target
@@ -6002,7 +6754,7 @@ impl ShellScene {
             );
             return false;
         };
-        let dialog = ShellCreateDialog::new(path.clone(), CreateEntryKind::Folder);
+        let dialog = ShellCreateDialog::new(path.clone(), kind);
         let changed = self.create_dialog.as_ref() != Some(&dialog);
         self.create_dialog = Some(dialog);
         self.properties_overlay = None;
@@ -6142,19 +6894,20 @@ impl ShellScene {
         let Some(dialog) = self.create_dialog.as_ref() else {
             return CreateDialogClick::Outside;
         };
-        let rect = create_dialog_rect(dialog, size);
+        let scale = self.ui_scale();
+        let rect = create_dialog_rect_scaled(dialog, size, scale);
         if !rect.contains(point) {
             return CreateDialogClick::Outside;
         }
         for kind in [CreateEntryKind::Folder, CreateEntryKind::File] {
-            if create_kind_button_rect(rect, kind).contains(point) {
+            if create_kind_button_rect_scaled(rect, kind, scale).contains(point) {
                 return CreateDialogClick::Kind(kind);
             }
         }
-        if create_dialog_cancel_button_rect(rect).contains(point) {
+        if create_dialog_cancel_button_rect_scaled(rect, scale).contains(point) {
             return CreateDialogClick::Cancel;
         }
-        if create_dialog_commit_button_rect(rect).contains(point) {
+        if create_dialog_commit_button_rect_scaled(rect, scale).contains(point) {
             return CreateDialogClick::Commit;
         }
         CreateDialogClick::Inside
@@ -6345,14 +7098,15 @@ impl ShellScene {
         let Some(dialog) = self.rename_dialog.as_ref() else {
             return RenameDialogClick::Outside;
         };
-        let rect = rename_dialog_rect(dialog, size);
+        let scale = self.ui_scale();
+        let rect = rename_dialog_rect_scaled(dialog, size, scale);
         if !rect.contains(point) {
             return RenameDialogClick::Outside;
         }
-        if rename_dialog_cancel_button_rect(rect).contains(point) {
+        if rename_dialog_cancel_button_rect_scaled(rect, scale).contains(point) {
             return RenameDialogClick::Cancel;
         }
-        if rename_dialog_commit_button_rect(rect).contains(point) {
+        if rename_dialog_commit_button_rect_scaled(rect, scale).contains(point) {
             return RenameDialogClick::Commit;
         }
         RenameDialogClick::Inside
@@ -6378,6 +7132,7 @@ impl ShellScene {
                 path,
                 is_dir,
                 selection_count,
+                ..
             } => {
                 let entry = self.entries.get(*index)?;
                 let title_name = entry.name.as_ref().to_string();
@@ -6415,7 +7170,7 @@ impl ShellScene {
                     rows,
                 })
             }
-            ShellContextTarget::Blank { path } => Some(ShellPropertiesOverlay {
+            ShellContextTarget::Blank { path, .. } => Some(ShellPropertiesOverlay {
                 title: format!("Properties - {}", path.display()),
                 rows: vec![
                     property_row("Name", path_name_or_display(path)),
@@ -7165,7 +7920,7 @@ impl ShellScene {
             );
         }
 
-        if !icons.push_icon(projection.view.path, entry, icon_rect, content_clip) {
+        if !icons.push_thumbnail_or_icon(projection.view.path, entry, icon_rect, content_clip) {
             push_fallback_icon(vertices, entry, icon_rect, content_clip, size);
         }
 
@@ -7976,7 +8731,8 @@ impl ShellScene {
             size,
         );
 
-        for (row, action) in context_menu_actions(&menu.target).iter().enumerate() {
+        let items = context_menu_items(menu);
+        for (row, item) in items.iter().enumerate() {
             let row_rect = ViewRect {
                 x: rect.x,
                 y: rect.y + padding_y + row as f32 * row_height,
@@ -8006,11 +8762,119 @@ impl ShellScene {
                 width: icon_size,
                 height: icon_size,
             };
-            let (glyph, icon_fg, icon_bg) = context_menu_icon_style(*action);
+            let (glyph, icon_fg, icon_bg) = context_menu_item_icon_style(item);
             push_context_menu_icon(vertices, icon, rect, glyph, icon_fg, icon_bg, scale, size);
             let text_x = icon.right() + gap;
             text.push_label_aligned(
-                action.label_for_hidden_state(self.show_hidden),
+                context_menu_item_label(item, self.show_hidden).as_str(),
+                ViewRect {
+                    x: text_x,
+                    y: row_rect.y + (row_rect.height - text_height) / 2.0,
+                    width: (row_rect.right()
+                        - text_x
+                        - row_padding_x
+                        - if item.submenu.is_some() { gap } else { 0.0 })
+                    .max(1.0),
+                    height: text_height,
+                },
+                rect,
+                if menu.hovered_row == Some(row) {
+                    TextColor::rgb(31, 79, 191)
+                } else {
+                    TextColor::rgb(36, 41, 47)
+                },
+                LabelAlignment::Start,
+            );
+            if item.submenu.is_some() {
+                text.push_label_aligned(
+                    ">",
+                    ViewRect {
+                        x: row_rect.right() - row_padding_x - gap,
+                        y: row_rect.y + (row_rect.height - text_height) / 2.0,
+                        width: gap,
+                        height: text_height,
+                    },
+                    rect,
+                    TextColor::rgb(89, 99, 110),
+                    LabelAlignment::Center,
+                );
+            }
+        }
+        push_clipped_rect_outline(vertices, rect, clip, 1.0, [0.784, 0.808, 0.839, 1.0], size);
+        self.push_context_submenu_overlay(vertices, text, menu, size);
+    }
+
+    fn push_context_submenu_overlay(
+        &self,
+        vertices: &mut Vec<QuadVertex>,
+        text: &mut TextFrameBuilder<'_>,
+        menu: &ShellContextMenu,
+        size: PhysicalSize<u32>,
+    ) {
+        let Some(submenu) = menu.active_submenu else {
+            return;
+        };
+        let scale = self.ui_scale();
+        let Some(rect) = context_menu_submenu_rect(menu, size, scale) else {
+            return;
+        };
+        let items = context_submenu_actions(submenu, menu);
+        let padding_y = scaled_context_menu_metric(CONTEXT_MENU_VERTICAL_PADDING, scale);
+        let row_height = scaled_context_menu_metric(CONTEXT_MENU_ROW_HEIGHT, scale);
+        let row_padding_x = scaled_context_menu_metric(8.0, scale);
+        let gap = scaled_context_menu_metric(8.0, scale);
+        let icon_size = scaled_context_menu_metric(CONTEXT_MENU_ICON_SIZE, scale);
+        let text_height = scaled_context_menu_metric(CONTEXT_MENU_TEXT_LINE_HEIGHT, scale);
+        let clip = ViewRect {
+            x: 0.0,
+            y: 0.0,
+            width: size.width.max(1) as f32,
+            height: size.height.max(1) as f32,
+        };
+        push_context_menu_shadow(vertices, rect, clip, scale, size);
+        push_clipped_rounded_rect(
+            vertices,
+            rect,
+            clip,
+            self.scale_metric(6.0),
+            [1.000, 1.000, 1.000, 1.0],
+            size,
+        );
+        for (row, item) in items.iter().enumerate() {
+            let row_rect = ViewRect {
+                x: rect.x,
+                y: rect.y + padding_y + row as f32 * row_height,
+                width: rect.width,
+                height: row_height,
+            };
+            if menu.hovered_submenu_row == Some(row) {
+                push_rect(vertices, row_rect, [0.918, 0.945, 1.000, 1.0], size);
+            }
+            if item.separator_before {
+                push_clipped_rect(
+                    vertices,
+                    ViewRect {
+                        x: rect.x + row_padding_x,
+                        y: row_rect.y,
+                        width: (rect.width - row_padding_x * 2.0).max(1.0),
+                        height: scale.round().max(1.0),
+                    },
+                    rect,
+                    [0.898, 0.906, 0.922, 1.0],
+                    size,
+                );
+            }
+            let icon = ViewRect {
+                x: row_rect.x + row_padding_x,
+                y: row_rect.y + (row_rect.height - icon_size) / 2.0,
+                width: icon_size,
+                height: icon_size,
+            };
+            let (glyph, icon_fg, icon_bg) = context_menu_item_icon_style(item);
+            push_context_menu_icon(vertices, icon, rect, glyph, icon_fg, icon_bg, scale, size);
+            let text_x = icon.right() + gap;
+            text.push_label_aligned(
+                context_menu_item_label(item, self.show_hidden).as_str(),
                 ViewRect {
                     x: text_x,
                     y: row_rect.y + (row_rect.height - text_height) / 2.0,
@@ -8018,7 +8882,7 @@ impl ShellScene {
                     height: text_height,
                 },
                 rect,
-                if menu.hovered_row == Some(row) {
+                if menu.hovered_submenu_row == Some(row) {
                     TextColor::rgb(31, 79, 191)
                 } else {
                     TextColor::rgb(36, 41, 47)
@@ -8045,7 +8909,11 @@ impl ShellScene {
             height: size.height.max(1) as f32,
         };
         push_rect(vertices, screen, [0.0, 0.0, 0.0, 0.40], size);
-        let rect = properties_overlay_rect(overlay, size);
+        let scale = self.ui_scale();
+        let rect = properties_overlay_rect_scaled(overlay, size, scale);
+        let title_height = scaled_dialog_metric(PROPERTIES_TITLE_HEIGHT, scale);
+        let row_height = scaled_dialog_metric(PROPERTIES_ROW_HEIGHT, scale);
+        let margin = scaled_dialog_metric(16.0, scale);
         push_rect(vertices, rect, [0.118, 0.128, 0.140, 0.99], size);
         push_clipped_rect_outline(vertices, rect, screen, 1.0, [0.34, 0.38, 0.43, 1.0], size);
         push_rect(
@@ -8054,7 +8922,7 @@ impl ShellScene {
                 x: rect.x,
                 y: rect.y,
                 width: rect.width,
-                height: PROPERTIES_TITLE_HEIGHT,
+                height: title_height,
             },
             [0.145, 0.158, 0.174, 1.0],
             size,
@@ -8062,25 +8930,25 @@ impl ShellScene {
         text.push_label(
             &overlay.title,
             ViewRect {
-                x: rect.x + 16.0,
-                y: rect.y + 12.0,
-                width: (rect.width - 32.0).max(1.0),
-                height: 18.0,
+                x: rect.x + margin,
+                y: rect.y + scaled_dialog_metric(12.0, scale),
+                width: (rect.width - margin * 2.0).max(1.0),
+                height: scaled_dialog_metric(18.0, scale),
             },
             rect,
             TextColor::rgb(238, 244, 249),
         );
 
-        let rows_y = rect.y + PROPERTIES_TITLE_HEIGHT + 10.0;
+        let rows_y = rect.y + title_height + scaled_dialog_metric(10.0, scale);
         for (index, row) in overlay.rows.iter().enumerate() {
-            let y = rows_y + index as f32 * PROPERTIES_ROW_HEIGHT;
+            let y = rows_y + index as f32 * row_height;
             text.push_label(
                 row.label,
                 ViewRect {
-                    x: rect.x + 16.0,
+                    x: rect.x + margin,
                     y,
-                    width: 92.0,
-                    height: 18.0,
+                    width: scaled_dialog_metric(92.0, scale),
+                    height: scaled_dialog_metric(18.0, scale),
                 },
                 rect,
                 TextColor::rgb(164, 176, 188),
@@ -8088,10 +8956,10 @@ impl ShellScene {
             text.push_label(
                 &row.value,
                 ViewRect {
-                    x: rect.x + 116.0,
+                    x: rect.x + scaled_dialog_metric(116.0, scale),
                     y,
-                    width: (rect.width - 132.0).max(1.0),
-                    height: 18.0,
+                    width: (rect.width - scaled_dialog_metric(132.0, scale)).max(1.0),
+                    height: scaled_dialog_metric(18.0, scale),
                 },
                 rect,
                 TextColor::rgb(222, 230, 238),
@@ -8115,7 +8983,10 @@ impl ShellScene {
             height: size.height.max(1) as f32,
         };
         push_rect(vertices, screen, [0.0, 0.0, 0.0, 0.44], size);
-        let rect = create_dialog_rect(dialog, size);
+        let scale = self.ui_scale();
+        let rect = create_dialog_rect_scaled(dialog, size, scale);
+        let title_height = scaled_dialog_metric(CREATE_DIALOG_TITLE_HEIGHT, scale);
+        let margin = scaled_dialog_metric(16.0, scale);
         push_rect(vertices, rect, [0.118, 0.128, 0.140, 0.99], size);
         push_clipped_rect_outline(vertices, rect, screen, 1.0, [0.34, 0.38, 0.43, 1.0], size);
         push_rect(
@@ -8124,7 +8995,7 @@ impl ShellScene {
                 x: rect.x,
                 y: rect.y,
                 width: rect.width,
-                height: CREATE_DIALOG_TITLE_HEIGHT,
+                height: title_height,
             },
             [0.145, 0.158, 0.174, 1.0],
             size,
@@ -8132,17 +9003,17 @@ impl ShellScene {
         text.push_label(
             "Create New",
             ViewRect {
-                x: rect.x + 16.0,
-                y: rect.y + 12.0,
-                width: (rect.width - 32.0).max(1.0),
-                height: 18.0,
+                x: rect.x + margin,
+                y: rect.y + scaled_dialog_metric(12.0, scale),
+                width: (rect.width - margin * 2.0).max(1.0),
+                height: scaled_dialog_metric(18.0, scale),
             },
             rect,
             TextColor::rgb(238, 244, 249),
         );
 
         for kind in [CreateEntryKind::Folder, CreateEntryKind::File] {
-            let button = create_kind_button_rect(rect, kind);
+            let button = create_kind_button_rect_scaled(rect, kind, scale);
             let active = dialog.kind == kind;
             push_rect(
                 vertices,
@@ -8157,10 +9028,10 @@ impl ShellScene {
             text.push_label(
                 kind.label(),
                 ViewRect {
-                    x: button.x + 10.0,
-                    y: button.y + 4.0,
-                    width: (button.width - 20.0).max(1.0),
-                    height: 18.0,
+                    x: button.x + scaled_dialog_metric(10.0, scale),
+                    y: button.y + scaled_dialog_metric(4.0, scale),
+                    width: (button.width - scaled_dialog_metric(20.0, scale)).max(1.0),
+                    height: scaled_dialog_metric(18.0, scale),
                 },
                 rect,
                 if active {
@@ -8171,17 +9042,17 @@ impl ShellScene {
             );
         }
 
-        let input = create_dialog_input_rect(rect);
+        let input = create_dialog_input_rect_scaled(rect, scale);
         push_rect(vertices, input, [0.078, 0.086, 0.096, 1.0], size);
         push_clipped_rect_outline(vertices, input, rect, 1.0, [0.26, 0.31, 0.36, 1.0], size);
         let draft = format!("{}|", dialog.name);
         text.push_label(
             &draft,
             ViewRect {
-                x: input.x + 10.0,
-                y: input.y + 7.0,
-                width: (input.width - 20.0).max(1.0),
-                height: 18.0,
+                x: input.x + scaled_dialog_metric(10.0, scale),
+                y: input.y + scaled_dialog_metric(7.0, scale),
+                width: (input.width - scaled_dialog_metric(20.0, scale)).max(1.0),
+                height: scaled_dialog_metric(18.0, scale),
             },
             input,
             TextColor::rgb(230, 236, 241),
@@ -8191,18 +9062,18 @@ impl ShellScene {
             text.push_label(
                 error,
                 ViewRect {
-                    x: rect.x + 16.0,
-                    y: input.bottom() + 8.0,
-                    width: (rect.width - 32.0).max(1.0),
-                    height: 18.0,
+                    x: rect.x + margin,
+                    y: input.bottom() + scaled_dialog_metric(8.0, scale),
+                    width: (rect.width - margin * 2.0).max(1.0),
+                    height: scaled_dialog_metric(18.0, scale),
                 },
                 rect,
                 TextColor::rgb(238, 132, 122),
             );
         }
 
-        let cancel = create_dialog_cancel_button_rect(rect);
-        let commit = create_dialog_commit_button_rect(rect);
+        let cancel = create_dialog_cancel_button_rect_scaled(rect, scale);
+        let commit = create_dialog_commit_button_rect_scaled(rect, scale);
         for (label, button, active) in [("Cancel", cancel, false), ("Create", commit, true)] {
             push_rect(
                 vertices,
@@ -8217,10 +9088,10 @@ impl ShellScene {
             text.push_label(
                 label,
                 ViewRect {
-                    x: button.x + 10.0,
-                    y: button.y + 4.0,
-                    width: (button.width - 20.0).max(1.0),
-                    height: 18.0,
+                    x: button.x + scaled_dialog_metric(10.0, scale),
+                    y: button.y + scaled_dialog_metric(4.0, scale),
+                    width: (button.width - scaled_dialog_metric(20.0, scale)).max(1.0),
+                    height: scaled_dialog_metric(18.0, scale),
                 },
                 rect,
                 TextColor::rgb(238, 244, 249),
@@ -8244,7 +9115,10 @@ impl ShellScene {
             height: size.height.max(1) as f32,
         };
         push_rect(vertices, screen, [0.0, 0.0, 0.0, 0.44], size);
-        let rect = rename_dialog_rect(dialog, size);
+        let scale = self.ui_scale();
+        let rect = rename_dialog_rect_scaled(dialog, size, scale);
+        let title_height = scaled_dialog_metric(RENAME_DIALOG_TITLE_HEIGHT, scale);
+        let margin = scaled_dialog_metric(16.0, scale);
         push_rect(vertices, rect, [0.118, 0.128, 0.140, 0.99], size);
         push_clipped_rect_outline(vertices, rect, screen, 1.0, [0.34, 0.38, 0.43, 1.0], size);
         push_rect(
@@ -8253,7 +9127,7 @@ impl ShellScene {
                 x: rect.x,
                 y: rect.y,
                 width: rect.width,
-                height: RENAME_DIALOG_TITLE_HEIGHT,
+                height: title_height,
             },
             [0.145, 0.158, 0.174, 1.0],
             size,
@@ -8265,26 +9139,26 @@ impl ShellScene {
                 "Rename File"
             },
             ViewRect {
-                x: rect.x + 16.0,
-                y: rect.y + 12.0,
-                width: (rect.width - 32.0).max(1.0),
-                height: 18.0,
+                x: rect.x + margin,
+                y: rect.y + scaled_dialog_metric(12.0, scale),
+                width: (rect.width - margin * 2.0).max(1.0),
+                height: scaled_dialog_metric(18.0, scale),
             },
             rect,
             TextColor::rgb(238, 244, 249),
         );
 
-        let input = rename_dialog_input_rect(rect);
+        let input = rename_dialog_input_rect_scaled(rect, scale);
         push_rect(vertices, input, [0.078, 0.086, 0.096, 1.0], size);
         push_clipped_rect_outline(vertices, input, rect, 1.0, [0.26, 0.31, 0.36, 1.0], size);
         let draft = format!("{}|", dialog.name);
         text.push_label(
             &draft,
             ViewRect {
-                x: input.x + 10.0,
-                y: input.y + 7.0,
-                width: (input.width - 20.0).max(1.0),
-                height: 18.0,
+                x: input.x + scaled_dialog_metric(10.0, scale),
+                y: input.y + scaled_dialog_metric(7.0, scale),
+                width: (input.width - scaled_dialog_metric(20.0, scale)).max(1.0),
+                height: scaled_dialog_metric(18.0, scale),
             },
             input,
             TextColor::rgb(230, 236, 241),
@@ -8294,18 +9168,18 @@ impl ShellScene {
             text.push_label(
                 error,
                 ViewRect {
-                    x: rect.x + 16.0,
-                    y: input.bottom() + 8.0,
-                    width: (rect.width - 32.0).max(1.0),
-                    height: 18.0,
+                    x: rect.x + margin,
+                    y: input.bottom() + scaled_dialog_metric(8.0, scale),
+                    width: (rect.width - margin * 2.0).max(1.0),
+                    height: scaled_dialog_metric(18.0, scale),
                 },
                 rect,
                 TextColor::rgb(238, 132, 122),
             );
         }
 
-        let cancel = rename_dialog_cancel_button_rect(rect);
-        let commit = rename_dialog_commit_button_rect(rect);
+        let cancel = rename_dialog_cancel_button_rect_scaled(rect, scale);
+        let commit = rename_dialog_commit_button_rect_scaled(rect, scale);
         for (label, button, active) in [("Cancel", cancel, false), ("Rename", commit, true)] {
             push_rect(
                 vertices,
@@ -8320,10 +9194,10 @@ impl ShellScene {
             text.push_label(
                 label,
                 ViewRect {
-                    x: button.x + 10.0,
-                    y: button.y + 4.0,
-                    width: (button.width - 20.0).max(1.0),
-                    height: 18.0,
+                    x: button.x + scaled_dialog_metric(10.0, scale),
+                    y: button.y + scaled_dialog_metric(4.0, scale),
+                    width: (button.width - scaled_dialog_metric(20.0, scale)).max(1.0),
+                    height: scaled_dialog_metric(18.0, scale),
                 },
                 rect,
                 TextColor::rgb(238, 244, 249),
@@ -8347,7 +9221,11 @@ impl ShellScene {
             height: size.height.max(1) as f32,
         };
         push_rect(vertices, screen, [0.0, 0.0, 0.0, 0.46], size);
-        let rect = open_with_chooser_rect(chooser, size);
+        let scale = self.ui_scale();
+        let rect = open_with_chooser_rect_scaled(chooser, size, scale);
+        let title_height = scaled_dialog_metric(OPEN_WITH_CHOOSER_TITLE_HEIGHT, scale);
+        let margin = scaled_dialog_metric(16.0, scale);
+        let row_height = scaled_dialog_metric(OPEN_WITH_CHOOSER_ROW_HEIGHT, scale);
         push_rect(vertices, rect, [0.118, 0.128, 0.140, 0.99], size);
         push_clipped_rect_outline(vertices, rect, screen, 1.0, [0.34, 0.38, 0.43, 1.0], size);
         push_rect(
@@ -8356,7 +9234,7 @@ impl ShellScene {
                 x: rect.x,
                 y: rect.y,
                 width: rect.width,
-                height: OPEN_WITH_CHOOSER_TITLE_HEIGHT,
+                height: title_height,
             },
             [0.145, 0.158, 0.174, 1.0],
             size,
@@ -8364,10 +9242,10 @@ impl ShellScene {
         text.push_label(
             &format!("Open With - {}", path_name_or_display(&chooser.path)),
             ViewRect {
-                x: rect.x + 16.0,
-                y: rect.y + 8.0,
-                width: (rect.width - 32.0).max(1.0),
-                height: 18.0,
+                x: rect.x + margin,
+                y: rect.y + scaled_dialog_metric(8.0, scale),
+                width: (rect.width - margin * 2.0).max(1.0),
+                height: scaled_dialog_metric(18.0, scale),
             },
             rect,
             TextColor::rgb(238, 244, 249),
@@ -8375,16 +9253,16 @@ impl ShellScene {
         text.push_label(
             chooser.mime_type.as_deref().unwrap_or("unknown MIME"),
             ViewRect {
-                x: rect.x + 16.0,
-                y: rect.y + 25.0,
-                width: (rect.width - 32.0).max(1.0),
-                height: 14.0,
+                x: rect.x + margin,
+                y: rect.y + scaled_dialog_metric(25.0, scale),
+                width: (rect.width - margin * 2.0).max(1.0),
+                height: scaled_dialog_metric(14.0, scale),
             },
             rect,
             TextColor::rgb(162, 176, 188),
         );
 
-        let query = open_with_chooser_query_rect(rect);
+        let query = open_with_chooser_query_rect_scaled(rect, scale);
         push_rect(vertices, query, [0.078, 0.086, 0.096, 1.0], size);
         push_clipped_rect_outline(vertices, query, rect, 1.0, [0.26, 0.31, 0.36, 1.0], size);
         let query_label = if chooser.query.is_empty() {
@@ -8395,10 +9273,10 @@ impl ShellScene {
         text.push_label(
             &query_label,
             ViewRect {
-                x: query.x + 10.0,
-                y: query.y + 7.0,
-                width: (query.width - 20.0).max(1.0),
-                height: 18.0,
+                x: query.x + scaled_dialog_metric(10.0, scale),
+                y: query.y + scaled_dialog_metric(7.0, scale),
+                width: (query.width - scaled_dialog_metric(20.0, scale)).max(1.0),
+                height: scaled_dialog_metric(18.0, scale),
             },
             query,
             if chooser.query.is_empty() {
@@ -8408,7 +9286,7 @@ impl ShellScene {
             },
         );
 
-        let list = open_with_chooser_list_rect(rect, chooser);
+        let list = open_with_chooser_list_rect_scaled(rect, chooser, scale);
         push_rect(vertices, list, [0.090, 0.100, 0.112, 1.0], size);
         push_clipped_rect_outline(vertices, list, rect, 1.0, [0.23, 0.27, 0.31, 1.0], size);
         let visible = chooser.visible_filtered_indexes();
@@ -8416,10 +9294,10 @@ impl ShellScene {
             text.push_label(
                 "No matching applications",
                 ViewRect {
-                    x: list.x + 12.0,
-                    y: list.y + 10.0,
-                    width: (list.width - 24.0).max(1.0),
-                    height: 18.0,
+                    x: list.x + scaled_dialog_metric(12.0, scale),
+                    y: list.y + scaled_dialog_metric(10.0, scale),
+                    width: (list.width - scaled_dialog_metric(24.0, scale)).max(1.0),
+                    height: scaled_dialog_metric(18.0, scale),
                 },
                 list,
                 TextColor::rgb(178, 188, 198),
@@ -8432,9 +9310,9 @@ impl ShellScene {
                 };
                 let row_rect = ViewRect {
                     x: list.x,
-                    y: list.y + visible_row as f32 * OPEN_WITH_CHOOSER_ROW_HEIGHT,
+                    y: list.y + visible_row as f32 * row_height,
                     width: list.width,
-                    height: OPEN_WITH_CHOOSER_ROW_HEIGHT,
+                    height: row_height,
                 };
                 let selected = row == chooser.selected_index;
                 push_rect(
@@ -8452,10 +9330,10 @@ impl ShellScene {
                     size,
                 );
                 let marker = ViewRect {
-                    x: row_rect.x + 10.0,
-                    y: row_rect.y + 11.0,
-                    width: 16.0,
-                    height: 16.0,
+                    x: row_rect.x + scaled_dialog_metric(10.0, scale),
+                    y: row_rect.y + scaled_dialog_metric(11.0, scale),
+                    width: scaled_dialog_metric(16.0, scale),
+                    height: scaled_dialog_metric(16.0, scale),
                 };
                 push_rect(
                     vertices,
@@ -8475,10 +9353,10 @@ impl ShellScene {
                 text.push_label(
                     &name,
                     ViewRect {
-                        x: row_rect.x + 36.0,
-                        y: row_rect.y + 4.0,
-                        width: (row_rect.width - 48.0).max(1.0),
-                        height: 18.0,
+                        x: row_rect.x + scaled_dialog_metric(36.0, scale),
+                        y: row_rect.y + scaled_dialog_metric(4.0, scale),
+                        width: (row_rect.width - scaled_dialog_metric(48.0, scale)).max(1.0),
+                        height: scaled_dialog_metric(18.0, scale),
                     },
                     row_rect,
                     if selected {
@@ -8490,10 +9368,10 @@ impl ShellScene {
                 text.push_label(
                     &application.id,
                     ViewRect {
-                        x: row_rect.x + 36.0,
-                        y: row_rect.y + 20.0,
-                        width: (row_rect.width - 48.0).max(1.0),
-                        height: 14.0,
+                        x: row_rect.x + scaled_dialog_metric(36.0, scale),
+                        y: row_rect.y + scaled_dialog_metric(20.0, scale),
+                        width: (row_rect.width - scaled_dialog_metric(48.0, scale)).max(1.0),
+                        height: scaled_dialog_metric(14.0, scale),
                     },
                     row_rect,
                     if selected {
@@ -8515,10 +9393,10 @@ impl ShellScene {
                     chooser.filtered_count()
                 ),
                 ViewRect {
-                    x: rect.x + 16.0,
-                    y: list.bottom() + 5.0,
-                    width: 120.0,
-                    height: 18.0,
+                    x: rect.x + margin,
+                    y: list.bottom() + scaled_dialog_metric(5.0, scale),
+                    width: scaled_dialog_metric(120.0, scale),
+                    height: scaled_dialog_metric(18.0, scale),
                 },
                 rect,
                 TextColor::rgb(146, 160, 174),
@@ -8529,18 +9407,18 @@ impl ShellScene {
             text.push_label(
                 error,
                 ViewRect {
-                    x: rect.x + 16.0,
-                    y: list.bottom() + 5.0,
-                    width: (rect.width - 32.0).max(1.0),
-                    height: 18.0,
+                    x: rect.x + margin,
+                    y: list.bottom() + scaled_dialog_metric(5.0, scale),
+                    width: (rect.width - margin * 2.0).max(1.0),
+                    height: scaled_dialog_metric(18.0, scale),
                 },
                 rect,
                 TextColor::rgb(238, 132, 122),
             );
         }
 
-        let cancel = open_with_chooser_cancel_button_rect(rect);
-        let open = open_with_chooser_open_button_rect(rect);
+        let cancel = open_with_chooser_cancel_button_rect_scaled(rect, scale);
+        let open = open_with_chooser_open_button_rect_scaled(rect, scale);
         for (label, button, active) in [("Cancel", cancel, false), ("Open", open, true)] {
             push_rect(
                 vertices,
@@ -8555,10 +9433,10 @@ impl ShellScene {
             text.push_label(
                 label,
                 ViewRect {
-                    x: button.x + 10.0,
-                    y: button.y + 4.0,
-                    width: (button.width - 20.0).max(1.0),
-                    height: 18.0,
+                    x: button.x + scaled_dialog_metric(10.0, scale),
+                    y: button.y + scaled_dialog_metric(4.0, scale),
+                    width: (button.width - scaled_dialog_metric(20.0, scale)).max(1.0),
+                    height: scaled_dialog_metric(18.0, scale),
                 },
                 rect,
                 TextColor::rgb(238, 244, 249),
@@ -8582,7 +9460,10 @@ impl ShellScene {
             height: size.height.max(1) as f32,
         };
         push_rect(vertices, screen, [0.0, 0.0, 0.0, 0.48], size);
-        let rect = trash_conflict_dialog_rect(dialog, size);
+        let scale = self.ui_scale();
+        let rect = trash_conflict_dialog_rect_scaled(dialog, size, scale);
+        let title_height = scaled_dialog_metric(TRASH_CONFLICT_DIALOG_TITLE_HEIGHT, scale);
+        let margin = scaled_dialog_metric(16.0, scale);
         push_rect(vertices, rect, [0.118, 0.128, 0.140, 0.99], size);
         push_clipped_rect_outline(vertices, rect, screen, 1.0, [0.42, 0.36, 0.25, 1.0], size);
         push_rect(
@@ -8591,7 +9472,7 @@ impl ShellScene {
                 x: rect.x,
                 y: rect.y,
                 width: rect.width,
-                height: TRASH_CONFLICT_DIALOG_TITLE_HEIGHT,
+                height: title_height,
             },
             [0.180, 0.150, 0.105, 1.0],
             size,
@@ -8599,10 +9480,10 @@ impl ShellScene {
         text.push_label(
             "Restore Conflict",
             ViewRect {
-                x: rect.x + 16.0,
-                y: rect.y + 12.0,
-                width: (rect.width - 32.0).max(1.0),
-                height: 18.0,
+                x: rect.x + margin,
+                y: rect.y + scaled_dialog_metric(12.0, scale),
+                width: (rect.width - margin * 2.0).max(1.0),
+                height: scaled_dialog_metric(18.0, scale),
             },
             rect,
             TextColor::rgb(248, 242, 232),
@@ -8612,10 +9493,10 @@ impl ShellScene {
         text.push_label(
             &format!("{count} item(s) already exist at the original location."),
             ViewRect {
-                x: rect.x + 16.0,
-                y: rect.y + TRASH_CONFLICT_DIALOG_TITLE_HEIGHT + 18.0,
-                width: (rect.width - 32.0).max(1.0),
-                height: 18.0,
+                x: rect.x + margin,
+                y: rect.y + title_height + scaled_dialog_metric(18.0, scale),
+                width: (rect.width - margin * 2.0).max(1.0),
+                height: scaled_dialog_metric(18.0, scale),
             },
             rect,
             TextColor::rgb(226, 218, 206),
@@ -8624,10 +9505,10 @@ impl ShellScene {
             text.push_label(
                 &format!("Original: {}", conflict.original_path.display()),
                 ViewRect {
-                    x: rect.x + 16.0,
-                    y: rect.y + TRASH_CONFLICT_DIALOG_TITLE_HEIGHT + 48.0,
-                    width: (rect.width - 32.0).max(1.0),
-                    height: 18.0,
+                    x: rect.x + margin,
+                    y: rect.y + title_height + scaled_dialog_metric(48.0, scale),
+                    width: (rect.width - margin * 2.0).max(1.0),
+                    height: scaled_dialog_metric(18.0, scale),
                 },
                 rect,
                 TextColor::rgb(192, 202, 212),
@@ -8635,18 +9516,18 @@ impl ShellScene {
             text.push_label(
                 &format!("Trash: {}", conflict.trash_path.display()),
                 ViewRect {
-                    x: rect.x + 16.0,
-                    y: rect.y + TRASH_CONFLICT_DIALOG_TITLE_HEIGHT + 76.0,
-                    width: (rect.width - 32.0).max(1.0),
-                    height: 18.0,
+                    x: rect.x + margin,
+                    y: rect.y + title_height + scaled_dialog_metric(76.0, scale),
+                    width: (rect.width - margin * 2.0).max(1.0),
+                    height: scaled_dialog_metric(18.0, scale),
                 },
                 rect,
                 TextColor::rgb(192, 202, 212),
             );
         }
 
-        let cancel = trash_conflict_dialog_cancel_button_rect(rect);
-        let replace = trash_conflict_dialog_replace_button_rect(rect);
+        let cancel = trash_conflict_dialog_cancel_button_rect_scaled(rect, scale);
+        let replace = trash_conflict_dialog_replace_button_rect_scaled(rect, scale);
         for (label, button, active) in [("Cancel", cancel, false), ("Replace", replace, true)] {
             push_rect(
                 vertices,
@@ -8661,10 +9542,10 @@ impl ShellScene {
             text.push_label(
                 label,
                 ViewRect {
-                    x: button.x + 10.0,
-                    y: button.y + 4.0,
-                    width: (button.width - 20.0).max(1.0),
-                    height: 18.0,
+                    x: button.x + scaled_dialog_metric(10.0, scale),
+                    y: button.y + scaled_dialog_metric(4.0, scale),
+                    width: (button.width - scaled_dialog_metric(20.0, scale)).max(1.0),
+                    height: scaled_dialog_metric(18.0, scale),
                 },
                 rect,
                 TextColor::rgb(248, 244, 238),
@@ -10194,7 +11075,9 @@ impl WgpuState {
         );
         let icon_work_pending = scene_frame.icon_stats.deferred > 0
             || scene_frame.icon_stats.raster_deferred > 0
-            || self.icon_renderer.resolver.has_pending();
+            || scene_frame.icon_stats.thumbnail_deferred > 0
+            || self.icon_renderer.resolver.has_pending()
+            || self.icon_renderer.thumbnails.has_pending();
         if icon_work_pending {
             window.request_redraw();
         }
@@ -10247,7 +11130,7 @@ impl WgpuState {
             || self.last_log.elapsed() >= Duration::from_secs(1)
         {
             eprintln!(
-                "[fika-wgpu] frame={} reason={} view={} scale={:.2} zoom={} zoom_changes={} path={} entries={} filtered={} show_hidden={} hidden_changes={} location_active={} location_changes={} filter_active={} filter_changes={} places={} places_visible={} places_width={:.1} place_hover={} places_changes={} places_resize_changes={} places_scroll_y={:.1} places_scroll_changes={} split_pane={} split_changes={} split_path={} content_scrollbar={} visible={} thumbnails={} slots={}/{} slot_reused={} slot_recycled={} slot_allocated={} selected={} hover={} dnd_hover={} dnd_hover_changes={} dnd_drop_requests={} context={} context_menu={} context_changes={} context_actions={} properties={} properties_changes={} create_dialog={} create_changes={} rename_dialog={} rename_changes={} open_with={} open_with_changes={} open_changes={} copy_location_changes={} file_clipboard_changes={} paste_changes={} trash_changes={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} path_changes={} reloads={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_deferred={} icon_raster_deferred={} icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_cache={}/{} entries={} bytes={} batches={} scroll_x={:.1} scroll_y={:.1} layout={}us text_raster={}us text_atlas={}x{}:{}b render={}us",
+                "[fika-wgpu] frame={} reason={} view={} scale={:.2} zoom={} zoom_changes={} path={} entries={} filtered={} show_hidden={} hidden_changes={} location_active={} location_changes={} filter_active={} filter_changes={} places={} places_visible={} places_width={:.1} place_hover={} places_changes={} places_resize_changes={} places_scroll_y={:.1} places_scroll_changes={} split_pane={} split_changes={} split_path={} content_scrollbar={} visible={} thumbnails={} slots={}/{} slot_reused={} slot_recycled={} slot_allocated={} selected={} hover={} dnd_hover={} dnd_hover_changes={} dnd_drop_requests={} context={} context_menu={} context_changes={} context_actions={} properties={} properties_changes={} create_dialog={} create_changes={} rename_dialog={} rename_changes={} open_with={} open_with_changes={} open_changes={} copy_location_changes={} file_clipboard_changes={} paste_changes={} trash_changes={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} path_changes={} reloads={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_deferred={} icon_raster_deferred={} thumb_loaded={} thumb_quads={} thumb_deferred={} icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_cache={}/{} entries={} bytes={} batches={} scroll_x={:.1} scroll_y={:.1} layout={}us text_raster={}us text_atlas={}x{}:{}b render={}us",
                 self.frame_count,
                 reason,
                 scene.view_mode.as_str(),
@@ -10348,6 +11231,9 @@ impl WgpuState {
                 scene_frame.icon_stats.fallbacks,
                 scene_frame.icon_stats.deferred,
                 scene_frame.icon_stats.raster_deferred,
+                scene_frame.icon_stats.thumbnails,
+                scene_frame.icon_stats.thumbnail_quads,
+                scene_frame.icon_stats.thumbnail_deferred,
                 scene_frame.icon_stats.cache_hits,
                 scene_frame.icon_stats.cache_misses,
                 scene_frame.icon_stats.cache_entries,
@@ -10475,6 +11361,9 @@ struct IconFrameStats {
     quads: usize,
     fallbacks: usize,
     deferred: usize,
+    thumbnails: usize,
+    thumbnail_quads: usize,
+    thumbnail_deferred: usize,
     atlas_width: u32,
     atlas_height: u32,
     atlas_bytes: usize,
@@ -10513,6 +11402,44 @@ struct IconRaster {
 struct IconRasterCacheKey {
     path: PathBuf,
     size_px: u16,
+    stamp: Option<u64>,
+}
+
+impl IconRasterCacheKey {
+    fn icon(path: PathBuf, size_px: u16) -> Self {
+        Self {
+            path,
+            size_px,
+            stamp: None,
+        }
+    }
+
+    fn thumbnail(path: PathBuf, size_px: u16, modified_secs: u64) -> Self {
+        Self {
+            path,
+            size_px,
+            stamp: Some(modified_secs),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct ThumbnailProbeCacheKey {
+    path: PathBuf,
+    modified_secs: u64,
+}
+
+impl ThumbnailProbeCacheKey {
+    fn new(path: PathBuf, modified_secs: u64) -> Self {
+        Self {
+            path,
+            modified_secs,
+        }
+    }
+
+    fn from_raster_key(key: &IconRasterCacheKey) -> Option<Self> {
+        Some(Self::new(key.path.clone(), key.stamp?))
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -10593,8 +11520,168 @@ impl IconRasterCache {
     }
 }
 
+#[derive(Clone, Debug)]
+struct ThumbnailRasterRequest {
+    key: IconRasterCacheKey,
+    mime_type: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+struct ThumbnailRasterResult {
+    key: IconRasterCacheKey,
+    raster: Option<IconRaster>,
+}
+
+#[derive(Clone, Debug)]
+enum ThumbnailResolveState {
+    Ready(IconRaster),
+    Pending,
+    Failed,
+}
+
+struct ThumbnailRasterResolver {
+    ready: HashMap<IconRasterCacheKey, Option<IconRaster>>,
+    failed: HashSet<ThumbnailProbeCacheKey>,
+    pending: HashSet<IconRasterCacheKey>,
+    request_tx: Option<Sender<ThumbnailRasterRequest>>,
+    result_rx: Receiver<ThumbnailRasterResult>,
+}
+
+impl ThumbnailRasterResolver {
+    fn new() -> Self {
+        Self::with_cache_root(default_thumbnail_cache_root())
+    }
+
+    fn with_cache_root(cache_root: PathBuf) -> Self {
+        let (request_tx, request_rx) = mpsc::channel::<ThumbnailRasterRequest>();
+        let (result_tx, result_rx) = mpsc::channel::<ThumbnailRasterResult>();
+        let request_tx = thread::Builder::new()
+            .name("fika-wgpu-thumbnail-raster".to_string())
+            .spawn(move || thumbnail_raster_worker(cache_root, request_rx, result_tx))
+            .ok()
+            .map(|_| request_tx);
+        Self {
+            ready: HashMap::new(),
+            failed: HashSet::new(),
+            pending: HashSet::new(),
+            request_tx,
+            result_rx,
+        }
+    }
+
+    fn resolve(
+        &mut self,
+        path: &Path,
+        modified_secs: u64,
+        mime_type: Option<String>,
+        size_px: u16,
+    ) -> ThumbnailResolveState {
+        self.drain_results();
+        let key = IconRasterCacheKey::thumbnail(path.to_path_buf(), size_px, modified_secs);
+        let failure_key = ThumbnailProbeCacheKey::new(path.to_path_buf(), modified_secs);
+        if let Some(raster) = self.ready.remove(&key) {
+            return raster
+                .map(ThumbnailResolveState::Ready)
+                .unwrap_or(ThumbnailResolveState::Failed);
+        }
+        if self.failed.contains(&failure_key) {
+            return ThumbnailResolveState::Failed;
+        }
+        if self.pending.contains(&key) {
+            return ThumbnailResolveState::Pending;
+        }
+        let Some(tx) = self.request_tx.as_ref() else {
+            self.failed.insert(failure_key);
+            return ThumbnailResolveState::Failed;
+        };
+        if tx
+            .send(ThumbnailRasterRequest {
+                key: key.clone(),
+                mime_type,
+            })
+            .is_err()
+        {
+            self.failed.insert(failure_key);
+            return ThumbnailResolveState::Failed;
+        }
+        self.pending.insert(key);
+        ThumbnailResolveState::Pending
+    }
+
+    fn drain_results(&mut self) -> usize {
+        let mut changed = 0usize;
+        while let Ok(result) = self.result_rx.try_recv() {
+            self.pending.remove(&result.key);
+            if result.raster.is_some() {
+                self.ready.insert(result.key, result.raster);
+            } else if let Some(key) = ThumbnailProbeCacheKey::from_raster_key(&result.key) {
+                self.failed.insert(key);
+            }
+            changed += 1;
+        }
+        changed
+    }
+
+    fn has_pending(&mut self) -> bool {
+        self.drain_results();
+        !self.pending.is_empty()
+    }
+}
+
+fn thumbnail_raster_worker(
+    cache_root: PathBuf,
+    request_rx: Receiver<ThumbnailRasterRequest>,
+    result_tx: Sender<ThumbnailRasterResult>,
+) {
+    let thumbnailers = ThumbnailerRegistry::shared_system();
+    while let Ok(request) = request_rx.recv() {
+        let raster = thumbnail_request_from_raster_request(&request)
+            .and_then(|thumbnail_request| {
+                generate_thumbnail_with_external_thumbnailer_registry(
+                    &cache_root,
+                    &thumbnail_request,
+                    thumbnailers,
+                )
+                .ok()
+                .flatten()
+            })
+            .and_then(|thumbnail| rasterize_icon(thumbnail.path(), request.key.size_px as u32));
+        if result_tx
+            .send(ThumbnailRasterResult {
+                key: request.key,
+                raster,
+            })
+            .is_err()
+        {
+            break;
+        }
+    }
+}
+
+fn thumbnail_request_from_raster_request(
+    request: &ThumbnailRasterRequest,
+) -> Option<ThumbnailRequest> {
+    ThumbnailRequest::from_entry_metadata_with_mime(
+        WGPU_SHELL_PANE_ID,
+        Generation(0),
+        ItemId(0),
+        request.key.path.clone(),
+        request.key.stamp?,
+        request.mime_type.clone(),
+        ThumbnailRequestPriority::Visible,
+    )
+}
+
+fn entry_path_for_thumbnail(directory: &Path, entry: &Entry) -> PathBuf {
+    entry
+        .target_path
+        .clone()
+        .unwrap_or_else(|| directory.join(entry.name.as_ref()))
+}
+
 struct IconFrameBuilder<'a> {
     resolver: &'a mut FileIconResolver,
+    thumbnails: &'a mut ThumbnailRasterResolver,
     raster_cache: &'a mut IconRasterCache,
     surface_size: PhysicalSize<u32>,
     pixels: Vec<u8>,
@@ -10606,6 +11693,9 @@ struct IconFrameBuilder<'a> {
     row_height: u32,
     icons: usize,
     fallbacks: usize,
+    thumbnails_loaded: usize,
+    thumbnail_quads: usize,
+    thumbnail_deferred: usize,
     cache_hits: usize,
     cache_misses: usize,
     deferred: usize,
@@ -10618,11 +11708,13 @@ struct IconFrameBuilder<'a> {
 impl<'a> IconFrameBuilder<'a> {
     fn new(
         resolver: &'a mut FileIconResolver,
+        thumbnails: &'a mut ThumbnailRasterResolver,
         raster_cache: &'a mut IconRasterCache,
         surface_size: PhysicalSize<u32>,
     ) -> Self {
         Self {
             resolver,
+            thumbnails,
             raster_cache,
             surface_size,
             pixels: vec![0; (ICON_ATLAS_WIDTH * 4) as usize],
@@ -10634,6 +11726,9 @@ impl<'a> IconFrameBuilder<'a> {
             row_height: 0,
             icons: 0,
             fallbacks: 0,
+            thumbnails_loaded: 0,
+            thumbnail_quads: 0,
+            thumbnail_deferred: 0,
             cache_hits: 0,
             cache_misses: 0,
             deferred: 0,
@@ -10675,7 +11770,7 @@ impl<'a> IconFrameBuilder<'a> {
             return false;
         };
         let size_px = icon_cache_size(icon_size);
-        let key = IconRasterCacheKey { path, size_px };
+        let key = IconRasterCacheKey::icon(path, size_px);
         let raster = if let Some(raster) = self.raster_cache.get(&key) {
             self.cache_hits += 1;
             raster
@@ -10697,6 +11792,85 @@ impl<'a> IconFrameBuilder<'a> {
             self.raster_cache.insert(key, raster)
         };
 
+        self.copy_raster_to_atlas(raster, rect, screen);
+        true
+    }
+
+    fn push_thumbnail_or_icon(
+        &mut self,
+        directory: &Path,
+        entry: &Entry,
+        rect: ViewRect,
+        clip: ViewRect,
+    ) -> bool {
+        if self.push_thumbnail(directory, entry, rect, clip) {
+            return true;
+        }
+        self.push_icon(directory, entry, rect, clip)
+    }
+
+    fn push_thumbnail(
+        &mut self,
+        directory: &Path,
+        entry: &Entry,
+        rect: ViewRect,
+        clip: ViewRect,
+    ) -> bool {
+        if entry.is_dir || rect.width.max(rect.height) < 32.0 {
+            return false;
+        }
+        let path = entry_path_for_thumbnail(directory, entry);
+        let Some(modified_secs) = entry.modified_secs else {
+            return false;
+        };
+        if !entry.metadata_complete
+            || is_network_path(&path)
+            || mime_magic_resolution_required(
+                entry.is_dir,
+                entry.size_bytes,
+                entry.mime_type.as_deref(),
+                entry.mime_magic_checked,
+            )
+            || !thumbnail_request_may_have_preview(&path, entry.mime_type.as_deref())
+        {
+            return false;
+        }
+        let Some(screen) = intersect_rect(rect, clip) else {
+            return true;
+        };
+        let size_px = icon_cache_size(rect.width.max(rect.height).clamp(16.0, 256.0));
+        let key = IconRasterCacheKey::thumbnail(path.clone(), size_px, modified_secs);
+        let raster = if let Some(raster) = self.raster_cache.get(&key) {
+            self.cache_hits += 1;
+            raster
+        } else {
+            match self.thumbnails.resolve(
+                &path,
+                modified_secs,
+                entry
+                    .mime_type
+                    .as_deref()
+                    .map(std::borrow::ToOwned::to_owned),
+                size_px,
+            ) {
+                ThumbnailResolveState::Ready(raster) => {
+                    self.cache_misses += 1;
+                    self.thumbnails_loaded += 1;
+                    self.raster_cache.insert(key, raster)
+                }
+                ThumbnailResolveState::Pending => {
+                    self.thumbnail_deferred += 1;
+                    return false;
+                }
+                ThumbnailResolveState::Failed => return false,
+            }
+        };
+        self.copy_raster_to_atlas(raster, rect, screen);
+        self.thumbnail_quads += 1;
+        true
+    }
+
+    fn copy_raster_to_atlas(&mut self, raster: IconRaster, rect: ViewRect, screen: ViewRect) {
         let atlas = self.allocate(raster.width, raster.height);
         self.copy_icon_pixels(atlas, &raster);
 
@@ -10713,7 +11887,6 @@ impl<'a> IconFrameBuilder<'a> {
             atlas,
             source,
         });
-        true
     }
 
     fn finish(self) -> IconFrame {
@@ -10747,6 +11920,9 @@ impl<'a> IconFrameBuilder<'a> {
                 quads: self.draws.len(),
                 fallbacks: self.fallbacks,
                 deferred: self.deferred,
+                thumbnails: self.thumbnails_loaded,
+                thumbnail_quads: self.thumbnail_quads,
+                thumbnail_deferred: self.thumbnail_deferred,
                 atlas_width: self.width,
                 atlas_height: height,
                 atlas_bytes,
@@ -10817,6 +11993,7 @@ struct IconRenderer {
     vertex_capacity: usize,
     vertex_count: usize,
     resolver: FileIconResolver,
+    thumbnails: ThumbnailRasterResolver,
     raster_cache: IconRasterCache,
 }
 
@@ -10904,6 +12081,7 @@ impl IconRenderer {
             vertex_capacity,
             vertex_count: 0,
             resolver: FileIconResolver::new(),
+            thumbnails: ThumbnailRasterResolver::new(),
             raster_cache: IconRasterCache::new(ICON_CACHE_MAX_BYTES),
         }
     }
@@ -11668,6 +12846,7 @@ fn prepare_scene_frame(
         );
         let mut icon_builder = IconFrameBuilder::new(
             &mut icon_renderer.resolver,
+            &mut icon_renderer.thumbnails,
             &mut icon_renderer.raster_cache,
             size,
         );
@@ -12103,8 +13282,13 @@ enum FileIconKind {
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
-struct FileIconCacheKey {
+struct FileIconRoleCacheKey {
     kind: FileIconKind,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct FileIconPathCacheKey {
+    role: FileIconRoleCacheKey,
     size_px: u16,
 }
 
@@ -12114,20 +13298,20 @@ struct ResolvedFileIcon {
 }
 
 struct FileIconResolver {
-    cached: HashMap<FileIconCacheKey, ResolvedFileIcon>,
-    pending: HashSet<FileIconCacheKey>,
+    cached: HashMap<FileIconPathCacheKey, ResolvedFileIcon>,
+    pending: HashSet<FileIconPathCacheKey>,
     request_tx: Option<Sender<IconResolveRequest>>,
     result_rx: Receiver<IconResolveResult>,
 }
 
 #[derive(Clone, Debug)]
 struct IconResolveRequest {
-    key: FileIconCacheKey,
+    key: FileIconPathCacheKey,
 }
 
 #[derive(Clone, Debug)]
 struct IconResolveResult {
-    key: FileIconCacheKey,
+    key: FileIconPathCacheKey,
     icon: ResolvedFileIcon,
 }
 
@@ -12156,7 +13340,7 @@ impl FileIconResolver {
     ) -> Option<ResolvedFileIcon> {
         self.drain_results();
         let path = directory.join(entry.name.as_ref());
-        let key = file_icon_cache_key(
+        let key = file_icon_path_cache_key(
             &path,
             entry.is_dir,
             entry.mime_type.clone(),
@@ -12200,8 +13384,12 @@ fn icon_resolve_worker(
 ) {
     let mut theme = IconThemeResolver::default();
     let mime = fika_core::MimeDatabase::shared();
+    let mut roles = HashMap::<FileIconRoleCacheKey, FileIconProfile>::new();
     while let Ok(request) = request_rx.recv() {
-        let icon = file_icon_snapshot(&request.key.kind, request.key.size_px, &mut theme, mime);
+        let profile = roles
+            .entry(request.key.role.clone())
+            .or_insert_with(|| file_icon_profile(&request.key.role.kind, mime));
+        let icon = file_icon_snapshot(profile, request.key.size_px, &mut theme);
         if result_tx
             .send(IconResolveResult {
                 key: request.key,
@@ -12395,15 +13583,17 @@ impl IconThemeResolver {
     }
 }
 
-fn file_icon_cache_key(
+fn file_icon_path_cache_key(
     path: &Path,
     is_dir: bool,
     mime_type: Option<Arc<str>>,
     mime_magic_checked: bool,
     icon_size: f32,
-) -> FileIconCacheKey {
-    FileIconCacheKey {
-        kind: file_icon_kind(path, is_dir, mime_type, mime_magic_checked),
+) -> FileIconPathCacheKey {
+    FileIconPathCacheKey {
+        role: FileIconRoleCacheKey {
+            kind: file_icon_kind(path, is_dir, mime_type, mime_magic_checked),
+        },
         size_px: icon_cache_size(icon_size),
     }
 }
@@ -12438,12 +13628,10 @@ fn icon_cache_size(icon_size: f32) -> u16 {
 }
 
 fn file_icon_snapshot(
-    kind: &FileIconKind,
+    profile: &FileIconProfile,
     desired_size: u16,
     theme: &mut IconThemeResolver,
-    mime: &fika_core::MimeDatabase,
 ) -> ResolvedFileIcon {
-    let profile = file_icon_profile(kind, mime);
     let path = theme
         .first_existing(&profile.icon_candidates, desired_size)
         .or_else(|| theme.first_existing(&profile.generic_candidates, desired_size))
@@ -13609,8 +14797,7 @@ fn context_menu_rect_scaled(
     let menu_width = scaled_context_menu_metric(CONTEXT_MENU_WIDTH, scale_factor)
         .min((width - margin * 2.0).max(1.0))
         .max(1.0);
-    let menu_height = (vertical_padding * 2.0
-        + context_menu_actions(&menu.target).len() as f32 * row_height)
+    let menu_height = (vertical_padding * 2.0 + context_menu_items(menu).len() as f32 * row_height)
         .min((height - margin * 2.0).max(1.0))
         .max(1.0);
     ViewRect {
@@ -13638,7 +14825,66 @@ fn context_menu_row_at_screen_point(
         return None;
     }
     let row = (row_y / row_height).floor() as usize;
-    (row < context_menu_actions(&menu.target).len()).then_some(row)
+    (row < context_menu_items(menu).len()).then_some(row)
+}
+
+fn context_menu_submenu_rect(
+    menu: &ShellContextMenu,
+    size: PhysicalSize<u32>,
+    scale_factor: f32,
+) -> Option<ViewRect> {
+    let submenu = menu.active_submenu?;
+    let parent_row = menu.hovered_row?;
+    let submenu_len = context_submenu_actions(submenu, menu).len();
+    if submenu_len == 0 {
+        return None;
+    }
+    let root = context_menu_rect_scaled(menu, size, scale_factor);
+    let width = size.width.max(1) as f32;
+    let height = size.height.max(1) as f32;
+    let margin = scaled_context_menu_metric(CONTEXT_MENU_VIEWPORT_MARGIN, scale_factor);
+    let row_height = scaled_context_menu_metric(CONTEXT_MENU_ROW_HEIGHT, scale_factor);
+    let vertical_padding = scaled_context_menu_metric(CONTEXT_MENU_VERTICAL_PADDING, scale_factor);
+    let submenu_width = scaled_context_menu_metric(CONTEXT_MENU_WIDTH, scale_factor)
+        .min((width - margin * 2.0).max(1.0))
+        .max(1.0);
+    let submenu_height = (vertical_padding * 2.0 + submenu_len as f32 * row_height)
+        .min((height - margin * 2.0).max(1.0))
+        .max(1.0);
+    let preferred_x = root.right() - 1.0;
+    let x = if preferred_x + submenu_width <= width - margin {
+        preferred_x
+    } else {
+        (root.x - submenu_width + 1.0).max(margin.min((width - submenu_width).max(0.0)))
+    };
+    let anchor_y = root.y + vertical_padding + parent_row as f32 * row_height;
+    Some(ViewRect {
+        x,
+        y: popup_menu_axis(anchor_y, submenu_height, height, margin),
+        width: submenu_width,
+        height: submenu_height,
+    })
+}
+
+fn context_submenu_row_at_screen_point(
+    menu: &ShellContextMenu,
+    submenu: ShellContextSubmenu,
+    point: ViewPoint,
+    size: PhysicalSize<u32>,
+    scale_factor: f32,
+) -> Option<usize> {
+    let rect = context_menu_submenu_rect(menu, size, scale_factor)?;
+    if !rect.contains(point) {
+        return None;
+    }
+    let padding = scaled_context_menu_metric(CONTEXT_MENU_VERTICAL_PADDING, scale_factor);
+    let row_height = scaled_context_menu_metric(CONTEXT_MENU_ROW_HEIGHT, scale_factor);
+    let row_y = point.y - rect.y - padding;
+    if row_y < 0.0 {
+        return None;
+    }
+    let row = (row_y / row_height).floor() as usize;
+    (row < context_submenu_actions(submenu, menu).len()).then_some(row)
 }
 
 fn scaled_context_menu_metric(value: f32, scale_factor: f32) -> f32 {
@@ -13659,149 +14905,244 @@ fn popup_menu_axis(anchor: f32, size: f32, viewport_size: f32, margin: f32) -> f
     forward
 }
 
+#[cfg(test)]
 fn properties_overlay_rect(overlay: &ShellPropertiesOverlay, size: PhysicalSize<u32>) -> ViewRect {
+    properties_overlay_rect_scaled(overlay, size, 1.0)
+}
+
+fn properties_overlay_rect_scaled(
+    overlay: &ShellPropertiesOverlay,
+    size: PhysicalSize<u32>,
+    scale_factor: f32,
+) -> ViewRect {
     let width = size.width.max(1) as f32;
     let height = size.height.max(1) as f32;
-    let overlay_width = PROPERTIES_OVERLAY_WIDTH
-        .min((width - PROPERTIES_OVERLAY_MARGIN * 2.0).max(1.0))
+    let margin = scaled_dialog_metric(PROPERTIES_OVERLAY_MARGIN, scale_factor);
+    let overlay_width = scaled_dialog_metric(PROPERTIES_OVERLAY_WIDTH, scale_factor)
+        .min((width - margin * 2.0).max(1.0))
         .max(1.0);
-    let overlay_height =
-        (PROPERTIES_TITLE_HEIGHT + 22.0 + overlay.rows.len() as f32 * PROPERTIES_ROW_HEIGHT)
-            .min((height - PROPERTIES_OVERLAY_MARGIN * 2.0).max(1.0))
-            .max(1.0);
+    let overlay_height = (scaled_dialog_metric(PROPERTIES_TITLE_HEIGHT, scale_factor)
+        + scaled_dialog_metric(22.0, scale_factor)
+        + overlay.rows.len() as f32 * scaled_dialog_metric(PROPERTIES_ROW_HEIGHT, scale_factor))
+    .min((height - margin * 2.0).max(1.0))
+    .max(1.0);
     ViewRect {
-        x: ((width - overlay_width) / 2.0).max(PROPERTIES_OVERLAY_MARGIN),
-        y: ((height - overlay_height) / 2.0).max(PROPERTIES_OVERLAY_MARGIN),
+        x: ((width - overlay_width) / 2.0).max(margin),
+        y: ((height - overlay_height) / 2.0).max(margin),
         width: overlay_width,
         height: overlay_height,
     }
 }
 
+#[cfg(test)]
 fn create_dialog_rect(_dialog: &ShellCreateDialog, size: PhysicalSize<u32>) -> ViewRect {
+    create_dialog_rect_scaled(_dialog, size, 1.0)
+}
+
+fn create_dialog_rect_scaled(
+    _dialog: &ShellCreateDialog,
+    size: PhysicalSize<u32>,
+    scale_factor: f32,
+) -> ViewRect {
     let width = size.width.max(1) as f32;
     let height = size.height.max(1) as f32;
-    let dialog_width = CREATE_DIALOG_WIDTH
-        .min((width - CREATE_DIALOG_MARGIN * 2.0).max(1.0))
+    let margin = scaled_dialog_metric(CREATE_DIALOG_MARGIN, scale_factor);
+    let dialog_width = scaled_dialog_metric(CREATE_DIALOG_WIDTH, scale_factor)
+        .min((width - margin * 2.0).max(1.0))
         .max(1.0);
-    let dialog_height = CREATE_DIALOG_HEIGHT
-        .min((height - CREATE_DIALOG_MARGIN * 2.0).max(1.0))
+    let dialog_height = scaled_dialog_metric(CREATE_DIALOG_HEIGHT, scale_factor)
+        .min((height - margin * 2.0).max(1.0))
         .max(1.0);
     ViewRect {
-        x: ((width - dialog_width) / 2.0).max(CREATE_DIALOG_MARGIN),
-        y: ((height - dialog_height) / 2.0).max(CREATE_DIALOG_MARGIN),
+        x: ((width - dialog_width) / 2.0).max(margin),
+        y: ((height - dialog_height) / 2.0).max(margin),
         width: dialog_width,
         height: dialog_height,
     }
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 fn create_kind_button_rect(dialog_rect: ViewRect, kind: CreateEntryKind) -> ViewRect {
+    create_kind_button_rect_scaled(dialog_rect, kind, 1.0)
+}
+
+fn create_kind_button_rect_scaled(
+    dialog_rect: ViewRect,
+    kind: CreateEntryKind,
+    scale_factor: f32,
+) -> ViewRect {
     let x = match kind {
-        CreateEntryKind::Folder => dialog_rect.x + 16.0,
-        CreateEntryKind::File => dialog_rect.x + 16.0 + 96.0,
+        CreateEntryKind::Folder => dialog_rect.x + scaled_dialog_metric(16.0, scale_factor),
+        CreateEntryKind::File => {
+            dialog_rect.x
+                + scaled_dialog_metric(16.0, scale_factor)
+                + scaled_dialog_metric(96.0, scale_factor)
+        }
     };
     ViewRect {
         x,
-        y: dialog_rect.y + CREATE_DIALOG_TITLE_HEIGHT + 14.0,
-        width: 88.0,
-        height: CREATE_DIALOG_BUTTON_HEIGHT,
+        y: dialog_rect.y
+            + scaled_dialog_metric(CREATE_DIALOG_TITLE_HEIGHT, scale_factor)
+            + scaled_dialog_metric(14.0, scale_factor),
+        width: scaled_dialog_metric(88.0, scale_factor),
+        height: scaled_dialog_metric(CREATE_DIALOG_BUTTON_HEIGHT, scale_factor),
     }
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 fn create_dialog_input_rect(dialog_rect: ViewRect) -> ViewRect {
+    create_dialog_input_rect_scaled(dialog_rect, 1.0)
+}
+
+fn create_dialog_input_rect_scaled(dialog_rect: ViewRect, scale_factor: f32) -> ViewRect {
+    let margin = scaled_dialog_metric(16.0, scale_factor);
     ViewRect {
-        x: dialog_rect.x + 16.0,
-        y: dialog_rect.y + CREATE_DIALOG_TITLE_HEIGHT + 60.0,
-        width: (dialog_rect.width - 32.0).max(1.0),
-        height: 30.0,
+        x: dialog_rect.x + margin,
+        y: dialog_rect.y
+            + scaled_dialog_metric(CREATE_DIALOG_TITLE_HEIGHT, scale_factor)
+            + scaled_dialog_metric(60.0, scale_factor),
+        width: (dialog_rect.width - margin * 2.0).max(1.0),
+        height: scaled_dialog_metric(30.0, scale_factor),
     }
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 fn create_dialog_cancel_button_rect(dialog_rect: ViewRect) -> ViewRect {
-    let right = dialog_rect.right() - 16.0;
+    create_dialog_cancel_button_rect_scaled(dialog_rect, 1.0)
+}
+
+fn create_dialog_cancel_button_rect_scaled(dialog_rect: ViewRect, scale_factor: f32) -> ViewRect {
+    let right = dialog_rect.right() - scaled_dialog_metric(16.0, scale_factor);
+    let button_width = scaled_dialog_metric(CREATE_DIALOG_BUTTON_WIDTH, scale_factor);
+    let button_height = scaled_dialog_metric(CREATE_DIALOG_BUTTON_HEIGHT, scale_factor);
     ViewRect {
-        x: right - CREATE_DIALOG_BUTTON_WIDTH * 2.0 - CREATE_DIALOG_BUTTON_GAP,
-        y: dialog_rect.bottom() - 16.0 - CREATE_DIALOG_BUTTON_HEIGHT,
-        width: CREATE_DIALOG_BUTTON_WIDTH,
-        height: CREATE_DIALOG_BUTTON_HEIGHT,
+        x: right
+            - button_width * 2.0
+            - scaled_dialog_metric(CREATE_DIALOG_BUTTON_GAP, scale_factor),
+        y: dialog_rect.bottom() - scaled_dialog_metric(16.0, scale_factor) - button_height,
+        width: button_width,
+        height: button_height,
     }
 }
 
+#[cfg(test)]
 fn create_dialog_commit_button_rect(dialog_rect: ViewRect) -> ViewRect {
-    let right = dialog_rect.right() - 16.0;
+    create_dialog_commit_button_rect_scaled(dialog_rect, 1.0)
+}
+
+fn create_dialog_commit_button_rect_scaled(dialog_rect: ViewRect, scale_factor: f32) -> ViewRect {
+    let right = dialog_rect.right() - scaled_dialog_metric(16.0, scale_factor);
+    let button_width = scaled_dialog_metric(CREATE_DIALOG_BUTTON_WIDTH, scale_factor);
+    let button_height = scaled_dialog_metric(CREATE_DIALOG_BUTTON_HEIGHT, scale_factor);
     ViewRect {
-        x: right - CREATE_DIALOG_BUTTON_WIDTH,
-        y: dialog_rect.bottom() - 16.0 - CREATE_DIALOG_BUTTON_HEIGHT,
-        width: CREATE_DIALOG_BUTTON_WIDTH,
-        height: CREATE_DIALOG_BUTTON_HEIGHT,
+        x: right - button_width,
+        y: dialog_rect.bottom() - scaled_dialog_metric(16.0, scale_factor) - button_height,
+        width: button_width,
+        height: button_height,
     }
 }
 
+#[cfg(test)]
 fn rename_dialog_rect(_dialog: &ShellRenameDialog, size: PhysicalSize<u32>) -> ViewRect {
+    rename_dialog_rect_scaled(_dialog, size, 1.0)
+}
+
+fn rename_dialog_rect_scaled(
+    _dialog: &ShellRenameDialog,
+    size: PhysicalSize<u32>,
+    scale_factor: f32,
+) -> ViewRect {
     let width = size.width.max(1) as f32;
     let height = size.height.max(1) as f32;
-    let dialog_width = RENAME_DIALOG_WIDTH
-        .min((width - RENAME_DIALOG_MARGIN * 2.0).max(1.0))
+    let margin = scaled_dialog_metric(RENAME_DIALOG_MARGIN, scale_factor);
+    let dialog_width = scaled_dialog_metric(RENAME_DIALOG_WIDTH, scale_factor)
+        .min((width - margin * 2.0).max(1.0))
         .max(1.0);
-    let dialog_height = RENAME_DIALOG_HEIGHT
-        .min((height - RENAME_DIALOG_MARGIN * 2.0).max(1.0))
+    let dialog_height = scaled_dialog_metric(RENAME_DIALOG_HEIGHT, scale_factor)
+        .min((height - margin * 2.0).max(1.0))
         .max(1.0);
     ViewRect {
-        x: ((width - dialog_width) / 2.0).max(RENAME_DIALOG_MARGIN),
-        y: ((height - dialog_height) / 2.0).max(RENAME_DIALOG_MARGIN),
+        x: ((width - dialog_width) / 2.0).max(margin),
+        y: ((height - dialog_height) / 2.0).max(margin),
         width: dialog_width,
         height: dialog_height,
     }
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 fn rename_dialog_input_rect(dialog_rect: ViewRect) -> ViewRect {
+    rename_dialog_input_rect_scaled(dialog_rect, 1.0)
+}
+
+fn rename_dialog_input_rect_scaled(dialog_rect: ViewRect, scale_factor: f32) -> ViewRect {
+    let margin = scaled_dialog_metric(16.0, scale_factor);
     ViewRect {
-        x: dialog_rect.x + 16.0,
-        y: dialog_rect.y + RENAME_DIALOG_TITLE_HEIGHT + 18.0,
-        width: (dialog_rect.width - 32.0).max(1.0),
-        height: 30.0,
+        x: dialog_rect.x + margin,
+        y: dialog_rect.y
+            + scaled_dialog_metric(RENAME_DIALOG_TITLE_HEIGHT, scale_factor)
+            + scaled_dialog_metric(18.0, scale_factor),
+        width: (dialog_rect.width - margin * 2.0).max(1.0),
+        height: scaled_dialog_metric(30.0, scale_factor),
     }
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 fn rename_dialog_cancel_button_rect(dialog_rect: ViewRect) -> ViewRect {
-    let right = dialog_rect.right() - 16.0;
-    ViewRect {
-        x: right - CREATE_DIALOG_BUTTON_WIDTH * 2.0 - CREATE_DIALOG_BUTTON_GAP,
-        y: dialog_rect.bottom() - 16.0 - CREATE_DIALOG_BUTTON_HEIGHT,
-        width: CREATE_DIALOG_BUTTON_WIDTH,
-        height: CREATE_DIALOG_BUTTON_HEIGHT,
-    }
+    create_dialog_cancel_button_rect(dialog_rect)
 }
 
+fn rename_dialog_cancel_button_rect_scaled(dialog_rect: ViewRect, scale_factor: f32) -> ViewRect {
+    create_dialog_cancel_button_rect_scaled(dialog_rect, scale_factor)
+}
+
+#[cfg(test)]
 fn rename_dialog_commit_button_rect(dialog_rect: ViewRect) -> ViewRect {
-    let right = dialog_rect.right() - 16.0;
-    ViewRect {
-        x: right - CREATE_DIALOG_BUTTON_WIDTH,
-        y: dialog_rect.bottom() - 16.0 - CREATE_DIALOG_BUTTON_HEIGHT,
-        width: CREATE_DIALOG_BUTTON_WIDTH,
-        height: CREATE_DIALOG_BUTTON_HEIGHT,
-    }
+    create_dialog_commit_button_rect(dialog_rect)
 }
 
+fn rename_dialog_commit_button_rect_scaled(dialog_rect: ViewRect, scale_factor: f32) -> ViewRect {
+    create_dialog_commit_button_rect_scaled(dialog_rect, scale_factor)
+}
+
+#[cfg(test)]
 fn open_with_chooser_rect(chooser: &ShellOpenWithChooser, size: PhysicalSize<u32>) -> ViewRect {
+    open_with_chooser_rect_scaled(chooser, size, 1.0)
+}
+
+fn open_with_chooser_rect_scaled(
+    chooser: &ShellOpenWithChooser,
+    size: PhysicalSize<u32>,
+    scale_factor: f32,
+) -> ViewRect {
     let width = size.width.max(1) as f32;
     let height = size.height.max(1) as f32;
-    let dialog_width = OPEN_WITH_CHOOSER_WIDTH
-        .min((width - OPEN_WITH_CHOOSER_MARGIN * 2.0).max(1.0))
+    let margin = scaled_dialog_metric(OPEN_WITH_CHOOSER_MARGIN, scale_factor);
+    let dialog_width = scaled_dialog_metric(OPEN_WITH_CHOOSER_WIDTH, scale_factor)
+        .min((width - margin * 2.0).max(1.0))
         .max(1.0);
     let rows = open_with_chooser_visible_row_count(chooser).max(1);
-    let error_height = if chooser.error.is_some() { 26.0 } else { 0.0 };
-    let dialog_height = (OPEN_WITH_CHOOSER_TITLE_HEIGHT
-        + 16.0
-        + OPEN_WITH_CHOOSER_QUERY_HEIGHT
-        + 12.0
-        + rows as f32 * OPEN_WITH_CHOOSER_ROW_HEIGHT
+    let error_height = if chooser.error.is_some() {
+        scaled_dialog_metric(26.0, scale_factor)
+    } else {
+        0.0
+    };
+    let dialog_height = (scaled_dialog_metric(OPEN_WITH_CHOOSER_TITLE_HEIGHT, scale_factor)
+        + scaled_dialog_metric(16.0, scale_factor)
+        + scaled_dialog_metric(OPEN_WITH_CHOOSER_QUERY_HEIGHT, scale_factor)
+        + scaled_dialog_metric(12.0, scale_factor)
+        + rows as f32 * scaled_dialog_metric(OPEN_WITH_CHOOSER_ROW_HEIGHT, scale_factor)
         + error_height
-        + 54.0)
-        .min((height - OPEN_WITH_CHOOSER_MARGIN * 2.0).max(1.0))
-        .max(1.0);
+        + scaled_dialog_metric(54.0, scale_factor))
+    .min((height - margin * 2.0).max(1.0))
+    .max(1.0);
     ViewRect {
-        x: ((width - dialog_width) / 2.0).max(OPEN_WITH_CHOOSER_MARGIN),
-        y: ((height - dialog_height) / 2.0).max(OPEN_WITH_CHOOSER_MARGIN),
+        x: ((width - dialog_width) / 2.0).max(margin),
+        y: ((height - dialog_height) / 2.0).max(margin),
         width: dialog_width,
         height: dialog_height,
     }
@@ -13814,83 +15155,142 @@ fn open_with_chooser_visible_row_count(chooser: &ShellOpenWithChooser) -> usize 
         .max(1)
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 fn open_with_chooser_query_rect(dialog_rect: ViewRect) -> ViewRect {
+    open_with_chooser_query_rect_scaled(dialog_rect, 1.0)
+}
+
+fn open_with_chooser_query_rect_scaled(dialog_rect: ViewRect, scale_factor: f32) -> ViewRect {
+    let margin = scaled_dialog_metric(16.0, scale_factor);
     ViewRect {
-        x: dialog_rect.x + 16.0,
-        y: dialog_rect.y + OPEN_WITH_CHOOSER_TITLE_HEIGHT + 16.0,
-        width: (dialog_rect.width - 32.0).max(1.0),
-        height: OPEN_WITH_CHOOSER_QUERY_HEIGHT,
+        x: dialog_rect.x + margin,
+        y: dialog_rect.y
+            + scaled_dialog_metric(OPEN_WITH_CHOOSER_TITLE_HEIGHT, scale_factor)
+            + margin,
+        width: (dialog_rect.width - margin * 2.0).max(1.0),
+        height: scaled_dialog_metric(OPEN_WITH_CHOOSER_QUERY_HEIGHT, scale_factor),
     }
 }
 
+#[cfg(test)]
 fn open_with_chooser_list_rect(dialog_rect: ViewRect, chooser: &ShellOpenWithChooser) -> ViewRect {
-    let query = open_with_chooser_query_rect(dialog_rect);
+    open_with_chooser_list_rect_scaled(dialog_rect, chooser, 1.0)
+}
+
+fn open_with_chooser_list_rect_scaled(
+    dialog_rect: ViewRect,
+    chooser: &ShellOpenWithChooser,
+    scale_factor: f32,
+) -> ViewRect {
+    let margin = scaled_dialog_metric(16.0, scale_factor);
+    let query = open_with_chooser_query_rect_scaled(dialog_rect, scale_factor);
     ViewRect {
-        x: dialog_rect.x + 16.0,
-        y: query.bottom() + 12.0,
-        width: (dialog_rect.width - 32.0).max(1.0),
-        height: open_with_chooser_visible_row_count(chooser) as f32 * OPEN_WITH_CHOOSER_ROW_HEIGHT,
+        x: dialog_rect.x + margin,
+        y: query.bottom() + scaled_dialog_metric(12.0, scale_factor),
+        width: (dialog_rect.width - margin * 2.0).max(1.0),
+        height: open_with_chooser_visible_row_count(chooser) as f32
+            * scaled_dialog_metric(OPEN_WITH_CHOOSER_ROW_HEIGHT, scale_factor),
     }
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 fn open_with_chooser_cancel_button_rect(dialog_rect: ViewRect) -> ViewRect {
-    let right = dialog_rect.right() - 16.0;
+    open_with_chooser_cancel_button_rect_scaled(dialog_rect, 1.0)
+}
+
+fn open_with_chooser_cancel_button_rect_scaled(
+    dialog_rect: ViewRect,
+    scale_factor: f32,
+) -> ViewRect {
+    let right = dialog_rect.right() - scaled_dialog_metric(16.0, scale_factor);
+    let button_width = scaled_dialog_metric(OPEN_WITH_CHOOSER_BUTTON_WIDTH, scale_factor);
+    let button_height = scaled_dialog_metric(OPEN_WITH_CHOOSER_BUTTON_HEIGHT, scale_factor);
     ViewRect {
-        x: right - OPEN_WITH_CHOOSER_BUTTON_WIDTH * 2.0 - OPEN_WITH_CHOOSER_BUTTON_GAP,
-        y: dialog_rect.bottom() - 16.0 - OPEN_WITH_CHOOSER_BUTTON_HEIGHT,
-        width: OPEN_WITH_CHOOSER_BUTTON_WIDTH,
-        height: OPEN_WITH_CHOOSER_BUTTON_HEIGHT,
+        x: right
+            - button_width * 2.0
+            - scaled_dialog_metric(OPEN_WITH_CHOOSER_BUTTON_GAP, scale_factor),
+        y: dialog_rect.bottom() - scaled_dialog_metric(16.0, scale_factor) - button_height,
+        width: button_width,
+        height: button_height,
     }
 }
 
+#[cfg(test)]
 fn open_with_chooser_open_button_rect(dialog_rect: ViewRect) -> ViewRect {
-    let right = dialog_rect.right() - 16.0;
+    open_with_chooser_open_button_rect_scaled(dialog_rect, 1.0)
+}
+
+fn open_with_chooser_open_button_rect_scaled(dialog_rect: ViewRect, scale_factor: f32) -> ViewRect {
+    let right = dialog_rect.right() - scaled_dialog_metric(16.0, scale_factor);
+    let button_width = scaled_dialog_metric(OPEN_WITH_CHOOSER_BUTTON_WIDTH, scale_factor);
+    let button_height = scaled_dialog_metric(OPEN_WITH_CHOOSER_BUTTON_HEIGHT, scale_factor);
     ViewRect {
-        x: right - OPEN_WITH_CHOOSER_BUTTON_WIDTH,
-        y: dialog_rect.bottom() - 16.0 - OPEN_WITH_CHOOSER_BUTTON_HEIGHT,
-        width: OPEN_WITH_CHOOSER_BUTTON_WIDTH,
-        height: OPEN_WITH_CHOOSER_BUTTON_HEIGHT,
+        x: right - button_width,
+        y: dialog_rect.bottom() - scaled_dialog_metric(16.0, scale_factor) - button_height,
+        width: button_width,
+        height: button_height,
     }
 }
 
+#[cfg(test)]
 fn trash_conflict_dialog_rect(
     _dialog: &ShellTrashConflictDialog,
     size: PhysicalSize<u32>,
 ) -> ViewRect {
+    trash_conflict_dialog_rect_scaled(_dialog, size, 1.0)
+}
+
+fn trash_conflict_dialog_rect_scaled(
+    _dialog: &ShellTrashConflictDialog,
+    size: PhysicalSize<u32>,
+    scale_factor: f32,
+) -> ViewRect {
     let width = size.width.max(1) as f32;
     let height = size.height.max(1) as f32;
-    let dialog_width = TRASH_CONFLICT_DIALOG_WIDTH
-        .min((width - TRASH_CONFLICT_DIALOG_MARGIN * 2.0).max(1.0))
+    let margin = scaled_dialog_metric(TRASH_CONFLICT_DIALOG_MARGIN, scale_factor);
+    let dialog_width = scaled_dialog_metric(TRASH_CONFLICT_DIALOG_WIDTH, scale_factor)
+        .min((width - margin * 2.0).max(1.0))
         .max(1.0);
-    let dialog_height = TRASH_CONFLICT_DIALOG_HEIGHT
-        .min((height - TRASH_CONFLICT_DIALOG_MARGIN * 2.0).max(1.0))
+    let dialog_height = scaled_dialog_metric(TRASH_CONFLICT_DIALOG_HEIGHT, scale_factor)
+        .min((height - margin * 2.0).max(1.0))
         .max(1.0);
     ViewRect {
-        x: ((width - dialog_width) / 2.0).max(TRASH_CONFLICT_DIALOG_MARGIN),
-        y: ((height - dialog_height) / 2.0).max(TRASH_CONFLICT_DIALOG_MARGIN),
+        x: ((width - dialog_width) / 2.0).max(margin),
+        y: ((height - dialog_height) / 2.0).max(margin),
         width: dialog_width,
         height: dialog_height,
     }
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 fn trash_conflict_dialog_cancel_button_rect(dialog_rect: ViewRect) -> ViewRect {
-    let right = dialog_rect.right() - 16.0;
-    ViewRect {
-        x: right - CREATE_DIALOG_BUTTON_WIDTH * 2.0 - CREATE_DIALOG_BUTTON_GAP,
-        y: dialog_rect.bottom() - 16.0 - CREATE_DIALOG_BUTTON_HEIGHT,
-        width: CREATE_DIALOG_BUTTON_WIDTH,
-        height: CREATE_DIALOG_BUTTON_HEIGHT,
-    }
+    create_dialog_cancel_button_rect(dialog_rect)
 }
 
+fn trash_conflict_dialog_cancel_button_rect_scaled(
+    dialog_rect: ViewRect,
+    scale_factor: f32,
+) -> ViewRect {
+    create_dialog_cancel_button_rect_scaled(dialog_rect, scale_factor)
+}
+
+#[cfg(test)]
 fn trash_conflict_dialog_replace_button_rect(dialog_rect: ViewRect) -> ViewRect {
-    let right = dialog_rect.right() - 16.0;
-    ViewRect {
-        x: right - CREATE_DIALOG_BUTTON_WIDTH,
-        y: dialog_rect.bottom() - 16.0 - CREATE_DIALOG_BUTTON_HEIGHT,
-        width: CREATE_DIALOG_BUTTON_WIDTH,
-        height: CREATE_DIALOG_BUTTON_HEIGHT,
-    }
+    create_dialog_commit_button_rect(dialog_rect)
+}
+
+fn trash_conflict_dialog_replace_button_rect_scaled(
+    dialog_rect: ViewRect,
+    scale_factor: f32,
+) -> ViewRect {
+    create_dialog_commit_button_rect_scaled(dialog_rect, scale_factor)
+}
+
+fn scaled_dialog_metric(value: f32, scale_factor: f32) -> f32 {
+    (value * scale_factor.max(1.0)).round().max(1.0)
 }
 
 fn property_row(label: &'static str, value: String) -> ShellPropertyRow {
@@ -15223,6 +16623,99 @@ mod tests {
     }
 
     #[test]
+    fn thumbnail_resolver_uses_freedesktop_cache_hit() {
+        let cache_root = test_dir("thumbnail-cache-root");
+        let source_root = test_dir("thumbnail-source-root");
+        fs::create_dir_all(&source_root).unwrap();
+        let source = source_root.join("photo.png");
+        fs::write(&source, b"source").unwrap();
+        let modified_secs = 42;
+        let uri = fika_core::thumbnail_uri_for_path(&source).unwrap();
+        let thumbnail =
+            fika_core::thumbnail_cache_path(&cache_root, fika_core::ThumbnailSize::Normal, &uri);
+        write_test_thumbnail_png(&thumbnail, &uri, modified_secs);
+
+        let mut resolver = ThumbnailRasterResolver::with_cache_root(cache_root.clone());
+        assert!(matches!(
+            resolver.resolve(&source, modified_secs, Some("image/png".to_string()), 48),
+            ThumbnailResolveState::Pending
+        ));
+
+        match wait_for_thumbnail_state(&mut resolver, &source, modified_secs, Some("image/png"), 48)
+        {
+            ThumbnailResolveState::Ready(raster) => {
+                assert_eq!(raster.width, 48);
+                assert_eq!(raster.height, 48);
+                assert!(raster.pixels.iter().any(|channel| *channel != 0));
+            }
+            state => panic!("expected ready thumbnail raster, got {state:?}"),
+        }
+
+        let _ = fs::remove_dir_all(cache_root);
+        let _ = fs::remove_dir_all(source_root);
+    }
+
+    #[test]
+    fn thumbnail_resolver_caches_failed_probe_result() {
+        let cache_root = test_dir("thumbnail-failed-cache-root");
+        let source_root = test_dir("thumbnail-failed-source-root");
+        fs::create_dir_all(&source_root).unwrap();
+        let source = source_root.join("payload.bin");
+        fs::write(&source, b"source").unwrap();
+        let modified_secs = 42;
+
+        let mut resolver = ThumbnailRasterResolver::with_cache_root(cache_root.clone());
+        assert!(matches!(
+            resolver.resolve(&source, modified_secs, None, 48),
+            ThumbnailResolveState::Pending
+        ));
+        assert!(matches!(
+            wait_for_thumbnail_state(&mut resolver, &source, modified_secs, None, 48),
+            ThumbnailResolveState::Failed
+        ));
+        let pending_after_failure = resolver.pending.len();
+        assert!(
+            resolver
+                .failed
+                .contains(&ThumbnailProbeCacheKey::new(source.clone(), modified_secs))
+        );
+        assert!(matches!(
+            resolver.resolve(&source, modified_secs, None, 48),
+            ThumbnailResolveState::Failed
+        ));
+        assert_eq!(resolver.pending.len(), pending_after_failure);
+
+        let _ = fs::remove_dir_all(cache_root);
+        let _ = fs::remove_dir_all(source_root);
+    }
+
+    fn wait_for_thumbnail_state(
+        resolver: &mut ThumbnailRasterResolver,
+        path: &Path,
+        modified_secs: u64,
+        mime_type: Option<&str>,
+        size_px: u16,
+    ) -> ThumbnailResolveState {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let state =
+                resolver.resolve(path, modified_secs, mime_type.map(str::to_string), size_px);
+            if !matches!(state, ThumbnailResolveState::Pending) || Instant::now() >= deadline {
+                return state;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    fn write_test_thumbnail_png(path: &Path, uri: &str, modified_secs: u64) {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        image::RgbaImage::from_pixel(4, 4, image::Rgba([32, 96, 192, 255]))
+            .save(path)
+            .unwrap();
+        fika_core::write_thumbnail_metadata(path, uri, modified_secs).unwrap();
+    }
+
+    #[test]
     fn split_pane_mouse_wheel_scrolls_the_target_pane_only() {
         let mut scene = test_scene(
             (0..12)
@@ -15722,6 +17215,142 @@ mod tests {
             ShellContextMenuAction::ToggleHiddenFiles.label_for_hidden_state(true),
             "Hide Hidden Files"
         );
+    }
+
+    #[test]
+    fn context_menu_items_offer_open_with_submenu_applications() {
+        let target = ShellContextTarget::Item {
+            index: 0,
+            path: PathBuf::from("/tmp/plain.txt"),
+            is_dir: false,
+            selection_count: 1,
+        };
+        let menu = ShellContextMenu::with_dynamic(
+            target,
+            ViewPoint { x: 20.0, y: 20.0 },
+            vec![MimeApplication {
+                id: "org.example.Editor.desktop".to_string(),
+                desktop_file: PathBuf::from("/usr/share/applications/org.example.Editor.desktop"),
+                name: "Editor".to_string(),
+                exec: "editor %F".to_string(),
+                icon: Some("accessories-text-editor".to_string()),
+                is_default: true,
+            }],
+            Vec::new(),
+        );
+
+        assert!(
+            context_menu_items(&menu)
+                .iter()
+                .any(|item| item.submenu == Some(ShellContextSubmenu::OpenWith))
+        );
+        let submenu = context_submenu_actions(ShellContextSubmenu::OpenWith, &menu);
+        assert!(matches!(
+            submenu.first().map(|item| &item.command),
+            Some(ShellContextMenuCommand::OpenWithApplication { desktop_id })
+                if desktop_id == "org.example.Editor.desktop"
+        ));
+        assert!(matches!(
+            submenu.last().map(|item| &item.command),
+            Some(ShellContextMenuCommand::Builtin(
+                ShellContextMenuAction::OpenWith
+            ))
+        ));
+    }
+
+    #[test]
+    fn context_menu_items_offer_service_root_more_and_group_submenus() {
+        let target = ShellContextTarget::Item {
+            index: 0,
+            path: PathBuf::from("/tmp/archive.zip"),
+            is_dir: false,
+            selection_count: 1,
+        };
+        let mut service_actions = Vec::new();
+        service_actions.push(ServiceMenuAction {
+            id: "compress.desktop::compress".to_string(),
+            label: "Compress".to_string(),
+            source_name: "Ark".to_string(),
+            icon: Some("ark".to_string()),
+            submenu: None,
+            priority: ServiceMenuPriority::Normal,
+        });
+        service_actions.push(ServiceMenuAction {
+            id: "tools.desktop::checksum".to_string(),
+            label: "Checksum".to_string(),
+            source_name: "Tools".to_string(),
+            icon: None,
+            submenu: Some("Tools".to_string()),
+            priority: ServiceMenuPriority::Normal,
+        });
+        for index in 0..4 {
+            service_actions.push(ServiceMenuAction {
+                id: format!("extra.desktop::action{index}"),
+                label: format!("Extra {index}"),
+                source_name: "Extra".to_string(),
+                icon: None,
+                submenu: None,
+                priority: ServiceMenuPriority::Normal,
+            });
+        }
+        let menu = ShellContextMenu::with_dynamic(
+            target,
+            ViewPoint { x: 20.0, y: 20.0 },
+            Vec::new(),
+            service_actions,
+        );
+
+        let root = context_menu_items(&menu);
+        assert!(root.iter().any(|item| matches!(
+            item.command,
+            ShellContextMenuCommand::RunServiceMenuAction { .. }
+        )));
+        assert!(root.iter().any(|item| {
+            item.submenu == Some(ShellContextSubmenu::ServiceMenu) && item.label == "More Actions"
+        }));
+        let more = context_submenu_actions(ShellContextSubmenu::ServiceMenu, &menu);
+        assert!(more.iter().any(|item| {
+            item.submenu == Some(ShellContextSubmenu::ServiceMenuGroup(0)) && item.label == "Tools"
+        }));
+        let tools = context_submenu_actions(ShellContextSubmenu::ServiceMenuGroup(0), &menu);
+        assert!(tools.iter().any(|item| item.label == "Checksum"));
+    }
+
+    #[test]
+    fn dialog_rects_scale_with_window_dpi() {
+        let chooser = ShellOpenWithChooser::new(
+            PathBuf::from("/tmp/plain.txt"),
+            Some(Arc::from("text/plain")),
+            vec![MimeApplication {
+                id: "org.example.Editor.desktop".to_string(),
+                desktop_file: PathBuf::from("/usr/share/applications/org.example.Editor.desktop"),
+                name: "Editor".to_string(),
+                exec: "editor %F".to_string(),
+                icon: None,
+                is_default: false,
+            }],
+        );
+        let size = PhysicalSize::new(1200, 900);
+        let base = open_with_chooser_rect(&chooser, size);
+        let scaled = open_with_chooser_rect_scaled(&chooser, size, 1.5);
+        assert!(scaled.width > base.width);
+        assert!(scaled.height > base.height);
+        assert_eq!(
+            open_with_chooser_list_rect_scaled(scaled, &chooser, 1.5).height,
+            scaled_dialog_metric(OPEN_WITH_CHOOSER_ROW_HEIGHT, 1.5)
+        );
+    }
+
+    #[test]
+    fn file_icon_path_cache_keys_share_dolphin_role_across_sizes() {
+        let path = Path::new("/tmp/plain.txt");
+        let small =
+            file_icon_path_cache_key(path, false, Some(Arc::from("text/plain")), true, 18.0);
+        let large =
+            file_icon_path_cache_key(path, false, Some(Arc::from("text/plain")), true, 48.0);
+
+        assert_eq!(small.role, large.role);
+        assert_ne!(small.size_px, large.size_px);
     }
 
     #[test]

@@ -189,10 +189,16 @@ Current checkpoint:
   and selection state. Restore conflicts now open a shell-owned confirmation
   overlay; Replace reruns the restore through core `TrashViewOperation` with the
   replace policy, then reloads Trash. Cut and Paste reject remote paths
-  explicitly. Open With default-application selection, multi-MIME
-  `text/uri-list` clipboard export/import, richer multi-conflict handling,
-  undo, richer properties, full inline rename, full Create New
-  submenus/templates, and new-pane dispatch remain Phase 4 work.
+  explicitly. Open With direct application submenu rows now launch the selected
+  desktop entry through the same systemd-user launch path as the chooser. The
+  wgpu context menu also consumes the core KDE/Fika service-menu matcher,
+  exposes TopLevel actions, More Actions, and `X-KDE-Submenu` groups as
+  shell-owned submenus, and launches matched service actions through core
+  service-menu launch plans. Themed application/service menu icons are still
+  placeholder glyphs in the wgpu shell. Multi-MIME `text/uri-list` clipboard
+  export/import, richer multi-conflict handling, undo, richer properties, full
+  inline rename, full Create New templates, and setting Open With defaults
+  remain Phase 4 work.
 - A first shell-owned Places sidebar is now drawn as a rounded light panel whose
   top edge aligns with the pane origin below the app-level toolbar, matching the
   right-side pane start rather than the pane body. It builds Home, existing XDG
@@ -275,6 +281,16 @@ Current checkpoint:
   retained projection by default; `Ctrl/Meta+H` shows them. Selection is
   retained or pruned through the same projection when the visibility mode
   changes. The app-level Hidden toggle remains toolbar migration work.
+- Initial thumbnail loading now follows the existing core thumbnail
+  architecture instead of trying to decode source files in the frame path. The
+  wgpu thumbnail resolver builds core `ThumbnailRequest`s for visible,
+  previewable local files, probes the freedesktop thumbnail cache and failure
+  markers, uses the core `ThumbnailerRegistry` fallback commands off the render
+  thread, rasterizes the cached/generated PNG in that worker, and then feeds an
+  mtime-keyed raster into the shell icon atlas. Failed probes are cached in the
+  resolver so steady redraws do not repeatedly requeue impossible thumbnails.
+  This is still an initial visible-item path, not full Dolphin/KIO PreviewJob
+  parity or read-ahead scheduler integration.
 - `[fika-wgpu]` logs include view mode, window/UI scale, path, entry count,
   visible item count, thumbnail candidate count, retained visible slot
   active/free/reuse/recycle/allocation counters,
@@ -282,6 +298,7 @@ Current checkpoint:
   context target kind, context menu state, properties overlay state, hit-test/selection/keyboard navigation/rubber-band/view-switch/path-change/open/copy-location/file-clipboard/paste
   counters, reload/location/filter/hidden counters, DnD hover/drop-request counters, zoom percent and zoom-change counters, icon count, icon deferred/raster-deferred count, icon cache
   hit/miss count, icon cache bytes, icon atlas bytes, icon resolve/raster time,
+  thumbnail loaded/quad/deferred counters,
   text label count, text cache hit/miss count, text cache bytes, text atlas
   bytes, draw batch count, render reason, layout time, text raster time, render
   time, and `scroll_x` / `scroll_y` offsets.
@@ -311,9 +328,10 @@ Acceptance:
   operation remain pending.
 - [~] Emits frame timing, visible range, draw-command counters, temporary
   icon/text atlas counters, retained hit-test counters, bounded
-  icon/label-cache counters, visible slot reuse counters, and thumbnail
-  candidate counters. Glyph-level and thumbnail atlas counters will start once
-  those resource retention layers exist.
+  icon/label-cache counters, visible slot reuse counters, thumbnail candidate
+  counters, and the first thumbnail loaded/quad/deferred counters. Glyph-level
+  and long-lived thumbnail atlas eviction counters will start once those
+  resource retention layers exist.
 
 ### Phase 1: File View Parity Core
 
@@ -347,8 +365,12 @@ Acceptance:
 - Zoom does not invalidate loaded same-semantic icons except when size/DPI
   requires a new raster.
 - Cold glyph/icon work is budgeted and visible-first.
-- Thumbnail candidates are projected from the visible retained pane items;
-  cached thumbnail decode/upload and atlas retention remain the next step.
+- Thumbnail candidates are projected from the visible retained pane items. The
+  first wgpu thumbnail worker now reuses core freedesktop cache lookup,
+  failure-cache checks, and thumbnailer registry commands off-frame, then
+  rasterizes ready thumbnails into the per-frame atlas path. Full
+  Dolphin/KIO-style preview job cancellation, read-ahead scheduling, model role
+  writeback, and long-lived thumbnail atlas retention remain the next step.
 - Cache logs show hit/miss/evict/bytes and per-frame compute time.
 
 ### Phase 3: Interaction and DnD
@@ -413,7 +435,8 @@ intentionally narrow until the full IME/caret/selection text boundary is
 migrated; context menu dispatch currently covers Open directory, Refresh,
 Select All, Properties, minimal Create New, minimal Rename, minimal Move to
 Trash, Trash view Restore/Delete Permanently/Empty Trash, Copy/Cut/Copy
-Location, Paste, and the minimal Places row Open/Copy Location/Properties/Remove
+Location, Paste, Open With direct application launch, KDE/Fika service-menu
+actions and submenus, and the minimal Places row Open/Copy Location/Properties/Remove
 menu. The blank context menu now exposes Show/Hide Hidden Files and Split View,
 directory/place Open in New Pane loads a real right-hand pane with its own
 location bar/content/status paint, item hover/selection backgrounds are rounded,
@@ -447,10 +470,14 @@ Copy `ShellDropOperationRequest` for valid pane/place targets. Real Wayland
 DnD hover/drop/export wiring and executing those requests remain pending. The
 Places Devices section now includes mounted GIO devices at app startup; live
 device monitoring and mount/eject actions remain pending. Thumbnail work has a
-visible-item candidate projection and frame telemetry, but decode/upload and
-atlas retention are still pending. Richer Places actions/DnD, richer Trash
-conflict handling, undo, richer properties, full inline rename, full Create New
-submenus/templates, and Open With default-app selection remain pending.
+visible-item candidate projection, off-frame core thumbnail cache/thumbnailer
+probing, background rasterization, mtime-keyed failure handling, and frame
+telemetry; read-ahead scheduling, model role writeback, and long-lived atlas
+retention remain pending. The properties, create, rename, Open With, and Trash
+conflict overlay rectangles and hit tests now scale with the window DPI factor.
+Richer Places actions/DnD, richer Trash conflict handling, undo, richer
+properties, full inline rename, full Create New templates, and setting Open
+With defaults remain pending.
 
 Acceptance:
 
