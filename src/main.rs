@@ -1478,8 +1478,13 @@ impl FikaWgpuApp {
             return;
         }
 
+        let affected_dir = request.target.parent().map(Path::to_path_buf);
         self.scene.close_rename_dialog_after_success(&request);
-        match self.scene.reload_pane_path(request.pane, size) {
+        let reload_result = affected_dir
+            .as_deref()
+            .ok_or_else(|| format!("rename target has no parent: {}", request.target.display()))
+            .and_then(|dir| self.scene.reload_panes_showing_path(dir, size));
+        match reload_result {
             Ok(_) => {
                 self.scene
                     .select_entry_by_name_in_pane(request.pane, &request.name, size);
@@ -1520,7 +1525,7 @@ impl FikaWgpuApp {
         }
 
         self.scene.close_create_dialog_after_success(&request);
-        match self.scene.reload_pane_path(request.pane, size) {
+        match self.scene.reload_panes_showing_path(&request.parent, size) {
             Ok(_) => {
                 self.scene
                     .select_entry_by_name_in_pane(request.pane, &request.name, size);
@@ -3901,6 +3906,25 @@ impl ShellScene {
         Ok(true)
     }
 
+    fn reload_panes_showing_path(
+        &mut self,
+        path: &Path,
+        size: PhysicalSize<u32>,
+    ) -> Result<bool, String> {
+        let pane_ids = ShellPaneId::ALL
+            .into_iter()
+            .filter(|pane| {
+                self.pane_state(*pane)
+                    .is_some_and(|state| same_directory(&state.path, path))
+            })
+            .collect::<Vec<_>>();
+        let mut changed = false;
+        for pane in pane_ids {
+            changed |= self.reload_pane_path(pane, size)?;
+        }
+        Ok(changed)
+    }
+
     fn go_parent_directory(&mut self, size: PhysicalSize<u32>) -> Result<bool, String> {
         let pane = self.active_pane();
         let Some(path) = self.parent_directory_path_for_pane(pane) else {
@@ -6159,7 +6183,7 @@ impl ShellScene {
 
     fn paste_clipboard_text_to_pane(
         &mut self,
-        target_pane: ShellPaneId,
+        _target_pane: ShellPaneId,
         target_dir: PathBuf,
         clipboard_text: &str,
         size: PhysicalSize<u32>,
@@ -6211,7 +6235,7 @@ impl ShellScene {
             self.create_dialog = None;
             self.rename_dialog = None;
             self.rubber_band = None;
-            self.reload_pane_path(target_pane, size)?;
+            self.reload_panes_showing_path(&target_dir, size)?;
         }
         Ok(result)
     }
@@ -6317,6 +6341,7 @@ impl ShellScene {
 
     fn delete_active_selection(&mut self, size: PhysicalSize<u32>) -> Result<bool, String> {
         let pane = self.active_pane();
+        let affected_dir = self.pane_state(pane).map(|state| state.path.clone());
         let Some(paths) = self.active_selection_item_paths()? else {
             return Ok(false);
         };
@@ -6358,7 +6383,9 @@ impl ShellScene {
             if let Some(selection) = self.pane_selection_mut(pane) {
                 selection.clear();
             }
-            self.reload_pane_path(pane, size)?;
+            if let Some(affected_dir) = affected_dir {
+                self.reload_panes_showing_path(&affected_dir, size)?;
+            }
         }
         Ok(changed)
     }
@@ -6468,6 +6495,9 @@ impl ShellScene {
         result: &TrashViewOperationResult,
         size: PhysicalSize<u32>,
     ) -> Result<(), String> {
+        let affected_dir = self
+            .pane_state(pane_to_reload)
+            .map(|state| state.path.clone());
         self.trash_changes += 1;
         eprintln!(
             "[fika-wgpu] trash-view action={} success={} failure={} conflicts={} changes={}",
@@ -6511,7 +6541,9 @@ impl ShellScene {
             if let Some(selection) = self.pane_selection_mut(pane_to_clear) {
                 selection.clear();
             }
-            self.reload_pane_path(pane_to_reload, size)?;
+            if let Some(affected_dir) = affected_dir {
+                self.reload_panes_showing_path(&affected_dir, size)?;
+            }
         }
         Ok(())
     }
@@ -6523,6 +6555,9 @@ impl ShellScene {
         let pane_to_reload = self
             .context_target_pane()
             .unwrap_or_else(|| self.active_pane());
+        let affected_dir = self
+            .pane_state(pane_to_reload)
+            .map(|state| state.path.clone());
         let paths = self.context_target_trash_paths()?;
         if paths.iter().any(|path| is_network_path(path)) {
             return Err("remote trash is not available yet".to_string());
@@ -6560,7 +6595,9 @@ impl ShellScene {
         self.create_dialog = None;
         self.rename_dialog = None;
         self.rubber_band = None;
-        self.reload_pane_path(pane_to_reload, size)?;
+        if let Some(affected_dir) = affected_dir {
+            self.reload_panes_showing_path(&affected_dir, size)?;
+        }
         Ok(result)
     }
 
@@ -15634,6 +15671,15 @@ fn copy_location_text_for_path(path: &Path) -> String {
     path.display().to_string()
 }
 
+fn same_directory(left: &Path, right: &Path) -> bool {
+    left == right
+        || left
+            .canonicalize()
+            .ok()
+            .zip(right.canonicalize().ok())
+            .is_some_and(|(left, right)| left == right)
+}
+
 fn file_clipboard_role_as_str(role: FileClipboardRole) -> &'static str {
     match role {
         FileClipboardRole::Copy => "copy",
@@ -20133,6 +20179,95 @@ text/plain=writer.desktop;\n",
         assert_eq!(scene.panes[ShellPaneId::FIRST].path, left);
 
         file_ops::undo_trash(&trash_result.trash_pairs).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn split_panes_showing_same_dir_refresh_after_create_and_rename() {
+        let root = test_dir("split-same-dir-file-ops");
+        fs::create_dir_all(&root).unwrap();
+
+        let size = PhysicalSize::new(900, 360);
+        let mut scene = ShellScene::load(root.clone(), ShellViewMode::Icons).unwrap();
+        assert!(scene.open_split_pane(root.clone(), size).unwrap());
+        scene.active_pane = ShellPaneId::SECOND;
+
+        scene.context_target = Some(ShellContextTarget::Blank {
+            pane: ShellPaneId::SECOND,
+            path: root.clone(),
+        });
+        assert!(scene.open_create_dialog_from_context_with_kind(CreateEntryKind::File));
+        scene.create_dialog.as_mut().unwrap().name = "made.txt".to_string();
+        scene.create_dialog.as_mut().unwrap().replace_on_insert = false;
+        let create_request = scene.create_entry_request().unwrap();
+        create_entry_on_disk(&create_request).unwrap();
+        assert!(scene.close_create_dialog_after_success(&create_request));
+        assert!(
+            scene
+                .reload_panes_showing_path(&create_request.parent, size)
+                .unwrap()
+        );
+        assert!(scene.select_entry_by_name_in_pane(
+            create_request.pane,
+            &create_request.name,
+            size
+        ));
+
+        assert!(
+            entry_index_by_name(&scene.panes[ShellPaneId::FIRST].entries, "made.txt").is_some()
+        );
+        let made_index =
+            entry_index_by_name(&scene.panes[ShellPaneId::SECOND].entries, "made.txt").unwrap();
+        assert!(
+            scene.panes[ShellPaneId::SECOND]
+                .selection
+                .contains(made_index)
+        );
+        assert_eq!(scene.directory_reloads, 2);
+
+        scene.context_target = Some(ShellContextTarget::Item {
+            pane: ShellPaneId::SECOND,
+            index: made_index,
+            path: root.join("made.txt"),
+            is_dir: false,
+            selection_count: 1,
+        });
+        assert!(scene.open_rename_dialog_from_context());
+        scene.rename_dialog.as_mut().unwrap().name = "renamed.txt".to_string();
+        scene.rename_dialog.as_mut().unwrap().replace_on_insert = false;
+        let rename_request = scene.rename_entry_request().unwrap();
+        rename_entry_on_disk(&rename_request).unwrap();
+        assert!(scene.close_rename_dialog_after_success(&rename_request));
+        let rename_parent = rename_request.target.parent().unwrap().to_path_buf();
+        assert!(
+            scene
+                .reload_panes_showing_path(&rename_parent, size)
+                .unwrap()
+        );
+        assert!(scene.select_entry_by_name_in_pane(
+            rename_request.pane,
+            &rename_request.name,
+            size
+        ));
+
+        assert!(
+            entry_index_by_name(&scene.panes[ShellPaneId::FIRST].entries, "made.txt").is_none()
+        );
+        assert!(
+            entry_index_by_name(&scene.panes[ShellPaneId::FIRST].entries, "renamed.txt").is_some()
+        );
+        assert!(
+            entry_index_by_name(&scene.panes[ShellPaneId::SECOND].entries, "made.txt").is_none()
+        );
+        let renamed_index =
+            entry_index_by_name(&scene.panes[ShellPaneId::SECOND].entries, "renamed.txt").unwrap();
+        assert!(
+            scene.panes[ShellPaneId::SECOND]
+                .selection
+                .contains(renamed_index)
+        );
+        assert_eq!(scene.directory_reloads, 4);
+
         fs::remove_dir_all(root).unwrap();
     }
 
