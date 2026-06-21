@@ -8,6 +8,7 @@ pub(crate) use fika_core::ViewMode as ShellViewMode;
 pub(crate) struct StartupOptions {
     pub(crate) path: PathBuf,
     pub(crate) view_mode: ShellViewMode,
+    pub(crate) view_mode_explicit: bool,
     pub(crate) auto_cycle_views: bool,
 }
 
@@ -27,6 +28,7 @@ fn parse_start_options_from(
 ) -> Result<Option<StartupOptions>, String> {
     let mut args = args.into_iter();
     let mut view_mode = ShellViewMode::Icons;
+    let mut view_mode_explicit = false;
     let mut auto_cycle_views = false;
     let mut path = None;
     while let Some(arg) = args.next() {
@@ -48,10 +50,12 @@ fn parse_start_options_from(
                 .to_str()
                 .ok_or_else(|| "--view value must be valid UTF-8".to_string())?;
             view_mode = ShellViewMode::parse(value)?;
+            view_mode_explicit = true;
             continue;
         }
         if let Some(value) = arg.to_str().and_then(|arg| arg.strip_prefix("--view=")) {
             view_mode = ShellViewMode::parse(value)?;
+            view_mode_explicit = true;
             continue;
         }
         if arg.to_str().is_some_and(|arg| arg.starts_with("--")) {
@@ -71,6 +75,7 @@ fn parse_start_options_from(
     Ok(Some(StartupOptions {
         path,
         view_mode,
+        view_mode_explicit,
         auto_cycle_views,
     }))
 }
@@ -94,6 +99,7 @@ mod tests {
 
         assert_eq!(options.path, PathBuf::from("/etc"));
         assert_eq!(options.view_mode, ShellViewMode::Compact);
+        assert!(options.view_mode_explicit);
         assert!(options.auto_cycle_views);
     }
 
@@ -112,6 +118,18 @@ mod tests {
 
         assert_eq!(options.path, PathBuf::from("/tmp"));
         assert_eq!(options.view_mode, ShellViewMode::Details);
+        assert!(options.view_mode_explicit);
+    }
+
+    #[test]
+    fn default_view_mode_is_not_explicit() {
+        let options = parse_start_options_from("fika".to_string(), [OsString::from("/tmp")])
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(options.path, PathBuf::from("/tmp"));
+        assert_eq!(options.view_mode, ShellViewMode::Icons);
+        assert!(!options.view_mode_explicit);
     }
 
     #[test]

@@ -3,19 +3,28 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use super::pane::ViewMode;
+
 const SETTINGS_FILE_NAME: &str = "settings.tsv";
 const PLACES_SIDEBAR_WIDTH_KEY: &str = "places.sidebar.width";
 const PLACES_SIDEBAR_VISIBLE_KEY: &str = "places.sidebar.visible";
+const VIEW_MODE_KEY: &str = "view.mode";
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct AppSettings {
     pub places_sidebar: PlacesSidebarSettings,
+    pub view: ViewSettings,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct PlacesSidebarSettings {
     pub width: Option<f32>,
     pub visible: Option<bool>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ViewSettings {
+    pub mode: Option<ViewMode>,
 }
 
 pub fn default_app_settings_path() -> PathBuf {
@@ -74,6 +83,11 @@ pub fn parse_app_settings(contents: &str) -> AppSettings {
                     settings.places_sidebar.visible = Some(visible);
                 }
             }
+            VIEW_MODE_KEY => {
+                if let Ok(mode) = ViewMode::parse(value.trim()) {
+                    settings.view.mode = Some(mode);
+                }
+            }
             _ => {}
         }
     }
@@ -87,6 +101,9 @@ pub fn app_settings_tsv(settings: &AppSettings) -> String {
     }
     if let Some(visible) = settings.places_sidebar.visible {
         lines.push(format!("{PLACES_SIDEBAR_VISIBLE_KEY}\t{visible}"));
+    }
+    if let Some(mode) = settings.view.mode {
+        lines.push(format!("{VIEW_MODE_KEY}\t{}", mode.as_str()));
     }
     if lines.is_empty() {
         String::new()
@@ -127,14 +144,17 @@ mod tests {
             "\
 places.sidebar.width\t276.5
 places.sidebar.visible\tfalse
+view.mode\tdetails
 ignored.key\tvalue
 places.sidebar.width\tnan
 places.sidebar.visible\tmaybe
+view.mode\tunknown
 ",
         );
 
         assert_eq!(settings.places_sidebar.width, Some(276.5));
         assert_eq!(settings.places_sidebar.visible, Some(false));
+        assert_eq!(settings.view.mode, Some(ViewMode::Details));
     }
 
     #[test]
@@ -151,6 +171,9 @@ places.sidebar.visible\tmaybe
             places_sidebar: PlacesSidebarSettings {
                 width: Some(311.25),
                 visible: Some(false),
+            },
+            view: ViewSettings {
+                mode: Some(ViewMode::Compact),
             },
         };
 

@@ -24,14 +24,15 @@ use fika_core::{
     ServiceMenuLaunchResult, ServiceMenuPriority, ServiceMenuTarget, ThumbnailRequest,
     ThumbnailRequestPriority, ThumbnailerRegistry, TransferTaskResult, TrashViewOperation,
     TrashViewOperationResult, UserPlace, ViewPoint, ViewRect, ViewSize, complete_location_input,
-    decode_file_clipboard_text, default_thumbnail_cache_root, default_user_places_path,
-    encode_file_clipboard_text, file_ops, format_modified_secs, format_size,
-    generate_thumbnail_with_external_thumbnailer_registry, home_dir, is_network_path,
-    launch_with_systemd_user, load_place_order, load_user_places, mime_magic_resolution_required,
-    network_root_path, network_uri_from_path, paste_text_result,
+    decode_file_clipboard_text, default_app_settings_path, default_thumbnail_cache_root,
+    default_user_places_path, encode_file_clipboard_text, file_ops, format_modified_secs,
+    format_size, generate_thumbnail_with_external_thumbnailer_registry, home_dir, is_network_path,
+    launch_with_systemd_user, load_app_settings, load_place_order, load_user_places,
+    mime_magic_resolution_required, network_root_path, network_uri_from_path, paste_text_result,
     place_order_path_for_user_places_path, read_entries_sync, read_gio_devices,
-    resolve_location_input, save_place_order, save_user_places, service_menu_target_label,
-    thumbnail_request_may_have_preview, transfer_paths_result, trash_view_operation_result,
+    resolve_location_input, save_app_settings, save_place_order, save_user_places,
+    service_menu_target_label, thumbnail_request_may_have_preview, transfer_paths_result,
+    trash_view_operation_result,
 };
 use gio::prelude::FileExt;
 use winit::application::ApplicationHandler;
@@ -71,16 +72,50 @@ use wgpu_selection::{
     NavigationAction, RubberBand, RubberBandMode, SelectionClick, ShellSelection,
 };
 
+fn startup_view_mode(
+    requested: ShellViewMode,
+    explicit: bool,
+    settings_path: &Path,
+) -> ShellViewMode {
+    if explicit {
+        return requested;
+    }
+    match load_app_settings(settings_path) {
+        Ok(settings) => settings.view.mode.unwrap_or(requested),
+        Err(error) => {
+            eprintln!(
+                "[fika-wgpu] settings-load-error path={} error={error}",
+                settings_path.display()
+            );
+            requested
+        }
+    }
+}
+
+fn save_view_mode_setting(settings_path: &Path, view_mode: ShellViewMode) -> Result<(), String> {
+    let mut settings = load_app_settings(settings_path)
+        .map_err(|error| format!("load settings {}: {error}", settings_path.display()))?;
+    settings.view.mode = Some(view_mode);
+    save_app_settings(settings_path, &settings)
+        .map_err(|error| format!("save settings {}: {error}", settings_path.display()))
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let Some(options) = parse_start_options()? else {
         return Ok(());
     };
-    let scene = ShellScene::load(options.path, options.view_mode)?;
+    let settings_path = default_app_settings_path();
+    let view_mode = startup_view_mode(
+        options.view_mode,
+        options.view_mode_explicit,
+        &settings_path,
+    );
+    let scene = ShellScene::load(options.path, view_mode)?;
 
     let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Wait);
 
-    let app = FikaWgpuApp::new(scene, options.auto_cycle_views);
+    let app = FikaWgpuApp::new(scene, options.auto_cycle_views, settings_path);
     event_loop.run_app(app)?;
     Ok(())
 }
@@ -261,6 +296,7 @@ fn window_title(scene: &ShellScene) -> String {
 struct FikaWgpuApp {
     scene: ShellScene,
     mime_applications: MimeApplicationCache,
+    settings_path: PathBuf,
     modifiers: Modifiers,
     // Drop order matters: renderer borrows display/window handles.
     renderer: Option<WgpuState>,
@@ -273,10 +309,11 @@ struct FikaWgpuApp {
 }
 
 impl FikaWgpuApp {
-    fn new(scene: ShellScene, auto_cycle_views: bool) -> Self {
+    fn new(scene: ShellScene, auto_cycle_views: bool, settings_path: PathBuf) -> Self {
         Self {
             scene,
             mime_applications: MimeApplicationCache::load(),
+            settings_path,
             modifiers: Modifiers::default(),
             renderer: None,
             clipboard: None,
@@ -300,6 +337,16 @@ impl FikaWgpuApp {
 
     fn update_window_cursor_for_scene(&mut self, size: PhysicalSize<u32>) {
         self.set_window_cursor(self.scene.cursor_icon(size));
+    }
+
+    fn set_user_view_mode(&mut self, view_mode: ShellViewMode, size: PhysicalSize<u32>) -> bool {
+        if !self.scene.set_view_mode(view_mode, size) {
+            return false;
+        }
+        if let Err(error) = save_view_mode_setting(&self.settings_path, view_mode) {
+            eprintln!("[fika-wgpu] settings-save-error {error}");
+        }
+        true
     }
 }
 
@@ -549,7 +596,7 @@ impl ApplicationHandler for FikaWgpuApp {
                     return;
                 }
                 if let Some(view_mode) = view_mode_for_key_event(&event, shortcut) {
-                    if self.scene.set_view_mode(view_mode, renderer.size) {
+                    if self.set_user_view_mode(view_mode, renderer.size) {
                         self.pending_redraw_frames = VIEW_SWITCH_REDRAW_FRAMES;
                         if let Some(window) = self.window.as_ref() {
                             window.set_title(&window_title(&self.scene));
@@ -848,7 +895,7 @@ impl ApplicationHandler for FikaWgpuApp {
                 if state == ElementState::Pressed
                     && let Some(view_mode) = self.scene.view_mode_at_screen_point(point, size)
                 {
-                    if self.scene.set_view_mode(view_mode, size) {
+                    if self.set_user_view_mode(view_mode, size) {
                         self.pending_redraw_frames = VIEW_SWITCH_REDRAW_FRAMES;
                         if let Some(window) = self.window.as_ref() {
                             window.set_title(&window_title(&self.scene));
@@ -16183,6 +16230,36 @@ mod tests {
         std::env::temp_dir().join(format!("fika-wgpu-{name}-{unique}"))
     }
 
+    #[test]
+    fn view_mode_setting_round_trips_and_startup_uses_storage() {
+        let root = test_dir("view-mode-settings");
+        let settings_path = root.join("storage/settings.tsv");
+        let settings = fika_core::AppSettings {
+            places_sidebar: fika_core::PlacesSidebarSettings {
+                width: Some(288.0),
+                visible: Some(true),
+            },
+            view: fika_core::ViewSettings::default(),
+        };
+        save_app_settings(&settings_path, &settings).unwrap();
+
+        save_view_mode_setting(&settings_path, ShellViewMode::Details).unwrap();
+        let loaded = load_app_settings(&settings_path).unwrap();
+        assert_eq!(loaded.places_sidebar.width, Some(288.0));
+        assert_eq!(loaded.places_sidebar.visible, Some(true));
+        assert_eq!(loaded.view.mode, Some(ShellViewMode::Details));
+        assert_eq!(
+            startup_view_mode(ShellViewMode::Icons, false, &settings_path),
+            ShellViewMode::Details
+        );
+        assert_eq!(
+            startup_view_mode(ShellViewMode::Compact, true, &settings_path),
+            ShellViewMode::Compact
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
     fn test_desktop_application(
         id: &str,
         name: &str,
@@ -18957,6 +19034,43 @@ text/plain=writer.desktop;\n",
         assert!(scene.rubber_band.is_none());
         assert_eq!(scene.selection_changes, 2);
         assert!(!scene.apply_selection_command(SelectionCommand::Clear));
+    }
+
+    #[test]
+    fn blank_pane_click_clears_multi_selection() {
+        let mut scene = test_scene(
+            vec![
+                test_entry("alpha.txt", false),
+                test_entry("bravo.txt", false),
+            ],
+            ShellViewMode::Icons,
+        );
+        let size = PhysicalSize::new(520, 360);
+        scene.panes[ShellPaneId::FIRST]
+            .selection
+            .select_indexes(&[0, 1]);
+        let content = scene
+            .pane_geometry(ShellPaneId::FIRST, size)
+            .unwrap()
+            .content;
+        let blank = ViewPoint {
+            x: content.right() - 2.0,
+            y: content.bottom() - 2.0,
+        };
+
+        assert!(scene.begin_pane_pointer(
+            SelectionClick {
+                point: blank,
+                extend: false,
+                toggle: false,
+            },
+            size,
+        ));
+        assert_eq!(scene.panes[ShellPaneId::FIRST].selection.len(), 0);
+        assert_eq!(scene.panes[ShellPaneId::FIRST].selection.anchor, None);
+        assert_eq!(scene.panes[ShellPaneId::FIRST].selection.focus, None);
+        let _ = scene.end_pane_pointer(blank, size);
+        assert!(scene.rubber_band.is_none());
     }
 
     #[test]
