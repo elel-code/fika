@@ -62,7 +62,11 @@ const ICON_CACHE_MAX_BYTES: usize = 32 * 1024 * 1024;
 const RUBBER_BAND_START_THRESHOLD: f32 = 4.0;
 const VIEW_SWITCH_REDRAW_FRAMES: u8 = 6;
 const PLACES_SIDEBAR_WIDTH: f32 = 228.0;
+const PLACES_SIDEBAR_MIN_WIDTH: f32 = 128.0;
+const PLACES_SIDEBAR_MAX_WIDTH_RATIO: f32 = 0.42;
+const PLACES_SIDEBAR_RIGHT_RESERVE: f32 = 120.0;
 const PLACES_SIDEBAR_SPLITTER_WIDTH: f32 = 1.0;
+const PLACES_RESIZE_HANDLE_WIDTH: f32 = 10.0;
 const PLACES_TO_PANE_GAP: f32 = 8.0;
 const PLACES_SIDEBAR_PANEL_MARGIN_X: f32 = 8.0;
 const PLACES_SIDEBAR_PANEL_MARGIN_BOTTOM: f32 = 8.0;
@@ -253,6 +257,7 @@ enum ContentScrollbarAxis {
 enum ScrollbarDragTarget {
     Content(ContentScrollbarAxis),
     Places,
+    PlacesResize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -930,6 +935,18 @@ impl ApplicationHandler for FikaWgpuApp {
                     if let Some(action) = action {
                         self.perform_context_menu_action(event_loop, action);
                     } else if let Some(window) = self.window.as_ref() {
+                        window.request_redraw();
+                    }
+                    return;
+                }
+                if state == ElementState::Pressed
+                    && let Some(changed) = self
+                        .scene
+                        .toggle_places_at_screen_point(point, renderer.size)
+                {
+                    if (changed || location_blur_changed)
+                        && let Some(window) = self.window.as_ref()
+                    {
                         window.request_redraw();
                     }
                     return;
@@ -3280,6 +3297,41 @@ enum TrashConflictDialogClick {
     Replace,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ShellPaneKind {
+    Primary,
+    Split,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ShellPaneGeometry {
+    kind: ShellPaneKind,
+    pane: ViewRect,
+    top_bar: ViewRect,
+    content: ViewRect,
+    status_bar: ViewRect,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum ShellDropTarget {
+    PaneItem {
+        pane: ShellPaneKind,
+        index: usize,
+        path: PathBuf,
+        is_dir: bool,
+    },
+    PaneBlank {
+        pane: ShellPaneKind,
+        path: PathBuf,
+    },
+    Place {
+        index: usize,
+        path: PathBuf,
+    },
+    PlacesBlank,
+}
+
 #[derive(Clone, Debug)]
 struct ShellPaneState {
     path: PathBuf,
@@ -3379,6 +3431,8 @@ struct ShellScene {
     zoom_step: i32,
     scroll_x: f32,
     scroll_y: f32,
+    places_visible: bool,
+    places_width: f32,
     places_scroll_y: f32,
     scrollbar_drag: Option<ScrollbarDrag>,
     pointer: Option<ViewPoint>,
@@ -3411,6 +3465,7 @@ struct ShellScene {
     paste_changes: u64,
     trash_changes: u64,
     places_changes: u64,
+    places_resize_changes: u64,
     places_scroll_changes: u64,
     keyboard_navigation: u64,
     rubber_band_updates: u64,
@@ -3468,6 +3523,8 @@ impl ShellScene {
             zoom_step: 0,
             scroll_x: 0.0,
             scroll_y: 0.0,
+            places_visible: true,
+            places_width: PLACES_SIDEBAR_WIDTH,
             places_scroll_y: 0.0,
             scrollbar_drag: None,
             pointer: None,
@@ -3500,6 +3557,7 @@ impl ShellScene {
             paste_changes: 0,
             trash_changes: 0,
             places_changes: 0,
+            places_resize_changes: 0,
             places_scroll_changes: 0,
             keyboard_navigation: 0,
             rubber_band_updates: 0,
@@ -4216,6 +4274,73 @@ impl ShellScene {
         None
     }
 
+    fn app_toolbar_rect(&self, size: PhysicalSize<u32>) -> ViewRect {
+        ViewRect {
+            x: 0.0,
+            y: self.app_toolbar_y(),
+            width: size.width.max(1) as f32,
+            height: self.app_toolbar_height(),
+        }
+    }
+
+    fn places_toggle_rect(&self, size: PhysicalSize<u32>) -> ViewRect {
+        let toolbar = self.app_toolbar_rect(size);
+        ViewRect {
+            x: self.scale_metric(8.0),
+            y: toolbar.y + self.scale_metric(8.0),
+            width: self.scale_metric(28.0),
+            height: self
+                .scale_metric(28.0)
+                .min((toolbar.height - self.scale_metric(8.0)).max(1.0)),
+        }
+    }
+
+    fn toggle_places_at_screen_point(
+        &mut self,
+        point: ViewPoint,
+        size: PhysicalSize<u32>,
+    ) -> Option<bool> {
+        self.places_toggle_rect(size)
+            .contains(point)
+            .then(|| self.toggle_places_visibility(size))
+    }
+
+    fn toggle_places_visibility(&mut self, size: PhysicalSize<u32>) -> bool {
+        self.places_visible = !self.places_visible;
+        self.places_changes += 1;
+        self.scrollbar_drag = None;
+        self.rubber_band = None;
+        self.hovered_place = None;
+        self.last_primary_click = None;
+        self.clamp_scroll(size);
+        eprintln!(
+            "[fika-wgpu] places visible={} width={:.1} changes={}",
+            self.places_visible as u8,
+            self.places_sidebar_width(size),
+            self.places_changes
+        );
+        true
+    }
+
+    fn places_resize_handle_rect(&self, size: PhysicalSize<u32>) -> Option<ViewRect> {
+        if !self.places_visible {
+            return None;
+        }
+        let sidebar = self.places_sidebar_rect(size);
+        if sidebar.width <= 0.0 || sidebar.height <= 0.0 {
+            return None;
+        }
+        let handle_width = self
+            .scale_metric(PLACES_RESIZE_HANDLE_WIDTH)
+            .max(self.scale_metric(PLACES_SIDEBAR_SPLITTER_WIDTH));
+        Some(ViewRect {
+            x: (sidebar.right() - handle_width / 2.0).max(sidebar.x),
+            y: sidebar.y,
+            width: handle_width,
+            height: sidebar.height,
+        })
+    }
+
     fn place_activation_for_primary_press(
         &mut self,
         point: ViewPoint,
@@ -4303,6 +4428,14 @@ impl ShellScene {
 
     fn places_panel_rect(&self, size: PhysicalSize<u32>) -> ViewRect {
         let sidebar = self.places_sidebar_rect(size);
+        if sidebar.width <= 0.0 || sidebar.height <= 0.0 {
+            return ViewRect {
+                x: sidebar.x,
+                y: sidebar.y,
+                width: 0.0,
+                height: 0.0,
+            };
+        }
         let margin_x = self
             .scale_metric(PLACES_SIDEBAR_PANEL_MARGIN_X)
             .min(sidebar.width / 3.0);
@@ -4423,6 +4556,46 @@ impl ShellScene {
         Some(ShellContextTarget::Blank {
             path: self.path.clone(),
         })
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn drop_target_at_screen_point(
+        &self,
+        point: ViewPoint,
+        size: PhysicalSize<u32>,
+    ) -> Option<ShellDropTarget> {
+        if let Some(index) = self.place_index_at_screen_point(point, size) {
+            let place = self.places.get(index)?;
+            return Some(ShellDropTarget::Place {
+                index,
+                path: place.path.clone(),
+            });
+        }
+        if self.places_visible && self.places_sidebar_rect(size).contains(point) {
+            return Some(ShellDropTarget::PlacesBlank);
+        }
+
+        for geometry in self.pane_geometries(size) {
+            if !geometry.content.contains(point) {
+                continue;
+            }
+            let pane = self.pane_view(geometry.kind)?;
+            if let Some(index) = self.pane_hit_test_screen_point(pane, geometry, point) {
+                let entry = pane.entries.get(index)?;
+                return Some(ShellDropTarget::PaneItem {
+                    pane: geometry.kind,
+                    index,
+                    path: self.entry_path_for_pane_view(pane, index)?,
+                    is_dir: entry.is_dir,
+                });
+            }
+            return Some(ShellDropTarget::PaneBlank {
+                pane: geometry.kind,
+                path: pane.path.to_path_buf(),
+            });
+        }
+
+        None
     }
 
     fn open_context_target(&mut self, point: ViewPoint, size: PhysicalSize<u32>) -> bool {
@@ -5883,12 +6056,16 @@ impl ShellScene {
     }
 
     fn entry_path_for_index(&self, index: usize) -> Option<PathBuf> {
-        let entry = self.entries.get(index)?;
+        self.entry_path_for_pane_view(self.primary_pane_view(), index)
+    }
+
+    fn entry_path_for_pane_view(&self, pane: ShellPaneView<'_>, index: usize) -> Option<PathBuf> {
+        let entry = pane.entries.get(index)?;
         Some(
             entry
                 .target_path
                 .clone()
-                .unwrap_or_else(|| self.path.join(entry.name.as_ref())),
+                .unwrap_or_else(|| pane.path.join(entry.name.as_ref())),
         )
     }
 
@@ -5929,6 +6106,77 @@ impl ShellScene {
             scroll_x: self.scroll_x,
             scroll_y: self.scroll_y,
         }
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn pane_view(&self, kind: ShellPaneKind) -> Option<ShellPaneView<'_>> {
+        match kind {
+            ShellPaneKind::Primary => Some(self.primary_pane_view()),
+            ShellPaneKind::Split => self.split_pane.as_ref().map(ShellPaneView::from_state),
+        }
+    }
+
+    fn primary_pane_geometry(&self, size: PhysicalSize<u32>) -> ShellPaneGeometry {
+        let pane = self.pane_rect(size);
+        ShellPaneGeometry {
+            kind: ShellPaneKind::Primary,
+            pane,
+            top_bar: ViewRect {
+                x: pane.x,
+                y: pane.y,
+                width: pane.width,
+                height: self.top_bar_height(),
+            },
+            content: self.content_screen_rect(size),
+            status_bar: self.status_bar_rect(size),
+        }
+    }
+
+    fn split_pane_geometry(&self, size: PhysicalSize<u32>) -> Option<ShellPaneGeometry> {
+        let split_pane = self.split_pane.as_ref()?;
+        let metrics = self.split_pane_metrics(size)?;
+        let pane = metrics.right_pane;
+        let status_height = self.status_bar_height().min(pane.height);
+        let status_bar = ViewRect {
+            x: pane.x,
+            y: pane.bottom() - status_height,
+            width: pane.width,
+            height: status_height,
+        };
+        let content_y = pane.y
+            + self.top_bar_height()
+            + if split_pane.view_mode == ShellViewMode::Details {
+                self.details_header_height()
+            } else {
+                0.0
+            };
+        Some(ShellPaneGeometry {
+            kind: ShellPaneKind::Split,
+            pane,
+            top_bar: ViewRect {
+                x: pane.x,
+                y: pane.y,
+                width: pane.width,
+                height: self.top_bar_height(),
+            },
+            content: ViewRect {
+                x: pane.x,
+                y: content_y,
+                width: pane.width,
+                height: (status_bar.y - content_y).max(1.0),
+            },
+            status_bar,
+        })
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn pane_geometries(&self, size: PhysicalSize<u32>) -> Vec<ShellPaneGeometry> {
+        let mut geometries = Vec::with_capacity(2);
+        geometries.push(self.primary_pane_geometry(size));
+        if let Some(geometry) = self.split_pane_geometry(size) {
+            geometries.push(geometry);
+        }
+        geometries
     }
 
     fn layout(&self, size: PhysicalSize<u32>) -> ShellLayout {
@@ -6328,42 +6576,16 @@ impl ShellScene {
         let Some(metrics) = self.split_pane_metrics(size) else {
             return;
         };
-        let pane = metrics.right_pane;
-        let top_bar_height = self.top_bar_height();
-        let status_height = self.status_bar_height().min(pane.height);
-        let status_bar = ViewRect {
-            x: pane.x,
-            y: pane.bottom() - status_height,
-            width: pane.width,
-            height: status_height,
+        let Some(geometry) = self.split_pane_geometry(size) else {
+            return;
         };
-        let content_y = pane.y
-            + top_bar_height
-            + if split_pane.view_mode == ShellViewMode::Details {
-                self.details_header_height()
-            } else {
-                0.0
-            };
-        let content_clip = ViewRect {
-            x: pane.x,
-            y: content_y,
-            width: pane.width,
-            height: (status_bar.y - content_y).max(1.0),
-        };
+        let pane = geometry.pane;
+        let status_bar = geometry.status_bar;
+        let content_clip = geometry.content;
 
         push_rect(vertices, metrics.divider, [0.784, 0.808, 0.839, 1.0], size);
         push_rect(vertices, pane, [1.000, 1.000, 1.000, 1.0], size);
-        push_rect(
-            vertices,
-            ViewRect {
-                x: pane.x,
-                y: pane.y,
-                width: pane.width,
-                height: top_bar_height,
-            },
-            chrome_color(),
-            size,
-        );
+        push_rect(vertices, geometry.top_bar, chrome_color(), size);
         let margin = self.scale_metric(8.0);
         let path_rect = ViewRect {
             x: pane.x + margin,
@@ -6376,12 +6598,7 @@ impl ShellScene {
             text,
             size,
             path_rect,
-            ViewRect {
-                x: pane.x,
-                y: pane.y,
-                width: pane.width,
-                height: top_bar_height,
-            },
+            geometry.top_bar,
             &split_view.path.display().to_string(),
             false,
             None,
@@ -6390,9 +6607,9 @@ impl ShellScene {
             vertices,
             ViewRect {
                 x: pane.x,
-                y: pane.y + top_bar_height,
+                y: geometry.top_bar.bottom(),
                 width: pane.width,
-                height: (status_bar.y - pane.y - top_bar_height).max(1.0),
+                height: (status_bar.y - geometry.top_bar.bottom()).max(1.0),
             },
             view_mode_content_color(split_pane.view_mode),
             size,
@@ -6594,12 +6811,7 @@ impl ShellScene {
     }
 
     fn push_app_toolbar(&self, vertices: &mut Vec<QuadVertex>, size: PhysicalSize<u32>) {
-        let toolbar = ViewRect {
-            x: 0.0,
-            y: self.app_toolbar_y(),
-            width: size.width.max(1) as f32,
-            height: self.app_toolbar_height(),
-        };
+        let toolbar = self.app_toolbar_rect(size);
         push_rect(
             vertices,
             toolbar,
@@ -6607,20 +6819,28 @@ impl ShellScene {
             size,
         );
 
-        let button = ViewRect {
-            x: self.scale_metric(8.0),
-            y: toolbar.y + self.scale_metric(8.0),
-            width: self.scale_metric(28.0),
-            height: self
-                .scale_metric(28.0)
-                .min((toolbar.height - self.scale_metric(8.0)).max(1.0)),
+        let button = self.places_toggle_rect(size);
+        let border_color = if self.places_visible {
+            [0.184, 0.435, 0.929, 1.0]
+        } else {
+            [0.694, 0.729, 0.776, 1.0]
+        };
+        let fill_color = if self.places_visible {
+            [0.918, 0.945, 1.000, 1.0]
+        } else {
+            [0.984, 0.986, 0.990, 1.0]
+        };
+        let icon_color = if self.places_visible {
+            [0.122, 0.310, 0.749, 1.0]
+        } else {
+            [0.420, 0.466, 0.545, 1.0]
         };
         push_clipped_rounded_rect(
             vertices,
             button,
             toolbar,
             self.scale_metric(6.0),
-            [0.184, 0.435, 0.929, 1.0],
+            border_color,
             size,
         );
         if let Some(inner) = inset_rect(button, self.scale_metric(1.0)) {
@@ -6629,7 +6849,7 @@ impl ShellScene {
                 inner,
                 toolbar,
                 self.scale_metric(5.0),
-                [0.918, 0.945, 1.000, 1.0],
+                fill_color,
                 size,
             );
         }
@@ -6650,7 +6870,7 @@ impl ShellScene {
                 height: icon.height - self.scale_metric(4.0),
             },
             toolbar,
-            [0.122, 0.310, 0.749, 1.0],
+            icon_color,
             size,
         );
         push_clipped_rect_outline(
@@ -6663,7 +6883,7 @@ impl ShellScene {
             },
             toolbar,
             self.scale_metric(1.0),
-            [0.122, 0.310, 0.749, 1.0],
+            icon_color,
             size,
         );
     }
@@ -8132,11 +8352,49 @@ impl ShellScene {
     }
 
     fn places_sidebar_width(&self, size: PhysicalSize<u32>) -> f32 {
+        if !self.places_visible {
+            return 0.0;
+        }
+        let (min_width, max_width) = self.places_sidebar_width_bounds(size);
+        if max_width <= f32::EPSILON {
+            return 0.0;
+        }
+        self.scale_metric(self.places_width)
+            .clamp(min_width, max_width)
+    }
+
+    fn places_sidebar_width_bounds(&self, size: PhysicalSize<u32>) -> (f32, f32) {
         let width = size.width.max(1) as f32;
-        let responsive_width = (width * 0.42).max(self.scale_metric(128.0));
-        self.scale_metric(PLACES_SIDEBAR_WIDTH)
-            .min(responsive_width)
-            .min((width - self.scale_metric(120.0)).max(0.0))
+        let reserve = self.scale_metric(PLACES_SIDEBAR_RIGHT_RESERVE);
+        let max_for_window = (width - reserve).max(0.0);
+        let min_width = self
+            .scale_metric(PLACES_SIDEBAR_MIN_WIDTH)
+            .min(max_for_window);
+        let responsive_width = (width * PLACES_SIDEBAR_MAX_WIDTH_RATIO).max(min_width);
+        let max_width = responsive_width.min(max_for_window).max(0.0);
+        (min_width.min(max_width), max_width)
+    }
+
+    fn set_places_sidebar_width_px(&mut self, desired_width: f32, size: PhysicalSize<u32>) -> bool {
+        if !self.places_visible {
+            return false;
+        }
+        let (min_width, max_width) = self.places_sidebar_width_bounds(size);
+        if max_width <= f32::EPSILON {
+            return false;
+        }
+        let next_width = desired_width.clamp(min_width, max_width);
+        let old_width = self.places_sidebar_width(size);
+        if (old_width - next_width).abs() <= 0.5 {
+            return false;
+        }
+        self.places_width = next_width / self.ui_scale().max(f32::EPSILON);
+        self.places_resize_changes += 1;
+        eprintln!(
+            "[fika-wgpu] places-resize width={:.1} min={:.1} max={:.1} changes={}",
+            next_width, min_width, max_width, self.places_resize_changes
+        );
+        true
     }
 
     fn split_pane_metrics(&self, size: PhysicalSize<u32>) -> Option<ShellPaneSplitMetrics> {
@@ -8339,6 +8597,18 @@ impl ShellScene {
     }
 
     fn begin_scrollbar_drag(&mut self, point: ViewPoint, size: PhysicalSize<u32>) -> Option<bool> {
+        if let Some(handle) = self.places_resize_handle_rect(size)
+            && handle.contains(point)
+        {
+            let sidebar = self.places_sidebar_rect(size);
+            self.scrollbar_drag = Some(ScrollbarDrag {
+                target: ScrollbarDragTarget::PlacesResize,
+                grab_offset: point.x - sidebar.right(),
+            });
+            self.pointer = Some(point);
+            return Some(self.update_scrollbar_drag(point, size));
+        }
+
         if let Some((track, thumb)) = self.places_scrollbar_rects(size)
             && track.contains(point)
         {
@@ -8393,8 +8663,13 @@ impl ShellScene {
         let old_x = self.scroll_x;
         let old_y = self.scroll_y;
         let old_places_y = self.places_scroll_y;
+        let old_places_width = self.places_sidebar_width(size);
 
         match drag.target {
+            ScrollbarDragTarget::PlacesResize => {
+                let desired_width = point.x - drag.grab_offset;
+                self.set_places_sidebar_width_px(desired_width, size);
+            }
             ScrollbarDragTarget::Places => {
                 if let Some((track, thumb)) = self.places_scrollbar_rects(size) {
                     self.places_scroll_y = scrollbar_scroll_from_pointer(
@@ -8439,11 +8714,13 @@ impl ShellScene {
         let content_changed = (self.scroll_x - old_x).abs() > f32::EPSILON
             || (self.scroll_y - old_y).abs() > f32::EPSILON;
         let places_changed = (self.places_scroll_y - old_places_y).abs() > f32::EPSILON;
+        let places_resized =
+            (self.places_sidebar_width(size) - old_places_width).abs() > f32::EPSILON;
         if places_changed {
             self.places_scroll_changes += 1;
         }
         let hover_changed = self.refresh_hover(size);
-        content_changed || places_changed || hover_changed
+        content_changed || places_changed || places_resized || hover_changed
     }
 
     fn end_scrollbar_drag(&mut self, point: ViewPoint, size: PhysicalSize<u32>) -> bool {
@@ -8660,17 +8937,36 @@ impl ShellScene {
     }
 
     fn hit_test_screen_point(&self, point: ViewPoint, size: PhysicalSize<u32>) -> Option<usize> {
-        if !self.content_screen_rect(size).contains(point) {
+        self.pane_hit_test_screen_point(
+            self.primary_pane_view(),
+            self.primary_pane_geometry(size),
+            point,
+        )
+    }
+
+    fn pane_hit_test_screen_point(
+        &self,
+        pane: ShellPaneView<'_>,
+        geometry: ShellPaneGeometry,
+        point: ViewPoint,
+    ) -> Option<usize> {
+        if !geometry.content.contains(point) {
             return None;
         }
-        let content_point =
-            screen_to_content_point(point, self.scroll_offset(), self.content_screen_rect(size))?;
-        let layout = self.layout(size);
+        let content_point = screen_to_content_point(
+            point,
+            ViewPoint {
+                x: pane.scroll_x,
+                y: pane.scroll_y,
+            },
+            geometry.content,
+        )?;
+        let layout = self.pane_layout(pane, geometry.content.width, geometry.content.height);
         let layout_index = layout.hit_test_content_point(content_point)?;
         let item = layout.item(layout_index)?;
         item.visual_rect
             .contains(content_point)
-            .then(|| self.model_index_for_layout_index(layout_index))
+            .then(|| pane.filtered_indexes.get(layout_index).copied())
             .flatten()
     }
 
@@ -9271,7 +9567,7 @@ impl WgpuState {
             || self.last_log.elapsed() >= Duration::from_secs(1)
         {
             eprintln!(
-                "[fika-wgpu] frame={} reason={} view={} scale={:.2} zoom={} zoom_changes={} path={} entries={} filtered={} show_hidden={} hidden_changes={} location_active={} location_changes={} filter_active={} filter_changes={} places={} place_hover={} places_changes={} places_scroll_y={:.1} places_scroll_changes={} split_pane={} split_changes={} split_path={} content_scrollbar={} visible={} selected={} hover={} context={} context_menu={} context_changes={} context_actions={} properties={} properties_changes={} create_dialog={} create_changes={} rename_dialog={} rename_changes={} open_with={} open_with_changes={} open_changes={} copy_location_changes={} file_clipboard_changes={} paste_changes={} trash_changes={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} path_changes={} reloads={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_cache={}/{} entries={} bytes={} batches={} scroll_x={:.1} scroll_y={:.1} layout={}us text_raster={}us text_atlas={}x{}:{}b render={}us",
+                "[fika-wgpu] frame={} reason={} view={} scale={:.2} zoom={} zoom_changes={} path={} entries={} filtered={} show_hidden={} hidden_changes={} location_active={} location_changes={} filter_active={} filter_changes={} places={} places_visible={} places_width={:.1} place_hover={} places_changes={} places_resize_changes={} places_scroll_y={:.1} places_scroll_changes={} split_pane={} split_changes={} split_path={} content_scrollbar={} visible={} selected={} hover={} context={} context_menu={} context_changes={} context_actions={} properties={} properties_changes={} create_dialog={} create_changes={} rename_dialog={} rename_changes={} open_with={} open_with_changes={} open_changes={} copy_location_changes={} file_clipboard_changes={} paste_changes={} trash_changes={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} path_changes={} reloads={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_cache={}/{} entries={} bytes={} batches={} scroll_x={:.1} scroll_y={:.1} layout={}us text_raster={}us text_atlas={}x{}:{}b render={}us",
                 self.frame_count,
                 reason,
                 scene.view_mode.as_str(),
@@ -9288,8 +9584,11 @@ impl WgpuState {
                 scene.filter_active as u8,
                 scene.filter_changes,
                 scene.places.len(),
+                scene.places_visible as u8,
+                scene.places_sidebar_width(self.size),
                 scene.hovered_place.map(|index| index as i64).unwrap_or(-1),
                 scene.places_changes,
+                scene.places_resize_changes,
                 scene.places_scroll_y,
                 scene.places_scroll_changes,
                 scene.split_pane.is_some() as u8,
@@ -13320,6 +13619,8 @@ mod tests {
             zoom_step: 0,
             scroll_x: 0.0,
             scroll_y: 0.0,
+            places_visible: true,
+            places_width: PLACES_SIDEBAR_WIDTH,
             places_scroll_y: 0.0,
             scrollbar_drag: None,
             pointer: None,
@@ -13352,6 +13653,7 @@ mod tests {
             paste_changes: 0,
             trash_changes: 0,
             places_changes: 0,
+            places_resize_changes: 0,
             places_scroll_changes: 0,
             keyboard_navigation: 0,
             rubber_band_updates: 0,
@@ -13424,6 +13726,226 @@ mod tests {
             x: sidebar.x + 8.0,
             y: scene.app_toolbar_height() / 2.0,
         }));
+    }
+
+    #[test]
+    fn places_toggle_hides_sidebar_and_reclaims_pane_width() {
+        let mut scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
+        let size = PhysicalSize::new(700, 320);
+        let before_origin = scene.content_origin_x(size);
+        let before_width = scene.pane_width(size);
+        let place_row = scene.place_row_rects(size)[0].1;
+        let place_point = ViewPoint {
+            x: place_row.x + 4.0,
+            y: place_row.y + 4.0,
+        };
+        let toggle = scene.places_toggle_rect(size);
+
+        assert_eq!(
+            scene.toggle_places_at_screen_point(
+                ViewPoint {
+                    x: toggle.x + 2.0,
+                    y: toggle.y + 2.0,
+                },
+                size,
+            ),
+            Some(true)
+        );
+        assert!(!scene.places_visible);
+        assert_eq!(scene.places_sidebar_width(size), 0.0);
+        assert_eq!(scene.content_origin_x(size), 0.0);
+        assert!(scene.pane_width(size) > before_width);
+        assert_eq!(scene.place_index_at_screen_point(place_point, size), None);
+        assert_eq!(scene.places_changes, 1);
+
+        assert_eq!(
+            scene.toggle_places_at_screen_point(
+                ViewPoint {
+                    x: toggle.x + 2.0,
+                    y: toggle.y + 2.0,
+                },
+                size,
+            ),
+            Some(true)
+        );
+        assert!(scene.places_visible);
+        assert_eq!(scene.content_origin_x(size), before_origin);
+        assert!(scene.places_sidebar_width(size) > 0.0);
+    }
+
+    #[test]
+    fn places_resize_drag_updates_sidebar_width_and_content_origin() {
+        let mut scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
+        let size = PhysicalSize::new(700, 320);
+        let before_width = scene.places_sidebar_width(size);
+        let before_origin = scene.content_origin_x(size);
+        let handle = scene.places_resize_handle_rect(size).unwrap();
+        let start = ViewPoint {
+            x: handle.x + handle.width / 2.0,
+            y: handle.y + 12.0,
+        };
+
+        assert!(scene.begin_scrollbar_drag(start, size).is_some());
+        assert!(scene.is_scrollbar_dragging());
+        assert!(scene.set_pointer(
+            ViewPoint {
+                x: start.x + 48.0,
+                y: start.y,
+            },
+            size
+        ));
+        assert!(scene.places_sidebar_width(size) > before_width);
+        assert!(scene.content_origin_x(size) > before_origin);
+        assert_eq!(scene.places_resize_changes, 1);
+
+        assert!(scene.set_pointer(ViewPoint { x: 0.0, y: start.y }, size));
+        assert_eq!(
+            scene.places_sidebar_width(size),
+            scene.places_sidebar_width_bounds(size).0
+        );
+        assert!(scene.places_resize_changes >= 2);
+        let _ = scene.end_scrollbar_drag(ViewPoint { x: 0.0, y: start.y }, size);
+        assert!(!scene.is_scrollbar_dragging());
+    }
+
+    #[test]
+    fn hidden_places_do_not_capture_scroll() {
+        let entries = (0..80)
+            .map(|index| test_entry(&format!("entry-{index:02}.txt"), false))
+            .collect::<Vec<_>>();
+        let mut scene = test_scene(entries, ShellViewMode::Icons);
+        scene.places = (0..28)
+            .map(|index| {
+                ShellPlace::new(
+                    "",
+                    "B",
+                    format!("Place {index:02}"),
+                    PathBuf::from(format!("/tmp/place-{index:02}")),
+                    true,
+                )
+            })
+            .collect();
+        let size = PhysicalSize::new(700, 220);
+        assert!(scene.max_places_scroll_y(size) > 0.0);
+        assert_eq!(
+            scene.toggle_places_at_screen_point(
+                ViewPoint {
+                    x: scene.places_toggle_rect(size).x + 2.0,
+                    y: scene.places_toggle_rect(size).y + 2.0,
+                },
+                size,
+            ),
+            Some(true)
+        );
+
+        scene.pointer = Some(ViewPoint {
+            x: PLACES_SIDEBAR_PADDING_X + 2.0,
+            y: scene.content_origin_y() + 10.0,
+        });
+        assert!(scene.scroll_by(90.0, size));
+        assert_eq!(scene.places_scroll_y, 0.0);
+        assert!(scene.scroll_y > 0.0);
+    }
+
+    #[test]
+    fn drop_target_lookup_resolves_places_primary_blank_and_split_items() {
+        let mut scene = test_scene(
+            vec![test_entry("alpha", true), test_entry("note.txt", false)],
+            ShellViewMode::Icons,
+        );
+        let split_entries = vec![test_entry("right", true)];
+        scene.split_pane = Some(ShellPaneState {
+            path: PathBuf::from("/right-root"),
+            view_mode: ShellViewMode::Icons,
+            dir_count: 1,
+            filtered_indexes: filtered_indexes_for_entries(&split_entries, false, ""),
+            entries: split_entries,
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+        });
+        let size = PhysicalSize::new(900, 360);
+
+        let place_row = scene.place_row_rects(size)[0].1;
+        assert_eq!(
+            scene.drop_target_at_screen_point(
+                ViewPoint {
+                    x: place_row.x + 4.0,
+                    y: place_row.y + 4.0,
+                },
+                size,
+            ),
+            Some(ShellDropTarget::Place {
+                index: 0,
+                path: PathBuf::from("/tmp"),
+            })
+        );
+
+        let places_panel = scene.places_panel_rect(size);
+        assert_eq!(
+            scene.drop_target_at_screen_point(
+                ViewPoint {
+                    x: places_panel.x + 4.0,
+                    y: places_panel.y + 4.0,
+                },
+                size,
+            ),
+            Some(ShellDropTarget::PlacesBlank)
+        );
+
+        let primary_geometry = scene.primary_pane_geometry(size);
+        let primary_item = scene.layout(size).item(0).unwrap();
+        assert_eq!(
+            scene.drop_target_at_screen_point(
+                ViewPoint {
+                    x: primary_geometry.content.x + primary_item.visual_rect.x + 4.0,
+                    y: primary_geometry.content.y + primary_item.visual_rect.y + 4.0,
+                },
+                size,
+            ),
+            Some(ShellDropTarget::PaneItem {
+                pane: ShellPaneKind::Primary,
+                index: 0,
+                path: PathBuf::from("/tmp/alpha"),
+                is_dir: true,
+            })
+        );
+        assert_eq!(
+            scene.drop_target_at_screen_point(
+                ViewPoint {
+                    x: primary_geometry.content.right() - 2.0,
+                    y: primary_geometry.content.bottom() - 2.0,
+                },
+                size,
+            ),
+            Some(ShellDropTarget::PaneBlank {
+                pane: ShellPaneKind::Primary,
+                path: PathBuf::from("/tmp"),
+            })
+        );
+
+        let split_geometry = scene.split_pane_geometry(size).unwrap();
+        let split_view = scene.pane_view(ShellPaneKind::Split).unwrap();
+        let split_layout = scene.pane_layout(
+            split_view,
+            split_geometry.content.width,
+            split_geometry.content.height,
+        );
+        let split_item = split_layout.item(0).unwrap();
+        assert_eq!(
+            scene.drop_target_at_screen_point(
+                ViewPoint {
+                    x: split_geometry.content.x + split_item.visual_rect.x + 4.0,
+                    y: split_geometry.content.y + split_item.visual_rect.y + 4.0,
+                },
+                size,
+            ),
+            Some(ShellDropTarget::PaneItem {
+                pane: ShellPaneKind::Split,
+                index: 0,
+                path: PathBuf::from("/right-root/right"),
+                is_dir: true,
+            })
+        );
     }
 
     #[test]

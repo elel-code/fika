@@ -201,14 +201,17 @@ Current checkpoint:
   leaves a visible splitter/gap before the file pane instead of sitting flush
   against it, paints rounded active/hovered row backgrounds, and dispatches
   left-click place navigation through the same `load_path`/history path as
-  file-view navigation. Places
+  file-view navigation. The toolbar Places button now hides/restores the
+  sidebar for real, the file pane reclaims the width when hidden, and the
+  Places splitter is a retained resize handle with clamped logical width and
+  frame-log telemetry. Places
   right-click now creates a shell-owned place context target and a minimal
   context menu that dispatches Open, Copy Location, Properties, and Remove for
   editable user places. Remove writes Fika's `places.xbel`, prunes matching
   place-order entries, reloads the sidebar projection, and clears stale place
   context state. Dynamic devices, richer Places actions such as sidebar
-  add/edit/hide and Trash actions, DnD/drop targets, and resizing remain Phase
-  4 work.
+  add/edit and Trash actions, and real Wayland DnD hover/drop/export remain
+  Phase 4 work.
 - Blank-space left-drag now runs rubber-band selection through the same
   retained Icons geometry. Plain drag replaces the selection, Shift extends it,
   Ctrl/Meta toggles it against the press-time base selection, and the band is
@@ -280,8 +283,8 @@ Current checkpoint:
   counters. The timeout exits are expected for the automated smokes.
 
 Still pending in Phase 0: glyph-level cache/atlas retention, manual
-open/close/interaction smoke evidence, DnD targeting, and the final choice of
-initial Compact vs Icons default.
+open/close/interaction smoke evidence, real Wayland DnD hover/drop/export
+wiring, and the final choice of initial Compact vs Icons default.
 
 Acceptance:
 
@@ -293,7 +296,8 @@ Acceptance:
   fallback icons for misses, and real file-name text via texture atlases.
 - [~] Routes basic pointer hover, mouse selection, keyboard navigation,
   select-all/clear shortcuts, right-click context target selection, and
-  rubber-band selection through retained geometry. DnD targeting remains
+  rubber-band selection through retained geometry. Basic DnD target lookup now
+  resolves pane/place targets; real Wayland DnD hover/drop/export remains
   pending.
 - [~] Emits frame timing, visible range, draw-command counters, temporary
   icon/text atlas counters, retained hit-test counters, and bounded
@@ -343,7 +347,10 @@ Acceptance:
   shell-owned context menu overlay are in the file view. Places row hover,
   left-click navigation, right-click context targets, and the minimal
   Open/Copy Location/Properties/Remove place menu are shell-owned. Device/place
-  edit/hide/add action dispatch and DnD target lookup remain pending.
+  edit/hide/add action dispatch remains pending. The first `ShellDropTarget`
+  lookup now resolves primary/split pane items, pane blanks, place rows, and
+  Places blanks through shared `ShellPaneView`/pane geometry; real Wayland DnD
+  hover/drop/export wiring remains pending.
 - Pane item to pane directory, pane item to Places, Places to pane, external
   path drop, and URI-list clipboard paths are covered by automated or isolated
   smoke runs.
@@ -398,15 +405,20 @@ character estimates, and clicking blank space outside the path bar cancels the
 location draft without committing an invalid path. The Places panel now keeps
 visible breathing room before the pane, and
 the pane chrome drops the earlier hard blue/gray outer border in favor of subtle
-separators that blend into the shell background. Empty Trash no longer paints
-the blue status dot. The split pane is intentionally a minimal visible skeleton:
-focus, pointer routing,
-scrollbars, DnD, and file operations still target the primary pane. The next
-multi-pane work has started by projecting both the primary and right-hand pane
-through `ShellPaneView` and a shared `pane_layout(...)` for Icons, Compact, and
-Details. The next step must continue that extraction through pane paint,
-hit-test, and event routing instead of adding more split-only paths. Richer Places
-actions/devices/DnD, richer Trash conflict handling, undo, richer properties, full inline
+separators that blend into the shell background. The Places toolbar toggle now
+really hides/restores the sidebar, hidden Places releases pane width, and the
+Places splitter can be dragged to a clamped retained width. Empty Trash no
+longer paints the blue status dot. The split pane is intentionally a minimal
+visible skeleton: focus, pointer routing, scrollbars, real DnD, and file
+operations still target the primary pane. Multi-pane work now projects both the
+primary and right-hand pane through `ShellPaneView`, shares `pane_layout(...)`
+for Icons, Compact, and Details, shares pane geometry/item hit-testing, and has
+started using `ShellPaneGeometry` in split-pane paint. The next step must
+continue that extraction through pane paint and event routing instead of adding
+more split-only paths. The first DnD preparation layer is in place through
+`ShellDropTarget` lookup for primary/split pane items, pane blanks, place rows,
+and Places blanks; real Wayland DnD hover/drop/export wiring remains pending.
+Richer Places actions/devices/DnD, richer Trash conflict handling, undo, richer properties, full inline
 rename, full Create New submenus/templates, and Open With default-app selection
 remain pending.
 
