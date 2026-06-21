@@ -129,10 +129,10 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
   Home/End 和 Page Up/Down，Shift 扩展 range，focus item 会滚入视口，`Ctrl/Meta+A`
   全选当前目录 entries，`Esc` 清空 selection 并取消任何 transient rubber-band；目录激活已走
   shell-owned input path，Enter 打开当前 focus/selected 目录，双击通过 retained
-  hit testing 打开目录，Backspace 或 Alt+Up 加载父目录；Top bar 已有 Back/Forward/Up
-  控制，Alt+Left/Alt+Right 走同一有界 history stack，Top-bar Reload 以及 `F5` /
-  `Ctrl/Meta+R` 可刷新当前目录且不写 history，并在 entry 仍存在时按名称保留
-  selection/focus；普通新导航只在读取成功后写入 back stack 并清空 forward history，并在加载新 path 时重置 scroll/selection/rubber-band
+  hit testing 打开目录，Backspace 或 Alt+Up 加载父目录；Alt+Left/Alt+Right
+  走同一有界 history stack，`F5` / `Ctrl/Meta+R` 可刷新当前目录且不写 history，并在 entry 仍存在时按名称保留
+  selection/focus，history/reload 的 app-level mouse controls 仍待 toolbar 迁移；
+  普通新导航只在读取成功后写入 back stack 并清空 forward history，并在加载新 path 时重置 scroll/selection/rubber-band
   transient state、刷新 hover、更新窗口标题且立即 present；初版 projection zoom 已由
   shell-owned retained geometry 驱动，`Ctrl/Meta + +`、`Ctrl/Meta + -` 和 `Ctrl/Meta + 0`
   调整/重置有界 zoom step，Icons/Compact 更新 item/icon/text slot metrics，Details 更新
@@ -143,8 +143,8 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
   字符输入更新 retained plain-text name filter，Backspace 编辑，Enter 保留 pattern/filter 结果但停止继续吃文本，
   Esc 清空并关闭，layout/hit-test/hover/selection/select-all/keyboard navigation 均通过
   filtered model-index projection 路由；dotfile visibility 已进入 shell-owned retained
-  projection，默认隐藏 hidden entries，`Ctrl/Meta+H` 或 top-bar `Hidden` toggle 可显示，
-  selection 会随可见性切换保留或裁剪；最小 shell-owned pane-local location edit mode 已可用，
+  projection，默认隐藏 hidden entries，`Ctrl/Meta+H` 可显示，selection 会随可见性切换保留或裁剪，
+  app-level Hidden toggle 仍待 toolbar 迁移；最小 shell-owned pane-local location edit mode 已可用，
   `Ctrl/Meta+L`、`Ctrl/Meta+D`、`F6` 或点击 top path bar 激活，首次输入替换当前 path
   draft，Backspace 编辑，Tab 复用 core `complete_location_input()` 补全，Enter 复用
   core `resolve_location_input()` 并通过 retained navigation/history path 提交，Esc 取消；
@@ -162,13 +162,12 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
   日志已输出
   `--view icons|compact|details`，默认仍是 Icons baseline，Compact 使用 core
   `CompactLayout`，Details 已有 shell-owned row projection、固定 header 和
-  Name/Size/Modified 三列；运行时可用 top-bar `Icons / Compact / Details` 按钮、
-  `1/2/3`、`Ctrl/Meta+1/2/3` 或 fallback `F1/F2/F3` 切换三种模式，
+  Name/Size/Modified 三列；运行时可用 `1/2/3`、`Ctrl/Meta+1/2/3` 或 fallback `F1/F2/F3` 切换三种模式，
+  临时 top-bar mode buttons 已移除以贴近原版 app toolbar，真实 toolbar controls 仍待迁移，
   `--auto-cycle-views` 可每秒自动切换一次以调试 compositor/render。切换会 clamp
   active scroll axis、清理 transient rubber-band state、刷新 hover、更新窗口标题，
   立即输出 `[fika-wgpu] view-mode=...` 日志，并保持短 redraw burst 直到切换后的
-  scene 被 present；top bar active segment 和全宽 mode color stripe 便于直接确认当前
-  projection。
+  scene 被 present。
   日志已输出 view mode、path、entry count、visible count、
   selected/hover/places/context/context-menu/properties/rubber-band state、
   hit-test/selection/context/context-menu-action/properties/keyboard/rubber-band/view-switch/path-change/open/copy-location/file-clipboard/paste/places/zoom counters、quad/icon/text/batch count、
@@ -188,7 +187,7 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
   和更完整 Details column/metadata parity 仍待完成。
 - [ ] Phase 2：把 Phase 0 初版 icon atlas 提升为预算化 semantic icon work，并实现 thumbnail texture retention、text shaping cache、glyph atlas policy 和 eviction telemetry。Cold glyph/icon work 必须 visible-first 且预算化。
 - [~] Phase 3：把剩余 pointer routing、context target selection、directory hover、Places hover 和 drag/drop target lookup 移到 shell-owned hit testing。当前 file view pane item/blank 右键 context target selection、菜单 row hit testing、Places row hover/left navigation/right-click target/sidebar scrolling 和最小 place menu（含 editable user place Remove）已由 wgpu shell-owned；directory hover、device/place edit/hide/add action dispatch 和 DnD target lookup 仍待迁移。
-- [~] Phase 4：实现 Places、toolbar、location bar、filter bar、status bar、context menus、dialogs 和 chooser mode，使常见文件管理器工作流不需要启动 GPUI shell。当前已有独立 app-level toolbar（Back/Forward/Up/Reload、Hidden 和 view-mode 控件）、从 toolbar 下方带 margin 开始的 pane、顶部与 pane 起点对齐的圆角 shell-owned Places panel/左键 navigation/独立 sidebar scrolling/最小 Open-Copy Location-Properties-Remove row menu、文件内容区 item-view scrollbar 显示/scroll offset 同步、pane-local 底部 status bar、窄实现 filter bar、窄实现 pane-local location edit mode、不透明浅色 item/blank context menu overlay、最小 properties metadata overlay、最小 Create New modal、最小 Rename modal、最小 Move to Trash dispatch、最小 Trash view Restore/Delete Permanently/Empty Trash dispatch、最小 Trash restore conflict Replace overlay、file Open 默认应用分发、最小 Open With chooser/systemd-user launch plan 分发、item Copy Location Wayland text clipboard 分发、item Copy/Cut 的 Fika URI-list text clipboard 导出，以及 blank Paste 的本地文件/纯文本执行；Open directory、Open file、Open With chooser、Copy、Cut、Paste、Copy Location、Refresh、Select All、Properties、最小 Create New、最小 Rename、最小 Move to Trash、最小 Trash view actions 已接入 dispatch。更完整 Places actions/devices/DnD、toolbar、scrollbar drag/click、完整 location/filter/create-name/rename-name/application-search 文本边界、多 MIME `text/uri-list` clipboard export/import、remote paste、更完整 Trash multi-conflict handling、undo、更完整 properties、完整 inline rename、完整 Create New 子菜单/模板、Open With default-app selection、new-pane actions、dialogs 和 chooser mode 仍待迁移。
+- [~] Phase 4：实现 Places、toolbar、location bar、filter bar、status bar、context menus、dialogs 和 chooser mode，使常见文件管理器工作流不需要启动 GPUI shell。当前已有独立 app-level toolbar（移除临时 Back/Forward/Reload/Hidden/view-mode 鼠标按钮，仅保留原版 Places toggle 形态，相关 keyboard commands 仍可用）、从 toolbar 下方带 margin 开始的 pane、顶部与 pane 起点对齐且补齐原版 title/row/icon 尺寸的圆角 shell-owned Places panel/左键 navigation/独立 sidebar scrolling/最小 Open-Copy Location-Properties-Remove row menu、文件内容区 item-view scrollbar 显示/scroll offset 同步、pane-local 底部 status bar、窄实现 filter bar、28px pane-local location edit mode、不透明浅色 item/blank context menu overlay（原版 196px 宽度、28px row、4px vertical padding、8px viewport margin、edge flip/clamp 定位、18px icon slot、shadow、row separators、几何 fallback 图标，overlay quads/text 独立顶层 pass，避免底层 item text 透出，并用同一 padding-aware row hit-test 驱动 hover/点击）、最小 properties metadata overlay、最小 Create New modal、最小 Rename modal、最小 Move to Trash dispatch、最小 Trash view Restore/Delete Permanently/Empty Trash dispatch、最小 Trash restore conflict Replace overlay、file Open 默认应用分发、最小 Open With chooser/systemd-user launch plan 分发、item Copy Location Wayland text clipboard 分发、item Copy/Cut 的 Fika URI-list text clipboard 导出，以及 blank Paste 的本地文件/纯文本执行；Open directory、Open file、Open With chooser、Copy、Cut、Paste、Copy Location、Refresh、Select All、Properties、最小 Create New、最小 Rename、最小 Move to Trash、最小 Trash view actions 已接入 dispatch。更完整 Places actions/devices/DnD、toolbar、scrollbar drag/click、完整 location/filter/create-name/rename-name/application-search 文本边界、多 MIME `text/uri-list` clipboard export/import、remote paste、更完整 Trash multi-conflict handling、undo、更完整 properties、完整 inline rename、完整 Create New 子菜单/模板、Open With default-app selection、new-pane actions、dialogs 和 chooser mode 仍待迁移。
 - [ ] Phase 5：同场景证据证明行为对齐，且 frame cost 比 GPUI Fika 和相关 cosmic-files 基线更好或更可预测后，再把新 shell 提升为默认。
 
 ### GPUI Item View 自绘 / Dolphin retained item 对齐（历史基线）

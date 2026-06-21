@@ -33,9 +33,9 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, KeyCode, NamedKey, PhysicalKey};
 use winit::window::{Window, WindowAttributes, WindowId};
 
-const APP_TOOLBAR_HEIGHT: f32 = 44.0;
+const APP_TOOLBAR_HEIGHT: f32 = 36.0;
 const PANE_MARGIN: f32 = 8.0;
-const TOP_BAR_HEIGHT: f32 = 52.0;
+const TOP_BAR_HEIGHT: f32 = 36.0;
 const FILTER_BAR_HEIGHT: f32 = 30.0;
 const STATUS_BAR_HEIGHT: f32 = 28.0;
 const ICONS_ITEM_WIDTH: f32 = 116.0;
@@ -61,34 +61,29 @@ const ICON_PADDING: u32 = 2;
 const ICON_CACHE_MAX_BYTES: usize = 32 * 1024 * 1024;
 const RUBBER_BAND_START_THRESHOLD: f32 = 4.0;
 const VIEW_SWITCH_REDRAW_FRAMES: u8 = 6;
-const VIEW_MODE_BUTTON_WIDTH: f32 = 86.0;
-const VIEW_MODE_BUTTON_HEIGHT: f32 = 24.0;
-const VIEW_MODE_BUTTON_GAP: f32 = 6.0;
-const NAV_BUTTON_WIDTH: f32 = 28.0;
-const NAV_UP_BUTTON_WIDTH: f32 = 36.0;
-const NAV_RELOAD_BUTTON_WIDTH: f32 = 58.0;
-const NAV_HIDDEN_BUTTON_WIDTH: f32 = 58.0;
-const NAV_BUTTON_HEIGHT: f32 = 24.0;
-const NAV_BUTTON_GAP: f32 = 6.0;
-const PLACES_SIDEBAR_WIDTH: f32 = 216.0;
+const PLACES_SIDEBAR_WIDTH: f32 = 228.0;
 const PLACES_SIDEBAR_SPLITTER_WIDTH: f32 = 1.0;
 const PLACES_SIDEBAR_PANEL_MARGIN_X: f32 = 8.0;
 const PLACES_SIDEBAR_PANEL_MARGIN_BOTTOM: f32 = 8.0;
 const PLACES_SIDEBAR_PADDING_X: f32 = 8.0;
 const PLACES_SIDEBAR_TOP_PADDING: f32 = 8.0;
+const PLACES_TITLE_HEIGHT: f32 = 28.0;
 const PLACES_SECTION_HEIGHT: f32 = 24.0;
 const PLACES_ROW_HEIGHT: f32 = 30.0;
-const PLACES_ROW_GAP: f32 = 2.0;
-const PLACES_ICON_SIZE: f32 = 18.0;
+const PLACES_ROW_GAP: f32 = 0.0;
+const PLACES_ICON_SIZE: f32 = 22.0;
 const PLACES_SCROLLBAR_WIDTH: f32 = 3.0;
 const PLACES_SCROLLBAR_MARGIN: f32 = 4.0;
 const PLACES_SCROLLBAR_MIN_THUMB_HEIGHT: f32 = 28.0;
 const CONTENT_SCROLLBAR_RESERVED_EXTENT: f32 = 14.0;
 const CONTENT_SCROLLBAR_PADDING: f32 = 4.0;
 const CONTENT_SCROLLBAR_MIN_THUMB_SIZE: f32 = 25.0;
-const CONTEXT_MENU_WIDTH: f32 = 184.0;
+const CONTEXT_MENU_WIDTH: f32 = 196.0;
 const CONTEXT_MENU_ROW_HEIGHT: f32 = 28.0;
-const CONTEXT_MENU_MARGIN: f32 = 6.0;
+const CONTEXT_MENU_VERTICAL_PADDING: f32 = 4.0;
+const CONTEXT_MENU_VIEWPORT_MARGIN: f32 = 8.0;
+const CONTEXT_MENU_ICON_SIZE: f32 = 18.0;
+const CONTEXT_MENU_TEXT_LINE_HEIGHT: f32 = 20.0;
 const PROPERTIES_OVERLAY_WIDTH: f32 = 440.0;
 const PROPERTIES_OVERLAY_MARGIN: f32 = 18.0;
 const PROPERTIES_TITLE_HEIGHT: f32 = 42.0;
@@ -256,28 +251,14 @@ enum PathNavigationAction {
     Back,
     Forward,
     Parent,
-    Reload,
-    ToggleHidden,
 }
 
 impl PathNavigationAction {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Back => "<",
-            Self::Forward => ">",
-            Self::Parent => "Up",
-            Self::Reload => "Reload",
-            Self::ToggleHidden => "Hidden",
-        }
-    }
-
     fn reason(self) -> &'static str {
         match self {
             Self::Back => "history-back",
             Self::Forward => "history-forward",
             Self::Parent => "parent-directory",
-            Self::Reload => "reload-directory",
-            Self::ToggleHidden => "toggle-hidden",
         }
     }
 }
@@ -1429,8 +1410,6 @@ impl FikaWgpuApp {
             PathNavigationAction::Back => self.scene.go_history_back(size),
             PathNavigationAction::Forward => self.scene.go_history_forward(size),
             PathNavigationAction::Parent => self.scene.go_parent_directory(size),
-            PathNavigationAction::Reload => self.scene.reload_current_path(size),
-            PathNavigationAction::ToggleHidden => Ok(self.scene.toggle_hidden_visibility(size)),
         };
         match result {
             Ok(true) => self.present_scene_change(event_loop, action.reason()),
@@ -2296,14 +2275,6 @@ struct PathHistory {
 }
 
 impl PathHistory {
-    fn can_go_back(&self) -> bool {
-        !self.back.is_empty()
-    }
-
-    fn can_go_forward(&self) -> bool {
-        !self.forward.is_empty()
-    }
-
     fn push_back(&mut self, path: PathBuf) {
         push_limited_path(&mut self.back, path);
     }
@@ -2433,14 +2404,14 @@ impl ShellContextMenuAction {
     fn label(self) -> &'static str {
         match self {
             Self::Open => "Open",
-            Self::OpenWith => "Open With...",
+            Self::OpenWith => "Open With",
             Self::OpenInNewPane => "Open in New Pane",
             Self::Copy => "Copy",
             Self::Cut => "Cut",
             Self::CopyLocation => "Copy Location",
             Self::Rename => "Rename",
             Self::MoveToTrash => "Move to Trash",
-            Self::RestoreFromTrash => "Restore From Trash",
+            Self::RestoreFromTrash => "Restore to Former Location",
             Self::DeletePermanently => "Delete Permanently",
             Self::EmptyTrash => "Empty Trash",
             Self::AddToPlaces => "Add to Places",
@@ -2474,6 +2445,119 @@ impl ShellContextMenuAction {
             Self::Properties => "properties",
             Self::RemovePlace => "remove-place",
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ContextMenuGlyph {
+    Open,
+    OpenWith,
+    Pane,
+    Copy,
+    Cut,
+    Location,
+    Rename,
+    Trash,
+    Restore,
+    Delete,
+    Place,
+    Create,
+    Paste,
+    Select,
+    Refresh,
+    Properties,
+    Remove,
+}
+
+fn context_menu_icon_style(
+    action: ShellContextMenuAction,
+) -> (ContextMenuGlyph, [f32; 4], [f32; 4]) {
+    match action {
+        ShellContextMenuAction::Open => (
+            ContextMenuGlyph::Open,
+            [0.114, 0.306, 0.847, 1.0],
+            [0.918, 0.945, 1.000, 1.0],
+        ),
+        ShellContextMenuAction::OpenWith => (
+            ContextMenuGlyph::OpenWith,
+            [0.263, 0.220, 0.792, 1.0],
+            [0.933, 0.929, 1.000, 1.0],
+        ),
+        ShellContextMenuAction::OpenInNewPane => (
+            ContextMenuGlyph::Pane,
+            [0.114, 0.306, 0.847, 1.0],
+            [0.918, 0.945, 1.000, 1.0],
+        ),
+        ShellContextMenuAction::Copy => (
+            ContextMenuGlyph::Copy,
+            [0.145, 0.388, 0.922, 1.0],
+            [0.918, 0.945, 1.000, 1.0],
+        ),
+        ShellContextMenuAction::Cut => (
+            ContextMenuGlyph::Cut,
+            [0.706, 0.325, 0.035, 1.0],
+            [1.000, 0.953, 0.875, 1.0],
+        ),
+        ShellContextMenuAction::CopyLocation => (
+            ContextMenuGlyph::Location,
+            [0.200, 0.255, 0.333, 1.0],
+            [0.910, 0.933, 0.969, 1.0],
+        ),
+        ShellContextMenuAction::Rename => (
+            ContextMenuGlyph::Rename,
+            [0.427, 0.157, 0.851, 1.0],
+            [0.949, 0.929, 1.000, 1.0],
+        ),
+        ShellContextMenuAction::MoveToTrash | ShellContextMenuAction::EmptyTrash => (
+            ContextMenuGlyph::Trash,
+            [0.725, 0.110, 0.110, 1.0],
+            [1.000, 0.910, 0.910, 1.0],
+        ),
+        ShellContextMenuAction::RestoreFromTrash => (
+            ContextMenuGlyph::Restore,
+            [0.016, 0.471, 0.341, 1.0],
+            [0.906, 0.973, 0.937, 1.0],
+        ),
+        ShellContextMenuAction::DeletePermanently => (
+            ContextMenuGlyph::Delete,
+            [0.725, 0.110, 0.110, 1.0],
+            [1.000, 0.910, 0.910, 1.0],
+        ),
+        ShellContextMenuAction::AddToPlaces => (
+            ContextMenuGlyph::Place,
+            [0.059, 0.463, 0.431, 1.0],
+            [0.902, 1.000, 0.984, 1.0],
+        ),
+        ShellContextMenuAction::CreateNew => (
+            ContextMenuGlyph::Create,
+            [0.059, 0.298, 0.506, 1.0],
+            [0.906, 0.945, 0.984, 1.0],
+        ),
+        ShellContextMenuAction::Paste => (
+            ContextMenuGlyph::Paste,
+            [0.016, 0.471, 0.341, 1.0],
+            [0.906, 0.973, 0.937, 1.0],
+        ),
+        ShellContextMenuAction::SelectAll => (
+            ContextMenuGlyph::Select,
+            [0.122, 0.310, 0.749, 1.0],
+            [0.918, 0.945, 1.000, 1.0],
+        ),
+        ShellContextMenuAction::Refresh => (
+            ContextMenuGlyph::Refresh,
+            [0.059, 0.463, 0.431, 1.0],
+            [0.902, 1.000, 0.984, 1.0],
+        ),
+        ShellContextMenuAction::Properties => (
+            ContextMenuGlyph::Properties,
+            [0.216, 0.255, 0.318, 1.0],
+            [0.933, 0.945, 0.961, 1.0],
+        ),
+        ShellContextMenuAction::RemovePlace => (
+            ContextMenuGlyph::Remove,
+            [0.725, 0.110, 0.110, 1.0],
+            [1.000, 0.910, 0.910, 1.0],
+        ),
     }
 }
 
@@ -2567,6 +2651,32 @@ fn context_menu_actions(target: &ShellContextTarget) -> &'static [ShellContextMe
         ShellContextTarget::Place { trash: true, .. } => TRASH_PLACE_ACTIONS,
         ShellContextTarget::Place { editable: true, .. } => EDITABLE_PLACE_ACTIONS,
         ShellContextTarget::Place { .. } => PLACE_ACTIONS,
+    }
+}
+
+fn context_menu_separator_before(target: &ShellContextTarget, row: usize) -> bool {
+    let Some(action) = context_menu_actions(target).get(row).copied() else {
+        return false;
+    };
+    match target {
+        ShellContextTarget::Item { path, .. } if file_ops::is_in_trash_files_dir(path) => {
+            action == ShellContextMenuAction::Properties
+        }
+        ShellContextTarget::Item { .. } => {
+            action == ShellContextMenuAction::Copy
+                || action == ShellContextMenuAction::Rename
+                || action == ShellContextMenuAction::Properties
+        }
+        ShellContextTarget::Blank { path } if file_ops::is_trash_files_dir(path) => {
+            action == ShellContextMenuAction::SelectAll
+                || action == ShellContextMenuAction::Properties
+        }
+        ShellContextTarget::Blank { .. } => {
+            action == ShellContextMenuAction::Paste
+                || action == ShellContextMenuAction::SelectAll
+                || action == ShellContextMenuAction::Properties
+        }
+        ShellContextTarget::Place { .. } => action == ShellContextMenuAction::Properties,
     }
 }
 
@@ -3633,33 +3743,21 @@ impl ShellScene {
         point: ViewPoint,
         size: PhysicalSize<u32>,
     ) -> Option<ShellViewMode> {
-        view_mode_button_rects(
-            size.width.max(1) as f32,
-            self.ui_scale(),
-            0.0,
-            self.app_toolbar_y(),
-        )
-        .into_iter()
-        .find_map(|(mode, rect)| rect.contains(point).then_some(mode))
+        let _ = (point, size);
+        None
     }
 
     fn path_bar_rect(&self, size: PhysicalSize<u32>) -> Option<ViewRect> {
-        let width = size.width.max(1) as f32;
-        let scale = self.ui_scale();
         let origin_x = self.content_origin_x(size);
-        let margin = self.scale_metric(12.0);
+        let width = size.width.max(1) as f32;
+        let margin = self.scale_metric(8.0);
         let path_x = origin_x + margin;
         let available_width = (width - path_x - margin).max(0.0);
-        let path_width = if self.is_location_editing() {
-            available_width
-        } else {
-            path_placeholder_width(&self.path, available_width, scale)
-        };
         let rect = ViewRect {
             x: path_x,
-            y: self.pane_top_y() + self.scale_metric(14.0),
-            width: path_width,
-            height: self.scale_metric(24.0),
+            y: self.pane_top_y() + self.scale_metric(4.0),
+            width: available_width,
+            height: self.scale_metric(28.0),
         };
         (rect.width > self.scale_metric(24.0)).then_some(rect)
     }
@@ -3674,22 +3772,8 @@ impl ShellScene {
         point: ViewPoint,
         _size: PhysicalSize<u32>,
     ) -> Option<PathNavigationAction> {
-        path_navigation_button_rects(self.ui_scale(), 0.0, self.app_toolbar_y())
-            .into_iter()
-            .find_map(|(action, rect)| {
-                (rect.contains(point) && self.path_navigation_action_enabled(action))
-                    .then_some(action)
-            })
-    }
-
-    fn path_navigation_action_enabled(&self, action: PathNavigationAction) -> bool {
-        match action {
-            PathNavigationAction::Back => self.history.can_go_back(),
-            PathNavigationAction::Forward => self.history.can_go_forward(),
-            PathNavigationAction::Parent => self.parent_directory_path().is_some(),
-            PathNavigationAction::Reload => true,
-            PathNavigationAction::ToggleHidden => true,
-        }
+        let _ = point;
+        None
     }
 
     fn place_activation_for_primary_press(
@@ -3739,11 +3823,12 @@ impl ShellScene {
         }
         let mut rows = Vec::with_capacity(self.places.len());
         let top_padding = self.scale_metric(PLACES_SIDEBAR_TOP_PADDING);
+        let title_height = self.scale_metric(PLACES_TITLE_HEIGHT);
         let padding_x = self.scale_metric(PLACES_SIDEBAR_PADDING_X);
         let section_height = self.scale_metric(PLACES_SECTION_HEIGHT);
         let row_height = self.scale_metric(PLACES_ROW_HEIGHT);
         let row_gap = self.scale_metric(PLACES_ROW_GAP);
-        let mut y = panel.y + top_padding - self.places_scroll_y;
+        let mut y = panel.y + top_padding + title_height - self.places_scroll_y;
         let mut previous_group = None;
         for (index, place) in self.places.iter().enumerate() {
             if !place.group.is_empty() && previous_group != Some(place.group) {
@@ -3788,21 +3873,22 @@ impl ShellScene {
         ViewRect {
             x: sidebar.x + margin_x,
             y,
-            width: (sidebar.width - margin_x * 2.0).max(1.0),
+            width: (sidebar.width - margin_x).max(1.0),
             height: (sidebar.bottom() - y - margin_bottom).max(1.0),
         }
     }
 
     fn places_content_height(&self) -> f32 {
         let top_padding = self.scale_metric(PLACES_SIDEBAR_TOP_PADDING);
+        let title_height = self.scale_metric(PLACES_TITLE_HEIGHT);
         let section_height = self.scale_metric(PLACES_SECTION_HEIGHT);
         let row_height = self.scale_metric(PLACES_ROW_HEIGHT);
         let row_gap = self.scale_metric(PLACES_ROW_GAP);
         if self.places.is_empty() {
-            return top_padding * 2.0;
+            return top_padding * 2.0 + title_height;
         }
 
-        let mut height = top_padding;
+        let mut height = top_padding + title_height;
         let mut previous_group = None;
         for place in &self.places {
             if !place.group.is_empty() && previous_group != Some(place.group) {
@@ -3999,23 +4085,15 @@ impl ShellScene {
         size: PhysicalSize<u32>,
     ) -> Option<ShellContextMenuAction> {
         let menu = self.context_menu.as_ref()?;
-        let rect = context_menu_rect(menu, size);
-        if !rect.contains(point) {
-            return None;
-        }
-        let row = ((point.y - rect.y) / CONTEXT_MENU_ROW_HEIGHT).floor() as usize;
+        let row = context_menu_row_at_screen_point(menu, point, size, self.ui_scale())?;
         context_menu_actions(&menu.target).get(row).copied()
     }
 
     fn update_context_menu_hover(&mut self, point: ViewPoint, size: PhysicalSize<u32>) -> bool {
-        let hovered_row = self.context_menu.as_ref().and_then(|menu| {
-            let rect = context_menu_rect(menu, size);
-            rect.contains(point).then(|| {
-                ((point.y - rect.y) / CONTEXT_MENU_ROW_HEIGHT)
-                    .floor()
-                    .max(0.0) as usize
-            })
-        });
+        let hovered_row = self
+            .context_menu
+            .as_ref()
+            .and_then(|menu| context_menu_row_at_screen_point(menu, point, size, self.ui_scale()));
         let Some(menu) = self.context_menu.as_mut() else {
             return false;
         };
@@ -5500,12 +5578,13 @@ impl ShellScene {
         size: PhysicalSize<u32>,
         text: &mut TextFrameBuilder<'_>,
         icons: &mut IconFrameBuilder<'_>,
+        overlay_text: &mut TextFrameBuilder<'_>,
     ) -> SceneFrame {
         let layout_start = Instant::now();
         let mut vertices = Vec::with_capacity(64);
+        let mut overlay_vertices = Vec::with_capacity(32);
         let width = size.width.max(1) as f32;
         let height = size.height.max(1) as f32;
-        let app_toolbar_height = self.app_toolbar_height();
         let pane = self.pane_rect(size);
         let top_bar_height = self.top_bar_height();
         let content_origin_x = self.content_origin_x(size);
@@ -5525,30 +5604,7 @@ impl ShellScene {
             view_mode_surface_color(self.view_mode),
             size,
         );
-        push_rect(
-            &mut vertices,
-            ViewRect {
-                x: 0.0,
-                y: 0.0,
-                width,
-                height: app_toolbar_height,
-            },
-            chrome_color(),
-            size,
-        );
-        push_rect(
-            &mut vertices,
-            ViewRect {
-                x: 0.0,
-                y: app_toolbar_height - self.scale_metric(1.0),
-                width,
-                height: self.scale_metric(1.0),
-            },
-            [0.784, 0.808, 0.839, 1.0],
-            size,
-        );
-        self.push_path_navigation_buttons(&mut vertices, text, size);
-        self.push_view_mode_buttons(&mut vertices, text, size);
+        self.push_app_toolbar(&mut vertices, size);
         push_rect(&mut vertices, pane, [1.000, 1.000, 1.000, 1.0], size);
         push_rect(
             &mut vertices,
@@ -5563,49 +5619,57 @@ impl ShellScene {
         );
         if let Some(path_rect) = self.path_bar_rect(size) {
             let location_active = self.is_location_editing();
-            push_rect(
-                &mut vertices,
-                path_rect,
-                if location_active {
-                    [0.918, 0.953, 1.000, 1.0]
-                } else {
-                    [1.000, 1.000, 1.000, 1.0]
-                },
-                size,
-            );
-            push_clipped_rect_outline(
-                &mut vertices,
-                path_rect,
-                ViewRect {
-                    x: pane.x,
-                    y: pane.y,
-                    width: self.pane_width(size),
-                    height: top_bar_height,
-                },
-                1.0,
-                [0.784, 0.808, 0.839, 1.0],
-                size,
-            );
+            let location_clip = ViewRect {
+                x: pane.x,
+                y: pane.y,
+                width: self.pane_width(size),
+                height: top_bar_height,
+            };
+            if location_active {
+                push_clipped_rounded_rect(
+                    &mut vertices,
+                    path_rect,
+                    location_clip,
+                    self.scale_metric(6.0),
+                    [0.184, 0.435, 0.929, 1.0],
+                    size,
+                );
+                if let Some(inner) = inset_rect(path_rect, self.scale_metric(1.0)) {
+                    push_clipped_rounded_rect(
+                        &mut vertices,
+                        inner,
+                        location_clip,
+                        self.scale_metric(5.0),
+                        [1.000, 1.000, 1.000, 1.0],
+                        size,
+                    );
+                }
+            } else {
+                push_clipped_rounded_rect(
+                    &mut vertices,
+                    path_rect,
+                    location_clip,
+                    self.scale_metric(6.0),
+                    [0.973, 0.984, 1.000, 1.0],
+                    size,
+                );
+            }
             let path_label = self
                 .location_draft
                 .as_ref()
                 .map(|draft| format!("{}|", draft.value))
                 .unwrap_or_else(|| self.path.display().to_string());
-            text.push_label(
+            text.push_label_aligned(
                 &path_label,
                 ViewRect {
-                    x: path_rect.x + self.scale_metric(12.0),
-                    y: path_rect.y + self.scale_metric(3.0),
-                    width: (path_rect.width - self.scale_metric(24.0)).max(1.0),
+                    x: path_rect.x + self.scale_metric(8.0),
+                    y: path_rect.y + (path_rect.height - self.text_line_height()) / 2.0,
+                    width: (path_rect.width - self.scale_metric(16.0)).max(1.0),
                     height: self.text_line_height(),
                 },
-                ViewRect {
-                    x: pane.x,
-                    y: pane.y,
-                    width: self.pane_width(size),
-                    height: top_bar_height,
-                },
+                location_clip,
                 TextColor::rgb(36, 41, 47),
+                LabelAlignment::Start,
             );
         }
         self.push_places_sidebar(&mut vertices, text, size);
@@ -5647,23 +5711,99 @@ impl ShellScene {
         self.push_content_scrollbar(&mut vertices, size);
         self.push_status_bar(&mut vertices, text, size, visible_items, status_bar);
         self.push_pane_borders(&mut vertices, size);
-        self.push_context_menu_overlay(&mut vertices, text, size);
-        self.push_properties_overlay(&mut vertices, text, size);
-        self.push_create_dialog_overlay(&mut vertices, text, size);
-        self.push_rename_dialog_overlay(&mut vertices, text, size);
-        self.push_open_with_chooser_overlay(&mut vertices, text, size);
-        self.push_trash_conflict_dialog_overlay(&mut vertices, text, size);
+        self.push_context_menu_overlay(&mut overlay_vertices, overlay_text, size);
+        self.push_properties_overlay(&mut overlay_vertices, overlay_text, size);
+        self.push_create_dialog_overlay(&mut overlay_vertices, overlay_text, size);
+        self.push_rename_dialog_overlay(&mut overlay_vertices, overlay_text, size);
+        self.push_open_with_chooser_overlay(&mut overlay_vertices, overlay_text, size);
+        self.push_trash_conflict_dialog_overlay(&mut overlay_vertices, overlay_text, size);
 
         SceneFrame {
             layout_us: layout_start.elapsed().as_micros(),
             visible_items,
-            quad_count: vertices.len() / 6,
+            quad_count: (vertices.len() + overlay_vertices.len()) / 6,
             content_size,
             first_item_rect,
             vertices,
+            overlay_vertices,
             text_stats: TextFrameStats::default(),
             icon_stats: IconFrameStats::default(),
         }
+    }
+
+    fn push_app_toolbar(&self, vertices: &mut Vec<QuadVertex>, size: PhysicalSize<u32>) {
+        let toolbar = ViewRect {
+            x: 0.0,
+            y: self.app_toolbar_y(),
+            width: size.width.max(1) as f32,
+            height: self.app_toolbar_height(),
+        };
+        push_rect(
+            vertices,
+            toolbar,
+            view_mode_surface_color(self.view_mode),
+            size,
+        );
+
+        let button = ViewRect {
+            x: self.scale_metric(8.0),
+            y: toolbar.y + self.scale_metric(8.0),
+            width: self.scale_metric(28.0),
+            height: self
+                .scale_metric(28.0)
+                .min((toolbar.height - self.scale_metric(8.0)).max(1.0)),
+        };
+        push_clipped_rounded_rect(
+            vertices,
+            button,
+            toolbar,
+            self.scale_metric(6.0),
+            [0.184, 0.435, 0.929, 1.0],
+            size,
+        );
+        if let Some(inner) = inset_rect(button, self.scale_metric(1.0)) {
+            push_clipped_rounded_rect(
+                vertices,
+                inner,
+                toolbar,
+                self.scale_metric(5.0),
+                [0.918, 0.945, 1.000, 1.0],
+                size,
+            );
+        }
+
+        let icon = ViewRect {
+            x: button.x + (button.width - self.scale_metric(18.0)) / 2.0,
+            y: button.y + (button.height - self.scale_metric(18.0)) / 2.0,
+            width: self.scale_metric(18.0),
+            height: self.scale_metric(18.0),
+        };
+        let rail = self.scale_metric(2.0);
+        push_clipped_rect(
+            vertices,
+            ViewRect {
+                x: icon.x + self.scale_metric(2.0),
+                y: icon.y + self.scale_metric(2.0),
+                width: rail,
+                height: icon.height - self.scale_metric(4.0),
+            },
+            toolbar,
+            [0.122, 0.310, 0.749, 1.0],
+            size,
+        );
+        push_clipped_rect_outline(
+            vertices,
+            ViewRect {
+                x: icon.x + self.scale_metric(1.0),
+                y: icon.y + self.scale_metric(3.0),
+                width: icon.width - self.scale_metric(2.0),
+                height: icon.height - self.scale_metric(6.0),
+            },
+            toolbar,
+            self.scale_metric(1.0),
+            [0.122, 0.310, 0.749, 1.0],
+            size,
+        );
     }
 
     fn push_places_sidebar(
@@ -5710,6 +5850,7 @@ impl ShellScene {
 
         let active_place = active_shell_place_index(&self.places, &self.path);
         let top_padding = self.scale_metric(PLACES_SIDEBAR_TOP_PADDING);
+        let title_height = self.scale_metric(PLACES_TITLE_HEIGHT);
         let padding_x = self.scale_metric(PLACES_SIDEBAR_PADDING_X);
         let section_height = self.scale_metric(PLACES_SECTION_HEIGHT);
         let row_height = self.scale_metric(PLACES_ROW_HEIGHT);
@@ -5717,18 +5858,37 @@ impl ShellScene {
         let icon_size = self.scale_metric(PLACES_ICON_SIZE);
         let text_height = self.text_line_height();
         let small_text_height = self.small_text_line_height();
-        let mut y = panel.y + top_padding - self.places_scroll_y;
+        text.push_label_aligned(
+            "Places",
+            ViewRect {
+                x: panel.x + padding_x + self.scale_metric(8.0),
+                y: panel.y + top_padding,
+                width: (panel.width - padding_x * 2.0 - self.scale_metric(16.0)).max(1.0),
+                height: text_height,
+            },
+            panel,
+            TextColor::rgb(36, 41, 47),
+            LabelAlignment::Start,
+        );
+
+        let mut y = panel.y + top_padding + title_height - self.places_scroll_y;
         let mut previous_group = None;
         for (index, place) in self.places.iter().enumerate() {
             if !place.group.is_empty() && previous_group != Some(place.group) {
                 let section = ViewRect {
-                    x: panel.x + padding_x + self.scale_metric(4.0),
+                    x: panel.x + padding_x + self.scale_metric(8.0),
                     y: y + self.scale_metric(4.0),
-                    width: (panel.width - padding_x * 2.0 - self.scale_metric(8.0)).max(1.0),
+                    width: (panel.width - padding_x * 2.0 - self.scale_metric(16.0)).max(1.0),
                     height: small_text_height,
                 };
                 if section.y < panel.bottom() && section.bottom() > panel.y {
-                    text.push_label(place.group, section, panel, TextColor::rgb(136, 148, 160));
+                    text.push_label_aligned(
+                        place.group,
+                        section,
+                        panel,
+                        TextColor::rgb(107, 114, 128),
+                        LabelAlignment::Start,
+                    );
                 }
                 y += section_height;
             }
@@ -5777,24 +5937,13 @@ impl ShellScene {
                     width: icon_size,
                     height: icon_size,
                 };
-                push_clipped_rect(vertices, icon, panel, place_marker_color(place), size);
-                text.push_label(
-                    place.marker,
-                    ViewRect {
-                        x: icon.x + self.scale_metric(3.0),
-                        y: icon.y + self.scale_metric(1.0),
-                        width: (icon.width - self.scale_metric(6.0)).max(1.0),
-                        height: small_text_height,
-                    },
-                    panel,
-                    TextColor::rgb(248, 250, 252),
-                );
-                text.push_label(
+                push_place_icon(vertices, icon, panel, place, active, self.ui_scale(), size);
+                text.push_label_aligned(
                     &place.label,
                     ViewRect {
-                        x: row.x + self.scale_metric(34.0),
+                        x: icon.right() + self.scale_metric(8.0),
                         y: row.y + (row.height - text_height) / 2.0,
-                        width: (row.width - self.scale_metric(42.0)).max(1.0),
+                        width: (row.right() - icon.right() - self.scale_metric(16.0)).max(1.0),
                         height: text_height,
                     },
                     panel,
@@ -5803,7 +5952,24 @@ impl ShellScene {
                     } else {
                         TextColor::rgb(36, 41, 47)
                     },
+                    LabelAlignment::Start,
                 );
+                if place.trash {
+                    let dot_size = self.scale_metric(7.0);
+                    push_clipped_rounded_rect(
+                        vertices,
+                        ViewRect {
+                            x: row.right() - self.scale_metric(8.0) - dot_size,
+                            y: row.y + (row.height - dot_size) / 2.0,
+                            width: dot_size,
+                            height: dot_size,
+                        },
+                        panel,
+                        dot_size / 2.0,
+                        [0.184, 0.435, 0.929, 1.0],
+                        size,
+                    );
+                }
             }
 
             y += row_height + row_gap;
@@ -5820,124 +5986,6 @@ impl ShellScene {
             };
             push_rect(vertices, track, [0.902, 0.922, 0.945, 1.0], size);
             push_rect(vertices, thumb, [0.596, 0.647, 0.714, 1.0], size);
-        }
-    }
-
-    fn push_path_navigation_buttons(
-        &self,
-        vertices: &mut Vec<QuadVertex>,
-        text: &mut TextFrameBuilder<'_>,
-        size: PhysicalSize<u32>,
-    ) {
-        let clip = ViewRect {
-            x: 0.0,
-            y: self.app_toolbar_y(),
-            width: size.width.max(1) as f32,
-            height: self.app_toolbar_height(),
-        };
-        for (action, rect) in
-            path_navigation_button_rects(self.ui_scale(), 0.0, self.app_toolbar_y())
-        {
-            let enabled = self.path_navigation_action_enabled(action);
-            let active = matches!(action, PathNavigationAction::ToggleHidden) && self.show_hidden;
-            push_rect(
-                vertices,
-                rect,
-                if active {
-                    [0.918, 0.953, 1.000, 1.0]
-                } else if enabled {
-                    [1.000, 1.000, 1.000, 1.0]
-                } else {
-                    [0.933, 0.945, 0.960, 1.0]
-                },
-                size,
-            );
-            push_clipped_rect_outline(
-                vertices,
-                rect,
-                clip,
-                1.0,
-                if active {
-                    [0.561, 0.773, 0.992, 1.0]
-                } else {
-                    [0.784, 0.808, 0.839, 1.0]
-                },
-                size,
-            );
-            text.push_label(
-                action.label(),
-                ViewRect {
-                    x: rect.x + self.scale_metric(7.0),
-                    y: rect.y + self.scale_metric(3.0),
-                    width: (rect.width - self.scale_metric(14.0)).max(1.0),
-                    height: self.text_line_height(),
-                },
-                clip,
-                if active {
-                    TextColor::rgb(31, 79, 191)
-                } else if enabled {
-                    TextColor::rgb(36, 41, 47)
-                } else {
-                    TextColor::rgb(122, 132, 148)
-                },
-            );
-        }
-    }
-
-    fn push_view_mode_buttons(
-        &self,
-        vertices: &mut Vec<QuadVertex>,
-        text: &mut TextFrameBuilder<'_>,
-        size: PhysicalSize<u32>,
-    ) {
-        let width = size.width.max(1) as f32;
-        let clip = ViewRect {
-            x: self.content_origin_x(size),
-            y: self.app_toolbar_y(),
-            width,
-            height: self.app_toolbar_height(),
-        };
-        for (mode, rect) in
-            view_mode_button_rects(width, self.ui_scale(), 0.0, self.app_toolbar_y())
-        {
-            let active = mode == self.view_mode;
-            push_rect(
-                vertices,
-                rect,
-                if active {
-                    [0.918, 0.953, 1.000, 1.0]
-                } else {
-                    [1.000, 1.000, 1.000, 1.0]
-                },
-                size,
-            );
-            push_clipped_rect_outline(
-                vertices,
-                rect,
-                clip,
-                1.0,
-                if active {
-                    [0.561, 0.773, 0.992, 1.0]
-                } else {
-                    [0.784, 0.808, 0.839, 1.0]
-                },
-                size,
-            );
-            text.push_label(
-                mode.label(),
-                ViewRect {
-                    x: rect.x + self.scale_metric(10.0),
-                    y: rect.y + self.scale_metric(3.0),
-                    width: (rect.width - self.scale_metric(20.0)).max(1.0),
-                    height: self.text_line_height(),
-                },
-                clip,
-                if active {
-                    TextColor::rgb(31, 79, 191)
-                } else {
-                    TextColor::rgb(89, 99, 110)
-                },
-            );
         }
     }
 
@@ -6407,35 +6455,70 @@ impl ShellScene {
         let Some(menu) = self.context_menu.as_ref() else {
             return;
         };
-        let rect = context_menu_rect(menu, size);
+        let scale = self.ui_scale();
+        let rect = context_menu_rect_scaled(menu, size, scale);
+        let padding_y = scaled_context_menu_metric(CONTEXT_MENU_VERTICAL_PADDING, scale);
+        let row_height = scaled_context_menu_metric(CONTEXT_MENU_ROW_HEIGHT, scale);
+        let row_padding_x = scaled_context_menu_metric(8.0, scale);
+        let gap = scaled_context_menu_metric(8.0, scale);
+        let icon_size = scaled_context_menu_metric(CONTEXT_MENU_ICON_SIZE, scale);
+        let text_height = scaled_context_menu_metric(CONTEXT_MENU_TEXT_LINE_HEIGHT, scale);
         let clip = ViewRect {
             x: 0.0,
             y: 0.0,
             width: size.width.max(1) as f32,
             height: size.height.max(1) as f32,
         };
-        push_rect(vertices, rect, [1.000, 1.000, 1.000, 1.0], size);
-        push_clipped_rect_outline(vertices, rect, clip, 1.0, [0.784, 0.808, 0.839, 1.0], size);
+        push_context_menu_shadow(vertices, rect, clip, scale, size);
+        push_clipped_rounded_rect(
+            vertices,
+            rect,
+            clip,
+            self.scale_metric(6.0),
+            [1.000, 1.000, 1.000, 1.0],
+            size,
+        );
 
         for (row, action) in context_menu_actions(&menu.target).iter().enumerate() {
             let row_rect = ViewRect {
                 x: rect.x,
-                y: rect.y + row as f32 * CONTEXT_MENU_ROW_HEIGHT,
+                y: rect.y + padding_y + row as f32 * row_height,
                 width: rect.width,
-                height: CONTEXT_MENU_ROW_HEIGHT,
+                height: row_height,
             };
             if menu.hovered_row == Some(row) {
                 push_rect(vertices, row_rect, [0.918, 0.945, 1.000, 1.0], size);
-            } else if row % 2 == 1 {
-                push_rect(vertices, row_rect, [0.973, 0.980, 0.988, 1.0], size);
             }
-            text.push_label(
+            if context_menu_separator_before(&menu.target, row) {
+                push_clipped_rect(
+                    vertices,
+                    ViewRect {
+                        x: rect.x + row_padding_x,
+                        y: row_rect.y,
+                        width: (rect.width - row_padding_x * 2.0).max(1.0),
+                        height: scale.round().max(1.0),
+                    },
+                    rect,
+                    [0.898, 0.906, 0.922, 1.0],
+                    size,
+                );
+            }
+            let icon = ViewRect {
+                x: row_rect.x + row_padding_x,
+                y: row_rect.y + (row_rect.height - icon_size) / 2.0,
+                width: icon_size,
+                height: icon_size,
+            };
+            let (glyph, icon_fg, icon_bg) = context_menu_icon_style(*action);
+            push_context_menu_icon(vertices, icon, rect, glyph, icon_fg, icon_bg, scale, size);
+            let text_x = icon.right() + gap;
+            text.push_label_aligned(
                 action.label(),
                 ViewRect {
-                    x: row_rect.x + 12.0,
-                    y: row_rect.y + 6.0,
-                    width: (row_rect.width - 24.0).max(1.0),
-                    height: 18.0,
+                    x: text_x,
+                    y: row_rect.y + (row_rect.height - text_height) / 2.0,
+                    width: (row_rect.right() - text_x - row_padding_x).max(1.0),
+                    height: text_height,
                 },
                 rect,
                 if menu.hovered_row == Some(row) {
@@ -6443,8 +6526,10 @@ impl ShellScene {
                 } else {
                     TextColor::rgb(36, 41, 47)
                 },
+                LabelAlignment::Start,
             );
         }
+        push_clipped_rect_outline(vertices, rect, clip, 1.0, [0.784, 0.808, 0.839, 1.0], size);
     }
 
     fn push_properties_overlay(
@@ -7883,6 +7968,7 @@ impl ShellSelection {
 
 struct SceneFrame {
     vertices: Vec<QuadVertex>,
+    overlay_vertices: Vec<QuadVertex>,
     visible_items: usize,
     quad_count: usize,
     content_size: ViewSize,
@@ -7900,8 +7986,10 @@ struct WgpuState {
     config: wgpu::SurfaceConfiguration,
     size: PhysicalSize<u32>,
     quad_renderer: QuadRenderer,
+    overlay_quad_renderer: QuadRenderer,
     icon_renderer: IconRenderer,
     text_renderer: TextRenderer,
+    overlay_text_renderer: TextRenderer,
     frame_count: u64,
     last_log: Instant,
     rendered_view_switches: u64,
@@ -7986,8 +8074,10 @@ impl WgpuState {
         surface.configure(&device, &config);
 
         let quad_renderer = QuadRenderer::new(&device, config.format);
+        let overlay_quad_renderer = QuadRenderer::new(&device, config.format);
         let icon_renderer = IconRenderer::new(&device, config.format);
         let text_renderer = TextRenderer::new(&device, config.format);
+        let overlay_text_renderer = TextRenderer::new(&device, config.format);
 
         Ok(Self {
             instance,
@@ -7997,8 +8087,10 @@ impl WgpuState {
             config,
             size,
             quad_renderer,
+            overlay_quad_renderer,
             icon_renderer,
             text_renderer,
+            overlay_text_renderer,
             frame_count: 0,
             last_log: Instant::now(),
             rendered_view_switches: 0,
@@ -8106,6 +8198,7 @@ impl WgpuState {
 
         let scene_frame = prepare_scene_frame(
             &mut self.text_renderer,
+            &mut self.overlay_text_renderer,
             &mut self.icon_renderer,
             &self.device,
             &self.queue,
@@ -8114,6 +8207,8 @@ impl WgpuState {
         );
         self.quad_renderer
             .upload(&self.device, &self.queue, &scene_frame.vertices);
+        self.overlay_quad_renderer
+            .upload(&self.device, &self.queue, &scene_frame.overlay_vertices);
 
         let view = frame
             .texture
@@ -8144,6 +8239,8 @@ impl WgpuState {
             self.quad_renderer.draw(&mut pass);
             self.icon_renderer.draw(&mut pass);
             self.text_renderer.draw(&mut pass);
+            self.overlay_quad_renderer.draw(&mut pass);
+            self.overlay_text_renderer.draw(&mut pass);
         }
 
         self.queue.submit(Some(encoder.finish()));
@@ -8249,8 +8346,10 @@ impl WgpuState {
                 scene_frame.text_stats.cache_entries,
                 scene_frame.text_stats.cache_bytes,
                 self.quad_renderer.batch_count()
+                    + self.overlay_quad_renderer.batch_count()
                     + self.icon_renderer.batch_count()
-                    + self.text_renderer.batch_count(),
+                    + self.text_renderer.batch_count()
+                    + self.overlay_text_renderer.batch_count(),
                 scene.scroll_x,
                 scene.scroll_y,
                 scene_frame.layout_us,
@@ -8849,6 +8948,23 @@ struct TextFrameStats {
     raster_us: u128,
 }
 
+impl TextFrameStats {
+    fn merged(self, other: Self) -> Self {
+        Self {
+            labels: self.labels + other.labels,
+            quads: self.quads + other.quads,
+            atlas_width: self.atlas_width.max(other.atlas_width),
+            atlas_height: self.atlas_height.max(other.atlas_height),
+            atlas_bytes: self.atlas_bytes + other.atlas_bytes,
+            cache_hits: self.cache_hits + other.cache_hits,
+            cache_misses: self.cache_misses + other.cache_misses,
+            cache_entries: self.cache_entries + other.cache_entries,
+            cache_bytes: self.cache_bytes + other.cache_bytes,
+            raster_us: self.raster_us + other.raster_us,
+        }
+    }
+}
+
 struct TextFrame {
     vertices: Vec<TextVertex>,
     pixels: Vec<u8>,
@@ -9397,6 +9513,7 @@ impl TextRenderer {
 
 fn prepare_scene_frame(
     text_renderer: &mut TextRenderer,
+    overlay_text_renderer: &mut TextRenderer,
     icon_renderer: &mut IconRenderer,
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -9404,9 +9521,10 @@ fn prepare_scene_frame(
     size: PhysicalSize<u32>,
 ) -> SceneFrame {
     text_renderer.label_cache.begin_frame();
+    overlay_text_renderer.label_cache.begin_frame();
     icon_renderer.raster_cache.begin_frame();
 
-    let (mut scene_frame, text_frame, icon_frame) = {
+    let (mut scene_frame, text_frame, overlay_text_frame, icon_frame) = {
         let mut text_builder = TextFrameBuilder::new(
             &mut text_renderer.font_system,
             &mut text_renderer.swash_cache,
@@ -9415,21 +9533,36 @@ fn prepare_scene_frame(
             size,
             scene.ui_scale() * scene.zoom_factor(),
         );
+        let mut overlay_text_builder = TextFrameBuilder::new(
+            &mut overlay_text_renderer.font_system,
+            &mut overlay_text_renderer.swash_cache,
+            &mut overlay_text_renderer.text_buffer,
+            &mut overlay_text_renderer.label_cache,
+            size,
+            scene.ui_scale(),
+        );
         let mut icon_builder = IconFrameBuilder::new(
             &mut icon_renderer.resolver,
             &mut icon_renderer.raster_cache,
             size,
         );
-        let scene_frame = scene.build_frame(size, &mut text_builder, &mut icon_builder);
+        let scene_frame = scene.build_frame(
+            size,
+            &mut text_builder,
+            &mut icon_builder,
+            &mut overlay_text_builder,
+        );
         let text_frame = text_builder.finish();
+        let overlay_text_frame = overlay_text_builder.finish();
         let icon_frame = icon_builder.finish();
-        (scene_frame, text_frame, icon_frame)
+        (scene_frame, text_frame, overlay_text_frame, icon_frame)
     };
 
     icon_renderer.upload(device, queue, &icon_frame);
     text_renderer.upload(device, queue, &text_frame);
+    overlay_text_renderer.upload(device, queue, &overlay_text_frame);
     scene_frame.icon_stats = icon_frame.stats;
-    scene_frame.text_stats = text_frame.stats;
+    scene_frame.text_stats = text_frame.stats.merged(overlay_text_frame.stats);
     scene_frame
 }
 
@@ -10686,18 +10819,314 @@ fn place_row_background_color(active: bool, hovered: bool) -> [f32; 4] {
     }
 }
 
-fn place_marker_color(place: &ShellPlace) -> [f32; 4] {
-    if place.trash {
-        [0.68, 0.36, 0.32, 1.0]
-    } else if place.network {
-        [0.32, 0.48, 0.72, 1.0]
-    } else if place.root {
-        [0.45, 0.46, 0.50, 1.0]
-    } else if place.editable {
-        [0.34, 0.54, 0.42, 1.0]
-    } else {
-        [0.72, 0.50, 0.22, 1.0]
+fn push_context_menu_shadow(
+    vertices: &mut Vec<QuadVertex>,
+    rect: ViewRect,
+    clip: ViewRect,
+    scale_factor: f32,
+    size: PhysicalSize<u32>,
+) {
+    let scale = scale_factor.max(1.0);
+    let radius = (6.0 * scale).round().max(1.0);
+    for (dy, spread, alpha) in [(1.0, 1.0, 0.10), (3.0, 3.0, 0.08), (7.0, 8.0, 0.05)] {
+        push_clipped_rounded_rect(
+            vertices,
+            ViewRect {
+                x: rect.x - (spread * scale).round(),
+                y: rect.y + (dy * scale).round() - (spread * scale).round(),
+                width: rect.width + (spread * 2.0 * scale).round(),
+                height: rect.height + (spread * 2.0 * scale).round(),
+            },
+            clip,
+            radius + (spread * scale).round(),
+            [0.000, 0.000, 0.000, alpha],
+            size,
+        );
     }
+}
+
+fn push_context_menu_icon(
+    vertices: &mut Vec<QuadVertex>,
+    rect: ViewRect,
+    clip: ViewRect,
+    glyph: ContextMenuGlyph,
+    fg: [f32; 4],
+    bg: [f32; 4],
+    scale_factor: f32,
+    size: PhysicalSize<u32>,
+) {
+    push_clipped_rounded_rect(
+        vertices,
+        rect,
+        clip,
+        (5.0 * scale_factor).round().max(1.0),
+        bg,
+        size,
+    );
+    match glyph {
+        ContextMenuGlyph::Open => {
+            push_context_icon_piece(vertices, rect, clip, 5.0, 5.0, 6.0, 3.0, 1.0, fg, size);
+            push_context_icon_piece(vertices, rect, clip, 4.0, 7.0, 10.0, 7.0, 2.0, fg, size);
+        }
+        ContextMenuGlyph::OpenWith => {
+            for (x, y) in [(5.0, 5.0), (10.0, 5.0), (5.0, 10.0), (10.0, 10.0)] {
+                push_context_icon_piece(vertices, rect, clip, x, y, 3.0, 3.0, 1.0, fg, size);
+            }
+        }
+        ContextMenuGlyph::Pane => {
+            push_context_icon_piece(vertices, rect, clip, 4.0, 4.0, 10.0, 10.0, 2.0, fg, size);
+            push_context_icon_piece(vertices, rect, clip, 8.0, 5.0, 1.0, 8.0, 0.0, bg, size);
+            push_context_icon_piece(vertices, rect, clip, 5.0, 8.0, 8.0, 1.0, 0.0, bg, size);
+        }
+        ContextMenuGlyph::Copy => {
+            push_context_icon_piece(vertices, rect, clip, 6.0, 4.0, 7.0, 9.0, 1.0, fg, size);
+            push_context_icon_piece(vertices, rect, clip, 4.0, 6.0, 7.0, 9.0, 1.0, fg, size);
+            push_context_icon_piece(vertices, rect, clip, 5.0, 7.0, 5.0, 7.0, 0.0, bg, size);
+        }
+        ContextMenuGlyph::Cut => {
+            push_context_icon_piece(vertices, rect, clip, 4.0, 5.0, 3.0, 3.0, 2.0, fg, size);
+            push_context_icon_piece(vertices, rect, clip, 4.0, 11.0, 3.0, 3.0, 2.0, fg, size);
+            push_context_icon_piece(vertices, rect, clip, 8.0, 6.0, 6.0, 2.0, 1.0, fg, size);
+            push_context_icon_piece(vertices, rect, clip, 8.0, 11.0, 6.0, 2.0, 1.0, fg, size);
+        }
+        ContextMenuGlyph::Location => {
+            push_context_icon_piece(vertices, rect, clip, 5.0, 4.0, 8.0, 8.0, 4.0, fg, size);
+            push_context_icon_piece(vertices, rect, clip, 8.0, 7.0, 2.0, 2.0, 1.0, bg, size);
+            push_context_icon_piece(vertices, rect, clip, 8.0, 11.0, 2.0, 4.0, 1.0, fg, size);
+        }
+        ContextMenuGlyph::Rename => {
+            push_context_icon_piece(vertices, rect, clip, 4.0, 10.0, 8.0, 3.0, 1.0, fg, size);
+            push_context_icon_piece(vertices, rect, clip, 11.0, 8.0, 3.0, 3.0, 1.0, fg, size);
+            push_context_icon_piece(vertices, rect, clip, 4.0, 14.0, 9.0, 1.0, 0.0, fg, size);
+        }
+        ContextMenuGlyph::Trash => {
+            push_context_icon_piece(vertices, rect, clip, 5.0, 5.0, 8.0, 2.0, 1.0, fg, size);
+            push_context_icon_piece(vertices, rect, clip, 6.0, 8.0, 6.0, 7.0, 1.0, fg, size);
+            push_context_icon_piece(vertices, rect, clip, 7.0, 9.0, 1.0, 5.0, 0.0, bg, size);
+            push_context_icon_piece(vertices, rect, clip, 10.0, 9.0, 1.0, 5.0, 0.0, bg, size);
+        }
+        ContextMenuGlyph::Restore => {
+            push_context_icon_piece(vertices, rect, clip, 5.0, 5.0, 2.0, 8.0, 1.0, fg, size);
+            push_context_icon_piece(vertices, rect, clip, 6.0, 11.0, 7.0, 2.0, 1.0, fg, size);
+            push_context_icon_piece(vertices, rect, clip, 11.0, 8.0, 2.0, 4.0, 1.0, fg, size);
+            push_context_icon_piece(vertices, rect, clip, 9.0, 7.0, 5.0, 2.0, 1.0, fg, size);
+        }
+        ContextMenuGlyph::Delete => {
+            push_context_icon_piece(vertices, rect, clip, 5.0, 5.0, 2.0, 2.0, 1.0, fg, size);
+            push_context_icon_piece(vertices, rect, clip, 8.0, 8.0, 2.0, 2.0, 1.0, fg, size);
+            push_context_icon_piece(vertices, rect, clip, 11.0, 11.0, 2.0, 2.0, 1.0, fg, size);
+            push_context_icon_piece(vertices, rect, clip, 11.0, 5.0, 2.0, 2.0, 1.0, fg, size);
+            push_context_icon_piece(vertices, rect, clip, 5.0, 11.0, 2.0, 2.0, 1.0, fg, size);
+        }
+        ContextMenuGlyph::Place => {
+            push_context_icon_piece(vertices, rect, clip, 5.0, 4.0, 8.0, 11.0, 1.0, fg, size);
+            push_context_icon_piece(vertices, rect, clip, 7.0, 11.0, 4.0, 4.0, 0.0, bg, size);
+        }
+        ContextMenuGlyph::Create => {
+            push_context_icon_piece(vertices, rect, clip, 8.0, 4.0, 2.0, 10.0, 1.0, fg, size);
+            push_context_icon_piece(vertices, rect, clip, 4.0, 8.0, 10.0, 2.0, 1.0, fg, size);
+        }
+        ContextMenuGlyph::Paste => {
+            push_context_icon_piece(vertices, rect, clip, 5.0, 5.0, 8.0, 10.0, 1.0, fg, size);
+            push_context_icon_piece(vertices, rect, clip, 7.0, 4.0, 4.0, 3.0, 1.0, fg, size);
+            push_context_icon_piece(vertices, rect, clip, 7.0, 9.0, 4.0, 1.0, 0.0, bg, size);
+            push_context_icon_piece(vertices, rect, clip, 7.0, 12.0, 4.0, 1.0, 0.0, bg, size);
+        }
+        ContextMenuGlyph::Select => {
+            push_context_icon_piece(vertices, rect, clip, 5.0, 5.0, 8.0, 2.0, 1.0, fg, size);
+            push_context_icon_piece(vertices, rect, clip, 5.0, 11.0, 8.0, 2.0, 1.0, fg, size);
+            push_context_icon_piece(vertices, rect, clip, 5.0, 5.0, 2.0, 8.0, 1.0, fg, size);
+            push_context_icon_piece(vertices, rect, clip, 11.0, 5.0, 2.0, 8.0, 1.0, fg, size);
+        }
+        ContextMenuGlyph::Refresh => {
+            push_context_icon_piece(vertices, rect, clip, 5.0, 5.0, 8.0, 2.0, 1.0, fg, size);
+            push_context_icon_piece(vertices, rect, clip, 5.0, 5.0, 2.0, 8.0, 1.0, fg, size);
+            push_context_icon_piece(vertices, rect, clip, 5.0, 11.0, 8.0, 2.0, 1.0, fg, size);
+            push_context_icon_piece(vertices, rect, clip, 11.0, 9.0, 2.0, 4.0, 1.0, fg, size);
+            push_context_icon_piece(vertices, rect, clip, 10.0, 4.0, 4.0, 4.0, 1.0, fg, size);
+        }
+        ContextMenuGlyph::Properties => {
+            push_context_icon_piece(vertices, rect, clip, 8.0, 4.0, 2.0, 2.0, 1.0, fg, size);
+            push_context_icon_piece(vertices, rect, clip, 8.0, 8.0, 2.0, 6.0, 1.0, fg, size);
+            push_context_icon_piece(vertices, rect, clip, 7.0, 14.0, 4.0, 1.0, 0.0, fg, size);
+        }
+        ContextMenuGlyph::Remove => {
+            push_context_icon_piece(vertices, rect, clip, 4.0, 8.0, 10.0, 2.0, 1.0, fg, size);
+        }
+    }
+}
+
+fn push_context_icon_piece(
+    vertices: &mut Vec<QuadVertex>,
+    bounds: ViewRect,
+    clip: ViewRect,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    radius: f32,
+    color: [f32; 4],
+    size: PhysicalSize<u32>,
+) {
+    let unit = bounds.width.min(bounds.height) / CONTEXT_MENU_ICON_SIZE;
+    let piece = ViewRect {
+        x: bounds.x + (x * unit).round(),
+        y: bounds.y + (y * unit).round(),
+        width: (width * unit).round().max(1.0),
+        height: (height * unit).round().max(1.0),
+    };
+    push_clipped_rounded_rect(vertices, piece, clip, (radius * unit).round(), color, size);
+}
+
+fn push_place_icon(
+    vertices: &mut Vec<QuadVertex>,
+    rect: ViewRect,
+    clip: ViewRect,
+    place: &ShellPlace,
+    active: bool,
+    scale_factor: f32,
+    size: PhysicalSize<u32>,
+) {
+    let (fg, bg) = place_icon_colors(place, active);
+    push_clipped_rounded_rect(
+        vertices,
+        rect,
+        clip,
+        (6.0 * scale_factor).round().max(1.0),
+        bg,
+        size,
+    );
+    if place.trash {
+        push_place_trash_icon(vertices, rect, clip, fg, scale_factor, size);
+    } else if place.root || place.network || place.marker == "D" || place.marker == "/" {
+        push_place_drive_icon(vertices, rect, clip, fg, scale_factor, size);
+    } else {
+        push_place_folder_icon(vertices, rect, clip, fg, scale_factor, size);
+    }
+}
+
+fn place_icon_colors(place: &ShellPlace, active: bool) -> ([f32; 4], [f32; 4]) {
+    if active {
+        return ([0.122, 0.310, 0.749, 1.0], [0.918, 0.945, 1.000, 1.0]);
+    }
+    if place.trash {
+        ([0.690, 0.282, 0.282, 1.0], [1.000, 0.922, 0.922, 1.0])
+    } else if place.network {
+        ([0.184, 0.435, 0.929, 1.0], [0.918, 0.945, 1.000, 1.0])
+    } else if place.root {
+        ([0.294, 0.318, 0.357, 1.0], [0.902, 0.922, 0.945, 1.0])
+    } else if place.editable {
+        ([0.192, 0.486, 0.310, 1.0], [0.910, 0.973, 0.925, 1.0])
+    } else {
+        ([0.749, 0.435, 0.047, 1.0], [1.000, 0.953, 0.855, 1.0])
+    }
+}
+
+fn place_icon_metric(value: f32, scale_factor: f32) -> f32 {
+    (value * scale_factor).round().max(1.0)
+}
+
+fn push_place_folder_icon(
+    vertices: &mut Vec<QuadVertex>,
+    bounds: ViewRect,
+    clip: ViewRect,
+    fg: [f32; 4],
+    scale_factor: f32,
+    size: PhysicalSize<u32>,
+) {
+    let s = |value| place_icon_metric(value, scale_factor);
+    push_clipped_rounded_rect(
+        vertices,
+        ViewRect {
+            x: bounds.x + s(5.0),
+            y: bounds.y + s(6.0),
+            width: s(7.0),
+            height: s(3.0),
+        },
+        clip,
+        s(1.0),
+        fg,
+        size,
+    );
+    push_clipped_rounded_rect(
+        vertices,
+        ViewRect {
+            x: bounds.x + s(4.0),
+            y: bounds.y + s(8.0),
+            width: bounds.width - s(8.0),
+            height: bounds.height - s(11.0),
+        },
+        clip,
+        s(2.0),
+        fg,
+        size,
+    );
+}
+
+fn push_place_drive_icon(
+    vertices: &mut Vec<QuadVertex>,
+    bounds: ViewRect,
+    clip: ViewRect,
+    fg: [f32; 4],
+    scale_factor: f32,
+    size: PhysicalSize<u32>,
+) {
+    let s = |value| place_icon_metric(value, scale_factor);
+    let body = ViewRect {
+        x: bounds.x + s(4.0),
+        y: bounds.y + s(5.0),
+        width: bounds.width - s(8.0),
+        height: bounds.height - s(10.0),
+    };
+    push_clipped_rounded_rect(vertices, body, clip, s(2.0), fg, size);
+    push_clipped_rect(
+        vertices,
+        ViewRect {
+            x: body.x + s(3.0),
+            y: body.bottom() - s(4.0),
+            width: body.width - s(6.0),
+            height: s(1.0),
+        },
+        clip,
+        [1.000, 1.000, 1.000, 0.75],
+        size,
+    );
+}
+
+fn push_place_trash_icon(
+    vertices: &mut Vec<QuadVertex>,
+    bounds: ViewRect,
+    clip: ViewRect,
+    fg: [f32; 4],
+    scale_factor: f32,
+    size: PhysicalSize<u32>,
+) {
+    let s = |value| place_icon_metric(value, scale_factor);
+    push_clipped_rect(
+        vertices,
+        ViewRect {
+            x: bounds.x + s(6.0),
+            y: bounds.y + s(5.0),
+            width: bounds.width - s(12.0),
+            height: s(2.0),
+        },
+        clip,
+        fg,
+        size,
+    );
+    push_clipped_rounded_rect(
+        vertices,
+        ViewRect {
+            x: bounds.x + s(5.0),
+            y: bounds.y + s(8.0),
+            width: bounds.width - s(10.0),
+            height: bounds.height - s(12.0),
+        },
+        clip,
+        s(2.0),
+        fg,
+        size,
+    );
 }
 
 fn item_background_color(selected: bool, hovered: bool) -> [f32; 4] {
@@ -10750,116 +11179,6 @@ fn chrome_color() -> [f32; 4] {
 
 fn sidebar_color() -> [f32; 4] {
     [0.973, 0.976, 0.984, 1.0]
-}
-
-fn view_mode_button_rects(
-    surface_width: f32,
-    scale_factor: f32,
-    content_origin_x: f32,
-    y: f32,
-) -> [(ShellViewMode, ViewRect); 3] {
-    let button_width = (VIEW_MODE_BUTTON_WIDTH * scale_factor).round().max(1.0);
-    let button_height = (VIEW_MODE_BUTTON_HEIGHT * scale_factor).round().max(1.0);
-    let button_gap = (VIEW_MODE_BUTTON_GAP * scale_factor).round().max(1.0);
-    let margin = (16.0 * scale_factor).round().max(1.0);
-    let y = y + (10.0 * scale_factor).round().max(1.0);
-    let total_width = button_width * 3.0 + button_gap * 2.0;
-    let start_x = (surface_width - total_width - margin).max(content_origin_x + margin);
-    [
-        (
-            ShellViewMode::Icons,
-            ViewRect {
-                x: start_x,
-                y,
-                width: button_width,
-                height: button_height,
-            },
-        ),
-        (
-            ShellViewMode::Compact,
-            ViewRect {
-                x: start_x + button_width + button_gap,
-                y,
-                width: button_width,
-                height: button_height,
-            },
-        ),
-        (
-            ShellViewMode::Details,
-            ViewRect {
-                x: start_x + (button_width + button_gap) * 2.0,
-                y,
-                width: button_width,
-                height: button_height,
-            },
-        ),
-    ]
-}
-
-fn path_navigation_button_rects(
-    scale_factor: f32,
-    content_origin_x: f32,
-    y: f32,
-) -> [(PathNavigationAction, ViewRect); 5] {
-    let x = content_origin_x + (16.0 * scale_factor).round().max(1.0);
-    let y = y + (10.0 * scale_factor).round().max(1.0);
-    let button_width = (NAV_BUTTON_WIDTH * scale_factor).round().max(1.0);
-    let up_button_width = (NAV_UP_BUTTON_WIDTH * scale_factor).round().max(1.0);
-    let reload_button_width = (NAV_RELOAD_BUTTON_WIDTH * scale_factor).round().max(1.0);
-    let hidden_button_width = (NAV_HIDDEN_BUTTON_WIDTH * scale_factor).round().max(1.0);
-    let button_height = (NAV_BUTTON_HEIGHT * scale_factor).round().max(1.0);
-    let gap = (NAV_BUTTON_GAP * scale_factor).round().max(1.0);
-    [
-        (
-            PathNavigationAction::Back,
-            ViewRect {
-                x,
-                y,
-                width: button_width,
-                height: button_height,
-            },
-        ),
-        (
-            PathNavigationAction::Forward,
-            ViewRect {
-                x: x + button_width + gap,
-                y,
-                width: button_width,
-                height: button_height,
-            },
-        ),
-        (
-            PathNavigationAction::Parent,
-            ViewRect {
-                x: x + (button_width + gap) * 2.0,
-                y,
-                width: up_button_width,
-                height: button_height,
-            },
-        ),
-        (
-            PathNavigationAction::Reload,
-            ViewRect {
-                x: x + (button_width + gap) * 2.0 + up_button_width + gap,
-                y,
-                width: reload_button_width,
-                height: button_height,
-            },
-        ),
-        (
-            PathNavigationAction::ToggleHidden,
-            ViewRect {
-                x: x + (button_width + gap) * 2.0
-                    + up_button_width
-                    + gap
-                    + reload_button_width
-                    + gap,
-                y,
-                width: hidden_button_width,
-                height: button_height,
-            },
-        ),
-    ]
 }
 
 fn push_limited_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
@@ -10970,29 +11289,72 @@ fn estimated_name_char_width(ch: char) -> f32 {
     }
 }
 
-fn path_placeholder_width(path: &std::path::Path, available_width: f32, scale_factor: f32) -> f32 {
-    let display_width = path.display().to_string().chars().count() as f32 * 7.5 * scale_factor
-        + 28.0 * scale_factor;
-    display_width.min(available_width)
+#[cfg(test)]
+fn context_menu_rect(menu: &ShellContextMenu, size: PhysicalSize<u32>) -> ViewRect {
+    context_menu_rect_scaled(menu, size, 1.0)
 }
 
-fn context_menu_rect(menu: &ShellContextMenu, size: PhysicalSize<u32>) -> ViewRect {
+fn context_menu_rect_scaled(
+    menu: &ShellContextMenu,
+    size: PhysicalSize<u32>,
+    scale_factor: f32,
+) -> ViewRect {
     let width = size.width.max(1) as f32;
     let height = size.height.max(1) as f32;
-    let menu_width = CONTEXT_MENU_WIDTH
-        .min((width - CONTEXT_MENU_MARGIN * 2.0).max(1.0))
+    let margin = scaled_context_menu_metric(CONTEXT_MENU_VIEWPORT_MARGIN, scale_factor);
+    let row_height = scaled_context_menu_metric(CONTEXT_MENU_ROW_HEIGHT, scale_factor);
+    let vertical_padding = scaled_context_menu_metric(CONTEXT_MENU_VERTICAL_PADDING, scale_factor);
+    let menu_width = scaled_context_menu_metric(CONTEXT_MENU_WIDTH, scale_factor)
+        .min((width - margin * 2.0).max(1.0))
         .max(1.0);
-    let menu_height = (context_menu_actions(&menu.target).len() as f32 * CONTEXT_MENU_ROW_HEIGHT)
-        .min((height - CONTEXT_MENU_MARGIN * 2.0).max(1.0))
+    let menu_height = (vertical_padding * 2.0
+        + context_menu_actions(&menu.target).len() as f32 * row_height)
+        .min((height - margin * 2.0).max(1.0))
         .max(1.0);
-    let max_x = (width - menu_width - CONTEXT_MENU_MARGIN).max(CONTEXT_MENU_MARGIN);
-    let max_y = (height - menu_height - CONTEXT_MENU_MARGIN).max(CONTEXT_MENU_MARGIN);
     ViewRect {
-        x: menu.position.x.max(CONTEXT_MENU_MARGIN).min(max_x),
-        y: menu.position.y.max(CONTEXT_MENU_MARGIN).min(max_y),
+        x: popup_menu_axis(menu.position.x, menu_width, width, margin),
+        y: popup_menu_axis(menu.position.y, menu_height, height, margin),
         width: menu_width,
         height: menu_height,
     }
+}
+
+fn context_menu_row_at_screen_point(
+    menu: &ShellContextMenu,
+    point: ViewPoint,
+    size: PhysicalSize<u32>,
+    scale_factor: f32,
+) -> Option<usize> {
+    let rect = context_menu_rect_scaled(menu, size, scale_factor);
+    if !rect.contains(point) {
+        return None;
+    }
+    let padding = scaled_context_menu_metric(CONTEXT_MENU_VERTICAL_PADDING, scale_factor);
+    let row_height = scaled_context_menu_metric(CONTEXT_MENU_ROW_HEIGHT, scale_factor);
+    let row_y = point.y - rect.y - padding;
+    if row_y < 0.0 {
+        return None;
+    }
+    let row = (row_y / row_height).floor() as usize;
+    (row < context_menu_actions(&menu.target).len()).then_some(row)
+}
+
+fn scaled_context_menu_metric(value: f32, scale_factor: f32) -> f32 {
+    (value * scale_factor.max(1.0)).round().max(1.0)
+}
+
+fn popup_menu_axis(anchor: f32, size: f32, viewport_size: f32, margin: f32) -> f32 {
+    let min = margin.min((viewport_size - size).max(0.0));
+    let max = (viewport_size - size - margin).max(min);
+    let forward = anchor.clamp(min, max);
+    if anchor + size <= viewport_size - margin {
+        return forward;
+    }
+    let flipped = anchor - size;
+    if flipped >= min {
+        return flipped.min(max);
+    }
+    forward
 }
 
 fn properties_overlay_rect(overlay: &ShellPropertiesOverlay, size: PhysicalSize<u32>) -> ViewRect {
@@ -12766,16 +13128,16 @@ text/plain=writer.desktop;\n",
             Some(ShellContextMenuAction::CreateNew)
         );
         let rect = context_menu_rect(menu, size);
-        assert!(rect.x >= CONTEXT_MENU_MARGIN);
-        assert!(rect.y >= CONTEXT_MENU_MARGIN);
-        assert!(rect.right() <= size.width as f32 - CONTEXT_MENU_MARGIN + f32::EPSILON);
-        assert!(rect.bottom() <= size.height as f32 - CONTEXT_MENU_MARGIN + f32::EPSILON);
+        assert!(rect.x >= CONTEXT_MENU_VIEWPORT_MARGIN);
+        assert!(rect.y >= CONTEXT_MENU_VIEWPORT_MARGIN);
+        assert!(rect.right() <= size.width as f32 - CONTEXT_MENU_VIEWPORT_MARGIN + f32::EPSILON);
+        assert!(rect.bottom() <= size.height as f32 - CONTEXT_MENU_VIEWPORT_MARGIN + f32::EPSILON);
 
         assert_eq!(
             scene.activate_or_close_context_menu(
                 ViewPoint {
-                    x: CONTEXT_MENU_MARGIN,
-                    y: CONTEXT_MENU_MARGIN,
+                    x: CONTEXT_MENU_VIEWPORT_MARGIN,
+                    y: CONTEXT_MENU_VIEWPORT_MARGIN,
                 },
                 size,
             ),
@@ -12783,6 +13145,124 @@ text/plain=writer.desktop;\n",
         );
         assert!(scene.context_menu.is_none());
         assert_eq!(scene.context_menu_actions, 0);
+    }
+
+    #[test]
+    fn context_menu_uses_original_metrics_and_flips_near_edges() {
+        let target = ShellContextTarget::Blank {
+            path: PathBuf::from("/tmp"),
+        };
+        let menu = ShellContextMenu::new(target, ViewPoint { x: 390.0, y: 280.0 });
+        let size = PhysicalSize::new(420, 320);
+        let rect = context_menu_rect(&menu, size);
+
+        assert_eq!(rect.width, 196.0);
+        assert_eq!(
+            rect.height,
+            CONTEXT_MENU_VERTICAL_PADDING * 2.0
+                + context_menu_actions(&menu.target).len() as f32 * CONTEXT_MENU_ROW_HEIGHT
+        );
+        assert!(rect.x < menu.position.x);
+        assert!(rect.y < menu.position.y);
+        assert!(rect.right() <= size.width as f32 - CONTEXT_MENU_VIEWPORT_MARGIN + f32::EPSILON);
+        assert!(rect.bottom() <= size.height as f32 - CONTEXT_MENU_VIEWPORT_MARGIN + f32::EPSILON);
+    }
+
+    #[test]
+    fn context_menu_hit_testing_respects_vertical_padding() {
+        let target = ShellContextTarget::Blank {
+            path: PathBuf::from("/tmp"),
+        };
+        let menu = ShellContextMenu::new(target, ViewPoint { x: 40.0, y: 40.0 });
+        let size = PhysicalSize::new(420, 320);
+        let rect = context_menu_rect(&menu, size);
+
+        assert_eq!(
+            context_menu_row_at_screen_point(
+                &menu,
+                ViewPoint {
+                    x: rect.x + 12.0,
+                    y: rect.y + 2.0
+                },
+                size,
+                1.0,
+            ),
+            None
+        );
+        assert_eq!(
+            context_menu_row_at_screen_point(
+                &menu,
+                ViewPoint {
+                    x: rect.x + 12.0,
+                    y: rect.y + CONTEXT_MENU_VERTICAL_PADDING + 2.0
+                },
+                size,
+                1.0,
+            ),
+            Some(0)
+        );
+        assert_eq!(
+            context_menu_row_at_screen_point(
+                &menu,
+                ViewPoint {
+                    x: rect.x + 12.0,
+                    y: rect.bottom() - 2.0
+                },
+                size,
+                1.0,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn context_menu_separator_rows_match_original_grouping() {
+        let blank = ShellContextTarget::Blank {
+            path: PathBuf::from("/tmp"),
+        };
+        let blank_actions = context_menu_actions(&blank);
+        let paste_row = blank_actions
+            .iter()
+            .position(|action| *action == ShellContextMenuAction::Paste)
+            .unwrap();
+        let select_all_row = blank_actions
+            .iter()
+            .position(|action| *action == ShellContextMenuAction::SelectAll)
+            .unwrap();
+        let properties_row = blank_actions
+            .iter()
+            .position(|action| *action == ShellContextMenuAction::Properties)
+            .unwrap();
+
+        assert!(!context_menu_separator_before(&blank, 0));
+        assert!(context_menu_separator_before(&blank, paste_row));
+        assert!(context_menu_separator_before(&blank, select_all_row));
+        assert!(context_menu_separator_before(&blank, properties_row));
+
+        let item = ShellContextTarget::Item {
+            index: 0,
+            path: PathBuf::from("/tmp/file.txt"),
+            is_dir: false,
+            selection_count: 1,
+        };
+        let item_actions = context_menu_actions(&item);
+        let copy_row = item_actions
+            .iter()
+            .position(|action| *action == ShellContextMenuAction::Copy)
+            .unwrap();
+        let rename_row = item_actions
+            .iter()
+            .position(|action| *action == ShellContextMenuAction::Rename)
+            .unwrap();
+        let properties_row = item_actions
+            .iter()
+            .position(|action| *action == ShellContextMenuAction::Properties)
+            .unwrap();
+
+        assert!(!context_menu_separator_before(&item, 0));
+        assert!(context_menu_separator_before(&item, copy_row));
+        assert!(context_menu_separator_before(&item, rename_row));
+        assert!(context_menu_separator_before(&item, properties_row));
     }
 
     #[test]
@@ -14145,7 +14625,7 @@ text/plain=writer.desktop;\n",
     }
 
     #[test]
-    fn location_editing_expands_path_bar_hit_target() {
+    fn location_bar_keeps_full_width_hit_target_when_editing() {
         let mut scene = test_scene(vec![test_entry("alpha", false)], ShellViewMode::Icons);
         scene.path = PathBuf::from("/x");
         let size = PhysicalSize::new(900, 360);
@@ -14158,7 +14638,8 @@ text/plain=writer.desktop;\n",
             .path_bar_rect(size)
             .expect("active path bar should be visible");
 
-        assert!(active.width > inactive.width);
+        assert_eq!(active.width, inactive.width);
+        assert_eq!(active.height, 28.0);
         assert!(scene.path_bar_contains_screen_point(
             ViewPoint {
                 x: active.right() - 2.0,
@@ -14468,102 +14949,18 @@ text/plain=writer.desktop;\n",
     }
 
     #[test]
-    fn top_bar_view_mode_buttons_are_hit_tested() {
+    fn app_toolbar_does_not_expose_temporary_mouse_buttons() {
         let scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
         let size = PhysicalSize::new(420, 240);
-        for (mode, rect) in
-            view_mode_button_rects(size.width as f32, 1.0, 0.0, scene.app_toolbar_y())
-        {
-            assert_eq!(
-                scene.view_mode_at_screen_point(
-                    ViewPoint {
-                        x: rect.x + 2.0,
-                        y: rect.y + 2.0
-                    },
-                    size
-                ),
-                Some(mode)
-            );
-        }
+        let toolbar_point = ViewPoint {
+            x: 18.0,
+            y: scene.app_toolbar_y() + 18.0,
+        };
+
+        assert_eq!(scene.view_mode_at_screen_point(toolbar_point, size), None);
         assert_eq!(
-            scene.view_mode_at_screen_point(ViewPoint { x: 8.0, y: 8.0 }, size),
+            scene.path_navigation_action_at_screen_point(toolbar_point, size),
             None
-        );
-    }
-
-    #[test]
-    fn top_bar_path_navigation_buttons_respect_enabled_state() {
-        let mut scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
-        let size = PhysicalSize::new(420, 240);
-        let navigation_rects = path_navigation_button_rects(1.0, 0.0, scene.app_toolbar_y());
-        let back_rect = navigation_rects[0].1;
-        let forward_rect = navigation_rects[1].1;
-        let parent_rect = navigation_rects[2].1;
-        let reload_rect = navigation_rects[3].1;
-        let hidden_rect = navigation_rects[4].1;
-
-        assert_eq!(
-            scene.path_navigation_action_at_screen_point(
-                ViewPoint {
-                    x: back_rect.x + 2.0,
-                    y: back_rect.y + 2.0
-                },
-                size
-            ),
-            None
-        );
-        assert_eq!(
-            scene.path_navigation_action_at_screen_point(
-                ViewPoint {
-                    x: parent_rect.x + 2.0,
-                    y: parent_rect.y + 2.0
-                },
-                size
-            ),
-            Some(PathNavigationAction::Parent)
-        );
-        assert_eq!(
-            scene.path_navigation_action_at_screen_point(
-                ViewPoint {
-                    x: reload_rect.x + 2.0,
-                    y: reload_rect.y + 2.0
-                },
-                size
-            ),
-            Some(PathNavigationAction::Reload)
-        );
-        assert_eq!(
-            scene.path_navigation_action_at_screen_point(
-                ViewPoint {
-                    x: hidden_rect.x + 2.0,
-                    y: hidden_rect.y + 2.0
-                },
-                size
-            ),
-            Some(PathNavigationAction::ToggleHidden)
-        );
-
-        scene.history.push_back(PathBuf::from("/tmp/previous"));
-        scene.history.push_forward(PathBuf::from("/tmp/next"));
-        assert_eq!(
-            scene.path_navigation_action_at_screen_point(
-                ViewPoint {
-                    x: back_rect.x + 2.0,
-                    y: back_rect.y + 2.0
-                },
-                size
-            ),
-            Some(PathNavigationAction::Back)
-        );
-        assert_eq!(
-            scene.path_navigation_action_at_screen_point(
-                ViewPoint {
-                    x: forward_rect.x + 2.0,
-                    y: forward_rect.y + 2.0
-                },
-                size
-            ),
-            Some(PathNavigationAction::Forward)
         );
     }
 
@@ -14652,7 +15049,7 @@ text/plain=writer.desktop;\n",
         let size = PhysicalSize::new(900, 600);
 
         assert!(scene.set_scale_factor(1.5, size));
-        assert_eq!(scene.top_bar_height(), 78.0);
+        assert_eq!(scene.top_bar_height(), 54.0);
         assert_eq!(scene.text_line_height(), 27.0);
 
         let icons_item = match scene.layout(size) {
@@ -14713,7 +15110,7 @@ text/plain=writer.desktop;\n",
         let size = PhysicalSize::new(360, 240);
         let status_bar = scene.status_bar_rect(size);
 
-        assert_eq!(scene.viewport_height(size), 100.0);
+        assert_eq!(scene.viewport_height(size), 124.0);
         assert_eq!(status_bar.y, 204.0);
         assert_eq!(
             scene.hit_test_screen_point(

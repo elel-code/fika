@@ -134,16 +134,16 @@ Current checkpoint:
   selection, so plain unhovered items no longer look pre-highlighted. Compact
   labels are left-aligned, and each Compact item's highlight width follows that
   item's own text width rather than filling the whole column.
-  The same modes can be switched at runtime with top-bar `Icons / Compact /
-  Details` buttons, `1/2/3`, `Ctrl/Meta+1/2/3`, or fallback `F1/F2/F3` keys.
+  The same modes can be switched at runtime with `1/2/3`,
+  `Ctrl/Meta+1/2/3`, or fallback `F1/F2/F3` keys; the temporary top-bar mode
+  buttons were removed to match the original app toolbar while real toolbar
+  controls are still pending.
   `--auto-cycle-views` switches modes once per second for compositor/render
   debugging without any input. Switching clamps the active scroll axis, clears
   transient rubber-band state, refreshes hover from retained geometry, updates
   the window title, emits an immediate `[fika-wgpu] view-mode=...` log line,
   and keeps a short redraw burst active until the switched scene has been
-  presented. The active top-bar segment and a full-width mode color stripe make
-  the current projection visible even when a directory's file content looks
-  similar across modes.
+  presented.
 - Pointer move/leave and left-click events now route through shell-owned
   retained hit testing. The spike tracks hovered item, single selection,
   Ctrl/Meta toggle selection, and Shift range selection by model index, then
@@ -218,10 +218,10 @@ Current checkpoint:
 - Directory activation now stays inside the shell-owned input path: Enter opens
   the focused selected directory, double-click opens a directory resolved from
   retained hit testing, and Backspace or Alt+Up loads the parent directory. The
-  top bar also has shell-owned Back/Forward/Up controls, with Alt+Left and
-  Alt+Right mapped to the same history stack. A top-bar Reload control plus
-  `F5` and `Ctrl/Meta+R` refresh the current directory without writing history,
-  preserving selection/focus by entry name when those entries still exist.
+  Alt+Left and Alt+Right map to the same history stack. `F5` and `Ctrl/Meta+R`
+  refresh the current directory without writing history, preserving
+  selection/focus by entry name when those entries still exist. App-level mouse
+  controls for history/reload remain toolbar migration work.
   Loading a new path reuses
   `read_entries_sync`, records normal navigation in a bounded back stack,
   clears forward history only after successful new navigation, resets
@@ -255,9 +255,9 @@ Current checkpoint:
   and Esc cancels. Caret movement, selection editing, and IME remain Phase 4
   text-boundary work.
 - Dotfile visibility is now shell-owned. Hidden entries are excluded from the
-  retained projection by default; `Ctrl/Meta+H` or the top-bar `Hidden` toggle
-  shows them. Selection is retained or pruned through the same projection when
-  the visibility mode changes.
+  retained projection by default; `Ctrl/Meta+H` shows them. Selection is
+  retained or pruned through the same projection when the visibility mode
+  changes. The app-level Hidden toggle remains toolbar migration work.
 - `[fika-wgpu]` logs include view mode, window/UI scale, path, entry count,
   visible item count,
   Places count/hover/change/scroll counters, quad count, selected count, hovered item index, active rubber-band state,
@@ -349,14 +349,24 @@ Implement the surrounding UI needed to make the shell usable: Places, toolbar,
 location bar, filter bar, status bar, context menus, dialogs, and chooser mode.
 
 Current checkpoint: the first chrome slices split the app-level toolbar from
-pane-local chrome. Back/Forward/Up/Reload, Hidden, and view-mode controls now
-live in the app toolbar; the pane starts below it with margin, while the
-rounded Places panel aligns to the pane origin and keeps left-click navigation
-plus a minimal Open/Copy Location/Properties/Remove row context menu. The pane
-still owns its bottom status bar with directory/selection/view/zoom summary, a
-minimal `Ctrl/Meta+F` filter bar, a pane-local
-`Ctrl/Meta+L`/`Ctrl/Meta+D`/`F6` location edit mode, and a lightweight opaque
-light file-view context menu overlay for item/blank right-clicks. Properties opens a
+pane-local chrome and remove the temporary Back/Forward/Reload/Hidden/view-mode
+mouse buttons from the toolbar. The toolbar now only carries the original-style
+Places toggle affordance until the real app-level controls are migrated; keyboard
+reload, hidden-file, history, and view-mode commands remain available. The pane
+starts below the toolbar with margin, while the rounded Places panel aligns to
+the pane origin, includes the original-style title/row/icon metrics, and keeps
+left-click navigation plus a minimal Open/Copy Location/Properties/Remove row
+context menu. The pane still owns its bottom status bar with
+directory/selection/view/zoom summary, a minimal `Ctrl/Meta+F` filter bar, a
+pane-local 28px `Ctrl/Meta+L`/`Ctrl/Meta+D`/`F6` location edit mode matching the
+original header scale, and a lightweight opaque light file-view context menu
+overlay for item/blank right-clicks. The context menu now follows the original
+196px width, 28px rows, 4px vertical padding, 8px viewport margin, edge
+flip/clamp positioning, 18px icon slot, `shadow_md`-style depth, grouped row
+separators, padding-aware hover/hit-test rows, geometric fallback icons instead
+of letter markers, and text scale independent from file view zoom. Overlay
+quads/text now render in a separate top pass so menu/dialog surfaces cover
+underlying item text. Properties opens a
 minimal metadata overlay for item and blank-directory targets. Create New opens
 a minimal shell-owned modal for blank-directory targets and performs real
 folder/file creation followed by reload and selection. Rename opens a minimal

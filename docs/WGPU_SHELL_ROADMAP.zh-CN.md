@@ -113,14 +113,14 @@ Shell 拥有：
   Compact 使用 core `CompactLayout`；Details 现在有 shell-owned row projection、
   固定 header，以及 Name/Size/Modified 三列。Icons 和 Compact 现在只在 hover 或 selection
   时绘制 item highlight/background，普通未悬停项不再像被预高亮。Compact label 左对齐，
-  每个 Compact item 的高亮宽度按该项自己的文本宽度收缩，而不是填满整列。同一组模式也可用 top-bar `Icons /
-  Compact / Details` 按钮、`1/2/3`、`Ctrl/Meta+1/2/3` 或 fallback `F1/F2/F3`
-  在运行时切换；`--auto-cycle-views` 会每秒自动切换一次，用于在没有输入的情况下
+  每个 Compact item 的高亮宽度按该项自己的文本宽度收缩，而不是填满整列。同一组模式也可用
+  `1/2/3`、`Ctrl/Meta+1/2/3` 或 fallback `F1/F2/F3` 在运行时切换；
+  临时 top-bar mode buttons 已移除，以贴近原版 app toolbar，真实 toolbar controls 仍待迁移。
+  `--auto-cycle-views` 会每秒自动切换一次，用于在没有输入的情况下
   调试 compositor/render。切换时会 clamp 当前 scroll axis、清理 transient
   rubber-band state、从 retained geometry 刷新 hover、更新窗口标题，立即输出
   `[fika-wgpu] view-mode=...` 日志，并保持一个短 redraw burst，直到切换后的 scene
-  被 present。Top bar active segment 和全宽 mode color stripe 让当前 projection
-  直接可见，即使目录内容在不同 mode 下看起来接近。
+  被 present。
 - Pointer move/leave 和左键点击现在通过 shell-owned retained hit testing 路由。Spike
   按 model index 跟踪 hovered item、单选、Ctrl/Meta toggle selection 和 Shift range
   selection，并从同一 slot projection 绘制 hover/selection 状态。
@@ -173,9 +173,9 @@ Shell 拥有：
   会全选当前目录 entries，`Esc` 会清空 selection 并取消任何 transient rubber-band 操作。
 - 目录激活现在也留在 shell-owned input path 内：Enter 打开当前 focus/selected
   目录，双击通过 retained hit testing 解析并打开目录，Backspace 或 Alt+Up 加载父目录。
-  Top bar 也提供 shell-owned Back/Forward/Up 控制，Alt+Left 和 Alt+Right 映射到同一
-  history stack。Top-bar Reload 控制以及 `F5` / `Ctrl/Meta+R` 会刷新当前目录，不写入
-  history，并在 entry 仍存在时按名称保留 selection/focus。加载新 path 复用
+  Alt+Left 和 Alt+Right 映射到同一 history stack。`F5` / `Ctrl/Meta+R`
+  会刷新当前目录，不写入 history，并在 entry 仍存在时按名称保留 selection/focus。
+  history/reload 的 app-level mouse controls 仍是 toolbar 迁移工作。加载新 path 复用
   `read_entries_sync`，普通导航会写入有界 back stack，
   且只在成功的新导航后清空 forward history；随后重置 scroll/selection/rubber-band
   transient state，从 retained geometry 刷新 hover，更新窗口标题，并通过与 view
@@ -201,8 +201,8 @@ Shell 拥有：
   补全 filesystem path，Enter 通过 retained navigation/history path 提交，Esc 取消。
   caret movement、selection editing 和 IME 仍留到 Phase 4 文本边界。
 - Dotfile 可见性现在也由 shell-owned retained projection 管理。默认不显示 hidden
-  entries；`Ctrl/Meta+H` 或 top-bar `Hidden` toggle 会显示它们。切换可见性时 selection
-  会通过同一 projection 保留或裁剪。
+  entries；`Ctrl/Meta+H` 会显示它们。切换可见性时 selection 会通过同一 projection
+  保留或裁剪；app-level Hidden toggle 仍是 toolbar 迁移工作。
 - `[fika-wgpu]` 日志包含 view mode、window/UI scale、path、entry count、visible item count、quad count、draw
   batch count、Places count/hover/change/scroll counters、selected count、hovered item index、active rubber-band state、
   context target kind、context menu state、properties overlay state、hit-test/selection/keyboard navigation/rubber-band/view-switch/path-change/open/copy-location/file-clipboard/paste/reload/location/filter/hidden counters、zoom percent
@@ -281,13 +281,19 @@ drag/drop target lookup 移到 shell-owned hit testing。
 实现可用 shell 所需外围 UI：Places、toolbar、location bar、filter bar、status bar、
 context menus、dialogs 和 chooser mode。
 
-当前 checkpoint：第一批 chrome slice 已把 app-level toolbar 与 pane-local chrome 分离；
-Back/Forward/Up/Reload、Hidden 和 view-mode 控件现在属于 app toolbar，pane 带 margin
-从 toolbar 下方开始，圆角 Places panel 对齐 pane 起点并保留左键 navigation 和最小
-Open/Copy Location/Properties/Remove row context menu。pane 内仍拥有底部 status bar、
+当前 checkpoint：第一批 chrome slice 已把 app-level toolbar 与 pane-local chrome 分离，
+并从 toolbar 移除临时 Back/Forward/Reload/Hidden/view-mode 鼠标按钮；toolbar 当前只保留
+原版样式的 Places toggle 形态，真实 app-level controls 留待后续迁移，keyboard reload、
+hidden-file、history 和 view-mode 命令仍可用。pane 带 margin 从 toolbar 下方开始，
+圆角 Places panel 对齐 pane 起点，补齐原版标题、row 和 icon 尺寸，并保留左键
+navigation 和最小 Open/Copy Location/Properties/Remove row context menu。pane 内仍拥有底部 status bar、
 `Ctrl/Meta+F` 最小 filter bar、
-`Ctrl/Meta+L`/`Ctrl/Meta+D`/`F6` pane-local 最小 location edit mode，以及用于 file-view
-item/blank 右键的不透明浅色 context menu overlay。Properties 会为 item 和 blank-directory
+`Ctrl/Meta+L`/`Ctrl/Meta+D`/`F6` pane-local 28px location edit mode（匹配原版 header scale），以及用于 file-view
+item/blank 右键的不透明浅色 context menu overlay。Context menu 现在对齐原版 196px 宽度、
+28px row、4px vertical padding、8px viewport margin、edge flip/clamp 定位、18px icon slot，
+`shadow_md` 风格层次、分组 row separator、padding-aware hover/hit-test row、非字母几何
+fallback 图标，且文字 scale 不再跟随 file-view zoom。Overlay quads/text 现在走独立顶层 pass，
+menu/dialog surface 会覆盖底下的 item text。Properties 会为 item 和 blank-directory
 targets 打开最小 metadata overlay。Create New 会为 blank-directory targets 打开最小
 shell-owned modal，并执行真实 folder/file 创建、reload 和选中新建条目。Rename 会为
 item targets 打开最小 shell-owned modal，并执行真实 filesystem rename、reload 和选中
