@@ -27,6 +27,7 @@ use fika_core::{
 use gio::prelude::FileExt;
 use raw_window_handle::{HasDisplayHandle, RawDisplayHandle};
 use winit::application::ApplicationHandler;
+use winit::cursor::{Cursor as WinitCursor, CursorIcon};
 use winit::dpi::PhysicalSize;
 use winit::event::{ElementState, KeyEvent, Modifiers, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
@@ -84,6 +85,7 @@ const CONTENT_SCROLLBAR_RESERVED_EXTENT: f32 = 14.0;
 const CONTENT_SCROLLBAR_PADDING: f32 = 4.0;
 const CONTENT_SCROLLBAR_MIN_THUMB_SIZE: f32 = 25.0;
 const SPLIT_PANE_DIVIDER_WIDTH: f32 = 1.0;
+const SPLIT_PANE_RESIZE_HANDLE_WIDTH: f32 = 10.0;
 const SPLIT_PANE_MIN_WIDTH: f32 = 180.0;
 const CONTEXT_MENU_WIDTH: f32 = 196.0;
 const CONTEXT_MENU_ROW_HEIGHT: f32 = 28.0;
@@ -258,6 +260,7 @@ enum ScrollbarDragTarget {
     Content(ContentScrollbarAxis),
     Places,
     PlacesResize,
+    SplitPaneResize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -427,6 +430,7 @@ struct FikaWgpuApp {
     renderer: Option<WgpuState>,
     clipboard: Option<ShellClipboard>,
     window: Option<Box<dyn Window>>,
+    cursor_icon: CursorIcon,
     pending_redraw_frames: u8,
     auto_cycle_views: bool,
     next_auto_cycle: Instant,
@@ -441,10 +445,25 @@ impl FikaWgpuApp {
             renderer: None,
             clipboard: None,
             window: None,
+            cursor_icon: CursorIcon::Default,
             pending_redraw_frames: 0,
             auto_cycle_views,
             next_auto_cycle: Instant::now() + AUTO_CYCLE_INTERVAL,
         }
+    }
+
+    fn set_window_cursor(&mut self, cursor_icon: CursorIcon) {
+        if self.cursor_icon == cursor_icon {
+            return;
+        }
+        self.cursor_icon = cursor_icon;
+        if let Some(window) = self.window.as_ref() {
+            window.set_cursor(WinitCursor::Icon(cursor_icon));
+        }
+    }
+
+    fn update_window_cursor_for_scene(&mut self, size: PhysicalSize<u32>) {
+        self.set_window_cursor(self.scene.cursor_icon(size));
     }
 }
 
@@ -751,26 +770,31 @@ impl ApplicationHandler for FikaWgpuApp {
                 let Some(renderer) = self.renderer.as_ref() else {
                     return;
                 };
+                let size = renderer.size;
                 let point = ViewPoint {
                     x: position.x as f32,
                     y: position.y as f32,
                 };
                 if self.scene.is_open_with_chooser_open() {
+                    self.set_window_cursor(CursorIcon::Default);
                     return;
                 }
                 if self.scene.is_rename_dialog_open() {
+                    self.set_window_cursor(CursorIcon::Default);
                     return;
                 }
                 if self.scene.is_create_dialog_open() {
+                    self.set_window_cursor(CursorIcon::Default);
                     return;
                 }
-                if self.scene.set_pointer(point, renderer.size)
-                    && let Some(window) = self.window.as_ref()
-                {
+                let changed = self.scene.set_pointer(point, size);
+                self.update_window_cursor_for_scene(size);
+                if changed && let Some(window) = self.window.as_ref() {
                     window.request_redraw();
                 }
             }
             WindowEvent::PointerLeft { .. } => {
+                self.set_window_cursor(CursorIcon::Default);
                 if self.scene.clear_pointer()
                     && let Some(window) = self.window.as_ref()
                 {
@@ -786,6 +810,7 @@ impl ApplicationHandler for FikaWgpuApp {
                 let Some(renderer) = self.renderer.as_ref() else {
                     return;
                 };
+                let size = renderer.size;
                 let point = ViewPoint {
                     x: position.x as f32,
                     y: position.y as f32,
@@ -797,7 +822,7 @@ impl ApplicationHandler for FikaWgpuApp {
                     if state == ElementState::Pressed && mouse_button == MouseButton::Left {
                         match self
                             .scene
-                            .open_with_chooser_click_at_screen_point(point, renderer.size)
+                            .open_with_chooser_click_at_screen_point(point, size)
                         {
                             OpenWithChooserClick::Outside | OpenWithChooserClick::Cancel => {
                                 if self.scene.close_open_with_chooser()
@@ -823,7 +848,7 @@ impl ApplicationHandler for FikaWgpuApp {
                     if state == ElementState::Pressed && mouse_button == MouseButton::Left {
                         match self
                             .scene
-                            .trash_conflict_dialog_click_at_screen_point(point, renderer.size)
+                            .trash_conflict_dialog_click_at_screen_point(point, size)
                         {
                             TrashConflictDialogClick::Outside
                             | TrashConflictDialogClick::Cancel => {
@@ -843,10 +868,7 @@ impl ApplicationHandler for FikaWgpuApp {
                 }
                 if self.scene.is_rename_dialog_open() {
                     if state == ElementState::Pressed && mouse_button == MouseButton::Left {
-                        match self
-                            .scene
-                            .rename_dialog_click_at_screen_point(point, renderer.size)
-                        {
+                        match self.scene.rename_dialog_click_at_screen_point(point, size) {
                             RenameDialogClick::Outside | RenameDialogClick::Cancel => {
                                 if self.scene.close_rename_dialog()
                                     && let Some(window) = self.window.as_ref()
@@ -862,10 +884,7 @@ impl ApplicationHandler for FikaWgpuApp {
                 }
                 if self.scene.is_create_dialog_open() {
                     if state == ElementState::Pressed && mouse_button == MouseButton::Left {
-                        match self
-                            .scene
-                            .create_dialog_click_at_screen_point(point, renderer.size)
-                        {
+                        match self.scene.create_dialog_click_at_screen_point(point, size) {
                             CreateDialogClick::Outside | CreateDialogClick::Cancel => {
                                 if self.scene.close_create_dialog()
                                     && let Some(window) = self.window.as_ref()
@@ -875,10 +894,10 @@ impl ApplicationHandler for FikaWgpuApp {
                             }
                             CreateDialogClick::Commit => self.commit_create_dialog(event_loop),
                             CreateDialogClick::Kind(kind) => {
-                                if self.scene.apply_create_command(
-                                    CreateCommand::SetKind(kind),
-                                    renderer.size,
-                                ) && let Some(window) = self.window.as_ref()
+                                if self
+                                    .scene
+                                    .apply_create_command(CreateCommand::SetKind(kind), size)
+                                    && let Some(window) = self.window.as_ref()
                                 {
                                     window.request_redraw();
                                 }
@@ -891,9 +910,7 @@ impl ApplicationHandler for FikaWgpuApp {
                 if self.scene.is_properties_overlay_open() {
                     if state == ElementState::Pressed
                         && mouse_button == MouseButton::Left
-                        && self
-                            .scene
-                            .close_properties_overlay_if_outside(point, renderer.size)
+                        && self.scene.close_properties_overlay_if_outside(point, size)
                         && let Some(window) = self.window.as_ref()
                     {
                         window.request_redraw();
@@ -902,7 +919,7 @@ impl ApplicationHandler for FikaWgpuApp {
                 }
                 if mouse_button == MouseButton::Right {
                     if state == ElementState::Pressed
-                        && self.scene.open_context_menu(point, renderer.size)
+                        && self.scene.open_context_menu(point, size)
                         && let Some(window) = self.window.as_ref()
                     {
                         window.request_redraw();
@@ -913,25 +930,20 @@ impl ApplicationHandler for FikaWgpuApp {
                     return;
                 }
                 let path_bar_hit = state == ElementState::Pressed
-                    && self
-                        .scene
-                        .path_bar_contains_screen_point(point, renderer.size);
+                    && self.scene.path_bar_contains_screen_point(point, size);
                 let location_blur_changed = state == ElementState::Pressed
                     && !path_bar_hit
-                    && self
-                        .scene
-                        .close_location_draft_if_outside(point, renderer.size);
+                    && self.scene.close_location_draft_if_outside(point, size);
                 if state == ElementState::Released && self.scene.is_scrollbar_dragging() {
-                    let changed = self.scene.end_scrollbar_drag(point, renderer.size);
+                    let changed = self.scene.end_scrollbar_drag(point, size);
+                    self.update_window_cursor_for_scene(size);
                     if changed && let Some(window) = self.window.as_ref() {
                         window.request_redraw();
                     }
                     return;
                 }
                 if state == ElementState::Pressed && self.scene.is_context_menu_open() {
-                    let action = self
-                        .scene
-                        .activate_or_close_context_menu(point, renderer.size);
+                    let action = self.scene.activate_or_close_context_menu(point, size);
                     if let Some(action) = action {
                         self.perform_context_menu_action(event_loop, action);
                     } else if let Some(window) = self.window.as_ref() {
@@ -940,10 +952,9 @@ impl ApplicationHandler for FikaWgpuApp {
                     return;
                 }
                 if state == ElementState::Pressed
-                    && let Some(changed) = self
-                        .scene
-                        .toggle_places_at_screen_point(point, renderer.size)
+                    && let Some(changed) = self.scene.toggle_places_at_screen_point(point, size)
                 {
+                    self.update_window_cursor_for_scene(size);
                     if (changed || location_blur_changed)
                         && let Some(window) = self.window.as_ref()
                     {
@@ -952,8 +963,9 @@ impl ApplicationHandler for FikaWgpuApp {
                     return;
                 }
                 if state == ElementState::Pressed
-                    && let Some(changed) = self.scene.begin_scrollbar_drag(point, renderer.size)
+                    && let Some(changed) = self.scene.begin_scrollbar_drag(point, size)
                 {
+                    self.update_window_cursor_for_scene(size);
                     if (changed || location_blur_changed)
                         && let Some(window) = self.window.as_ref()
                     {
@@ -964,7 +976,7 @@ impl ApplicationHandler for FikaWgpuApp {
                 if path_bar_hit {
                     if self
                         .scene
-                        .apply_location_command(LocationCommand::Activate, renderer.size)
+                        .apply_location_command(LocationCommand::Activate, size)
                         && let Some(window) = self.window.as_ref()
                     {
                         window.request_redraw();
@@ -974,16 +986,15 @@ impl ApplicationHandler for FikaWgpuApp {
                 if state == ElementState::Pressed
                     && let Some(action) = self
                         .scene
-                        .path_navigation_action_at_screen_point(point, renderer.size)
+                        .path_navigation_action_at_screen_point(point, size)
                 {
                     self.perform_path_navigation(event_loop, action);
                     return;
                 }
                 if state == ElementState::Pressed
-                    && let Some(view_mode) =
-                        self.scene.view_mode_at_screen_point(point, renderer.size)
+                    && let Some(view_mode) = self.scene.view_mode_at_screen_point(point, size)
                 {
-                    if self.scene.set_view_mode(view_mode, renderer.size) {
+                    if self.scene.set_view_mode(view_mode, size) {
                         self.pending_redraw_frames = VIEW_SWITCH_REDRAW_FRAMES;
                         if let Some(window) = self.window.as_ref() {
                             window.set_title(&window_title(&self.scene));
@@ -994,9 +1005,7 @@ impl ApplicationHandler for FikaWgpuApp {
                     return;
                 }
                 if state == ElementState::Pressed
-                    && let Some(path) = self
-                        .scene
-                        .place_activation_for_primary_press(point, renderer.size)
+                    && let Some(path) = self.scene.place_activation_for_primary_press(point, size)
                 {
                     self.load_scene_path(event_loop, path, "place-open");
                     return;
@@ -1004,7 +1013,7 @@ impl ApplicationHandler for FikaWgpuApp {
                 if state == ElementState::Pressed
                     && let Some(path) = self.scene.directory_activation_for_primary_press(
                         point,
-                        renderer.size,
+                        size,
                         Instant::now(),
                     )
                 {
@@ -1019,10 +1028,11 @@ impl ApplicationHandler for FikaWgpuApp {
                             toggle: self.modifiers.state().control_key()
                                 || self.modifiers.state().meta_key(),
                         };
-                        self.scene.begin_primary_pointer(selection, renderer.size)
+                        self.scene.begin_primary_pointer(selection, size)
                     }
-                    ElementState::Released => self.scene.end_primary_pointer(point, renderer.size),
+                    ElementState::Released => self.scene.end_primary_pointer(point, size),
                 };
+                self.update_window_cursor_for_scene(size);
                 if (changed || location_blur_changed)
                     && let Some(window) = self.window.as_ref()
                 {
@@ -3449,6 +3459,7 @@ struct ShellScene {
     open_with_chooser: Option<ShellOpenWithChooser>,
     trash_conflict_dialog: Option<ShellTrashConflictDialog>,
     split_pane: Option<ShellPaneState>,
+    split_pane_left_fraction: f32,
     rubber_band: Option<RubberBand>,
     scale_factor: f32,
     hit_tests: u64,
@@ -3541,6 +3552,7 @@ impl ShellScene {
             open_with_chooser: None,
             trash_conflict_dialog: None,
             split_pane: None,
+            split_pane_left_fraction: 0.5,
             rubber_band: None,
             scale_factor: 1.0,
             hit_tests: 0,
@@ -4040,6 +4052,7 @@ impl ShellScene {
         split_pane.scroll_x = 0.0;
         split_pane.scroll_y = 0.0;
         self.split_pane = Some(split_pane);
+        self.split_pane_left_fraction = 0.5;
         self.split_pane_changes += 1;
         self.context_target = None;
         self.context_menu = None;
@@ -4339,6 +4352,44 @@ impl ShellScene {
             width: handle_width,
             height: sidebar.height,
         })
+    }
+
+    fn split_pane_resize_handle_rect(&self, size: PhysicalSize<u32>) -> Option<ViewRect> {
+        let divider = self.split_pane_metrics(size)?.divider;
+        let handle_width = self
+            .scale_metric(SPLIT_PANE_RESIZE_HANDLE_WIDTH)
+            .max(divider.width);
+        Some(ViewRect {
+            x: divider.x + (divider.width - handle_width) / 2.0,
+            y: divider.y,
+            width: handle_width,
+            height: divider.height,
+        })
+    }
+
+    fn cursor_icon(&self, size: PhysicalSize<u32>) -> CursorIcon {
+        if self.scrollbar_drag.is_some_and(|drag| {
+            matches!(
+                drag.target,
+                ScrollbarDragTarget::PlacesResize | ScrollbarDragTarget::SplitPaneResize
+            )
+        }) {
+            return CursorIcon::ColResize;
+        }
+        let Some(point) = self.pointer else {
+            return CursorIcon::Default;
+        };
+        if self
+            .places_resize_handle_rect(size)
+            .is_some_and(|rect| rect.contains(point))
+            || self
+                .split_pane_resize_handle_rect(size)
+                .is_some_and(|rect| rect.contains(point))
+        {
+            CursorIcon::ColResize
+        } else {
+            CursorIcon::Default
+        }
     }
 
     fn place_activation_for_primary_press(
@@ -8402,11 +8453,12 @@ impl ShellScene {
         let origin_x = self.content_origin_x(size);
         let total_width = (size.width.max(1) as f32 - origin_x).max(1.0);
         let divider_width = self.scale_metric(SPLIT_PANE_DIVIDER_WIDTH);
-        let min_width = self.scale_metric(SPLIT_PANE_MIN_WIDTH);
-        let split_width = (total_width - divider_width).max(2.0);
-        let left_width = (split_width / 2.0)
-            .max(1.0)
-            .min((total_width - divider_width - min_width).max(split_width / 2.0));
+        let (available_width, min_width, max_left_width) =
+            self.split_pane_width_bounds_for_total(total_width, divider_width);
+        let left_width = (available_width * self.split_pane_left_fraction)
+            .clamp(min_width, max_left_width)
+            .round()
+            .max(1.0);
         let divider = ViewRect {
             x: origin_x + left_width,
             y: self.pane_top_y(),
@@ -8425,6 +8477,58 @@ impl ShellScene {
             right_pane,
             left_width,
         })
+    }
+
+    fn split_pane_width_bounds(&self, size: PhysicalSize<u32>) -> Option<(f32, f32, f32)> {
+        self.split_pane.as_ref()?;
+        let origin_x = self.content_origin_x(size);
+        let total_width = (size.width.max(1) as f32 - origin_x).max(1.0);
+        let divider_width = self.scale_metric(SPLIT_PANE_DIVIDER_WIDTH);
+        Some(self.split_pane_width_bounds_for_total(total_width, divider_width))
+    }
+
+    fn split_pane_width_bounds_for_total(
+        &self,
+        total_width: f32,
+        divider_width: f32,
+    ) -> (f32, f32, f32) {
+        let available_width = (total_width - divider_width).max(1.0);
+        let min_width = self
+            .scale_metric(SPLIT_PANE_MIN_WIDTH)
+            .min((available_width / 2.0).max(1.0));
+        let max_left_width = (available_width - min_width).max(min_width);
+        (available_width, min_width, max_left_width)
+    }
+
+    fn set_split_pane_left_width_px(
+        &mut self,
+        desired_left_width: f32,
+        size: PhysicalSize<u32>,
+    ) -> bool {
+        if self.split_pane.is_none() {
+            return false;
+        }
+        let Some((available_width, min_width, max_left_width)) = self.split_pane_width_bounds(size)
+        else {
+            return false;
+        };
+        let next_width = desired_left_width.clamp(min_width, max_left_width);
+        let Some(old_width) = self
+            .split_pane_metrics(size)
+            .map(|metrics| metrics.left_width)
+        else {
+            return false;
+        };
+        if (old_width - next_width).abs() <= 0.5 {
+            return false;
+        }
+        self.split_pane_left_fraction = (next_width / available_width).clamp(0.0, 1.0);
+        self.split_pane_changes += 1;
+        eprintln!(
+            "[fika-wgpu] split-pane-resize left_width={:.1} fraction={:.3} changes={}",
+            next_width, self.split_pane_left_fraction, self.split_pane_changes
+        );
+        true
     }
 
     fn content_scrollbar_axis(&self) -> ContentScrollbarAxis {
@@ -8609,6 +8713,18 @@ impl ShellScene {
             return Some(self.update_scrollbar_drag(point, size));
         }
 
+        if let Some(handle) = self.split_pane_resize_handle_rect(size)
+            && handle.contains(point)
+            && let Some(metrics) = self.split_pane_metrics(size)
+        {
+            self.scrollbar_drag = Some(ScrollbarDrag {
+                target: ScrollbarDragTarget::SplitPaneResize,
+                grab_offset: point.x - metrics.divider.x,
+            });
+            self.pointer = Some(point);
+            return Some(self.update_scrollbar_drag(point, size));
+        }
+
         if let Some((track, thumb)) = self.places_scrollbar_rects(size)
             && track.contains(point)
         {
@@ -8664,11 +8780,18 @@ impl ShellScene {
         let old_y = self.scroll_y;
         let old_places_y = self.places_scroll_y;
         let old_places_width = self.places_sidebar_width(size);
+        let old_split_left_width = self
+            .split_pane_metrics(size)
+            .map(|metrics| metrics.left_width);
 
         match drag.target {
             ScrollbarDragTarget::PlacesResize => {
                 let desired_width = point.x - drag.grab_offset;
                 self.set_places_sidebar_width_px(desired_width, size);
+            }
+            ScrollbarDragTarget::SplitPaneResize => {
+                let desired_left_width = point.x - self.content_origin_x(size) - drag.grab_offset;
+                self.set_split_pane_left_width_px(desired_left_width, size);
             }
             ScrollbarDragTarget::Places => {
                 if let Some((track, thumb)) = self.places_scrollbar_rects(size) {
@@ -8716,11 +8839,17 @@ impl ShellScene {
         let places_changed = (self.places_scroll_y - old_places_y).abs() > f32::EPSILON;
         let places_resized =
             (self.places_sidebar_width(size) - old_places_width).abs() > f32::EPSILON;
+        let split_resized = old_split_left_width
+            .zip(
+                self.split_pane_metrics(size)
+                    .map(|metrics| metrics.left_width),
+            )
+            .is_some_and(|(old_width, new_width)| (old_width - new_width).abs() > f32::EPSILON);
         if places_changed {
             self.places_scroll_changes += 1;
         }
         let hover_changed = self.refresh_hover(size);
-        content_changed || places_changed || places_resized || hover_changed
+        content_changed || places_changed || places_resized || split_resized || hover_changed
     }
 
     fn end_scrollbar_drag(&mut self, point: ViewPoint, size: PhysicalSize<u32>) -> bool {
@@ -13637,6 +13766,7 @@ mod tests {
             open_with_chooser: None,
             trash_conflict_dialog: None,
             split_pane: None,
+            split_pane_left_fraction: 0.5,
             rubber_band: None,
             scale_factor: 1.0,
             hit_tests: 0,
@@ -13804,6 +13934,90 @@ mod tests {
             scene.places_sidebar_width_bounds(size).0
         );
         assert!(scene.places_resize_changes >= 2);
+        let _ = scene.end_scrollbar_drag(ViewPoint { x: 0.0, y: start.y }, size);
+        assert!(!scene.is_scrollbar_dragging());
+    }
+
+    #[test]
+    fn splitter_cursor_hints_follow_hover_and_drag_state() {
+        let mut scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
+        let size = PhysicalSize::new(700, 320);
+        let handle = scene.places_resize_handle_rect(size).unwrap();
+        let point = ViewPoint {
+            x: handle.x + handle.width / 2.0,
+            y: handle.y + 10.0,
+        };
+
+        assert_eq!(scene.cursor_icon(size), CursorIcon::Default);
+        let _ = scene.set_pointer(point, size);
+        assert_eq!(scene.cursor_icon(size), CursorIcon::ColResize);
+        assert!(scene.begin_scrollbar_drag(point, size).is_some());
+        assert_eq!(scene.cursor_icon(size), CursorIcon::ColResize);
+        assert!(scene.set_pointer(
+            ViewPoint {
+                x: point.x + 30.0,
+                y: point.y,
+            },
+            size
+        ));
+        assert_eq!(scene.cursor_icon(size), CursorIcon::ColResize);
+        let _ = scene.end_scrollbar_drag(
+            ViewPoint {
+                x: point.x + 30.0,
+                y: point.y,
+            },
+            size,
+        );
+        assert_eq!(scene.cursor_icon(size), CursorIcon::ColResize);
+        let _ = scene.set_pointer(
+            ViewPoint {
+                x: scene.content_origin_x(size) + scene.content_width(size) - 8.0,
+                y: scene.content_origin_y() + 8.0,
+            },
+            size,
+        );
+        assert_eq!(scene.cursor_icon(size), CursorIcon::Default);
+    }
+
+    #[test]
+    fn split_pane_divider_drag_updates_left_width_and_cursor_hint() {
+        let mut scene = test_scene(vec![test_entry("alpha", true)], ShellViewMode::Icons);
+        let split_entries = vec![test_entry("right", true)];
+        scene.split_pane = Some(ShellPaneState {
+            path: PathBuf::from("/right-root"),
+            view_mode: ShellViewMode::Icons,
+            dir_count: 1,
+            filtered_indexes: filtered_indexes_for_entries(&split_entries, false, ""),
+            entries: split_entries,
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+        });
+        let size = PhysicalSize::new(900, 360);
+        let before_left = scene.split_pane_metrics(size).unwrap().left_width;
+        let handle = scene.split_pane_resize_handle_rect(size).unwrap();
+        let start = ViewPoint {
+            x: handle.x + handle.width / 2.0,
+            y: handle.y + 20.0,
+        };
+
+        let _ = scene.set_pointer(start, size);
+        assert_eq!(scene.cursor_icon(size), CursorIcon::ColResize);
+        assert!(scene.begin_scrollbar_drag(start, size).is_some());
+        assert!(scene.set_pointer(
+            ViewPoint {
+                x: start.x + 70.0,
+                y: start.y,
+            },
+            size
+        ));
+        let after_left = scene.split_pane_metrics(size).unwrap().left_width;
+        assert!(after_left > before_left);
+        assert!(scene.split_pane_left_fraction > 0.5);
+        assert_eq!(scene.cursor_icon(size), CursorIcon::ColResize);
+
+        assert!(scene.set_pointer(ViewPoint { x: 0.0, y: start.y }, size));
+        let min_left = scene.split_pane_width_bounds(size).unwrap().1;
+        assert_eq!(scene.split_pane_metrics(size).unwrap().left_width, min_left);
         let _ = scene.end_scrollbar_drag(ViewPoint { x: 0.0, y: start.y }, size);
         assert!(!scene.is_scrollbar_dragging());
     }

@@ -203,8 +203,9 @@ Current checkpoint:
   left-click place navigation through the same `load_path`/history path as
   file-view navigation. The toolbar Places button now hides/restores the
   sidebar for real, the file pane reclaims the width when hidden, and the
-  Places splitter is a retained resize handle with clamped logical width and
-  frame-log telemetry. Places
+  Places splitter is a retained resize handle with clamped logical width,
+  `ColResize` cursor feedback, and frame-log telemetry. The split-pane divider
+  also supports retained drag-resize with the same cursor feedback. Places
   right-click now creates a shell-owned place context target and a minimal
   context menu that dispatches Open, Copy Location, Properties, and Remove for
   editable user places. Remove writes Fika's `places.xbel`, prunes matching
@@ -407,15 +408,17 @@ visible breathing room before the pane, and
 the pane chrome drops the earlier hard blue/gray outer border in favor of subtle
 separators that blend into the shell background. The Places toolbar toggle now
 really hides/restores the sidebar, hidden Places releases pane width, and the
-Places splitter can be dragged to a clamped retained width. Empty Trash no
-longer paints the blue status dot. The split pane is intentionally a minimal
-visible skeleton: focus, pointer routing, scrollbars, real DnD, and file
-operations still target the primary pane. Multi-pane work now projects both the
-primary and right-hand pane through `ShellPaneView`, shares `pane_layout(...)`
-for Icons, Compact, and Details, shares pane geometry/item hit-testing, and has
-started using `ShellPaneGeometry` in split-pane paint. The next step must
-continue that extraction through pane paint and event routing instead of adding
-more split-only paths. The first DnD preparation layer is in place through
+Places splitter can be dragged to a clamped retained width. The Places splitter
+and split-pane divider both show `ColResize` cursor feedback while hovered or
+dragged. Empty Trash no longer paints the blue status dot. The split pane is intentionally
+still a minimal visible skeleton: focus, split-pane scrollbars, real DnD, and
+file operations still target the primary pane, but its divider now supports
+retained drag-resize. Multi-pane work now projects both the primary and
+right-hand pane through `ShellPaneView`, shares `pane_layout(...)` for Icons,
+Compact, and Details, shares pane geometry/item hit-testing, and has started
+using `ShellPaneGeometry` in split-pane paint. The next step must continue that
+extraction through pane paint and event routing instead of adding more
+split-only paths. The first DnD preparation layer is in place through
 `ShellDropTarget` lookup for primary/split pane items, pane blanks, place rows,
 and Places blanks; real Wayland DnD hover/drop/export wiring remains pending.
 Richer Places actions/devices/DnD, richer Trash conflict handling, undo, richer properties, full inline
