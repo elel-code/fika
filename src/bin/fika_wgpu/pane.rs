@@ -33,6 +33,26 @@ pub(crate) struct ShellPaneState {
 }
 
 impl ShellPaneState {
+    pub(crate) fn from_entries(
+        path: PathBuf,
+        view_mode: ShellViewMode,
+        entries: Vec<Entry>,
+        show_hidden: bool,
+        filter_pattern: &str,
+    ) -> Self {
+        let dir_count = entries.iter().filter(|entry| entry.is_dir).count();
+        let filtered_indexes = filtered_indexes_for_entries(&entries, show_hidden, filter_pattern);
+        Self {
+            path,
+            view_mode,
+            entries,
+            dir_count,
+            filtered_indexes,
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+        }
+    }
+
     pub(crate) fn load(
         path: PathBuf,
         view_mode: ShellViewMode,
@@ -71,6 +91,15 @@ impl ShellPaneState {
 
     pub(crate) fn rebuild_filtered_indexes(&mut self, show_hidden: bool) {
         self.filtered_indexes = filtered_indexes_for_entries(&self.entries, show_hidden, "");
+    }
+
+    pub(crate) fn rebuild_filtered_indexes_with_pattern(
+        &mut self,
+        show_hidden: bool,
+        filter_pattern: &str,
+    ) {
+        self.filtered_indexes =
+            filtered_indexes_for_entries(&self.entries, show_hidden, filter_pattern);
     }
 }
 

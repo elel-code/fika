@@ -88,6 +88,9 @@ winit/wgpu shell 负责：
 
 ### Phase 2：拆分单文件
 
+- 当前首要目标是 pane 复用。Primary pane 和 split pane 必须共享
+  `ShellPaneState`、pane view/projection、scroll metrics、slot pool、layout adapter，
+  后续继续收敛 input/action routing 边界。
 - 第一批拆分已落地：`src/bin/fika_wgpu/clipboard.rs` 负责 shell clipboard wrapper；
   `src/bin/fika_wgpu/location.rs` 负责 `PathHistory`、`LocationDraft` 和地址栏编辑使用的
   UTF-8 cursor normalization；`src/bin/fika_wgpu/selection.rs` 负责 selection state、
@@ -95,6 +98,9 @@ winit/wgpu shell 负责：
   `src/bin/fika_wgpu/pane.rs` 负责 pane kind/state/view/projection data、scroll metrics、
   split metrics 和 visible-slot pool；`src/bin/fika_wgpu/pane_layout.rs` 负责 shell layout
   enum、Compact/Details layout adapter 和 keyboard navigation target calculation。
+- `ShellScene` 现在用 `primary_pane: ShellPaneState` 存储主 pane；primary/split pane
+  通过同一组 `pane_state` / `pane_state_mut` 状态访问边界工作，不再保留 primary-only
+  的 path/view/entries/filter/scroll 散落字段。
 - 抽出 app/window/event loop、renderer、scene、pane、Places、context menu、
   dialogs、icons、thumbnails、text、DnD、telemetry 模块。
 - 拆分时尽量少改行为，方便定位 regression。

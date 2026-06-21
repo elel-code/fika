@@ -101,6 +101,9 @@ Expected cleanup:
 
 ### Phase 2: Break Up the Monolith
 
+- Current priority: pane reuse. Primary and split panes must share
+  `ShellPaneState`, pane view/projection, scroll metrics, slot pool, layout
+  adapters, and later input/action routing boundaries.
 - First extraction is in place: `src/bin/fika_wgpu/clipboard.rs` owns the
   shell clipboard wrapper, and `src/bin/fika_wgpu/location.rs` owns
   `PathHistory`, `LocationDraft`, and UTF-8 cursor normalization for location
@@ -110,6 +113,9 @@ Expected cleanup:
   scroll metrics, split metrics, and the visible-slot pool.
   `src/bin/fika_wgpu/pane_layout.rs` owns the shell layout enum, Compact and
   Details layout adapters, and keyboard navigation target calculation.
+- `ShellScene` now stores the primary pane as `primary_pane: ShellPaneState`;
+  primary and split panes use the same `pane_state` / `pane_state_mut` access
+  boundary instead of maintaining separate primary-only fields.
 - Extract app/window/event loop, renderer, scene, pane, Places, context menu,
   dialogs, icons, thumbnails, text, DnD, and telemetry modules.
 - Keep behavior changes small while moving code, so regressions remain easy to

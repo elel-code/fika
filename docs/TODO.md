@@ -58,6 +58,9 @@ wgpu = "29"
 
 ## winit/wgpu Shell Work
 
+- [~] **当前首要目标：pane 复用。** Primary pane 和 split pane 必须共享
+  `ShellPaneState`、pane view/projection、scroll metrics、slot pool、layout adapter 和
+  后续 input/action routing 边界；禁止继续让 primary pane 以散落字段形成第二套实现。
 - [x] Phase 0a：依赖从 Pop!_OS/COSMIC `winit` tag 切到官方 upstream
   `rust-windowing/winit` `master` 分支，并刷新 `Cargo.lock`。
 - [x] Phase 0b：撤销未完成的 SCTK dialog 半迁移，避免 `fika-sctk` 因半成品引用阻塞构建。
@@ -73,7 +76,9 @@ wgpu = "29"
   visible-slot pool）、
   `src/bin/fika_wgpu/pane_layout.rs`（ShellLayout、compact/details layout adapter、
   keyboard navigation target）。
-  下一步继续抽 app/window/event loop、renderer、pane scene assembly、Places、context menu、
+  `ShellScene` 的 primary pane 已迁入 `primary_pane: ShellPaneState`，并通过
+  `pane_state` / `pane_state_mut` 与 split pane 共享状态访问边界。下一步继续抽
+  app/window/event loop、renderer、pane scene assembly、Places、context menu、
   dialogs、icons、thumbnails、text、DnD、telemetry。
 - [ ] Phase 3：把 pane 做成可复用组件，并持续对齐 Dolphin 架构：visible-slot
   virtualization、slot pool、retained geometry、filtered projection、selection/rubber-band、
