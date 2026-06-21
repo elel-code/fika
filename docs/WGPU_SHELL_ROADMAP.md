@@ -115,7 +115,10 @@ Current checkpoint:
   state, Icons/Compact/Details layout projection, item painting, content
   scrollbar drawing, pane-local chrome, and pane hit testing, while `SctkScene`
   owns app chrome, Places, and routes pointer/scroll events into the active pane
-  geometry.
+  geometry. The SCTK shell now accepts `--split` for a second pane on the same
+  path and `--split-path PATH` for a second pane on a different path; both panes
+  share `SctkPane`, and pointer hover, primary selection, and positioned wheel
+  scroll route to the hit pane.
   The SCTK renderer uploads and draws those quads, while Wayland pointer handling
   routes hover, left-click selection, and wheel scroll through the retained
   scene hit-test path. Text is also rendered in SCTK now: `src/bin/fika_sctk/text.rs`
@@ -124,7 +127,14 @@ Current checkpoint:
   solid scene pass. Its entry point is a thin binary wrapper; startup options,
   app/calloop orchestration, wgpu surface rendering, metrics, pane projection,
   quad drawing, text drawing, the directory scene, and Wayland handlers live under
-  `src/bin/fika_sctk/`.
+  `src/bin/fika_sctk/`. HiDPI is now handled in the SCTK shell by configuring a
+  physical `wgpu` surface from the Wayland integer buffer scale and drawing
+  both solid quads and text atlas quads in the same physical surface coordinate
+  space. The earlier blur came from rendering a logical-size buffer that the
+  compositor upscaled; the follow-up offset came from scaling quad rects without
+  scaling the NDC surface denominator. The exact fractional-scale viewport path
+  remains available only behind `FIKA_SCTK_EXACT_FRACTIONAL_VIEWPORT=1` until it
+  has separate visual evidence.
 - New shell work should land in `src/bin/fika_sctk/`. The older
   winit-backed `fika-wgpu` spike is a history/reference baseline only and should
   not receive new shell behavior.

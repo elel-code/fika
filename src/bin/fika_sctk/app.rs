@@ -5,30 +5,38 @@ use calloop::EventLoop;
 use calloop_wayland_source::WaylandSource;
 use smithay_client_toolkit::{
     compositor::CompositorState,
+    globals::GlobalData,
     output::OutputState,
+    reexports::protocols::wp::{
+        fractional_scale::v1::client::{
+            wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1,
+            wp_fractional_scale_v1::WpFractionalScaleV1,
+        },
+        viewporter::client::{wp_viewport::WpViewport, wp_viewporter::WpViewporter},
+    },
     registry::RegistryState,
     seat::SeatState,
     shell::{
         WaylandSurface,
         xdg::{
-            XdgShell,
+            XdgShell, XdgSurface,
             window::{Window, WindowConfigure, WindowDecorations},
         },
     },
 };
 use wayland_client::Connection;
 use wayland_client::globals::registry_queue_init;
-use wayland_client::protocol::wl_pointer;
+use wayland_client::protocol::{wl_pointer, wl_surface};
 
 use super::options::StartupOptions;
-use super::renderer::WgpuRenderer;
+use super::renderer::{WgpuRenderer, surface_extent};
 use super::scene::SctkScene;
 
 const DEFAULT_WIDTH: u32 = 1100;
 const DEFAULT_HEIGHT: u32 = 720;
 
 pub(crate) fn run(options: StartupOptions) -> Result<(), Box<dyn Error>> {
-    let scene = SctkScene::load(options.path, options.view_mode)?;
+    let scene = SctkScene::load(options.path, options.view_mode, options.split_path)?;
     scene.log_startup();
 
     let conn = Connection::connect_to_env()?;
@@ -45,6 +53,29 @@ pub(crate) fn run(options: StartupOptions) -> Result<(), Box<dyn Error>> {
     window.set_min_size(Some((360, 240)));
     window.commit();
 
+    let exact_fractional_viewport =
+        std::env::var_os("FIKA_SCTK_EXACT_FRACTIONAL_VIEWPORT").is_some();
+    let viewporter: Option<WpViewporter> = exact_fractional_viewport
+        .then(|| globals.bind(&qh, 1..=1, GlobalData).ok())
+        .flatten();
+    let viewport = viewporter
+        .as_ref()
+        .map(|viewporter| viewporter.get_viewport(window.wl_surface(), &qh, GlobalData));
+    let fractional_scale_manager: Option<WpFractionalScaleManagerV1> =
+        globals.bind(&qh, 1..=1, GlobalData).ok();
+    let fractional_scale = fractional_scale_manager
+        .as_ref()
+        .zip(viewport.as_ref())
+        .map(|(manager, _)| {
+            manager.get_fractional_scale(
+                window.wl_surface(),
+                &qh,
+                FractionalScaleData {
+                    surface: window.wl_surface().clone(),
+                },
+            )
+        });
+
     let renderer = WgpuRenderer::new(&conn, &window)?;
     let mut app = FikaSctkApp {
         registry_state: RegistryState::new(&globals),
@@ -55,6 +86,11 @@ pub(crate) fn run(options: StartupOptions) -> Result<(), Box<dyn Error>> {
         ready_logged: false,
         width: DEFAULT_WIDTH,
         height: DEFAULT_HEIGHT,
+        scale_factor: 1.0,
+        viewporter,
+        viewport,
+        fractional_scale_manager,
+        fractional_scale,
         // Drop order matters: the wgpu surface must be destroyed before the
         // underlying Wayland window.
         renderer,
@@ -80,9 +116,19 @@ pub(crate) struct FikaSctkApp {
     ready_logged: bool,
     width: u32,
     height: u32,
+    scale_factor: f32,
+    viewporter: Option<WpViewporter>,
+    pub(crate) viewport: Option<WpViewport>,
+    fractional_scale_manager: Option<WpFractionalScaleManagerV1>,
+    pub(crate) fractional_scale: Option<WpFractionalScaleV1>,
     renderer: WgpuRenderer,
     pub(crate) window: Window,
     scene: SctkScene,
+}
+
+#[derive(Clone)]
+pub(crate) struct FractionalScaleData {
+    pub(crate) surface: wl_surface::WlSurface,
 }
 
 impl FikaSctkApp {
@@ -94,28 +140,92 @@ impl FikaSctkApp {
         let (width, height) = configure.new_size;
         self.width = width.map(NonZeroU32::get).unwrap_or(DEFAULT_WIDTH);
         self.height = height.map(NonZeroU32::get).unwrap_or(DEFAULT_HEIGHT);
-        let config = self.renderer.configure_surface(self.width, self.height);
+        self.apply_surface_state();
+        let config = self
+            .renderer
+            .configure_surface(self.width, self.height, self.ui_scale());
         if !self.ready_logged {
             eprintln!(
-                "[fika-sctk] shell-ready size={}x{} format={:?} path={} view={} entries={} dirs={} files={}",
+                "[fika-sctk] shell-ready size={}x{} scale={:.2} scale_mode={} viewporter={} fractional_protocol={} surface={}x{} format={:?} path={} view={} entries={} dirs={} files={} split_pane={}",
                 self.width,
                 self.height,
+                self.ui_scale(),
+                self.scale_mode(),
+                self.viewporter.is_some() as u8,
+                self.fractional_scale_manager.is_some() as u8,
+                config.width,
+                config.height,
                 config.format,
                 self.scene.path().display(),
                 self.scene.view_mode().as_str(),
                 self.scene.entry_count(),
                 self.scene.dir_count(),
-                self.scene.file_count()
+                self.scene.file_count(),
+                self.scene.split_enabled() as u8
             );
             self.ready_logged = true;
         } else {
-            eprintln!("[fika-sctk] configure size={}x{}", self.width, self.height);
+            eprintln!(
+                "[fika-sctk] configure size={}x{} scale={:.2} scale_mode={} surface={}x{}",
+                self.width,
+                self.height,
+                self.ui_scale(),
+                self.scale_mode(),
+                config.width,
+                config.height
+            );
         }
         self.render_scene("configure");
     }
 
+    pub(crate) fn set_legacy_scale_factor(&mut self, scale_factor: i32) {
+        if self.fractional_scale.is_some() {
+            return;
+        }
+        self.set_scale_factor(scale_factor.max(1) as f32, "legacy-scale");
+    }
+
+    pub(crate) fn set_fractional_scale(&mut self, scale_factor: f32) {
+        let preferred_scale = scale_factor.max(1.0);
+        let render_scale = if self.viewport.is_some() {
+            preferred_scale
+        } else {
+            preferred_scale.ceil()
+        };
+        eprintln!(
+            "[fika-sctk] fractional-scale={preferred_scale:.3} render-scale={render_scale:.3}"
+        );
+        self.set_scale_factor(render_scale, "render-scale");
+    }
+
+    fn set_scale_factor(&mut self, scale_factor: f32, reason: &str) {
+        let scale_factor = (scale_factor.max(1.0) * 120.0).round() / 120.0;
+        if (self.scale_factor - scale_factor).abs() < f32::EPSILON {
+            return;
+        }
+        self.scale_factor = scale_factor;
+        eprintln!("[fika-sctk] {reason}={scale_factor:.3}");
+        if self.ready_logged {
+            self.apply_surface_state();
+            let config = self
+                .renderer
+                .configure_surface(self.width, self.height, self.ui_scale());
+            eprintln!(
+                "[fika-sctk] reconfigure scale={:.2} scale_mode={} surface={}x{}",
+                self.ui_scale(),
+                self.scale_mode(),
+                config.width,
+                config.height
+            );
+            self.render_scene("scale-factor");
+        }
+    }
+
     pub(crate) fn render_scene(&mut self, reason: &str) {
-        let frame = self.scene.render_frame(self.width, self.height);
+        self.apply_surface_state();
+        let frame = self
+            .scene
+            .render_frame(self.width, self.height, self.ui_scale());
         self.renderer.render_scene_frame(frame, reason);
     }
 
@@ -143,12 +253,50 @@ impl FikaSctkApp {
         }
     }
 
-    pub(crate) fn scroll(&mut self, horizontal: f32, vertical: f32) {
-        if self
-            .scene
-            .scroll(horizontal, vertical, self.width, self.height)
-        {
+    pub(crate) fn scroll_at(&mut self, x: f64, y: f64, horizontal: f32, vertical: f32) {
+        if self.scene.scroll_at(
+            crate::fika_sctk::quad::point(x, y),
+            horizontal,
+            vertical,
+            self.width,
+            self.height,
+        ) {
             self.render_scene("scroll");
+        }
+    }
+
+    fn ui_scale(&self) -> f32 {
+        self.scale_factor.max(1.0)
+    }
+
+    fn apply_surface_state(&self) {
+        self.window.xdg_surface().set_window_geometry(
+            0,
+            0,
+            self.width.max(1) as i32,
+            self.height.max(1) as i32,
+        );
+        if let Some(viewport) = &self.viewport {
+            self.window.wl_surface().set_buffer_scale(1);
+            viewport.set_source(
+                0.0,
+                0.0,
+                surface_extent(self.width, self.ui_scale()) as f64,
+                surface_extent(self.height, self.ui_scale()) as f64,
+            );
+            viewport.set_destination(self.width as i32, self.height as i32);
+        } else {
+            self.window
+                .wl_surface()
+                .set_buffer_scale(self.scale_factor.round().max(1.0) as i32);
+        }
+    }
+
+    fn scale_mode(&self) -> &'static str {
+        if self.viewport.is_some() {
+            "viewport"
+        } else {
+            "buffer"
         }
     }
 }

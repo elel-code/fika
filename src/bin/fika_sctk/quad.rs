@@ -28,12 +28,25 @@ fn fs_main(input: VertexOut) -> @location(0) vec4<f32> {
 }
 "#;
 
-#[derive(Default)]
 pub(crate) struct QuadBatch {
     vertices: Vec<QuadVertex>,
+    scale: f32,
+}
+
+impl Default for QuadBatch {
+    fn default() -> Self {
+        Self::with_scale(1.0)
+    }
 }
 
 impl QuadBatch {
+    pub(crate) fn with_scale(scale: f32) -> Self {
+        Self {
+            vertices: Vec::new(),
+            scale: scale.max(1.0),
+        }
+    }
+
     pub(crate) fn vertices(&self) -> &[QuadVertex] {
         &self.vertices
     }
@@ -49,9 +62,11 @@ impl QuadBatch {
         surface_width: u32,
         surface_height: u32,
     ) {
+        let surface_width = scaled_extent(surface_width, self.scale);
+        let surface_height = scaled_extent(surface_height, self.scale);
         push_rect(
             &mut self.vertices,
-            rect,
+            scale_rect(rect, self.scale),
             color,
             surface_width,
             surface_height,
@@ -66,9 +81,16 @@ impl QuadBatch {
         surface_width: u32,
         surface_height: u32,
     ) {
-        if let Some(rect) = intersect_rect(rect, clip) {
-            self.push_rect(rect, color, surface_width, surface_height);
-        }
+        let surface_width = scaled_extent(surface_width, self.scale);
+        let surface_height = scaled_extent(surface_height, self.scale);
+        push_clipped_rect_unscaled(
+            &mut self.vertices,
+            scale_rect(rect, self.scale),
+            scale_rect(clip, self.scale),
+            color,
+            surface_width,
+            surface_height,
+        );
     }
 
     pub(crate) fn push_clipped_rounded_rect(
@@ -80,18 +102,31 @@ impl QuadBatch {
         surface_width: u32,
         surface_height: u32,
     ) {
+        let surface_width = scaled_extent(surface_width, self.scale);
+        let surface_height = scaled_extent(surface_height, self.scale);
+        let rect = scale_rect(rect, self.scale);
+        let clip = scale_rect(clip, self.scale);
+        let radius = radius * self.scale;
         if rect.width <= 0.0 || rect.height <= 0.0 || color[3] <= 0.0 {
             return;
         }
         let radius = radius.min(rect.width / 2.0).min(rect.height / 2.0).max(0.0);
         if radius <= 1.0 {
-            self.push_clipped_rect(rect, clip, color, surface_width, surface_height);
+            push_clipped_rect_unscaled(
+                &mut self.vertices,
+                rect,
+                clip,
+                color,
+                surface_width,
+                surface_height,
+            );
             return;
         }
 
         let middle_height = (rect.height - radius * 2.0).max(0.0);
         if middle_height > 0.0 {
-            self.push_clipped_rect(
+            push_clipped_rect_unscaled(
+                &mut self.vertices,
                 ViewRect {
                     x: rect.x,
                     y: rect.y + radius,
@@ -128,8 +163,22 @@ impl QuadBatch {
                 width: strip_width,
                 height: step_height,
             };
-            self.push_clipped_rect(top, clip, color, surface_width, surface_height);
-            self.push_clipped_rect(bottom, clip, color, surface_width, surface_height);
+            push_clipped_rect_unscaled(
+                &mut self.vertices,
+                top,
+                clip,
+                color,
+                surface_width,
+                surface_height,
+            );
+            push_clipped_rect_unscaled(
+                &mut self.vertices,
+                bottom,
+                clip,
+                color,
+                surface_width,
+                surface_height,
+            );
         }
     }
 }
@@ -300,6 +349,32 @@ fn intersect_rect(a: ViewRect, b: ViewRect) -> Option<ViewRect> {
         width,
         height,
     })
+}
+
+fn push_clipped_rect_unscaled(
+    vertices: &mut Vec<QuadVertex>,
+    rect: ViewRect,
+    clip: ViewRect,
+    color: [f32; 4],
+    surface_width: u32,
+    surface_height: u32,
+) {
+    if let Some(rect) = intersect_rect(rect, clip) {
+        push_rect(vertices, rect, color, surface_width, surface_height);
+    }
+}
+
+fn scale_rect(rect: ViewRect, scale: f32) -> ViewRect {
+    ViewRect {
+        x: rect.x * scale,
+        y: rect.y * scale,
+        width: rect.width * scale,
+        height: rect.height * scale,
+    }
+}
+
+fn scaled_extent(value: u32, scale: f32) -> u32 {
+    ((value.max(1) as f32) * scale.max(1.0)).ceil().max(1.0) as u32
 }
 
 pub(crate) fn inset(rect: ViewRect, by: f32) -> ViewRect {

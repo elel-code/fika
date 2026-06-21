@@ -83,6 +83,7 @@ impl WgpuRenderer {
         &mut self,
         width: u32,
         height: u32,
+        scale: f32,
     ) -> wgpu::SurfaceConfiguration {
         let capabilities = self.surface.get_capabilities(&self.adapter);
         let format = capabilities
@@ -110,11 +111,13 @@ impl WgpuRenderer {
             .first()
             .copied()
             .unwrap_or(wgpu::CompositeAlphaMode::Auto);
+        let physical_width = surface_extent(width, scale);
+        let physical_height = surface_extent(height, scale);
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
-            width: width.max(1),
-            height: height.max(1),
+            width: physical_width,
+            height: physical_height,
             present_mode,
             desired_maximum_frame_latency: 2,
             alpha_mode,
@@ -160,6 +163,7 @@ impl WgpuRenderer {
                 &frame_scene.text,
                 frame.texture.width(),
                 frame.texture.height(),
+                frame_scene.scale,
             );
             text_renderer.stats()
         } else {
@@ -198,9 +202,10 @@ impl WgpuRenderer {
         frame.present();
         self.frame_count = self.frame_count.wrapping_add(1);
         eprintln!(
-            "[fika-sctk] frame={} reason={} quads={} visible={} selected={} hover={} text_labels={} text_quads={} text_atlas={}x{}:{}b scroll_x={:.1} scroll_y={:.1}",
+            "[fika-sctk] frame={} reason={} scale={:.2} quads={} visible={} selected={} hover={} split_pane={} active_pane={} text_labels={} text_quads={} text_atlas={}x{}:{}b scroll_x={:.1} scroll_y={:.1}",
             self.frame_count,
             reason,
+            frame_scene.scale,
             frame_scene.quads,
             frame_scene.visible_items,
             frame_scene
@@ -211,6 +216,8 @@ impl WgpuRenderer {
                 .hover
                 .map(|index| index.to_string())
                 .unwrap_or_else(|| "-1".to_string()),
+            frame_scene.split_pane as u8,
+            frame_scene.active_pane,
             text_stats.labels,
             text_stats.quads,
             text_stats.atlas_width,
@@ -220,4 +227,8 @@ impl WgpuRenderer {
             frame_scene.scroll_y,
         );
     }
+}
+
+pub(crate) fn surface_extent(value: u32, scale: f32) -> u32 {
+    ((value.max(1) as f32) * scale.max(1.0)).ceil().max(1.0) as u32
 }

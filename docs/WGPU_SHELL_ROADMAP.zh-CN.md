@@ -101,7 +101,10 @@ retained scene/renderer 行为。
   `SctkPane` 拥有启动目录 entries、core `ViewMode`、retained scroll/hover/selection
   状态、Icons/Compact/Details layout projection、item painting、content scrollbar、
   pane-local chrome 和 pane hit testing；`SctkScene` 拥有 app chrome、Places，
-  并把 pointer/scroll 事件路由到 active pane geometry。SCTK renderer 会上传并绘制
+  并把 pointer/scroll 事件路由到 active pane geometry。SCTK shell 现在支持
+  `--split` 打开同一路径的第二 pane，也支持 `--split-path PATH` 打开指定路径的
+  第二 pane；两个 pane 共用 `SctkPane`，pointer hover、左键 selection 和带坐标的
+  wheel scroll 会路由到命中的 pane。SCTK renderer 会上传并绘制
   这些 quads；Wayland pointer handling 已把 hover、左键 selection 和 wheel scroll
   路由到同一 retained pane hit-test path。真实文本也已进入 SCTK：
   `src/bin/fika_sctk/text.rs` 使用 `cosmic-text` shape/rasterize 地址栏、Places、
@@ -109,6 +112,11 @@ retained scene/renderer 行为。
   后用 textured quad pass 绘制。入口现在只是很薄的 binary wrapper；启动参数、
   app/calloop 编排、wgpu surface rendering、metrics、pane projection、quad drawing、
   text drawing、directory scene 和 Wayland handlers 已拆到 `src/bin/fika_sctk/`。
+  HiDPI 现在由 SCTK shell 自己处理：默认按 Wayland integer buffer scale 配置物理
+  `wgpu` surface，并把 solid quad 和 text atlas quad 都绘制到同一个物理 surface
+  坐标系。此前发糊是因为逻辑尺寸 buffer 被 compositor 放大；随后出现的整体偏移是因为
+  quad rect 已按 scale 放大，但 NDC surface 分母仍使用逻辑尺寸。exact fractional-scale
+  viewport 路径先保留为 `FIKA_SCTK_EXACT_FRACTIONAL_VIEWPORT=1` 实验入口，等有单独视觉证据后再决定是否默认启用。
 - 后续新 shell 工作只应落入 `src/bin/fika_sctk/`。较早的 winit-backed `fika-wgpu`
   spike 只作为历史/参考基线，不再承接新的 shell 行为。
 

@@ -2,7 +2,18 @@ use smithay_client_toolkit::{
     compositor::CompositorHandler,
     delegate_compositor, delegate_output, delegate_pointer, delegate_registry, delegate_seat,
     delegate_xdg_shell, delegate_xdg_window,
+    globals::GlobalData,
     output::{OutputHandler, OutputState},
+    reexports::protocols::wp::{
+        fractional_scale::v1::client::{
+            wp_fractional_scale_manager_v1::{self, WpFractionalScaleManagerV1},
+            wp_fractional_scale_v1::{self, WpFractionalScaleV1},
+        },
+        viewporter::client::{
+            wp_viewport::{self, WpViewport},
+            wp_viewporter::{self, WpViewporter},
+        },
+    },
     registry::{ProvidesRegistryState, RegistryState},
     registry_handlers,
     seat::{
@@ -15,11 +26,11 @@ use smithay_client_toolkit::{
     },
 };
 use wayland_client::{
-    Connection, QueueHandle,
+    Connection, Dispatch, QueueHandle,
     protocol::{wl_output, wl_pointer, wl_seat, wl_surface},
 };
 
-use super::app::FikaSctkApp;
+use super::app::{FikaSctkApp, FractionalScaleData};
 
 impl CompositorHandler for FikaSctkApp {
     fn scale_factor_changed(
@@ -29,7 +40,7 @@ impl CompositorHandler for FikaSctkApp {
         _surface: &wl_surface::WlSurface,
         new_factor: i32,
     ) {
-        eprintln!("[fika-sctk] scale-factor={new_factor}");
+        self.set_legacy_scale_factor(new_factor);
     }
 
     fn transform_changed(
@@ -193,7 +204,7 @@ impl PointerHandler for FikaSctkApp {
                     } else {
                         -(vertical.value120 as f32 / 120.0) * super::metrics::SCROLL_LINE_PX
                     };
-                    self.scroll(horizontal, vertical);
+                    self.scroll_at(event.position.0, event.position.1, horizontal, vertical);
                 }
                 _ => {}
             }
@@ -208,6 +219,60 @@ delegate_seat!(FikaSctkApp);
 delegate_xdg_shell!(FikaSctkApp);
 delegate_xdg_window!(FikaSctkApp);
 delegate_registry!(FikaSctkApp);
+
+impl Dispatch<WpViewporter, GlobalData> for FikaSctkApp {
+    fn event(
+        _: &mut Self,
+        _: &WpViewporter,
+        _: wp_viewporter::Event,
+        _: &GlobalData,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<WpViewport, GlobalData> for FikaSctkApp {
+    fn event(
+        _: &mut Self,
+        _: &WpViewport,
+        _: wp_viewport::Event,
+        _: &GlobalData,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<WpFractionalScaleManagerV1, GlobalData> for FikaSctkApp {
+    fn event(
+        _: &mut Self,
+        _: &WpFractionalScaleManagerV1,
+        _: wp_fractional_scale_manager_v1::Event,
+        _: &GlobalData,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<WpFractionalScaleV1, FractionalScaleData> for FikaSctkApp {
+    fn event(
+        state: &mut Self,
+        _: &WpFractionalScaleV1,
+        event: wp_fractional_scale_v1::Event,
+        data: &FractionalScaleData,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if data.surface != *state.window.wl_surface() {
+            return;
+        }
+        if let wp_fractional_scale_v1::Event::PreferredScale { scale } = event {
+            state.set_fractional_scale(scale as f32 / 120.0);
+        }
+    }
+}
 
 impl ProvidesRegistryState for FikaSctkApp {
     fn registry(&mut self) -> &mut RegistryState {

@@ -4,6 +4,7 @@ pub(crate) const TOP_BAR_HEIGHT: f32 = 36.0;
 pub(crate) const STATUS_BAR_HEIGHT: f32 = 28.0;
 pub(crate) const PLACES_WIDTH: f32 = 228.0;
 pub(crate) const PLACES_TO_PANE_GAP: f32 = 8.0;
+pub(crate) const SPLIT_PANE_GAP: f32 = 8.0;
 pub(crate) const PLACES_PANEL_MARGIN_X: f32 = 8.0;
 pub(crate) const PLACES_PANEL_MARGIN_BOTTOM: f32 = 8.0;
 pub(crate) const PLACES_TITLE_HEIGHT: f32 = 28.0;

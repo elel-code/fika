@@ -9,6 +9,7 @@ use fika_core::ViewMode;
 #[derive(Debug)]
 pub(crate) struct StartupOptions {
     pub(crate) path: PathBuf,
+    pub(crate) split_path: Option<PathBuf>,
     pub(crate) view_mode: ViewMode,
 }
 
@@ -33,9 +34,13 @@ fn parse_from(
     let mut args = args.into_iter();
     let mut view_mode = ViewMode::Icons;
     let mut path = None;
+    let mut split_requested = false;
+    let mut split_path = None;
     while let Some(arg) = args.next() {
         if arg == "--help" || arg == "-h" {
-            println!("Usage: {program} [--view icons|compact|details] [PATH]");
+            println!(
+                "Usage: {program} [--view icons|compact|details] [--split|--split-path PATH] [PATH]"
+            );
             return Ok(None);
         }
         if arg == "--view" {
@@ -54,6 +59,28 @@ fn parse_from(
             view_mode = ViewMode::parse(value)?;
             continue;
         }
+        if arg == "--split" {
+            split_requested = true;
+            continue;
+        }
+        if arg == "--split-path" {
+            let Some(value) = args.next() else {
+                return Err(format!(
+                    "usage: {program} [--view icons|compact|details] [--split|--split-path PATH] [PATH]"
+                ));
+            };
+            split_path = Some(PathBuf::from(value));
+            split_requested = true;
+            continue;
+        }
+        if let Some(value) = arg
+            .to_str()
+            .and_then(|arg| arg.strip_prefix("--split-path="))
+        {
+            split_path = Some(PathBuf::from(value));
+            split_requested = true;
+            continue;
+        }
         if arg.to_str().is_some_and(|arg| arg.starts_with("--")) {
             return Err(format!("unknown option: {}", arg.to_string_lossy()));
         }
@@ -68,7 +95,12 @@ fn parse_from(
         Some(path) => path,
         None => env::current_dir().map_err(|error| format!("current directory: {error}"))?,
     };
-    Ok(Some(StartupOptions { path, view_mode }))
+    let split_path = split_path.or_else(|| split_requested.then(|| path.clone()));
+    Ok(Some(StartupOptions {
+        path,
+        split_path,
+        view_mode,
+    }))
 }
 
 #[cfg(test)]
@@ -89,7 +121,38 @@ mod tests {
         .unwrap();
 
         assert_eq!(options.path, PathBuf::from("/etc"));
+        assert_eq!(options.split_path, None);
         assert_eq!(options.view_mode, ViewMode::Details);
+    }
+
+    #[test]
+    fn parses_split_same_path() {
+        let options = parse_from(
+            "fika-sctk".to_string(),
+            [OsString::from("--split"), OsString::from("/etc")],
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(options.path, PathBuf::from("/etc"));
+        assert_eq!(options.split_path, Some(PathBuf::from("/etc")));
+    }
+
+    #[test]
+    fn parses_split_path() {
+        let options = parse_from(
+            "fika-sctk".to_string(),
+            [
+                OsString::from("--split-path"),
+                OsString::from("/tmp"),
+                OsString::from("/etc"),
+            ],
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(options.path, PathBuf::from("/etc"));
+        assert_eq!(options.split_path, Some(PathBuf::from("/tmp")));
     }
 
     #[test]

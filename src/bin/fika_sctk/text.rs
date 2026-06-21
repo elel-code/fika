@@ -315,8 +315,9 @@ impl TextRenderer {
         batch: &TextBatch,
         surface_width: u32,
         surface_height: u32,
+        scale: f32,
     ) {
-        let frame = self.build_frame(batch, surface_width, surface_height);
+        let frame = self.build_frame(batch, surface_width, surface_height, scale);
         if frame.width != self.texture_width || frame.height != self.texture_height {
             self.texture = create_text_texture(device, frame.width, frame.height);
             self.texture_view = self
@@ -384,7 +385,9 @@ impl TextRenderer {
         batch: &TextBatch,
         surface_width: u32,
         surface_height: u32,
+        scale: f32,
     ) -> TextFrame {
+        let scale = scale.max(1.0);
         let mut rasters = Vec::new();
         let mut cursor_x = TEXT_PADDING;
         let mut cursor_y = TEXT_PADDING;
@@ -396,7 +399,7 @@ impl TextRenderer {
                 Some(rect) => rect,
                 None => continue,
             };
-            let raster = self.raster_label(label, clipped);
+            let raster = self.raster_label(label, clipped, scale);
             if raster.width == 0 || raster.height == 0 {
                 continue;
             }
@@ -410,7 +413,7 @@ impl TextRenderer {
                 y: cursor_y,
                 width: raster.width,
                 height: raster.height,
-                screen: clipped,
+                screen: scale_rect(clipped, scale),
             };
             cursor_x += raster.width + TEXT_PADDING;
             row_height = row_height.max(raster.height);
@@ -449,13 +452,18 @@ impl TextRenderer {
         }
     }
 
-    fn raster_label(&mut self, label: &TextLabel, clipped: ViewRect) -> LabelRaster {
-        let width = clipped.width.ceil().clamp(1.0, TEXT_ATLAS_WIDTH as f32) as u32;
-        let height = clipped.height.ceil().max(label.line_height.ceil()).max(1.0) as u32;
+    fn raster_label(&mut self, label: &TextLabel, clipped: ViewRect, scale: f32) -> LabelRaster {
+        let width = (clipped.width * scale)
+            .ceil()
+            .clamp(1.0, TEXT_ATLAS_WIDTH as f32) as u32;
+        let height = (clipped.height * scale)
+            .ceil()
+            .max((label.line_height * scale).ceil())
+            .max(1.0) as u32;
         let mut pixels = vec![0; (width * height * 4) as usize];
         let mut buffer = Buffer::new(
             &mut self.font_system,
-            Metrics::new(label.size, label.line_height),
+            Metrics::new(label.size * scale, label.line_height * scale),
         );
         buffer.set_wrap(label.wrap.cosmic());
         buffer.set_size(Some(width as f32), Some(height as f32));
@@ -471,8 +479,8 @@ impl TextRenderer {
             label.color[2],
             label.color[3],
         );
-        let dx = (label.rect.x - clipped.x).round() as i32;
-        let dy = (label.rect.y - clipped.y).round() as i32;
+        let dx = ((label.rect.x - clipped.x) * scale).round() as i32;
+        let dy = ((label.rect.y - clipped.y) * scale).round() as i32;
         buffer.draw(
             &mut self.font_system,
             &mut self.swash_cache,
@@ -659,6 +667,15 @@ fn intersect_rect(a: ViewRect, b: ViewRect) -> Option<ViewRect> {
         width,
         height,
     })
+}
+
+fn scale_rect(rect: ViewRect, scale: f32) -> ViewRect {
+    ViewRect {
+        x: rect.x * scale,
+        y: rect.y * scale,
+        width: rect.width * scale,
+        height: rect.height * scale,
+    }
 }
 
 #[cfg(test)]

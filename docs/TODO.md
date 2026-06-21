@@ -101,7 +101,12 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
   summary、Icons/Compact 文件名、Details header/name/size/modified label 打包进
   per-frame RGBA text atlas，并在 quad pass 后用 textured quad pass 绘制。`/etc`
   三种 view smoke 均已到达 `shell-ready`/`frame=1`，并输出非零
-  `text_labels/text_quads/text_atlas` counters。下一步要把该第一版 per-frame atlas
+  `text_labels/text_quads/text_atlas` counters。HiDPI 路径已修正：SCTK app 会按
+  Wayland integer `wl_surface.set_buffer_scale` 配置物理 `wgpu` surface，text raster、
+  text screen rect 和 quad rect 都进入同一物理 surface 坐标系；之前 quad rect 已按
+  scale 放大但 NDC 分母仍用逻辑尺寸，导致 1.5/2x 下整体偏移。exact fractional
+  viewport 路径先保留为 `FIKA_SCTK_EXACT_FRACTIONAL_VIEWPORT=1` 实验入口，默认不启用。
+  下一步要把该第一版 per-frame atlas
   提升为 retained glyph/label cache，补 eviction telemetry，避免 steady scroll 反复
   rasterize 可见 label。
 - [~] Phase 3：继续 pane 可复用化。当前增量已新增
@@ -109,10 +114,13 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
   selection、Icons/Compact/Details layout projection、item painter、content scrollbar、
   status bar、pane-local location bar、hit-test、left-click selection 和 wheel scroll
   从 app scene 中抽到 `SctkPane`。`SctkScene` 现在只负责 app 背景、toolbar band、
-  Places panel 以及把 pointer/scroll 路由到 active pane geometry。下一步要把
-  `SctkPane` 扩成 primary/split pane 共享的 component，并继续补 pane focus、目录激活、
-  keyboard navigation、rubber-band、scrollbar drag、view switching、hidden toggle、
-  filter/location edit 和 file-operation routing。
+  Places panel 以及把 pointer/scroll 路由到 active pane geometry。当前 `--split`
+  会打开同一路径的右侧 pane，`--split-path PATH` 会打开指定路径；primary/split
+  pane 已共用 `SctkPane`，首帧会输出 `split_pane=1 active_pane=...` telemetry，
+  鼠标 hover、左键 selection 和带坐标的 wheel scroll 会路由到命中的 pane。下一步继续补
+  keyboard/toolbar split trigger、pane focus visual、目录激活、keyboard navigation、
+  rubber-band、scrollbar drag、view switching、hidden toggle、filter/location edit 和
+  file-operation routing。
 - [ ] Phase 4：迁入资产和系统集成热路径。MIME/theme icon atlas、Dolphin-style
   visible-first icon resolve、thumbnail worker/read-ahead、device/Places 动态数据、
   context menu、Open With、service menu、clipboard、Trash actions、file operations、
