@@ -59,7 +59,7 @@ mount-state model, and Places sidebar integration.
     `unmount_device()` calls `Mount::unmount_with_operation()` when available
     and falls back to `Mount::eject_with_operation()` for eject-only mounts.
     `eject_device()` calls the matching GIO eject method on `Mount` or `Volume`.
-- `src/core/places.rs` and `src/bin/fika-wgpu.rs`
+- `src/core/places.rs` and `src/main.rs`
   - Places has static built-ins, persisted user bookmarks, a dynamic
     "Removable Devices" section for removable `DeviceInfo` rows, and a static
     Root entry under Devices.
@@ -73,7 +73,7 @@ mount-state model, and Places sidebar integration.
   - Click on a mounted device opens its local mount point. Click on an unmounted
     device calls the GIO mount operation and navigates to the returned mount
     point.
-- `src/bin/fika-wgpu.rs`
+- `src/main.rs`
   - Startup reads `read_gio_devices()` and starts the live `watch_devices()`
     monitor.
   - Successful device operations force a fresh device snapshot refresh in

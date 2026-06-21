@@ -115,11 +115,6 @@ impl ShellPaneState {
         self.filtered_indexes.len()
     }
 
-    pub(crate) fn rebuild_filtered_indexes(&mut self, show_hidden: bool) -> bool {
-        self.filtered_indexes = filtered_indexes_for_entries(&self.entries, show_hidden, "");
-        self.selection.retain_indexes(&self.filtered_indexes)
-    }
-
     pub(crate) fn rebuild_filtered_indexes_with_pattern(
         &mut self,
         show_hidden: bool,

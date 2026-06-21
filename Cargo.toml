@@ -3,7 +3,7 @@ name = "fika"
 edition = "2024"
 license = "MIT"
 publish = false
-default-run = "fika-wgpu"
+default-run = "fika"
 
 [lib]
 name = "fika_core"

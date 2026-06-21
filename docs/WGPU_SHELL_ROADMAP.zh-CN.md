@@ -1,7 +1,7 @@
 # Fika winit/wgpu Shell 路线图
 
 2026-06-21 决策：Fika UI 主线是官方 upstream `winit` `master` 加官方 crates.io
-`wgpu`。`fika-wgpu` 是默认运行目标，也是当前源码树里唯一的文件管理器 UI runtime。
+`wgpu`。默认 `fika` 二进制是当前源码树里唯一的文件管理器 UI runtime。
 
 ## 架构目标
 
@@ -19,8 +19,8 @@ thumbnail/text/icon scheduling 和 telemetry。
 
 ## 当前路线
 
-- `src/bin/fika-wgpu.rs` 仍是 shell 入口。
-- `src/bin/fika_wgpu/` 是 shell 模块拆分目标。
+- `src/main.rs` 仍是 shell 入口。
+- `src/shell/` 是 shell 模块拆分目标。
 - `src/core/` 负责可复用文件管理器行为。
 - `src/bin/fika-xdp-filechooser.rs` 和 `src/bin/fika-privileged-helper.rs`
   继续作为集成二进制保留。
@@ -64,8 +64,8 @@ wgpu = "29"
 
 ### Phase 5：验证
 
-- `cargo check --locked --bin fika-wgpu`
-- `cargo test --locked --bin fika-wgpu`
+- `cargo check --locked --bin fika`
+- `cargo test --locked --bin fika`
 - Icons/Compact/Details、split panes、hidden files、location editing、
   scroll/zoom、context menus、DnD、thumbnails、devices、大目录 runtime smoke。
 - Telemetry 覆盖 frame time、layout time、visible slots、cache hits/misses、

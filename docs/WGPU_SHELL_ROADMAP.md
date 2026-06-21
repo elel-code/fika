@@ -1,8 +1,8 @@
 # Fika winit/wgpu Shell Roadmap
 
 Decision, 2026-06-21: Fika's UI mainline is official upstream `winit` `master`
-plus official crates.io `wgpu`. `fika-wgpu` is the default run target and the
-only in-tree file-manager UI runtime.
+plus official crates.io `wgpu`. The default `fika` binary is the only in-tree
+file-manager UI runtime.
 
 ## Architecture Target
 
@@ -20,8 +20,8 @@ texture atlases, thumbnails/text/icon scheduling, and telemetry.
 
 ## Current Route
 
-- `src/bin/fika-wgpu.rs` remains the shell entry point.
-- `src/bin/fika_wgpu/` is the extraction target for shell modules.
+- `src/main.rs` remains the shell entry point.
+- `src/shell/` is the extraction target for shell modules.
 - `src/core/` owns reusable file-manager behavior.
 - `src/bin/fika-xdp-filechooser.rs` and `src/bin/fika-privileged-helper.rs`
   remain integration binaries.
@@ -67,8 +67,8 @@ wgpu = "29"
 
 ### Phase 5: Verification
 
-- `cargo check --locked --bin fika-wgpu`
-- `cargo test --locked --bin fika-wgpu`
+- `cargo check --locked --bin fika`
+- `cargo test --locked --bin fika`
 - Runtime smoke for Icons/Compact/Details, split panes, hidden files, location
   editing, scroll/zoom, context menus, DnD, thumbnails, devices, and large
   directories.

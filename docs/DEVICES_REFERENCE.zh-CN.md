@@ -51,7 +51,7 @@
     `unmount_device()` 在可用时调用 `Mount::unmount_with_operation()`，
     对仅弹出挂载回退到 `Mount::eject_with_operation()`。
     `eject_device()` 在 `Mount` 或 `Volume` 上调用匹配的 GIO eject 方法。
-- `src/core/places.rs` 和 `src/bin/fika-wgpu.rs`
+- `src/core/places.rs` 和 `src/main.rs`
   - Places 拥有静态内置条目、持久化用户书签、"Removable Devices" 动态
     section（用于可移动 `DeviceInfo` 行），以及 Devices 下的静态 Root 条目。
   - 设备行携带 `device_id` 和 `device_mounted`，与显示/导航路径分离。
@@ -61,7 +61,7 @@
     并为设备行赋予驱动器图标而非书签/文件夹样式。
   - 点击已挂载设备打开其本地挂载点。点击未挂载设备调用 GIO 挂载操作
     并导航到返回的挂载点。
-- `src/bin/fika-wgpu.rs`
+- `src/main.rs`
   - 启动时读取 `read_gio_devices()` 并启动实时 `watch_devices()` 监视器。
   - 成功的设备操作除了依赖 GIO 监视器信号外，还会强制进行新的设备快照刷新。
   - 设备右键菜单 action 将 GIO `device_id` 和用户可见标签传递到

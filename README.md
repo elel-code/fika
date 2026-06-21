@@ -3,15 +3,15 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Rust Edition](https://img.shields.io/badge/rust-2024-orange.svg)](https://doc.rust-lang.org/edition-guide/rust-2024/index.html)
 
-Fika is a Linux-focused Rust file manager. The UI mainline is now the
-Fika-specific `winit + wgpu` shell in `fika-wgpu`; the previous UI runtimes have
-been removed from the source tree.
+Fika is a Linux-focused Rust file manager. The UI mainline is now the default
+`fika` binary, a Fika-specific `winit + wgpu` shell; the previous UI runtimes
+have been removed from the source tree.
 
 > [中文版 / Chinese](README.zh-CN.md)
 
 ## Current Runtime
 
-- `fika-wgpu` is the default run target and the only in-tree file-manager UI.
+- `fika` is the default run target and the only in-tree file-manager UI.
 - `winit` comes from official upstream `rust-windowing/winit` `master`.
 - `wgpu` comes from the official crates.io release.
 - `fika-core` stays UI-neutral and owns filesystem/domain behavior.
@@ -25,15 +25,15 @@ been removed from the source tree.
 ```text
 src/
   lib.rs                         UI-neutral core exports
+  main.rs                        winit/wgpu shell entry point
   core.rs                        Core module re-exports
   cli.rs                         Shared CLI parsing entry point
   cli/
     args.rs                      Manager/chooser argument parsing
   core/                          Directory, pane, operations, launcher,
                                  Places, devices, thumbnails, trash, D-Bus
+  shell/                         Extracted shell modules
   bin/
-    fika-wgpu.rs                 winit/wgpu shell entry point
-    fika_wgpu/                   Extracted shell modules
     fika-xdp-filechooser.rs      XDG Desktop Portal FileChooser backend
     fika-privileged-helper.rs    D-Bus helper for privileged operations
 ```
@@ -41,11 +41,11 @@ src/
 ## Build And Run
 
 ```bash
-cargo run --bin fika-wgpu -- --view compact /etc
-cargo test --bin fika-wgpu
+cargo run --bin fika -- --view compact /etc
+cargo test --bin fika
 ```
 
-Because `default-run` is `fika-wgpu`, this also starts the current shell:
+Because `default-run` is `fika`, this also starts the current shell:
 
 ```bash
 cargo run -- /etc

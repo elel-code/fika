@@ -42,19 +42,19 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, KeyCode, NamedKey, PhysicalKey};
 use winit::window::{Window, WindowAttributes, WindowId};
 
-#[path = "fika_wgpu/clipboard.rs"]
+#[path = "shell/clipboard.rs"]
 mod wgpu_clipboard;
-#[path = "fika_wgpu/location.rs"]
+#[path = "shell/location.rs"]
 mod wgpu_location;
-#[path = "fika_wgpu/metrics.rs"]
+#[path = "shell/metrics.rs"]
 mod wgpu_metrics;
-#[path = "fika_wgpu/options.rs"]
+#[path = "shell/options.rs"]
 mod wgpu_options;
-#[path = "fika_wgpu/pane.rs"]
+#[path = "shell/pane.rs"]
 mod wgpu_pane;
-#[path = "fika_wgpu/pane_layout.rs"]
+#[path = "shell/pane_layout.rs"]
 mod wgpu_pane_layout;
-#[path = "fika_wgpu/selection.rs"]
+#[path = "shell/selection.rs"]
 mod wgpu_selection;
 
 use wgpu_clipboard::ShellClipboard;
@@ -147,6 +147,15 @@ impl SelectionCommand {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FileKeyboardCommand {
+    Copy,
+    Cut,
+    Paste,
+    Rename,
+    Delete,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum FilterCommand {
     Activate,
@@ -200,6 +209,36 @@ enum OpenWithCommand {
     MoveUp,
     MoveDown,
     Ignore,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ShellLocationDraft {
+    pane: ShellPaneId,
+    draft: LocationDraft,
+}
+
+impl ShellLocationDraft {
+    fn new(pane: ShellPaneId, value: String) -> Self {
+        Self {
+            pane,
+            draft: LocationDraft::new(value),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct ShellPaneHistories {
+    histories: [PathHistory; 2],
+}
+
+impl ShellPaneHistories {
+    fn get(&self, pane: ShellPaneId) -> &PathHistory {
+        &self.histories[pane.index()]
+    }
+
+    fn get_mut(&mut self, pane: ShellPaneId) -> &mut PathHistory {
+        &mut self.histories[pane.index()]
+    }
 }
 
 fn window_title(scene: &ShellScene) -> String {
@@ -505,6 +544,10 @@ impl ApplicationHandler for FikaWgpuApp {
                     }
                     return;
                 }
+                if let Some(command) = file_keyboard_command_for_key_event(&event, shortcut) {
+                    self.perform_file_keyboard_command(event_loop, command);
+                    return;
+                }
                 if let Some(view_mode) = view_mode_for_key_event(&event, shortcut) {
                     if self.scene.set_view_mode(view_mode, renderer.size) {
                         self.pending_redraw_frames = VIEW_SWITCH_REDRAW_FRAMES;
@@ -541,8 +584,18 @@ impl ApplicationHandler for FikaWgpuApp {
                     return;
                 }
                 if is_activation_key(&event.logical_key) {
-                    if let Some(path) = self.scene.selected_directory_path() {
-                        self.load_scene_path(event_loop, path, "activate-directory");
+                    if let Some((pane, path)) = self.scene.selected_directory_path() {
+                        self.load_path_into_pane(event_loop, pane, path, "activate-directory");
+                    } else if let Some(request) = self.scene.selected_file_open_request() {
+                        match launch_file_with_default_app(&request) {
+                            Ok(()) => {
+                                self.scene.record_open_file_request(&request);
+                                if let Some(window) = self.window.as_ref() {
+                                    window.request_redraw();
+                                }
+                            }
+                            Err(error) => eprintln!("[fika-wgpu] open-error {error}"),
+                        }
                     }
                     return;
                 }
@@ -902,8 +955,8 @@ impl FikaWgpuApp {
         };
         match action {
             ShellContextMenuAction::Open => {
-                if let Some(path) = self.scene.context_target_directory_path() {
-                    self.load_scene_path(event_loop, path, "context-open");
+                if let Some((pane, path)) = self.scene.context_target_directory_path() {
+                    self.load_path_into_pane(event_loop, pane, path, "context-open");
                 } else {
                     match self.scene.open_context_target_file_with_default_app() {
                         Ok(true) => {
@@ -1063,6 +1116,71 @@ impl FikaWgpuApp {
                 }
             }
             ShellContextMenuAction::Paste => self.paste_from_clipboard(event_loop),
+        }
+    }
+
+    fn perform_file_keyboard_command(
+        &mut self,
+        event_loop: &dyn ActiveEventLoop,
+        command: FileKeyboardCommand,
+    ) {
+        let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
+            return;
+        };
+        match command {
+            FileKeyboardCommand::Copy | FileKeyboardCommand::Cut => {
+                let role = match command {
+                    FileKeyboardCommand::Copy => FileClipboardRole::Copy,
+                    FileKeyboardCommand::Cut => FileClipboardRole::Cut,
+                    _ => unreachable!(),
+                };
+                match self.scene.active_file_clipboard_request(role) {
+                    Ok(Some(request)) => self.store_file_clipboard_request(&request),
+                    Ok(None) => eprintln!(
+                        "[fika-wgpu] clipboard-export-error role={} target=none",
+                        file_clipboard_role_as_str(role)
+                    ),
+                    Err(error) => eprintln!(
+                        "[fika-wgpu] clipboard-export-error role={} {error}",
+                        file_clipboard_role_as_str(role)
+                    ),
+                }
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+            }
+            FileKeyboardCommand::Paste => self.paste_from_clipboard_into_active_pane(event_loop),
+            FileKeyboardCommand::Rename => {
+                if self.scene.open_rename_dialog_from_active_selection()
+                    && let Some(window) = self.window.as_ref()
+                {
+                    window.request_redraw();
+                }
+            }
+            FileKeyboardCommand::Delete => match self.scene.delete_active_selection(size) {
+                Ok(true) => self.present_scene_change(event_loop, "delete-selection"),
+                Ok(false) => {}
+                Err(error) => eprintln!("[fika-wgpu] delete-error {error}"),
+            },
+        }
+    }
+
+    fn store_file_clipboard_request(&mut self, request: &FileClipboardExportRequest) {
+        if let Some(clipboard) = self.clipboard.as_ref() {
+            match clipboard.store_text(&request.text) {
+                Ok(()) => self.scene.record_file_clipboard_export(request),
+                Err(error) => eprintln!(
+                    "[fika-wgpu] clipboard-export-error role={} paths={} error={error}",
+                    file_clipboard_role_as_str(request.role),
+                    request.paths.len()
+                ),
+            }
+        } else {
+            eprintln!(
+                "[fika-wgpu] clipboard-export-error role={} paths={} error=clipboard-unavailable",
+                file_clipboard_role_as_str(request.role),
+                request.paths.len()
+            );
         }
     }
 
@@ -1274,6 +1392,18 @@ impl FikaWgpuApp {
     }
 
     fn paste_from_clipboard(&mut self, event_loop: &dyn ActiveEventLoop) {
+        self.paste_from_clipboard_with_target(event_loop, true);
+    }
+
+    fn paste_from_clipboard_into_active_pane(&mut self, event_loop: &dyn ActiveEventLoop) {
+        self.paste_from_clipboard_with_target(event_loop, false);
+    }
+
+    fn paste_from_clipboard_with_target(
+        &mut self,
+        event_loop: &dyn ActiveEventLoop,
+        use_context: bool,
+    ) {
         let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
             return;
         };
@@ -1294,7 +1424,13 @@ impl FikaWgpuApp {
                 return;
             }
         };
-        match self.scene.paste_clipboard_text_from_context(&text, size) {
+        let paste_result = if use_context {
+            self.scene.paste_clipboard_text_from_context(&text, size)
+        } else {
+            self.scene
+                .paste_clipboard_text_into_active_pane(&text, size)
+        };
+        match paste_result {
             Ok(result) if result.changed() => {
                 if result.clear_clipboard && result.failure_count == 0 {
                     if let Err(error) = clipboard.store_text("") {
@@ -1343,9 +1479,10 @@ impl FikaWgpuApp {
         }
 
         self.scene.close_rename_dialog_after_success(&request);
-        match self.scene.reload_current_path(size) {
+        match self.scene.reload_pane_path(request.pane, size) {
             Ok(_) => {
-                self.scene.select_entry_by_name(&request.name, size);
+                self.scene
+                    .select_entry_by_name_in_pane(request.pane, &request.name, size);
                 self.present_scene_change(event_loop, "rename");
             }
             Err(error) => {
@@ -1383,9 +1520,10 @@ impl FikaWgpuApp {
         }
 
         self.scene.close_create_dialog_after_success(&request);
-        match self.scene.reload_current_path(size) {
+        match self.scene.reload_pane_path(request.pane, size) {
             Ok(_) => {
-                self.scene.select_entry_by_name(&request.name, size);
+                self.scene
+                    .select_entry_by_name_in_pane(request.pane, &request.name, size);
                 self.present_scene_change(event_loop, "create-new");
             }
             Err(error) => {
@@ -1466,12 +1604,12 @@ impl FikaWgpuApp {
             return;
         };
         let input = self.scene.location_draft_value().unwrap_or("").to_string();
-        let Some(path) = self.scene.resolved_location_draft() else {
+        let Some((pane, path)) = self.scene.resolved_location_draft() else {
             eprintln!("[fika-wgpu] location-error input={input:?} error=empty");
             return;
         };
         let closed = self.scene.close_location_draft(size);
-        match self.scene.load_path(path, size) {
+        match self.scene.load_path_for_pane(pane, path, size) {
             Ok(true) => self.present_scene_change(event_loop, "location-commit"),
             Ok(false) => {
                 if let Some(window) = self.window.as_ref() {
@@ -1484,26 +1622,6 @@ impl FikaWgpuApp {
                     window.request_redraw();
                 }
             }
-        }
-    }
-
-    fn load_scene_path(
-        &mut self,
-        event_loop: &dyn ActiveEventLoop,
-        path: PathBuf,
-        reason: &'static str,
-    ) {
-        let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
-            return;
-        };
-        match self.scene.load_path(path, size) {
-            Ok(true) => self.present_scene_change(event_loop, reason),
-            Ok(false) => {
-                if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
-            }
-            Err(error) => eprintln!("[fika-wgpu] navigation-error {error}"),
         }
     }
 
@@ -1653,6 +1771,60 @@ fn selection_command_for_key_parts(
         || key_character_eq(key_without_modifiers, "a")
     {
         return Some(SelectionCommand::SelectAll);
+    }
+    None
+}
+
+fn file_keyboard_command_for_key_event(
+    event: &KeyEvent,
+    shortcut: bool,
+) -> Option<FileKeyboardCommand> {
+    file_keyboard_command_for_key_parts(
+        shortcut,
+        &event.physical_key,
+        &event.logical_key,
+        &event.key_without_modifiers,
+    )
+}
+
+fn file_keyboard_command_for_key_parts(
+    shortcut: bool,
+    physical_key: &PhysicalKey,
+    logical_key: &Key,
+    key_without_modifiers: &Key,
+) -> Option<FileKeyboardCommand> {
+    if matches!(physical_key, PhysicalKey::Code(KeyCode::F2))
+        || matches!(logical_key, Key::Named(NamedKey::F2))
+        || matches!(key_without_modifiers, Key::Named(NamedKey::F2))
+    {
+        return Some(FileKeyboardCommand::Rename);
+    }
+    if matches!(physical_key, PhysicalKey::Code(KeyCode::Delete))
+        || matches!(logical_key, Key::Named(NamedKey::Delete))
+        || matches!(key_without_modifiers, Key::Named(NamedKey::Delete))
+    {
+        return Some(FileKeyboardCommand::Delete);
+    }
+    if !shortcut {
+        return None;
+    }
+    if matches!(physical_key, PhysicalKey::Code(KeyCode::KeyC))
+        || key_character_eq(logical_key, "c")
+        || key_character_eq(key_without_modifiers, "c")
+    {
+        return Some(FileKeyboardCommand::Copy);
+    }
+    if matches!(physical_key, PhysicalKey::Code(KeyCode::KeyX))
+        || key_character_eq(logical_key, "x")
+        || key_character_eq(key_without_modifiers, "x")
+    {
+        return Some(FileKeyboardCommand::Cut);
+    }
+    if matches!(physical_key, PhysicalKey::Code(KeyCode::KeyV))
+        || key_character_eq(logical_key, "v")
+        || key_character_eq(key_without_modifiers, "v")
+    {
+        return Some(FileKeyboardCommand::Paste);
     }
     None
 }
@@ -2034,14 +2206,13 @@ fn view_mode_for_key_event(event: &KeyEvent, shortcut: bool) -> Option<ShellView
 }
 
 fn view_mode_for_key_parts(
-    _shortcut: bool,
+    shortcut: bool,
     physical_key: &PhysicalKey,
     logical_key: &Key,
     key_without_modifiers: &Key,
 ) -> Option<ShellViewMode> {
     let function_key_mode = match physical_key {
         PhysicalKey::Code(KeyCode::F1) => Some(ShellViewMode::Icons),
-        PhysicalKey::Code(KeyCode::F2) => Some(ShellViewMode::Compact),
         PhysicalKey::Code(KeyCode::F3) => Some(ShellViewMode::Details),
         _ => function_key_view_mode(logical_key),
     };
@@ -2049,6 +2220,9 @@ fn view_mode_for_key_parts(
         return function_key_mode;
     }
 
+    if !shortcut {
+        return None;
+    }
     physical_digit_view_mode(physical_key)
         .or_else(|| character_digit_view_mode(key_without_modifiers))
         .or_else(|| character_digit_view_mode(logical_key))
@@ -2075,7 +2249,6 @@ fn character_digit_view_mode(key: &Key) -> Option<ShellViewMode> {
 fn function_key_view_mode(key: &Key) -> Option<ShellViewMode> {
     match key {
         Key::Named(NamedKey::F1) => Some(ShellViewMode::Icons),
-        Key::Named(NamedKey::F2) => Some(ShellViewMode::Compact),
         Key::Named(NamedKey::F3) => Some(ShellViewMode::Details),
         _ => None,
     }
@@ -3068,6 +3241,7 @@ impl CreateEntryKind {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct ShellCreateDialog {
+    pane: ShellPaneId,
     parent: PathBuf,
     kind: CreateEntryKind,
     name: String,
@@ -3076,9 +3250,10 @@ struct ShellCreateDialog {
 }
 
 impl ShellCreateDialog {
-    fn new(parent: PathBuf, kind: CreateEntryKind) -> Self {
+    fn new(pane: ShellPaneId, parent: PathBuf, kind: CreateEntryKind) -> Self {
         let name = unique_child_name(&parent, kind.default_name());
         Self {
+            pane,
             parent,
             kind,
             name,
@@ -3090,6 +3265,7 @@ impl ShellCreateDialog {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct CreateEntryRequest {
+    pane: ShellPaneId,
     parent: PathBuf,
     path: PathBuf,
     kind: CreateEntryKind,
@@ -3107,6 +3283,7 @@ enum CreateDialogClick {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct ShellRenameDialog {
+    pane: ShellPaneId,
     source: PathBuf,
     parent: PathBuf,
     original_name: String,
@@ -3117,10 +3294,11 @@ struct ShellRenameDialog {
 }
 
 impl ShellRenameDialog {
-    fn new(source: PathBuf, is_dir: bool) -> Option<Self> {
+    fn new(pane: ShellPaneId, source: PathBuf, is_dir: bool) -> Option<Self> {
         let parent = source.parent()?.to_path_buf();
         let original_name = source.file_name()?.to_string_lossy().to_string();
         Some(Self {
+            pane,
             source,
             parent,
             name: original_name.clone(),
@@ -3134,6 +3312,7 @@ impl ShellRenameDialog {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct RenameEntryRequest {
+    pane: ShellPaneId,
     source: PathBuf,
     target: PathBuf,
     original_name: String,
@@ -3462,7 +3641,7 @@ struct ShellScene {
     panes: ShellPaneStates,
     active_pane: ShellPaneId,
     places: Vec<ShellPlace>,
-    location_draft: Option<LocationDraft>,
+    location_draft: Option<ShellLocationDraft>,
     filter_active: bool,
     filter_pattern: String,
     show_hidden: bool,
@@ -3475,7 +3654,7 @@ struct ShellScene {
     hovered_item: Option<ShellPaneItemTarget>,
     hovered_place: Option<usize>,
     last_item_click: Option<PaneClick>,
-    history: PathHistory,
+    histories: ShellPaneHistories,
     context_target: Option<ShellContextTarget>,
     context_menu: Option<ShellContextMenu>,
     properties_overlay: Option<ShellPropertiesOverlay>,
@@ -3568,7 +3747,7 @@ impl ShellScene {
             hovered_item: None,
             hovered_place: None,
             last_item_click: None,
-            history: PathHistory::default(),
+            histories: ShellPaneHistories::default(),
             context_target: None,
             context_menu: None,
             properties_overlay: None,
@@ -3615,8 +3794,23 @@ impl ShellScene {
         })
     }
 
+    #[cfg(test)]
     fn load_path(&mut self, path: PathBuf, size: PhysicalSize<u32>) -> Result<bool, String> {
-        if path == self.panes[ShellPaneId::FIRST].path {
+        self.load_path_in_pane(ShellPaneId::FIRST, path, size, true)
+    }
+
+    fn load_path_in_pane(
+        &mut self,
+        pane: ShellPaneId,
+        path: PathBuf,
+        size: PhysicalSize<u32>,
+        push_history: bool,
+    ) -> Result<bool, String> {
+        let pane = self.normalized_pane_id(pane);
+        let Some(current) = self.pane_state(pane) else {
+            return Err(format!("pane {} is not open", pane.as_str()));
+        };
+        if path == current.path {
             return Ok(false);
         }
         let load_start = Instant::now();
@@ -3631,12 +3825,15 @@ impl ShellScene {
             .collect::<Vec<_>>()
             .join(", ");
 
-        let previous_path = self.panes[ShellPaneId::FIRST].path.clone();
-        self.history.push_back(previous_path);
-        self.history.clear_forward();
-        self.apply_loaded_path(path, entries, dir_count, size);
+        if push_history {
+            let previous_path = current.path.clone();
+            let history = self.pane_history_mut(pane);
+            history.push_back(previous_path);
+            history.clear_forward();
+        }
+        self.apply_loaded_path_to_pane(pane, path, entries, size);
 
-        self.log_loaded_path(dir_count, &preview, elapsed);
+        self.log_loaded_path_for_pane(pane, dir_count, &preview, elapsed);
         Ok(true)
     }
 
@@ -3646,73 +3843,27 @@ impl ShellScene {
         path: PathBuf,
         size: PhysicalSize<u32>,
     ) -> Result<bool, String> {
-        match self.normalized_pane_id(pane) {
-            ShellPaneId::FIRST => self.load_path(path, size),
-            ShellPaneId::SECOND => self.load_split_pane_path(path, size),
-        }
-    }
-
-    fn load_split_pane_path(
-        &mut self,
-        path: PathBuf,
-        size: PhysicalSize<u32>,
-    ) -> Result<bool, String> {
-        let Some(current) = self.panes.get(ShellPaneId::SECOND) else {
-            return self.load_path(path, size);
-        };
-        if path == current.path {
-            return Ok(false);
-        }
-
-        let view_mode = current.view_mode;
-        let load_start = Instant::now();
-        let entries = read_entries_sync(&path)
-            .map_err(|error| format!("read split pane directory {}: {error}", path.display()))?;
-        let elapsed = load_start.elapsed();
-        let dir_count = entries.iter().filter(|entry| entry.is_dir).count();
-        self.panes.set(
-            ShellPaneId::SECOND,
-            ShellPaneState::from_entries(path, view_mode, entries, self.show_hidden, ""),
-        );
-        self.visible_slots.clear(ShellPaneId::SECOND);
-        self.active_pane = ShellPaneId::SECOND;
-        self.context_target = None;
-        self.context_menu = None;
-        self.properties_overlay = None;
-        self.create_dialog = None;
-        self.rename_dialog = None;
-        self.open_with_chooser = None;
-        self.trash_conflict_dialog = None;
-        self.internal_drag = None;
-        self.pending_drop_request = None;
-        self.clear_dnd_hover_target();
-        self.rubber_band = None;
-        self.scrollbar_drag = None;
-        self.last_item_click = None;
-        self.split_pane_changes += 1;
-        self.clamp_scroll(size);
-        if let Some(split) = self.panes.get(ShellPaneId::SECOND) {
-            eprintln!(
-                "[fika-wgpu] split-pane path={} entries={} dirs={} files={} load={}us changes={}",
-                split.path.display(),
-                split.entries.len(),
-                dir_count,
-                split.entries.len().saturating_sub(dir_count),
-                elapsed.as_micros(),
-                self.split_pane_changes
-            );
-        }
-        Ok(true)
+        self.load_path_in_pane(self.normalized_pane_id(pane), path, size, true)
     }
 
     fn reload_current_path(&mut self, size: PhysicalSize<u32>) -> Result<bool, String> {
+        self.reload_pane_path(self.active_pane(), size)
+    }
+
+    fn reload_pane_path(
+        &mut self,
+        pane: ShellPaneId,
+        size: PhysicalSize<u32>,
+    ) -> Result<bool, String> {
+        let pane = self.normalized_pane_id(pane);
+        let Some(current) = self.pane_state(pane) else {
+            return Err(format!("pane {} is not open", pane.as_str()));
+        };
+        let view_mode = current.view_mode;
+        let path = current.path.clone();
         let load_start = Instant::now();
-        let entries = read_entries_sync(&self.panes[ShellPaneId::FIRST].path).map_err(|error| {
-            format!(
-                "read directory {}: {error}",
-                self.panes[ShellPaneId::FIRST].path.display()
-            )
-        })?;
+        let entries = read_entries_sync(&path)
+            .map_err(|error| format!("read directory {}: {error}", path.display()))?;
         let elapsed = load_start.elapsed();
         let dir_count = entries.iter().filter(|entry| entry.is_dir).count();
         let preview = entries
@@ -3722,126 +3873,152 @@ impl ShellScene {
             .collect::<Vec<_>>()
             .join(", ");
 
-        let remapped_selection = self.selection_for_reloaded_entries(&entries);
-        let previous_selection = self.panes[ShellPaneId::FIRST].selection.clone();
+        let remapped_selection = self.selection_for_reloaded_pane_entries(pane, &entries);
+        let previous_selection = self.pane_selection(pane).cloned().unwrap_or_default();
+        let filter_pattern = self.filter_pattern_for_pane(pane).to_string();
+        let show_hidden = self.show_hidden;
 
-        self.panes[ShellPaneId::FIRST].entries = entries;
-        self.panes[ShellPaneId::FIRST].dir_count = dir_count;
-        self.panes[ShellPaneId::FIRST].selection = remapped_selection;
-        let pruned_selection = self.rebuild_filtered_indexes();
-        let selection_changed = previous_selection != self.panes[ShellPaneId::FIRST].selection;
-        self.rubber_band = None;
-        self.scrollbar_drag = None;
-        self.last_item_click = None;
-        self.directory_reloads += 1;
+        let Some(state) = self.pane_state_mut(pane) else {
+            return Err(format!("pane {} is not open", pane.as_str()));
+        };
+        let (selection_changed, pruned_selection) = {
+            state.view_mode = view_mode;
+            state.entries = entries;
+            state.dir_count = dir_count;
+            state.selection = remapped_selection;
+            let pruned_selection =
+                state.rebuild_filtered_indexes_with_pattern(show_hidden, &filter_pattern);
+            let selection_changed = previous_selection != state.selection;
+            (selection_changed, pruned_selection)
+        };
         if selection_changed || pruned_selection {
             self.selection_changes += 1;
         }
+        self.directory_reloads += 1;
+        self.clear_transient_after_pane_content_change(pane, false);
         self.clamp_scroll(size);
-        self.log_reloaded_path(dir_count, &preview, elapsed, selection_changed);
+        self.log_reloaded_path_for_pane(pane, dir_count, &preview, elapsed, selection_changed);
         Ok(true)
     }
 
     fn go_parent_directory(&mut self, size: PhysicalSize<u32>) -> Result<bool, String> {
-        let Some(path) = self.parent_directory_path() else {
+        let pane = self.active_pane();
+        let Some(path) = self.parent_directory_path_for_pane(pane) else {
             return Ok(false);
         };
-        self.load_path(path, size)
+        self.load_path_for_pane(pane, path, size)
     }
 
     fn go_history_back(&mut self, size: PhysicalSize<u32>) -> Result<bool, String> {
-        let Some(path) = self.history.back.last().cloned() else {
+        let pane = self.active_pane();
+        let Some(path) = self.pane_history(pane).back.last().cloned() else {
             return Ok(false);
         };
-        let load_start = Instant::now();
-        let entries = read_entries_sync(&path)
-            .map_err(|error| format!("read directory {}: {error}", path.display()))?;
-        let elapsed = load_start.elapsed();
-        let dir_count = entries.iter().filter(|entry| entry.is_dir).count();
-        let preview = entries
-            .iter()
-            .take(8)
-            .map(|entry| entry.name.as_ref())
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        let current_path = self.panes[ShellPaneId::FIRST].path.clone();
-        self.history.back.pop();
-        self.history.push_forward(current_path);
-        self.apply_loaded_path(path, entries, dir_count, size);
-        self.log_loaded_path(dir_count, &preview, elapsed);
-        Ok(true)
+        let current_path = self
+            .pane_state(pane)
+            .map(|state| state.path.clone())
+            .ok_or_else(|| format!("pane {} is not open", pane.as_str()))?;
+        {
+            let history = self.pane_history_mut(pane);
+            history.back.pop();
+            history.push_forward(current_path);
+        }
+        self.load_path_in_pane(pane, path, size, false)
     }
 
     fn go_history_forward(&mut self, size: PhysicalSize<u32>) -> Result<bool, String> {
-        let Some(path) = self.history.forward.last().cloned() else {
+        let pane = self.active_pane();
+        let Some(path) = self.pane_history(pane).forward.last().cloned() else {
             return Ok(false);
         };
-        let load_start = Instant::now();
-        let entries = read_entries_sync(&path)
-            .map_err(|error| format!("read directory {}: {error}", path.display()))?;
-        let elapsed = load_start.elapsed();
-        let dir_count = entries.iter().filter(|entry| entry.is_dir).count();
-        let preview = entries
-            .iter()
-            .take(8)
-            .map(|entry| entry.name.as_ref())
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        let current_path = self.panes[ShellPaneId::FIRST].path.clone();
-        self.history.forward.pop();
-        self.history.push_back(current_path);
-        self.apply_loaded_path(path, entries, dir_count, size);
-        self.log_loaded_path(dir_count, &preview, elapsed);
-        Ok(true)
+        let current_path = self
+            .pane_state(pane)
+            .map(|state| state.path.clone())
+            .ok_or_else(|| format!("pane {} is not open", pane.as_str()))?;
+        {
+            let history = self.pane_history_mut(pane);
+            history.forward.pop();
+            history.push_back(current_path);
+        }
+        self.load_path_in_pane(pane, path, size, false)
     }
 
-    fn apply_loaded_path(
+    fn apply_loaded_path_to_pane(
         &mut self,
+        pane: ShellPaneId,
         path: PathBuf,
         entries: Vec<Entry>,
-        _dir_count: usize,
         size: PhysicalSize<u32>,
     ) {
-        self.panes[ShellPaneId::FIRST] = ShellPaneState::from_entries(
-            path,
-            self.panes[ShellPaneId::FIRST].view_mode,
-            entries,
-            self.show_hidden,
-            &self.filter_pattern,
+        let pane = self.normalized_pane_id(pane);
+        let view_mode = self
+            .pane_state(pane)
+            .map(|state| state.view_mode)
+            .unwrap_or(ShellViewMode::Icons);
+        let filter_pattern = self.filter_pattern_for_pane(pane).to_string();
+        self.panes.set(
+            pane,
+            ShellPaneState::from_entries(
+                path,
+                view_mode,
+                entries,
+                self.show_hidden,
+                &filter_pattern,
+            ),
         );
-        self.visible_slots.clear(ShellPaneId::FIRST);
-        self.panes[ShellPaneId::FIRST].scroll_x = 0.0;
-        self.panes[ShellPaneId::FIRST].scroll_y = 0.0;
-        self.location_draft = None;
+        self.visible_slots.clear(pane);
+        if let Some(state) = self.pane_state_mut(pane) {
+            state.scroll_x = 0.0;
+            state.scroll_y = 0.0;
+        }
+        self.active_pane = pane;
+        self.clear_transient_after_pane_content_change(pane, true);
+        self.path_changes += 1;
+        self.clamp_scroll(size);
+    }
+
+    fn clear_transient_after_pane_content_change(&mut self, pane: ShellPaneId, clear_open: bool) {
+        if self
+            .location_draft
+            .as_ref()
+            .is_some_and(|draft| draft.pane == pane)
+        {
+            self.location_draft = None;
+        }
+        self.rubber_band = None;
+        self.scrollbar_drag = None;
+        self.last_item_click = None;
         self.context_target = None;
         self.context_menu = None;
         self.properties_overlay = None;
-        self.create_dialog = None;
-        self.rename_dialog = None;
+        if clear_open {
+            self.create_dialog = None;
+            self.rename_dialog = None;
+        }
         self.open_with_chooser = None;
         self.trash_conflict_dialog = None;
         self.internal_drag = None;
         self.pending_drop_request = None;
         self.clear_dnd_hover_target();
-        self.rubber_band = None;
-        self.scrollbar_drag = None;
-        self.last_item_click = None;
-        self.path_changes += 1;
-        self.clamp_scroll(size);
     }
 
-    fn log_loaded_path(&self, dir_count: usize, preview: &str, elapsed: Duration) {
+    fn log_loaded_path_for_pane(
+        &self,
+        pane: ShellPaneId,
+        dir_count: usize,
+        preview: &str,
+        elapsed: Duration,
+    ) {
+        let Some(state) = self.pane_state(pane) else {
+            return;
+        };
         eprintln!(
-            "[fika-wgpu] path={} entries={} dirs={} files={} load={}us changes={}",
-            self.panes[ShellPaneId::FIRST].path.display(),
-            self.panes[ShellPaneId::FIRST].entries.len(),
+            "[fika-wgpu] pane={} path={} entries={} dirs={} files={} load={}us changes={}",
+            pane.as_str(),
+            state.path.display(),
+            state.entries.len(),
             dir_count,
-            self.panes[ShellPaneId::FIRST]
-                .entries
-                .len()
-                .saturating_sub(dir_count),
+            state.entries.len().saturating_sub(dir_count),
             elapsed.as_micros(),
             self.path_changes
         );
@@ -3850,25 +4027,27 @@ impl ShellScene {
         }
     }
 
-    fn log_reloaded_path(
+    fn log_reloaded_path_for_pane(
         &self,
+        pane: ShellPaneId,
         dir_count: usize,
         preview: &str,
         elapsed: Duration,
         selection_changed: bool,
     ) {
+        let Some(state) = self.pane_state(pane) else {
+            return;
+        };
         eprintln!(
-            "[fika-wgpu] reload path={} entries={} dirs={} files={} load={}us reloads={} selected={} selection_changed={}",
-            self.panes[ShellPaneId::FIRST].path.display(),
-            self.panes[ShellPaneId::FIRST].entries.len(),
+            "[fika-wgpu] reload pane={} path={} entries={} dirs={} files={} load={}us reloads={} selected={} selection_changed={}",
+            pane.as_str(),
+            state.path.display(),
+            state.entries.len(),
             dir_count,
-            self.panes[ShellPaneId::FIRST]
-                .entries
-                .len()
-                .saturating_sub(dir_count),
+            state.entries.len().saturating_sub(dir_count),
             elapsed.as_micros(),
             self.directory_reloads,
-            self.panes[ShellPaneId::FIRST].selection.len(),
+            state.selection.len(),
             selection_changed as u8
         );
         if !preview.is_empty() {
@@ -3970,15 +4149,49 @@ impl ShellScene {
         self.location_draft.is_some()
     }
 
+    fn location_draft_pane(&self) -> Option<ShellPaneId> {
+        self.location_draft
+            .as_ref()
+            .map(|draft| self.normalized_pane_id(draft.pane))
+    }
+
     fn location_draft_value(&self) -> Option<&str> {
         self.location_draft
             .as_ref()
-            .map(|draft| draft.value.as_str())
+            .map(|draft| draft.draft.value.as_str())
     }
 
-    fn resolved_location_draft(&self) -> Option<PathBuf> {
+    fn location_label_for_pane(&self, pane: ShellPaneId) -> String {
+        if let Some(draft) = self
+            .location_draft
+            .as_ref()
+            .filter(|draft| self.normalized_pane_id(draft.pane) == self.normalized_pane_id(pane))
+        {
+            return draft.draft.value.clone();
+        }
+        self.pane_state(pane)
+            .map(|pane| pane.path.display().to_string())
+            .unwrap_or_default()
+    }
+
+    fn location_cursor_for_pane(&self, pane: ShellPaneId) -> Option<usize> {
+        self.location_draft
+            .as_ref()
+            .filter(|draft| self.normalized_pane_id(draft.pane) == self.normalized_pane_id(pane))
+            .map(|draft| draft.draft.cursor)
+    }
+
+    fn location_bar_active_for_pane(&self, pane: ShellPaneId) -> bool {
+        let pane = self.normalized_pane_id(pane);
+        self.location_draft_pane() == Some(pane)
+            || (self.location_draft.is_none() && self.active_pane() == pane)
+    }
+
+    fn resolved_location_draft(&self) -> Option<(ShellPaneId, PathBuf)> {
+        let pane = self.location_draft_pane()?;
         let value = self.location_draft_value()?;
-        resolve_location_input(&self.panes[ShellPaneId::FIRST].path, value)
+        let base = &self.pane_state(pane)?.path;
+        resolve_location_input(base, value).map(|path| (pane, path))
     }
 
     fn close_location_draft(&mut self, size: PhysicalSize<u32>) -> bool {
@@ -4000,10 +4213,12 @@ impl ShellScene {
         point: ViewPoint,
         size: PhysicalSize<u32>,
     ) -> bool {
-        if !self.is_location_editing()
-            || self
-                .pane_path_bar_rect(ShellPaneId::FIRST, size)
-                .is_some_and(|rect| rect.contains(point))
+        let Some(pane) = self.location_draft_pane() else {
+            return false;
+        };
+        if self
+            .pane_path_bar_rect(pane, size)
+            .is_some_and(|rect| rect.contains(point))
         {
             return false;
         }
@@ -4020,11 +4235,8 @@ impl ShellScene {
         };
         let old_pane = self.active_pane();
         self.active_pane = self.normalized_pane_id(pane);
-        if self.active_pane() == ShellPaneId::FIRST {
-            return self.apply_location_command(LocationCommand::Activate, size)
-                || old_pane != self.active_pane();
-        }
-        self.close_location_draft(size) || old_pane != self.active_pane()
+        self.apply_location_command(LocationCommand::Activate, size)
+            || old_pane != self.active_pane()
     }
 
     fn apply_location_command(
@@ -4037,66 +4249,73 @@ impl ShellScene {
 
         match command {
             LocationCommand::Activate => {
-                self.location_draft = Some(LocationDraft::new(
-                    self.panes[ShellPaneId::FIRST].path.display().to_string(),
-                ));
+                let pane = self.active_pane();
+                let Some(path) = self.pane_state(pane).map(|pane| pane.path.clone()) else {
+                    return false;
+                };
+                self.location_draft =
+                    Some(ShellLocationDraft::new(pane, path.display().to_string()));
                 self.filter_active = false;
             }
             LocationCommand::Insert(value) => {
                 let Some(draft) = self.location_draft.as_mut() else {
                     return false;
                 };
-                draft.insert(&value);
+                draft.draft.insert(&value);
             }
             LocationCommand::Backspace => {
                 let Some(draft) = self.location_draft.as_mut() else {
                     return false;
                 };
-                draft.backspace();
+                draft.draft.backspace();
             }
             LocationCommand::Delete => {
                 let Some(draft) = self.location_draft.as_mut() else {
                     return false;
                 };
-                draft.delete();
+                draft.draft.delete();
             }
             LocationCommand::MoveLeft => {
                 let Some(draft) = self.location_draft.as_mut() else {
                     return false;
                 };
-                draft.move_left();
+                draft.draft.move_left();
             }
             LocationCommand::MoveRight => {
                 let Some(draft) = self.location_draft.as_mut() else {
                     return false;
                 };
-                draft.move_right();
+                draft.draft.move_right();
             }
             LocationCommand::MoveHome => {
                 let Some(draft) = self.location_draft.as_mut() else {
                     return false;
                 };
-                draft.move_home();
+                draft.draft.move_home();
             }
             LocationCommand::MoveEnd => {
                 let Some(draft) = self.location_draft.as_mut() else {
                     return false;
                 };
-                draft.move_end();
+                draft.draft.move_end();
             }
             LocationCommand::Cancel => {
                 self.location_draft = None;
             }
             LocationCommand::Complete => {
-                let Some(draft) = self.location_draft.as_mut() else {
+                let Some(location) = self.location_draft.as_ref() else {
                     return false;
                 };
-                let Some(completed) =
-                    complete_location_input(&self.panes[ShellPaneId::FIRST].path, &draft.value)
-                else {
+                let pane = self.normalized_pane_id(location.pane);
+                let Some(base) = self.pane_state(pane).map(|pane| pane.path.clone()) else {
                     return false;
                 };
-                draft.set_completed(completed);
+                let Some(completed) = complete_location_input(&base, &location.draft.value) else {
+                    return false;
+                };
+                if let Some(draft) = self.location_draft.as_mut() {
+                    draft.draft.set_completed(completed);
+                }
             }
             LocationCommand::Commit | LocationCommand::Ignore => return false,
         }
@@ -4170,10 +4389,7 @@ impl ShellScene {
         self.show_hidden = !self.show_hidden;
         self.hidden_changes += 1;
         self.rubber_band = None;
-        let mut selection_changed = self.rebuild_filtered_indexes();
-        if let Some(split_pane) = self.panes.get_mut(ShellPaneId::SECOND) {
-            selection_changed |= split_pane.rebuild_filtered_indexes(self.show_hidden);
-        }
+        let selection_changed = self.rebuild_filtered_indexes();
         if selection_changed {
             self.selection_changes += 1;
         }
@@ -4236,11 +4452,11 @@ impl ShellScene {
     fn context_target_split_pane_path(&self) -> Option<PathBuf> {
         match self.context_target.as_ref()? {
             ShellContextTarget::Item { path, is_dir, .. } if *is_dir => Some(path.clone()),
-            ShellContextTarget::Item { path, .. } => path
+            ShellContextTarget::Item { pane, path, .. } => path
                 .parent()
                 .filter(|parent| !parent.as_os_str().is_empty())
                 .map(Path::to_path_buf)
-                .or_else(|| Some(self.panes[ShellPaneId::FIRST].path.clone())),
+                .or_else(|| self.pane_state(*pane).map(|state| state.path.clone())),
             ShellContextTarget::Blank { path, .. } | ShellContextTarget::Place { path, .. } => {
                 Some(path.clone())
             }
@@ -4248,8 +4464,16 @@ impl ShellScene {
     }
 
     fn rebuild_filtered_indexes(&mut self) -> bool {
-        self.panes[ShellPaneId::FIRST]
-            .rebuild_filtered_indexes_with_pattern(self.show_hidden, &self.filter_pattern)
+        let mut selection_changed = false;
+        let show_hidden = self.show_hidden;
+        for pane in ShellPaneId::ALL {
+            let filter_pattern = self.filter_pattern_for_pane(pane).to_string();
+            if let Some(state) = self.pane_state_mut(pane) {
+                selection_changed |=
+                    state.rebuild_filtered_indexes_with_pattern(show_hidden, &filter_pattern);
+            }
+        }
+        selection_changed
     }
 
     fn filtered_entry_count(&self) -> usize {
@@ -4269,8 +4493,12 @@ impl ShellScene {
         let next_ui_scale = self.ui_scale();
         if old_ui_scale > f32::EPSILON {
             let ratio = next_ui_scale / old_ui_scale;
-            self.panes[ShellPaneId::FIRST].scroll_x *= ratio;
-            self.panes[ShellPaneId::FIRST].scroll_y *= ratio;
+            for pane in ShellPaneId::ALL {
+                if let Some(state) = self.pane_state_mut(pane) {
+                    state.scroll_x *= ratio;
+                    state.scroll_y *= ratio;
+                }
+            }
             self.places_scroll_y *= ratio;
         }
         self.clamp_scroll(size);
@@ -4347,27 +4575,34 @@ impl ShellScene {
         self.scale_metric(DETAILS_MODIFIED_WIDTH)
     }
 
-    fn selection_for_reloaded_entries(&self, entries: &[Entry]) -> ShellSelection {
-        if self.panes[ShellPaneId::FIRST].selection.selected.is_empty() {
+    fn selection_for_reloaded_pane_entries(
+        &self,
+        pane_id: ShellPaneId,
+        entries: &[Entry],
+    ) -> ShellSelection {
+        let Some(pane) = self.pane_state(pane_id) else {
+            return ShellSelection::default();
+        };
+        if pane.selection.selected.is_empty() {
             return ShellSelection::default();
         }
 
-        let selected_names = self.panes[ShellPaneId::FIRST]
+        let selected_names = pane
             .selection
             .selected
             .iter()
-            .filter_map(|index| self.panes[ShellPaneId::FIRST].entries.get(*index))
+            .filter_map(|index| pane.entries.get(*index))
             .map(|entry| entry.name.to_string())
             .collect::<BTreeSet<_>>();
-        let anchor_name = self.panes[ShellPaneId::FIRST]
+        let anchor_name = pane
             .selection
             .anchor
-            .and_then(|index| self.panes[ShellPaneId::FIRST].entries.get(index))
+            .and_then(|index| pane.entries.get(index))
             .map(|entry| entry.name.to_string());
-        let focus_name = self.panes[ShellPaneId::FIRST]
+        let focus_name = pane
             .selection
             .focus
-            .and_then(|index| self.panes[ShellPaneId::FIRST].entries.get(index))
+            .and_then(|index| pane.entries.get(index))
             .map(|entry| entry.name.to_string());
 
         let selected = entries
@@ -4988,6 +5223,7 @@ impl ShellScene {
 
         let mut selection_changed = false;
         if let Some(ShellContextTarget::Item { pane, index, .. }) = target.as_ref() {
+            self.active_pane = self.normalized_pane_id(*pane);
             selection_changed = if self
                 .pane_selection(*pane)
                 .is_some_and(|selection| selection.contains(*index))
@@ -5001,6 +5237,8 @@ impl ShellScene {
             if selection_changed {
                 self.selection_changes += 1;
             }
+        } else if let Some(ShellContextTarget::Blank { pane, .. }) = target.as_ref() {
+            self.active_pane = self.normalized_pane_id(*pane);
         }
 
         let target_changed = old_target != target;
@@ -5324,25 +5562,43 @@ impl ShellScene {
         }
     }
 
-    fn selected_directory_path(&self) -> Option<PathBuf> {
+    fn selected_directory_path(&self) -> Option<(ShellPaneId, PathBuf)> {
         let pane = self.active_pane();
         self.pane_selection(pane)?
             .focus_or_first_selected()
             .and_then(|index| self.directory_path_for_pane_index(pane, index))
+            .map(|path| (pane, path))
     }
 
-    fn context_target_directory_path(&self) -> Option<PathBuf> {
+    fn selected_file_open_request(&self) -> Option<OpenFileRequest> {
+        let pane = self.active_pane();
+        let index = self.pane_selection(pane)?.focus_or_first_selected()?;
+        let view = self.pane_view(pane)?;
+        let entry = view.entries.get(index)?;
+        if entry.is_dir {
+            return None;
+        }
+        let path = self.entry_path_for_pane_view(view, index)?;
+        Some(OpenFileRequest {
+            uri: launch_uri_for_path(&path),
+            path,
+        })
+    }
+
+    fn context_target_directory_path(&self) -> Option<(ShellPaneId, PathBuf)> {
         match self.context_target.as_ref()? {
             ShellContextTarget::Item {
                 pane,
                 index,
                 is_dir,
                 ..
-            } if *is_dir => self.directory_path_for_pane_index(*pane, *index),
+            } if *is_dir => self
+                .directory_path_for_pane_index(*pane, *index)
+                .map(|path| (*pane, path)),
             ShellContextTarget::Place { path, device, .. }
                 if device.as_ref().is_none_or(|device| device.mounted) =>
             {
-                Some(path.clone())
+                Some((self.active_pane(), path.clone()))
             }
             _ => None,
         }
@@ -5351,7 +5607,7 @@ impl ShellScene {
     fn context_target_open_file_request(&self) -> Option<OpenFileRequest> {
         match self.context_target.as_ref()? {
             ShellContextTarget::Item {
-                pane: ShellPaneId::FIRST,
+                pane: _,
                 path,
                 is_dir: false,
                 ..
@@ -5376,6 +5632,16 @@ impl ShellScene {
             self.open_changes
         );
         Ok(true)
+    }
+
+    fn record_open_file_request(&mut self, request: &OpenFileRequest) {
+        self.open_changes += 1;
+        eprintln!(
+            "[fika-wgpu] open path={} uri={} changes={}",
+            request.path.display(),
+            request.uri,
+            self.open_changes
+        );
     }
 
     fn open_open_with_chooser_from_context(&mut self, cache: &MimeApplicationCache) -> bool {
@@ -5504,7 +5770,6 @@ impl ShellScene {
     ) -> Result<OpenWithLaunchRequest, String> {
         let path = match self.context_target.as_ref() {
             Some(ShellContextTarget::Item {
-                pane: ShellPaneId::FIRST,
                 path,
                 is_dir: false,
                 ..
@@ -5653,6 +5918,15 @@ impl ShellScene {
                 })
             }
             ShellContextTarget::Blank { .. } => None,
+        }
+    }
+
+    fn context_target_pane(&self) -> Option<ShellPaneId> {
+        match self.context_target.as_ref()? {
+            ShellContextTarget::Item { pane, .. } | ShellContextTarget::Blank { pane, .. } => {
+                Some(self.normalized_pane_id(*pane))
+            }
+            ShellContextTarget::Place { .. } => Some(self.active_pane()),
         }
     }
 
@@ -5822,6 +6096,20 @@ impl ShellScene {
         Ok(Some(FileClipboardExportRequest { role, paths, text }))
     }
 
+    fn active_file_clipboard_request(
+        &self,
+        role: FileClipboardRole,
+    ) -> Result<Option<FileClipboardExportRequest>, String> {
+        let Some(paths) = self.active_selection_item_paths()? else {
+            return Ok(None);
+        };
+        if role == FileClipboardRole::Cut && paths.iter().any(|path| is_network_path(path)) {
+            return Err("remote cut is not available yet".to_string());
+        }
+        let text = encode_file_clipboard_text(role, &paths);
+        Ok(Some(FileClipboardExportRequest { role, paths, text }))
+    }
+
     fn record_file_clipboard_export(&mut self, request: &FileClipboardExportRequest) {
         self.file_clipboard_changes += 1;
         eprintln!(
@@ -5833,11 +6121,17 @@ impl ShellScene {
         );
     }
 
-    fn context_target_paste_directory(&self) -> Option<PathBuf> {
+    fn context_target_paste_directory(&self) -> Option<(ShellPaneId, PathBuf)> {
         match self.context_target.as_ref()? {
-            ShellContextTarget::Blank { path, .. } => Some(path.clone()),
+            ShellContextTarget::Blank { pane, path, .. } => Some((*pane, path.clone())),
             _ => None,
         }
+    }
+
+    fn active_pane_paste_directory(&self) -> Option<(ShellPaneId, PathBuf)> {
+        let pane = self.active_pane();
+        self.pane_state(pane)
+            .map(|state| (pane, state.path.clone()))
     }
 
     fn paste_clipboard_text_from_context(
@@ -5845,9 +6139,31 @@ impl ShellScene {
         clipboard_text: &str,
         size: PhysicalSize<u32>,
     ) -> Result<ShellPasteResult, String> {
-        let target_dir = self
+        let (target_pane, target_dir) = self
             .context_target_paste_directory()
-            .unwrap_or_else(|| self.panes[ShellPaneId::FIRST].path.clone());
+            .or_else(|| self.active_pane_paste_directory())
+            .ok_or_else(|| "no paste target pane".to_string())?;
+        self.paste_clipboard_text_to_pane(target_pane, target_dir, clipboard_text, size)
+    }
+
+    fn paste_clipboard_text_into_active_pane(
+        &mut self,
+        clipboard_text: &str,
+        size: PhysicalSize<u32>,
+    ) -> Result<ShellPasteResult, String> {
+        let (target_pane, target_dir) = self
+            .active_pane_paste_directory()
+            .ok_or_else(|| "no paste target pane".to_string())?;
+        self.paste_clipboard_text_to_pane(target_pane, target_dir, clipboard_text, size)
+    }
+
+    fn paste_clipboard_text_to_pane(
+        &mut self,
+        target_pane: ShellPaneId,
+        target_dir: PathBuf,
+        clipboard_text: &str,
+        size: PhysicalSize<u32>,
+    ) -> Result<ShellPasteResult, String> {
         if is_network_path(&target_dir) {
             return Err("remote paste target is not available yet".to_string());
         }
@@ -5895,7 +6211,7 @@ impl ShellScene {
             self.create_dialog = None;
             self.rename_dialog = None;
             self.rubber_band = None;
-            self.reload_current_path(size)?;
+            self.reload_pane_path(target_pane, size)?;
         }
         Ok(result)
     }
@@ -5932,6 +6248,119 @@ impl ShellScene {
             | Some(ShellContextTarget::Place { .. })
             | None => Ok(None),
         }
+    }
+
+    fn active_selection_item_paths(&self) -> Result<Option<Vec<PathBuf>>, String> {
+        let pane = self.active_pane();
+        let Some(pane_view) = self.pane_view(pane) else {
+            return Err("active pane no longer exists".to_string());
+        };
+        let Some(selection) = self.pane_selection(pane) else {
+            return Ok(None);
+        };
+        if selection.selected.is_empty() {
+            return Ok(None);
+        }
+        let paths = selection
+            .selected
+            .iter()
+            .copied()
+            .filter_map(|index| self.entry_path_for_pane_view(pane_view, index))
+            .collect::<Vec<_>>();
+        if paths.is_empty() {
+            return Err("active selection no longer exists".to_string());
+        }
+        Ok(Some(paths))
+    }
+
+    fn open_rename_dialog_from_active_selection(&mut self) -> bool {
+        let pane = self.active_pane();
+        let Some(selection) = self.pane_selection(pane) else {
+            eprintln!("[fika-wgpu] rename-error target=none");
+            return false;
+        };
+        let Some(index) = selection.focus_or_first_selected() else {
+            eprintln!("[fika-wgpu] rename-error target=none");
+            return false;
+        };
+        let Some(view) = self.pane_view(pane) else {
+            eprintln!("[fika-wgpu] rename-error target=none");
+            return false;
+        };
+        let Some(entry) = view.entries.get(index) else {
+            eprintln!("[fika-wgpu] rename-error target=none");
+            return false;
+        };
+        let Some(path) = self.entry_path_for_pane_view(view, index) else {
+            eprintln!("[fika-wgpu] rename-error target=none");
+            return false;
+        };
+        let Some(dialog) = ShellRenameDialog::new(pane, path.clone(), entry.is_dir) else {
+            eprintln!(
+                "[fika-wgpu] rename-error path={} error=no-file-name",
+                path.display()
+            );
+            return false;
+        };
+        let changed = self.rename_dialog.as_ref() != Some(&dialog);
+        self.rename_dialog = Some(dialog);
+        self.context_menu = None;
+        self.properties_overlay = None;
+        self.create_dialog = None;
+        self.rubber_band = None;
+        if changed {
+            self.rename_changes += 1;
+            self.log_rename_dialog_state();
+        }
+        changed
+    }
+
+    fn delete_active_selection(&mut self, size: PhysicalSize<u32>) -> Result<bool, String> {
+        let pane = self.active_pane();
+        let Some(paths) = self.active_selection_item_paths()? else {
+            return Ok(false);
+        };
+        if paths
+            .iter()
+            .all(|path| file_ops::is_in_trash_files_dir(path))
+        {
+            let result = trash_view_operation_result(
+                WGPU_SHELL_PANE_ID,
+                TrashViewOperation::DeletePermanently,
+                paths,
+            );
+            self.apply_trash_view_result("delete-active-selection", pane, &result, size)?;
+            return Ok(result.success_count > 0);
+        }
+        if paths.iter().any(|path| is_network_path(path)) {
+            return Err("remote trash is not available yet".to_string());
+        }
+        let summary = file_ops::trash_paths(&paths);
+        let changed = !summary.successes.is_empty();
+        self.trash_changes += 1;
+        eprintln!(
+            "[fika-wgpu] trash paths={} success={} failure={} changes={}",
+            paths.len(),
+            summary.successes.len(),
+            summary.failures.len(),
+            self.trash_changes
+        );
+        for failure in &summary.failures {
+            eprintln!("[fika-wgpu] trash-failure {failure}");
+        }
+        if changed {
+            self.context_target = None;
+            self.context_menu = None;
+            self.properties_overlay = None;
+            self.create_dialog = None;
+            self.rename_dialog = None;
+            self.rubber_band = None;
+            if let Some(selection) = self.pane_selection_mut(pane) {
+                selection.clear();
+            }
+            self.reload_pane_path(pane, size)?;
+        }
+        Ok(changed)
     }
 
     fn context_target_trash_paths(&self) -> Result<Vec<PathBuf>, String> {
@@ -5996,9 +6425,12 @@ impl ShellScene {
         action: ShellContextMenuAction,
         size: PhysicalSize<u32>,
     ) -> Result<TrashViewOperationResult, String> {
+        let pane_to_reload = self
+            .context_target_pane()
+            .unwrap_or_else(|| self.active_pane());
         let (operation, paths) = self.context_target_trash_view_operation(action)?;
         let result = trash_view_operation_result(WGPU_SHELL_PANE_ID, operation, paths);
-        self.apply_trash_view_result(action.as_str(), &result, size)?;
+        self.apply_trash_view_result(action.as_str(), pane_to_reload, &result, size)?;
         Ok(result)
     }
 
@@ -6024,13 +6456,15 @@ impl ShellScene {
             },
             paths,
         );
-        self.apply_trash_view_result("replace-trash-conflicts", &result, size)?;
+        let pane_to_reload = self.active_pane();
+        self.apply_trash_view_result("replace-trash-conflicts", pane_to_reload, &result, size)?;
         Ok(result)
     }
 
     fn apply_trash_view_result(
         &mut self,
         action: &str,
+        pane_to_reload: ShellPaneId,
         result: &TrashViewOperationResult,
         size: PhysicalSize<u32>,
     ) -> Result<(), String> {
@@ -6067,11 +6501,7 @@ impl ShellScene {
         }
 
         if result.success_count > 0 {
-            let pane_to_clear = match self.context_target.as_ref() {
-                Some(ShellContextTarget::Item { pane, .. })
-                | Some(ShellContextTarget::Blank { pane, .. }) => *pane,
-                Some(ShellContextTarget::Place { .. }) | None => self.active_pane(),
-            };
+            let pane_to_clear = pane_to_reload;
             self.context_target = None;
             self.context_menu = None;
             self.properties_overlay = None;
@@ -6081,7 +6511,7 @@ impl ShellScene {
             if let Some(selection) = self.pane_selection_mut(pane_to_clear) {
                 selection.clear();
             }
-            self.reload_current_path(size)?;
+            self.reload_pane_path(pane_to_reload, size)?;
         }
         Ok(())
     }
@@ -6090,6 +6520,9 @@ impl ShellScene {
         &mut self,
         size: PhysicalSize<u32>,
     ) -> Result<ShellTrashResult, String> {
+        let pane_to_reload = self
+            .context_target_pane()
+            .unwrap_or_else(|| self.active_pane());
         let paths = self.context_target_trash_paths()?;
         if paths.iter().any(|path| is_network_path(path)) {
             return Err("remote trash is not available yet".to_string());
@@ -6127,7 +6560,7 @@ impl ShellScene {
         self.create_dialog = None;
         self.rename_dialog = None;
         self.rubber_band = None;
-        self.reload_current_path(size)?;
+        self.reload_pane_path(pane_to_reload, size)?;
         Ok(result)
     }
 
@@ -6229,7 +6662,8 @@ impl ShellScene {
     }
 
     fn open_create_dialog_from_context_with_kind(&mut self, kind: CreateEntryKind) -> bool {
-        let Some(ShellContextTarget::Blank { path, .. }) = self.context_target.as_ref() else {
+        let Some(ShellContextTarget::Blank { pane, path, .. }) = self.context_target.as_ref()
+        else {
             eprintln!(
                 "[fika-wgpu] create-new-error target={}",
                 self.context_target
@@ -6239,7 +6673,7 @@ impl ShellScene {
             );
             return false;
         };
-        let dialog = ShellCreateDialog::new(path.clone(), kind);
+        let dialog = ShellCreateDialog::new(*pane, path.clone(), kind);
         let changed = self.create_dialog.as_ref() != Some(&dialog);
         self.create_dialog = Some(dialog);
         self.properties_overlay = None;
@@ -6323,6 +6757,7 @@ impl ShellScene {
             return Err(format!("{} already exists", path.display()));
         }
         Ok(CreateEntryRequest {
+            pane: dialog.pane,
             parent: dialog.parent.clone(),
             path,
             kind: dialog.kind,
@@ -6398,8 +6833,18 @@ impl ShellScene {
         CreateDialogClick::Inside
     }
 
+    #[cfg(test)]
     fn select_entry_by_name(&mut self, name: &str, size: PhysicalSize<u32>) -> bool {
-        let pane_id = self.active_pane();
+        self.select_entry_by_name_in_pane(self.active_pane(), name, size)
+    }
+
+    fn select_entry_by_name_in_pane(
+        &mut self,
+        pane_id: ShellPaneId,
+        name: &str,
+        size: PhysicalSize<u32>,
+    ) -> bool {
+        let pane_id = self.normalized_pane_id(pane_id);
         let Some(pane) = self.pane_state(pane_id) else {
             return false;
         };
@@ -6441,7 +6886,9 @@ impl ShellScene {
     }
 
     fn open_rename_dialog_from_context(&mut self) -> bool {
-        let Some(ShellContextTarget::Item { path, is_dir, .. }) = self.context_target.as_ref()
+        let Some(ShellContextTarget::Item {
+            pane, path, is_dir, ..
+        }) = self.context_target.as_ref()
         else {
             eprintln!(
                 "[fika-wgpu] rename-error target={}",
@@ -6452,7 +6899,7 @@ impl ShellScene {
             );
             return false;
         };
-        let Some(dialog) = ShellRenameDialog::new(path.clone(), *is_dir) else {
+        let Some(dialog) = ShellRenameDialog::new(*pane, path.clone(), *is_dir) else {
             eprintln!(
                 "[fika-wgpu] rename-error path={} error=no-file-name",
                 path.display()
@@ -6534,6 +6981,7 @@ impl ShellScene {
             return Err(format!("{} already exists", target.display()));
         }
         Ok(RenameEntryRequest {
+            pane: dialog.pane,
             source: dialog.source.clone(),
             target,
             original_name: dialog.original_name.clone(),
@@ -6714,8 +7162,8 @@ impl ShellScene {
         }
     }
 
-    fn parent_directory_path(&self) -> Option<PathBuf> {
-        self.panes[ShellPaneId::FIRST]
+    fn parent_directory_path_for_pane(&self, pane: ShellPaneId) -> Option<PathBuf> {
+        self.pane_state(pane)?
             .path
             .parent()
             .filter(|parent| !parent.as_os_str().is_empty())
@@ -6761,6 +7209,19 @@ impl ShellScene {
 
     fn pane_selection_mut(&mut self, kind: ShellPaneId) -> Option<&mut ShellSelection> {
         self.pane_state_mut(kind).map(|pane| &mut pane.selection)
+    }
+
+    fn pane_history(&self, kind: ShellPaneId) -> &PathHistory {
+        self.histories.get(self.normalized_pane_id(kind))
+    }
+
+    fn pane_history_mut(&mut self, kind: ShellPaneId) -> &mut PathHistory {
+        let kind = self.normalized_pane_id(kind);
+        self.histories.get_mut(kind)
+    }
+
+    fn filter_pattern_for_pane(&self, _kind: ShellPaneId) -> &str {
+        &self.filter_pattern
     }
 
     fn active_selection_len(&self) -> usize {
@@ -7184,20 +7645,15 @@ impl ShellScene {
             size,
         );
         if let Some(path_rect) = self.path_bar_rect(size) {
-            let location_active =
-                self.is_location_editing() || self.active_pane() == ShellPaneId::FIRST;
+            let location_active = self.location_bar_active_for_pane(ShellPaneId::FIRST);
             let location_clip = ViewRect {
                 x: pane.x,
                 y: pane.y,
                 width: self.pane_width(size),
                 height: top_bar_height,
             };
-            let path_label = self
-                .location_draft
-                .as_ref()
-                .map(|draft| draft.value.clone())
-                .unwrap_or_else(|| self.panes[ShellPaneId::FIRST].path.display().to_string());
-            let path_cursor = self.location_draft.as_ref().map(|draft| draft.cursor);
+            let path_label = self.location_label_for_pane(ShellPaneId::FIRST);
+            let path_cursor = self.location_cursor_for_pane(ShellPaneId::FIRST);
             self.push_location_bar(
                 &mut vertices,
                 text,
@@ -7651,16 +8107,18 @@ impl ShellScene {
             width: (pane.width - margin * 2.0).max(1.0),
             height: self.scale_metric(28.0),
         };
-        let location_active = self.active_pane() == ShellPaneId::SECOND;
+        let location_active = self.location_bar_active_for_pane(ShellPaneId::SECOND);
+        let path_label = self.location_label_for_pane(ShellPaneId::SECOND);
+        let path_cursor = self.location_cursor_for_pane(ShellPaneId::SECOND);
         self.push_location_bar(
             vertices,
             text,
             size,
             path_rect,
             projection.geometry.top_bar,
-            &split_view.path.display().to_string(),
+            &path_label,
             location_active,
-            None,
+            path_cursor,
         );
         push_rect(
             vertices,
@@ -7909,8 +8367,11 @@ impl ShellScene {
             size,
         );
 
-        let active_place =
-            active_shell_place_index(&self.places, &self.panes[ShellPaneId::FIRST].path);
+        let active_place_path = self
+            .pane_state(self.active_pane())
+            .map(|pane| pane.path.as_path())
+            .unwrap_or_else(|| self.panes[ShellPaneId::FIRST].path.as_path());
+        let active_place = active_shell_place_index(&self.places, active_place_path);
         let top_padding = self.scale_metric(PLACES_SIDEBAR_TOP_PADDING);
         let title_height = self.scale_metric(PLACES_TITLE_HEIGHT);
         let padding_x = self.scale_metric(PLACES_SIDEBAR_PADDING_X);
@@ -15720,7 +16181,7 @@ mod tests {
             hovered_item: None,
             hovered_place: None,
             last_item_click: None,
-            history: PathHistory::default(),
+            histories: ShellPaneHistories::default(),
             context_target: None,
             context_menu: None,
             properties_overlay: None,
@@ -15765,6 +16226,42 @@ mod tests {
             dnd_hover_changes: 0,
             dnd_drop_requests: 0,
         }
+    }
+
+    fn set_test_pane(
+        scene: &mut ShellScene,
+        pane: ShellPaneId,
+        path: PathBuf,
+        view_mode: ShellViewMode,
+        entries: Vec<Entry>,
+    ) {
+        let dir_count = entries.iter().filter(|entry| entry.is_dir).count();
+        let filtered_indexes = filtered_indexes_for_entries(
+            &entries,
+            scene.show_hidden,
+            scene.filter_pattern_for_pane(pane),
+        );
+        scene.panes.set(
+            pane,
+            ShellPaneState {
+                path,
+                view_mode,
+                dir_count,
+                filtered_indexes,
+                entries,
+                selection: ShellSelection::default(),
+                scroll_x: 0.0,
+                scroll_y: 0.0,
+            },
+        );
+    }
+
+    fn filtered_names(scene: &ShellScene, pane: ShellPaneId) -> Vec<String> {
+        let pane = scene.pane_state(pane).expect("test pane should be open");
+        pane.filtered_indexes
+            .iter()
+            .map(|index| pane.entries[*index].name.as_ref().to_string())
+            .collect()
     }
 
     #[test]
@@ -16516,7 +17013,31 @@ mod tests {
     }
 
     #[test]
-    fn split_pane_path_bar_click_focuses_without_location_editor() {
+    fn split_pane_file_context_split_path_falls_back_to_that_pane() {
+        let mut scene = test_scene(vec![test_entry("left.txt", false)], ShellViewMode::Icons);
+        set_test_pane(
+            &mut scene,
+            ShellPaneId::SECOND,
+            PathBuf::from("/right-root"),
+            ShellViewMode::Icons,
+            vec![test_entry("right.txt", false)],
+        );
+        scene.context_target = Some(ShellContextTarget::Item {
+            pane: ShellPaneId::SECOND,
+            index: 0,
+            path: PathBuf::from("right.txt"),
+            is_dir: false,
+            selection_count: 1,
+        });
+
+        assert_eq!(
+            scene.context_target_split_pane_path(),
+            Some(PathBuf::from("/right-root"))
+        );
+    }
+
+    #[test]
+    fn split_pane_path_bar_click_activates_location_editor_for_that_pane() {
         let mut scene = test_scene(vec![test_entry("alpha", true)], ShellViewMode::Icons);
         scene.panes.set(
             ShellPaneId::SECOND,
@@ -16542,7 +17063,11 @@ mod tests {
 
         assert!(scene.activate_path_bar_at_screen_point(point, size));
         assert_eq!(scene.active_pane(), ShellPaneId::SECOND);
-        assert!(!scene.is_location_editing());
+        assert!(scene.is_location_editing());
+        assert_eq!(scene.location_draft_pane(), Some(ShellPaneId::SECOND));
+        assert_eq!(scene.location_draft_value(), Some("/right-root"));
+        assert!(scene.location_bar_active_for_pane(ShellPaneId::SECOND));
+        assert!(!scene.location_bar_active_for_pane(ShellPaneId::FIRST));
     }
 
     #[test]
@@ -16591,6 +17116,116 @@ mod tests {
         assert_eq!(split.entries[0].name.as_ref(), "child.txt");
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn split_pane_location_commit_and_history_are_pane_local() {
+        let root = test_dir("split-location-history");
+        let left = root.join("left");
+        let right = root.join("right");
+        let next = root.join("next");
+        fs::create_dir_all(&left).unwrap();
+        fs::create_dir_all(&right).unwrap();
+        fs::create_dir_all(&next).unwrap();
+        fs::write(left.join("left.txt"), b"left").unwrap();
+        fs::write(right.join("right.txt"), b"right").unwrap();
+        fs::write(next.join("next.txt"), b"next").unwrap();
+
+        let size = PhysicalSize::new(900, 360);
+        let mut scene = ShellScene::load(left.clone(), ShellViewMode::Icons).unwrap();
+        assert!(scene.open_split_pane(right.clone(), size).unwrap());
+        scene.active_pane = ShellPaneId::SECOND;
+
+        assert!(scene.apply_location_command(LocationCommand::Activate, size));
+        scene
+            .location_draft
+            .as_mut()
+            .unwrap()
+            .draft
+            .set_completed(next.display().to_string());
+        assert_eq!(
+            scene.resolved_location_draft(),
+            Some((ShellPaneId::SECOND, next.clone()))
+        );
+        assert!(scene.close_location_draft(size));
+        assert!(
+            scene
+                .load_path_for_pane(ShellPaneId::SECOND, next.clone(), size)
+                .unwrap()
+        );
+
+        assert_eq!(scene.panes[ShellPaneId::FIRST].path, left);
+        assert_eq!(scene.panes[ShellPaneId::SECOND].path, next);
+        assert!(scene.pane_history(ShellPaneId::FIRST).back.is_empty());
+        assert_eq!(
+            scene.pane_history(ShellPaneId::SECOND).back,
+            vec![right.clone()]
+        );
+
+        assert!(scene.go_history_back(size).unwrap());
+        assert_eq!(scene.panes[ShellPaneId::FIRST].path, left);
+        assert_eq!(scene.panes[ShellPaneId::SECOND].path, right);
+        assert!(scene.pane_history(ShellPaneId::SECOND).back.is_empty());
+        assert_eq!(scene.pane_history(ShellPaneId::SECOND).forward, vec![next]);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn filter_and_hidden_rebuild_all_open_panes() {
+        let mut scene = test_scene(
+            vec![
+                test_entry("alpha.txt", false),
+                test_entry(".left-hidden", false),
+            ],
+            ShellViewMode::Icons,
+        );
+        set_test_pane(
+            &mut scene,
+            ShellPaneId::SECOND,
+            PathBuf::from("/right-root"),
+            ShellViewMode::Icons,
+            vec![
+                test_entry("alpha-right.txt", false),
+                test_entry(".right-hidden", false),
+                test_entry("beta.txt", false),
+            ],
+        );
+        let size = PhysicalSize::new(900, 360);
+
+        assert_eq!(
+            filtered_names(&scene, ShellPaneId::FIRST),
+            vec!["alpha.txt"]
+        );
+        assert_eq!(
+            filtered_names(&scene, ShellPaneId::SECOND),
+            vec!["alpha-right.txt", "beta.txt"]
+        );
+
+        assert!(scene.toggle_hidden_visibility(size));
+        assert_eq!(
+            filtered_names(&scene, ShellPaneId::FIRST),
+            vec!["alpha.txt", ".left-hidden"]
+        );
+        assert_eq!(
+            filtered_names(&scene, ShellPaneId::SECOND),
+            vec!["alpha-right.txt", ".right-hidden", "beta.txt"]
+        );
+
+        scene.panes[ShellPaneId::SECOND]
+            .selection
+            .select_indexes(&[1]);
+        assert!(scene.apply_filter_command(FilterCommand::Activate, size));
+        assert!(scene.apply_filter_command(FilterCommand::Insert("alpha".to_string()), size));
+        assert_eq!(
+            filtered_names(&scene, ShellPaneId::FIRST),
+            vec!["alpha.txt"]
+        );
+        assert_eq!(
+            filtered_names(&scene, ShellPaneId::SECOND),
+            vec!["alpha-right.txt"]
+        );
+        assert_eq!(scene.panes[ShellPaneId::SECOND].selection.len(), 0);
     }
 
     #[test]
@@ -17287,7 +17922,7 @@ mod tests {
         );
         assert_eq!(
             scene.context_target_directory_path(),
-            Some(PathBuf::from("/"))
+            Some((ShellPaneId::FIRST, PathBuf::from("/")))
         );
 
         let rect = context_menu_rect(menu, size);
@@ -18478,7 +19113,7 @@ text/plain=writer.desktop;\n",
         assert_eq!(scene.context_menu_actions, 1);
         assert_eq!(
             scene.context_target_directory_path(),
-            Some(PathBuf::from("/tmp/folder"))
+            Some((ShellPaneId::FIRST, PathBuf::from("/tmp/folder")))
         );
     }
 
@@ -18710,7 +19345,7 @@ text/plain=writer.desktop;\n",
         });
         assert_eq!(
             scene.context_target_directory_path(),
-            Some(PathBuf::from("/tmp/folder"))
+            Some((ShellPaneId::FIRST, PathBuf::from("/tmp/folder")))
         );
 
         scene.context_target = Some(ShellContextTarget::Item {
@@ -18741,7 +19376,7 @@ text/plain=writer.desktop;\n",
         });
         assert_eq!(
             scene.context_target_directory_path(),
-            Some(PathBuf::from("/"))
+            Some((ShellPaneId::FIRST, PathBuf::from("/")))
         );
     }
 
@@ -19250,10 +19885,12 @@ text/plain=writer.desktop;\n",
         let root = test_dir("create-file");
         fs::create_dir_all(&root).unwrap();
         fs::write(root.join("New File"), b"existing").unwrap();
-        let mut dialog = ShellCreateDialog::new(root.clone(), CreateEntryKind::File);
+        let mut dialog =
+            ShellCreateDialog::new(ShellPaneId::FIRST, root.clone(), CreateEntryKind::File);
         assert_eq!(dialog.name, "New File 2");
         dialog.name = "note.txt".to_string();
         let request = CreateEntryRequest {
+            pane: ShellPaneId::FIRST,
             parent: root.clone(),
             path: root.join("note.txt"),
             kind: CreateEntryKind::File,
@@ -19374,6 +20011,128 @@ text/plain=writer.desktop;\n",
         assert!(scene.rename_dialog.is_none());
         assert_eq!(scene.directory_reloads, 1);
 
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn split_pane_create_rename_clipboard_paste_and_trash_are_pane_local() {
+        let root = test_dir("split-file-ops");
+        let left = root.join("left");
+        let right = root.join("right");
+        let source_root = root.join("source");
+        fs::create_dir_all(&left).unwrap();
+        fs::create_dir_all(&right).unwrap();
+        fs::create_dir_all(&source_root).unwrap();
+        fs::write(left.join("left.txt"), b"left").unwrap();
+        fs::write(right.join("existing.txt"), b"existing").unwrap();
+        fs::write(right.join("trash-me.txt"), b"trash").unwrap();
+        fs::write(source_root.join("copy.txt"), b"copy").unwrap();
+
+        let size = PhysicalSize::new(900, 360);
+        let mut scene = ShellScene::load(left.clone(), ShellViewMode::Icons).unwrap();
+        assert!(scene.open_split_pane(right.clone(), size).unwrap());
+        scene.active_pane = ShellPaneId::SECOND;
+
+        scene.context_target = Some(ShellContextTarget::Blank {
+            pane: ShellPaneId::SECOND,
+            path: right.clone(),
+        });
+        assert!(scene.open_create_dialog_from_context_with_kind(CreateEntryKind::File));
+        scene.create_dialog.as_mut().unwrap().name = "made.txt".to_string();
+        scene.create_dialog.as_mut().unwrap().replace_on_insert = false;
+        let create_request = scene.create_entry_request().unwrap();
+        assert_eq!(create_request.pane, ShellPaneId::SECOND);
+        create_entry_on_disk(&create_request).unwrap();
+        assert!(scene.close_create_dialog_after_success(&create_request));
+        assert!(scene.reload_pane_path(create_request.pane, size).unwrap());
+        assert!(scene.select_entry_by_name_in_pane(
+            create_request.pane,
+            &create_request.name,
+            size
+        ));
+        assert_eq!(scene.panes[ShellPaneId::FIRST].path, left);
+        assert!(
+            entry_index_by_name(&scene.panes[ShellPaneId::FIRST].entries, "made.txt").is_none()
+        );
+
+        let made_index =
+            entry_index_by_name(&scene.panes[ShellPaneId::SECOND].entries, "made.txt").unwrap();
+        scene.context_target = Some(ShellContextTarget::Item {
+            pane: ShellPaneId::SECOND,
+            index: made_index,
+            path: right.join("made.txt"),
+            is_dir: false,
+            selection_count: 1,
+        });
+        assert!(scene.open_rename_dialog_from_context());
+        scene.rename_dialog.as_mut().unwrap().name = "renamed.txt".to_string();
+        scene.rename_dialog.as_mut().unwrap().replace_on_insert = false;
+        let rename_request = scene.rename_entry_request().unwrap();
+        assert_eq!(rename_request.pane, ShellPaneId::SECOND);
+        rename_entry_on_disk(&rename_request).unwrap();
+        assert!(scene.close_rename_dialog_after_success(&rename_request));
+        assert!(scene.reload_pane_path(rename_request.pane, size).unwrap());
+        assert!(scene.select_entry_by_name_in_pane(
+            rename_request.pane,
+            &rename_request.name,
+            size
+        ));
+        assert!(right.join("renamed.txt").is_file());
+        assert!(!right.join("made.txt").exists());
+        assert!(
+            entry_index_by_name(&scene.panes[ShellPaneId::FIRST].entries, "renamed.txt").is_none()
+        );
+
+        scene.rename_dialog = None;
+        assert!(scene.open_rename_dialog_from_active_selection());
+        let dialog = scene.rename_dialog.as_ref().unwrap();
+        assert_eq!(dialog.pane, ShellPaneId::SECOND);
+        assert_eq!(dialog.source, right.join("renamed.txt"));
+        assert!(scene.close_rename_dialog());
+
+        let clipboard_request = scene
+            .active_file_clipboard_request(FileClipboardRole::Copy)
+            .unwrap()
+            .expect("active second pane selection should export paths");
+        assert_eq!(clipboard_request.role, FileClipboardRole::Copy);
+        assert_eq!(clipboard_request.paths, vec![right.join("renamed.txt")]);
+
+        let paste_text =
+            encode_file_clipboard_text(FileClipboardRole::Copy, &[source_root.join("copy.txt")]);
+        let paste_result = scene
+            .paste_clipboard_text_into_active_pane(&paste_text, size)
+            .unwrap();
+        assert_eq!(paste_result.mode, FileTransferMode::Copy);
+        assert_eq!(paste_result.success_count, 1);
+        assert_eq!(scene.paste_changes, 1);
+        assert!(right.join("copy.txt").is_file());
+        assert!(
+            entry_index_by_name(&scene.panes[ShellPaneId::SECOND].entries, "copy.txt").is_some()
+        );
+        assert!(
+            entry_index_by_name(&scene.panes[ShellPaneId::FIRST].entries, "copy.txt").is_none()
+        );
+
+        let trash_index =
+            entry_index_by_name(&scene.panes[ShellPaneId::SECOND].entries, "trash-me.txt").unwrap();
+        scene.context_target = Some(ShellContextTarget::Item {
+            pane: ShellPaneId::SECOND,
+            index: trash_index,
+            path: right.join("trash-me.txt"),
+            is_dir: false,
+            selection_count: 1,
+        });
+        let trash_result = scene.move_context_target_to_trash(size).unwrap();
+        assert_eq!(trash_result.success_count, 1);
+        assert_eq!(trash_result.failure_count, 0);
+        assert!(!right.join("trash-me.txt").exists());
+        assert!(
+            entry_index_by_name(&scene.panes[ShellPaneId::SECOND].entries, "trash-me.txt")
+                .is_none()
+        );
+        assert_eq!(scene.panes[ShellPaneId::FIRST].path, left);
+
+        file_ops::undo_trash(&trash_result.trash_pairs).unwrap();
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -19647,6 +20406,55 @@ text/plain=writer.desktop;\n",
     }
 
     #[test]
+    fn active_delete_reloads_active_split_trash_view() {
+        file_ops::ensure_trash_dirs().unwrap();
+        let root = test_dir("split-active-delete");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("left.txt"), b"left").unwrap();
+        let trash_dir = file_ops::trash_files_dir();
+        let unique = format!(
+            "fika-active-delete-{}-{}.tmp",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let trash_file = trash_dir.join(unique);
+        fs::write(&trash_file, b"delete").unwrap();
+
+        let size = PhysicalSize::new(900, 360);
+        let mut scene = ShellScene::load(root.clone(), ShellViewMode::Icons).unwrap();
+        assert!(scene.open_split_pane(trash_dir.clone(), size).unwrap());
+        scene.active_pane = ShellPaneId::SECOND;
+        let trash_index = entry_index_by_name(
+            &scene.panes[ShellPaneId::SECOND].entries,
+            trash_file.file_name().unwrap().to_string_lossy().as_ref(),
+        )
+        .unwrap();
+        scene.panes[ShellPaneId::SECOND]
+            .selection
+            .select_indexes(&[trash_index]);
+
+        assert!(scene.delete_active_selection(size).unwrap());
+
+        assert!(!trash_file.exists());
+        assert_eq!(scene.panes[ShellPaneId::FIRST].path, root);
+        assert_eq!(scene.panes[ShellPaneId::SECOND].path, trash_dir);
+        assert!(
+            entry_index_by_name(
+                &scene.panes[ShellPaneId::SECOND].entries,
+                trash_file.file_name().unwrap().to_string_lossy().as_ref()
+            )
+            .is_none()
+        );
+        assert_eq!(scene.panes[ShellPaneId::SECOND].selection.len(), 0);
+        assert_eq!(scene.directory_reloads, 1);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn selected_directory_path_uses_focus_and_target_path() {
         let target = PathBuf::from("/run/user/1000/gvfs/sftp:host=example");
         let mut scene = test_scene(
@@ -19663,7 +20471,10 @@ text/plain=writer.desktop;\n",
                 .selection
                 .apply_navigation(0, false)
         );
-        assert_eq!(scene.selected_directory_path(), Some(target));
+        assert_eq!(
+            scene.selected_directory_path(),
+            Some((ShellPaneId::FIRST, target))
+        );
         assert!(
             scene.panes[ShellPaneId::FIRST]
                 .selection
@@ -19763,29 +20574,47 @@ text/plain=writer.desktop;\n",
 
         assert!(scene.load_path(first.clone(), size).unwrap());
         assert_eq!(scene.panes[ShellPaneId::FIRST].path, first);
-        assert_eq!(scene.history.back, vec![root.clone()]);
-        assert!(scene.history.forward.is_empty());
+        assert_eq!(
+            scene.pane_history(ShellPaneId::FIRST).back,
+            vec![root.clone()]
+        );
+        assert!(scene.pane_history(ShellPaneId::FIRST).forward.is_empty());
 
         assert!(scene.load_path(second.clone(), size).unwrap());
         assert_eq!(scene.panes[ShellPaneId::FIRST].path, second);
-        assert_eq!(scene.history.back, vec![root.clone(), first.clone()]);
+        assert_eq!(
+            scene.pane_history(ShellPaneId::FIRST).back,
+            vec![root.clone(), first.clone()]
+        );
 
         assert!(scene.go_history_back(size).unwrap());
         assert_eq!(scene.panes[ShellPaneId::FIRST].path, first);
-        assert_eq!(scene.history.back, vec![root.clone()]);
-        assert_eq!(scene.history.forward, vec![second.clone()]);
+        assert_eq!(
+            scene.pane_history(ShellPaneId::FIRST).back,
+            vec![root.clone()]
+        );
+        assert_eq!(
+            scene.pane_history(ShellPaneId::FIRST).forward,
+            vec![second.clone()]
+        );
 
         assert!(scene.go_history_forward(size).unwrap());
         assert_eq!(scene.panes[ShellPaneId::FIRST].path, second);
-        assert_eq!(scene.history.back, vec![root.clone(), first.clone()]);
-        assert!(scene.history.forward.is_empty());
+        assert_eq!(
+            scene.pane_history(ShellPaneId::FIRST).back,
+            vec![root.clone(), first.clone()]
+        );
+        assert!(scene.pane_history(ShellPaneId::FIRST).forward.is_empty());
 
         assert!(scene.go_history_back(size).unwrap());
         assert_eq!(scene.panes[ShellPaneId::FIRST].path, first);
         assert!(scene.load_path(sibling.clone(), size).unwrap());
         assert_eq!(scene.panes[ShellPaneId::FIRST].path, sibling);
-        assert!(scene.history.forward.is_empty());
-        assert_eq!(scene.history.back, vec![root.clone(), first]);
+        assert!(scene.pane_history(ShellPaneId::FIRST).forward.is_empty());
+        assert_eq!(
+            scene.pane_history(ShellPaneId::FIRST).back,
+            vec![root.clone(), first]
+        );
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -19813,8 +20642,12 @@ text/plain=writer.desktop;\n",
                 .selection
                 .apply_navigation(keep_index, false)
         );
-        scene.history.push_back(PathBuf::from("/tmp/previous"));
-        scene.history.push_forward(PathBuf::from("/tmp/next"));
+        scene
+            .pane_history_mut(ShellPaneId::FIRST)
+            .push_back(PathBuf::from("/tmp/previous"));
+        scene
+            .pane_history_mut(ShellPaneId::FIRST)
+            .push_forward(PathBuf::from("/tmp/next"));
 
         fs::write(root.join("aaa.txt"), b"new").unwrap();
         assert!(scene.reload_current_path(size).unwrap());
@@ -19831,8 +20664,14 @@ text/plain=writer.desktop;\n",
             scene.panes[ShellPaneId::FIRST].selection.focus,
             Some(new_keep_index)
         );
-        assert_eq!(scene.history.back, vec![PathBuf::from("/tmp/previous")]);
-        assert_eq!(scene.history.forward, vec![PathBuf::from("/tmp/next")]);
+        assert_eq!(
+            scene.pane_history(ShellPaneId::FIRST).back,
+            vec![PathBuf::from("/tmp/previous")]
+        );
+        assert_eq!(
+            scene.pane_history(ShellPaneId::FIRST).forward,
+            vec![PathBuf::from("/tmp/next")]
+        );
         assert_eq!(scene.panes[ShellPaneId::FIRST].path, root);
         assert_eq!(scene.path_changes, 0);
         assert_eq!(scene.directory_reloads, 1);
@@ -19878,7 +20717,7 @@ text/plain=writer.desktop;\n",
     }
 
     #[test]
-    fn view_mode_shortcuts_accept_digits_and_function_key_fallbacks() {
+    fn view_mode_shortcuts_accept_ctrl_digits_and_function_key_fallbacks() {
         let unidentified = PhysicalKey::Unidentified(winit::keyboard::NativeKeyCode::Unidentified);
         let no_key = Key::Unidentified(winit::keyboard::NativeKey::Unidentified);
 
@@ -19914,7 +20753,71 @@ text/plain=writer.desktop;\n",
                 &Key::Character("1".into()),
                 &Key::Character("1".into()),
             ),
-            Some(ShellViewMode::Icons)
+            None
+        );
+        assert_eq!(
+            view_mode_for_key_parts(false, &PhysicalKey::Code(KeyCode::F2), &no_key, &no_key,),
+            None
+        );
+    }
+
+    #[test]
+    fn file_keyboard_shortcuts_cover_clipboard_rename_and_delete() {
+        let no_key = Key::Unidentified(winit::keyboard::NativeKey::Unidentified);
+
+        assert_eq!(
+            file_keyboard_command_for_key_parts(
+                false,
+                &PhysicalKey::Code(KeyCode::F2),
+                &no_key,
+                &no_key
+            ),
+            Some(FileKeyboardCommand::Rename)
+        );
+        assert_eq!(
+            file_keyboard_command_for_key_parts(
+                false,
+                &PhysicalKey::Code(KeyCode::Delete),
+                &no_key,
+                &no_key
+            ),
+            Some(FileKeyboardCommand::Delete)
+        );
+        assert_eq!(
+            file_keyboard_command_for_key_parts(
+                true,
+                &PhysicalKey::Code(KeyCode::KeyC),
+                &no_key,
+                &no_key
+            ),
+            Some(FileKeyboardCommand::Copy)
+        );
+        assert_eq!(
+            file_keyboard_command_for_key_parts(
+                true,
+                &PhysicalKey::Code(KeyCode::KeyX),
+                &no_key,
+                &no_key
+            ),
+            Some(FileKeyboardCommand::Cut)
+        );
+        assert_eq!(
+            file_keyboard_command_for_key_parts(
+                true,
+                &PhysicalKey::Code(KeyCode::KeyV),
+                &no_key,
+                &no_key
+            ),
+            Some(FileKeyboardCommand::Paste)
+        );
+        assert_eq!(
+            file_keyboard_command_for_key_parts(
+                false,
+                &PhysicalKey::Code(KeyCode::KeyC),
+                &Key::Character("c".into()),
+                &Key::Character("c".into())
+            ),
+            None
         );
     }
 
@@ -20143,7 +21046,10 @@ text/plain=writer.desktop;\n",
 
         assert!(scene.apply_location_command(LocationCommand::Complete, size));
         assert_eq!(scene.location_draft_value(), Some("alpha/"));
-        assert_eq!(scene.resolved_location_draft(), Some(temp.join("alpha/")));
+        assert_eq!(
+            scene.resolved_location_draft(),
+            Some((ShellPaneId::FIRST, temp.join("alpha/")))
+        );
 
         assert!(scene.apply_location_command(LocationCommand::Cancel, size));
         assert_eq!(scene.location_draft_value(), None);
@@ -20160,32 +21066,39 @@ text/plain=writer.desktop;\n",
 
         assert!(scene.apply_location_command(LocationCommand::Activate, size));
         let draft = scene.location_draft.as_ref().unwrap();
-        assert_eq!(draft.cursor, draft.value.len());
+        assert_eq!(draft.pane, ShellPaneId::FIRST);
+        assert_eq!(draft.draft.cursor, draft.draft.value.len());
 
         assert!(scene.apply_location_command(LocationCommand::Insert("abc".to_string()), size));
         assert_eq!(scene.location_draft_value(), Some("abc"));
-        assert_eq!(scene.location_draft.as_ref().unwrap().cursor, 3);
+        assert_eq!(scene.location_draft.as_ref().unwrap().draft.cursor, 3);
 
         assert!(scene.apply_location_command(LocationCommand::MoveLeft, size));
-        assert_eq!(scene.location_draft.as_ref().unwrap().cursor, 2);
+        assert_eq!(scene.location_draft.as_ref().unwrap().draft.cursor, 2);
         assert!(scene.apply_location_command(LocationCommand::Backspace, size));
         assert_eq!(scene.location_draft_value(), Some("ac"));
-        assert_eq!(scene.location_draft.as_ref().unwrap().cursor, 1);
+        assert_eq!(scene.location_draft.as_ref().unwrap().draft.cursor, 1);
 
         assert!(scene.apply_location_command(LocationCommand::Insert("β".to_string()), size));
         assert_eq!(scene.location_draft_value(), Some("aβc"));
-        assert_eq!(scene.location_draft.as_ref().unwrap().cursor, "aβ".len());
+        assert_eq!(
+            scene.location_draft.as_ref().unwrap().draft.cursor,
+            "aβ".len()
+        );
 
         assert!(scene.apply_location_command(LocationCommand::MoveLeft, size));
-        assert_eq!(scene.location_draft.as_ref().unwrap().cursor, "a".len());
+        assert_eq!(
+            scene.location_draft.as_ref().unwrap().draft.cursor,
+            "a".len()
+        );
         assert!(scene.apply_location_command(LocationCommand::Delete, size));
         assert_eq!(scene.location_draft_value(), Some("ac"));
-        assert_eq!(scene.location_draft.as_ref().unwrap().cursor, 1);
+        assert_eq!(scene.location_draft.as_ref().unwrap().draft.cursor, 1);
 
         assert!(scene.apply_location_command(LocationCommand::MoveEnd, size));
-        assert_eq!(scene.location_draft.as_ref().unwrap().cursor, 2);
+        assert_eq!(scene.location_draft.as_ref().unwrap().draft.cursor, 2);
         assert!(scene.apply_location_command(LocationCommand::MoveHome, size));
-        assert_eq!(scene.location_draft.as_ref().unwrap().cursor, 0);
+        assert_eq!(scene.location_draft.as_ref().unwrap().draft.cursor, 0);
     }
 
     #[test]
@@ -20706,11 +21619,22 @@ text/plain=writer.desktop;\n",
     #[test]
     fn window_scale_factor_scales_default_shell_metrics() {
         let mut scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
+        set_test_pane(
+            &mut scene,
+            ShellPaneId::SECOND,
+            PathBuf::from("/right-root"),
+            ShellViewMode::Icons,
+            (0..80)
+                .map(|index| test_entry(&format!("right-{index:02}.txt"), false))
+                .collect(),
+        );
+        scene.panes[ShellPaneId::SECOND].scroll_y = 80.0;
         let size = PhysicalSize::new(900, 600);
 
         assert!(scene.set_scale_factor(1.5, size));
         assert_eq!(scene.top_bar_height(), 54.0);
         assert_eq!(scene.text_line_height(), 27.0);
+        assert_eq!(scene.panes[ShellPaneId::SECOND].scroll_y, 120.0);
 
         let icons_item = match scene.layout(size) {
             ShellLayout::Icons(layout) => layout.item(0).unwrap(),

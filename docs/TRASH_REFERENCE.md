@@ -72,7 +72,7 @@ operation flow, while using the local XDG Trash layout as the backing store.
     changes the visible order, the model emits a reset rather than reporting
     changed roles at stale indexes.
 - UI actions:
-  - `src/bin/fika-wgpu.rs` routes Delete in normal directories to move-to-trash.
+  - `src/main.rs` routes Delete in normal directories to move-to-trash.
   - Trash view context menus provide Restore, Delete Permanently, and Empty
     Trash actions.
   - Restore conflicts are reported as structured `TrashRestoreConflict`
@@ -88,7 +88,7 @@ operation flow, while using the local XDG Trash layout as the backing store.
 - Places:
   - `src/core/places.rs` defines the Trash place that navigates to the Trash
     files directory.
-  - `src/bin/fika-wgpu.rs` owns the Trash empty/non-empty state, initializes it
+  - `src/main.rs` owns the Trash empty/non-empty state, initializes it
     once, refreshes it after Trash-affecting operations, updates it from Trash
     pane lister events, and drains the core `TrashEmptinessMonitor` singleton
     watcher for external changes when no Trash pane is open. Places projection

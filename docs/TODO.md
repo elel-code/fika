@@ -1,6 +1,6 @@
 # Fika TODO: winit/wgpu Mainline
 
-2026-06-21: Fika's only in-tree file-manager UI is now `fika-wgpu`, built on
+2026-06-21: Fika's only in-tree file-manager UI is now `fika`, built on
 official upstream `winit` `master` and crates.io `wgpu`.
 
 Status:
@@ -12,7 +12,7 @@ Status:
 
 ## Hard Rules
 
-- [x] `fika-wgpu` is the default and active UI runtime.
+- [x] `fika` is the default and active UI runtime.
 - [x] Core remains UI-neutral: no windowing, renderer, Wayland object, raw
   window handle, or GPU resource dependencies in `src/core/`.
 - [x] Every pane uses stable `ShellPaneId` routing and the same pane state,
@@ -23,8 +23,8 @@ Status:
 
 ## Current Source Boundaries
 
-- `src/bin/fika-wgpu.rs`: current shell entry point and remaining monolith.
-- `src/bin/fika_wgpu/`: extracted shell modules.
+- `src/main.rs`: current shell entry point and remaining monolith.
+- `src/shell/`: extracted shell modules.
 - `src/core/`: UI-neutral file-manager/domain logic.
 - `src/bin/fika-xdp-filechooser.rs`: portal backend.
 - `src/bin/fika-privileged-helper.rs`: privileged operation helper.
@@ -34,7 +34,7 @@ Status:
 - [~] Finish pane reuse:
   every pane must be addressed through pane containers, not dedicated
   first/second-pane fields.
-- [~] Continue splitting `src/bin/fika-wgpu.rs` into focused modules:
+- [~] Continue splitting `src/main.rs` into focused modules:
   app/window/event loop, renderer, scene, pane assembly, Places, context menu,
   dialogs, icons, thumbnails, text, DnD, and telemetry.
 - [~] Keep item view hot paths Dolphin-aligned:

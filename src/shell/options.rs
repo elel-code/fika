@@ -16,7 +16,7 @@ pub(crate) fn parse_start_options() -> Result<Option<StartupOptions>, String> {
     let program = args
         .next()
         .and_then(|value| value.into_string().ok())
-        .unwrap_or_else(|| "fika-wgpu".to_string());
+        .unwrap_or_else(|| "fika".to_string());
 
     parse_start_options_from(program, args)
 }
@@ -82,7 +82,7 @@ mod tests {
     #[test]
     fn parses_view_mode_cycle_and_path() {
         let options = parse_start_options_from(
-            "fika-wgpu".to_string(),
+            "fika".to_string(),
             [
                 OsString::from("--view=compact"),
                 OsString::from("--auto-cycle-views"),
@@ -100,7 +100,7 @@ mod tests {
     #[test]
     fn parses_split_view_flag_value() {
         let options = parse_start_options_from(
-            "fika-wgpu".to_string(),
+            "fika".to_string(),
             [
                 OsString::from("--view"),
                 OsString::from("details"),
@@ -118,15 +118,14 @@ mod tests {
     fn rejects_duplicate_path_and_unknown_option() {
         assert!(
             parse_start_options_from(
-                "fika-wgpu".to_string(),
+                "fika".to_string(),
                 [OsString::from("/etc"), OsString::from("/tmp")]
             )
             .unwrap_err()
             .contains("usage:")
         );
         assert_eq!(
-            parse_start_options_from("fika-wgpu".to_string(), [OsString::from("--bad")])
-                .unwrap_err(),
+            parse_start_options_from("fika".to_string(), [OsString::from("--bad")]).unwrap_err(),
             "unknown option: --bad"
         );
     }
