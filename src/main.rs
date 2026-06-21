@@ -6,7 +6,7 @@ use std::fs;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::{
-    Arc,
+    Arc, OnceLock,
     mpsc::{self, Receiver, Sender},
 };
 use std::thread;
@@ -42,6 +42,27 @@ use winit::event::{ElementState, KeyEvent, Modifiers, MouseButton, MouseScrollDe
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, KeyCode, NamedKey, PhysicalKey};
 use winit::window::{Window, WindowAttributes, WindowId};
+
+macro_rules! fika_log {
+    ($($arg:tt)*) => {{
+        if crate::fika_log_enabled() {
+            eprintln!($($arg)*);
+        }
+    }};
+}
+
+fn fika_log_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        env::var_os("FIKA_LOG")
+            .or_else(|| env::var_os("FIKA_WGPU_LOG"))
+            .is_some_and(|value| {
+                let value = value.to_string_lossy();
+                let value = value.trim().to_ascii_lowercase();
+                !matches!(value.as_str(), "" | "0" | "false" | "no" | "off")
+            })
+    })
+}
 
 #[path = "shell/clipboard.rs"]
 mod wgpu_clipboard;
@@ -91,7 +112,7 @@ fn load_startup_app_settings(settings_path: &Path) -> AppSettings {
     match load_app_settings(settings_path) {
         Ok(settings) => settings,
         Err(error) => {
-            eprintln!(
+            fika_log!(
                 "[fika-wgpu] settings-load-error path={} error={error}",
                 settings_path.display()
             );
@@ -371,7 +392,7 @@ impl FikaWgpuApp {
             return false;
         }
         if let Err(error) = save_view_mode_setting(&self.settings_path, view_mode) {
-            eprintln!("[fika-wgpu] settings-save-error {error}");
+            fika_log!("[fika-wgpu] settings-save-error {error}");
         }
         true
     }
@@ -381,7 +402,7 @@ impl FikaWgpuApp {
             return false;
         }
         if let Err(error) = save_show_hidden_setting(&self.settings_path, self.scene.show_hidden) {
-            eprintln!("[fika-wgpu] settings-save-error {error}");
+            fika_log!("[fika-wgpu] settings-save-error {error}");
         }
         true
     }
@@ -400,7 +421,7 @@ impl ApplicationHandler for FikaWgpuApp {
         let window = match event_loop.create_window(attrs) {
             Ok(window) => window,
             Err(error) => {
-                eprintln!("[fika-wgpu] window create failed: {error}");
+                fika_log!("[fika-wgpu] window create failed: {error}");
                 event_loop.exit();
                 return;
             }
@@ -409,25 +430,25 @@ impl ApplicationHandler for FikaWgpuApp {
         let renderer = match WgpuState::new(window.as_ref()) {
             Ok(renderer) => renderer,
             Err(error) => {
-                eprintln!("[fika-wgpu] renderer init failed: {error}");
+                fika_log!("[fika-wgpu] renderer init failed: {error}");
                 event_loop.exit();
                 return;
             }
         };
         let clipboard = match ShellClipboard::from_window(window.as_ref()) {
             Ok(Some(clipboard)) => {
-                eprintln!(
+                fika_log!(
                     "[fika-wgpu] clipboard-ready backend={}",
                     clipboard.backend()
                 );
                 Some(clipboard)
             }
             Ok(None) => {
-                eprintln!("[fika-wgpu] clipboard-unavailable backend=unsupported");
+                fika_log!("[fika-wgpu] clipboard-unavailable backend=unsupported");
                 None
             }
             Err(error) => {
-                eprintln!("[fika-wgpu] clipboard-unavailable error={error}");
+                fika_log!("[fika-wgpu] clipboard-unavailable error={error}");
                 None
             }
         };
@@ -435,7 +456,7 @@ impl ApplicationHandler for FikaWgpuApp {
         self.scene
             .set_scale_factor(window.scale_factor() as f32, renderer.size);
 
-        eprintln!(
+        fika_log!(
             "[fika-wgpu] shell-ready size={}x{} scale={:.2}",
             renderer.size.width,
             renderer.size.height,
@@ -596,6 +617,14 @@ impl ApplicationHandler for FikaWgpuApp {
                     }
                     return;
                 }
+                if self.scene.is_drop_menu_open() && escape_requested_for_key_event(&event) {
+                    if self.scene.close_drop_menu()
+                        && let Some(window) = self.window.as_ref()
+                    {
+                        window.request_redraw();
+                    }
+                    return;
+                }
                 if self.scene.is_context_menu_open() && escape_requested_for_key_event(&event) {
                     if self.scene.close_context_menu()
                         && let Some(window) = self.window.as_ref()
@@ -678,7 +707,7 @@ impl ApplicationHandler for FikaWgpuApp {
                                     window.request_redraw();
                                 }
                             }
-                            Err(error) => eprintln!("[fika-wgpu] open-error {error}"),
+                            Err(error) => fika_log!("[fika-wgpu] open-error {error}"),
                         }
                     }
                     return;
@@ -891,6 +920,15 @@ impl ApplicationHandler for FikaWgpuApp {
                     }
                     return;
                 }
+                if state == ElementState::Pressed && self.scene.is_drop_menu_open() {
+                    let request = self.scene.activate_or_close_drop_menu_request(point, size);
+                    if let Some(request) = request {
+                        self.perform_drop_operation_request(event_loop, request);
+                    } else if let Some(window) = self.window.as_ref() {
+                        window.request_redraw();
+                    }
+                    return;
+                }
                 if state == ElementState::Pressed
                     && self.scene.split_view_button_at_screen_point(point, size)
                 {
@@ -949,9 +987,26 @@ impl ApplicationHandler for FikaWgpuApp {
                     return;
                 }
                 if state == ElementState::Pressed
-                    && let Some((pane, path)) = self.scene.place_activation_for_press(point, size)
+                    && let Some(changed) = self.scene.begin_place_pointer(point, size)
                 {
-                    self.load_path_into_pane(event_loop, pane, path, "place-open");
+                    if (changed || location_blur_changed)
+                        && let Some(window) = self.window.as_ref()
+                    {
+                        window.request_redraw();
+                    }
+                    return;
+                }
+                if state == ElementState::Released && self.scene.internal_drag_source_place() {
+                    let (changed, activation) = self.scene.end_place_pointer(point, size);
+                    if let Some((pane, path)) = activation {
+                        self.load_path_into_pane(event_loop, pane, path, "place-open");
+                        return;
+                    }
+                    if (changed || location_blur_changed)
+                        && let Some(window) = self.window.as_ref()
+                    {
+                        window.request_redraw();
+                    }
                     return;
                 }
                 if state == ElementState::Pressed
@@ -1055,13 +1110,13 @@ impl FikaWgpuApp {
                             }
                         }
                         Ok(false) => {
-                            eprintln!("[fika-wgpu] context-action-pending action=open target=none");
+                            fika_log!("[fika-wgpu] context-action-pending action=open target=none");
                             if let Some(window) = self.window.as_ref() {
                                 window.request_redraw();
                             }
                         }
                         Err(error) => {
-                            eprintln!("[fika-wgpu] open-error {error}");
+                            fika_log!("[fika-wgpu] open-error {error}");
                             if let Some(window) = self.window.as_ref() {
                                 window.request_redraw();
                             }
@@ -1134,25 +1189,25 @@ impl FikaWgpuApp {
                         if let Some(clipboard) = self.clipboard.as_ref() {
                             match clipboard.store_text(&request.text) {
                                 Ok(()) => self.scene.record_file_clipboard_export(&request),
-                                Err(error) => eprintln!(
+                                Err(error) => fika_log!(
                                     "[fika-wgpu] clipboard-export-error role={} paths={} error={error}",
                                     file_clipboard_role_as_str(request.role),
                                     request.paths.len()
                                 ),
                             }
                         } else {
-                            eprintln!(
+                            fika_log!(
                                 "[fika-wgpu] clipboard-export-error role={} paths={} error=clipboard-unavailable",
                                 file_clipboard_role_as_str(request.role),
                                 request.paths.len()
                             );
                         }
                     }
-                    Ok(None) => eprintln!(
+                    Ok(None) => fika_log!(
                         "[fika-wgpu] clipboard-export-error role={} target=none",
                         action.as_str()
                     ),
-                    Err(error) => eprintln!(
+                    Err(error) => fika_log!(
                         "[fika-wgpu] clipboard-export-error role={} {error}",
                         action.as_str()
                     ),
@@ -1167,19 +1222,19 @@ impl FikaWgpuApp {
                         if let Some(clipboard) = self.clipboard.as_ref() {
                             match clipboard.store_text(&request.text) {
                                 Ok(()) => self.scene.record_copy_location(&request),
-                                Err(error) => eprintln!(
+                                Err(error) => fika_log!(
                                     "[fika-wgpu] copy-location-error path={} error={error}",
                                     request.path.display()
                                 ),
                             }
                         } else {
-                            eprintln!(
+                            fika_log!(
                                 "[fika-wgpu] copy-location-error path={} error=clipboard-unavailable",
                                 request.path.display()
                             );
                         }
                     }
-                    None => eprintln!("[fika-wgpu] copy-location-error target=none"),
+                    None => fika_log!("[fika-wgpu] copy-location-error target=none"),
                 }
                 if let Some(window) = self.window.as_ref() {
                     window.request_redraw();
@@ -1190,13 +1245,13 @@ impl FikaWgpuApp {
             | ShellContextMenuAction::EjectDevice
             | ShellContextMenuAction::SafelyRemoveDevice => {
                 match self.scene.context_target_device_action(action) {
-                    Some(request) => eprintln!(
+                    Some(request) => fika_log!(
                         "[fika-wgpu] device-action-pending action={} id={:?} label={:?}",
                         action.as_str(),
                         request.id,
                         request.label
                     ),
-                    None => eprintln!(
+                    None => fika_log!(
                         "[fika-wgpu] device-action-error action={} target=none",
                         action.as_str()
                     ),
@@ -1226,11 +1281,11 @@ impl FikaWgpuApp {
                 };
                 match self.scene.active_file_clipboard_request(role) {
                     Ok(Some(request)) => self.store_file_clipboard_request(&request),
-                    Ok(None) => eprintln!(
+                    Ok(None) => fika_log!(
                         "[fika-wgpu] clipboard-export-error role={} target=none",
                         file_clipboard_role_as_str(role)
                     ),
-                    Err(error) => eprintln!(
+                    Err(error) => fika_log!(
                         "[fika-wgpu] clipboard-export-error role={} {error}",
                         file_clipboard_role_as_str(role)
                     ),
@@ -1250,7 +1305,7 @@ impl FikaWgpuApp {
             FileKeyboardCommand::Delete => match self.scene.delete_active_selection(size) {
                 Ok(true) => self.present_scene_change(event_loop, "delete-selection"),
                 Ok(false) => {}
-                Err(error) => eprintln!("[fika-wgpu] delete-error {error}"),
+                Err(error) => fika_log!("[fika-wgpu] delete-error {error}"),
             },
         }
     }
@@ -1259,14 +1314,14 @@ impl FikaWgpuApp {
         if let Some(clipboard) = self.clipboard.as_ref() {
             match clipboard.store_text(&request.text) {
                 Ok(()) => self.scene.record_file_clipboard_export(request),
-                Err(error) => eprintln!(
+                Err(error) => fika_log!(
                     "[fika-wgpu] clipboard-export-error role={} paths={} error={error}",
                     file_clipboard_role_as_str(request.role),
                     request.paths.len()
                 ),
             }
         } else {
-            eprintln!(
+            fika_log!(
                 "[fika-wgpu] clipboard-export-error role={} paths={} error=clipboard-unavailable",
                 file_clipboard_role_as_str(request.role),
                 request.paths.len()
@@ -1281,7 +1336,7 @@ impl FikaWgpuApp {
         {
             Ok(request) => request,
             Err(error) => {
-                eprintln!("[fika-wgpu] service-menu-error action={action_id:?} {error}");
+                fika_log!("[fika-wgpu] service-menu-error action={action_id:?} {error}");
                 if let Some(window) = self.window.as_ref() {
                     window.request_redraw();
                 }
@@ -1299,7 +1354,7 @@ impl FikaWgpuApp {
                 result,
             }
             .status_message();
-            eprintln!("[fika-wgpu] service-menu-finished {status}");
+            fika_log!("[fika-wgpu] service-menu-finished {status}");
         });
         if let Some(window) = self.window.as_ref() {
             window.request_redraw();
@@ -1313,7 +1368,7 @@ impl FikaWgpuApp {
         {
             Ok(request) => request,
             Err(error) => {
-                eprintln!("[fika-wgpu] open-with-error app={desktop_id:?} {error}");
+                fika_log!("[fika-wgpu] open-with-error app={desktop_id:?} {error}");
                 if let Some(window) = self.window.as_ref() {
                     window.request_redraw();
                 }
@@ -1331,7 +1386,7 @@ impl FikaWgpuApp {
                 result,
             }
             .status_message();
-            eprintln!("[fika-wgpu] open-with-finished {status}");
+            fika_log!("[fika-wgpu] open-with-finished {status}");
         });
         if let Some(window) = self.window.as_ref() {
             window.request_redraw();
@@ -1354,7 +1409,7 @@ impl FikaWgpuApp {
                 }
             }
             Err(error) => {
-                eprintln!("[fika-wgpu] split-pane-error {error}");
+                fika_log!("[fika-wgpu] split-pane-error {error}");
                 if let Some(window) = self.window.as_ref() {
                     window.request_redraw();
                 }
@@ -1374,7 +1429,7 @@ impl FikaWgpuApp {
                 }
             }
             Err(error) => {
-                eprintln!("[fika-wgpu] split-pane-error {error}");
+                fika_log!("[fika-wgpu] split-pane-error {error}");
                 if let Some(window) = self.window.as_ref() {
                     window.request_redraw();
                 }
@@ -1400,7 +1455,7 @@ impl FikaWgpuApp {
                 }
             }
             Err(error) => {
-                eprintln!(
+                fika_log!(
                     "[fika-wgpu] trash-view-error action={} {error}",
                     action.as_str()
                 );
@@ -1425,7 +1480,7 @@ impl FikaWgpuApp {
                 }
             }
             Err(error) => {
-                eprintln!("[fika-wgpu] trash-conflict-error {error}");
+                fika_log!("[fika-wgpu] trash-conflict-error {error}");
                 if let Some(window) = self.window.as_ref() {
                     window.request_redraw();
                 }
@@ -1448,7 +1503,7 @@ impl FikaWgpuApp {
                 }
             }
             Err(error) => {
-                eprintln!("[fika-wgpu] add-place-error {error}");
+                fika_log!("[fika-wgpu] add-place-error {error}");
                 if let Some(window) = self.window.as_ref() {
                     window.request_redraw();
                 }
@@ -1471,7 +1526,7 @@ impl FikaWgpuApp {
                 }
             }
             Err(error) => {
-                eprintln!("[fika-wgpu] remove-place-error {error}");
+                fika_log!("[fika-wgpu] remove-place-error {error}");
                 if let Some(window) = self.window.as_ref() {
                     window.request_redraw();
                 }
@@ -1493,7 +1548,7 @@ impl FikaWgpuApp {
                 }
             }
             Err(error) => {
-                eprintln!("[fika-wgpu] trash-error {error}");
+                fika_log!("[fika-wgpu] trash-error {error}");
                 if let Some(window) = self.window.as_ref() {
                     window.request_redraw();
                 }
@@ -1503,6 +1558,30 @@ impl FikaWgpuApp {
 
     fn paste_from_clipboard(&mut self, event_loop: &dyn ActiveEventLoop) {
         self.paste_from_clipboard_with_target(event_loop, true);
+    }
+
+    fn perform_drop_operation_request(
+        &mut self,
+        event_loop: &dyn ActiveEventLoop,
+        request: ShellDropOperationRequest,
+    ) {
+        let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
+            return;
+        };
+        match self.scene.perform_drop_operation_request(&request, size) {
+            Ok(result) if result.changed() => self.present_scene_change(event_loop, "dnd-drop"),
+            Ok(_) => {
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+            }
+            Err(error) => {
+                fika_log!("[fika-wgpu] dnd-transfer-error {error}");
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+            }
+        }
     }
 
     fn paste_from_clipboard_into_active_pane(&mut self, event_loop: &dyn ActiveEventLoop) {
@@ -1518,7 +1597,7 @@ impl FikaWgpuApp {
             return;
         };
         let Some(clipboard) = self.clipboard.as_ref() else {
-            eprintln!("[fika-wgpu] paste-error error=clipboard-unavailable");
+            fika_log!("[fika-wgpu] paste-error error=clipboard-unavailable");
             if let Some(window) = self.window.as_ref() {
                 window.request_redraw();
             }
@@ -1527,7 +1606,7 @@ impl FikaWgpuApp {
         let text = match clipboard.load_text() {
             Ok(text) => text,
             Err(error) => {
-                eprintln!("[fika-wgpu] paste-error load={error}");
+                fika_log!("[fika-wgpu] paste-error load={error}");
                 if let Some(window) = self.window.as_ref() {
                     window.request_redraw();
                 }
@@ -1544,7 +1623,7 @@ impl FikaWgpuApp {
             Ok(result) if result.changed() => {
                 if result.clear_clipboard && result.failure_count == 0 {
                     if let Err(error) = clipboard.store_text("") {
-                        eprintln!("[fika-wgpu] clipboard-clear-error error={error}");
+                        fika_log!("[fika-wgpu] clipboard-clear-error error={error}");
                     }
                 }
                 self.present_scene_change(event_loop, "paste");
@@ -1555,7 +1634,7 @@ impl FikaWgpuApp {
                 }
             }
             Err(error) => {
-                eprintln!("[fika-wgpu] paste-error {error}");
+                fika_log!("[fika-wgpu] paste-error {error}");
                 if let Some(window) = self.window.as_ref() {
                     window.request_redraw();
                 }
@@ -1601,7 +1680,7 @@ impl FikaWgpuApp {
                 self.present_scene_change(event_loop, "rename");
             }
             Err(error) => {
-                eprintln!("[fika-wgpu] rename-reload-error {error}");
+                fika_log!("[fika-wgpu] rename-reload-error {error}");
                 if let Some(window) = self.window.as_ref() {
                     window.request_redraw();
                 }
@@ -1642,7 +1721,7 @@ impl FikaWgpuApp {
                 self.present_scene_change(event_loop, "create-new");
             }
             Err(error) => {
-                eprintln!("[fika-wgpu] create-new-reload-error {error}");
+                fika_log!("[fika-wgpu] create-new-reload-error {error}");
                 if let Some(window) = self.window.as_ref() {
                     window.request_redraw();
                 }
@@ -1675,7 +1754,7 @@ impl FikaWgpuApp {
                 result,
             }
             .status_message();
-            eprintln!("[fika-wgpu] open-with-finished {status}");
+            fika_log!("[fika-wgpu] open-with-finished {status}");
         });
 
         if let Some(window) = self.window.as_ref() {
@@ -1699,7 +1778,7 @@ impl FikaWgpuApp {
         match result {
             Ok(true) => self.present_scene_change(event_loop, action.reason()),
             Ok(false) => {}
-            Err(error) => eprintln!("[fika-wgpu] navigation-error {error}"),
+            Err(error) => fika_log!("[fika-wgpu] navigation-error {error}"),
         }
     }
 
@@ -1710,7 +1789,7 @@ impl FikaWgpuApp {
         match self.scene.reload_current_path(size) {
             Ok(true) => self.present_scene_change(event_loop, "reload-directory"),
             Ok(false) => {}
-            Err(error) => eprintln!("[fika-wgpu] reload-error {error}"),
+            Err(error) => fika_log!("[fika-wgpu] reload-error {error}"),
         }
     }
 
@@ -1720,7 +1799,7 @@ impl FikaWgpuApp {
         };
         let input = self.scene.location_draft_value().unwrap_or("").to_string();
         let Some((pane, path)) = self.scene.resolved_location_draft() else {
-            eprintln!("[fika-wgpu] location-error input={input:?} error=empty");
+            fika_log!("[fika-wgpu] location-error input={input:?} error=empty");
             return;
         };
         let closed = self.scene.close_location_draft(size);
@@ -1732,7 +1811,7 @@ impl FikaWgpuApp {
                 }
             }
             Err(error) => {
-                eprintln!("[fika-wgpu] location-error input={input:?} error={error}");
+                fika_log!("[fika-wgpu] location-error input={input:?} error={error}");
                 if closed && let Some(window) = self.window.as_ref() {
                     window.request_redraw();
                 }
@@ -1757,7 +1836,7 @@ impl FikaWgpuApp {
                     window.request_redraw();
                 }
             }
-            Err(error) => eprintln!("[fika-wgpu] navigation-error {error}"),
+            Err(error) => fika_log!("[fika-wgpu] navigation-error {error}"),
         }
     }
 
@@ -2817,6 +2896,15 @@ fn context_menu_item_icon_style(
     }
 }
 
+fn drop_menu_item_icon_style(icon: ShellDropMenuIcon) -> (ContextMenuGlyph, [f32; 4], [f32; 4]) {
+    match icon {
+        ShellDropMenuIcon::Copy => context_menu_icon_style(ShellContextMenuAction::Copy),
+        ShellDropMenuIcon::Move => context_menu_icon_style(ShellContextMenuAction::Cut),
+        ShellDropMenuIcon::Link => context_menu_icon_style(ShellContextMenuAction::CopyLocation),
+        ShellDropMenuIcon::Cancel => context_menu_icon_style(ShellContextMenuAction::RemovePlace),
+    }
+}
+
 fn context_menu_named_icon_request(
     item: &ShellContextMenuItem,
 ) -> Option<(&str, NamedIconFallback)> {
@@ -3582,6 +3670,78 @@ enum OpenWithChooserClick {
     Row(usize),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ShellDropMenuCommand {
+    Mode(FileTransferMode),
+    Cancel,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ShellDropMenuIcon {
+    Copy,
+    Move,
+    Link,
+    Cancel,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ShellDropMenuItem {
+    command: ShellDropMenuCommand,
+    label: &'static str,
+    icon: ShellDropMenuIcon,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct ShellDropMenu {
+    sources: Vec<PathBuf>,
+    target_dir: PathBuf,
+    target: ShellDropTarget,
+    position: ViewPoint,
+    hovered_row: Option<usize>,
+}
+
+impl ShellDropMenu {
+    fn new(
+        sources: Vec<PathBuf>,
+        target_dir: PathBuf,
+        target: ShellDropTarget,
+        position: ViewPoint,
+    ) -> Self {
+        Self {
+            sources,
+            target_dir,
+            target,
+            position,
+            hovered_row: None,
+        }
+    }
+}
+
+fn drop_menu_items() -> [ShellDropMenuItem; 4] {
+    [
+        ShellDropMenuItem {
+            command: ShellDropMenuCommand::Mode(FileTransferMode::Copy),
+            label: "Copy Here",
+            icon: ShellDropMenuIcon::Copy,
+        },
+        ShellDropMenuItem {
+            command: ShellDropMenuCommand::Mode(FileTransferMode::Move),
+            label: "Move Here",
+            icon: ShellDropMenuIcon::Move,
+        },
+        ShellDropMenuItem {
+            command: ShellDropMenuCommand::Mode(FileTransferMode::Link),
+            label: "Link Here",
+            icon: ShellDropMenuIcon::Link,
+        },
+        ShellDropMenuItem {
+            command: ShellDropMenuCommand::Cancel,
+            label: "Cancel",
+            icon: ShellDropMenuIcon::Cancel,
+        },
+    ]
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct OpenFileRequest {
     path: PathBuf,
@@ -3692,14 +3852,30 @@ enum ShellDropTarget {
         index: usize,
         path: PathBuf,
     },
+    PlacesGap {
+        index: usize,
+    },
     PlacesBlank,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum ShellInternalDragSource {
+    PaneItem {
+        pane: ShellPaneId,
+        index: usize,
+        source_path: PathBuf,
+        is_dir: bool,
+    },
+    Place {
+        index: usize,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
 struct ShellInternalDrag {
-    source_pane: ShellPaneId,
-    source_index: usize,
+    source: ShellInternalDragSource,
     paths: Vec<PathBuf>,
+    label: String,
     start: ViewPoint,
     current: ViewPoint,
     active: bool,
@@ -3707,15 +3883,15 @@ struct ShellInternalDrag {
 
 impl ShellInternalDrag {
     fn new(
-        source_pane: ShellPaneId,
-        source_index: usize,
+        source: ShellInternalDragSource,
         paths: Vec<PathBuf>,
+        label: String,
         start: ViewPoint,
     ) -> Self {
         Self {
-            source_pane,
-            source_index,
+            source,
             paths,
+            label,
             start,
             current: start,
             active: false,
@@ -3730,6 +3906,26 @@ impl ShellInternalDrag {
             self.active = true;
         }
         old_current != self.current || old_active != self.active
+    }
+
+    fn source_place_index(&self) -> Option<usize> {
+        match self.source {
+            ShellInternalDragSource::Place { index } => Some(index),
+            ShellInternalDragSource::PaneItem { .. } => None,
+        }
+    }
+
+    fn pane_source_directory_path(&self) -> Option<&Path> {
+        match &self.source {
+            ShellInternalDragSource::PaneItem {
+                source_path,
+                is_dir: true,
+                ..
+            } => Some(source_path.as_path()),
+            ShellInternalDragSource::PaneItem { .. } | ShellInternalDragSource::Place { .. } => {
+                None
+            }
+        }
     }
 }
 
@@ -3747,6 +3943,7 @@ impl ShellDropTarget {
             Self::PaneItem { .. } => "pane-item",
             Self::PaneBlank { .. } => "pane-blank",
             Self::Place { .. } => "place",
+            Self::PlacesGap { .. } => "places-gap",
             Self::PlacesBlank => "places-blank",
         }
     }
@@ -3772,6 +3969,7 @@ struct ShellScene {
     histories: ShellPaneHistories,
     context_target: Option<ShellContextTarget>,
     context_menu: Option<ShellContextMenu>,
+    drop_menu: Option<ShellDropMenu>,
     properties_overlay: Option<ShellPropertiesOverlay>,
     create_dialog: Option<ShellCreateDialog>,
     rename_dialog: Option<ShellRenameDialog>,
@@ -3816,6 +4014,7 @@ struct ShellScene {
 }
 
 impl ShellScene {
+    #[cfg(test)]
     fn load(path: PathBuf, view_mode: ShellViewMode) -> Result<Self, String> {
         Self::load_with_hidden_visibility(path, view_mode, false)
     }
@@ -3837,7 +4036,7 @@ impl ShellScene {
             .collect::<Vec<_>>()
             .join(", ");
 
-        eprintln!(
+        fika_log!(
             "[fika-wgpu] path={} entries={} dirs={} files={} load={}us",
             path.display(),
             entries.len(),
@@ -3846,12 +4045,12 @@ impl ShellScene {
             elapsed.as_micros()
         );
         if !preview.is_empty() {
-            eprintln!("[fika-wgpu] first-entries={preview}");
+            fika_log!("[fika-wgpu] first-entries={preview}");
         }
 
         let first_pane = ShellPaneState::from_entries(path, view_mode, entries, show_hidden, "");
         let places = build_shell_places();
-        eprintln!("[fika-wgpu] places entries={}", places.len());
+        fika_log!("[fika-wgpu] places entries={}", places.len());
 
         Ok(Self {
             panes: ShellPaneStates::new(first_pane),
@@ -3873,6 +4072,7 @@ impl ShellScene {
             histories: ShellPaneHistories::default(),
             context_target: None,
             context_menu: None,
+            drop_menu: None,
             properties_overlay: None,
             create_dialog: None,
             rename_dialog: None,
@@ -4132,6 +4332,7 @@ impl ShellScene {
         self.last_item_click = None;
         self.context_target = None;
         self.context_menu = None;
+        self.drop_menu = None;
         self.properties_overlay = None;
         if clear_open {
             self.create_dialog = None;
@@ -4154,7 +4355,7 @@ impl ShellScene {
         let Some(state) = self.pane_state(pane) else {
             return;
         };
-        eprintln!(
+        fika_log!(
             "[fika-wgpu] pane={} path={} entries={} dirs={} files={} load={}us changes={}",
             pane.as_str(),
             state.path.display(),
@@ -4165,7 +4366,7 @@ impl ShellScene {
             self.path_changes
         );
         if !preview.is_empty() {
-            eprintln!("[fika-wgpu] first-entries={preview}");
+            fika_log!("[fika-wgpu] first-entries={preview}");
         }
     }
 
@@ -4180,7 +4381,7 @@ impl ShellScene {
         let Some(state) = self.pane_state(pane) else {
             return;
         };
-        eprintln!(
+        fika_log!(
             "[fika-wgpu] reload pane={} path={} entries={} dirs={} files={} load={}us reloads={} selected={} selection_changed={}",
             pane.as_str(),
             state.path.display(),
@@ -4193,7 +4394,7 @@ impl ShellScene {
             selection_changed as u8
         );
         if !preview.is_empty() {
-            eprintln!("[fika-wgpu] first-entries={preview}");
+            fika_log!("[fika-wgpu] first-entries={preview}");
         }
     }
 
@@ -4213,7 +4414,7 @@ impl ShellScene {
         self.scrollbar_drag = None;
         self.view_switches += 1;
         self.clamp_scroll(size);
-        eprintln!(
+        fika_log!(
             "[fika-wgpu] view-mode pane={} mode={} switches={} scroll_x={:.1} scroll_y={:.1}",
             pane_id.as_str(),
             view_mode.as_str(),
@@ -4253,7 +4454,7 @@ impl ShellScene {
         } else {
             self.clamp_scroll(size);
         }
-        eprintln!(
+        fika_log!(
             "[fika-wgpu] zoom step={} percent={} changes={} scroll_x={:.1} scroll_y={:.1}",
             self.zoom_step,
             self.zoom_percent(),
@@ -4283,7 +4484,7 @@ impl ShellScene {
             self.selection_changes += 1;
         }
         if selection_changed || rubber_band_changed {
-            eprintln!(
+            fika_log!(
                 "[fika-wgpu] selection command={} selected={} changes={}",
                 command.as_str(),
                 self.active_selection_len(),
@@ -4349,7 +4550,7 @@ impl ShellScene {
         self.location_changes += 1;
         self.rubber_band = None;
         self.clamp_scroll(size);
-        eprintln!(
+        fika_log!(
             "[fika-wgpu] location active=0 value=\"\" changes={}",
             self.location_changes
         );
@@ -4476,7 +4677,7 @@ impl ShellScene {
         self.location_changes += 1;
         self.rubber_band = None;
         self.clamp_scroll(size);
-        eprintln!(
+        fika_log!(
             "[fika-wgpu] location active={} value={:?} changes={}",
             self.location_draft.is_some() as u8,
             self.location_draft_value().unwrap_or(""),
@@ -4522,7 +4723,7 @@ impl ShellScene {
             self.selection_changes += 1;
         }
         self.clamp_scroll(size);
-        eprintln!(
+        fika_log!(
             "[fika-wgpu] filter active={} pattern={:?} matches={} changes={} selection_changed={}",
             self.filter_active as u8,
             self.filter_pattern,
@@ -4542,7 +4743,7 @@ impl ShellScene {
             self.selection_changes += 1;
         }
         self.clamp_scroll(size);
-        eprintln!(
+        fika_log!(
             "[fika-wgpu] hidden show={} visible={} changes={} selection_changed={}",
             self.show_hidden as u8,
             self.filtered_entry_count(),
@@ -4568,6 +4769,7 @@ impl ShellScene {
         self.open_split_pane_with_view_mode(path, view_mode, size)
     }
 
+    #[cfg(test)]
     fn open_split_pane(&mut self, path: PathBuf, size: PhysicalSize<u32>) -> Result<bool, String> {
         let view_mode = self.active_view_mode();
         self.open_split_pane_with_view_mode(path, view_mode, size)
@@ -4589,6 +4791,7 @@ impl ShellScene {
         self.split_pane_changes += 1;
         self.context_target = None;
         self.context_menu = None;
+        self.drop_menu = None;
         self.properties_overlay = None;
         self.create_dialog = None;
         self.rename_dialog = None;
@@ -4600,7 +4803,7 @@ impl ShellScene {
         self.rubber_band = None;
         self.scrollbar_drag = None;
         self.clamp_scroll(size);
-        eprintln!(
+        fika_log!(
             "[fika-wgpu] split-pane open=1 changes={} left={} right={}",
             self.split_pane_changes,
             self.panes[ShellPaneId::FIRST].path.display(),
@@ -4662,6 +4865,7 @@ impl ShellScene {
         self.split_pane_changes += 1;
         self.context_target = None;
         self.context_menu = None;
+        self.drop_menu = None;
         self.properties_overlay = None;
         self.create_dialog = None;
         self.rename_dialog = None;
@@ -4673,7 +4877,7 @@ impl ShellScene {
         self.rubber_band = None;
         self.scrollbar_drag = None;
         self.clamp_scroll(size);
-        eprintln!(
+        fika_log!(
             "[fika-wgpu] split-pane open=0 closed={} changes={} remaining={}",
             active.as_str(),
             self.split_pane_changes,
@@ -4682,6 +4886,7 @@ impl ShellScene {
         true
     }
 
+    #[cfg(test)]
     fn context_target_split_pane_path(&self) -> Option<PathBuf> {
         self.context_target_split_pane_request()
             .map(|(path, _pane)| path)
@@ -4754,7 +4959,7 @@ impl ShellScene {
             self.places_scroll_y *= ratio;
         }
         self.clamp_scroll(size);
-        eprintln!(
+        fika_log!(
             "[fika-wgpu] scale-factor={:.2} ui_scale={:.2} scroll_x={:.1} scroll_y={:.1}",
             self.scale_factor,
             self.ui_scale(),
@@ -4996,7 +5201,7 @@ impl ShellScene {
         self.hovered_place = None;
         self.last_item_click = None;
         self.clamp_scroll(size);
-        eprintln!(
+        fika_log!(
             "[fika-wgpu] places visible={} width={:.1} changes={}",
             self.places_visible as u8,
             self.places_sidebar_width(size),
@@ -5074,12 +5279,21 @@ impl ShellScene {
         }
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     fn place_activation_for_press(
         &mut self,
         point: ViewPoint,
         size: PhysicalSize<u32>,
     ) -> Option<(ShellPaneId, PathBuf)> {
         let index = self.place_index_at_screen_point(point, size)?;
+        self.activate_place_index(index, point)
+    }
+
+    fn activate_place_index(
+        &mut self,
+        index: usize,
+        point: ViewPoint,
+    ) -> Option<(ShellPaneId, PathBuf)> {
         let target_pane = self.active_pane();
         self.pointer = Some(point);
         let hover_changed = self.set_hovered_place(Some(index));
@@ -5089,10 +5303,11 @@ impl ShellScene {
         self.last_item_click = None;
         self.context_target = None;
         self.context_menu = None;
+        self.drop_menu = None;
         let place = self.places.get(index)?;
         if place.device.as_ref().is_some_and(|device| !device.mounted) {
             self.places_changes += 1;
-            eprintln!(
+            fika_log!(
                 "[fika-wgpu] place-open index={} label={:?} mounted=0 path={} changes={}",
                 index,
                 place.label,
@@ -5102,7 +5317,7 @@ impl ShellScene {
             return None;
         }
         self.places_changes += 1;
-        eprintln!(
+        fika_log!(
             "[fika-wgpu] place-open index={} label={:?} target_pane={} path={} hover_changed={} item_hover_changed={} changes={}",
             index,
             place.label,
@@ -5113,6 +5328,58 @@ impl ShellScene {
             self.places_changes
         );
         Some((target_pane, place.path.clone()))
+    }
+
+    fn begin_place_pointer(&mut self, point: ViewPoint, size: PhysicalSize<u32>) -> Option<bool> {
+        let index = self.place_index_at_screen_point(point, size)?;
+        self.pointer = Some(point);
+        let hover_changed = self.set_hovered_place(Some(index));
+        let item_hover_changed = self.set_hovered_item(None);
+        self.rubber_band = None;
+        self.last_item_click = None;
+        self.context_target = None;
+        self.context_menu = None;
+        self.drop_menu = None;
+        let drag_started = self.begin_internal_drag_for_place(index, point);
+        Some(hover_changed || item_hover_changed || drag_started)
+    }
+
+    fn internal_drag_source_place(&self) -> bool {
+        self.internal_drag
+            .as_ref()
+            .and_then(ShellInternalDrag::source_place_index)
+            .is_some()
+    }
+
+    fn end_place_pointer(
+        &mut self,
+        point: ViewPoint,
+        size: PhysicalSize<u32>,
+    ) -> (bool, Option<(ShellPaneId, PathBuf)>) {
+        self.pointer = Some(point);
+        let Some(source_index) = self
+            .internal_drag
+            .as_ref()
+            .and_then(ShellInternalDrag::source_place_index)
+        else {
+            return (self.refresh_hover(size), None);
+        };
+        if self.internal_drag.as_ref().is_some_and(|drag| drag.active) {
+            let drop_changed = self.finish_internal_drag(point, size);
+            let hover_changed = self.refresh_hover(size);
+            return (drop_changed || hover_changed, None);
+        }
+
+        let drag_cleared = self.internal_drag.take().is_some();
+        let _ = self.clear_dnd_hover_target();
+        let activation = (self.place_index_at_screen_point(point, size) == Some(source_index))
+            .then(|| self.activate_place_index(source_index, point))
+            .flatten();
+        let hover_changed = self.refresh_hover(size);
+        (
+            drag_cleared || hover_changed || activation.is_some(),
+            activation,
+        )
     }
 
     fn place_index_at_screen_point(
@@ -5159,6 +5426,59 @@ impl ShellScene {
             previous_group = Some(place.group);
         }
         rows
+    }
+
+    fn place_gap_rects(&self, size: PhysicalSize<u32>) -> Vec<(usize, ViewRect)> {
+        let panel = self.places_panel_rect(size);
+        if panel.width <= 0.0 || panel.height <= 0.0 {
+            return Vec::new();
+        }
+        let rows = self.place_row_rects(size);
+        let Some((first_index, first_rect)) = rows.first().copied() else {
+            return Vec::new();
+        };
+        let gap_height = self.scale_metric(8.0).max(4.0);
+        let mut gaps = Vec::with_capacity(rows.len() + 1);
+        let mut push_gap = |index: usize, center_y: f32, row: ViewRect| {
+            let rect = ViewRect {
+                x: row.x,
+                y: center_y - gap_height / 2.0,
+                width: row.width,
+                height: gap_height,
+            };
+            if rect.y < panel.bottom() && rect.bottom() > panel.y {
+                gaps.push((index, rect));
+            }
+        };
+        push_gap(first_index, first_rect.y, first_rect);
+        for pair in rows.windows(2) {
+            let (index, rect) = pair[1];
+            let (_, previous) = pair[0];
+            push_gap(index, (previous.bottom() + rect.y) / 2.0, rect);
+        }
+        if let Some((last_index, last_rect)) = rows.last().copied() {
+            push_gap(last_index + 1, last_rect.bottom(), last_rect);
+        }
+        gaps
+    }
+
+    fn place_gap_at_screen_point(
+        &self,
+        point: ViewPoint,
+        size: PhysicalSize<u32>,
+    ) -> Option<usize> {
+        if !self.places_sidebar_rect(size).contains(point) {
+            return None;
+        }
+        self.place_gap_rects(size)
+            .into_iter()
+            .find_map(|(index, rect)| rect.contains(point).then_some(index))
+    }
+
+    fn place_gap_rect_for_index(&self, index: usize, size: PhysicalSize<u32>) -> Option<ViewRect> {
+        self.place_gap_rects(size)
+            .into_iter()
+            .find_map(|(gap_index, rect)| (gap_index == index).then_some(rect))
     }
 
     fn places_sidebar_rect(&self, size: PhysicalSize<u32>) -> ViewRect {
@@ -5352,9 +5672,53 @@ impl ShellScene {
         None
     }
 
+    fn drop_target_at_screen_point_for_drag(
+        &self,
+        point: ViewPoint,
+        size: PhysicalSize<u32>,
+        drag: &ShellInternalDrag,
+    ) -> Option<ShellDropTarget> {
+        if let Some(index) = self.place_gap_at_screen_point(point, size) {
+            let target = ShellDropTarget::PlacesGap { index };
+            if self.drag_can_drop_on_target(drag, &target) {
+                return Some(target);
+            }
+        }
+        let target = self.drop_target_at_screen_point(point, size)?;
+        self.drag_can_drop_on_target(drag, &target)
+            .then_some(target)
+    }
+
+    fn drag_can_drop_on_target(&self, drag: &ShellInternalDrag, target: &ShellDropTarget) -> bool {
+        match target {
+            ShellDropTarget::PlacesGap { index } => match &drag.source {
+                ShellInternalDragSource::Place {
+                    index: source_index,
+                } => *index != *source_index && *index != source_index.saturating_add(1),
+                ShellInternalDragSource::PaneItem { is_dir: true, .. } => {
+                    drag.pane_source_directory_path().is_some()
+                }
+                ShellInternalDragSource::PaneItem { is_dir: false, .. } => false,
+            },
+            ShellDropTarget::Place { .. } => {
+                matches!(&drag.source, ShellInternalDragSource::PaneItem { .. })
+            }
+            ShellDropTarget::PaneItem { is_dir, path, .. } if *is_dir => {
+                !drag.paths.iter().any(|source| source == path)
+            }
+            ShellDropTarget::PaneBlank { path, .. } => {
+                !drag.paths.iter().any(|source| source == path)
+            }
+            ShellDropTarget::PaneItem { .. } | ShellDropTarget::PlacesBlank => false,
+        }
+    }
+
     #[cfg_attr(not(test), allow(dead_code))]
     fn update_dnd_hover_target(&mut self, point: ViewPoint, size: PhysicalSize<u32>) -> bool {
-        let next = self.drop_target_at_screen_point(point, size);
+        let next = self
+            .internal_drag
+            .as_ref()
+            .and_then(|drag| self.drop_target_at_screen_point_for_drag(point, size, drag));
         let changed = self.dnd_hover_target != next;
         if changed {
             self.dnd_hover_target = next;
@@ -5393,18 +5757,73 @@ impl ShellScene {
             .collect()
     }
 
+    fn pane_drag_source_for_index(
+        &self,
+        pane_id: ShellPaneId,
+        index: usize,
+    ) -> Option<(PathBuf, bool, String)> {
+        let pane = self.pane_view(pane_id)?;
+        let entry = pane.entries.get(index)?;
+        let path = self.entry_path_for_pane_view(pane, index)?;
+        Some((path, entry.is_dir, entry.name.as_ref().to_string()))
+    }
+
+    fn drag_label_for_paths(paths: &[PathBuf], fallback: String) -> String {
+        if paths.len() > 1 {
+            return format!("{} items", paths.len());
+        }
+        paths
+            .first()
+            .and_then(|path| path.file_name())
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.is_empty())
+            .map(str::to_string)
+            .unwrap_or(fallback)
+    }
+
     fn begin_internal_drag_for_pane_item(
         &mut self,
         pane: ShellPaneId,
         index: usize,
         point: ViewPoint,
     ) -> bool {
+        let Some((source_path, is_dir, fallback_label)) =
+            self.pane_drag_source_for_index(pane, index)
+        else {
+            self.internal_drag = None;
+            return false;
+        };
         let paths = self.pane_drag_paths_for_index(pane, index);
         if paths.is_empty() {
             self.internal_drag = None;
             return false;
         }
-        self.internal_drag = Some(ShellInternalDrag::new(pane, index, paths, point));
+        let label = Self::drag_label_for_paths(&paths, fallback_label);
+        self.internal_drag = Some(ShellInternalDrag::new(
+            ShellInternalDragSource::PaneItem {
+                pane,
+                index,
+                source_path,
+                is_dir,
+            },
+            paths,
+            label,
+            point,
+        ));
+        true
+    }
+
+    fn begin_internal_drag_for_place(&mut self, index: usize, point: ViewPoint) -> bool {
+        let Some(place) = self.places.get(index) else {
+            self.internal_drag = None;
+            return false;
+        };
+        self.internal_drag = Some(ShellInternalDrag::new(
+            ShellInternalDragSource::Place { index },
+            vec![place.path.clone()],
+            place.label.clone(),
+            point,
+        ));
         true
     }
 
@@ -5420,45 +5839,177 @@ impl ShellScene {
         drag_changed || hover_changed
     }
 
-    fn finish_internal_drag(
+    fn finish_internal_drag(&mut self, point: ViewPoint, size: PhysicalSize<u32>) -> bool {
+        let user_places_path = default_user_places_path();
+        match self.finish_internal_drag_with_user_places_path(point, size, &user_places_path) {
+            Ok(changed) => changed,
+            Err(error) => {
+                fika_log!("[fika-wgpu] dnd-error {error}");
+                false
+            }
+        }
+    }
+
+    fn finish_internal_drag_with_user_places_path(
         &mut self,
         point: ViewPoint,
         size: PhysicalSize<u32>,
-    ) -> Option<ShellDropOperationRequest> {
-        let drag = self.internal_drag.take()?;
+        user_places_path: &Path,
+    ) -> Result<bool, String> {
+        let Some(drag) = self.internal_drag.take() else {
+            return Ok(false);
+        };
         if !drag.active {
             let _ = self.clear_dnd_hover_target();
-            return None;
+            return Ok(false);
         }
-        let Some(target) = self.drop_target_at_screen_point(point, size) else {
+        let Some(target) = self.drop_target_at_screen_point_for_drag(point, size, &drag) else {
             let _ = self.clear_dnd_hover_target();
-            return None;
+            return Ok(false);
         };
+        if let ShellDropTarget::PlacesGap { index } = target {
+            let changed =
+                self.drop_internal_drag_to_places_gap(drag, index, user_places_path, size)?;
+            let _ = self.clear_dnd_hover_target();
+            return Ok(changed);
+        }
         let Some(target_dir) = self.target_dir_for_drop_target(&target) else {
             let _ = self.clear_dnd_hover_target();
-            return None;
+            return Ok(false);
         };
         if drag.paths.iter().any(|source| source == &target_dir) {
             let _ = self.clear_dnd_hover_target();
-            return None;
+            return Ok(false);
         }
-        let request = ShellDropOperationRequest {
-            sources: drag.paths,
-            target_dir,
-            target,
-            mode: FileTransferMode::Copy,
-        };
-        self.pending_drop_request = Some(request.clone());
-        self.dnd_drop_requests += 1;
+        let old_menu = self.drop_menu.clone();
+        self.drop_menu = Some(ShellDropMenu::new(drag.paths, target_dir, target, point));
+        self.context_menu = None;
+        self.context_target = None;
+        self.rubber_band = None;
         let _ = self.clear_dnd_hover_target();
-        eprintln!(
-            "[fika-wgpu] dnd-drop-request sources={} target={} mode={} requests={}",
-            request.sources.len(),
-            request.target_dir.display(),
-            request.mode.operation(),
-            self.dnd_drop_requests
+        let changed = old_menu != self.drop_menu;
+        if changed {
+            fika_log!(
+                "[fika-wgpu] dnd-menu open=1 sources={} target={}",
+                self.drop_menu
+                    .as_ref()
+                    .map(|menu| menu.sources.len())
+                    .unwrap_or(0),
+                self.drop_menu
+                    .as_ref()
+                    .map(|menu| menu.target.kind())
+                    .unwrap_or("none")
+            );
+        }
+        Ok(changed)
+    }
+
+    fn drop_internal_drag_to_places_gap(
+        &mut self,
+        drag: ShellInternalDrag,
+        index: usize,
+        user_places_path: &Path,
+        size: PhysicalSize<u32>,
+    ) -> Result<bool, String> {
+        match drag.source {
+            ShellInternalDragSource::Place {
+                index: source_index,
+            } => self.move_place_to_gap(source_index, index, user_places_path, size),
+            ShellInternalDragSource::PaneItem {
+                source_path,
+                is_dir: true,
+                ..
+            } => self.add_pane_folder_to_places_gap(source_path, index, user_places_path, size),
+            ShellInternalDragSource::PaneItem { .. } => Ok(false),
+        }
+    }
+
+    fn move_place_to_gap(
+        &mut self,
+        source_index: usize,
+        gap_index: usize,
+        user_places_path: &Path,
+        size: PhysicalSize<u32>,
+    ) -> Result<bool, String> {
+        if source_index >= self.places.len()
+            || gap_index > self.places.len()
+            || gap_index == source_index
+            || gap_index == source_index.saturating_add(1)
+        {
+            return Ok(false);
+        }
+        let place = self.places.remove(source_index);
+        let insert_index = if gap_index > source_index {
+            gap_index.saturating_sub(1)
+        } else {
+            gap_index
+        }
+        .min(self.places.len());
+        let path = place.path.clone();
+        let label = place.label.clone();
+        self.places.insert(insert_index, place);
+        save_shell_place_order(user_places_path, &self.places)?;
+        self.context_target = None;
+        self.context_menu = None;
+        self.drop_menu = None;
+        self.properties_overlay = None;
+        self.rubber_band = None;
+        self.clamp_places_scroll(size);
+        self.places_changes += 1;
+        self.refresh_hover(size);
+        fika_log!(
+            "[fika-wgpu] places-reorder label={:?} path={} from={} gap={} to={} changes={}",
+            label,
+            path.display(),
+            source_index,
+            gap_index,
+            insert_index,
+            self.places_changes
         );
-        Some(request)
+        Ok(true)
+    }
+
+    fn add_pane_folder_to_places_gap(
+        &mut self,
+        path: PathBuf,
+        gap_index: usize,
+        user_places_path: &Path,
+        size: PhysicalSize<u32>,
+    ) -> Result<bool, String> {
+        if let Some(existing_index) = self.places.iter().position(|place| place.path == path) {
+            return self.move_place_to_gap(existing_index, gap_index, user_places_path, size);
+        }
+        let label = default_shell_place_label(&path);
+        if !add_user_place_at_path(user_places_path, &path, label.clone())? {
+            return Ok(false);
+        }
+        self.places = rebuild_shell_places_for_user_path(user_places_path);
+        let Some(source_index) = self.places.iter().position(|place| place.path == path) else {
+            save_shell_place_order(user_places_path, &self.places)?;
+            return Ok(false);
+        };
+        let target_gap = gap_index.min(self.places.len());
+        if self.move_place_to_gap(source_index, target_gap, user_places_path, size)? {
+            return Ok(true);
+        }
+        save_shell_place_order(user_places_path, &self.places)?;
+        self.context_target = None;
+        self.context_menu = None;
+        self.drop_menu = None;
+        self.properties_overlay = None;
+        self.rubber_band = None;
+        self.clamp_places_scroll(size);
+        self.places_changes += 1;
+        self.refresh_hover(size);
+        fika_log!(
+            "[fika-wgpu] add-place label={:?} path={} gap={} places={} changes={}",
+            label,
+            path.display(),
+            gap_index,
+            self.places.len(),
+            self.places_changes
+        );
+        Ok(true)
     }
 
     fn target_dir_for_drop_target(&self, target: &ShellDropTarget) -> Option<PathBuf> {
@@ -5467,7 +6018,9 @@ impl ShellScene {
             ShellDropTarget::PaneBlank { path, .. } | ShellDropTarget::Place { path, .. } => {
                 Some(path.clone())
             }
-            ShellDropTarget::PaneItem { .. } | ShellDropTarget::PlacesBlank => None,
+            ShellDropTarget::PaneItem { .. }
+            | ShellDropTarget::PlacesGap { .. }
+            | ShellDropTarget::PlacesBlank => None,
         }
     }
 
@@ -5530,6 +6083,132 @@ impl ShellScene {
         self.context_menu.is_some()
     }
 
+    fn is_drop_menu_open(&self) -> bool {
+        self.drop_menu.is_some()
+    }
+
+    fn close_drop_menu(&mut self) -> bool {
+        if self.drop_menu.take().is_none() {
+            return false;
+        }
+        fika_log!("[fika-wgpu] dnd-menu open=0");
+        true
+    }
+
+    fn update_drop_menu_hover(&mut self, point: ViewPoint, size: PhysicalSize<u32>) -> bool {
+        let row = self.drop_menu_row_at_screen_point(point, size);
+        let Some(menu) = self.drop_menu.as_mut() else {
+            return false;
+        };
+        let changed = menu.hovered_row != row;
+        menu.hovered_row = row;
+        changed
+    }
+
+    fn drop_menu_command_at_screen_point(
+        &self,
+        point: ViewPoint,
+        size: PhysicalSize<u32>,
+    ) -> Option<ShellDropMenuCommand> {
+        let row = self.drop_menu_row_at_screen_point(point, size)?;
+        drop_menu_items().get(row).map(|item| item.command)
+    }
+
+    fn drop_menu_row_at_screen_point(
+        &self,
+        point: ViewPoint,
+        size: PhysicalSize<u32>,
+    ) -> Option<usize> {
+        let menu = self.drop_menu.as_ref()?;
+        drop_menu_row_at_screen_point(menu, point, size, self.ui_scale())
+    }
+
+    fn activate_or_close_drop_menu_request(
+        &mut self,
+        point: ViewPoint,
+        size: PhysicalSize<u32>,
+    ) -> Option<ShellDropOperationRequest> {
+        let command = self.drop_menu_command_at_screen_point(point, size);
+        let menu = self.drop_menu.take();
+        let Some(menu) = menu else {
+            return None;
+        };
+        match command {
+            Some(ShellDropMenuCommand::Mode(mode)) => {
+                let request = ShellDropOperationRequest {
+                    sources: menu.sources,
+                    target_dir: menu.target_dir,
+                    target: menu.target,
+                    mode,
+                };
+                self.pending_drop_request = Some(request.clone());
+                self.dnd_drop_requests += 1;
+                fika_log!(
+                    "[fika-wgpu] dnd-drop-request sources={} target={} mode={} requests={}",
+                    request.sources.len(),
+                    request.target_dir.display(),
+                    request.mode.operation(),
+                    self.dnd_drop_requests
+                );
+                Some(request)
+            }
+            Some(ShellDropMenuCommand::Cancel) | None => {
+                fika_log!("[fika-wgpu] dnd-menu open=0");
+                None
+            }
+        }
+    }
+
+    fn perform_drop_operation_request(
+        &mut self,
+        request: &ShellDropOperationRequest,
+        size: PhysicalSize<u32>,
+    ) -> Result<ShellPasteResult, String> {
+        if request.sources.is_empty() {
+            return Err("no drop sources".to_string());
+        }
+        if is_network_path(&request.target_dir) {
+            return Err("remote drop target is not available yet".to_string());
+        }
+        if request.sources.iter().any(|path| is_network_path(path)) {
+            return Err("remote drop source is not available yet".to_string());
+        }
+
+        let transfer = transfer_paths_result(
+            WGPU_SHELL_PANE_ID,
+            request.target_dir.clone(),
+            request.mode,
+            request.sources.clone(),
+            request.mode.label(),
+            false,
+            None,
+        );
+        let result = ShellPasteResult::from_transfer(&transfer);
+        self.paste_changes += 1;
+        fika_log!(
+            "[fika-wgpu] dnd-transfer mode={} target={} success={} failure={} changes={}",
+            result.mode.label(),
+            request.target_dir.display(),
+            result.success_count,
+            result.failure_count,
+            self.paste_changes
+        );
+
+        if result.changed() {
+            self.context_target = None;
+            self.context_menu = None;
+            self.drop_menu = None;
+            self.properties_overlay = None;
+            self.create_dialog = None;
+            self.rename_dialog = None;
+            self.rubber_band = None;
+            for affected_dir in transfer.refresh_dirs {
+                self.reload_panes_showing_path(&affected_dir, size)?;
+            }
+        }
+        Ok(result)
+    }
+
     #[cfg(test)]
     fn open_context_menu(&mut self, point: ViewPoint, size: PhysicalSize<u32>) -> bool {
         self.open_context_menu_with_cache(point, size, &MimeApplicationCache::empty())
@@ -5543,13 +6222,14 @@ impl ShellScene {
     ) -> bool {
         let changed = self.open_context_target(point, size);
         let old_menu = self.context_menu.clone();
+        self.drop_menu = None;
         self.context_menu = self.context_target.clone().map(|target| {
             let (open_with_apps, service_actions) = self.context_menu_dynamic_data(&target, cache);
             ShellContextMenu::with_dynamic(target, point, open_with_apps, service_actions)
         });
         let menu_changed = old_menu != self.context_menu;
         if menu_changed {
-            eprintln!(
+            fika_log!(
                 "[fika-wgpu] context-menu open={} target={} actions={}",
                 self.context_menu.is_some() as u8,
                 self.context_target
@@ -5662,7 +6342,7 @@ impl ShellScene {
         if self.context_menu.take().is_none() {
             return false;
         }
-        eprintln!("[fika-wgpu] context-menu open=0");
+        fika_log!("[fika-wgpu] context-menu open=0");
         true
     }
 
@@ -5675,7 +6355,7 @@ impl ShellScene {
         let menu_was_open = self.context_menu.take().is_some();
         if let Some(action) = action {
             self.context_menu_actions += 1;
-            eprintln!(
+            fika_log!(
                 "[fika-wgpu] context-menu action={} target={} actions={}",
                 action.as_str(),
                 self.context_target
@@ -5686,7 +6366,7 @@ impl ShellScene {
             );
             return Some(action);
         } else if menu_was_open {
-            eprintln!("[fika-wgpu] context-menu open=0");
+            fika_log!("[fika-wgpu] context-menu open=0");
         }
         None
     }
@@ -5785,7 +6465,7 @@ impl ShellScene {
                 is_dir,
                 selection_count,
                 ..
-            }) => eprintln!(
+            }) => fika_log!(
                 "[fika-wgpu] context-target kind=item pane={} index={} dir={} selection={} path={} changes={}",
                 pane.as_str(),
                 index,
@@ -5794,7 +6474,7 @@ impl ShellScene {
                 path.display(),
                 self.context_target_changes
             ),
-            Some(ShellContextTarget::Blank { pane, path, .. }) => eprintln!(
+            Some(ShellContextTarget::Blank { pane, path, .. }) => fika_log!(
                 "[fika-wgpu] context-target kind=blank pane={} path={} changes={}",
                 pane.as_str(),
                 path.display(),
@@ -5810,7 +6490,7 @@ impl ShellScene {
                 root,
                 editable,
                 ..
-            }) => eprintln!(
+            }) => fika_log!(
                 "[fika-wgpu] context-target kind=place index={} label={:?} device={} mounted={} ejectable={} poweroff={} network={} trash={} root={} editable={} path={} changes={}",
                 index,
                 label,
@@ -5825,7 +6505,7 @@ impl ShellScene {
                 path.display(),
                 self.context_target_changes
             ),
-            None => eprintln!(
+            None => fika_log!(
                 "[fika-wgpu] context-target kind=none changes={}",
                 self.context_target_changes
             ),
@@ -5895,7 +6575,7 @@ impl ShellScene {
         };
         launch_file_with_default_app(&request)?;
         self.open_changes += 1;
-        eprintln!(
+        fika_log!(
             "[fika-wgpu] open path={} uri={} changes={}",
             request.path.display(),
             request.uri,
@@ -5906,7 +6586,7 @@ impl ShellScene {
 
     fn record_open_file_request(&mut self, request: &OpenFileRequest) {
         self.open_changes += 1;
-        eprintln!(
+        fika_log!(
             "[fika-wgpu] open path={} uri={} changes={}",
             request.path.display(),
             request.uri,
@@ -5918,13 +6598,14 @@ impl ShellScene {
         let chooser = match self.open_with_chooser_for_context(cache) {
             Ok(chooser) => chooser,
             Err(error) => {
-                eprintln!("[fika-wgpu] open-with-error {error}");
+                fika_log!("[fika-wgpu] open-with-error {error}");
                 return false;
             }
         };
         let changed = self.open_with_chooser.as_ref() != Some(&chooser);
         self.open_with_chooser = Some(chooser);
         self.context_menu = None;
+        self.drop_menu = None;
         self.properties_overlay = None;
         self.create_dialog = None;
         self.rename_dialog = None;
@@ -6089,7 +6770,7 @@ impl ShellScene {
 
     fn set_open_with_chooser_error(&mut self, error: String) -> bool {
         let Some(chooser) = self.open_with_chooser.as_mut() else {
-            eprintln!("[fika-wgpu] open-with-error {error}");
+            fika_log!("[fika-wgpu] open-with-error {error}");
             return false;
         };
         if chooser.error.as_ref() == Some(&error) {
@@ -6106,7 +6787,7 @@ impl ShellScene {
             return false;
         }
         self.open_with_changes += 1;
-        eprintln!(
+        fika_log!(
             "[fika-wgpu] open-with open=0 changes={}",
             self.open_with_changes
         );
@@ -6118,7 +6799,7 @@ impl ShellScene {
             return false;
         }
         self.open_with_changes += 1;
-        eprintln!(
+        fika_log!(
             "[fika-wgpu] open-with path={} app={:?} changes={}",
             request.path.display(),
             request.app_name,
@@ -6161,7 +6842,7 @@ impl ShellScene {
 
     fn log_open_with_chooser_state(&self) {
         match self.open_with_chooser.as_ref() {
-            Some(chooser) => eprintln!(
+            Some(chooser) => fika_log!(
                 "[fika-wgpu] open-with open=1 path={} mime={} apps={} filtered={} selected={} query={:?} error={:?} changes={}",
                 chooser.path.display(),
                 chooser.mime_type.as_deref().unwrap_or("unknown"),
@@ -6172,7 +6853,7 @@ impl ShellScene {
                 chooser.error,
                 self.open_with_changes
             ),
-            None => eprintln!(
+            None => fika_log!(
                 "[fika-wgpu] open-with open=0 changes={}",
                 self.open_with_changes
             ),
@@ -6230,7 +6911,7 @@ impl ShellScene {
 
     fn record_copy_location(&mut self, request: &CopyLocationRequest) {
         self.copy_location_changes += 1;
-        eprintln!(
+        fika_log!(
             "[fika-wgpu] copy-location path={} text={:?} changes={}",
             request.path.display(),
             request.text,
@@ -6263,7 +6944,7 @@ impl ShellScene {
     ) -> Result<bool, String> {
         let (label, path) = self.context_target_add_place_candidate()?;
         if self.places.iter().any(|place| place.path == path) {
-            eprintln!(
+            fika_log!(
                 "[fika-wgpu] add-place label={:?} path={} added=0 duplicate=1 changes={}",
                 label,
                 path.display(),
@@ -6272,7 +6953,7 @@ impl ShellScene {
             return Ok(false);
         }
         if !add_user_place_at_path(user_places_path, &path, label.clone())? {
-            eprintln!(
+            fika_log!(
                 "[fika-wgpu] add-place label={:?} path={} added=0 duplicate=1 changes={}",
                 label,
                 path.display(),
@@ -6286,11 +6967,12 @@ impl ShellScene {
         self.clamp_places_scroll(size);
         self.context_target = None;
         self.context_menu = None;
+        self.drop_menu = None;
         self.properties_overlay = None;
         self.rubber_band = None;
         self.places_changes += 1;
         self.refresh_hover(size);
-        eprintln!(
+        fika_log!(
             "[fika-wgpu] add-place label={:?} path={} added=1 places={} changes={}",
             label,
             path.display(),
@@ -6320,7 +7002,7 @@ impl ShellScene {
         let label = label.clone();
         let path = path.clone();
         if !remove_user_place_at_path(user_places_path, &path)? {
-            eprintln!(
+            fika_log!(
                 "[fika-wgpu] remove-place label={:?} path={} removed=0 changes={}",
                 label,
                 path.display(),
@@ -6333,11 +7015,12 @@ impl ShellScene {
         self.clamp_places_scroll(size);
         self.context_target = None;
         self.context_menu = None;
+        self.drop_menu = None;
         self.properties_overlay = None;
         self.rubber_band = None;
         self.places_changes += 1;
         self.refresh_hover(size);
-        eprintln!(
+        fika_log!(
             "[fika-wgpu] remove-place label={:?} path={} removed=1 places={} changes={}",
             label,
             path.display(),
@@ -6382,7 +7065,7 @@ impl ShellScene {
 
     fn record_file_clipboard_export(&mut self, request: &FileClipboardExportRequest) {
         self.file_clipboard_changes += 1;
-        eprintln!(
+        fika_log!(
             "[fika-wgpu] clipboard-export role={} paths={} bytes={} changes={}",
             file_clipboard_role_as_str(request.role),
             request.paths.len(),
@@ -6464,7 +7147,7 @@ impl ShellScene {
 
         let result = ShellPasteResult::from_transfer(&transfer);
         self.paste_changes += 1;
-        eprintln!(
+        fika_log!(
             "[fika-wgpu] paste mode={} target={} success={} failure={} clear_clipboard={} changes={}",
             result.mode.label(),
             target_dir.display(),
@@ -6477,6 +7160,7 @@ impl ShellScene {
         if result.changed() {
             self.context_target = None;
             self.context_menu = None;
+            self.drop_menu = None;
             self.properties_overlay = None;
             self.create_dialog = None;
             self.rename_dialog = None;
@@ -6546,27 +7230,27 @@ impl ShellScene {
     fn open_rename_dialog_from_active_selection(&mut self) -> bool {
         let pane = self.active_pane();
         let Some(selection) = self.pane_selection(pane) else {
-            eprintln!("[fika-wgpu] rename-error target=none");
+            fika_log!("[fika-wgpu] rename-error target=none");
             return false;
         };
         let Some(index) = selection.focus_or_first_selected() else {
-            eprintln!("[fika-wgpu] rename-error target=none");
+            fika_log!("[fika-wgpu] rename-error target=none");
             return false;
         };
         let Some(view) = self.pane_view(pane) else {
-            eprintln!("[fika-wgpu] rename-error target=none");
+            fika_log!("[fika-wgpu] rename-error target=none");
             return false;
         };
         let Some(entry) = view.entries.get(index) else {
-            eprintln!("[fika-wgpu] rename-error target=none");
+            fika_log!("[fika-wgpu] rename-error target=none");
             return false;
         };
         let Some(path) = self.entry_path_for_pane_view(view, index) else {
-            eprintln!("[fika-wgpu] rename-error target=none");
+            fika_log!("[fika-wgpu] rename-error target=none");
             return false;
         };
         let Some(dialog) = ShellRenameDialog::new(pane, path.clone(), entry.is_dir) else {
-            eprintln!(
+            fika_log!(
                 "[fika-wgpu] rename-error path={} error=no-file-name",
                 path.display()
             );
@@ -6575,6 +7259,7 @@ impl ShellScene {
         let changed = self.rename_dialog.as_ref() != Some(&dialog);
         self.rename_dialog = Some(dialog);
         self.context_menu = None;
+        self.drop_menu = None;
         self.properties_overlay = None;
         self.create_dialog = None;
         self.rubber_band = None;
@@ -6609,7 +7294,7 @@ impl ShellScene {
         let summary = file_ops::trash_paths(&paths);
         let changed = !summary.successes.is_empty();
         self.trash_changes += 1;
-        eprintln!(
+        fika_log!(
             "[fika-wgpu] trash paths={} success={} failure={} changes={}",
             paths.len(),
             summary.successes.len(),
@@ -6617,11 +7302,12 @@ impl ShellScene {
             self.trash_changes
         );
         for failure in &summary.failures {
-            eprintln!("[fika-wgpu] trash-failure {failure}");
+            fika_log!("[fika-wgpu] trash-failure {failure}");
         }
         if changed {
             self.context_target = None;
             self.context_menu = None;
+            self.drop_menu = None;
             self.properties_overlay = None;
             self.create_dialog = None;
             self.rename_dialog = None;
@@ -6745,7 +7431,7 @@ impl ShellScene {
             .pane_state(pane_to_reload)
             .map(|state| state.path.clone());
         self.trash_changes += 1;
-        eprintln!(
+        fika_log!(
             "[fika-wgpu] trash-view action={} success={} failure={} conflicts={} changes={}",
             action,
             result.success_count,
@@ -6754,7 +7440,7 @@ impl ShellScene {
             self.trash_changes
         );
         for conflict in &result.restore_conflicts {
-            eprintln!(
+            fika_log!(
                 "[fika-wgpu] trash-restore-conflict original={} trash={}",
                 conflict.original_path.display(),
                 conflict.trash_path.display()
@@ -6765,11 +7451,12 @@ impl ShellScene {
             self.trash_conflict_dialog = Some(dialog);
             self.context_target = None;
             self.context_menu = None;
+            self.drop_menu = None;
             self.properties_overlay = None;
             self.create_dialog = None;
             self.rename_dialog = None;
             self.rubber_band = None;
-            eprintln!(
+            fika_log!(
                 "[fika-wgpu] trash-conflict open=1 conflicts={} changes={}",
                 result.restore_conflicts.len(),
                 self.trash_changes
@@ -6780,6 +7467,7 @@ impl ShellScene {
             let pane_to_clear = pane_to_reload;
             self.context_target = None;
             self.context_menu = None;
+            self.drop_menu = None;
             self.properties_overlay = None;
             self.create_dialog = None;
             self.rename_dialog = None;
@@ -6820,7 +7508,7 @@ impl ShellScene {
                 .collect(),
         };
         self.trash_changes += 1;
-        eprintln!(
+        fika_log!(
             "[fika-wgpu] trash paths={} success={} failure={} changes={}",
             paths.len(),
             result.success_count,
@@ -6828,7 +7516,7 @@ impl ShellScene {
             self.trash_changes
         );
         for failure in &summary.failures {
-            eprintln!("[fika-wgpu] trash-failure {failure}");
+            fika_log!("[fika-wgpu] trash-failure {failure}");
         }
 
         if !result.changed() {
@@ -6837,6 +7525,7 @@ impl ShellScene {
 
         self.context_target = None;
         self.context_menu = None;
+        self.drop_menu = None;
         self.properties_overlay = None;
         self.create_dialog = None;
         self.rename_dialog = None;
@@ -6856,7 +7545,7 @@ impl ShellScene {
             return false;
         }
         self.trash_changes += 1;
-        eprintln!(
+        fika_log!(
             "[fika-wgpu] trash-conflict open=0 changes={}",
             self.trash_changes
         );
@@ -6891,7 +7580,7 @@ impl ShellScene {
 
     fn open_properties_overlay_from_context(&mut self) -> bool {
         let Some(overlay) = self.properties_overlay_for_context_target() else {
-            eprintln!("[fika-wgpu] properties-error target=none");
+            fika_log!("[fika-wgpu] properties-error target=none");
             return false;
         };
         let changed = self.properties_overlay.as_ref() != Some(&overlay);
@@ -6899,7 +7588,7 @@ impl ShellScene {
         if changed {
             self.properties_changes += 1;
             if let Some(overlay) = self.properties_overlay.as_ref() {
-                eprintln!(
+                fika_log!(
                     "[fika-wgpu] properties open=1 title={:?} rows={} changes={}",
                     overlay.title,
                     overlay.rows.len(),
@@ -6915,7 +7604,7 @@ impl ShellScene {
             return false;
         }
         self.properties_changes += 1;
-        eprintln!(
+        fika_log!(
             "[fika-wgpu] properties open=0 changes={}",
             self.properties_changes
         );
@@ -6947,7 +7636,7 @@ impl ShellScene {
     fn open_create_dialog_from_context_with_kind(&mut self, kind: CreateEntryKind) -> bool {
         let Some(ShellContextTarget::Blank { pane, path, .. }) = self.context_target.as_ref()
         else {
-            eprintln!(
+            fika_log!(
                 "[fika-wgpu] create-new-error target={}",
                 self.context_target
                     .as_ref()
@@ -6964,7 +7653,7 @@ impl ShellScene {
         if changed {
             self.create_changes += 1;
             if let Some(dialog) = self.create_dialog.as_ref() {
-                eprintln!(
+                fika_log!(
                     "[fika-wgpu] create-new open=1 kind={} parent={} name={:?} changes={}",
                     dialog.kind.as_str(),
                     dialog.parent.display(),
@@ -7050,7 +7739,7 @@ impl ShellScene {
 
     fn set_create_dialog_error(&mut self, error: String) -> bool {
         let Some(dialog) = self.create_dialog.as_mut() else {
-            eprintln!("[fika-wgpu] create-new-error {error}");
+            fika_log!("[fika-wgpu] create-new-error {error}");
             return false;
         };
         if dialog.error.as_ref() == Some(&error) {
@@ -7068,7 +7757,7 @@ impl ShellScene {
             return false;
         }
         self.create_changes += 1;
-        eprintln!(
+        fika_log!(
             "[fika-wgpu] create-new open=0 changes={}",
             self.create_changes
         );
@@ -7080,7 +7769,7 @@ impl ShellScene {
             return false;
         }
         self.create_changes += 1;
-        eprintln!(
+        fika_log!(
             "[fika-wgpu] create-new created kind={} path={} changes={}",
             request.kind.as_str(),
             request.path.display(),
@@ -7149,7 +7838,7 @@ impl ShellScene {
 
     fn log_create_dialog_state(&self) {
         match self.create_dialog.as_ref() {
-            Some(dialog) => eprintln!(
+            Some(dialog) => fika_log!(
                 "[fika-wgpu] create-new open=1 kind={} parent={} name={:?} error={:?} changes={}",
                 dialog.kind.as_str(),
                 dialog.parent.display(),
@@ -7157,7 +7846,7 @@ impl ShellScene {
                 dialog.error,
                 self.create_changes
             ),
-            None => eprintln!(
+            None => fika_log!(
                 "[fika-wgpu] create-new open=0 changes={}",
                 self.create_changes
             ),
@@ -7173,7 +7862,7 @@ impl ShellScene {
             pane, path, is_dir, ..
         }) = self.context_target.as_ref()
         else {
-            eprintln!(
+            fika_log!(
                 "[fika-wgpu] rename-error target={}",
                 self.context_target
                     .as_ref()
@@ -7183,7 +7872,7 @@ impl ShellScene {
             return false;
         };
         let Some(dialog) = ShellRenameDialog::new(*pane, path.clone(), *is_dir) else {
-            eprintln!(
+            fika_log!(
                 "[fika-wgpu] rename-error path={} error=no-file-name",
                 path.display()
             );
@@ -7197,7 +7886,7 @@ impl ShellScene {
         if changed {
             self.rename_changes += 1;
             if let Some(dialog) = self.rename_dialog.as_ref() {
-                eprintln!(
+                fika_log!(
                     "[fika-wgpu] rename open=1 source={} name={:?} dir={} changes={}",
                     dialog.source.display(),
                     dialog.name,
@@ -7275,7 +7964,7 @@ impl ShellScene {
 
     fn set_rename_dialog_error(&mut self, error: String) -> bool {
         let Some(dialog) = self.rename_dialog.as_mut() else {
-            eprintln!("[fika-wgpu] rename-error {error}");
+            fika_log!("[fika-wgpu] rename-error {error}");
             return false;
         };
         if dialog.error.as_ref() == Some(&error) {
@@ -7293,7 +7982,7 @@ impl ShellScene {
             return false;
         }
         self.rename_changes += 1;
-        eprintln!("[fika-wgpu] rename open=0 changes={}", self.rename_changes);
+        fika_log!("[fika-wgpu] rename open=0 changes={}", self.rename_changes);
         true
     }
 
@@ -7302,7 +7991,7 @@ impl ShellScene {
             return false;
         }
         self.rename_changes += 1;
-        eprintln!(
+        fika_log!(
             "[fika-wgpu] rename source={} target={} dir={} changes={}",
             request.source.display(),
             request.target.display(),
@@ -7336,14 +8025,14 @@ impl ShellScene {
 
     fn log_rename_dialog_state(&self) {
         match self.rename_dialog.as_ref() {
-            Some(dialog) => eprintln!(
+            Some(dialog) => fika_log!(
                 "[fika-wgpu] rename open=1 source={} name={:?} error={:?} changes={}",
                 dialog.source.display(),
                 dialog.name,
                 dialog.error,
                 self.rename_changes
             ),
-            None => eprintln!("[fika-wgpu] rename open=0 changes={}", self.rename_changes),
+            None => fika_log!("[fika-wgpu] rename open=0 changes={}", self.rename_changes),
         }
     }
 
@@ -7992,6 +8681,8 @@ impl ShellScene {
         if let Some(split_projection) = self.pane_projection(ShellPaneId::SECOND, size) {
             self.queue_thumbnail_read_ahead_for_projection(&split_projection, icons);
         }
+        self.push_drag_preview_overlay(&mut overlay_vertices, overlay_text, size);
+        self.push_drop_menu_overlay(&mut overlay_vertices, overlay_text, size);
         self.push_context_menu_overlay(&mut overlay_vertices, overlay_text, icons, size);
         self.push_properties_overlay(&mut overlay_vertices, overlay_text, size);
         self.push_create_dialog_overlay(&mut overlay_vertices, overlay_text, size);
@@ -8147,6 +8838,15 @@ impl ShellScene {
                 pane: projection.geometry.kind,
                 index: entry_index,
             });
+        let dnd_hovered = matches!(
+            self.dnd_hover_target,
+            Some(ShellDropTarget::PaneItem {
+                pane,
+                index,
+                is_dir: true,
+                ..
+            }) if pane == projection.geometry.kind && index == entry_index
+        );
 
         if projection.view.view_mode == ShellViewMode::Details {
             push_clipped_rect(
@@ -8193,6 +8893,24 @@ impl ShellScene {
                 content_clip,
                 self.scale_metric(7.0),
                 item_background_color(selected, hovered),
+                size,
+            );
+        }
+        if dnd_hovered {
+            let rect = if projection.view.view_mode == ShellViewMode::Details {
+                item_rect
+            } else {
+                visual_rect
+            };
+            let radius = self.scale_metric(7.0);
+            push_clipped_rounded_highlight(
+                vertices,
+                rect,
+                content_clip,
+                radius,
+                [1.000, 0.953, 0.820, 0.82],
+                [0.924, 0.518, 0.043, 0.98],
+                self.scale_metric(1.0),
                 size,
             );
         }
@@ -8800,6 +9518,13 @@ impl ShellScene {
             if row.y < panel.bottom() && row.bottom() > panel.y {
                 let active = active_place == Some(index);
                 let hovered = self.hovered_place == Some(index);
+                let dnd_hovered = matches!(
+                    self.dnd_hover_target,
+                    Some(ShellDropTarget::Place {
+                        index: target_index,
+                        ..
+                    }) if target_index == index
+                );
                 if active {
                     push_clipped_rounded_rect(
                         vertices,
@@ -8826,6 +9551,18 @@ impl ShellScene {
                         panel,
                         self.scale_metric(8.0),
                         place_row_background_color(active, hovered),
+                        size,
+                    );
+                }
+                if dnd_hovered {
+                    push_clipped_rounded_highlight(
+                        vertices,
+                        row,
+                        panel,
+                        self.scale_metric(8.0),
+                        [1.000, 0.953, 0.820, 0.88],
+                        [0.924, 0.518, 0.043, 0.98],
+                        self.scale_metric(1.0),
                         size,
                     );
                 }
@@ -8872,6 +9609,26 @@ impl ShellScene {
 
             y += row_height + row_gap;
             previous_group = Some(place.group);
+        }
+
+        if let Some(ShellDropTarget::PlacesGap { index }) = self.dnd_hover_target.as_ref()
+            && let Some(gap) = self.place_gap_rect_for_index(*index, size)
+        {
+            let line_height = self.scale_metric(3.0).max(2.0);
+            let line = ViewRect {
+                x: gap.x + self.scale_metric(8.0),
+                y: gap.y + (gap.height - line_height) / 2.0,
+                width: (gap.width - self.scale_metric(16.0)).max(1.0),
+                height: line_height,
+            };
+            push_clipped_rounded_rect(
+                vertices,
+                line,
+                panel,
+                line_height / 2.0,
+                [0.924, 0.518, 0.043, 1.0],
+                size,
+            );
         }
 
         if let Some((track, thumb)) = self.places_scrollbar_rects(size) {
@@ -9134,6 +9891,227 @@ impl ShellScene {
         };
         push_scrollbar(vertices, track, thumb, screen, size);
         true
+    }
+
+    fn push_drag_preview_overlay(
+        &self,
+        vertices: &mut Vec<QuadVertex>,
+        text: &mut TextFrameBuilder<'_>,
+        size: PhysicalSize<u32>,
+    ) {
+        let Some(drag) = self.internal_drag.as_ref().filter(|drag| drag.active) else {
+            return;
+        };
+        let screen = ViewRect {
+            x: 0.0,
+            y: 0.0,
+            width: size.width.max(1) as f32,
+            height: size.height.max(1) as f32,
+        };
+        let scale = self.ui_scale();
+        let width = self
+            .scale_metric(188.0)
+            .min((screen.width - self.scale_metric(16.0)).max(1.0));
+        let height = self.scale_metric(42.0);
+        let offset = self.scale_metric(14.0);
+        let mut rect = ViewRect {
+            x: drag.current.x + offset,
+            y: drag.current.y + offset,
+            width,
+            height,
+        };
+        rect.x = rect
+            .x
+            .min((screen.right() - rect.width - self.scale_metric(8.0)).max(0.0));
+        rect.y = rect
+            .y
+            .min((screen.bottom() - rect.height - self.scale_metric(8.0)).max(0.0));
+
+        push_context_menu_shadow(vertices, rect, screen, scale, size);
+        push_clipped_rounded_rect(
+            vertices,
+            rect,
+            screen,
+            self.scale_metric(7.0),
+            [1.000, 1.000, 1.000, 0.94],
+            size,
+        );
+        push_clipped_rect_outline(
+            vertices,
+            rect,
+            screen,
+            1.0,
+            [0.784, 0.808, 0.839, 0.96],
+            size,
+        );
+
+        let icon_size = self.scale_metric(26.0);
+        let icon = ViewRect {
+            x: rect.x + self.scale_metric(8.0),
+            y: rect.y + (rect.height - icon_size) / 2.0,
+            width: icon_size,
+            height: icon_size,
+        };
+        self.push_drag_preview_icon(vertices, icon, screen, drag, size);
+
+        let text_x = icon.right() + self.scale_metric(8.0);
+        text.push_label_aligned(
+            &drag.label,
+            ViewRect {
+                x: text_x,
+                y: rect.y + (rect.height - self.text_line_height()) / 2.0,
+                width: (rect.right() - text_x - self.scale_metric(10.0)).max(1.0),
+                height: self.text_line_height(),
+            },
+            rect,
+            TextColor::rgb(36, 41, 47),
+            LabelAlignment::Start,
+        );
+
+        if drag.paths.len() > 1 {
+            let badge_size = self.scale_metric(18.0);
+            let badge = ViewRect {
+                x: icon.right() - badge_size * 0.45,
+                y: icon.y - badge_size * 0.25,
+                width: badge_size,
+                height: badge_size,
+            };
+            push_clipped_rounded_rect(
+                vertices,
+                badge,
+                screen,
+                badge_size / 2.0,
+                [0.114, 0.306, 0.847, 1.0],
+                size,
+            );
+            text.push_label_aligned(
+                &drag.paths.len().min(99).to_string(),
+                badge,
+                screen,
+                TextColor::rgb(255, 255, 255),
+                LabelAlignment::Center,
+            );
+        }
+    }
+
+    fn push_drag_preview_icon(
+        &self,
+        vertices: &mut Vec<QuadVertex>,
+        icon: ViewRect,
+        clip: ViewRect,
+        drag: &ShellInternalDrag,
+        size: PhysicalSize<u32>,
+    ) {
+        match &drag.source {
+            ShellInternalDragSource::PaneItem { pane, index, .. } => {
+                if let Some(view) = self.pane_view(*pane)
+                    && let Some(entry) = view.entries.get(*index)
+                {
+                    push_fallback_icon(vertices, entry, icon, clip, size);
+                    return;
+                }
+            }
+            ShellInternalDragSource::Place { index } => {
+                if let Some(place) = self.places.get(*index) {
+                    push_place_icon(vertices, icon, clip, place, false, self.ui_scale(), size);
+                    return;
+                }
+            }
+        }
+        push_clipped_rounded_rect(
+            vertices,
+            icon,
+            clip,
+            self.scale_metric(6.0),
+            [0.918, 0.945, 1.000, 1.0],
+            size,
+        );
+    }
+
+    fn push_drop_menu_overlay(
+        &self,
+        vertices: &mut Vec<QuadVertex>,
+        text: &mut TextFrameBuilder<'_>,
+        size: PhysicalSize<u32>,
+    ) {
+        let Some(menu) = self.drop_menu.as_ref() else {
+            return;
+        };
+        let scale = self.ui_scale();
+        let rect = drop_menu_rect_scaled(menu, size, scale);
+        let padding_y = scaled_context_menu_metric(CONTEXT_MENU_VERTICAL_PADDING, scale);
+        let row_height = scaled_context_menu_metric(CONTEXT_MENU_ROW_HEIGHT, scale);
+        let row_padding_x = scaled_context_menu_metric(8.0, scale);
+        let gap = scaled_context_menu_metric(8.0, scale);
+        let icon_size = scaled_context_menu_metric(CONTEXT_MENU_ICON_SIZE, scale);
+        let text_height = scaled_context_menu_metric(CONTEXT_MENU_TEXT_LINE_HEIGHT, scale);
+        let clip = ViewRect {
+            x: 0.0,
+            y: 0.0,
+            width: size.width.max(1) as f32,
+            height: size.height.max(1) as f32,
+        };
+        push_context_menu_shadow(vertices, rect, clip, scale, size);
+        push_clipped_rounded_rect(
+            vertices,
+            rect,
+            clip,
+            self.scale_metric(6.0),
+            [1.000, 1.000, 1.000, 1.0],
+            size,
+        );
+
+        for (row, item) in drop_menu_items().iter().enumerate() {
+            let row_rect = ViewRect {
+                x: rect.x,
+                y: rect.y + padding_y + row as f32 * row_height,
+                width: rect.width,
+                height: row_height,
+            };
+            if menu.hovered_row == Some(row) {
+                push_rect(vertices, row_rect, [0.918, 0.945, 1.000, 1.0], size);
+            }
+            if matches!(item.command, ShellDropMenuCommand::Cancel) {
+                push_clipped_rect(
+                    vertices,
+                    ViewRect {
+                        x: rect.x + row_padding_x,
+                        y: row_rect.y,
+                        width: (rect.width - row_padding_x * 2.0).max(1.0),
+                        height: scale.round().max(1.0),
+                    },
+                    rect,
+                    [0.898, 0.906, 0.922, 1.0],
+                    size,
+                );
+            }
+            let icon = ViewRect {
+                x: row_rect.x + row_padding_x,
+                y: row_rect.y + (row_rect.height - icon_size) / 2.0,
+                width: icon_size,
+                height: icon_size,
+            };
+            let (glyph, fg, bg) = drop_menu_item_icon_style(item.icon);
+            push_context_menu_icon(vertices, icon, rect, glyph, fg, bg, scale, size);
+            let text_x = icon.right() + gap;
+            text.push_label_aligned(
+                item.label,
+                ViewRect {
+                    x: text_x,
+                    y: row_rect.y + (row_rect.height - text_height) / 2.0,
+                    width: (row_rect.right() - text_x - row_padding_x).max(1.0),
+                    height: text_height,
+                },
+                rect,
+                if menu.hovered_row == Some(row) {
+                    TextColor::rgb(31, 79, 191)
+                } else {
+                    TextColor::rgb(36, 41, 47)
+                },
+                LabelAlignment::Start,
+            );
+        }
+        push_clipped_rect_outline(vertices, rect, clip, 1.0, [0.784, 0.808, 0.839, 1.0], size);
     }
 
     fn push_context_menu_item_icon(
@@ -10147,9 +11125,12 @@ impl ShellScene {
         }
         self.places_width = next_width / self.ui_scale().max(f32::EPSILON);
         self.places_resize_changes += 1;
-        eprintln!(
+        fika_log!(
             "[fika-wgpu] places-resize width={:.1} min={:.1} max={:.1} changes={}",
-            next_width, min_width, max_width, self.places_resize_changes
+            next_width,
+            min_width,
+            max_width,
+            self.places_resize_changes
         );
         true
     }
@@ -10230,9 +11211,11 @@ impl ShellScene {
         }
         self.split_pane_left_fraction = (next_width / available_width).clamp(0.0, 1.0);
         self.split_pane_changes += 1;
-        eprintln!(
+        fika_log!(
             "[fika-wgpu] split-pane-resize left_width={:.1} fraction={:.3} changes={}",
-            next_width, self.split_pane_left_fraction, self.split_pane_changes
+            next_width,
+            self.split_pane_left_fraction,
+            self.split_pane_changes
         );
         true
     }
@@ -10710,6 +11693,9 @@ impl ShellScene {
         if self.scrollbar_drag.is_some() {
             return self.update_scrollbar_drag(point, size);
         }
+        if self.drop_menu.is_some() {
+            return self.update_drop_menu_hover(point, size);
+        }
         if self.context_menu.is_some() {
             return self.update_context_menu_hover(point, size);
         }
@@ -10792,9 +11778,9 @@ impl ShellScene {
         self.pointer = Some(point);
         if let Some(drag) = self.internal_drag.as_ref() {
             let was_active = drag.active;
-            let request_created = self.finish_internal_drag(point, size).is_some();
+            let drop_changed = self.finish_internal_drag(point, size);
             let hover_changed = self.refresh_hover(size);
-            return was_active || request_created || hover_changed;
+            return was_active || drop_changed || hover_changed;
         }
         let band_was_active = self.rubber_band.as_ref().is_some_and(|band| band.active);
         let changed = if self.rubber_band.is_some() {
@@ -11144,9 +12130,10 @@ impl WgpuState {
         .map_err(|error| format!("request adapter: {error}"))?;
 
         let adapter_info = adapter.get_info();
-        eprintln!(
+        fika_log!(
             "[fika-wgpu] adapter name={:?} backend={:?}",
-            adapter_info.name, adapter_info.backend
+            adapter_info.name,
+            adapter_info.backend
         );
 
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
@@ -11178,7 +12165,7 @@ impl WgpuState {
             .first()
             .copied()
             .unwrap_or(wgpu::CompositeAlphaMode::Auto);
-        eprintln!(
+        fika_log!(
             "[fika-wgpu] surface-format={format:?} srgb={}",
             format.is_srgb() as u8
         );
@@ -11237,7 +12224,7 @@ impl WgpuState {
         self.config.width = size.width;
         self.config.height = size.height;
         self.surface.configure(&self.device, &self.config);
-        eprintln!(
+        fika_log!(
             "[fika-wgpu] {} width={} height={}",
             if force { "reconfigure" } else { "resize" },
             size.width,
@@ -11262,7 +12249,7 @@ impl WgpuState {
             }
             wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
                 if force_log {
-                    eprintln!(
+                    fika_log!(
                         "[fika-wgpu] frame-retry reason={} view={} surface=reconfigure",
                         reason,
                         scene.panes[ShellPaneId::FIRST].view_mode.as_str()
@@ -11274,7 +12261,7 @@ impl WgpuState {
                     | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
                     wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
                         if force_log {
-                            eprintln!(
+                            fika_log!(
                                 "[fika-wgpu] frame-skip reason={} view={} surface=reconfigure-pending",
                                 reason,
                                 scene.panes[ShellPaneId::FIRST].view_mode.as_str()
@@ -11286,7 +12273,7 @@ impl WgpuState {
                     wgpu::CurrentSurfaceTexture::Timeout
                     | wgpu::CurrentSurfaceTexture::Occluded => {
                         if force_log {
-                            eprintln!(
+                            fika_log!(
                                 "[fika-wgpu] frame-skip reason={} view={} surface=not-ready",
                                 reason,
                                 scene.panes[ShellPaneId::FIRST].view_mode.as_str()
@@ -11295,7 +12282,7 @@ impl WgpuState {
                         return false;
                     }
                     wgpu::CurrentSurfaceTexture::Validation => {
-                        eprintln!("[fika-wgpu] surface validation error");
+                        fika_log!("[fika-wgpu] surface validation error");
                         event_loop.exit();
                         return false;
                     }
@@ -11303,7 +12290,7 @@ impl WgpuState {
             }
             wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
                 if force_log {
-                    eprintln!(
+                    fika_log!(
                         "[fika-wgpu] frame-skip reason={} view={} surface=not-ready",
                         reason,
                         scene.panes[ShellPaneId::FIRST].view_mode.as_str()
@@ -11312,7 +12299,7 @@ impl WgpuState {
                 return false;
             }
             wgpu::CurrentSurfaceTexture::Validation => {
-                eprintln!("[fika-wgpu] surface validation error");
+                fika_log!("[fika-wgpu] surface validation error");
                 event_loop.exit();
                 return false;
             }
@@ -11386,7 +12373,7 @@ impl WgpuState {
             || force_log
             || self.last_log.elapsed() >= Duration::from_secs(1)
         {
-            eprintln!(
+            fika_log!(
                 "[fika-wgpu] frame={} reason={} view={} scale={:.2} zoom={} zoom_changes={} path={} entries={} filtered={} show_hidden={} hidden_changes={} location_active={} location_changes={} filter_active={} filter_changes={} places={} places_visible={} places_width={:.1} place_hover={} places_changes={} places_resize_changes={} places_scroll_y={:.1} places_scroll_changes={} split_pane={} split_changes={} split_path={} content_scrollbar={} visible={} thumbnails={} slots={}/{} slot_reused={} slot_recycled={} slot_allocated={} selected={} hover={} dnd_hover={} dnd_hover_changes={} dnd_drop_requests={} context={} context_menu={} context_changes={} context_actions={} properties={} properties_changes={} create_dialog={} create_changes={} rename_dialog={} rename_changes={} open_with={} open_with_changes={} open_changes={} copy_location_changes={} file_clipboard_changes={} paste_changes={} trash_changes={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} path_changes={} reloads={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_deferred={} icon_raster_deferred={} thumb_loaded={} thumb_quads={} thumb_deferred={} thumb_read_ahead={} thumb_ready={}/{}b icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_cache={}/{} entries={} bytes={} batches={} scroll_x={:.1} scroll_y={:.1} layout={}us text_raster={}us text_atlas={}x{}:{}b render={}us",
                 self.frame_count,
                 reason,
@@ -14878,6 +15865,29 @@ fn push_scrollbar(
     );
 }
 
+fn push_clipped_rounded_highlight(
+    vertices: &mut Vec<QuadVertex>,
+    rect: ViewRect,
+    clip: ViewRect,
+    radius: f32,
+    fill: [f32; 4],
+    border: [f32; 4],
+    border_width: f32,
+    size: PhysicalSize<u32>,
+) {
+    push_clipped_rounded_rect(vertices, rect, clip, radius, border, size);
+    if let Some(inner) = inset_rect(rect, border_width.max(1.0)) {
+        push_clipped_rounded_rect(
+            vertices,
+            inner,
+            clip,
+            (radius - border_width.max(1.0)).max(1.0),
+            fill,
+            size,
+        );
+    }
+}
+
 fn push_context_menu_shadow(
     vertices: &mut Vec<QuadVertex>,
     rect: ViewRect,
@@ -15404,6 +16414,55 @@ fn estimated_name_char_width(ch: char) -> f32 {
 #[cfg(test)]
 fn context_menu_rect(menu: &ShellContextMenu, size: PhysicalSize<u32>) -> ViewRect {
     context_menu_rect_scaled(menu, size, 1.0)
+}
+
+#[cfg(test)]
+fn drop_menu_rect(menu: &ShellDropMenu, size: PhysicalSize<u32>) -> ViewRect {
+    drop_menu_rect_scaled(menu, size, 1.0)
+}
+
+fn drop_menu_rect_scaled(
+    menu: &ShellDropMenu,
+    size: PhysicalSize<u32>,
+    scale_factor: f32,
+) -> ViewRect {
+    let width = size.width.max(1) as f32;
+    let height = size.height.max(1) as f32;
+    let margin = scaled_context_menu_metric(CONTEXT_MENU_VIEWPORT_MARGIN, scale_factor);
+    let row_height = scaled_context_menu_metric(CONTEXT_MENU_ROW_HEIGHT, scale_factor);
+    let vertical_padding = scaled_context_menu_metric(CONTEXT_MENU_VERTICAL_PADDING, scale_factor);
+    let menu_width = scaled_context_menu_metric(CONTEXT_MENU_WIDTH, scale_factor)
+        .min((width - margin * 2.0).max(1.0))
+        .max(1.0);
+    let menu_height = (vertical_padding * 2.0 + drop_menu_items().len() as f32 * row_height)
+        .min((height - margin * 2.0).max(1.0))
+        .max(1.0);
+    ViewRect {
+        x: popup_menu_axis(menu.position.x, menu_width, width, margin),
+        y: popup_menu_axis(menu.position.y, menu_height, height, margin),
+        width: menu_width,
+        height: menu_height,
+    }
+}
+
+fn drop_menu_row_at_screen_point(
+    menu: &ShellDropMenu,
+    point: ViewPoint,
+    size: PhysicalSize<u32>,
+    scale_factor: f32,
+) -> Option<usize> {
+    let rect = drop_menu_rect_scaled(menu, size, scale_factor);
+    if !rect.contains(point) {
+        return None;
+    }
+    let padding = scaled_context_menu_metric(CONTEXT_MENU_VERTICAL_PADDING, scale_factor);
+    let row_height = scaled_context_menu_metric(CONTEXT_MENU_ROW_HEIGHT, scale_factor);
+    let row_y = point.y - rect.y - padding;
+    if row_y < 0.0 {
+        return None;
+    }
+    let row = (row_y / row_height).floor() as usize;
+    (row < drop_menu_items().len()).then_some(row)
 }
 
 fn context_menu_rect_scaled(
@@ -16626,6 +17685,7 @@ mod tests {
             histories: ShellPaneHistories::default(),
             context_target: None,
             context_menu: None,
+            drop_menu: None,
             properties_overlay: None,
             create_dialog: None,
             rename_dialog: None,
@@ -17175,6 +18235,10 @@ mod tests {
             y: content.y + item.layout.visual_rect.y + 4.0,
         };
 
+        assert!(scene.begin_internal_drag_for_pane_item(ShellPaneId::FIRST, 1, item_point));
+        if let Some(drag) = scene.internal_drag.as_mut() {
+            drag.active = true;
+        }
         assert!(scene.update_dnd_hover_target(item_point, size));
         assert_eq!(
             scene.dnd_hover_target.as_ref().map(ShellDropTarget::kind),
@@ -17232,10 +18296,23 @@ mod tests {
         assert!(scene.internal_drag.as_ref().is_some_and(|drag| drag.active));
         assert!(scene.end_pane_pointer(blank, size));
 
-        let request = scene
-            .pending_drop_request
+        assert!(scene.pending_drop_request.is_none());
+        let menu = scene
+            .drop_menu
             .as_ref()
-            .expect("active internal drag should create a drop request");
+            .expect("active internal drag should open a drop menu");
+        assert_eq!(menu.sources, vec![PathBuf::from("/tmp/alpha.txt")]);
+        assert_eq!(menu.target_dir, PathBuf::from("/tmp"));
+        let copy_row = drop_menu_rect(menu, size);
+        let request = scene
+            .activate_or_close_drop_menu_request(
+                ViewPoint {
+                    x: copy_row.x + 8.0,
+                    y: copy_row.y + CONTEXT_MENU_VERTICAL_PADDING + 2.0,
+                },
+                size,
+            )
+            .expect("copy row should create a drop request");
         assert_eq!(request.sources, vec![PathBuf::from("/tmp/alpha.txt")]);
         assert_eq!(request.target_dir, PathBuf::from("/tmp"));
         assert_eq!(
@@ -17247,6 +18324,7 @@ mod tests {
         );
         assert_eq!(request.mode, FileTransferMode::Copy);
         assert_eq!(scene.dnd_drop_requests, 1);
+        assert_eq!(scene.pending_drop_request.as_ref(), Some(&request));
         assert!(scene.internal_drag.is_none());
         assert!(scene.dnd_hover_target.is_none());
     }
@@ -17281,10 +18359,22 @@ mod tests {
         assert!(scene.set_pointer(target, size));
         assert!(scene.end_pane_pointer(target, size));
 
-        let request = scene
-            .pending_drop_request
+        let menu = scene
+            .drop_menu
             .as_ref()
-            .expect("directory target should accept a drop request");
+            .expect("directory target should open a drop menu");
+        assert_eq!(menu.sources, vec![PathBuf::from("/tmp/note.txt")]);
+        assert_eq!(menu.target_dir, PathBuf::from("/tmp/folder"));
+        let rect = drop_menu_rect(menu, size);
+        let request = scene
+            .activate_or_close_drop_menu_request(
+                ViewPoint {
+                    x: rect.x + 8.0,
+                    y: rect.y + CONTEXT_MENU_VERTICAL_PADDING + 2.0,
+                },
+                size,
+            )
+            .expect("copy row should create a drop request");
         assert_eq!(request.sources, vec![PathBuf::from("/tmp/note.txt")]);
         assert_eq!(request.target_dir, PathBuf::from("/tmp/folder"));
         assert_eq!(
@@ -17363,12 +18453,263 @@ mod tests {
         assert!(scene.set_pointer(end, size));
         assert_eq!(
             scene.dnd_hover_target.as_ref().map(ShellDropTarget::kind),
-            Some("pane-item")
+            None
         );
         assert!(scene.end_pane_pointer(end, size));
         assert!(scene.pending_drop_request.is_none());
         assert_eq!(scene.dnd_drop_requests, 0);
         assert!(scene.dnd_hover_target.is_none());
+    }
+
+    #[test]
+    fn place_drag_to_places_gap_reorders_and_persists_order() {
+        let root = test_dir("place-dnd-reorder");
+        let places_path = root.join("places.xbel");
+        let alpha = PathBuf::from("/tmp/place-alpha");
+        let beta = PathBuf::from("/tmp/place-beta");
+        let gamma = PathBuf::from("/tmp/place-gamma");
+        let mut scene = test_scene(Vec::new(), ShellViewMode::Icons);
+        scene.places = vec![
+            ShellPlace::new("", "A", "Alpha", alpha.clone(), true),
+            ShellPlace::new("", "B", "Beta", beta.clone(), true),
+            ShellPlace::new("", "G", "Gamma", gamma.clone(), true),
+        ];
+        let size = PhysicalSize::new(700, 360);
+        let start = scene.place_row_rects(size)[0].1;
+        let gap = scene
+            .place_gap_rect_for_index(3, size)
+            .expect("last gap should be visible");
+        let start_point = ViewPoint {
+            x: start.x + 6.0,
+            y: start.y + 6.0,
+        };
+        let gap_point = ViewPoint {
+            x: gap.x + gap.width / 2.0,
+            y: gap.y + gap.height / 2.0,
+        };
+
+        assert!(scene.begin_internal_drag_for_place(0, start_point));
+        assert!(scene.set_pointer(gap_point, size));
+        assert_eq!(
+            scene.dnd_hover_target,
+            Some(ShellDropTarget::PlacesGap { index: 3 })
+        );
+        assert!(
+            scene
+                .finish_internal_drag_with_user_places_path(gap_point, size, &places_path)
+                .unwrap()
+        );
+
+        assert_eq!(
+            scene
+                .places
+                .iter()
+                .map(|place| place.path.clone())
+                .collect::<Vec<_>>(),
+            vec![beta.clone(), gamma.clone(), alpha.clone()]
+        );
+        assert_eq!(
+            load_place_order(&place_order_path_for_user_places_path(&places_path)).unwrap(),
+            vec![beta, gamma, alpha]
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn pane_folder_drag_to_places_gap_adds_place_at_gap() {
+        let root = test_dir("pane-folder-dnd-add-place");
+        let places_path = root.join("places.xbel");
+        let beta = PathBuf::from("/tmp/dnd-existing-beta");
+        save_user_places(
+            &places_path,
+            &[UserPlace::new("Beta".to_string(), beta.clone())],
+        )
+        .unwrap();
+        let mut scene = test_scene(vec![test_entry("project", true)], ShellViewMode::Icons);
+        scene.places = build_shell_places_from(&places_path);
+        let size = PhysicalSize::new(900, 760);
+        let beta_index = scene
+            .places
+            .iter()
+            .position(|place| place.path == beta)
+            .expect("test user place should be visible");
+        let gap = scene
+            .place_gap_rect_for_index(beta_index, size)
+            .expect("gap before beta should be visible");
+        let projection = scene.pane_projection(ShellPaneId::FIRST, size).unwrap();
+        let item = projection.visible_items[0];
+        let start = ViewPoint {
+            x: projection.geometry.content.x + item.layout.visual_rect.x + 6.0,
+            y: projection.geometry.content.y + item.layout.visual_rect.y + 6.0,
+        };
+        let gap_point = ViewPoint {
+            x: gap.x + gap.width / 2.0,
+            y: gap.y + gap.height / 2.0,
+        };
+
+        assert!(scene.begin_internal_drag_for_pane_item(ShellPaneId::FIRST, 0, start));
+        assert!(scene.set_pointer(gap_point, size));
+        assert_eq!(
+            scene.dnd_hover_target,
+            Some(ShellDropTarget::PlacesGap { index: beta_index })
+        );
+        assert!(
+            scene
+                .finish_internal_drag_with_user_places_path(gap_point, size, &places_path)
+                .unwrap()
+        );
+
+        let project = PathBuf::from("/tmp/project");
+        let project_index = scene
+            .places
+            .iter()
+            .position(|place| place.path == project)
+            .expect("project folder should be added to places");
+        let beta_index_after = scene
+            .places
+            .iter()
+            .position(|place| place.path == beta)
+            .expect("existing place should remain");
+        assert!(project_index < beta_index_after);
+        assert!(
+            load_user_places(&places_path)
+                .unwrap()
+                .iter()
+                .any(|place| place.path == project)
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn pane_file_drag_to_place_item_opens_drop_menu_for_place_path() {
+        let mut scene = test_scene(vec![test_entry("note.txt", false)], ShellViewMode::Icons);
+        scene.places = vec![ShellPlace::new(
+            "",
+            "T",
+            "Target",
+            PathBuf::from("/tmp/drop-target"),
+            true,
+        )];
+        let size = PhysicalSize::new(700, 360);
+        let projection = scene.pane_projection(ShellPaneId::FIRST, size).unwrap();
+        let item = projection.visible_items[0];
+        let start = ViewPoint {
+            x: projection.geometry.content.x + item.layout.visual_rect.x + 6.0,
+            y: projection.geometry.content.y + item.layout.visual_rect.y + 6.0,
+        };
+        let row = scene.place_row_rects(size)[0].1;
+        let target = ViewPoint {
+            x: row.x + row.width / 2.0,
+            y: row.y + row.height / 2.0,
+        };
+
+        assert!(scene.begin_internal_drag_for_pane_item(ShellPaneId::FIRST, 0, start));
+        assert!(scene.set_pointer(target, size));
+        assert_eq!(
+            scene.dnd_hover_target,
+            Some(ShellDropTarget::Place {
+                index: 0,
+                path: PathBuf::from("/tmp/drop-target")
+            })
+        );
+        assert!(scene.finish_internal_drag(target, size));
+        let menu = scene.drop_menu.as_ref().expect("drop menu should open");
+        assert_eq!(menu.sources, vec![PathBuf::from("/tmp/note.txt")]);
+        assert_eq!(menu.target_dir, PathBuf::from("/tmp/drop-target"));
+        assert!(matches!(
+            menu.target,
+            ShellDropTarget::Place { index: 0, .. }
+        ));
+    }
+
+    #[test]
+    fn place_drag_to_pane_folder_and_blank_opens_drop_menu() {
+        let mut scene = test_scene(vec![test_entry("folder", true)], ShellViewMode::Icons);
+        scene.places = vec![ShellPlace::new(
+            "",
+            "S",
+            "Source",
+            PathBuf::from("/tmp/source-place"),
+            true,
+        )];
+        let size = PhysicalSize::new(700, 360);
+        let place_row = scene.place_row_rects(size)[0].1;
+        let place_point = ViewPoint {
+            x: place_row.x + 6.0,
+            y: place_row.y + 6.0,
+        };
+        let projection = scene.pane_projection(ShellPaneId::FIRST, size).unwrap();
+        let content = projection.geometry.content;
+        let folder = projection.visible_items[0];
+        let folder_point = ViewPoint {
+            x: content.x + folder.layout.visual_rect.x + 6.0,
+            y: content.y + folder.layout.visual_rect.y + 6.0,
+        };
+
+        assert_eq!(scene.begin_place_pointer(place_point, size), Some(true));
+        assert!(scene.set_pointer(folder_point, size));
+        let (changed, activation) = scene.end_place_pointer(folder_point, size);
+        assert!(changed);
+        assert!(activation.is_none());
+        let menu = scene
+            .drop_menu
+            .as_ref()
+            .expect("folder drop menu should open");
+        assert_eq!(menu.sources, vec![PathBuf::from("/tmp/source-place")]);
+        assert_eq!(menu.target_dir, PathBuf::from("/tmp/folder"));
+        assert!(matches!(
+            menu.target,
+            ShellDropTarget::PaneItem { is_dir: true, .. }
+        ));
+
+        scene.drop_menu = None;
+        let blank_point = ViewPoint {
+            x: content.right() - 4.0,
+            y: content.bottom() - 4.0,
+        };
+        assert_eq!(scene.begin_place_pointer(place_point, size), Some(true));
+        assert!(scene.set_pointer(blank_point, size));
+        let (changed, activation) = scene.end_place_pointer(blank_point, size);
+        assert!(changed);
+        assert!(activation.is_none());
+        let menu = scene
+            .drop_menu
+            .as_ref()
+            .expect("blank drop menu should open");
+        assert_eq!(menu.sources, vec![PathBuf::from("/tmp/source-place")]);
+        assert_eq!(menu.target_dir, PathBuf::from("/tmp"));
+        assert!(matches!(menu.target, ShellDropTarget::PaneBlank { .. }));
+    }
+
+    #[test]
+    fn place_drag_to_own_adjacent_gaps_has_no_drop_target() {
+        let mut scene = test_scene(Vec::new(), ShellViewMode::Icons);
+        scene.places = vec![
+            ShellPlace::new("", "A", "Alpha", PathBuf::from("/tmp/a"), true),
+            ShellPlace::new("", "B", "Beta", PathBuf::from("/tmp/b"), true),
+        ];
+        let size = PhysicalSize::new(700, 360);
+        let row = scene.place_row_rects(size)[0].1;
+        let start = ViewPoint {
+            x: row.x + 6.0,
+            y: row.y + 6.0,
+        };
+        let own_gap = scene.place_gap_rect_for_index(0, size).unwrap();
+        let own_gap_point = ViewPoint {
+            x: own_gap.x + own_gap.width / 2.0,
+            y: own_gap.y + own_gap.height / 2.0,
+        };
+        assert!(scene.begin_internal_drag_for_place(0, start));
+        assert!(scene.set_pointer(own_gap_point, size));
+        assert_eq!(scene.dnd_hover_target, None);
+
+        let after_gap = scene.place_gap_rect_for_index(1, size).unwrap();
+        let after_gap_point = ViewPoint {
+            x: after_gap.x + after_gap.width / 2.0,
+            y: after_gap.y + after_gap.height / 2.0,
+        };
+        assert!(scene.set_pointer(after_gap_point, size));
+        assert_eq!(scene.dnd_hover_target, None);
     }
 
     #[test]
