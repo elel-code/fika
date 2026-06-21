@@ -15,7 +15,10 @@ use smithay_client_toolkit::{
         viewporter::client::{wp_viewport::WpViewport, wp_viewporter::WpViewporter},
     },
     registry::RegistryState,
-    seat::SeatState,
+    seat::{
+        SeatState,
+        keyboard::{KeyEvent, Keysym, Modifiers},
+    },
     shell::{
         WaylandSurface,
         xdg::{
@@ -26,11 +29,12 @@ use smithay_client_toolkit::{
 };
 use wayland_client::Connection;
 use wayland_client::globals::registry_queue_init;
-use wayland_client::protocol::{wl_pointer, wl_surface};
+use wayland_client::protocol::{wl_keyboard, wl_pointer, wl_surface};
 
 use super::options::StartupOptions;
+use super::pane::PaneSelectionMove;
 use super::renderer::{WgpuRenderer, surface_extent};
-use super::scene::SctkScene;
+use super::scene::{SceneCommand, SctkScene};
 
 const DEFAULT_WIDTH: u32 = 1100;
 const DEFAULT_HEIGHT: u32 = 720;
@@ -82,6 +86,9 @@ pub(crate) fn run(options: StartupOptions) -> Result<(), Box<dyn Error>> {
         seat_state: SeatState::new(&globals, &qh),
         output_state: OutputState::new(&globals, &qh),
         pointer: None,
+        keyboard: None,
+        modifiers: Modifiers::default(),
+        keyboard_focus: false,
         exit: false,
         ready_logged: false,
         width: DEFAULT_WIDTH,
@@ -112,6 +119,9 @@ pub(crate) struct FikaSctkApp {
     pub(crate) seat_state: SeatState,
     pub(crate) output_state: OutputState,
     pub(crate) pointer: Option<wl_pointer::WlPointer>,
+    pub(crate) keyboard: Option<wl_keyboard::WlKeyboard>,
+    pub(crate) modifiers: Modifiers,
+    pub(crate) keyboard_focus: bool,
     pub(crate) exit: bool,
     ready_logged: bool,
     width: u32,
@@ -244,6 +254,50 @@ impl FikaSctkApp {
         }
     }
 
+    pub(crate) fn set_keyboard_focus(&mut self, focused: bool) {
+        self.keyboard_focus = focused;
+    }
+
+    pub(crate) fn update_modifiers(&mut self, modifiers: Modifiers) {
+        self.modifiers = modifiers;
+    }
+
+    pub(crate) fn press_key(&mut self, event: KeyEvent) {
+        self.handle_key_event(event, "key-press");
+    }
+
+    pub(crate) fn repeat_key(&mut self, event: KeyEvent) {
+        self.handle_key_event(event, "key-repeat");
+    }
+
+    fn handle_key_event(&mut self, event: KeyEvent, reason: &str) {
+        if !self.keyboard_focus {
+            return;
+        }
+        let Some(command) = key_command(event.keysym, self.modifiers) else {
+            return;
+        };
+        match self.scene.handle_command(command, self.width, self.height) {
+            Ok(true) => {
+                eprintln!(
+                    "[fika-sctk] command={command:?} reason={reason} active_pane={} path={} view={} show_hidden={} visible={}",
+                    self.scene.active_pane_name(),
+                    self.scene.active_path().display(),
+                    self.scene.active_view_mode().as_str(),
+                    self.scene.active_show_hidden() as u8,
+                    self.scene.active_visible_entry_count()
+                );
+                self.render_scene(reason);
+            }
+            Ok(false) => {}
+            Err(error) => {
+                eprintln!(
+                    "[fika-sctk] command-error command={command:?} reason={reason} error={error}"
+                );
+            }
+        }
+    }
+
     pub(crate) fn press_primary(&mut self, x: f64, y: f64) {
         if self
             .scene
@@ -298,5 +352,82 @@ impl FikaSctkApp {
         } else {
             "buffer"
         }
+    }
+}
+
+fn key_command(keysym: Keysym, modifiers: Modifiers) -> Option<SceneCommand> {
+    let shortcut = modifiers.ctrl || modifiers.logo;
+    if keysym == Keysym::F1 || keysym == Keysym::_1 || keysym == Keysym::KP_1 {
+        return Some(SceneCommand::SetViewMode(fika_core::ViewMode::Icons));
+    }
+    if keysym == Keysym::F2 || keysym == Keysym::_2 || keysym == Keysym::KP_2 {
+        return Some(SceneCommand::SetViewMode(fika_core::ViewMode::Compact));
+    }
+    if keysym == Keysym::F3 || keysym == Keysym::_3 || keysym == Keysym::KP_3 {
+        return Some(SceneCommand::SetViewMode(fika_core::ViewMode::Details));
+    }
+    if shortcut && (keysym == Keysym::h || keysym == Keysym::H) {
+        return Some(SceneCommand::ToggleHidden);
+    }
+    if keysym == Keysym::F5 || (shortcut && (keysym == Keysym::r || keysym == Keysym::R)) {
+        return Some(SceneCommand::Reload);
+    }
+    match keysym {
+        Keysym::Left => Some(SceneCommand::MoveSelection(PaneSelectionMove::Left)),
+        Keysym::Right => Some(SceneCommand::MoveSelection(PaneSelectionMove::Right)),
+        Keysym::Up => Some(SceneCommand::MoveSelection(PaneSelectionMove::Up)),
+        Keysym::Down => Some(SceneCommand::MoveSelection(PaneSelectionMove::Down)),
+        Keysym::Home => Some(SceneCommand::MoveSelection(PaneSelectionMove::First)),
+        Keysym::End => Some(SceneCommand::MoveSelection(PaneSelectionMove::Last)),
+        Keysym::Page_Up => Some(SceneCommand::MoveSelection(PaneSelectionMove::PageUp)),
+        Keysym::Page_Down => Some(SceneCommand::MoveSelection(PaneSelectionMove::PageDown)),
+        Keysym::Return | Keysym::KP_Enter => Some(SceneCommand::ActivateSelection),
+        Keysym::Escape => Some(SceneCommand::ClearSelection),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn key_command_maps_view_mode_shortcuts() {
+        assert_eq!(
+            key_command(Keysym::F1, Modifiers::default()),
+            Some(SceneCommand::SetViewMode(fika_core::ViewMode::Icons))
+        );
+        assert_eq!(
+            key_command(Keysym::_2, Modifiers::default()),
+            Some(SceneCommand::SetViewMode(fika_core::ViewMode::Compact))
+        );
+        assert_eq!(
+            key_command(Keysym::KP_3, Modifiers::default()),
+            Some(SceneCommand::SetViewMode(fika_core::ViewMode::Details))
+        );
+    }
+
+    #[test]
+    fn key_command_maps_pane_commands() {
+        let ctrl = Modifiers {
+            ctrl: true,
+            ..Modifiers::default()
+        };
+        assert_eq!(
+            key_command(Keysym::h, ctrl),
+            Some(SceneCommand::ToggleHidden)
+        );
+        assert_eq!(
+            key_command(Keysym::F5, Modifiers::default()),
+            Some(SceneCommand::Reload)
+        );
+        assert_eq!(
+            key_command(Keysym::Down, Modifiers::default()),
+            Some(SceneCommand::MoveSelection(PaneSelectionMove::Down))
+        );
+        assert_eq!(
+            key_command(Keysym::Return, Modifiers::default()),
+            Some(SceneCommand::ActivateSelection)
+        );
     }
 }

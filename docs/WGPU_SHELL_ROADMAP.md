@@ -118,7 +118,12 @@ Current checkpoint:
   geometry. The SCTK shell now accepts `--split` for a second pane on the same
   path and `--split-path PATH` for a second pane on a different path; both panes
   share `SctkPane`, and pointer hover, primary selection, and positioned wheel
-  scroll route to the hit pane.
+  scroll route to the hit pane. SCTK keyboard capability is now registered on
+  the Wayland seat; `F1/F2/F3`, `1/2/3`, arrows, Home/End, PageUp/PageDown,
+  Enter, Esc, `Ctrl/Meta+H`, and `F5`/`Ctrl/Meta+R` are translated into
+  `SceneCommand`s and dispatched to the active pane. `SctkPane` now owns the
+  hidden-file visible-index projection, runtime view switching, keyboard
+  navigation, directory activation, and reload paths.
   The SCTK renderer uploads and draws those quads, while Wayland pointer handling
   routes hover, left-click selection, and wheel scroll through the retained
   scene hit-test path. Text is also rendered in SCTK now: `src/bin/fika_sctk/text.rs`
@@ -391,15 +396,15 @@ Acceptance:
 
 - [~] `/etc` renders in Compact, Icons, and Details via `--view`; `~/Downloads`
   and manual interaction smokes remain pending.
-- [~] Scroll, hover, keyboard navigation, runtime mode switching, projection
-  zoom, reload, location editing, filtering, hidden-file visibility, selection, and
-  select-all/clear shortcuts work from retained geometry for the initial
-  projections. Glyph-level text zoom policy remains pending.
+- [~] Scroll, hover, keyboard navigation, runtime mode switching, reload,
+  hidden-file visibility, selection, and clear shortcuts work from retained
+  geometry in `SctkPane`. Projection zoom, location editing, filtering, and
+  select-all remain pending in the SCTK shell.
 - [~] Layout/hit-test/paint share the same shell layout abstraction for Icons,
-  Compact, and Details. Primary and split panes now share `ShellPaneView`,
-  `ShellPaneProjection`, generic item paint, scrollbar metrics, and a
-  path-keyed visible slot pool/reuse list modeled after the existing Dolphin
-  retained item-view work.
+  Compact, and Details. Primary and split panes now share `SctkPane` state,
+  generic item paint, scrollbar metrics, and the hidden-file visible-index
+  projection; a path-keyed visible slot pool/reuse list modeled after the
+  existing Dolphin retained item-view work remains pending.
 - No synchronous theme scan, MIME magic read, thumbnail decode, or text shaping
   occurs in the steady render pass.
 

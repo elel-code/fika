@@ -117,10 +117,13 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
   Places panel 以及把 pointer/scroll 路由到 active pane geometry。当前 `--split`
   会打开同一路径的右侧 pane，`--split-path PATH` 会打开指定路径；primary/split
   pane 已共用 `SctkPane`，首帧会输出 `split_pane=1 active_pane=...` telemetry，
-  鼠标 hover、左键 selection 和带坐标的 wheel scroll 会路由到命中的 pane。下一步继续补
-  keyboard/toolbar split trigger、pane focus visual、目录激活、keyboard navigation、
-  rubber-band、scrollbar drag、view switching、hidden toggle、filter/location edit 和
-  file-operation routing。
+  鼠标 hover、左键 selection 和带坐标的 wheel scroll 会路由到命中的 pane。SCTK
+  keyboard seat 已接入，`F1/F2/F3`、`1/2/3`、方向键、Home/End、PageUp/PageDown、
+  Enter、Esc、`Ctrl/Meta+H` 和 `F5`/`Ctrl/Meta+R` 会通过 `SceneCommand` 路由到
+  active pane；pane 内部已拥有 hidden-file 可见索引缓存、runtime view switching、
+  keyboard navigation、目录激活和 reload。下一步继续补 toolbar split trigger、pane
+  focus visual、rubber-band、scrollbar drag、filter/location edit 和 file-operation
+  routing。
 - [ ] Phase 4：迁入资产和系统集成热路径。MIME/theme icon atlas、Dolphin-style
   visible-first icon resolve、thumbnail worker/read-ahead、device/Places 动态数据、
   context menu、Open With、service menu、clipboard、Trash actions、file operations、

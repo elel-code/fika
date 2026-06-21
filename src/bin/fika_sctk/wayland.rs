@@ -1,7 +1,7 @@
 use smithay_client_toolkit::{
     compositor::CompositorHandler,
-    delegate_compositor, delegate_output, delegate_pointer, delegate_registry, delegate_seat,
-    delegate_xdg_shell, delegate_xdg_window,
+    delegate_compositor, delegate_keyboard, delegate_output, delegate_pointer, delegate_registry,
+    delegate_seat, delegate_xdg_shell, delegate_xdg_window,
     globals::GlobalData,
     output::{OutputHandler, OutputState},
     reexports::protocols::wp::{
@@ -18,6 +18,7 @@ use smithay_client_toolkit::{
     registry_handlers,
     seat::{
         Capability, SeatHandler, SeatState,
+        keyboard::{KeyEvent, KeyboardHandler, Keysym, Modifiers, RawModifiers},
         pointer::{BTN_LEFT, PointerEvent, PointerEventKind, PointerHandler},
     },
     shell::{
@@ -27,7 +28,7 @@ use smithay_client_toolkit::{
 };
 use wayland_client::{
     Connection, Dispatch, QueueHandle,
-    protocol::{wl_output, wl_pointer, wl_seat, wl_surface},
+    protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_surface},
 };
 
 use super::app::{FikaSctkApp, FractionalScaleData};
@@ -142,6 +143,12 @@ impl SeatHandler for FikaSctkApp {
         capability: Capability,
     ) {
         eprintln!("[fika-sctk] seat-capability={capability:?}");
+        if capability == Capability::Keyboard && self.keyboard.is_none() {
+            match self.seat_state.get_keyboard(qh, &seat, None) {
+                Ok(keyboard) => self.keyboard = Some(keyboard),
+                Err(error) => eprintln!("[fika-sctk] keyboard-unavailable error={error}"),
+            }
+        }
         if capability == Capability::Pointer && self.pointer.is_none() {
             match self.seat_state.get_pointer(qh, &seat) {
                 Ok(pointer) => self.pointer = Some(pointer),
@@ -158,6 +165,12 @@ impl SeatHandler for FikaSctkApp {
         capability: Capability,
     ) {
         eprintln!("[fika-sctk] seat-capability-removed={capability:?}");
+        if capability == Capability::Keyboard && self.keyboard.is_some() {
+            if let Some(keyboard) = self.keyboard.take() {
+                keyboard.release();
+            }
+            self.set_keyboard_focus(false);
+        }
         if capability == Capability::Pointer && self.pointer.is_some() {
             if let Some(pointer) = self.pointer.take() {
                 pointer.release();
@@ -166,6 +179,83 @@ impl SeatHandler for FikaSctkApp {
     }
 
     fn remove_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
+}
+
+impl KeyboardHandler for FikaSctkApp {
+    fn enter(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        surface: &wl_surface::WlSurface,
+        _: u32,
+        _: &[u32],
+        keysyms: &[Keysym],
+    ) {
+        if self.window.wl_surface() == surface {
+            self.set_keyboard_focus(true);
+            eprintln!("[fika-sctk] keyboard-focus=1 pressed={keysyms:?}");
+        }
+    }
+
+    fn leave(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        surface: &wl_surface::WlSurface,
+        _: u32,
+    ) {
+        if self.window.wl_surface() == surface {
+            self.set_keyboard_focus(false);
+            eprintln!("[fika-sctk] keyboard-focus=0");
+        }
+    }
+
+    fn press_key(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: u32,
+        event: KeyEvent,
+    ) {
+        self.press_key(event);
+    }
+
+    fn repeat_key(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: u32,
+        event: KeyEvent,
+    ) {
+        self.repeat_key(event);
+    }
+
+    fn release_key(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: u32,
+        _: KeyEvent,
+    ) {
+    }
+
+    fn update_modifiers(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: u32,
+        modifiers: Modifiers,
+        _: RawModifiers,
+        _: u32,
+    ) {
+        self.update_modifiers(modifiers);
+    }
 }
 
 impl PointerHandler for FikaSctkApp {
@@ -213,6 +303,7 @@ impl PointerHandler for FikaSctkApp {
 }
 
 delegate_compositor!(FikaSctkApp);
+delegate_keyboard!(FikaSctkApp);
 delegate_output!(FikaSctkApp);
 delegate_pointer!(FikaSctkApp);
 delegate_seat!(FikaSctkApp);

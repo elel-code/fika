@@ -27,7 +27,9 @@ pub(crate) struct SctkPane {
     path: PathBuf,
     view_mode: ViewMode,
     entries: Vec<Entry>,
+    visible_indices: Vec<usize>,
     dir_count: usize,
+    show_hidden: bool,
     hover: Option<usize>,
     selected: Option<usize>,
     scroll_x: f32,
@@ -42,16 +44,20 @@ impl SctkPane {
 
     pub(crate) fn from_entries(path: PathBuf, view_mode: ViewMode, entries: Vec<Entry>) -> Self {
         let dir_count = entries.iter().filter(|entry| entry.is_dir).count();
-        Self {
+        let mut pane = Self {
             path,
             view_mode,
             entries,
+            visible_indices: Vec::new(),
             dir_count,
+            show_hidden: false,
             hover: None,
             selected: None,
             scroll_x: 0.0,
             scroll_y: 0.0,
-        }
+        };
+        pane.rebuild_visible_indices();
+        pane
     }
 
     pub(crate) fn path(&self) -> &PathBuf {
@@ -66,12 +72,20 @@ impl SctkPane {
         self.entries.len()
     }
 
+    pub(crate) fn visible_entry_count(&self) -> usize {
+        self.visible_indices.len()
+    }
+
     pub(crate) fn dir_count(&self) -> usize {
         self.dir_count
     }
 
     pub(crate) fn file_count(&self) -> usize {
         self.entries.len().saturating_sub(self.dir_count)
+    }
+
+    pub(crate) fn show_hidden(&self) -> bool {
+        self.show_hidden
     }
 
     #[cfg(test)]
@@ -154,6 +168,95 @@ impl SctkPane {
         true
     }
 
+    pub(crate) fn set_view_mode(&mut self, view_mode: ViewMode, geometry: PaneGeometry) -> bool {
+        if self.view_mode == view_mode {
+            return false;
+        }
+        self.view_mode = view_mode;
+        self.scroll_x = 0.0;
+        self.scroll_y = 0.0;
+        if let Some(selected) = self.selected {
+            self.ensure_entry_visible(selected, geometry.content);
+        }
+        self.clamp_scroll(geometry.content);
+        true
+    }
+
+    pub(crate) fn toggle_show_hidden(&mut self, geometry: PaneGeometry) -> bool {
+        self.show_hidden = !self.show_hidden;
+        self.rebuild_visible_indices();
+        self.prune_hidden_state();
+        self.clamp_scroll(geometry.content);
+        true
+    }
+
+    pub(crate) fn move_selection(
+        &mut self,
+        movement: PaneSelectionMove,
+        geometry: PaneGeometry,
+    ) -> bool {
+        let Some(target) = self.selection_target(movement, geometry.content) else {
+            let changed = self.selected.is_some();
+            self.selected = None;
+            return changed;
+        };
+        let Some(entry_index) = self.visible_indices.get(target).copied() else {
+            return false;
+        };
+        if self.selected == Some(entry_index) {
+            self.ensure_entry_visible(entry_index, geometry.content);
+            return false;
+        }
+        self.selected = Some(entry_index);
+        self.ensure_entry_visible(entry_index, geometry.content);
+        true
+    }
+
+    pub(crate) fn clear_selection(&mut self) -> bool {
+        let changed = self.selected.is_some();
+        self.selected = None;
+        changed
+    }
+
+    pub(crate) fn activate_selected(&mut self) -> Result<bool, Box<dyn Error>> {
+        let Some(index) = self.selected else {
+            return Ok(false);
+        };
+        let Some(entry) = self.entries.get(index) else {
+            return Ok(false);
+        };
+        if !entry.is_dir {
+            return Ok(false);
+        }
+        let path = entry
+            .target_path
+            .clone()
+            .unwrap_or_else(|| self.path.join(entry.name.as_ref()));
+        self.load_path(path)?;
+        Ok(true)
+    }
+
+    pub(crate) fn reload(&mut self) -> Result<bool, Box<dyn Error>> {
+        let selected_name = self
+            .selected
+            .and_then(|index| self.entries.get(index))
+            .map(|entry| entry.name.clone());
+        let entries = read_entries_sync(&self.path)?;
+        self.entries = entries;
+        self.dir_count = self.entries.iter().filter(|entry| entry.is_dir).count();
+        self.rebuild_visible_indices();
+        self.selected = selected_name
+            .as_deref()
+            .and_then(|name| {
+                self.entries
+                    .iter()
+                    .position(|entry| entry.name.as_ref() == name)
+            })
+            .filter(|index| self.visible_indices.contains(index));
+        self.hover = None;
+        Ok(true)
+    }
+
     pub(crate) fn scroll(&mut self, delta_x: f32, delta_y: f32, geometry: PaneGeometry) -> bool {
         let before = (self.scroll_x, self.scroll_y);
         match self.view_mode {
@@ -171,7 +274,7 @@ impl SctkPane {
 
     pub(crate) fn icons_layout(&self, content: ViewRect) -> IconsLayout {
         IconsLayout::new(
-            self.entries.len(),
+            self.visible_indices.len(),
             IconsLayoutOptions {
                 viewport_width: (content.width - CONTENT_SCROLLBAR_RESERVED_EXTENT).max(1.0),
                 viewport_height: content.height.max(1.0),
@@ -190,7 +293,7 @@ impl SctkPane {
 
     fn compact_layout(&self, content: ViewRect) -> CompactLayout {
         CompactLayout::new(
-            self.entries.len(),
+            self.visible_indices.len(),
             CompactLayoutOptions {
                 viewport_width: content.width.max(1.0),
                 viewport_height: (content.height - CONTENT_SCROLLBAR_RESERVED_EXTENT).max(1.0),
@@ -220,17 +323,19 @@ impl SctkPane {
         match self.view_mode {
             ViewMode::Icons => self
                 .icons_layout(geometry.content)
-                .hit_test_content_point(content_point),
+                .hit_test_content_point(content_point)
+                .and_then(|visible| self.entry_index_for_visible(visible)),
             ViewMode::Compact => self
                 .compact_layout(geometry.content)
-                .hit_test_content_point(content_point),
+                .hit_test_content_point(content_point)
+                .and_then(|visible| self.entry_index_for_visible(visible)),
             ViewMode::Details => {
                 if content_point.y < DETAILS_HEADER_HEIGHT {
                     return None;
                 }
                 let row = ((content_point.y - DETAILS_HEADER_HEIGHT) / DETAILS_ROW_HEIGHT).floor();
-                let index = row.max(0.0) as usize;
-                (index < self.entries.len()).then_some(index)
+                let visible = row.max(0.0) as usize;
+                self.entry_index_for_visible(visible)
             }
         }
     }
@@ -344,14 +449,17 @@ impl SctkPane {
         width: u32,
         height: u32,
     ) {
-        let Some(entry) = self.entries.get(item.model_index) else {
+        let Some(entry_index) = self.entry_index_for_visible(item.model_index) else {
+            return;
+        };
+        let Some(entry) = self.entries.get(entry_index) else {
             return;
         };
         let visual = self.to_screen_rect(item.visual_rect, content);
         let icon = self.to_screen_rect(item.icon_rect, content);
         let text_rect = self.to_screen_rect(item.text_rect, content);
-        let selected = self.selected == Some(item.model_index);
-        let hovered = self.hover == Some(item.model_index);
+        let selected = self.selected == Some(entry_index);
+        let hovered = self.hover == Some(entry_index);
         if selected || hovered {
             batch.push_clipped_rounded_rect(
                 visual,
@@ -402,11 +510,14 @@ impl SctkPane {
             as usize;
         let rows = ((content.height + DETAILS_ROW_HEIGHT - 1.0) / DETAILS_ROW_HEIGHT) as usize + 2;
         let mut visible = 0usize;
-        for index in first..(first + rows).min(self.entries.len()) {
+        for visible_index in first..(first + rows).min(self.visible_indices.len()) {
+            let Some(index) = self.entry_index_for_visible(visible_index) else {
+                continue;
+            };
             let Some(entry) = self.entries.get(index) else {
                 continue;
             };
-            let y = content.y + DETAILS_HEADER_HEIGHT + index as f32 * DETAILS_ROW_HEIGHT
+            let y = content.y + DETAILS_HEADER_HEIGHT + visible_index as f32 * DETAILS_ROW_HEIGHT
                 - self.scroll_y;
             let row_rect = ViewRect {
                 x: content.x,
@@ -683,13 +794,25 @@ impl SctkPane {
             .selected
             .map(|_| ", 1 selected".to_string())
             .unwrap_or_default();
+        let visible_dirs = self
+            .visible_indices
+            .iter()
+            .filter(|index| self.entries.get(**index).is_some_and(|entry| entry.is_dir))
+            .count();
+        let visible_files = self.visible_indices.len().saturating_sub(visible_dirs);
+        let hidden = if self.show_hidden {
+            "hidden shown"
+        } else {
+            "hidden hidden"
+        };
         format!(
-            "{} items, {} folders, {} files, {} visible, {}{}",
-            self.entries.len(),
-            self.dir_count(),
-            self.file_count(),
+            "{} items, {} folders, {} files, {} on screen, {}, {}{}",
+            self.visible_indices.len(),
+            visible_dirs,
+            visible_files,
             visible_items,
             self.view_mode.as_str(),
+            hidden,
             selected,
         )
     }
@@ -714,7 +837,7 @@ impl SctkPane {
             ViewMode::Icons => {
                 let layout = self.icons_layout(content);
                 let last = self
-                    .entries
+                    .visible_indices
                     .len()
                     .checked_sub(1)
                     .and_then(|index| layout.item(index));
@@ -727,7 +850,7 @@ impl SctkPane {
             ViewMode::Compact => {
                 let layout = self.compact_layout(content);
                 let last = self
-                    .entries
+                    .visible_indices
                     .len()
                     .checked_sub(1)
                     .and_then(|index| layout.item(index));
@@ -739,8 +862,168 @@ impl SctkPane {
             }
             ViewMode::Details => {
                 let content_height =
-                    DETAILS_HEADER_HEIGHT + self.entries.len() as f32 * DETAILS_ROW_HEIGHT;
+                    DETAILS_HEADER_HEIGHT + self.visible_indices.len() as f32 * DETAILS_ROW_HEIGHT;
                 (0.0, (content_height - content.height).max(0.0))
+            }
+        }
+    }
+
+    fn load_path(&mut self, path: PathBuf) -> Result<(), Box<dyn Error>> {
+        let entries = read_entries_sync(&path)?;
+        self.path = path;
+        self.entries = entries;
+        self.dir_count = self.entries.iter().filter(|entry| entry.is_dir).count();
+        self.rebuild_visible_indices();
+        self.hover = None;
+        self.selected = None;
+        self.scroll_x = 0.0;
+        self.scroll_y = 0.0;
+        Ok(())
+    }
+
+    fn rebuild_visible_indices(&mut self) {
+        self.visible_indices.clear();
+        self.visible_indices
+            .extend(
+                self.entries
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, entry)| {
+                        (self.show_hidden || !entry.name.starts_with('.')).then_some(index)
+                    }),
+            );
+    }
+
+    fn prune_hidden_state(&mut self) {
+        if self
+            .selected
+            .is_some_and(|index| !self.visible_indices.contains(&index))
+        {
+            self.selected = None;
+        }
+        if self
+            .hover
+            .is_some_and(|index| !self.visible_indices.contains(&index))
+        {
+            self.hover = None;
+        }
+    }
+
+    fn entry_index_for_visible(&self, visible_index: usize) -> Option<usize> {
+        self.visible_indices.get(visible_index).copied()
+    }
+
+    fn selected_visible_index(&self) -> Option<usize> {
+        let selected = self.selected?;
+        self.visible_indices
+            .iter()
+            .position(|entry_index| *entry_index == selected)
+    }
+
+    fn selection_target(&self, movement: PaneSelectionMove, content: ViewRect) -> Option<usize> {
+        let len = self.visible_indices.len();
+        if len == 0 {
+            return None;
+        }
+        let Some(current) = self.selected_visible_index() else {
+            return Some(match movement {
+                PaneSelectionMove::Last => len - 1,
+                _ => 0,
+            });
+        };
+        let target = match movement {
+            PaneSelectionMove::First => 0,
+            PaneSelectionMove::Last => len - 1,
+            PaneSelectionMove::Left => current.saturating_sub(self.horizontal_step(content)),
+            PaneSelectionMove::Right => current.saturating_add(self.horizontal_step(content)),
+            PaneSelectionMove::Up => current.saturating_sub(self.vertical_step(content)),
+            PaneSelectionMove::Down => current.saturating_add(self.vertical_step(content)),
+            PaneSelectionMove::PageUp => current.saturating_sub(self.page_step(content)),
+            PaneSelectionMove::PageDown => current.saturating_add(self.page_step(content)),
+        };
+        Some(target.min(len - 1))
+    }
+
+    fn horizontal_step(&self, content: ViewRect) -> usize {
+        match self.view_mode {
+            ViewMode::Icons | ViewMode::Details => 1,
+            ViewMode::Compact => self.compact_layout(content).rows_per_column().max(1),
+        }
+    }
+
+    fn vertical_step(&self, content: ViewRect) -> usize {
+        match self.view_mode {
+            ViewMode::Icons => self.icons_layout(content).columns_per_row().max(1),
+            ViewMode::Compact | ViewMode::Details => 1,
+        }
+    }
+
+    fn page_step(&self, content: ViewRect) -> usize {
+        match self.view_mode {
+            ViewMode::Icons => {
+                let layout = self.icons_layout(content);
+                let rows = (content.height / ICONS_ITEM_HEIGHT).ceil().max(1.0) as usize;
+                layout.columns_per_row().max(1) * rows
+            }
+            ViewMode::Compact => self.compact_layout(content).rows_per_column().max(1),
+            ViewMode::Details => ((content.height - DETAILS_HEADER_HEIGHT).max(DETAILS_ROW_HEIGHT)
+                / DETAILS_ROW_HEIGHT)
+                .floor()
+                .max(1.0) as usize,
+        }
+    }
+
+    fn ensure_entry_visible(&mut self, entry_index: usize, content: ViewRect) {
+        let Some(visible_index) = self
+            .visible_indices
+            .iter()
+            .position(|index| *index == entry_index)
+        else {
+            return;
+        };
+        match self.view_mode {
+            ViewMode::Icons => {
+                if let Some(item) = self.icons_layout(content).item(visible_index) {
+                    self.ensure_rect_visible(item.item_rect, content, true, false);
+                }
+            }
+            ViewMode::Compact => {
+                if let Some(item) = self.compact_layout(content).item(visible_index) {
+                    self.ensure_rect_visible(item.item_rect, content, false, true);
+                }
+            }
+            ViewMode::Details => {
+                let top = DETAILS_HEADER_HEIGHT + visible_index as f32 * DETAILS_ROW_HEIGHT;
+                let bottom = top + DETAILS_ROW_HEIGHT;
+                if top - self.scroll_y < DETAILS_HEADER_HEIGHT {
+                    self.scroll_y = (top - DETAILS_HEADER_HEIGHT).max(0.0);
+                } else if bottom - self.scroll_y > content.height {
+                    self.scroll_y = (bottom - content.height).max(0.0);
+                }
+            }
+        }
+        self.clamp_scroll(content);
+    }
+
+    fn ensure_rect_visible(
+        &mut self,
+        rect: ViewRect,
+        content: ViewRect,
+        vertical: bool,
+        horizontal: bool,
+    ) {
+        if vertical {
+            if rect.y < self.scroll_y {
+                self.scroll_y = rect.y.max(0.0);
+            } else if rect.bottom() > self.scroll_y + content.height {
+                self.scroll_y = (rect.bottom() - content.height).max(0.0);
+            }
+        }
+        if horizontal {
+            if rect.x < self.scroll_x {
+                self.scroll_x = rect.x.max(0.0);
+            } else if rect.right() > self.scroll_x + content.width {
+                self.scroll_x = (rect.right() - content.width).max(0.0);
             }
         }
     }
@@ -759,6 +1042,18 @@ pub(crate) struct PaneRenderStats {
     pub(crate) hover: Option<usize>,
     pub(crate) scroll_x: f32,
     pub(crate) scroll_y: f32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PaneSelectionMove {
+    Left,
+    Right,
+    Up,
+    Down,
+    First,
+    Last,
+    PageUp,
+    PageDown,
 }
 
 fn push_folder_glyph(
@@ -813,5 +1108,113 @@ fn details_size_label(entry: &Entry) -> String {
         "-".to_string()
     } else {
         format_size(entry.size_bytes)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use fika_core::EntryData;
+
+    use super::*;
+
+    fn entry(name: &str, is_dir: bool) -> Entry {
+        Entry::new(EntryData {
+            name: Arc::from(name),
+            name_width_units: name.len().min(u16::MAX as usize) as u16,
+            target_path: None,
+            size_bytes: 0,
+            modified_secs: None,
+            metadata_complete: true,
+            mime_type: None,
+            mime_magic_checked: true,
+            trash_original_path: None,
+            trash_deletion_time: None,
+            is_dir,
+        })
+    }
+
+    fn geometry() -> PaneGeometry {
+        PaneGeometry {
+            pane: ViewRect {
+                x: 0.0,
+                y: 0.0,
+                width: 480.0,
+                height: 360.0,
+            },
+            content: ViewRect {
+                x: 0.0,
+                y: TOP_BAR_HEIGHT,
+                width: 480.0,
+                height: 300.0,
+            },
+        }
+    }
+
+    #[test]
+    fn hidden_entries_are_filtered_by_default_and_toggled_per_pane() {
+        let mut pane = SctkPane::from_entries(
+            PathBuf::from("/tmp"),
+            ViewMode::Details,
+            vec![
+                entry("alpha", false),
+                entry(".secret", false),
+                entry("beta", false),
+            ],
+        );
+
+        assert!(!pane.show_hidden());
+        assert_eq!(pane.entry_count(), 3);
+        assert_eq!(pane.visible_entry_count(), 2);
+
+        assert!(pane.toggle_show_hidden(geometry()));
+        assert!(pane.show_hidden());
+        assert_eq!(pane.visible_entry_count(), 3);
+
+        pane.selected = Some(1);
+        assert!(pane.toggle_show_hidden(geometry()));
+        assert!(!pane.show_hidden());
+        assert_eq!(pane.visible_entry_count(), 2);
+        assert_eq!(pane.selected(), None);
+    }
+
+    #[test]
+    fn keyboard_selection_moves_over_visible_projection() {
+        let mut pane = SctkPane::from_entries(
+            PathBuf::from("/tmp"),
+            ViewMode::Details,
+            vec![
+                entry("alpha", false),
+                entry(".secret", false),
+                entry("beta", false),
+            ],
+        );
+
+        assert!(pane.move_selection(PaneSelectionMove::Down, geometry()));
+        assert_eq!(pane.selected(), Some(0));
+        assert!(pane.move_selection(PaneSelectionMove::Down, geometry()));
+        assert_eq!(pane.selected(), Some(2));
+    }
+
+    #[test]
+    fn activating_selected_directory_loads_that_path() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("fika-sctk-pane-{stamp}"));
+        let child = root.join("child");
+        std::fs::create_dir_all(&child).unwrap();
+        std::fs::write(child.join("nested.txt"), b"nested").unwrap();
+
+        let mut pane = SctkPane::load(root.clone(), ViewMode::Details).unwrap();
+        assert!(pane.move_selection(PaneSelectionMove::Down, geometry()));
+        assert!(pane.activate_selected().unwrap());
+        assert_eq!(pane.path(), &child);
+        assert_eq!(pane.visible_entry_count(), 1);
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

@@ -8,7 +8,7 @@ use super::metrics::{
     PLACES_PANEL_MARGIN_X, PLACES_ROW_HEIGHT, PLACES_TITLE_HEIGHT, PLACES_TO_PANE_GAP,
     PLACES_WIDTH, SPLIT_PANE_GAP, TEXT_FONT_SIZE, TEXT_LINE_HEIGHT,
 };
-use super::pane::{PaneGeometry, SctkPane};
+use super::pane::{PaneGeometry, PaneSelectionMove, SctkPane};
 use super::quad::{QuadBatch, inset};
 use super::text::TextBatch;
 
@@ -56,6 +56,26 @@ impl SctkScene {
 
     pub(crate) fn view_mode(&self) -> ViewMode {
         self.primary.view_mode()
+    }
+
+    pub(crate) fn active_pane_name(&self) -> &'static str {
+        self.active.as_str()
+    }
+
+    pub(crate) fn active_path(&self) -> &PathBuf {
+        self.active_pane().path()
+    }
+
+    pub(crate) fn active_view_mode(&self) -> ViewMode {
+        self.active_pane().view_mode()
+    }
+
+    pub(crate) fn active_show_hidden(&self) -> bool {
+        self.active_pane().show_hidden()
+    }
+
+    pub(crate) fn active_visible_entry_count(&self) -> usize {
+        self.active_pane().visible_entry_count()
     }
 
     pub(crate) fn entry_count(&self) -> usize {
@@ -185,6 +205,26 @@ impl SctkScene {
                     .zip(geometry.split)
                     .is_some_and(|(split, geometry)| split.scroll(delta_x, delta_y, geometry))
             }
+        }
+    }
+
+    pub(crate) fn handle_command(
+        &mut self,
+        command: SceneCommand,
+        width: u32,
+        height: u32,
+    ) -> Result<bool, Box<dyn Error>> {
+        let geometry = self.geometry(width, height);
+        match self.active {
+            PaneSlot::Primary => {
+                Self::apply_pane_command(&mut self.primary, geometry.primary, command)
+            }
+            PaneSlot::Split => self
+                .split
+                .as_mut()
+                .zip(geometry.split)
+                .map(|(split, geometry)| Self::apply_pane_command(split, geometry, command))
+                .unwrap_or(Ok(false)),
         }
     }
 
@@ -378,6 +418,38 @@ impl SctkScene {
             .as_mut()
             .is_some_and(|split| split.clear_pointer())
     }
+
+    fn active_pane(&self) -> &SctkPane {
+        match self.active {
+            PaneSlot::Primary => &self.primary,
+            PaneSlot::Split => self.split.as_ref().unwrap_or(&self.primary),
+        }
+    }
+
+    fn apply_pane_command(
+        pane: &mut SctkPane,
+        geometry: PaneGeometry,
+        command: SceneCommand,
+    ) -> Result<bool, Box<dyn Error>> {
+        match command {
+            SceneCommand::SetViewMode(view_mode) => Ok(pane.set_view_mode(view_mode, geometry)),
+            SceneCommand::ToggleHidden => Ok(pane.toggle_show_hidden(geometry)),
+            SceneCommand::MoveSelection(movement) => Ok(pane.move_selection(movement, geometry)),
+            SceneCommand::ActivateSelection => pane.activate_selected(),
+            SceneCommand::Reload => pane.reload(),
+            SceneCommand::ClearSelection => Ok(pane.clear_selection()),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SceneCommand {
+    SetViewMode(ViewMode),
+    ToggleHidden,
+    MoveSelection(PaneSelectionMove),
+    ActivateSelection,
+    Reload,
+    ClearSelection,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -596,5 +668,59 @@ mod tests {
         assert_eq!(frame.active_pane, "split");
         assert_eq!(frame.selected, Some(0));
         assert!(frame.visible_items > 0);
+    }
+
+    #[test]
+    fn commands_are_routed_to_active_split_pane_only() {
+        let mut scene = split_scene(ViewMode::Icons, 20);
+        let geometry = scene.geometry(1000, 640);
+        let split_geometry = geometry.split.expect("split geometry");
+        let item = scene
+            .split
+            .as_ref()
+            .unwrap()
+            .icons_layout(split_geometry.content)
+            .item(0)
+            .unwrap();
+        let point = ViewPoint {
+            x: split_geometry.content.x + item.visual_rect.x + 4.0,
+            y: split_geometry.content.y + item.visual_rect.y + 4.0,
+        };
+        assert!(scene.press_primary(point, 1000, 640));
+
+        assert!(
+            scene
+                .handle_command(SceneCommand::SetViewMode(ViewMode::Details), 1000, 640)
+                .unwrap()
+        );
+        assert_eq!(scene.primary.view_mode(), ViewMode::Icons);
+        assert_eq!(scene.split.as_ref().unwrap().view_mode(), ViewMode::Details);
+        assert_eq!(scene.active_pane_name(), "split");
+    }
+
+    #[test]
+    fn move_selection_command_uses_active_pane_projection() {
+        let mut scene = scene(ViewMode::Details, 5);
+
+        assert!(
+            scene
+                .handle_command(
+                    SceneCommand::MoveSelection(PaneSelectionMove::Down),
+                    900,
+                    640
+                )
+                .unwrap()
+        );
+        assert_eq!(scene.primary.selected(), Some(0));
+        assert!(
+            scene
+                .handle_command(
+                    SceneCommand::MoveSelection(PaneSelectionMove::Down),
+                    900,
+                    640
+                )
+                .unwrap()
+        );
+        assert_eq!(scene.primary.selected(), Some(1));
     }
 }
