@@ -127,8 +127,13 @@ Current checkpoint:
   `Ctrl/Meta+Shift+S` toggles split view from the scene layer, reusing the same
   `SctkPane` component for the new pane. The active pane now draws a lightweight
   focus marker, and content scrollbar thumb/track dragging is routed through a
-  scene-level pointer capture that is cleared on release/leave; this is the same
-  capture boundary intended for rubber-band and DnD.
+  scene-level pointer capture that is cleared on release/leave. Pane selection
+  now has a reusable `selected_entries` set in addition to the focused/activated
+  item: `Ctrl/Meta+A` selects only the active pane's visible entries, blank
+  primary press starts rubber-band pointer capture, and Icons/Compact/Details
+  update multi-selection from their retained projection while drawing a clipped
+  translucent overlay. This same selection/capture boundary is the next DnD
+  source/export boundary.
   The SCTK renderer uploads and draws those quads, while Wayland pointer handling
   routes hover, left-click selection, and wheel scroll through the retained
   scene hit-test path. Text is also rendered in SCTK now: `src/bin/fika_sctk/text.rs`

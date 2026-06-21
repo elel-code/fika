@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::error::Error;
 use std::path::PathBuf;
 
@@ -32,6 +33,7 @@ pub(crate) struct SctkPane {
     show_hidden: bool,
     hover: Option<usize>,
     selected: Option<usize>,
+    selected_entries: BTreeSet<usize>,
     scroll_x: f32,
     scroll_y: f32,
 }
@@ -53,6 +55,7 @@ impl SctkPane {
             show_hidden: false,
             hover: None,
             selected: None,
+            selected_entries: BTreeSet::new(),
             scroll_x: 0.0,
             scroll_y: 0.0,
         };
@@ -86,6 +89,10 @@ impl SctkPane {
 
     pub(crate) fn show_hidden(&self) -> bool {
         self.show_hidden
+    }
+
+    pub(crate) fn selected_count(&self) -> usize {
+        self.selected_entries.len()
     }
 
     #[cfg(test)]
@@ -139,6 +146,7 @@ impl SctkPane {
         PaneRenderStats {
             visible_items,
             selected: self.selected,
+            selected_count: self.selected_count(),
             hover: self.hover,
             scroll_x: self.scroll_x,
             scroll_y: self.scroll_y,
@@ -162,11 +170,7 @@ impl SctkPane {
 
     pub(crate) fn press_primary(&mut self, point: ViewPoint, geometry: PaneGeometry) -> bool {
         let hit = self.hit_test(point, geometry);
-        if self.selected == hit {
-            return false;
-        }
-        self.selected = hit;
-        true
+        self.replace_selection(hit)
     }
 
     pub(crate) fn set_view_mode(&mut self, view_mode: ViewMode, geometry: PaneGeometry) -> bool {
@@ -201,15 +205,93 @@ impl SctkPane {
         true
     }
 
+    pub(crate) fn begin_rubber_band(
+        &mut self,
+        point: ViewPoint,
+        geometry: PaneGeometry,
+    ) -> Option<bool> {
+        if !geometry.content.contains(point) || self.hit_test(point, geometry).is_some() {
+            return None;
+        }
+        Some(self.clear_selection())
+    }
+
+    pub(crate) fn update_rubber_band_selection(
+        &mut self,
+        origin: ViewPoint,
+        current: ViewPoint,
+        geometry: PaneGeometry,
+    ) -> bool {
+        let band = clipped_band_rect(origin, current, geometry.content);
+        let mut selected_entries = BTreeSet::new();
+        if band.width >= 1.0 && band.height >= 1.0 {
+            match self.view_mode {
+                ViewMode::Icons => {
+                    let layout = self.icons_layout(geometry.content);
+                    for item in layout.visible_items() {
+                        let Some(index) = self.entry_index_for_visible(item.model_index) else {
+                            continue;
+                        };
+                        let rect = self.to_screen_rect(item.visual_rect, geometry.content);
+                        if rects_intersect(rect, band) {
+                            selected_entries.insert(index);
+                        }
+                    }
+                }
+                ViewMode::Compact => {
+                    let layout = self.compact_layout(geometry.content);
+                    for item in layout.visible_items() {
+                        let Some(index) = self.entry_index_for_visible(item.model_index) else {
+                            continue;
+                        };
+                        let rect = self.to_screen_rect(item.visual_rect, geometry.content);
+                        if rects_intersect(rect, band) {
+                            selected_entries.insert(index);
+                        }
+                    }
+                }
+                ViewMode::Details => {
+                    let first = ((self.scroll_y - DETAILS_HEADER_HEIGHT).max(0.0)
+                        / DETAILS_ROW_HEIGHT)
+                        .floor() as usize;
+                    let rows = ((geometry.content.height + DETAILS_ROW_HEIGHT - 1.0)
+                        / DETAILS_ROW_HEIGHT) as usize
+                        + 2;
+                    for visible_index in first..(first + rows).min(self.visible_indices.len()) {
+                        let Some(index) = self.entry_index_for_visible(visible_index) else {
+                            continue;
+                        };
+                        let y = geometry.content.y
+                            + DETAILS_HEADER_HEIGHT
+                            + visible_index as f32 * DETAILS_ROW_HEIGHT
+                            - self.scroll_y;
+                        let rect = ViewRect {
+                            x: geometry.content.x,
+                            y,
+                            width: geometry.content.width - CONTENT_SCROLLBAR_RESERVED_EXTENT,
+                            height: DETAILS_ROW_HEIGHT,
+                        };
+                        if rects_intersect(rect, band) {
+                            selected_entries.insert(index);
+                        }
+                    }
+                }
+            }
+        }
+        self.set_selection_set(selected_entries)
+    }
+
+    pub(crate) fn select_all(&mut self) -> bool {
+        self.set_selection_set(self.visible_indices.iter().copied().collect())
+    }
+
     pub(crate) fn move_selection(
         &mut self,
         movement: PaneSelectionMove,
         geometry: PaneGeometry,
     ) -> bool {
         let Some(target) = self.selection_target(movement, geometry.content) else {
-            let changed = self.selected.is_some();
-            self.selected = None;
-            return changed;
+            return self.clear_selection();
         };
         let Some(entry_index) = self.visible_indices.get(target).copied() else {
             return false;
@@ -218,14 +300,15 @@ impl SctkPane {
             self.ensure_entry_visible(entry_index, geometry.content);
             return false;
         }
-        self.selected = Some(entry_index);
+        self.replace_selection(Some(entry_index));
         self.ensure_entry_visible(entry_index, geometry.content);
         true
     }
 
     pub(crate) fn clear_selection(&mut self) -> bool {
-        let changed = self.selected.is_some();
+        let changed = self.selected.is_some() || !self.selected_entries.is_empty();
         self.selected = None;
+        self.selected_entries.clear();
         changed
     }
 
@@ -252,10 +335,27 @@ impl SctkPane {
             .selected
             .and_then(|index| self.entries.get(index))
             .map(|entry| entry.name.clone());
+        let selected_names = self
+            .selected_entries
+            .iter()
+            .filter_map(|index| self.entries.get(*index))
+            .map(|entry| entry.name.to_string())
+            .collect::<BTreeSet<_>>();
         let entries = read_entries_sync(&self.path)?;
         self.entries = entries;
         self.dir_count = self.entries.iter().filter(|entry| entry.is_dir).count();
         self.rebuild_visible_indices();
+        let selected_entries = self
+            .entries
+            .iter()
+            .enumerate()
+            .filter_map(|(index, entry)| {
+                selected_names
+                    .contains(entry.name.as_ref())
+                    .then_some(index)
+            })
+            .collect::<BTreeSet<_>>();
+        self.set_selection_set(selected_entries);
         self.selected = selected_name
             .as_deref()
             .and_then(|name| {
@@ -263,7 +363,8 @@ impl SctkPane {
                     .iter()
                     .position(|entry| entry.name.as_ref() == name)
             })
-            .filter(|index| self.visible_indices.contains(index));
+            .filter(|index| self.selected_entries.contains(index))
+            .or_else(|| self.selected_entries.iter().next().copied());
         self.hover = None;
         Ok(true)
     }
@@ -525,7 +626,7 @@ impl SctkPane {
         let visual = self.to_screen_rect(item.visual_rect, content);
         let icon = self.to_screen_rect(item.icon_rect, content);
         let text_rect = self.to_screen_rect(item.text_rect, content);
-        let selected = self.selected == Some(entry_index);
+        let selected = self.selected_entries.contains(&entry_index);
         let hovered = self.hover == Some(entry_index);
         if selected || hovered {
             batch.push_clipped_rounded_rect(
@@ -596,12 +697,13 @@ impl SctkPane {
                 continue;
             }
             visible += 1;
-            if self.selected == Some(index) || self.hover == Some(index) {
+            let selected = self.selected_entries.contains(&index);
+            if selected || self.hover == Some(index) {
                 batch.push_clipped_rounded_rect(
                     inset(row_rect, 2.0),
                     content,
                     6.0,
-                    if self.selected == Some(index) {
+                    if selected {
                         [0.23, 0.50, 0.84, 0.92]
                     } else {
                         [0.74, 0.82, 0.90, 0.72]
@@ -629,7 +731,7 @@ impl SctkPane {
                 content,
                 TEXT_FONT_SIZE,
                 TEXT_LINE_HEIGHT,
-                item_text_color(entry, self.selected == Some(index), self.view_mode),
+                item_text_color(entry, selected, self.view_mode),
             );
             let metadata_y = row_rect.y + (row_rect.height - TEXT_LINE_HEIGHT) / 2.0;
             text.push_no_wrap(
@@ -808,10 +910,12 @@ impl SctkPane {
     }
 
     fn status_text(&self, visible_items: usize) -> String {
-        let selected = self
-            .selected
-            .map(|_| ", 1 selected".to_string())
-            .unwrap_or_default();
+        let selected_count = self.selected_count();
+        let selected = if selected_count == 0 {
+            String::new()
+        } else {
+            format!(", {selected_count} selected")
+        };
         let visible_dirs = self
             .visible_indices
             .iter()
@@ -959,6 +1063,7 @@ impl SctkPane {
         self.rebuild_visible_indices();
         self.hover = None;
         self.selected = None;
+        self.selected_entries.clear();
         self.scroll_x = 0.0;
         self.scroll_y = 0.0;
         Ok(())
@@ -978,11 +1083,14 @@ impl SctkPane {
     }
 
     fn prune_hidden_state(&mut self) {
+        let visible_indices = &self.visible_indices;
+        self.selected_entries
+            .retain(|index| visible_indices.contains(index));
         if self
             .selected
-            .is_some_and(|index| !self.visible_indices.contains(&index))
+            .is_some_and(|index| !self.selected_entries.contains(&index))
         {
-            self.selected = None;
+            self.selected = self.selected_entries.iter().next().copied();
         }
         if self
             .hover
@@ -990,6 +1098,23 @@ impl SctkPane {
         {
             self.hover = None;
         }
+    }
+
+    fn replace_selection(&mut self, selected: Option<usize>) -> bool {
+        self.set_selection_set(selected.into_iter().collect())
+    }
+
+    fn set_selection_set(&mut self, mut selected_entries: BTreeSet<usize>) -> bool {
+        let visible_indices = &self.visible_indices;
+        selected_entries.retain(|index| visible_indices.contains(index));
+        let selected = self
+            .selected
+            .filter(|index| selected_entries.contains(index))
+            .or_else(|| selected_entries.iter().next().copied());
+        let changed = self.selected != selected || self.selected_entries != selected_entries;
+        self.selected = selected;
+        self.selected_entries = selected_entries;
+        changed
     }
 
     fn entry_index_for_visible(&self, visible_index: usize) -> Option<usize> {
@@ -1122,6 +1247,7 @@ pub(crate) struct PaneGeometry {
 pub(crate) struct PaneRenderStats {
     pub(crate) visible_items: usize,
     pub(crate) selected: Option<usize>,
+    pub(crate) selected_count: usize,
     pub(crate) hover: Option<usize>,
     pub(crate) scroll_x: f32,
     pub(crate) scroll_y: f32,
@@ -1234,6 +1360,23 @@ fn push_focus_ring(batch: &mut QuadBatch, pane: ViewRect, clip: ViewRect, width:
     );
 }
 
+fn clipped_band_rect(origin: ViewPoint, current: ViewPoint, clip: ViewRect) -> ViewRect {
+    let left = origin.x.min(current.x).clamp(clip.x, clip.right());
+    let right = origin.x.max(current.x).clamp(clip.x, clip.right());
+    let top = origin.y.min(current.y).clamp(clip.y, clip.bottom());
+    let bottom = origin.y.max(current.y).clamp(clip.y, clip.bottom());
+    ViewRect {
+        x: left,
+        y: top,
+        width: (right - left).max(0.0),
+        height: (bottom - top).max(0.0),
+    }
+}
+
+fn rects_intersect(a: ViewRect, b: ViewRect) -> bool {
+    a.width > 0.0 && a.height > 0.0 && b.width > 0.0 && b.height > 0.0 && a.intersects(b)
+}
+
 fn item_text_color(entry: &Entry, selected: bool, view_mode: ViewMode) -> [u8; 4] {
     if selected {
         TEXT_SELECTED
@@ -1316,11 +1459,12 @@ mod tests {
         assert!(pane.show_hidden());
         assert_eq!(pane.visible_entry_count(), 3);
 
-        pane.selected = Some(1);
+        pane.replace_selection(Some(1));
         assert!(pane.toggle_show_hidden(geometry()));
         assert!(!pane.show_hidden());
         assert_eq!(pane.visible_entry_count(), 2);
         assert_eq!(pane.selected(), None);
+        assert_eq!(pane.selected_count(), 0);
     }
 
     #[test]
@@ -1339,6 +1483,79 @@ mod tests {
         assert_eq!(pane.selected(), Some(0));
         assert!(pane.move_selection(PaneSelectionMove::Down, geometry()));
         assert_eq!(pane.selected(), Some(2));
+    }
+
+    #[test]
+    fn select_all_selects_visible_entries_only() {
+        let mut pane = SctkPane::from_entries(
+            PathBuf::from("/tmp"),
+            ViewMode::Details,
+            vec![
+                entry("alpha", false),
+                entry(".secret", false),
+                entry("beta", false),
+            ],
+        );
+
+        assert!(pane.select_all());
+        assert_eq!(pane.selected(), Some(0));
+        assert_eq!(pane.selected_count(), 2);
+        assert!(pane.selected_entries.contains(&0));
+        assert!(!pane.selected_entries.contains(&1));
+        assert!(pane.selected_entries.contains(&2));
+    }
+
+    #[test]
+    fn hiding_entries_prunes_selection_set() {
+        let mut pane = SctkPane::from_entries(
+            PathBuf::from("/tmp"),
+            ViewMode::Details,
+            vec![
+                entry("alpha", false),
+                entry(".secret", false),
+                entry("beta", false),
+            ],
+        );
+
+        assert!(pane.toggle_show_hidden(geometry()));
+        assert!(pane.select_all());
+        assert_eq!(pane.selected_count(), 3);
+        assert!(pane.toggle_show_hidden(geometry()));
+        assert_eq!(pane.selected_count(), 2);
+        assert!(!pane.selected_entries.contains(&1));
+    }
+
+    #[test]
+    fn rubber_band_selects_projected_details_rows() {
+        let mut pane = SctkPane::from_entries(
+            PathBuf::from("/tmp"),
+            ViewMode::Details,
+            vec![
+                entry("alpha", false),
+                entry("beta", false),
+                entry("gamma", false),
+                entry("delta", false),
+            ],
+        );
+        let geometry = geometry();
+        let row_top = geometry.content.y + DETAILS_HEADER_HEIGHT;
+
+        assert!(pane.update_rubber_band_selection(
+            ViewPoint {
+                x: geometry.content.x + 8.0,
+                y: row_top + 1.0,
+            },
+            ViewPoint {
+                x: geometry.content.x + 240.0,
+                y: row_top + DETAILS_ROW_HEIGHT * 2.0 - 1.0,
+            },
+            geometry,
+        ));
+        assert_eq!(pane.selected_count(), 2);
+        assert_eq!(pane.selected(), Some(0));
+        assert!(pane.selected_entries.contains(&0));
+        assert!(pane.selected_entries.contains(&1));
+        assert!(!pane.selected_entries.contains(&2));
     }
 
     #[test]

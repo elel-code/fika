@@ -202,7 +202,7 @@ impl WgpuRenderer {
         frame.present();
         self.frame_count = self.frame_count.wrapping_add(1);
         eprintln!(
-            "[fika-sctk] frame={} reason={} scale={:.2} quads={} visible={} selected={} hover={} split_pane={} active_pane={} text_labels={} text_quads={} text_atlas={}x{}:{}b scroll_x={:.1} scroll_y={:.1}",
+            "[fika-sctk] frame={} reason={} scale={:.2} quads={} visible={} selected={} selected_count={} hover={} split_pane={} active_pane={} text_labels={} text_quads={} text_atlas={}x{}:{}b scroll_x={:.1} scroll_y={:.1}",
             self.frame_count,
             reason,
             frame_scene.scale,
@@ -212,6 +212,7 @@ impl WgpuRenderer {
                 .selected
                 .map(|index| index.to_string())
                 .unwrap_or_else(|| "-1".to_string()),
+            frame_scene.selected_count,
             frame_scene
                 .hover
                 .map(|index| index.to_string())

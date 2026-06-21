@@ -124,8 +124,11 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
   keyboard navigation、目录激活和 reload。分屏命令也已进入 scene 层：`F4` 或
   `Ctrl/Meta+Shift+S` 会打开/关闭复用同一 `SctkPane` 的 split pane。active pane
   已绘制轻量焦点标记，content scrollbar thumb/track drag 已走 scene pointer capture，
-  release/leave 会清理 capture，为后续 rubber-band 和 DnD 共享同一捕获边界。下一步继续补
-  toolbar split UI、rubber-band、filter/location edit 和 file-operation routing。
+  release/leave 会清理 capture。pane selection 已从单选焦点扩展为可复用的
+  `selected_entries` 集合；`Ctrl/Meta+A` 只选择 active pane 的可见条目，空白 primary
+  press 会进入 rubber-band pointer capture，并在 Icons/Compact/Details 当前投影上更新
+  多选集合和半透明 overlay，为后续 DnD source/export 复用同一 selection 边界。下一步继续补
+  toolbar split UI、filter/location edit、file-operation routing 和 DnD data-device。
 - [ ] Phase 4：迁入资产和系统集成热路径。MIME/theme icon atlas、Dolphin-style
   visible-first icon resolve、thumbnail worker/read-ahead、device/Places 动态数据、
   context menu、Open With、service menu、clipboard、Trash actions、file operations、

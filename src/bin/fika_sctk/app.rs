@@ -375,6 +375,9 @@ fn key_command(keysym: Keysym, modifiers: Modifiers) -> Option<SceneCommand> {
     if shortcut && (keysym == Keysym::h || keysym == Keysym::H) {
         return Some(SceneCommand::ToggleHidden);
     }
+    if shortcut && (keysym == Keysym::a || keysym == Keysym::A) {
+        return Some(SceneCommand::SelectAll);
+    }
     if keysym == Keysym::F5 || (shortcut && (keysym == Keysym::r || keysym == Keysym::R)) {
         return Some(SceneCommand::Reload);
     }
@@ -428,6 +431,7 @@ mod tests {
             key_command(Keysym::h, ctrl),
             Some(SceneCommand::ToggleHidden)
         );
+        assert_eq!(key_command(Keysym::a, ctrl), Some(SceneCommand::SelectAll));
         assert_eq!(
             key_command(Keysym::F5, Modifiers::default()),
             Some(SceneCommand::Reload)

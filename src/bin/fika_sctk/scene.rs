@@ -132,6 +132,7 @@ impl SctkScene {
             PaneSlot::Primary => primary_stats,
             PaneSlot::Split => split_stats.unwrap_or(primary_stats),
         };
+        self.push_pointer_capture_overlay(&mut batch, geometry, window, width, height);
         let visible_items = primary_stats.visible_items
             + split_stats
                 .map(|stats| stats.visible_items)
@@ -144,6 +145,7 @@ impl SctkScene {
             quads,
             visible_items,
             selected: active_stats.selected,
+            selected_count: active_stats.selected_count,
             hover: active_stats.hover,
             scroll_x: active_stats.scroll_x,
             scroll_y: active_stats.scroll_y,
@@ -155,8 +157,24 @@ impl SctkScene {
 
     pub(crate) fn set_pointer(&mut self, point: ViewPoint, width: u32, height: u32) -> bool {
         let geometry = self.geometry(width, height);
-        if let Some(PointerCapture::Scrollbar { pane, drag }) = self.pointer_capture {
-            return self.drag_scrollbar(pane, point, geometry, drag);
+        if let Some(capture) = self.pointer_capture {
+            return match capture {
+                PointerCapture::Scrollbar { pane, drag } => {
+                    self.drag_scrollbar(pane, point, geometry, drag)
+                }
+                PointerCapture::RubberBand {
+                    pane,
+                    origin,
+                    current,
+                } => {
+                    self.pointer_capture = Some(PointerCapture::RubberBand {
+                        pane,
+                        origin,
+                        current: point,
+                    });
+                    self.update_rubber_band(pane, origin, point, geometry) || current != point
+                }
+            };
         }
         match geometry.pane_at(point) {
             Some(PaneSlot::Primary) => {
@@ -195,6 +213,14 @@ impl SctkScene {
                     });
                     return changed | (self.active != previous_active);
                 }
+                if let Some(changed) = self.primary.begin_rubber_band(point, geometry.primary) {
+                    self.pointer_capture = Some(PointerCapture::RubberBand {
+                        pane: PaneSlot::Primary,
+                        origin: point,
+                        current: point,
+                    });
+                    return changed | (self.active != previous_active);
+                }
                 self.primary.press_primary(point, geometry.primary)
                     | (self.active != previous_active)
             }
@@ -207,6 +233,15 @@ impl SctkScene {
                         self.pointer_capture = Some(PointerCapture::Scrollbar {
                             pane: PaneSlot::Split,
                             drag,
+                        });
+                        changed
+                    } else if let Some(changed) =
+                        split.begin_rubber_band(point, geometry.split.unwrap())
+                    {
+                        self.pointer_capture = Some(PointerCapture::RubberBand {
+                            pane: PaneSlot::Split,
+                            origin: point,
+                            current: point,
                         });
                         changed
                     } else {
@@ -404,6 +439,36 @@ impl SctkScene {
         }
     }
 
+    fn push_pointer_capture_overlay(
+        &self,
+        batch: &mut QuadBatch,
+        geometry: SceneGeometry,
+        window: ViewRect,
+        width: u32,
+        height: u32,
+    ) {
+        let Some(PointerCapture::RubberBand {
+            pane,
+            origin,
+            current,
+        }) = self.pointer_capture
+        else {
+            return;
+        };
+        let Some(pane_geometry) = geometry.pane_geometry(pane) else {
+            return;
+        };
+        push_rubber_band(
+            batch,
+            origin,
+            current,
+            pane_geometry.content,
+            window,
+            width,
+            height,
+        );
+    }
+
     fn geometry(&self, width: u32, height: u32) -> SceneGeometry {
         let window_width = width as f32;
         let window_height = height as f32;
@@ -478,6 +543,29 @@ impl SctkScene {
         }
     }
 
+    fn update_rubber_band(
+        &mut self,
+        pane: PaneSlot,
+        origin: ViewPoint,
+        current: ViewPoint,
+        geometry: SceneGeometry,
+    ) -> bool {
+        match pane {
+            PaneSlot::Primary => {
+                self.primary
+                    .update_rubber_band_selection(origin, current, geometry.primary)
+            }
+            PaneSlot::Split => {
+                self.split
+                    .as_mut()
+                    .zip(geometry.split)
+                    .is_some_and(|(split, geometry)| {
+                        split.update_rubber_band_selection(origin, current, geometry)
+                    })
+            }
+        }
+    }
+
     fn toggle_split(&mut self) -> Result<bool, Box<dyn Error>> {
         self.pointer_capture = None;
         if self.split.is_some() {
@@ -514,6 +602,7 @@ impl SctkScene {
             SceneCommand::ActivateSelection => pane.activate_selected(),
             SceneCommand::Reload => pane.reload(),
             SceneCommand::ClearSelection => Ok(pane.clear_selection()),
+            SceneCommand::SelectAll => Ok(pane.select_all()),
             SceneCommand::ToggleSplit => Ok(false),
         }
     }
@@ -528,6 +617,7 @@ pub(crate) enum SceneCommand {
     ActivateSelection,
     Reload,
     ClearSelection,
+    SelectAll,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -535,6 +625,11 @@ enum PointerCapture {
     Scrollbar {
         pane: PaneSlot,
         drag: PaneScrollbarDrag,
+    },
+    RubberBand {
+        pane: PaneSlot,
+        origin: ViewPoint,
+        current: ViewPoint,
     },
 }
 
@@ -559,6 +654,13 @@ impl SceneGeometry {
             None
         }
     }
+
+    fn pane_geometry(self, pane: PaneSlot) -> Option<PaneGeometry> {
+        match pane {
+            PaneSlot::Primary => Some(self.primary),
+            PaneSlot::Split => self.split,
+        }
+    }
 }
 
 fn pane_geometry(pane: ViewRect) -> PaneGeometry {
@@ -574,6 +676,75 @@ fn pane_geometry(pane: ViewRect) -> PaneGeometry {
                 .max(1.0),
         },
     }
+}
+
+fn push_rubber_band(
+    batch: &mut QuadBatch,
+    origin: ViewPoint,
+    current: ViewPoint,
+    clip: ViewRect,
+    window: ViewRect,
+    width: u32,
+    height: u32,
+) {
+    let left = origin.x.min(current.x).clamp(clip.x, clip.right());
+    let right = origin.x.max(current.x).clamp(clip.x, clip.right());
+    let top = origin.y.min(current.y).clamp(clip.y, clip.bottom());
+    let bottom = origin.y.max(current.y).clamp(clip.y, clip.bottom());
+    let rect = ViewRect {
+        x: left,
+        y: top,
+        width: right - left,
+        height: bottom - top,
+    };
+    if rect.width < 1.0 || rect.height < 1.0 {
+        return;
+    }
+    batch.push_clipped_rounded_rect(rect, clip, 3.0, [0.22, 0.49, 0.82, 0.14], width, height);
+    let border = [0.22, 0.49, 0.82, 0.62];
+    let thickness = 1.0;
+    batch.push_clipped_rect(
+        ViewRect {
+            height: thickness,
+            ..rect
+        },
+        window,
+        border,
+        width,
+        height,
+    );
+    batch.push_clipped_rect(
+        ViewRect {
+            y: rect.bottom() - thickness,
+            height: thickness,
+            ..rect
+        },
+        window,
+        border,
+        width,
+        height,
+    );
+    batch.push_clipped_rect(
+        ViewRect {
+            width: thickness,
+            ..rect
+        },
+        window,
+        border,
+        width,
+        height,
+    );
+    batch.push_clipped_rect(
+        ViewRect {
+            x: rect.right() - thickness,
+            width: thickness,
+            ..rect
+        },
+        window,
+        border,
+        width,
+        height,
+    );
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -597,6 +768,7 @@ pub(crate) struct SceneFrame {
     pub(crate) quads: usize,
     pub(crate) visible_items: usize,
     pub(crate) selected: Option<usize>,
+    pub(crate) selected_count: usize,
     pub(crate) hover: Option<usize>,
     pub(crate) scroll_x: f32,
     pub(crate) scroll_y: f32,
@@ -611,7 +783,7 @@ mod tests {
 
     use fika_core::{Entry, EntryData};
 
-    use crate::fika_sctk::metrics::SCROLL_LINE_PX;
+    use crate::fika_sctk::metrics::{DETAILS_HEADER_HEIGHT, DETAILS_ROW_HEIGHT, SCROLL_LINE_PX};
 
     use super::*;
 
@@ -813,6 +985,34 @@ mod tests {
     }
 
     #[test]
+    fn select_all_command_routes_to_active_pane_only() {
+        let mut scene = split_scene(ViewMode::Icons, 5);
+        let geometry = scene.geometry(1000, 640);
+        let split_geometry = geometry.split.expect("split geometry");
+        let item = scene
+            .split
+            .as_ref()
+            .unwrap()
+            .icons_layout(split_geometry.content)
+            .item(0)
+            .unwrap();
+        let point = ViewPoint {
+            x: split_geometry.content.x + item.visual_rect.x + 4.0,
+            y: split_geometry.content.y + item.visual_rect.y + 4.0,
+        };
+        scene.press_primary(point, 1000, 640);
+
+        assert_eq!(scene.active_pane_name(), "split");
+        assert!(
+            scene
+                .handle_command(SceneCommand::SelectAll, 1000, 640)
+                .unwrap()
+        );
+        assert_eq!(scene.primary.selected_count(), 0);
+        assert_eq!(scene.split.as_ref().unwrap().selected_count(), 5);
+    }
+
+    #[test]
     fn toggle_split_command_opens_and_closes_reusable_pane() {
         let mut scene = scene(ViewMode::Icons, 5);
 
@@ -859,6 +1059,34 @@ mod tests {
         assert!(scene.set_pointer(drag, 900, 480));
         let frame = scene.render_frame(900, 480, 1.0);
         assert!(frame.scroll_y > 0.0);
+        assert!(scene.release_primary());
+        assert!(scene.pointer_capture.is_none());
+    }
+
+    #[test]
+    fn rubber_band_capture_selects_until_release() {
+        let mut scene = scene(ViewMode::Details, 20);
+        let geometry = scene.geometry(900, 480).primary;
+        let origin = ViewPoint {
+            x: geometry.content.x + 8.0,
+            y: geometry.content.y + 5.0,
+        };
+
+        scene.press_primary(origin, 900, 480);
+        assert!(matches!(
+            scene.pointer_capture,
+            Some(PointerCapture::RubberBand {
+                pane: PaneSlot::Primary,
+                ..
+            })
+        ));
+
+        let current = ViewPoint {
+            x: geometry.content.x + 260.0,
+            y: geometry.content.y + DETAILS_HEADER_HEIGHT + DETAILS_ROW_HEIGHT * 3.0,
+        };
+        assert!(scene.set_pointer(current, 900, 480));
+        assert!(scene.primary.selected_count() >= 3);
         assert!(scene.release_primary());
         assert!(scene.pointer_capture.is_none());
     }

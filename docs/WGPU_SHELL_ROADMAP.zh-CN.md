@@ -111,8 +111,12 @@ retained scene/renderer 行为。
   keyboard navigation、目录激活和 reload path。`F4` 或 `Ctrl/Meta+Shift+S`
   会从 scene 层打开/关闭 split view，并复用同一个 `SctkPane` 组件作为新 pane。
   active pane 现在会绘制轻量焦点标记，content scrollbar thumb/track drag 已通过
-  scene-level pointer capture 路由，release/leave 会清理 capture；这也是后续
-  rubber-band 和 DnD 要复用的捕获边界。SCTK renderer 会上传并绘制
+  scene-level pointer capture 路由，release/leave 会清理 capture。pane selection
+  现在除了焦点/激活项外，还有可复用的 `selected_entries` 集合：`Ctrl/Meta+A`
+  只选择 active pane 的可见条目，空白 primary press 会进入 rubber-band pointer
+  capture，Icons/Compact/Details 会按当前 retained 投影更新多选集合，并绘制裁剪后的
+  半透明 overlay。这也是后续 DnD source/export 要复用的 selection/capture 边界。
+  SCTK renderer 会上传并绘制
   这些 quads；Wayland pointer handling 已把 hover、左键 selection 和 wheel scroll
   路由到同一 retained pane hit-test path。真实文本也已进入 SCTK：
   `src/bin/fika_sctk/text.rs` 使用 `cosmic-text` shape/rasterize 地址栏、Places、
