@@ -15,6 +15,8 @@ Fika 专用的 `winit + wgpu` shell，也就是 `fika-wgpu`；之前的 UI runti
 - `winit` 使用官方 upstream `rust-windowing/winit` 的 `master` 分支。
 - `wgpu` 使用官方 crates.io 版本。
 - `fika-core` 保持 UI-neutral，负责文件系统和领域行为。
+- 剪贴板集成在可用时使用 `wl-copy`/`wl-paste` 或 `xclip` 这些 Linux 工具；
+  Fika 不再携带直接 Smithay clipboard runtime 依赖。
 - Portal 与 privileged helper 继续作为独立集成二进制保留。
 
 ## 源码布局

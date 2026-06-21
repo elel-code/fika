@@ -15,6 +15,9 @@ been removed from the source tree.
 - `winit` comes from official upstream `rust-windowing/winit` `master`.
 - `wgpu` comes from the official crates.io release.
 - `fika-core` stays UI-neutral and owns filesystem/domain behavior.
+- Clipboard integration uses `wl-copy`/`wl-paste` or `xclip` when those Linux
+  tools are available; Fika does not carry a direct Smithay clipboard runtime
+  dependency.
 - Portal and privileged-helper binaries remain separate integration pieces.
 
 ## Source Layout

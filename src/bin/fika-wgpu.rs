@@ -223,8 +223,7 @@ struct FikaWgpuApp {
     scene: ShellScene,
     mime_applications: MimeApplicationCache,
     modifiers: Modifiers,
-    // Drop order matters: renderer and clipboard borrow display/window handles,
-    // so they must be dropped before the window.
+    // Drop order matters: renderer borrows display/window handles.
     renderer: Option<WgpuState>,
     clipboard: Option<ShellClipboard>,
     window: Option<Box<dyn Window>>,
@@ -990,8 +989,14 @@ impl FikaWgpuApp {
                 match self.scene.context_target_file_clipboard_request(action) {
                     Ok(Some(request)) => {
                         if let Some(clipboard) = self.clipboard.as_ref() {
-                            clipboard.store_text(&request.text);
-                            self.scene.record_file_clipboard_export(&request);
+                            match clipboard.store_text(&request.text) {
+                                Ok(()) => self.scene.record_file_clipboard_export(&request),
+                                Err(error) => eprintln!(
+                                    "[fika-wgpu] clipboard-export-error role={} paths={} error={error}",
+                                    file_clipboard_role_as_str(request.role),
+                                    request.paths.len()
+                                ),
+                            }
                         } else {
                             eprintln!(
                                 "[fika-wgpu] clipboard-export-error role={} paths={} error=clipboard-unavailable",
@@ -1017,8 +1022,13 @@ impl FikaWgpuApp {
                 match self.scene.context_target_copy_location_request() {
                     Some(request) => {
                         if let Some(clipboard) = self.clipboard.as_ref() {
-                            clipboard.store_text(&request.text);
-                            self.scene.record_copy_location(&request);
+                            match clipboard.store_text(&request.text) {
+                                Ok(()) => self.scene.record_copy_location(&request),
+                                Err(error) => eprintln!(
+                                    "[fika-wgpu] copy-location-error path={} error={error}",
+                                    request.path.display()
+                                ),
+                            }
                         } else {
                             eprintln!(
                                 "[fika-wgpu] copy-location-error path={} error=clipboard-unavailable",
@@ -1287,7 +1297,9 @@ impl FikaWgpuApp {
         match self.scene.paste_clipboard_text_from_context(&text, size) {
             Ok(result) if result.changed() => {
                 if result.clear_clipboard && result.failure_count == 0 {
-                    clipboard.store_text("");
+                    if let Err(error) = clipboard.store_text("") {
+                        eprintln!("[fika-wgpu] clipboard-clear-error error={error}");
+                    }
                 }
                 self.present_scene_change(event_loop, "paste");
             }
