@@ -113,7 +113,9 @@ Current checkpoint:
   calloop `WaylandSource`, logs entry counts, and clears configured frames.
   This is the target host for the retained scene. Its entry point is now only a
   thin binary wrapper; startup options, app/calloop orchestration, wgpu surface
-  rendering, and Wayland handlers live under `src/bin/fika_sctk/`.
+  rendering, the initial directory scene snapshot, and Wayland handlers live
+  under `src/bin/fika_sctk/`. `SctkScene` is the current replacement boundary
+  for moving the winit-backed `fika-wgpu` retained scene into SCTK/calloop.
 - `src/bin/fika-wgpu.rs` exists as the older winit-backed renderer spike.
 - It accepts an optional path argument and defaults to the current directory.
 - It reads directory entries through `fika_core::read_entries_sync`.

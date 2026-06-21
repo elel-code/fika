@@ -3,7 +3,6 @@ use std::num::NonZeroU32;
 
 use calloop::EventLoop;
 use calloop_wayland_source::WaylandSource;
-use fika_core::read_entries_sync;
 use smithay_client_toolkit::{
     compositor::CompositorState,
     output::OutputState,
@@ -22,12 +21,14 @@ use wayland_client::globals::registry_queue_init;
 
 use super::options::StartupOptions;
 use super::renderer::WgpuRenderer;
+use super::scene::SctkScene;
 
 const DEFAULT_WIDTH: u32 = 1100;
 const DEFAULT_HEIGHT: u32 = 720;
 
 pub(crate) fn run(options: StartupOptions) -> Result<(), Box<dyn Error>> {
-    log_directory_snapshot(&options)?;
+    let scene = SctkScene::load(options.path)?;
+    scene.log_startup();
 
     let conn = Connection::connect_to_env()?;
     let (globals, event_queue) = registry_queue_init(&conn)?;
@@ -56,6 +57,7 @@ pub(crate) fn run(options: StartupOptions) -> Result<(), Box<dyn Error>> {
         // underlying Wayland window.
         renderer,
         window,
+        scene,
     };
 
     let mut event_loop = EventLoop::<FikaSctkApp>::try_new()?;
@@ -64,19 +66,6 @@ pub(crate) fn run(options: StartupOptions) -> Result<(), Box<dyn Error>> {
         event_loop.dispatch(None, &mut app)?;
     }
 
-    Ok(())
-}
-
-fn log_directory_snapshot(options: &StartupOptions) -> Result<(), Box<dyn Error>> {
-    let entries = read_entries_sync(&options.path)?;
-    let dir_count = entries.iter().filter(|entry| entry.is_dir).count();
-    eprintln!(
-        "[fika-sctk] path={} entries={} dirs={} files={}",
-        options.path.display(),
-        entries.len(),
-        dir_count,
-        entries.len().saturating_sub(dir_count)
-    );
     Ok(())
 }
 
@@ -91,6 +80,7 @@ pub(crate) struct FikaSctkApp {
     renderer: WgpuRenderer,
     #[allow(dead_code)]
     window: Window,
+    scene: SctkScene,
 }
 
 impl FikaSctkApp {
@@ -105,8 +95,14 @@ impl FikaSctkApp {
         let config = self.renderer.configure_surface(self.width, self.height);
         if !self.ready_logged {
             eprintln!(
-                "[fika-sctk] shell-ready size={}x{} format={:?}",
-                self.width, self.height, config.format
+                "[fika-sctk] shell-ready size={}x{} format={:?} path={} entries={} dirs={} files={}",
+                self.width,
+                self.height,
+                config.format,
+                self.scene.path().display(),
+                self.scene.entry_count(),
+                self.scene.dir_count(),
+                self.scene.file_count()
             );
             self.ready_logged = true;
         } else {

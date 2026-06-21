@@ -99,8 +99,9 @@ Shell 拥有：
   建立 `wgpu` surface，通过 `fika_core::read_entries_sync` 读取目标目录，输出 entry
   计数，把 Wayland event queue 接入 calloop `WaylandSource`，并在 configure 后清屏绘制。
   这是 retained scene 的目标承载层。入口现在只是很薄的 binary wrapper；启动参数、
-  app/calloop 编排、wgpu surface rendering 和 Wayland handlers 已拆到
-  `src/bin/fika_sctk/`。
+  app/calloop 编排、wgpu surface rendering、初始目录 scene snapshot 和 Wayland handlers
+  已拆到 `src/bin/fika_sctk/`。`SctkScene` 是当前把 winit-backed `fika-wgpu`
+  retained scene 迁入 SCTK/calloop 的替换边界。
 - `src/bin/fika-wgpu.rs` 是较早的 winit-backed renderer spike。
 - 接受可选 path 参数，默认使用当前目录。
 - 通过 `fika_core::read_entries_sync` 读取目录 entries。
