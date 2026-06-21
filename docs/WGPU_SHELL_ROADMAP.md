@@ -410,17 +410,22 @@ separators that blend into the shell background. The Places toolbar toggle now
 really hides/restores the sidebar, hidden Places releases pane width, and the
 Places splitter can be dragged to a clamped retained width. The Places splitter
 and split-pane divider both show `ColResize` cursor feedback while hovered or
-dragged. Empty Trash no longer paints the blue status dot. The split pane is intentionally
-still a minimal visible skeleton: focus, split-pane scrollbars, real DnD, and
-file operations still target the primary pane, but its divider now supports
-retained drag-resize. Multi-pane work now projects both the primary and
-right-hand pane through `ShellPaneView`, shares `pane_layout(...)` for Icons,
-Compact, and Details, shares pane geometry/item hit-testing, and has started
-using `ShellPaneGeometry` in split-pane paint. The next step must continue that
-extraction through pane paint and event routing instead of adding more
+dragged, and the location bar now shows a text cursor on hover. The Places
+splitter hit target is wider toward the Places side while the Places scrollbar
+keeps priority where the two overlap. Empty Trash no longer paints the blue
+status dot. The split pane is intentionally still a minimal visible skeleton:
+focus, split-pane scrollbars, real DnD, and file operations still target the
+primary pane, but its divider now supports retained drag-resize. Multi-pane work
+now projects both the primary and right-hand pane through `ShellPaneView`, shares
+`pane_layout(...)` for Icons, Compact, and Details, shares pane geometry/item
+hit-testing, and has started using `ShellPaneProjection` for primary/split item
+paint plus shared scroll metrics. The next step must continue that extraction
+through pane focus, scrollbar, and file-operation routing instead of adding more
 split-only paths. The first DnD preparation layer is in place through
 `ShellDropTarget` lookup for primary/split pane items, pane blanks, place rows,
-and Places blanks; real Wayland DnD hover/drop/export wiring remains pending.
+and Places blanks; retained DnD hover state/telemetry now exists, but regular
+pointer movement does not run extra drop hit-testing until real Wayland DnD
+events are wired. Real Wayland DnD hover/drop/export wiring remains pending.
 Richer Places actions/devices/DnD, richer Trash conflict handling, undo, richer properties, full inline
 rename, full Create New submenus/templates, and Open With default-app selection
 remain pending.
@@ -442,9 +447,14 @@ Acceptance:
 
 - GPUI stays available as a fallback during the promotion window.
 - `/etc`, `~/Downloads`, large local directories, mixed thumbnail directories,
-  removable devices, trash, and network roots have smoke coverage.
+  removable devices, trash, network roots, split pane, hidden-file toggling,
+  zoom, context menus, location editing, Places resize/hide, and DnD
+  hover/drop/export paths have smoke coverage.
+- Binary naming, desktop file routing, CLI defaults, and initial Compact vs
+  Icons default are settled before the switch.
 - Performance gates cover frame build time, GPU submission count, draw batches,
-  texture bytes, glyph/icon/thumbnail cache behavior, and input latency.
+  texture bytes, glyph/icon/thumbnail cache behavior, steady scroll, view
+  switching, split pane, reload, and input latency.
 
 ## Documentation Policy
 

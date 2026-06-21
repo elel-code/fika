@@ -67,7 +67,7 @@ const PLACES_SIDEBAR_MIN_WIDTH: f32 = 128.0;
 const PLACES_SIDEBAR_MAX_WIDTH_RATIO: f32 = 0.42;
 const PLACES_SIDEBAR_RIGHT_RESERVE: f32 = 120.0;
 const PLACES_SIDEBAR_SPLITTER_WIDTH: f32 = 1.0;
-const PLACES_RESIZE_HANDLE_WIDTH: f32 = 10.0;
+const PLACES_RESIZE_HANDLE_WIDTH: f32 = 16.0;
 const PLACES_TO_PANE_GAP: f32 = 8.0;
 const PLACES_SIDEBAR_PANEL_MARGIN_X: f32 = 8.0;
 const PLACES_SIDEBAR_PANEL_MARGIN_BOTTOM: f32 = 8.0;
@@ -3342,6 +3342,17 @@ enum ShellDropTarget {
     PlacesBlank,
 }
 
+impl ShellDropTarget {
+    fn kind(&self) -> &'static str {
+        match self {
+            Self::PaneItem { .. } => "pane-item",
+            Self::PaneBlank { .. } => "pane-blank",
+            Self::Place { .. } => "place",
+            Self::PlacesBlank => "places-blank",
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 struct ShellPaneState {
     path: PathBuf,
@@ -3420,6 +3431,37 @@ impl<'a> ShellPaneView<'a> {
     }
 }
 
+#[derive(Clone, Debug)]
+struct ShellPaneProjection<'a> {
+    view: ShellPaneView<'a>,
+    geometry: ShellPaneGeometry,
+    visible_items: Vec<fika_core::ItemLayout>,
+    scroll_metrics: ShellPaneScrollMetrics,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ShellPaneScrollMetrics {
+    content_size: ViewSize,
+    viewport_width: f32,
+    viewport_height: f32,
+    max_scroll_x: f32,
+    max_scroll_y: f32,
+}
+
+impl ShellPaneScrollMetrics {
+    fn new(content_size: ViewSize, viewport: ViewRect) -> Self {
+        let viewport_width = viewport.width.max(1.0);
+        let viewport_height = viewport.height.max(1.0);
+        Self {
+            content_size,
+            viewport_width,
+            viewport_height,
+            max_scroll_x: (content_size.width - viewport_width).max(0.0),
+            max_scroll_y: (content_size.height - viewport_height).max(0.0),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct ShellPaneSplitMetrics {
     divider: ViewRect,
@@ -3460,6 +3502,7 @@ struct ShellScene {
     trash_conflict_dialog: Option<ShellTrashConflictDialog>,
     split_pane: Option<ShellPaneState>,
     split_pane_left_fraction: f32,
+    dnd_hover_target: Option<ShellDropTarget>,
     rubber_band: Option<RubberBand>,
     scale_factor: f32,
     hit_tests: u64,
@@ -3488,6 +3531,7 @@ struct ShellScene {
     hidden_changes: u64,
     zoom_changes: u64,
     split_pane_changes: u64,
+    dnd_hover_changes: u64,
 }
 
 impl ShellScene {
@@ -3553,6 +3597,7 @@ impl ShellScene {
             trash_conflict_dialog: None,
             split_pane: None,
             split_pane_left_fraction: 0.5,
+            dnd_hover_target: None,
             rubber_band: None,
             scale_factor: 1.0,
             hit_tests: 0,
@@ -3581,6 +3626,7 @@ impl ShellScene {
             hidden_changes: 0,
             zoom_changes: 0,
             split_pane_changes: 0,
+            dnd_hover_changes: 0,
         })
     }
 
@@ -4346,10 +4392,11 @@ impl ShellScene {
         let handle_width = self
             .scale_metric(PLACES_RESIZE_HANDLE_WIDTH)
             .max(self.scale_metric(PLACES_SIDEBAR_SPLITTER_WIDTH));
+        let splitter_cover = self.scale_metric(PLACES_SIDEBAR_SPLITTER_WIDTH + 2.0);
         Some(ViewRect {
-            x: (sidebar.right() - handle_width / 2.0).max(sidebar.x),
+            x: (sidebar.right() - handle_width).max(sidebar.x),
             y: sidebar.y,
-            width: handle_width,
+            width: (handle_width + splitter_cover).min(sidebar.width + splitter_cover),
             height: sidebar.height,
         })
     }
@@ -4376,9 +4423,18 @@ impl ShellScene {
         }) {
             return CursorIcon::ColResize;
         }
+        if self.scrollbar_drag.is_some() {
+            return CursorIcon::Default;
+        }
         let Some(point) = self.pointer else {
             return CursorIcon::Default;
         };
+        if self
+            .places_scrollbar_rects(size)
+            .is_some_and(|(track, _)| track.contains(point))
+        {
+            return CursorIcon::Default;
+        }
         if self
             .places_resize_handle_rect(size)
             .is_some_and(|rect| rect.contains(point))
@@ -4387,6 +4443,8 @@ impl ShellScene {
                 .is_some_and(|rect| rect.contains(point))
         {
             CursorIcon::ColResize
+        } else if self.path_bar_contains_screen_point(point, size) {
+            CursorIcon::Text
         } else {
             CursorIcon::Default
         }
@@ -4647,6 +4705,26 @@ impl ShellScene {
         }
 
         None
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn update_dnd_hover_target(&mut self, point: ViewPoint, size: PhysicalSize<u32>) -> bool {
+        let next = self.drop_target_at_screen_point(point, size);
+        let changed = self.dnd_hover_target != next;
+        if changed {
+            self.dnd_hover_target = next;
+            self.dnd_hover_changes += 1;
+        }
+        changed
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn clear_dnd_hover_target(&mut self) -> bool {
+        let changed = self.dnd_hover_target.take().is_some();
+        if changed {
+            self.dnd_hover_changes += 1;
+        }
+        changed
     }
 
     fn open_context_target(&mut self, point: ViewPoint, size: PhysicalSize<u32>) -> bool {
@@ -6230,6 +6308,52 @@ impl ShellScene {
         geometries
     }
 
+    fn primary_pane_projection(&self, size: PhysicalSize<u32>) -> ShellPaneProjection<'_> {
+        self.pane_projection_from_geometry(
+            self.primary_pane_view(),
+            self.primary_pane_geometry(size),
+        )
+    }
+
+    fn pane_projection(
+        &self,
+        kind: ShellPaneKind,
+        size: PhysicalSize<u32>,
+    ) -> Option<ShellPaneProjection<'_>> {
+        let view = self.pane_view(kind)?;
+        let geometry = match kind {
+            ShellPaneKind::Primary => self.primary_pane_geometry(size),
+            ShellPaneKind::Split => self.split_pane_geometry(size)?,
+        };
+        Some(self.pane_projection_from_geometry(view, geometry))
+    }
+
+    fn pane_projection_from_geometry<'a>(
+        &self,
+        view: ShellPaneView<'a>,
+        geometry: ShellPaneGeometry,
+    ) -> ShellPaneProjection<'a> {
+        let layout = self.pane_layout(view, geometry.content.width, geometry.content.height);
+        let visible_items = layout.visible_items();
+        let scroll_metrics = ShellPaneScrollMetrics::new(layout.content_size(), geometry.content);
+        ShellPaneProjection {
+            view,
+            geometry,
+            visible_items,
+            scroll_metrics,
+        }
+    }
+
+    fn primary_pane_scroll_metrics(&self, size: PhysicalSize<u32>) -> ShellPaneScrollMetrics {
+        let geometry = self.primary_pane_geometry(size);
+        let layout = self.pane_layout(
+            self.primary_pane_view(),
+            geometry.content.width,
+            geometry.content.height,
+        );
+        ShellPaneScrollMetrics::new(layout.content_size(), geometry.content)
+    }
+
     fn layout(&self, size: PhysicalSize<u32>) -> ShellLayout {
         self.pane_layout(
             self.primary_pane_view(),
@@ -6398,11 +6522,9 @@ impl ShellScene {
         let height = size.height.max(1) as f32;
         let pane = self.pane_rect(size);
         let top_bar_height = self.top_bar_height();
-        let content_origin_x = self.content_origin_x(size);
-        let content_origin_y = self.content_origin_y();
-        let content_width = self.content_width(size);
-        let viewport_h = self.viewport_height(size);
         let status_bar = self.status_bar_rect(size);
+        let primary_projection = self.primary_pane_projection(size);
+        let content_clip = primary_projection.geometry.content;
 
         push_rect(
             &mut vertices,
@@ -6466,30 +6588,18 @@ impl ShellScene {
             self.push_details_header(&mut vertices, text, size);
         }
 
-        let layout = self.layout(size);
-        let content_size = layout.content_size();
-        let visible_layout_items = layout.visible_items();
-        let first_item_rect = visible_layout_items.first().map(|item| item.item_rect);
-        let content_clip = ViewRect {
-            x: content_origin_x,
-            y: content_origin_y,
-            width: content_width,
-            height: viewport_h,
-        };
-        let mut visible_items = 0usize;
-        for item in visible_layout_items {
-            visible_items += 1;
-            match self.view_mode {
-                ShellViewMode::Icons | ShellViewMode::Compact => {
-                    self.push_item(&mut vertices, text, icons, item, content_clip, size);
-                }
-                ShellViewMode::Details => {
-                    self.push_details_item(&mut vertices, text, icons, item, content_clip, size);
-                }
-            }
+        let content_size = primary_projection.scroll_metrics.content_size;
+        let first_item_rect = primary_projection
+            .visible_items
+            .first()
+            .map(|item| item.item_rect);
+        let visible_items = primary_projection.visible_items.len();
+        for item in primary_projection.visible_items.iter().copied() {
+            self.push_pane_item(&mut vertices, text, icons, &primary_projection, item, size);
         }
         self.push_rubber_band(&mut vertices, content_clip, size);
-        self.push_content_scrollbar(&mut vertices, size);
+        let content_scrollbar_visible =
+            self.push_content_scrollbar_for_projection(&mut vertices, &primary_projection, size);
         self.push_status_bar(&mut vertices, text, size, visible_items, status_bar);
         self.push_pane_borders(&mut vertices, size);
         self.push_split_pane(&mut vertices, text, icons, size);
@@ -6505,6 +6615,7 @@ impl ShellScene {
             visible_items,
             quad_count: (vertices.len() + overlay_vertices.len()) / 6,
             content_size,
+            content_scrollbar_visible,
             first_item_rect,
             vertices,
             overlay_vertices,
@@ -6613,6 +6724,161 @@ impl ShellScene {
         }
     }
 
+    fn push_pane_item(
+        &self,
+        vertices: &mut Vec<QuadVertex>,
+        text: &mut TextFrameBuilder<'_>,
+        icons: &mut IconFrameBuilder<'_>,
+        projection: &ShellPaneProjection<'_>,
+        item: fika_core::ItemLayout,
+        size: PhysicalSize<u32>,
+    ) {
+        let Some(entry_index) = projection
+            .view
+            .filtered_indexes
+            .get(item.model_index)
+            .copied()
+        else {
+            return;
+        };
+        let Some(entry) = projection.view.entries.get(entry_index) else {
+            return;
+        };
+        let content_clip = projection.geometry.content;
+        let item_rect = pane_content_rect_to_screen(item.item_rect, projection);
+        let visual_rect = pane_content_rect_to_screen(item.visual_rect, projection);
+        let icon_rect = pane_content_rect_to_screen(item.icon_rect, projection);
+        let text_rect = pane_content_rect_to_screen(item.text_rect, projection);
+        let primary = projection.geometry.kind == ShellPaneKind::Primary;
+        let selected = primary && self.selection.contains(entry_index);
+        let hovered = primary && self.hovered_index == Some(entry_index);
+
+        if projection.view.view_mode == ShellViewMode::Details {
+            push_clipped_rect(
+                vertices,
+                item_rect,
+                content_clip,
+                details_row_background_color(selected, hovered, entry_index),
+                size,
+            );
+            if selected {
+                push_clipped_rect_outline(
+                    vertices,
+                    item_rect,
+                    content_clip,
+                    1.0,
+                    [0.38, 0.64, 0.92, 0.92],
+                    size,
+                );
+            }
+        } else if selected {
+            let radius = self.scale_metric(7.0);
+            push_clipped_rounded_rect(
+                vertices,
+                visual_rect,
+                content_clip,
+                radius,
+                [0.38, 0.64, 0.92, 0.95],
+                size,
+            );
+            if let Some(inner) = inset_rect(visual_rect, self.scale_metric(1.0)) {
+                push_clipped_rounded_rect(
+                    vertices,
+                    inner,
+                    content_clip,
+                    (radius - self.scale_metric(1.0)).max(1.0),
+                    item_background_color(selected, hovered),
+                    size,
+                );
+            }
+        } else if hovered {
+            push_clipped_rounded_rect(
+                vertices,
+                visual_rect,
+                content_clip,
+                self.scale_metric(7.0),
+                item_background_color(selected, hovered),
+                size,
+            );
+        }
+
+        if !icons.push_icon(projection.view.path, entry, icon_rect, content_clip) {
+            push_fallback_icon(vertices, entry, icon_rect, content_clip, size);
+        }
+
+        let text_color = if selected {
+            TextColor::rgb(15, 23, 42)
+        } else if projection.view.view_mode != ShellViewMode::Details && entry.is_dir {
+            TextColor::rgb(31, 79, 191)
+        } else {
+            TextColor::rgb(36, 41, 47)
+        };
+        if projection.view.view_mode == ShellViewMode::Compact {
+            text.push_label_aligned(
+                entry.name.as_ref(),
+                text_rect,
+                content_clip,
+                text_color,
+                LabelAlignment::Start,
+            );
+        } else {
+            text.push_label(entry.name.as_ref(), text_rect, content_clip, text_color);
+        }
+
+        if projection.view.view_mode == ShellViewMode::Details {
+            let text_height = self.text_line_height();
+            let metadata_y = item_rect.y + (item_rect.height - text_height).max(0.0) / 2.0;
+            text.push_label(
+                &details_size_label(entry),
+                ViewRect {
+                    x: content_clip.x + self.details_name_width() + self.scale_metric(8.0)
+                        - projection.view.scroll_x,
+                    y: metadata_y,
+                    width: self.details_size_width() - self.scale_metric(16.0),
+                    height: text_height,
+                },
+                content_clip,
+                TextColor::rgb(89, 99, 110),
+            );
+            text.push_label(
+                &format_modified_secs(entry.modified_secs),
+                ViewRect {
+                    x: content_clip.x
+                        + self.details_name_width()
+                        + self.details_size_width()
+                        + self.scale_metric(8.0)
+                        - projection.view.scroll_x,
+                    y: metadata_y,
+                    width: self.details_modified_width() - self.scale_metric(16.0),
+                    height: text_height,
+                },
+                content_clip,
+                TextColor::rgb(89, 99, 110),
+            );
+        }
+
+        if selected || hovered {
+            let marker_size = self.scale_metric(5.0);
+            let index_marker = ViewRect {
+                x: item_rect.x + self.scale_metric(7.0),
+                y: item_rect.y + self.scale_metric(7.0),
+                width: marker_size,
+                height: marker_size,
+            };
+            push_clipped_rect(
+                vertices,
+                index_marker,
+                content_clip,
+                if entry.is_dir {
+                    [0.55, 0.80, 0.54, 1.0]
+                } else {
+                    [0.42, 0.62, 0.84, 1.0]
+                },
+                size,
+            );
+        }
+    }
+
     fn push_split_pane(
         &self,
         vertices: &mut Vec<QuadVertex>,
@@ -6620,23 +6886,19 @@ impl ShellScene {
         icons: &mut IconFrameBuilder<'_>,
         size: PhysicalSize<u32>,
     ) {
-        let Some(split_pane) = self.split_pane.as_ref() else {
+        let Some(projection) = self.pane_projection(ShellPaneKind::Split, size) else {
             return;
         };
-        let split_view = ShellPaneView::from_state(split_pane);
         let Some(metrics) = self.split_pane_metrics(size) else {
             return;
         };
-        let Some(geometry) = self.split_pane_geometry(size) else {
-            return;
-        };
-        let pane = geometry.pane;
-        let status_bar = geometry.status_bar;
-        let content_clip = geometry.content;
+        let split_view = projection.view;
+        let pane = projection.geometry.pane;
+        let status_bar = projection.geometry.status_bar;
 
         push_rect(vertices, metrics.divider, [0.784, 0.808, 0.839, 1.0], size);
         push_rect(vertices, pane, [1.000, 1.000, 1.000, 1.0], size);
-        push_rect(vertices, geometry.top_bar, chrome_color(), size);
+        push_rect(vertices, projection.geometry.top_bar, chrome_color(), size);
         let margin = self.scale_metric(8.0);
         let path_rect = ViewRect {
             x: pane.x + margin,
@@ -6649,7 +6911,7 @@ impl ShellScene {
             text,
             size,
             path_rect,
-            geometry.top_bar,
+            projection.geometry.top_bar,
             &split_view.path.display().to_string(),
             false,
             None,
@@ -6658,24 +6920,28 @@ impl ShellScene {
             vertices,
             ViewRect {
                 x: pane.x,
-                y: geometry.top_bar.bottom(),
+                y: projection.geometry.top_bar.bottom(),
                 width: pane.width,
-                height: (status_bar.y - geometry.top_bar.bottom()).max(1.0),
+                height: (status_bar.y - projection.geometry.top_bar.bottom()).max(1.0),
             },
-            view_mode_content_color(split_pane.view_mode),
+            view_mode_content_color(split_view.view_mode),
             size,
         );
-        if split_pane.view_mode == ShellViewMode::Details {
+        if split_view.view_mode == ShellViewMode::Details {
             self.push_split_details_header(vertices, text, pane, size);
         }
 
-        let layout = self.pane_layout(split_view, content_clip.width, content_clip.height);
-        let mut visible_items = 0usize;
-        for item in layout.visible_items() {
-            visible_items += 1;
-            self.push_split_item(vertices, text, icons, split_pane, item, content_clip, size);
+        for item in projection.visible_items.iter().copied() {
+            self.push_pane_item(vertices, text, icons, &projection, item, size);
         }
-        self.push_split_status_bar(vertices, text, split_view, status_bar, visible_items, size);
+        self.push_split_status_bar(
+            vertices,
+            text,
+            split_view,
+            status_bar,
+            projection.visible_items.len(),
+            size,
+        );
     }
 
     fn push_split_details_header(
@@ -6729,91 +6995,6 @@ impl ShellScene {
                     height: self.text_line_height(),
                 },
                 header,
-                TextColor::rgb(89, 99, 110),
-            );
-        }
-    }
-
-    fn push_split_item(
-        &self,
-        vertices: &mut Vec<QuadVertex>,
-        text: &mut TextFrameBuilder<'_>,
-        icons: &mut IconFrameBuilder<'_>,
-        split_pane: &ShellPaneState,
-        item: fika_core::ItemLayout,
-        content_clip: ViewRect,
-        size: PhysicalSize<u32>,
-    ) {
-        let Some(entry_index) = split_pane.filtered_indexes.get(item.model_index).copied() else {
-            return;
-        };
-        let Some(entry) = split_pane.entries.get(entry_index) else {
-            return;
-        };
-        let row_rect = split_content_rect_to_screen(item.item_rect, content_clip, split_pane);
-        let icon_rect = split_content_rect_to_screen(item.icon_rect, content_clip, split_pane);
-        let text_rect = split_content_rect_to_screen(item.text_rect, content_clip, split_pane);
-
-        if split_pane.view_mode == ShellViewMode::Details {
-            push_clipped_rect(
-                vertices,
-                row_rect,
-                content_clip,
-                details_row_background_color(false, false, entry_index),
-                size,
-            );
-        }
-        if icons.push_icon(&split_pane.path, entry, icon_rect, content_clip) {
-            // The atlas draw covers the icon slot; fallback geometry remains for misses.
-        } else {
-            push_fallback_icon(vertices, entry, icon_rect, content_clip, size);
-        }
-
-        let text_color = if entry.is_dir {
-            TextColor::rgb(31, 79, 191)
-        } else {
-            TextColor::rgb(36, 41, 47)
-        };
-        if split_pane.view_mode == ShellViewMode::Compact {
-            text.push_label_aligned(
-                entry.name.as_ref(),
-                text_rect,
-                content_clip,
-                text_color,
-                LabelAlignment::Start,
-            );
-        } else {
-            text.push_label(entry.name.as_ref(), text_rect, content_clip, text_color);
-        }
-
-        if split_pane.view_mode == ShellViewMode::Details {
-            let text_height = self.text_line_height();
-            let metadata_y = row_rect.y + (row_rect.height - text_height).max(0.0) / 2.0;
-            text.push_label(
-                &details_size_label(entry),
-                ViewRect {
-                    x: content_clip.x + self.details_name_width() + self.scale_metric(8.0)
-                        - split_pane.scroll_x,
-                    y: metadata_y,
-                    width: self.details_size_width() - self.scale_metric(16.0),
-                    height: text_height,
-                },
-                content_clip,
-                TextColor::rgb(89, 99, 110),
-            );
-            text.push_label(
-                &format_modified_secs(entry.modified_secs),
-                ViewRect {
-                    x: content_clip.x
-                        + self.details_name_width()
-                        + self.details_size_width()
-                        + self.scale_metric(8.0)
-                        - split_pane.scroll_x,
-                    y: metadata_y,
-                    width: self.details_modified_width() - self.scale_metric(16.0),
-                    height: text_height,
-                },
-                content_clip,
                 TextColor::rgb(89, 99, 110),
             );
         }
@@ -7226,219 +7407,6 @@ impl ShellScene {
         );
     }
 
-    fn push_item(
-        &self,
-        vertices: &mut Vec<QuadVertex>,
-        text: &mut TextFrameBuilder<'_>,
-        icons: &mut IconFrameBuilder<'_>,
-        item: fika_core::ItemLayout,
-        content_clip: ViewRect,
-        size: PhysicalSize<u32>,
-    ) {
-        let Some(entry_index) = self.model_index_for_layout_index(item.model_index) else {
-            return;
-        };
-        let Some(entry) = self.entries.get(entry_index) else {
-            return;
-        };
-        let item_rect = self.content_to_screen(item.item_rect, size);
-        let visual_rect = self.content_to_screen(item.visual_rect, size);
-        let icon_rect = self.content_to_screen(item.icon_rect, size);
-        let text_rect = self.content_to_screen(item.text_rect, size);
-        let selected = self.selection.contains(entry_index);
-        let hovered = self.hovered_index == Some(entry_index);
-
-        if selected {
-            let radius = self.scale_metric(7.0);
-            push_clipped_rounded_rect(
-                vertices,
-                visual_rect,
-                content_clip,
-                radius,
-                [0.38, 0.64, 0.92, 0.95],
-                size,
-            );
-            if let Some(inner) = inset_rect(visual_rect, self.scale_metric(1.0)) {
-                push_clipped_rounded_rect(
-                    vertices,
-                    inner,
-                    content_clip,
-                    (radius - self.scale_metric(1.0)).max(1.0),
-                    item_background_color(selected, hovered),
-                    size,
-                );
-            }
-        } else if hovered {
-            push_clipped_rounded_rect(
-                vertices,
-                visual_rect,
-                content_clip,
-                self.scale_metric(7.0),
-                item_background_color(selected, hovered),
-                size,
-            );
-        }
-
-        if icons.push_icon(&self.path, entry, icon_rect, content_clip) {
-            // The atlas draw covers the icon slot; fallback geometry remains for misses.
-        } else if entry.is_dir {
-            let tab = ViewRect {
-                x: icon_rect.x + icon_rect.width * 0.12,
-                y: icon_rect.y + icon_rect.height * 0.16,
-                width: icon_rect.width * 0.42,
-                height: icon_rect.height * 0.18,
-            };
-            let body = ViewRect {
-                x: icon_rect.x + icon_rect.width * 0.08,
-                y: icon_rect.y + icon_rect.height * 0.28,
-                width: icon_rect.width * 0.84,
-                height: icon_rect.height * 0.56,
-            };
-            push_clipped_rect(vertices, tab, content_clip, [0.96, 0.70, 0.26, 1.0], size);
-            push_clipped_rect(vertices, body, content_clip, [0.90, 0.58, 0.18, 1.0], size);
-        } else {
-            let body = ViewRect {
-                x: icon_rect.x + icon_rect.width * 0.18,
-                y: icon_rect.y + icon_rect.height * 0.10,
-                width: icon_rect.width * 0.64,
-                height: icon_rect.height * 0.78,
-            };
-            let stripe = ViewRect {
-                x: body.x,
-                y: body.y,
-                width: body.width,
-                height: body.height * 0.22,
-            };
-            push_clipped_rect(vertices, body, content_clip, file_color(entry), size);
-            push_clipped_rect(
-                vertices,
-                stripe,
-                content_clip,
-                [0.76, 0.80, 0.86, 1.0],
-                size,
-            );
-        }
-
-        let text_color = if selected {
-            TextColor::rgb(15, 23, 42)
-        } else if entry.is_dir {
-            TextColor::rgb(31, 79, 191)
-        } else {
-            TextColor::rgb(36, 41, 47)
-        };
-        if self.view_mode == ShellViewMode::Compact {
-            text.push_label_aligned(
-                entry.name.as_ref(),
-                text_rect,
-                content_clip,
-                text_color,
-                LabelAlignment::Start,
-            );
-        } else {
-            text.push_label(entry.name.as_ref(), text_rect, content_clip, text_color);
-        }
-
-        if selected || hovered {
-            let marker_size = self.scale_metric(5.0);
-            let index_marker = ViewRect {
-                x: item_rect.x + self.scale_metric(7.0),
-                y: item_rect.y + self.scale_metric(7.0),
-                width: marker_size,
-                height: marker_size,
-            };
-            push_clipped_rect(
-                vertices,
-                index_marker,
-                content_clip,
-                if entry.is_dir {
-                    [0.55, 0.80, 0.54, 1.0]
-                } else {
-                    [0.42, 0.62, 0.84, 1.0]
-                },
-                size,
-            );
-        }
-    }
-
-    fn push_details_item(
-        &self,
-        vertices: &mut Vec<QuadVertex>,
-        text: &mut TextFrameBuilder<'_>,
-        icons: &mut IconFrameBuilder<'_>,
-        item: fika_core::ItemLayout,
-        content_clip: ViewRect,
-        size: PhysicalSize<u32>,
-    ) {
-        let Some(entry_index) = self.model_index_for_layout_index(item.model_index) else {
-            return;
-        };
-        let Some(entry) = self.entries.get(entry_index) else {
-            return;
-        };
-        let row_rect = self.content_to_screen(item.item_rect, size);
-        let icon_rect = self.content_to_screen(item.icon_rect, size);
-        let name_rect = self.content_to_screen(item.text_rect, size);
-        let selected = self.selection.contains(entry_index);
-        let hovered = self.hovered_index == Some(entry_index);
-
-        push_clipped_rect(
-            vertices,
-            row_rect,
-            content_clip,
-            details_row_background_color(selected, hovered, entry_index),
-            size,
-        );
-        if selected {
-            push_clipped_rect_outline(
-                vertices,
-                row_rect,
-                content_clip,
-                1.0,
-                [0.38, 0.64, 0.92, 0.92],
-                size,
-            );
-        }
-
-        if !icons.push_icon(&self.path, entry, icon_rect, content_clip) {
-            push_fallback_icon(vertices, entry, icon_rect, content_clip, size);
-        }
-
-        let text_color = if selected {
-            TextColor::rgb(15, 23, 42)
-        } else {
-            TextColor::rgb(36, 41, 47)
-        };
-        text.push_label(entry.name.as_ref(), name_rect, content_clip, text_color);
-        let text_height = self.text_line_height();
-        let name_width = self.details_name_width();
-        let size_width = self.details_size_width();
-        let metadata_y = row_rect.y + (row_rect.height - text_height).max(0.0) / 2.0;
-        text.push_label(
-            &details_size_label(entry),
-            ViewRect {
-                x: self.content_origin_x(size) + name_width + self.scale_metric(8.0)
-                    - self.scroll_x,
-                y: metadata_y,
-                width: size_width - self.scale_metric(16.0),
-                height: text_height,
-            },
-            content_clip,
-            TextColor::rgb(89, 99, 110),
-        );
-        text.push_label(
-            &format_modified_secs(entry.modified_secs),
-            ViewRect {
-                x: self.content_origin_x(size) + name_width + size_width + self.scale_metric(8.0)
-                    - self.scroll_x,
-                y: metadata_y,
-                width: self.details_modified_width() - self.scale_metric(16.0),
-                height: text_height,
-            },
-            content_clip,
-            TextColor::rgb(89, 99, 110),
-        );
-    }
-
     fn push_rubber_band(
         &self,
         vertices: &mut Vec<QuadVertex>,
@@ -7562,9 +7530,14 @@ impl ShellScene {
         );
     }
 
-    fn push_content_scrollbar(&self, vertices: &mut Vec<QuadVertex>, size: PhysicalSize<u32>) {
-        let Some((track, thumb)) = self.content_scrollbar_rects(size) else {
-            return;
+    fn push_content_scrollbar_for_projection(
+        &self,
+        vertices: &mut Vec<QuadVertex>,
+        projection: &ShellPaneProjection<'_>,
+        size: PhysicalSize<u32>,
+    ) -> bool {
+        let Some((track, thumb)) = self.content_scrollbar_rects_for_projection(projection) else {
+            return false;
         };
         let screen = ViewRect {
             x: 0.0,
@@ -7573,6 +7546,7 @@ impl ShellScene {
             height: size.height.max(1) as f32,
         };
         push_scrollbar(vertices, track, thumb, screen, size);
+        true
     }
 
     fn push_context_menu_overlay(
@@ -8532,10 +8506,7 @@ impl ShellScene {
     }
 
     fn content_scrollbar_axis(&self) -> ContentScrollbarAxis {
-        match self.view_mode {
-            ShellViewMode::Compact => ContentScrollbarAxis::Horizontal,
-            ShellViewMode::Icons | ShellViewMode::Details => ContentScrollbarAxis::Vertical,
-        }
+        scrollbar_axis_for_view_mode(self.view_mode)
     }
 
     fn content_screen_rect(&self, size: PhysicalSize<u32>) -> ViewRect {
@@ -8561,8 +8532,9 @@ impl ShellScene {
     }
 
     fn clamp_scroll(&mut self, size: PhysicalSize<u32>) {
-        self.scroll_x = self.scroll_x.clamp(0.0, self.max_scroll_x(size));
-        self.scroll_y = self.scroll_y.clamp(0.0, self.max_scroll_y(size));
+        let metrics = self.primary_pane_scroll_metrics(size);
+        self.scroll_x = self.scroll_x.clamp(0.0, metrics.max_scroll_x);
+        self.scroll_y = self.scroll_y.clamp(0.0, metrics.max_scroll_y);
         if self.view_mode != ShellViewMode::Compact {
             self.scroll_x = 0.0;
         }
@@ -8585,12 +8557,14 @@ impl ShellScene {
         let old_y = self.scroll_y;
         match self.view_mode {
             ShellViewMode::Compact => {
-                self.scroll_x = (self.scroll_x + delta_y).clamp(0.0, self.max_scroll_x(size));
+                self.scroll_x = (self.scroll_x + delta_y)
+                    .clamp(0.0, self.primary_pane_scroll_metrics(size).max_scroll_x);
                 self.scroll_y = 0.0;
             }
             ShellViewMode::Icons | ShellViewMode::Details => {
                 self.scroll_x = 0.0;
-                self.scroll_y = (self.scroll_y + delta_y).clamp(0.0, self.max_scroll_y(size));
+                self.scroll_y = (self.scroll_y + delta_y)
+                    .clamp(0.0, self.primary_pane_scroll_metrics(size).max_scroll_y);
             }
         }
         let scrolled = (self.scroll_x - old_x).abs() > f32::EPSILON
@@ -8618,33 +8592,40 @@ impl ShellScene {
     }
 
     fn max_scroll_x(&self, size: PhysicalSize<u32>) -> f32 {
-        let layout = self.layout(size);
-        (layout.content_size().width - self.content_width(size)).max(0.0)
+        self.primary_pane_scroll_metrics(size).max_scroll_x
     }
 
     fn max_scroll_y(&self, size: PhysicalSize<u32>) -> f32 {
-        let layout = self.layout(size);
-        (layout.content_size().height - self.viewport_height(size)).max(0.0)
+        self.primary_pane_scroll_metrics(size).max_scroll_y
     }
 
     fn content_scrollbar_rects(&self, size: PhysicalSize<u32>) -> Option<(ViewRect, ViewRect)> {
-        match self.content_scrollbar_axis() {
+        let projection = self.primary_pane_projection(size);
+        self.content_scrollbar_rects_for_projection(&projection)
+    }
+
+    fn content_scrollbar_rects_for_projection(
+        &self,
+        projection: &ShellPaneProjection<'_>,
+    ) -> Option<(ViewRect, ViewRect)> {
+        let metrics = projection.scroll_metrics;
+        match scrollbar_axis_for_view_mode(projection.view.view_mode) {
             ContentScrollbarAxis::Vertical => {
-                let max_scroll = self.max_scroll_y(size);
+                let max_scroll = metrics.max_scroll_y;
                 if max_scroll <= f32::EPSILON {
                     return None;
                 }
-                let viewport_extent = self.viewport_height(size);
+                let viewport_extent = metrics.viewport_height;
                 let slot = ViewRect {
-                    x: self.content_origin_x(size) + self.content_width(size),
-                    y: self.content_origin_y(),
-                    width: self
-                        .scale_metric(CONTENT_SCROLLBAR_RESERVED_EXTENT)
-                        .min((self.pane_rect(size).right() - self.content_origin_x(size)).max(1.0)),
+                    x: projection.geometry.content.right(),
+                    y: projection.geometry.content.y,
+                    width: self.scale_metric(CONTENT_SCROLLBAR_RESERVED_EXTENT).min(
+                        (projection.geometry.pane.right() - projection.geometry.content.x).max(1.0),
+                    ),
                     height: viewport_extent,
                 };
                 let track = inset_content_scrollbar_slot(slot, self.ui_scale())?;
-                let content_extent = viewport_extent + max_scroll;
+                let content_extent = metrics.content_size.height;
                 let min_thumb_size = self.scale_metric(CONTENT_SCROLLBAR_MIN_THUMB_SIZE);
                 let thumb_extent = (track.height * (viewport_extent / content_extent))
                     .clamp(min_thumb_size.min(track.height), track.height);
@@ -8652,7 +8633,8 @@ impl ShellScene {
                     return None;
                 }
                 let travel = (track.height - thumb_extent).max(0.0);
-                let thumb_y = track.y + (self.scroll_y / max_scroll).clamp(0.0, 1.0) * travel;
+                let thumb_y =
+                    track.y + (projection.view.scroll_y / max_scroll).clamp(0.0, 1.0) * travel;
                 Some((
                     track,
                     ViewRect {
@@ -8664,21 +8646,21 @@ impl ShellScene {
                 ))
             }
             ContentScrollbarAxis::Horizontal => {
-                let max_scroll = self.max_scroll_x(size);
+                let max_scroll = metrics.max_scroll_x;
                 if max_scroll <= f32::EPSILON {
                     return None;
                 }
-                let viewport_extent = self.content_width(size);
+                let viewport_extent = metrics.viewport_width;
                 let slot = ViewRect {
-                    x: self.content_origin_x(size),
-                    y: self.content_origin_y() + self.viewport_height(size),
+                    x: projection.geometry.content.x,
+                    y: projection.geometry.content.bottom(),
                     width: viewport_extent,
-                    height: self
-                        .scale_metric(CONTENT_SCROLLBAR_RESERVED_EXTENT)
-                        .min((self.status_bar_rect(size).y - self.content_origin_y()).max(1.0)),
+                    height: self.scale_metric(CONTENT_SCROLLBAR_RESERVED_EXTENT).min(
+                        (projection.geometry.status_bar.y - projection.geometry.content.y).max(1.0),
+                    ),
                 };
                 let track = inset_content_scrollbar_slot(slot, self.ui_scale())?;
-                let content_extent = viewport_extent + max_scroll;
+                let content_extent = metrics.content_size.width;
                 let min_thumb_size = self.scale_metric(CONTENT_SCROLLBAR_MIN_THUMB_SIZE);
                 let thumb_extent = (track.width * (viewport_extent / content_extent))
                     .clamp(min_thumb_size.min(track.width), track.width);
@@ -8686,7 +8668,8 @@ impl ShellScene {
                     return None;
                 }
                 let travel = (track.width - thumb_extent).max(0.0);
-                let thumb_x = track.x + (self.scroll_x / max_scroll).clamp(0.0, 1.0) * travel;
+                let thumb_x =
+                    track.x + (projection.view.scroll_x / max_scroll).clamp(0.0, 1.0) * travel;
                 Some((
                     track,
                     ViewRect {
@@ -8701,6 +8684,22 @@ impl ShellScene {
     }
 
     fn begin_scrollbar_drag(&mut self, point: ViewPoint, size: PhysicalSize<u32>) -> Option<bool> {
+        if let Some((track, thumb)) = self.places_scrollbar_rects(size)
+            && track.contains(point)
+        {
+            let grab_offset = if thumb.contains(point) {
+                point.y - thumb.y
+            } else {
+                thumb.height / 2.0
+            };
+            self.scrollbar_drag = Some(ScrollbarDrag {
+                target: ScrollbarDragTarget::Places,
+                grab_offset,
+            });
+            self.pointer = Some(point);
+            return Some(self.update_scrollbar_drag(point, size));
+        }
+
         if let Some(handle) = self.places_resize_handle_rect(size)
             && handle.contains(point)
         {
@@ -8720,22 +8719,6 @@ impl ShellScene {
             self.scrollbar_drag = Some(ScrollbarDrag {
                 target: ScrollbarDragTarget::SplitPaneResize,
                 grab_offset: point.x - metrics.divider.x,
-            });
-            self.pointer = Some(point);
-            return Some(self.update_scrollbar_drag(point, size));
-        }
-
-        if let Some((track, thumb)) = self.places_scrollbar_rects(size)
-            && track.contains(point)
-        {
-            let grab_offset = if thumb.contains(point) {
-                point.y - thumb.y
-            } else {
-                thumb.height / 2.0
-            };
-            self.scrollbar_drag = Some(ScrollbarDrag {
-                target: ScrollbarDragTarget::Places,
-                grab_offset,
             });
             self.pointer = Some(point);
             return Some(self.update_scrollbar_drag(point, size));
@@ -8882,7 +8865,9 @@ impl ShellScene {
 
     fn clear_pointer(&mut self) -> bool {
         self.pointer = None;
-        let changed = self.hovered_index.take().is_some() || self.hovered_place.take().is_some();
+        let changed = self.hovered_index.take().is_some()
+            || self.hovered_place.take().is_some()
+            || self.clear_dnd_hover_target();
         if changed {
             self.hit_tests += 1;
         }
@@ -9414,6 +9399,7 @@ struct SceneFrame {
     visible_items: usize,
     quad_count: usize,
     content_size: ViewSize,
+    content_scrollbar_visible: bool,
     first_item_rect: Option<ViewRect>,
     layout_us: u128,
     text_stats: TextFrameStats,
@@ -9696,7 +9682,7 @@ impl WgpuState {
             || self.last_log.elapsed() >= Duration::from_secs(1)
         {
             eprintln!(
-                "[fika-wgpu] frame={} reason={} view={} scale={:.2} zoom={} zoom_changes={} path={} entries={} filtered={} show_hidden={} hidden_changes={} location_active={} location_changes={} filter_active={} filter_changes={} places={} places_visible={} places_width={:.1} place_hover={} places_changes={} places_resize_changes={} places_scroll_y={:.1} places_scroll_changes={} split_pane={} split_changes={} split_path={} content_scrollbar={} visible={} selected={} hover={} context={} context_menu={} context_changes={} context_actions={} properties={} properties_changes={} create_dialog={} create_changes={} rename_dialog={} rename_changes={} open_with={} open_with_changes={} open_changes={} copy_location_changes={} file_clipboard_changes={} paste_changes={} trash_changes={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} path_changes={} reloads={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_cache={}/{} entries={} bytes={} batches={} scroll_x={:.1} scroll_y={:.1} layout={}us text_raster={}us text_atlas={}x{}:{}b render={}us",
+                "[fika-wgpu] frame={} reason={} view={} scale={:.2} zoom={} zoom_changes={} path={} entries={} filtered={} show_hidden={} hidden_changes={} location_active={} location_changes={} filter_active={} filter_changes={} places={} places_visible={} places_width={:.1} place_hover={} places_changes={} places_resize_changes={} places_scroll_y={:.1} places_scroll_changes={} split_pane={} split_changes={} split_path={} content_scrollbar={} visible={} selected={} hover={} dnd_hover={} dnd_hover_changes={} context={} context_menu={} context_changes={} context_actions={} properties={} properties_changes={} create_dialog={} create_changes={} rename_dialog={} rename_changes={} open_with={} open_with_changes={} open_changes={} copy_location_changes={} file_clipboard_changes={} paste_changes={} trash_changes={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} path_changes={} reloads={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_cache={}/{} entries={} bytes={} batches={} scroll_x={:.1} scroll_y={:.1} layout={}us text_raster={}us text_atlas={}x{}:{}b render={}us",
                 self.frame_count,
                 reason,
                 scene.view_mode.as_str(),
@@ -9727,10 +9713,16 @@ impl WgpuState {
                     .as_ref()
                     .map(|pane| pane.path.display().to_string())
                     .unwrap_or_else(|| "-".to_string()),
-                scene.content_scrollbar_rects(self.size).is_some() as u8,
+                scene_frame.content_scrollbar_visible as u8,
                 scene_frame.visible_items,
                 scene.selection.len(),
                 scene.hovered_index.map(|index| index as i64).unwrap_or(-1),
+                scene
+                    .dnd_hover_target
+                    .as_ref()
+                    .map(ShellDropTarget::kind)
+                    .unwrap_or("none"),
+                scene.dnd_hover_changes,
                 scene
                     .context_target
                     .as_ref()
@@ -12352,14 +12344,10 @@ fn clamped_screen_to_content_point(
     }
 }
 
-fn split_content_rect_to_screen(
-    rect: ViewRect,
-    content_clip: ViewRect,
-    split_pane: &ShellPaneState,
-) -> ViewRect {
+fn pane_content_rect_to_screen(rect: ViewRect, projection: &ShellPaneProjection<'_>) -> ViewRect {
     ViewRect {
-        x: rect.x - split_pane.scroll_x + content_clip.x,
-        y: rect.y - split_pane.scroll_y + content_clip.y,
+        x: rect.x - projection.view.scroll_x + projection.geometry.content.x,
+        y: rect.y - projection.view.scroll_y + projection.geometry.content.y,
         width: rect.width,
         height: rect.height,
     }
@@ -13323,6 +13311,13 @@ fn launch_uri_for_path(path: &Path) -> String {
     network_uri_from_path(path).unwrap_or_else(|| gio::File::for_path(path).uri().to_string())
 }
 
+fn scrollbar_axis_for_view_mode(view_mode: ShellViewMode) -> ContentScrollbarAxis {
+    match view_mode {
+        ShellViewMode::Compact => ContentScrollbarAxis::Horizontal,
+        ShellViewMode::Icons | ShellViewMode::Details => ContentScrollbarAxis::Vertical,
+    }
+}
+
 fn launch_file_with_default_app(request: &OpenFileRequest) -> Result<(), String> {
     gio::AppInfo::launch_default_for_uri(&request.uri, None::<&gio::AppLaunchContext>).map_err(
         |error| {
@@ -13767,6 +13762,7 @@ mod tests {
             trash_conflict_dialog: None,
             split_pane: None,
             split_pane_left_fraction: 0.5,
+            dnd_hover_target: None,
             rubber_band: None,
             scale_factor: 1.0,
             hit_tests: 0,
@@ -13795,6 +13791,7 @@ mod tests {
             hidden_changes: 0,
             zoom_changes: 0,
             split_pane_changes: 0,
+            dnd_hover_changes: 0,
         }
     }
 
@@ -13936,6 +13933,57 @@ mod tests {
         assert!(scene.places_resize_changes >= 2);
         let _ = scene.end_scrollbar_drag(ViewPoint { x: 0.0, y: start.y }, size);
         assert!(!scene.is_scrollbar_dragging());
+    }
+
+    #[test]
+    fn places_resize_handle_is_left_biased_and_easier_to_hit() {
+        let mut scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
+        let size = PhysicalSize::new(700, 320);
+        let sidebar = scene.places_sidebar_rect(size);
+        let handle = scene.places_resize_handle_rect(size).unwrap();
+        let expected_left = sidebar.right() - scene.scale_metric(PLACES_RESIZE_HANDLE_WIDTH);
+
+        assert!(handle.x <= expected_left + 0.5);
+        assert!(handle.right() > sidebar.right());
+
+        let left_edge_point = ViewPoint {
+            x: handle.x + 0.25,
+            y: handle.y + 12.0,
+        };
+        let _ = scene.set_pointer(left_edge_point, size);
+        assert_eq!(scene.cursor_icon(size), CursorIcon::ColResize);
+
+        let outside_left = ViewPoint {
+            x: handle.x - 1.0,
+            y: handle.y + 12.0,
+        };
+        let _ = scene.set_pointer(outside_left, size);
+        assert_eq!(scene.cursor_icon(size), CursorIcon::Default);
+    }
+
+    #[test]
+    fn address_bar_uses_text_cursor_without_overriding_resize_cursor() {
+        let mut scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
+        let size = PhysicalSize::new(700, 320);
+        let path_bar = scene.path_bar_rect(size).unwrap();
+        let path_point = ViewPoint {
+            x: path_bar.x + path_bar.width / 2.0,
+            y: path_bar.y + path_bar.height / 2.0,
+        };
+
+        let _ = scene.set_pointer(path_point, size);
+        assert_eq!(scene.cursor_icon(size), CursorIcon::Text);
+
+        let handle = scene.places_resize_handle_rect(size).unwrap();
+        let handle_point = ViewPoint {
+            x: handle.x + 1.0,
+            y: handle.y + 12.0,
+        };
+        let _ = scene.set_pointer(handle_point, size);
+        assert_eq!(scene.cursor_icon(size), CursorIcon::ColResize);
+        assert!(scene.begin_scrollbar_drag(handle_point, size).is_some());
+        let _ = scene.set_pointer(path_point, size);
+        assert_eq!(scene.cursor_icon(size), CursorIcon::ColResize);
     }
 
     #[test]
@@ -14160,6 +14208,89 @@ mod tests {
                 is_dir: true,
             })
         );
+    }
+
+    #[test]
+    fn dnd_hover_target_can_be_updated_and_cleared_from_retained_hit_testing() {
+        let mut scene = test_scene(
+            vec![test_entry("alpha", true), test_entry("note.txt", false)],
+            ShellViewMode::Icons,
+        );
+        let size = PhysicalSize::new(700, 320);
+        let projection = scene.primary_pane_projection(size);
+        let content = projection.geometry.content;
+        let item = projection.visible_items[0];
+        let item_point = ViewPoint {
+            x: content.x + item.visual_rect.x + 4.0,
+            y: content.y + item.visual_rect.y + 4.0,
+        };
+
+        assert!(scene.update_dnd_hover_target(item_point, size));
+        assert_eq!(
+            scene.dnd_hover_target.as_ref().map(ShellDropTarget::kind),
+            Some("pane-item")
+        );
+        assert_eq!(scene.dnd_hover_changes, 1);
+        assert!(!scene.update_dnd_hover_target(item_point, size));
+        assert_eq!(scene.dnd_hover_changes, 1);
+
+        let blank_point = ViewPoint {
+            x: content.right() - 2.0,
+            y: content.bottom() - 2.0,
+        };
+        assert!(scene.update_dnd_hover_target(blank_point, size));
+        assert_eq!(
+            scene.dnd_hover_target.as_ref().map(ShellDropTarget::kind),
+            Some("pane-blank")
+        );
+        assert_eq!(scene.dnd_hover_changes, 2);
+        assert!(scene.clear_dnd_hover_target());
+        assert_eq!(scene.dnd_hover_target, None);
+        assert_eq!(scene.dnd_hover_changes, 3);
+    }
+
+    #[test]
+    fn pane_projection_shares_visible_items_and_scroll_metrics_across_panes() {
+        let mut scene = test_scene(
+            (0..80)
+                .map(|index| test_entry(&format!("entry-{index:02}.txt"), false))
+                .collect(),
+            ShellViewMode::Compact,
+        );
+        let split_entries = (0..24)
+            .map(|index| test_entry(&format!("right-{index:02}"), index % 2 == 0))
+            .collect::<Vec<_>>();
+        scene.split_pane = Some(ShellPaneState {
+            path: PathBuf::from("/right-root"),
+            view_mode: ShellViewMode::Details,
+            dir_count: split_entries.iter().filter(|entry| entry.is_dir).count(),
+            filtered_indexes: filtered_indexes_for_entries(&split_entries, false, ""),
+            entries: split_entries,
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+        });
+        let size = PhysicalSize::new(900, 360);
+
+        let primary = scene.primary_pane_projection(size);
+        assert_eq!(primary.geometry.kind, ShellPaneKind::Primary);
+        assert_eq!(
+            primary.visible_items.len(),
+            scene.layout(size).visible_items().len()
+        );
+        assert_eq!(
+            primary.scroll_metrics.max_scroll_x,
+            scene.max_scroll_x(size)
+        );
+        assert_eq!(
+            primary.scroll_metrics.max_scroll_y,
+            scene.max_scroll_y(size)
+        );
+
+        let split = scene.pane_projection(ShellPaneKind::Split, size).unwrap();
+        assert_eq!(split.geometry.kind, ShellPaneKind::Split);
+        assert_eq!(split.view.path, Path::new("/right-root"));
+        assert!(!split.visible_items.is_empty());
+        assert!(split.scroll_metrics.content_size.height >= split.geometry.content.height);
     }
 
     #[test]
