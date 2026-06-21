@@ -3066,6 +3066,22 @@ fn context_menu_item_icon_style(
     }
 }
 
+fn context_menu_named_icon_request(
+    item: &ShellContextMenuItem,
+) -> Option<(&str, NamedIconFallback)> {
+    match &item.icon {
+        ShellContextMenuIcon::Service(Some(icon)) => {
+            let icon = icon.trim();
+            (!icon.is_empty()).then_some((icon, NamedIconFallback::Service))
+        }
+        ShellContextMenuIcon::Application(Some(icon)) => {
+            let icon = icon.trim();
+            (!icon.is_empty()).then_some((icon, NamedIconFallback::Application))
+        }
+        _ => None,
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 struct ShellContextMenu {
     target: ShellContextTarget,
@@ -7727,7 +7743,7 @@ impl ShellScene {
         if let Some(split_projection) = self.pane_projection(ShellPaneKind::Split, size) {
             self.queue_thumbnail_read_ahead_for_projection(&split_projection, icons);
         }
-        self.push_context_menu_overlay(&mut overlay_vertices, overlay_text, size);
+        self.push_context_menu_overlay(&mut overlay_vertices, overlay_text, icons, size);
         self.push_properties_overlay(&mut overlay_vertices, overlay_text, size);
         self.push_create_dialog_overlay(&mut overlay_vertices, overlay_text, size);
         self.push_rename_dialog_overlay(&mut overlay_vertices, overlay_text, size);
@@ -8772,10 +8788,30 @@ impl ShellScene {
         true
     }
 
+    fn push_context_menu_item_icon(
+        &self,
+        vertices: &mut Vec<QuadVertex>,
+        icons: &mut IconFrameBuilder<'_>,
+        item: &ShellContextMenuItem,
+        icon: ViewRect,
+        clip: ViewRect,
+        scale: f32,
+        size: PhysicalSize<u32>,
+    ) {
+        if let Some((icon_name, fallback)) = context_menu_named_icon_request(item)
+            && icons.push_named_theme_icon(icon_name, fallback, icon, clip, IconDrawLayer::Overlay)
+        {
+            return;
+        }
+        let (glyph, icon_fg, icon_bg) = context_menu_item_icon_style(item);
+        push_context_menu_icon(vertices, icon, clip, glyph, icon_fg, icon_bg, scale, size);
+    }
+
     fn push_context_menu_overlay(
         &self,
         vertices: &mut Vec<QuadVertex>,
         text: &mut TextFrameBuilder<'_>,
+        icons: &mut IconFrameBuilder<'_>,
         size: PhysicalSize<u32>,
     ) {
         let Some(menu) = self.context_menu.as_ref() else {
@@ -8836,8 +8872,7 @@ impl ShellScene {
                 width: icon_size,
                 height: icon_size,
             };
-            let (glyph, icon_fg, icon_bg) = context_menu_item_icon_style(item);
-            push_context_menu_icon(vertices, icon, rect, glyph, icon_fg, icon_bg, scale, size);
+            self.push_context_menu_item_icon(vertices, icons, item, icon, rect, scale, size);
             let text_x = icon.right() + gap;
             text.push_label_aligned(
                 context_menu_item_label(item, self.show_hidden).as_str(),
@@ -8875,13 +8910,14 @@ impl ShellScene {
             }
         }
         push_clipped_rect_outline(vertices, rect, clip, 1.0, [0.784, 0.808, 0.839, 1.0], size);
-        self.push_context_submenu_overlay(vertices, text, menu, size);
+        self.push_context_submenu_overlay(vertices, text, icons, menu, size);
     }
 
     fn push_context_submenu_overlay(
         &self,
         vertices: &mut Vec<QuadVertex>,
         text: &mut TextFrameBuilder<'_>,
+        icons: &mut IconFrameBuilder<'_>,
         menu: &ShellContextMenu,
         size: PhysicalSize<u32>,
     ) {
@@ -8944,8 +8980,7 @@ impl ShellScene {
                 width: icon_size,
                 height: icon_size,
             };
-            let (glyph, icon_fg, icon_bg) = context_menu_item_icon_style(item);
-            push_context_menu_icon(vertices, icon, rect, glyph, icon_fg, icon_bg, scale, size);
+            self.push_context_menu_item_icon(vertices, icons, item, icon, rect, scale, size);
             let text_x = icon.right() + gap;
             text.push_label_aligned(
                 context_menu_item_label(item, self.show_hidden).as_str(),
@@ -11190,6 +11225,7 @@ impl WgpuState {
             self.icon_renderer.draw(&mut pass);
             self.text_renderer.draw(&mut pass);
             self.overlay_quad_renderer.draw(&mut pass);
+            self.icon_renderer.draw_overlay(&mut pass);
             self.overlay_text_renderer.draw(&mut pass);
         }
 
@@ -11458,6 +11494,7 @@ struct IconFrameStats {
 
 struct IconFrame {
     vertices: Vec<TextVertex>,
+    overlay_vertices: Vec<TextVertex>,
     pixels: Vec<u8>,
     width: u32,
     height: u32,
@@ -11469,6 +11506,12 @@ struct IconDraw {
     screen: ViewRect,
     atlas: AtlasRect,
     source: ViewRect,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum IconDrawLayer {
+    Content,
+    Overlay,
 }
 
 #[derive(Clone, Debug)]
@@ -11933,6 +11976,7 @@ struct IconFrameBuilder<'a> {
     surface_size: PhysicalSize<u32>,
     pixels: Vec<u8>,
     draws: Vec<IconDraw>,
+    overlay_draws: Vec<IconDraw>,
     width: u32,
     height: u32,
     cursor_x: u32,
@@ -11967,6 +12011,7 @@ impl<'a> IconFrameBuilder<'a> {
             surface_size,
             pixels: vec![0; (ICON_ATLAS_WIDTH * 4) as usize],
             draws: Vec::with_capacity(64),
+            overlay_draws: Vec::with_capacity(16),
             width: ICON_ATLAS_WIDTH,
             height: 1,
             cursor_x: ICON_PADDING,
@@ -12041,7 +12086,7 @@ impl<'a> IconFrameBuilder<'a> {
             self.raster_cache.insert(key, raster)
         };
 
-        self.copy_raster_to_atlas(raster, rect, screen);
+        self.copy_raster_to_atlas(raster, rect, screen, IconDrawLayer::Content);
         true
     }
 
@@ -12114,8 +12159,65 @@ impl<'a> IconFrameBuilder<'a> {
                 ThumbnailResolveState::Failed => return false,
             }
         };
-        self.copy_raster_to_atlas(raster, rect, screen);
+        self.copy_raster_to_atlas(raster, rect, screen, IconDrawLayer::Content);
         self.thumbnail_quads += 1;
+        true
+    }
+
+    fn push_named_theme_icon(
+        &mut self,
+        icon_name: &str,
+        fallback: NamedIconFallback,
+        rect: ViewRect,
+        clip: ViewRect,
+        layer: IconDrawLayer,
+    ) -> bool {
+        if rect.width <= 0.0 || rect.height <= 0.0 {
+            self.fallbacks += 1;
+            return false;
+        }
+        let Some(screen) = intersect_rect(rect, clip) else {
+            return true;
+        };
+        self.icons += 1;
+        let resolve_start = Instant::now();
+        let icon_size = rect.width.max(rect.height).clamp(16.0, 256.0);
+        let Some(snapshot) = self.resolver.resolve_named(icon_name, fallback, icon_size) else {
+            self.resolve_us += resolve_start.elapsed().as_micros();
+            self.deferred += 1;
+            self.fallbacks += 1;
+            return false;
+        };
+        self.resolve_us += resolve_start.elapsed().as_micros();
+
+        let Some(path) = snapshot.path else {
+            self.fallbacks += 1;
+            return false;
+        };
+        let size_px = icon_cache_size(icon_size);
+        let key = IconRasterCacheKey::icon(path, size_px);
+        let raster = if let Some(raster) = self.raster_cache.get(&key) {
+            self.cache_hits += 1;
+            raster
+        } else {
+            self.cache_misses += 1;
+            if self.raster_miss_budget == 0 {
+                self.raster_deferred += 1;
+                self.fallbacks += 1;
+                return false;
+            }
+            self.raster_miss_budget -= 1;
+            let raster_start = Instant::now();
+            let Some(raster) = rasterize_icon(&key.path, size_px as u32) else {
+                self.raster_us += raster_start.elapsed().as_micros();
+                self.fallbacks += 1;
+                return false;
+            };
+            self.raster_us += raster_start.elapsed().as_micros();
+            self.raster_cache.insert(key, raster)
+        };
+
+        self.copy_raster_to_atlas(raster, rect, screen, layer);
         true
     }
 
@@ -12135,7 +12237,13 @@ impl<'a> IconFrameBuilder<'a> {
         }
     }
 
-    fn copy_raster_to_atlas(&mut self, raster: IconRaster, rect: ViewRect, screen: ViewRect) {
+    fn copy_raster_to_atlas(
+        &mut self,
+        raster: IconRaster,
+        rect: ViewRect,
+        screen: ViewRect,
+        layer: IconDrawLayer,
+    ) {
         let atlas = self.allocate(raster.width, raster.height);
         self.copy_icon_pixels(atlas, &raster);
 
@@ -12147,31 +12255,22 @@ impl<'a> IconFrameBuilder<'a> {
             width: screen.width * scale_x,
             height: screen.height * scale_y,
         };
-        self.draws.push(IconDraw {
+        let draw = IconDraw {
             screen,
             atlas,
             source,
-        });
+        };
+        match layer {
+            IconDrawLayer::Content => self.draws.push(draw),
+            IconDrawLayer::Overlay => self.overlay_draws.push(draw),
+        }
     }
 
     fn finish(self) -> IconFrame {
         let height = self.height.max(1);
-        let mut vertices = Vec::with_capacity(self.draws.len() * 6);
-        for draw in &self.draws {
-            push_textured_rect(
-                &mut vertices,
-                draw.screen,
-                AtlasRect {
-                    x: draw.atlas.x + draw.source.x,
-                    y: draw.atlas.y + draw.source.y,
-                    width: draw.source.width,
-                    height: draw.source.height,
-                },
-                self.width,
-                height,
-                self.surface_size,
-            );
-        }
+        let vertices = icon_draw_vertices(&self.draws, self.width, height, self.surface_size);
+        let overlay_vertices =
+            icon_draw_vertices(&self.overlay_draws, self.width, height, self.surface_size);
         let atlas_bytes = (self.width * height * 4) as usize;
         let cache_entries = self.raster_cache.len();
         let cache_bytes = self.raster_cache.bytes();
@@ -12179,12 +12278,13 @@ impl<'a> IconFrameBuilder<'a> {
         let thumbnail_ready_bytes = self.thumbnails.ready_bytes();
         IconFrame {
             vertices,
+            overlay_vertices,
             pixels: self.pixels,
             width: self.width,
             height,
             stats: IconFrameStats {
                 icons: self.icons,
-                quads: self.draws.len(),
+                quads: self.draws.len() + self.overlay_draws.len(),
                 fallbacks: self.fallbacks,
                 deferred: self.deferred,
                 thumbnails: self.thumbnails_loaded,
@@ -12250,6 +12350,31 @@ impl<'a> IconFrameBuilder<'a> {
     }
 }
 
+fn icon_draw_vertices(
+    draws: &[IconDraw],
+    atlas_width: u32,
+    atlas_height: u32,
+    surface_size: PhysicalSize<u32>,
+) -> Vec<TextVertex> {
+    let mut vertices = Vec::with_capacity(draws.len() * 6);
+    for draw in draws {
+        push_textured_rect(
+            &mut vertices,
+            draw.screen,
+            AtlasRect {
+                x: draw.atlas.x + draw.source.x,
+                y: draw.atlas.y + draw.source.y,
+                width: draw.source.width,
+                height: draw.source.height,
+            },
+            atlas_width,
+            atlas_height,
+            surface_size,
+        );
+    }
+    vertices
+}
+
 struct IconRenderer {
     pipeline: wgpu::RenderPipeline,
     bind_group_layout: wgpu::BindGroupLayout,
@@ -12262,6 +12387,8 @@ struct IconRenderer {
     vertex_buffer: wgpu::Buffer,
     vertex_capacity: usize,
     vertex_count: usize,
+    overlay_vertex_start: usize,
+    overlay_vertex_count: usize,
     resolver: FileIconResolver,
     thumbnails: ThumbnailRasterResolver,
     raster_cache: IconRasterCache,
@@ -12350,6 +12477,8 @@ impl IconRenderer {
             vertex_buffer,
             vertex_capacity,
             vertex_count: 0,
+            overlay_vertex_start: 0,
+            overlay_vertex_count: 0,
             resolver: FileIconResolver::new(),
             thumbnails: ThumbnailRasterResolver::new(),
             raster_cache: IconRasterCache::new(ICON_CACHE_MAX_BYTES),
@@ -12392,17 +12521,19 @@ impl IconRenderer {
             },
         );
 
-        if frame.vertices.len() > self.vertex_capacity {
-            self.vertex_capacity = frame.vertices.len().next_power_of_two();
+        let total_vertices = frame.vertices.len() + frame.overlay_vertices.len();
+        if total_vertices > self.vertex_capacity {
+            self.vertex_capacity = total_vertices.next_power_of_two();
             self.vertex_buffer = create_text_vertex_buffer(device, self.vertex_capacity);
         }
         self.vertex_count = frame.vertices.len();
-        if !frame.vertices.is_empty() {
-            queue.write_buffer(
-                &self.vertex_buffer,
-                0,
-                bytemuck::cast_slice(&frame.vertices),
-            );
+        self.overlay_vertex_start = frame.vertices.len();
+        self.overlay_vertex_count = frame.overlay_vertices.len();
+        if total_vertices > 0 {
+            let mut vertices = Vec::with_capacity(total_vertices);
+            vertices.extend_from_slice(&frame.vertices);
+            vertices.extend_from_slice(&frame.overlay_vertices);
+            queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&vertices));
         }
     }
 
@@ -12416,8 +12547,20 @@ impl IconRenderer {
         pass.draw(0..self.vertex_count as u32, 0..1);
     }
 
+    fn draw_overlay<'pass>(&'pass self, pass: &mut wgpu::RenderPass<'pass>) {
+        if self.overlay_vertex_count == 0 {
+            return;
+        }
+        pass.set_pipeline(&self.pipeline);
+        pass.set_bind_group(0, &self.bind_group, &[]);
+        pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+        let start = self.overlay_vertex_start as u32;
+        let end = start + self.overlay_vertex_count as u32;
+        pass.draw(start..end, 0..1);
+    }
+
     fn batch_count(&self) -> usize {
-        usize::from(self.vertex_count > 0)
+        usize::from(self.vertex_count > 0) + usize::from(self.overlay_vertex_count > 0)
     }
 }
 
@@ -13549,6 +13692,16 @@ enum FileIconKind {
     File {
         extension: Option<String>,
     },
+    Named {
+        icon_name: String,
+        fallback: NamedIconFallback,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum NamedIconFallback {
+    Service,
+    Application,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -13617,6 +13770,41 @@ impl FileIconResolver {
             entry.mime_magic_checked,
             icon_size,
         );
+        if let Some(icon) = self.cached.get(&key) {
+            return Some(icon.clone());
+        }
+
+        if self.pending.insert(key.clone())
+            && self
+                .request_tx
+                .as_ref()
+                .is_none_or(|tx| tx.send(IconResolveRequest { key }).is_err())
+        {
+            self.pending.clear();
+        }
+        None
+    }
+
+    fn resolve_named(
+        &mut self,
+        icon_name: &str,
+        fallback: NamedIconFallback,
+        icon_size: f32,
+    ) -> Option<ResolvedFileIcon> {
+        self.drain_results();
+        let icon_name = icon_name.trim();
+        if icon_name.is_empty() {
+            return None;
+        }
+        let key = FileIconPathCacheKey {
+            role: FileIconRoleCacheKey {
+                kind: FileIconKind::Named {
+                    icon_name: icon_name.to_string(),
+                    fallback,
+                },
+            },
+            size_px: icon_cache_size(icon_size),
+        };
         if let Some(icon) = self.cached.get(&key) {
             return Some(icon.clone());
         }
@@ -13721,6 +13909,12 @@ impl IconThemeResolver {
     }
 
     fn find_uncached(&mut self, icon_name: &str, desired_size: u16) -> Option<PathBuf> {
+        if let Some(path) = absolute_icon_candidate(icon_name)
+            && self.is_renderable_icon_file(&path)
+        {
+            return Some(path);
+        }
+
         let roots = self.roots.clone();
         for theme in self.theme_search_order() {
             for root in &roots {
@@ -13945,6 +14139,10 @@ fn file_icon_profile(kind: &FileIconKind, mime: &fika_core::MimeDatabase) -> Fil
             fallback_file_icon_candidates(extension.as_deref()),
             mime_generic_icon_candidates(fika_core::GENERIC_BINARY_MIME, mime),
         ),
+        FileIconKind::Named {
+            icon_name,
+            fallback,
+        } => named_icon_candidates(icon_name, *fallback),
     };
 
     FileIconProfile {
@@ -14037,6 +14235,32 @@ fn push_icon_candidate(candidates: &mut Vec<String>, icon_name: impl Into<String
     if !candidates.iter().any(|existing| existing == &icon_name) {
         candidates.push(icon_name);
     }
+}
+
+fn named_icon_candidates(
+    icon_name: &str,
+    fallback: NamedIconFallback,
+) -> (Vec<String>, Vec<String>) {
+    let mut candidates = Vec::new();
+    push_icon_candidate(&mut candidates, icon_name.trim());
+    let generic = match fallback {
+        NamedIconFallback::Service => ["configure", "preferences-system", "system-run"].as_slice(),
+        NamedIconFallback::Application => [
+            "application-x-executable",
+            "system-run",
+            "application-default-icon",
+        ]
+        .as_slice(),
+    }
+    .iter()
+    .map(|candidate| (*candidate).to_string())
+    .collect();
+    (candidates, generic)
+}
+
+fn absolute_icon_candidate(icon_name: &str) -> Option<PathBuf> {
+    let path = Path::new(icon_name);
+    path.is_absolute().then(|| path.to_path_buf())
 }
 
 fn icon_theme_roots() -> Vec<PathBuf> {
@@ -17737,6 +17961,104 @@ mod tests {
         }));
         let tools = context_submenu_actions(ShellContextSubmenu::ServiceMenuGroup(0), &menu);
         assert!(tools.iter().any(|item| item.label == "Checksum"));
+    }
+
+    #[test]
+    fn service_menu_named_icon_request_preserves_icon_name() {
+        let action = ServiceMenuAction {
+            id: "archive.desktop::compress".to_string(),
+            label: "Compress".to_string(),
+            source_name: "Archive".to_string(),
+            icon: Some("archive-insert".to_string()),
+            submenu: None,
+            priority: ServiceMenuPriority::TopLevel,
+        };
+        let item = service_menu_action_item(&action);
+
+        assert_eq!(
+            context_menu_named_icon_request(&item),
+            Some(("archive-insert", NamedIconFallback::Service))
+        );
+    }
+
+    #[test]
+    fn named_service_icon_candidates_prefer_service_icon() {
+        let profile = file_icon_profile(
+            &FileIconKind::Named {
+                icon_name: "tools-checksum".to_string(),
+                fallback: NamedIconFallback::Service,
+            },
+            fika_core::MimeDatabase::shared(),
+        );
+
+        assert_eq!(
+            profile.icon_candidates.first().map(String::as_str),
+            Some("tools-checksum")
+        );
+        assert!(
+            profile
+                .generic_candidates
+                .iter()
+                .any(|name| name == "configure")
+        );
+        assert!(
+            profile
+                .generic_candidates
+                .iter()
+                .any(|name| name == "system-run")
+        );
+    }
+
+    #[test]
+    fn icon_frame_keeps_overlay_vertices_separate() {
+        let mut resolver = FileIconResolver::new();
+        let mut thumbnails = ThumbnailRasterResolver::new();
+        let mut raster_cache = IconRasterCache::new(ICON_CACHE_MAX_BYTES);
+        let mut builder = IconFrameBuilder::new(
+            &mut resolver,
+            &mut thumbnails,
+            &mut raster_cache,
+            PhysicalSize::new(128, 96),
+        );
+        let raster = test_icon_raster(2, 7);
+        builder.copy_raster_to_atlas(
+            raster.clone(),
+            ViewRect {
+                x: 4.0,
+                y: 4.0,
+                width: 16.0,
+                height: 16.0,
+            },
+            ViewRect {
+                x: 4.0,
+                y: 4.0,
+                width: 16.0,
+                height: 16.0,
+            },
+            IconDrawLayer::Content,
+        );
+        builder.copy_raster_to_atlas(
+            raster,
+            ViewRect {
+                x: 24.0,
+                y: 4.0,
+                width: 16.0,
+                height: 16.0,
+            },
+            ViewRect {
+                x: 24.0,
+                y: 4.0,
+                width: 16.0,
+                height: 16.0,
+            },
+            IconDrawLayer::Overlay,
+        );
+
+        let frame = builder.finish();
+
+        assert_eq!(frame.vertices.len(), 6);
+        assert_eq!(frame.overlay_vertices.len(), 6);
+        assert_eq!(frame.stats.quads, 2);
     }
 
     #[test]

@@ -159,10 +159,10 @@ Shell 拥有：
   启动选中的 desktop entry。wgpu context menu 也已消费 core KDE/Fika service-menu
   matcher，把 TopLevel actions、More Actions 和 `X-KDE-Submenu` groups 暴露为
   shell-owned 子菜单，并通过 core service-menu launch plan 启动匹配的 service action。
-  wgpu shell 里的 application/service menu themed icon 仍是占位 glyph。多 MIME
-  `text/uri-list` clipboard export/import、更完整 multi-conflict handling、undo、
-  更完整 properties、完整 inline rename、完整 Create New 模板和设置 Open With default
-  仍留到 Phase 4。
+  Open With 和 service-menu row 现在会保留 `.desktop` / service `Icon=` 名称，并通过
+  wgpu theme icon worker 解析到 overlay icon pass；未解析成功时仍回退到紧凑 glyph。
+  多 MIME `text/uri-list` clipboard export/import、更完整 multi-conflict handling、undo、
+  更完整 properties、完整 inline rename、完整 Create New 模板和设置 Open With default 仍留到 Phase 4。
 - 第一版 shell-owned Places 侧栏现在作为圆角浅色 panel 绘制，顶部与 app-level
   toolbar 下方的 pane 起点对齐，也就是对齐右侧 pane 外框起点而不是 pane body。它通过公开 core API 构建 Home、已存在的 XDG directories、Trash、Fika user places、primary
   `places-order.xml`、Network root、network bookmarks 和 Root，保留 row geometry，用最长路径前缀决定 active place，Places

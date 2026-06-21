@@ -194,11 +194,12 @@ Current checkpoint:
   wgpu context menu also consumes the core KDE/Fika service-menu matcher,
   exposes TopLevel actions, More Actions, and `X-KDE-Submenu` groups as
   shell-owned submenus, and launches matched service actions through core
-  service-menu launch plans. Themed application/service menu icons are still
-  placeholder glyphs in the wgpu shell. Multi-MIME `text/uri-list` clipboard
-  export/import, richer multi-conflict handling, undo, richer properties, full
-  inline rename, full Create New templates, and setting Open With defaults
-  remain Phase 4 work.
+  service-menu launch plans. Open With and service-menu rows now preserve their
+  `.desktop` / service `Icon=` names and resolve them through the wgpu theme icon
+  worker into an overlay icon pass; unresolved icons still fall back to compact
+  glyphs. Multi-MIME `text/uri-list` clipboard export/import, richer
+  multi-conflict handling, undo, richer properties, full inline rename, full
+  Create New templates, and setting Open With defaults remain Phase 4 work.
 - A first shell-owned Places sidebar is now drawn as a rounded light panel whose
   top edge aligns with the pane origin below the app-level toolbar, matching the
   right-side pane start rather than the pane body. It builds Home, existing XDG
