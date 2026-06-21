@@ -34,7 +34,6 @@ use fika_core::{
     thumbnail_request_may_have_preview, transfer_paths_result, trash_view_operation_result,
 };
 use gio::prelude::FileExt;
-use raw_window_handle::{HasDisplayHandle, RawDisplayHandle};
 use winit::application::ApplicationHandler;
 use winit::cursor::{Cursor as WinitCursor, CursorIcon};
 use winit::dpi::PhysicalSize;
@@ -43,11 +42,17 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, KeyCode, NamedKey, PhysicalKey};
 use winit::window::{Window, WindowAttributes, WindowId};
 
+#[path = "fika_wgpu/clipboard.rs"]
+mod wgpu_clipboard;
+#[path = "fika_wgpu/location.rs"]
+mod wgpu_location;
 #[path = "fika_wgpu/metrics.rs"]
 mod wgpu_metrics;
 #[path = "fika_wgpu/options.rs"]
 mod wgpu_options;
 
+use wgpu_clipboard::ShellClipboard;
+use wgpu_location::{LocationDraft, PathHistory, normalized_text_cursor};
 use wgpu_metrics::*;
 use wgpu_options::{ShellViewMode, parse_start_options};
 
@@ -196,47 +201,6 @@ fn window_title(scene: &ShellScene) -> String {
             scene.view_mode.as_str(),
             scene.path.display()
         )
-    }
-}
-
-enum ShellClipboard {
-    Wayland(smithay_clipboard::Clipboard),
-}
-
-impl ShellClipboard {
-    fn from_window(window: &dyn Window) -> Result<Option<Self>, String> {
-        let display = window
-            .display_handle()
-            .map_err(|error| format!("display handle: {error}"))?;
-        match display.as_raw() {
-            RawDisplayHandle::Wayland(handle) => {
-                let clipboard = unsafe {
-                    // The pointer comes from winit's live Wayland display handle.
-                    // Fika drops ShellClipboard before dropping the window.
-                    smithay_clipboard::Clipboard::new(handle.display.as_ptr())
-                };
-                Ok(Some(Self::Wayland(clipboard)))
-            }
-            _ => Ok(None),
-        }
-    }
-
-    fn backend(&self) -> &'static str {
-        match self {
-            Self::Wayland(_) => "wayland",
-        }
-    }
-
-    fn store_text(&self, text: &str) {
-        match self {
-            Self::Wayland(clipboard) => clipboard.store(text.to_string()),
-        }
-    }
-
-    fn load_text(&self) -> Result<String, String> {
-        match self {
-            Self::Wayland(clipboard) => clipboard.load().map_err(|error| error.to_string()),
-        }
     }
 }
 
@@ -2356,144 +2320,6 @@ struct PrimaryClick {
     index: usize,
     point: ViewPoint,
     time: Instant,
-}
-
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-struct PathHistory {
-    back: Vec<PathBuf>,
-    forward: Vec<PathBuf>,
-}
-
-impl PathHistory {
-    fn push_back(&mut self, path: PathBuf) {
-        push_limited_path(&mut self.back, path);
-    }
-
-    fn push_forward(&mut self, path: PathBuf) {
-        push_limited_path(&mut self.forward, path);
-    }
-
-    fn clear_forward(&mut self) {
-        self.forward.clear();
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct LocationDraft {
-    value: String,
-    cursor: usize,
-    replace_on_insert: bool,
-}
-
-impl LocationDraft {
-    fn new(value: String) -> Self {
-        Self {
-            cursor: value.len(),
-            value,
-            replace_on_insert: true,
-        }
-    }
-
-    fn insert(&mut self, value: &str) {
-        self.prepare_for_edit();
-        self.value.insert_str(self.cursor, value);
-        self.cursor += value.len();
-    }
-
-    fn backspace(&mut self) {
-        if self.replace_on_insert {
-            self.value.clear();
-            self.cursor = 0;
-            self.replace_on_insert = false;
-            return;
-        }
-        let Some(previous) = previous_char_boundary(&self.value, self.cursor) else {
-            return;
-        };
-        self.value.drain(previous..self.cursor);
-        self.cursor = previous;
-    }
-
-    fn delete(&mut self) {
-        self.replace_on_insert = false;
-        let cursor = normalized_text_cursor(&self.value, self.cursor);
-        let Some(next) = next_char_boundary(&self.value, cursor) else {
-            self.cursor = cursor;
-            return;
-        };
-        self.value.drain(cursor..next);
-        self.cursor = cursor;
-    }
-
-    fn move_left(&mut self) {
-        self.replace_on_insert = false;
-        if let Some(previous) = previous_char_boundary(&self.value, self.cursor) {
-            self.cursor = previous;
-        }
-    }
-
-    fn move_right(&mut self) {
-        self.replace_on_insert = false;
-        if let Some(next) = next_char_boundary(&self.value, self.cursor) {
-            self.cursor = next;
-        }
-    }
-
-    fn move_home(&mut self) {
-        self.replace_on_insert = false;
-        self.cursor = 0;
-    }
-
-    fn move_end(&mut self) {
-        self.replace_on_insert = false;
-        self.cursor = self.value.len();
-    }
-
-    fn set_completed(&mut self, value: String) {
-        self.value = value;
-        self.cursor = self.value.len();
-        self.replace_on_insert = false;
-    }
-
-    fn prepare_for_edit(&mut self) {
-        if self.replace_on_insert {
-            self.value.clear();
-            self.cursor = 0;
-            self.replace_on_insert = false;
-        }
-        self.cursor = self.cursor.min(self.value.len());
-        while !self.value.is_char_boundary(self.cursor) {
-            self.cursor -= 1;
-        }
-    }
-}
-
-fn previous_char_boundary(value: &str, cursor: usize) -> Option<usize> {
-    let cursor = normalized_text_cursor(value, cursor);
-    value[..cursor]
-        .char_indices()
-        .last()
-        .map(|(index, _)| index)
-}
-
-fn next_char_boundary(value: &str, cursor: usize) -> Option<usize> {
-    let cursor = normalized_text_cursor(value, cursor);
-    if cursor >= value.len() {
-        return None;
-    }
-    value[cursor..]
-        .char_indices()
-        .nth(1)
-        .map(|(index, _)| cursor + index)
-        .or(Some(value.len()))
-}
-
-fn normalized_text_cursor(value: &str, cursor: usize) -> usize {
-    let mut cursor = cursor.min(value.len());
-    while !value.is_char_boundary(cursor) {
-        cursor -= 1;
-    }
-    cursor
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -15113,17 +14939,6 @@ fn chrome_color() -> [f32; 4] {
 
 fn sidebar_color() -> [f32; 4] {
     [0.973, 0.976, 0.984, 1.0]
-}
-
-fn push_limited_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
-    if paths.last().is_some_and(|existing| existing == &path) {
-        return;
-    }
-    paths.push(path);
-    if paths.len() > PATH_HISTORY_LIMIT {
-        let overflow = paths.len() - PATH_HISTORY_LIMIT;
-        paths.drain(0..overflow);
-    }
 }
 
 fn details_size_label(entry: &Entry) -> String {

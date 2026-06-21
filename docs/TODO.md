@@ -65,9 +65,11 @@ wgpu = "29"
 - [ ] Phase 1：用 upstream winit master 重新验证 `fika-wgpu` 构建和 runtime smoke：
   `/etc`、repo root、large-dir、Icons/Compact/Details、split pane、scrollbar、rubber-band、
   context menu、location caret、DPI。
-- [ ] Phase 2：拆分 `src/bin/fika-wgpu.rs` 单文件。优先抽出 app/window/event loop、
-  renderer、scene、pane、Places、context menu、dialogs、icons、thumbnails、text、
-  DnD、telemetry。
+- [~] Phase 2：拆分 `src/bin/fika-wgpu.rs` 单文件。已抽出
+  `src/bin/fika_wgpu/clipboard.rs`（Wayland clipboard wrapper）和
+  `src/bin/fika_wgpu/location.rs`（`PathHistory`、`LocationDraft`、UTF-8 cursor helper）。
+  下一步继续抽 app/window/event loop、renderer、scene、pane、Places、context menu、
+  dialogs、icons、thumbnails、text、DnD、telemetry。
 - [ ] Phase 3：把 pane 做成可复用组件，并持续对齐 Dolphin 架构：visible-slot
   virtualization、slot pool、retained geometry、filtered projection、selection/rubber-band、
   scroll/zoom、rename/filter/DnD 共用边界。

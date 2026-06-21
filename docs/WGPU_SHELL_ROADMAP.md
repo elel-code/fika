@@ -101,6 +101,10 @@ Expected cleanup:
 
 ### Phase 2: Break Up the Monolith
 
+- First extraction is in place: `src/bin/fika_wgpu/clipboard.rs` owns the
+  shell clipboard wrapper, and `src/bin/fika_wgpu/location.rs` owns
+  `PathHistory`, `LocationDraft`, and UTF-8 cursor normalization for location
+  editing.
 - Extract app/window/event loop, renderer, scene, pane, Places, context menu,
   dialogs, icons, thumbnails, text, DnD, and telemetry modules.
 - Keep behavior changes small while moving code, so regressions remain easy to

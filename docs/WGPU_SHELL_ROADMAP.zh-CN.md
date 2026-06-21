@@ -88,6 +88,9 @@ winit/wgpu shell 负责：
 
 ### Phase 2：拆分单文件
 
+- 第一批拆分已落地：`src/bin/fika_wgpu/clipboard.rs` 负责 shell clipboard wrapper；
+  `src/bin/fika_wgpu/location.rs` 负责 `PathHistory`、`LocationDraft` 和地址栏编辑使用的
+  UTF-8 cursor normalization。
 - 抽出 app/window/event loop、renderer、scene、pane、Places、context menu、
   dialogs、icons、thumbnails、text、DnD、telemetry 模块。
 - 拆分时尽量少改行为，方便定位 regression。
