@@ -144,7 +144,7 @@ Before adding a new UI feature:
 ## Reference Document Catalog
 
 ### Architecture and Planning
-- [WGPU_SHELL_ROADMAP.md](WGPU_SHELL_ROADMAP.md) — Active Linux-only SCTK/wgpu shell target
+- [WGPU_SHELL_ROADMAP.md](WGPU_SHELL_ROADMAP.md) — Active upstream winit/wgpu shell target
 - [DESIGN.md](DESIGN.md) — Current GPUI/core baseline architecture
 - [TODO.md](TODO.md) — Remaining task board
 - [ITEM_VIEW_CUSTOM_PAINT_DESIGN.md](ITEM_VIEW_CUSTOM_PAINT_DESIGN.md) — GPUI retained item-view baseline evidence

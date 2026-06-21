@@ -1,7 +1,7 @@
 # Dolphin-style Item Slot Reuse Plan
 
 > Archived Slint-era slot-reuse investigation. Future UI work targets the
-> SCTK/wgpu shell and should follow `docs/WGPU_SHELL_ROADMAP.md`,
+> upstream winit/wgpu shell and should follow `docs/WGPU_SHELL_ROADMAP.md`,
 > `docs/TODO.md`, and `docs/DESIGN.md`.
 
 ## Verdict

@@ -1,636 +1,156 @@
-# Fika SCTK/wgpu Shell Roadmap
+# Fika winit/wgpu Shell Roadmap
 
-This document is the active UI direction for Fika. The GPUI application remains
-the compatibility and behavior baseline while the new Linux-only shell is
-proved out. New UI architecture work should target a Fika-specific
-`smithay-client-toolkit + calloop + wgpu` runtime instead of extending the GPUI
-element-tree migration.
+This document is the active UI direction for Fika.
 
-The goal is not to adopt another general-purpose widget toolkit. Fika should
-own the Linux/Wayland client boundary through the Smithay client-toolkit
-ecosystem, then build a narrow file-manager renderer, scene model, input
-router, and cache policy around Fika's own retained data.
+Decision, 2026-06-21: the new shell mainline is **official upstream
+`winit` master + official crates.io `wgpu`**. The GPUI application remains the
+compatibility and behavior baseline while the winit shell is made complete.
+The SCTK backend is no longer the main route; keep it buildable as an
+experiment/reference backend, but do not add new shell behavior there unless a
+later decision explicitly reopens it.
 
 ## Decision
 
-Fika is Linux-only. That removes the main reason to keep a cross-platform UI
-framework in the hot path. The file view, Places sidebar, selection model,
-hover state, drag/drop routing, zoom, thumbnails, and icon/text caches are
-specialized enough that emulating Dolphin through GPUI has become more costly
-than owning a purpose-built runtime.
+Fika is Linux-only, but that does not require owning every Wayland protocol
+edge directly. The recent SCTK spike exposed shell-level cost in startup
+presentation, input coordinates, scale handling, popup behavior, and DnD
+plumbing. Those problems sit below the file-manager scene and would continue to
+slow migration.
 
-The new shell should use:
+The mainline should use:
 
-- `smithay-client-toolkit`, `calloop`, `calloop-wayland-source`, and
-  `wayland-client` as first-class shell dependencies. Fika is not targeting
-  other platforms, so the long-term window/event/input layer should be the
-  native Wayland client stack rather than `winit`.
-- Official crates.io `wgpu` for the render backend. COSMIC's resolved `wgpu`
-  version is useful compatibility context, but Fika should depend on upstream
-  `wgpu` directly instead of inheriting a framework or editor fork.
-- Existing Fika core modules for listing, operations, thumbnails, MIME,
-  Places, devices, trash, portal, and privileged-helper behavior.
-- Existing retained file-grid and Places models as migration input, not as
-  GPUI-specific design constraints.
+- `winit` from `https://github.com/rust-windowing/winit.git`, branch `master`.
+  This is the official upstream branch. Do not use the Pop!_OS/COSMIC or
+  iced-maintained fork for the mainline.
+- Official crates.io `wgpu` for rendering.
+- Existing Fika core modules for directory listing, operations, thumbnails,
+  MIME/application launching, Places, devices, trash, portal, and privileged
+  helper behavior.
+- Existing GPUI retained-model work and the `fika-wgpu` spike as migration
+  input, not as a reason to keep a monolithic renderer file.
 
-Do not build the main shell as a libcosmic/iced widget tree. Those projects are
-valuable references for Linux windowing, Wayland, DnD, clipboard, text, and
-theme integration, but Fika's primary UI should be a dedicated file-manager
-surface.
-
-The earlier iced/COSMIC `winit` spike was useful for proving the retained scene
-and wgpu renderer quickly, but it should now be treated as migration input only.
-For Fika's target environment, SCTK is the better long-term layer because it
-lets the shell own xdg-shell windows, popups, seats, data devices, drag/drop,
-frame callbacks, scale/output state, and calloop integration directly instead
-of inheriting a cross-platform abstraction designed for broader applications.
-
-## Why This Can Outperform GPUI and cosmic-files
-
-Fika has a narrower problem than a general desktop UI framework:
-
-- The file grid can be rendered as a few batched GPU passes over visible slots
-  instead of thousands of independent row/item widgets.
-- Layout, hit testing, paint command generation, and input routing can share
-  one retained geometry projection.
-- Scroll and zoom can update viewport state first, then budget expensive
-  thumbnail, icon, text-shape, and glyph work behind the visible layer.
-- MIME/theme icons, thumbnails, and glyph atlases can be keyed by file-manager
-  semantics instead of widget/image handle lifetime.
-- Places, Compact, Icons, and Details can share slot, dirty-state, cache, and
-  hit-test primitives.
-- Linux-only clipboard, URI-list, Wayland DnD, portal, GIO/GVfs, and XDG
-  behavior can stay narrow and directly testable.
-
-The tradeoff is explicit ownership. Fika must own frame scheduling, GPU
-resources, text cache policy, focus, IME boundaries, popups, clipboard, DnD,
-and accessibility planning. This is acceptable only because those pieces can be
-implemented for Fika's file-manager workflows instead of for a generic toolkit.
+`winit` is a shell shim here, not a portability goal. Fika can remain
+Linux-focused while letting upstream winit own the difficult window/event/scale
+surface boundary.
 
 ## Architecture Target
 
 ```text
-core model -> retained UI model -> scene projection -> GPU command batches
-          \-> input/hit-test routing -> file-manager actions
+fika-core
+  -> retained file-manager model
+  -> winit shell state
+  -> wgpu scene projection and GPU batches
+  -> input/hit-test routing back to file-manager actions
 ```
 
-Core remains UI-neutral. It must not depend on SCTK, Wayland protocol objects,
-`wgpu`, window handles, or renderer resources.
+Core remains UI-neutral. It must not depend on GPUI, winit, SCTK, Wayland
+protocol objects, `wgpu`, raw window handles, or renderer resources.
 
-The shell owns:
+The winit/wgpu shell owns:
 
-- Window lifecycle and event-loop integration.
-- Pane, Places, overlay, popup, and chooser scene state.
-- Retained geometry for file slots, Details rows, Places rows, scrollbars,
-  rubber-band selection, splitters, and context targets.
+- Window lifecycle and event loop integration.
+- Surface resize, scale-factor changes, redraw scheduling, and frame pacing.
+- Pane, Places, overlay, context menu, dialog, and chooser scene state.
+- Retained geometry for file slots, Details rows, Places rows, splitters,
+  scrollbars, rubber-band selection, drag targets, and context targets.
 - Hit testing and pointer/keyboard routing.
 - Draw command generation, batching, clipping, transforms, and invalidation.
-- Texture atlases for icons, thumbnails, masks, and UI assets.
-- Text shaping/raster cache integration through proven text crates. Do not
-  hand-roll Unicode shaping, bidi, fallback, or IME text editing.
-- Performance logs that replace GPUI renderer-policy logs with shell-native
-  frame, cache, atlas, batch, and hit-test counters.
+- Texture atlases/caches for MIME/theme icons, thumbnails, text, and UI assets.
+- Performance telemetry for frame time, layout, hit tests, visible slots,
+  cache hits/misses, atlas pressure, thumbnails, and DnD state.
+
+## Source Direction
+
+Current state:
+
+- `src/bin/fika-wgpu.rs` is the winit/wgpu prototype and becomes the new shell
+  migration source.
+- `src/bin/fika_wgpu/` already contains a small start of module extraction.
+- `src/bin/fika-sctk.rs` and `src/bin/fika_sctk/` are experimental/reference
+  code only. Keep them compiling when practical, but stop moving new behavior
+  into SCTK.
+- `src/main.rs` remains the GPUI baseline until the winit shell passes the
+  promotion gates.
+
+Expected cleanup:
+
+- Split `src/bin/fika-wgpu.rs` into focused modules under `src/bin/fika_wgpu/`.
+- Move reusable pane, Places, dialog, icon, thumbnail, text, DnD, and telemetry
+  pieces out of the monolith before adding major new behavior.
+- Keep shell-only state in the winit shell; move reusable file-manager behavior
+  into `fika-core` or shared UI-neutral modules.
 
 ## Migration Phases
 
-### Phase 0: Shell Spike
+### Phase 0: Route Switch
 
-Add a separate experimental binary, `fika-sctk`, without deleting the GPUI
-binary. It should open an SCTK xdg-window, initialize `wgpu` from raw Wayland
-handles, drive the existing directory listing model, and then migrate the
-retained scene/renderer behavior into the SCTK shell.
+- Use upstream `winit` master in `Cargo.toml`.
+- Remove old documentation that names SCTK as the sole shell target.
+- Preserve SCTK as an experiment/reference backend.
+- Verify the existing winit shell still builds with the upstream branch.
 
-The existing `fika-wgpu` binary remains a migration source for renderer,
-layout, hit-test, and cache behavior, but not the target window/event backend.
-New shell work should move code out of it rather than add more behavior to it.
+### Phase 1: Stabilize the winit Shell
 
-Current checkpoint:
-
-- `src/bin/fika-sctk.rs` exists as the new backend spike. It connects to the
-  Wayland session through SCTK/wayland-client, creates an xdg-window, builds a
-  `wgpu` surface from raw Wayland handles, reads the requested directory through
-  `fika_core::read_entries_sync`, and routes the Wayland event queue through
-  calloop `WaylandSource`. This is now more than a clear-frame host: `SctkPane`
-  owns startup directory entries, core `ViewMode`, retained scroll/hover/selection
-  state, Icons/Compact/Details layout projection, item painting, content
-  scrollbar drawing, pane-local chrome, and pane hit testing, while `SctkScene`
-  owns app chrome, Places, and routes pointer/scroll events into the active pane
-  geometry. The SCTK shell now accepts `--split` for a second pane on the same
-  path and `--split-path PATH` for a second pane on a different path; both panes
-  share `SctkPane`, and pointer hover, primary selection, and positioned wheel
-  scroll route to the hit pane. SCTK keyboard capability is now registered on
-  the Wayland seat; `F1/F2/F3`, `1/2/3`, arrows, Home/End, PageUp/PageDown,
-  Enter, Esc, `Ctrl/Meta+H`, `Ctrl/Meta+F`, `Ctrl/Meta+L`, and `F5`/`Ctrl/Meta+R` are translated into
-  `SceneCommand`s and dispatched to the active pane. `SctkPane` now owns the
-  hidden-file visible-index projection, runtime view switching, keyboard
-  navigation, directory activation, reload paths, and pane-local location edit.
-  The location bar can be focused by `Ctrl/Meta+L` or by clicking the active
-  pane's location bar; it accepts UTF-8 text insertion, Backspace/Delete,
-  arrows/Home/End, Enter-to-navigate, and Escape/outside-click cancellation
-  that restores the current path. `Ctrl/Meta+F` opens the active pane's filter
-  bar; UTF-8 text editing updates a retained plain-text name filter and rebuilds
-  the same `visible_indices` projection used for hidden-file filtering. Layout,
-  hit testing, hover, selection, select-all, keyboard navigation, rubber-band,
-  and scrollbars all route through that filtered projection. Enter keeps the
-  query and returns focus to the file view; Escape clears and closes the filter.
-  `F4` or
-  `Ctrl/Meta+Shift+S` toggles split view from the scene layer, reusing the same
-  `SctkPane` component for the new pane. The active pane now draws a lightweight
-  focus marker, and content scrollbar thumb/track dragging is routed through a
-  scene-level pointer capture that is cleared on release/leave. Pane selection
-  now has a reusable `selected_entries` set in addition to the focused/activated
-  item: `Ctrl/Meta+A` selects only the active pane's visible entries, blank
-  primary press starts rubber-band pointer capture, and Icons/Compact/Details
-  update multi-selection from their retained projection while drawing a clipped
-  translucent overlay. This same selection/capture boundary is the next DnD
-  source/export boundary.
-  The SCTK renderer uploads and draws those quads, while Wayland pointer handling
-  routes hover, left-click selection, and wheel scroll through the retained
-  scene hit-test path. Text is also rendered in SCTK now: `src/bin/fika_sctk/text.rs`
-  uses `cosmic-text` to shape/rasterize path, Places, status, item, and Details
-  labels into a per-frame RGBA atlas, then draws a textured quad pass after the
-  solid scene pass. Its entry point is a thin binary wrapper; startup options,
-  app/calloop orchestration, wgpu surface rendering, metrics, pane projection,
-  quad drawing, text drawing, the directory scene, and Wayland handlers live under
-  `src/bin/fika_sctk/`. HiDPI is now handled in the SCTK shell by configuring a
-  physical `wgpu` surface from the Wayland integer buffer scale and drawing
-  both solid quads and text atlas quads in the same physical surface coordinate
-  space. The earlier blur came from rendering a logical-size buffer that the
-  compositor upscaled; the follow-up offset came from scaling quad rects without
-  scaling the NDC surface denominator. The exact fractional-scale viewport path
-  remains available only behind `FIKA_SCTK_EXACT_FRACTIONAL_VIEWPORT=1` until it
-  has separate visual evidence.
-- New shell work should land in `src/bin/fika_sctk/`. The older
-  winit-backed `fika-wgpu` spike is a history/reference baseline only and should
-  not receive new shell behavior.
-
-Legacy migration input, read-only unless shared build breakage requires a fix:
-
-- `src/bin/fika-wgpu.rs` exists as the older winit-backed renderer spike.
-- It accepts an optional path argument and defaults to the current directory.
-- It reads directory entries through `fika_core::read_entries_sync`.
-- It projects entries through the existing `IconsLayout` retained geometry and
-  a shell-owned Compact projection that derives each column width from the
-  longest visible name in that column.
-- It renders a pane-local path bar, visible item backgrounds, real theme file/folder
-  icons when the active XDG icon theme can resolve them, fallback file/folder
-  icon shapes for misses, and real visible file names. Text uses
-  `cosmic-text` for shaping/rasterization, then uploads a temporary per-frame
-  RGBA atlas for a textured quad batch. The wgpu shell now applies the window
-  scale factor to shell metrics before layout/rasterization, so the default
-  Icons icon remains 48 logical px (for example 72 physical px at 1.5x scale)
-  and the 14px/18px baseline text metric matches the current GPUI Fika scale
-  more closely.
-- It keeps a bounded persistent label raster cache for visible file/path text,
-  keyed by text, size, and color. The per-frame atlas now packs cached label
-  rasters instead of reshaping/rasterizing every visible label on every redraw.
-- It resolves MIME/theme icons from XDG, GTK, and KDE theme settings; rasterizes
-  PNG/WebP/JPEG/BMP/GIF/ICO through `image` and SVG through `usvg/resvg`;
-  packs visible icons into a per-frame RGBA icon atlas; and keeps a bounded
-  persistent icon raster cache keyed by theme icon file path and size. Semantic
-  theme-icon path resolution is no longer allowed to block the frame path:
-  uncached file-icon roles are queued to a background resolver and the current
-  frame paints a fallback until the resolved path is ready. New icon rasters are
-  also capped per frame, following Dolphin's visible-first role updater model.
-- Mouse-wheel scrolling updates retained viewport state. File content now
-  reserves and draws shell-owned item-view scrollbars: Icons/Details use a
-  vertical right-side track and Compact uses a horizontal bottom track. The
-  track and thumb are rounded, and thumb drag plus track click-to-drag update
-  the same retained scroll offsets. The frame log includes
-  `content_scrollbar=0|1`.
-- The experimental binary accepts `--view icons|compact|details`. Icons remains
-  the default baseline; Compact uses core `CompactLayout`; Details now has a
-  shell-owned row projection with a fixed header and Name/Size/Modified columns.
-  Icons and Compact now only paint item highlight/background for hover or
-  selection, so plain unhovered items no longer look pre-highlighted. Compact
-  labels are left-aligned, and each Compact item's highlight width follows that
-  item's own text width rather than filling the whole column.
-  The same modes can be switched at runtime with `1/2/3`,
-  `Ctrl/Meta+1/2/3`, or fallback `F1/F2/F3` keys; the temporary top-bar mode
-  buttons were removed to match the original app toolbar while real toolbar
-  controls are still pending.
-  `--auto-cycle-views` switches modes once per second for compositor/render
-  debugging without any input. Switching clamps the active scroll axis, clears
-  transient rubber-band state, refreshes hover from retained geometry, updates
-  the window title, emits an immediate `[fika-wgpu] view-mode=...` log line,
-  and keeps a short redraw burst active until the switched scene has been
-  presented.
-- Pointer move/leave and left-click events now route through shell-owned
-  retained hit testing. The spike tracks hovered item, single selection,
-  Ctrl/Meta toggle selection, and Shift range selection by model index, then
-  paints hover/selection state from the same slot projection.
-- Right-click context targeting now also routes through shell-owned retained
-  hit testing. Right-clicking an unselected item syncs selection to that item,
-  right-clicking an already-selected item preserves the multi-selection while
-  focusing the clicked model index, and right-clicking blank content records a
-  blank directory target without starting rubber-band selection. The shell now
-  stores a lightweight context target snapshot, opens a clamped shell-owned
-  context menu overlay for item/blank targets, updates row hover, closes on Esc
-  or outside click, paints an opaque light menu surface instead of the earlier
-  translucent dark overlay, dispatches Open for directory items, dispatches Open for file
-  items through GIO default-application URI launch, opens a minimal
-  shell-owned Open With chooser for file items using core `MimeApplicationCache`
-  and systemd-user launch plans, dispatches item Copy Location to a shell-owned
-  Wayland text clipboard provider, dispatches item
-  Copy/Cut to the same provider using Fika's URI-list text encoding, dispatches
-  blank-menu Paste by reading the Wayland text clipboard, decoding Fika/GNOME
-  URI-list text or plain text, executing local core transfer/text-paste helpers,
-  reloading the directory, and clearing successful Cut clipboards, plus blank-menu
-  Refresh and Select All through existing shell navigation/reload/selection paths, logs
-  remaining pending action hits, and emits context target/menu counters.
-  Properties now opens a lightweight shell-owned metadata overlay for item and
-  blank-directory targets. Blank-menu Create New now opens a shell-owned modal
-  with folder/file selection, plain text name capture, validation, real
-  `create_dir` / `create_new` filesystem actions, reload, and selection of the
-  created entry. Directory item and blank-directory context menus can now Add to
-  Places by writing Fika `places.xbel`, rebuilding the sidebar projection, and
-  persisting the primary place order. Item Rename now opens a minimal
-  shell-owned modal with plain text name capture, validation, real `rename`,
-  reload, and selection of the renamed entry. Move to Trash now resolves the
-  context target to either the clicked item or the active multi-selection,
-  rejects remote paths explicitly, calls core XDG trash handling, reloads the
-  pane, and clears stale context state. Trash view context menus now dispatch
-  Restore From Trash, Delete Permanently, and Empty Trash through the core
-  `TrashViewOperation` path, then reload the Trash view and clear stale context
-  and selection state. Restore conflicts now open a shell-owned confirmation
-  overlay; Replace reruns the restore through core `TrashViewOperation` with the
-  replace policy, then reloads Trash. Cut and Paste reject remote paths
-  explicitly. Open With direct application submenu rows now launch the selected
-  desktop entry through the same systemd-user launch path as the chooser. The
-  wgpu context menu also consumes the core KDE/Fika service-menu matcher,
-  exposes TopLevel actions, More Actions, and `X-KDE-Submenu` groups as
-  shell-owned submenus, and launches matched service actions through core
-  service-menu launch plans. Open With and service-menu rows now preserve their
-  `.desktop` / service `Icon=` names and resolve them through the wgpu theme icon
-  worker into an overlay icon pass; unresolved icons still fall back to compact
-  glyphs. Multi-MIME `text/uri-list` clipboard export/import, richer
-  multi-conflict handling, undo, richer properties, full inline rename, full
-  Create New templates, and setting Open With defaults remain Phase 4 work.
-- A first shell-owned Places sidebar is now drawn as a rounded light panel whose
-  top edge aligns with the pane origin below the app-level toolbar, matching the
-  right-side pane start rather than the pane body. It builds Home, existing XDG
-  directories, Trash, Fika user places, primary
-  `places-order.xml`, Network root, network bookmarks, and Root from public
-  core APIs, keeps retained row geometry, uses longest-prefix active-place
-  projection, updates sidebar hover independently from item hover, owns an
-  independent sidebar scroll offset with clipped row rendering and a rounded
-  narrow scrollbar track/thumb that supports thumb drag and track click-to-drag,
-  leaves a visible splitter/gap before the file pane instead of sitting flush
-  against it, paints rounded active/hovered row backgrounds, and dispatches
-  left-click place navigation through the same `load_path`/history path as
-  file-view navigation. The toolbar Places button now hides/restores the
-  sidebar for real, the file pane reclaims the width when hidden, and the
-  Places splitter is a retained resize handle with clamped logical width,
-  `ColResize` cursor feedback, and frame-log telemetry. The split-pane divider
-  also supports retained drag-resize with the same cursor feedback. Places
-  right-click now creates a shell-owned place context target and a minimal
-  context menu that dispatches Open, Copy Location, Properties, and Remove for
-  editable user places. Remove writes Fika's `places.xbel`, prunes matching
-  place-order entries, reloads the sidebar projection, and clears stale place
-  context state. The app-start Places projection now also consumes a GIO
-  `DeviceInfo` snapshot, keeps mounted and unmounted device metadata in
-  Devices, and exposes Mount/Unmount/Eject/Safely Remove place context rows
-  from that metadata. Executing those device operations, live device
-  monitoring, richer Places actions such as sidebar add/edit and Trash actions,
-  and real Wayland DnD hover/drop/export remain Phase 4 work.
-- Blank-space left-drag now runs rubber-band selection through the same
-  retained Icons geometry. Plain drag replaces the selection, Shift extends it,
-  Ctrl/Meta toggles it against the press-time base selection, and the band is
-  painted as a clipped GPU overlay.
-- Keyboard navigation now handles Arrow, Home/End, and Page Up/Down keys
-  through the same retained selection state. Shift extends the current range,
-  and the focused item is scrolled into view. `Ctrl/Meta+A` selects all current
-  directory entries, and `Esc` clears selection while canceling any transient
-  rubber-band operation.
-- Directory activation now stays inside the shell-owned input path: Enter opens
-  the focused selected directory, double-click opens a directory resolved from
-  retained hit testing, and Backspace or Alt+Up loads the parent directory. The
-  Alt+Left and Alt+Right map to the same history stack. `F5` and `Ctrl/Meta+R`
-  refresh the current directory without writing history, preserving
-  selection/focus by entry name when those entries still exist. App-level mouse
-  controls for history/reload remain toolbar migration work.
-  Loading a new path reuses
-  `read_entries_sync`, records normal navigation in a bounded back stack,
-  clears forward history only after successful new navigation, resets
-  scroll/selection/rubber-band transient state, refreshes hover from retained
-  geometry, updates the title, and presents the new scene through the same
-  redraw burst path used by view switching.
-- Initial view zoom is shell-owned and retained-geometry driven. `Ctrl/Meta + +`,
-  `Ctrl/Meta + -`, `Ctrl/Meta + 0`, and `Ctrl/Meta + wheel` adjust or reset a bounded zoom step.
-  Icons and Compact update item/icon/text slot metrics, Details updates row and
-  icon metrics, scroll is clamped, the focused item is kept visible, and the icon
-  resolver now requests rasters at the zoomed slot size. Glyph-level text sizing
-  and long-lived glyph atlas policy remain Phase 2 work.
-- The shell now prefers a non-sRGB surface format when the compositor offers one,
-  because its UI colors and icon/text atlases are already authored in display
-  byte space; this avoids the earlier washed-out sRGB double-conversion look.
-- A minimal shell-owned status bar is now drawn at the bottom of the content
-  pane, not across the Places sidebar. It
-  summarizes entry, directory, file, selection, visible-item, view-mode, and zoom
-  state, reserves content viewport height, and is excluded from item hit testing.
-- A minimal shell-owned filter bar is now available with `Ctrl/Meta+F`.
-  Character input updates a retained plain-text name filter, Backspace edits the
-  pattern, Enter keeps the pattern applied while leaving text-capture mode, and
-  Esc clears/deactivates it. Layout, hit testing, hover, selection, select-all, and
-  keyboard navigation all route through the filtered model-index projection.
-  Full IME/caret/selection editing remains Phase 4 text-boundary work.
-- A minimal shell-owned pane-local location edit mode is now available from `Ctrl/Meta+L`,
-  or clicking the top path bar. Backspace/Delete edit at the caret,
-  Arrow/Home/End move the caret, clicking outside the path bar safely cancels
-  the draft and restores the real current path, Enter commits by loading the
-  target path, and Esc cancels. The SCTK caret is now vertically centered, and
-  caret paint plus click/hit-test positioning share `cosmic-text` shaped caret
-  stops instead of hand-written character-width estimates. Full IME/selection
-  editing remains Phase 4 text-boundary work.
-- SCTK now flushes the Wayland connection after the initial window commit and
-  after each rendered frame, so the first presented frame is delivered without
-  waiting for a later focus or pointer event to wake the compositor path.
-- The first SCTK Places rows are now clickable retained targets instead of paint
-  only. Home, existing common XDG directories, Trash files, and Root navigate
-  the active pane, including split mode, with active-row highlighting based on
-  the active pane path.
-- High-frequency pointer rendering has been tightened for rubber-band selection:
-  rubber-band motion is sampled, frame logging is throttled for pointer/scroll
-  frames, and unchanged text batches reuse their previous atlas instead of
-  reshaping/rasterizing every visible label during overlay-only frames.
-- The first SCTK file-operation route now reaches the reusable pane boundary.
-  `SctkPane` projects selected paths after hidden/filter pruning, `Delete`
-  moves the active pane selection through the core XDG Trash operation, records
-  an undo payload, reloads affected primary/split panes, clears stale selection,
-  and reports the result in the pane-local status bar. Remote trash is rejected.
-  `Shift+Delete` is intentionally a safe pending boundary that reports the
-  missing confirmation dialog instead of deleting permanently.
-- Dotfile visibility is now shell-owned. Hidden entries are excluded from the
-  retained projection by default; `Ctrl/Meta+H` shows them. Selection is
-  retained or pruned through the same projection when the visibility mode
-  changes. The app-level Hidden toggle remains toolbar migration work.
-- Initial thumbnail loading now follows the existing core thumbnail
-  architecture instead of trying to decode source files in the frame path. The
-  wgpu thumbnail resolver builds core `ThumbnailRequest`s for visible,
-  previewable local files, probes the freedesktop thumbnail cache and failure
-  markers, uses the core `ThumbnailerRegistry` fallback commands off the render
-  thread, rasterizes the cached/generated PNG in that worker, and then feeds an
-  mtime-keyed raster into the shell icon atlas. Visible requests are promoted
-  ahead of deferred work, and each frame queues a bounded Dolphin-order
-  read-ahead set after visible items so scrolling into nearby images can reuse
-  already-started work. Ready read-ahead rasters are held in a bounded resolver
-  cache before visible items consume them, so long image-directory scrolls do
-  not leave unbounded thumbnail PNG rasters outside the retained icon cache.
-  Failed probes are cached in the resolver so steady redraws do not repeatedly
-  requeue impossible thumbnails. This is still an initial shell-local path, not
-  full Dolphin/KIO PreviewJob parity or model-role writeback.
-- `[fika-wgpu]` logs include view mode, window/UI scale, path, entry count,
-  visible item count, thumbnail candidate count, retained visible slot
-  active/free/reuse/recycle/allocation counters,
-  Places count/hover/change/scroll counters, quad count, selected count, hovered item index, active rubber-band state,
-  context target kind, context menu state, properties overlay state, hit-test/selection/keyboard navigation/rubber-band/view-switch/path-change/open/copy-location/file-clipboard/paste
-  counters, reload/location/filter/hidden counters, DnD hover/drop-request counters, zoom percent and zoom-change counters, icon count, icon deferred/raster-deferred count, icon cache
-  hit/miss count, icon cache bytes, icon atlas bytes, icon resolve/raster time,
-  thumbnail loaded/quad/deferred/read-ahead/ready-cache counters,
-  text label count, text cache hit/miss count, text cache bytes, text atlas
-  bytes, draw batch count, render reason, layout time, text raster time, render
-  time, and `scroll_x` / `scroll_y` offsets.
-- Local target-session smokes with `timeout 4s target/debug/fika-wgpu --view
-  icons|compact|details /etc` reached `shell-ready` and emitted `frame=1` on
-  Vulkan with `surface-format=Rgba8Unorm srgb=0` and real icon/text atlas
-  counters. The timeout exits are expected for the automated smokes.
-
-Still pending in Phase 0: glyph-level cache/atlas retention, manual
-open/close/interaction smoke evidence, real Wayland DnD hover/drop/export
-wiring, and the final choice of initial Compact vs Icons default.
-
-Acceptance:
-
-- [x] Builds without changing the existing GPUI app.
-- [~] Opens on the target Linux desktop session and reaches the first rendered
-  frame in an automated timeout smoke. Manual close and interaction smoke remain
-  pending.
-- [~] Renders visible directory slots with real theme icons when available,
-  fallback icons for misses, and real file-name text via texture atlases.
-- [~] Routes basic pointer hover, mouse selection, keyboard navigation,
-  select-all/clear shortcuts, right-click context target selection, and
-  rubber-band selection through retained geometry. Basic DnD target lookup now
-  resolves pane/place targets, and primary-pane item drags can create an
-  internal retained copy drop request for pane blanks, directory items, and
-  Places. Real Wayland DnD hover/drop/export and executing the requested
-  operation remain pending.
-- [~] Emits frame timing, visible range, draw-command counters, temporary
-  icon/text atlas counters, retained hit-test counters, bounded
-  icon/label-cache counters, visible slot reuse counters, thumbnail candidate
-  counters, and the first thumbnail loaded/quad/deferred/read-ahead/ready-cache
+- Treat `fika-wgpu` as the active new-shell binary.
+- Reconfirm startup presentation, DPI, pointer coordinates, keyboard routing,
+  scrollbars, rubber-band selection, context menus, and location caret behavior.
+- Keep `/etc`, the repo root, a large local directory, and split-pane runs as
+  smoke targets.
+- Track regressions with shell-native telemetry rather than GPUI renderer
   counters.
-  Glyph-level and long-lived thumbnail atlas eviction counters will start once
-  those resource retention layers exist.
 
-### Phase 1: File View Parity Core
+### Phase 2: Break Up the Monolith
 
-Implement Compact, Icons, and Details scene projection from existing Fika
-models.
+- Extract app/window/event loop, renderer, scene, pane, Places, context menu,
+  dialogs, icons, thumbnails, text, DnD, and telemetry modules.
+- Keep behavior changes small while moving code, so regressions remain easy to
+  identify.
+- Start removing duplicated code between the winit prototype and SCTK only when
+  the shared code is shell-neutral.
 
-Acceptance:
+### Phase 3: Dolphin-style Pane Architecture
 
-- [~] `/etc` renders in Compact, Icons, and Details via `--view`; `~/Downloads`
-  and manual interaction smokes remain pending.
-- [~] Scroll, scrollbar drag, hover, keyboard navigation, runtime mode
-  switching, split toggling, reload, hidden-file visibility, selection, and
-  clear shortcuts work from retained geometry in `SctkPane`/`SctkScene`.
-  Location editing, filtering, rubber-band, select-all, and first Places
-  left-click navigation are now routed through the SCTK shell. Delete-to-Trash
-  now uses core file operations on the active pane selection. Projection zoom,
-  richer Places/device actions, and full file-operation dialogs remain pending.
-- [~] Layout/hit-test/paint share the same shell layout abstraction for Icons,
-  Compact, and Details. Primary and split panes now share `SctkPane` state,
-  generic item paint, scrollbar metrics, and the hidden-file visible-index
-  projection; a path-keyed visible slot pool/reuse list modeled after the
-  existing Dolphin retained item-view work remains pending.
-- No synchronous theme scan, MIME magic read, thumbnail decode, or text shaping
-  occurs in the steady render pass.
+- Align pane projection with Dolphin's model/controller/view split.
+- Keep visible-slot virtualization, reusable slot pools, and retained geometry
+  as the hot path.
+- Make Compact/Icons/Details share selection, hit testing, scroll, zoom,
+  rename, filter, and DnD boundaries.
+- Ensure icon/thumbnail/text work is visible-first and never blocks input.
 
-### Phase 2: Cache and Text Pipeline
+### Phase 4: System Integration
 
-Promote the initial Phase 0 icon atlas into budgeted semantic icon work, then
-add thumbnail texture retention, text shaping cache, glyph atlas policy, and
-eviction telemetry.
+- Wire Open With, service menu submenus, clipboard, file transfer, create,
+  rename, trash, properties, thumbnails, devices, and Places dynamic data into
+  the winit shell.
+- Implement external DnD using winit's platform surface where possible and
+  narrow Linux-specific support where needed.
+- Keep remote/GVfs behavior explicit: unsupported local file operations must
+  fail safely.
 
-Acceptance:
+### Phase 5: Mainline Promotion
 
-- Zoom does not invalidate loaded same-semantic icons except when size/DPI
-  requires a new raster.
-- Cold glyph/icon work is budgeted and visible-first.
-- Thumbnail candidates are projected from the visible retained pane items. The
-  first wgpu thumbnail worker now reuses core freedesktop cache lookup,
-  failure-cache checks, and thumbnailer registry commands off-frame, then
-  rasterizes ready thumbnails into the per-frame atlas path. Visible requests
-  are prioritized over deferred work, and a bounded Dolphin-order read-ahead
-  queue now covers nearby offscreen thumbnails. Ready read-ahead rasters are
-  bounded before visible consumption. Full Dolphin/KIO-style preview job
-  cancellation, model role writeback, and long-lived thumbnail atlas retention
-  remain the next step.
-- Cache logs show hit/miss/evict/bytes and per-frame compute time.
+Promote the winit shell only after evidence proves it is a better default than
+the GPUI baseline:
 
-### Phase 3: Interaction and DnD
+- `cargo check --locked --bin fika-wgpu`
+- `cargo test --locked --bin fika-wgpu`
+- representative runtime smokes for Icons/Compact/Details, split panes,
+  hidden files, location editing, scroll/zoom, context menus, DnD, thumbnails,
+  devices, and large directories
+- telemetry showing frame/layout/cache behavior is not worse than the current
+  baseline
+- docs updated so `fika-wgpu` is no longer described as an experiment
 
-Move remaining pointer routing, context target selection, directory hover,
-Places hover, and drag/drop target lookup into shell-owned hit testing.
+## Dependency Policy
 
-Acceptance:
+- `winit` mainline dependency:
 
-- [~] Pane item/blank right-click context target selection and the first
-  shell-owned context menu overlay are in the file view. SCTK Places
-  left-click navigation is now shell-owned; row hover, richer right-click
-  context targets, and the minimal Open/Copy Location/Properties/Remove place
-  menu remain pending for the SCTK path. Mounted
-  devices are projected into Places from a GIO snapshot; live device monitoring
-  and device/place edit/hide/add action dispatch remain pending. The first `ShellDropTarget`
-  lookup now resolves primary/split pane items, pane blanks, place rows, and
-  Places blanks through shared `ShellPaneView`/pane geometry. Primary-pane item
-  drags now enter an internal drag session, update retained drop hover after
-  the movement threshold, and produce a retained Copy request on release for
-  valid pane/place targets; real Wayland DnD hover/drop/export wiring and
-  executing that request remain pending.
-- Pane item to pane directory, pane item to Places, Places to pane, external
-  path drop, and URI-list clipboard paths are covered by automated or isolated
-  smoke runs.
-- DnD hover does not depend on per-row or per-item widget callbacks.
-- Drag cursor/action state follows Copy/Move/Link semantics.
+```toml
+winit = { git = "https://github.com/rust-windowing/winit.git", branch = "master" }
+```
 
-### Phase 4: Chrome, Overlays, and Chooser
-
-Implement the surrounding UI needed to make the shell usable: Places, toolbar,
-location bar, filter bar, status bar, context menus, dialogs, and chooser mode.
-
-Current checkpoint: the first chrome slices split the app-level toolbar from
-pane-local chrome and remove the temporary Back/Forward/Reload/Hidden/view-mode
-mouse buttons from the toolbar. The toolbar now only carries the original-style
-Places toggle affordance until the real app-level controls are migrated; keyboard
-reload, hidden-file, history, and view-mode commands remain available. The pane
-starts below the toolbar with margin, while the rounded Places panel aligns to
-the pane origin, includes the original-style title/row/icon metrics, and keeps
-left-click navigation plus a minimal Open/Copy Location/Properties/Remove row
-context menu. Content and Places scrollbars now use rounded tracks/thumbs and
-support thumb drag plus track click-to-drag without leaving retained geometry.
-The pane still owns its bottom status bar with
-directory/selection/view/zoom summary, a minimal `Ctrl/Meta+F` filter bar, a
-pane-local 28px `Ctrl/Meta+L`/`Ctrl/Meta+D`/`F6` location edit mode matching the
-original header scale, and a lightweight opaque light file-view context menu
-overlay for item/blank right-clicks. The context menu now follows the original
-196px width, 28px rows, 4px vertical padding, 8px viewport margin, edge
-flip/clamp positioning, 18px icon slot, `shadow_md`-style depth, grouped row
-separators, padding-aware hover/hit-test rows, geometric fallback icons instead
-of letter markers, and text scale independent from file view zoom. Overlay
-quads/text now render in a separate top pass so menu/dialog surfaces cover
-underlying item text. Properties opens a
-minimal metadata overlay for item and blank-directory targets. Create New opens
-a minimal shell-owned modal for blank-directory targets and performs real
-folder/file creation followed by reload and selection. Rename opens a minimal
-shell-owned modal for item targets and performs real filesystem rename followed
-by reload and selection. Move to Trash handles item or selected item targets
-through core trash operations, with remote paths rejected before filesystem
-mutation. Filter, location, create-name, and rename-name text editing remain
-intentionally narrow until the full IME/caret/selection text boundary is
-migrated; context menu dispatch currently covers Open directory, Refresh,
-Select All, Properties, minimal Create New, minimal Rename, minimal Move to
-Trash, Trash view Restore/Delete Permanently/Empty Trash, Copy/Cut/Copy
-Location, Paste, Open With direct application launch, KDE/Fika service-menu
-actions and submenus, and the minimal Places row Open/Copy Location/Properties/Remove
-menu in the migration input. In the current SCTK path, the first direct
-file-operation route is Delete-to-Trash from the active pane selection; the
-first shell-owned context-menu boundary is also in place. Wayland right-click
-now creates retained item/blank/place targets, paints an opaque light overlay,
-closes on Esc or outside click, and item targets follow Dolphin-style right-click
-selection by making an unselected item the sole selection before opening the
-menu. The current SCTK menu dispatch covers Open directory/place, Open in Split
-Pane, Move to Trash through core trash operations, Toggle Hidden, Split View,
-Select All, and Refresh. Create, Rename, Properties, and Copy Location currently
-report explicit pane-local pending status until their SCTK dialogs or clipboard
-provider are migrated. Trash view operations, full rename/create dialogs,
-Wayland clipboard transfer, Open With, and service-menu dispatch still need to
-be moved over. The blank context menu now exposes Show/Hide Hidden Files and Split View,
-directory/place Open in New Pane loads a real right-hand pane with its own
-location bar/content/status paint, item hover/selection backgrounds are rounded,
-the location bar uses a white bordered original-style treatment with a leading
-folder glyph, a vertically centered real caret, and Arrow/Home/End/Delete cursor
-editing. The caret is positioned from shaped text metrics instead of hand-written
-character estimates, and clicking blank space outside the path bar cancels the
-location draft without committing an invalid path. The Places panel now keeps
-visible breathing room before the pane, and
-the pane chrome drops the earlier hard blue/gray outer border in favor of subtle
-separators that blend into the shell background. The Places toolbar toggle now
-really hides/restores the sidebar, hidden Places releases pane width, and the
-Places splitter can be dragged to a clamped retained width. The Places splitter
-and split-pane divider both show `ColResize` cursor feedback while hovered or
-dragged, and the location bar now shows a text cursor on hover. The Places
-splitter hit target is wider toward the Places side while the Places scrollbar
-keeps priority where the two overlap. Empty Trash no longer paints the blue
-status dot. The split pane is still a visible skeleton for focus and file
-operations, but its divider supports retained drag-resize and its own content
-scrollbar/wheel routing now updates the targeted pane instead of the primary
-pane. Multi-pane work now projects both the primary and right-hand pane through
-`ShellPaneView`, shares `pane_layout(...)` for Icons, Compact, and Details,
-shares pane geometry/item hit-testing, uses `ShellPaneProjection` for
-primary/split item paint plus shared scroll metrics, and maintains a retained
-visible slot pool with active/free/reused/recycled/allocation telemetry. The
-next step must continue that extraction through pane focus and file-operation
-routing instead of adding more split-only paths. The first DnD preparation layer
-has advanced from target lookup to a basic internal primary-item drag session:
-movement past the threshold updates retained drop hover and release creates a
-Copy `ShellDropOperationRequest` for valid pane/place targets. Real Wayland
-DnD hover/drop/export wiring and executing those requests remain pending. The
-Places Devices section now includes mounted/unmounted GIO device metadata at app
-startup and projects Mount/Unmount/Eject/Safely Remove context rows; executing
-those device operations and live device monitoring remain pending. Thumbnail work has a
-visible-item candidate projection, off-frame core thumbnail cache/thumbnailer
-probing, background rasterization, mtime-keyed failure handling, and frame
-telemetry; visible-priority dispatch and bounded Dolphin-order read-ahead are
-now in place, and ready read-ahead rasters are bounded before visible
-consumption, while model role writeback and long-lived atlas retention remain
-pending. The properties, create, rename, Open With, and Trash
-conflict overlay rectangles and hit tests now scale with the window DPI factor.
-Richer Places actions/DnD, richer Trash conflict handling, undo, richer
-properties, full inline rename, full Create New templates, and setting Open
-With defaults remain pending.
-
-Acceptance:
-
-- Common file-manager workflows are possible without launching the GPUI shell.
-- Text editing boundaries for rename, location, filter, and application search
-  have explicit IME/caret/selection coverage.
-- Portal file chooser output remains compatible with the existing backend.
-
-### Phase 5: Default Promotion
-
-Promote the new shell only after same-scenario evidence shows behavior parity
-and better or more predictable frame costs than both GPUI Fika and the relevant
-COSMIC Files baseline.
-
-Acceptance:
-
-- GPUI stays available as a fallback during the promotion window.
-- `/etc`, `~/Downloads`, large local directories, mixed thumbnail directories,
-  removable devices, trash, network roots, split pane, hidden-file toggling,
-  zoom, context menus, location editing, Places resize/hide, and DnD
-  hover/drop/export paths have smoke coverage.
-- Binary naming, desktop file routing, CLI defaults, and initial Compact vs
-  Icons default are settled before the switch.
-- Performance gates cover frame build time, GPU submission count, draw batches,
-  texture bytes, glyph/icon/thumbnail cache behavior, steady scroll, view
-  switching, split pane, reload, and input latency.
-
-## Documentation Policy
-
-The GPUI retained-renderer documents are historical evidence and migration
-input. They should no longer be treated as the active architecture target.
-
-Keep:
-
-- Dolphin behavior references.
-- Core/system integration references.
-- GPUI performance evidence that gives baseline numbers or behavior coverage.
-
-Delete or rewrite:
-
-- Completed plans whose only purpose was moving from the old UI to GPUI.
-- Documents that describe "continue GPUI retained migration" as the active
-  future direction.
-- Duplicated TODO slices once their evidence has been summarized in this
-  roadmap or in a shell-specific implementation note.
+- `wgpu` remains the official crates.io dependency.
+- Do not pin to the COSMIC/iced fork unless a future route decision explicitly
+  changes this document.
+- Do not add a second window/event backend abstraction before the winit shell
+  has been made complete enough to evaluate.
