@@ -123,7 +123,12 @@ Current checkpoint:
   Enter, Esc, `Ctrl/Meta+H`, and `F5`/`Ctrl/Meta+R` are translated into
   `SceneCommand`s and dispatched to the active pane. `SctkPane` now owns the
   hidden-file visible-index projection, runtime view switching, keyboard
-  navigation, directory activation, and reload paths.
+  navigation, directory activation, and reload paths. `F4` or
+  `Ctrl/Meta+Shift+S` toggles split view from the scene layer, reusing the same
+  `SctkPane` component for the new pane. The active pane now draws a lightweight
+  focus marker, and content scrollbar thumb/track dragging is routed through a
+  scene-level pointer capture that is cleared on release/leave; this is the same
+  capture boundary intended for rubber-band and DnD.
   The SCTK renderer uploads and draws those quads, while Wayland pointer handling
   routes hover, left-click selection, and wheel scroll through the retained
   scene hit-test path. Text is also rendered in SCTK now: `src/bin/fika_sctk/text.rs`
@@ -396,10 +401,11 @@ Acceptance:
 
 - [~] `/etc` renders in Compact, Icons, and Details via `--view`; `~/Downloads`
   and manual interaction smokes remain pending.
-- [~] Scroll, hover, keyboard navigation, runtime mode switching, reload,
-  hidden-file visibility, selection, and clear shortcuts work from retained
-  geometry in `SctkPane`. Projection zoom, location editing, filtering, and
-  select-all remain pending in the SCTK shell.
+- [~] Scroll, scrollbar drag, hover, keyboard navigation, runtime mode
+  switching, split toggling, reload, hidden-file visibility, selection, and
+  clear shortcuts work from retained geometry in `SctkPane`/`SctkScene`.
+  Projection zoom, location editing, filtering, rubber-band, and select-all
+  remain pending in the SCTK shell.
 - [~] Layout/hit-test/paint share the same shell layout abstraction for Icons,
   Compact, and Details. Primary and split panes now share `SctkPane` state,
   generic item paint, scrollbar metrics, and the hidden-file visible-index

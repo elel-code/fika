@@ -104,11 +104,12 @@ impl SctkPane {
         text: &mut TextBatch,
         geometry: PaneGeometry,
         window_clip: ViewRect,
+        active: bool,
         width: u32,
         height: u32,
     ) -> PaneRenderStats {
         self.clamp_scroll(geometry.content);
-        self.push_chrome(batch, text, geometry, window_clip, width, height);
+        self.push_chrome(batch, text, geometry, window_clip, active, width, height);
         let visible_items = match self.view_mode {
             ViewMode::Icons => {
                 let layout = self.icons_layout(geometry.content);
@@ -187,6 +188,16 @@ impl SctkPane {
         self.rebuild_visible_indices();
         self.prune_hidden_state();
         self.clamp_scroll(geometry.content);
+        true
+    }
+
+    pub(crate) fn set_show_hidden(&mut self, show_hidden: bool) -> bool {
+        if self.show_hidden == show_hidden {
+            return false;
+        }
+        self.show_hidden = show_hidden;
+        self.rebuild_visible_indices();
+        self.prune_hidden_state();
         true
     }
 
@@ -272,6 +283,58 @@ impl SctkPane {
         before != (self.scroll_x, self.scroll_y)
     }
 
+    pub(crate) fn begin_scrollbar_drag(
+        &mut self,
+        point: ViewPoint,
+        geometry: PaneGeometry,
+    ) -> Option<(PaneScrollbarDrag, bool)> {
+        let metrics = self.scrollbar_metrics(geometry.content)?;
+        if !metrics.hit_rect.contains(point) {
+            return None;
+        }
+        let point_axis = metrics.axis.point_axis(point);
+        let thumb_start = metrics.axis.rect_start(metrics.thumb);
+        let thumb_extent = metrics.axis.rect_extent(metrics.thumb);
+        let pointer_offset = if metrics.thumb.contains(point) {
+            point_axis - thumb_start
+        } else {
+            thumb_extent / 2.0
+        };
+        let drag = PaneScrollbarDrag {
+            axis: metrics.axis,
+            pointer_offset,
+        };
+        let changed = self.drag_scrollbar(point, geometry, drag);
+        Some((drag, changed))
+    }
+
+    pub(crate) fn drag_scrollbar(
+        &mut self,
+        point: ViewPoint,
+        geometry: PaneGeometry,
+        drag: PaneScrollbarDrag,
+    ) -> bool {
+        let Some(metrics) = self.scrollbar_metrics(geometry.content) else {
+            return false;
+        };
+        if metrics.axis != drag.axis {
+            return false;
+        }
+        let before = (self.scroll_x, self.scroll_y);
+        let track_start = metrics.axis.rect_start(metrics.track);
+        let track_extent = metrics.axis.rect_extent(metrics.track);
+        let thumb_extent = metrics.axis.rect_extent(metrics.thumb);
+        let travel = (track_extent - thumb_extent).max(1.0);
+        let raw = metrics.axis.point_axis(point) - track_start - drag.pointer_offset;
+        let ratio = (raw / travel).clamp(0.0, 1.0);
+        match drag.axis {
+            PaneScrollbarAxis::Vertical => self.scroll_y = ratio * metrics.max_scroll,
+            PaneScrollbarAxis::Horizontal => self.scroll_x = ratio * metrics.max_scroll,
+        }
+        self.clamp_scroll(geometry.content);
+        before != (self.scroll_x, self.scroll_y)
+    }
+
     pub(crate) fn icons_layout(&self, content: ViewRect) -> IconsLayout {
         IconsLayout::new(
             self.visible_indices.len(),
@@ -346,6 +409,7 @@ impl SctkPane {
         text: &mut TextBatch,
         geometry: PaneGeometry,
         window_clip: ViewRect,
+        active: bool,
         width: u32,
         height: u32,
     ) {
@@ -357,6 +421,9 @@ impl SctkPane {
             width,
             height,
         );
+        if active {
+            push_focus_ring(batch, geometry.pane, window_clip, width, height);
+        }
         let location_bar = ViewRect {
             x: geometry.pane.x + 12.0,
             y: geometry.pane.y + 5.0,
@@ -660,74 +727,25 @@ impl SctkPane {
         width: u32,
         height: u32,
     ) {
-        let (max_x, max_y) = self.scroll_bounds(content);
-        if max_x <= 0.0 && max_y <= 0.0 {
+        let Some(metrics) = self.scrollbar_metrics(content) else {
             return;
-        }
-        let vertical = self.view_mode != ViewMode::Compact;
-        if vertical {
-            let track = ViewRect {
-                x: content.right() - CONTENT_SCROLLBAR_RESERVED_EXTENT + CONTENT_SCROLLBAR_PADDING,
-                y: content.y + CONTENT_SCROLLBAR_PADDING,
-                width: 4.0,
-                height: content.height - CONTENT_SCROLLBAR_PADDING * 2.0,
-            };
-            let ratio = (content.height / (content.height + max_y)).clamp(0.05, 1.0);
-            let thumb_h = (track.height * ratio).max(CONTENT_SCROLLBAR_MIN_THUMB_SIZE);
-            let travel = (track.height - thumb_h).max(1.0);
-            let y = track.y + travel * (self.scroll_y / max_y.max(1.0)).clamp(0.0, 1.0);
-            batch.push_clipped_rounded_rect(
-                track,
-                content,
-                2.0,
-                [0.78, 0.80, 0.82, 0.45],
-                width,
-                height,
-            );
-            batch.push_clipped_rounded_rect(
-                ViewRect {
-                    y,
-                    height: thumb_h,
-                    ..track
-                },
-                content,
-                2.0,
-                [0.48, 0.52, 0.56, 0.8],
-                width,
-                height,
-            );
-        } else {
-            let track = ViewRect {
-                x: content.x + CONTENT_SCROLLBAR_PADDING,
-                y: content.bottom() - CONTENT_SCROLLBAR_RESERVED_EXTENT + CONTENT_SCROLLBAR_PADDING,
-                width: content.width - CONTENT_SCROLLBAR_PADDING * 2.0,
-                height: 4.0,
-            };
-            let ratio = (content.width / (content.width + max_x)).clamp(0.05, 1.0);
-            let thumb_w = (track.width * ratio).max(CONTENT_SCROLLBAR_MIN_THUMB_SIZE);
-            let travel = (track.width - thumb_w).max(1.0);
-            let x = track.x + travel * (self.scroll_x / max_x.max(1.0)).clamp(0.0, 1.0);
-            batch.push_clipped_rounded_rect(
-                track,
-                content,
-                2.0,
-                [0.78, 0.80, 0.82, 0.45],
-                width,
-                height,
-            );
-            batch.push_clipped_rounded_rect(
-                ViewRect {
-                    x,
-                    width: thumb_w,
-                    ..track
-                },
-                content,
-                2.0,
-                [0.48, 0.52, 0.56, 0.8],
-                width,
-                height,
-            );
-        }
+        };
+        batch.push_clipped_rounded_rect(
+            metrics.track,
+            content,
+            2.0,
+            [0.78, 0.80, 0.82, 0.45],
+            width,
+            height,
+        );
+        batch.push_clipped_rounded_rect(
+            metrics.thumb,
+            content,
+            2.0,
+            [0.48, 0.52, 0.56, 0.8],
+            width,
+            height,
+        );
     }
 
     fn push_details_header_text(&self, text: &mut TextBatch, content: ViewRect) {
@@ -865,6 +883,71 @@ impl SctkPane {
                     DETAILS_HEADER_HEIGHT + self.visible_indices.len() as f32 * DETAILS_ROW_HEIGHT;
                 (0.0, (content_height - content.height).max(0.0))
             }
+        }
+    }
+
+    fn scrollbar_metrics(&self, content: ViewRect) -> Option<ScrollbarMetrics> {
+        let (max_x, max_y) = self.scroll_bounds(content);
+        if self.view_mode == ViewMode::Compact {
+            if max_x <= 0.0 {
+                return None;
+            }
+            let track = ViewRect {
+                x: content.x + CONTENT_SCROLLBAR_PADDING,
+                y: content.bottom() - CONTENT_SCROLLBAR_RESERVED_EXTENT + CONTENT_SCROLLBAR_PADDING,
+                width: content.width - CONTENT_SCROLLBAR_PADDING * 2.0,
+                height: 4.0,
+            };
+            let ratio = (content.width / (content.width + max_x)).clamp(0.05, 1.0);
+            let thumb_w = (track.width * ratio).max(CONTENT_SCROLLBAR_MIN_THUMB_SIZE);
+            let travel = (track.width - thumb_w).max(1.0);
+            let x = track.x + travel * (self.scroll_x / max_x.max(1.0)).clamp(0.0, 1.0);
+            Some(ScrollbarMetrics {
+                axis: PaneScrollbarAxis::Horizontal,
+                track,
+                thumb: ViewRect {
+                    x,
+                    width: thumb_w,
+                    ..track
+                },
+                hit_rect: ViewRect {
+                    x: content.x,
+                    y: content.bottom() - CONTENT_SCROLLBAR_RESERVED_EXTENT,
+                    width: content.width,
+                    height: CONTENT_SCROLLBAR_RESERVED_EXTENT,
+                },
+                max_scroll: max_x,
+            })
+        } else {
+            if max_y <= 0.0 {
+                return None;
+            }
+            let track = ViewRect {
+                x: content.right() - CONTENT_SCROLLBAR_RESERVED_EXTENT + CONTENT_SCROLLBAR_PADDING,
+                y: content.y + CONTENT_SCROLLBAR_PADDING,
+                width: 4.0,
+                height: content.height - CONTENT_SCROLLBAR_PADDING * 2.0,
+            };
+            let ratio = (content.height / (content.height + max_y)).clamp(0.05, 1.0);
+            let thumb_h = (track.height * ratio).max(CONTENT_SCROLLBAR_MIN_THUMB_SIZE);
+            let travel = (track.height - thumb_h).max(1.0);
+            let y = track.y + travel * (self.scroll_y / max_y.max(1.0)).clamp(0.0, 1.0);
+            Some(ScrollbarMetrics {
+                axis: PaneScrollbarAxis::Vertical,
+                track,
+                thumb: ViewRect {
+                    y,
+                    height: thumb_h,
+                    ..track
+                },
+                hit_rect: ViewRect {
+                    x: content.right() - CONTENT_SCROLLBAR_RESERVED_EXTENT,
+                    y: content.y,
+                    width: CONTENT_SCROLLBAR_RESERVED_EXTENT,
+                    height: content.height,
+                },
+                max_scroll: max_y,
+            })
         }
     }
 
@@ -1056,6 +1139,50 @@ pub(crate) enum PaneSelectionMove {
     PageDown,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PaneScrollbarAxis {
+    Horizontal,
+    Vertical,
+}
+
+impl PaneScrollbarAxis {
+    fn point_axis(self, point: ViewPoint) -> f32 {
+        match self {
+            Self::Horizontal => point.x,
+            Self::Vertical => point.y,
+        }
+    }
+
+    fn rect_start(self, rect: ViewRect) -> f32 {
+        match self {
+            Self::Horizontal => rect.x,
+            Self::Vertical => rect.y,
+        }
+    }
+
+    fn rect_extent(self, rect: ViewRect) -> f32 {
+        match self {
+            Self::Horizontal => rect.width,
+            Self::Vertical => rect.height,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct PaneScrollbarDrag {
+    axis: PaneScrollbarAxis,
+    pointer_offset: f32,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ScrollbarMetrics {
+    axis: PaneScrollbarAxis,
+    track: ViewRect,
+    thumb: ViewRect,
+    hit_rect: ViewRect,
+    max_scroll: f32,
+}
+
 fn push_folder_glyph(
     batch: &mut QuadBatch,
     icon: ViewRect,
@@ -1086,6 +1213,22 @@ fn push_folder_glyph(
         clip,
         3.0,
         [0.90, 0.58, 0.18, 1.0],
+        width,
+        height,
+    );
+}
+
+fn push_focus_ring(batch: &mut QuadBatch, pane: ViewRect, clip: ViewRect, width: u32, height: u32) {
+    batch.push_clipped_rounded_rect(
+        ViewRect {
+            x: pane.x + 10.0,
+            y: pane.y + 1.0,
+            width: (pane.width - 20.0).max(1.0),
+            height: 2.0,
+        },
+        clip,
+        1.0,
+        [0.22, 0.49, 0.82, 0.65],
         width,
         height,
     );
@@ -1216,5 +1359,57 @@ mod tests {
         assert_eq!(pane.visible_entry_count(), 1);
 
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn vertical_scrollbar_drag_updates_scroll_y() {
+        let entries = (0..200)
+            .map(|index| entry(&format!("item-{index}"), false))
+            .collect::<Vec<_>>();
+        let mut pane = SctkPane::from_entries(PathBuf::from("/tmp"), ViewMode::Details, entries);
+        let geometry = geometry();
+        let press = ViewPoint {
+            x: geometry.content.right() - 2.0,
+            y: geometry.content.y + 80.0,
+        };
+        let (drag, _) = pane
+            .begin_scrollbar_drag(press, geometry)
+            .expect("scrollbar drag");
+
+        assert!(pane.drag_scrollbar(
+            ViewPoint {
+                x: press.x,
+                y: geometry.content.bottom() - 20.0,
+            },
+            geometry,
+            drag,
+        ));
+        assert!(pane.scroll_y > 0.0);
+    }
+
+    #[test]
+    fn compact_scrollbar_drag_updates_scroll_x() {
+        let entries = (0..200)
+            .map(|index| entry(&format!("item-{index}"), false))
+            .collect::<Vec<_>>();
+        let mut pane = SctkPane::from_entries(PathBuf::from("/tmp"), ViewMode::Compact, entries);
+        let geometry = geometry();
+        let press = ViewPoint {
+            x: geometry.content.x + 120.0,
+            y: geometry.content.bottom() - 2.0,
+        };
+        let (drag, _) = pane
+            .begin_scrollbar_drag(press, geometry)
+            .expect("scrollbar drag");
+
+        assert!(pane.drag_scrollbar(
+            ViewPoint {
+                x: geometry.content.right() - 20.0,
+                y: press.y,
+            },
+            geometry,
+            drag,
+        ));
+        assert!(pane.scroll_x > 0.0);
     }
 }

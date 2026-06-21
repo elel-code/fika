@@ -8,7 +8,7 @@ use super::metrics::{
     PLACES_PANEL_MARGIN_X, PLACES_ROW_HEIGHT, PLACES_TITLE_HEIGHT, PLACES_TO_PANE_GAP,
     PLACES_WIDTH, SPLIT_PANE_GAP, TEXT_FONT_SIZE, TEXT_LINE_HEIGHT,
 };
-use super::pane::{PaneGeometry, PaneSelectionMove, SctkPane};
+use super::pane::{PaneGeometry, PaneScrollbarDrag, PaneSelectionMove, SctkPane};
 use super::quad::{QuadBatch, inset};
 use super::text::TextBatch;
 
@@ -20,6 +20,7 @@ pub(crate) struct SctkScene {
     split: Option<SctkPane>,
     active: PaneSlot,
     places_visible: bool,
+    pointer_capture: Option<PointerCapture>,
 }
 
 impl SctkScene {
@@ -36,6 +37,7 @@ impl SctkScene {
             split,
             active: PaneSlot::Primary,
             places_visible: true,
+            pointer_capture: None,
         })
     }
 
@@ -110,13 +112,20 @@ impl SctkScene {
             &mut text,
             geometry.primary,
             window,
+            self.active == PaneSlot::Primary,
             width,
             height,
         );
         let split_stats = match (self.split.as_mut(), geometry.split) {
-            (Some(split), Some(split_geometry)) => {
-                Some(split.render(&mut batch, &mut text, split_geometry, window, width, height))
-            }
+            (Some(split), Some(split_geometry)) => Some(split.render(
+                &mut batch,
+                &mut text,
+                split_geometry,
+                window,
+                self.active == PaneSlot::Split,
+                width,
+                height,
+            )),
             _ => None,
         };
         let active_stats = match self.active {
@@ -146,6 +155,9 @@ impl SctkScene {
 
     pub(crate) fn set_pointer(&mut self, point: ViewPoint, width: u32, height: u32) -> bool {
         let geometry = self.geometry(width, height);
+        if let Some(PointerCapture::Scrollbar { pane, drag }) = self.pointer_capture {
+            return self.drag_scrollbar(pane, point, geometry, drag);
+        }
         match geometry.pane_at(point) {
             Some(PaneSlot::Primary) => {
                 let changed = self.primary.set_pointer(point, geometry.primary);
@@ -163,25 +175,52 @@ impl SctkScene {
     }
 
     pub(crate) fn clear_pointer(&mut self) -> bool {
+        let captured = self.pointer_capture.take().is_some();
         let primary = self.primary.clear_pointer();
-        primary | self.clear_split_pointer()
+        captured | primary | self.clear_split_pointer()
     }
 
     pub(crate) fn press_primary(&mut self, point: ViewPoint, width: u32, height: u32) -> bool {
         let geometry = self.geometry(width, height);
+        let previous_active = self.active;
         match geometry.pane_at(point) {
             Some(PaneSlot::Primary) => {
                 self.active = PaneSlot::Primary;
+                if let Some((drag, changed)) =
+                    self.primary.begin_scrollbar_drag(point, geometry.primary)
+                {
+                    self.pointer_capture = Some(PointerCapture::Scrollbar {
+                        pane: PaneSlot::Primary,
+                        drag,
+                    });
+                    return changed | (self.active != previous_active);
+                }
                 self.primary.press_primary(point, geometry.primary)
+                    | (self.active != previous_active)
             }
             Some(PaneSlot::Split) => {
                 self.active = PaneSlot::Split;
-                self.split
-                    .as_mut()
-                    .is_some_and(|split| split.press_primary(point, geometry.split.unwrap()))
+                let changed = self.split.as_mut().is_some_and(|split| {
+                    if let Some((drag, changed)) =
+                        split.begin_scrollbar_drag(point, geometry.split.unwrap())
+                    {
+                        self.pointer_capture = Some(PointerCapture::Scrollbar {
+                            pane: PaneSlot::Split,
+                            drag,
+                        });
+                        changed
+                    } else {
+                        split.press_primary(point, geometry.split.unwrap())
+                    }
+                });
+                changed | (self.active != previous_active)
             }
             None => false,
         }
+    }
+
+    pub(crate) fn release_primary(&mut self) -> bool {
+        self.pointer_capture.take().is_some()
     }
 
     pub(crate) fn scroll_at(
@@ -214,6 +253,9 @@ impl SctkScene {
         width: u32,
         height: u32,
     ) -> Result<bool, Box<dyn Error>> {
+        if command == SceneCommand::ToggleSplit {
+            return self.toggle_split();
+        }
         let geometry = self.geometry(width, height);
         match self.active {
             PaneSlot::Primary => {
@@ -419,6 +461,40 @@ impl SctkScene {
             .is_some_and(|split| split.clear_pointer())
     }
 
+    fn drag_scrollbar(
+        &mut self,
+        pane: PaneSlot,
+        point: ViewPoint,
+        geometry: SceneGeometry,
+        drag: PaneScrollbarDrag,
+    ) -> bool {
+        match pane {
+            PaneSlot::Primary => self.primary.drag_scrollbar(point, geometry.primary, drag),
+            PaneSlot::Split => self
+                .split
+                .as_mut()
+                .zip(geometry.split)
+                .is_some_and(|(split, geometry)| split.drag_scrollbar(point, geometry, drag)),
+        }
+    }
+
+    fn toggle_split(&mut self) -> Result<bool, Box<dyn Error>> {
+        self.pointer_capture = None;
+        if self.split.is_some() {
+            self.split = None;
+            self.active = PaneSlot::Primary;
+            return Ok(true);
+        }
+        let path = self.active_pane().path().clone();
+        let view_mode = self.active_pane().view_mode();
+        let show_hidden = self.active_pane().show_hidden();
+        let mut split = SctkPane::load(path, view_mode)?;
+        split.set_show_hidden(show_hidden);
+        self.split = Some(split);
+        self.active = PaneSlot::Split;
+        Ok(true)
+    }
+
     fn active_pane(&self) -> &SctkPane {
         match self.active {
             PaneSlot::Primary => &self.primary,
@@ -438,6 +514,7 @@ impl SctkScene {
             SceneCommand::ActivateSelection => pane.activate_selected(),
             SceneCommand::Reload => pane.reload(),
             SceneCommand::ClearSelection => Ok(pane.clear_selection()),
+            SceneCommand::ToggleSplit => Ok(false),
         }
     }
 }
@@ -446,10 +523,19 @@ impl SctkScene {
 pub(crate) enum SceneCommand {
     SetViewMode(ViewMode),
     ToggleHidden,
+    ToggleSplit,
     MoveSelection(PaneSelectionMove),
     ActivateSelection,
     Reload,
     ClearSelection,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum PointerCapture {
+    Scrollbar {
+        pane: PaneSlot,
+        drag: PaneScrollbarDrag,
+    },
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -554,6 +640,7 @@ mod tests {
             split: None,
             active: PaneSlot::Primary,
             places_visible: true,
+            pointer_capture: None,
         }
     }
 
@@ -573,6 +660,7 @@ mod tests {
             )),
             active: PaneSlot::Primary,
             places_visible: true,
+            pointer_capture: None,
         }
     }
 
@@ -722,5 +810,56 @@ mod tests {
                 .unwrap()
         );
         assert_eq!(scene.primary.selected(), Some(1));
+    }
+
+    #[test]
+    fn toggle_split_command_opens_and_closes_reusable_pane() {
+        let mut scene = scene(ViewMode::Icons, 5);
+
+        assert!(!scene.split_enabled());
+        assert!(
+            scene
+                .handle_command(SceneCommand::ToggleSplit, 900, 640)
+                .unwrap()
+        );
+        assert!(scene.split_enabled());
+        assert_eq!(scene.active_pane_name(), "split");
+
+        assert!(
+            scene
+                .handle_command(SceneCommand::ToggleSplit, 900, 640)
+                .unwrap()
+        );
+        assert!(!scene.split_enabled());
+        assert_eq!(scene.active_pane_name(), "primary");
+    }
+
+    #[test]
+    fn scrollbar_press_captures_motion_until_release() {
+        let mut scene = scene(ViewMode::Details, 200);
+        let geometry = scene.geometry(900, 480).primary;
+        let press = ViewPoint {
+            x: geometry.content.right() - 2.0,
+            y: geometry.content.y + 80.0,
+        };
+
+        assert!(scene.press_primary(press, 900, 480));
+        assert!(matches!(
+            scene.pointer_capture,
+            Some(PointerCapture::Scrollbar {
+                pane: PaneSlot::Primary,
+                ..
+            })
+        ));
+
+        let drag = ViewPoint {
+            x: press.x,
+            y: geometry.content.bottom() - 20.0,
+        };
+        assert!(scene.set_pointer(drag, 900, 480));
+        let frame = scene.render_frame(900, 480, 1.0);
+        assert!(frame.scroll_y > 0.0);
+        assert!(scene.release_primary());
+        assert!(scene.pointer_capture.is_none());
     }
 }

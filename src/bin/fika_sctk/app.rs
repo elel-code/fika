@@ -307,6 +307,12 @@ impl FikaSctkApp {
         }
     }
 
+    pub(crate) fn release_primary(&mut self) {
+        if self.scene.release_primary() {
+            self.render_scene("pointer-release");
+        }
+    }
+
     pub(crate) fn scroll_at(&mut self, x: f64, y: f64, horizontal: f32, vertical: f32) {
         if self.scene.scroll_at(
             crate::fika_sctk::quad::point(x, y),
@@ -372,6 +378,11 @@ fn key_command(keysym: Keysym, modifiers: Modifiers) -> Option<SceneCommand> {
     if keysym == Keysym::F5 || (shortcut && (keysym == Keysym::r || keysym == Keysym::R)) {
         return Some(SceneCommand::Reload);
     }
+    if keysym == Keysym::F4
+        || (shortcut && modifiers.shift && (keysym == Keysym::s || keysym == Keysym::S))
+    {
+        return Some(SceneCommand::ToggleSplit);
+    }
     match keysym {
         Keysym::Left => Some(SceneCommand::MoveSelection(PaneSelectionMove::Left)),
         Keysym::Right => Some(SceneCommand::MoveSelection(PaneSelectionMove::Right)),
@@ -428,6 +439,10 @@ mod tests {
         assert_eq!(
             key_command(Keysym::Return, Modifiers::default()),
             Some(SceneCommand::ActivateSelection)
+        );
+        assert_eq!(
+            key_command(Keysym::F4, Modifiers::default()),
+            Some(SceneCommand::ToggleSplit)
         );
     }
 }
