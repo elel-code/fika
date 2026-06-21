@@ -8,7 +8,7 @@ becomes the default.
 
 This is now a GPUI baseline/history document. The post-Places-chrome retained
 roadmap remains useful as evidence in `docs/FULL_RETAINED_RENDERER_ROADMAP.md`,
-but the active UI direction is the Fika-specific winit/wgpu shell in
+but the active UI direction is the Fika-specific SCTK/wgpu shell in
 `docs/WGPU_SHELL_ROADMAP.md`.
 
 ## Active First Priority

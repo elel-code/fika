@@ -2,9 +2,9 @@
 
 This document describes the current runnable GPUI baseline. It is no longer the
 long-term UI architecture target. New shell architecture work should follow
-`docs/WGPU_SHELL_ROADMAP.md`: a Linux-only, Fika-specific `winit + wgpu`
-runtime using the iced/COSMIC windowing path while avoiding a generic
-libcosmic/iced widget tree.
+`docs/WGPU_SHELL_ROADMAP.md`: a Linux-only, Fika-specific
+`smithay-client-toolkit + calloop + wgpu` runtime. The existing winit spike is
+now migration input, not the target window/event backend.
 
 The boundaries below still matter because the GPUI app is the compatibility
 implementation and behavior baseline. The implementation boundary is the root
@@ -19,7 +19,7 @@ current-directory-removed behavior.
 - 保持 `fika-core` UI-neutral：core 不依赖 GPUI、窗口句柄或 UI model 类型。
 - 每个 pane 都有稳定 identity：`PaneId + generation` 是 lister、watcher、async result 和 UI event 的路由边界。
 - 目录变化通过 lister event 进入 `DirectoryModel`，GPUI 层只渲染 snapshot 并派发 action。
-- New UI runtime work targets the winit/wgpu shell, while feature fixes for the
+- New UI runtime work targets the SCTK/wgpu shell, while feature fixes for the
   current binary may still land in the GPUI baseline.
 - 新增 UI 功能优先采用现代 Rust 目录式模块（`feature.rs` 入口 + `feature/*.rs` 子职责），`src/main.rs` 只保留 app 状态编排和跨模块路由。
 

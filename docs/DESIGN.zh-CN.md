@@ -3,8 +3,9 @@
 # Fika 设计：GPUI 基线与 Shell 方向
 
 本文档描述当前可运行 GPUI 基线。它不再是长期 UI 架构目标。新的 shell 架构工作应遵循
-`docs/WGPU_SHELL_ROADMAP.md`：Linux-only、Fika 专用的 `winit + wgpu` runtime，
-使用 iced/COSMIC windowing 路径，但避免采用通用 libcosmic/iced widget tree。
+`docs/WGPU_SHELL_ROADMAP.md`：Linux-only、Fika 专用的
+`smithay-client-toolkit + calloop + wgpu` runtime。现有 winit spike 只作为迁移输入，
+不再是目标 window/event backend。
 
 下面的边界仍然重要，因为 GPUI 应用是兼容实现和行为基线。实现边界以根 Cargo package
 和 `src/` 源码目录为准；Dolphin 源码执行流仍是目录加载、刷新、model signal 和
@@ -16,7 +17,7 @@ current-directory-removed 行为的第一参考。
 - 保持 `fika-core` UI-neutral：core 不依赖 GPUI、窗口句柄或 UI model 类型。
 - 每个 pane 都有稳定 identity：`PaneId + generation` 是 lister、watcher、async result 和 UI event 的路由边界。
 - 目录变化通过 lister event 进入 `DirectoryModel`，GPUI 层只渲染 snapshot 并派发 action。
-- 新 UI runtime 工作面向 winit/wgpu shell；当前二进制所需的功能修复仍可进入 GPUI 基线。
+- 新 UI runtime 工作面向 SCTK/wgpu shell；当前二进制所需的功能修复仍可进入 GPUI 基线。
 - 新增 UI 功能优先采用现代 Rust 目录式模块（`feature.rs` 入口 + `feature/*.rs` 子职责），`src/main.rs` 只保留 app 状态编排和跨模块路由。
 
 ## 非目标

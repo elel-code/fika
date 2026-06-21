@@ -140,7 +140,7 @@
 ## 参考文档目录
 
 ### 架构与规划
-- [WGPU_SHELL_ROADMAP.md](WGPU_SHELL_ROADMAP.md) — 活跃 Linux-only winit/wgpu shell 目标
+- [WGPU_SHELL_ROADMAP.md](WGPU_SHELL_ROADMAP.md) — 活跃 Linux-only SCTK/wgpu shell 目标
 - [DESIGN.md](DESIGN.md) — 当前 GPUI/core 基线架构
 - [TODO.md](TODO.md) — 剩余任务板
 - [ITEM_VIEW_CUSTOM_PAINT_DESIGN.md](ITEM_VIEW_CUSTOM_PAINT_DESIGN.md) — GPUI retained item-view 基线证据

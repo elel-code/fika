@@ -8,7 +8,7 @@
 
 本文现在是 GPUI 基线/历史文档。Places chrome 默认之后的 retained 路线图
 `docs/FULL_RETAINED_RENDERER_ROADMAP.zh-CN.md` 仍可作为证据参考；活跃 UI 方向已经转为
-`docs/WGPU_SHELL_ROADMAP.zh-CN.md` 中的 Fika 专用 winit/wgpu shell。
+`docs/WGPU_SHELL_ROADMAP.zh-CN.md` 中的 Fika 专用 SCTK/wgpu shell。
 
 ## 当前第一优先级
 

@@ -1,7 +1,7 @@
-# Fika TODO: winit/wgpu Shell Mainline
+# Fika TODO: SCTK/wgpu Shell Mainline
 
 本文档是当前任务板。当前可运行应用仍是 GPUI 基线，但长期 UI 主线已经转向
-Linux-only、Fika 专用的 `winit + wgpu` shell。新 UI runtime 工作以
+Linux-only、Fika 专用的 `smithay-client-toolkit + calloop + wgpu` shell。新 UI runtime 工作以
 `docs/WGPU_SHELL_ROADMAP.md` 为准；GPUI 代码保留为兼容实现、行为基线和必要
 fallback。
 
@@ -14,11 +14,11 @@ fallback。
 
 ## Hard Rules
 
-- [!] **P0：新增 Fika 专用 winit/wgpu shell，并把 GPUI 降级为基线/fallback。** 新 UI 工作必须优先进入独立 `fika-wgpu` spike：复用 `fika-core`，使用 iced/COSMIC 路径中的 `winit` 和 `wgpu`，但不采用 libcosmic/iced widget tree。文件视图和 Places 的热路径必须直接拥有 retained geometry、hit-test、paint command、texture/glyph cache 和 DnD routing。GPUI retained renderer 文档只作为历史证据和迁移输入。
+- [!] **P0：新增 Fika 专用 SCTK/wgpu shell，并把 GPUI 降级为基线/fallback。** 新 UI 工作必须优先进入独立 `fika-sctk` spike：复用 `fika-core`，使用 `smithay-client-toolkit`/`calloop`/`wayland-client` 直接拥有 Wayland window、event loop、seat、clipboard、popup 和 DnD 边界，使用官方 crates.io `wgpu` 渲染。既不采用 libcosmic/iced widget tree，也不把 winit 作为长期窗口层；现有 `fika-wgpu` 仅作为 renderer/scene 迁移输入。文件视图和 Places 的热路径必须直接拥有 retained geometry、hit-test、paint command、texture/glyph cache 和 DnD routing。GPUI retained renderer 文档只作为历史证据和迁移输入。
 - [x] Dolphin 是第一参考目标。目录加载、刷新、删除、rename、undo 后刷新必须先确认 Dolphin 源码执行流，再实现 Fika 对应层。
 - [x] 每个 pane 必须有稳定 `PaneId`。所有 lister、watcher、async result、selection、thumbnail、file operation result 都按 `PaneId + generation` 路由。
 - [~] 当前主构建路径仍保留 GPUI/core package；新增 shell 应先作为独立实验二进制并与 GPUI 并存。
-- [~] GPUI 从 Zed 仓库通过 git 依赖获取，仅用于当前二进制和 fallback；新 shell 依赖策略以 `docs/WGPU_SHELL_ROADMAP.md` 为准。
+- [~] GPUI 从 Zed 仓库通过 git 依赖获取，仅用于当前二进制和 fallback；新 shell 依赖策略以 `docs/WGPU_SHELL_ROADMAP.md` 为准，窗口/event 后端以 SCTK/calloop 为准。
 - [x] 直接 crates.io 依赖不使用 `*`。版本声明保持最新稳定大版本范围，不锁到 patch/minor。
 - [x] 新实现不得把 UI widget identity 当作文件模型 identity。文件身份属于 core model；新 shell 的 slot、hitbox、atlas 和 draw resources 只能消费 core/retained identity。
 - [x] 功能提炼与集成：Dolphin 是 UI 行为和文件操作流程的第一参考；cosmic-files 是纯 Rust 系统集成的参考源。两个源码库中提炼的功能统一集成到 `fika-core`，UI 层只做渲染和输入路由。
@@ -74,15 +74,19 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
 
 ## Remaining Work
 
-### winit/wgpu Shell 迁移
+### SCTK/wgpu Shell 迁移
 
 详细目标和阶段见：
 
 - `docs/WGPU_SHELL_ROADMAP.md`
 - `docs/WGPU_SHELL_ROADMAP.zh-CN.md`
 
-- [~] Phase 0：新增独立 `fika-wgpu` spike，不删除 GPUI binary。当前已能打开独立
-  winit/wgpu shell、接受可选 path 参数、通过 `fika_core::read_entries_sync`
+- [~] Phase 0：新增独立 `fika-sctk` spike，不删除 GPUI binary，并把现有 `fika-wgpu`
+  作为 scene/renderer 迁移输入而不是长期窗口层。当前 `fika-sctk` 已通过
+  `smithay-client-toolkit` 创建 Wayland xdg-window、用 raw Wayland handle 初始化
+  wgpu surface、读取可选 path 并输出目录统计；下一步是把 `fika-wgpu` 的
+  `ShellScene`/renderer/input projection 搬到 SCTK/calloop 事件循环下。历史 `fika-wgpu`
+  winit-backed spike 已能打开独立窗口、接受可选 path 参数、通过 `fika_core::read_entries_sync`
   读取目录、用 `IconsLayout` 投影 retained geometry，Compact projection 会按每列
   可见名称中的最长项决定列宽，并用 solid quad batch 渲染 path bar、可见 item
   背景和 icon fallback 形状；真实文件名通过

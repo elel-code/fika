@@ -1,14 +1,15 @@
-# Fika winit/wgpu Shell Roadmap
+# Fika SCTK/wgpu Shell Roadmap
 
 This document is the active UI direction for Fika. The GPUI application remains
 the compatibility and behavior baseline while the new Linux-only shell is
 proved out. New UI architecture work should target a Fika-specific
-`winit + wgpu` runtime instead of extending the GPUI element-tree migration.
+`smithay-client-toolkit + calloop + wgpu` runtime instead of extending the GPUI
+element-tree migration.
 
 The goal is not to adopt another general-purpose widget toolkit. Fika should
-borrow the windowing stack that the iced/COSMIC ecosystem is actively validating
-on Linux, then build a narrow file-manager renderer, scene model, input router,
-and cache policy around Fika's own retained data.
+own the Linux/Wayland client boundary through the Smithay client-toolkit
+ecosystem, then build a narrow file-manager renderer, scene model, input
+router, and cache policy around Fika's own retained data.
 
 ## Decision
 
@@ -20,9 +21,10 @@ than owning a purpose-built runtime.
 
 The new shell should use:
 
-- `winit` from the iced/COSMIC stack, not an arbitrary upstream windowing
-  dependency. The local COSMIC reference resolves `winit` through
-  `pop-os/winit` tag `cosmic-0.14`.
+- `smithay-client-toolkit`, `calloop`, `calloop-wayland-source`, and
+  `wayland-client` as first-class shell dependencies. Fika is not targeting
+  other platforms, so the long-term window/event/input layer should be the
+  native Wayland client stack rather than `winit`.
 - Official crates.io `wgpu` for the render backend. COSMIC's resolved `wgpu`
   version is useful compatibility context, but Fika should depend on upstream
   `wgpu` directly instead of inheriting a framework or editor fork.
@@ -36,13 +38,12 @@ valuable references for Linux windowing, Wayland, DnD, clipboard, text, and
 theme integration, but Fika's primary UI should be a dedicated file-manager
 surface.
 
-Choosing the iced/COSMIC `winit` path is intentional. For Fika's target
-environment, it is more useful than following upstream `winit` in isolation
-because it is exercised by real Linux desktop applications and carries the
-integration assumptions needed by the iced/libcosmic runtime: Wayland window
-and popup behavior, clipboard and drag/drop plumbing, raw-window-handle/wgpu
-surface integration, and desktop-session edge cases. Fika should reuse that
-tested windowing layer while avoiding the generic widget tree above it.
+The earlier iced/COSMIC `winit` spike was useful for proving the retained scene
+and wgpu renderer quickly, but it should now be treated as migration input only.
+For Fika's target environment, SCTK is the better long-term layer because it
+lets the shell own xdg-shell windows, popups, seats, data devices, drag/drop,
+frame callbacks, scale/output state, and calloop integration directly instead
+of inheriting a cross-platform abstraction designed for broader applications.
 
 ## Why This Can Outperform GPUI and cosmic-files
 
@@ -73,8 +74,8 @@ core model -> retained UI model -> scene projection -> GPU command batches
           \-> input/hit-test routing -> file-manager actions
 ```
 
-Core remains UI-neutral. It must not depend on `winit`, `wgpu`, window handles,
-or renderer resources.
+Core remains UI-neutral. It must not depend on SCTK, Wayland protocol objects,
+`wgpu`, window handles, or renderer resources.
 
 The shell owns:
 
@@ -94,13 +95,22 @@ The shell owns:
 
 ### Phase 0: Shell Spike
 
-Add a separate experimental binary, tentatively `fika-wgpu`, without deleting
-the GPUI binary. It should open a window, initialize `wgpu`, drive the existing
-directory listing model, and render `/etc` with a minimal Compact view.
+Add a separate experimental binary, `fika-sctk`, without deleting the GPUI
+binary. It should open an SCTK xdg-window, initialize `wgpu` from raw Wayland
+handles, drive the existing directory listing model, and then host the retained
+scene/renderer code currently proven in `fika-wgpu`.
+
+The existing `fika-wgpu` binary remains a migration source for renderer,
+layout, hit-test, and cache behavior, but not the target window/event backend.
 
 Current checkpoint:
 
-- `src/bin/fika-wgpu.rs` exists as an independent binary.
+- `src/bin/fika-sctk.rs` exists as the new backend spike. It connects to the
+  Wayland session through SCTK/wayland-client, creates an xdg-window, builds a
+  `wgpu` surface from raw Wayland handles, reads the requested directory through
+  `fika_core::read_entries_sync`, logs entry counts, and clears the first
+  configured frame. This is the target host for the retained scene.
+- `src/bin/fika-wgpu.rs` exists as the older winit-backed renderer spike.
 - It accepts an optional path argument and defaults to the current directory.
 - It reads directory entries through `fika_core::read_entries_sync`.
 - It projects entries through the existing `IconsLayout` retained geometry and

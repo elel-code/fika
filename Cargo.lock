@@ -1852,6 +1852,7 @@ name = "fika"
 version = "0.0.0"
 dependencies = [
  "bytemuck",
+ "calloop",
  "compio",
  "cosmic-text",
  "futures-lite",
@@ -1863,10 +1864,12 @@ dependencies = [
  "pollster 0.4.0",
  "raw-window-handle",
  "resvg",
+ "smithay-client-toolkit",
  "smithay-clipboard",
  "tiny-skia",
  "tokio",
  "usvg",
+ "wayland-client",
  "wgpu 29.0.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "winit",
  "zbus",
@@ -5586,12 +5589,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0512da38f5e2b31201a93524adb8d3136276fa4fe4aafab4e1f727a82b534cc0"
 dependencies = [
  "bitflags 2.13.0",
+ "bytemuck",
  "calloop",
  "calloop-wayland-source",
  "cursor-icon",
  "libc",
  "log",
  "memmap2",
+ "pkg-config",
  "rustix 1.1.4",
  "thiserror 2.0.18",
  "wayland-backend",
@@ -5603,6 +5608,7 @@ dependencies = [
  "wayland-protocols-misc",
  "wayland-protocols-wlr",
  "wayland-scanner",
+ "xkbcommon",
  "xkeysym",
 ]
 
@@ -8026,6 +8032,9 @@ name = "xkeysym"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b9cc00251562a284751c9973bace760d86c0276c471b4be569fe6b068ee97a56"
+dependencies = [
+ "bytemuck",
+]
 
 [[package]]
 name = "xml-rs"
