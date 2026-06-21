@@ -154,8 +154,8 @@ Shell 拥有：
   Open With default-application selection、多 MIME `text/uri-list` clipboard
   export/import、更完整 multi-conflict handling、undo、更完整 properties、完整 inline
   rename、完整 Create New 子菜单/模板和 new-pane dispatch 仍留到 Phase 4。
-- 第一版 shell-owned Places 侧栏现在作为圆角浅色 panel 绘制，顶部与右侧 pane-local
-  顶栏下方的 content/body 区起点对齐。它通过公开 core API 构建 Home、已存在的 XDG directories、Trash、Fika user places、primary
+- 第一版 shell-owned Places 侧栏现在作为圆角浅色 panel 绘制，顶部与 app-level
+  toolbar 下方的 pane 起点对齐，也就是对齐右侧 pane 外框起点而不是 pane body。它通过公开 core API 构建 Home、已存在的 XDG directories、Trash、Fika user places、primary
   `places-order.xml`、Network root、network bookmarks 和 Root，保留 row geometry，用最长路径前缀决定 active place，Places
   hover 与 item hover 分离，拥有独立 sidebar scroll offset、clipped row rendering 和窄
   scrollbar thumb，active/hover row 会绘制圆角背景，并将左键 place navigation 分派到与文件视图相同的
@@ -281,8 +281,10 @@ drag/drop target lookup 移到 shell-owned hit testing。
 实现可用 shell 所需外围 UI：Places、toolbar、location bar、filter bar、status bar、
 context menus、dialogs 和 chooser mode。
 
-当前 checkpoint：第一批 chrome slice 包含顶部与 pane content/body 区对齐的圆角 shell-owned Places panel、
-左键 navigation 和最小 Open/Copy Location/Properties/Remove row context menu、pane-local 底部 status bar、
+当前 checkpoint：第一批 chrome slice 已把 app-level toolbar 与 pane-local chrome 分离；
+Back/Forward/Up/Reload、Hidden 和 view-mode 控件现在属于 app toolbar，pane 带 margin
+从 toolbar 下方开始，圆角 Places panel 对齐 pane 起点并保留左键 navigation 和最小
+Open/Copy Location/Properties/Remove row context menu。pane 内仍拥有底部 status bar、
 `Ctrl/Meta+F` 最小 filter bar、
 `Ctrl/Meta+L`/`Ctrl/Meta+D`/`F6` pane-local 最小 location edit mode，以及用于 file-view
 item/blank 右键的不透明浅色 context menu overlay。Properties 会为 item 和 blank-directory

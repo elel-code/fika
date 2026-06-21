@@ -189,7 +189,8 @@ Current checkpoint:
   undo, richer properties, full inline rename, full Create New
   submenus/templates, and new-pane dispatch remain Phase 4 work.
 - A first shell-owned Places sidebar is now drawn as a rounded light panel whose
-  top edge aligns with the content pane body below the pane-local header. It builds Home, existing XDG
+  top edge aligns with the pane origin below the app-level toolbar, matching the
+  right-side pane start rather than the pane body. It builds Home, existing XDG
   directories, Trash, Fika user places, primary
   `places-order.xml`, Network root, network bookmarks, and Root from public
   core APIs, keeps retained row geometry, uses longest-prefix active-place
@@ -347,12 +348,15 @@ Acceptance:
 Implement the surrounding UI needed to make the shell usable: Places, toolbar,
 location bar, filter bar, status bar, context menus, dialogs, and chooser mode.
 
-Current checkpoint: the first chrome slices are a minimal shell-owned rounded
-Places panel aligned to the pane content/body area with left-click navigation and a minimal
-Open/Copy Location/Properties/Remove row context menu, a pane-local bottom
-status bar with directory/selection/view/zoom summary, a minimal `Ctrl/Meta+F`
-filter bar, a pane-local `Ctrl/Meta+L`/`Ctrl/Meta+D`/`F6` location edit mode, and a lightweight
-opaque light file-view context menu overlay for item/blank right-clicks. Properties opens a
+Current checkpoint: the first chrome slices split the app-level toolbar from
+pane-local chrome. Back/Forward/Up/Reload, Hidden, and view-mode controls now
+live in the app toolbar; the pane starts below it with margin, while the
+rounded Places panel aligns to the pane origin and keeps left-click navigation
+plus a minimal Open/Copy Location/Properties/Remove row context menu. The pane
+still owns its bottom status bar with directory/selection/view/zoom summary, a
+minimal `Ctrl/Meta+F` filter bar, a pane-local
+`Ctrl/Meta+L`/`Ctrl/Meta+D`/`F6` location edit mode, and a lightweight opaque
+light file-view context menu overlay for item/blank right-clicks. Properties opens a
 minimal metadata overlay for item and blank-directory targets. Create New opens
 a minimal shell-owned modal for blank-directory targets and performs real
 folder/file creation followed by reload and selection. Rename opens a minimal

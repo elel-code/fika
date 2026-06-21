@@ -33,6 +33,8 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, KeyCode, NamedKey, PhysicalKey};
 use winit::window::{Window, WindowAttributes, WindowId};
 
+const APP_TOOLBAR_HEIGHT: f32 = 44.0;
+const PANE_MARGIN: f32 = 8.0;
 const TOP_BAR_HEIGHT: f32 = 52.0;
 const FILTER_BAR_HEIGHT: f32 = 30.0;
 const STATUS_BAR_HEIGHT: f32 = 28.0;
@@ -3526,6 +3528,22 @@ impl ShellScene {
         self.scale_metric(14.0)
     }
 
+    fn app_toolbar_height(&self) -> f32 {
+        self.scale_metric(APP_TOOLBAR_HEIGHT)
+    }
+
+    fn app_toolbar_y(&self) -> f32 {
+        0.0
+    }
+
+    fn pane_margin(&self) -> f32 {
+        self.scale_metric(PANE_MARGIN)
+    }
+
+    fn pane_top_y(&self) -> f32 {
+        self.app_toolbar_height() + self.pane_margin()
+    }
+
     fn top_bar_height(&self) -> f32 {
         self.scale_metric(TOP_BAR_HEIGHT)
     }
@@ -3618,7 +3636,8 @@ impl ShellScene {
         view_mode_button_rects(
             size.width.max(1) as f32,
             self.ui_scale(),
-            self.content_origin_x(size),
+            0.0,
+            self.app_toolbar_y(),
         )
         .into_iter()
         .find_map(|(mode, rect)| rect.contains(point).then_some(mode))
@@ -3628,15 +3647,17 @@ impl ShellScene {
         let width = size.width.max(1) as f32;
         let scale = self.ui_scale();
         let origin_x = self.content_origin_x(size);
-        let path_x = path_bar_start_x(scale, origin_x);
+        let margin = self.scale_metric(12.0);
+        let path_x = origin_x + margin;
+        let available_width = (width - path_x - margin).max(0.0);
         let path_width = if self.is_location_editing() {
-            path_bar_available_width(width, path_x, scale, origin_x)
+            available_width
         } else {
-            path_placeholder_width(&self.path, width, path_x, scale, origin_x)
+            path_placeholder_width(&self.path, available_width, scale)
         };
         let rect = ViewRect {
             x: path_x,
-            y: self.scale_metric(14.0),
+            y: self.pane_top_y() + self.scale_metric(14.0),
             width: path_width,
             height: self.scale_metric(24.0),
         };
@@ -3651,9 +3672,9 @@ impl ShellScene {
     fn path_navigation_action_at_screen_point(
         &self,
         point: ViewPoint,
-        size: PhysicalSize<u32>,
+        _size: PhysicalSize<u32>,
     ) -> Option<PathNavigationAction> {
-        path_navigation_button_rects(self.ui_scale(), self.content_origin_x(size))
+        path_navigation_button_rects(self.ui_scale(), 0.0, self.app_toolbar_y())
             .into_iter()
             .find_map(|(action, rect)| {
                 (rect.contains(point) && self.path_navigation_action_enabled(action))
@@ -3745,10 +3766,11 @@ impl ShellScene {
 
     fn places_sidebar_rect(&self, size: PhysicalSize<u32>) -> ViewRect {
         let width = self.places_sidebar_width(size);
-        let height = size.height as f32;
+        let y = self.pane_top_y();
+        let height = (size.height as f32 - y - self.pane_margin()).max(1.0);
         ViewRect {
             x: 0.0,
-            y: 0.0,
+            y,
             width,
             height,
         }
@@ -3762,7 +3784,7 @@ impl ShellScene {
         let margin_bottom = self
             .scale_metric(PLACES_SIDEBAR_PANEL_MARGIN_BOTTOM)
             .min(sidebar.height / 3.0);
-        let y = sidebar.y + self.top_bar_height();
+        let y = sidebar.y;
         ViewRect {
             x: sidebar.x + margin_x,
             y,
@@ -5483,6 +5505,8 @@ impl ShellScene {
         let mut vertices = Vec::with_capacity(64);
         let width = size.width.max(1) as f32;
         let height = size.height.max(1) as f32;
+        let app_toolbar_height = self.app_toolbar_height();
+        let pane = self.pane_rect(size);
         let top_bar_height = self.top_bar_height();
         let content_origin_x = self.content_origin_x(size);
         let content_origin_y = self.content_origin_y();
@@ -5504,15 +5528,39 @@ impl ShellScene {
         push_rect(
             &mut vertices,
             ViewRect {
-                x: content_origin_x,
+                x: 0.0,
                 y: 0.0,
-                width: self.pane_width(size),
+                width,
+                height: app_toolbar_height,
+            },
+            chrome_color(),
+            size,
+        );
+        push_rect(
+            &mut vertices,
+            ViewRect {
+                x: 0.0,
+                y: app_toolbar_height - self.scale_metric(1.0),
+                width,
+                height: self.scale_metric(1.0),
+            },
+            [0.784, 0.808, 0.839, 1.0],
+            size,
+        );
+        self.push_path_navigation_buttons(&mut vertices, text, size);
+        self.push_view_mode_buttons(&mut vertices, text, size);
+        push_rect(&mut vertices, pane, [1.000, 1.000, 1.000, 1.0], size);
+        push_rect(
+            &mut vertices,
+            ViewRect {
+                x: pane.x,
+                y: pane.y,
+                width: pane.width,
                 height: top_bar_height,
             },
             chrome_color(),
             size,
         );
-        self.push_path_navigation_buttons(&mut vertices, text, size);
         if let Some(path_rect) = self.path_bar_rect(size) {
             let location_active = self.is_location_editing();
             push_rect(
@@ -5529,8 +5577,8 @@ impl ShellScene {
                 &mut vertices,
                 path_rect,
                 ViewRect {
-                    x: content_origin_x,
-                    y: 0.0,
+                    x: pane.x,
+                    y: pane.y,
                     width: self.pane_width(size),
                     height: top_bar_height,
                 },
@@ -5552,15 +5600,14 @@ impl ShellScene {
                     height: self.text_line_height(),
                 },
                 ViewRect {
-                    x: content_origin_x,
-                    y: 0.0,
+                    x: pane.x,
+                    y: pane.y,
                     width: self.pane_width(size),
                     height: top_bar_height,
                 },
                 TextColor::rgb(36, 41, 47),
             );
         }
-        self.push_view_mode_buttons(&mut vertices, text, size);
         self.push_places_sidebar(&mut vertices, text, size);
         let pane_body = self.pane_body_rect(size);
         push_rect(
@@ -5782,15 +5829,14 @@ impl ShellScene {
         text: &mut TextFrameBuilder<'_>,
         size: PhysicalSize<u32>,
     ) {
-        let top_bar_height = self.top_bar_height();
         let clip = ViewRect {
-            x: self.content_origin_x(size),
-            y: 0.0,
-            width: self.pane_width(size),
-            height: top_bar_height,
+            x: 0.0,
+            y: self.app_toolbar_y(),
+            width: size.width.max(1) as f32,
+            height: self.app_toolbar_height(),
         };
         for (action, rect) in
-            path_navigation_button_rects(self.ui_scale(), self.content_origin_x(size))
+            path_navigation_button_rects(self.ui_scale(), 0.0, self.app_toolbar_y())
         {
             let enabled = self.path_navigation_action_enabled(action);
             let active = matches!(action, PathNavigationAction::ToggleHidden) && self.show_hidden;
@@ -5845,15 +5891,14 @@ impl ShellScene {
         size: PhysicalSize<u32>,
     ) {
         let width = size.width.max(1) as f32;
-        let top_bar_height = self.top_bar_height();
         let clip = ViewRect {
             x: self.content_origin_x(size),
-            y: 0.0,
-            width: self.pane_width(size),
-            height: top_bar_height,
+            y: self.app_toolbar_y(),
+            width,
+            height: self.app_toolbar_height(),
         };
         for (mode, rect) in
-            view_mode_button_rects(width, self.ui_scale(), self.content_origin_x(size))
+            view_mode_button_rects(width, self.ui_scale(), 0.0, self.app_toolbar_y())
         {
             let active = mode == self.view_mode;
             push_rect(
@@ -7073,7 +7118,7 @@ impl ShellScene {
     }
 
     fn details_header_y(&self) -> f32 {
-        self.top_bar_height() + self.filter_bar_height()
+        self.pane_top_y() + self.top_bar_height() + self.filter_bar_height()
     }
 
     fn filter_bar_height(&self) -> f32 {
@@ -7088,7 +7133,7 @@ impl ShellScene {
         let height = self.filter_bar_height();
         (height > 0.0).then(|| ViewRect {
             x: self.content_origin_x(size),
-            y: self.top_bar_height(),
+            y: self.pane_top_y() + self.top_bar_height(),
             width: self.content_width(size),
             height,
         })
@@ -7108,18 +7153,20 @@ impl ShellScene {
     }
 
     fn pane_rect(&self, size: PhysicalSize<u32>) -> ViewRect {
+        let y = self.pane_top_y();
+        let bottom_margin = self.pane_margin();
         ViewRect {
             x: self.content_origin_x(size),
-            y: 0.0,
+            y,
             width: self.pane_width(size),
-            height: size.height.max(1) as f32,
+            height: (size.height.max(1) as f32 - y - bottom_margin).max(1.0),
         }
     }
 
     fn pane_body_rect(&self, size: PhysicalSize<u32>) -> ViewRect {
         let pane = self.pane_rect(size);
         let status_bar = self.status_bar_rect(size);
-        let y = self.top_bar_height();
+        let y = pane.y + self.top_bar_height();
         ViewRect {
             x: pane.x,
             y,
@@ -7134,8 +7181,7 @@ impl ShellScene {
         } else {
             0.0
         };
-        (size.height as f32 - self.content_origin_y() - self.status_bar_height() - reserved)
-            .max(1.0)
+        (self.status_bar_rect(size).y - self.content_origin_y() - reserved).max(1.0)
     }
 
     fn places_sidebar_width(&self, size: PhysicalSize<u32>) -> f32 {
@@ -7166,9 +7212,10 @@ impl ShellScene {
         let height = size.height.max(1) as f32;
         let bar_height = self.status_bar_height().min(height);
         let x = self.content_origin_x(size);
+        let pane = self.pane_rect(size);
         ViewRect {
             x,
-            y: height - bar_height,
+            y: pane.bottom() - bar_height,
             width: self.pane_width(size),
             height: bar_height,
         }
@@ -7289,7 +7336,7 @@ impl ShellScene {
                     width: viewport_extent,
                     height: self
                         .scale_metric(CONTENT_SCROLLBAR_RESERVED_EXTENT)
-                        .min((size.height as f32 - self.content_origin_y()).max(1.0)),
+                        .min((self.status_bar_rect(size).y - self.content_origin_y()).max(1.0)),
                 };
                 let track = inset_content_scrollbar_slot(slot, self.ui_scale())?;
                 let content_extent = viewport_extent + max_scroll;
@@ -10709,12 +10756,13 @@ fn view_mode_button_rects(
     surface_width: f32,
     scale_factor: f32,
     content_origin_x: f32,
+    y: f32,
 ) -> [(ShellViewMode, ViewRect); 3] {
     let button_width = (VIEW_MODE_BUTTON_WIDTH * scale_factor).round().max(1.0);
     let button_height = (VIEW_MODE_BUTTON_HEIGHT * scale_factor).round().max(1.0);
     let button_gap = (VIEW_MODE_BUTTON_GAP * scale_factor).round().max(1.0);
     let margin = (16.0 * scale_factor).round().max(1.0);
-    let y = (14.0 * scale_factor).round().max(1.0);
+    let y = y + (10.0 * scale_factor).round().max(1.0);
     let total_width = button_width * 3.0 + button_gap * 2.0;
     let start_x = (surface_width - total_width - margin).max(content_origin_x + margin);
     [
@@ -10751,9 +10799,10 @@ fn view_mode_button_rects(
 fn path_navigation_button_rects(
     scale_factor: f32,
     content_origin_x: f32,
+    y: f32,
 ) -> [(PathNavigationAction, ViewRect); 5] {
     let x = content_origin_x + (16.0 * scale_factor).round().max(1.0);
-    let y = (14.0 * scale_factor).round().max(1.0);
+    let y = y + (10.0 * scale_factor).round().max(1.0);
     let button_width = (NAV_BUTTON_WIDTH * scale_factor).round().max(1.0);
     let up_button_width = (NAV_UP_BUTTON_WIDTH * scale_factor).round().max(1.0);
     let reload_button_width = (NAV_RELOAD_BUTTON_WIDTH * scale_factor).round().max(1.0);
@@ -10811,11 +10860,6 @@ fn path_navigation_button_rects(
             },
         ),
     ]
-}
-
-fn path_bar_start_x(scale_factor: f32, content_origin_x: f32) -> f32 {
-    let hidden = path_navigation_button_rects(scale_factor, content_origin_x)[4].1;
-    hidden.right() + (10.0 * scale_factor).round().max(1.0)
 }
 
 fn push_limited_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
@@ -10926,33 +10970,10 @@ fn estimated_name_char_width(ch: char) -> f32 {
     }
 }
 
-fn path_placeholder_width(
-    path: &std::path::Path,
-    surface_width: f32,
-    path_x: f32,
-    scale_factor: f32,
-    content_origin_x: f32,
-) -> f32 {
+fn path_placeholder_width(path: &std::path::Path, available_width: f32, scale_factor: f32) -> f32 {
     let display_width = path.display().to_string().chars().count() as f32 * 7.5 * scale_factor
         + 28.0 * scale_factor;
-    display_width.min(path_bar_available_width(
-        surface_width,
-        path_x,
-        scale_factor,
-        content_origin_x,
-    ))
-}
-
-fn path_bar_available_width(
-    surface_width: f32,
-    path_x: f32,
-    scale_factor: f32,
-    content_origin_x: f32,
-) -> f32 {
-    let first_button_x = view_mode_button_rects(surface_width, scale_factor, content_origin_x)[0]
-        .1
-        .x;
-    (first_button_x - path_x - 10.0 * scale_factor).max(0.0)
+    display_width.min(available_width)
 }
 
 fn context_menu_rect(menu: &ShellContextMenu, size: PhysicalSize<u32>) -> ViewRect {
@@ -11777,6 +11798,24 @@ mod tests {
     }
 
     #[test]
+    fn places_chrome_starts_at_pane_origin_below_app_toolbar() {
+        let scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
+        let size = PhysicalSize::new(700, 320);
+        let pane = scene.pane_rect(size);
+        let sidebar = scene.places_sidebar_rect(size);
+        let panel = scene.places_panel_rect(size);
+
+        assert_eq!(sidebar.y, pane.y);
+        assert_eq!(panel.y, pane.y);
+        assert_eq!(sidebar.bottom(), pane.bottom());
+        assert!(scene.app_toolbar_height() < pane.y);
+        assert!(!sidebar.contains(ViewPoint {
+            x: sidebar.x + 8.0,
+            y: scene.app_toolbar_height() / 2.0,
+        }));
+    }
+
+    #[test]
     fn places_sidebar_scroll_is_independent_from_file_content_scroll() {
         let entries = (0..80)
             .map(|index| test_entry(&format!("entry-{index:02}.txt"), false))
@@ -12543,7 +12582,7 @@ text/plain=writer.desktop;\n",
             ],
             ShellViewMode::Icons,
         );
-        let size = PhysicalSize::new(420, 260);
+        let size = PhysicalSize::new(420, 340);
         let item = scene
             .layout(size)
             .item(1)
@@ -13695,7 +13734,7 @@ text/plain=writer.desktop;\n",
         let item = scene.layout(size).item(0).expect("test item should layout");
         let point = ViewPoint {
             x: scene.content_origin_x(size) + item.visual_rect.x + 4.0,
-            y: item.visual_rect.y + TOP_BAR_HEIGHT + 4.0,
+            y: item.visual_rect.y + scene.content_origin_y() + 4.0,
         };
         let now = Instant::now();
 
@@ -14364,7 +14403,7 @@ text/plain=writer.desktop;\n",
             ],
             ShellViewMode::Icons,
         );
-        let size = PhysicalSize::new(420, 260);
+        let size = PhysicalSize::new(420, 340);
 
         assert!(scene.apply_filter_command(FilterCommand::Activate, size));
         assert!(scene.apply_filter_command(FilterCommand::Insert("alp".to_string()), size));
@@ -14433,7 +14472,7 @@ text/plain=writer.desktop;\n",
         let scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
         let size = PhysicalSize::new(420, 240);
         for (mode, rect) in
-            view_mode_button_rects(size.width as f32, 1.0, scene.content_origin_x(size))
+            view_mode_button_rects(size.width as f32, 1.0, 0.0, scene.app_toolbar_y())
         {
             assert_eq!(
                 scene.view_mode_at_screen_point(
@@ -14456,7 +14495,7 @@ text/plain=writer.desktop;\n",
     fn top_bar_path_navigation_buttons_respect_enabled_state() {
         let mut scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
         let size = PhysicalSize::new(420, 240);
-        let navigation_rects = path_navigation_button_rects(1.0, scene.content_origin_x(size));
+        let navigation_rects = path_navigation_button_rects(1.0, 0.0, scene.app_toolbar_y());
         let back_rect = navigation_rects[0].1;
         let forward_rect = navigation_rects[1].1;
         let parent_rect = navigation_rects[2].1;
@@ -14651,13 +14690,13 @@ text/plain=writer.desktop;\n",
 
         let visual_point = ViewPoint {
             x: scene.content_origin_x(size) + item.visual_rect.x + 1.0,
-            y: item.visual_rect.y + TOP_BAR_HEIGHT + 1.0,
+            y: item.visual_rect.y + scene.content_origin_y() + 1.0,
         };
         assert_eq!(scene.hit_test_screen_point(visual_point, size), Some(0));
 
         let top_bar_point = ViewPoint {
             x: scene.content_origin_x(size) + item.item_rect.x + 1.0,
-            y: TOP_BAR_HEIGHT - 1.0,
+            y: scene.content_origin_y() - 1.0,
         };
         assert_eq!(scene.hit_test_screen_point(top_bar_point, size), None);
     }
@@ -14674,8 +14713,8 @@ text/plain=writer.desktop;\n",
         let size = PhysicalSize::new(360, 240);
         let status_bar = scene.status_bar_rect(size);
 
-        assert_eq!(scene.viewport_height(size), 160.0);
-        assert_eq!(status_bar.y, 212.0);
+        assert_eq!(scene.viewport_height(size), 100.0);
+        assert_eq!(status_bar.y, 204.0);
         assert_eq!(
             scene.hit_test_screen_point(
                 ViewPoint {
@@ -14801,7 +14840,7 @@ text/plain=writer.desktop;\n",
             ],
             ShellViewMode::Compact,
         );
-        let size = PhysicalSize::new(700, 190);
+        let size = PhysicalSize::new(700, 250);
         let layout = match scene.layout(size) {
             ShellLayout::Compact(layout) => layout,
             _ => unreachable!(),
@@ -14834,13 +14873,13 @@ text/plain=writer.desktop;\n",
         let size = PhysicalSize::new(420, 220);
         let header_point = ViewPoint {
             x: scene.content_origin_x(size) + 12.0,
-            y: TOP_BAR_HEIGHT + 4.0,
+            y: scene.details_header_y() + 4.0,
         };
         assert_eq!(scene.hit_test_screen_point(header_point, size), None);
 
         let row_point = ViewPoint {
             x: scene.content_origin_x(size) + 12.0,
-            y: TOP_BAR_HEIGHT + DETAILS_HEADER_HEIGHT + 4.0,
+            y: scene.content_origin_y() + 4.0,
         };
         assert_eq!(scene.hit_test_screen_point(row_point, size), Some(0));
 
