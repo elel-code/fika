@@ -50,6 +50,8 @@ mod wgpu_location;
 mod wgpu_metrics;
 #[path = "fika_wgpu/options.rs"]
 mod wgpu_options;
+#[path = "fika_wgpu/pane.rs"]
+mod wgpu_pane;
 #[path = "fika_wgpu/selection.rs"]
 mod wgpu_selection;
 
@@ -57,6 +59,11 @@ use wgpu_clipboard::ShellClipboard;
 use wgpu_location::{LocationDraft, PathHistory, normalized_text_cursor};
 use wgpu_metrics::*;
 use wgpu_options::{ShellViewMode, parse_start_options};
+use wgpu_pane::{
+    ShellPaneGeometry, ShellPaneKind, ShellPaneProjection, ShellPaneScrollMetrics,
+    ShellPaneSplitMetrics, ShellPaneState, ShellPaneView, ShellPaneVisibleItem,
+    ShellVisibleItemSlotPool, ShellVisibleItemSlotStats,
+};
 use wgpu_selection::{
     NavigationAction, RubberBand, RubberBandMode, SelectionClick, ShellSelection,
 };
@@ -3611,21 +3618,6 @@ enum TrashConflictDialogClick {
     Replace,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ShellPaneKind {
-    Primary,
-    Split,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct ShellPaneGeometry {
-    kind: ShellPaneKind,
-    pane: ViewRect,
-    top_bar: ViewRect,
-    content: ViewRect,
-    status_bar: ViewRect,
-}
-
 #[cfg_attr(not(test), allow(dead_code))]
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum ShellDropTarget {
@@ -3701,243 +3693,6 @@ impl ShellDropTarget {
             Self::PlacesBlank => "places-blank",
         }
     }
-}
-
-#[derive(Clone, Debug)]
-struct ShellPaneState {
-    path: PathBuf,
-    view_mode: ShellViewMode,
-    entries: Vec<Entry>,
-    dir_count: usize,
-    filtered_indexes: Vec<usize>,
-    scroll_x: f32,
-    scroll_y: f32,
-}
-
-impl ShellPaneState {
-    fn load(path: PathBuf, view_mode: ShellViewMode, show_hidden: bool) -> Result<Self, String> {
-        let load_start = Instant::now();
-        let entries = read_entries_sync(&path)
-            .map_err(|error| format!("read pane directory {}: {error}", path.display()))?;
-        let elapsed = load_start.elapsed();
-        let dir_count = entries.iter().filter(|entry| entry.is_dir).count();
-        let filtered_indexes = filtered_indexes_for_entries(&entries, show_hidden, "");
-        eprintln!(
-            "[fika-wgpu] split-pane path={} entries={} dirs={} files={} visible={} load={}us",
-            path.display(),
-            entries.len(),
-            dir_count,
-            entries.len().saturating_sub(dir_count),
-            filtered_indexes.len(),
-            elapsed.as_micros()
-        );
-        Ok(Self {
-            path,
-            view_mode,
-            entries,
-            dir_count,
-            filtered_indexes,
-            scroll_x: 0.0,
-            scroll_y: 0.0,
-        })
-    }
-
-    #[cfg(test)]
-    fn filtered_entry_count(&self) -> usize {
-        self.filtered_indexes.len()
-    }
-
-    fn rebuild_filtered_indexes(&mut self, show_hidden: bool) {
-        self.filtered_indexes = filtered_indexes_for_entries(&self.entries, show_hidden, "");
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-struct ShellPaneView<'a> {
-    path: &'a Path,
-    view_mode: ShellViewMode,
-    entries: &'a [Entry],
-    dir_count: usize,
-    filtered_indexes: &'a [usize],
-    scroll_x: f32,
-    scroll_y: f32,
-}
-
-impl<'a> ShellPaneView<'a> {
-    fn from_state(state: &'a ShellPaneState) -> Self {
-        Self {
-            path: &state.path,
-            view_mode: state.view_mode,
-            entries: &state.entries,
-            dir_count: state.dir_count,
-            filtered_indexes: &state.filtered_indexes,
-            scroll_x: state.scroll_x,
-            scroll_y: state.scroll_y,
-        }
-    }
-
-    fn filtered_entry_count(self) -> usize {
-        self.filtered_indexes.len()
-    }
-}
-
-#[derive(Clone, Debug)]
-struct ShellPaneProjection<'a> {
-    view: ShellPaneView<'a>,
-    geometry: ShellPaneGeometry,
-    visible_items: Vec<ShellPaneVisibleItem>,
-    scroll_metrics: ShellPaneScrollMetrics,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct ShellPaneVisibleItem {
-    layout: fika_core::ItemLayout,
-    slot_id: u64,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct ShellPaneScrollMetrics {
-    content_size: ViewSize,
-    viewport_width: f32,
-    viewport_height: f32,
-    max_scroll_x: f32,
-    max_scroll_y: f32,
-}
-
-impl ShellPaneScrollMetrics {
-    fn new(content_size: ViewSize, viewport: ViewRect) -> Self {
-        let viewport_width = viewport.width.max(1.0);
-        let viewport_height = viewport.height.max(1.0);
-        Self {
-            content_size,
-            viewport_width,
-            viewport_height,
-            max_scroll_x: (content_size.width - viewport_width).max(0.0),
-            max_scroll_y: (content_size.height - viewport_height).max(0.0),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct ShellVisibleItemSlot {
-    slot_id: u64,
-    visible_epoch: u64,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-struct ShellVisibleItemSlotStats {
-    active: usize,
-    free: usize,
-    reused: usize,
-    recycled: usize,
-    allocated: usize,
-}
-
-impl ShellVisibleItemSlotStats {
-    fn merged(self, other: Self) -> Self {
-        Self {
-            active: self.active + other.active,
-            free: self.free + other.free,
-            reused: self.reused + other.reused,
-            recycled: self.recycled + other.recycled,
-            allocated: self.allocated + other.allocated,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Default)]
-struct ShellVisibleItemSlotPool {
-    next_slot_id: u64,
-    visible_epoch: u64,
-    slot_by_path: HashMap<PathBuf, ShellVisibleItemSlot>,
-    free_slots: Vec<u64>,
-}
-
-impl ShellVisibleItemSlotPool {
-    const MAX_FREE_SLOTS: usize = 100;
-
-    fn update_visible_items(
-        &mut self,
-        visible_paths: impl IntoIterator<Item = PathBuf>,
-    ) -> ShellVisibleItemSlotStats {
-        self.visible_epoch = self.visible_epoch.wrapping_add(1).max(1);
-        let visible_epoch = self.visible_epoch;
-        let mut reused = 0usize;
-
-        for path in visible_paths {
-            match self.slot_by_path.entry(path) {
-                std::collections::hash_map::Entry::Occupied(mut entry) => {
-                    reused += usize::from(entry.get().visible_epoch != visible_epoch);
-                    entry.get_mut().visible_epoch = visible_epoch;
-                }
-                std::collections::hash_map::Entry::Vacant(entry) => {
-                    entry.insert(ShellVisibleItemSlot {
-                        slot_id: 0,
-                        visible_epoch,
-                    });
-                }
-            }
-        }
-
-        let free_slots = &mut self.free_slots;
-        self.slot_by_path.retain(|_, slot| {
-            if slot.visible_epoch == visible_epoch {
-                true
-            } else {
-                if slot.slot_id != 0 {
-                    free_slots.push(slot.slot_id);
-                }
-                false
-            }
-        });
-        if self.free_slots.len() > Self::MAX_FREE_SLOTS {
-            self.free_slots.truncate(Self::MAX_FREE_SLOTS);
-        }
-
-        let mut recycled = 0usize;
-        let mut allocated = 0usize;
-        for slot in self.slot_by_path.values_mut() {
-            if slot.slot_id != 0 {
-                continue;
-            }
-            if let Some(slot_id) = self.free_slots.pop() {
-                slot.slot_id = slot_id;
-                recycled += 1;
-            } else {
-                self.next_slot_id += 1;
-                slot.slot_id = self.next_slot_id;
-                allocated += 1;
-            }
-        }
-
-        ShellVisibleItemSlotStats {
-            active: self.slot_by_path.len(),
-            free: self.free_slots.len(),
-            reused,
-            recycled,
-            allocated,
-        }
-    }
-
-    fn slot_for_path(&self, path: &Path) -> Option<u64> {
-        self.slot_by_path
-            .get(path)
-            .map(|slot| slot.slot_id)
-            .filter(|slot_id| *slot_id != 0)
-    }
-
-    fn clear(&mut self) {
-        self.slot_by_path.clear();
-        self.free_slots.clear();
-        self.visible_epoch = 0;
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct ShellPaneSplitMetrics {
-    divider: ViewRect,
-    right_pane: ViewRect,
-    left_width: f32,
 }
 
 struct ShellScene {

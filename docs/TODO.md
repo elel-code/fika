@@ -68,8 +68,10 @@ wgpu = "29"
 - [~] Phase 2：拆分 `src/bin/fika-wgpu.rs` 单文件。已抽出
   `src/bin/fika_wgpu/clipboard.rs`（Wayland clipboard wrapper）和
   `src/bin/fika_wgpu/location.rs`（`PathHistory`、`LocationDraft`、UTF-8 cursor helper）、
-  `src/bin/fika_wgpu/selection.rs`（selection、keyboard navigation、rubber-band state）。
-  下一步继续抽 app/window/event loop、renderer、scene、pane、Places、context menu、
+  `src/bin/fika_wgpu/selection.rs`（selection、keyboard navigation、rubber-band state）、
+  `src/bin/fika_wgpu/pane.rs`（pane kind/state/view/projection、scroll metrics、
+  visible-slot pool）。
+  下一步继续抽 app/window/event loop、renderer、pane layout、Places、context menu、
   dialogs、icons、thumbnails、text、DnD、telemetry。
 - [ ] Phase 3：把 pane 做成可复用组件，并持续对齐 Dolphin 架构：visible-slot
   virtualization、slot pool、retained geometry、filtered projection、selection/rubber-band、

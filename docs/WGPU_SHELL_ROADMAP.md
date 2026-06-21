@@ -106,6 +106,8 @@ Expected cleanup:
   `PathHistory`, `LocationDraft`, and UTF-8 cursor normalization for location
   editing. `src/bin/fika_wgpu/selection.rs` now owns selection state,
   keyboard navigation actions, click context, and rubber-band state.
+  `src/bin/fika_wgpu/pane.rs` owns pane kind/state/view/projection data,
+  scroll metrics, split metrics, and the visible-slot pool.
 - Extract app/window/event loop, renderer, scene, pane, Places, context menu,
   dialogs, icons, thumbnails, text, DnD, and telemetry modules.
 - Keep behavior changes small while moving code, so regressions remain easy to
