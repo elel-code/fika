@@ -18,18 +18,18 @@ use cosmic_text::{
     SwashCache, Wrap,
 };
 use fika_core::{
-    CompactLayout, CompactLayoutOptions, DesktopLaunchPlan, DeviceInfo, Entry, FileClipboardRole,
-    FileTransferMode, Generation, IconsLayout, IconsLayoutOptions, ItemId, MimeApplication,
-    MimeApplicationCache, NETWORK_ROOT_LABEL, NameFilter, OpenWithLaunchResult, ServiceMenuAction,
-    ServiceMenuLaunchResult, ServiceMenuPriority, ServiceMenuTarget, ThumbnailRequest,
-    ThumbnailRequestPriority, ThumbnailerRegistry, TransferTaskResult, TrashViewOperation,
-    TrashViewOperationResult, UserPlace, ViewPoint, ViewRect, ViewSize, complete_location_input,
-    decode_file_clipboard_text, default_app_settings_path, default_thumbnail_cache_root,
-    default_user_places_path, encode_file_clipboard_text, file_ops, format_modified_secs,
-    format_size, generate_thumbnail_with_external_thumbnailer_registry, home_dir, is_network_path,
-    launch_with_systemd_user, load_app_settings, load_place_order, load_user_places,
-    mime_magic_resolution_required, network_root_path, network_uri_from_path, paste_text_result,
-    place_order_path_for_user_places_path, read_entries_sync, read_gio_devices,
+    AppSettings, CompactLayout, CompactLayoutOptions, DesktopLaunchPlan, DeviceInfo, Entry,
+    FileClipboardRole, FileTransferMode, Generation, IconsLayout, IconsLayoutOptions, ItemId,
+    MimeApplication, MimeApplicationCache, NETWORK_ROOT_LABEL, NameFilter, OpenWithLaunchResult,
+    ServiceMenuAction, ServiceMenuLaunchResult, ServiceMenuPriority, ServiceMenuTarget,
+    ThumbnailRequest, ThumbnailRequestPriority, ThumbnailerRegistry, TransferTaskResult,
+    TrashViewOperation, TrashViewOperationResult, UserPlace, ViewPoint, ViewRect, ViewSize,
+    complete_location_input, decode_file_clipboard_text, default_app_settings_path,
+    default_thumbnail_cache_root, default_user_places_path, encode_file_clipboard_text, file_ops,
+    format_modified_secs, format_size, generate_thumbnail_with_external_thumbnailer_registry,
+    home_dir, is_network_path, launch_with_systemd_user, load_app_settings, load_place_order,
+    load_user_places, mime_magic_resolution_required, network_root_path, network_uri_from_path,
+    paste_text_result, place_order_path_for_user_places_path, read_entries_sync, read_gio_devices,
     resolve_location_input, save_app_settings, save_place_order, save_user_places,
     service_menu_target_label, thumbnail_request_may_have_preview, transfer_paths_result,
     trash_view_operation_result,
@@ -75,19 +75,27 @@ use wgpu_selection::{
 fn startup_view_mode(
     requested: ShellViewMode,
     explicit: bool,
-    settings_path: &Path,
+    settings: &AppSettings,
 ) -> ShellViewMode {
     if explicit {
         return requested;
     }
+    settings.view.mode.unwrap_or(requested)
+}
+
+fn startup_show_hidden(settings: &AppSettings) -> bool {
+    settings.view.show_hidden.unwrap_or(false)
+}
+
+fn load_startup_app_settings(settings_path: &Path) -> AppSettings {
     match load_app_settings(settings_path) {
-        Ok(settings) => settings.view.mode.unwrap_or(requested),
+        Ok(settings) => settings,
         Err(error) => {
             eprintln!(
                 "[fika-wgpu] settings-load-error path={} error={error}",
                 settings_path.display()
             );
-            requested
+            AppSettings::default()
         }
     }
 }
@@ -100,17 +108,23 @@ fn save_view_mode_setting(settings_path: &Path, view_mode: ShellViewMode) -> Res
         .map_err(|error| format!("save settings {}: {error}", settings_path.display()))
 }
 
+fn save_show_hidden_setting(settings_path: &Path, show_hidden: bool) -> Result<(), String> {
+    let mut settings = load_app_settings(settings_path)
+        .map_err(|error| format!("load settings {}: {error}", settings_path.display()))?;
+    settings.view.show_hidden = Some(show_hidden);
+    save_app_settings(settings_path, &settings)
+        .map_err(|error| format!("save settings {}: {error}", settings_path.display()))
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let Some(options) = parse_start_options()? else {
         return Ok(());
     };
     let settings_path = default_app_settings_path();
-    let view_mode = startup_view_mode(
-        options.view_mode,
-        options.view_mode_explicit,
-        &settings_path,
-    );
-    let scene = ShellScene::load(options.path, view_mode)?;
+    let settings = load_startup_app_settings(&settings_path);
+    let view_mode = startup_view_mode(options.view_mode, options.view_mode_explicit, &settings);
+    let show_hidden = startup_show_hidden(&settings);
+    let scene = ShellScene::load_with_hidden_visibility(options.path, view_mode, show_hidden)?;
 
     let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Wait);
@@ -274,20 +288,33 @@ impl ShellPaneHistories {
     fn get_mut(&mut self, pane: ShellPaneId) -> &mut PathHistory {
         &mut self.histories[pane.index()]
     }
+
+    fn clear(&mut self, pane: ShellPaneId) {
+        self.histories[pane.index()] = PathHistory::default();
+    }
+
+    fn take(&mut self, pane: ShellPaneId) -> PathHistory {
+        std::mem::take(self.get_mut(pane))
+    }
+
+    fn set(&mut self, pane: ShellPaneId, history: PathHistory) {
+        self.histories[pane.index()] = history;
+    }
 }
 
 fn window_title(scene: &ShellScene) -> String {
+    let view_mode = scene.active_view_mode();
     if let Some(split_pane) = scene.panes.get(ShellPaneId::SECOND) {
         format!(
             "Fika wgpu shell [{}] - {} | {}",
-            scene.panes[ShellPaneId::FIRST].view_mode.as_str(),
+            view_mode.as_str(),
             scene.panes[ShellPaneId::FIRST].path.display(),
             split_pane.path.display()
         )
     } else {
         format!(
             "Fika wgpu shell [{}] - {}",
-            scene.panes[ShellPaneId::FIRST].view_mode.as_str(),
+            view_mode.as_str(),
             scene.panes[ShellPaneId::FIRST].path.display()
         )
     }
@@ -344,6 +371,16 @@ impl FikaWgpuApp {
             return false;
         }
         if let Err(error) = save_view_mode_setting(&self.settings_path, view_mode) {
+            eprintln!("[fika-wgpu] settings-save-error {error}");
+        }
+        true
+    }
+
+    fn toggle_user_hidden_visibility(&mut self, size: PhysicalSize<u32>) -> bool {
+        if !self.scene.toggle_hidden_visibility(size) {
+            return false;
+        }
+        if let Err(error) = save_show_hidden_setting(&self.settings_path, self.scene.show_hidden) {
             eprintln!("[fika-wgpu] settings-save-error {error}");
         }
         true
@@ -419,7 +456,7 @@ impl ApplicationHandler for FikaWgpuApp {
         if self.auto_cycle_views && Instant::now() >= self.next_auto_cycle {
             self.next_auto_cycle = Instant::now() + AUTO_CYCLE_INTERVAL;
             if let Some(renderer) = self.renderer.as_ref() {
-                let next = self.scene.panes[ShellPaneId::FIRST].view_mode.next();
+                let next = self.scene.active_view_mode().next();
                 if self.scene.set_view_mode(next, renderer.size) {
                     self.pending_redraw_frames = VIEW_SWITCH_REDRAW_FRAMES;
                     if let Some(window) = self.window.as_ref() {
@@ -625,7 +662,7 @@ impl ApplicationHandler for FikaWgpuApp {
                     return;
                 }
                 if hidden_toggle_requested_for_key_event(&event, shortcut) {
-                    if self.scene.toggle_hidden_visibility(renderer.size) {
+                    if self.toggle_user_hidden_visibility(renderer.size) {
                         self.present_scene_change(event_loop, "toggle-hidden");
                     }
                     return;
@@ -855,6 +892,12 @@ impl ApplicationHandler for FikaWgpuApp {
                     return;
                 }
                 if state == ElementState::Pressed
+                    && self.scene.split_view_button_at_screen_point(point, size)
+                {
+                    self.toggle_split_view_from_toolbar(event_loop);
+                    return;
+                }
+                if state == ElementState::Pressed
                     && let Some(changed) = self.scene.toggle_places_at_screen_point(point, size)
                 {
                     self.update_window_cursor_for_scene(size);
@@ -1041,7 +1084,7 @@ impl FikaWgpuApp {
                 let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
                     return;
                 };
-                if self.scene.toggle_hidden_visibility(size) {
+                if self.toggle_user_hidden_visibility(size) {
                     self.present_scene_change(event_loop, "context-toggle-hidden");
                 }
             }
@@ -1305,6 +1348,26 @@ impl FikaWgpuApp {
         };
         match self.scene.open_split_pane_from_context(size) {
             Ok(true) => self.present_scene_change(event_loop, reason),
+            Ok(false) => {
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+            }
+            Err(error) => {
+                eprintln!("[fika-wgpu] split-pane-error {error}");
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+            }
+        }
+    }
+
+    fn toggle_split_view_from_toolbar(&mut self, event_loop: &dyn ActiveEventLoop) {
+        let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
+            return;
+        };
+        match self.scene.toggle_split_view_from_toolbar(size) {
+            Ok(true) => self.present_scene_change(event_loop, "toolbar-split-view"),
             Ok(false) => {
                 if let Some(window) = self.window.as_ref() {
                     window.request_redraw();
@@ -3754,6 +3817,14 @@ struct ShellScene {
 
 impl ShellScene {
     fn load(path: PathBuf, view_mode: ShellViewMode) -> Result<Self, String> {
+        Self::load_with_hidden_visibility(path, view_mode, false)
+    }
+
+    fn load_with_hidden_visibility(
+        path: PathBuf,
+        view_mode: ShellViewMode,
+        show_hidden: bool,
+    ) -> Result<Self, String> {
         let load_start = Instant::now();
         let entries = read_entries_sync(&path)
             .map_err(|error| format!("read directory {}: {error}", path.display()))?;
@@ -3778,7 +3849,7 @@ impl ShellScene {
             eprintln!("[fika-wgpu] first-entries={preview}");
         }
 
-        let first_pane = ShellPaneState::from_entries(path, view_mode, entries, false, "");
+        let first_pane = ShellPaneState::from_entries(path, view_mode, entries, show_hidden, "");
         let places = build_shell_places();
         eprintln!("[fika-wgpu] places entries={}", places.len());
 
@@ -3789,7 +3860,7 @@ impl ShellScene {
             location_draft: None,
             filter_active: false,
             filter_pattern: String::new(),
-            show_hidden: false,
+            show_hidden,
             zoom_step: 0,
             places_visible: true,
             places_width: PLACES_SIDEBAR_WIDTH,
@@ -4127,26 +4198,32 @@ impl ShellScene {
     }
 
     fn set_view_mode(&mut self, view_mode: ShellViewMode, size: PhysicalSize<u32>) -> bool {
-        if self.panes[ShellPaneId::FIRST].view_mode == view_mode {
+        let pane_id = self.active_pane();
+        let Some(pane) = self.pane_state_mut(pane_id) else {
+            return false;
+        };
+        if pane.view_mode == view_mode {
             return false;
         }
-        for kind in ShellPaneId::ALL {
-            if let Some(pane) = self.pane_state_mut(kind) {
-                pane.view_mode = view_mode;
-                pane.scroll_x = 0.0;
-                pane.scroll_y = 0.0;
-            }
-        }
+        pane.view_mode = view_mode;
+        pane.scroll_x = 0.0;
+        pane.scroll_y = 0.0;
+        self.visible_slots.clear(pane_id);
         self.rubber_band = None;
         self.scrollbar_drag = None;
         self.view_switches += 1;
         self.clamp_scroll(size);
         eprintln!(
-            "[fika-wgpu] view-mode={} switches={} scroll_x={:.1} scroll_y={:.1}",
-            self.panes[ShellPaneId::FIRST].view_mode.as_str(),
+            "[fika-wgpu] view-mode pane={} mode={} switches={} scroll_x={:.1} scroll_y={:.1}",
+            pane_id.as_str(),
+            view_mode.as_str(),
             self.view_switches,
-            self.panes[ShellPaneId::FIRST].scroll_x,
-            self.panes[ShellPaneId::FIRST].scroll_y
+            self.pane_state(pane_id)
+                .map(|pane| pane.scroll_x)
+                .unwrap_or(0.0),
+            self.pane_state(pane_id)
+                .map(|pane| pane.scroll_y)
+                .unwrap_or(0.0)
         );
         true
     }
@@ -4476,18 +4553,33 @@ impl ShellScene {
     }
 
     fn open_split_pane_from_context(&mut self, size: PhysicalSize<u32>) -> Result<bool, String> {
-        let path = self
-            .context_target_split_pane_path()
-            .unwrap_or_else(|| self.panes[ShellPaneId::FIRST].path.clone());
-        self.open_split_pane(path, size)
+        let (path, source_pane) = self.context_target_split_pane_request().unwrap_or_else(|| {
+            let pane = self.active_pane();
+            let path = self
+                .pane_state(pane)
+                .map(|pane| pane.path.clone())
+                .unwrap_or_else(|| self.panes[ShellPaneId::FIRST].path.clone());
+            (path, pane)
+        });
+        let view_mode = self
+            .pane_state(source_pane)
+            .map(|pane| pane.view_mode)
+            .unwrap_or_else(|| self.active_view_mode());
+        self.open_split_pane_with_view_mode(path, view_mode, size)
     }
 
     fn open_split_pane(&mut self, path: PathBuf, size: PhysicalSize<u32>) -> Result<bool, String> {
-        let mut split_pane = ShellPaneState::load(
-            path,
-            self.panes[ShellPaneId::FIRST].view_mode,
-            self.show_hidden,
-        )?;
+        let view_mode = self.active_view_mode();
+        self.open_split_pane_with_view_mode(path, view_mode, size)
+    }
+
+    fn open_split_pane_with_view_mode(
+        &mut self,
+        path: PathBuf,
+        view_mode: ShellViewMode,
+        size: PhysicalSize<u32>,
+    ) -> Result<bool, String> {
+        let mut split_pane = ShellPaneState::load(path, view_mode, self.show_hidden)?;
         split_pane.scroll_x = 0.0;
         split_pane.scroll_y = 0.0;
         self.panes.set(ShellPaneId::SECOND, split_pane);
@@ -4520,18 +4612,107 @@ impl ShellScene {
         Ok(true)
     }
 
+    fn open_split_pane_from_active(&mut self, size: PhysicalSize<u32>) -> Result<bool, String> {
+        let pane = self.active_pane();
+        let Some(state) = self.pane_state(pane) else {
+            return Err(format!("pane {} is not open", pane.as_str()));
+        };
+        let current_path = state.path.clone();
+        let view_mode = state.view_mode;
+        let path = self
+            .single_selected_directory_path_for_pane(pane)
+            .unwrap_or(current_path);
+        self.open_split_pane_with_view_mode(path, view_mode, size)
+    }
+
+    fn toggle_split_view_from_toolbar(&mut self, size: PhysicalSize<u32>) -> Result<bool, String> {
+        if self.panes.is_open(ShellPaneId::SECOND) {
+            Ok(self.close_active_split_pane(size))
+        } else {
+            self.open_split_pane_from_active(size)
+        }
+    }
+
+    fn close_active_split_pane(&mut self, size: PhysicalSize<u32>) -> bool {
+        if !self.panes.is_open(ShellPaneId::SECOND) {
+            return false;
+        }
+        let active = self.active_pane();
+        match active {
+            ShellPaneId::FIRST => {
+                let Some(remaining) = self.panes.take(ShellPaneId::SECOND) else {
+                    return false;
+                };
+                self.panes.set(ShellPaneId::FIRST, remaining);
+                let remaining_history = self.histories.take(ShellPaneId::SECOND);
+                self.histories.set(ShellPaneId::FIRST, remaining_history);
+                self.histories.clear(ShellPaneId::SECOND);
+            }
+            ShellPaneId::SECOND => {
+                if self.panes.take(ShellPaneId::SECOND).is_none() {
+                    return false;
+                }
+                self.histories.clear(ShellPaneId::SECOND);
+            }
+        }
+        self.active_pane = ShellPaneId::FIRST;
+        self.visible_slots.clear(ShellPaneId::FIRST);
+        self.visible_slots.clear(ShellPaneId::SECOND);
+        self.split_pane_left_fraction = 0.5;
+        self.split_pane_changes += 1;
+        self.context_target = None;
+        self.context_menu = None;
+        self.properties_overlay = None;
+        self.create_dialog = None;
+        self.rename_dialog = None;
+        self.open_with_chooser = None;
+        self.trash_conflict_dialog = None;
+        self.internal_drag = None;
+        self.pending_drop_request = None;
+        self.clear_dnd_hover_target();
+        self.rubber_band = None;
+        self.scrollbar_drag = None;
+        self.clamp_scroll(size);
+        eprintln!(
+            "[fika-wgpu] split-pane open=0 closed={} changes={} remaining={}",
+            active.as_str(),
+            self.split_pane_changes,
+            self.panes[ShellPaneId::FIRST].path.display()
+        );
+        true
+    }
+
     fn context_target_split_pane_path(&self) -> Option<PathBuf> {
+        self.context_target_split_pane_request()
+            .map(|(path, _pane)| path)
+    }
+
+    fn context_target_split_pane_request(&self) -> Option<(PathBuf, ShellPaneId)> {
         match self.context_target.as_ref()? {
-            ShellContextTarget::Item { path, is_dir, .. } if *is_dir => Some(path.clone()),
+            ShellContextTarget::Item {
+                pane, path, is_dir, ..
+            } if *is_dir => Some((path.clone(), self.normalized_pane_id(*pane))),
             ShellContextTarget::Item { pane, path, .. } => path
                 .parent()
                 .filter(|parent| !parent.as_os_str().is_empty())
                 .map(Path::to_path_buf)
-                .or_else(|| self.pane_state(*pane).map(|state| state.path.clone())),
-            ShellContextTarget::Blank { path, .. } | ShellContextTarget::Place { path, .. } => {
-                Some(path.clone())
+                .or_else(|| self.pane_state(*pane).map(|state| state.path.clone()))
+                .map(|path| (path, self.normalized_pane_id(*pane))),
+            ShellContextTarget::Blank { pane, path, .. } => {
+                Some((path.clone(), self.normalized_pane_id(*pane)))
             }
+            ShellContextTarget::Place { path, .. } => Some((path.clone(), self.active_pane())),
         }
+    }
+
+    fn single_selected_directory_path_for_pane(&self, pane: ShellPaneId) -> Option<PathBuf> {
+        let selection = self.pane_selection(pane)?;
+        if selection.len() != 1 {
+            return None;
+        }
+        selection
+            .focus_or_first_selected()
+            .and_then(|index| self.directory_path_for_pane_index(pane, index))
     }
 
     fn rebuild_filtered_indexes(&mut self) -> bool {
@@ -4777,6 +4958,24 @@ impl ShellScene {
                 .scale_metric(28.0)
                 .min((toolbar.height - self.scale_metric(8.0)).max(1.0)),
         }
+    }
+
+    fn split_view_button_rect(&self, size: PhysicalSize<u32>) -> ViewRect {
+        let toolbar = self.app_toolbar_rect(size);
+        let margin = self.scale_metric(8.0);
+        let button_size = self
+            .scale_metric(28.0)
+            .min((toolbar.height - margin).max(1.0));
+        ViewRect {
+            x: (toolbar.right() - margin - button_size).max(toolbar.x),
+            y: toolbar.y + margin,
+            width: button_size,
+            height: button_size,
+        }
+    }
+
+    fn split_view_button_at_screen_point(&self, point: ViewPoint, size: PhysicalSize<u32>) -> bool {
+        self.split_view_button_rect(size).contains(point)
     }
 
     fn toggle_places_at_screen_point(
@@ -7326,6 +7525,12 @@ impl ShellScene {
         self.normalized_pane_id(self.active_pane)
     }
 
+    fn active_view_mode(&self) -> ShellViewMode {
+        self.pane_state(self.active_pane())
+            .map(|pane| pane.view_mode)
+            .unwrap_or(ShellViewMode::Icons)
+    }
+
     fn focus_pane_at_screen_point(&mut self, point: ViewPoint, size: PhysicalSize<u32>) -> bool {
         let Some(kind) = self.pane_id_at_screen_point(point, size) else {
             return false;
@@ -8407,6 +8612,92 @@ impl ShellScene {
             icon_color,
             size,
         );
+
+        let split_button = self.split_view_button_rect(size);
+        let split_open = self.panes.is_open(ShellPaneId::SECOND);
+        let split_border = if split_open {
+            [0.184, 0.435, 0.929, 1.0]
+        } else {
+            [0.694, 0.729, 0.776, 1.0]
+        };
+        let split_fill = if split_open {
+            [0.918, 0.945, 1.000, 1.0]
+        } else {
+            [0.984, 0.986, 0.990, 1.0]
+        };
+        let split_icon_color = if split_open {
+            [0.122, 0.310, 0.749, 1.0]
+        } else {
+            [0.420, 0.466, 0.545, 1.0]
+        };
+        push_clipped_rounded_rect(
+            vertices,
+            split_button,
+            toolbar,
+            self.scale_metric(6.0),
+            split_border,
+            size,
+        );
+        if let Some(inner) = inset_rect(split_button, self.scale_metric(1.0)) {
+            push_clipped_rounded_rect(
+                vertices,
+                inner,
+                toolbar,
+                self.scale_metric(5.0),
+                split_fill,
+                size,
+            );
+        }
+        let split_icon = ViewRect {
+            x: split_button.x + (split_button.width - self.scale_metric(18.0)) / 2.0,
+            y: split_button.y + (split_button.height - self.scale_metric(18.0)) / 2.0,
+            width: self.scale_metric(18.0),
+            height: self.scale_metric(18.0),
+        };
+        push_clipped_rect_outline(
+            vertices,
+            ViewRect {
+                x: split_icon.x + self.scale_metric(1.0),
+                y: split_icon.y + self.scale_metric(2.0),
+                width: split_icon.width - self.scale_metric(2.0),
+                height: split_icon.height - self.scale_metric(4.0),
+            },
+            toolbar,
+            self.scale_metric(1.0),
+            split_icon_color,
+            size,
+        );
+        push_clipped_rect(
+            vertices,
+            ViewRect {
+                x: split_icon.x + split_icon.width / 2.0 - self.scale_metric(0.5),
+                y: split_icon.y + self.scale_metric(2.0),
+                width: self.scale_metric(1.0),
+                height: split_icon.height - self.scale_metric(4.0),
+            },
+            toolbar,
+            split_icon_color,
+            size,
+        );
+        if split_open {
+            let close_center_x = if self.active_pane() == ShellPaneId::FIRST {
+                split_icon.x + split_icon.width * 0.25
+            } else {
+                split_icon.x + split_icon.width * 0.75
+            };
+            push_clipped_rect(
+                vertices,
+                ViewRect {
+                    x: close_center_x - self.scale_metric(3.0),
+                    y: split_icon.y + split_icon.height / 2.0 - self.scale_metric(0.5),
+                    width: self.scale_metric(6.0),
+                    height: self.scale_metric(1.0),
+                },
+                toolbar,
+                split_icon_color,
+                size,
+            );
+        }
     }
 
     fn push_places_sidebar(
@@ -16244,17 +16535,45 @@ mod tests {
         save_app_settings(&settings_path, &settings).unwrap();
 
         save_view_mode_setting(&settings_path, ShellViewMode::Details).unwrap();
+        save_show_hidden_setting(&settings_path, true).unwrap();
         let loaded = load_app_settings(&settings_path).unwrap();
         assert_eq!(loaded.places_sidebar.width, Some(288.0));
         assert_eq!(loaded.places_sidebar.visible, Some(true));
         assert_eq!(loaded.view.mode, Some(ShellViewMode::Details));
+        assert_eq!(loaded.view.show_hidden, Some(true));
         assert_eq!(
-            startup_view_mode(ShellViewMode::Icons, false, &settings_path),
+            startup_view_mode(ShellViewMode::Icons, false, &loaded),
             ShellViewMode::Details
         );
         assert_eq!(
-            startup_view_mode(ShellViewMode::Compact, true, &settings_path),
+            startup_view_mode(ShellViewMode::Compact, true, &loaded),
             ShellViewMode::Compact
+        );
+        assert!(startup_show_hidden(&loaded));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn startup_hidden_visibility_applies_to_initial_pane() {
+        let root = test_dir("startup-hidden-files");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("visible.txt"), b"visible").unwrap();
+        fs::write(root.join(".hidden.txt"), b"hidden").unwrap();
+
+        let hidden =
+            ShellScene::load_with_hidden_visibility(root.clone(), ShellViewMode::Icons, true)
+                .unwrap();
+        assert!(hidden.show_hidden);
+        assert_eq!(hidden.panes[ShellPaneId::FIRST].filtered_indexes.len(), 2);
+
+        let visible_only =
+            ShellScene::load_with_hidden_visibility(root.clone(), ShellViewMode::Icons, false)
+                .unwrap();
+        assert!(!visible_only.show_hidden);
+        assert_eq!(
+            filtered_names(&visible_only, ShellPaneId::FIRST),
+            vec!["visible.txt"]
         );
 
         fs::remove_dir_all(root).unwrap();
@@ -16496,6 +16815,31 @@ mod tests {
         assert!(scene.places_visible);
         assert_eq!(scene.content_origin_x(size), before_origin);
         assert!(scene.places_sidebar_width(size) > 0.0);
+    }
+
+    #[test]
+    fn split_view_button_is_right_aligned_in_app_toolbar() {
+        let scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
+        let size = PhysicalSize::new(700, 320);
+        let toolbar = scene.app_toolbar_rect(size);
+        let button = scene.split_view_button_rect(size);
+        let places = scene.places_toggle_rect(size);
+        let point = ViewPoint {
+            x: button.x + button.width / 2.0,
+            y: button.y + button.height / 2.0,
+        };
+
+        assert!(button.right() <= toolbar.right() - scene.scale_metric(8.0) + 0.5);
+        assert!(button.x > toolbar.width / 2.0);
+        assert!(button.x > places.right());
+        assert!(scene.split_view_button_at_screen_point(point, size));
+        assert!(!scene.split_view_button_at_screen_point(
+            ViewPoint {
+                x: places.x + places.width / 2.0,
+                y: places.y + places.height / 2.0,
+            },
+            size,
+        ));
     }
 
     #[test]
@@ -18436,6 +18780,74 @@ mod tests {
             }
             _ => panic!("split pane view mode should drive reusable compact layout"),
         }
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn toolbar_split_view_opens_single_selected_directory_with_active_view_mode() {
+        let root = test_dir("toolbar-split-selected-dir");
+        let child = root.join("child");
+        fs::create_dir_all(&child).unwrap();
+        fs::write(child.join("nested.txt"), b"nested").unwrap();
+        fs::write(root.join("plain.txt"), b"plain").unwrap();
+
+        let size = PhysicalSize::new(900, 420);
+        let mut scene =
+            ShellScene::load_with_hidden_visibility(root.clone(), ShellViewMode::Details, false)
+                .unwrap();
+        let child_index =
+            entry_index_by_name(&scene.panes[ShellPaneId::FIRST].entries, "child").unwrap();
+        assert!(
+            scene.panes[ShellPaneId::FIRST]
+                .selection
+                .apply_navigation(child_index, false)
+        );
+
+        assert!(scene.toggle_split_view_from_toolbar(size).unwrap());
+        let split = scene
+            .panes
+            .get(ShellPaneId::SECOND)
+            .expect("split pane should load");
+        assert_eq!(split.path, child);
+        assert_eq!(split.view_mode, ShellViewMode::Details);
+        assert_eq!(split.entries.len(), 1);
+        assert_eq!(split.entries[0].name.as_ref(), "nested.txt");
+        assert_eq!(scene.active_pane(), ShellPaneId::SECOND);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn toolbar_split_view_closes_current_pane_and_keeps_the_other_pane() {
+        let root = test_dir("toolbar-split-close-current");
+        let left = root.join("left");
+        let right = root.join("right");
+        fs::create_dir_all(&left).unwrap();
+        fs::create_dir_all(&right).unwrap();
+        fs::write(left.join("left.txt"), b"left").unwrap();
+        fs::write(right.join("right.txt"), b"right").unwrap();
+
+        let size = PhysicalSize::new(900, 420);
+        let mut scene = ShellScene::load(left.clone(), ShellViewMode::Icons).unwrap();
+        assert!(scene.open_split_pane(right.clone(), size).unwrap());
+        assert_eq!(scene.active_pane(), ShellPaneId::SECOND);
+
+        assert!(scene.toggle_split_view_from_toolbar(size).unwrap());
+        assert!(!scene.panes.is_open(ShellPaneId::SECOND));
+        assert_eq!(scene.active_pane(), ShellPaneId::FIRST);
+        assert_eq!(scene.panes[ShellPaneId::FIRST].path, left);
+
+        assert!(scene.open_split_pane(right.clone(), size).unwrap());
+        scene.active_pane = ShellPaneId::FIRST;
+        assert!(scene.toggle_split_view_from_toolbar(size).unwrap());
+        assert!(!scene.panes.is_open(ShellPaneId::SECOND));
+        assert_eq!(scene.active_pane(), ShellPaneId::FIRST);
+        assert_eq!(scene.panes[ShellPaneId::FIRST].path, right);
+        assert_eq!(
+            scene.panes[ShellPaneId::FIRST].entries[0].name.as_ref(),
+            "right.txt"
+        );
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -21812,6 +22224,53 @@ text/plain=writer.desktop;\n",
 
         assert!(!scene.set_view_mode(ShellViewMode::Details, size));
         assert_eq!(scene.view_switches, 1);
+    }
+
+    #[test]
+    fn switching_view_modes_only_changes_active_pane() {
+        let mut scene = test_scene(
+            (0..80)
+                .map(|index| test_entry(&format!("left-{index:02}.txt"), false))
+                .collect(),
+            ShellViewMode::Icons,
+        );
+        set_test_pane(
+            &mut scene,
+            ShellPaneId::SECOND,
+            PathBuf::from("/right-root"),
+            ShellViewMode::Details,
+            vec![test_entry("right.txt", false)],
+        );
+        let size = PhysicalSize::new(900, 360);
+        scene.panes[ShellPaneId::FIRST].scroll_y = 18.0;
+        scene.panes[ShellPaneId::SECOND].scroll_y = 42.0;
+        scene.active_pane = ShellPaneId::SECOND;
+
+        assert!(scene.set_view_mode(ShellViewMode::Compact, size));
+        assert_eq!(
+            scene.panes[ShellPaneId::FIRST].view_mode,
+            ShellViewMode::Icons
+        );
+        assert_eq!(
+            scene.panes[ShellPaneId::SECOND].view_mode,
+            ShellViewMode::Compact
+        );
+        assert_eq!(scene.panes[ShellPaneId::FIRST].scroll_y, 18.0);
+        assert_eq!(scene.panes[ShellPaneId::SECOND].scroll_y, 0.0);
+        assert_eq!(scene.view_switches, 1);
+
+        assert!(!scene.set_view_mode(ShellViewMode::Compact, size));
+        scene.active_pane = ShellPaneId::FIRST;
+        assert!(scene.set_view_mode(ShellViewMode::Details, size));
+        assert_eq!(
+            scene.panes[ShellPaneId::FIRST].view_mode,
+            ShellViewMode::Details
+        );
+        assert_eq!(
+            scene.panes[ShellPaneId::SECOND].view_mode,
+            ShellViewMode::Compact
+        );
+        assert_eq!(scene.view_switches, 2);
     }
 
     #[test]

@@ -150,6 +150,10 @@ impl ShellPaneStates {
         self.panes[pane.index()] = Some(state);
     }
 
+    pub(crate) fn take(&mut self, pane: ShellPaneId) -> Option<ShellPaneState> {
+        self.panes[pane.index()].take()
+    }
+
     pub(crate) fn is_open(&self, pane: ShellPaneId) -> bool {
         self.panes[pane.index()].is_some()
     }
