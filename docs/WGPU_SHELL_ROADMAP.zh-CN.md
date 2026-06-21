@@ -95,12 +95,12 @@ winit/wgpu shell 负责：
   `src/bin/fika_wgpu/location.rs` 负责 `PathHistory`、`LocationDraft` 和地址栏编辑使用的
   UTF-8 cursor normalization；`src/bin/fika_wgpu/selection.rs` 负责 selection state、
   keyboard navigation action、click context 和 rubber-band state；
-  `src/bin/fika_wgpu/pane.rs` 负责 pane kind/state/view/projection data、scroll metrics、
+  `src/bin/fika_wgpu/pane.rs` 负责 pane id/state/view/projection data、scroll metrics、
   split metrics 和 visible-slot pool；`src/bin/fika_wgpu/pane_layout.rs` 负责 shell layout
   enum、Compact/Details layout adapter 和 keyboard navigation target calculation。
 - `ShellScene` 不再保留全局 selection；pane state 自持 selection，hover、
-  context target、双击打开、滚动条拖动等路径携带 pane 归属，避免某个 pane
-  成为隐式主路径。
+  context target、双击打开、滚动条拖动等路径通过 `ShellPaneId` slot 身份携带
+  pane 归属，不再用 left/split 语义作为交互路由类型。
 - 抽出 app/window/event loop、renderer、scene、pane、Places、context menu、
   dialogs、icons、thumbnails、text、DnD、telemetry 模块。
 - 拆分时尽量少改行为，方便定位 regression。

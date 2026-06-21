@@ -109,13 +109,13 @@ Expected cleanup:
   `PathHistory`, `LocationDraft`, and UTF-8 cursor normalization for location
   editing. `src/bin/fika_wgpu/selection.rs` now owns selection state,
   keyboard navigation actions, click context, and rubber-band state.
-  `src/bin/fika_wgpu/pane.rs` owns pane kind/state/view/projection data,
+  `src/bin/fika_wgpu/pane.rs` owns pane id/state/view/projection data,
   scroll metrics, split metrics, and the visible-slot pool.
   `src/bin/fika_wgpu/pane_layout.rs` owns the shell layout enum, Compact and
   Details layout adapters, and keyboard navigation target calculation.
 - `ShellScene` no longer keeps global selection. Pane state owns selection, and
   hover, context targets, double-click open, and scrollbar drag paths carry pane
-  identity so no pane remains an implicit main route.
+  identity through `ShellPaneId` slots instead of left/split semantic routing.
 - Extract app/window/event loop, renderer, scene, pane, Places, context menu,
   dialogs, icons, thumbnails, text, DnD, and telemetry modules.
 - Keep behavior changes small while moving code, so regressions remain easy to

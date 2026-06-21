@@ -72,12 +72,13 @@ wgpu = "29"
   `src/bin/fika_wgpu/clipboard.rs`（Wayland clipboard wrapper）和
   `src/bin/fika_wgpu/location.rs`（`PathHistory`、`LocationDraft`、UTF-8 cursor helper）、
   `src/bin/fika_wgpu/selection.rs`（selection、keyboard navigation、rubber-band state）、
-  `src/bin/fika_wgpu/pane.rs`（pane kind/state/view/projection、scroll metrics、
+  `src/bin/fika_wgpu/pane.rs`（pane id/state/view/projection、scroll metrics、
   visible-slot pool）、
   `src/bin/fika_wgpu/pane_layout.rs`（ShellLayout、compact/details layout adapter、
   keyboard navigation target）。
   `ShellScene` 已删除全局 selection，并让 pane state 自持 selection；hover、
-  context target、双击打开和滚动条拖动都带 pane 归属。下一步继续抽
+  context target、双击打开和滚动条拖动都带 `ShellPaneId` slot 身份，不再用
+  left/split 语义作为交互路由类型。下一步继续抽
   app/window/event loop、renderer、pane scene assembly、Places、context menu、
   dialogs、icons、thumbnails、text、DnD、telemetry。
 - [ ] Phase 3：把 pane 做成可复用组件，并持续对齐 Dolphin 架构：visible-slot

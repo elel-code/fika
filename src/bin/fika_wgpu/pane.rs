@@ -9,23 +9,27 @@ use crate::{
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ShellPaneKind {
-    Left,
-    Split,
+pub(crate) enum ShellPaneId {
+    First,
+    Second,
 }
 
-impl ShellPaneKind {
+impl ShellPaneId {
+    pub(crate) const FIRST: Self = Self::First;
+    pub(crate) const SECOND: Self = Self::Second;
+    pub(crate) const ALL: [Self; 2] = [Self::FIRST, Self::SECOND];
+
     pub(crate) fn as_str(self) -> &'static str {
         match self {
-            Self::Left => "left",
-            Self::Split => "split",
+            Self::First => "pane-0",
+            Self::Second => "pane-1",
         }
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct ShellPaneGeometry {
-    pub(crate) kind: ShellPaneKind,
+    pub(crate) kind: ShellPaneId,
     pub(crate) pane: ViewRect,
     pub(crate) top_bar: ViewRect,
     pub(crate) content: ViewRect,
