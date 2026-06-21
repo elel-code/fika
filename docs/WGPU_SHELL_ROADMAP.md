@@ -383,9 +383,19 @@ migrated; context menu dispatch currently covers Open directory, Refresh,
 Select All, Properties, minimal Create New, minimal Rename, minimal Move to
 Trash, Trash view Restore/Delete Permanently/Empty Trash, Copy/Cut/Copy
 Location, Paste, and the minimal Places row Open/Copy Location/Properties/Remove
-menu, while richer Places actions/devices/DnD, richer Trash conflict handling,
-undo, richer properties, full inline rename, full Create New submenus/templates,
-Open With default-app selection, and new-pane actions remain pending.
+menu. The blank context menu now exposes Show/Hide Hidden Files and Split View,
+directory/place Open in New Pane loads a real right-hand pane with its own
+location bar/content/status paint, item hover/selection backgrounds are rounded,
+the location bar uses a white bordered original-style treatment with a leading
+folder glyph, and empty Trash no longer paints the blue status dot. The split
+pane is intentionally a minimal visible skeleton: focus, pointer routing,
+scrollbars, DnD, and file operations still target the primary pane. The next
+multi-pane step must extract pane state/layout/paint/hit-test into a reusable
+pane component and then plug both the primary and right-hand panes into that
+component instead of adding more split-only paths. Richer Places
+actions/devices/DnD, richer Trash conflict handling, undo, richer properties, full inline
+rename, full Create New submenus/templates, and Open With default-app selection
+remain pending.
 
 Acceptance:
 

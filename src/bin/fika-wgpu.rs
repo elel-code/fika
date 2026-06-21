@@ -78,6 +78,8 @@ const PLACES_SCROLLBAR_MIN_THUMB_HEIGHT: f32 = 28.0;
 const CONTENT_SCROLLBAR_RESERVED_EXTENT: f32 = 14.0;
 const CONTENT_SCROLLBAR_PADDING: f32 = 4.0;
 const CONTENT_SCROLLBAR_MIN_THUMB_SIZE: f32 = 25.0;
+const SPLIT_PANE_DIVIDER_WIDTH: f32 = 1.0;
+const SPLIT_PANE_MIN_WIDTH: f32 = 180.0;
 const CONTEXT_MENU_WIDTH: f32 = 196.0;
 const CONTEXT_MENU_ROW_HEIGHT: f32 = 28.0;
 const CONTEXT_MENU_VERTICAL_PADDING: f32 = 4.0;
@@ -348,11 +350,20 @@ enum OpenWithCommand {
 }
 
 fn window_title(scene: &ShellScene) -> String {
-    format!(
-        "Fika wgpu shell [{}] - {}",
-        scene.view_mode.as_str(),
-        scene.path.display()
-    )
+    if let Some(split_pane) = scene.split_pane.as_ref() {
+        format!(
+            "Fika wgpu shell [{}] - {} | {}",
+            scene.view_mode.as_str(),
+            scene.path.display(),
+            split_pane.path.display()
+        )
+    } else {
+        format!(
+            "Fika wgpu shell [{}] - {}",
+            scene.view_mode.as_str(),
+            scene.path.display()
+        )
+    }
 }
 
 enum ShellClipboard {
@@ -1060,6 +1071,17 @@ impl FikaWgpuApp {
                 }
             }
             ShellContextMenuAction::Refresh => self.reload_scene_path(event_loop),
+            ShellContextMenuAction::ToggleHiddenFiles => {
+                let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
+                    return;
+                };
+                if self.scene.toggle_hidden_visibility(size) {
+                    self.present_scene_change(event_loop, "context-toggle-hidden");
+                }
+            }
+            ShellContextMenuAction::SplitPane | ShellContextMenuAction::OpenInNewPane => {
+                self.open_context_target_in_split_pane(event_loop, action.as_str());
+            }
             ShellContextMenuAction::SelectAll => {
                 let _ = self
                     .scene
@@ -1144,16 +1166,26 @@ impl FikaWgpuApp {
                 }
             }
             ShellContextMenuAction::Paste => self.paste_from_clipboard(event_loop),
-            ShellContextMenuAction::OpenInNewPane => {
-                eprintln!(
-                    "[fika-wgpu] context-action-pending action={} target={}",
-                    action.as_str(),
-                    self.scene
-                        .context_target
-                        .as_ref()
-                        .map(ShellContextTarget::kind)
-                        .unwrap_or("none")
-                );
+        }
+    }
+
+    fn open_context_target_in_split_pane(
+        &mut self,
+        event_loop: &dyn ActiveEventLoop,
+        reason: &'static str,
+    ) {
+        let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
+            return;
+        };
+        match self.scene.open_split_pane_from_context(size) {
+            Ok(true) => self.present_scene_change(event_loop, reason),
+            Ok(false) => {
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+            }
+            Err(error) => {
+                eprintln!("[fika-wgpu] split-pane-error {error}");
                 if let Some(window) = self.window.as_ref() {
                     window.request_redraw();
                 }
@@ -2430,6 +2462,7 @@ enum ShellContextMenuAction {
     Open,
     OpenWith,
     OpenInNewPane,
+    SplitPane,
     Copy,
     Cut,
     CopyLocation,
@@ -2442,6 +2475,7 @@ enum ShellContextMenuAction {
     CreateNew,
     Paste,
     SelectAll,
+    ToggleHiddenFiles,
     Refresh,
     Properties,
     RemovePlace,
@@ -2453,6 +2487,7 @@ impl ShellContextMenuAction {
             Self::Open => "Open",
             Self::OpenWith => "Open With",
             Self::OpenInNewPane => "Open in New Pane",
+            Self::SplitPane => "Split View",
             Self::Copy => "Copy",
             Self::Cut => "Cut",
             Self::CopyLocation => "Copy Location",
@@ -2465,9 +2500,18 @@ impl ShellContextMenuAction {
             Self::CreateNew => "Create New",
             Self::Paste => "Paste",
             Self::SelectAll => "Select All",
+            Self::ToggleHiddenFiles => "Show Hidden Files",
             Self::Refresh => "Refresh",
             Self::Properties => "Properties",
             Self::RemovePlace => "Remove",
+        }
+    }
+
+    fn label_for_hidden_state(self, show_hidden: bool) -> &'static str {
+        match (self, show_hidden) {
+            (Self::ToggleHiddenFiles, true) => "Hide Hidden Files",
+            (Self::ToggleHiddenFiles, false) => "Show Hidden Files",
+            _ => self.label(),
         }
     }
 
@@ -2476,6 +2520,7 @@ impl ShellContextMenuAction {
             Self::Open => "open",
             Self::OpenWith => "open-with",
             Self::OpenInNewPane => "open-in-new-pane",
+            Self::SplitPane => "split-pane",
             Self::Copy => "copy",
             Self::Cut => "cut",
             Self::CopyLocation => "copy-location",
@@ -2488,6 +2533,7 @@ impl ShellContextMenuAction {
             Self::CreateNew => "create-new",
             Self::Paste => "paste",
             Self::SelectAll => "select-all",
+            Self::ToggleHiddenFiles => "toggle-hidden-files",
             Self::Refresh => "refresh",
             Self::Properties => "properties",
             Self::RemovePlace => "remove-place",
@@ -2500,6 +2546,7 @@ enum ContextMenuGlyph {
     Open,
     OpenWith,
     Pane,
+    Hidden,
     Copy,
     Cut,
     Location,
@@ -2531,6 +2578,11 @@ fn context_menu_icon_style(
             [0.933, 0.929, 1.000, 1.0],
         ),
         ShellContextMenuAction::OpenInNewPane => (
+            ContextMenuGlyph::Pane,
+            [0.114, 0.306, 0.847, 1.0],
+            [0.918, 0.945, 1.000, 1.0],
+        ),
+        ShellContextMenuAction::SplitPane => (
             ContextMenuGlyph::Pane,
             [0.114, 0.306, 0.847, 1.0],
             [0.918, 0.945, 1.000, 1.0],
@@ -2589,6 +2641,11 @@ fn context_menu_icon_style(
             ContextMenuGlyph::Select,
             [0.122, 0.310, 0.749, 1.0],
             [0.918, 0.945, 1.000, 1.0],
+        ),
+        ShellContextMenuAction::ToggleHiddenFiles => (
+            ContextMenuGlyph::Hidden,
+            [0.294, 0.318, 0.357, 1.0],
+            [0.933, 0.945, 0.961, 1.0],
         ),
         ShellContextMenuAction::Refresh => (
             ContextMenuGlyph::Refresh,
@@ -2659,6 +2716,8 @@ fn context_menu_actions(target: &ShellContextTarget) -> &'static [ShellContextMe
         ShellContextMenuAction::AddToPlaces,
         ShellContextMenuAction::Paste,
         ShellContextMenuAction::SelectAll,
+        ShellContextMenuAction::ToggleHiddenFiles,
+        ShellContextMenuAction::SplitPane,
         ShellContextMenuAction::Refresh,
         ShellContextMenuAction::Properties,
     ];
@@ -2670,17 +2729,20 @@ fn context_menu_actions(target: &ShellContextTarget) -> &'static [ShellContextMe
     ];
     const PLACE_ACTIONS: &[ShellContextMenuAction] = &[
         ShellContextMenuAction::Open,
+        ShellContextMenuAction::OpenInNewPane,
         ShellContextMenuAction::CopyLocation,
         ShellContextMenuAction::Properties,
     ];
     const TRASH_PLACE_ACTIONS: &[ShellContextMenuAction] = &[
         ShellContextMenuAction::Open,
+        ShellContextMenuAction::OpenInNewPane,
         ShellContextMenuAction::EmptyTrash,
         ShellContextMenuAction::CopyLocation,
         ShellContextMenuAction::Properties,
     ];
     const EDITABLE_PLACE_ACTIONS: &[ShellContextMenuAction] = &[
         ShellContextMenuAction::Open,
+        ShellContextMenuAction::OpenInNewPane,
         ShellContextMenuAction::CopyLocation,
         ShellContextMenuAction::RemovePlace,
         ShellContextMenuAction::Properties,
@@ -2721,6 +2783,7 @@ fn context_menu_separator_before(target: &ShellContextTarget, row: usize) -> boo
         ShellContextTarget::Blank { .. } => {
             action == ShellContextMenuAction::Paste
                 || action == ShellContextMenuAction::SelectAll
+                || action == ShellContextMenuAction::ToggleHiddenFiles
                 || action == ShellContextMenuAction::Properties
         }
         ShellContextTarget::Place { .. } => action == ShellContextMenuAction::Properties,
@@ -3069,6 +3132,61 @@ enum TrashConflictDialogClick {
     Replace,
 }
 
+#[derive(Clone, Debug)]
+struct ShellPaneState {
+    path: PathBuf,
+    view_mode: ShellViewMode,
+    entries: Vec<Entry>,
+    dir_count: usize,
+    filtered_indexes: Vec<usize>,
+    scroll_x: f32,
+    scroll_y: f32,
+}
+
+impl ShellPaneState {
+    fn load(path: PathBuf, view_mode: ShellViewMode, show_hidden: bool) -> Result<Self, String> {
+        let load_start = Instant::now();
+        let entries = read_entries_sync(&path)
+            .map_err(|error| format!("read pane directory {}: {error}", path.display()))?;
+        let elapsed = load_start.elapsed();
+        let dir_count = entries.iter().filter(|entry| entry.is_dir).count();
+        let filtered_indexes = filtered_indexes_for_entries(&entries, show_hidden, "");
+        eprintln!(
+            "[fika-wgpu] split-pane path={} entries={} dirs={} files={} visible={} load={}us",
+            path.display(),
+            entries.len(),
+            dir_count,
+            entries.len().saturating_sub(dir_count),
+            filtered_indexes.len(),
+            elapsed.as_micros()
+        );
+        Ok(Self {
+            path,
+            view_mode,
+            entries,
+            dir_count,
+            filtered_indexes,
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+        })
+    }
+
+    fn filtered_entry_count(&self) -> usize {
+        self.filtered_indexes.len()
+    }
+
+    fn rebuild_filtered_indexes(&mut self, show_hidden: bool) {
+        self.filtered_indexes = filtered_indexes_for_entries(&self.entries, show_hidden, "");
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ShellPaneSplitMetrics {
+    divider: ViewRect,
+    right_pane: ViewRect,
+    left_width: f32,
+}
+
 struct ShellScene {
     path: PathBuf,
     view_mode: ShellViewMode,
@@ -3098,6 +3216,7 @@ struct ShellScene {
     rename_dialog: Option<ShellRenameDialog>,
     open_with_chooser: Option<ShellOpenWithChooser>,
     trash_conflict_dialog: Option<ShellTrashConflictDialog>,
+    split_pane: Option<ShellPaneState>,
     rubber_band: Option<RubberBand>,
     scale_factor: f32,
     hit_tests: u64,
@@ -3124,6 +3243,7 @@ struct ShellScene {
     filter_changes: u64,
     hidden_changes: u64,
     zoom_changes: u64,
+    split_pane_changes: u64,
 }
 
 impl ShellScene {
@@ -3185,6 +3305,7 @@ impl ShellScene {
             rename_dialog: None,
             open_with_chooser: None,
             trash_conflict_dialog: None,
+            split_pane: None,
             rubber_band: None,
             scale_factor: 1.0,
             hit_tests: 0,
@@ -3211,6 +3332,7 @@ impl ShellScene {
             filter_changes: 0,
             hidden_changes: 0,
             zoom_changes: 0,
+            split_pane_changes: 0,
         })
     }
 
@@ -3400,6 +3522,11 @@ impl ShellScene {
             return false;
         }
         self.view_mode = view_mode;
+        if let Some(split_pane) = self.split_pane.as_mut() {
+            split_pane.view_mode = view_mode;
+            split_pane.scroll_x = 0.0;
+            split_pane.scroll_y = 0.0;
+        }
         self.rubber_band = None;
         self.scrollbar_drag = None;
         self.view_switches += 1;
@@ -3616,6 +3743,9 @@ impl ShellScene {
         self.hidden_changes += 1;
         self.rubber_band = None;
         self.rebuild_filtered_indexes();
+        if let Some(split_pane) = self.split_pane.as_mut() {
+            split_pane.rebuild_filtered_indexes(self.show_hidden);
+        }
         let selection_changed = self.selection.retain_indexes(&self.filtered_indexes);
         if selection_changed {
             self.selection_changes += 1;
@@ -3629,6 +3759,55 @@ impl ShellScene {
             selection_changed as u8
         );
         true
+    }
+
+    fn open_split_pane_from_context(&mut self, size: PhysicalSize<u32>) -> Result<bool, String> {
+        let path = self
+            .context_target_split_pane_path()
+            .unwrap_or_else(|| self.path.clone());
+        self.open_split_pane(path, size)
+    }
+
+    fn open_split_pane(&mut self, path: PathBuf, size: PhysicalSize<u32>) -> Result<bool, String> {
+        let mut split_pane = ShellPaneState::load(path, self.view_mode, self.show_hidden)?;
+        split_pane.scroll_x = 0.0;
+        split_pane.scroll_y = 0.0;
+        self.split_pane = Some(split_pane);
+        self.split_pane_changes += 1;
+        self.context_target = None;
+        self.context_menu = None;
+        self.properties_overlay = None;
+        self.create_dialog = None;
+        self.rename_dialog = None;
+        self.open_with_chooser = None;
+        self.trash_conflict_dialog = None;
+        self.rubber_band = None;
+        self.scrollbar_drag = None;
+        self.clamp_scroll(size);
+        eprintln!(
+            "[fika-wgpu] split-pane open=1 changes={} left={} right={}",
+            self.split_pane_changes,
+            self.path.display(),
+            self.split_pane
+                .as_ref()
+                .map(|pane| pane.path.display().to_string())
+                .unwrap_or_default()
+        );
+        Ok(true)
+    }
+
+    fn context_target_split_pane_path(&self) -> Option<PathBuf> {
+        match self.context_target.as_ref()? {
+            ShellContextTarget::Item { path, is_dir, .. } if *is_dir => Some(path.clone()),
+            ShellContextTarget::Item { path, .. } => path
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+                .map(Path::to_path_buf)
+                .or_else(|| Some(self.path.clone())),
+            ShellContextTarget::Blank { path } | ShellContextTarget::Place { path, .. } => {
+                Some(path.clone())
+            }
+        }
     }
 
     fn rebuild_filtered_indexes(&mut self) {
@@ -3801,11 +3980,10 @@ impl ShellScene {
     }
 
     fn path_bar_rect(&self, size: PhysicalSize<u32>) -> Option<ViewRect> {
-        let origin_x = self.content_origin_x(size);
-        let width = size.width.max(1) as f32;
+        let pane = self.pane_rect(size);
         let margin = self.scale_metric(8.0);
-        let path_x = origin_x + margin;
-        let available_width = (width - path_x - margin).max(0.0);
+        let path_x = pane.x + margin;
+        let available_width = (pane.right() - path_x - margin).max(0.0);
         let rect = ViewRect {
             x: path_x,
             y: self.pane_top_y() + self.scale_metric(4.0),
@@ -5583,12 +5761,24 @@ impl ShellScene {
     }
 
     fn icons_options(&self, size: PhysicalSize<u32>) -> IconsLayoutOptions {
+        let mut options =
+            self.icons_options_for_viewport(self.content_width(size), self.viewport_height(size));
+        options.scroll_x = self.scroll_x;
+        options.scroll_y = self.scroll_y;
+        options
+    }
+
+    fn icons_options_for_viewport(
+        &self,
+        viewport_width: f32,
+        viewport_height: f32,
+    ) -> IconsLayoutOptions {
         IconsLayoutOptions {
-            viewport_width: self.content_width(size),
-            viewport_height: self.viewport_height(size),
+            viewport_width,
+            viewport_height,
             reserved_bottom: 0.0,
-            scroll_x: self.scroll_x,
-            scroll_y: self.scroll_y,
+            scroll_x: 0.0,
+            scroll_y: 0.0,
             padding: self.zoomed_metric(8.0, 6.0, 14.0),
             gap: self.zoomed_metric(12.0, 8.0, 22.0),
             item_width: self.zoomed_metric(ICONS_ITEM_WIDTH, 82.0, 188.0),
@@ -5599,6 +5789,17 @@ impl ShellScene {
     }
 
     fn compact_options(&self, size: PhysicalSize<u32>) -> CompactLayoutOptions {
+        let mut options =
+            self.compact_options_for_viewport(self.content_width(size), self.viewport_height(size));
+        options.scroll_x = self.scroll_x;
+        options
+    }
+
+    fn compact_options_for_viewport(
+        &self,
+        viewport_width: f32,
+        viewport_height: f32,
+    ) -> CompactLayoutOptions {
         let padding = self.zoomed_metric(6.0, 4.0, 10.0);
         let side_padding = self.zoomed_metric(8.0, 6.0, 14.0);
         let gap = self.zoomed_metric(8.0, 6.0, 14.0);
@@ -5606,10 +5807,10 @@ impl ShellScene {
         let icon_size = self.zoomed_metric(COMPACT_ICON_SIZE, 20.0, 56.0);
         let min_text_width = self.zoomed_metric(COMPACT_MIN_TEXT_WIDTH, 16.0, 48.0);
         CompactLayoutOptions {
-            viewport_width: self.content_width(size),
-            viewport_height: self.viewport_height(size),
+            viewport_width,
+            viewport_height,
             reserved_bottom: 0.0,
-            scroll_x: self.scroll_x,
+            scroll_x: 0.0,
             scroll_y: 0.0,
             padding,
             side_padding,
@@ -5690,51 +5891,19 @@ impl ShellScene {
                 width: self.pane_width(size),
                 height: top_bar_height,
             };
-            if location_active {
-                push_clipped_rounded_rect(
-                    &mut vertices,
-                    path_rect,
-                    location_clip,
-                    self.scale_metric(6.0),
-                    [0.184, 0.435, 0.929, 1.0],
-                    size,
-                );
-                if let Some(inner) = inset_rect(path_rect, self.scale_metric(1.0)) {
-                    push_clipped_rounded_rect(
-                        &mut vertices,
-                        inner,
-                        location_clip,
-                        self.scale_metric(5.0),
-                        [1.000, 1.000, 1.000, 1.0],
-                        size,
-                    );
-                }
-            } else {
-                push_clipped_rounded_rect(
-                    &mut vertices,
-                    path_rect,
-                    location_clip,
-                    self.scale_metric(6.0),
-                    [0.973, 0.984, 1.000, 1.0],
-                    size,
-                );
-            }
             let path_label = self
                 .location_draft
                 .as_ref()
                 .map(|draft| format!("{}|", draft.value))
                 .unwrap_or_else(|| self.path.display().to_string());
-            text.push_label_aligned(
-                &path_label,
-                ViewRect {
-                    x: path_rect.x + self.scale_metric(8.0),
-                    y: path_rect.y + (path_rect.height - self.text_line_height()) / 2.0,
-                    width: (path_rect.width - self.scale_metric(16.0)).max(1.0),
-                    height: self.text_line_height(),
-                },
+            self.push_location_bar(
+                &mut vertices,
+                text,
+                size,
+                path_rect,
                 location_clip,
-                TextColor::rgb(36, 41, 47),
-                LabelAlignment::Start,
+                &path_label,
+                location_active,
             );
         }
         self.push_places_sidebar(&mut vertices, text, size);
@@ -5776,6 +5945,7 @@ impl ShellScene {
         self.push_content_scrollbar(&mut vertices, size);
         self.push_status_bar(&mut vertices, text, size, visible_items, status_bar);
         self.push_pane_borders(&mut vertices, size);
+        self.push_split_pane(&mut vertices, text, icons, size);
         self.push_context_menu_overlay(&mut overlay_vertices, overlay_text, size);
         self.push_properties_overlay(&mut overlay_vertices, overlay_text, size);
         self.push_create_dialog_overlay(&mut overlay_vertices, overlay_text, size);
@@ -5793,6 +5963,422 @@ impl ShellScene {
             overlay_vertices,
             text_stats: TextFrameStats::default(),
             icon_stats: IconFrameStats::default(),
+        }
+    }
+
+    fn push_location_bar(
+        &self,
+        vertices: &mut Vec<QuadVertex>,
+        text: &mut TextFrameBuilder<'_>,
+        size: PhysicalSize<u32>,
+        rect: ViewRect,
+        clip: ViewRect,
+        label: &str,
+        active: bool,
+    ) {
+        let radius = self.scale_metric(7.0);
+        let border_color = if active {
+            [0.184, 0.435, 0.929, 1.0]
+        } else {
+            [0.784, 0.808, 0.839, 1.0]
+        };
+        push_clipped_rounded_rect(vertices, rect, clip, radius, border_color, size);
+        if let Some(inner) = inset_rect(rect, self.scale_metric(1.0)) {
+            push_clipped_rounded_rect(
+                vertices,
+                inner,
+                clip,
+                (radius - self.scale_metric(1.0)).max(1.0),
+                [1.000, 1.000, 1.000, 1.0],
+                size,
+            );
+        }
+
+        let icon_size = self
+            .scale_metric(18.0)
+            .min((rect.height - self.scale_metric(8.0)).max(1.0));
+        let icon_rect = ViewRect {
+            x: rect.x + self.scale_metric(8.0),
+            y: rect.y + (rect.height - icon_size) / 2.0,
+            width: icon_size,
+            height: icon_size,
+        };
+        push_location_bar_icon(vertices, icon_rect, clip, active, self.ui_scale(), size);
+        let separator_x = icon_rect.right() + self.scale_metric(8.0);
+        push_clipped_rect(
+            vertices,
+            ViewRect {
+                x: separator_x,
+                y: rect.y + self.scale_metric(7.0),
+                width: self.scale_metric(1.0),
+                height: (rect.height - self.scale_metric(14.0)).max(1.0),
+            },
+            clip,
+            [0.835, 0.851, 0.875, 1.0],
+            size,
+        );
+        let text_x = separator_x + self.scale_metric(9.0);
+        text.push_label_aligned(
+            label,
+            ViewRect {
+                x: text_x,
+                y: rect.y + (rect.height - self.text_line_height()) / 2.0,
+                width: (rect.right() - text_x - self.scale_metric(8.0)).max(1.0),
+                height: self.text_line_height(),
+            },
+            clip,
+            TextColor::rgb(36, 41, 47),
+            LabelAlignment::Start,
+        );
+    }
+
+    fn push_split_pane(
+        &self,
+        vertices: &mut Vec<QuadVertex>,
+        text: &mut TextFrameBuilder<'_>,
+        icons: &mut IconFrameBuilder<'_>,
+        size: PhysicalSize<u32>,
+    ) {
+        let Some(split_pane) = self.split_pane.as_ref() else {
+            return;
+        };
+        let Some(metrics) = self.split_pane_metrics(size) else {
+            return;
+        };
+        let pane = metrics.right_pane;
+        let top_bar_height = self.top_bar_height();
+        let status_height = self.status_bar_height().min(pane.height);
+        let status_bar = ViewRect {
+            x: pane.x,
+            y: pane.bottom() - status_height,
+            width: pane.width,
+            height: status_height,
+        };
+        let content_y = pane.y
+            + top_bar_height
+            + if split_pane.view_mode == ShellViewMode::Details {
+                self.details_header_height()
+            } else {
+                0.0
+            };
+        let content_clip = ViewRect {
+            x: pane.x,
+            y: content_y,
+            width: pane.width,
+            height: (status_bar.y - content_y).max(1.0),
+        };
+
+        push_rect(vertices, metrics.divider, [0.784, 0.808, 0.839, 1.0], size);
+        push_rect(vertices, pane, [1.000, 1.000, 1.000, 1.0], size);
+        push_rect(
+            vertices,
+            ViewRect {
+                x: pane.x,
+                y: pane.y,
+                width: pane.width,
+                height: top_bar_height,
+            },
+            chrome_color(),
+            size,
+        );
+        let margin = self.scale_metric(8.0);
+        let path_rect = ViewRect {
+            x: pane.x + margin,
+            y: pane.y + self.scale_metric(4.0),
+            width: (pane.width - margin * 2.0).max(1.0),
+            height: self.scale_metric(28.0),
+        };
+        self.push_location_bar(
+            vertices,
+            text,
+            size,
+            path_rect,
+            ViewRect {
+                x: pane.x,
+                y: pane.y,
+                width: pane.width,
+                height: top_bar_height,
+            },
+            &split_pane.path.display().to_string(),
+            false,
+        );
+        push_rect(
+            vertices,
+            ViewRect {
+                x: pane.x,
+                y: pane.y + top_bar_height,
+                width: pane.width,
+                height: (status_bar.y - pane.y - top_bar_height).max(1.0),
+            },
+            view_mode_content_color(split_pane.view_mode),
+            size,
+        );
+        if split_pane.view_mode == ShellViewMode::Details {
+            self.push_split_details_header(vertices, text, pane, size);
+        }
+
+        let layout = self.split_pane_layout(split_pane, content_clip.width, content_clip.height);
+        let mut visible_items = 0usize;
+        for item in layout.visible_items() {
+            visible_items += 1;
+            self.push_split_item(vertices, text, icons, split_pane, item, content_clip, size);
+        }
+        self.push_split_status_bar(vertices, text, split_pane, status_bar, visible_items, size);
+        push_clipped_rect_outline(
+            vertices,
+            pane,
+            ViewRect {
+                x: 0.0,
+                y: 0.0,
+                width: size.width.max(1) as f32,
+                height: size.height.max(1) as f32,
+            },
+            1.0,
+            [0.835, 0.851, 0.875, 1.0],
+            size,
+        );
+    }
+
+    fn push_split_details_header(
+        &self,
+        vertices: &mut Vec<QuadVertex>,
+        text: &mut TextFrameBuilder<'_>,
+        pane: ViewRect,
+        size: PhysicalSize<u32>,
+    ) {
+        let header = ViewRect {
+            x: pane.x,
+            y: pane.y + self.top_bar_height(),
+            width: pane.width,
+            height: self.details_header_height(),
+        };
+        push_rect(vertices, header, [0.953, 0.961, 0.973, 1.0], size);
+        push_rect(
+            vertices,
+            ViewRect {
+                x: header.x,
+                y: header.bottom() - 1.0,
+                width: header.width,
+                height: 1.0,
+            },
+            [0.784, 0.808, 0.839, 1.0],
+            size,
+        );
+        for (label, x, width) in [
+            (
+                "Name",
+                self.scale_metric(34.0),
+                self.details_name_width() - self.scale_metric(42.0),
+            ),
+            (
+                "Size",
+                self.details_name_width() + self.scale_metric(8.0),
+                self.details_size_width() - self.scale_metric(16.0),
+            ),
+            (
+                "Modified",
+                self.details_name_width() + self.details_size_width() + self.scale_metric(8.0),
+                self.details_modified_width() - self.scale_metric(16.0),
+            ),
+        ] {
+            text.push_label(
+                label,
+                ViewRect {
+                    x: header.x + x,
+                    y: header.y + self.scale_metric(6.0),
+                    width: width.max(1.0),
+                    height: self.text_line_height(),
+                },
+                header,
+                TextColor::rgb(89, 99, 110),
+            );
+        }
+    }
+
+    fn push_split_item(
+        &self,
+        vertices: &mut Vec<QuadVertex>,
+        text: &mut TextFrameBuilder<'_>,
+        icons: &mut IconFrameBuilder<'_>,
+        split_pane: &ShellPaneState,
+        item: fika_core::ItemLayout,
+        content_clip: ViewRect,
+        size: PhysicalSize<u32>,
+    ) {
+        let Some(entry_index) = split_pane.filtered_indexes.get(item.model_index).copied() else {
+            return;
+        };
+        let Some(entry) = split_pane.entries.get(entry_index) else {
+            return;
+        };
+        let row_rect = split_content_rect_to_screen(item.item_rect, content_clip, split_pane);
+        let icon_rect = split_content_rect_to_screen(item.icon_rect, content_clip, split_pane);
+        let text_rect = split_content_rect_to_screen(item.text_rect, content_clip, split_pane);
+
+        if split_pane.view_mode == ShellViewMode::Details {
+            push_clipped_rect(
+                vertices,
+                row_rect,
+                content_clip,
+                details_row_background_color(false, false, entry_index),
+                size,
+            );
+        }
+        if icons.push_icon(&split_pane.path, entry, icon_rect, content_clip) {
+            // The atlas draw covers the icon slot; fallback geometry remains for misses.
+        } else {
+            push_fallback_icon(vertices, entry, icon_rect, content_clip, size);
+        }
+
+        let text_color = if entry.is_dir {
+            TextColor::rgb(31, 79, 191)
+        } else {
+            TextColor::rgb(36, 41, 47)
+        };
+        if split_pane.view_mode == ShellViewMode::Compact {
+            text.push_label_aligned(
+                entry.name.as_ref(),
+                text_rect,
+                content_clip,
+                text_color,
+                LabelAlignment::Start,
+            );
+        } else {
+            text.push_label(entry.name.as_ref(), text_rect, content_clip, text_color);
+        }
+
+        if split_pane.view_mode == ShellViewMode::Details {
+            let text_height = self.text_line_height();
+            let metadata_y = row_rect.y + (row_rect.height - text_height).max(0.0) / 2.0;
+            text.push_label(
+                &details_size_label(entry),
+                ViewRect {
+                    x: content_clip.x + self.details_name_width() + self.scale_metric(8.0)
+                        - split_pane.scroll_x,
+                    y: metadata_y,
+                    width: self.details_size_width() - self.scale_metric(16.0),
+                    height: text_height,
+                },
+                content_clip,
+                TextColor::rgb(89, 99, 110),
+            );
+            text.push_label(
+                &format_modified_secs(entry.modified_secs),
+                ViewRect {
+                    x: content_clip.x
+                        + self.details_name_width()
+                        + self.details_size_width()
+                        + self.scale_metric(8.0)
+                        - split_pane.scroll_x,
+                    y: metadata_y,
+                    width: self.details_modified_width() - self.scale_metric(16.0),
+                    height: text_height,
+                },
+                content_clip,
+                TextColor::rgb(89, 99, 110),
+            );
+        }
+    }
+
+    fn push_split_status_bar(
+        &self,
+        vertices: &mut Vec<QuadVertex>,
+        text: &mut TextFrameBuilder<'_>,
+        split_pane: &ShellPaneState,
+        rect: ViewRect,
+        visible_items: usize,
+        size: PhysicalSize<u32>,
+    ) {
+        push_rect(vertices, rect, [1.000, 1.000, 1.000, 1.0], size);
+        push_rect(
+            vertices,
+            ViewRect {
+                x: rect.x,
+                y: rect.y,
+                width: rect.width,
+                height: 1.0,
+            },
+            [0.784, 0.808, 0.839, 1.0],
+            size,
+        );
+        let status = format!(
+            "{} entries ({} dirs, {} files) | {} visible | {}",
+            split_pane.entries.len(),
+            split_pane.dir_count,
+            split_pane
+                .entries
+                .len()
+                .saturating_sub(split_pane.dir_count),
+            visible_items,
+            split_pane.view_mode.label()
+        );
+        text.push_label(
+            &status,
+            ViewRect {
+                x: rect.x + self.scale_metric(12.0),
+                y: rect.y + self.scale_metric(5.0),
+                width: (rect.width - self.scale_metric(24.0)).max(1.0),
+                height: self.text_line_height(),
+            },
+            rect,
+            TextColor::rgb(89, 99, 110),
+        );
+    }
+
+    fn split_pane_layout(
+        &self,
+        split_pane: &ShellPaneState,
+        content_width: f32,
+        viewport_height: f32,
+    ) -> ShellLayout {
+        let item_count = split_pane.filtered_entry_count();
+        match split_pane.view_mode {
+            ShellViewMode::Icons => ShellLayout::Icons(IconsLayout::new(
+                item_count,
+                self.icons_options_for_viewport(content_width, viewport_height),
+            )),
+            ShellViewMode::Compact => {
+                let options = self.compact_options_for_viewport(content_width, viewport_height);
+                let rows_per_column = CompactLayout::rows_per_column_for_options(options);
+                let column_count = item_count.div_ceil(rows_per_column);
+                let mut text_widths = Vec::with_capacity(item_count);
+                let mut column_widths = vec![options.item_width; column_count];
+                for layout_index in 0..item_count {
+                    let Some(entry_index) = split_pane.filtered_indexes.get(layout_index).copied()
+                    else {
+                        text_widths.push(0.0);
+                        continue;
+                    };
+                    let Some(entry) = split_pane.entries.get(entry_index) else {
+                        text_widths.push(0.0);
+                        continue;
+                    };
+                    let text_width =
+                        compact_entry_text_width(entry, self.ui_scale() * self.zoom_factor());
+                    text_widths.push(text_width);
+                    let column = layout_index / rows_per_column;
+                    if let Some(width) = column_widths.get_mut(column) {
+                        *width = width.max(required_compact_item_width(options, text_width));
+                    }
+                }
+                ShellLayout::Compact(ShellCompactLayout::new(
+                    CompactLayout::new_with_column_widths(item_count, options, column_widths),
+                    text_widths,
+                ))
+            }
+            ShellViewMode::Details => ShellLayout::Details(DetailsLayout::new(
+                item_count,
+                content_width,
+                viewport_height,
+                split_pane.scroll_y,
+                self.details_row_height(),
+                self.details_icon_size(),
+                self.ui_scale(),
+                self.details_name_width(),
+                self.details_size_width(),
+                self.details_modified_width(),
+                self.text_line_height(),
+            )),
         }
     }
 
@@ -6019,7 +6605,7 @@ impl ShellScene {
                     },
                     LabelAlignment::Start,
                 );
-                if place.trash {
+                if place.trash && file_ops::trash_has_items() {
                     let dot_size = self.scale_metric(7.0);
                     push_clipped_rounded_rect(
                         vertices,
@@ -6180,22 +6766,33 @@ impl ShellScene {
         let selected = self.selection.contains(entry_index);
         let hovered = self.hovered_index == Some(entry_index);
 
-        if selected || hovered {
-            push_clipped_rect(
+        if selected {
+            let radius = self.scale_metric(7.0);
+            push_clipped_rounded_rect(
                 vertices,
                 visual_rect,
                 content_clip,
-                item_background_color(selected, hovered),
+                radius,
+                [0.38, 0.64, 0.92, 0.95],
                 size,
             );
-        }
-        if selected {
-            push_clipped_rect_outline(
+            if let Some(inner) = inset_rect(visual_rect, self.scale_metric(1.0)) {
+                push_clipped_rounded_rect(
+                    vertices,
+                    inner,
+                    content_clip,
+                    (radius - self.scale_metric(1.0)).max(1.0),
+                    item_background_color(selected, hovered),
+                    size,
+                );
+            }
+        } else if hovered {
+            push_clipped_rounded_rect(
                 vertices,
                 visual_rect,
                 content_clip,
-                1.5,
-                [0.38, 0.64, 0.92, 0.95],
+                self.scale_metric(7.0),
+                item_background_color(selected, hovered),
                 size,
             );
         }
@@ -6575,7 +7172,7 @@ impl ShellScene {
             push_context_menu_icon(vertices, icon, rect, glyph, icon_fg, icon_bg, scale, size);
             let text_x = icon.right() + gap;
             text.push_label_aligned(
-                action.label(),
+                action.label_for_hidden_state(self.show_hidden),
                 ViewRect {
                     x: text_x,
                     y: row_rect.y + (row_rect.height - text_height) / 2.0,
@@ -7292,11 +7889,13 @@ impl ShellScene {
         } else {
             0.0
         };
-        (size.width as f32 - self.content_origin_x(size) - reserved).max(1.0)
+        (self.pane_width(size) - reserved).max(1.0)
     }
 
     fn pane_width(&self, size: PhysicalSize<u32>) -> f32 {
-        (size.width as f32 - self.content_origin_x(size)).max(1.0)
+        self.split_pane_metrics(size)
+            .map(|metrics| metrics.left_width)
+            .unwrap_or_else(|| (size.width as f32 - self.content_origin_x(size)).max(1.0))
     }
 
     fn pane_rect(&self, size: PhysicalSize<u32>) -> ViewRect {
@@ -7337,6 +7936,36 @@ impl ShellScene {
         self.scale_metric(PLACES_SIDEBAR_WIDTH)
             .min(responsive_width)
             .min((width - self.scale_metric(120.0)).max(0.0))
+    }
+
+    fn split_pane_metrics(&self, size: PhysicalSize<u32>) -> Option<ShellPaneSplitMetrics> {
+        self.split_pane.as_ref()?;
+        let origin_x = self.content_origin_x(size);
+        let total_width = (size.width.max(1) as f32 - origin_x).max(1.0);
+        let divider_width = self.scale_metric(SPLIT_PANE_DIVIDER_WIDTH);
+        let min_width = self.scale_metric(SPLIT_PANE_MIN_WIDTH);
+        let split_width = (total_width - divider_width).max(2.0);
+        let left_width = (split_width / 2.0)
+            .max(1.0)
+            .min((total_width - divider_width - min_width).max(split_width / 2.0));
+        let divider = ViewRect {
+            x: origin_x + left_width,
+            y: self.pane_top_y(),
+            width: divider_width,
+            height: (size.height.max(1) as f32 - self.pane_top_y() - self.pane_margin()).max(1.0),
+        };
+        let right_x = divider.right();
+        let right_pane = ViewRect {
+            x: right_x,
+            y: divider.y,
+            width: (size.width.max(1) as f32 - right_x).max(1.0),
+            height: divider.height,
+        };
+        Some(ShellPaneSplitMetrics {
+            divider,
+            right_pane,
+            left_width,
+        })
     }
 
     fn content_scrollbar_axis(&self) -> ContentScrollbarAxis {
@@ -7448,7 +8077,7 @@ impl ShellScene {
                     y: self.content_origin_y(),
                     width: self
                         .scale_metric(CONTENT_SCROLLBAR_RESERVED_EXTENT)
-                        .min((size.width as f32 - self.content_origin_x(size)).max(1.0)),
+                        .min((self.pane_rect(size).right() - self.content_origin_x(size)).max(1.0)),
                     height: viewport_extent,
                 };
                 let track = inset_content_scrollbar_slot(slot, self.ui_scale())?;
@@ -8441,7 +9070,7 @@ impl WgpuState {
             || self.last_log.elapsed() >= Duration::from_secs(1)
         {
             eprintln!(
-                "[fika-wgpu] frame={} reason={} view={} scale={:.2} zoom={} zoom_changes={} path={} entries={} filtered={} show_hidden={} hidden_changes={} location_active={} location_changes={} filter_active={} filter_changes={} places={} place_hover={} places_changes={} places_scroll_y={:.1} places_scroll_changes={} content_scrollbar={} visible={} selected={} hover={} context={} context_menu={} context_changes={} context_actions={} properties={} properties_changes={} create_dialog={} create_changes={} rename_dialog={} rename_changes={} open_with={} open_with_changes={} open_changes={} copy_location_changes={} file_clipboard_changes={} paste_changes={} trash_changes={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} path_changes={} reloads={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_cache={}/{} entries={} bytes={} batches={} scroll_x={:.1} scroll_y={:.1} layout={}us text_raster={}us text_atlas={}x{}:{}b render={}us",
+                "[fika-wgpu] frame={} reason={} view={} scale={:.2} zoom={} zoom_changes={} path={} entries={} filtered={} show_hidden={} hidden_changes={} location_active={} location_changes={} filter_active={} filter_changes={} places={} place_hover={} places_changes={} places_scroll_y={:.1} places_scroll_changes={} split_pane={} split_changes={} split_path={} content_scrollbar={} visible={} selected={} hover={} context={} context_menu={} context_changes={} context_actions={} properties={} properties_changes={} create_dialog={} create_changes={} rename_dialog={} rename_changes={} open_with={} open_with_changes={} open_changes={} copy_location_changes={} file_clipboard_changes={} paste_changes={} trash_changes={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} path_changes={} reloads={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_cache={}/{} entries={} bytes={} batches={} scroll_x={:.1} scroll_y={:.1} layout={}us text_raster={}us text_atlas={}x{}:{}b render={}us",
                 self.frame_count,
                 reason,
                 scene.view_mode.as_str(),
@@ -8462,6 +9091,13 @@ impl WgpuState {
                 scene.places_changes,
                 scene.places_scroll_y,
                 scene.places_scroll_changes,
+                scene.split_pane.is_some() as u8,
+                scene.split_pane_changes,
+                scene
+                    .split_pane
+                    .as_ref()
+                    .map(|pane| pane.path.display().to_string())
+                    .unwrap_or_else(|| "-".to_string()),
                 scene.content_scrollbar_rects(self.size).is_some() as u8,
                 scene_frame.visible_items,
                 scene.selection.len(),
@@ -11001,6 +11637,19 @@ fn clamped_screen_to_content_point(
     }
 }
 
+fn split_content_rect_to_screen(
+    rect: ViewRect,
+    content_clip: ViewRect,
+    split_pane: &ShellPaneState,
+) -> ViewRect {
+    ViewRect {
+        x: rect.x - split_pane.scroll_x + content_clip.x,
+        y: rect.y - split_pane.scroll_y + content_clip.y,
+        width: rect.width,
+        height: rect.height,
+    }
+}
+
 fn rect_from_points(start: ViewPoint, current: ViewPoint) -> ViewRect {
     let x = start.x.min(current.x);
     let y = start.y.min(current.y);
@@ -11111,6 +11760,11 @@ fn push_context_menu_icon(
             push_context_icon_piece(vertices, rect, clip, 8.0, 5.0, 1.0, 8.0, 0.0, bg, size);
             push_context_icon_piece(vertices, rect, clip, 5.0, 8.0, 8.0, 1.0, 0.0, bg, size);
         }
+        ContextMenuGlyph::Hidden => {
+            push_context_icon_piece(vertices, rect, clip, 4.0, 8.0, 10.0, 3.0, 2.0, fg, size);
+            push_context_icon_piece(vertices, rect, clip, 7.0, 6.0, 4.0, 7.0, 2.0, fg, size);
+            push_context_icon_piece(vertices, rect, clip, 8.0, 8.0, 2.0, 3.0, 1.0, bg, size);
+        }
         ContextMenuGlyph::Copy => {
             push_context_icon_piece(vertices, rect, clip, 6.0, 4.0, 7.0, 9.0, 1.0, fg, size);
             push_context_icon_piece(vertices, rect, clip, 4.0, 6.0, 7.0, 9.0, 1.0, fg, size);
@@ -11209,6 +11863,65 @@ fn push_context_icon_piece(
         height: (height * unit).round().max(1.0),
     };
     push_clipped_rounded_rect(vertices, piece, clip, (radius * unit).round(), color, size);
+}
+
+fn push_location_bar_icon(
+    vertices: &mut Vec<QuadVertex>,
+    bounds: ViewRect,
+    clip: ViewRect,
+    active: bool,
+    scale_factor: f32,
+    size: PhysicalSize<u32>,
+) {
+    let fg = if active {
+        [0.122, 0.310, 0.749, 1.0]
+    } else {
+        [0.294, 0.318, 0.357, 1.0]
+    };
+    let bg = if active {
+        [0.918, 0.945, 1.000, 1.0]
+    } else {
+        [0.933, 0.945, 0.961, 1.0]
+    };
+    push_clipped_rounded_rect(
+        vertices,
+        bounds,
+        clip,
+        (5.0 * scale_factor).round().max(1.0),
+        bg,
+        size,
+    );
+    let s = |value: f32| {
+        (value * bounds.width.min(bounds.height) / 18.0)
+            .round()
+            .max(1.0)
+    };
+    push_clipped_rounded_rect(
+        vertices,
+        ViewRect {
+            x: bounds.x + s(5.0),
+            y: bounds.y + s(6.0),
+            width: s(7.0),
+            height: s(3.0),
+        },
+        clip,
+        s(1.0),
+        fg,
+        size,
+    );
+    push_clipped_rounded_rect(
+        vertices,
+        ViewRect {
+            x: bounds.x + s(4.0),
+            y: bounds.y + s(8.0),
+            width: bounds.width - s(8.0),
+            height: bounds.height - s(11.0),
+        },
+        clip,
+        s(2.0),
+        fg,
+        size,
+    );
 }
 
 fn push_place_icon(
@@ -12335,6 +13048,7 @@ mod tests {
             rename_dialog: None,
             open_with_chooser: None,
             trash_conflict_dialog: None,
+            split_pane: None,
             rubber_band: None,
             scale_factor: 1.0,
             hit_tests: 0,
@@ -12361,6 +13075,7 @@ mod tests {
             filter_changes: 0,
             hidden_changes: 0,
             zoom_changes: 0,
+            split_pane_changes: 0,
         }
     }
 
@@ -12733,6 +13448,7 @@ mod tests {
             context_menu_actions(&menu.target),
             &[
                 ShellContextMenuAction::Open,
+                ShellContextMenuAction::OpenInNewPane,
                 ShellContextMenuAction::CopyLocation,
                 ShellContextMenuAction::Properties,
             ]
@@ -12745,7 +13461,7 @@ mod tests {
         let rect = context_menu_rect(menu, size);
         let copy_location_row = ViewPoint {
             x: rect.x + 8.0,
-            y: rect.y + CONTEXT_MENU_ROW_HEIGHT + 8.0,
+            y: rect.y + CONTEXT_MENU_ROW_HEIGHT * 2.0 + 8.0,
         };
         assert_eq!(
             scene.activate_or_close_context_menu(copy_location_row, size),
@@ -12775,6 +13491,7 @@ mod tests {
             context_menu_actions(&menu.target),
             &[
                 ShellContextMenuAction::Open,
+                ShellContextMenuAction::OpenInNewPane,
                 ShellContextMenuAction::CopyLocation,
                 ShellContextMenuAction::RemovePlace,
                 ShellContextMenuAction::Properties,
@@ -12783,7 +13500,7 @@ mod tests {
         let rect = context_menu_rect(menu, size);
         let remove_row = ViewPoint {
             x: rect.x + 8.0,
-            y: rect.y + CONTEXT_MENU_ROW_HEIGHT * 2.0 + 8.0,
+            y: rect.y + CONTEXT_MENU_ROW_HEIGHT * 3.0 + 8.0,
         };
         assert_eq!(
             scene.activate_or_close_context_menu(remove_row, size),
@@ -12816,6 +13533,53 @@ mod tests {
             path: PathBuf::from("/tmp"),
         };
         assert!(context_menu_actions(&blank_target).contains(&ShellContextMenuAction::AddToPlaces));
+        assert!(
+            context_menu_actions(&blank_target)
+                .contains(&ShellContextMenuAction::ToggleHiddenFiles)
+        );
+        assert!(context_menu_actions(&blank_target).contains(&ShellContextMenuAction::SplitPane));
+        assert_eq!(
+            ShellContextMenuAction::ToggleHiddenFiles.label_for_hidden_state(false),
+            "Show Hidden Files"
+        );
+        assert_eq!(
+            ShellContextMenuAction::ToggleHiddenFiles.label_for_hidden_state(true),
+            "Hide Hidden Files"
+        );
+    }
+
+    #[test]
+    fn open_in_new_pane_loads_reusable_pane_state() {
+        let root = test_dir("split-pane");
+        let right = root.join("right");
+        fs::create_dir_all(&right).unwrap();
+        fs::write(right.join("child.txt"), "split").unwrap();
+
+        let mut scene = test_scene(vec![test_entry("right", true)], ShellViewMode::Icons);
+        scene.path = root.clone();
+        scene.context_target = Some(ShellContextTarget::Item {
+            index: 0,
+            path: right.clone(),
+            is_dir: true,
+            selection_count: 1,
+        });
+        let size = PhysicalSize::new(900, 420);
+
+        assert!(scene.open_split_pane_from_context(size).unwrap());
+        let pane = scene.split_pane.as_ref().expect("split pane should load");
+        assert_eq!(pane.path, right);
+        assert_eq!(pane.view_mode, ShellViewMode::Icons);
+        assert_eq!(pane.entries.len(), 1);
+        assert_eq!(pane.entries[0].name.as_ref(), "child.txt");
+        assert_eq!(pane.filtered_entry_count(), 1);
+        assert_eq!(scene.split_pane_changes, 1);
+        let metrics = scene
+            .split_pane_metrics(size)
+            .expect("split pane should expose geometry");
+        assert!(scene.pane_width(size) < (size.width as f32 - scene.content_origin_x(size)));
+        assert!(metrics.right_pane.x > scene.pane_rect(size).x);
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -13016,6 +13780,7 @@ text/plain=writer.desktop;\n",
             context_menu_actions(&trash_place),
             &[
                 ShellContextMenuAction::Open,
+                ShellContextMenuAction::OpenInNewPane,
                 ShellContextMenuAction::EmptyTrash,
                 ShellContextMenuAction::CopyLocation,
                 ShellContextMenuAction::Properties,
@@ -13558,6 +14323,14 @@ text/plain=writer.desktop;\n",
             .iter()
             .position(|action| *action == ShellContextMenuAction::SelectAll)
             .unwrap();
+        let toggle_hidden_row = blank_actions
+            .iter()
+            .position(|action| *action == ShellContextMenuAction::ToggleHiddenFiles)
+            .unwrap();
+        let split_row = blank_actions
+            .iter()
+            .position(|action| *action == ShellContextMenuAction::SplitPane)
+            .unwrap();
         let properties_row = blank_actions
             .iter()
             .position(|action| *action == ShellContextMenuAction::Properties)
@@ -13566,6 +14339,8 @@ text/plain=writer.desktop;\n",
         assert!(!context_menu_separator_before(&blank, 0));
         assert!(context_menu_separator_before(&blank, paste_row));
         assert!(context_menu_separator_before(&blank, select_all_row));
+        assert!(context_menu_separator_before(&blank, toggle_hidden_row));
+        assert!(!context_menu_separator_before(&blank, split_row));
         assert!(context_menu_separator_before(&blank, properties_row));
 
         let item = ShellContextTarget::Item {
@@ -13620,7 +14395,7 @@ text/plain=writer.desktop;\n",
         let rect = context_menu_rect(scene.context_menu.as_ref().unwrap(), size);
         let refresh_row = ViewPoint {
             x: rect.x + 8.0,
-            y: rect.y + CONTEXT_MENU_ROW_HEIGHT * 4.0 + 8.0,
+            y: rect.y + CONTEXT_MENU_ROW_HEIGHT * 6.0 + 8.0,
         };
         assert_eq!(
             scene.activate_or_close_context_menu(refresh_row, size),
