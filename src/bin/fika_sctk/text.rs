@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::cell::RefCell;
 
 use bytemuck::{Pod, Zeroable};
 use cosmic_text::{
@@ -9,6 +10,10 @@ use fika_core::ViewRect;
 
 const TEXT_ATLAS_WIDTH: u32 = 2048;
 const TEXT_PADDING: u32 = 2;
+
+thread_local! {
+    static CARET_FONT_SYSTEM: RefCell<FontSystem> = RefCell::new(FontSystem::new());
+}
 
 const TEXT_SHADER: &str = r#"
 struct VertexIn {
@@ -141,6 +146,118 @@ impl TextBatch {
     fn labels(&self) -> &[TextLabel] {
         &self.labels
     }
+}
+
+pub(crate) fn shaped_cursor_advance(text: &str, cursor: usize, size: f32, line_height: f32) -> f32 {
+    let cursor = clamp_to_char_boundary(text, cursor);
+    let stops = shaped_caret_stops(text, size, line_height);
+    stops
+        .iter()
+        .find(|stop| stop.index == cursor)
+        .or_else(|| stops.iter().rev().find(|stop| stop.index <= cursor))
+        .map(|stop| stop.x)
+        .unwrap_or(0.0)
+}
+
+pub(crate) fn shaped_cursor_for_x(text: &str, x: f32, size: f32, line_height: f32) -> usize {
+    if text.is_empty() || x <= 0.0 {
+        return 0;
+    }
+    let mut stops = shaped_caret_stops(text, size, line_height);
+    if stops.is_empty() {
+        return text.len();
+    }
+    stops.sort_by(|left, right| left.x.total_cmp(&right.x));
+    for pair in stops.windows(2) {
+        let left = pair[0];
+        let right = pair[1];
+        if x <= (left.x + right.x) / 2.0 {
+            return left.index;
+        }
+    }
+    stops.last().map(|stop| stop.index).unwrap_or(text.len())
+}
+
+#[derive(Clone, Copy)]
+struct CaretStop {
+    index: usize,
+    x: f32,
+}
+
+fn shaped_caret_stops(text: &str, size: f32, line_height: f32) -> Vec<CaretStop> {
+    let mut stops = vec![CaretStop { index: 0, x: 0.0 }];
+    if text.is_empty() {
+        return stops;
+    }
+    CARET_FONT_SYSTEM.with(|font_system| {
+        let mut font_system = font_system.borrow_mut();
+        let mut buffer = Buffer::new(&mut font_system, Metrics::new(size, line_height));
+        buffer.set_wrap(Wrap::None);
+        buffer.set_size(Some(100_000.0), Some(line_height.max(1.0)));
+        buffer.set_text(
+            text,
+            &Attrs::new().family(Family::SansSerif),
+            Shaping::Advanced,
+            Some(Align::Left),
+        );
+        buffer.shape_until_scroll(&mut font_system, false);
+        for run in buffer.layout_runs() {
+            for glyph in run.glyphs {
+                push_glyph_caret_stops(
+                    run.text,
+                    glyph.start,
+                    glyph.end,
+                    glyph.x,
+                    glyph.w,
+                    &mut stops,
+                );
+            }
+            if run.line_w > 0.0 {
+                push_caret_stop(&mut stops, text.len(), run.line_w);
+            }
+        }
+    });
+    let last_x = stops.last().map(|stop| stop.x).unwrap_or(0.0);
+    push_caret_stop(&mut stops, text.len(), last_x);
+    stops.sort_by_key(|stop| stop.index);
+    stops.dedup_by_key(|stop| stop.index);
+    stops
+}
+
+fn push_glyph_caret_stops(
+    text: &str,
+    start: usize,
+    end: usize,
+    x: f32,
+    width: f32,
+    stops: &mut Vec<CaretStop>,
+) {
+    let cluster = text.get(start..end).unwrap_or_default();
+    let char_count = cluster.chars().count().max(1);
+    let char_width = width / char_count as f32;
+    let mut cursor_x = x;
+    for (offset, character) in cluster.char_indices() {
+        let index = start + offset;
+        push_caret_stop(stops, index, cursor_x);
+        cursor_x += char_width;
+        push_caret_stop(stops, index + character.len_utf8(), cursor_x);
+    }
+}
+
+fn push_caret_stop(stops: &mut Vec<CaretStop>, index: usize, x: f32) {
+    if let Some(existing) = stops.iter_mut().find(|stop| stop.index == index) {
+        existing.x = x;
+    } else {
+        stops.push(CaretStop { index, x });
+    }
+}
+
+fn clamp_to_char_boundary(text: &str, mut index: usize) -> usize {
+    index = index.min(text.len());
+    while index > 0 && !text.is_char_boundary(index) {
+        index -= 1;
+    }
+    index
 }
 
 #[derive(Clone, PartialEq)]

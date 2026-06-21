@@ -56,6 +56,7 @@ pub(crate) fn run(options: StartupOptions) -> Result<(), Box<dyn Error>> {
     window.set_app_id("io.github.elel-code.fika.sctk");
     window.set_min_size(Some((360, 240)));
     window.commit();
+    conn.flush()?;
 
     let exact_fractional_viewport =
         std::env::var_os("FIKA_SCTK_EXACT_FRACTIONAL_VIEWPORT").is_some();
@@ -100,6 +101,7 @@ pub(crate) fn run(options: StartupOptions) -> Result<(), Box<dyn Error>> {
         fractional_scale,
         // Drop order matters: the wgpu surface must be destroyed before the
         // underlying Wayland window.
+        conn: conn.clone(),
         renderer,
         window,
         scene,
@@ -131,6 +133,7 @@ pub(crate) struct FikaSctkApp {
     pub(crate) viewport: Option<WpViewport>,
     fractional_scale_manager: Option<WpFractionalScaleManagerV1>,
     pub(crate) fractional_scale: Option<WpFractionalScaleV1>,
+    conn: Connection,
     renderer: WgpuRenderer,
     pub(crate) window: Window,
     scene: SctkScene,
@@ -237,6 +240,9 @@ impl FikaSctkApp {
             .scene
             .render_frame(self.width, self.height, self.ui_scale());
         self.renderer.render_scene_frame(frame, reason);
+        if let Err(error) = self.conn.flush() {
+            eprintln!("[fika-sctk] wayland-flush-error reason={reason} error={error}");
+        }
     }
 
     pub(crate) fn set_pointer(&mut self, x: f64, y: f64) {

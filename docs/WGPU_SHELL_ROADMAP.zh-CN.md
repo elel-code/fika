@@ -267,9 +267,11 @@ retained scene/renderer 行为。
   `F6` 或点击顶部 path bar 激活。它复用 core `resolve_location_input` 和
   `complete_location_input`：Backspace/Delete 在 caret 处编辑 draft，Arrow/Home/End
   移动 caret，点击 path bar 外部空白会安全取消 draft 并恢复当前真实 path，Enter
-  加载目标路径，Esc 取消。SCTK caret 现在已垂直居中，并用按字符类型加权的路径宽度估算
-  处理点击定位；把这个估算替换为与 raster 共用的 `cosmic-text` shaping cache 仍属于
-  Phase 4 文本边界工作。
+  加载目标路径，Esc 取消。SCTK caret 现在已垂直居中，caret 绘制与点击 hit-test
+  会共用 `cosmic-text` shaped caret stops，不再使用手写字符宽度估算；完整 IME/selection
+  文本边界仍留到 Phase 4。
+- SCTK 现在会在初始 window commit 和每次 rendered frame 后显式 flush Wayland connection，
+  避免首帧已经 present 但 compositor 需要后续焦点/指针事件才恢复显示或交互。
 - 第一版 SCTK Places rows 已从纯绘制升级为 retained click targets。Home、存在的常见
   XDG 目录、Trash files 和 Root 会导航 active pane；split 模式下也会打开当前 active
   pane，并用 active pane path 决定高亮 row。

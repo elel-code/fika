@@ -15,7 +15,7 @@ use super::metrics::{
     ICONS_ITEM_WIDTH, STATUS_BAR_HEIGHT, TEXT_FONT_SIZE, TEXT_LINE_HEIGHT, TOP_BAR_HEIGHT,
 };
 use super::quad::{QuadBatch, inset};
-use super::text::TextBatch;
+use super::text::{TextBatch, shaped_cursor_advance, shaped_cursor_for_x};
 
 const DETAIL_NAME_COLUMN_WIDTH: f32 = 360.0;
 const DETAIL_SIZE_COLUMN_WIDTH: f32 = 110.0;
@@ -1940,39 +1940,11 @@ fn cursor_for_location_point(point: ViewPoint, pane: ViewRect, text: &str) -> us
 
 fn cursor_for_text_point(point: ViewPoint, text_rect: ViewRect, text: &str) -> usize {
     let target = (point.x - text_rect.x).max(0.0);
-    let mut advance = 0.0;
-    for (index, character) in text.char_indices() {
-        let width = character_visual_width(character);
-        if target <= advance + width / 2.0 {
-            return index;
-        }
-        advance += width;
-    }
-    text.len()
+    shaped_cursor_for_x(text, target, TEXT_FONT_SIZE, TEXT_LINE_HEIGHT)
 }
 
 fn cursor_visual_advance(text: &str, cursor: usize) -> f32 {
-    let cursor = clamp_to_char_boundary(text, cursor);
-    text[..cursor].chars().map(character_visual_width).sum()
-}
-
-fn character_visual_width(character: char) -> f32 {
-    if character.is_ascii_whitespace() {
-        TEXT_FONT_SIZE * 0.32
-    } else if matches!(
-        character,
-        '/' | '\\' | '.' | ',' | ':' | ';' | '\'' | '"' | '!' | '|'
-    ) {
-        TEXT_FONT_SIZE * 0.30
-    } else if matches!(character, 'i' | 'l' | 'I' | 'j' | 't' | 'f') {
-        TEXT_FONT_SIZE * 0.34
-    } else if character.is_ascii_uppercase() {
-        TEXT_FONT_SIZE * 0.62
-    } else if character.is_ascii() {
-        TEXT_FONT_SIZE * 0.54
-    } else {
-        TEXT_FONT_SIZE
-    }
+    shaped_cursor_advance(text, cursor, TEXT_FONT_SIZE, TEXT_LINE_HEIGHT)
 }
 
 fn caret_rect(text_rect: ViewRect, x: f32) -> ViewRect {
@@ -2404,8 +2376,8 @@ mod tests {
     }
 
     #[test]
-    fn location_cursor_hit_test_uses_weighted_path_widths() {
-        let text = "/home/yk/Downloads";
+    fn location_cursor_hit_test_uses_shaped_text_metrics() {
+        let text = "/home/yk/下载/Downloads";
         let rect = ViewRect {
             x: 20.0,
             y: 8.0,
@@ -2415,7 +2387,7 @@ mod tests {
 
         let after_slash = cursor_for_text_point(
             ViewPoint {
-                x: rect.x + character_visual_width('/') * 0.75,
+                x: rect.x + cursor_visual_advance(text, 1) * 0.75,
                 y: rect.y,
             },
             rect,
@@ -2433,6 +2405,26 @@ mod tests {
         );
         assert!(text.is_char_boundary(near_downloads));
         assert!(near_downloads >= 8);
+
+        for index in text
+            .char_indices()
+            .map(|(index, _)| index)
+            .chain([text.len()])
+        {
+            let x = cursor_visual_advance(text, index);
+            let hit = cursor_for_text_point(
+                ViewPoint {
+                    x: rect.x + x,
+                    y: rect.y,
+                },
+                rect,
+                text,
+            );
+            assert!(
+                text.is_char_boundary(hit),
+                "hit-test must return a UTF-8 boundary"
+            );
+        }
     }
 
     #[test]

@@ -338,10 +338,13 @@ Legacy migration input, read-only unless shared build breakage requires a fix:
   or clicking the top path bar. Backspace/Delete edit at the caret,
   Arrow/Home/End move the caret, clicking outside the path bar safely cancels
   the draft and restores the real current path, Enter commits by loading the
-  target path, and Esc cancels. The SCTK caret is now vertically centered and
-  uses weighted path-character advances for click/hit-test positioning; replacing
-  that approximation with the same `cosmic-text` shaping cache used for raster
-  remains Phase 4 text-boundary work.
+  target path, and Esc cancels. The SCTK caret is now vertically centered, and
+  caret paint plus click/hit-test positioning share `cosmic-text` shaped caret
+  stops instead of hand-written character-width estimates. Full IME/selection
+  editing remains Phase 4 text-boundary work.
+- SCTK now flushes the Wayland connection after the initial window commit and
+  after each rendered frame, so the first presented frame is delivered without
+  waiting for a later focus or pointer event to wake the compositor path.
 - The first SCTK Places rows are now clickable retained targets instead of paint
   only. Home, existing common XDG directories, Trash files, and Root navigate
   the active pane, including split mode, with active-row highlighting based on

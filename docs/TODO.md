@@ -140,8 +140,11 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
   避免框选拖动时被 per-pixel selection 重算、文本 atlas raster 和 stderr 同步输出拖慢。
   Places 已从纯绘制升级为可点击 retained rows：Home、存在的 XDG 常见目录、Trash files
   dir 和 Root 会命中 active pane 并执行路径导航，split 模式下不会误路由到 primary pane。
-  地址栏/filter caret 现在使用垂直居中的 caret rect，并用按字符类型加权的路径宽度估算，
-  完整 `cosmic-text` shaping caret/hit-test cache 仍属于后续文本边界迁移。
+  Wayland 初始 window commit 和每次 render 后都会显式 flush connection，避免首帧已经
+  present 但 compositor 需要焦点切换或额外事件后才恢复显示/交互。地址栏/filter caret
+  现在使用垂直居中的 caret rect，并且 caret 绘制与 click hit-test 已改为共用
+  `cosmic-text` shaped caret stops，不再使用手写字符宽度估算；完整 IME/selection 文本边界
+  仍属于后续迁移。
   第一段 file-operation routing 已进入可复用 pane 边界：`SctkPane` 暴露 filtered/hidden 后的
   selected path 投影，`Delete` 会把 active pane selection 通过 core XDG Trash 操作移入
   Trash、注册 undo payload、刷新受影响 primary/split pane、清空 stale selection，并在 pane-local
