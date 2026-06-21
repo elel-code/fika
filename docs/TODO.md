@@ -135,17 +135,23 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
   release/leave 会清理 capture。pane selection 已从单选焦点扩展为可复用的
   `selected_entries` 集合；`Ctrl/Meta+A` 只选择 active pane 的可见条目，空白 primary
   press 会进入 rubber-band pointer capture，并在 Icons/Compact/Details 当前投影上更新
-  多选集合和半透明 overlay，为后续 DnD source/export 复用同一 selection 边界。下一步继续补
-  toolbar split UI、file-operation routing、IME/text-selection 和 DnD data-device。当前
+  多选集合和半透明 overlay，为后续 DnD source/export 复用同一 selection 边界。当前
   rubber-band pointer capture 已做 motion 采样，renderer 高频 frame 日志也已降频，
   避免框选拖动时被 per-pixel selection 重算、文本 atlas raster 和 stderr 同步输出拖慢。
   Places 已从纯绘制升级为可点击 retained rows：Home、存在的 XDG 常见目录、Trash files
   dir 和 Root 会命中 active pane 并执行路径导航，split 模式下不会误路由到 primary pane。
   地址栏/filter caret 现在使用垂直居中的 caret rect，并用按字符类型加权的路径宽度估算，
   完整 `cosmic-text` shaping caret/hit-test cache 仍属于后续文本边界迁移。
+  第一段 file-operation routing 已进入可复用 pane 边界：`SctkPane` 暴露 filtered/hidden 后的
+  selected path 投影，`Delete` 会把 active pane selection 通过 core XDG Trash 操作移入
+  Trash、注册 undo payload、刷新受影响 primary/split pane、清空 stale selection，并在 pane-local
+  status bar 显示结果；remote trash 会显式拒绝。`Shift+Delete` 现在只进入“需要确认对话框”
+  状态，不执行永久删除。下一步继续补 toolbar split UI、context-menu 文件操作入口、
+  IME/text-selection、rename/create/dialogs、clipboard 和 DnD data-device。
 - [ ] Phase 4：迁入资产和系统集成热路径。MIME/theme icon atlas、Dolphin-style
   visible-first icon resolve、thumbnail worker/read-ahead、device/Places 动态数据、
-  context menu、Open With、service menu、clipboard、Trash actions、file operations、
+  context menu、Open With、service menu、clipboard、更完整 Trash actions、rename/create/transfer
+  file operations、
   dialogs 和 chooser mode 仍未接到 SCTK shell。迁移时优先复用已有 core 能力，
   UI 层只负责 retained geometry、hit-test、overlay state 和 GPU batches。
 - [ ] Phase 5：Wayland DnD 和主线化。需要完成 SCTK data-device export/drop、

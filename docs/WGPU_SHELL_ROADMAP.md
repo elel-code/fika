@@ -350,6 +350,13 @@ Legacy migration input, read-only unless shared build breakage requires a fix:
   rubber-band motion is sampled, frame logging is throttled for pointer/scroll
   frames, and unchanged text batches reuse their previous atlas instead of
   reshaping/rasterizing every visible label during overlay-only frames.
+- The first SCTK file-operation route now reaches the reusable pane boundary.
+  `SctkPane` projects selected paths after hidden/filter pruning, `Delete`
+  moves the active pane selection through the core XDG Trash operation, records
+  an undo payload, reloads affected primary/split panes, clears stale selection,
+  and reports the result in the pane-local status bar. Remote trash is rejected.
+  `Shift+Delete` is intentionally a safe pending boundary that reports the
+  missing confirmation dialog instead of deleting permanently.
 - Dotfile visibility is now shell-owned. Hidden entries are excluded from the
   retained projection by default; `Ctrl/Meta+H` shows them. Selection is
   retained or pruned through the same projection when the visibility mode
@@ -425,8 +432,9 @@ Acceptance:
   switching, split toggling, reload, hidden-file visibility, selection, and
   clear shortcuts work from retained geometry in `SctkPane`/`SctkScene`.
   Location editing, filtering, rubber-band, select-all, and first Places
-  left-click navigation are now routed through the SCTK shell. Projection zoom
-  and richer Places/device actions remain pending.
+  left-click navigation are now routed through the SCTK shell. Delete-to-Trash
+  now uses core file operations on the active pane selection. Projection zoom,
+  richer Places/device actions, and full file-operation dialogs remain pending.
 - [~] Layout/hit-test/paint share the same shell layout abstraction for Icons,
   Compact, and Details. Primary and split panes now share `SctkPane` state,
   generic item paint, scrollbar metrics, and the hidden-file visible-index
@@ -522,7 +530,11 @@ Select All, Properties, minimal Create New, minimal Rename, minimal Move to
 Trash, Trash view Restore/Delete Permanently/Empty Trash, Copy/Cut/Copy
 Location, Paste, Open With direct application launch, KDE/Fika service-menu
 actions and submenus, and the minimal Places row Open/Copy Location/Properties/Remove
-menu. The blank context menu now exposes Show/Hide Hidden Files and Split View,
+menu in the migration input. In the current SCTK path, the first direct
+file-operation route is Delete-to-Trash from the active pane selection; the
+context-menu entry points, Trash view operations, rename/create dialogs,
+clipboard transfer, Open With, and service-menu dispatch still need to be moved
+over. The blank context menu now exposes Show/Hide Hidden Files and Split View,
 directory/place Open in New Pane loads a real right-hand pane with its own
 location bar/content/status paint, item hover/selection backgrounds are rounded,
 the location bar uses a white bordered original-style treatment with a leading

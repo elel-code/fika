@@ -41,6 +41,7 @@ pub(crate) struct SctkPane {
     filter_active: bool,
     filter_text: String,
     filter_cursor: usize,
+    status_message: Option<String>,
     scroll_x: f32,
     scroll_y: f32,
 }
@@ -71,6 +72,7 @@ impl SctkPane {
             filter_active: false,
             filter_text: String::new(),
             filter_cursor: 0,
+            status_message: None,
             scroll_x: 0.0,
             scroll_y: 0.0,
         };
@@ -152,6 +154,11 @@ impl SctkPane {
         self.filter_cursor
     }
 
+    #[cfg(test)]
+    pub(crate) fn status_message(&self) -> Option<&str> {
+        self.status_message.as_deref()
+    }
+
     pub(crate) fn render(
         &mut self,
         batch: &mut QuadBatch,
@@ -217,6 +224,15 @@ impl SctkPane {
     pub(crate) fn press_primary(&mut self, point: ViewPoint, geometry: PaneGeometry) -> bool {
         let hit = self.hit_test(point, geometry);
         self.replace_selection(hit)
+    }
+
+    pub(crate) fn set_status(&mut self, message: impl Into<String>) -> bool {
+        let message = Some(message.into());
+        if self.status_message == message {
+            return false;
+        }
+        self.status_message = message;
+        true
     }
 
     pub(crate) fn focus_location(&mut self) -> bool {
@@ -613,6 +629,13 @@ impl SctkPane {
             .unwrap_or_else(|| self.path.join(entry.name.as_ref()));
         self.load_path(path)?;
         Ok(true)
+    }
+
+    pub(crate) fn selected_paths(&self) -> Vec<PathBuf> {
+        self.selected_entries
+            .iter()
+            .filter_map(|index| self.entry_path(*index))
+            .collect()
     }
 
     pub(crate) fn open_path(&mut self, path: PathBuf) -> Result<bool, Box<dyn Error>> {
@@ -1347,7 +1370,7 @@ impl SctkPane {
         } else {
             format!(", filter {:?}", self.filter_text)
         };
-        format!(
+        let summary = format!(
             "{} items, {} folders, {} files, {} on screen, {}, {}{}{}",
             self.visible_indices.len(),
             visible_dirs,
@@ -1357,7 +1380,11 @@ impl SctkPane {
             hidden,
             selected,
             filter,
-        )
+        );
+        self.status_message
+            .as_ref()
+            .map(|message| format!("{message} - {summary}"))
+            .unwrap_or(summary)
     }
 
     fn to_screen_rect(&self, rect: ViewRect, content: ViewRect) -> ViewRect {
@@ -1501,6 +1528,7 @@ impl SctkPane {
         self.filter_active = false;
         self.filter_text.clear();
         self.filter_cursor = 0;
+        self.status_message = None;
         self.rebuild_visible_indices();
         self.scroll_x = 0.0;
         self.scroll_y = 0.0;
@@ -1551,6 +1579,16 @@ impl SctkPane {
 
     fn replace_selection(&mut self, selected: Option<usize>) -> bool {
         self.set_selection_set(selected.into_iter().collect())
+    }
+
+    fn entry_path(&self, index: usize) -> Option<PathBuf> {
+        let entry = self.entries.get(index)?;
+        Some(
+            entry
+                .target_path
+                .clone()
+                .unwrap_or_else(|| self.path.join(entry.name.as_ref())),
+        )
     }
 
     fn set_selection_set(&mut self, mut selected_entries: BTreeSet<usize>) -> bool {
@@ -2020,6 +2058,22 @@ mod tests {
         })
     }
 
+    fn entry_with_target(name: &str, target_path: PathBuf, is_dir: bool) -> Entry {
+        Entry::new(EntryData {
+            name: Arc::from(name),
+            name_width_units: name.len().min(u16::MAX as usize) as u16,
+            target_path: Some(target_path),
+            size_bytes: 0,
+            modified_secs: None,
+            metadata_complete: true,
+            mime_type: None,
+            mime_magic_checked: true,
+            trash_original_path: None,
+            trash_deletion_time: None,
+            is_dir,
+        })
+    }
+
     fn geometry() -> PaneGeometry {
         PaneGeometry {
             pane: ViewRect {
@@ -2101,6 +2155,26 @@ mod tests {
         assert!(pane.selected_entries.contains(&0));
         assert!(!pane.selected_entries.contains(&1));
         assert!(pane.selected_entries.contains(&2));
+    }
+
+    #[test]
+    fn selected_paths_use_visible_selection_and_entry_targets() {
+        let target = PathBuf::from("/target/link");
+        let mut pane = SctkPane::from_entries(
+            PathBuf::from("/tmp"),
+            ViewMode::Details,
+            vec![
+                entry("alpha", false),
+                entry(".secret", false),
+                entry_with_target("linked", target.clone(), true),
+            ],
+        );
+
+        assert!(pane.select_all());
+        assert_eq!(
+            pane.selected_paths(),
+            vec![PathBuf::from("/tmp/alpha"), target]
+        );
     }
 
     #[test]

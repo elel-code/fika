@@ -435,6 +435,14 @@ fn key_command(keysym: Keysym, modifiers: Modifiers) -> Option<SceneCommand> {
     {
         return Some(SceneCommand::ToggleSplit);
     }
+    if keysym == Keysym::Delete || keysym == Keysym::KP_Delete {
+        if modifiers.shift {
+            return Some(SceneCommand::DeleteSelectionPermanently);
+        }
+        if !modifiers.ctrl && !modifiers.logo && !modifiers.alt {
+            return Some(SceneCommand::TrashSelection);
+        }
+    }
     match keysym {
         Keysym::Left => Some(SceneCommand::MoveSelection(PaneSelectionMove::Left)),
         Keysym::Right => Some(SceneCommand::MoveSelection(PaneSelectionMove::Right)),
@@ -556,6 +564,20 @@ mod tests {
         assert_eq!(
             key_command(Keysym::F4, Modifiers::default()),
             Some(SceneCommand::ToggleSplit)
+        );
+        assert_eq!(
+            key_command(Keysym::Delete, Modifiers::default()),
+            Some(SceneCommand::TrashSelection)
+        );
+        assert_eq!(
+            key_command(
+                Keysym::Delete,
+                Modifiers {
+                    shift: true,
+                    ..Modifiers::default()
+                }
+            ),
+            Some(SceneCommand::DeleteSelectionPermanently)
         );
     }
 

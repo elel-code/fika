@@ -1,7 +1,10 @@
 use std::error::Error;
 use std::path::{Path, PathBuf};
 
-use fika_core::{ViewMode, ViewPoint, ViewRect, file_ops, home_dir};
+use fika_core::{
+    OperationQueue, PaneId, UndoPayload, ViewMode, ViewPoint, ViewRect, action_status, file_ops,
+    home_dir, is_network_path, trash_selection_result,
+};
 
 use super::metrics::{
     APP_TOOLBAR_HEIGHT, PANE_MARGIN, PLACES_ICON_SIZE, PLACES_PANEL_MARGIN_BOTTOM,
@@ -24,6 +27,7 @@ pub(crate) struct SctkScene {
     active: PaneSlot,
     places_visible: bool,
     pointer_capture: Option<PointerCapture>,
+    operations: OperationQueue,
 }
 
 impl SctkScene {
@@ -41,6 +45,7 @@ impl SctkScene {
             active: PaneSlot::Primary,
             places_visible: true,
             pointer_capture: None,
+            operations: OperationQueue::new(),
         })
     }
 
@@ -369,6 +374,12 @@ impl SctkScene {
         if command == SceneCommand::ToggleSplit {
             return self.toggle_split();
         }
+        if command == SceneCommand::TrashSelection {
+            return self.trash_active_selection();
+        }
+        if command == SceneCommand::DeleteSelectionPermanently {
+            return Ok(self.defer_permanent_delete());
+        }
         let geometry = self.geometry(width, height);
         match self.active {
             PaneSlot::Primary => {
@@ -615,6 +626,70 @@ impl SctkScene {
             .is_some_and(|split| split.clear_pointer())
     }
 
+    fn trash_active_selection(&mut self) -> Result<bool, Box<dyn Error>> {
+        let selected_paths = self.active_pane().selected_paths();
+        if selected_paths.is_empty() {
+            return Ok(self.active_pane_mut().set_status("No selection to trash"));
+        }
+        if selected_paths.iter().any(|path| is_network_path(path)) {
+            return Ok(self
+                .active_pane_mut()
+                .set_status("Remote trash is not available yet"));
+        }
+
+        let pane_id = self.active.pane_id();
+        let result = trash_selection_result(pane_id, selected_paths);
+        let success_count = result.success_count;
+        let failure_count = result.failure_count;
+        let affected_dirs = result.affected_dirs.clone();
+        if success_count > 0 {
+            self.operations.register_undo_with_payload(
+                "Move to Trash".to_string(),
+                affected_dirs.clone(),
+                UndoPayload::Trash {
+                    items: result.undo_items,
+                },
+            );
+        }
+
+        let mut changed = self.active_pane_mut().set_status(action_status(
+            "Moved to trash",
+            success_count,
+            failure_count,
+        ));
+        if success_count > 0 {
+            changed |= self.reload_affected_panes(&affected_dirs)?;
+            changed |= self.active_pane_mut().clear_selection();
+        }
+        Ok(changed)
+    }
+
+    fn defer_permanent_delete(&mut self) -> bool {
+        let selected_count = self.active_pane().selected_count();
+        if selected_count == 0 {
+            self.active_pane_mut()
+                .set_status("No selection to delete permanently")
+        } else {
+            self.active_pane_mut()
+                .set_status("Delete permanently needs a confirmation dialog")
+        }
+    }
+
+    fn reload_affected_panes(&mut self, affected_dirs: &[PathBuf]) -> Result<bool, Box<dyn Error>> {
+        let mut changed = false;
+        if pane_path_is_affected(self.primary.path(), affected_dirs) {
+            self.primary.reload()?;
+            changed = true;
+        }
+        if let Some(split) = self.split.as_mut()
+            && pane_path_is_affected(split.path(), affected_dirs)
+        {
+            split.reload()?;
+            changed = true;
+        }
+        Ok(changed)
+    }
+
     fn place_rows(&self) -> Vec<PlaceRow> {
         let home = home_dir();
         let mut rows = Vec::new();
@@ -729,7 +804,9 @@ impl SctkScene {
             SceneCommand::SelectAll => Ok(pane.select_all()),
             SceneCommand::FocusLocation => Ok(pane.focus_location()),
             SceneCommand::FocusFilter => Ok(pane.edit_filter(FilterEdit::Focus, geometry)),
-            SceneCommand::ToggleSplit => Ok(false),
+            SceneCommand::ToggleSplit
+            | SceneCommand::TrashSelection
+            | SceneCommand::DeleteSelectionPermanently => Ok(false),
         }
     }
 }
@@ -746,6 +823,8 @@ pub(crate) enum SceneCommand {
     SelectAll,
     FocusLocation,
     FocusFilter,
+    TrashSelection,
+    DeleteSelectionPermanently,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -942,6 +1021,28 @@ impl PaneSlot {
             Self::Split => "split",
         }
     }
+
+    fn pane_id(self) -> PaneId {
+        match self {
+            Self::Primary => PaneId(1),
+            Self::Split => PaneId(2),
+        }
+    }
+}
+
+fn pane_path_is_affected(path: &Path, affected_dirs: &[PathBuf]) -> bool {
+    affected_dirs
+        .iter()
+        .any(|affected| same_directory(path, affected))
+}
+
+fn same_directory(left: &Path, right: &Path) -> bool {
+    left == right
+        || left
+            .canonicalize()
+            .ok()
+            .zip(right.canonicalize().ok())
+            .is_some_and(|(left, right)| left == right)
 }
 
 pub(crate) struct SceneFrame {
@@ -961,7 +1062,9 @@ pub(crate) struct SceneFrame {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::path::{Path, PathBuf};
+    use std::sync::{Arc, Mutex};
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     use fika_core::{Entry, EntryData};
 
@@ -970,6 +1073,8 @@ mod tests {
     };
 
     use super::*;
+
+    static TRASH_ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn entry(name: &str, is_dir: bool) -> Entry {
         Entry::new(EntryData {
@@ -997,6 +1102,7 @@ mod tests {
             active: PaneSlot::Primary,
             places_visible: true,
             pointer_capture: None,
+            operations: OperationQueue::new(),
         }
     }
 
@@ -1017,7 +1123,34 @@ mod tests {
             active: PaneSlot::Primary,
             places_visible: true,
             pointer_capture: None,
+            operations: OperationQueue::new(),
         }
+    }
+
+    fn test_dir(name: &str) -> PathBuf {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("fika-sctk-{name}-{stamp}"))
+    }
+
+    fn with_xdg_data_home<T>(path: &Path, run: impl FnOnce() -> T) -> T {
+        let _guard = TRASH_ENV_LOCK.lock().unwrap();
+        let previous = std::env::var_os("XDG_DATA_HOME");
+        unsafe {
+            std::env::set_var("XDG_DATA_HOME", path);
+        }
+        let result = run();
+        match previous {
+            Some(previous) => unsafe {
+                std::env::set_var("XDG_DATA_HOME", previous);
+            },
+            None => unsafe {
+                std::env::remove_var("XDG_DATA_HOME");
+            },
+        }
+        result
     }
 
     #[test]
@@ -1187,6 +1320,87 @@ mod tests {
         assert_eq!(scene.primary.view_mode(), ViewMode::Icons);
         assert_eq!(scene.split.as_ref().unwrap().view_mode(), ViewMode::Details);
         assert_eq!(scene.active_pane_name(), "split");
+    }
+
+    #[test]
+    fn trash_selection_command_routes_to_active_split_pane() {
+        let root = test_dir("trash-routing");
+        let xdg = root.join("xdg");
+        let left = root.join("left");
+        let right = root.join("right");
+        std::fs::create_dir_all(&left).unwrap();
+        std::fs::create_dir_all(&right).unwrap();
+        std::fs::write(left.join("keep.txt"), b"keep").unwrap();
+        let doomed = right.join("doomed.txt");
+        std::fs::write(&doomed, b"doomed").unwrap();
+
+        with_xdg_data_home(&xdg, || {
+            let mut scene = SctkScene {
+                primary: SctkPane::load(left.clone(), ViewMode::Details).unwrap(),
+                split: Some(SctkPane::load(right.clone(), ViewMode::Details).unwrap()),
+                active: PaneSlot::Split,
+                places_visible: true,
+                pointer_capture: None,
+                operations: OperationQueue::new(),
+            };
+            let geometry = scene.geometry(1000, 640);
+            assert!(
+                scene
+                    .split
+                    .as_mut()
+                    .unwrap()
+                    .move_selection(PaneSelectionMove::Down, geometry.split.unwrap())
+            );
+
+            assert!(
+                scene
+                    .handle_command(SceneCommand::TrashSelection, 1000, 640)
+                    .unwrap()
+            );
+
+            assert!(left.join("keep.txt").exists());
+            assert!(!doomed.exists());
+            assert_eq!(scene.primary.path(), &left);
+            assert_eq!(scene.split.as_ref().unwrap().path(), &right);
+            assert_eq!(scene.split.as_ref().unwrap().selected_count(), 0);
+            assert!(
+                scene
+                    .split
+                    .as_ref()
+                    .unwrap()
+                    .status_message()
+                    .is_some_and(|message| message.contains("Moved to trash: 1 item"))
+            );
+            assert!(scene.operations.latest_undo().is_some());
+            assert!(file_ops::trash_files_dir().join("doomed.txt").exists());
+        });
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn permanent_delete_command_is_a_safe_pending_boundary() {
+        let mut scene = scene(ViewMode::Details, 5);
+        assert!(
+            scene
+                .handle_command(
+                    SceneCommand::MoveSelection(PaneSelectionMove::Down),
+                    900,
+                    640
+                )
+                .unwrap()
+        );
+
+        assert!(
+            scene
+                .handle_command(SceneCommand::DeleteSelectionPermanently, 900, 640)
+                .unwrap()
+        );
+        assert_eq!(scene.primary.selected_count(), 1);
+        assert_eq!(
+            scene.primary.status_message(),
+            Some("Delete permanently needs a confirmation dialog")
+        );
     }
 
     #[test]
