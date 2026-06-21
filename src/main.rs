@@ -21,20 +21,20 @@ use fika_core::{
     AppSettings, CompactLayout, CompactLayoutOptions, DesktopLaunchPlan, DeviceInfo,
     DevicePlaceOperation, DevicePlaceOperationResult, Entry, FileClipboardRole, FileTransferMode,
     Generation, IconsLayout, IconsLayoutOptions, ItemId, MimeApplication, MimeApplicationCache,
-    NETWORK_ROOT_LABEL, NameFilter, OpenWithLaunchResult, ServiceMenuAction,
+    NETWORK_ROOT_LABEL, NameFilter, OpenWithLaunchResult, PrivilegedCommand, ServiceMenuAction,
     ServiceMenuLaunchResult, ServiceMenuPriority, ServiceMenuTarget, ThumbnailRequest,
-    ThumbnailRequestPriority, ThumbnailerRegistry, TransferTaskResult, TrashViewOperation,
-    TrashViewOperationResult, UserPlace, ViewPoint, ViewRect, ViewSize, complete_location_input,
-    decode_file_clipboard_text, default_app_settings_path, default_thumbnail_cache_root,
-    default_user_places_path, encode_file_clipboard_text, file_ops, format_modified_secs,
-    format_size, generate_thumbnail_with_external_thumbnailer_registry, home_dir, is_network_path,
-    launch_with_systemd_user, load_app_settings, load_place_order, load_user_places,
-    mime_magic_resolution_required, network_parent_path, network_root_path, network_uri_from_path,
-    paste_text_result, perform_device_place_operation, place_order_path_for_user_places_path,
-    read_entries_sync, read_gio_devices, read_network_entry_batches_sync_cancellable,
-    resolve_location_input, save_app_settings, save_place_order, save_user_places,
-    service_menu_target_label, thumbnail_request_may_have_preview, transfer_paths_result,
-    trash_view_operation_result,
+    ThumbnailRequestPriority, ThumbnailerRegistry, TransferTaskResult, TransferUndoItem,
+    TrashViewOperation, TrashViewOperationResult, UserPlace, ViewPoint, ViewRect, ViewSize,
+    complete_location_input, decode_file_clipboard_text, default_app_settings_path,
+    default_thumbnail_cache_root, default_user_places_path, encode_file_clipboard_text, file_ops,
+    format_modified_secs, format_size, generate_thumbnail_with_external_thumbnailer_registry,
+    home_dir, is_network_path, launch_with_systemd_user, load_app_settings, load_place_order,
+    load_user_places, mime_magic_resolution_required, network_parent_path, network_root_path,
+    network_uri_from_path, paste_text_result, perform_device_place_operation,
+    place_order_path_for_user_places_path, push_unique_path, read_entries_sync, read_gio_devices,
+    read_network_entry_batches_sync_cancellable, resolve_location_input, run_via_dbus,
+    save_app_settings, save_place_order, save_user_places, service_menu_target_label,
+    thumbnail_request_may_have_preview, trash_view_operation_result,
 };
 use gio::prelude::FileExt;
 use winit::application::ApplicationHandler;
@@ -1107,8 +1107,10 @@ impl FikaWgpuApp {
     ) {
         let action = match command {
             ShellContextMenuCommand::Builtin(action) => action,
-            ShellContextMenuCommand::CreateEntry(kind) => {
-                if self.scene.open_create_dialog_from_context_with_kind(kind)
+            ShellContextMenuCommand::CreateEntry { kind, privileged } => {
+                if self
+                    .scene
+                    .open_create_dialog_from_context_with_kind(kind, privileged)
                     && let Some(window) = self.window.as_ref()
                 {
                     window.request_redraw();
@@ -1143,12 +1145,22 @@ impl FikaWgpuApp {
                         }
                         Ok(false) => {
                             fika_log!("[fika-wgpu] context-action-pending action=open target=none");
+                            self.scene.record_task_status(ShellTaskStatus::failed(
+                                "Open failed",
+                                "No target",
+                                false,
+                            ));
                             if let Some(window) = self.window.as_ref() {
                                 window.request_redraw();
                             }
                         }
                         Err(error) => {
                             fika_log!("[fika-wgpu] open-error {error}");
+                            self.scene.record_task_status(ShellTaskStatus::failed(
+                                "Open failed",
+                                error,
+                                false,
+                            ));
                             if let Some(window) = self.window.as_ref() {
                                 window.request_redraw();
                             }
@@ -1172,6 +1184,15 @@ impl FikaWgpuApp {
                     return;
                 };
                 if self.toggle_user_hidden_visibility(size) {
+                    self.scene.record_task_status(ShellTaskStatus::completed(
+                        if self.scene.show_hidden {
+                            "Hidden Files Shown"
+                        } else {
+                            "Hidden Files Hidden"
+                        },
+                        "Current view updated",
+                        false,
+                    ));
                     self.present_scene_change(event_loop, "context-toggle-hidden");
                 }
             }
@@ -1182,6 +1203,11 @@ impl FikaWgpuApp {
                 let _ = self
                     .scene
                     .apply_selection_command(SelectionCommand::SelectAll);
+                self.scene.record_task_status(ShellTaskStatus::completed(
+                    "Selected All",
+                    self.scene.active_pane_status_summary(),
+                    false,
+                ));
                 if let Some(window) = self.window.as_ref() {
                     window.request_redraw();
                 }
@@ -1201,7 +1227,14 @@ impl FikaWgpuApp {
                 }
             }
             ShellContextMenuAction::Rename => {
-                if self.scene.open_rename_dialog_from_context()
+                if self.scene.open_rename_dialog_from_context(false)
+                    && let Some(window) = self.window.as_ref()
+                {
+                    window.request_redraw();
+                }
+            }
+            ShellContextMenuAction::RenameAsAdministrator => {
+                if self.scene.open_rename_dialog_from_context(true)
                     && let Some(window) = self.window.as_ref()
                 {
                     window.request_redraw();
@@ -1214,35 +1247,37 @@ impl FikaWgpuApp {
             | ShellContextMenuAction::EmptyTrash => {
                 self.perform_trash_view_context_action(event_loop, action)
             }
-            ShellContextMenuAction::MoveToTrash => self.move_context_target_to_trash(event_loop),
+            ShellContextMenuAction::MoveToTrash => {
+                self.move_context_target_to_trash(event_loop, false)
+            }
+            ShellContextMenuAction::MoveToTrashAsAdministrator => {
+                self.move_context_target_to_trash(event_loop, true)
+            }
             ShellContextMenuAction::Copy | ShellContextMenuAction::Cut => {
                 match self.scene.context_target_file_clipboard_request(action) {
-                    Ok(Some(request)) => {
-                        if let Some(clipboard) = self.clipboard.as_ref() {
-                            match clipboard.store_text(&request.text) {
-                                Ok(()) => self.scene.record_file_clipboard_export(&request),
-                                Err(error) => fika_log!(
-                                    "[fika-wgpu] clipboard-export-error role={} paths={} error={error}",
-                                    file_clipboard_role_as_str(request.role),
-                                    request.paths.len()
-                                ),
-                            }
-                        } else {
-                            fika_log!(
-                                "[fika-wgpu] clipboard-export-error role={} paths={} error=clipboard-unavailable",
-                                file_clipboard_role_as_str(request.role),
-                                request.paths.len()
-                            );
-                        }
+                    Ok(Some(request)) => self.store_file_clipboard_request(&request),
+                    Ok(None) => {
+                        fika_log!(
+                            "[fika-wgpu] clipboard-export-error role={} target=none",
+                            action.as_str()
+                        );
+                        self.scene.record_task_status(ShellTaskStatus::failed(
+                            "Clipboard failed",
+                            "No file target",
+                            false,
+                        ));
                     }
-                    Ok(None) => fika_log!(
-                        "[fika-wgpu] clipboard-export-error role={} target=none",
-                        action.as_str()
-                    ),
-                    Err(error) => fika_log!(
-                        "[fika-wgpu] clipboard-export-error role={} {error}",
-                        action.as_str()
-                    ),
+                    Err(error) => {
+                        fika_log!(
+                            "[fika-wgpu] clipboard-export-error role={} {error}",
+                            action.as_str()
+                        );
+                        self.scene.record_task_status(ShellTaskStatus::failed(
+                            "Clipboard failed",
+                            error,
+                            false,
+                        ));
+                    }
                 }
                 if let Some(window) = self.window.as_ref() {
                     window.request_redraw();
@@ -1254,19 +1289,38 @@ impl FikaWgpuApp {
                         if let Some(clipboard) = self.clipboard.as_ref() {
                             match clipboard.store_text(&request.text) {
                                 Ok(()) => self.scene.record_copy_location(&request),
-                                Err(error) => fika_log!(
-                                    "[fika-wgpu] copy-location-error path={} error={error}",
-                                    request.path.display()
-                                ),
+                                Err(error) => {
+                                    fika_log!(
+                                        "[fika-wgpu] copy-location-error path={} error={error}",
+                                        request.path.display()
+                                    );
+                                    self.scene.record_task_status(ShellTaskStatus::failed(
+                                        "Copy Location failed",
+                                        format!("{}: {error}", request.path.display()),
+                                        false,
+                                    ));
+                                }
                             }
                         } else {
                             fika_log!(
                                 "[fika-wgpu] copy-location-error path={} error=clipboard-unavailable",
                                 request.path.display()
                             );
+                            self.scene.record_task_status(ShellTaskStatus::failed(
+                                "Copy Location failed",
+                                format!("Clipboard is unavailable for {}", request.path.display()),
+                                false,
+                            ));
                         }
                     }
-                    None => fika_log!("[fika-wgpu] copy-location-error target=none"),
+                    None => {
+                        fika_log!("[fika-wgpu] copy-location-error target=none");
+                        self.scene.record_task_status(ShellTaskStatus::failed(
+                            "Copy Location failed",
+                            "No target",
+                            false,
+                        ));
+                    }
                 }
                 if let Some(window) = self.window.as_ref() {
                     window.request_redraw();
@@ -1278,7 +1332,10 @@ impl FikaWgpuApp {
             | ShellContextMenuAction::SafelyRemoveDevice => {
                 self.perform_device_context_action(event_loop, action)
             }
-            ShellContextMenuAction::Paste => self.paste_from_clipboard(event_loop),
+            ShellContextMenuAction::Paste => self.paste_from_clipboard(event_loop, false),
+            ShellContextMenuAction::PasteAsAdministrator => {
+                self.paste_from_clipboard(event_loop, true)
+            }
         }
     }
 
@@ -1314,7 +1371,7 @@ impl FikaWgpuApp {
             }
             FileKeyboardCommand::Paste => self.paste_from_clipboard_into_active_pane(event_loop),
             FileKeyboardCommand::Rename => {
-                if self.scene.open_rename_dialog_from_active_selection()
+                if self.scene.open_rename_dialog_from_active_selection(false)
                     && let Some(window) = self.window.as_ref()
                 {
                     window.request_redraw();
@@ -1323,7 +1380,17 @@ impl FikaWgpuApp {
             FileKeyboardCommand::Delete => match self.scene.delete_active_selection(size) {
                 Ok(true) => self.present_scene_change(event_loop, "delete-selection"),
                 Ok(false) => {}
-                Err(error) => fika_log!("[fika-wgpu] delete-error {error}"),
+                Err(error) => {
+                    fika_log!("[fika-wgpu] delete-error {error}");
+                    self.scene.record_task_status(ShellTaskStatus::failed(
+                        "Move to Trash failed",
+                        error,
+                        false,
+                    ));
+                    if let Some(window) = self.window.as_ref() {
+                        window.request_redraw();
+                    }
+                }
             },
         }
     }
@@ -1332,11 +1399,21 @@ impl FikaWgpuApp {
         if let Some(clipboard) = self.clipboard.as_ref() {
             match clipboard.store_text(&request.text) {
                 Ok(()) => self.scene.record_file_clipboard_export(request),
-                Err(error) => fika_log!(
-                    "[fika-wgpu] clipboard-export-error role={} paths={} error={error}",
-                    file_clipboard_role_as_str(request.role),
-                    request.paths.len()
-                ),
+                Err(error) => {
+                    fika_log!(
+                        "[fika-wgpu] clipboard-export-error role={} paths={} error={error}",
+                        file_clipboard_role_as_str(request.role),
+                        request.paths.len()
+                    );
+                    self.scene.record_task_status(ShellTaskStatus::failed(
+                        "Clipboard failed",
+                        format!(
+                            "Could not store {}: {error}",
+                            paths_task_summary(&request.paths)
+                        ),
+                        false,
+                    ));
+                }
             }
         } else {
             fika_log!(
@@ -1344,6 +1421,14 @@ impl FikaWgpuApp {
                 file_clipboard_role_as_str(request.role),
                 request.paths.len()
             );
+            self.scene.record_task_status(ShellTaskStatus::failed(
+                "Clipboard failed",
+                format!(
+                    "Clipboard is unavailable for {}",
+                    paths_task_summary(&request.paths)
+                ),
+                false,
+            ));
         }
     }
 
@@ -1355,6 +1440,11 @@ impl FikaWgpuApp {
             Ok(request) => request,
             Err(error) => {
                 fika_log!("[fika-wgpu] service-menu-error action={action_id:?} {error}");
+                self.scene.record_task_status(ShellTaskStatus::failed(
+                    "Action failed",
+                    error,
+                    false,
+                ));
                 if let Some(window) = self.window.as_ref() {
                     window.request_redraw();
                 }
@@ -1363,6 +1453,11 @@ impl FikaWgpuApp {
         };
         let paths = request.paths.clone();
         let app_name = request.app_name.clone();
+        self.scene.record_task_status(ShellTaskStatus::completed(
+            "Started Action",
+            format!("{} with {}", service_menu_target_label(&paths), app_name),
+            false,
+        ));
         std::thread::spawn(move || {
             let result = pollster::block_on(launch_with_systemd_user(request.plan));
             let status = ServiceMenuLaunchResult {
@@ -1389,6 +1484,11 @@ impl FikaWgpuApp {
                 "[fika-wgpu] device-action-error action={} target=none",
                 action.as_str()
             );
+            self.scene.record_task_status(ShellTaskStatus::failed(
+                format!("{} failed", action.label()),
+                "No device target",
+                false,
+            ));
             if let Some(window) = self.window.as_ref() {
                 window.request_redraw();
             }
@@ -1463,6 +1563,11 @@ impl FikaWgpuApp {
             Ok(request) => request,
             Err(error) => {
                 fika_log!("[fika-wgpu] open-with-error app={desktop_id:?} {error}");
+                self.scene.record_task_status(ShellTaskStatus::failed(
+                    "Open With failed",
+                    error,
+                    false,
+                ));
                 if let Some(window) = self.window.as_ref() {
                     window.request_redraw();
                 }
@@ -1471,6 +1576,11 @@ impl FikaWgpuApp {
         };
         let path = request.path.clone();
         let app_name = request.app_name.clone();
+        self.scene.record_task_status(ShellTaskStatus::completed(
+            "Opening With",
+            format!("{} using {}", path_display_label(&path), app_name),
+            false,
+        ));
         std::thread::spawn(move || {
             let result = pollster::block_on(launch_with_systemd_user(request.plan));
             let status = OpenWithLaunchResult {
@@ -1598,6 +1708,11 @@ impl FikaWgpuApp {
             }
             Err(error) => {
                 fika_log!("[fika-wgpu] add-place-error {error}");
+                self.scene.record_task_status(ShellTaskStatus::failed(
+                    "Add to Places failed",
+                    error,
+                    false,
+                ));
                 if let Some(window) = self.window.as_ref() {
                     window.request_redraw();
                 }
@@ -1621,6 +1736,11 @@ impl FikaWgpuApp {
             }
             Err(error) => {
                 fika_log!("[fika-wgpu] remove-place-error {error}");
+                self.scene.record_task_status(ShellTaskStatus::failed(
+                    "Remove Place failed",
+                    error,
+                    false,
+                ));
                 if let Some(window) = self.window.as_ref() {
                     window.request_redraw();
                 }
@@ -1628,11 +1748,11 @@ impl FikaWgpuApp {
         }
     }
 
-    fn move_context_target_to_trash(&mut self, event_loop: &dyn ActiveEventLoop) {
+    fn move_context_target_to_trash(&mut self, event_loop: &dyn ActiveEventLoop, privileged: bool) {
         let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
             return;
         };
-        match self.scene.move_context_target_to_trash(size) {
+        match self.scene.move_context_target_to_trash(size, privileged) {
             Ok(result) if result.changed() => {
                 self.present_scene_change(event_loop, "move-to-trash")
             }
@@ -1643,6 +1763,15 @@ impl FikaWgpuApp {
             }
             Err(error) => {
                 fika_log!("[fika-wgpu] trash-error {error}");
+                self.scene.record_task_status(ShellTaskStatus::failed(
+                    if privileged {
+                        "Administrator move to Trash failed"
+                    } else {
+                        "Move to Trash failed"
+                    },
+                    error,
+                    privileged,
+                ));
                 if let Some(window) = self.window.as_ref() {
                     window.request_redraw();
                 }
@@ -1650,8 +1779,8 @@ impl FikaWgpuApp {
         }
     }
 
-    fn paste_from_clipboard(&mut self, event_loop: &dyn ActiveEventLoop) {
-        self.paste_from_clipboard_with_target(event_loop, true);
+    fn paste_from_clipboard(&mut self, event_loop: &dyn ActiveEventLoop, privileged: bool) {
+        self.paste_from_clipboard_with_target(event_loop, true, privileged);
     }
 
     fn perform_drop_operation_request(
@@ -1671,6 +1800,15 @@ impl FikaWgpuApp {
             }
             Err(error) => {
                 fika_log!("[fika-wgpu] dnd-transfer-error {error}");
+                self.scene.record_task_status(ShellTaskStatus::failed(
+                    if request.privileged {
+                        "Administrator drop failed"
+                    } else {
+                        "Drop failed"
+                    },
+                    error,
+                    request.privileged,
+                ));
                 if let Some(window) = self.window.as_ref() {
                     window.request_redraw();
                 }
@@ -1679,19 +1817,25 @@ impl FikaWgpuApp {
     }
 
     fn paste_from_clipboard_into_active_pane(&mut self, event_loop: &dyn ActiveEventLoop) {
-        self.paste_from_clipboard_with_target(event_loop, false);
+        self.paste_from_clipboard_with_target(event_loop, false, false);
     }
 
     fn paste_from_clipboard_with_target(
         &mut self,
         event_loop: &dyn ActiveEventLoop,
         use_context: bool,
+        privileged: bool,
     ) {
         let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
             return;
         };
         let Some(clipboard) = self.clipboard.as_ref() else {
             fika_log!("[fika-wgpu] paste-error error=clipboard-unavailable");
+            self.scene.record_task_status(ShellTaskStatus::failed(
+                "Paste failed",
+                "Clipboard is unavailable",
+                false,
+            ));
             if let Some(window) = self.window.as_ref() {
                 window.request_redraw();
             }
@@ -1701,6 +1845,11 @@ impl FikaWgpuApp {
             Ok(text) => text,
             Err(error) => {
                 fika_log!("[fika-wgpu] paste-error load={error}");
+                self.scene.record_task_status(ShellTaskStatus::failed(
+                    "Paste failed",
+                    format!("Clipboard read failed: {error}"),
+                    false,
+                ));
                 if let Some(window) = self.window.as_ref() {
                     window.request_redraw();
                 }
@@ -1708,10 +1857,11 @@ impl FikaWgpuApp {
             }
         };
         let paste_result = if use_context {
-            self.scene.paste_clipboard_text_from_context(&text, size)
+            self.scene
+                .paste_clipboard_text_from_context(&text, size, privileged)
         } else {
             self.scene
-                .paste_clipboard_text_into_active_pane(&text, size)
+                .paste_clipboard_text_into_active_pane(&text, size, privileged)
         };
         match paste_result {
             Ok(result) if result.changed() => {
@@ -1729,6 +1879,15 @@ impl FikaWgpuApp {
             }
             Err(error) => {
                 fika_log!("[fika-wgpu] paste-error {error}");
+                self.scene.record_task_status(ShellTaskStatus::failed(
+                    if privileged {
+                        "Administrator paste failed"
+                    } else {
+                        "Paste failed"
+                    },
+                    error,
+                    privileged,
+                ));
                 if let Some(window) = self.window.as_ref() {
                     window.request_redraw();
                 }
@@ -1752,13 +1911,48 @@ impl FikaWgpuApp {
             }
         };
 
-        if let Err(error) = rename_entry_on_disk(&request) {
-            if self.scene.set_rename_dialog_error(error)
-                && let Some(window) = self.window.as_ref()
-            {
-                window.request_redraw();
+        let outcome = match rename_entry_on_disk_explicit(&request) {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                let administrator_available =
+                    !request.privileged && should_attempt_privileged_operation(&error);
+                self.scene.record_task_status(ShellTaskStatus::failed(
+                    "Rename failed",
+                    task_error_detail(&error, administrator_available),
+                    request.privileged,
+                ));
+                if self.scene.set_rename_dialog_error(error)
+                    && let Some(window) = self.window.as_ref()
+                {
+                    window.request_redraw();
+                }
+                return;
             }
-            return;
+        };
+
+        if outcome.privileged {
+            self.scene.record_task_status(ShellTaskStatus::completed(
+                "Administrator rename",
+                format!(
+                    "{} to {}",
+                    path_display_label(&request.source),
+                    outcome
+                        .message
+                        .clone()
+                        .unwrap_or_else(|| request.name.clone())
+                ),
+                true,
+            ));
+        } else {
+            self.scene.record_task_status(ShellTaskStatus::completed(
+                "Renamed",
+                format!(
+                    "{} to {}",
+                    request.original_name,
+                    path_display_label(&request.target)
+                ),
+                false,
+            ));
         }
 
         let affected_dir = request.target.parent().map(Path::to_path_buf);
@@ -1798,13 +1992,44 @@ impl FikaWgpuApp {
             }
         };
 
-        if let Err(error) = create_entry_on_disk(&request) {
-            if self.scene.set_create_dialog_error(error)
-                && let Some(window) = self.window.as_ref()
-            {
-                window.request_redraw();
+        let outcome = match create_entry_on_disk_explicit(&request) {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                let administrator_available =
+                    !request.privileged && should_attempt_privileged_operation(&error);
+                self.scene.record_task_status(ShellTaskStatus::failed(
+                    "Create failed",
+                    task_error_detail(&error, administrator_available),
+                    request.privileged,
+                ));
+                if self.scene.set_create_dialog_error(error)
+                    && let Some(window) = self.window.as_ref()
+                {
+                    window.request_redraw();
+                }
+                return;
             }
-            return;
+        };
+
+        if outcome.privileged {
+            self.scene.record_task_status(ShellTaskStatus::completed(
+                format!("Administrator create {}", request.kind.as_str()),
+                format!(
+                    "{} in {}",
+                    outcome
+                        .message
+                        .clone()
+                        .unwrap_or_else(|| request.name.clone()),
+                    request.parent.display()
+                ),
+                true,
+            ));
+        } else {
+            self.scene.record_task_status(ShellTaskStatus::completed(
+                format!("Created {}", request.kind.as_str()),
+                format!("{} in {}", request.name, request.parent.display()),
+                false,
+            ));
         }
 
         self.scene.close_create_dialog_after_success(&request);
@@ -1827,6 +2052,11 @@ impl FikaWgpuApp {
         let request = match self.scene.open_with_launch_request(&self.mime_applications) {
             Ok(request) => request,
             Err(error) => {
+                self.scene.record_task_status(ShellTaskStatus::failed(
+                    "Open With failed",
+                    error.clone(),
+                    false,
+                ));
                 if self.scene.set_open_with_chooser_error(error)
                     && let Some(window) = self.window.as_ref()
                 {
@@ -1839,6 +2069,11 @@ impl FikaWgpuApp {
         self.scene.close_open_with_chooser_after_success(&request);
         let path = request.path.clone();
         let app_name = request.app_name.clone();
+        self.scene.record_task_status(ShellTaskStatus::completed(
+            "Opening With",
+            format!("{} using {}", path_display_label(&path), app_name),
+            false,
+        ));
         std::thread::spawn(move || {
             let result = pollster::block_on(launch_with_systemd_user(request.plan));
             let status = OpenWithLaunchResult {
@@ -1881,9 +2116,35 @@ impl FikaWgpuApp {
             return;
         };
         match self.scene.reload_current_path(size) {
-            Ok(true) => self.present_scene_change(event_loop, "reload-directory"),
-            Ok(false) => {}
-            Err(error) => fika_log!("[fika-wgpu] reload-error {error}"),
+            Ok(true) => {
+                self.scene.record_task_status(ShellTaskStatus::completed(
+                    "Refreshed",
+                    self.scene.active_pane_path_label(),
+                    false,
+                ));
+                self.present_scene_change(event_loop, "reload-directory");
+            }
+            Ok(false) => {
+                self.scene.record_task_status(ShellTaskStatus::completed(
+                    "Refresh skipped",
+                    self.scene.active_pane_path_label(),
+                    false,
+                ));
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+            }
+            Err(error) => {
+                fika_log!("[fika-wgpu] reload-error {error}");
+                self.scene.record_task_status(ShellTaskStatus::failed(
+                    "Refresh failed",
+                    error,
+                    false,
+                ));
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+            }
         }
     }
 
@@ -2641,20 +2902,21 @@ impl ShellContextTarget {
             Self::Place { .. } => "place",
         }
     }
-
-    fn log_path(&self) -> &Path {
-        match self {
-            Self::Item { path, .. } | Self::Blank { path, .. } | Self::Place { path, .. } => path,
-        }
-    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum ShellContextMenuCommand {
     Builtin(ShellContextMenuAction),
-    CreateEntry(CreateEntryKind),
-    RunServiceMenuAction { action_id: String },
-    OpenWithApplication { desktop_id: String },
+    CreateEntry {
+        kind: CreateEntryKind,
+        privileged: bool,
+    },
+    RunServiceMenuAction {
+        action_id: String,
+    },
+    OpenWithApplication {
+        desktop_id: String,
+    },
     OpenSubmenu(ShellContextSubmenu),
 }
 
@@ -2662,7 +2924,13 @@ impl ShellContextMenuCommand {
     fn as_str(&self) -> &'static str {
         match self {
             Self::Builtin(action) => action.as_str(),
-            Self::CreateEntry(kind) => kind.as_str(),
+            Self::CreateEntry { kind, privileged } => {
+                if *privileged {
+                    kind.admin_as_str()
+                } else {
+                    kind.as_str()
+                }
+            }
             Self::RunServiceMenuAction { .. } => "run-service-menu-action",
             Self::OpenWithApplication { .. } => "open-with-application",
             Self::OpenSubmenu(submenu) => submenu.as_str(),
@@ -2741,13 +3009,16 @@ enum ShellContextMenuAction {
     Cut,
     CopyLocation,
     Rename,
+    RenameAsAdministrator,
     MoveToTrash,
+    MoveToTrashAsAdministrator,
     RestoreFromTrash,
     DeletePermanently,
     EmptyTrash,
     AddToPlaces,
     CreateNew,
     Paste,
+    PasteAsAdministrator,
     SelectAll,
     ToggleHiddenFiles,
     Refresh,
@@ -2770,13 +3041,16 @@ impl ShellContextMenuAction {
             Self::Cut => "Cut",
             Self::CopyLocation => "Copy Location",
             Self::Rename => "Rename",
+            Self::RenameAsAdministrator => "Rename as Administrator",
             Self::MoveToTrash => "Move to Trash",
+            Self::MoveToTrashAsAdministrator => "Move to Trash as Administrator",
             Self::RestoreFromTrash => "Restore to Former Location",
             Self::DeletePermanently => "Delete Permanently",
             Self::EmptyTrash => "Empty Trash",
             Self::AddToPlaces => "Add to Places",
             Self::CreateNew => "Create New",
             Self::Paste => "Paste",
+            Self::PasteAsAdministrator => "Paste as Administrator",
             Self::SelectAll => "Select All",
             Self::ToggleHiddenFiles => "Show Hidden Files",
             Self::Refresh => "Refresh",
@@ -2807,13 +3081,16 @@ impl ShellContextMenuAction {
             Self::Cut => "cut",
             Self::CopyLocation => "copy-location",
             Self::Rename => "rename",
+            Self::RenameAsAdministrator => "rename-as-administrator",
             Self::MoveToTrash => "move-to-trash",
+            Self::MoveToTrashAsAdministrator => "move-to-trash-as-administrator",
             Self::RestoreFromTrash => "restore-from-trash",
             Self::DeletePermanently => "delete-permanently",
             Self::EmptyTrash => "empty-trash",
             Self::AddToPlaces => "add-to-places",
             Self::CreateNew => "create-new",
             Self::Paste => "paste",
+            Self::PasteAsAdministrator => "paste-as-administrator",
             Self::SelectAll => "select-all",
             Self::ToggleHiddenFiles => "toggle-hidden-files",
             Self::Refresh => "refresh",
@@ -2905,10 +3182,20 @@ fn context_menu_icon_style(
             [0.427, 0.157, 0.851, 1.0],
             [0.949, 0.929, 1.000, 1.0],
         ),
+        ShellContextMenuAction::RenameAsAdministrator => (
+            ContextMenuGlyph::Rename,
+            [0.706, 0.325, 0.035, 1.0],
+            [1.000, 0.953, 0.875, 1.0],
+        ),
         ShellContextMenuAction::MoveToTrash | ShellContextMenuAction::EmptyTrash => (
             ContextMenuGlyph::Trash,
             [0.725, 0.110, 0.110, 1.0],
             [1.000, 0.910, 0.910, 1.0],
+        ),
+        ShellContextMenuAction::MoveToTrashAsAdministrator => (
+            ContextMenuGlyph::Trash,
+            [0.706, 0.325, 0.035, 1.0],
+            [1.000, 0.953, 0.875, 1.0],
         ),
         ShellContextMenuAction::RestoreFromTrash => (
             ContextMenuGlyph::Restore,
@@ -2934,6 +3221,11 @@ fn context_menu_icon_style(
             ContextMenuGlyph::Paste,
             [0.016, 0.471, 0.341, 1.0],
             [0.906, 0.973, 0.937, 1.0],
+        ),
+        ShellContextMenuAction::PasteAsAdministrator => (
+            ContextMenuGlyph::Paste,
+            [0.706, 0.325, 0.035, 1.0],
+            [1.000, 0.953, 0.875, 1.0],
         ),
         ShellContextMenuAction::SelectAll => (
             ContextMenuGlyph::Select,
@@ -3079,7 +3371,9 @@ fn context_menu_builtin_actions(target: &ShellContextTarget) -> Vec<ShellContext
         ShellContextMenuAction::Cut,
         ShellContextMenuAction::CopyLocation,
         ShellContextMenuAction::Rename,
+        ShellContextMenuAction::RenameAsAdministrator,
         ShellContextMenuAction::MoveToTrash,
+        ShellContextMenuAction::MoveToTrashAsAdministrator,
         ShellContextMenuAction::Properties,
     ];
     const ITEM_DIR_ACTIONS: &[ShellContextMenuAction] = &[
@@ -3090,7 +3384,9 @@ fn context_menu_builtin_actions(target: &ShellContextTarget) -> Vec<ShellContext
         ShellContextMenuAction::Cut,
         ShellContextMenuAction::CopyLocation,
         ShellContextMenuAction::Rename,
+        ShellContextMenuAction::RenameAsAdministrator,
         ShellContextMenuAction::MoveToTrash,
+        ShellContextMenuAction::MoveToTrashAsAdministrator,
         ShellContextMenuAction::Properties,
     ];
     const TRASH_ITEM_ACTIONS: &[ShellContextMenuAction] = &[
@@ -3103,6 +3399,7 @@ fn context_menu_builtin_actions(target: &ShellContextTarget) -> Vec<ShellContext
         ShellContextMenuAction::CreateNew,
         ShellContextMenuAction::AddToPlaces,
         ShellContextMenuAction::Paste,
+        ShellContextMenuAction::PasteAsAdministrator,
         ShellContextMenuAction::SelectAll,
         ShellContextMenuAction::ToggleHiddenFiles,
         ShellContextMenuAction::SplitPane,
@@ -3257,15 +3554,41 @@ fn context_submenu_actions(
     match submenu {
         ShellContextSubmenu::CreateNew => vec![
             ShellContextMenuItem {
-                command: ShellContextMenuCommand::CreateEntry(CreateEntryKind::Folder),
+                command: ShellContextMenuCommand::CreateEntry {
+                    kind: CreateEntryKind::Folder,
+                    privileged: false,
+                },
                 label: "Folder".to_string(),
                 separator_before: false,
                 submenu: None,
                 icon: ShellContextMenuIcon::Builtin(ShellContextMenuAction::CreateNew),
             },
             ShellContextMenuItem {
-                command: ShellContextMenuCommand::CreateEntry(CreateEntryKind::File),
+                command: ShellContextMenuCommand::CreateEntry {
+                    kind: CreateEntryKind::File,
+                    privileged: false,
+                },
                 label: "Text File".to_string(),
+                separator_before: false,
+                submenu: None,
+                icon: ShellContextMenuIcon::Builtin(ShellContextMenuAction::CreateNew),
+            },
+            ShellContextMenuItem {
+                command: ShellContextMenuCommand::CreateEntry {
+                    kind: CreateEntryKind::Folder,
+                    privileged: true,
+                },
+                label: "Folder as Administrator".to_string(),
+                separator_before: true,
+                submenu: None,
+                icon: ShellContextMenuIcon::Builtin(ShellContextMenuAction::CreateNew),
+            },
+            ShellContextMenuItem {
+                command: ShellContextMenuCommand::CreateEntry {
+                    kind: CreateEntryKind::File,
+                    privileged: true,
+                },
+                label: "Text File as Administrator".to_string(),
                 separator_before: false,
                 submenu: None,
                 icon: ShellContextMenuIcon::Builtin(ShellContextMenuAction::CreateNew),
@@ -3540,6 +3863,13 @@ impl CreateEntryKind {
         }
     }
 
+    fn admin_as_str(self) -> &'static str {
+        match self {
+            Self::Folder => "folder-as-administrator",
+            Self::File => "file-as-administrator",
+        }
+    }
+
     fn default_name(self) -> &'static str {
         match self {
             Self::Folder => "New Folder",
@@ -3553,18 +3883,20 @@ struct ShellCreateDialog {
     pane: ShellPaneId,
     parent: PathBuf,
     kind: CreateEntryKind,
+    privileged: bool,
     name: String,
     error: Option<String>,
     replace_on_insert: bool,
 }
 
 impl ShellCreateDialog {
-    fn new(pane: ShellPaneId, parent: PathBuf, kind: CreateEntryKind) -> Self {
+    fn new(pane: ShellPaneId, parent: PathBuf, kind: CreateEntryKind, privileged: bool) -> Self {
         let name = unique_child_name(&parent, kind.default_name());
         Self {
             pane,
             parent,
             kind,
+            privileged,
             name,
             error: None,
             replace_on_insert: true,
@@ -3579,6 +3911,7 @@ struct CreateEntryRequest {
     path: PathBuf,
     kind: CreateEntryKind,
     name: String,
+    privileged: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -3598,12 +3931,13 @@ struct ShellRenameDialog {
     original_name: String,
     name: String,
     is_dir: bool,
+    privileged: bool,
     error: Option<String>,
     replace_on_insert: bool,
 }
 
 impl ShellRenameDialog {
-    fn new(pane: ShellPaneId, source: PathBuf, is_dir: bool) -> Option<Self> {
+    fn new(pane: ShellPaneId, source: PathBuf, is_dir: bool, privileged: bool) -> Option<Self> {
         let parent = source.parent()?.to_path_buf();
         let original_name = source.file_name()?.to_string_lossy().to_string();
         Some(Self {
@@ -3613,6 +3947,7 @@ impl ShellRenameDialog {
             name: original_name.clone(),
             original_name,
             is_dir,
+            privileged,
             error: None,
             replace_on_insert: true,
         })
@@ -3627,6 +3962,7 @@ struct RenameEntryRequest {
     original_name: String,
     name: String,
     is_dir: bool,
+    privileged: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -3778,7 +4114,10 @@ enum OpenWithChooserClick {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ShellDropMenuCommand {
-    Mode(FileTransferMode),
+    Mode {
+        mode: FileTransferMode,
+        privileged: bool,
+    },
     Cancel,
 }
 
@@ -3823,21 +4162,54 @@ impl ShellDropMenu {
     }
 }
 
-fn drop_menu_items() -> [ShellDropMenuItem; 4] {
+fn drop_menu_items() -> [ShellDropMenuItem; 7] {
     [
         ShellDropMenuItem {
-            command: ShellDropMenuCommand::Mode(FileTransferMode::Copy),
+            command: ShellDropMenuCommand::Mode {
+                mode: FileTransferMode::Copy,
+                privileged: false,
+            },
             label: "Copy Here",
             icon: ShellDropMenuIcon::Copy,
         },
         ShellDropMenuItem {
-            command: ShellDropMenuCommand::Mode(FileTransferMode::Move),
+            command: ShellDropMenuCommand::Mode {
+                mode: FileTransferMode::Move,
+                privileged: false,
+            },
             label: "Move Here",
             icon: ShellDropMenuIcon::Move,
         },
         ShellDropMenuItem {
-            command: ShellDropMenuCommand::Mode(FileTransferMode::Link),
+            command: ShellDropMenuCommand::Mode {
+                mode: FileTransferMode::Link,
+                privileged: false,
+            },
             label: "Link Here",
+            icon: ShellDropMenuIcon::Link,
+        },
+        ShellDropMenuItem {
+            command: ShellDropMenuCommand::Mode {
+                mode: FileTransferMode::Copy,
+                privileged: true,
+            },
+            label: "Copy Here as Administrator",
+            icon: ShellDropMenuIcon::Copy,
+        },
+        ShellDropMenuItem {
+            command: ShellDropMenuCommand::Mode {
+                mode: FileTransferMode::Move,
+                privileged: true,
+            },
+            label: "Move Here as Administrator",
+            icon: ShellDropMenuIcon::Move,
+        },
+        ShellDropMenuItem {
+            command: ShellDropMenuCommand::Mode {
+                mode: FileTransferMode::Link,
+                privileged: true,
+            },
+            label: "Link Here as Administrator",
             icon: ShellDropMenuIcon::Link,
         },
         ShellDropMenuItem {
@@ -3876,6 +4248,62 @@ enum ShellPlaceActivation {
     DeviceAction(DeviceActionRequest),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ShellTaskStatusKind {
+    Completed,
+    Failed,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ShellTaskStatus {
+    label: String,
+    detail: String,
+    kind: ShellTaskStatusKind,
+    privileged: bool,
+}
+
+impl ShellTaskStatus {
+    fn completed(label: impl Into<String>, detail: impl Into<String>, privileged: bool) -> Self {
+        Self {
+            label: label.into(),
+            detail: detail.into(),
+            kind: ShellTaskStatusKind::Completed,
+            privileged,
+        }
+    }
+
+    fn failed(label: impl Into<String>, detail: impl Into<String>, privileged: bool) -> Self {
+        Self {
+            label: label.into(),
+            detail: detail.into(),
+            kind: ShellTaskStatusKind::Failed,
+            privileged,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ShellPrivilegeOutcome {
+    privileged: bool,
+    message: Option<String>,
+}
+
+impl ShellPrivilegeOutcome {
+    fn normal() -> Self {
+        Self {
+            privileged: false,
+            message: None,
+        }
+    }
+
+    fn privileged(message: String) -> Self {
+        Self {
+            privileged: true,
+            message: Some(message),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct FileClipboardExportRequest {
     role: FileClipboardRole,
@@ -3889,15 +4317,21 @@ struct ShellPasteResult {
     success_count: usize,
     failure_count: usize,
     clear_clipboard: bool,
+    privileged: bool,
+    administrator_available: bool,
+    first_error: Option<String>,
 }
 
 impl ShellPasteResult {
-    fn from_transfer(result: &TransferTaskResult) -> Self {
+    fn from_transfer(execution: &ShellTransferExecution) -> Self {
         Self {
-            mode: result.mode,
-            success_count: result.success_count,
-            failure_count: result.failure_count,
-            clear_clipboard: result.clear_clipboard,
+            mode: execution.result.mode,
+            success_count: execution.result.success_count,
+            failure_count: execution.result.failure_count,
+            clear_clipboard: execution.result.clear_clipboard,
+            privileged: execution.privileged,
+            administrator_available: execution.administrator_available,
+            first_error: execution.first_error.clone(),
         }
     }
 
@@ -3906,11 +4340,22 @@ impl ShellPasteResult {
     }
 }
 
+#[derive(Clone, Debug)]
+struct ShellTransferExecution {
+    result: TransferTaskResult,
+    privileged: bool,
+    administrator_available: bool,
+    first_error: Option<String>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct ShellTrashResult {
     success_count: usize,
     failure_count: usize,
     trash_pairs: Vec<(PathBuf, PathBuf)>,
+    privileged: bool,
+    administrator_available: bool,
+    first_error: Option<String>,
 }
 
 impl ShellTrashResult {
@@ -4056,6 +4501,7 @@ struct ShellDropOperationRequest {
     target_dir: PathBuf,
     target: ShellDropTarget,
     mode: FileTransferMode,
+    privileged: bool,
 }
 
 impl ShellDropTarget {
@@ -4103,6 +4549,7 @@ struct ShellScene {
     place_press: Option<ShellPlacePress>,
     dnd_hover_target: Option<ShellDropTarget>,
     pending_drop_request: Option<ShellDropOperationRequest>,
+    task_statuses: VecDeque<ShellTaskStatus>,
     rubber_band: Option<RubberBand>,
     scale_factor: f32,
     hit_tests: u64,
@@ -4133,6 +4580,7 @@ struct ShellScene {
     split_pane_changes: u64,
     dnd_hover_changes: u64,
     dnd_drop_requests: u64,
+    task_status_changes: u64,
 }
 
 impl ShellScene {
@@ -4206,6 +4654,7 @@ impl ShellScene {
             place_press: None,
             dnd_hover_target: None,
             pending_drop_request: None,
+            task_statuses: VecDeque::new(),
             rubber_band: None,
             scale_factor: 1.0,
             hit_tests: 0,
@@ -4236,6 +4685,7 @@ impl ShellScene {
             split_pane_changes: 0,
             dnd_hover_changes: 0,
             dnd_drop_requests: 0,
+            task_status_changes: 0,
         })
     }
 
@@ -5701,12 +6151,45 @@ impl ShellScene {
             .scale_metric(PLACES_SIDEBAR_PANEL_MARGIN_BOTTOM)
             .min(sidebar.height / 3.0);
         let y = sidebar.y;
+        let task_top = self
+            .places_task_area_rect(size)
+            .map(|rect| rect.y - self.scale_metric(PLACES_TASK_AREA_GAP))
+            .unwrap_or_else(|| sidebar.bottom() - margin_bottom);
         ViewRect {
             x: sidebar.x + margin_x,
             y,
             width: (sidebar.width - margin_x * 2.0).max(1.0),
-            height: (sidebar.bottom() - y - margin_bottom).max(1.0),
+            height: (task_top - y).max(1.0),
         }
+    }
+
+    fn places_task_area_rect(&self, size: PhysicalSize<u32>) -> Option<ViewRect> {
+        if self.task_statuses.is_empty() {
+            return None;
+        }
+        let sidebar = self.places_sidebar_rect(size);
+        if sidebar.width <= 0.0 || sidebar.height <= 0.0 {
+            return None;
+        }
+        let margin_x = self
+            .scale_metric(PLACES_SIDEBAR_PANEL_MARGIN_X)
+            .min(sidebar.width / 3.0);
+        let margin_bottom = self
+            .scale_metric(PLACES_SIDEBAR_PANEL_MARGIN_BOTTOM)
+            .min(sidebar.height / 3.0);
+        let min_height = self.scale_metric(52.0);
+        let desired_height = self.scale_metric(PLACES_TASK_AREA_HEIGHT);
+        let max_height = (sidebar.height - self.scale_metric(72.0)).max(0.0);
+        let height = desired_height.min(max_height);
+        if height < min_height {
+            return None;
+        }
+        Some(ViewRect {
+            x: sidebar.x + margin_x,
+            y: sidebar.bottom() - margin_bottom - height,
+            width: (sidebar.width - margin_x * 2.0).max(1.0),
+            height,
+        })
     }
 
     fn places_content_height(&self) -> f32 {
@@ -5836,7 +6319,7 @@ impl ShellScene {
                 path: place.path.clone(),
             });
         }
-        if self.places_visible && self.places_sidebar_rect(size).contains(point) {
+        if self.places_visible && self.places_panel_rect(size).contains(point) {
             return Some(ShellDropTarget::PlacesBlank);
         }
 
@@ -6345,20 +6828,22 @@ impl ShellScene {
             return None;
         };
         match command {
-            Some(ShellDropMenuCommand::Mode(mode)) => {
+            Some(ShellDropMenuCommand::Mode { mode, privileged }) => {
                 let request = ShellDropOperationRequest {
                     sources: menu.sources,
                     target_dir: menu.target_dir,
                     target: menu.target,
                     mode,
+                    privileged,
                 };
                 self.pending_drop_request = Some(request.clone());
                 self.dnd_drop_requests += 1;
                 fika_log!(
-                    "[fika-wgpu] dnd-drop-request sources={} target={} mode={} requests={}",
+                    "[fika-wgpu] dnd-drop-request sources={} target={} mode={} privileged={} requests={}",
                     request.sources.len(),
                     request.target_dir.display(),
                     request.mode.operation(),
+                    request.privileged as u8,
                     self.dnd_drop_requests
                 );
                 Some(request)
@@ -6385,25 +6870,58 @@ impl ShellScene {
             return Err("remote drop source is not available yet".to_string());
         }
 
-        let transfer = transfer_paths_result(
-            WGPU_SHELL_PANE_ID,
+        let transfer = transfer_paths_with_privilege(
             request.target_dir.clone(),
             request.mode,
             request.sources.clone(),
             request.mode.label(),
             false,
-            None,
+            request.privileged,
         );
         let result = ShellPasteResult::from_transfer(&transfer);
         self.paste_changes += 1;
         fika_log!(
-            "[fika-wgpu] dnd-transfer mode={} target={} success={} failure={} changes={}",
+            "[fika-wgpu] dnd-transfer mode={} target={} success={} failure={} privileged={} changes={}",
             result.mode.label(),
             request.target_dir.display(),
             result.success_count,
             result.failure_count,
+            result.privileged as u8,
             self.paste_changes
         );
+        self.record_task_status(if result.failure_count > 0 {
+            ShellTaskStatus::failed(
+                if result.privileged {
+                    format!("Administrator {} failed", result.mode.label())
+                } else {
+                    format!("{} failed", result.mode.label())
+                },
+                transfer_task_detail(
+                    result.success_count,
+                    result.failure_count,
+                    &request.target_dir,
+                    result.first_error.as_deref(),
+                    result.administrator_available,
+                ),
+                result.privileged,
+            )
+        } else {
+            ShellTaskStatus::completed(
+                if result.privileged {
+                    format!("Administrator {}", result.mode.label())
+                } else {
+                    result.mode.label().to_string()
+                },
+                transfer_task_detail(
+                    result.success_count,
+                    result.failure_count,
+                    &request.target_dir,
+                    None,
+                    false,
+                ),
+                result.privileged,
+            )
+        });
 
         if result.changed() {
             self.context_target = None;
@@ -6413,7 +6931,7 @@ impl ShellScene {
             self.create_dialog = None;
             self.rename_dialog = None;
             self.rubber_band = None;
-            for affected_dir in transfer.refresh_dirs {
+            for affected_dir in transfer.result.refresh_dirs {
                 self.reload_panes_showing_path(&affected_dir, size)?;
             }
         }
@@ -6792,6 +7310,11 @@ impl ShellScene {
             request.uri,
             self.open_changes
         );
+        self.record_task_status(ShellTaskStatus::completed(
+            "Opened",
+            request.path.display().to_string(),
+            false,
+        ));
         Ok(true)
     }
 
@@ -6803,6 +7326,11 @@ impl ShellScene {
             request.uri,
             self.open_changes
         );
+        self.record_task_status(ShellTaskStatus::completed(
+            "Opened",
+            request.path.display().to_string(),
+            false,
+        ));
     }
 
     fn open_open_with_chooser_from_context(&mut self, cache: &MimeApplicationCache) -> bool {
@@ -6810,6 +7338,7 @@ impl ShellScene {
             Ok(chooser) => chooser,
             Err(error) => {
                 fika_log!("[fika-wgpu] open-with-error {error}");
+                self.record_task_status(ShellTaskStatus::failed("Open With failed", error, false));
                 return false;
             }
         };
@@ -7136,24 +7665,39 @@ impl ShellScene {
         self.places_changes += 1;
         self.refresh_hover(size);
         match &result.result {
-            Ok(mount_point) => fika_log!(
-                "[fika-wgpu] device-action-finished action={} id={:?} label={:?} mount={} changes={}",
-                request.action.as_str(),
-                result.device_id,
-                result.label,
-                mount_point
+            Ok(mount_point) => {
+                let mount_detail = mount_point
                     .as_ref()
                     .map(|path| path.display().to_string())
-                    .unwrap_or_else(|| "-".to_string()),
-                self.places_changes
-            ),
-            Err(error) => fika_log!(
-                "[fika-wgpu] device-action-finished action={} id={:?} label={:?} error={error} changes={}",
-                request.action.as_str(),
-                result.device_id,
-                result.label,
-                self.places_changes
-            ),
+                    .unwrap_or_else(|| "-".to_string());
+                fika_log!(
+                    "[fika-wgpu] device-action-finished action={} id={:?} label={:?} mount={} changes={}",
+                    request.action.as_str(),
+                    result.device_id,
+                    result.label,
+                    mount_detail,
+                    self.places_changes
+                );
+                self.record_task_status(ShellTaskStatus::completed(
+                    request.action.label(),
+                    format!("{} | mount {}", request.label, mount_detail),
+                    false,
+                ));
+            }
+            Err(error) => {
+                fika_log!(
+                    "[fika-wgpu] device-action-finished action={} id={:?} label={:?} error={error} changes={}",
+                    request.action.as_str(),
+                    result.device_id,
+                    result.label,
+                    self.places_changes
+                );
+                self.record_task_status(ShellTaskStatus::failed(
+                    format!("{} failed", request.action.label()),
+                    format!("{} | {error}", request.label),
+                    false,
+                ));
+            }
         }
 
         if result.result.is_ok() && !matches!(request.operation, DevicePlaceOperation::Mount) {
@@ -7193,6 +7737,30 @@ impl ShellScene {
             request.text,
             self.copy_location_changes
         );
+        self.record_task_status(ShellTaskStatus::completed(
+            "Copied Location",
+            request.path.display().to_string(),
+            false,
+        ));
+    }
+
+    fn record_task_status(&mut self, status: ShellTaskStatus) {
+        const MAX_TASK_STATUSES: usize = 4;
+        self.task_statuses.push_front(status);
+        while self.task_statuses.len() > MAX_TASK_STATUSES {
+            self.task_statuses.pop_back();
+        }
+        self.task_status_changes += 1;
+        if let Some(status) = self.task_statuses.front() {
+            fika_log!(
+                "[fika-wgpu] task-status kind={:?} label={:?} privileged={} detail={:?} changes={}",
+                status.kind,
+                status.label,
+                status.privileged as u8,
+                status.detail,
+                self.task_status_changes
+            );
+        }
     }
 
     fn context_target_add_place_candidate(&self) -> Result<(String, PathBuf), String> {
@@ -7226,6 +7794,11 @@ impl ShellScene {
                 path.display(),
                 self.places_changes
             );
+            self.record_task_status(ShellTaskStatus::failed(
+                "Add to Places skipped",
+                format!("{label} is already in Places"),
+                false,
+            ));
             return Ok(false);
         }
         if !add_user_place_at_path(user_places_path, &path, label.clone())? {
@@ -7235,6 +7808,11 @@ impl ShellScene {
                 path.display(),
                 self.places_changes
             );
+            self.record_task_status(ShellTaskStatus::failed(
+                "Add to Places skipped",
+                format!("{label} was not added"),
+                false,
+            ));
             return Ok(false);
         }
 
@@ -7255,6 +7833,11 @@ impl ShellScene {
             self.places.len(),
             self.places_changes
         );
+        self.record_task_status(ShellTaskStatus::completed(
+            "Added to Places",
+            format!("{label} -> {}", path.display()),
+            false,
+        ));
         Ok(true)
     }
 
@@ -7284,6 +7867,11 @@ impl ShellScene {
                 path.display(),
                 self.places_changes
             );
+            self.record_task_status(ShellTaskStatus::failed(
+                "Remove Place skipped",
+                format!("{label} was not removed"),
+                false,
+            ));
             return Ok(false);
         }
 
@@ -7303,6 +7891,11 @@ impl ShellScene {
             self.places.len(),
             self.places_changes
         );
+        self.record_task_status(ShellTaskStatus::completed(
+            "Removed Place",
+            format!("{label} -> {}", path.display()),
+            false,
+        ));
         Ok(true)
     }
 
@@ -7348,6 +7941,15 @@ impl ShellScene {
             request.text.len(),
             self.file_clipboard_changes
         );
+        let label = match request.role {
+            FileClipboardRole::Copy => "Copied to Clipboard",
+            FileClipboardRole::Cut => "Cut to Clipboard",
+        };
+        self.record_task_status(ShellTaskStatus::completed(
+            label,
+            paths_task_summary(&request.paths),
+            false,
+        ));
     }
 
     fn context_target_paste_directory(&self) -> Option<(ShellPaneId, PathBuf)> {
@@ -7367,23 +7969,25 @@ impl ShellScene {
         &mut self,
         clipboard_text: &str,
         size: PhysicalSize<u32>,
+        privileged: bool,
     ) -> Result<ShellPasteResult, String> {
         let (target_pane, target_dir) = self
             .context_target_paste_directory()
             .or_else(|| self.active_pane_paste_directory())
             .ok_or_else(|| "no paste target pane".to_string())?;
-        self.paste_clipboard_text_to_pane(target_pane, target_dir, clipboard_text, size)
+        self.paste_clipboard_text_to_pane(target_pane, target_dir, clipboard_text, size, privileged)
     }
 
     fn paste_clipboard_text_into_active_pane(
         &mut self,
         clipboard_text: &str,
         size: PhysicalSize<u32>,
+        privileged: bool,
     ) -> Result<ShellPasteResult, String> {
         let (target_pane, target_dir) = self
             .active_pane_paste_directory()
             .ok_or_else(|| "no paste target pane".to_string())?;
-        self.paste_clipboard_text_to_pane(target_pane, target_dir, clipboard_text, size)
+        self.paste_clipboard_text_to_pane(target_pane, target_dir, clipboard_text, size, privileged)
     }
 
     fn paste_clipboard_text_to_pane(
@@ -7392,6 +7996,7 @@ impl ShellScene {
         target_dir: PathBuf,
         clipboard_text: &str,
         size: PhysicalSize<u32>,
+        privileged: bool,
     ) -> Result<ShellPasteResult, String> {
         if is_network_path(&target_dir) {
             return Err("remote paste target is not available yet".to_string());
@@ -7408,30 +8013,72 @@ impl ShellScene {
                 FileClipboardRole::Copy => FileTransferMode::Copy,
                 FileClipboardRole::Cut => FileTransferMode::Move,
             };
-            transfer_paths_result(
-                WGPU_SHELL_PANE_ID,
+            transfer_paths_with_privilege(
                 target_dir.clone(),
                 mode,
                 payload.paths,
                 "Paste",
                 payload.role == FileClipboardRole::Cut,
-                None,
+                privileged,
             )
+        } else if privileged {
+            return Err(
+                "administrator paste is only available for file clipboard items".to_string(),
+            );
         } else {
-            paste_text_result(WGPU_SHELL_PANE_ID, target_dir.clone(), clipboard_text)
+            ShellTransferExecution {
+                result: paste_text_result(WGPU_SHELL_PANE_ID, target_dir.clone(), clipboard_text),
+                privileged: false,
+                administrator_available: false,
+                first_error: None,
+            }
         };
 
         let result = ShellPasteResult::from_transfer(&transfer);
         self.paste_changes += 1;
         fika_log!(
-            "[fika-wgpu] paste mode={} target={} success={} failure={} clear_clipboard={} changes={}",
+            "[fika-wgpu] paste mode={} target={} success={} failure={} clear_clipboard={} privileged={} changes={}",
             result.mode.label(),
             target_dir.display(),
             result.success_count,
             result.failure_count,
             result.clear_clipboard as u8,
+            result.privileged as u8,
             self.paste_changes
         );
+        self.record_task_status(if result.failure_count > 0 {
+            ShellTaskStatus::failed(
+                if result.privileged {
+                    "Administrator paste failed"
+                } else {
+                    "Paste failed"
+                },
+                transfer_task_detail(
+                    result.success_count,
+                    result.failure_count,
+                    &target_dir,
+                    result.first_error.as_deref(),
+                    result.administrator_available,
+                ),
+                result.privileged,
+            )
+        } else {
+            ShellTaskStatus::completed(
+                if result.privileged {
+                    "Administrator paste"
+                } else {
+                    "Pasted"
+                },
+                transfer_task_detail(
+                    result.success_count,
+                    result.failure_count,
+                    &target_dir,
+                    None,
+                    false,
+                ),
+                result.privileged,
+            )
+        });
 
         if result.changed() {
             self.context_target = None;
@@ -7503,7 +8150,7 @@ impl ShellScene {
         Ok(Some(paths))
     }
 
-    fn open_rename_dialog_from_active_selection(&mut self) -> bool {
+    fn open_rename_dialog_from_active_selection(&mut self, privileged: bool) -> bool {
         let pane = self.active_pane();
         let Some(selection) = self.pane_selection(pane) else {
             fika_log!("[fika-wgpu] rename-error target=none");
@@ -7525,7 +8172,8 @@ impl ShellScene {
             fika_log!("[fika-wgpu] rename-error target=none");
             return false;
         };
-        let Some(dialog) = ShellRenameDialog::new(pane, path.clone(), entry.is_dir) else {
+        let Some(dialog) = ShellRenameDialog::new(pane, path.clone(), entry.is_dir, privileged)
+        else {
             fika_log!(
                 "[fika-wgpu] rename-error path={} error=no-file-name",
                 path.display()
@@ -7567,19 +8215,46 @@ impl ShellScene {
         if paths.iter().any(|path| is_network_path(path)) {
             return Err("remote trash is not available yet".to_string());
         }
-        let summary = file_ops::trash_paths(&paths);
-        let changed = !summary.successes.is_empty();
+        let result = match trash_paths_with_privilege(&paths, false) {
+            Ok(result) => result,
+            Err(error) => {
+                self.record_task_status(ShellTaskStatus::failed(
+                    "Move to Trash failed",
+                    error.clone(),
+                    false,
+                ));
+                return Err(error);
+            }
+        };
+        let changed = result.changed();
         self.trash_changes += 1;
         fika_log!(
-            "[fika-wgpu] trash paths={} success={} failure={} changes={}",
+            "[fika-wgpu] trash paths={} success={} failure={} privileged={} changes={}",
             paths.len(),
-            summary.successes.len(),
-            summary.failures.len(),
+            result.success_count,
+            result.failure_count,
+            result.privileged as u8,
             self.trash_changes
         );
-        for failure in &summary.failures {
-            fika_log!("[fika-wgpu] trash-failure {failure}");
-        }
+        self.record_task_status(if result.failure_count > 0 {
+            ShellTaskStatus::failed(
+                "Move to Trash failed",
+                transfer_task_detail(
+                    result.success_count,
+                    result.failure_count,
+                    Path::new("Trash"),
+                    result.first_error.as_deref(),
+                    result.administrator_available,
+                ),
+                result.privileged,
+            )
+        } else {
+            ShellTaskStatus::completed(
+                "Moved to Trash",
+                paths_task_summary(&paths),
+                result.privileged,
+            )
+        });
         if changed {
             self.context_target = None;
             self.context_menu = None;
@@ -7722,6 +8397,28 @@ impl ShellScene {
                 conflict.trash_path.display()
             );
         }
+        let label = match &result.operation {
+            TrashViewOperation::Restore { .. } => "Restore from Trash",
+            TrashViewOperation::DeletePermanently => "Delete Permanently",
+            TrashViewOperation::Empty => "Empty Trash",
+        };
+        let detail = if result.failure_count > 0 || !result.restore_conflicts.is_empty() {
+            format!(
+                "{} completed, {} failed, {} conflict(s)",
+                result.success_count,
+                result.failure_count,
+                result.restore_conflicts.len()
+            )
+        } else {
+            count_label(result.success_count, "item", "items")
+        };
+        self.record_task_status(
+            if result.failure_count > 0 || !result.restore_conflicts.is_empty() {
+                ShellTaskStatus::failed(format!("{label} needs attention"), detail, false)
+            } else {
+                ShellTaskStatus::completed(label, detail, false)
+            },
+        );
 
         if let Some(dialog) = ShellTrashConflictDialog::new(result.restore_conflicts.clone()) {
             self.trash_conflict_dialog = Some(dialog);
@@ -7761,6 +8458,7 @@ impl ShellScene {
     fn move_context_target_to_trash(
         &mut self,
         size: PhysicalSize<u32>,
+        privileged: bool,
     ) -> Result<ShellTrashResult, String> {
         let pane_to_reload = self
             .context_target_pane()
@@ -7773,27 +8471,56 @@ impl ShellScene {
             return Err("remote trash is not available yet".to_string());
         }
 
-        let summary = file_ops::trash_paths(&paths);
-        let result = ShellTrashResult {
-            success_count: summary.successes.len(),
-            failure_count: summary.failures.len(),
-            trash_pairs: summary
-                .successes
-                .iter()
-                .map(|record| (record.original_path.clone(), record.trash_path.clone()))
-                .collect(),
+        let result = match trash_paths_with_privilege(&paths, privileged) {
+            Ok(result) => result,
+            Err(error) => {
+                self.record_task_status(ShellTaskStatus::failed(
+                    "Move to Trash failed",
+                    task_error_detail(
+                        &error,
+                        !privileged && should_attempt_privileged_operation(&error),
+                    ),
+                    privileged,
+                ));
+                return Err(error);
+            }
         };
         self.trash_changes += 1;
         fika_log!(
-            "[fika-wgpu] trash paths={} success={} failure={} changes={}",
+            "[fika-wgpu] trash paths={} success={} failure={} privileged={} changes={}",
             paths.len(),
             result.success_count,
             result.failure_count,
+            result.privileged as u8,
             self.trash_changes
         );
-        for failure in &summary.failures {
-            fika_log!("[fika-wgpu] trash-failure {failure}");
-        }
+        self.record_task_status(if result.failure_count > 0 {
+            ShellTaskStatus::failed(
+                if result.privileged {
+                    "Administrator move to Trash failed"
+                } else {
+                    "Move to Trash failed"
+                },
+                transfer_task_detail(
+                    result.success_count,
+                    result.failure_count,
+                    Path::new("Trash"),
+                    result.first_error.as_deref(),
+                    result.administrator_available,
+                ),
+                result.privileged,
+            )
+        } else {
+            ShellTaskStatus::completed(
+                if result.privileged {
+                    "Administrator move to Trash"
+                } else {
+                    "Moved to Trash"
+                },
+                paths_task_summary(&paths),
+                result.privileged,
+            )
+        });
 
         if !result.changed() {
             return Ok(result);
@@ -7906,10 +8633,14 @@ impl ShellScene {
     }
 
     fn open_create_dialog_from_context(&mut self) -> bool {
-        self.open_create_dialog_from_context_with_kind(CreateEntryKind::Folder)
+        self.open_create_dialog_from_context_with_kind(CreateEntryKind::Folder, false)
     }
 
-    fn open_create_dialog_from_context_with_kind(&mut self, kind: CreateEntryKind) -> bool {
+    fn open_create_dialog_from_context_with_kind(
+        &mut self,
+        kind: CreateEntryKind,
+        privileged: bool,
+    ) -> bool {
         let Some(ShellContextTarget::Blank { pane, path, .. }) = self.context_target.as_ref()
         else {
             fika_log!(
@@ -7921,7 +8652,7 @@ impl ShellScene {
             );
             return false;
         };
-        let dialog = ShellCreateDialog::new(*pane, path.clone(), kind);
+        let dialog = ShellCreateDialog::new(*pane, path.clone(), kind, privileged);
         let changed = self.create_dialog.as_ref() != Some(&dialog);
         self.create_dialog = Some(dialog);
         self.properties_overlay = None;
@@ -7930,10 +8661,11 @@ impl ShellScene {
             self.create_changes += 1;
             if let Some(dialog) = self.create_dialog.as_ref() {
                 fika_log!(
-                    "[fika-wgpu] create-new open=1 kind={} parent={} name={:?} changes={}",
+                    "[fika-wgpu] create-new open=1 kind={} parent={} name={:?} privileged={} changes={}",
                     dialog.kind.as_str(),
                     dialog.parent.display(),
                     dialog.name,
+                    dialog.privileged as u8,
                     self.create_changes
                 );
             }
@@ -8010,6 +8742,7 @@ impl ShellScene {
             path,
             kind: dialog.kind,
             name: name.to_string(),
+            privileged: dialog.privileged,
         })
     }
 
@@ -8115,10 +8848,11 @@ impl ShellScene {
     fn log_create_dialog_state(&self) {
         match self.create_dialog.as_ref() {
             Some(dialog) => fika_log!(
-                "[fika-wgpu] create-new open=1 kind={} parent={} name={:?} error={:?} changes={}",
+                "[fika-wgpu] create-new open=1 kind={} parent={} name={:?} privileged={} error={:?} changes={}",
                 dialog.kind.as_str(),
                 dialog.parent.display(),
                 dialog.name,
+                dialog.privileged as u8,
                 dialog.error,
                 self.create_changes
             ),
@@ -8133,7 +8867,7 @@ impl ShellScene {
         self.rename_dialog.is_some()
     }
 
-    fn open_rename_dialog_from_context(&mut self) -> bool {
+    fn open_rename_dialog_from_context(&mut self, privileged: bool) -> bool {
         let Some(ShellContextTarget::Item {
             pane, path, is_dir, ..
         }) = self.context_target.as_ref()
@@ -8147,7 +8881,7 @@ impl ShellScene {
             );
             return false;
         };
-        let Some(dialog) = ShellRenameDialog::new(*pane, path.clone(), *is_dir) else {
+        let Some(dialog) = ShellRenameDialog::new(*pane, path.clone(), *is_dir, privileged) else {
             fika_log!(
                 "[fika-wgpu] rename-error path={} error=no-file-name",
                 path.display()
@@ -8163,10 +8897,11 @@ impl ShellScene {
             self.rename_changes += 1;
             if let Some(dialog) = self.rename_dialog.as_ref() {
                 fika_log!(
-                    "[fika-wgpu] rename open=1 source={} name={:?} dir={} changes={}",
+                    "[fika-wgpu] rename open=1 source={} name={:?} dir={} privileged={} changes={}",
                     dialog.source.display(),
                     dialog.name,
                     dialog.is_dir as u8,
+                    dialog.privileged as u8,
                     self.rename_changes
                 );
             }
@@ -8235,6 +8970,7 @@ impl ShellScene {
             original_name: dialog.original_name.clone(),
             name: name.to_string(),
             is_dir: dialog.is_dir,
+            privileged: dialog.privileged,
         })
     }
 
@@ -8268,10 +9004,11 @@ impl ShellScene {
         }
         self.rename_changes += 1;
         fika_log!(
-            "[fika-wgpu] rename source={} target={} dir={} changes={}",
+            "[fika-wgpu] rename source={} target={} dir={} privileged={} changes={}",
             request.source.display(),
             request.target.display(),
             request.is_dir as u8,
+            request.privileged as u8,
             self.rename_changes
         );
         true
@@ -8302,9 +9039,10 @@ impl ShellScene {
     fn log_rename_dialog_state(&self) {
         match self.rename_dialog.as_ref() {
             Some(dialog) => fika_log!(
-                "[fika-wgpu] rename open=1 source={} name={:?} error={:?} changes={}",
+                "[fika-wgpu] rename open=1 source={} name={:?} privileged={} error={:?} changes={}",
                 dialog.source.display(),
                 dialog.name,
+                dialog.privileged as u8,
                 dialog.error,
                 self.rename_changes
             ),
@@ -8871,7 +9609,6 @@ impl ShellScene {
         let height = size.height.max(1) as f32;
         let pane = self.pane_rect(size);
         let top_bar_height = self.top_bar_height();
-        let status_bar = self.status_bar_rect(size);
         let left_projection = self
             .pane_projection(ShellPaneId::FIRST, size)
             .expect("first pane is open");
@@ -8953,7 +9690,7 @@ impl ShellScene {
         self.push_rubber_band(&mut vertices, content_clip, size);
         let content_scrollbar_visible =
             self.push_content_scrollbar_for_projection(&mut vertices, &left_projection, size);
-        self.push_status_bar(&mut vertices, text, size, visible_items, status_bar);
+        self.push_pane_status_bar(&mut vertices, text, &left_projection, size);
         self.push_pane_borders(&mut vertices, size);
         self.push_split_pane(&mut vertices, text, icons, size);
         self.queue_thumbnail_read_ahead_for_projection(&left_projection, icons);
@@ -9425,14 +10162,7 @@ impl ShellScene {
             self.push_pane_item(vertices, text, icons, &projection, item, size);
         }
         let _ = self.push_content_scrollbar_for_projection(vertices, &projection, size);
-        self.push_split_status_bar(
-            vertices,
-            text,
-            split_view,
-            status_bar,
-            projection.visible_items.len(),
-            size,
-        );
+        self.push_pane_status_bar(vertices, text, &projection, size);
     }
 
     fn push_split_details_header(
@@ -9491,15 +10221,15 @@ impl ShellScene {
         }
     }
 
-    fn push_split_status_bar(
+    fn push_pane_status_bar(
         &self,
         vertices: &mut Vec<QuadVertex>,
         text: &mut TextFrameBuilder<'_>,
-        pane: ShellPaneView<'_>,
-        rect: ViewRect,
-        visible_items: usize,
+        projection: &ShellPaneProjection<'_>,
         size: PhysicalSize<u32>,
     ) {
+        let pane = projection.view;
+        let rect = projection.geometry.status_bar;
         push_rect(vertices, rect, [1.000, 1.000, 1.000, 1.0], size);
         push_rect(
             vertices,
@@ -9512,15 +10242,8 @@ impl ShellScene {
             [0.784, 0.808, 0.839, 1.0],
             size,
         );
-        let status = format!(
-            "{} entries ({} dirs, {} files) | {} visible | {}",
-            pane.entries.len(),
-            pane.dir_count,
-            pane.entries.len().saturating_sub(pane.dir_count),
-            visible_items,
-            pane.view_mode.label()
-        );
-        text.push_label(
+        let status = self.pane_status_text(pane, projection.visible_items.len());
+        text.push_label_aligned(
             &status,
             ViewRect {
                 x: rect.x + self.scale_metric(12.0),
@@ -9530,6 +10253,7 @@ impl ShellScene {
             },
             rect,
             TextColor::rgb(89, 99, 110),
+            LabelAlignment::Start,
         );
     }
 
@@ -9913,6 +10637,105 @@ impl ShellScene {
         if let Some((track, thumb)) = self.places_scrollbar_rects(size) {
             push_scrollbar(vertices, track, thumb, panel, size);
         }
+        self.push_places_task_area(vertices, text, size);
+    }
+
+    fn push_places_task_area(
+        &self,
+        vertices: &mut Vec<QuadVertex>,
+        text: &mut TextFrameBuilder<'_>,
+        size: PhysicalSize<u32>,
+    ) {
+        let Some(rect) = self.places_task_area_rect(size) else {
+            return;
+        };
+        let sidebar = self.places_sidebar_rect(size);
+        let radius = self.scale_metric(10.0);
+        push_clipped_rounded_rect(
+            vertices,
+            rect,
+            sidebar,
+            radius,
+            [0.784, 0.808, 0.839, 1.0],
+            size,
+        );
+        let Some(inner) = inset_rect(rect, self.scale_metric(1.0)) else {
+            return;
+        };
+        push_clipped_rounded_rect(
+            vertices,
+            inner,
+            sidebar,
+            (radius - self.scale_metric(1.0)).max(1.0),
+            [0.973, 0.976, 0.984, 1.0],
+            size,
+        );
+
+        let padding = self.scale_metric(10.0);
+        let title_height = self.small_text_line_height();
+        text.push_label_aligned(
+            "Tasks",
+            ViewRect {
+                x: inner.x + padding,
+                y: inner.y + self.scale_metric(7.0),
+                width: (inner.width - padding * 2.0).max(1.0),
+                height: title_height,
+            },
+            inner,
+            TextColor::rgb(71, 85, 105),
+            LabelAlignment::Start,
+        );
+
+        let row_height = self.scale_metric(PLACES_TASK_ROW_HEIGHT);
+        let mut y = inner.y + self.scale_metric(26.0);
+        let max_rows = ((inner.bottom() - y - self.scale_metric(4.0)) / row_height)
+            .floor()
+            .max(0.0) as usize;
+        for status in self.task_statuses.iter().take(max_rows) {
+            let dot_size = self.scale_metric(7.0);
+            let dot = ViewRect {
+                x: inner.x + padding,
+                y: y + self.scale_metric(5.0),
+                width: dot_size,
+                height: dot_size,
+            };
+            let color = match status.kind {
+                ShellTaskStatusKind::Completed => [0.102, 0.514, 0.286, 1.0],
+                ShellTaskStatusKind::Failed => [0.820, 0.184, 0.184, 1.0],
+            };
+            push_clipped_rounded_rect(vertices, dot, inner, dot_size / 2.0, color, size);
+            let text_x = dot.right() + self.scale_metric(8.0);
+            text.push_label_aligned(
+                &status.label,
+                ViewRect {
+                    x: text_x,
+                    y,
+                    width: (inner.right() - text_x - padding).max(1.0),
+                    height: self.small_text_line_height(),
+                },
+                inner,
+                TextColor::rgb(36, 41, 47),
+                LabelAlignment::Start,
+            );
+            let detail = if status.privileged {
+                format!("{} | administrator", status.detail)
+            } else {
+                status.detail.clone()
+            };
+            text.push_label_aligned(
+                &detail,
+                ViewRect {
+                    x: text_x,
+                    y: y + self.scale_metric(16.0),
+                    width: (inner.right() - text_x - padding).max(1.0),
+                    height: self.small_text_line_height(),
+                },
+                inner,
+                TextColor::rgb(107, 114, 128),
+                LabelAlignment::Start,
+            );
+            y += row_height;
+        }
     }
 
     fn push_details_header(
@@ -10048,94 +10871,48 @@ impl ShellScene {
         );
     }
 
-    fn push_status_bar(
-        &self,
-        vertices: &mut Vec<QuadVertex>,
-        text: &mut TextFrameBuilder<'_>,
-        size: PhysicalSize<u32>,
-        visible_items: usize,
-        rect: ViewRect,
-    ) {
-        if rect.height <= 0.0 {
-            return;
+    fn pane_status_text(&self, pane: ShellPaneView<'_>, visible_items: usize) -> String {
+        let total = pane.entries.len();
+        let selected = pane.selection.len();
+        let file_count = total.saturating_sub(pane.dir_count);
+        let mut status = if selected > 0 {
+            format!("{} selected", count_label(selected, "item", "items"))
+        } else {
+            format!(
+                "{}, {}, {}",
+                count_label(total, "item", "items"),
+                count_label(pane.dir_count, "folder", "folders"),
+                count_label(file_count, "file", "files")
+            )
+        };
+        if visible_items != total {
+            status.push_str(&format!(" | {visible_items} visible"));
         }
-        push_rect(vertices, rect, [1.000, 1.000, 1.000, 1.0], size);
-        push_rect(
-            vertices,
-            ViewRect {
-                x: rect.x,
-                y: rect.y,
-                width: rect.width,
-                height: 1.0,
-            },
-            [0.784, 0.808, 0.839, 1.0],
-            size,
-        );
-
-        let mut status = format!(
-            "{} entries ({} dirs, {} files) | {} selected | {} visible | {} | {}%",
-            self.panes[ShellPaneId::FIRST].entries.len(),
-            self.panes[ShellPaneId::FIRST].dir_count,
-            self.panes[ShellPaneId::FIRST]
-                .entries
-                .len()
-                .saturating_sub(self.panes[ShellPaneId::FIRST].dir_count),
-            self.panes[ShellPaneId::FIRST].selection.len(),
-            visible_items,
-            self.panes[ShellPaneId::FIRST].view_mode.label(),
-            self.zoom_percent()
-        );
         if self.show_hidden {
-            status.push_str(" | hidden");
-        }
-        if let Some(value) = self.location_draft_value() {
-            status.push_str(&format!(" | location {:?}", value));
-        }
-        if let Some(dialog) = self.create_dialog.as_ref() {
-            status.push_str(&format!(
-                " | create {} {:?}",
-                dialog.kind.as_str(),
-                dialog.name
-            ));
-        }
-        if let Some(dialog) = self.rename_dialog.as_ref() {
-            status.push_str(&format!(" | rename {:?}", dialog.name));
-        }
-        if let Some(chooser) = self.open_with_chooser.as_ref() {
-            status.push_str(&format!(
-                " | open-with {} apps {:?}",
-                chooser.filtered_count(),
-                chooser.query
-            ));
-        }
-        if let Some(dialog) = self.trash_conflict_dialog.as_ref() {
-            status.push_str(&format!(" | trash conflicts {}", dialog.conflicts.len()));
-        }
-        if let Some(target) = self.context_target.as_ref() {
-            status.push_str(&format!(
-                " | context {} {}",
-                target.kind(),
-                target.log_path().display()
-            ));
+            status.push_str(" | hidden shown");
         }
         if self.filter_active || !self.filter_pattern.is_empty() {
-            status.push_str(&format!(
-                " | filter {:?} ({})",
-                self.filter_pattern,
-                self.filtered_entry_count()
-            ));
+            status.push_str(&format!(" | {} matches", pane.filtered_entry_count()));
         }
-        text.push_label(
-            &status,
-            ViewRect {
-                x: rect.x + self.scale_metric(12.0),
-                y: rect.y + self.scale_metric(5.0),
-                width: (rect.width - self.scale_metric(24.0)).max(1.0),
-                height: self.text_line_height(),
-            },
-            rect,
-            TextColor::rgb(89, 99, 110),
-        );
+        status
+    }
+
+    fn active_pane_status_summary(&self) -> String {
+        let pane = self.active_pane();
+        let Some(state) = self.pane_state(pane) else {
+            return "No active pane".to_string();
+        };
+        if state.selection.len() > 0 {
+            count_label(state.selection.len(), "item selected", "items selected")
+        } else {
+            count_label(state.entries.len(), "item", "items")
+        }
+    }
+
+    fn active_pane_path_label(&self) -> String {
+        self.pane_state(self.active_pane())
+            .map(|state| state.path.display().to_string())
+            .unwrap_or_else(|| "No active pane".to_string())
     }
 
     fn push_pane_borders(&self, vertices: &mut Vec<QuadVertex>, size: PhysicalSize<u32>) {
@@ -10714,8 +11491,13 @@ impl ShellScene {
             [0.145, 0.158, 0.174, 1.0],
             size,
         );
+        let title = if dialog.privileged {
+            "Create New as Administrator"
+        } else {
+            "Create New"
+        };
         text.push_label(
-            "Create New",
+            title,
             ViewRect {
                 x: rect.x + margin,
                 y: rect.y + scaled_dialog_metric(12.0, scale),
@@ -10792,7 +11574,9 @@ impl ShellScene {
             push_rect(
                 vertices,
                 button,
-                if active {
+                if active && dialog.privileged {
+                    [0.706, 0.325, 0.035, 1.0]
+                } else if active {
                     [0.22, 0.42, 0.62, 1.0]
                 } else {
                     [0.150, 0.162, 0.176, 1.0]
@@ -10846,12 +11630,14 @@ impl ShellScene {
             [0.145, 0.158, 0.174, 1.0],
             size,
         );
+        let title = match (dialog.is_dir, dialog.privileged) {
+            (true, true) => "Rename Folder as Administrator",
+            (false, true) => "Rename File as Administrator",
+            (true, false) => "Rename Folder",
+            (false, false) => "Rename File",
+        };
         text.push_label(
-            if dialog.is_dir {
-                "Rename Folder"
-            } else {
-                "Rename File"
-            },
+            title,
             ViewRect {
                 x: rect.x + margin,
                 y: rect.y + scaled_dialog_metric(12.0, scale),
@@ -10898,7 +11684,9 @@ impl ShellScene {
             push_rect(
                 vertices,
                 button,
-                if active {
+                if active && dialog.privileged {
+                    [0.706, 0.325, 0.035, 1.0]
+                } else if active {
                     [0.22, 0.42, 0.62, 1.0]
                 } else {
                     [0.150, 0.162, 0.176, 1.0]
@@ -11531,7 +12319,7 @@ impl ShellScene {
     fn scroll_by(&mut self, delta_y: f32, size: PhysicalSize<u32>) -> bool {
         if self
             .pointer
-            .is_some_and(|point| self.places_sidebar_rect(size).contains(point))
+            .is_some_and(|point| self.places_panel_rect(size).contains(point))
         {
             return self.scroll_places_by(delta_y, size);
         }
@@ -17323,6 +18111,75 @@ fn yes_no(value: bool) -> String {
     if value { "Yes" } else { "No" }.to_string()
 }
 
+fn count_label(count: usize, singular: &str, plural: &str) -> String {
+    if count == 1 {
+        format!("1 {singular}")
+    } else {
+        format!("{count} {plural}")
+    }
+}
+
+fn path_display_label(path: &Path) -> String {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| path.display().to_string())
+}
+
+fn paths_task_summary(paths: &[PathBuf]) -> String {
+    match paths {
+        [] => "No items".to_string(),
+        [path] => path_display_label(path),
+        [first, ..] => format!(
+            "{} including {}",
+            count_label(paths.len(), "item", "items"),
+            path_display_label(first)
+        ),
+    }
+}
+
+fn task_error_detail(error: &str, administrator_available: bool) -> String {
+    if administrator_available {
+        format!("{error} | use the administrator action explicitly")
+    } else {
+        error.to_string()
+    }
+}
+
+fn transfer_task_detail(
+    success_count: usize,
+    failure_count: usize,
+    target_dir: &Path,
+    first_error: Option<&str>,
+    administrator_available: bool,
+) -> String {
+    if failure_count > 0 {
+        let base = format!(
+            "{} failed, {} completed to {}",
+            count_label(failure_count, "item", "items"),
+            success_count,
+            target_dir.display()
+        );
+        if let Some(error) = first_error {
+            format!(
+                "{base} | {}",
+                task_error_detail(error, administrator_available)
+            )
+        } else if administrator_available {
+            format!("{base} | use the administrator action explicitly")
+        } else {
+            base
+        }
+    } else {
+        format!(
+            "{} to {}",
+            count_label(success_count, "item", "items"),
+            target_dir.display()
+        )
+    }
+}
+
 fn launch_uri_for_path(path: &Path) -> String {
     network_uri_from_path(path).unwrap_or_else(|| gio::File::for_path(path).uri().to_string())
 }
@@ -17379,6 +18236,26 @@ fn create_entry_on_disk(request: &CreateEntryRequest) -> Result<(), String> {
     }
 }
 
+fn create_entry_on_disk_explicit(
+    request: &CreateEntryRequest,
+) -> Result<ShellPrivilegeOutcome, String> {
+    if request.privileged {
+        let command = match request.kind {
+            CreateEntryKind::Folder => PrivilegedCommand::CreateFolder {
+                parent: request.parent.clone(),
+                name: request.name.clone(),
+            },
+            CreateEntryKind::File => PrivilegedCommand::CreateFile {
+                parent: request.parent.clone(),
+                name: request.name.clone(),
+            },
+        };
+        run_privileged_command_sync(command)
+    } else {
+        create_entry_on_disk(request).map(|()| ShellPrivilegeOutcome::normal())
+    }
+}
+
 fn rename_entry_on_disk(request: &RenameEntryRequest) -> Result<(), String> {
     fs::rename(&request.source, &request.target).map_err(|error| {
         format!(
@@ -17387,6 +18264,212 @@ fn rename_entry_on_disk(request: &RenameEntryRequest) -> Result<(), String> {
             request.target.display()
         )
     })
+}
+
+fn rename_entry_on_disk_explicit(
+    request: &RenameEntryRequest,
+) -> Result<ShellPrivilegeOutcome, String> {
+    if request.privileged {
+        run_privileged_command_sync(PrivilegedCommand::Rename {
+            path: request.source.clone(),
+            new_name: request.name.clone(),
+        })
+    } else {
+        rename_entry_on_disk(request).map(|()| ShellPrivilegeOutcome::normal())
+    }
+}
+
+fn run_privileged_command_sync(
+    command: PrivilegedCommand,
+) -> Result<ShellPrivilegeOutcome, String> {
+    let result = pollster::block_on(run_via_dbus(command));
+    result
+        .result
+        .map(ShellPrivilegeOutcome::privileged)
+        .map_err(|error| format!("administrator operation failed: {error}"))
+}
+
+fn trash_paths_with_privilege(
+    paths: &[PathBuf],
+    privileged: bool,
+) -> Result<ShellTrashResult, String> {
+    if privileged {
+        return match run_privileged_command_sync(PrivilegedCommand::Trash {
+            paths: paths.to_vec(),
+        }) {
+            Ok(_) => Ok(ShellTrashResult {
+                success_count: paths.len(),
+                failure_count: 0,
+                trash_pairs: Vec::new(),
+                privileged: true,
+                administrator_available: false,
+                first_error: None,
+            }),
+            Err(error) => Ok(ShellTrashResult {
+                success_count: 0,
+                failure_count: paths.len(),
+                trash_pairs: Vec::new(),
+                privileged: true,
+                administrator_available: false,
+                first_error: Some(error),
+            }),
+        };
+    }
+
+    let summary = file_ops::trash_paths(paths);
+    Ok(ShellTrashResult {
+        success_count: summary.successes.len(),
+        failure_count: summary.failures.len(),
+        trash_pairs: summary
+            .successes
+            .iter()
+            .map(|record| (record.original_path.clone(), record.trash_path.clone()))
+            .collect(),
+        privileged: false,
+        administrator_available: summary
+            .failures
+            .iter()
+            .any(|failure| should_attempt_privileged_operation(failure)),
+        first_error: summary.failures.first().cloned(),
+    })
+}
+
+fn transfer_paths_with_privilege(
+    target_dir: PathBuf,
+    mode: FileTransferMode,
+    paths: Vec<PathBuf>,
+    label: &'static str,
+    clear_clipboard: bool,
+    privileged: bool,
+) -> ShellTransferExecution {
+    let operation = mode.operation();
+    let mut success_count = 0;
+    let mut failure_count = 0;
+    let mut affected_dirs = Vec::new();
+    let mut refresh_dirs = Vec::new();
+    let mut undo_items = Vec::new();
+    let mut administrator_available = false;
+    let mut first_error = None;
+
+    for source in paths {
+        if privileged {
+            match run_privileged_command_sync(PrivilegedCommand::Transfer {
+                operation: operation.to_string(),
+                source: source.clone(),
+                target_dir: target_dir.clone(),
+            }) {
+                Ok(_) => {
+                    success_count += 1;
+                    push_transfer_refresh_dirs(
+                        mode,
+                        &source,
+                        &target_dir,
+                        &mut affected_dirs,
+                        &mut refresh_dirs,
+                    );
+                }
+                Err(error) => {
+                    failure_count += 1;
+                    if first_error.is_none() {
+                        first_error = Some(error.clone());
+                    }
+                    fika_log!(
+                        "[fika-wgpu] privileged-transfer-error mode={} source={} target={} error={error}",
+                        mode.label(),
+                        source.display(),
+                        target_dir.display()
+                    );
+                    push_unique_path(&mut refresh_dirs, target_dir.clone());
+                }
+            }
+            continue;
+        }
+
+        match file_ops::perform_transfer_with_progress_outcome(
+            operation,
+            &source,
+            &target_dir,
+            "keep-both",
+            None,
+            |_| {},
+        ) {
+            Ok(outcome) => {
+                success_count += 1;
+                push_transfer_refresh_dirs(
+                    mode,
+                    &source,
+                    &target_dir,
+                    &mut affected_dirs,
+                    &mut refresh_dirs,
+                );
+                undo_items.push(TransferUndoItem {
+                    operation: operation.to_string(),
+                    original_source: source,
+                    destination: outcome.destination,
+                    overwritten_backup: outcome.overwritten_backup,
+                });
+            }
+            Err(error) => {
+                failure_count += 1;
+                administrator_available |= should_attempt_privileged_operation(&error);
+                if first_error.is_none() {
+                    first_error = Some(error.clone());
+                }
+                fika_log!(
+                    "[fika-wgpu] transfer-error mode={} source={} target={} error={error}",
+                    mode.label(),
+                    source.display(),
+                    target_dir.display()
+                );
+                push_unique_path(&mut refresh_dirs, target_dir.clone());
+            }
+        }
+    }
+
+    ShellTransferExecution {
+        result: TransferTaskResult {
+            pane_id: WGPU_SHELL_PANE_ID,
+            mode,
+            label,
+            clear_clipboard,
+            success_count,
+            failure_count,
+            affected_dirs,
+            refresh_dirs,
+            undo_items,
+            created_items: Vec::new(),
+        },
+        privileged,
+        administrator_available,
+        first_error,
+    }
+}
+
+fn push_transfer_refresh_dirs(
+    mode: FileTransferMode,
+    source: &Path,
+    target_dir: &Path,
+    affected_dirs: &mut Vec<PathBuf>,
+    refresh_dirs: &mut Vec<PathBuf>,
+) {
+    push_unique_path(affected_dirs, target_dir.to_path_buf());
+    push_unique_path(refresh_dirs, target_dir.to_path_buf());
+    if mode == FileTransferMode::Move
+        && let Some(parent) = source
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        push_unique_path(affected_dirs, parent.to_path_buf());
+        push_unique_path(refresh_dirs, parent.to_path_buf());
+    }
+}
+
+fn should_attempt_privileged_operation(error: &str) -> bool {
+    let error = error.to_ascii_lowercase();
+    error.contains("permission denied")
+        || error.contains("os error 13")
+        || error.contains("operation not permitted")
+        || error.contains("os error 1")
 }
 
 fn validate_create_name(name: &str) -> Result<(), String> {
@@ -17980,6 +19063,7 @@ mod tests {
             place_press: None,
             dnd_hover_target: None,
             pending_drop_request: None,
+            task_statuses: VecDeque::new(),
             rubber_band: None,
             scale_factor: 1.0,
             hit_tests: 0,
@@ -18010,6 +19094,7 @@ mod tests {
             split_pane_changes: 0,
             dnd_hover_changes: 0,
             dnd_drop_requests: 0,
+            task_status_changes: 0,
         }
     }
 
@@ -18610,6 +19695,48 @@ mod tests {
         assert_eq!(scene.pending_drop_request.as_ref(), Some(&request));
         assert!(scene.internal_drag.is_none());
         assert!(scene.dnd_hover_target.is_none());
+    }
+
+    #[test]
+    fn drop_menu_administrator_rows_create_privileged_requests() {
+        let mut scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
+        let size = PhysicalSize::new(700, 320);
+        scene.drop_menu = Some(ShellDropMenu::new(
+            vec![PathBuf::from("/tmp/alpha.txt")],
+            PathBuf::from("/etc"),
+            ShellDropTarget::PaneBlank {
+                pane: ShellPaneId::FIRST,
+                path: PathBuf::from("/etc"),
+            },
+            ViewPoint { x: 80.0, y: 80.0 },
+        ));
+        let menu = scene.drop_menu.as_ref().unwrap();
+        let rect = drop_menu_rect(menu, size);
+        let admin_copy_index = drop_menu_items()
+            .iter()
+            .position(|item| {
+                item.command
+                    == ShellDropMenuCommand::Mode {
+                        mode: FileTransferMode::Copy,
+                        privileged: true,
+                    }
+            })
+            .unwrap();
+        let request = scene
+            .activate_or_close_drop_menu_request(
+                ViewPoint {
+                    x: rect.x + 8.0,
+                    y: rect.y
+                        + CONTEXT_MENU_VERTICAL_PADDING
+                        + CONTEXT_MENU_ROW_HEIGHT * admin_copy_index as f32
+                        + 2.0,
+                },
+                size,
+            )
+            .expect("administrator copy row should create a drop request");
+        assert_eq!(request.mode, FileTransferMode::Copy);
+        assert!(request.privileged);
+        assert_eq!(scene.pending_drop_request.as_ref(), Some(&request));
     }
 
     #[test]
@@ -21549,7 +22676,7 @@ text/plain=writer.desktop;\n",
         let size = PhysicalSize::new(420, 320);
         let rect = context_menu_rect(&menu, size);
 
-        assert_eq!(rect.width, 196.0);
+        assert_eq!(rect.width, 260.0);
         assert_eq!(
             rect.height,
             CONTEXT_MENU_VERTICAL_PADDING * 2.0
@@ -21686,9 +22813,17 @@ text/plain=writer.desktop;\n",
 
         assert!(scene.open_context_menu(point, size));
         let rect = context_menu_rect(scene.context_menu.as_ref().unwrap(), size);
+        let actions = context_menu_actions(&scene.context_menu.as_ref().unwrap().target);
+        let select_all_index = actions
+            .iter()
+            .position(|action| *action == ShellContextMenuAction::SelectAll)
+            .unwrap();
         let select_all_row = ViewPoint {
             x: rect.x + 8.0,
-            y: rect.y + CONTEXT_MENU_ROW_HEIGHT * 3.0 + 8.0,
+            y: rect.y
+                + CONTEXT_MENU_VERTICAL_PADDING
+                + CONTEXT_MENU_ROW_HEIGHT * select_all_index as f32
+                + 8.0,
         };
         assert_eq!(
             scene.activate_or_close_context_menu(select_all_row, size),
@@ -21698,15 +22833,68 @@ text/plain=writer.desktop;\n",
 
         assert!(scene.open_context_menu(point, size));
         let rect = context_menu_rect(scene.context_menu.as_ref().unwrap(), size);
+        let actions = context_menu_actions(&scene.context_menu.as_ref().unwrap().target);
+        let refresh_index = actions
+            .iter()
+            .position(|action| *action == ShellContextMenuAction::Refresh)
+            .unwrap();
         let refresh_row = ViewPoint {
             x: rect.x + 8.0,
-            y: rect.y + CONTEXT_MENU_ROW_HEIGHT * 6.0 + 8.0,
+            y: rect.y
+                + CONTEXT_MENU_VERTICAL_PADDING
+                + CONTEXT_MENU_ROW_HEIGHT * refresh_index as f32
+                + 8.0,
         };
         assert_eq!(
             scene.activate_or_close_context_menu(refresh_row, size),
             Some(ShellContextMenuAction::Refresh)
         );
         assert_eq!(scene.context_menu_actions, 2);
+    }
+
+    #[test]
+    fn context_menu_exposes_explicit_administrator_actions() {
+        let blank = ShellContextTarget::Blank {
+            pane: ShellPaneId::FIRST,
+            path: PathBuf::from("/tmp"),
+        };
+        let blank_actions = context_menu_actions(&blank);
+        assert!(blank_actions.contains(&ShellContextMenuAction::Paste));
+        assert!(blank_actions.contains(&ShellContextMenuAction::PasteAsAdministrator));
+
+        let item = ShellContextTarget::Item {
+            pane: ShellPaneId::FIRST,
+            index: 0,
+            path: PathBuf::from("/tmp/file.txt"),
+            is_dir: false,
+            selection_count: 1,
+        };
+        let item_actions = context_menu_actions(&item);
+        assert!(item_actions.contains(&ShellContextMenuAction::Rename));
+        assert!(item_actions.contains(&ShellContextMenuAction::RenameAsAdministrator));
+        assert!(item_actions.contains(&ShellContextMenuAction::MoveToTrash));
+        assert!(item_actions.contains(&ShellContextMenuAction::MoveToTrashAsAdministrator));
+
+        let menu = ShellContextMenu::new(blank, ViewPoint { x: 0.0, y: 0.0 });
+        let create_items = context_submenu_actions(ShellContextSubmenu::CreateNew, &menu);
+        assert!(create_items.iter().any(|item| {
+            matches!(
+                item.command,
+                ShellContextMenuCommand::CreateEntry {
+                    kind: CreateEntryKind::Folder,
+                    privileged: true
+                }
+            )
+        }));
+        assert!(create_items.iter().any(|item| {
+            matches!(
+                item.command,
+                ShellContextMenuCommand::CreateEntry {
+                    kind: CreateEntryKind::File,
+                    privileged: true
+                }
+            )
+        }));
     }
 
     #[test]
@@ -21937,7 +23125,7 @@ text/plain=writer.desktop;\n",
             encode_file_clipboard_text(FileClipboardRole::Copy, &[source_root.join("source.txt")]);
 
         let result = scene
-            .paste_clipboard_text_from_context(&clipboard_text, size)
+            .paste_clipboard_text_from_context(&clipboard_text, size, false)
             .unwrap();
 
         assert_eq!(result.mode, FileTransferMode::Copy);
@@ -21973,7 +23161,7 @@ text/plain=writer.desktop;\n",
             encode_file_clipboard_text(FileClipboardRole::Cut, &[source_root.join("move.txt")]);
 
         let result = scene
-            .paste_clipboard_text_from_context(&clipboard_text, size)
+            .paste_clipboard_text_from_context(&clipboard_text, size, false)
             .unwrap();
 
         assert_eq!(result.mode, FileTransferMode::Move);
@@ -22001,7 +23189,7 @@ text/plain=writer.desktop;\n",
         });
 
         let result = scene
-            .paste_clipboard_text_from_context("hello from clipboard", size)
+            .paste_clipboard_text_from_context("hello from clipboard", size, false)
             .unwrap();
 
         assert_eq!(result.mode, FileTransferMode::Copy);
@@ -22229,6 +23417,31 @@ text/plain=writer.desktop;\n",
     }
 
     #[test]
+    fn create_and_rename_requests_preserve_explicit_administrator_flag() {
+        let mut scene = test_scene(vec![test_entry("plain.txt", false)], ShellViewMode::Icons);
+        scene.context_target = Some(ShellContextTarget::Blank {
+            pane: ShellPaneId::FIRST,
+            path: PathBuf::from("/tmp"),
+        });
+        assert!(scene.open_create_dialog_from_context_with_kind(CreateEntryKind::File, true));
+        scene.create_dialog.as_mut().unwrap().name = "admin.txt".to_string();
+        let create_request = scene.create_entry_request().unwrap();
+        assert!(create_request.privileged);
+
+        scene.context_target = Some(ShellContextTarget::Item {
+            pane: ShellPaneId::FIRST,
+            index: 0,
+            path: PathBuf::from("/tmp/plain.txt"),
+            is_dir: false,
+            selection_count: 1,
+        });
+        assert!(scene.open_rename_dialog_from_context(true));
+        scene.rename_dialog.as_mut().unwrap().name = "admin-renamed.txt".to_string();
+        let rename_request = scene.rename_entry_request().unwrap();
+        assert!(rename_request.privileged);
+    }
+
+    #[test]
     fn create_new_folder_creates_on_disk_reloads_and_selects_entry() {
         let root = test_dir("create-folder");
         fs::create_dir_all(&root).unwrap();
@@ -22264,8 +23477,12 @@ text/plain=writer.desktop;\n",
         let root = test_dir("create-file");
         fs::create_dir_all(&root).unwrap();
         fs::write(root.join("New File"), b"existing").unwrap();
-        let mut dialog =
-            ShellCreateDialog::new(ShellPaneId::FIRST, root.clone(), CreateEntryKind::File);
+        let mut dialog = ShellCreateDialog::new(
+            ShellPaneId::FIRST,
+            root.clone(),
+            CreateEntryKind::File,
+            false,
+        );
         assert_eq!(dialog.name, "New File 2");
         dialog.name = "note.txt".to_string();
         let request = CreateEntryRequest {
@@ -22274,6 +23491,7 @@ text/plain=writer.desktop;\n",
             path: root.join("note.txt"),
             kind: CreateEntryKind::File,
             name: "note.txt".to_string(),
+            privileged: false,
         };
 
         create_entry_on_disk(&request).unwrap();
@@ -22299,7 +23517,7 @@ text/plain=writer.desktop;\n",
             selection_count: 1,
         });
 
-        assert!(scene.open_rename_dialog_from_context());
+        assert!(scene.open_rename_dialog_from_context(false));
         let dialog = scene
             .rename_dialog
             .as_ref()
@@ -22338,7 +23556,7 @@ text/plain=writer.desktop;\n",
             is_dir: false,
             selection_count: 1,
         });
-        assert!(scene.open_rename_dialog_from_context());
+        assert!(scene.open_rename_dialog_from_context(false));
 
         let unchanged = scene.rename_entry_request().unwrap_err();
         assert!(unchanged.contains("unchanged"));
@@ -22367,7 +23585,7 @@ text/plain=writer.desktop;\n",
             selection_count: 1,
         });
 
-        assert!(scene.open_rename_dialog_from_context());
+        assert!(scene.open_rename_dialog_from_context(false));
         scene.rename_dialog.as_mut().unwrap().name = "new.txt".to_string();
         scene.rename_dialog.as_mut().unwrap().replace_on_insert = false;
         let request = scene.rename_entry_request().unwrap();
@@ -22416,7 +23634,7 @@ text/plain=writer.desktop;\n",
             pane: ShellPaneId::SECOND,
             path: right.clone(),
         });
-        assert!(scene.open_create_dialog_from_context_with_kind(CreateEntryKind::File));
+        assert!(scene.open_create_dialog_from_context_with_kind(CreateEntryKind::File, false));
         scene.create_dialog.as_mut().unwrap().name = "made.txt".to_string();
         scene.create_dialog.as_mut().unwrap().replace_on_insert = false;
         let create_request = scene.create_entry_request().unwrap();
@@ -22443,7 +23661,7 @@ text/plain=writer.desktop;\n",
             is_dir: false,
             selection_count: 1,
         });
-        assert!(scene.open_rename_dialog_from_context());
+        assert!(scene.open_rename_dialog_from_context(false));
         scene.rename_dialog.as_mut().unwrap().name = "renamed.txt".to_string();
         scene.rename_dialog.as_mut().unwrap().replace_on_insert = false;
         let rename_request = scene.rename_entry_request().unwrap();
@@ -22463,7 +23681,7 @@ text/plain=writer.desktop;\n",
         );
 
         scene.rename_dialog = None;
-        assert!(scene.open_rename_dialog_from_active_selection());
+        assert!(scene.open_rename_dialog_from_active_selection(false));
         let dialog = scene.rename_dialog.as_ref().unwrap();
         assert_eq!(dialog.pane, ShellPaneId::SECOND);
         assert_eq!(dialog.source, right.join("renamed.txt"));
@@ -22479,7 +23697,7 @@ text/plain=writer.desktop;\n",
         let paste_text =
             encode_file_clipboard_text(FileClipboardRole::Copy, &[source_root.join("copy.txt")]);
         let paste_result = scene
-            .paste_clipboard_text_into_active_pane(&paste_text, size)
+            .paste_clipboard_text_into_active_pane(&paste_text, size, false)
             .unwrap();
         assert_eq!(paste_result.mode, FileTransferMode::Copy);
         assert_eq!(paste_result.success_count, 1);
@@ -22501,7 +23719,7 @@ text/plain=writer.desktop;\n",
             is_dir: false,
             selection_count: 1,
         });
-        let trash_result = scene.move_context_target_to_trash(size).unwrap();
+        let trash_result = scene.move_context_target_to_trash(size, false).unwrap();
         assert_eq!(trash_result.success_count, 1);
         assert_eq!(trash_result.failure_count, 0);
         assert!(!right.join("trash-me.txt").exists());
@@ -22529,7 +23747,7 @@ text/plain=writer.desktop;\n",
             pane: ShellPaneId::SECOND,
             path: root.clone(),
         });
-        assert!(scene.open_create_dialog_from_context_with_kind(CreateEntryKind::File));
+        assert!(scene.open_create_dialog_from_context_with_kind(CreateEntryKind::File, false));
         scene.create_dialog.as_mut().unwrap().name = "made.txt".to_string();
         scene.create_dialog.as_mut().unwrap().replace_on_insert = false;
         let create_request = scene.create_entry_request().unwrap();
@@ -22565,7 +23783,7 @@ text/plain=writer.desktop;\n",
             is_dir: false,
             selection_count: 1,
         });
-        assert!(scene.open_rename_dialog_from_context());
+        assert!(scene.open_rename_dialog_from_context(false));
         scene.rename_dialog.as_mut().unwrap().name = "renamed.txt".to_string();
         scene.rename_dialog.as_mut().unwrap().replace_on_insert = false;
         let rename_request = scene.rename_entry_request().unwrap();
@@ -22639,7 +23857,7 @@ text/plain=writer.desktop;\n",
         });
         assert!(
             scene
-                .move_context_target_to_trash(PhysicalSize::new(420, 260))
+                .move_context_target_to_trash(PhysicalSize::new(420, 260), false)
                 .unwrap_err()
                 .contains("remote trash")
         );
@@ -22856,7 +24074,7 @@ text/plain=writer.desktop;\n",
             selection_count: 1,
         });
 
-        let result = scene.move_context_target_to_trash(size).unwrap();
+        let result = scene.move_context_target_to_trash(size, false).unwrap();
         assert_eq!(result.success_count, 1);
         assert_eq!(result.failure_count, 0);
         assert_eq!(scene.trash_changes, 1);
@@ -24240,6 +25458,62 @@ text/plain=writer.desktop;\n",
         ));
         assert_eq!(scene.panes[ShellPaneId::FIRST].selection.len(), 1);
         assert!(scene.panes[ShellPaneId::FIRST].selection.contains(0));
+    }
+
+    #[test]
+    fn pane_status_text_is_plain_pane_state() {
+        let mut scene = test_scene(
+            vec![
+                test_entry("folder", true),
+                test_entry("alpha.txt", false),
+                test_entry("bravo.txt", false),
+            ],
+            ShellViewMode::Icons,
+        );
+        let size = PhysicalSize::new(520, 320);
+        let projection = scene.pane_projection(ShellPaneId::FIRST, size).unwrap();
+
+        assert_eq!(
+            scene.pane_status_text(projection.view, projection.visible_items.len()),
+            "3 items, 1 folder, 2 files"
+        );
+
+        assert!(
+            scene.panes[ShellPaneId::FIRST]
+                .selection
+                .apply_navigation(1, false)
+        );
+        let projection = scene.pane_projection(ShellPaneId::FIRST, size).unwrap();
+        assert_eq!(
+            scene.pane_status_text(projection.view, projection.visible_items.len()),
+            "1 item selected"
+        );
+    }
+
+    #[test]
+    fn task_area_uses_sidebar_bottom_without_replacing_pane_status() {
+        let mut scene = test_scene(
+            (0..16)
+                .map(|index| test_entry(&format!("entry-{index:02}.txt"), false))
+                .collect(),
+            ShellViewMode::Icons,
+        );
+        let size = PhysicalSize::new(760, 520);
+        let panel_without_tasks = scene.places_panel_rect(size);
+        assert!(scene.places_task_area_rect(size).is_none());
+
+        scene.record_task_status(ShellTaskStatus::completed("Copied", "2 item(s)", false));
+        let task_area = scene
+            .places_task_area_rect(size)
+            .expect("recent tasks should show a sidebar task area");
+        let panel_with_tasks = scene.places_panel_rect(size);
+        let sidebar = scene.places_sidebar_rect(size);
+        let status_bar = scene.status_bar_rect(size);
+
+        assert!(task_area.y > panel_with_tasks.bottom());
+        assert!(task_area.bottom() <= sidebar.bottom());
+        assert!(panel_with_tasks.height < panel_without_tasks.height);
+        assert!(status_bar.x >= sidebar.right());
     }
 
     #[test]
