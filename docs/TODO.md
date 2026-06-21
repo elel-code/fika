@@ -106,9 +106,10 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
   text screen rect 和 quad rect 都进入同一物理 surface 坐标系；之前 quad rect 已按
   scale 放大但 NDC 分母仍用逻辑尺寸，导致 1.5/2x 下整体偏移。exact fractional
   viewport 路径先保留为 `FIKA_SCTK_EXACT_FRACTIONAL_VIEWPORT=1` 实验入口，默认不启用。
-  下一步要把该第一版 per-frame atlas
-  提升为 retained glyph/label cache，补 eviction telemetry，避免 steady scroll 反复
-  rasterize 可见 label。
+  `TextRenderer` 已先加入 batch/dpi/surface-key 复用：rubber-band、hover 和其他没有
+  文本变化的高频帧会复用上一帧 text atlas，不再重复 shape/raster 可见 label；下一步要把
+  该第一版 per-frame atlas 提升为 retained glyph/label cache，补 eviction telemetry，
+  进一步覆盖 selection 颜色变化和 steady scroll。
 - [~] Phase 3：继续 pane 可复用化。当前增量已新增
   `src/bin/fika_sctk/pane.rs`，把 pane path/view/entries/dir_count、scroll、hover、
   selection、Icons/Compact/Details layout projection、item painter、content scrollbar、
@@ -135,7 +136,13 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
   `selected_entries` 集合；`Ctrl/Meta+A` 只选择 active pane 的可见条目，空白 primary
   press 会进入 rubber-band pointer capture，并在 Icons/Compact/Details 当前投影上更新
   多选集合和半透明 overlay，为后续 DnD source/export 复用同一 selection 边界。下一步继续补
-  toolbar split UI、file-operation routing、IME/text-selection 和 DnD data-device。
+  toolbar split UI、file-operation routing、IME/text-selection 和 DnD data-device。当前
+  rubber-band pointer capture 已做 motion 采样，renderer 高频 frame 日志也已降频，
+  避免框选拖动时被 per-pixel selection 重算、文本 atlas raster 和 stderr 同步输出拖慢。
+  Places 已从纯绘制升级为可点击 retained rows：Home、存在的 XDG 常见目录、Trash files
+  dir 和 Root 会命中 active pane 并执行路径导航，split 模式下不会误路由到 primary pane。
+  地址栏/filter caret 现在使用垂直居中的 caret rect，并用按字符类型加权的路径宽度估算，
+  完整 `cosmic-text` shaping caret/hit-test cache 仍属于后续文本边界迁移。
 - [ ] Phase 4：迁入资产和系统集成热路径。MIME/theme icon atlas、Dolphin-style
   visible-first icon resolve、thumbnail worker/read-ahead、device/Places 动态数据、
   context menu、Open With、service menu、clipboard、Trash actions、file operations、

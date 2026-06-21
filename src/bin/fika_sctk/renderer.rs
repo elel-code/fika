@@ -1,5 +1,6 @@
 use std::error::Error;
 use std::ptr::NonNull;
+use std::time::{Duration, Instant};
 
 use raw_window_handle::{
     RawDisplayHandle, RawWindowHandle, WaylandDisplayHandle, WaylandWindowHandle,
@@ -20,6 +21,7 @@ pub(crate) struct WgpuRenderer {
     quad_renderer: Option<QuadRenderer>,
     text_renderer: Option<TextRenderer>,
     frame_count: u64,
+    last_frame_log: Instant,
 }
 
 impl WgpuRenderer {
@@ -76,6 +78,7 @@ impl WgpuRenderer {
             quad_renderer: None,
             text_renderer: None,
             frame_count: 0,
+            last_frame_log: Instant::now(),
         })
     }
 
@@ -201,32 +204,45 @@ impl WgpuRenderer {
         self.queue.submit(Some(encoder.finish()));
         frame.present();
         self.frame_count = self.frame_count.wrapping_add(1);
-        eprintln!(
-            "[fika-sctk] frame={} reason={} scale={:.2} quads={} visible={} selected={} selected_count={} hover={} split_pane={} active_pane={} text_labels={} text_quads={} text_atlas={}x{}:{}b scroll_x={:.1} scroll_y={:.1}",
-            self.frame_count,
-            reason,
-            frame_scene.scale,
-            frame_scene.quads,
-            frame_scene.visible_items,
-            frame_scene
-                .selected
-                .map(|index| index.to_string())
-                .unwrap_or_else(|| "-1".to_string()),
-            frame_scene.selected_count,
-            frame_scene
-                .hover
-                .map(|index| index.to_string())
-                .unwrap_or_else(|| "-1".to_string()),
-            frame_scene.split_pane as u8,
-            frame_scene.active_pane,
-            text_stats.labels,
-            text_stats.quads,
-            text_stats.atlas_width,
-            text_stats.atlas_height,
-            text_stats.atlas_bytes,
-            frame_scene.scroll_x,
-            frame_scene.scroll_y,
-        );
+        if self.should_log_frame(reason) {
+            eprintln!(
+                "[fika-sctk] frame={} reason={} scale={:.2} quads={} visible={} selected={} selected_count={} hover={} split_pane={} active_pane={} text_labels={} text_quads={} text_atlas={}x{}:{}b scroll_x={:.1} scroll_y={:.1}",
+                self.frame_count,
+                reason,
+                frame_scene.scale,
+                frame_scene.quads,
+                frame_scene.visible_items,
+                frame_scene
+                    .selected
+                    .map(|index| index.to_string())
+                    .unwrap_or_else(|| "-1".to_string()),
+                frame_scene.selected_count,
+                frame_scene
+                    .hover
+                    .map(|index| index.to_string())
+                    .unwrap_or_else(|| "-1".to_string()),
+                frame_scene.split_pane as u8,
+                frame_scene.active_pane,
+                text_stats.labels,
+                text_stats.quads,
+                text_stats.atlas_width,
+                text_stats.atlas_height,
+                text_stats.atlas_bytes,
+                frame_scene.scroll_x,
+                frame_scene.scroll_y,
+            );
+        }
+    }
+
+    fn should_log_frame(&mut self, reason: &str) -> bool {
+        let high_frequency = matches!(reason, "pointer-hover" | "scroll");
+        let should_log = self.frame_count <= 1
+            || !high_frequency
+            || self.last_frame_log.elapsed() >= Duration::from_secs(1);
+        if should_log {
+            self.last_frame_log = Instant::now();
+        }
+        should_log
     }
 }
 

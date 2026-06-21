@@ -38,7 +38,7 @@ fn fs_main(input: VertexOut) -> @location(0) vec4<f32> {
 }
 "#;
 
-#[derive(Default)]
+#[derive(Clone, Default, PartialEq)]
 pub(crate) struct TextBatch {
     labels: Vec<TextLabel>,
 }
@@ -143,6 +143,7 @@ impl TextBatch {
     }
 }
 
+#[derive(Clone, PartialEq)]
 struct TextLabel {
     text: String,
     rect: ViewRect,
@@ -154,7 +155,7 @@ struct TextLabel {
     wrap: TextWrap,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 enum TextAlign {
     Start,
     Center,
@@ -169,7 +170,7 @@ impl TextAlign {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 enum TextWrap {
     None,
     WordOrGlyph,
@@ -216,6 +217,8 @@ pub(crate) struct TextRenderer {
     vertex_capacity: usize,
     vertex_count: usize,
     stats: TextFrameStats,
+    last_batch: Option<TextBatch>,
+    last_frame_key: Option<TextFrameKey>,
 }
 
 impl TextRenderer {
@@ -305,6 +308,8 @@ impl TextRenderer {
             vertex_capacity,
             vertex_count: 0,
             stats: TextFrameStats::default(),
+            last_batch: None,
+            last_frame_key: None,
         }
     }
 
@@ -317,6 +322,14 @@ impl TextRenderer {
         surface_height: u32,
         scale: f32,
     ) {
+        let frame_key = TextFrameKey {
+            surface_width,
+            surface_height,
+            scale_bits: scale.max(1.0).to_bits(),
+        };
+        if self.last_frame_key == Some(frame_key) && self.last_batch.as_ref() == Some(batch) {
+            return;
+        }
         let frame = self.build_frame(batch, surface_width, surface_height, scale);
         if frame.width != self.texture_width || frame.height != self.texture_height {
             self.texture = create_text_texture(device, frame.width, frame.height);
@@ -364,6 +377,8 @@ impl TextRenderer {
             );
         }
         self.stats = frame.stats;
+        self.last_frame_key = Some(frame_key);
+        self.last_batch = Some(batch.clone());
     }
 
     pub(crate) fn draw<'pass>(&'pass self, pass: &mut wgpu::RenderPass<'pass>) {
@@ -515,6 +530,13 @@ struct LabelRaster {
     pixels: Vec<u8>,
     width: u32,
     height: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct TextFrameKey {
+    surface_width: u32,
+    surface_height: u32,
+    scale_bits: u32,
 }
 
 #[derive(Clone, Copy)]

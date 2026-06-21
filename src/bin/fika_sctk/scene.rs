@@ -1,7 +1,7 @@
 use std::error::Error;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use fika_core::{ViewMode, ViewPoint, ViewRect};
+use fika_core::{ViewMode, ViewPoint, ViewRect, file_ops, home_dir};
 
 use super::metrics::{
     APP_TOOLBAR_HEIGHT, PANE_MARGIN, PLACES_ICON_SIZE, PLACES_PANEL_MARGIN_BOTTOM,
@@ -16,6 +16,7 @@ use super::text::TextBatch;
 
 const TEXT_PRIMARY: [u8; 4] = [36, 41, 47, 255];
 const TEXT_MUTED: [u8; 4] = [89, 99, 110, 255];
+const RUBBER_BAND_POINTER_STEP: f32 = 4.0;
 
 pub(crate) struct SctkScene {
     primary: SctkPane,
@@ -177,6 +178,10 @@ impl SctkScene {
                     origin,
                     current,
                 } => {
+                    let point = sample_rubber_band_point(point);
+                    if current == point {
+                        return false;
+                    }
                     self.pointer_capture = Some(PointerCapture::RubberBand {
                         pane,
                         origin,
@@ -210,6 +215,32 @@ impl SctkScene {
 
     pub(crate) fn press_primary(&mut self, point: ViewPoint, width: u32, height: u32) -> bool {
         let geometry = self.geometry(width, height);
+        if let Some(place) = self.place_at(point, geometry) {
+            self.pointer_capture = None;
+            let location_changed = self.active_pane_mut().cancel_location_edit();
+            let filter_changed = self.active_pane_mut().blur_filter_edit();
+            let PlaceRow { label, path } = place;
+            if label == "Trash"
+                && let Err(error) = file_ops::ensure_trash_dirs()
+            {
+                eprintln!(
+                    "[fika-sctk] place-open-error label={label} path={} error={error}",
+                    path.display()
+                );
+                return location_changed | filter_changed;
+            }
+            let opened = match self.active_pane_mut().open_path(path.clone()) {
+                Ok(changed) => changed,
+                Err(error) => {
+                    eprintln!(
+                        "[fika-sctk] place-open-error label={label} path={} error={error}",
+                        path.display()
+                    );
+                    false
+                }
+            };
+            return opened | location_changed | filter_changed;
+        }
         let previous_active = self.active;
         match geometry.pane_at(point) {
             Some(PaneSlot::Primary) => {
@@ -449,23 +480,11 @@ impl SctkScene {
         height: u32,
     ) {
         let clip = inset(places, 6.0);
-        let rows = [
-            ("Home", true),
-            ("Desktop", false),
-            ("Documents", false),
-            ("Downloads", false),
-            ("Trash", false),
-            ("Root", self.path() == &PathBuf::from("/")),
-        ];
-        for (row, (label, active)) in rows.iter().enumerate() {
-            let y = places.y + PLACES_TITLE_HEIGHT + 8.0 + row as f32 * PLACES_ROW_HEIGHT;
-            let rect = ViewRect {
-                x: places.x + 8.0,
-                y,
-                width: places.width - 16.0,
-                height: PLACES_ROW_HEIGHT - 2.0,
-            };
-            if *active {
+        let rows = self.place_rows();
+        let active_index = active_place_index(self.active_path(), &rows);
+        for (row, place) in rows.iter().enumerate() {
+            let rect = place_row_rect(places, row);
+            if Some(row) == active_index {
                 batch.push_clipped_rounded_rect(
                     rect,
                     clip,
@@ -490,7 +509,7 @@ impl SctkScene {
                 height,
             );
             text.push_no_wrap(
-                *label,
+                place.label.as_str(),
                 ViewRect {
                     x: icon.right() + 9.0,
                     y: rect.y + (rect.height - TEXT_LINE_HEIGHT) / 2.0,
@@ -500,7 +519,11 @@ impl SctkScene {
                 clip,
                 TEXT_FONT_SIZE,
                 TEXT_LINE_HEIGHT,
-                if *active { TEXT_PRIMARY } else { TEXT_MUTED },
+                if Some(row) == active_index {
+                    TEXT_PRIMARY
+                } else {
+                    TEXT_MUTED
+                },
             );
         }
     }
@@ -590,6 +613,33 @@ impl SctkScene {
         self.split
             .as_mut()
             .is_some_and(|split| split.clear_pointer())
+    }
+
+    fn place_rows(&self) -> Vec<PlaceRow> {
+        let home = home_dir();
+        let mut rows = Vec::new();
+        push_place(&mut rows, "Home", home.clone());
+        push_existing_place(&mut rows, "Desktop", home.join("Desktop"));
+        push_existing_place(&mut rows, "Documents", home.join("Documents"));
+        push_existing_place(&mut rows, "Downloads", home.join("Downloads"));
+        push_place(&mut rows, "Trash", file_ops::trash_files_dir());
+        push_place(&mut rows, "Root", PathBuf::from("/"));
+        rows
+    }
+
+    fn place_at(&self, point: ViewPoint, geometry: SceneGeometry) -> Option<PlaceRow> {
+        let places = geometry.places?;
+        if !places.contains(point) {
+            return None;
+        }
+        self.place_rows()
+            .into_iter()
+            .enumerate()
+            .find_map(|(index, place)| {
+                place_row_rect(places, index)
+                    .contains(point)
+                    .then_some(place)
+            })
     }
 
     fn drag_scrollbar(
@@ -719,6 +769,12 @@ struct SceneGeometry {
     split_divider: Option<ViewRect>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PlaceRow {
+    label: String,
+    path: PathBuf,
+}
+
 impl SceneGeometry {
     fn pane_at(self, point: ViewPoint) -> Option<PaneSlot> {
         if self.primary.pane.contains(point) {
@@ -823,6 +879,54 @@ fn push_rubber_band(
         width,
         height,
     );
+}
+
+fn sample_rubber_band_point(point: ViewPoint) -> ViewPoint {
+    ViewPoint {
+        x: (point.x / RUBBER_BAND_POINTER_STEP).round() * RUBBER_BAND_POINTER_STEP,
+        y: (point.y / RUBBER_BAND_POINTER_STEP).round() * RUBBER_BAND_POINTER_STEP,
+    }
+}
+
+fn place_row_rect(places: ViewRect, row: usize) -> ViewRect {
+    ViewRect {
+        x: places.x + 8.0,
+        y: places.y + PLACES_TITLE_HEIGHT + 8.0 + row as f32 * PLACES_ROW_HEIGHT,
+        width: places.width - 16.0,
+        height: PLACES_ROW_HEIGHT - 2.0,
+    }
+}
+
+fn push_place(rows: &mut Vec<PlaceRow>, label: &str, path: PathBuf) {
+    if rows.iter().any(|row| row.path == path) {
+        return;
+    }
+    rows.push(PlaceRow {
+        label: label.to_string(),
+        path,
+    });
+}
+
+fn push_existing_place(rows: &mut Vec<PlaceRow>, label: &str, path: PathBuf) {
+    if path.is_dir() {
+        push_place(rows, label, path);
+    }
+}
+
+fn active_place_index(active_path: &Path, rows: &[PlaceRow]) -> Option<usize> {
+    rows.iter()
+        .enumerate()
+        .filter(|(_, row)| path_matches_place(active_path, &row.path))
+        .max_by_key(|(_, row)| row.path.components().count())
+        .map(|(index, _)| index)
+}
+
+fn path_matches_place(path: &Path, place: &Path) -> bool {
+    if place == Path::new("/") {
+        path.is_absolute()
+    } else {
+        path == place || path.starts_with(place)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -977,6 +1081,53 @@ mod tests {
         assert!(geometry.primary.content.width > 0.0);
         assert!(geometry.primary.content.y > geometry.primary.pane.y);
         assert!(geometry.places.is_some());
+    }
+
+    #[test]
+    fn places_click_opens_path_in_active_pane() {
+        let mut scene = scene(ViewMode::Icons, 5);
+        let geometry = scene.geometry(900, 640);
+        let places = geometry.places.expect("places geometry");
+        let root_row = scene
+            .place_rows()
+            .iter()
+            .position(|place| place.label == "Root")
+            .expect("root place");
+        let root_rect = place_row_rect(places, root_row);
+        let point = ViewPoint {
+            x: root_rect.x + 8.0,
+            y: root_rect.y + root_rect.height / 2.0,
+        };
+
+        assert!(scene.press_primary(point, 900, 640));
+        assert_eq!(scene.primary.path(), &PathBuf::from("/"));
+        assert_eq!(
+            active_place_index(scene.active_path(), &scene.place_rows()),
+            Some(root_row)
+        );
+    }
+
+    #[test]
+    fn places_click_routes_to_active_split_pane() {
+        let mut scene = split_scene(ViewMode::Icons, 5);
+        scene.active = PaneSlot::Split;
+        let geometry = scene.geometry(1000, 640);
+        let places = geometry.places.expect("places geometry");
+        let root_row = scene
+            .place_rows()
+            .iter()
+            .position(|place| place.label == "Root")
+            .expect("root place");
+        let root_rect = place_row_rect(places, root_row);
+        let point = ViewPoint {
+            x: root_rect.x + 8.0,
+            y: root_rect.y + root_rect.height / 2.0,
+        };
+
+        assert!(scene.press_primary(point, 1000, 640));
+        assert_eq!(scene.primary.path(), &PathBuf::from("/left"));
+        assert_eq!(scene.split.as_ref().unwrap().path(), &PathBuf::from("/"));
+        assert_eq!(scene.active_pane_name(), "split");
     }
 
     #[test]

@@ -615,6 +615,14 @@ impl SctkPane {
         Ok(true)
     }
 
+    pub(crate) fn open_path(&mut self, path: PathBuf) -> Result<bool, Box<dyn Error>> {
+        if path == self.path {
+            return Ok(false);
+        }
+        self.load_path(path)?;
+        Ok(true)
+    }
+
     pub(crate) fn reload(&mut self) -> Result<bool, Box<dyn Error>> {
         let selected_name = self
             .selected
@@ -862,12 +870,7 @@ impl SctkPane {
                 + cursor_visual_advance(&self.location_text, self.location_cursor))
             .clamp(text_rect.x, text_rect.right() - 1.0);
             batch.push_clipped_rect(
-                ViewRect {
-                    x: cursor_x,
-                    y: text_rect.y + 2.0,
-                    width: 1.0,
-                    height: (text_rect.height - 4.0).max(1.0),
-                },
+                caret_rect(text_rect, cursor_x),
                 location_bar,
                 [0.12, 0.30, 0.62, 1.0],
                 width,
@@ -1239,12 +1242,7 @@ impl SctkPane {
                 + cursor_visual_advance(&self.filter_text, self.filter_cursor))
             .clamp(text_rect.x, text_rect.right() - 1.0);
             batch.push_clipped_rect(
-                ViewRect {
-                    x: cursor_x,
-                    y: text_rect.y + 2.0,
-                    width: 1.0,
-                    height: (text_rect.height - 4.0).max(1.0),
-                },
+                caret_rect(text_rect, cursor_x),
                 field,
                 [0.12, 0.30, 0.62, 1.0],
                 width,
@@ -1863,18 +1861,50 @@ fn cursor_for_location_point(point: ViewPoint, pane: ViewRect, text: &str) -> us
 }
 
 fn cursor_for_text_point(point: ViewPoint, text_rect: ViewRect, text: &str) -> usize {
-    let target =
-        ((point.x - text_rect.x).max(0.0) / location_average_char_width()).round() as usize;
-    byte_index_after_chars(text, target)
+    let target = (point.x - text_rect.x).max(0.0);
+    let mut advance = 0.0;
+    for (index, character) in text.char_indices() {
+        let width = character_visual_width(character);
+        if target <= advance + width / 2.0 {
+            return index;
+        }
+        advance += width;
+    }
+    text.len()
 }
 
 fn cursor_visual_advance(text: &str, cursor: usize) -> f32 {
     let cursor = clamp_to_char_boundary(text, cursor);
-    text[..cursor].chars().count() as f32 * location_average_char_width()
+    text[..cursor].chars().map(character_visual_width).sum()
 }
 
-fn location_average_char_width() -> f32 {
-    TEXT_FONT_SIZE * 0.56
+fn character_visual_width(character: char) -> f32 {
+    if character.is_ascii_whitespace() {
+        TEXT_FONT_SIZE * 0.32
+    } else if matches!(
+        character,
+        '/' | '\\' | '.' | ',' | ':' | ';' | '\'' | '"' | '!' | '|'
+    ) {
+        TEXT_FONT_SIZE * 0.30
+    } else if matches!(character, 'i' | 'l' | 'I' | 'j' | 't' | 'f') {
+        TEXT_FONT_SIZE * 0.34
+    } else if character.is_ascii_uppercase() {
+        TEXT_FONT_SIZE * 0.62
+    } else if character.is_ascii() {
+        TEXT_FONT_SIZE * 0.54
+    } else {
+        TEXT_FONT_SIZE
+    }
+}
+
+fn caret_rect(text_rect: ViewRect, x: f32) -> ViewRect {
+    let height = (TEXT_LINE_HEIGHT - 2.0).max(1.0);
+    ViewRect {
+        x,
+        y: text_rect.y + (text_rect.height - height) / 2.0,
+        width: 1.25,
+        height,
+    }
 }
 
 fn filter_bar_rect(content: ViewRect) -> ViewRect {
@@ -1904,14 +1934,6 @@ fn filter_text_rect(content: ViewRect) -> ViewRect {
         width: (field.width - 16.0).max(1.0),
         height: TEXT_LINE_HEIGHT,
     }
-}
-
-fn byte_index_after_chars(text: &str, count: usize) -> usize {
-    text.char_indices()
-        .map(|(index, _)| index)
-        .chain(std::iter::once(text.len()))
-        .nth(count)
-        .unwrap_or(text.len())
 }
 
 fn clamp_to_char_boundary(text: &str, mut cursor: usize) -> usize {
@@ -2265,6 +2287,52 @@ mod tests {
         assert_eq!(pane.visible_entry_count(), 1);
 
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn location_cursor_hit_test_uses_weighted_path_widths() {
+        let text = "/home/yk/Downloads";
+        let rect = ViewRect {
+            x: 20.0,
+            y: 8.0,
+            width: 240.0,
+            height: TEXT_LINE_HEIGHT,
+        };
+
+        let after_slash = cursor_for_text_point(
+            ViewPoint {
+                x: rect.x + character_visual_width('/') * 0.75,
+                y: rect.y,
+            },
+            rect,
+            text,
+        );
+        assert_eq!(after_slash, 1);
+
+        let near_downloads = cursor_for_text_point(
+            ViewPoint {
+                x: rect.x + cursor_visual_advance(text, 9),
+                y: rect.y,
+            },
+            rect,
+            text,
+        );
+        assert!(text.is_char_boundary(near_downloads));
+        assert!(near_downloads >= 8);
+    }
+
+    #[test]
+    fn caret_rect_is_vertically_centered_in_text_rect() {
+        let rect = ViewRect {
+            x: 4.0,
+            y: 10.0,
+            width: 100.0,
+            height: TEXT_LINE_HEIGHT,
+        };
+        let caret = caret_rect(rect, 12.0);
+        assert_eq!(caret.x, 12.0);
+        assert!(caret.y > rect.y);
+        assert!(caret.bottom() < rect.bottom());
     }
 
     #[test]

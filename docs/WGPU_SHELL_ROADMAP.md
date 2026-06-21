@@ -335,16 +335,21 @@ Legacy migration input, read-only unless shared build breakage requires a fix:
   keyboard navigation all route through the filtered model-index projection.
   Full IME/caret/selection editing remains Phase 4 text-boundary work.
 - A minimal shell-owned pane-local location edit mode is now available from `Ctrl/Meta+L`,
-  `Ctrl/Meta+D`, `F6`, or clicking the top path bar. It reuses core
-  `resolve_location_input` and `complete_location_input`: first typed input
-  replaces the current path draft, Backspace/Delete edit at the real caret,
-  Arrow/Home/End move the caret, caret x is now measured from the same
-  `cosmic-text` shaped glyph layout used to rasterize the no-wrap path label,
-  clicking outside the path bar safely cancels the draft and restores the real
-  current path, Tab completes filesystem paths, Enter commits through the
-  retained navigation/history path, and Esc cancels. Selection editing and IME
-  remain Phase 4
-  text-boundary work.
+  or clicking the top path bar. Backspace/Delete edit at the caret,
+  Arrow/Home/End move the caret, clicking outside the path bar safely cancels
+  the draft and restores the real current path, Enter commits by loading the
+  target path, and Esc cancels. The SCTK caret is now vertically centered and
+  uses weighted path-character advances for click/hit-test positioning; replacing
+  that approximation with the same `cosmic-text` shaping cache used for raster
+  remains Phase 4 text-boundary work.
+- The first SCTK Places rows are now clickable retained targets instead of paint
+  only. Home, existing common XDG directories, Trash files, and Root navigate
+  the active pane, including split mode, with active-row highlighting based on
+  the active pane path.
+- High-frequency pointer rendering has been tightened for rubber-band selection:
+  rubber-band motion is sampled, frame logging is throttled for pointer/scroll
+  frames, and unchanged text batches reuse their previous atlas instead of
+  reshaping/rasterizing every visible label during overlay-only frames.
 - Dotfile visibility is now shell-owned. Hidden entries are excluded from the
   retained projection by default; `Ctrl/Meta+H` shows them. Selection is
   retained or pruned through the same projection when the visibility mode
@@ -419,8 +424,9 @@ Acceptance:
 - [~] Scroll, scrollbar drag, hover, keyboard navigation, runtime mode
   switching, split toggling, reload, hidden-file visibility, selection, and
   clear shortcuts work from retained geometry in `SctkPane`/`SctkScene`.
-  Projection zoom, location editing, filtering, rubber-band, and select-all
-  remain pending in the SCTK shell.
+  Location editing, filtering, rubber-band, select-all, and first Places
+  left-click navigation are now routed through the SCTK shell. Projection zoom
+  and richer Places/device actions remain pending.
 - [~] Layout/hit-test/paint share the same shell layout abstraction for Icons,
   Compact, and Details. Primary and split panes now share `SctkPane` state,
   generic item paint, scrollbar metrics, and the hidden-file visible-index
@@ -459,9 +465,10 @@ Places hover, and drag/drop target lookup into shell-owned hit testing.
 Acceptance:
 
 - [~] Pane item/blank right-click context target selection and the first
-  shell-owned context menu overlay are in the file view. Places row hover,
-  left-click navigation, right-click context targets, and the minimal
-  Open/Copy Location/Properties/Remove place menu are shell-owned. Mounted
+  shell-owned context menu overlay are in the file view. SCTK Places
+  left-click navigation is now shell-owned; row hover, richer right-click
+  context targets, and the minimal Open/Copy Location/Properties/Remove place
+  menu remain pending for the SCTK path. Mounted
   devices are projected into Places from a GIO snapshot; live device monitoring
   and device/place edit/hide/add action dispatch remain pending. The first `ShellDropTarget`
   lookup now resolves primary/split pane items, pane blanks, place rows, and
