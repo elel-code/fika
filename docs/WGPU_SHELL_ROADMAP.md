@@ -108,6 +108,8 @@ Expected cleanup:
   keyboard navigation actions, click context, and rubber-band state.
   `src/bin/fika_wgpu/pane.rs` owns pane kind/state/view/projection data,
   scroll metrics, split metrics, and the visible-slot pool.
+  `src/bin/fika_wgpu/pane_layout.rs` owns the shell layout enum, Compact and
+  Details layout adapters, and keyboard navigation target calculation.
 - Extract app/window/event loop, renderer, scene, pane, Places, context menu,
   dialogs, icons, thumbnails, text, DnD, and telemetry modules.
 - Keep behavior changes small while moving code, so regressions remain easy to
