@@ -290,10 +290,12 @@ Current checkpoint:
   mtime-keyed raster into the shell icon atlas. Visible requests are promoted
   ahead of deferred work, and each frame queues a bounded Dolphin-order
   read-ahead set after visible items so scrolling into nearby images can reuse
-  already-started work. Failed probes are cached in the resolver so steady
-  redraws do not repeatedly requeue impossible thumbnails. This is still an
-  initial shell-local path, not full Dolphin/KIO PreviewJob parity or model-role
-  writeback.
+  already-started work. Ready read-ahead rasters are held in a bounded resolver
+  cache before visible items consume them, so long image-directory scrolls do
+  not leave unbounded thumbnail PNG rasters outside the retained icon cache.
+  Failed probes are cached in the resolver so steady redraws do not repeatedly
+  requeue impossible thumbnails. This is still an initial shell-local path, not
+  full Dolphin/KIO PreviewJob parity or model-role writeback.
 - `[fika-wgpu]` logs include view mode, window/UI scale, path, entry count,
   visible item count, thumbnail candidate count, retained visible slot
   active/free/reuse/recycle/allocation counters,
@@ -301,7 +303,7 @@ Current checkpoint:
   context target kind, context menu state, properties overlay state, hit-test/selection/keyboard navigation/rubber-band/view-switch/path-change/open/copy-location/file-clipboard/paste
   counters, reload/location/filter/hidden counters, DnD hover/drop-request counters, zoom percent and zoom-change counters, icon count, icon deferred/raster-deferred count, icon cache
   hit/miss count, icon cache bytes, icon atlas bytes, icon resolve/raster time,
-  thumbnail loaded/quad/deferred/read-ahead counters,
+  thumbnail loaded/quad/deferred/read-ahead/ready-cache counters,
   text label count, text cache hit/miss count, text cache bytes, text atlas
   bytes, draw batch count, render reason, layout time, text raster time, render
   time, and `scroll_x` / `scroll_y` offsets.
@@ -332,7 +334,8 @@ Acceptance:
 - [~] Emits frame timing, visible range, draw-command counters, temporary
   icon/text atlas counters, retained hit-test counters, bounded
   icon/label-cache counters, visible slot reuse counters, thumbnail candidate
-  counters, and the first thumbnail loaded/quad/deferred/read-ahead counters.
+  counters, and the first thumbnail loaded/quad/deferred/read-ahead/ready-cache
+  counters.
   Glyph-level and long-lived thumbnail atlas eviction counters will start once
   those resource retention layers exist.
 
@@ -373,9 +376,10 @@ Acceptance:
   failure-cache checks, and thumbnailer registry commands off-frame, then
   rasterizes ready thumbnails into the per-frame atlas path. Visible requests
   are prioritized over deferred work, and a bounded Dolphin-order read-ahead
-  queue now covers nearby offscreen thumbnails. Full Dolphin/KIO-style preview
-  job cancellation, model role writeback, and long-lived thumbnail atlas
-  retention remain the next step.
+  queue now covers nearby offscreen thumbnails. Ready read-ahead rasters are
+  bounded before visible consumption. Full Dolphin/KIO-style preview job
+  cancellation, model role writeback, and long-lived thumbnail atlas retention
+  remain the next step.
 - Cache logs show hit/miss/evict/bytes and per-frame compute time.
 
 ### Phase 3: Interaction and DnD
@@ -478,7 +482,8 @@ device monitoring and mount/eject actions remain pending. Thumbnail work has a
 visible-item candidate projection, off-frame core thumbnail cache/thumbnailer
 probing, background rasterization, mtime-keyed failure handling, and frame
 telemetry; visible-priority dispatch and bounded Dolphin-order read-ahead are
-now in place, while model role writeback and long-lived atlas retention remain
+now in place, and ready read-ahead rasters are bounded before visible
+consumption, while model role writeback and long-lived atlas retention remain
 pending. The properties, create, rename, Open With, and Trash
 conflict overlay rectangles and hit tests now scale with the window DPI factor.
 Richer Places actions/DnD, richer Trash conflict handling, undo, richer

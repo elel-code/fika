@@ -70,6 +70,7 @@ const ICON_ATLAS_WIDTH: u32 = 1024;
 const ICON_PADDING: u32 = 2;
 const ICON_CACHE_MAX_BYTES: usize = 32 * 1024 * 1024;
 const ICON_RASTER_MISS_BUDGET_PER_FRAME: usize = 2;
+const THUMBNAIL_READY_CACHE_MAX_BYTES: usize = 32 * 1024 * 1024;
 const THUMBNAIL_READ_AHEAD_PAGES: usize = 5;
 const THUMBNAIL_READ_AHEAD_RESOLVE_LIMIT: usize = 500;
 const THUMBNAIL_READ_AHEAD_QUEUE_BUDGET_PER_FRAME: usize = 32;
@@ -11203,7 +11204,7 @@ impl WgpuState {
             || self.last_log.elapsed() >= Duration::from_secs(1)
         {
             eprintln!(
-                "[fika-wgpu] frame={} reason={} view={} scale={:.2} zoom={} zoom_changes={} path={} entries={} filtered={} show_hidden={} hidden_changes={} location_active={} location_changes={} filter_active={} filter_changes={} places={} places_visible={} places_width={:.1} place_hover={} places_changes={} places_resize_changes={} places_scroll_y={:.1} places_scroll_changes={} split_pane={} split_changes={} split_path={} content_scrollbar={} visible={} thumbnails={} slots={}/{} slot_reused={} slot_recycled={} slot_allocated={} selected={} hover={} dnd_hover={} dnd_hover_changes={} dnd_drop_requests={} context={} context_menu={} context_changes={} context_actions={} properties={} properties_changes={} create_dialog={} create_changes={} rename_dialog={} rename_changes={} open_with={} open_with_changes={} open_changes={} copy_location_changes={} file_clipboard_changes={} paste_changes={} trash_changes={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} path_changes={} reloads={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_deferred={} icon_raster_deferred={} thumb_loaded={} thumb_quads={} thumb_deferred={} thumb_read_ahead={} icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_cache={}/{} entries={} bytes={} batches={} scroll_x={:.1} scroll_y={:.1} layout={}us text_raster={}us text_atlas={}x{}:{}b render={}us",
+                "[fika-wgpu] frame={} reason={} view={} scale={:.2} zoom={} zoom_changes={} path={} entries={} filtered={} show_hidden={} hidden_changes={} location_active={} location_changes={} filter_active={} filter_changes={} places={} places_visible={} places_width={:.1} place_hover={} places_changes={} places_resize_changes={} places_scroll_y={:.1} places_scroll_changes={} split_pane={} split_changes={} split_path={} content_scrollbar={} visible={} thumbnails={} slots={}/{} slot_reused={} slot_recycled={} slot_allocated={} selected={} hover={} dnd_hover={} dnd_hover_changes={} dnd_drop_requests={} context={} context_menu={} context_changes={} context_actions={} properties={} properties_changes={} create_dialog={} create_changes={} rename_dialog={} rename_changes={} open_with={} open_with_changes={} open_changes={} copy_location_changes={} file_clipboard_changes={} paste_changes={} trash_changes={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} path_changes={} reloads={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_deferred={} icon_raster_deferred={} thumb_loaded={} thumb_quads={} thumb_deferred={} thumb_read_ahead={} thumb_ready={}/{}b icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_cache={}/{} entries={} bytes={} batches={} scroll_x={:.1} scroll_y={:.1} layout={}us text_raster={}us text_atlas={}x{}:{}b render={}us",
                 self.frame_count,
                 reason,
                 scene.view_mode.as_str(),
@@ -11308,6 +11309,8 @@ impl WgpuState {
                 scene_frame.icon_stats.thumbnail_quads,
                 scene_frame.icon_stats.thumbnail_deferred,
                 scene_frame.icon_stats.thumbnail_read_ahead_queued,
+                scene_frame.icon_stats.thumbnail_ready_entries,
+                scene_frame.icon_stats.thumbnail_ready_bytes,
                 scene_frame.icon_stats.cache_hits,
                 scene_frame.icon_stats.cache_misses,
                 scene_frame.icon_stats.cache_entries,
@@ -11439,6 +11442,8 @@ struct IconFrameStats {
     thumbnail_quads: usize,
     thumbnail_deferred: usize,
     thumbnail_read_ahead_queued: usize,
+    thumbnail_ready_entries: usize,
+    thumbnail_ready_bytes: usize,
     atlas_width: u32,
     atlas_height: u32,
     atlas_bytes: usize,
@@ -11619,10 +11624,20 @@ enum ThumbnailResolveState {
     Failed,
 }
 
+#[derive(Clone, Debug)]
+struct ThumbnailReadyEntry {
+    raster: IconRaster,
+    bytes: usize,
+    last_used_frame: u64,
+}
+
 struct ThumbnailRasterResolver {
-    ready: HashMap<IconRasterCacheKey, Option<IconRaster>>,
+    ready: HashMap<IconRasterCacheKey, ThumbnailReadyEntry>,
     failed: HashSet<ThumbnailProbeCacheKey>,
     pending: HashMap<IconRasterCacheKey, ThumbnailRequestPriority>,
+    ready_frame: u64,
+    ready_bytes: usize,
+    ready_max_bytes: usize,
     request_tx: Option<Sender<ThumbnailRasterRequest>>,
     result_rx: Receiver<ThumbnailRasterResult>,
 }
@@ -11644,6 +11659,9 @@ impl ThumbnailRasterResolver {
             ready: HashMap::new(),
             failed: HashSet::new(),
             pending: HashMap::new(),
+            ready_frame: 0,
+            ready_bytes: 0,
+            ready_max_bytes: THUMBNAIL_READY_CACHE_MAX_BYTES,
             request_tx,
             result_rx,
         }
@@ -11659,10 +11677,9 @@ impl ThumbnailRasterResolver {
         self.drain_results();
         let key = IconRasterCacheKey::thumbnail(path.to_path_buf(), size_px, modified_secs);
         let failure_key = ThumbnailProbeCacheKey::new(path.to_path_buf(), modified_secs);
-        if let Some(raster) = self.ready.remove(&key) {
-            return raster
-                .map(ThumbnailResolveState::Ready)
-                .unwrap_or(ThumbnailResolveState::Failed);
+        if let Some(entry) = self.ready.remove(&key) {
+            self.ready_bytes = self.ready_bytes.saturating_sub(entry.bytes);
+            return ThumbnailResolveState::Ready(entry.raster);
         }
         if self.failed.contains(&failure_key) {
             return ThumbnailResolveState::Failed;
@@ -11737,14 +11754,56 @@ impl ThumbnailRasterResolver {
         let mut changed = 0usize;
         while let Ok(result) = self.result_rx.try_recv() {
             self.pending.remove(&result.key);
-            if result.raster.is_some() {
-                self.ready.insert(result.key, result.raster);
+            if let Some(raster) = result.raster {
+                self.insert_ready(result.key, raster);
             } else if let Some(key) = ThumbnailProbeCacheKey::from_raster_key(&result.key) {
                 self.failed.insert(key);
             }
             changed += 1;
         }
         changed
+    }
+
+    fn insert_ready(&mut self, key: IconRasterCacheKey, raster: IconRaster) {
+        let bytes = raster.pixels.len();
+        self.ready_frame = self.ready_frame.wrapping_add(1);
+        if let Some(old) = self.ready.insert(
+            key.clone(),
+            ThumbnailReadyEntry {
+                raster,
+                bytes,
+                last_used_frame: self.ready_frame,
+            },
+        ) {
+            self.ready_bytes = self.ready_bytes.saturating_sub(old.bytes);
+        }
+        self.ready_bytes += bytes;
+        self.evict_ready_if_needed(&key);
+    }
+
+    fn evict_ready_if_needed(&mut self, protected: &IconRasterCacheKey) {
+        while self.ready_bytes > self.ready_max_bytes && self.ready.len() > 1 {
+            let Some(victim) = self
+                .ready
+                .iter()
+                .filter(|(key, _)| *key != protected)
+                .min_by_key(|(_, entry)| entry.last_used_frame)
+                .map(|(key, _)| key.clone())
+            else {
+                break;
+            };
+            if let Some(entry) = self.ready.remove(&victim) {
+                self.ready_bytes = self.ready_bytes.saturating_sub(entry.bytes);
+            }
+        }
+    }
+
+    fn ready_len(&self) -> usize {
+        self.ready.len()
+    }
+
+    fn ready_bytes(&self) -> usize {
+        self.ready_bytes
     }
 
     fn has_pending(&mut self) -> bool {
@@ -12116,6 +12175,8 @@ impl<'a> IconFrameBuilder<'a> {
         let atlas_bytes = (self.width * height * 4) as usize;
         let cache_entries = self.raster_cache.len();
         let cache_bytes = self.raster_cache.bytes();
+        let thumbnail_ready_entries = self.thumbnails.ready_len();
+        let thumbnail_ready_bytes = self.thumbnails.ready_bytes();
         IconFrame {
             vertices,
             pixels: self.pixels,
@@ -12130,6 +12191,8 @@ impl<'a> IconFrameBuilder<'a> {
                 thumbnail_quads: self.thumbnail_quads,
                 thumbnail_deferred: self.thumbnail_deferred,
                 thumbnail_read_ahead_queued: self.thumbnail_read_ahead_queued,
+                thumbnail_ready_entries,
+                thumbnail_ready_bytes,
                 atlas_width: self.width,
                 atlas_height: height,
                 atlas_bytes,
@@ -16910,6 +16973,60 @@ mod tests {
     }
 
     #[test]
+    fn thumbnail_worker_promotes_visible_request_over_deferred() {
+        let mut visible = VecDeque::new();
+        let mut deferred = VecDeque::new();
+        let mut queued = HashMap::new();
+        let first = test_thumbnail_raster_request("first.png", ThumbnailRequestPriority::Deferred);
+        let second =
+            test_thumbnail_raster_request("second.png", ThumbnailRequestPriority::Deferred);
+        let promoted =
+            test_thumbnail_raster_request("first.png", ThumbnailRequestPriority::Visible);
+
+        thumbnail_worker_queue_request(first.clone(), &mut visible, &mut deferred, &mut queued);
+        thumbnail_worker_queue_request(second.clone(), &mut visible, &mut deferred, &mut queued);
+        thumbnail_worker_queue_request(promoted.clone(), &mut visible, &mut deferred, &mut queued);
+
+        assert_eq!(visible.len(), 1);
+        assert_eq!(deferred.len(), 1);
+        assert_eq!(visible.front().unwrap().key, promoted.key);
+        assert_eq!(deferred.front().unwrap().key, second.key);
+        assert_eq!(
+            queued.get(&promoted.key),
+            Some(&ThumbnailRequestPriority::Visible)
+        );
+    }
+
+    #[test]
+    fn thumbnail_ready_cache_evicts_old_read_ahead_results() {
+        let cache_root = test_dir("thumbnail-ready-cache-root");
+        let mut resolver = ThumbnailRasterResolver::with_cache_root(cache_root.clone());
+        resolver.ready_max_bytes = 32;
+        let first = IconRasterCacheKey::thumbnail(PathBuf::from("/tmp/first.png"), 8, 1);
+        let second = IconRasterCacheKey::thumbnail(PathBuf::from("/tmp/second.png"), 8, 1);
+        let third = IconRasterCacheKey::thumbnail(PathBuf::from("/tmp/third.png"), 8, 1);
+
+        resolver.insert_ready(first.clone(), test_icon_raster(2, 1));
+        resolver.insert_ready(second.clone(), test_icon_raster(2, 2));
+        resolver.insert_ready(third.clone(), test_icon_raster(2, 3));
+
+        assert_eq!(resolver.ready_len(), 2);
+        assert_eq!(resolver.ready_bytes(), 32);
+        assert!(!resolver.ready.contains_key(&first));
+        assert!(resolver.ready.contains_key(&second));
+        assert!(resolver.ready.contains_key(&third));
+
+        assert!(matches!(
+            resolver.resolve(&second.path, 1, Some("image/png".to_string()), 8),
+            ThumbnailResolveState::Ready(_)
+        ));
+        assert_eq!(resolver.ready_len(), 1);
+        assert_eq!(resolver.ready_bytes(), 16);
+
+        let _ = fs::remove_dir_all(cache_root);
+    }
+
+    #[test]
     fn thumbnail_resolver_uses_freedesktop_cache_hit() {
         let cache_root = test_dir("thumbnail-cache-root");
         let source_root = test_dir("thumbnail-source-root");
@@ -16974,6 +17091,25 @@ mod tests {
 
         let _ = fs::remove_dir_all(cache_root);
         let _ = fs::remove_dir_all(source_root);
+    }
+
+    fn test_thumbnail_raster_request(
+        name: &str,
+        priority: ThumbnailRequestPriority,
+    ) -> ThumbnailRasterRequest {
+        ThumbnailRasterRequest {
+            key: IconRasterCacheKey::thumbnail(PathBuf::from(format!("/tmp/{name}")), 48, 1),
+            mime_type: Some("image/png".to_string()),
+            priority,
+        }
+    }
+
+    fn test_icon_raster(size: u32, seed: u8) -> IconRaster {
+        IconRaster {
+            pixels: vec![seed; (size * size * 4) as usize].into(),
+            width: size,
+            height: size,
+        }
     }
 
     fn wait_for_thumbnail_state(
