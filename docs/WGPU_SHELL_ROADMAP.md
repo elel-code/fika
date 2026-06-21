@@ -125,8 +125,9 @@ Current checkpoint:
 - Mouse-wheel scrolling updates retained viewport state. File content now
   reserves and draws shell-owned item-view scrollbars: Icons/Details use a
   vertical right-side track and Compact uses a horizontal bottom track. The
-  frame log includes `content_scrollbar=0|1`; scrollbar drag/click interaction
-  remains follow-up work.
+  track and thumb are rounded, and thumb drag plus track click-to-drag update
+  the same retained scroll offsets. The frame log includes
+  `content_scrollbar=0|1`.
 - The experimental binary accepts `--view icons|compact|details`. Icons remains
   the default baseline; Compact uses core `CompactLayout`; Details now has a
   shell-owned row projection with a fixed header and Name/Size/Modified columns.
@@ -195,8 +196,9 @@ Current checkpoint:
   `places-order.xml`, Network root, network bookmarks, and Root from public
   core APIs, keeps retained row geometry, uses longest-prefix active-place
   projection, updates sidebar hover independently from item hover, owns an
-  independent sidebar scroll offset with clipped row rendering and a narrow
-  scrollbar thumb, paints rounded active/hovered row backgrounds, and dispatches
+  independent sidebar scroll offset with clipped row rendering and a rounded
+  narrow scrollbar track/thumb that supports thumb drag and track click-to-drag,
+  paints rounded active/hovered row backgrounds, and dispatches
   left-click place navigation through the same `load_path`/history path as
   file-view navigation. Places
   right-click now creates a shell-owned place context target and a minimal
@@ -229,7 +231,7 @@ Current checkpoint:
   geometry, updates the title, and presents the new scene through the same
   redraw burst path used by view switching.
 - Initial view zoom is shell-owned and retained-geometry driven. `Ctrl/Meta + +`,
-  `Ctrl/Meta + -`, and `Ctrl/Meta + 0` adjust or reset a bounded zoom step.
+  `Ctrl/Meta + -`, `Ctrl/Meta + 0`, and `Ctrl/Meta + wheel` adjust or reset a bounded zoom step.
   Icons and Compact update item/icon/text slot metrics, Details updates row and
   icon metrics, scroll is clamped, the focused item is kept visible, and the icon
   resolver now requests rasters at the zoomed slot size. Glyph-level text sizing
@@ -356,7 +358,9 @@ reload, hidden-file, history, and view-mode commands remain available. The pane
 starts below the toolbar with margin, while the rounded Places panel aligns to
 the pane origin, includes the original-style title/row/icon metrics, and keeps
 left-click navigation plus a minimal Open/Copy Location/Properties/Remove row
-context menu. The pane still owns its bottom status bar with
+context menu. Content and Places scrollbars now use rounded tracks/thumbs and
+support thumb drag plus track click-to-drag without leaving retained geometry.
+The pane still owns its bottom status bar with
 directory/selection/view/zoom summary, a minimal `Ctrl/Meta+F` filter bar, a
 pane-local 28px `Ctrl/Meta+L`/`Ctrl/Meta+D`/`F6` location edit mode matching the
 original header scale, and a lightweight opaque light file-view context menu

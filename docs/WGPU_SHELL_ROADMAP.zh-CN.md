@@ -108,7 +108,8 @@ Shell 拥有：
   icon atlas，并按 theme icon file path 和 size 保留 bounded persistent icon raster cache。
 - 鼠标滚轮更新 retained viewport state。文件内容区现在会预留并绘制 shell-owned
   item-view scrollbar：Icons/Details 使用右侧竖向 track，Compact 使用底部横向 track。
-  frame log 会输出 `content_scrollbar=0|1`；scrollbar drag/click 交互仍是后续工作。
+  track 和 thumb 均为圆角，并支持 thumb drag 与 track click-to-drag 更新同一 retained
+  scroll offset。frame log 会输出 `content_scrollbar=0|1`。
 - 实验 binary 支持 `--view icons|compact|details`。Icons 仍是默认 baseline；
   Compact 使用 core `CompactLayout`；Details 现在有 shell-owned row projection、
   固定 header，以及 Name/Size/Modified 三列。Icons 和 Compact 现在只在 hover 或 selection
@@ -158,7 +159,7 @@ Shell 拥有：
   toolbar 下方的 pane 起点对齐，也就是对齐右侧 pane 外框起点而不是 pane body。它通过公开 core API 构建 Home、已存在的 XDG directories、Trash、Fika user places、primary
   `places-order.xml`、Network root、network bookmarks 和 Root，保留 row geometry，用最长路径前缀决定 active place，Places
   hover 与 item hover 分离，拥有独立 sidebar scroll offset、clipped row rendering 和窄
-  scrollbar thumb，active/hover row 会绘制圆角背景，并将左键 place navigation 分派到与文件视图相同的
+  圆角窄 scrollbar track/thumb，并支持 thumb drag 与 track click-to-drag；active/hover row 会绘制圆角背景，并将左键 place navigation 分派到与文件视图相同的
   `load_path`/history path。Places 右键现在会创建 shell-owned place context target，
   并打开最小 context menu，分派 Open、Copy Location、Properties，以及 editable user
   places 的 Remove。Remove 会写回 Fika `places.xbel`，裁剪对应 place-order 条目，
@@ -181,7 +182,7 @@ Shell 拥有：
   transient state，从 retained geometry 刷新 hover，更新窗口标题，并通过与 view
   switching 相同的 redraw burst present 新 scene。
 - 初版 view zoom 也由 shell-owned retained geometry 驱动。`Ctrl/Meta + +`、
-  `Ctrl/Meta + -` 和 `Ctrl/Meta + 0` 会调整或重置有界 zoom step。Icons 和 Compact
+  `Ctrl/Meta + -`、`Ctrl/Meta + 0` 和 `Ctrl/Meta + wheel` 会调整或重置有界 zoom step。Icons 和 Compact
   会更新 item/icon/text slot metrics，Details 会更新 row 和 icon metrics，scroll 会被
   clamp，focus item 会保持可见，icon resolver 现在会按 zoom 后的 slot size 请求 raster。
   glyph-level text sizing 和长期 glyph atlas policy 仍留到 Phase 2。
@@ -286,7 +287,9 @@ context menus、dialogs 和 chooser mode。
 原版样式的 Places toggle 形态，真实 app-level controls 留待后续迁移，keyboard reload、
 hidden-file、history 和 view-mode 命令仍可用。pane 带 margin 从 toolbar 下方开始，
 圆角 Places panel 对齐 pane 起点，补齐原版标题、row 和 icon 尺寸，并保留左键
-navigation 和最小 Open/Copy Location/Properties/Remove row context menu。pane 内仍拥有底部 status bar、
+navigation 和最小 Open/Copy Location/Properties/Remove row context menu。内容区和 Places
+scrollbar 现在使用圆角 track/thumb，并支持 thumb drag 与 track click-to-drag，仍留在 retained geometry 内。
+pane 内仍拥有底部 status bar、
 `Ctrl/Meta+F` 最小 filter bar、
 `Ctrl/Meta+L`/`Ctrl/Meta+D`/`F6` pane-local 28px location edit mode（匹配原版 header scale），以及用于 file-view
 item/blank 右键的不透明浅色 context menu overlay。Context menu 现在对齐原版 196px 宽度、

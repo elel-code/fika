@@ -246,6 +246,18 @@ enum ContentScrollbarAxis {
     Vertical,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum ScrollbarDragTarget {
+    Content(ContentScrollbarAxis),
+    Places,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ScrollbarDrag {
+    target: ScrollbarDragTarget,
+    grab_offset: f32,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PathNavigationAction {
     Back,
@@ -878,6 +890,13 @@ impl ApplicationHandler for FikaWgpuApp {
                 if mouse_button != MouseButton::Left {
                     return;
                 }
+                if state == ElementState::Released && self.scene.is_scrollbar_dragging() {
+                    let changed = self.scene.end_scrollbar_drag(point, renderer.size);
+                    if changed && let Some(window) = self.window.as_ref() {
+                        window.request_redraw();
+                    }
+                    return;
+                }
                 if state == ElementState::Pressed && self.scene.is_context_menu_open() {
                     let action = self
                         .scene
@@ -885,6 +904,14 @@ impl ApplicationHandler for FikaWgpuApp {
                     if let Some(action) = action {
                         self.perform_context_menu_action(event_loop, action);
                     } else if let Some(window) = self.window.as_ref() {
+                        window.request_redraw();
+                    }
+                    return;
+                }
+                if state == ElementState::Pressed
+                    && let Some(changed) = self.scene.begin_scrollbar_drag(point, renderer.size)
+                {
+                    if changed && let Some(window) = self.window.as_ref() {
                         window.request_redraw();
                     }
                     return;
@@ -963,11 +990,21 @@ impl ApplicationHandler for FikaWgpuApp {
                 let Some(renderer) = self.renderer.as_ref() else {
                     return;
                 };
+                let shortcut =
+                    self.modifiers.state().control_key() || self.modifiers.state().meta_key();
                 let delta_y = scroll_delta_y(delta, self.scene.ui_scale());
-                if self.scene.scroll_by(delta_y, renderer.size) {
-                    if let Some(window) = self.window.as_ref() {
-                        window.request_redraw();
+                if shortcut {
+                    if let Some(zoom_action) = zoom_action_for_scroll_delta(delta_y)
+                        && self.scene.zoom(zoom_action, renderer.size)
+                    {
+                        self.present_scene_change(event_loop, "wheel-zoom");
                     }
+                    return;
+                }
+                if self.scene.scroll_by(delta_y, renderer.size)
+                    && let Some(window) = self.window.as_ref()
+                {
+                    window.request_redraw();
                 }
             }
             WindowEvent::RedrawRequested => {
@@ -1510,6 +1547,16 @@ fn scroll_delta_y(delta: MouseScrollDelta, scale_factor: f32) -> f32 {
     match delta {
         MouseScrollDelta::LineDelta(_, y) => -y * SCROLL_LINE_PX * scale_factor,
         MouseScrollDelta::PixelDelta(position) => -position.y as f32,
+    }
+}
+
+fn zoom_action_for_scroll_delta(delta_y: f32) -> Option<ZoomAction> {
+    if delta_y < -f32::EPSILON {
+        Some(ZoomAction::In)
+    } else if delta_y > f32::EPSILON {
+        Some(ZoomAction::Out)
+    } else {
+        None
     }
 }
 
@@ -3037,6 +3084,7 @@ struct ShellScene {
     scroll_x: f32,
     scroll_y: f32,
     places_scroll_y: f32,
+    scrollbar_drag: Option<ScrollbarDrag>,
     pointer: Option<ViewPoint>,
     hovered_index: Option<usize>,
     hovered_place: Option<usize>,
@@ -3123,6 +3171,7 @@ impl ShellScene {
             scroll_x: 0.0,
             scroll_y: 0.0,
             places_scroll_y: 0.0,
+            scrollbar_drag: None,
             pointer: None,
             hovered_index: None,
             hovered_place: None,
@@ -3213,6 +3262,7 @@ impl ShellScene {
         let pruned_selection = self.selection.retain_indexes(&self.filtered_indexes);
         let selection_changed = previous_selection != self.selection;
         self.rubber_band = None;
+        self.scrollbar_drag = None;
         self.last_primary_click = None;
         self.directory_reloads += 1;
         if selection_changed || pruned_selection {
@@ -3301,6 +3351,7 @@ impl ShellScene {
         self.open_with_chooser = None;
         self.trash_conflict_dialog = None;
         self.rubber_band = None;
+        self.scrollbar_drag = None;
         self.last_primary_click = None;
         self.path_changes += 1;
         self.clamp_scroll(size);
@@ -3350,6 +3401,7 @@ impl ShellScene {
         }
         self.view_mode = view_mode;
         self.rubber_band = None;
+        self.scrollbar_drag = None;
         self.view_switches += 1;
         self.clamp_scroll(size);
         eprintln!(
@@ -3376,6 +3428,7 @@ impl ShellScene {
 
         self.zoom_step = next_step;
         self.rubber_band = None;
+        self.scrollbar_drag = None;
         self.zoom_changes += 1;
         if let Some(index) = self.selection.focus_or_first_selected() {
             self.ensure_index_visible(index, size);
@@ -3905,7 +3958,12 @@ impl ShellScene {
         (self.places_content_height() - panel.height).max(0.0)
     }
 
+    #[cfg(test)]
     fn places_scrollbar_thumb_rect(&self, size: PhysicalSize<u32>) -> Option<ViewRect> {
+        self.places_scrollbar_rects(size).map(|(_, thumb)| thumb)
+    }
+
+    fn places_scrollbar_rects(&self, size: PhysicalSize<u32>) -> Option<(ViewRect, ViewRect)> {
         let panel = self.places_panel_rect(size);
         let max_scroll = self.max_places_scroll_y(size);
         if panel.width <= 0.0 || panel.height <= 0.0 || max_scroll <= f32::EPSILON {
@@ -3925,12 +3983,19 @@ impl ShellScene {
         } else {
             (self.places_scroll_y / max_scroll).clamp(0.0, 1.0)
         };
-        Some(ViewRect {
+        let track = ViewRect {
             x: panel.right() - scrollbar_margin - scrollbar_width,
+            y: panel.y + scrollbar_margin,
+            width: scrollbar_width,
+            height: track_height,
+        };
+        let thumb = ViewRect {
+            x: track.x,
             y: panel.y + scrollbar_margin + travel * scroll_ratio,
             width: scrollbar_width,
             height: thumb_height,
-        })
+        };
+        Some((track, thumb))
     }
 
     fn context_target_for_screen_point(
@@ -5976,16 +6041,8 @@ impl ShellScene {
             previous_group = Some(place.group);
         }
 
-        if let Some(thumb) = self.places_scrollbar_thumb_rect(size) {
-            let scrollbar_margin = self.scale_metric(PLACES_SCROLLBAR_MARGIN);
-            let track = ViewRect {
-                x: thumb.x,
-                y: panel.y + scrollbar_margin,
-                width: thumb.width,
-                height: (panel.height - scrollbar_margin * 2.0).max(1.0),
-            };
-            push_rect(vertices, track, [0.902, 0.922, 0.945, 1.0], size);
-            push_rect(vertices, thumb, [0.596, 0.647, 0.714, 1.0], size);
+        if let Some((track, thumb)) = self.places_scrollbar_rects(size) {
+            push_scrollbar(vertices, track, thumb, panel, size);
         }
     }
 
@@ -6442,8 +6499,13 @@ impl ShellScene {
         let Some((track, thumb)) = self.content_scrollbar_rects(size) else {
             return;
         };
-        push_rect(vertices, track, [0.902, 0.922, 0.945, 1.0], size);
-        push_rect(vertices, thumb, [0.596, 0.647, 0.714, 1.0], size);
+        let screen = ViewRect {
+            x: 0.0,
+            y: 0.0,
+            width: size.width.max(1) as f32,
+            height: size.height.max(1) as f32,
+        };
+        push_scrollbar(vertices, track, thumb, screen, size);
     }
 
     fn push_context_menu_overlay(
@@ -7446,8 +7508,133 @@ impl ShellScene {
         }
     }
 
+    fn begin_scrollbar_drag(&mut self, point: ViewPoint, size: PhysicalSize<u32>) -> Option<bool> {
+        if let Some((track, thumb)) = self.places_scrollbar_rects(size)
+            && track.contains(point)
+        {
+            let grab_offset = if thumb.contains(point) {
+                point.y - thumb.y
+            } else {
+                thumb.height / 2.0
+            };
+            self.scrollbar_drag = Some(ScrollbarDrag {
+                target: ScrollbarDragTarget::Places,
+                grab_offset,
+            });
+            self.pointer = Some(point);
+            return Some(self.update_scrollbar_drag(point, size));
+        }
+
+        if let Some((track, thumb)) = self.content_scrollbar_rects(size)
+            && track.contains(point)
+        {
+            let axis = self.content_scrollbar_axis();
+            let grab_offset = match axis {
+                ContentScrollbarAxis::Vertical => {
+                    if thumb.contains(point) {
+                        point.y - thumb.y
+                    } else {
+                        thumb.height / 2.0
+                    }
+                }
+                ContentScrollbarAxis::Horizontal => {
+                    if thumb.contains(point) {
+                        point.x - thumb.x
+                    } else {
+                        thumb.width / 2.0
+                    }
+                }
+            };
+            self.scrollbar_drag = Some(ScrollbarDrag {
+                target: ScrollbarDragTarget::Content(axis),
+                grab_offset,
+            });
+            self.pointer = Some(point);
+            return Some(self.update_scrollbar_drag(point, size));
+        }
+
+        None
+    }
+
+    fn update_scrollbar_drag(&mut self, point: ViewPoint, size: PhysicalSize<u32>) -> bool {
+        let Some(drag) = self.scrollbar_drag else {
+            return false;
+        };
+        let old_x = self.scroll_x;
+        let old_y = self.scroll_y;
+        let old_places_y = self.places_scroll_y;
+
+        match drag.target {
+            ScrollbarDragTarget::Places => {
+                if let Some((track, thumb)) = self.places_scrollbar_rects(size) {
+                    self.places_scroll_y = scrollbar_scroll_from_pointer(
+                        point.y,
+                        drag.grab_offset,
+                        track.y,
+                        track.height,
+                        thumb.height,
+                        self.max_places_scroll_y(size),
+                    );
+                }
+            }
+            ScrollbarDragTarget::Content(ContentScrollbarAxis::Vertical) => {
+                if let Some((track, thumb)) = self.content_scrollbar_rects(size) {
+                    self.scroll_y = scrollbar_scroll_from_pointer(
+                        point.y,
+                        drag.grab_offset,
+                        track.y,
+                        track.height,
+                        thumb.height,
+                        self.max_scroll_y(size),
+                    );
+                    self.scroll_x = 0.0;
+                }
+            }
+            ScrollbarDragTarget::Content(ContentScrollbarAxis::Horizontal) => {
+                if let Some((track, thumb)) = self.content_scrollbar_rects(size) {
+                    self.scroll_x = scrollbar_scroll_from_pointer(
+                        point.x,
+                        drag.grab_offset,
+                        track.x,
+                        track.width,
+                        thumb.width,
+                        self.max_scroll_x(size),
+                    );
+                    self.scroll_y = 0.0;
+                }
+            }
+        }
+
+        self.clamp_scroll(size);
+        let content_changed = (self.scroll_x - old_x).abs() > f32::EPSILON
+            || (self.scroll_y - old_y).abs() > f32::EPSILON;
+        let places_changed = (self.places_scroll_y - old_places_y).abs() > f32::EPSILON;
+        if places_changed {
+            self.places_scroll_changes += 1;
+        }
+        let hover_changed = self.refresh_hover(size);
+        content_changed || places_changed || hover_changed
+    }
+
+    fn end_scrollbar_drag(&mut self, point: ViewPoint, size: PhysicalSize<u32>) -> bool {
+        if self.scrollbar_drag.is_none() {
+            return false;
+        }
+        self.pointer = Some(point);
+        let changed = self.update_scrollbar_drag(point, size);
+        self.scrollbar_drag = None;
+        changed
+    }
+
+    fn is_scrollbar_dragging(&self) -> bool {
+        self.scrollbar_drag.is_some()
+    }
+
     fn set_pointer(&mut self, point: ViewPoint, size: PhysicalSize<u32>) -> bool {
         self.pointer = Some(point);
+        if self.scrollbar_drag.is_some() {
+            return self.update_scrollbar_drag(point, size);
+        }
         if self.context_menu.is_some() {
             return self.update_context_menu_hover(point, size);
         }
@@ -10768,6 +10955,25 @@ fn inset_content_scrollbar_slot(slot: ViewRect, scale_factor: f32) -> Option<Vie
     })
 }
 
+fn scrollbar_scroll_from_pointer(
+    pointer_axis: f32,
+    grab_offset: f32,
+    track_origin: f32,
+    track_extent: f32,
+    thumb_extent: f32,
+    max_scroll: f32,
+) -> f32 {
+    if max_scroll <= f32::EPSILON {
+        return 0.0;
+    }
+    let travel = (track_extent - thumb_extent).max(0.0);
+    if travel <= f32::EPSILON {
+        return 0.0;
+    }
+    let thumb_origin = (pointer_axis - grab_offset).clamp(track_origin, track_origin + travel);
+    ((thumb_origin - track_origin) / travel * max_scroll).clamp(0.0, max_scroll)
+}
+
 fn screen_to_content_point(
     point: ViewPoint,
     scroll_offset: ViewPoint,
@@ -10817,6 +11023,33 @@ fn place_row_background_color(active: bool, hovered: bool) -> [f32; 4] {
         (false, true) => [0.933, 0.953, 0.973, 1.0],
         (false, false) => [0.0, 0.0, 0.0, 0.0],
     }
+}
+
+fn push_scrollbar(
+    vertices: &mut Vec<QuadVertex>,
+    track: ViewRect,
+    thumb: ViewRect,
+    clip: ViewRect,
+    size: PhysicalSize<u32>,
+) {
+    let track_radius = track.width.min(track.height) / 2.0;
+    let thumb_radius = thumb.width.min(thumb.height) / 2.0;
+    push_clipped_rounded_rect(
+        vertices,
+        track,
+        clip,
+        track_radius,
+        [0.902, 0.922, 0.945, 1.0],
+        size,
+    );
+    push_clipped_rounded_rect(
+        vertices,
+        thumb,
+        clip,
+        thumb_radius,
+        [0.596, 0.647, 0.714, 1.0],
+        size,
+    );
 }
 
 fn push_context_menu_shadow(
@@ -12088,6 +12321,7 @@ mod tests {
             scroll_x: 0.0,
             scroll_y: 0.0,
             places_scroll_y: 0.0,
+            scrollbar_drag: None,
             pointer: None,
             hovered_index: None,
             hovered_place: None,
@@ -12322,6 +12556,101 @@ mod tests {
         assert_eq!(start_track.y, middle_track.y);
         assert!(middle_thumb.x > start_thumb.x);
         assert_eq!(start_thumb.height, middle_thumb.height);
+    }
+
+    #[test]
+    fn content_scrollbar_thumb_drag_updates_vertical_scroll() {
+        let mut scene = test_scene(
+            (0..80)
+                .map(|index| test_entry(&format!("entry-{index:02}.txt"), false))
+                .collect(),
+            ShellViewMode::Icons,
+        );
+        let size = PhysicalSize::new(420, 260);
+        let (track, thumb) = scene
+            .content_scrollbar_rects(size)
+            .expect("icons view should need vertical scrollbar");
+        let press = ViewPoint {
+            x: thumb.x + thumb.width / 2.0,
+            y: thumb.y + thumb.height / 2.0,
+        };
+        let drag_to = ViewPoint {
+            x: press.x,
+            y: track.bottom() - thumb.height / 2.0,
+        };
+
+        assert!(scene.begin_scrollbar_drag(press, size).is_some());
+        assert!(scene.scrollbar_drag.is_some());
+        assert!(scene.set_pointer(drag_to, size));
+        assert!(scene.scroll_y > 0.0);
+        assert_eq!(scene.scroll_x, 0.0);
+        let _ = scene.end_scrollbar_drag(drag_to, size);
+        assert!(scene.scrollbar_drag.is_none());
+    }
+
+    #[test]
+    fn content_scrollbar_thumb_drag_updates_horizontal_scroll() {
+        let mut scene = test_scene(
+            (0..80)
+                .map(|index| test_entry(&format!("entry-{index:02}.txt"), false))
+                .collect(),
+            ShellViewMode::Compact,
+        );
+        let size = PhysicalSize::new(420, 260);
+        let (track, thumb) = scene
+            .content_scrollbar_rects(size)
+            .expect("compact view should need horizontal scrollbar");
+        let press = ViewPoint {
+            x: thumb.x + thumb.width / 2.0,
+            y: thumb.y + thumb.height / 2.0,
+        };
+        let drag_to = ViewPoint {
+            x: track.right() - thumb.width / 2.0,
+            y: press.y,
+        };
+
+        assert!(scene.begin_scrollbar_drag(press, size).is_some());
+        assert!(scene.set_pointer(drag_to, size));
+        assert!(scene.scroll_x > 0.0);
+        assert_eq!(scene.scroll_y, 0.0);
+        let _ = scene.end_scrollbar_drag(drag_to, size);
+        assert!(scene.scrollbar_drag.is_none());
+    }
+
+    #[test]
+    fn places_scrollbar_thumb_drag_updates_sidebar_scroll() {
+        let mut scene = test_scene(Vec::new(), ShellViewMode::Icons);
+        scene.places = (0..24)
+            .map(|index| {
+                ShellPlace::new(
+                    "",
+                    "B",
+                    format!("Place {index:02}"),
+                    PathBuf::from(format!("/tmp/place-{index:02}")),
+                    true,
+                )
+            })
+            .collect();
+        let size = PhysicalSize::new(700, 220);
+        let (track, thumb) = scene
+            .places_scrollbar_rects(size)
+            .expect("overflowing places should show a scrollbar");
+        let press = ViewPoint {
+            x: thumb.x + thumb.width / 2.0,
+            y: thumb.y + thumb.height / 2.0,
+        };
+        let drag_to = ViewPoint {
+            x: press.x,
+            y: track.bottom() - thumb.height / 2.0,
+        };
+
+        assert!(scene.begin_scrollbar_drag(press, size).is_some());
+        assert!(scene.set_pointer(drag_to, size));
+        assert!(scene.places_scroll_y > 0.0);
+        assert_eq!(scene.scroll_y, 0.0);
+        assert!(scene.places_scroll_changes > 0);
+        let _ = scene.end_scrollbar_drag(drag_to, size);
+        assert!(scene.scrollbar_drag.is_none());
     }
 
     #[test]
@@ -14668,6 +14997,9 @@ text/plain=writer.desktop;\n",
             Some(ZoomAction::Reset)
         );
         assert_eq!(zoom_action_for_key(&Key::Character("x".into())), None);
+        assert_eq!(zoom_action_for_scroll_delta(-1.0), Some(ZoomAction::In));
+        assert_eq!(zoom_action_for_scroll_delta(1.0), Some(ZoomAction::Out));
+        assert_eq!(zoom_action_for_scroll_delta(0.0), None);
     }
 
     #[test]
