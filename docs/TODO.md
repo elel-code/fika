@@ -119,11 +119,15 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
   pane 已共用 `SctkPane`，首帧会输出 `split_pane=1 active_pane=...` telemetry，
   鼠标 hover、左键 selection 和带坐标的 wheel scroll 会路由到命中的 pane。SCTK
   keyboard seat 已接入，`F1/F2/F3`、`1/2/3`、方向键、Home/End、PageUp/PageDown、
-  Enter、Esc、`Ctrl/Meta+H`、`Ctrl/Meta+L` 和 `F5`/`Ctrl/Meta+R` 会通过 `SceneCommand` 路由到
+  Enter、Esc、`Ctrl/Meta+H`、`Ctrl/Meta+F`、`Ctrl/Meta+L` 和 `F5`/`Ctrl/Meta+R` 会通过 `SceneCommand` 路由到
   active pane；pane 内部已拥有 hidden-file 可见索引缓存、runtime view switching、
   keyboard navigation、目录激活、reload 和 pane-local location edit。地址栏现在可通过
   `Ctrl/Meta+L` 或点击 active pane 的 location bar 聚焦，支持 UTF-8 文本插入、
   Backspace/Delete、方向/Home/End、Enter 提交路径导航、Esc/外部点击取消并恢复当前路径。
+  `Ctrl/Meta+F` 会打开 active pane 的 filter bar，UTF-8 文本编辑会更新 plain-text
+  name filter，并和 hidden-file 一起重建同一个 `visible_indices` 投影；layout、hit-test、
+  hover、selection、select-all、keyboard navigation、rubber-band 和 scrollbar 都走过滤后的
+  投影。Enter 保留 query 并把焦点还给 view，Esc 清空并关闭 filter。
   分屏命令也已进入 scene 层：`F4` 或
   `Ctrl/Meta+Shift+S` 会打开/关闭复用同一 `SctkPane` 的 split pane。active pane
   已绘制轻量焦点标记，content scrollbar thumb/track drag 已走 scene pointer capture，
@@ -131,7 +135,7 @@ Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark 
   `selected_entries` 集合；`Ctrl/Meta+A` 只选择 active pane 的可见条目，空白 primary
   press 会进入 rubber-band pointer capture，并在 Icons/Compact/Details 当前投影上更新
   多选集合和半透明 overlay，为后续 DnD source/export 复用同一 selection 边界。下一步继续补
-  toolbar split UI、filter edit、file-operation routing、IME/text-selection 和 DnD data-device。
+  toolbar split UI、file-operation routing、IME/text-selection 和 DnD data-device。
 - [ ] Phase 4：迁入资产和系统集成热路径。MIME/theme icon atlas、Dolphin-style
   visible-first icon resolve、thumbnail worker/read-ahead、device/Places 动态数据、
   context menu、Open With、service menu、clipboard、Trash actions、file operations、

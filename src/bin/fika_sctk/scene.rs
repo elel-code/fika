@@ -8,7 +8,9 @@ use super::metrics::{
     PLACES_PANEL_MARGIN_X, PLACES_ROW_HEIGHT, PLACES_TITLE_HEIGHT, PLACES_TO_PANE_GAP,
     PLACES_WIDTH, SPLIT_PANE_GAP, TEXT_FONT_SIZE, TEXT_LINE_HEIGHT,
 };
-use super::pane::{LocationEdit, PaneGeometry, PaneScrollbarDrag, PaneSelectionMove, SctkPane};
+use super::pane::{
+    FilterEdit, LocationEdit, PaneGeometry, PaneScrollbarDrag, PaneSelectionMove, SctkPane,
+};
 use super::quad::{QuadBatch, inset};
 use super::text::TextBatch;
 
@@ -98,6 +100,10 @@ impl SctkScene {
 
     pub(crate) fn location_editing(&self) -> bool {
         self.active_pane().location_active()
+    }
+
+    pub(crate) fn filter_editing(&self) -> bool {
+        self.active_pane().filter_active()
     }
 
     pub(crate) fn render_frame(&mut self, width: u32, height: u32, scale: f32) -> SceneFrame {
@@ -212,7 +218,12 @@ impl SctkScene {
                     self.pointer_capture = None;
                     return changed | (self.active != previous_active);
                 }
+                if let Some(changed) = self.primary.focus_filter_if_hit(point, geometry.primary) {
+                    self.pointer_capture = None;
+                    return changed | (self.active != previous_active);
+                }
                 let location_changed = self.primary.cancel_location_edit();
+                let filter_changed = self.primary.blur_filter_edit();
                 if let Some((drag, changed)) =
                     self.primary.begin_scrollbar_drag(point, geometry.primary)
                 {
@@ -220,7 +231,10 @@ impl SctkScene {
                         pane: PaneSlot::Primary,
                         drag,
                     });
-                    return changed | location_changed | (self.active != previous_active);
+                    return changed
+                        | location_changed
+                        | filter_changed
+                        | (self.active != previous_active);
                 }
                 if let Some(changed) = self.primary.begin_rubber_band(point, geometry.primary) {
                     self.pointer_capture = Some(PointerCapture::RubberBand {
@@ -228,10 +242,14 @@ impl SctkScene {
                         origin: point,
                         current: point,
                     });
-                    return changed | location_changed | (self.active != previous_active);
+                    return changed
+                        | location_changed
+                        | filter_changed
+                        | (self.active != previous_active);
                 }
                 self.primary.press_primary(point, geometry.primary)
                     | location_changed
+                    | filter_changed
                     | (self.active != previous_active)
             }
             Some(PaneSlot::Split) => {
@@ -243,7 +261,13 @@ impl SctkScene {
                         self.pointer_capture = None;
                         return changed;
                     }
+                    if let Some(changed) = split.focus_filter_if_hit(point, geometry.split.unwrap())
+                    {
+                        self.pointer_capture = None;
+                        return changed;
+                    }
                     let location_changed = split.cancel_location_edit();
+                    let filter_changed = split.blur_filter_edit();
                     if let Some((drag, changed)) =
                         split.begin_scrollbar_drag(point, geometry.split.unwrap())
                     {
@@ -251,7 +275,7 @@ impl SctkScene {
                             pane: PaneSlot::Split,
                             drag,
                         });
-                        changed | location_changed
+                        changed | location_changed | filter_changed
                     } else if let Some(changed) =
                         split.begin_rubber_band(point, geometry.split.unwrap())
                     {
@@ -260,14 +284,20 @@ impl SctkScene {
                             origin: point,
                             current: point,
                         });
-                        changed | location_changed
+                        changed | location_changed | filter_changed
                     } else {
-                        split.press_primary(point, geometry.split.unwrap()) | location_changed
+                        split.press_primary(point, geometry.split.unwrap())
+                            | location_changed
+                            | filter_changed
                     }
                 });
                 changed | (self.active != previous_active)
             }
-            None => self.active_pane_mut().cancel_location_edit(),
+            None => {
+                let location_changed = self.active_pane_mut().cancel_location_edit();
+                let filter_changed = self.active_pane_mut().blur_filter_edit();
+                location_changed | filter_changed
+            }
         }
     }
 
@@ -327,6 +357,18 @@ impl SctkScene {
         edit: LocationEdit,
     ) -> Result<bool, Box<dyn Error>> {
         self.active_pane_mut().edit_location(edit)
+    }
+
+    pub(crate) fn handle_filter_edit(&mut self, edit: FilterEdit, width: u32, height: u32) -> bool {
+        let geometry = self.geometry(width, height);
+        match self.active {
+            PaneSlot::Primary => self.primary.edit_filter(edit, geometry.primary),
+            PaneSlot::Split => self
+                .split
+                .as_mut()
+                .zip(geometry.split)
+                .is_some_and(|(split, geometry)| split.edit_filter(edit, geometry)),
+        }
     }
 
     fn push_app_chrome(
@@ -636,6 +678,7 @@ impl SctkScene {
             SceneCommand::ClearSelection => Ok(pane.clear_selection()),
             SceneCommand::SelectAll => Ok(pane.select_all()),
             SceneCommand::FocusLocation => Ok(pane.focus_location()),
+            SceneCommand::FocusFilter => Ok(pane.edit_filter(FilterEdit::Focus, geometry)),
             SceneCommand::ToggleSplit => Ok(false),
         }
     }
@@ -652,6 +695,7 @@ pub(crate) enum SceneCommand {
     ClearSelection,
     SelectAll,
     FocusLocation,
+    FocusFilter,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -817,7 +861,9 @@ mod tests {
 
     use fika_core::{Entry, EntryData};
 
-    use crate::fika_sctk::metrics::{DETAILS_HEADER_HEIGHT, DETAILS_ROW_HEIGHT, SCROLL_LINE_PX};
+    use crate::fika_sctk::metrics::{
+        DETAILS_HEADER_HEIGHT, DETAILS_ROW_HEIGHT, FILTER_BAR_HEIGHT, SCROLL_LINE_PX,
+    };
 
     use super::*;
 
@@ -1074,6 +1120,56 @@ mod tests {
     }
 
     #[test]
+    fn focus_filter_command_routes_to_active_pane_only() {
+        let mut scene = split_scene(ViewMode::Icons, 5);
+        let geometry = scene.geometry(1000, 640);
+        let split_geometry = geometry.split.expect("split geometry");
+        let item = scene
+            .split
+            .as_ref()
+            .unwrap()
+            .icons_layout(split_geometry.content)
+            .item(0)
+            .unwrap();
+        let point = ViewPoint {
+            x: split_geometry.content.x + item.visual_rect.x + 4.0,
+            y: split_geometry.content.y + item.visual_rect.y + 4.0,
+        };
+        scene.press_primary(point, 1000, 640);
+
+        assert!(
+            scene
+                .handle_command(SceneCommand::FocusFilter, 1000, 640)
+                .unwrap()
+        );
+        assert!(!scene.primary.filter_active());
+        assert!(scene.split.as_ref().unwrap().filter_active());
+    }
+
+    #[test]
+    fn filter_command_updates_active_projection() {
+        let mut scene = scene(ViewMode::Details, 12);
+
+        assert!(
+            scene
+                .handle_command(SceneCommand::FocusFilter, 900, 640)
+                .unwrap()
+        );
+        assert!(scene.handle_filter_edit(FilterEdit::Insert("item-1".to_string()), 900, 640));
+        assert!(scene.primary.filter_active());
+        assert!(scene.primary.visible_entry_count() < scene.primary.entry_count());
+        assert!(
+            scene
+                .handle_command(SceneCommand::SelectAll, 900, 640)
+                .unwrap()
+        );
+        assert_eq!(
+            scene.primary.selected_count(),
+            scene.primary.visible_entry_count()
+        );
+    }
+
+    #[test]
     fn clicking_outside_location_cancels_editor_before_selection() {
         let mut scene = scene(ViewMode::Icons, 20);
         assert!(
@@ -1096,6 +1192,38 @@ mod tests {
         assert!(scene.press_primary(point, 900, 640));
         assert!(!scene.primary.location_active());
         assert_eq!(scene.primary.selected(), Some(0));
+    }
+
+    #[test]
+    fn clicking_content_blurs_filter_but_keeps_query() {
+        let mut scene = scene(ViewMode::Icons, 20);
+        assert!(
+            scene
+                .handle_command(SceneCommand::FocusFilter, 900, 640)
+                .unwrap()
+        );
+        assert!(scene.handle_filter_edit(FilterEdit::Insert("item-1".to_string()), 900, 640));
+        assert!(scene.primary.filter_active());
+
+        let geometry = scene.geometry(900, 640).primary;
+        let filtered_content = ViewRect {
+            y: geometry.content.y + FILTER_BAR_HEIGHT,
+            height: geometry.content.height - FILTER_BAR_HEIGHT,
+            ..geometry.content
+        };
+        let item = scene
+            .primary
+            .icons_layout(filtered_content)
+            .item(0)
+            .unwrap();
+        let point = ViewPoint {
+            x: filtered_content.x + item.visual_rect.x + 4.0,
+            y: filtered_content.y + item.visual_rect.y + 4.0,
+        };
+        assert!(scene.press_primary(point, 900, 640));
+        assert!(!scene.primary.filter_active());
+        assert!(scene.primary.filter_visible());
+        assert_eq!(scene.primary.filter_text(), "item-1");
     }
 
     #[test]

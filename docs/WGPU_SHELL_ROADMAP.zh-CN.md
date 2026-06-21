@@ -106,11 +106,15 @@ retained scene/renderer 行为。
   第二 pane；两个 pane 共用 `SctkPane`，pointer hover、左键 selection 和带坐标的
   wheel scroll 会路由到命中的 pane。SCTK keyboard capability 已注册到 Wayland
   seat；`F1/F2/F3`、`1/2/3`、方向键、Home/End、PageUp/PageDown、Enter、Esc、
-  `Ctrl/Meta+H`、`Ctrl/Meta+L` 和 `F5`/`Ctrl/Meta+R` 会转换成 `SceneCommand` 并分派到 active
+  `Ctrl/Meta+H`、`Ctrl/Meta+F`、`Ctrl/Meta+L` 和 `F5`/`Ctrl/Meta+R` 会转换成 `SceneCommand` 并分派到 active
   pane。`SctkPane` 现在拥有 hidden-file 可见索引投影、运行时 view switching、
   keyboard navigation、目录激活、reload path 和 pane-local location edit。地址栏可通过
   `Ctrl/Meta+L` 或点击 active pane 的 location bar 聚焦，支持 UTF-8 文本插入、
   Backspace/Delete、方向/Home/End、Enter 提交路径导航，以及 Esc/外部点击取消并恢复当前路径。
+  `Ctrl/Meta+F` 会打开 active pane 的 filter bar，UTF-8 文本编辑会更新 retained
+  plain-text name filter，并和 hidden-file 一起重建同一个 `visible_indices` 投影；layout、
+  hit-test、hover、selection、select-all、keyboard navigation、rubber-band 和 scrollbar
+  都会通过过滤后的投影路由。Enter 保留 query 并把焦点交回文件视图，Esc 清空并关闭 filter。
   `F4` 或 `Ctrl/Meta+Shift+S`
   会从 scene 层打开/关闭 split view，并复用同一个 `SctkPane` 组件作为新 pane。
   active pane 现在会绘制轻量焦点标记，content scrollbar thumb/track drag 已通过

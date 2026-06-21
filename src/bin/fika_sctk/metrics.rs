@@ -1,6 +1,7 @@
 pub(crate) const APP_TOOLBAR_HEIGHT: f32 = 36.0;
 pub(crate) const PANE_MARGIN: f32 = 8.0;
 pub(crate) const TOP_BAR_HEIGHT: f32 = 36.0;
+pub(crate) const FILTER_BAR_HEIGHT: f32 = 30.0;
 pub(crate) const STATUS_BAR_HEIGHT: f32 = 28.0;
 pub(crate) const PLACES_WIDTH: f32 = 228.0;
 pub(crate) const PLACES_TO_PANE_GAP: f32 = 8.0;

@@ -32,7 +32,7 @@ use wayland_client::globals::registry_queue_init;
 use wayland_client::protocol::{wl_keyboard, wl_pointer, wl_surface};
 
 use super::options::StartupOptions;
-use super::pane::{LocationEdit, PaneSelectionMove};
+use super::pane::{FilterEdit, LocationEdit, PaneSelectionMove};
 use super::renderer::{WgpuRenderer, surface_extent};
 use super::scene::{SceneCommand, SctkScene};
 
@@ -298,6 +298,25 @@ impl FikaSctkApp {
             }
             return;
         }
+        if self.scene.filter_editing() {
+            let Some(edit) =
+                filter_edit_command(event.keysym, self.modifiers, event.utf8.as_deref())
+            else {
+                return;
+            };
+            if self
+                .scene
+                .handle_filter_edit(edit.clone(), self.width, self.height)
+            {
+                eprintln!(
+                    "[fika-sctk] filter-edit={edit:?} reason={reason} active_pane={} visible={}",
+                    self.scene.active_pane_name(),
+                    self.scene.active_visible_entry_count()
+                );
+                self.render_scene(reason);
+            }
+            return;
+        }
         let Some(command) = key_command(event.keysym, self.modifiers) else {
             return;
         };
@@ -405,6 +424,9 @@ fn key_command(keysym: Keysym, modifiers: Modifiers) -> Option<SceneCommand> {
     if shortcut && (keysym == Keysym::l || keysym == Keysym::L) {
         return Some(SceneCommand::FocusLocation);
     }
+    if shortcut && (keysym == Keysym::f || keysym == Keysym::F) {
+        return Some(SceneCommand::FocusFilter);
+    }
     if keysym == Keysym::F5 || (shortcut && (keysym == Keysym::r || keysym == Keysym::R)) {
         return Some(SceneCommand::Reload);
     }
@@ -454,6 +476,32 @@ fn location_edit_command(
     (!text.is_empty()).then_some(LocationEdit::Insert(text))
 }
 
+fn filter_edit_command(
+    keysym: Keysym,
+    modifiers: Modifiers,
+    utf8: Option<&str>,
+) -> Option<FilterEdit> {
+    match keysym {
+        Keysym::Return | Keysym::KP_Enter => return Some(FilterEdit::Accept),
+        Keysym::Escape => return Some(FilterEdit::Cancel),
+        Keysym::BackSpace => return Some(FilterEdit::Backspace),
+        Keysym::Delete | Keysym::KP_Delete => return Some(FilterEdit::Delete),
+        Keysym::Left => return Some(FilterEdit::MoveLeft),
+        Keysym::Right => return Some(FilterEdit::MoveRight),
+        Keysym::Home | Keysym::KP_Home => return Some(FilterEdit::MoveHome),
+        Keysym::End | Keysym::KP_End => return Some(FilterEdit::MoveEnd),
+        _ => {}
+    }
+    if modifiers.ctrl || modifiers.logo || modifiers.alt {
+        return None;
+    }
+    let text = utf8?
+        .chars()
+        .filter(|character| !character.is_control())
+        .collect::<String>();
+    (!text.is_empty()).then_some(FilterEdit::Insert(text))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -490,6 +538,10 @@ mod tests {
             Some(SceneCommand::FocusLocation)
         );
         assert_eq!(
+            key_command(Keysym::f, ctrl),
+            Some(SceneCommand::FocusFilter)
+        );
+        assert_eq!(
             key_command(Keysym::F5, Modifiers::default()),
             Some(SceneCommand::Reload)
         );
@@ -523,6 +575,37 @@ mod tests {
         );
         assert_eq!(
             location_edit_command(
+                Keysym::a,
+                Modifiers {
+                    ctrl: true,
+                    ..Modifiers::default()
+                },
+                Some("a")
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn filter_edit_command_prefers_editor_keys_and_utf8_text() {
+        assert_eq!(
+            filter_edit_command(Keysym::BackSpace, Modifiers::default(), None),
+            Some(FilterEdit::Backspace)
+        );
+        assert_eq!(
+            filter_edit_command(Keysym::Return, Modifiers::default(), None),
+            Some(FilterEdit::Accept)
+        );
+        assert_eq!(
+            filter_edit_command(Keysym::Escape, Modifiers::default(), None),
+            Some(FilterEdit::Cancel)
+        );
+        assert_eq!(
+            filter_edit_command(Keysym::a, Modifiers::default(), Some("a")),
+            Some(FilterEdit::Insert("a".to_string()))
+        );
+        assert_eq!(
+            filter_edit_command(
                 Keysym::a,
                 Modifiers {
                     ctrl: true,

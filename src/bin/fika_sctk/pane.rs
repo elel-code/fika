@@ -4,14 +4,15 @@ use std::path::PathBuf;
 
 use fika_core::{
     CompactLayout, CompactLayoutOptions, Entry, IconsLayout, IconsLayoutOptions, ItemLayout,
-    ViewMode, ViewPoint, ViewRect, format_modified_secs, format_size, read_entries_sync,
+    NameFilter, ViewMode, ViewPoint, ViewRect, format_modified_secs, format_size,
+    read_entries_sync,
 };
 
 use super::metrics::{
     COMPACT_ICON_SIZE, COMPACT_ITEM_HEIGHT, COMPACT_ITEM_WIDTH, CONTENT_SCROLLBAR_MIN_THUMB_SIZE,
     CONTENT_SCROLLBAR_PADDING, CONTENT_SCROLLBAR_RESERVED_EXTENT, DETAILS_HEADER_HEIGHT,
-    DETAILS_ICON_SIZE, DETAILS_ROW_HEIGHT, ICONS_ICON_SIZE, ICONS_ITEM_HEIGHT, ICONS_ITEM_WIDTH,
-    STATUS_BAR_HEIGHT, TEXT_FONT_SIZE, TEXT_LINE_HEIGHT, TOP_BAR_HEIGHT,
+    DETAILS_ICON_SIZE, DETAILS_ROW_HEIGHT, FILTER_BAR_HEIGHT, ICONS_ICON_SIZE, ICONS_ITEM_HEIGHT,
+    ICONS_ITEM_WIDTH, STATUS_BAR_HEIGHT, TEXT_FONT_SIZE, TEXT_LINE_HEIGHT, TOP_BAR_HEIGHT,
 };
 use super::quad::{QuadBatch, inset};
 use super::text::TextBatch;
@@ -37,6 +38,9 @@ pub(crate) struct SctkPane {
     location_active: bool,
     location_text: String,
     location_cursor: usize,
+    filter_active: bool,
+    filter_text: String,
+    filter_cursor: usize,
     scroll_x: f32,
     scroll_y: f32,
 }
@@ -64,6 +68,9 @@ impl SctkPane {
             location_active: false,
             location_text,
             location_cursor,
+            filter_active: false,
+            filter_text: String::new(),
+            filter_cursor: 0,
             scroll_x: 0.0,
             scroll_y: 0.0,
         };
@@ -107,6 +114,14 @@ impl SctkPane {
         self.location_active
     }
 
+    pub(crate) fn filter_active(&self) -> bool {
+        self.filter_active
+    }
+
+    pub(crate) fn filter_visible(&self) -> bool {
+        self.filter_active || !self.filter_text.is_empty()
+    }
+
     #[cfg(test)]
     pub(crate) fn hover(&self) -> Option<usize> {
         self.hover
@@ -127,6 +142,16 @@ impl SctkPane {
         self.location_cursor
     }
 
+    #[cfg(test)]
+    pub(crate) fn filter_text(&self) -> &str {
+        &self.filter_text
+    }
+
+    #[cfg(test)]
+    pub(crate) fn filter_cursor(&self) -> usize {
+        self.filter_cursor
+    }
+
     pub(crate) fn render(
         &mut self,
         batch: &mut QuadBatch,
@@ -137,33 +162,32 @@ impl SctkPane {
         width: u32,
         height: u32,
     ) -> PaneRenderStats {
-        self.clamp_scroll(geometry.content);
+        let content = self.item_content_rect(geometry.content);
+        self.clamp_scroll(content);
         self.push_chrome(batch, text, geometry, window_clip, active, width, height);
         let visible_items = match self.view_mode {
             ViewMode::Icons => {
-                let layout = self.icons_layout(geometry.content);
+                let layout = self.icons_layout(content);
                 let items: Vec<_> = layout.visible_items().collect();
                 let visible_items = items.len();
                 for item in items {
-                    self.push_item(batch, text, &item, geometry.content, width, height);
+                    self.push_item(batch, text, &item, content, width, height);
                 }
                 visible_items
             }
             ViewMode::Compact => {
-                let layout = self.compact_layout(geometry.content);
+                let layout = self.compact_layout(content);
                 let items: Vec<_> = layout.visible_items().collect();
                 let visible_items = items.len();
                 for item in items {
-                    self.push_item(batch, text, &item, geometry.content, width, height);
+                    self.push_item(batch, text, &item, content, width, height);
                 }
                 visible_items
             }
-            ViewMode::Details => {
-                self.push_details_items(batch, text, geometry.content, width, height)
-            }
+            ViewMode::Details => self.push_details_items(batch, text, content, width, height),
         };
         self.push_status_text(text, geometry.pane, visible_items);
-        self.push_content_scrollbar(batch, geometry.content, width, height);
+        self.push_content_scrollbar(batch, content, width, height);
 
         PaneRenderStats {
             visible_items,
@@ -202,6 +226,7 @@ impl SctkPane {
             self.location_cursor,
         );
         self.location_active = true;
+        self.filter_active = false;
         self.location_text = self.path.display().to_string();
         self.location_cursor = self.location_text.len();
         before
@@ -229,6 +254,7 @@ impl SctkPane {
             self.location_text = self.path.display().to_string();
         }
         self.location_active = true;
+        self.filter_active = false;
         self.location_cursor = cursor_for_location_point(point, geometry.pane, &self.location_text);
         Some(
             before
@@ -317,6 +343,118 @@ impl SctkPane {
             ))
     }
 
+    pub(crate) fn focus_filter_if_hit(
+        &mut self,
+        point: ViewPoint,
+        geometry: PaneGeometry,
+    ) -> Option<bool> {
+        if !self.filter_visible() || !filter_bar_rect(geometry.content).contains(point) {
+            return None;
+        }
+        let before = (
+            self.filter_active,
+            self.filter_text.clone(),
+            self.filter_cursor,
+        );
+        self.location_active = false;
+        self.filter_active = true;
+        self.filter_cursor =
+            cursor_for_text_point(point, filter_text_rect(geometry.content), &self.filter_text);
+        Some(
+            before
+                != (
+                    self.filter_active,
+                    self.filter_text.clone(),
+                    self.filter_cursor,
+                ),
+        )
+    }
+
+    pub(crate) fn blur_filter_edit(&mut self) -> bool {
+        let changed = self.filter_active;
+        self.filter_active = false;
+        changed
+    }
+
+    pub(crate) fn edit_filter(&mut self, edit: FilterEdit, geometry: PaneGeometry) -> bool {
+        if !self.filter_active && edit != FilterEdit::Focus {
+            return false;
+        }
+        let before = (
+            self.filter_active,
+            self.filter_text.clone(),
+            self.filter_cursor,
+            self.visible_indices.clone(),
+            self.selected,
+            self.selected_entries.clone(),
+            self.hover,
+        );
+        self.filter_cursor = clamp_to_char_boundary(&self.filter_text, self.filter_cursor);
+        match edit {
+            FilterEdit::Focus => {
+                self.location_active = false;
+                self.filter_active = true;
+                self.filter_cursor = self.filter_text.len();
+            }
+            FilterEdit::Insert(text) => {
+                let text = text
+                    .chars()
+                    .filter(|character| !character.is_control())
+                    .collect::<String>();
+                if !text.is_empty() {
+                    self.filter_text.insert_str(self.filter_cursor, &text);
+                    self.filter_cursor += text.len();
+                }
+            }
+            FilterEdit::Backspace => {
+                if let Some(previous) =
+                    previous_char_boundary(&self.filter_text, self.filter_cursor)
+                {
+                    self.filter_text.drain(previous..self.filter_cursor);
+                    self.filter_cursor = previous;
+                }
+            }
+            FilterEdit::Delete => {
+                if let Some(next) = next_char_boundary(&self.filter_text, self.filter_cursor) {
+                    self.filter_text.drain(self.filter_cursor..next);
+                }
+            }
+            FilterEdit::MoveLeft => {
+                if let Some(previous) =
+                    previous_char_boundary(&self.filter_text, self.filter_cursor)
+                {
+                    self.filter_cursor = previous;
+                }
+            }
+            FilterEdit::MoveRight => {
+                if let Some(next) = next_char_boundary(&self.filter_text, self.filter_cursor) {
+                    self.filter_cursor = next;
+                }
+            }
+            FilterEdit::MoveHome => self.filter_cursor = 0,
+            FilterEdit::MoveEnd => self.filter_cursor = self.filter_text.len(),
+            FilterEdit::Accept => self.filter_active = false,
+            FilterEdit::Cancel => {
+                self.filter_active = false;
+                self.filter_text.clear();
+                self.filter_cursor = 0;
+            }
+        }
+        self.rebuild_visible_indices();
+        self.prune_hidden_state();
+        self.clamp_scroll(self.item_content_rect(geometry.content));
+        before
+            != (
+                self.filter_active,
+                self.filter_text.clone(),
+                self.filter_cursor,
+                self.visible_indices.clone(),
+                self.selected,
+                self.selected_entries.clone(),
+                self.hover,
+            )
+    }
+
     pub(crate) fn set_view_mode(&mut self, view_mode: ViewMode, geometry: PaneGeometry) -> bool {
         if self.view_mode == view_mode {
             return false;
@@ -325,9 +463,9 @@ impl SctkPane {
         self.scroll_x = 0.0;
         self.scroll_y = 0.0;
         if let Some(selected) = self.selected {
-            self.ensure_entry_visible(selected, geometry.content);
+            self.ensure_entry_visible(selected, self.item_content_rect(geometry.content));
         }
-        self.clamp_scroll(geometry.content);
+        self.clamp_scroll(self.item_content_rect(geometry.content));
         true
     }
 
@@ -335,7 +473,7 @@ impl SctkPane {
         self.show_hidden = !self.show_hidden;
         self.rebuild_visible_indices();
         self.prune_hidden_state();
-        self.clamp_scroll(geometry.content);
+        self.clamp_scroll(self.item_content_rect(geometry.content));
         true
     }
 
@@ -354,7 +492,8 @@ impl SctkPane {
         point: ViewPoint,
         geometry: PaneGeometry,
     ) -> Option<bool> {
-        if !geometry.content.contains(point) || self.hit_test(point, geometry).is_some() {
+        let content = self.item_content_rect(geometry.content);
+        if !content.contains(point) || self.hit_test(point, geometry).is_some() {
             return None;
         }
         Some(self.clear_selection())
@@ -366,29 +505,30 @@ impl SctkPane {
         current: ViewPoint,
         geometry: PaneGeometry,
     ) -> bool {
-        let band = clipped_band_rect(origin, current, geometry.content);
+        let content = self.item_content_rect(geometry.content);
+        let band = clipped_band_rect(origin, current, content);
         let mut selected_entries = BTreeSet::new();
         if band.width >= 1.0 && band.height >= 1.0 {
             match self.view_mode {
                 ViewMode::Icons => {
-                    let layout = self.icons_layout(geometry.content);
+                    let layout = self.icons_layout(content);
                     for item in layout.visible_items() {
                         let Some(index) = self.entry_index_for_visible(item.model_index) else {
                             continue;
                         };
-                        let rect = self.to_screen_rect(item.visual_rect, geometry.content);
+                        let rect = self.to_screen_rect(item.visual_rect, content);
                         if rects_intersect(rect, band) {
                             selected_entries.insert(index);
                         }
                     }
                 }
                 ViewMode::Compact => {
-                    let layout = self.compact_layout(geometry.content);
+                    let layout = self.compact_layout(content);
                     for item in layout.visible_items() {
                         let Some(index) = self.entry_index_for_visible(item.model_index) else {
                             continue;
                         };
-                        let rect = self.to_screen_rect(item.visual_rect, geometry.content);
+                        let rect = self.to_screen_rect(item.visual_rect, content);
                         if rects_intersect(rect, band) {
                             selected_entries.insert(index);
                         }
@@ -405,14 +545,14 @@ impl SctkPane {
                         let Some(index) = self.entry_index_for_visible(visible_index) else {
                             continue;
                         };
-                        let y = geometry.content.y
+                        let y = content.y
                             + DETAILS_HEADER_HEIGHT
                             + visible_index as f32 * DETAILS_ROW_HEIGHT
                             - self.scroll_y;
                         let rect = ViewRect {
-                            x: geometry.content.x,
+                            x: content.x,
                             y,
-                            width: geometry.content.width - CONTENT_SCROLLBAR_RESERVED_EXTENT,
+                            width: content.width - CONTENT_SCROLLBAR_RESERVED_EXTENT,
                             height: DETAILS_ROW_HEIGHT,
                         };
                         if rects_intersect(rect, band) {
@@ -434,18 +574,19 @@ impl SctkPane {
         movement: PaneSelectionMove,
         geometry: PaneGeometry,
     ) -> bool {
-        let Some(target) = self.selection_target(movement, geometry.content) else {
+        let content = self.item_content_rect(geometry.content);
+        let Some(target) = self.selection_target(movement, content) else {
             return self.clear_selection();
         };
         let Some(entry_index) = self.visible_indices.get(target).copied() else {
             return false;
         };
         if self.selected == Some(entry_index) {
-            self.ensure_entry_visible(entry_index, geometry.content);
+            self.ensure_entry_visible(entry_index, content);
             return false;
         }
         self.replace_selection(Some(entry_index));
-        self.ensure_entry_visible(entry_index, geometry.content);
+        self.ensure_entry_visible(entry_index, content);
         true
     }
 
@@ -524,7 +665,7 @@ impl SctkPane {
                 self.scroll_y += delta_y;
             }
         }
-        self.clamp_scroll(geometry.content);
+        self.clamp_scroll(self.item_content_rect(geometry.content));
         before != (self.scroll_x, self.scroll_y)
     }
 
@@ -533,7 +674,8 @@ impl SctkPane {
         point: ViewPoint,
         geometry: PaneGeometry,
     ) -> Option<(PaneScrollbarDrag, bool)> {
-        let metrics = self.scrollbar_metrics(geometry.content)?;
+        let content = self.item_content_rect(geometry.content);
+        let metrics = self.scrollbar_metrics(content)?;
         if !metrics.hit_rect.contains(point) {
             return None;
         }
@@ -559,7 +701,8 @@ impl SctkPane {
         geometry: PaneGeometry,
         drag: PaneScrollbarDrag,
     ) -> bool {
-        let Some(metrics) = self.scrollbar_metrics(geometry.content) else {
+        let content = self.item_content_rect(geometry.content);
+        let Some(metrics) = self.scrollbar_metrics(content) else {
             return false;
         };
         if metrics.axis != drag.axis {
@@ -576,7 +719,7 @@ impl SctkPane {
             PaneScrollbarAxis::Vertical => self.scroll_y = ratio * metrics.max_scroll,
             PaneScrollbarAxis::Horizontal => self.scroll_x = ratio * metrics.max_scroll,
         }
-        self.clamp_scroll(geometry.content);
+        self.clamp_scroll(content);
         before != (self.scroll_x, self.scroll_y)
     }
 
@@ -621,20 +764,21 @@ impl SctkPane {
     }
 
     fn hit_test(&self, point: ViewPoint, geometry: PaneGeometry) -> Option<usize> {
-        if !geometry.content.contains(point) {
+        let content = self.item_content_rect(geometry.content);
+        if !content.contains(point) {
             return None;
         }
         let content_point = ViewPoint {
-            x: point.x - geometry.content.x + self.scroll_x,
-            y: point.y - geometry.content.y + self.scroll_y,
+            x: point.x - content.x + self.scroll_x,
+            y: point.y - content.y + self.scroll_y,
         };
         match self.view_mode {
             ViewMode::Icons => self
-                .icons_layout(geometry.content)
+                .icons_layout(content)
                 .hit_test_content_point(content_point)
                 .and_then(|visible| self.entry_index_for_visible(visible)),
             ViewMode::Compact => self
-                .compact_layout(geometry.content)
+                .compact_layout(content)
                 .hit_test_content_point(content_point)
                 .and_then(|visible| self.entry_index_for_visible(visible)),
             ViewMode::Details => {
@@ -741,6 +885,9 @@ impl SctkPane {
             width,
             height,
         );
+        if self.filter_visible() {
+            self.push_filter_bar(batch, text, geometry.content, width, height);
+        }
         batch.push_rect(
             ViewRect {
                 x: geometry.pane.x,
@@ -764,18 +911,19 @@ impl SctkPane {
             height,
         );
         if self.view_mode == ViewMode::Details {
+            let content = self.item_content_rect(geometry.content);
             batch.push_rect(
                 ViewRect {
-                    x: geometry.content.x,
-                    y: geometry.content.y,
-                    width: geometry.content.width,
+                    x: content.x,
+                    y: content.y,
+                    width: content.width,
                     height: DETAILS_HEADER_HEIGHT,
                 },
                 [0.90, 0.92, 0.94, 1.0],
                 width,
                 height,
             );
-            self.push_details_header_text(text, geometry.content);
+            self.push_details_header_text(text, content);
         }
     }
 
@@ -1021,6 +1169,104 @@ impl SctkPane {
         );
     }
 
+    fn push_filter_bar(
+        &self,
+        batch: &mut QuadBatch,
+        text: &mut TextBatch,
+        content: ViewRect,
+        width: u32,
+        height: u32,
+    ) {
+        let bar = filter_bar_rect(content);
+        batch.push_clipped_rect(bar, content, [0.935, 0.952, 0.968, 1.0], width, height);
+        batch.push_rect(
+            ViewRect {
+                x: bar.x,
+                y: bar.bottom() - 1.0,
+                width: bar.width,
+                height: 1.0,
+            },
+            [0.82, 0.84, 0.86, 1.0],
+            width,
+            height,
+        );
+        let field = filter_field_rect(content);
+        batch.push_clipped_rounded_rect(
+            field,
+            bar,
+            5.0,
+            if self.filter_active {
+                [0.985, 0.995, 1.0, 1.0]
+            } else {
+                [1.0, 1.0, 1.0, 1.0]
+            },
+            width,
+            height,
+        );
+        text.push_no_wrap(
+            "Filter",
+            ViewRect {
+                x: bar.x + 12.0,
+                y: bar.y + (bar.height - TEXT_LINE_HEIGHT) / 2.0,
+                width: 44.0,
+                height: TEXT_LINE_HEIGHT,
+            },
+            bar,
+            TEXT_FONT_SIZE,
+            TEXT_LINE_HEIGHT,
+            TEXT_MUTED,
+        );
+        let query = if self.filter_text.is_empty() {
+            "Type to filter".to_string()
+        } else {
+            self.filter_text.clone()
+        };
+        text.push_no_wrap(
+            query,
+            filter_text_rect(content),
+            field,
+            TEXT_FONT_SIZE,
+            TEXT_LINE_HEIGHT,
+            if self.filter_text.is_empty() {
+                TEXT_MUTED
+            } else {
+                TEXT_PRIMARY
+            },
+        );
+        if self.filter_active {
+            let text_rect = filter_text_rect(content);
+            let cursor_x = (text_rect.x
+                + cursor_visual_advance(&self.filter_text, self.filter_cursor))
+            .clamp(text_rect.x, text_rect.right() - 1.0);
+            batch.push_clipped_rect(
+                ViewRect {
+                    x: cursor_x,
+                    y: text_rect.y + 2.0,
+                    width: 1.0,
+                    height: (text_rect.height - 4.0).max(1.0),
+                },
+                field,
+                [0.12, 0.30, 0.62, 1.0],
+                width,
+                height,
+            );
+        }
+        let count_label = format!("{} matches", self.visible_indices.len());
+        text.push_no_wrap(
+            count_label,
+            ViewRect {
+                x: field.right() + 10.0,
+                y: bar.y + (bar.height - TEXT_LINE_HEIGHT) / 2.0,
+                width: (bar.right() - field.right() - 20.0).max(1.0),
+                height: TEXT_LINE_HEIGHT,
+            },
+            bar,
+            TEXT_FONT_SIZE,
+            TEXT_LINE_HEIGHT,
+            TEXT_MUTED,
+        );
+    }
+
     fn push_details_header_text(&self, text: &mut TextBatch, content: ViewRect) {
         let y = content.y + (DETAILS_HEADER_HEIGHT - TEXT_LINE_HEIGHT) / 2.0;
         text.push_no_wrap(
@@ -1098,8 +1344,13 @@ impl SctkPane {
         } else {
             "hidden hidden"
         };
+        let filter = if self.filter_text.is_empty() {
+            String::new()
+        } else {
+            format!(", filter {:?}", self.filter_text)
+        };
         format!(
-            "{} items, {} folders, {} files, {} on screen, {}, {}{}",
+            "{} items, {} folders, {} files, {} on screen, {}, {}{}{}",
             self.visible_indices.len(),
             visible_dirs,
             visible_files,
@@ -1107,6 +1358,7 @@ impl SctkPane {
             self.view_mode.as_str(),
             hidden,
             selected,
+            filter,
         )
     }
 
@@ -1116,6 +1368,17 @@ impl SctkPane {
             y: content.y + rect.y - self.scroll_y,
             width: rect.width,
             height: rect.height,
+        }
+    }
+
+    fn item_content_rect(&self, content: ViewRect) -> ViewRect {
+        if !self.filter_visible() {
+            return content;
+        }
+        ViewRect {
+            y: content.y + FILTER_BAR_HEIGHT,
+            height: (content.height - FILTER_BAR_HEIGHT).max(1.0),
+            ..content
         }
     }
 
@@ -1237,6 +1500,10 @@ impl SctkPane {
         self.selected_entries.clear();
         self.location_active = false;
         self.sync_location_text();
+        self.filter_active = false;
+        self.filter_text.clear();
+        self.filter_cursor = 0;
+        self.rebuild_visible_indices();
         self.scroll_x = 0.0;
         self.scroll_y = 0.0;
         Ok(())
@@ -1248,6 +1515,8 @@ impl SctkPane {
     }
 
     fn rebuild_visible_indices(&mut self) {
+        let filter = (!self.filter_text.is_empty())
+            .then(|| NameFilter::plain_text(self.filter_text.clone()));
         self.visible_indices.clear();
         self.visible_indices
             .extend(
@@ -1255,7 +1524,11 @@ impl SctkPane {
                     .iter()
                     .enumerate()
                     .filter_map(|(index, entry)| {
-                        (self.show_hidden || !entry.name.starts_with('.')).then_some(index)
+                        let visible = self.show_hidden || !entry.name.starts_with('.');
+                        let matches_filter = filter
+                            .as_ref()
+                            .is_none_or(|filter| filter.matches_name(entry.name.as_ref()));
+                        (visible && matches_filter).then_some(index)
                     }),
             );
     }
@@ -1456,6 +1729,20 @@ pub(crate) enum LocationEdit {
     Cancel,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum FilterEdit {
+    Focus,
+    Insert(String),
+    Backspace,
+    Delete,
+    MoveLeft,
+    MoveRight,
+    MoveHome,
+    MoveEnd,
+    Accept,
+    Cancel,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PaneScrollbarAxis {
     Horizontal,
@@ -1572,9 +1859,12 @@ fn location_text_rect(pane: ViewRect) -> ViewRect {
 }
 
 fn cursor_for_location_point(point: ViewPoint, pane: ViewRect, text: &str) -> usize {
-    let text_rect = location_text_rect(pane);
-    let average_char_width = location_average_char_width();
-    let target = ((point.x - text_rect.x).max(0.0) / average_char_width).round() as usize;
+    cursor_for_text_point(point, location_text_rect(pane), text)
+}
+
+fn cursor_for_text_point(point: ViewPoint, text_rect: ViewRect, text: &str) -> usize {
+    let target =
+        ((point.x - text_rect.x).max(0.0) / location_average_char_width()).round() as usize;
     byte_index_after_chars(text, target)
 }
 
@@ -1585,6 +1875,35 @@ fn cursor_visual_advance(text: &str, cursor: usize) -> f32 {
 
 fn location_average_char_width() -> f32 {
     TEXT_FONT_SIZE * 0.56
+}
+
+fn filter_bar_rect(content: ViewRect) -> ViewRect {
+    ViewRect {
+        x: content.x,
+        y: content.y,
+        width: content.width,
+        height: FILTER_BAR_HEIGHT,
+    }
+}
+
+fn filter_field_rect(content: ViewRect) -> ViewRect {
+    let bar = filter_bar_rect(content);
+    ViewRect {
+        x: bar.x + 62.0,
+        y: bar.y + 4.0,
+        width: (bar.width - 178.0).max(96.0),
+        height: (bar.height - 8.0).max(1.0),
+    }
+}
+
+fn filter_text_rect(content: ViewRect) -> ViewRect {
+    let field = filter_field_rect(content);
+    ViewRect {
+        x: field.x + 8.0,
+        y: field.y + (field.height - TEXT_LINE_HEIGHT) / 2.0,
+        width: (field.width - 16.0).max(1.0),
+        height: TEXT_LINE_HEIGHT,
+    }
 }
 
 fn byte_index_after_chars(text: &str, count: usize) -> usize {
@@ -1760,6 +2079,62 @@ mod tests {
         assert!(pane.selected_entries.contains(&0));
         assert!(!pane.selected_entries.contains(&1));
         assert!(pane.selected_entries.contains(&2));
+    }
+
+    #[test]
+    fn filter_updates_visible_projection_selection_and_status() {
+        let mut pane = SctkPane::from_entries(
+            PathBuf::from("/tmp"),
+            ViewMode::Details,
+            vec![
+                entry("alpha", false),
+                entry("beta", false),
+                entry("alphabet", false),
+                entry(".alpha-hidden", false),
+            ],
+        );
+
+        assert!(pane.edit_filter(FilterEdit::Focus, geometry()));
+        assert!(pane.edit_filter(FilterEdit::Insert("alpha".to_string()), geometry()));
+        assert_eq!(pane.visible_entry_count(), 2);
+        assert_eq!(pane.filter_text(), "alpha");
+        assert_eq!(pane.filter_cursor(), pane.filter_text().len());
+        assert!(pane.select_all());
+        assert_eq!(pane.selected_count(), 2);
+        assert!(pane.selected_entries.contains(&0));
+        assert!(pane.selected_entries.contains(&2));
+        assert!(!pane.selected_entries.contains(&3));
+        assert!(pane.status_text(2).contains("filter \"alpha\""));
+
+        assert!(pane.edit_filter(FilterEdit::Backspace, geometry()));
+        assert_eq!(pane.filter_text(), "alph");
+        assert!(pane.edit_filter(FilterEdit::Accept, geometry()));
+        assert!(!pane.filter_active());
+        assert!(pane.filter_visible());
+        assert_eq!(pane.visible_entry_count(), 2);
+        assert!(pane.edit_filter(FilterEdit::Focus, geometry()));
+        assert!(pane.edit_filter(FilterEdit::Cancel, geometry()));
+        assert!(!pane.filter_visible());
+        assert_eq!(pane.visible_entry_count(), 3);
+    }
+
+    #[test]
+    fn filter_and_hidden_projection_are_combined() {
+        let mut pane = SctkPane::from_entries(
+            PathBuf::from("/tmp"),
+            ViewMode::Details,
+            vec![
+                entry("alpha", false),
+                entry(".alpha-hidden", false),
+                entry("beta", false),
+            ],
+        );
+
+        assert!(pane.edit_filter(FilterEdit::Focus, geometry()));
+        assert!(pane.edit_filter(FilterEdit::Insert("alpha".to_string()), geometry()));
+        assert_eq!(pane.visible_entry_count(), 1);
+        assert!(pane.toggle_show_hidden(geometry()));
+        assert_eq!(pane.visible_entry_count(), 2);
     }
 
     #[test]
