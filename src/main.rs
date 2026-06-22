@@ -79,6 +79,8 @@ fn fika_frame_log_all_enabled() -> bool {
     })
 }
 
+#[path = "shell/autosmoke.rs"]
+mod wgpu_autosmoke;
 #[path = "shell/clipboard.rs"]
 mod wgpu_clipboard;
 #[path = "shell/icon_resolver.rs"]
@@ -100,6 +102,7 @@ mod wgpu_pane_layout;
 #[path = "shell/selection.rs"]
 mod wgpu_selection;
 
+use wgpu_autosmoke::{AutosmokeScrollAction, autosmoke_scroll_config, autosmoke_zoom_config};
 use wgpu_clipboard::ShellClipboard;
 #[cfg(test)]
 use wgpu_icon_resolver::FileIconResolverTestHarness;
@@ -259,7 +262,7 @@ impl PathNavigationAction {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ZoomAction {
+pub(crate) enum ZoomAction {
     In,
     Out,
     Reset,
@@ -414,128 +417,10 @@ fn window_title(scene: &ShellScene) -> String {
     }
 }
 
-struct AutosmokeZoomConfig {
-    actions: VecDeque<ZoomAction>,
-    interval: Duration,
-    allow_pending_redraw: bool,
-}
-
-#[derive(Clone, Copy, Debug)]
-struct AutosmokeScrollAction {
-    delta: f32,
-    label: &'static str,
-}
-
-struct AutosmokeScrollConfig {
-    actions: VecDeque<AutosmokeScrollAction>,
-    interval: Duration,
-    allow_pending_redraw: bool,
-}
-
-fn env_flag_enabled(key: &str) -> bool {
-    env::var_os(key).is_some_and(|value| {
-        let value = value.to_string_lossy();
-        let value = value.trim().to_ascii_lowercase();
-        !matches!(value.as_str(), "" | "0" | "false" | "no" | "off")
-    })
-}
-
-fn env_duration_millis(key: &str) -> Option<Duration> {
-    env::var(key)
-        .ok()
-        .and_then(|value| value.trim().parse::<u64>().ok())
-        .map(Duration::from_millis)
-}
-
-fn env_f32(key: &str) -> Option<f32> {
-    env::var(key)
-        .ok()
-        .and_then(|value| value.trim().parse::<f32>().ok())
-}
-
 fn env_usize(key: &str) -> Option<usize> {
     env::var(key)
         .ok()
         .and_then(|value| value.trim().parse::<usize>().ok())
-}
-
-fn autosmoke_zoom_config() -> AutosmokeZoomConfig {
-    let enabled = env_flag_enabled("FIKA_WGPU_AUTOSMOKE_ZOOM");
-    if !enabled {
-        return AutosmokeZoomConfig {
-            actions: VecDeque::new(),
-            interval: Duration::from_millis(250),
-            allow_pending_redraw: false,
-        };
-    }
-
-    let rapid = env_flag_enabled("FIKA_WGPU_AUTOSMOKE_ZOOM_RAPID");
-    let interval = env_duration_millis("FIKA_WGPU_AUTOSMOKE_ZOOM_INTERVAL_MS")
-        .unwrap_or_else(|| Duration::from_millis(if rapid { 16 } else { 250 }));
-    let actions = if rapid {
-        let mut actions = VecDeque::new();
-        for _ in 0..6 {
-            actions.push_back(ZoomAction::In);
-            actions.push_back(ZoomAction::In);
-            actions.push_back(ZoomAction::Out);
-            actions.push_back(ZoomAction::Out);
-        }
-        actions.push_back(ZoomAction::Reset);
-        actions
-    } else {
-        VecDeque::from([
-            ZoomAction::In,
-            ZoomAction::In,
-            ZoomAction::Out,
-            ZoomAction::Reset,
-        ])
-    };
-    AutosmokeZoomConfig {
-        actions,
-        interval,
-        allow_pending_redraw: rapid,
-    }
-}
-
-fn autosmoke_scroll_config() -> AutosmokeScrollConfig {
-    let enabled = env_flag_enabled("FIKA_WGPU_AUTOSMOKE_SCROLL");
-    if !enabled {
-        return AutosmokeScrollConfig {
-            actions: VecDeque::new(),
-            interval: Duration::from_millis(250),
-            allow_pending_redraw: false,
-        };
-    }
-
-    let rapid = env_flag_enabled("FIKA_WGPU_AUTOSMOKE_SCROLL_RAPID");
-    let interval = env_duration_millis("FIKA_WGPU_AUTOSMOKE_SCROLL_INTERVAL_MS")
-        .unwrap_or_else(|| Duration::from_millis(if rapid { 16 } else { 120 }));
-    let step = env_f32("FIKA_WGPU_AUTOSMOKE_SCROLL_STEP").unwrap_or(SCROLL_LINE_PX * 2.0);
-    let mut actions = VecDeque::new();
-    let forward_count = env_usize("FIKA_WGPU_AUTOSMOKE_SCROLL_FORWARD_COUNT").unwrap_or(if rapid {
-        28
-    } else {
-        10
-    });
-    let back_count =
-        env_usize("FIKA_WGPU_AUTOSMOKE_SCROLL_BACK_COUNT").unwrap_or(if rapid { 14 } else { 5 });
-    for _ in 0..forward_count {
-        actions.push_back(AutosmokeScrollAction {
-            delta: step,
-            label: "forward",
-        });
-    }
-    for _ in 0..back_count {
-        actions.push_back(AutosmokeScrollAction {
-            delta: -step,
-            label: "back",
-        });
-    }
-    AutosmokeScrollConfig {
-        actions,
-        interval,
-        allow_pending_redraw: rapid,
-    }
 }
 
 struct FikaWgpuApp {
@@ -571,7 +456,7 @@ impl FikaWgpuApp {
     fn new(scene: ShellScene, auto_cycle_views: bool, settings_path: PathBuf) -> Self {
         let (async_task_tx, async_task_rx) = mpsc::channel();
         let autosmoke_zoom = autosmoke_zoom_config();
-        let autosmoke_scroll = autosmoke_scroll_config();
+        let autosmoke_scroll = autosmoke_scroll_config(SCROLL_LINE_PX * 2.0);
         Self {
             scene,
             mime_applications: MimeApplicationCache::load(),

@@ -37,6 +37,8 @@ Status:
 - [~] Continue splitting `src/main.rs` into focused modules:
   app/window/event loop, renderer, scene, pane assembly, Places, context menu,
   dialogs, icons, thumbnails, text, DnD, and telemetry.
+  Autosmoke runtime-evidence configuration now lives in `src/shell/autosmoke.rs`
+  instead of the shell entry point.
 - [~] Keep item view hot paths Dolphin-aligned:
   visible-slot virtualization, reusable slot pools, retained geometry,
   filtered projection, visible-first icon/thumbnail/text work, and scroll
