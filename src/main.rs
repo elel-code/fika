@@ -4814,10 +4814,11 @@ impl ShellScene {
         self.context_target = None;
         self.context_menu = None;
         self.drop_menu = None;
-        self.place_press = Some(ShellPlacePress { index, point });
         let drag_started = if self.place_participates_in_dnd(index) {
+            self.place_press = None;
             self.begin_internal_drag_for_place(index, point)
         } else {
+            self.place_press = Some(ShellPlacePress { index, point });
             self.internal_drag = None;
             false
         };
@@ -4839,23 +4840,32 @@ impl ShellScene {
         size: PhysicalSize<u32>,
     ) -> (bool, Option<ShellPlaceActivation>) {
         self.pointer = Some(point);
-        let Some(source_index) = self
+        if let Some(source_index) = self
             .internal_drag
             .as_ref()
             .and_then(ShellInternalDrag::source_place_index)
-            .or_else(|| self.place_press.as_ref().map(|press| press.index))
-        else {
-            return (self.refresh_hover(size), None);
-        };
-        if self.internal_drag.as_ref().is_some_and(|drag| drag.active) {
+        {
+            let was_active = self.internal_drag.as_ref().is_some_and(|drag| drag.active);
             self.place_press = None;
             let drop_changed = self.finish_internal_drag(point, size);
             let hover_changed = self.refresh_hover(size);
-            return (drop_changed || hover_changed, None);
+            let activation = if !was_active
+                && self.place_index_at_screen_point(point, size) == Some(source_index)
+            {
+                self.activate_place_index(source_index, point)
+            } else {
+                None
+            };
+            return (
+                was_active || drop_changed || hover_changed || activation.is_some(),
+                activation,
+            );
         }
 
         let press = self.place_press.take();
-        let drag_cleared = self.internal_drag.take().is_some();
+        let Some(source_index) = press.as_ref().map(|press| press.index) else {
+            return (self.refresh_hover(size), None);
+        };
         let _ = self.clear_dnd_hover_target();
         let within_click_distance = press
             .as_ref()
@@ -4868,10 +4878,7 @@ impl ShellScene {
             None
         };
         let hover_changed = self.refresh_hover(size);
-        (
-            drag_cleared || hover_changed || activation.is_some(),
-            activation,
-        )
+        (hover_changed || activation.is_some(), activation)
     }
 
     fn place_index_at_screen_point(
@@ -21096,6 +21103,61 @@ mod tests {
         assert_eq!(menu.sources, vec![PathBuf::from("/tmp/source-place")]);
         assert_eq!(menu.target_dir, PathBuf::from("/tmp"));
         assert!(matches!(menu.target, ShellDropTarget::PaneBlank { .. }));
+    }
+
+    #[test]
+    fn place_pointer_drag_uses_internal_drag_flow_like_pane_items() {
+        let mut scene = test_scene(Vec::new(), ShellViewMode::Icons);
+        scene.places = vec![
+            ShellPlace::new("", "A", "Alpha", PathBuf::from("/tmp/a"), true),
+            ShellPlace::new("", "B", "Beta", PathBuf::from("/tmp/b"), true),
+        ];
+        let size = PhysicalSize::new(700, 360);
+        let source_row = scene.place_row_rects(size)[0].1;
+        let start = ViewPoint {
+            x: source_row.x + 6.0,
+            y: source_row.y + 6.0,
+        };
+
+        assert_eq!(scene.begin_place_pointer(start, size), Some(true));
+        assert!(scene.place_press.is_none());
+        let drag = scene
+            .internal_drag
+            .as_ref()
+            .expect("editable place should use internal drag");
+        assert_eq!(drag.source_place_index(), Some(0));
+        assert!(!drag.active);
+
+        let (changed, activation) = scene.end_place_pointer(start, size);
+        assert!(changed);
+        assert_eq!(
+            activation,
+            Some(ShellPlaceActivation::Open {
+                pane: ShellPaneId::FIRST,
+                path: PathBuf::from("/tmp/a")
+            })
+        );
+        assert!(scene.internal_drag.is_none());
+
+        assert_eq!(scene.begin_place_pointer(start, size), Some(true));
+        assert!(scene.place_press.is_none());
+        let self_hover = ViewPoint {
+            x: source_row.x + source_row.width / 2.0,
+            y: source_row.y + source_row.height / 2.0,
+        };
+        assert!(scene.set_pointer(self_hover, size));
+        let drag = scene
+            .internal_drag
+            .as_ref()
+            .expect("place drag should still use internal drag");
+        assert!(drag.active);
+        assert_eq!(scene.dnd_hover_target, None);
+
+        let (changed, activation) = scene.end_place_pointer(self_hover, size);
+        assert!(changed);
+        assert!(activation.is_none());
+        assert!(scene.internal_drag.is_none());
+        assert!(scene.drop_menu.is_none());
     }
 
     #[test]
