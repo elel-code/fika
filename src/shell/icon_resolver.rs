@@ -1,6 +1,9 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{
+    Arc,
+    mpsc::{self, Receiver, Sender},
+};
 use std::thread;
 
 use crate::wgpu_icon_roles::{
@@ -23,6 +26,8 @@ pub(crate) struct FileIconResolver {
     result_rx: Receiver<IconResolveResult>,
 }
 
+const DOLPHIN_VISIBLE_ICON_PREWARM_SIZES: &[u16] = &[16, 22, 32, 48, 64, 80, 96, 112, 128, 144];
+
 #[derive(Clone, Debug)]
 struct IconResolveRequest {
     key: FileIconPathCacheKey,
@@ -43,13 +48,38 @@ impl FileIconResolver {
             .spawn(move || icon_resolve_worker(request_rx, result_tx))
             .ok()
             .map(|_| request_tx);
-        Self {
+        let mut resolver = Self {
             cached: HashMap::new(),
             pending: HashSet::new(),
             fast_theme: IconThemeResolver::default(),
             fast_profiles: HashMap::new(),
             request_tx,
             result_rx,
+        };
+        resolver.prewarm_common_visible_roles();
+        resolver
+    }
+
+    fn prewarm_common_visible_roles(&mut self) {
+        let roles = [
+            FileIconKind::Directory,
+            FileIconKind::File { extension: None },
+            FileIconKind::PreliminaryFile { extension: None },
+            FileIconKind::Mime {
+                mime: Arc::from(fika_core::GENERIC_BINARY_MIME),
+            },
+            FileIconKind::Mime {
+                mime: Arc::from("text/plain"),
+            },
+        ];
+
+        for size_px in DOLPHIN_VISIBLE_ICON_PREWARM_SIZES {
+            for kind in roles.iter().cloned() {
+                self.resolve_key_fast(FileIconPathCacheKey {
+                    role: FileIconRoleCacheKey { kind },
+                    size_px: *size_px,
+                });
+            }
         }
     }
 
@@ -72,6 +102,7 @@ impl FileIconResolver {
         self.resolve_key(key)
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn resolve_entry_fast(
         &mut self,
         directory: &Path,
@@ -88,6 +119,33 @@ impl FileIconResolver {
             icon_size,
         );
         self.resolve_key_fast(key)
+    }
+
+    pub(crate) fn resolve_entry_visible(
+        &mut self,
+        directory: &Path,
+        entry: &Entry,
+        icon_size: f32,
+    ) -> (ResolvedFileIcon, bool) {
+        self.drain_results();
+        let path = directory.join(entry.name.as_ref());
+        let key = file_icon_path_cache_key(
+            &path,
+            entry.is_dir,
+            entry.mime_type.clone(),
+            entry.mime_magic_checked,
+            icon_size,
+        );
+        if let Some(icon) = self.resolve_key(key.clone()) {
+            return (icon, false);
+        }
+
+        let fallback_key = visible_icon_fallback_key(&key);
+        if let Some(icon) = self.cached.get(&fallback_key) {
+            return (icon.clone(), true);
+        }
+
+        (self.resolve_key_fast(fallback_key), true)
     }
 
     pub(crate) fn resolve_named(
@@ -171,6 +229,17 @@ impl FileIconResolver {
     pub(crate) fn cached_len_for_test(&mut self) -> usize {
         self.drain_results();
         self.cached.len()
+    }
+}
+
+fn visible_icon_fallback_key(key: &FileIconPathCacheKey) -> FileIconPathCacheKey {
+    let kind = match &key.role.kind {
+        FileIconKind::Directory => FileIconKind::Directory,
+        _ => FileIconKind::File { extension: None },
+    };
+    FileIconPathCacheKey {
+        role: FileIconRoleCacheKey { kind },
+        size_px: key.size_px,
     }
 }
 

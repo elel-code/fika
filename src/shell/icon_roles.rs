@@ -71,10 +71,10 @@ pub(crate) fn file_icon_kind(
     }
     match mime_type {
         Some(mime) if mime.as_ref() == fika_core::GENERIC_BINARY_MIME => {
-            FileIconKind::File { extension }
+            FileIconKind::File { extension: None }
         }
         Some(mime) => FileIconKind::Mime { mime },
-        None => FileIconKind::File { extension },
+        None => FileIconKind::File { extension: None },
     }
 }
 
@@ -110,8 +110,8 @@ pub(crate) fn file_icon_profile(
             preliminary_file_icon_candidates(extension.as_deref(), mime),
             Vec::new(),
         ),
-        FileIconKind::File { extension } => (
-            fallback_file_icon_candidates(extension.as_deref()),
+        FileIconKind::File { .. } => (
+            fallback_file_icon_candidates(),
             mime_generic_icon_candidates(fika_core::GENERIC_BINARY_MIME, mime),
         ),
         FileIconKind::Named {
@@ -136,7 +136,7 @@ fn mime_icon_candidates(mime_name: &str, mime: &fika_core::MimeDatabase) -> Vec<
     let mut candidates = Vec::new();
 
     if mime_name == fika_core::GENERIC_BINARY_MIME {
-        for icon_name in fallback_file_icon_candidates(None) {
+        for icon_name in fallback_file_icon_candidates() {
             push_icon_candidate(&mut candidates, icon_name);
         }
         return candidates;
@@ -178,12 +178,8 @@ fn mime_theme_icon_candidates(mime_name: &str, extension: Option<&str>) -> Vec<S
     candidates
 }
 
-fn fallback_file_icon_candidates(extension: Option<&str>) -> Vec<String> {
+fn fallback_file_icon_candidates() -> Vec<String> {
     let mut candidates = Vec::new();
-    if let Some(extension) = extension.filter(|extension| !extension.is_empty()) {
-        push_icon_candidate(&mut candidates, format!("text-x-{extension}"));
-        push_icon_candidate(&mut candidates, format!("application-x-{extension}"));
-    }
     push_icon_candidate(&mut candidates, "application-octet-stream");
     candidates
 }

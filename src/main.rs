@@ -66,6 +66,17 @@ fn fika_log_enabled() -> bool {
     })
 }
 
+fn fika_frame_log_all_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        env::var_os("FIKA_WGPU_FRAME_LOG_ALL").is_some_and(|value| {
+            let value = value.to_string_lossy();
+            let value = value.trim().to_ascii_lowercase();
+            !matches!(value.as_str(), "" | "0" | "false" | "no" | "off")
+        })
+    })
+}
+
 #[path = "shell/clipboard.rs"]
 mod wgpu_clipboard;
 #[path = "shell/icon_resolver.rs"]
@@ -239,6 +250,16 @@ enum ZoomAction {
     Reset,
 }
 
+impl ZoomAction {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::In => "in",
+            Self::Out => "out",
+            Self::Reset => "reset",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SelectionCommand {
     SelectAll,
@@ -378,6 +399,65 @@ fn window_title(scene: &ShellScene) -> String {
     }
 }
 
+struct AutosmokeZoomConfig {
+    actions: VecDeque<ZoomAction>,
+    interval: Duration,
+    allow_pending_redraw: bool,
+}
+
+fn env_flag_enabled(key: &str) -> bool {
+    env::var_os(key).is_some_and(|value| {
+        let value = value.to_string_lossy();
+        let value = value.trim().to_ascii_lowercase();
+        !matches!(value.as_str(), "" | "0" | "false" | "no" | "off")
+    })
+}
+
+fn env_duration_millis(key: &str) -> Option<Duration> {
+    env::var(key)
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .map(Duration::from_millis)
+}
+
+fn autosmoke_zoom_config() -> AutosmokeZoomConfig {
+    let enabled = env_flag_enabled("FIKA_WGPU_AUTOSMOKE_ZOOM");
+    if !enabled {
+        return AutosmokeZoomConfig {
+            actions: VecDeque::new(),
+            interval: Duration::from_millis(250),
+            allow_pending_redraw: false,
+        };
+    }
+
+    let rapid = env_flag_enabled("FIKA_WGPU_AUTOSMOKE_ZOOM_RAPID");
+    let interval = env_duration_millis("FIKA_WGPU_AUTOSMOKE_ZOOM_INTERVAL_MS")
+        .unwrap_or_else(|| Duration::from_millis(if rapid { 16 } else { 250 }));
+    let actions = if rapid {
+        let mut actions = VecDeque::new();
+        for _ in 0..6 {
+            actions.push_back(ZoomAction::In);
+            actions.push_back(ZoomAction::In);
+            actions.push_back(ZoomAction::Out);
+            actions.push_back(ZoomAction::Out);
+        }
+        actions.push_back(ZoomAction::Reset);
+        actions
+    } else {
+        VecDeque::from([
+            ZoomAction::In,
+            ZoomAction::In,
+            ZoomAction::Out,
+            ZoomAction::Reset,
+        ])
+    };
+    AutosmokeZoomConfig {
+        actions,
+        interval,
+        allow_pending_redraw: rapid,
+    }
+}
+
 struct FikaWgpuApp {
     scene: ShellScene,
     mime_applications: MimeApplicationCache,
@@ -394,13 +474,19 @@ struct FikaWgpuApp {
     window: Option<Box<dyn Window>>,
     cursor_icon: CursorIcon,
     pending_redraw_frames: u8,
+    pending_render_reason: Option<&'static str>,
     auto_cycle_views: bool,
     next_auto_cycle: Instant,
+    autosmoke_zoom_actions: VecDeque<ZoomAction>,
+    next_autosmoke_zoom: Instant,
+    autosmoke_zoom_interval: Duration,
+    autosmoke_zoom_allow_pending_redraw: bool,
 }
 
 impl FikaWgpuApp {
     fn new(scene: ShellScene, auto_cycle_views: bool, settings_path: PathBuf) -> Self {
         let (async_task_tx, async_task_rx) = mpsc::channel();
+        let autosmoke_zoom = autosmoke_zoom_config();
         Self {
             scene,
             mime_applications: MimeApplicationCache::load(),
@@ -416,8 +502,13 @@ impl FikaWgpuApp {
             window: None,
             cursor_icon: CursorIcon::Default,
             pending_redraw_frames: 0,
+            pending_render_reason: None,
             auto_cycle_views,
             next_auto_cycle: Instant::now() + AUTO_CYCLE_INTERVAL,
+            autosmoke_zoom_actions: autosmoke_zoom.actions,
+            next_autosmoke_zoom: Instant::now() + autosmoke_zoom.interval,
+            autosmoke_zoom_interval: autosmoke_zoom.interval,
+            autosmoke_zoom_allow_pending_redraw: autosmoke_zoom.allow_pending_redraw,
         }
     }
 
@@ -681,6 +772,20 @@ impl ApplicationHandler for FikaWgpuApp {
                 }
             }
         }
+        if (self.autosmoke_zoom_allow_pending_redraw || self.pending_redraw_frames == 0)
+            && Instant::now() >= self.next_autosmoke_zoom
+            && let Some(action) = self.autosmoke_zoom_actions.pop_front()
+            && let Some(renderer) = self.renderer.as_ref()
+            && renderer.frame_count > 0
+        {
+            if self.scene.zoom(action, renderer.size) {
+                fika_log!("[fika-wgpu] autosmoke-zoom action={}", action.as_str());
+                self.next_autosmoke_zoom = Instant::now() + self.autosmoke_zoom_interval;
+                self.queue_scene_change("autosmoke-zoom", ZOOM_REDRAW_FRAMES);
+            } else {
+                self.next_autosmoke_zoom = Instant::now() + self.autosmoke_zoom_interval;
+            }
+        }
 
         let needs_redraw = self.renderer.as_ref().is_some_and(|renderer| {
             renderer.frame_count == 0
@@ -881,7 +986,7 @@ impl ApplicationHandler for FikaWgpuApp {
                 }
                 if shortcut && let Some(zoom_action) = zoom_action_for_key_event(&event) {
                     if self.scene.zoom(zoom_action, renderer.size) {
-                        self.present_scene_change(event_loop, "zoom");
+                        self.queue_scene_change("zoom", ZOOM_REDRAW_FRAMES);
                     }
                     return;
                 }
@@ -1308,7 +1413,7 @@ impl ApplicationHandler for FikaWgpuApp {
                     if let Some(zoom_action) = zoom_action_for_scroll_delta(delta_y)
                         && self.scene.zoom(zoom_action, renderer.size)
                     {
-                        self.present_scene_change(event_loop, "wheel-zoom");
+                        self.queue_scene_change("wheel-zoom", ZOOM_REDRAW_FRAMES);
                     }
                     return;
                 }
@@ -1320,7 +1425,11 @@ impl ApplicationHandler for FikaWgpuApp {
             }
             WindowEvent::RedrawRequested => {
                 let force_log = self.pending_redraw_frames > 0;
-                let reason = if force_log { "switch-redraw" } else { "redraw" };
+                let reason = self.pending_render_reason.take().unwrap_or(if force_log {
+                    "switch-redraw"
+                } else {
+                    "redraw"
+                });
                 self.render_now(event_loop, reason, force_log);
             }
             _ => {}
@@ -2504,8 +2613,18 @@ impl FikaWgpuApp {
         }
     }
 
+    fn queue_scene_change(&mut self, reason: &'static str, redraw_frames: u8) {
+        self.pending_redraw_frames = self.pending_redraw_frames.max(redraw_frames);
+        self.pending_render_reason = Some(reason);
+        if let Some(window) = self.window.as_ref() {
+            window.set_title(&window_title(&self.scene));
+            window.request_redraw();
+        }
+    }
+
     fn present_scene_change(&mut self, event_loop: &dyn ActiveEventLoop, reason: &'static str) {
         self.pending_redraw_frames = VIEW_SWITCH_REDRAW_FRAMES;
+        self.pending_render_reason = None;
         if let Some(window) = self.window.as_ref() {
             window.set_title(&window_title(&self.scene));
             window.request_redraw();
@@ -10293,7 +10412,6 @@ impl ShellScene {
             .iter()
             .map(|projection| self.thumbnail_candidate_count_for_projection(projection))
             .sum();
-        self.prewarm_visible_file_icons(&projections, icons);
 
         push_rect(
             &mut vertices,
@@ -10451,16 +10569,18 @@ impl ShellScene {
         }
     }
 
-    fn prewarm_visible_file_icons(
+    fn prewarm_visible_file_icon_roles(
         &self,
         projections: &[ShellPaneProjection<'_>],
-        icons: &mut IconFrameBuilder<'_>,
-    ) {
+        resolver: &mut FileIconResolver,
+    ) -> IconRolePrewarmStats {
+        let mut stats = IconRolePrewarmStats::default();
         let deadline = Instant::now() + VISIBLE_ICON_ROLE_PREWARM_BUDGET;
         for projection in projections {
             for item in &projection.visible_items {
                 if Instant::now() >= deadline {
-                    return;
+                    stats.over_budget = true;
+                    return stats;
                 }
                 let Some(entry_index) = projection
                     .view
@@ -10479,11 +10599,20 @@ impl ShellScene {
                     .width
                     .max(item.layout.icon_rect.height)
                     .clamp(16.0, 256.0);
-                if !icons.prewarm_file_icon_role(projection.view.path, entry, icon_size, deadline) {
-                    return;
+                let resolve_start = Instant::now();
+                let snapshot = resolver.resolve_entry(projection.view.path, entry, icon_size);
+                stats.resolve_us += resolve_start.elapsed().as_micros();
+                stats.entries += 1;
+                if snapshot.is_none() {
+                    stats.deferred += 1;
+                }
+                if Instant::now() >= deadline {
+                    stats.over_budget = true;
+                    return stats;
                 }
             }
         }
+        stats
     }
 
     fn push_pane_projection(
@@ -10669,22 +10798,34 @@ impl ShellScene {
         } else {
             TextColor::rgb(36, 41, 47)
         };
-        if projection.view.view_mode == ShellViewMode::Compact {
-            text.push_label_aligned(
-                entry.name.as_ref(),
-                text_rect,
-                content_clip,
-                text_color,
-                LabelAlignment::Start,
-            );
-        } else {
-            text.push_label(entry.name.as_ref(), text_rect, content_clip, text_color);
+        match projection.view.view_mode {
+            ShellViewMode::Compact => {
+                text.push_label_aligned(
+                    entry.name.as_ref(),
+                    text_rect,
+                    content_clip,
+                    text_color,
+                    LabelAlignment::Start,
+                );
+            }
+            ShellViewMode::Details => {
+                text.push_label_aligned_no_wrap(
+                    entry.name.as_ref(),
+                    text_rect,
+                    content_clip,
+                    text_color,
+                    LabelAlignment::Start,
+                );
+            }
+            ShellViewMode::Icons => {
+                text.push_label(entry.name.as_ref(), text_rect, content_clip, text_color);
+            }
         }
 
         if projection.view.view_mode == ShellViewMode::Details {
             let text_height = self.text_line_height();
             let metadata_y = item_rect.y + (item_rect.height - text_height).max(0.0) / 2.0;
-            text.push_label(
+            text.push_label_aligned_no_wrap(
                 &details_size_label(entry),
                 ViewRect {
                     x: content_clip.x + self.details_name_width() + self.scale_metric(8.0)
@@ -10695,8 +10836,9 @@ impl ShellScene {
                 },
                 content_clip,
                 TextColor::rgb(89, 99, 110),
+                LabelAlignment::Start,
             );
-            text.push_label(
+            text.push_label_aligned_no_wrap(
                 &format_modified_secs(entry.modified_secs),
                 ViewRect {
                     x: content_clip.x
@@ -10710,6 +10852,7 @@ impl ShellScene {
                 },
                 content_clip,
                 TextColor::rgb(89, 99, 110),
+                LabelAlignment::Start,
             );
         }
 
@@ -10873,7 +11016,7 @@ impl ShellScene {
                 self.details_modified_width() - self.scale_metric(16.0),
             ),
         ] {
-            text.push_label(
+            text.push_label_aligned_no_wrap(
                 label,
                 ViewRect {
                     x: header.x + x,
@@ -10883,6 +11026,7 @@ impl ShellScene {
                 },
                 header,
                 TextColor::rgb(89, 99, 110),
+                LabelAlignment::Start,
             );
         }
     }
@@ -14015,6 +14159,14 @@ struct SceneFrame {
     icon_stats: IconFrameStats,
 }
 
+#[derive(Default)]
+struct IconRolePrewarmStats {
+    entries: usize,
+    deferred: usize,
+    resolve_us: u128,
+    over_budget: bool,
+}
+
 struct WgpuState {
     instance: wgpu::Instance,
     surface: wgpu::Surface<'static>,
@@ -14169,6 +14321,31 @@ impl WgpuState {
         reason: &'static str,
         force_log: bool,
     ) -> bool {
+        let prewarm_stats = {
+            let projections = ShellPaneId::ALL
+                .into_iter()
+                .filter_map(|kind| scene.pane_projection(kind, self.size))
+                .collect::<Vec<_>>();
+            scene.prewarm_visible_file_icon_roles(&projections, &mut self.icon_renderer.resolver)
+        };
+        if prewarm_stats.entries > 0
+            && (self.frame_count == 0
+                || force_log
+                || fika_frame_log_all_enabled()
+                || prewarm_stats.resolve_us >= 1000)
+        {
+            fika_log!(
+                "[fika-wgpu] prewarm-icons reason={} view={} entries={} deferred={} resolve={}us budget={}us over_budget={}",
+                reason,
+                scene.panes[ShellPaneId::FIRST].view_mode.as_str(),
+                prewarm_stats.entries,
+                prewarm_stats.deferred,
+                prewarm_stats.resolve_us,
+                VISIBLE_ICON_ROLE_PREWARM_BUDGET.as_micros(),
+                prewarm_stats.over_budget as u8
+            );
+        }
+
         let frame_start = Instant::now();
         let frame = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame) => frame,
@@ -14301,6 +14478,7 @@ impl WgpuState {
         if self.frame_count == 1
             || view_switch_rendered
             || force_log
+            || fika_frame_log_all_enabled()
             || self.last_log.elapsed() >= Duration::from_secs(1)
         {
             fika_log!(
@@ -15118,29 +15296,6 @@ impl<'a> IconFrameBuilder<'a> {
         }
     }
 
-    fn prewarm_file_icon_role(
-        &mut self,
-        directory: &Path,
-        entry: &Entry,
-        icon_size: f32,
-        deadline: Instant,
-    ) -> bool {
-        if Instant::now() >= deadline {
-            return false;
-        }
-
-        let resolve_start = Instant::now();
-        let snapshot = self
-            .resolver
-            .resolve_entry_fast(directory, entry, icon_size);
-        self.resolve_us += resolve_start.elapsed().as_micros();
-
-        if snapshot.path.is_none() {
-            self.deferred += 1;
-        }
-        Instant::now() < deadline
-    }
-
     fn push_icon(
         &mut self,
         directory: &Path,
@@ -15159,10 +15314,13 @@ impl<'a> IconFrameBuilder<'a> {
         self.icons += 1;
         let resolve_start = Instant::now();
         let icon_size = rect.width.max(rect.height).clamp(16.0, 256.0);
-        let snapshot = self
+        let (snapshot, used_fallback) = self
             .resolver
-            .resolve_entry_fast(directory, entry, icon_size);
+            .resolve_entry_visible(directory, entry, icon_size);
         self.resolve_us += resolve_start.elapsed().as_micros();
+        if used_fallback {
+            self.deferred += 1;
+        }
 
         let Some(path) = snapshot.path else {
             self.fallbacks += 1;
@@ -15957,7 +16115,7 @@ impl<'a> TextFrameBuilder<'a> {
     fn push_label_aligned_wrapped(
         &mut self,
         label: &str,
-        rect: ViewRect,
+        mut rect: ViewRect,
         clip: ViewRect,
         color: TextColor,
         alignment: LabelAlignment,
@@ -15965,6 +16123,11 @@ impl<'a> TextFrameBuilder<'a> {
     ) {
         if label.is_empty() || rect.width <= 0.0 || rect.height <= 0.0 {
             return;
+        }
+        if alignment == LabelAlignment::Start && wrap == LabelWrap::None {
+            rect.width = rect
+                .width
+                .min(estimated_label_raster_width(label, self.max_font_size));
         }
         let Some(screen) = intersect_rect(rect, clip) else {
             return;
@@ -16812,6 +16975,13 @@ fn blend_pixel(dst: &mut [u8], src: [u8; 4]) {
         dst[channel] = (out_c * 255.0).round().clamp(0.0, 255.0) as u8;
     }
     dst[3] = (out_a * 255.0).round().clamp(0.0, 255.0) as u8;
+}
+
+fn estimated_label_raster_width(label: &str, font_size: f32) -> f32 {
+    let scale = font_size / TEXT_FONT_SIZE.max(1.0);
+    let width = label.chars().map(estimated_name_char_width).sum::<f32>() * scale
+        + TEXT_PADDING as f32 * 2.0;
+    width.ceil().max(1.0)
 }
 
 #[derive(Clone, Debug)]
@@ -18016,13 +18186,7 @@ fn required_compact_item_width(options: CompactLayoutOptions, text_width: f32) -
 }
 
 fn compact_entry_text_width(entry: &Entry, scale_factor: f32) -> f32 {
-    let unit_width = f32::from(entry.name_width_units) * 8.5;
-    let estimated_width = entry
-        .name
-        .chars()
-        .map(estimated_name_char_width)
-        .sum::<f32>();
-    unit_width.max(estimated_width) * scale_factor
+    f32::from(entry.name_width_units) * 9.0 * scale_factor
 }
 
 fn estimated_name_char_width(ch: char) -> f32 {
@@ -22481,6 +22645,33 @@ mod tests {
     }
 
     #[test]
+    fn generic_binary_file_icon_roles_share_dolphin_generic_role() {
+        let script_file = file_icon_path_cache_key(
+            Path::new("/usr/bin/tool.py"),
+            false,
+            Some(Arc::from(fika_core::GENERIC_BINARY_MIME)),
+            true,
+            32.0,
+        );
+        let shell_file = file_icon_path_cache_key(
+            Path::new("/usr/bin/tool.sh"),
+            false,
+            Some(Arc::from(fika_core::GENERIC_BINARY_MIME)),
+            true,
+            32.0,
+        );
+        let unknown_file =
+            file_icon_path_cache_key(Path::new("/usr/bin/tool.pl"), false, None, true, 32.0);
+
+        assert_eq!(script_file.role, shell_file.role);
+        assert_eq!(script_file.role, unknown_file.role);
+        assert!(matches!(
+            script_file.role.kind,
+            FileIconKind::File { extension: None }
+        ));
+    }
+
+    #[test]
     fn file_icon_resolver_reuses_mime_pending_and_cached_snapshot() {
         let mut harness = FileIconResolverTestHarness::new();
         let text_file = test_entry_with_mime("readme.txt", false, "text/plain");
@@ -25926,6 +26117,43 @@ text/plain=writer.desktop;\n",
             TEXT_RASTER_MISS_BUDGET_PER_FRAME + 1
         );
         assert_eq!(second_frame.stats.deferred, 0);
+    }
+
+    #[test]
+    fn start_no_wrap_labels_rasterize_to_estimated_text_width() {
+        let mut font_system = FontSystem::new();
+        let mut swash_cache = SwashCache::new();
+        let mut text_buffer = Buffer::new_empty(Metrics::new(TEXT_FONT_SIZE, TEXT_LINE_HEIGHT));
+        let mut label_cache = LabelRasterCache::new(1024 * 1024);
+        let mut text = TextFrameBuilder::new(
+            &mut font_system,
+            &mut swash_cache,
+            &mut text_buffer,
+            &mut label_cache,
+            PhysicalSize::new(320, 120),
+            1.0,
+        );
+        text.push_label_aligned_no_wrap(
+            "a",
+            ViewRect {
+                x: 0.0,
+                y: 0.0,
+                width: 220.0,
+                height: TEXT_LINE_HEIGHT,
+            },
+            ViewRect {
+                x: 0.0,
+                y: 0.0,
+                width: 240.0,
+                height: 120.0,
+            },
+            TextColor::rgb(36, 41, 47),
+            LabelAlignment::Start,
+        );
+        let frame = text.finish();
+
+        assert_eq!(frame.stats.quads, 1);
+        assert!(frame.stats.cache_bytes < (220.0 * TEXT_LINE_HEIGHT * 4.0) as usize);
     }
 
     #[test]
