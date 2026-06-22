@@ -42,13 +42,15 @@ Status:
   filtered projection, visible-first icon/thumbnail/text work, and scroll
   metrics.
   2026-06-22 breakthrough: MIME/icon role reuse, queued read-ahead,
-  subrect atlas uploads, and bounded icon-theme caching have moved the runtime
-  closer to Dolphin's role updater + widget cache architecture; `/bin` compact
-  full-scroll `Private_Dirty` is now about 43.7-45.9 MB instead of about
-  97.7 MB.
-  Follow-up: visible exact icon role lookup is now nonblocking in UI frames,
-  and compact zoom reuses a bounded role-raster cache so new zoom sizes do not
-  flash missing icons.
+  alpha-mask text caching, persistent R8 text atlas reuse, subrect atlas
+  uploads, and bounded icon-theme caching have moved the runtime closer to
+  Dolphin's role updater + widget cache architecture; `/bin` compact
+  full-scroll end-position `Private_Dirty` is now about 45.5 MB instead of
+  about 97.7 MB.
+  Follow-up: visible exact icon role lookup is nonblocking in ordinary UI
+  frames, compact zoom/scroll avoids synchronous SVG raster, and the remaining
+  work is visible-priority MIME role draining so small-directory tail ranges do
+  not show generic -> exact icon replacement.
 - [ ] Complete system integration in the winit/wgpu shell:
   Open With, service-menu icons/submenus, clipboard, create/rename/file
   transfer/trash/properties, thumbnail worker, devices, and dynamic Places.

@@ -148,6 +148,25 @@ impl FileIconResolver {
         (self.resolve_key_fast(fallback_key), true)
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn resolve_entry_visible_fast(
+        &mut self,
+        directory: &Path,
+        entry: &Entry,
+        icon_size: f32,
+    ) -> ResolvedFileIcon {
+        self.drain_results();
+        let path = directory.join(entry.name.as_ref());
+        let key = file_icon_path_cache_key(
+            &path,
+            entry.is_dir,
+            entry.mime_type.clone(),
+            entry.mime_magic_checked,
+            icon_size,
+        );
+        self.resolve_key_fast(key)
+    }
+
     pub(crate) fn resolve_named(
         &mut self,
         icon_name: &str,
@@ -177,6 +196,14 @@ impl FileIconResolver {
     ) -> Option<ResolvedFileIcon> {
         self.drain_results();
         self.resolve_key(key)
+    }
+
+    pub(crate) fn resolve_path_cache_key_fast(
+        &mut self,
+        key: FileIconPathCacheKey,
+    ) -> ResolvedFileIcon {
+        self.drain_results();
+        self.resolve_key_fast(key)
     }
 
     fn resolve_key(&mut self, key: FileIconPathCacheKey) -> Option<ResolvedFileIcon> {
@@ -240,7 +267,7 @@ impl FileIconResolver {
     }
 }
 
-fn visible_icon_fallback_key(key: &FileIconPathCacheKey) -> FileIconPathCacheKey {
+pub(crate) fn visible_icon_fallback_key(key: &FileIconPathCacheKey) -> FileIconPathCacheKey {
     let kind = match &key.role.kind {
         FileIconKind::Directory => FileIconKind::Directory,
         _ => FileIconKind::File { extension: None },

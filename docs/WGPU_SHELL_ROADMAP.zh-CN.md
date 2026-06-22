@@ -27,6 +27,10 @@ item-view hot path，这是本轮性能工作的关键突破。
   view/widget 再复用 pixmap/text cache 的分层。
 - icon read-ahead 从一次性大批量扫描改为持久队列和每帧小预算，方向对齐
   Dolphin 用 event loop 分摊 pending role 的做法。
+- text cache 改为 alpha mask 复用，颜色进入 text vertex/shader；text atlas 改为
+  持久 R8 atlas。这样同一标签不同颜色共用一份 mask，`/bin` compact 滚到底后
+  3096 个 label cache 约 9.1 MB，后续帧 `text_atlas_reused` 稳定命中。这更接近
+  Dolphin `QStaticText::AggressiveCaching` 的“文本形状缓存 + 绘制资源复用”边界。
 - text/icon atlas 改为子矩形上传；无 overlay 时不创建 overlay text renderer，
   让普通 compact 滚动帧只承担可见项需要的工作。
 - icon theme cache 只保留命中的可渲染资源，不再长期缓存大量 negative full-path
@@ -35,15 +39,19 @@ item-view hot path，这是本轮性能工作的关键突破。
 - 后续推进把 visible exact icon role lookup 从所有 UI 预热/绘制帧移到
   pending resolver 路径；普通帧只读 exact cache 或显示 role fallback，避免滚动中
   theme lookup 回到 draw path。
-- zoom 帧新增 role-raster 复用池：新尺寸还没有 exact raster 时，先按 MIME/icon
-  role 复用上一帧可绘制 raster，再由后续帧补齐。这对应 Dolphin 按 role/pixmap
-  cache 复用，而不是缩放时让图标短暂空掉。
+- zoom/scroll 帧的 SVG icon raster miss 进入后台 worker；UI 帧优先使用 exact
+  cache、相邻尺寸 cache、role-raster cache 或 generic role fallback，不再在普通
+  redraw 中同步 raster SVG。这对应 Dolphin 按 role/pixmap cache 复用，而不是缩放
+  时让图标短暂空掉或把 SVG raster 放回 draw path。
 
 这说明当前架构已经比之前更接近 Dolphin：复用单位是文件管理器 role 和视图资源，
 昂贵工作进入队列/缓存边界，而不是在 draw path 为每个路径即时构造。最新 debug
-实测中，`/bin` compact 全滚动的 `icon_resolve_us_max` 为约 215 us，
-`Private_Dirty` 约 45.9 MB；`/etc` compact 滚动 `render_us_p95` 约 4.4 ms；
-compact 快速 zoom 的 `icon_raster_deferred_max` 已降为 0。
+实测中，`/bin` compact 从头滚到底并停留末尾的 `Private_Dirty` 为 45.5 MB，
+`autosmoke-scroll render_us_p50/p95/max` 约 2.17/3.78/5.94 ms，`icon_raster_us_max=0`；
+`/etc` compact 快速滚动 `render_us_p95` 约 3.9 ms；compact 快速 zoom
+`render_us_p95` 约 4.5 ms，`icon_raster_us_max=0`。剩余未对齐点是小目录快速滚到
+未命中的尾部 MIME role 时仍可能出现 generic -> exact 图标后补；把 role resolver
+改成 visible-priority/background drain 是下一步。
 
 ## 当前路线
 

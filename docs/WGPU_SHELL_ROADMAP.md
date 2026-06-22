@@ -30,6 +30,13 @@ breakthrough from the current performance pass.
 - Icon read-ahead now uses a persistent queue with a small per-frame budget,
   matching Dolphin's pattern of spreading pending role work through the event
   loop.
+- Text cache now stores reusable alpha masks, with color carried by text
+  vertices and the shader; the text atlas is a persistent R8 atlas. The same
+  label in different colors therefore shares one mask, and after scrolling
+  `/bin` compact to the end the 3096 label cache entries occupy about 9.1 MB
+  with stable `text_atlas_reused` hits. This is closer to Dolphin's
+  `QStaticText::AggressiveCaching` boundary: cache text shape/raster resources,
+  then reuse them while painting.
 - Text/icon atlases upload dirty subrectangles, and the overlay text renderer is
   not created on ordinary frames without overlays. Compact scrolling therefore
   pays for visible item work, not full-atlas or unused overlay work.
@@ -40,17 +47,23 @@ breakthrough from the current performance pass.
 - Follow-up work moved visible exact icon role lookup out of all UI
   prewarm/draw frames. Normal frames now read the exact cache or show a role
   fallback while the pending resolver owns theme lookup.
-- Zoom frames now reuse the previous drawable raster by MIME/icon role when the
-  exact new-size raster is not ready yet. This matches Dolphin's role/pixmap
-  reuse direction and avoids transient missing icons during compact zoom.
+- Zoom/scroll SVG icon raster misses now go to a background worker. UI frames
+  prefer the exact cache, nearby-size cache, role-raster cache, or generic role
+  fallback instead of synchronously rasterizing SVGs during ordinary redraws.
+  This matches Dolphin's role/pixmap reuse direction and avoids transient
+  missing icons during compact zoom.
 
 The architecture is therefore materially closer to Dolphin: the reuse unit is a
 file-manager role and a view resource, while expensive work is bounded by queues
 and cache ownership instead of being constructed per path in the draw path. In
-current debug measurements, `/bin` compact full-scroll has
-`icon_resolve_us_max` around 215 us and `Private_Dirty` around 45.9 MB; `/etc`
-compact scroll has `render_us_p95` around 4.4 ms; compact rapid zoom has
-`icon_raster_deferred_max` at 0.
+current debug measurements, `/bin` compact full-scroll and end-position dwell
+has `Private_Dirty` at 45.5 MB, `autosmoke-scroll render_us_p50/p95/max` around
+2.17/3.78/5.94 ms, and `icon_raster_us_max=0`; `/etc` compact rapid scroll has
+`render_us_p95` around 3.9 ms; compact rapid zoom has `render_us_p95` around
+4.5 ms with `icon_raster_us_max=0`. The remaining mismatch is that quickly
+scrolling a small directory to a tail range whose MIME roles are not ready can
+still show generic -> exact icon replacement; making the role resolver
+visible-priority/background-drained is the next step.
 
 ## Current Route
 

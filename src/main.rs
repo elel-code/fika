@@ -101,11 +101,11 @@ mod wgpu_selection;
 use wgpu_clipboard::ShellClipboard;
 #[cfg(test)]
 use wgpu_icon_resolver::FileIconResolverTestHarness;
-use wgpu_icon_resolver::{FileIconResolver, ResolvedFileIcon};
+use wgpu_icon_resolver::{FileIconResolver, ResolvedFileIcon, visible_icon_fallback_key};
 #[cfg(test)]
-use wgpu_icon_roles::{FileIconKind, file_icon_profile};
+use wgpu_icon_roles::file_icon_profile;
 use wgpu_icon_roles::{
-    FileIconPathCacheKey, FileIconProfile, FileIconRoleCacheKey, NamedIconFallback,
+    FileIconKind, FileIconPathCacheKey, FileIconProfile, FileIconRoleCacheKey, NamedIconFallback,
     file_icon_path_cache_key, icon_cache_size,
 };
 use wgpu_location::{LocationDraft, PathHistory, normalized_text_cursor};
@@ -10853,7 +10853,7 @@ impl ShellScene {
         reason: &str,
     ) -> IconRolePrewarmStats {
         let mut stats = IconRolePrewarmStats::default();
-        let deadline = Instant::now() + VISIBLE_ICON_ROLE_PREWARM_BUDGET;
+        let deadline = Instant::now() + icon_role_prewarm_budget_for_frame(reason);
         for projection in projections {
             for item in &projection.visible_items {
                 if Instant::now() >= deadline {
@@ -10878,12 +10878,18 @@ impl ShellScene {
                     .max(item.layout.icon_rect.height)
                     .clamp(16.0, 256.0);
                 let resolve_start = Instant::now();
-                let (snapshot, deferred) =
-                    resolver.resolve_entry_visible(projection.view.path, entry, icon_size);
-                if deferred {
-                    stats.deferred += 1;
+                if visible_exact_icon_roles_enabled_for_frame(reason) {
+                    let snapshot =
+                        resolver.resolve_entry_visible_fast(projection.view.path, entry, icon_size);
+                    let _ = snapshot;
+                } else {
+                    let (snapshot, deferred) =
+                        resolver.resolve_entry_visible(projection.view.path, entry, icon_size);
+                    if deferred {
+                        stats.deferred += 1;
+                    }
+                    let _ = snapshot;
                 }
-                let _ = snapshot;
                 stats.resolve_us += resolve_start.elapsed().as_micros();
                 stats.entries += 1;
                 if Instant::now() >= deadline {
@@ -10892,6 +10898,8 @@ impl ShellScene {
                 }
             }
         }
+        let small_directory_read_ahead =
+            self.enqueue_dolphin_small_directory_icon_roles(projections);
         for projection in projections {
             let Some(visible_range) = visible_layout_range_for_projection(projection) else {
                 continue;
@@ -10932,10 +10940,46 @@ impl ShellScene {
                 }
             }
         }
-        if icon_role_read_ahead_enabled_for_frame(reason) {
-            self.resolve_next_icon_role_read_ahead(resolver, &mut stats, deadline);
+        let read_ahead_budget =
+            icon_role_read_ahead_queue_budget_for_frame(reason, small_directory_read_ahead);
+        if read_ahead_budget > 0 {
+            self.resolve_next_icon_role_read_ahead(
+                resolver,
+                &mut stats,
+                deadline,
+                read_ahead_budget,
+            );
         }
         stats
+    }
+
+    fn enqueue_dolphin_small_directory_icon_roles(
+        &self,
+        projections: &[ShellPaneProjection<'_>],
+    ) -> bool {
+        let mut queued = false;
+        for projection in projections {
+            if projection.view.filtered_entry_count() > DOLPHIN_RESOLVE_ALL_ITEMS_LIMIT {
+                continue;
+            }
+            let Some(icon_size) = projection.visible_items.first().map(|item| {
+                item.layout
+                    .icon_rect
+                    .width
+                    .max(item.layout.icon_rect.height)
+                    .clamp(16.0, 256.0)
+            }) else {
+                continue;
+            };
+            for entry_index in projection.view.filtered_indexes.iter().copied() {
+                let Some(entry) = projection.view.entries.get(entry_index) else {
+                    continue;
+                };
+                self.enqueue_icon_role_read_ahead(projection.view.path, entry, icon_size);
+                queued = true;
+            }
+        }
+        queued
     }
 
     fn enqueue_icon_role_read_ahead(&self, directory: &Path, entry: &Entry, icon_size: f32) {
@@ -10962,8 +11006,9 @@ impl ShellScene {
         resolver: &mut FileIconResolver,
         stats: &mut IconRolePrewarmStats,
         deadline: Instant,
+        limit: usize,
     ) {
-        for _ in 0..ICON_ROLE_READ_AHEAD_QUEUE_BUDGET_PER_FRAME {
+        for _ in 0..limit {
             if Instant::now() >= deadline {
                 stats.over_budget = true;
                 return;
@@ -10986,11 +11031,11 @@ impl ShellScene {
         &self,
         projections: &[ShellPaneProjection<'_>],
         text: &mut TextFrameBuilder<'_>,
-        read_ahead_enabled: bool,
+        mode: TextLabelPrewarmMode,
     ) -> TextLabelPrewarmStats {
         let mut stats = TextLabelPrewarmStats::default();
         let raster_us_start = text.raster_us;
-        let deadline = Instant::now() + VISIBLE_TEXT_LABEL_PREWARM_BUDGET;
+        let deadline = Instant::now() + text_label_prewarm_budget_for_mode(mode);
 
         for projection in projections {
             for item in &projection.visible_items {
@@ -11007,15 +11052,12 @@ impl ShellScene {
             }
         }
 
-        if !read_ahead_enabled {
+        if mode == TextLabelPrewarmMode::VisibleOnly {
             stats.raster_us = text.raster_us.saturating_sub(raster_us_start);
             return stats;
         }
 
         for projection in projections {
-            let Some(visible_range) = visible_layout_range_for_projection(projection) else {
-                continue;
-            };
             let layout = self.pane_layout_for_pane(
                 projection.geometry.kind,
                 projection.view,
@@ -11023,11 +11065,21 @@ impl ShellScene {
                 projection.geometry.content.height,
             );
             let item_count = projection.view.filtered_entry_count();
-            for layout_index in shell_dolphin_read_ahead_indexes(
-                visible_range,
-                item_count,
-                projection.visible_items.len(),
-            ) {
+            let read_ahead_indexes = if mode == TextLabelPrewarmMode::ResolveAllSmallDirectory
+                && item_count <= DOLPHIN_RESOLVE_ALL_ITEMS_LIMIT
+            {
+                (0..item_count).collect::<Vec<_>>()
+            } else {
+                let Some(visible_range) = visible_layout_range_for_projection(projection) else {
+                    continue;
+                };
+                shell_dolphin_read_ahead_indexes(
+                    visible_range,
+                    item_count,
+                    projection.visible_items.len(),
+                )
+            };
+            for layout_index in read_ahead_indexes {
                 if stats.read_ahead >= TEXT_LABEL_READ_AHEAD_LIMIT {
                     stats.raster_us = text.raster_us.saturating_sub(raster_us_start);
                     return stats;
@@ -14645,6 +14697,16 @@ struct IconRolePrewarmStats {
 }
 
 #[derive(Default)]
+struct IconRasterPrewarmStats {
+    entries: usize,
+    cache_hits: usize,
+    cache_misses: usize,
+    failed: usize,
+    raster_us: u128,
+    over_budget: bool,
+}
+
+#[derive(Default)]
 struct TextLabelPrewarmStats {
     entries: usize,
     read_ahead: usize,
@@ -14653,6 +14715,13 @@ struct TextLabelPrewarmStats {
     deferred: usize,
     raster_us: u128,
     over_budget: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TextLabelPrewarmMode {
+    VisibleOnly,
+    DolphinReadAhead,
+    ResolveAllSmallDirectory,
 }
 
 impl TextLabelPrewarmStats {
@@ -14814,18 +14883,77 @@ impl WgpuState {
     fn prewarm_scene_caches(&mut self, scene: &mut ShellScene, reason: &'static str) {
         let total_start = Instant::now();
         let role_start = Instant::now();
-        let role_stats = {
+        let (role_stats, scene_icon_raster_prewarm_stats, scene_text_prewarm_stats) = {
             let projections = ShellPaneId::ALL
                 .into_iter()
                 .filter_map(|kind| scene.pane_projection(kind, self.size))
                 .collect::<Vec<_>>();
-            scene.prewarm_visible_file_icon_roles(
+            for projection in &projections {
+                if let Some(item) = projection.visible_items.first() {
+                    let icon_size = item
+                        .layout
+                        .icon_rect
+                        .width
+                        .max(item.layout.icon_rect.height)
+                        .clamp(16.0, 256.0);
+                    self.icon_renderer
+                        .prewarm_common_file_icon_rasters(icon_size);
+                }
+            }
+            let role_stats = scene.prewarm_visible_file_icon_roles(
                 &projections,
                 &mut self.icon_renderer.resolver,
                 reason,
-            )
+            );
+            let icon_raster_stats = if visible_exact_icon_roles_enabled_for_frame(reason) {
+                self.icon_renderer
+                    .prewarm_small_directory_file_icon_rasters(&projections)
+            } else {
+                IconRasterPrewarmStats::default()
+            };
+            let text_stats = self.prewarm_text_labels(
+                scene,
+                &projections,
+                text_label_prewarm_mode_for_scene_prewarm(reason),
+            );
+            (role_stats, icon_raster_stats, text_stats)
         };
         let role_prewarm_us = role_start.elapsed().as_micros();
+        if scene_icon_raster_prewarm_stats.entries > 0
+            && (scene_icon_raster_prewarm_stats.raster_us >= 1000
+                || scene_icon_raster_prewarm_stats.over_budget
+                || fika_frame_log_all_enabled())
+        {
+            fika_log!(
+                "[fika-wgpu] prewarm-icon-rasters-scene reason={} view={} entries={} hits={} misses={} failed={} raster={}us over_budget={}",
+                reason,
+                scene.panes[ShellPaneId::FIRST].view_mode.as_str(),
+                scene_icon_raster_prewarm_stats.entries,
+                scene_icon_raster_prewarm_stats.cache_hits,
+                scene_icon_raster_prewarm_stats.cache_misses,
+                scene_icon_raster_prewarm_stats.failed,
+                scene_icon_raster_prewarm_stats.raster_us,
+                scene_icon_raster_prewarm_stats.over_budget as u8
+            );
+        }
+        if scene_text_prewarm_stats.entries + scene_text_prewarm_stats.read_ahead > 0
+            && (scene_text_prewarm_stats.raster_us >= 1000
+                || scene_text_prewarm_stats.over_budget
+                || fika_frame_log_all_enabled())
+        {
+            fika_log!(
+                "[fika-wgpu] prewarm-text-scene reason={} view={} entries={} read_ahead={} hits={} misses={} deferred={} raster={}us over_budget={}",
+                reason,
+                scene.panes[ShellPaneId::FIRST].view_mode.as_str(),
+                scene_text_prewarm_stats.entries,
+                scene_text_prewarm_stats.read_ahead,
+                scene_text_prewarm_stats.cache_hits,
+                scene_text_prewarm_stats.cache_misses,
+                scene_text_prewarm_stats.deferred,
+                scene_text_prewarm_stats.raster_us,
+                scene_text_prewarm_stats.over_budget as u8
+            );
+        }
         let prepare_start = Instant::now();
         let overlay_text_active = scene.overlay_text_needed();
         if overlay_text_active && self.overlay_text_renderer.is_none() {
@@ -14875,7 +15003,7 @@ impl WgpuState {
         &mut self,
         scene: &ShellScene,
         projections: &[ShellPaneProjection<'_>],
-        read_ahead_enabled: bool,
+        mode: TextLabelPrewarmMode,
     ) -> TextLabelPrewarmStats {
         self.text_renderer.label_cache.begin_frame();
         self.text_renderer.metrics_cache.begin_frame();
@@ -14890,7 +15018,8 @@ impl WgpuState {
             scene.ui_scale(),
             Vec::new(),
         );
-        scene.prewarm_file_item_text_labels(projections, &mut text_builder, read_ahead_enabled)
+        text_builder.set_raster_miss_budget(text_label_raster_miss_budget_for_mode(mode));
+        scene.prewarm_file_item_text_labels(projections, &mut text_builder, mode)
     }
 
     fn render(
@@ -14908,7 +15037,7 @@ impl WgpuState {
         let text_prewarm_stats = self.prewarm_text_labels(
             scene,
             &projections,
-            text_label_read_ahead_enabled_for_frame(reason),
+            text_label_prewarm_mode_for_frame(reason),
         );
         if text_prewarm_stats.entries + text_prewarm_stats.read_ahead > 0
             && (self.frame_count == 0
@@ -15050,6 +15179,10 @@ impl WgpuState {
             || scene_frame.icon_stats.raster_deferred > 0
             || scene_frame.icon_stats.thumbnail_deferred > 0
             || self.icon_renderer.resolver.has_pending()
+            || self
+                .icon_renderer
+                .icon_rasters
+                .has_pending(&mut self.icon_renderer.raster_cache)
             || self.icon_renderer.thumbnails.has_pending();
         let text_work_pending = scene_frame.text_stats.deferred > 0;
         if icon_work_pending || text_work_pending {
@@ -15564,6 +15697,179 @@ impl IconRasterCache {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum IconRasterRequestPriority {
+    Visible,
+    #[allow(dead_code)]
+    Deferred,
+}
+
+#[derive(Clone, Debug)]
+struct IconRasterRequest {
+    key: IconRasterCacheKey,
+    priority: IconRasterRequestPriority,
+}
+
+#[derive(Clone, Debug)]
+struct IconRasterResult {
+    key: IconRasterCacheKey,
+    raster: Option<IconRaster>,
+}
+
+struct IconRasterResolver {
+    pending: HashMap<IconRasterCacheKey, IconRasterRequestPriority>,
+    failed: HashSet<IconRasterCacheKey>,
+    request_tx: Option<Sender<IconRasterRequest>>,
+    result_rx: Receiver<IconRasterResult>,
+}
+
+impl IconRasterResolver {
+    fn new() -> Self {
+        let (request_tx, request_rx) = mpsc::channel::<IconRasterRequest>();
+        let (result_tx, result_rx) = mpsc::channel::<IconRasterResult>();
+        let request_tx = thread::Builder::new()
+            .name("fika-wgpu-icon-raster".to_string())
+            .spawn(move || icon_raster_worker(request_rx, result_tx))
+            .ok()
+            .map(|_| request_tx);
+        Self {
+            pending: HashMap::new(),
+            failed: HashSet::new(),
+            request_tx,
+            result_rx,
+        }
+    }
+
+    fn queue_visible(&mut self, key: IconRasterCacheKey) -> bool {
+        self.queue(key, IconRasterRequestPriority::Visible)
+    }
+
+    fn queue(&mut self, key: IconRasterCacheKey, priority: IconRasterRequestPriority) -> bool {
+        if self.failed.contains(&key) {
+            return false;
+        }
+        match self.pending.get(&key).copied() {
+            Some(IconRasterRequestPriority::Visible) => return false,
+            Some(IconRasterRequestPriority::Deferred)
+                if priority == IconRasterRequestPriority::Deferred =>
+            {
+                return false;
+            }
+            Some(IconRasterRequestPriority::Deferred) | None => {}
+        }
+
+        let Some(tx) = self.request_tx.as_ref() else {
+            self.failed.insert(key);
+            return false;
+        };
+        if tx
+            .send(IconRasterRequest {
+                key: key.clone(),
+                priority,
+            })
+            .is_err()
+        {
+            self.failed.insert(key);
+            return false;
+        }
+        self.pending.insert(key, priority);
+        true
+    }
+
+    fn drain_results(&mut self, raster_cache: &mut IconRasterCache) -> usize {
+        let mut changed = 0usize;
+        while let Ok(result) = self.result_rx.try_recv() {
+            self.pending.remove(&result.key);
+            if let Some(raster) = result.raster {
+                raster_cache.insert(result.key, raster);
+            } else {
+                self.failed.insert(result.key);
+            }
+            changed += 1;
+        }
+        changed
+    }
+
+    fn has_pending(&mut self, raster_cache: &mut IconRasterCache) -> bool {
+        self.drain_results(raster_cache);
+        !self.pending.is_empty()
+    }
+}
+
+fn icon_raster_worker(
+    request_rx: Receiver<IconRasterRequest>,
+    result_tx: Sender<IconRasterResult>,
+) {
+    let mut visible = VecDeque::new();
+    let mut deferred = VecDeque::new();
+    let mut queued = HashMap::new();
+    while let Some(request) =
+        icon_raster_worker_next_request(&request_rx, &mut visible, &mut deferred, &mut queued)
+    {
+        let raster = rasterize_icon(&request.key.path, request.key.size_px as u32);
+        if result_tx
+            .send(IconRasterResult {
+                key: request.key,
+                raster,
+            })
+            .is_err()
+        {
+            break;
+        }
+    }
+}
+
+fn icon_raster_worker_next_request(
+    request_rx: &Receiver<IconRasterRequest>,
+    visible: &mut VecDeque<IconRasterRequest>,
+    deferred: &mut VecDeque<IconRasterRequest>,
+    queued: &mut HashMap<IconRasterCacheKey, IconRasterRequestPriority>,
+) -> Option<IconRasterRequest> {
+    loop {
+        while let Ok(request) = request_rx.try_recv() {
+            icon_raster_worker_queue_request(request, visible, deferred, queued);
+        }
+
+        if let Some(request) = visible.pop_front().or_else(|| deferred.pop_front()) {
+            queued.remove(&request.key);
+            return Some(request);
+        }
+
+        match request_rx.recv() {
+            Ok(request) => icon_raster_worker_queue_request(request, visible, deferred, queued),
+            Err(_) => return None,
+        }
+    }
+}
+
+fn icon_raster_worker_queue_request(
+    request: IconRasterRequest,
+    visible: &mut VecDeque<IconRasterRequest>,
+    deferred: &mut VecDeque<IconRasterRequest>,
+    queued: &mut HashMap<IconRasterCacheKey, IconRasterRequestPriority>,
+) {
+    let key = request.key.clone();
+    match queued.get(&key).copied() {
+        Some(IconRasterRequestPriority::Visible) => {}
+        Some(IconRasterRequestPriority::Deferred)
+            if request.priority == IconRasterRequestPriority::Visible =>
+        {
+            deferred.retain(|queued| queued.key != key);
+            queued.insert(key, IconRasterRequestPriority::Visible);
+            visible.push_back(request);
+        }
+        Some(IconRasterRequestPriority::Deferred) => {}
+        None => {
+            let priority = request.priority;
+            queued.insert(key, priority);
+            match priority {
+                IconRasterRequestPriority::Visible => visible.push_back(request),
+                IconRasterRequestPriority::Deferred => deferred.push_back(request),
+            }
+        }
+    }
+}
+
 #[derive(Debug)]
 struct IconRoleRasterCache {
     entries: HashMap<FileIconRoleCacheKey, CachedIconRaster>,
@@ -15951,6 +16257,7 @@ struct ShellThumbnailCandidate {
 struct IconFrameBuilder<'a> {
     resolver: &'a mut FileIconResolver,
     thumbnails: &'a mut ThumbnailRasterResolver,
+    icon_rasters: &'a mut IconRasterResolver,
     raster_cache: &'a mut IconRasterCache,
     role_raster_cache: &'a mut IconRoleRasterCache,
     surface_size: PhysicalSize<u32>,
@@ -15981,14 +16288,17 @@ impl<'a> IconFrameBuilder<'a> {
     fn new(
         resolver: &'a mut FileIconResolver,
         thumbnails: &'a mut ThumbnailRasterResolver,
+        icon_rasters: &'a mut IconRasterResolver,
         raster_cache: &'a mut IconRasterCache,
         role_raster_cache: &'a mut IconRoleRasterCache,
         surface_size: PhysicalSize<u32>,
         raster_miss_budget: usize,
     ) -> Self {
+        icon_rasters.drain_results(raster_cache);
         Self {
             resolver,
             thumbnails,
+            icon_rasters,
             raster_cache,
             role_raster_cache,
             surface_size,
@@ -16072,36 +16382,51 @@ impl<'a> IconFrameBuilder<'a> {
             .get_closest_icon_variant(&key.path, size_px)
         {
             self.cache_hits += 1;
+            self.icon_rasters.queue_visible(key.clone());
             raster
-        } else if self.raster_miss_budget == 0 {
-            if let Some(raster) = self.role_raster_cache.get(&role_key) {
-                self.cache_hits += 1;
-                raster
-            } else {
-                self.raster_deferred += 1;
-                self.fallbacks += 1;
-                return false;
-            }
         } else {
-            self.cache_misses += 1;
-            self.raster_miss_budget -= 1;
-            let raster_start = Instant::now();
-            let Some(raster) = rasterize_icon(&key.path, size_px as u32) else {
-                self.raster_us += raster_start.elapsed().as_micros();
-                self.fallbacks += 1;
-                return false;
-            };
-            let raster_us = raster_start.elapsed().as_micros();
-            if raster_us >= 2_000 {
-                fika_log!(
-                    "[fika-wgpu] icon-raster-slow path={} size={} elapsed={}us",
-                    key.path.display(),
-                    size_px,
-                    raster_us
-                );
+            self.icon_rasters.queue_visible(key.clone());
+            if self.raster_miss_budget == 0 {
+                if let Some(raster) = self.role_raster_cache.get(&role_key) {
+                    self.cache_hits += 1;
+                    self.raster_deferred += 1;
+                    raster
+                } else if let Some(raster) = self.role_raster_cache.get(
+                    &visible_icon_fallback_key(&FileIconPathCacheKey {
+                        role: role_key.clone(),
+                        size_px,
+                    })
+                    .role,
+                ) {
+                    self.cache_hits += 1;
+                    self.raster_deferred += 1;
+                    raster
+                } else {
+                    self.raster_deferred += 1;
+                    self.fallbacks += 1;
+                    return false;
+                }
+            } else {
+                self.cache_misses += 1;
+                self.raster_miss_budget -= 1;
+                let raster_start = Instant::now();
+                let Some(raster) = rasterize_icon(&key.path, size_px as u32) else {
+                    self.raster_us += raster_start.elapsed().as_micros();
+                    self.fallbacks += 1;
+                    return false;
+                };
+                let raster_us = raster_start.elapsed().as_micros();
+                if raster_us >= 2_000 {
+                    fika_log!(
+                        "[fika-wgpu] icon-raster-slow path={} size={} elapsed={}us",
+                        key.path.display(),
+                        size_px,
+                        raster_us
+                    );
+                }
+                self.raster_us += raster_us;
+                self.raster_cache.insert(key, raster)
             }
-            self.raster_us += raster_us;
-            self.raster_cache.insert(key, raster)
         };
 
         self.role_raster_cache.insert(role_key, raster.clone());
@@ -16308,7 +16633,7 @@ impl<'a> IconFrameBuilder<'a> {
         let vertices = icon_draw_vertices(&self.draws, self.width, height, self.surface_size);
         let overlay_vertices =
             icon_draw_vertices(&self.overlay_draws, self.width, height, self.surface_size);
-        let atlas_bytes = (self.width * height * 4) as usize;
+        let atlas_bytes = (self.width * height) as usize;
         let cache_entries = self.raster_cache.len();
         let cache_bytes = self.raster_cache.bytes();
         let thumbnail_ready_entries = self.thumbnails.ready_len();
@@ -16393,6 +16718,7 @@ fn icon_draw_vertices(
             atlas_width,
             atlas_height,
             surface_size,
+            [1.0, 1.0, 1.0, 1.0],
         );
     }
     vertices
@@ -16414,6 +16740,7 @@ struct IconRenderer {
     overlay_vertex_count: usize,
     resolver: FileIconResolver,
     thumbnails: ThumbnailRasterResolver,
+    icon_rasters: IconRasterResolver,
     raster_cache: IconRasterCache,
     role_raster_cache: IconRoleRasterCache,
 }
@@ -16454,7 +16781,7 @@ impl IconRenderer {
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("fika-wgpu-icon-shader"),
-            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(TEXT_SHADER)),
+            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(TEXTURE_SHADER)),
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("fika-wgpu-icon-pipeline-layout"),
@@ -16505,9 +16832,116 @@ impl IconRenderer {
             overlay_vertex_count: 0,
             resolver: FileIconResolver::new(),
             thumbnails: ThumbnailRasterResolver::new(),
+            icon_rasters: IconRasterResolver::new(),
             raster_cache: IconRasterCache::new(ICON_CACHE_MAX_BYTES),
             role_raster_cache: IconRoleRasterCache::new(ICON_ROLE_RASTER_CACHE_MAX_BYTES),
         }
+    }
+
+    fn prewarm_common_file_icon_rasters(&mut self, icon_size: f32) -> usize {
+        let size_px = icon_cache_size(icon_size);
+        let roles = [
+            FileIconRoleCacheKey {
+                kind: FileIconKind::Directory,
+            },
+            FileIconRoleCacheKey {
+                kind: FileIconKind::File { extension: None },
+            },
+        ];
+        let mut rasterized = 0usize;
+        for role in roles {
+            let path_key = FileIconPathCacheKey {
+                role: role.clone(),
+                size_px,
+            };
+            let snapshot = self.resolver.resolve_path_cache_key_fast(path_key);
+            let Some(path) = snapshot.path else {
+                continue;
+            };
+            let key = IconRasterCacheKey::icon(path, size_px);
+            if let Some(raster) = self.raster_cache.get(&key) {
+                self.role_raster_cache.insert(role, raster);
+                continue;
+            }
+            let Some(raster) = rasterize_icon(&key.path, size_px as u32) else {
+                continue;
+            };
+            let raster = self.raster_cache.insert(key, raster);
+            self.role_raster_cache.insert(role, raster);
+            rasterized += 1;
+        }
+        rasterized
+    }
+
+    fn prewarm_small_directory_file_icon_rasters(
+        &mut self,
+        projections: &[ShellPaneProjection<'_>],
+    ) -> IconRasterPrewarmStats {
+        self.icon_rasters.drain_results(&mut self.raster_cache);
+        let deadline = Instant::now() + DOLPHIN_MAX_BLOCK_TIMEOUT;
+        let mut stats = IconRasterPrewarmStats::default();
+        let mut seen = HashSet::new();
+        for projection in projections {
+            if projection.view.filtered_entry_count() > DOLPHIN_RESOLVE_ALL_ITEMS_LIMIT {
+                continue;
+            }
+            let Some(icon_size) = projection.visible_items.first().map(|item| {
+                item.layout
+                    .icon_rect
+                    .width
+                    .max(item.layout.icon_rect.height)
+                    .clamp(16.0, 256.0)
+            }) else {
+                continue;
+            };
+            let size_px = icon_cache_size(icon_size);
+            for entry_index in projection.view.filtered_indexes.iter().copied() {
+                if Instant::now() >= deadline {
+                    stats.over_budget = true;
+                    return stats;
+                }
+                let Some(entry) = projection.view.entries.get(entry_index) else {
+                    continue;
+                };
+                let path = projection.view.path.join(entry.name.as_ref());
+                let path_key = file_icon_path_cache_key(
+                    &path,
+                    entry.is_dir,
+                    entry.mime_type.clone(),
+                    entry.mime_magic_checked,
+                    icon_size,
+                );
+                let role_key = path_key.role.clone();
+                let Some(snapshot) = self.resolver.resolve_path_cache_key(path_key) else {
+                    continue;
+                };
+                let Some(icon_path) = snapshot.path else {
+                    stats.failed += 1;
+                    continue;
+                };
+                let raster_key = IconRasterCacheKey::icon(icon_path, size_px);
+                if !seen.insert(raster_key.clone()) {
+                    continue;
+                }
+                stats.entries += 1;
+                if let Some(raster) = self.raster_cache.get(&raster_key) {
+                    stats.cache_hits += 1;
+                    self.role_raster_cache.insert(role_key, raster);
+                    continue;
+                }
+                stats.cache_misses += 1;
+                let raster_start = Instant::now();
+                let Some(raster) = rasterize_icon(&raster_key.path, size_px as u32) else {
+                    stats.raster_us += raster_start.elapsed().as_micros();
+                    stats.failed += 1;
+                    continue;
+                };
+                stats.raster_us += raster_start.elapsed().as_micros();
+                let raster = self.raster_cache.insert(raster_key, raster);
+                self.role_raster_cache.insert(role_key, raster);
+            }
+        }
+        stats
     }
 
     fn upload(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, frame: &mut IconFrame) {
@@ -16661,6 +17095,7 @@ struct PendingTextDraw {
     rect: ViewRect,
     label_width: u32,
     label_height: u32,
+    color: TextColor,
 }
 
 #[derive(Clone, Debug)]
@@ -16686,7 +17121,7 @@ impl Default for TextAtlasFrameCache {
         Self {
             entries: HashMap::new(),
             width: TEXT_ATLAS_WIDTH,
-            height: 1,
+            height: TEXT_ATLAS_MAX_HEIGHT,
             cursor_x: TEXT_PADDING,
             cursor_y: TEXT_PADDING,
             row_height: 0,
@@ -16697,7 +17132,7 @@ impl Default for TextAtlasFrameCache {
 impl TextAtlasFrameCache {
     fn reset(&mut self) {
         self.entries.clear();
-        self.height = 1;
+        self.height = TEXT_ATLAS_MAX_HEIGHT;
         self.cursor_x = TEXT_PADDING;
         self.cursor_y = TEXT_PADDING;
         self.row_height = 0;
@@ -16771,7 +17206,6 @@ struct LabelCacheKey {
     text: String,
     width: u32,
     height: u32,
-    color: TextColor,
     alignment: LabelAlignment,
     wrap: LabelWrap,
 }
@@ -17032,7 +17466,7 @@ impl<'a> TextFrameBuilder<'a> {
         wrap: LabelWrap,
     ) {
         let Some((key, rect, label_width, label_height)) =
-            self.label_raster_key(label, rect, color, alignment, wrap)
+            self.label_raster_key(label, rect, alignment, wrap)
         else {
             return;
         };
@@ -17053,8 +17487,13 @@ impl<'a> TextFrameBuilder<'a> {
             rect,
             label_width,
             label_height,
+            color,
         });
         self.labels += 1;
+    }
+
+    fn set_raster_miss_budget(&mut self, budget: usize) {
+        self.raster_miss_budget = budget;
     }
 
     fn prewarm_label_aligned_no_wrap(
@@ -17071,12 +17510,12 @@ impl<'a> TextFrameBuilder<'a> {
         &mut self,
         label: &str,
         rect: ViewRect,
-        color: TextColor,
+        _color: TextColor,
         alignment: LabelAlignment,
         wrap: LabelWrap,
     ) -> LabelCacheOutcome {
         let Some((key, _, label_width, label_height)) =
-            self.label_raster_key(label, rect, color, alignment, wrap)
+            self.label_raster_key(label, rect, alignment, wrap)
         else {
             return LabelCacheOutcome::Skipped;
         };
@@ -17089,7 +17528,6 @@ impl<'a> TextFrameBuilder<'a> {
         &mut self,
         label: &str,
         mut rect: ViewRect,
-        color: TextColor,
         alignment: LabelAlignment,
         wrap: LabelWrap,
     ) -> Option<(LabelCacheKey, ViewRect, u32, u32)> {
@@ -17115,7 +17553,6 @@ impl<'a> TextFrameBuilder<'a> {
                 text: label.to_string(),
                 width: label_width,
                 height: label_height,
-                color,
                 alignment,
                 wrap,
             },
@@ -17139,44 +17576,11 @@ impl<'a> TextFrameBuilder<'a> {
             return width.min(max_label_width).max(1);
         }
 
-        let width = self.measure_no_wrap_natural_width(label, label_height, max_label_width);
+        let width = estimated_label_raster_width(label, self.max_font_size)
+            .ceil()
+            .max(1.0) as u32;
         self.metrics_cache.insert(key, width);
         width.min(max_label_width).max(1)
-    }
-
-    fn measure_no_wrap_natural_width(
-        &mut self,
-        label: &str,
-        label_height: u32,
-        max_label_width: u32,
-    ) -> u32 {
-        let attrs = Attrs::new().family(Family::SansSerif);
-        let metrics =
-            text_metrics_for_label_height(label_height, self.max_font_size, self.max_line_height);
-        self.text_buffer.set_metrics(metrics);
-        self.text_buffer.set_wrap(Wrap::None);
-        self.text_buffer
-            .set_size(Some(max_label_width as f32), Some(label_height as f32));
-        self.text_buffer.set_text(
-            label,
-            &attrs,
-            shaping_for_label(label, LabelWrap::None),
-            Some(Align::Left),
-        );
-        self.text_buffer.shape_until_scroll(self.font_system, false);
-        let measured_width = self
-            .text_buffer
-            .layout_runs()
-            .map(|run| run.line_w)
-            .fold(0.0_f32, f32::max);
-        if measured_width <= 0.0 {
-            return estimated_label_raster_width(label, self.max_font_size)
-                .ceil()
-                .max(1.0) as u32;
-        }
-        (measured_width.ceil() as u32)
-            .saturating_add(TEXT_PADDING * 2)
-            .max(1)
     }
 
     fn resolve_label_pixels(
@@ -17200,8 +17604,7 @@ impl<'a> TextFrameBuilder<'a> {
         }
         self.raster_miss_budget -= 1;
         let raster_start = Instant::now();
-        let label_pixels =
-            self.rasterize_label(label, label_width, label_height, key.color, alignment, wrap);
+        let label_pixels = self.rasterize_label(label, label_width, label_height, alignment, wrap);
         self.raster_us += raster_start.elapsed().as_micros();
         let pixels = self.label_cache.insert(key.clone(), label_pixels);
         Some((pixels, LabelCacheOutcome::Miss))
@@ -17249,43 +17652,56 @@ impl<'a> TextFrameBuilder<'a> {
         let cache_entries = self.label_cache.len();
         let cache_bytes = self.label_cache.bytes();
         let pending = std::mem::take(&mut self.pending_draws);
-        self.atlas_cache.reset();
 
-        let mut atlas_reused = 0usize;
+        let mut atlas_reused: usize;
         let mut drawable = Vec::with_capacity(pending.len());
         let mut atlases = Vec::with_capacity(pending.len());
         let mut uploads = Vec::new();
-        for draw in pending {
-            if let Some(atlas) = self.atlas_cache.entries.get(&draw.key).copied() {
-                atlas_reused += 1;
-                atlases.push(atlas);
-                drawable.push(draw);
-                continue;
-            }
+        let mut reset_once = false;
+        'build_atlas: loop {
+            atlas_reused = 0;
+            drawable.clear();
+            atlases.clear();
+            uploads.clear();
 
-            let Some(atlas) = self
-                .atlas_cache
-                .allocate(draw.label_width, draw.label_height)
-            else {
-                self.deferred += 1;
-                continue;
-            };
-            self.atlas_cache.entries.insert(draw.key.clone(), atlas);
-            uploads.push(TextAtlasUpload {
-                atlas,
-                pixels: Arc::clone(&draw.pixels),
-                width: draw.label_width,
-                height: draw.label_height,
-            });
-            atlases.push(atlas);
-            drawable.push(draw);
+            for draw in pending.iter() {
+                if let Some(atlas) = self.atlas_cache.entries.get(&draw.key).copied() {
+                    atlas_reused += 1;
+                    atlases.push(atlas);
+                    drawable.push(draw.clone());
+                    continue;
+                }
+
+                let Some(atlas) = self
+                    .atlas_cache
+                    .allocate(draw.label_width, draw.label_height)
+                else {
+                    if !reset_once {
+                        reset_once = true;
+                        self.atlas_cache.reset();
+                        continue 'build_atlas;
+                    }
+                    self.deferred += 1;
+                    continue;
+                };
+                self.atlas_cache.entries.insert(draw.key.clone(), atlas);
+                uploads.push(TextAtlasUpload {
+                    atlas,
+                    pixels: Arc::clone(&draw.pixels),
+                    width: draw.label_width,
+                    height: draw.label_height,
+                });
+                atlases.push(atlas);
+                drawable.push(draw.clone());
+            }
+            break;
         }
         let height = self.atlas_cache.height.max(1);
         let mut pixels = self.atlas_pixels;
         pixels.clear();
         let vertices =
             text_vertices_for_pending(&drawable, &atlases, self.width, height, self.surface_size);
-        let atlas_bytes = (self.width * height * 4) as usize;
+        let atlas_bytes = (self.width * height) as usize;
         TextFrame {
             vertices,
             pixels,
@@ -17317,11 +17733,10 @@ impl<'a> TextFrameBuilder<'a> {
         label: &str,
         label_width: u32,
         label_height: u32,
-        color: TextColor,
         alignment: LabelAlignment,
         wrap: LabelWrap,
     ) -> Vec<u8> {
-        let mut pixels = vec![0; (label_width * label_height * 4) as usize];
+        let mut pixels = vec![0; (label_width * label_height) as usize];
         let attrs = Attrs::new().family(Family::SansSerif);
         let metrics =
             text_metrics_for_label_height(label_height, self.max_font_size, self.max_line_height);
@@ -17338,9 +17753,9 @@ impl<'a> TextFrameBuilder<'a> {
         self.text_buffer.draw(
             self.font_system,
             self.swash_cache,
-            color,
+            TextColor::rgba(255, 255, 255, 255),
             |x, y, w, h, glyph_color| {
-                fill_text_pixels(
+                fill_text_alpha_pixels(
                     &mut pixels,
                     label_width,
                     label_height,
@@ -17380,6 +17795,7 @@ fn text_vertices_for_pending(
             atlas_width,
             atlas_height,
             surface_size,
+            text_color_to_vertex_color(draw.color),
         );
     }
     vertices
@@ -17559,7 +17975,7 @@ impl TextRenderer {
                     upload.pixels.as_ref(),
                     wgpu::TexelCopyBufferLayout {
                         offset: 0,
-                        bytes_per_row: Some(upload.width * 4),
+                        bytes_per_row: Some(upload.width),
                         rows_per_image: Some(upload.height),
                     },
                     wgpu::Extent3d {
@@ -17648,6 +18064,7 @@ fn prepare_scene_frame(
             let mut icon_builder = IconFrameBuilder::new(
                 &mut icon_renderer.resolver,
                 &mut icon_renderer.thumbnails,
+                &mut icon_renderer.icon_rasters,
                 &mut icon_renderer.raster_cache,
                 &mut icon_renderer.role_raster_cache,
                 size,
@@ -17697,6 +18114,7 @@ fn prepare_scene_frame(
             let mut icon_builder = IconFrameBuilder::new(
                 &mut icon_renderer.resolver,
                 &mut icon_renderer.thumbnails,
+                &mut icon_renderer.icon_rasters,
                 &mut icon_renderer.raster_cache,
                 &mut icon_renderer.role_raster_cache,
                 size,
@@ -17725,22 +18143,95 @@ fn icon_raster_miss_budget_for_frame(reason: &str) -> usize {
     if let Some(budget) = env_usize("FIKA_WGPU_ICON_RASTER_MISS_BUDGET") {
         return budget;
     }
-    if matches!(reason, "zoom" | "wheel-zoom" | "autosmoke-zoom") {
+    if matches!(
+        reason,
+        "autosmoke-scroll" | "wheel-scroll" | "zoom" | "wheel-zoom" | "autosmoke-zoom"
+    ) {
         0
+    } else if visible_exact_icon_roles_enabled_for_frame(reason) {
+        ICON_RASTER_VISIBLE_SYNC_BUDGET
     } else {
-        ICON_RASTER_MISS_BUDGET_PER_FRAME
+        0
     }
 }
 
-fn icon_role_read_ahead_enabled_for_frame(reason: &str) -> bool {
-    !matches!(
+fn icon_role_prewarm_budget_for_frame(reason: &str) -> Duration {
+    if visible_exact_icon_roles_enabled_for_frame(reason) {
+        DOLPHIN_MAX_BLOCK_TIMEOUT
+    } else {
+        VISIBLE_ICON_ROLE_PREWARM_BUDGET
+    }
+}
+
+fn visible_exact_icon_roles_enabled_for_frame(reason: &str) -> bool {
+    matches!(
         reason,
-        "autosmoke-scroll" | "wheel-scroll" | "zoom" | "wheel-zoom" | "autosmoke-zoom"
+        "startup"
+            | "activate-directory"
+            | "double-click-directory"
+            | "context-open"
+            | "place-open"
+            | "device-mount"
+            | "history-back"
+            | "history-forward"
+            | "parent-directory"
+            | "location-commit"
+            | "reload-directory"
+            | "toggle-hidden"
+            | "context-toggle-hidden"
+            | "auto-cycle"
+            | "mode-click"
+            | "switch-immediate"
     )
 }
 
-fn text_label_read_ahead_enabled_for_frame(_reason: &str) -> bool {
-    false
+fn icon_role_read_ahead_queue_budget_for_frame(
+    reason: &str,
+    small_directory_read_ahead: bool,
+) -> usize {
+    if matches!(reason, "zoom" | "wheel-zoom" | "autosmoke-zoom") {
+        return 0;
+    }
+    if small_directory_read_ahead {
+        ICON_ROLE_READ_AHEAD_LIMIT
+    } else {
+        ICON_ROLE_READ_AHEAD_QUEUE_BUDGET_PER_FRAME
+    }
+}
+
+fn text_label_prewarm_mode_for_scene_prewarm(reason: &str) -> TextLabelPrewarmMode {
+    if visible_exact_icon_roles_enabled_for_frame(reason) {
+        TextLabelPrewarmMode::ResolveAllSmallDirectory
+    } else {
+        text_label_prewarm_mode_for_frame(reason)
+    }
+}
+
+fn text_label_prewarm_mode_for_frame(reason: &str) -> TextLabelPrewarmMode {
+    if matches!(
+        reason,
+        "autosmoke-scroll" | "wheel-scroll" | "zoom" | "wheel-zoom" | "autosmoke-zoom"
+    ) {
+        TextLabelPrewarmMode::VisibleOnly
+    } else {
+        TextLabelPrewarmMode::DolphinReadAhead
+    }
+}
+
+fn text_label_prewarm_budget_for_mode(mode: TextLabelPrewarmMode) -> Duration {
+    if mode == TextLabelPrewarmMode::ResolveAllSmallDirectory {
+        DOLPHIN_MAX_BLOCK_TIMEOUT
+    } else {
+        VISIBLE_TEXT_LABEL_PREWARM_BUDGET
+    }
+}
+
+fn text_label_raster_miss_budget_for_mode(mode: TextLabelPrewarmMode) -> usize {
+    if mode == TextLabelPrewarmMode::VisibleOnly {
+        TEXT_RASTER_MISS_BUDGET_PER_FRAME
+    } else {
+        TEXT_LABEL_PREWARM_RASTER_MISS_BUDGET
+    }
 }
 
 fn create_vertex_buffer(device: &wgpu::Device, vertex_capacity: usize) -> wgpu::Buffer {
@@ -17777,11 +18268,12 @@ impl QuadVertex {
 struct TextVertex {
     position: [f32; 2],
     uv: [f32; 2],
+    color: [f32; 4],
 }
 
 impl TextVertex {
-    const ATTRIBUTES: [wgpu::VertexAttribute; 2] =
-        wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2];
+    const ATTRIBUTES: [wgpu::VertexAttribute; 3] =
+        wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x4];
 
     fn layout() -> wgpu::VertexBufferLayout<'static> {
         wgpu::VertexBufferLayout {
@@ -17812,7 +18304,7 @@ fn create_text_texture(device: &wgpu::Device, width: u32, height: u32) -> wgpu::
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8Unorm,
+        format: wgpu::TextureFormat::R8Unorm,
         usage: wgpu::TextureUsages::TEXTURE_BINDING
             | wgpu::TextureUsages::COPY_DST
             | wgpu::TextureUsages::COPY_SRC
@@ -18045,6 +18537,7 @@ fn push_textured_rect(
     atlas_width: u32,
     atlas_height: u32,
     size: PhysicalSize<u32>,
+    color: [f32; 4],
 ) {
     if rect.width <= 0.0 || rect.height <= 0.0 || atlas.width <= 0.0 || atlas.height <= 0.0 {
         return;
@@ -18067,31 +18560,47 @@ fn push_textured_rect(
         TextVertex {
             position: [left, top],
             uv: [u0, v0],
+            color,
         },
         TextVertex {
             position: [left, bottom],
             uv: [u0, v1],
+            color,
         },
         TextVertex {
             position: [right, bottom],
             uv: [u1, v1],
+            color,
         },
         TextVertex {
             position: [left, top],
             uv: [u0, v0],
+            color,
         },
         TextVertex {
             position: [right, bottom],
             uv: [u1, v1],
+            color,
         },
         TextVertex {
             position: [right, top],
             uv: [u1, v0],
+            color,
         },
     ]);
 }
 
-fn fill_text_pixels(
+fn text_color_to_vertex_color(color: TextColor) -> [f32; 4] {
+    let [r, g, b, a] = color.as_rgba();
+    [
+        r as f32 / 255.0,
+        g as f32 / 255.0,
+        b as f32 / 255.0,
+        a as f32 / 255.0,
+    ]
+}
+
+fn fill_text_alpha_pixels(
     pixels: &mut [u8],
     width: u32,
     height: u32,
@@ -18112,38 +18621,23 @@ fn fill_text_pixels(
         return;
     }
 
-    let rgba = color.as_rgba();
+    let src_alpha = color.a();
     for yy in y0..y1 {
         for xx in x0..x1 {
-            let offset = ((yy * width + xx) * 4) as usize;
-            if pixels[offset + 3] == 0 {
-                pixels[offset..offset + 4].copy_from_slice(&rgba);
-            } else {
-                blend_pixel(&mut pixels[offset..offset + 4], rgba);
-            }
+            let offset = (yy * width + xx) as usize;
+            pixels[offset] = blend_alpha(pixels[offset], src_alpha);
         }
     }
 }
 
-fn blend_pixel(dst: &mut [u8], src: [u8; 4]) {
-    let src_a = src[3] as f32 / 255.0;
+fn blend_alpha(dst: u8, src: u8) -> u8 {
+    let src_a = src as f32 / 255.0;
     if src_a <= 0.0 {
-        return;
+        return dst;
     }
-    let dst_a = dst[3] as f32 / 255.0;
+    let dst_a = dst as f32 / 255.0;
     let out_a = src_a + dst_a * (1.0 - src_a);
-    if out_a <= 0.0 {
-        dst.copy_from_slice(&[0, 0, 0, 0]);
-        return;
-    }
-
-    for channel in 0..3 {
-        let src_c = src[channel] as f32 / 255.0;
-        let dst_c = dst[channel] as f32 / 255.0;
-        let out_c = (src_c * src_a + dst_c * dst_a * (1.0 - src_a)) / out_a;
-        dst[channel] = (out_c * 255.0).round().clamp(0.0, 255.0) as u8;
-    }
-    dst[3] = (out_a * 255.0).round().clamp(0.0, 255.0) as u8;
+    (out_a * 255.0).round().clamp(0.0, 255.0) as u8
 }
 
 fn estimated_label_raster_width(label: &str, font_size: f32) -> f32 {
@@ -23659,15 +24153,17 @@ mod tests {
     fn icon_frame_keeps_overlay_vertices_separate() {
         let mut resolver = FileIconResolver::new();
         let mut thumbnails = ThumbnailRasterResolver::new();
+        let mut icon_rasters = IconRasterResolver::new();
         let mut raster_cache = IconRasterCache::new(ICON_CACHE_MAX_BYTES);
         let mut role_raster_cache = IconRoleRasterCache::new(ICON_ROLE_RASTER_CACHE_MAX_BYTES);
         let mut builder = IconFrameBuilder::new(
             &mut resolver,
             &mut thumbnails,
+            &mut icon_rasters,
             &mut raster_cache,
             &mut role_raster_cache,
             PhysicalSize::new(128, 96),
-            ICON_RASTER_MISS_BUDGET_PER_FRAME,
+            0,
         );
         let raster = test_icon_raster(2, 7);
         builder.copy_raster_to_atlas(
@@ -23960,6 +24456,36 @@ mod tests {
                 .resolve_entry(Path::new("/var/log"), &log_file, icon_size),
             Some(resolved)
         );
+        assert!(harness.next_request_key().is_none());
+    }
+
+    #[test]
+    fn file_icon_resolver_visible_fast_path_resolves_exact_role_without_pending_jump() {
+        let mut harness = FileIconResolverTestHarness::new();
+        let text_file = test_entry_with_mime("readme.txt", false, "text/plain");
+        let log_file = test_entry_with_mime("system.log", false, "text/plain");
+        let icon_size = 32.0;
+
+        let resolved =
+            harness
+                .resolver
+                .resolve_entry_visible_fast(Path::new("/tmp"), &text_file, icon_size);
+
+        assert_eq!(harness.resolver.pending_len_for_test(), 0);
+        assert_eq!(harness.resolver.cached_len_for_test(), 1);
+        assert!(
+            harness.next_request_key().is_none(),
+            "visible fast prewarm should not enqueue async icon resolution"
+        );
+
+        let (visible, deferred) =
+            harness
+                .resolver
+                .resolve_entry_visible(Path::new("/var/log"), &log_file, icon_size);
+
+        assert!(!deferred);
+        assert_eq!(visible, resolved);
+        assert_eq!(harness.resolver.pending_len_for_test(), 0);
         assert!(harness.next_request_key().is_none());
     }
 
@@ -28559,7 +29085,7 @@ fn fs_main(input: VertexOut) -> @location(0) vec4<f32> {
 }
 "#;
 
-const TEXT_SHADER: &str = r#"
+const TEXTURE_SHADER: &str = r#"
 @group(0) @binding(0)
 var text_atlas: texture_2d<f32>;
 
@@ -28587,5 +29113,40 @@ fn vs_main(input: VertexIn) -> VertexOut {
 @fragment
 fn fs_main(input: VertexOut) -> @location(0) vec4<f32> {
     return textureSample(text_atlas, text_sampler, input.uv);
+}
+"#;
+
+const TEXT_SHADER: &str = r#"
+@group(0) @binding(0)
+var text_atlas: texture_2d<f32>;
+
+@group(0) @binding(1)
+var text_sampler: sampler;
+
+struct VertexIn {
+    @location(0) position: vec2<f32>,
+    @location(1) uv: vec2<f32>,
+    @location(2) color: vec4<f32>,
+};
+
+struct VertexOut {
+    @builtin(position) position: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+    @location(1) color: vec4<f32>,
+};
+
+@vertex
+fn vs_main(input: VertexIn) -> VertexOut {
+    var out: VertexOut;
+    out.position = vec4<f32>(input.position, 0.0, 1.0);
+    out.uv = input.uv;
+    out.color = input.color;
+    return out;
+}
+
+@fragment
+fn fs_main(input: VertexOut) -> @location(0) vec4<f32> {
+    let mask = textureSample(text_atlas, text_sampler, input.uv).r;
+    return vec4<f32>(input.color.rgb, input.color.a * mask);
 }
 "#;
