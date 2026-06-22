@@ -28,6 +28,13 @@ Options:
   --max-icon-raster-us N
       Fail if any frame icon raster time exceeds N microseconds.
 
+  --max-text-deferred N
+      Fail if any frame text deferred count exceeds N.
+
+  --gate-scope SCOPE
+      Apply latency gates to this summary scope instead of all frames. Useful
+      values include "view:compact" and "reason:autosmoke-scroll".
+
   --require-autosmoke-scroll
       Fail unless FIKA_WGPU_AUTOSMOKE_SCROLL produced changed scroll actions.
 
@@ -42,6 +49,8 @@ warm_max_render_us=""
 warm_p95_render_us=""
 max_text_raster_us=""
 max_icon_raster_us=""
+max_text_deferred=""
+gate_scope="all"
 require_autosmoke_scroll=false
 log_path=""
 
@@ -110,6 +119,30 @@ while [[ $# -gt 0 ]]; do
         --max-icon-raster-us=*)
             max_icon_raster_us="${1#--max-icon-raster-us=}"
             ;;
+        --max-text-deferred)
+            if [[ $# -lt 2 || "$2" == --* ]]; then
+                echo "--max-text-deferred requires a numeric value" >&2
+                usage >&2
+                exit 2
+            fi
+            max_text_deferred="$2"
+            shift
+            ;;
+        --max-text-deferred=*)
+            max_text_deferred="${1#--max-text-deferred=}"
+            ;;
+        --gate-scope)
+            if [[ $# -lt 2 || "$2" == --* ]]; then
+                echo "--gate-scope requires a scope value" >&2
+                usage >&2
+                exit 2
+            fi
+            gate_scope="$2"
+            shift
+            ;;
+        --gate-scope=*)
+            gate_scope="${1#--gate-scope=}"
+            ;;
         --require-autosmoke-scroll)
             require_autosmoke_scroll=true
             ;;
@@ -140,12 +173,17 @@ if [[ -z "$log_path" ]]; then
     exit 2
 fi
 
-for value in "$max_render_us" "$warm_max_render_us" "$warm_p95_render_us" "$max_text_raster_us" "$max_icon_raster_us"; do
+for value in "$max_render_us" "$warm_max_render_us" "$warm_p95_render_us" "$max_text_raster_us" "$max_icon_raster_us" "$max_text_deferred"; do
     if [[ -n "$value" && ! "$value" =~ ^[0-9]+$ ]]; then
         echo "gate values must be integer microsecond values" >&2
         exit 2
     fi
 done
+
+if [[ -z "$gate_scope" ]]; then
+    echo "--gate-scope must not be empty" >&2
+    exit 2
+fi
 
 input_path="$log_path"
 if [[ "$log_path" == "-" ]]; then
@@ -162,7 +200,9 @@ awk \
     -v warm_p95_render_us="${warm_p95_render_us:-}" \
     -v require_autosmoke_scroll="$require_autosmoke_scroll" \
     -v max_text_raster_us="${max_text_raster_us:-}" \
-    -v max_icon_raster_us="${max_icon_raster_us:-}" '
+    -v max_icon_raster_us="${max_icon_raster_us:-}" \
+    -v max_text_deferred="${max_text_deferred:-}" \
+    -v gate_scope="$gate_scope" '
 function value_of(key,    i, pair) {
     for (i = 1; i <= NF; i++) {
         split($i, pair, "=")
@@ -274,7 +314,7 @@ function print_summary(prefix, label,    frames, warm_frames, render_max, render
     render_p95 = percentile(prefix, "render", 95)
     warm_p95 = percentile(prefix, "warm_render", 95)
     warm_max_value = max[prefix SUBSEP "warm_render"] + 0
-    printf("wgpu-frame-summary scope=%s frames=%d warm_frames=%d render_us_p50=%d render_us_p95=%d render_us_max=%d warm_render_us_p95=%d warm_render_us_max=%d layout_us_max=%d text_raster_us_max=%d icon_resolve_us_max=%d icon_raster_us_max=%d text_deferred_max=%d icon_deferred_max=%d icon_raster_deferred_max=%d visible_max=%d\n",
+    printf("wgpu-frame-summary scope=%s frames=%d warm_frames=%d render_us_p50=%d render_us_p95=%d render_us_max=%d warm_render_us_p95=%d warm_render_us_max=%d prepare_us_max=%d surface_us_max=%d encode_present_us_max=%d layout_us_max=%d text_raster_us_max=%d icon_resolve_us_max=%d icon_raster_us_max=%d text_atlas_reused_max=%d text_deferred_max=%d icon_deferred_max=%d icon_raster_deferred_max=%d visible_max=%d\n",
         label,
         frames,
         warm_frames,
@@ -283,10 +323,14 @@ function print_summary(prefix, label,    frames, warm_frames, render_max, render
         render_max,
         warm_p95,
         warm_max_value,
+        max[prefix SUBSEP "prepare"] + 0,
+        max[prefix SUBSEP "surface"] + 0,
+        max[prefix SUBSEP "encode_present"] + 0,
         max[prefix SUBSEP "layout"] + 0,
         max[prefix SUBSEP "text_raster"] + 0,
         max[prefix SUBSEP "icon_resolve"] + 0,
         max[prefix SUBSEP "icon_raster"] + 0,
+        max[prefix SUBSEP "text_atlas_reused"] + 0,
         max[prefix SUBSEP "text_deferred"] + 0,
         max[prefix SUBSEP "icon_deferred"] + 0,
         max[prefix SUBSEP "icon_raster_deferred"] + 0,
@@ -326,7 +370,7 @@ function print_autosmoke_scroll_summary() {
 
 function gate_metric(gate, actual, label,    failed) {
     if (gate != "" && actual > gate) {
-        printf("wgpu-frame-gate-fail metric=%s actual=%d gate=%d\n", label, actual, gate) > "/dev/stderr"
+        printf("wgpu-frame-gate-fail scope=%s metric=%s actual=%d gate=%d\n", gate_scope, label, actual, gate) > "/dev/stderr"
         return 1
     }
     return 0
@@ -345,9 +389,13 @@ function gate_metric(gate, actual, label,    failed) {
     reason_prefix = "reason:" reason
     render = numeric_value("render")
     layout = numeric_value("layout")
+    prepare = numeric_value("prepare")
+    surface = numeric_value("surface")
+    encode_present = numeric_value("encode_present")
     text_raster = numeric_value("text_raster")
     icon_resolve = numeric_value("icon_resolve")
     icon_raster = numeric_value("icon_raster")
+    text_atlas_reused = numeric_value("text_atlas_reused")
     text_deferred = numeric_value("text_deferred")
     icon_deferred = numeric_value("icon_deferred")
     icon_raster_deferred = numeric_value("icon_raster_deferred")
@@ -385,9 +433,21 @@ function gate_metric(gate, actual, label,    failed) {
     bump_metric("all", "layout", layout)
     bump_metric(prefix, "layout", layout)
     bump_metric(reason_prefix, "layout", layout)
+    bump_metric("all", "prepare", prepare)
+    bump_metric(prefix, "prepare", prepare)
+    bump_metric(reason_prefix, "prepare", prepare)
+    bump_metric("all", "surface", surface)
+    bump_metric(prefix, "surface", surface)
+    bump_metric(reason_prefix, "surface", surface)
+    bump_metric("all", "encode_present", encode_present)
+    bump_metric(prefix, "encode_present", encode_present)
+    bump_metric(reason_prefix, "encode_present", encode_present)
     bump_metric("all", "text_raster", text_raster)
     bump_metric(prefix, "text_raster", text_raster)
     bump_metric(reason_prefix, "text_raster", text_raster)
+    bump_metric("all", "text_atlas_reused", text_atlas_reused)
+    bump_metric(prefix, "text_atlas_reused", text_atlas_reused)
+    bump_metric(reason_prefix, "text_atlas_reused", text_atlas_reused)
     bump_metric("all", "icon_resolve", icon_resolve)
     bump_metric(prefix, "icon_resolve", icon_resolve)
     bump_metric(reason_prefix, "icon_resolve", icon_resolve)
@@ -471,11 +531,16 @@ END {
     }
     print_autosmoke_scroll_summary()
 
-    failed += gate_metric(max_render_us, max["all" SUBSEP "render"] + 0, "render_us_max")
-    failed += gate_metric(warm_max_render_us, max["all" SUBSEP "warm_render"] + 0, "warm_render_us_max")
-    failed += gate_metric(warm_p95_render_us, percentile("all", "warm_render", 95), "warm_render_us_p95")
-    failed += gate_metric(max_text_raster_us, max["all" SUBSEP "text_raster"] + 0, "text_raster_us_max")
-    failed += gate_metric(max_icon_raster_us, max["all" SUBSEP "icon_raster"] + 0, "icon_raster_us_max")
+    if (gate_scope != "all" && frame_count[gate_scope] == 0) {
+        printf("wgpu-frame-gate-fail scope=%s metric=frames actual=0 gate=>0\n", gate_scope) > "/dev/stderr"
+        failed++
+    }
+    failed += gate_metric(max_render_us, max[gate_scope SUBSEP "render"] + 0, "render_us_max")
+    failed += gate_metric(warm_max_render_us, max[gate_scope SUBSEP "warm_render"] + 0, "warm_render_us_max")
+    failed += gate_metric(warm_p95_render_us, percentile(gate_scope, "warm_render", 95), "warm_render_us_p95")
+    failed += gate_metric(max_text_raster_us, max[gate_scope SUBSEP "text_raster"] + 0, "text_raster_us_max")
+    failed += gate_metric(max_icon_raster_us, max[gate_scope SUBSEP "icon_raster"] + 0, "icon_raster_us_max")
+    failed += gate_metric(max_text_deferred, max[gate_scope SUBSEP "text_deferred"] + 0, "text_deferred_max")
     if (require_autosmoke_scroll == "true" && autosmoke_scroll_changed == 0) {
         print "wgpu-frame-gate-fail metric=autosmoke_scroll_changed actual=0 gate=>0" > "/dev/stderr"
         failed++

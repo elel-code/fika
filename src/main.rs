@@ -10841,6 +10841,37 @@ impl ShellScene {
                 }
             }
         }
+        for projection in projections {
+            let Some(icon_size) = projection.visible_items.first().map(|item| {
+                item.layout
+                    .icon_rect
+                    .width
+                    .max(item.layout.icon_rect.height)
+                    .clamp(16.0, 256.0)
+            }) else {
+                continue;
+            };
+            for entry_index in projection.view.filtered_indexes {
+                if stats.read_ahead >= ICON_ROLE_READ_AHEAD_LIMIT {
+                    return stats;
+                }
+                if Instant::now() >= deadline {
+                    stats.over_budget = true;
+                    return stats;
+                }
+                let Some(entry) = projection.view.entries.get(*entry_index) else {
+                    continue;
+                };
+                let resolve_start = Instant::now();
+                let _ = resolver.resolve_entry(projection.view.path, entry, icon_size);
+                stats.resolve_us += resolve_start.elapsed().as_micros();
+                stats.read_ahead += 1;
+                if Instant::now() >= deadline {
+                    stats.over_budget = true;
+                    return stats;
+                }
+            }
+        }
         stats
     }
 
@@ -14401,6 +14432,7 @@ struct SceneFrame {
 struct IconRolePrewarmStats {
     entries: usize,
     deferred: usize,
+    read_ahead: usize,
     resolve_us: u128,
     over_budget: bool,
 }
@@ -14575,11 +14607,12 @@ impl WgpuState {
                 || prewarm_stats.resolve_us >= 1000)
         {
             fika_log!(
-                "[fika-wgpu] prewarm-icons reason={} view={} entries={} deferred={} resolve={}us budget={}us over_budget={}",
+                "[fika-wgpu] prewarm-icons reason={} view={} entries={} deferred={} read_ahead={} resolve={}us budget={}us over_budget={}",
                 reason,
                 scene.panes[ShellPaneId::FIRST].view_mode.as_str(),
                 prewarm_stats.entries,
                 prewarm_stats.deferred,
+                prewarm_stats.read_ahead,
                 prewarm_stats.resolve_us,
                 VISIBLE_ICON_ROLE_PREWARM_BUDGET.as_micros(),
                 prewarm_stats.over_budget as u8
@@ -15585,18 +15618,15 @@ impl<'a> IconFrameBuilder<'a> {
         let raster = if let Some(raster) = self.raster_cache.get(&key) {
             self.cache_hits += 1;
             raster
+        } else if let Some(raster) = self
+            .raster_cache
+            .get_closest_icon_variant(&key.path, size_px)
+        {
+            self.cache_hits += 1;
+            raster
         } else {
             self.cache_misses += 1;
             if self.raster_miss_budget == 0 {
-                if let Some(raster) = self
-                    .raster_cache
-                    .get_closest_icon_variant(&key.path, size_px)
-                {
-                    self.cache_hits += 1;
-                    self.raster_deferred += 1;
-                    self.copy_raster_to_atlas(raster, rect, screen, IconDrawLayer::Content);
-                    return true;
-                }
                 self.raster_deferred += 1;
                 self.fallbacks += 1;
                 return false;
@@ -15725,18 +15755,15 @@ impl<'a> IconFrameBuilder<'a> {
         let raster = if let Some(raster) = self.raster_cache.get(&key) {
             self.cache_hits += 1;
             raster
+        } else if let Some(raster) = self
+            .raster_cache
+            .get_closest_icon_variant(&key.path, size_px)
+        {
+            self.cache_hits += 1;
+            raster
         } else {
             self.cache_misses += 1;
             if self.raster_miss_budget == 0 {
-                if let Some(raster) = self
-                    .raster_cache
-                    .get_closest_icon_variant(&key.path, size_px)
-                {
-                    self.cache_hits += 1;
-                    self.raster_deferred += 1;
-                    self.copy_raster_to_atlas(raster, rect, screen, layer);
-                    return true;
-                }
                 self.raster_deferred += 1;
                 self.fallbacks += 1;
                 return false;
@@ -16136,10 +16163,10 @@ impl TextFrameStats {
 
 struct TextFrame {
     vertices: Vec<TextVertex>,
-    pixels: Arc<[u8]>,
+    uploads: Vec<TextAtlasUpload>,
     width: u32,
     height: u32,
-    texture_dirty: bool,
+    clear_texture: bool,
     stats: TextFrameStats,
 }
 
@@ -16162,23 +16189,92 @@ struct PendingTextDraw {
 }
 
 #[derive(Clone, Debug)]
-struct TextAtlasFrameCache {
-    keys: Vec<LabelCacheKey>,
-    atlases: Vec<AtlasRect>,
+struct TextAtlasUpload {
+    atlas: AtlasRect,
     pixels: Arc<[u8]>,
     width: u32,
     height: u32,
 }
 
+#[derive(Clone, Debug)]
+struct TextAtlasFrameCache {
+    entries: HashMap<LabelCacheKey, AtlasRect>,
+    width: u32,
+    height: u32,
+    cursor_x: u32,
+    cursor_y: u32,
+    row_height: u32,
+}
+
 impl Default for TextAtlasFrameCache {
     fn default() -> Self {
         Self {
-            keys: Vec::new(),
-            atlases: Vec::new(),
-            pixels: Arc::from([]),
+            entries: HashMap::new(),
             width: TEXT_ATLAS_WIDTH,
             height: 1,
+            cursor_x: TEXT_PADDING,
+            cursor_y: TEXT_PADDING,
+            row_height: 0,
         }
+    }
+}
+
+impl TextAtlasFrameCache {
+    fn reset(&mut self) {
+        self.entries.clear();
+        self.height = 1;
+        self.cursor_x = TEXT_PADDING;
+        self.cursor_y = TEXT_PADDING;
+        self.row_height = 0;
+    }
+
+    fn would_exceed_max_height(&self, labels: impl IntoIterator<Item = (u32, u32)>) -> bool {
+        let mut cursor_x = self.cursor_x;
+        let mut cursor_y = self.cursor_y;
+        let mut row_height = self.row_height;
+        let mut height = self.height;
+        for (label_width, label_height) in labels {
+            if cursor_x + label_width + TEXT_PADDING > self.width {
+                cursor_x = TEXT_PADDING;
+                cursor_y += row_height.max(1);
+                row_height = 0;
+            }
+            let needed_height = cursor_y + label_height + TEXT_PADDING;
+            if needed_height > height {
+                height = needed_height.next_power_of_two();
+            }
+            cursor_x += label_width + TEXT_PADDING;
+            row_height = row_height.max(label_height + TEXT_PADDING);
+        }
+        height > TEXT_ATLAS_MAX_HEIGHT
+    }
+
+    fn allocate(&mut self, label_width: u32, label_height: u32) -> AtlasRect {
+        if self.cursor_x + label_width + TEXT_PADDING > self.width {
+            self.cursor_x = TEXT_PADDING;
+            self.cursor_y += self.row_height.max(1);
+            self.row_height = 0;
+        }
+
+        let x = self.cursor_x;
+        let y = self.cursor_y;
+        self.cursor_x += label_width + TEXT_PADDING;
+        self.row_height = self.row_height.max(label_height + TEXT_PADDING);
+        self.ensure_height(y + label_height + TEXT_PADDING);
+
+        AtlasRect {
+            x: x as f32,
+            y: y as f32,
+            width: label_width as f32,
+            height: label_height as f32,
+        }
+    }
+
+    fn ensure_height(&mut self, needed_height: u32) {
+        if needed_height <= self.height {
+            return;
+        }
+        self.height = needed_height.next_power_of_two();
     }
 }
 
@@ -16310,13 +16406,8 @@ struct TextFrameBuilder<'a> {
     surface_size: PhysicalSize<u32>,
     max_font_size: f32,
     max_line_height: f32,
-    pixels: Vec<u8>,
     pending_draws: Vec<PendingTextDraw>,
     width: u32,
-    height: u32,
-    cursor_x: u32,
-    cursor_y: u32,
-    row_height: u32,
     labels: usize,
     cache_hits: usize,
     cache_misses: usize,
@@ -16335,6 +16426,7 @@ impl<'a> TextFrameBuilder<'a> {
         surface_size: PhysicalSize<u32>,
         text_scale_factor: f32,
     ) -> Self {
+        let atlas_width = atlas_cache.width;
         let max_line_height = (TEXT_LINE_HEIGHT * text_scale_factor).round().max(1.0);
         let max_font_size = (TEXT_FONT_SIZE * max_line_height / TEXT_LINE_HEIGHT).max(1.0);
         text_buffer.set_metrics(Metrics::new(max_font_size, max_line_height));
@@ -16348,13 +16440,8 @@ impl<'a> TextFrameBuilder<'a> {
             surface_size,
             max_font_size,
             max_line_height,
-            pixels: vec![0; (TEXT_ATLAS_WIDTH * 4) as usize],
             pending_draws: Vec::with_capacity(64),
-            width: TEXT_ATLAS_WIDTH,
-            height: 1,
-            cursor_x: TEXT_PADDING,
-            cursor_y: TEXT_PADDING,
-            row_height: 0,
+            width: atlas_width,
             labels: 0,
             cache_hits: 0,
             cache_misses: 0,
@@ -16499,83 +16586,52 @@ impl<'a> TextFrameBuilder<'a> {
         let cache_entries = self.label_cache.len();
         let cache_bytes = self.label_cache.bytes();
         let pending = std::mem::take(&mut self.pending_draws);
-        let reuse_atlas = !pending.is_empty()
-            && self.atlas_cache.width == self.width
-            && self.atlas_cache.keys.len() == pending.len()
-            && self
-                .atlas_cache
-                .keys
-                .iter()
-                .zip(pending.iter())
-                .all(|(cached, pending)| cached == &pending.key);
-
-        if reuse_atlas {
-            let height = self.atlas_cache.height.max(1);
-            let vertices = text_vertices_for_pending(
-                &pending,
-                &self.atlas_cache.atlases,
-                self.width,
-                height,
-                self.surface_size,
-            );
-            let atlas_bytes = (self.width * height * 4) as usize;
-            return TextFrame {
-                vertices,
-                pixels: Arc::clone(&self.atlas_cache.pixels),
-                width: self.width,
-                height,
-                texture_dirty: false,
-                stats: TextFrameStats {
-                    labels: self.labels,
-                    quads: pending.len(),
-                    deferred: self.deferred,
-                    atlas_reused: usize::from(!pending.is_empty()),
-                    atlas_width: self.width,
-                    atlas_height: height,
-                    atlas_bytes,
-                    cache_hits: self.cache_hits,
-                    cache_misses: self.cache_misses,
-                    cache_entries,
-                    cache_bytes,
-                    raster_us: self.raster_us,
-                },
-            };
+        let missing_labels = pending
+            .iter()
+            .filter(|draw| !self.atlas_cache.entries.contains_key(&draw.key))
+            .map(|draw| (draw.label_width, draw.label_height));
+        let clear_texture = self.atlas_cache.would_exceed_max_height(missing_labels);
+        if clear_texture {
+            self.atlas_cache.reset();
         }
 
+        let mut atlas_reused = 0usize;
         let mut atlases = Vec::with_capacity(pending.len());
+        let mut uploads = Vec::new();
         for draw in &pending {
-            let atlas = self.allocate(draw.label_width, draw.label_height);
-            self.copy_label_pixels(
+            if let Some(atlas) = self.atlas_cache.entries.get(&draw.key).copied() {
+                atlas_reused += 1;
+                atlases.push(atlas);
+                continue;
+            }
+
+            let atlas = self
+                .atlas_cache
+                .allocate(draw.label_width, draw.label_height);
+            self.atlas_cache.entries.insert(draw.key.clone(), atlas);
+            uploads.push(TextAtlasUpload {
                 atlas,
-                draw.label_width,
-                draw.label_height,
-                draw.pixels.as_ref(),
-            );
+                pixels: Arc::clone(&draw.pixels),
+                width: draw.label_width,
+                height: draw.label_height,
+            });
             atlases.push(atlas);
         }
-        let height = self.height.max(1);
+        let height = self.atlas_cache.height.max(1);
         let vertices =
             text_vertices_for_pending(&pending, &atlases, self.width, height, self.surface_size);
         let atlas_bytes = (self.width * height * 4) as usize;
-        let pixels = Arc::<[u8]>::from(self.pixels);
-        *self.atlas_cache = TextAtlasFrameCache {
-            keys: pending.iter().map(|draw| draw.key.clone()).collect(),
-            atlases,
-            pixels: Arc::clone(&pixels),
-            width: self.width,
-            height,
-        };
         TextFrame {
             vertices,
-            pixels,
+            uploads,
             width: self.width,
             height,
-            texture_dirty: true,
+            clear_texture,
             stats: TextFrameStats {
                 labels: self.labels,
                 quads: pending.len(),
                 deferred: self.deferred,
-                atlas_reused: 0,
+                atlas_reused,
                 atlas_width: self.width,
                 atlas_height: height,
                 atlas_bytes,
@@ -16629,54 +16685,6 @@ impl<'a> TextFrameBuilder<'a> {
             },
         );
         pixels
-    }
-
-    fn allocate(&mut self, label_width: u32, label_height: u32) -> AtlasRect {
-        if self.cursor_x + label_width + TEXT_PADDING > self.width {
-            self.cursor_x = TEXT_PADDING;
-            self.cursor_y += self.row_height.max(1);
-            self.row_height = 0;
-        }
-
-        let x = self.cursor_x;
-        let y = self.cursor_y;
-        self.cursor_x += label_width + TEXT_PADDING;
-        self.row_height = self.row_height.max(label_height + TEXT_PADDING);
-        self.ensure_height(y + label_height + TEXT_PADDING);
-
-        AtlasRect {
-            x: x as f32,
-            y: y as f32,
-            width: label_width as f32,
-            height: label_height as f32,
-        }
-    }
-
-    fn ensure_height(&mut self, needed_height: u32) {
-        if needed_height <= self.height {
-            return;
-        }
-        self.height = needed_height.next_power_of_two();
-        self.pixels
-            .resize((self.width * self.height * 4) as usize, 0);
-    }
-
-    fn copy_label_pixels(
-        &mut self,
-        atlas: AtlasRect,
-        label_width: u32,
-        label_height: u32,
-        label_pixels: &[u8],
-    ) {
-        let atlas_x = atlas.x as u32;
-        let atlas_y = atlas.y as u32;
-        for row in 0..label_height {
-            let src_start = (row * label_width * 4) as usize;
-            let src_end = src_start + (label_width * 4) as usize;
-            let dst_start = (((atlas_y + row) * self.width + atlas_x) * 4) as usize;
-            let dst_end = dst_start + (label_width * 4) as usize;
-            self.pixels[dst_start..dst_end].copy_from_slice(&label_pixels[src_start..src_end]);
-        }
     }
 }
 
@@ -16830,12 +16838,58 @@ impl TextRenderer {
     }
 
     fn upload(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, frame: &TextFrame) {
-        let mut texture_dirty = frame.texture_dirty;
-        if frame.width != self.texture_width || frame.height != self.texture_height {
-            self.texture = create_text_texture(device, frame.width, frame.height);
-            self.texture_view = self
-                .texture
-                .create_view(&wgpu::TextureViewDescriptor::default());
+        let texture_resized =
+            frame.width != self.texture_width || frame.height != self.texture_height;
+        if texture_resized {
+            let old_width = self.texture_width;
+            let old_height = self.texture_height;
+            let new_texture = create_text_texture(device, frame.width, frame.height);
+            let new_texture_view = new_texture.create_view(&wgpu::TextureViewDescriptor::default());
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("fika-wgpu-text-atlas-resize"),
+            });
+            {
+                let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("fika-wgpu-text-atlas-clear"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &new_texture_view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                        depth_slice: None,
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+            }
+            if !frame.clear_texture && (old_width > 1 || old_height > 1) {
+                encoder.copy_texture_to_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &self.texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &new_texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::Extent3d {
+                        width: old_width.min(frame.width),
+                        height: old_height.min(frame.height),
+                        depth_or_array_layers: 1,
+                    },
+                );
+            }
+            queue.submit(Some(encoder.finish()));
+            self.texture = new_texture;
+            self.texture_view = new_texture_view;
             self.bind_group = create_text_bind_group(
                 device,
                 &self.bind_group_layout,
@@ -16844,26 +16898,52 @@ impl TextRenderer {
             );
             self.texture_width = frame.width;
             self.texture_height = frame.height;
-            texture_dirty = true;
+        } else if frame.clear_texture {
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("fika-wgpu-text-atlas-clear"),
+            });
+            {
+                let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("fika-wgpu-text-atlas-clear-pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &self.texture_view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                        depth_slice: None,
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+            }
+            queue.submit(Some(encoder.finish()));
         }
 
-        if texture_dirty {
+        for upload in &frame.uploads {
             queue.write_texture(
                 wgpu::TexelCopyTextureInfo {
                     texture: &self.texture,
                     mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
+                    origin: wgpu::Origin3d {
+                        x: upload.atlas.x as u32,
+                        y: upload.atlas.y as u32,
+                        z: 0,
+                    },
                     aspect: wgpu::TextureAspect::All,
                 },
-                frame.pixels.as_ref(),
+                upload.pixels.as_ref(),
                 wgpu::TexelCopyBufferLayout {
                     offset: 0,
-                    bytes_per_row: Some(frame.width * 4),
-                    rows_per_image: Some(frame.height),
+                    bytes_per_row: Some(upload.width * 4),
+                    rows_per_image: Some(upload.height),
                 },
                 wgpu::Extent3d {
-                    width: frame.width,
-                    height: frame.height,
+                    width: upload.width,
+                    height: upload.height,
                     depth_or_array_layers: 1,
                 },
             );
@@ -17026,7 +17106,10 @@ fn create_text_texture(device: &wgpu::Device, width: u32, height: u32) -> wgpu::
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format: wgpu::TextureFormat::Rgba8Unorm,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::COPY_DST
+            | wgpu::TextureUsages::COPY_SRC
+            | wgpu::TextureUsages::RENDER_ATTACHMENT,
         view_formats: &[],
     })
 }
