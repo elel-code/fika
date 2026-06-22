@@ -5936,11 +5936,29 @@ impl ShellScene {
         (value * self.ui_scale()).round().max(1.0)
     }
 
-    fn zoomed_metric(&self, value: f32, min: f32, max: f32) -> f32 {
+    fn dolphin_zoom_level(&self) -> i32 {
+        (self.zoom_step + DOLPHIN_ZOOM_LEVEL_DEFAULT)
+            .clamp(DOLPHIN_ZOOM_LEVEL_MIN, DOLPHIN_ZOOM_LEVEL_MAX)
+    }
+
+    fn dolphin_zoom_icon_size(&self) -> f32 {
+        dolphin_icon_size_for_zoom_level(self.dolphin_zoom_level())
+    }
+
+    fn zoom_icon_factor(&self) -> f32 {
+        self.dolphin_zoom_icon_size() / dolphin_icon_size_for_zoom_level(DOLPHIN_ZOOM_LEVEL_DEFAULT)
+    }
+
+    fn zoom_icon_metric(&self, value: f32, min: f32, max: f32) -> f32 {
         let scale = self.ui_scale();
-        (value * self.zoom_factor() * scale)
+        (value * self.zoom_icon_factor() * scale)
             .round()
             .clamp(min * scale, max * scale)
+    }
+
+    fn icons_text_width_factor(&self) -> f32 {
+        let default = (DOLPHIN_ZOOM_LEVEL_DEFAULT as f32 / 13.0).exp();
+        (self.dolphin_zoom_level() as f32 / 13.0).exp() / default
     }
 
     fn text_line_height(&self) -> f32 {
@@ -10171,17 +10189,25 @@ impl ShellScene {
         viewport_width: f32,
         viewport_height: f32,
     ) -> IconsLayoutOptions {
+        let scale = self.ui_scale();
+        let padding = self.scale_metric(2.0);
+        let gap = self.scale_metric(12.0);
+        let icon_size = self.zoom_icon_metric(ICONS_ICON_SIZE, 16.0, 256.0);
+        let item_width = (ICONS_ITEM_WIDTH * self.icons_text_width_factor() * scale)
+            .round()
+            .max(icon_size + padding * 2.0);
+        let item_height = (padding * 3.0 + icon_size + self.text_line_height()).round();
         IconsLayoutOptions {
             viewport_width,
             viewport_height,
             reserved_bottom: 0.0,
             scroll_x: 0.0,
             scroll_y: 0.0,
-            padding: self.zoomed_metric(8.0, 6.0, 14.0),
-            gap: self.zoomed_metric(12.0, 8.0, 22.0),
-            item_width: self.zoomed_metric(ICONS_ITEM_WIDTH, 82.0, 188.0),
-            item_height: self.zoomed_metric(ICONS_ITEM_HEIGHT, 76.0, 172.0),
-            icon_size: self.zoomed_metric(ICONS_ICON_SIZE, 28.0, 92.0),
+            padding,
+            gap,
+            item_width,
+            item_height,
+            icon_size,
             text_height: self.text_line_height(),
         }
     }
@@ -10199,12 +10225,13 @@ impl ShellScene {
         viewport_width: f32,
         viewport_height: f32,
     ) -> CompactLayoutOptions {
-        let padding = self.zoomed_metric(6.0, 4.0, 10.0);
-        let side_padding = self.zoomed_metric(8.0, 6.0, 14.0);
-        let gap = self.zoomed_metric(8.0, 6.0, 14.0);
-        let text_gap = self.zoomed_metric(8.0, 6.0, 14.0);
-        let icon_size = self.zoomed_metric(COMPACT_ICON_SIZE, 20.0, 56.0);
-        let min_text_width = self.zoomed_metric(COMPACT_MIN_TEXT_WIDTH, 16.0, 48.0);
+        let padding = self.scale_metric(6.0);
+        let side_padding = self.scale_metric(8.0);
+        let gap = self.scale_metric(8.0);
+        let text_gap = self.scale_metric(8.0);
+        let icon_size = self.zoom_icon_metric(COMPACT_ICON_SIZE, 16.0, 144.0);
+        let min_text_width = self.scale_metric(COMPACT_MIN_TEXT_WIDTH);
+        let item_height = (padding * 2.0 + icon_size.max(self.text_line_height())).round();
         CompactLayoutOptions {
             viewport_width,
             viewport_height,
@@ -10216,26 +10243,23 @@ impl ShellScene {
             gap,
             text_gap,
             item_width: (padding * 2.0 + icon_size + text_gap + min_text_width).round(),
-            item_height: self.zoomed_metric(COMPACT_ITEM_HEIGHT, 34.0, 72.0),
+            item_height,
             icon_size,
             text_height: self.text_line_height(),
         }
     }
 
-    fn zoom_factor(&self) -> f32 {
-        (1.0 + self.zoom_step as f32 * ZOOM_STEP_SCALE).clamp(0.64, 1.64)
-    }
-
     fn zoom_percent(&self) -> i32 {
-        (self.zoom_factor() * 100.0).round() as i32
+        (self.zoom_icon_factor() * 100.0).round() as i32
     }
 
     fn details_row_height(&self) -> f32 {
-        self.zoomed_metric(DETAILS_ROW_HEIGHT, 22.0, 44.0)
+        let padding = self.scale_metric(4.0);
+        (padding * 2.0 + self.details_icon_size().max(self.text_line_height())).round()
     }
 
     fn details_icon_size(&self) -> f32 {
-        self.zoomed_metric(DETAILS_ICON_SIZE, 16.0, 34.0)
+        self.zoom_icon_metric(DETAILS_ICON_SIZE, 16.0, 144.0)
     }
 
     fn build_frame(
@@ -10432,7 +10456,7 @@ impl ShellScene {
         projections: &[ShellPaneProjection<'_>],
         icons: &mut IconFrameBuilder<'_>,
     ) {
-        let deadline = Instant::now() + VISIBLE_ICON_SYNC_BUDGET;
+        let deadline = Instant::now() + VISIBLE_ICON_ROLE_PREWARM_BUDGET;
         for projection in projections {
             for item in &projection.visible_items {
                 if Instant::now() >= deadline {
@@ -10455,7 +10479,7 @@ impl ShellScene {
                     .width
                     .max(item.layout.icon_rect.height)
                     .clamp(16.0, 256.0);
-                if !icons.prewarm_file_icon(projection.view.path, entry, icon_size, deadline) {
+                if !icons.prewarm_file_icon_role(projection.view.path, entry, icon_size, deadline) {
                     return;
                 }
             }
@@ -10767,8 +10791,8 @@ impl ShellScene {
 
     fn thumbnail_read_ahead_size_px(&self, view_mode: ShellViewMode) -> u16 {
         let icon_size = match view_mode {
-            ShellViewMode::Icons => self.zoomed_metric(ICONS_ICON_SIZE, 28.0, 92.0),
-            ShellViewMode::Compact => self.zoomed_metric(COMPACT_ICON_SIZE, 20.0, 56.0),
+            ShellViewMode::Icons => self.zoom_icon_metric(ICONS_ICON_SIZE, 16.0, 256.0),
+            ShellViewMode::Compact => self.zoom_icon_metric(COMPACT_ICON_SIZE, 16.0, 144.0),
             ShellViewMode::Details => self.details_icon_size(),
         };
         icon_cache_size(icon_size)
@@ -14224,7 +14248,8 @@ impl WgpuState {
             || scene_frame.icon_stats.thumbnail_deferred > 0
             || self.icon_renderer.resolver.has_pending()
             || self.icon_renderer.thumbnails.has_pending();
-        if icon_work_pending {
+        let text_work_pending = scene_frame.text_stats.deferred > 0;
+        if icon_work_pending || text_work_pending {
             window.request_redraw();
         }
         self.quad_renderer
@@ -14279,7 +14304,7 @@ impl WgpuState {
             || self.last_log.elapsed() >= Duration::from_secs(1)
         {
             fika_log!(
-                "[fika-wgpu] frame={} reason={} view={} scale={:.2} zoom={} zoom_changes={} path={} entries={} filtered={} show_hidden={} hidden_changes={} location_active={} location_changes={} filter_active={} filter_changes={} places={} places_visible={} places_width={:.1} place_hover={} places_changes={} places_resize_changes={} places_scroll_y={:.1} places_scroll_changes={} split_pane={} split_changes={} split_path={} content_scrollbar={} visible={} thumbnails={} slots={}/{} slot_reused={} slot_recycled={} slot_allocated={} selected={} hover={} dnd_hover={} dnd_hover_changes={} dnd_drop_requests={} context={} context_menu={} context_changes={} context_actions={} properties={} properties_changes={} create_dialog={} create_changes={} rename_dialog={} rename_changes={} open_with={} open_with_changes={} open_changes={} copy_location_changes={} file_clipboard_changes={} paste_changes={} trash_changes={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} path_changes={} reloads={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_deferred={} icon_raster_deferred={} thumb_loaded={} thumb_quads={} thumb_deferred={} thumb_read_ahead={} thumb_ready={}/{}b icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_cache={}/{} entries={} bytes={} batches={} scroll_x={:.1} scroll_y={:.1} layout={}us text_raster={}us text_atlas={}x{}:{}b render={}us",
+                "[fika-wgpu] frame={} reason={} view={} scale={:.2} zoom={} zoom_changes={} path={} entries={} filtered={} show_hidden={} hidden_changes={} location_active={} location_changes={} filter_active={} filter_changes={} places={} places_visible={} places_width={:.1} place_hover={} places_changes={} places_resize_changes={} places_scroll_y={:.1} places_scroll_changes={} split_pane={} split_changes={} split_path={} content_scrollbar={} visible={} thumbnails={} slots={}/{} slot_reused={} slot_recycled={} slot_allocated={} selected={} hover={} dnd_hover={} dnd_hover_changes={} dnd_drop_requests={} context={} context_menu={} context_changes={} context_actions={} properties={} properties_changes={} create_dialog={} create_changes={} rename_dialog={} rename_changes={} open_with={} open_with_changes={} open_changes={} copy_location_changes={} file_clipboard_changes={} paste_changes={} trash_changes={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} path_changes={} reloads={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_deferred={} icon_raster_deferred={} thumb_loaded={} thumb_quads={} thumb_deferred={} thumb_read_ahead={} thumb_ready={}/{}b icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_deferred={} text_cache={}/{} entries={} bytes={} batches={} scroll_x={:.1} scroll_y={:.1} layout={}us text_raster={}us text_atlas={}x{}:{}b render={}us",
                 self.frame_count,
                 reason,
                 scene.panes[ShellPaneId::FIRST].view_mode.as_str(),
@@ -14400,6 +14425,7 @@ impl WgpuState {
                 scene_frame.icon_stats.raster_us,
                 scene_frame.text_stats.labels,
                 scene_frame.text_stats.quads,
+                scene_frame.text_stats.deferred,
                 scene_frame.text_stats.cache_hits,
                 scene_frame.text_stats.cache_misses,
                 scene_frame.text_stats.cache_entries,
@@ -14646,6 +14672,7 @@ impl IconRasterCache {
         self.entries.contains_key(key)
     }
 
+    #[cfg(test)]
     fn contains_icon_variant(&self, path: &Path) -> bool {
         self.entries
             .keys()
@@ -15091,7 +15118,7 @@ impl<'a> IconFrameBuilder<'a> {
         }
     }
 
-    fn prewarm_file_icon(
+    fn prewarm_file_icon_role(
         &mut self,
         directory: &Path,
         entry: &Entry,
@@ -15108,27 +15135,9 @@ impl<'a> IconFrameBuilder<'a> {
             .resolve_entry_fast(directory, entry, icon_size);
         self.resolve_us += resolve_start.elapsed().as_micros();
 
-        let Some(path) = snapshot.path else {
-            return Instant::now() < deadline;
-        };
-        let size_px = icon_cache_size(icon_size);
-        let key = IconRasterCacheKey::icon(path, size_px);
-        if self.raster_cache.contains(&key) {
-            return true;
+        if snapshot.path.is_none() {
+            self.deferred += 1;
         }
-        if self.raster_cache.contains_icon_variant(&key.path) {
-            return true;
-        }
-        if Instant::now() >= deadline {
-            return false;
-        }
-
-        self.cache_misses += 1;
-        let raster_start = Instant::now();
-        if let Some(raster) = rasterize_icon(&key.path, size_px as u32) {
-            self.raster_cache.insert(key, raster);
-        }
-        self.raster_us += raster_start.elapsed().as_micros();
         Instant::now() < deadline
     }
 
@@ -15307,6 +15316,15 @@ impl<'a> IconFrameBuilder<'a> {
         } else {
             self.cache_misses += 1;
             if self.raster_miss_budget == 0 {
+                if let Some(raster) = self
+                    .raster_cache
+                    .get_closest_icon_variant(&key.path, size_px)
+                {
+                    self.cache_hits += 1;
+                    self.raster_deferred += 1;
+                    self.copy_raster_to_atlas(raster, rect, screen, layer);
+                    return true;
+                }
                 self.raster_deferred += 1;
                 self.fallbacks += 1;
                 return false;
@@ -15673,6 +15691,7 @@ impl IconRenderer {
 struct TextFrameStats {
     labels: usize,
     quads: usize,
+    deferred: usize,
     atlas_width: u32,
     atlas_height: u32,
     atlas_bytes: usize,
@@ -15688,6 +15707,7 @@ impl TextFrameStats {
         Self {
             labels: self.labels + other.labels,
             quads: self.quads + other.quads,
+            deferred: self.deferred + other.deferred,
             atlas_width: self.atlas_width.max(other.atlas_width),
             atlas_height: self.atlas_height.max(other.atlas_height),
             atlas_bytes: self.atlas_bytes + other.atlas_bytes,
@@ -15859,6 +15879,8 @@ struct TextFrameBuilder<'a> {
     labels: usize,
     cache_hits: usize,
     cache_misses: usize,
+    deferred: usize,
+    raster_miss_budget: usize,
     raster_us: u128,
 }
 
@@ -15893,6 +15915,8 @@ impl<'a> TextFrameBuilder<'a> {
             labels: 0,
             cache_hits: 0,
             cache_misses: 0,
+            deferred: 0,
+            raster_miss_budget: TEXT_RASTER_MISS_BUDGET_PER_FRAME,
             raster_us: 0,
         }
     }
@@ -15962,6 +15986,11 @@ impl<'a> TextFrameBuilder<'a> {
             pixels
         } else {
             self.cache_misses += 1;
+            if self.raster_miss_budget == 0 {
+                self.deferred += 1;
+                return;
+            }
+            self.raster_miss_budget -= 1;
             let raster_start = Instant::now();
             let label_pixels =
                 self.rasterize_label(label, label_width, label_height, color, alignment, wrap);
@@ -16046,6 +16075,7 @@ impl<'a> TextFrameBuilder<'a> {
             stats: TextFrameStats {
                 labels: self.labels,
                 quads: self.draws.len(),
+                deferred: self.deferred,
                 atlas_width: self.width,
                 atlas_height: height,
                 atlas_bytes,
@@ -19587,6 +19617,17 @@ fn normalized_scale_factor(scale_factor: f32) -> f32 {
     }
 }
 
+fn dolphin_icon_size_for_zoom_level(level: i32) -> f32 {
+    match level.clamp(DOLPHIN_ZOOM_LEVEL_MIN, DOLPHIN_ZOOM_LEVEL_MAX) {
+        0 => 16.0,
+        1 => 22.0,
+        2 => 32.0,
+        3 => 48.0,
+        4 => 64.0,
+        level => (64 + ((level - 4) << 4)) as f32,
+    }
+}
+
 fn visible_layout_range_for_projection(
     projection: &ShellPaneProjection<'_>,
 ) -> Option<Range<usize>> {
@@ -22369,6 +22410,26 @@ mod tests {
 
         assert_eq!(small.role, large.role);
         assert_ne!(small.size_px, large.size_px);
+    }
+
+    #[test]
+    fn dolphin_zoom_level_sizes_match_dolphin_table() {
+        assert_eq!(dolphin_icon_size_for_zoom_level(0), 16.0);
+        assert_eq!(dolphin_icon_size_for_zoom_level(1), 22.0);
+        assert_eq!(dolphin_icon_size_for_zoom_level(2), 32.0);
+        assert_eq!(dolphin_icon_size_for_zoom_level(3), 48.0);
+        assert_eq!(dolphin_icon_size_for_zoom_level(4), 64.0);
+        assert_eq!(dolphin_icon_size_for_zoom_level(5), 80.0);
+        assert_eq!(dolphin_icon_size_for_zoom_level(16), 256.0);
+    }
+
+    #[test]
+    fn icon_cache_size_quantizes_to_dolphin_zoom_sizes() {
+        assert_eq!(icon_cache_size(18.0), 16);
+        assert_eq!(icon_cache_size(28.0), 32);
+        assert_eq!(icon_cache_size(48.0), 48);
+        assert_eq!(icon_cache_size(64.0), 64);
+        assert_eq!(icon_cache_size(250.0), 256);
     }
 
     #[test]
@@ -25805,6 +25866,69 @@ text/plain=writer.desktop;\n",
     }
 
     #[test]
+    fn text_raster_misses_are_budgeted_across_frames() {
+        let mut font_system = FontSystem::new();
+        let mut swash_cache = SwashCache::new();
+        let mut text_buffer = Buffer::new_empty(Metrics::new(TEXT_FONT_SIZE, TEXT_LINE_HEIGHT));
+        let mut label_cache = LabelRasterCache::new(1024 * 1024);
+        let rect = ViewRect {
+            x: 0.0,
+            y: 0.0,
+            width: 180.0,
+            height: TEXT_LINE_HEIGHT,
+        };
+        let clip = ViewRect {
+            x: 0.0,
+            y: 0.0,
+            width: 240.0,
+            height: 120.0,
+        };
+
+        let mut first = TextFrameBuilder::new(
+            &mut font_system,
+            &mut swash_cache,
+            &mut text_buffer,
+            &mut label_cache,
+            PhysicalSize::new(320, 120),
+            1.0,
+        );
+        for index in 0..=TEXT_RASTER_MISS_BUDGET_PER_FRAME {
+            first.push_label(
+                &format!("label-{index}"),
+                rect,
+                clip,
+                TextColor::rgb(36, 41, 47),
+            );
+        }
+        let first_frame = first.finish();
+        assert_eq!(first_frame.stats.quads, TEXT_RASTER_MISS_BUDGET_PER_FRAME);
+        assert_eq!(first_frame.stats.deferred, 1);
+
+        let mut second = TextFrameBuilder::new(
+            &mut font_system,
+            &mut swash_cache,
+            &mut text_buffer,
+            &mut label_cache,
+            PhysicalSize::new(320, 120),
+            1.0,
+        );
+        for index in 0..=TEXT_RASTER_MISS_BUDGET_PER_FRAME {
+            second.push_label(
+                &format!("label-{index}"),
+                rect,
+                clip,
+                TextColor::rgb(36, 41, 47),
+            );
+        }
+        let second_frame = second.finish();
+        assert_eq!(
+            second_frame.stats.quads,
+            TEXT_RASTER_MISS_BUDGET_PER_FRAME + 1
+        );
+        assert_eq!(second_frame.stats.deferred, 0);
+    }
+
+    #[test]
     fn location_bar_keeps_full_width_hit_target_when_editing() {
         let mut scene = test_scene(vec![test_entry("alpha", false)], ShellViewMode::Icons);
         scene.panes[ShellPaneId::FIRST].path = PathBuf::from("/x");
@@ -26292,8 +26416,8 @@ text/plain=writer.desktop;\n",
             ShellLayout::Details(layout) => layout.item(0).unwrap(),
             _ => unreachable!(),
         };
-        assert!(details_after.item_rect.height < details_before.item_rect.height);
-        assert!(details_after.icon_rect.width <= details_before.icon_rect.width);
+        assert!(details_after.item_rect.height <= details_before.item_rect.height);
+        assert!(details_after.icon_rect.width < details_before.icon_rect.width);
     }
 
     #[test]
@@ -26572,7 +26696,7 @@ text/plain=writer.desktop;\n",
                 padding: 8.0,
                 gap: 12.0,
                 item_width: ICONS_ITEM_WIDTH,
-                item_height: ICONS_ITEM_HEIGHT,
+                item_height: 106.0,
                 icon_size: ICONS_ICON_SIZE,
                 text_height: 18.0,
             },
@@ -26620,7 +26744,7 @@ text/plain=writer.desktop;\n",
                 gap: 8.0,
                 text_gap: 8.0,
                 item_width: 236.0,
-                item_height: COMPACT_ITEM_HEIGHT,
+                item_height: 44.0,
                 icon_size: COMPACT_ICON_SIZE,
                 text_height: 18.0,
             },
@@ -26662,10 +26786,10 @@ text/plain=writer.desktop;\n",
             _ => unreachable!(),
         };
 
-        assert_eq!(layout.rows_per_column(), 2);
+        assert_eq!(layout.rows_per_column(), 3);
         let short_first_column = layout.item(0).unwrap();
         let long_first_column = layout.item(1).unwrap();
-        let short_second_column = layout.item(2).unwrap();
+        let short_second_column = layout.item(3).unwrap();
 
         assert_eq!(
             short_first_column.item_rect.width,

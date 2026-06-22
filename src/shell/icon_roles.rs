@@ -79,7 +79,18 @@ pub(crate) fn file_icon_kind(
 }
 
 pub(crate) fn icon_cache_size(icon_size: f32) -> u16 {
-    icon_size.round().clamp(16.0, 256.0) as u16
+    let requested = icon_size.round().clamp(16.0, 256.0) as u16;
+    dolphin_icon_cache_sizes()
+        .iter()
+        .copied()
+        .min_by_key(|size| size.abs_diff(requested))
+        .unwrap_or(48)
+}
+
+fn dolphin_icon_cache_sizes() -> [u16; 17] {
+    [
+        16, 22, 32, 48, 64, 80, 96, 112, 128, 144, 160, 176, 192, 208, 224, 240, 256,
+    ]
 }
 
 pub(crate) fn file_icon_profile(
