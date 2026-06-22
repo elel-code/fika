@@ -87,6 +87,8 @@ mod wgpu_clipboard;
 mod wgpu_create_rename;
 #[path = "shell/dolphin.rs"]
 mod wgpu_dolphin;
+#[path = "shell/drop_menu.rs"]
+mod wgpu_drop_menu;
 #[path = "shell/icon_resolver.rs"]
 mod wgpu_icon_resolver;
 #[path = "shell/icon_roles.rs"]
@@ -121,6 +123,10 @@ use wgpu_create_rename::{
 use wgpu_dolphin::{
     dolphin_icon_size_for_zoom_level, shell_dolphin_read_ahead_indexes,
     visible_layout_range_for_projection,
+};
+use wgpu_drop_menu::{
+    ShellDropMenu, ShellDropMenuCommand, ShellDropMenuIcon, ShellDropOperationRequest,
+    ShellDropTarget, drop_menu_items,
 };
 #[cfg(test)]
 use wgpu_icon_resolver::FileIconResolverTestHarness;
@@ -3797,114 +3803,6 @@ struct ShellPropertiesOverlay {
     rows: Vec<ShellPropertyRow>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ShellDropMenuCommand {
-    Mode {
-        mode: FileTransferMode,
-        privileged: bool,
-    },
-    Cancel,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ShellDropMenuIcon {
-    Copy,
-    Move,
-    Link,
-    Cancel,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct ShellDropMenuItem {
-    command: ShellDropMenuCommand,
-    label: &'static str,
-    icon: ShellDropMenuIcon,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-struct ShellDropMenu {
-    sources: Vec<PathBuf>,
-    target_dir: PathBuf,
-    target: ShellDropTarget,
-    position: ViewPoint,
-    hovered_row: Option<usize>,
-}
-
-impl ShellDropMenu {
-    fn new(
-        sources: Vec<PathBuf>,
-        target_dir: PathBuf,
-        target: ShellDropTarget,
-        position: ViewPoint,
-    ) -> Self {
-        Self {
-            sources,
-            target_dir,
-            target,
-            position,
-            hovered_row: None,
-        }
-    }
-}
-
-fn drop_menu_items() -> [ShellDropMenuItem; 7] {
-    [
-        ShellDropMenuItem {
-            command: ShellDropMenuCommand::Mode {
-                mode: FileTransferMode::Copy,
-                privileged: false,
-            },
-            label: "Copy Here",
-            icon: ShellDropMenuIcon::Copy,
-        },
-        ShellDropMenuItem {
-            command: ShellDropMenuCommand::Mode {
-                mode: FileTransferMode::Move,
-                privileged: false,
-            },
-            label: "Move Here",
-            icon: ShellDropMenuIcon::Move,
-        },
-        ShellDropMenuItem {
-            command: ShellDropMenuCommand::Mode {
-                mode: FileTransferMode::Link,
-                privileged: false,
-            },
-            label: "Link Here",
-            icon: ShellDropMenuIcon::Link,
-        },
-        ShellDropMenuItem {
-            command: ShellDropMenuCommand::Mode {
-                mode: FileTransferMode::Copy,
-                privileged: true,
-            },
-            label: "Copy Here as Administrator",
-            icon: ShellDropMenuIcon::Copy,
-        },
-        ShellDropMenuItem {
-            command: ShellDropMenuCommand::Mode {
-                mode: FileTransferMode::Move,
-                privileged: true,
-            },
-            label: "Move Here as Administrator",
-            icon: ShellDropMenuIcon::Move,
-        },
-        ShellDropMenuItem {
-            command: ShellDropMenuCommand::Mode {
-                mode: FileTransferMode::Link,
-                privileged: true,
-            },
-            label: "Link Here as Administrator",
-            icon: ShellDropMenuIcon::Link,
-        },
-        ShellDropMenuItem {
-            command: ShellDropMenuCommand::Cancel,
-            label: "Cancel",
-            icon: ShellDropMenuIcon::Cancel,
-        },
-    ]
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct OpenFileRequest {
     path: PathBuf,
@@ -4139,29 +4037,6 @@ enum TrashConflictDialogClick {
     Replace,
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum ShellDropTarget {
-    PaneItem {
-        pane: ShellPaneId,
-        index: usize,
-        path: PathBuf,
-        is_dir: bool,
-    },
-    PaneBlank {
-        pane: ShellPaneId,
-        path: PathBuf,
-    },
-    Place {
-        index: usize,
-        path: PathBuf,
-    },
-    PlacesGap {
-        index: usize,
-    },
-    PlacesBlank,
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum ShellInternalDragSource {
     PaneItem {
@@ -4251,30 +4126,9 @@ struct ShellPlacePress {
     point: ViewPoint,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct ShellDropOperationRequest {
-    sources: Vec<PathBuf>,
-    target_dir: PathBuf,
-    target: ShellDropTarget,
-    mode: FileTransferMode,
-    privileged: bool,
-}
-
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct IconRoleReadAheadRequest {
     key: FileIconPathCacheKey,
-}
-
-impl ShellDropTarget {
-    fn kind(&self) -> &'static str {
-        match self {
-            Self::PaneItem { .. } => "pane-item",
-            Self::PaneBlank { .. } => "pane-blank",
-            Self::Place { .. } => "place",
-            Self::PlacesGap { .. } => "places-gap",
-            Self::PlacesBlank => "places-blank",
-        }
-    }
 }
 
 struct ShellScene {
