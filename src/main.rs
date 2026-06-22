@@ -83,6 +83,8 @@ fn fika_frame_log_all_enabled() -> bool {
 mod wgpu_autosmoke;
 #[path = "shell/clipboard.rs"]
 mod wgpu_clipboard;
+#[path = "shell/create_rename.rs"]
+mod wgpu_create_rename;
 #[path = "shell/dolphin.rs"]
 mod wgpu_dolphin;
 #[path = "shell/icon_resolver.rs"]
@@ -112,6 +114,10 @@ mod wgpu_shortcuts;
 
 use wgpu_autosmoke::{AutosmokeScrollAction, autosmoke_scroll_config, autosmoke_zoom_config};
 use wgpu_clipboard::ShellClipboard;
+use wgpu_create_rename::{
+    CreateDialogClick, CreateEntryKind, CreateEntryRequest, RenameDialogClick, RenameEntryRequest,
+    ShellCreateDialog, ShellRenameDialog, unique_child_name, validate_create_name,
+};
 use wgpu_dolphin::{
     dolphin_icon_size_for_zoom_level, shell_dolphin_read_ahead_indexes,
     visible_layout_range_for_projection,
@@ -3792,129 +3798,6 @@ struct ShellPropertiesOverlay {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum CreateEntryKind {
-    Folder,
-    File,
-}
-
-impl CreateEntryKind {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Folder => "Folder",
-            Self::File => "File",
-        }
-    }
-
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Folder => "folder",
-            Self::File => "file",
-        }
-    }
-
-    fn admin_as_str(self) -> &'static str {
-        match self {
-            Self::Folder => "folder-as-administrator",
-            Self::File => "file-as-administrator",
-        }
-    }
-
-    fn default_name(self) -> &'static str {
-        match self {
-            Self::Folder => "New Folder",
-            Self::File => "New File",
-        }
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct ShellCreateDialog {
-    pane: ShellPaneId,
-    parent: PathBuf,
-    kind: CreateEntryKind,
-    privileged: bool,
-    name: String,
-    error: Option<String>,
-    replace_on_insert: bool,
-}
-
-impl ShellCreateDialog {
-    fn new(pane: ShellPaneId, parent: PathBuf, kind: CreateEntryKind, privileged: bool) -> Self {
-        let name = unique_child_name(&parent, kind.default_name());
-        Self {
-            pane,
-            parent,
-            kind,
-            privileged,
-            name,
-            error: None,
-            replace_on_insert: true,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct CreateEntryRequest {
-    pane: ShellPaneId,
-    parent: PathBuf,
-    path: PathBuf,
-    kind: CreateEntryKind,
-    name: String,
-    privileged: bool,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum CreateDialogClick {
-    Outside,
-    Inside,
-    Cancel,
-    Commit,
-    Kind(CreateEntryKind),
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct ShellRenameDialog {
-    pane: ShellPaneId,
-    source: PathBuf,
-    parent: PathBuf,
-    original_name: String,
-    name: String,
-    is_dir: bool,
-    privileged: bool,
-    error: Option<String>,
-    replace_on_insert: bool,
-}
-
-impl ShellRenameDialog {
-    fn new(pane: ShellPaneId, source: PathBuf, is_dir: bool, privileged: bool) -> Option<Self> {
-        let parent = source.parent()?.to_path_buf();
-        let original_name = source.file_name()?.to_string_lossy().to_string();
-        Some(Self {
-            pane,
-            source,
-            parent,
-            name: original_name.clone(),
-            original_name,
-            is_dir,
-            privileged,
-            error: None,
-            replace_on_insert: true,
-        })
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct RenameEntryRequest {
-    pane: ShellPaneId,
-    source: PathBuf,
-    target: PathBuf,
-    original_name: String,
-    name: String,
-    is_dir: bool,
-    privileged: bool,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ShellDropMenuCommand {
     Mode {
         mode: FileTransferMode,
@@ -4231,14 +4114,6 @@ impl ShellTrashResult {
     fn changed(&self) -> bool {
         self.success_count > 0
     }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum RenameDialogClick {
-    Outside,
-    Inside,
-    Cancel,
-    Commit,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -20371,35 +20246,6 @@ fn should_attempt_privileged_operation(error: &str) -> bool {
         || error.contains("os error 13")
         || error.contains("operation not permitted")
         || error.contains("os error 1")
-}
-
-fn validate_create_name(name: &str) -> Result<(), String> {
-    if name.is_empty() {
-        return Err("name is empty".to_string());
-    }
-    if name == "." || name == ".." {
-        return Err("name must not be . or ..".to_string());
-    }
-    if name.contains('/') {
-        return Err("name must not contain /".to_string());
-    }
-    if name.contains('\0') {
-        return Err("name must not contain NUL".to_string());
-    }
-    Ok(())
-}
-
-fn unique_child_name(parent: &Path, base: &str) -> String {
-    if !parent.join(base).exists() {
-        return base.to_string();
-    }
-    for suffix in 2..1000 {
-        let candidate = format!("{base} {suffix}");
-        if !parent.join(&candidate).exists() {
-            return candidate;
-        }
-    }
-    base.to_string()
 }
 
 fn path_name_or_display(path: &Path) -> String {
