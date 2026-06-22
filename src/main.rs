@@ -43,6 +43,7 @@ use winit::cursor::{Cursor as WinitCursor, CursorIcon};
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, Modifiers, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+#[cfg(test)]
 use winit::keyboard::{Key, KeyCode, NamedKey, PhysicalKey};
 use winit::window::{Window, WindowAttributes, WindowId};
 
@@ -158,17 +159,20 @@ use wgpu_selection::{
 use wgpu_shortcuts::{
     CreateCommand, FileKeyboardCommand, FilterCommand, LocationCommand, OpenWithCommand,
     PathNavigationAction, RenameCommand, SelectionCommand, ZoomAction,
-    create_command_for_key_event, create_command_for_key_parts, escape_requested_for_key_event,
-    file_keyboard_command_for_key_event, file_keyboard_command_for_key_parts,
-    filter_command_for_key_event, filter_command_for_key_parts,
-    hidden_toggle_requested_for_key_event, hidden_toggle_requested_for_key_parts,
-    is_activation_key, location_command_for_key_event, location_command_for_key_parts,
+    create_command_for_key_event, escape_requested_for_key_event,
+    file_keyboard_command_for_key_event, filter_command_for_key_event,
+    hidden_toggle_requested_for_key_event, is_activation_key, location_command_for_key_event,
     navigation_action_for_key, open_with_command_for_key_event, path_navigation_action_for_key,
     path_navigation_action_for_mouse_button, reload_requested_for_key_event,
-    reload_requested_for_key_parts, rename_command_for_key_event, rename_command_for_key_parts,
-    selection_command_for_key_event, selection_command_for_key_parts, view_mode_for_key_event,
-    view_mode_for_key_parts, zoom_action_for_key, zoom_action_for_key_event,
-    zoom_action_for_scroll_delta,
+    rename_command_for_key_event, selection_command_for_key_event, view_mode_for_key_event,
+    zoom_action_for_key_event, zoom_action_for_scroll_delta,
+};
+#[cfg(test)]
+use wgpu_shortcuts::{
+    create_command_for_key_parts, file_keyboard_command_for_key_parts,
+    filter_command_for_key_parts, hidden_toggle_requested_for_key_parts,
+    location_command_for_key_parts, reload_requested_for_key_parts, rename_command_for_key_parts,
+    selection_command_for_key_parts, view_mode_for_key_parts, zoom_action_for_key,
 };
 
 fn startup_view_mode(
@@ -4304,7 +4308,6 @@ struct ShellInternalDrag {
     start: ViewPoint,
     current: ViewPoint,
     active: bool,
-    preview_suppressed: bool,
 }
 
 impl ShellInternalDrag {
@@ -4321,7 +4324,6 @@ impl ShellInternalDrag {
             start,
             current: start,
             active: false,
-            preview_suppressed: false,
         }
     }
 
@@ -6628,44 +6630,10 @@ impl ShellScene {
             drag.update(point)
         };
         if !self.internal_drag.as_ref().is_some_and(|drag| drag.active) {
-            let preview_changed = self.set_internal_drag_preview_suppressed(false);
-            return drag_changed || preview_changed;
+            return drag_changed;
         }
-        let preview_changed = self.update_internal_drag_preview_suppression(size);
         let hover_changed = self.update_dnd_hover_target(point, size);
-        drag_changed || preview_changed || hover_changed
-    }
-
-    fn update_internal_drag_preview_suppression(&mut self, size: PhysicalSize<u32>) -> bool {
-        let next = self
-            .internal_drag
-            .as_ref()
-            .is_some_and(|drag| self.internal_drag_preview_should_suppress(drag, size));
-        self.set_internal_drag_preview_suppressed(next)
-    }
-
-    fn set_internal_drag_preview_suppressed(&mut self, suppressed: bool) -> bool {
-        let Some(drag) = self.internal_drag.as_mut() else {
-            return false;
-        };
-        if drag.preview_suppressed == suppressed {
-            return false;
-        }
-        drag.preview_suppressed = suppressed;
-        true
-    }
-
-    fn internal_drag_preview_should_suppress(
-        &self,
-        drag: &ShellInternalDrag,
-        size: PhysicalSize<u32>,
-    ) -> bool {
-        match drag.source {
-            ShellInternalDragSource::Place { index } => {
-                self.place_index_at_screen_point(drag.current, size) == Some(index)
-            }
-            ShellInternalDragSource::PaneItem { .. } => false,
-        }
+        drag_changed || hover_changed
     }
 
     fn finish_internal_drag(&mut self, point: ViewPoint, size: PhysicalSize<u32>) -> bool {
@@ -11689,11 +11657,7 @@ impl ShellScene {
         text: &mut TextFrameBuilder<'_>,
         size: PhysicalSize<u32>,
     ) {
-        let Some(drag) = self
-            .internal_drag
-            .as_ref()
-            .filter(|drag| drag.active && !drag.preview_suppressed)
-        else {
+        let Some(drag) = self.internal_drag.as_ref().filter(|drag| drag.active) else {
             return;
         };
         let screen = ViewRect {
@@ -22276,7 +22240,7 @@ mod tests {
     }
 
     #[test]
-    fn place_drag_over_source_row_suppresses_preview_until_valid_target() {
+    fn place_drag_over_source_row_keeps_preview_without_drop_target() {
         let mut scene = test_scene(Vec::new(), ShellViewMode::Icons);
         scene.places = vec![
             ShellPlace::new("", "A", "Alpha", PathBuf::from("/tmp/a"), true),
@@ -22300,8 +22264,27 @@ mod tests {
             .as_ref()
             .expect("place drag should exist");
         assert!(drag.active);
-        assert!(drag.preview_suppressed);
         assert_eq!(scene.dnd_hover_target, None);
+        let mut vertices = Vec::new();
+        let mut font_system = FontSystem::new();
+        let mut swash_cache = SwashCache::new();
+        let mut text_buffer = Buffer::new_empty(Metrics::new(TEXT_FONT_SIZE, TEXT_LINE_HEIGHT));
+        let mut label_cache = LabelRasterCache::new(1024 * 1024);
+        let mut metrics_cache = LabelMetricsCache::new(TEXT_LABEL_METRICS_CACHE_MAX_ENTRIES);
+        let mut atlas_cache = TextAtlasFrameCache::default();
+        let mut text = TextFrameBuilder::new(
+            &mut font_system,
+            &mut swash_cache,
+            &mut text_buffer,
+            &mut label_cache,
+            &mut metrics_cache,
+            &mut atlas_cache,
+            size,
+            scene.ui_scale(),
+            Vec::new(),
+        );
+        scene.push_drag_preview_overlay(&mut vertices, &mut text, size);
+        assert!(!vertices.is_empty());
 
         let valid_gap = scene.place_gap_rect_for_index(2, size).unwrap();
         let valid_gap_point = ViewPoint {
@@ -22314,7 +22297,6 @@ mod tests {
             .as_ref()
             .expect("place drag should continue");
         assert!(drag.active);
-        assert!(!drag.preview_suppressed);
         assert_eq!(
             scene.dnd_hover_target,
             Some(ShellDropTarget::PlacesGap { index: 2 })
