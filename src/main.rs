@@ -14878,11 +14878,13 @@ impl WgpuState {
         read_ahead_enabled: bool,
     ) -> TextLabelPrewarmStats {
         self.text_renderer.label_cache.begin_frame();
+        self.text_renderer.metrics_cache.begin_frame();
         let mut text_builder = TextFrameBuilder::new(
             &mut self.text_renderer.font_system,
             &mut self.text_renderer.swash_cache,
             &mut self.text_renderer.text_buffer,
             &mut self.text_renderer.label_cache,
+            &mut self.text_renderer.metrics_cache,
             &mut self.text_renderer.atlas_cache,
             self.size,
             scene.ui_scale(),
@@ -16853,6 +16855,71 @@ impl LabelRasterCache {
     }
 }
 
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct LabelMetricsCacheKey {
+    text: String,
+    label_height: u32,
+}
+
+#[derive(Clone, Debug)]
+struct CachedLabelMetrics {
+    natural_width: u32,
+    last_used_frame: u64,
+}
+
+#[derive(Debug)]
+struct LabelMetricsCache {
+    entries: HashMap<LabelMetricsCacheKey, CachedLabelMetrics>,
+    frame: u64,
+    max_entries: usize,
+}
+
+impl LabelMetricsCache {
+    fn new(max_entries: usize) -> Self {
+        Self {
+            entries: HashMap::new(),
+            frame: 0,
+            max_entries,
+        }
+    }
+
+    fn begin_frame(&mut self) {
+        self.frame = self.frame.wrapping_add(1);
+    }
+
+    fn get(&mut self, key: &LabelMetricsCacheKey) -> Option<u32> {
+        let entry = self.entries.get_mut(key)?;
+        entry.last_used_frame = self.frame;
+        Some(entry.natural_width)
+    }
+
+    fn insert(&mut self, key: LabelMetricsCacheKey, natural_width: u32) {
+        self.entries.insert(
+            key.clone(),
+            CachedLabelMetrics {
+                natural_width,
+                last_used_frame: self.frame,
+            },
+        );
+        self.evict_if_needed(&key);
+    }
+
+    fn evict_if_needed(&mut self, protected: &LabelMetricsCacheKey) {
+        while self.entries.len() > self.max_entries && self.entries.len() > 1 {
+            let Some(victim) = self
+                .entries
+                .iter()
+                .filter(|(key, _)| *key != protected)
+                .min_by_key(|(_, entry)| entry.last_used_frame)
+                .map(|(key, _)| key.clone())
+            else {
+                break;
+            };
+            self.entries.remove(&victim);
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum LabelCacheOutcome {
     Hit,
@@ -16866,6 +16933,7 @@ struct TextFrameBuilder<'a> {
     swash_cache: &'a mut SwashCache,
     text_buffer: &'a mut Buffer,
     label_cache: &'a mut LabelRasterCache,
+    metrics_cache: &'a mut LabelMetricsCache,
     atlas_cache: &'a mut TextAtlasFrameCache,
     surface_size: PhysicalSize<u32>,
     max_font_size: f32,
@@ -16887,6 +16955,7 @@ impl<'a> TextFrameBuilder<'a> {
         swash_cache: &'a mut SwashCache,
         text_buffer: &'a mut Buffer,
         label_cache: &'a mut LabelRasterCache,
+        metrics_cache: &'a mut LabelMetricsCache,
         atlas_cache: &'a mut TextAtlasFrameCache,
         surface_size: PhysicalSize<u32>,
         text_scale_factor: f32,
@@ -16902,6 +16971,7 @@ impl<'a> TextFrameBuilder<'a> {
             swash_cache,
             text_buffer,
             label_cache,
+            metrics_cache,
             atlas_cache,
             surface_size,
             max_font_size,
@@ -17016,7 +17086,7 @@ impl<'a> TextFrameBuilder<'a> {
     }
 
     fn label_raster_key(
-        &self,
+        &mut self,
         label: &str,
         mut rect: ViewRect,
         color: TextColor,
@@ -17026,14 +17096,20 @@ impl<'a> TextFrameBuilder<'a> {
         if label.is_empty() || rect.width <= 0.0 || rect.height <= 0.0 {
             return None;
         }
-        if alignment == LabelAlignment::Start && wrap == LabelWrap::None {
-            rect.width = rect
-                .width
-                .min(estimated_label_raster_width(label, self.max_font_size));
-        }
         let max_label_width = self.width.saturating_sub(TEXT_PADDING * 2).max(1);
-        let label_width = (rect.width.ceil().max(1.0) as u32).min(max_label_width);
         let label_height = rect.height.ceil().max(1.0) as u32;
+        let label_width = if alignment == LabelAlignment::Start && wrap == LabelWrap::None {
+            let natural_width =
+                self.cached_no_wrap_label_width(label, label_height, max_label_width);
+            let width = natural_width
+                .min(rect.width.ceil().max(1.0) as u32)
+                .min(max_label_width)
+                .max(1);
+            rect.width = width as f32;
+            width
+        } else {
+            (rect.width.ceil().max(1.0) as u32).min(max_label_width)
+        };
         Some((
             LabelCacheKey {
                 text: label.to_string(),
@@ -17047,6 +17123,60 @@ impl<'a> TextFrameBuilder<'a> {
             label_width,
             label_height,
         ))
+    }
+
+    fn cached_no_wrap_label_width(
+        &mut self,
+        label: &str,
+        label_height: u32,
+        max_label_width: u32,
+    ) -> u32 {
+        let key = LabelMetricsCacheKey {
+            text: label.to_string(),
+            label_height,
+        };
+        if let Some(width) = self.metrics_cache.get(&key) {
+            return width.min(max_label_width).max(1);
+        }
+
+        let width = self.measure_no_wrap_natural_width(label, label_height, max_label_width);
+        self.metrics_cache.insert(key, width);
+        width.min(max_label_width).max(1)
+    }
+
+    fn measure_no_wrap_natural_width(
+        &mut self,
+        label: &str,
+        label_height: u32,
+        max_label_width: u32,
+    ) -> u32 {
+        let attrs = Attrs::new().family(Family::SansSerif);
+        let metrics =
+            text_metrics_for_label_height(label_height, self.max_font_size, self.max_line_height);
+        self.text_buffer.set_metrics(metrics);
+        self.text_buffer.set_wrap(Wrap::None);
+        self.text_buffer
+            .set_size(Some(max_label_width as f32), Some(label_height as f32));
+        self.text_buffer.set_text(
+            label,
+            &attrs,
+            shaping_for_label(label, LabelWrap::None),
+            Some(Align::Left),
+        );
+        self.text_buffer.shape_until_scroll(self.font_system, false);
+        let measured_width = self
+            .text_buffer
+            .layout_runs()
+            .map(|run| run.line_w)
+            .fold(0.0_f32, f32::max);
+        if measured_width <= 0.0 {
+            return estimated_label_raster_width(label, self.max_font_size)
+                .ceil()
+                .max(1.0) as u32;
+        }
+        (measured_width.ceil() as u32)
+            .saturating_add(TEXT_PADDING * 2)
+            .max(1)
     }
 
     fn resolve_label_pixels(
@@ -17271,6 +17401,7 @@ struct TextRenderer {
     swash_cache: SwashCache,
     text_buffer: Buffer,
     label_cache: LabelRasterCache,
+    metrics_cache: LabelMetricsCache,
     atlas_cache: TextAtlasFrameCache,
     staging_pixels: Vec<u8>,
 }
@@ -17352,6 +17483,7 @@ impl TextRenderer {
         text_buffer.set_wrap(Wrap::WordOrGlyph);
         let swash_cache = SwashCache::new();
         let label_cache = LabelRasterCache::new(TEXT_LABEL_CACHE_MAX_BYTES);
+        let metrics_cache = LabelMetricsCache::new(TEXT_LABEL_METRICS_CACHE_MAX_ENTRIES);
         let atlas_cache = TextAtlasFrameCache::default();
         let vertex_capacity = 6;
         let vertex_buffer = create_text_vertex_buffer(device, vertex_capacity);
@@ -17372,6 +17504,7 @@ impl TextRenderer {
             swash_cache,
             text_buffer,
             label_cache,
+            metrics_cache,
             atlas_cache,
             staging_pixels: Vec::new(),
         }
@@ -17480,11 +17613,13 @@ fn prepare_scene_frame(
     reason: &str,
 ) -> SceneFrame {
     text_renderer.label_cache.begin_frame();
+    text_renderer.metrics_cache.begin_frame();
     icon_renderer.raster_cache.begin_frame();
     icon_renderer.role_raster_cache.begin_frame();
 
     if let Some(overlay_text_renderer) = overlay_text_renderer {
         overlay_text_renderer.label_cache.begin_frame();
+        overlay_text_renderer.metrics_cache.begin_frame();
         let (mut scene_frame, mut text_frame, mut overlay_text_frame, mut icon_frame) = {
             let text_pixels = text_renderer.take_staging_pixels();
             let overlay_text_pixels = overlay_text_renderer.take_staging_pixels();
@@ -17493,6 +17628,7 @@ fn prepare_scene_frame(
                 &mut text_renderer.swash_cache,
                 &mut text_renderer.text_buffer,
                 &mut text_renderer.label_cache,
+                &mut text_renderer.metrics_cache,
                 &mut text_renderer.atlas_cache,
                 size,
                 scene.ui_scale(),
@@ -17503,6 +17639,7 @@ fn prepare_scene_frame(
                 &mut overlay_text_renderer.swash_cache,
                 &mut overlay_text_renderer.text_buffer,
                 &mut overlay_text_renderer.label_cache,
+                &mut overlay_text_renderer.metrics_cache,
                 &mut overlay_text_renderer.atlas_cache,
                 size,
                 scene.ui_scale(),
@@ -17551,6 +17688,7 @@ fn prepare_scene_frame(
                 &mut text_renderer.swash_cache,
                 &mut text_renderer.text_buffer,
                 &mut text_renderer.label_cache,
+                &mut text_renderer.metrics_cache,
                 &mut text_renderer.atlas_cache,
                 size,
                 scene.ui_scale(),
@@ -27148,12 +27286,14 @@ text/plain=writer.desktop;\n",
         let mut swash_cache = SwashCache::new();
         let mut text_buffer = Buffer::new_empty(Metrics::new(TEXT_FONT_SIZE, TEXT_LINE_HEIGHT));
         let mut label_cache = LabelRasterCache::new(1024 * 1024);
+        let mut metrics_cache = LabelMetricsCache::new(TEXT_LABEL_METRICS_CACHE_MAX_ENTRIES);
         let mut atlas_cache = TextAtlasFrameCache::default();
         let mut text = TextFrameBuilder::new(
             &mut font_system,
             &mut swash_cache,
             &mut text_buffer,
             &mut label_cache,
+            &mut metrics_cache,
             &mut atlas_cache,
             PhysicalSize::new(320, 120),
             1.0,
@@ -27194,6 +27334,7 @@ text/plain=writer.desktop;\n",
         let mut swash_cache = SwashCache::new();
         let mut text_buffer = Buffer::new_empty(Metrics::new(TEXT_FONT_SIZE, TEXT_LINE_HEIGHT));
         let mut label_cache = LabelRasterCache::new(1024 * 1024);
+        let mut metrics_cache = LabelMetricsCache::new(TEXT_LABEL_METRICS_CACHE_MAX_ENTRIES);
         let mut atlas_cache = TextAtlasFrameCache::default();
         let rect = ViewRect {
             x: 0.0,
@@ -27213,6 +27354,7 @@ text/plain=writer.desktop;\n",
             &mut swash_cache,
             &mut text_buffer,
             &mut label_cache,
+            &mut metrics_cache,
             &mut atlas_cache,
             PhysicalSize::new(320, 120),
             1.0,
@@ -27235,6 +27377,7 @@ text/plain=writer.desktop;\n",
             &mut swash_cache,
             &mut text_buffer,
             &mut label_cache,
+            &mut metrics_cache,
             &mut atlas_cache,
             PhysicalSize::new(320, 120),
             1.0,
@@ -27262,12 +27405,14 @@ text/plain=writer.desktop;\n",
         let mut swash_cache = SwashCache::new();
         let mut text_buffer = Buffer::new_empty(Metrics::new(TEXT_FONT_SIZE, TEXT_LINE_HEIGHT));
         let mut label_cache = LabelRasterCache::new(1024 * 1024);
+        let mut metrics_cache = LabelMetricsCache::new(TEXT_LABEL_METRICS_CACHE_MAX_ENTRIES);
         let mut atlas_cache = TextAtlasFrameCache::default();
         let mut text = TextFrameBuilder::new(
             &mut font_system,
             &mut swash_cache,
             &mut text_buffer,
             &mut label_cache,
+            &mut metrics_cache,
             &mut atlas_cache,
             PhysicalSize::new(320, 120),
             1.0,
@@ -27294,6 +27439,63 @@ text/plain=writer.desktop;\n",
 
         assert_eq!(frame.stats.quads, 1);
         assert!(frame.stats.cache_bytes < (220.0 * TEXT_LINE_HEIGHT * 4.0) as usize);
+    }
+
+    #[test]
+    fn start_no_wrap_labels_reuse_natural_width_across_rect_widths() {
+        let mut font_system = FontSystem::new();
+        let mut swash_cache = SwashCache::new();
+        let mut text_buffer = Buffer::new_empty(Metrics::new(TEXT_FONT_SIZE, TEXT_LINE_HEIGHT));
+        let mut label_cache = LabelRasterCache::new(1024 * 1024);
+        let mut metrics_cache = LabelMetricsCache::new(TEXT_LABEL_METRICS_CACHE_MAX_ENTRIES);
+        let mut atlas_cache = TextAtlasFrameCache::default();
+        let mut text = TextFrameBuilder::new(
+            &mut font_system,
+            &mut swash_cache,
+            &mut text_buffer,
+            &mut label_cache,
+            &mut metrics_cache,
+            &mut atlas_cache,
+            PhysicalSize::new(320, 120),
+            1.0,
+            Vec::new(),
+        );
+        let clip = ViewRect {
+            x: 0.0,
+            y: 0.0,
+            width: 260.0,
+            height: 120.0,
+        };
+        text.push_label_aligned_no_wrap(
+            "alpha",
+            ViewRect {
+                x: 0.0,
+                y: 0.0,
+                width: 220.0,
+                height: TEXT_LINE_HEIGHT,
+            },
+            clip,
+            TextColor::rgb(36, 41, 47),
+            LabelAlignment::Start,
+        );
+        text.push_label_aligned_no_wrap(
+            "alpha",
+            ViewRect {
+                x: 0.0,
+                y: 24.0,
+                width: 160.0,
+                height: TEXT_LINE_HEIGHT,
+            },
+            clip,
+            TextColor::rgb(36, 41, 47),
+            LabelAlignment::Start,
+        );
+        let frame = text.finish();
+
+        assert_eq!(frame.stats.quads, 2);
+        assert_eq!(frame.stats.cache_misses, 1);
+        assert_eq!(frame.stats.cache_hits, 1);
+        assert_eq!(frame.stats.cache_entries, 1);
     }
 
     #[test]
