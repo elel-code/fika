@@ -55,8 +55,9 @@ Status:
   Open With, service-menu icons/submenus, clipboard, create/rename/file
   transfer/trash/properties, thumbnail worker, devices, and dynamic Places.
 - [ ] Make DnD basically usable:
-  `text/uri-list` export/import, internal pane/place targets, Copy/Move/Link
-  drop menu, drag preview, hover feedback, and safe failure paths.
+  internal pane/place targets, external file import, Copy/Move/Link drop menu,
+  drag preview, hover feedback, and safe failure paths. `text/uri-list` export
+  remains pending.
 - [ ] Mainline verification:
   `cargo check`, `cargo test`, runtime smoke for `/etc`, repo root, large
   directories, Icons/Compact/Details, split pane, scrollbars, rubber-band,

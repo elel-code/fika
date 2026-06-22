@@ -110,7 +110,8 @@ wgpu = "29"
 - Wire Open With, service-menu icons/submenus, clipboard, file transfer,
   create, rename, trash, properties, thumbnails, devices, Places dynamic data,
   and portal chooser behavior into the winit/wgpu shell.
-- Implement external DnD with narrow Linux-specific support where required.
+- External file DnD import is wired through winit file drag events; `text/uri-list`
+  export and any missing Wayland-specific support remain follow-up work.
 
 ### Phase 5: Verification
 

@@ -96,7 +96,8 @@ wgpu = "29"
 - 接入 Open With、service-menu 图标/子菜单、clipboard、file transfer、create、
   rename、trash、properties、thumbnails、devices、Places dynamic data 和 portal
   chooser 行为。
-- 外部 DnD 在必要处补窄的 Linux-specific 支持。
+- 外部文件 DnD import 已通过 winit 文件拖放事件接入；`text/uri-list` export
+  和缺失的 Wayland-specific 支持后续补齐。
 
 ### Phase 5：验证
 

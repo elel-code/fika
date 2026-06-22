@@ -41,7 +41,7 @@ use fika_core::{
 use gio::prelude::FileExt;
 use winit::application::ApplicationHandler;
 use winit::cursor::{Cursor as WinitCursor, CursorIcon};
-use winit::dpi::PhysicalSize;
+use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, KeyEvent, Modifiers, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, KeyCode, NamedKey, PhysicalKey};
@@ -1238,6 +1238,18 @@ impl ApplicationHandler for FikaWgpuApp {
                     window.request_redraw();
                 }
             }
+            WindowEvent::DragEntered { paths, position } => {
+                self.external_drag_entered(paths, position);
+            }
+            WindowEvent::DragMoved { position } => {
+                self.external_drag_moved(position);
+            }
+            WindowEvent::DragDropped { paths, position } => {
+                self.external_drag_dropped(paths, position);
+            }
+            WindowEvent::DragLeft { .. } => {
+                self.external_drag_left();
+            }
             WindowEvent::PointerButton {
                 state,
                 position,
@@ -1595,6 +1607,86 @@ impl ApplicationHandler for FikaWgpuApp {
 }
 
 impl FikaWgpuApp {
+    fn external_drag_entered(&mut self, paths: Vec<PathBuf>, position: PhysicalPosition<f64>) {
+        let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
+            return;
+        };
+        let point = view_point_from_physical_position(position);
+        let changed = self.scene.begin_external_drag(paths, point, size);
+        fika_log!(
+            "[fika-wgpu] external-dnd enter sources={} target={}",
+            self.scene
+                .external_drag
+                .as_ref()
+                .map(|drag| drag.sources.len())
+                .unwrap_or(0),
+            self.scene
+                .dnd_hover_target
+                .as_ref()
+                .map(ShellDropTarget::kind)
+                .unwrap_or("none")
+        );
+        if changed && let Some(window) = self.window.as_ref() {
+            window.request_redraw();
+        }
+    }
+
+    fn external_drag_moved(&mut self, position: PhysicalPosition<f64>) {
+        let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
+            return;
+        };
+        let point = view_point_from_physical_position(position);
+        if self.scene.update_external_drag(point, size)
+            && let Some(window) = self.window.as_ref()
+        {
+            window.request_redraw();
+        }
+    }
+
+    fn external_drag_dropped(&mut self, paths: Vec<PathBuf>, position: PhysicalPosition<f64>) {
+        let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
+            return;
+        };
+        let point = view_point_from_physical_position(position);
+        let sources = if paths.is_empty() {
+            self.scene.external_drag_sources().unwrap_or_default()
+        } else {
+            paths
+        };
+        match self.scene.finish_external_drag(sources, point, size) {
+            Ok(changed) => {
+                fika_log!(
+                    "[fika-wgpu] external-dnd drop menu={} target={}",
+                    self.scene.drop_menu.is_some() as u8,
+                    self.scene
+                        .drop_menu
+                        .as_ref()
+                        .map(|menu| menu.target.kind())
+                        .unwrap_or("none")
+                );
+                if changed && let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+            }
+            Err(error) => {
+                fika_log!("[fika-wgpu] external-dnd-error {error}");
+                self.scene
+                    .record_task_status(ShellTaskStatus::failed("Drop failed", error, false));
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+            }
+        }
+    }
+
+    fn external_drag_left(&mut self) {
+        if self.scene.clear_external_drag()
+            && let Some(window) = self.window.as_ref()
+        {
+            window.request_redraw();
+        }
+    }
+
     fn perform_context_menu_action(
         &mut self,
         event_loop: &dyn ActiveEventLoop,
@@ -5163,6 +5255,18 @@ impl ShellInternalDrag {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ShellExternalDrag {
+    sources: Vec<PathBuf>,
+}
+
+impl ShellExternalDrag {
+    fn new(sources: Vec<PathBuf>) -> Option<Self> {
+        let sources = normalized_external_drop_sources(sources);
+        (!sources.is_empty()).then_some(Self { sources })
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct ShellPlacePress {
     index: usize,
@@ -5229,6 +5333,7 @@ struct ShellScene {
     icon_role_read_ahead_queue: RefCell<VecDeque<IconRoleReadAheadRequest>>,
     icon_role_read_ahead_seen: RefCell<HashSet<IconRoleReadAheadRequest>>,
     internal_drag: Option<ShellInternalDrag>,
+    external_drag: Option<ShellExternalDrag>,
     place_press: Option<ShellPlacePress>,
     dnd_hover_target: Option<ShellDropTarget>,
     pending_drop_request: Option<ShellDropOperationRequest>,
@@ -5356,6 +5461,7 @@ impl ShellScene {
             icon_role_read_ahead_queue: RefCell::new(VecDeque::new()),
             icon_role_read_ahead_seen: RefCell::new(HashSet::new()),
             internal_drag: None,
+            external_drag: None,
             place_press: None,
             dnd_hover_target: None,
             pending_drop_request: None,
@@ -5629,6 +5735,7 @@ impl ShellScene {
         self.open_with_chooser = None;
         self.trash_conflict_dialog = None;
         self.internal_drag = None;
+        self.external_drag = None;
         self.place_press = None;
         self.pending_drop_request = None;
         self.clear_dnd_hover_target();
@@ -6089,6 +6196,7 @@ impl ShellScene {
         self.open_with_chooser = None;
         self.trash_conflict_dialog = None;
         self.internal_drag = None;
+        self.external_drag = None;
         self.place_press = None;
         self.pending_drop_request = None;
         self.clear_dnd_hover_target();
@@ -6164,6 +6272,7 @@ impl ShellScene {
         self.open_with_chooser = None;
         self.trash_conflict_dialog = None;
         self.internal_drag = None;
+        self.external_drag = None;
         self.place_press = None;
         self.pending_drop_request = None;
         self.clear_dnd_hover_target();
@@ -6620,6 +6729,7 @@ impl ShellScene {
         let item_hover_changed = self.set_hovered_item(None);
         self.rubber_band = None;
         self.internal_drag = None;
+        self.external_drag = None;
         self.place_press = None;
         self.last_item_click = None;
         self.context_target = None;
@@ -6669,6 +6779,7 @@ impl ShellScene {
         let hover_changed = self.set_hovered_place(Some(index));
         let item_hover_changed = self.set_hovered_item(None);
         self.rubber_band = None;
+        self.external_drag = None;
         self.last_item_click = None;
         self.context_target = None;
         self.context_menu = None;
@@ -7142,12 +7253,150 @@ impl ShellScene {
         }
     }
 
+    fn drop_target_at_screen_point_for_external_drag(
+        &self,
+        point: ViewPoint,
+        size: PhysicalSize<u32>,
+        sources: &[PathBuf],
+    ) -> Option<ShellDropTarget> {
+        let target = self.drop_target_at_screen_point(point, size)?;
+        self.external_drag_can_drop_on_target(sources, &target)
+            .then_some(target)
+    }
+
+    fn external_drag_can_drop_on_target(
+        &self,
+        sources: &[PathBuf],
+        target: &ShellDropTarget,
+    ) -> bool {
+        if sources.is_empty()
+            || sources.iter().any(|path| is_network_path(path))
+            || self
+                .target_dir_for_drop_target(target)
+                .is_some_and(|target_dir| is_network_path(&target_dir))
+        {
+            return false;
+        }
+        match target {
+            ShellDropTarget::Place { index, path } => {
+                self.place_participates_in_dnd(*index)
+                    && !sources.iter().any(|source| source == path)
+            }
+            ShellDropTarget::PaneItem { is_dir, path, .. } if *is_dir => {
+                !sources.iter().any(|source| source == path)
+            }
+            ShellDropTarget::PaneBlank { path, .. } => !sources.iter().any(|source| source == path),
+            ShellDropTarget::PaneItem { .. }
+            | ShellDropTarget::PlacesGap { .. }
+            | ShellDropTarget::PlacesBlank => false,
+        }
+    }
+
     #[cfg_attr(not(test), allow(dead_code))]
     fn update_dnd_hover_target(&mut self, point: ViewPoint, size: PhysicalSize<u32>) -> bool {
         let next = self
             .internal_drag
             .as_ref()
             .and_then(|drag| self.drop_target_at_screen_point_for_drag(point, size, drag));
+        let changed = self.dnd_hover_target != next;
+        if changed {
+            self.dnd_hover_target = next;
+            self.dnd_hover_changes += 1;
+        }
+        changed
+    }
+
+    fn begin_external_drag(
+        &mut self,
+        sources: Vec<PathBuf>,
+        point: ViewPoint,
+        size: PhysicalSize<u32>,
+    ) -> bool {
+        self.pointer = Some(point);
+        self.internal_drag = None;
+        self.place_press = None;
+        self.rubber_band = None;
+        self.context_target = None;
+        self.context_menu = None;
+        self.drop_menu = None;
+        let old_drag = self.external_drag.clone();
+        self.external_drag = ShellExternalDrag::new(sources);
+        let hover_changed = self.update_external_dnd_hover_target(point, size);
+        old_drag != self.external_drag || hover_changed
+    }
+
+    fn update_external_drag(&mut self, point: ViewPoint, size: PhysicalSize<u32>) -> bool {
+        self.pointer = Some(point);
+        self.update_external_dnd_hover_target(point, size)
+    }
+
+    fn external_drag_sources(&self) -> Option<Vec<PathBuf>> {
+        self.external_drag
+            .as_ref()
+            .map(|drag| drag.sources.clone())
+            .filter(|sources| !sources.is_empty())
+    }
+
+    fn clear_external_drag(&mut self) -> bool {
+        let changed = self.external_drag.take().is_some() || self.clear_dnd_hover_target();
+        if changed {
+            fika_log!("[fika-wgpu] external-dnd clear=1");
+        }
+        changed
+    }
+
+    fn finish_external_drag(
+        &mut self,
+        sources: Vec<PathBuf>,
+        point: ViewPoint,
+        size: PhysicalSize<u32>,
+    ) -> Result<bool, String> {
+        self.pointer = Some(point);
+        let sources = normalized_external_drop_sources(sources);
+        let drag_cleared = self.external_drag.take().is_some();
+        let Some(target) =
+            self.drop_target_at_screen_point_for_external_drag(point, size, &sources)
+        else {
+            let hover_cleared = self.clear_dnd_hover_target();
+            return Ok(drag_cleared || hover_cleared);
+        };
+        let Some(target_dir) = self.target_dir_for_drop_target(&target) else {
+            let hover_cleared = self.clear_dnd_hover_target();
+            return Ok(drag_cleared || hover_cleared);
+        };
+        let old_menu = self.drop_menu.clone();
+        self.drop_menu = Some(ShellDropMenu::new(sources, target_dir, target, point));
+        self.context_menu = None;
+        self.context_target = None;
+        self.rubber_band = None;
+        self.internal_drag = None;
+        self.place_press = None;
+        let _ = self.clear_dnd_hover_target();
+        let changed = drag_cleared || old_menu != self.drop_menu;
+        if changed {
+            fika_log!(
+                "[fika-wgpu] external-dnd-menu open=1 sources={} target={}",
+                self.drop_menu
+                    .as_ref()
+                    .map(|menu| menu.sources.len())
+                    .unwrap_or(0),
+                self.drop_menu
+                    .as_ref()
+                    .map(|menu| menu.target.kind())
+                    .unwrap_or("none")
+            );
+        }
+        Ok(changed)
+    }
+
+    fn update_external_dnd_hover_target(
+        &mut self,
+        point: ViewPoint,
+        size: PhysicalSize<u32>,
+    ) -> bool {
+        let next = self.external_drag.as_ref().and_then(|drag| {
+            self.drop_target_at_screen_point_for_external_drag(point, size, &drag.sources)
+        });
         let changed = self.dnd_hover_target != next;
         if changed {
             self.dnd_hover_target = next;
@@ -7220,14 +7469,17 @@ impl ShellScene {
             self.pane_drag_source_for_index(pane, index)
         else {
             self.internal_drag = None;
+            self.external_drag = None;
             return false;
         };
         let paths = self.pane_drag_paths_for_index(pane, index);
         if paths.is_empty() {
             self.internal_drag = None;
+            self.external_drag = None;
             return false;
         }
         let label = Self::drag_label_for_paths(&paths, fallback_label);
+        self.external_drag = None;
         self.internal_drag = Some(ShellInternalDrag::new(
             ShellInternalDragSource::PaneItem {
                 pane,
@@ -7245,12 +7497,15 @@ impl ShellScene {
     fn begin_internal_drag_for_place(&mut self, index: usize, point: ViewPoint) -> bool {
         if !self.place_participates_in_dnd(index) {
             self.internal_drag = None;
+            self.external_drag = None;
             return false;
         }
         let Some(place) = self.places.get(index) else {
             self.internal_drag = None;
+            self.external_drag = None;
             return false;
         };
+        self.external_drag = None;
         self.internal_drag = Some(ShellInternalDrag::new(
             ShellInternalDragSource::Place { index },
             vec![place.path.clone()],
@@ -8427,6 +8682,7 @@ impl ShellScene {
         self.properties_overlay = None;
         self.rubber_band = None;
         self.internal_drag = None;
+        self.external_drag = None;
         self.place_press = None;
         self.places_changes += 1;
         self.refresh_hover(size);
@@ -8563,6 +8819,7 @@ impl ShellScene {
         self.rename_dialog = None;
         self.rubber_band = None;
         self.internal_drag = None;
+        self.external_drag = None;
         self.place_press = None;
         self.dnd_hover_target = None;
         self.pending_drop_request = None;
@@ -8695,6 +8952,7 @@ impl ShellScene {
         self.trash_conflict_dialog = None;
         self.rubber_band = None;
         self.internal_drag = None;
+        self.external_drag = None;
         self.place_press = None;
         Some(changed)
     }
@@ -14283,6 +14541,9 @@ impl ShellScene {
         if self.scrollbar_drag.is_some() {
             return self.update_scrollbar_drag(point, size);
         }
+        if self.external_drag.is_some() {
+            return self.update_external_drag(point, size);
+        }
         if self.drop_menu.is_some() {
             return self.update_drop_menu_hover(point, size);
         }
@@ -14303,6 +14564,7 @@ impl ShellScene {
         let changed = self.hovered_item.take().is_some()
             || self.hovered_place.take().is_some()
             || self.internal_drag.take().is_some()
+            || self.external_drag.take().is_some()
             || self.place_press.take().is_some()
             || self.clear_dnd_hover_target();
         if changed {
@@ -14313,6 +14575,7 @@ impl ShellScene {
 
     fn begin_pane_pointer(&mut self, click: SelectionClick, size: PhysicalSize<u32>) -> bool {
         self.rubber_band = None;
+        self.external_drag = None;
         self.place_press = None;
         self.pointer = Some(click.point);
         let active_changed = self.focus_pane_at_screen_point(click.point, size);
@@ -19064,6 +19327,19 @@ fn push_unique_icon_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
     }
 }
 
+fn normalized_external_drop_sources(sources: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut normalized = Vec::with_capacity(sources.len());
+    for source in sources {
+        if source.as_os_str().is_empty() {
+            continue;
+        }
+        if !normalized.iter().any(|existing| existing == &source) {
+            normalized.push(source);
+        }
+    }
+    normalized
+}
+
 fn push_unique_icon_theme(values: &mut Vec<String>, value: &str) {
     if !values.iter().any(|existing| existing == value) {
         values.push(value.to_string());
@@ -19292,6 +19568,13 @@ fn pane_content_rect_to_screen(rect: ViewRect, projection: &ShellPaneProjection<
         y: rect.y - projection.view.scroll_y + projection.geometry.content.y,
         width: rect.width,
         height: rect.height,
+    }
+}
+
+fn view_point_from_physical_position(position: PhysicalPosition<f64>) -> ViewPoint {
+    ViewPoint {
+        x: position.x as f32,
+        y: position.y as f32,
     }
 }
 
@@ -21731,6 +22014,7 @@ mod tests {
             icon_role_read_ahead_queue: RefCell::new(VecDeque::new()),
             icon_role_read_ahead_seen: RefCell::new(HashSet::new()),
             internal_drag: None,
+            external_drag: None,
             place_press: None,
             dnd_hover_target: None,
             pending_drop_request: None,
@@ -22366,6 +22650,112 @@ mod tests {
         assert_eq!(scene.dnd_drop_requests, 1);
         assert_eq!(scene.pending_drop_request.as_ref(), Some(&request));
         assert!(scene.internal_drag.is_none());
+        assert!(scene.dnd_hover_target.is_none());
+    }
+
+    #[test]
+    fn external_drag_to_pane_blank_opens_drop_menu() {
+        let mut scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
+        let size = PhysicalSize::new(700, 320);
+        let projection = scene.pane_projection(ShellPaneId::FIRST, size).unwrap();
+        let blank = ViewPoint {
+            x: projection.geometry.content.right() - 4.0,
+            y: projection.geometry.content.bottom() - 4.0,
+        };
+        let source = PathBuf::from("/external/source.txt");
+
+        assert!(scene.begin_external_drag(
+            vec![source.clone(), source.clone(), PathBuf::new()],
+            blank,
+            size,
+        ));
+        assert_eq!(
+            scene.dnd_hover_target,
+            Some(ShellDropTarget::PaneBlank {
+                pane: ShellPaneId::FIRST,
+                path: PathBuf::from("/tmp")
+            })
+        );
+        assert_eq!(
+            scene
+                .external_drag
+                .as_ref()
+                .map(|drag| drag.sources.as_slice()),
+            Some([source.clone()].as_slice())
+        );
+
+        assert!(
+            scene
+                .finish_external_drag(vec![source.clone(), source.clone()], blank, size)
+                .unwrap()
+        );
+        let menu = scene
+            .drop_menu
+            .as_ref()
+            .expect("external drop should open a drop menu");
+        assert_eq!(menu.sources, vec![source]);
+        assert_eq!(menu.target_dir, PathBuf::from("/tmp"));
+        assert!(matches!(menu.target, ShellDropTarget::PaneBlank { .. }));
+        assert!(scene.external_drag.is_none());
+        assert!(scene.dnd_hover_target.is_none());
+    }
+
+    #[test]
+    fn external_drag_to_directory_item_targets_that_directory() {
+        let mut scene = test_scene(
+            vec![test_entry("folder", true), test_entry("note.txt", false)],
+            ShellViewMode::Icons,
+        );
+        let size = PhysicalSize::new(700, 320);
+        let projection = scene.pane_projection(ShellPaneId::FIRST, size).unwrap();
+        let folder = projection.visible_items[0];
+        let target = ViewPoint {
+            x: projection.geometry.content.x + folder.layout.visual_rect.x + 6.0,
+            y: projection.geometry.content.y + folder.layout.visual_rect.y + 6.0,
+        };
+        let source = PathBuf::from("/external/source.txt");
+
+        assert!(scene.begin_external_drag(vec![source.clone()], target, size));
+        assert_eq!(
+            scene.dnd_hover_target,
+            Some(ShellDropTarget::PaneItem {
+                pane: ShellPaneId::FIRST,
+                index: 0,
+                path: PathBuf::from("/tmp/folder"),
+                is_dir: true,
+            })
+        );
+        assert!(
+            scene
+                .finish_external_drag(vec![source.clone()], target, size)
+                .unwrap()
+        );
+        let menu = scene.drop_menu.as_ref().unwrap();
+        assert_eq!(menu.sources, vec![source]);
+        assert_eq!(menu.target_dir, PathBuf::from("/tmp/folder"));
+    }
+
+    #[test]
+    fn external_drag_rejects_plain_files_and_clears_hover() {
+        let mut scene = test_scene(vec![test_entry("note.txt", false)], ShellViewMode::Icons);
+        let size = PhysicalSize::new(700, 320);
+        let projection = scene.pane_projection(ShellPaneId::FIRST, size).unwrap();
+        let item = projection.visible_items[0];
+        let target = ViewPoint {
+            x: projection.geometry.content.x + item.layout.visual_rect.x + 6.0,
+            y: projection.geometry.content.y + item.layout.visual_rect.y + 6.0,
+        };
+        let source = PathBuf::from("/external/source.txt");
+
+        assert!(scene.begin_external_drag(vec![source.clone()], target, size));
+        assert_eq!(scene.dnd_hover_target, None);
+        assert!(
+            scene
+                .finish_external_drag(vec![source], target, size)
+                .unwrap()
+        );
+        assert!(scene.drop_menu.is_none());
+        assert!(scene.external_drag.is_none());
         assert!(scene.dnd_hover_target.is_none());
     }
 
