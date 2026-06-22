@@ -121,6 +121,8 @@ mod wgpu_selection;
 mod wgpu_shortcuts;
 #[path = "shell/tasks.rs"]
 mod wgpu_tasks;
+#[path = "shell/transfer.rs"]
+mod wgpu_transfer;
 #[path = "shell/trash_conflict.rs"]
 mod wgpu_trash_conflict;
 
@@ -207,6 +209,10 @@ use wgpu_shortcuts::{
 };
 use wgpu_tasks::{
     ShellTaskDetailDialog, ShellTaskId, ShellTaskStatus, ShellTaskStatusKind, TaskDetailDialogClick,
+};
+use wgpu_transfer::{
+    ShellAsyncTaskResult, ShellAsyncTransferCompletion, ShellAsyncTransferSource, ShellPasteResult,
+    ShellTransferExecution,
 };
 use wgpu_trash_conflict::{ShellTrashConflictDialog, TrashConflictDialogClick};
 
@@ -3062,63 +3068,6 @@ struct FileClipboardExportRequest {
     role: FileClipboardRole,
     paths: Vec<PathBuf>,
     text: String,
-}
-
-#[derive(Clone, Debug)]
-struct ShellPasteResult {
-    mode: FileTransferMode,
-    success_count: usize,
-    failure_count: usize,
-    clear_clipboard: bool,
-    privileged: bool,
-    administrator_available: bool,
-    first_error: Option<String>,
-}
-
-impl ShellPasteResult {
-    fn from_transfer(execution: &ShellTransferExecution) -> Self {
-        Self {
-            mode: execution.result.mode,
-            success_count: execution.result.success_count,
-            failure_count: execution.result.failure_count,
-            clear_clipboard: execution.result.clear_clipboard,
-            privileged: execution.privileged,
-            administrator_available: execution.administrator_available,
-            first_error: execution.first_error.clone(),
-        }
-    }
-
-    fn changed(&self) -> bool {
-        self.success_count > 0
-    }
-}
-
-#[derive(Clone, Debug)]
-struct ShellTransferExecution {
-    result: TransferTaskResult,
-    privileged: bool,
-    administrator_available: bool,
-    first_error: Option<String>,
-    cancelled: bool,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ShellAsyncTransferSource {
-    Paste,
-    Drop,
-}
-
-#[derive(Clone, Debug)]
-struct ShellAsyncTransferCompletion {
-    task_id: ShellTaskId,
-    source: ShellAsyncTransferSource,
-    target_dir: PathBuf,
-    transfer: ShellTransferExecution,
-}
-
-#[derive(Clone, Debug)]
-enum ShellAsyncTaskResult {
-    Transfer(ShellAsyncTransferCompletion),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
