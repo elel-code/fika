@@ -17,6 +17,8 @@ pub(crate) struct ResolvedFileIcon {
 pub(crate) struct FileIconResolver {
     cached: HashMap<FileIconPathCacheKey, ResolvedFileIcon>,
     pending: HashSet<FileIconPathCacheKey>,
+    fast_theme: IconThemeResolver,
+    fast_profiles: HashMap<FileIconRoleCacheKey, FileIconProfile>,
     request_tx: Option<Sender<IconResolveRequest>>,
     result_rx: Receiver<IconResolveResult>,
 }
@@ -44,6 +46,8 @@ impl FileIconResolver {
         Self {
             cached: HashMap::new(),
             pending: HashSet::new(),
+            fast_theme: IconThemeResolver::default(),
+            fast_profiles: HashMap::new(),
             request_tx,
             result_rx,
         }
@@ -65,6 +69,24 @@ impl FileIconResolver {
             icon_size,
         );
         self.resolve_key(key)
+    }
+
+    pub(crate) fn resolve_entry_fast(
+        &mut self,
+        directory: &Path,
+        entry: &Entry,
+        icon_size: f32,
+    ) -> ResolvedFileIcon {
+        self.drain_results();
+        let path = directory.join(entry.name.as_ref());
+        let key = file_icon_path_cache_key(
+            &path,
+            entry.is_dir,
+            entry.mime_type.clone(),
+            entry.mime_magic_checked,
+            icon_size,
+        );
+        self.resolve_key_fast(key)
     }
 
     pub(crate) fn resolve_named(
@@ -104,6 +126,23 @@ impl FileIconResolver {
             self.pending.clear();
         }
         None
+    }
+
+    fn resolve_key_fast(&mut self, key: FileIconPathCacheKey) -> ResolvedFileIcon {
+        if let Some(icon) = self.cached.get(&key) {
+            return icon.clone();
+        }
+
+        let profile = self
+            .fast_profiles
+            .entry(key.role.clone())
+            .or_insert_with(|| {
+                file_icon_profile(&key.role.kind, fika_core::MimeDatabase::shared())
+            });
+        let icon = file_icon_snapshot(profile, key.size_px, &mut self.fast_theme);
+        self.pending.remove(&key);
+        self.cached.insert(key, icon.clone());
+        icon
     }
 
     pub(crate) fn drain_results(&mut self) -> usize {
@@ -174,6 +213,8 @@ impl FileIconResolverTestHarness {
             resolver: FileIconResolver {
                 cached: HashMap::new(),
                 pending: HashSet::new(),
+                fast_theme: IconThemeResolver::default(),
+                fast_profiles: HashMap::new(),
                 request_tx: Some(request_tx),
                 result_rx,
             },

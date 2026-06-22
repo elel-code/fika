@@ -6061,6 +6061,7 @@ impl ShellScene {
         (rect.width > self.scale_metric(24.0)).then_some(rect)
     }
 
+    #[cfg(test)]
     fn path_bar_rect(&self, size: PhysicalSize<u32>) -> Option<ViewRect> {
         self.pane_path_bar_rect(ShellPaneId::FIRST, size)
     }
@@ -10254,6 +10255,7 @@ impl ShellScene {
             .iter()
             .map(|projection| self.thumbnail_candidate_count_for_projection(projection))
             .sum();
+        self.prewarm_visible_file_icons(&projections, icons);
 
         push_rect(
             &mut vertices,
@@ -10408,6 +10410,41 @@ impl ShellScene {
                 [0.122, 0.310, 0.749, 1.0],
                 size,
             );
+        }
+    }
+
+    fn prewarm_visible_file_icons(
+        &self,
+        projections: &[ShellPaneProjection<'_>],
+        icons: &mut IconFrameBuilder<'_>,
+    ) {
+        let deadline = Instant::now() + VISIBLE_ICON_SYNC_BUDGET;
+        for projection in projections {
+            for item in &projection.visible_items {
+                if Instant::now() >= deadline {
+                    return;
+                }
+                let Some(entry_index) = projection
+                    .view
+                    .filtered_indexes
+                    .get(item.layout.model_index)
+                    .copied()
+                else {
+                    continue;
+                };
+                let Some(entry) = projection.view.entries.get(entry_index) else {
+                    continue;
+                };
+                let icon_size = item
+                    .layout
+                    .icon_rect
+                    .width
+                    .max(item.layout.icon_rect.height)
+                    .clamp(16.0, 256.0);
+                if !icons.prewarm_file_icon(projection.view.path, entry, icon_size, deadline) {
+                    return;
+                }
+            }
         }
     }
 
@@ -15022,6 +15059,44 @@ impl<'a> IconFrameBuilder<'a> {
             resolve_us: 0,
             raster_us: 0,
         }
+    }
+
+    fn prewarm_file_icon(
+        &mut self,
+        directory: &Path,
+        entry: &Entry,
+        icon_size: f32,
+        deadline: Instant,
+    ) -> bool {
+        if Instant::now() >= deadline {
+            return false;
+        }
+
+        let resolve_start = Instant::now();
+        let snapshot = self
+            .resolver
+            .resolve_entry_fast(directory, entry, icon_size);
+        self.resolve_us += resolve_start.elapsed().as_micros();
+
+        let Some(path) = snapshot.path else {
+            return Instant::now() < deadline;
+        };
+        let size_px = icon_cache_size(icon_size);
+        let key = IconRasterCacheKey::icon(path, size_px);
+        if self.raster_cache.contains(&key) {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+
+        self.cache_misses += 1;
+        let raster_start = Instant::now();
+        if let Some(raster) = rasterize_icon(&key.path, size_px as u32) {
+            self.raster_cache.insert(key, raster);
+        }
+        self.raster_us += raster_start.elapsed().as_micros();
+        Instant::now() < deadline
     }
 
     fn push_icon(
@@ -22325,6 +22400,33 @@ mod tests {
         assert_eq!(resolved.path, Some(resolved_path));
         assert_eq!(harness.resolver.pending_len_for_test(), 0);
         assert_eq!(harness.resolver.cached_len_for_test(), 1);
+        assert!(harness.next_request_key().is_none());
+    }
+
+    #[test]
+    fn file_icon_resolver_fast_path_caches_mime_role_without_pending_jump() {
+        let mut harness = FileIconResolverTestHarness::new();
+        let text_file = test_entry_with_mime("readme.txt", false, "text/plain");
+        let log_file = test_entry_with_mime("system.log", false, "text/plain");
+        let icon_size = 32.0;
+
+        let resolved =
+            harness
+                .resolver
+                .resolve_entry_fast(Path::new("/tmp"), &text_file, icon_size);
+
+        assert_eq!(harness.resolver.pending_len_for_test(), 0);
+        assert_eq!(harness.resolver.cached_len_for_test(), 1);
+        assert!(
+            harness.next_request_key().is_none(),
+            "visible fast path should not enqueue async icon resolution"
+        );
+        assert_eq!(
+            harness
+                .resolver
+                .resolve_entry(Path::new("/var/log"), &log_file, icon_size),
+            Some(resolved)
+        );
         assert!(harness.next_request_key().is_none());
     }
 
