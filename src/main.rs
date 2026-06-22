@@ -2989,9 +2989,13 @@ fn context_menu_named_icon_request(
             let icon = icon.trim();
             (!icon.is_empty()).then_some((icon, NamedIconFallback::Service))
         }
+        ShellContextMenuIcon::Service(None) => Some(("system-run", NamedIconFallback::Service)),
         ShellContextMenuIcon::Application(Some(icon)) => {
             let icon = icon.trim();
             (!icon.is_empty()).then_some((icon, NamedIconFallback::Application))
+        }
+        ShellContextMenuIcon::Application(None) => {
+            Some(("application-x-executable", NamedIconFallback::Application))
         }
         _ => None,
     }
@@ -4832,6 +4836,17 @@ impl ShellScene {
                 .as_ref()
                 .and_then(ShellInternalDrag::source_place_index)
                 .is_some()
+    }
+
+    fn active_place_drag_source_index(&self) -> Option<usize> {
+        self.internal_drag
+            .as_ref()
+            .filter(|drag| drag.active)
+            .and_then(ShellInternalDrag::source_place_index)
+    }
+
+    fn place_row_suppressed_for_drag(&self, index: usize) -> bool {
+        self.active_place_drag_source_index() == Some(index)
     }
 
     fn end_place_pointer(
@@ -10199,14 +10214,15 @@ impl ShellScene {
                 height: row_height,
             };
             if row.y < panel.bottom() && row.bottom() > panel.y {
-                let active = active_place == Some(index);
-                let hovered = self.hovered_place == Some(index);
+                let source_dragged = self.place_row_suppressed_for_drag(index);
+                let active = active_place == Some(index) && !source_dragged;
+                let hovered = self.hovered_place == Some(index) && !source_dragged;
                 let dnd_hovered = matches!(
                     self.dnd_hover_target,
                     Some(ShellDropTarget::Place {
                         index: target_index,
                         ..
-                    }) if target_index == index
+                    }) if target_index == index && !source_dragged
                 );
                 if active {
                     push_clipped_rounded_rect(
@@ -10249,44 +10265,46 @@ impl ShellScene {
                         size,
                     );
                 }
-                let icon = ViewRect {
-                    x: row.x + self.scale_metric(8.0),
-                    y: row.y + (row.height - icon_size) / 2.0,
-                    width: icon_size,
-                    height: icon_size,
-                };
-                push_place_icon(vertices, icon, panel, place, active, self.ui_scale(), size);
-                text.push_label_aligned(
-                    &place.label,
-                    ViewRect {
-                        x: icon.right() + self.scale_metric(8.0),
-                        y: row.y + (row.height - text_height) / 2.0,
-                        width: (row.right() - icon.right() - self.scale_metric(16.0)).max(1.0),
-                        height: text_height,
-                    },
-                    panel,
-                    if active {
-                        TextColor::rgb(31, 79, 191)
-                    } else {
-                        TextColor::rgb(36, 41, 47)
-                    },
-                    LabelAlignment::Start,
-                );
-                if place.trash && file_ops::trash_has_items() {
-                    let dot_size = self.scale_metric(7.0);
-                    push_clipped_rounded_rect(
-                        vertices,
+                if !source_dragged {
+                    let icon = ViewRect {
+                        x: row.x + self.scale_metric(8.0),
+                        y: row.y + (row.height - icon_size) / 2.0,
+                        width: icon_size,
+                        height: icon_size,
+                    };
+                    push_place_icon(vertices, icon, panel, place, active, self.ui_scale(), size);
+                    text.push_label_aligned(
+                        &place.label,
                         ViewRect {
-                            x: row.right() - self.scale_metric(8.0) - dot_size,
-                            y: row.y + (row.height - dot_size) / 2.0,
-                            width: dot_size,
-                            height: dot_size,
+                            x: icon.right() + self.scale_metric(8.0),
+                            y: row.y + (row.height - text_height) / 2.0,
+                            width: (row.right() - icon.right() - self.scale_metric(16.0)).max(1.0),
+                            height: text_height,
                         },
                         panel,
-                        dot_size / 2.0,
-                        [0.184, 0.435, 0.929, 1.0],
-                        size,
+                        if active {
+                            TextColor::rgb(31, 79, 191)
+                        } else {
+                            TextColor::rgb(36, 41, 47)
+                        },
+                        LabelAlignment::Start,
                     );
+                    if place.trash && file_ops::trash_has_items() {
+                        let dot_size = self.scale_metric(7.0);
+                        push_clipped_rounded_rect(
+                            vertices,
+                            ViewRect {
+                                x: row.right() - self.scale_metric(8.0) - dot_size,
+                                y: row.y + (row.height - dot_size) / 2.0,
+                                width: dot_size,
+                                height: dot_size,
+                            },
+                            panel,
+                            dot_size / 2.0,
+                            [0.184, 0.435, 0.929, 1.0],
+                            size,
+                        );
+                    }
                 }
             }
 
@@ -21216,6 +21234,9 @@ mod tests {
             .as_ref()
             .expect("place drag should exist");
         assert!(drag.active);
+        assert_eq!(scene.active_place_drag_source_index(), Some(0));
+        assert!(scene.place_row_suppressed_for_drag(0));
+        assert!(!scene.place_row_suppressed_for_drag(1));
         assert_eq!(scene.dnd_hover_target, None);
         let mut vertices = Vec::new();
         let mut font_system = FontSystem::new();
@@ -22491,6 +22512,22 @@ mod tests {
         assert_eq!(
             context_menu_named_icon_request(&item),
             Some(("archive-insert", NamedIconFallback::Service))
+        );
+    }
+
+    #[test]
+    fn service_menu_named_icon_request_supplies_service_fallback_icon() {
+        let item = ShellContextMenuItem {
+            command: ShellContextMenuCommand::OpenSubmenu(ShellContextSubmenu::ServiceMenu),
+            label: "More Actions".to_string(),
+            separator_before: false,
+            submenu: Some(ShellContextSubmenu::ServiceMenu),
+            icon: ShellContextMenuIcon::Service(None),
+        };
+
+        assert_eq!(
+            context_menu_named_icon_request(&item),
+            Some(("system-run", NamedIconFallback::Service))
         );
     }
 
