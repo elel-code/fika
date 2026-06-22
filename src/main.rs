@@ -68,6 +68,10 @@ fn fika_log_enabled() -> bool {
 
 #[path = "shell/clipboard.rs"]
 mod wgpu_clipboard;
+#[path = "shell/icon_resolver.rs"]
+mod wgpu_icon_resolver;
+#[path = "shell/icon_roles.rs"]
+mod wgpu_icon_roles;
 #[path = "shell/location.rs"]
 mod wgpu_location;
 #[path = "shell/metrics.rs"]
@@ -82,6 +86,12 @@ mod wgpu_pane_layout;
 mod wgpu_selection;
 
 use wgpu_clipboard::ShellClipboard;
+#[cfg(test)]
+use wgpu_icon_resolver::FileIconResolverTestHarness;
+use wgpu_icon_resolver::{FileIconResolver, ResolvedFileIcon};
+#[cfg(test)]
+use wgpu_icon_roles::{FileIconKind, file_icon_path_cache_key, file_icon_profile};
+use wgpu_icon_roles::{FileIconProfile, NamedIconFallback, icon_cache_size};
 use wgpu_location::{LocationDraft, PathHistory, normalized_text_cursor};
 use wgpu_metrics::*;
 use wgpu_options::{ShellViewMode, parse_start_options};
@@ -10226,12 +10236,24 @@ impl ShellScene {
         let mut overlay_vertices = Vec::with_capacity(32);
         let width = size.width.max(1) as f32;
         let height = size.height.max(1) as f32;
-        let pane = self.pane_rect(size);
-        let top_bar_height = self.top_bar_height();
-        let left_projection = self
-            .pane_projection(ShellPaneId::FIRST, size)
+        let projections = ShellPaneId::ALL
+            .into_iter()
+            .filter_map(|kind| self.pane_projection(kind, size))
+            .collect::<Vec<_>>();
+        let first_projection = projections
+            .iter()
+            .find(|projection| projection.geometry.kind == ShellPaneId::FIRST)
             .expect("first pane is open");
-        let content_clip = left_projection.geometry.content;
+        let content_size = first_projection.scroll_metrics.content_size;
+        let first_item_rect = first_projection
+            .visible_items
+            .first()
+            .map(|item| item.layout.item_rect);
+        let visible_items = first_projection.visible_items.len();
+        let thumbnail_candidates = projections
+            .iter()
+            .map(|projection| self.thumbnail_candidate_count_for_projection(projection))
+            .sum();
 
         push_rect(
             &mut vertices,
@@ -10241,80 +10263,28 @@ impl ShellScene {
                 width,
                 height,
             },
-            view_mode_surface_color(self.panes[ShellPaneId::FIRST].view_mode),
+            view_mode_surface_color(first_projection.view.view_mode),
             size,
         );
         self.push_app_toolbar(&mut vertices, size);
-        push_rect(&mut vertices, pane, [1.000, 1.000, 1.000, 1.0], size);
-        push_rect(
-            &mut vertices,
-            ViewRect {
-                x: pane.x,
-                y: pane.y,
-                width: pane.width,
-                height: top_bar_height,
-            },
-            chrome_color(),
-            size,
-        );
-        if let Some(path_rect) = self.path_bar_rect(size) {
-            let location_active = self.location_bar_active_for_pane(ShellPaneId::FIRST);
-            let location_clip = ViewRect {
-                x: pane.x,
-                y: pane.y,
-                width: self.pane_width(size),
-                height: top_bar_height,
-            };
-            let path_label = self.location_label_for_pane(ShellPaneId::FIRST);
-            let path_cursor = self.location_cursor_for_pane(ShellPaneId::FIRST);
-            self.push_location_bar(
+        self.push_places_sidebar(&mut vertices, text, size);
+        if let Some(metrics) = self.split_pane_metrics(size) {
+            push_rect(
                 &mut vertices,
-                text,
+                metrics.divider,
+                [0.784, 0.808, 0.839, 1.0],
                 size,
-                path_rect,
-                location_clip,
-                &path_label,
-                location_active,
-                path_cursor,
             );
         }
-        self.push_places_sidebar(&mut vertices, text, size);
-        let pane_body = self.pane_body_rect(size);
-        push_rect(
-            &mut vertices,
-            pane_body,
-            view_mode_content_color(self.panes[ShellPaneId::FIRST].view_mode),
-            size,
-        );
-        self.push_filter_bar(&mut vertices, text, size);
-        if self.panes[ShellPaneId::FIRST].view_mode == ShellViewMode::Details {
-            self.push_details_header(&mut vertices, text, size);
-        }
 
-        let content_size = left_projection.scroll_metrics.content_size;
-        let first_item_rect = left_projection
-            .visible_items
-            .first()
-            .map(|item| item.layout.item_rect);
-        let visible_items = left_projection.visible_items.len();
-        let thumbnail_candidates = self.thumbnail_candidate_count_for_projection(&left_projection)
-            + self
-                .pane_projection(ShellPaneId::SECOND, size)
-                .as_ref()
-                .map(|projection| self.thumbnail_candidate_count_for_projection(projection))
-                .unwrap_or(0);
-        for item in left_projection.visible_items.iter().copied() {
-            self.push_pane_item(&mut vertices, text, icons, &left_projection, item, size);
-        }
-        self.push_rubber_band(&mut vertices, content_clip, size);
-        let content_scrollbar_visible =
-            self.push_content_scrollbar_for_projection(&mut vertices, &left_projection, size);
-        self.push_pane_status_bar(&mut vertices, text, &left_projection, size);
-        self.push_pane_borders(&mut vertices, size);
-        self.push_split_pane(&mut vertices, text, icons, size);
-        self.queue_thumbnail_read_ahead_for_projection(&left_projection, icons);
-        if let Some(split_projection) = self.pane_projection(ShellPaneId::SECOND, size) {
-            self.queue_thumbnail_read_ahead_for_projection(&split_projection, icons);
+        let mut content_scrollbar_visible = false;
+        for projection in &projections {
+            let scrollbar_visible =
+                self.push_pane_projection(&mut vertices, text, icons, projection, size);
+            if projection.geometry.kind == ShellPaneId::FIRST {
+                content_scrollbar_visible = scrollbar_visible;
+            }
+            self.queue_thumbnail_read_ahead_for_projection(projection, icons);
         }
         self.push_drag_preview_overlay(&mut overlay_vertices, overlay_text, size);
         self.push_drop_menu_overlay(&mut overlay_vertices, overlay_text, size);
@@ -10439,6 +10409,68 @@ impl ShellScene {
                 size,
             );
         }
+    }
+
+    fn push_pane_projection(
+        &self,
+        vertices: &mut Vec<QuadVertex>,
+        text: &mut TextFrameBuilder<'_>,
+        icons: &mut IconFrameBuilder<'_>,
+        projection: &ShellPaneProjection<'_>,
+        size: PhysicalSize<u32>,
+    ) -> bool {
+        let pane_id = projection.geometry.kind;
+        let pane = projection.geometry.pane;
+        let top_bar = projection.geometry.top_bar;
+        let status_bar = projection.geometry.status_bar;
+
+        push_rect(vertices, pane, [1.000, 1.000, 1.000, 1.0], size);
+        push_rect(vertices, top_bar, chrome_color(), size);
+        if let Some(path_rect) = self.pane_path_bar_rect(pane_id, size) {
+            let location_active = self.location_bar_active_for_pane(pane_id);
+            let path_label = self.location_label_for_pane(pane_id);
+            let path_cursor = self.location_cursor_for_pane(pane_id);
+            self.push_location_bar(
+                vertices,
+                text,
+                size,
+                path_rect,
+                top_bar,
+                &path_label,
+                location_active,
+                path_cursor,
+            );
+        }
+
+        push_rect(
+            vertices,
+            ViewRect {
+                x: pane.x,
+                y: top_bar.bottom(),
+                width: pane.width,
+                height: (status_bar.y - top_bar.bottom()).max(1.0),
+            },
+            view_mode_content_color(projection.view.view_mode),
+            size,
+        );
+        self.push_pane_body_border(vertices, projection, size);
+        if pane_id == ShellPaneId::FIRST {
+            self.push_filter_bar(vertices, text, size);
+        }
+        if projection.view.view_mode == ShellViewMode::Details {
+            self.push_details_header_for_projection(vertices, text, projection, size);
+        }
+
+        for item in projection.visible_items.iter().copied() {
+            self.push_pane_item(vertices, text, icons, projection, item, size);
+        }
+        if self.rubber_band.is_some() && pane_id == self.active_pane() {
+            self.push_rubber_band_for_projection(vertices, projection, size);
+        }
+        let content_scrollbar_visible =
+            self.push_content_scrollbar_for_projection(vertices, projection, size);
+        self.push_pane_status_bar(vertices, text, projection, size);
+        content_scrollbar_visible
     }
 
     fn push_pane_item(
@@ -10723,80 +10755,19 @@ impl ShellScene {
         })
     }
 
-    fn push_split_pane(
+    fn push_details_header_for_projection(
         &self,
         vertices: &mut Vec<QuadVertex>,
         text: &mut TextFrameBuilder<'_>,
-        icons: &mut IconFrameBuilder<'_>,
+        projection: &ShellPaneProjection<'_>,
         size: PhysicalSize<u32>,
     ) {
-        let Some(projection) = self.pane_projection(ShellPaneId::SECOND, size) else {
-            return;
-        };
-        let Some(metrics) = self.split_pane_metrics(size) else {
-            return;
-        };
-        let split_view = projection.view;
-        let pane = projection.geometry.pane;
-        let status_bar = projection.geometry.status_bar;
-
-        push_rect(vertices, metrics.divider, [0.784, 0.808, 0.839, 1.0], size);
-        push_rect(vertices, pane, [1.000, 1.000, 1.000, 1.0], size);
-        push_rect(vertices, projection.geometry.top_bar, chrome_color(), size);
-        let margin = self.scale_metric(8.0);
-        let path_rect = ViewRect {
-            x: pane.x + margin,
-            y: pane.y + self.scale_metric(4.0),
-            width: (pane.width - margin * 2.0).max(1.0),
-            height: self.scale_metric(28.0),
-        };
-        let location_active = self.location_bar_active_for_pane(ShellPaneId::SECOND);
-        let path_label = self.location_label_for_pane(ShellPaneId::SECOND);
-        let path_cursor = self.location_cursor_for_pane(ShellPaneId::SECOND);
-        self.push_location_bar(
-            vertices,
-            text,
-            size,
-            path_rect,
-            projection.geometry.top_bar,
-            &path_label,
-            location_active,
-            path_cursor,
-        );
-        push_rect(
-            vertices,
-            ViewRect {
-                x: pane.x,
-                y: projection.geometry.top_bar.bottom(),
-                width: pane.width,
-                height: (status_bar.y - projection.geometry.top_bar.bottom()).max(1.0),
-            },
-            view_mode_content_color(split_view.view_mode),
-            size,
-        );
-        if split_view.view_mode == ShellViewMode::Details {
-            self.push_split_details_header(vertices, text, pane, size);
-        }
-
-        for item in projection.visible_items.iter().copied() {
-            self.push_pane_item(vertices, text, icons, &projection, item, size);
-        }
-        let _ = self.push_content_scrollbar_for_projection(vertices, &projection, size);
-        self.push_pane_status_bar(vertices, text, &projection, size);
-    }
-
-    fn push_split_details_header(
-        &self,
-        vertices: &mut Vec<QuadVertex>,
-        text: &mut TextFrameBuilder<'_>,
-        pane: ViewRect,
-        size: PhysicalSize<u32>,
-    ) {
+        let header_height = self.details_header_height();
         let header = ViewRect {
-            x: pane.x,
-            y: pane.y + self.top_bar_height(),
-            width: pane.width,
-            height: self.details_header_height(),
+            x: projection.geometry.content.x,
+            y: (projection.geometry.content.y - header_height).max(projection.geometry.top_bar.y),
+            width: projection.geometry.content.width,
+            height: header_height,
         };
         push_rect(vertices, header, [0.953, 0.961, 0.973, 1.0], size);
         push_rect(
@@ -11360,68 +11331,6 @@ impl ShellScene {
         }
     }
 
-    fn push_details_header(
-        &self,
-        vertices: &mut Vec<QuadVertex>,
-        text: &mut TextFrameBuilder<'_>,
-        size: PhysicalSize<u32>,
-    ) {
-        let x = self.content_origin_x(size);
-        let width = self.content_width(size);
-        let y = self.details_header_y();
-        let header = ViewRect {
-            x,
-            y,
-            width,
-            height: self.details_header_height(),
-        };
-        push_rect(vertices, header, [0.953, 0.961, 0.973, 1.0], size);
-        push_rect(
-            vertices,
-            ViewRect {
-                x,
-                y: header.bottom() - 1.0,
-                width,
-                height: 1.0,
-            },
-            [0.784, 0.808, 0.839, 1.0],
-            size,
-        );
-        let name_width = self.details_name_width();
-        let size_width = self.details_size_width();
-        let modified_width = self.details_modified_width();
-        let columns = [
-            (
-                "Name",
-                self.scale_metric(34.0),
-                name_width - self.scale_metric(42.0),
-            ),
-            (
-                "Size",
-                name_width + self.scale_metric(8.0),
-                size_width - self.scale_metric(16.0),
-            ),
-            (
-                "Modified",
-                name_width + size_width + self.scale_metric(8.0),
-                modified_width - self.scale_metric(16.0),
-            ),
-        ];
-        for (label, x, width) in columns {
-            text.push_label(
-                label,
-                ViewRect {
-                    x: header.x + x,
-                    y: header.y + self.scale_metric(6.0),
-                    width: width.max(1.0),
-                    height: self.text_line_height(),
-                },
-                header,
-                TextColor::rgb(89, 99, 110),
-            );
-        }
-    }
-
     fn push_filter_bar(
         &self,
         vertices: &mut Vec<QuadVertex>,
@@ -11472,16 +11381,17 @@ impl ShellScene {
         );
     }
 
-    fn push_rubber_band(
+    fn push_rubber_band_for_projection(
         &self,
         vertices: &mut Vec<QuadVertex>,
-        content_clip: ViewRect,
+        projection: &ShellPaneProjection<'_>,
         size: PhysicalSize<u32>,
     ) {
         let Some(rect) = self.rubber_band.as_ref().and_then(RubberBand::active_rect) else {
             return;
         };
-        let rect = self.content_to_screen(rect, size);
+        let content_clip = projection.geometry.content;
+        let rect = pane_content_rect_to_screen(rect, projection);
         push_clipped_rect(vertices, rect, content_clip, [0.28, 0.58, 0.92, 0.18], size);
         push_clipped_rect_outline(
             vertices,
@@ -11537,8 +11447,19 @@ impl ShellScene {
             .unwrap_or_else(|| "No active pane".to_string())
     }
 
-    fn push_pane_borders(&self, vertices: &mut Vec<QuadVertex>, size: PhysicalSize<u32>) {
-        let body = self.pane_body_rect(size);
+    fn push_pane_body_border(
+        &self,
+        vertices: &mut Vec<QuadVertex>,
+        projection: &ShellPaneProjection<'_>,
+        size: PhysicalSize<u32>,
+    ) {
+        let body = ViewRect {
+            x: projection.geometry.pane.x,
+            y: projection.geometry.top_bar.bottom(),
+            width: projection.geometry.pane.width,
+            height: (projection.geometry.status_bar.y - projection.geometry.top_bar.bottom())
+                .max(1.0),
+        };
         push_rect(
             vertices,
             ViewRect {
@@ -12939,15 +12860,6 @@ impl ShellScene {
         }
     }
 
-    fn content_to_screen(&self, rect: ViewRect, size: PhysicalSize<u32>) -> ViewRect {
-        ViewRect {
-            x: rect.x - self.panes[ShellPaneId::FIRST].scroll_x + self.content_origin_x(size),
-            y: rect.y - self.panes[ShellPaneId::FIRST].scroll_y + self.content_origin_y(),
-            width: rect.width,
-            height: rect.height,
-        }
-    }
-
     fn content_origin_x(&self, size: PhysicalSize<u32>) -> f32 {
         let sidebar_width = self.places_sidebar_width(size);
         if sidebar_width <= 0.0 {
@@ -13013,18 +12925,6 @@ impl ShellScene {
             y,
             width: self.pane_width(size),
             height: (size.height.max(1) as f32 - y - bottom_margin).max(1.0),
-        }
-    }
-
-    fn pane_body_rect(&self, size: PhysicalSize<u32>) -> ViewRect {
-        let pane = self.pane_rect(size);
-        let status_bar = self.status_bar_rect(size);
-        let y = pane.y + self.top_bar_height();
-        ViewRect {
-            x: pane.x,
-            y,
-            width: pane.width,
-            height: (status_bar.y - y).max(1.0),
         }
     }
 
@@ -16770,186 +16670,6 @@ fn blend_pixel(dst: &mut [u8], src: [u8; 4]) {
     dst[3] = (out_a * 255.0).round().clamp(0.0, 255.0) as u8;
 }
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-enum FileIconKind {
-    Directory,
-    Mime {
-        mime: Arc<str>,
-    },
-    PreliminaryFile {
-        extension: Option<String>,
-    },
-    File {
-        extension: Option<String>,
-    },
-    Named {
-        icon_name: String,
-        fallback: NamedIconFallback,
-    },
-}
-
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-enum NamedIconFallback {
-    Service,
-    Application,
-}
-
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-struct FileIconRoleCacheKey {
-    kind: FileIconKind,
-}
-
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-struct FileIconPathCacheKey {
-    role: FileIconRoleCacheKey,
-    size_px: u16,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct ResolvedFileIcon {
-    path: Option<PathBuf>,
-}
-
-struct FileIconResolver {
-    cached: HashMap<FileIconPathCacheKey, ResolvedFileIcon>,
-    pending: HashSet<FileIconPathCacheKey>,
-    request_tx: Option<Sender<IconResolveRequest>>,
-    result_rx: Receiver<IconResolveResult>,
-}
-
-#[derive(Clone, Debug)]
-struct IconResolveRequest {
-    key: FileIconPathCacheKey,
-}
-
-#[derive(Clone, Debug)]
-struct IconResolveResult {
-    key: FileIconPathCacheKey,
-    icon: ResolvedFileIcon,
-}
-
-impl FileIconResolver {
-    fn new() -> Self {
-        let (request_tx, request_rx) = mpsc::channel::<IconResolveRequest>();
-        let (result_tx, result_rx) = mpsc::channel::<IconResolveResult>();
-        let request_tx = thread::Builder::new()
-            .name("fika-wgpu-icon-resolver".to_string())
-            .spawn(move || icon_resolve_worker(request_rx, result_tx))
-            .ok()
-            .map(|_| request_tx);
-        Self {
-            cached: HashMap::new(),
-            pending: HashSet::new(),
-            request_tx,
-            result_rx,
-        }
-    }
-
-    fn resolve_entry(
-        &mut self,
-        directory: &Path,
-        entry: &Entry,
-        icon_size: f32,
-    ) -> Option<ResolvedFileIcon> {
-        self.drain_results();
-        let path = directory.join(entry.name.as_ref());
-        let key = file_icon_path_cache_key(
-            &path,
-            entry.is_dir,
-            entry.mime_type.clone(),
-            entry.mime_magic_checked,
-            icon_size,
-        );
-        if let Some(icon) = self.cached.get(&key) {
-            return Some(icon.clone());
-        }
-
-        if self.pending.insert(key.clone())
-            && self
-                .request_tx
-                .as_ref()
-                .is_none_or(|tx| tx.send(IconResolveRequest { key }).is_err())
-        {
-            self.pending.clear();
-        }
-        None
-    }
-
-    fn resolve_named(
-        &mut self,
-        icon_name: &str,
-        fallback: NamedIconFallback,
-        icon_size: f32,
-    ) -> Option<ResolvedFileIcon> {
-        self.drain_results();
-        let icon_name = icon_name.trim();
-        if icon_name.is_empty() {
-            return None;
-        }
-        let key = FileIconPathCacheKey {
-            role: FileIconRoleCacheKey {
-                kind: FileIconKind::Named {
-                    icon_name: icon_name.to_string(),
-                    fallback,
-                },
-            },
-            size_px: icon_cache_size(icon_size),
-        };
-        if let Some(icon) = self.cached.get(&key) {
-            return Some(icon.clone());
-        }
-
-        if self.pending.insert(key.clone())
-            && self
-                .request_tx
-                .as_ref()
-                .is_none_or(|tx| tx.send(IconResolveRequest { key }).is_err())
-        {
-            self.pending.clear();
-        }
-        None
-    }
-
-    fn drain_results(&mut self) -> usize {
-        let mut changed = 0usize;
-        while let Ok(result) = self.result_rx.try_recv() {
-            self.pending.remove(&result.key);
-            self.cached.insert(result.key, result.icon);
-            changed += 1;
-        }
-        changed
-    }
-
-    fn has_pending(&mut self) -> bool {
-        self.drain_results();
-        !self.pending.is_empty()
-    }
-}
-
-fn icon_resolve_worker(
-    request_rx: Receiver<IconResolveRequest>,
-    result_tx: Sender<IconResolveResult>,
-) {
-    let mut theme = IconThemeResolver::default();
-    let mime = fika_core::MimeDatabase::shared();
-    let mut roles = HashMap::<FileIconRoleCacheKey, FileIconProfile>::new();
-    while let Ok(request) = request_rx.recv() {
-        let profile = roles
-            .entry(request.key.role.clone())
-            .or_insert_with(|| file_icon_profile(&request.key.role.kind, mime));
-        let icon = file_icon_snapshot(profile, request.key.size_px, &mut theme);
-        if result_tx
-            .send(IconResolveResult {
-                key: request.key,
-                icon,
-            })
-            .is_err()
-        {
-            break;
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 struct IconThemeResolver {
     roots: Vec<PathBuf>,
@@ -17137,53 +16857,6 @@ impl IconThemeResolver {
     }
 }
 
-fn file_icon_path_cache_key(
-    path: &Path,
-    is_dir: bool,
-    mime_type: Option<Arc<str>>,
-    mime_magic_checked: bool,
-    icon_size: f32,
-) -> FileIconPathCacheKey {
-    FileIconPathCacheKey {
-        role: FileIconRoleCacheKey {
-            kind: file_icon_kind(path, is_dir, mime_type, mime_magic_checked),
-        },
-        size_px: icon_cache_size(icon_size),
-    }
-}
-
-fn file_icon_kind(
-    path: &Path,
-    is_dir: bool,
-    mime_type: Option<Arc<str>>,
-    mime_magic_checked: bool,
-) -> FileIconKind {
-    if is_dir {
-        return FileIconKind::Directory;
-    }
-    let extension = file_extension(path);
-    if !mime_magic_checked && mime_type.as_deref() == Some(fika_core::GENERIC_BINARY_MIME) {
-        return FileIconKind::PreliminaryFile { extension };
-    }
-    match mime_type {
-        Some(mime) if mime.as_ref() == fika_core::GENERIC_BINARY_MIME => {
-            FileIconKind::File { extension }
-        }
-        Some(mime) => FileIconKind::Mime { mime },
-        None => FileIconKind::File { extension },
-    }
-}
-
-fn file_extension(path: &Path) -> Option<String> {
-    path.extension()
-        .and_then(|extension| extension.to_str())
-        .map(|extension| extension.to_ascii_lowercase())
-}
-
-fn icon_cache_size(icon_size: f32) -> u16 {
-    icon_size.round().clamp(16.0, 256.0) as u16
-}
-
 fn file_icon_snapshot(
     profile: &FileIconProfile,
     desired_size: u16,
@@ -17204,144 +16877,6 @@ fn file_icon_snapshot(
         .map(|(_, path)| path);
 
     ResolvedFileIcon { path }
-}
-
-struct FileIconProfile {
-    icon_candidates: Vec<String>,
-    generic_candidates: Vec<String>,
-}
-
-fn file_icon_profile(kind: &FileIconKind, mime: &fika_core::MimeDatabase) -> FileIconProfile {
-    let (icon_candidates, generic_candidates) = match kind {
-        FileIconKind::Directory => (
-            vec!["folder".to_string(), "inode-directory".to_string()],
-            Vec::new(),
-        ),
-        FileIconKind::Mime { mime: mime_name } => (
-            mime_icon_candidates(mime_name, mime),
-            mime_generic_icon_candidates(mime_name, mime),
-        ),
-        FileIconKind::PreliminaryFile { extension } => (
-            preliminary_file_icon_candidates(extension.as_deref(), mime),
-            Vec::new(),
-        ),
-        FileIconKind::File { extension } => (
-            fallback_file_icon_candidates(extension.as_deref()),
-            mime_generic_icon_candidates(fika_core::GENERIC_BINARY_MIME, mime),
-        ),
-        FileIconKind::Named {
-            icon_name,
-            fallback,
-        } => named_icon_candidates(icon_name, *fallback),
-    };
-
-    FileIconProfile {
-        icon_candidates,
-        generic_candidates,
-    }
-}
-
-fn mime_icon_candidates(mime_name: &str, mime: &fika_core::MimeDatabase) -> Vec<String> {
-    let mut candidates = Vec::new();
-
-    if mime_name == fika_core::GENERIC_BINARY_MIME {
-        for icon_name in fallback_file_icon_candidates(None) {
-            push_icon_candidate(&mut candidates, icon_name);
-        }
-        return candidates;
-    }
-
-    for icon_name in mime_theme_icon_candidates(mime_name, None) {
-        push_icon_candidate(&mut candidates, icon_name);
-    }
-    if let Some(icon_name) = mime.icon_name_for_mime(mime_name) {
-        push_icon_candidate(&mut candidates, icon_name);
-    }
-    candidates
-}
-
-fn mime_generic_icon_candidates(mime_name: &str, mime: &fika_core::MimeDatabase) -> Vec<String> {
-    let mut candidates = Vec::new();
-    if let Some(icon_name) = mime.generic_icon_name_for_mime(mime_name) {
-        push_icon_candidate(&mut candidates, icon_name);
-    }
-    candidates
-}
-
-fn mime_theme_icon_candidates(mime_name: &str, extension: Option<&str>) -> Vec<String> {
-    let mut candidates = Vec::new();
-    if let Some(icon_name) = fika_core::mime_icon_name(mime_name) {
-        push_icon_candidate(&mut candidates, icon_name);
-    }
-    if let Some((family, subtype)) = mime_name.split_once('/')
-        && family == "text"
-    {
-        let subtype = subtype.strip_prefix("x-").unwrap_or(subtype);
-        if !subtype.is_empty() {
-            push_icon_candidate(&mut candidates, format!("text-x-{subtype}"));
-        }
-        if let Some(extension) = extension.filter(|extension| !extension.is_empty()) {
-            push_icon_candidate(&mut candidates, format!("text-x-{extension}"));
-        }
-    }
-    candidates
-}
-
-fn fallback_file_icon_candidates(extension: Option<&str>) -> Vec<String> {
-    let mut candidates = Vec::new();
-    if let Some(extension) = extension.filter(|extension| !extension.is_empty()) {
-        push_icon_candidate(&mut candidates, format!("text-x-{extension}"));
-        push_icon_candidate(&mut candidates, format!("application-x-{extension}"));
-    }
-    push_icon_candidate(&mut candidates, "application-octet-stream");
-    candidates
-}
-
-fn preliminary_file_icon_candidates(
-    extension: Option<&str>,
-    mime: &fika_core::MimeDatabase,
-) -> Vec<String> {
-    let mut candidates = Vec::new();
-    if let Some(extension) = extension.filter(|extension| !extension.is_empty()) {
-        if let Some(mime_name) = mime.mime_for_extension(extension) {
-            for icon_name in mime_theme_icon_candidates(mime_name, Some(extension)) {
-                push_icon_candidate(&mut candidates, icon_name);
-            }
-        }
-        push_icon_candidate(&mut candidates, format!("text-x-{extension}"));
-        push_icon_candidate(&mut candidates, format!("application-x-{extension}"));
-    }
-    push_icon_candidate(&mut candidates, "text-x-generic");
-    push_icon_candidate(&mut candidates, "unknown");
-    candidates
-}
-
-fn push_icon_candidate(candidates: &mut Vec<String>, icon_name: impl Into<String>) {
-    let icon_name = icon_name.into();
-    if !candidates.iter().any(|existing| existing == &icon_name) {
-        candidates.push(icon_name);
-    }
-}
-
-fn named_icon_candidates(
-    icon_name: &str,
-    fallback: NamedIconFallback,
-) -> (Vec<String>, Vec<String>) {
-    let mut candidates = Vec::new();
-    push_icon_candidate(&mut candidates, icon_name.trim());
-    let generic = match fallback {
-        NamedIconFallback::Service => ["configure", "preferences-system", "system-run"].as_slice(),
-        NamedIconFallback::Application => [
-            "application-x-executable",
-            "system-run",
-            "application-default-icon",
-        ]
-        .as_slice(),
-    }
-    .iter()
-    .map(|candidate| (*candidate).to_string())
-    .collect();
-    (candidates, generic)
 }
 
 fn absolute_icon_candidate(icon_name: &str) -> Option<PathBuf> {
@@ -22744,6 +22279,53 @@ mod tests {
         );
 
         assert_ne!(text_file.role, log_file.role);
+    }
+
+    #[test]
+    fn file_icon_resolver_reuses_mime_pending_and_cached_snapshot() {
+        let mut harness = FileIconResolverTestHarness::new();
+        let text_file = test_entry_with_mime("readme.txt", false, "text/plain");
+        let log_file = test_entry_with_mime("system.log", false, "text/plain");
+        let icon_size = 32.0;
+
+        assert_eq!(
+            harness
+                .resolver
+                .resolve_entry(Path::new("/tmp"), &text_file, icon_size),
+            None
+        );
+        let request_key = harness
+            .next_request_key()
+            .expect("first visible text file should queue one icon resolve");
+        match &request_key.role.kind {
+            FileIconKind::Mime { mime } => assert_eq!(mime.as_ref(), "text/plain"),
+            kind => panic!("expected text/plain MIME role, got {kind:?}"),
+        }
+        assert_eq!(harness.resolver.pending_len_for_test(), 1);
+
+        assert_eq!(
+            harness
+                .resolver
+                .resolve_entry(Path::new("/var/log"), &log_file, icon_size),
+            None
+        );
+        assert_eq!(harness.resolver.pending_len_for_test(), 1);
+        assert!(
+            harness.next_request_key().is_none(),
+            "same MIME role and size should reuse the pending request"
+        );
+
+        let resolved_path = PathBuf::from("/theme/mimetypes/text-plain.svg");
+        harness.complete(request_key, Some(resolved_path.clone()));
+        let resolved = harness
+            .resolver
+            .resolve_entry(Path::new("/var/log"), &log_file, icon_size)
+            .expect("same MIME role should reuse the cached resolved icon");
+
+        assert_eq!(resolved.path, Some(resolved_path));
+        assert_eq!(harness.resolver.pending_len_for_test(), 0);
+        assert_eq!(harness.resolver.cached_len_for_test(), 1);
+        assert!(harness.next_request_key().is_none());
     }
 
     #[test]
