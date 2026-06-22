@@ -119,6 +119,8 @@ mod wgpu_properties;
 mod wgpu_selection;
 #[path = "shell/shortcuts.rs"]
 mod wgpu_shortcuts;
+#[path = "shell/tasks.rs"]
+mod wgpu_tasks;
 
 use wgpu_autosmoke::{AutosmokeScrollAction, autosmoke_scroll_config, autosmoke_zoom_config};
 use wgpu_clipboard::ShellClipboard;
@@ -201,6 +203,9 @@ use wgpu_shortcuts::{
     location_command_for_key_parts, reload_requested_for_key_parts, rename_command_for_key_parts,
     selection_command_for_key_parts, view_mode_for_key_parts, zoom_action_for_key,
 };
+use wgpu_tasks::{
+    ShellTaskDetailDialog, ShellTaskId, ShellTaskStatus, ShellTaskStatusKind, TaskDetailDialogClick,
+};
 
 fn startup_view_mode(
     requested: ShellViewMode,
@@ -245,8 +250,6 @@ fn save_show_hidden_setting(settings_path: &Path, show_hidden: bool) -> Result<(
     save_app_settings(settings_path, &settings)
         .map_err(|error| format!("save settings {}: {error}", settings_path.display()))
 }
-
-type ShellTaskId = u64;
 
 fn read_shell_entries_sync(path: &Path) -> Result<Vec<Entry>, String> {
     if is_network_path(path) {
@@ -3027,87 +3030,6 @@ struct DeviceActionRequest {
 enum ShellPlaceActivation {
     Open { pane: ShellPaneId, path: PathBuf },
     DeviceAction(DeviceActionRequest),
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ShellTaskStatusKind {
-    Running,
-    Completed,
-    Failed,
-    Cancelled,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct ShellTaskStatus {
-    task_id: Option<ShellTaskId>,
-    label: String,
-    detail: String,
-    kind: ShellTaskStatusKind,
-    privileged: bool,
-    cancellable: bool,
-}
-
-impl ShellTaskStatus {
-    fn running(
-        task_id: ShellTaskId,
-        label: impl Into<String>,
-        detail: impl Into<String>,
-        privileged: bool,
-    ) -> Self {
-        Self {
-            task_id: Some(task_id),
-            label: label.into(),
-            detail: detail.into(),
-            kind: ShellTaskStatusKind::Running,
-            privileged,
-            cancellable: true,
-        }
-    }
-
-    fn completed(label: impl Into<String>, detail: impl Into<String>, privileged: bool) -> Self {
-        Self {
-            task_id: None,
-            label: label.into(),
-            detail: detail.into(),
-            kind: ShellTaskStatusKind::Completed,
-            privileged,
-            cancellable: false,
-        }
-    }
-
-    fn failed(label: impl Into<String>, detail: impl Into<String>, privileged: bool) -> Self {
-        Self {
-            task_id: None,
-            label: label.into(),
-            detail: detail.into(),
-            kind: ShellTaskStatusKind::Failed,
-            privileged,
-            cancellable: false,
-        }
-    }
-
-    fn cancelled(label: impl Into<String>, detail: impl Into<String>, privileged: bool) -> Self {
-        Self {
-            task_id: None,
-            label: label.into(),
-            detail: detail.into(),
-            kind: ShellTaskStatusKind::Cancelled,
-            privileged,
-            cancellable: false,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct ShellTaskDetailDialog;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum TaskDetailDialogClick {
-    Outside,
-    Inside,
-    Cancel,
-    Clear,
-    Dismiss(usize),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
