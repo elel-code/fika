@@ -21,18 +21,19 @@ use cosmic_text::{
 use fika_core::{
     AppSettings, CompactLayout, CompactLayoutOptions, DesktopLaunchPlan, DeviceInfo,
     DevicePlaceOperation, DevicePlaceOperationResult, Entry, FileClipboardRole, FileTransferMode,
-    Generation, IconsLayout, IconsLayoutOptions, ItemId, MimeApplication, MimeApplicationCache,
-    NETWORK_ROOT_LABEL, NameFilter, OpenWithLaunchResult, OperationController, PrivilegedCommand,
-    ServiceMenuAction, ServiceMenuLaunchResult, ServiceMenuPriority, ServiceMenuTarget,
-    ThumbnailRequest, ThumbnailRequestPriority, ThumbnailerRegistry, TransferTaskResult,
-    TransferUndoItem, TrashViewOperation, TrashViewOperationResult, UserPlace, ViewPoint, ViewRect,
-    ViewSize, complete_location_input, decode_file_clipboard_text, default_app_settings_path,
-    default_thumbnail_cache_root, default_user_places_path, encode_file_clipboard_text, file_ops,
-    format_modified_secs, format_size, generate_thumbnail_with_external_thumbnailer_registry,
-    home_dir, is_network_path, launch_with_systemd_user, load_app_settings, load_place_order,
-    load_user_places, mime_magic_resolution_required, network_parent_path, network_root_path,
-    network_uri_from_path, paste_text_result, perform_device_place_operation,
-    place_order_path_for_user_places_path, push_unique_path, read_entries_sync, read_gio_devices,
+    Generation, IconsLayout, IconsLayoutOptions, ItemId, ItemLayout, MimeApplication,
+    MimeApplicationCache, NETWORK_ROOT_LABEL, NameFilter, OpenWithLaunchResult,
+    OperationController, PrivilegedCommand, ServiceMenuAction, ServiceMenuLaunchResult,
+    ServiceMenuPriority, ServiceMenuTarget, ThumbnailRequest, ThumbnailRequestPriority,
+    ThumbnailerRegistry, TransferTaskResult, TransferUndoItem, TrashViewOperation,
+    TrashViewOperationResult, UserPlace, ViewPoint, ViewRect, ViewSize, complete_location_input,
+    decode_file_clipboard_text, default_app_settings_path, default_thumbnail_cache_root,
+    default_user_places_path, encode_file_clipboard_text, file_ops, format_modified_secs,
+    format_size, generate_thumbnail_with_external_thumbnailer_registry, home_dir, is_network_path,
+    launch_with_systemd_user, load_app_settings, load_place_order, load_user_places,
+    mime_magic_resolution_required, network_parent_path, network_root_path, network_uri_from_path,
+    paste_text_result, perform_device_place_operation, place_order_path_for_user_places_path,
+    push_unique_path, read_entries_sync, read_gio_devices,
     read_network_entry_batches_sync_cancellable, resolve_location_input, run_operation_task,
     run_via_dbus, save_app_settings, save_place_order, save_user_places, service_menu_target_label,
     thumbnail_request_may_have_preview, trash_view_operation_result,
@@ -842,7 +843,7 @@ impl ApplicationHandler for FikaWgpuApp {
             }
         };
 
-        let renderer = match WgpuState::new(window.as_ref()) {
+        let mut renderer = match WgpuState::new(window.as_ref()) {
             Ok(renderer) => renderer,
             Err(error) => {
                 fika_log!("[fika-wgpu] renderer init failed: {error}");
@@ -879,6 +880,7 @@ impl ApplicationHandler for FikaWgpuApp {
         );
 
         self.scene.clamp_scroll(renderer.size);
+        renderer.prewarm_scene_caches(&mut self.scene, "startup");
         self.renderer = Some(renderer);
         self.clipboard = clipboard;
         self.window = Some(window);
@@ -904,6 +906,7 @@ impl ApplicationHandler for FikaWgpuApp {
                         window.set_title(&window_title(&self.scene));
                         window.request_redraw();
                     }
+                    self.prewarm_current_scene_caches("auto-cycle");
                     self.render_now(event_loop, "auto-cycle", true);
                 }
             }
@@ -1120,6 +1123,7 @@ impl ApplicationHandler for FikaWgpuApp {
                             window.set_title(&window_title(&self.scene));
                             window.request_redraw();
                         }
+                        self.prewarm_current_scene_caches("switch-immediate");
                         self.render_now(event_loop, "switch-immediate", true);
                     }
                     return;
@@ -1481,6 +1485,7 @@ impl ApplicationHandler for FikaWgpuApp {
                             window.set_title(&window_title(&self.scene));
                             window.request_redraw();
                         }
+                        self.prewarm_current_scene_caches("mode-click");
                         self.render_now(event_loop, "mode-click", true);
                     }
                     return;
@@ -2769,7 +2774,15 @@ impl FikaWgpuApp {
             window.set_title(&window_title(&self.scene));
             window.request_redraw();
         }
+        self.prewarm_current_scene_caches(reason);
         self.render_now(event_loop, reason, true);
+    }
+
+    fn prewarm_current_scene_caches(&mut self, reason: &'static str) {
+        let Some(renderer) = self.renderer.as_mut() else {
+            return;
+        };
+        renderer.prewarm_scene_caches(&mut self.scene, reason);
     }
 
     fn render_now(
@@ -10842,6 +10855,9 @@ impl ShellScene {
             }
         }
         for projection in projections {
+            let Some(visible_range) = visible_layout_range_for_projection(projection) else {
+                continue;
+            };
             let Some(icon_size) = projection.visible_items.first().map(|item| {
                 item.layout
                     .icon_rect
@@ -10851,7 +10867,12 @@ impl ShellScene {
             }) else {
                 continue;
             };
-            for entry_index in projection.view.filtered_indexes {
+            let item_count = projection.view.filtered_entry_count();
+            for layout_index in shell_dolphin_read_ahead_indexes(
+                visible_range,
+                item_count,
+                projection.visible_items.len(),
+            ) {
                 if stats.read_ahead >= ICON_ROLE_READ_AHEAD_LIMIT {
                     return stats;
                 }
@@ -10859,7 +10880,11 @@ impl ShellScene {
                     stats.over_budget = true;
                     return stats;
                 }
-                let Some(entry) = projection.view.entries.get(*entry_index) else {
+                let Some(entry_index) = projection.view.filtered_indexes.get(layout_index).copied()
+                else {
+                    continue;
+                };
+                let Some(entry) = projection.view.entries.get(entry_index) else {
                     continue;
                 };
                 let resolve_start = Instant::now();
@@ -10873,6 +10898,112 @@ impl ShellScene {
             }
         }
         stats
+    }
+
+    fn prewarm_file_item_text_labels(
+        &self,
+        projections: &[ShellPaneProjection<'_>],
+        text: &mut TextFrameBuilder<'_>,
+        read_ahead_enabled: bool,
+    ) -> TextLabelPrewarmStats {
+        let mut stats = TextLabelPrewarmStats::default();
+        let raster_us_start = text.raster_us;
+        let deadline = Instant::now() + VISIBLE_TEXT_LABEL_PREWARM_BUDGET;
+
+        for projection in projections {
+            for item in &projection.visible_items {
+                if Instant::now() >= deadline {
+                    stats.over_budget = true;
+                    stats.raster_us = text.raster_us.saturating_sub(raster_us_start);
+                    return stats;
+                }
+                let outcome = self.prewarm_projection_text_label(projection, item.layout, text);
+                if outcome != LabelCacheOutcome::Skipped {
+                    stats.entries += 1;
+                }
+                stats.record(outcome);
+            }
+        }
+
+        if !read_ahead_enabled {
+            stats.raster_us = text.raster_us.saturating_sub(raster_us_start);
+            return stats;
+        }
+
+        for projection in projections {
+            let Some(visible_range) = visible_layout_range_for_projection(projection) else {
+                continue;
+            };
+            let layout = self.pane_layout_for_pane(
+                projection.geometry.kind,
+                projection.view,
+                projection.geometry.content.width,
+                projection.geometry.content.height,
+            );
+            let item_count = projection.view.filtered_entry_count();
+            for layout_index in shell_dolphin_read_ahead_indexes(
+                visible_range,
+                item_count,
+                projection.visible_items.len(),
+            ) {
+                if stats.read_ahead >= TEXT_LABEL_READ_AHEAD_LIMIT {
+                    stats.raster_us = text.raster_us.saturating_sub(raster_us_start);
+                    return stats;
+                }
+                if Instant::now() >= deadline {
+                    stats.over_budget = true;
+                    stats.raster_us = text.raster_us.saturating_sub(raster_us_start);
+                    return stats;
+                }
+                let Some(layout) = layout.item(layout_index) else {
+                    continue;
+                };
+                let outcome = self.prewarm_projection_text_label(projection, layout, text);
+                if outcome != LabelCacheOutcome::Skipped {
+                    stats.read_ahead += 1;
+                }
+                stats.record(outcome);
+            }
+        }
+
+        stats.raster_us = text.raster_us.saturating_sub(raster_us_start);
+        stats
+    }
+
+    fn prewarm_projection_text_label(
+        &self,
+        projection: &ShellPaneProjection<'_>,
+        layout: ItemLayout,
+        text: &mut TextFrameBuilder<'_>,
+    ) -> LabelCacheOutcome {
+        let Some(entry_index) = projection
+            .view
+            .filtered_indexes
+            .get(layout.model_index)
+            .copied()
+        else {
+            return LabelCacheOutcome::Skipped;
+        };
+        let Some(entry) = projection.view.entries.get(entry_index) else {
+            return LabelCacheOutcome::Skipped;
+        };
+        let selected = projection.view.selection.contains(entry_index);
+        let text_color = pane_item_text_color(projection.view.view_mode, entry, selected);
+        match projection.view.view_mode {
+            ShellViewMode::Compact | ShellViewMode::Details => text.prewarm_label_aligned_no_wrap(
+                entry.name.as_ref(),
+                layout.text_rect,
+                text_color,
+                LabelAlignment::Start,
+            ),
+            ShellViewMode::Icons => text.prewarm_label_aligned_wrapped(
+                entry.name.as_ref(),
+                layout.text_rect,
+                text_color,
+                LabelAlignment::Center,
+                LabelWrap::WordOrGlyph,
+            ),
+        }
     }
 
     fn push_pane_projection(
@@ -11051,13 +11182,7 @@ impl ShellScene {
             push_fallback_icon(vertices, entry, icon_rect, content_clip, size);
         }
 
-        let text_color = if selected {
-            TextColor::rgb(15, 23, 42)
-        } else if projection.view.view_mode != ShellViewMode::Details && entry.is_dir {
-            TextColor::rgb(31, 79, 191)
-        } else {
-            TextColor::rgb(36, 41, 47)
-        };
+        let text_color = pane_item_text_color(projection.view.view_mode, entry, selected);
         match projection.view.view_mode {
             ShellViewMode::Compact => {
                 text.push_label_aligned_no_wrap(
@@ -14437,6 +14562,28 @@ struct IconRolePrewarmStats {
     over_budget: bool,
 }
 
+#[derive(Default)]
+struct TextLabelPrewarmStats {
+    entries: usize,
+    read_ahead: usize,
+    cache_hits: usize,
+    cache_misses: usize,
+    deferred: usize,
+    raster_us: u128,
+    over_budget: bool,
+}
+
+impl TextLabelPrewarmStats {
+    fn record(&mut self, outcome: LabelCacheOutcome) {
+        match outcome {
+            LabelCacheOutcome::Hit => self.cache_hits += 1,
+            LabelCacheOutcome::Miss => self.cache_misses += 1,
+            LabelCacheOutcome::Deferred => self.deferred += 1,
+            LabelCacheOutcome::Skipped => {}
+        }
+    }
+}
+
 struct WgpuState {
     instance: wgpu::Instance,
     surface: wgpu::Surface<'static>,
@@ -14583,6 +14730,72 @@ impl WgpuState {
         );
     }
 
+    fn prewarm_scene_caches(&mut self, scene: &mut ShellScene, reason: &'static str) {
+        let total_start = Instant::now();
+        let role_start = Instant::now();
+        let role_stats = {
+            let projections = ShellPaneId::ALL
+                .into_iter()
+                .filter_map(|kind| scene.pane_projection(kind, self.size))
+                .collect::<Vec<_>>();
+            scene.prewarm_visible_file_icon_roles(&projections, &mut self.icon_renderer.resolver)
+        };
+        let role_prewarm_us = role_start.elapsed().as_micros();
+        let prepare_start = Instant::now();
+        let scene_frame = prepare_scene_frame(
+            &mut self.text_renderer,
+            &mut self.overlay_text_renderer,
+            &mut self.icon_renderer,
+            &self.device,
+            &self.queue,
+            scene,
+            self.size,
+            reason,
+        );
+        let prepare_us = prepare_start.elapsed().as_micros();
+        fika_log!(
+            "[fika-wgpu] prewarm-scene reason={} view={} visible={} role_entries={} role_deferred={} role_read_ahead={} role_resolve={}us role_total={}us text_labels={} text_cache={}/{} text_deferred={} text_raster={}us icon_resolve={}us icon_raster={}us icon_deferred={} icon_raster_deferred={} prepare={}us total={}us",
+            reason,
+            scene.panes[ShellPaneId::FIRST].view_mode.as_str(),
+            scene_frame.visible_items,
+            role_stats.entries,
+            role_stats.deferred,
+            role_stats.read_ahead,
+            role_stats.resolve_us,
+            role_prewarm_us,
+            scene_frame.text_stats.labels,
+            scene_frame.text_stats.cache_hits,
+            scene_frame.text_stats.cache_misses,
+            scene_frame.text_stats.deferred,
+            scene_frame.text_stats.raster_us,
+            scene_frame.icon_stats.resolve_us,
+            scene_frame.icon_stats.raster_us,
+            scene_frame.icon_stats.deferred,
+            scene_frame.icon_stats.raster_deferred,
+            prepare_us,
+            total_start.elapsed().as_micros()
+        );
+    }
+
+    fn prewarm_text_labels(
+        &mut self,
+        scene: &ShellScene,
+        projections: &[ShellPaneProjection<'_>],
+        read_ahead_enabled: bool,
+    ) -> TextLabelPrewarmStats {
+        self.text_renderer.label_cache.begin_frame();
+        let mut text_builder = TextFrameBuilder::new(
+            &mut self.text_renderer.font_system,
+            &mut self.text_renderer.swash_cache,
+            &mut self.text_renderer.text_buffer,
+            &mut self.text_renderer.label_cache,
+            &mut self.text_renderer.atlas_cache,
+            self.size,
+            scene.ui_scale(),
+        );
+        scene.prewarm_file_item_text_labels(projections, &mut text_builder, read_ahead_enabled)
+    }
+
     fn render(
         &mut self,
         window: &dyn Window,
@@ -14591,14 +14804,39 @@ impl WgpuState {
         reason: &'static str,
         force_log: bool,
     ) -> bool {
+        let projections = ShellPaneId::ALL
+            .into_iter()
+            .filter_map(|kind| scene.pane_projection(kind, self.size))
+            .collect::<Vec<_>>();
+        let text_prewarm_stats = self.prewarm_text_labels(
+            scene,
+            &projections,
+            text_label_read_ahead_enabled_for_frame(reason),
+        );
+        if text_prewarm_stats.entries + text_prewarm_stats.read_ahead > 0
+            && (self.frame_count == 0
+                || force_log
+                || fika_frame_log_all_enabled()
+                || text_prewarm_stats.raster_us >= 1000)
+        {
+            fika_log!(
+                "[fika-wgpu] prewarm-text reason={} view={} entries={} read_ahead={} hits={} misses={} deferred={} raster={}us budget={}us over_budget={}",
+                reason,
+                scene.panes[ShellPaneId::FIRST].view_mode.as_str(),
+                text_prewarm_stats.entries,
+                text_prewarm_stats.read_ahead,
+                text_prewarm_stats.cache_hits,
+                text_prewarm_stats.cache_misses,
+                text_prewarm_stats.deferred,
+                text_prewarm_stats.raster_us,
+                VISIBLE_TEXT_LABEL_PREWARM_BUDGET.as_micros(),
+                text_prewarm_stats.over_budget as u8
+            );
+        }
+
         let prewarm_start = Instant::now();
-        let prewarm_stats = {
-            let projections = ShellPaneId::ALL
-                .into_iter()
-                .filter_map(|kind| scene.pane_projection(kind, self.size))
-                .collect::<Vec<_>>();
-            scene.prewarm_visible_file_icon_roles(&projections, &mut self.icon_renderer.resolver)
-        };
+        let prewarm_stats =
+            scene.prewarm_visible_file_icon_roles(&projections, &mut self.icon_renderer.resolver);
         let prewarm_us = prewarm_start.elapsed().as_micros();
         if prewarm_stats.entries > 0
             && (self.frame_count == 0
@@ -14618,6 +14856,7 @@ impl WgpuState {
                 prewarm_stats.over_budget as u8
             );
         }
+        drop(projections);
 
         let frame_start = Instant::now();
         let surface_acquire_start = Instant::now();
@@ -14695,6 +14934,7 @@ impl WgpuState {
             &self.queue,
             scene,
             self.size,
+            reason,
         );
         let prepare_us = prepare_start.elapsed().as_micros();
         let icon_work_pending = scene_frame.icon_stats.deferred > 0
@@ -15553,6 +15793,7 @@ impl<'a> IconFrameBuilder<'a> {
         thumbnails: &'a mut ThumbnailRasterResolver,
         raster_cache: &'a mut IconRasterCache,
         surface_size: PhysicalSize<u32>,
+        raster_miss_budget: usize,
     ) -> Self {
         Self {
             resolver,
@@ -15577,7 +15818,7 @@ impl<'a> IconFrameBuilder<'a> {
             cache_misses: 0,
             deferred: 0,
             raster_deferred: 0,
-            raster_miss_budget: ICON_RASTER_MISS_BUDGET_PER_FRAME,
+            raster_miss_budget,
             resolve_us: 0,
             raster_us: 0,
         }
@@ -16397,6 +16638,14 @@ impl LabelRasterCache {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LabelCacheOutcome {
+    Hit,
+    Miss,
+    Deferred,
+    Skipped,
+}
+
 struct TextFrameBuilder<'a> {
     font_system: &'a mut FontSystem,
     swash_cache: &'a mut SwashCache,
@@ -16487,50 +16736,25 @@ impl<'a> TextFrameBuilder<'a> {
     fn push_label_aligned_wrapped(
         &mut self,
         label: &str,
-        mut rect: ViewRect,
+        rect: ViewRect,
         clip: ViewRect,
         color: TextColor,
         alignment: LabelAlignment,
         wrap: LabelWrap,
     ) {
-        if label.is_empty() || rect.width <= 0.0 || rect.height <= 0.0 {
+        let Some((key, rect, label_width, label_height)) =
+            self.label_raster_key(label, rect, color, alignment, wrap)
+        else {
             return;
-        }
-        if alignment == LabelAlignment::Start && wrap == LabelWrap::None {
-            rect.width = rect
-                .width
-                .min(estimated_label_raster_width(label, self.max_font_size));
-        }
+        };
         let Some(screen) = intersect_rect(rect, clip) else {
             return;
         };
 
-        let max_label_width = self.width.saturating_sub(TEXT_PADDING * 2).max(1);
-        let label_width = (rect.width.ceil().max(1.0) as u32).min(max_label_width);
-        let label_height = rect.height.ceil().max(1.0) as u32;
-        let key = LabelCacheKey {
-            text: label.to_string(),
-            width: label_width,
-            height: label_height,
-            color,
-            alignment,
-            wrap,
-        };
-        let label_pixels = if let Some(pixels) = self.label_cache.get(&key) {
-            self.cache_hits += 1;
-            pixels
-        } else {
-            self.cache_misses += 1;
-            if self.raster_miss_budget == 0 {
-                self.deferred += 1;
-                return;
-            }
-            self.raster_miss_budget -= 1;
-            let raster_start = Instant::now();
-            let label_pixels =
-                self.rasterize_label(label, label_width, label_height, color, alignment, wrap);
-            self.raster_us += raster_start.elapsed().as_micros();
-            self.label_cache.insert(key.clone(), label_pixels)
+        let Some((label_pixels, _)) =
+            self.resolve_label_pixels(label, &key, label_width, label_height, alignment, wrap)
+        else {
+            return;
         };
 
         self.pending_draws.push(PendingTextDraw {
@@ -16542,6 +16766,96 @@ impl<'a> TextFrameBuilder<'a> {
             label_height,
         });
         self.labels += 1;
+    }
+
+    fn prewarm_label_aligned_no_wrap(
+        &mut self,
+        label: &str,
+        rect: ViewRect,
+        color: TextColor,
+        alignment: LabelAlignment,
+    ) -> LabelCacheOutcome {
+        self.prewarm_label_aligned_wrapped(label, rect, color, alignment, LabelWrap::None)
+    }
+
+    fn prewarm_label_aligned_wrapped(
+        &mut self,
+        label: &str,
+        rect: ViewRect,
+        color: TextColor,
+        alignment: LabelAlignment,
+        wrap: LabelWrap,
+    ) -> LabelCacheOutcome {
+        let Some((key, _, label_width, label_height)) =
+            self.label_raster_key(label, rect, color, alignment, wrap)
+        else {
+            return LabelCacheOutcome::Skipped;
+        };
+        self.resolve_label_pixels(label, &key, label_width, label_height, alignment, wrap)
+            .map(|(_, outcome)| outcome)
+            .unwrap_or(LabelCacheOutcome::Deferred)
+    }
+
+    fn label_raster_key(
+        &self,
+        label: &str,
+        mut rect: ViewRect,
+        color: TextColor,
+        alignment: LabelAlignment,
+        wrap: LabelWrap,
+    ) -> Option<(LabelCacheKey, ViewRect, u32, u32)> {
+        if label.is_empty() || rect.width <= 0.0 || rect.height <= 0.0 {
+            return None;
+        }
+        if alignment == LabelAlignment::Start && wrap == LabelWrap::None {
+            rect.width = rect
+                .width
+                .min(estimated_label_raster_width(label, self.max_font_size));
+        }
+        let max_label_width = self.width.saturating_sub(TEXT_PADDING * 2).max(1);
+        let label_width = (rect.width.ceil().max(1.0) as u32).min(max_label_width);
+        let label_height = rect.height.ceil().max(1.0) as u32;
+        Some((
+            LabelCacheKey {
+                text: label.to_string(),
+                width: label_width,
+                height: label_height,
+                color,
+                alignment,
+                wrap,
+            },
+            rect,
+            label_width,
+            label_height,
+        ))
+    }
+
+    fn resolve_label_pixels(
+        &mut self,
+        label: &str,
+        key: &LabelCacheKey,
+        label_width: u32,
+        label_height: u32,
+        alignment: LabelAlignment,
+        wrap: LabelWrap,
+    ) -> Option<(Arc<[u8]>, LabelCacheOutcome)> {
+        if let Some(pixels) = self.label_cache.get(key) {
+            self.cache_hits += 1;
+            return Some((pixels, LabelCacheOutcome::Hit));
+        }
+
+        self.cache_misses += 1;
+        if self.raster_miss_budget == 0 {
+            self.deferred += 1;
+            return None;
+        }
+        self.raster_miss_budget -= 1;
+        let raster_start = Instant::now();
+        let label_pixels =
+            self.rasterize_label(label, label_width, label_height, key.color, alignment, wrap);
+        self.raster_us += raster_start.elapsed().as_micros();
+        let pixels = self.label_cache.insert(key.clone(), label_pixels);
+        Some((pixels, LabelCacheOutcome::Miss))
     }
 
     fn measure_label_cursor_x(
@@ -16986,6 +17300,7 @@ fn prepare_scene_frame(
     queue: &wgpu::Queue,
     scene: &mut ShellScene,
     size: PhysicalSize<u32>,
+    reason: &str,
 ) -> SceneFrame {
     text_renderer.label_cache.begin_frame();
     overlay_text_renderer.label_cache.begin_frame();
@@ -17015,6 +17330,7 @@ fn prepare_scene_frame(
             &mut icon_renderer.thumbnails,
             &mut icon_renderer.raster_cache,
             size,
+            icon_raster_miss_budget_for_frame(reason),
         );
         let scene_frame = scene.build_frame(
             size,
@@ -17034,6 +17350,18 @@ fn prepare_scene_frame(
     scene_frame.icon_stats = icon_frame.stats;
     scene_frame.text_stats = text_frame.stats.merged(overlay_text_frame.stats);
     scene_frame
+}
+
+fn icon_raster_miss_budget_for_frame(reason: &str) -> usize {
+    if matches!(reason, "zoom" | "wheel-zoom" | "autosmoke-zoom") {
+        0
+    } else {
+        ICON_RASTER_MISS_BUDGET_PER_FRAME
+    }
+}
+
+fn text_label_read_ahead_enabled_for_frame(reason: &str) -> bool {
+    !matches!(reason, "zoom" | "wheel-zoom" | "autosmoke-zoom")
 }
 
 fn create_vertex_buffer(device: &wgpu::Device, vertex_capacity: usize) -> wgpu::Buffer {
@@ -18648,6 +18976,16 @@ fn file_color(entry: &Entry) -> [f32; 4] {
         [0.38, 0.60, 0.84, 1.0]
     } else {
         [0.55, 0.60, 0.68, 1.0]
+    }
+}
+
+fn pane_item_text_color(view_mode: ShellViewMode, entry: &Entry, selected: bool) -> TextColor {
+    if selected {
+        TextColor::rgb(15, 23, 42)
+    } else if view_mode != ShellViewMode::Details && entry.is_dir {
+        TextColor::rgb(31, 79, 191)
+    } else {
+        TextColor::rgb(36, 41, 47)
     }
 }
 
@@ -22945,6 +23283,7 @@ mod tests {
             &mut thumbnails,
             &mut raster_cache,
             PhysicalSize::new(128, 96),
+            ICON_RASTER_MISS_BUDGET_PER_FRAME,
         );
         let raster = test_icon_raster(2, 7);
         builder.copy_raster_to_atlas(

@@ -266,13 +266,26 @@ function percentile(prefix, metric, percent,    key, count, i, j, tmp, rank) {
     return sorted[rank]
 }
 
-function add_prewarm(prefix, resolve, entries, deferred, over_budget,    key) {
+function add_prewarm(prefix, resolve, entries, deferred, read_ahead, over_budget,    key) {
     prewarm_count[prefix]++
     prewarm_values[prefix, prewarm_count[prefix]] = resolve
     bump_metric(prefix, "prewarm_resolve", resolve)
     bump_metric(prefix, "prewarm_entries", entries)
     bump_metric(prefix, "prewarm_deferred", deferred)
+    bump_metric(prefix, "prewarm_read_ahead", read_ahead)
     bump_metric(prefix, "prewarm_over_budget", over_budget)
+}
+
+function add_text_prewarm(prefix, raster, entries, read_ahead, hits, misses, deferred, over_budget) {
+    text_prewarm_count[prefix]++
+    text_prewarm_values[prefix, text_prewarm_count[prefix]] = raster
+    bump_metric(prefix, "text_prewarm_raster", raster)
+    bump_metric(prefix, "text_prewarm_entries", entries)
+    bump_metric(prefix, "text_prewarm_read_ahead", read_ahead)
+    bump_metric(prefix, "text_prewarm_hits", hits)
+    bump_metric(prefix, "text_prewarm_misses", misses)
+    bump_metric(prefix, "text_prewarm_deferred", deferred)
+    bump_metric(prefix, "text_prewarm_over_budget", over_budget)
 }
 
 function prewarm_percentile(prefix, percent,    count, i, j, tmp, rank) {
@@ -283,6 +296,34 @@ function prewarm_percentile(prefix, percent,    count, i, j, tmp, rank) {
     delete sorted
     for (i = 1; i <= count; i++) {
         sorted[i] = prewarm_values[prefix, i]
+    }
+    for (i = 1; i <= count; i++) {
+        for (j = i + 1; j <= count; j++) {
+            if (sorted[j] < sorted[i]) {
+                tmp = sorted[i]
+                sorted[i] = sorted[j]
+                sorted[j] = tmp
+            }
+        }
+    }
+    rank = int((percent * count + 99) / 100)
+    if (rank < 1) {
+        rank = 1
+    }
+    if (rank > count) {
+        rank = count
+    }
+    return sorted[rank]
+}
+
+function text_prewarm_percentile(prefix, percent,    count, i, j, tmp, rank) {
+    count = text_prewarm_count[prefix] + 0
+    if (count <= 0) {
+        return 0
+    }
+    delete sorted
+    for (i = 1; i <= count; i++) {
+        sorted[i] = text_prewarm_values[prefix, i]
     }
     for (i = 1; i <= count; i++) {
         for (j = i + 1; j <= count; j++) {
@@ -344,7 +385,7 @@ function print_prewarm_summary(prefix, label,    count, resolve_p50, resolve_p95
     }
     resolve_p50 = prewarm_percentile(prefix, 50)
     resolve_p95 = prewarm_percentile(prefix, 95)
-    printf("wgpu-prewarm-summary scope=%s samples=%d resolve_us_p50=%d resolve_us_p95=%d resolve_us_max=%d entries_max=%d deferred_max=%d over_budget_max=%d\n",
+    printf("wgpu-prewarm-summary scope=%s samples=%d resolve_us_p50=%d resolve_us_p95=%d resolve_us_max=%d entries_max=%d deferred_max=%d read_ahead_max=%d over_budget_max=%d\n",
         label,
         count,
         resolve_p50,
@@ -352,7 +393,29 @@ function print_prewarm_summary(prefix, label,    count, resolve_p50, resolve_p95
         max[prefix SUBSEP "prewarm_resolve"] + 0,
         max[prefix SUBSEP "prewarm_entries"] + 0,
         max[prefix SUBSEP "prewarm_deferred"] + 0,
+        max[prefix SUBSEP "prewarm_read_ahead"] + 0,
         max[prefix SUBSEP "prewarm_over_budget"] + 0)
+}
+
+function print_text_prewarm_summary(prefix, label,    count, raster_p50, raster_p95) {
+    count = text_prewarm_count[prefix] + 0
+    if (count <= 0) {
+        return
+    }
+    raster_p50 = text_prewarm_percentile(prefix, 50)
+    raster_p95 = text_prewarm_percentile(prefix, 95)
+    printf("wgpu-text-prewarm-summary scope=%s samples=%d raster_us_p50=%d raster_us_p95=%d raster_us_max=%d entries_max=%d read_ahead_max=%d hits_max=%d misses_max=%d deferred_max=%d over_budget_max=%d\n",
+        label,
+        count,
+        raster_p50,
+        raster_p95,
+        max[prefix SUBSEP "text_prewarm_raster"] + 0,
+        max[prefix SUBSEP "text_prewarm_entries"] + 0,
+        max[prefix SUBSEP "text_prewarm_read_ahead"] + 0,
+        max[prefix SUBSEP "text_prewarm_hits"] + 0,
+        max[prefix SUBSEP "text_prewarm_misses"] + 0,
+        max[prefix SUBSEP "text_prewarm_deferred"] + 0,
+        max[prefix SUBSEP "text_prewarm_over_budget"] + 0)
 }
 
 function print_autosmoke_scroll_summary() {
@@ -481,14 +544,41 @@ function gate_metric(gate, actual, label,    failed) {
     reason_prefix = "reason:" reason
     entries = numeric_value("entries")
     deferred = numeric_value("deferred")
+    read_ahead = numeric_value("read_ahead")
     resolve = numeric_value("resolve")
     over_budget = numeric_value("over_budget")
 
-    add_prewarm("all", resolve, entries, deferred, over_budget)
-    add_prewarm(prefix, resolve, entries, deferred, over_budget)
-    add_prewarm(reason_prefix, resolve, entries, deferred, over_budget)
+    add_prewarm("all", resolve, entries, deferred, read_ahead, over_budget)
+    add_prewarm(prefix, resolve, entries, deferred, read_ahead, over_budget)
+    add_prewarm(reason_prefix, resolve, entries, deferred, read_ahead, over_budget)
     prewarm_view_seen[view] = 1
     prewarm_reason_seen[reason] = 1
+}
+
+/\[fika-wgpu\] prewarm-text/ {
+    view = value_of("view")
+    if (view == "") {
+        view = "unknown"
+    }
+    reason = value_of("reason")
+    if (reason == "") {
+        reason = "unknown"
+    }
+    prefix = "view:" view
+    reason_prefix = "reason:" reason
+    entries = numeric_value("entries")
+    read_ahead = numeric_value("read_ahead")
+    hits = numeric_value("hits")
+    misses = numeric_value("misses")
+    deferred = numeric_value("deferred")
+    raster = numeric_value("raster")
+    over_budget = numeric_value("over_budget")
+
+    add_text_prewarm("all", raster, entries, read_ahead, hits, misses, deferred, over_budget)
+    add_text_prewarm(prefix, raster, entries, read_ahead, hits, misses, deferred, over_budget)
+    add_text_prewarm(reason_prefix, raster, entries, read_ahead, hits, misses, deferred, over_budget)
+    text_prewarm_view_seen[view] = 1
+    text_prewarm_reason_seen[reason] = 1
 }
 
 /\[fika-wgpu\] autosmoke-scroll/ {
@@ -528,6 +618,13 @@ END {
     }
     for (reason in prewarm_reason_seen) {
         print_prewarm_summary("reason:" reason, "reason:" reason)
+    }
+    print_text_prewarm_summary("all", "all")
+    for (view in text_prewarm_view_seen) {
+        print_text_prewarm_summary("view:" view, view)
+    }
+    for (reason in text_prewarm_reason_seen) {
+        print_text_prewarm_summary("reason:" reason, "reason:" reason)
     }
     print_autosmoke_scroll_summary()
 
