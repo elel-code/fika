@@ -9,9 +9,9 @@ use fika_core::{
     metadata_role_results_for_requests, mime_magic_resolution_required,
 };
 
+use crate::wgpu_dolphin::{shell_dolphin_read_ahead_indexes, visible_layout_range_for_projection};
 use crate::wgpu_metrics::{DOLPHIN_RESOLVE_ALL_ITEMS_LIMIT, METADATA_ROLE_BATCH_SIZE};
 use crate::wgpu_pane::{ShellPaneId, ShellPaneProjection};
-use crate::{shell_dolphin_read_ahead_indexes, visible_layout_range_for_projection};
 
 #[derive(Default)]
 pub(crate) struct MetadataRolePrewarmStats {

@@ -4,7 +4,6 @@ use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::env;
 use std::error::Error;
 use std::fs;
-use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::{
     Arc, OnceLock,
@@ -83,6 +82,8 @@ fn fika_frame_log_all_enabled() -> bool {
 mod wgpu_autosmoke;
 #[path = "shell/clipboard.rs"]
 mod wgpu_clipboard;
+#[path = "shell/dolphin.rs"]
+mod wgpu_dolphin;
 #[path = "shell/icon_resolver.rs"]
 mod wgpu_icon_resolver;
 #[path = "shell/icon_roles.rs"]
@@ -106,6 +107,10 @@ mod wgpu_selection;
 
 use wgpu_autosmoke::{AutosmokeScrollAction, autosmoke_scroll_config, autosmoke_zoom_config};
 use wgpu_clipboard::ShellClipboard;
+use wgpu_dolphin::{
+    dolphin_icon_size_for_zoom_level, shell_dolphin_read_ahead_indexes,
+    visible_layout_range_for_projection,
+};
 #[cfg(test)]
 use wgpu_icon_resolver::FileIconResolverTestHarness;
 use wgpu_icon_resolver::{FileIconResolver, ResolvedFileIcon, visible_icon_fallback_key};
@@ -21606,76 +21611,6 @@ fn normalized_scale_factor(scale_factor: f32) -> f32 {
     } else {
         1.0
     }
-}
-
-fn dolphin_icon_size_for_zoom_level(level: i32) -> f32 {
-    match level.clamp(DOLPHIN_ZOOM_LEVEL_MIN, DOLPHIN_ZOOM_LEVEL_MAX) {
-        0 => 16.0,
-        1 => 22.0,
-        2 => 32.0,
-        3 => 48.0,
-        4 => 64.0,
-        level => (64 + ((level - 4) << 4)) as f32,
-    }
-}
-
-fn visible_layout_range_for_projection(
-    projection: &ShellPaneProjection<'_>,
-) -> Option<Range<usize>> {
-    let start = projection
-        .visible_items
-        .iter()
-        .map(|item| item.layout.model_index)
-        .min()?;
-    let end = projection
-        .visible_items
-        .iter()
-        .map(|item| item.layout.model_index)
-        .max()?
-        + 1;
-    (start < end).then_some(start..end)
-}
-
-fn shell_dolphin_read_ahead_indexes(
-    visible_indexes: Range<usize>,
-    item_count: usize,
-    maximum_visible_items: usize,
-) -> Vec<usize> {
-    if item_count == 0 || visible_indexes.is_empty() {
-        return Vec::new();
-    }
-
-    let visible_start = visible_indexes.start.min(item_count);
-    let visible_end = visible_indexes.end.min(item_count).max(visible_start);
-    if visible_start >= visible_end {
-        return Vec::new();
-    }
-
-    let maximum_visible_items = maximum_visible_items.max(1);
-    let read_ahead_items = (THUMBNAIL_READ_AHEAD_PAGES * maximum_visible_items)
-        .min(THUMBNAIL_READ_AHEAD_RESOLVE_LIMIT / 2);
-    let last_visible = visible_end - 1;
-    let end_extended = (last_visible + read_ahead_items).min(item_count - 1);
-    let begin_extended = visible_start.saturating_sub(read_ahead_items);
-
-    let mut result = Vec::new();
-    result.extend(visible_end..end_extended + 1);
-    result.extend((begin_extended..visible_start).rev());
-
-    let last_page_start = (end_extended + 1).max(item_count.saturating_sub(maximum_visible_items));
-    result.extend(last_page_start..item_count);
-
-    let first_page_end = begin_extended.min(maximum_visible_items);
-    result.extend(0..first_page_end);
-
-    let mut remaining = THUMBNAIL_READ_AHEAD_RESOLVE_LIMIT.saturating_sub(result.len());
-    let rest_after_visible = (end_extended + 1)..last_page_start;
-    let rest_after_len = rest_after_visible.len().min(remaining);
-    result.extend(rest_after_visible.take(rest_after_len));
-    remaining = remaining.saturating_sub(rest_after_len);
-
-    result.extend((first_page_end..begin_extended).rev().take(remaining));
-    result
 }
 
 fn text_metrics_for_label_height(
