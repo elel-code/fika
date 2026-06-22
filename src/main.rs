@@ -5100,6 +5100,7 @@ struct ShellInternalDrag {
     start: ViewPoint,
     current: ViewPoint,
     active: bool,
+    preview_suppressed: bool,
 }
 
 impl ShellInternalDrag {
@@ -5116,6 +5117,7 @@ impl ShellInternalDrag {
             start,
             current: start,
             active: false,
+            preview_suppressed: false,
         }
     }
 
@@ -7415,15 +7417,51 @@ impl ShellScene {
     }
 
     fn update_internal_drag(&mut self, point: ViewPoint, size: PhysicalSize<u32>) -> bool {
+        let drag_changed = {
+            let Some(drag) = self.internal_drag.as_mut() else {
+                return false;
+            };
+            drag.update(point)
+        };
+        if !self.internal_drag.as_ref().is_some_and(|drag| drag.active) {
+            let preview_changed = self.set_internal_drag_preview_suppressed(false);
+            return drag_changed || preview_changed;
+        }
+        let preview_changed = self.update_internal_drag_preview_suppression(size);
+        let hover_changed = self.update_dnd_hover_target(point, size);
+        drag_changed || preview_changed || hover_changed
+    }
+
+    fn update_internal_drag_preview_suppression(&mut self, size: PhysicalSize<u32>) -> bool {
+        let next = self
+            .internal_drag
+            .as_ref()
+            .is_some_and(|drag| self.internal_drag_preview_should_suppress(drag, size));
+        self.set_internal_drag_preview_suppressed(next)
+    }
+
+    fn set_internal_drag_preview_suppressed(&mut self, suppressed: bool) -> bool {
         let Some(drag) = self.internal_drag.as_mut() else {
             return false;
         };
-        let drag_changed = drag.update(point);
-        if !drag.active {
-            return drag_changed;
+        if drag.preview_suppressed == suppressed {
+            return false;
         }
-        let hover_changed = self.update_dnd_hover_target(point, size);
-        drag_changed || hover_changed
+        drag.preview_suppressed = suppressed;
+        true
+    }
+
+    fn internal_drag_preview_should_suppress(
+        &self,
+        drag: &ShellInternalDrag,
+        size: PhysicalSize<u32>,
+    ) -> bool {
+        match drag.source {
+            ShellInternalDragSource::Place { index } => {
+                self.place_index_at_screen_point(drag.current, size) == Some(index)
+            }
+            ShellInternalDragSource::PaneItem { .. } => false,
+        }
     }
 
     fn finish_internal_drag(&mut self, point: ViewPoint, size: PhysicalSize<u32>) -> bool {
@@ -12447,7 +12485,11 @@ impl ShellScene {
         text: &mut TextFrameBuilder<'_>,
         size: PhysicalSize<u32>,
     ) {
-        let Some(drag) = self.internal_drag.as_ref().filter(|drag| drag.active) else {
+        let Some(drag) = self
+            .internal_drag
+            .as_ref()
+            .filter(|drag| drag.active && !drag.preview_suppressed)
+        else {
             return;
         };
         let screen = ViewRect {
@@ -16799,6 +16841,7 @@ impl<'a> IconFrameBuilder<'a> {
             raster
         } else {
             self.cache_misses += 1;
+            self.icon_rasters.queue_visible(key.clone());
             if self.raster_miss_budget == 0 {
                 self.raster_deferred += 1;
                 self.fallbacks += 1;
@@ -23333,6 +23376,52 @@ mod tests {
     }
 
     #[test]
+    fn place_drag_over_source_row_suppresses_preview_until_valid_target() {
+        let mut scene = test_scene(Vec::new(), ShellViewMode::Icons);
+        scene.places = vec![
+            ShellPlace::new("", "A", "Alpha", PathBuf::from("/tmp/a"), true),
+            ShellPlace::new("", "B", "Beta", PathBuf::from("/tmp/b"), true),
+        ];
+        let size = PhysicalSize::new(700, 360);
+        let source_row = scene.place_row_rects(size)[0].1;
+        let start = ViewPoint {
+            x: source_row.x + 6.0,
+            y: source_row.y + 6.0,
+        };
+        let self_hover = ViewPoint {
+            x: source_row.x + source_row.width / 2.0,
+            y: source_row.y + source_row.height / 2.0,
+        };
+
+        assert!(scene.begin_internal_drag_for_place(0, start));
+        assert!(scene.set_pointer(self_hover, size));
+        let drag = scene
+            .internal_drag
+            .as_ref()
+            .expect("place drag should exist");
+        assert!(drag.active);
+        assert!(drag.preview_suppressed);
+        assert_eq!(scene.dnd_hover_target, None);
+
+        let valid_gap = scene.place_gap_rect_for_index(2, size).unwrap();
+        let valid_gap_point = ViewPoint {
+            x: valid_gap.x + valid_gap.width / 2.0,
+            y: valid_gap.y + valid_gap.height / 2.0,
+        };
+        assert!(scene.set_pointer(valid_gap_point, size));
+        let drag = scene
+            .internal_drag
+            .as_ref()
+            .expect("place drag should continue");
+        assert!(drag.active);
+        assert!(!drag.preview_suppressed);
+        assert_eq!(
+            scene.dnd_hover_target,
+            Some(ShellDropTarget::PlacesGap { index: 2 })
+        );
+    }
+
+    #[test]
     fn split_panes_share_reusable_state_accessors() {
         let mut scene = test_scene(vec![test_entry("alpha", true)], ShellViewMode::Icons);
         let split_entries = vec![test_entry("right", true)];
@@ -24654,6 +24743,76 @@ mod tests {
         assert_eq!(frame.vertices.len(), 6);
         assert_eq!(frame.overlay_vertices.len(), 6);
         assert_eq!(frame.stats.quads, 2);
+    }
+
+    #[test]
+    fn named_overlay_icon_queues_raster_when_sync_budget_is_empty() {
+        let mut harness = FileIconResolverTestHarness::new();
+        let mut thumbnails = ThumbnailRasterResolver::new();
+        let mut icon_rasters = IconRasterResolver::new();
+        let mut raster_cache = IconRasterCache::new(ICON_CACHE_MAX_BYTES);
+        let mut role_raster_cache = IconRoleRasterCache::new(ICON_ROLE_RASTER_CACHE_MAX_BYTES);
+        let icon = ViewRect {
+            x: 4.0,
+            y: 4.0,
+            width: 16.0,
+            height: 16.0,
+        };
+        let clip = ViewRect {
+            x: 0.0,
+            y: 0.0,
+            width: 128.0,
+            height: 96.0,
+        };
+
+        {
+            let mut builder = IconFrameBuilder::new(
+                &mut harness.resolver,
+                &mut thumbnails,
+                &mut icon_rasters,
+                &mut raster_cache,
+                &mut role_raster_cache,
+                PhysicalSize::new(128, 96),
+                0,
+            );
+            assert!(!builder.push_named_theme_icon(
+                "archive-insert",
+                NamedIconFallback::Service,
+                icon,
+                clip,
+                IconDrawLayer::Overlay,
+            ));
+        }
+        let request_key = harness
+            .next_request_key()
+            .expect("named overlay icon should queue a theme resolve");
+        let resolved_path = PathBuf::from("/theme/actions/archive-insert.svg");
+        harness.complete(request_key, Some(resolved_path.clone()));
+
+        {
+            let mut builder = IconFrameBuilder::new(
+                &mut harness.resolver,
+                &mut thumbnails,
+                &mut icon_rasters,
+                &mut raster_cache,
+                &mut role_raster_cache,
+                PhysicalSize::new(128, 96),
+                0,
+            );
+            assert!(!builder.push_named_theme_icon(
+                "archive-insert",
+                NamedIconFallback::Service,
+                icon,
+                clip,
+                IconDrawLayer::Overlay,
+            ));
+        }
+
+        assert!(
+            icon_rasters
+                .pending
+                .contains_key(&IconRasterCacheKey::icon(resolved_path, 16))
+        );
     }
 
     #[test]
