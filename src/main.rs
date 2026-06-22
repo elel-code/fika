@@ -18,10 +18,10 @@ use cosmic_text::{
     SwashCache, Wrap,
 };
 use fika_core::{
-    AppSettings, CompactLayout, CompactLayoutOptions, DesktopLaunchPlan, DeviceInfo,
-    DevicePlaceOperation, DevicePlaceOperationResult, Entry, FileClipboardRole, FileTransferMode,
-    Generation, IconsLayout, IconsLayoutOptions, ItemId, ItemLayout, MetadataRoleResult,
-    MimeApplication, MimeApplicationCache, NETWORK_ROOT_LABEL, NameFilter, OpenWithLaunchResult,
+    AppSettings, CompactLayout, CompactLayoutOptions, DeviceInfo, DevicePlaceOperation,
+    DevicePlaceOperationResult, Entry, FileClipboardRole, FileTransferMode, Generation,
+    IconsLayout, IconsLayoutOptions, ItemId, ItemLayout, MetadataRoleResult, MimeApplication,
+    MimeApplicationCache, NETWORK_ROOT_LABEL, NameFilter, OpenWithLaunchResult,
     OperationController, PrivilegedCommand, ServiceMenuAction, ServiceMenuLaunchResult,
     ServiceMenuPriority, ServiceMenuTarget, ThumbnailRequest, ThumbnailRequestPriority,
     ThumbnailerRegistry, TransferTaskResult, TransferUndoItem, TrashViewOperation,
@@ -96,6 +96,8 @@ mod wgpu_menu_geometry;
 mod wgpu_metadata_roles;
 #[path = "shell/metrics.rs"]
 mod wgpu_metrics;
+#[path = "shell/open_with.rs"]
+mod wgpu_open_with;
 #[path = "shell/options.rs"]
 mod wgpu_options;
 #[path = "shell/pane.rs"]
@@ -139,6 +141,10 @@ use wgpu_metadata_roles::{
     core_pane_id_for_shell_pane, shell_metadata_item_id, shell_metadata_role_candidate,
 };
 use wgpu_metrics::*;
+use wgpu_open_with::{
+    OpenWithChooserClick, OpenWithLaunchRequest, ServiceMenuLaunchRequest, ShellOpenWithChooser,
+    open_with_applications_for_mime,
+};
 use wgpu_options::{ShellViewMode, parse_start_options};
 use wgpu_pane::{
     ShellPaneGeometry, ShellPaneId, ShellPaneProjection, ShellPaneScrollMetrics,
@@ -3902,153 +3908,6 @@ struct RenameEntryRequest {
     name: String,
     is_dir: bool,
     privileged: bool,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct ShellOpenWithChooser {
-    path: PathBuf,
-    mime_type: Option<Arc<str>>,
-    applications: Vec<MimeApplication>,
-    query: String,
-    selected_index: usize,
-    scroll_row: usize,
-    error: Option<String>,
-}
-
-impl ShellOpenWithChooser {
-    fn new(path: PathBuf, mime_type: Option<Arc<str>>, applications: Vec<MimeApplication>) -> Self {
-        let mut chooser = Self {
-            path,
-            mime_type,
-            selected_index: applications
-                .iter()
-                .position(|application| application.is_default)
-                .unwrap_or(0),
-            applications,
-            query: String::new(),
-            scroll_row: 0,
-            error: None,
-        };
-        chooser.ensure_selected_visible();
-        chooser
-    }
-
-    fn filtered_indexes(&self) -> Vec<usize> {
-        open_with_filtered_application_indexes(&self.applications, &self.query)
-    }
-
-    fn filtered_count(&self) -> usize {
-        self.filtered_indexes().len()
-    }
-
-    fn visible_filtered_indexes(&self) -> Vec<usize> {
-        let indexes = self.filtered_indexes();
-        indexes
-            .into_iter()
-            .skip(self.scroll_row)
-            .take(OPEN_WITH_CHOOSER_MAX_ROWS)
-            .collect()
-    }
-
-    fn selected_application(&self) -> Option<&MimeApplication> {
-        let indexes = self.filtered_indexes();
-        let selected = self.selected_index.min(indexes.len().saturating_sub(1));
-        let app_index = *indexes.get(selected)?;
-        self.applications.get(app_index)
-    }
-
-    fn apply_command(&mut self, command: OpenWithCommand) -> bool {
-        let old = self.clone();
-        match command {
-            OpenWithCommand::Insert(value) => {
-                self.query.push_str(&value);
-                self.selected_index = 0;
-                self.scroll_row = 0;
-                self.error = None;
-            }
-            OpenWithCommand::Backspace => {
-                self.query.pop();
-                self.selected_index = 0;
-                self.scroll_row = 0;
-                self.error = None;
-            }
-            OpenWithCommand::Cancel => return false,
-            OpenWithCommand::MoveUp => self.move_selection(-1),
-            OpenWithCommand::MoveDown => self.move_selection(1),
-            OpenWithCommand::Commit | OpenWithCommand::Ignore => return false,
-        }
-        self.ensure_selected_visible();
-        old != *self
-    }
-
-    fn select_filtered_row(&mut self, row: usize) -> bool {
-        let count = self.filtered_count();
-        if count == 0 {
-            return false;
-        }
-        let old_selected = self.selected_index;
-        let old_scroll = self.scroll_row;
-        self.selected_index = row.min(count - 1);
-        self.error = None;
-        self.ensure_selected_visible();
-        old_selected != self.selected_index || old_scroll != self.scroll_row
-    }
-
-    fn move_selection(&mut self, delta: isize) {
-        let count = self.filtered_count();
-        if count == 0 {
-            self.selected_index = 0;
-            self.scroll_row = 0;
-            return;
-        }
-        let current = self.selected_index.min(count - 1);
-        self.selected_index = if delta < 0 {
-            current.saturating_sub(delta.unsigned_abs())
-        } else {
-            (current + delta as usize).min(count - 1)
-        };
-    }
-
-    fn ensure_selected_visible(&mut self) {
-        let count = self.filtered_count();
-        if count == 0 {
-            self.selected_index = 0;
-            self.scroll_row = 0;
-            return;
-        }
-        self.selected_index = self.selected_index.min(count - 1);
-        if self.selected_index < self.scroll_row {
-            self.scroll_row = self.selected_index;
-        } else if self.selected_index >= self.scroll_row + OPEN_WITH_CHOOSER_MAX_ROWS {
-            self.scroll_row = self.selected_index + 1 - OPEN_WITH_CHOOSER_MAX_ROWS;
-        }
-        self.scroll_row = self
-            .scroll_row
-            .min(count.saturating_sub(OPEN_WITH_CHOOSER_MAX_ROWS));
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct OpenWithLaunchRequest {
-    path: PathBuf,
-    app_name: String,
-    plan: DesktopLaunchPlan,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct ServiceMenuLaunchRequest {
-    paths: Vec<PathBuf>,
-    app_name: String,
-    plan: DesktopLaunchPlan,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum OpenWithChooserClick {
-    Outside,
-    Inside,
-    Cancel,
-    Open,
-    Row(usize),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -20030,65 +19889,6 @@ fn scaled_dialog_metric(value: f32, scale_factor: f32) -> f32 {
 
 fn property_row(label: &'static str, value: String) -> ShellPropertyRow {
     ShellPropertyRow { label, value }
-}
-
-fn open_with_applications_for_mime(
-    cache: &MimeApplicationCache,
-    mime: Option<&str>,
-) -> Vec<MimeApplication> {
-    let mut applications = Vec::new();
-    let mut seen = BTreeSet::new();
-    let associated = mime
-        .map(|mime| cache.applications_for_mime(mime))
-        .unwrap_or_default();
-    for application in associated.into_iter().chain(cache.all_applications()) {
-        if seen.insert(application.id.clone()) {
-            applications.push(application);
-        }
-    }
-    applications
-}
-
-fn open_with_filtered_application_indexes(
-    applications: &[MimeApplication],
-    query: &str,
-) -> Vec<usize> {
-    let terms = query
-        .split_whitespace()
-        .map(|term| term.to_ascii_lowercase())
-        .collect::<Vec<_>>();
-    applications
-        .iter()
-        .enumerate()
-        .filter(|(_, application)| open_with_application_matches_terms(application, &terms))
-        .map(|(index, _)| index)
-        .collect()
-}
-
-fn open_with_application_matches_terms(application: &MimeApplication, terms: &[String]) -> bool {
-    if terms.is_empty() {
-        return true;
-    }
-    let haystacks = [
-        application.name.to_ascii_lowercase(),
-        application.id.to_ascii_lowercase(),
-        application.exec.to_ascii_lowercase(),
-        application
-            .desktop_file
-            .display()
-            .to_string()
-            .to_ascii_lowercase(),
-        application
-            .icon
-            .clone()
-            .unwrap_or_default()
-            .to_ascii_lowercase(),
-    ];
-    terms.iter().all(|term| {
-        haystacks
-            .iter()
-            .any(|haystack| haystack.contains(term.as_str()))
-    })
 }
 
 fn yes_no(value: bool) -> String {
