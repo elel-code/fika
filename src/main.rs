@@ -105,8 +105,8 @@ use wgpu_icon_resolver::{FileIconResolver, ResolvedFileIcon};
 #[cfg(test)]
 use wgpu_icon_roles::{FileIconKind, file_icon_profile};
 use wgpu_icon_roles::{
-    FileIconPathCacheKey, FileIconProfile, NamedIconFallback, file_icon_path_cache_key,
-    icon_cache_size,
+    FileIconPathCacheKey, FileIconProfile, FileIconRoleCacheKey, NamedIconFallback,
+    file_icon_path_cache_key, icon_cache_size,
 };
 use wgpu_location::{LocationDraft, PathHistory, normalized_text_cursor};
 use wgpu_metrics::*;
@@ -10878,10 +10878,14 @@ impl ShellScene {
                     .max(item.layout.icon_rect.height)
                     .clamp(16.0, 256.0);
                 let resolve_start = Instant::now();
-                let snapshot = resolver.resolve_entry_fast(projection.view.path, entry, icon_size);
+                let (snapshot, deferred) =
+                    resolver.resolve_entry_visible(projection.view.path, entry, icon_size);
+                if deferred {
+                    stats.deferred += 1;
+                }
+                let _ = snapshot;
                 stats.resolve_us += resolve_start.elapsed().as_micros();
                 stats.entries += 1;
-                let _ = snapshot;
                 if Instant::now() >= deadline {
                     stats.over_budget = true;
                     return stats;
@@ -10968,9 +10972,12 @@ impl ShellScene {
                 return;
             };
             let resolve_start = Instant::now();
-            let snapshot = resolver.resolve_path_cache_key_fast(request.key);
+            let snapshot = resolver.resolve_path_cache_key(request.key);
             stats.resolve_us += resolve_start.elapsed().as_micros();
             stats.read_ahead += 1;
+            if snapshot.is_none() {
+                stats.deferred += 1;
+            }
             let _ = snapshot;
         }
     }
@@ -15555,6 +15562,68 @@ impl IconRasterCache {
     }
 }
 
+#[derive(Debug)]
+struct IconRoleRasterCache {
+    entries: HashMap<FileIconRoleCacheKey, CachedIconRaster>,
+    frame: u64,
+    bytes: usize,
+    max_bytes: usize,
+}
+
+impl IconRoleRasterCache {
+    fn new(max_bytes: usize) -> Self {
+        Self {
+            entries: HashMap::new(),
+            frame: 0,
+            bytes: 0,
+            max_bytes,
+        }
+    }
+
+    fn begin_frame(&mut self) {
+        self.frame = self.frame.wrapping_add(1);
+    }
+
+    fn get(&mut self, key: &FileIconRoleCacheKey) -> Option<IconRaster> {
+        let entry = self.entries.get_mut(key)?;
+        entry.last_used_frame = self.frame;
+        Some(entry.raster.clone())
+    }
+
+    fn insert(&mut self, key: FileIconRoleCacheKey, raster: IconRaster) {
+        let bytes = raster.pixels.len();
+        if let Some(old) = self.entries.insert(
+            key.clone(),
+            CachedIconRaster {
+                raster,
+                bytes,
+                last_used_frame: self.frame,
+            },
+        ) {
+            self.bytes = self.bytes.saturating_sub(old.bytes);
+        }
+        self.bytes += bytes;
+        self.evict_if_needed(&key);
+    }
+
+    fn evict_if_needed(&mut self, protected: &FileIconRoleCacheKey) {
+        while self.bytes > self.max_bytes && self.entries.len() > 1 {
+            let Some(victim) = self
+                .entries
+                .iter()
+                .filter(|(key, _)| *key != protected)
+                .min_by_key(|(_, entry)| entry.last_used_frame)
+                .map(|(key, _)| key.clone())
+            else {
+                break;
+            };
+            if let Some(entry) = self.entries.remove(&victim) {
+                self.bytes = self.bytes.saturating_sub(entry.bytes);
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 struct ThumbnailRasterRequest {
     key: IconRasterCacheKey,
@@ -15881,6 +15950,7 @@ struct IconFrameBuilder<'a> {
     resolver: &'a mut FileIconResolver,
     thumbnails: &'a mut ThumbnailRasterResolver,
     raster_cache: &'a mut IconRasterCache,
+    role_raster_cache: &'a mut IconRoleRasterCache,
     surface_size: PhysicalSize<u32>,
     uploads: Vec<IconAtlasUpload>,
     draws: Vec<IconDraw>,
@@ -15910,6 +15980,7 @@ impl<'a> IconFrameBuilder<'a> {
         resolver: &'a mut FileIconResolver,
         thumbnails: &'a mut ThumbnailRasterResolver,
         raster_cache: &'a mut IconRasterCache,
+        role_raster_cache: &'a mut IconRoleRasterCache,
         surface_size: PhysicalSize<u32>,
         raster_miss_budget: usize,
     ) -> Self {
@@ -15917,6 +15988,7 @@ impl<'a> IconFrameBuilder<'a> {
             resolver,
             thumbnails,
             raster_cache,
+            role_raster_cache,
             surface_size,
             uploads: Vec::with_capacity(64),
             draws: Vec::with_capacity(64),
@@ -15960,12 +16032,31 @@ impl<'a> IconFrameBuilder<'a> {
         self.icons += 1;
         let resolve_start = Instant::now();
         let icon_size = rect.width.max(rect.height).clamp(16.0, 256.0);
-        let snapshot = self
+        let path = directory.join(entry.name.as_ref());
+        let role_key = file_icon_path_cache_key(
+            &path,
+            entry.is_dir,
+            entry.mime_type.clone(),
+            entry.mime_magic_checked,
+            icon_size,
+        )
+        .role;
+        let (snapshot, deferred) = self
             .resolver
-            .resolve_entry_fast(directory, entry, icon_size);
+            .resolve_entry_visible(directory, entry, icon_size);
+        if deferred {
+            self.deferred += 1;
+        }
         self.resolve_us += resolve_start.elapsed().as_micros();
 
         let Some(path) = snapshot.path else {
+            if self.raster_miss_budget == 0
+                && let Some(raster) = self.role_raster_cache.get(&role_key)
+            {
+                self.cache_hits += 1;
+                self.copy_raster_to_atlas(raster, rect, screen, IconDrawLayer::Content);
+                return true;
+            }
             self.fallbacks += 1;
             return false;
         };
@@ -15980,13 +16071,17 @@ impl<'a> IconFrameBuilder<'a> {
         {
             self.cache_hits += 1;
             raster
-        } else {
-            self.cache_misses += 1;
-            if self.raster_miss_budget == 0 {
+        } else if self.raster_miss_budget == 0 {
+            if let Some(raster) = self.role_raster_cache.get(&role_key) {
+                self.cache_hits += 1;
+                raster
+            } else {
                 self.raster_deferred += 1;
                 self.fallbacks += 1;
                 return false;
             }
+        } else {
+            self.cache_misses += 1;
             self.raster_miss_budget -= 1;
             let raster_start = Instant::now();
             let Some(raster) = rasterize_icon(&key.path, size_px as u32) else {
@@ -16007,6 +16102,7 @@ impl<'a> IconFrameBuilder<'a> {
             self.raster_cache.insert(key, raster)
         };
 
+        self.role_raster_cache.insert(role_key, raster.clone());
         self.copy_raster_to_atlas(raster, rect, screen, IconDrawLayer::Content);
         true
     }
@@ -16317,6 +16413,7 @@ struct IconRenderer {
     resolver: FileIconResolver,
     thumbnails: ThumbnailRasterResolver,
     raster_cache: IconRasterCache,
+    role_raster_cache: IconRoleRasterCache,
 }
 
 impl IconRenderer {
@@ -16407,6 +16504,7 @@ impl IconRenderer {
             resolver: FileIconResolver::new(),
             thumbnails: ThumbnailRasterResolver::new(),
             raster_cache: IconRasterCache::new(ICON_CACHE_MAX_BYTES),
+            role_raster_cache: IconRoleRasterCache::new(ICON_ROLE_RASTER_CACHE_MAX_BYTES),
         }
     }
 
@@ -17383,6 +17481,7 @@ fn prepare_scene_frame(
 ) -> SceneFrame {
     text_renderer.label_cache.begin_frame();
     icon_renderer.raster_cache.begin_frame();
+    icon_renderer.role_raster_cache.begin_frame();
 
     if let Some(overlay_text_renderer) = overlay_text_renderer {
         overlay_text_renderer.label_cache.begin_frame();
@@ -17413,6 +17512,7 @@ fn prepare_scene_frame(
                 &mut icon_renderer.resolver,
                 &mut icon_renderer.thumbnails,
                 &mut icon_renderer.raster_cache,
+                &mut icon_renderer.role_raster_cache,
                 size,
                 icon_raster_miss_budget_for_frame(reason),
             );
@@ -17460,6 +17560,7 @@ fn prepare_scene_frame(
                 &mut icon_renderer.resolver,
                 &mut icon_renderer.thumbnails,
                 &mut icon_renderer.raster_cache,
+                &mut icon_renderer.role_raster_cache,
                 size,
                 icon_raster_miss_budget_for_frame(reason),
             );
@@ -23421,10 +23522,12 @@ mod tests {
         let mut resolver = FileIconResolver::new();
         let mut thumbnails = ThumbnailRasterResolver::new();
         let mut raster_cache = IconRasterCache::new(ICON_CACHE_MAX_BYTES);
+        let mut role_raster_cache = IconRoleRasterCache::new(ICON_ROLE_RASTER_CACHE_MAX_BYTES);
         let mut builder = IconFrameBuilder::new(
             &mut resolver,
             &mut thumbnails,
             &mut raster_cache,
+            &mut role_raster_cache,
             PhysicalSize::new(128, 96),
             ICON_RASTER_MISS_BUDGET_PER_FRAME,
         );
@@ -23488,6 +23591,29 @@ mod tests {
         let raster = cache
             .get_closest_icon_variant(&path, 64)
             .expect("zoom should reuse a cached neighboring icon size");
+
+        assert_eq!(raster.width, 4);
+        assert_eq!(raster.height, 4);
+    }
+
+    #[test]
+    fn icon_role_raster_cache_reuses_previous_role_for_zoom_transition() {
+        let mut cache = IconRoleRasterCache::new(ICON_ROLE_RASTER_CACHE_MAX_BYTES);
+        let role = file_icon_path_cache_key(
+            Path::new("/tmp/readme.txt"),
+            false,
+            Some(Arc::from("text/plain")),
+            true,
+            48.0,
+        )
+        .role;
+
+        cache.begin_frame();
+        cache.insert(role.clone(), test_icon_raster(4, 7));
+        cache.begin_frame();
+        let raster = cache
+            .get(&role)
+            .expect("zoom should reuse the previous raster for the same MIME role");
 
         assert_eq!(raster.width, 4);
         assert_eq!(raster.height, 4);
@@ -23697,6 +23823,50 @@ mod tests {
             Some(resolved)
         );
         assert!(harness.next_request_key().is_none());
+    }
+
+    #[test]
+    fn file_icon_resolver_visible_path_uses_fallback_while_exact_role_is_pending() {
+        let mut harness = FileIconResolverTestHarness::new();
+        let text_file = test_entry_with_mime("readme.txt", false, "text/plain");
+        let log_file = test_entry_with_mime("system.log", false, "text/plain");
+        let icon_size = 32.0;
+
+        let (_fallback, deferred) =
+            harness
+                .resolver
+                .resolve_entry_visible(Path::new("/tmp"), &text_file, icon_size);
+        assert!(deferred);
+        let request_key = harness
+            .next_request_key()
+            .expect("visible text file should queue exact MIME icon resolve");
+        match &request_key.role.kind {
+            FileIconKind::Mime { mime } => assert_eq!(mime.as_ref(), "text/plain"),
+            kind => panic!("expected text/plain MIME role, got {kind:?}"),
+        }
+        assert_eq!(harness.resolver.pending_len_for_test(), 1);
+
+        let (_same_fallback, deferred) =
+            harness
+                .resolver
+                .resolve_entry_visible(Path::new("/var/log"), &log_file, icon_size);
+        assert!(deferred);
+        assert_eq!(harness.resolver.pending_len_for_test(), 1);
+        assert!(
+            harness.next_request_key().is_none(),
+            "same MIME role and size should reuse the pending exact request"
+        );
+
+        let resolved_path = PathBuf::from("/theme/mimetypes/text-plain.svg");
+        harness.complete(request_key, Some(resolved_path.clone()));
+        let (resolved, deferred) =
+            harness
+                .resolver
+                .resolve_entry_visible(Path::new("/var/log"), &log_file, icon_size);
+
+        assert!(!deferred);
+        assert_eq!(resolved.path, Some(resolved_path));
+        assert_eq!(harness.resolver.pending_len_for_test(), 0);
     }
 
     #[test]

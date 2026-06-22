@@ -46,6 +46,9 @@ Status:
   closer to Dolphin's role updater + widget cache architecture; `/bin` compact
   full-scroll `Private_Dirty` is now about 43.7-45.9 MB instead of about
   97.7 MB.
+  Follow-up: visible exact icon role lookup is now nonblocking in UI frames,
+  and compact zoom reuses a bounded role-raster cache so new zoom sizes do not
+  flash missing icons.
 - [ ] Complete system integration in the winit/wgpu shell:
   Open With, service-menu icons/submenus, clipboard, create/rename/file
   transfer/trash/properties, thumbnail worker, devices, and dynamic Places.

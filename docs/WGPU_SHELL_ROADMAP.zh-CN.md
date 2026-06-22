@@ -32,11 +32,18 @@ item-view hot path，这是本轮性能工作的关键突破。
 - icon theme cache 只保留命中的可渲染资源，不再长期缓存大量 negative full-path
   probe；这把 `/bin` compact 从头滚到底后的 `Private_Dirty` 从约 97.7 MB
   降到约 43.7-45.9 MB，其中 `[anon]` 从约 54.9 MB 降到约 2.9 MB。
+- 后续推进把 visible exact icon role lookup 从所有 UI 预热/绘制帧移到
+  pending resolver 路径；普通帧只读 exact cache 或显示 role fallback，避免滚动中
+  theme lookup 回到 draw path。
+- zoom 帧新增 role-raster 复用池：新尺寸还没有 exact raster 时，先按 MIME/icon
+  role 复用上一帧可绘制 raster，再由后续帧补齐。这对应 Dolphin 按 role/pixmap
+  cache 复用，而不是缩放时让图标短暂空掉。
 
 这说明当前架构已经比之前更接近 Dolphin：复用单位是文件管理器 role 和视图资源，
-昂贵工作进入队列/缓存边界，而不是在 draw path 为每个路径即时构造。剩余重点是继续
-把首次可见 exact icon role lookup 从滚动/zoom 帧移出去，避免 compact 模式下新 MIME
-批次进入视口时出现尖峰。
+昂贵工作进入队列/缓存边界，而不是在 draw path 为每个路径即时构造。最新 debug
+实测中，`/bin` compact 全滚动的 `icon_resolve_us_max` 为约 215 us，
+`Private_Dirty` 约 45.9 MB；`/etc` compact 滚动 `render_us_p95` 约 4.4 ms；
+compact 快速 zoom 的 `icon_raster_deferred_max` 已降为 0。
 
 ## 当前路线
 

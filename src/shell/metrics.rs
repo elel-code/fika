@@ -31,6 +31,7 @@ pub(crate) const TEXT_SWASH_OUTLINE_CACHE_MAX_ENTRIES: usize = 256;
 pub(crate) const ICON_ATLAS_WIDTH: u32 = 1024;
 pub(crate) const ICON_PADDING: u32 = 2;
 pub(crate) const ICON_CACHE_MAX_BYTES: usize = 32 * 1024 * 1024;
+pub(crate) const ICON_ROLE_RASTER_CACHE_MAX_BYTES: usize = 4 * 1024 * 1024;
 pub(crate) const ICON_RASTER_MISS_BUDGET_PER_FRAME: usize = 2;
 pub(crate) const ICON_ROLE_READ_AHEAD_LIMIT: usize = 512;
 pub(crate) const ICON_ROLE_READ_AHEAD_QUEUE_BUDGET_PER_FRAME: usize = 1;

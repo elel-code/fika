@@ -37,13 +37,20 @@ breakthrough from the current performance pass.
   negative full-path probe sets. In `/bin` compact full-scroll testing,
   `Private_Dirty` dropped from about 97.7 MB to about 43.7-45.9 MB, with
   `[anon]` dropping from about 54.9 MB to about 2.9 MB.
+- Follow-up work moved visible exact icon role lookup out of all UI
+  prewarm/draw frames. Normal frames now read the exact cache or show a role
+  fallback while the pending resolver owns theme lookup.
+- Zoom frames now reuse the previous drawable raster by MIME/icon role when the
+  exact new-size raster is not ready yet. This matches Dolphin's role/pixmap
+  reuse direction and avoids transient missing icons during compact zoom.
 
 The architecture is therefore materially closer to Dolphin: the reuse unit is a
 file-manager role and a view resource, while expensive work is bounded by queues
-and cache ownership instead of being constructed per path in the draw path. The
-remaining focus is to move first-time visible exact icon role lookup out of
-scroll/zoom frames, so compact mode does not spike when a new MIME batch enters
-the viewport.
+and cache ownership instead of being constructed per path in the draw path. In
+current debug measurements, `/bin` compact full-scroll has
+`icon_resolve_us_max` around 215 us and `Private_Dirty` around 45.9 MB; `/etc`
+compact scroll has `render_us_p95` around 4.4 ms; compact rapid zoom has
+`icon_raster_deferred_max` at 0.
 
 ## Current Route
 
