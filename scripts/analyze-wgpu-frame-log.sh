@@ -38,6 +38,18 @@ Options:
   --require-autosmoke-scroll
       Fail unless FIKA_WGPU_AUTOSMOKE_SCROLL produced changed scroll actions.
 
+  --min-metadata-visible N
+      Fail if the selected scope does not report at least N visible metadata
+      role candidates.
+
+  --min-metadata-results N
+      Fail if the selected scope does not report at least N completed metadata
+      role results.
+
+  --min-metadata-applied N
+      Fail if the selected scope does not report at least N applied metadata
+      role results.
+
   -h, --help
       Show this help.
 EOF
@@ -52,6 +64,9 @@ max_icon_raster_us=""
 max_text_deferred=""
 gate_scope="all"
 require_autosmoke_scroll=false
+min_metadata_visible=""
+min_metadata_results=""
+min_metadata_applied=""
 log_path=""
 
 while [[ $# -gt 0 ]]; do
@@ -146,6 +161,42 @@ while [[ $# -gt 0 ]]; do
         --require-autosmoke-scroll)
             require_autosmoke_scroll=true
             ;;
+        --min-metadata-visible)
+            if [[ $# -lt 2 || "$2" == --* ]]; then
+                echo "--min-metadata-visible requires a numeric value" >&2
+                usage >&2
+                exit 2
+            fi
+            min_metadata_visible="$2"
+            shift
+            ;;
+        --min-metadata-visible=*)
+            min_metadata_visible="${1#--min-metadata-visible=}"
+            ;;
+        --min-metadata-results)
+            if [[ $# -lt 2 || "$2" == --* ]]; then
+                echo "--min-metadata-results requires a numeric value" >&2
+                usage >&2
+                exit 2
+            fi
+            min_metadata_results="$2"
+            shift
+            ;;
+        --min-metadata-results=*)
+            min_metadata_results="${1#--min-metadata-results=}"
+            ;;
+        --min-metadata-applied)
+            if [[ $# -lt 2 || "$2" == --* ]]; then
+                echo "--min-metadata-applied requires a numeric value" >&2
+                usage >&2
+                exit 2
+            fi
+            min_metadata_applied="$2"
+            shift
+            ;;
+        --min-metadata-applied=*)
+            min_metadata_applied="${1#--min-metadata-applied=}"
+            ;;
         -h|--help)
             usage
             exit 0
@@ -173,9 +224,9 @@ if [[ -z "$log_path" ]]; then
     exit 2
 fi
 
-for value in "$max_render_us" "$warm_max_render_us" "$warm_p95_render_us" "$max_text_raster_us" "$max_icon_raster_us" "$max_text_deferred"; do
+for value in "$max_render_us" "$warm_max_render_us" "$warm_p95_render_us" "$max_text_raster_us" "$max_icon_raster_us" "$max_text_deferred" "$min_metadata_visible" "$min_metadata_results" "$min_metadata_applied"; do
     if [[ -n "$value" && ! "$value" =~ ^[0-9]+$ ]]; then
-        echo "gate values must be integer microsecond values" >&2
+        echo "gate values must be integer values" >&2
         exit 2
     fi
 done
@@ -202,6 +253,9 @@ awk \
     -v max_text_raster_us="${max_text_raster_us:-}" \
     -v max_icon_raster_us="${max_icon_raster_us:-}" \
     -v max_text_deferred="${max_text_deferred:-}" \
+    -v min_metadata_visible="${min_metadata_visible:-}" \
+    -v min_metadata_results="${min_metadata_results:-}" \
+    -v min_metadata_applied="${min_metadata_applied:-}" \
     -v gate_scope="$gate_scope" '
 function value_of(key,    i, pair) {
     for (i = 1; i <= NF; i++) {
@@ -217,6 +271,14 @@ function numeric_value(key,    value) {
     value = value_of(key)
     gsub(/[^0-9.].*/, "", value)
     return value + 0
+}
+
+function boolean_value(key,    value) {
+    value = value_of(key)
+    if (value == "true" || value == "1") {
+        return 1
+    }
+    return 0
 }
 
 function bump_metric(prefix, metric, value,    key) {
@@ -286,6 +348,20 @@ function add_text_prewarm(prefix, raster, entries, read_ahead, hits, misses, def
     bump_metric(prefix, "text_prewarm_misses", misses)
     bump_metric(prefix, "text_prewarm_deferred", deferred)
     bump_metric(prefix, "text_prewarm_over_budget", over_budget)
+}
+
+function add_metadata_prewarm(prefix, visible, deferred, batches, results, applied) {
+    metadata_prewarm_count[prefix]++
+    metadata_prewarm_visible_total[prefix] += visible
+    metadata_prewarm_deferred_total[prefix] += deferred
+    metadata_prewarm_batches_total[prefix] += batches
+    metadata_prewarm_results_total[prefix] += results
+    metadata_prewarm_applied_total[prefix] += applied
+    bump_metric(prefix, "metadata_prewarm_visible", visible)
+    bump_metric(prefix, "metadata_prewarm_deferred", deferred)
+    bump_metric(prefix, "metadata_prewarm_batches", batches)
+    bump_metric(prefix, "metadata_prewarm_results", results)
+    bump_metric(prefix, "metadata_prewarm_applied", applied)
 }
 
 function prewarm_percentile(prefix, percent,    count, i, j, tmp, rank) {
@@ -418,6 +494,26 @@ function print_text_prewarm_summary(prefix, label,    count, raster_p50, raster_
         max[prefix SUBSEP "text_prewarm_over_budget"] + 0)
 }
 
+function print_metadata_prewarm_summary(prefix, label,    count) {
+    count = metadata_prewarm_count[prefix] + 0
+    if (count <= 0) {
+        return
+    }
+    printf("wgpu-metadata-prewarm-summary scope=%s samples=%d visible_total=%d deferred_total=%d batches_total=%d results_total=%d applied_total=%d visible_max=%d deferred_max=%d batches_max=%d results_max=%d applied_max=%d\n",
+        label,
+        count,
+        metadata_prewarm_visible_total[prefix] + 0,
+        metadata_prewarm_deferred_total[prefix] + 0,
+        metadata_prewarm_batches_total[prefix] + 0,
+        metadata_prewarm_results_total[prefix] + 0,
+        metadata_prewarm_applied_total[prefix] + 0,
+        max[prefix SUBSEP "metadata_prewarm_visible"] + 0,
+        max[prefix SUBSEP "metadata_prewarm_deferred"] + 0,
+        max[prefix SUBSEP "metadata_prewarm_batches"] + 0,
+        max[prefix SUBSEP "metadata_prewarm_results"] + 0,
+        max[prefix SUBSEP "metadata_prewarm_applied"] + 0)
+}
+
 function print_autosmoke_scroll_summary() {
     if (autosmoke_scroll_actions <= 0) {
         return
@@ -434,6 +530,14 @@ function print_autosmoke_scroll_summary() {
 function gate_metric(gate, actual, label,    failed) {
     if (gate != "" && actual > gate) {
         printf("wgpu-frame-gate-fail scope=%s metric=%s actual=%d gate=%d\n", gate_scope, label, actual, gate) > "/dev/stderr"
+        return 1
+    }
+    return 0
+}
+
+function gate_min_metric(gate, actual, label,    failed) {
+    if (gate != "" && actual < gate) {
+        printf("wgpu-frame-gate-fail scope=%s metric=%s actual=%d gate=>=%d\n", gate_scope, label, actual, gate) > "/dev/stderr"
         return 1
     }
     return 0
@@ -581,9 +685,33 @@ function gate_metric(gate, actual, label,    failed) {
     text_prewarm_reason_seen[reason] = 1
 }
 
+/\[fika-wgpu\] prewarm-metadata/ {
+    view = value_of("view")
+    if (view == "") {
+        view = "unknown"
+    }
+    reason = value_of("reason")
+    if (reason == "") {
+        reason = "unknown"
+    }
+    prefix = "view:" view
+    reason_prefix = "reason:" reason
+    visible = numeric_value("visible")
+    deferred = numeric_value("deferred")
+    batches = numeric_value("batches")
+    results = numeric_value("results")
+    applied = numeric_value("applied")
+
+    add_metadata_prewarm("all", visible, deferred, batches, results, applied)
+    add_metadata_prewarm(prefix, visible, deferred, batches, results, applied)
+    add_metadata_prewarm(reason_prefix, visible, deferred, batches, results, applied)
+    metadata_prewarm_view_seen[view] = 1
+    metadata_prewarm_reason_seen[reason] = 1
+}
+
 /\[fika-wgpu\] autosmoke-scroll/ {
     action = value_of("action")
-    changed = numeric_value("changed")
+    changed = boolean_value("changed")
     new_scroll_x = numeric_value("new_scroll_x")
     new_scroll_y = numeric_value("new_scroll_y")
     autosmoke_scroll_actions++
@@ -626,6 +754,13 @@ END {
     for (reason in text_prewarm_reason_seen) {
         print_text_prewarm_summary("reason:" reason, "reason:" reason)
     }
+    print_metadata_prewarm_summary("all", "all")
+    for (view in metadata_prewarm_view_seen) {
+        print_metadata_prewarm_summary("view:" view, view)
+    }
+    for (reason in metadata_prewarm_reason_seen) {
+        print_metadata_prewarm_summary("reason:" reason, "reason:" reason)
+    }
     print_autosmoke_scroll_summary()
 
     if (gate_scope != "all" && frame_count[gate_scope] == 0) {
@@ -638,6 +773,9 @@ END {
     failed += gate_metric(max_text_raster_us, max[gate_scope SUBSEP "text_raster"] + 0, "text_raster_us_max")
     failed += gate_metric(max_icon_raster_us, max[gate_scope SUBSEP "icon_raster"] + 0, "icon_raster_us_max")
     failed += gate_metric(max_text_deferred, max[gate_scope SUBSEP "text_deferred"] + 0, "text_deferred_max")
+    failed += gate_min_metric(min_metadata_visible, metadata_prewarm_visible_total[gate_scope] + 0, "metadata_visible_total")
+    failed += gate_min_metric(min_metadata_results, metadata_prewarm_results_total[gate_scope] + 0, "metadata_results_total")
+    failed += gate_min_metric(min_metadata_applied, metadata_prewarm_applied_total[gate_scope] + 0, "metadata_applied_total")
     if (require_autosmoke_scroll == "true" && autosmoke_scroll_changed == 0) {
         print "wgpu-frame-gate-fail metric=autosmoke_scroll_changed actual=0 gate=>0" > "/dev/stderr"
         failed++

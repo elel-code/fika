@@ -73,8 +73,9 @@ has `Private_Dirty` at 45.5 MB, `autosmoke-scroll render_us_p50/p95/max` around
 `render_us_p95` around 3.9 ms; compact rapid zoom has `render_us_p95` around
 4.5 ms with `icon_raster_us_max=0`. The remaining mismatch to verify is quick
 small-directory tail scrolling when MIME roles are not ready; resolver,
-metadata scheduler, and shell runtime drains are in place, and the next step is
-end-to-end evidence.
+metadata scheduler, shell runtime drains, and frame-log metadata gates are in
+place, and the next step is capturing desktop-session end-to-end evidence
+through those gates.
 
 ## Current Route
 
@@ -132,4 +133,5 @@ wgpu = "29"
   editing, scroll/zoom, context menus, DnD, thumbnails, devices, and large
   directories.
 - Telemetry must cover frame time, layout time, visible slots, cache
-  hits/misses, atlas pressure, thumbnails, hit tests, and DnD state.
+  hits/misses, atlas pressure, thumbnails, metadata role prewarm/drain, hit
+  tests, and DnD state.

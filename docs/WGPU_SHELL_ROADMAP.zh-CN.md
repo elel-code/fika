@@ -59,8 +59,9 @@ item-view hot path，这是本轮性能工作的关键突破。
 `autosmoke-scroll render_us_p50/p95/max` 约 2.17/3.78/5.94 ms，`icon_raster_us_max=0`；
 `/etc` compact 快速滚动 `render_us_p95` 约 3.9 ms；compact 快速 zoom
 `render_us_p95` 约 4.5 ms，`icon_raster_us_max=0`。接下来需要验证的剩余点是
-小目录快速滚到未命中的尾部 MIME role：resolver、metadata scheduler 和 shell
-runtime drain 都已经落地，下一步是补端到端 evidence。
+小目录快速滚到未命中的尾部 MIME role：resolver、metadata scheduler、shell
+runtime drain 和 frame-log metadata gates 都已经落地，下一步是在真实 desktop
+session 中通过这些 gates 采集端到端 evidence。
 
 ## 当前路线
 
@@ -115,4 +116,4 @@ wgpu = "29"
 - Icons/Compact/Details、split panes、hidden files、location editing、
   scroll/zoom、context menus、DnD、thumbnails、devices、大目录 runtime smoke。
 - Telemetry 覆盖 frame time、layout time、visible slots、cache hits/misses、
-  atlas pressure、thumbnails、hit tests 和 DnD state。
+  atlas pressure、thumbnails、metadata role prewarm/drain、hit tests 和 DnD state。

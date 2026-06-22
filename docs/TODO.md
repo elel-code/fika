@@ -52,8 +52,10 @@ Status:
   pending work now promotes visible role requests over deferred read-ahead.
   Core MIME metadata role scheduling now has the same visible/deferred priority
   boundary, and the winit/wgpu shell now drains visible MIME metadata before
-  deferred read-ahead. Remaining work is collecting end-to-end small-directory
-  tail-scroll evidence.
+  deferred read-ahead. The wgpu frame-log analyzer now has metadata prewarm
+  summary/gates for visible candidates, completed results, and applied results;
+  remaining work is collecting a real desktop-session small-directory
+  tail-scroll trace through that gate.
 - [ ] Complete system integration in the winit/wgpu shell:
   Open With, service-menu icons/submenus, clipboard, create/rename/file
   transfer/trash/properties, thumbnail worker, devices, and dynamic Places.
@@ -64,7 +66,9 @@ Status:
 - [ ] Mainline verification:
   `cargo check`, `cargo test`, runtime smoke for `/etc`, repo root, large
   directories, Icons/Compact/Details, split pane, scrollbars, rubber-band,
-  context menus, location editing, hidden files, thumbnails, and devices.
+  context menus, location editing, hidden files, thumbnails, and devices. Use
+  `scripts/analyze-wgpu-frame-log.sh` metadata gates for the small-directory
+  tail-scroll MIME role evidence.
 
 ## Pending Areas
 
