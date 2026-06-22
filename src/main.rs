@@ -16499,7 +16499,8 @@ impl<'a> TextFrameBuilder<'a> {
         let cache_entries = self.label_cache.len();
         let cache_bytes = self.label_cache.bytes();
         let pending = std::mem::take(&mut self.pending_draws);
-        let reuse_atlas = self.atlas_cache.width == self.width
+        let reuse_atlas = !pending.is_empty()
+            && self.atlas_cache.width == self.width
             && self.atlas_cache.keys.len() == pending.len()
             && self
                 .atlas_cache
