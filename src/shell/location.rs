@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use super::wgpu_metrics::PATH_HISTORY_LIMIT;
+use crate::wgpu_pane::ShellPaneId;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct PathHistory {
@@ -106,6 +107,48 @@ impl LocationDraft {
             self.replace_on_insert = false;
         }
         self.cursor = normalized_text_cursor(&self.value, self.cursor);
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ShellLocationDraft {
+    pub(crate) pane: ShellPaneId,
+    pub(crate) draft: LocationDraft,
+}
+
+impl ShellLocationDraft {
+    pub(crate) fn new(pane: ShellPaneId, value: String) -> Self {
+        Self {
+            pane,
+            draft: LocationDraft::new(value),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct ShellPaneHistories {
+    histories: [PathHistory; 2],
+}
+
+impl ShellPaneHistories {
+    pub(crate) fn get(&self, pane: ShellPaneId) -> &PathHistory {
+        &self.histories[pane.index()]
+    }
+
+    pub(crate) fn get_mut(&mut self, pane: ShellPaneId) -> &mut PathHistory {
+        &mut self.histories[pane.index()]
+    }
+
+    pub(crate) fn clear(&mut self, pane: ShellPaneId) {
+        self.histories[pane.index()] = PathHistory::default();
+    }
+
+    pub(crate) fn take(&mut self, pane: ShellPaneId) -> PathHistory {
+        std::mem::take(&mut self.histories[pane.index()])
+    }
+
+    pub(crate) fn set(&mut self, pane: ShellPaneId, history: PathHistory) {
+        self.histories[pane.index()] = history;
     }
 }
 

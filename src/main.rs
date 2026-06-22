@@ -149,7 +149,7 @@ use wgpu_icon_roles::{
     FileIconKind, FileIconPathCacheKey, FileIconProfile, FileIconRoleCacheKey, NamedIconFallback,
     file_icon_path_cache_key, icon_cache_size,
 };
-use wgpu_location::{LocationDraft, PathHistory, normalized_text_cursor};
+use wgpu_location::{PathHistory, ShellLocationDraft, ShellPaneHistories, normalized_text_cursor};
 #[cfg(test)]
 use wgpu_menu_geometry::{context_menu_rect, drop_menu_rect};
 use wgpu_menu_geometry::{
@@ -307,48 +307,6 @@ enum ScrollbarDragTarget {
 struct ScrollbarDrag {
     target: ScrollbarDragTarget,
     grab_offset: f32,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct ShellLocationDraft {
-    pane: ShellPaneId,
-    draft: LocationDraft,
-}
-
-impl ShellLocationDraft {
-    fn new(pane: ShellPaneId, value: String) -> Self {
-        Self {
-            pane,
-            draft: LocationDraft::new(value),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-struct ShellPaneHistories {
-    histories: [PathHistory; 2],
-}
-
-impl ShellPaneHistories {
-    fn get(&self, pane: ShellPaneId) -> &PathHistory {
-        &self.histories[pane.index()]
-    }
-
-    fn get_mut(&mut self, pane: ShellPaneId) -> &mut PathHistory {
-        &mut self.histories[pane.index()]
-    }
-
-    fn clear(&mut self, pane: ShellPaneId) {
-        self.histories[pane.index()] = PathHistory::default();
-    }
-
-    fn take(&mut self, pane: ShellPaneId) -> PathHistory {
-        std::mem::take(self.get_mut(pane))
-    }
-
-    fn set(&mut self, pane: ShellPaneId, history: PathHistory) {
-        self.histories[pane.index()] = history;
-    }
 }
 
 fn window_title(scene: &ShellScene) -> String {
