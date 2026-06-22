@@ -16775,7 +16775,6 @@ enum FileIconKind {
     Directory,
     Mime {
         mime: Arc<str>,
-        extension: Option<String>,
     },
     PreliminaryFile {
         extension: Option<String>,
@@ -17167,7 +17166,10 @@ fn file_icon_kind(
         return FileIconKind::PreliminaryFile { extension };
     }
     match mime_type {
-        Some(mime) => FileIconKind::Mime { mime, extension },
+        Some(mime) if mime.as_ref() == fika_core::GENERIC_BINARY_MIME => {
+            FileIconKind::File { extension }
+        }
+        Some(mime) => FileIconKind::Mime { mime },
         None => FileIconKind::File { extension },
     }
 }
@@ -17215,11 +17217,8 @@ fn file_icon_profile(kind: &FileIconKind, mime: &fika_core::MimeDatabase) -> Fil
             vec!["folder".to_string(), "inode-directory".to_string()],
             Vec::new(),
         ),
-        FileIconKind::Mime {
-            mime: mime_name,
-            extension,
-        } => (
-            mime_icon_candidates(mime_name, extension.as_deref(), mime),
+        FileIconKind::Mime { mime: mime_name } => (
+            mime_icon_candidates(mime_name, mime),
             mime_generic_icon_candidates(mime_name, mime),
         ),
         FileIconKind::PreliminaryFile { extension } => (
@@ -17242,21 +17241,17 @@ fn file_icon_profile(kind: &FileIconKind, mime: &fika_core::MimeDatabase) -> Fil
     }
 }
 
-fn mime_icon_candidates(
-    mime_name: &str,
-    extension: Option<&str>,
-    mime: &fika_core::MimeDatabase,
-) -> Vec<String> {
+fn mime_icon_candidates(mime_name: &str, mime: &fika_core::MimeDatabase) -> Vec<String> {
     let mut candidates = Vec::new();
 
     if mime_name == fika_core::GENERIC_BINARY_MIME {
-        for icon_name in fallback_file_icon_candidates(extension) {
+        for icon_name in fallback_file_icon_candidates(None) {
             push_icon_candidate(&mut candidates, icon_name);
         }
         return candidates;
     }
 
-    for icon_name in mime_theme_icon_candidates(mime_name, extension) {
+    for icon_name in mime_theme_icon_candidates(mime_name, None) {
         push_icon_candidate(&mut candidates, icon_name);
     }
     if let Some(icon_name) = mime.icon_name_for_mime(mime_name) {
@@ -22701,6 +22696,54 @@ mod tests {
 
         assert_eq!(small.role, large.role);
         assert_ne!(small.size_px, large.size_px);
+    }
+
+    #[test]
+    fn file_icon_path_cache_keys_share_dolphin_mime_role_across_paths_and_extensions() {
+        let text_file = file_icon_path_cache_key(
+            Path::new("/tmp/readme.txt"),
+            false,
+            Some(Arc::from("text/plain")),
+            true,
+            32.0,
+        );
+        let log_file = file_icon_path_cache_key(
+            Path::new("/var/log/system.log"),
+            false,
+            Some(Arc::from("text/plain")),
+            true,
+            32.0,
+        );
+        let image_file = file_icon_path_cache_key(
+            Path::new("/tmp/readme.png"),
+            false,
+            Some(Arc::from("image/png")),
+            true,
+            32.0,
+        );
+
+        assert_eq!(text_file.role, log_file.role);
+        assert_ne!(text_file.role, image_file.role);
+    }
+
+    #[test]
+    fn preliminary_file_icon_roles_keep_extension_until_mime_is_resolved() {
+        let text_file = file_icon_path_cache_key(
+            Path::new("/tmp/readme.txt"),
+            false,
+            Some(Arc::from(fika_core::GENERIC_BINARY_MIME)),
+            false,
+            32.0,
+        );
+        let log_file = file_icon_path_cache_key(
+            Path::new("/var/log/system.log"),
+            false,
+            Some(Arc::from(fika_core::GENERIC_BINARY_MIME)),
+            false,
+            32.0,
+        );
+
+        assert_ne!(text_file.role, log_file.role);
     }
 
     #[test]
