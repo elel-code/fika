@@ -113,6 +113,8 @@ mod wgpu_options;
 mod wgpu_pane;
 #[path = "shell/pane_layout.rs"]
 mod wgpu_pane_layout;
+#[path = "shell/properties.rs"]
+mod wgpu_properties;
 #[path = "shell/selection.rs"]
 mod wgpu_selection;
 #[path = "shell/shortcuts.rs"]
@@ -177,6 +179,7 @@ use wgpu_pane::{
     ShellPaneVisibleSlotPools, ShellVisibleItemSlotPool, ShellVisibleItemSlotStats,
 };
 use wgpu_pane_layout::{DetailsLayout, ShellCompactLayout, ShellLayout, navigation_target};
+use wgpu_properties::{ShellPropertiesOverlay, property_row};
 use wgpu_selection::{
     NavigationAction, RubberBand, RubberBandMode, SelectionClick, ShellSelection,
 };
@@ -2992,18 +2995,6 @@ fn context_menu_named_icon_request(
         }
         _ => None,
     }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct ShellPropertyRow {
-    label: &'static str,
-    value: String,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct ShellPropertiesOverlay {
-    title: String,
-    rows: Vec<ShellPropertyRow>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -18781,10 +18772,6 @@ fn trash_conflict_dialog_replace_button_rect_scaled(
 
 fn scaled_dialog_metric(value: f32, scale_factor: f32) -> f32 {
     (value * scale_factor.max(1.0)).round().max(1.0)
-}
-
-fn property_row(label: &'static str, value: String) -> ShellPropertyRow {
-    ShellPropertyRow { label, value }
 }
 
 fn yes_no(value: bool) -> String {
