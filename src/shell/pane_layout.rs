@@ -127,10 +127,10 @@ pub(crate) struct ShellCompactLayout {
 }
 
 impl ShellCompactLayout {
-    pub(crate) fn new(layout: CompactLayout, text_widths: Vec<f32>) -> Self {
+    pub(crate) fn new(layout: CompactLayout, text_widths: impl Into<Arc<[f32]>>) -> Self {
         Self {
             layout,
-            text_widths: Arc::from(text_widths),
+            text_widths: text_widths.into(),
         }
     }
 

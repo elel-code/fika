@@ -28,6 +28,9 @@ Options:
   --max-icon-raster-us N
       Fail if any frame icon raster time exceeds N microseconds.
 
+  --require-autosmoke-scroll
+      Fail unless FIKA_WGPU_AUTOSMOKE_SCROLL produced changed scroll actions.
+
   -h, --help
       Show this help.
 EOF
@@ -39,6 +42,7 @@ warm_max_render_us=""
 warm_p95_render_us=""
 max_text_raster_us=""
 max_icon_raster_us=""
+require_autosmoke_scroll=false
 log_path=""
 
 while [[ $# -gt 0 ]]; do
@@ -106,6 +110,9 @@ while [[ $# -gt 0 ]]; do
         --max-icon-raster-us=*)
             max_icon_raster_us="${1#--max-icon-raster-us=}"
             ;;
+        --require-autosmoke-scroll)
+            require_autosmoke_scroll=true
+            ;;
         -h|--help)
             usage
             exit 0
@@ -153,6 +160,7 @@ awk \
     -v max_render_us="${max_render_us:-}" \
     -v warm_max_render_us="${warm_max_render_us:-}" \
     -v warm_p95_render_us="${warm_p95_render_us:-}" \
+    -v require_autosmoke_scroll="$require_autosmoke_scroll" \
     -v max_text_raster_us="${max_text_raster_us:-}" \
     -v max_icon_raster_us="${max_icon_raster_us:-}" '
 function value_of(key,    i, pair) {
@@ -303,6 +311,19 @@ function print_prewarm_summary(prefix, label,    count, resolve_p50, resolve_p95
         max[prefix SUBSEP "prewarm_over_budget"] + 0)
 }
 
+function print_autosmoke_scroll_summary() {
+    if (autosmoke_scroll_actions <= 0) {
+        return
+    }
+    printf("wgpu-autosmoke-scroll actions=%d changed=%d forward_changed=%d back_changed=%d max_new_scroll_x=%.1f max_new_scroll_y=%.1f\n",
+        autosmoke_scroll_actions + 0,
+        autosmoke_scroll_changed + 0,
+        autosmoke_scroll_forward_changed + 0,
+        autosmoke_scroll_back_changed + 0,
+        max["autosmoke-scroll" SUBSEP "new_scroll_x"] + 0,
+        max["autosmoke-scroll" SUBSEP "new_scroll_y"] + 0)
+}
+
 function gate_metric(gate, actual, label,    failed) {
     if (gate != "" && actual > gate) {
         printf("wgpu-frame-gate-fail metric=%s actual=%d gate=%d\n", label, actual, gate) > "/dev/stderr"
@@ -410,6 +431,24 @@ function gate_metric(gate, actual, label,    failed) {
     prewarm_reason_seen[reason] = 1
 }
 
+/\[fika-wgpu\] autosmoke-scroll/ {
+    action = value_of("action")
+    changed = numeric_value("changed")
+    new_scroll_x = numeric_value("new_scroll_x")
+    new_scroll_y = numeric_value("new_scroll_y")
+    autosmoke_scroll_actions++
+    if (changed > 0) {
+        autosmoke_scroll_changed++
+        if (action == "forward") {
+            autosmoke_scroll_forward_changed++
+        } else if (action == "back") {
+            autosmoke_scroll_back_changed++
+        }
+    }
+    bump_metric("autosmoke-scroll", "new_scroll_x", new_scroll_x)
+    bump_metric("autosmoke-scroll", "new_scroll_y", new_scroll_y)
+}
+
 END {
     failed = 0
     if (require_frames == "true" && total_frames == 0) {
@@ -430,12 +469,17 @@ END {
     for (reason in prewarm_reason_seen) {
         print_prewarm_summary("reason:" reason, "reason:" reason)
     }
+    print_autosmoke_scroll_summary()
 
     failed += gate_metric(max_render_us, max["all" SUBSEP "render"] + 0, "render_us_max")
     failed += gate_metric(warm_max_render_us, max["all" SUBSEP "warm_render"] + 0, "warm_render_us_max")
     failed += gate_metric(warm_p95_render_us, percentile("all", "warm_render", 95), "warm_render_us_p95")
     failed += gate_metric(max_text_raster_us, max["all" SUBSEP "text_raster"] + 0, "text_raster_us_max")
     failed += gate_metric(max_icon_raster_us, max["all" SUBSEP "icon_raster"] + 0, "icon_raster_us_max")
+    if (require_autosmoke_scroll == "true" && autosmoke_scroll_changed == 0) {
+        print "wgpu-frame-gate-fail metric=autosmoke_scroll_changed actual=0 gate=>0" > "/dev/stderr"
+        failed++
+    }
     if (failed > 0) {
         exit 1
     }
