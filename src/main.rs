@@ -121,6 +121,8 @@ mod wgpu_selection;
 mod wgpu_shortcuts;
 #[path = "shell/tasks.rs"]
 mod wgpu_tasks;
+#[path = "shell/trash_conflict.rs"]
+mod wgpu_trash_conflict;
 
 use wgpu_autosmoke::{AutosmokeScrollAction, autosmoke_scroll_config, autosmoke_zoom_config};
 use wgpu_clipboard::ShellClipboard;
@@ -206,6 +208,7 @@ use wgpu_shortcuts::{
 use wgpu_tasks::{
     ShellTaskDetailDialog, ShellTaskId, ShellTaskStatus, ShellTaskStatusKind, TaskDetailDialogClick,
 };
+use wgpu_trash_conflict::{ShellTrashConflictDialog, TrashConflictDialogClick};
 
 fn startup_view_mode(
     requested: ShellViewMode,
@@ -3132,29 +3135,6 @@ impl ShellTrashResult {
     fn changed(&self) -> bool {
         self.success_count > 0
     }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct ShellTrashConflictDialog {
-    conflicts: Vec<file_ops::TrashRestoreConflict>,
-}
-
-impl ShellTrashConflictDialog {
-    fn new(conflicts: Vec<file_ops::TrashRestoreConflict>) -> Option<Self> {
-        (!conflicts.is_empty()).then_some(Self { conflicts })
-    }
-
-    fn first_conflict(&self) -> Option<&file_ops::TrashRestoreConflict> {
-        self.conflicts.first()
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum TrashConflictDialogClick {
-    Outside,
-    Inside,
-    Cancel,
-    Replace,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
