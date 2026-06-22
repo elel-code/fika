@@ -38,6 +38,7 @@ pub(crate) const ICON_ROLE_RASTER_CACHE_MAX_BYTES: usize = 4 * 1024 * 1024;
 pub(crate) const ICON_RASTER_VISIBLE_SYNC_BUDGET: usize = 128;
 pub(crate) const ICON_ROLE_READ_AHEAD_LIMIT: usize = 512;
 pub(crate) const ICON_ROLE_READ_AHEAD_QUEUE_BUDGET_PER_FRAME: usize = 1;
+pub(crate) const METADATA_ROLE_BATCH_SIZE: usize = 64;
 pub(crate) const DOLPHIN_RESOLVE_ALL_ITEMS_LIMIT: usize = 500;
 pub(crate) const DOLPHIN_MAX_BLOCK_TIMEOUT: Duration = Duration::from_millis(200);
 pub(crate) const VISIBLE_ICON_ROLE_PREWARM_BUDGET: Duration = Duration::from_millis(8);

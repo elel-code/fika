@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{
     Arc,
@@ -19,7 +19,7 @@ pub(crate) struct ResolvedFileIcon {
 
 pub(crate) struct FileIconResolver {
     cached: HashMap<FileIconPathCacheKey, ResolvedFileIcon>,
-    pending: HashSet<FileIconPathCacheKey>,
+    pending: HashMap<FileIconPathCacheKey, IconResolvePriority>,
     fast_theme: IconThemeResolver,
     fast_profiles: HashMap<FileIconRoleCacheKey, FileIconProfile>,
     request_tx: Option<Sender<IconResolveRequest>>,
@@ -31,6 +31,13 @@ const DOLPHIN_VISIBLE_ICON_PREWARM_SIZES: &[u16] = &[16, 22, 32, 48, 64, 80, 96,
 #[derive(Clone, Debug)]
 struct IconResolveRequest {
     key: FileIconPathCacheKey,
+    priority: IconResolvePriority,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum IconResolvePriority {
+    Deferred,
+    Visible,
 }
 
 #[derive(Clone, Debug)]
@@ -50,7 +57,7 @@ impl FileIconResolver {
             .map(|_| request_tx);
         let mut resolver = Self {
             cached: HashMap::new(),
-            pending: HashSet::new(),
+            pending: HashMap::new(),
             fast_theme: IconThemeResolver::default(),
             fast_profiles: HashMap::new(),
             request_tx,
@@ -99,7 +106,7 @@ impl FileIconResolver {
             entry.mime_magic_checked,
             icon_size,
         );
-        self.resolve_key(key)
+        self.resolve_key(key, IconResolvePriority::Deferred)
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -136,7 +143,7 @@ impl FileIconResolver {
             entry.mime_magic_checked,
             icon_size,
         );
-        if let Some(icon) = self.resolve_key(key.clone()) {
+        if let Some(icon) = self.resolve_key(key.clone(), IconResolvePriority::Visible) {
             return (icon, false);
         }
 
@@ -187,7 +194,7 @@ impl FileIconResolver {
             },
             size_px: icon_cache_size(icon_size),
         };
-        self.resolve_key(key)
+        self.resolve_key(key, IconResolvePriority::Deferred)
     }
 
     pub(crate) fn resolve_path_cache_key(
@@ -195,7 +202,7 @@ impl FileIconResolver {
         key: FileIconPathCacheKey,
     ) -> Option<ResolvedFileIcon> {
         self.drain_results();
-        self.resolve_key(key)
+        self.resolve_key(key, IconResolvePriority::Deferred)
     }
 
     pub(crate) fn resolve_path_cache_key_fast(
@@ -206,18 +213,28 @@ impl FileIconResolver {
         self.resolve_key_fast(key)
     }
 
-    fn resolve_key(&mut self, key: FileIconPathCacheKey) -> Option<ResolvedFileIcon> {
+    fn resolve_key(
+        &mut self,
+        key: FileIconPathCacheKey,
+        priority: IconResolvePriority,
+    ) -> Option<ResolvedFileIcon> {
         if let Some(icon) = self.cached.get(&key) {
             return Some(icon.clone());
         }
 
-        if self.pending.insert(key.clone())
-            && self
+        let should_send = self
+            .pending
+            .get(&key)
+            .is_none_or(|queued_priority| priority > *queued_priority);
+        if should_send {
+            self.pending.insert(key.clone(), priority);
+            if self
                 .request_tx
                 .as_ref()
-                .is_none_or(|tx| tx.send(IconResolveRequest { key }).is_err())
-        {
-            self.pending.clear();
+                .is_none_or(|tx| tx.send(IconResolveRequest { key, priority }).is_err())
+            {
+                self.pending.clear();
+            }
         }
         None
     }
@@ -285,20 +302,88 @@ fn icon_resolve_worker(
     let mut theme = IconThemeResolver::default();
     let mime = fika_core::MimeDatabase::shared();
     let mut roles = HashMap::<FileIconRoleCacheKey, FileIconProfile>::new();
+    let mut queue = IconResolveWorkerQueue::default();
     while let Ok(request) = request_rx.recv() {
-        let profile = roles
-            .entry(request.key.role.clone())
-            .or_insert_with(|| file_icon_profile(&request.key.role.kind, mime));
-        let icon = file_icon_snapshot(profile, request.key.size_px, &mut theme);
-        if result_tx
-            .send(IconResolveResult {
-                key: request.key,
-                icon,
-            })
-            .is_err()
-        {
-            break;
+        queue.push(request);
+        drain_icon_resolve_requests(&request_rx, &mut queue);
+        while let Some(request) = queue.pop() {
+            drain_icon_resolve_requests(&request_rx, &mut queue);
+            if result_tx
+                .send(resolve_icon_request(request, &mut theme, mime, &mut roles))
+                .is_err()
+            {
+                return;
+            }
         }
+    }
+}
+
+#[derive(Default)]
+struct IconResolveWorkerQueue {
+    visible: VecDeque<FileIconPathCacheKey>,
+    deferred: VecDeque<FileIconPathCacheKey>,
+    queued: HashMap<FileIconPathCacheKey, IconResolvePriority>,
+}
+
+impl IconResolveWorkerQueue {
+    fn push(&mut self, request: IconResolveRequest) {
+        if self
+            .queued
+            .get(&request.key)
+            .is_some_and(|queued_priority| *queued_priority >= request.priority)
+        {
+            return;
+        }
+        self.queued.insert(request.key.clone(), request.priority);
+        match request.priority {
+            IconResolvePriority::Visible => self.visible.push_back(request.key),
+            IconResolvePriority::Deferred => self.deferred.push_back(request.key),
+        }
+    }
+
+    fn pop(&mut self) -> Option<IconResolveRequest> {
+        while let Some(key) = self.visible.pop_front() {
+            if self.queued.remove(&key) == Some(IconResolvePriority::Visible) {
+                return Some(IconResolveRequest {
+                    key,
+                    priority: IconResolvePriority::Visible,
+                });
+            }
+        }
+        while let Some(key) = self.deferred.pop_front() {
+            if self.queued.remove(&key) == Some(IconResolvePriority::Deferred) {
+                return Some(IconResolveRequest {
+                    key,
+                    priority: IconResolvePriority::Deferred,
+                });
+            }
+        }
+        None
+    }
+}
+
+fn drain_icon_resolve_requests(
+    request_rx: &Receiver<IconResolveRequest>,
+    queue: &mut IconResolveWorkerQueue,
+) {
+    while let Ok(request) = request_rx.try_recv() {
+        queue.push(request);
+    }
+}
+
+fn resolve_icon_request(
+    request: IconResolveRequest,
+    theme: &mut IconThemeResolver,
+    mime: &fika_core::MimeDatabase,
+    roles: &mut HashMap<FileIconRoleCacheKey, FileIconProfile>,
+) -> IconResolveResult {
+    let profile = roles
+        .entry(request.key.role.clone())
+        .or_insert_with(|| file_icon_profile(&request.key.role.kind, mime));
+    let icon = file_icon_snapshot(profile, request.key.size_px, theme);
+    IconResolveResult {
+        key: request.key,
+        icon,
     }
 }
 
@@ -317,7 +402,7 @@ impl FileIconResolverTestHarness {
         Self {
             resolver: FileIconResolver {
                 cached: HashMap::new(),
-                pending: HashSet::new(),
+                pending: HashMap::new(),
                 fast_theme: IconThemeResolver::default(),
                 fast_profiles: HashMap::new(),
                 request_tx: Some(request_tx),
@@ -337,5 +422,93 @@ impl FileIconResolverTestHarness {
             key,
             icon: ResolvedFileIcon { path },
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_mime_key(mime: &'static str) -> FileIconPathCacheKey {
+        FileIconPathCacheKey {
+            role: FileIconRoleCacheKey {
+                kind: FileIconKind::Mime {
+                    mime: Arc::from(mime),
+                },
+            },
+            size_px: 32,
+        }
+    }
+
+    #[test]
+    fn icon_resolve_worker_queue_promotes_visible_request_over_deferred() {
+        let mut queue = IconResolveWorkerQueue::default();
+        let first = test_mime_key("text/plain");
+        let second = test_mime_key("image/png");
+
+        queue.push(IconResolveRequest {
+            key: first.clone(),
+            priority: IconResolvePriority::Deferred,
+        });
+        queue.push(IconResolveRequest {
+            key: second.clone(),
+            priority: IconResolvePriority::Deferred,
+        });
+        queue.push(IconResolveRequest {
+            key: first.clone(),
+            priority: IconResolvePriority::Visible,
+        });
+
+        let promoted = queue
+            .pop()
+            .expect("visible request should be available first");
+        assert_eq!(promoted.key, first);
+        assert_eq!(promoted.priority, IconResolvePriority::Visible);
+
+        let remaining = queue
+            .pop()
+            .expect("unpromoted deferred request should remain queued");
+        assert_eq!(remaining.key, second);
+        assert_eq!(remaining.priority, IconResolvePriority::Deferred);
+        assert!(queue.pop().is_none());
+    }
+
+    #[test]
+    fn file_icon_resolver_promotes_pending_deferred_key_to_visible() {
+        let (request_tx, request_rx) = mpsc::channel::<IconResolveRequest>();
+        let (_result_tx, result_rx) = mpsc::channel::<IconResolveResult>();
+        let mut resolver = FileIconResolver {
+            cached: HashMap::new(),
+            pending: HashMap::new(),
+            fast_theme: IconThemeResolver::default(),
+            fast_profiles: HashMap::new(),
+            request_tx: Some(request_tx),
+            result_rx,
+        };
+        let key = test_mime_key("text/plain");
+
+        assert_eq!(
+            resolver.resolve_key(key.clone(), IconResolvePriority::Deferred),
+            None
+        );
+        let deferred = request_rx
+            .try_recv()
+            .expect("deferred miss should queue worker request");
+        assert_eq!(deferred.key, key);
+        assert_eq!(deferred.priority, IconResolvePriority::Deferred);
+
+        assert_eq!(
+            resolver.resolve_key(key.clone(), IconResolvePriority::Visible),
+            None
+        );
+        let visible = request_rx
+            .try_recv()
+            .expect("visible miss should promote pending worker request");
+        assert_eq!(visible.key, key);
+        assert_eq!(visible.priority, IconResolvePriority::Visible);
+        assert_eq!(
+            resolver.pending.get(&key),
+            Some(&IconResolvePriority::Visible)
+        );
     }
 }

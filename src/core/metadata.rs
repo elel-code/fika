@@ -3,7 +3,7 @@ use super::mime::{MimeDatabase, mime_magic_resolution_required, read_mime_magic}
 use super::model::DirectoryModel;
 use super::network::is_network_path;
 use super::pane::{Generation, PaneId};
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -158,10 +158,17 @@ pub struct MetadataRoleBatch {
     pub requests: Vec<MetadataRoleRequest>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum MetadataRolePriority {
+    Deferred,
+    Visible,
+}
+
 #[derive(Debug, Default)]
 pub struct MetadataRoleScheduler {
-    queued: VecDeque<MetadataRoleRequest>,
-    seen: HashSet<MetadataRoleWorkKey>,
+    visible: VecDeque<MetadataRoleRequest>,
+    deferred: VecDeque<MetadataRoleRequest>,
+    seen: HashMap<MetadataRoleWorkKey, MetadataRolePriority>,
     active: HashSet<MetadataRoleWorkKey>,
     role_batch_pending: bool,
 }
@@ -172,6 +179,21 @@ impl MetadataRoleScheduler {
         pane_id: PaneId,
         generation: Generation,
         candidates: impl IntoIterator<Item = MetadataRoleCandidate>,
+    ) -> bool {
+        self.queue_candidates_with_priority(
+            pane_id,
+            generation,
+            candidates,
+            MetadataRolePriority::Visible,
+        )
+    }
+
+    pub fn queue_candidates_with_priority(
+        &mut self,
+        pane_id: PaneId,
+        generation: Generation,
+        candidates: impl IntoIterator<Item = MetadataRoleCandidate>,
+        priority: MetadataRolePriority,
     ) -> bool {
         let mut keep = HashSet::new();
         let mut pending = Vec::new();
@@ -184,27 +206,40 @@ impl MetadataRoleScheduler {
             };
             pending.push((key, request));
         }
-        self.prune_queued_for_snapshot(pane_id, generation, &keep);
+        if priority == MetadataRolePriority::Visible {
+            self.prune_visible_for_snapshot(pane_id, generation, &keep);
+        }
 
         let mut queued = false;
         for (key, request) in pending {
-            if self.seen.contains(&key) {
+            if self
+                .seen
+                .get(&key)
+                .is_some_and(|queued_priority| *queued_priority >= priority)
+            {
                 continue;
             }
-            self.seen.insert(key);
-            self.queued.push_back(request);
+            self.seen.insert(key.clone(), priority);
+            match priority {
+                MetadataRolePriority::Visible => {
+                    self.deferred
+                        .retain(|queued| MetadataRoleWorkKey::from_request(queued) != key);
+                    self.visible.push_back(request);
+                }
+                MetadataRolePriority::Deferred => self.deferred.push_back(request),
+            }
             queued = true;
         }
         queued
     }
 
     pub fn start_role_batch(&mut self, batch_size: usize) -> Option<MetadataRoleBatch> {
-        if self.role_batch_pending || self.queued.is_empty() {
+        if self.role_batch_pending || (self.visible.is_empty() && self.deferred.is_empty()) {
             return None;
         }
         let mut requests = Vec::new();
         while requests.len() < batch_size {
-            let Some(request) = self.queued.pop_front() else {
+            let Some(request) = self.pop_next_queued_request() else {
                 break;
             };
             requests.push(request);
@@ -243,27 +278,30 @@ impl MetadataRoleScheduler {
     }
 
     pub fn cancel_pane(&mut self, pane_id: PaneId) {
-        self.queued.retain(|request| request.pane_id != pane_id);
-        self.seen.retain(|key| key.pane_id != pane_id);
+        self.visible.retain(|request| request.pane_id != pane_id);
+        self.deferred.retain(|request| request.pane_id != pane_id);
+        self.seen.retain(|key, _| key.pane_id != pane_id);
         self.active.retain(|key| key.pane_id != pane_id);
     }
 
     pub fn cancel_stale_pane_generations(&mut self, pane_id: PaneId, generation: Generation) {
-        self.queued
+        self.visible
+            .retain(|request| request.pane_id != pane_id || request.generation == generation);
+        self.deferred
             .retain(|request| request.pane_id != pane_id || request.generation == generation);
         self.seen
-            .retain(|key| key.pane_id != pane_id || key.generation == generation);
+            .retain(|key, _| key.pane_id != pane_id || key.generation == generation);
         self.active
             .retain(|key| key.pane_id != pane_id || key.generation == generation);
     }
 
     pub fn is_empty(&self) -> bool {
-        self.queued.is_empty() && !self.role_batch_pending
+        self.visible.is_empty() && self.deferred.is_empty() && !self.role_batch_pending
     }
 
     #[cfg(test)]
     pub(crate) fn queued_len(&self) -> usize {
-        self.queued.len()
+        self.visible.len() + self.deferred.len()
     }
 
     #[cfg(test)]
@@ -271,14 +309,30 @@ impl MetadataRoleScheduler {
         self.seen.len()
     }
 
-    fn prune_queued_for_snapshot(
+    fn pop_next_queued_request(&mut self) -> Option<MetadataRoleRequest> {
+        while let Some(request) = self.visible.pop_front() {
+            let key = MetadataRoleWorkKey::from_request(&request);
+            if self.seen.get(&key) == Some(&MetadataRolePriority::Visible) {
+                return Some(request);
+            }
+        }
+        while let Some(request) = self.deferred.pop_front() {
+            let key = MetadataRoleWorkKey::from_request(&request);
+            if self.seen.get(&key) == Some(&MetadataRolePriority::Deferred) {
+                return Some(request);
+            }
+        }
+        None
+    }
+
+    fn prune_visible_for_snapshot(
         &mut self,
         pane_id: PaneId,
         generation: Generation,
         keep: &HashSet<MetadataRoleWorkKey>,
     ) {
         let mut removed = Vec::new();
-        self.queued.retain(|request| {
+        self.visible.retain(|request| {
             if request.pane_id != pane_id || request.generation != generation {
                 return true;
             }
@@ -291,7 +345,9 @@ impl MetadataRoleScheduler {
             }
         });
         for key in removed {
-            self.seen.remove(&key);
+            if self.seen.get(&key) == Some(&MetadataRolePriority::Visible) {
+                self.seen.remove(&key);
+            }
         }
     }
 }
@@ -396,6 +452,68 @@ mod tests {
         scheduler.finish_role_batch();
         assert!(scheduler.is_empty());
         assert_eq!(scheduler.seen_len(), 0);
+    }
+
+    #[test]
+    fn metadata_role_scheduler_promotes_visible_work_over_deferred() {
+        let root = PathBuf::from("/tmp/fika-metadata-priority");
+        let deferred = metadata_candidate(ItemId(1), root.join("deferred"));
+        let visible = metadata_candidate(ItemId(2), root.join("visible"));
+        let mut scheduler = MetadataRoleScheduler::default();
+
+        assert!(scheduler.queue_candidates_with_priority(
+            PaneId(1),
+            Generation(1),
+            vec![deferred.clone()],
+            MetadataRolePriority::Deferred,
+        ));
+        assert!(scheduler.queue_candidates(PaneId(1), Generation(1), vec![visible.clone()]));
+
+        let batch = scheduler.start_role_batch(2).unwrap();
+        assert_eq!(batch.requests[0].item_id(), visible.item_id);
+        assert_eq!(batch.requests[1].item_id(), deferred.item_id);
+    }
+
+    #[test]
+    fn metadata_role_scheduler_promotes_same_key_from_deferred_to_visible() {
+        let root = PathBuf::from("/tmp/fika-metadata-promote");
+        let candidate = metadata_candidate(ItemId(1), root.join("payload"));
+        let mut scheduler = MetadataRoleScheduler::default();
+
+        assert!(scheduler.queue_candidates_with_priority(
+            PaneId(1),
+            Generation(1),
+            vec![candidate.clone()],
+            MetadataRolePriority::Deferred,
+        ));
+        assert!(scheduler.queue_candidates(PaneId(1), Generation(1), vec![candidate.clone()]));
+
+        assert_eq!(scheduler.queued_len(), 1);
+        let batch = scheduler.start_role_batch(8).unwrap();
+        assert_eq!(batch.requests.len(), 1);
+        assert_eq!(batch.requests[0].item_id(), candidate.item_id);
+    }
+
+    #[test]
+    fn metadata_role_scheduler_visible_snapshot_keeps_deferred_background_work() {
+        let root = PathBuf::from("/tmp/fika-metadata-visible-keeps-deferred");
+        let deferred = metadata_candidate(ItemId(1), root.join("deferred"));
+        let visible = metadata_candidate(ItemId(2), root.join("visible"));
+        let mut scheduler = MetadataRoleScheduler::default();
+
+        assert!(scheduler.queue_candidates_with_priority(
+            PaneId(1),
+            Generation(1),
+            vec![deferred.clone()],
+            MetadataRolePriority::Deferred,
+        ));
+        assert!(scheduler.queue_candidates(PaneId(1), Generation(1), vec![visible.clone()]));
+        assert!(!scheduler.queue_candidates(PaneId(1), Generation(1), vec![visible.clone()]));
+
+        let batch = scheduler.start_role_batch(8).unwrap();
+        assert_eq!(batch.requests.len(), 2);
+        assert_eq!(batch.requests[0].item_id(), visible.item_id);
+        assert_eq!(batch.requests[1].item_id(), deferred.item_id);
     }
 
     #[test]

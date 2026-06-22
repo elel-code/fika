@@ -1063,6 +1063,7 @@ fn image_thumbnail_extension(extension: &str) -> bool {
             | "heic"
             | "heif"
             | "avif"
+            | "avifs"
     )
 }
 
@@ -1481,6 +1482,10 @@ mod tests {
         ));
         assert!(thumbnail_request_may_have_preview(
             Path::new("/tmp/photo.png"),
+            Some("application/octet-stream")
+        ));
+        assert!(thumbnail_request_may_have_preview(
+            Path::new("/tmp/clip.avifs"),
             Some("application/octet-stream")
         ));
         assert!(!thumbnail_request_may_have_preview(

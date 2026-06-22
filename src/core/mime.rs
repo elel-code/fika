@@ -206,7 +206,7 @@ pub fn detect_mime_from_magic(bytes: &[u8]) -> Option<&'static str> {
     } else if bytes.starts_with(b"OggS") {
         Some("audio/ogg")
     } else if bytes.len() >= 12 && &bytes[4..8] == b"ftyp" {
-        Some("video/mp4")
+        iso_base_media_mime(bytes)
     } else if bytes.starts_with(&[0x1a, 0x45, 0xdf, 0xa3]) {
         Some("video/x-matroska")
     } else if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
@@ -222,6 +222,23 @@ pub fn detect_mime_from_magic(bytes: &[u8]) -> Option<&'static str> {
     } else {
         None
     }
+}
+
+fn iso_base_media_mime(bytes: &[u8]) -> Option<&'static str> {
+    let major = bytes.get(8..12)?;
+    if matches!(major, b"avif" | b"avis") || iso_base_media_has_compatible_brand(bytes, b"avif") {
+        Some("image/avif")
+    } else if matches!(major, b"qt  ") {
+        Some("video/quicktime")
+    } else {
+        Some("video/mp4")
+    }
+}
+
+fn iso_base_media_has_compatible_brand(bytes: &[u8], brand: &[u8; 4]) -> bool {
+    bytes
+        .get(16..)
+        .is_some_and(|brands| brands.chunks_exact(4).any(|chunk| chunk == brand))
 }
 
 fn trim_ascii_prefix(bytes: &[u8]) -> &[u8] {
@@ -779,6 +796,26 @@ mod tests {
         assert_eq!(
             detect_mime_from_magic(b"#!/usr/bin/env python\nprint('ok')\n"),
             Some("text/x-python")
+        );
+        assert_eq!(
+            detect_mime_from_magic(b"\0\0\0\x20ftypavif\0\0\0\0avifmif1"),
+            Some("image/avif")
+        );
+        assert_eq!(
+            detect_mime_from_magic(b"\0\0\0\x20ftypavis\0\0\0\0avisavif"),
+            Some("image/avif")
+        );
+        assert_eq!(
+            detect_mime_from_magic(b"\0\0\0\x18ftypisom\0\0\0\0avif"),
+            Some("image/avif")
+        );
+        assert_eq!(
+            detect_mime_from_magic(b"\0\0\0\x18ftypqt  \0\0\0\0"),
+            Some("video/quicktime")
+        );
+        assert_eq!(
+            detect_mime_from_magic(b"\0\0\0\x18ftypisom\0\0\0\0mp41"),
+            Some("video/mp4")
         );
         assert_eq!(
             detect_mime_from_magic(b"   <svg xmlns=\"http://www.w3.org/2000/svg\"/>"),

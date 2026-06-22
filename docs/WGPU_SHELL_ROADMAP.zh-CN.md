@@ -43,15 +43,24 @@ item-view hot path，这是本轮性能工作的关键突破。
   cache、相邻尺寸 cache、role-raster cache 或 generic role fallback，不再在普通
   redraw 中同步 raster SVG。这对应 Dolphin 按 role/pixmap cache 复用，而不是缩放
   时让图标短暂空掉或把 SVG raster 放回 draw path。
+- icon resolver 的 pending 请求现在区分 visible/deferred 优先级，worker 会把可见
+  role 请求提升到 deferred read-ahead 前处理。这让当前 viewport 的 role work
+  优先于后台 warmup，更接近 Dolphin 由 event loop 分摊 pending role 的边界。
+- core MIME metadata role 调度也具备同样的 visible/deferred 边界：可见 metadata
+  work 会先于 deferred background work 成批处理，同一个 key 的 deferred 请求可以
+  被提升为 visible，visible snapshot 也不会误删 deferred background 请求。
+- winit/wgpu shell 现在已经在 prewarm/render 中使用这个 metadata 边界：可见
+  MIME metadata candidates 会先于 deferred read-ahead drain，旧结果通过 pane、
+  path、entry index、size 和 modified time 做保护性写回。
 
 这说明当前架构已经比之前更接近 Dolphin：复用单位是文件管理器 role 和视图资源，
 昂贵工作进入队列/缓存边界，而不是在 draw path 为每个路径即时构造。最新 debug
 实测中，`/bin` compact 从头滚到底并停留末尾的 `Private_Dirty` 为 45.5 MB，
 `autosmoke-scroll render_us_p50/p95/max` 约 2.17/3.78/5.94 ms，`icon_raster_us_max=0`；
 `/etc` compact 快速滚动 `render_us_p95` 约 3.9 ms；compact 快速 zoom
-`render_us_p95` 约 4.5 ms，`icon_raster_us_max=0`。剩余未对齐点是小目录快速滚到
-未命中的尾部 MIME role 时仍可能出现 generic -> exact 图标后补；把 role resolver
-改成 visible-priority/background drain 是下一步。
+`render_us_p95` 约 4.5 ms，`icon_raster_us_max=0`。接下来需要验证的剩余点是
+小目录快速滚到未命中的尾部 MIME role：resolver、metadata scheduler 和 shell
+runtime drain 都已经落地，下一步是补端到端 evidence。
 
 ## 当前路线
 

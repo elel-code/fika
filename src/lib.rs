@@ -53,9 +53,10 @@ pub use core::location::{
     normalize_start_dir, parent_location, resolve_location_input,
 };
 pub use core::metadata::{
-    MetadataRoleBatch, MetadataRoleCandidate, MetadataRoleRequest, MetadataRoleResult,
-    MetadataRoleScheduler, MetadataRoleWorkKey, apply_metadata_role_result_to_model,
-    metadata_role_result_for_request, metadata_role_results_for_requests,
+    MetadataRoleBatch, MetadataRoleCandidate, MetadataRolePriority, MetadataRoleRequest,
+    MetadataRoleResult, MetadataRoleScheduler, MetadataRoleWorkKey,
+    apply_metadata_role_result_to_model, metadata_role_result_for_request,
+    metadata_role_results_for_requests,
 };
 pub use core::mime::{
     GENERIC_BINARY_MIME, MimeDatabase, detect_mime_from_magic, generic_mime_icon_name,

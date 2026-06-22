@@ -52,6 +52,17 @@ breakthrough from the current performance pass.
   fallback instead of synchronously rasterizing SVGs during ordinary redraws.
   This matches Dolphin's role/pixmap reuse direction and avoids transient
   missing icons during compact zoom.
+- Icon resolver pending requests now carry visible/deferred priority, and the
+  worker promotes visible role requests over deferred read-ahead. This keeps
+  current viewport role work ahead of background warmup, closer to Dolphin's
+  event-loop-drained role updater.
+- Core MIME metadata role scheduling has the same visible/deferred boundary:
+  visible metadata work is batched before deferred background work, same-key
+  deferred requests can be promoted, and visible snapshots no longer discard
+  deferred background requests.
+- The winit/wgpu shell now uses that metadata boundary during prewarm/render:
+  visible MIME metadata candidates are drained before deferred read-ahead and
+  stale results are guarded by pane, path, entry index, size, and modified time.
 
 The architecture is therefore materially closer to Dolphin: the reuse unit is a
 file-manager role and a view resource, while expensive work is bounded by queues
@@ -60,10 +71,10 @@ current debug measurements, `/bin` compact full-scroll and end-position dwell
 has `Private_Dirty` at 45.5 MB, `autosmoke-scroll render_us_p50/p95/max` around
 2.17/3.78/5.94 ms, and `icon_raster_us_max=0`; `/etc` compact rapid scroll has
 `render_us_p95` around 3.9 ms; compact rapid zoom has `render_us_p95` around
-4.5 ms with `icon_raster_us_max=0`. The remaining mismatch is that quickly
-scrolling a small directory to a tail range whose MIME roles are not ready can
-still show generic -> exact icon replacement; making the role resolver
-visible-priority/background-drained is the next step.
+4.5 ms with `icon_raster_us_max=0`. The remaining mismatch to verify is quick
+small-directory tail scrolling when MIME roles are not ready; resolver,
+metadata scheduler, and shell runtime drains are in place, and the next step is
+end-to-end evidence.
 
 ## Current Route
 

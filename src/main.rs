@@ -21,8 +21,8 @@ use cosmic_text::{
 use fika_core::{
     AppSettings, CompactLayout, CompactLayoutOptions, DesktopLaunchPlan, DeviceInfo,
     DevicePlaceOperation, DevicePlaceOperationResult, Entry, FileClipboardRole, FileTransferMode,
-    Generation, IconsLayout, IconsLayoutOptions, ItemId, ItemLayout, MimeApplication,
-    MimeApplicationCache, NETWORK_ROOT_LABEL, NameFilter, OpenWithLaunchResult,
+    Generation, IconsLayout, IconsLayoutOptions, ItemId, ItemLayout, MetadataRoleResult,
+    MimeApplication, MimeApplicationCache, NETWORK_ROOT_LABEL, NameFilter, OpenWithLaunchResult,
     OperationController, PrivilegedCommand, ServiceMenuAction, ServiceMenuLaunchResult,
     ServiceMenuPriority, ServiceMenuTarget, ThumbnailRequest, ThumbnailRequestPriority,
     ThumbnailerRegistry, TransferTaskResult, TransferUndoItem, TrashViewOperation,
@@ -87,6 +87,8 @@ mod wgpu_icon_resolver;
 mod wgpu_icon_roles;
 #[path = "shell/location.rs"]
 mod wgpu_location;
+#[path = "shell/metadata_roles.rs"]
+mod wgpu_metadata_roles;
 #[path = "shell/metrics.rs"]
 mod wgpu_metrics;
 #[path = "shell/options.rs"]
@@ -109,6 +111,14 @@ use wgpu_icon_roles::{
     file_icon_path_cache_key, icon_cache_size,
 };
 use wgpu_location::{LocationDraft, PathHistory, normalized_text_cursor};
+use wgpu_metadata_roles::{
+    MetadataRolePrewarmStats, ShellMetadataRoleRuntime, entry_with_metadata_role, shell_entry_path,
+    shell_metadata_entry_index, shell_pane_id_for_core_pane,
+};
+#[cfg(test)]
+use wgpu_metadata_roles::{
+    core_pane_id_for_shell_pane, shell_metadata_item_id, shell_metadata_role_candidate,
+};
 use wgpu_metrics::*;
 use wgpu_options::{ShellViewMode, parse_start_options};
 use wgpu_pane::{
@@ -5330,6 +5340,7 @@ struct ShellScene {
     split_pane_left_fraction: f32,
     visible_slots: ShellPaneVisibleSlotPools,
     visible_slot_stats: ShellVisibleItemSlotStats,
+    metadata_roles: ShellMetadataRoleRuntime,
     icon_role_read_ahead_queue: RefCell<VecDeque<IconRoleReadAheadRequest>>,
     icon_role_read_ahead_seen: RefCell<HashSet<IconRoleReadAheadRequest>>,
     internal_drag: Option<ShellInternalDrag>,
@@ -5458,6 +5469,7 @@ impl ShellScene {
             split_pane_left_fraction: 0.5,
             visible_slots: ShellPaneVisibleSlotPools::default(),
             visible_slot_stats: ShellVisibleItemSlotStats::default(),
+            metadata_roles: ShellMetadataRoleRuntime::new(),
             icon_role_read_ahead_queue: RefCell::new(VecDeque::new()),
             icon_role_read_ahead_seen: RefCell::new(HashSet::new()),
             internal_drag: None,
@@ -5593,6 +5605,7 @@ impl ShellScene {
         let filter_pattern = self.filter_pattern_for_pane(pane).to_string();
         let show_hidden = self.show_hidden;
 
+        self.cancel_metadata_role_work_for_pane(pane);
         let Some(state) = self.pane_state_mut(pane) else {
             return Err(format!("pane {} is not open", pane.as_str()));
         };
@@ -5691,6 +5704,7 @@ impl ShellScene {
             .map(|state| state.view_mode)
             .unwrap_or(ShellViewMode::Icons);
         let filter_pattern = self.filter_pattern_for_pane(pane).to_string();
+        self.cancel_metadata_role_work_for_pane(pane);
         self.panes.set(
             pane,
             ShellPaneState::from_entries(
@@ -11104,6 +11118,60 @@ impl ShellScene {
         }
     }
 
+    fn prewarm_file_metadata_roles(
+        &self,
+        projections: &[ShellPaneProjection<'_>],
+    ) -> MetadataRolePrewarmStats {
+        self.metadata_roles
+            .prewarm(projections, Generation(self.path_changes))
+    }
+
+    fn drain_metadata_role_results(&mut self) -> MetadataRolePrewarmStats {
+        let (mut stats, results) = self.metadata_roles.drain_ready_results();
+        for result in results {
+            if self.apply_metadata_role_result(result) {
+                stats.applied += 1;
+            }
+        }
+        stats
+    }
+
+    fn apply_metadata_role_result(&mut self, result: MetadataRoleResult) -> bool {
+        let Some(pane_id) = shell_pane_id_for_core_pane(result.pane_id) else {
+            return false;
+        };
+        let Some(index) = shell_metadata_entry_index(result.item_id) else {
+            return false;
+        };
+        let Some(role) = result.role else {
+            return false;
+        };
+        let Some(pane) = self.pane_state_mut(pane_id) else {
+            return false;
+        };
+        let Some(entry) = pane.entries.get(index) else {
+            return false;
+        };
+        if entry.is_dir
+            || shell_entry_path(&pane.path, entry) != result.path
+            || entry.modified_secs != role.modified_secs
+            || entry.size_bytes != role.size_bytes
+            || (entry.mime_magic_checked && entry.mime_type == role.mime_type)
+        {
+            return false;
+        }
+        pane.entries[index] = entry_with_metadata_role(entry, role);
+        true
+    }
+
+    fn metadata_role_work_pending(&self) -> bool {
+        self.metadata_roles.has_pending()
+    }
+
+    fn cancel_metadata_role_work_for_pane(&self, pane: ShellPaneId) {
+        self.metadata_roles.cancel_pane(pane);
+    }
+
     fn prewarm_visible_file_icon_roles(
         &self,
         projections: &[ShellPaneProjection<'_>],
@@ -15145,12 +15213,19 @@ impl WgpuState {
 
     fn prewarm_scene_caches(&mut self, scene: &mut ShellScene, reason: &'static str) {
         let total_start = Instant::now();
+        let metadata_result_stats = scene.drain_metadata_role_results();
         let role_start = Instant::now();
-        let (role_stats, scene_icon_raster_prewarm_stats, scene_text_prewarm_stats) = {
+        let (
+            metadata_role_stats,
+            role_stats,
+            scene_icon_raster_prewarm_stats,
+            scene_text_prewarm_stats,
+        ) = {
             let projections = ShellPaneId::ALL
                 .into_iter()
                 .filter_map(|kind| scene.pane_projection(kind, self.size))
                 .collect::<Vec<_>>();
+            let metadata_stats = scene.prewarm_file_metadata_roles(&projections);
             for projection in &projections {
                 if let Some(item) = projection.visible_items.first() {
                     let icon_size = item
@@ -15179,7 +15254,7 @@ impl WgpuState {
                 &projections,
                 text_label_prewarm_mode_for_scene_prewarm(reason),
             );
-            (role_stats, icon_raster_stats, text_stats)
+            (metadata_stats, role_stats, icon_raster_stats, text_stats)
         };
         let role_prewarm_us = role_start.elapsed().as_micros();
         if scene_icon_raster_prewarm_stats.entries > 0
@@ -15239,10 +15314,15 @@ impl WgpuState {
         );
         let prepare_us = prepare_start.elapsed().as_micros();
         fika_log!(
-            "[fika-wgpu] prewarm-scene reason={} view={} visible={} role_entries={} role_deferred={} role_read_ahead={} role_resolve={}us role_total={}us text_labels={} text_cache={}/{} text_deferred={} text_raster={}us icon_resolve={}us icon_raster={}us icon_deferred={} icon_raster_deferred={} prepare={}us total={}us",
+            "[fika-wgpu] prewarm-scene reason={} view={} visible={} metadata_visible={} metadata_deferred={} metadata_batches={} metadata_results={} metadata_applied={} role_entries={} role_deferred={} role_read_ahead={} role_resolve={}us role_total={}us text_labels={} text_cache={}/{} text_deferred={} text_raster={}us icon_resolve={}us icon_raster={}us icon_deferred={} icon_raster_deferred={} prepare={}us total={}us",
             reason,
             scene.panes[ShellPaneId::FIRST].view_mode.as_str(),
             scene_frame.visible_items,
+            metadata_role_stats.visible,
+            metadata_role_stats.deferred,
+            metadata_role_stats.batches_started,
+            metadata_result_stats.results,
+            metadata_result_stats.applied,
             role_stats.entries,
             role_stats.deferred,
             role_stats.read_ahead,
@@ -15293,10 +15373,29 @@ impl WgpuState {
         reason: &'static str,
         force_log: bool,
     ) -> bool {
+        let metadata_result_stats = scene.drain_metadata_role_results();
         let projections = ShellPaneId::ALL
             .into_iter()
             .filter_map(|kind| scene.pane_projection(kind, self.size))
             .collect::<Vec<_>>();
+        let metadata_role_stats = scene.prewarm_file_metadata_roles(&projections);
+        if metadata_role_stats.visible
+            + metadata_role_stats.deferred
+            + metadata_result_stats.results
+            > 0
+            && (self.frame_count == 0 || force_log || fika_frame_log_all_enabled())
+        {
+            fika_log!(
+                "[fika-wgpu] prewarm-metadata reason={} view={} visible={} deferred={} batches={} results={} applied={}",
+                reason,
+                scene.panes[ShellPaneId::FIRST].view_mode.as_str(),
+                metadata_role_stats.visible,
+                metadata_role_stats.deferred,
+                metadata_role_stats.batches_started,
+                metadata_result_stats.results,
+                metadata_result_stats.applied,
+            );
+        }
         let text_prewarm_stats = self.prewarm_text_labels(
             scene,
             &projections,
@@ -15438,6 +15537,7 @@ impl WgpuState {
             reason,
         );
         let prepare_us = prepare_start.elapsed().as_micros();
+        let metadata_work_pending = scene.metadata_role_work_pending();
         let icon_work_pending = scene_frame.icon_stats.deferred > 0
             || scene_frame.icon_stats.raster_deferred > 0
             || scene_frame.icon_stats.thumbnail_deferred > 0
@@ -15448,7 +15548,7 @@ impl WgpuState {
                 .has_pending(&mut self.icon_renderer.raster_cache)
             || self.icon_renderer.thumbnails.has_pending();
         let text_work_pending = scene_frame.text_stats.deferred > 0;
-        if icon_work_pending || text_work_pending {
+        if metadata_work_pending || icon_work_pending || text_work_pending {
             window.request_redraw();
         }
         let quad_upload_start = Instant::now();
@@ -21887,6 +21987,22 @@ mod tests {
         })
     }
 
+    fn test_unchecked_generic_entry(name: &str, size_bytes: u64, modified_secs: u64) -> Entry {
+        Entry::new(fika_core::EntryData {
+            name: Arc::from(name),
+            name_width_units: name.len() as u16,
+            target_path: None,
+            size_bytes,
+            modified_secs: Some(modified_secs),
+            metadata_complete: true,
+            mime_type: Some(Arc::from(fika_core::GENERIC_BINARY_MIME)),
+            mime_magic_checked: false,
+            trash_original_path: None,
+            trash_deletion_time: None,
+            is_dir: false,
+        })
+    }
+
     fn test_dir(name: &str) -> PathBuf {
         let unique = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -21953,6 +22069,64 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    #[test]
+    fn shell_metadata_candidate_targets_unchecked_generic_file() {
+        let entry = test_unchecked_generic_entry("payload", 12, 42);
+        let candidate = shell_metadata_role_candidate(Path::new("/tmp/fika-metadata"), 3, &entry)
+            .expect("unchecked generic file should require MIME magic metadata");
+
+        assert_eq!(candidate.item_id, shell_metadata_item_id(3));
+        assert_eq!(candidate.path, PathBuf::from("/tmp/fika-metadata/payload"));
+        assert_eq!(candidate.size_bytes, 12);
+        assert_eq!(candidate.modified_secs, Some(42));
+        assert_eq!(
+            candidate.mime_type.as_deref(),
+            Some(fika_core::GENERIC_BINARY_MIME)
+        );
+
+        let checked = test_entry_with_mime("plain.txt", false, "text/plain");
+        assert!(shell_metadata_role_candidate(Path::new("/tmp"), 0, &checked).is_none());
+    }
+
+    #[test]
+    fn shell_metadata_result_updates_matching_entry_only() {
+        let mut scene = test_scene(
+            vec![test_unchecked_generic_entry("payload", 12, 42)],
+            ShellViewMode::Icons,
+        );
+        let stale = MetadataRoleResult {
+            pane_id: core_pane_id_for_shell_pane(ShellPaneId::FIRST),
+            generation: Generation(0),
+            item_id: shell_metadata_item_id(0),
+            path: PathBuf::from("/tmp/other"),
+            role: Some(fika_core::EntryMetadataRole {
+                size_bytes: 12,
+                modified_secs: Some(42),
+                mime_type: Some(Arc::from("image/png")),
+                mime_magic_checked: true,
+            }),
+        };
+        assert!(!scene.apply_metadata_role_result(stale));
+        assert!(!scene.panes[ShellPaneId::FIRST].entries[0].mime_magic_checked);
+
+        let matching = MetadataRoleResult {
+            pane_id: core_pane_id_for_shell_pane(ShellPaneId::FIRST),
+            generation: Generation(0),
+            item_id: shell_metadata_item_id(0),
+            path: PathBuf::from("/tmp/payload"),
+            role: Some(fika_core::EntryMetadataRole {
+                size_bytes: 12,
+                modified_secs: Some(42),
+                mime_type: Some(Arc::from("image/png")),
+                mime_magic_checked: true,
+            }),
+        };
+        assert!(scene.apply_metadata_role_result(matching));
+        let entry = &scene.panes[ShellPaneId::FIRST].entries[0];
+        assert!(entry.mime_magic_checked);
+        assert_eq!(entry.mime_type.as_deref(), Some("image/png"));
+    }
+
     fn test_desktop_application(
         id: &str,
         name: &str,
@@ -22011,6 +22185,7 @@ mod tests {
             split_pane_left_fraction: 0.5,
             visible_slots: ShellPaneVisibleSlotPools::default(),
             visible_slot_stats: ShellVisibleItemSlotStats::default(),
+            metadata_roles: ShellMetadataRoleRuntime::new(),
             icon_role_read_ahead_queue: RefCell::new(VecDeque::new()),
             icon_role_read_ahead_seen: RefCell::new(HashSet::new()),
             internal_drag: None,

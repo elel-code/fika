@@ -794,10 +794,10 @@ fn push_unique_glob(globs: &mut Vec<String>, glob: &str) {
 fn mime_filter_globs(mime_type: &str) -> &'static [&'static str] {
     match mime_type.trim().to_ascii_lowercase().as_str() {
         "image/*" => &[
-            "*.avif", "*.bmp", "*.gif", "*.heic", "*.heif", "*.jpeg", "*.jpg", "*.png", "*.svg",
-            "*.webp",
+            "*.avif", "*.avifs", "*.bmp", "*.gif", "*.heic", "*.heif", "*.jpeg", "*.jpg", "*.png",
+            "*.svg", "*.webp",
         ],
-        "image/avif" => &["*.avif"],
+        "image/avif" | "image/avif-sequence" => &["*.avif", "*.avifs"],
         "image/bmp" | "image/x-bmp" => &["*.bmp"],
         "image/gif" => &["*.gif"],
         "image/heic" => &["*.heic"],
@@ -870,7 +870,7 @@ fn mime_filter_globs(mime_type: &str) -> &'static [&'static str] {
         "audio/opus" => &["*.opus"],
         "audio/wav" | "audio/x-wav" => &["*.wav"],
         "video/*" => &[
-            "*.avi", "*.m4v", "*.mkv", "*.mov", "*.mp4", "*.mpeg", "*.mpg", "*.webm",
+            "*.avi", "*.m4v", "*.mkv", "*.mov", "*.mp4", "*.mpeg", "*.mpg", "*.ogv", "*.webm",
         ],
         "video/mp4" => &["*.mp4", "*.m4v"],
         "video/mpeg" => &["*.mpeg", "*.mpg"],
@@ -1608,6 +1608,10 @@ mod tests {
             ("Audio".to_string(), vec![(1, "audio/*".to_string())]),
             ("Video".to_string(), vec![(1, "video/mp4".to_string())]),
             (
+                "AVIF".to_string(),
+                vec![(1, "image/avif-sequence".to_string())],
+            ),
+            (
                 "Documents".to_string(),
                 vec![
                     (
@@ -1638,12 +1642,13 @@ mod tests {
             vec![
                 "Audio\t*.aac;*.flac;*.m4a;*.mp3;*.oga;*.ogg;*.opus;*.wav".to_string(),
                 "Video\t*.mp4;*.m4v".to_string(),
+                "AVIF\t*.avif;*.avifs".to_string(),
                 "Documents\t*.docx;*.odt".to_string(),
                 "Sheets\t*.xlsx;*.xls".to_string(),
             ]
         );
-        assert_eq!(filter_map.portal_indices, vec![0, 1, 2, 3]);
-        assert_eq!(filter_map.mime_mapped_filters, 4);
+        assert_eq!(filter_map.portal_indices, vec![0, 1, 2, 3, 4]);
+        assert_eq!(filter_map.mime_mapped_filters, 5);
         assert_eq!(filter_map.hidden_filters, 0);
     }
 

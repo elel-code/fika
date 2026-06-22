@@ -48,9 +48,12 @@ Status:
   full-scroll end-position `Private_Dirty` is now about 45.5 MB instead of
   about 97.7 MB.
   Follow-up: visible exact icon role lookup is nonblocking in ordinary UI
-  frames, compact zoom/scroll avoids synchronous SVG raster, and the remaining
-  work is visible-priority MIME role draining so small-directory tail ranges do
-  not show generic -> exact icon replacement.
+  frames, compact zoom/scroll avoids synchronous SVG raster, and icon resolver
+  pending work now promotes visible role requests over deferred read-ahead.
+  Core MIME metadata role scheduling now has the same visible/deferred priority
+  boundary, and the winit/wgpu shell now drains visible MIME metadata before
+  deferred read-ahead. Remaining work is collecting end-to-end small-directory
+  tail-scroll evidence.
 - [ ] Complete system integration in the winit/wgpu shell:
   Open With, service-menu icons/submenus, clipboard, create/rename/file
   transfer/trash/properties, thumbnail worker, devices, and dynamic Places.
