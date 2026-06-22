@@ -1,8 +1,15 @@
-use std::{cell::RefCell, env};
+use std::{cell::RefCell, env, path::PathBuf};
 
 use arboard::{Clipboard, Error as ClipboardError};
 use fika_core::{FileClipboardRole, encode_file_clipboard_text};
 use winit::window::Window;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct FileClipboardExportRequest {
+    pub(crate) role: FileClipboardRole,
+    pub(crate) paths: Vec<PathBuf>,
+    pub(crate) text: String,
+}
 
 pub(crate) struct ShellClipboard {
     clipboard: RefCell<Clipboard>,

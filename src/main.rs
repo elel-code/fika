@@ -127,7 +127,7 @@ mod wgpu_transfer;
 mod wgpu_trash_conflict;
 
 use wgpu_autosmoke::{AutosmokeScrollAction, autosmoke_scroll_config, autosmoke_zoom_config};
-use wgpu_clipboard::ShellClipboard;
+use wgpu_clipboard::{FileClipboardExportRequest, ShellClipboard};
 use wgpu_context_menu::{
     ShellContextMenu, ShellContextMenuAction, ShellContextMenuCommand, ShellContextMenuIcon,
     ShellContextMenuItem, ShellContextTarget, ShellDevicePlace, context_menu_items,
@@ -3061,13 +3061,6 @@ impl ShellPrivilegeOutcome {
             message: Some(message),
         }
     }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct FileClipboardExportRequest {
-    role: FileClipboardRole,
-    paths: Vec<PathBuf>,
-    text: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
