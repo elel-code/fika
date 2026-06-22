@@ -21,19 +21,19 @@ use fika_core::{
     AppSettings, CompactLayout, CompactLayoutOptions, DesktopLaunchPlan, DeviceInfo,
     DevicePlaceOperation, DevicePlaceOperationResult, Entry, FileClipboardRole, FileTransferMode,
     Generation, IconsLayout, IconsLayoutOptions, ItemId, MimeApplication, MimeApplicationCache,
-    NETWORK_ROOT_LABEL, NameFilter, OpenWithLaunchResult, PrivilegedCommand, ServiceMenuAction,
-    ServiceMenuLaunchResult, ServiceMenuPriority, ServiceMenuTarget, ThumbnailRequest,
-    ThumbnailRequestPriority, ThumbnailerRegistry, TransferTaskResult, TransferUndoItem,
-    TrashViewOperation, TrashViewOperationResult, UserPlace, ViewPoint, ViewRect, ViewSize,
-    complete_location_input, decode_file_clipboard_text, default_app_settings_path,
+    NETWORK_ROOT_LABEL, NameFilter, OpenWithLaunchResult, OperationController, PrivilegedCommand,
+    ServiceMenuAction, ServiceMenuLaunchResult, ServiceMenuPriority, ServiceMenuTarget,
+    ThumbnailRequest, ThumbnailRequestPriority, ThumbnailerRegistry, TransferTaskResult,
+    TransferUndoItem, TrashViewOperation, TrashViewOperationResult, UserPlace, ViewPoint, ViewRect,
+    ViewSize, complete_location_input, decode_file_clipboard_text, default_app_settings_path,
     default_thumbnail_cache_root, default_user_places_path, encode_file_clipboard_text, file_ops,
     format_modified_secs, format_size, generate_thumbnail_with_external_thumbnailer_registry,
     home_dir, is_network_path, launch_with_systemd_user, load_app_settings, load_place_order,
     load_user_places, mime_magic_resolution_required, network_parent_path, network_root_path,
     network_uri_from_path, paste_text_result, perform_device_place_operation,
     place_order_path_for_user_places_path, push_unique_path, read_entries_sync, read_gio_devices,
-    read_network_entry_batches_sync_cancellable, resolve_location_input, run_via_dbus,
-    save_app_settings, save_place_order, save_user_places, service_menu_target_label,
+    read_network_entry_batches_sync_cancellable, resolve_location_input, run_operation_task,
+    run_via_dbus, save_app_settings, save_place_order, save_user_places, service_menu_target_label,
     thumbnail_request_may_have_preview, trash_view_operation_result,
 };
 use gio::prelude::FileExt;
@@ -138,6 +138,8 @@ fn save_show_hidden_setting(settings_path: &Path, show_hidden: bool) -> Result<(
     save_app_settings(settings_path, &settings)
         .map_err(|error| format!("save settings {}: {error}", settings_path.display()))
 }
+
+type ShellTaskId = u64;
 
 fn read_shell_entries_sync(path: &Path) -> Result<Vec<Entry>, String> {
     if is_network_path(path) {
@@ -370,6 +372,11 @@ struct FikaWgpuApp {
     scene: ShellScene,
     mime_applications: MimeApplicationCache,
     settings_path: PathBuf,
+    async_task_tx: Sender<ShellAsyncTaskResult>,
+    async_task_rx: Receiver<ShellAsyncTaskResult>,
+    active_task_controllers: HashMap<ShellTaskId, OperationController>,
+    active_task_base_details: HashMap<ShellTaskId, String>,
+    next_task_id: ShellTaskId,
     modifiers: Modifiers,
     // Drop order matters: renderer borrows display/window handles.
     renderer: Option<WgpuState>,
@@ -383,10 +390,16 @@ struct FikaWgpuApp {
 
 impl FikaWgpuApp {
     fn new(scene: ShellScene, auto_cycle_views: bool, settings_path: PathBuf) -> Self {
+        let (async_task_tx, async_task_rx) = mpsc::channel();
         Self {
             scene,
             mime_applications: MimeApplicationCache::load(),
             settings_path,
+            async_task_tx,
+            async_task_rx,
+            active_task_controllers: HashMap::new(),
+            active_task_base_details: HashMap::new(),
+            next_task_id: 1,
             modifiers: Modifiers::default(),
             renderer: None,
             clipboard: None,
@@ -430,6 +443,146 @@ impl FikaWgpuApp {
             fika_log!("[fika-wgpu] settings-save-error {error}");
         }
         true
+    }
+
+    fn next_task_id(&mut self) -> ShellTaskId {
+        let task_id = self.next_task_id;
+        self.next_task_id = self.next_task_id.saturating_add(1).max(1);
+        task_id
+    }
+
+    fn drain_async_task_results(&mut self, event_loop: &dyn ActiveEventLoop) {
+        let mut changed = false;
+        while let Ok(result) = self.async_task_rx.try_recv() {
+            match result {
+                ShellAsyncTaskResult::Transfer(completion) => {
+                    self.active_task_controllers.remove(&completion.task_id);
+                    self.active_task_base_details.remove(&completion.task_id);
+                    let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
+                        continue;
+                    };
+                    let clear_clipboard = completion.transfer.result.clear_clipboard
+                        && completion.transfer.result.failure_count == 0;
+                    let apply_result = self
+                        .scene
+                        .apply_async_transfer_completion(&completion, size);
+                    match apply_result {
+                        Ok(result) => {
+                            changed = true;
+                            if clear_clipboard
+                                && result.changed()
+                                && let Some(clipboard) = self.clipboard.as_ref()
+                                && let Err(error) = clipboard.store_text("")
+                            {
+                                fika_log!("[fika-wgpu] clipboard-clear-error error={error}");
+                            }
+                        }
+                        Err(error) => {
+                            self.scene.record_task_status(ShellTaskStatus::failed(
+                                "Task update failed",
+                                error,
+                                completion.transfer.privileged,
+                            ));
+                            changed = true;
+                        }
+                    }
+                }
+            }
+        }
+        if changed {
+            self.present_scene_change(event_loop, "async-task");
+        }
+    }
+
+    fn refresh_active_task_progress(&mut self) -> bool {
+        let mut changed = false;
+        for (task_id, controller) in &self.active_task_controllers {
+            let progress = controller.progress();
+            if progress.bytes_total == 0 {
+                continue;
+            }
+            let Some(base_detail) = self.active_task_base_details.get(task_id) else {
+                continue;
+            };
+            let percentage = progress
+                .bytes_done
+                .saturating_mul(100)
+                .checked_div(progress.bytes_total)
+                .unwrap_or_default()
+                .min(100);
+            let detail = format!(
+                "{} | {} / {} ({}%)",
+                base_detail,
+                format_size(progress.bytes_done.min(progress.bytes_total)),
+                format_size(progress.bytes_total),
+                percentage
+            );
+            changed |= self.scene.update_running_task_detail(*task_id, detail);
+        }
+        changed
+    }
+
+    fn cancel_task_if_running(&mut self, task_id: ShellTaskId) {
+        if let Some(controller) = self.active_task_controllers.get(&task_id) {
+            controller.cancel();
+        }
+    }
+
+    fn start_async_transfer(
+        &mut self,
+        source: ShellAsyncTransferSource,
+        target_dir: PathBuf,
+        mode: FileTransferMode,
+        paths: Vec<PathBuf>,
+        label: &'static str,
+        clear_clipboard: bool,
+    ) {
+        let task_id = self.next_task_id();
+        let controller = OperationController::new();
+        self.active_task_controllers
+            .insert(task_id, controller.clone());
+        let base_detail = async_transfer_task_detail(&target_dir, paths.len(), clear_clipboard);
+        self.active_task_base_details
+            .insert(task_id, base_detail.clone());
+        self.scene.record_async_transfer_started(
+            task_id,
+            source,
+            mode,
+            &target_dir,
+            paths.len(),
+            clear_clipboard,
+            base_detail,
+        );
+        let tx = self.async_task_tx.clone();
+        thread::spawn(move || {
+            let transfer = pollster::block_on(run_operation_task({
+                let controller = controller.clone();
+                let target_dir = target_dir.clone();
+                let paths = paths.clone();
+                move || async move {
+                    transfer_paths_async_with_controller(
+                        target_dir,
+                        mode,
+                        paths,
+                        label,
+                        clear_clipboard,
+                        controller,
+                    )
+                    .await
+                }
+            }))
+            .unwrap_or_else(|error| {
+                transfer_runtime_failure(target_dir.clone(), mode, label, clear_clipboard, error)
+            });
+            let _ = tx.send(ShellAsyncTaskResult::Transfer(
+                ShellAsyncTransferCompletion {
+                    task_id,
+                    source,
+                    target_dir,
+                    transfer,
+                },
+            ));
+        });
     }
 }
 
@@ -499,6 +652,11 @@ impl ApplicationHandler for FikaWgpuApp {
     }
 
     fn about_to_wait(&mut self, event_loop: &dyn ActiveEventLoop) {
+        self.drain_async_task_results(event_loop);
+        let progress_changed = self.refresh_active_task_progress();
+        if progress_changed && let Some(window) = self.window.as_ref() {
+            window.request_redraw();
+        }
         if self.auto_cycle_views && Instant::now() >= self.next_auto_cycle {
             self.next_auto_cycle = Instant::now() + AUTO_CYCLE_INTERVAL;
             if let Some(renderer) = self.renderer.as_ref() {
@@ -526,6 +684,10 @@ impl ApplicationHandler for FikaWgpuApp {
 
         if needs_redraw {
             event_loop.set_control_flow(ControlFlow::Poll);
+        } else if !self.active_task_controllers.is_empty() {
+            event_loop.set_control_flow(ControlFlow::WaitUntil(
+                Instant::now() + Duration::from_millis(100),
+            ));
         } else if self.auto_cycle_views {
             event_loop.set_control_flow(ControlFlow::WaitUntil(self.next_auto_cycle));
         } else {
@@ -598,6 +760,16 @@ impl ApplicationHandler for FikaWgpuApp {
                 if self.scene.is_trash_conflict_dialog_open() {
                     if escape_requested_for_key_event(&event) {
                         if self.scene.close_trash_conflict_dialog()
+                            && let Some(window) = self.window.as_ref()
+                        {
+                            window.request_redraw();
+                        }
+                    }
+                    return;
+                }
+                if self.scene.is_task_detail_dialog_open() {
+                    if escape_requested_for_key_event(&event) {
+                        if self.scene.close_task_detail_dialog()
                             && let Some(window) = self.window.as_ref()
                         {
                             window.request_redraw();
@@ -775,6 +947,10 @@ impl ApplicationHandler for FikaWgpuApp {
                     self.set_window_cursor(CursorIcon::Default);
                     return;
                 }
+                if self.scene.is_task_detail_dialog_open() {
+                    self.set_window_cursor(CursorIcon::Default);
+                    return;
+                }
                 let changed = self.scene.set_pointer(point, size);
                 self.update_window_cursor_for_scene(size);
                 if changed && let Some(window) = self.window.as_ref() {
@@ -850,6 +1026,31 @@ impl ApplicationHandler for FikaWgpuApp {
                                 self.replace_trash_restore_conflicts(event_loop)
                             }
                             TrashConflictDialogClick::Inside => {}
+                        }
+                    }
+                    return;
+                }
+                if self.scene.is_task_detail_dialog_open() {
+                    if state == ElementState::Pressed && mouse_button == MouseButton::Left {
+                        let changed = match self
+                            .scene
+                            .task_detail_dialog_click_at_screen_point(point, size)
+                        {
+                            TaskDetailDialogClick::Outside | TaskDetailDialogClick::Cancel => {
+                                self.scene.close_task_detail_dialog()
+                            }
+                            TaskDetailDialogClick::Clear => self.scene.clear_task_statuses(),
+                            TaskDetailDialogClick::Dismiss(index) => {
+                                let (changed, task_id) = self.scene.dismiss_task_status(index);
+                                if let Some(task_id) = task_id {
+                                    self.cancel_task_if_running(task_id);
+                                }
+                                changed
+                            }
+                            TaskDetailDialogClick::Inside => false,
+                        };
+                        if changed && let Some(window) = self.window.as_ref() {
+                            window.request_redraw();
                         }
                     }
                     return;
@@ -950,6 +1151,18 @@ impl ApplicationHandler for FikaWgpuApp {
                     if let Some(request) = request {
                         self.perform_drop_operation_request(event_loop, request);
                     } else if let Some(window) = self.window.as_ref() {
+                        window.request_redraw();
+                    }
+                    return;
+                }
+                if state == ElementState::Pressed
+                    && let Some(changed) = self
+                        .scene
+                        .open_task_detail_dialog_at_screen_point(point, size)
+                {
+                    if (changed || location_blur_changed)
+                        && let Some(window) = self.window.as_ref()
+                    {
                         window.request_redraw();
                     }
                     return;
@@ -1791,6 +2004,28 @@ impl FikaWgpuApp {
         let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
             return;
         };
+        if !request.privileged {
+            if let Err(error) = self.scene.validate_drop_operation_request(&request) {
+                self.scene
+                    .record_task_status(ShellTaskStatus::failed("Drop failed", error, false));
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+                return;
+            }
+            self.start_async_transfer(
+                ShellAsyncTransferSource::Drop,
+                request.target_dir,
+                request.mode,
+                request.sources,
+                request.mode.label(),
+                false,
+            );
+            if let Some(window) = self.window.as_ref() {
+                window.request_redraw();
+            }
+            return;
+        }
         match self.scene.perform_drop_operation_request(&request, size) {
             Ok(result) if result.changed() => self.present_scene_change(event_loop, "dnd-drop"),
             Ok(_) => {
@@ -1856,6 +2091,64 @@ impl FikaWgpuApp {
                 return;
             }
         };
+        if !privileged && let Some(payload) = decode_file_clipboard_text(&text) {
+            let target_dir = if use_context {
+                self.scene
+                    .context_target_paste_directory()
+                    .or_else(|| self.scene.active_pane_paste_directory())
+            } else {
+                self.scene.active_pane_paste_directory()
+            };
+            let Some((_target_pane, target_dir)) = target_dir else {
+                self.scene.record_task_status(ShellTaskStatus::failed(
+                    "Paste failed",
+                    "No paste target pane",
+                    false,
+                ));
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+                return;
+            };
+            if is_network_path(&target_dir) {
+                self.scene.record_task_status(ShellTaskStatus::failed(
+                    "Paste failed",
+                    "Remote paste target is not available yet",
+                    false,
+                ));
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+                return;
+            }
+            if payload.paths.iter().any(|path| is_network_path(path)) {
+                self.scene.record_task_status(ShellTaskStatus::failed(
+                    "Paste failed",
+                    "Remote paste source is not available yet",
+                    false,
+                ));
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+                return;
+            }
+            let mode = match payload.role {
+                FileClipboardRole::Copy => FileTransferMode::Copy,
+                FileClipboardRole::Cut => FileTransferMode::Move,
+            };
+            self.start_async_transfer(
+                ShellAsyncTransferSource::Paste,
+                target_dir,
+                mode,
+                payload.paths,
+                "Paste",
+                payload.role == FileClipboardRole::Cut,
+            );
+            if let Some(window) = self.window.as_ref() {
+                window.request_redraw();
+            }
+            return;
+        }
         let paste_result = if use_context {
             self.scene
                 .paste_clipboard_text_from_context(&text, size, privileged)
@@ -4250,36 +4543,83 @@ enum ShellPlaceActivation {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ShellTaskStatusKind {
+    Running,
     Completed,
     Failed,
+    Cancelled,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct ShellTaskStatus {
+    task_id: Option<ShellTaskId>,
     label: String,
     detail: String,
     kind: ShellTaskStatusKind,
     privileged: bool,
+    cancellable: bool,
 }
 
 impl ShellTaskStatus {
+    fn running(
+        task_id: ShellTaskId,
+        label: impl Into<String>,
+        detail: impl Into<String>,
+        privileged: bool,
+    ) -> Self {
+        Self {
+            task_id: Some(task_id),
+            label: label.into(),
+            detail: detail.into(),
+            kind: ShellTaskStatusKind::Running,
+            privileged,
+            cancellable: true,
+        }
+    }
+
     fn completed(label: impl Into<String>, detail: impl Into<String>, privileged: bool) -> Self {
         Self {
+            task_id: None,
             label: label.into(),
             detail: detail.into(),
             kind: ShellTaskStatusKind::Completed,
             privileged,
+            cancellable: false,
         }
     }
 
     fn failed(label: impl Into<String>, detail: impl Into<String>, privileged: bool) -> Self {
         Self {
+            task_id: None,
             label: label.into(),
             detail: detail.into(),
             kind: ShellTaskStatusKind::Failed,
             privileged,
+            cancellable: false,
         }
     }
+
+    fn cancelled(label: impl Into<String>, detail: impl Into<String>, privileged: bool) -> Self {
+        Self {
+            task_id: None,
+            label: label.into(),
+            detail: detail.into(),
+            kind: ShellTaskStatusKind::Cancelled,
+            privileged,
+            cancellable: false,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ShellTaskDetailDialog;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TaskDetailDialogClick {
+    Outside,
+    Inside,
+    Cancel,
+    Clear,
+    Dismiss(usize),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -4346,6 +4686,26 @@ struct ShellTransferExecution {
     privileged: bool,
     administrator_available: bool,
     first_error: Option<String>,
+    cancelled: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ShellAsyncTransferSource {
+    Paste,
+    Drop,
+}
+
+#[derive(Clone, Debug)]
+struct ShellAsyncTransferCompletion {
+    task_id: ShellTaskId,
+    source: ShellAsyncTransferSource,
+    target_dir: PathBuf,
+    transfer: ShellTransferExecution,
+}
+
+#[derive(Clone, Debug)]
+enum ShellAsyncTaskResult {
+    Transfer(ShellAsyncTransferCompletion),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -4542,6 +4902,7 @@ struct ShellScene {
     rename_dialog: Option<ShellRenameDialog>,
     open_with_chooser: Option<ShellOpenWithChooser>,
     trash_conflict_dialog: Option<ShellTrashConflictDialog>,
+    task_detail_dialog: Option<ShellTaskDetailDialog>,
     split_pane_left_fraction: f32,
     visible_slots: ShellPaneVisibleSlotPools,
     visible_slot_stats: ShellVisibleItemSlotStats,
@@ -4647,6 +5008,7 @@ impl ShellScene {
             rename_dialog: None,
             open_with_chooser: None,
             trash_conflict_dialog: None,
+            task_detail_dialog: None,
             split_pane_left_fraction: 0.5,
             visible_slots: ShellPaneVisibleSlotPools::default(),
             visible_slot_stats: ShellVisibleItemSlotStats::default(),
@@ -5838,6 +6200,12 @@ impl ShellScene {
             return CursorIcon::Default;
         }
         if self
+            .places_task_area_rect(size)
+            .is_some_and(|rect| rect.contains(point))
+        {
+            return CursorIcon::Pointer;
+        }
+        if self
             .places_resize_handle_rect(size)
             .is_some_and(|rect| rect.contains(point))
             || self
@@ -6860,16 +7228,7 @@ impl ShellScene {
         request: &ShellDropOperationRequest,
         size: PhysicalSize<u32>,
     ) -> Result<ShellPasteResult, String> {
-        if request.sources.is_empty() {
-            return Err("no drop sources".to_string());
-        }
-        if is_network_path(&request.target_dir) {
-            return Err("remote drop target is not available yet".to_string());
-        }
-        if request.sources.iter().any(|path| is_network_path(path)) {
-            return Err("remote drop source is not available yet".to_string());
-        }
-
+        self.validate_drop_operation_request(request)?;
         let transfer = transfer_paths_with_privilege(
             request.target_dir.clone(),
             request.mode,
@@ -6936,6 +7295,22 @@ impl ShellScene {
             }
         }
         Ok(result)
+    }
+
+    fn validate_drop_operation_request(
+        &self,
+        request: &ShellDropOperationRequest,
+    ) -> Result<(), String> {
+        if request.sources.is_empty() {
+            return Err("no drop sources".to_string());
+        }
+        if is_network_path(&request.target_dir) {
+            return Err("remote drop target is not available yet".to_string());
+        }
+        if request.sources.iter().any(|path| is_network_path(path)) {
+            return Err("remote drop source is not available yet".to_string());
+        }
+        Ok(())
     }
 
     #[cfg(test)]
@@ -7763,6 +8138,249 @@ impl ShellScene {
         }
     }
 
+    fn finish_task_status(&mut self, task_id: ShellTaskId, mut status: ShellTaskStatus) {
+        status.task_id = Some(task_id);
+        if let Some(existing) = self
+            .task_statuses
+            .iter_mut()
+            .find(|candidate| candidate.task_id == Some(task_id))
+        {
+            *existing = status;
+        } else {
+            self.record_task_status(status);
+            return;
+        }
+        self.task_status_changes += 1;
+    }
+
+    fn record_async_transfer_started(
+        &mut self,
+        task_id: ShellTaskId,
+        source: ShellAsyncTransferSource,
+        mode: FileTransferMode,
+        _target_dir: &Path,
+        item_count: usize,
+        _clear_clipboard: bool,
+        detail: String,
+    ) {
+        let label = async_transfer_task_label(source, mode, item_count);
+        self.context_target = None;
+        self.context_menu = None;
+        self.drop_menu = None;
+        self.properties_overlay = None;
+        self.create_dialog = None;
+        self.rename_dialog = None;
+        self.rubber_band = None;
+        self.internal_drag = None;
+        self.place_press = None;
+        self.dnd_hover_target = None;
+        self.pending_drop_request = None;
+        self.record_task_status(ShellTaskStatus::running(task_id, label, detail, false));
+    }
+
+    fn update_running_task_detail(&mut self, task_id: ShellTaskId, detail: String) -> bool {
+        let Some(status) = self
+            .task_statuses
+            .iter_mut()
+            .find(|status| status.task_id == Some(task_id))
+        else {
+            return false;
+        };
+        if status.kind != ShellTaskStatusKind::Running || status.detail == detail {
+            return false;
+        }
+        status.detail = detail;
+        self.task_status_changes += 1;
+        true
+    }
+
+    fn apply_async_transfer_completion(
+        &mut self,
+        completion: &ShellAsyncTransferCompletion,
+        size: PhysicalSize<u32>,
+    ) -> Result<ShellPasteResult, String> {
+        let transfer = &completion.transfer;
+        let result = ShellPasteResult::from_transfer(transfer);
+        self.paste_changes += 1;
+        fika_log!(
+            "[fika-wgpu] async-transfer source={:?} mode={} target={} success={} failure={} cancelled={} changes={}",
+            completion.source,
+            result.mode.label(),
+            completion.target_dir.display(),
+            result.success_count,
+            result.failure_count,
+            transfer.cancelled as u8,
+            self.paste_changes
+        );
+        let status = if transfer.cancelled {
+            ShellTaskStatus::cancelled(
+                match completion.source {
+                    ShellAsyncTransferSource::Paste => "Paste cancelled".to_string(),
+                    ShellAsyncTransferSource::Drop => {
+                        format!("{} cancelled", result.mode.label())
+                    }
+                },
+                transfer_task_detail(
+                    result.success_count,
+                    result.failure_count,
+                    &completion.target_dir,
+                    result.first_error.as_deref(),
+                    false,
+                ),
+                result.privileged,
+            )
+        } else if result.failure_count > 0 {
+            ShellTaskStatus::failed(
+                match completion.source {
+                    ShellAsyncTransferSource::Paste => "Paste failed".to_string(),
+                    ShellAsyncTransferSource::Drop => format!("{} failed", result.mode.label()),
+                },
+                transfer_task_detail(
+                    result.success_count,
+                    result.failure_count,
+                    &completion.target_dir,
+                    result.first_error.as_deref(),
+                    result.administrator_available,
+                ),
+                result.privileged,
+            )
+        } else {
+            ShellTaskStatus::completed(
+                match completion.source {
+                    ShellAsyncTransferSource::Paste => "Pasted".to_string(),
+                    ShellAsyncTransferSource::Drop => result.mode.label().to_string(),
+                },
+                transfer_task_detail(
+                    result.success_count,
+                    result.failure_count,
+                    &completion.target_dir,
+                    None,
+                    false,
+                ),
+                result.privileged,
+            )
+        };
+        self.finish_task_status(completion.task_id, status);
+
+        if result.changed() {
+            self.context_target = None;
+            self.context_menu = None;
+            self.drop_menu = None;
+            self.properties_overlay = None;
+            self.create_dialog = None;
+            self.rename_dialog = None;
+            self.rubber_band = None;
+            for affected_dir in &transfer.result.refresh_dirs {
+                self.reload_panes_showing_path(affected_dir, size)?;
+            }
+        }
+        Ok(result)
+    }
+
+    fn is_task_detail_dialog_open(&self) -> bool {
+        self.task_detail_dialog.is_some()
+    }
+
+    fn open_task_detail_dialog_at_screen_point(
+        &mut self,
+        point: ViewPoint,
+        size: PhysicalSize<u32>,
+    ) -> Option<bool> {
+        let rect = self.places_task_area_rect(size)?;
+        if !rect.contains(point) {
+            return None;
+        }
+        if self.task_statuses.is_empty() {
+            return Some(false);
+        }
+        let changed = self.task_detail_dialog.is_none();
+        self.task_detail_dialog = Some(ShellTaskDetailDialog);
+        self.context_menu = None;
+        self.drop_menu = None;
+        self.properties_overlay = None;
+        self.create_dialog = None;
+        self.rename_dialog = None;
+        self.open_with_chooser = None;
+        self.trash_conflict_dialog = None;
+        self.rubber_band = None;
+        self.internal_drag = None;
+        self.place_press = None;
+        Some(changed)
+    }
+
+    fn close_task_detail_dialog(&mut self) -> bool {
+        if self.task_detail_dialog.take().is_none() {
+            return false;
+        }
+        self.task_status_changes += 1;
+        true
+    }
+
+    fn clear_task_statuses(&mut self) -> bool {
+        if self.task_statuses.is_empty() && self.task_detail_dialog.is_none() {
+            return false;
+        }
+        self.task_statuses
+            .retain(|status| status.kind == ShellTaskStatusKind::Running);
+        if self.task_statuses.is_empty() {
+            self.task_detail_dialog = None;
+        }
+        self.task_status_changes += 1;
+        true
+    }
+
+    fn dismiss_task_status(&mut self, index: usize) -> (bool, Option<ShellTaskId>) {
+        if index >= self.task_statuses.len() {
+            return (false, None);
+        }
+        let task_id = self.task_statuses[index].task_id;
+        if self.task_statuses[index].kind == ShellTaskStatusKind::Running
+            && self.task_statuses[index].cancellable
+        {
+            self.task_statuses[index] = ShellTaskStatus::cancelled(
+                "Task cancelling",
+                self.task_statuses[index].detail.clone(),
+                self.task_statuses[index].privileged,
+            );
+            self.task_statuses[index].task_id = task_id;
+            self.task_status_changes += 1;
+            return (true, task_id);
+        }
+        self.task_statuses.remove(index);
+        if self.task_statuses.is_empty() {
+            self.task_detail_dialog = None;
+        }
+        self.task_status_changes += 1;
+        (true, None)
+    }
+
+    fn task_detail_dialog_click_at_screen_point(
+        &self,
+        point: ViewPoint,
+        size: PhysicalSize<u32>,
+    ) -> TaskDetailDialogClick {
+        if self.task_detail_dialog.is_none() {
+            return TaskDetailDialogClick::Outside;
+        }
+        let scale = self.ui_scale();
+        let rect = task_detail_dialog_rect_scaled(self.task_statuses.len(), size, scale);
+        if !rect.contains(point) {
+            return TaskDetailDialogClick::Outside;
+        }
+        if task_detail_cancel_button_rect_scaled(rect, scale).contains(point) {
+            return TaskDetailDialogClick::Cancel;
+        }
+        if task_detail_clear_button_rect_scaled(rect, scale).contains(point) {
+            return TaskDetailDialogClick::Clear;
+        }
+        for index in 0..self.task_statuses.len().min(4) {
+            if task_detail_dismiss_button_rect_scaled(rect, index, scale).contains(point) {
+                return TaskDetailDialogClick::Dismiss(index);
+            }
+        }
+        TaskDetailDialogClick::Inside
+    }
+
     fn context_target_add_place_candidate(&self) -> Result<(String, PathBuf), String> {
         match self.context_target.as_ref() {
             Some(ShellContextTarget::Item {
@@ -8031,6 +8649,7 @@ impl ShellScene {
                 privileged: false,
                 administrator_available: false,
                 first_error: None,
+                cancelled: false,
             }
         };
 
@@ -9701,6 +10320,7 @@ impl ShellScene {
         self.push_drop_menu_overlay(&mut overlay_vertices, overlay_text, size);
         self.push_context_menu_overlay(&mut overlay_vertices, overlay_text, icons, size);
         self.push_properties_overlay(&mut overlay_vertices, overlay_text, size);
+        self.push_task_detail_dialog_overlay(&mut overlay_vertices, overlay_text, size);
         self.push_create_dialog_overlay(&mut overlay_vertices, overlay_text, size);
         self.push_rename_dialog_overlay(&mut overlay_vertices, overlay_text, size);
         self.push_open_with_chooser_overlay(&mut overlay_vertices, overlay_text, size);
@@ -10700,8 +11320,10 @@ impl ShellScene {
                 height: dot_size,
             };
             let color = match status.kind {
+                ShellTaskStatusKind::Running => [0.184, 0.435, 0.929, 1.0],
                 ShellTaskStatusKind::Completed => [0.102, 0.514, 0.286, 1.0],
                 ShellTaskStatusKind::Failed => [0.820, 0.184, 0.184, 1.0],
+                ShellTaskStatusKind::Cancelled => [0.475, 0.514, 0.565, 1.0],
             };
             push_clipped_rounded_rect(vertices, dot, inner, dot_size / 2.0, color, size);
             let text_x = dot.right() + self.scale_metric(8.0);
@@ -11405,7 +12027,14 @@ impl ShellScene {
         let title_height = scaled_dialog_metric(PROPERTIES_TITLE_HEIGHT, scale);
         let row_height = scaled_dialog_metric(PROPERTIES_ROW_HEIGHT, scale);
         let margin = scaled_dialog_metric(16.0, scale);
-        push_rect(vertices, rect, [0.118, 0.128, 0.140, 0.99], size);
+        push_clipped_rounded_rect(
+            vertices,
+            rect,
+            screen,
+            scaled_dialog_metric(8.0, scale),
+            [0.118, 0.128, 0.140, 0.99],
+            size,
+        );
         push_clipped_rect_outline(vertices, rect, screen, 1.0, [0.34, 0.38, 0.43, 1.0], size);
         push_rect(
             vertices,
@@ -11458,6 +12087,193 @@ impl ShellScene {
         }
     }
 
+    fn push_task_detail_dialog_overlay(
+        &self,
+        vertices: &mut Vec<QuadVertex>,
+        text: &mut TextFrameBuilder<'_>,
+        size: PhysicalSize<u32>,
+    ) {
+        if self.task_detail_dialog.is_none() {
+            return;
+        }
+        let screen = ViewRect {
+            x: 0.0,
+            y: 0.0,
+            width: size.width.max(1) as f32,
+            height: size.height.max(1) as f32,
+        };
+        push_rect(vertices, screen, [0.0, 0.0, 0.0, 0.40], size);
+        let scale = self.ui_scale();
+        let rect = task_detail_dialog_rect_scaled(self.task_statuses.len(), size, scale);
+        let title_height = scaled_dialog_metric(TASK_DETAIL_TITLE_HEIGHT, scale);
+        let row_height = scaled_dialog_metric(TASK_DETAIL_ROW_HEIGHT, scale);
+        let margin = scaled_dialog_metric(18.0, scale);
+        push_clipped_rounded_rect(
+            vertices,
+            rect,
+            screen,
+            scaled_dialog_metric(8.0, scale),
+            [0.118, 0.128, 0.140, 0.99],
+            size,
+        );
+        push_clipped_rect_outline(vertices, rect, screen, 1.0, [0.34, 0.38, 0.43, 1.0], size);
+        push_rect(
+            vertices,
+            ViewRect {
+                x: rect.x,
+                y: rect.y,
+                width: rect.width,
+                height: title_height,
+            },
+            [0.145, 0.158, 0.174, 1.0],
+            size,
+        );
+        text.push_label_aligned(
+            "Task Details",
+            ViewRect {
+                x: rect.x + margin,
+                y: rect.y + scaled_dialog_metric(13.0, scale),
+                width: (rect.width - margin * 2.0).max(1.0),
+                height: scaled_dialog_metric(18.0, scale),
+            },
+            rect,
+            TextColor::rgb(238, 244, 249),
+            LabelAlignment::Start,
+        );
+
+        let rows_y = rect.y + title_height + scaled_dialog_metric(12.0, scale);
+        for (index, status) in self.task_statuses.iter().take(4).enumerate() {
+            let row = ViewRect {
+                x: rect.x + margin,
+                y: rows_y + index as f32 * row_height,
+                width: (rect.width - margin * 2.0).max(1.0),
+                height: (row_height - scaled_dialog_metric(8.0, scale)).max(1.0),
+            };
+            push_clipped_rounded_rect(
+                vertices,
+                row,
+                rect,
+                scaled_dialog_metric(6.0, scale),
+                [0.150, 0.162, 0.176, 1.0],
+                size,
+            );
+            let color = match status.kind {
+                ShellTaskStatusKind::Running => [0.184, 0.435, 0.929, 1.0],
+                ShellTaskStatusKind::Completed => [0.102, 0.514, 0.286, 1.0],
+                ShellTaskStatusKind::Failed => [0.820, 0.184, 0.184, 1.0],
+                ShellTaskStatusKind::Cancelled => [0.475, 0.514, 0.565, 1.0],
+            };
+            let dot = ViewRect {
+                x: row.x + scaled_dialog_metric(12.0, scale),
+                y: row.y + scaled_dialog_metric(11.0, scale),
+                width: scaled_dialog_metric(8.0, scale),
+                height: scaled_dialog_metric(8.0, scale),
+            };
+            push_clipped_rounded_rect(vertices, dot, row, dot.width / 2.0, color, size);
+
+            let text_x = dot.right() + scaled_dialog_metric(10.0, scale);
+            let button = task_detail_dismiss_button_rect_scaled(rect, index, scale);
+            text.push_label_aligned(
+                &status.label,
+                ViewRect {
+                    x: text_x,
+                    y: row.y + scaled_dialog_metric(6.0, scale),
+                    width: (button.x - text_x - scaled_dialog_metric(10.0, scale)).max(1.0),
+                    height: scaled_dialog_metric(18.0, scale),
+                },
+                row,
+                TextColor::rgb(238, 244, 249),
+                LabelAlignment::Start,
+            );
+            let detail = if status.privileged {
+                format!("{} | administrator", status.detail)
+            } else {
+                status.detail.clone()
+            };
+            text.push_label_aligned(
+                &detail,
+                ViewRect {
+                    x: text_x,
+                    y: row.y + scaled_dialog_metric(28.0, scale),
+                    width: (button.x - text_x - scaled_dialog_metric(10.0, scale)).max(1.0),
+                    height: scaled_dialog_metric(18.0, scale),
+                },
+                row,
+                TextColor::rgb(196, 207, 218),
+                LabelAlignment::Start,
+            );
+            text.push_label_aligned(
+                match status.kind {
+                    ShellTaskStatusKind::Running => "Running",
+                    ShellTaskStatusKind::Completed => "Completed",
+                    ShellTaskStatusKind::Failed => "Failed",
+                    ShellTaskStatusKind::Cancelled => "Cancelled",
+                },
+                ViewRect {
+                    x: text_x,
+                    y: row.y + scaled_dialog_metric(47.0, scale),
+                    width: (button.x - text_x - scaled_dialog_metric(10.0, scale)).max(1.0),
+                    height: scaled_dialog_metric(16.0, scale),
+                },
+                row,
+                TextColor::rgb(148, 163, 184),
+                LabelAlignment::Start,
+            );
+
+            push_clipped_rounded_rect(
+                vertices,
+                button,
+                rect,
+                scaled_dialog_metric(5.0, scale),
+                [0.185, 0.202, 0.220, 1.0],
+                size,
+            );
+            text.push_label(
+                if status.kind == ShellTaskStatusKind::Running && status.cancellable {
+                    "Cancel"
+                } else {
+                    "Dismiss"
+                },
+                ViewRect {
+                    x: button.x + scaled_dialog_metric(8.0, scale),
+                    y: button.y + scaled_dialog_metric(4.0, scale),
+                    width: (button.width - scaled_dialog_metric(16.0, scale)).max(1.0),
+                    height: scaled_dialog_metric(18.0, scale),
+                },
+                rect,
+                TextColor::rgb(238, 244, 249),
+            );
+        }
+
+        let clear = task_detail_clear_button_rect_scaled(rect, scale);
+        let cancel = task_detail_cancel_button_rect_scaled(rect, scale);
+        for (label, button, active) in [("Clear", clear, false), ("Close", cancel, true)] {
+            push_clipped_rounded_rect(
+                vertices,
+                button,
+                rect,
+                scaled_dialog_metric(5.0, scale),
+                if active {
+                    [0.22, 0.42, 0.62, 1.0]
+                } else {
+                    [0.150, 0.162, 0.176, 1.0]
+                },
+                size,
+            );
+            text.push_label(
+                label,
+                ViewRect {
+                    x: button.x + scaled_dialog_metric(10.0, scale),
+                    y: button.y + scaled_dialog_metric(4.0, scale),
+                    width: (button.width - scaled_dialog_metric(20.0, scale)).max(1.0),
+                    height: scaled_dialog_metric(18.0, scale),
+                },
+                rect,
+                TextColor::rgb(238, 244, 249),
+            );
+        }
+    }
+
     fn push_create_dialog_overlay(
         &self,
         vertices: &mut Vec<QuadVertex>,
@@ -11478,7 +12294,14 @@ impl ShellScene {
         let rect = create_dialog_rect_scaled(dialog, size, scale);
         let title_height = scaled_dialog_metric(CREATE_DIALOG_TITLE_HEIGHT, scale);
         let margin = scaled_dialog_metric(16.0, scale);
-        push_rect(vertices, rect, [0.118, 0.128, 0.140, 0.99], size);
+        push_clipped_rounded_rect(
+            vertices,
+            rect,
+            screen,
+            scaled_dialog_metric(8.0, scale),
+            [0.118, 0.128, 0.140, 0.99],
+            size,
+        );
         push_clipped_rect_outline(vertices, rect, screen, 1.0, [0.34, 0.38, 0.43, 1.0], size);
         push_rect(
             vertices,
@@ -11511,9 +12334,11 @@ impl ShellScene {
         for kind in [CreateEntryKind::Folder, CreateEntryKind::File] {
             let button = create_kind_button_rect_scaled(rect, kind, scale);
             let active = dialog.kind == kind;
-            push_rect(
+            push_clipped_rounded_rect(
                 vertices,
                 button,
+                rect,
+                scaled_dialog_metric(5.0, scale),
                 if active {
                     view_mode_badge_color(self.panes[ShellPaneId::FIRST].view_mode)
                 } else {
@@ -11539,7 +12364,14 @@ impl ShellScene {
         }
 
         let input = create_dialog_input_rect_scaled(rect, scale);
-        push_rect(vertices, input, [0.078, 0.086, 0.096, 1.0], size);
+        push_clipped_rounded_rect(
+            vertices,
+            input,
+            rect,
+            scaled_dialog_metric(5.0, scale),
+            [0.078, 0.086, 0.096, 1.0],
+            size,
+        );
         push_clipped_rect_outline(vertices, input, rect, 1.0, [0.26, 0.31, 0.36, 1.0], size);
         let draft = format!("{}|", dialog.name);
         text.push_label(
@@ -11571,9 +12403,11 @@ impl ShellScene {
         let cancel = create_dialog_cancel_button_rect_scaled(rect, scale);
         let commit = create_dialog_commit_button_rect_scaled(rect, scale);
         for (label, button, active) in [("Cancel", cancel, false), ("Create", commit, true)] {
-            push_rect(
+            push_clipped_rounded_rect(
                 vertices,
                 button,
+                rect,
+                scaled_dialog_metric(5.0, scale),
                 if active && dialog.privileged {
                     [0.706, 0.325, 0.035, 1.0]
                 } else if active {
@@ -11617,7 +12451,14 @@ impl ShellScene {
         let rect = rename_dialog_rect_scaled(dialog, size, scale);
         let title_height = scaled_dialog_metric(RENAME_DIALOG_TITLE_HEIGHT, scale);
         let margin = scaled_dialog_metric(16.0, scale);
-        push_rect(vertices, rect, [0.118, 0.128, 0.140, 0.99], size);
+        push_clipped_rounded_rect(
+            vertices,
+            rect,
+            screen,
+            scaled_dialog_metric(8.0, scale),
+            [0.118, 0.128, 0.140, 0.99],
+            size,
+        );
         push_clipped_rect_outline(vertices, rect, screen, 1.0, [0.34, 0.38, 0.43, 1.0], size);
         push_rect(
             vertices,
@@ -11649,7 +12490,14 @@ impl ShellScene {
         );
 
         let input = rename_dialog_input_rect_scaled(rect, scale);
-        push_rect(vertices, input, [0.078, 0.086, 0.096, 1.0], size);
+        push_clipped_rounded_rect(
+            vertices,
+            input,
+            rect,
+            scaled_dialog_metric(5.0, scale),
+            [0.078, 0.086, 0.096, 1.0],
+            size,
+        );
         push_clipped_rect_outline(vertices, input, rect, 1.0, [0.26, 0.31, 0.36, 1.0], size);
         let draft = format!("{}|", dialog.name);
         text.push_label(
@@ -11681,9 +12529,11 @@ impl ShellScene {
         let cancel = rename_dialog_cancel_button_rect_scaled(rect, scale);
         let commit = rename_dialog_commit_button_rect_scaled(rect, scale);
         for (label, button, active) in [("Cancel", cancel, false), ("Rename", commit, true)] {
-            push_rect(
+            push_clipped_rounded_rect(
                 vertices,
                 button,
+                rect,
+                scaled_dialog_metric(5.0, scale),
                 if active && dialog.privileged {
                     [0.706, 0.325, 0.035, 1.0]
                 } else if active {
@@ -11728,7 +12578,14 @@ impl ShellScene {
         let title_height = scaled_dialog_metric(OPEN_WITH_CHOOSER_TITLE_HEIGHT, scale);
         let margin = scaled_dialog_metric(16.0, scale);
         let row_height = scaled_dialog_metric(OPEN_WITH_CHOOSER_ROW_HEIGHT, scale);
-        push_rect(vertices, rect, [0.118, 0.128, 0.140, 0.99], size);
+        push_clipped_rounded_rect(
+            vertices,
+            rect,
+            screen,
+            scaled_dialog_metric(8.0, scale),
+            [0.118, 0.128, 0.140, 0.99],
+            size,
+        );
         push_clipped_rect_outline(vertices, rect, screen, 1.0, [0.34, 0.38, 0.43, 1.0], size);
         push_rect(
             vertices,
@@ -11765,7 +12622,14 @@ impl ShellScene {
         );
 
         let query = open_with_chooser_query_rect_scaled(rect, scale);
-        push_rect(vertices, query, [0.078, 0.086, 0.096, 1.0], size);
+        push_clipped_rounded_rect(
+            vertices,
+            query,
+            rect,
+            scaled_dialog_metric(5.0, scale),
+            [0.078, 0.086, 0.096, 1.0],
+            size,
+        );
         push_clipped_rect_outline(vertices, query, rect, 1.0, [0.26, 0.31, 0.36, 1.0], size);
         let query_label = if chooser.query.is_empty() {
             "Search applications|".to_string()
@@ -11789,7 +12653,14 @@ impl ShellScene {
         );
 
         let list = open_with_chooser_list_rect_scaled(rect, chooser, scale);
-        push_rect(vertices, list, [0.090, 0.100, 0.112, 1.0], size);
+        push_clipped_rounded_rect(
+            vertices,
+            list,
+            rect,
+            scaled_dialog_metric(6.0, scale),
+            [0.090, 0.100, 0.112, 1.0],
+            size,
+        );
         push_clipped_rect_outline(vertices, list, rect, 1.0, [0.23, 0.27, 0.31, 1.0], size);
         let visible = chooser.visible_filtered_indexes();
         if visible.is_empty() {
@@ -11837,9 +12708,11 @@ impl ShellScene {
                     width: scaled_dialog_metric(16.0, scale),
                     height: scaled_dialog_metric(16.0, scale),
                 };
-                push_rect(
+                push_clipped_rounded_rect(
                     vertices,
                     marker,
+                    list,
+                    scaled_dialog_metric(4.0, scale),
                     if application.is_default {
                         [0.42, 0.58, 0.34, 1.0]
                     } else {
@@ -11922,9 +12795,11 @@ impl ShellScene {
         let cancel = open_with_chooser_cancel_button_rect_scaled(rect, scale);
         let open = open_with_chooser_open_button_rect_scaled(rect, scale);
         for (label, button, active) in [("Cancel", cancel, false), ("Open", open, true)] {
-            push_rect(
+            push_clipped_rounded_rect(
                 vertices,
                 button,
+                rect,
+                scaled_dialog_metric(5.0, scale),
                 if active {
                     [0.22, 0.42, 0.62, 1.0]
                 } else {
@@ -11966,7 +12841,14 @@ impl ShellScene {
         let rect = trash_conflict_dialog_rect_scaled(dialog, size, scale);
         let title_height = scaled_dialog_metric(TRASH_CONFLICT_DIALOG_TITLE_HEIGHT, scale);
         let margin = scaled_dialog_metric(16.0, scale);
-        push_rect(vertices, rect, [0.118, 0.128, 0.140, 0.99], size);
+        push_clipped_rounded_rect(
+            vertices,
+            rect,
+            screen,
+            scaled_dialog_metric(8.0, scale),
+            [0.118, 0.128, 0.140, 0.99],
+            size,
+        );
         push_clipped_rect_outline(vertices, rect, screen, 1.0, [0.42, 0.36, 0.25, 1.0], size);
         push_rect(
             vertices,
@@ -12031,9 +12913,11 @@ impl ShellScene {
         let cancel = trash_conflict_dialog_cancel_button_rect_scaled(rect, scale);
         let replace = trash_conflict_dialog_replace_button_rect_scaled(rect, scale);
         for (label, button, active) in [("Cancel", cancel, false), ("Replace", replace, true)] {
-            push_rect(
+            push_clipped_rounded_rect(
                 vertices,
                 button,
+                rect,
+                scaled_dialog_metric(5.0, scale),
                 if active {
                     [0.58, 0.36, 0.18, 1.0]
                 } else {
@@ -17686,6 +18570,105 @@ fn properties_overlay_rect_scaled(
 }
 
 #[cfg(test)]
+fn task_detail_dialog_rect(task_count: usize, size: PhysicalSize<u32>) -> ViewRect {
+    task_detail_dialog_rect_scaled(task_count, size, 1.0)
+}
+
+fn task_detail_dialog_rect_scaled(
+    task_count: usize,
+    size: PhysicalSize<u32>,
+    scale_factor: f32,
+) -> ViewRect {
+    let width = size.width.max(1) as f32;
+    let height = size.height.max(1) as f32;
+    let margin = scaled_dialog_metric(TASK_DETAIL_DIALOG_MARGIN, scale_factor);
+    let dialog_width = scaled_dialog_metric(TASK_DETAIL_DIALOG_WIDTH, scale_factor)
+        .min((width - margin * 2.0).max(1.0))
+        .max(1.0);
+    let rows = task_count.max(1).min(4) as f32;
+    let dialog_height = (scaled_dialog_metric(TASK_DETAIL_TITLE_HEIGHT, scale_factor)
+        + scaled_dialog_metric(18.0, scale_factor)
+        + rows * scaled_dialog_metric(TASK_DETAIL_ROW_HEIGHT, scale_factor)
+        + scaled_dialog_metric(48.0, scale_factor))
+    .min((height - margin * 2.0).max(1.0))
+    .max(1.0);
+    ViewRect {
+        x: ((width - dialog_width) / 2.0).max(margin),
+        y: ((height - dialog_height) / 2.0).max(margin),
+        width: dialog_width,
+        height: dialog_height,
+    }
+}
+
+fn task_detail_row_rect_scaled(dialog_rect: ViewRect, index: usize, scale_factor: f32) -> ViewRect {
+    let margin = scaled_dialog_metric(18.0, scale_factor);
+    let title_height = scaled_dialog_metric(TASK_DETAIL_TITLE_HEIGHT, scale_factor);
+    let row_height = scaled_dialog_metric(TASK_DETAIL_ROW_HEIGHT, scale_factor);
+    ViewRect {
+        x: dialog_rect.x + margin,
+        y: dialog_rect.y
+            + title_height
+            + scaled_dialog_metric(12.0, scale_factor)
+            + index as f32 * row_height,
+        width: (dialog_rect.width - margin * 2.0).max(1.0),
+        height: (row_height - scaled_dialog_metric(8.0, scale_factor)).max(1.0),
+    }
+}
+
+#[cfg(test)]
+fn task_detail_dismiss_button_rect(dialog_rect: ViewRect, index: usize) -> ViewRect {
+    task_detail_dismiss_button_rect_scaled(dialog_rect, index, 1.0)
+}
+
+fn task_detail_dismiss_button_rect_scaled(
+    dialog_rect: ViewRect,
+    index: usize,
+    scale_factor: f32,
+) -> ViewRect {
+    let row = task_detail_row_rect_scaled(dialog_rect, index, scale_factor);
+    let button_width = scaled_dialog_metric(TASK_DETAIL_BUTTON_WIDTH, scale_factor);
+    let button_height = scaled_dialog_metric(TASK_DETAIL_BUTTON_HEIGHT, scale_factor);
+    ViewRect {
+        x: row.right() - button_width - scaled_dialog_metric(10.0, scale_factor),
+        y: row.y + (row.height - button_height) / 2.0,
+        width: button_width,
+        height: button_height,
+    }
+}
+
+#[cfg(test)]
+fn task_detail_cancel_button_rect(dialog_rect: ViewRect) -> ViewRect {
+    task_detail_cancel_button_rect_scaled(dialog_rect, 1.0)
+}
+
+fn task_detail_cancel_button_rect_scaled(dialog_rect: ViewRect, scale_factor: f32) -> ViewRect {
+    let button_width = scaled_dialog_metric(TASK_DETAIL_BUTTON_WIDTH, scale_factor);
+    let button_height = scaled_dialog_metric(TASK_DETAIL_BUTTON_HEIGHT, scale_factor);
+    ViewRect {
+        x: dialog_rect.right() - scaled_dialog_metric(16.0, scale_factor) - button_width,
+        y: dialog_rect.bottom() - scaled_dialog_metric(14.0, scale_factor) - button_height,
+        width: button_width,
+        height: button_height,
+    }
+}
+
+#[cfg(test)]
+fn task_detail_clear_button_rect(dialog_rect: ViewRect) -> ViewRect {
+    task_detail_clear_button_rect_scaled(dialog_rect, 1.0)
+}
+
+fn task_detail_clear_button_rect_scaled(dialog_rect: ViewRect, scale_factor: f32) -> ViewRect {
+    let cancel = task_detail_cancel_button_rect_scaled(dialog_rect, scale_factor);
+    let gap = scaled_dialog_metric(TASK_DETAIL_BUTTON_GAP, scale_factor);
+    ViewRect {
+        x: cancel.x - gap - cancel.width,
+        y: cancel.y,
+        width: cancel.width,
+        height: cancel.height,
+    }
+}
+
+#[cfg(test)]
 fn create_dialog_rect(_dialog: &ShellCreateDialog, size: PhysicalSize<u32>) -> ViewRect {
     create_dialog_rect_scaled(_dialog, size, 1.0)
 }
@@ -18442,6 +19425,159 @@ fn transfer_paths_with_privilege(
         privileged,
         administrator_available,
         first_error,
+        cancelled: false,
+    }
+}
+
+async fn transfer_paths_async_with_controller(
+    target_dir: PathBuf,
+    mode: FileTransferMode,
+    paths: Vec<PathBuf>,
+    label: &'static str,
+    clear_clipboard: bool,
+    controller: OperationController,
+) -> ShellTransferExecution {
+    let operation = mode.operation();
+    let mut success_count = 0;
+    let mut failure_count = 0;
+    let mut affected_dirs = Vec::new();
+    let mut refresh_dirs = Vec::new();
+    let mut undo_items = Vec::new();
+    let mut administrator_available = false;
+    let mut first_error = None;
+    let mut cancelled = false;
+
+    for source in paths {
+        if controller.is_cancelled() {
+            cancelled = true;
+            failure_count += 1;
+            if first_error.is_none() {
+                first_error = Some("operation cancelled".to_string());
+            }
+            continue;
+        }
+        let progress_controller = controller.clone();
+        match file_ops::perform_transfer_with_progress_outcome_async(
+            operation,
+            &source,
+            &target_dir,
+            "keep-both",
+            Some(controller.clone()),
+            move |transfer_progress| {
+                progress_controller.set_progress(transfer_progress);
+            },
+        )
+        .await
+        {
+            Ok(outcome) => {
+                success_count += 1;
+                push_transfer_refresh_dirs(
+                    mode,
+                    &source,
+                    &target_dir,
+                    &mut affected_dirs,
+                    &mut refresh_dirs,
+                );
+                undo_items.push(TransferUndoItem {
+                    operation: operation.to_string(),
+                    original_source: source,
+                    destination: outcome.destination,
+                    overwritten_backup: outcome.overwritten_backup,
+                });
+            }
+            Err(error) => {
+                cancelled |= controller.is_cancelled() || error.contains("operation cancelled");
+                administrator_available |= should_attempt_privileged_operation(&error);
+                failure_count += 1;
+                if first_error.is_none() {
+                    first_error = Some(error.clone());
+                }
+                fika_log!(
+                    "[fika-wgpu] async-transfer-error mode={} source={} target={} error={error}",
+                    mode.label(),
+                    source.display(),
+                    target_dir.display()
+                );
+                push_unique_path(&mut refresh_dirs, target_dir.clone());
+            }
+        }
+    }
+
+    ShellTransferExecution {
+        result: TransferTaskResult {
+            pane_id: WGPU_SHELL_PANE_ID,
+            mode,
+            label,
+            clear_clipboard,
+            success_count,
+            failure_count,
+            affected_dirs,
+            refresh_dirs,
+            undo_items,
+            created_items: Vec::new(),
+        },
+        privileged: false,
+        administrator_available,
+        first_error,
+        cancelled,
+    }
+}
+
+fn async_transfer_task_label(
+    source: ShellAsyncTransferSource,
+    mode: FileTransferMode,
+    item_count: usize,
+) -> String {
+    match source {
+        ShellAsyncTransferSource::Paste => "Pasting".to_string(),
+        ShellAsyncTransferSource::Drop => mode.progress_label(item_count),
+    }
+}
+
+fn async_transfer_task_detail(
+    target_dir: &Path,
+    item_count: usize,
+    clear_clipboard: bool,
+) -> String {
+    if clear_clipboard {
+        format!(
+            "{} to {} | clipboard will clear on success",
+            count_label(item_count, "item", "items"),
+            target_dir.display()
+        )
+    } else {
+        format!(
+            "{} to {}",
+            count_label(item_count, "item", "items"),
+            target_dir.display()
+        )
+    }
+}
+
+fn transfer_runtime_failure(
+    target_dir: PathBuf,
+    mode: FileTransferMode,
+    label: &'static str,
+    clear_clipboard: bool,
+    error: impl std::fmt::Display,
+) -> ShellTransferExecution {
+    ShellTransferExecution {
+        result: TransferTaskResult {
+            pane_id: WGPU_SHELL_PANE_ID,
+            mode,
+            label,
+            clear_clipboard,
+            success_count: 0,
+            failure_count: 1,
+            affected_dirs: Vec::new(),
+            refresh_dirs: vec![target_dir],
+            undo_items: Vec::new(),
+            created_items: Vec::new(),
+        },
+        privileged: false,
+        administrator_available: false,
+        first_error: Some(format!("operation runtime failed: {error}")),
+        cancelled: false,
     }
 }
 
@@ -19056,6 +20192,7 @@ mod tests {
             rename_dialog: None,
             open_with_chooser: None,
             trash_conflict_dialog: None,
+            task_detail_dialog: None,
             split_pane_left_fraction: 0.5,
             visible_slots: ShellPaneVisibleSlotPools::default(),
             visible_slot_stats: ShellVisibleItemSlotStats::default(),
@@ -25514,6 +26651,101 @@ text/plain=writer.desktop;\n",
         assert!(task_area.bottom() <= sidebar.bottom());
         assert!(panel_with_tasks.height < panel_without_tasks.height);
         assert!(status_bar.x >= sidebar.right());
+    }
+
+    #[test]
+    fn task_area_opens_detail_dialog_and_clear_keeps_running_tasks_visible() {
+        let mut scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
+        let size = PhysicalSize::new(760, 520);
+        assert_eq!(
+            scene.open_task_detail_dialog_at_screen_point(ViewPoint { x: 1.0, y: 1.0 }, size),
+            None
+        );
+
+        scene.record_task_status(ShellTaskStatus::completed("Copied", "alpha.txt", false));
+        scene.record_task_status(ShellTaskStatus::running(
+            7,
+            "Copying",
+            "1 item to /tmp",
+            false,
+        ));
+        let task_area = scene.places_task_area_rect(size).unwrap();
+        assert_eq!(
+            scene.open_task_detail_dialog_at_screen_point(
+                ViewPoint {
+                    x: task_area.x + 4.0,
+                    y: task_area.y + 4.0,
+                },
+                size,
+            ),
+            Some(true)
+        );
+        assert!(scene.is_task_detail_dialog_open());
+
+        let rect = task_detail_dialog_rect(scene.task_statuses.len(), size);
+        assert_eq!(
+            scene.task_detail_dialog_click_at_screen_point(
+                ViewPoint {
+                    x: task_detail_cancel_button_rect(rect).x + 2.0,
+                    y: task_detail_cancel_button_rect(rect).y + 2.0,
+                },
+                size,
+            ),
+            TaskDetailDialogClick::Cancel
+        );
+        assert_eq!(
+            scene.task_detail_dialog_click_at_screen_point(
+                ViewPoint {
+                    x: task_detail_clear_button_rect(rect).x + 2.0,
+                    y: task_detail_clear_button_rect(rect).y + 2.0,
+                },
+                size,
+            ),
+            TaskDetailDialogClick::Clear
+        );
+        assert!(scene.clear_task_statuses());
+        assert_eq!(scene.task_statuses.len(), 1);
+        assert_eq!(scene.task_statuses[0].kind, ShellTaskStatusKind::Running);
+        assert!(scene.is_task_detail_dialog_open());
+    }
+
+    #[test]
+    fn task_detail_cancel_marks_running_task_and_returns_task_id() {
+        let mut scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
+        let size = PhysicalSize::new(760, 520);
+        scene.record_task_status(ShellTaskStatus::running(
+            42,
+            "Copying",
+            "1 item to /tmp",
+            false,
+        ));
+        let task_area = scene.places_task_area_rect(size).unwrap();
+        assert_eq!(
+            scene.open_task_detail_dialog_at_screen_point(
+                ViewPoint {
+                    x: task_area.x + 4.0,
+                    y: task_area.y + 4.0,
+                },
+                size,
+            ),
+            Some(true)
+        );
+
+        let rect = task_detail_dialog_rect(scene.task_statuses.len(), size);
+        assert_eq!(
+            scene.task_detail_dialog_click_at_screen_point(
+                ViewPoint {
+                    x: task_detail_dismiss_button_rect(rect, 0).x + 2.0,
+                    y: task_detail_dismiss_button_rect(rect, 0).y + 2.0,
+                },
+                size,
+            ),
+            TaskDetailDialogClick::Dismiss(0)
+        );
+        let (changed, task_id) = scene.dismiss_task_status(0);
+        assert!(changed);
+        assert_eq!(task_id, Some(42));
+        assert_eq!(scene.task_statuses[0].kind, ShellTaskStatusKind::Cancelled);
     }
 
     #[test]
