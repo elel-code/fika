@@ -1,12 +1,14 @@
 use fika_core::{ViewPoint, ViewRect};
 use winit::dpi::PhysicalSize;
 
+use crate::wgpu_context_menu::{
+    ShellContextMenu, ShellContextSubmenu, context_menu_items, context_submenu_actions,
+};
 use crate::wgpu_drop_menu::{ShellDropMenu, drop_menu_items};
 use crate::wgpu_metrics::{
     CONTEXT_MENU_ROW_HEIGHT, CONTEXT_MENU_VERTICAL_PADDING, CONTEXT_MENU_VIEWPORT_MARGIN,
     CONTEXT_MENU_WIDTH,
 };
-use crate::{ShellContextMenu, ShellContextSubmenu, context_menu_items, context_submenu_actions};
 
 #[cfg(test)]
 pub(super) fn context_menu_rect(menu: &ShellContextMenu, size: PhysicalSize<u32>) -> ViewRect {
