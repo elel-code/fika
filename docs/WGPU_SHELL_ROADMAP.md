@@ -18,6 +18,33 @@ Core must remain UI-neutral. The shell owns window lifecycle, scale handling,
 redraw scheduling, retained geometry, hit testing, overlay/menu/dialog state,
 texture atlases, thumbnails/text/icon scheduling, and telemetry.
 
+## Dolphin Alignment Breakthrough
+
+2026-06-22: the current shell architecture has moved from per-entry immediate
+resolution toward a Dolphin-style item-view hot path. This is the main
+breakthrough from the current performance pass.
+
+- MIME/icon roles are reused by role + size instead of paying full theme lookup
+  per file path. This matches Dolphin's split between `KFileItemModelRolesUpdater`
+  role resolution and view/widget pixmap/text reuse.
+- Icon read-ahead now uses a persistent queue with a small per-frame budget,
+  matching Dolphin's pattern of spreading pending role work through the event
+  loop.
+- Text/icon atlases upload dirty subrectangles, and the overlay text renderer is
+  not created on ordinary frames without overlays. Compact scrolling therefore
+  pays for visible item work, not full-atlas or unused overlay work.
+- The icon theme cache keeps renderable hits but no longer retains large
+  negative full-path probe sets. In `/bin` compact full-scroll testing,
+  `Private_Dirty` dropped from about 97.7 MB to about 43.7-45.9 MB, with
+  `[anon]` dropping from about 54.9 MB to about 2.9 MB.
+
+The architecture is therefore materially closer to Dolphin: the reuse unit is a
+file-manager role and a view resource, while expensive work is bounded by queues
+and cache ownership instead of being constructed per path in the draw path. The
+remaining focus is to move first-time visible exact icon role lookup out of
+scroll/zoom frames, so compact mode does not spike when a new MIME batch enters
+the viewport.
+
 ## Current Route
 
 - `src/main.rs` remains the shell entry point.

@@ -103,8 +103,11 @@ use wgpu_clipboard::ShellClipboard;
 use wgpu_icon_resolver::FileIconResolverTestHarness;
 use wgpu_icon_resolver::{FileIconResolver, ResolvedFileIcon};
 #[cfg(test)]
-use wgpu_icon_roles::{FileIconKind, file_icon_path_cache_key, file_icon_profile};
-use wgpu_icon_roles::{FileIconProfile, NamedIconFallback, icon_cache_size};
+use wgpu_icon_roles::{FileIconKind, file_icon_profile};
+use wgpu_icon_roles::{
+    FileIconPathCacheKey, FileIconProfile, NamedIconFallback, file_icon_path_cache_key,
+    icon_cache_size,
+};
 use wgpu_location::{LocationDraft, PathHistory, normalized_text_cursor};
 use wgpu_metrics::*;
 use wgpu_options::{ShellViewMode, parse_start_options};
@@ -440,6 +443,12 @@ fn env_f32(key: &str) -> Option<f32> {
         .and_then(|value| value.trim().parse::<f32>().ok())
 }
 
+fn env_usize(key: &str) -> Option<usize> {
+    env::var(key)
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+}
+
 fn autosmoke_zoom_config() -> AutosmokeZoomConfig {
     let enabled = env_flag_enabled("FIKA_WGPU_AUTOSMOKE_ZOOM");
     if !enabled {
@@ -493,8 +502,13 @@ fn autosmoke_scroll_config() -> AutosmokeScrollConfig {
         .unwrap_or_else(|| Duration::from_millis(if rapid { 16 } else { 120 }));
     let step = env_f32("FIKA_WGPU_AUTOSMOKE_SCROLL_STEP").unwrap_or(SCROLL_LINE_PX * 2.0);
     let mut actions = VecDeque::new();
-    let forward_count = if rapid { 28 } else { 10 };
-    let back_count = if rapid { 14 } else { 5 };
+    let forward_count = env_usize("FIKA_WGPU_AUTOSMOKE_SCROLL_FORWARD_COUNT").unwrap_or(if rapid {
+        28
+    } else {
+        10
+    });
+    let back_count =
+        env_usize("FIKA_WGPU_AUTOSMOKE_SCROLL_BACK_COUNT").unwrap_or(if rapid { 14 } else { 5 });
     for _ in 0..forward_count {
         actions.push_back(AutosmokeScrollAction {
             delta: step,
@@ -1562,10 +1576,8 @@ impl ApplicationHandler for FikaWgpuApp {
                     }
                     return;
                 }
-                if self.scene.scroll_by(delta_y, renderer.size)
-                    && let Some(window) = self.window.as_ref()
-                {
-                    window.request_redraw();
+                if self.scene.scroll_by(delta_y, renderer.size) {
+                    self.queue_scene_change("wheel-scroll", SCROLL_REDRAW_FRAMES);
                 }
             }
             WindowEvent::RedrawRequested => {
@@ -5166,6 +5178,11 @@ struct ShellDropOperationRequest {
     privileged: bool,
 }
 
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct IconRoleReadAheadRequest {
+    key: FileIconPathCacheKey,
+}
+
 impl ShellDropTarget {
     fn kind(&self) -> &'static str {
         match self {
@@ -5209,6 +5226,8 @@ struct ShellScene {
     split_pane_left_fraction: f32,
     visible_slots: ShellPaneVisibleSlotPools,
     visible_slot_stats: ShellVisibleItemSlotStats,
+    icon_role_read_ahead_queue: RefCell<VecDeque<IconRoleReadAheadRequest>>,
+    icon_role_read_ahead_seen: RefCell<HashSet<IconRoleReadAheadRequest>>,
     internal_drag: Option<ShellInternalDrag>,
     place_press: Option<ShellPlacePress>,
     dnd_hover_target: Option<ShellDropTarget>,
@@ -5334,6 +5353,8 @@ impl ShellScene {
             split_pane_left_fraction: 0.5,
             visible_slots: ShellPaneVisibleSlotPools::default(),
             visible_slot_stats: ShellVisibleItemSlotStats::default(),
+            icon_role_read_ahead_queue: RefCell::new(VecDeque::new()),
+            icon_role_read_ahead_seen: RefCell::new(HashSet::new()),
             internal_drag: None,
             place_press: None,
             dnd_hover_target: None,
@@ -7505,6 +7526,18 @@ impl ShellScene {
 
     fn is_drop_menu_open(&self) -> bool {
         self.drop_menu.is_some()
+    }
+
+    fn overlay_text_needed(&self) -> bool {
+        self.internal_drag.as_ref().is_some_and(|drag| drag.active)
+            || self.drop_menu.is_some()
+            || self.context_menu.is_some()
+            || self.properties_overlay.is_some()
+            || self.task_detail_dialog.is_some()
+            || self.create_dialog.is_some()
+            || self.rename_dialog.is_some()
+            || self.open_with_chooser.is_some()
+            || self.trash_conflict_dialog.is_some()
     }
 
     fn close_drop_menu(&mut self) -> bool {
@@ -10628,7 +10661,7 @@ impl ShellScene {
         size: PhysicalSize<u32>,
         text: &mut TextFrameBuilder<'_>,
         icons: &mut IconFrameBuilder<'_>,
-        overlay_text: &mut TextFrameBuilder<'_>,
+        overlay_text: Option<&mut TextFrameBuilder<'_>>,
     ) -> SceneFrame {
         let layout_start = Instant::now();
         self.update_visible_slot_pools(size);
@@ -10686,15 +10719,17 @@ impl ShellScene {
             }
             self.queue_thumbnail_read_ahead_for_projection(projection, icons);
         }
-        self.push_drag_preview_overlay(&mut overlay_vertices, overlay_text, size);
-        self.push_drop_menu_overlay(&mut overlay_vertices, overlay_text, size);
-        self.push_context_menu_overlay(&mut overlay_vertices, overlay_text, icons, size);
-        self.push_properties_overlay(&mut overlay_vertices, overlay_text, size);
-        self.push_task_detail_dialog_overlay(&mut overlay_vertices, overlay_text, size);
-        self.push_create_dialog_overlay(&mut overlay_vertices, overlay_text, size);
-        self.push_rename_dialog_overlay(&mut overlay_vertices, overlay_text, size);
-        self.push_open_with_chooser_overlay(&mut overlay_vertices, overlay_text, size);
-        self.push_trash_conflict_dialog_overlay(&mut overlay_vertices, overlay_text, size);
+        if let Some(overlay_text) = overlay_text {
+            self.push_drag_preview_overlay(&mut overlay_vertices, overlay_text, size);
+            self.push_drop_menu_overlay(&mut overlay_vertices, overlay_text, size);
+            self.push_context_menu_overlay(&mut overlay_vertices, overlay_text, icons, size);
+            self.push_properties_overlay(&mut overlay_vertices, overlay_text, size);
+            self.push_task_detail_dialog_overlay(&mut overlay_vertices, overlay_text, size);
+            self.push_create_dialog_overlay(&mut overlay_vertices, overlay_text, size);
+            self.push_rename_dialog_overlay(&mut overlay_vertices, overlay_text, size);
+            self.push_open_with_chooser_overlay(&mut overlay_vertices, overlay_text, size);
+            self.push_trash_conflict_dialog_overlay(&mut overlay_vertices, overlay_text, size);
+        }
 
         SceneFrame {
             layout_us: layout_start.elapsed().as_micros(),
@@ -10815,6 +10850,7 @@ impl ShellScene {
         &self,
         projections: &[ShellPaneProjection<'_>],
         resolver: &mut FileIconResolver,
+        reason: &str,
     ) -> IconRolePrewarmStats {
         let mut stats = IconRolePrewarmStats::default();
         let deadline = Instant::now() + VISIBLE_ICON_ROLE_PREWARM_BUDGET;
@@ -10842,12 +10878,10 @@ impl ShellScene {
                     .max(item.layout.icon_rect.height)
                     .clamp(16.0, 256.0);
                 let resolve_start = Instant::now();
-                let snapshot = resolver.resolve_entry(projection.view.path, entry, icon_size);
+                let snapshot = resolver.resolve_entry_fast(projection.view.path, entry, icon_size);
                 stats.resolve_us += resolve_start.elapsed().as_micros();
                 stats.entries += 1;
-                if snapshot.is_none() {
-                    stats.deferred += 1;
-                }
+                let _ = snapshot;
                 if Instant::now() >= deadline {
                     stats.over_budget = true;
                     return stats;
@@ -10887,17 +10921,58 @@ impl ShellScene {
                 let Some(entry) = projection.view.entries.get(entry_index) else {
                     continue;
                 };
-                let resolve_start = Instant::now();
-                let _ = resolver.resolve_entry(projection.view.path, entry, icon_size);
-                stats.resolve_us += resolve_start.elapsed().as_micros();
-                stats.read_ahead += 1;
+                self.enqueue_icon_role_read_ahead(projection.view.path, entry, icon_size);
                 if Instant::now() >= deadline {
                     stats.over_budget = true;
                     return stats;
                 }
             }
         }
+        if icon_role_read_ahead_enabled_for_frame(reason) {
+            self.resolve_next_icon_role_read_ahead(resolver, &mut stats, deadline);
+        }
         stats
+    }
+
+    fn enqueue_icon_role_read_ahead(&self, directory: &Path, entry: &Entry, icon_size: f32) {
+        let path = directory.join(entry.name.as_ref());
+        let key = file_icon_path_cache_key(
+            &path,
+            entry.is_dir,
+            entry.mime_type.clone(),
+            entry.mime_magic_checked,
+            icon_size,
+        );
+        let request = IconRoleReadAheadRequest { key };
+        let mut seen = self.icon_role_read_ahead_seen.borrow_mut();
+        if !seen.insert(request.clone()) {
+            return;
+        }
+        self.icon_role_read_ahead_queue
+            .borrow_mut()
+            .push_back(request);
+    }
+
+    fn resolve_next_icon_role_read_ahead(
+        &self,
+        resolver: &mut FileIconResolver,
+        stats: &mut IconRolePrewarmStats,
+        deadline: Instant,
+    ) {
+        for _ in 0..ICON_ROLE_READ_AHEAD_QUEUE_BUDGET_PER_FRAME {
+            if Instant::now() >= deadline {
+                stats.over_budget = true;
+                return;
+            }
+            let Some(request) = self.icon_role_read_ahead_queue.borrow_mut().pop_front() else {
+                return;
+            };
+            let resolve_start = Instant::now();
+            let snapshot = resolver.resolve_path_cache_key_fast(request.key);
+            stats.resolve_us += resolve_start.elapsed().as_micros();
+            stats.read_ahead += 1;
+            let _ = snapshot;
+        }
     }
 
     fn prewarm_file_item_text_labels(
@@ -14595,7 +14670,7 @@ struct WgpuState {
     overlay_quad_renderer: QuadRenderer,
     icon_renderer: IconRenderer,
     text_renderer: TextRenderer,
-    overlay_text_renderer: TextRenderer,
+    overlay_text_renderer: Option<TextRenderer>,
     frame_count: u64,
     last_log: Instant,
     rendered_view_switches: u64,
@@ -14639,7 +14714,7 @@ impl WgpuState {
             required_features: wgpu::Features::empty(),
             required_limits: wgpu::Limits::default(),
             experimental_features: wgpu::ExperimentalFeatures::disabled(),
-            memory_hints: wgpu::MemoryHints::Performance,
+            memory_hints: wgpu::MemoryHints::MemoryUsage,
             trace: wgpu::Trace::Off,
         }))
         .map_err(|error| format!("request device: {error}"))?;
@@ -14684,7 +14759,6 @@ impl WgpuState {
         let overlay_quad_renderer = QuadRenderer::new(&device, config.format);
         let icon_renderer = IconRenderer::new(&device, config.format);
         let text_renderer = TextRenderer::new(&device, config.format);
-        let overlay_text_renderer = TextRenderer::new(&device, config.format);
 
         Ok(Self {
             instance,
@@ -14697,7 +14771,7 @@ impl WgpuState {
             overlay_quad_renderer,
             icon_renderer,
             text_renderer,
-            overlay_text_renderer,
+            overlay_text_renderer: None,
             frame_count: 0,
             last_log: Instant::now(),
             rendered_view_switches: 0,
@@ -14738,13 +14812,26 @@ impl WgpuState {
                 .into_iter()
                 .filter_map(|kind| scene.pane_projection(kind, self.size))
                 .collect::<Vec<_>>();
-            scene.prewarm_visible_file_icon_roles(&projections, &mut self.icon_renderer.resolver)
+            scene.prewarm_visible_file_icon_roles(
+                &projections,
+                &mut self.icon_renderer.resolver,
+                reason,
+            )
         };
         let role_prewarm_us = role_start.elapsed().as_micros();
         let prepare_start = Instant::now();
+        let overlay_text_active = scene.overlay_text_needed();
+        if overlay_text_active && self.overlay_text_renderer.is_none() {
+            fika_log!("[fika-wgpu] overlay-text init reason={reason}");
+            self.overlay_text_renderer = Some(TextRenderer::new(&self.device, self.config.format));
+        }
         let scene_frame = prepare_scene_frame(
             &mut self.text_renderer,
-            &mut self.overlay_text_renderer,
+            if overlay_text_active {
+                self.overlay_text_renderer.as_mut()
+            } else {
+                None
+            },
             &mut self.icon_renderer,
             &self.device,
             &self.queue,
@@ -14792,6 +14879,7 @@ impl WgpuState {
             &mut self.text_renderer.atlas_cache,
             self.size,
             scene.ui_scale(),
+            Vec::new(),
         );
         scene.prewarm_file_item_text_labels(projections, &mut text_builder, read_ahead_enabled)
     }
@@ -14835,8 +14923,11 @@ impl WgpuState {
         }
 
         let prewarm_start = Instant::now();
-        let prewarm_stats =
-            scene.prewarm_visible_file_icon_roles(&projections, &mut self.icon_renderer.resolver);
+        let prewarm_stats = scene.prewarm_visible_file_icon_roles(
+            &projections,
+            &mut self.icon_renderer.resolver,
+            reason,
+        );
         let prewarm_us = prewarm_start.elapsed().as_micros();
         if prewarm_stats.entries > 0
             && (self.frame_count == 0
@@ -14926,9 +15017,18 @@ impl WgpuState {
         let surface_acquire_us = surface_acquire_start.elapsed().as_micros();
 
         let prepare_start = Instant::now();
+        let overlay_text_active = scene.overlay_text_needed();
+        if overlay_text_active && self.overlay_text_renderer.is_none() {
+            fika_log!("[fika-wgpu] overlay-text init reason={reason}");
+            self.overlay_text_renderer = Some(TextRenderer::new(&self.device, self.config.format));
+        }
         let scene_frame = prepare_scene_frame(
             &mut self.text_renderer,
-            &mut self.overlay_text_renderer,
+            if overlay_text_active {
+                self.overlay_text_renderer.as_mut()
+            } else {
+                None
+            },
             &mut self.icon_renderer,
             &self.device,
             &self.queue,
@@ -14987,7 +15087,11 @@ impl WgpuState {
             self.text_renderer.draw(&mut pass);
             self.overlay_quad_renderer.draw(&mut pass);
             self.icon_renderer.draw_overlay(&mut pass);
-            self.overlay_text_renderer.draw(&mut pass);
+            if overlay_text_active
+                && let Some(overlay_text_renderer) = self.overlay_text_renderer.as_ref()
+            {
+                overlay_text_renderer.draw(&mut pass);
+            }
         }
 
         self.queue.submit(Some(encoder.finish()));
@@ -15003,7 +15107,7 @@ impl WgpuState {
             || self.last_log.elapsed() >= Duration::from_secs(1)
         {
             fika_log!(
-                "[fika-wgpu] frame={} reason={} view={} scale={:.2} zoom={} zoom_changes={} path={} entries={} filtered={} show_hidden={} hidden_changes={} location_active={} location_changes={} filter_active={} filter_changes={} places={} places_visible={} places_width={:.1} place_hover={} places_changes={} places_resize_changes={} places_scroll_y={:.1} places_scroll_changes={} split_pane={} split_changes={} split_path={} content_scrollbar={} visible={} thumbnails={} slots={}/{} slot_reused={} slot_recycled={} slot_allocated={} selected={} hover={} dnd_hover={} dnd_hover_changes={} dnd_drop_requests={} context={} context_menu={} context_changes={} context_actions={} properties={} properties_changes={} create_dialog={} create_changes={} rename_dialog={} rename_changes={} open_with={} open_with_changes={} open_changes={} copy_location_changes={} file_clipboard_changes={} paste_changes={} trash_changes={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} path_changes={} reloads={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_deferred={} icon_raster_deferred={} thumb_loaded={} thumb_quads={} thumb_deferred={} thumb_read_ahead={} thumb_ready={}/{}b icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_deferred={} text_cache={}/{} entries={} bytes={} text_atlas_reused={} batches={} scroll_x={:.1} scroll_y={:.1} prewarm={}us surface={}us prepare={}us quad_upload={}us encode_present={}us layout={}us text_raster={}us text_atlas={}x{}:{}b render={}us",
+                "[fika-wgpu] frame={} reason={} view={} scale={:.2} zoom={} zoom_changes={} path={} entries={} filtered={} show_hidden={} hidden_changes={} location_active={} location_changes={} filter_active={} filter_changes={} places={} places_visible={} places_width={:.1} place_hover={} places_changes={} places_resize_changes={} places_scroll_y={:.1} places_scroll_changes={} split_pane={} split_changes={} split_path={} content_scrollbar={} visible={} thumbnails={} slots={}/{} slot_reused={} slot_recycled={} slot_allocated={} selected={} hover={} dnd_hover={} dnd_hover_changes={} dnd_drop_requests={} context={} context_menu={} context_changes={} context_actions={} properties={} properties_changes={} create_dialog={} create_changes={} rename_dialog={} rename_changes={} open_with={} open_with_changes={} open_changes={} copy_location_changes={} file_clipboard_changes={} paste_changes={} trash_changes={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} path_changes={} reloads={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_deferred={} icon_raster_deferred={} thumb_loaded={} thumb_quads={} thumb_deferred={} thumb_read_ahead={} thumb_ready={}/{}b icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_deferred={} text_cache={}/{} entries={} bytes={} swash_cache={}/{} swash_reset={} text_atlas_reused={} batches={} scroll_x={:.1} scroll_y={:.1} prewarm={}us surface={}us prepare={}us quad_upload={}us encode_present={}us layout={}us text_raster={}us text_atlas={}x{}:{}b render={}us",
                 self.frame_count,
                 reason,
                 scene.panes[ShellPaneId::FIRST].view_mode.as_str(),
@@ -15129,12 +15233,20 @@ impl WgpuState {
                 scene_frame.text_stats.cache_misses,
                 scene_frame.text_stats.cache_entries,
                 scene_frame.text_stats.cache_bytes,
+                scene_frame.text_stats.swash_image_entries,
+                scene_frame.text_stats.swash_outline_entries,
+                scene_frame.text_stats.swash_resets,
                 scene_frame.text_stats.atlas_reused,
                 self.quad_renderer.batch_count()
                     + self.overlay_quad_renderer.batch_count()
                     + self.icon_renderer.batch_count()
                     + self.text_renderer.batch_count()
-                    + self.overlay_text_renderer.batch_count(),
+                    + self
+                        .overlay_text_renderer
+                        .as_ref()
+                        .filter(|_| overlay_text_active)
+                        .map(TextRenderer::batch_count)
+                        .unwrap_or(0),
                 scene.panes[ShellPaneId::FIRST].scroll_x,
                 scene.panes[ShellPaneId::FIRST].scroll_y,
                 prewarm_us,
@@ -15268,10 +15380,16 @@ struct IconFrameStats {
 struct IconFrame {
     vertices: Vec<TextVertex>,
     overlay_vertices: Vec<TextVertex>,
-    pixels: Vec<u8>,
+    uploads: Vec<IconAtlasUpload>,
     width: u32,
     height: u32,
     stats: IconFrameStats,
+}
+
+#[derive(Clone, Debug)]
+struct IconAtlasUpload {
+    atlas: AtlasRect,
+    raster: IconRaster,
 }
 
 #[derive(Clone, Debug)]
@@ -15764,7 +15882,7 @@ struct IconFrameBuilder<'a> {
     thumbnails: &'a mut ThumbnailRasterResolver,
     raster_cache: &'a mut IconRasterCache,
     surface_size: PhysicalSize<u32>,
-    pixels: Vec<u8>,
+    uploads: Vec<IconAtlasUpload>,
     draws: Vec<IconDraw>,
     overlay_draws: Vec<IconDraw>,
     width: u32,
@@ -15800,7 +15918,7 @@ impl<'a> IconFrameBuilder<'a> {
             thumbnails,
             raster_cache,
             surface_size,
-            pixels: vec![0; (ICON_ATLAS_WIDTH * 4) as usize],
+            uploads: Vec::with_capacity(64),
             draws: Vec::with_capacity(64),
             overlay_draws: Vec::with_capacity(16),
             width: ICON_ATLAS_WIDTH,
@@ -15842,13 +15960,10 @@ impl<'a> IconFrameBuilder<'a> {
         self.icons += 1;
         let resolve_start = Instant::now();
         let icon_size = rect.width.max(rect.height).clamp(16.0, 256.0);
-        let (snapshot, used_fallback) = self
+        let snapshot = self
             .resolver
-            .resolve_entry_visible(directory, entry, icon_size);
+            .resolve_entry_fast(directory, entry, icon_size);
         self.resolve_us += resolve_start.elapsed().as_micros();
-        if used_fallback {
-            self.deferred += 1;
-        }
 
         let Some(path) = snapshot.path else {
             self.fallbacks += 1;
@@ -15879,7 +15994,16 @@ impl<'a> IconFrameBuilder<'a> {
                 self.fallbacks += 1;
                 return false;
             };
-            self.raster_us += raster_start.elapsed().as_micros();
+            let raster_us = raster_start.elapsed().as_micros();
+            if raster_us >= 2_000 {
+                fika_log!(
+                    "[fika-wgpu] icon-raster-slow path={} size={} elapsed={}us",
+                    key.path.display(),
+                    size_px,
+                    raster_us
+                );
+            }
+            self.raster_us += raster_us;
             self.raster_cache.insert(key, raster)
         };
 
@@ -16016,7 +16140,16 @@ impl<'a> IconFrameBuilder<'a> {
                 self.fallbacks += 1;
                 return false;
             };
-            self.raster_us += raster_start.elapsed().as_micros();
+            let raster_us = raster_start.elapsed().as_micros();
+            if raster_us >= 2_000 {
+                fika_log!(
+                    "[fika-wgpu] icon-raster-slow path={} size={} elapsed={}us",
+                    key.path.display(),
+                    size_px,
+                    raster_us
+                );
+            }
+            self.raster_us += raster_us;
             self.raster_cache.insert(key, raster)
         };
 
@@ -16048,7 +16181,10 @@ impl<'a> IconFrameBuilder<'a> {
         layer: IconDrawLayer,
     ) {
         let atlas = self.allocate(raster.width, raster.height);
-        self.copy_icon_pixels(atlas, &raster);
+        self.uploads.push(IconAtlasUpload {
+            atlas,
+            raster: raster.clone(),
+        });
 
         let scale_x = raster.width as f32 / rect.width.max(1.0);
         let scale_y = raster.height as f32 / rect.height.max(1.0);
@@ -16082,7 +16218,7 @@ impl<'a> IconFrameBuilder<'a> {
         IconFrame {
             vertices,
             overlay_vertices,
-            pixels: self.pixels,
+            uploads: self.uploads,
             width: self.width,
             height,
             stats: IconFrameStats {
@@ -16136,20 +16272,6 @@ impl<'a> IconFrameBuilder<'a> {
             return;
         }
         self.height = needed_height.next_power_of_two();
-        self.pixels
-            .resize((self.width * self.height * 4) as usize, 0);
-    }
-
-    fn copy_icon_pixels(&mut self, atlas: AtlasRect, raster: &IconRaster) {
-        let atlas_x = atlas.x as u32;
-        let atlas_y = atlas.y as u32;
-        for row in 0..raster.height {
-            let src_start = (row * raster.width * 4) as usize;
-            let src_end = src_start + (raster.width * 4) as usize;
-            let dst_start = (((atlas_y + row) * self.width + atlas_x) * 4) as usize;
-            let dst_end = dst_start + (raster.width * 4) as usize;
-            self.pixels[dst_start..dst_end].copy_from_slice(&raster.pixels[src_start..src_end]);
-        }
     }
 }
 
@@ -16288,7 +16410,7 @@ impl IconRenderer {
         }
     }
 
-    fn upload(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, frame: &IconFrame) {
+    fn upload(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, frame: &mut IconFrame) {
         if frame.width != self.texture_width || frame.height != self.texture_height {
             self.texture = create_icon_texture(device, frame.width, frame.height);
             self.texture_view = self
@@ -16304,25 +16426,31 @@ impl IconRenderer {
             self.texture_height = frame.height;
         }
 
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &self.texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            &frame.pixels,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(frame.width * 4),
-                rows_per_image: Some(frame.height),
-            },
-            wgpu::Extent3d {
-                width: frame.width,
-                height: frame.height,
-                depth_or_array_layers: 1,
-            },
-        );
+        for upload in &frame.uploads {
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &self.texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d {
+                        x: upload.atlas.x as u32,
+                        y: upload.atlas.y as u32,
+                        z: 0,
+                    },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                upload.raster.pixels.as_ref(),
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(upload.raster.width * 4),
+                    rows_per_image: Some(upload.raster.height),
+                },
+                wgpu::Extent3d {
+                    width: upload.raster.width,
+                    height: upload.raster.height,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
 
         let total_vertices = frame.vertices.len() + frame.overlay_vertices.len();
         if total_vertices > self.vertex_capacity {
@@ -16380,6 +16508,9 @@ struct TextFrameStats {
     cache_misses: usize,
     cache_entries: usize,
     cache_bytes: usize,
+    swash_image_entries: usize,
+    swash_outline_entries: usize,
+    swash_resets: usize,
     raster_us: u128,
 }
 
@@ -16397,6 +16528,9 @@ impl TextFrameStats {
             cache_misses: self.cache_misses + other.cache_misses,
             cache_entries: self.cache_entries + other.cache_entries,
             cache_bytes: self.cache_bytes + other.cache_bytes,
+            swash_image_entries: self.swash_image_entries.max(other.swash_image_entries),
+            swash_outline_entries: self.swash_outline_entries.max(other.swash_outline_entries),
+            swash_resets: self.swash_resets + other.swash_resets,
             raster_us: self.raster_us + other.raster_us,
         }
     }
@@ -16404,10 +16538,10 @@ impl TextFrameStats {
 
 struct TextFrame {
     vertices: Vec<TextVertex>,
+    pixels: Vec<u8>,
     uploads: Vec<TextAtlasUpload>,
     width: u32,
     height: u32,
-    clear_texture: bool,
     stats: TextFrameStats,
 }
 
@@ -16469,28 +16603,7 @@ impl TextAtlasFrameCache {
         self.row_height = 0;
     }
 
-    fn would_exceed_max_height(&self, labels: impl IntoIterator<Item = (u32, u32)>) -> bool {
-        let mut cursor_x = self.cursor_x;
-        let mut cursor_y = self.cursor_y;
-        let mut row_height = self.row_height;
-        let mut height = self.height;
-        for (label_width, label_height) in labels {
-            if cursor_x + label_width + TEXT_PADDING > self.width {
-                cursor_x = TEXT_PADDING;
-                cursor_y += row_height.max(1);
-                row_height = 0;
-            }
-            let needed_height = cursor_y + label_height + TEXT_PADDING;
-            if needed_height > height {
-                height = needed_height.next_power_of_two();
-            }
-            cursor_x += label_width + TEXT_PADDING;
-            row_height = row_height.max(label_height + TEXT_PADDING);
-        }
-        height > TEXT_ATLAS_MAX_HEIGHT
-    }
-
-    fn allocate(&mut self, label_width: u32, label_height: u32) -> AtlasRect {
+    fn allocate(&mut self, label_width: u32, label_height: u32) -> Option<AtlasRect> {
         if self.cursor_x + label_width + TEXT_PADDING > self.width {
             self.cursor_x = TEXT_PADDING;
             self.cursor_y += self.row_height.max(1);
@@ -16499,16 +16612,20 @@ impl TextAtlasFrameCache {
 
         let x = self.cursor_x;
         let y = self.cursor_y;
+        let needed_height = y + label_height + TEXT_PADDING;
+        if needed_height > TEXT_ATLAS_MAX_HEIGHT {
+            return None;
+        }
         self.cursor_x += label_width + TEXT_PADDING;
         self.row_height = self.row_height.max(label_height + TEXT_PADDING);
-        self.ensure_height(y + label_height + TEXT_PADDING);
+        self.ensure_height(needed_height);
 
-        AtlasRect {
+        Some(AtlasRect {
             x: x as f32,
             y: y as f32,
             width: label_width as f32,
             height: label_height as f32,
-        }
+        })
     }
 
     fn ensure_height(&mut self, needed_height: u32) {
@@ -16663,6 +16780,7 @@ struct TextFrameBuilder<'a> {
     deferred: usize,
     raster_miss_budget: usize,
     raster_us: u128,
+    atlas_pixels: Vec<u8>,
 }
 
 impl<'a> TextFrameBuilder<'a> {
@@ -16674,6 +16792,7 @@ impl<'a> TextFrameBuilder<'a> {
         atlas_cache: &'a mut TextAtlasFrameCache,
         surface_size: PhysicalSize<u32>,
         text_scale_factor: f32,
+        atlas_pixels: Vec<u8>,
     ) -> Self {
         let atlas_width = atlas_cache.width;
         let max_line_height = (TEXT_LINE_HEIGHT * text_scale_factor).round().max(1.0);
@@ -16695,8 +16814,10 @@ impl<'a> TextFrameBuilder<'a> {
             cache_hits: 0,
             cache_misses: 0,
             deferred: 0,
-            raster_miss_budget: TEXT_RASTER_MISS_BUDGET_PER_FRAME,
+            raster_miss_budget: env_usize("FIKA_WGPU_TEXT_RASTER_MISS_BUDGET")
+                .unwrap_or(TEXT_RASTER_MISS_BUDGET_PER_FRAME),
             raster_us: 0,
+            atlas_pixels,
         }
     }
 
@@ -16900,28 +17021,27 @@ impl<'a> TextFrameBuilder<'a> {
         let cache_entries = self.label_cache.len();
         let cache_bytes = self.label_cache.bytes();
         let pending = std::mem::take(&mut self.pending_draws);
-        let missing_labels = pending
-            .iter()
-            .filter(|draw| !self.atlas_cache.entries.contains_key(&draw.key))
-            .map(|draw| (draw.label_width, draw.label_height));
-        let clear_texture = self.atlas_cache.would_exceed_max_height(missing_labels);
-        if clear_texture {
-            self.atlas_cache.reset();
-        }
+        self.atlas_cache.reset();
 
         let mut atlas_reused = 0usize;
+        let mut drawable = Vec::with_capacity(pending.len());
         let mut atlases = Vec::with_capacity(pending.len());
         let mut uploads = Vec::new();
-        for draw in &pending {
+        for draw in pending {
             if let Some(atlas) = self.atlas_cache.entries.get(&draw.key).copied() {
                 atlas_reused += 1;
                 atlases.push(atlas);
+                drawable.push(draw);
                 continue;
             }
 
-            let atlas = self
+            let Some(atlas) = self
                 .atlas_cache
-                .allocate(draw.label_width, draw.label_height);
+                .allocate(draw.label_width, draw.label_height)
+            else {
+                self.deferred += 1;
+                continue;
+            };
             self.atlas_cache.entries.insert(draw.key.clone(), atlas);
             uploads.push(TextAtlasUpload {
                 atlas,
@@ -16930,20 +17050,23 @@ impl<'a> TextFrameBuilder<'a> {
                 height: draw.label_height,
             });
             atlases.push(atlas);
+            drawable.push(draw);
         }
         let height = self.atlas_cache.height.max(1);
+        let mut pixels = self.atlas_pixels;
+        pixels.clear();
         let vertices =
-            text_vertices_for_pending(&pending, &atlases, self.width, height, self.surface_size);
+            text_vertices_for_pending(&drawable, &atlases, self.width, height, self.surface_size);
         let atlas_bytes = (self.width * height * 4) as usize;
         TextFrame {
             vertices,
+            pixels,
             uploads,
             width: self.width,
             height,
-            clear_texture,
             stats: TextFrameStats {
                 labels: self.labels,
-                quads: pending.len(),
+                quads: drawable.len(),
                 deferred: self.deferred,
                 atlas_reused,
                 atlas_width: self.width,
@@ -16953,6 +17076,9 @@ impl<'a> TextFrameBuilder<'a> {
                 cache_misses: self.cache_misses,
                 cache_entries,
                 cache_bytes,
+                swash_image_entries: 0,
+                swash_outline_entries: 0,
+                swash_resets: 0,
                 raster_us: self.raster_us,
             },
         }
@@ -17048,6 +17174,7 @@ struct TextRenderer {
     text_buffer: Buffer,
     label_cache: LabelRasterCache,
     atlas_cache: TextAtlasFrameCache,
+    staging_pixels: Vec<u8>,
 }
 
 impl TextRenderer {
@@ -17148,60 +17275,31 @@ impl TextRenderer {
             text_buffer,
             label_cache,
             atlas_cache,
+            staging_pixels: Vec::new(),
         }
     }
 
-    fn upload(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, frame: &TextFrame) {
+    fn trim_text_engine_caches(&mut self) -> (usize, usize, bool) {
+        let image_entries = self.swash_cache.image_cache.len();
+        let outline_entries = self.swash_cache.outline_command_cache.len();
+        let reset = image_entries > TEXT_SWASH_IMAGE_CACHE_MAX_ENTRIES
+            || outline_entries > TEXT_SWASH_OUTLINE_CACHE_MAX_ENTRIES;
+        if reset {
+            self.swash_cache = SwashCache::new();
+        }
+        (image_entries, outline_entries, reset)
+    }
+
+    fn take_staging_pixels(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.staging_pixels)
+    }
+
+    fn upload(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, frame: &mut TextFrame) {
         let texture_resized =
             frame.width != self.texture_width || frame.height != self.texture_height;
         if texture_resized {
-            let old_width = self.texture_width;
-            let old_height = self.texture_height;
             let new_texture = create_text_texture(device, frame.width, frame.height);
             let new_texture_view = new_texture.create_view(&wgpu::TextureViewDescriptor::default());
-            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("fika-wgpu-text-atlas-resize"),
-            });
-            {
-                let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("fika-wgpu-text-atlas-clear"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &new_texture_view,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                            store: wgpu::StoreOp::Store,
-                        },
-                        depth_slice: None,
-                    })],
-                    depth_stencil_attachment: None,
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                    multiview_mask: None,
-                });
-            }
-            if !frame.clear_texture && (old_width > 1 || old_height > 1) {
-                encoder.copy_texture_to_texture(
-                    wgpu::TexelCopyTextureInfo {
-                        texture: &self.texture,
-                        mip_level: 0,
-                        origin: wgpu::Origin3d::ZERO,
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    wgpu::TexelCopyTextureInfo {
-                        texture: &new_texture,
-                        mip_level: 0,
-                        origin: wgpu::Origin3d::ZERO,
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    wgpu::Extent3d {
-                        width: old_width.min(frame.width),
-                        height: old_height.min(frame.height),
-                        depth_or_array_layers: 1,
-                    },
-                );
-            }
-            queue.submit(Some(encoder.finish()));
             self.texture = new_texture;
             self.texture_view = new_texture_view;
             self.bind_group = create_text_bind_group(
@@ -17212,55 +17310,34 @@ impl TextRenderer {
             );
             self.texture_width = frame.width;
             self.texture_height = frame.height;
-        } else if frame.clear_texture {
-            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("fika-wgpu-text-atlas-clear"),
-            });
-            {
-                let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("fika-wgpu-text-atlas-clear-pass"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &self.texture_view,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                            store: wgpu::StoreOp::Store,
-                        },
-                        depth_slice: None,
-                    })],
-                    depth_stencil_attachment: None,
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                    multiview_mask: None,
-                });
-            }
-            queue.submit(Some(encoder.finish()));
         }
 
-        for upload in &frame.uploads {
-            queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &self.texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d {
-                        x: upload.atlas.x as u32,
-                        y: upload.atlas.y as u32,
-                        z: 0,
+        if !frame.vertices.is_empty() {
+            for upload in &frame.uploads {
+                queue.write_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &self.texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d {
+                            x: upload.atlas.x as u32,
+                            y: upload.atlas.y as u32,
+                            z: 0,
+                        },
+                        aspect: wgpu::TextureAspect::All,
                     },
-                    aspect: wgpu::TextureAspect::All,
-                },
-                upload.pixels.as_ref(),
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(upload.width * 4),
-                    rows_per_image: Some(upload.height),
-                },
-                wgpu::Extent3d {
-                    width: upload.width,
-                    height: upload.height,
-                    depth_or_array_layers: 1,
-                },
-            );
+                    upload.pixels.as_ref(),
+                    wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(upload.width * 4),
+                        rows_per_image: Some(upload.height),
+                    },
+                    wgpu::Extent3d {
+                        width: upload.width,
+                        height: upload.height,
+                        depth_or_array_layers: 1,
+                    },
+                );
+            }
         }
 
         if frame.vertices.len() > self.vertex_capacity {
@@ -17275,6 +17352,8 @@ impl TextRenderer {
                 bytemuck::cast_slice(&frame.vertices),
             );
         }
+        self.staging_pixels = std::mem::take(&mut frame.pixels);
+        self.staging_pixels.clear();
     }
 
     fn draw<'pass>(&'pass self, pass: &mut wgpu::RenderPass<'pass>) {
@@ -17294,7 +17373,7 @@ impl TextRenderer {
 
 fn prepare_scene_frame(
     text_renderer: &mut TextRenderer,
-    overlay_text_renderer: &mut TextRenderer,
+    overlay_text_renderer: Option<&mut TextRenderer>,
     icon_renderer: &mut IconRenderer,
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -17303,56 +17382,110 @@ fn prepare_scene_frame(
     reason: &str,
 ) -> SceneFrame {
     text_renderer.label_cache.begin_frame();
-    overlay_text_renderer.label_cache.begin_frame();
     icon_renderer.raster_cache.begin_frame();
 
-    let (mut scene_frame, text_frame, overlay_text_frame, icon_frame) = {
-        let mut text_builder = TextFrameBuilder::new(
-            &mut text_renderer.font_system,
-            &mut text_renderer.swash_cache,
-            &mut text_renderer.text_buffer,
-            &mut text_renderer.label_cache,
-            &mut text_renderer.atlas_cache,
-            size,
-            scene.ui_scale(),
-        );
-        let mut overlay_text_builder = TextFrameBuilder::new(
-            &mut overlay_text_renderer.font_system,
-            &mut overlay_text_renderer.swash_cache,
-            &mut overlay_text_renderer.text_buffer,
-            &mut overlay_text_renderer.label_cache,
-            &mut overlay_text_renderer.atlas_cache,
-            size,
-            scene.ui_scale(),
-        );
-        let mut icon_builder = IconFrameBuilder::new(
-            &mut icon_renderer.resolver,
-            &mut icon_renderer.thumbnails,
-            &mut icon_renderer.raster_cache,
-            size,
-            icon_raster_miss_budget_for_frame(reason),
-        );
-        let scene_frame = scene.build_frame(
-            size,
-            &mut text_builder,
-            &mut icon_builder,
-            &mut overlay_text_builder,
-        );
-        let text_frame = text_builder.finish();
-        let overlay_text_frame = overlay_text_builder.finish();
-        let icon_frame = icon_builder.finish();
-        (scene_frame, text_frame, overlay_text_frame, icon_frame)
-    };
+    if let Some(overlay_text_renderer) = overlay_text_renderer {
+        overlay_text_renderer.label_cache.begin_frame();
+        let (mut scene_frame, mut text_frame, mut overlay_text_frame, mut icon_frame) = {
+            let text_pixels = text_renderer.take_staging_pixels();
+            let overlay_text_pixels = overlay_text_renderer.take_staging_pixels();
+            let mut text_builder = TextFrameBuilder::new(
+                &mut text_renderer.font_system,
+                &mut text_renderer.swash_cache,
+                &mut text_renderer.text_buffer,
+                &mut text_renderer.label_cache,
+                &mut text_renderer.atlas_cache,
+                size,
+                scene.ui_scale(),
+                text_pixels,
+            );
+            let mut overlay_text_builder = TextFrameBuilder::new(
+                &mut overlay_text_renderer.font_system,
+                &mut overlay_text_renderer.swash_cache,
+                &mut overlay_text_renderer.text_buffer,
+                &mut overlay_text_renderer.label_cache,
+                &mut overlay_text_renderer.atlas_cache,
+                size,
+                scene.ui_scale(),
+                overlay_text_pixels,
+            );
+            let mut icon_builder = IconFrameBuilder::new(
+                &mut icon_renderer.resolver,
+                &mut icon_renderer.thumbnails,
+                &mut icon_renderer.raster_cache,
+                size,
+                icon_raster_miss_budget_for_frame(reason),
+            );
+            let scene_frame = scene.build_frame(
+                size,
+                &mut text_builder,
+                &mut icon_builder,
+                Some(&mut overlay_text_builder),
+            );
+            let text_frame = text_builder.finish();
+            let overlay_text_frame = overlay_text_builder.finish();
+            let icon_frame = icon_builder.finish();
+            (scene_frame, text_frame, overlay_text_frame, icon_frame)
+        };
 
-    icon_renderer.upload(device, queue, &icon_frame);
-    text_renderer.upload(device, queue, &text_frame);
-    overlay_text_renderer.upload(device, queue, &overlay_text_frame);
-    scene_frame.icon_stats = icon_frame.stats;
-    scene_frame.text_stats = text_frame.stats.merged(overlay_text_frame.stats);
-    scene_frame
+        icon_renderer.upload(device, queue, &mut icon_frame);
+        text_renderer.upload(device, queue, &mut text_frame);
+        overlay_text_renderer.upload(device, queue, &mut overlay_text_frame);
+        let (text_swash_images, text_swash_outlines, text_swash_reset) =
+            text_renderer.trim_text_engine_caches();
+        let (overlay_swash_images, overlay_swash_outlines, overlay_swash_reset) =
+            overlay_text_renderer.trim_text_engine_caches();
+        scene_frame.icon_stats = icon_frame.stats;
+        scene_frame.text_stats = text_frame.stats.merged(overlay_text_frame.stats);
+        scene_frame.text_stats.swash_image_entries = text_swash_images.max(overlay_swash_images);
+        scene_frame.text_stats.swash_outline_entries =
+            text_swash_outlines.max(overlay_swash_outlines);
+        scene_frame.text_stats.swash_resets =
+            usize::from(text_swash_reset) + usize::from(overlay_swash_reset);
+        scene_frame
+    } else {
+        let (mut scene_frame, mut text_frame, mut icon_frame) = {
+            let text_pixels = text_renderer.take_staging_pixels();
+            let mut text_builder = TextFrameBuilder::new(
+                &mut text_renderer.font_system,
+                &mut text_renderer.swash_cache,
+                &mut text_renderer.text_buffer,
+                &mut text_renderer.label_cache,
+                &mut text_renderer.atlas_cache,
+                size,
+                scene.ui_scale(),
+                text_pixels,
+            );
+            let mut icon_builder = IconFrameBuilder::new(
+                &mut icon_renderer.resolver,
+                &mut icon_renderer.thumbnails,
+                &mut icon_renderer.raster_cache,
+                size,
+                icon_raster_miss_budget_for_frame(reason),
+            );
+            let scene_frame = scene.build_frame(size, &mut text_builder, &mut icon_builder, None);
+            let text_frame = text_builder.finish();
+            let icon_frame = icon_builder.finish();
+            (scene_frame, text_frame, icon_frame)
+        };
+
+        icon_renderer.upload(device, queue, &mut icon_frame);
+        text_renderer.upload(device, queue, &mut text_frame);
+        let (text_swash_images, text_swash_outlines, text_swash_reset) =
+            text_renderer.trim_text_engine_caches();
+        scene_frame.icon_stats = icon_frame.stats;
+        scene_frame.text_stats = text_frame.stats;
+        scene_frame.text_stats.swash_image_entries = text_swash_images;
+        scene_frame.text_stats.swash_outline_entries = text_swash_outlines;
+        scene_frame.text_stats.swash_resets = usize::from(text_swash_reset);
+        scene_frame
+    }
 }
 
 fn icon_raster_miss_budget_for_frame(reason: &str) -> usize {
+    if let Some(budget) = env_usize("FIKA_WGPU_ICON_RASTER_MISS_BUDGET") {
+        return budget;
+    }
     if matches!(reason, "zoom" | "wheel-zoom" | "autosmoke-zoom") {
         0
     } else {
@@ -17360,8 +17493,15 @@ fn icon_raster_miss_budget_for_frame(reason: &str) -> usize {
     }
 }
 
-fn text_label_read_ahead_enabled_for_frame(reason: &str) -> bool {
-    !matches!(reason, "zoom" | "wheel-zoom" | "autosmoke-zoom")
+fn icon_role_read_ahead_enabled_for_frame(reason: &str) -> bool {
+    !matches!(
+        reason,
+        "autosmoke-scroll" | "wheel-scroll" | "zoom" | "wheel-zoom" | "autosmoke-zoom"
+    )
+}
+
+fn text_label_read_ahead_enabled_for_frame(_reason: &str) -> bool {
+    false
 }
 
 fn create_vertex_buffer(device: &wgpu::Device, vertex_capacity: usize) -> wgpu::Buffer {
@@ -17963,8 +18103,9 @@ impl IconThemeResolver {
             return *is_renderable;
         }
         let is_renderable = is_renderable_icon_file(path);
-        self.renderable_file_cache
-            .insert(path.to_path_buf(), is_renderable);
+        if is_renderable {
+            self.renderable_file_cache.insert(path.to_path_buf(), true);
+        }
         is_renderable
     }
 }
@@ -20854,6 +20995,8 @@ mod tests {
             split_pane_left_fraction: 0.5,
             visible_slots: ShellPaneVisibleSlotPools::default(),
             visible_slot_stats: ShellVisibleItemSlotStats::default(),
+            icon_role_read_ahead_queue: RefCell::new(VecDeque::new()),
+            icon_role_read_ahead_seen: RefCell::new(HashSet::new()),
             internal_drag: None,
             place_press: None,
             dnd_hover_target: None,
@@ -26844,6 +26987,7 @@ text/plain=writer.desktop;\n",
             &mut atlas_cache,
             PhysicalSize::new(320, 120),
             1.0,
+            Vec::new(),
         );
         let rect = ViewRect {
             x: 0.0,
@@ -26902,6 +27046,7 @@ text/plain=writer.desktop;\n",
             &mut atlas_cache,
             PhysicalSize::new(320, 120),
             1.0,
+            Vec::new(),
         );
         for index in 0..=TEXT_RASTER_MISS_BUDGET_PER_FRAME {
             first.push_label(
@@ -26923,6 +27068,7 @@ text/plain=writer.desktop;\n",
             &mut atlas_cache,
             PhysicalSize::new(320, 120),
             1.0,
+            Vec::new(),
         );
         for index in 0..=TEXT_RASTER_MISS_BUDGET_PER_FRAME {
             second.push_label(
@@ -26955,6 +27101,7 @@ text/plain=writer.desktop;\n",
             &mut atlas_cache,
             PhysicalSize::new(320, 120),
             1.0,
+            Vec::new(),
         );
         text.push_label_aligned_no_wrap(
             "a",

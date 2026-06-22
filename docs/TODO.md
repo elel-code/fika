@@ -41,6 +41,11 @@ Status:
   visible-slot virtualization, reusable slot pools, retained geometry,
   filtered projection, visible-first icon/thumbnail/text work, and scroll
   metrics.
+  2026-06-22 breakthrough: MIME/icon role reuse, queued read-ahead,
+  subrect atlas uploads, and bounded icon-theme caching have moved the runtime
+  closer to Dolphin's role updater + widget cache architecture; `/bin` compact
+  full-scroll `Private_Dirty` is now about 43.7-45.9 MB instead of about
+  97.7 MB.
 - [ ] Complete system integration in the winit/wgpu shell:
   Open With, service-menu icons/submenus, clipboard, create/rename/file
   transfer/trash/properties, thumbnail worker, devices, and dynamic Places.

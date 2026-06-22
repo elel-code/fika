@@ -121,6 +121,7 @@ impl FileIconResolver {
         self.resolve_key_fast(key)
     }
 
+    #[allow(dead_code)]
     pub(crate) fn resolve_entry_visible(
         &mut self,
         directory: &Path,
@@ -169,6 +170,14 @@ impl FileIconResolver {
             size_px: icon_cache_size(icon_size),
         };
         self.resolve_key(key)
+    }
+
+    pub(crate) fn resolve_path_cache_key_fast(
+        &mut self,
+        key: FileIconPathCacheKey,
+    ) -> ResolvedFileIcon {
+        self.drain_results();
+        self.resolve_key_fast(key)
     }
 
     fn resolve_key(&mut self, key: FileIconPathCacheKey) -> Option<ResolvedFileIcon> {
