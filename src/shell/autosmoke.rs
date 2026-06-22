@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 use std::env;
 use std::time::Duration;
 
-use crate::ZoomAction;
+use crate::wgpu_shortcuts::ZoomAction;
 
 pub(crate) struct AutosmokeZoomConfig {
     pub(crate) actions: VecDeque<ZoomAction>,
