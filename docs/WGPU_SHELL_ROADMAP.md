@@ -71,11 +71,13 @@ current debug measurements, `/bin` compact full-scroll and end-position dwell
 has `Private_Dirty` at 45.5 MB, `autosmoke-scroll render_us_p50/p95/max` around
 2.17/3.78/5.94 ms, and `icon_raster_us_max=0`; `/etc` compact rapid scroll has
 `render_us_p95` around 3.9 ms; compact rapid zoom has `render_us_p95` around
-4.5 ms with `icon_raster_us_max=0`. The remaining mismatch to verify is quick
-small-directory tail scrolling when MIME roles are not ready; resolver,
-metadata scheduler, shell runtime drains, and frame-log metadata gates are in
-place, and the next step is capturing desktop-session end-to-end evidence
-through those gates.
+4.5 ms with `icon_raster_us_max=0`. Quick small-directory tail scrolling now
+has a desktop-session gate path through
+`scripts/run-retained-renderer-evidence.sh --metadata-tail-scroll`: the current
+Icons fixture evidence shows startup metadata visible/deferred queueing
+(`visible_total=44`, `deferred_total=128`) and autosmoke-scroll metadata drain
+(`results_total=32`, `applied_total=32`) with `icon_raster_us_max=0` and
+`max_new_scroll_y=1693.0`.
 
 ## Current Route
 
@@ -131,7 +133,9 @@ wgpu = "29"
 - `cargo test --locked --bin fika`
 - Runtime smoke for Icons/Compact/Details, split panes, hidden files, location
   editing, scroll/zoom, context menus, DnD, thumbnails, devices, and large
-  directories.
+  directories. Small-directory MIME role tail scrolling has a dedicated
+  `scripts/run-retained-renderer-evidence.sh --metadata-tail-scroll` gate and
+  should be included in the broader matrix.
 - Telemetry must cover frame time, layout time, visible slots, cache
   hits/misses, atlas pressure, thumbnails, metadata role prewarm/drain, hit
   tests, and DnD state.

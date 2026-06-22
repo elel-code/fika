@@ -709,6 +709,32 @@ function gate_min_metric(gate, actual, label,    failed) {
     metadata_prewarm_reason_seen[reason] = 1
 }
 
+/\[fika-wgpu\] prewarm-scene/ {
+    view = value_of("view")
+    if (view == "") {
+        view = "unknown"
+    }
+    reason = value_of("reason")
+    if (reason == "") {
+        reason = "unknown"
+    }
+    prefix = "view:" view
+    reason_prefix = "reason:" reason
+    visible = numeric_value("metadata_visible")
+    deferred = numeric_value("metadata_deferred")
+    batches = numeric_value("metadata_batches")
+    results = numeric_value("metadata_results")
+    applied = numeric_value("metadata_applied")
+
+    if (visible + deferred + batches + results + applied > 0) {
+        add_metadata_prewarm("all", visible, deferred, batches, results, applied)
+        add_metadata_prewarm(prefix, visible, deferred, batches, results, applied)
+        add_metadata_prewarm(reason_prefix, visible, deferred, batches, results, applied)
+        metadata_prewarm_view_seen[view] = 1
+        metadata_prewarm_reason_seen[reason] = 1
+    }
+}
+
 /\[fika-wgpu\] autosmoke-scroll/ {
     action = value_of("action")
     changed = boolean_value("changed")

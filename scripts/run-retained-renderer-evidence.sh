@@ -33,8 +33,12 @@ Options:
       for targets, overflow, and layout. Full rows are already the default;
       this is a regression/baseline suite for the handoff path.
 
+  --metadata-tail-scroll
+      Capture a small extensionless-file directory with wgpu autosmoke scroll
+      enabled and gate metadata role prewarm/drain evidence for tail scrolling.
+
   --all
-      Same as --core --places-full-handoff.
+      Same as --core --places-full-handoff --metadata-tail-scroll.
 
   --analyze-only
       Do not launch Fika. Re-run analyzers against existing logs.
@@ -71,6 +75,7 @@ timeout_seconds=8
 capture_items=false
 capture_places=false
 capture_places_full_handoff=false
+capture_metadata_tail_scroll=false
 analyze_only=false
 skip_build=false
 explicit_selection=false
@@ -104,11 +109,16 @@ while [[ $# -gt 0 ]]; do
             explicit_selection=true
             capture_places_full_handoff=true
             ;;
+        --metadata-tail-scroll)
+            explicit_selection=true
+            capture_metadata_tail_scroll=true
+            ;;
         --all)
             explicit_selection=true
             capture_items=true
             capture_places=true
             capture_places_full_handoff=true
+            capture_metadata_tail_scroll=true
             ;;
         --analyze-only)
             analyze_only=true
@@ -242,6 +252,19 @@ run_gate() {
     "$@"
 }
 
+prepare_metadata_tail_fixture() {
+    local dir="$1"
+    mkdir -p "$dir"
+    find "$dir" -mindepth 1 -maxdepth 1 -type f -delete
+
+    local i
+    for i in $(seq -w 1 96); do
+        # Extensionless PDF-like payloads force MIME magic role updates from
+        # the initial generic binary role without relying on external assets.
+        printf '%%PDF-1.7\n%% fika metadata tail fixture %s\n' "$i" > "$dir/payload-$i"
+    done
+}
+
 expect_gate_failure() {
     local label="$1"
     shift
@@ -256,6 +279,43 @@ expect_gate_failure() {
         exit 1
     fi
 }
+
+if [[ "$capture_metadata_tail_scroll" == true ]]; then
+    metadata_tail_log="$(log_path metadata-tail-scroll)"
+    metadata_tail_dir="$out_dir/$prefix-metadata-tail-fixture"
+
+    if [[ "$analyze_only" != true ]]; then
+        prepare_metadata_tail_fixture "$metadata_tail_dir"
+    fi
+
+    run_capture "metadata tail scroll" "$metadata_tail_log" \
+        env \
+            FIKA_LOG=1 \
+            FIKA_WGPU_FRAME_LOG_ALL=1 \
+            FIKA_WGPU_AUTOSMOKE_SCROLL=1 \
+            FIKA_WGPU_AUTOSMOKE_SCROLL_RAPID=1 \
+            FIKA_WGPU_AUTOSMOKE_SCROLL_STEP=160 \
+            FIKA_WGPU_AUTOSMOKE_SCROLL_FORWARD_COUNT=18 \
+            FIKA_WGPU_AUTOSMOKE_SCROLL_BACK_COUNT=0 \
+            "$binary" --view icons "$metadata_tail_dir"
+
+    run_gate "metadata tail-scroll visible metadata queue" \
+        bash "$root_dir/scripts/analyze-wgpu-frame-log.sh" \
+        --require-frames \
+        --gate-scope all \
+        --min-metadata-visible 1 \
+        "$metadata_tail_log"
+
+    run_gate "metadata tail-scroll autosmoke metadata drain" \
+        bash "$root_dir/scripts/analyze-wgpu-frame-log.sh" \
+        --require-frames \
+        --require-autosmoke-scroll \
+        --gate-scope reason:autosmoke-scroll \
+        --max-icon-raster-us 0 \
+        --min-metadata-results 1 \
+        --min-metadata-applied 1 \
+        "$metadata_tail_log"
+fi
 
 if [[ "$capture_items" == true ]]; then
     item_downloads_log="$(log_path item-downloads)"

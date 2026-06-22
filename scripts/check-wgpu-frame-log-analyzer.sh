@@ -3,6 +3,7 @@ set -euo pipefail
 
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 analyzer="$root_dir/scripts/analyze-wgpu-frame-log.sh"
+evidence_runner="$root_dir/scripts/run-retained-renderer-evidence.sh"
 tmpdir="$(mktemp -d)"
 cleanup() {
     rm -rf "$tmpdir"
@@ -10,6 +11,7 @@ cleanup() {
 trap cleanup EXIT
 
 bash -n "$analyzer"
+bash -n "$evidence_runner"
 
 cat > "$tmpdir/metadata.log" <<'EOF'
 [fika-wgpu] frame=1 reason=initial view=compact visible=36 layout=20us prepare=30us render=900us surface=40us encode_present=20us text_raster=0us icon_resolve=10us icon_raster=0us text_atlas_reused=0 text_deferred=0 icon_deferred=0 icon_raster_deferred=0
@@ -61,3 +63,11 @@ if bash "$analyzer" --min-metadata-visible not-a-number "$tmpdir/metadata.log" >
     echo "expected non-numeric metadata gate to fail" >&2
     exit 1
 fi
+
+cp "$tmpdir/metadata.log" "$tmpdir/evidence-metadata-tail-scroll.log"
+bash "$evidence_runner" \
+    --metadata-tail-scroll \
+    --analyze-only \
+    --skip-build \
+    --out-dir "$tmpdir" \
+    --prefix evidence >/dev/null

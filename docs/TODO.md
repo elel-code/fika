@@ -53,9 +53,11 @@ Status:
   Core MIME metadata role scheduling now has the same visible/deferred priority
   boundary, and the winit/wgpu shell now drains visible MIME metadata before
   deferred read-ahead. The wgpu frame-log analyzer now has metadata prewarm
-  summary/gates for visible candidates, completed results, and applied results;
-  remaining work is collecting a real desktop-session small-directory
-  tail-scroll trace through that gate.
+  summary/gates for visible candidates, completed results, and applied results.
+  A real desktop-session `scripts/run-retained-renderer-evidence.sh
+  --metadata-tail-scroll` run now covers small-directory tail-scroll MIME role
+  queue/drain evidence; remaining work is folding this into the broader
+  mainline runtime matrix.
 - [ ] Complete system integration in the winit/wgpu shell:
   Open With, service-menu icons/submenus, clipboard, create/rename/file
   transfer/trash/properties, thumbnail worker, devices, and dynamic Places.
@@ -67,8 +69,9 @@ Status:
   `cargo check`, `cargo test`, runtime smoke for `/etc`, repo root, large
   directories, Icons/Compact/Details, split pane, scrollbars, rubber-band,
   context menus, location editing, hidden files, thumbnails, and devices. Use
-  `scripts/analyze-wgpu-frame-log.sh` metadata gates for the small-directory
-  tail-scroll MIME role evidence.
+  `scripts/run-retained-renderer-evidence.sh --metadata-tail-scroll` and the
+  underlying `scripts/analyze-wgpu-frame-log.sh` metadata gates for the
+  small-directory tail-scroll MIME role evidence.
 
 ## Pending Areas
 

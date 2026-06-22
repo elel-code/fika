@@ -58,10 +58,13 @@ item-view hot path，这是本轮性能工作的关键突破。
 实测中，`/bin` compact 从头滚到底并停留末尾的 `Private_Dirty` 为 45.5 MB，
 `autosmoke-scroll render_us_p50/p95/max` 约 2.17/3.78/5.94 ms，`icon_raster_us_max=0`；
 `/etc` compact 快速滚动 `render_us_p95` 约 3.9 ms；compact 快速 zoom
-`render_us_p95` 约 4.5 ms，`icon_raster_us_max=0`。接下来需要验证的剩余点是
-小目录快速滚到未命中的尾部 MIME role：resolver、metadata scheduler、shell
-runtime drain 和 frame-log metadata gates 都已经落地，下一步是在真实 desktop
-session 中通过这些 gates 采集端到端 evidence。
+`render_us_p95` 约 4.5 ms，`icon_raster_us_max=0`。小目录快速滚到未命中的尾部
+MIME role 现在已有真实 desktop-session gate：
+`scripts/run-retained-renderer-evidence.sh --metadata-tail-scroll`。当前 Icons
+fixture evidence 显示 startup metadata visible/deferred queue
+（`visible_total=44`、`deferred_total=128`）和 autosmoke-scroll metadata drain
+（`results_total=32`、`applied_total=32`），同时 `icon_raster_us_max=0`、
+`max_new_scroll_y=1693.0`。
 
 ## 当前路线
 
@@ -115,5 +118,8 @@ wgpu = "29"
 - `cargo test --locked --bin fika`
 - Icons/Compact/Details、split panes、hidden files、location editing、
   scroll/zoom、context menus、DnD、thumbnails、devices、大目录 runtime smoke。
+  小目录 MIME role tail-scroll 通过
+  `scripts/run-retained-renderer-evidence.sh --metadata-tail-scroll` 独立 gate
+  覆盖，后续应并入更完整的 runtime matrix。
 - Telemetry 覆盖 frame time、layout time、visible slots、cache hits/misses、
   atlas pressure、thumbnails、metadata role prewarm/drain、hit tests 和 DnD state。
