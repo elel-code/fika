@@ -10146,7 +10146,7 @@ impl ShellScene {
                 text_widths.push(0.0);
                 continue;
             };
-            let text_width = compact_entry_text_width(entry, self.ui_scale() * self.zoom_factor());
+            let text_width = compact_entry_text_width(entry, self.ui_scale());
             text_widths.push(text_width);
             let column = layout_index / rows_per_column;
             if let Some(width) = column_widths.get_mut(column) {
@@ -10182,7 +10182,7 @@ impl ShellScene {
             item_width: self.zoomed_metric(ICONS_ITEM_WIDTH, 82.0, 188.0),
             item_height: self.zoomed_metric(ICONS_ITEM_HEIGHT, 76.0, 172.0),
             icon_size: self.zoomed_metric(ICONS_ICON_SIZE, 28.0, 92.0),
-            text_height: self.zoomed_metric(TEXT_LINE_HEIGHT, 16.0, 30.0),
+            text_height: self.text_line_height(),
         }
     }
 
@@ -10218,7 +10218,7 @@ impl ShellScene {
             item_width: (padding * 2.0 + icon_size + text_gap + min_text_width).round(),
             item_height: self.zoomed_metric(COMPACT_ITEM_HEIGHT, 34.0, 72.0),
             icon_size,
-            text_height: self.zoomed_metric(TEXT_LINE_HEIGHT, 16.0, 26.0),
+            text_height: self.text_line_height(),
         }
     }
 
@@ -14646,6 +14646,22 @@ impl IconRasterCache {
         self.entries.contains_key(key)
     }
 
+    fn contains_icon_variant(&self, path: &Path) -> bool {
+        self.entries
+            .keys()
+            .any(|key| key.stamp.is_none() && key.path == path)
+    }
+
+    fn get_closest_icon_variant(&mut self, path: &Path, size_px: u16) -> Option<IconRaster> {
+        let key = self
+            .entries
+            .keys()
+            .filter(|key| key.stamp.is_none() && key.path == path)
+            .min_by_key(|key| key.size_px.abs_diff(size_px))
+            .cloned()?;
+        self.get(&key)
+    }
+
     fn insert(&mut self, key: IconRasterCacheKey, raster: IconRaster) -> IconRaster {
         let bytes = raster.pixels.len();
         if let Some(old) = self.entries.insert(
@@ -15100,6 +15116,9 @@ impl<'a> IconFrameBuilder<'a> {
         if self.raster_cache.contains(&key) {
             return true;
         }
+        if self.raster_cache.contains_icon_variant(&key.path) {
+            return true;
+        }
         if Instant::now() >= deadline {
             return false;
         }
@@ -15147,6 +15166,21 @@ impl<'a> IconFrameBuilder<'a> {
             raster
         } else {
             self.cache_misses += 1;
+            if self.raster_miss_budget == 0 {
+                if let Some(raster) = self
+                    .raster_cache
+                    .get_closest_icon_variant(&key.path, size_px)
+                {
+                    self.cache_hits += 1;
+                    self.raster_deferred += 1;
+                    self.copy_raster_to_atlas(raster, rect, screen, IconDrawLayer::Content);
+                    return true;
+                }
+                self.raster_deferred += 1;
+                self.fallbacks += 1;
+                return false;
+            }
+            self.raster_miss_budget -= 1;
             let raster_start = Instant::now();
             let Some(raster) = rasterize_icon(&key.path, size_px as u32) else {
                 self.raster_us += raster_start.elapsed().as_micros();
@@ -16318,7 +16352,7 @@ fn prepare_scene_frame(
             &mut text_renderer.text_buffer,
             &mut text_renderer.label_cache,
             size,
-            scene.ui_scale() * scene.zoom_factor(),
+            scene.ui_scale(),
         );
         let mut overlay_text_builder = TextFrameBuilder::new(
             &mut overlay_text_renderer.font_system,
@@ -22277,6 +22311,30 @@ mod tests {
     }
 
     #[test]
+    fn icon_raster_cache_reuses_closest_size_for_zoom_transition() {
+        let mut cache = IconRasterCache::new(ICON_CACHE_MAX_BYTES);
+        let path = PathBuf::from("/theme/mimetypes/text-plain.svg");
+        cache.begin_frame();
+        cache.insert(
+            IconRasterCacheKey::icon(path.clone(), 48),
+            test_icon_raster(4, 7),
+        );
+
+        assert!(cache.contains_icon_variant(&path));
+        assert!(
+            cache
+                .get(&IconRasterCacheKey::icon(path.clone(), 64))
+                .is_none()
+        );
+        let raster = cache
+            .get_closest_icon_variant(&path, 64)
+            .expect("zoom should reuse a cached neighboring icon size");
+
+        assert_eq!(raster.width, 4);
+        assert_eq!(raster.height, 4);
+    }
+
+    #[test]
     fn dialog_rects_scale_with_window_dpi() {
         let chooser = ShellOpenWithChooser::new(
             PathBuf::from("/tmp/plain.txt"),
@@ -26202,6 +26260,10 @@ text/plain=writer.desktop;\n",
         };
         assert!(icons_after.icon_rect.width > icons_before.icon_rect.width);
         assert!(icons_after.item_rect.height > icons_before.item_rect.height);
+        assert_eq!(
+            scene.icons_options(size).text_height,
+            scene.text_line_height()
+        );
 
         assert!(scene.set_view_mode(ShellViewMode::Compact, size));
         let compact_zoomed = match scene.layout(size) {
@@ -26215,6 +26277,10 @@ text/plain=writer.desktop;\n",
         };
         assert!(compact_zoomed.icon_rect.width > compact_reset.icon_rect.width);
         assert!(compact_zoomed.item_rect.height > compact_reset.item_rect.height);
+        assert_eq!(
+            scene.compact_options(size).text_height,
+            scene.text_line_height()
+        );
 
         assert!(scene.set_view_mode(ShellViewMode::Details, size));
         let details_before = match scene.layout(size) {
