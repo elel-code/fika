@@ -1,123 +1,52 @@
-use std::{
-    env,
-    ffi::OsString,
-    io::Write,
-    path::PathBuf,
-    process::{Command, Stdio},
-};
+use std::{cell::RefCell, env};
+
+use arboard::{Clipboard, Error as ClipboardError};
+use fika_core::{FileClipboardRole, encode_file_clipboard_text};
 use winit::window::Window;
 
 pub(crate) struct ShellClipboard {
-    backend: ShellClipboardBackend,
-}
-
-#[derive(Clone, Copy)]
-enum ShellClipboardBackend {
-    WlClipboard,
-    Xclip,
+    clipboard: RefCell<Clipboard>,
 }
 
 impl ShellClipboard {
     pub(crate) fn from_window(_window: &dyn Window) -> Result<Option<Self>, String> {
-        if env::var_os("WAYLAND_DISPLAY").is_some()
-            && command_exists("wl-copy")
-            && command_exists("wl-paste")
-        {
-            return Ok(Some(Self {
-                backend: ShellClipboardBackend::WlClipboard,
-            }));
+        if env::var_os("WAYLAND_DISPLAY").is_none() && env::var_os("DISPLAY").is_none() {
+            return Ok(None);
         }
-        if env::var_os("DISPLAY").is_some() && command_exists("xclip") {
-            return Ok(Some(Self {
-                backend: ShellClipboardBackend::Xclip,
-            }));
-        }
-        Ok(None)
+        Clipboard::new()
+            .map(|clipboard| {
+                Some(Self {
+                    clipboard: RefCell::new(clipboard),
+                })
+            })
+            .map_err(|error| error.to_string())
     }
 
     pub(crate) fn backend(&self) -> &'static str {
-        match self.backend {
-            ShellClipboardBackend::WlClipboard => "wl-clipboard",
-            ShellClipboardBackend::Xclip => "xclip",
-        }
+        "arboard"
     }
 
     pub(crate) fn store_text(&self, text: &str) -> Result<(), String> {
-        match self.backend {
-            ShellClipboardBackend::WlClipboard => {
-                run_clipboard_store("wl-copy", &["--type", "text/plain;charset=utf-8"], text)
-            }
-            ShellClipboardBackend::Xclip => {
-                run_clipboard_store("xclip", &["-selection", "clipboard"], text)
-            }
-        }
+        self.clipboard
+            .try_borrow_mut()
+            .map_err(|error| format!("clipboard already borrowed: {error}"))?
+            .set_text(text)
+            .map_err(|error| error.to_string())
     }
 
     pub(crate) fn load_text(&self) -> Result<String, String> {
-        match self.backend {
-            ShellClipboardBackend::WlClipboard => {
-                run_clipboard_load("wl-paste", &["--no-newline", "--type", "text/plain"])
-            }
-            ShellClipboardBackend::Xclip => {
-                run_clipboard_load("xclip", &["-selection", "clipboard", "-out"])
-            }
+        let mut clipboard = self
+            .clipboard
+            .try_borrow_mut()
+            .map_err(|error| format!("clipboard already borrowed: {error}"))?;
+        match clipboard.get_text() {
+            Ok(text) => Ok(text),
+            Err(ClipboardError::ContentNotAvailable) => clipboard
+                .get()
+                .file_list()
+                .map(|paths| encode_file_clipboard_text(FileClipboardRole::Copy, &paths))
+                .map_err(|error| error.to_string()),
+            Err(error) => Err(error.to_string()),
         }
     }
-}
-
-fn run_clipboard_store(program: &str, args: &[&str], text: &str) -> Result<(), String> {
-    let mut child = Command::new(program)
-        .args(args)
-        .stdin(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| format!("{program} spawn: {error}"))?;
-    let mut stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| format!("{program} stdin unavailable"))?;
-    stdin
-        .write_all(text.as_bytes())
-        .map_err(|error| format!("{program} write: {error}"))?;
-    drop(stdin);
-    let output = child
-        .wait_with_output()
-        .map_err(|error| format!("{program} wait: {error}"))?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(command_error(program, &output.stderr))
-    }
-}
-
-fn run_clipboard_load(program: &str, args: &[&str]) -> Result<String, String> {
-    let output = Command::new(program)
-        .args(args)
-        .stderr(Stdio::piped())
-        .output()
-        .map_err(|error| format!("{program} spawn: {error}"))?;
-    if !output.status.success() {
-        return Err(command_error(program, &output.stderr));
-    }
-    String::from_utf8(output.stdout).map_err(|error| format!("{program} utf8: {error}"))
-}
-
-fn command_error(program: &str, stderr: &[u8]) -> String {
-    let message = String::from_utf8_lossy(stderr).trim().to_string();
-    if message.is_empty() {
-        format!("{program} failed")
-    } else {
-        format!("{program}: {message}")
-    }
-}
-
-fn command_exists(program: &str) -> bool {
-    let program = OsString::from(program);
-    if PathBuf::from(&program).components().count() > 1 {
-        return PathBuf::from(program).is_file();
-    }
-    env::var_os("PATH")
-        .into_iter()
-        .flat_map(|paths| env::split_paths(&paths).collect::<Vec<_>>())
-        .any(|path| path.join(&program).is_file())
 }
