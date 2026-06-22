@@ -53,6 +53,7 @@ impl FileIconResolver {
         }
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn resolve_entry(
         &mut self,
         directory: &Path,

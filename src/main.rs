@@ -1116,6 +1116,12 @@ impl ApplicationHandler for FikaWgpuApp {
                     }
                     return;
                 }
+                if state == ElementState::Pressed
+                    && let Some(action) = path_navigation_action_for_mouse_button(mouse_button)
+                {
+                    self.perform_path_navigation(event_loop, action);
+                    return;
+                }
                 if mouse_button == MouseButton::Right {
                     if state == ElementState::Pressed
                         && self.scene.open_context_menu_with_cache(
@@ -2572,6 +2578,14 @@ fn path_navigation_action_for_key(key: &Key, alt: bool) -> Option<PathNavigation
         Key::Named(NamedKey::ArrowLeft) => Some(PathNavigationAction::Back),
         Key::Named(NamedKey::ArrowRight) => Some(PathNavigationAction::Forward),
         Key::Named(NamedKey::ArrowUp) => Some(PathNavigationAction::Parent),
+        _ => None,
+    }
+}
+
+fn path_navigation_action_for_mouse_button(button: MouseButton) -> Option<PathNavigationAction> {
+    match button {
+        MouseButton::Back => Some(PathNavigationAction::Back),
+        MouseButton::Forward => Some(PathNavigationAction::Forward),
         _ => None,
     }
 }
@@ -15117,12 +15131,9 @@ impl<'a> IconFrameBuilder<'a> {
         self.icons += 1;
         let resolve_start = Instant::now();
         let icon_size = rect.width.max(rect.height).clamp(16.0, 256.0);
-        let Some(snapshot) = self.resolver.resolve_entry(directory, entry, icon_size) else {
-            self.resolve_us += resolve_start.elapsed().as_micros();
-            self.deferred += 1;
-            self.fallbacks += 1;
-            return false;
-        };
+        let snapshot = self
+            .resolver
+            .resolve_entry_fast(directory, entry, icon_size);
         self.resolve_us += resolve_start.elapsed().as_micros();
 
         let Some(path) = snapshot.path else {
@@ -15136,12 +15147,6 @@ impl<'a> IconFrameBuilder<'a> {
             raster
         } else {
             self.cache_misses += 1;
-            if self.raster_miss_budget == 0 {
-                self.raster_deferred += 1;
-                self.fallbacks += 1;
-                return false;
-            }
-            self.raster_miss_budget -= 1;
             let raster_start = Instant::now();
             let Some(raster) = rasterize_icon(&key.path, size_px as u32) else {
                 self.raster_us += raster_start.elapsed().as_micros();
@@ -25391,6 +25396,18 @@ text/plain=writer.desktop;\n",
         );
         assert_eq!(
             path_navigation_action_for_key(&Key::Named(NamedKey::ArrowLeft), false),
+            None
+        );
+        assert_eq!(
+            path_navigation_action_for_mouse_button(MouseButton::Back),
+            Some(PathNavigationAction::Back)
+        );
+        assert_eq!(
+            path_navigation_action_for_mouse_button(MouseButton::Forward),
+            Some(PathNavigationAction::Forward)
+        );
+        assert_eq!(
+            path_navigation_action_for_mouse_button(MouseButton::Left),
             None
         );
     }
