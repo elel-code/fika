@@ -63,6 +63,9 @@ breakthrough from the current performance pass.
 - The winit/wgpu shell now uses that metadata boundary during prewarm/render:
   visible MIME metadata candidates are drained before deferred read-ahead and
   stale results are guarded by pane, path, entry index, size, and modified time.
+- Metadata deferred read-ahead is now budgeted per frame, and thumbnail plus
+  folder-preview background workers share one visible/deferred priority queue
+  helper instead of carrying duplicated queue logic in `src/main.rs`.
 
 The architecture is therefore materially closer to Dolphin: the reuse unit is a
 file-manager role and a view resource, while expensive work is bounded by queues

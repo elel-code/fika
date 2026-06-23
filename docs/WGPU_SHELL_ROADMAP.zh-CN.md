@@ -52,6 +52,9 @@ item-view hot path，这是本轮性能工作的关键突破。
 - winit/wgpu shell 现在已经在 prewarm/render 中使用这个 metadata 边界：可见
   MIME metadata candidates 会先于 deferred read-ahead drain，旧结果通过 pane、
   path、entry index、size 和 modified time 做保护性写回。
+- metadata deferred read-ahead 现在按帧预算推进，并且 thumbnail 与 folder-preview
+  后台 worker 共用同一个 visible/deferred 优先级队列 helper，减少 `src/main.rs`
+  里的历史重复逻辑，也让后续继续拆 folder-preview runtime 更直接。
 
 这说明当前架构已经比之前更接近 Dolphin：复用单位是文件管理器 role 和视图资源，
 昂贵工作进入队列/缓存边界，而不是在 draw path 为每个路径即时构造。最新 debug

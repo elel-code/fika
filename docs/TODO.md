@@ -56,6 +56,9 @@ Status:
   boundary, and the winit/wgpu shell now drains visible MIME metadata before
   deferred read-ahead. The wgpu frame-log analyzer now has metadata prewarm
   summary/gates for visible candidates, completed results, and applied results.
+  Metadata deferred read-ahead is now also budgeted per frame, and thumbnail
+  plus folder-preview background workers share a single visible/deferred worker
+  queue helper instead of carrying duplicated queue logic in `src/main.rs`.
   A real desktop-session `scripts/run-retained-renderer-evidence.sh
   --metadata-tail-scroll` run now covers small-directory tail-scroll MIME role
   queue/drain evidence; remaining work is folding this into the broader

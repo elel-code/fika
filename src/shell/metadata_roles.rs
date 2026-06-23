@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
@@ -10,7 +11,10 @@ use fika_core::{
 };
 
 use crate::wgpu_dolphin::{shell_dolphin_read_ahead_indexes, visible_layout_range_for_projection};
-use crate::wgpu_metrics::{DOLPHIN_RESOLVE_ALL_ITEMS_LIMIT, METADATA_ROLE_BATCH_SIZE};
+use crate::wgpu_metrics::{
+    DOLPHIN_RESOLVE_ALL_ITEMS_LIMIT, METADATA_ROLE_BATCH_SIZE,
+    METADATA_ROLE_READ_AHEAD_QUEUE_BUDGET_PER_FRAME,
+};
 use crate::wgpu_pane::{ShellPaneId, ShellPaneProjection};
 
 #[derive(Default)]
@@ -157,26 +161,42 @@ fn metadata_role_candidates_for_deferred_projection(
     projection: &ShellPaneProjection<'_>,
 ) -> Vec<MetadataRoleCandidate> {
     let item_count = projection.view.filtered_entry_count();
-    let layout_indexes = if item_count <= DOLPHIN_RESOLVE_ALL_ITEMS_LIMIT {
+    metadata_deferred_layout_indexes(
+        visible_layout_range_for_projection(projection),
+        item_count,
+        projection.visible_items.len(),
+    )
+    .into_iter()
+    .filter_map(|layout_index| {
+        let entry_index = projection
+            .view
+            .filtered_indexes
+            .get(layout_index)
+            .copied()?;
+        let entry = projection.view.entries.get(entry_index)?;
+        shell_metadata_role_candidate(projection.view.path, entry_index, entry)
+    })
+    .take(METADATA_ROLE_READ_AHEAD_QUEUE_BUDGET_PER_FRAME)
+    .collect()
+}
+
+fn metadata_deferred_layout_indexes(
+    visible_range: Option<Range<usize>>,
+    item_count: usize,
+    maximum_visible_items: usize,
+) -> Vec<usize> {
+    let mut indexes = if item_count <= DOLPHIN_RESOLVE_ALL_ITEMS_LIMIT {
         (0..item_count).collect::<Vec<_>>()
     } else {
-        let Some(visible_range) = visible_layout_range_for_projection(projection) else {
+        let Some(visible_range) = visible_range.clone() else {
             return Vec::new();
         };
-        shell_dolphin_read_ahead_indexes(visible_range, item_count, projection.visible_items.len())
+        shell_dolphin_read_ahead_indexes(visible_range, item_count, maximum_visible_items)
     };
-    layout_indexes
-        .into_iter()
-        .filter_map(|layout_index| {
-            let entry_index = projection
-                .view
-                .filtered_indexes
-                .get(layout_index)
-                .copied()?;
-            let entry = projection.view.entries.get(entry_index)?;
-            shell_metadata_role_candidate(projection.view.path, entry_index, entry)
-        })
-        .collect()
+    if let Some(visible_range) = visible_range {
+        indexes.retain(|index| !visible_range.contains(index));
+    }
+    indexes
 }
 
 pub(crate) fn core_pane_id_for_shell_pane(pane: ShellPaneId) -> PaneId {
@@ -246,4 +266,33 @@ pub(crate) fn entry_with_metadata_role(entry: &Entry, role: EntryMetadataRole) -
         trash_deletion_time: entry.trash_deletion_time.clone(),
         is_dir: entry.is_dir,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn metadata_deferred_indexes_for_small_directory_exclude_visible_items() {
+        let indexes = metadata_deferred_layout_indexes(Some(4..7), 10, 3);
+
+        assert_eq!(indexes, vec![0, 1, 2, 3, 7, 8, 9]);
+    }
+
+    #[test]
+    fn metadata_deferred_indexes_for_large_directory_follow_dolphin_order() {
+        let indexes =
+            metadata_deferred_layout_indexes(Some(4..7), DOLPHIN_RESOLVE_ALL_ITEMS_LIMIT + 1, 3);
+
+        assert_eq!(&indexes[..6], &[7, 8, 9, 10, 11, 12]);
+        assert!(!indexes.iter().any(|index| (4..7).contains(index)));
+    }
+
+    #[test]
+    fn metadata_deferred_indexes_for_large_directory_require_visible_range() {
+        let indexes =
+            metadata_deferred_layout_indexes(None, DOLPHIN_RESOLVE_ALL_ITEMS_LIMIT + 1, 3);
+
+        assert!(indexes.is_empty());
+    }
 }

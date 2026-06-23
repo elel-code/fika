@@ -117,6 +117,8 @@ mod wgpu_pane;
 mod wgpu_pane_layout;
 #[path = "shell/properties.rs"]
 mod wgpu_properties;
+#[path = "shell/role_worker_queue.rs"]
+mod wgpu_role_worker_queue;
 #[path = "shell/selection.rs"]
 mod wgpu_selection;
 #[path = "shell/shortcuts.rs"]
@@ -188,6 +190,7 @@ use wgpu_pane::{
 };
 use wgpu_pane_layout::{DetailsLayout, ShellCompactLayout, ShellLayout, navigation_target};
 use wgpu_properties::{ShellPropertiesOverlay, property_row};
+use wgpu_role_worker_queue::{PriorityWorkerQueue, PriorityWorkerRequest};
 use wgpu_selection::{
     NavigationAction, RubberBand, RubberBandMode, SelectionClick, ShellSelection,
 };
@@ -16648,6 +16651,18 @@ struct ThumbnailRasterRequest {
     priority: ThumbnailRequestPriority,
 }
 
+impl PriorityWorkerRequest for ThumbnailRasterRequest {
+    type Key = IconRasterCacheKey;
+
+    fn key(&self) -> &Self::Key {
+        &self.key
+    }
+
+    fn priority(&self) -> ThumbnailRequestPriority {
+        self.priority
+    }
+}
+
 #[derive(Clone, Debug)]
 struct ThumbnailRasterResult {
     key: IconRasterCacheKey,
@@ -16854,12 +16869,8 @@ fn thumbnail_raster_worker(
     result_tx: Sender<ThumbnailRasterResult>,
 ) {
     let thumbnailers = ThumbnailerRegistry::shared_system();
-    let mut visible = VecDeque::new();
-    let mut deferred = VecDeque::new();
-    let mut queued = HashMap::new();
-    while let Some(request) =
-        thumbnail_worker_next_request(&request_rx, &mut visible, &mut deferred, &mut queued)
-    {
+    let mut queue = PriorityWorkerQueue::default();
+    while let Some(request) = queue.next_request(&request_rx) {
         let raster = thumbnail_raster_for_request(&cache_root, thumbnailers, &request);
         if result_tx
             .send(ThumbnailRasterResult {
@@ -16939,6 +16950,18 @@ struct FolderPreviewRoleMetadata {
 struct FolderPreviewRoleRequest {
     key: FolderPreviewRoleKey,
     priority: ThumbnailRequestPriority,
+}
+
+impl PriorityWorkerRequest for FolderPreviewRoleRequest {
+    type Key = FolderPreviewRoleKey;
+
+    fn key(&self) -> &Self::Key {
+        &self.key
+    }
+
+    fn priority(&self) -> ThumbnailRequestPriority {
+        self.priority
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -17244,12 +17267,8 @@ fn folder_preview_worker(
     result_tx: Sender<FolderPreviewRoleResult>,
 ) {
     let thumbnailers = ThumbnailerRegistry::shared_system();
-    let mut visible = VecDeque::new();
-    let mut deferred = VecDeque::new();
-    let mut queued = HashMap::new();
-    while let Some(request) =
-        folder_preview_worker_next_request(&request_rx, &mut visible, &mut deferred, &mut queued)
-    {
+    let mut queue = PriorityWorkerQueue::default();
+    while let Some(request) = queue.next_request(&request_rx) {
         let preview = folder_preview_for_request(&cache_root, thumbnailers, &request);
         if result_tx
             .send(FolderPreviewRoleResult {
@@ -17902,108 +17921,6 @@ fn fit_size_to_rect(
     let width = ((source_width as f32 * scale).round() as u32).clamp(1, max_width);
     let height = ((source_height as f32 * scale).round() as u32).clamp(1, max_height);
     (width, height)
-}
-
-fn thumbnail_worker_next_request(
-    request_rx: &Receiver<ThumbnailRasterRequest>,
-    visible: &mut VecDeque<ThumbnailRasterRequest>,
-    deferred: &mut VecDeque<ThumbnailRasterRequest>,
-    queued: &mut HashMap<IconRasterCacheKey, ThumbnailRequestPriority>,
-) -> Option<ThumbnailRasterRequest> {
-    loop {
-        while let Ok(request) = request_rx.try_recv() {
-            thumbnail_worker_queue_request(request, visible, deferred, queued);
-        }
-
-        if let Some(request) = visible.pop_front().or_else(|| deferred.pop_front()) {
-            queued.remove(&request.key);
-            return Some(request);
-        }
-
-        match request_rx.recv() {
-            Ok(request) => thumbnail_worker_queue_request(request, visible, deferred, queued),
-            Err(_) => return None,
-        }
-    }
-}
-
-fn thumbnail_worker_queue_request(
-    request: ThumbnailRasterRequest,
-    visible: &mut VecDeque<ThumbnailRasterRequest>,
-    deferred: &mut VecDeque<ThumbnailRasterRequest>,
-    queued: &mut HashMap<IconRasterCacheKey, ThumbnailRequestPriority>,
-) {
-    let key = request.key.clone();
-    match queued.get(&key).copied() {
-        Some(ThumbnailRequestPriority::Visible) => {}
-        Some(ThumbnailRequestPriority::Deferred)
-            if request.priority == ThumbnailRequestPriority::Visible =>
-        {
-            deferred.retain(|queued| queued.key != key);
-            queued.insert(key, ThumbnailRequestPriority::Visible);
-            visible.push_back(request);
-        }
-        Some(ThumbnailRequestPriority::Deferred) => {}
-        None => {
-            let priority = request.priority;
-            queued.insert(key, priority);
-            match priority {
-                ThumbnailRequestPriority::Visible => visible.push_back(request),
-                ThumbnailRequestPriority::Deferred => deferred.push_back(request),
-            }
-        }
-    }
-}
-
-fn folder_preview_worker_next_request(
-    request_rx: &Receiver<FolderPreviewRoleRequest>,
-    visible: &mut VecDeque<FolderPreviewRoleRequest>,
-    deferred: &mut VecDeque<FolderPreviewRoleRequest>,
-    queued: &mut HashMap<FolderPreviewRoleKey, ThumbnailRequestPriority>,
-) -> Option<FolderPreviewRoleRequest> {
-    loop {
-        while let Ok(request) = request_rx.try_recv() {
-            folder_preview_worker_queue_request(request, visible, deferred, queued);
-        }
-
-        if let Some(request) = visible.pop_front().or_else(|| deferred.pop_front()) {
-            queued.remove(&request.key);
-            return Some(request);
-        }
-
-        match request_rx.recv() {
-            Ok(request) => folder_preview_worker_queue_request(request, visible, deferred, queued),
-            Err(_) => return None,
-        }
-    }
-}
-
-fn folder_preview_worker_queue_request(
-    request: FolderPreviewRoleRequest,
-    visible: &mut VecDeque<FolderPreviewRoleRequest>,
-    deferred: &mut VecDeque<FolderPreviewRoleRequest>,
-    queued: &mut HashMap<FolderPreviewRoleKey, ThumbnailRequestPriority>,
-) {
-    let key = request.key.clone();
-    match queued.get(&key).copied() {
-        Some(ThumbnailRequestPriority::Visible) => {}
-        Some(ThumbnailRequestPriority::Deferred)
-            if request.priority == ThumbnailRequestPriority::Visible =>
-        {
-            deferred.retain(|queued| queued.key != key);
-            queued.insert(key, ThumbnailRequestPriority::Visible);
-            visible.push_back(request);
-        }
-        Some(ThumbnailRequestPriority::Deferred) => {}
-        None => {
-            let priority = request.priority;
-            queued.insert(key, priority);
-            match priority {
-                ThumbnailRequestPriority::Visible => visible.push_back(request),
-                ThumbnailRequestPriority::Deferred => deferred.push_back(request),
-            }
-        }
-    }
 }
 
 fn thumbnail_request_from_raster_request(
@@ -28311,28 +28228,27 @@ mod tests {
     }
 
     #[test]
-    fn thumbnail_worker_promotes_visible_request_over_deferred() {
-        let mut visible = VecDeque::new();
-        let mut deferred = VecDeque::new();
-        let mut queued = HashMap::new();
+    fn priority_worker_queue_promotes_visible_request_over_deferred() {
+        let mut queue = PriorityWorkerQueue::default();
         let first = test_thumbnail_raster_request("first.png", ThumbnailRequestPriority::Deferred);
         let second =
             test_thumbnail_raster_request("second.png", ThumbnailRequestPriority::Deferred);
         let promoted =
             test_thumbnail_raster_request("first.png", ThumbnailRequestPriority::Visible);
 
-        thumbnail_worker_queue_request(first.clone(), &mut visible, &mut deferred, &mut queued);
-        thumbnail_worker_queue_request(second.clone(), &mut visible, &mut deferred, &mut queued);
-        thumbnail_worker_queue_request(promoted.clone(), &mut visible, &mut deferred, &mut queued);
+        queue.push(first);
+        queue.push(second.clone());
+        queue.push(promoted.clone());
 
-        assert_eq!(visible.len(), 1);
-        assert_eq!(deferred.len(), 1);
-        assert_eq!(visible.front().unwrap().key, promoted.key);
-        assert_eq!(deferred.front().unwrap().key, second.key);
-        assert_eq!(
-            queued.get(&promoted.key),
-            Some(&ThumbnailRequestPriority::Visible)
-        );
+        let next = queue.pop_ready().unwrap();
+        assert_eq!(next.key, promoted.key);
+        assert_eq!(next.priority, ThumbnailRequestPriority::Visible);
+
+        let next = queue.pop_ready().unwrap();
+        assert_eq!(next.key, second.key);
+        assert_eq!(next.priority, ThumbnailRequestPriority::Deferred);
+
+        assert!(queue.pop_ready().is_none());
     }
 
     #[test]
