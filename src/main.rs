@@ -16158,6 +16158,8 @@ struct IconFrame {
     stats: IconFrameStats,
 }
 
+const ICON_ATLAS_GUARD_TEXELS: u32 = 1;
+
 #[derive(Clone, Debug)]
 struct IconAtlasUpload {
     atlas: AtlasRect,
@@ -16203,6 +16205,33 @@ impl IconAtlasUploadKey {
             raster_height: upload.raster.height,
             pixels_hash: hash_bytes_with_len(upload.raster.pixels.as_ref()),
         }
+    }
+}
+
+fn padded_icon_atlas_raster(raster: &IconRaster) -> IconRaster {
+    if ICON_ATLAS_GUARD_TEXELS == 0 || raster.width == 0 || raster.height == 0 {
+        return raster.clone();
+    }
+
+    let guard = ICON_ATLAS_GUARD_TEXELS;
+    let width = raster.width + guard * 2;
+    let height = raster.height + guard * 2;
+    let mut pixels = vec![0; (width * height * 4) as usize];
+    for y in 0..height {
+        let src_y = y.saturating_sub(guard).min(raster.height.saturating_sub(1));
+        for x in 0..width {
+            let src_x = x.saturating_sub(guard).min(raster.width.saturating_sub(1));
+            let src_offset = ((src_y * raster.width + src_x) * 4) as usize;
+            let dst_offset = ((y * width + x) * 4) as usize;
+            pixels[dst_offset..dst_offset + 4]
+                .copy_from_slice(&raster.pixels[src_offset..src_offset + 4]);
+        }
+    }
+
+    IconRaster {
+        pixels: pixels.into(),
+        width,
+        height,
     }
 }
 
@@ -17246,6 +17275,7 @@ fn folder_preview_for_request(
     let raster = folder_preview_raster_for_sources(
         cache_root,
         thumbnailers,
+        &request.key.path,
         &metadata.sources,
         request.priority,
         request.key.size_px,
@@ -17274,6 +17304,7 @@ fn folder_preview_role_metadata_for_path(
 fn folder_preview_raster_for_sources(
     cache_root: &Path,
     thumbnailers: &ThumbnailerRegistry,
+    directory: &Path,
     sources: &[FolderPreviewThumbnailSource],
     priority: ThumbnailRequestPriority,
     size_px: u16,
@@ -17289,7 +17320,11 @@ fn folder_preview_raster_for_sources(
             rasters.push(raster);
         }
     }
-    folder_preview_thumbnail_raster_from_children(&rasters, size_px as u32)
+    folder_preview_thumbnail_raster_from_children(
+        &rasters,
+        size_px as u32,
+        folder_preview_directory_seed(directory),
+    )
 }
 
 fn folder_preview_child_raster(
@@ -17460,73 +17495,33 @@ fn folder_preview_thumbnail_stamp_from_sources(
 fn folder_preview_thumbnail_raster_from_children(
     rasters: &[IconRaster],
     target_size: u32,
+    seed: u64,
 ) -> Option<IconRaster> {
     let target_size = target_size.clamp(16, 256);
-    match rasters {
-        [] => None,
-        [raster] => Some(dolphin_transform_single_preview_raster(
+    if rasters.is_empty() {
+        return None;
+    }
+    let layout = DolphinDirectoryPreviewLayout::new(target_size)?;
+    let mut pixels = vec![0; (target_size * target_size * 4) as usize];
+    let slots = folder_preview_thumbnail_slots(rasters.len(), layout);
+    let mut painted = 0;
+    for (index, (raster, slot)) in rasters.iter().zip(slots.iter()).enumerate() {
+        if paint_dolphin_directory_subthumbnail(
             raster,
+            *slot,
+            &mut pixels,
             target_size,
-        )?),
-        _ => {
-            let slots = folder_preview_thumbnail_slots(rasters.len(), target_size);
-            let mut pixels = vec![0; (target_size * target_size * 4) as usize];
-            for (raster, slot) in rasters.iter().zip(slots.iter()) {
-                copy_folder_preview_child_raster(raster, *slot, &mut pixels, target_size)?;
-            }
-            Some(IconRaster {
-                pixels: Arc::from(pixels),
-                width: target_size,
-                height: target_size,
-            })
+            layout.border_stroke_width,
+            folder_preview_thumbnail_angle(seed, index),
+        )
+        .is_some()
+        {
+            painted += 1;
         }
     }
-}
-
-const DOLPHIN_PREVIEW_FRAME_LEFT_MARGIN: u32 = 3;
-const DOLPHIN_PREVIEW_FRAME_TOP_MARGIN: u32 = 2;
-const DOLPHIN_PREVIEW_FRAME_RIGHT_MARGIN: u32 = 3;
-const DOLPHIN_PREVIEW_FRAME_BOTTOM_MARGIN: u32 = 4;
-const DOLPHIN_SIZE_SMALL_MEDIUM: u32 = 22;
-
-fn dolphin_transform_single_preview_raster(
-    raster: &IconRaster,
-    target_size: u32,
-) -> Option<IconRaster> {
-    if target_size <= DOLPHIN_SIZE_SMALL_MEDIUM || icon_raster_has_effective_alpha(raster) {
-        return Some(raster.clone());
+    if painted == 0 {
+        return None;
     }
-
-    let content_width = target_size
-        .saturating_sub(DOLPHIN_PREVIEW_FRAME_LEFT_MARGIN + DOLPHIN_PREVIEW_FRAME_RIGHT_MARGIN)
-        .max(1);
-    let content_height = target_size
-        .saturating_sub(DOLPHIN_PREVIEW_FRAME_TOP_MARGIN + DOLPHIN_PREVIEW_FRAME_BOTTOM_MARGIN)
-        .max(1);
-    let (draw_width, draw_height) =
-        fit_size_to_rect(raster.width, raster.height, content_width, content_height);
-    let source =
-        image::RgbaImage::from_raw(raster.width, raster.height, raster.pixels.as_ref().to_vec())?;
-    let resized = image::imageops::resize(
-        &source,
-        draw_width,
-        draw_height,
-        image::imageops::FilterType::Lanczos3,
-    );
-    let mut pixels = vec![0; (target_size * target_size * 4) as usize];
-    paint_dolphin_preview_frame(&mut pixels, target_size, draw_width, draw_height);
-    let draw_x = DOLPHIN_PREVIEW_FRAME_LEFT_MARGIN + (content_width.saturating_sub(draw_width)) / 2;
-    let draw_y =
-        DOLPHIN_PREVIEW_FRAME_TOP_MARGIN + (content_height.saturating_sub(draw_height)) / 2;
-    copy_rgba_into(
-        resized.as_raw(),
-        draw_width,
-        draw_height,
-        &mut pixels,
-        target_size,
-        draw_x,
-        draw_y,
-    );
     Some(IconRaster {
         pixels: Arc::from(pixels),
         width: target_size,
@@ -17534,42 +17529,59 @@ fn dolphin_transform_single_preview_raster(
     })
 }
 
-fn icon_raster_has_effective_alpha(raster: &IconRaster) -> bool {
-    raster.pixels.chunks_exact(4).any(|pixel| pixel[3] < 255)
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DolphinDirectoryPreviewLayout {
+    folder_size: u32,
+    top_margin: u32,
+    bottom_margin: u32,
+    left_margin: u32,
+    right_margin: u32,
+    spacing: u32,
+    segment_width: u32,
+    segment_height: u32,
+    border_stroke_width: u32,
 }
 
-fn paint_dolphin_preview_frame(
-    pixels: &mut [u8],
-    target_size: u32,
-    draw_width: u32,
-    draw_height: u32,
-) {
-    let frame_width =
-        draw_width + DOLPHIN_PREVIEW_FRAME_LEFT_MARGIN + DOLPHIN_PREVIEW_FRAME_RIGHT_MARGIN;
-    let frame_height =
-        draw_height + DOLPHIN_PREVIEW_FRAME_TOP_MARGIN + DOLPHIN_PREVIEW_FRAME_BOTTOM_MARGIN;
-    let frame_x = (target_size.saturating_sub(frame_width)) / 2;
-    let frame_y = (target_size.saturating_sub(frame_height)) / 2;
-    fill_rgba_rect(
-        pixels,
-        target_size,
-        frame_x,
-        frame_y,
-        frame_width,
-        frame_height,
-        [0, 0, 0, 28],
-    );
-    let inner_x = frame_x + DOLPHIN_PREVIEW_FRAME_LEFT_MARGIN;
-    let inner_y = frame_y + DOLPHIN_PREVIEW_FRAME_TOP_MARGIN;
-    fill_rgba_rect(
-        pixels,
-        target_size,
-        inner_x,
-        inner_y,
-        draw_width,
-        draw_height,
-        [0, 0, 0, 0],
-    );
+impl DolphinDirectoryPreviewLayout {
+    fn new(folder_size: u32) -> Option<Self> {
+        let folder_size = folder_size.clamp(16, 256);
+        let spacing = 1;
+        let tiles = 2;
+        let top_margin = folder_size * 30 / 100;
+        let bottom_margin = folder_size / 6;
+        let left_margin = folder_size / 13;
+        let right_margin = left_margin;
+        let segment_width = (folder_size - left_margin - right_margin + spacing) / tiles - spacing;
+        let segment_height = (folder_size - top_margin - bottom_margin + spacing) / tiles - spacing;
+        if segment_width < 5 || segment_height < 5 {
+            return None;
+        }
+        let border_stroke_width = ((folder_size as f32 / 170.0) + 0.5).floor() as u32;
+        Some(Self {
+            folder_size,
+            top_margin,
+            bottom_margin,
+            left_margin,
+            right_margin,
+            spacing,
+            segment_width,
+            segment_height,
+            border_stroke_width,
+        })
+    }
+
+    fn one_tile_slot(self) -> FolderPreviewThumbnailSlot {
+        FolderPreviewThumbnailSlot {
+            x: self.left_margin,
+            y: self.top_margin,
+            width: self
+                .folder_size
+                .saturating_sub(self.left_margin + self.right_margin),
+            height: self
+                .folder_size
+                .saturating_sub(self.top_margin + self.bottom_margin),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -17582,140 +17594,301 @@ struct FolderPreviewThumbnailSlot {
 
 fn folder_preview_thumbnail_slots(
     count: usize,
-    target_size: u32,
+    layout: DolphinDirectoryPreviewLayout,
 ) -> Vec<FolderPreviewThumbnailSlot> {
     let count = count.min(DOLPHIN_FOLDER_PREVIEW_MAX_IMAGES);
     if count == 0 {
         return Vec::new();
     }
     if count == 1 {
-        return vec![FolderPreviewThumbnailSlot {
-            x: 0,
-            y: 0,
-            width: target_size,
-            height: target_size,
-        }];
+        return vec![layout.one_tile_slot()];
     }
 
-    let gap = (target_size / 12).max(1);
-    if count == 2 {
-        let width = target_size.saturating_sub(gap * 3).max(2) / 2;
-        let height = target_size.saturating_sub(gap * 2).max(1);
-        return vec![
-            FolderPreviewThumbnailSlot {
-                x: gap,
-                y: gap,
-                width,
-                height,
-            },
-            FolderPreviewThumbnailSlot {
-                x: target_size.saturating_sub(gap + width),
-                y: gap,
-                width,
-                height,
-            },
-        ];
-    }
-
-    let tile = target_size.saturating_sub(gap * 3).max(2) / 2;
-    let mut slots = vec![
-        FolderPreviewThumbnailSlot {
-            x: gap,
-            y: gap,
-            width: tile,
-            height: tile,
-        },
-        FolderPreviewThumbnailSlot {
-            x: target_size.saturating_sub(gap + tile),
-            y: gap,
-            width: tile,
-            height: tile,
-        },
-        FolderPreviewThumbnailSlot {
-            x: if count == 3 {
-                (target_size.saturating_sub(tile)) / 2
-            } else {
-                gap
-            },
-            y: target_size.saturating_sub(gap + tile),
-            width: tile,
-            height: tile,
-        },
-    ];
-    if count >= 4 {
+    let mut slots = Vec::with_capacity(count);
+    let mut x = layout.left_margin;
+    let mut y = layout.top_margin;
+    for _ in 0..count {
         slots.push(FolderPreviewThumbnailSlot {
-            x: target_size.saturating_sub(gap + tile),
-            y: target_size.saturating_sub(gap + tile),
-            width: tile,
-            height: tile,
+            x,
+            y,
+            width: layout.segment_width,
+            height: layout.segment_height,
         });
+        x += layout.segment_width + layout.spacing;
+        if x > layout.folder_size - layout.right_margin - layout.segment_width {
+            x = layout.left_margin;
+            y += layout.segment_height + layout.spacing;
+        }
     }
     slots
 }
 
-fn copy_folder_preview_child_raster(
+fn paint_dolphin_directory_subthumbnail(
     raster: &IconRaster,
     slot: FolderPreviewThumbnailSlot,
     target: &mut [u8],
     target_size: u32,
+    border_stroke_width: u32,
+    rotation_angle: i32,
 ) -> Option<()> {
-    let border = (target_size / 64)
-        .max(1)
-        .min(slot.width / 3)
-        .min(slot.height / 3);
-    fill_rgba_rect(
+    let source = crop_icon_raster_to_alpha_bounds(raster)?;
+    let framed =
+        dolphin_directory_picture_frame(&source, slot.width, slot.height, border_stroke_width);
+    let rotated = rotate_rgba_image(&framed, rotation_angle);
+    let radius = border_stroke_width.max(1);
+    let center_x = slot.x as i32 + slot.width as i32 / 2;
+    let center_y = slot.y as i32 + slot.height as i32 / 2;
+    let draw_x = center_x - rotated.width() as i32 / 2;
+    let draw_y = center_y - rotated.height() as i32 / 2;
+    let mut shadow = shadow_from_alpha(&rotated, radius);
+    blur_alpha_shadow(&mut shadow, radius);
+    blend_image_over(
         target,
         target_size,
-        slot.x,
-        slot.y,
-        slot.width,
-        slot.height,
-        [238, 242, 246, 235],
+        &shadow,
+        draw_x - radius as i32 / 2,
+        draw_y - radius as i32 / 2,
     );
-    let inner_x = slot.x + border;
-    let inner_y = slot.y + border;
-    let inner_width = slot.width.saturating_sub(border * 2).max(1);
-    let inner_height = slot.height.saturating_sub(border * 2).max(1);
-    let (draw_width, draw_height) =
-        fit_size_to_rect(raster.width, raster.height, inner_width, inner_height);
+    blend_image_over(target, target_size, &rotated, draw_x, draw_y);
+    Some(())
+}
+
+fn crop_icon_raster_to_alpha_bounds(raster: &IconRaster) -> Option<image::RgbaImage> {
     let source =
         image::RgbaImage::from_raw(raster.width, raster.height, raster.pixels.as_ref().to_vec())?;
+    let mut min_x = raster.width;
+    let mut min_y = raster.height;
+    let mut max_x = 0;
+    let mut max_y = 0;
+    let mut found = false;
+    for y in 0..raster.height {
+        for x in 0..raster.width {
+            if source.get_pixel(x, y)[3] == 0 {
+                continue;
+            }
+            found = true;
+            min_x = min_x.min(x);
+            min_y = min_y.min(y);
+            max_x = max_x.max(x);
+            max_y = max_y.max(y);
+        }
+    }
+    found.then(|| {
+        image::imageops::crop_imm(&source, min_x, min_y, max_x - min_x + 1, max_y - min_y + 1)
+            .to_image()
+    })
+}
+
+fn dolphin_directory_picture_frame(
+    image: &image::RgbaImage,
+    target_width: u32,
+    target_height: u32,
+    border_stroke_width: u32,
+) -> image::RgbaImage {
+    let width_with_frame = image.width() + border_stroke_width * 2;
+    let height_with_frame = image.height() + border_stroke_width * 2;
+    let scaling =
+        if image.width() > image.height() && width_with_frame > target_width && target_width > 0 {
+            target_width as f32 / width_with_frame as f32
+        } else if height_with_frame > target_height && target_height > 0 {
+            target_height as f32 / height_with_frame as f32
+        } else {
+            1.0
+        };
+    let draw_width = ((image.width() as f32 * scaling).round() as u32)
+        .max(1)
+        .min(target_width.max(1));
+    let draw_height = ((image.height() as f32 * scaling).round() as u32)
+        .max(1)
+        .min(target_height.max(1));
     let resized = image::imageops::resize(
-        &source,
+        image,
         draw_width,
         draw_height,
         image::imageops::FilterType::Lanczos3,
     );
-    let draw_x = inner_x + (inner_width - draw_width) / 2;
-    let draw_y = inner_y + (inner_height - draw_height) / 2;
-    copy_rgba_into(
-        resized.as_raw(),
-        draw_width,
-        draw_height,
-        target,
-        target_size,
-        draw_x,
-        draw_y,
+    let frame_width = draw_width + border_stroke_width * 2;
+    let frame_height = draw_height + border_stroke_width * 2;
+    let mut framed = image::RgbaImage::from_pixel(
+        frame_width.max(1),
+        frame_height.max(1),
+        image::Rgba([0, 0, 0, 0]),
     );
-    Some(())
-}
-
-fn fill_rgba_rect(
-    pixels: &mut [u8],
-    target_width: u32,
-    x: u32,
-    y: u32,
-    width: u32,
-    height: u32,
-    color: [u8; 4],
-) {
-    for row in y..y.saturating_add(height) {
-        let row_start = ((row * target_width + x) * 4) as usize;
-        let row_end = row_start + (width * 4) as usize;
-        for pixel in pixels[row_start..row_end].chunks_exact_mut(4) {
-            pixel.copy_from_slice(&color);
+    if border_stroke_width > 0 && image_corners_are_opaque(image) {
+        for pixel in framed.pixels_mut() {
+            *pixel = image::Rgba([255, 255, 255, 255]);
         }
     }
+    image::imageops::overlay(
+        &mut framed,
+        &resized,
+        border_stroke_width as i64,
+        border_stroke_width as i64,
+    );
+    framed
+}
+
+fn image_corners_are_opaque(image: &image::RgbaImage) -> bool {
+    image.get_pixel(0, 0)[3] == 255
+        && image.get_pixel(image.width() - 1, 0)[3] == 255
+        && image.get_pixel(0, image.height() - 1)[3] == 255
+        && image.get_pixel(image.width() - 1, image.height() - 1)[3] == 255
+}
+
+fn rotate_rgba_image(image: &image::RgbaImage, angle_degrees: i32) -> image::RgbaImage {
+    if angle_degrees == 0 {
+        return image.clone();
+    }
+    let radians = (angle_degrees as f32).to_radians();
+    let sin = radians.sin();
+    let cos = radians.cos();
+    let src_w = image.width() as f32;
+    let src_h = image.height() as f32;
+    let dst_w = (src_w * cos.abs() + src_h * sin.abs()).ceil().max(1.0) as u32;
+    let dst_h = (src_w * sin.abs() + src_h * cos.abs()).ceil().max(1.0) as u32;
+    let src_cx = (src_w - 1.0) / 2.0;
+    let src_cy = (src_h - 1.0) / 2.0;
+    let dst_cx = (dst_w as f32 - 1.0) / 2.0;
+    let dst_cy = (dst_h as f32 - 1.0) / 2.0;
+    let mut rotated = image::RgbaImage::from_pixel(dst_w, dst_h, image::Rgba([0, 0, 0, 0]));
+    for y in 0..dst_h {
+        for x in 0..dst_w {
+            let dx = x as f32 - dst_cx;
+            let dy = y as f32 - dst_cy;
+            let src_x = cos * dx + sin * dy + src_cx;
+            let src_y = -sin * dx + cos * dy + src_cy;
+            if src_x < 0.0 || src_y < 0.0 || src_x > src_w - 1.0 || src_y > src_h - 1.0 {
+                continue;
+            }
+            rotated.put_pixel(x, y, sample_rgba_bilinear(image, src_x, src_y));
+        }
+    }
+    rotated
+}
+
+fn sample_rgba_bilinear(image: &image::RgbaImage, x: f32, y: f32) -> image::Rgba<u8> {
+    let x0 = x.floor() as u32;
+    let y0 = y.floor() as u32;
+    let x1 = (x0 + 1).min(image.width() - 1);
+    let y1 = (y0 + 1).min(image.height() - 1);
+    let tx = x - x0 as f32;
+    let ty = y - y0 as f32;
+    let p00 = image.get_pixel(x0, y0).0;
+    let p10 = image.get_pixel(x1, y0).0;
+    let p01 = image.get_pixel(x0, y1).0;
+    let p11 = image.get_pixel(x1, y1).0;
+    let mut out = [0u8; 4];
+    for channel in 0..4 {
+        let top = p00[channel] as f32 * (1.0 - tx) + p10[channel] as f32 * tx;
+        let bottom = p01[channel] as f32 * (1.0 - tx) + p11[channel] as f32 * tx;
+        out[channel] = (top * (1.0 - ty) + bottom * ty).round().clamp(0.0, 255.0) as u8;
+    }
+    image::Rgba(out)
+}
+
+fn shadow_from_alpha(image: &image::RgbaImage, radius: u32) -> image::RgbaImage {
+    let mut shadow = image::RgbaImage::from_pixel(
+        image.width() + radius * 2,
+        image.height() + radius * 2,
+        image::Rgba([0, 0, 0, 0]),
+    );
+    for y in 0..image.height() {
+        for x in 0..image.width() {
+            let alpha = image.get_pixel(x, y)[3];
+            if alpha == 0 {
+                continue;
+            }
+            shadow.put_pixel(
+                x + radius,
+                y + radius,
+                image::Rgba([0, 0, 0, ((alpha as u16 * 128) / 255) as u8]),
+            );
+        }
+    }
+    shadow
+}
+
+fn blur_alpha_shadow(image: &mut image::RgbaImage, radius: u32) {
+    let radius = radius.max(1) as i32;
+    let original = image.clone();
+    for y in 0..image.height() {
+        for x in 0..image.width() {
+            let mut total = 0u32;
+            let mut count = 0u32;
+            for yy in (y as i32 - radius)..=(y as i32 + radius) {
+                for xx in (x as i32 - radius)..=(x as i32 + radius) {
+                    if xx < 0
+                        || yy < 0
+                        || xx >= original.width() as i32
+                        || yy >= original.height() as i32
+                    {
+                        continue;
+                    }
+                    total += original.get_pixel(xx as u32, yy as u32)[3] as u32;
+                    count += 1;
+                }
+            }
+            let alpha = if count == 0 { 0 } else { (total / count) as u8 };
+            image.put_pixel(x, y, image::Rgba([0, 0, 0, alpha]));
+        }
+    }
+}
+
+fn blend_image_over(
+    target: &mut [u8],
+    target_size: u32,
+    image: &image::RgbaImage,
+    dst_x: i32,
+    dst_y: i32,
+) {
+    for y in 0..image.height() {
+        let ty = dst_y + y as i32;
+        if ty < 0 || ty >= target_size as i32 {
+            continue;
+        }
+        for x in 0..image.width() {
+            let tx = dst_x + x as i32;
+            if tx < 0 || tx >= target_size as i32 {
+                continue;
+            }
+            let src = image.get_pixel(x, y).0;
+            if src[3] == 0 {
+                continue;
+            }
+            let offset = ((ty as u32 * target_size + tx as u32) * 4) as usize;
+            alpha_blend_pixel(&mut target[offset..offset + 4], src);
+        }
+    }
+}
+
+fn alpha_blend_pixel(dst: &mut [u8], src: [u8; 4]) {
+    let src_a = src[3] as u32;
+    let dst_a = dst[3] as u32;
+    let out_a = src_a + dst_a * (255 - src_a) / 255;
+    if out_a == 0 {
+        dst.copy_from_slice(&[0, 0, 0, 0]);
+        return;
+    }
+    for channel in 0..3 {
+        let src_term = src[channel] as u32 * src_a;
+        let dst_term = dst[channel] as u32 * dst_a * (255 - src_a) / 255;
+        dst[channel] = ((src_term + dst_term) / out_a).min(255) as u8;
+    }
+    dst[3] = out_a.min(255) as u8;
+}
+
+fn folder_preview_directory_seed(directory: &Path) -> u64 {
+    hash_bytes_with_len(directory.to_string_lossy().as_bytes())
+}
+
+fn folder_preview_thumbnail_angle(seed: u64, index: usize) -> i32 {
+    let mut value = seed ^ ((index as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15));
+    value ^= value >> 30;
+    value = value.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    value ^= value >> 27;
+    value = value.wrapping_mul(0x94D0_49BB_1331_11EB);
+    value ^= value >> 31;
+    (value % 17) as i32 - 8
 }
 
 fn fit_size_to_rect(
@@ -17912,15 +18085,7 @@ fn folder_preview_role_shell_rect(layout: ItemPixmapLayout) -> ViewRect {
 }
 
 fn folder_preview_role_slot(layout: ItemPixmapLayout) -> ViewRect {
-    let icon = folder_preview_role_shell_rect(layout);
-    let width = icon.width * 0.66;
-    let height = icon.height * 0.48;
-    ViewRect {
-        x: icon.x + (icon.width - width) / 2.0,
-        y: icon.y + icon.height * 0.20,
-        width: width.max(1.0),
-        height: height.max(1.0),
-    }
+    folder_preview_role_shell_rect(layout)
 }
 
 #[derive(Clone, Debug)]
@@ -18349,20 +18514,22 @@ impl<'a> IconFrameBuilder<'a> {
         let atlas = if let Some(atlas) = self.atlas_rasters.get(&raster_key).copied() {
             atlas
         } else {
-            let atlas = self.allocate(raster.width, raster.height);
+            let padded_raster = padded_icon_atlas_raster(&raster);
+            let atlas = self.allocate(padded_raster.width, padded_raster.height);
             self.uploads.push(IconAtlasUpload {
                 atlas,
-                raster: raster.clone(),
+                raster: padded_raster,
             });
             self.atlas_rasters.insert(raster_key, atlas);
             atlas
         };
 
+        let guard = ICON_ATLAS_GUARD_TEXELS as f32;
         let scale_x = raster.width as f32 / rect.width.max(1.0);
         let scale_y = raster.height as f32 / rect.height.max(1.0);
         let source = ViewRect {
-            x: (screen.x - rect.x).max(0.0) * scale_x,
-            y: (screen.y - rect.y).max(0.0) * scale_y,
+            x: guard + (screen.x - rect.x).max(0.0) * scale_x,
+            y: guard + (screen.y - rect.y).max(0.0) * scale_y,
             width: screen.width * scale_x,
             height: screen.height * scale_y,
         };
@@ -18532,6 +18699,9 @@ impl IconRenderer {
         });
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("fika-wgpu-icon-sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
@@ -18882,6 +19052,8 @@ struct TextFrame {
     stats: TextFrameStats,
 }
 
+const TEXT_ATLAS_GUARD_TEXELS: u32 = 1;
+
 #[derive(Clone, Copy, Debug)]
 struct AtlasRect {
     x: f32,
@@ -18932,6 +19104,50 @@ impl TextAtlasUploadKey {
             upload_height: upload.height,
             pixels_hash: hash_bytes_with_len(upload.pixels.as_ref()),
         }
+    }
+}
+
+fn text_atlas_max_label_width(atlas_width: u32) -> u32 {
+    atlas_width
+        .saturating_sub(TEXT_PADDING * 2 + TEXT_ATLAS_GUARD_TEXELS * 2)
+        .max(1)
+}
+
+fn text_atlas_guarded_extent(extent: u32) -> u32 {
+    extent + TEXT_ATLAS_GUARD_TEXELS * 2
+}
+
+fn padded_text_atlas_pixels(pixels: Arc<[u8]>, width: u32, height: u32) -> (Arc<[u8]>, u32, u32) {
+    if TEXT_ATLAS_GUARD_TEXELS == 0 || width == 0 || height == 0 {
+        return (pixels, width, height);
+    }
+
+    let guard = TEXT_ATLAS_GUARD_TEXELS;
+    let padded_width = text_atlas_guarded_extent(width);
+    let padded_height = text_atlas_guarded_extent(height);
+    let mut padded = vec![0; (padded_width * padded_height) as usize];
+    for y in 0..padded_height {
+        let src_y = y.saturating_sub(guard).min(height.saturating_sub(1));
+        for x in 0..padded_width {
+            let src_x = x.saturating_sub(guard).min(width.saturating_sub(1));
+            padded[(y * padded_width + x) as usize] = pixels[(src_y * width + src_x) as usize];
+        }
+    }
+
+    (padded.into(), padded_width, padded_height)
+}
+
+fn text_atlas_upload_from_draw(atlas: AtlasRect, draw: &PendingTextDraw) -> TextAtlasUpload {
+    let (pixels, width, height) = padded_text_atlas_pixels(
+        Arc::clone(&draw.pixels),
+        draw.label_width,
+        draw.label_height,
+    );
+    TextAtlasUpload {
+        atlas,
+        pixels,
+        width,
+        height,
     }
 }
 
@@ -19429,7 +19645,7 @@ impl<'a> TextFrameBuilder<'a> {
         if label.is_empty() || rect.width <= 0.0 || rect.height <= 0.0 {
             return None;
         }
-        let max_label_width = self.width.saturating_sub(TEXT_PADDING * 2).max(1);
+        let max_label_width = text_atlas_max_label_width(self.width);
         let label_height = rect.height.ceil().max(1.0) as u32;
         let label_width = if alignment == LabelAlignment::Start && wrap == LabelWrap::None {
             let natural_width =
@@ -19516,7 +19732,7 @@ impl<'a> TextFrameBuilder<'a> {
         if label.is_empty() || rect.width <= 0.0 || rect.height <= 0.0 {
             return 0.0;
         }
-        let max_label_width = self.width.saturating_sub(TEXT_PADDING * 2).max(1);
+        let max_label_width = text_atlas_max_label_width(self.width);
         let label_width = (rect.width.ceil().max(1.0) as u32).min(max_label_width);
         let label_height = rect.height.ceil().max(1.0) as u32;
         let attrs = Attrs::new().family(Family::SansSerif);
@@ -19563,22 +19779,17 @@ impl<'a> TextFrameBuilder<'a> {
                 if let Some(atlas) = self.atlas_cache.entries.get(&draw.key).copied() {
                     atlas_reused += 1;
                     if draw.atlas_upload_required {
-                        uploads.push(TextAtlasUpload {
-                            atlas,
-                            pixels: Arc::clone(&draw.pixels),
-                            width: draw.label_width,
-                            height: draw.label_height,
-                        });
+                        uploads.push(text_atlas_upload_from_draw(atlas, draw));
                     }
                     atlases.push(atlas);
                     drawable.push(draw.clone());
                     continue;
                 }
 
-                let Some(atlas) = self
-                    .atlas_cache
-                    .allocate(draw.label_width, draw.label_height)
-                else {
+                let Some(atlas) = self.atlas_cache.allocate(
+                    text_atlas_guarded_extent(draw.label_width),
+                    text_atlas_guarded_extent(draw.label_height),
+                ) else {
                     if !reset_once {
                         reset_once = true;
                         self.atlas_cache.reset();
@@ -19588,12 +19799,7 @@ impl<'a> TextFrameBuilder<'a> {
                     continue;
                 };
                 self.atlas_cache.entries.insert(draw.key.clone(), atlas);
-                uploads.push(TextAtlasUpload {
-                    atlas,
-                    pixels: Arc::clone(&draw.pixels),
-                    width: draw.label_width,
-                    height: draw.label_height,
-                });
+                uploads.push(text_atlas_upload_from_draw(atlas, draw));
                 atlases.push(atlas);
                 drawable.push(draw.clone());
             }
@@ -19686,11 +19892,12 @@ fn text_vertices_for_pending(
 ) -> Vec<TextVertex> {
     let mut vertices = Vec::with_capacity(pending.len() * 6);
     for (draw, atlas) in pending.iter().zip(atlases.iter()) {
+        let guard = TEXT_ATLAS_GUARD_TEXELS as f32;
         let scale_x = draw.label_width as f32 / draw.rect.width.max(1.0);
         let scale_y = draw.label_height as f32 / draw.rect.height.max(1.0);
         let atlas = AtlasRect {
-            x: atlas.x + (draw.screen.x - draw.rect.x).max(0.0) * scale_x,
-            y: atlas.y + (draw.screen.y - draw.rect.y).max(0.0) * scale_y,
+            x: atlas.x + guard + (draw.screen.x - draw.rect.x).max(0.0) * scale_x,
+            y: atlas.y + guard + (draw.screen.y - draw.rect.y).max(0.0) * scale_y,
             width: draw.screen.width * scale_x,
             height: draw.screen.height * scale_y,
         };
@@ -19755,6 +19962,9 @@ impl TextRenderer {
         });
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("fika-wgpu-text-sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
@@ -28609,6 +28819,7 @@ mod tests {
         let raster = folder_preview_raster_for_sources(
             &cache_root,
             &ThumbnailerRegistry::default(),
+            &root,
             &[FolderPreviewThumbnailSource {
                 path: cover,
                 modified_secs: cover_modified_secs,
@@ -28628,37 +28839,69 @@ mod tests {
     }
 
     #[test]
-    fn single_opaque_folder_preview_child_uses_dolphin_frame_margins() {
-        let raster = solid_icon_raster(64, 64, [210, 40, 80, 255]);
-        let framed = folder_preview_thumbnail_raster_from_children(&[raster], 64).unwrap();
+    fn directory_folder_preview_angles_are_stable_and_non_grid_like_dolphin() {
+        let seed = folder_preview_directory_seed(Path::new("/home/yk/Documents/wallper"));
+        let angles = (0..DOLPHIN_FOLDER_PREVIEW_MAX_IMAGES)
+            .map(|index| folder_preview_thumbnail_angle(seed, index))
+            .collect::<Vec<_>>();
 
-        assert_eq!(framed.width, 64);
-        assert_eq!(framed.height, 64);
-        assert_ne!(raster_pixel(&framed, 0, 0), [210, 40, 80, 255]);
-        assert_eq!(
-            raster_pixel(
-                &framed,
-                DOLPHIN_PREVIEW_FRAME_LEFT_MARGIN,
-                DOLPHIN_PREVIEW_FRAME_TOP_MARGIN
-            ),
-            [210, 40, 80, 255]
-        );
-        assert_eq!(
-            raster_pixel(
-                &framed,
-                64 - DOLPHIN_PREVIEW_FRAME_RIGHT_MARGIN,
-                64 - DOLPHIN_PREVIEW_FRAME_BOTTOM_MARGIN
-            ),
-            [0, 0, 0, 28]
-        );
+        assert!(angles.iter().all(|angle| (-8..=8).contains(angle)));
+        assert!(angles.iter().any(|angle| *angle != 0));
+        assert!(angles.windows(2).any(|pair| pair[0] != pair[1]));
     }
 
     #[test]
-    fn single_alpha_folder_preview_child_stays_unframed_like_dolphin() {
-        let raster = solid_icon_raster(64, 64, [20, 120, 220, 128]);
-        let framed = folder_preview_thumbnail_raster_from_children(&[raster], 64).unwrap();
+    fn multiple_folder_preview_children_use_dolphin_rotated_segments() {
+        let rasters = [
+            solid_icon_raster(64, 64, [220, 40, 80, 255]),
+            solid_icon_raster(64, 64, [40, 160, 90, 255]),
+            solid_icon_raster(64, 64, [50, 100, 220, 255]),
+            solid_icon_raster(64, 64, [220, 180, 40, 255]),
+        ];
+        let seed = folder_preview_directory_seed(Path::new("/home/yk/Documents/wallper"));
+        let composed = folder_preview_thumbnail_raster_from_children(&rasters, 128, seed).unwrap();
+        let layout = DolphinDirectoryPreviewLayout::new(128).unwrap();
+        let slots = folder_preview_thumbnail_slots(rasters.len(), layout);
 
-        assert_eq!(raster_pixel(&framed, 0, 0), [20, 120, 220, 128]);
+        assert!(raster_has_visible_pixel_outside_slots(&composed, &slots));
+    }
+
+    #[test]
+    fn folder_preview_composition_skips_unpaintable_child_without_dropping_later_images() {
+        let transparent = solid_icon_raster(64, 64, [20, 120, 220, 0]);
+        let visible = solid_icon_raster(64, 64, [220, 80, 40, 255]);
+        let composed =
+            folder_preview_thumbnail_raster_from_children(&[transparent, visible], 128, 9).unwrap();
+
+        assert!(raster_contains_rgb(&composed, [220, 80, 40]));
+    }
+
+    #[test]
+    fn single_opaque_folder_preview_child_uses_dolphin_directory_margins() {
+        let raster = solid_icon_raster(64, 64, [210, 40, 80, 255]);
+        let framed = folder_preview_thumbnail_raster_from_children(&[raster], 64, 4).unwrap();
+        let layout = DolphinDirectoryPreviewLayout::new(64).unwrap();
+        let slot = layout.one_tile_slot();
+
+        assert_eq!(framed.width, 64);
+        assert_eq!(framed.height, 64);
+        assert_eq!(raster_pixel(&framed, 0, 0), [0, 0, 0, 0]);
+        assert!(raster_has_visible_pixel_in_rect(&framed, slot));
+        assert!(raster_contains_rgb(&framed, [210, 40, 80]));
+    }
+
+    #[test]
+    fn single_alpha_folder_preview_child_does_not_get_opaque_picture_frame() {
+        let raster = solid_icon_raster(64, 64, [20, 120, 220, 128]);
+        let framed = folder_preview_thumbnail_raster_from_children(&[raster], 64, 4).unwrap();
+
+        assert_eq!(raster_pixel(&framed, 0, 0), [0, 0, 0, 0]);
+        assert!(
+            !framed
+                .pixels
+                .chunks_exact(4)
+                .any(|pixel| pixel == [255, 255, 255, 255])
+        );
     }
 
     #[test]
@@ -28809,6 +29052,45 @@ mod tests {
             raster.pixels[offset + 2],
             raster.pixels[offset + 3],
         ]
+    }
+
+    fn raster_has_visible_pixel_in_rect(
+        raster: &IconRaster,
+        rect: FolderPreviewThumbnailSlot,
+    ) -> bool {
+        let right = rect.x.saturating_add(rect.width).min(raster.width);
+        let bottom = rect.y.saturating_add(rect.height).min(raster.height);
+        for y in rect.y.min(raster.height)..bottom {
+            for x in rect.x.min(raster.width)..right {
+                if raster_pixel(raster, x, y)[3] > 0 {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    fn raster_has_visible_pixel_outside_slots(
+        raster: &IconRaster,
+        slots: &[FolderPreviewThumbnailSlot],
+    ) -> bool {
+        for y in 0..raster.height {
+            for x in 0..raster.width {
+                if raster_pixel(raster, x, y)[3] == 0 {
+                    continue;
+                }
+                let inside_slot = slots.iter().any(|slot| {
+                    x >= slot.x
+                        && y >= slot.y
+                        && x < slot.x.saturating_add(slot.width)
+                        && y < slot.y.saturating_add(slot.height)
+                });
+                if !inside_slot {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     fn wait_for_thumbnail_state(
@@ -29542,6 +29824,80 @@ mod tests {
                 .iter()
                 .any(|name| name == "system-run")
         );
+    }
+
+    #[test]
+    fn icon_atlas_upload_extends_edges_for_linear_sampling() {
+        let raster = IconRaster {
+            pixels: vec![
+                10, 20, 30, 255, 40, 50, 60, 255, 70, 80, 90, 255, 100, 110, 120, 255,
+            ]
+            .into(),
+            width: 2,
+            height: 2,
+        };
+
+        let padded = padded_icon_atlas_raster(&raster);
+
+        assert_eq!(padded.width, 4);
+        assert_eq!(padded.height, 4);
+        assert_eq!(raster_pixel(&padded, 0, 0), [10, 20, 30, 255]);
+        assert_eq!(raster_pixel(&padded, 1, 1), [10, 20, 30, 255]);
+        assert_eq!(raster_pixel(&padded, 3, 0), [40, 50, 60, 255]);
+        assert_eq!(raster_pixel(&padded, 0, 3), [70, 80, 90, 255]);
+        assert_eq!(raster_pixel(&padded, 3, 3), [100, 110, 120, 255]);
+    }
+
+    #[test]
+    fn icon_frame_vertices_sample_inside_atlas_guard() {
+        let mut resolver = FileIconResolver::new();
+        let mut thumbnails = ThumbnailRasterResolver::new();
+        let mut icon_rasters = IconRasterResolver::new();
+        let mut raster_cache = IconRasterCache::new(ICON_CACHE_MAX_BYTES);
+        let mut role_raster_cache = IconRoleRasterCache::new(ICON_ROLE_RASTER_CACHE_MAX_BYTES);
+        let mut builder = IconFrameBuilder::new(
+            &mut resolver,
+            &mut thumbnails,
+            &mut icon_rasters,
+            &mut raster_cache,
+            &mut role_raster_cache,
+            PhysicalSize::new(128, 96),
+            0,
+            0,
+            0,
+        );
+        let raster = test_icon_raster(2, 7);
+        builder.copy_raster_to_atlas(
+            raster,
+            ViewRect {
+                x: 4.0,
+                y: 4.0,
+                width: 16.0,
+                height: 16.0,
+            },
+            ViewRect {
+                x: 4.0,
+                y: 4.0,
+                width: 16.0,
+                height: 16.0,
+            },
+            IconDrawLayer::Content,
+        );
+
+        let frame = builder.finish();
+        let upload = &frame.uploads[0];
+        let guard = ICON_ATLAS_GUARD_TEXELS as f32;
+        let u0 = frame.vertices[0].uv[0] * frame.width as f32;
+        let v0 = frame.vertices[0].uv[1] * frame.height as f32;
+        let u1 = frame.vertices[2].uv[0] * frame.width as f32;
+        let v1 = frame.vertices[2].uv[1] * frame.height as f32;
+
+        assert_eq!(upload.raster.width, 4);
+        assert_eq!(upload.raster.height, 4);
+        assert!((u0 - (upload.atlas.x + guard)).abs() < 0.001);
+        assert!((v0 - (upload.atlas.y + guard)).abs() < 0.001);
+        assert!((u1 - (upload.atlas.x + guard + 2.0)).abs() < 0.001);
+        assert!((v1 - (upload.atlas.y + guard + 2.0)).abs() < 0.001);
     }
 
     #[test]
@@ -33623,6 +33979,69 @@ text/plain=writer.desktop;\n",
 
         assert_eq!(second_frame.stats.atlas_reused, 1);
         assert_eq!(second_frame.uploads.len(), 1);
+    }
+
+    #[test]
+    fn text_atlas_upload_extends_edges_for_linear_sampling() {
+        let (pixels, width, height) =
+            padded_text_atlas_pixels(Arc::from(vec![10, 40, 70, 100]), 2, 2);
+
+        assert_eq!(width, 4);
+        assert_eq!(height, 4);
+        assert_eq!(pixels[0], 10);
+        assert_eq!(pixels[(width + 1) as usize], 10);
+        assert_eq!(pixels[3], 40);
+        assert_eq!(pixels[(3 * width) as usize], 70);
+        assert_eq!(pixels[(3 * width + 3) as usize], 100);
+    }
+
+    #[test]
+    fn text_frame_vertices_sample_inside_atlas_guard() {
+        let draw = PendingTextDraw {
+            key: LabelCacheKey {
+                text: "alpha".to_string(),
+                width: 2,
+                height: 2,
+                alignment: LabelAlignment::Center,
+                wrap: LabelWrap::WordOrGlyph,
+            },
+            pixels: Arc::from(vec![255; 4]),
+            atlas_upload_required: false,
+            screen: ViewRect {
+                x: 0.0,
+                y: 0.0,
+                width: 20.0,
+                height: 20.0,
+            },
+            rect: ViewRect {
+                x: 0.0,
+                y: 0.0,
+                width: 20.0,
+                height: 20.0,
+            },
+            label_width: 2,
+            label_height: 2,
+            color: TextColor::rgb(36, 41, 47),
+        };
+        let atlas = AtlasRect {
+            x: 4.0,
+            y: 8.0,
+            width: 4.0,
+            height: 4.0,
+        };
+
+        let vertices =
+            text_vertices_for_pending(&[draw], &[atlas], 64, 64, PhysicalSize::new(64, 64));
+        let guard = TEXT_ATLAS_GUARD_TEXELS as f32;
+        let u0 = vertices[0].uv[0] * 64.0;
+        let v0 = vertices[0].uv[1] * 64.0;
+        let u1 = vertices[2].uv[0] * 64.0;
+        let v1 = vertices[2].uv[1] * 64.0;
+
+        assert!((u0 - (atlas.x + guard)).abs() < 0.001);
+        assert!((v0 - (atlas.y + guard)).abs() < 0.001);
+        assert!((u1 - (atlas.x + guard + 2.0)).abs() < 0.001);
+        assert!((v1 - (atlas.y + guard + 2.0)).abs() < 0.001);
     }
 
     #[test]
