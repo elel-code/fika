@@ -17,6 +17,7 @@ pub mod network;
 pub mod operation_runtime;
 pub mod operations;
 pub mod pane;
+pub mod pe_icon;
 pub mod places;
 pub mod privilege;
 pub mod settings;

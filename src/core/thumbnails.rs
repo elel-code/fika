@@ -1,6 +1,7 @@
 use super::{
     entries::ItemId,
     pane::{Generation, PaneId},
+    pe_icon::windows_executable_icon_png,
 };
 use std::collections::{HashMap, VecDeque};
 use std::env;
@@ -641,8 +642,23 @@ pub fn generate_thumbnail_with_external_thumbnailer_registry(
         fs::create_dir_all(parent)?;
     }
     let temp_path = temporary_thumbnail_path(&output_path);
-    let commands = registry.commands_for_request(request, &temp_path, ThumbnailSize::Normal);
     let mut attempted = false;
+    if thumbnail_request_is_windows_executable(request) {
+        attempted = true;
+        let _ = fs::remove_file(&temp_path);
+        if let Some(png) =
+            windows_executable_icon_png(request.path(), ThumbnailSize::Normal.max_dimension())?
+        {
+            fs::write(&temp_path, png)?;
+            if write_thumbnail_metadata(&temp_path, request.uri(), request.modified_secs()).is_ok()
+                && fs::rename(&temp_path, &output_path).is_ok()
+                && let Some(hit) = cached_thumbnail_for_request(root, request)
+            {
+                return Ok(Some(hit));
+            }
+        }
+    }
+    let commands = registry.commands_for_request(request, &temp_path, ThumbnailSize::Normal);
     for command in commands {
         let _ = fs::remove_file(&temp_path);
         match run_external_thumbnailer_command(&command) {
@@ -753,6 +769,13 @@ pub fn thumbnail_request_may_have_preview(path: &Path, mime_type: Option<&str>) 
         || thumbnail_extension_may_have_preview(path)
 }
 
+fn thumbnail_request_is_windows_executable(request: &ThumbnailRequest) -> bool {
+    request
+        .mime_type()
+        .is_some_and(windows_executable_mime_may_have_preview)
+        || path_has_windows_executable_thumbnail_extension(request.path())
+}
+
 fn thumbnail_mime_may_have_preview(mime_type: &str) -> bool {
     let mime_type = mime_type.trim().to_ascii_lowercase();
     if mime_type.starts_with("text/") {
@@ -771,10 +794,22 @@ fn thumbnail_mime_may_have_preview(mime_type: &str) -> bool {
     ) {
         return true;
     }
-    false
+    windows_executable_mime_may_have_preview(&mime_type)
+}
+
+fn windows_executable_mime_may_have_preview(mime_type: &str) -> bool {
+    matches!(
+        mime_type.trim().to_ascii_lowercase().as_str(),
+        "application/vnd.microsoft.portable-executable"
+            | "application/x-msdownload"
+            | "application/x-ms-dos-executable"
+    )
 }
 
 fn thumbnail_extension_may_have_preview(path: &Path) -> bool {
+    if path_has_windows_executable_thumbnail_extension(path) {
+        return true;
+    }
     path.extension()
         .and_then(OsStr::to_str)
         .map(str::to_ascii_lowercase)
@@ -783,6 +818,13 @@ fn thumbnail_extension_may_have_preview(path: &Path) -> bool {
                 || video_thumbnail_extension(&extension)
                 || document_thumbnail_extension(&extension)
         })
+}
+
+fn path_has_windows_executable_thumbnail_extension(path: &Path) -> bool {
+    path.extension()
+        .and_then(OsStr::to_str)
+        .map(str::to_ascii_lowercase)
+        .is_some_and(|extension| matches!(extension.as_str(), "exe" | "scr" | "cpl" | "dll"))
 }
 
 fn thumbnailer_search_dirs() -> Vec<PathBuf> {
@@ -1486,6 +1528,14 @@ mod tests {
         ));
         assert!(thumbnail_request_may_have_preview(
             Path::new("/tmp/clip.avifs"),
+            Some("application/octet-stream")
+        ));
+        assert!(thumbnail_request_may_have_preview(
+            Path::new("/tmp/setup.exe"),
+            Some("application/vnd.microsoft.portable-executable")
+        ));
+        assert!(thumbnail_request_may_have_preview(
+            Path::new("/tmp/setup.exe"),
             Some("application/octet-stream")
         ));
         assert!(!thumbnail_request_may_have_preview(
