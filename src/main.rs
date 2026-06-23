@@ -4682,15 +4682,12 @@ impl ShellScene {
                 .is_some()
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     fn active_place_drag_source_index(&self) -> Option<usize> {
         self.internal_drag
             .as_ref()
             .filter(|drag| drag.active)
             .and_then(ShellInternalDrag::source_place_index)
-    }
-
-    fn place_row_suppressed_for_drag(&self, index: usize) -> bool {
-        self.active_place_drag_source_index() == Some(index)
     }
 
     fn end_place_pointer(
@@ -4868,6 +4865,45 @@ impl ShellScene {
         self.place_gap_rects(size)
             .into_iter()
             .find_map(|(index, rect)| rect.contains(point).then_some(index))
+    }
+
+    fn place_gap_at_screen_point_for_drag(
+        &self,
+        point: ViewPoint,
+        size: PhysicalSize<u32>,
+        drag: &ShellInternalDrag,
+    ) -> Option<usize> {
+        if let Some(index) = self.place_gap_at_screen_point(point, size) {
+            return Some(index);
+        }
+        if !matches!(drag.source, ShellInternalDragSource::Place { .. }) {
+            return None;
+        }
+        self.place_row_gap_at_screen_point(point, size)
+    }
+
+    fn place_row_gap_at_screen_point(
+        &self,
+        point: ViewPoint,
+        size: PhysicalSize<u32>,
+    ) -> Option<usize> {
+        if !self.places_sidebar_rect(size).contains(point) {
+            return None;
+        }
+        self.place_row_rects(size)
+            .into_iter()
+            .filter(|(index, _rect)| self.place_participates_in_dnd(*index))
+            .find_map(|(index, rect)| {
+                if !rect.contains(point) {
+                    return None;
+                }
+                let before = point.y < rect.y + rect.height / 2.0;
+                Some(if before {
+                    index
+                } else {
+                    index.saturating_add(1)
+                })
+            })
     }
 
     fn place_gap_rect_for_index(&self, index: usize, size: PhysicalSize<u32>) -> Option<ViewRect> {
@@ -5106,7 +5142,7 @@ impl ShellScene {
         size: PhysicalSize<u32>,
         drag: &ShellInternalDrag,
     ) -> Option<ShellDropTarget> {
-        if let Some(index) = self.place_gap_at_screen_point(point, size) {
+        if let Some(index) = self.place_gap_at_screen_point_for_drag(point, size, drag) {
             let target = ShellDropTarget::PlacesGap { index };
             if self.drag_can_drop_on_target(drag, &target) {
                 return Some(target);
@@ -5421,8 +5457,28 @@ impl ShellScene {
         if !self.internal_drag.as_ref().is_some_and(|drag| drag.active) {
             return drag_changed;
         }
+        let hover_cleared = if self
+            .internal_drag
+            .as_ref()
+            .and_then(ShellInternalDrag::source_place_index)
+            .is_some()
+        {
+            let place_hover_cleared = if self.hovered_place.is_some() {
+                self.set_hovered_place(None)
+            } else {
+                false
+            };
+            let item_hover_cleared = if self.hovered_item.is_some() {
+                self.set_hovered_item(None)
+            } else {
+                false
+            };
+            place_hover_cleared || item_hover_cleared
+        } else {
+            false
+        };
         let hover_changed = self.update_dnd_hover_target(point, size);
-        drag_changed || hover_changed
+        drag_changed || hover_cleared || hover_changed
     }
 
     fn finish_internal_drag(&mut self, point: ViewPoint, size: PhysicalSize<u32>) -> bool {
@@ -10058,15 +10114,14 @@ impl ShellScene {
                 height: row_height,
             };
             if row.y < panel.bottom() && row.bottom() > panel.y {
-                let source_dragged = self.place_row_suppressed_for_drag(index);
-                let active = active_place == Some(index) && !source_dragged;
-                let hovered = self.hovered_place == Some(index) && !source_dragged;
+                let active = active_place == Some(index);
+                let hovered = self.hovered_place == Some(index);
                 let dnd_hovered = matches!(
                     self.dnd_hover_target,
                     Some(ShellDropTarget::Place {
                         index: target_index,
                         ..
-                    }) if target_index == index && !source_dragged
+                    }) if target_index == index
                 );
                 if active {
                     push_clipped_rounded_rect(
@@ -10109,46 +10164,44 @@ impl ShellScene {
                         size,
                     );
                 }
-                if !source_dragged {
-                    let icon = ViewRect {
-                        x: row.x + self.scale_metric(8.0),
-                        y: row.y + (row.height - icon_size) / 2.0,
-                        width: icon_size,
-                        height: icon_size,
-                    };
-                    push_place_icon(vertices, icon, panel, place, active, self.ui_scale(), size);
-                    text.push_label_aligned(
-                        &place.label,
+                let icon = ViewRect {
+                    x: row.x + self.scale_metric(8.0),
+                    y: row.y + (row.height - icon_size) / 2.0,
+                    width: icon_size,
+                    height: icon_size,
+                };
+                push_place_icon(vertices, icon, panel, place, active, self.ui_scale(), size);
+                text.push_label_aligned(
+                    &place.label,
+                    ViewRect {
+                        x: icon.right() + self.scale_metric(8.0),
+                        y: row.y + (row.height - text_height) / 2.0,
+                        width: (row.right() - icon.right() - self.scale_metric(16.0)).max(1.0),
+                        height: text_height,
+                    },
+                    panel,
+                    if active {
+                        TextColor::rgb(31, 79, 191)
+                    } else {
+                        TextColor::rgb(36, 41, 47)
+                    },
+                    LabelAlignment::Start,
+                );
+                if place.trash && file_ops::trash_has_items() {
+                    let dot_size = self.scale_metric(7.0);
+                    push_clipped_rounded_rect(
+                        vertices,
                         ViewRect {
-                            x: icon.right() + self.scale_metric(8.0),
-                            y: row.y + (row.height - text_height) / 2.0,
-                            width: (row.right() - icon.right() - self.scale_metric(16.0)).max(1.0),
-                            height: text_height,
+                            x: row.right() - self.scale_metric(8.0) - dot_size,
+                            y: row.y + (row.height - dot_size) / 2.0,
+                            width: dot_size,
+                            height: dot_size,
                         },
                         panel,
-                        if active {
-                            TextColor::rgb(31, 79, 191)
-                        } else {
-                            TextColor::rgb(36, 41, 47)
-                        },
-                        LabelAlignment::Start,
+                        dot_size / 2.0,
+                        [0.184, 0.435, 0.929, 1.0],
+                        size,
                     );
-                    if place.trash && file_ops::trash_has_items() {
-                        let dot_size = self.scale_metric(7.0);
-                        push_clipped_rounded_rect(
-                            vertices,
-                            ViewRect {
-                                x: row.right() - self.scale_metric(8.0) - dot_size,
-                                y: row.y + (row.height - dot_size) / 2.0,
-                                width: dot_size,
-                                height: dot_size,
-                            },
-                            panel,
-                            dot_size / 2.0,
-                            [0.184, 0.435, 0.929, 1.0],
-                            size,
-                        );
-                    }
                 }
             }
 
@@ -21079,8 +21132,7 @@ mod tests {
             .expect("place drag should exist");
         assert!(drag.active);
         assert_eq!(scene.active_place_drag_source_index(), Some(0));
-        assert!(scene.place_row_suppressed_for_drag(0));
-        assert!(!scene.place_row_suppressed_for_drag(1));
+        assert_eq!(scene.hovered_place, None);
         assert_eq!(scene.dnd_hover_target, None);
         let mut vertices = Vec::new();
         let mut font_system = FontSystem::new();
@@ -21103,10 +21155,10 @@ mod tests {
         scene.push_drag_preview_overlay(&mut vertices, &mut text, size);
         assert!(!vertices.is_empty());
 
-        let valid_gap = scene.place_gap_rect_for_index(2, size).unwrap();
+        let valid_gap = scene.place_row_rects(size)[1].1;
         let valid_gap_point = ViewPoint {
             x: valid_gap.x + valid_gap.width / 2.0,
-            y: valid_gap.y + valid_gap.height / 2.0,
+            y: valid_gap.y + valid_gap.height * 0.75,
         };
         assert!(scene.set_pointer(valid_gap_point, size));
         let drag = scene
