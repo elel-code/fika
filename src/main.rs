@@ -118,6 +118,8 @@ mod wgpu_options;
 mod wgpu_pane;
 #[path = "shell/pane_layout.rs"]
 mod wgpu_pane_layout;
+#[path = "shell/prewarm.rs"]
+mod wgpu_prewarm;
 #[path = "shell/properties.rs"]
 mod wgpu_properties;
 #[path = "shell/role_worker_queue.rs"]
@@ -193,7 +195,18 @@ use wgpu_pane::{
     ShellPaneSplitMetrics, ShellPaneState, ShellPaneStates, ShellPaneView, ShellPaneVisibleItem,
     ShellPaneVisibleSlotPools, ShellVisibleItemSlotPool, ShellVisibleItemSlotStats,
 };
-use wgpu_pane_layout::{DetailsLayout, ShellCompactLayout, ShellLayout, navigation_target};
+use wgpu_pane_layout::{
+    CompactLayoutCache, CompactLayoutCacheKey, CompactLayoutCacheValue, DetailsLayout,
+    ShellCompactLayout, ShellLayout, navigation_target,
+};
+use wgpu_prewarm::{
+    IconRasterPrewarmStats, IconRolePrewarmStats, TextLabelPrewarmMode, TextLabelPrewarmStats,
+    default_text_raster_miss_budget, icon_raster_miss_budget_for_frame,
+    icon_role_prewarm_budget_for_frame, icon_role_read_ahead_queue_budget_for_frame,
+    text_label_prewarm_budget_for_mode, text_label_prewarm_mode_for_frame,
+    text_label_prewarm_mode_for_scene_prewarm, text_label_raster_miss_budget_for_mode,
+    visible_exact_icon_roles_enabled_for_frame,
+};
 use wgpu_properties::{ShellPropertiesOverlay, property_row};
 use wgpu_role_worker_queue::{PriorityWorkerQueue, PriorityWorkerRequest, WorkerRequestPriority};
 use wgpu_selection::{
@@ -350,12 +363,6 @@ fn window_title(scene: &ShellScene) -> String {
             scene.panes[ShellPaneId::FIRST].path.display()
         )
     }
-}
-
-fn env_usize(key: &str) -> Option<usize> {
-    env::var(key)
-        .ok()
-        .and_then(|value| value.trim().parse::<usize>().ok())
 }
 
 struct FikaWgpuApp {
@@ -3215,7 +3222,7 @@ struct ShellPlacePress {
 
 struct ShellScene {
     panes: ShellPaneStates,
-    compact_layout_cache: RefCell<HashMap<CompactLayoutCacheKey, CompactLayoutCacheValue>>,
+    compact_layout_cache: CompactLayoutCache,
     active_pane: ShellPaneId,
     places: Vec<ShellPlace>,
     location_draft: Option<ShellLocationDraft>,
@@ -4825,24 +4832,6 @@ fn push_open_with_chooser(
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-struct CompactLayoutCacheKey {
-    pane: usize,
-    item_count: usize,
-    rows_per_column: usize,
-    item_width: u32,
-    padding: u32,
-    icon_size: u32,
-    text_gap: u32,
-    text_scale: u32,
-}
-
-#[derive(Clone, Debug)]
-struct CompactLayoutCacheValue {
-    text_widths: Arc<[f32]>,
-    column_widths: Arc<[f32]>,
-}
-
 impl ShellScene {
     #[cfg(test)]
     fn load(path: PathBuf, view_mode: ShellViewMode) -> Result<Self, String> {
@@ -4883,7 +4872,7 @@ impl ShellScene {
 
         Ok(Self {
             panes: ShellPaneStates::new(first_pane),
-            compact_layout_cache: RefCell::new(HashMap::new()),
+            compact_layout_cache: CompactLayoutCache::new(),
             active_pane: ShellPaneId::FIRST,
             places,
             location_draft: None,
@@ -4956,14 +4945,11 @@ impl ShellScene {
     }
 
     fn invalidate_compact_layout_cache(&self, pane: ShellPaneId) {
-        let pane_index = pane.index();
-        self.compact_layout_cache
-            .borrow_mut()
-            .retain(|key, _| key.pane != pane_index);
+        self.compact_layout_cache.invalidate_pane(pane.index());
     }
 
     fn invalidate_all_compact_layout_caches(&self) {
-        self.compact_layout_cache.borrow_mut().clear();
+        self.compact_layout_cache.clear();
     }
 
     #[cfg(test)]
@@ -10334,7 +10320,7 @@ impl ShellScene {
             text_gap: options.text_gap.to_bits(),
             text_scale: self.ui_scale().to_bits(),
         };
-        if let Some(cached) = self.compact_layout_cache.borrow().get(&cache_key).cloned() {
+        if let Some(cached) = self.compact_layout_cache.get(&cache_key) {
             let layout =
                 CompactLayout::new_with_column_widths(item_count, options, cached.column_widths);
             return ShellCompactLayout::new(layout, cached.text_widths);
@@ -10361,7 +10347,7 @@ impl ShellScene {
         }
         let text_widths = Arc::<[f32]>::from(text_widths);
         let column_widths = Arc::<[f32]>::from(column_widths);
-        self.compact_layout_cache.borrow_mut().insert(
+        self.compact_layout_cache.insert(
             cache_key,
             CompactLayoutCacheValue {
                 text_widths: Arc::clone(&text_widths),
@@ -14865,43 +14851,6 @@ struct SceneFrame {
     vertex_upload_stats: VertexBufferUploadStats,
 }
 
-#[derive(Default)]
-struct IconRolePrewarmStats {
-    entries: usize,
-    deferred: usize,
-    read_ahead: usize,
-    resolve_us: u128,
-    over_budget: bool,
-}
-
-#[derive(Default)]
-struct IconRasterPrewarmStats {
-    entries: usize,
-    cache_hits: usize,
-    cache_misses: usize,
-    failed: usize,
-    raster_us: u128,
-    over_budget: bool,
-}
-
-#[derive(Default)]
-struct TextLabelPrewarmStats {
-    entries: usize,
-    read_ahead: usize,
-    cache_hits: usize,
-    cache_misses: usize,
-    deferred: usize,
-    raster_us: u128,
-    over_budget: bool,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum TextLabelPrewarmMode {
-    VisibleOnly,
-    DolphinReadAhead,
-    ResolveAllSmallDirectory,
-}
-
 impl TextLabelPrewarmStats {
     fn record(&mut self, outcome: LabelCacheOutcome) {
         match outcome {
@@ -16416,17 +16365,10 @@ impl IconRasterCache {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum IconRasterRequestPriority {
-    Visible,
-    #[allow(dead_code)]
-    Deferred,
-}
-
 #[derive(Clone, Debug)]
 struct IconRasterRequest {
     key: IconRasterCacheKey,
-    priority: IconRasterRequestPriority,
+    priority: WorkerRequestPriority,
 }
 
 impl PriorityWorkerRequest for IconRasterRequest {
@@ -16437,10 +16379,7 @@ impl PriorityWorkerRequest for IconRasterRequest {
     }
 
     fn priority(&self) -> WorkerRequestPriority {
-        match self.priority {
-            IconRasterRequestPriority::Visible => WorkerRequestPriority::Visible,
-            IconRasterRequestPriority::Deferred => WorkerRequestPriority::Deferred,
-        }
+        self.priority
     }
 }
 
@@ -16451,7 +16390,7 @@ struct IconRasterResult {
 }
 
 struct IconRasterResolver {
-    pending: HashMap<IconRasterCacheKey, IconRasterRequestPriority>,
+    pending: HashMap<IconRasterCacheKey, WorkerRequestPriority>,
     failed: HashSet<IconRasterCacheKey>,
     request_tx: Option<Sender<IconRasterRequest>>,
     result_rx: Receiver<IconRasterResult>,
@@ -16475,21 +16414,21 @@ impl IconRasterResolver {
     }
 
     fn queue_visible(&mut self, key: IconRasterCacheKey) -> bool {
-        self.queue(key, IconRasterRequestPriority::Visible)
+        self.queue(key, WorkerRequestPriority::Visible)
     }
 
-    fn queue(&mut self, key: IconRasterCacheKey, priority: IconRasterRequestPriority) -> bool {
+    fn queue(&mut self, key: IconRasterCacheKey, priority: WorkerRequestPriority) -> bool {
         if self.failed.contains(&key) {
             return false;
         }
         match self.pending.get(&key).copied() {
-            Some(IconRasterRequestPriority::Visible) => return false,
-            Some(IconRasterRequestPriority::Deferred)
-                if priority == IconRasterRequestPriority::Deferred =>
+            Some(WorkerRequestPriority::Visible) => return false,
+            Some(WorkerRequestPriority::Deferred)
+                if priority == WorkerRequestPriority::Deferred =>
             {
                 return false;
             }
-            Some(IconRasterRequestPriority::Deferred) | None => {}
+            Some(WorkerRequestPriority::Deferred) | None => {}
         }
 
         let Some(tx) = self.request_tx.as_ref() else {
@@ -19348,8 +19287,7 @@ impl<'a> TextFrameBuilder<'a> {
             cache_hits: 0,
             cache_misses: 0,
             deferred: 0,
-            raster_miss_budget: env_usize("FIKA_WGPU_TEXT_RASTER_MISS_BUDGET")
-                .unwrap_or(TEXT_RASTER_MISS_BUDGET_PER_FRAME),
+            raster_miss_budget: default_text_raster_miss_budget(),
             raster_us: 0,
             atlas_pixels,
             text_midline_shift,
@@ -20187,101 +20125,6 @@ fn prepare_scene_frame(
         scene_frame.text_stats.swash_resets = usize::from(text_swash_reset);
         scene_frame.vertex_upload_stats = vertex_upload_stats;
         scene_frame
-    }
-}
-
-fn icon_raster_miss_budget_for_frame(reason: &str) -> usize {
-    if let Some(budget) = env_usize("FIKA_WGPU_ICON_RASTER_MISS_BUDGET") {
-        return budget;
-    }
-    if matches!(
-        reason,
-        "autosmoke-scroll" | "wheel-scroll" | "zoom" | "wheel-zoom" | "autosmoke-zoom"
-    ) {
-        0
-    } else if visible_exact_icon_roles_enabled_for_frame(reason) {
-        ICON_RASTER_VISIBLE_SYNC_BUDGET
-    } else {
-        0
-    }
-}
-
-fn icon_role_prewarm_budget_for_frame(reason: &str) -> Duration {
-    if visible_exact_icon_roles_enabled_for_frame(reason) {
-        DOLPHIN_MAX_BLOCK_TIMEOUT
-    } else {
-        VISIBLE_ICON_ROLE_PREWARM_BUDGET
-    }
-}
-
-fn visible_exact_icon_roles_enabled_for_frame(reason: &str) -> bool {
-    matches!(
-        reason,
-        "startup"
-            | "activate-directory"
-            | "double-click-directory"
-            | "context-open"
-            | "place-open"
-            | "device-mount"
-            | "history-back"
-            | "history-forward"
-            | "parent-directory"
-            | "location-commit"
-            | "reload-directory"
-            | "toggle-hidden"
-            | "context-toggle-hidden"
-            | "auto-cycle"
-            | "mode-click"
-            | "switch-immediate"
-    )
-}
-
-fn icon_role_read_ahead_queue_budget_for_frame(
-    reason: &str,
-    small_directory_read_ahead: bool,
-) -> usize {
-    if matches!(reason, "zoom" | "wheel-zoom" | "autosmoke-zoom") {
-        return 0;
-    }
-    if small_directory_read_ahead {
-        ICON_ROLE_READ_AHEAD_LIMIT
-    } else {
-        ICON_ROLE_READ_AHEAD_QUEUE_BUDGET_PER_FRAME
-    }
-}
-
-fn text_label_prewarm_mode_for_scene_prewarm(reason: &str) -> TextLabelPrewarmMode {
-    if visible_exact_icon_roles_enabled_for_frame(reason) {
-        TextLabelPrewarmMode::ResolveAllSmallDirectory
-    } else {
-        text_label_prewarm_mode_for_frame(reason)
-    }
-}
-
-fn text_label_prewarm_mode_for_frame(reason: &str) -> TextLabelPrewarmMode {
-    if matches!(
-        reason,
-        "autosmoke-scroll" | "wheel-scroll" | "zoom" | "wheel-zoom" | "autosmoke-zoom"
-    ) {
-        TextLabelPrewarmMode::VisibleOnly
-    } else {
-        TextLabelPrewarmMode::DolphinReadAhead
-    }
-}
-
-fn text_label_prewarm_budget_for_mode(mode: TextLabelPrewarmMode) -> Duration {
-    if mode == TextLabelPrewarmMode::ResolveAllSmallDirectory {
-        DOLPHIN_MAX_BLOCK_TIMEOUT
-    } else {
-        VISIBLE_TEXT_LABEL_PREWARM_BUDGET
-    }
-}
-
-fn text_label_raster_miss_budget_for_mode(mode: TextLabelPrewarmMode) -> usize {
-    if mode == TextLabelPrewarmMode::VisibleOnly {
-        TEXT_RASTER_MISS_BUDGET_PER_FRAME
-    } else {
-        TEXT_LABEL_PREWARM_RASTER_MISS_BUDGET
     }
 }
 
@@ -23797,7 +23640,7 @@ mod tests {
                 false,
                 "",
             )),
-            compact_layout_cache: RefCell::new(HashMap::new()),
+            compact_layout_cache: CompactLayoutCache::new(),
             active_pane: ShellPaneId::FIRST,
             places: vec![
                 ShellPlace::new("", "H", "Home", PathBuf::from("/tmp"), false),

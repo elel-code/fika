@@ -1,8 +1,57 @@
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use fika_core::{CompactLayout, IconsLayout, ItemLayout, ViewPoint, ViewRect, ViewSize};
 
 use crate::wgpu_selection::NavigationAction;
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) struct CompactLayoutCacheKey {
+    pub(crate) pane: usize,
+    pub(crate) item_count: usize,
+    pub(crate) rows_per_column: usize,
+    pub(crate) item_width: u32,
+    pub(crate) padding: u32,
+    pub(crate) icon_size: u32,
+    pub(crate) text_gap: u32,
+    pub(crate) text_scale: u32,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct CompactLayoutCacheValue {
+    pub(crate) text_widths: Arc<[f32]>,
+    pub(crate) column_widths: Arc<[f32]>,
+}
+
+#[derive(Default)]
+pub(crate) struct CompactLayoutCache {
+    entries: RefCell<HashMap<CompactLayoutCacheKey, CompactLayoutCacheValue>>,
+}
+
+impl CompactLayoutCache {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    pub(crate) fn get(&self, key: &CompactLayoutCacheKey) -> Option<CompactLayoutCacheValue> {
+        self.entries.borrow().get(key).cloned()
+    }
+
+    pub(crate) fn insert(&self, key: CompactLayoutCacheKey, value: CompactLayoutCacheValue) {
+        self.entries.borrow_mut().insert(key, value);
+    }
+
+    pub(crate) fn invalidate_pane(&self, pane_index: usize) {
+        self.entries
+            .borrow_mut()
+            .retain(|key, _| key.pane != pane_index);
+    }
+
+    pub(crate) fn clear(&self) {
+        self.entries.borrow_mut().clear();
+    }
+}
 
 pub(crate) fn navigation_target(
     action: NavigationAction,
