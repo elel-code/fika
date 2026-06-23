@@ -4,11 +4,26 @@ use std::sync::mpsc::Receiver;
 
 use fika_core::ThumbnailRequestPriority;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WorkerRequestPriority {
+    Deferred,
+    Visible,
+}
+
+impl From<ThumbnailRequestPriority> for WorkerRequestPriority {
+    fn from(priority: ThumbnailRequestPriority) -> Self {
+        match priority {
+            ThumbnailRequestPriority::Visible => Self::Visible,
+            ThumbnailRequestPriority::Deferred => Self::Deferred,
+        }
+    }
+}
+
 pub(crate) trait PriorityWorkerRequest {
     type Key: Clone + Eq + Hash;
 
     fn key(&self) -> &Self::Key;
-    fn priority(&self) -> ThumbnailRequestPriority;
+    fn priority(&self) -> WorkerRequestPriority;
 }
 
 pub(crate) struct PriorityWorkerQueue<R>
@@ -17,7 +32,7 @@ where
 {
     visible: VecDeque<R>,
     deferred: VecDeque<R>,
-    queued: HashMap<R::Key, ThumbnailRequestPriority>,
+    queued: HashMap<R::Key, WorkerRequestPriority>,
 }
 
 impl<R> Default for PriorityWorkerQueue<R>
@@ -40,21 +55,21 @@ where
     pub(crate) fn push(&mut self, request: R) {
         let key = request.key().clone();
         match self.queued.get(&key).copied() {
-            Some(ThumbnailRequestPriority::Visible) => {}
-            Some(ThumbnailRequestPriority::Deferred)
-                if request.priority() == ThumbnailRequestPriority::Visible =>
+            Some(WorkerRequestPriority::Visible) => {}
+            Some(WorkerRequestPriority::Deferred)
+                if request.priority() == WorkerRequestPriority::Visible =>
             {
                 self.deferred.retain(|queued| queued.key() != &key);
-                self.queued.insert(key, ThumbnailRequestPriority::Visible);
+                self.queued.insert(key, WorkerRequestPriority::Visible);
                 self.visible.push_back(request);
             }
-            Some(ThumbnailRequestPriority::Deferred) => {}
+            Some(WorkerRequestPriority::Deferred) => {}
             None => {
                 let priority = request.priority();
                 self.queued.insert(key, priority);
                 match priority {
-                    ThumbnailRequestPriority::Visible => self.visible.push_back(request),
-                    ThumbnailRequestPriority::Deferred => self.deferred.push_back(request),
+                    WorkerRequestPriority::Visible => self.visible.push_back(request),
+                    WorkerRequestPriority::Deferred => self.deferred.push_back(request),
                 }
             }
         }

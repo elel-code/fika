@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{
     Arc,
@@ -9,6 +9,9 @@ use std::thread;
 use crate::wgpu_icon_roles::{
     FileIconKind, FileIconPathCacheKey, FileIconProfile, FileIconRoleCacheKey, NamedIconFallback,
     file_icon_path_cache_key, file_icon_profile, icon_cache_size,
+};
+use crate::wgpu_role_worker_queue::{
+    PriorityWorkerQueue, PriorityWorkerRequest, WorkerRequestPriority,
 };
 use crate::{Entry, IconThemeResolver, file_icon_snapshot};
 
@@ -32,6 +35,21 @@ const DOLPHIN_VISIBLE_ICON_PREWARM_SIZES: &[u16] = &[16, 22, 32, 48, 64, 80, 96,
 struct IconResolveRequest {
     key: FileIconPathCacheKey,
     priority: IconResolvePriority,
+}
+
+impl PriorityWorkerRequest for IconResolveRequest {
+    type Key = FileIconPathCacheKey;
+
+    fn key(&self) -> &Self::Key {
+        &self.key
+    }
+
+    fn priority(&self) -> WorkerRequestPriority {
+        match self.priority {
+            IconResolvePriority::Visible => WorkerRequestPriority::Visible,
+            IconResolvePriority::Deferred => WorkerRequestPriority::Deferred,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -302,72 +320,14 @@ fn icon_resolve_worker(
     let mut theme = IconThemeResolver::default();
     let mime = fika_core::MimeDatabase::shared();
     let mut roles = HashMap::<FileIconRoleCacheKey, FileIconProfile>::new();
-    let mut queue = IconResolveWorkerQueue::default();
-    while let Ok(request) = request_rx.recv() {
-        queue.push(request);
-        drain_icon_resolve_requests(&request_rx, &mut queue);
-        while let Some(request) = queue.pop() {
-            drain_icon_resolve_requests(&request_rx, &mut queue);
-            if result_tx
-                .send(resolve_icon_request(request, &mut theme, mime, &mut roles))
-                .is_err()
-            {
-                return;
-            }
-        }
-    }
-}
-
-#[derive(Default)]
-struct IconResolveWorkerQueue {
-    visible: VecDeque<FileIconPathCacheKey>,
-    deferred: VecDeque<FileIconPathCacheKey>,
-    queued: HashMap<FileIconPathCacheKey, IconResolvePriority>,
-}
-
-impl IconResolveWorkerQueue {
-    fn push(&mut self, request: IconResolveRequest) {
-        if self
-            .queued
-            .get(&request.key)
-            .is_some_and(|queued_priority| *queued_priority >= request.priority)
+    let mut queue = PriorityWorkerQueue::default();
+    while let Some(request) = queue.next_request(&request_rx) {
+        if result_tx
+            .send(resolve_icon_request(request, &mut theme, mime, &mut roles))
+            .is_err()
         {
             return;
         }
-        self.queued.insert(request.key.clone(), request.priority);
-        match request.priority {
-            IconResolvePriority::Visible => self.visible.push_back(request.key),
-            IconResolvePriority::Deferred => self.deferred.push_back(request.key),
-        }
-    }
-
-    fn pop(&mut self) -> Option<IconResolveRequest> {
-        while let Some(key) = self.visible.pop_front() {
-            if self.queued.remove(&key) == Some(IconResolvePriority::Visible) {
-                return Some(IconResolveRequest {
-                    key,
-                    priority: IconResolvePriority::Visible,
-                });
-            }
-        }
-        while let Some(key) = self.deferred.pop_front() {
-            if self.queued.remove(&key) == Some(IconResolvePriority::Deferred) {
-                return Some(IconResolveRequest {
-                    key,
-                    priority: IconResolvePriority::Deferred,
-                });
-            }
-        }
-        None
-    }
-}
-
-fn drain_icon_resolve_requests(
-    request_rx: &Receiver<IconResolveRequest>,
-    queue: &mut IconResolveWorkerQueue,
-) {
-    while let Ok(request) = request_rx.try_recv() {
-        queue.push(request);
     }
 }
 
@@ -442,7 +402,7 @@ mod tests {
 
     #[test]
     fn icon_resolve_worker_queue_promotes_visible_request_over_deferred() {
-        let mut queue = IconResolveWorkerQueue::default();
+        let mut queue = PriorityWorkerQueue::default();
         let first = test_mime_key("text/plain");
         let second = test_mime_key("image/png");
 
@@ -460,17 +420,17 @@ mod tests {
         });
 
         let promoted = queue
-            .pop()
+            .pop_ready()
             .expect("visible request should be available first");
         assert_eq!(promoted.key, first);
         assert_eq!(promoted.priority, IconResolvePriority::Visible);
 
         let remaining = queue
-            .pop()
+            .pop_ready()
             .expect("unpromoted deferred request should remain queued");
         assert_eq!(remaining.key, second);
         assert_eq!(remaining.priority, IconResolvePriority::Deferred);
-        assert!(queue.pop().is_none());
+        assert!(queue.pop_ready().is_none());
     }
 
     #[test]

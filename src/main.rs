@@ -34,14 +34,13 @@ use fika_core::{
     encode_file_clipboard_text, file_ops, format_modified_secs, format_size,
     generate_thumbnail_with_external_thumbnailer_registry, home_dir, is_network_path,
     launch_with_systemd_user, load_app_settings, load_place_order, load_user_places,
-    mime_magic_resolution_required, network_parent_path, network_root_path, network_uri_from_path,
-    paste_text_result, perform_device_place_operation, place_order_path_for_user_places_path,
-    push_unique_path, read_entries_sync, read_gio_devices,
-    read_network_entry_batches_sync_cancellable, resolve_location_input, run_operation_task,
-    run_via_dbus, save_app_settings, save_place_order, save_user_places, service_menu_target_label,
-    thumbnail_request_may_have_preview, trash_view_operation_result,
+    mime_magic_resolution_required, network_parent_path, network_root_path, paste_text_result,
+    perform_device_place_operation, place_order_path_for_user_places_path, push_unique_path,
+    read_entries_sync, read_gio_devices, read_network_entry_batches_sync_cancellable,
+    resolve_location_input, run_operation_task, run_via_dbus, save_app_settings, save_place_order,
+    save_user_places, service_menu_target_label, thumbnail_request_may_have_preview,
+    trash_view_operation_result,
 };
-use gio::prelude::FileExt;
 use winit::application::ApplicationHandler;
 use winit::cursor::{Cursor as WinitCursor, CursorIcon};
 use winit::dpi::{PhysicalPosition, PhysicalSize};
@@ -97,6 +96,8 @@ mod wgpu_dolphin;
 mod wgpu_drop_menu;
 #[path = "shell/icon_resolver.rs"]
 mod wgpu_icon_resolver;
+#[path = "shell/icon_role_read_ahead.rs"]
+mod wgpu_icon_role_read_ahead;
 #[path = "shell/icon_roles.rs"]
 mod wgpu_icon_roles;
 #[path = "shell/location.rs"]
@@ -107,6 +108,8 @@ mod wgpu_menu_geometry;
 mod wgpu_metadata_roles;
 #[path = "shell/metrics.rs"]
 mod wgpu_metrics;
+#[path = "shell/open_file.rs"]
+mod wgpu_open_file;
 #[path = "shell/open_with.rs"]
 mod wgpu_open_with;
 #[path = "shell/options.rs"]
@@ -155,6 +158,7 @@ use wgpu_drop_menu::{
 #[cfg(test)]
 use wgpu_icon_resolver::FileIconResolverTestHarness;
 use wgpu_icon_resolver::{FileIconResolver, ResolvedFileIcon, visible_icon_fallback_key};
+use wgpu_icon_role_read_ahead::ShellIconRoleReadAheadQueue;
 #[cfg(test)]
 use wgpu_icon_roles::file_icon_profile;
 use wgpu_icon_roles::{
@@ -178,6 +182,7 @@ use wgpu_metadata_roles::{
     core_pane_id_for_shell_pane, shell_metadata_item_id, shell_metadata_role_candidate,
 };
 use wgpu_metrics::*;
+use wgpu_open_file::{OpenFileRequest, default_open_file_launch_request};
 use wgpu_open_with::{
     OpenWithChooserClick, OpenWithLaunchRequest, ServiceMenuLaunchRequest, ShellOpenWithChooser,
     open_with_applications_for_mime,
@@ -190,7 +195,7 @@ use wgpu_pane::{
 };
 use wgpu_pane_layout::{DetailsLayout, ShellCompactLayout, ShellLayout, navigation_target};
 use wgpu_properties::{ShellPropertiesOverlay, property_row};
-use wgpu_role_worker_queue::{PriorityWorkerQueue, PriorityWorkerRequest};
+use wgpu_role_worker_queue::{PriorityWorkerQueue, PriorityWorkerRequest, WorkerRequestPriority};
 use wgpu_selection::{
     NavigationAction, RubberBand, RubberBandMode, SelectionClick, ShellSelection,
 };
@@ -1437,14 +1442,37 @@ impl ApplicationHandler for FikaWgpuApp {
 
 impl FikaWgpuApp {
     fn launch_open_file_request(&mut self, request: &OpenFileRequest) {
-        match launch_file_with_default_app(request) {
-            Ok(()) => {
-                self.scene.record_open_file_request(request);
+        let launch = match default_open_file_launch_request(&self.mime_applications, request) {
+            Ok(launch) => launch,
+            Err(error) => {
+                fika_log!("[fika-wgpu] open-error {error}");
+                self.scene
+                    .record_task_status(ShellTaskStatus::failed("Open failed", error, false));
                 if let Some(window) = self.window.as_ref() {
                     window.request_redraw();
                 }
+                return;
             }
-            Err(error) => fika_log!("[fika-wgpu] open-error {error}"),
+        };
+        self.scene.record_open_file_request(request);
+        std::thread::spawn(move || {
+            let result = pollster::block_on(launch_with_systemd_user(launch.plan));
+            match result {
+                Ok(result) => fika_log!(
+                    "[fika-wgpu] open-finished path={} app={:?} units={}",
+                    launch.path.display(),
+                    launch.app_name,
+                    result.units.join(",")
+                ),
+                Err(error) => fika_log!(
+                    "[fika-wgpu] open-finished path={} app={:?} error={error}",
+                    launch.path.display(),
+                    launch.app_name
+                ),
+            }
+        });
+        if let Some(window) = self.window.as_ref() {
+            window.request_redraw();
         }
     }
 
@@ -1573,35 +1601,17 @@ impl FikaWgpuApp {
             ShellContextMenuAction::Open => {
                 if let Some((pane, path)) = self.scene.context_target_directory_path() {
                     self.load_path_into_pane(event_loop, pane, path, "context-open");
+                } else if let Some(request) = self.scene.context_target_open_file_request() {
+                    self.launch_open_file_request(&request);
                 } else {
-                    match self.scene.open_context_target_file_with_default_app() {
-                        Ok(true) => {
-                            if let Some(window) = self.window.as_ref() {
-                                window.request_redraw();
-                            }
-                        }
-                        Ok(false) => {
-                            fika_log!("[fika-wgpu] context-action-pending action=open target=none");
-                            self.scene.record_task_status(ShellTaskStatus::failed(
-                                "Open failed",
-                                "No target",
-                                false,
-                            ));
-                            if let Some(window) = self.window.as_ref() {
-                                window.request_redraw();
-                            }
-                        }
-                        Err(error) => {
-                            fika_log!("[fika-wgpu] open-error {error}");
-                            self.scene.record_task_status(ShellTaskStatus::failed(
-                                "Open failed",
-                                error,
-                                false,
-                            ));
-                            if let Some(window) = self.window.as_ref() {
-                                window.request_redraw();
-                            }
-                        }
+                    fika_log!("[fika-wgpu] context-action-pending action=open target=none");
+                    self.scene.record_task_status(ShellTaskStatus::failed(
+                        "Open failed",
+                        "No target",
+                        false,
+                    ));
+                    if let Some(window) = self.window.as_ref() {
+                        window.request_redraw();
                     }
                 }
             }
@@ -3049,12 +3059,6 @@ fn context_menu_named_icon_request(
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct OpenFileRequest {
-    path: PathBuf,
-    uri: String,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
 enum ShellItemActivation {
     Directory { pane: ShellPaneId, path: PathBuf },
     File(OpenFileRequest),
@@ -3209,11 +3213,6 @@ struct ShellPlacePress {
     point: ViewPoint,
 }
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-struct IconRoleReadAheadRequest {
-    key: FileIconPathCacheKey,
-}
-
 struct ShellScene {
     panes: ShellPaneStates,
     compact_layout_cache: RefCell<HashMap<CompactLayoutCacheKey, CompactLayoutCacheValue>>,
@@ -3247,8 +3246,7 @@ struct ShellScene {
     visible_slot_stats: ShellVisibleItemSlotStats,
     metadata_roles: ShellMetadataRoleRuntime,
     folder_preview_roles: RefCell<ShellFolderPreviewRoleRuntime>,
-    icon_role_read_ahead_queue: RefCell<VecDeque<IconRoleReadAheadRequest>>,
-    icon_role_read_ahead_seen: RefCell<HashSet<IconRoleReadAheadRequest>>,
+    icon_role_read_ahead: RefCell<ShellIconRoleReadAheadQueue>,
     internal_drag: Option<ShellInternalDrag>,
     external_drag: Option<ShellExternalDrag>,
     place_press: Option<ShellPlacePress>,
@@ -4916,8 +4914,7 @@ impl ShellScene {
             visible_slot_stats: ShellVisibleItemSlotStats::default(),
             metadata_roles: ShellMetadataRoleRuntime::new(),
             folder_preview_roles: RefCell::new(ShellFolderPreviewRoleRuntime::new()),
-            icon_role_read_ahead_queue: RefCell::new(VecDeque::new()),
-            icon_role_read_ahead_seen: RefCell::new(HashSet::new()),
+            icon_role_read_ahead: RefCell::new(ShellIconRoleReadAheadQueue::new()),
             internal_drag: None,
             external_drag: None,
             place_press: None,
@@ -7832,10 +7829,7 @@ impl ShellScene {
             return None;
         }
         let path = self.entry_path_for_pane_view(view, index)?;
-        Some(OpenFileRequest {
-            uri: launch_uri_for_path(&path),
-            path,
-        })
+        Some(OpenFileRequest::from_path(path, entry.mime_type.as_deref()))
     }
 
     fn context_target_directory_path(&self) -> Option<(ShellPaneId, PathBuf)> {
@@ -7860,36 +7854,20 @@ impl ShellScene {
     fn context_target_open_file_request(&self) -> Option<OpenFileRequest> {
         match self.context_target.as_ref()? {
             ShellContextTarget::Item {
-                pane: _,
+                pane,
+                index,
                 path,
                 is_dir: false,
                 ..
-            } => Some(OpenFileRequest {
-                path: path.clone(),
-                uri: launch_uri_for_path(path),
-            }),
+            } => {
+                let mime_type = self
+                    .pane_state(*pane)
+                    .and_then(|pane| pane.entries.get(*index))
+                    .and_then(|entry| entry.mime_type.as_deref());
+                Some(OpenFileRequest::from_path(path.clone(), mime_type))
+            }
             _ => None,
         }
-    }
-
-    fn open_context_target_file_with_default_app(&mut self) -> Result<bool, String> {
-        let Some(request) = self.context_target_open_file_request() else {
-            return Ok(false);
-        };
-        launch_file_with_default_app(&request)?;
-        self.open_changes += 1;
-        fika_log!(
-            "[fika-wgpu] open path={} uri={} changes={}",
-            request.path.display(),
-            request.uri,
-            self.open_changes
-        );
-        self.record_task_status(ShellTaskStatus::completed(
-            "Opened",
-            request.path.display().to_string(),
-            false,
-        ));
-        Ok(true)
     }
 
     fn record_open_file_request(&mut self, request: &OpenFileRequest) {
@@ -10105,10 +10083,10 @@ impl ShellScene {
                 path,
             })
         } else {
-            Some(ShellItemActivation::File(OpenFileRequest {
-                uri: launch_uri_for_path(&path),
+            Some(ShellItemActivation::File(OpenFileRequest::from_path(
                 path,
-            }))
+                entry.mime_type.as_deref(),
+            )))
         }
     }
 
@@ -11128,14 +11106,7 @@ impl ShellScene {
             entry.mime_magic_checked,
             icon_size,
         );
-        let request = IconRoleReadAheadRequest { key };
-        let mut seen = self.icon_role_read_ahead_seen.borrow_mut();
-        if !seen.insert(request.clone()) {
-            return;
-        }
-        self.icon_role_read_ahead_queue
-            .borrow_mut()
-            .push_back(request);
+        self.icon_role_read_ahead.borrow_mut().push_key(key);
     }
 
     fn resolve_next_icon_role_read_ahead(
@@ -11150,7 +11121,7 @@ impl ShellScene {
                 stats.over_budget = true;
                 return;
             }
-            let Some(request) = self.icon_role_read_ahead_queue.borrow_mut().pop_front() else {
+            let Some(request) = self.icon_role_read_ahead.borrow_mut().pop_front() else {
                 return;
             };
             let resolve_start = Instant::now();
@@ -15301,7 +15272,7 @@ impl WgpuState {
             &folder_preview_results.changes,
         );
         let dirty_key = ShellRenderDirtyKey::from_scene(scene, self.size);
-        let scene_read_ahead_pending = !scene.icon_role_read_ahead_queue.borrow().is_empty()
+        let scene_read_ahead_pending = !scene.icon_role_read_ahead.borrow().is_empty()
             || scene.folder_preview_roles.borrow().has_pending();
         let non_folder_preview_async_results_changed = metadata_result_stats.applied > 0
             || icon_resolve_results > 0
@@ -16458,6 +16429,21 @@ struct IconRasterRequest {
     priority: IconRasterRequestPriority,
 }
 
+impl PriorityWorkerRequest for IconRasterRequest {
+    type Key = IconRasterCacheKey;
+
+    fn key(&self) -> &Self::Key {
+        &self.key
+    }
+
+    fn priority(&self) -> WorkerRequestPriority {
+        match self.priority {
+            IconRasterRequestPriority::Visible => WorkerRequestPriority::Visible,
+            IconRasterRequestPriority::Deferred => WorkerRequestPriority::Deferred,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 struct IconRasterResult {
     key: IconRasterCacheKey,
@@ -16548,12 +16534,8 @@ fn icon_raster_worker(
     request_rx: Receiver<IconRasterRequest>,
     result_tx: Sender<IconRasterResult>,
 ) {
-    let mut visible = VecDeque::new();
-    let mut deferred = VecDeque::new();
-    let mut queued = HashMap::new();
-    while let Some(request) =
-        icon_raster_worker_next_request(&request_rx, &mut visible, &mut deferred, &mut queued)
-    {
+    let mut queue = PriorityWorkerQueue::default();
+    while let Some(request) = queue.next_request(&request_rx) {
         let raster = rasterize_icon(&request.key.path, request.key.size_px as u32);
         if result_tx
             .send(IconRasterResult {
@@ -16563,57 +16545,6 @@ fn icon_raster_worker(
             .is_err()
         {
             break;
-        }
-    }
-}
-
-fn icon_raster_worker_next_request(
-    request_rx: &Receiver<IconRasterRequest>,
-    visible: &mut VecDeque<IconRasterRequest>,
-    deferred: &mut VecDeque<IconRasterRequest>,
-    queued: &mut HashMap<IconRasterCacheKey, IconRasterRequestPriority>,
-) -> Option<IconRasterRequest> {
-    loop {
-        while let Ok(request) = request_rx.try_recv() {
-            icon_raster_worker_queue_request(request, visible, deferred, queued);
-        }
-
-        if let Some(request) = visible.pop_front().or_else(|| deferred.pop_front()) {
-            queued.remove(&request.key);
-            return Some(request);
-        }
-
-        match request_rx.recv() {
-            Ok(request) => icon_raster_worker_queue_request(request, visible, deferred, queued),
-            Err(_) => return None,
-        }
-    }
-}
-
-fn icon_raster_worker_queue_request(
-    request: IconRasterRequest,
-    visible: &mut VecDeque<IconRasterRequest>,
-    deferred: &mut VecDeque<IconRasterRequest>,
-    queued: &mut HashMap<IconRasterCacheKey, IconRasterRequestPriority>,
-) {
-    let key = request.key.clone();
-    match queued.get(&key).copied() {
-        Some(IconRasterRequestPriority::Visible) => {}
-        Some(IconRasterRequestPriority::Deferred)
-            if request.priority == IconRasterRequestPriority::Visible =>
-        {
-            deferred.retain(|queued| queued.key != key);
-            queued.insert(key, IconRasterRequestPriority::Visible);
-            visible.push_back(request);
-        }
-        Some(IconRasterRequestPriority::Deferred) => {}
-        None => {
-            let priority = request.priority;
-            queued.insert(key, priority);
-            match priority {
-                IconRasterRequestPriority::Visible => visible.push_back(request),
-                IconRasterRequestPriority::Deferred => deferred.push_back(request),
-            }
         }
     }
 }
@@ -16694,8 +16625,8 @@ impl PriorityWorkerRequest for ThumbnailRasterRequest {
         &self.key
     }
 
-    fn priority(&self) -> ThumbnailRequestPriority {
-        self.priority
+    fn priority(&self) -> WorkerRequestPriority {
+        self.priority.into()
     }
 }
 
@@ -16995,8 +16926,8 @@ impl PriorityWorkerRequest for FolderPreviewRoleRequest {
         &self.key
     }
 
-    fn priority(&self) -> ThumbnailRequestPriority {
-        self.priority
+    fn priority(&self) -> WorkerRequestPriority {
+        self.priority.into()
     }
 }
 
@@ -22852,27 +22783,11 @@ fn transfer_task_detail(
     }
 }
 
-fn launch_uri_for_path(path: &Path) -> String {
-    network_uri_from_path(path).unwrap_or_else(|| gio::File::for_path(path).uri().to_string())
-}
-
 fn scrollbar_axis_for_view_mode(view_mode: ShellViewMode) -> ContentScrollbarAxis {
     match view_mode {
         ShellViewMode::Compact => ContentScrollbarAxis::Horizontal,
         ShellViewMode::Icons | ShellViewMode::Details => ContentScrollbarAxis::Vertical,
     }
-}
-
-fn launch_file_with_default_app(request: &OpenFileRequest) -> Result<(), String> {
-    gio::AppInfo::launch_default_for_uri(&request.uri, None::<&gio::AppLaunchContext>).map_err(
-        |error| {
-            format!(
-                "launch default app for {} ({}): {error}",
-                request.path.display(),
-                request.uri
-            )
-        },
-    )
 }
 
 fn copy_location_text_for_path(path: &Path) -> String {
@@ -23916,8 +23831,7 @@ mod tests {
             visible_slot_stats: ShellVisibleItemSlotStats::default(),
             metadata_roles: ShellMetadataRoleRuntime::new(),
             folder_preview_roles: RefCell::new(ShellFolderPreviewRoleRuntime::new()),
-            icon_role_read_ahead_queue: RefCell::new(VecDeque::new()),
-            icon_role_read_ahead_seen: RefCell::new(HashSet::new()),
+            icon_role_read_ahead: RefCell::new(ShellIconRoleReadAheadQueue::new()),
             internal_drag: None,
             external_drag: None,
             place_press: None,
@@ -31902,6 +31816,7 @@ text/plain=writer.desktop;\n",
             Some(OpenFileRequest {
                 path: PathBuf::from("/tmp/Fika Test/plain.txt"),
                 uri: "file:///tmp/Fika%20Test/plain.txt".to_string(),
+                mime_type: Some("text/plain".to_string()),
             })
         );
         assert_eq!(scene.open_changes, 0);
@@ -31923,8 +31838,38 @@ text/plain=writer.desktop;\n",
             Some(OpenFileRequest {
                 path: PathBuf::from("sftp://example.test/home/yk/remote.txt"),
                 uri: "sftp://example.test/home/yk/remote.txt".to_string(),
+                mime_type: Some("text/plain".to_string()),
             })
         );
+    }
+
+    #[test]
+    fn default_open_file_launch_request_uses_mime_default_application_plan() {
+        let cache = MimeApplicationCache::from_applications_and_mimeapps(
+            vec![
+                test_desktop_application("viewer.desktop", "Viewer", "viewer %f", &["text/plain"]),
+                test_desktop_application("other.desktop", "Other", "other %f", &["text/plain"]),
+            ],
+            &[fika_core::MimeAppsList {
+                default_apps: HashMap::from([(
+                    "text/plain".to_string(),
+                    vec!["viewer.desktop".to_string()],
+                )]),
+                ..Default::default()
+            }],
+        );
+        let request = OpenFileRequest {
+            path: PathBuf::from("/tmp/plain.txt"),
+            uri: "file:///tmp/plain.txt".to_string(),
+            mime_type: Some("text/plain".to_string()),
+        };
+
+        let launch = default_open_file_launch_request(&cache, &request).unwrap();
+
+        assert_eq!(launch.path, PathBuf::from("/tmp/plain.txt"));
+        assert_eq!(launch.app_name, "Viewer");
+        assert_eq!(launch.plan.commands[0].program, "viewer");
+        assert_eq!(launch.plan.commands[0].args, vec!["/tmp/plain.txt"]);
     }
 
     #[test]
@@ -33129,6 +33074,7 @@ text/plain=writer.desktop;\n",
             Some(ShellItemActivation::File(OpenFileRequest {
                 path: PathBuf::from("/tmp/plain.txt"),
                 uri: "file:///tmp/plain.txt".to_string(),
+                mime_type: Some("text/plain".to_string()),
             }))
         );
     }
