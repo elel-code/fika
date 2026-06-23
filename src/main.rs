@@ -995,15 +995,7 @@ impl ApplicationHandler for FikaWgpuApp {
                     if let Some((pane, path)) = self.scene.selected_directory_path() {
                         self.load_path_into_pane(event_loop, pane, path, "activate-directory");
                     } else if let Some(request) = self.scene.selected_file_open_request() {
-                        match launch_file_with_default_app(&request) {
-                            Ok(()) => {
-                                self.scene.record_open_file_request(&request);
-                                if let Some(window) = self.window.as_ref() {
-                                    window.request_redraw();
-                                }
-                            }
-                            Err(error) => fika_log!("[fika-wgpu] open-error {error}"),
-                        }
+                        self.launch_open_file_request(&request);
                     }
                     return;
                 }
@@ -1372,11 +1364,23 @@ impl ApplicationHandler for FikaWgpuApp {
                     return;
                 }
                 if state == ElementState::Pressed
-                    && let Some((pane, path)) =
+                    && let Some(activation) =
                         self.scene
-                            .directory_activation_for_press(point, size, Instant::now())
+                            .item_activation_for_press(point, size, Instant::now())
                 {
-                    self.load_path_into_pane(event_loop, pane, path, "double-click-directory");
+                    match activation {
+                        ShellItemActivation::Directory { pane, path } => {
+                            self.load_path_into_pane(
+                                event_loop,
+                                pane,
+                                path,
+                                "double-click-directory",
+                            );
+                        }
+                        ShellItemActivation::File(request) => {
+                            self.launch_open_file_request(&request)
+                        }
+                    }
                     return;
                 }
                 let changed = match state {
@@ -1432,6 +1436,18 @@ impl ApplicationHandler for FikaWgpuApp {
 }
 
 impl FikaWgpuApp {
+    fn launch_open_file_request(&mut self, request: &OpenFileRequest) {
+        match launch_file_with_default_app(request) {
+            Ok(()) => {
+                self.scene.record_open_file_request(request);
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+            }
+            Err(error) => fika_log!("[fika-wgpu] open-error {error}"),
+        }
+    }
+
     fn external_drag_entered(&mut self, paths: Vec<PathBuf>, position: PhysicalPosition<f64>) {
         let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
             return;
@@ -3036,6 +3052,12 @@ fn context_menu_named_icon_request(
 struct OpenFileRequest {
     path: PathBuf,
     uri: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum ShellItemActivation {
+    Directory { pane: ShellPaneId, path: PathBuf },
+    File(OpenFileRequest),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -10046,12 +10068,12 @@ impl ShellScene {
         old != kind
     }
 
-    fn directory_activation_for_press(
+    fn item_activation_for_press(
         &mut self,
         point: ViewPoint,
         size: PhysicalSize<u32>,
         now: Instant,
-    ) -> Option<(ShellPaneId, PathBuf)> {
+    ) -> Option<ShellItemActivation> {
         let Some(target) = self.pane_item_at_screen_point(point, size) else {
             self.last_item_click = None;
             return None;
@@ -10070,10 +10092,24 @@ impl ShellScene {
             time: now,
         });
 
-        double_click
-            .then(|| self.directory_path_for_pane_index(target.pane, target.index))
-            .flatten()
-            .map(|path| (target.pane, path))
+        if !double_click {
+            return None;
+        }
+
+        let view = self.pane_view(target.pane)?;
+        let entry = view.entries.get(target.index)?;
+        let path = self.entry_path_for_pane_view(view, target.index)?;
+        if entry.is_dir {
+            Some(ShellItemActivation::Directory {
+                pane: target.pane,
+                path,
+            })
+        } else {
+            Some(ShellItemActivation::File(OpenFileRequest {
+                uri: launch_uri_for_path(&path),
+                path,
+            }))
+        }
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -33066,10 +33102,34 @@ text/plain=writer.desktop;\n",
         };
         let now = Instant::now();
 
-        assert_eq!(scene.directory_activation_for_press(point, size, now), None);
+        assert_eq!(scene.item_activation_for_press(point, size, now), None);
         assert_eq!(
-            scene.directory_activation_for_press(point, size, now + Duration::from_millis(120)),
-            Some((ShellPaneId::FIRST, PathBuf::from("/tmp/folder")))
+            scene.item_activation_for_press(point, size, now + Duration::from_millis(120)),
+            Some(ShellItemActivation::Directory {
+                pane: ShellPaneId::FIRST,
+                path: PathBuf::from("/tmp/folder")
+            })
+        );
+    }
+
+    #[test]
+    fn double_click_file_activation_uses_default_app_like_dolphin() {
+        let mut scene = test_scene(vec![test_entry("plain.txt", false)], ShellViewMode::Icons);
+        let size = PhysicalSize::new(360, 240);
+        let item = scene.layout(size).item(0).expect("test item should layout");
+        let point = ViewPoint {
+            x: scene.content_origin_x(size) + item.visual_rect.x + 4.0,
+            y: item.visual_rect.y + scene.content_origin_y() + 4.0,
+        };
+        let now = Instant::now();
+
+        assert_eq!(scene.item_activation_for_press(point, size, now), None);
+        assert_eq!(
+            scene.item_activation_for_press(point, size, now + Duration::from_millis(120)),
+            Some(ShellItemActivation::File(OpenFileRequest {
+                path: PathBuf::from("/tmp/plain.txt"),
+                uri: "file:///tmp/plain.txt".to_string(),
+            }))
         );
     }
 
