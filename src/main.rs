@@ -5,6 +5,7 @@ use std::env;
 use std::error::Error;
 use std::fs;
 use std::hash::{Hash, Hasher};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{
     Arc, OnceLock,
@@ -16,7 +17,7 @@ use std::time::{Duration, Instant};
 use bytemuck::{Pod, Zeroable};
 use cosmic_text::{
     Align, Attrs, Buffer, Color as TextColor, Cursor, Family, FontSystem, Metrics, Shaping,
-    SwashCache, Wrap,
+    Stretch, Style, SwashCache, Weight, Wrap, fontdb,
 };
 #[cfg(test)]
 use fika_core::ServiceMenuPriority;
@@ -24,7 +25,7 @@ use fika_core::{
     AppSettings, CompactLayout, CompactLayoutOptions, DeviceInfo, DevicePlaceOperation,
     DevicePlaceOperationResult, Entry, FileClipboardRole, FileTransferMode, Generation,
     IconsLayout, IconsLayoutOptions, ItemId, ItemLayout, MetadataRoleResult, MimeApplication,
-    MimeApplicationCache, NETWORK_ROOT_LABEL, NameFilter, OpenWithLaunchResult,
+    MimeApplicationCache, MimeDatabase, NETWORK_ROOT_LABEL, NameFilter, OpenWithLaunchResult,
     OperationController, PrivilegedCommand, ServiceMenuAction, ServiceMenuLaunchResult,
     ServiceMenuTarget, ThumbnailRequest, ThumbnailRequestPriority, ThumbnailerRegistry,
     TransferTaskResult, TransferUndoItem, TrashViewOperation, TrashViewOperationResult, UserPlace,
@@ -1515,6 +1516,15 @@ impl FikaWgpuApp {
     ) {
         let action = match command {
             ShellContextMenuCommand::Builtin(action) => action,
+            ShellContextMenuCommand::SetViewMode(view_mode) => {
+                if let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size)
+                    && self.set_user_view_mode(view_mode, size)
+                    && let Some(window) = self.window.as_ref()
+                {
+                    window.request_redraw();
+                }
+                return;
+            }
             ShellContextMenuCommand::CreateEntry { kind, privileged } => {
                 if self
                     .scene
@@ -1744,6 +1754,7 @@ impl FikaWgpuApp {
             ShellContextMenuAction::PasteAsAdministrator => {
                 self.paste_from_clipboard(event_loop, true)
             }
+            ShellContextMenuAction::ViewMode => {}
         }
     }
 
@@ -2922,6 +2933,11 @@ fn context_menu_icon_style(
             [0.122, 0.310, 0.749, 1.0],
             [0.918, 0.945, 1.000, 1.0],
         ),
+        ShellContextMenuAction::ViewMode => (
+            ContextMenuGlyph::Pane,
+            [0.114, 0.306, 0.847, 1.0],
+            [0.918, 0.945, 1.000, 1.0],
+        ),
         ShellContextMenuAction::ToggleHiddenFiles => (
             ContextMenuGlyph::Hidden,
             [0.294, 0.318, 0.357, 1.0],
@@ -3205,6 +3221,7 @@ struct ShellScene {
     visible_slots: ShellPaneVisibleSlotPools,
     visible_slot_stats: ShellVisibleItemSlotStats,
     metadata_roles: ShellMetadataRoleRuntime,
+    folder_preview_roles: RefCell<ShellFolderPreviewRoleRuntime>,
     icon_role_read_ahead_queue: RefCell<VecDeque<IconRoleReadAheadRequest>>,
     icon_role_read_ahead_seen: RefCell<HashSet<IconRoleReadAheadRequest>>,
     internal_drag: Option<ShellInternalDrag>,
@@ -3279,6 +3296,52 @@ impl ShellRenderDirtyKey {
                 include_open_with_chooser_changes: false,
                 include_task_status_changes: false,
                 include_rubber_band: false,
+                include_folder_preview_roles: true,
+            },
+        )
+    }
+
+    fn from_scene_ignoring_folder_preview_roles(
+        scene: &ShellScene,
+        size: PhysicalSize<u32>,
+    ) -> Self {
+        Self::from_scene_with_options(
+            scene,
+            size,
+            ShellRenderDirtyKeyOptions {
+                include_folder_preview_roles: false,
+                ..ShellRenderDirtyKeyOptions::default()
+            },
+        )
+    }
+
+    fn from_scene_ignoring_hover_and_folder_preview_roles(
+        scene: &ShellScene,
+        size: PhysicalSize<u32>,
+    ) -> Self {
+        Self::from_scene_with_options(
+            scene,
+            size,
+            ShellRenderDirtyKeyOptions {
+                include_hover: false,
+                include_context_menu: false,
+                include_context_menu_hover: false,
+                include_drop_menu: false,
+                include_drop_menu_hover: false,
+                include_dnd_hover: false,
+                include_internal_drag: false,
+                include_places_scroll: false,
+                include_location_draft: false,
+                include_location_changes: false,
+                include_properties_overlay_content: false,
+                include_properties_overlay_changes: false,
+                include_create_dialog_changes: false,
+                include_rename_dialog_changes: false,
+                include_open_with_chooser_content: false,
+                include_open_with_chooser_changes: false,
+                include_task_status_changes: false,
+                include_rubber_band: false,
+                include_folder_preview_roles: false,
             },
         )
     }
@@ -3328,6 +3391,9 @@ impl ShellRenderDirtyKey {
                 }
                 None => push_bool(&mut values, false),
             }
+        }
+        if options.include_folder_preview_roles {
+            push_folder_preview_roles_dirty_hash(&mut values, scene, size);
         }
 
         push_pane_item_target(
@@ -3513,6 +3579,7 @@ struct ShellRenderDirtyKeyOptions {
     include_open_with_chooser_changes: bool,
     include_task_status_changes: bool,
     include_rubber_band: bool,
+    include_folder_preview_roles: bool,
 }
 
 impl Default for ShellRenderDirtyKeyOptions {
@@ -3536,6 +3603,7 @@ impl Default for ShellRenderDirtyKeyOptions {
             include_open_with_chooser_changes: true,
             include_task_status_changes: true,
             include_rubber_band: true,
+            include_folder_preview_roles: true,
         }
     }
 }
@@ -3594,100 +3662,44 @@ impl ShellRenderDamage {
         })
     }
 
+    #[cfg(test)]
     fn between(
         previous: Option<&ShellRenderDamageSnapshot>,
         current: &ShellRenderDamageSnapshot,
         async_results_changed: bool,
     ) -> Self {
+        Self::between_with_async_damage(previous, current, async_results_changed, Vec::new())
+    }
+
+    fn between_with_async_damage(
+        previous: Option<&ShellRenderDamageSnapshot>,
+        current: &ShellRenderDamageSnapshot,
+        force_full_async_results_changed: bool,
+        async_damage_rects: Vec<ViewRect>,
+    ) -> Self {
         let Some(previous) = previous else {
             return Self::full(current.size);
         };
-        if async_results_changed || previous.size != current.size {
+        if force_full_async_results_changed || previous.size != current.size {
             return Self::full(current.size);
+        }
+        if previous.folder_previewless_dirty_key == current.folder_previewless_dirty_key {
+            return Self::bounded(async_damage_rects).unwrap_or_else(Self::clean);
         }
         if previous.dirty_key == current.dirty_key {
             return Self::clean();
         }
         if previous.hoverless_dirty_key == current.hoverless_dirty_key {
-            let mut rects = Vec::new();
-            if previous.hovered_item != current.hovered_item {
-                push_item_damage_rect(&mut rects, previous, previous.hovered_item);
-                push_item_damage_rect(&mut rects, current, current.hovered_item);
+            let rects = hover_damage_rects(previous, current);
+            if let Some(damage) = Self::bounded(rects) {
+                return damage;
             }
-            if previous.hovered_place != current.hovered_place {
-                push_place_damage_rect(&mut rects, previous, previous.hovered_place);
-                push_place_damage_rect(&mut rects, current, current.hovered_place);
-            }
-            if previous.dnd_hover_target != current.dnd_hover_target {
-                push_dnd_hover_damage_rect(
-                    &mut rects,
-                    previous,
-                    previous.dnd_hover_target.as_ref(),
-                );
-                push_dnd_hover_damage_rect(&mut rects, current, current.dnd_hover_target.as_ref());
-            }
-            push_context_menu_damage_rects(
-                &mut rects,
-                previous.context_menu.as_ref(),
-                current.context_menu.as_ref(),
-            );
-            push_drop_menu_damage_rects(
-                &mut rects,
-                previous.drop_menu.as_ref(),
-                current.drop_menu.as_ref(),
-            );
-            if (previous.places_scroll_y - current.places_scroll_y).abs() > f32::EPSILON {
-                push_stable_or_changed_damage_rect(
-                    &mut rects,
-                    previous.places_sidebar_rect,
-                    current.places_sidebar_rect,
-                );
-            }
-            push_changed_damage_rect(
-                &mut rects,
-                previous.drag_preview_rect,
-                current.drag_preview_rect,
-            );
-            push_changed_damage_rect(
-                &mut rects,
-                previous.rubber_band_rect,
-                current.rubber_band_rect,
-            );
-            push_stable_or_changed_damage_rect(
-                &mut rects,
-                previous.location_draft_rect,
-                current.location_draft_rect,
-            );
-            push_stable_or_changed_damage_rect(
-                &mut rects,
-                previous.properties_overlay_rect,
-                current.properties_overlay_rect,
-            );
-            push_stable_or_changed_damage_rect(
-                &mut rects,
-                previous.create_dialog_rect,
-                current.create_dialog_rect,
-            );
-            push_stable_or_changed_damage_rect(
-                &mut rects,
-                previous.rename_dialog_rect,
-                current.rename_dialog_rect,
-            );
-            push_stable_or_changed_damage_rect(
-                &mut rects,
-                previous.open_with_chooser_rect,
-                current.open_with_chooser_rect,
-            );
-            push_stable_or_changed_damage_rect(
-                &mut rects,
-                previous.task_area_rect,
-                current.task_area_rect,
-            );
-            push_stable_or_changed_damage_rect(
-                &mut rects,
-                previous.task_detail_dialog_rect,
-                current.task_detail_dialog_rect,
-            );
+        }
+        if previous.hoverless_folder_previewless_dirty_key
+            == current.hoverless_folder_previewless_dirty_key
+        {
+            let mut rects = hover_damage_rects(previous, current);
+            rects.extend(async_damage_rects);
             if let Some(damage) = Self::bounded(rects) {
                 return damage;
             }
@@ -3708,6 +3720,84 @@ impl ShellRenderDamage {
     }
 }
 
+fn hover_damage_rects(
+    previous: &ShellRenderDamageSnapshot,
+    current: &ShellRenderDamageSnapshot,
+) -> Vec<ViewRect> {
+    let mut rects = Vec::new();
+    if previous.hovered_item != current.hovered_item {
+        push_item_damage_rect(&mut rects, previous, previous.hovered_item);
+        push_item_damage_rect(&mut rects, current, current.hovered_item);
+    }
+    if previous.hovered_place != current.hovered_place {
+        push_place_damage_rect(&mut rects, previous, previous.hovered_place);
+        push_place_damage_rect(&mut rects, current, current.hovered_place);
+    }
+    if previous.dnd_hover_target != current.dnd_hover_target {
+        push_dnd_hover_damage_rect(&mut rects, previous, previous.dnd_hover_target.as_ref());
+        push_dnd_hover_damage_rect(&mut rects, current, current.dnd_hover_target.as_ref());
+    }
+    push_context_menu_damage_rects(
+        &mut rects,
+        previous.context_menu.as_ref(),
+        current.context_menu.as_ref(),
+    );
+    push_drop_menu_damage_rects(
+        &mut rects,
+        previous.drop_menu.as_ref(),
+        current.drop_menu.as_ref(),
+    );
+    if (previous.places_scroll_y - current.places_scroll_y).abs() > f32::EPSILON {
+        push_stable_or_changed_damage_rect(
+            &mut rects,
+            previous.places_sidebar_rect,
+            current.places_sidebar_rect,
+        );
+    }
+    push_changed_damage_rect(
+        &mut rects,
+        previous.drag_preview_rect,
+        current.drag_preview_rect,
+    );
+    push_changed_damage_rect(
+        &mut rects,
+        previous.rubber_band_rect,
+        current.rubber_band_rect,
+    );
+    push_stable_or_changed_damage_rect(
+        &mut rects,
+        previous.location_draft_rect,
+        current.location_draft_rect,
+    );
+    push_stable_or_changed_damage_rect(
+        &mut rects,
+        previous.properties_overlay_rect,
+        current.properties_overlay_rect,
+    );
+    push_stable_or_changed_damage_rect(
+        &mut rects,
+        previous.create_dialog_rect,
+        current.create_dialog_rect,
+    );
+    push_stable_or_changed_damage_rect(
+        &mut rects,
+        previous.rename_dialog_rect,
+        current.rename_dialog_rect,
+    );
+    push_stable_or_changed_damage_rect(
+        &mut rects,
+        previous.open_with_chooser_rect,
+        current.open_with_chooser_rect,
+    );
+    push_stable_or_changed_damage_rect(&mut rects, previous.task_area_rect, current.task_area_rect);
+    push_stable_or_changed_damage_rect(
+        &mut rects,
+        previous.task_detail_dialog_rect,
+        current.task_detail_dialog_rect,
+    );
+    rects
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct DamageScissorRect {
     x: u32,
@@ -3720,6 +3810,8 @@ struct DamageScissorRect {
 struct ShellRenderDamageSnapshot {
     dirty_key: ShellRenderDirtyKey,
     hoverless_dirty_key: ShellRenderDirtyKey,
+    folder_previewless_dirty_key: ShellRenderDirtyKey,
+    hoverless_folder_previewless_dirty_key: ShellRenderDirtyKey,
     hovered_item: Option<ShellPaneItemTarget>,
     hovered_place: Option<usize>,
     dnd_hover_target: Option<ShellDropTarget>,
@@ -3843,6 +3935,10 @@ impl ShellRenderDamageSnapshot {
         Self {
             dirty_key,
             hoverless_dirty_key: ShellRenderDirtyKey::from_scene_ignoring_hover(scene, size),
+            folder_previewless_dirty_key:
+                ShellRenderDirtyKey::from_scene_ignoring_folder_preview_roles(scene, size),
+            hoverless_folder_previewless_dirty_key:
+                ShellRenderDirtyKey::from_scene_ignoring_hover_and_folder_preview_roles(scene, size),
             hovered_item: scene.hovered_item,
             hovered_place: scene.hovered_place,
             dnd_hover_target: scene.dnd_hover_target.clone(),
@@ -4358,6 +4454,156 @@ fn push_pane_entries_visual_hash_for_indexes(
     values.push(hasher.finish());
 }
 
+fn push_folder_preview_roles_dirty_hash(
+    values: &mut Vec<u64>,
+    scene: &ShellScene,
+    size: PhysicalSize<u32>,
+) {
+    let roles = scene.folder_preview_roles.borrow();
+    let mut states = Vec::new();
+    for pane_id in ShellPaneId::ALL {
+        let Some(projection) = scene.pane_projection(pane_id, size) else {
+            continue;
+        };
+        for item in &projection.visible_items {
+            let Some(entry_index) = projection
+                .view
+                .filtered_indexes
+                .get(item.layout.model_index)
+                .copied()
+            else {
+                continue;
+            };
+            let Some(entry) = projection.view.entries.get(entry_index) else {
+                continue;
+            };
+            if !entry.is_dir || !entry.metadata_complete {
+                continue;
+            }
+            let Some(modified_secs) = entry.modified_secs else {
+                continue;
+            };
+            let Some(path) = scene.entry_path_for_pane_view(projection.view, entry_index) else {
+                continue;
+            };
+            if is_network_path(&path) {
+                continue;
+            }
+            let pixmap_layout =
+                ItemPixmapLayout::from_item_layout(projection.view.view_mode, item.layout);
+            let requested_size = scene.folder_preview_role_size_px_for_item(pixmap_layout);
+            let requested_key =
+                FolderPreviewRoleKey::new(path.clone(), modified_secs, requested_size);
+            let state = roles
+                .preview_or_closest(&path, modified_secs, requested_size)
+                .map(|preview| (1_u8, preview.size_px, preview.stamp))
+                .or_else(|| {
+                    roles
+                        .failed
+                        .contains(&requested_key)
+                        .then_some((2_u8, requested_size, 0))
+                })
+                .unwrap_or((0_u8, requested_size, 0));
+            states.push((pane_id.index(), path, modified_secs, requested_size, state));
+        }
+    }
+    states.sort();
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    states.hash(&mut hasher);
+    values.push(hasher.finish());
+}
+
+#[cfg(test)]
+fn folder_preview_damage_rects_for_changed_keys(
+    scene: &ShellScene,
+    projections: &[ShellPaneProjection<'_>],
+    keys: &[FolderPreviewRoleKey],
+) -> Vec<ViewRect> {
+    keys.iter()
+        .filter_map(|key| folder_preview_damage_rect_for_changed_key(scene, projections, key, None))
+        .collect()
+}
+
+fn folder_preview_damage_rects_for_changes(
+    scene: &ShellScene,
+    projections: &[ShellPaneProjection<'_>],
+    changes: &[FolderPreviewRoleChange],
+) -> Vec<ViewRect> {
+    changes
+        .iter()
+        .filter_map(|change| {
+            folder_preview_damage_rect_for_changed_key(
+                scene,
+                projections,
+                &change.key,
+                change.previous.as_ref(),
+            )
+        })
+        .collect()
+}
+
+fn folder_preview_damage_rect_for_changed_key(
+    scene: &ShellScene,
+    projections: &[ShellPaneProjection<'_>],
+    key: &FolderPreviewRoleKey,
+    previous: Option<&FolderPreviewReady>,
+) -> Option<ViewRect> {
+    for projection in projections {
+        for item in &projection.visible_items {
+            let Some(entry_index) = projection
+                .view
+                .filtered_indexes
+                .get(item.layout.model_index)
+                .copied()
+            else {
+                continue;
+            };
+            let Some(entry) = projection.view.entries.get(entry_index) else {
+                continue;
+            };
+            if !entry.is_dir || !entry.metadata_complete {
+                continue;
+            }
+            if entry.modified_secs != Some(key.directory_modified_secs) {
+                continue;
+            }
+            let Some(candidate) = scene.entry_path_for_pane_view(projection.view, entry_index)
+            else {
+                continue;
+            };
+            if candidate == key.path {
+                let pixmap_layout =
+                    ItemPixmapLayout::from_item_layout(projection.view.view_mode, item.layout);
+                let requested_size = scene.folder_preview_role_size_px_for_item(pixmap_layout);
+                let roles = scene.folder_preview_roles.borrow();
+                let preview = roles.preview_or_closest(
+                    &key.path,
+                    key.directory_modified_secs,
+                    requested_size,
+                );
+                let damage_rect = if preview
+                    .filter(|preview| preview.size_px == key.size_px)
+                    .is_some()
+                {
+                    folder_preview_role_shell_rect(pixmap_layout)
+                } else if previous.is_some()
+                    && preview
+                        .map(|preview| preview.size_px != requested_size)
+                        .unwrap_or(true)
+                {
+                    folder_preview_role_shell_rect(pixmap_layout)
+                } else if requested_size == key.size_px && roles.failed.contains(key) {
+                    folder_preview_role_shell_rect(pixmap_layout)
+                } else {
+                    continue;
+                };
+                return Some(pane_content_rect_to_screen(damage_rect, projection));
+            }
+        }
+    }
+    None
+}
+
 fn push_option_usize(values: &mut Vec<u64>, value: Option<usize>) {
     match value {
         Some(value) => {
@@ -4644,6 +4890,7 @@ impl ShellScene {
             visible_slots: ShellPaneVisibleSlotPools::default(),
             visible_slot_stats: ShellVisibleItemSlotStats::default(),
             metadata_roles: ShellMetadataRoleRuntime::new(),
+            folder_preview_roles: RefCell::new(ShellFolderPreviewRoleRuntime::new()),
             icon_role_read_ahead_queue: RefCell::new(VecDeque::new()),
             icon_role_read_ahead_seen: RefCell::new(HashSet::new()),
             internal_drag: None,
@@ -4780,6 +5027,9 @@ impl ShellScene {
         let show_hidden = self.show_hidden;
 
         self.cancel_metadata_role_work_for_pane(pane);
+        self.folder_preview_roles
+            .borrow_mut()
+            .clear_path_prefix(&path);
         let Some(state) = self.pane_state_mut(pane) else {
             return Err(format!("pane {} is not open", pane.as_str()));
         };
@@ -4877,6 +5127,11 @@ impl ShellScene {
             .pane_state(pane)
             .map(|state| state.view_mode)
             .unwrap_or(ShellViewMode::Icons);
+        if let Some(old_path) = self.pane_state(pane).map(|state| state.path.clone()) {
+            self.folder_preview_roles
+                .borrow_mut()
+                .clear_path_prefix(&old_path);
+        }
         let filter_pattern = self.filter_pattern_for_pane(pane).to_string();
         self.cancel_metadata_role_work_for_pane(pane);
         self.panes.set(
@@ -4994,6 +5249,9 @@ impl ShellScene {
         pane.scroll_x = 0.0;
         pane.scroll_y = 0.0;
         self.visible_slots.clear(pane_id);
+        self.folder_preview_roles
+            .borrow_mut()
+            .clear_request_lifecycle();
         self.rubber_band = None;
         self.scrollbar_drag = None;
         self.view_switches += 1;
@@ -5027,6 +5285,9 @@ impl ShellScene {
 
         self.zoom_step = next_step;
         self.invalidate_all_compact_layout_caches();
+        self.folder_preview_roles
+            .borrow_mut()
+            .clear_request_lifecycle();
         self.rubber_band = None;
         self.scrollbar_drag = None;
         self.zoom_changes += 1;
@@ -5539,6 +5800,9 @@ impl ShellScene {
         let old_ui_scale = self.ui_scale();
         self.scale_factor = next;
         self.invalidate_all_compact_layout_caches();
+        self.folder_preview_roles
+            .borrow_mut()
+            .clear_request_lifecycle();
         let next_ui_scale = self.ui_scale();
         if old_ui_scale > f32::EPSILON {
             let ratio = next_ui_scale / old_ui_scale;
@@ -10012,7 +10276,7 @@ impl ShellScene {
                 let mut options = self.icons_options_for_viewport(content_width, viewport_height);
                 options.scroll_x = pane.scroll_x;
                 options.scroll_y = pane.scroll_y;
-                ShellLayout::Icons(IconsLayout::new(item_count, options))
+                ShellLayout::Icons(self.pane_icons_layout(pane, options))
             }
             ShellViewMode::Compact => {
                 let mut options = self.compact_options_for_viewport(content_width, viewport_height);
@@ -10091,6 +10355,41 @@ impl ShellScene {
         ShellCompactLayout::new(layout, text_widths)
     }
 
+    fn pane_icons_layout(
+        &self,
+        pane: ShellPaneView<'_>,
+        options: IconsLayoutOptions,
+    ) -> IconsLayout {
+        let item_count = pane.filtered_entry_count();
+        if item_count == 0 {
+            return IconsLayout::new(0, options);
+        }
+
+        let available_text_width = (options.item_width - options.padding * 2.0).max(1.0);
+        let item_heights = pane
+            .filtered_indexes
+            .iter()
+            .take(item_count)
+            .map(|entry_index| {
+                pane.entries
+                    .get(*entry_index)
+                    .map(|entry| {
+                        let lines = icons_entry_text_line_count(
+                            entry,
+                            self.ui_scale(),
+                            available_text_width,
+                        );
+                        (options.padding * 3.0
+                            + options.icon_size
+                            + options.text_height * lines as f32)
+                            .round()
+                    })
+                    .unwrap_or(options.item_height)
+            })
+            .collect::<Vec<_>>();
+        IconsLayout::new_with_item_heights(item_count, options, item_heights)
+    }
+
     #[cfg(test)]
     fn icons_options(&self, size: PhysicalSize<u32>) -> IconsLayoutOptions {
         let mut options =
@@ -10109,9 +10408,12 @@ impl ShellScene {
         let padding = self.scale_metric(2.0);
         let gap = self.scale_metric(12.0);
         let icon_size = self.zoom_icon_metric(ICONS_ICON_SIZE, 16.0, 256.0);
-        let item_width = (ICONS_ITEM_WIDTH * self.icons_text_width_factor() * scale)
+        let font_factor = scale;
+        let zoom_factor = self.icons_text_width_factor();
+        let item_width = (16.0 * scale
+            + DOLPHIN_ICONS_TEXT_WIDTH_INDEX * 64.0 * font_factor * zoom_factor)
             .round()
-            .max(icon_size + padding * 2.0);
+            .max(icon_size + padding * 2.0 * zoom_factor);
         let item_height = (padding * 3.0 + icon_size + self.text_line_height()).round();
         IconsLayoutOptions {
             viewport_width,
@@ -10141,12 +10443,13 @@ impl ShellScene {
         viewport_width: f32,
         viewport_height: f32,
     ) -> CompactLayoutOptions {
-        let padding = self.scale_metric(6.0);
+        let padding = self.scale_metric(2.0);
         let side_padding = self.scale_metric(8.0);
         let gap = self.scale_metric(8.0);
-        let text_gap = self.scale_metric(8.0);
+        let text_gap = padding * 2.0;
         let icon_size = self.zoom_icon_metric(COMPACT_ICON_SIZE, 16.0, 144.0);
-        let min_text_width = self.scale_metric(COMPACT_MIN_TEXT_WIDTH);
+        let min_text_width =
+            (self.text_line_height() * 5.0).max(self.scale_metric(COMPACT_MIN_TEXT_WIDTH));
         let item_height = (padding * 2.0 + icon_size.max(self.text_line_height())).round();
         CompactLayoutOptions {
             viewport_width,
@@ -10158,7 +10461,7 @@ impl ShellScene {
             side_padding,
             gap,
             text_gap,
-            item_width: (padding * 2.0 + icon_size + text_gap + min_text_width).round(),
+            item_width: (padding * 4.0 + icon_size + min_text_width).round(),
             item_height,
             icon_size,
             text_height: self.text_line_height(),
@@ -10211,7 +10514,7 @@ impl ShellScene {
             .sum();
         let folder_preview_candidates = projections
             .iter()
-            .map(|projection| self.folder_preview_candidate_count_for_projection(projection))
+            .map(|projection| self.folder_preview_role_candidate_count_for_projection(projection))
             .sum();
 
         push_rect(
@@ -10244,7 +10547,6 @@ impl ShellScene {
                 content_scrollbar_visible = scrollbar_visible;
             }
             self.queue_thumbnail_read_ahead_for_projection(projection, icons);
-            self.queue_folder_preview_read_ahead_for_projection(projection, icons);
         }
         if let Some(overlay_text) = overlay_text {
             self.push_drag_preview_overlay(&mut overlay_vertices, overlay_text, size);
@@ -10391,6 +10693,219 @@ impl ShellScene {
             }
         }
         stats
+    }
+
+    fn drain_folder_preview_role_results(&self) -> FolderPreviewRoleDrainStats {
+        self.folder_preview_roles.borrow_mut().drain_results()
+    }
+
+    fn update_folder_preview_roles_for_projections(
+        &self,
+        projections: &[ShellPaneProjection<'_>],
+    ) -> FolderPreviewRoleUpdateStats {
+        let mut requests = Vec::new();
+        for projection in projections {
+            let read_ahead_size_px =
+                self.folder_preview_role_size_px_for_view_mode(projection.view.view_mode);
+            for item in &projection.visible_items {
+                let Some(entry_index) = projection
+                    .view
+                    .filtered_indexes
+                    .get(item.layout.model_index)
+                    .copied()
+                else {
+                    continue;
+                };
+                let pixmap_layout =
+                    ItemPixmapLayout::from_item_layout(projection.view.view_mode, item.layout);
+                let size_px = self.folder_preview_role_size_px_for_item(pixmap_layout);
+                if let Some(request) = self.folder_preview_role_request_for_pane_entry(
+                    projection.view,
+                    entry_index,
+                    size_px,
+                    ThumbnailRequestPriority::Visible,
+                ) {
+                    requests.push(request);
+                }
+            }
+            let Some(visible_range) = visible_layout_range_for_projection(projection) else {
+                continue;
+            };
+            let item_count = projection.view.filtered_entry_count();
+            for layout_index in shell_dolphin_read_ahead_indexes(
+                visible_range,
+                item_count,
+                projection.visible_items.len(),
+            )
+            .into_iter()
+            .take(THUMBNAIL_READ_AHEAD_QUEUE_BUDGET_PER_FRAME)
+            {
+                let Some(entry_index) = projection.view.filtered_indexes.get(layout_index).copied()
+                else {
+                    continue;
+                };
+                if let Some(request) = self.folder_preview_role_request_for_pane_entry(
+                    projection.view,
+                    entry_index,
+                    read_ahead_size_px,
+                    ThumbnailRequestPriority::Deferred,
+                ) {
+                    requests.push(request);
+                }
+            }
+        }
+        self.folder_preview_roles
+            .borrow_mut()
+            .queue_candidates(requests)
+    }
+
+    fn folder_preview_role_for_pane_entry(
+        &self,
+        view: ShellPaneView<'_>,
+        entry_index: usize,
+        pixmap_layout: ItemPixmapLayout,
+    ) -> Option<FolderPreviewReady> {
+        let entry = view.entries.get(entry_index)?;
+        if !entry.is_dir || !entry.metadata_complete {
+            return None;
+        }
+        let modified_secs = entry.modified_secs?;
+        let path = self.entry_path_for_pane_view(view, entry_index)?;
+        if is_network_path(&path) {
+            return None;
+        }
+        let size_px = self.folder_preview_role_size_px_for_item(pixmap_layout);
+        self.folder_preview_roles
+            .borrow()
+            .preview_or_closest(&path, modified_secs, size_px)
+            .cloned()
+    }
+
+    fn folder_preview_role_request_for_pane_entry(
+        &self,
+        view: ShellPaneView<'_>,
+        entry_index: usize,
+        size_px: u16,
+        priority: ThumbnailRequestPriority,
+    ) -> Option<FolderPreviewRoleRequest> {
+        let entry = view.entries.get(entry_index)?;
+        if !entry.is_dir || !entry.metadata_complete {
+            return None;
+        }
+        let modified_secs = entry.modified_secs?;
+        let path = self.entry_path_for_pane_view(view, entry_index)?;
+        if is_network_path(&path) {
+            return None;
+        }
+        Some(FolderPreviewRoleRequest {
+            key: FolderPreviewRoleKey::new(path, modified_secs, size_px),
+            priority,
+        })
+    }
+
+    fn folder_preview_role_size_px_for_item(&self, pixmap_layout: ItemPixmapLayout) -> u16 {
+        folder_preview_role_cache_size(
+            pixmap_layout
+                .icon_rect
+                .width
+                .max(pixmap_layout.icon_rect.height)
+                .clamp(16.0, 256.0),
+        )
+    }
+
+    fn folder_preview_role_size_px_for_view_mode(&self, view_mode: ShellViewMode) -> u16 {
+        let item = match view_mode {
+            ShellViewMode::Icons => {
+                let options = self.icons_options_for_viewport(1.0, 1.0);
+                ItemLayout {
+                    model_index: 0,
+                    column: 0,
+                    row: 0,
+                    item_rect: ViewRect {
+                        x: 0.0,
+                        y: 0.0,
+                        width: options.item_width,
+                        height: options.item_height,
+                    },
+                    visual_rect: ViewRect::default(),
+                    icon_rect: ViewRect {
+                        x: (options.item_width - options.icon_size).max(0.0) / 2.0,
+                        y: options.padding,
+                        width: options.icon_size,
+                        height: options.icon_size,
+                    },
+                    text_rect: ViewRect {
+                        x: options.padding,
+                        y: options.icon_size + options.padding * 2.0,
+                        width: (options.item_width - options.padding * 2.0).max(1.0),
+                        height: options.text_height,
+                    },
+                }
+            }
+            ShellViewMode::Compact => {
+                let options = self.compact_options_for_viewport(1.0, 1.0);
+                ItemLayout {
+                    model_index: 0,
+                    column: 0,
+                    row: 0,
+                    item_rect: ViewRect {
+                        x: 0.0,
+                        y: 0.0,
+                        width: options.item_width,
+                        height: options.item_height,
+                    },
+                    visual_rect: ViewRect::default(),
+                    icon_rect: ViewRect {
+                        x: options.padding,
+                        y: (options.item_height - options.icon_size) / 2.0,
+                        width: options.icon_size,
+                        height: options.icon_size,
+                    },
+                    text_rect: ViewRect {
+                        x: options.padding + options.icon_size + options.text_gap,
+                        y: (options.item_height - options.text_height) / 2.0,
+                        width: (options.item_width
+                            - options.padding * 2.0
+                            - options.icon_size
+                            - options.text_gap)
+                            .max(1.0),
+                        height: options.text_height,
+                    },
+                }
+            }
+            ShellViewMode::Details => {
+                let icon_size = self.details_icon_size();
+                let row_height = self.details_row_height();
+                let icon_padding = self.scale_metric(8.0);
+                ItemLayout {
+                    model_index: 0,
+                    column: 0,
+                    row: 0,
+                    item_rect: ViewRect {
+                        x: 0.0,
+                        y: 0.0,
+                        width: self.details_name_width(),
+                        height: row_height,
+                    },
+                    visual_rect: ViewRect::default(),
+                    icon_rect: ViewRect {
+                        x: icon_padding,
+                        y: (row_height - icon_size) / 2.0,
+                        width: icon_size,
+                        height: icon_size,
+                    },
+                    text_rect: ViewRect {
+                        x: icon_padding + icon_size + self.scale_metric(8.0),
+                        y: (row_height - self.text_line_height()).max(0.0) / 2.0,
+                        width: self.details_name_width().max(1.0),
+                        height: self.text_line_height(),
+                    },
+                }
+            }
+        };
+        self.folder_preview_role_size_px_for_item(ItemPixmapLayout::from_item_layout(
+            view_mode, item,
+        ))
     }
 
     fn apply_metadata_role_result(&mut self, result: MetadataRoleResult) -> bool {
@@ -10707,18 +11222,23 @@ impl ShellScene {
         let selected = projection.view.selection.contains(entry_index);
         let text_color = pane_item_text_color(projection.view.view_mode, entry, selected);
         match projection.view.view_mode {
-            ShellViewMode::Compact | ShellViewMode::Details => text.prewarm_label_aligned_no_wrap(
+            ShellViewMode::Compact => text.prewarm_label_aligned_wrapped(
+                entry.name.as_ref(),
+                layout.text_rect,
+                text_color,
+                LabelAlignment::Start,
+                LabelWrap::None,
+            ),
+            ShellViewMode::Details => text.prewarm_filename_label_aligned_no_wrap(
                 entry.name.as_ref(),
                 layout.text_rect,
                 text_color,
                 LabelAlignment::Start,
             ),
-            ShellViewMode::Icons => text.prewarm_label_aligned_wrapped(
+            ShellViewMode::Icons => text.prewarm_filename_label_wrapped(
                 entry.name.as_ref(),
                 layout.text_rect,
                 text_color,
-                LabelAlignment::Center,
-                LabelWrap::WordOrGlyph,
             ),
         }
     }
@@ -10812,6 +11332,12 @@ impl ShellScene {
         let visual_rect = pane_content_rect_to_screen(layout.visual_rect, projection);
         let icon_rect = pane_content_rect_to_screen(layout.icon_rect, projection);
         let text_rect = pane_content_rect_to_screen(layout.text_rect, projection);
+        let pixmap_layout = ItemPixmapLayout {
+            view_mode: projection.view.view_mode,
+            icon_rect,
+            text_rect,
+            text_midline_shift: text.dolphin_midline_shift(),
+        };
         let selected = projection.view.selection.contains(entry_index);
         let hovered = self.hovered_item
             == Some(ShellPaneItemTarget {
@@ -10895,7 +11421,15 @@ impl ShellScene {
             );
         }
 
-        if !icons.push_thumbnail_or_icon(projection.view.path, entry, icon_rect, content_clip) {
+        let folder_preview =
+            self.folder_preview_role_for_pane_entry(projection.view, entry_index, pixmap_layout);
+        if !icons.push_thumbnail_or_icon(
+            projection.view.path,
+            entry,
+            folder_preview.as_ref(),
+            pixmap_layout,
+            content_clip,
+        ) {
             push_fallback_icon(vertices, entry, icon_rect, content_clip, size);
         }
 
@@ -10911,7 +11445,7 @@ impl ShellScene {
                 );
             }
             ShellViewMode::Details => {
-                text.push_label_aligned_no_wrap(
+                text.push_filename_label_aligned_no_wrap(
                     entry.name.as_ref(),
                     text_rect,
                     content_clip,
@@ -10920,7 +11454,12 @@ impl ShellScene {
                 );
             }
             ShellViewMode::Icons => {
-                text.push_label(entry.name.as_ref(), text_rect, content_clip, text_color);
+                text.push_filename_label_wrapped(
+                    entry.name.as_ref(),
+                    text_rect,
+                    content_clip,
+                    text_color,
+                );
             }
         }
 
@@ -11001,7 +11540,7 @@ impl ShellScene {
             .count()
     }
 
-    fn folder_preview_candidate_count_for_projection(
+    fn folder_preview_role_candidate_count_for_projection(
         &self,
         projection: &ShellPaneProjection<'_>,
     ) -> usize {
@@ -11015,7 +11554,10 @@ impl ShellScene {
                     .get(item.layout.model_index)
                     .copied()
                     .and_then(|entry_index| {
-                        self.folder_preview_candidate_for_pane_entry(projection.view, entry_index)
+                        self.folder_preview_role_requestable_for_pane_entry(
+                            projection.view,
+                            entry_index,
+                        )
                     })
                     .is_some()
             })
@@ -11051,39 +11593,6 @@ impl ShellScene {
                 self.thumbnail_candidate_for_pane_entry(projection.view, entry_index)
             {
                 icons.queue_thumbnail_read_ahead(candidate, size_px);
-            }
-        }
-    }
-
-    fn queue_folder_preview_read_ahead_for_projection(
-        &self,
-        projection: &ShellPaneProjection<'_>,
-        icons: &mut IconFrameBuilder<'_>,
-    ) {
-        let Some(visible_range) = visible_layout_range_for_projection(projection) else {
-            return;
-        };
-        let size_px = self.thumbnail_read_ahead_size_px(projection.view.view_mode);
-        if size_px < 32 {
-            return;
-        }
-        let item_count = projection.view.filtered_entry_count();
-        for layout_index in shell_dolphin_read_ahead_indexes(
-            visible_range,
-            item_count,
-            projection.visible_items.len(),
-        )
-        .into_iter()
-        .take(THUMBNAIL_READ_AHEAD_QUEUE_BUDGET_PER_FRAME)
-        {
-            let Some(entry_index) = projection.view.filtered_indexes.get(layout_index).copied()
-            else {
-                continue;
-            };
-            if let Some(candidate) =
-                self.folder_preview_candidate_for_pane_entry(projection.view, entry_index)
-            {
-                icons.queue_folder_preview_read_ahead(candidate, size_px);
             }
         }
     }
@@ -11130,21 +11639,18 @@ impl ShellScene {
         })
     }
 
-    fn folder_preview_candidate_for_pane_entry(
+    fn folder_preview_role_requestable_for_pane_entry(
         &self,
         view: ShellPaneView<'_>,
         entry_index: usize,
-    ) -> Option<ShellFolderPreviewCandidate> {
+    ) -> Option<()> {
         let entry = view.entries.get(entry_index)?;
         if !entry.is_dir || !entry.metadata_complete {
             return None;
         }
-        let modified_secs = entry.modified_secs?;
+        let _modified_secs = entry.modified_secs?;
         let path = self.entry_path_for_pane_view(view, entry_index)?;
-        (!is_network_path(&path)).then_some(ShellFolderPreviewCandidate {
-            path,
-            modified_secs,
-        })
+        (!is_network_path(&path)).then_some(())
     }
 
     fn push_details_header_for_projection(
@@ -14585,6 +15091,9 @@ impl WgpuState {
                 .into_iter()
                 .filter_map(|kind| scene.pane_projection(kind, self.size))
                 .collect::<Vec<_>>();
+            let _folder_preview_role_stats =
+                scene.update_folder_preview_roles_for_projections(&projections);
+            let _folder_preview_results = scene.drain_folder_preview_role_results();
             let metadata_stats = scene.prewarm_file_metadata_roles(&projections);
             for projection in &projections {
                 if let Some(item) = projection.visible_items.first() {
@@ -14734,20 +15243,35 @@ impl WgpuState {
         force_log: bool,
     ) -> ShellRenderOutcome {
         let metadata_result_stats = scene.drain_metadata_role_results();
+        let projections = ShellPaneId::ALL
+            .into_iter()
+            .filter_map(|kind| scene.pane_projection(kind, self.size))
+            .collect::<Vec<_>>();
+        let _folder_preview_role_stats =
+            scene.update_folder_preview_roles_for_projections(&projections);
+        let folder_preview_results = scene.drain_folder_preview_role_results();
         let icon_resolve_results = self.icon_renderer.resolver.drain_results();
         let icon_raster_results = self
             .icon_renderer
             .icon_rasters
             .drain_results(&mut self.icon_renderer.raster_cache);
         let thumbnail_results = self.icon_renderer.thumbnails.drain_results();
-        let folder_preview_results = self.icon_renderer.folder_previews.drain_results();
+        let folder_preview_damage_rects = folder_preview_damage_rects_for_changes(
+            scene,
+            &projections,
+            &folder_preview_results.changes,
+        );
         let dirty_key = ShellRenderDirtyKey::from_scene(scene, self.size);
-        let scene_read_ahead_pending = !scene.icon_role_read_ahead_queue.borrow().is_empty();
-        let async_results_changed = metadata_result_stats.applied > 0
+        let scene_read_ahead_pending = !scene.icon_role_read_ahead_queue.borrow().is_empty()
+            || scene.folder_preview_roles.borrow().has_pending();
+        let non_folder_preview_async_results_changed = metadata_result_stats.applied > 0
             || icon_resolve_results > 0
             || icon_raster_results > 0
-            || thumbnail_results > 0
-            || folder_preview_results > 0;
+            || thumbnail_results > 0;
+        let visible_folder_preview_async_results_changed =
+            folder_preview_results.applied > 0 && !folder_preview_damage_rects.is_empty();
+        let async_results_changed = non_folder_preview_async_results_changed
+            || visible_folder_preview_async_results_changed;
         if self.can_skip_clean_redraw(
             reason,
             force_log,
@@ -14769,16 +15293,13 @@ impl WgpuState {
             }
             return ShellRenderOutcome::SkippedClean;
         }
-        let projections = ShellPaneId::ALL
-            .into_iter()
-            .filter_map(|kind| scene.pane_projection(kind, self.size))
-            .collect::<Vec<_>>();
         let damage_snapshot =
             ShellRenderDamageSnapshot::from_scene(scene, self.size, &projections, dirty_key);
-        let mut render_damage = ShellRenderDamage::between(
+        let mut render_damage = ShellRenderDamage::between_with_async_damage(
             self.last_render_damage_snapshot.as_ref(),
             &damage_snapshot,
-            async_results_changed,
+            non_folder_preview_async_results_changed,
+            folder_preview_damage_rects,
         );
         if !self.retained_scene.is_valid() {
             render_damage = ShellRenderDamage::full(self.size);
@@ -14956,7 +15477,7 @@ impl WgpuState {
                 .icon_rasters
                 .has_pending(&mut self.icon_renderer.raster_cache)
             || self.icon_renderer.thumbnails.has_pending()
-            || self.icon_renderer.folder_previews.has_pending();
+            || scene.folder_preview_roles.borrow().has_pending();
         let text_work_pending = scene_frame.text_stats.deferred > 0;
         if metadata_work_pending || icon_work_pending || text_work_pending {
             window.request_redraw();
@@ -16293,8 +16814,7 @@ impl ThumbnailRasterResolver {
         self.ready_bytes
     }
 
-    fn has_pending(&mut self) -> bool {
-        self.drain_results();
+    fn has_pending(&self) -> bool {
         !self.pending.is_empty()
     }
 }
@@ -16346,11 +16866,13 @@ fn thumbnail_raster_for_request(
 struct FolderPreviewThumbnailSource {
     path: PathBuf,
     modified_secs: u64,
+    mime_type: Option<String>,
 }
 
 #[derive(Clone, Debug)]
 struct FolderPreviewReady {
     stamp: u64,
+    size_px: u16,
     raster: IconRaster,
 }
 
@@ -16358,7 +16880,6 @@ struct FolderPreviewReady {
 struct FolderPreviewReadyEntry {
     preview: FolderPreviewReady,
     bytes: usize,
-    checked_at: Instant,
     last_used_frame: u64,
 }
 
@@ -16397,25 +16918,42 @@ struct FolderPreviewRoleResult {
     preview: Option<FolderPreviewReady>,
 }
 
-#[derive(Clone, Debug)]
-enum FolderPreviewResolveState {
-    Ready(FolderPreviewReady),
-    Pending,
-    Failed,
+#[derive(Clone, Debug, Default)]
+struct FolderPreviewRoleDrainStats {
+    results: usize,
+    applied: usize,
+    changes: Vec<FolderPreviewRoleChange>,
 }
 
-struct FolderPreviewResolver {
+#[derive(Clone, Debug)]
+struct FolderPreviewRoleChange {
+    key: FolderPreviewRoleKey,
+    previous: Option<FolderPreviewReady>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct FolderPreviewRoleUpdateStats {
+    visible: usize,
+    deferred: usize,
+    queued: usize,
+    ready: usize,
+    failed: usize,
+}
+
+struct ShellFolderPreviewRoleRuntime {
     ready: HashMap<FolderPreviewRoleKey, FolderPreviewReadyEntry>,
-    failed: HashMap<FolderPreviewRoleKey, Instant>,
+    failed: HashSet<FolderPreviewRoleKey>,
     pending: HashMap<FolderPreviewRoleKey, ThumbnailRequestPriority>,
-    ready_frame: u64,
+    finished: HashSet<FolderPreviewRoleKey>,
+    active: HashSet<FolderPreviewRoleKey>,
+    frame: u64,
     ready_bytes: usize,
     ready_max_bytes: usize,
     request_tx: Option<Sender<FolderPreviewRoleRequest>>,
     result_rx: Receiver<FolderPreviewRoleResult>,
 }
 
-impl FolderPreviewResolver {
+impl ShellFolderPreviewRoleRuntime {
     fn new() -> Self {
         Self::with_cache_root(default_thumbnail_cache_root())
     }
@@ -16430,9 +16968,11 @@ impl FolderPreviewResolver {
             .map(|_| request_tx);
         Self {
             ready: HashMap::new(),
-            failed: HashMap::new(),
+            failed: HashSet::new(),
             pending: HashMap::new(),
-            ready_frame: 0,
+            finished: HashSet::new(),
+            active: HashSet::new(),
+            frame: 0,
             ready_bytes: 0,
             ready_max_bytes: THUMBNAIL_READY_CACHE_MAX_BYTES,
             request_tx,
@@ -16440,57 +16980,67 @@ impl FolderPreviewResolver {
         }
     }
 
-    fn resolve(
-        &mut self,
+    fn preview(
+        &self,
         path: &Path,
         directory_modified_secs: u64,
         size_px: u16,
-    ) -> FolderPreviewResolveState {
-        self.drain_results();
+    ) -> Option<&FolderPreviewReady> {
         let key = FolderPreviewRoleKey::new(path.to_path_buf(), directory_modified_secs, size_px);
-        if let Some(entry) = self.ready.remove(&key) {
-            self.ready_bytes = self.ready_bytes.saturating_sub(entry.bytes);
-            let preview = entry.preview;
-            let recheck = entry.checked_at.elapsed() >= DOLPHIN_FOLDER_PREVIEW_METADATA_RECHECK;
-            if recheck {
-                self.queue(key, ThumbnailRequestPriority::Visible);
-            }
-            return FolderPreviewResolveState::Ready(preview);
-        }
-        if let Some(failed_at) = self.failed.get(&key).copied() {
-            if failed_at.elapsed() < DOLPHIN_FOLDER_PREVIEW_METADATA_RECHECK {
-                return FolderPreviewResolveState::Failed;
-            }
-            self.failed.remove(&key);
-        }
-        match self.pending.get(&key).copied() {
-            Some(ThumbnailRequestPriority::Visible) => return FolderPreviewResolveState::Pending,
-            Some(ThumbnailRequestPriority::Deferred) | None => {}
-        }
-        if self.queue(key, ThumbnailRequestPriority::Visible) {
-            FolderPreviewResolveState::Pending
-        } else {
-            FolderPreviewResolveState::Failed
-        }
+        self.ready.get(&key).map(|entry| &entry.preview)
     }
 
-    fn queue_deferred(&mut self, path: &Path, directory_modified_secs: u64, size_px: u16) -> bool {
-        self.drain_results();
-        let key = FolderPreviewRoleKey::new(path.to_path_buf(), directory_modified_secs, size_px);
-        if self.ready.get(&key).is_some_and(|entry| {
-            entry.checked_at.elapsed() < DOLPHIN_FOLDER_PREVIEW_METADATA_RECHECK
-        }) || self
-            .failed
-            .get(&key)
-            .is_some_and(|failed_at| failed_at.elapsed() < DOLPHIN_FOLDER_PREVIEW_METADATA_RECHECK)
-            || self.pending.contains_key(&key)
-        {
-            return false;
+    fn preview_or_closest(
+        &self,
+        path: &Path,
+        directory_modified_secs: u64,
+        size_px: u16,
+    ) -> Option<&FolderPreviewReady> {
+        self.preview(path, directory_modified_secs, size_px)
+            .or_else(|| {
+                self.ready
+                    .iter()
+                    .filter(|(key, _)| {
+                        key.path == path && key.directory_modified_secs == directory_modified_secs
+                    })
+                    .min_by_key(|(key, _)| key.size_px.abs_diff(size_px))
+                    .map(|(_, entry)| &entry.preview)
+            })
+    }
+
+    fn queue_candidates(
+        &mut self,
+        candidates: impl IntoIterator<Item = FolderPreviewRoleRequest>,
+    ) -> FolderPreviewRoleUpdateStats {
+        let mut stats = FolderPreviewRoleUpdateStats::default();
+        let mut keep = HashSet::new();
+        for candidate in candidates {
+            keep.insert(candidate.key.clone());
+            if self.ready.contains_key(&candidate.key) {
+                stats.ready += 1;
+                continue;
+            }
+            if self.failed.contains(&candidate.key) || self.finished.contains(&candidate.key) {
+                stats.failed += usize::from(self.failed.contains(&candidate.key));
+                continue;
+            }
+            match candidate.priority {
+                ThumbnailRequestPriority::Visible => stats.visible += 1,
+                ThumbnailRequestPriority::Deferred => stats.deferred += 1,
+            }
+            if self.queue(candidate.key, candidate.priority) {
+                stats.queued += 1;
+            }
         }
-        self.queue(key, ThumbnailRequestPriority::Deferred)
+        self.prune_inactive_deferred(&keep);
+        self.active = keep;
+        stats
     }
 
     fn queue(&mut self, key: FolderPreviewRoleKey, priority: ThumbnailRequestPriority) -> bool {
+        if self.ready.contains_key(&key) || self.finished.contains(&key) {
+            return false;
+        }
         match self.pending.get(&key).copied() {
             Some(ThumbnailRequestPriority::Visible) => return false,
             Some(ThumbnailRequestPriority::Deferred)
@@ -16505,7 +17055,8 @@ impl FolderPreviewResolver {
             }
         }
         let Some(tx) = self.request_tx.as_ref() else {
-            self.failed.insert(key.clone(), Instant::now());
+            self.failed.insert(key.clone());
+            self.finished.insert(key.clone());
             self.pending.retain(|pending_key, _| pending_key != &key);
             return false;
         };
@@ -16516,49 +17067,81 @@ impl FolderPreviewResolver {
             })
             .is_err()
         {
-            self.failed.insert(key.clone(), Instant::now());
+            self.failed.insert(key.clone());
+            self.finished.insert(key.clone());
             self.pending.retain(|pending_key, _| pending_key != &key);
             return false;
         }
         true
     }
 
-    fn drain_results(&mut self) -> usize {
-        let mut changed = 0usize;
+    fn drain_results(&mut self) -> FolderPreviewRoleDrainStats {
+        let mut stats = FolderPreviewRoleDrainStats::default();
         while let Ok(result) = self.result_rx.try_recv() {
+            stats.results += 1;
             self.pending.remove(&result.key);
+            if !self.has_active_identity(&result.key) {
+                continue;
+            }
+            self.finished.insert(result.key.clone());
             match result.preview {
                 Some(preview) => {
-                    self.insert_ready(result.key.clone(), preview);
+                    let previous = self.insert_ready(result.key.clone(), preview);
                     self.failed.remove(&result.key);
-                    changed += 1;
+                    stats.applied += 1;
+                    stats.changes.push(FolderPreviewRoleChange {
+                        key: result.key,
+                        previous,
+                    });
                 }
                 None => {
-                    let had_ready = self.ready.remove(&result.key).is_some();
-                    let was_not_failed = self.failed.insert(result.key, Instant::now()).is_none();
-                    changed += usize::from(had_ready || was_not_failed);
+                    let previous = self.ready.remove(&result.key).map(|entry| {
+                        self.ready_bytes = self.ready_bytes.saturating_sub(entry.bytes);
+                        entry.preview
+                    });
+                    let had_ready = previous.is_some();
+                    let was_not_failed = self.failed.insert(result.key.clone());
+                    stats.applied += usize::from(had_ready || was_not_failed);
+                    if had_ready || was_not_failed {
+                        stats.changes.push(FolderPreviewRoleChange {
+                            key: result.key,
+                            previous,
+                        });
+                    }
                 }
             }
         }
-        changed
+        stats
     }
 
-    fn insert_ready(&mut self, key: FolderPreviewRoleKey, preview: FolderPreviewReady) {
+    fn has_active_identity(&self, key: &FolderPreviewRoleKey) -> bool {
+        self.active.contains(key)
+    }
+
+    fn insert_ready(
+        &mut self,
+        key: FolderPreviewRoleKey,
+        preview: FolderPreviewReady,
+    ) -> Option<FolderPreviewReady> {
         let bytes = preview.raster.pixels.len();
-        self.ready_frame = self.ready_frame.wrapping_add(1);
-        if let Some(old) = self.ready.insert(
+        self.frame = self.frame.wrapping_add(1);
+        let previous = self.ready.insert(
             key.clone(),
             FolderPreviewReadyEntry {
                 preview,
                 bytes,
-                checked_at: Instant::now(),
-                last_used_frame: self.ready_frame,
+                last_used_frame: self.frame,
             },
-        ) {
+        );
+        let previous_preview = if let Some(old) = previous {
             self.ready_bytes = self.ready_bytes.saturating_sub(old.bytes);
-        }
+            Some(old.preview)
+        } else {
+            None
+        };
         self.ready_bytes += bytes;
         self.evict_ready_if_needed(&key);
+        previous_preview
     }
 
     fn evict_ready_if_needed(&mut self, protected: &FolderPreviewRoleKey) {
@@ -16578,6 +17161,41 @@ impl FolderPreviewResolver {
         }
     }
 
+    fn prune_inactive_deferred(&mut self, keep: &HashSet<FolderPreviewRoleKey>) {
+        let stale = self
+            .pending
+            .iter()
+            .filter_map(|(key, priority)| {
+                (*priority == ThumbnailRequestPriority::Deferred && !keep.contains(key))
+                    .then(|| key.clone())
+            })
+            .collect::<Vec<_>>();
+        for key in stale {
+            self.pending.remove(&key);
+        }
+    }
+
+    fn clear_request_lifecycle(&mut self) {
+        self.failed.clear();
+        self.finished.clear();
+        self.pending.clear();
+        self.active.clear();
+    }
+
+    fn clear_path_prefix(&mut self, path: &Path) {
+        self.ready.retain(|key, entry| {
+            let keep = !key.path.starts_with(path);
+            if !keep {
+                self.ready_bytes = self.ready_bytes.saturating_sub(entry.bytes);
+            }
+            keep
+        });
+        self.failed.retain(|key| !key.path.starts_with(path));
+        self.finished.retain(|key| !key.path.starts_with(path));
+        self.active.retain(|key| !key.path.starts_with(path));
+        self.pending.retain(|key, _| !key.path.starts_with(path));
+    }
+
     fn ready_len(&self) -> usize {
         self.ready.len()
     }
@@ -16586,8 +17204,7 @@ impl FolderPreviewResolver {
         self.ready_bytes
     }
 
-    fn has_pending(&mut self) -> bool {
-        self.drain_results();
+    fn has_pending(&self) -> bool {
         !self.pending.is_empty()
     }
 }
@@ -16635,6 +17252,7 @@ fn folder_preview_for_request(
     )?;
     Some(FolderPreviewReady {
         stamp: metadata.stamp,
+        size_px: request.key.size_px,
         raster,
     })
 }
@@ -16665,30 +17283,63 @@ fn folder_preview_raster_for_sources(
     }
     let mut rasters = Vec::with_capacity(sources.len());
     for source in sources {
-        let Some(thumbnail_request) = ThumbnailRequest::from_entry_metadata_with_mime(
-            WGPU_SHELL_PANE_ID,
-            Generation(0),
-            ItemId(0),
-            source.path.clone(),
-            source.modified_secs,
-            None,
-            priority,
-        ) else {
-            continue;
-        };
-        let Some(raster) = generate_thumbnail_with_external_thumbnailer_registry(
+        if let Some(raster) =
+            folder_preview_child_raster(cache_root, thumbnailers, source, priority, size_px)
+        {
+            rasters.push(raster);
+        }
+    }
+    folder_preview_thumbnail_raster_from_children(&rasters, size_px as u32)
+}
+
+fn folder_preview_child_raster(
+    cache_root: &Path,
+    thumbnailers: &ThumbnailerRegistry,
+    source: &FolderPreviewThumbnailSource,
+    priority: ThumbnailRequestPriority,
+    size_px: u16,
+) -> Option<IconRaster> {
+    let thumbnail_raster = ThumbnailRequest::from_entry_metadata_with_mime(
+        WGPU_SHELL_PANE_ID,
+        Generation(0),
+        ItemId(0),
+        source.path.clone(),
+        source.modified_secs,
+        source.mime_type.clone(),
+        priority,
+    )
+    .and_then(|thumbnail_request| {
+        generate_thumbnail_with_external_thumbnailer_registry(
             cache_root,
             &thumbnail_request,
             thumbnailers,
         )
         .ok()
         .flatten()
-        .and_then(|thumbnail| rasterize_icon(thumbnail.path(), size_px as u32)) else {
-            continue;
-        };
-        rasters.push(raster);
+    })
+    .and_then(|thumbnail| rasterize_icon(thumbnail.path(), size_px as u32));
+    thumbnail_raster.or_else(|| folder_preview_direct_image_raster(source, size_px))
+}
+
+fn folder_preview_direct_image_raster(
+    source: &FolderPreviewThumbnailSource,
+    size_px: u16,
+) -> Option<IconRaster> {
+    let mime_type = source.mime_type.as_deref().unwrap_or_default();
+    if !mime_type.starts_with("image/") && !thumbnail_extension_may_be_direct_image(&source.path) {
+        return None;
     }
-    folder_preview_thumbnail_raster_from_children(&rasters, size_px as u32)
+    rasterize_icon(&source.path, size_px as u32)
+}
+
+fn thumbnail_extension_may_be_direct_image(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .map(str::to_ascii_lowercase)
+            .as_deref(),
+        Some("png" | "svg" | "webp" | "jpg" | "jpeg" | "bmp" | "gif" | "ico")
+    )
 }
 
 #[cfg(test)]
@@ -16705,9 +17356,11 @@ fn folder_preview_thumbnail_sources(directory: &Path) -> Vec<FolderPreviewThumbn
     let Ok(entries) = fs::read_dir(directory) else {
         return Vec::new();
     };
+    let mime_database = MimeDatabase::shared();
     let mut candidates = Vec::new();
     for entry in entries.flatten().take(DOLPHIN_FOLDER_PREVIEW_SCAN_LIMIT) {
         let path = entry.path();
+        let name = entry.file_name();
         if entry
             .file_name()
             .to_str()
@@ -16722,13 +17375,17 @@ fn folder_preview_thumbnail_sources(directory: &Path) -> Vec<FolderPreviewThumbn
         {
             continue;
         }
-        if !thumbnail_request_may_have_preview(&path, None) {
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        let name = name.to_string_lossy();
+        let mime_type = folder_preview_child_mime_type(&path, &name, mime_database);
+        if !thumbnail_request_may_have_preview(&path, mime_type.as_deref()) {
             continue;
         }
-        let Some(modified_secs) = entry
-            .metadata()
+        let Some(modified_secs) = metadata
+            .modified()
             .ok()
-            .and_then(|metadata| metadata.modified().ok())
             .and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok())
             .map(|duration| duration.as_secs())
         else {
@@ -16740,6 +17397,7 @@ fn folder_preview_thumbnail_sources(directory: &Path) -> Vec<FolderPreviewThumbn
             FolderPreviewThumbnailSource {
                 path,
                 modified_secs,
+                mime_type,
             },
         ));
     }
@@ -16753,6 +17411,27 @@ fn folder_preview_thumbnail_sources(directory: &Path) -> Vec<FolderPreviewThumbn
         .take(DOLPHIN_FOLDER_PREVIEW_MAX_IMAGES)
         .map(|(_, source)| source)
         .collect()
+}
+
+fn folder_preview_child_mime_type(
+    path: &Path,
+    name: &str,
+    mime_database: &MimeDatabase,
+) -> Option<String> {
+    let by_name = mime_database.mime_for_name(name, false, None);
+    if thumbnail_request_may_have_preview(path, Some(by_name.as_ref())) {
+        return Some(by_name.to_string());
+    }
+
+    let mut magic = [0u8; 512];
+    let len = fs::File::open(path)
+        .and_then(|mut file| file.read(&mut magic))
+        .ok()?;
+    if len == 0 {
+        return Some(by_name.to_string());
+    }
+    let by_magic = mime_database.mime_for_name(name, false, Some(&magic[..len]));
+    Some(by_magic.to_string())
 }
 
 #[cfg(test)]
@@ -16785,7 +17464,10 @@ fn folder_preview_thumbnail_raster_from_children(
     let target_size = target_size.clamp(16, 256);
     match rasters {
         [] => None,
-        [raster] => Some(raster.clone()),
+        [raster] => Some(dolphin_transform_single_preview_raster(
+            raster,
+            target_size,
+        )?),
         _ => {
             let slots = folder_preview_thumbnail_slots(rasters.len(), target_size);
             let mut pixels = vec![0; (target_size * target_size * 4) as usize];
@@ -16799,6 +17481,95 @@ fn folder_preview_thumbnail_raster_from_children(
             })
         }
     }
+}
+
+const DOLPHIN_PREVIEW_FRAME_LEFT_MARGIN: u32 = 3;
+const DOLPHIN_PREVIEW_FRAME_TOP_MARGIN: u32 = 2;
+const DOLPHIN_PREVIEW_FRAME_RIGHT_MARGIN: u32 = 3;
+const DOLPHIN_PREVIEW_FRAME_BOTTOM_MARGIN: u32 = 4;
+const DOLPHIN_SIZE_SMALL_MEDIUM: u32 = 22;
+
+fn dolphin_transform_single_preview_raster(
+    raster: &IconRaster,
+    target_size: u32,
+) -> Option<IconRaster> {
+    if target_size <= DOLPHIN_SIZE_SMALL_MEDIUM || icon_raster_has_effective_alpha(raster) {
+        return Some(raster.clone());
+    }
+
+    let content_width = target_size
+        .saturating_sub(DOLPHIN_PREVIEW_FRAME_LEFT_MARGIN + DOLPHIN_PREVIEW_FRAME_RIGHT_MARGIN)
+        .max(1);
+    let content_height = target_size
+        .saturating_sub(DOLPHIN_PREVIEW_FRAME_TOP_MARGIN + DOLPHIN_PREVIEW_FRAME_BOTTOM_MARGIN)
+        .max(1);
+    let (draw_width, draw_height) =
+        fit_size_to_rect(raster.width, raster.height, content_width, content_height);
+    let source =
+        image::RgbaImage::from_raw(raster.width, raster.height, raster.pixels.as_ref().to_vec())?;
+    let resized = image::imageops::resize(
+        &source,
+        draw_width,
+        draw_height,
+        image::imageops::FilterType::Lanczos3,
+    );
+    let mut pixels = vec![0; (target_size * target_size * 4) as usize];
+    paint_dolphin_preview_frame(&mut pixels, target_size, draw_width, draw_height);
+    let draw_x = DOLPHIN_PREVIEW_FRAME_LEFT_MARGIN + (content_width.saturating_sub(draw_width)) / 2;
+    let draw_y =
+        DOLPHIN_PREVIEW_FRAME_TOP_MARGIN + (content_height.saturating_sub(draw_height)) / 2;
+    copy_rgba_into(
+        resized.as_raw(),
+        draw_width,
+        draw_height,
+        &mut pixels,
+        target_size,
+        draw_x,
+        draw_y,
+    );
+    Some(IconRaster {
+        pixels: Arc::from(pixels),
+        width: target_size,
+        height: target_size,
+    })
+}
+
+fn icon_raster_has_effective_alpha(raster: &IconRaster) -> bool {
+    raster.pixels.chunks_exact(4).any(|pixel| pixel[3] < 255)
+}
+
+fn paint_dolphin_preview_frame(
+    pixels: &mut [u8],
+    target_size: u32,
+    draw_width: u32,
+    draw_height: u32,
+) {
+    let frame_width =
+        draw_width + DOLPHIN_PREVIEW_FRAME_LEFT_MARGIN + DOLPHIN_PREVIEW_FRAME_RIGHT_MARGIN;
+    let frame_height =
+        draw_height + DOLPHIN_PREVIEW_FRAME_TOP_MARGIN + DOLPHIN_PREVIEW_FRAME_BOTTOM_MARGIN;
+    let frame_x = (target_size.saturating_sub(frame_width)) / 2;
+    let frame_y = (target_size.saturating_sub(frame_height)) / 2;
+    fill_rgba_rect(
+        pixels,
+        target_size,
+        frame_x,
+        frame_y,
+        frame_width,
+        frame_height,
+        [0, 0, 0, 28],
+    );
+    let inner_x = frame_x + DOLPHIN_PREVIEW_FRAME_LEFT_MARGIN;
+    let inner_y = frame_y + DOLPHIN_PREVIEW_FRAME_TOP_MARGIN;
+    fill_rgba_rect(
+        pixels,
+        target_size,
+        inner_x,
+        inner_y,
+        draw_width,
+        draw_height,
+        [0, 0, 0, 0],
+    );
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -17083,14 +17854,72 @@ fn entry_path_for_thumbnail(directory: &Path, entry: &Entry) -> PathBuf {
         .unwrap_or_else(|| directory.join(entry.name.as_ref()))
 }
 
-fn folder_preview_thumbnail_rect(rect: ViewRect) -> ViewRect {
-    let inset_x = rect.width * 0.22;
-    let inset_top = rect.height * 0.24;
+fn folder_preview_role_cache_size(icon_size: f32) -> u16 {
+    if icon_size > 128.0 { 256 } else { 128 }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ItemPixmapLayout {
+    view_mode: ShellViewMode,
+    icon_rect: ViewRect,
+    text_rect: ViewRect,
+    text_midline_shift: f32,
+}
+
+impl ItemPixmapLayout {
+    fn from_item_layout(view_mode: ShellViewMode, layout: ItemLayout) -> Self {
+        Self {
+            view_mode,
+            icon_rect: layout.icon_rect,
+            text_rect: layout.text_rect,
+            text_midline_shift: 0.0,
+        }
+    }
+}
+
+fn folder_preview_role_draw_rect(layout: ItemPixmapLayout, raster: &IconRaster) -> ViewRect {
+    let area = folder_preview_role_slot(layout);
+    let (width, height) = fit_size_to_rect(
+        raster.width,
+        raster.height,
+        area.width.ceil().max(1.0) as u32,
+        area.height.ceil().max(1.0) as u32,
+    );
+    let width = width as f32;
+    let height = height as f32;
     ViewRect {
-        x: rect.x + inset_x,
-        y: rect.y + inset_top,
-        width: (rect.width - inset_x * 2.0).max(1.0),
-        height: (rect.height * 0.48).max(1.0),
+        x: area.x + (area.width - width) / 2.0,
+        y: area.y + (area.height - height) / 2.0,
+        width,
+        height,
+    }
+}
+
+fn folder_preview_role_shell_rect(layout: ItemPixmapLayout) -> ViewRect {
+    match layout.view_mode {
+        ShellViewMode::Icons => layout.icon_rect,
+        ShellViewMode::Compact | ShellViewMode::Details => {
+            let center_y =
+                layout.text_rect.y + layout.text_rect.height / 2.0 + layout.text_midline_shift;
+            ViewRect {
+                x: layout.icon_rect.x,
+                y: center_y - layout.icon_rect.height / 2.0,
+                width: layout.icon_rect.width.max(1.0),
+                height: layout.icon_rect.height.max(1.0),
+            }
+        }
+    }
+}
+
+fn folder_preview_role_slot(layout: ItemPixmapLayout) -> ViewRect {
+    let icon = folder_preview_role_shell_rect(layout);
+    let width = icon.width * 0.66;
+    let height = icon.height * 0.48;
+    ViewRect {
+        x: icon.x + (icon.width - width) / 2.0,
+        y: icon.y + icon.height * 0.20,
+        width: width.max(1.0),
+        height: height.max(1.0),
     }
 }
 
@@ -17101,16 +17930,9 @@ struct ShellThumbnailCandidate {
     mime_type: Option<String>,
 }
 
-#[derive(Clone, Debug)]
-struct ShellFolderPreviewCandidate {
-    path: PathBuf,
-    modified_secs: u64,
-}
-
 struct IconFrameBuilder<'a> {
     resolver: &'a mut FileIconResolver,
     thumbnails: &'a mut ThumbnailRasterResolver,
-    folder_previews: &'a mut FolderPreviewResolver,
     icon_rasters: &'a mut IconRasterResolver,
     raster_cache: &'a mut IconRasterCache,
     role_raster_cache: &'a mut IconRoleRasterCache,
@@ -17134,6 +17956,8 @@ struct IconFrameBuilder<'a> {
     folder_preview_quads: usize,
     folder_preview_deferred: usize,
     folder_preview_read_ahead_queued: usize,
+    folder_preview_ready_entries: usize,
+    folder_preview_ready_bytes: usize,
     cache_hits: usize,
     cache_misses: usize,
     deferred: usize,
@@ -17147,18 +17971,18 @@ impl<'a> IconFrameBuilder<'a> {
     fn new(
         resolver: &'a mut FileIconResolver,
         thumbnails: &'a mut ThumbnailRasterResolver,
-        folder_previews: &'a mut FolderPreviewResolver,
         icon_rasters: &'a mut IconRasterResolver,
         raster_cache: &'a mut IconRasterCache,
         role_raster_cache: &'a mut IconRoleRasterCache,
         surface_size: PhysicalSize<u32>,
         raster_miss_budget: usize,
+        folder_preview_ready_entries: usize,
+        folder_preview_ready_bytes: usize,
     ) -> Self {
         icon_rasters.drain_results(raster_cache);
         Self {
             resolver,
             thumbnails,
-            folder_previews,
             icon_rasters,
             raster_cache,
             role_raster_cache,
@@ -17182,6 +18006,8 @@ impl<'a> IconFrameBuilder<'a> {
             folder_preview_quads: 0,
             folder_preview_deferred: 0,
             folder_preview_read_ahead_queued: 0,
+            folder_preview_ready_entries,
+            folder_preview_ready_bytes,
             cache_hits: 0,
             cache_misses: 0,
             deferred: 0,
@@ -17304,54 +18130,50 @@ impl<'a> IconFrameBuilder<'a> {
         &mut self,
         directory: &Path,
         entry: &Entry,
-        rect: ViewRect,
+        folder_preview: Option<&FolderPreviewReady>,
+        pixmap_layout: ItemPixmapLayout,
         clip: ViewRect,
     ) -> bool {
         if entry.is_dir {
-            return self.push_folder_preview_or_icon(directory, entry, rect, clip);
+            return self.push_folder_preview_or_icon(
+                directory,
+                entry,
+                folder_preview,
+                pixmap_layout,
+                clip,
+            );
         }
-        if self.push_thumbnail(directory, entry, rect, clip) {
+        if self.push_thumbnail(directory, entry, pixmap_layout.icon_rect, clip) {
             return true;
         }
-        self.push_icon(directory, entry, rect, clip)
+        self.push_icon(directory, entry, pixmap_layout.icon_rect, clip)
     }
 
     fn push_folder_preview_or_icon(
         &mut self,
         directory: &Path,
         entry: &Entry,
-        rect: ViewRect,
+        folder_preview: Option<&FolderPreviewReady>,
+        pixmap_layout: ItemPixmapLayout,
         clip: ViewRect,
     ) -> bool {
-        let icon_drawn = self.push_icon(directory, entry, rect, clip);
-        if rect.width.max(rect.height) < 32.0 {
-            return icon_drawn;
-        }
         let path = entry_path_for_thumbnail(directory, entry);
-        let Some(modified_secs) = entry.modified_secs else {
-            return icon_drawn;
+        let Some(_modified_secs) = entry.modified_secs else {
+            return self.push_icon(directory, entry, pixmap_layout.icon_rect, clip);
         };
         if !entry.metadata_complete || is_network_path(&path) {
-            return icon_drawn;
+            return self.push_icon(directory, entry, pixmap_layout.icon_rect, clip);
         }
-        let preview_rect = folder_preview_thumbnail_rect(rect);
+        let drew_folder_shell = self.push_icon(directory, entry, pixmap_layout.icon_rect, clip);
+        let Some(preview) = folder_preview else {
+            self.folder_preview_deferred += 1;
+            return drew_folder_shell;
+        };
+        let preview_rect = folder_preview_role_draw_rect(pixmap_layout, &preview.raster);
         let Some(screen) = intersect_rect(preview_rect, clip) else {
-            return true;
+            return drew_folder_shell;
         };
-        let size_px = icon_cache_size(
-            preview_rect
-                .width
-                .max(preview_rect.height)
-                .clamp(16.0, 256.0),
-        );
-        let preview = match self.folder_previews.resolve(&path, modified_secs, size_px) {
-            FolderPreviewResolveState::Ready(preview) => preview,
-            FolderPreviewResolveState::Pending => {
-                self.folder_preview_deferred += 1;
-                return icon_drawn;
-            }
-            FolderPreviewResolveState::Failed => return icon_drawn,
-        };
+        let size_px = preview.size_px;
         let key = IconRasterCacheKey::folder_preview(path, size_px, preview.stamp);
         let raster = if let Some(raster) = self.raster_cache.get(&key) {
             self.cache_hits += 1;
@@ -17359,11 +18181,11 @@ impl<'a> IconFrameBuilder<'a> {
         } else {
             self.cache_misses += 1;
             self.folder_previews_loaded += 1;
-            self.raster_cache.insert(key, preview.raster)
+            self.raster_cache.insert(key, preview.raster.clone())
         };
         self.copy_raster_to_atlas(raster, preview_rect, screen, IconDrawLayer::Content);
         self.folder_preview_quads += 1;
-        true
+        drew_folder_shell
     }
 
     fn push_thumbnail(
@@ -17516,19 +18338,6 @@ impl<'a> IconFrameBuilder<'a> {
         }
     }
 
-    fn queue_folder_preview_read_ahead(
-        &mut self,
-        candidate: ShellFolderPreviewCandidate,
-        size_px: u16,
-    ) {
-        if self
-            .folder_previews
-            .queue_deferred(&candidate.path, candidate.modified_secs, size_px)
-        {
-            self.folder_preview_read_ahead_queued += 1;
-        }
-    }
-
     fn copy_raster_to_atlas(
         &mut self,
         raster: IconRaster,
@@ -17578,8 +18387,8 @@ impl<'a> IconFrameBuilder<'a> {
         let cache_bytes = self.raster_cache.bytes();
         let thumbnail_ready_entries = self.thumbnails.ready_len();
         let thumbnail_ready_bytes = self.thumbnails.ready_bytes();
-        let folder_preview_ready_entries = self.folder_previews.ready_len();
-        let folder_preview_ready_bytes = self.folder_previews.ready_bytes();
+        let folder_preview_ready_entries = self.folder_preview_ready_entries;
+        let folder_preview_ready_bytes = self.folder_preview_ready_bytes;
         let atlas_uploads = self.uploads.len();
         IconFrame {
             vertices,
@@ -17693,7 +18502,6 @@ struct IconRenderer {
     last_icon_upload_keys: HashSet<IconAtlasUploadKey>,
     resolver: FileIconResolver,
     thumbnails: ThumbnailRasterResolver,
-    folder_previews: FolderPreviewResolver,
     icon_rasters: IconRasterResolver,
     raster_cache: IconRasterCache,
     role_raster_cache: IconRoleRasterCache,
@@ -17788,7 +18596,6 @@ impl IconRenderer {
             last_icon_upload_keys: HashSet::new(),
             resolver: FileIconResolver::new(),
             thumbnails: ThumbnailRasterResolver::new(),
-            folder_previews: FolderPreviewResolver::new(),
             icon_rasters: IconRasterResolver::new(),
             raster_cache: IconRasterCache::new(ICON_CACHE_MAX_BYTES),
             role_raster_cache: IconRoleRasterCache::new(ICON_ROLE_RASTER_CACHE_MAX_BYTES),
@@ -18403,6 +19210,7 @@ struct TextFrameBuilder<'a> {
     raster_miss_budget: usize,
     raster_us: u128,
     atlas_pixels: Vec<u8>,
+    text_midline_shift: f32,
 }
 
 impl<'a> TextFrameBuilder<'a> {
@@ -18420,6 +19228,8 @@ impl<'a> TextFrameBuilder<'a> {
         let atlas_width = atlas_cache.width;
         let max_line_height = (TEXT_LINE_HEIGHT * text_scale_factor).round().max(1.0);
         let max_font_size = (TEXT_FONT_SIZE * max_line_height / TEXT_LINE_HEIGHT).max(1.0);
+        let text_midline_shift =
+            dolphin_text_midline_shift_for_font(font_system, max_font_size, max_line_height);
         text_buffer.set_metrics(Metrics::new(max_font_size, max_line_height));
         text_buffer.set_wrap(Wrap::WordOrGlyph);
         Self {
@@ -18442,7 +19252,12 @@ impl<'a> TextFrameBuilder<'a> {
                 .unwrap_or(TEXT_RASTER_MISS_BUDGET_PER_FRAME),
             raster_us: 0,
             atlas_pixels,
+            text_midline_shift,
         }
+    }
+
+    fn dolphin_midline_shift(&self) -> f32 {
+        self.text_midline_shift
     }
 
     fn push_label(&mut self, label: &str, rect: ViewRect, clip: ViewRect, color: TextColor) {
@@ -18476,6 +19291,41 @@ impl<'a> TextFrameBuilder<'a> {
         alignment: LabelAlignment,
     ) {
         self.push_label_aligned_wrapped(label, rect, clip, color, alignment, LabelWrap::None);
+    }
+
+    fn push_filename_label_aligned_no_wrap(
+        &mut self,
+        label: &str,
+        rect: ViewRect,
+        clip: ViewRect,
+        color: TextColor,
+        alignment: LabelAlignment,
+    ) {
+        let display = dolphin_elide_filename_to_width(label, rect.width, self.max_font_size);
+        self.push_label_aligned_wrapped(&display, rect, clip, color, alignment, LabelWrap::None);
+    }
+
+    fn push_filename_label_wrapped(
+        &mut self,
+        label: &str,
+        rect: ViewRect,
+        clip: ViewRect,
+        color: TextColor,
+    ) {
+        let display = dolphin_elide_wrapped_filename_to_rect(
+            label,
+            rect.width,
+            rect.height,
+            self.max_font_size,
+        );
+        self.push_label_aligned_wrapped(
+            &display,
+            rect,
+            clip,
+            color,
+            LabelAlignment::Center,
+            LabelWrap::WordOrGlyph,
+        );
     }
 
     fn push_label_aligned_wrapped(
@@ -18519,14 +19369,36 @@ impl<'a> TextFrameBuilder<'a> {
         self.raster_miss_budget = budget;
     }
 
-    fn prewarm_label_aligned_no_wrap(
+    fn prewarm_filename_label_aligned_no_wrap(
         &mut self,
         label: &str,
         rect: ViewRect,
         color: TextColor,
         alignment: LabelAlignment,
     ) -> LabelCacheOutcome {
-        self.prewarm_label_aligned_wrapped(label, rect, color, alignment, LabelWrap::None)
+        let display = dolphin_elide_filename_to_width(label, rect.width, self.max_font_size);
+        self.prewarm_label_aligned_wrapped(&display, rect, color, alignment, LabelWrap::None)
+    }
+
+    fn prewarm_filename_label_wrapped(
+        &mut self,
+        label: &str,
+        rect: ViewRect,
+        color: TextColor,
+    ) -> LabelCacheOutcome {
+        let display = dolphin_elide_wrapped_filename_to_rect(
+            label,
+            rect.width,
+            rect.height,
+            self.max_font_size,
+        );
+        self.prewarm_label_aligned_wrapped(
+            &display,
+            rect,
+            color,
+            LabelAlignment::Center,
+            LabelWrap::WordOrGlyph,
+        )
     }
 
     fn prewarm_label_aligned_wrapped(
@@ -19137,12 +20009,13 @@ fn prepare_scene_frame(
             let mut icon_builder = IconFrameBuilder::new(
                 &mut icon_renderer.resolver,
                 &mut icon_renderer.thumbnails,
-                &mut icon_renderer.folder_previews,
                 &mut icon_renderer.icon_rasters,
                 &mut icon_renderer.raster_cache,
                 &mut icon_renderer.role_raster_cache,
                 size,
                 icon_raster_miss_budget_for_frame(reason),
+                scene.folder_preview_roles.borrow().ready_len(),
+                scene.folder_preview_roles.borrow().ready_bytes(),
             );
             let scene_frame = scene.build_frame(
                 size,
@@ -19194,12 +20067,13 @@ fn prepare_scene_frame(
             let mut icon_builder = IconFrameBuilder::new(
                 &mut icon_renderer.resolver,
                 &mut icon_renderer.thumbnails,
-                &mut icon_renderer.folder_previews,
                 &mut icon_renderer.icon_rasters,
                 &mut icon_renderer.raster_cache,
                 &mut icon_renderer.role_raster_cache,
                 size,
                 icon_raster_miss_budget_for_frame(reason),
+                scene.folder_preview_roles.borrow().ready_len(),
+                scene.folder_preview_roles.borrow().ready_bytes(),
             );
             let scene_frame = scene.build_frame(size, &mut text_builder, &mut icon_builder, None);
             let text_frame = text_builder.finish();
@@ -19813,6 +20687,176 @@ fn estimated_label_raster_width(label: &str, font_size: f32) -> f32 {
     let width = label.chars().map(estimated_name_char_width).sum::<f32>() * scale
         + TEXT_PADDING as f32 * 2.0;
     width.ceil().max(1.0)
+}
+
+fn estimated_text_width_without_padding(label: &str, font_size: f32) -> f32 {
+    let scale = font_size / TEXT_FONT_SIZE.max(1.0);
+    label.chars().map(estimated_name_char_width).sum::<f32>() * scale
+}
+
+fn dolphin_elide_wrapped_filename_to_rect(
+    label: &str,
+    width: f32,
+    height: f32,
+    font_size: f32,
+) -> Cow<'_, str> {
+    let line_height = (font_size / TEXT_FONT_SIZE.max(1.0)) * TEXT_LINE_HEIGHT;
+    let line_count = (height / line_height.max(1.0))
+        .floor()
+        .max(1.0)
+        .min(DOLPHIN_ICONS_MAX_TEXT_LINES as f32) as usize;
+    let available = dolphin_text_available_width(width);
+    let Some(last_line_start) =
+        dolphin_wrapped_filename_last_line_start(label, available, line_count, font_size)
+    else {
+        return Cow::Borrowed(label);
+    };
+
+    let mut display = String::from(&label[..last_line_start]);
+    let last_line =
+        dolphin_elide_filename_to_available_width(&label[last_line_start..], available, font_size);
+    display.push_str(&last_line);
+    Cow::Owned(display)
+}
+
+fn dolphin_elide_filename_to_width(label: &str, width: f32, font_size: f32) -> Cow<'_, str> {
+    dolphin_elide_filename_to_available_width(label, dolphin_text_available_width(width), font_size)
+}
+
+fn dolphin_text_available_width(width: f32) -> f32 {
+    (width - TEXT_PADDING as f32 * 2.0).max(1.0)
+}
+
+fn dolphin_elide_filename_to_available_width(
+    label: &str,
+    available: f32,
+    font_size: f32,
+) -> Cow<'_, str> {
+    if estimated_text_width_without_padding(label, font_size) <= available {
+        return Cow::Borrowed(label);
+    }
+
+    const ELLIPSIS: &str = "...";
+    let ellipsis_width = estimated_text_width_without_padding(ELLIPSIS, font_size);
+    let Some((base, extension)) = filename_base_and_extension(label) else {
+        return Cow::Owned(elide_text_right(label, available, font_size));
+    };
+
+    let extension_width = estimated_text_width_without_padding(extension, font_size);
+    if extension_width + ellipsis_width < available {
+        let base_budget = (available - extension_width - ellipsis_width).max(1.0);
+        let mut result = take_prefix_to_width(base, base_budget, font_size);
+        result.push_str(ELLIPSIS);
+        result.push_str(extension);
+        return Cow::Owned(result);
+    }
+
+    Cow::Owned(elide_text_right(label, available, font_size))
+}
+
+fn dolphin_wrapped_filename_last_line_start(
+    label: &str,
+    available_width: f32,
+    max_lines: usize,
+    font_size: f32,
+) -> Option<usize> {
+    let max_lines = max_lines.max(1);
+    let mut line_start = 0;
+    for line_index in 0..max_lines {
+        let line_end =
+            dolphin_wrapped_filename_line_end(label, line_start, available_width, font_size);
+        if line_end >= label.len() {
+            return None;
+        }
+        if line_index + 1 == max_lines {
+            return Some(line_start);
+        }
+        line_start = line_end;
+    }
+    Some(line_start)
+}
+
+fn dolphin_wrapped_filename_line_count(
+    label: &str,
+    available_width: f32,
+    max_lines: usize,
+    font_size: f32,
+) -> usize {
+    let max_lines = max_lines.max(1);
+    let mut line_start = 0;
+    let mut lines = 0;
+    while line_start < label.len() && lines < max_lines {
+        lines += 1;
+        let line_end =
+            dolphin_wrapped_filename_line_end(label, line_start, available_width, font_size);
+        if line_end >= label.len() {
+            break;
+        }
+        line_start = line_end;
+    }
+    lines.max(1)
+}
+
+fn dolphin_wrapped_filename_line_end(
+    label: &str,
+    start: usize,
+    available_width: f32,
+    font_size: f32,
+) -> usize {
+    if start >= label.len() {
+        return label.len();
+    }
+    let available_width = available_width.max(1.0);
+    let scale = font_size / TEXT_FONT_SIZE.max(1.0);
+    let mut width = 0.0;
+    for (offset, ch) in label[start..].char_indices() {
+        let byte = start + offset;
+        let next = byte + ch.len_utf8();
+        let char_width = estimated_name_char_width(ch) * scale;
+        if width + char_width > available_width {
+            return if byte == start { next } else { byte };
+        }
+        width += char_width;
+    }
+    label.len()
+}
+
+fn filename_base_and_extension(label: &str) -> Option<(&str, &str)> {
+    let dot = label.rfind('.')?;
+    if dot == 0 || dot + 1 >= label.len() {
+        return None;
+    }
+    let (base, extension) = label.split_at(dot);
+    (!base.is_empty() && extension.len() > 1).then_some((base, extension))
+}
+
+fn elide_text_right(label: &str, available: f32, font_size: f32) -> String {
+    const ELLIPSIS: &str = "...";
+    let ellipsis_width = estimated_text_width_without_padding(ELLIPSIS, font_size);
+    if ellipsis_width >= available {
+        return ELLIPSIS.to_string();
+    }
+    let mut result = take_prefix_to_width(label, available - ellipsis_width, font_size);
+    result.push_str(ELLIPSIS);
+    result
+}
+
+fn take_prefix_to_width(label: &str, max_width: f32, font_size: f32) -> String {
+    let scale = font_size / TEXT_FONT_SIZE.max(1.0);
+    let mut width = 0.0;
+    let mut result = String::new();
+    for ch in label.chars() {
+        let char_width = estimated_name_char_width(ch) * scale;
+        if width + char_width > max_width && !result.is_empty() {
+            break;
+        }
+        if width + char_width > max_width {
+            break;
+        }
+        width += char_width;
+        result.push(ch);
+    }
+    result
 }
 
 fn shaping_for_label(label: &str, wrap: LabelWrap) -> Shaping {
@@ -21056,7 +22100,19 @@ fn required_compact_item_width(options: CompactLayoutOptions, text_width: f32) -
 }
 
 fn compact_entry_text_width(entry: &Entry, scale_factor: f32) -> f32 {
-    f32::from(entry.name_width_units) * 9.0 * scale_factor
+    estimated_text_width_without_padding(
+        entry.name.as_ref(),
+        TEXT_FONT_SIZE * normalized_scale_factor(scale_factor),
+    )
+}
+
+fn icons_entry_text_line_count(entry: &Entry, scale_factor: f32, available_width: f32) -> usize {
+    dolphin_wrapped_filename_line_count(
+        entry.name.as_ref(),
+        available_width,
+        DOLPHIN_ICONS_MAX_TEXT_LINES,
+        TEXT_FONT_SIZE * normalized_scale_factor(scale_factor),
+    )
 }
 
 fn estimated_name_char_width(ch: char) -> f32 {
@@ -22394,6 +23450,48 @@ fn text_metrics_for_label_height(
     Metrics::new(font_size, line_height)
 }
 
+fn dolphin_text_midline_shift_for_font(
+    font_system: &mut FontSystem,
+    font_size: f32,
+    line_height: f32,
+) -> f32 {
+    let query = fontdb::Query {
+        families: &[Family::SansSerif],
+        weight: Weight::NORMAL,
+        stretch: Stretch::Normal,
+        style: Style::Normal,
+    };
+    let Some(font_id) = font_system.db().query(&query) else {
+        return 0.0;
+    };
+    let Some(font) = font_system.get_font(font_id, Weight::NORMAL) else {
+        return 0.0;
+    };
+    let metrics = font.metrics();
+    dolphin_text_midline_shift_from_metrics(
+        line_height,
+        font_size,
+        metrics.units_per_em,
+        metrics.descent,
+        metrics.cap_height,
+    )
+}
+
+fn dolphin_text_midline_shift_from_metrics(
+    line_height: f32,
+    font_size: f32,
+    units_per_em: u16,
+    descent: f32,
+    cap_height: Option<f32>,
+) -> f32 {
+    let units_per_em = units_per_em.max(1) as f32;
+    let descent_px = (-descent / units_per_em * font_size).max(0.0);
+    let cap_height_px = cap_height
+        .map(|height| (height / units_per_em * font_size).max(0.0))
+        .unwrap_or(font_size * 0.70);
+    line_height / 2.0 - descent_px - cap_height_px / 2.0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -22654,6 +23752,7 @@ mod tests {
             visible_slots: ShellPaneVisibleSlotPools::default(),
             visible_slot_stats: ShellVisibleItemSlotStats::default(),
             metadata_roles: ShellMetadataRoleRuntime::new(),
+            folder_preview_roles: RefCell::new(ShellFolderPreviewRoleRuntime::new()),
             icon_role_read_ahead_queue: RefCell::new(VecDeque::new()),
             icon_role_read_ahead_seen: RefCell::new(HashSet::new()),
             internal_drag: None,
@@ -24885,6 +25984,194 @@ mod tests {
     }
 
     #[test]
+    fn render_damage_bounds_visible_folder_preview_role_result() {
+        let scene = test_scene(
+            vec![test_entry_with_mime_and_modified(
+                "album",
+                true,
+                "inode/directory",
+                Some(7),
+            )],
+            ShellViewMode::Icons,
+        );
+        let size = PhysicalSize::new(700, 320);
+        let album = PathBuf::from("/tmp/album");
+        let projections = ShellPaneId::ALL
+            .into_iter()
+            .filter_map(|kind| scene.pane_projection(kind, size))
+            .collect::<Vec<_>>();
+        let initial = ShellRenderDamageSnapshot::from_scene(
+            &scene,
+            size,
+            &projections,
+            ShellRenderDirtyKey::from_scene(&scene, size),
+        );
+
+        scene.folder_preview_roles.borrow_mut().insert_ready(
+            FolderPreviewRoleKey::new(album.clone(), 7, 48),
+            FolderPreviewReady {
+                stamp: 11,
+                size_px: 48,
+                raster: test_icon_raster(2, 3),
+            },
+        );
+        let projections = ShellPaneId::ALL
+            .into_iter()
+            .filter_map(|kind| scene.pane_projection(kind, size))
+            .collect::<Vec<_>>();
+        let changed = ShellRenderDamageSnapshot::from_scene(
+            &scene,
+            size,
+            &projections,
+            ShellRenderDirtyKey::from_scene(&scene, size),
+        );
+        let rects = folder_preview_damage_rects_for_changed_keys(
+            &scene,
+            &projections,
+            &[FolderPreviewRoleKey::new(album.clone(), 7, 48)],
+        );
+        let item = projections[0].visible_items[0];
+        let expected_rect = pane_content_rect_to_screen(
+            folder_preview_role_shell_rect(ItemPixmapLayout::from_item_layout(
+                projections[0].view.view_mode,
+                item.layout,
+            )),
+            &projections[0],
+        );
+
+        let damage =
+            ShellRenderDamage::between_with_async_damage(Some(&initial), &changed, false, rects);
+
+        assert_eq!(damage.kind, ShellRenderDamageKind::Bounded);
+        assert_eq!(damage.rect_count, 1);
+        assert_eq!(damage.bounds, Some(expected_rect));
+        assert!(damage.area_px > 0.0);
+        assert!(
+            damage.area_px
+                < rect_area(pane_content_rect_to_screen(
+                    item.layout.visual_rect,
+                    &projections[0]
+                ))
+        );
+        assert!(damage.area_px < rect_area(full_surface_rect(size)));
+    }
+
+    #[test]
+    fn render_damage_bounds_folder_preview_role_result_with_hover_transition() {
+        let mut scene = test_scene(
+            vec![test_entry_with_mime_and_modified(
+                "album",
+                true,
+                "inode/directory",
+                Some(7),
+            )],
+            ShellViewMode::Icons,
+        );
+        let size = PhysicalSize::new(700, 320);
+        let album = PathBuf::from("/tmp/album");
+        let projections = ShellPaneId::ALL
+            .into_iter()
+            .filter_map(|kind| scene.pane_projection(kind, size))
+            .collect::<Vec<_>>();
+        let initial = ShellRenderDamageSnapshot::from_scene(
+            &scene,
+            size,
+            &projections,
+            ShellRenderDirtyKey::from_scene(&scene, size),
+        );
+
+        scene.folder_preview_roles.borrow_mut().insert_ready(
+            FolderPreviewRoleKey::new(album.clone(), 7, 48),
+            FolderPreviewReady {
+                stamp: 11,
+                size_px: 48,
+                raster: test_icon_raster(2, 3),
+            },
+        );
+        assert!(scene.set_hovered_item(Some(ShellPaneItemTarget {
+            pane: ShellPaneId::FIRST,
+            index: 0,
+        })));
+        let projections = ShellPaneId::ALL
+            .into_iter()
+            .filter_map(|kind| scene.pane_projection(kind, size))
+            .collect::<Vec<_>>();
+        let changed = ShellRenderDamageSnapshot::from_scene(
+            &scene,
+            size,
+            &projections,
+            ShellRenderDirtyKey::from_scene(&scene, size),
+        );
+        let rects = folder_preview_damage_rects_for_changed_keys(
+            &scene,
+            &projections,
+            &[FolderPreviewRoleKey::new(album.clone(), 7, 48)],
+        );
+
+        let damage =
+            ShellRenderDamage::between_with_async_damage(Some(&initial), &changed, false, rects);
+
+        assert_eq!(damage.kind, ShellRenderDamageKind::Bounded);
+        assert!(damage.rect_count >= 1);
+        assert!(damage.area_px > 0.0);
+        assert!(damage.area_px < rect_area(full_surface_rect(size)));
+    }
+
+    #[test]
+    fn render_damage_is_clean_for_offscreen_folder_preview_role_result() {
+        let scene = test_scene(
+            vec![test_entry_with_mime_and_modified(
+                "album",
+                true,
+                "inode/directory",
+                Some(7),
+            )],
+            ShellViewMode::Icons,
+        );
+        let size = PhysicalSize::new(700, 320);
+        let offscreen = PathBuf::from("/tmp/offscreen");
+        let projections = ShellPaneId::ALL
+            .into_iter()
+            .filter_map(|kind| scene.pane_projection(kind, size))
+            .collect::<Vec<_>>();
+        let initial = ShellRenderDamageSnapshot::from_scene(
+            &scene,
+            size,
+            &projections,
+            ShellRenderDirtyKey::from_scene(&scene, size),
+        );
+
+        scene.folder_preview_roles.borrow_mut().insert_ready(
+            FolderPreviewRoleKey::new(offscreen.clone(), 7, 48),
+            FolderPreviewReady {
+                stamp: 11,
+                size_px: 48,
+                raster: test_icon_raster(2, 3),
+            },
+        );
+        let projections = ShellPaneId::ALL
+            .into_iter()
+            .filter_map(|kind| scene.pane_projection(kind, size))
+            .collect::<Vec<_>>();
+        let changed = ShellRenderDamageSnapshot::from_scene(
+            &scene,
+            size,
+            &projections,
+            ShellRenderDirtyKey::from_scene(&scene, size),
+        );
+        let rects = folder_preview_damage_rects_for_changed_keys(
+            &scene,
+            &projections,
+            &[FolderPreviewRoleKey::new(offscreen.clone(), 7, 48)],
+        );
+
+        let damage =
+            ShellRenderDamage::between_with_async_damage(Some(&initial), &changed, false, rects);
+
+        assert_eq!(damage.kind, ShellRenderDamageKind::Clean);
+    }
+
+    #[test]
     fn render_damage_bounds_rubber_band_transition() {
         let mut scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
         let size = PhysicalSize::new(700, 320);
@@ -26055,7 +27342,7 @@ mod tests {
             1
         );
         assert_eq!(
-            scene.folder_preview_candidate_count_for_projection(&projection),
+            scene.folder_preview_role_candidate_count_for_projection(&projection),
             1
         );
     }
@@ -26080,12 +27367,723 @@ mod tests {
             .pane_projection(ShellPaneId::FIRST, PhysicalSize::new(700, 320))
             .unwrap();
 
-        let candidate = scene
-            .folder_preview_candidate_for_pane_entry(projection.view, 0)
+        let request = scene
+            .folder_preview_role_request_for_pane_entry(
+                projection.view,
+                0,
+                48,
+                ThumbnailRequestPriority::Visible,
+            )
             .unwrap();
 
-        assert_eq!(candidate.modified_secs, 7);
+        assert_eq!(request.key.directory_modified_secs, 7);
+        assert_eq!(request.key.path, album);
         assert_ne!(folder_preview_thumbnail_stamp(&album, 7), 7);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn folder_preview_role_request_size_matches_render_lookup_size() {
+        let root = test_dir("directory-preview-size-key");
+        let album = root.join("album");
+        fs::create_dir_all(&album).unwrap();
+        fs::write(album.join("cover.png"), b"preview").unwrap();
+        let scene = test_scene(
+            vec![test_entry_with_mime_and_modified(
+                "album",
+                true,
+                "inode/directory",
+                Some(7),
+            )],
+            ShellViewMode::Icons,
+        );
+        let mut scene = scene;
+        scene.panes[ShellPaneId::FIRST].path = root.clone();
+        let projection = scene
+            .pane_projection(ShellPaneId::FIRST, PhysicalSize::new(700, 320))
+            .unwrap();
+        let item = projection.visible_items[0];
+        let entry_index = projection.view.filtered_indexes[item.layout.model_index];
+        let pixmap_layout =
+            ItemPixmapLayout::from_item_layout(projection.view.view_mode, item.layout);
+        let expected_size = scene.folder_preview_role_size_px_for_item(pixmap_layout);
+        assert_eq!(expected_size, 128);
+        let request = scene
+            .folder_preview_role_request_for_pane_entry(
+                projection.view,
+                entry_index,
+                expected_size,
+                ThumbnailRequestPriority::Visible,
+            )
+            .unwrap();
+
+        assert_eq!(request.key.size_px, expected_size);
+        scene.folder_preview_roles.borrow_mut().insert_ready(
+            request.key,
+            FolderPreviewReady {
+                stamp: 11,
+                size_px: expected_size,
+                raster: test_icon_raster(2, 3),
+            },
+        );
+        assert!(
+            scene
+                .folder_preview_role_for_pane_entry(projection.view, entry_index, pixmap_layout)
+                .is_some()
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn folder_preview_role_runs_in_compact_below_32px_icon_size_like_dolphin() {
+        let root = test_dir("directory-preview-compact-small-icon");
+        let album = root.join("album");
+        fs::create_dir_all(&album).unwrap();
+        fs::write(album.join("cover.png"), b"preview").unwrap();
+        let mut scene = test_scene(
+            vec![test_entry_with_mime_and_modified(
+                "album",
+                true,
+                "inode/directory",
+                Some(7),
+            )],
+            ShellViewMode::Compact,
+        );
+        scene.panes[ShellPaneId::FIRST].path = root.clone();
+        let projection = scene
+            .pane_projection(ShellPaneId::FIRST, PhysicalSize::new(700, 320))
+            .unwrap();
+        let item = projection.visible_items[0];
+        assert!(
+            item.layout
+                .icon_rect
+                .width
+                .max(item.layout.icon_rect.height)
+                < 32.0
+        );
+        let entry_index = projection.view.filtered_indexes[item.layout.model_index];
+        let pixmap_layout =
+            ItemPixmapLayout::from_item_layout(projection.view.view_mode, item.layout);
+        let expected_size = scene.folder_preview_role_size_px_for_item(pixmap_layout);
+        assert_eq!(expected_size, 128);
+
+        let stats = scene.update_folder_preview_roles_for_projections(&[projection.clone()]);
+        assert_eq!(stats.visible, 1);
+        assert_eq!(stats.queued, 1);
+
+        scene.folder_preview_roles.borrow_mut().insert_ready(
+            FolderPreviewRoleKey::new(album, 7, expected_size),
+            FolderPreviewReady {
+                stamp: 11,
+                size_px: expected_size,
+                raster: test_icon_raster(28, 20),
+            },
+        );
+
+        assert!(
+            scene
+                .folder_preview_role_for_pane_entry(projection.view, entry_index, pixmap_layout)
+                .is_some()
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn folder_preview_role_cache_size_matches_dolphin_preview_job_cache_size() {
+        assert_eq!(folder_preview_role_cache_size(16.0), 128);
+        assert_eq!(folder_preview_role_cache_size(128.0), 128);
+        assert_eq!(folder_preview_role_cache_size(128.1), 256);
+        assert_eq!(folder_preview_role_cache_size(256.0), 256);
+    }
+
+    #[test]
+    fn folder_preview_role_uses_closest_ready_size_while_zoom_request_is_pending() {
+        let root = test_dir("directory-preview-closest-size");
+        let album = root.join("album");
+        fs::create_dir_all(&album).unwrap();
+        fs::write(album.join("cover.png"), b"preview").unwrap();
+        let mut scene = test_scene(
+            vec![test_entry_with_mime_and_modified(
+                "album",
+                true,
+                "inode/directory",
+                Some(7),
+            )],
+            ShellViewMode::Icons,
+        );
+        scene.panes[ShellPaneId::FIRST].path = root.clone();
+        scene.folder_preview_roles.borrow_mut().insert_ready(
+            FolderPreviewRoleKey::new(album, 7, 48),
+            FolderPreviewReady {
+                stamp: 11,
+                size_px: 48,
+                raster: test_icon_raster(32, 24),
+            },
+        );
+        let projection = scene
+            .pane_projection(ShellPaneId::FIRST, PhysicalSize::new(700, 320))
+            .unwrap();
+        let entry_index = projection.view.filtered_indexes[0];
+        let pixmap_layout = ItemPixmapLayout {
+            view_mode: ShellViewMode::Icons,
+            icon_rect: ViewRect {
+                x: 16.0,
+                y: 2.0,
+                width: 128.0,
+                height: 128.0,
+            },
+            text_rect: ViewRect {
+                x: 2.0,
+                y: 132.0,
+                width: 156.0,
+                height: 18.0,
+            },
+            text_midline_shift: 0.0,
+        };
+        let preview = scene
+            .folder_preview_role_for_pane_entry(projection.view, entry_index, pixmap_layout)
+            .unwrap();
+
+        assert_eq!(preview.size_px, 48);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn zoom_clears_folder_preview_request_lifecycle_but_keeps_ready_pixmap() {
+        let root = test_dir("directory-preview-zoom-lifecycle");
+        let album = root.join("album");
+        fs::create_dir_all(&album).unwrap();
+        let mut scene = test_scene(
+            vec![test_entry_with_mime_and_modified(
+                "album",
+                true,
+                "inode/directory",
+                Some(7),
+            )],
+            ShellViewMode::Icons,
+        );
+        scene.panes[ShellPaneId::FIRST].path = root.clone();
+        let old_key = FolderPreviewRoleKey::new(album.clone(), 7, 48);
+        let new_key = FolderPreviewRoleKey::new(album.clone(), 7, 96);
+        {
+            let mut roles = scene.folder_preview_roles.borrow_mut();
+            roles.insert_ready(
+                old_key.clone(),
+                FolderPreviewReady {
+                    stamp: 11,
+                    size_px: 48,
+                    raster: test_icon_raster(2, 3),
+                },
+            );
+            roles.failed.insert(new_key.clone());
+            roles.finished.insert(new_key.clone());
+            roles
+                .pending
+                .insert(new_key.clone(), ThumbnailRequestPriority::Visible);
+            roles.active.insert(new_key.clone());
+        }
+
+        assert!(scene.zoom(ZoomAction::In, PhysicalSize::new(700, 320)));
+
+        let roles = scene.folder_preview_roles.borrow();
+        assert!(roles.ready.contains_key(&old_key));
+        assert!(roles.failed.is_empty());
+        assert!(roles.finished.is_empty());
+        assert!(roles.pending.is_empty());
+        assert!(roles.active.is_empty());
+        assert!(roles.preview_or_closest(&album, 7, 96).is_some());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn folder_preview_role_rejects_late_old_size_result_after_zoom_size_changes() {
+        let root = PathBuf::from("/tmp/fika-directory-preview-late-zoom-result");
+        let old_key = FolderPreviewRoleKey::new(root.clone(), 7, 48);
+        let new_key = FolderPreviewRoleKey::new(root.clone(), 7, 96);
+        let (request_tx, _request_rx) = mpsc::channel();
+        let (result_tx, result_rx) = mpsc::channel();
+        let mut runtime = ShellFolderPreviewRoleRuntime {
+            ready: HashMap::new(),
+            failed: HashSet::new(),
+            pending: HashMap::from([(old_key.clone(), ThumbnailRequestPriority::Visible)]),
+            finished: HashSet::new(),
+            active: HashSet::from([new_key]),
+            frame: 0,
+            ready_bytes: 0,
+            ready_max_bytes: THUMBNAIL_READY_CACHE_MAX_BYTES,
+            request_tx: Some(request_tx),
+            result_rx,
+        };
+        result_tx
+            .send(FolderPreviewRoleResult {
+                key: old_key.clone(),
+                preview: Some(FolderPreviewReady {
+                    stamp: 11,
+                    size_px: 48,
+                    raster: test_icon_raster(2, 3),
+                }),
+            })
+            .unwrap();
+
+        let stats = runtime.drain_results();
+
+        assert_eq!(stats.results, 1);
+        assert_eq!(stats.applied, 0);
+        assert!(stats.changes.is_empty());
+        assert!(!runtime.ready.contains_key(&old_key));
+        assert!(runtime.preview_or_closest(&root, 7, 96).is_none());
+    }
+
+    #[test]
+    fn folder_preview_role_draw_rect_keeps_aspect_inside_folder_shell_slot() {
+        let layout = ItemPixmapLayout {
+            view_mode: ShellViewMode::Icons,
+            icon_rect: ViewRect {
+                x: 50.0,
+                y: 20.0,
+                width: 100.0,
+                height: 100.0,
+            },
+            text_rect: ViewRect {
+                x: 12.0,
+                y: 124.0,
+                width: 176.0,
+                height: 16.0,
+            },
+            text_midline_shift: 0.0,
+        };
+        let raster = IconRaster {
+            pixels: vec![40; 80 * 40 * 4].into(),
+            width: 80,
+            height: 40,
+        };
+        let shell = folder_preview_role_shell_rect(layout);
+        let slot = folder_preview_role_slot(layout);
+        let draw = folder_preview_role_draw_rect(layout, &raster);
+
+        assert!(slot.x >= shell.x);
+        assert!(slot.y >= shell.y);
+        assert!(slot.right() <= shell.right() + f32::EPSILON);
+        assert!(slot.bottom() <= shell.bottom() + f32::EPSILON);
+        assert!(draw.width <= slot.width + f32::EPSILON);
+        assert!(draw.height <= slot.height + f32::EPSILON);
+        assert!((draw.width / draw.height - 2.0).abs() < 0.05);
+        assert!((draw.x + draw.width / 2.0 - (slot.x + slot.width / 2.0)).abs() < f32::EPSILON);
+        assert!((draw.y + draw.height / 2.0 - (slot.y + slot.height / 2.0)).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn folder_preview_role_draw_rect_uses_dolphin_text_midline_shift_in_compact_area() {
+        let layout = ItemPixmapLayout {
+            view_mode: ShellViewMode::Compact,
+            icon_rect: ViewRect {
+                x: 4.0,
+                y: 8.0,
+                width: 48.0,
+                height: 48.0,
+            },
+            text_rect: ViewRect {
+                x: 60.0,
+                y: 22.0,
+                width: 140.0,
+                height: 18.0,
+            },
+            text_midline_shift: 3.0,
+        };
+        let raster = IconRaster {
+            pixels: vec![40; 48 * 24 * 4].into(),
+            width: 48,
+            height: 24,
+        };
+        let area = folder_preview_role_shell_rect(layout);
+        let draw = folder_preview_role_draw_rect(layout, &raster);
+        let expected_center_y = layout.text_rect.y + layout.text_rect.height / 2.0 + 3.0;
+
+        assert!((area.y + area.height / 2.0 - expected_center_y).abs() < f32::EPSILON);
+        assert!(draw.y >= area.y);
+        assert!(draw.bottom() <= area.bottom() + f32::EPSILON);
+        assert!((draw.x + draw.width / 2.0 - (area.x + area.width / 2.0)).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn dolphin_text_midline_shift_matches_font_metrics_formula() {
+        let shift = dolphin_text_midline_shift_from_metrics(18.0, 14.0, 1000, -200.0, Some(700.0));
+
+        assert!((shift - 1.3).abs() < 0.01);
+    }
+
+    #[test]
+    fn folder_preview_role_dirty_key_tracks_role_state_but_not_hoverless_hover() {
+        let root = test_dir("directory-preview-dirty-key");
+        let album = root.join("album");
+        fs::create_dir_all(&album).unwrap();
+        let mut scene = test_scene(
+            vec![test_entry_with_mime_and_modified(
+                "album",
+                true,
+                "inode/directory",
+                Some(7),
+            )],
+            ShellViewMode::Icons,
+        );
+        scene.panes[ShellPaneId::FIRST].path = root.clone();
+        let size = PhysicalSize::new(700, 320);
+        let before = ShellRenderDirtyKey::from_scene(&scene, size);
+        scene.folder_preview_roles.borrow_mut().insert_ready(
+            FolderPreviewRoleKey::new(album, 7, 48),
+            FolderPreviewReady {
+                stamp: 11,
+                size_px: 48,
+                raster: test_icon_raster(2, 3),
+            },
+        );
+        let after = ShellRenderDirtyKey::from_scene(&scene, size);
+        assert_ne!(before, after);
+
+        let hoverless_before = ShellRenderDirtyKey::from_scene_ignoring_hover(&scene, size);
+        scene.set_hovered_item(Some(ShellPaneItemTarget {
+            pane: ShellPaneId::FIRST,
+            index: 0,
+        }));
+        let hoverless_after = ShellRenderDirtyKey::from_scene_ignoring_hover(&scene, size);
+        assert_eq!(hoverless_before, hoverless_after);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn folder_preview_role_dirty_key_ignores_offscreen_ready_entries() {
+        let root = test_dir("directory-preview-visible-dirty-key");
+        let album = root.join("album");
+        let offscreen = root.join("offscreen");
+        fs::create_dir_all(&album).unwrap();
+        fs::create_dir_all(&offscreen).unwrap();
+        let scene = test_scene(
+            vec![test_entry_with_mime_and_modified(
+                "album",
+                true,
+                "inode/directory",
+                Some(7),
+            )],
+            ShellViewMode::Icons,
+        );
+        let mut scene = scene;
+        scene.panes[ShellPaneId::FIRST].path = root.clone();
+        let size = PhysicalSize::new(700, 320);
+        let before = ShellRenderDirtyKey::from_scene(&scene, size);
+
+        scene.folder_preview_roles.borrow_mut().insert_ready(
+            FolderPreviewRoleKey::new(offscreen, 7, 48),
+            FolderPreviewReady {
+                stamp: 11,
+                size_px: 48,
+                raster: test_icon_raster(2, 3),
+            },
+        );
+        let offscreen_after = ShellRenderDirtyKey::from_scene(&scene, size);
+        assert_eq!(before, offscreen_after);
+
+        scene.folder_preview_roles.borrow_mut().insert_ready(
+            FolderPreviewRoleKey::new(album, 7, 48),
+            FolderPreviewReady {
+                stamp: 12,
+                size_px: 48,
+                raster: test_icon_raster(2, 4),
+            },
+        );
+        let visible_after = ShellRenderDirtyKey::from_scene(&scene, size);
+        assert_ne!(before, visible_after);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn folder_preview_role_dirty_key_ignores_unused_ready_size_variant() {
+        let root = test_dir("directory-preview-unused-size-dirty-key");
+        let album = root.join("album");
+        fs::create_dir_all(&album).unwrap();
+        let mut scene = test_scene(
+            vec![test_entry_with_mime_and_modified(
+                "album",
+                true,
+                "inode/directory",
+                Some(7),
+            )],
+            ShellViewMode::Icons,
+        );
+        scene.panes[ShellPaneId::FIRST].path = root.clone();
+        let size = PhysicalSize::new(700, 320);
+        scene.folder_preview_roles.borrow_mut().insert_ready(
+            FolderPreviewRoleKey::new(album.clone(), 7, 128),
+            FolderPreviewReady {
+                stamp: 11,
+                size_px: 128,
+                raster: test_icon_raster(2, 3),
+            },
+        );
+        let exact_before = ShellRenderDirtyKey::from_scene(&scene, size);
+
+        scene.folder_preview_roles.borrow_mut().insert_ready(
+            FolderPreviewRoleKey::new(album.clone(), 7, 256),
+            FolderPreviewReady {
+                stamp: 12,
+                size_px: 256,
+                raster: test_icon_raster(2, 4),
+            },
+        );
+        let exact_after = ShellRenderDirtyKey::from_scene(&scene, size);
+        let projections = ShellPaneId::ALL
+            .into_iter()
+            .filter_map(|kind| scene.pane_projection(kind, size))
+            .collect::<Vec<_>>();
+        let rects = folder_preview_damage_rects_for_changed_keys(
+            &scene,
+            &projections,
+            &[FolderPreviewRoleKey::new(album.clone(), 7, 256)],
+        );
+
+        assert_eq!(exact_before, exact_after);
+        assert!(rects.is_empty());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn folder_preview_role_dirty_key_tracks_closest_ready_size_when_exact_is_missing() {
+        let root = test_dir("directory-preview-closest-size-dirty-key");
+        let album = root.join("album");
+        fs::create_dir_all(&album).unwrap();
+        let mut scene = test_scene(
+            vec![test_entry_with_mime_and_modified(
+                "album",
+                true,
+                "inode/directory",
+                Some(7),
+            )],
+            ShellViewMode::Icons,
+        );
+        scene.panes[ShellPaneId::FIRST].path = root.clone();
+        let size = PhysicalSize::new(700, 320);
+        let before = ShellRenderDirtyKey::from_scene(&scene, size);
+
+        scene.folder_preview_roles.borrow_mut().insert_ready(
+            FolderPreviewRoleKey::new(album.clone(), 7, 256),
+            FolderPreviewReady {
+                stamp: 12,
+                size_px: 256,
+                raster: test_icon_raster(2, 4),
+            },
+        );
+        let after = ShellRenderDirtyKey::from_scene(&scene, size);
+        let projections = ShellPaneId::ALL
+            .into_iter()
+            .filter_map(|kind| scene.pane_projection(kind, size))
+            .collect::<Vec<_>>();
+        let rects = folder_preview_damage_rects_for_changed_keys(
+            &scene,
+            &projections,
+            &[FolderPreviewRoleKey::new(album.clone(), 7, 256)],
+        );
+
+        assert_ne!(before, after);
+        assert_eq!(rects.len(), 1);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn folder_preview_damage_covers_folder_shell_when_preview_changes() {
+        let root = test_dir("directory-preview-replacement-damage");
+        let album = root.join("album");
+        fs::create_dir_all(&album).unwrap();
+        let mut scene = test_scene(
+            vec![test_entry_with_mime_and_modified(
+                "album",
+                true,
+                "inode/directory",
+                Some(7),
+            )],
+            ShellViewMode::Icons,
+        );
+        scene.panes[ShellPaneId::FIRST].path = root.clone();
+        let size = PhysicalSize::new(700, 320);
+        let key = FolderPreviewRoleKey::new(album.clone(), 7, 128);
+        let previous = FolderPreviewReady {
+            stamp: 11,
+            size_px: 128,
+            raster: solid_icon_raster(96, 24, [220, 40, 80, 255]),
+        };
+        let current = FolderPreviewReady {
+            stamp: 12,
+            size_px: 128,
+            raster: solid_icon_raster(24, 96, [40, 120, 220, 255]),
+        };
+        scene
+            .folder_preview_roles
+            .borrow_mut()
+            .insert_ready(key.clone(), current.clone());
+        let projections = ShellPaneId::ALL
+            .into_iter()
+            .filter_map(|kind| scene.pane_projection(kind, size))
+            .collect::<Vec<_>>();
+        let item = projections[0].visible_items[0];
+        let layout = ItemPixmapLayout::from_item_layout(projections[0].view.view_mode, item.layout);
+        let expected =
+            pane_content_rect_to_screen(folder_preview_role_shell_rect(layout), &projections[0]);
+
+        let rects = folder_preview_damage_rects_for_changes(
+            &scene,
+            &projections,
+            &[FolderPreviewRoleChange {
+                key,
+                previous: Some(previous.clone()),
+            }],
+        );
+
+        assert_eq!(rects, vec![expected]);
+        let previous_draw = pane_content_rect_to_screen(
+            folder_preview_role_draw_rect(layout, &previous.raster),
+            &projections[0],
+        );
+        let current_draw = pane_content_rect_to_screen(
+            folder_preview_role_draw_rect(layout, &current.raster),
+            &projections[0],
+        );
+        assert!(expected.x <= previous_draw.x);
+        assert!(expected.y <= previous_draw.y);
+        assert!(expected.right() >= previous_draw.right());
+        assert!(expected.bottom() >= previous_draw.bottom());
+        assert!(expected.x <= current_draw.x);
+        assert!(expected.y <= current_draw.y);
+        assert!(expected.right() >= current_draw.right());
+        assert!(expected.bottom() >= current_draw.bottom());
+        assert!(
+            rect_area(expected)
+                < rect_area(pane_content_rect_to_screen(
+                    item.layout.visual_rect,
+                    &projections[0]
+                ))
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn folder_preview_damage_ignores_replaced_unused_ready_size_variant() {
+        let root = test_dir("directory-preview-unused-replacement-damage");
+        let album = root.join("album");
+        fs::create_dir_all(&album).unwrap();
+        let mut scene = test_scene(
+            vec![test_entry_with_mime_and_modified(
+                "album",
+                true,
+                "inode/directory",
+                Some(7),
+            )],
+            ShellViewMode::Icons,
+        );
+        scene.panes[ShellPaneId::FIRST].path = root.clone();
+        let size = PhysicalSize::new(700, 320);
+        let exact_key = FolderPreviewRoleKey::new(album.clone(), 7, 128);
+        let unused_key = FolderPreviewRoleKey::new(album.clone(), 7, 256);
+        scene.folder_preview_roles.borrow_mut().insert_ready(
+            exact_key,
+            FolderPreviewReady {
+                stamp: 11,
+                size_px: 128,
+                raster: solid_icon_raster(48, 48, [40, 120, 220, 255]),
+            },
+        );
+        scene.folder_preview_roles.borrow_mut().insert_ready(
+            unused_key.clone(),
+            FolderPreviewReady {
+                stamp: 12,
+                size_px: 256,
+                raster: solid_icon_raster(96, 24, [220, 40, 80, 255]),
+            },
+        );
+        let projections = ShellPaneId::ALL
+            .into_iter()
+            .filter_map(|kind| scene.pane_projection(kind, size))
+            .collect::<Vec<_>>();
+
+        let rects = folder_preview_damage_rects_for_changes(
+            &scene,
+            &projections,
+            &[FolderPreviewRoleChange {
+                key: unused_key,
+                previous: Some(FolderPreviewReady {
+                    stamp: 10,
+                    size_px: 256,
+                    raster: solid_icon_raster(24, 96, [80, 220, 40, 255]),
+                }),
+            }],
+        );
+
+        assert!(rects.is_empty());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn folder_preview_damage_covers_previous_preview_when_role_fails() {
+        let root = test_dir("directory-preview-failure-replacement-damage");
+        let album = root.join("album");
+        fs::create_dir_all(&album).unwrap();
+        let mut scene = test_scene(
+            vec![test_entry_with_mime_and_modified(
+                "album",
+                true,
+                "inode/directory",
+                Some(7),
+            )],
+            ShellViewMode::Icons,
+        );
+        scene.panes[ShellPaneId::FIRST].path = root.clone();
+        let size = PhysicalSize::new(700, 320);
+        let key = FolderPreviewRoleKey::new(album.clone(), 7, 128);
+        let previous = FolderPreviewReady {
+            stamp: 11,
+            size_px: 128,
+            raster: solid_icon_raster(96, 24, [220, 40, 80, 255]),
+        };
+        {
+            let mut roles = scene.folder_preview_roles.borrow_mut();
+            roles.failed.insert(key.clone());
+            roles.finished.insert(key.clone());
+        }
+        let projections = ShellPaneId::ALL
+            .into_iter()
+            .filter_map(|kind| scene.pane_projection(kind, size))
+            .collect::<Vec<_>>();
+        let item = projections[0].visible_items[0];
+        let layout = ItemPixmapLayout::from_item_layout(projections[0].view.view_mode, item.layout);
+        let expected =
+            pane_content_rect_to_screen(folder_preview_role_shell_rect(layout), &projections[0]);
+
+        let rects = folder_preview_damage_rects_for_changes(
+            &scene,
+            &projections,
+            &[FolderPreviewRoleChange {
+                key,
+                previous: Some(previous.clone()),
+            }],
+        );
+
+        assert_eq!(rects, vec![expected]);
+        let previous_draw = pane_content_rect_to_screen(
+            folder_preview_role_draw_rect(layout, &previous.raster),
+            &projections[0],
+        );
+        assert!(expected.x <= previous_draw.x);
+        assert!(expected.y <= previous_draw.y);
+        assert!(expected.right() >= previous_draw.right());
+        assert!(expected.bottom() >= previous_draw.bottom());
 
         let _ = fs::remove_dir_all(root);
     }
@@ -26139,6 +28137,20 @@ mod tests {
         let source = folder_preview_thumbnail_source(&root).unwrap();
 
         assert_eq!(source.path, root.join("Cover.PNG"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn folder_preview_source_uses_magic_for_extensionless_images() {
+        let root = test_dir("directory-preview-source-magic");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("cover"), b"\x89PNG\r\n\x1a\npreview").unwrap();
+
+        let source = folder_preview_thumbnail_source(&root).unwrap();
+
+        assert_eq!(source.path, root.join("cover"));
+        assert_eq!(source.mime_type.as_deref(), Some("image/png"));
 
         let _ = fs::remove_dir_all(root);
     }
@@ -26223,54 +28235,211 @@ mod tests {
     }
 
     #[test]
-    fn folder_preview_role_recent_failure_waits_for_recheck() {
+    fn folder_preview_role_failed_item_is_finished_until_identity_changes() {
         let root = PathBuf::from("/tmp/fika-directory-preview-recent-failure");
         let key = FolderPreviewRoleKey::new(root.clone(), 7, 48);
         let (request_tx, request_rx) = mpsc::channel();
         let (_result_tx, result_rx) = mpsc::channel();
-        let mut resolver = FolderPreviewResolver {
+        let mut runtime = ShellFolderPreviewRoleRuntime {
             ready: HashMap::new(),
-            failed: HashMap::from([(key, Instant::now())]),
+            failed: HashSet::from([key.clone()]),
             pending: HashMap::new(),
-            ready_frame: 0,
+            finished: HashSet::from([key.clone()]),
+            active: HashSet::from([key.clone()]),
+            frame: 0,
             ready_bytes: 0,
             ready_max_bytes: THUMBNAIL_READY_CACHE_MAX_BYTES,
             request_tx: Some(request_tx),
             result_rx,
         };
 
-        assert!(matches!(
-            resolver.resolve(&root, 7, 48),
-            FolderPreviewResolveState::Failed
-        ));
+        let stats = runtime.queue_candidates([FolderPreviewRoleRequest {
+            key,
+            priority: ThumbnailRequestPriority::Visible,
+        }]);
+        assert_eq!(stats.failed, 1);
+        assert_eq!(stats.queued, 0);
         assert!(request_rx.try_recv().is_err());
     }
 
     #[test]
-    fn folder_preview_role_expired_failure_requeues_probe() {
-        let root = PathBuf::from("/tmp/fika-directory-preview-expired-failure");
+    fn folder_preview_role_failure_result_marks_empty_icon_pixmap_finished() {
+        let root = PathBuf::from("/tmp/fika-directory-preview-failure-result");
         let key = FolderPreviewRoleKey::new(root.clone(), 7, 48);
-        let expired = Instant::now()
-            .checked_sub(DOLPHIN_FOLDER_PREVIEW_METADATA_RECHECK + Duration::from_millis(1))
+        let (request_tx, request_rx) = mpsc::channel();
+        let (result_tx, result_rx) = mpsc::channel();
+        let mut runtime = ShellFolderPreviewRoleRuntime {
+            ready: HashMap::new(),
+            failed: HashSet::new(),
+            pending: HashMap::from([(key.clone(), ThumbnailRequestPriority::Visible)]),
+            finished: HashSet::new(),
+            active: HashSet::from([key.clone()]),
+            frame: 0,
+            ready_bytes: 0,
+            ready_max_bytes: THUMBNAIL_READY_CACHE_MAX_BYTES,
+            request_tx: Some(request_tx),
+            result_rx,
+        };
+        result_tx
+            .send(FolderPreviewRoleResult {
+                key: key.clone(),
+                preview: None,
+            })
             .unwrap();
+
+        let result_stats = runtime.drain_results();
+        assert_eq!(result_stats.results, 1);
+        assert_eq!(result_stats.applied, 1);
+        assert_eq!(result_stats.changes.len(), 1);
+        assert_eq!(result_stats.changes[0].key, key);
+        assert!(result_stats.changes[0].previous.is_none());
+        assert!(runtime.failed.contains(&key));
+        assert!(runtime.finished.contains(&key));
+        assert!(!runtime.has_pending());
+
+        let queue_stats = runtime.queue_candidates([FolderPreviewRoleRequest {
+            key,
+            priority: ThumbnailRequestPriority::Visible,
+        }]);
+        assert_eq!(queue_stats.failed, 1);
+        assert_eq!(queue_stats.queued, 0);
+        assert!(request_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn folder_preview_role_visible_candidate_promotes_deferred_work() {
+        let root = PathBuf::from("/tmp/fika-directory-preview-promote");
+        let key = FolderPreviewRoleKey::new(root.clone(), 7, 48);
         let (request_tx, request_rx) = mpsc::channel();
         let (_result_tx, result_rx) = mpsc::channel();
-        let mut resolver = FolderPreviewResolver {
+        let mut runtime = ShellFolderPreviewRoleRuntime {
             ready: HashMap::new(),
-            failed: HashMap::from([(key.clone(), expired)]),
-            pending: HashMap::new(),
-            ready_frame: 0,
+            failed: HashSet::new(),
+            pending: HashMap::from([(key.clone(), ThumbnailRequestPriority::Deferred)]),
+            finished: HashSet::new(),
+            active: HashSet::from([key.clone()]),
+            frame: 0,
             ready_bytes: 0,
             ready_max_bytes: THUMBNAIL_READY_CACHE_MAX_BYTES,
             request_tx: Some(request_tx),
             result_rx,
         };
 
-        assert!(matches!(
-            resolver.resolve(&root, 7, 48),
-            FolderPreviewResolveState::Pending
-        ));
-        assert_eq!(request_rx.try_recv().unwrap().key, key);
+        let stats = runtime.queue_candidates([FolderPreviewRoleRequest {
+            key: key.clone(),
+            priority: ThumbnailRequestPriority::Visible,
+        }]);
+        assert_eq!(stats.visible, 1);
+        assert_eq!(stats.queued, 1);
+        let request = request_rx.try_recv().unwrap();
+        assert_eq!(request.key, key);
+        assert_eq!(request.priority, ThumbnailRequestPriority::Visible);
+    }
+
+    #[test]
+    fn folder_preview_role_pending_visible_candidate_does_not_requeue_on_hover_redraw() {
+        let root = PathBuf::from("/tmp/fika-directory-preview-hover-redraw");
+        let key = FolderPreviewRoleKey::new(root.clone(), 7, 48);
+        let (request_tx, request_rx) = mpsc::channel();
+        let (_result_tx, result_rx) = mpsc::channel();
+        let mut runtime = ShellFolderPreviewRoleRuntime {
+            ready: HashMap::new(),
+            failed: HashSet::new(),
+            pending: HashMap::from([(key.clone(), ThumbnailRequestPriority::Visible)]),
+            finished: HashSet::new(),
+            active: HashSet::from([key.clone()]),
+            frame: 0,
+            ready_bytes: 0,
+            ready_max_bytes: THUMBNAIL_READY_CACHE_MAX_BYTES,
+            request_tx: Some(request_tx),
+            result_rx,
+        };
+
+        let stats = runtime.queue_candidates([FolderPreviewRoleRequest {
+            key,
+            priority: ThumbnailRequestPriority::Visible,
+        }]);
+
+        assert_eq!(stats.visible, 1);
+        assert_eq!(stats.queued, 0);
+        assert!(request_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn folder_preview_role_has_pending_does_not_apply_late_results_after_dirty_key() {
+        let root = PathBuf::from("/tmp/fika-directory-preview-late-result");
+        let key = FolderPreviewRoleKey::new(root.clone(), 7, 48);
+        let (request_tx, _request_rx) = mpsc::channel();
+        let (result_tx, result_rx) = mpsc::channel();
+        let mut runtime = ShellFolderPreviewRoleRuntime {
+            ready: HashMap::new(),
+            failed: HashSet::new(),
+            pending: HashMap::from([(key.clone(), ThumbnailRequestPriority::Visible)]),
+            finished: HashSet::new(),
+            active: HashSet::from([key.clone()]),
+            frame: 0,
+            ready_bytes: 0,
+            ready_max_bytes: THUMBNAIL_READY_CACHE_MAX_BYTES,
+            request_tx: Some(request_tx),
+            result_rx,
+        };
+        result_tx
+            .send(FolderPreviewRoleResult {
+                key: key.clone(),
+                preview: Some(FolderPreviewReady {
+                    stamp: 11,
+                    size_px: 48,
+                    raster: test_icon_raster(2, 3),
+                }),
+            })
+            .unwrap();
+
+        assert!(runtime.has_pending());
+        assert!(runtime.ready.is_empty());
+
+        let stats = runtime.drain_results();
+        assert_eq!(stats.applied, 1);
+        assert!(runtime.ready.contains_key(&key));
+        assert!(!runtime.has_pending());
+    }
+
+    #[test]
+    fn folder_preview_role_projection_update_marks_active_before_drain() {
+        let root = PathBuf::from("/tmp/fika-directory-preview-active-before-drain");
+        let key = FolderPreviewRoleKey::new(root.clone(), 7, 48);
+        let (request_tx, _request_rx) = mpsc::channel();
+        let (result_tx, result_rx) = mpsc::channel();
+        let mut runtime = ShellFolderPreviewRoleRuntime {
+            ready: HashMap::new(),
+            failed: HashSet::new(),
+            pending: HashMap::from([(key.clone(), ThumbnailRequestPriority::Visible)]),
+            finished: HashSet::new(),
+            active: HashSet::new(),
+            frame: 0,
+            ready_bytes: 0,
+            ready_max_bytes: THUMBNAIL_READY_CACHE_MAX_BYTES,
+            request_tx: Some(request_tx),
+            result_rx,
+        };
+        result_tx
+            .send(FolderPreviewRoleResult {
+                key: key.clone(),
+                preview: Some(FolderPreviewReady {
+                    stamp: 11,
+                    size_px: 48,
+                    raster: test_icon_raster(2, 3),
+                }),
+            })
+            .unwrap();
+
+        runtime.queue_candidates([FolderPreviewRoleRequest {
+            key: key.clone(),
+            priority: ThumbnailRequestPriority::Visible,
+        }]);
+        let stats = runtime.drain_results();
+
+        assert_eq!(stats.applied, 1);
+        assert!(runtime.ready.contains_key(&key));
     }
 
     #[test]
@@ -26314,6 +28483,40 @@ mod tests {
 
         assert_eq!(preview.raster.width, 48);
         assert_eq!(preview.raster.height, 48);
+
+        let _ = fs::remove_dir_all(cache_root);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn folder_preview_role_rasterizes_local_image_when_thumbnailer_has_no_result() {
+        let cache_root = test_dir("directory-preview-direct-image-cache");
+        let root = test_dir("directory-preview-direct-image-worker");
+        fs::create_dir_all(&root).unwrap();
+        let cover = root.join("cover.png");
+        image::RgbaImage::from_pixel(8, 4, image::Rgba([210, 40, 80, 255]))
+            .save(&cover)
+            .unwrap();
+        let directory_modified_secs = root
+            .metadata()
+            .unwrap()
+            .modified()
+            .unwrap()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let request = FolderPreviewRoleRequest {
+            key: FolderPreviewRoleKey::new(root.clone(), directory_modified_secs, 48),
+            priority: ThumbnailRequestPriority::Visible,
+        };
+
+        let preview =
+            folder_preview_for_request(&cache_root, &ThumbnailerRegistry::default(), &request)
+                .unwrap();
+
+        assert_eq!(preview.raster.width, 48);
+        assert_eq!(preview.raster.height, 48);
+        assert!(raster_contains_rgb(&preview.raster, [210, 40, 80]));
 
         let _ = fs::remove_dir_all(cache_root);
         let _ = fs::remove_dir_all(root);
@@ -26409,6 +28612,7 @@ mod tests {
             &[FolderPreviewThumbnailSource {
                 path: cover,
                 modified_secs: cover_modified_secs,
+                mime_type: Some("image/png".to_string()),
             }],
             ThumbnailRequestPriority::Visible,
             48,
@@ -26421,6 +28625,40 @@ mod tests {
         let _ = fs::remove_dir_all(cache_root);
         let _ = fs::remove_dir_all(root);
         let _ = fs::remove_dir_all(source_root);
+    }
+
+    #[test]
+    fn single_opaque_folder_preview_child_uses_dolphin_frame_margins() {
+        let raster = solid_icon_raster(64, 64, [210, 40, 80, 255]);
+        let framed = folder_preview_thumbnail_raster_from_children(&[raster], 64).unwrap();
+
+        assert_eq!(framed.width, 64);
+        assert_eq!(framed.height, 64);
+        assert_ne!(raster_pixel(&framed, 0, 0), [210, 40, 80, 255]);
+        assert_eq!(
+            raster_pixel(
+                &framed,
+                DOLPHIN_PREVIEW_FRAME_LEFT_MARGIN,
+                DOLPHIN_PREVIEW_FRAME_TOP_MARGIN
+            ),
+            [210, 40, 80, 255]
+        );
+        assert_eq!(
+            raster_pixel(
+                &framed,
+                64 - DOLPHIN_PREVIEW_FRAME_RIGHT_MARGIN,
+                64 - DOLPHIN_PREVIEW_FRAME_BOTTOM_MARGIN
+            ),
+            [0, 0, 0, 28]
+        );
+    }
+
+    #[test]
+    fn single_alpha_folder_preview_child_stays_unframed_like_dolphin() {
+        let raster = solid_icon_raster(64, 64, [20, 120, 220, 128]);
+        let framed = folder_preview_thumbnail_raster_from_children(&[raster], 64).unwrap();
+
+        assert_eq!(raster_pixel(&framed, 0, 0), [20, 120, 220, 128]);
     }
 
     #[test]
@@ -26536,6 +28774,41 @@ mod tests {
             width: size,
             height: size,
         }
+    }
+
+    fn solid_icon_raster(width: u32, height: u32, color: [u8; 4]) -> IconRaster {
+        let mut pixels = Vec::with_capacity((width * height * 4) as usize);
+        for _ in 0..width * height {
+            pixels.extend_from_slice(&color);
+        }
+        IconRaster {
+            pixels: pixels.into(),
+            width,
+            height,
+        }
+    }
+
+    fn seed_directory_role_raster(cache: &mut IconRoleRasterCache, path: &Path, icon_size: f32) {
+        let role = file_icon_path_cache_key(
+            path,
+            true,
+            Some(Arc::from("inode/directory")),
+            true,
+            icon_size,
+        )
+        .role;
+        cache.begin_frame();
+        cache.insert(role, solid_icon_raster(64, 64, [245, 184, 70, 255]));
+    }
+
+    fn raster_pixel(raster: &IconRaster, x: u32, y: u32) -> [u8; 4] {
+        let offset = ((y * raster.width + x) * 4) as usize;
+        [
+            raster.pixels[offset],
+            raster.pixels[offset + 1],
+            raster.pixels[offset + 2],
+            raster.pixels[offset + 3],
+        ]
     }
 
     fn wait_for_thumbnail_state(
@@ -27275,18 +29548,18 @@ mod tests {
     fn icon_frame_keeps_overlay_vertices_separate() {
         let mut resolver = FileIconResolver::new();
         let mut thumbnails = ThumbnailRasterResolver::new();
-        let mut folder_previews = FolderPreviewResolver::new();
         let mut icon_rasters = IconRasterResolver::new();
         let mut raster_cache = IconRasterCache::new(ICON_CACHE_MAX_BYTES);
         let mut role_raster_cache = IconRoleRasterCache::new(ICON_ROLE_RASTER_CACHE_MAX_BYTES);
         let mut builder = IconFrameBuilder::new(
             &mut resolver,
             &mut thumbnails,
-            &mut folder_previews,
             &mut icon_rasters,
             &mut raster_cache,
             &mut role_raster_cache,
             PhysicalSize::new(128, 96),
+            0,
+            0,
             0,
         );
         let raster = test_icon_raster(2, 7);
@@ -27332,10 +29605,135 @@ mod tests {
     }
 
     #[test]
+    fn ready_folder_preview_keeps_directory_icon_shell() {
+        let mut resolver = FileIconResolver::new();
+        let mut thumbnails = ThumbnailRasterResolver::new();
+        let mut icon_rasters = IconRasterResolver::new();
+        let mut raster_cache = IconRasterCache::new(ICON_CACHE_MAX_BYTES);
+        let mut role_raster_cache = IconRoleRasterCache::new(ICON_ROLE_RASTER_CACHE_MAX_BYTES);
+        seed_directory_role_raster(&mut role_raster_cache, Path::new("/tmp/album"), 96.0);
+        let mut builder = IconFrameBuilder::new(
+            &mut resolver,
+            &mut thumbnails,
+            &mut icon_rasters,
+            &mut raster_cache,
+            &mut role_raster_cache,
+            PhysicalSize::new(240, 180),
+            0,
+            0,
+            0,
+        );
+        let entry = test_entry_with_mime_and_modified("album", true, "inode/directory", Some(7));
+        let preview = FolderPreviewReady {
+            stamp: 11,
+            size_px: 96,
+            raster: IconRaster {
+                pixels: vec![31; 96 * 48 * 4].into(),
+                width: 96,
+                height: 48,
+            },
+        };
+        let layout = ItemPixmapLayout {
+            view_mode: ShellViewMode::Icons,
+            icon_rect: ViewRect {
+                x: 44.0,
+                y: 10.0,
+                width: 96.0,
+                height: 96.0,
+            },
+            text_rect: ViewRect {
+                x: 14.0,
+                y: 108.0,
+                width: 156.0,
+                height: 18.0,
+            },
+            text_midline_shift: 0.0,
+        };
+
+        assert!(builder.push_thumbnail_or_icon(
+            Path::new("/tmp"),
+            &entry,
+            Some(&preview),
+            layout,
+            ViewRect {
+                x: 0.0,
+                y: 0.0,
+                width: 240.0,
+                height: 180.0,
+            },
+        ));
+        let frame = builder.finish();
+
+        assert_eq!(frame.stats.icons, 1);
+        assert_eq!(frame.stats.folder_preview_quads, 1);
+        assert_eq!(frame.stats.quads, 2);
+    }
+
+    #[test]
+    fn compact_ready_folder_preview_keeps_directory_icon_below_32px() {
+        let mut resolver = FileIconResolver::new();
+        let mut thumbnails = ThumbnailRasterResolver::new();
+        let mut icon_rasters = IconRasterResolver::new();
+        let mut raster_cache = IconRasterCache::new(ICON_CACHE_MAX_BYTES);
+        let mut role_raster_cache = IconRoleRasterCache::new(ICON_ROLE_RASTER_CACHE_MAX_BYTES);
+        seed_directory_role_raster(&mut role_raster_cache, Path::new("/tmp/album"), 28.0);
+        let mut builder = IconFrameBuilder::new(
+            &mut resolver,
+            &mut thumbnails,
+            &mut icon_rasters,
+            &mut raster_cache,
+            &mut role_raster_cache,
+            PhysicalSize::new(160, 80),
+            0,
+            0,
+            0,
+        );
+        let entry = test_entry_with_mime_and_modified("album", true, "inode/directory", Some(7));
+        let preview = FolderPreviewReady {
+            stamp: 11,
+            size_px: 128,
+            raster: test_icon_raster(28, 20),
+        };
+        let layout = ItemPixmapLayout {
+            view_mode: ShellViewMode::Compact,
+            icon_rect: ViewRect {
+                x: 6.0,
+                y: 6.0,
+                width: 28.0,
+                height: 28.0,
+            },
+            text_rect: ViewRect {
+                x: 42.0,
+                y: 9.0,
+                width: 88.0,
+                height: 18.0,
+            },
+            text_midline_shift: 0.0,
+        };
+
+        assert!(builder.push_thumbnail_or_icon(
+            Path::new("/tmp"),
+            &entry,
+            Some(&preview),
+            layout,
+            ViewRect {
+                x: 0.0,
+                y: 0.0,
+                width: 160.0,
+                height: 80.0,
+            },
+        ));
+        let frame = builder.finish();
+
+        assert_eq!(frame.stats.icons, 1);
+        assert_eq!(frame.stats.folder_preview_quads, 1);
+        assert_eq!(frame.stats.quads, 2);
+    }
+
+    #[test]
     fn named_overlay_icon_queues_raster_when_sync_budget_is_empty() {
         let mut harness = FileIconResolverTestHarness::new();
         let mut thumbnails = ThumbnailRasterResolver::new();
-        let mut folder_previews = FolderPreviewResolver::new();
         let mut icon_rasters = IconRasterResolver::new();
         let mut raster_cache = IconRasterCache::new(ICON_CACHE_MAX_BYTES);
         let mut role_raster_cache = IconRoleRasterCache::new(ICON_ROLE_RASTER_CACHE_MAX_BYTES);
@@ -27356,11 +29754,12 @@ mod tests {
             let mut builder = IconFrameBuilder::new(
                 &mut harness.resolver,
                 &mut thumbnails,
-                &mut folder_previews,
                 &mut icon_rasters,
                 &mut raster_cache,
                 &mut role_raster_cache,
                 PhysicalSize::new(128, 96),
+                0,
+                0,
                 0,
             );
             assert!(!builder.push_named_theme_icon(
@@ -27381,11 +29780,12 @@ mod tests {
             let mut builder = IconFrameBuilder::new(
                 &mut harness.resolver,
                 &mut thumbnails,
-                &mut folder_previews,
                 &mut icon_rasters,
                 &mut raster_cache,
                 &mut role_raster_cache,
                 PhysicalSize::new(128, 96),
+                0,
+                0,
                 0,
             );
             assert!(!builder.push_named_theme_icon(
@@ -28925,6 +31325,10 @@ text/plain=writer.desktop;\n",
             .iter()
             .position(|action| *action == ShellContextMenuAction::ToggleHiddenFiles)
             .unwrap();
+        let view_mode_row = blank_actions
+            .iter()
+            .position(|action| *action == ShellContextMenuAction::ViewMode)
+            .unwrap();
         let split_row = blank_actions
             .iter()
             .position(|action| *action == ShellContextMenuAction::SplitPane)
@@ -28937,7 +31341,8 @@ text/plain=writer.desktop;\n",
         assert!(!context_menu_separator_before(&blank, 0));
         assert!(context_menu_separator_before(&blank, paste_row));
         assert!(context_menu_separator_before(&blank, select_all_row));
-        assert!(context_menu_separator_before(&blank, toggle_hidden_row));
+        assert!(context_menu_separator_before(&blank, view_mode_row));
+        assert!(!context_menu_separator_before(&blank, toggle_hidden_row));
         assert!(!context_menu_separator_before(&blank, split_row));
         assert!(context_menu_separator_before(&blank, properties_row));
 
@@ -29065,6 +31470,45 @@ text/plain=writer.desktop;\n",
                 }
             )
         }));
+    }
+
+    #[test]
+    fn context_menu_blank_target_exposes_view_mode_submenu() {
+        let blank = ShellContextTarget::Blank {
+            pane: ShellPaneId::FIRST,
+            path: PathBuf::from("/tmp"),
+        };
+        let menu = ShellContextMenu::new(blank.clone(), ViewPoint { x: 0.0, y: 0.0 });
+        let items = context_menu_items(&menu);
+        assert!(items.iter().any(|item| {
+            item.submenu == Some(ShellContextSubmenu::ViewMode)
+                && matches!(
+                    item.command,
+                    ShellContextMenuCommand::OpenSubmenu(ShellContextSubmenu::ViewMode)
+                )
+        }));
+
+        let modes = context_submenu_actions(ShellContextSubmenu::ViewMode, &menu);
+        assert_eq!(modes.len(), 3);
+        assert!(matches!(
+            modes[0].command,
+            ShellContextMenuCommand::SetViewMode(ShellViewMode::Icons)
+        ));
+        assert!(matches!(
+            modes[1].command,
+            ShellContextMenuCommand::SetViewMode(ShellViewMode::Compact)
+        ));
+        assert!(matches!(
+            modes[2].command,
+            ShellContextMenuCommand::SetViewMode(ShellViewMode::Details)
+        ));
+
+        let actions = context_menu_actions(&blank);
+        let view_mode_row = actions
+            .iter()
+            .position(|action| *action == ShellContextMenuAction::ViewMode)
+            .unwrap();
+        assert!(context_menu_separator_before(&blank, view_mode_row));
     }
 
     #[test]
@@ -31858,6 +34302,126 @@ text/plain=writer.desktop;\n",
         };
         assert!(details_after.item_rect.height <= details_before.item_rect.height);
         assert!(details_after.icon_rect.width < details_before.icon_rect.width);
+    }
+
+    #[test]
+    fn icons_layout_allocates_multiple_text_lines_for_long_names() {
+        let long_name = "a-very-long-folder-name-that-needs-more-than-one-line-in-icons-layout.png";
+        let scene = test_scene(vec![test_entry(long_name, false)], ShellViewMode::Icons);
+        let size = PhysicalSize::new(420, 260);
+        let options = scene.icons_options(size);
+        let item = match scene.layout(size) {
+            ShellLayout::Icons(layout) => layout.item(0).unwrap(),
+            _ => unreachable!(),
+        };
+
+        assert!(item.text_rect.height >= scene.text_line_height() * 2.0);
+        assert!(
+            item.text_rect.height <= scene.text_line_height() * DOLPHIN_ICONS_MAX_TEXT_LINES as f32
+        );
+        assert!(item.item_rect.height > options.item_height);
+        assert!(item.text_rect.bottom() <= item.item_rect.bottom() + f32::EPSILON);
+    }
+
+    #[test]
+    fn dolphin_filename_elision_preserves_extension() {
+        let display = dolphin_elide_filename_to_width(
+            "very-long-filename-that-does-not-fit-in-details-mode.tar.gz",
+            130.0,
+            TEXT_FONT_SIZE,
+        );
+
+        assert!(display.contains("..."));
+        assert!(display.ends_with(".gz"));
+        assert!(
+            estimated_label_raster_width(&display, TEXT_FONT_SIZE)
+                <= 130.0 + TEXT_PADDING as f32 * 2.0
+        );
+    }
+
+    #[test]
+    fn dolphin_wrapped_filename_elides_only_last_icons_line() {
+        let display = dolphin_elide_wrapped_filename_to_rect(
+            "very-long-folder-preview-name-that-needs-more-than-three-lines.png",
+            64.0,
+            TEXT_LINE_HEIGHT * DOLPHIN_ICONS_MAX_TEXT_LINES as f32,
+            TEXT_FONT_SIZE,
+        );
+
+        assert!(display.contains("..."));
+        assert!(display.ends_with(".png"));
+        assert!(
+            dolphin_wrapped_filename_line_count(
+                display.as_ref(),
+                dolphin_text_available_width(64.0),
+                DOLPHIN_ICONS_MAX_TEXT_LINES,
+                TEXT_FONT_SIZE,
+            ) <= DOLPHIN_ICONS_MAX_TEXT_LINES
+        );
+    }
+
+    #[test]
+    fn compact_text_width_uses_estimated_glyph_widths_not_name_length() {
+        let narrow = compact_entry_text_width(&test_entry("iiiiiiiiiiiiiiii.txt", false), 1.0);
+        let wide = compact_entry_text_width(&test_entry("mmmmmmmm.txt", false), 1.0);
+
+        assert!(wide > narrow);
+    }
+
+    #[test]
+    fn compact_layout_and_prewarm_keep_full_item_name() {
+        let long_name =
+            "very-long-compact-name-that-dolphin-keeps-unelided-by-expanding-the-column.tar.gz";
+        let scene = test_scene(vec![test_entry(long_name, false)], ShellViewMode::Compact);
+        let size = PhysicalSize::new(320, 180);
+        let options = scene.compact_options(size);
+        let layout = match scene.layout(size) {
+            ShellLayout::Compact(layout) => layout,
+            _ => unreachable!(),
+        };
+        let item = layout.item(0).unwrap();
+        let text_width = compact_entry_text_width(&test_entry(long_name, false), scene.ui_scale());
+
+        assert!(item.text_rect.width >= text_width - 1.0);
+        assert!(
+            item.item_rect.width >= required_compact_item_width(options, text_width) - f32::EPSILON
+        );
+
+        let projection = scene
+            .pane_projection(ShellPaneId::FIRST, size)
+            .expect("compact projection");
+        let mut font_system = FontSystem::new();
+        let mut swash_cache = SwashCache::new();
+        let mut text_buffer = Buffer::new_empty(Metrics::new(TEXT_FONT_SIZE, TEXT_LINE_HEIGHT));
+        let mut label_cache = LabelRasterCache::new(1024 * 1024);
+        let mut metrics_cache = LabelMetricsCache::new(TEXT_LABEL_METRICS_CACHE_MAX_ENTRIES);
+        let mut atlas_cache = TextAtlasFrameCache::default();
+        let mut text = TextFrameBuilder::new(
+            &mut font_system,
+            &mut swash_cache,
+            &mut text_buffer,
+            &mut label_cache,
+            &mut metrics_cache,
+            &mut atlas_cache,
+            size,
+            scene.ui_scale(),
+            Vec::new(),
+        );
+
+        let outcome = scene.prewarm_projection_text_label(&projection, item, &mut text);
+        drop(text);
+
+        assert!(matches!(
+            outcome,
+            LabelCacheOutcome::Miss | LabelCacheOutcome::Hit
+        ));
+        assert!(label_cache.entries.keys().any(|key| key.text == long_name));
+        assert!(
+            !label_cache
+                .entries
+                .keys()
+                .any(|key| key.text.contains("..."))
+        );
     }
 
     #[test]

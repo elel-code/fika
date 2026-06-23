@@ -6,6 +6,7 @@ use fika_core::{
 };
 
 use crate::wgpu_create_rename::CreateEntryKind;
+use crate::wgpu_options::ShellViewMode;
 use crate::wgpu_pane::ShellPaneId;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -55,6 +56,7 @@ impl ShellContextTarget {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ShellContextMenuCommand {
     Builtin(ShellContextMenuAction),
+    SetViewMode(ShellViewMode),
     CreateEntry {
         kind: CreateEntryKind,
         privileged: bool,
@@ -72,6 +74,7 @@ impl ShellContextMenuCommand {
     pub(crate) fn as_str(&self) -> &'static str {
         match self {
             Self::Builtin(action) => action.as_str(),
+            Self::SetViewMode(view_mode) => view_mode.as_str(),
             Self::CreateEntry { kind, privileged } => {
                 if *privileged {
                     kind.admin_as_str()
@@ -92,6 +95,7 @@ pub(crate) enum ShellContextSubmenu {
     OpenWith,
     ServiceMenu,
     ServiceMenuGroup(usize),
+    ViewMode,
 }
 
 impl ShellContextSubmenu {
@@ -101,6 +105,7 @@ impl ShellContextSubmenu {
             Self::OpenWith => "submenu-open-with",
             Self::ServiceMenu => "submenu-service-menu",
             Self::ServiceMenuGroup(_) => "submenu-service-menu-group",
+            Self::ViewMode => "submenu-view-mode",
         }
     }
 }
@@ -168,6 +173,7 @@ pub(crate) enum ShellContextMenuAction {
     Paste,
     PasteAsAdministrator,
     SelectAll,
+    ViewMode,
     ToggleHiddenFiles,
     Refresh,
     Properties,
@@ -200,6 +206,7 @@ impl ShellContextMenuAction {
             Self::Paste => "Paste",
             Self::PasteAsAdministrator => "Paste as Administrator",
             Self::SelectAll => "Select All",
+            Self::ViewMode => "View Mode",
             Self::ToggleHiddenFiles => "Show Hidden Files",
             Self::Refresh => "Refresh",
             Self::Properties => "Properties",
@@ -240,6 +247,7 @@ impl ShellContextMenuAction {
             Self::Paste => "paste",
             Self::PasteAsAdministrator => "paste-as-administrator",
             Self::SelectAll => "select-all",
+            Self::ViewMode => "view-mode",
             Self::ToggleHiddenFiles => "toggle-hidden-files",
             Self::Refresh => "refresh",
             Self::Properties => "properties",
@@ -346,6 +354,7 @@ fn context_menu_builtin_actions(target: &ShellContextTarget) -> Vec<ShellContext
         ShellContextMenuAction::Paste,
         ShellContextMenuAction::PasteAsAdministrator,
         ShellContextMenuAction::SelectAll,
+        ShellContextMenuAction::ViewMode,
         ShellContextMenuAction::ToggleHiddenFiles,
         ShellContextMenuAction::SplitPane,
         ShellContextMenuAction::Refresh,
@@ -439,6 +448,11 @@ fn context_menu_items_for_target(
                     action,
                     action.label(),
                     ShellContextSubmenu::CreateNew,
+                ),
+                ShellContextMenuAction::ViewMode => ShellContextMenuItem::builtin_submenu(
+                    action,
+                    action.label(),
+                    ShellContextSubmenu::ViewMode,
                 ),
                 _ => ShellContextMenuItem::builtin(action),
             };
@@ -604,6 +618,20 @@ pub(crate) fn context_submenu_actions(
             }
             items
         }
+        ShellContextSubmenu::ViewMode => [
+            (ShellViewMode::Icons, "Icons"),
+            (ShellViewMode::Compact, "Compact"),
+            (ShellViewMode::Details, "Details"),
+        ]
+        .into_iter()
+        .map(|(view_mode, label)| ShellContextMenuItem {
+            command: ShellContextMenuCommand::SetViewMode(view_mode),
+            label: label.to_string(),
+            separator_before: false,
+            submenu: None,
+            icon: ShellContextMenuIcon::Builtin(ShellContextMenuAction::ViewMode),
+        })
+        .collect(),
     }
 }
 
@@ -640,7 +668,7 @@ pub(crate) fn context_menu_separator_before(target: &ShellContextTarget, row: us
         ShellContextTarget::Blank { .. } => {
             action == ShellContextMenuAction::Paste
                 || action == ShellContextMenuAction::SelectAll
-                || action == ShellContextMenuAction::ToggleHiddenFiles
+                || action == ShellContextMenuAction::ViewMode
                 || action == ShellContextMenuAction::Properties
         }
         ShellContextTarget::Place {
