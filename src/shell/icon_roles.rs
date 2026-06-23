@@ -164,6 +164,7 @@ fn mime_theme_icon_candidates(mime_name: &str, extension: Option<&str>) -> Vec<S
     if let Some(icon_name) = fika_core::mime_icon_name(mime_name) {
         push_icon_candidate(&mut candidates, icon_name);
     }
+    push_portable_executable_icon_candidates(&mut candidates, mime_name);
     if let Some((family, subtype)) = mime_name.split_once('/')
         && family == "text"
     {
@@ -176,6 +177,33 @@ fn mime_theme_icon_candidates(mime_name: &str, extension: Option<&str>) -> Vec<S
         }
     }
     candidates
+}
+
+fn push_portable_executable_icon_candidates(candidates: &mut Vec<String>, mime_name: &str) {
+    let aliases = match mime_name {
+        "application/vnd.microsoft.portable-executable" => [
+            "application-x-msdownload",
+            "application-x-ms-dos-executable",
+            "application-x-executable",
+        ]
+        .as_slice(),
+        "application/x-msdownload" => [
+            "application-vnd.microsoft.portable-executable",
+            "application-x-ms-dos-executable",
+            "application-x-executable",
+        ]
+        .as_slice(),
+        "application/x-ms-dos-executable" => [
+            "application-x-msdownload",
+            "application-vnd.microsoft.portable-executable",
+            "application-x-executable",
+        ]
+        .as_slice(),
+        _ => [].as_slice(),
+    };
+    for icon_name in aliases {
+        push_icon_candidate(candidates, *icon_name);
+    }
 }
 
 fn fallback_file_icon_candidates() -> Vec<String> {
@@ -229,4 +257,70 @@ fn named_icon_candidates(
     .map(|candidate| (*candidate).to_string())
     .collect();
     (candidates, generic)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn portable_executable_mime_candidates_match_kde_theme_aliases() {
+        let profile = file_icon_profile(
+            &FileIconKind::Mime {
+                mime: Arc::from("application/vnd.microsoft.portable-executable"),
+            },
+            fika_core::MimeDatabase::shared(),
+        );
+
+        assert_eq!(
+            profile.icon_candidates.first().map(String::as_str),
+            Some("application-vnd.microsoft.portable-executable")
+        );
+        assert!(
+            profile
+                .icon_candidates
+                .iter()
+                .any(|name| name == "application-x-msdownload")
+        );
+        assert!(
+            profile
+                .icon_candidates
+                .iter()
+                .any(|name| name == "application-x-ms-dos-executable")
+        );
+        assert!(
+            profile
+                .icon_candidates
+                .iter()
+                .any(|name| name == "application-x-executable")
+        );
+    }
+
+    #[test]
+    fn exe_preliminary_icon_candidates_include_executable_alias() {
+        let database = fika_core::MimeDatabase::from_maps(
+            [("exe".to_string(), "application/x-msdownload".to_string())].into(),
+            Default::default(),
+            Default::default(),
+        );
+        let profile = file_icon_profile(
+            &FileIconKind::PreliminaryFile {
+                extension: Some("exe".to_string()),
+            },
+            &database,
+        );
+
+        assert!(
+            profile
+                .icon_candidates
+                .iter()
+                .any(|name| name == "application-x-msdownload")
+        );
+        assert!(
+            profile
+                .icon_candidates
+                .iter()
+                .any(|name| name == "application-x-executable")
+        );
+    }
 }

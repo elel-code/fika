@@ -191,6 +191,8 @@ pub fn detect_mime_from_magic(bytes: &[u8]) -> Option<&'static str> {
         Some("application/x-7z-compressed")
     } else if bytes.starts_with(b"Rar!\x1a\x07\x00") || bytes.starts_with(b"Rar!\x1a\x07\x01\x00") {
         Some("application/vnd.rar")
+    } else if let Some(mime) = portable_executable_mime_from_magic(bytes) {
+        Some(mime)
     } else if bytes.starts_with(b"\x7fELF") {
         Some("application/x-executable")
     } else if bytes.starts_with(b"#!") {
@@ -221,6 +223,22 @@ pub fn detect_mime_from_magic(bytes: &[u8]) -> Option<&'static str> {
         Some("text/plain")
     } else {
         None
+    }
+}
+
+fn portable_executable_mime_from_magic(bytes: &[u8]) -> Option<&'static str> {
+    if !bytes.starts_with(b"MZ") {
+        return None;
+    }
+
+    let Some(offset_bytes) = bytes.get(0x3c..0x40) else {
+        return Some("application/x-msdownload");
+    };
+    let pe_offset = u32::from_le_bytes(offset_bytes.try_into().ok()?) as usize;
+    if bytes.get(pe_offset..pe_offset.saturating_add(4)) == Some(b"PE\0\0".as_slice()) {
+        Some("application/vnd.microsoft.portable-executable")
+    } else {
+        Some("application/x-msdownload")
     }
 }
 
@@ -796,6 +814,18 @@ mod tests {
         assert_eq!(
             detect_mime_from_magic(b"#!/usr/bin/env python\nprint('ok')\n"),
             Some("text/x-python")
+        );
+        let mut pe = vec![0u8; 0x84];
+        pe[0..2].copy_from_slice(b"MZ");
+        pe[0x3c..0x40].copy_from_slice(&0x80u32.to_le_bytes());
+        pe[0x80..0x84].copy_from_slice(b"PE\0\0");
+        assert_eq!(
+            detect_mime_from_magic(&pe),
+            Some("application/vnd.microsoft.portable-executable")
+        );
+        assert_eq!(
+            detect_mime_from_magic(b"MZstub"),
+            Some("application/x-msdownload")
         );
         assert_eq!(
             detect_mime_from_magic(b"\0\0\0\x20ftypavif\0\0\0\0avifmif1"),

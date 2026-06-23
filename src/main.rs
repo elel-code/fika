@@ -12918,7 +12918,7 @@ impl ShellScene {
             width: size.width.max(1) as f32,
             height: size.height.max(1) as f32,
         };
-        push_rect(vertices, screen, [0.0, 0.0, 0.0, 0.40], size);
+        push_rect(vertices, screen, [0.0, 0.0, 0.0, 0.42], size);
         let scale = self.ui_scale();
         let rect = task_detail_dialog_rect_scaled(self.task_statuses.len(), size, scale);
         let title_height = scaled_dialog_metric(TASK_DETAIL_TITLE_HEIGHT, scale);
@@ -12929,10 +12929,10 @@ impl ShellScene {
             rect,
             screen,
             scaled_dialog_metric(8.0, scale),
-            [0.118, 0.128, 0.140, 0.99],
+            [0.105, 0.113, 0.124, 0.99],
             size,
         );
-        push_clipped_rect_outline(vertices, rect, screen, 1.0, [0.34, 0.38, 0.43, 1.0], size);
+        push_clipped_rect_outline(vertices, rect, screen, 1.0, [0.28, 0.32, 0.36, 1.0], size);
         push_rect(
             vertices,
             ViewRect {
@@ -12941,7 +12941,18 @@ impl ShellScene {
                 width: rect.width,
                 height: title_height,
             },
-            [0.145, 0.158, 0.174, 1.0],
+            [0.126, 0.137, 0.150, 1.0],
+            size,
+        );
+        push_rect(
+            vertices,
+            ViewRect {
+                x: rect.x,
+                y: rect.y + title_height - scaled_dialog_metric(1.0, scale).max(1.0),
+                width: rect.width,
+                height: scaled_dialog_metric(1.0, scale).max(1.0),
+            },
+            [0.20, 0.23, 0.26, 1.0],
             size,
         );
         text.push_label_aligned(
@@ -12970,22 +12981,37 @@ impl ShellScene {
                 row,
                 rect,
                 scaled_dialog_metric(6.0, scale),
-                [0.150, 0.162, 0.176, 1.0],
+                [0.136, 0.145, 0.157, 1.0],
                 size,
             );
-            let color = match status.kind {
-                ShellTaskStatusKind::Running => [0.184, 0.435, 0.929, 1.0],
-                ShellTaskStatusKind::Completed => [0.102, 0.514, 0.286, 1.0],
-                ShellTaskStatusKind::Failed => [0.820, 0.184, 0.184, 1.0],
-                ShellTaskStatusKind::Cancelled => [0.475, 0.514, 0.565, 1.0],
+            push_clipped_rect_outline(vertices, row, rect, 1.0, [0.218, 0.246, 0.274, 1.0], size);
+            let accent_color = match status.kind {
+                ShellTaskStatusKind::Running => [0.166, 0.420, 0.706, 1.0],
+                ShellTaskStatusKind::Completed => [0.118, 0.522, 0.318, 1.0],
+                ShellTaskStatusKind::Failed => [0.761, 0.220, 0.204, 1.0],
+                ShellTaskStatusKind::Cancelled => [0.440, 0.486, 0.540, 1.0],
             };
+            let strip_width = scaled_dialog_metric(3.0, scale).max(1.0);
+            push_clipped_rounded_rect(
+                vertices,
+                ViewRect {
+                    x: row.x,
+                    y: row.y,
+                    width: strip_width,
+                    height: row.height,
+                },
+                row,
+                scaled_dialog_metric(2.0, scale),
+                accent_color,
+                size,
+            );
             let dot = ViewRect {
                 x: row.x + scaled_dialog_metric(12.0, scale),
                 y: row.y + scaled_dialog_metric(11.0, scale),
                 width: scaled_dialog_metric(8.0, scale),
                 height: scaled_dialog_metric(8.0, scale),
             };
-            push_clipped_rounded_rect(vertices, dot, row, dot.width / 2.0, color, size);
+            push_clipped_rounded_rect(vertices, dot, row, dot.width / 2.0, accent_color, size);
 
             let text_x = dot.right() + scaled_dialog_metric(10.0, scale);
             let button = task_detail_dismiss_button_rect_scaled(rect, index, scale);
@@ -13032,20 +13058,39 @@ impl ShellScene {
                     height: scaled_dialog_metric(16.0, scale),
                 },
                 row,
-                TextColor::rgb(148, 163, 184),
+                match status.kind {
+                    ShellTaskStatusKind::Running => TextColor::rgb(134, 183, 230),
+                    ShellTaskStatusKind::Completed => TextColor::rgb(126, 205, 157),
+                    ShellTaskStatusKind::Failed => TextColor::rgb(235, 139, 130),
+                    ShellTaskStatusKind::Cancelled => TextColor::rgb(164, 176, 188),
+                },
                 LabelAlignment::Start,
             );
 
+            let row_action_is_cancel =
+                status.kind == ShellTaskStatusKind::Running && status.cancellable;
             push_clipped_rounded_rect(
                 vertices,
                 button,
                 rect,
                 scaled_dialog_metric(5.0, scale),
-                [0.185, 0.202, 0.220, 1.0],
+                if row_action_is_cancel {
+                    [0.442, 0.226, 0.190, 1.0]
+                } else {
+                    [0.154, 0.166, 0.180, 1.0]
+                },
+                size,
+            );
+            push_clipped_rect_outline(
+                vertices,
+                button,
+                rect,
+                1.0,
+                [0.252, 0.286, 0.322, 1.0],
                 size,
             );
             text.push_label(
-                if status.kind == ShellTaskStatusKind::Running && status.cancellable {
+                if row_action_is_cancel {
                     "Cancel"
                 } else {
                     "Dismiss"
@@ -13070,10 +13115,18 @@ impl ShellScene {
                 rect,
                 scaled_dialog_metric(5.0, scale),
                 if active {
-                    [0.22, 0.42, 0.62, 1.0]
+                    [0.176, 0.368, 0.565, 1.0]
                 } else {
-                    [0.150, 0.162, 0.176, 1.0]
+                    [0.154, 0.166, 0.180, 1.0]
                 },
+                size,
+            );
+            push_clipped_rect_outline(
+                vertices,
+                button,
+                rect,
+                1.0,
+                [0.252, 0.286, 0.322, 1.0],
                 size,
             );
             text.push_label(
@@ -13388,7 +13441,7 @@ impl ShellScene {
             width: size.width.max(1) as f32,
             height: size.height.max(1) as f32,
         };
-        push_rect(vertices, screen, [0.0, 0.0, 0.0, 0.46], size);
+        push_rect(vertices, screen, [0.0, 0.0, 0.0, 0.42], size);
         let scale = self.ui_scale();
         let rect = open_with_chooser_rect_scaled(chooser, size, scale);
         let title_height = scaled_dialog_metric(OPEN_WITH_CHOOSER_TITLE_HEIGHT, scale);
@@ -13399,10 +13452,10 @@ impl ShellScene {
             rect,
             screen,
             scaled_dialog_metric(8.0, scale),
-            [0.118, 0.128, 0.140, 0.99],
+            [0.105, 0.113, 0.124, 0.99],
             size,
         );
-        push_clipped_rect_outline(vertices, rect, screen, 1.0, [0.34, 0.38, 0.43, 1.0], size);
+        push_clipped_rect_outline(vertices, rect, screen, 1.0, [0.28, 0.32, 0.36, 1.0], size);
         push_rect(
             vertices,
             ViewRect {
@@ -13411,7 +13464,18 @@ impl ShellScene {
                 width: rect.width,
                 height: title_height,
             },
-            [0.145, 0.158, 0.174, 1.0],
+            [0.126, 0.137, 0.150, 1.0],
+            size,
+        );
+        push_rect(
+            vertices,
+            ViewRect {
+                x: rect.x,
+                y: rect.y + title_height - scaled_dialog_metric(1.0, scale).max(1.0),
+                width: rect.width,
+                height: scaled_dialog_metric(1.0, scale).max(1.0),
+            },
+            [0.20, 0.23, 0.26, 1.0],
             size,
         );
         text.push_label(
@@ -13443,10 +13507,10 @@ impl ShellScene {
             query,
             rect,
             scaled_dialog_metric(5.0, scale),
-            [0.078, 0.086, 0.096, 1.0],
+            [0.074, 0.082, 0.092, 1.0],
             size,
         );
-        push_clipped_rect_outline(vertices, query, rect, 1.0, [0.26, 0.31, 0.36, 1.0], size);
+        push_clipped_rect_outline(vertices, query, rect, 1.0, [0.28, 0.33, 0.38, 1.0], size);
         let query_label = if chooser.query.is_empty() {
             "Search applications|".to_string()
         } else {
@@ -13474,10 +13538,10 @@ impl ShellScene {
             list,
             rect,
             scaled_dialog_metric(6.0, scale),
-            [0.090, 0.100, 0.112, 1.0],
+            [0.083, 0.091, 0.101, 1.0],
             size,
         );
-        push_clipped_rect_outline(vertices, list, rect, 1.0, [0.23, 0.27, 0.31, 1.0], size);
+        push_clipped_rect_outline(vertices, list, rect, 1.0, [0.220, 0.250, 0.282, 1.0], size);
         let visible = chooser.visible_filtered_indexes();
         if visible.is_empty() {
             text.push_label(
@@ -13489,7 +13553,7 @@ impl ShellScene {
                     height: scaled_dialog_metric(18.0, scale),
                 },
                 list,
-                TextColor::rgb(178, 188, 198),
+                TextColor::rgb(166, 178, 190),
             );
         } else {
             for (visible_row, app_index) in visible.iter().copied().enumerate() {
@@ -13508,16 +13572,33 @@ impl ShellScene {
                     vertices,
                     row_rect,
                     if selected {
-                        [0.19, 0.33, 0.50, 0.90]
+                        [0.155, 0.280, 0.410, 0.94]
                     } else if application.is_default {
-                        [0.15, 0.18, 0.16, 0.88]
+                        [0.110, 0.142, 0.118, 0.90]
                     } else if visible_row % 2 == 1 {
-                        [0.105, 0.114, 0.126, 0.76]
+                        [0.103, 0.112, 0.124, 0.76]
                     } else {
-                        [0.095, 0.104, 0.116, 0.72]
+                        [0.093, 0.102, 0.114, 0.72]
                     },
                     size,
                 );
+                if selected || application.is_default {
+                    push_rect(
+                        vertices,
+                        ViewRect {
+                            x: row_rect.x,
+                            y: row_rect.y,
+                            width: scaled_dialog_metric(3.0, scale).max(1.0),
+                            height: row_rect.height,
+                        },
+                        if selected {
+                            [0.314, 0.565, 0.784, 1.0]
+                        } else {
+                            [0.344, 0.580, 0.322, 1.0]
+                        },
+                        size,
+                    );
+                }
                 let marker = ViewRect {
                     x: row_rect.x + scaled_dialog_metric(10.0, scale),
                     y: row_rect.y + scaled_dialog_metric(11.0, scale),
@@ -13529,10 +13610,12 @@ impl ShellScene {
                     marker,
                     list,
                     scaled_dialog_metric(4.0, scale),
-                    if application.is_default {
-                        [0.42, 0.58, 0.34, 1.0]
+                    if selected {
+                        [0.506, 0.690, 0.836, 1.0]
+                    } else if application.is_default {
+                        [0.350, 0.566, 0.318, 1.0]
                     } else {
-                        [0.38, 0.48, 0.58, 1.0]
+                        [0.330, 0.406, 0.480, 1.0]
                     },
                     size,
                 );
@@ -13566,9 +13649,9 @@ impl ShellScene {
                     },
                     row_rect,
                     if selected {
-                        TextColor::rgb(198, 214, 228)
+                        TextColor::rgb(210, 225, 236)
                     } else {
-                        TextColor::rgb(146, 160, 174)
+                        TextColor::rgb(150, 164, 178)
                     },
                 );
             }
@@ -13617,10 +13700,18 @@ impl ShellScene {
                 rect,
                 scaled_dialog_metric(5.0, scale),
                 if active {
-                    [0.22, 0.42, 0.62, 1.0]
+                    [0.176, 0.368, 0.565, 1.0]
                 } else {
-                    [0.150, 0.162, 0.176, 1.0]
+                    [0.154, 0.166, 0.180, 1.0]
                 },
+                size,
+            );
+            push_clipped_rect_outline(
+                vertices,
+                button,
+                rect,
+                1.0,
+                [0.252, 0.286, 0.322, 1.0],
                 size,
             );
             text.push_label(
