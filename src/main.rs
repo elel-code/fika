@@ -27779,6 +27779,24 @@ mod tests {
     }
 
     #[test]
+    fn folder_preview_source_ignores_video_without_preview_support() {
+        let root = test_dir("directory-preview-source-video");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("01.mp4"), b"\0\0\0\x18ftypmp42preview").unwrap();
+        image::RgbImage::from_pixel(8, 4, image::Rgb([210, 40, 80]))
+            .save(root.join("安炳琨-20230557126.jpeg"))
+            .unwrap();
+
+        let sources = folder_preview_thumbnail_sources(&root);
+
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].path, root.join("安炳琨-20230557126.jpeg"));
+        assert_eq!(sources[0].mime_type.as_deref(), Some("image/jpeg"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn folder_preview_source_includes_windows_executable_icons() {
         let root = test_dir("directory-preview-source-exe");
         fs::create_dir_all(&root).unwrap();
@@ -28145,6 +28163,40 @@ mod tests {
         let cover = root.join("cover.png");
         image::RgbaImage::from_pixel(8, 4, image::Rgba([210, 40, 80, 255]))
             .save(&cover)
+            .unwrap();
+        let directory_modified_secs = root
+            .metadata()
+            .unwrap()
+            .modified()
+            .unwrap()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let request = FolderPreviewRoleRequest {
+            key: FolderPreviewRoleKey::new(root.clone(), directory_modified_secs, 48),
+            priority: ThumbnailRequestPriority::Visible,
+        };
+
+        let preview =
+            folder_preview_for_request(&cache_root, &ThumbnailerRegistry::default(), &request)
+                .unwrap();
+
+        assert_eq!(preview.raster.width, 48);
+        assert_eq!(preview.raster.height, 48);
+        assert!(raster_contains_rgb(&preview.raster, [210, 40, 80]));
+
+        let _ = fs::remove_dir_all(cache_root);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn folder_preview_role_rasterizes_chinese_named_jpeg_when_video_is_present() {
+        let cache_root = test_dir("directory-preview-chinese-jpeg-cache");
+        let root = test_dir("directory-preview-chinese-jpeg-worker");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("01.mp4"), b"\0\0\0\x18ftypmp42preview").unwrap();
+        image::RgbImage::from_pixel(8, 4, image::Rgb([210, 40, 80]))
+            .save(root.join("安炳琨-20230557126.jpeg"))
             .unwrap();
         let directory_modified_secs = root
             .metadata()

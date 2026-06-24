@@ -781,7 +781,7 @@ fn thumbnail_mime_may_have_preview(mime_type: &str) -> bool {
     if mime_type.starts_with("text/") {
         return false;
     }
-    if mime_type.starts_with("image/") || mime_type.starts_with("video/") {
+    if mime_type.starts_with("image/") {
         return true;
     }
     if matches!(
@@ -814,9 +814,7 @@ fn thumbnail_extension_may_have_preview(path: &Path) -> bool {
         .and_then(OsStr::to_str)
         .map(str::to_ascii_lowercase)
         .is_some_and(|extension| {
-            image_thumbnail_extension(&extension)
-                || video_thumbnail_extension(&extension)
-                || document_thumbnail_extension(&extension)
+            image_thumbnail_extension(&extension) || document_thumbnail_extension(&extension)
         })
 }
 
@@ -1536,6 +1534,14 @@ mod tests {
         ));
         assert!(thumbnail_request_may_have_preview(
             Path::new("/tmp/setup.exe"),
+            Some("application/octet-stream")
+        ));
+        assert!(!thumbnail_request_may_have_preview(
+            Path::new("/tmp/clip.mp4"),
+            Some("video/mp4")
+        ));
+        assert!(!thumbnail_request_may_have_preview(
+            Path::new("/tmp/clip.mp4"),
             Some("application/octet-stream")
         ));
         assert!(!thumbnail_request_may_have_preview(
