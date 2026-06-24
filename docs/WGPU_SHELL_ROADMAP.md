@@ -104,7 +104,7 @@ wgpu = "29"
 - Store pane state through reusable pane containers.
 - Route selection, hover, context targets, scrollbars, location/filter state,
   keyboard navigation, rubber-band, and DnD by `ShellPaneId`.
-- Keep split panes visually and behaviorally identical to the first pane.
+- Keep split panes visually and behaviorally identical across pane slots.
 
 ### Phase 2: Split The Shell
 

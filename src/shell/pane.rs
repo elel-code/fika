@@ -11,26 +11,26 @@ use crate::{
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ShellPaneId {
-    First,
-    Second,
+    Slot0,
+    Slot1,
 }
 
 impl ShellPaneId {
-    pub(crate) const FIRST: Self = Self::First;
-    pub(crate) const SECOND: Self = Self::Second;
-    pub(crate) const ALL: [Self; 2] = [Self::FIRST, Self::SECOND];
+    pub(crate) const SLOT_0: Self = Self::Slot0;
+    pub(crate) const SLOT_1: Self = Self::Slot1;
+    pub(crate) const ALL: [Self; 2] = [Self::SLOT_0, Self::SLOT_1];
 
     pub(crate) fn index(self) -> usize {
         match self {
-            Self::First => 0,
-            Self::Second => 1,
+            Self::Slot0 => 0,
+            Self::Slot1 => 1,
         }
     }
 
     pub(crate) fn as_str(self) -> &'static str {
         match self {
-            Self::First => "pane-0",
-            Self::Second => "pane-1",
+            Self::Slot0 => "pane-0",
+            Self::Slot1 => "pane-1",
         }
     }
 }
@@ -132,9 +132,9 @@ pub(crate) struct ShellPaneStates {
 }
 
 impl ShellPaneStates {
-    pub(crate) fn new(first: ShellPaneState) -> Self {
+    pub(crate) fn new(slot0: ShellPaneState) -> Self {
         Self {
-            panes: [Some(first), None],
+            panes: [Some(slot0), None],
         }
     }
 
@@ -395,30 +395,40 @@ mod tests {
         let path = PathBuf::from("/tmp/shared-name");
         let mut pools = ShellPaneVisibleSlotPools::default();
 
-        let first_stats = pools.update_visible_items(ShellPaneId::FIRST, [path.clone()]);
-        assert_eq!(first_stats.active, 1);
-        assert!(pools.get(ShellPaneId::FIRST).slot_for_path(&path).is_some());
+        let slot0_stats = pools.update_visible_items(ShellPaneId::SLOT_0, [path.clone()]);
+        assert_eq!(slot0_stats.active, 1);
         assert!(
             pools
-                .get(ShellPaneId::SECOND)
+                .get(ShellPaneId::SLOT_0)
+                .slot_for_path(&path)
+                .is_some()
+        );
+        assert!(
+            pools
+                .get(ShellPaneId::SLOT_1)
                 .slot_for_path(&path)
                 .is_none()
         );
 
-        let second_stats = pools.update_visible_items(ShellPaneId::SECOND, [path.clone()]);
-        assert_eq!(second_stats.active, 1);
+        let slot1_stats = pools.update_visible_items(ShellPaneId::SLOT_1, [path.clone()]);
+        assert_eq!(slot1_stats.active, 1);
         assert!(
             pools
-                .get(ShellPaneId::SECOND)
+                .get(ShellPaneId::SLOT_1)
                 .slot_for_path(&path)
                 .is_some()
         );
 
-        pools.clear(ShellPaneId::SECOND);
-        assert!(pools.get(ShellPaneId::FIRST).slot_for_path(&path).is_some());
+        pools.clear(ShellPaneId::SLOT_1);
         assert!(
             pools
-                .get(ShellPaneId::SECOND)
+                .get(ShellPaneId::SLOT_0)
+                .slot_for_path(&path)
+                .is_some()
+        );
+        assert!(
+            pools
+                .get(ShellPaneId::SLOT_1)
                 .slot_for_path(&path)
                 .is_none()
         );

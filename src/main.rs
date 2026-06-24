@@ -360,18 +360,18 @@ struct ScrollbarDrag {
 
 fn window_title(scene: &ShellScene) -> String {
     let view_mode = scene.active_view_mode();
-    if let Some(split_pane) = scene.panes.get(ShellPaneId::SECOND) {
+    if let Some(split_pane) = scene.panes.get(ShellPaneId::SLOT_1) {
         format!(
             "Fika wgpu shell [{}] - {} | {}",
             view_mode.as_str(),
-            scene.panes[ShellPaneId::FIRST].path.display(),
+            scene.panes[ShellPaneId::SLOT_0].path.display(),
             split_pane.path.display()
         )
     } else {
         format!(
             "Fika wgpu shell [{}] - {}",
             view_mode.as_str(),
-            scene.panes[ShellPaneId::FIRST].path.display()
+            scene.panes[ShellPaneId::SLOT_0].path.display()
         )
     }
 }
@@ -599,11 +599,11 @@ impl FikaWgpuApp {
             return;
         }
         while let Some(action) = self.autosmoke_scroll_actions.pop_front() {
-            let old_x = self.scene.panes[ShellPaneId::FIRST].scroll_x;
-            let old_y = self.scene.panes[ShellPaneId::FIRST].scroll_y;
+            let old_x = self.scene.panes[ShellPaneId::SLOT_0].scroll_x;
+            let old_y = self.scene.panes[ShellPaneId::SLOT_0].scroll_y;
             let changed = self.scene.scroll_by(action.delta, size);
-            let new_x = self.scene.panes[ShellPaneId::FIRST].scroll_x;
-            let new_y = self.scene.panes[ShellPaneId::FIRST].scroll_y;
+            let new_x = self.scene.panes[ShellPaneId::SLOT_0].scroll_x;
+            let new_y = self.scene.panes[ShellPaneId::SLOT_0].scroll_y;
             fika_log!(
                 "[fika-wgpu] autosmoke-scroll action={} delta={:.1} changed={} old_scroll_x={:.1} new_scroll_x={:.1} old_scroll_y={:.1} new_scroll_y={:.1}",
                 action.label,
@@ -4877,14 +4877,14 @@ impl ShellScene {
             fika_log!("[fika-wgpu] first-entries={preview}");
         }
 
-        let first_pane = ShellPaneState::from_entries(path, view_mode, entries, show_hidden, "");
+        let slot0_pane = ShellPaneState::from_entries(path, view_mode, entries, show_hidden, "");
         let places = build_shell_places();
         fika_log!("[fika-wgpu] places entries={}", places.len());
 
         Ok(Self {
-            panes: ShellPaneStates::new(first_pane),
+            panes: ShellPaneStates::new(slot0_pane),
             compact_layout_cache: CompactLayoutCache::new(),
-            active_pane: ShellPaneId::FIRST,
+            active_pane: ShellPaneId::SLOT_0,
             places,
             location_draft: None,
             filter_active: false,
@@ -4965,7 +4965,7 @@ impl ShellScene {
 
     #[cfg(test)]
     fn load_path(&mut self, path: PathBuf, size: PhysicalSize<u32>) -> Result<bool, String> {
-        self.load_path_in_pane(ShellPaneId::FIRST, path, size, true)
+        self.load_path_in_pane(ShellPaneId::SLOT_0, path, size, true)
     }
 
     fn load_path_in_pane(
@@ -5324,8 +5324,8 @@ impl ShellScene {
             self.zoom_step,
             self.zoom_percent(),
             self.zoom_changes,
-            self.panes[ShellPaneId::FIRST].scroll_x,
-            self.panes[ShellPaneId::FIRST].scroll_y
+            self.panes[ShellPaneId::SLOT_0].scroll_x,
+            self.panes[ShellPaneId::SLOT_0].scroll_y
         );
         true
     }
@@ -5592,7 +5592,7 @@ impl ShellScene {
             "[fika-wgpu] filter active={} pattern={:?} matches={} changes={} selection_changed={}",
             self.filter_active as u8,
             self.filter_pattern,
-            self.panes[ShellPaneId::FIRST].filtered_indexes.len(),
+            self.panes[ShellPaneId::SLOT_0].filtered_indexes.len(),
             self.filter_changes,
             selection_changed as u8
         );
@@ -5624,7 +5624,7 @@ impl ShellScene {
             let path = self
                 .pane_state(pane)
                 .map(|pane| pane.path.clone())
-                .unwrap_or_else(|| self.panes[ShellPaneId::FIRST].path.clone());
+                .unwrap_or_else(|| self.panes[ShellPaneId::SLOT_0].path.clone());
             (path, pane)
         });
         let view_mode = self
@@ -5649,10 +5649,10 @@ impl ShellScene {
         let mut split_pane = ShellPaneState::load(path, view_mode, self.show_hidden)?;
         split_pane.scroll_x = 0.0;
         split_pane.scroll_y = 0.0;
-        self.panes.set(ShellPaneId::SECOND, split_pane);
-        self.invalidate_compact_layout_cache(ShellPaneId::SECOND);
-        self.visible_slots.clear(ShellPaneId::SECOND);
-        self.active_pane = ShellPaneId::SECOND;
+        self.panes.set(ShellPaneId::SLOT_1, split_pane);
+        self.invalidate_compact_layout_cache(ShellPaneId::SLOT_1);
+        self.visible_slots.clear(ShellPaneId::SLOT_1);
+        self.active_pane = ShellPaneId::SLOT_1;
         self.split_pane_left_fraction = 0.5;
         self.split_pane_changes += 1;
         self.context_target = None;
@@ -5674,9 +5674,9 @@ impl ShellScene {
         fika_log!(
             "[fika-wgpu] split-pane open=1 changes={} left={} right={}",
             self.split_pane_changes,
-            self.panes[ShellPaneId::FIRST].path.display(),
+            self.panes[ShellPaneId::SLOT_0].path.display(),
             self.panes
-                .get(ShellPaneId::SECOND)
+                .get(ShellPaneId::SLOT_1)
                 .map(|pane| pane.path.display().to_string())
                 .unwrap_or_default()
         );
@@ -5697,7 +5697,7 @@ impl ShellScene {
     }
 
     fn toggle_split_view_from_toolbar(&mut self, size: PhysicalSize<u32>) -> Result<bool, String> {
-        if self.panes.is_open(ShellPaneId::SECOND) {
+        if self.panes.is_open(ShellPaneId::SLOT_1) {
             Ok(self.close_active_split_pane(size))
         } else {
             self.open_split_pane_from_active(size)
@@ -5705,30 +5705,30 @@ impl ShellScene {
     }
 
     fn close_active_split_pane(&mut self, size: PhysicalSize<u32>) -> bool {
-        if !self.panes.is_open(ShellPaneId::SECOND) {
+        if !self.panes.is_open(ShellPaneId::SLOT_1) {
             return false;
         }
         let active = self.active_pane();
         match active {
-            ShellPaneId::FIRST => {
-                let Some(remaining) = self.panes.take(ShellPaneId::SECOND) else {
+            ShellPaneId::SLOT_0 => {
+                let Some(remaining) = self.panes.take(ShellPaneId::SLOT_1) else {
                     return false;
                 };
-                self.panes.set(ShellPaneId::FIRST, remaining);
-                let remaining_history = self.histories.take(ShellPaneId::SECOND);
-                self.histories.set(ShellPaneId::FIRST, remaining_history);
-                self.histories.clear(ShellPaneId::SECOND);
+                self.panes.set(ShellPaneId::SLOT_0, remaining);
+                let remaining_history = self.histories.take(ShellPaneId::SLOT_1);
+                self.histories.set(ShellPaneId::SLOT_0, remaining_history);
+                self.histories.clear(ShellPaneId::SLOT_1);
             }
-            ShellPaneId::SECOND => {
-                if self.panes.take(ShellPaneId::SECOND).is_none() {
+            ShellPaneId::SLOT_1 => {
+                if self.panes.take(ShellPaneId::SLOT_1).is_none() {
                     return false;
                 }
-                self.histories.clear(ShellPaneId::SECOND);
+                self.histories.clear(ShellPaneId::SLOT_1);
             }
         }
-        self.active_pane = ShellPaneId::FIRST;
-        self.visible_slots.clear(ShellPaneId::FIRST);
-        self.visible_slots.clear(ShellPaneId::SECOND);
+        self.active_pane = ShellPaneId::SLOT_0;
+        self.visible_slots.clear(ShellPaneId::SLOT_0);
+        self.visible_slots.clear(ShellPaneId::SLOT_1);
         self.split_pane_left_fraction = 0.5;
         self.split_pane_changes += 1;
         self.context_target = None;
@@ -5751,7 +5751,7 @@ impl ShellScene {
             "[fika-wgpu] split-pane open=0 closed={} changes={} remaining={}",
             active.as_str(),
             self.split_pane_changes,
-            self.panes[ShellPaneId::FIRST].path.display()
+            self.panes[ShellPaneId::SLOT_0].path.display()
         );
         true
     }
@@ -5805,7 +5805,7 @@ impl ShellScene {
     }
 
     fn filtered_entry_count(&self) -> usize {
-        self.panes[ShellPaneId::FIRST].filtered_indexes.len()
+        self.panes[ShellPaneId::SLOT_0].filtered_indexes.len()
     }
 
     fn set_scale_factor(&mut self, scale_factor: f32, size: PhysicalSize<u32>) -> bool {
@@ -5838,8 +5838,8 @@ impl ShellScene {
             "[fika-wgpu] scale-factor={:.2} ui_scale={:.2} scroll_x={:.1} scroll_y={:.1}",
             self.scale_factor,
             self.ui_scale(),
-            self.panes[ShellPaneId::FIRST].scroll_x,
-            self.panes[ShellPaneId::FIRST].scroll_y
+            self.panes[ShellPaneId::SLOT_0].scroll_x,
+            self.panes[ShellPaneId::SLOT_0].scroll_y
         );
         true
     }
@@ -6011,7 +6011,7 @@ impl ShellScene {
 
     #[cfg(test)]
     fn path_bar_rect(&self, size: PhysicalSize<u32>) -> Option<ViewRect> {
-        self.pane_path_bar_rect(ShellPaneId::FIRST, size)
+        self.pane_path_bar_rect(ShellPaneId::SLOT_0, size)
     }
 
     fn path_bar_contains_screen_point(&self, point: ViewPoint, size: PhysicalSize<u32>) -> bool {
@@ -9976,15 +9976,15 @@ impl ShellScene {
 
     fn pane_state(&self, kind: ShellPaneId) -> Option<&ShellPaneState> {
         match kind {
-            ShellPaneId::FIRST => Some(&self.panes[ShellPaneId::FIRST]),
-            ShellPaneId::SECOND => self.panes.get(ShellPaneId::SECOND),
+            ShellPaneId::SLOT_0 => Some(&self.panes[ShellPaneId::SLOT_0]),
+            ShellPaneId::SLOT_1 => self.panes.get(ShellPaneId::SLOT_1),
         }
     }
 
     fn pane_state_mut(&mut self, kind: ShellPaneId) -> Option<&mut ShellPaneState> {
         match kind {
-            ShellPaneId::FIRST => Some(&mut self.panes[ShellPaneId::FIRST]),
-            ShellPaneId::SECOND => self.panes.get_mut(ShellPaneId::SECOND),
+            ShellPaneId::SLOT_0 => Some(&mut self.panes[ShellPaneId::SLOT_0]),
+            ShellPaneId::SLOT_1 => self.panes.get_mut(ShellPaneId::SLOT_1),
         }
     }
 
@@ -10017,9 +10017,9 @@ impl ShellScene {
 
     fn normalized_pane_id(&self, kind: ShellPaneId) -> ShellPaneId {
         match kind {
-            ShellPaneId::FIRST => ShellPaneId::FIRST,
-            ShellPaneId::SECOND if self.panes.is_open(ShellPaneId::SECOND) => ShellPaneId::SECOND,
-            ShellPaneId::SECOND => ShellPaneId::FIRST,
+            ShellPaneId::SLOT_0 => ShellPaneId::SLOT_0,
+            ShellPaneId::SLOT_1 if self.panes.is_open(ShellPaneId::SLOT_1) => ShellPaneId::SLOT_1,
+            ShellPaneId::SLOT_1 => ShellPaneId::SLOT_0,
         }
     }
 
@@ -10095,15 +10095,15 @@ impl ShellScene {
     fn pane_rect_for_id(&self, kind: ShellPaneId, size: PhysicalSize<u32>) -> Option<ViewRect> {
         self.pane_state(kind)?;
         match kind {
-            ShellPaneId::FIRST => Some(self.pane_rect(size)),
-            ShellPaneId::SECOND => self
+            ShellPaneId::SLOT_0 => Some(self.pane_rect(size)),
+            ShellPaneId::SLOT_1 => self
                 .split_pane_metrics(size)
                 .map(|metrics| metrics.right_pane),
         }
     }
 
     fn pane_filter_bar_height(&self, kind: ShellPaneId) -> f32 {
-        if kind == ShellPaneId::FIRST {
+        if kind == ShellPaneId::SLOT_0 {
             self.filter_bar_height()
         } else {
             0.0
@@ -10261,8 +10261,8 @@ impl ShellScene {
     #[cfg_attr(not(test), allow(dead_code))]
     fn layout(&self, size: PhysicalSize<u32>) -> ShellLayout {
         self.pane_layout(
-            self.pane_view(ShellPaneId::FIRST)
-                .expect("first pane is open"),
+            self.pane_view(ShellPaneId::SLOT_0)
+                .expect("pane slot 0 is open"),
             self.content_width(size),
             self.viewport_height(size),
         )
@@ -10274,7 +10274,7 @@ impl ShellScene {
         content_width: f32,
         viewport_height: f32,
     ) -> ShellLayout {
-        self.pane_layout_for_pane(ShellPaneId::FIRST, pane, content_width, viewport_height)
+        self.pane_layout_for_pane(ShellPaneId::SLOT_0, pane, content_width, viewport_height)
     }
 
     fn pane_layout_for_pane(
@@ -10408,8 +10408,8 @@ impl ShellScene {
     fn icons_options(&self, size: PhysicalSize<u32>) -> IconsLayoutOptions {
         let mut options =
             self.icons_options_for_viewport(self.content_width(size), self.viewport_height(size));
-        options.scroll_x = self.panes[ShellPaneId::FIRST].scroll_x;
-        options.scroll_y = self.panes[ShellPaneId::FIRST].scroll_y;
+        options.scroll_x = self.panes[ShellPaneId::SLOT_0].scroll_x;
+        options.scroll_y = self.panes[ShellPaneId::SLOT_0].scroll_y;
         options
     }
 
@@ -10448,7 +10448,7 @@ impl ShellScene {
     fn compact_options(&self, size: PhysicalSize<u32>) -> CompactLayoutOptions {
         let mut options =
             self.compact_options_for_viewport(self.content_width(size), self.viewport_height(size));
-        options.scroll_x = self.panes[ShellPaneId::FIRST].scroll_x;
+        options.scroll_x = self.panes[ShellPaneId::SLOT_0].scroll_x;
         options
     }
 
@@ -10512,16 +10512,16 @@ impl ShellScene {
             .into_iter()
             .filter_map(|kind| self.pane_projection(kind, size))
             .collect::<Vec<_>>();
-        let first_projection = projections
+        let slot0_projection = projections
             .iter()
-            .find(|projection| projection.geometry.kind == ShellPaneId::FIRST)
-            .expect("first pane is open");
-        let content_size = first_projection.scroll_metrics.content_size;
-        let first_item_rect = first_projection
+            .find(|projection| projection.geometry.kind == ShellPaneId::SLOT_0)
+            .expect("pane slot 0 is open");
+        let content_size = slot0_projection.scroll_metrics.content_size;
+        let first_item_rect = slot0_projection
             .visible_items
             .first()
             .map(|item| item.layout.item_rect);
-        let visible_items = first_projection.visible_items.len();
+        let visible_items = slot0_projection.visible_items.len();
         let thumbnail_candidates = projections
             .iter()
             .map(|projection| self.thumbnail_candidate_count_for_projection(projection))
@@ -10539,7 +10539,7 @@ impl ShellScene {
                 width,
                 height,
             },
-            view_mode_surface_color(first_projection.view.view_mode),
+            view_mode_surface_color(slot0_projection.view.view_mode),
             size,
         );
         self.push_app_toolbar(&mut vertices, size);
@@ -10557,7 +10557,7 @@ impl ShellScene {
         for projection in &projections {
             let scrollbar_visible =
                 self.push_pane_projection(&mut vertices, text, icons, projection, size);
-            if projection.geometry.kind == ShellPaneId::FIRST {
+            if projection.geometry.kind == ShellPaneId::SLOT_0 {
                 content_scrollbar_visible = scrollbar_visible;
             }
             self.queue_thumbnail_read_ahead_for_projection(projection, icons);
@@ -11263,7 +11263,6 @@ impl ShellScene {
         let top_bar = projection.geometry.top_bar;
         let status_bar = projection.geometry.status_bar;
 
-        push_rect(vertices, pane, [1.000, 1.000, 1.000, 1.0], size);
         push_rect(vertices, top_bar, chrome_color(), size);
         if let Some(path_rect) = self.pane_path_bar_rect(pane_id, size) {
             let location_active = self.location_bar_active_for_pane(pane_id);
@@ -11293,7 +11292,7 @@ impl ShellScene {
             size,
         );
         self.push_pane_body_border(vertices, projection, size);
-        if pane_id == ShellPaneId::FIRST {
+        if pane_id == ShellPaneId::SLOT_0 {
             self.push_filter_bar(vertices, text, size);
         }
         if projection.view.view_mode == ShellViewMode::Details {
@@ -11727,7 +11726,7 @@ impl ShellScene {
     ) {
         let pane = projection.view;
         let rect = projection.geometry.status_bar;
-        push_rect(vertices, rect, [1.000, 1.000, 1.000, 1.0], size);
+        push_rect(vertices, rect, chrome_color(), size);
         push_rect(
             vertices,
             ViewRect {
@@ -11759,7 +11758,7 @@ impl ShellScene {
         push_rect(
             vertices,
             toolbar,
-            view_mode_surface_color(self.panes[ShellPaneId::FIRST].view_mode),
+            view_mode_surface_color(self.panes[ShellPaneId::SLOT_0].view_mode),
             size,
         );
 
@@ -11832,7 +11831,7 @@ impl ShellScene {
         );
 
         let split_button = self.split_view_button_rect(size);
-        let split_open = self.panes.is_open(ShellPaneId::SECOND);
+        let split_open = self.panes.is_open(ShellPaneId::SLOT_1);
         let split_border = if split_open {
             [0.184, 0.435, 0.929, 1.0]
         } else {
@@ -11898,7 +11897,7 @@ impl ShellScene {
             size,
         );
         if split_open {
-            let close_center_x = if self.active_pane() == ShellPaneId::FIRST {
+            let close_center_x = if self.active_pane() == ShellPaneId::SLOT_0 {
                 split_icon.x + split_icon.width * 0.25
             } else {
                 split_icon.x + split_icon.width * 0.75
@@ -11963,7 +11962,7 @@ impl ShellScene {
         let active_place_path = self
             .pane_state(self.active_pane())
             .map(|pane| pane.path.as_path())
-            .unwrap_or_else(|| self.panes[ShellPaneId::FIRST].path.as_path());
+            .unwrap_or_else(|| self.panes[ShellPaneId::SLOT_0].path.as_path());
         let active_place = active_shell_place_index(&self.places, active_place_path);
         let top_padding = self.scale_metric(PLACES_SIDEBAR_TOP_PADDING);
         let title_height = self.scale_metric(PLACES_TITLE_HEIGHT);
@@ -13220,7 +13219,7 @@ impl ShellScene {
                 rect,
                 scaled_dialog_metric(5.0, scale),
                 if active {
-                    view_mode_badge_color(self.panes[ShellPaneId::FIRST].view_mode)
+                    view_mode_badge_color(self.panes[ShellPaneId::SLOT_0].view_mode)
                 } else {
                     [0.150, 0.162, 0.176, 1.0]
                 },
@@ -13870,7 +13869,7 @@ impl ShellScene {
 
     fn content_origin_y(&self) -> f32 {
         self.details_header_y()
-            + if self.panes[ShellPaneId::FIRST].view_mode == ShellViewMode::Details {
+            + if self.panes[ShellPaneId::SLOT_0].view_mode == ShellViewMode::Details {
                 self.details_header_height()
             } else {
                 0.0
@@ -13984,7 +13983,7 @@ impl ShellScene {
     }
 
     fn split_pane_metrics(&self, size: PhysicalSize<u32>) -> Option<ShellPaneSplitMetrics> {
-        self.panes.get(ShellPaneId::SECOND)?;
+        self.panes.get(ShellPaneId::SLOT_1)?;
         let origin_x = self.content_origin_x(size);
         let total_width = (size.width.max(1) as f32 - origin_x).max(1.0);
         let divider_width = self.scale_metric(SPLIT_PANE_DIVIDER_WIDTH);
@@ -14015,7 +14014,7 @@ impl ShellScene {
     }
 
     fn split_pane_width_bounds(&self, size: PhysicalSize<u32>) -> Option<(f32, f32, f32)> {
-        self.panes.get(ShellPaneId::SECOND)?;
+        self.panes.get(ShellPaneId::SLOT_1)?;
         let origin_x = self.content_origin_x(size);
         let total_width = (size.width.max(1) as f32 - origin_x).max(1.0);
         let divider_width = self.scale_metric(SPLIT_PANE_DIVIDER_WIDTH);
@@ -14040,7 +14039,7 @@ impl ShellScene {
         desired_left_width: f32,
         size: PhysicalSize<u32>,
     ) -> bool {
-        if !self.panes.is_open(ShellPaneId::SECOND) {
+        if !self.panes.is_open(ShellPaneId::SLOT_1) {
             return false;
         }
         let Some((available_width, min_width, max_left_width)) = self.split_pane_width_bounds(size)
@@ -14069,7 +14068,7 @@ impl ShellScene {
     }
 
     fn content_scrollbar_axis(&self) -> ContentScrollbarAxis {
-        scrollbar_axis_for_view_mode(self.panes[ShellPaneId::FIRST].view_mode)
+        scrollbar_axis_for_view_mode(self.panes[ShellPaneId::SLOT_0].view_mode)
     }
 
     fn pane_content_scrollbar_axis(&self, kind: ShellPaneId) -> Option<ContentScrollbarAxis> {
@@ -14091,8 +14090,8 @@ impl ShellScene {
     }
 
     fn clamp_scroll(&mut self, size: PhysicalSize<u32>) {
-        self.clamp_pane_scroll(ShellPaneId::FIRST, size);
-        self.clamp_pane_scroll(ShellPaneId::SECOND, size);
+        self.clamp_pane_scroll(ShellPaneId::SLOT_0, size);
+        self.clamp_pane_scroll(ShellPaneId::SLOT_1, size);
         self.clamp_places_scroll(size);
         self.refresh_hover(size);
     }
@@ -14108,7 +14107,7 @@ impl ShellScene {
         let pane = self
             .pointer
             .and_then(|point| self.pane_id_at_screen_point(point, size))
-            .unwrap_or(ShellPaneId::FIRST);
+            .unwrap_or(ShellPaneId::SLOT_0);
         let old_active = self.active_pane();
         self.active_pane = self.normalized_pane_id(pane);
         let scrolled = self.scroll_pane_by(pane, delta_y, size);
@@ -14220,21 +14219,21 @@ impl ShellScene {
 
     #[cfg_attr(not(test), allow(dead_code))]
     fn max_scroll_x(&self, size: PhysicalSize<u32>) -> f32 {
-        self.pane_scroll_metrics(ShellPaneId::FIRST, size)
+        self.pane_scroll_metrics(ShellPaneId::SLOT_0, size)
             .map(|metrics| metrics.max_scroll_x)
             .unwrap_or(0.0)
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
     fn max_scroll_y(&self, size: PhysicalSize<u32>) -> f32 {
-        self.pane_scroll_metrics(ShellPaneId::FIRST, size)
+        self.pane_scroll_metrics(ShellPaneId::SLOT_0, size)
             .map(|metrics| metrics.max_scroll_y)
             .unwrap_or(0.0)
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
     fn content_scrollbar_rects(&self, size: PhysicalSize<u32>) -> Option<(ViewRect, ViewRect)> {
-        self.pane_content_scrollbar_rects(ShellPaneId::FIRST, size)
+        self.pane_content_scrollbar_rects(ShellPaneId::SLOT_0, size)
     }
 
     fn pane_content_scrollbar_rects(
@@ -14418,11 +14417,11 @@ impl ShellScene {
         let Some(drag) = self.scrollbar_drag else {
             return false;
         };
-        let old_x = self.panes[ShellPaneId::FIRST].scroll_x;
-        let old_y = self.panes[ShellPaneId::FIRST].scroll_y;
+        let old_x = self.panes[ShellPaneId::SLOT_0].scroll_x;
+        let old_y = self.panes[ShellPaneId::SLOT_0].scroll_y;
         let old_split_scroll = self
             .panes
-            .get(ShellPaneId::SECOND)
+            .get(ShellPaneId::SLOT_1)
             .map(|pane| (pane.scroll_x, pane.scroll_y));
         let old_places_y = self.places_scroll_y;
         let old_places_width = self.places_sidebar_width(size);
@@ -14490,13 +14489,13 @@ impl ShellScene {
         }
 
         self.clamp_scroll(size);
-        let content_changed = (self.panes[ShellPaneId::FIRST].scroll_x - old_x).abs()
+        let content_changed = (self.panes[ShellPaneId::SLOT_0].scroll_x - old_x).abs()
             > f32::EPSILON
-            || (self.panes[ShellPaneId::FIRST].scroll_y - old_y).abs() > f32::EPSILON;
+            || (self.panes[ShellPaneId::SLOT_0].scroll_y - old_y).abs() > f32::EPSILON;
         let split_content_changed = old_split_scroll
             .zip(
                 self.panes
-                    .get(ShellPaneId::SECOND)
+                    .get(ShellPaneId::SLOT_1)
                     .map(|pane| (pane.scroll_x, pane.scroll_y)),
             )
             .is_some_and(|((old_x, old_y), (new_x, new_y))| {
@@ -14830,8 +14829,8 @@ impl ShellScene {
 
     #[cfg_attr(not(test), allow(dead_code))]
     fn hit_test_screen_point(&self, point: ViewPoint, size: PhysicalSize<u32>) -> Option<usize> {
-        let pane = self.pane_view(ShellPaneId::FIRST)?;
-        let geometry = self.pane_geometry(ShellPaneId::FIRST, size)?;
+        let pane = self.pane_view(ShellPaneId::SLOT_0)?;
+        let geometry = self.pane_geometry(ShellPaneId::SLOT_0, size)?;
         self.pane_hit_test_screen_point(pane, geometry, point)
     }
 
@@ -15195,7 +15194,7 @@ impl WgpuState {
             fika_log!(
                 "[fika-wgpu] prewarm-icon-rasters-scene reason={} view={} entries={} hits={} misses={} failed={} raster={}us over_budget={}",
                 reason,
-                scene.panes[ShellPaneId::FIRST].view_mode.as_str(),
+                scene.panes[ShellPaneId::SLOT_0].view_mode.as_str(),
                 scene_icon_raster_prewarm_stats.entries,
                 scene_icon_raster_prewarm_stats.cache_hits,
                 scene_icon_raster_prewarm_stats.cache_misses,
@@ -15212,7 +15211,7 @@ impl WgpuState {
             fika_log!(
                 "[fika-wgpu] prewarm-text-scene reason={} view={} entries={} read_ahead={} hits={} misses={} deferred={} raster={}us over_budget={}",
                 reason,
-                scene.panes[ShellPaneId::FIRST].view_mode.as_str(),
+                scene.panes[ShellPaneId::SLOT_0].view_mode.as_str(),
                 scene_text_prewarm_stats.entries,
                 scene_text_prewarm_stats.read_ahead,
                 scene_text_prewarm_stats.cache_hits,
@@ -15246,7 +15245,7 @@ impl WgpuState {
         fika_log!(
             "[fika-wgpu] prewarm-scene reason={} view={} visible={} metadata_visible={} metadata_deferred={} metadata_batches={} metadata_results={} metadata_applied={} role_entries={} role_deferred={} role_read_ahead={} role_resolve={}us role_total={}us text_labels={} text_cache={}/{} text_deferred={} text_raster={}us icon_resolve={}us icon_raster={}us icon_deferred={} icon_raster_deferred={} prepare={}us total={}us",
             reason,
-            scene.panes[ShellPaneId::FIRST].view_mode.as_str(),
+            scene.panes[ShellPaneId::SLOT_0].view_mode.as_str(),
             scene_frame.visible_items,
             metadata_role_stats.visible,
             metadata_role_stats.deferred,
@@ -15379,7 +15378,7 @@ impl WgpuState {
             fika_log!(
                 "[fika-wgpu] prewarm-metadata reason={} view={} visible={} deferred={} batches={} results={} applied={}",
                 reason,
-                scene.panes[ShellPaneId::FIRST].view_mode.as_str(),
+                scene.panes[ShellPaneId::SLOT_0].view_mode.as_str(),
                 metadata_role_stats.visible,
                 metadata_role_stats.deferred,
                 metadata_role_stats.batches_started,
@@ -15401,7 +15400,7 @@ impl WgpuState {
             fika_log!(
                 "[fika-wgpu] prewarm-text reason={} view={} entries={} read_ahead={} hits={} misses={} deferred={} raster={}us budget={}us over_budget={}",
                 reason,
-                scene.panes[ShellPaneId::FIRST].view_mode.as_str(),
+                scene.panes[ShellPaneId::SLOT_0].view_mode.as_str(),
                 text_prewarm_stats.entries,
                 text_prewarm_stats.read_ahead,
                 text_prewarm_stats.cache_hits,
@@ -15429,7 +15428,7 @@ impl WgpuState {
             fika_log!(
                 "[fika-wgpu] prewarm-icons reason={} view={} entries={} deferred={} read_ahead={} resolve={}us budget={}us over_budget={}",
                 reason,
-                scene.panes[ShellPaneId::FIRST].view_mode.as_str(),
+                scene.panes[ShellPaneId::SLOT_0].view_mode.as_str(),
                 prewarm_stats.entries,
                 prewarm_stats.deferred,
                 prewarm_stats.read_ahead,
@@ -15453,7 +15452,7 @@ impl WgpuState {
                     fika_log!(
                         "[fika-wgpu] frame-retry reason={} view={} surface=reconfigure",
                         reason,
-                        scene.panes[ShellPaneId::FIRST].view_mode.as_str()
+                        scene.panes[ShellPaneId::SLOT_0].view_mode.as_str()
                     );
                 }
                 self.force_reconfigure(window.surface_size());
@@ -15465,7 +15464,7 @@ impl WgpuState {
                             fika_log!(
                                 "[fika-wgpu] frame-skip reason={} view={} surface=reconfigure-pending",
                                 reason,
-                                scene.panes[ShellPaneId::FIRST].view_mode.as_str()
+                                scene.panes[ShellPaneId::SLOT_0].view_mode.as_str()
                             );
                         }
                         window.request_redraw();
@@ -15477,7 +15476,7 @@ impl WgpuState {
                             fika_log!(
                                 "[fika-wgpu] frame-skip reason={} view={} surface=not-ready",
                                 reason,
-                                scene.panes[ShellPaneId::FIRST].view_mode.as_str()
+                                scene.panes[ShellPaneId::SLOT_0].view_mode.as_str()
                             );
                         }
                         return ShellRenderOutcome::NotReady;
@@ -15494,7 +15493,7 @@ impl WgpuState {
                     fika_log!(
                         "[fika-wgpu] frame-skip reason={} view={} surface=not-ready",
                         reason,
-                        scene.panes[ShellPaneId::FIRST].view_mode.as_str()
+                        scene.panes[ShellPaneId::SLOT_0].view_mode.as_str()
                     );
                 }
                 return ShellRenderOutcome::NotReady;
@@ -15571,7 +15570,7 @@ impl WgpuState {
         if render_damage.kind != ShellRenderDamageKind::Clean {
             let load = if render_damage.kind == ShellRenderDamageKind::Full {
                 wgpu::LoadOp::Clear(view_mode_clear_color(
-                    scene.panes[ShellPaneId::FIRST].view_mode,
+                    scene.panes[ShellPaneId::SLOT_0].view_mode,
                 ))
             } else {
                 wgpu::LoadOp::Load
@@ -15647,12 +15646,12 @@ impl WgpuState {
                 "[fika-wgpu] frame={} reason={} view={} scale={:.2} zoom={} zoom_changes={} path={} entries={} filtered={} show_hidden={} hidden_changes={} location_active={} location_changes={} filter_active={} filter_changes={} places={} places_visible={} places_width={:.1} place_hover={} places_changes={} places_resize_changes={} places_scroll_y={:.1} places_scroll_changes={} split_pane={} split_changes={} split_path={} content_scrollbar={} visible={} thumbnails={} folder_previews={} slots={}/{} slot_reused={} slot_recycled={} slot_allocated={} selected={} hover={} dnd_hover={} dnd_hover_changes={} dnd_drop_requests={} context={} context_menu={} context_changes={} context_actions={} properties={} properties_changes={} create_dialog={} create_changes={} rename_dialog={} rename_changes={} open_with={} open_with_changes={} open_changes={} copy_location_changes={} file_clipboard_changes={} paste_changes={} trash_changes={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} path_changes={} reloads={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_deferred={} icon_raster_deferred={} thumb_loaded={} thumb_quads={} thumb_deferred={} thumb_read_ahead={} thumb_ready={}/{}b folder_preview_loaded={} folder_preview_quads={} folder_preview_deferred={} folder_preview_read_ahead={} folder_preview_ready={}/{}b icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_atlas_uploads={}/{} icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_deferred={} text_cache={}/{} entries={} bytes={} swash_cache={}/{} swash_reset={} text_atlas_reused={} text_atlas_uploads={}/{} batches={} vertex_uploads={}/{} damage={} damage_rects={} damage_area={:.0} damage_bounds={:.1},{:.1},{:.1},{:.1} scroll_x={:.1} scroll_y={:.1} prewarm={}us surface={}us prepare={}us quad_upload={}us encode_present={}us layout={}us text_raster={}us text_atlas={}x{}:{}b dirty_skips={} dirty_pending={} render={}us",
                 self.frame_count,
                 reason,
-                scene.panes[ShellPaneId::FIRST].view_mode.as_str(),
+                scene.panes[ShellPaneId::SLOT_0].view_mode.as_str(),
                 scene.ui_scale(),
                 scene.zoom_percent(),
                 scene.zoom_changes,
-                scene.panes[ShellPaneId::FIRST].path.display(),
-                scene.panes[ShellPaneId::FIRST].entries.len(),
+                scene.panes[ShellPaneId::SLOT_0].path.display(),
+                scene.panes[ShellPaneId::SLOT_0].entries.len(),
                 scene.filtered_entry_count(),
                 scene.show_hidden as u8,
                 scene.hidden_changes,
@@ -15668,11 +15667,11 @@ impl WgpuState {
                 scene.places_resize_changes,
                 scene.places_scroll_y,
                 scene.places_scroll_changes,
-                scene.panes.is_open(ShellPaneId::SECOND) as u8,
+                scene.panes.is_open(ShellPaneId::SLOT_1) as u8,
                 scene.split_pane_changes,
                 scene
                     .panes
-                    .get(ShellPaneId::SECOND)
+                    .get(ShellPaneId::SLOT_1)
                     .map(|pane| pane.path.display().to_string())
                     .unwrap_or_else(|| "-".to_string()),
                 scene_frame.content_scrollbar_visible as u8,
@@ -15805,8 +15804,8 @@ impl WgpuState {
                 render_damage.bounds.map(|rect| rect.y).unwrap_or(-1.0),
                 render_damage.bounds.map(|rect| rect.width).unwrap_or(-1.0),
                 render_damage.bounds.map(|rect| rect.height).unwrap_or(-1.0),
-                scene.panes[ShellPaneId::FIRST].scroll_x,
-                scene.panes[ShellPaneId::FIRST].scroll_y,
+                scene.panes[ShellPaneId::SLOT_0].scroll_x,
+                scene.panes[ShellPaneId::SLOT_0].scroll_y,
                 prewarm_us,
                 surface_acquire_us,
                 prepare_us,
@@ -21640,8 +21639,7 @@ fn view_mode_surface_color(view_mode: ShellViewMode) -> [f32; 4] {
 }
 
 fn view_mode_content_color(view_mode: ShellViewMode) -> [f32; 4] {
-    let _ = view_mode;
-    [1.000, 1.000, 1.000, 1.0]
+    view_mode_surface_color(view_mode)
 }
 
 fn view_mode_badge_color(view_mode: ShellViewMode) -> [f32; 4] {
@@ -23246,14 +23244,14 @@ mod tests {
             ShellScene::load_with_hidden_visibility(root.clone(), ShellViewMode::Icons, true)
                 .unwrap();
         assert!(hidden.show_hidden);
-        assert_eq!(hidden.panes[ShellPaneId::FIRST].filtered_indexes.len(), 2);
+        assert_eq!(hidden.panes[ShellPaneId::SLOT_0].filtered_indexes.len(), 2);
 
         let visible_only =
             ShellScene::load_with_hidden_visibility(root.clone(), ShellViewMode::Icons, false)
                 .unwrap();
         assert!(!visible_only.show_hidden);
         assert_eq!(
-            filtered_names(&visible_only, ShellPaneId::FIRST),
+            filtered_names(&visible_only, ShellPaneId::SLOT_0),
             vec!["visible.txt"]
         );
 
@@ -23286,7 +23284,7 @@ mod tests {
             ShellViewMode::Icons,
         );
         let stale = MetadataRoleResult {
-            pane_id: core_pane_id_for_shell_pane(ShellPaneId::FIRST),
+            pane_id: core_pane_id_for_shell_pane(ShellPaneId::SLOT_0),
             generation: Generation(0),
             item_id: shell_metadata_item_id(0),
             path: PathBuf::from("/tmp/other"),
@@ -23298,10 +23296,10 @@ mod tests {
             }),
         };
         assert!(!scene.apply_metadata_role_result(stale));
-        assert!(!scene.panes[ShellPaneId::FIRST].entries[0].mime_magic_checked);
+        assert!(!scene.panes[ShellPaneId::SLOT_0].entries[0].mime_magic_checked);
 
         let matching = MetadataRoleResult {
-            pane_id: core_pane_id_for_shell_pane(ShellPaneId::FIRST),
+            pane_id: core_pane_id_for_shell_pane(ShellPaneId::SLOT_0),
             generation: Generation(0),
             item_id: shell_metadata_item_id(0),
             path: PathBuf::from("/tmp/payload"),
@@ -23313,7 +23311,7 @@ mod tests {
             }),
         };
         assert!(scene.apply_metadata_role_result(matching));
-        let entry = &scene.panes[ShellPaneId::FIRST].entries[0];
+        let entry = &scene.panes[ShellPaneId::SLOT_0].entries[0];
         assert!(entry.mime_magic_checked);
         assert_eq!(entry.mime_type.as_deref(), Some("image/png"));
     }
@@ -23345,7 +23343,7 @@ mod tests {
                 "",
             )),
             compact_layout_cache: CompactLayoutCache::new(),
-            active_pane: ShellPaneId::FIRST,
+            active_pane: ShellPaneId::SLOT_0,
             places: vec![
                 ShellPlace::new("", "H", "Home", PathBuf::from("/tmp"), false),
                 ShellPlace::new("Devices", "/", "Root", PathBuf::from("/"), false),
@@ -23484,7 +23482,7 @@ mod tests {
         assert_eq!(
             scene.hovered_item,
             Some(ShellPaneItemTarget {
-                pane: ShellPaneId::FIRST,
+                pane: ShellPaneId::SLOT_0,
                 index: 0,
             })
         );
@@ -23723,7 +23721,7 @@ mod tests {
         let mut scene = test_scene(vec![test_entry("alpha", true)], ShellViewMode::Icons);
         let split_entries = vec![test_entry("right", true)];
         scene.panes.set(
-            ShellPaneId::SECOND,
+            ShellPaneId::SLOT_1,
             ShellPaneState {
                 path: PathBuf::from("/right-root"),
                 view_mode: ShellViewMode::Icons,
@@ -23801,18 +23799,18 @@ mod tests {
         });
         assert!(scene.scroll_by(90.0, size));
         assert_eq!(scene.places_scroll_y, 0.0);
-        assert!(scene.panes[ShellPaneId::FIRST].scroll_y > 0.0);
+        assert!(scene.panes[ShellPaneId::SLOT_0].scroll_y > 0.0);
     }
 
     #[test]
-    fn drop_target_lookup_resolves_places_first_pane_blank_and_split_items() {
+    fn drop_target_lookup_resolves_places_slot0_blank_and_split_items() {
         let mut scene = test_scene(
             vec![test_entry("alpha", true), test_entry("note.txt", false)],
             ShellViewMode::Icons,
         );
         let split_entries = vec![test_entry("right", true)];
         scene.panes.set(
-            ShellPaneId::SECOND,
+            ShellPaneId::SLOT_1,
             ShellPaneState {
                 path: PathBuf::from("/right-root"),
                 view_mode: ShellViewMode::Icons,
@@ -23853,7 +23851,7 @@ mod tests {
             Some(ShellDropTarget::PlacesBlank)
         );
 
-        let left_geometry = scene.pane_geometry(ShellPaneId::FIRST, size).unwrap();
+        let left_geometry = scene.pane_geometry(ShellPaneId::SLOT_0, size).unwrap();
         let left_item = scene.layout(size).item(0).unwrap();
         assert_eq!(
             scene.drop_target_at_screen_point(
@@ -23864,7 +23862,7 @@ mod tests {
                 size,
             ),
             Some(ShellDropTarget::PaneItem {
-                pane: ShellPaneId::FIRST,
+                pane: ShellPaneId::SLOT_0,
                 index: 0,
                 path: PathBuf::from("/tmp/alpha"),
                 is_dir: true,
@@ -23879,15 +23877,15 @@ mod tests {
                 size,
             ),
             Some(ShellDropTarget::PaneBlank {
-                pane: ShellPaneId::FIRST,
+                pane: ShellPaneId::SLOT_0,
                 path: PathBuf::from("/tmp"),
             })
         );
 
-        let split_geometry = scene.pane_geometry(ShellPaneId::SECOND, size).unwrap();
-        let split_view = scene.pane_view(ShellPaneId::SECOND).unwrap();
+        let split_geometry = scene.pane_geometry(ShellPaneId::SLOT_1, size).unwrap();
+        let split_view = scene.pane_view(ShellPaneId::SLOT_1).unwrap();
         let split_layout = scene.pane_layout_for_pane(
-            ShellPaneId::SECOND,
+            ShellPaneId::SLOT_1,
             split_view,
             split_geometry.content.width,
             split_geometry.content.height,
@@ -23902,7 +23900,7 @@ mod tests {
                 size,
             ),
             Some(ShellDropTarget::PaneItem {
-                pane: ShellPaneId::SECOND,
+                pane: ShellPaneId::SLOT_1,
                 index: 0,
                 path: PathBuf::from("/right-root/right"),
                 is_dir: true,
@@ -23917,7 +23915,7 @@ mod tests {
             ShellViewMode::Icons,
         );
         let size = PhysicalSize::new(700, 320);
-        let projection = scene.pane_projection(ShellPaneId::FIRST, size).unwrap();
+        let projection = scene.pane_projection(ShellPaneId::SLOT_0, size).unwrap();
         let content = projection.geometry.content;
         let item = projection.visible_items[0];
         let item_point = ViewPoint {
@@ -23925,7 +23923,7 @@ mod tests {
             y: content.y + item.layout.visual_rect.y + 4.0,
         };
 
-        assert!(scene.begin_internal_drag_for_pane_item(ShellPaneId::FIRST, 1, item_point));
+        assert!(scene.begin_internal_drag_for_pane_item(ShellPaneId::SLOT_0, 1, item_point));
         if let Some(drag) = scene.internal_drag.as_mut() {
             drag.active = true;
         }
@@ -23954,7 +23952,7 @@ mod tests {
     }
 
     #[test]
-    fn internal_drag_to_first_pane_blank_creates_copy_drop_request() {
+    fn internal_drag_to_slot0_blank_creates_copy_drop_request() {
         let mut scene = test_scene(
             vec![
                 test_entry("alpha.txt", false),
@@ -23963,7 +23961,7 @@ mod tests {
             ShellViewMode::Icons,
         );
         let size = PhysicalSize::new(700, 320);
-        let projection = scene.pane_projection(ShellPaneId::FIRST, size).unwrap();
+        let projection = scene.pane_projection(ShellPaneId::SLOT_0, size).unwrap();
         let item = projection.visible_items[0];
         let start = ViewPoint {
             x: projection.geometry.content.x + item.layout.visual_rect.x + 6.0,
@@ -24008,7 +24006,7 @@ mod tests {
         assert_eq!(
             request.target,
             ShellDropTarget::PaneBlank {
-                pane: ShellPaneId::FIRST,
+                pane: ShellPaneId::SLOT_0,
                 path: PathBuf::from("/tmp"),
             }
         );
@@ -24023,7 +24021,7 @@ mod tests {
     fn external_drag_to_pane_blank_opens_drop_menu() {
         let mut scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
         let size = PhysicalSize::new(700, 320);
-        let projection = scene.pane_projection(ShellPaneId::FIRST, size).unwrap();
+        let projection = scene.pane_projection(ShellPaneId::SLOT_0, size).unwrap();
         let blank = ViewPoint {
             x: projection.geometry.content.right() - 4.0,
             y: projection.geometry.content.bottom() - 4.0,
@@ -24038,7 +24036,7 @@ mod tests {
         assert_eq!(
             scene.dnd_hover_target,
             Some(ShellDropTarget::PaneBlank {
-                pane: ShellPaneId::FIRST,
+                pane: ShellPaneId::SLOT_0,
                 path: PathBuf::from("/tmp")
             })
         );
@@ -24073,7 +24071,7 @@ mod tests {
             ShellViewMode::Icons,
         );
         let size = PhysicalSize::new(700, 320);
-        let projection = scene.pane_projection(ShellPaneId::FIRST, size).unwrap();
+        let projection = scene.pane_projection(ShellPaneId::SLOT_0, size).unwrap();
         let folder = projection.visible_items[0];
         let target = ViewPoint {
             x: projection.geometry.content.x + folder.layout.visual_rect.x + 6.0,
@@ -24085,7 +24083,7 @@ mod tests {
         assert_eq!(
             scene.dnd_hover_target,
             Some(ShellDropTarget::PaneItem {
-                pane: ShellPaneId::FIRST,
+                pane: ShellPaneId::SLOT_0,
                 index: 0,
                 path: PathBuf::from("/tmp/folder"),
                 is_dir: true,
@@ -24105,7 +24103,7 @@ mod tests {
     fn external_drag_rejects_plain_files_and_clears_hover() {
         let mut scene = test_scene(vec![test_entry("note.txt", false)], ShellViewMode::Icons);
         let size = PhysicalSize::new(700, 320);
-        let projection = scene.pane_projection(ShellPaneId::FIRST, size).unwrap();
+        let projection = scene.pane_projection(ShellPaneId::SLOT_0, size).unwrap();
         let item = projection.visible_items[0];
         let target = ViewPoint {
             x: projection.geometry.content.x + item.layout.visual_rect.x + 6.0,
@@ -24133,7 +24131,7 @@ mod tests {
             vec![PathBuf::from("/tmp/alpha.txt")],
             PathBuf::from("/etc"),
             ShellDropTarget::PaneBlank {
-                pane: ShellPaneId::FIRST,
+                pane: ShellPaneId::SLOT_0,
                 path: PathBuf::from("/etc"),
             },
             ViewPoint { x: 80.0, y: 80.0 },
@@ -24174,7 +24172,7 @@ mod tests {
             ShellViewMode::Icons,
         );
         let size = PhysicalSize::new(700, 320);
-        let projection = scene.pane_projection(ShellPaneId::FIRST, size).unwrap();
+        let projection = scene.pane_projection(ShellPaneId::SLOT_0, size).unwrap();
         let folder = projection.visible_items[0];
         let note = projection.visible_items[1];
         let start = ViewPoint {
@@ -24218,7 +24216,7 @@ mod tests {
         assert_eq!(
             request.target,
             ShellDropTarget::PaneItem {
-                pane: ShellPaneId::FIRST,
+                pane: ShellPaneId::SLOT_0,
                 index: 0,
                 path: PathBuf::from("/tmp/folder"),
                 is_dir: true,
@@ -24231,7 +24229,7 @@ mod tests {
     fn internal_drag_below_threshold_finishes_as_plain_click() {
         let mut scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
         let size = PhysicalSize::new(700, 320);
-        let projection = scene.pane_projection(ShellPaneId::FIRST, size).unwrap();
+        let projection = scene.pane_projection(ShellPaneId::SLOT_0, size).unwrap();
         let item = projection.visible_items[0];
         let start = ViewPoint {
             x: projection.geometry.content.x + item.layout.visual_rect.x + 6.0,
@@ -24255,7 +24253,7 @@ mod tests {
         assert!(!scene.end_pane_pointer(end, size));
         assert!(scene.pending_drop_request.is_none());
         assert_eq!(scene.dnd_drop_requests, 0);
-        assert!(scene.panes[ShellPaneId::FIRST].selection.contains(0));
+        assert!(scene.panes[ShellPaneId::SLOT_0].selection.contains(0));
     }
 
     #[test]
@@ -24268,7 +24266,7 @@ mod tests {
             ShellViewMode::Icons,
         );
         let size = PhysicalSize::new(700, 320);
-        let projection = scene.pane_projection(ShellPaneId::FIRST, size).unwrap();
+        let projection = scene.pane_projection(ShellPaneId::SLOT_0, size).unwrap();
         let source = projection.visible_items[0];
         let target = projection.visible_items[1];
         let start = ViewPoint {
@@ -24374,7 +24372,7 @@ mod tests {
         let gap = scene
             .place_gap_rect_for_index(beta_index, size)
             .expect("gap before beta should be visible");
-        let projection = scene.pane_projection(ShellPaneId::FIRST, size).unwrap();
+        let projection = scene.pane_projection(ShellPaneId::SLOT_0, size).unwrap();
         let item = projection.visible_items[0];
         let start = ViewPoint {
             x: projection.geometry.content.x + item.layout.visual_rect.x + 6.0,
@@ -24385,7 +24383,7 @@ mod tests {
             y: gap.y + gap.height / 2.0,
         };
 
-        assert!(scene.begin_internal_drag_for_pane_item(ShellPaneId::FIRST, 0, start));
+        assert!(scene.begin_internal_drag_for_pane_item(ShellPaneId::SLOT_0, 0, start));
         assert!(scene.set_pointer(gap_point, size));
         assert_eq!(
             scene.dnd_hover_target,
@@ -24456,12 +24454,12 @@ mod tests {
         assert_eq!(
             activation,
             Some(ShellPlaceActivation::Open {
-                pane: ShellPaneId::FIRST,
+                pane: ShellPaneId::SLOT_0,
                 path: network_root_path()
             })
         );
 
-        let projection = scene.pane_projection(ShellPaneId::FIRST, size).unwrap();
+        let projection = scene.pane_projection(ShellPaneId::SLOT_0, size).unwrap();
         let item = projection.visible_items[0];
         let start = ViewPoint {
             x: projection.geometry.content.x + item.layout.visual_rect.x + 6.0,
@@ -24473,7 +24471,7 @@ mod tests {
             y: device_row.y + device_row.height / 2.0,
         };
 
-        assert!(scene.begin_internal_drag_for_pane_item(ShellPaneId::FIRST, 0, start));
+        assert!(scene.begin_internal_drag_for_pane_item(ShellPaneId::SLOT_0, 0, start));
         assert!(scene.set_pointer(device_point, size));
         assert_eq!(scene.dnd_hover_target, None);
         assert!(!scene.finish_internal_drag(device_point, size));
@@ -24517,7 +24515,7 @@ mod tests {
             true,
         )];
         let size = PhysicalSize::new(700, 360);
-        let projection = scene.pane_projection(ShellPaneId::FIRST, size).unwrap();
+        let projection = scene.pane_projection(ShellPaneId::SLOT_0, size).unwrap();
         let item = projection.visible_items[0];
         let start = ViewPoint {
             x: projection.geometry.content.x + item.layout.visual_rect.x + 6.0,
@@ -24529,7 +24527,7 @@ mod tests {
             y: row.y + row.height / 2.0,
         };
 
-        assert!(scene.begin_internal_drag_for_pane_item(ShellPaneId::FIRST, 0, start));
+        assert!(scene.begin_internal_drag_for_pane_item(ShellPaneId::SLOT_0, 0, start));
         assert!(scene.set_pointer(target, size));
         assert_eq!(
             scene.dnd_hover_target,
@@ -24564,7 +24562,7 @@ mod tests {
             x: place_row.x + 6.0,
             y: place_row.y + 6.0,
         };
-        let projection = scene.pane_projection(ShellPaneId::FIRST, size).unwrap();
+        let projection = scene.pane_projection(ShellPaneId::SLOT_0, size).unwrap();
         let content = projection.geometry.content;
         let folder = projection.visible_items[0];
         let folder_point = ViewPoint {
@@ -24635,7 +24633,7 @@ mod tests {
         assert_eq!(
             activation,
             Some(ShellPlaceActivation::Open {
-                pane: ShellPaneId::FIRST,
+                pane: ShellPaneId::SLOT_0,
                 path: PathBuf::from("/tmp/a")
             })
         );
@@ -24764,7 +24762,7 @@ mod tests {
         let mut scene = test_scene(vec![test_entry("alpha", true)], ShellViewMode::Icons);
         let split_entries = vec![test_entry("right", true)];
         scene.panes.set(
-            ShellPaneId::SECOND,
+            ShellPaneId::SLOT_1,
             ShellPaneState {
                 path: PathBuf::from("/right-root"),
                 view_mode: ShellViewMode::Details,
@@ -24778,23 +24776,23 @@ mod tests {
         );
 
         assert_eq!(
-            scene.pane_state(ShellPaneId::FIRST).unwrap().path,
+            scene.pane_state(ShellPaneId::SLOT_0).unwrap().path,
             PathBuf::from("/tmp")
         );
         assert_eq!(
-            scene.pane_state(ShellPaneId::SECOND).unwrap().path,
+            scene.pane_state(ShellPaneId::SLOT_1).unwrap().path,
             PathBuf::from("/right-root")
         );
 
-        scene.pane_state_mut(ShellPaneId::FIRST).unwrap().scroll_y = 42.0;
-        scene.pane_state_mut(ShellPaneId::SECOND).unwrap().scroll_y = 24.0;
+        scene.pane_state_mut(ShellPaneId::SLOT_0).unwrap().scroll_y = 42.0;
+        scene.pane_state_mut(ShellPaneId::SLOT_1).unwrap().scroll_y = 24.0;
 
         assert_eq!(
-            scene.pane_scroll_offset(ShellPaneId::FIRST),
+            scene.pane_scroll_offset(ShellPaneId::SLOT_0),
             Some((0.0, 42.0))
         );
         assert_eq!(
-            scene.pane_scroll_offset(ShellPaneId::SECOND),
+            scene.pane_scroll_offset(ShellPaneId::SLOT_1),
             Some((0.0, 24.0))
         );
     }
@@ -24804,7 +24802,7 @@ mod tests {
         let mut scene = test_scene(vec![test_entry("alpha", true)], ShellViewMode::Icons);
         let split_entries = vec![test_entry("right", true)];
         scene.panes.set(
-            ShellPaneId::SECOND,
+            ShellPaneId::SLOT_1,
             ShellPaneState {
                 path: PathBuf::from("/right-root"),
                 view_mode: ShellViewMode::Icons,
@@ -24818,7 +24816,7 @@ mod tests {
         );
         let size = PhysicalSize::new(900, 360);
         let split_content = scene
-            .pane_geometry(ShellPaneId::SECOND, size)
+            .pane_geometry(ShellPaneId::SLOT_1, size)
             .unwrap()
             .content;
         let point = ViewPoint {
@@ -24826,9 +24824,9 @@ mod tests {
             y: split_content.y + 6.0,
         };
 
-        assert_eq!(scene.active_pane(), ShellPaneId::FIRST);
+        assert_eq!(scene.active_pane(), ShellPaneId::SLOT_0);
         assert!(scene.focus_pane_at_screen_point(point, size));
-        assert_eq!(scene.active_pane(), ShellPaneId::SECOND);
+        assert_eq!(scene.active_pane(), ShellPaneId::SLOT_1);
         assert!(!scene.focus_pane_at_screen_point(point, size));
     }
 
@@ -24837,7 +24835,7 @@ mod tests {
         let mut scene = test_scene(vec![test_entry("alpha", true)], ShellViewMode::Icons);
         let split_entries = vec![test_entry("right", true), test_entry("other", false)];
         scene.panes.set(
-            ShellPaneId::SECOND,
+            ShellPaneId::SLOT_1,
             ShellPaneState {
                 path: PathBuf::from("/right-root"),
                 view_mode: ShellViewMode::Icons,
@@ -24850,7 +24848,7 @@ mod tests {
             },
         );
         let size = PhysicalSize::new(900, 360);
-        let projection = scene.pane_projection(ShellPaneId::SECOND, size).unwrap();
+        let projection = scene.pane_projection(ShellPaneId::SLOT_1, size).unwrap();
         let item = projection.visible_items[0].layout.visual_rect;
         let point = ViewPoint {
             x: projection.geometry.content.x + item.x + 4.0,
@@ -24861,7 +24859,7 @@ mod tests {
         assert_eq!(
             scene.hovered_item,
             Some(ShellPaneItemTarget {
-                pane: ShellPaneId::SECOND,
+                pane: ShellPaneId::SLOT_1,
                 index: 0,
             })
         );
@@ -24872,13 +24870,13 @@ mod tests {
         let mut scene = test_scene(vec![test_entry("left.txt", false)], ShellViewMode::Icons);
         set_test_pane(
             &mut scene,
-            ShellPaneId::SECOND,
+            ShellPaneId::SLOT_1,
             PathBuf::from("/right-root"),
             ShellViewMode::Icons,
             vec![test_entry("right.txt", false)],
         );
         scene.context_target = Some(ShellContextTarget::Item {
-            pane: ShellPaneId::SECOND,
+            pane: ShellPaneId::SLOT_1,
             index: 0,
             path: PathBuf::from("right.txt"),
             is_dir: false,
@@ -24895,7 +24893,7 @@ mod tests {
     fn split_pane_path_bar_click_activates_location_editor_for_that_pane() {
         let mut scene = test_scene(vec![test_entry("alpha", true)], ShellViewMode::Icons);
         scene.panes.set(
-            ShellPaneId::SECOND,
+            ShellPaneId::SLOT_1,
             ShellPaneState {
                 path: PathBuf::from("/right-root"),
                 view_mode: ShellViewMode::Icons,
@@ -24909,7 +24907,7 @@ mod tests {
         );
         let size = PhysicalSize::new(900, 360);
         let rect = scene
-            .pane_path_bar_rect(ShellPaneId::SECOND, size)
+            .pane_path_bar_rect(ShellPaneId::SLOT_1, size)
             .expect("split path bar should be visible");
         let point = ViewPoint {
             x: rect.x + 8.0,
@@ -24917,12 +24915,12 @@ mod tests {
         };
 
         assert!(scene.activate_path_bar_at_screen_point(point, size));
-        assert_eq!(scene.active_pane(), ShellPaneId::SECOND);
+        assert_eq!(scene.active_pane(), ShellPaneId::SLOT_1);
         assert!(scene.is_location_editing());
-        assert_eq!(scene.location_draft_pane(), Some(ShellPaneId::SECOND));
+        assert_eq!(scene.location_draft_pane(), Some(ShellPaneId::SLOT_1));
         assert_eq!(scene.location_draft_value(), Some("/right-root"));
-        assert!(scene.location_bar_active_for_pane(ShellPaneId::SECOND));
-        assert!(!scene.location_bar_active_for_pane(ShellPaneId::FIRST));
+        assert!(scene.location_bar_active_for_pane(ShellPaneId::SLOT_1));
+        assert!(!scene.location_bar_active_for_pane(ShellPaneId::SLOT_0));
     }
 
     #[test]
@@ -24933,9 +24931,9 @@ mod tests {
         fs::write(target.join("child.txt"), "split").unwrap();
 
         let mut scene = test_scene(vec![test_entry("left", true)], ShellViewMode::Icons);
-        scene.panes[ShellPaneId::FIRST].path = root.clone();
+        scene.panes[ShellPaneId::SLOT_0].path = root.clone();
         scene.panes.set(
-            ShellPaneId::SECOND,
+            ShellPaneId::SLOT_1,
             ShellPaneState {
                 path: root.join("old-split"),
                 view_mode: ShellViewMode::Icons,
@@ -24947,7 +24945,7 @@ mod tests {
                 scroll_y: 0.0,
             },
         );
-        scene.active_pane = ShellPaneId::SECOND;
+        scene.active_pane = ShellPaneId::SLOT_1;
         scene.places = vec![ShellPlace::new("", "T", "Target", target.clone(), true)];
         let size = PhysicalSize::new(900, 360);
         let row = scene.place_row_rects(size)[0].1;
@@ -24964,11 +24962,11 @@ mod tests {
             panic!("place should open a path");
         };
 
-        assert_eq!(pane, ShellPaneId::SECOND);
+        assert_eq!(pane, ShellPaneId::SLOT_1);
         assert_eq!(path, target);
         assert!(scene.load_path_for_pane(pane, path, size).unwrap());
-        assert_eq!(scene.panes[ShellPaneId::FIRST].path, root);
-        let split = scene.panes.get(ShellPaneId::SECOND).unwrap();
+        assert_eq!(scene.panes[ShellPaneId::SLOT_0].path, root);
+        let split = scene.panes.get(ShellPaneId::SLOT_1).unwrap();
         assert_eq!(split.path, target);
         assert_eq!(split.entries.len(), 1);
         assert_eq!(split.entries[0].name.as_ref(), "child.txt");
@@ -24992,7 +24990,7 @@ mod tests {
         let size = PhysicalSize::new(900, 360);
         let mut scene = ShellScene::load(left.clone(), ShellViewMode::Icons).unwrap();
         assert!(scene.open_split_pane(right.clone(), size).unwrap());
-        scene.active_pane = ShellPaneId::SECOND;
+        scene.active_pane = ShellPaneId::SLOT_1;
 
         assert!(scene.apply_location_command(LocationCommand::Activate, size));
         scene
@@ -25003,28 +25001,28 @@ mod tests {
             .set_completed(next.display().to_string());
         assert_eq!(
             scene.resolved_location_draft(),
-            Some((ShellPaneId::SECOND, next.clone()))
+            Some((ShellPaneId::SLOT_1, next.clone()))
         );
         assert!(scene.close_location_draft(size));
         assert!(
             scene
-                .load_path_for_pane(ShellPaneId::SECOND, next.clone(), size)
+                .load_path_for_pane(ShellPaneId::SLOT_1, next.clone(), size)
                 .unwrap()
         );
 
-        assert_eq!(scene.panes[ShellPaneId::FIRST].path, left);
-        assert_eq!(scene.panes[ShellPaneId::SECOND].path, next);
-        assert!(scene.pane_history(ShellPaneId::FIRST).back.is_empty());
+        assert_eq!(scene.panes[ShellPaneId::SLOT_0].path, left);
+        assert_eq!(scene.panes[ShellPaneId::SLOT_1].path, next);
+        assert!(scene.pane_history(ShellPaneId::SLOT_0).back.is_empty());
         assert_eq!(
-            scene.pane_history(ShellPaneId::SECOND).back,
+            scene.pane_history(ShellPaneId::SLOT_1).back,
             vec![right.clone()]
         );
 
         assert!(scene.go_history_back(size).unwrap());
-        assert_eq!(scene.panes[ShellPaneId::FIRST].path, left);
-        assert_eq!(scene.panes[ShellPaneId::SECOND].path, right);
-        assert!(scene.pane_history(ShellPaneId::SECOND).back.is_empty());
-        assert_eq!(scene.pane_history(ShellPaneId::SECOND).forward, vec![next]);
+        assert_eq!(scene.panes[ShellPaneId::SLOT_0].path, left);
+        assert_eq!(scene.panes[ShellPaneId::SLOT_1].path, right);
+        assert!(scene.pane_history(ShellPaneId::SLOT_1).back.is_empty());
+        assert_eq!(scene.pane_history(ShellPaneId::SLOT_1).forward, vec![next]);
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -25040,7 +25038,7 @@ mod tests {
         );
         set_test_pane(
             &mut scene,
-            ShellPaneId::SECOND,
+            ShellPaneId::SLOT_1,
             PathBuf::from("/right-root"),
             ShellViewMode::Icons,
             vec![
@@ -25052,38 +25050,38 @@ mod tests {
         let size = PhysicalSize::new(900, 360);
 
         assert_eq!(
-            filtered_names(&scene, ShellPaneId::FIRST),
+            filtered_names(&scene, ShellPaneId::SLOT_0),
             vec!["alpha.txt"]
         );
         assert_eq!(
-            filtered_names(&scene, ShellPaneId::SECOND),
+            filtered_names(&scene, ShellPaneId::SLOT_1),
             vec!["alpha-right.txt", "beta.txt"]
         );
 
         assert!(scene.toggle_hidden_visibility(size));
         assert_eq!(
-            filtered_names(&scene, ShellPaneId::FIRST),
+            filtered_names(&scene, ShellPaneId::SLOT_0),
             vec!["alpha.txt", ".left-hidden"]
         );
         assert_eq!(
-            filtered_names(&scene, ShellPaneId::SECOND),
+            filtered_names(&scene, ShellPaneId::SLOT_1),
             vec!["alpha-right.txt", ".right-hidden", "beta.txt"]
         );
 
-        scene.panes[ShellPaneId::SECOND]
+        scene.panes[ShellPaneId::SLOT_1]
             .selection
             .select_indexes(&[1]);
         assert!(scene.apply_filter_command(FilterCommand::Activate, size));
         assert!(scene.apply_filter_command(FilterCommand::Insert("alpha".to_string()), size));
         assert_eq!(
-            filtered_names(&scene, ShellPaneId::FIRST),
+            filtered_names(&scene, ShellPaneId::SLOT_0),
             vec!["alpha.txt"]
         );
         assert_eq!(
-            filtered_names(&scene, ShellPaneId::SECOND),
+            filtered_names(&scene, ShellPaneId::SLOT_1),
             vec!["alpha-right.txt"]
         );
-        assert_eq!(scene.panes[ShellPaneId::SECOND].selection.len(), 0);
+        assert_eq!(scene.panes[ShellPaneId::SLOT_1].selection.len(), 0);
     }
 
     #[test]
@@ -25098,7 +25096,7 @@ mod tests {
             .map(|index| test_entry(&format!("right-{index:02}"), index % 2 == 0))
             .collect::<Vec<_>>();
         scene.panes.set(
-            ShellPaneId::SECOND,
+            ShellPaneId::SLOT_1,
             ShellPaneState {
                 path: PathBuf::from("/right-root"),
                 view_mode: ShellViewMode::Details,
@@ -25112,8 +25110,8 @@ mod tests {
         );
         let size = PhysicalSize::new(900, 360);
 
-        let left = scene.pane_projection(ShellPaneId::FIRST, size).unwrap();
-        assert_eq!(left.geometry.kind, ShellPaneId::FIRST);
+        let left = scene.pane_projection(ShellPaneId::SLOT_0, size).unwrap();
+        assert_eq!(left.geometry.kind, ShellPaneId::SLOT_0);
         assert_eq!(
             left.visible_items.len(),
             scene.layout(size).visible_items().len()
@@ -25121,8 +25119,8 @@ mod tests {
         assert_eq!(left.scroll_metrics.max_scroll_x, scene.max_scroll_x(size));
         assert_eq!(left.scroll_metrics.max_scroll_y, scene.max_scroll_y(size));
 
-        let split = scene.pane_projection(ShellPaneId::SECOND, size).unwrap();
-        assert_eq!(split.geometry.kind, ShellPaneId::SECOND);
+        let split = scene.pane_projection(ShellPaneId::SLOT_1, size).unwrap();
+        assert_eq!(split.geometry.kind, ShellPaneId::SLOT_1);
         assert_eq!(split.view.path, Path::new("/right-root"));
         assert!(!split.visible_items.is_empty());
         assert!(split.scroll_metrics.content_size.height >= split.geometry.content.height);
@@ -25138,23 +25136,23 @@ mod tests {
         );
         let size = PhysicalSize::new(420, 260);
 
-        let first_stats = scene.update_visible_slot_pools(size);
-        assert!(first_stats.active > 0);
-        assert_eq!(first_stats.allocated, first_stats.active);
-        let first_projection = scene.pane_projection(ShellPaneId::FIRST, size).unwrap();
-        let first_slot = first_projection.visible_items[0].slot_id;
-        assert_ne!(first_slot, 0);
+        let initial_stats = scene.update_visible_slot_pools(size);
+        assert!(initial_stats.active > 0);
+        assert_eq!(initial_stats.allocated, initial_stats.active);
+        let initial_projection = scene.pane_projection(ShellPaneId::SLOT_0, size).unwrap();
+        let retained_slot = initial_projection.visible_items[0].slot_id;
+        assert_ne!(retained_slot, 0);
         assert!(
-            first_projection
+            initial_projection
                 .visible_items
                 .iter()
                 .all(|item| item.slot_id != 0)
         );
 
-        let second_stats = scene.update_visible_slot_pools(size);
-        assert_eq!(second_stats.reused, second_stats.active);
-        let second_projection = scene.pane_projection(ShellPaneId::FIRST, size).unwrap();
-        assert_eq!(second_projection.visible_items[0].slot_id, first_slot);
+        let next_stats = scene.update_visible_slot_pools(size);
+        assert_eq!(next_stats.reused, next_stats.active);
+        let next_projection = scene.pane_projection(ShellPaneId::SLOT_0, size).unwrap();
+        assert_eq!(next_projection.visible_items[0].slot_id, retained_slot);
     }
 
     #[test]
@@ -25166,12 +25164,12 @@ mod tests {
         let size = PhysicalSize::new(700, 320);
         let initial = ShellRenderDirtyKey::from_scene(&scene, size);
 
-        scene.panes[ShellPaneId::FIRST].scroll_y = 24.0;
+        scene.panes[ShellPaneId::SLOT_0].scroll_y = 24.0;
         let scrolled = ShellRenderDirtyKey::from_scene(&scene, size);
         assert_ne!(initial, scrolled);
 
         scene.hovered_item = Some(ShellPaneItemTarget {
-            pane: ShellPaneId::FIRST,
+            pane: ShellPaneId::SLOT_0,
             index: 1,
         });
         let hovered = ShellRenderDirtyKey::from_scene(&scene, size);
@@ -25184,7 +25182,7 @@ mod tests {
         let size = PhysicalSize::new(700, 320);
         scene.context_menu = Some(ShellContextMenu::new(
             ShellContextTarget::Blank {
-                pane: ShellPaneId::FIRST,
+                pane: ShellPaneId::SLOT_0,
                 path: PathBuf::from("/tmp"),
             },
             ViewPoint { x: 20.0, y: 30.0 },
@@ -25203,7 +25201,7 @@ mod tests {
         let size = PhysicalSize::new(700, 320);
         scene.context_menu = Some(ShellContextMenu::new(
             ShellContextTarget::Blank {
-                pane: ShellPaneId::FIRST,
+                pane: ShellPaneId::SLOT_0,
                 path: PathBuf::from("/tmp"),
             },
             ViewPoint { x: 20.0, y: 30.0 },
@@ -25228,7 +25226,7 @@ mod tests {
 
         scene.context_menu = Some(ShellContextMenu::new(
             ShellContextTarget::Blank {
-                pane: ShellPaneId::FIRST,
+                pane: ShellPaneId::SLOT_0,
                 path: PathBuf::from("/tmp"),
             },
             ViewPoint { x: 20.0, y: 30.0 },
@@ -25248,7 +25246,7 @@ mod tests {
             vec![PathBuf::from("/tmp/source.txt")],
             PathBuf::from("/tmp"),
             ShellDropTarget::PaneBlank {
-                pane: ShellPaneId::FIRST,
+                pane: ShellPaneId::SLOT_0,
                 path: PathBuf::from("/tmp"),
             },
             ViewPoint { x: 20.0, y: 30.0 },
@@ -25275,7 +25273,7 @@ mod tests {
             vec![PathBuf::from("/tmp/source.txt")],
             PathBuf::from("/tmp"),
             ShellDropTarget::PaneBlank {
-                pane: ShellPaneId::FIRST,
+                pane: ShellPaneId::SLOT_0,
                 path: PathBuf::from("/tmp"),
             },
             ViewPoint { x: 20.0, y: 30.0 },
@@ -25295,7 +25293,7 @@ mod tests {
         let initial_hoverless = ShellRenderDirtyKey::from_scene_ignoring_hover(&scene, size);
 
         scene.dnd_hover_target = Some(ShellDropTarget::PaneItem {
-            pane: ShellPaneId::FIRST,
+            pane: ShellPaneId::SLOT_0,
             index: 0,
             path: PathBuf::from("/tmp/alpha"),
             is_dir: true,
@@ -25314,7 +25312,7 @@ mod tests {
         let size = PhysicalSize::new(700, 320);
         scene.internal_drag = Some(ShellInternalDrag {
             source: ShellInternalDragSource::PaneItem {
-                pane: ShellPaneId::FIRST,
+                pane: ShellPaneId::SLOT_0,
                 index: 0,
                 source_path: PathBuf::from("/tmp/alpha.txt"),
                 is_dir: false,
@@ -25380,7 +25378,7 @@ mod tests {
     #[test]
     fn render_dirty_key_can_ignore_location_draft_for_damage_detection() {
         let mut scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
-        scene.panes[ShellPaneId::FIRST].path = PathBuf::from("/tmp");
+        scene.panes[ShellPaneId::SLOT_0].path = PathBuf::from("/tmp");
         let size = PhysicalSize::new(700, 320);
         assert!(scene.apply_location_command(LocationCommand::Activate, size));
         let initial = ShellRenderDirtyKey::from_scene(&scene, size);
@@ -25443,7 +25441,7 @@ mod tests {
         let mut scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
         let size = PhysicalSize::new(700, 320);
         scene.create_dialog = Some(ShellCreateDialog::new(
-            ShellPaneId::FIRST,
+            ShellPaneId::SLOT_0,
             PathBuf::from("/tmp"),
             CreateEntryKind::Folder,
             false,
@@ -25467,7 +25465,7 @@ mod tests {
         let mut scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
         let size = PhysicalSize::new(700, 320);
         scene.rename_dialog = ShellRenameDialog::new(
-            ShellPaneId::FIRST,
+            ShellPaneId::SLOT_0,
             PathBuf::from("/tmp/alpha.txt"),
             false,
             false,
@@ -25531,7 +25529,7 @@ mod tests {
         let initial_hoverless = ShellRenderDirtyKey::from_scene_ignoring_hover(&scene, size);
 
         assert!(scene.set_hovered_item(Some(ShellPaneItemTarget {
-            pane: ShellPaneId::FIRST,
+            pane: ShellPaneId::SLOT_0,
             index: 0,
         })));
         let hovered = ShellRenderDirtyKey::from_scene(&scene, size);
@@ -25553,7 +25551,7 @@ mod tests {
             current: ViewPoint { x: 50.0, y: 54.0 },
             active: true,
             mode: RubberBandMode::Replace,
-            base_selection: scene.panes[ShellPaneId::FIRST].selection.clone(),
+            base_selection: scene.panes[ShellPaneId::SLOT_0].selection.clone(),
         });
         scene.rubber_band_updates += 1;
         let dragged = ShellRenderDirtyKey::from_scene(&scene, size);
@@ -25585,7 +25583,7 @@ mod tests {
         );
 
         assert!(scene.set_hovered_item(Some(ShellPaneItemTarget {
-            pane: ShellPaneId::FIRST,
+            pane: ShellPaneId::SLOT_0,
             index: 0,
         })));
         let projections = ShellPaneId::ALL
@@ -25713,7 +25711,7 @@ mod tests {
             },
         );
         assert!(scene.set_hovered_item(Some(ShellPaneItemTarget {
-            pane: ShellPaneId::FIRST,
+            pane: ShellPaneId::SLOT_0,
             index: 0,
         })));
         let projections = ShellPaneId::ALL
@@ -25804,7 +25802,7 @@ mod tests {
             current: ViewPoint { x: 46.0, y: 52.0 },
             active: true,
             mode: RubberBandMode::Replace,
-            base_selection: scene.panes[ShellPaneId::FIRST].selection.clone(),
+            base_selection: scene.panes[ShellPaneId::SLOT_0].selection.clone(),
         });
         let projections = ShellPaneId::ALL
             .into_iter()
@@ -25851,7 +25849,7 @@ mod tests {
         let size = PhysicalSize::new(700, 320);
         scene.internal_drag = Some(ShellInternalDrag {
             source: ShellInternalDragSource::PaneItem {
-                pane: ShellPaneId::FIRST,
+                pane: ShellPaneId::SLOT_0,
                 index: 0,
                 source_path: PathBuf::from("/tmp/alpha.txt"),
                 is_dir: false,
@@ -25984,7 +25982,7 @@ mod tests {
     #[test]
     fn render_damage_bounds_location_draft_transition() {
         let mut scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
-        scene.panes[ShellPaneId::FIRST].path = PathBuf::from("/tmp");
+        scene.panes[ShellPaneId::SLOT_0].path = PathBuf::from("/tmp");
         let size = PhysicalSize::new(700, 320);
         assert!(scene.apply_location_command(LocationCommand::Activate, size));
         let projections = ShellPaneId::ALL
@@ -26117,7 +26115,7 @@ mod tests {
         let mut scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
         let size = PhysicalSize::new(700, 320);
         scene.create_dialog = Some(ShellCreateDialog::new(
-            ShellPaneId::FIRST,
+            ShellPaneId::SLOT_0,
             PathBuf::from("/tmp"),
             CreateEntryKind::Folder,
             false,
@@ -26161,7 +26159,7 @@ mod tests {
         let mut scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
         let size = PhysicalSize::new(700, 320);
         scene.rename_dialog = ShellRenameDialog::new(
-            ShellPaneId::FIRST,
+            ShellPaneId::SLOT_0,
             PathBuf::from("/tmp/alpha.txt"),
             false,
             false,
@@ -26289,10 +26287,10 @@ mod tests {
             current: ViewPoint { x: 110.0, y: 118.0 },
             active: true,
             mode: RubberBandMode::Replace,
-            base_selection: scene.panes[ShellPaneId::FIRST].selection.clone(),
+            base_selection: scene.panes[ShellPaneId::SLOT_0].selection.clone(),
         });
         assert!(
-            scene.panes[ShellPaneId::FIRST]
+            scene.panes[ShellPaneId::SLOT_0]
                 .selection
                 .select_indexes(&[0])
         );
@@ -26330,7 +26328,7 @@ mod tests {
             ShellRenderDirtyKey::from_scene(&scene, size),
         );
 
-        scene.panes[ShellPaneId::FIRST].scroll_y = 24.0;
+        scene.panes[ShellPaneId::SLOT_0].scroll_y = 24.0;
         let projections = ShellPaneId::ALL
             .into_iter()
             .filter_map(|kind| scene.pane_projection(kind, size))
@@ -26354,7 +26352,7 @@ mod tests {
         let size = PhysicalSize::new(700, 320);
         scene.context_menu = Some(ShellContextMenu::new(
             ShellContextTarget::Blank {
-                pane: ShellPaneId::FIRST,
+                pane: ShellPaneId::SLOT_0,
                 path: PathBuf::from("/tmp"),
             },
             ViewPoint { x: 20.0, y: 30.0 },
@@ -26407,7 +26405,7 @@ mod tests {
 
         scene.context_menu = Some(ShellContextMenu::new(
             ShellContextTarget::Blank {
-                pane: ShellPaneId::FIRST,
+                pane: ShellPaneId::SLOT_0,
                 path: PathBuf::from("/tmp"),
             },
             ViewPoint { x: 20.0, y: 30.0 },
@@ -26446,7 +26444,7 @@ mod tests {
         let size = PhysicalSize::new(700, 320);
         scene.context_menu = Some(ShellContextMenu::new(
             ShellContextTarget::Blank {
-                pane: ShellPaneId::FIRST,
+                pane: ShellPaneId::SLOT_0,
                 path: PathBuf::from("/tmp"),
             },
             ViewPoint { x: 20.0, y: 30.0 },
@@ -26502,7 +26500,7 @@ mod tests {
             vec![PathBuf::from("/tmp/source.txt")],
             PathBuf::from("/tmp"),
             ShellDropTarget::PaneBlank {
-                pane: ShellPaneId::FIRST,
+                pane: ShellPaneId::SLOT_0,
                 path: PathBuf::from("/tmp"),
             },
             ViewPoint { x: 20.0, y: 30.0 },
@@ -26557,7 +26555,7 @@ mod tests {
             vec![PathBuf::from("/tmp/source.txt")],
             PathBuf::from("/tmp"),
             ShellDropTarget::PaneBlank {
-                pane: ShellPaneId::FIRST,
+                pane: ShellPaneId::SLOT_0,
                 path: PathBuf::from("/tmp"),
             },
             ViewPoint { x: 20.0, y: 30.0 },
@@ -26606,7 +26604,7 @@ mod tests {
         );
 
         scene.dnd_hover_target = Some(ShellDropTarget::PaneItem {
-            pane: ShellPaneId::FIRST,
+            pane: ShellPaneId::SLOT_0,
             index: 0,
             path: PathBuf::from("/tmp/alpha"),
             is_dir: true,
@@ -26741,7 +26739,7 @@ mod tests {
         let size = PhysicalSize::new(700, 320);
         let initial = ShellRenderDirtyKey::from_scene(&scene, size);
 
-        scene.panes[ShellPaneId::FIRST].entries[0] =
+        scene.panes[ShellPaneId::SLOT_0].entries[0] =
             test_entry_with_mime_and_modified("beta.png", false, "image/png", Some(42));
         let renamed = ShellRenderDirtyKey::from_scene(&scene, size);
 
@@ -26757,12 +26755,12 @@ mod tests {
             ShellViewMode::Details,
         );
         let size = PhysicalSize::new(700, 320);
-        let projection = scene.pane_projection(ShellPaneId::FIRST, size).unwrap();
+        let projection = scene.pane_projection(ShellPaneId::SLOT_0, size).unwrap();
         let visible_entry =
             projection.view.filtered_indexes[projection.visible_items[0].layout.model_index];
         let initial = ShellRenderDirtyKey::from_scene(&scene, size);
 
-        scene.panes[ShellPaneId::FIRST].entries[visible_entry] =
+        scene.panes[ShellPaneId::SLOT_0].entries[visible_entry] =
             test_entry_with_mime_and_modified("visible-renamed.png", false, "image/png", Some(42));
         let renamed = ShellRenderDirtyKey::from_scene(&scene, size);
 
@@ -26778,7 +26776,7 @@ mod tests {
             ShellViewMode::Details,
         );
         let size = PhysicalSize::new(700, 320);
-        let projection = scene.pane_projection(ShellPaneId::FIRST, size).unwrap();
+        let projection = scene.pane_projection(ShellPaneId::SLOT_0, size).unwrap();
         let visible_entry_indexes = projection
             .visible_items
             .iter()
@@ -26790,12 +26788,12 @@ mod tests {
                     .copied()
             })
             .collect::<HashSet<_>>();
-        let offscreen_entry = (0..scene.panes[ShellPaneId::FIRST].entries.len())
+        let offscreen_entry = (0..scene.panes[ShellPaneId::SLOT_0].entries.len())
             .find(|index| !visible_entry_indexes.contains(index))
             .expect("test needs at least one offscreen details entry");
         let initial = ShellRenderDirtyKey::from_scene(&scene, size);
 
-        scene.panes[ShellPaneId::FIRST].entries[offscreen_entry] =
+        scene.panes[ShellPaneId::SLOT_0].entries[offscreen_entry] =
             test_entry_with_mime_and_modified(
                 "offscreen-renamed.png",
                 false,
@@ -26941,7 +26939,7 @@ mod tests {
             ShellViewMode::Icons,
         );
         let size = PhysicalSize::new(700, 320);
-        let projection = scene.pane_projection(ShellPaneId::FIRST, size).unwrap();
+        let projection = scene.pane_projection(ShellPaneId::SLOT_0, size).unwrap();
 
         assert_eq!(
             scene.thumbnail_candidate_count_for_projection(&projection),
@@ -26959,7 +26957,7 @@ mod tests {
             ShellViewMode::Icons,
         );
         let size = PhysicalSize::new(700, 320);
-        let projection = scene.pane_projection(ShellPaneId::FIRST, size).unwrap();
+        let projection = scene.pane_projection(ShellPaneId::SLOT_0, size).unwrap();
 
         assert_eq!(
             scene.thumbnail_candidate_count_for_projection(&projection),
@@ -26986,9 +26984,9 @@ mod tests {
             )],
             ShellViewMode::Icons,
         );
-        scene.panes[ShellPaneId::FIRST].path = root.clone();
+        scene.panes[ShellPaneId::SLOT_0].path = root.clone();
         let projection = scene
-            .pane_projection(ShellPaneId::FIRST, PhysicalSize::new(700, 320))
+            .pane_projection(ShellPaneId::SLOT_0, PhysicalSize::new(700, 320))
             .unwrap();
 
         let request = scene
@@ -27023,9 +27021,9 @@ mod tests {
             ShellViewMode::Icons,
         );
         let mut scene = scene;
-        scene.panes[ShellPaneId::FIRST].path = root.clone();
+        scene.panes[ShellPaneId::SLOT_0].path = root.clone();
         let projection = scene
-            .pane_projection(ShellPaneId::FIRST, PhysicalSize::new(700, 320))
+            .pane_projection(ShellPaneId::SLOT_0, PhysicalSize::new(700, 320))
             .unwrap();
         let item = projection.visible_items[0];
         let entry_index = projection.view.filtered_indexes[item.layout.model_index];
@@ -27075,9 +27073,9 @@ mod tests {
             )],
             ShellViewMode::Compact,
         );
-        scene.panes[ShellPaneId::FIRST].path = root.clone();
+        scene.panes[ShellPaneId::SLOT_0].path = root.clone();
         let projection = scene
-            .pane_projection(ShellPaneId::FIRST, PhysicalSize::new(700, 320))
+            .pane_projection(ShellPaneId::SLOT_0, PhysicalSize::new(700, 320))
             .unwrap();
         let item = projection.visible_items[0];
         assert!(
@@ -27138,7 +27136,7 @@ mod tests {
             )],
             ShellViewMode::Icons,
         );
-        scene.panes[ShellPaneId::FIRST].path = root.clone();
+        scene.panes[ShellPaneId::SLOT_0].path = root.clone();
         scene.folder_preview_roles.borrow_mut().insert_ready(
             FolderPreviewRoleKey::new(album, 7, 48),
             FolderPreviewReady {
@@ -27148,7 +27146,7 @@ mod tests {
             },
         );
         let projection = scene
-            .pane_projection(ShellPaneId::FIRST, PhysicalSize::new(700, 320))
+            .pane_projection(ShellPaneId::SLOT_0, PhysicalSize::new(700, 320))
             .unwrap();
         let entry_index = projection.view.filtered_indexes[0];
         let pixmap_layout = ItemPixmapLayout {
@@ -27190,7 +27188,7 @@ mod tests {
             )],
             ShellViewMode::Icons,
         );
-        scene.panes[ShellPaneId::FIRST].path = root.clone();
+        scene.panes[ShellPaneId::SLOT_0].path = root.clone();
         let old_key = FolderPreviewRoleKey::new(album.clone(), 7, 48);
         let new_key = FolderPreviewRoleKey::new(album.clone(), 7, 96);
         {
@@ -27355,7 +27353,7 @@ mod tests {
             )],
             ShellViewMode::Icons,
         );
-        scene.panes[ShellPaneId::FIRST].path = root.clone();
+        scene.panes[ShellPaneId::SLOT_0].path = root.clone();
         let size = PhysicalSize::new(700, 320);
         let before = ShellRenderDirtyKey::from_scene(&scene, size);
         scene.folder_preview_roles.borrow_mut().insert_ready(
@@ -27371,7 +27369,7 @@ mod tests {
 
         let hoverless_before = ShellRenderDirtyKey::from_scene_ignoring_hover(&scene, size);
         scene.set_hovered_item(Some(ShellPaneItemTarget {
-            pane: ShellPaneId::FIRST,
+            pane: ShellPaneId::SLOT_0,
             index: 0,
         }));
         let hoverless_after = ShellRenderDirtyKey::from_scene_ignoring_hover(&scene, size);
@@ -27397,7 +27395,7 @@ mod tests {
             ShellViewMode::Icons,
         );
         let mut scene = scene;
-        scene.panes[ShellPaneId::FIRST].path = root.clone();
+        scene.panes[ShellPaneId::SLOT_0].path = root.clone();
         let size = PhysicalSize::new(700, 320);
         let before = ShellRenderDirtyKey::from_scene(&scene, size);
 
@@ -27440,7 +27438,7 @@ mod tests {
             )],
             ShellViewMode::Icons,
         );
-        scene.panes[ShellPaneId::FIRST].path = root.clone();
+        scene.panes[ShellPaneId::SLOT_0].path = root.clone();
         let size = PhysicalSize::new(700, 320);
         scene.folder_preview_roles.borrow_mut().insert_ready(
             FolderPreviewRoleKey::new(album.clone(), 7, 128),
@@ -27491,7 +27489,7 @@ mod tests {
             )],
             ShellViewMode::Icons,
         );
-        scene.panes[ShellPaneId::FIRST].path = root.clone();
+        scene.panes[ShellPaneId::SLOT_0].path = root.clone();
         let size = PhysicalSize::new(700, 320);
         let before = ShellRenderDirtyKey::from_scene(&scene, size);
 
@@ -27534,7 +27532,7 @@ mod tests {
             )],
             ShellViewMode::Icons,
         );
-        scene.panes[ShellPaneId::FIRST].path = root.clone();
+        scene.panes[ShellPaneId::SLOT_0].path = root.clone();
         let size = PhysicalSize::new(700, 320);
         let key = FolderPreviewRoleKey::new(album.clone(), 7, 128);
         let previous = FolderPreviewReady {
@@ -27611,7 +27609,7 @@ mod tests {
             )],
             ShellViewMode::Icons,
         );
-        scene.panes[ShellPaneId::FIRST].path = root.clone();
+        scene.panes[ShellPaneId::SLOT_0].path = root.clone();
         let size = PhysicalSize::new(700, 320);
         let exact_key = FolderPreviewRoleKey::new(album.clone(), 7, 128);
         let unused_key = FolderPreviewRoleKey::new(album.clone(), 7, 256);
@@ -27668,7 +27666,7 @@ mod tests {
             )],
             ShellViewMode::Icons,
         );
-        scene.panes[ShellPaneId::FIRST].path = root.clone();
+        scene.panes[ShellPaneId::SLOT_0].path = root.clone();
         let size = PhysicalSize::new(700, 320);
         let key = FolderPreviewRoleKey::new(album.clone(), 7, 128);
         let previous = FolderPreviewReady {
@@ -28774,7 +28772,7 @@ mod tests {
             .map(|index| test_entry(&format!("right-{index:02}.txt"), false))
             .collect::<Vec<_>>();
         scene.panes.set(
-            ShellPaneId::SECOND,
+            ShellPaneId::SLOT_1,
             ShellPaneState {
                 path: PathBuf::from("/right-root"),
                 view_mode: ShellViewMode::Icons,
@@ -28788,7 +28786,7 @@ mod tests {
         );
         let size = PhysicalSize::new(760, 260);
         let split_content = scene
-            .pane_geometry(ShellPaneId::SECOND, size)
+            .pane_geometry(ShellPaneId::SLOT_1, size)
             .unwrap()
             .content;
         scene.pointer = Some(ViewPoint {
@@ -28797,8 +28795,8 @@ mod tests {
         });
 
         assert!(scene.scroll_by(120.0, size));
-        assert_eq!(scene.panes[ShellPaneId::FIRST].scroll_y, 0.0);
-        assert!(scene.panes.get(ShellPaneId::SECOND).unwrap().scroll_y > 0.0);
+        assert_eq!(scene.panes[ShellPaneId::SLOT_0].scroll_y, 0.0);
+        assert!(scene.panes.get(ShellPaneId::SLOT_1).unwrap().scroll_y > 0.0);
     }
 
     #[test]
@@ -28813,7 +28811,7 @@ mod tests {
             .map(|index| test_entry(&format!("right-{index:02}.txt"), false))
             .collect::<Vec<_>>();
         scene.panes.set(
-            ShellPaneId::SECOND,
+            ShellPaneId::SLOT_1,
             ShellPaneState {
                 path: PathBuf::from("/right-root"),
                 view_mode: ShellViewMode::Icons,
@@ -28827,7 +28825,7 @@ mod tests {
         );
         let size = PhysicalSize::new(760, 260);
         let (track, thumb) = scene
-            .pane_content_scrollbar_rects(ShellPaneId::SECOND, size)
+            .pane_content_scrollbar_rects(ShellPaneId::SLOT_1, size)
             .expect("split pane should need its own scrollbar");
         let press = ViewPoint {
             x: thumb.x + thumb.width / 2.0,
@@ -28842,13 +28840,13 @@ mod tests {
         assert_eq!(
             scene.scrollbar_drag.map(|drag| drag.target),
             Some(ScrollbarDragTarget::Content {
-                pane: ShellPaneId::SECOND,
+                pane: ShellPaneId::SLOT_1,
                 axis: ContentScrollbarAxis::Vertical,
             })
         );
         assert!(scene.set_pointer(drag_to, size));
-        assert_eq!(scene.panes[ShellPaneId::FIRST].scroll_y, 0.0);
-        assert!(scene.panes.get(ShellPaneId::SECOND).unwrap().scroll_y > 0.0);
+        assert_eq!(scene.panes[ShellPaneId::SLOT_0].scroll_y, 0.0);
+        assert!(scene.panes.get(ShellPaneId::SLOT_1).unwrap().scroll_y > 0.0);
         let _ = scene.end_scrollbar_drag(drag_to, size);
         assert!(scene.scrollbar_drag.is_none());
     }
@@ -28880,7 +28878,7 @@ mod tests {
         });
         assert!(scene.scroll_by(90.0, size));
         assert!(scene.places_scroll_y > 0.0);
-        assert_eq!(scene.panes[ShellPaneId::FIRST].scroll_y, 0.0);
+        assert_eq!(scene.panes[ShellPaneId::SLOT_0].scroll_y, 0.0);
         assert_eq!(scene.places_scroll_changes, 1);
 
         scene.pointer = Some(ViewPoint {
@@ -28888,7 +28886,7 @@ mod tests {
             y: scene.content_origin_y() + 10.0,
         });
         assert!(scene.scroll_by(90.0, size));
-        assert!(scene.panes[ShellPaneId::FIRST].scroll_y > 0.0);
+        assert!(scene.panes[ShellPaneId::SLOT_0].scroll_y > 0.0);
         assert_eq!(scene.places_scroll_changes, 1);
     }
 
@@ -28957,7 +28955,7 @@ mod tests {
         );
         let size = PhysicalSize::new(420, 260);
         let content = scene
-            .pane_geometry(ShellPaneId::FIRST, size)
+            .pane_geometry(ShellPaneId::SLOT_0, size)
             .unwrap()
             .content;
         let (track, thumb) = scene
@@ -28989,7 +28987,7 @@ mod tests {
         let (start_track, start_thumb) = scene
             .content_scrollbar_rects(size)
             .expect("compact view should need horizontal scrollbar");
-        scene.panes[ShellPaneId::FIRST].scroll_x = scene.max_scroll_x(size) / 2.0;
+        scene.panes[ShellPaneId::SLOT_0].scroll_x = scene.max_scroll_x(size) / 2.0;
         let (middle_track, middle_thumb) = scene
             .content_scrollbar_rects(size)
             .expect("compact view should keep horizontal scrollbar");
@@ -29027,8 +29025,8 @@ mod tests {
         assert!(scene.begin_scrollbar_drag(press, size).is_some());
         assert!(scene.scrollbar_drag.is_some());
         assert!(scene.set_pointer(drag_to, size));
-        assert!(scene.panes[ShellPaneId::FIRST].scroll_y > 0.0);
-        assert_eq!(scene.panes[ShellPaneId::FIRST].scroll_x, 0.0);
+        assert!(scene.panes[ShellPaneId::SLOT_0].scroll_y > 0.0);
+        assert_eq!(scene.panes[ShellPaneId::SLOT_0].scroll_x, 0.0);
         let _ = scene.end_scrollbar_drag(drag_to, size);
         assert!(scene.scrollbar_drag.is_none());
     }
@@ -29056,8 +29054,8 @@ mod tests {
 
         assert!(scene.begin_scrollbar_drag(press, size).is_some());
         assert!(scene.set_pointer(drag_to, size));
-        assert!(scene.panes[ShellPaneId::FIRST].scroll_x > 0.0);
-        assert_eq!(scene.panes[ShellPaneId::FIRST].scroll_y, 0.0);
+        assert!(scene.panes[ShellPaneId::SLOT_0].scroll_x > 0.0);
+        assert_eq!(scene.panes[ShellPaneId::SLOT_0].scroll_y, 0.0);
         let _ = scene.end_scrollbar_drag(drag_to, size);
         assert!(scene.scrollbar_drag.is_none());
     }
@@ -29092,7 +29090,7 @@ mod tests {
         assert!(scene.begin_scrollbar_drag(press, size).is_some());
         assert!(scene.set_pointer(drag_to, size));
         assert!(scene.places_scroll_y > 0.0);
-        assert_eq!(scene.panes[ShellPaneId::FIRST].scroll_y, 0.0);
+        assert_eq!(scene.panes[ShellPaneId::SLOT_0].scroll_y, 0.0);
         assert!(scene.places_scroll_changes > 0);
         let _ = scene.end_scrollbar_drag(drag_to, size);
         assert!(scene.scrollbar_drag.is_none());
@@ -29115,7 +29113,7 @@ mod tests {
         assert_eq!(
             scene.place_activation_for_press(point, size),
             Some(ShellPlaceActivation::Open {
-                pane: ShellPaneId::FIRST,
+                pane: ShellPaneId::SLOT_0,
                 path: PathBuf::from("/tmp/projects")
             })
         );
@@ -29149,7 +29147,7 @@ mod tests {
     #[test]
     fn places_context_menu_opens_row_actions_without_selecting_items() {
         let mut scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
-        scene.panes[ShellPaneId::FIRST]
+        scene.panes[ShellPaneId::SLOT_0]
             .selection
             .apply_navigation(0, false);
         let size = PhysicalSize::new(700, 320);
@@ -29160,7 +29158,7 @@ mod tests {
         };
 
         assert!(scene.open_context_menu(point, size));
-        assert_eq!(scene.panes[ShellPaneId::FIRST].selection.len(), 1);
+        assert_eq!(scene.panes[ShellPaneId::SLOT_0].selection.len(), 1);
         assert_eq!(scene.hovered_place, Some(1));
         assert_eq!(scene.hovered_item, None);
         assert_eq!(scene.context_target_changes, 1);
@@ -29191,7 +29189,7 @@ mod tests {
         );
         assert_eq!(
             scene.context_target_directory_path(),
-            Some((ShellPaneId::FIRST, PathBuf::from("/")))
+            Some((ShellPaneId::SLOT_0, PathBuf::from("/")))
         );
 
         let rect = context_menu_rect(menu, size);
@@ -29247,7 +29245,7 @@ mod tests {
     #[test]
     fn directory_context_menu_includes_add_to_places_action() {
         let folder_target = ShellContextTarget::Item {
-            pane: ShellPaneId::FIRST,
+            pane: ShellPaneId::SLOT_0,
             index: 0,
             path: PathBuf::from("/tmp/folder"),
             is_dir: true,
@@ -29258,7 +29256,7 @@ mod tests {
         );
 
         let file_target = ShellContextTarget::Item {
-            pane: ShellPaneId::FIRST,
+            pane: ShellPaneId::SLOT_0,
             index: 0,
             path: PathBuf::from("/tmp/plain.txt"),
             is_dir: false,
@@ -29268,7 +29266,7 @@ mod tests {
         assert!(context_menu_actions(&file_target).contains(&ShellContextMenuAction::OpenWith));
 
         let blank_target = ShellContextTarget::Blank {
-            pane: ShellPaneId::FIRST,
+            pane: ShellPaneId::SLOT_0,
             path: PathBuf::from("/tmp"),
         };
         assert!(context_menu_actions(&blank_target).contains(&ShellContextMenuAction::AddToPlaces));
@@ -29290,7 +29288,7 @@ mod tests {
     #[test]
     fn context_menu_items_offer_open_with_submenu_applications() {
         let target = ShellContextTarget::Item {
-            pane: ShellPaneId::FIRST,
+            pane: ShellPaneId::SLOT_0,
             index: 0,
             path: PathBuf::from("/tmp/plain.txt"),
             is_dir: false,
@@ -29332,7 +29330,7 @@ mod tests {
     #[test]
     fn context_menu_items_offer_service_root_more_and_group_submenus() {
         let target = ShellContextTarget::Item {
-            pane: ShellPaneId::FIRST,
+            pane: ShellPaneId::SLOT_0,
             index: 0,
             path: PathBuf::from("/tmp/archive.zip"),
             is_dir: false,
@@ -30119,9 +30117,9 @@ mod tests {
         fs::write(right.join("child.txt"), "split").unwrap();
 
         let mut scene = test_scene(vec![test_entry("right", true)], ShellViewMode::Icons);
-        scene.panes[ShellPaneId::FIRST].path = root.clone();
+        scene.panes[ShellPaneId::SLOT_0].path = root.clone();
         scene.context_target = Some(ShellContextTarget::Item {
-            pane: ShellPaneId::FIRST,
+            pane: ShellPaneId::SLOT_0,
             index: 0,
             path: right.clone(),
             is_dir: true,
@@ -30132,7 +30130,7 @@ mod tests {
         assert!(scene.open_split_pane_from_context(size).unwrap());
         let pane = scene
             .panes
-            .get(ShellPaneId::SECOND)
+            .get(ShellPaneId::SLOT_1)
             .expect("split pane should load");
         assert_eq!(pane.path, right);
         assert_eq!(pane.view_mode, ShellViewMode::Icons);
@@ -30149,21 +30147,21 @@ mod tests {
         {
             let pane = scene
                 .panes
-                .get_mut(ShellPaneId::SECOND)
+                .get_mut(ShellPaneId::SLOT_1)
                 .expect("split pane should load");
             pane.view_mode = ShellViewMode::Compact;
             pane.scroll_x = 12.0;
         }
         let pane = scene
             .panes
-            .get(ShellPaneId::SECOND)
+            .get(ShellPaneId::SLOT_1)
             .expect("split pane should load");
         let view = ShellPaneView::from_state(pane);
         assert_eq!(view.path, right.as_path());
         assert_eq!(view.dir_count, 0);
         assert_eq!(view.scroll_x, 12.0);
         let layout = scene.pane_layout_for_pane(
-            ShellPaneId::SECOND,
+            ShellPaneId::SLOT_1,
             view,
             metrics.right_pane.width,
             metrics.right_pane.height,
@@ -30192,9 +30190,9 @@ mod tests {
             ShellScene::load_with_hidden_visibility(root.clone(), ShellViewMode::Details, false)
                 .unwrap();
         let child_index =
-            entry_index_by_name(&scene.panes[ShellPaneId::FIRST].entries, "child").unwrap();
+            entry_index_by_name(&scene.panes[ShellPaneId::SLOT_0].entries, "child").unwrap();
         assert!(
-            scene.panes[ShellPaneId::FIRST]
+            scene.panes[ShellPaneId::SLOT_0]
                 .selection
                 .apply_navigation(child_index, false)
         );
@@ -30202,13 +30200,13 @@ mod tests {
         assert!(scene.toggle_split_view_from_toolbar(size).unwrap());
         let split = scene
             .panes
-            .get(ShellPaneId::SECOND)
+            .get(ShellPaneId::SLOT_1)
             .expect("split pane should load");
         assert_eq!(split.path, child);
         assert_eq!(split.view_mode, ShellViewMode::Details);
         assert_eq!(split.entries.len(), 1);
         assert_eq!(split.entries[0].name.as_ref(), "nested.txt");
-        assert_eq!(scene.active_pane(), ShellPaneId::SECOND);
+        assert_eq!(scene.active_pane(), ShellPaneId::SLOT_1);
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -30226,21 +30224,21 @@ mod tests {
         let size = PhysicalSize::new(900, 420);
         let mut scene = ShellScene::load(left.clone(), ShellViewMode::Icons).unwrap();
         assert!(scene.open_split_pane(right.clone(), size).unwrap());
-        assert_eq!(scene.active_pane(), ShellPaneId::SECOND);
+        assert_eq!(scene.active_pane(), ShellPaneId::SLOT_1);
 
         assert!(scene.toggle_split_view_from_toolbar(size).unwrap());
-        assert!(!scene.panes.is_open(ShellPaneId::SECOND));
-        assert_eq!(scene.active_pane(), ShellPaneId::FIRST);
-        assert_eq!(scene.panes[ShellPaneId::FIRST].path, left);
+        assert!(!scene.panes.is_open(ShellPaneId::SLOT_1));
+        assert_eq!(scene.active_pane(), ShellPaneId::SLOT_0);
+        assert_eq!(scene.panes[ShellPaneId::SLOT_0].path, left);
 
         assert!(scene.open_split_pane(right.clone(), size).unwrap());
-        scene.active_pane = ShellPaneId::FIRST;
+        scene.active_pane = ShellPaneId::SLOT_0;
         assert!(scene.toggle_split_view_from_toolbar(size).unwrap());
-        assert!(!scene.panes.is_open(ShellPaneId::SECOND));
-        assert_eq!(scene.active_pane(), ShellPaneId::FIRST);
-        assert_eq!(scene.panes[ShellPaneId::FIRST].path, right);
+        assert!(!scene.panes.is_open(ShellPaneId::SLOT_1));
+        assert_eq!(scene.active_pane(), ShellPaneId::SLOT_0);
+        assert_eq!(scene.panes[ShellPaneId::SLOT_0].path, right);
         assert_eq!(
-            scene.panes[ShellPaneId::FIRST].entries[0].name.as_ref(),
+            scene.panes[ShellPaneId::SLOT_0].entries[0].name.as_ref(),
             "right.txt"
         );
 
@@ -30251,7 +30249,7 @@ mod tests {
     fn open_with_chooser_opens_from_file_context_and_filters_applications() {
         let mut scene = test_scene(vec![test_entry("note.txt", false)], ShellViewMode::Icons);
         scene.context_target = Some(ShellContextTarget::Item {
-            pane: ShellPaneId::FIRST,
+            pane: ShellPaneId::SLOT_0,
             index: 0,
             path: PathBuf::from("/tmp/note.txt"),
             is_dir: false,
@@ -30404,7 +30402,7 @@ text/plain=writer.desktop;\n",
     #[test]
     fn trash_context_menu_uses_restore_delete_and_empty_actions() {
         let trash_item = ShellContextTarget::Item {
-            pane: ShellPaneId::FIRST,
+            pane: ShellPaneId::SLOT_0,
             index: 0,
             path: file_ops::trash_files_dir().join("trashed.txt"),
             is_dir: false,
@@ -30421,7 +30419,7 @@ text/plain=writer.desktop;\n",
         );
 
         let trash_blank = ShellContextTarget::Blank {
-            pane: ShellPaneId::FIRST,
+            pane: ShellPaneId::SLOT_0,
             path: file_ops::trash_files_dir(),
         };
         assert_eq!(
@@ -30457,7 +30455,7 @@ text/plain=writer.desktop;\n",
         );
 
         let normal_blank = ShellContextTarget::Blank {
-            pane: ShellPaneId::FIRST,
+            pane: ShellPaneId::SLOT_0,
             path: PathBuf::from("/tmp"),
         };
         assert!(!context_menu_actions(&normal_blank).contains(&ShellContextMenuAction::EmptyTrash));
@@ -30640,7 +30638,7 @@ text/plain=writer.desktop;\n",
                 label: "USB Drive".to_string(),
                 action: ShellContextMenuAction::MountDevice,
                 operation: DevicePlaceOperation::Mount,
-                pane: ShellPaneId::FIRST,
+                pane: ShellPaneId::SLOT_0,
                 path: PathBuf::from("gio:volume:usb"),
             })
         );
@@ -30679,7 +30677,7 @@ text/plain=writer.desktop;\n",
                 label: "USB Drive".to_string(),
                 action: ShellContextMenuAction::MountDevice,
                 operation: DevicePlaceOperation::Mount,
-                pane: ShellPaneId::FIRST,
+                pane: ShellPaneId::SLOT_0,
                 path: PathBuf::from("gio:volume:usb"),
             }))
         );
@@ -30692,10 +30690,10 @@ text/plain=writer.desktop;\n",
         assert!(entries.iter().all(|entry| entry.is_dir));
 
         let mut scene = test_scene(Vec::new(), ShellViewMode::Icons);
-        scene.panes[ShellPaneId::FIRST].path =
+        scene.panes[ShellPaneId::SLOT_0].path =
             PathBuf::from("smb://server.example/share/folder/child/");
         assert_eq!(
-            scene.parent_directory_path_for_pane(ShellPaneId::FIRST),
+            scene.parent_directory_path_for_pane(ShellPaneId::SLOT_0),
             Some(PathBuf::from("smb://server.example/share/folder/"))
         );
     }
@@ -30705,13 +30703,13 @@ text/plain=writer.desktop;\n",
         let mut scene = test_scene(Vec::new(), ShellViewMode::Icons);
         let size = PhysicalSize::new(700, 360);
         let device_path = PathBuf::from("/run/media/usb");
-        scene.panes[ShellPaneId::FIRST].path = device_path.join("folder");
+        scene.panes[ShellPaneId::SLOT_0].path = device_path.join("folder");
         let request = DeviceActionRequest {
             id: "gio:mount:usb".to_string(),
             label: "USB".to_string(),
             action: ShellContextMenuAction::UnmountDevice,
             operation: DevicePlaceOperation::Unmount,
-            pane: ShellPaneId::FIRST,
+            pane: ShellPaneId::SLOT_0,
             path: device_path,
         };
         let result = DevicePlaceOperationResult {
@@ -30727,7 +30725,7 @@ text/plain=writer.desktop;\n",
             .unwrap();
 
         assert_eq!(scene.places_changes, 1);
-        assert_eq!(scene.panes[ShellPaneId::FIRST].path, home_dir());
+        assert_eq!(scene.panes[ShellPaneId::SLOT_0].path, home_dir());
         assert!(scene.context_target.is_none());
         assert!(scene.context_menu.is_none());
     }
@@ -30762,7 +30760,7 @@ text/plain=writer.desktop;\n",
         let size = PhysicalSize::new(700, 320);
         let mut scene = test_scene(Vec::new(), ShellViewMode::Icons);
         scene.context_target = Some(ShellContextTarget::Blank {
-            pane: ShellPaneId::FIRST,
+            pane: ShellPaneId::SLOT_0,
             path: project.clone(),
         });
         scene.context_menu = Some(ShellContextMenu::new(
@@ -30911,9 +30909,9 @@ text/plain=writer.desktop;\n",
         );
 
         assert!(scene.apply_selection_command(SelectionCommand::SelectAll));
-        assert_eq!(scene.panes[ShellPaneId::FIRST].selection.len(), 3);
-        assert_eq!(scene.panes[ShellPaneId::FIRST].selection.anchor, Some(0));
-        assert_eq!(scene.panes[ShellPaneId::FIRST].selection.focus, Some(2));
+        assert_eq!(scene.panes[ShellPaneId::SLOT_0].selection.len(), 3);
+        assert_eq!(scene.panes[ShellPaneId::SLOT_0].selection.anchor, Some(0));
+        assert_eq!(scene.panes[ShellPaneId::SLOT_0].selection.focus, Some(2));
         assert_eq!(scene.selection_changes, 1);
         assert!(!scene.apply_selection_command(SelectionCommand::SelectAll));
         assert_eq!(scene.selection_changes, 1);
@@ -30921,12 +30919,12 @@ text/plain=writer.desktop;\n",
         scene.rubber_band = Some(RubberBand::new(
             ViewPoint { x: 0.0, y: 0.0 },
             RubberBandMode::Replace,
-            scene.panes[ShellPaneId::FIRST].selection.clone(),
+            scene.panes[ShellPaneId::SLOT_0].selection.clone(),
         ));
         assert!(scene.apply_selection_command(SelectionCommand::Clear));
-        assert_eq!(scene.panes[ShellPaneId::FIRST].selection.len(), 0);
-        assert_eq!(scene.panes[ShellPaneId::FIRST].selection.anchor, None);
-        assert_eq!(scene.panes[ShellPaneId::FIRST].selection.focus, None);
+        assert_eq!(scene.panes[ShellPaneId::SLOT_0].selection.len(), 0);
+        assert_eq!(scene.panes[ShellPaneId::SLOT_0].selection.anchor, None);
+        assert_eq!(scene.panes[ShellPaneId::SLOT_0].selection.focus, None);
         assert!(scene.rubber_band.is_none());
         assert_eq!(scene.selection_changes, 2);
         assert!(!scene.apply_selection_command(SelectionCommand::Clear));
@@ -30942,11 +30940,11 @@ text/plain=writer.desktop;\n",
             ShellViewMode::Icons,
         );
         let size = PhysicalSize::new(520, 360);
-        scene.panes[ShellPaneId::FIRST]
+        scene.panes[ShellPaneId::SLOT_0]
             .selection
             .select_indexes(&[0, 1]);
         let content = scene
-            .pane_geometry(ShellPaneId::FIRST, size)
+            .pane_geometry(ShellPaneId::SLOT_0, size)
             .unwrap()
             .content;
         let blank = ViewPoint {
@@ -30962,9 +30960,9 @@ text/plain=writer.desktop;\n",
             },
             size,
         ));
-        assert_eq!(scene.panes[ShellPaneId::FIRST].selection.len(), 0);
-        assert_eq!(scene.panes[ShellPaneId::FIRST].selection.anchor, None);
-        assert_eq!(scene.panes[ShellPaneId::FIRST].selection.focus, None);
+        assert_eq!(scene.panes[ShellPaneId::SLOT_0].selection.len(), 0);
+        assert_eq!(scene.panes[ShellPaneId::SLOT_0].selection.anchor, None);
+        assert_eq!(scene.panes[ShellPaneId::SLOT_0].selection.focus, None);
         let _ = scene.end_pane_pointer(blank, size);
         assert!(scene.rubber_band.is_none());
     }
@@ -30991,7 +30989,7 @@ text/plain=writer.desktop;\n",
 
         assert!(scene.open_context_target(point, size));
         assert_eq!(
-            scene.panes[ShellPaneId::FIRST]
+            scene.panes[ShellPaneId::SLOT_0]
                 .selection
                 .selected
                 .iter()
@@ -30999,11 +30997,11 @@ text/plain=writer.desktop;\n",
                 .collect::<Vec<_>>(),
             vec![1]
         );
-        assert_eq!(scene.panes[ShellPaneId::FIRST].selection.focus, Some(1));
+        assert_eq!(scene.panes[ShellPaneId::SLOT_0].selection.focus, Some(1));
         assert_eq!(
             scene.hovered_item,
             Some(ShellPaneItemTarget {
-                pane: ShellPaneId::FIRST,
+                pane: ShellPaneId::SLOT_0,
                 index: 1,
             })
         );
@@ -31012,7 +31010,7 @@ text/plain=writer.desktop;\n",
         assert_eq!(
             scene.context_target,
             Some(ShellContextTarget::Item {
-                pane: ShellPaneId::FIRST,
+                pane: ShellPaneId::SLOT_0,
                 index: 1,
                 path: PathBuf::from("/tmp/bravo.txt"),
                 is_dir: false,
@@ -31033,7 +31031,7 @@ text/plain=writer.desktop;\n",
         );
         let size = PhysicalSize::new(420, 260);
         assert!(
-            scene.panes[ShellPaneId::FIRST]
+            scene.panes[ShellPaneId::SLOT_0]
                 .selection
                 .select_indexes(&[0, 2])
         );
@@ -31048,7 +31046,7 @@ text/plain=writer.desktop;\n",
 
         assert!(scene.open_context_target(point, size));
         assert_eq!(
-            scene.panes[ShellPaneId::FIRST]
+            scene.panes[ShellPaneId::SLOT_0]
                 .selection
                 .selected
                 .iter()
@@ -31056,11 +31054,11 @@ text/plain=writer.desktop;\n",
                 .collect::<Vec<_>>(),
             vec![0, 2]
         );
-        assert_eq!(scene.panes[ShellPaneId::FIRST].selection.focus, Some(0));
+        assert_eq!(scene.panes[ShellPaneId::SLOT_0].selection.focus, Some(0));
         assert_eq!(
             scene.context_target,
             Some(ShellContextTarget::Item {
-                pane: ShellPaneId::FIRST,
+                pane: ShellPaneId::SLOT_0,
                 index: 0,
                 path: PathBuf::from("/tmp/alpha.txt"),
                 is_dir: false,
@@ -31074,7 +31072,7 @@ text/plain=writer.desktop;\n",
         let mut scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
         let size = PhysicalSize::new(420, 260);
         assert!(
-            scene.panes[ShellPaneId::FIRST]
+            scene.panes[ShellPaneId::SLOT_0]
                 .selection
                 .apply_navigation(0, false)
         );
@@ -31083,10 +31081,10 @@ text/plain=writer.desktop;\n",
             current: ViewPoint { x: 12.0, y: 12.0 },
             active: true,
             mode: RubberBandMode::Replace,
-            base_selection: scene.panes[ShellPaneId::FIRST].selection.clone(),
+            base_selection: scene.panes[ShellPaneId::SLOT_0].selection.clone(),
         });
         let content = scene
-            .pane_geometry(ShellPaneId::FIRST, size)
+            .pane_geometry(ShellPaneId::SLOT_0, size)
             .unwrap()
             .content;
         let point = ViewPoint {
@@ -31095,14 +31093,14 @@ text/plain=writer.desktop;\n",
         };
 
         assert!(scene.open_context_target(point, size));
-        assert_eq!(scene.panes[ShellPaneId::FIRST].selection.len(), 1);
-        assert!(scene.panes[ShellPaneId::FIRST].selection.contains(0));
+        assert_eq!(scene.panes[ShellPaneId::SLOT_0].selection.len(), 1);
+        assert!(scene.panes[ShellPaneId::SLOT_0].selection.contains(0));
         assert_eq!(scene.hovered_item, None);
         assert!(scene.rubber_band.is_none());
         assert_eq!(
             scene.context_target,
             Some(ShellContextTarget::Blank {
-                pane: ShellPaneId::FIRST,
+                pane: ShellPaneId::SLOT_0,
                 path: PathBuf::from("/tmp"),
             })
         );
@@ -31133,7 +31131,7 @@ text/plain=writer.desktop;\n",
         assert!(matches!(
             menu.target,
             ShellContextTarget::Item {
-                pane: ShellPaneId::FIRST,
+                pane: ShellPaneId::SLOT_0,
                 index: 0,
                 is_dir: true,
                 ..
@@ -31169,7 +31167,7 @@ text/plain=writer.desktop;\n",
         assert_eq!(scene.context_menu_actions, 1);
         assert_eq!(
             scene.context_target_directory_path(),
-            Some((ShellPaneId::FIRST, PathBuf::from("/tmp/folder")))
+            Some((ShellPaneId::SLOT_0, PathBuf::from("/tmp/folder")))
         );
     }
 
@@ -31178,7 +31176,7 @@ text/plain=writer.desktop;\n",
         let mut scene = test_scene(Vec::new(), ShellViewMode::Icons);
         let size = PhysicalSize::new(240, 180);
         let content = scene
-            .pane_geometry(ShellPaneId::FIRST, size)
+            .pane_geometry(ShellPaneId::SLOT_0, size)
             .unwrap()
             .content;
         let point = ViewPoint {
@@ -31219,7 +31217,7 @@ text/plain=writer.desktop;\n",
     #[test]
     fn context_menu_uses_original_metrics_and_flips_near_edges() {
         let target = ShellContextTarget::Blank {
-            pane: ShellPaneId::FIRST,
+            pane: ShellPaneId::SLOT_0,
             path: PathBuf::from("/tmp"),
         };
         let menu = ShellContextMenu::new(target, ViewPoint { x: 390.0, y: 280.0 });
@@ -31241,7 +31239,7 @@ text/plain=writer.desktop;\n",
     #[test]
     fn context_menu_hit_testing_respects_vertical_padding() {
         let target = ShellContextTarget::Blank {
-            pane: ShellPaneId::FIRST,
+            pane: ShellPaneId::SLOT_0,
             path: PathBuf::from("/tmp"),
         };
         let menu = ShellContextMenu::new(target, ViewPoint { x: 40.0, y: 40.0 });
@@ -31289,7 +31287,7 @@ text/plain=writer.desktop;\n",
     #[test]
     fn context_menu_separator_rows_match_original_grouping() {
         let blank = ShellContextTarget::Blank {
-            pane: ShellPaneId::FIRST,
+            pane: ShellPaneId::SLOT_0,
             path: PathBuf::from("/tmp"),
         };
         let blank_actions = context_menu_actions(&blank);
@@ -31327,7 +31325,7 @@ text/plain=writer.desktop;\n",
         assert!(context_menu_separator_before(&blank, properties_row));
 
         let item = ShellContextTarget::Item {
-            pane: ShellPaneId::FIRST,
+            pane: ShellPaneId::SLOT_0,
             index: 0,
             path: PathBuf::from("/tmp/file.txt"),
             is_dir: false,
@@ -31358,7 +31356,7 @@ text/plain=writer.desktop;\n",
         let mut scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
         let size = PhysicalSize::new(420, 260);
         let content = scene
-            .pane_geometry(ShellPaneId::FIRST, size)
+            .pane_geometry(ShellPaneId::SLOT_0, size)
             .unwrap()
             .content;
         let point = ViewPoint {
@@ -31410,7 +31408,7 @@ text/plain=writer.desktop;\n",
     #[test]
     fn context_menu_exposes_explicit_administrator_actions() {
         let blank = ShellContextTarget::Blank {
-            pane: ShellPaneId::FIRST,
+            pane: ShellPaneId::SLOT_0,
             path: PathBuf::from("/tmp"),
         };
         let blank_actions = context_menu_actions(&blank);
@@ -31418,7 +31416,7 @@ text/plain=writer.desktop;\n",
         assert!(blank_actions.contains(&ShellContextMenuAction::PasteAsAdministrator));
 
         let item = ShellContextTarget::Item {
-            pane: ShellPaneId::FIRST,
+            pane: ShellPaneId::SLOT_0,
             index: 0,
             path: PathBuf::from("/tmp/file.txt"),
             is_dir: false,
@@ -31455,7 +31453,7 @@ text/plain=writer.desktop;\n",
     #[test]
     fn context_menu_blank_target_exposes_view_mode_submenu() {
         let blank = ShellContextTarget::Blank {
-            pane: ShellPaneId::FIRST,
+            pane: ShellPaneId::SLOT_0,
             path: PathBuf::from("/tmp"),
         };
         let menu = ShellContextMenu::new(blank.clone(), ViewPoint { x: 0.0, y: 0.0 });
@@ -31498,7 +31496,7 @@ text/plain=writer.desktop;\n",
             ShellViewMode::Icons,
         );
         scene.context_target = Some(ShellContextTarget::Item {
-            pane: ShellPaneId::FIRST,
+            pane: ShellPaneId::SLOT_0,
             index: 0,
             path: PathBuf::from("/tmp/folder"),
             is_dir: true,
@@ -31506,11 +31504,11 @@ text/plain=writer.desktop;\n",
         });
         assert_eq!(
             scene.context_target_directory_path(),
-            Some((ShellPaneId::FIRST, PathBuf::from("/tmp/folder")))
+            Some((ShellPaneId::SLOT_0, PathBuf::from("/tmp/folder")))
         );
 
         scene.context_target = Some(ShellContextTarget::Item {
-            pane: ShellPaneId::FIRST,
+            pane: ShellPaneId::SLOT_0,
             index: 1,
             path: PathBuf::from("/tmp/plain.txt"),
             is_dir: false,
@@ -31519,7 +31517,7 @@ text/plain=writer.desktop;\n",
         assert_eq!(scene.context_target_directory_path(), None);
 
         scene.context_target = Some(ShellContextTarget::Blank {
-            pane: ShellPaneId::FIRST,
+            pane: ShellPaneId::SLOT_0,
             path: PathBuf::from("/tmp"),
         });
         assert_eq!(scene.context_target_directory_path(), None);
@@ -31537,7 +31535,7 @@ text/plain=writer.desktop;\n",
         });
         assert_eq!(
             scene.context_target_directory_path(),
-            Some((ShellPaneId::FIRST, PathBuf::from("/")))
+            Some((ShellPaneId::SLOT_0, PathBuf::from("/")))
         );
     }
 
@@ -31548,13 +31546,13 @@ text/plain=writer.desktop;\n",
             ShellViewMode::Icons,
         );
         scene.context_target = Some(ShellContextTarget::Blank {
-            pane: ShellPaneId::FIRST,
+            pane: ShellPaneId::SLOT_0,
             path: PathBuf::from("/tmp"),
         });
         assert_eq!(scene.context_target_open_file_request(), None);
 
         scene.context_target = Some(ShellContextTarget::Item {
-            pane: ShellPaneId::FIRST,
+            pane: ShellPaneId::SLOT_0,
             index: 0,
             path: PathBuf::from("/tmp/folder"),
             is_dir: true,
@@ -31563,7 +31561,7 @@ text/plain=writer.desktop;\n",
         assert_eq!(scene.context_target_open_file_request(), None);
 
         scene.context_target = Some(ShellContextTarget::Item {
-            pane: ShellPaneId::FIRST,
+            pane: ShellPaneId::SLOT_0,
             index: 1,
             path: PathBuf::from("/tmp/Fika Test/plain.txt"),
             is_dir: false,
@@ -31584,7 +31582,7 @@ text/plain=writer.desktop;\n",
     fn open_file_request_preserves_network_uri_targets() {
         let mut scene = test_scene(vec![test_entry("remote.txt", false)], ShellViewMode::Icons);
         scene.context_target = Some(ShellContextTarget::Item {
-            pane: ShellPaneId::FIRST,
+            pane: ShellPaneId::SLOT_0,
             index: 0,
             path: PathBuf::from("sftp://example.test/home/yk/remote.txt"),
             is_dir: false,
@@ -31634,13 +31632,13 @@ text/plain=writer.desktop;\n",
     fn copy_location_request_uses_target_display_path() {
         let mut scene = test_scene(vec![test_entry("plain.txt", false)], ShellViewMode::Icons);
         scene.context_target = Some(ShellContextTarget::Blank {
-            pane: ShellPaneId::FIRST,
+            pane: ShellPaneId::SLOT_0,
             path: PathBuf::from("/tmp"),
         });
         assert_eq!(scene.context_target_copy_location_request(), None);
 
         scene.context_target = Some(ShellContextTarget::Item {
-            pane: ShellPaneId::FIRST,
+            pane: ShellPaneId::SLOT_0,
             index: 0,
             path: PathBuf::from("/tmp/Fika Test/plain.txt"),
             is_dir: false,
@@ -31691,13 +31689,13 @@ text/plain=writer.desktop;\n",
             ShellViewMode::Icons,
         );
         scene.context_target = Some(ShellContextTarget::Item {
-            pane: ShellPaneId::FIRST,
+            pane: ShellPaneId::SLOT_0,
             index: 1,
             path: PathBuf::from("/tmp/two.txt"),
             is_dir: false,
             selection_count: 2,
         });
-        scene.panes[ShellPaneId::FIRST]
+        scene.panes[ShellPaneId::SLOT_0]
             .selection
             .select_indexes(&[0, 1]);
 
@@ -31719,7 +31717,7 @@ text/plain=writer.desktop;\n",
         assert_eq!(scene.file_clipboard_changes, 1);
 
         scene.context_target = Some(ShellContextTarget::Item {
-            pane: ShellPaneId::FIRST,
+            pane: ShellPaneId::SLOT_0,
             index: 2,
             path: PathBuf::from("sftp://example.test/home/yk/remote.txt"),
             is_dir: false,
@@ -31743,7 +31741,7 @@ text/plain=writer.desktop;\n",
         let size = PhysicalSize::new(420, 260);
         let mut scene = ShellScene::load(target_root.clone(), ShellViewMode::Icons).unwrap();
         scene.context_target = Some(ShellContextTarget::Blank {
-            pane: ShellPaneId::FIRST,
+            pane: ShellPaneId::SLOT_0,
             path: target_root.clone(),
         });
         let clipboard_text =
@@ -31762,7 +31760,7 @@ text/plain=writer.desktop;\n",
         assert!(target_root.join("source.txt").is_file());
         assert_eq!(fs::read(target_root.join("source.txt")).unwrap(), b"source");
         assert!(
-            entry_index_by_name(&scene.panes[ShellPaneId::FIRST].entries, "source.txt").is_some()
+            entry_index_by_name(&scene.panes[ShellPaneId::SLOT_0].entries, "source.txt").is_some()
         );
 
         fs::remove_dir_all(source_root).unwrap();
@@ -31779,7 +31777,7 @@ text/plain=writer.desktop;\n",
         let size = PhysicalSize::new(420, 260);
         let mut scene = ShellScene::load(target_root.clone(), ShellViewMode::Icons).unwrap();
         scene.context_target = Some(ShellContextTarget::Blank {
-            pane: ShellPaneId::FIRST,
+            pane: ShellPaneId::SLOT_0,
             path: target_root.clone(),
         });
         let clipboard_text =
@@ -31809,7 +31807,7 @@ text/plain=writer.desktop;\n",
         let size = PhysicalSize::new(420, 260);
         let mut scene = ShellScene::load(root.clone(), ShellViewMode::Icons).unwrap();
         scene.context_target = Some(ShellContextTarget::Blank {
-            pane: ShellPaneId::FIRST,
+            pane: ShellPaneId::SLOT_0,
             path: root.clone(),
         });
 
@@ -31828,7 +31826,7 @@ text/plain=writer.desktop;\n",
             "hello from clipboard"
         );
         assert!(
-            entry_index_by_name(&scene.panes[ShellPaneId::FIRST].entries, "Pasted Text.txt")
+            entry_index_by_name(&scene.panes[ShellPaneId::SLOT_0].entries, "Pasted Text.txt")
                 .is_some()
         );
 
@@ -31842,7 +31840,7 @@ text/plain=writer.desktop;\n",
             ShellViewMode::Icons,
         );
         scene.context_target = Some(ShellContextTarget::Item {
-            pane: ShellPaneId::FIRST,
+            pane: ShellPaneId::SLOT_0,
             index: 1,
             path: PathBuf::from("/tmp/plain.txt"),
             is_dir: false,
@@ -31889,7 +31887,7 @@ text/plain=writer.desktop;\n",
             ShellViewMode::Icons,
         );
         scene.context_target = Some(ShellContextTarget::Blank {
-            pane: ShellPaneId::FIRST,
+            pane: ShellPaneId::SLOT_0,
             path: PathBuf::from("/tmp"),
         });
         let size = PhysicalSize::new(360, 240);
@@ -31987,7 +31985,7 @@ text/plain=writer.desktop;\n",
         let size = PhysicalSize::new(420, 260);
         let root = test_dir("create-dialog");
         scene.context_target = Some(ShellContextTarget::Blank {
-            pane: ShellPaneId::FIRST,
+            pane: ShellPaneId::SLOT_0,
             path: root,
         });
 
@@ -32027,7 +32025,7 @@ text/plain=writer.desktop;\n",
     fn create_entry_request_rejects_invalid_names_and_records_error() {
         let mut scene = test_scene(vec![], ShellViewMode::Icons);
         scene.context_target = Some(ShellContextTarget::Blank {
-            pane: ShellPaneId::FIRST,
+            pane: ShellPaneId::SLOT_0,
             path: PathBuf::from("/tmp"),
         });
         assert!(scene.open_create_dialog_from_context());
@@ -32045,7 +32043,7 @@ text/plain=writer.desktop;\n",
     fn create_and_rename_requests_preserve_explicit_administrator_flag() {
         let mut scene = test_scene(vec![test_entry("plain.txt", false)], ShellViewMode::Icons);
         scene.context_target = Some(ShellContextTarget::Blank {
-            pane: ShellPaneId::FIRST,
+            pane: ShellPaneId::SLOT_0,
             path: PathBuf::from("/tmp"),
         });
         assert!(scene.open_create_dialog_from_context_with_kind(CreateEntryKind::File, true));
@@ -32054,7 +32052,7 @@ text/plain=writer.desktop;\n",
         assert!(create_request.privileged);
 
         scene.context_target = Some(ShellContextTarget::Item {
-            pane: ShellPaneId::FIRST,
+            pane: ShellPaneId::SLOT_0,
             index: 0,
             path: PathBuf::from("/tmp/plain.txt"),
             is_dir: false,
@@ -32073,7 +32071,7 @@ text/plain=writer.desktop;\n",
         let size = PhysicalSize::new(420, 260);
         let mut scene = ShellScene::load(root.clone(), ShellViewMode::Icons).unwrap();
         scene.context_target = Some(ShellContextTarget::Blank {
-            pane: ShellPaneId::FIRST,
+            pane: ShellPaneId::SLOT_0,
             path: root.clone(),
         });
 
@@ -32088,9 +32086,9 @@ text/plain=writer.desktop;\n",
         assert!(scene.reload_current_path(size).unwrap());
         assert!(scene.select_entry_by_name("made", size));
 
-        let index = entry_index_by_name(&scene.panes[ShellPaneId::FIRST].entries, "made").unwrap();
-        assert!(scene.panes[ShellPaneId::FIRST].entries[index].is_dir);
-        assert!(scene.panes[ShellPaneId::FIRST].selection.contains(index));
+        let index = entry_index_by_name(&scene.panes[ShellPaneId::SLOT_0].entries, "made").unwrap();
+        assert!(scene.panes[ShellPaneId::SLOT_0].entries[index].is_dir);
+        assert!(scene.panes[ShellPaneId::SLOT_0].selection.contains(index));
         assert!(scene.create_dialog.is_none());
         assert_eq!(scene.directory_reloads, 1);
 
@@ -32103,7 +32101,7 @@ text/plain=writer.desktop;\n",
         fs::create_dir_all(&root).unwrap();
         fs::write(root.join("New File"), b"existing").unwrap();
         let mut dialog = ShellCreateDialog::new(
-            ShellPaneId::FIRST,
+            ShellPaneId::SLOT_0,
             root.clone(),
             CreateEntryKind::File,
             false,
@@ -32111,7 +32109,7 @@ text/plain=writer.desktop;\n",
         assert_eq!(dialog.name, "New File 2");
         dialog.name = "note.txt".to_string();
         let request = CreateEntryRequest {
-            pane: ShellPaneId::FIRST,
+            pane: ShellPaneId::SLOT_0,
             parent: root.clone(),
             path: root.join("note.txt"),
             kind: CreateEntryKind::File,
@@ -32135,7 +32133,7 @@ text/plain=writer.desktop;\n",
         let mut scene = test_scene(vec![test_entry("plain.txt", false)], ShellViewMode::Icons);
         let size = PhysicalSize::new(420, 260);
         scene.context_target = Some(ShellContextTarget::Item {
-            pane: ShellPaneId::FIRST,
+            pane: ShellPaneId::SLOT_0,
             index: 0,
             path: PathBuf::from("/tmp/plain.txt"),
             is_dir: false,
@@ -32175,7 +32173,7 @@ text/plain=writer.desktop;\n",
     fn rename_entry_request_rejects_unchanged_and_invalid_names() {
         let mut scene = test_scene(vec![test_entry("plain.txt", false)], ShellViewMode::Icons);
         scene.context_target = Some(ShellContextTarget::Item {
-            pane: ShellPaneId::FIRST,
+            pane: ShellPaneId::SLOT_0,
             index: 0,
             path: PathBuf::from("/tmp/plain.txt"),
             is_dir: false,
@@ -32201,9 +32199,9 @@ text/plain=writer.desktop;\n",
         let size = PhysicalSize::new(420, 260);
         let mut scene = ShellScene::load(root.clone(), ShellViewMode::Icons).unwrap();
         let old_index =
-            entry_index_by_name(&scene.panes[ShellPaneId::FIRST].entries, "old.txt").unwrap();
+            entry_index_by_name(&scene.panes[ShellPaneId::SLOT_0].entries, "old.txt").unwrap();
         scene.context_target = Some(ShellContextTarget::Item {
-            pane: ShellPaneId::FIRST,
+            pane: ShellPaneId::SLOT_0,
             index: old_index,
             path: root.join("old.txt"),
             is_dir: false,
@@ -32224,9 +32222,9 @@ text/plain=writer.desktop;\n",
         assert!(scene.select_entry_by_name("new.txt", size));
 
         let new_index =
-            entry_index_by_name(&scene.panes[ShellPaneId::FIRST].entries, "new.txt").unwrap();
+            entry_index_by_name(&scene.panes[ShellPaneId::SLOT_0].entries, "new.txt").unwrap();
         assert!(
-            scene.panes[ShellPaneId::FIRST]
+            scene.panes[ShellPaneId::SLOT_0]
                 .selection
                 .contains(new_index)
         );
@@ -32253,17 +32251,17 @@ text/plain=writer.desktop;\n",
         let size = PhysicalSize::new(900, 360);
         let mut scene = ShellScene::load(left.clone(), ShellViewMode::Icons).unwrap();
         assert!(scene.open_split_pane(right.clone(), size).unwrap());
-        scene.active_pane = ShellPaneId::SECOND;
+        scene.active_pane = ShellPaneId::SLOT_1;
 
         scene.context_target = Some(ShellContextTarget::Blank {
-            pane: ShellPaneId::SECOND,
+            pane: ShellPaneId::SLOT_1,
             path: right.clone(),
         });
         assert!(scene.open_create_dialog_from_context_with_kind(CreateEntryKind::File, false));
         scene.create_dialog.as_mut().unwrap().name = "made.txt".to_string();
         scene.create_dialog.as_mut().unwrap().replace_on_insert = false;
         let create_request = scene.create_entry_request().unwrap();
-        assert_eq!(create_request.pane, ShellPaneId::SECOND);
+        assert_eq!(create_request.pane, ShellPaneId::SLOT_1);
         create_entry_on_disk(&create_request).unwrap();
         assert!(scene.close_create_dialog_after_success(&create_request));
         assert!(scene.reload_pane_path(create_request.pane, size).unwrap());
@@ -32272,15 +32270,15 @@ text/plain=writer.desktop;\n",
             &create_request.name,
             size
         ));
-        assert_eq!(scene.panes[ShellPaneId::FIRST].path, left);
+        assert_eq!(scene.panes[ShellPaneId::SLOT_0].path, left);
         assert!(
-            entry_index_by_name(&scene.panes[ShellPaneId::FIRST].entries, "made.txt").is_none()
+            entry_index_by_name(&scene.panes[ShellPaneId::SLOT_0].entries, "made.txt").is_none()
         );
 
         let made_index =
-            entry_index_by_name(&scene.panes[ShellPaneId::SECOND].entries, "made.txt").unwrap();
+            entry_index_by_name(&scene.panes[ShellPaneId::SLOT_1].entries, "made.txt").unwrap();
         scene.context_target = Some(ShellContextTarget::Item {
-            pane: ShellPaneId::SECOND,
+            pane: ShellPaneId::SLOT_1,
             index: made_index,
             path: right.join("made.txt"),
             is_dir: false,
@@ -32290,7 +32288,7 @@ text/plain=writer.desktop;\n",
         scene.rename_dialog.as_mut().unwrap().name = "renamed.txt".to_string();
         scene.rename_dialog.as_mut().unwrap().replace_on_insert = false;
         let rename_request = scene.rename_entry_request().unwrap();
-        assert_eq!(rename_request.pane, ShellPaneId::SECOND);
+        assert_eq!(rename_request.pane, ShellPaneId::SLOT_1);
         rename_entry_on_disk(&rename_request).unwrap();
         assert!(scene.close_rename_dialog_after_success(&rename_request));
         assert!(scene.reload_pane_path(rename_request.pane, size).unwrap());
@@ -32302,20 +32300,20 @@ text/plain=writer.desktop;\n",
         assert!(right.join("renamed.txt").is_file());
         assert!(!right.join("made.txt").exists());
         assert!(
-            entry_index_by_name(&scene.panes[ShellPaneId::FIRST].entries, "renamed.txt").is_none()
+            entry_index_by_name(&scene.panes[ShellPaneId::SLOT_0].entries, "renamed.txt").is_none()
         );
 
         scene.rename_dialog = None;
         assert!(scene.open_rename_dialog_from_active_selection(false));
         let dialog = scene.rename_dialog.as_ref().unwrap();
-        assert_eq!(dialog.pane, ShellPaneId::SECOND);
+        assert_eq!(dialog.pane, ShellPaneId::SLOT_1);
         assert_eq!(dialog.source, right.join("renamed.txt"));
         assert!(scene.close_rename_dialog());
 
         let clipboard_request = scene
             .active_file_clipboard_request(FileClipboardRole::Copy)
             .unwrap()
-            .expect("active second pane selection should export paths");
+            .expect("active slot 1 pane selection should export paths");
         assert_eq!(clipboard_request.role, FileClipboardRole::Copy);
         assert_eq!(clipboard_request.paths, vec![right.join("renamed.txt")]);
 
@@ -32329,16 +32327,16 @@ text/plain=writer.desktop;\n",
         assert_eq!(scene.paste_changes, 1);
         assert!(right.join("copy.txt").is_file());
         assert!(
-            entry_index_by_name(&scene.panes[ShellPaneId::SECOND].entries, "copy.txt").is_some()
+            entry_index_by_name(&scene.panes[ShellPaneId::SLOT_1].entries, "copy.txt").is_some()
         );
         assert!(
-            entry_index_by_name(&scene.panes[ShellPaneId::FIRST].entries, "copy.txt").is_none()
+            entry_index_by_name(&scene.panes[ShellPaneId::SLOT_0].entries, "copy.txt").is_none()
         );
 
         let trash_index =
-            entry_index_by_name(&scene.panes[ShellPaneId::SECOND].entries, "trash-me.txt").unwrap();
+            entry_index_by_name(&scene.panes[ShellPaneId::SLOT_1].entries, "trash-me.txt").unwrap();
         scene.context_target = Some(ShellContextTarget::Item {
-            pane: ShellPaneId::SECOND,
+            pane: ShellPaneId::SLOT_1,
             index: trash_index,
             path: right.join("trash-me.txt"),
             is_dir: false,
@@ -32349,10 +32347,10 @@ text/plain=writer.desktop;\n",
         assert_eq!(trash_result.failure_count, 0);
         assert!(!right.join("trash-me.txt").exists());
         assert!(
-            entry_index_by_name(&scene.panes[ShellPaneId::SECOND].entries, "trash-me.txt")
+            entry_index_by_name(&scene.panes[ShellPaneId::SLOT_1].entries, "trash-me.txt")
                 .is_none()
         );
-        assert_eq!(scene.panes[ShellPaneId::FIRST].path, left);
+        assert_eq!(scene.panes[ShellPaneId::SLOT_0].path, left);
 
         file_ops::undo_trash(&trash_result.trash_pairs).unwrap();
         fs::remove_dir_all(root).unwrap();
@@ -32366,10 +32364,10 @@ text/plain=writer.desktop;\n",
         let size = PhysicalSize::new(900, 360);
         let mut scene = ShellScene::load(root.clone(), ShellViewMode::Icons).unwrap();
         assert!(scene.open_split_pane(root.clone(), size).unwrap());
-        scene.active_pane = ShellPaneId::SECOND;
+        scene.active_pane = ShellPaneId::SLOT_1;
 
         scene.context_target = Some(ShellContextTarget::Blank {
-            pane: ShellPaneId::SECOND,
+            pane: ShellPaneId::SLOT_1,
             path: root.clone(),
         });
         assert!(scene.open_create_dialog_from_context_with_kind(CreateEntryKind::File, false));
@@ -32390,19 +32388,19 @@ text/plain=writer.desktop;\n",
         ));
 
         assert!(
-            entry_index_by_name(&scene.panes[ShellPaneId::FIRST].entries, "made.txt").is_some()
+            entry_index_by_name(&scene.panes[ShellPaneId::SLOT_0].entries, "made.txt").is_some()
         );
         let made_index =
-            entry_index_by_name(&scene.panes[ShellPaneId::SECOND].entries, "made.txt").unwrap();
+            entry_index_by_name(&scene.panes[ShellPaneId::SLOT_1].entries, "made.txt").unwrap();
         assert!(
-            scene.panes[ShellPaneId::SECOND]
+            scene.panes[ShellPaneId::SLOT_1]
                 .selection
                 .contains(made_index)
         );
         assert_eq!(scene.directory_reloads, 2);
 
         scene.context_target = Some(ShellContextTarget::Item {
-            pane: ShellPaneId::SECOND,
+            pane: ShellPaneId::SLOT_1,
             index: made_index,
             path: root.join("made.txt"),
             is_dir: false,
@@ -32427,18 +32425,18 @@ text/plain=writer.desktop;\n",
         ));
 
         assert!(
-            entry_index_by_name(&scene.panes[ShellPaneId::FIRST].entries, "made.txt").is_none()
+            entry_index_by_name(&scene.panes[ShellPaneId::SLOT_0].entries, "made.txt").is_none()
         );
         assert!(
-            entry_index_by_name(&scene.panes[ShellPaneId::FIRST].entries, "renamed.txt").is_some()
+            entry_index_by_name(&scene.panes[ShellPaneId::SLOT_0].entries, "renamed.txt").is_some()
         );
         assert!(
-            entry_index_by_name(&scene.panes[ShellPaneId::SECOND].entries, "made.txt").is_none()
+            entry_index_by_name(&scene.panes[ShellPaneId::SLOT_1].entries, "made.txt").is_none()
         );
         let renamed_index =
-            entry_index_by_name(&scene.panes[ShellPaneId::SECOND].entries, "renamed.txt").unwrap();
+            entry_index_by_name(&scene.panes[ShellPaneId::SLOT_1].entries, "renamed.txt").unwrap();
         assert!(
-            scene.panes[ShellPaneId::SECOND]
+            scene.panes[ShellPaneId::SLOT_1]
                 .selection
                 .contains(renamed_index)
         );
@@ -32458,13 +32456,13 @@ text/plain=writer.desktop;\n",
             ShellViewMode::Icons,
         );
         scene.context_target = Some(ShellContextTarget::Item {
-            pane: ShellPaneId::FIRST,
+            pane: ShellPaneId::SLOT_0,
             index: 1,
             path: PathBuf::from("/tmp/two.txt"),
             is_dir: false,
             selection_count: 2,
         });
-        scene.panes[ShellPaneId::FIRST]
+        scene.panes[ShellPaneId::SLOT_0]
             .selection
             .select_indexes(&[0, 1]);
 
@@ -32474,7 +32472,7 @@ text/plain=writer.desktop;\n",
         );
 
         scene.context_target = Some(ShellContextTarget::Item {
-            pane: ShellPaneId::FIRST,
+            pane: ShellPaneId::SLOT_0,
             index: 2,
             path: PathBuf::from("sftp://example.test/home/remote"),
             is_dir: false,
@@ -32494,7 +32492,7 @@ text/plain=writer.desktop;\n",
         let mut scene = test_scene(vec![test_entry("plain.txt", false)], ShellViewMode::Icons);
         let trash_path = file_ops::trash_files_dir().join("plain.txt");
         scene.context_target = Some(ShellContextTarget::Item {
-            pane: ShellPaneId::FIRST,
+            pane: ShellPaneId::SLOT_0,
             index: 0,
             path: trash_path.clone(),
             is_dir: false,
@@ -32513,7 +32511,7 @@ text/plain=writer.desktop;\n",
         assert_eq!(paths, vec![trash_path]);
 
         scene.context_target = Some(ShellContextTarget::Blank {
-            pane: ShellPaneId::FIRST,
+            pane: ShellPaneId::SLOT_0,
             path: file_ops::trash_files_dir(),
         });
         let (operation, paths) = scene
@@ -32523,7 +32521,7 @@ text/plain=writer.desktop;\n",
         assert!(paths.is_empty());
 
         scene.context_target = Some(ShellContextTarget::Item {
-            pane: ShellPaneId::FIRST,
+            pane: ShellPaneId::SLOT_0,
             index: 0,
             path: PathBuf::from("/tmp/plain.txt"),
             is_dir: false,
@@ -32550,7 +32548,7 @@ text/plain=writer.desktop;\n",
         let mut scene =
             ShellScene::load(file_ops::trash_files_dir(), ShellViewMode::Icons).unwrap();
         scene.context_target = Some(ShellContextTarget::Item {
-            pane: ShellPaneId::FIRST,
+            pane: ShellPaneId::SLOT_0,
             index: 0,
             path: trash_path.clone(),
             is_dir: false,
@@ -32560,7 +32558,7 @@ text/plain=writer.desktop;\n",
             scene.context_target.clone().unwrap(),
             ViewPoint { x: 8.0, y: 8.0 },
         ));
-        scene.panes[ShellPaneId::FIRST]
+        scene.panes[ShellPaneId::SLOT_0]
             .selection
             .select_indexes(&[0]);
 
@@ -32574,7 +32572,7 @@ text/plain=writer.desktop;\n",
         assert!(!trash_path.exists());
         assert!(scene.context_target.is_none());
         assert!(scene.context_menu.is_none());
-        assert_eq!(scene.panes[ShellPaneId::FIRST].selection.len(), 0);
+        assert_eq!(scene.panes[ShellPaneId::SLOT_0].selection.len(), 0);
         assert_eq!(scene.trash_changes, 1);
         assert_eq!(scene.directory_reloads, 1);
 
@@ -32596,7 +32594,7 @@ text/plain=writer.desktop;\n",
         let mut scene =
             ShellScene::load(file_ops::trash_files_dir(), ShellViewMode::Icons).unwrap();
         scene.context_target = Some(ShellContextTarget::Item {
-            pane: ShellPaneId::FIRST,
+            pane: ShellPaneId::SLOT_0,
             index: 0,
             path: trash_path.clone(),
             is_dir: false,
@@ -32657,7 +32655,7 @@ text/plain=writer.desktop;\n",
         let mut scene =
             ShellScene::load(file_ops::trash_files_dir(), ShellViewMode::Icons).unwrap();
         scene.context_target = Some(ShellContextTarget::Item {
-            pane: ShellPaneId::FIRST,
+            pane: ShellPaneId::SLOT_0,
             index: 0,
             path: trash_path.clone(),
             is_dir: false,
@@ -32687,12 +32685,12 @@ text/plain=writer.desktop;\n",
         let size = PhysicalSize::new(420, 260);
         let mut scene = ShellScene::load(root.clone(), ShellViewMode::Icons).unwrap();
         let remove_index =
-            entry_index_by_name(&scene.panes[ShellPaneId::FIRST].entries, "remove.txt").unwrap();
-        scene.panes[ShellPaneId::FIRST]
+            entry_index_by_name(&scene.panes[ShellPaneId::SLOT_0].entries, "remove.txt").unwrap();
+        scene.panes[ShellPaneId::SLOT_0]
             .selection
             .select_indexes(&[remove_index]);
         scene.context_target = Some(ShellContextTarget::Item {
-            pane: ShellPaneId::FIRST,
+            pane: ShellPaneId::SLOT_0,
             index: remove_index,
             path: root.join("remove.txt"),
             is_dir: false,
@@ -32707,9 +32705,9 @@ text/plain=writer.desktop;\n",
         assert!(!root.join("remove.txt").exists());
         assert!(root.join("keep.txt").exists());
         assert!(
-            entry_index_by_name(&scene.panes[ShellPaneId::FIRST].entries, "remove.txt").is_none()
+            entry_index_by_name(&scene.panes[ShellPaneId::SLOT_0].entries, "remove.txt").is_none()
         );
-        assert_eq!(scene.panes[ShellPaneId::FIRST].selection.len(), 0);
+        assert_eq!(scene.panes[ShellPaneId::SLOT_0].selection.len(), 0);
         assert!(scene.context_target.is_none());
 
         file_ops::undo_trash(&result.trash_pairs).unwrap();
@@ -32737,29 +32735,29 @@ text/plain=writer.desktop;\n",
         let size = PhysicalSize::new(900, 360);
         let mut scene = ShellScene::load(root.clone(), ShellViewMode::Icons).unwrap();
         assert!(scene.open_split_pane(trash_dir.clone(), size).unwrap());
-        scene.active_pane = ShellPaneId::SECOND;
+        scene.active_pane = ShellPaneId::SLOT_1;
         let trash_index = entry_index_by_name(
-            &scene.panes[ShellPaneId::SECOND].entries,
+            &scene.panes[ShellPaneId::SLOT_1].entries,
             trash_file.file_name().unwrap().to_string_lossy().as_ref(),
         )
         .unwrap();
-        scene.panes[ShellPaneId::SECOND]
+        scene.panes[ShellPaneId::SLOT_1]
             .selection
             .select_indexes(&[trash_index]);
 
         assert!(scene.delete_active_selection(size).unwrap());
 
         assert!(!trash_file.exists());
-        assert_eq!(scene.panes[ShellPaneId::FIRST].path, root);
-        assert_eq!(scene.panes[ShellPaneId::SECOND].path, trash_dir);
+        assert_eq!(scene.panes[ShellPaneId::SLOT_0].path, root);
+        assert_eq!(scene.panes[ShellPaneId::SLOT_1].path, trash_dir);
         assert!(
             entry_index_by_name(
-                &scene.panes[ShellPaneId::SECOND].entries,
+                &scene.panes[ShellPaneId::SLOT_1].entries,
                 trash_file.file_name().unwrap().to_string_lossy().as_ref()
             )
             .is_none()
         );
-        assert_eq!(scene.panes[ShellPaneId::SECOND].selection.len(), 0);
+        assert_eq!(scene.panes[ShellPaneId::SLOT_1].selection.len(), 0);
         assert_eq!(scene.directory_reloads, 1);
 
         fs::remove_dir_all(root).unwrap();
@@ -32778,16 +32776,16 @@ text/plain=writer.desktop;\n",
 
         assert_eq!(scene.selected_directory_path(), None);
         assert!(
-            scene.panes[ShellPaneId::FIRST]
+            scene.panes[ShellPaneId::SLOT_0]
                 .selection
                 .apply_navigation(0, false)
         );
         assert_eq!(
             scene.selected_directory_path(),
-            Some((ShellPaneId::FIRST, target))
+            Some((ShellPaneId::SLOT_0, target))
         );
         assert!(
-            scene.panes[ShellPaneId::FIRST]
+            scene.panes[ShellPaneId::SLOT_0]
                 .selection
                 .apply_navigation(1, false)
         );
@@ -32809,7 +32807,7 @@ text/plain=writer.desktop;\n",
         assert_eq!(
             scene.item_activation_for_press(point, size, now + Duration::from_millis(120)),
             Some(ShellItemActivation::Directory {
-                pane: ShellPaneId::FIRST,
+                pane: ShellPaneId::SLOT_0,
                 path: PathBuf::from("/tmp/folder")
             })
         );
@@ -32854,14 +32852,14 @@ text/plain=writer.desktop;\n",
 
         let size = PhysicalSize::new(360, 240);
         let mut scene = ShellScene::load(root.clone(), ShellViewMode::Compact).unwrap();
-        scene.panes[ShellPaneId::FIRST].scroll_x = 128.0;
-        scene.panes[ShellPaneId::FIRST].scroll_y = 64.0;
+        scene.panes[ShellPaneId::SLOT_0].scroll_x = 128.0;
+        scene.panes[ShellPaneId::SLOT_0].scroll_y = 64.0;
         scene.pointer = Some(ViewPoint {
             x: 12.0,
             y: TOP_BAR_HEIGHT + 12.0,
         });
         assert!(
-            scene.panes[ShellPaneId::FIRST]
+            scene.panes[ShellPaneId::SLOT_0]
                 .selection
                 .apply_navigation(0, false)
         );
@@ -32873,15 +32871,15 @@ text/plain=writer.desktop;\n",
 
         scene.load_path(child.clone(), size).unwrap();
 
-        assert_eq!(scene.panes[ShellPaneId::FIRST].path, child);
-        assert_eq!(scene.panes[ShellPaneId::FIRST].entries.len(), 1);
+        assert_eq!(scene.panes[ShellPaneId::SLOT_0].path, child);
+        assert_eq!(scene.panes[ShellPaneId::SLOT_0].entries.len(), 1);
         assert_eq!(
-            scene.panes[ShellPaneId::FIRST].entries[0].name.as_ref(),
+            scene.panes[ShellPaneId::SLOT_0].entries[0].name.as_ref(),
             "nested.txt"
         );
-        assert_eq!(scene.panes[ShellPaneId::FIRST].scroll_x, 0.0);
-        assert_eq!(scene.panes[ShellPaneId::FIRST].scroll_y, 0.0);
-        assert_eq!(scene.panes[ShellPaneId::FIRST].selection.len(), 0);
+        assert_eq!(scene.panes[ShellPaneId::SLOT_0].scroll_x, 0.0);
+        assert_eq!(scene.panes[ShellPaneId::SLOT_0].scroll_y, 0.0);
+        assert_eq!(scene.panes[ShellPaneId::SLOT_0].selection.len(), 0);
         assert!(scene.rubber_band.is_none());
         assert_eq!(scene.path_changes, 1);
 
@@ -32909,46 +32907,46 @@ text/plain=writer.desktop;\n",
         let mut scene = ShellScene::load(root.clone(), ShellViewMode::Compact).unwrap();
 
         assert!(scene.load_path(first.clone(), size).unwrap());
-        assert_eq!(scene.panes[ShellPaneId::FIRST].path, first);
+        assert_eq!(scene.panes[ShellPaneId::SLOT_0].path, first);
         assert_eq!(
-            scene.pane_history(ShellPaneId::FIRST).back,
+            scene.pane_history(ShellPaneId::SLOT_0).back,
             vec![root.clone()]
         );
-        assert!(scene.pane_history(ShellPaneId::FIRST).forward.is_empty());
+        assert!(scene.pane_history(ShellPaneId::SLOT_0).forward.is_empty());
 
         assert!(scene.load_path(second.clone(), size).unwrap());
-        assert_eq!(scene.panes[ShellPaneId::FIRST].path, second);
+        assert_eq!(scene.panes[ShellPaneId::SLOT_0].path, second);
         assert_eq!(
-            scene.pane_history(ShellPaneId::FIRST).back,
+            scene.pane_history(ShellPaneId::SLOT_0).back,
             vec![root.clone(), first.clone()]
         );
 
         assert!(scene.go_history_back(size).unwrap());
-        assert_eq!(scene.panes[ShellPaneId::FIRST].path, first);
+        assert_eq!(scene.panes[ShellPaneId::SLOT_0].path, first);
         assert_eq!(
-            scene.pane_history(ShellPaneId::FIRST).back,
+            scene.pane_history(ShellPaneId::SLOT_0).back,
             vec![root.clone()]
         );
         assert_eq!(
-            scene.pane_history(ShellPaneId::FIRST).forward,
+            scene.pane_history(ShellPaneId::SLOT_0).forward,
             vec![second.clone()]
         );
 
         assert!(scene.go_history_forward(size).unwrap());
-        assert_eq!(scene.panes[ShellPaneId::FIRST].path, second);
+        assert_eq!(scene.panes[ShellPaneId::SLOT_0].path, second);
         assert_eq!(
-            scene.pane_history(ShellPaneId::FIRST).back,
+            scene.pane_history(ShellPaneId::SLOT_0).back,
             vec![root.clone(), first.clone()]
         );
-        assert!(scene.pane_history(ShellPaneId::FIRST).forward.is_empty());
+        assert!(scene.pane_history(ShellPaneId::SLOT_0).forward.is_empty());
 
         assert!(scene.go_history_back(size).unwrap());
-        assert_eq!(scene.panes[ShellPaneId::FIRST].path, first);
+        assert_eq!(scene.panes[ShellPaneId::SLOT_0].path, first);
         assert!(scene.load_path(sibling.clone(), size).unwrap());
-        assert_eq!(scene.panes[ShellPaneId::FIRST].path, sibling);
-        assert!(scene.pane_history(ShellPaneId::FIRST).forward.is_empty());
+        assert_eq!(scene.panes[ShellPaneId::SLOT_0].path, sibling);
+        assert!(scene.pane_history(ShellPaneId::SLOT_0).forward.is_empty());
         assert_eq!(
-            scene.pane_history(ShellPaneId::FIRST).back,
+            scene.pane_history(ShellPaneId::SLOT_0).back,
             vec![root.clone(), first]
         );
 
@@ -32972,47 +32970,47 @@ text/plain=writer.desktop;\n",
         let size = PhysicalSize::new(360, 240);
         let mut scene = ShellScene::load(root.clone(), ShellViewMode::Compact).unwrap();
         let keep_index =
-            entry_index_by_name(&scene.panes[ShellPaneId::FIRST].entries, "keep.txt").unwrap();
+            entry_index_by_name(&scene.panes[ShellPaneId::SLOT_0].entries, "keep.txt").unwrap();
         assert!(
-            scene.panes[ShellPaneId::FIRST]
+            scene.panes[ShellPaneId::SLOT_0]
                 .selection
                 .apply_navigation(keep_index, false)
         );
         scene
-            .pane_history_mut(ShellPaneId::FIRST)
+            .pane_history_mut(ShellPaneId::SLOT_0)
             .push_back(PathBuf::from("/tmp/previous"));
         scene
-            .pane_history_mut(ShellPaneId::FIRST)
+            .pane_history_mut(ShellPaneId::SLOT_0)
             .push_forward(PathBuf::from("/tmp/next"));
 
         fs::write(root.join("aaa.txt"), b"new").unwrap();
         assert!(scene.reload_current_path(size).unwrap());
 
         let new_keep_index =
-            entry_index_by_name(&scene.panes[ShellPaneId::FIRST].entries, "keep.txt").unwrap();
+            entry_index_by_name(&scene.panes[ShellPaneId::SLOT_0].entries, "keep.txt").unwrap();
         assert!(
-            scene.panes[ShellPaneId::FIRST]
+            scene.panes[ShellPaneId::SLOT_0]
                 .selection
                 .contains(new_keep_index)
         );
-        assert_eq!(scene.panes[ShellPaneId::FIRST].selection.len(), 1);
+        assert_eq!(scene.panes[ShellPaneId::SLOT_0].selection.len(), 1);
         assert_eq!(
-            scene.panes[ShellPaneId::FIRST].selection.focus,
+            scene.panes[ShellPaneId::SLOT_0].selection.focus,
             Some(new_keep_index)
         );
         assert_eq!(
-            scene.pane_history(ShellPaneId::FIRST).back,
+            scene.pane_history(ShellPaneId::SLOT_0).back,
             vec![PathBuf::from("/tmp/previous")]
         );
         assert_eq!(
-            scene.pane_history(ShellPaneId::FIRST).forward,
+            scene.pane_history(ShellPaneId::SLOT_0).forward,
             vec![PathBuf::from("/tmp/next")]
         );
-        assert_eq!(scene.panes[ShellPaneId::FIRST].path, root);
+        assert_eq!(scene.panes[ShellPaneId::SLOT_0].path, root);
         assert_eq!(scene.path_changes, 0);
         assert_eq!(scene.directory_reloads, 1);
 
-        fs::remove_dir_all(scene.panes[ShellPaneId::FIRST].path.clone()).unwrap();
+        fs::remove_dir_all(scene.panes[ShellPaneId::SLOT_0].path.clone()).unwrap();
     }
 
     #[test]
@@ -33382,7 +33380,7 @@ text/plain=writer.desktop;\n",
         std::fs::create_dir_all(temp.join("alpha")).unwrap();
 
         let mut scene = test_scene(vec![test_entry("alpha", true)], ShellViewMode::Icons);
-        scene.panes[ShellPaneId::FIRST].path = temp.clone();
+        scene.panes[ShellPaneId::SLOT_0].path = temp.clone();
         let size = PhysicalSize::new(420, 260);
 
         assert!(scene.apply_location_command(LocationCommand::Activate, size));
@@ -33396,7 +33394,7 @@ text/plain=writer.desktop;\n",
         assert_eq!(scene.location_draft_value(), Some("alpha/"));
         assert_eq!(
             scene.resolved_location_draft(),
-            Some((ShellPaneId::FIRST, temp.join("alpha/")))
+            Some((ShellPaneId::SLOT_0, temp.join("alpha/")))
         );
 
         assert!(scene.apply_location_command(LocationCommand::Cancel, size));
@@ -33409,12 +33407,12 @@ text/plain=writer.desktop;\n",
     #[test]
     fn location_draft_cursor_edits_at_caret() {
         let mut scene = test_scene(vec![test_entry("alpha", false)], ShellViewMode::Icons);
-        scene.panes[ShellPaneId::FIRST].path = PathBuf::from("/tmp");
+        scene.panes[ShellPaneId::SLOT_0].path = PathBuf::from("/tmp");
         let size = PhysicalSize::new(420, 260);
 
         assert!(scene.apply_location_command(LocationCommand::Activate, size));
         let draft = scene.location_draft.as_ref().unwrap();
-        assert_eq!(draft.pane, ShellPaneId::FIRST);
+        assert_eq!(draft.pane, ShellPaneId::SLOT_0);
         assert_eq!(draft.draft.cursor, draft.draft.value.len());
 
         assert!(scene.apply_location_command(LocationCommand::Insert("abc".to_string()), size));
@@ -33452,7 +33450,7 @@ text/plain=writer.desktop;\n",
     #[test]
     fn location_draft_blurs_outside_path_bar_without_committing() {
         let mut scene = test_scene(vec![test_entry("alpha", false)], ShellViewMode::Icons);
-        scene.panes[ShellPaneId::FIRST].path = PathBuf::from("/tmp");
+        scene.panes[ShellPaneId::SLOT_0].path = PathBuf::from("/tmp");
         let size = PhysicalSize::new(600, 320);
 
         assert!(scene.apply_location_command(LocationCommand::Activate, size));
@@ -33480,7 +33478,7 @@ text/plain=writer.desktop;\n",
         };
         assert!(scene.close_location_draft_if_outside(blank, size));
         assert_eq!(scene.location_draft_value(), None);
-        assert_eq!(scene.panes[ShellPaneId::FIRST].path, PathBuf::from("/tmp"));
+        assert_eq!(scene.panes[ShellPaneId::SLOT_0].path, PathBuf::from("/tmp"));
         assert_eq!(scene.location_changes, 3);
     }
 
@@ -33914,7 +33912,7 @@ text/plain=writer.desktop;\n",
     #[test]
     fn location_bar_keeps_full_width_hit_target_when_editing() {
         let mut scene = test_scene(vec![test_entry("alpha", false)], ShellViewMode::Icons);
-        scene.panes[ShellPaneId::FIRST].path = PathBuf::from("/x");
+        scene.panes[ShellPaneId::SLOT_0].path = PathBuf::from("/x");
         let size = PhysicalSize::new(900, 360);
 
         let inactive = scene
@@ -34178,7 +34176,10 @@ text/plain=writer.desktop;\n",
 
         assert!(scene.apply_filter_command(FilterCommand::Activate, size));
         assert!(scene.apply_filter_command(FilterCommand::Insert("alp".to_string()), size));
-        assert_eq!(scene.panes[ShellPaneId::FIRST].filtered_indexes, vec![0, 2]);
+        assert_eq!(
+            scene.panes[ShellPaneId::SLOT_0].filtered_indexes,
+            vec![0, 2]
+        );
         assert_eq!(scene.filtered_entry_count(), 2);
         assert_eq!(scene.filter_changes, 2);
 
@@ -34193,7 +34194,7 @@ text/plain=writer.desktop;\n",
 
         assert!(scene.apply_selection_command(SelectionCommand::SelectAll));
         assert_eq!(
-            scene.panes[ShellPaneId::FIRST]
+            scene.panes[ShellPaneId::SLOT_0]
                 .selection
                 .selected
                 .iter()
@@ -34226,10 +34227,13 @@ text/plain=writer.desktop;\n",
         );
         let size = PhysicalSize::new(420, 260);
 
-        assert_eq!(scene.panes[ShellPaneId::FIRST].filtered_indexes, vec![0, 2]);
+        assert_eq!(
+            scene.panes[ShellPaneId::SLOT_0].filtered_indexes,
+            vec![0, 2]
+        );
         assert_eq!(scene.filtered_entry_count(), 2);
         assert!(
-            scene.panes[ShellPaneId::FIRST]
+            scene.panes[ShellPaneId::SLOT_0]
                 .selection
                 .apply_navigation(1, false)
         );
@@ -34237,16 +34241,19 @@ text/plain=writer.desktop;\n",
         assert!(scene.toggle_hidden_visibility(size));
         assert!(scene.show_hidden);
         assert_eq!(
-            scene.panes[ShellPaneId::FIRST].filtered_indexes,
+            scene.panes[ShellPaneId::SLOT_0].filtered_indexes,
             vec![0, 1, 2]
         );
         assert_eq!(scene.hidden_changes, 1);
-        assert!(scene.panes[ShellPaneId::FIRST].selection.contains(1));
+        assert!(scene.panes[ShellPaneId::SLOT_0].selection.contains(1));
 
         assert!(scene.toggle_hidden_visibility(size));
         assert!(!scene.show_hidden);
-        assert_eq!(scene.panes[ShellPaneId::FIRST].filtered_indexes, vec![0, 2]);
-        assert_eq!(scene.panes[ShellPaneId::FIRST].selection.len(), 0);
+        assert_eq!(
+            scene.panes[ShellPaneId::SLOT_0].filtered_indexes,
+            vec![0, 2]
+        );
+        assert_eq!(scene.panes[ShellPaneId::SLOT_0].selection.len(), 0);
         assert_eq!(scene.selection_changes, 1);
     }
 
@@ -34275,8 +34282,8 @@ text/plain=writer.desktop;\n",
             ShellViewMode::Compact,
         );
         let size = PhysicalSize::new(260, 180);
-        scene.panes[ShellPaneId::FIRST].scroll_x = 10_000.0;
-        scene.panes[ShellPaneId::FIRST].scroll_y = 500.0;
+        scene.panes[ShellPaneId::SLOT_0].scroll_x = 10_000.0;
+        scene.panes[ShellPaneId::SLOT_0].scroll_y = 500.0;
         scene.rubber_band = Some(RubberBand::new(
             ViewPoint { x: 0.0, y: 0.0 },
             RubberBandMode::Replace,
@@ -34285,11 +34292,11 @@ text/plain=writer.desktop;\n",
 
         assert!(scene.set_view_mode(ShellViewMode::Details, size));
         assert_eq!(
-            scene.panes[ShellPaneId::FIRST].view_mode,
+            scene.panes[ShellPaneId::SLOT_0].view_mode,
             ShellViewMode::Details
         );
-        assert_eq!(scene.panes[ShellPaneId::FIRST].scroll_x, 0.0);
-        assert!(scene.panes[ShellPaneId::FIRST].scroll_y >= 0.0);
+        assert_eq!(scene.panes[ShellPaneId::SLOT_0].scroll_x, 0.0);
+        assert!(scene.panes[ShellPaneId::SLOT_0].scroll_y >= 0.0);
         assert!(scene.rubber_band.is_none());
         assert_eq!(scene.view_switches, 1);
 
@@ -34307,38 +34314,38 @@ text/plain=writer.desktop;\n",
         );
         set_test_pane(
             &mut scene,
-            ShellPaneId::SECOND,
+            ShellPaneId::SLOT_1,
             PathBuf::from("/right-root"),
             ShellViewMode::Details,
             vec![test_entry("right.txt", false)],
         );
         let size = PhysicalSize::new(900, 360);
-        scene.panes[ShellPaneId::FIRST].scroll_y = 18.0;
-        scene.panes[ShellPaneId::SECOND].scroll_y = 42.0;
-        scene.active_pane = ShellPaneId::SECOND;
+        scene.panes[ShellPaneId::SLOT_0].scroll_y = 18.0;
+        scene.panes[ShellPaneId::SLOT_1].scroll_y = 42.0;
+        scene.active_pane = ShellPaneId::SLOT_1;
 
         assert!(scene.set_view_mode(ShellViewMode::Compact, size));
         assert_eq!(
-            scene.panes[ShellPaneId::FIRST].view_mode,
+            scene.panes[ShellPaneId::SLOT_0].view_mode,
             ShellViewMode::Icons
         );
         assert_eq!(
-            scene.panes[ShellPaneId::SECOND].view_mode,
+            scene.panes[ShellPaneId::SLOT_1].view_mode,
             ShellViewMode::Compact
         );
-        assert_eq!(scene.panes[ShellPaneId::FIRST].scroll_y, 18.0);
-        assert_eq!(scene.panes[ShellPaneId::SECOND].scroll_y, 0.0);
+        assert_eq!(scene.panes[ShellPaneId::SLOT_0].scroll_y, 18.0);
+        assert_eq!(scene.panes[ShellPaneId::SLOT_1].scroll_y, 0.0);
         assert_eq!(scene.view_switches, 1);
 
         assert!(!scene.set_view_mode(ShellViewMode::Compact, size));
-        scene.active_pane = ShellPaneId::FIRST;
+        scene.active_pane = ShellPaneId::SLOT_0;
         assert!(scene.set_view_mode(ShellViewMode::Details, size));
         assert_eq!(
-            scene.panes[ShellPaneId::FIRST].view_mode,
+            scene.panes[ShellPaneId::SLOT_0].view_mode,
             ShellViewMode::Details
         );
         assert_eq!(
-            scene.panes[ShellPaneId::SECOND].view_mode,
+            scene.panes[ShellPaneId::SLOT_1].view_mode,
             ShellViewMode::Compact
         );
         assert_eq!(scene.view_switches, 2);
@@ -34487,7 +34494,7 @@ text/plain=writer.desktop;\n",
         );
 
         let projection = scene
-            .pane_projection(ShellPaneId::FIRST, size)
+            .pane_projection(ShellPaneId::SLOT_0, size)
             .expect("compact projection");
         let mut font_system = FontSystem::new();
         let mut swash_cache = SwashCache::new();
@@ -34528,20 +34535,20 @@ text/plain=writer.desktop;\n",
         let mut scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
         set_test_pane(
             &mut scene,
-            ShellPaneId::SECOND,
+            ShellPaneId::SLOT_1,
             PathBuf::from("/right-root"),
             ShellViewMode::Icons,
             (0..80)
                 .map(|index| test_entry(&format!("right-{index:02}.txt"), false))
                 .collect(),
         );
-        scene.panes[ShellPaneId::SECOND].scroll_y = 80.0;
+        scene.panes[ShellPaneId::SLOT_1].scroll_y = 80.0;
         let size = PhysicalSize::new(900, 600);
 
         assert!(scene.set_scale_factor(1.5, size));
         assert_eq!(scene.top_bar_height(), 54.0);
         assert_eq!(scene.text_line_height(), 27.0);
-        assert_eq!(scene.panes[ShellPaneId::SECOND].scroll_y, 120.0);
+        assert_eq!(scene.panes[ShellPaneId::SLOT_1].scroll_y, 120.0);
 
         let icons_item = match scene.layout(size) {
             ShellLayout::Icons(layout) => layout.item(0).unwrap(),
@@ -34615,7 +34622,7 @@ text/plain=writer.desktop;\n",
         );
 
         assert!(
-            scene.panes[ShellPaneId::FIRST]
+            scene.panes[ShellPaneId::SLOT_0]
                 .selection
                 .apply_navigation(0, false)
         );
@@ -34630,8 +34637,8 @@ text/plain=writer.desktop;\n",
             },
             size,
         ));
-        assert_eq!(scene.panes[ShellPaneId::FIRST].selection.len(), 1);
-        assert!(scene.panes[ShellPaneId::FIRST].selection.contains(0));
+        assert_eq!(scene.panes[ShellPaneId::SLOT_0].selection.len(), 1);
+        assert!(scene.panes[ShellPaneId::SLOT_0].selection.contains(0));
     }
 
     #[test]
@@ -34645,7 +34652,7 @@ text/plain=writer.desktop;\n",
             ShellViewMode::Icons,
         );
         let size = PhysicalSize::new(520, 320);
-        let projection = scene.pane_projection(ShellPaneId::FIRST, size).unwrap();
+        let projection = scene.pane_projection(ShellPaneId::SLOT_0, size).unwrap();
 
         assert_eq!(
             scene.pane_status_text(projection.view, projection.visible_items.len()),
@@ -34653,11 +34660,11 @@ text/plain=writer.desktop;\n",
         );
 
         assert!(
-            scene.panes[ShellPaneId::FIRST]
+            scene.panes[ShellPaneId::SLOT_0]
                 .selection
                 .apply_navigation(1, false)
         );
-        let projection = scene.pane_projection(ShellPaneId::FIRST, size).unwrap();
+        let projection = scene.pane_projection(ShellPaneId::SLOT_0, size).unwrap();
         assert_eq!(
             scene.pane_status_text(projection.view, projection.visible_items.len()),
             "1 item selected"
@@ -35017,7 +35024,7 @@ text/plain=writer.desktop;\n",
         };
         let current = ViewPoint {
             x: scene.content_origin_x(size) + item.visual_rect.right() - 1.0,
-            y: item.visual_rect.bottom() - scene.panes[ShellPaneId::FIRST].scroll_y
+            y: item.visual_rect.bottom() - scene.panes[ShellPaneId::SLOT_0].scroll_y
                 + scene.content_origin_y()
                 - 1.0,
         };
@@ -35031,7 +35038,7 @@ text/plain=writer.desktop;\n",
             size,
         ));
         assert!(scene.set_pointer(current, size));
-        assert!(scene.panes[ShellPaneId::FIRST].selection.contains(0));
+        assert!(scene.panes[ShellPaneId::SLOT_0].selection.contains(0));
         assert!(scene.rubber_band.as_ref().is_some_and(|band| band.active));
         assert!(scene.end_pane_pointer(current, size));
         assert!(scene.rubber_band.is_none());

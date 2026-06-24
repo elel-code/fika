@@ -205,8 +205,8 @@ pub(crate) fn core_pane_id_for_shell_pane(pane: ShellPaneId) -> PaneId {
 
 pub(crate) fn shell_pane_id_for_core_pane(pane: PaneId) -> Option<ShellPaneId> {
     match pane.0 {
-        1 => Some(ShellPaneId::FIRST),
-        2 => Some(ShellPaneId::SECOND),
+        1 => Some(ShellPaneId::SLOT_0),
+        2 => Some(ShellPaneId::SLOT_1),
         _ => None,
     }
 }
