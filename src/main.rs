@@ -21323,6 +21323,140 @@ fn push_clipped_rect_outline(
     push_clipped_rect(vertices, right, clip, color, size);
 }
 
+fn push_clipped_rounded_rect_outline(
+    vertices: &mut Vec<QuadVertex>,
+    rect: ViewRect,
+    clip: ViewRect,
+    radius: f32,
+    thickness: f32,
+    color: [f32; 4],
+    size: PhysicalSize<u32>,
+) {
+    if rect.width <= 0.0 || rect.height <= 0.0 || color[3] <= 0.0 {
+        return;
+    }
+    let thickness = thickness.max(1.0).min(rect.width.min(rect.height) / 2.0);
+    let radius = radius.min(rect.width / 2.0).min(rect.height / 2.0).max(0.0);
+    if radius <= 1.0 || radius <= thickness {
+        push_clipped_rect_outline(vertices, rect, clip, thickness, color, size);
+        return;
+    }
+
+    let center_width = (rect.width - radius * 2.0).max(0.0);
+    if center_width > 0.0 {
+        push_clipped_rect(
+            vertices,
+            ViewRect {
+                x: rect.x + radius,
+                y: rect.y,
+                width: center_width,
+                height: thickness,
+            },
+            clip,
+            color,
+            size,
+        );
+        push_clipped_rect(
+            vertices,
+            ViewRect {
+                x: rect.x + radius,
+                y: rect.bottom() - thickness,
+                width: center_width,
+                height: thickness,
+            },
+            clip,
+            color,
+            size,
+        );
+    }
+
+    let center_height = (rect.height - radius * 2.0).max(0.0);
+    if center_height > 0.0 {
+        push_clipped_rect(
+            vertices,
+            ViewRect {
+                x: rect.x,
+                y: rect.y + radius,
+                width: thickness,
+                height: center_height,
+            },
+            clip,
+            color,
+            size,
+        );
+        push_clipped_rect(
+            vertices,
+            ViewRect {
+                x: rect.right() - thickness,
+                y: rect.y + radius,
+                width: thickness,
+                height: center_height,
+            },
+            clip,
+            color,
+            size,
+        );
+    }
+
+    let steps = radius.ceil().clamp(4.0, 16.0) as usize;
+    let step_height = radius / steps as f32;
+    let inner_radius = (radius - thickness).max(0.0);
+    let left_center_x = rect.x + radius;
+    let right_center_x = rect.right() - radius;
+    for step in 0..steps {
+        let top_y = rect.y + step as f32 * step_height;
+        let bottom_y = rect.bottom() - (step + 1) as f32 * step_height;
+        for y in [top_y, bottom_y] {
+            let midpoint_y = y + step_height / 2.0;
+            let center_y = if midpoint_y < rect.y + radius {
+                rect.y + radius
+            } else {
+                rect.bottom() - radius
+            };
+            let dy = (center_y - midpoint_y).abs();
+            let outer_dx = (radius * radius - dy * dy).max(0.0).sqrt();
+            let outer_left = left_center_x - outer_dx;
+            let outer_right = right_center_x + outer_dx;
+            let (inner_left, inner_right) = if inner_radius > 0.0 && dy <= inner_radius {
+                let inner_dx = (inner_radius * inner_radius - dy * dy).max(0.0).sqrt();
+                (left_center_x - inner_dx, right_center_x + inner_dx)
+            } else {
+                (left_center_x, right_center_x)
+            };
+            let left_width = (inner_left - outer_left).max(0.0);
+            if left_width > 0.0 {
+                push_clipped_rect(
+                    vertices,
+                    ViewRect {
+                        x: outer_left,
+                        y,
+                        width: left_width,
+                        height: step_height,
+                    },
+                    clip,
+                    color,
+                    size,
+                );
+            }
+            let right_width = (outer_right - inner_right).max(0.0);
+            if right_width > 0.0 {
+                push_clipped_rect(
+                    vertices,
+                    ViewRect {
+                        x: inner_right,
+                        y,
+                        width: right_width,
+                        height: step_height,
+                    },
+                    clip,
+                    color,
+                    size,
+                );
+            }
+        }
+    }
+}
+
 fn push_rect(
     vertices: &mut Vec<QuadVertex>,
     rect: ViewRect,
@@ -22429,17 +22563,10 @@ fn push_clipped_rounded_highlight(
     border_width: f32,
     size: PhysicalSize<u32>,
 ) {
-    push_clipped_rounded_rect(vertices, rect, clip, radius, border, size);
-    if let Some(inner) = inset_rect(rect, border_width.max(1.0)) {
-        push_clipped_rounded_rect(
-            vertices,
-            inner,
-            clip,
-            (radius - border_width.max(1.0)).max(1.0),
-            fill,
-            size,
-        );
+    if fill[3] > 0.0 {
+        push_clipped_rounded_rect(vertices, rect, clip, radius, fill, size);
     }
+    push_clipped_rounded_rect_outline(vertices, rect, clip, radius, border_width, border, size);
 }
 
 fn push_context_menu_shadow(
@@ -28051,6 +28178,121 @@ mod tests {
                 skips: 0
             }
         );
+    }
+
+    #[test]
+    fn rounded_highlight_with_transparent_fill_paints_only_outline() {
+        let size = PhysicalSize::new(120, 80);
+        let rect = ViewRect {
+            x: 20.0,
+            y: 20.0,
+            width: 80.0,
+            height: 36.0,
+        };
+        let center = ViewPoint { x: 60.0, y: 38.0 };
+        let border = [0.2, 0.3, 0.4, 0.8];
+        let mut vertices = Vec::new();
+
+        push_clipped_rounded_highlight(
+            &mut vertices,
+            rect,
+            ViewRect {
+                x: 0.0,
+                y: 0.0,
+                width: 120.0,
+                height: 80.0,
+            },
+            5.0,
+            [0.0, 0.0, 0.0, 0.0],
+            border,
+            1.25,
+            size,
+        );
+
+        assert!(!vertices.is_empty());
+        assert!(!quad_vertices_contain_point_with_color(
+            &vertices, size, center, border
+        ));
+    }
+
+    #[test]
+    fn rounded_highlight_with_fill_keeps_center_fill() {
+        let size = PhysicalSize::new(120, 80);
+        let rect = ViewRect {
+            x: 20.0,
+            y: 20.0,
+            width: 80.0,
+            height: 36.0,
+        };
+        let center = ViewPoint { x: 60.0, y: 38.0 };
+        let fill = [0.8, 0.7, 0.2, 0.5];
+        let border = [0.2, 0.3, 0.4, 0.8];
+        let mut vertices = Vec::new();
+
+        push_clipped_rounded_highlight(
+            &mut vertices,
+            rect,
+            ViewRect {
+                x: 0.0,
+                y: 0.0,
+                width: 120.0,
+                height: 80.0,
+            },
+            5.0,
+            fill,
+            border,
+            1.25,
+            size,
+        );
+
+        assert!(quad_vertices_contain_point_with_color(
+            &vertices, size, center, fill
+        ));
+        assert!(!quad_vertices_contain_point_with_color(
+            &vertices, size, center, border
+        ));
+    }
+
+    fn quad_vertices_contain_point_with_color(
+        vertices: &[QuadVertex],
+        size: PhysicalSize<u32>,
+        point: ViewPoint,
+        color: [f32; 4],
+    ) -> bool {
+        vertices
+            .chunks_exact(6)
+            .any(|quad| quad[0].color == color && quad_screen_rect(quad, size).contains(point))
+    }
+
+    fn quad_screen_rect(quad: &[QuadVertex], size: PhysicalSize<u32>) -> ViewRect {
+        let min_x = quad
+            .iter()
+            .map(|vertex| vertex.position[0])
+            .fold(f32::INFINITY, f32::min);
+        let max_x = quad
+            .iter()
+            .map(|vertex| vertex.position[0])
+            .fold(f32::NEG_INFINITY, f32::max);
+        let min_y = quad
+            .iter()
+            .map(|vertex| vertex.position[1])
+            .fold(f32::INFINITY, f32::min);
+        let max_y = quad
+            .iter()
+            .map(|vertex| vertex.position[1])
+            .fold(f32::NEG_INFINITY, f32::max);
+        let width = size.width.max(1) as f32;
+        let height = size.height.max(1) as f32;
+        let left = (min_x + 1.0) * width / 2.0;
+        let right = (max_x + 1.0) * width / 2.0;
+        let top = (1.0 - max_y) * height / 2.0;
+        let bottom = (1.0 - min_y) * height / 2.0;
+        ViewRect {
+            x: left,
+            y: top,
+            width: right - left,
+            height: bottom - top,
+        }
     }
 
     #[test]
