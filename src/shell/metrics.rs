@@ -135,3 +135,7 @@ pub(crate) const AUTO_CYCLE_INTERVAL: Duration = Duration::from_secs(1);
 pub(crate) const DOUBLE_CLICK_MAX_INTERVAL: Duration = Duration::from_millis(500);
 pub(crate) const DOUBLE_CLICK_MAX_DISTANCE: f32 = 6.0;
 pub(crate) const WGPU_SHELL_PANE_ID: PaneId = PaneId(1);
+
+pub(crate) fn scaled_dialog_metric(value: f32, scale_factor: f32) -> f32 {
+    (value * scale_factor.max(1.0)).round().max(1.0)
+}

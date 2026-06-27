@@ -169,6 +169,18 @@ use wgpu_metadata_roles::{
 };
 use wgpu_metrics::*;
 use wgpu_open_file::{OpenFileRequest, default_open_file_launch_request};
+use wgpu_open_with::geometry::{
+    open_with_chooser_cancel_button_rect_scaled, open_with_chooser_click_at_point,
+    open_with_chooser_default_checkbox_rect_scaled, open_with_chooser_list_rect_scaled,
+    open_with_chooser_open_button_rect_scaled, open_with_chooser_query_rect_scaled,
+    open_with_chooser_rect_scaled, open_with_chooser_scrollbar_rects_scaled,
+    open_with_chooser_visible_row_count, open_with_scroll_delta_rows,
+};
+#[cfg(test)]
+use wgpu_open_with::geometry::{
+    open_with_chooser_default_checkbox_rect, open_with_chooser_list_rect,
+    open_with_chooser_open_button_rect, open_with_chooser_rect,
+};
 use wgpu_open_with::{
     OpenWithChooserClick, OpenWithDefaultUpdate, OpenWithLaunchRequest, ServiceMenuLaunchRequest,
     ShellOpenWithChooser, open_with_applications_for_mime,
@@ -8684,13 +8696,9 @@ impl ShellScene {
     }
 
     fn scroll_open_with_chooser_by(&mut self, delta_y: f32) -> bool {
-        if delta_y.abs() <= f32::EPSILON {
+        let Some(delta) = open_with_scroll_delta_rows(delta_y, self.ui_scale()) else {
             return false;
-        }
-        let scale = self.ui_scale();
-        let row_height = scaled_dialog_metric(OPEN_WITH_CHOOSER_ROW_HEIGHT, scale).max(1.0);
-        let rows = (delta_y.abs() / row_height).ceil().max(1.0) as isize;
-        let delta = if delta_y > 0.0 { rows } else { -rows };
+        };
         let Some(chooser) = self.open_with_chooser.as_mut() else {
             return false;
         };
@@ -8920,31 +8928,7 @@ impl ShellScene {
         let Some(chooser) = self.open_with_chooser.as_ref() else {
             return OpenWithChooserClick::Outside;
         };
-        let scale = self.ui_scale();
-        let rect = open_with_chooser_rect_scaled(chooser, size, scale);
-        if !rect.contains(point) {
-            return OpenWithChooserClick::Outside;
-        }
-        if open_with_chooser_cancel_button_rect_scaled(rect, scale).contains(point) {
-            return OpenWithChooserClick::Cancel;
-        }
-        if open_with_chooser_open_button_rect_scaled(rect, scale).contains(point) {
-            return OpenWithChooserClick::Open;
-        }
-        if open_with_chooser_default_checkbox_rect_scaled(rect, chooser, scale).contains(point) {
-            return OpenWithChooserClick::ToggleDefault;
-        }
-        let list = open_with_chooser_list_rect_scaled(rect, chooser, scale);
-        if list.contains(point) {
-            let visible_row = ((point.y - list.y)
-                / scaled_dialog_metric(OPEN_WITH_CHOOSER_ROW_HEIGHT, scale))
-            .floor() as usize;
-            let row = chooser.scroll_row + visible_row;
-            if row < chooser.filtered_count() {
-                return OpenWithChooserClick::Row(row);
-            }
-        }
-        OpenWithChooserClick::Inside
+        open_with_chooser_click_at_point(chooser, point, size, self.ui_scale())
     }
 
     fn log_open_with_chooser_state(&self) {
@@ -14534,38 +14518,26 @@ impl ShellScene {
                     height: row_height,
                 };
                 let selected = row == chooser.selected_index;
+                let row_radius = scaled_dialog_metric(BREEZE_ITEM_ROUNDNESS, scale);
+                let row_background =
+                    details_row_background_color(false, false, visible_row % 2 == 1);
                 push_clipped_rounded_rect(
                     vertices,
                     row_rect,
                     list,
-                    scaled_dialog_metric(7.0, scale),
-                    if selected {
-                        POPUP_ROW_SELECTED
-                    } else if application.is_default {
-                        POPUP_ROW_DEFAULT
-                    } else if visible_row % 2 == 1 {
-                        POPUP_ROW_ALT
-                    } else {
-                        POPUP_INPUT
-                    },
+                    row_radius,
+                    row_background,
                     size,
                 );
-                if selected || application.is_default {
-                    push_clipped_rounded_rect(
+                if selected {
+                    push_clipped_rounded_highlight(
                         vertices,
-                        ViewRect {
-                            x: row_rect.x,
-                            y: row_rect.y + scaled_dialog_metric(6.0, scale),
-                            width: scaled_dialog_metric(3.0, scale).max(1.0),
-                            height: (row_rect.height - scaled_dialog_metric(12.0, scale)).max(1.0),
-                        },
+                        row_rect,
                         list,
-                        scaled_dialog_metric(2.0, scale),
-                        if selected {
-                            POPUP_BUTTON_PRIMARY
-                        } else {
-                            POPUP_STATUS_COMPLETED
-                        },
+                        row_radius,
+                        item_background_color(true, false),
+                        POPUP_FIELD_FOCUS,
+                        scaled_dialog_metric(1.25, scale),
                         size,
                     );
                 }
@@ -22877,9 +22849,7 @@ const POPUP_PANEL: UiColor = [0.976, 0.979, 0.978, 1.0];
 const POPUP_INPUT: UiColor = [1.000, 1.000, 1.000, 1.0];
 const POPUP_BORDER: UiColor = [0.706, 0.722, 0.741, 1.0];
 const POPUP_DIVIDER: UiColor = [0.855, 0.863, 0.873, 1.0];
-const POPUP_ROW_SELECTED: UiColor = [0.820, 0.886, 0.976, 1.0];
 const POPUP_ROW_ALT: UiColor = [0.974, 0.976, 0.972, 1.0];
-const POPUP_ROW_DEFAULT: UiColor = [0.910, 0.961, 0.925, 1.0];
 const POPUP_BUTTON_SECONDARY: UiColor = [0.941, 0.944, 0.941, 1.0];
 const POPUP_BUTTON_PRIMARY: UiColor = [0.119, 0.392, 0.635, 1.0];
 const POPUP_BUTTON_PRIMARY_SOFT: UiColor = [0.176, 0.459, 0.620, 1.0];
@@ -23292,189 +23262,6 @@ fn rename_dialog_commit_button_rect_scaled(dialog_rect: ViewRect, scale_factor: 
 }
 
 #[cfg(test)]
-fn open_with_chooser_rect(chooser: &ShellOpenWithChooser, size: PhysicalSize<u32>) -> ViewRect {
-    open_with_chooser_rect_scaled(chooser, size, 1.0)
-}
-
-fn open_with_chooser_rect_scaled(
-    chooser: &ShellOpenWithChooser,
-    size: PhysicalSize<u32>,
-    scale_factor: f32,
-) -> ViewRect {
-    let width = size.width.max(1) as f32;
-    let height = size.height.max(1) as f32;
-    let margin = scaled_dialog_metric(OPEN_WITH_CHOOSER_MARGIN, scale_factor);
-    let dialog_width = scaled_dialog_metric(OPEN_WITH_CHOOSER_WIDTH, scale_factor)
-        .min((width - margin * 2.0).max(1.0))
-        .max(1.0);
-    let rows = open_with_chooser_visible_row_count(chooser).max(1);
-    let error_height = if chooser.error.is_some() {
-        scaled_dialog_metric(26.0, scale_factor)
-    } else {
-        0.0
-    };
-    let dialog_height = (scaled_dialog_metric(OPEN_WITH_CHOOSER_TITLE_HEIGHT, scale_factor)
-        + scaled_dialog_metric(16.0, scale_factor)
-        + scaled_dialog_metric(OPEN_WITH_CHOOSER_QUERY_HEIGHT, scale_factor)
-        + scaled_dialog_metric(10.0, scale_factor)
-        + rows as f32 * scaled_dialog_metric(OPEN_WITH_CHOOSER_ROW_HEIGHT, scale_factor)
-        + scaled_dialog_metric(38.0, scale_factor)
-        + error_height
-        + scaled_dialog_metric(52.0, scale_factor))
-    .min((height - margin * 2.0).max(1.0))
-    .max(1.0);
-    ViewRect {
-        x: ((width - dialog_width) / 2.0).max(margin),
-        y: ((height - dialog_height) / 2.0).max(margin),
-        width: dialog_width,
-        height: dialog_height,
-    }
-}
-
-fn open_with_chooser_visible_row_count(chooser: &ShellOpenWithChooser) -> usize {
-    chooser
-        .filtered_count()
-        .min(OPEN_WITH_CHOOSER_MAX_ROWS)
-        .max(1)
-}
-
-#[cfg(test)]
-#[allow(dead_code)]
-fn open_with_chooser_query_rect(dialog_rect: ViewRect) -> ViewRect {
-    open_with_chooser_query_rect_scaled(dialog_rect, 1.0)
-}
-
-fn open_with_chooser_query_rect_scaled(dialog_rect: ViewRect, scale_factor: f32) -> ViewRect {
-    let margin = scaled_dialog_metric(16.0, scale_factor);
-    ViewRect {
-        x: dialog_rect.x + margin,
-        y: dialog_rect.y
-            + scaled_dialog_metric(OPEN_WITH_CHOOSER_TITLE_HEIGHT, scale_factor)
-            + margin,
-        width: (dialog_rect.width - margin * 2.0).max(1.0),
-        height: scaled_dialog_metric(OPEN_WITH_CHOOSER_QUERY_HEIGHT, scale_factor),
-    }
-}
-
-#[cfg(test)]
-fn open_with_chooser_list_rect(dialog_rect: ViewRect, chooser: &ShellOpenWithChooser) -> ViewRect {
-    open_with_chooser_list_rect_scaled(dialog_rect, chooser, 1.0)
-}
-
-fn open_with_chooser_list_rect_scaled(
-    dialog_rect: ViewRect,
-    chooser: &ShellOpenWithChooser,
-    scale_factor: f32,
-) -> ViewRect {
-    let margin = scaled_dialog_metric(16.0, scale_factor);
-    let query = open_with_chooser_query_rect_scaled(dialog_rect, scale_factor);
-    ViewRect {
-        x: dialog_rect.x + margin,
-        y: query.bottom() + scaled_dialog_metric(10.0, scale_factor),
-        width: (dialog_rect.width - margin * 2.0).max(1.0),
-        height: open_with_chooser_visible_row_count(chooser) as f32
-            * scaled_dialog_metric(OPEN_WITH_CHOOSER_ROW_HEIGHT, scale_factor),
-    }
-}
-
-#[cfg(test)]
-#[allow(dead_code)]
-fn open_with_chooser_default_checkbox_rect(
-    dialog_rect: ViewRect,
-    chooser: &ShellOpenWithChooser,
-) -> ViewRect {
-    open_with_chooser_default_checkbox_rect_scaled(dialog_rect, chooser, 1.0)
-}
-
-fn open_with_chooser_default_checkbox_rect_scaled(
-    dialog_rect: ViewRect,
-    chooser: &ShellOpenWithChooser,
-    scale_factor: f32,
-) -> ViewRect {
-    let margin = scaled_dialog_metric(16.0, scale_factor);
-    let list = open_with_chooser_list_rect_scaled(dialog_rect, chooser, scale_factor);
-    ViewRect {
-        x: dialog_rect.x + margin,
-        y: list.bottom() + scaled_dialog_metric(8.0, scale_factor),
-        width: (dialog_rect.width - margin * 2.0).max(1.0),
-        height: scaled_dialog_metric(24.0, scale_factor),
-    }
-}
-
-fn open_with_chooser_scrollbar_rects_scaled(
-    list_rect: ViewRect,
-    chooser: &ShellOpenWithChooser,
-    scale_factor: f32,
-) -> Option<(ViewRect, ViewRect)> {
-    let total = chooser.filtered_count();
-    let visible = open_with_chooser_visible_row_count(chooser);
-    if total <= visible {
-        return None;
-    }
-    let margin = scaled_dialog_metric(6.0, scale_factor);
-    let width = scaled_dialog_metric(4.0, scale_factor).max(2.0);
-    let track = ViewRect {
-        x: list_rect.right() - margin - width,
-        y: list_rect.y + margin,
-        width,
-        height: (list_rect.height - margin * 2.0).max(1.0),
-    };
-    let thumb_height = (track.height * visible as f32 / total as f32)
-        .max(scaled_dialog_metric(28.0, scale_factor))
-        .min(track.height);
-    let max_scroll = total.saturating_sub(visible).max(1);
-    let ratio = (chooser.scroll_row.min(max_scroll) as f32 / max_scroll as f32).clamp(0.0, 1.0);
-    let travel = (track.height - thumb_height).max(0.0);
-    let thumb = ViewRect {
-        x: track.x,
-        y: track.y + travel * ratio,
-        width: track.width,
-        height: thumb_height,
-    };
-    Some((track, thumb))
-}
-
-#[cfg(test)]
-#[allow(dead_code)]
-fn open_with_chooser_cancel_button_rect(dialog_rect: ViewRect) -> ViewRect {
-    open_with_chooser_cancel_button_rect_scaled(dialog_rect, 1.0)
-}
-
-fn open_with_chooser_cancel_button_rect_scaled(
-    dialog_rect: ViewRect,
-    scale_factor: f32,
-) -> ViewRect {
-    let right = dialog_rect.right() - scaled_dialog_metric(16.0, scale_factor);
-    let button_width = scaled_dialog_metric(OPEN_WITH_CHOOSER_BUTTON_WIDTH, scale_factor);
-    let button_height = scaled_dialog_metric(OPEN_WITH_CHOOSER_BUTTON_HEIGHT, scale_factor);
-    ViewRect {
-        x: right
-            - button_width * 2.0
-            - scaled_dialog_metric(OPEN_WITH_CHOOSER_BUTTON_GAP, scale_factor),
-        y: dialog_rect.bottom() - scaled_dialog_metric(16.0, scale_factor) - button_height,
-        width: button_width,
-        height: button_height,
-    }
-}
-
-#[cfg(test)]
-fn open_with_chooser_open_button_rect(dialog_rect: ViewRect) -> ViewRect {
-    open_with_chooser_open_button_rect_scaled(dialog_rect, 1.0)
-}
-
-fn open_with_chooser_open_button_rect_scaled(dialog_rect: ViewRect, scale_factor: f32) -> ViewRect {
-    let right = dialog_rect.right() - scaled_dialog_metric(16.0, scale_factor);
-    let button_width = scaled_dialog_metric(OPEN_WITH_CHOOSER_BUTTON_WIDTH, scale_factor);
-    let button_height = scaled_dialog_metric(OPEN_WITH_CHOOSER_BUTTON_HEIGHT, scale_factor);
-    ViewRect {
-        x: right - button_width,
-        y: dialog_rect.bottom() - scaled_dialog_metric(16.0, scale_factor) - button_height,
-        width: button_width,
-        height: button_height,
-    }
-}
-
-#[cfg(test)]
 fn trash_conflict_dialog_rect(
     _dialog: &ShellTrashConflictDialog,
     size: PhysicalSize<u32>,
@@ -23527,10 +23314,6 @@ fn trash_conflict_dialog_replace_button_rect_scaled(
     scale_factor: f32,
 ) -> ViewRect {
     create_dialog_commit_button_rect_scaled(dialog_rect, scale_factor)
-}
-
-fn scaled_dialog_metric(value: f32, scale_factor: f32) -> f32 {
-    (value * scale_factor.max(1.0)).round().max(1.0)
 }
 
 fn yes_no(value: bool) -> String {
