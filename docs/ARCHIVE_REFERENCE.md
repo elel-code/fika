@@ -35,20 +35,29 @@ external archive tool when the user invokes archive actions.
   - Parses and validates Ark DnD payloads and builds the structured D-Bus
     request for `extractSelectedFilesTo`.
 - `src/core/launcher/ark.rs`
-  - Builds Ark launch plans for `Compress`, `Extract Here`, and `Extract To`
-    through the `ark` command.
+  - Builds Ark launch plans for the Dolphin Ark plugin actions: direct
+    `tar.gz`/`zip` compression, `Compress to...`, `Extract here`, `Extract and
+    trash archive`, and `Extract to...`.
   - Keeps Ark execution behind the same `DesktopLaunchPlan` and systemd-user
     launcher used by Open With and service-menu actions.
+- `src/core/file_ops.rs`
+  - Provides async/compio trash helpers so archive post-actions can move files
+    to Trash through Fika's io_uring-backed local file operation path.
 - `src/main.rs`
   - Adds Fika-owned context action IDs:
-    `fika.builtin.ark.compress`, `fika.builtin.ark.extract-here`, and
-    `fika.builtin.ark.extract-to`.
-  - Shows `Compress...` for local file/directory item selections.
-  - Shows `Extract Here` and `Extract To...` only for a single local archive,
-    using MIME information first and file extension as a fallback.
+    `fika.builtin.ark.compress-tar-gz`, `fika.builtin.ark.compress-zip`,
+    `fika.builtin.ark.compress`, `fika.builtin.ark.extract-here`,
+    `fika.builtin.ark.extract-and-trash`, and `fika.builtin.ark.extract-to`.
+  - Shows a root `Compress` submenu for local file/directory item selections,
+    except a single archive, matching Ark's Dolphin plugin.
+  - Shows a root `Extract` submenu for local archive selections, including
+    multi-selection; extraction actions operate only on selected archive items.
+  - Runs `Extract and trash archive` internally: Fika waits for Ark with
+    `tokio::process`, then moves the original archive(s) to Trash with
+    `file_ops::trash_paths_async`.
   - Does not expose Ark local actions for Trash or pure network URI targets.
-  - De-duplicates by visible label when a discovered service menu already
-    provides the same archive action.
+  - De-duplicates by visible label and submenu when a discovered service menu
+    already provides the same archive action.
 
 ## Remaining Work
 

@@ -12,7 +12,10 @@ use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
 mod ark;
 mod results;
 
-pub use ark::{ark_compress_launch_plan, ark_extract_here_launch_plan, ark_extract_to_launch_plan};
+pub use ark::{
+    ArkCompressionMode, ark_compress_launch_plan, ark_extract_and_trash_launch_plan,
+    ark_extract_here_launch_plan, ark_extract_to_launch_plan,
+};
 pub use results::{
     NewWindowLaunchResult, OpenWithLaunchResult, ServiceMenuLaunchResult, service_menu_target_label,
 };

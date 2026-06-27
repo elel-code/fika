@@ -750,40 +750,45 @@ pub(crate) fn context_menu_separator_before(target: &ShellContextTarget, row: us
 }
 
 fn service_menu_root_items(actions: &[ServiceMenuAction]) -> Vec<ShellContextMenuItem> {
-    actions
-        .iter()
+    let (ungrouped, groups) = service_menu_partition_grouped_actions(actions.iter().collect());
+    let mut items = ungrouped
+        .into_iter()
         .filter(|action| service_menu_action_promoted(action, actions.len()))
         .map(service_menu_action_item)
-        .collect()
+        .collect::<Vec<_>>();
+    for (group_index, (label, group_actions)) in groups.iter().enumerate() {
+        if service_menu_group_promoted(group_actions) {
+            items.push(service_menu_group_submenu_item(label, group_index));
+        }
+    }
+    items
 }
 
 fn service_menu_has_more_actions(actions: &[ServiceMenuAction]) -> bool {
-    actions
-        .iter()
+    let (ungrouped, groups) = service_menu_partition_grouped_actions(actions.iter().collect());
+    ungrouped
+        .into_iter()
         .any(|action| !service_menu_action_promoted(action, actions.len()))
+        || groups
+            .iter()
+            .any(|(_, group_actions)| !service_menu_group_promoted(group_actions))
 }
 
 fn service_menu_more_items(actions: &[ServiceMenuAction]) -> Vec<ShellContextMenuItem> {
-    let more = actions
-        .iter()
-        .filter(|action| !service_menu_action_promoted(action, actions.len()))
-        .collect::<Vec<_>>();
-    let (ungrouped, groups) = service_menu_partition_grouped_actions(more);
+    let (ungrouped, groups) = service_menu_partition_grouped_actions(actions.iter().collect());
     let mut items = ungrouped
         .into_iter()
+        .filter(|action| !service_menu_action_promoted(action, actions.len()))
         .map(service_menu_action_item)
         .collect::<Vec<_>>();
-    for (group_index, (label, _)) in groups.iter().enumerate() {
-        let mut item = ShellContextMenuItem::builtin_submenu(
-            ShellContextMenuAction::Properties,
-            label.clone(),
-            ShellContextSubmenu::ServiceMenuGroup(group_index),
-        );
-        item.command = ShellContextMenuCommand::OpenSubmenu(ShellContextSubmenu::ServiceMenuGroup(
-            group_index,
-        ));
-        item.icon = ShellContextMenuIcon::Service(None);
-        item.separator_before = !items.is_empty() && group_index == 0;
+    let mut appended_group = false;
+    for (group_index, (label, group_actions)) in groups.iter().enumerate() {
+        if service_menu_group_promoted(group_actions) {
+            continue;
+        }
+        let mut item = service_menu_group_submenu_item(label, group_index);
+        item.separator_before = !items.is_empty() && !appended_group;
+        appended_group = true;
         items.push(item);
     }
     items
@@ -793,11 +798,7 @@ fn service_menu_group_items(
     actions: &[ServiceMenuAction],
     group_index: usize,
 ) -> Vec<ShellContextMenuItem> {
-    let more = actions
-        .iter()
-        .filter(|action| !service_menu_action_promoted(action, actions.len()))
-        .collect::<Vec<_>>();
-    let (_, groups) = service_menu_partition_grouped_actions(more);
+    let (_, groups) = service_menu_partition_grouped_actions(actions.iter().collect());
     groups
         .into_iter()
         .nth(group_index)
@@ -837,6 +838,24 @@ fn service_menu_partition_grouped_actions<'a>(
         }
     }
     (ungrouped, grouped)
+}
+
+fn service_menu_group_promoted(actions: &[&ServiceMenuAction]) -> bool {
+    actions
+        .iter()
+        .any(|action| action.priority == ServiceMenuPriority::TopLevel)
+}
+
+fn service_menu_group_submenu_item(label: &str, group_index: usize) -> ShellContextMenuItem {
+    let mut item = ShellContextMenuItem::builtin_submenu(
+        ShellContextMenuAction::Properties,
+        label.to_string(),
+        ShellContextSubmenu::ServiceMenuGroup(group_index),
+    );
+    item.command =
+        ShellContextMenuCommand::OpenSubmenu(ShellContextSubmenu::ServiceMenuGroup(group_index));
+    item.icon = ShellContextMenuIcon::Service(None);
+    item
 }
 
 fn service_menu_action_promoted(action: &ServiceMenuAction, action_count: usize) -> bool {

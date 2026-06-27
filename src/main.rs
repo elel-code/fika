@@ -20,20 +20,21 @@ use cosmic_text::{
     Stretch, Style, SwashCache, Weight, Wrap, fontdb,
 };
 use fika_core::{
-    AppSettings, CompactLayout, CompactLayoutOptions, DeviceInfo, DevicePlaceOperation,
-    DevicePlaceOperationResult, Entry, FileClipboardRole, FileTransferMode, Generation,
-    IconsLayout, IconsLayoutOptions, ItemId, ItemLayout, MetadataRoleResult, MimeApplication,
-    MimeApplicationCache, MimeDatabase, NETWORK_ROOT_LABEL, NameFilter, OpenWithLaunchResult,
-    OperationController, PrivilegedCommand, ServiceMenuAction, ServiceMenuLaunchResult,
-    ServiceMenuPriority, ServiceMenuTarget, ThumbnailRequest, ThumbnailRequestPriority,
-    ThumbnailerRegistry, TransferTaskResult, TransferUndoItem, TrashViewOperation,
-    TrashViewOperationResult, UserPlace, ViewPoint, ViewRect, ViewSize, ark_compress_launch_plan,
-    ark_extract_here_launch_plan, ark_extract_to_launch_plan, complete_location_input,
-    decode_file_clipboard_text, default_app_settings_path, default_thumbnail_cache_root,
-    default_user_places_path, encode_file_clipboard_text, file_ops, format_modified_secs,
-    format_size, generate_thumbnail_with_external_thumbnailer_registry, home_dir,
-    is_archive_mime_or_path, is_network_path, launch_with_systemd_user, load_app_settings,
-    load_place_order, load_user_places, mime_magic_resolution_required, network_parent_path,
+    AppSettings, ArkCompressionMode, CompactLayout, CompactLayoutOptions, DeviceInfo,
+    DevicePlaceOperation, DevicePlaceOperationResult, Entry, FileClipboardRole, FileTransferMode,
+    Generation, IconsLayout, IconsLayoutOptions, ItemId, ItemLayout, MetadataRoleResult,
+    MimeApplication, MimeApplicationCache, MimeDatabase, NETWORK_ROOT_LABEL, NameFilter,
+    OpenWithLaunchResult, OperationController, PrivilegedCommand, ServiceMenuAction,
+    ServiceMenuLaunchResult, ServiceMenuPriority, ServiceMenuTarget, ThumbnailRequest,
+    ThumbnailRequestPriority, ThumbnailerRegistry, TransferTaskResult, TransferUndoItem,
+    TrashViewOperation, TrashViewOperationResult, UserPlace, ViewPoint, ViewRect, ViewSize,
+    ark_compress_launch_plan, ark_extract_and_trash_launch_plan, ark_extract_here_launch_plan,
+    ark_extract_to_launch_plan, complete_location_input, decode_file_clipboard_text,
+    default_app_settings_path, default_thumbnail_cache_root, default_user_places_path,
+    encode_file_clipboard_text, file_ops, format_modified_secs, format_size,
+    generate_thumbnail_with_external_thumbnailer_registry, home_dir, is_archive_mime_or_path,
+    is_network_path, launch_with_systemd_user, load_app_settings, load_place_order,
+    load_user_places, mime_magic_resolution_required, network_parent_path,
     network_path_display_name, network_path_from_uri, network_root_path, paste_text_result,
     perform_device_place_operation, place_order_path_for_user_places_path, push_unique_path,
     read_entries_sync, read_gio_devices, read_network_entry_batches_sync_cancellable,
@@ -2163,6 +2164,7 @@ impl FikaWgpuApp {
     }
 
     fn run_context_service_menu_action(&mut self, action_id: String) {
+        let extract_and_trash = action_id == BUILTIN_ARK_EXTRACT_AND_TRASH_ACTION_ID;
         let request = match self
             .scene
             .service_menu_launch_request(&self.mime_applications, &action_id)
@@ -2181,6 +2183,10 @@ impl FikaWgpuApp {
                 return;
             }
         };
+        if extract_and_trash {
+            self.run_ark_extract_and_trash_action(request);
+            return;
+        }
         let paths = request.paths.clone();
         let app_name = request.app_name.clone();
         self.scene.record_task_status(ShellTaskStatus::completed(
@@ -2197,6 +2203,30 @@ impl FikaWgpuApp {
                 result,
             }
             .status_message();
+            fika_log!("[fika-wgpu] service-menu-finished {status}");
+        });
+        if let Some(window) = self.window.as_ref() {
+            window.request_redraw();
+        }
+    }
+
+    fn run_ark_extract_and_trash_action(&mut self, request: ServiceMenuLaunchRequest) {
+        let paths = request.paths.clone();
+        let app_name = request.app_name.clone();
+        self.scene.record_task_status(ShellTaskStatus::completed(
+            "Started Action",
+            format!("{} with {}", service_menu_target_label(&paths), app_name),
+            false,
+        ));
+        std::thread::spawn(move || {
+            let target_label = service_menu_target_label(&paths);
+            let status = pollster::block_on(run_operation_task(move || async move {
+                execute_ark_extract_and_trash(request).await
+            }))
+            .map_err(|err| err.to_string())
+            .and_then(|result| result)
+            .map(|message| format!("Ran {app_name} for {target_label}: {message}"))
+            .unwrap_or_else(|err| format!("Cannot run {app_name} for {target_label}: {err}"));
             fika_log!("[fika-wgpu] service-menu-finished {status}");
         });
         if let Some(window) = self.window.as_ref() {
@@ -3437,9 +3467,14 @@ struct CopyLocationRequest {
     text: String,
 }
 
+const BUILTIN_ARK_COMPRESS_TAR_GZ_ACTION_ID: &str = "fika.builtin.ark.compress-tar-gz";
+const BUILTIN_ARK_COMPRESS_ZIP_ACTION_ID: &str = "fika.builtin.ark.compress-zip";
 const BUILTIN_ARK_COMPRESS_ACTION_ID: &str = "fika.builtin.ark.compress";
 const BUILTIN_ARK_EXTRACT_HERE_ACTION_ID: &str = "fika.builtin.ark.extract-here";
+const BUILTIN_ARK_EXTRACT_AND_TRASH_ACTION_ID: &str = "fika.builtin.ark.extract-and-trash";
 const BUILTIN_ARK_EXTRACT_TO_ACTION_ID: &str = "fika.builtin.ark.extract-to";
+const BUILTIN_ARK_COMPRESS_SUBMENU: &str = "Compress";
+const BUILTIN_ARK_EXTRACT_SUBMENU: &str = "Extract";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct ArkContextItem {
@@ -3472,17 +3507,57 @@ fn ark_context_items_are_local(items: &[ArkContextItem]) -> bool {
         })
 }
 
+fn ark_context_item_is_archive(item: &ArkContextItem) -> bool {
+    !item.is_dir && is_archive_mime_or_path(item.mime_type.as_deref(), &item.path)
+}
+
+fn ark_context_items_are_single_archive(items: &[ArkContextItem]) -> bool {
+    matches!(items, [item] if ark_context_item_is_archive(item))
+}
+
+fn ark_context_archive_items(items: &[ArkContextItem]) -> Vec<ArkContextItem> {
+    items
+        .iter()
+        .filter(|item| ark_context_item_is_archive(item))
+        .cloned()
+        .collect()
+}
+
+fn ark_context_parent_writable(items: &[ArkContextItem]) -> bool {
+    items
+        .first()
+        .is_none_or(|item| ark_context_item_parent_writable(item))
+}
+
+fn ark_context_all_parents_writable(items: &[ArkContextItem]) -> bool {
+    items.iter().all(ark_context_item_parent_writable)
+}
+
+fn ark_context_item_parent_writable(item: &ArkContextItem) -> bool {
+    let parent = item
+        .path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    fs::metadata(parent)
+        .map(|metadata| !metadata.permissions().readonly())
+        .unwrap_or(true)
+}
+
 fn push_builtin_ark_service_action(
     actions: &mut Vec<ServiceMenuAction>,
     id: &str,
     label: &str,
     icon: &str,
+    submenu: Option<&str>,
+    priority: ServiceMenuPriority,
 ) {
     let label_key = service_action_label_key(label);
-    if actions
-        .iter()
-        .any(|action| service_action_label_key(&action.label) == label_key)
-    {
+    let submenu_key = submenu.map(service_action_label_key);
+    if actions.iter().any(|action| {
+        service_action_label_key(&action.label) == label_key
+            && action.submenu.as_deref().map(service_action_label_key) == submenu_key
+    }) {
         return;
     }
     actions.push(ServiceMenuAction {
@@ -3490,8 +3565,8 @@ fn push_builtin_ark_service_action(
         label: label.to_string(),
         source_name: "Ark".to_string(),
         icon: Some(icon.to_string()),
-        submenu: None,
-        priority: ServiceMenuPriority::TopLevel,
+        submenu: submenu.map(str::to_string),
+        priority,
     });
 }
 
@@ -3501,6 +3576,49 @@ fn service_action_label_key(label: &str) -> String {
         .filter(|byte| byte.is_ascii_alphanumeric())
         .map(|byte| byte.to_ascii_lowercase() as char)
         .collect()
+}
+
+fn ark_compress_action_label(items: &[ArkContextItem], suffix: &str) -> String {
+    format!("Compress to \"{}.{suffix}\"", ark_compress_base_name(items))
+}
+
+fn ark_compress_base_name(items: &[ArkContextItem]) -> String {
+    match items {
+        [item] => path_stem_or_name(&item.path).unwrap_or_else(|| "Archive".to_string()),
+        [] => "Archive".to_string(),
+        _ => ark_common_name_prefix(items).unwrap_or_else(|| "Archive".to_string()),
+    }
+}
+
+fn ark_common_name_prefix(items: &[ArkContextItem]) -> Option<String> {
+    let mut names = items
+        .iter()
+        .filter_map(|item| path_stem_or_name(&item.path))
+        .collect::<Vec<_>>();
+    let first = names.first()?.clone();
+    let mut prefix_len = first.len();
+    for name in names.drain(1..) {
+        let common = first
+            .chars()
+            .zip(name.chars())
+            .take_while(|(left, right)| left == right)
+            .map(|(ch, _)| ch.len_utf8())
+            .sum::<usize>();
+        prefix_len = prefix_len.min(common);
+    }
+    let prefix = first[..prefix_len]
+        .trim_matches(|ch: char| ch.is_ascii_whitespace() || matches!(ch, '-' | '_' | '.'))
+        .to_string();
+    (prefix.len() >= 5).then_some(prefix)
+}
+
+fn path_stem_or_name(path: &Path) -> Option<String> {
+    path.file_stem()
+        .or_else(|| path.file_name())
+        .and_then(|name| name.to_str())
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -8065,29 +8183,74 @@ impl ShellScene {
             return;
         }
 
-        push_builtin_ark_service_action(
-            service_actions,
-            BUILTIN_ARK_COMPRESS_ACTION_ID,
-            "Compress...",
-            "archive-insert",
-        );
-
-        if items.len() == 1 {
-            let item = &items[0];
-            if !item.is_dir && is_archive_mime_or_path(item.mime_type.as_deref(), &item.path) {
+        if !ark_context_items_are_single_archive(&items) {
+            if ark_context_parent_writable(&items) {
                 push_builtin_ark_service_action(
                     service_actions,
-                    BUILTIN_ARK_EXTRACT_HERE_ACTION_ID,
-                    "Extract Here",
-                    "archive-extract",
+                    BUILTIN_ARK_COMPRESS_TAR_GZ_ACTION_ID,
+                    &ark_compress_action_label(&items, "tar.gz"),
+                    "archive-insert",
+                    Some(BUILTIN_ARK_COMPRESS_SUBMENU),
+                    ServiceMenuPriority::TopLevel,
                 );
                 push_builtin_ark_service_action(
                     service_actions,
-                    BUILTIN_ARK_EXTRACT_TO_ACTION_ID,
-                    "Extract To...",
-                    "archive-extract",
+                    BUILTIN_ARK_COMPRESS_ZIP_ACTION_ID,
+                    &ark_compress_action_label(&items, "zip"),
+                    "archive-insert",
+                    Some(BUILTIN_ARK_COMPRESS_SUBMENU),
+                    ServiceMenuPriority::TopLevel,
                 );
             }
+            push_builtin_ark_service_action(
+                service_actions,
+                BUILTIN_ARK_COMPRESS_ACTION_ID,
+                "Compress to…",
+                "archive-insert",
+                Some(BUILTIN_ARK_COMPRESS_SUBMENU),
+                ServiceMenuPriority::TopLevel,
+            );
+        }
+
+        let archive_items = ark_context_archive_items(&items);
+        if archive_items.is_empty() {
+            return;
+        }
+
+        if ark_context_all_parents_writable(&archive_items) {
+            push_builtin_ark_service_action(
+                service_actions,
+                BUILTIN_ARK_EXTRACT_HERE_ACTION_ID,
+                "Extract here",
+                "archive-extract",
+                Some(BUILTIN_ARK_EXTRACT_SUBMENU),
+                ServiceMenuPriority::TopLevel,
+            );
+            push_builtin_ark_service_action(
+                service_actions,
+                BUILTIN_ARK_EXTRACT_AND_TRASH_ACTION_ID,
+                "Extract and trash archive",
+                "archive-remove",
+                Some(BUILTIN_ARK_EXTRACT_SUBMENU),
+                ServiceMenuPriority::TopLevel,
+            );
+            push_builtin_ark_service_action(
+                service_actions,
+                BUILTIN_ARK_EXTRACT_TO_ACTION_ID,
+                "Extract to…",
+                "archive-extract",
+                Some(BUILTIN_ARK_EXTRACT_SUBMENU),
+                ServiceMenuPriority::TopLevel,
+            );
+        } else {
+            push_builtin_ark_service_action(
+                service_actions,
+                BUILTIN_ARK_EXTRACT_TO_ACTION_ID,
+                "Extract to…",
+                "archive-extract",
+                None,
+                ServiceMenuPriority::TopLevel,
+            );
         }
     }
 
@@ -8603,7 +8766,9 @@ impl ShellScene {
         action_id: &str,
     ) -> Result<Option<ServiceMenuLaunchRequest>, String> {
         match action_id {
-            BUILTIN_ARK_COMPRESS_ACTION_ID => {
+            BUILTIN_ARK_COMPRESS_TAR_GZ_ACTION_ID
+            | BUILTIN_ARK_COMPRESS_ZIP_ACTION_ID
+            | BUILTIN_ARK_COMPRESS_ACTION_ID => {
                 let target = self
                     .context_target
                     .as_ref()
@@ -8612,23 +8777,39 @@ impl ShellScene {
                 if !ark_context_items_are_local(&items) {
                     return Err("Ark actions require local file targets".to_string());
                 }
+                if ark_context_items_are_single_archive(&items) {
+                    return Err("Compress is not available for a single archive".to_string());
+                }
                 let paths = items.into_iter().map(|item| item.path).collect::<Vec<_>>();
-                let plan = ark_compress_launch_plan(&paths)?;
+                let mode = match action_id {
+                    BUILTIN_ARK_COMPRESS_TAR_GZ_ACTION_ID => ArkCompressionMode::TarGz,
+                    BUILTIN_ARK_COMPRESS_ZIP_ACTION_ID => ArkCompressionMode::Zip,
+                    _ => ArkCompressionMode::Dialog,
+                };
+                let plan = ark_compress_launch_plan(&paths, mode)?;
                 Ok(Some(ServiceMenuLaunchRequest {
                     paths,
                     app_name: plan.app_name.clone(),
                     plan,
                 }))
             }
-            BUILTIN_ARK_EXTRACT_HERE_ACTION_ID | BUILTIN_ARK_EXTRACT_TO_ACTION_ID => {
-                let item = self.single_archive_ark_context_item()?;
-                let plan = if action_id == BUILTIN_ARK_EXTRACT_HERE_ACTION_ID {
-                    ark_extract_here_launch_plan(&item.path)?
-                } else {
-                    ark_extract_to_launch_plan(&item.path)?
+            BUILTIN_ARK_EXTRACT_HERE_ACTION_ID
+            | BUILTIN_ARK_EXTRACT_AND_TRASH_ACTION_ID
+            | BUILTIN_ARK_EXTRACT_TO_ACTION_ID => {
+                let archive_items = self.context_target_ark_archive_items()?;
+                let paths = archive_items
+                    .into_iter()
+                    .map(|item| item.path)
+                    .collect::<Vec<_>>();
+                let plan = match action_id {
+                    BUILTIN_ARK_EXTRACT_HERE_ACTION_ID => ark_extract_here_launch_plan(&paths)?,
+                    BUILTIN_ARK_EXTRACT_AND_TRASH_ACTION_ID => {
+                        ark_extract_and_trash_launch_plan(&paths)?
+                    }
+                    _ => ark_extract_to_launch_plan(&paths)?,
                 };
                 Ok(Some(ServiceMenuLaunchRequest {
-                    paths: vec![item.path],
+                    paths,
                     app_name: plan.app_name.clone(),
                     plan,
                 }))
@@ -8637,7 +8818,7 @@ impl ShellScene {
         }
     }
 
-    fn single_archive_ark_context_item(&self) -> Result<ArkContextItem, String> {
+    fn context_target_ark_archive_items(&self) -> Result<Vec<ArkContextItem>, String> {
         let target = self
             .context_target
             .as_ref()
@@ -8646,17 +8827,11 @@ impl ShellScene {
         if !ark_context_items_are_local(&items) {
             return Err("Ark actions require local file targets".to_string());
         }
-        if items.len() != 1 {
-            return Err("Extract requires exactly one archive".to_string());
+        let archive_items = ark_context_archive_items(&items);
+        if archive_items.is_empty() {
+            return Err("Extract requires at least one archive".to_string());
         }
-        let item = items
-            .into_iter()
-            .next()
-            .ok_or_else(|| "Extract requires exactly one archive".to_string())?;
-        if item.is_dir || !is_archive_mime_or_path(item.mime_type.as_deref(), &item.path) {
-            return Err(format!("{} is not an archive", item.path.display()));
-        }
-        Ok(item)
+        Ok(archive_items)
     }
 
     fn context_target_service_menu_paths(&self) -> Result<Option<Vec<PathBuf>>, String> {
@@ -23220,6 +23395,36 @@ fn run_privileged_command_sync(
         .map_err(|error| format!("administrator operation failed: {error}"))
 }
 
+async fn execute_ark_extract_and_trash(
+    request: ServiceMenuLaunchRequest,
+) -> Result<String, String> {
+    let command = match request.plan.commands.as_slice() {
+        [command] => command,
+        [] => return Err("Ark extract produced no launch command".to_string()),
+        _ => return Err("Ark extract produced multiple launch commands".to_string()),
+    };
+    let status = tokio::process::Command::new(&command.program)
+        .args(&command.args)
+        .status()
+        .await
+        .map_err(|err| format!("failed to start Ark: {err}"))?;
+    if !status.success() {
+        return Err(format!("Ark exited with {status}"));
+    }
+
+    let summary = file_ops::trash_paths_async(request.paths.clone()).await;
+    if !summary.failures.is_empty() {
+        return Err(format!(
+            "extracted, but moving archives to Trash failed: {}",
+            summary.failures.join("; ")
+        ));
+    }
+    Ok(format!(
+        "extracted and moved {} archive(s) to Trash",
+        summary.successes.len()
+    ))
+}
+
 fn trash_paths_with_privilege(
     paths: &[PathBuf],
     privileged: bool,
@@ -31443,7 +31648,19 @@ text/plain=writer.desktop;\n",
         let (_, actions) = scene.context_menu_dynamic_data(&target, &MimeApplicationCache::empty());
 
         assert!(actions.iter().any(|action| {
-            action.id == BUILTIN_ARK_COMPRESS_ACTION_ID && action.label == "Compress..."
+            action.id == BUILTIN_ARK_COMPRESS_TAR_GZ_ACTION_ID
+                && action.label == "Compress to \"Archive.tar.gz\""
+                && action.submenu.as_deref() == Some(BUILTIN_ARK_COMPRESS_SUBMENU)
+        }));
+        assert!(actions.iter().any(|action| {
+            action.id == BUILTIN_ARK_COMPRESS_ZIP_ACTION_ID
+                && action.label == "Compress to \"Archive.zip\""
+                && action.submenu.as_deref() == Some(BUILTIN_ARK_COMPRESS_SUBMENU)
+        }));
+        assert!(actions.iter().any(|action| {
+            action.id == BUILTIN_ARK_COMPRESS_ACTION_ID
+                && action.label == "Compress to…"
+                && action.submenu.as_deref() == Some(BUILTIN_ARK_COMPRESS_SUBMENU)
         }));
         assert!(
             actions
@@ -31451,11 +31668,37 @@ text/plain=writer.desktop;\n",
                 .all(|action| action.id != BUILTIN_ARK_EXTRACT_HERE_ACTION_ID)
         );
 
+        let menu = ShellContextMenu::with_dynamic(
+            target.clone(),
+            ViewPoint { x: 20.0, y: 20.0 },
+            Vec::new(),
+            actions,
+        );
+        let root = context_menu_items(&menu);
+        let compress_submenu = root
+            .iter()
+            .find_map(|item| {
+                (item.label == BUILTIN_ARK_COMPRESS_SUBMENU).then_some(item.submenu)?
+            })
+            .expect("Ark compress actions should be a root submenu");
+        let compress_items = context_submenu_actions(compress_submenu, &menu);
+        assert_eq!(
+            compress_items
+                .iter()
+                .map(|item| item.label.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "Compress to \"Archive.tar.gz\"",
+                "Compress to \"Archive.zip\"",
+                "Compress to…"
+            ]
+        );
+
         scene.context_target = Some(target);
         let request = scene
             .service_menu_launch_request(
                 &MimeApplicationCache::empty(),
-                BUILTIN_ARK_COMPRESS_ACTION_ID,
+                BUILTIN_ARK_COMPRESS_ZIP_ACTION_ID,
             )
             .unwrap();
 
@@ -31463,7 +31706,7 @@ text/plain=writer.desktop;\n",
             request.paths,
             vec![PathBuf::from("/tmp/one.txt"), PathBuf::from("/tmp/two.txt")]
         );
-        assert_eq!(request.app_name, "Ark: Compress");
+        assert_eq!(request.app_name, "Ark: Compress to ZIP");
         assert_eq!(request.plan.commands[0].program, "ark");
         assert_eq!(
             request.plan.commands[0].args,
@@ -31472,6 +31715,24 @@ text/plain=writer.desktop;\n",
                 "--changetofirstpath",
                 "--autofilename",
                 "zip",
+                "/tmp/one.txt",
+                "/tmp/two.txt"
+            ]
+        );
+
+        let dialog = scene
+            .service_menu_launch_request(
+                &MimeApplicationCache::empty(),
+                BUILTIN_ARK_COMPRESS_ACTION_ID,
+            )
+            .unwrap();
+        assert_eq!(dialog.app_name, "Ark: Compress To");
+        assert_eq!(
+            dialog.plan.commands[0].args,
+            vec![
+                "--add",
+                "--changetofirstpath",
+                "--dialog",
                 "/tmp/one.txt",
                 "/tmp/two.txt"
             ]
@@ -31501,12 +31762,46 @@ text/plain=writer.desktop;\n",
         assert!(
             actions
                 .iter()
-                .any(|action| action.id == BUILTIN_ARK_EXTRACT_HERE_ACTION_ID)
+                .all(|action| action.submenu.as_deref() != Some(BUILTIN_ARK_COMPRESS_SUBMENU))
         );
         assert!(
             actions
                 .iter()
-                .any(|action| action.id == BUILTIN_ARK_EXTRACT_TO_ACTION_ID)
+                .any(|action| action.id == BUILTIN_ARK_EXTRACT_HERE_ACTION_ID
+                    && action.label == "Extract here"
+                    && action.submenu.as_deref() == Some(BUILTIN_ARK_EXTRACT_SUBMENU))
+        );
+        assert!(actions.iter().any(
+            |action| action.id == BUILTIN_ARK_EXTRACT_AND_TRASH_ACTION_ID
+                && action.label == "Extract and trash archive"
+                && action.submenu.as_deref() == Some(BUILTIN_ARK_EXTRACT_SUBMENU)
+        ));
+        assert!(
+            actions
+                .iter()
+                .any(|action| action.id == BUILTIN_ARK_EXTRACT_TO_ACTION_ID
+                    && action.label == "Extract to…"
+                    && action.submenu.as_deref() == Some(BUILTIN_ARK_EXTRACT_SUBMENU))
+        );
+
+        let menu = ShellContextMenu::with_dynamic(
+            target.clone(),
+            ViewPoint { x: 20.0, y: 20.0 },
+            Vec::new(),
+            actions,
+        );
+        let root = context_menu_items(&menu);
+        let extract_submenu = root
+            .iter()
+            .find_map(|item| (item.label == BUILTIN_ARK_EXTRACT_SUBMENU).then_some(item.submenu)?)
+            .expect("Ark extract actions should be a root submenu");
+        let extract_items = context_submenu_actions(extract_submenu, &menu);
+        assert_eq!(
+            extract_items
+                .iter()
+                .map(|item| item.label.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Extract here", "Extract and trash archive", "Extract to…"]
         );
 
         scene.context_target = Some(target);
@@ -31521,7 +31816,71 @@ text/plain=writer.desktop;\n",
         assert_eq!(request.app_name, "Ark: Extract Here");
         assert_eq!(
             request.plan.commands[0].args,
-            vec!["--batch", "--destination", "/tmp", "/tmp/payload.bin"]
+            vec![
+                "--batch",
+                "--autosubfolder",
+                "--destination",
+                "/tmp",
+                "/tmp/payload.bin"
+            ]
+        );
+    }
+
+    #[test]
+    fn ark_builtin_context_action_extracts_selected_archives_only() {
+        let mut scene = test_scene(
+            vec![
+                test_entry_with_mime("one.zip", false, "application/zip"),
+                test_entry("notes.txt", false),
+                test_entry_with_mime("two.tar.gz", false, "application/x-compressed-tar"),
+            ],
+            ShellViewMode::Icons,
+        );
+        assert!(
+            scene.panes[ShellPaneId::SLOT_0]
+                .selection
+                .select_indexes(&[0, 1, 2])
+        );
+        let target = ShellContextTarget::Item {
+            pane: ShellPaneId::SLOT_0,
+            index: 0,
+            path: PathBuf::from("/tmp/one.zip"),
+            is_dir: false,
+            selection_count: 3,
+        };
+
+        let (_, actions) = scene.context_menu_dynamic_data(&target, &MimeApplicationCache::empty());
+        assert!(
+            actions
+                .iter()
+                .any(|action| action.id == BUILTIN_ARK_EXTRACT_HERE_ACTION_ID)
+        );
+
+        scene.context_target = Some(target);
+        let request = scene
+            .service_menu_launch_request(
+                &MimeApplicationCache::empty(),
+                BUILTIN_ARK_EXTRACT_HERE_ACTION_ID,
+            )
+            .unwrap();
+
+        assert_eq!(
+            request.paths,
+            vec![
+                PathBuf::from("/tmp/one.zip"),
+                PathBuf::from("/tmp/two.tar.gz")
+            ]
+        );
+        assert_eq!(
+            request.plan.commands[0].args,
+            vec![
+                "--batch",
+                "--autosubfolder",
+                "--destination",
+                "/tmp",
+                "/tmp/one.zip",
+                "/tmp/two.tar.gz"
+            ]
         );
     }
 

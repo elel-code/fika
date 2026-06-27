@@ -535,6 +535,20 @@ pub fn trash_paths(paths: &[PathBuf]) -> FileActionSummary {
     summary
 }
 
+pub async fn trash_paths_async(paths: Vec<PathBuf>) -> FileActionSummary {
+    let mut summary = FileActionSummary::default();
+    for path in paths {
+        match trash_path_async(&path).await {
+            Ok(destination) => summary.successes.push(TrashRecord {
+                original_path: path,
+                trash_path: destination,
+            }),
+            Err(err) => summary.failures.push(format!("{}: {err}", path.display())),
+        }
+    }
+    summary
+}
+
 pub fn trash_path(path: &Path) -> Result<PathBuf, String> {
     if !path_exists(path) {
         return Err("item no longer exists".to_string());
@@ -566,9 +580,52 @@ pub fn trash_path(path: &Path) -> Result<PathBuf, String> {
     Ok(destination)
 }
 
+pub async fn trash_path_async(path: &Path) -> Result<PathBuf, String> {
+    if !path_exists_async(path).await {
+        return Err("item no longer exists".to_string());
+    }
+    if is_in_trash_files_dir(path) {
+        return Err("item is already in Trash".to_string());
+    }
+
+    ensure_trash_dirs_async().await?;
+    let files_dir = trash_files_dir();
+    let info_dir = trash_info_dir();
+
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| "item has no file name".to_string())?;
+    let destination = unique_destination_async(&files_dir, file_name).await;
+    move_path_async(path, &destination, None, &mut |_| {})
+        .await
+        .map_err(|err| err.to_string())?;
+
+    let info_name = destination
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| "trash destination has invalid name".to_string())?;
+    write_file_async(
+        &info_dir.join(format!("{info_name}.trashinfo")),
+        trashinfo(path),
+    )
+    .await
+    .map_err(|err| err.to_string())?;
+    let _ = set_trash_status_empty_async(false).await;
+    Ok(destination)
+}
+
 pub fn ensure_trash_dirs() -> Result<(), String> {
     fs::create_dir_all(trash_files_dir()).map_err(|err| err.to_string())?;
     fs::create_dir_all(trash_info_dir()).map_err(|err| err.to_string())
+}
+
+async fn ensure_trash_dirs_async() -> Result<(), String> {
+    create_dir_all_async(&trash_files_dir())
+        .await
+        .map_err(|err| err.to_string())?;
+    create_dir_all_async(&trash_info_dir())
+        .await
+        .map_err(|err| err.to_string())
 }
 
 pub fn trash_files_dir() -> PathBuf {
@@ -599,6 +656,10 @@ pub fn trash_status_empty() -> bool {
 
 pub fn set_trash_status_empty(empty: bool) -> Result<(), String> {
     write_trash_status_empty_at(&trashrc_path(), empty)
+}
+
+async fn set_trash_status_empty_async(empty: bool) -> Result<(), String> {
+    write_trash_status_empty_at_async(&trashrc_path(), empty).await
 }
 
 pub fn sync_trash_status_empty() -> Result<bool, String> {
@@ -1474,6 +1535,49 @@ async fn read_dir_entries_async(path: &Path) -> io::Result<Vec<(PathBuf, OsStrin
     Ok(entries)
 }
 
+fn create_dir_all_async<'a>(
+    path: &'a Path,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = io::Result<()>> + 'a>> {
+    Box::pin(async move {
+        if path.as_os_str().is_empty() {
+            return Ok(());
+        }
+        if metadata_async(path)
+            .await
+            .map(|metadata| metadata.is_dir())
+            .unwrap_or(false)
+        {
+            return Ok(());
+        }
+        if let Some(parent) = path.parent().filter(|parent| *parent != path) {
+            create_dir_all_async(parent).await?;
+        }
+        match compio::fs::create_dir(path).await {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
+                if metadata_async(path)
+                    .await
+                    .map(|metadata| metadata.is_dir())
+                    .unwrap_or(false)
+                {
+                    Ok(())
+                } else {
+                    Err(err)
+                }
+            }
+            Err(err) => Err(err),
+        }
+    })
+}
+
+async fn write_file_async(path: &Path, contents: String) -> io::Result<()> {
+    let mut file = compio::fs::File::create(path).await?;
+    let BufResult(write_result, file_contents) = file.write_all_at(contents.into_bytes(), 0).await;
+    write_result?;
+    drop(file_contents);
+    file.close().await
+}
+
 async fn remove_path_async(path: &Path) -> io::Result<()> {
     let metadata = symlink_metadata_async(path).await?;
     if metadata.is_dir() && !metadata.file_type().is_symlink() {
@@ -1833,6 +1937,20 @@ fn write_trash_status_empty_at(path: &Path, empty: bool) -> Result<(), String> {
         fs::create_dir_all(parent).map_err(|err| err.to_string())?;
     }
     fs::write(path, trash_status_contents(empty)).map_err(|err| err.to_string())
+}
+
+async fn write_trash_status_empty_at_async(path: &Path, empty: bool) -> Result<(), String> {
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        create_dir_all_async(parent)
+            .await
+            .map_err(|err| err.to_string())?;
+    }
+    write_file_async(path, trash_status_contents(empty))
+        .await
+        .map_err(|err| err.to_string())
 }
 
 fn trash_status_contents(empty: bool) -> String {
@@ -2623,6 +2741,39 @@ mod tests {
             assert_eq!(summary.successes.len(), 1);
             assert_eq!(summary.successes[0].original_path, first);
             assert!(summary.successes[0].trash_path.exists());
+            let _ = undo_trash(&[(
+                summary.successes[0].original_path.clone(),
+                summary.successes[0].trash_path.clone(),
+            )]);
+        }
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn trash_paths_async_records_original_and_trash_destinations() {
+        let temp = test_dir("trash-records-async");
+        fs::create_dir_all(&temp).unwrap();
+        let first = temp.join("first.txt");
+        fs::write(&first, "first").unwrap();
+
+        let summary =
+            futures_lite::future::block_on(crate::core::operation_runtime::run_operation_task({
+                let first = first.clone();
+                move || async move { trash_paths_async(vec![first]).await }
+            }))
+            .unwrap();
+
+        if summary.failures.is_empty() {
+            assert_eq!(summary.successes.len(), 1);
+            assert_eq!(summary.successes[0].original_path, first);
+            assert!(!summary.successes[0].original_path.exists());
+            assert!(summary.successes[0].trash_path.exists());
+            assert_eq!(
+                trash_metadata(&summary.successes[0].trash_path)
+                    .unwrap()
+                    .original_path,
+                summary.successes[0].original_path
+            );
             let _ = undo_trash(&[(
                 summary.successes[0].original_path.clone(),
                 summary.successes[0].trash_path.clone(),
