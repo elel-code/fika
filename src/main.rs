@@ -103,7 +103,7 @@ use shell::create_rename::{
     CreateDialogClick, CreateEntryKind, CreateEntryRequest, RenameDialogClick, RenameEntryRequest,
     ShellCreateDialog, ShellRenameDialog, unique_child_name, validate_create_name,
 };
-use shell::dolphin::item_paint::dolphin_item_paint;
+use shell::dolphin::item_paint::{dolphin_item_paint, dolphin_selection_core_rect};
 use shell::dolphin::style::{
     BREEZE_ITEM_ROUNDNESS, details_row_background_color, item_background_color,
     place_row_background_color,
@@ -7306,7 +7306,7 @@ impl ShellScene {
                 continue;
             }
             let pane = self.pane_view(geometry.kind)?;
-            if let Some(index) = self.pane_hit_test_screen_point(pane, geometry, point) {
+            if let Some(index) = self.pane_drop_hit_test_screen_point(pane, geometry, point) {
                 let entry = pane.entries.get(index)?;
                 return Some(ShellDropTarget::PaneItem {
                     pane: geometry.kind,
@@ -15987,6 +15987,45 @@ impl ShellScene {
             .contains(content_point)
             .then(|| pane.filtered_indexes.get(layout_index).copied())
             .flatten()
+    }
+
+    fn pane_drop_hit_test_screen_point(
+        &self,
+        pane: ShellPaneView<'_>,
+        geometry: ShellPaneGeometry,
+        point: ViewPoint,
+    ) -> Option<usize> {
+        if !geometry.content.contains(point) {
+            return None;
+        }
+        let content_point = screen_to_content_point(
+            point,
+            ViewPoint {
+                x: pane.scroll_x,
+                y: pane.scroll_y,
+            },
+            geometry.content,
+        )?;
+        let layout = self.pane_layout_for_pane(
+            geometry.kind,
+            pane,
+            geometry.content.width,
+            geometry.content.height,
+        );
+        let layout_index = layout.hit_test_content_point(content_point)?;
+        let item = layout.item(layout_index)?;
+        let entry_index = pane.filtered_indexes.get(layout_index).copied()?;
+        let selected = pane.selection.contains(entry_index);
+        dolphin_selection_core_rect(
+            pane.view_mode,
+            item.item_rect,
+            item.visual_rect,
+            item.icon_rect,
+            item.text_rect,
+            selected,
+        )
+        .contains(content_point)
+        .then_some(entry_index)
     }
 
     fn ensure_index_visible_in_pane(
@@ -24999,6 +25038,43 @@ mod tests {
         let menu = scene.drop_menu.as_ref().unwrap();
         assert_eq!(menu.sources, vec![source]);
         assert_eq!(menu.target_dir, PathBuf::from("/tmp/folder"));
+    }
+
+    #[test]
+    fn details_drop_target_uses_dolphin_selection_core_rect() {
+        let mut scene = test_scene(vec![test_entry("folder", true)], ShellViewMode::Details);
+        let size = PhysicalSize::new(900, 320);
+        let projection = scene.pane_projection(ShellPaneId::SLOT_0, size).unwrap();
+        let content = projection.geometry.content;
+        let row = projection.visible_items[0].layout;
+        let blank_side = ViewPoint {
+            x: content.right() - 4.0,
+            y: content.y + row.item_rect.y + row.item_rect.height / 2.0,
+        };
+
+        assert_eq!(scene.hit_test_screen_point(blank_side, size), Some(0));
+        assert_eq!(
+            scene.drop_target_at_screen_point(blank_side, size),
+            Some(ShellDropTarget::PaneBlank {
+                pane: ShellPaneId::SLOT_0,
+                path: PathBuf::from("/tmp"),
+            })
+        );
+
+        assert!(
+            scene.panes[ShellPaneId::SLOT_0]
+                .selection
+                .apply_navigation(0, false)
+        );
+        assert_eq!(
+            scene.drop_target_at_screen_point(blank_side, size),
+            Some(ShellDropTarget::PaneItem {
+                pane: ShellPaneId::SLOT_0,
+                index: 0,
+                path: PathBuf::from("/tmp/folder"),
+                is_dir: true,
+            })
+        );
     }
 
     #[test]

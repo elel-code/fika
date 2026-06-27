@@ -71,6 +71,34 @@ pub(crate) fn dolphin_item_paint(
     DolphinItemPaint { background, focus }
 }
 
+pub(crate) fn dolphin_selection_core_rect(
+    view_mode: ShellViewMode,
+    item_rect: ViewRect,
+    visual_rect: ViewRect,
+    icon_rect: ViewRect,
+    text_rect: ViewRect,
+    selected: bool,
+) -> ViewRect {
+    match view_mode {
+        ShellViewMode::Details if !selected => union_rect(icon_rect, text_rect),
+        ShellViewMode::Details => item_rect,
+        ShellViewMode::Compact | ShellViewMode::Icons => visual_rect,
+    }
+}
+
+fn union_rect(left: ViewRect, right: ViewRect) -> ViewRect {
+    let x = left.x.min(right.x);
+    let y = left.y.min(right.y);
+    let rect_right = left.right().max(right.right());
+    let bottom = left.bottom().max(right.bottom());
+    ViewRect {
+        x,
+        y,
+        width: (rect_right - x).max(0.0),
+        height: (bottom - y).max(0.0),
+    }
+}
+
 fn inset_rect(rect: ViewRect, inset: f32) -> Option<ViewRect> {
     let inset = inset.max(0.0);
     let width = rect.width - inset * 2.0;
@@ -175,6 +203,36 @@ mod tests {
                 color: [0.217, 0.456, 0.645, 0.8],
                 stroke_width: BREEZE_FOCUS_PEN_WIDTH,
             })
+        );
+    }
+
+    #[test]
+    fn details_selection_core_uses_icon_and_text_for_unselected_rows() {
+        let item = rect(0.0, 20.0, 480.0, 28.0);
+        let visual = item;
+        let icon = rect(8.0, 22.0, 24.0, 24.0);
+        let text = rect(40.0, 24.0, 160.0, 18.0);
+
+        assert_eq!(
+            dolphin_selection_core_rect(ShellViewMode::Details, item, visual, icon, text, false),
+            rect(8.0, 22.0, 192.0, 24.0)
+        );
+        assert_eq!(
+            dolphin_selection_core_rect(ShellViewMode::Details, item, visual, icon, text, true),
+            item
+        );
+    }
+
+    #[test]
+    fn icon_selection_core_matches_visual_rect() {
+        let item = rect(0.0, 0.0, 120.0, 120.0);
+        let visual = rect(8.0, 8.0, 104.0, 100.0);
+        let icon = rect(36.0, 8.0, 48.0, 48.0);
+        let text = rect(8.0, 64.0, 104.0, 36.0);
+
+        assert_eq!(
+            dolphin_selection_core_rect(ShellViewMode::Icons, item, visual, icon, text, false),
+            visual
         );
     }
 }
