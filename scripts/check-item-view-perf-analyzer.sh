@@ -157,18 +157,12 @@ if [[ "$image_renderer_gate_evidence" != *"Default-promotion gate: pass"* ]]; th
     exit 1
 fi
 
-if "$image_renderer_compare" --gate-hybrid-handoff "$tmpdir/custom-theme-clean.log" "$tmpdir/default-split.log" >/dev/null 2>&1; then
-    echo "expected obsolete hybrid handoff gate to fail" >&2
-    exit 1
-fi
-
-cat > "$tmpdir/legacy-no-icon-sync.log" <<'EOF'
+cat > "$tmpdir/missing-icon-sync.log" <<'EOF'
 [fika item-view] pane=1 mode=Compact phase=steady items=48 visible=32 raw=50us queue=1us convert=40us total=120us
 EOF
 
-legacy_summary="$("$analyzer" "$tmpdir/legacy-no-icon-sync.log")"
-if [[ "$legacy_summary" != *"item_view_stage_max"* || "$legacy_summary" != *"icon_sync=0us"* ]]; then
-    echo "expected legacy item-view logs without icon_sync to stay parseable" >&2
+if "$analyzer" "$tmpdir/missing-icon-sync.log" >/dev/null 2>&1; then
+    echo "expected item-view logs without icon_sync to fail" >&2
     exit 1
 fi
 

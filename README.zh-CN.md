@@ -56,13 +56,16 @@ cargo run -- /etc
   分屏 pane 走同一套 state/projection/slot-pool 路径。
 - 热路径 item view 使用 retained + virtualization：visible-slot 复用、投影缓存、
   text/icon atlas 缓存和显式 scroll metrics。
-- 2026-06-22 的 Dolphin 对齐突破已经落到 roadmap：MIME/icon role 按 role + size
-  复用，read-ahead 队列化，atlas 子矩形上传，并收紧 icon theme cache 边界。
+- Shell 热路径使用 MIME/icon role 按 role + size 复用、read-ahead 队列化、
+  atlas 子矩形上传，并收紧 icon theme cache 边界。
 - 文件管理器语义以 Dolphin 为第一参考；shell 层负责渲染、hit-test、DPI、输入路由、
   overlay 和 telemetry。
 
-## 活跃文档
+## 参考文档
 
-- [docs/TODO.md](docs/TODO.md) — 当前任务板。
-- [docs/WGPU_SHELL_ROADMAP.zh-CN.md](docs/WGPU_SHELL_ROADMAP.zh-CN.md) —
-  UI runtime 路线与迁移 gate。
+- [docs/DEVICES_REFERENCE.zh-CN.md](docs/DEVICES_REFERENCE.zh-CN.md) —
+  设备和 Places 行为。
+- [docs/NETWORK_REFERENCE.zh-CN.md](docs/NETWORK_REFERENCE.zh-CN.md) —
+  网络位置行为。
+- [docs/TRASH_REFERENCE.zh-CN.md](docs/TRASH_REFERENCE.zh-CN.md) —
+  回收站行为。

@@ -56,15 +56,17 @@ cargo run -- /etc
   containers, so split panes use the same state/projection/slot-pool path.
 - Hot item views are retained and virtualized: visible-slot reuse, cached
   projection, cached text/icon atlas work, and explicit scroll metrics.
-- The 2026-06-22 Dolphin alignment breakthrough is recorded in the roadmap:
-  MIME/icon role reuse by role + size, queued read-ahead, dirty-subrect atlas
-  uploads, and tighter icon theme cache ownership.
+- The shell hot path uses MIME/icon role reuse by role + size, queued
+  read-ahead, dirty-subrect atlas uploads, and tighter icon theme cache
+  ownership.
 - Core behavior follows Dolphin as the first reference for file-manager
   semantics, while the shell owns rendering, hit testing, DPI, input routing,
   overlays, and telemetry.
 
-## Active Docs
+## Reference Docs
 
-- [docs/TODO.md](docs/TODO.md) — current task board.
-- [docs/WGPU_SHELL_ROADMAP.md](docs/WGPU_SHELL_ROADMAP.md) — UI runtime route
-  and migration gates.
+- [docs/DEVICES_REFERENCE.md](docs/DEVICES_REFERENCE.md) — devices and Places
+  behavior.
+- [docs/NETWORK_REFERENCE.md](docs/NETWORK_REFERENCE.md) — network locations
+  behavior.
+- [docs/TRASH_REFERENCE.md](docs/TRASH_REFERENCE.md) — trash behavior.

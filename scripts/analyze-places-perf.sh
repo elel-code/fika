@@ -7,7 +7,7 @@ Usage: analyze-places-perf.sh [OPTIONS] LOG
        FIKA_PERF_PLACES_VIEW=1 FIKA_AUTOSMOKE_PLACES=targets target/debug/fika /etc 2>&1 | analyze-places-perf.sh [OPTIONS] -
 
 Summarizes FIKA_PERF_PLACES_VIEW logs and optionally enforces Places renderer
-baseline gates.
+policy gates.
 
 Options:
   --require-autosmoke
@@ -47,12 +47,6 @@ Options:
       Fail unless [fika places-event-probe] is present and its hitbox count
       matches the explicit retained-probe policy count.
 
-  --expect-current-gpui-policy
-      Fail unless [fika places-renderer-policy] matches the explicit GPUI row
-      and event-shell fallback baseline: row_gpui/icon_gpui equal rows,
-      row_visual_layer=0, retained_interaction=0, section_gpui=sections, and
-      drag_shell=0, scrollbar_canvas=1.
-
   --expect-custom-row-visual-policy
       Fail unless [fika places-renderer-policy] matches the opt-in
       custom text policy: row_visual_layer/icon_gpui equal rows,
@@ -70,12 +64,6 @@ Options:
       selected event policy, section_gpui=0, scrollbar_canvas=1, and
       visual_kind=full. Also requires aggregated [fika places-row-visual] logs
       whose rows count matches the policy rows and row text shape-cache logs.
-
-  --expect-custom-row-handoff-policy
-      Fail unless [fika places-renderer-policy] and [fika places-row-handoff]
-      prove the opt-in ready-only full visual handoff: initial full-policy frames
-      keep GPUI text/icons while the custom layer paints chrome only, then a
-      ready frame switches text_gpui/icon_gpui to 0 and paints full custom rows.
 
   --expect-custom-row-chrome-policy
       Fail unless [fika places-renderer-policy] matches the Dolphin-aligned
@@ -134,10 +122,8 @@ require_retained_dnd_autosmoke=false
 require_interaction_policy=false
 require_interaction_geometry=false
 require_event_probe=false
-expect_current_gpui_policy=false
 expect_custom_row_visual_policy=false
 expect_custom_row_full_policy=false
-expect_custom_row_handoff_policy=false
 expect_custom_row_chrome_policy=false
 expect_retained_event_policy=false
 snapshot_us=""
@@ -179,17 +165,11 @@ while [[ $# -gt 0 ]]; do
         --require-event-probe)
             require_event_probe=true
             ;;
-        --expect-current-gpui-policy)
-            expect_current_gpui_policy=true
-            ;;
         --expect-custom-row-visual-policy)
             expect_custom_row_visual_policy=true
             ;;
         --expect-custom-row-full-policy)
             expect_custom_row_full_policy=true
-            ;;
-        --expect-custom-row-handoff-policy)
-            expect_custom_row_handoff_policy=true
             ;;
         --expect-custom-row-chrome-policy)
             expect_custom_row_chrome_policy=true
@@ -338,10 +318,8 @@ awk \
     -v require_interaction_policy="$require_interaction_policy" \
     -v require_interaction_geometry="$require_interaction_geometry" \
     -v require_event_probe="$require_event_probe" \
-    -v expect_current_gpui_policy="$expect_current_gpui_policy" \
     -v expect_custom_row_visual_policy="$expect_custom_row_visual_policy" \
     -v expect_custom_row_full_policy="$expect_custom_row_full_policy" \
-    -v expect_custom_row_handoff_policy="$expect_custom_row_handoff_policy" \
     -v expect_custom_row_chrome_policy="$expect_custom_row_chrome_policy" \
     -v expect_retained_event_policy="$expect_retained_event_policy" \
     -v snapshot_limit="$snapshot_us" \
@@ -590,14 +568,6 @@ function renderer_retained_interaction_for_policy(event_policy, rows, sections) 
     } else {
         policy_kind_other_seen = 1
     }
-    if (expect_current_gpui_policy == "true") {
-        if (row_gpui != rows || text_gpui != rows || icon_gpui != rows || drag_shell != 0 ||
-            row_visual_layer != 0 || retained_interaction != 0 ||
-            section_gpui != last_sidebar_sections || scrollbar_canvas != 1 ||
-            visual_kind != "gpui") {
-            policy_invalid = 1
-        }
-    }
     if (expect_custom_row_visual_policy == "true") {
         if (row_gpui != 0 || text_gpui != 0 || icon_gpui != rows || drag_shell != 0 ||
             row_visual_layer != rows || retained_interaction != expected_retained_interaction ||
@@ -612,21 +582,6 @@ function renderer_retained_interaction_for_policy(event_policy, rows, sections) 
             section_gpui != 0 || scrollbar_canvas != 1 ||
             visual_kind != "full") {
             custom_full_policy_invalid = 1
-        }
-    }
-    if (expect_custom_row_handoff_policy == "true") {
-        handoff_policy_shape_valid = row_gpui == 0 && row_visual_layer == rows &&
-            drag_shell == 0 && retained_interaction == expected_retained_interaction &&
-            scrollbar_canvas == 1 && visual_kind == "full"
-        if (!handoff_policy_shape_valid) {
-            custom_handoff_policy_invalid = 1
-        } else if (text_gpui == rows && icon_gpui == rows &&
-            section_gpui == last_sidebar_sections) {
-            handoff_policy_fallback_seen = 1
-        } else if (text_gpui == 0 && icon_gpui == 0 && section_gpui == 0) {
-            handoff_policy_ready_seen = 1
-        } else {
-            custom_handoff_policy_invalid = 1
         }
     }
     if (expect_custom_row_chrome_policy == "true") {
@@ -653,44 +608,6 @@ function renderer_retained_interaction_for_policy(event_policy, rows, sections) 
             drag_shell != 0 || scrollbar_canvas != 1) {
             retained_event_renderer_policy_invalid = 1
         }
-    }
-}
-
-/^\[fika places-row-handoff\]/ {
-    row_handoff_frames++
-    rows = field("rows") + 0
-    enabled = field("enabled") + 0
-    ready = field("ready") + 0
-    frames_field = field("frames")
-    split(frames_field, frame_parts, "/")
-    frames_seen = frame_parts[1] + 0
-    required_frames = frame_parts[2] + 0
-    paint_text = field("paint_text") + 0
-    paint_icon = field("paint_icon") + 0
-    gpui_text = field("gpui_text") + 0
-    gpui_icon = field("gpui_icon") + 0
-    max_update("row_handoff_rows", rows)
-    max_update("row_handoff_frames_seen", frames_seen)
-    max_update("row_handoff_required_frames", required_frames)
-    max_update("row_handoff_paint_text", paint_text)
-    max_update("row_handoff_paint_icon", paint_icon)
-    max_update("row_handoff_gpui_text", gpui_text)
-    max_update("row_handoff_gpui_icon", gpui_icon)
-    if (enabled) {
-        row_handoff_enabled_seen = 1
-    }
-    if (ready) {
-        row_handoff_ready_seen = 1
-    } else {
-        row_handoff_fallback_seen = 1
-    }
-    if (enabled && !ready && paint_text == 0 && paint_icon == 0 &&
-        gpui_text == 1 && gpui_icon == 1) {
-        row_handoff_valid_fallback_seen = 1
-    }
-    if (enabled && ready && paint_text == 1 && paint_icon == 1 &&
-        gpui_text == 0 && gpui_icon == 0) {
-        row_handoff_valid_ready_seen = 1
     }
 }
 
@@ -1096,9 +1013,6 @@ END {
     if (!slot_unchanged_frame_seen) {
         fail("missing steady unchanged places slot frame")
     }
-    if (expect_current_gpui_policy == "true" && policy_invalid) {
-        fail("places renderer policy does not match current GPUI baseline")
-    }
     if (expect_custom_row_visual_policy == "true") {
         if (custom_policy_invalid) {
             fail("places renderer policy does not match opt-in custom text row visual policy")
@@ -1131,34 +1045,6 @@ END {
         }
         if (max_values["row_visual_rows"] != max_values["policy_rows"]) {
             fail("full custom Places row visual layer is not aggregated to the policy row count")
-        }
-    }
-    if (expect_custom_row_handoff_policy == "true") {
-        if (custom_handoff_policy_invalid) {
-            fail("places renderer policy does not match opt-in full custom row handoff policy")
-        }
-        if (!handoff_policy_fallback_seen || !handoff_policy_ready_seen) {
-            fail("missing renderer-policy fallback or ready frame for Places row handoff")
-        }
-        if (row_handoff_frames == 0) {
-            fail("missing [fika places-row-handoff] logs")
-        }
-        if (!row_handoff_enabled_seen ||
-            !row_handoff_valid_fallback_seen ||
-            !row_handoff_valid_ready_seen) {
-            fail("Places row handoff did not prove GPUI fallback followed by ready full custom paint")
-        }
-        if (row_visual_frames == 0) {
-            fail("missing [fika places-row-visual] logs for full custom row handoff policy")
-        }
-        if (row_shape_cache_frames == 0) {
-            fail("missing [fika places-row-shape-cache] logs for full custom row handoff policy")
-        }
-        if (row_glyph_cache_frames == 0) {
-            fail("missing [fika places-row-glyph-cache] logs for full custom row handoff policy")
-        }
-        if (max_values["row_visual_rows"] != max_values["policy_rows"]) {
-            fail("handoff Places row visual layer is not aggregated to the policy row count")
         }
     }
     if (expect_custom_row_chrome_policy == "true") {
@@ -1468,20 +1354,6 @@ END {
         row_visual_warm_frames,
         max_values["row_visual_warm_prepaint"],
         max_values["row_visual_warm_paint"])
-    printf("places_row_handoff_frames=%d max_rows=%d enabled=%d fallback=%d ready=%d valid_fallback=%d valid_ready=%d max_frames_seen=%d max_required_frames=%d max_paint_text=%d max_paint_icon=%d max_gpui_text=%d max_gpui_icon=%d\n",
-        row_handoff_frames,
-        max_values["row_handoff_rows"],
-        row_handoff_enabled_seen,
-        row_handoff_fallback_seen,
-        row_handoff_ready_seen,
-        row_handoff_valid_fallback_seen,
-        row_handoff_valid_ready_seen,
-        max_values["row_handoff_frames_seen"],
-        max_values["row_handoff_required_frames"],
-        max_values["row_handoff_paint_text"],
-        max_values["row_handoff_paint_icon"],
-        max_values["row_handoff_gpui_text"],
-        max_values["row_handoff_gpui_icon"])
     printf("places_icon_cache_refresh_frames=%d max_rows=%d requested=%d retained=%d loaded=%d decoded=%d missing=%d non_svg=%d max_requested=%d max_retained=%d max_loaded=%d max_decoded=%d max_missing=%d max_non_svg=%d max_total=%dus evicted=%d max_entries=%d max_bytes=%d max_evicted=%d\n",
         icon_cache_refresh_frames,
         max_values["icon_cache_refresh_rows"],

@@ -403,6 +403,16 @@ function us_field(name,    value) {
     return value + 0
 }
 
+function required_us_field(name, log_name,    value) {
+    value = field(name)
+    if (value == "") {
+        fail("missing " name "= in " log_name " line")
+        return 0
+    }
+    sub(/us$/, "", value)
+    return value + 0
+}
+
 function note_mode(mode) {
     if (mode != "") {
         modes[mode] = 1
@@ -509,11 +519,11 @@ BEGIN {
     if (phase == "") {
         phase = "unknown"
     }
-    total = us_field("total")
-    raw = us_field("raw")
-    icon_sync = us_field("icon_sync")
-    queue = us_field("queue")
-    convert = us_field("convert")
+    total = required_us_field("total", "[fika item-view]")
+    raw = required_us_field("raw", "[fika item-view]")
+    icon_sync = required_us_field("icon_sync", "[fika item-view]")
+    queue = required_us_field("queue", "[fika item-view]")
+    convert = required_us_field("convert", "[fika item-view]")
     visible = field("visible") + 0
     note_mode(mode)
     phase_count[phase]++

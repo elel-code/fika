@@ -32,10 +32,6 @@ while [[ $# -gt 0 ]]; do
             gate_mode="default-promotion"
             shift
             ;;
-        --gate-hybrid-handoff|--gate-hybrid-default-promotion)
-            echo "$1 is obsolete: ordinary MIME/theme icons no longer have a GPUI/hybrid renderer branch" >&2
-            exit 2
-            ;;
         *)
             break
             ;;

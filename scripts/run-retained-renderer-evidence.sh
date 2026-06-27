@@ -5,10 +5,9 @@ usage() {
     cat <<'EOF'
 Usage: run-retained-renderer-evidence.sh [OPTIONS]
 
-Captures and analyzes the retained-renderer Track 1 runtime evidence described
-in docs/RETAINED_RENDERER_EVIDENCE_CHECKLIST.md. Run this from a real desktop
-session; headless/sandbox sessions can fail with GPUI NoCompositor and are not
-valid runtime evidence.
+Captures and analyzes retained item-view and Places runtime evidence. Run this
+from a real desktop session; headless/sandbox sessions are not valid runtime
+evidence.
 
 Options:
   --core
@@ -20,25 +19,12 @@ Options:
   --places-only
       Capture only Places evidence.
 
-  --icons
-      Obsolete. Ordinary MIME/theme icons no longer have a GPUI image-element
-      renderer branch; use --items-only and inspect gpui_image_element=0.
-
-  --hybrid-icons
-      Obsolete. The GPUI-to-custom readiness handoff renderer branch was
-      removed for ordinary MIME/theme icons.
-
-  --places-full-handoff
-      Capture paired Places chrome-baseline vs full ready-only handoff logs
-      for targets, overflow, and layout. Full rows are already the default;
-      this is a regression/baseline suite for the handoff path.
-
   --metadata-tail-scroll
       Capture a small extensionless-file directory with wgpu autosmoke scroll
       enabled and gate metadata role prewarm/drain evidence for tail scrolling.
 
   --all
-      Same as --core --places-full-handoff --metadata-tail-scroll.
+      Same as --core --metadata-tail-scroll.
 
   --analyze-only
       Do not launch Fika. Re-run analyzers against existing logs.
@@ -74,7 +60,6 @@ downloads_dir="${HOME:-}/Downloads"
 timeout_seconds=8
 capture_items=false
 capture_places=false
-capture_places_full_handoff=false
 capture_metadata_tail_scroll=false
 analyze_only=false
 skip_build=false
@@ -97,18 +82,6 @@ while [[ $# -gt 0 ]]; do
             capture_items=false
             capture_places=true
             ;;
-        --icons)
-            echo "--icons is obsolete: ordinary MIME/theme icons are always self-painted now" >&2
-            exit 2
-            ;;
-        --hybrid-icons)
-            echo "--hybrid-icons is obsolete: the MIME/theme readiness handoff renderer was removed" >&2
-            exit 2
-            ;;
-        --places-full-handoff)
-            explicit_selection=true
-            capture_places_full_handoff=true
-            ;;
         --metadata-tail-scroll)
             explicit_selection=true
             capture_metadata_tail_scroll=true
@@ -117,7 +90,6 @@ while [[ $# -gt 0 ]]; do
             explicit_selection=true
             capture_items=true
             capture_places=true
-            capture_places_full_handoff=true
             capture_metadata_tail_scroll=true
             ;;
         --analyze-only)
@@ -395,45 +367,6 @@ if [[ "$capture_places" == true ]]; then
     run_gate "places dnd" "$places_analyzer" --require-retained-dnd-autosmoke "${places_common[@]}" "$places_dnd_log"
     run_gate "places full retained-event" \
         "$places_analyzer" --expect-retained-event-policy "$places_dnd_log"
-fi
-
-if [[ "$capture_places_full_handoff" == true ]]; then
-    places_analyzer="$root_dir/scripts/analyze-places-perf.sh"
-    places_handoff_chrome_targets_log="$(log_path places-handoff-chrome-targets)"
-    places_handoff_full_targets_log="$(log_path places-handoff-full-targets)"
-    places_handoff_chrome_overflow_log="$(log_path places-handoff-chrome-overflow)"
-    places_handoff_full_overflow_log="$(log_path places-handoff-full-overflow)"
-    places_handoff_chrome_layout_log="$(log_path places-handoff-chrome-layout)"
-    places_handoff_full_layout_log="$(log_path places-handoff-full-layout)"
-
-    run_capture "places handoff chrome targets" "$places_handoff_chrome_targets_log" \
-        env FIKA_PERF_ITEM_VIEW=1 FIKA_PERF_PLACES_VIEW=1 FIKA_PLACES_ROW_VISUAL_POLICY=chrome FIKA_AUTOSMOKE_PLACES=targets "$binary" /etc
-    run_capture "places handoff full targets" "$places_handoff_full_targets_log" \
-        env FIKA_PERF_ITEM_VIEW=1 FIKA_PERF_PLACES_VIEW=1 FIKA_PLACES_ROW_VISUAL_POLICY=full FIKA_PLACES_ROW_VISUAL_HANDOFF=1 FIKA_AUTOSMOKE_PLACES=targets "$binary" /etc
-    run_capture "places handoff chrome overflow" "$places_handoff_chrome_overflow_log" \
-        env FIKA_PERF_ITEM_VIEW=1 FIKA_PERF_PLACES_VIEW=1 FIKA_PLACES_ROW_VISUAL_POLICY=chrome FIKA_AUTOSMOKE_PLACES=overflow "$binary" /etc
-    run_capture "places handoff full overflow" "$places_handoff_full_overflow_log" \
-        env FIKA_PERF_ITEM_VIEW=1 FIKA_PERF_PLACES_VIEW=1 FIKA_PLACES_ROW_VISUAL_POLICY=full FIKA_PLACES_ROW_VISUAL_HANDOFF=1 FIKA_AUTOSMOKE_PLACES=overflow "$binary" /etc
-    run_capture "places handoff chrome layout" "$places_handoff_chrome_layout_log" \
-        env FIKA_PERF_ITEM_VIEW=1 FIKA_PERF_PLACES_VIEW=1 FIKA_PLACES_ROW_VISUAL_POLICY=chrome FIKA_AUTOSMOKE_PLACES=layout "$binary" /etc
-    run_capture "places handoff full layout" "$places_handoff_full_layout_log" \
-        env FIKA_PERF_ITEM_VIEW=1 FIKA_PERF_PLACES_VIEW=1 FIKA_PLACES_ROW_VISUAL_POLICY=full FIKA_PLACES_ROW_VISUAL_HANDOFF=1 FIKA_AUTOSMOKE_PLACES=layout "$binary" /etc
-
-    places_handoff_chrome_common=(--require-interaction-policy --require-interaction-geometry --expect-custom-row-chrome-policy --render-total-us 25000)
-    places_handoff_full_common=(--require-interaction-policy --require-interaction-geometry --expect-custom-row-handoff-policy --row-visual-prepaint-us 1000 --row-visual-paint-us 3000 --row-visual-warm-prepaint-us 500 --row-visual-warm-paint-us 3000 --render-total-us 30000)
-
-    run_gate "places handoff chrome targets" \
-        "$places_analyzer" --require-autosmoke "${places_handoff_chrome_common[@]}" "$places_handoff_chrome_targets_log"
-    run_gate "places handoff full targets" \
-        "$places_analyzer" --require-autosmoke "${places_handoff_full_common[@]}" "$places_handoff_full_targets_log"
-    run_gate "places handoff chrome overflow" \
-        "$places_analyzer" --require-overflow-autosmoke "${places_handoff_chrome_common[@]}" "$places_handoff_chrome_overflow_log"
-    run_gate "places handoff full overflow" \
-        "$places_analyzer" --require-overflow-autosmoke "${places_handoff_full_common[@]}" "$places_handoff_full_overflow_log"
-    run_gate "places handoff chrome layout" \
-        "$places_analyzer" --require-layout-autosmoke "${places_handoff_chrome_common[@]}" "$places_handoff_chrome_layout_log"
-    run_gate "places handoff full layout" \
-        "$places_analyzer" --require-layout-autosmoke "${places_handoff_full_common[@]}" "$places_handoff_full_layout_log"
 fi
 
 echo "retained renderer evidence complete"

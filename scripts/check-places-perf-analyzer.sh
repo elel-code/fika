@@ -61,7 +61,6 @@ summary="$("$analyzer" \
     --require-autosmoke \
     --require-interaction-policy \
     --require-interaction-geometry \
-    --expect-current-gpui-policy \
     --snapshot-us 5000 \
     --sidebar-build-us 1000 \
     --slot-project-us 100 \
@@ -169,69 +168,6 @@ if [[ "$full_summary" != *"max_row_gpui=0 max_row_visual_layer=11 max_icon_gpui=
 fi
 if [[ "$full_summary" != *"places_icon_cache_refresh_frames=1 max_rows=11 requested=11 retained=9 loaded=2 decoded=2 missing=0 non_svg=0 max_requested=11 max_retained=9 max_loaded=2 max_decoded=2 max_missing=0 max_non_svg=0 max_total=120us"* ]]; then
     echo "expected full custom Places icon cache-refresh summary" >&2
-    exit 1
-fi
-
-cat > "$tmpdir/custom-row-full-handoff.log" <<'EOF'
-[fika places-slots] rows=11 sections=2 entries=13 inserted=13 content=0 geometry=0 visual=0 unchanged=0 removed=0 project=25us
-[fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
-[fika places-view] source=11 visible=11 sections=2 snapshot=100us
-[fika places-sidebar] rows=11 sections=2 elements=13 build=240us
-[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=11 icon_gpui=11 retained_interaction=0 drag_shell=0 section_gpui=2 scrollbar_canvas=1 visual_kind=full
-[fika places-row-handoff] rows=11 enabled=1 ready=0 frames=1/2 paint_text=0 paint_icon=0 gpui_text=1 gpui_icon=1
-[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=0
-[fika places-row-visual] rows=11 painted=11 prepaint=20us paint=55us
-[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=11 icon_gpui=11 retained_interaction=0 drag_shell=0 section_gpui=2 scrollbar_canvas=1 visual_kind=full
-[fika places-row-handoff] rows=11 enabled=1 ready=0 frames=2/2 paint_text=0 paint_icon=0 gpui_text=1 gpui_icon=1
-[fika places-row-visual] rows=11 painted=11 prepaint=18us paint=50us
-[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=0 icon_gpui=0 retained_interaction=0 drag_shell=0 section_gpui=0 scrollbar_canvas=1 visual_kind=full
-[fika places-row-handoff] rows=11 enabled=1 ready=1 frames=2/2 paint_text=1 paint_icon=1 gpui_text=0 gpui_icon=0
-[fika places-row-visual] rows=11 painted=11 prepaint=260us paint=240us
-[fika places-row-shape-cache] hits=0 misses=11 evicted=0 entries=11
-[fika places-row-glyph-cache] hits=0 misses=11 evicted=0 entries=11
-[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=0 icon_gpui=0 retained_interaction=0 drag_shell=0 section_gpui=0 scrollbar_canvas=1 visual_kind=full
-[fika places-row-handoff] rows=11 enabled=1 ready=1 frames=2/2 paint_text=1 paint_icon=1 gpui_text=0 gpui_icon=0
-[fika places-row-visual] rows=11 painted=11 prepaint=35us paint=230us
-[fika places-row-shape-cache] hits=11 misses=0 evicted=0 entries=11
-[fika places-row-glyph-cache] hits=11 misses=0 evicted=0 entries=11
-EOF
-
-handoff_summary="$("$analyzer" \
-    --expect-custom-row-handoff-policy \
-    --row-visual-prepaint-us 300 \
-    --row-visual-paint-us 1000 \
-    --row-visual-warm-prepaint-us 300 \
-    --row-visual-warm-paint-us 1000 \
-    "$tmpdir/custom-row-full-handoff.log")"
-
-if [[ "$handoff_summary" != *"places_row_handoff_frames=4 max_rows=11 enabled=1 fallback=1 ready=1 valid_fallback=1 valid_ready=1 max_frames_seen=2 max_required_frames=2 max_paint_text=1 max_paint_icon=1 max_gpui_text=1 max_gpui_icon=1"* ]]; then
-    echo "expected full custom Places row handoff summary" >&2
-    exit 1
-fi
-
-if "$analyzer" \
-    --expect-custom-row-handoff-policy \
-    --row-visual-warm-prepaint-us 100 \
-    "$tmpdir/custom-row-full-handoff.log" >/dev/null 2>&1; then
-    echo "expected full custom Places handoff warm-prepaint gate to fail" >&2
-    exit 1
-fi
-
-cat > "$tmpdir/custom-row-full-handoff-missing-ready.log" <<'EOF'
-[fika places-slots] rows=11 sections=2 entries=13 inserted=13 content=0 geometry=0 visual=0 unchanged=0 removed=0 project=25us
-[fika places-slots] rows=11 sections=2 entries=13 inserted=0 content=0 geometry=0 visual=0 unchanged=13 removed=0 project=21us
-[fika places-view] source=11 visible=11 sections=2 snapshot=100us
-[fika places-sidebar] rows=11 sections=2 elements=13 build=240us
-[fika places-renderer-policy] rows=11 row_gpui=0 row_visual_layer=11 text_gpui=11 icon_gpui=11 retained_interaction=0 drag_shell=0 section_gpui=2 scrollbar_canvas=1 visual_kind=full
-[fika places-row-handoff] rows=11 enabled=1 ready=0 frames=1/2 paint_text=0 paint_icon=0 gpui_text=1 gpui_icon=1
-[fika places-interaction-policy] rows=11 sections=2 row_target_decisions=11 section_target_decisions=2 retained_hitboxes=0 gpui_event_shells=13 drag_shells=0
-[fika places-row-visual] rows=11 painted=11 prepaint=20us paint=55us
-EOF
-
-if "$analyzer" \
-    --expect-custom-row-handoff-policy \
-    "$tmpdir/custom-row-full-handoff-missing-ready.log" >/dev/null 2>&1; then
-    echo "expected full custom Places handoff gate to reject missing ready frame" >&2
     exit 1
 fi
 
@@ -602,7 +538,6 @@ EOF
 
 overflow_summary="$("$analyzer" \
     --require-overflow-autosmoke \
-    --expect-current-gpui-policy \
     "$tmpdir/overflow.log")"
 
 if [[ "$overflow_summary" != *"places_scrollbar_frames=2 max_visible=1 max_scroll_y=1420.0"* ]]; then
@@ -634,7 +569,6 @@ EOF
 
 layout_summary="$("$analyzer" \
     --require-layout-autosmoke \
-    --expect-current-gpui-policy \
     "$tmpdir/layout.log")"
 
 if [[ "$layout_summary" != *"places_layout_autosmoke start=1 complete=1 initial=1 hide=1 show=1 resize=1 reset=1 restore=1 verify_saved=1"* ]]; then
@@ -663,7 +597,6 @@ hit_test_summary="$("$analyzer" \
     --require-hit-test-autosmoke \
     --require-interaction-policy \
     --require-interaction-geometry \
-    --expect-current-gpui-policy \
     "$tmpdir/hit-test.log")"
 
 if [[ "$hit_test_summary" != *"places_hit_test_autosmoke start=1 complete=1 row_before=1 row_body=1 row_after=1 section=1 summary=1 max_rows=11 max_sections=2"* ]]; then
@@ -850,11 +783,6 @@ cat > "$tmpdir/bad-policy.log" <<'EOF'
 [fika places-sidebar] rows=11 sections=2 elements=13 build=200us
 [fika places-renderer-policy] rows=11 row_gpui=10 row_visual_layer=1 icon_gpui=11 retained_interaction=1 drag_shell=0 section_gpui=2 scrollbar_canvas=1
 EOF
-
-if "$analyzer" --expect-current-gpui-policy "$tmpdir/bad-policy.log" >/dev/null 2>&1; then
-    echo "expected invalid current GPUI policy to fail" >&2
-    exit 1
-fi
 
 if "$analyzer" --expect-custom-row-visual-policy "$tmpdir/bad-policy.log" >/dev/null 2>&1; then
     echo "expected invalid custom row visual policy to fail" >&2
