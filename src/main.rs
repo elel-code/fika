@@ -181,6 +181,9 @@ use shell::pane_layout::{
     CompactLayoutCache, CompactLayoutCacheKey, CompactLayoutCacheValue, DetailsLayout,
     ShellCompactLayout, ShellLayout, navigation_target,
 };
+use shell::perf::{
+    ShellFrameLatencyAsyncResults, ShellFrameLatencyCounters, ShellFrameLatencyTracker,
+};
 use shell::prewarm::{
     IconRasterPrewarmStats, IconRolePrewarmStats, TextLabelPrewarmMode, TextLabelPrewarmStats,
     default_text_raster_miss_budget, icon_raster_miss_budget_for_frame,
@@ -3822,6 +3825,7 @@ struct ShellScene {
     places_changes: u64,
     places_resize_changes: u64,
     places_scroll_changes: u64,
+    content_scroll_changes: u64,
     keyboard_navigation: u64,
     rubber_band_updates: u64,
     view_switches: u64,
@@ -5474,6 +5478,7 @@ impl ShellScene {
             places_changes: 0,
             places_resize_changes: 0,
             places_scroll_changes: 0,
+            content_scroll_changes: 0,
             keyboard_navigation: 0,
             rubber_band_updates: 0,
             view_switches: 0,
@@ -15160,7 +15165,11 @@ impl ShellScene {
             }
         }
         let (new_x, new_y) = self.pane_scroll_offset(kind).unwrap_or((0.0, 0.0));
-        (new_x - old_x).abs() > f32::EPSILON || (new_y - old_y).abs() > f32::EPSILON
+        let scrolled = (new_x - old_x).abs() > f32::EPSILON || (new_y - old_y).abs() > f32::EPSILON;
+        if scrolled {
+            self.content_scroll_changes += 1;
+        }
+        scrolled
     }
 
     fn pane_scroll_metrics(
@@ -15590,6 +15599,9 @@ impl ShellScene {
             .is_some_and(|(old_scroll, new_scroll)| old_scroll != new_scroll);
         if places_changed {
             self.places_scroll_changes += 1;
+        }
+        if content_changed || split_content_changed {
+            self.content_scroll_changes += 1;
         }
         if open_with_changed {
             self.open_with_changes += 1;
@@ -16063,6 +16075,7 @@ struct WgpuState {
     rendered_view_switches: u64,
     last_render_dirty_key: Option<ShellRenderDirtyKey>,
     last_render_damage_snapshot: Option<ShellRenderDamageSnapshot>,
+    frame_latency: ShellFrameLatencyTracker,
     render_work_pending: bool,
     clean_redraw_skips: u64,
 }
@@ -16187,6 +16200,7 @@ impl WgpuState {
             rendered_view_switches: 0,
             last_render_dirty_key: None,
             last_render_damage_snapshot: None,
+            frame_latency: ShellFrameLatencyTracker::default(),
             render_work_pending: false,
             clean_redraw_skips: 0,
         })
@@ -16226,6 +16240,7 @@ impl WgpuState {
         let (
             metadata_role_stats,
             role_stats,
+            folder_preview_results,
             scene_icon_raster_prewarm_stats,
             scene_text_prewarm_stats,
         ) = {
@@ -16235,7 +16250,7 @@ impl WgpuState {
                 .collect::<Vec<_>>();
             let _folder_preview_role_stats =
                 scene.update_folder_preview_roles_for_projections(&projections);
-            let _folder_preview_results = scene.drain_folder_preview_role_results();
+            let folder_preview_results = scene.drain_folder_preview_role_results();
             let metadata_stats = scene.prewarm_file_metadata_roles(&projections);
             for projection in &projections {
                 if let Some(item) = projection.visible_items.first() {
@@ -16265,8 +16280,22 @@ impl WgpuState {
                 &projections,
                 text_label_prewarm_mode_for_scene_prewarm(reason),
             );
-            (metadata_stats, role_stats, icon_raster_stats, text_stats)
+            (
+                metadata_stats,
+                role_stats,
+                folder_preview_results,
+                icon_raster_stats,
+                text_stats,
+            )
         };
+        self.frame_latency.observe_async_results(
+            ShellFrameLatencyAsyncResults {
+                metadata_applied: metadata_result_stats.applied as u64,
+                folder_preview_results: folder_preview_results.applied as u64,
+                ..ShellFrameLatencyAsyncResults::default()
+            },
+            self.frame_count,
+        );
         let role_prewarm_us = role_start.elapsed().as_micros();
         if scene_icon_raster_prewarm_stats.entries > 0
             && (scene_icon_raster_prewarm_stats.raster_us >= 1000
@@ -16414,6 +16443,22 @@ impl WgpuState {
             folder_preview_results.applied > 0 && !folder_preview_damage_rects.is_empty();
         let async_results_changed = non_folder_preview_async_results_changed
             || visible_folder_preview_async_results_changed;
+        self.frame_latency
+            .observe_scene_counters(frame_latency_counters_for_scene(scene), self.frame_count);
+        self.frame_latency.observe_async_results(
+            ShellFrameLatencyAsyncResults {
+                metadata_applied: metadata_result_stats.applied as u64,
+                icon_resolve_results: icon_resolve_results as u64,
+                icon_raster_results: icon_raster_results as u64,
+                thumbnail_results: thumbnail_results as u64,
+                folder_preview_results: if visible_folder_preview_async_results_changed {
+                    folder_preview_results.applied as u64
+                } else {
+                    0
+                },
+            },
+            self.frame_count,
+        );
         if self.can_skip_clean_redraw(
             reason,
             force_log,
@@ -16718,6 +16763,17 @@ impl WgpuState {
 
         let view_switch_rendered = self.rendered_view_switches != scene.view_switches;
         self.frame_count += 1;
+        for report in self.frame_latency.drain_presented(self.frame_count) {
+            fika_log!(
+                "[fika-wgpu] frame-latency event={} count={} requested_after_frame={} presented_frame={} frames={} reason={}",
+                report.event,
+                report.count,
+                report.requested_after_frame,
+                report.presented_frame,
+                report.frames,
+                reason
+            );
+        }
         if self.frame_count == 1
             || view_switch_rendered
             || force_log
@@ -16725,7 +16781,7 @@ impl WgpuState {
             || self.last_log.elapsed() >= Duration::from_secs(1)
         {
             fika_log!(
-                "[fika-wgpu] frame={} reason={} view={} scale={:.2} zoom={} zoom_changes={} path={} entries={} filtered={} show_hidden={} hidden_changes={} location_active={} location_changes={} filter_active={} filter_changes={} places={} places_visible={} places_width={:.1} place_hover={} places_changes={} places_resize_changes={} places_scroll_y={:.1} places_scroll_changes={} split_pane={} split_changes={} split_path={} content_scrollbar={} visible={} thumbnails={} folder_previews={} slots={}/{} slot_reused={} slot_recycled={} slot_allocated={} selected={} hover={} dnd_hover={} dnd_hover_changes={} dnd_drop_requests={} context={} context_menu={} context_changes={} context_actions={} properties={} properties_changes={} create_dialog={} create_changes={} rename_dialog={} rename_changes={} open_with={} open_with_changes={} open_changes={} copy_location_changes={} file_clipboard_changes={} paste_changes={} trash_changes={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} path_changes={} reloads={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_deferred={} icon_raster_deferred={} thumb_loaded={} thumb_quads={} thumb_deferred={} thumb_read_ahead={} thumb_ready={}/{}b folder_preview_loaded={} folder_preview_quads={} folder_preview_deferred={} folder_preview_read_ahead={} folder_preview_ready={}/{}b icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_atlas_uploads={}/{} icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_deferred={} text_cache={}/{} entries={} bytes={} swash_cache={}/{} swash_reset={} text_atlas_reused={} text_atlas_uploads={}/{} batches={} vertex_uploads={}/{} damage={} damage_rects={} damage_area={:.0} damage_bounds={:.1},{:.1},{:.1},{:.1} scroll_x={:.1} scroll_y={:.1} prewarm={}us surface={}us prepare={}us quad_upload={}us encode_present={}us layout={}us text_raster={}us text_atlas={}x{}:{}b dirty_skips={} dirty_pending={} render={}us",
+                "[fika-wgpu] frame={} reason={} view={} scale={:.2} zoom={} zoom_changes={} path={} entries={} filtered={} show_hidden={} hidden_changes={} location_active={} location_changes={} filter_active={} filter_changes={} places={} places_visible={} places_width={:.1} place_hover={} places_changes={} places_resize_changes={} places_scroll_y={:.1} places_scroll_changes={} content_scroll_changes={} split_pane={} split_changes={} split_path={} content_scrollbar={} visible={} thumbnails={} folder_previews={} slots={}/{} slot_reused={} slot_recycled={} slot_allocated={} selected={} hover={} dnd_hover={} dnd_hover_changes={} dnd_drop_requests={} context={} context_menu={} context_changes={} context_actions={} properties={} properties_changes={} create_dialog={} create_changes={} rename_dialog={} rename_changes={} open_with={} open_with_changes={} open_changes={} copy_location_changes={} file_clipboard_changes={} paste_changes={} trash_changes={} rubber_band={} hit_tests={} selection_changes={} keyboard_nav={} rubber_band_updates={} view_switches={} path_changes={} reloads={} quads={} layout_content={:.1}x{:.1} first_item={:.1},{:.1},{:.1},{:.1} icons={} icon_quads={} icon_fallbacks={} icon_deferred={} icon_raster_deferred={} thumb_loaded={} thumb_quads={} thumb_deferred={} thumb_read_ahead={} thumb_ready={}/{}b folder_preview_loaded={} folder_preview_quads={} folder_preview_deferred={} folder_preview_read_ahead={} folder_preview_ready={}/{}b icon_cache={}/{} entries={} bytes={} icon_atlas={}x{}:{}b icon_atlas_uploads={}/{} icon_resolve={}us icon_raster={}us text_labels={} text_quads={} text_deferred={} text_cache={}/{} entries={} bytes={} swash_cache={}/{} swash_reset={} text_atlas_reused={} text_atlas_uploads={}/{} batches={} vertex_uploads={}/{} damage={} damage_rects={} damage_area={:.0} damage_bounds={:.1},{:.1},{:.1},{:.1} scroll_x={:.1} scroll_y={:.1} prewarm={}us surface={}us prepare={}us quad_upload={}us encode_present={}us layout={}us text_raster={}us text_atlas={}x{}:{}b dirty_skips={} dirty_pending={} render={}us",
                 self.frame_count,
                 reason,
                 scene.panes[ShellPaneId::SLOT_0].view_mode.as_str(),
@@ -16749,6 +16805,7 @@ impl WgpuState {
                 scene.places_resize_changes,
                 scene.places_scroll_y,
                 scene.places_scroll_changes,
+                scene.content_scroll_changes,
                 scene.panes.is_open(ShellPaneId::SLOT_1) as u8,
                 scene.split_pane_changes,
                 scene
@@ -16932,6 +16989,16 @@ impl WgpuState {
 
 fn clean_render_skip_reason_allowed(reason: &str, force_log: bool) -> bool {
     reason == "redraw" && !force_log || reason == "switch-redraw" && force_log
+}
+
+fn frame_latency_counters_for_scene(scene: &ShellScene) -> ShellFrameLatencyCounters {
+    ShellFrameLatencyCounters {
+        zoom_changes: scene.zoom_changes,
+        content_scroll_changes: scene.content_scroll_changes,
+        places_scroll_changes: scene.places_scroll_changes,
+        path_changes: scene.path_changes,
+        directory_reloads: scene.directory_reloads,
+    }
 }
 
 impl Drop for WgpuState {
@@ -24512,6 +24579,7 @@ mod tests {
             places_changes: 0,
             places_resize_changes: 0,
             places_scroll_changes: 0,
+            content_scroll_changes: 0,
             keyboard_navigation: 0,
             rubber_band_updates: 0,
             view_switches: 0,
@@ -29908,6 +29976,7 @@ mod tests {
         assert!(scene.scroll_by(120.0, size));
         assert_eq!(scene.panes[ShellPaneId::SLOT_0].scroll_y, 0.0);
         assert!(scene.panes.get(ShellPaneId::SLOT_1).unwrap().scroll_y > 0.0);
+        assert_eq!(scene.content_scroll_changes, 1);
     }
 
     #[test]
@@ -29958,6 +30027,7 @@ mod tests {
         assert!(scene.set_pointer(drag_to, size));
         assert_eq!(scene.panes[ShellPaneId::SLOT_0].scroll_y, 0.0);
         assert!(scene.panes.get(ShellPaneId::SLOT_1).unwrap().scroll_y > 0.0);
+        assert_eq!(scene.content_scroll_changes, 1);
         let _ = scene.end_scrollbar_drag(drag_to, size);
         assert!(scene.scrollbar_drag.is_none());
     }
@@ -29991,6 +30061,7 @@ mod tests {
         assert!(scene.places_scroll_y > 0.0);
         assert_eq!(scene.panes[ShellPaneId::SLOT_0].scroll_y, 0.0);
         assert_eq!(scene.places_scroll_changes, 1);
+        assert_eq!(scene.content_scroll_changes, 0);
 
         scene.pointer = Some(ViewPoint {
             x: scene.content_origin_x(size) + 10.0,
@@ -29999,6 +30070,7 @@ mod tests {
         assert!(scene.scroll_by(90.0, size));
         assert!(scene.panes[ShellPaneId::SLOT_0].scroll_y > 0.0);
         assert_eq!(scene.places_scroll_changes, 1);
+        assert_eq!(scene.content_scroll_changes, 1);
     }
 
     #[test]
@@ -30138,6 +30210,7 @@ mod tests {
         assert!(scene.set_pointer(drag_to, size));
         assert!(scene.panes[ShellPaneId::SLOT_0].scroll_y > 0.0);
         assert_eq!(scene.panes[ShellPaneId::SLOT_0].scroll_x, 0.0);
+        assert_eq!(scene.content_scroll_changes, 1);
         let _ = scene.end_scrollbar_drag(drag_to, size);
         assert!(scene.scrollbar_drag.is_none());
     }

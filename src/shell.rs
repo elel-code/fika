@@ -17,6 +17,7 @@ pub(crate) mod open_with;
 pub(crate) mod options;
 pub(crate) mod pane;
 pub(crate) mod pane_layout;
+pub(crate) mod perf;
 pub(crate) mod prewarm;
 pub(crate) mod properties;
 pub(crate) mod role_worker_queue;
