@@ -39,8 +39,8 @@ use fika_core::{
     perform_device_place_operation, place_order_path_for_user_places_path, push_unique_path,
     read_entries_sync, read_gio_devices, read_network_entry_batches_sync_cancellable,
     resolve_location_input, run_operation_task, run_via_dbus, save_app_settings, save_place_order,
-    save_user_places, service_menu_target_label, thumbnail_request_may_have_preview,
-    trash_view_operation_result,
+    save_user_places, service_menu_target_label, set_default_mime_application,
+    thumbnail_request_may_have_preview, trash_view_operation_result,
 };
 use notify::event::{MetadataKind as NotifyMetadataKind, ModifyKind as NotifyModifyKind};
 use notify::{
@@ -205,8 +205,8 @@ use wgpu_metadata_roles::{
 use wgpu_metrics::*;
 use wgpu_open_file::{OpenFileRequest, default_open_file_launch_request};
 use wgpu_open_with::{
-    OpenWithChooserClick, OpenWithLaunchRequest, ServiceMenuLaunchRequest, ShellOpenWithChooser,
-    open_with_applications_for_mime,
+    OpenWithChooserClick, OpenWithDefaultUpdate, OpenWithLaunchRequest, ServiceMenuLaunchRequest,
+    ShellOpenWithChooser, open_with_applications_for_mime,
 };
 use wgpu_options::{ShellViewMode, parse_start_options};
 use wgpu_pane::{
@@ -361,6 +361,7 @@ enum ScrollbarDragTarget {
         pane: ShellPaneId,
         axis: ContentScrollbarAxis,
     },
+    OpenWith,
     Places,
     PlacesResize,
     SplitPaneResize,
@@ -1313,6 +1314,12 @@ impl ApplicationHandler for FikaWgpuApp {
                     y: position.y as f32,
                 };
                 if self.scene.is_open_with_chooser_open() {
+                    if self.scene.is_scrollbar_dragging() {
+                        let changed = self.scene.set_pointer(point, size);
+                        if changed && let Some(window) = self.window.as_ref() {
+                            window.request_redraw();
+                        }
+                    }
                     self.set_window_cursor(CursorIcon::Default);
                     return;
                 }
@@ -1372,7 +1379,24 @@ impl ApplicationHandler for FikaWgpuApp {
                     return;
                 };
                 if self.scene.is_open_with_chooser_open() {
+                    if state == ElementState::Released && self.scene.is_scrollbar_dragging() {
+                        let changed = self.scene.end_scrollbar_drag(point, size);
+                        self.set_window_cursor(CursorIcon::Default);
+                        if changed && let Some(window) = self.window.as_ref() {
+                            window.request_redraw();
+                        }
+                        return;
+                    }
                     if state == ElementState::Pressed && mouse_button == MouseButton::Left {
+                        if let Some(changed) =
+                            self.scene.begin_open_with_scrollbar_drag(point, size)
+                        {
+                            self.set_window_cursor(CursorIcon::Default);
+                            if changed && let Some(window) = self.window.as_ref() {
+                                window.request_redraw();
+                            }
+                            return;
+                        }
                         match self
                             .scene
                             .open_with_chooser_click_at_screen_point(point, size)
@@ -1385,6 +1409,13 @@ impl ApplicationHandler for FikaWgpuApp {
                                 }
                             }
                             OpenWithChooserClick::Open => self.commit_open_with_chooser(),
+                            OpenWithChooserClick::ToggleDefault => {
+                                if self.scene.toggle_open_with_set_default()
+                                    && let Some(window) = self.window.as_ref()
+                                {
+                                    window.request_redraw();
+                                }
+                            }
                             OpenWithChooserClick::Row(row) => {
                                 if self.scene.select_open_with_filtered_row(row)
                                     && let Some(window) = self.window.as_ref()
@@ -1693,9 +1724,17 @@ impl ApplicationHandler for FikaWgpuApp {
                 let Some(renderer) = self.renderer.as_ref() else {
                     return;
                 };
+                let delta_y = scroll_delta_y(delta, self.scene.ui_scale());
+                if self.scene.is_open_with_chooser_open() {
+                    if self.scene.scroll_open_with_chooser_by(delta_y)
+                        && let Some(window) = self.window.as_ref()
+                    {
+                        window.request_redraw();
+                    }
+                    return;
+                }
                 let shortcut =
                     self.modifiers.state().control_key() || self.modifiers.state().meta_key();
-                let delta_y = scroll_delta_y(delta, self.scene.ui_scale());
                 if shortcut {
                     if let Some(zoom_action) = zoom_action_for_scroll_delta(delta_y)
                         && self.scene.zoom(zoom_action, renderer.size)
@@ -2916,6 +2955,36 @@ impl FikaWgpuApp {
                 return;
             }
         };
+
+        if let Some(default_update) = request.default_update.as_ref() {
+            match set_default_mime_application(
+                &default_update.mime_type,
+                &default_update.desktop_id,
+            ) {
+                Ok(path) => {
+                    fika_log!(
+                        "[fika-wgpu] open-with-default mime={} desktop={} path={}",
+                        default_update.mime_type,
+                        default_update.desktop_id,
+                        path.display()
+                    );
+                    self.mime_applications = MimeApplicationCache::load();
+                }
+                Err(error) => {
+                    self.scene.record_task_status(ShellTaskStatus::failed(
+                        "Set Default Application failed",
+                        error.clone(),
+                        false,
+                    ));
+                    if self.scene.set_open_with_chooser_error(error)
+                        && let Some(window) = self.window.as_ref()
+                    {
+                        window.request_redraw();
+                    }
+                    return;
+                }
+            }
+        }
 
         self.scene.close_open_with_chooser_after_success(&request);
         let path = request.path.clone();
@@ -5360,6 +5429,7 @@ fn push_open_with_chooser(
                 push_hash(values, &chooser.query);
                 push_u64(values, chooser.selected_index as u64);
                 push_u64(values, chooser.scroll_row as u64);
+                push_bool(values, chooser.set_as_default);
                 push_hash(values, &chooser.error);
             }
         }
@@ -8695,6 +8765,39 @@ impl ShellScene {
         }
     }
 
+    fn toggle_open_with_set_default(&mut self) -> bool {
+        let Some(chooser) = self.open_with_chooser.as_mut() else {
+            return false;
+        };
+        if chooser.toggle_set_as_default() {
+            self.open_with_changes += 1;
+            self.log_open_with_chooser_state();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn scroll_open_with_chooser_by(&mut self, delta_y: f32) -> bool {
+        if delta_y.abs() <= f32::EPSILON {
+            return false;
+        }
+        let scale = self.ui_scale();
+        let row_height = scaled_dialog_metric(OPEN_WITH_CHOOSER_ROW_HEIGHT, scale).max(1.0);
+        let rows = (delta_y.abs() / row_height).ceil().max(1.0) as isize;
+        let delta = if delta_y > 0.0 { rows } else { -rows };
+        let Some(chooser) = self.open_with_chooser.as_mut() else {
+            return false;
+        };
+        if chooser.scroll_rows(delta) {
+            self.open_with_changes += 1;
+            self.log_open_with_chooser_state();
+            true
+        } else {
+            false
+        }
+    }
+
     fn open_with_launch_request(
         &self,
         cache: &MimeApplicationCache,
@@ -8712,9 +8815,23 @@ impl ShellScene {
         let plan = app
             .launch_plan(std::slice::from_ref(&chooser.path))
             .ok_or_else(|| format!("{} did not produce a launch command", app.name))?;
+        let default_update = if chooser.set_as_default && !selected.is_default {
+            let mime_type = chooser
+                .mime_type
+                .as_deref()
+                .ok_or_else(|| "cannot set a default application for an unknown MIME type")?
+                .to_string();
+            Some(OpenWithDefaultUpdate {
+                mime_type,
+                desktop_id: selected.id.clone(),
+            })
+        } else {
+            None
+        };
         Ok(OpenWithLaunchRequest {
             path: chooser.path.clone(),
             app_name: plan.app_name.clone(),
+            default_update,
             plan,
         })
     }
@@ -8742,6 +8859,7 @@ impl ShellScene {
         Ok(OpenWithLaunchRequest {
             path,
             app_name: plan.app_name.clone(),
+            default_update: None,
             plan,
         })
     }
@@ -8908,6 +9026,9 @@ impl ShellScene {
         if open_with_chooser_open_button_rect_scaled(rect, scale).contains(point) {
             return OpenWithChooserClick::Open;
         }
+        if open_with_chooser_default_checkbox_rect_scaled(rect, chooser, scale).contains(point) {
+            return OpenWithChooserClick::ToggleDefault;
+        }
         let list = open_with_chooser_list_rect_scaled(rect, chooser, scale);
         if list.contains(point) {
             let visible_row = ((point.y - list.y)
@@ -8924,12 +9045,14 @@ impl ShellScene {
     fn log_open_with_chooser_state(&self) {
         match self.open_with_chooser.as_ref() {
             Some(chooser) => fika_log!(
-                "[fika-wgpu] open-with open=1 path={} mime={} apps={} filtered={} selected={} query={:?} error={:?} changes={}",
+                "[fika-wgpu] open-with open=1 path={} mime={} apps={} filtered={} selected={} scroll={} set_default={} query={:?} error={:?} changes={}",
                 chooser.path.display(),
                 chooser.mime_type.as_deref().unwrap_or("unknown"),
                 chooser.applications.len(),
                 chooser.filtered_count(),
                 chooser.selected_index,
+                chooser.scroll_row,
+                chooser.set_as_default as u8,
                 chooser.query,
                 chooser.error,
                 self.open_with_changes
@@ -11420,7 +11543,7 @@ impl ShellScene {
             self.push_task_detail_dialog_overlay(&mut overlay_vertices, overlay_text, size);
             self.push_create_dialog_overlay(&mut overlay_vertices, overlay_text, size);
             self.push_rename_dialog_overlay(&mut overlay_vertices, overlay_text, size);
-            self.push_open_with_chooser_overlay(&mut overlay_vertices, overlay_text, size);
+            self.push_open_with_chooser_overlay(&mut overlay_vertices, overlay_text, icons, size);
             self.push_trash_conflict_dialog_overlay(&mut overlay_vertices, overlay_text, size);
         }
 
@@ -14347,6 +14470,7 @@ impl ShellScene {
         &self,
         vertices: &mut Vec<QuadVertex>,
         text: &mut TextFrameBuilder<'_>,
+        icons: &mut IconFrameBuilder<'_>,
         size: PhysicalSize<u32>,
     ) {
         let Some(chooser) = self.open_with_chooser.as_ref() else {
@@ -14423,24 +14547,52 @@ impl ShellScene {
             vertices,
             query,
             rect,
-            scaled_dialog_metric(5.0, scale),
+            scaled_dialog_metric(8.0, scale),
             POPUP_INPUT,
             size,
         );
         push_clipped_rect_outline(vertices, query, rect, 1.0, POPUP_FIELD_FOCUS, size);
+        let search_icon = ViewRect {
+            x: query.x + scaled_dialog_metric(10.0, scale),
+            y: query.y + (query.height - scaled_dialog_metric(14.0, scale)) / 2.0,
+            width: scaled_dialog_metric(14.0, scale),
+            height: scaled_dialog_metric(14.0, scale),
+        };
+        if !icons.push_named_theme_icon(
+            "edit-find",
+            NamedIconFallback::Service,
+            search_icon,
+            query,
+            IconDrawLayer::Overlay,
+        ) {
+            push_open_with_search_icon(vertices, search_icon, query, scale, size);
+        }
+        let query_text_rect = ViewRect {
+            x: search_icon.right() + scaled_dialog_metric(8.0, scale),
+            y: query.y + (query.height - scaled_dialog_metric(18.0, scale)) / 2.0,
+            width: (query.right() - search_icon.right() - scaled_dialog_metric(18.0, scale))
+                .max(1.0),
+            height: scaled_dialog_metric(18.0, scale),
+        };
         let query_label = if chooser.query.is_empty() {
-            "Search applications|".to_string()
+            "Search applications"
         } else {
-            format!("{}|", chooser.query)
+            chooser.query.as_str()
+        };
+        let cursor_x = if chooser.query.is_empty() {
+            0.0
+        } else {
+            text.measure_label_cursor_x(
+                &chooser.query,
+                query_text_rect,
+                chooser.query.len(),
+                LabelAlignment::Start,
+                LabelWrap::None,
+            )
         };
         text.push_label(
-            &query_label,
-            ViewRect {
-                x: query.x + scaled_dialog_metric(10.0, scale),
-                y: query.y + scaled_dialog_metric(7.0, scale),
-                width: (query.width - scaled_dialog_metric(20.0, scale)).max(1.0),
-                height: scaled_dialog_metric(18.0, scale),
-            },
+            query_label,
+            query_text_rect,
             query,
             if chooser.query.is_empty() {
                 popup_muted_text()
@@ -14448,13 +14600,39 @@ impl ShellScene {
                 popup_body_text()
             },
         );
+        let caret_width = scaled_dialog_metric(1.25, scale).max(1.0);
+        let caret_height = scaled_dialog_metric(18.0, scale)
+            .min(query.height - 8.0)
+            .max(1.0);
+        let caret_x = (query_text_rect.x + cursor_x).clamp(
+            query_text_rect.x,
+            (query_text_rect.right() - caret_width).max(query_text_rect.x),
+        );
+        push_clipped_rounded_rect(
+            vertices,
+            ViewRect {
+                x: caret_x,
+                y: query.y + (query.height - caret_height) / 2.0,
+                width: caret_width,
+                height: caret_height,
+            },
+            query,
+            caret_width / 2.0,
+            POPUP_FIELD_FOCUS,
+            size,
+        );
 
         let list = open_with_chooser_list_rect_scaled(rect, chooser, scale);
+        let scrollbar = open_with_chooser_scrollbar_rects_scaled(list, chooser, scale);
+        let row_content_right = scrollbar
+            .as_ref()
+            .map(|(track, _)| track.x - scaled_dialog_metric(8.0, scale))
+            .unwrap_or_else(|| list.right() - scaled_dialog_metric(10.0, scale));
         push_clipped_rounded_rect(
             vertices,
             list,
             rect,
-            scaled_dialog_metric(6.0, scale),
+            scaled_dialog_metric(8.0, scale),
             POPUP_INPUT,
             size,
         );
@@ -14479,15 +14657,23 @@ impl ShellScene {
                     continue;
                 };
                 let row_rect = ViewRect {
+                    x: list.x + scaled_dialog_metric(4.0, scale),
+                    y: list.y + visible_row as f32 * row_height + scaled_dialog_metric(3.0, scale),
+                    width: (row_content_right - list.x - scaled_dialog_metric(8.0, scale)).max(1.0),
+                    height: (row_height - scaled_dialog_metric(6.0, scale)).max(1.0),
+                };
+                let row_clip = ViewRect {
                     x: list.x,
                     y: list.y + visible_row as f32 * row_height,
                     width: list.width,
                     height: row_height,
                 };
                 let selected = row == chooser.selected_index;
-                push_rect(
+                push_clipped_rounded_rect(
                     vertices,
                     row_rect,
+                    list,
+                    scaled_dialog_metric(7.0, scale),
                     if selected {
                         POPUP_ROW_SELECTED
                     } else if application.is_default {
@@ -14500,14 +14686,16 @@ impl ShellScene {
                     size,
                 );
                 if selected || application.is_default {
-                    push_rect(
+                    push_clipped_rounded_rect(
                         vertices,
                         ViewRect {
                             x: row_rect.x,
-                            y: row_rect.y,
+                            y: row_rect.y + scaled_dialog_metric(6.0, scale),
                             width: scaled_dialog_metric(3.0, scale).max(1.0),
-                            height: row_rect.height,
+                            height: (row_rect.height - scaled_dialog_metric(12.0, scale)).max(1.0),
                         },
+                        list,
+                        scaled_dialog_metric(2.0, scale),
                         if selected {
                             POPUP_BUTTON_PRIMARY
                         } else {
@@ -14516,26 +14704,34 @@ impl ShellScene {
                         size,
                     );
                 }
-                let marker = ViewRect {
-                    x: row_rect.x + scaled_dialog_metric(10.0, scale),
-                    y: row_rect.y + scaled_dialog_metric(11.0, scale),
-                    width: scaled_dialog_metric(16.0, scale),
-                    height: scaled_dialog_metric(16.0, scale),
+                let icon_rect = ViewRect {
+                    x: row_rect.x + scaled_dialog_metric(13.0, scale),
+                    y: row_rect.y + (row_rect.height - scaled_dialog_metric(28.0, scale)) / 2.0,
+                    width: scaled_dialog_metric(28.0, scale),
+                    height: scaled_dialog_metric(28.0, scale),
                 };
-                push_clipped_rounded_rect(
-                    vertices,
-                    marker,
-                    list,
-                    scaled_dialog_metric(4.0, scale),
-                    if selected {
-                        POPUP_BUTTON_PRIMARY
-                    } else if application.is_default {
-                        POPUP_STATUS_COMPLETED
-                    } else {
-                        POPUP_MARKER_NEUTRAL
-                    },
-                    size,
-                );
+                let icon_pushed = application
+                    .icon
+                    .as_deref()
+                    .filter(|icon| !icon.is_empty())
+                    .is_some_and(|icon| {
+                        icons.push_named_theme_icon(
+                            icon,
+                            NamedIconFallback::Application,
+                            icon_rect,
+                            list,
+                            IconDrawLayer::Overlay,
+                        )
+                    });
+                if !icon_pushed {
+                    icons.push_named_theme_icon(
+                        "application-x-executable",
+                        NamedIconFallback::Application,
+                        icon_rect,
+                        list,
+                        IconDrawLayer::Overlay,
+                    );
+                }
                 let name = if application.is_default {
                     format!("{} (default)", application.name)
                 } else {
@@ -14544,12 +14740,15 @@ impl ShellScene {
                 text.push_label(
                     &name,
                     ViewRect {
-                        x: row_rect.x + scaled_dialog_metric(36.0, scale),
-                        y: row_rect.y + scaled_dialog_metric(4.0, scale),
-                        width: (row_rect.width - scaled_dialog_metric(48.0, scale)).max(1.0),
+                        x: icon_rect.right() + scaled_dialog_metric(12.0, scale),
+                        y: row_rect.y + scaled_dialog_metric(7.0, scale),
+                        width: (row_content_right
+                            - icon_rect.right()
+                            - scaled_dialog_metric(18.0, scale))
+                        .max(1.0),
                         height: scaled_dialog_metric(18.0, scale),
                     },
-                    row_rect,
+                    row_clip,
                     if selected {
                         popup_title_text()
                     } else {
@@ -14559,12 +14758,15 @@ impl ShellScene {
                 text.push_label(
                     &application.id,
                     ViewRect {
-                        x: row_rect.x + scaled_dialog_metric(36.0, scale),
-                        y: row_rect.y + scaled_dialog_metric(20.0, scale),
-                        width: (row_rect.width - scaled_dialog_metric(48.0, scale)).max(1.0),
+                        x: icon_rect.right() + scaled_dialog_metric(12.0, scale),
+                        y: row_rect.y + scaled_dialog_metric(25.0, scale),
+                        width: (row_content_right
+                            - icon_rect.right()
+                            - scaled_dialog_metric(18.0, scale))
+                        .max(1.0),
                         height: scaled_dialog_metric(14.0, scale),
                     },
-                    row_rect,
+                    row_clip,
                     if selected {
                         popup_soft_text()
                     } else {
@@ -14573,6 +14775,68 @@ impl ShellScene {
                 );
             }
         }
+
+        if let Some((track, thumb)) = scrollbar {
+            push_scrollbar(vertices, track, thumb, list, size);
+        }
+
+        let default_row = open_with_chooser_default_checkbox_rect_scaled(rect, chooser, scale);
+        let default_enabled = chooser.mime_type.is_some();
+        let checkbox_size = scaled_dialog_metric(16.0, scale);
+        let checkbox = ViewRect {
+            x: default_row.x,
+            y: default_row.y + (default_row.height - checkbox_size) / 2.0,
+            width: checkbox_size,
+            height: checkbox_size,
+        };
+        push_clipped_rounded_rect(
+            vertices,
+            checkbox,
+            rect,
+            scaled_dialog_metric(4.0, scale),
+            if chooser.set_as_default {
+                POPUP_BUTTON_PRIMARY
+            } else {
+                POPUP_INPUT
+            },
+            size,
+        );
+        push_clipped_rect_outline(
+            vertices,
+            checkbox,
+            rect,
+            1.0,
+            if default_enabled {
+                POPUP_BORDER
+            } else {
+                POPUP_DIVIDER
+            },
+            size,
+        );
+        if chooser.set_as_default {
+            push_open_with_checkbox_check(vertices, checkbox, rect, scale, size);
+        }
+        let default_label = chooser
+            .mime_type
+            .as_deref()
+            .map(|mime| format!("Set as default application for {mime}"))
+            .unwrap_or_else(|| "Set as default application".to_string());
+        text.push_label(
+            &default_label,
+            ViewRect {
+                x: checkbox.right() + scaled_dialog_metric(8.0, scale),
+                y: default_row.y + scaled_dialog_metric(3.0, scale),
+                width: (default_row.right() - checkbox.right() - scaled_dialog_metric(8.0, scale))
+                    .max(1.0),
+                height: scaled_dialog_metric(18.0, scale),
+            },
+            rect,
+            if default_enabled {
+                popup_body_text()
+            } else {
+                popup_muted_text()
+            },
+        );
 
         if chooser.filtered_count() > OPEN_WITH_CHOOSER_MAX_ROWS {
             let end = (chooser.scroll_row + visible.len()).min(chooser.filtered_count());
@@ -14585,7 +14849,7 @@ impl ShellScene {
                 ),
                 ViewRect {
                     x: rect.x + margin,
-                    y: list.bottom() + scaled_dialog_metric(5.0, scale),
+                    y: default_row.bottom() + scaled_dialog_metric(3.0, scale),
                     width: scaled_dialog_metric(120.0, scale),
                     height: scaled_dialog_metric(18.0, scale),
                 },
@@ -14599,7 +14863,7 @@ impl ShellScene {
                 error,
                 ViewRect {
                     x: rect.x + margin,
-                    y: list.bottom() + scaled_dialog_metric(5.0, scale),
+                    y: default_row.bottom() + scaled_dialog_metric(3.0, scale),
                     width: (rect.width - margin * 2.0).max(1.0),
                     height: scaled_dialog_metric(18.0, scale),
                 },
@@ -15246,6 +15510,39 @@ impl ShellScene {
         }
     }
 
+    fn open_with_chooser_scrollbar_rects(
+        &self,
+        size: PhysicalSize<u32>,
+    ) -> Option<(ViewRect, ViewRect)> {
+        let chooser = self.open_with_chooser.as_ref()?;
+        let scale = self.ui_scale();
+        let rect = open_with_chooser_rect_scaled(chooser, size, scale);
+        let list = open_with_chooser_list_rect_scaled(rect, chooser, scale);
+        open_with_chooser_scrollbar_rects_scaled(list, chooser, scale)
+    }
+
+    fn begin_open_with_scrollbar_drag(
+        &mut self,
+        point: ViewPoint,
+        size: PhysicalSize<u32>,
+    ) -> Option<bool> {
+        let (track, thumb) = self.open_with_chooser_scrollbar_rects(size)?;
+        if !track.contains(point) {
+            return None;
+        }
+        let grab_offset = if thumb.contains(point) {
+            point.y - thumb.y
+        } else {
+            thumb.height / 2.0
+        };
+        self.scrollbar_drag = Some(ScrollbarDrag {
+            target: ScrollbarDragTarget::OpenWith,
+            grab_offset,
+        });
+        self.pointer = Some(point);
+        Some(self.update_scrollbar_drag(point, size))
+    }
+
     fn begin_scrollbar_drag(&mut self, point: ViewPoint, size: PhysicalSize<u32>) -> Option<bool> {
         if let Some((track, thumb)) = self.places_scrollbar_rects(size)
             && track.contains(point)
@@ -15350,8 +15647,37 @@ impl ShellScene {
         let old_split_left_width = self
             .split_pane_metrics(size)
             .map(|metrics| metrics.left_width);
+        let old_open_with_scroll = self
+            .open_with_chooser
+            .as_ref()
+            .map(|chooser| chooser.scroll_row);
 
         match drag.target {
+            ScrollbarDragTarget::OpenWith => {
+                if let Some((track, thumb)) = self.open_with_chooser_scrollbar_rects(size) {
+                    let max_scroll = self
+                        .open_with_chooser
+                        .as_ref()
+                        .map(|chooser| {
+                            chooser
+                                .filtered_count()
+                                .saturating_sub(open_with_chooser_visible_row_count(chooser))
+                        })
+                        .unwrap_or(0);
+                    let next_row = scrollbar_scroll_from_pointer(
+                        point.y,
+                        drag.grab_offset,
+                        track.y,
+                        track.height,
+                        thumb.height,
+                        max_scroll as f32,
+                    )
+                    .round() as usize;
+                    if let Some(chooser) = self.open_with_chooser.as_mut() {
+                        chooser.scroll_row = next_row.min(max_scroll);
+                    }
+                }
+            }
             ScrollbarDragTarget::PlacesResize => {
                 let desired_width = point.x - drag.grab_offset;
                 self.set_places_sidebar_width_px(desired_width, size);
@@ -15432,13 +15758,24 @@ impl ShellScene {
                     .map(|metrics| metrics.left_width),
             )
             .is_some_and(|(old_width, new_width)| (old_width - new_width).abs() > f32::EPSILON);
+        let open_with_changed = old_open_with_scroll
+            .zip(
+                self.open_with_chooser
+                    .as_ref()
+                    .map(|chooser| chooser.scroll_row),
+            )
+            .is_some_and(|(old_scroll, new_scroll)| old_scroll != new_scroll);
         if places_changed {
             self.places_scroll_changes += 1;
+        }
+        if open_with_changed {
+            self.open_with_changes += 1;
         }
         let hover_changed = self.refresh_hover(size);
         content_changed
             || split_content_changed
             || places_changed
+            || open_with_changed
             || places_resized
             || split_resized
             || hover_changed
@@ -22129,6 +22466,72 @@ fn push_scrollbar(
     );
 }
 
+fn push_open_with_search_icon(
+    vertices: &mut Vec<QuadVertex>,
+    rect: ViewRect,
+    clip: ViewRect,
+    scale: f32,
+    size: PhysicalSize<u32>,
+) {
+    let stroke = scaled_dialog_metric(1.5, scale).max(1.0);
+    let lens = ViewRect {
+        x: rect.x,
+        y: rect.y,
+        width: rect.width * 0.72,
+        height: rect.height * 0.72,
+    };
+    push_clipped_rect_outline(vertices, lens, clip, stroke, POPUP_MARKER_NEUTRAL, size);
+    push_clipped_rounded_rect(
+        vertices,
+        ViewRect {
+            x: rect.x + rect.width * 0.62,
+            y: rect.y + rect.height * 0.68,
+            width: rect.width * 0.34,
+            height: stroke,
+        },
+        clip,
+        stroke / 2.0,
+        POPUP_MARKER_NEUTRAL,
+        size,
+    );
+}
+
+fn push_open_with_checkbox_check(
+    vertices: &mut Vec<QuadVertex>,
+    checkbox: ViewRect,
+    clip: ViewRect,
+    scale: f32,
+    size: PhysicalSize<u32>,
+) {
+    let stroke = scaled_dialog_metric(2.0, scale).max(1.0);
+    push_clipped_rounded_rect(
+        vertices,
+        ViewRect {
+            x: checkbox.x + checkbox.width * 0.25,
+            y: checkbox.y + checkbox.height * 0.55,
+            width: checkbox.width * 0.22,
+            height: stroke,
+        },
+        clip,
+        stroke / 2.0,
+        [1.0, 1.0, 1.0, 1.0],
+        size,
+    );
+    push_clipped_rounded_rect(
+        vertices,
+        ViewRect {
+            x: checkbox.x + checkbox.width * 0.42,
+            y: checkbox.y + checkbox.height * 0.30,
+            width: stroke,
+            height: checkbox.height * 0.44,
+        },
+        clip,
+        stroke / 2.0,
+        [1.0, 1.0, 1.0, 1.0],
+        size,
+    );
+}
+
 fn push_clipped_rounded_highlight(
     vertices: &mut Vec<QuadVertex>,
     rect: ViewRect,
@@ -23076,10 +23479,11 @@ fn open_with_chooser_rect_scaled(
     let dialog_height = (scaled_dialog_metric(OPEN_WITH_CHOOSER_TITLE_HEIGHT, scale_factor)
         + scaled_dialog_metric(16.0, scale_factor)
         + scaled_dialog_metric(OPEN_WITH_CHOOSER_QUERY_HEIGHT, scale_factor)
-        + scaled_dialog_metric(12.0, scale_factor)
+        + scaled_dialog_metric(10.0, scale_factor)
         + rows as f32 * scaled_dialog_metric(OPEN_WITH_CHOOSER_ROW_HEIGHT, scale_factor)
+        + scaled_dialog_metric(38.0, scale_factor)
         + error_height
-        + scaled_dialog_metric(54.0, scale_factor))
+        + scaled_dialog_metric(52.0, scale_factor))
     .min((height - margin * 2.0).max(1.0))
     .max(1.0);
     ViewRect {
@@ -23129,11 +23533,68 @@ fn open_with_chooser_list_rect_scaled(
     let query = open_with_chooser_query_rect_scaled(dialog_rect, scale_factor);
     ViewRect {
         x: dialog_rect.x + margin,
-        y: query.bottom() + scaled_dialog_metric(12.0, scale_factor),
+        y: query.bottom() + scaled_dialog_metric(10.0, scale_factor),
         width: (dialog_rect.width - margin * 2.0).max(1.0),
         height: open_with_chooser_visible_row_count(chooser) as f32
             * scaled_dialog_metric(OPEN_WITH_CHOOSER_ROW_HEIGHT, scale_factor),
     }
+}
+
+#[cfg(test)]
+#[allow(dead_code)]
+fn open_with_chooser_default_checkbox_rect(
+    dialog_rect: ViewRect,
+    chooser: &ShellOpenWithChooser,
+) -> ViewRect {
+    open_with_chooser_default_checkbox_rect_scaled(dialog_rect, chooser, 1.0)
+}
+
+fn open_with_chooser_default_checkbox_rect_scaled(
+    dialog_rect: ViewRect,
+    chooser: &ShellOpenWithChooser,
+    scale_factor: f32,
+) -> ViewRect {
+    let margin = scaled_dialog_metric(16.0, scale_factor);
+    let list = open_with_chooser_list_rect_scaled(dialog_rect, chooser, scale_factor);
+    ViewRect {
+        x: dialog_rect.x + margin,
+        y: list.bottom() + scaled_dialog_metric(8.0, scale_factor),
+        width: (dialog_rect.width - margin * 2.0).max(1.0),
+        height: scaled_dialog_metric(24.0, scale_factor),
+    }
+}
+
+fn open_with_chooser_scrollbar_rects_scaled(
+    list_rect: ViewRect,
+    chooser: &ShellOpenWithChooser,
+    scale_factor: f32,
+) -> Option<(ViewRect, ViewRect)> {
+    let total = chooser.filtered_count();
+    let visible = open_with_chooser_visible_row_count(chooser);
+    if total <= visible {
+        return None;
+    }
+    let margin = scaled_dialog_metric(6.0, scale_factor);
+    let width = scaled_dialog_metric(4.0, scale_factor).max(2.0);
+    let track = ViewRect {
+        x: list_rect.right() - margin - width,
+        y: list_rect.y + margin,
+        width,
+        height: (list_rect.height - margin * 2.0).max(1.0),
+    };
+    let thumb_height = (track.height * visible as f32 / total as f32)
+        .max(scaled_dialog_metric(28.0, scale_factor))
+        .min(track.height);
+    let max_scroll = total.saturating_sub(visible).max(1);
+    let ratio = (chooser.scroll_row.min(max_scroll) as f32 / max_scroll as f32).clamp(0.0, 1.0);
+    let travel = (track.height - thumb_height).max(0.0);
+    let thumb = ViewRect {
+        x: track.x,
+        y: track.y + travel * ratio,
+        width: track.width,
+        height: thumb_height,
+    };
+    Some((track, thumb))
 }
 
 #[cfg(test)]
@@ -31627,6 +32088,124 @@ text/plain=writer.desktop;\n",
     }
 
     #[test]
+    fn open_with_chooser_checkbox_toggles_default_setting() {
+        let mut scene = test_scene(vec![test_entry("note.txt", false)], ShellViewMode::Icons);
+        scene.open_with_chooser = Some(ShellOpenWithChooser::new(
+            PathBuf::from("/tmp/note.txt"),
+            Some(Arc::from("text/plain")),
+            vec![MimeApplication {
+                id: "writer.desktop".to_string(),
+                desktop_file: PathBuf::from("/apps/writer.desktop"),
+                name: "Writer".to_string(),
+                exec: "writer %f".to_string(),
+                icon: None,
+                is_default: false,
+            }],
+        ));
+        let size = PhysicalSize::new(640, 460);
+        let rect = open_with_chooser_rect(scene.open_with_chooser.as_ref().unwrap(), size);
+        let checkbox = open_with_chooser_default_checkbox_rect(
+            rect,
+            scene.open_with_chooser.as_ref().unwrap(),
+        );
+
+        assert_eq!(
+            scene.open_with_chooser_click_at_screen_point(
+                ViewPoint {
+                    x: checkbox.x + 2.0,
+                    y: checkbox.y + 2.0,
+                },
+                size,
+            ),
+            OpenWithChooserClick::ToggleDefault
+        );
+        assert!(scene.toggle_open_with_set_default());
+        assert!(scene.open_with_chooser.as_ref().unwrap().set_as_default);
+    }
+
+    #[test]
+    fn open_with_chooser_scrolls_visible_applications_without_changing_selection() {
+        let mut scene = test_scene(vec![test_entry("note.txt", false)], ShellViewMode::Icons);
+        let applications = (0..12)
+            .map(|index| MimeApplication {
+                id: format!("app{index}.desktop"),
+                desktop_file: PathBuf::from(format!("/apps/app{index}.desktop")),
+                name: format!("App {index}"),
+                exec: format!("app{index} %f"),
+                icon: None,
+                is_default: index == 0,
+            })
+            .collect::<Vec<_>>();
+        scene.open_with_chooser = Some(ShellOpenWithChooser::new(
+            PathBuf::from("/tmp/note.txt"),
+            Some(Arc::from("text/plain")),
+            applications,
+        ));
+
+        assert!(scene.scroll_open_with_chooser_by(OPEN_WITH_CHOOSER_ROW_HEIGHT));
+        let chooser = scene.open_with_chooser.as_ref().unwrap();
+        assert_eq!(chooser.scroll_row, 1);
+        assert_eq!(chooser.selected_index, 0);
+        assert_eq!(chooser.visible_filtered_indexes().first().copied(), Some(1));
+
+        assert!(scene.scroll_open_with_chooser_by(OPEN_WITH_CHOOSER_ROW_HEIGHT * 99.0));
+        assert_eq!(scene.open_with_chooser.as_ref().unwrap().scroll_row, 4);
+
+        assert!(scene.scroll_open_with_chooser_by(-OPEN_WITH_CHOOSER_ROW_HEIGHT));
+        assert_eq!(scene.open_with_chooser.as_ref().unwrap().scroll_row, 3);
+
+        assert!(scene.scroll_open_with_chooser_by(-OPEN_WITH_CHOOSER_ROW_HEIGHT * 99.0));
+        assert_eq!(scene.open_with_chooser.as_ref().unwrap().scroll_row, 0);
+    }
+
+    #[test]
+    fn open_with_chooser_scrollbar_thumb_drag_updates_visible_rows() {
+        let mut scene = test_scene(vec![test_entry("note.txt", false)], ShellViewMode::Icons);
+        let applications = (0..12)
+            .map(|index| MimeApplication {
+                id: format!("app{index}.desktop"),
+                desktop_file: PathBuf::from(format!("/apps/app{index}.desktop")),
+                name: format!("App {index}"),
+                exec: format!("app{index} %f"),
+                icon: None,
+                is_default: index == 0,
+            })
+            .collect::<Vec<_>>();
+        scene.open_with_chooser = Some(ShellOpenWithChooser::new(
+            PathBuf::from("/tmp/note.txt"),
+            Some(Arc::from("text/plain")),
+            applications,
+        ));
+        let size = PhysicalSize::new(700, 560);
+        let (track, thumb) = scene
+            .open_with_chooser_scrollbar_rects(size)
+            .expect("overflowing open-with chooser should show a scrollbar");
+        let press = ViewPoint {
+            x: thumb.x + thumb.width / 2.0,
+            y: thumb.y + thumb.height / 2.0,
+        };
+        let drag_to = ViewPoint {
+            x: press.x,
+            y: track.bottom() - thumb.height / 2.0,
+        };
+
+        assert_eq!(
+            scene.begin_open_with_scrollbar_drag(press, size),
+            Some(false)
+        );
+        assert_eq!(
+            scene.scrollbar_drag.map(|drag| drag.target),
+            Some(ScrollbarDragTarget::OpenWith)
+        );
+        assert!(scene.set_pointer(drag_to, size));
+        assert_eq!(scene.open_with_chooser.as_ref().unwrap().scroll_row, 4);
+        assert_eq!(scene.panes[ShellPaneId::SLOT_0].scroll_y, 0.0);
+
+        let _ = scene.end_scrollbar_drag(drag_to, size);
+        assert!(scene.scrollbar_drag.is_none());
+    }
+
+    #[test]
     fn open_with_chooser_builds_launch_plan_for_selected_application() {
         let mut scene = test_scene(vec![test_entry("note.txt", false)], ShellViewMode::Icons);
         scene.open_with_chooser = Some(ShellOpenWithChooser::new(
@@ -31659,6 +32238,44 @@ text/plain=writer.desktop;\n",
         assert_eq!(
             request.plan.commands[0].args,
             vec!["--line", "/tmp/note.txt"]
+        );
+        assert_eq!(request.default_update, None);
+    }
+
+    #[test]
+    fn open_with_chooser_launch_request_can_set_selected_application_as_default() {
+        let mut scene = test_scene(vec![test_entry("note.txt", false)], ShellViewMode::Icons);
+        scene.open_with_chooser = Some(ShellOpenWithChooser::new(
+            PathBuf::from("/tmp/note.txt"),
+            Some(Arc::from("text/plain")),
+            vec![MimeApplication {
+                id: "viewer.desktop".to_string(),
+                desktop_file: PathBuf::from("/apps/viewer.desktop"),
+                name: "Viewer".to_string(),
+                exec: "viewer %f".to_string(),
+                icon: None,
+                is_default: false,
+            }],
+        ));
+        assert!(scene.toggle_open_with_set_default());
+        let cache = MimeApplicationCache::from_applications_and_mimeapps(
+            vec![test_desktop_application(
+                "viewer.desktop",
+                "Viewer",
+                "viewer %f",
+                &["text/plain"],
+            )],
+            &[],
+        );
+
+        let request = scene.open_with_launch_request(&cache).unwrap();
+
+        assert_eq!(
+            request.default_update,
+            Some(OpenWithDefaultUpdate {
+                mime_type: "text/plain".to_string(),
+                desktop_id: "viewer.desktop".to_string(),
+            })
         );
     }
 

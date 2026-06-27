@@ -15,6 +15,7 @@ pub(crate) struct ShellOpenWithChooser {
     pub(crate) query: String,
     pub(crate) selected_index: usize,
     pub(crate) scroll_row: usize,
+    pub(crate) set_as_default: bool,
     pub(crate) error: Option<String>,
 }
 
@@ -34,6 +35,7 @@ impl ShellOpenWithChooser {
             applications,
             query: String::new(),
             scroll_row: 0,
+            set_as_default: false,
             error: None,
         };
         chooser.ensure_selected_visible();
@@ -101,6 +103,30 @@ impl ShellOpenWithChooser {
         old_selected != self.selected_index || old_scroll != self.scroll_row
     }
 
+    pub(crate) fn toggle_set_as_default(&mut self) -> bool {
+        if self.mime_type.is_none() {
+            return false;
+        }
+        self.set_as_default = !self.set_as_default;
+        self.error = None;
+        true
+    }
+
+    pub(crate) fn scroll_rows(&mut self, delta: isize) -> bool {
+        let count = self.filtered_count();
+        if count <= OPEN_WITH_CHOOSER_MAX_ROWS {
+            return false;
+        }
+        let old_scroll = self.scroll_row;
+        let max_scroll = count.saturating_sub(OPEN_WITH_CHOOSER_MAX_ROWS);
+        self.scroll_row = if delta < 0 {
+            self.scroll_row.saturating_sub(delta.unsigned_abs())
+        } else {
+            (self.scroll_row + delta as usize).min(max_scroll)
+        };
+        old_scroll != self.scroll_row
+    }
+
     fn move_selection(&mut self, delta: isize) {
         let count = self.filtered_count();
         if count == 0 {
@@ -139,7 +165,14 @@ impl ShellOpenWithChooser {
 pub(crate) struct OpenWithLaunchRequest {
     pub(crate) path: PathBuf,
     pub(crate) app_name: String,
+    pub(crate) default_update: Option<OpenWithDefaultUpdate>,
     pub(crate) plan: DesktopLaunchPlan,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct OpenWithDefaultUpdate {
+    pub(crate) mime_type: String,
+    pub(crate) desktop_id: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -155,6 +188,7 @@ pub(crate) enum OpenWithChooserClick {
     Inside,
     Cancel,
     Open,
+    ToggleDefault,
     Row(usize),
 }
 
