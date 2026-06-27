@@ -14,7 +14,7 @@ use std::sync::{
 use std::thread;
 use std::time::{Duration, Instant};
 
-use bytemuck::{Pod, Zeroable};
+use bytemuck::Pod;
 use cosmic_text::{
     Align, Attrs, Buffer, Color as TextColor, Cursor, Family, FontSystem, Metrics, Shaping,
     Stretch, Style, SwashCache, Weight, Wrap, fontdb,
@@ -198,6 +198,7 @@ use shell::render::quad::{
     QuadVertex, push_clipped_rect, push_clipped_rect_outline, push_clipped_rounded_highlight,
     push_clipped_rounded_rect, push_rect,
 };
+use shell::render::texture::{AtlasRect, TextVertex, push_textured_rect};
 use shell::role_worker_queue::{PriorityWorkerQueue, PriorityWorkerRequest, WorkerRequestPriority};
 use shell::selection::{
     NavigationAction, RubberBand, RubberBandMode, SelectionClick, ShellSelection,
@@ -19739,14 +19740,6 @@ struct TextFrame {
 
 const TEXT_ATLAS_GUARD_TEXELS: u32 = 1;
 
-#[derive(Clone, Copy, Debug)]
-struct AtlasRect {
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
-}
-
 #[derive(Clone, Debug)]
 struct PendingTextDraw {
     key: LabelCacheKey,
@@ -20999,27 +20992,6 @@ fn create_vertex_buffer(device: &wgpu::Device, vertex_capacity: usize) -> wgpu::
     })
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Pod, Zeroable)]
-struct TextVertex {
-    position: [f32; 2],
-    uv: [f32; 2],
-    color: [f32; 4],
-}
-
-impl TextVertex {
-    const ATTRIBUTES: [wgpu::VertexAttribute; 3] =
-        wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x4];
-
-    fn layout() -> wgpu::VertexBufferLayout<'static> {
-        wgpu::VertexBufferLayout {
-            array_stride: std::mem::size_of::<Self>() as u64,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &Self::ATTRIBUTES,
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct VertexBufferUploadStats {
     writes: usize,
@@ -21193,66 +21165,6 @@ fn create_icon_bind_group(
             },
         ],
     })
-}
-
-fn push_textured_rect(
-    vertices: &mut Vec<TextVertex>,
-    rect: ViewRect,
-    atlas: AtlasRect,
-    atlas_width: u32,
-    atlas_height: u32,
-    size: PhysicalSize<u32>,
-    color: [f32; 4],
-) {
-    if rect.width <= 0.0 || rect.height <= 0.0 || atlas.width <= 0.0 || atlas.height <= 0.0 {
-        return;
-    }
-    let width = size.width.max(1) as f32;
-    let height = size.height.max(1) as f32;
-    let left = rect.x / width * 2.0 - 1.0;
-    let right = rect.right() / width * 2.0 - 1.0;
-    let top = 1.0 - rect.y / height * 2.0;
-    let bottom = 1.0 - rect.bottom() / height * 2.0;
-
-    let atlas_width = atlas_width.max(1) as f32;
-    let atlas_height = atlas_height.max(1) as f32;
-    let u0 = atlas.x / atlas_width;
-    let v0 = atlas.y / atlas_height;
-    let u1 = (atlas.x + atlas.width) / atlas_width;
-    let v1 = (atlas.y + atlas.height) / atlas_height;
-
-    vertices.extend_from_slice(&[
-        TextVertex {
-            position: [left, top],
-            uv: [u0, v0],
-            color,
-        },
-        TextVertex {
-            position: [left, bottom],
-            uv: [u0, v1],
-            color,
-        },
-        TextVertex {
-            position: [right, bottom],
-            uv: [u1, v1],
-            color,
-        },
-        TextVertex {
-            position: [left, top],
-            uv: [u0, v0],
-            color,
-        },
-        TextVertex {
-            position: [right, bottom],
-            uv: [u1, v1],
-            color,
-        },
-        TextVertex {
-            position: [right, top],
-            uv: [u1, v0],
-            color,
-        },
-    ]);
 }
 
 fn text_color_to_vertex_color(color: TextColor) -> [f32; 4] {
