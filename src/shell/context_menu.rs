@@ -485,11 +485,12 @@ fn context_menu_builtin_actions(target: &ShellContextTarget) -> Vec<ShellContext
 }
 
 pub(crate) fn context_menu_items(menu: &ShellContextMenu) -> Vec<ShellContextMenuItem> {
-    context_menu_items_for_target(&menu.target, &menu.service_actions)
+    context_menu_items_for_target(&menu.target, &menu.open_with_apps, &menu.service_actions)
 }
 
 fn context_menu_items_for_target(
     target: &ShellContextTarget,
+    open_with_apps: &[MimeApplication],
     service_actions: &[ServiceMenuAction],
 ) -> Vec<ShellContextMenuItem> {
     let mut items = context_menu_builtin_actions(target)
@@ -518,6 +519,14 @@ fn context_menu_items_for_target(
             item
         })
         .collect::<Vec<_>>();
+
+    if let Some(insert_at) = items
+        .iter()
+        .position(|item| item.submenu == Some(ShellContextSubmenu::OpenWith))
+    {
+        let app_items = root_open_with_application_items(open_with_apps);
+        items.splice(insert_at..insert_at, app_items);
+    }
 
     if !service_actions.is_empty() {
         let insert_at = items
@@ -554,12 +563,43 @@ fn context_menu_items_for_target(
 
 #[cfg(test)]
 pub(crate) fn context_menu_actions(target: &ShellContextTarget) -> Vec<ShellContextMenuAction> {
-    context_menu_items_for_target(target, &[])
+    context_menu_items_for_target(target, &[], &[])
         .into_iter()
         .filter_map(|item| match (&item.command, &item.icon) {
             (ShellContextMenuCommand::Builtin(action), _) => Some(*action),
             (_, ShellContextMenuIcon::Builtin(action)) => Some(*action),
             _ => None,
+        })
+        .collect()
+}
+
+const ROOT_OPEN_WITH_APP_LIMIT: usize = 2;
+
+fn root_open_with_application_items(
+    open_with_apps: &[MimeApplication],
+) -> Vec<ShellContextMenuItem> {
+    let has_default = open_with_apps.iter().any(|app| app.is_default);
+
+    open_with_apps
+        .iter()
+        .filter(|app| !has_default || !app.is_default)
+        .take(ROOT_OPEN_WITH_APP_LIMIT)
+        .map(|app| {
+            let name = app.name.trim();
+            let name = if name.is_empty() {
+                app.id.as_str()
+            } else {
+                name
+            };
+            ShellContextMenuItem {
+                command: ShellContextMenuCommand::OpenWithApplication {
+                    desktop_id: app.id.clone(),
+                },
+                label: format!("Open With {name}"),
+                separator_before: false,
+                submenu: None,
+                icon: ShellContextMenuIcon::Application(app.icon.clone()),
+            }
         })
         .collect()
 }

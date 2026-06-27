@@ -30513,7 +30513,7 @@ mod tests {
     }
 
     #[test]
-    fn context_menu_items_offer_open_with_submenu_applications() {
+    fn context_menu_items_offer_open_with_root_applications_and_submenu() {
         let target = ShellContextTarget::Item {
             pane: ShellPaneId::SLOT_0,
             index: 0,
@@ -30521,25 +30521,59 @@ mod tests {
             is_dir: false,
             selection_count: 1,
         };
+        let app = |id: &str, name: &str, icon: Option<&str>, is_default: bool| MimeApplication {
+            id: format!("org.example.{id}.desktop"),
+            desktop_file: PathBuf::from(format!(
+                "/usr/share/applications/org.example.{id}.desktop"
+            )),
+            name: name.to_string(),
+            exec: format!("{} %F", name.to_ascii_lowercase()),
+            icon: icon.map(str::to_string),
+            is_default,
+        };
         let menu = ShellContextMenu::with_dynamic(
             target,
             ViewPoint { x: 20.0, y: 20.0 },
-            vec![MimeApplication {
-                id: "org.example.Editor.desktop".to_string(),
-                desktop_file: PathBuf::from("/usr/share/applications/org.example.Editor.desktop"),
-                name: "Editor".to_string(),
-                exec: "editor %F".to_string(),
-                icon: Some("accessories-text-editor".to_string()),
-                is_default: true,
-            }],
+            vec![
+                app("Editor", "Editor", Some("accessories-text-editor"), true),
+                app("Viewer", "Viewer", Some("image-viewer"), false),
+                app("Paint", "Paint", Some("applications-graphics"), false),
+                app("Notes", "Notes", None, false),
+            ],
             Vec::new(),
         );
 
-        assert!(
-            context_menu_items(&menu)
+        let root = context_menu_items(&menu);
+        let open_with_index = root
+            .iter()
+            .position(|item| item.submenu == Some(ShellContextSubmenu::OpenWith))
+            .expect("Open With submenu should remain present");
+        let root_apps = root
+            .iter()
+            .filter_map(|item| match &item.command {
+                ShellContextMenuCommand::OpenWithApplication { desktop_id } => {
+                    Some((item.label.as_str(), desktop_id.as_str(), &item.icon))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(root_apps.len(), 2);
+        assert_eq!(
+            root_apps
                 .iter()
-                .any(|item| item.submenu == Some(ShellContextSubmenu::OpenWith))
+                .map(|(label, desktop_id, _)| (*label, *desktop_id))
+                .collect::<Vec<_>>(),
+            vec![
+                ("Open With Viewer", "org.example.Viewer.desktop"),
+                ("Open With Paint", "org.example.Paint.desktop"),
+            ]
         );
+        assert_eq!(root[open_with_index - 2].label, "Open With Viewer");
+        assert_eq!(root[open_with_index - 1].label, "Open With Paint");
+        assert!(matches!(
+            root_apps.first().map(|(_, _, icon)| *icon),
+            Some(ShellContextMenuIcon::Application(Some(icon))) if icon == "image-viewer"
+        ));
         let submenu = context_submenu_actions(ShellContextSubmenu::OpenWith, &menu);
         assert!(matches!(
             submenu.first().map(|item| &item.command),
