@@ -141,6 +141,12 @@ GIO/GVfs-backed network discovery, authentication, mounting, and scanning.
     uses `folder-remote` icon candidates, is not persisted to
     Fika's Places file, and is not treated as a local mounted directory until a
     network backend is attached.
+  - The Network root context menu exposes Dolphin's `Add Network Folder`
+    affordance, but implements it inside Fika: the action opens Fika's own
+    location input prefilled for a network URI, validates the URI through
+    `src/core/network.rs`, saves it as a Network bookmark, and navigates to it
+    through the same pane/generation loading path. Fika does not depend on
+    `org.kde.knetattach` for this flow.
   - Show saved network bookmarks and discovered mounted network locations as
     locations, not as duplicated text-only hints.
   - Network places keep icon names/handles from the backend when available.
@@ -149,6 +155,9 @@ GIO/GVfs-backed network discovery, authentication, mounting, and scanning.
     routing once the location has a local mounted path.
   - Pure URI operations need a backend boundary similar to Dolphin/KIO rather
     than ad-hoc UI commands.
+  - Until that backend exists, remote context menus hide local write actions
+    such as Create, Paste, Cut, Rename, and Trash instead of exposing commands
+    that fail later.
 - Terminal/open-here behavior
   - Local-only actions must be disabled or bridged through a local path resolver
     (`mostLocalUrl`/KIOFuse-style behavior) before execution.
@@ -157,7 +166,8 @@ GIO/GVfs-backed network discovery, authentication, mounting, and scanning.
 
 - Decide the backend boundary: GVfs/GIO, KIOFuse, or a small abstraction that
   can use either when present.
-- Add saved network bookmarks and Add Network Drive UI.
+- Add a fuller network bookmark editor after the network backend boundary is
+  settled.
 - Add authentication, cancellation, and structured error reporting.
 - Integrate network scans with `DirectoryLister` without pane flicker.
 - Add remote/GVfs metadata degradation for MIME, thumbnail, size, and watcher

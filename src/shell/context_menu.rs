@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use fika_core::{
     DevicePlaceOperation, MimeApplication, ServiceMenuAction, ServiceMenuPriority, ViewPoint,
-    file_ops,
+    file_ops, is_network_path, is_network_root_path,
 };
 
 use crate::wgpu_create_rename::CreateEntryKind;
@@ -169,6 +169,7 @@ pub(crate) enum ShellContextMenuAction {
     DeletePermanently,
     EmptyTrash,
     AddToPlaces,
+    AddNetworkFolder,
     CreateNew,
     Paste,
     PasteAsAdministrator,
@@ -202,6 +203,7 @@ impl ShellContextMenuAction {
             Self::DeletePermanently => "Delete Permanently",
             Self::EmptyTrash => "Empty Trash",
             Self::AddToPlaces => "Add to Places",
+            Self::AddNetworkFolder => "Add Network Folder...",
             Self::CreateNew => "Create New",
             Self::Paste => "Paste",
             Self::PasteAsAdministrator => "Paste as Administrator",
@@ -243,6 +245,7 @@ impl ShellContextMenuAction {
             Self::DeletePermanently => "delete-permanently",
             Self::EmptyTrash => "empty-trash",
             Self::AddToPlaces => "add-to-places",
+            Self::AddNetworkFolder => "add-network-folder",
             Self::CreateNew => "create-new",
             Self::Paste => "paste",
             Self::PasteAsAdministrator => "paste-as-administrator",
@@ -342,6 +345,19 @@ fn context_menu_builtin_actions(target: &ShellContextTarget) -> Vec<ShellContext
         ShellContextMenuAction::MoveToTrashAsAdministrator,
         ShellContextMenuAction::Properties,
     ];
+    const NETWORK_ITEM_FILE_ACTIONS: &[ShellContextMenuAction] = &[
+        ShellContextMenuAction::Open,
+        ShellContextMenuAction::OpenWith,
+        ShellContextMenuAction::CopyLocation,
+        ShellContextMenuAction::Properties,
+    ];
+    const NETWORK_ITEM_DIR_ACTIONS: &[ShellContextMenuAction] = &[
+        ShellContextMenuAction::Open,
+        ShellContextMenuAction::OpenInNewPane,
+        ShellContextMenuAction::AddToPlaces,
+        ShellContextMenuAction::CopyLocation,
+        ShellContextMenuAction::Properties,
+    ];
     const TRASH_ITEM_ACTIONS: &[ShellContextMenuAction] = &[
         ShellContextMenuAction::RestoreFromTrash,
         ShellContextMenuAction::Copy,
@@ -360,6 +376,24 @@ fn context_menu_builtin_actions(target: &ShellContextTarget) -> Vec<ShellContext
         ShellContextMenuAction::Refresh,
         ShellContextMenuAction::Properties,
     ];
+    const NETWORK_BLANK_ACTIONS: &[ShellContextMenuAction] = &[
+        ShellContextMenuAction::AddToPlaces,
+        ShellContextMenuAction::SelectAll,
+        ShellContextMenuAction::ViewMode,
+        ShellContextMenuAction::ToggleHiddenFiles,
+        ShellContextMenuAction::SplitPane,
+        ShellContextMenuAction::Refresh,
+        ShellContextMenuAction::Properties,
+    ];
+    const NETWORK_ROOT_BLANK_ACTIONS: &[ShellContextMenuAction] = &[
+        ShellContextMenuAction::AddNetworkFolder,
+        ShellContextMenuAction::SelectAll,
+        ShellContextMenuAction::ViewMode,
+        ShellContextMenuAction::ToggleHiddenFiles,
+        ShellContextMenuAction::SplitPane,
+        ShellContextMenuAction::Refresh,
+        ShellContextMenuAction::Properties,
+    ];
     const TRASH_BLANK_ACTIONS: &[ShellContextMenuAction] = &[
         ShellContextMenuAction::EmptyTrash,
         ShellContextMenuAction::SelectAll,
@@ -369,6 +403,13 @@ fn context_menu_builtin_actions(target: &ShellContextTarget) -> Vec<ShellContext
     const PLACE_ACTIONS: &[ShellContextMenuAction] = &[
         ShellContextMenuAction::Open,
         ShellContextMenuAction::OpenInNewPane,
+        ShellContextMenuAction::CopyLocation,
+        ShellContextMenuAction::Properties,
+    ];
+    const NETWORK_ROOT_PLACE_ACTIONS: &[ShellContextMenuAction] = &[
+        ShellContextMenuAction::Open,
+        ShellContextMenuAction::OpenInNewPane,
+        ShellContextMenuAction::AddNetworkFolder,
         ShellContextMenuAction::CopyLocation,
         ShellContextMenuAction::Properties,
     ];
@@ -390,13 +431,30 @@ fn context_menu_builtin_actions(target: &ShellContextTarget) -> Vec<ShellContext
         ShellContextTarget::Item { path, .. } if file_ops::is_in_trash_files_dir(path) => {
             TRASH_ITEM_ACTIONS.to_vec()
         }
+        ShellContextTarget::Item {
+            path, is_dir: true, ..
+        } if is_network_path(path) => NETWORK_ITEM_DIR_ACTIONS.to_vec(),
+        ShellContextTarget::Item { path, .. } if is_network_path(path) => {
+            NETWORK_ITEM_FILE_ACTIONS.to_vec()
+        }
         ShellContextTarget::Item { is_dir: true, .. } => ITEM_DIR_ACTIONS.to_vec(),
         ShellContextTarget::Item { .. } => ITEM_FILE_ACTIONS.to_vec(),
         ShellContextTarget::Blank { path, .. } if file_ops::is_trash_files_dir(path) => {
             TRASH_BLANK_ACTIONS.to_vec()
         }
+        ShellContextTarget::Blank { path, .. } if is_network_root_path(path) => {
+            NETWORK_ROOT_BLANK_ACTIONS.to_vec()
+        }
+        ShellContextTarget::Blank { path, .. } if is_network_path(path) => {
+            NETWORK_BLANK_ACTIONS.to_vec()
+        }
         ShellContextTarget::Blank { .. } => BLANK_ACTIONS.to_vec(),
         ShellContextTarget::Place { trash: true, .. } => TRASH_PLACE_ACTIONS.to_vec(),
+        ShellContextTarget::Place {
+            network: true,
+            path,
+            ..
+        } if is_network_root_path(path) => NETWORK_ROOT_PLACE_ACTIONS.to_vec(),
         ShellContextTarget::Place {
             device: Some(device),
             ..
@@ -679,6 +737,14 @@ pub(crate) fn context_menu_separator_before(target: &ShellContextTarget, row: us
                 | ShellContextMenuAction::UnmountDevice
                 | ShellContextMenuAction::Properties
         ),
+        ShellContextTarget::Place {
+            network: true,
+            path,
+            ..
+        } if is_network_root_path(path) => {
+            action == ShellContextMenuAction::AddNetworkFolder
+                || action == ShellContextMenuAction::Properties
+        }
         ShellContextTarget::Place { .. } => action == ShellContextMenuAction::Properties,
     }
 }

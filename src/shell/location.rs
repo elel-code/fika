@@ -114,6 +114,13 @@ impl LocationDraft {
 pub(crate) struct ShellLocationDraft {
     pub(crate) pane: ShellPaneId,
     pub(crate) draft: LocationDraft,
+    pub(crate) purpose: LocationDraftPurpose,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum LocationDraftPurpose {
+    Navigate,
+    AddNetworkFolder,
 }
 
 impl ShellLocationDraft {
@@ -121,6 +128,15 @@ impl ShellLocationDraft {
         Self {
             pane,
             draft: LocationDraft::new(value),
+            purpose: LocationDraftPurpose::Navigate,
+        }
+    }
+
+    pub(crate) fn add_network_folder(pane: ShellPaneId) -> Self {
+        Self {
+            pane,
+            draft: LocationDraft::new("smb://".to_string()),
+            purpose: LocationDraftPurpose::AddNetworkFolder,
         }
     }
 }

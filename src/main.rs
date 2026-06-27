@@ -19,22 +19,22 @@ use cosmic_text::{
     Align, Attrs, Buffer, Color as TextColor, Cursor, Family, FontSystem, Metrics, Shaping,
     Stretch, Style, SwashCache, Weight, Wrap, fontdb,
 };
-#[cfg(test)]
-use fika_core::ServiceMenuPriority;
 use fika_core::{
     AppSettings, CompactLayout, CompactLayoutOptions, DeviceInfo, DevicePlaceOperation,
     DevicePlaceOperationResult, Entry, FileClipboardRole, FileTransferMode, Generation,
     IconsLayout, IconsLayoutOptions, ItemId, ItemLayout, MetadataRoleResult, MimeApplication,
     MimeApplicationCache, MimeDatabase, NETWORK_ROOT_LABEL, NameFilter, OpenWithLaunchResult,
     OperationController, PrivilegedCommand, ServiceMenuAction, ServiceMenuLaunchResult,
-    ServiceMenuTarget, ThumbnailRequest, ThumbnailRequestPriority, ThumbnailerRegistry,
-    TransferTaskResult, TransferUndoItem, TrashViewOperation, TrashViewOperationResult, UserPlace,
-    ViewPoint, ViewRect, ViewSize, complete_location_input, decode_file_clipboard_text,
-    default_app_settings_path, default_thumbnail_cache_root, default_user_places_path,
-    encode_file_clipboard_text, file_ops, format_modified_secs, format_size,
-    generate_thumbnail_with_external_thumbnailer_registry, home_dir, is_network_path,
-    launch_with_systemd_user, load_app_settings, load_place_order, load_user_places,
-    mime_magic_resolution_required, network_parent_path, network_root_path, paste_text_result,
+    ServiceMenuPriority, ServiceMenuTarget, ThumbnailRequest, ThumbnailRequestPriority,
+    ThumbnailerRegistry, TransferTaskResult, TransferUndoItem, TrashViewOperation,
+    TrashViewOperationResult, UserPlace, ViewPoint, ViewRect, ViewSize, ark_compress_launch_plan,
+    ark_extract_here_launch_plan, ark_extract_to_launch_plan, complete_location_input,
+    decode_file_clipboard_text, default_app_settings_path, default_thumbnail_cache_root,
+    default_user_places_path, encode_file_clipboard_text, file_ops, format_modified_secs,
+    format_size, generate_thumbnail_with_external_thumbnailer_registry, home_dir,
+    is_archive_mime_or_path, is_network_path, launch_with_systemd_user, load_app_settings,
+    load_place_order, load_user_places, mime_magic_resolution_required, network_parent_path,
+    network_path_display_name, network_path_from_uri, network_root_path, paste_text_result,
     perform_device_place_operation, place_order_path_for_user_places_path, push_unique_path,
     read_entries_sync, read_gio_devices, read_network_entry_batches_sync_cancellable,
     resolve_location_input, run_operation_task, run_via_dbus, save_app_settings, save_place_order,
@@ -178,7 +178,10 @@ use wgpu_icon_roles::{
     FileIconKind, FileIconPathCacheKey, FileIconProfile, FileIconRoleCacheKey, NamedIconFallback,
     file_icon_path_cache_key, icon_cache_size,
 };
-use wgpu_location::{PathHistory, ShellLocationDraft, ShellPaneHistories, normalized_text_cursor};
+use wgpu_location::{
+    LocationDraftPurpose, PathHistory, ShellLocationDraft, ShellPaneHistories,
+    normalized_text_cursor,
+};
 #[cfg(test)]
 use wgpu_menu_geometry::{context_menu_rect, drop_menu_rect};
 use wgpu_menu_geometry::{
@@ -1706,6 +1709,7 @@ impl FikaWgpuApp {
                 }
             }
             ShellContextMenuAction::AddToPlaces => self.add_context_target_to_places(event_loop),
+            ShellContextMenuAction::AddNetworkFolder => self.open_add_network_folder_input(),
             ShellContextMenuAction::RemovePlace => self.remove_context_place(event_loop),
             ShellContextMenuAction::RestoreFromTrash
             | ShellContextMenuAction::DeletePermanently
@@ -1936,6 +1940,17 @@ impl FikaWgpuApp {
             fika_log!("[fika-wgpu] service-menu-finished {status}");
         });
         if let Some(window) = self.window.as_ref() {
+            window.request_redraw();
+        }
+    }
+
+    fn open_add_network_folder_input(&mut self) {
+        let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
+            return;
+        };
+        if self.scene.open_add_network_folder_location_draft(size)
+            && let Some(window) = self.window.as_ref()
+        {
             window.request_redraw();
         }
     }
@@ -2698,6 +2713,10 @@ impl FikaWgpuApp {
         let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
             return;
         };
+        if self.scene.location_draft_purpose() == Some(LocationDraftPurpose::AddNetworkFolder) {
+            self.commit_add_network_folder_draft(event_loop, size);
+            return;
+        }
         let input = self.scene.location_draft_value().unwrap_or("").to_string();
         let Some((pane, path)) = self.scene.resolved_location_draft() else {
             fika_log!("[fika-wgpu] location-error input={input:?} error=empty");
@@ -2714,6 +2733,71 @@ impl FikaWgpuApp {
             Err(error) => {
                 fika_log!("[fika-wgpu] location-error input={input:?} error={error}");
                 if closed && let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+            }
+        }
+    }
+
+    fn commit_add_network_folder_draft(
+        &mut self,
+        event_loop: &dyn ActiveEventLoop,
+        size: PhysicalSize<u32>,
+    ) {
+        let input = self.scene.location_draft_value().unwrap_or("").to_string();
+        let request = match self.scene.add_network_folder_request_from_draft() {
+            Ok(request) => request,
+            Err(error) => {
+                fika_log!("[fika-wgpu] add-network-folder-error input={input:?} error={error}");
+                self.scene.record_task_status(ShellTaskStatus::failed(
+                    "Add Network Folder failed",
+                    error,
+                    false,
+                ));
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+                return;
+            }
+        };
+
+        let _ = self.scene.close_location_draft(size);
+        match self.scene.add_network_folder_place(
+            &default_user_places_path(),
+            &request.path,
+            request.label,
+            size,
+        ) {
+            Ok(_) => match self
+                .scene
+                .load_path_for_pane(request.pane, request.path, size)
+            {
+                Ok(true) => self.present_scene_change(event_loop, "add-network-folder"),
+                Ok(false) => {
+                    if let Some(window) = self.window.as_ref() {
+                        window.request_redraw();
+                    }
+                }
+                Err(error) => {
+                    fika_log!("[fika-wgpu] add-network-folder-load-error {error}");
+                    self.scene.record_task_status(ShellTaskStatus::failed(
+                        "Open Network Folder failed",
+                        error,
+                        false,
+                    ));
+                    if let Some(window) = self.window.as_ref() {
+                        window.request_redraw();
+                    }
+                }
+            },
+            Err(error) => {
+                fika_log!("[fika-wgpu] add-network-folder-error input={input:?} error={error}");
+                self.scene.record_task_status(ShellTaskStatus::failed(
+                    "Add Network Folder failed",
+                    error,
+                    false,
+                ));
+                if let Some(window) = self.window.as_ref() {
                     window.request_redraw();
                 }
             }
@@ -2960,6 +3044,11 @@ fn context_menu_icon_style(
             [0.059, 0.463, 0.431, 1.0],
             [0.902, 1.000, 0.984, 1.0],
         ),
+        ShellContextMenuAction::AddNetworkFolder => (
+            ContextMenuGlyph::Place,
+            [0.059, 0.463, 0.431, 1.0],
+            [0.902, 1.000, 0.984, 1.0],
+        ),
         ShellContextMenuAction::CreateNew => (
             ContextMenuGlyph::Create,
             [0.059, 0.298, 0.506, 1.0],
@@ -3088,6 +3177,24 @@ struct CopyLocationRequest {
     text: String,
 }
 
+const BUILTIN_ARK_COMPRESS_ACTION_ID: &str = "fika.builtin.ark.compress";
+const BUILTIN_ARK_EXTRACT_HERE_ACTION_ID: &str = "fika.builtin.ark.extract-here";
+const BUILTIN_ARK_EXTRACT_TO_ACTION_ID: &str = "fika.builtin.ark.extract-to";
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ArkContextItem {
+    path: PathBuf,
+    is_dir: bool,
+    mime_type: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct AddNetworkFolderRequest {
+    pane: ShellPaneId,
+    path: PathBuf,
+    label: String,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct DeviceActionRequest {
     id: String,
@@ -3096,6 +3203,44 @@ struct DeviceActionRequest {
     operation: DevicePlaceOperation,
     pane: ShellPaneId,
     path: PathBuf,
+}
+
+fn ark_context_items_are_local(items: &[ArkContextItem]) -> bool {
+    !items.is_empty()
+        && items.iter().all(|item| {
+            !file_ops::is_in_trash_files_dir(&item.path) && !is_network_path(&item.path)
+        })
+}
+
+fn push_builtin_ark_service_action(
+    actions: &mut Vec<ServiceMenuAction>,
+    id: &str,
+    label: &str,
+    icon: &str,
+) {
+    let label_key = service_action_label_key(label);
+    if actions
+        .iter()
+        .any(|action| service_action_label_key(&action.label) == label_key)
+    {
+        return;
+    }
+    actions.push(ServiceMenuAction {
+        id: id.to_string(),
+        label: label.to_string(),
+        source_name: "Ark".to_string(),
+        icon: Some(icon.to_string()),
+        submenu: None,
+        priority: ServiceMenuPriority::TopLevel,
+    });
+}
+
+fn service_action_label_key(label: &str) -> String {
+    label
+        .bytes()
+        .filter(|byte| byte.is_ascii_alphanumeric())
+        .map(|byte| byte.to_ascii_lowercase() as char)
+        .collect()
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -4760,6 +4905,7 @@ fn push_location_draft(values: &mut Vec<u64>, draft: Option<&ShellLocationDraft>
             push_hash(values, &draft.draft.value);
             push_u64(values, draft.draft.cursor as u64);
             push_bool(values, draft.draft.replace_on_insert);
+            push_hash(values, format!("{:?}", draft.purpose));
         }
         None => push_bool(values, false),
     }
@@ -5375,6 +5521,10 @@ impl ShellScene {
             .map(|draft| draft.draft.value.as_str())
     }
 
+    fn location_draft_purpose(&self) -> Option<LocationDraftPurpose> {
+        self.location_draft.as_ref().map(|draft| draft.purpose)
+    }
+
     fn location_label_for_pane(&self, pane: ShellPaneId) -> String {
         if let Some(draft) = self
             .location_draft
@@ -5451,6 +5601,51 @@ impl ShellScene {
         self.active_pane = self.normalized_pane_id(pane);
         self.apply_location_command(LocationCommand::Activate, size)
             || old_pane != self.active_pane()
+    }
+
+    fn open_add_network_folder_location_draft(&mut self, size: PhysicalSize<u32>) -> bool {
+        let old_draft = self.location_draft.clone();
+        let pane = self.active_pane();
+        self.location_draft = Some(ShellLocationDraft::add_network_folder(pane));
+        self.filter_active = false;
+        self.context_target = None;
+        self.context_menu = None;
+        self.drop_menu = None;
+        self.properties_overlay = None;
+        self.create_dialog = None;
+        self.rename_dialog = None;
+        self.open_with_chooser = None;
+        self.rubber_band = None;
+        let changed = old_draft != self.location_draft;
+        if changed {
+            self.location_changes += 1;
+            self.clamp_scroll(size);
+            fika_log!(
+                "[fika-wgpu] add-network-folder input=1 value={:?} changes={}",
+                self.location_draft_value().unwrap_or(""),
+                self.location_changes
+            );
+        }
+        changed
+    }
+
+    fn add_network_folder_request_from_draft(&self) -> Result<AddNetworkFolderRequest, String> {
+        let Some(draft) = self.location_draft.as_ref() else {
+            return Err("network folder input is not open".to_string());
+        };
+        if draft.purpose != LocationDraftPurpose::AddNetworkFolder {
+            return Err("location input is not adding a network folder".to_string());
+        }
+        let pane = self.normalized_pane_id(draft.pane);
+        let input = draft.draft.value.trim();
+        let path = network_path_from_uri(input).map_err(|error| error.to_string())?;
+        if path == network_root_path() {
+            return Err("enter a network server or share URL".to_string());
+        }
+        let label = network_path_display_name(&path)
+            .filter(|label| !label.trim().is_empty())
+            .unwrap_or_else(|| path.display().to_string());
+        Ok(AddNetworkFolderRequest { pane, path, label })
     }
 
     fn apply_location_command(
@@ -7564,15 +7759,17 @@ impl ShellScene {
                 } else {
                     open_with_applications_for_mime(cache, mime_type)
                 };
-                let service_actions = if file_ops::is_in_trash_files_dir(path) {
-                    Vec::new()
-                } else {
-                    cache.service_actions_for_targets(
-                        &self.service_menu_targets_for_context_item(
-                            *pane, *index, *is_dir, mime_type,
-                        ),
-                    )
-                };
+                let mut service_actions =
+                    if file_ops::is_in_trash_files_dir(path) || is_network_path(path) {
+                        Vec::new()
+                    } else {
+                        cache.service_actions_for_targets(
+                            &self.service_menu_targets_for_context_item(
+                                *pane, *index, *is_dir, mime_type,
+                            ),
+                        )
+                    };
+                self.append_builtin_ark_service_actions(target, &mut service_actions);
                 (open_with_apps, service_actions)
             }
             ShellContextTarget::Blank { path, .. } => {
@@ -7581,18 +7778,108 @@ impl ShellScene {
                 } else {
                     open_with_applications_for_mime(cache, Some("inode/directory"))
                 };
-                let service_actions = if file_ops::is_trash_files_dir(&path) {
-                    Vec::new()
-                } else {
-                    cache.service_actions_for_targets(&[ServiceMenuTarget::new(
-                        Some("inode/directory"),
-                        true,
-                    )])
-                };
+                let service_actions =
+                    if file_ops::is_trash_files_dir(&path) || is_network_path(path) {
+                        Vec::new()
+                    } else {
+                        cache.service_actions_for_targets(&[ServiceMenuTarget::new(
+                            Some("inode/directory"),
+                            true,
+                        )])
+                    };
                 (open_with_apps, service_actions)
             }
             ShellContextTarget::Place { .. } => (Vec::new(), Vec::new()),
         }
+    }
+
+    fn append_builtin_ark_service_actions(
+        &self,
+        target: &ShellContextTarget,
+        service_actions: &mut Vec<ServiceMenuAction>,
+    ) {
+        let Ok(items) = self.context_target_ark_items(target) else {
+            return;
+        };
+        if items.is_empty() || !ark_context_items_are_local(&items) {
+            return;
+        }
+
+        push_builtin_ark_service_action(
+            service_actions,
+            BUILTIN_ARK_COMPRESS_ACTION_ID,
+            "Compress...",
+            "archive-insert",
+        );
+
+        if items.len() == 1 {
+            let item = &items[0];
+            if !item.is_dir && is_archive_mime_or_path(item.mime_type.as_deref(), &item.path) {
+                push_builtin_ark_service_action(
+                    service_actions,
+                    BUILTIN_ARK_EXTRACT_HERE_ACTION_ID,
+                    "Extract Here",
+                    "archive-extract",
+                );
+                push_builtin_ark_service_action(
+                    service_actions,
+                    BUILTIN_ARK_EXTRACT_TO_ACTION_ID,
+                    "Extract To...",
+                    "archive-extract",
+                );
+            }
+        }
+    }
+
+    fn context_target_ark_items(
+        &self,
+        target: &ShellContextTarget,
+    ) -> Result<Vec<ArkContextItem>, String> {
+        let ShellContextTarget::Item {
+            pane,
+            index,
+            path,
+            is_dir,
+            selection_count,
+        } = target
+        else {
+            return Ok(Vec::new());
+        };
+        if file_ops::is_in_trash_files_dir(path) || is_network_path(path) {
+            return Ok(Vec::new());
+        }
+
+        let pane_view = self
+            .pane_view(*pane)
+            .ok_or_else(|| "context target pane no longer exists".to_string())?;
+        if *selection_count > 1 && pane_view.selection.contains(*index) {
+            let items = self
+                .pane_selection(*pane)
+                .into_iter()
+                .flat_map(|selection| selection.selected.iter())
+                .copied()
+                .filter_map(|selected| {
+                    let entry = pane_view.entries.get(selected)?;
+                    Some(ArkContextItem {
+                        path: self.entry_path_for_pane_view(pane_view, selected)?,
+                        is_dir: entry.is_dir,
+                        mime_type: entry.mime_type.as_deref().map(str::to_string),
+                    })
+                })
+                .collect::<Vec<_>>();
+            return Ok(items);
+        }
+
+        let mime_type = pane_view
+            .entries
+            .get(*index)
+            .and_then(|entry| entry.mime_type.as_deref())
+            .map(str::to_string);
+        Ok(vec![ArkContextItem {
+            path: path.clone(),
+            is_dir: *is_dir,
+            mime_type,
+        }])
     }
 
     fn service_menu_targets_for_context_item(
@@ -8038,6 +8325,9 @@ impl ShellScene {
         let paths = self
             .context_target_service_menu_paths()?
             .ok_or_else(|| "no service menu target paths".to_string())?;
+        if let Some(request) = self.builtin_ark_launch_request(action_id)? {
+            return Ok(request);
+        }
         let plan = cache
             .service_action_launch_plan(action_id, &paths)
             .ok_or_else(|| format!("service action not found or unsupported: {action_id}"))?;
@@ -8046,6 +8336,67 @@ impl ShellScene {
             app_name: plan.app_name.clone(),
             plan,
         })
+    }
+
+    fn builtin_ark_launch_request(
+        &self,
+        action_id: &str,
+    ) -> Result<Option<ServiceMenuLaunchRequest>, String> {
+        match action_id {
+            BUILTIN_ARK_COMPRESS_ACTION_ID => {
+                let target = self
+                    .context_target
+                    .as_ref()
+                    .ok_or_else(|| "Ark action requires a context target".to_string())?;
+                let items = self.context_target_ark_items(target)?;
+                if !ark_context_items_are_local(&items) {
+                    return Err("Ark actions require local file targets".to_string());
+                }
+                let paths = items.into_iter().map(|item| item.path).collect::<Vec<_>>();
+                let plan = ark_compress_launch_plan(&paths)?;
+                Ok(Some(ServiceMenuLaunchRequest {
+                    paths,
+                    app_name: plan.app_name.clone(),
+                    plan,
+                }))
+            }
+            BUILTIN_ARK_EXTRACT_HERE_ACTION_ID | BUILTIN_ARK_EXTRACT_TO_ACTION_ID => {
+                let item = self.single_archive_ark_context_item()?;
+                let plan = if action_id == BUILTIN_ARK_EXTRACT_HERE_ACTION_ID {
+                    ark_extract_here_launch_plan(&item.path)?
+                } else {
+                    ark_extract_to_launch_plan(&item.path)?
+                };
+                Ok(Some(ServiceMenuLaunchRequest {
+                    paths: vec![item.path],
+                    app_name: plan.app_name.clone(),
+                    plan,
+                }))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    fn single_archive_ark_context_item(&self) -> Result<ArkContextItem, String> {
+        let target = self
+            .context_target
+            .as_ref()
+            .ok_or_else(|| "Ark action requires a context target".to_string())?;
+        let items = self.context_target_ark_items(target)?;
+        if !ark_context_items_are_local(&items) {
+            return Err("Ark actions require local file targets".to_string());
+        }
+        if items.len() != 1 {
+            return Err("Extract requires exactly one archive".to_string());
+        }
+        let item = items
+            .into_iter()
+            .next()
+            .ok_or_else(|| "Extract requires exactly one archive".to_string())?;
+        if item.is_dir || !is_archive_mime_or_path(item.mime_type.as_deref(), &item.path) {
+            return Err(format!("{} is not an archive", item.path.display()));
+        }
+        Ok(item)
     }
 
     fn context_target_service_menu_paths(&self) -> Result<Option<Vec<PathBuf>>, String> {
@@ -8630,6 +8981,64 @@ impl ShellScene {
         );
         self.record_task_status(ShellTaskStatus::completed(
             "Added to Places",
+            format!("{label} -> {}", path.display()),
+            false,
+        ));
+        Ok(true)
+    }
+
+    fn add_network_folder_place(
+        &mut self,
+        user_places_path: &Path,
+        path: &Path,
+        label: String,
+        size: PhysicalSize<u32>,
+    ) -> Result<bool, String> {
+        if !is_network_path(path) || path == network_root_path() {
+            return Err(format!("{} is not a network folder URL", path.display()));
+        }
+        if self.places.iter().any(|place| place.path == path) {
+            fika_log!(
+                "[fika-wgpu] add-network-folder label={:?} path={} added=0 duplicate=1 changes={}",
+                label,
+                path.display(),
+                self.places_changes
+            );
+            self.record_task_status(ShellTaskStatus::completed(
+                "Network Folder already added",
+                format!("{label} -> {}", path.display()),
+                false,
+            ));
+            return Ok(false);
+        }
+        if !add_user_place_at_path(user_places_path, path, label.clone())? {
+            self.record_task_status(ShellTaskStatus::completed(
+                "Network Folder already added",
+                format!("{label} -> {}", path.display()),
+                false,
+            ));
+            return Ok(false);
+        }
+
+        self.places = rebuild_shell_places_for_user_path(user_places_path);
+        save_shell_place_order(user_places_path, &self.places)?;
+        self.clamp_places_scroll(size);
+        self.context_target = None;
+        self.context_menu = None;
+        self.drop_menu = None;
+        self.properties_overlay = None;
+        self.rubber_band = None;
+        self.places_changes += 1;
+        self.refresh_hover(size);
+        fika_log!(
+            "[fika-wgpu] add-network-folder label={:?} path={} added=1 places={} changes={}",
+            label,
+            path.display(),
+            self.places.len(),
+            self.places_changes
+        );
+        self.record_task_status(ShellTaskStatus::completed(
+            "Added Network Folder",
             format!("{label} -> {}", path.display()),
             false,
         ));
@@ -12847,7 +13256,7 @@ impl ShellScene {
             width: size.width.max(1) as f32,
             height: size.height.max(1) as f32,
         };
-        push_rect(vertices, screen, [0.0, 0.0, 0.0, 0.40], size);
+        push_rect(vertices, screen, POPUP_BACKDROP, size);
         let scale = self.ui_scale();
         let rect = properties_overlay_rect_scaled(overlay, size, scale);
         let title_height = scaled_dialog_metric(PROPERTIES_TITLE_HEIGHT, scale);
@@ -12858,10 +13267,10 @@ impl ShellScene {
             rect,
             screen,
             scaled_dialog_metric(8.0, scale),
-            [0.118, 0.128, 0.140, 0.99],
+            POPUP_SURFACE,
             size,
         );
-        push_clipped_rect_outline(vertices, rect, screen, 1.0, [0.34, 0.38, 0.43, 1.0], size);
+        push_clipped_rect_outline(vertices, rect, screen, 1.0, POPUP_BORDER, size);
         push_rect(
             vertices,
             ViewRect {
@@ -12870,7 +13279,18 @@ impl ShellScene {
                 width: rect.width,
                 height: title_height,
             },
-            [0.145, 0.158, 0.174, 1.0],
+            POPUP_HEADER,
+            size,
+        );
+        push_rect(
+            vertices,
+            ViewRect {
+                x: rect.x,
+                y: rect.y + title_height - scaled_dialog_metric(1.0, scale).max(1.0),
+                width: rect.width,
+                height: scaled_dialog_metric(1.0, scale).max(1.0),
+            },
+            POPUP_DIVIDER,
             size,
         );
         text.push_label(
@@ -12882,12 +13302,28 @@ impl ShellScene {
                 height: scaled_dialog_metric(18.0, scale),
             },
             rect,
-            TextColor::rgb(238, 244, 249),
+            popup_title_text(),
         );
 
         let rows_y = rect.y + title_height + scaled_dialog_metric(10.0, scale);
         for (index, row) in overlay.rows.iter().enumerate() {
             let y = rows_y + index as f32 * row_height;
+            if index % 2 == 1 {
+                push_clipped_rounded_rect(
+                    vertices,
+                    ViewRect {
+                        x: rect.x + margin - scaled_dialog_metric(6.0, scale),
+                        y: y - scaled_dialog_metric(3.0, scale),
+                        width: (rect.width - margin * 2.0 + scaled_dialog_metric(12.0, scale))
+                            .max(1.0),
+                        height: (row_height - scaled_dialog_metric(4.0, scale)).max(1.0),
+                    },
+                    rect,
+                    scaled_dialog_metric(5.0, scale),
+                    POPUP_ROW_ALT,
+                    size,
+                );
+            }
             text.push_label(
                 row.label,
                 ViewRect {
@@ -12897,7 +13333,7 @@ impl ShellScene {
                     height: scaled_dialog_metric(18.0, scale),
                 },
                 rect,
-                TextColor::rgb(164, 176, 188),
+                popup_muted_text(),
             );
             text.push_label(
                 &row.value,
@@ -12908,7 +13344,7 @@ impl ShellScene {
                     height: scaled_dialog_metric(18.0, scale),
                 },
                 rect,
-                TextColor::rgb(222, 230, 238),
+                popup_body_text(),
             );
         }
     }
@@ -12928,7 +13364,7 @@ impl ShellScene {
             width: size.width.max(1) as f32,
             height: size.height.max(1) as f32,
         };
-        push_rect(vertices, screen, [0.0, 0.0, 0.0, 0.42], size);
+        push_rect(vertices, screen, POPUP_BACKDROP, size);
         let scale = self.ui_scale();
         let rect = task_detail_dialog_rect_scaled(self.task_statuses.len(), size, scale);
         let title_height = scaled_dialog_metric(TASK_DETAIL_TITLE_HEIGHT, scale);
@@ -12939,10 +13375,10 @@ impl ShellScene {
             rect,
             screen,
             scaled_dialog_metric(8.0, scale),
-            [0.105, 0.113, 0.124, 0.99],
+            POPUP_SURFACE,
             size,
         );
-        push_clipped_rect_outline(vertices, rect, screen, 1.0, [0.28, 0.32, 0.36, 1.0], size);
+        push_clipped_rect_outline(vertices, rect, screen, 1.0, POPUP_BORDER, size);
         push_rect(
             vertices,
             ViewRect {
@@ -12951,7 +13387,7 @@ impl ShellScene {
                 width: rect.width,
                 height: title_height,
             },
-            [0.126, 0.137, 0.150, 1.0],
+            POPUP_HEADER,
             size,
         );
         push_rect(
@@ -12962,7 +13398,7 @@ impl ShellScene {
                 width: rect.width,
                 height: scaled_dialog_metric(1.0, scale).max(1.0),
             },
-            [0.20, 0.23, 0.26, 1.0],
+            POPUP_DIVIDER,
             size,
         );
         text.push_label_aligned(
@@ -12974,7 +13410,7 @@ impl ShellScene {
                 height: scaled_dialog_metric(18.0, scale),
             },
             rect,
-            TextColor::rgb(238, 244, 249),
+            popup_title_text(),
             LabelAlignment::Start,
         );
 
@@ -12991,15 +13427,15 @@ impl ShellScene {
                 row,
                 rect,
                 scaled_dialog_metric(6.0, scale),
-                [0.136, 0.145, 0.157, 1.0],
+                POPUP_PANEL,
                 size,
             );
-            push_clipped_rect_outline(vertices, row, rect, 1.0, [0.218, 0.246, 0.274, 1.0], size);
+            push_clipped_rect_outline(vertices, row, rect, 1.0, POPUP_DIVIDER, size);
             let accent_color = match status.kind {
-                ShellTaskStatusKind::Running => [0.166, 0.420, 0.706, 1.0],
-                ShellTaskStatusKind::Completed => [0.118, 0.522, 0.318, 1.0],
-                ShellTaskStatusKind::Failed => [0.761, 0.220, 0.204, 1.0],
-                ShellTaskStatusKind::Cancelled => [0.440, 0.486, 0.540, 1.0],
+                ShellTaskStatusKind::Running => POPUP_STATUS_RUNNING,
+                ShellTaskStatusKind::Completed => POPUP_STATUS_COMPLETED,
+                ShellTaskStatusKind::Failed => POPUP_STATUS_FAILED,
+                ShellTaskStatusKind::Cancelled => POPUP_STATUS_CANCELLED,
             };
             let strip_width = scaled_dialog_metric(3.0, scale).max(1.0);
             push_clipped_rounded_rect(
@@ -13034,7 +13470,7 @@ impl ShellScene {
                     height: scaled_dialog_metric(18.0, scale),
                 },
                 row,
-                TextColor::rgb(238, 244, 249),
+                popup_body_text(),
                 LabelAlignment::Start,
             );
             let detail = if status.privileged {
@@ -13051,7 +13487,7 @@ impl ShellScene {
                     height: scaled_dialog_metric(18.0, scale),
                 },
                 row,
-                TextColor::rgb(196, 207, 218),
+                popup_soft_text(),
                 LabelAlignment::Start,
             );
             text.push_label_aligned(
@@ -13068,12 +13504,7 @@ impl ShellScene {
                     height: scaled_dialog_metric(16.0, scale),
                 },
                 row,
-                match status.kind {
-                    ShellTaskStatusKind::Running => TextColor::rgb(134, 183, 230),
-                    ShellTaskStatusKind::Completed => TextColor::rgb(126, 205, 157),
-                    ShellTaskStatusKind::Failed => TextColor::rgb(235, 139, 130),
-                    ShellTaskStatusKind::Cancelled => TextColor::rgb(164, 176, 188),
-                },
+                popup_status_text(status.kind),
                 LabelAlignment::Start,
             );
 
@@ -13085,21 +13516,14 @@ impl ShellScene {
                 rect,
                 scaled_dialog_metric(5.0, scale),
                 if row_action_is_cancel {
-                    [0.442, 0.226, 0.190, 1.0]
+                    POPUP_BUTTON_DANGER
                 } else {
-                    [0.154, 0.166, 0.180, 1.0]
+                    POPUP_BUTTON_SECONDARY
                 },
                 size,
             );
-            push_clipped_rect_outline(
-                vertices,
-                button,
-                rect,
-                1.0,
-                [0.252, 0.286, 0.322, 1.0],
-                size,
-            );
-            text.push_label(
+            push_clipped_rect_outline(vertices, button, rect, 1.0, POPUP_BORDER, size);
+            text.push_label_aligned(
                 if row_action_is_cancel {
                     "Cancel"
                 } else {
@@ -13112,7 +13536,12 @@ impl ShellScene {
                     height: scaled_dialog_metric(18.0, scale),
                 },
                 rect,
-                TextColor::rgb(238, 244, 249),
+                if row_action_is_cancel {
+                    popup_inverse_text()
+                } else {
+                    popup_body_text()
+                },
+                LabelAlignment::Center,
             );
         }
 
@@ -13125,21 +13554,14 @@ impl ShellScene {
                 rect,
                 scaled_dialog_metric(5.0, scale),
                 if active {
-                    [0.176, 0.368, 0.565, 1.0]
+                    POPUP_BUTTON_PRIMARY
                 } else {
-                    [0.154, 0.166, 0.180, 1.0]
+                    POPUP_BUTTON_SECONDARY
                 },
                 size,
             );
-            push_clipped_rect_outline(
-                vertices,
-                button,
-                rect,
-                1.0,
-                [0.252, 0.286, 0.322, 1.0],
-                size,
-            );
-            text.push_label(
+            push_clipped_rect_outline(vertices, button, rect, 1.0, POPUP_BORDER, size);
+            text.push_label_aligned(
                 label,
                 ViewRect {
                     x: button.x + scaled_dialog_metric(10.0, scale),
@@ -13148,7 +13570,12 @@ impl ShellScene {
                     height: scaled_dialog_metric(18.0, scale),
                 },
                 rect,
-                TextColor::rgb(238, 244, 249),
+                if active {
+                    popup_inverse_text()
+                } else {
+                    popup_body_text()
+                },
+                LabelAlignment::Center,
             );
         }
     }
@@ -13168,7 +13595,7 @@ impl ShellScene {
             width: size.width.max(1) as f32,
             height: size.height.max(1) as f32,
         };
-        push_rect(vertices, screen, [0.0, 0.0, 0.0, 0.44], size);
+        push_rect(vertices, screen, POPUP_BACKDROP, size);
         let scale = self.ui_scale();
         let rect = create_dialog_rect_scaled(dialog, size, scale);
         let title_height = scaled_dialog_metric(CREATE_DIALOG_TITLE_HEIGHT, scale);
@@ -13178,10 +13605,10 @@ impl ShellScene {
             rect,
             screen,
             scaled_dialog_metric(8.0, scale),
-            [0.118, 0.128, 0.140, 0.99],
+            POPUP_SURFACE,
             size,
         );
-        push_clipped_rect_outline(vertices, rect, screen, 1.0, [0.34, 0.38, 0.43, 1.0], size);
+        push_clipped_rect_outline(vertices, rect, screen, 1.0, POPUP_BORDER, size);
         push_rect(
             vertices,
             ViewRect {
@@ -13190,7 +13617,18 @@ impl ShellScene {
                 width: rect.width,
                 height: title_height,
             },
-            [0.145, 0.158, 0.174, 1.0],
+            POPUP_HEADER,
+            size,
+        );
+        push_rect(
+            vertices,
+            ViewRect {
+                x: rect.x,
+                y: rect.y + title_height - scaled_dialog_metric(1.0, scale).max(1.0),
+                width: rect.width,
+                height: scaled_dialog_metric(1.0, scale).max(1.0),
+            },
+            POPUP_DIVIDER,
             size,
         );
         let title = if dialog.privileged {
@@ -13207,7 +13645,7 @@ impl ShellScene {
                 height: scaled_dialog_metric(18.0, scale),
             },
             rect,
-            TextColor::rgb(238, 244, 249),
+            popup_title_text(),
         );
 
         for kind in [CreateEntryKind::Folder, CreateEntryKind::File] {
@@ -13219,13 +13657,14 @@ impl ShellScene {
                 rect,
                 scaled_dialog_metric(5.0, scale),
                 if active {
-                    view_mode_badge_color(self.panes[ShellPaneId::SLOT_0].view_mode)
+                    POPUP_BUTTON_PRIMARY_SOFT
                 } else {
-                    [0.150, 0.162, 0.176, 1.0]
+                    POPUP_BUTTON_SECONDARY
                 },
                 size,
             );
-            text.push_label(
+            push_clipped_rect_outline(vertices, button, rect, 1.0, POPUP_BORDER, size);
+            text.push_label_aligned(
                 kind.label(),
                 ViewRect {
                     x: button.x + scaled_dialog_metric(10.0, scale),
@@ -13235,10 +13674,11 @@ impl ShellScene {
                 },
                 rect,
                 if active {
-                    TextColor::rgb(246, 250, 252)
+                    popup_inverse_text()
                 } else {
-                    TextColor::rgb(196, 207, 218)
+                    popup_body_text()
                 },
+                LabelAlignment::Center,
             );
         }
 
@@ -13248,10 +13688,10 @@ impl ShellScene {
             input,
             rect,
             scaled_dialog_metric(5.0, scale),
-            [0.078, 0.086, 0.096, 1.0],
+            POPUP_INPUT,
             size,
         );
-        push_clipped_rect_outline(vertices, input, rect, 1.0, [0.26, 0.31, 0.36, 1.0], size);
+        push_clipped_rect_outline(vertices, input, rect, 1.0, POPUP_FIELD_FOCUS, size);
         let draft = format!("{}|", dialog.name);
         text.push_label(
             &draft,
@@ -13262,7 +13702,7 @@ impl ShellScene {
                 height: scaled_dialog_metric(18.0, scale),
             },
             input,
-            TextColor::rgb(230, 236, 241),
+            popup_body_text(),
         );
 
         if let Some(error) = dialog.error.as_ref() {
@@ -13275,7 +13715,7 @@ impl ShellScene {
                     height: scaled_dialog_metric(18.0, scale),
                 },
                 rect,
-                TextColor::rgb(238, 132, 122),
+                popup_error_text(),
             );
         }
 
@@ -13288,15 +13728,16 @@ impl ShellScene {
                 rect,
                 scaled_dialog_metric(5.0, scale),
                 if active && dialog.privileged {
-                    [0.706, 0.325, 0.035, 1.0]
+                    POPUP_BUTTON_WARNING
                 } else if active {
-                    [0.22, 0.42, 0.62, 1.0]
+                    POPUP_BUTTON_PRIMARY
                 } else {
-                    [0.150, 0.162, 0.176, 1.0]
+                    POPUP_BUTTON_SECONDARY
                 },
                 size,
             );
-            text.push_label(
+            push_clipped_rect_outline(vertices, button, rect, 1.0, POPUP_BORDER, size);
+            text.push_label_aligned(
                 label,
                 ViewRect {
                     x: button.x + scaled_dialog_metric(10.0, scale),
@@ -13305,7 +13746,12 @@ impl ShellScene {
                     height: scaled_dialog_metric(18.0, scale),
                 },
                 rect,
-                TextColor::rgb(238, 244, 249),
+                if active {
+                    popup_inverse_text()
+                } else {
+                    popup_body_text()
+                },
+                LabelAlignment::Center,
             );
         }
     }
@@ -13325,7 +13771,7 @@ impl ShellScene {
             width: size.width.max(1) as f32,
             height: size.height.max(1) as f32,
         };
-        push_rect(vertices, screen, [0.0, 0.0, 0.0, 0.44], size);
+        push_rect(vertices, screen, POPUP_BACKDROP, size);
         let scale = self.ui_scale();
         let rect = rename_dialog_rect_scaled(dialog, size, scale);
         let title_height = scaled_dialog_metric(RENAME_DIALOG_TITLE_HEIGHT, scale);
@@ -13335,10 +13781,10 @@ impl ShellScene {
             rect,
             screen,
             scaled_dialog_metric(8.0, scale),
-            [0.118, 0.128, 0.140, 0.99],
+            POPUP_SURFACE,
             size,
         );
-        push_clipped_rect_outline(vertices, rect, screen, 1.0, [0.34, 0.38, 0.43, 1.0], size);
+        push_clipped_rect_outline(vertices, rect, screen, 1.0, POPUP_BORDER, size);
         push_rect(
             vertices,
             ViewRect {
@@ -13347,7 +13793,18 @@ impl ShellScene {
                 width: rect.width,
                 height: title_height,
             },
-            [0.145, 0.158, 0.174, 1.0],
+            POPUP_HEADER,
+            size,
+        );
+        push_rect(
+            vertices,
+            ViewRect {
+                x: rect.x,
+                y: rect.y + title_height - scaled_dialog_metric(1.0, scale).max(1.0),
+                width: rect.width,
+                height: scaled_dialog_metric(1.0, scale).max(1.0),
+            },
+            POPUP_DIVIDER,
             size,
         );
         let title = match (dialog.is_dir, dialog.privileged) {
@@ -13365,7 +13822,7 @@ impl ShellScene {
                 height: scaled_dialog_metric(18.0, scale),
             },
             rect,
-            TextColor::rgb(238, 244, 249),
+            popup_title_text(),
         );
 
         let input = rename_dialog_input_rect_scaled(rect, scale);
@@ -13374,10 +13831,10 @@ impl ShellScene {
             input,
             rect,
             scaled_dialog_metric(5.0, scale),
-            [0.078, 0.086, 0.096, 1.0],
+            POPUP_INPUT,
             size,
         );
-        push_clipped_rect_outline(vertices, input, rect, 1.0, [0.26, 0.31, 0.36, 1.0], size);
+        push_clipped_rect_outline(vertices, input, rect, 1.0, POPUP_FIELD_FOCUS, size);
         let draft = format!("{}|", dialog.name);
         text.push_label(
             &draft,
@@ -13388,7 +13845,7 @@ impl ShellScene {
                 height: scaled_dialog_metric(18.0, scale),
             },
             input,
-            TextColor::rgb(230, 236, 241),
+            popup_body_text(),
         );
 
         if let Some(error) = dialog.error.as_ref() {
@@ -13401,7 +13858,7 @@ impl ShellScene {
                     height: scaled_dialog_metric(18.0, scale),
                 },
                 rect,
-                TextColor::rgb(238, 132, 122),
+                popup_error_text(),
             );
         }
 
@@ -13414,15 +13871,16 @@ impl ShellScene {
                 rect,
                 scaled_dialog_metric(5.0, scale),
                 if active && dialog.privileged {
-                    [0.706, 0.325, 0.035, 1.0]
+                    POPUP_BUTTON_WARNING
                 } else if active {
-                    [0.22, 0.42, 0.62, 1.0]
+                    POPUP_BUTTON_PRIMARY
                 } else {
-                    [0.150, 0.162, 0.176, 1.0]
+                    POPUP_BUTTON_SECONDARY
                 },
                 size,
             );
-            text.push_label(
+            push_clipped_rect_outline(vertices, button, rect, 1.0, POPUP_BORDER, size);
+            text.push_label_aligned(
                 label,
                 ViewRect {
                     x: button.x + scaled_dialog_metric(10.0, scale),
@@ -13431,7 +13889,12 @@ impl ShellScene {
                     height: scaled_dialog_metric(18.0, scale),
                 },
                 rect,
-                TextColor::rgb(238, 244, 249),
+                if active {
+                    popup_inverse_text()
+                } else {
+                    popup_body_text()
+                },
+                LabelAlignment::Center,
             );
         }
     }
@@ -13451,7 +13914,7 @@ impl ShellScene {
             width: size.width.max(1) as f32,
             height: size.height.max(1) as f32,
         };
-        push_rect(vertices, screen, [0.0, 0.0, 0.0, 0.42], size);
+        push_rect(vertices, screen, POPUP_BACKDROP, size);
         let scale = self.ui_scale();
         let rect = open_with_chooser_rect_scaled(chooser, size, scale);
         let title_height = scaled_dialog_metric(OPEN_WITH_CHOOSER_TITLE_HEIGHT, scale);
@@ -13462,10 +13925,10 @@ impl ShellScene {
             rect,
             screen,
             scaled_dialog_metric(8.0, scale),
-            [0.105, 0.113, 0.124, 0.99],
+            POPUP_SURFACE,
             size,
         );
-        push_clipped_rect_outline(vertices, rect, screen, 1.0, [0.28, 0.32, 0.36, 1.0], size);
+        push_clipped_rect_outline(vertices, rect, screen, 1.0, POPUP_BORDER, size);
         push_rect(
             vertices,
             ViewRect {
@@ -13474,7 +13937,7 @@ impl ShellScene {
                 width: rect.width,
                 height: title_height,
             },
-            [0.126, 0.137, 0.150, 1.0],
+            POPUP_HEADER,
             size,
         );
         push_rect(
@@ -13485,7 +13948,7 @@ impl ShellScene {
                 width: rect.width,
                 height: scaled_dialog_metric(1.0, scale).max(1.0),
             },
-            [0.20, 0.23, 0.26, 1.0],
+            POPUP_DIVIDER,
             size,
         );
         text.push_label(
@@ -13497,7 +13960,7 @@ impl ShellScene {
                 height: scaled_dialog_metric(18.0, scale),
             },
             rect,
-            TextColor::rgb(238, 244, 249),
+            popup_title_text(),
         );
         text.push_label(
             chooser.mime_type.as_deref().unwrap_or("unknown MIME"),
@@ -13508,7 +13971,7 @@ impl ShellScene {
                 height: scaled_dialog_metric(14.0, scale),
             },
             rect,
-            TextColor::rgb(162, 176, 188),
+            popup_muted_text(),
         );
 
         let query = open_with_chooser_query_rect_scaled(rect, scale);
@@ -13517,10 +13980,10 @@ impl ShellScene {
             query,
             rect,
             scaled_dialog_metric(5.0, scale),
-            [0.074, 0.082, 0.092, 1.0],
+            POPUP_INPUT,
             size,
         );
-        push_clipped_rect_outline(vertices, query, rect, 1.0, [0.28, 0.33, 0.38, 1.0], size);
+        push_clipped_rect_outline(vertices, query, rect, 1.0, POPUP_FIELD_FOCUS, size);
         let query_label = if chooser.query.is_empty() {
             "Search applications|".to_string()
         } else {
@@ -13536,9 +13999,9 @@ impl ShellScene {
             },
             query,
             if chooser.query.is_empty() {
-                TextColor::rgb(132, 146, 158)
+                popup_muted_text()
             } else {
-                TextColor::rgb(230, 236, 241)
+                popup_body_text()
             },
         );
 
@@ -13548,10 +14011,10 @@ impl ShellScene {
             list,
             rect,
             scaled_dialog_metric(6.0, scale),
-            [0.083, 0.091, 0.101, 1.0],
+            POPUP_INPUT,
             size,
         );
-        push_clipped_rect_outline(vertices, list, rect, 1.0, [0.220, 0.250, 0.282, 1.0], size);
+        push_clipped_rect_outline(vertices, list, rect, 1.0, POPUP_DIVIDER, size);
         let visible = chooser.visible_filtered_indexes();
         if visible.is_empty() {
             text.push_label(
@@ -13563,7 +14026,7 @@ impl ShellScene {
                     height: scaled_dialog_metric(18.0, scale),
                 },
                 list,
-                TextColor::rgb(166, 178, 190),
+                popup_muted_text(),
             );
         } else {
             for (visible_row, app_index) in visible.iter().copied().enumerate() {
@@ -13582,13 +14045,13 @@ impl ShellScene {
                     vertices,
                     row_rect,
                     if selected {
-                        [0.155, 0.280, 0.410, 0.94]
+                        POPUP_ROW_SELECTED
                     } else if application.is_default {
-                        [0.110, 0.142, 0.118, 0.90]
+                        POPUP_ROW_DEFAULT
                     } else if visible_row % 2 == 1 {
-                        [0.103, 0.112, 0.124, 0.76]
+                        POPUP_ROW_ALT
                     } else {
-                        [0.093, 0.102, 0.114, 0.72]
+                        POPUP_INPUT
                     },
                     size,
                 );
@@ -13602,9 +14065,9 @@ impl ShellScene {
                             height: row_rect.height,
                         },
                         if selected {
-                            [0.314, 0.565, 0.784, 1.0]
+                            POPUP_BUTTON_PRIMARY
                         } else {
-                            [0.344, 0.580, 0.322, 1.0]
+                            POPUP_STATUS_COMPLETED
                         },
                         size,
                     );
@@ -13621,11 +14084,11 @@ impl ShellScene {
                     list,
                     scaled_dialog_metric(4.0, scale),
                     if selected {
-                        [0.506, 0.690, 0.836, 1.0]
+                        POPUP_BUTTON_PRIMARY
                     } else if application.is_default {
-                        [0.350, 0.566, 0.318, 1.0]
+                        POPUP_STATUS_COMPLETED
                     } else {
-                        [0.330, 0.406, 0.480, 1.0]
+                        POPUP_MARKER_NEUTRAL
                     },
                     size,
                 );
@@ -13644,9 +14107,9 @@ impl ShellScene {
                     },
                     row_rect,
                     if selected {
-                        TextColor::rgb(246, 250, 252)
+                        popup_title_text()
                     } else {
-                        TextColor::rgb(222, 230, 238)
+                        popup_body_text()
                     },
                 );
                 text.push_label(
@@ -13659,9 +14122,9 @@ impl ShellScene {
                     },
                     row_rect,
                     if selected {
-                        TextColor::rgb(210, 225, 236)
+                        popup_soft_text()
                     } else {
-                        TextColor::rgb(150, 164, 178)
+                        popup_muted_text()
                     },
                 );
             }
@@ -13683,7 +14146,7 @@ impl ShellScene {
                     height: scaled_dialog_metric(18.0, scale),
                 },
                 rect,
-                TextColor::rgb(146, 160, 174),
+                popup_muted_text(),
             );
         }
 
@@ -13697,7 +14160,7 @@ impl ShellScene {
                     height: scaled_dialog_metric(18.0, scale),
                 },
                 rect,
-                TextColor::rgb(238, 132, 122),
+                popup_error_text(),
             );
         }
 
@@ -13710,21 +14173,14 @@ impl ShellScene {
                 rect,
                 scaled_dialog_metric(5.0, scale),
                 if active {
-                    [0.176, 0.368, 0.565, 1.0]
+                    POPUP_BUTTON_PRIMARY
                 } else {
-                    [0.154, 0.166, 0.180, 1.0]
+                    POPUP_BUTTON_SECONDARY
                 },
                 size,
             );
-            push_clipped_rect_outline(
-                vertices,
-                button,
-                rect,
-                1.0,
-                [0.252, 0.286, 0.322, 1.0],
-                size,
-            );
-            text.push_label(
+            push_clipped_rect_outline(vertices, button, rect, 1.0, POPUP_BORDER, size);
+            text.push_label_aligned(
                 label,
                 ViewRect {
                     x: button.x + scaled_dialog_metric(10.0, scale),
@@ -13733,7 +14189,12 @@ impl ShellScene {
                     height: scaled_dialog_metric(18.0, scale),
                 },
                 rect,
-                TextColor::rgb(238, 244, 249),
+                if active {
+                    popup_inverse_text()
+                } else {
+                    popup_body_text()
+                },
+                LabelAlignment::Center,
             );
         }
     }
@@ -13753,7 +14214,7 @@ impl ShellScene {
             width: size.width.max(1) as f32,
             height: size.height.max(1) as f32,
         };
-        push_rect(vertices, screen, [0.0, 0.0, 0.0, 0.48], size);
+        push_rect(vertices, screen, POPUP_BACKDROP, size);
         let scale = self.ui_scale();
         let rect = trash_conflict_dialog_rect_scaled(dialog, size, scale);
         let title_height = scaled_dialog_metric(TRASH_CONFLICT_DIALOG_TITLE_HEIGHT, scale);
@@ -13763,10 +14224,10 @@ impl ShellScene {
             rect,
             screen,
             scaled_dialog_metric(8.0, scale),
-            [0.118, 0.128, 0.140, 0.99],
+            POPUP_SURFACE,
             size,
         );
-        push_clipped_rect_outline(vertices, rect, screen, 1.0, [0.42, 0.36, 0.25, 1.0], size);
+        push_clipped_rect_outline(vertices, rect, screen, 1.0, POPUP_BUTTON_WARNING, size);
         push_rect(
             vertices,
             ViewRect {
@@ -13775,7 +14236,18 @@ impl ShellScene {
                 width: rect.width,
                 height: title_height,
             },
-            [0.180, 0.150, 0.105, 1.0],
+            POPUP_WARNING_HEADER,
+            size,
+        );
+        push_rect(
+            vertices,
+            ViewRect {
+                x: rect.x,
+                y: rect.y + title_height - scaled_dialog_metric(1.0, scale).max(1.0),
+                width: rect.width,
+                height: scaled_dialog_metric(1.0, scale).max(1.0),
+            },
+            POPUP_WARNING_DIVIDER,
             size,
         );
         text.push_label(
@@ -13787,7 +14259,7 @@ impl ShellScene {
                 height: scaled_dialog_metric(18.0, scale),
             },
             rect,
-            TextColor::rgb(248, 242, 232),
+            popup_warning_text(),
         );
 
         let count = dialog.conflicts.len();
@@ -13800,7 +14272,7 @@ impl ShellScene {
                 height: scaled_dialog_metric(18.0, scale),
             },
             rect,
-            TextColor::rgb(226, 218, 206),
+            popup_body_text(),
         );
         if let Some(conflict) = dialog.first_conflict() {
             text.push_label(
@@ -13812,7 +14284,7 @@ impl ShellScene {
                     height: scaled_dialog_metric(18.0, scale),
                 },
                 rect,
-                TextColor::rgb(192, 202, 212),
+                popup_soft_text(),
             );
             text.push_label(
                 &format!("Trash: {}", conflict.trash_path.display()),
@@ -13823,7 +14295,7 @@ impl ShellScene {
                     height: scaled_dialog_metric(18.0, scale),
                 },
                 rect,
-                TextColor::rgb(192, 202, 212),
+                popup_soft_text(),
             );
         }
 
@@ -13836,13 +14308,14 @@ impl ShellScene {
                 rect,
                 scaled_dialog_metric(5.0, scale),
                 if active {
-                    [0.58, 0.36, 0.18, 1.0]
+                    POPUP_BUTTON_WARNING
                 } else {
-                    [0.150, 0.162, 0.176, 1.0]
+                    POPUP_BUTTON_SECONDARY
                 },
                 size,
             );
-            text.push_label(
+            push_clipped_rect_outline(vertices, button, rect, 1.0, POPUP_BORDER, size);
+            text.push_label_aligned(
                 label,
                 ViewRect {
                     x: button.x + scaled_dialog_metric(10.0, scale),
@@ -13851,7 +14324,12 @@ impl ShellScene {
                     height: scaled_dialog_metric(18.0, scale),
                 },
                 rect,
-                TextColor::rgb(248, 244, 238),
+                if active {
+                    popup_inverse_text()
+                } else {
+                    popup_body_text()
+                },
+                LabelAlignment::Center,
             );
         }
     }
@@ -21642,11 +22120,6 @@ fn view_mode_content_color(view_mode: ShellViewMode) -> [f32; 4] {
     view_mode_surface_color(view_mode)
 }
 
-fn view_mode_badge_color(view_mode: ShellViewMode) -> [f32; 4] {
-    let _ = view_mode;
-    [0.184, 0.435, 0.929, 1.0]
-}
-
 fn chrome_color() -> [f32; 4] {
     [0.973, 0.976, 0.984, 1.0]
 }
@@ -21708,6 +22181,69 @@ fn push_fallback_icon(
             [0.76, 0.80, 0.86, 1.0],
             size,
         );
+    }
+}
+
+type UiColor = [f32; 4];
+
+const POPUP_BACKDROP: UiColor = [0.047, 0.051, 0.056, 0.30];
+const POPUP_SURFACE: UiColor = [0.990, 0.991, 0.988, 0.99];
+const POPUP_HEADER: UiColor = [0.965, 0.969, 0.973, 1.0];
+const POPUP_PANEL: UiColor = [0.976, 0.979, 0.978, 1.0];
+const POPUP_INPUT: UiColor = [1.000, 1.000, 1.000, 1.0];
+const POPUP_BORDER: UiColor = [0.706, 0.722, 0.741, 1.0];
+const POPUP_DIVIDER: UiColor = [0.855, 0.863, 0.873, 1.0];
+const POPUP_ROW_SELECTED: UiColor = [0.820, 0.886, 0.976, 1.0];
+const POPUP_ROW_ALT: UiColor = [0.974, 0.976, 0.972, 1.0];
+const POPUP_ROW_DEFAULT: UiColor = [0.910, 0.961, 0.925, 1.0];
+const POPUP_BUTTON_SECONDARY: UiColor = [0.941, 0.944, 0.941, 1.0];
+const POPUP_BUTTON_PRIMARY: UiColor = [0.119, 0.392, 0.635, 1.0];
+const POPUP_BUTTON_PRIMARY_SOFT: UiColor = [0.176, 0.459, 0.620, 1.0];
+const POPUP_BUTTON_WARNING: UiColor = [0.718, 0.404, 0.133, 1.0];
+const POPUP_BUTTON_DANGER: UiColor = [0.700, 0.235, 0.188, 1.0];
+const POPUP_STATUS_RUNNING: UiColor = [0.119, 0.392, 0.635, 1.0];
+const POPUP_STATUS_COMPLETED: UiColor = [0.090, 0.506, 0.286, 1.0];
+const POPUP_STATUS_FAILED: UiColor = [0.765, 0.235, 0.188, 1.0];
+const POPUP_STATUS_CANCELLED: UiColor = [0.408, 0.459, 0.522, 1.0];
+const POPUP_FIELD_FOCUS: UiColor = [0.239, 0.502, 0.710, 1.0];
+const POPUP_MARKER_NEUTRAL: UiColor = [0.608, 0.674, 0.753, 1.0];
+const POPUP_WARNING_HEADER: UiColor = [1.000, 0.957, 0.890, 1.0];
+const POPUP_WARNING_DIVIDER: UiColor = [0.906, 0.737, 0.490, 1.0];
+
+fn popup_title_text() -> TextColor {
+    TextColor::rgb(31, 37, 45)
+}
+
+fn popup_body_text() -> TextColor {
+    TextColor::rgb(48, 56, 66)
+}
+
+fn popup_muted_text() -> TextColor {
+    TextColor::rgb(100, 113, 128)
+}
+
+fn popup_soft_text() -> TextColor {
+    TextColor::rgb(74, 86, 100)
+}
+
+fn popup_inverse_text() -> TextColor {
+    TextColor::rgb(255, 255, 255)
+}
+
+fn popup_error_text() -> TextColor {
+    TextColor::rgb(177, 54, 43)
+}
+
+fn popup_warning_text() -> TextColor {
+    TextColor::rgb(92, 55, 18)
+}
+
+fn popup_status_text(kind: ShellTaskStatusKind) -> TextColor {
+    match kind {
+        ShellTaskStatusKind::Running => TextColor::rgb(46, 103, 168),
+        ShellTaskStatusKind::Completed => TextColor::rgb(31, 132, 79),
+        ShellTaskStatusKind::Failed => popup_error_text(),
+        ShellTaskStatusKind::Cancelled => popup_muted_text(),
     }
 }
 
@@ -29286,6 +29822,195 @@ mod tests {
     }
 
     #[test]
+    fn network_context_menus_hide_unavailable_local_write_actions() {
+        let root_blank = ShellContextTarget::Blank {
+            pane: ShellPaneId::SLOT_0,
+            path: network_root_path(),
+        };
+        assert_eq!(
+            context_menu_actions(&root_blank),
+            &[
+                ShellContextMenuAction::AddNetworkFolder,
+                ShellContextMenuAction::SelectAll,
+                ShellContextMenuAction::ViewMode,
+                ShellContextMenuAction::ToggleHiddenFiles,
+                ShellContextMenuAction::SplitPane,
+                ShellContextMenuAction::Refresh,
+                ShellContextMenuAction::Properties,
+            ]
+        );
+
+        let remote_blank = ShellContextTarget::Blank {
+            pane: ShellPaneId::SLOT_0,
+            path: PathBuf::from("smb://server/share/folder/"),
+        };
+        assert_eq!(
+            context_menu_actions(&remote_blank),
+            &[
+                ShellContextMenuAction::AddToPlaces,
+                ShellContextMenuAction::SelectAll,
+                ShellContextMenuAction::ViewMode,
+                ShellContextMenuAction::ToggleHiddenFiles,
+                ShellContextMenuAction::SplitPane,
+                ShellContextMenuAction::Refresh,
+                ShellContextMenuAction::Properties,
+            ]
+        );
+        assert!(!context_menu_actions(&remote_blank).contains(&ShellContextMenuAction::CreateNew));
+        assert!(!context_menu_actions(&remote_blank).contains(&ShellContextMenuAction::Paste));
+        assert!(
+            !context_menu_actions(&remote_blank)
+                .contains(&ShellContextMenuAction::PasteAsAdministrator)
+        );
+
+        let remote_file = ShellContextTarget::Item {
+            pane: ShellPaneId::SLOT_0,
+            index: 0,
+            path: PathBuf::from("sftp://example.test/home/yk/report.txt"),
+            is_dir: false,
+            selection_count: 1,
+        };
+        assert_eq!(
+            context_menu_actions(&remote_file),
+            &[
+                ShellContextMenuAction::Open,
+                ShellContextMenuAction::OpenWith,
+                ShellContextMenuAction::CopyLocation,
+                ShellContextMenuAction::Properties,
+            ]
+        );
+        assert!(!context_menu_actions(&remote_file).contains(&ShellContextMenuAction::Cut));
+        assert!(!context_menu_actions(&remote_file).contains(&ShellContextMenuAction::Rename));
+        assert!(!context_menu_actions(&remote_file).contains(&ShellContextMenuAction::MoveToTrash));
+
+        let remote_dir = ShellContextTarget::Item {
+            pane: ShellPaneId::SLOT_0,
+            index: 0,
+            path: PathBuf::from("sftp://example.test/home/yk/projects/"),
+            is_dir: true,
+            selection_count: 1,
+        };
+        assert_eq!(
+            context_menu_actions(&remote_dir),
+            &[
+                ShellContextMenuAction::Open,
+                ShellContextMenuAction::OpenInNewPane,
+                ShellContextMenuAction::AddToPlaces,
+                ShellContextMenuAction::CopyLocation,
+                ShellContextMenuAction::Properties,
+            ]
+        );
+    }
+
+    #[test]
+    fn network_root_place_context_menu_offers_add_network_folder() {
+        let target = ShellContextTarget::Place {
+            index: 0,
+            label: "Network".to_string(),
+            path: network_root_path(),
+            group: "Network",
+            device: None,
+            network: true,
+            trash: false,
+            root: false,
+            editable: false,
+        };
+
+        assert_eq!(
+            context_menu_actions(&target),
+            &[
+                ShellContextMenuAction::Open,
+                ShellContextMenuAction::OpenInNewPane,
+                ShellContextMenuAction::AddNetworkFolder,
+                ShellContextMenuAction::CopyLocation,
+                ShellContextMenuAction::Properties,
+            ]
+        );
+        assert_eq!(
+            ShellContextMenuAction::AddNetworkFolder.label(),
+            "Add Network Folder..."
+        );
+        assert_eq!(
+            ShellContextMenuAction::AddNetworkFolder.as_str(),
+            "add-network-folder"
+        );
+    }
+
+    #[test]
+    fn add_network_folder_opens_builtin_uri_input() {
+        let mut scene = test_scene(Vec::new(), ShellViewMode::Icons);
+        scene.context_target = Some(ShellContextTarget::Place {
+            index: 0,
+            label: "Network".to_string(),
+            path: network_root_path(),
+            group: "Network",
+            device: None,
+            network: true,
+            trash: false,
+            root: false,
+            editable: false,
+        });
+        scene.context_menu = Some(ShellContextMenu::new(
+            scene.context_target.clone().unwrap(),
+            ViewPoint { x: 20.0, y: 20.0 },
+        ));
+        let size = PhysicalSize::new(700, 320);
+
+        assert!(scene.open_add_network_folder_location_draft(size));
+
+        assert_eq!(
+            scene.location_draft_purpose(),
+            Some(LocationDraftPurpose::AddNetworkFolder)
+        );
+        assert_eq!(scene.location_draft_value(), Some("smb://"));
+        assert!(scene.context_target.is_none());
+        assert!(scene.context_menu.is_none());
+    }
+
+    #[test]
+    fn add_network_folder_request_saves_network_bookmark() {
+        let root = test_dir("add-network-folder-bookmark");
+        let places_path = root.join("places.xbel");
+        let mut scene = test_scene(Vec::new(), ShellViewMode::Icons);
+        let size = PhysicalSize::new(700, 320);
+        assert!(scene.open_add_network_folder_location_draft(size));
+        scene
+            .location_draft
+            .as_mut()
+            .unwrap()
+            .draft
+            .set_completed("smb://server/Share%20Name/".to_string());
+
+        let request = scene.add_network_folder_request_from_draft().unwrap();
+        assert_eq!(request.pane, ShellPaneId::SLOT_0);
+        assert_eq!(request.path, PathBuf::from("smb://server/Share%20Name/"));
+        assert_eq!(request.label, "Share Name on server");
+        assert!(
+            scene
+                .add_network_folder_place(&places_path, &request.path, request.label.clone(), size)
+                .unwrap()
+        );
+
+        assert_eq!(
+            load_user_places(&places_path).unwrap(),
+            vec![UserPlace::new(
+                "Share Name on server".to_string(),
+                PathBuf::from("smb://server/Share%20Name/")
+            )]
+        );
+        let places = build_shell_places_from(&places_path);
+        assert!(places.iter().any(|place| {
+            place.group == "Network"
+                && place.label == "Share Name on server"
+                && place.path == PathBuf::from("smb://server/Share%20Name/")
+                && place.network
+                && place.editable
+        }));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn context_menu_items_offer_open_with_submenu_applications() {
         let target = ShellContextTarget::Item {
             pane: ShellPaneId::SLOT_0,
@@ -30396,6 +31121,137 @@ text/plain=writer.desktop;\n",
         assert_eq!(
             request.plan.commands[0].args,
             vec!["--line", "/tmp/note.txt"]
+        );
+    }
+
+    #[test]
+    fn ark_builtin_context_action_compresses_local_multi_selection() {
+        let mut scene = test_scene(
+            vec![test_entry("one.txt", false), test_entry("two.txt", false)],
+            ShellViewMode::Icons,
+        );
+        assert!(
+            scene.panes[ShellPaneId::SLOT_0]
+                .selection
+                .select_indexes(&[0, 1])
+        );
+        let target = ShellContextTarget::Item {
+            pane: ShellPaneId::SLOT_0,
+            index: 0,
+            path: PathBuf::from("/tmp/one.txt"),
+            is_dir: false,
+            selection_count: 2,
+        };
+
+        let (_, actions) = scene.context_menu_dynamic_data(&target, &MimeApplicationCache::empty());
+
+        assert!(actions.iter().any(|action| {
+            action.id == BUILTIN_ARK_COMPRESS_ACTION_ID && action.label == "Compress..."
+        }));
+        assert!(
+            actions
+                .iter()
+                .all(|action| action.id != BUILTIN_ARK_EXTRACT_HERE_ACTION_ID)
+        );
+
+        scene.context_target = Some(target);
+        let request = scene
+            .service_menu_launch_request(
+                &MimeApplicationCache::empty(),
+                BUILTIN_ARK_COMPRESS_ACTION_ID,
+            )
+            .unwrap();
+
+        assert_eq!(
+            request.paths,
+            vec![PathBuf::from("/tmp/one.txt"), PathBuf::from("/tmp/two.txt")]
+        );
+        assert_eq!(request.app_name, "Ark: Compress");
+        assert_eq!(request.plan.commands[0].program, "ark");
+        assert_eq!(
+            request.plan.commands[0].args,
+            vec![
+                "--add",
+                "--changetofirstpath",
+                "--autofilename",
+                "zip",
+                "/tmp/one.txt",
+                "/tmp/two.txt"
+            ]
+        );
+    }
+
+    #[test]
+    fn ark_builtin_context_action_extracts_single_archive_by_mime() {
+        let mut scene = test_scene(
+            vec![test_entry_with_mime(
+                "payload.bin",
+                false,
+                "application/zip",
+            )],
+            ShellViewMode::Icons,
+        );
+        let target = ShellContextTarget::Item {
+            pane: ShellPaneId::SLOT_0,
+            index: 0,
+            path: PathBuf::from("/tmp/payload.bin"),
+            is_dir: false,
+            selection_count: 1,
+        };
+
+        let (_, actions) = scene.context_menu_dynamic_data(&target, &MimeApplicationCache::empty());
+
+        assert!(
+            actions
+                .iter()
+                .any(|action| action.id == BUILTIN_ARK_EXTRACT_HERE_ACTION_ID)
+        );
+        assert!(
+            actions
+                .iter()
+                .any(|action| action.id == BUILTIN_ARK_EXTRACT_TO_ACTION_ID)
+        );
+
+        scene.context_target = Some(target);
+        let request = scene
+            .service_menu_launch_request(
+                &MimeApplicationCache::empty(),
+                BUILTIN_ARK_EXTRACT_HERE_ACTION_ID,
+            )
+            .unwrap();
+
+        assert_eq!(request.paths, vec![PathBuf::from("/tmp/payload.bin")]);
+        assert_eq!(request.app_name, "Ark: Extract Here");
+        assert_eq!(
+            request.plan.commands[0].args,
+            vec!["--batch", "--destination", "/tmp", "/tmp/payload.bin"]
+        );
+    }
+
+    #[test]
+    fn ark_builtin_context_actions_skip_remote_targets() {
+        let scene = test_scene(
+            vec![test_entry_with_mime(
+                "archive.zip",
+                false,
+                "application/zip",
+            )],
+            ShellViewMode::Icons,
+        );
+        let target = ShellContextTarget::Item {
+            pane: ShellPaneId::SLOT_0,
+            index: 0,
+            path: PathBuf::from("smb://server/share/archive.zip"),
+            is_dir: false,
+            selection_count: 1,
+        };
+
+        let (_, actions) = scene.context_menu_dynamic_data(&target, &MimeApplicationCache::empty());
+
+        assert!(
+            actions
+                .iter()
+                .all(|action| !action.id.starts_with("fika.builtin.ark."))
         );
     }
 

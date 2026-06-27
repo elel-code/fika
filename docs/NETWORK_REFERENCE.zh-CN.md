@@ -51,11 +51,11 @@
   - 定义后端无关的 `NetworkLocation` 快照，`local_path` 保持可选。
   - 提供 `NetworkAuth` 带编辑后的 `Debug` 实现。通过 `classify_network_filesystem()` 分类远程/GVfs 文件系统类型。
 - `DirectoryLister`：本地挂载路径可复用本地列表路径；纯 URI 位置通过后端转换为相同的 core model deltas。
-- Places 侧栏：添加 Network root（规范 `network:///` 伪路径，使用 `folder-remote` 图标）。
-- 文件操作：一旦位置有本地挂载路径，网络位置的操作可复用 core 文件操作结果路由。
+- Places 侧栏：添加 Network root（规范 `network:///` 伪路径，使用 `folder-remote` 图标）。Network 根右键菜单暴露 Dolphin 的 `Add Network Folder` 入口，但由 Fika 内置实现：动作打开 Fika 自己的位置输入并预填网络 URI，通过 `src/core/network.rs` 校验，保存为 Network 书签，再走同一 pane/generation 加载路径导航；Fika 不依赖 `org.kde.knetattach` 完成这个流程。
+- 文件操作：一旦位置有本地挂载路径，网络位置的操作可复用 core 文件操作结果路由。纯 URI 后端完成前，远程右键菜单隐藏 Create、Paste、Cut、Rename、Trash 等本地写操作，而不是暴露稍后失败的命令。
 
 ## 剩余工作
 
-- 后端边界决策；添加保存的网络书签和 Add Network Drive UI。
+- 后端边界决策；在网络后端边界确定后添加更完整的网络书签编辑器。
 - 认证、取消和结构化错误报告；Remote/GVfs metadata 降级。
 - Remote 位置的文件操作和 DnD 语义。
