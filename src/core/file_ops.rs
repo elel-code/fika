@@ -1,4 +1,4 @@
-use crate::core::operation_runtime::{OperationController, run_operation_blocking};
+use crate::core::operation_runtime::OperationController;
 use std::ffi::OsString;
 use std::fs;
 use std::io::{self, Read, Write};
@@ -7,7 +7,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use compio::buf::{BufResult, IntoInner};
 use compio::io::{AsyncReadAt, AsyncWriteAtExt};
-use gio::prelude::*;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TransferProgress {
@@ -1286,18 +1285,6 @@ async fn copy_file_async(
     bytes_total: u64,
     progress: &mut impl FnMut(TransferProgress),
 ) -> io::Result<()> {
-    if path_pair_uses_gio_copy_async(source, destination).await? {
-        return copy_file_with_gio_async(
-            source,
-            destination,
-            cancel,
-            bytes_done,
-            bytes_total,
-            progress,
-        )
-        .await;
-    }
-
     let from_file = compio::fs::File::open(source).await?;
     let mut to_file = compio::fs::File::create(destination).await?;
     if let Ok(metadata) = compio::fs::metadata(source).await {
@@ -1332,121 +1319,6 @@ async fn copy_file_async(
     Ok(())
 }
 
-async fn copy_file_with_gio_async(
-    source: &Path,
-    destination: &Path,
-    cancel: Option<&OperationController>,
-    bytes_done: &mut u64,
-    bytes_total: u64,
-    progress: &mut impl FnMut(TransferProgress),
-) -> io::Result<()> {
-    ensure_not_cancelled(cancel)?;
-    let source = source.to_path_buf();
-    let destination = destination.to_path_buf();
-    let controller = cancel.cloned();
-    let base_done = *bytes_done;
-    let final_progress = blocking_io(move || {
-        copy_file_with_gio(&source, &destination, controller, base_done, bytes_total)
-    })
-    .await?;
-    *bytes_done = final_progress.bytes_done;
-    progress(final_progress);
-    Ok(())
-}
-
-fn copy_file_with_gio(
-    source: &Path,
-    destination: &Path,
-    controller: Option<OperationController>,
-    base_done: u64,
-    bytes_total: u64,
-) -> io::Result<TransferProgress> {
-    ensure_not_cancelled(controller.as_ref())?;
-    let source_file = gio::File::for_path(source);
-    let destination_file = gio::File::for_path(destination);
-    let cancellable = gio::Cancellable::new();
-    let file_size = fs::symlink_metadata(source)
-        .map(|metadata| metadata.len())
-        .unwrap_or_else(|_| bytes_total.saturating_sub(base_done));
-    let mut latest_progress = TransferProgress {
-        bytes_done: base_done,
-        bytes_total,
-    };
-
-    let mut progress_callback = |current_num_bytes: i64, total_num_bytes: i64| {
-        if controller
-            .as_ref()
-            .is_some_and(OperationController::is_cancelled)
-        {
-            cancellable.cancel();
-            return;
-        }
-        let copied = u64::try_from(current_num_bytes).unwrap_or_default();
-        let total = u64::try_from(total_num_bytes)
-            .ok()
-            .filter(|total| *total > 0)
-            .unwrap_or(file_size);
-        latest_progress = TransferProgress {
-            bytes_done: base_done.saturating_add(copied.min(total)).min(bytes_total),
-            bytes_total,
-        };
-        if let Some(controller) = &controller {
-            controller.set_progress(latest_progress);
-        }
-    };
-
-    source_file
-        .copy(
-            &destination_file,
-            gio::FileCopyFlags::NONE,
-            Some(&cancellable),
-            Some(&mut progress_callback),
-        )
-        .map_err(gio_error_to_io)?;
-    ensure_not_cancelled(controller.as_ref())?;
-
-    let final_progress = TransferProgress {
-        bytes_done: latest_progress
-            .bytes_done
-            .max(base_done.saturating_add(file_size).min(bytes_total))
-            .min(bytes_total),
-        bytes_total,
-    };
-    if let Some(controller) = &controller {
-        controller.set_progress(final_progress);
-    }
-    Ok(final_progress)
-}
-
-fn gio_error_to_io(err: gio::glib::Error) -> io::Error {
-    let kind = if err.matches::<gio::IOErrorEnum>(gio::IOErrorEnum::Cancelled) {
-        io::ErrorKind::Interrupted
-    } else {
-        io::ErrorKind::Other
-    };
-    io::Error::new(kind, err.to_string())
-}
-
-async fn path_pair_uses_gio_copy_async(source: &Path, destination: &Path) -> io::Result<bool> {
-    let source = source.to_path_buf();
-    let target = destination
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or(destination)
-        .to_path_buf();
-    blocking_io(move || Ok(gio_path_is_remote(&source) || gio_path_is_remote(&target))).await
-}
-
-fn gio_path_is_remote(path: &Path) -> bool {
-    let file = gio::File::for_path(path);
-    if !file.is_native() {
-        return true;
-    }
-    file.query_filesystem_info("filesystem::remote", gio::Cancellable::NONE)
-        .ok()
-        .is_some_and(|info| info.boolean("filesystem::remote"))
-}
-
 fn link_path(source: &Path, destination: &Path) -> io::Result<()> {
     #[cfg(unix)]
     {
@@ -1479,15 +1351,6 @@ async fn link_path_async(source: &Path, destination: &Path) -> io::Result<()> {
             compio::fs::symlink_file(source, destination).await
         }
     }
-}
-
-async fn blocking_io<T>(task: impl FnOnce() -> io::Result<T> + Send + 'static) -> io::Result<T>
-where
-    T: Send + 'static,
-{
-    run_operation_blocking(task)
-        .await
-        .map_err(|err| io::Error::other(err.to_string()))?
 }
 
 async fn copy_path_preflight_async(source: &Path, destination: &Path) -> io::Result<(bool, u64)> {
@@ -2142,37 +2005,44 @@ mod tests {
     }
 
     #[test]
-    fn gio_copy_helper_copies_file_and_updates_progress() {
-        let temp = test_dir("gio-copy-helper");
+    fn async_copy_reports_progress_via_compio() {
+        let temp = test_dir("async-progress");
         fs::create_dir_all(&temp).unwrap();
         let source = temp.join("source.bin");
-        let destination = temp.join("destination.bin");
-        let payload = vec![11_u8; 32 * 1024];
+        let target = temp.join("target");
+        fs::create_dir(&target).unwrap();
+        let payload = vec![11_u8; 96 * 1024];
         fs::write(&source, &payload).unwrap();
         let controller = OperationController::new();
 
-        let progress = copy_file_with_gio(
-            &source,
-            &destination,
-            Some(controller.clone()),
-            5,
-            5 + payload.len() as u64,
-        )
-        .unwrap();
+        let outcome =
+            futures_lite::future::block_on(crate::core::operation_runtime::run_operation_task({
+                let source = source.clone();
+                let target = target.clone();
+                let controller = controller.clone();
+                move || async move {
+                    let progress_controller = controller.clone();
+                    perform_transfer_with_progress_outcome_async(
+                        "copy",
+                        &source,
+                        &target,
+                        "keep-both",
+                        Some(controller),
+                        move |progress| {
+                            progress_controller.set_progress(progress);
+                        },
+                    )
+                    .await
+                }
+            }))
+            .unwrap()
+            .unwrap();
 
-        assert_eq!(fs::read(destination).unwrap(), payload);
-        assert_eq!(progress.bytes_done, 5 + 32 * 1024);
-        assert_eq!(progress.bytes_total, 5 + 32 * 1024);
+        assert_eq!(fs::read(outcome.destination).unwrap(), payload);
+        let progress = controller.progress();
+        assert_eq!(progress.bytes_done, 96 * 1024);
+        assert_eq!(progress.bytes_total, 96 * 1024);
         assert_eq!(controller.progress(), progress);
-        let _ = fs::remove_dir_all(temp);
-    }
-
-    #[test]
-    fn gio_remote_probe_keeps_local_temp_paths_on_compio_path() {
-        let temp = test_dir("gio-local-probe");
-        fs::create_dir_all(&temp).unwrap();
-
-        assert!(!gio_path_is_remote(&temp));
         let _ = fs::remove_dir_all(temp);
     }
 
