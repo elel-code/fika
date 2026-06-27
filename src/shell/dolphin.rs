@@ -6,6 +6,9 @@ use crate::wgpu_metrics::{
 };
 use crate::wgpu_pane::ShellPaneProjection;
 
+#[path = "dolphin/style.rs"]
+pub(crate) mod style;
+
 pub(crate) fn dolphin_icon_size_for_zoom_level(level: i32) -> f32 {
     match level.clamp(DOLPHIN_ZOOM_LEVEL_MIN, DOLPHIN_ZOOM_LEVEL_MAX) {
         0 => 16.0,

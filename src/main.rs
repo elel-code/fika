@@ -87,60 +87,21 @@ fn fika_frame_log_all_enabled() -> bool {
     })
 }
 
-#[path = "shell/autosmoke.rs"]
-mod wgpu_autosmoke;
-#[path = "shell/clipboard.rs"]
-mod wgpu_clipboard;
-#[path = "shell/context_menu.rs"]
-mod wgpu_context_menu;
-#[path = "shell/create_rename.rs"]
-mod wgpu_create_rename;
-#[path = "shell/dolphin.rs"]
-mod wgpu_dolphin;
-#[path = "shell/drop_menu.rs"]
-mod wgpu_drop_menu;
-#[path = "shell/folder_preview.rs"]
-mod wgpu_folder_preview;
-#[path = "shell/icon_resolver.rs"]
-mod wgpu_icon_resolver;
-#[path = "shell/icon_role_read_ahead.rs"]
-mod wgpu_icon_role_read_ahead;
-#[path = "shell/icon_roles.rs"]
-mod wgpu_icon_roles;
-#[path = "shell/location.rs"]
-mod wgpu_location;
-#[path = "shell/menu_geometry.rs"]
-mod wgpu_menu_geometry;
-#[path = "shell/metadata_roles.rs"]
-mod wgpu_metadata_roles;
-#[path = "shell/metrics.rs"]
-mod wgpu_metrics;
-#[path = "shell/open_file.rs"]
-mod wgpu_open_file;
-#[path = "shell/open_with.rs"]
-mod wgpu_open_with;
-#[path = "shell/options.rs"]
-mod wgpu_options;
-#[path = "shell/pane.rs"]
-mod wgpu_pane;
-#[path = "shell/pane_layout.rs"]
-mod wgpu_pane_layout;
-#[path = "shell/prewarm.rs"]
-mod wgpu_prewarm;
-#[path = "shell/properties.rs"]
-mod wgpu_properties;
-#[path = "shell/role_worker_queue.rs"]
-mod wgpu_role_worker_queue;
-#[path = "shell/selection.rs"]
-mod wgpu_selection;
-#[path = "shell/shortcuts.rs"]
-mod wgpu_shortcuts;
-#[path = "shell/tasks.rs"]
-mod wgpu_tasks;
-#[path = "shell/transfer.rs"]
-mod wgpu_transfer;
-#[path = "shell/trash_conflict.rs"]
-mod wgpu_trash_conflict;
+mod shell;
+
+pub(crate) use shell::{
+    autosmoke as wgpu_autosmoke, clipboard as wgpu_clipboard, context_menu as wgpu_context_menu,
+    create_rename as wgpu_create_rename, dolphin as wgpu_dolphin, drop_menu as wgpu_drop_menu,
+    folder_preview as wgpu_folder_preview, icon_resolver as wgpu_icon_resolver,
+    icon_role_read_ahead as wgpu_icon_role_read_ahead, icon_roles as wgpu_icon_roles,
+    location as wgpu_location, menu_geometry as wgpu_menu_geometry,
+    metadata_roles as wgpu_metadata_roles, metrics as wgpu_metrics, open_file as wgpu_open_file,
+    open_with as wgpu_open_with, options as wgpu_options, pane as wgpu_pane,
+    pane_layout as wgpu_pane_layout, prewarm as wgpu_prewarm, properties as wgpu_properties,
+    role_worker_queue as wgpu_role_worker_queue, selection as wgpu_selection,
+    shortcuts as wgpu_shortcuts, tasks as wgpu_tasks, transfer as wgpu_transfer,
+    trash_conflict as wgpu_trash_conflict,
+};
 
 use wgpu_autosmoke::{AutosmokeScrollAction, autosmoke_scroll_config, autosmoke_zoom_config};
 use wgpu_clipboard::{FileClipboardExportRequest, ShellClipboard};
@@ -155,6 +116,10 @@ use wgpu_context_menu::{context_menu_actions, service_menu_action_item};
 use wgpu_create_rename::{
     CreateDialogClick, CreateEntryKind, CreateEntryRequest, RenameDialogClick, RenameEntryRequest,
     ShellCreateDialog, ShellRenameDialog, unique_child_name, validate_create_name,
+};
+use wgpu_dolphin::style::{
+    BREEZE_ITEM_ROUNDNESS, details_row_background_color, item_background_color,
+    place_row_background_color,
 };
 use wgpu_dolphin::{
     dolphin_icon_size_for_zoom_level, shell_dolphin_deferred_all_indexes,
@@ -1919,23 +1884,6 @@ impl FikaWgpuApp {
             }
         };
         match action {
-            ShellContextMenuAction::Open => {
-                if let Some((pane, path)) = self.scene.context_target_directory_path() {
-                    self.load_path_into_pane(event_loop, pane, path, "context-open");
-                } else if let Some(request) = self.scene.context_target_open_file_request() {
-                    self.launch_open_file_request(&request);
-                } else {
-                    fika_log!("[fika-wgpu] context-action-pending action=open target=none");
-                    self.scene.record_task_status(ShellTaskStatus::failed(
-                        "Open failed",
-                        "No target",
-                        false,
-                    ));
-                    if let Some(window) = self.window.as_ref() {
-                        window.request_redraw();
-                    }
-                }
-            }
             ShellContextMenuAction::OpenWith => {
                 if self
                     .scene
@@ -3333,11 +3281,6 @@ fn context_menu_icon_style(
     action: ShellContextMenuAction,
 ) -> (ContextMenuGlyph, [f32; 4], [f32; 4]) {
     match action {
-        ShellContextMenuAction::Open => (
-            ContextMenuGlyph::Open,
-            [0.114, 0.306, 0.847, 1.0],
-            [0.918, 0.945, 1.000, 1.0],
-        ),
         ShellContextMenuAction::OpenWith => (
             ContextMenuGlyph::OpenWith,
             [0.263, 0.220, 0.792, 1.0],
@@ -8615,44 +8558,6 @@ impl ShellScene {
         Some(OpenFileRequest::from_path(path, entry.mime_type.as_deref()))
     }
 
-    fn context_target_directory_path(&self) -> Option<(ShellPaneId, PathBuf)> {
-        match self.context_target.as_ref()? {
-            ShellContextTarget::Item {
-                pane,
-                index,
-                is_dir,
-                ..
-            } if *is_dir => self
-                .directory_path_for_pane_index(*pane, *index)
-                .map(|path| (*pane, path)),
-            ShellContextTarget::Place { path, device, .. }
-                if device.as_ref().is_none_or(|device| device.mounted) =>
-            {
-                Some((self.active_pane(), path.clone()))
-            }
-            _ => None,
-        }
-    }
-
-    fn context_target_open_file_request(&self) -> Option<OpenFileRequest> {
-        match self.context_target.as_ref()? {
-            ShellContextTarget::Item {
-                pane,
-                index,
-                path,
-                is_dir: false,
-                ..
-            } => {
-                let mime_type = self
-                    .pane_state(*pane)
-                    .and_then(|pane| pane.entries.get(*index))
-                    .and_then(|entry| entry.mime_type.as_deref());
-                Some(OpenFileRequest::from_path(path.clone(), mime_type))
-            }
-            _ => None,
-        }
-    }
-
     fn record_open_file_request(&mut self, request: &OpenFileRequest) {
         self.open_changes += 1;
         fika_log!(
@@ -12341,45 +12246,15 @@ impl ShellScene {
                 vertices,
                 item_rect,
                 content_clip,
-                details_row_background_color(selected, hovered, entry_index),
+                details_row_background_color(selected, hovered, entry_index % 2 == 1),
                 size,
             );
-            if selected {
-                push_clipped_rect_outline(
-                    vertices,
-                    item_rect,
-                    content_clip,
-                    1.0,
-                    [0.38, 0.64, 0.92, 0.92],
-                    size,
-                );
-            }
-        } else if selected {
-            let radius = self.scale_metric(7.0);
+        } else if selected || hovered {
             push_clipped_rounded_rect(
                 vertices,
                 visual_rect,
                 content_clip,
-                radius,
-                [0.38, 0.64, 0.92, 0.95],
-                size,
-            );
-            if let Some(inner) = inset_rect(visual_rect, self.scale_metric(1.0)) {
-                push_clipped_rounded_rect(
-                    vertices,
-                    inner,
-                    content_clip,
-                    (radius - self.scale_metric(1.0)).max(1.0),
-                    item_background_color(selected, hovered),
-                    size,
-                );
-            }
-        } else if hovered {
-            push_clipped_rounded_rect(
-                vertices,
-                visual_rect,
-                content_clip,
-                self.scale_metric(7.0),
+                self.scale_metric(BREEZE_ITEM_ROUNDNESS),
                 item_background_color(selected, hovered),
                 size,
             );
@@ -13005,26 +12880,16 @@ impl ShellScene {
                         vertices,
                         row,
                         panel,
-                        self.scale_metric(8.0),
-                        [0.749, 0.859, 0.996, 1.0],
+                        self.scale_metric(BREEZE_ITEM_ROUNDNESS),
+                        place_row_background_color(active, hovered),
                         size,
                     );
-                    if let Some(inner_row) = inset_rect(row, self.scale_metric(1.0)) {
-                        push_clipped_rounded_rect(
-                            vertices,
-                            inner_row,
-                            panel,
-                            self.scale_metric(7.0),
-                            place_row_background_color(active, hovered),
-                            size,
-                        );
-                    }
                 } else if hovered {
                     push_clipped_rounded_rect(
                         vertices,
                         row,
                         panel,
-                        self.scale_metric(8.0),
+                        self.scale_metric(BREEZE_ITEM_ROUNDNESS),
                         place_row_background_color(active, hovered),
                         size,
                     );
@@ -22430,15 +22295,6 @@ fn point_distance(left: ViewPoint, right: ViewPoint) -> f32 {
     ((left.x - right.x).powi(2) + (left.y - right.y).powi(2)).sqrt()
 }
 
-fn place_row_background_color(active: bool, hovered: bool) -> [f32; 4] {
-    match (active, hovered) {
-        (true, true) => [0.918, 0.945, 1.000, 1.0],
-        (true, false) => [0.918, 0.945, 1.000, 1.0],
-        (false, true) => [0.933, 0.953, 0.973, 1.0],
-        (false, false) => [0.0, 0.0, 0.0, 0.0],
-    }
-}
-
 fn push_scrollbar(
     vertices: &mut Vec<QuadVertex>,
     track: ViewRect,
@@ -22927,25 +22783,6 @@ fn push_place_trash_icon(
         fg,
         size,
     );
-}
-
-fn item_background_color(selected: bool, hovered: bool) -> [f32; 4] {
-    match (selected, hovered) {
-        (true, true) => [0.812, 0.890, 1.000, 1.0],
-        (true, false) => [0.859, 0.918, 0.996, 1.0],
-        (false, true) => [0.918, 0.945, 1.000, 1.0],
-        (false, false) => [0.0, 0.0, 0.0, 0.0],
-    }
-}
-
-fn details_row_background_color(selected: bool, hovered: bool, index: usize) -> [f32; 4] {
-    match (selected, hovered, index % 2 == 0) {
-        (true, true, _) => [0.812, 0.890, 1.000, 1.0],
-        (true, false, _) => [0.859, 0.918, 0.996, 1.0],
-        (false, true, _) => [0.918, 0.945, 1.000, 1.0],
-        (false, false, true) => [1.000, 1.000, 1.000, 1.0],
-        (false, false, false) => [0.973, 0.980, 0.988, 1.0],
-    }
 }
 
 fn view_mode_clear_color(view_mode: ShellViewMode) -> wgpu::Color {
@@ -30691,10 +30528,6 @@ mod tests {
                 ShellContextMenuAction::Properties,
             ]
         );
-        assert_eq!(
-            scene.context_target_directory_path(),
-            Some((ShellPaneId::SLOT_0, PathBuf::from("/")))
-        );
 
         let rect = context_menu_rect(menu, size);
         let copy_location_row = ViewPoint {
@@ -30766,8 +30599,10 @@ mod tests {
             selection_count: 1,
         };
         assert!(!context_menu_actions(&file_target).contains(&ShellContextMenuAction::AddToPlaces));
-        assert!(!context_menu_actions(&file_target).contains(&ShellContextMenuAction::Open));
-        assert!(context_menu_actions(&file_target).contains(&ShellContextMenuAction::OpenWith));
+        assert_eq!(
+            context_menu_actions(&file_target).first(),
+            Some(&ShellContextMenuAction::OpenWith)
+        );
 
         let blank_target = ShellContextTarget::Blank {
             pane: ShellPaneId::SLOT_0,
@@ -33367,10 +33202,6 @@ text/plain=writer.desktop;\n",
         );
         assert!(scene.context_menu.is_none());
         assert_eq!(scene.context_menu_actions, 1);
-        assert_eq!(
-            scene.context_target_directory_path(),
-            Some((ShellPaneId::SLOT_0, PathBuf::from("/tmp/folder")))
-        );
     }
 
     #[test]
@@ -33689,116 +33520,6 @@ text/plain=writer.desktop;\n",
             .position(|action| *action == ShellContextMenuAction::ViewMode)
             .unwrap();
         assert!(context_menu_separator_before(&blank, view_mode_row));
-    }
-
-    #[test]
-    fn context_target_directory_path_only_resolves_directory_items() {
-        let mut scene = test_scene(
-            vec![test_entry("folder", true), test_entry("plain.txt", false)],
-            ShellViewMode::Icons,
-        );
-        scene.context_target = Some(ShellContextTarget::Item {
-            pane: ShellPaneId::SLOT_0,
-            index: 0,
-            path: PathBuf::from("/tmp/folder"),
-            is_dir: true,
-            selection_count: 1,
-        });
-        assert_eq!(
-            scene.context_target_directory_path(),
-            Some((ShellPaneId::SLOT_0, PathBuf::from("/tmp/folder")))
-        );
-
-        scene.context_target = Some(ShellContextTarget::Item {
-            pane: ShellPaneId::SLOT_0,
-            index: 1,
-            path: PathBuf::from("/tmp/plain.txt"),
-            is_dir: false,
-            selection_count: 1,
-        });
-        assert_eq!(scene.context_target_directory_path(), None);
-
-        scene.context_target = Some(ShellContextTarget::Blank {
-            pane: ShellPaneId::SLOT_0,
-            path: PathBuf::from("/tmp"),
-        });
-        assert_eq!(scene.context_target_directory_path(), None);
-
-        scene.context_target = Some(ShellContextTarget::Place {
-            index: 1,
-            label: "Root".to_string(),
-            path: PathBuf::from("/"),
-            group: "Devices",
-            device: None,
-            network: false,
-            trash: false,
-            root: true,
-            editable: false,
-        });
-        assert_eq!(
-            scene.context_target_directory_path(),
-            Some((ShellPaneId::SLOT_0, PathBuf::from("/")))
-        );
-    }
-
-    #[test]
-    fn open_file_request_only_resolves_file_context_targets() {
-        let mut scene = test_scene(
-            vec![test_entry("folder", true), test_entry("plain.txt", false)],
-            ShellViewMode::Icons,
-        );
-        scene.context_target = Some(ShellContextTarget::Blank {
-            pane: ShellPaneId::SLOT_0,
-            path: PathBuf::from("/tmp"),
-        });
-        assert_eq!(scene.context_target_open_file_request(), None);
-
-        scene.context_target = Some(ShellContextTarget::Item {
-            pane: ShellPaneId::SLOT_0,
-            index: 0,
-            path: PathBuf::from("/tmp/folder"),
-            is_dir: true,
-            selection_count: 1,
-        });
-        assert_eq!(scene.context_target_open_file_request(), None);
-
-        scene.context_target = Some(ShellContextTarget::Item {
-            pane: ShellPaneId::SLOT_0,
-            index: 1,
-            path: PathBuf::from("/tmp/Fika Test/plain.txt"),
-            is_dir: false,
-            selection_count: 1,
-        });
-        assert_eq!(
-            scene.context_target_open_file_request(),
-            Some(OpenFileRequest {
-                path: PathBuf::from("/tmp/Fika Test/plain.txt"),
-                uri: "file:///tmp/Fika%20Test/plain.txt".to_string(),
-                mime_type: Some("text/plain".to_string()),
-            })
-        );
-        assert_eq!(scene.open_changes, 0);
-    }
-
-    #[test]
-    fn open_file_request_preserves_network_uri_targets() {
-        let mut scene = test_scene(vec![test_entry("remote.txt", false)], ShellViewMode::Icons);
-        scene.context_target = Some(ShellContextTarget::Item {
-            pane: ShellPaneId::SLOT_0,
-            index: 0,
-            path: PathBuf::from("sftp://example.test/home/yk/remote.txt"),
-            is_dir: false,
-            selection_count: 1,
-        });
-
-        assert_eq!(
-            scene.context_target_open_file_request(),
-            Some(OpenFileRequest {
-                path: PathBuf::from("sftp://example.test/home/yk/remote.txt"),
-                uri: "sftp://example.test/home/yk/remote.txt".to_string(),
-                mime_type: Some("text/plain".to_string()),
-            })
-        );
     }
 
     #[test]

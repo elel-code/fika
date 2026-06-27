@@ -1,10 +1,10 @@
 /target/
 .agents/
 .codex/
-dolphin
-cosmic-files
+/dolphin
+/cosmic-files
 REFACTOR_REPLACEMENTS.md
 STEP4_PLAN.md
-dolphin/
+/dolphin/
 .codewhale/
 .deepseek/state/

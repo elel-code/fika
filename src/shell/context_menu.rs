@@ -154,7 +154,6 @@ impl ShellContextMenuItem {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ShellContextMenuAction {
-    Open,
     OpenWith,
     OpenInNewPane,
     SplitPane,
@@ -188,7 +187,6 @@ pub(crate) enum ShellContextMenuAction {
 impl ShellContextMenuAction {
     pub(crate) fn label(self) -> &'static str {
         match self {
-            Self::Open => "Open",
             Self::OpenWith => "Open With",
             Self::OpenInNewPane => "Open in New Pane",
             Self::SplitPane => "Split View",
@@ -230,7 +228,6 @@ impl ShellContextMenuAction {
 
     pub(crate) fn as_str(self) -> &'static str {
         match self {
-            Self::Open => "open",
             Self::OpenWith => "open-with",
             Self::OpenInNewPane => "open-in-new-pane",
             Self::SplitPane => "split-pane",

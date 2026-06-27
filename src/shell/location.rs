@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use super::wgpu_metrics::PATH_HISTORY_LIMIT;
+use crate::wgpu_metrics::PATH_HISTORY_LIMIT;
 use crate::wgpu_pane::ShellPaneId;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]

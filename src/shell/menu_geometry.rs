@@ -11,16 +11,16 @@ use crate::wgpu_metrics::{
 };
 
 #[cfg(test)]
-pub(super) fn context_menu_rect(menu: &ShellContextMenu, size: PhysicalSize<u32>) -> ViewRect {
+pub(crate) fn context_menu_rect(menu: &ShellContextMenu, size: PhysicalSize<u32>) -> ViewRect {
     context_menu_rect_scaled(menu, size, 1.0)
 }
 
 #[cfg(test)]
-pub(super) fn drop_menu_rect(menu: &ShellDropMenu, size: PhysicalSize<u32>) -> ViewRect {
+pub(crate) fn drop_menu_rect(menu: &ShellDropMenu, size: PhysicalSize<u32>) -> ViewRect {
     drop_menu_rect_scaled(menu, size, 1.0)
 }
 
-pub(super) fn drop_menu_rect_scaled(
+pub(crate) fn drop_menu_rect_scaled(
     menu: &ShellDropMenu,
     size: PhysicalSize<u32>,
     scale_factor: f32,
@@ -44,7 +44,7 @@ pub(super) fn drop_menu_rect_scaled(
     }
 }
 
-pub(super) fn drop_menu_row_at_screen_point(
+pub(crate) fn drop_menu_row_at_screen_point(
     menu: &ShellDropMenu,
     point: ViewPoint,
     size: PhysicalSize<u32>,
@@ -64,7 +64,7 @@ pub(super) fn drop_menu_row_at_screen_point(
     (row < drop_menu_items().len()).then_some(row)
 }
 
-pub(super) fn context_menu_rect_scaled(
+pub(crate) fn context_menu_rect_scaled(
     menu: &ShellContextMenu,
     size: PhysicalSize<u32>,
     scale_factor: f32,
@@ -88,7 +88,7 @@ pub(super) fn context_menu_rect_scaled(
     }
 }
 
-pub(super) fn context_menu_row_at_screen_point(
+pub(crate) fn context_menu_row_at_screen_point(
     menu: &ShellContextMenu,
     point: ViewPoint,
     size: PhysicalSize<u32>,
@@ -108,7 +108,7 @@ pub(super) fn context_menu_row_at_screen_point(
     (row < context_menu_items(menu).len()).then_some(row)
 }
 
-pub(super) fn context_menu_submenu_rect(
+pub(crate) fn context_menu_submenu_rect(
     menu: &ShellContextMenu,
     size: PhysicalSize<u32>,
     scale_factor: f32,
@@ -146,7 +146,7 @@ pub(super) fn context_menu_submenu_rect(
     })
 }
 
-pub(super) fn context_submenu_row_at_screen_point(
+pub(crate) fn context_submenu_row_at_screen_point(
     menu: &ShellContextMenu,
     submenu: ShellContextSubmenu,
     point: ViewPoint,
@@ -167,7 +167,7 @@ pub(super) fn context_submenu_row_at_screen_point(
     (row < context_submenu_actions(submenu, menu).len()).then_some(row)
 }
 
-pub(super) fn scaled_context_menu_metric(value: f32, scale_factor: f32) -> f32 {
+pub(crate) fn scaled_context_menu_metric(value: f32, scale_factor: f32) -> f32 {
     (value * scale_factor.max(1.0)).round().max(1.0)
 }
 
