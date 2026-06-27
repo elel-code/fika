@@ -103,6 +103,7 @@ use shell::create_rename::{
     CreateDialogClick, CreateEntryKind, CreateEntryRequest, RenameDialogClick, RenameEntryRequest,
     ShellCreateDialog, ShellRenameDialog, unique_child_name, validate_create_name,
 };
+use shell::dolphin::item_paint::dolphin_item_paint;
 use shell::dolphin::style::{
     BREEZE_ITEM_ROUNDNESS, details_row_background_color, item_background_color,
     place_row_background_color,
@@ -12215,22 +12216,48 @@ impl ShellScene {
                 ..
             }) if pane == projection.geometry.kind && index == entry_index
         );
+        let current = projection.geometry.kind == self.active_pane()
+            && projection.view.selection.focus == Some(entry_index);
+        let paint = dolphin_item_paint(
+            projection.view.view_mode,
+            item_rect,
+            visual_rect,
+            selected,
+            hovered,
+            current,
+            entry_index % 2 == 1,
+            self.ui_scale(),
+        );
 
-        if projection.view.view_mode == ShellViewMode::Details {
-            push_clipped_rect(
+        if let Some(background) = paint.background {
+            if background.radius <= 0.0 {
+                push_clipped_rect(
+                    vertices,
+                    background.rect,
+                    content_clip,
+                    background.color,
+                    size,
+                );
+            } else {
+                push_clipped_rounded_rect(
+                    vertices,
+                    background.rect,
+                    content_clip,
+                    background.radius,
+                    background.color,
+                    size,
+                );
+            }
+        }
+        if let Some(focus) = paint.focus {
+            push_clipped_rounded_highlight(
                 vertices,
-                item_rect,
+                focus.rect,
                 content_clip,
-                details_row_background_color(selected, hovered, entry_index % 2 == 1),
-                size,
-            );
-        } else if selected || hovered {
-            push_clipped_rounded_rect(
-                vertices,
-                visual_rect,
-                content_clip,
-                self.scale_metric(BREEZE_ITEM_ROUNDNESS),
-                item_background_color(selected, hovered),
+                focus.radius,
+                [0.0, 0.0, 0.0, 0.0],
+                focus.color,
+                focus.stroke_width,
                 size,
             );
         }
@@ -12326,27 +12353,6 @@ impl ShellScene {
                 content_clip,
                 TextColor::rgb(89, 99, 110),
                 LabelAlignment::Start,
-            );
-        }
-
-        if selected || hovered {
-            let marker_size = self.scale_metric(5.0);
-            let index_marker = ViewRect {
-                x: item_rect.x + self.scale_metric(7.0),
-                y: item_rect.y + self.scale_metric(7.0),
-                width: marker_size,
-                height: marker_size,
-            };
-            push_clipped_rect(
-                vertices,
-                index_marker,
-                content_clip,
-                if entry.is_dir {
-                    [0.55, 0.80, 0.54, 1.0]
-                } else {
-                    [0.42, 0.62, 0.84, 1.0]
-                },
-                size,
             );
         }
     }

@@ -6,6 +6,8 @@ use crate::shell::metrics::{
 };
 use crate::shell::pane::ShellPaneProjection;
 
+#[path = "dolphin/item_paint.rs"]
+pub(crate) mod item_paint;
 #[path = "dolphin/style.rs"]
 pub(crate) mod style;
 
