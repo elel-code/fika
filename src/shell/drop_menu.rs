@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use fika_core::{FileTransferMode, ViewPoint};
 
-use crate::wgpu_pane::ShellPaneId;
+use crate::shell::pane::ShellPaneId;
 
 #[cfg_attr(not(test), allow(dead_code))]
 #[derive(Clone, Debug, Eq, PartialEq)]

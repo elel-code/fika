@@ -89,87 +89,73 @@ fn fika_frame_log_all_enabled() -> bool {
 
 mod shell;
 
-pub(crate) use shell::{
-    autosmoke as wgpu_autosmoke, clipboard as wgpu_clipboard, context_menu as wgpu_context_menu,
-    create_rename as wgpu_create_rename, dolphin as wgpu_dolphin, drop_menu as wgpu_drop_menu,
-    folder_preview as wgpu_folder_preview, icon_resolver as wgpu_icon_resolver,
-    icon_role_read_ahead as wgpu_icon_role_read_ahead, icon_roles as wgpu_icon_roles,
-    location as wgpu_location, menu_geometry as wgpu_menu_geometry,
-    metadata_roles as wgpu_metadata_roles, metrics as wgpu_metrics, open_file as wgpu_open_file,
-    open_with as wgpu_open_with, options as wgpu_options, pane as wgpu_pane,
-    pane_layout as wgpu_pane_layout, prewarm as wgpu_prewarm, properties as wgpu_properties,
-    role_worker_queue as wgpu_role_worker_queue, selection as wgpu_selection,
-    shortcuts as wgpu_shortcuts, tasks as wgpu_tasks, transfer as wgpu_transfer,
-    trash_conflict as wgpu_trash_conflict,
-};
-
-use wgpu_autosmoke::{AutosmokeScrollAction, autosmoke_scroll_config, autosmoke_zoom_config};
-use wgpu_clipboard::{FileClipboardExportRequest, ShellClipboard};
-use wgpu_context_menu::{
+use shell::autosmoke::{AutosmokeScrollAction, autosmoke_scroll_config, autosmoke_zoom_config};
+use shell::clipboard::{FileClipboardExportRequest, ShellClipboard};
+use shell::context_menu::{
     ShellContextMenu, ShellContextMenuAction, ShellContextMenuCommand, ShellContextMenuIcon,
     ShellContextMenuItem, ShellContextSubmenu, ShellContextTarget, ShellDevicePlace,
     context_menu_items, context_menu_separator_before, context_submenu_actions,
     device_place_operation_for_context_action,
 };
 #[cfg(test)]
-use wgpu_context_menu::{context_menu_actions, service_menu_action_item};
-use wgpu_create_rename::{
+use shell::context_menu::{context_menu_actions, service_menu_action_item};
+use shell::create_rename::{
     CreateDialogClick, CreateEntryKind, CreateEntryRequest, RenameDialogClick, RenameEntryRequest,
     ShellCreateDialog, ShellRenameDialog, unique_child_name, validate_create_name,
 };
-use wgpu_dolphin::style::{
+use shell::dolphin::style::{
     BREEZE_ITEM_ROUNDNESS, details_row_background_color, item_background_color,
     place_row_background_color,
 };
-use wgpu_dolphin::{
+use shell::dolphin::{
     dolphin_icon_size_for_zoom_level, shell_dolphin_deferred_all_indexes,
     shell_dolphin_read_ahead_indexes, visible_layout_range_for_projection,
 };
-use wgpu_drop_menu::{
+use shell::drop_menu::{
     ShellDropMenu, ShellDropMenuCommand, ShellDropMenuIcon, ShellDropOperationRequest,
     ShellDropTarget, drop_menu_items,
 };
 #[cfg(test)]
-use wgpu_folder_preview::{
+use shell::folder_preview::{
     DolphinDirectoryPreviewLayout, FolderPreviewThumbnailSlot, folder_preview_thumbnail_angle,
     folder_preview_thumbnail_slots,
 };
-use wgpu_folder_preview::{
+use shell::folder_preview::{
     FOLDER_PREVIEW_LAYOUT_VERSION, folder_preview_directory_seed,
     folder_preview_thumbnail_raster_from_children,
 };
 #[cfg(test)]
-use wgpu_icon_resolver::FileIconResolverTestHarness;
-use wgpu_icon_resolver::{FileIconResolver, ResolvedFileIcon, visible_icon_fallback_key};
-use wgpu_icon_role_read_ahead::ShellIconRoleReadAheadQueue;
+use shell::icon_resolver::FileIconResolverTestHarness;
+use shell::icon_resolver::{FileIconResolver, ResolvedFileIcon, visible_icon_fallback_key};
+use shell::icon_role_read_ahead::ShellIconRoleReadAheadQueue;
 #[cfg(test)]
-use wgpu_icon_roles::file_icon_profile;
-use wgpu_icon_roles::{
+use shell::icon_roles::file_icon_profile;
+use shell::icon_roles::{
     FileIconKind, FileIconPathCacheKey, FileIconProfile, FileIconRoleCacheKey, NamedIconFallback,
     file_icon_path_cache_key, icon_cache_size,
 };
-use wgpu_location::{
+use shell::location::{
     LocationDraftPurpose, PathHistory, ShellLocationDraft, ShellPaneHistories,
     normalized_text_cursor,
 };
 #[cfg(test)]
-use wgpu_menu_geometry::{context_menu_rect, drop_menu_rect};
-use wgpu_menu_geometry::{
+use shell::menu_geometry::{context_menu_rect, drop_menu_rect};
+use shell::menu_geometry::{
     context_menu_rect_scaled, context_menu_row_at_screen_point, context_menu_submenu_rect,
     context_submenu_row_at_screen_point, drop_menu_rect_scaled, drop_menu_row_at_screen_point,
     scaled_context_menu_metric,
 };
-use wgpu_metadata_roles::{
+use shell::metadata_roles::{
     MetadataRolePrewarmStats, ShellMetadataRoleRuntime, entry_with_metadata_role, shell_entry_path,
     shell_metadata_entry_index, shell_pane_id_for_core_pane,
 };
 #[cfg(test)]
-use wgpu_metadata_roles::{
+use shell::metadata_roles::{
     core_pane_id_for_shell_pane, shell_metadata_item_id, shell_metadata_role_candidate,
 };
-use wgpu_metrics::*;
-use wgpu_open_file::{OpenFileRequest, default_open_file_launch_request};
-use wgpu_open_with::geometry::{
+use shell::metrics::*;
+use shell::open_file::{OpenFileRequest, default_open_file_launch_request};
+use shell::open_with::geometry::{
     open_with_chooser_cancel_button_rect_scaled, open_with_chooser_click_at_point,
     open_with_chooser_default_checkbox_rect_scaled, open_with_chooser_list_rect_scaled,
     open_with_chooser_open_button_rect_scaled, open_with_chooser_query_rect_scaled,
@@ -177,25 +163,25 @@ use wgpu_open_with::geometry::{
     open_with_chooser_visible_row_count, open_with_scroll_delta_rows,
 };
 #[cfg(test)]
-use wgpu_open_with::geometry::{
+use shell::open_with::geometry::{
     open_with_chooser_default_checkbox_rect, open_with_chooser_list_rect,
     open_with_chooser_open_button_rect, open_with_chooser_rect,
 };
-use wgpu_open_with::{
+use shell::open_with::{
     OpenWithChooserClick, OpenWithDefaultUpdate, OpenWithLaunchRequest, ServiceMenuLaunchRequest,
     ShellOpenWithChooser, open_with_applications_for_mime,
 };
-use wgpu_options::{ShellViewMode, parse_start_options};
-use wgpu_pane::{
+use shell::options::{ShellViewMode, parse_start_options};
+use shell::pane::{
     ShellPaneGeometry, ShellPaneId, ShellPaneProjection, ShellPaneScrollMetrics,
     ShellPaneSplitMetrics, ShellPaneState, ShellPaneStates, ShellPaneView, ShellPaneVisibleItem,
     ShellPaneVisibleSlotPools, ShellVisibleItemSlotPool, ShellVisibleItemSlotStats,
 };
-use wgpu_pane_layout::{
+use shell::pane_layout::{
     CompactLayoutCache, CompactLayoutCacheKey, CompactLayoutCacheValue, DetailsLayout,
     ShellCompactLayout, ShellLayout, navigation_target,
 };
-use wgpu_prewarm::{
+use shell::prewarm::{
     IconRasterPrewarmStats, IconRolePrewarmStats, TextLabelPrewarmMode, TextLabelPrewarmStats,
     default_text_raster_miss_budget, icon_raster_miss_budget_for_frame,
     icon_role_prewarm_budget_for_frame, icon_role_read_ahead_queue_budget_for_frame,
@@ -203,12 +189,12 @@ use wgpu_prewarm::{
     text_label_prewarm_mode_for_scene_prewarm, text_label_raster_miss_budget_for_mode,
     visible_exact_icon_roles_enabled_for_frame,
 };
-use wgpu_properties::{ShellPropertiesOverlay, property_row};
-use wgpu_role_worker_queue::{PriorityWorkerQueue, PriorityWorkerRequest, WorkerRequestPriority};
-use wgpu_selection::{
+use shell::properties::{ShellPropertiesOverlay, property_row};
+use shell::role_worker_queue::{PriorityWorkerQueue, PriorityWorkerRequest, WorkerRequestPriority};
+use shell::selection::{
     NavigationAction, RubberBand, RubberBandMode, SelectionClick, ShellSelection,
 };
-use wgpu_shortcuts::{
+use shell::shortcuts::{
     CreateCommand, FileKeyboardCommand, FilterCommand, LocationCommand, OpenWithCommand,
     PathNavigationAction, RenameCommand, SelectionCommand, ZoomAction,
     create_command_for_key_event, escape_requested_for_key_event,
@@ -220,20 +206,20 @@ use wgpu_shortcuts::{
     zoom_action_for_key_event, zoom_action_for_scroll_delta,
 };
 #[cfg(test)]
-use wgpu_shortcuts::{
+use shell::shortcuts::{
     create_command_for_key_parts, file_keyboard_command_for_key_parts,
     filter_command_for_key_parts, hidden_toggle_requested_for_key_parts,
     location_command_for_key_parts, reload_requested_for_key_parts, rename_command_for_key_parts,
     selection_command_for_key_parts, view_mode_for_key_parts, zoom_action_for_key,
 };
-use wgpu_tasks::{
+use shell::tasks::{
     ShellTaskDetailDialog, ShellTaskId, ShellTaskStatus, ShellTaskStatusKind, TaskDetailDialogClick,
 };
-use wgpu_transfer::{
+use shell::transfer::{
     ShellAsyncTaskResult, ShellAsyncTransferCompletion, ShellAsyncTransferSource, ShellPasteResult,
     ShellTransferExecution,
 };
-use wgpu_trash_conflict::{ShellTrashConflictDialog, TrashConflictDialogClick};
+use shell::trash_conflict::{ShellTrashConflictDialog, TrashConflictDialogClick};
 
 fn startup_view_mode(
     requested: ShellViewMode,

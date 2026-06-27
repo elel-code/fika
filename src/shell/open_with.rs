@@ -5,7 +5,7 @@ use std::sync::Arc;
 use fika_core::{DesktopLaunchPlan, MimeApplication, MimeApplicationCache};
 
 use crate::shell::metrics::OPEN_WITH_CHOOSER_MAX_ROWS;
-use crate::wgpu_shortcuts::OpenWithCommand;
+use crate::shell::shortcuts::OpenWithCommand;
 
 #[path = "open_with/geometry.rs"]
 pub(crate) mod geometry;

@@ -1,6 +1,6 @@
 use std::collections::{HashSet, VecDeque};
 
-use crate::wgpu_icon_roles::FileIconPathCacheKey;
+use crate::shell::icon_roles::FileIconPathCacheKey;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct IconRoleReadAheadRequest {
@@ -41,7 +41,7 @@ impl ShellIconRoleReadAheadQueue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::wgpu_icon_roles::{FileIconKind, FileIconRoleCacheKey};
+    use crate::shell::icon_roles::{FileIconKind, FileIconRoleCacheKey};
 
     fn directory_key(size_px: u16) -> FileIconPathCacheKey {
         FileIconPathCacheKey {

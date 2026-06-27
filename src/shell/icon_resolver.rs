@@ -6,11 +6,11 @@ use std::sync::{
 };
 use std::thread;
 
-use crate::wgpu_icon_roles::{
+use crate::shell::icon_roles::{
     FileIconKind, FileIconPathCacheKey, FileIconProfile, FileIconRoleCacheKey, NamedIconFallback,
     file_icon_path_cache_key, file_icon_profile, icon_cache_size,
 };
-use crate::wgpu_role_worker_queue::{
+use crate::shell::role_worker_queue::{
     PriorityWorkerQueue, PriorityWorkerRequest, WorkerRequestPriority,
 };
 use crate::{Entry, IconThemeResolver, file_icon_snapshot};

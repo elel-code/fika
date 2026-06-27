@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use crate::wgpu_pane::ShellPaneId;
+use crate::shell::pane::ShellPaneId;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CreateEntryKind {

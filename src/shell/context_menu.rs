@@ -5,9 +5,9 @@ use fika_core::{
     file_ops, is_network_path, is_network_root_path,
 };
 
-use crate::wgpu_create_rename::CreateEntryKind;
-use crate::wgpu_options::ShellViewMode;
-use crate::wgpu_pane::ShellPaneId;
+use crate::shell::create_rename::CreateEntryKind;
+use crate::shell::options::ShellViewMode;
+use crate::shell::pane::ShellPaneId;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ShellDevicePlace {

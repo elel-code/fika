@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use fika_core::{CompactLayout, IconsLayout, ItemLayout, ViewPoint, ViewRect, ViewSize};
 
-use crate::wgpu_selection::NavigationAction;
+use crate::shell::selection::NavigationAction;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct CompactLayoutCacheKey {

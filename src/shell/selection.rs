@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use fika_core::{ViewPoint, ViewRect};
 
-use crate::wgpu_metrics::RUBBER_BAND_START_THRESHOLD;
+use crate::shell::metrics::RUBBER_BAND_START_THRESHOLD;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum NavigationAction {

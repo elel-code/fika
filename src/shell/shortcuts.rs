@@ -2,9 +2,9 @@ use winit::event::KeyEvent;
 use winit::event::MouseButton;
 use winit::keyboard::{Key, KeyCode, NamedKey, PhysicalKey};
 
-use crate::wgpu_create_rename::CreateEntryKind;
-use crate::wgpu_options::ShellViewMode;
-use crate::wgpu_selection::NavigationAction;
+use crate::shell::create_rename::CreateEntryKind;
+use crate::shell::options::ShellViewMode;
+use crate::shell::selection::NavigationAction;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PathNavigationAction {

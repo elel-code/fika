@@ -5,9 +5,8 @@ use std::time::Instant;
 
 use fika_core::{Entry, ItemLayout, ViewRect, ViewSize, read_entries_sync};
 
-use crate::{
-    filtered_indexes_for_entries, wgpu_options::ShellViewMode, wgpu_selection::ShellSelection,
-};
+use crate::filtered_indexes_for_entries;
+use crate::shell::{options::ShellViewMode, selection::ShellSelection};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum ShellPaneId {

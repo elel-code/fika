@@ -1,10 +1,10 @@
 use std::ops::Range;
 
-use crate::wgpu_metrics::{
+use crate::shell::metrics::{
     DOLPHIN_ZOOM_LEVEL_MAX, DOLPHIN_ZOOM_LEVEL_MIN, THUMBNAIL_READ_AHEAD_PAGES,
     THUMBNAIL_READ_AHEAD_RESOLVE_LIMIT,
 };
-use crate::wgpu_pane::ShellPaneProjection;
+use crate::shell::pane::ShellPaneProjection;
 
 #[path = "dolphin/style.rs"]
 pub(crate) mod style;

@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::wgpu_metrics::DOLPHIN_FOLDER_PREVIEW_MAX_IMAGES;
+use crate::shell::metrics::DOLPHIN_FOLDER_PREVIEW_MAX_IMAGES;
 use crate::{IconRaster, hash_bytes_with_len};
 
 pub(crate) const FOLDER_PREVIEW_LAYOUT_VERSION: u64 = 2;

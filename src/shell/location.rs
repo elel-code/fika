@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
-use crate::wgpu_metrics::PATH_HISTORY_LIMIT;
-use crate::wgpu_pane::ShellPaneId;
+use crate::shell::metrics::PATH_HISTORY_LIMIT;
+use crate::shell::pane::ShellPaneId;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct PathHistory {

@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use fika_core::{FileTransferMode, TransferTaskResult};
 
-use crate::wgpu_tasks::ShellTaskId;
+use crate::shell::tasks::ShellTaskId;
 
 #[derive(Clone, Debug)]
 pub(crate) struct ShellPasteResult {
