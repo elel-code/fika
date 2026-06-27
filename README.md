@@ -69,4 +69,6 @@ cargo run -- /etc
   behavior.
 - [docs/NETWORK_REFERENCE.md](docs/NETWORK_REFERENCE.md) — network locations
   behavior.
+- [docs/PERFORMANCE_ALIGNMENT.md](docs/PERFORMANCE_ALIGNMENT.md) — Dolphin-first
+  performance reference policy.
 - [docs/TRASH_REFERENCE.md](docs/TRASH_REFERENCE.md) — trash behavior.

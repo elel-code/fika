@@ -67,5 +67,7 @@ cargo run -- /etc
   设备和 Places 行为。
 - [docs/NETWORK_REFERENCE.zh-CN.md](docs/NETWORK_REFERENCE.zh-CN.md) —
   网络位置行为。
+- [docs/PERFORMANCE_ALIGNMENT.zh-CN.md](docs/PERFORMANCE_ALIGNMENT.zh-CN.md) —
+  Dolphin-first 性能参考原则。
 - [docs/TRASH_REFERENCE.zh-CN.md](docs/TRASH_REFERENCE.zh-CN.md) —
   回收站行为。
