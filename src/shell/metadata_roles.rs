@@ -10,7 +10,10 @@ use fika_core::{
     metadata_role_results_for_requests, mime_magic_resolution_required,
 };
 
-use crate::wgpu_dolphin::{shell_dolphin_read_ahead_indexes, visible_layout_range_for_projection};
+use crate::wgpu_dolphin::{
+    shell_dolphin_deferred_all_indexes, shell_dolphin_read_ahead_indexes,
+    visible_layout_range_for_projection,
+};
 use crate::wgpu_metrics::{
     DOLPHIN_RESOLVE_ALL_ITEMS_LIMIT, METADATA_ROLE_BATCH_SIZE,
     METADATA_ROLE_READ_AHEAD_QUEUE_BUDGET_PER_FRAME,
@@ -185,18 +188,13 @@ fn metadata_deferred_layout_indexes(
     item_count: usize,
     maximum_visible_items: usize,
 ) -> Vec<usize> {
-    let mut indexes = if item_count <= DOLPHIN_RESOLVE_ALL_ITEMS_LIMIT {
-        (0..item_count).collect::<Vec<_>>()
-    } else {
-        let Some(visible_range) = visible_range.clone() else {
-            return Vec::new();
-        };
-        shell_dolphin_read_ahead_indexes(visible_range, item_count, maximum_visible_items)
-    };
-    if let Some(visible_range) = visible_range {
-        indexes.retain(|index| !visible_range.contains(index));
+    if item_count <= DOLPHIN_RESOLVE_ALL_ITEMS_LIMIT {
+        return shell_dolphin_deferred_all_indexes(visible_range, item_count);
     }
-    indexes
+    let Some(visible_range) = visible_range else {
+        return Vec::new();
+    };
+    shell_dolphin_read_ahead_indexes(visible_range, item_count, maximum_visible_items)
 }
 
 pub(crate) fn core_pane_id_for_shell_pane(pane: ShellPaneId) -> PaneId {

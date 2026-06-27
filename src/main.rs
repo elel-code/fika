@@ -152,8 +152,8 @@ use wgpu_create_rename::{
     ShellCreateDialog, ShellRenameDialog, unique_child_name, validate_create_name,
 };
 use wgpu_dolphin::{
-    dolphin_icon_size_for_zoom_level, shell_dolphin_read_ahead_indexes,
-    visible_layout_range_for_projection,
+    dolphin_icon_size_for_zoom_level, shell_dolphin_deferred_all_indexes,
+    shell_dolphin_read_ahead_indexes, visible_layout_range_for_projection,
 };
 use wgpu_drop_menu::{
     ShellDropMenu, ShellDropMenuCommand, ShellDropMenuIcon, ShellDropOperationRequest,
@@ -11582,7 +11582,10 @@ impl ShellScene {
             let read_ahead_indexes = if mode == TextLabelPrewarmMode::ResolveAllSmallDirectory
                 && item_count <= DOLPHIN_RESOLVE_ALL_ITEMS_LIMIT
             {
-                (0..item_count).collect::<Vec<_>>()
+                shell_dolphin_deferred_all_indexes(
+                    visible_layout_range_for_projection(projection),
+                    item_count,
+                )
             } else {
                 let Some(visible_range) = visible_layout_range_for_projection(projection) else {
                     continue;

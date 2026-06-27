@@ -34,6 +34,23 @@ pub(crate) fn visible_layout_range_for_projection(
     (start < end).then_some(start..end)
 }
 
+pub(crate) fn shell_dolphin_deferred_all_indexes(
+    visible_indexes: Option<Range<usize>>,
+    item_count: usize,
+) -> Vec<usize> {
+    let Some(visible_indexes) = visible_indexes else {
+        return (0..item_count).collect();
+    };
+
+    let visible_start = visible_indexes.start.min(item_count);
+    let visible_end = visible_indexes.end.min(item_count).max(visible_start);
+    let visible_len = visible_end.saturating_sub(visible_start);
+    let mut result = Vec::with_capacity(item_count.saturating_sub(visible_len));
+    result.extend(0..visible_start);
+    result.extend(visible_end..item_count);
+    result
+}
+
 pub(crate) fn shell_dolphin_read_ahead_indexes(
     visible_indexes: Range<usize>,
     item_count: usize,
@@ -74,4 +91,30 @@ pub(crate) fn shell_dolphin_read_ahead_indexes(
 
     result.extend((first_page_end..begin_extended).rev().take(remaining));
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deferred_all_indexes_exclude_visible_range() {
+        let indexes = shell_dolphin_deferred_all_indexes(Some(4..7), 10);
+
+        assert_eq!(indexes, vec![0, 1, 2, 3, 7, 8, 9]);
+    }
+
+    #[test]
+    fn deferred_all_indexes_keep_all_items_without_visible_range() {
+        let indexes = shell_dolphin_deferred_all_indexes(None, 4);
+
+        assert_eq!(indexes, vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn deferred_all_indexes_clamp_visible_range_to_item_count() {
+        let indexes = shell_dolphin_deferred_all_indexes(Some(2..8), 5);
+
+        assert_eq!(indexes, vec![0, 1]);
+    }
 }

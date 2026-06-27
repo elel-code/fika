@@ -28,7 +28,9 @@ impl ShellIconRoleReadAheadQueue {
     }
 
     pub(crate) fn pop_front(&mut self) -> Option<IconRoleReadAheadRequest> {
-        self.queue.pop_front()
+        let request = self.queue.pop_front()?;
+        self.seen.remove(&request);
+        Some(request)
     }
 
     pub(crate) fn is_empty(&self) -> bool {
@@ -63,6 +65,23 @@ mod tests {
         assert_eq!(queue.pop_front().map(|request| request.key), Some(first));
         assert_eq!(queue.pop_front().map(|request| request.key), Some(second));
         assert!(queue.pop_front().is_none());
+        assert!(queue.is_empty());
+    }
+
+    #[test]
+    fn icon_role_read_ahead_queue_allows_requeue_after_pop() {
+        let mut queue = ShellIconRoleReadAheadQueue::new();
+        let key = directory_key(32);
+
+        queue.push_key(key.clone());
+        assert_eq!(
+            queue.pop_front().map(|request| request.key),
+            Some(key.clone())
+        );
+
+        queue.push_key(key.clone());
+
+        assert_eq!(queue.pop_front().map(|request| request.key), Some(key));
         assert!(queue.is_empty());
     }
 }
