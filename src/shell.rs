@@ -20,6 +20,7 @@ pub(crate) mod pane_layout;
 pub(crate) mod perf;
 pub(crate) mod prewarm;
 pub(crate) mod properties;
+pub(crate) mod render;
 pub(crate) mod role_worker_queue;
 pub(crate) mod selection;
 pub(crate) mod shortcuts;
