@@ -7878,6 +7878,12 @@ impl ShellScene {
             }
         } else if let Some(ShellContextTarget::Blank { pane, .. }) = target.as_ref() {
             self.active_pane = self.normalized_pane_id(*pane);
+            selection_changed = self
+                .pane_selection_mut(*pane)
+                .is_some_and(ShellSelection::clear);
+            if selection_changed {
+                self.selection_changes += 1;
+            }
         }
 
         let target_changed = old_target != target;
@@ -30219,7 +30225,6 @@ mod tests {
         assert_eq!(
             context_menu_actions(&menu.target),
             &[
-                ShellContextMenuAction::Open,
                 ShellContextMenuAction::OpenInNewPane,
                 ShellContextMenuAction::CopyLocation,
                 ShellContextMenuAction::Properties,
@@ -30233,7 +30238,7 @@ mod tests {
         let rect = context_menu_rect(menu, size);
         let copy_location_row = ViewPoint {
             x: rect.x + 8.0,
-            y: rect.y + CONTEXT_MENU_ROW_HEIGHT * 2.0 + 8.0,
+            y: rect.y + CONTEXT_MENU_ROW_HEIGHT + 8.0,
         };
         assert_eq!(
             scene.activate_or_close_context_menu(copy_location_row, size),
@@ -30262,7 +30267,6 @@ mod tests {
         assert_eq!(
             context_menu_actions(&menu.target),
             &[
-                ShellContextMenuAction::Open,
                 ShellContextMenuAction::OpenInNewPane,
                 ShellContextMenuAction::CopyLocation,
                 ShellContextMenuAction::RemovePlace,
@@ -30272,7 +30276,7 @@ mod tests {
         let rect = context_menu_rect(menu, size);
         let remove_row = ViewPoint {
             x: rect.x + 8.0,
-            y: rect.y + CONTEXT_MENU_ROW_HEIGHT * 3.0 + 8.0,
+            y: rect.y + CONTEXT_MENU_ROW_HEIGHT * 2.0 + 8.0,
         };
         assert_eq!(
             scene.activate_or_close_context_menu(remove_row, size),
@@ -30301,6 +30305,7 @@ mod tests {
             selection_count: 1,
         };
         assert!(!context_menu_actions(&file_target).contains(&ShellContextMenuAction::AddToPlaces));
+        assert!(!context_menu_actions(&file_target).contains(&ShellContextMenuAction::Open));
         assert!(context_menu_actions(&file_target).contains(&ShellContextMenuAction::OpenWith));
 
         let blank_target = ShellContextTarget::Blank {
@@ -30375,7 +30380,6 @@ mod tests {
         assert_eq!(
             context_menu_actions(&remote_file),
             &[
-                ShellContextMenuAction::Open,
                 ShellContextMenuAction::OpenWith,
                 ShellContextMenuAction::CopyLocation,
                 ShellContextMenuAction::Properties,
@@ -30395,7 +30399,6 @@ mod tests {
         assert_eq!(
             context_menu_actions(&remote_dir),
             &[
-                ShellContextMenuAction::Open,
                 ShellContextMenuAction::OpenInNewPane,
                 ShellContextMenuAction::AddToPlaces,
                 ShellContextMenuAction::CopyLocation,
@@ -30421,7 +30424,6 @@ mod tests {
         assert_eq!(
             context_menu_actions(&target),
             &[
-                ShellContextMenuAction::Open,
                 ShellContextMenuAction::OpenInNewPane,
                 ShellContextMenuAction::AddNetworkFolder,
                 ShellContextMenuAction::CopyLocation,
@@ -31992,7 +31994,6 @@ text/plain=writer.desktop;\n",
         assert_eq!(
             context_menu_actions(&trash_place),
             &[
-                ShellContextMenuAction::Open,
                 ShellContextMenuAction::OpenInNewPane,
                 ShellContextMenuAction::EmptyTrash,
                 ShellContextMenuAction::CopyLocation,
@@ -32121,7 +32122,6 @@ text/plain=writer.desktop;\n",
         assert_eq!(
             context_menu_actions(&mounted),
             &[
-                ShellContextMenuAction::Open,
                 ShellContextMenuAction::OpenInNewPane,
                 ShellContextMenuAction::CopyLocation,
                 ShellContextMenuAction::UnmountDevice,
@@ -32639,8 +32639,9 @@ text/plain=writer.desktop;\n",
         };
 
         assert!(scene.open_context_target(point, size));
-        assert_eq!(scene.panes[ShellPaneId::SLOT_0].selection.len(), 1);
-        assert!(scene.panes[ShellPaneId::SLOT_0].selection.contains(0));
+        assert_eq!(scene.panes[ShellPaneId::SLOT_0].selection.len(), 0);
+        assert_eq!(scene.panes[ShellPaneId::SLOT_0].selection.anchor, None);
+        assert_eq!(scene.panes[ShellPaneId::SLOT_0].selection.focus, None);
         assert_eq!(scene.hovered_item, None);
         assert!(scene.rubber_band.is_none());
         assert_eq!(
@@ -32657,6 +32658,44 @@ text/plain=writer.desktop;\n",
         };
         assert!(scene.open_context_target(status_point, size));
         assert_eq!(scene.context_target, None);
+    }
+
+    #[test]
+    fn context_target_blank_clears_multi_selection() {
+        let mut scene = test_scene(
+            vec![
+                test_entry("alpha.txt", false),
+                test_entry("bravo.txt", false),
+            ],
+            ShellViewMode::Icons,
+        );
+        let size = PhysicalSize::new(420, 260);
+        assert!(
+            scene.panes[ShellPaneId::SLOT_0]
+                .selection
+                .select_indexes(&[0, 1])
+        );
+        let content = scene
+            .pane_geometry(ShellPaneId::SLOT_0, size)
+            .unwrap()
+            .content;
+        let point = ViewPoint {
+            x: content.right() - 4.0,
+            y: scene.content_origin_y() + 4.0,
+        };
+
+        assert!(scene.open_context_target(point, size));
+        assert_eq!(scene.panes[ShellPaneId::SLOT_0].selection.len(), 0);
+        assert_eq!(scene.panes[ShellPaneId::SLOT_0].selection.anchor, None);
+        assert_eq!(scene.panes[ShellPaneId::SLOT_0].selection.focus, None);
+        assert_eq!(scene.selection_changes, 1);
+        assert_eq!(
+            scene.context_target,
+            Some(ShellContextTarget::Blank {
+                pane: ShellPaneId::SLOT_0,
+                path: PathBuf::from("/tmp"),
+            })
+        );
     }
 
     #[test]
@@ -32685,7 +32724,7 @@ text/plain=writer.desktop;\n",
         ));
         assert_eq!(
             context_menu_actions(&menu.target).first().copied(),
-            Some(ShellContextMenuAction::Open)
+            Some(ShellContextMenuAction::OpenInNewPane)
         );
 
         let rect = context_menu_rect(menu, size);
@@ -32695,7 +32734,7 @@ text/plain=writer.desktop;\n",
         };
         assert_eq!(
             scene.context_menu_action_at_screen_point(first_row, size),
-            Some(ShellContextMenuAction::Open)
+            Some(ShellContextMenuAction::OpenInNewPane)
         );
         assert!(scene.set_pointer(first_row, size));
         assert_eq!(
@@ -32707,7 +32746,7 @@ text/plain=writer.desktop;\n",
         );
         assert_eq!(
             scene.activate_or_close_context_menu(first_row, size),
-            Some(ShellContextMenuAction::Open)
+            Some(ShellContextMenuAction::OpenInNewPane)
         );
         assert!(scene.context_menu.is_none());
         assert_eq!(scene.context_menu_actions, 1);

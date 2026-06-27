@@ -320,7 +320,6 @@ impl ShellContextMenu {
 
 fn context_menu_builtin_actions(target: &ShellContextTarget) -> Vec<ShellContextMenuAction> {
     const ITEM_FILE_ACTIONS: &[ShellContextMenuAction] = &[
-        ShellContextMenuAction::Open,
         ShellContextMenuAction::OpenWith,
         ShellContextMenuAction::OpenInNewPane,
         ShellContextMenuAction::Copy,
@@ -333,7 +332,6 @@ fn context_menu_builtin_actions(target: &ShellContextTarget) -> Vec<ShellContext
         ShellContextMenuAction::Properties,
     ];
     const ITEM_DIR_ACTIONS: &[ShellContextMenuAction] = &[
-        ShellContextMenuAction::Open,
         ShellContextMenuAction::OpenInNewPane,
         ShellContextMenuAction::AddToPlaces,
         ShellContextMenuAction::Copy,
@@ -346,13 +344,11 @@ fn context_menu_builtin_actions(target: &ShellContextTarget) -> Vec<ShellContext
         ShellContextMenuAction::Properties,
     ];
     const NETWORK_ITEM_FILE_ACTIONS: &[ShellContextMenuAction] = &[
-        ShellContextMenuAction::Open,
         ShellContextMenuAction::OpenWith,
         ShellContextMenuAction::CopyLocation,
         ShellContextMenuAction::Properties,
     ];
     const NETWORK_ITEM_DIR_ACTIONS: &[ShellContextMenuAction] = &[
-        ShellContextMenuAction::Open,
         ShellContextMenuAction::OpenInNewPane,
         ShellContextMenuAction::AddToPlaces,
         ShellContextMenuAction::CopyLocation,
@@ -401,27 +397,23 @@ fn context_menu_builtin_actions(target: &ShellContextTarget) -> Vec<ShellContext
         ShellContextMenuAction::Properties,
     ];
     const PLACE_ACTIONS: &[ShellContextMenuAction] = &[
-        ShellContextMenuAction::Open,
         ShellContextMenuAction::OpenInNewPane,
         ShellContextMenuAction::CopyLocation,
         ShellContextMenuAction::Properties,
     ];
     const NETWORK_ROOT_PLACE_ACTIONS: &[ShellContextMenuAction] = &[
-        ShellContextMenuAction::Open,
         ShellContextMenuAction::OpenInNewPane,
         ShellContextMenuAction::AddNetworkFolder,
         ShellContextMenuAction::CopyLocation,
         ShellContextMenuAction::Properties,
     ];
     const TRASH_PLACE_ACTIONS: &[ShellContextMenuAction] = &[
-        ShellContextMenuAction::Open,
         ShellContextMenuAction::OpenInNewPane,
         ShellContextMenuAction::EmptyTrash,
         ShellContextMenuAction::CopyLocation,
         ShellContextMenuAction::Properties,
     ];
     const EDITABLE_PLACE_ACTIONS: &[ShellContextMenuAction] = &[
-        ShellContextMenuAction::Open,
         ShellContextMenuAction::OpenInNewPane,
         ShellContextMenuAction::CopyLocation,
         ShellContextMenuAction::RemovePlace,
@@ -462,7 +454,6 @@ fn context_menu_builtin_actions(target: &ShellContextTarget) -> Vec<ShellContext
             let mut actions = Vec::new();
             if device.mounted {
                 actions.extend([
-                    ShellContextMenuAction::Open,
                     ShellContextMenuAction::OpenInNewPane,
                     ShellContextMenuAction::CopyLocation,
                     ShellContextMenuAction::UnmountDevice,
