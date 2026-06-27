@@ -9,7 +9,7 @@ use crate::{
     filtered_indexes_for_entries, wgpu_options::ShellViewMode, wgpu_selection::ShellSelection,
 };
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum ShellPaneId {
     Slot0,
     Slot1,

@@ -41,11 +41,15 @@ use fika_core::{
     save_user_places, service_menu_target_label, thumbnail_request_may_have_preview,
     trash_view_operation_result,
 };
+use notify::event::{MetadataKind as NotifyMetadataKind, ModifyKind as NotifyModifyKind};
+use notify::{
+    Event as NotifyEvent, EventKind as NotifyEventKind, RecursiveMode as NotifyRecursiveMode,
+};
 use winit::application::ApplicationHandler;
 use winit::cursor::{Cursor as WinitCursor, CursorIcon};
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, Modifiers, MouseButton, MouseScrollDelta, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 #[cfg(test)]
 use winit::keyboard::{Key, KeyCode, NamedKey, PhysicalKey};
 use winit::window::{Window, WindowAttributes, WindowId};
@@ -331,9 +335,15 @@ fn main() -> Result<(), Box<dyn Error>> {
     let scene = ShellScene::load_with_hidden_visibility(options.path, view_mode, show_hidden)?;
 
     let event_loop = EventLoop::new()?;
+    let event_loop_proxy = event_loop.create_proxy();
     event_loop.set_control_flow(ControlFlow::Wait);
 
-    let app = FikaWgpuApp::new(scene, options.auto_cycle_views, settings_path);
+    let app = FikaWgpuApp::new(
+        scene,
+        options.auto_cycle_views,
+        settings_path,
+        event_loop_proxy,
+    );
     event_loop.run_app(app)?;
     Ok(())
 }
@@ -379,10 +389,208 @@ fn window_title(scene: &ShellScene) -> String {
     }
 }
 
+struct ShellDirectoryWatcherRuntime {
+    tx: Sender<notify::Result<NotifyEvent>>,
+    rx: Receiver<notify::Result<NotifyEvent>>,
+    proxy: EventLoopProxy,
+    watchers: HashMap<ShellPaneId, ShellDirectoryWatcher>,
+    failed_paths: HashMap<ShellPaneId, PathBuf>,
+    pending_reload_paths: BTreeSet<PathBuf>,
+    reload_deadline: Option<Instant>,
+}
+
+struct ShellDirectoryWatcher {
+    path: PathBuf,
+    _watcher: notify::RecommendedWatcher,
+}
+
+impl ShellDirectoryWatcherRuntime {
+    const DEBOUNCE: Duration = Duration::from_millis(250);
+
+    fn new(proxy: EventLoopProxy) -> Self {
+        let (tx, rx) = mpsc::channel();
+        Self {
+            tx,
+            rx,
+            proxy,
+            watchers: HashMap::new(),
+            failed_paths: HashMap::new(),
+            pending_reload_paths: BTreeSet::new(),
+            reload_deadline: None,
+        }
+    }
+
+    fn sync_with_scene(&mut self, scene: &ShellScene) {
+        for pane in ShellPaneId::ALL {
+            let target_path = scene
+                .pane_state(pane)
+                .filter(|state| !is_network_path(&state.path))
+                .map(|state| state.path.clone());
+            let Some(path) = target_path else {
+                self.watchers.remove(&pane);
+                self.failed_paths.remove(&pane);
+                continue;
+            };
+
+            if self
+                .watchers
+                .get(&pane)
+                .is_some_and(|watcher| watcher.path == path)
+            {
+                self.failed_paths.remove(&pane);
+                continue;
+            }
+            if self
+                .failed_paths
+                .get(&pane)
+                .is_some_and(|failed_path| *failed_path == path)
+            {
+                continue;
+            }
+
+            self.watchers.remove(&pane);
+            match self.start_watching(&path) {
+                Ok(watcher) => {
+                    self.failed_paths.remove(&pane);
+                    self.watchers.insert(pane, watcher);
+                    fika_log!(
+                        "[fika-wgpu] directory-watch-start pane={} path={}",
+                        pane.as_str(),
+                        path.display()
+                    );
+                }
+                Err(error) => {
+                    self.failed_paths.insert(pane, path.clone());
+                    fika_log!(
+                        "[fika-wgpu] directory-watch-start-error pane={} path={} error={error}",
+                        pane.as_str(),
+                        path.display()
+                    );
+                }
+            }
+        }
+    }
+
+    fn start_watching(&self, path: &Path) -> Result<ShellDirectoryWatcher, String> {
+        let tx = self.tx.clone();
+        let proxy = self.proxy.clone();
+        let mut watcher = notify::recommended_watcher(move |event: notify::Result<NotifyEvent>| {
+            if tx.send(event).is_ok() {
+                proxy.wake_up();
+            }
+        })
+        .map_err(|error| error.to_string())?;
+        notify::Watcher::watch(&mut watcher, path, NotifyRecursiveMode::NonRecursive)
+            .map_err(|error| error.to_string())?;
+        Ok(ShellDirectoryWatcher {
+            path: path.to_path_buf(),
+            _watcher: watcher,
+        })
+    }
+
+    fn drain_events(&mut self, scene: &ShellScene) {
+        let mut should_debounce = false;
+        while let Ok(event) = self.rx.try_recv() {
+            match event {
+                Ok(event) if shell_directory_watch_event_mutates(&event.kind) => {
+                    should_debounce |= self.schedule_event_reload(scene, &event);
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    fika_log!("[fika-wgpu] directory-watch-error {error}");
+                    should_debounce |= self.schedule_all_watched_reloads();
+                }
+            }
+        }
+        if should_debounce && self.reload_deadline.is_none() {
+            self.reload_deadline = Some(Instant::now() + Self::DEBOUNCE);
+        }
+    }
+
+    fn schedule_event_reload(&mut self, scene: &ShellScene, event: &NotifyEvent) -> bool {
+        let mut changed = false;
+        for pane in ShellPaneId::ALL {
+            let Some(state) = scene.pane_state(pane) else {
+                continue;
+            };
+            if is_network_path(&state.path) {
+                continue;
+            }
+            if shell_directory_watch_event_touches_path(event, &state.path) {
+                changed |= self.pending_reload_paths.insert(state.path.clone());
+            }
+        }
+        changed
+    }
+
+    fn schedule_all_watched_reloads(&mut self) -> bool {
+        let mut changed = false;
+        for path in self
+            .watchers
+            .values()
+            .map(|watcher| watcher.path.clone())
+            .collect::<Vec<_>>()
+        {
+            changed |= self.pending_reload_paths.insert(path);
+        }
+        changed
+    }
+
+    fn defer_reload_paths(&mut self, paths: Vec<PathBuf>) {
+        if paths.is_empty() {
+            return;
+        }
+        for path in paths {
+            self.pending_reload_paths.insert(path);
+        }
+        self.reload_deadline = Some(Instant::now() + Self::DEBOUNCE);
+    }
+
+    fn take_due_reload_paths(&mut self, now: Instant) -> Vec<PathBuf> {
+        let Some(deadline) = self.reload_deadline else {
+            return Vec::new();
+        };
+        if now < deadline {
+            return Vec::new();
+        }
+        self.reload_deadline = None;
+        std::mem::take(&mut self.pending_reload_paths)
+            .into_iter()
+            .collect()
+    }
+
+    fn next_reload_deadline(&self) -> Option<Instant> {
+        (!self.pending_reload_paths.is_empty())
+            .then_some(self.reload_deadline)
+            .flatten()
+    }
+}
+
+fn shell_directory_watch_event_mutates(kind: &NotifyEventKind) -> bool {
+    match kind {
+        NotifyEventKind::Access(_) | NotifyEventKind::Other => false,
+        NotifyEventKind::Modify(NotifyModifyKind::Metadata(kind)) => {
+            matches!(
+                kind,
+                NotifyMetadataKind::Any | NotifyMetadataKind::WriteTime
+            )
+        }
+        _ => true,
+    }
+}
+
+fn shell_directory_watch_event_touches_path(event: &NotifyEvent, directory: &Path) -> bool {
+    event.paths.is_empty()
+        || event.paths.iter().any(|path| {
+            path == directory || path.parent() == Some(directory) || path.starts_with(directory)
+        })
+}
+
 struct FikaWgpuApp {
     scene: ShellScene,
     mime_applications: MimeApplicationCache,
     settings_path: PathBuf,
+    directory_watchers: ShellDirectoryWatcherRuntime,
     async_task_tx: Sender<ShellAsyncTaskResult>,
     async_task_rx: Receiver<ShellAsyncTaskResult>,
     active_task_controllers: HashMap<ShellTaskId, OperationController>,
@@ -409,14 +617,22 @@ struct FikaWgpuApp {
 }
 
 impl FikaWgpuApp {
-    fn new(scene: ShellScene, auto_cycle_views: bool, settings_path: PathBuf) -> Self {
+    fn new(
+        scene: ShellScene,
+        auto_cycle_views: bool,
+        settings_path: PathBuf,
+        event_loop_proxy: EventLoopProxy,
+    ) -> Self {
         let (async_task_tx, async_task_rx) = mpsc::channel();
         let autosmoke_zoom = autosmoke_zoom_config();
         let autosmoke_scroll = autosmoke_scroll_config(SCROLL_LINE_PX * 2.0);
+        let mut directory_watchers = ShellDirectoryWatcherRuntime::new(event_loop_proxy);
+        directory_watchers.sync_with_scene(&scene);
         Self {
             scene,
             mime_applications: MimeApplicationCache::load(),
             settings_path,
+            directory_watchers,
             async_task_tx,
             async_task_rx,
             active_task_controllers: HashMap::new(),
@@ -454,6 +670,39 @@ impl FikaWgpuApp {
 
     fn update_window_cursor_for_scene(&mut self, size: PhysicalSize<u32>) {
         self.set_window_cursor(self.scene.cursor_icon(size));
+    }
+
+    fn drive_directory_watchers(&mut self, event_loop: &dyn ActiveEventLoop) {
+        self.directory_watchers.sync_with_scene(&self.scene);
+        self.directory_watchers.drain_events(&self.scene);
+
+        let now = Instant::now();
+        let reload_paths = self.directory_watchers.take_due_reload_paths(now);
+        if reload_paths.is_empty() {
+            return;
+        }
+
+        let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
+            self.directory_watchers.defer_reload_paths(reload_paths);
+            return;
+        };
+
+        let mut changed = false;
+        for path in reload_paths {
+            match self.scene.reload_panes_showing_path(&path, size) {
+                Ok(reloaded) => changed |= reloaded,
+                Err(error) => {
+                    fika_log!(
+                        "[fika-wgpu] directory-watch-reload-error path={} error={error}",
+                        path.display()
+                    );
+                }
+            }
+        }
+        self.directory_watchers.sync_with_scene(&self.scene);
+        if changed {
+            self.present_scene_change(event_loop, "directory-watch");
+        }
     }
 
     fn set_user_view_mode(&mut self, view_mode: ShellViewMode, size: PhysicalSize<u32>) -> bool {
@@ -690,6 +939,10 @@ impl FikaWgpuApp {
 }
 
 impl ApplicationHandler for FikaWgpuApp {
+    fn proxy_wake_up(&mut self, event_loop: &dyn ActiveEventLoop) {
+        self.drive_directory_watchers(event_loop);
+    }
+
     fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
         if self.window.is_some() {
             return;
@@ -756,6 +1009,7 @@ impl ApplicationHandler for FikaWgpuApp {
     }
 
     fn about_to_wait(&mut self, event_loop: &dyn ActiveEventLoop) {
+        self.drive_directory_watchers(event_loop);
         self.drain_async_task_results(event_loop);
         let progress_changed = self.refresh_active_task_progress();
         if progress_changed && let Some(window) = self.window.as_ref() {
@@ -798,6 +1052,14 @@ impl ApplicationHandler for FikaWgpuApp {
         .into_iter()
         .flatten()
         .min();
+        let next_idle_deadline = [
+            self.auto_cycle_views.then_some(self.next_auto_cycle),
+            next_autosmoke_deadline,
+            self.directory_watchers.next_reload_deadline(),
+        ]
+        .into_iter()
+        .flatten()
+        .min();
 
         if needs_redraw && let Some(window) = self.window.as_ref() {
             window.request_redraw();
@@ -809,9 +1071,7 @@ impl ApplicationHandler for FikaWgpuApp {
             event_loop.set_control_flow(ControlFlow::WaitUntil(
                 Instant::now() + Duration::from_millis(100),
             ));
-        } else if self.auto_cycle_views {
-            event_loop.set_control_flow(ControlFlow::WaitUntil(self.next_auto_cycle));
-        } else if let Some(deadline) = next_autosmoke_deadline {
+        } else if let Some(deadline) = next_idle_deadline {
             event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
         } else {
             event_loop.set_control_flow(ControlFlow::Wait);
@@ -23672,6 +23932,40 @@ mod tests {
 
     fn test_entry_with_mime(name: &str, is_dir: bool, mime_type: &'static str) -> Entry {
         test_entry_with_mime_and_modified(name, is_dir, mime_type, None)
+    }
+
+    #[test]
+    fn directory_watch_event_filter_ignores_non_mutating_events() {
+        assert!(!shell_directory_watch_event_mutates(
+            &NotifyEventKind::Access(notify::event::AccessKind::Read)
+        ));
+        assert!(!shell_directory_watch_event_mutates(
+            &NotifyEventKind::Modify(NotifyModifyKind::Metadata(NotifyMetadataKind::Permissions))
+        ));
+        assert!(shell_directory_watch_event_mutates(
+            &NotifyEventKind::Modify(NotifyModifyKind::Metadata(NotifyMetadataKind::WriteTime))
+        ));
+        assert!(shell_directory_watch_event_mutates(
+            &NotifyEventKind::Create(notify::event::CreateKind::File)
+        ));
+    }
+
+    #[test]
+    fn directory_watch_event_path_matching_stays_inside_directory() {
+        let event = NotifyEvent {
+            kind: NotifyEventKind::Any,
+            paths: vec![PathBuf::from("/tmp/fika-watch-root/child.txt")],
+            attrs: Default::default(),
+        };
+
+        assert!(shell_directory_watch_event_touches_path(
+            &event,
+            Path::new("/tmp/fika-watch-root")
+        ));
+        assert!(!shell_directory_watch_event_touches_path(
+            &event,
+            Path::new("/tmp/fika-watch")
+        ));
     }
 
     fn test_entry_with_mime_and_modified(
