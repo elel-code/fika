@@ -47,34 +47,56 @@ pub(crate) fn push_open_with_chooser_overlay(
     let title_height = scaled_dialog_metric(OPEN_WITH_CHOOSER_TITLE_HEIGHT, scale);
     let margin = scaled_dialog_metric(16.0, scale);
     let row_height = scaled_dialog_metric(OPEN_WITH_CHOOSER_ROW_HEIGHT, scale);
-    push_clipped_rounded_rect(
+    let dialog_radius = scaled_dialog_metric(8.0, scale);
+    push_open_with_rounded_box(
         vertices,
         rect,
         screen,
-        scaled_dialog_metric(8.0, scale),
+        dialog_radius,
         POPUP_SURFACE,
+        POPUP_BORDER,
+        scale,
         size,
     );
-    push_clipped_rect_outline(vertices, rect, screen, 1.0, POPUP_BORDER, size);
-    push_rect(
+    let dialog_inner = open_with_inset_rect(rect, scaled_dialog_metric(1.0, scale)).unwrap_or(rect);
+    let dialog_inner_radius = (dialog_radius - scaled_dialog_metric(1.0, scale)).max(1.0);
+    let header_rect = ViewRect {
+        x: dialog_inner.x,
+        y: dialog_inner.y,
+        width: dialog_inner.width,
+        height: title_height.min(dialog_inner.height),
+    };
+    push_clipped_rounded_rect(
         vertices,
-        ViewRect {
-            x: rect.x,
-            y: rect.y,
-            width: rect.width,
-            height: title_height,
-        },
+        header_rect,
+        rect,
+        dialog_inner_radius,
         POPUP_HEADER,
         size,
     );
-    push_rect(
+    if header_rect.height > dialog_inner_radius {
+        push_rect(
+            vertices,
+            ViewRect {
+                x: header_rect.x,
+                y: header_rect.y + dialog_inner_radius,
+                width: header_rect.width,
+                height: (header_rect.height - dialog_inner_radius).max(1.0),
+            },
+            POPUP_HEADER,
+            size,
+        );
+    }
+    push_clipped_rounded_rect(
         vertices,
         ViewRect {
-            x: rect.x,
-            y: rect.y + title_height - scaled_dialog_metric(1.0, scale).max(1.0),
-            width: rect.width,
+            x: dialog_inner.x,
+            y: header_rect.bottom() - scaled_dialog_metric(1.0, scale).max(1.0),
+            width: dialog_inner.width,
             height: scaled_dialog_metric(1.0, scale).max(1.0),
         },
+        rect,
+        scaled_dialog_metric(1.0, scale),
         POPUP_DIVIDER,
         size,
     );
@@ -102,15 +124,16 @@ pub(crate) fn push_open_with_chooser_overlay(
     );
 
     let query = open_with_chooser_query_rect_scaled(rect, scale);
-    push_clipped_rounded_rect(
+    push_open_with_rounded_box(
         vertices,
         query,
         rect,
         scaled_dialog_metric(7.0, scale),
         POPUP_INPUT,
+        POPUP_DIVIDER,
+        scale,
         size,
     );
-    push_clipped_rect_outline(vertices, query, rect, 1.0, POPUP_DIVIDER, size);
     push_clipped_rounded_rect(
         vertices,
         ViewRect {
@@ -190,15 +213,16 @@ pub(crate) fn push_open_with_chooser_overlay(
         .as_ref()
         .map(|(track, _)| track.x - scaled_dialog_metric(8.0, scale))
         .unwrap_or_else(|| list.right() - scaled_dialog_metric(10.0, scale));
-    push_clipped_rounded_rect(
+    push_open_with_rounded_box(
         vertices,
         list,
         rect,
         scaled_dialog_metric(8.0, scale),
         POPUP_INPUT,
+        POPUP_DIVIDER,
+        scale,
         size,
     );
-    push_clipped_rect_outline(vertices, list, rect, 1.0, POPUP_DIVIDER, size);
     let visible = chooser.visible_tree_rows();
     if visible.is_empty() {
         text.push_label(
@@ -384,7 +408,7 @@ pub(crate) fn push_open_with_chooser_overlay(
         width: checkbox_size,
         height: checkbox_size,
     };
-    push_clipped_rounded_rect(
+    push_open_with_rounded_box(
         vertices,
         checkbox,
         rect,
@@ -394,18 +418,12 @@ pub(crate) fn push_open_with_chooser_overlay(
         } else {
             POPUP_INPUT
         },
-        size,
-    );
-    push_clipped_rect_outline(
-        vertices,
-        checkbox,
-        rect,
-        1.0,
         if default_enabled {
             POPUP_BORDER
         } else {
             POPUP_DIVIDER
         },
+        scale,
         size,
     );
     if chooser.set_as_default {
@@ -474,7 +492,7 @@ pub(crate) fn push_open_with_chooser_overlay(
         ("Cancel", cancel, false, true),
         ("Open", open, true, open_enabled),
     ] {
-        push_clipped_rounded_rect(
+        push_open_with_rounded_box(
             vertices,
             button,
             rect,
@@ -484,9 +502,10 @@ pub(crate) fn push_open_with_chooser_overlay(
             } else {
                 POPUP_BUTTON_SECONDARY
             },
+            POPUP_BORDER,
+            scale,
             size,
         );
-        push_clipped_rect_outline(vertices, button, rect, 1.0, POPUP_BORDER, size);
         text.push_label_aligned(
             label,
             ViewRect {
@@ -506,6 +525,41 @@ pub(crate) fn push_open_with_chooser_overlay(
             LabelAlignment::Center,
         );
     }
+}
+
+fn push_open_with_rounded_box(
+    vertices: &mut Vec<QuadVertex>,
+    rect: ViewRect,
+    clip: ViewRect,
+    radius: f32,
+    fill: [f32; 4],
+    border: [f32; 4],
+    scale: f32,
+    size: PhysicalSize<u32>,
+) {
+    let border_width = scaled_dialog_metric(1.0, scale);
+    push_clipped_rounded_rect(vertices, rect, clip, radius, border, size);
+    if let Some(inner) = open_with_inset_rect(rect, border_width) {
+        push_clipped_rounded_rect(
+            vertices,
+            inner,
+            clip,
+            (radius - border_width).max(1.0),
+            fill,
+            size,
+        );
+    }
+}
+
+fn open_with_inset_rect(rect: ViewRect, inset: f32) -> Option<ViewRect> {
+    let width = rect.width - inset * 2.0;
+    let height = rect.height - inset * 2.0;
+    (width > 0.0 && height > 0.0).then_some(ViewRect {
+        x: rect.x + inset,
+        y: rect.y + inset,
+        width,
+        height,
+    })
 }
 
 fn push_open_with_search_icon(

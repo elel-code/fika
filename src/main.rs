@@ -25997,6 +25997,14 @@ mod tests {
         let size = PhysicalSize::new(1200, 900);
         let base = open_with_chooser_rect(&chooser, size);
         let scaled = open_with_chooser_rect_scaled(&chooser, size, 1.5);
+        assert_eq!(
+            base.width,
+            scaled_dialog_metric(OPEN_WITH_CHOOSER_WIDTH, 1.0)
+        );
+        assert_eq!(
+            scaled.width,
+            scaled_dialog_metric(OPEN_WITH_CHOOSER_WIDTH, 1.5)
+        );
         assert!(scaled.width > base.width);
         assert!(scaled.height > base.height);
         assert_eq!(
