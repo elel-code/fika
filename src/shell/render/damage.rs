@@ -20,11 +20,11 @@ use crate::shell::options::ShellViewMode;
 use crate::shell::pane::{ShellPaneId, ShellPaneProjection, ShellPaneState};
 use crate::shell::properties::ShellPropertiesOverlay;
 use crate::shell::properties::geometry::properties_overlay_rect_scaled;
+use crate::shell::tasks::geometry::task_detail_dialog_rect_scaled;
 use crate::{
     FolderPreviewReady, FolderPreviewRoleChange, FolderPreviewRoleKey, ItemPixmapLayout,
     RubberBand, ShellInternalDrag, ShellInternalDragSource, ShellPaneItemTarget, ShellScene,
     folder_preview_role_shell_rect, intersect_rect, pane_content_rect_to_screen,
-    task_detail_dialog_rect_scaled,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]

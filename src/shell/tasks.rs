@@ -1,3 +1,8 @@
+#[path = "tasks/geometry.rs"]
+pub(crate) mod geometry;
+#[path = "tasks/paint.rs"]
+pub(crate) mod paint;
+
 pub(crate) type ShellTaskId = u64;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
