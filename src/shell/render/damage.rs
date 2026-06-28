@@ -6,6 +6,7 @@ use winit::dpi::PhysicalSize;
 use crate::shell::context_menu::{
     ShellContextMenu, ShellContextSubmenu, context_menu_items, context_submenu_actions,
 };
+use crate::shell::create_rename::geometry::{create_dialog_rect_scaled, rename_dialog_rect_scaled};
 use crate::shell::drop_menu::{ShellDropMenu, ShellDropTarget, drop_menu_items};
 use crate::shell::location::ShellLocationDraft;
 use crate::shell::menu_geometry::{
@@ -22,8 +23,8 @@ use crate::shell::properties::geometry::properties_overlay_rect_scaled;
 use crate::{
     FolderPreviewReady, FolderPreviewRoleChange, FolderPreviewRoleKey, ItemPixmapLayout,
     RubberBand, ShellInternalDrag, ShellInternalDragSource, ShellPaneItemTarget, ShellScene,
-    create_dialog_rect_scaled, folder_preview_role_shell_rect, intersect_rect,
-    pane_content_rect_to_screen, rename_dialog_rect_scaled, task_detail_dialog_rect_scaled,
+    folder_preview_role_shell_rect, intersect_rect, pane_content_rect_to_screen,
+    task_detail_dialog_rect_scaled,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]

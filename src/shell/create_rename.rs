@@ -2,6 +2,11 @@ use std::path::{Path, PathBuf};
 
 use crate::shell::pane::ShellPaneId;
 
+#[path = "create_rename/geometry.rs"]
+pub(crate) mod geometry;
+#[path = "create_rename/paint.rs"]
+pub(crate) mod paint;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CreateEntryKind {
     Folder,

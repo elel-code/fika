@@ -98,6 +98,17 @@ use shell::context_menu::{
     ShellContextMenuIcon, ShellContextMenuItem, ShellContextSubmenu, context_menu_actions,
     context_menu_separator_before, service_menu_action_item,
 };
+#[cfg(test)]
+use shell::create_rename::geometry::{
+    create_dialog_cancel_button_rect, create_dialog_commit_button_rect, create_dialog_rect,
+    rename_dialog_commit_button_rect, rename_dialog_rect,
+};
+use shell::create_rename::geometry::{
+    create_dialog_cancel_button_rect_scaled, create_dialog_commit_button_rect_scaled,
+    create_dialog_rect_scaled, create_kind_button_rect_scaled,
+    rename_dialog_cancel_button_rect_scaled, rename_dialog_commit_button_rect_scaled,
+    rename_dialog_rect_scaled,
+};
 use shell::create_rename::{
     CreateDialogClick, CreateEntryKind, CreateEntryRequest, RenameDialogClick, RenameEntryRequest,
     ShellCreateDialog, ShellRenameDialog, unique_child_name, validate_create_name,
@@ -11755,172 +11766,13 @@ impl ShellScene {
         text: &mut TextFrameBuilder<'_>,
         size: PhysicalSize<u32>,
     ) {
-        let Some(dialog) = self.create_dialog.as_ref() else {
-            return;
-        };
-        let screen = ViewRect {
-            x: 0.0,
-            y: 0.0,
-            width: size.width.max(1) as f32,
-            height: size.height.max(1) as f32,
-        };
-        push_rect(vertices, screen, POPUP_BACKDROP, size);
-        let scale = self.ui_scale();
-        let rect = create_dialog_rect_scaled(dialog, size, scale);
-        let title_height = scaled_dialog_metric(CREATE_DIALOG_TITLE_HEIGHT, scale);
-        let margin = scaled_dialog_metric(16.0, scale);
-        push_clipped_rounded_rect(
-            vertices,
-            rect,
-            screen,
-            scaled_dialog_metric(8.0, scale),
-            POPUP_SURFACE,
-            size,
-        );
-        push_clipped_rect_outline(vertices, rect, screen, 1.0, POPUP_BORDER, size);
-        push_rect(
-            vertices,
-            ViewRect {
-                x: rect.x,
-                y: rect.y,
-                width: rect.width,
-                height: title_height,
-            },
-            POPUP_HEADER,
-            size,
-        );
-        push_rect(
-            vertices,
-            ViewRect {
-                x: rect.x,
-                y: rect.y + title_height - scaled_dialog_metric(1.0, scale).max(1.0),
-                width: rect.width,
-                height: scaled_dialog_metric(1.0, scale).max(1.0),
-            },
-            POPUP_DIVIDER,
-            size,
-        );
-        let title = if dialog.privileged {
-            "Create New as Administrator"
-        } else {
-            "Create New"
-        };
-        text.push_label(
-            title,
-            ViewRect {
-                x: rect.x + margin,
-                y: rect.y + scaled_dialog_metric(12.0, scale),
-                width: (rect.width - margin * 2.0).max(1.0),
-                height: scaled_dialog_metric(18.0, scale),
-            },
-            rect,
-            popup_title_text(),
-        );
-
-        for kind in [CreateEntryKind::Folder, CreateEntryKind::File] {
-            let button = create_kind_button_rect_scaled(rect, kind, scale);
-            let active = dialog.kind == kind;
-            push_clipped_rounded_rect(
+        if let Some(dialog) = self.create_dialog.as_ref() {
+            shell::create_rename::paint::push_create_dialog_overlay(
+                dialog,
+                self.ui_scale(),
                 vertices,
-                button,
-                rect,
-                scaled_dialog_metric(5.0, scale),
-                if active {
-                    POPUP_BUTTON_PRIMARY_SOFT
-                } else {
-                    POPUP_BUTTON_SECONDARY
-                },
+                text,
                 size,
-            );
-            push_clipped_rect_outline(vertices, button, rect, 1.0, POPUP_BORDER, size);
-            text.push_label_aligned(
-                kind.label(),
-                ViewRect {
-                    x: button.x + scaled_dialog_metric(10.0, scale),
-                    y: button.y + scaled_dialog_metric(4.0, scale),
-                    width: (button.width - scaled_dialog_metric(20.0, scale)).max(1.0),
-                    height: scaled_dialog_metric(18.0, scale),
-                },
-                rect,
-                if active {
-                    popup_inverse_text()
-                } else {
-                    popup_body_text()
-                },
-                LabelAlignment::Center,
-            );
-        }
-
-        let input = create_dialog_input_rect_scaled(rect, scale);
-        push_clipped_rounded_rect(
-            vertices,
-            input,
-            rect,
-            scaled_dialog_metric(5.0, scale),
-            POPUP_INPUT,
-            size,
-        );
-        push_clipped_rect_outline(vertices, input, rect, 1.0, POPUP_FIELD_FOCUS, size);
-        let draft = format!("{}|", dialog.name);
-        text.push_label(
-            &draft,
-            ViewRect {
-                x: input.x + scaled_dialog_metric(10.0, scale),
-                y: input.y + scaled_dialog_metric(7.0, scale),
-                width: (input.width - scaled_dialog_metric(20.0, scale)).max(1.0),
-                height: scaled_dialog_metric(18.0, scale),
-            },
-            input,
-            popup_body_text(),
-        );
-
-        if let Some(error) = dialog.error.as_ref() {
-            text.push_label(
-                error,
-                ViewRect {
-                    x: rect.x + margin,
-                    y: input.bottom() + scaled_dialog_metric(8.0, scale),
-                    width: (rect.width - margin * 2.0).max(1.0),
-                    height: scaled_dialog_metric(18.0, scale),
-                },
-                rect,
-                popup_error_text(),
-            );
-        }
-
-        let cancel = create_dialog_cancel_button_rect_scaled(rect, scale);
-        let commit = create_dialog_commit_button_rect_scaled(rect, scale);
-        for (label, button, active) in [("Cancel", cancel, false), ("Create", commit, true)] {
-            push_clipped_rounded_rect(
-                vertices,
-                button,
-                rect,
-                scaled_dialog_metric(5.0, scale),
-                if active && dialog.privileged {
-                    POPUP_BUTTON_WARNING
-                } else if active {
-                    POPUP_BUTTON_PRIMARY
-                } else {
-                    POPUP_BUTTON_SECONDARY
-                },
-                size,
-            );
-            push_clipped_rect_outline(vertices, button, rect, 1.0, POPUP_BORDER, size);
-            text.push_label_aligned(
-                label,
-                ViewRect {
-                    x: button.x + scaled_dialog_metric(10.0, scale),
-                    y: button.y + scaled_dialog_metric(4.0, scale),
-                    width: (button.width - scaled_dialog_metric(20.0, scale)).max(1.0),
-                    height: scaled_dialog_metric(18.0, scale),
-                },
-                rect,
-                if active {
-                    popup_inverse_text()
-                } else {
-                    popup_body_text()
-                },
-                LabelAlignment::Center,
             );
         }
     }
@@ -11931,139 +11783,13 @@ impl ShellScene {
         text: &mut TextFrameBuilder<'_>,
         size: PhysicalSize<u32>,
     ) {
-        let Some(dialog) = self.rename_dialog.as_ref() else {
-            return;
-        };
-        let screen = ViewRect {
-            x: 0.0,
-            y: 0.0,
-            width: size.width.max(1) as f32,
-            height: size.height.max(1) as f32,
-        };
-        push_rect(vertices, screen, POPUP_BACKDROP, size);
-        let scale = self.ui_scale();
-        let rect = rename_dialog_rect_scaled(dialog, size, scale);
-        let title_height = scaled_dialog_metric(RENAME_DIALOG_TITLE_HEIGHT, scale);
-        let margin = scaled_dialog_metric(16.0, scale);
-        push_clipped_rounded_rect(
-            vertices,
-            rect,
-            screen,
-            scaled_dialog_metric(8.0, scale),
-            POPUP_SURFACE,
-            size,
-        );
-        push_clipped_rect_outline(vertices, rect, screen, 1.0, POPUP_BORDER, size);
-        push_rect(
-            vertices,
-            ViewRect {
-                x: rect.x,
-                y: rect.y,
-                width: rect.width,
-                height: title_height,
-            },
-            POPUP_HEADER,
-            size,
-        );
-        push_rect(
-            vertices,
-            ViewRect {
-                x: rect.x,
-                y: rect.y + title_height - scaled_dialog_metric(1.0, scale).max(1.0),
-                width: rect.width,
-                height: scaled_dialog_metric(1.0, scale).max(1.0),
-            },
-            POPUP_DIVIDER,
-            size,
-        );
-        let title = match (dialog.is_dir, dialog.privileged) {
-            (true, true) => "Rename Folder as Administrator",
-            (false, true) => "Rename File as Administrator",
-            (true, false) => "Rename Folder",
-            (false, false) => "Rename File",
-        };
-        text.push_label(
-            title,
-            ViewRect {
-                x: rect.x + margin,
-                y: rect.y + scaled_dialog_metric(12.0, scale),
-                width: (rect.width - margin * 2.0).max(1.0),
-                height: scaled_dialog_metric(18.0, scale),
-            },
-            rect,
-            popup_title_text(),
-        );
-
-        let input = rename_dialog_input_rect_scaled(rect, scale);
-        push_clipped_rounded_rect(
-            vertices,
-            input,
-            rect,
-            scaled_dialog_metric(5.0, scale),
-            POPUP_INPUT,
-            size,
-        );
-        push_clipped_rect_outline(vertices, input, rect, 1.0, POPUP_FIELD_FOCUS, size);
-        let draft = format!("{}|", dialog.name);
-        text.push_label(
-            &draft,
-            ViewRect {
-                x: input.x + scaled_dialog_metric(10.0, scale),
-                y: input.y + scaled_dialog_metric(7.0, scale),
-                width: (input.width - scaled_dialog_metric(20.0, scale)).max(1.0),
-                height: scaled_dialog_metric(18.0, scale),
-            },
-            input,
-            popup_body_text(),
-        );
-
-        if let Some(error) = dialog.error.as_ref() {
-            text.push_label(
-                error,
-                ViewRect {
-                    x: rect.x + margin,
-                    y: input.bottom() + scaled_dialog_metric(8.0, scale),
-                    width: (rect.width - margin * 2.0).max(1.0),
-                    height: scaled_dialog_metric(18.0, scale),
-                },
-                rect,
-                popup_error_text(),
-            );
-        }
-
-        let cancel = rename_dialog_cancel_button_rect_scaled(rect, scale);
-        let commit = rename_dialog_commit_button_rect_scaled(rect, scale);
-        for (label, button, active) in [("Cancel", cancel, false), ("Rename", commit, true)] {
-            push_clipped_rounded_rect(
+        if let Some(dialog) = self.rename_dialog.as_ref() {
+            shell::create_rename::paint::push_rename_dialog_overlay(
+                dialog,
+                self.ui_scale(),
                 vertices,
-                button,
-                rect,
-                scaled_dialog_metric(5.0, scale),
-                if active && dialog.privileged {
-                    POPUP_BUTTON_WARNING
-                } else if active {
-                    POPUP_BUTTON_PRIMARY
-                } else {
-                    POPUP_BUTTON_SECONDARY
-                },
+                text,
                 size,
-            );
-            push_clipped_rect_outline(vertices, button, rect, 1.0, POPUP_BORDER, size);
-            text.push_label_aligned(
-                label,
-                ViewRect {
-                    x: button.x + scaled_dialog_metric(10.0, scale),
-                    y: button.y + scaled_dialog_metric(4.0, scale),
-                    width: (button.width - scaled_dialog_metric(20.0, scale)).max(1.0),
-                    height: scaled_dialog_metric(18.0, scale),
-                },
-                rect,
-                if active {
-                    popup_inverse_text()
-                } else {
-                    popup_body_text()
-                },
-                LabelAlignment::Center,
             );
         }
     }
@@ -19079,181 +18805,6 @@ fn task_detail_clear_button_rect_scaled(dialog_rect: ViewRect, scale_factor: f32
         width: cancel.width,
         height: cancel.height,
     }
-}
-
-#[cfg(test)]
-fn create_dialog_rect(_dialog: &ShellCreateDialog, size: PhysicalSize<u32>) -> ViewRect {
-    create_dialog_rect_scaled(_dialog, size, 1.0)
-}
-
-fn create_dialog_rect_scaled(
-    _dialog: &ShellCreateDialog,
-    size: PhysicalSize<u32>,
-    scale_factor: f32,
-) -> ViewRect {
-    let width = size.width.max(1) as f32;
-    let height = size.height.max(1) as f32;
-    let margin = scaled_dialog_metric(CREATE_DIALOG_MARGIN, scale_factor);
-    let dialog_width = scaled_dialog_metric(CREATE_DIALOG_WIDTH, scale_factor)
-        .min((width - margin * 2.0).max(1.0))
-        .max(1.0);
-    let dialog_height = scaled_dialog_metric(CREATE_DIALOG_HEIGHT, scale_factor)
-        .min((height - margin * 2.0).max(1.0))
-        .max(1.0);
-    ViewRect {
-        x: ((width - dialog_width) / 2.0).max(margin),
-        y: ((height - dialog_height) / 2.0).max(margin),
-        width: dialog_width,
-        height: dialog_height,
-    }
-}
-
-#[cfg(test)]
-#[allow(dead_code)]
-fn create_kind_button_rect(dialog_rect: ViewRect, kind: CreateEntryKind) -> ViewRect {
-    create_kind_button_rect_scaled(dialog_rect, kind, 1.0)
-}
-
-fn create_kind_button_rect_scaled(
-    dialog_rect: ViewRect,
-    kind: CreateEntryKind,
-    scale_factor: f32,
-) -> ViewRect {
-    let x = match kind {
-        CreateEntryKind::Folder => dialog_rect.x + scaled_dialog_metric(16.0, scale_factor),
-        CreateEntryKind::File => {
-            dialog_rect.x
-                + scaled_dialog_metric(16.0, scale_factor)
-                + scaled_dialog_metric(96.0, scale_factor)
-        }
-    };
-    ViewRect {
-        x,
-        y: dialog_rect.y
-            + scaled_dialog_metric(CREATE_DIALOG_TITLE_HEIGHT, scale_factor)
-            + scaled_dialog_metric(14.0, scale_factor),
-        width: scaled_dialog_metric(88.0, scale_factor),
-        height: scaled_dialog_metric(CREATE_DIALOG_BUTTON_HEIGHT, scale_factor),
-    }
-}
-
-#[cfg(test)]
-#[allow(dead_code)]
-fn create_dialog_input_rect(dialog_rect: ViewRect) -> ViewRect {
-    create_dialog_input_rect_scaled(dialog_rect, 1.0)
-}
-
-fn create_dialog_input_rect_scaled(dialog_rect: ViewRect, scale_factor: f32) -> ViewRect {
-    let margin = scaled_dialog_metric(16.0, scale_factor);
-    ViewRect {
-        x: dialog_rect.x + margin,
-        y: dialog_rect.y
-            + scaled_dialog_metric(CREATE_DIALOG_TITLE_HEIGHT, scale_factor)
-            + scaled_dialog_metric(60.0, scale_factor),
-        width: (dialog_rect.width - margin * 2.0).max(1.0),
-        height: scaled_dialog_metric(30.0, scale_factor),
-    }
-}
-
-#[cfg(test)]
-#[allow(dead_code)]
-fn create_dialog_cancel_button_rect(dialog_rect: ViewRect) -> ViewRect {
-    create_dialog_cancel_button_rect_scaled(dialog_rect, 1.0)
-}
-
-fn create_dialog_cancel_button_rect_scaled(dialog_rect: ViewRect, scale_factor: f32) -> ViewRect {
-    let right = dialog_rect.right() - scaled_dialog_metric(16.0, scale_factor);
-    let button_width = scaled_dialog_metric(CREATE_DIALOG_BUTTON_WIDTH, scale_factor);
-    let button_height = scaled_dialog_metric(CREATE_DIALOG_BUTTON_HEIGHT, scale_factor);
-    ViewRect {
-        x: right
-            - button_width * 2.0
-            - scaled_dialog_metric(CREATE_DIALOG_BUTTON_GAP, scale_factor),
-        y: dialog_rect.bottom() - scaled_dialog_metric(16.0, scale_factor) - button_height,
-        width: button_width,
-        height: button_height,
-    }
-}
-
-#[cfg(test)]
-fn create_dialog_commit_button_rect(dialog_rect: ViewRect) -> ViewRect {
-    create_dialog_commit_button_rect_scaled(dialog_rect, 1.0)
-}
-
-fn create_dialog_commit_button_rect_scaled(dialog_rect: ViewRect, scale_factor: f32) -> ViewRect {
-    let right = dialog_rect.right() - scaled_dialog_metric(16.0, scale_factor);
-    let button_width = scaled_dialog_metric(CREATE_DIALOG_BUTTON_WIDTH, scale_factor);
-    let button_height = scaled_dialog_metric(CREATE_DIALOG_BUTTON_HEIGHT, scale_factor);
-    ViewRect {
-        x: right - button_width,
-        y: dialog_rect.bottom() - scaled_dialog_metric(16.0, scale_factor) - button_height,
-        width: button_width,
-        height: button_height,
-    }
-}
-
-#[cfg(test)]
-fn rename_dialog_rect(_dialog: &ShellRenameDialog, size: PhysicalSize<u32>) -> ViewRect {
-    rename_dialog_rect_scaled(_dialog, size, 1.0)
-}
-
-fn rename_dialog_rect_scaled(
-    _dialog: &ShellRenameDialog,
-    size: PhysicalSize<u32>,
-    scale_factor: f32,
-) -> ViewRect {
-    let width = size.width.max(1) as f32;
-    let height = size.height.max(1) as f32;
-    let margin = scaled_dialog_metric(RENAME_DIALOG_MARGIN, scale_factor);
-    let dialog_width = scaled_dialog_metric(RENAME_DIALOG_WIDTH, scale_factor)
-        .min((width - margin * 2.0).max(1.0))
-        .max(1.0);
-    let dialog_height = scaled_dialog_metric(RENAME_DIALOG_HEIGHT, scale_factor)
-        .min((height - margin * 2.0).max(1.0))
-        .max(1.0);
-    ViewRect {
-        x: ((width - dialog_width) / 2.0).max(margin),
-        y: ((height - dialog_height) / 2.0).max(margin),
-        width: dialog_width,
-        height: dialog_height,
-    }
-}
-
-#[cfg(test)]
-#[allow(dead_code)]
-fn rename_dialog_input_rect(dialog_rect: ViewRect) -> ViewRect {
-    rename_dialog_input_rect_scaled(dialog_rect, 1.0)
-}
-
-fn rename_dialog_input_rect_scaled(dialog_rect: ViewRect, scale_factor: f32) -> ViewRect {
-    let margin = scaled_dialog_metric(16.0, scale_factor);
-    ViewRect {
-        x: dialog_rect.x + margin,
-        y: dialog_rect.y
-            + scaled_dialog_metric(RENAME_DIALOG_TITLE_HEIGHT, scale_factor)
-            + scaled_dialog_metric(18.0, scale_factor),
-        width: (dialog_rect.width - margin * 2.0).max(1.0),
-        height: scaled_dialog_metric(30.0, scale_factor),
-    }
-}
-
-#[cfg(test)]
-#[allow(dead_code)]
-fn rename_dialog_cancel_button_rect(dialog_rect: ViewRect) -> ViewRect {
-    create_dialog_cancel_button_rect(dialog_rect)
-}
-
-fn rename_dialog_cancel_button_rect_scaled(dialog_rect: ViewRect, scale_factor: f32) -> ViewRect {
-    create_dialog_cancel_button_rect_scaled(dialog_rect, scale_factor)
-}
-
-#[cfg(test)]
-fn rename_dialog_commit_button_rect(dialog_rect: ViewRect) -> ViewRect {
-    create_dialog_commit_button_rect(dialog_rect)
-}
-
-fn rename_dialog_commit_button_rect_scaled(dialog_rect: ViewRect, scale_factor: f32) -> ViewRect {
-    create_dialog_commit_button_rect_scaled(dialog_rect, scale_factor)
 }
 
 #[cfg(test)]
