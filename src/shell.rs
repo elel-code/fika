@@ -1,3 +1,4 @@
+pub(crate) mod ark;
 pub(crate) mod autosmoke;
 pub(crate) mod clipboard;
 pub(crate) mod context_menu;
