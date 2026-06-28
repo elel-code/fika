@@ -24,6 +24,7 @@ pub(crate) struct DolphinItemFocus {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct DolphinItemPaint {
+    pub(crate) alternate_background: Option<DolphinItemFill>,
     pub(crate) background: Option<DolphinItemFill>,
     pub(crate) focus: Option<DolphinItemFocus>,
 }
@@ -40,11 +41,17 @@ pub(crate) fn dolphin_item_paint(
 ) -> DolphinItemPaint {
     let radius = BREEZE_ITEM_ROUNDNESS * scale.max(1.0);
     let selection_rect = dolphin_selection_full_rect(view_mode, item_rect, visual_rect, scale);
+    let alternate_background =
+        (view_mode == ShellViewMode::Details && alternate).then(|| DolphinItemFill {
+            rect: item_rect,
+            radius: 0.0,
+            color: details_row_background_color(false, false, true),
+        });
     let background = match view_mode {
-        ShellViewMode::Details => Some(DolphinItemFill {
+        ShellViewMode::Details => (selected || hovered).then(|| DolphinItemFill {
             rect: selection_rect,
             radius: 0.0,
-            color: details_row_background_color(selected, hovered, alternate),
+            color: item_background_color(selected, hovered),
         }),
         ShellViewMode::Compact | ShellViewMode::Icons => {
             (selected || hovered).then(|| DolphinItemFill {
@@ -65,7 +72,11 @@ pub(crate) fn dolphin_item_paint(
         }
     });
 
-    DolphinItemPaint { background, focus }
+    DolphinItemPaint {
+        alternate_background,
+        background,
+        focus,
+    }
 }
 
 pub(crate) fn dolphin_selection_full_rect(
@@ -143,7 +154,7 @@ mod tests {
     }
 
     #[test]
-    fn details_item_paint_uses_full_row_background() {
+    fn details_item_paint_uses_alternate_row_base_without_idle_highlight() {
         let paint = dolphin_item_paint(
             ShellViewMode::Details,
             rect(0.0, 0.0, 320.0, 28.0),
@@ -156,14 +167,46 @@ mod tests {
         );
 
         assert_eq!(
-            paint.background,
+            paint.alternate_background,
             Some(DolphinItemFill {
                 rect: rect(0.0, 0.0, 320.0, 28.0),
                 radius: 0.0,
                 color: [0.949, 0.957, 0.969, 1.0],
             })
         );
+        assert_eq!(paint.background, None);
         assert_eq!(paint.focus, None);
+    }
+
+    #[test]
+    fn details_item_paint_layers_selection_highlight_over_alternate_row() {
+        let paint = dolphin_item_paint(
+            ShellViewMode::Details,
+            rect(0.0, 0.0, 320.0, 28.0),
+            rect(8.0, 2.0, 180.0, 24.0),
+            true,
+            false,
+            false,
+            true,
+            1.0,
+        );
+
+        assert_eq!(
+            paint.alternate_background,
+            Some(DolphinItemFill {
+                rect: rect(0.0, 0.0, 320.0, 28.0),
+                radius: 0.0,
+                color: [0.949, 0.957, 0.969, 1.0],
+            })
+        );
+        assert_eq!(
+            paint.background,
+            Some(DolphinItemFill {
+                rect: rect(0.0, 0.0, 320.0, 28.0),
+                radius: 0.0,
+                color: [0.239, 0.502, 0.710, 0.32],
+            })
+        );
     }
 
     #[test]

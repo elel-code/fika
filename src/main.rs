@@ -10540,6 +10540,15 @@ impl ShellScene {
             self.ui_scale(),
         );
 
+        if let Some(background) = paint.alternate_background {
+            push_clipped_rect(
+                vertices,
+                background.rect,
+                content_clip,
+                background.color,
+                size,
+            );
+        }
         if let Some(background) = paint.background {
             if background.radius <= 0.0 {
                 push_clipped_rect(
