@@ -555,8 +555,33 @@ fn shell_directory_watch_event_mutates(kind: &NotifyEventKind) -> bool {
 
 fn shell_directory_watch_event_touches_path(event: &NotifyEvent, directory: &Path) -> bool {
     event.paths.is_empty()
-        || event.paths.iter().any(|path| {
-            path == directory || path.parent() == Some(directory) || path.starts_with(directory)
+        || event
+            .paths
+            .iter()
+            .any(|path| shell_directory_watch_path_touches_directory(path, directory))
+}
+
+fn shell_directory_watch_path_touches_directory(path: &Path, directory: &Path) -> bool {
+    if path.is_relative() {
+        return true;
+    }
+    if path == directory || path.parent() == Some(directory) || path.starts_with(directory) {
+        return true;
+    }
+
+    let Some(canonical_directory) = directory.canonicalize().ok() else {
+        return false;
+    };
+    if path == canonical_directory
+        || path.parent() == Some(canonical_directory.as_path())
+        || path.starts_with(&canonical_directory)
+    {
+        return true;
+    }
+    path.parent()
+        .and_then(|parent| parent.canonicalize().ok())
+        .is_some_and(|parent| {
+            parent == canonical_directory || parent.starts_with(&canonical_directory)
         })
 }
 
@@ -915,6 +940,9 @@ impl FikaWgpuApp {
 impl ApplicationHandler for FikaWgpuApp {
     fn proxy_wake_up(&mut self, event_loop: &dyn ActiveEventLoop) {
         self.drive_directory_watchers(event_loop);
+        if let Some(deadline) = self.directory_watchers.next_reload_deadline() {
+            event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
+        }
     }
 
     fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
@@ -24117,6 +24145,26 @@ mod tests {
             &event,
             Path::new("/tmp/fika-watch")
         ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn directory_watch_event_path_matching_accepts_canonical_symlink_children() {
+        let root = test_dir("watch-symlink");
+        let real = root.join("real");
+        let link = root.join("link");
+        fs::create_dir_all(&real).unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let event = NotifyEvent {
+            kind: NotifyEventKind::Create(notify::event::CreateKind::File),
+            paths: vec![real.join("child.txt")],
+            attrs: Default::default(),
+        };
+
+        assert!(shell_directory_watch_event_touches_path(&event, &link));
+
+        fs::remove_file(&link).unwrap();
+        fs::remove_dir_all(&root).unwrap();
     }
 
     fn test_entry_with_mime_and_modified(
