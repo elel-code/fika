@@ -1,8 +1,15 @@
+use std::borrow::Cow;
+
 use bytemuck::{Pod, Zeroable};
 #[cfg(test)]
 use fika_core::ViewPoint;
 use fika_core::ViewRect;
 use winit::dpi::PhysicalSize;
+
+use crate::shell::render::gpu::{
+    VertexBufferUploadStats, create_vertex_buffer, upload_vertex_buffer_if_dirty,
+};
+use crate::shell::render::shaders::QUAD_SHADER;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
@@ -21,6 +28,96 @@ impl QuadVertex {
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &Self::ATTRIBUTES,
         }
+    }
+}
+
+pub(crate) struct QuadRenderer {
+    pipeline: wgpu::RenderPipeline,
+    vertex_buffer: wgpu::Buffer,
+    vertex_capacity: usize,
+    vertex_count: usize,
+    last_vertices_hash: Option<u64>,
+}
+
+impl QuadRenderer {
+    pub(crate) fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("fika-wgpu-quad-shader"),
+            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(QUAD_SHADER)),
+        });
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("fika-wgpu-quad-layout"),
+            bind_group_layouts: &[],
+            immediate_size: 0,
+        });
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("fika-wgpu-quad-pipeline"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                buffers: &[QuadVertex::layout()],
+            },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+        let vertex_capacity = 6;
+        let vertex_buffer = create_vertex_buffer(device, vertex_capacity);
+        Self {
+            pipeline,
+            vertex_buffer,
+            vertex_capacity,
+            vertex_count: 0,
+            last_vertices_hash: None,
+        }
+    }
+
+    pub(crate) fn upload(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        vertices: &[QuadVertex],
+    ) -> VertexBufferUploadStats {
+        if vertices.len() > self.vertex_capacity {
+            self.vertex_capacity = vertices.len().next_power_of_two();
+            self.vertex_buffer = create_vertex_buffer(device, self.vertex_capacity);
+            self.last_vertices_hash = None;
+        }
+
+        self.vertex_count = vertices.len();
+        upload_vertex_buffer_if_dirty(
+            queue,
+            &self.vertex_buffer,
+            vertices,
+            &mut self.last_vertices_hash,
+        )
+    }
+
+    pub(crate) fn draw<'pass>(&'pass self, pass: &mut wgpu::RenderPass<'pass>) {
+        if self.vertex_count == 0 {
+            return;
+        }
+        pass.set_pipeline(&self.pipeline);
+        pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+        pass.draw(0..self.vertex_count as u32, 0..1);
+    }
+
+    pub(crate) fn batch_count(&self) -> usize {
+        usize::from(self.vertex_count > 0)
     }
 }
 

@@ -194,17 +194,17 @@ use shell::properties::{ShellPropertiesOverlay, property_row};
 use shell::render::gpu::upload_vertex_hash_for_test;
 use shell::render::gpu::{
     VertexBufferUploadStats, create_icon_bind_group, create_icon_texture, create_text_bind_group,
-    create_text_texture, create_text_vertex_buffer, create_vertex_buffer, hash_bytes_with_len,
+    create_text_texture, create_text_vertex_buffer, hash_bytes_with_len,
     upload_vertex_buffer_if_dirty, vertex_pair_hash,
 };
 use shell::render::quad::{
-    QuadVertex, push_clipped_rect, push_clipped_rect_outline, push_clipped_rounded_highlight,
-    push_clipped_rounded_rect, push_rect,
+    QuadRenderer, QuadVertex, push_clipped_rect, push_clipped_rect_outline,
+    push_clipped_rounded_highlight, push_clipped_rounded_rect, push_rect,
 };
 use shell::render::retained::RetainedSceneRenderer;
 #[cfg(test)]
 use shell::render::retained::retained_scene_vertices;
-use shell::render::shaders::{QUAD_SHADER, TEXT_SHADER, TEXTURE_SHADER};
+use shell::render::shaders::{TEXT_SHADER, TEXTURE_SHADER};
 use shell::render::texture::{AtlasRect, TextVertex, push_textured_rect};
 use shell::role_worker_queue::{PriorityWorkerQueue, PriorityWorkerRequest, WorkerRequestPriority};
 use shell::selection::{
@@ -16911,96 +16911,6 @@ fn frame_latency_counters_for_scene(scene: &ShellScene) -> ShellFrameLatencyCoun
 impl Drop for WgpuState {
     fn drop(&mut self) {
         let _ = self.instance.poll_all(false);
-    }
-}
-
-struct QuadRenderer {
-    pipeline: wgpu::RenderPipeline,
-    vertex_buffer: wgpu::Buffer,
-    vertex_capacity: usize,
-    vertex_count: usize,
-    last_vertices_hash: Option<u64>,
-}
-
-impl QuadRenderer {
-    fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("fika-wgpu-quad-shader"),
-            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(QUAD_SHADER)),
-        });
-        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("fika-wgpu-quad-layout"),
-            bind_group_layouts: &[],
-            immediate_size: 0,
-        });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("fika-wgpu-quad-pipeline"),
-            layout: Some(&layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                buffers: &[QuadVertex::layout()],
-            },
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
-        let vertex_capacity = 6;
-        let vertex_buffer = create_vertex_buffer(device, vertex_capacity);
-        Self {
-            pipeline,
-            vertex_buffer,
-            vertex_capacity,
-            vertex_count: 0,
-            last_vertices_hash: None,
-        }
-    }
-
-    fn upload(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        vertices: &[QuadVertex],
-    ) -> VertexBufferUploadStats {
-        if vertices.len() > self.vertex_capacity {
-            self.vertex_capacity = vertices.len().next_power_of_two();
-            self.vertex_buffer = create_vertex_buffer(device, self.vertex_capacity);
-            self.last_vertices_hash = None;
-        }
-
-        self.vertex_count = vertices.len();
-        upload_vertex_buffer_if_dirty(
-            queue,
-            &self.vertex_buffer,
-            vertices,
-            &mut self.last_vertices_hash,
-        )
-    }
-
-    fn draw<'pass>(&'pass self, pass: &mut wgpu::RenderPass<'pass>) {
-        if self.vertex_count == 0 {
-            return;
-        }
-        pass.set_pipeline(&self.pipeline);
-        pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-        pass.draw(0..self.vertex_count as u32, 0..1);
-    }
-
-    fn batch_count(&self) -> usize {
-        usize::from(self.vertex_count > 0)
     }
 }
 
