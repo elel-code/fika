@@ -330,6 +330,7 @@ fn context_menu_builtin_actions(target: &ShellContextTarget) -> Vec<ShellContext
     ];
     const ITEM_DIR_ACTIONS: &[ShellContextMenuAction] = &[
         ShellContextMenuAction::OpenInNewPane,
+        ShellContextMenuAction::OpenWith,
         ShellContextMenuAction::AddToPlaces,
         ShellContextMenuAction::Copy,
         ShellContextMenuAction::Cut,
@@ -359,6 +360,7 @@ fn context_menu_builtin_actions(target: &ShellContextTarget) -> Vec<ShellContext
     ];
     const BLANK_ACTIONS: &[ShellContextMenuAction] = &[
         ShellContextMenuAction::CreateNew,
+        ShellContextMenuAction::OpenWith,
         ShellContextMenuAction::AddToPlaces,
         ShellContextMenuAction::Paste,
         ShellContextMenuAction::PasteAsAdministrator,

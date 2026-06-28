@@ -7261,7 +7261,7 @@ impl ShellScene {
                 continue;
             }
             let pane = self.pane_view(geometry.kind)?;
-            if let Some(index) = self.pane_hit_test_screen_point(pane, geometry, point) {
+            if let Some(index) = self.pane_context_hit_test_screen_point(pane, geometry, point) {
                 let entry = pane.entries.get(index)?;
                 let selection_count = if pane.selection.contains(index) {
                     pane.selection.len().max(1)
@@ -8160,8 +8160,12 @@ impl ShellScene {
                     .pane_state(*pane)
                     .and_then(|pane| pane.entries.get(*index))
                     .and_then(|entry| entry.mime_type.as_deref());
-                let open_with_apps = if *is_dir || file_ops::is_in_trash_files_dir(path) {
+                let open_with_apps = if file_ops::is_in_trash_files_dir(path)
+                    || (*is_dir && is_network_path(path))
+                {
                     Vec::new()
+                } else if *is_dir {
+                    open_with_applications_for_mime(cache, Some("inode/directory"))
                 } else {
                     open_with_applications_for_mime(cache, mime_type)
                 };
@@ -8179,7 +8183,8 @@ impl ShellScene {
                 (open_with_apps, service_actions)
             }
             ShellContextTarget::Blank { path, .. } => {
-                let open_with_apps = if file_ops::is_trash_files_dir(&path) {
+                let open_with_apps = if file_ops::is_trash_files_dir(&path) || is_network_path(path)
+                {
                     Vec::new()
                 } else {
                     open_with_applications_for_mime(cache, Some("inode/directory"))
@@ -8611,39 +8616,52 @@ impl ShellScene {
         &self,
         cache: &MimeApplicationCache,
     ) -> Result<ShellOpenWithChooser, String> {
-        let Some(ShellContextTarget::Item {
-            pane,
-            index,
-            path,
-            is_dir: false,
-            ..
-        }) = self.context_target.as_ref()
-        else {
-            return Err(format!(
-                "target={} is not a file item",
-                self.context_target
-                    .as_ref()
-                    .map(ShellContextTarget::kind)
-                    .unwrap_or("none")
-            ));
+        let (path, mime_type) = match self.context_target.as_ref() {
+            Some(ShellContextTarget::Item {
+                pane,
+                index,
+                path,
+                is_dir,
+                ..
+            }) => {
+                if file_ops::is_in_trash_files_dir(path) {
+                    return Err("Open With is not available inside Trash".to_string());
+                }
+                let entry = self
+                    .pane_state(*pane)
+                    .and_then(|pane| pane.entries.get(*index))
+                    .ok_or_else(|| format!("entry index {index} is out of range"))?;
+                let mime_type = if *is_dir {
+                    entry
+                        .mime_type
+                        .clone()
+                        .or_else(|| Some(Arc::from("inode/directory")))
+                } else {
+                    entry.mime_type.clone()
+                };
+                (path.clone(), mime_type)
+            }
+            Some(ShellContextTarget::Blank { path, .. }) => {
+                if file_ops::is_trash_files_dir(path) {
+                    return Err("Open With is not available inside Trash".to_string());
+                }
+                (path.clone(), Some(Arc::from("inode/directory")))
+            }
+            _ => {
+                return Err(format!(
+                    "target={} is not a file or folder target",
+                    self.context_target
+                        .as_ref()
+                        .map(ShellContextTarget::kind)
+                        .unwrap_or("none")
+                ));
+            }
         };
-        if file_ops::is_in_trash_files_dir(path) {
-            return Err("Open With is not available inside Trash".to_string());
-        }
-        let entry = self
-            .pane_state(*pane)
-            .and_then(|pane| pane.entries.get(*index))
-            .ok_or_else(|| format!("entry index {index} is out of range"))?;
-        let applications =
-            open_with_applications_for_mime(cache, entry.mime_type.as_ref().map(|mime| &**mime));
+        let applications = open_with_applications_for_mime(cache, mime_type.as_deref());
         if applications.is_empty() {
             return Err("no desktop applications found".to_string());
         }
-        Ok(ShellOpenWithChooser::new(
-            path.clone(),
-            entry.mime_type.clone(),
-            applications,
-        ))
+        Ok(ShellOpenWithChooser::new(path, mime_type, applications))
     }
 
     fn is_open_with_chooser_open(&self) -> bool {
@@ -8752,11 +8770,11 @@ impl ShellScene {
         desktop_id: &str,
     ) -> Result<OpenWithLaunchRequest, String> {
         let path = match self.context_target.as_ref() {
-            Some(ShellContextTarget::Item {
-                path,
-                is_dir: false,
-                ..
-            }) => path.clone(),
+            Some(ShellContextTarget::Item { path, .. })
+                if !file_ops::is_in_trash_files_dir(path) =>
+            {
+                path.clone()
+            }
             Some(ShellContextTarget::Blank { path, .. }) => path.clone(),
             _ => return Err("Open With application requires a file or folder target".to_string()),
         };
@@ -14398,11 +14416,24 @@ impl ShellScene {
             vertices,
             query,
             rect,
-            scaled_dialog_metric(8.0, scale),
+            scaled_dialog_metric(7.0, scale),
             POPUP_INPUT,
             size,
         );
-        push_clipped_rect_outline(vertices, query, rect, 1.0, POPUP_FIELD_FOCUS, size);
+        push_clipped_rect_outline(vertices, query, rect, 1.0, POPUP_DIVIDER, size);
+        push_clipped_rounded_rect(
+            vertices,
+            ViewRect {
+                x: query.x + scaled_dialog_metric(10.0, scale),
+                y: query.bottom() - scaled_dialog_metric(2.0, scale),
+                width: (query.width - scaled_dialog_metric(20.0, scale)).max(1.0),
+                height: scaled_dialog_metric(1.5, scale),
+            },
+            query,
+            scaled_dialog_metric(1.0, scale),
+            POPUP_FIELD_FOCUS,
+            size,
+        );
         let search_icon = ViewRect {
             x: query.x + scaled_dialog_metric(10.0, scale),
             y: query.y + (query.height - scaled_dialog_metric(14.0, scale)) / 2.0,
@@ -14425,53 +14456,44 @@ impl ShellScene {
                 .max(1.0),
             height: scaled_dialog_metric(18.0, scale),
         };
-        let query_label = if chooser.query.is_empty() {
-            "Search applications"
+        if chooser.query.is_empty() {
+            text.push_label(
+                "Search applications",
+                query_text_rect,
+                query,
+                popup_muted_text(),
+            );
         } else {
-            chooser.query.as_str()
-        };
-        let cursor_x = if chooser.query.is_empty() {
-            0.0
-        } else {
-            text.measure_label_cursor_x(
+            let cursor_x = text.measure_label_cursor_x(
                 &chooser.query,
                 query_text_rect,
                 chooser.query.len(),
                 LabelAlignment::Start,
                 LabelWrap::None,
-            )
-        };
-        text.push_label(
-            query_label,
-            query_text_rect,
-            query,
-            if chooser.query.is_empty() {
-                popup_muted_text()
-            } else {
-                popup_body_text()
-            },
-        );
-        let caret_width = scaled_dialog_metric(1.25, scale).max(1.0);
-        let caret_height = scaled_dialog_metric(18.0, scale)
-            .min(query.height - 8.0)
-            .max(1.0);
-        let caret_x = (query_text_rect.x + cursor_x).clamp(
-            query_text_rect.x,
-            (query_text_rect.right() - caret_width).max(query_text_rect.x),
-        );
-        push_clipped_rounded_rect(
-            vertices,
-            ViewRect {
-                x: caret_x,
-                y: query.y + (query.height - caret_height) / 2.0,
-                width: caret_width,
-                height: caret_height,
-            },
-            query,
-            caret_width / 2.0,
-            POPUP_FIELD_FOCUS,
-            size,
-        );
+            );
+            text.push_label(&chooser.query, query_text_rect, query, popup_body_text());
+            let caret_width = scaled_dialog_metric(1.0, scale).max(1.0);
+            let caret_height = scaled_dialog_metric(17.0, scale)
+                .min(query.height - scaled_dialog_metric(10.0, scale))
+                .max(1.0);
+            let caret_x = (query_text_rect.x + cursor_x).clamp(
+                query_text_rect.x,
+                (query_text_rect.right() - caret_width).max(query_text_rect.x),
+            );
+            push_clipped_rounded_rect(
+                vertices,
+                ViewRect {
+                    x: caret_x,
+                    y: query.y + (query.height - caret_height) / 2.0,
+                    width: caret_width,
+                    height: caret_height,
+                },
+                query,
+                caret_width / 2.0,
+                POPUP_FIELD_FOCUS,
+                size,
+            );
+        }
 
         let list = open_with_chooser_list_rect_scaled(rect, chooser, scale);
         let scrollbar = open_with_chooser_scrollbar_rects_scaled(list, chooser, scale);
@@ -15989,7 +16011,20 @@ impl ShellScene {
             .flatten()
     }
 
-    fn pane_drop_hit_test_screen_point(
+    fn pane_context_hit_test_screen_point(
+        &self,
+        pane: ShellPaneView<'_>,
+        geometry: ShellPaneGeometry,
+        point: ViewPoint,
+    ) -> Option<usize> {
+        if pane.selection.len() > 1 {
+            self.pane_selection_core_hit_test_screen_point(pane, geometry, point)
+        } else {
+            self.pane_hit_test_screen_point(pane, geometry, point)
+        }
+    }
+
+    fn pane_selection_core_hit_test_screen_point(
         &self,
         pane: ShellPaneView<'_>,
         geometry: ShellPaneGeometry,
@@ -16026,6 +16061,15 @@ impl ShellScene {
         )
         .contains(content_point)
         .then_some(entry_index)
+    }
+
+    fn pane_drop_hit_test_screen_point(
+        &self,
+        pane: ShellPaneView<'_>,
+        geometry: ShellPaneGeometry,
+        point: ViewPoint,
+    ) -> Option<usize> {
+        self.pane_selection_core_hit_test_screen_point(pane, geometry, point)
     }
 
     fn ensure_index_visible_in_pane(
@@ -30231,6 +30275,7 @@ mod tests {
         assert!(
             context_menu_actions(&folder_target).contains(&ShellContextMenuAction::AddToPlaces)
         );
+        assert!(context_menu_actions(&folder_target).contains(&ShellContextMenuAction::OpenWith));
 
         let file_target = ShellContextTarget::Item {
             pane: ShellPaneId::SLOT_0,
@@ -30250,6 +30295,7 @@ mod tests {
             path: PathBuf::from("/tmp"),
         };
         assert!(context_menu_actions(&blank_target).contains(&ShellContextMenuAction::AddToPlaces));
+        assert!(context_menu_actions(&blank_target).contains(&ShellContextMenuAction::OpenWith));
         assert!(
             context_menu_actions(&blank_target)
                 .contains(&ShellContextMenuAction::ToggleHiddenFiles)
@@ -30525,6 +30571,45 @@ mod tests {
                 ShellContextMenuAction::OpenWith
             ))
         ));
+    }
+
+    #[test]
+    fn blank_context_menu_offers_directory_open_with_root_applications() {
+        let target = ShellContextTarget::Blank {
+            pane: ShellPaneId::SLOT_0,
+            path: PathBuf::from("/tmp/project"),
+        };
+        let app = |id: &str, name: &str, icon: Option<&str>| MimeApplication {
+            id: format!("org.example.{id}.desktop"),
+            desktop_file: PathBuf::from(format!(
+                "/usr/share/applications/org.example.{id}.desktop"
+            )),
+            name: name.to_string(),
+            exec: format!("{} %F", name.to_ascii_lowercase()),
+            icon: icon.map(str::to_string),
+            is_default: false,
+        };
+        let menu = ShellContextMenu::with_dynamic(
+            target,
+            ViewPoint { x: 20.0, y: 20.0 },
+            vec![
+                app("Code", "Code", Some("com.visualstudio.code")),
+                app("Kate", "Kate", Some("kate")),
+            ],
+            Vec::new(),
+        );
+
+        let root = context_menu_items(&menu);
+        assert!(root.iter().any(|item| {
+            matches!(
+                item.command,
+                ShellContextMenuCommand::OpenWithApplication { .. }
+            ) && item.label == "Open With Code"
+        }));
+        assert!(
+            root.iter()
+                .any(|item| item.submenu == Some(ShellContextSubmenu::OpenWith))
+        );
     }
 
     #[test]
@@ -31495,6 +31580,36 @@ text/plain=writer.desktop;\n",
         assert_eq!(
             chooser.selected_application().map(|app| app.id.as_str()),
             Some("paint.desktop")
+        );
+    }
+
+    #[test]
+    fn open_with_chooser_opens_from_blank_directory_context() {
+        let mut scene = test_scene(Vec::new(), ShellViewMode::Icons);
+        scene.context_target = Some(ShellContextTarget::Blank {
+            pane: ShellPaneId::SLOT_0,
+            path: PathBuf::from("/tmp"),
+        });
+        let cache = MimeApplicationCache::from_applications_and_mimeapps(
+            vec![test_desktop_application(
+                "code.desktop",
+                "Code",
+                "code %F",
+                &["inode/directory"],
+            )],
+            &[],
+        );
+
+        assert!(scene.open_open_with_chooser_from_context(&cache));
+        let chooser = scene
+            .open_with_chooser
+            .as_ref()
+            .expect("directory chooser should open");
+        assert_eq!(chooser.path, PathBuf::from("/tmp"));
+        assert_eq!(chooser.mime_type.as_deref(), Some("inode/directory"));
+        assert_eq!(
+            chooser.selected_application().map(|app| app.id.as_str()),
+            Some("code.desktop")
         );
     }
 
@@ -32792,6 +32907,43 @@ text/plain=writer.desktop;\n",
     }
 
     #[test]
+    fn details_context_target_unselected_row_blank_side_clears_multi_selection() {
+        let mut scene = test_scene(
+            vec![
+                test_entry("alpha.txt", false),
+                test_entry("bravo.txt", false),
+                test_entry("charlie.txt", false),
+            ],
+            ShellViewMode::Details,
+        );
+        let size = PhysicalSize::new(900, 320);
+        assert!(
+            scene.panes[ShellPaneId::SLOT_0]
+                .selection
+                .select_indexes(&[0, 1])
+        );
+        let projection = scene.pane_projection(ShellPaneId::SLOT_0, size).unwrap();
+        let content = projection.geometry.content;
+        let row = projection.visible_items[2].layout;
+        let blank_side = ViewPoint {
+            x: content.right() - 4.0,
+            y: content.y + row.item_rect.y + row.item_rect.height / 2.0,
+        };
+
+        assert_eq!(scene.hit_test_screen_point(blank_side, size), Some(2));
+        assert!(scene.open_context_target(blank_side, size));
+        assert_eq!(scene.panes[ShellPaneId::SLOT_0].selection.len(), 0);
+        assert_eq!(scene.selection_changes, 1);
+        assert_eq!(
+            scene.context_target,
+            Some(ShellContextTarget::Blank {
+                pane: ShellPaneId::SLOT_0,
+                path: PathBuf::from("/tmp"),
+            })
+        );
+    }
+
+    #[test]
     fn context_menu_opens_item_actions_and_records_action_hits() {
         let mut scene = test_scene(vec![test_entry("folder", true)], ShellViewMode::Icons);
         let size = PhysicalSize::new(420, 260);
@@ -32895,7 +33047,7 @@ text/plain=writer.desktop;\n",
             path: PathBuf::from("/tmp"),
         };
         let menu = ShellContextMenu::new(target, ViewPoint { x: 390.0, y: 280.0 });
-        let size = PhysicalSize::new(420, 320);
+        let size = PhysicalSize::new(420, 420);
         let rect = context_menu_rect(&menu, size);
 
         assert_eq!(rect.width, 260.0);
@@ -32917,7 +33069,7 @@ text/plain=writer.desktop;\n",
             path: PathBuf::from("/tmp"),
         };
         let menu = ShellContextMenu::new(target, ViewPoint { x: 40.0, y: 40.0 });
-        let size = PhysicalSize::new(420, 320);
+        let size = PhysicalSize::new(420, 420);
         let rect = context_menu_rect(&menu, size);
 
         assert_eq!(
@@ -33028,7 +33180,7 @@ text/plain=writer.desktop;\n",
     #[test]
     fn context_menu_blank_actions_can_hit_select_all_and_refresh() {
         let mut scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
-        let size = PhysicalSize::new(420, 260);
+        let size = PhysicalSize::new(420, 420);
         let content = scene
             .pane_geometry(ShellPaneId::SLOT_0, size)
             .unwrap()
