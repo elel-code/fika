@@ -276,10 +276,10 @@ fn canonical_paths_equal(source: &Path, target_dir: &Path) -> bool {
 }
 
 async fn canonical_paths_equal_async(source: &Path, target_dir: &Path) -> bool {
-    let Ok(source) = tokio::fs::canonicalize(source).await else {
+    let Ok(source) = canonicalize_async(source).await else {
         return false;
     };
-    let Ok(target_dir) = tokio::fs::canonicalize(target_dir).await else {
+    let Ok(target_dir) = canonicalize_async(target_dir).await else {
         return false;
     };
     source == target_dir
@@ -304,10 +304,10 @@ async fn target_is_source_descendant_async(source: &Path, target_dir: &Path) -> 
         return true;
     }
 
-    let Ok(source) = tokio::fs::canonicalize(source).await else {
+    let Ok(source) = canonicalize_async(source).await else {
         return false;
     };
-    let Ok(target_dir) = tokio::fs::canonicalize(target_dir).await else {
+    let Ok(target_dir) = canonicalize_async(target_dir).await else {
         return false;
     };
     target_dir.starts_with(source)
@@ -1386,16 +1386,37 @@ async fn metadata_async(path: &Path) -> io::Result<compio::fs::Metadata> {
 }
 
 async fn read_link_async(path: &Path) -> io::Result<PathBuf> {
-    tokio::fs::read_link(path).await
+    let path = path.to_path_buf();
+    compio_blocking_io(move || fs::read_link(path)).await
 }
 
 async fn read_dir_entries_async(path: &Path) -> io::Result<Vec<(PathBuf, OsString)>> {
-    let mut entries = Vec::new();
-    let mut dir = tokio::fs::read_dir(path).await?;
-    while let Some(entry) = dir.next_entry().await? {
-        entries.push((entry.path(), entry.file_name()));
-    }
-    Ok(entries)
+    let path = path.to_path_buf();
+    compio_blocking_io(move || {
+        let mut entries = Vec::new();
+        for entry in fs::read_dir(path)? {
+            let entry = entry?;
+            entries.push((entry.path(), entry.file_name()));
+        }
+        Ok(entries)
+    })
+    .await
+}
+
+async fn canonicalize_async(path: &Path) -> io::Result<PathBuf> {
+    let path = path.to_path_buf();
+    compio_blocking_io(move || path.canonicalize()).await
+}
+
+async fn compio_blocking_io<T>(
+    task: impl FnOnce() -> io::Result<T> + Send + 'static,
+) -> io::Result<T>
+where
+    T: Send + 'static,
+{
+    compio::runtime::spawn_blocking(task)
+        .await
+        .map_err(|err| io::Error::new(io::ErrorKind::Other, err.to_string()))?
 }
 
 fn create_dir_all_async<'a>(
