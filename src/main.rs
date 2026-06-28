@@ -37,7 +37,7 @@ use fika_core::{
     network_path_from_uri, network_root_path, paste_text_result, perform_device_place_operation,
     place_order_path_for_user_places_path, push_unique_path, read_entries_sync, read_gio_devices,
     read_network_entry_batches_sync_cancellable, resolve_location_input, run_operation_task,
-    run_via_dbus, save_app_settings, save_place_order, save_user_places, service_menu_target_label,
+    save_app_settings, save_place_order, save_user_places, service_menu_target_label,
     set_default_mime_application, thumbnail_request_may_have_preview, trash_view_operation_result,
 };
 use winit::application::ApplicationHandler;
@@ -105,7 +105,9 @@ use shell::context_menu::{
     ShellContextMenuIcon, ShellContextMenuItem, ShellContextSubmenu, context_menu_actions,
     context_menu_separator_before, service_menu_action_item,
 };
+#[cfg(test)]
 use shell::create_rename::disk::{create_entry_on_disk, rename_entry_on_disk};
+use shell::create_rename::disk::{create_entry_on_disk_explicit, rename_entry_on_disk_explicit};
 #[cfg(test)]
 use shell::create_rename::geometry::{
     create_dialog_cancel_button_rect, create_dialog_commit_button_rect, create_dialog_rect,
@@ -218,6 +220,7 @@ use shell::prewarm::{
     text_label_prewarm_mode_for_frame, text_label_prewarm_mode_for_scene_prewarm,
     text_label_raster_miss_budget_for_mode, visible_exact_icon_roles_enabled_for_frame,
 };
+use shell::privilege::{run_privileged_command_sync, should_attempt_privileged_operation};
 #[cfg(test)]
 use shell::properties::geometry::properties_overlay_rect;
 use shell::properties::geometry::properties_overlay_rect_scaled;
@@ -3160,28 +3163,6 @@ struct DeviceActionRequest {
 enum ShellPlaceActivation {
     Open { pane: ShellPaneId, path: PathBuf },
     DeviceAction(DeviceActionRequest),
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct ShellPrivilegeOutcome {
-    privileged: bool,
-    message: Option<String>,
-}
-
-impl ShellPrivilegeOutcome {
-    fn normal() -> Self {
-        Self {
-            privileged: false,
-            message: None,
-        }
-    }
-
-    fn privileged(message: String) -> Self {
-        Self {
-            privileged: true,
-            message: Some(message),
-        }
-    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -18329,49 +18310,6 @@ fn file_clipboard_role_as_str(role: FileClipboardRole) -> &'static str {
     }
 }
 
-fn create_entry_on_disk_explicit(
-    request: &CreateEntryRequest,
-) -> Result<ShellPrivilegeOutcome, String> {
-    if request.privileged {
-        let command = match request.kind {
-            CreateEntryKind::Folder => PrivilegedCommand::CreateFolder {
-                parent: request.parent.clone(),
-                name: request.name.clone(),
-            },
-            CreateEntryKind::File => PrivilegedCommand::CreateFile {
-                parent: request.parent.clone(),
-                name: request.name.clone(),
-            },
-        };
-        run_privileged_command_sync(command)
-    } else {
-        create_entry_on_disk(request).map(|()| ShellPrivilegeOutcome::normal())
-    }
-}
-
-fn rename_entry_on_disk_explicit(
-    request: &RenameEntryRequest,
-) -> Result<ShellPrivilegeOutcome, String> {
-    if request.privileged {
-        run_privileged_command_sync(PrivilegedCommand::Rename {
-            path: request.source.clone(),
-            new_name: request.name.clone(),
-        })
-    } else {
-        rename_entry_on_disk(request).map(|()| ShellPrivilegeOutcome::normal())
-    }
-}
-
-fn run_privileged_command_sync(
-    command: PrivilegedCommand,
-) -> Result<ShellPrivilegeOutcome, String> {
-    let result = pollster::block_on(run_via_dbus(command));
-    result
-        .result
-        .map(ShellPrivilegeOutcome::privileged)
-        .map_err(|error| format!("administrator operation failed: {error}"))
-}
-
 fn trash_paths_with_privilege(
     paths: &[PathBuf],
     privileged: bool,
@@ -18698,14 +18636,6 @@ fn push_transfer_refresh_dirs(
         push_unique_path(affected_dirs, parent.to_path_buf());
         push_unique_path(refresh_dirs, parent.to_path_buf());
     }
-}
-
-fn should_attempt_privileged_operation(error: &str) -> bool {
-    let error = error.to_ascii_lowercase();
-    error.contains("permission denied")
-        || error.contains("os error 13")
-        || error.contains("operation not permitted")
-        || error.contains("os error 1")
 }
 
 fn path_name_or_display(path: &Path) -> String {

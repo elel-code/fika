@@ -1,6 +1,7 @@
-use fika_core::{file_ops, run_operation_task};
+use fika_core::{PrivilegedCommand, file_ops, run_operation_task};
 
 use super::{CreateEntryKind, CreateEntryRequest, RenameEntryRequest};
+use crate::shell::privilege::{ShellPrivilegeOutcome, run_privileged_command_sync};
 
 pub(crate) fn create_entry_on_disk(request: &CreateEntryRequest) -> Result<(), String> {
     let path = request.path.clone();
@@ -18,6 +19,26 @@ pub(crate) fn create_entry_on_disk(request: &CreateEntryRequest) -> Result<(), S
     .map_err(|error| error.to_string())?
 }
 
+pub(crate) fn create_entry_on_disk_explicit(
+    request: &CreateEntryRequest,
+) -> Result<ShellPrivilegeOutcome, String> {
+    if request.privileged {
+        let command = match request.kind {
+            CreateEntryKind::Folder => PrivilegedCommand::CreateFolder {
+                parent: request.parent.clone(),
+                name: request.name.clone(),
+            },
+            CreateEntryKind::File => PrivilegedCommand::CreateFile {
+                parent: request.parent.clone(),
+                name: request.name.clone(),
+            },
+        };
+        run_privileged_command_sync(command)
+    } else {
+        create_entry_on_disk(request).map(|()| ShellPrivilegeOutcome::normal())
+    }
+}
+
 pub(crate) fn rename_entry_on_disk(request: &RenameEntryRequest) -> Result<(), String> {
     let source = request.source.clone();
     let target = request.target.clone();
@@ -33,4 +54,17 @@ pub(crate) fn rename_entry_on_disk(request: &RenameEntryRequest) -> Result<(), S
             })
     }))
     .map_err(|error| error.to_string())?
+}
+
+pub(crate) fn rename_entry_on_disk_explicit(
+    request: &RenameEntryRequest,
+) -> Result<ShellPrivilegeOutcome, String> {
+    if request.privileged {
+        run_privileged_command_sync(PrivilegedCommand::Rename {
+            path: request.source.clone(),
+            new_name: request.name.clone(),
+        })
+    } else {
+        rename_entry_on_disk(request).map(|()| ShellPrivilegeOutcome::normal())
+    }
 }
