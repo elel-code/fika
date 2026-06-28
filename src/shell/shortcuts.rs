@@ -116,6 +116,8 @@ pub(crate) enum OpenWithCommand {
     Commit,
     MoveUp,
     MoveDown,
+    MoveCategoryLeft,
+    MoveCategoryRight,
     Ignore,
 }
 
@@ -603,6 +605,18 @@ pub(crate) fn open_with_command_for_key_parts(
         || matches!(key_without_modifiers, Key::Named(NamedKey::ArrowDown))
     {
         return OpenWithCommand::MoveDown;
+    }
+    if matches!(physical_key, PhysicalKey::Code(KeyCode::ArrowLeft))
+        || matches!(logical_key, Key::Named(NamedKey::ArrowLeft))
+        || matches!(key_without_modifiers, Key::Named(NamedKey::ArrowLeft))
+    {
+        return OpenWithCommand::MoveCategoryLeft;
+    }
+    if matches!(physical_key, PhysicalKey::Code(KeyCode::ArrowRight))
+        || matches!(logical_key, Key::Named(NamedKey::ArrowRight))
+        || matches!(key_without_modifiers, Key::Named(NamedKey::ArrowRight))
+    {
+        return OpenWithCommand::MoveCategoryRight;
     }
     if matches!(physical_key, PhysicalKey::Code(KeyCode::Backspace))
         || matches!(logical_key, Key::Named(NamedKey::Backspace))

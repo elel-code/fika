@@ -9,13 +9,13 @@ use crate::shell::metrics::{
     OPEN_WITH_CHOOSER_MAX_ROWS, OPEN_WITH_CHOOSER_ROW_HEIGHT, OPEN_WITH_CHOOSER_TITLE_HEIGHT,
     scaled_dialog_metric,
 };
-use crate::shell::open_with::ShellOpenWithChooser;
 use crate::shell::open_with::geometry::{
     open_with_chooser_cancel_button_rect_scaled, open_with_chooser_default_checkbox_rect_scaled,
     open_with_chooser_list_rect_scaled, open_with_chooser_open_button_rect_scaled,
     open_with_chooser_query_rect_scaled, open_with_chooser_rect_scaled,
     open_with_chooser_scrollbar_rects_scaled,
 };
+use crate::shell::open_with::{OpenWithTreeRow, ShellOpenWithChooser};
 use crate::shell::popup::style::{
     POPUP_BACKDROP, POPUP_BORDER, POPUP_BUTTON_PRIMARY, POPUP_BUTTON_SECONDARY, POPUP_DIVIDER,
     POPUP_FIELD_FOCUS, POPUP_HEADER, POPUP_INPUT, POPUP_MARKER_NEUTRAL, POPUP_SURFACE,
@@ -199,7 +199,7 @@ pub(crate) fn push_open_with_chooser_overlay(
         size,
     );
     push_clipped_rect_outline(vertices, list, rect, 1.0, POPUP_DIVIDER, size);
-    let visible = chooser.visible_filtered_indexes();
+    let visible = chooser.visible_tree_rows();
     if visible.is_empty() {
         text.push_label(
             "No matching applications",
@@ -213,11 +213,8 @@ pub(crate) fn push_open_with_chooser_overlay(
             popup_muted_text(),
         );
     } else {
-        for (visible_row, app_index) in visible.iter().copied().enumerate() {
+        for (visible_row, tree_row) in visible.iter().copied().enumerate() {
             let row = chooser.scroll_row + visible_row;
-            let Some(application) = chooser.applications.get(app_index) else {
-                continue;
-            };
             let row_rect = ViewRect {
                 x: list.x + scaled_dialog_metric(4.0, scale),
                 y: list.y + visible_row as f32 * row_height + scaled_dialog_metric(3.0, scale),
@@ -246,75 +243,131 @@ pub(crate) fn push_open_with_chooser_overlay(
                     size,
                 );
             }
-            let icon_rect = ViewRect {
-                x: row_rect.x + scaled_dialog_metric(13.0, scale),
-                y: row_rect.y + (row_rect.height - scaled_dialog_metric(28.0, scale)) / 2.0,
-                width: scaled_dialog_metric(28.0, scale),
-                height: scaled_dialog_metric(28.0, scale),
-            };
-            let icon_pushed = application
-                .icon
-                .as_deref()
-                .filter(|icon| !icon.is_empty())
-                .is_some_and(|icon| {
+            match tree_row {
+                OpenWithTreeRow::Category { category, expanded } => {
+                    text.push_label_aligned(
+                        if expanded { "v" } else { ">" },
+                        ViewRect {
+                            x: row_rect.x + scaled_dialog_metric(5.0, scale),
+                            y: row_rect.y + scaled_dialog_metric(10.0, scale),
+                            width: scaled_dialog_metric(14.0, scale),
+                            height: scaled_dialog_metric(18.0, scale),
+                        },
+                        row_clip,
+                        if selected {
+                            popup_title_text()
+                        } else {
+                            popup_body_text()
+                        },
+                        LabelAlignment::Center,
+                    );
+                    let icon_rect = ViewRect {
+                        x: row_rect.x + scaled_dialog_metric(28.0, scale),
+                        y: row_rect.y + (row_rect.height - scaled_dialog_metric(26.0, scale)) / 2.0,
+                        width: scaled_dialog_metric(26.0, scale),
+                        height: scaled_dialog_metric(26.0, scale),
+                    };
                     icons.push_named_theme_icon(
-                        icon,
+                        category.icon,
                         NamedIconFallback::Application,
                         icon_rect,
                         list,
                         IconDrawLayer::Overlay,
-                    )
-                });
-            if !icon_pushed {
-                icons.push_named_theme_icon(
-                    "application-x-executable",
-                    NamedIconFallback::Application,
-                    icon_rect,
-                    list,
-                    IconDrawLayer::Overlay,
-                );
+                    );
+                    text.push_label(
+                        category.label,
+                        ViewRect {
+                            x: icon_rect.right() + scaled_dialog_metric(12.0, scale),
+                            y: row_rect.y + scaled_dialog_metric(12.0, scale),
+                            width: (row_content_right
+                                - icon_rect.right()
+                                - scaled_dialog_metric(18.0, scale))
+                            .max(1.0),
+                            height: scaled_dialog_metric(18.0, scale),
+                        },
+                        row_clip,
+                        if selected {
+                            popup_title_text()
+                        } else {
+                            popup_body_text()
+                        },
+                    );
+                }
+                OpenWithTreeRow::Application { app_index } => {
+                    let Some(application) = chooser.applications.get(app_index) else {
+                        continue;
+                    };
+                    let icon_rect = ViewRect {
+                        x: row_rect.x + scaled_dialog_metric(58.0, scale),
+                        y: row_rect.y + (row_rect.height - scaled_dialog_metric(28.0, scale)) / 2.0,
+                        width: scaled_dialog_metric(28.0, scale),
+                        height: scaled_dialog_metric(28.0, scale),
+                    };
+                    let icon_pushed = application
+                        .icon
+                        .as_deref()
+                        .filter(|icon| !icon.is_empty())
+                        .is_some_and(|icon| {
+                            icons.push_named_theme_icon(
+                                icon,
+                                NamedIconFallback::Application,
+                                icon_rect,
+                                list,
+                                IconDrawLayer::Overlay,
+                            )
+                        });
+                    if !icon_pushed {
+                        icons.push_named_theme_icon(
+                            "application-x-executable",
+                            NamedIconFallback::Application,
+                            icon_rect,
+                            list,
+                            IconDrawLayer::Overlay,
+                        );
+                    }
+                    let name = if application.is_default {
+                        format!("{} (default)", application.name)
+                    } else {
+                        application.name.clone()
+                    };
+                    text.push_label(
+                        &name,
+                        ViewRect {
+                            x: icon_rect.right() + scaled_dialog_metric(12.0, scale),
+                            y: row_rect.y + scaled_dialog_metric(7.0, scale),
+                            width: (row_content_right
+                                - icon_rect.right()
+                                - scaled_dialog_metric(18.0, scale))
+                            .max(1.0),
+                            height: scaled_dialog_metric(18.0, scale),
+                        },
+                        row_clip,
+                        if selected {
+                            popup_title_text()
+                        } else {
+                            popup_body_text()
+                        },
+                    );
+                    text.push_label(
+                        &application.id,
+                        ViewRect {
+                            x: icon_rect.right() + scaled_dialog_metric(12.0, scale),
+                            y: row_rect.y + scaled_dialog_metric(25.0, scale),
+                            width: (row_content_right
+                                - icon_rect.right()
+                                - scaled_dialog_metric(18.0, scale))
+                            .max(1.0),
+                            height: scaled_dialog_metric(14.0, scale),
+                        },
+                        row_clip,
+                        if selected {
+                            popup_soft_text()
+                        } else {
+                            popup_muted_text()
+                        },
+                    );
+                }
             }
-            let name = if application.is_default {
-                format!("{} (default)", application.name)
-            } else {
-                application.name.clone()
-            };
-            text.push_label(
-                &name,
-                ViewRect {
-                    x: icon_rect.right() + scaled_dialog_metric(12.0, scale),
-                    y: row_rect.y + scaled_dialog_metric(7.0, scale),
-                    width: (row_content_right
-                        - icon_rect.right()
-                        - scaled_dialog_metric(18.0, scale))
-                    .max(1.0),
-                    height: scaled_dialog_metric(18.0, scale),
-                },
-                row_clip,
-                if selected {
-                    popup_title_text()
-                } else {
-                    popup_body_text()
-                },
-            );
-            text.push_label(
-                &application.id,
-                ViewRect {
-                    x: icon_rect.right() + scaled_dialog_metric(12.0, scale),
-                    y: row_rect.y + scaled_dialog_metric(25.0, scale),
-                    width: (row_content_right
-                        - icon_rect.right()
-                        - scaled_dialog_metric(18.0, scale))
-                    .max(1.0),
-                    height: scaled_dialog_metric(14.0, scale),
-                },
-                row_clip,
-                if selected {
-                    popup_soft_text()
-                } else {
-                    popup_muted_text()
-                },
-            );
         }
     }
 
@@ -380,14 +433,14 @@ pub(crate) fn push_open_with_chooser_overlay(
         },
     );
 
-    if chooser.filtered_count() > OPEN_WITH_CHOOSER_MAX_ROWS {
-        let end = (chooser.scroll_row + visible.len()).min(chooser.filtered_count());
+    if chooser.tree_row_count() > OPEN_WITH_CHOOSER_MAX_ROWS {
+        let end = (chooser.scroll_row + visible.len()).min(chooser.tree_row_count());
         text.push_label(
             &format!(
                 "{}-{} of {}",
                 chooser.scroll_row + 1,
                 end,
-                chooser.filtered_count()
+                chooser.tree_row_count()
             ),
             ViewRect {
                 x: rect.x + margin,
@@ -416,13 +469,17 @@ pub(crate) fn push_open_with_chooser_overlay(
 
     let cancel = open_with_chooser_cancel_button_rect_scaled(rect, scale);
     let open = open_with_chooser_open_button_rect_scaled(rect, scale);
-    for (label, button, active) in [("Cancel", cancel, false), ("Open", open, true)] {
+    let open_enabled = chooser.selected_application().is_some();
+    for (label, button, active, enabled) in [
+        ("Cancel", cancel, false, true),
+        ("Open", open, true, open_enabled),
+    ] {
         push_clipped_rounded_rect(
             vertices,
             button,
             rect,
             scaled_dialog_metric(5.0, scale),
-            if active {
+            if active && enabled {
                 POPUP_BUTTON_PRIMARY
             } else {
                 POPUP_BUTTON_SECONDARY
@@ -439,10 +496,12 @@ pub(crate) fn push_open_with_chooser_overlay(
                 height: scaled_dialog_metric(18.0, scale),
             },
             rect,
-            if active {
+            if active && enabled {
                 popup_inverse_text()
-            } else {
+            } else if enabled {
                 popup_body_text()
+            } else {
+                popup_muted_text()
             },
             LabelAlignment::Center,
         );

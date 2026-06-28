@@ -27,6 +27,7 @@ pub struct DesktopApplication {
     pub name: String,
     pub exec: String,
     pub icon: Option<String>,
+    pub categories: Vec<String>,
     pub mime_types: Vec<String>,
     pub actions: Vec<DesktopAction>,
 }
@@ -729,6 +730,10 @@ pub fn parse_desktop_application(
         name: name.to_string(),
         exec: exec.to_string(),
         icon: entry.get("Icon").filter(|icon| !icon.is_empty()).cloned(),
+        categories: entry
+            .get("Categories")
+            .map(|value| desktop_list(value))
+            .unwrap_or_default(),
         mime_types: entry
             .get("MimeType")
             .map(|value| desktop_list(value))
@@ -2069,6 +2074,7 @@ mod tests {
             name: name.to_string(),
             exec: format!("{name} %f"),
             icon: None,
+            categories: Vec::new(),
             mime_types: mime_types.iter().map(|mime| mime.to_string()).collect(),
             actions: Vec::new(),
         }
@@ -2109,6 +2115,7 @@ Type=Application\n\
 Name=Example Viewer\n\
 Exec=viewer %f\n\
 Icon=viewer\n\
+Categories=Graphics;Viewer;\n\
 MimeType=text/plain;image/png;\n\
 Actions=print;\n\
 \n\
@@ -2120,6 +2127,7 @@ Exec=viewer --print %f\n",
         .unwrap();
 
         assert_eq!(entry.name, "Example Viewer");
+        assert_eq!(entry.categories, vec!["Graphics", "Viewer"]);
         assert_eq!(entry.mime_types, vec!["text/plain", "image/png"]);
         assert_eq!(entry.actions[0].name, "Print");
         assert_eq!(entry.actions[0].icon.as_deref(), Some("document-print"));

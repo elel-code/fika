@@ -89,6 +89,7 @@ mod tests {
             name: name.to_string(),
             exec: exec.to_string(),
             icon: None,
+            categories: Vec::new(),
             mime_types: mime_types.iter().map(|mime| mime.to_string()).collect(),
             actions: Vec::new(),
         }

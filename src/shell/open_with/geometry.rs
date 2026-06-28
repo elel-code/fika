@@ -29,7 +29,7 @@ pub(crate) fn open_with_chooser_rect_scaled(
     let dialog_width = scaled_dialog_metric(OPEN_WITH_CHOOSER_WIDTH, scale_factor)
         .min((width - margin * 2.0).max(1.0))
         .max(1.0);
-    let rows = open_with_chooser_visible_row_count(chooser).max(1);
+    let content_height = open_with_chooser_content_height_scaled(chooser, scale_factor);
     let error_height = if chooser.error.is_some() {
         scaled_dialog_metric(26.0, scale_factor)
     } else {
@@ -39,7 +39,7 @@ pub(crate) fn open_with_chooser_rect_scaled(
         + scaled_dialog_metric(16.0, scale_factor)
         + scaled_dialog_metric(OPEN_WITH_CHOOSER_QUERY_HEIGHT, scale_factor)
         + scaled_dialog_metric(10.0, scale_factor)
-        + rows as f32 * scaled_dialog_metric(OPEN_WITH_CHOOSER_ROW_HEIGHT, scale_factor)
+        + content_height
         + scaled_dialog_metric(38.0, scale_factor)
         + error_height
         + scaled_dialog_metric(52.0, scale_factor))
@@ -55,7 +55,7 @@ pub(crate) fn open_with_chooser_rect_scaled(
 
 pub(crate) fn open_with_chooser_visible_row_count(chooser: &ShellOpenWithChooser) -> usize {
     chooser
-        .filtered_count()
+        .tree_row_count()
         .min(OPEN_WITH_CHOOSER_MAX_ROWS)
         .max(1)
 }
@@ -100,9 +100,16 @@ pub(crate) fn open_with_chooser_list_rect_scaled(
         x: dialog_rect.x + margin,
         y: query.bottom() + scaled_dialog_metric(10.0, scale_factor),
         width: (dialog_rect.width - margin * 2.0).max(1.0),
-        height: open_with_chooser_visible_row_count(chooser) as f32
-            * scaled_dialog_metric(OPEN_WITH_CHOOSER_ROW_HEIGHT, scale_factor),
+        height: open_with_chooser_content_height_scaled(chooser, scale_factor),
     }
+}
+
+fn open_with_chooser_content_height_scaled(
+    chooser: &ShellOpenWithChooser,
+    scale_factor: f32,
+) -> f32 {
+    open_with_chooser_visible_row_count(chooser) as f32
+        * scaled_dialog_metric(OPEN_WITH_CHOOSER_ROW_HEIGHT, scale_factor)
 }
 
 #[cfg(test)]
@@ -134,7 +141,7 @@ pub(crate) fn open_with_chooser_scrollbar_rects_scaled(
     chooser: &ShellOpenWithChooser,
     scale_factor: f32,
 ) -> Option<(ViewRect, ViewRect)> {
-    let total = chooser.filtered_count();
+    let total = chooser.tree_row_count();
     let visible = open_with_chooser_visible_row_count(chooser);
     if total <= visible {
         return None;
@@ -227,7 +234,9 @@ pub(crate) fn open_with_chooser_click_at_point(
     if open_with_chooser_cancel_button_rect_scaled(rect, scale_factor).contains(point) {
         return OpenWithChooserClick::Cancel;
     }
-    if open_with_chooser_open_button_rect_scaled(rect, scale_factor).contains(point) {
+    if open_with_chooser_open_button_rect_scaled(rect, scale_factor).contains(point)
+        && chooser.selected_application().is_some()
+    {
         return OpenWithChooserClick::Open;
     }
     if open_with_chooser_default_checkbox_rect_scaled(rect, chooser, scale_factor).contains(point) {
@@ -239,7 +248,7 @@ pub(crate) fn open_with_chooser_click_at_point(
             / scaled_dialog_metric(OPEN_WITH_CHOOSER_ROW_HEIGHT, scale_factor))
         .floor() as usize;
         let row = chooser.scroll_row + visible_row;
-        if row < chooser.filtered_count() {
+        if row < chooser.tree_row_count() {
             return OpenWithChooserClick::Row(row);
         }
     }

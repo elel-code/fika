@@ -1558,7 +1558,17 @@ fn push_open_with_chooser(
                     push_hash(values, &application.name);
                     push_bool(values, application.is_default);
                 }
+                for categories in &chooser.application_categories {
+                    push_u64(values, categories.len() as u64);
+                    for category in categories {
+                        push_hash(values, category);
+                    }
+                }
                 push_hash(values, &chooser.query);
+                push_u64(values, chooser.expanded_categories.len() as u64);
+                for category in &chooser.expanded_categories {
+                    push_hash(values, category);
+                }
                 push_u64(values, chooser.selected_index as u64);
                 push_u64(values, chooser.scroll_row as u64);
                 push_bool(values, chooser.set_as_default);

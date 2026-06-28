@@ -19,6 +19,8 @@ pub(crate) struct ShellOpenWithChooser {
     pub(crate) path: PathBuf,
     pub(crate) mime_type: Option<Arc<str>>,
     pub(crate) applications: Vec<MimeApplication>,
+    pub(crate) application_categories: Vec<Vec<String>>,
+    pub(crate) expanded_categories: BTreeSet<OpenWithCategoryKey>,
     pub(crate) query: String,
     pub(crate) selected_index: usize,
     pub(crate) scroll_row: usize,
@@ -31,15 +33,18 @@ impl ShellOpenWithChooser {
         path: PathBuf,
         mime_type: Option<Arc<str>>,
         applications: Vec<MimeApplication>,
+        application_categories: Vec<Vec<String>>,
     ) -> Self {
+        let mut application_categories = application_categories;
+        application_categories.truncate(applications.len());
+        application_categories.resize_with(applications.len(), Vec::new);
         let mut chooser = Self {
             path,
             mime_type,
-            selected_index: applications
-                .iter()
-                .position(|application| application.is_default)
-                .unwrap_or(0),
+            selected_index: 0,
             applications,
+            application_categories,
+            expanded_categories: BTreeSet::new(),
             query: String::new(),
             scroll_row: 0,
             set_as_default: false,
@@ -50,26 +55,75 @@ impl ShellOpenWithChooser {
     }
 
     pub(crate) fn filtered_indexes(&self) -> Vec<usize> {
-        open_with_filtered_application_indexes(&self.applications, &self.query)
+        open_with_matching_application_indexes(&self.applications, &self.query)
     }
 
     pub(crate) fn filtered_count(&self) -> usize {
         self.filtered_indexes().len()
     }
 
-    pub(crate) fn visible_filtered_indexes(&self) -> Vec<usize> {
+    pub(crate) fn category_rows(&self) -> Vec<OpenWithCategoryRow> {
+        open_with_category_rows_for_indexes(&self.application_categories, &self.filtered_indexes())
+    }
+
+    pub(crate) fn selected_category_row(&self) -> Option<OpenWithCategoryRow> {
+        match self.tree_rows().get(self.selected_index)? {
+            OpenWithTreeRow::Category { category, .. } => Some(*category),
+            OpenWithTreeRow::Application { app_index } => self
+                .application_categories
+                .get(*app_index)
+                .and_then(|categories| {
+                    self.category_rows().into_iter().find(|category| {
+                        open_with_application_matches_category(categories, Some(category))
+                    })
+                }),
+        }
+    }
+
+    pub(crate) fn tree_rows(&self) -> Vec<OpenWithTreeRow> {
         let indexes = self.filtered_indexes();
-        indexes
-            .into_iter()
+        let categories =
+            open_with_category_rows_for_indexes(&self.application_categories, &indexes);
+        let mut rows = Vec::new();
+        for category in categories {
+            let expanded = self.category_is_expanded(category.key);
+            rows.push(OpenWithTreeRow::Category { category, expanded });
+            if expanded {
+                for app_index in &indexes {
+                    let categories = self
+                        .application_categories
+                        .get(*app_index)
+                        .map(Vec::as_slice)
+                        .unwrap_or_default();
+                    if open_with_application_matches_category(categories, Some(&category)) {
+                        rows.push(OpenWithTreeRow::Application {
+                            app_index: *app_index,
+                        });
+                    }
+                }
+            }
+        }
+        rows
+    }
+
+    pub(crate) fn tree_row_count(&self) -> usize {
+        self.tree_rows().len()
+    }
+
+    pub(crate) fn visible_tree_rows(&self) -> Vec<OpenWithTreeRow> {
+        let rows = self.tree_rows();
+        rows.into_iter()
             .skip(self.scroll_row)
             .take(OPEN_WITH_CHOOSER_MAX_ROWS)
             .collect()
     }
 
     pub(crate) fn selected_application(&self) -> Option<&MimeApplication> {
-        let indexes = self.filtered_indexes();
-        let selected = self.selected_index.min(indexes.len().saturating_sub(1));
-        let app_index = *indexes.get(selected)?;
+        let OpenWithTreeRow::Application { app_index } =
+            *self.tree_rows().get(self.selected_index)?
+        else {
+            return None;
+        };
         self.applications.get(app_index)
     }
 
@@ -78,19 +132,21 @@ impl ShellOpenWithChooser {
         match command {
             OpenWithCommand::Insert(value) => {
                 self.query.push_str(&value);
-                self.selected_index = 0;
                 self.scroll_row = 0;
                 self.error = None;
+                self.selected_index = self.first_application_row().unwrap_or(0);
             }
             OpenWithCommand::Backspace => {
                 self.query.pop();
-                self.selected_index = 0;
                 self.scroll_row = 0;
                 self.error = None;
+                self.selected_index = self.first_application_row().unwrap_or(0);
             }
             OpenWithCommand::Cancel => return false,
             OpenWithCommand::MoveUp => self.move_selection(-1),
             OpenWithCommand::MoveDown => self.move_selection(1),
+            OpenWithCommand::MoveCategoryLeft => self.collapse_selected_category(),
+            OpenWithCommand::MoveCategoryRight => self.expand_selected_category(),
             OpenWithCommand::Commit | OpenWithCommand::Ignore => return false,
         }
         self.ensure_selected_visible();
@@ -98,16 +154,24 @@ impl ShellOpenWithChooser {
     }
 
     pub(crate) fn select_filtered_row(&mut self, row: usize) -> bool {
-        let count = self.filtered_count();
+        self.select_tree_row(row)
+    }
+
+    pub(crate) fn select_tree_row(&mut self, row: usize) -> bool {
+        let count = self.tree_row_count();
         if count == 0 {
             return false;
         }
-        let old_selected = self.selected_index;
-        let old_scroll = self.scroll_row;
+        let old = self.clone();
         self.selected_index = row.min(count - 1);
+        if let Some(OpenWithTreeRow::Category { category, .. }) =
+            self.tree_rows().get(self.selected_index)
+        {
+            self.toggle_category(category.key);
+        }
         self.error = None;
         self.ensure_selected_visible();
-        old_selected != self.selected_index || old_scroll != self.scroll_row
+        old != *self
     }
 
     pub(crate) fn toggle_set_as_default(&mut self) -> bool {
@@ -120,7 +184,7 @@ impl ShellOpenWithChooser {
     }
 
     pub(crate) fn scroll_rows(&mut self, delta: isize) -> bool {
-        let count = self.filtered_count();
+        let count = self.tree_row_count();
         if count <= OPEN_WITH_CHOOSER_MAX_ROWS {
             return false;
         }
@@ -135,7 +199,7 @@ impl ShellOpenWithChooser {
     }
 
     fn move_selection(&mut self, delta: isize) {
-        let count = self.filtered_count();
+        let count = self.tree_row_count();
         if count == 0 {
             self.selected_index = 0;
             self.scroll_row = 0;
@@ -149,8 +213,55 @@ impl ShellOpenWithChooser {
         };
     }
 
+    fn collapse_selected_category(&mut self) {
+        let rows = self.tree_rows();
+        match rows.get(self.selected_index).copied() {
+            Some(OpenWithTreeRow::Category { category, .. }) => {
+                self.expanded_categories.remove(&category.key);
+            }
+            Some(OpenWithTreeRow::Application { .. }) => {
+                if let Some(parent_row) = self.parent_category_row_for_selected_application(&rows) {
+                    self.selected_index = parent_row;
+                }
+            }
+            None => {}
+        }
+        self.error = None;
+    }
+
+    fn expand_selected_category(&mut self) {
+        if let Some(OpenWithTreeRow::Category { category, .. }) =
+            self.tree_rows().get(self.selected_index).copied()
+        {
+            self.expanded_categories.insert(category.key);
+            self.error = None;
+        }
+    }
+
+    fn parent_category_row_for_selected_application(
+        &self,
+        rows: &[OpenWithTreeRow],
+    ) -> Option<usize> {
+        rows.iter()
+            .take(self.selected_index)
+            .enumerate()
+            .rev()
+            .find_map(|(row, tree_row)| {
+                matches!(tree_row, OpenWithTreeRow::Category { .. }).then_some(row)
+            })
+    }
+
+    fn toggle_category(&mut self, key: OpenWithCategoryKey) {
+        if !self.query.is_empty() {
+            return;
+        }
+        if !self.expanded_categories.remove(&key) {
+            self.expanded_categories.insert(key);
+        }
+    }
+
     fn ensure_selected_visible(&mut self) {
-        let count = self.filtered_count();
+        let count = self.tree_row_count();
         if count == 0 {
             self.selected_index = 0;
             self.scroll_row = 0;
@@ -166,7 +277,124 @@ impl ShellOpenWithChooser {
             .scroll_row
             .min(count.saturating_sub(OPEN_WITH_CHOOSER_MAX_ROWS));
     }
+
+    fn first_application_row(&self) -> Option<usize> {
+        self.tree_rows()
+            .iter()
+            .position(|row| matches!(row, OpenWithTreeRow::Application { .. }))
+    }
+
+    fn category_is_expanded(&self, key: OpenWithCategoryKey) -> bool {
+        !self.query.is_empty() || self.expanded_categories.contains(&key)
+    }
 }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum OpenWithTreeRow {
+    Category {
+        category: OpenWithCategoryRow,
+        expanded: bool,
+    },
+    Application {
+        app_index: usize,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct OpenWithCategoryRow {
+    pub(crate) key: OpenWithCategoryKey,
+    pub(crate) label: &'static str,
+    pub(crate) icon: &'static str,
+    pub(crate) count: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub(crate) enum OpenWithCategoryKey {
+    Known(&'static str),
+    Other,
+}
+
+struct OpenWithCategoryDefinition {
+    key: &'static str,
+    label: &'static str,
+    icon: &'static str,
+    desktop_categories: &'static [&'static str],
+}
+
+const OPEN_WITH_CATEGORY_DEFINITIONS: &[OpenWithCategoryDefinition] = &[
+    OpenWithCategoryDefinition {
+        key: "accessories",
+        label: "Accessories",
+        icon: "applications-accessories",
+        desktop_categories: &["Utility"],
+    },
+    OpenWithCategoryDefinition {
+        key: "education",
+        label: "Education",
+        icon: "applications-education",
+        desktop_categories: &["Education"],
+    },
+    OpenWithCategoryDefinition {
+        key: "game",
+        label: "Games",
+        icon: "applications-games",
+        desktop_categories: &["Game"],
+    },
+    OpenWithCategoryDefinition {
+        key: "graphics",
+        label: "Graphics",
+        icon: "applications-graphics",
+        desktop_categories: &["Graphics"],
+    },
+    OpenWithCategoryDefinition {
+        key: "internet",
+        label: "Internet",
+        icon: "applications-internet",
+        desktop_categories: &["Network"],
+    },
+    OpenWithCategoryDefinition {
+        key: "office",
+        label: "Office",
+        icon: "applications-office",
+        desktop_categories: &["Office"],
+    },
+    OpenWithCategoryDefinition {
+        key: "programming",
+        label: "Programming",
+        icon: "applications-development",
+        desktop_categories: &["Development"],
+    },
+    OpenWithCategoryDefinition {
+        key: "science",
+        label: "Science",
+        icon: "applications-science",
+        desktop_categories: &["Science"],
+    },
+    OpenWithCategoryDefinition {
+        key: "settings",
+        label: "Settings",
+        icon: "preferences-system",
+        desktop_categories: &["Settings"],
+    },
+    OpenWithCategoryDefinition {
+        key: "sound-video",
+        label: "Sound & Video",
+        icon: "applications-multimedia",
+        desktop_categories: &["AudioVideo", "Audio", "Video"],
+    },
+    OpenWithCategoryDefinition {
+        key: "system-tools",
+        label: "System Tools",
+        icon: "applications-system",
+        desktop_categories: &["System"],
+    },
+    OpenWithCategoryDefinition {
+        key: "wine",
+        label: "Wine",
+        icon: "wine",
+        desktop_categories: &["Wine"],
+    },
+];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct OpenWithLaunchRequest {
@@ -209,7 +437,22 @@ pub(crate) fn open_with_applications_for_mime(
     applications
 }
 
-pub(crate) fn open_with_filtered_application_indexes(
+pub(crate) fn open_with_application_categories_for_applications(
+    cache: &MimeApplicationCache,
+    applications: &[MimeApplication],
+) -> Vec<Vec<String>> {
+    applications
+        .iter()
+        .map(|application| {
+            cache
+                .application(&application.id)
+                .map(|application| application.categories.clone())
+                .unwrap_or_default()
+        })
+        .collect()
+}
+
+fn open_with_matching_application_indexes(
     applications: &[MimeApplication],
     query: &str,
 ) -> Vec<usize> {
@@ -223,6 +466,67 @@ pub(crate) fn open_with_filtered_application_indexes(
         .filter(|(_, application)| open_with_application_matches_terms(application, &terms))
         .map(|(index, _)| index)
         .collect()
+}
+
+pub(crate) fn open_with_category_rows_for_indexes(
+    application_categories: &[Vec<String>],
+    application_indexes: &[usize],
+) -> Vec<OpenWithCategoryRow> {
+    let mut rows = Vec::new();
+    let mut other_pushed = false;
+    for definition in OPEN_WITH_CATEGORY_DEFINITIONS {
+        if definition.key == "programming" && !other_pushed {
+            push_open_with_other_category_row(
+                application_categories,
+                application_indexes,
+                &mut rows,
+            );
+            other_pushed = true;
+        }
+        let count = application_categories
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| application_indexes.contains(index))
+            .map(|(_, categories)| categories)
+            .filter(|categories| {
+                open_with_categories_match_any(categories, definition.desktop_categories)
+            })
+            .count();
+        if count > 0 {
+            rows.push(OpenWithCategoryRow {
+                key: OpenWithCategoryKey::Known(definition.key),
+                label: definition.label,
+                icon: definition.icon,
+                count,
+            });
+        }
+    }
+    if !other_pushed {
+        push_open_with_other_category_row(application_categories, application_indexes, &mut rows);
+    }
+    rows
+}
+
+fn push_open_with_other_category_row(
+    application_categories: &[Vec<String>],
+    application_indexes: &[usize],
+    rows: &mut Vec<OpenWithCategoryRow>,
+) {
+    let other_count = application_categories
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| application_indexes.contains(index))
+        .map(|(_, categories)| categories)
+        .filter(|categories| !open_with_categories_have_known_category(categories))
+        .count();
+    if other_count > 0 {
+        rows.push(OpenWithCategoryRow {
+            key: OpenWithCategoryKey::Other,
+            label: "Other",
+            icon: "applications-other",
+            count: other_count,
+        });
+    }
 }
 
 fn open_with_application_matches_terms(application: &MimeApplication, terms: &[String]) -> bool {
@@ -249,4 +553,93 @@ fn open_with_application_matches_terms(application: &MimeApplication, terms: &[S
             .iter()
             .any(|haystack| haystack.contains(term.as_str()))
     })
+}
+
+fn open_with_application_matches_category(
+    categories: &[String],
+    category: Option<&OpenWithCategoryRow>,
+) -> bool {
+    match category.map(|category| category.key) {
+        None => true,
+        Some(OpenWithCategoryKey::Known(key)) => {
+            open_with_category_definition(key).is_some_and(|definition| {
+                open_with_categories_match_any(categories, definition.desktop_categories)
+            })
+        }
+        Some(OpenWithCategoryKey::Other) => !open_with_categories_have_known_category(categories),
+    }
+}
+
+fn open_with_category_definition(key: &str) -> Option<&'static OpenWithCategoryDefinition> {
+    OPEN_WITH_CATEGORY_DEFINITIONS
+        .iter()
+        .find(|definition| definition.key == key)
+}
+
+fn open_with_categories_have_known_category(categories: &[String]) -> bool {
+    OPEN_WITH_CATEGORY_DEFINITIONS
+        .iter()
+        .any(|definition| open_with_categories_match_any(categories, definition.desktop_categories))
+}
+
+fn open_with_categories_match_any(categories: &[String], expected: &[&str]) -> bool {
+    categories
+        .iter()
+        .any(|category| expected.iter().any(|expected| category == expected))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn app(id: &str, name: &str) -> MimeApplication {
+        MimeApplication {
+            id: id.to_string(),
+            desktop_file: PathBuf::from(format!("/apps/{id}")),
+            name: name.to_string(),
+            exec: format!("{name} %f"),
+            icon: None,
+            is_default: false,
+        }
+    }
+
+    #[test]
+    fn category_rows_follow_desktop_main_categories() {
+        let indexes = [0, 1, 2];
+        let rows = open_with_category_rows_for_indexes(
+            &[
+                vec!["Graphics".to_string(), "Viewer".to_string()],
+                vec!["Network".to_string()],
+                vec!["Viewer".to_string()],
+            ],
+            &indexes,
+        );
+
+        assert_eq!(
+            rows.iter().map(|row| row.label).collect::<Vec<_>>(),
+            vec!["Graphics", "Internet", "Other"]
+        );
+        assert_eq!(rows[0].count, 1);
+        assert_eq!(rows[2].count, 1);
+    }
+
+    #[test]
+    fn chooser_filters_applications_by_selected_category() {
+        let mut chooser = ShellOpenWithChooser::new(
+            PathBuf::from("/tmp/file.txt"),
+            Some(Arc::from("text/plain")),
+            vec![
+                app("viewer.desktop", "Viewer"),
+                app("browser.desktop", "Browser"),
+            ],
+            vec![vec!["Graphics".to_string()], vec!["Network".to_string()]],
+        );
+
+        assert!(chooser.select_tree_row(0));
+        assert!(chooser.select_tree_row(1));
+
+        let selected = chooser.selected_application().unwrap();
+        assert_eq!(selected.id, "viewer.desktop");
+        assert_eq!(chooser.selected_index, 1);
+    }
 }

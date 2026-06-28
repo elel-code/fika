@@ -182,6 +182,8 @@ use shell::metrics::*;
 use shell::open_file::{OpenFileRequest, default_open_file_launch_request};
 #[cfg(test)]
 use shell::open_with::OpenWithDefaultUpdate;
+#[cfg(test)]
+use shell::open_with::OpenWithTreeRow;
 use shell::open_with::geometry::{
     open_with_chooser_click_at_point, open_with_chooser_list_rect_scaled,
     open_with_chooser_rect_scaled, open_with_chooser_scrollbar_rects_scaled,
@@ -6790,11 +6792,15 @@ impl ShellScene {
     fn log_open_with_chooser_state(&self) {
         match self.open_with_chooser.as_ref() {
             Some(chooser) => fika_log!(
-                "[fika-wgpu] open-with open=1 path={} mime={} apps={} filtered={} selected={} scroll={} set_default={} query={:?} error={:?} changes={}",
+                "[fika-wgpu] open-with open=1 path={} mime={} apps={} filtered={} category={} selected={} scroll={} set_default={} query={:?} error={:?} changes={}",
                 chooser.path.display(),
                 chooser.mime_type.as_deref().unwrap_or("unknown"),
                 chooser.applications.len(),
                 chooser.filtered_count(),
+                chooser
+                    .selected_category_row()
+                    .map(|category| category.label)
+                    .unwrap_or("unknown"),
                 chooser.selected_index,
                 chooser.scroll_row,
                 chooser.set_as_default as u8,
@@ -12163,7 +12169,7 @@ impl ShellScene {
                         .as_ref()
                         .map(|chooser| {
                             chooser
-                                .filtered_count()
+                                .tree_row_count()
                                 .saturating_sub(open_with_chooser_visible_row_count(chooser))
                         })
                         .unwrap_or(0);
@@ -19075,6 +19081,7 @@ mod tests {
             name: name.to_string(),
             exec: exec.to_string(),
             icon: None,
+            categories: Vec::new(),
             mime_types: mime_types.iter().map(|mime| mime.to_string()).collect(),
             actions: Vec::new(),
         }
@@ -21294,6 +21301,7 @@ mod tests {
                     is_default: false,
                 },
             ],
+            Vec::new(),
         ));
         let initial = ShellRenderDirtyKey::from_scene(&scene, size);
         let initial_hoverless = ShellRenderDirtyKey::from_scene_ignoring_hover(&scene, size);
@@ -22008,6 +22016,7 @@ mod tests {
                     is_default: false,
                 },
             ],
+            Vec::new(),
         ));
         let projections = ShellPaneId::ALL
             .into_iter()
@@ -25983,6 +25992,7 @@ mod tests {
                 icon: None,
                 is_default: false,
             }],
+            Vec::new(),
         );
         let size = PhysicalSize::new(1200, 900);
         let base = open_with_chooser_rect(&chooser, size);
@@ -25992,6 +26002,7 @@ mod tests {
         assert_eq!(
             open_with_chooser_list_rect_scaled(scaled, &chooser, 1.5).height,
             scaled_dialog_metric(OPEN_WITH_CHOOSER_ROW_HEIGHT, 1.5)
+                * open_with_chooser_visible_row_count(&chooser) as f32
         );
     }
 
@@ -26427,7 +26438,7 @@ text/plain=writer.desktop;\n",
         );
         assert_eq!(
             chooser.selected_application().map(|app| app.id.as_str()),
-            Some("writer.desktop")
+            None
         );
 
         assert!(scene.apply_open_with_command(OpenWithCommand::Insert("paint".to_string())));
@@ -26465,7 +26476,7 @@ text/plain=writer.desktop;\n",
         assert_eq!(chooser.mime_type.as_deref(), Some("inode/directory"));
         assert_eq!(
             chooser.selected_application().map(|app| app.id.as_str()),
-            Some("code.desktop")
+            None
         );
     }
 
@@ -26493,6 +26504,7 @@ text/plain=writer.desktop;\n",
                     is_default: false,
                 },
             ],
+            Vec::new(),
         ));
         let size = PhysicalSize::new(640, 420);
         let rect = open_with_chooser_rect(scene.open_with_chooser.as_ref().unwrap(), size);
@@ -26502,13 +26514,34 @@ text/plain=writer.desktop;\n",
             scene.open_with_chooser_click_at_screen_point(
                 ViewPoint {
                     x: list.x + 4.0,
-                    y: list.y + OPEN_WITH_CHOOSER_ROW_HEIGHT + 4.0,
+                    y: list.y + 4.0,
                 },
                 size,
             ),
-            OpenWithChooserClick::Row(1)
+            OpenWithChooserClick::Row(0)
         );
-        assert!(scene.select_open_with_filtered_row(1));
+        assert!(scene.select_open_with_filtered_row(0));
+        assert!(
+            scene
+                .open_with_chooser
+                .as_ref()
+                .unwrap()
+                .selected_application()
+                .is_none()
+        );
+        let rect = open_with_chooser_rect(scene.open_with_chooser.as_ref().unwrap(), size);
+        let list = open_with_chooser_list_rect(rect, scene.open_with_chooser.as_ref().unwrap());
+        assert_eq!(
+            scene.open_with_chooser_click_at_screen_point(
+                ViewPoint {
+                    x: list.x + 4.0,
+                    y: list.y + OPEN_WITH_CHOOSER_ROW_HEIGHT * 2.0 + 4.0,
+                },
+                size,
+            ),
+            OpenWithChooserClick::Row(2)
+        );
+        assert!(scene.select_open_with_filtered_row(2));
         assert_eq!(
             scene
                 .open_with_chooser
@@ -26548,6 +26581,7 @@ text/plain=writer.desktop;\n",
                 icon: None,
                 is_default: false,
             }],
+            Vec::new(),
         ));
         let size = PhysicalSize::new(640, 460);
         let rect = open_with_chooser_rect(scene.open_with_chooser.as_ref().unwrap(), size);
@@ -26587,19 +26621,24 @@ text/plain=writer.desktop;\n",
             PathBuf::from("/tmp/note.txt"),
             Some(Arc::from("text/plain")),
             applications,
+            Vec::new(),
         ));
+        assert!(scene.select_open_with_filtered_row(0));
 
         assert!(scene.scroll_open_with_chooser_by(OPEN_WITH_CHOOSER_ROW_HEIGHT));
         let chooser = scene.open_with_chooser.as_ref().unwrap();
         assert_eq!(chooser.scroll_row, 1);
         assert_eq!(chooser.selected_index, 0);
-        assert_eq!(chooser.visible_filtered_indexes().first().copied(), Some(1));
+        assert!(matches!(
+            chooser.visible_tree_rows().first(),
+            Some(OpenWithTreeRow::Application { app_index: 0 })
+        ));
 
         assert!(scene.scroll_open_with_chooser_by(OPEN_WITH_CHOOSER_ROW_HEIGHT * 99.0));
-        assert_eq!(scene.open_with_chooser.as_ref().unwrap().scroll_row, 4);
+        assert_eq!(scene.open_with_chooser.as_ref().unwrap().scroll_row, 5);
 
         assert!(scene.scroll_open_with_chooser_by(-OPEN_WITH_CHOOSER_ROW_HEIGHT));
-        assert_eq!(scene.open_with_chooser.as_ref().unwrap().scroll_row, 3);
+        assert_eq!(scene.open_with_chooser.as_ref().unwrap().scroll_row, 4);
 
         assert!(scene.scroll_open_with_chooser_by(-OPEN_WITH_CHOOSER_ROW_HEIGHT * 99.0));
         assert_eq!(scene.open_with_chooser.as_ref().unwrap().scroll_row, 0);
@@ -26622,7 +26661,9 @@ text/plain=writer.desktop;\n",
             PathBuf::from("/tmp/note.txt"),
             Some(Arc::from("text/plain")),
             applications,
+            Vec::new(),
         ));
+        assert!(scene.select_open_with_filtered_row(0));
         let size = PhysicalSize::new(700, 560);
         let (track, thumb) = scene
             .open_with_chooser_scrollbar_rects(size)
@@ -26645,7 +26686,7 @@ text/plain=writer.desktop;\n",
             Some(ScrollbarDragTarget::OpenWith)
         );
         assert!(scene.set_pointer(drag_to, size));
-        assert_eq!(scene.open_with_chooser.as_ref().unwrap().scroll_row, 4);
+        assert_eq!(scene.open_with_chooser.as_ref().unwrap().scroll_row, 5);
         assert_eq!(scene.panes[ShellPaneId::SLOT_0].scroll_y, 0.0);
 
         let _ = scene.end_scrollbar_drag(drag_to, size);
@@ -26666,7 +26707,10 @@ text/plain=writer.desktop;\n",
                 icon: None,
                 is_default: true,
             }],
+            Vec::new(),
         ));
+        assert!(scene.select_open_with_filtered_row(0));
+        assert!(scene.select_open_with_filtered_row(1));
         let cache = MimeApplicationCache::from_applications_and_mimeapps(
             vec![test_desktop_application(
                 "writer.desktop",
@@ -26703,7 +26747,10 @@ text/plain=writer.desktop;\n",
                 icon: None,
                 is_default: false,
             }],
+            Vec::new(),
         ));
+        assert!(scene.select_open_with_filtered_row(0));
+        assert!(scene.select_open_with_filtered_row(1));
         assert!(scene.toggle_open_with_set_default());
         let cache = MimeApplicationCache::from_applications_and_mimeapps(
             vec![test_desktop_application(

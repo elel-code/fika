@@ -5,7 +5,7 @@ use fika_core::{MimeApplicationCache, file_ops};
 use crate::shell::context_menu::ShellContextTarget;
 use crate::shell::open_with::{
     OpenWithDefaultUpdate, OpenWithLaunchRequest, ShellOpenWithChooser,
-    open_with_applications_for_mime,
+    open_with_application_categories_for_applications, open_with_applications_for_mime,
 };
 
 pub(crate) fn chooser_for_context_target(
@@ -42,7 +42,14 @@ pub(crate) fn chooser_for_context_target(
     if applications.is_empty() {
         return Err("no desktop applications found".to_string());
     }
-    Ok(ShellOpenWithChooser::new(path, mime_type, applications))
+    let application_categories =
+        open_with_application_categories_for_applications(cache, &applications);
+    Ok(ShellOpenWithChooser::new(
+        path,
+        mime_type,
+        applications,
+        application_categories,
+    ))
 }
 
 pub(crate) fn launch_request_for_chooser(
