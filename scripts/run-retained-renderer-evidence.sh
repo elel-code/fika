@@ -14,7 +14,7 @@ Options:
       Capture item-view and Places evidence. This is the default.
 
   --items-only
-      Capture only item-view evidence.
+      Capture only item-view wgpu frame evidence.
 
   --places-only
       Capture only Places evidence.
@@ -291,48 +291,57 @@ fi
 
 if [[ "$capture_items" == true ]]; then
     item_downloads_log="$(log_path item-downloads)"
-    item_etc_log="$(log_path item-etc)"
-    item_zoom_log="$(log_path item-etc-zoom-scroll)"
+    item_etc_log="$(log_path item-etc-compact)"
+    item_zoom_log="$(log_path item-etc-compact-zoom-scroll)"
     item_icons_log="$(log_path item-etc-icons-zoom-scroll)"
     item_details_log="$(log_path item-etc-details-zoom-scroll)"
 
     run_capture "item downloads" "$item_downloads_log" \
-        env FIKA_PERF_ITEM_VIEW=1 "$binary" "$downloads_dir"
-    run_capture "item etc" "$item_etc_log" \
-        env FIKA_PERF_ITEM_VIEW=1 "$binary" /etc
-    run_capture "item etc zoom-scroll" "$item_zoom_log" \
-        env FIKA_PERF_ITEM_VIEW=1 FIKA_AUTOSMOKE_ITEM_VIEW=zoom-scroll "$binary" /etc
+        env FIKA_LOG=1 FIKA_WGPU_FRAME_LOG_ALL=1 "$binary" "$downloads_dir"
+    run_capture "item etc compact" "$item_etc_log" \
+        env FIKA_LOG=1 FIKA_WGPU_FRAME_LOG_ALL=1 "$binary" --view compact /etc
+    run_capture "item etc compact zoom-scroll" "$item_zoom_log" \
+        env FIKA_LOG=1 FIKA_WGPU_FRAME_LOG_ALL=1 \
+            FIKA_WGPU_AUTOSMOKE_ZOOM=1 \
+            FIKA_WGPU_AUTOSMOKE_SCROLL=1 \
+            "$binary" --view compact /etc
     run_capture "item etc icons zoom-scroll" "$item_icons_log" \
-        env FIKA_PERF_ITEM_VIEW=1 FIKA_AUTOSMOKE_ITEM_VIEW=icons-zoom-scroll "$binary" /etc
+        env FIKA_LOG=1 FIKA_WGPU_FRAME_LOG_ALL=1 \
+            FIKA_WGPU_AUTOSMOKE_ZOOM=1 \
+            FIKA_WGPU_AUTOSMOKE_SCROLL=1 \
+            "$binary" --view icons /etc
     run_capture "item etc details zoom-scroll" "$item_details_log" \
-        env FIKA_PERF_ITEM_VIEW=1 FIKA_AUTOSMOKE_ITEM_VIEW=details-zoom-scroll "$binary" /etc
+        env FIKA_LOG=1 FIKA_WGPU_FRAME_LOG_ALL=1 \
+            FIKA_WGPU_AUTOSMOKE_ZOOM=1 \
+            FIKA_WGPU_AUTOSMOKE_SCROLL=1 \
+            "$binary" --view details /etc
 
-    run_gate "item runtime" \
-        "$root_dir/scripts/check-item-view-runtime-log.sh" \
-        "$item_zoom_log" "$item_icons_log" "$item_details_log"
-    run_gate "item renderer evidence summary" \
-        "$root_dir/scripts/summarize-item-view-renderer-evidence.sh" \
-        "$item_zoom_log" "$item_icons_log" "$item_details_log"
-    run_gate "item icons renderer policy" \
-        "$root_dir/scripts/analyze-item-view-perf.sh" \
-        --require-autosmoke \
-        --require-static-visual \
-        --require-renderer-policy \
-        --require-interaction \
-        --expect-retained-item-policy \
-        --require-modes Icons \
-        --require-static-modes Icons \
-        --require-renderer-policy-modes Icons \
+    run_gate "item downloads wgpu frames" \
+        bash "$root_dir/scripts/analyze-wgpu-frame-log.sh" \
+        --require-frames \
+        "$item_downloads_log"
+    run_gate "item compact wgpu frames" \
+        bash "$root_dir/scripts/analyze-wgpu-frame-log.sh" \
+        --require-frames \
+        --gate-scope view:compact \
+        "$item_etc_log"
+    run_gate "item compact zoom-scroll wgpu frames" \
+        bash "$root_dir/scripts/analyze-wgpu-frame-log.sh" \
+        --require-frames \
+        --require-autosmoke-scroll \
+        --gate-scope reason:autosmoke-scroll \
+        "$item_zoom_log"
+    run_gate "item icons zoom-scroll wgpu frames" \
+        bash "$root_dir/scripts/analyze-wgpu-frame-log.sh" \
+        --require-frames \
+        --require-autosmoke-scroll \
+        --gate-scope view:icons \
         "$item_icons_log"
-    run_gate "item details renderer policy" \
-        "$root_dir/scripts/analyze-item-view-perf.sh" \
-        --require-autosmoke \
-        --require-details \
-        --require-renderer-policy \
-        --require-interaction \
-        --expect-retained-item-policy \
-        --require-modes Details \
-        --require-renderer-policy-modes Details \
+    run_gate "item details zoom-scroll wgpu frames" \
+        bash "$root_dir/scripts/analyze-wgpu-frame-log.sh" \
+        --require-frames \
+        --require-autosmoke-scroll \
+        --gate-scope view:details \
         "$item_details_log"
 fi
 

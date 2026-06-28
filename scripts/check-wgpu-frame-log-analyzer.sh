@@ -71,3 +71,32 @@ bash "$evidence_runner" \
     --skip-build \
     --out-dir "$tmpdir" \
     --prefix evidence >/dev/null
+
+cat > "$tmpdir/evidence-item-downloads.log" <<'EOF'
+[fika-wgpu] frame=1 reason=initial view=icons visible=36 layout=20us prepare=30us render=900us surface=40us encode_present=20us text_raster=0us icon_resolve=10us icon_raster=0us text_atlas_reused=0 text_deferred=0 icon_deferred=0 icon_raster_deferred=0
+EOF
+cat > "$tmpdir/evidence-item-etc-compact.log" <<'EOF'
+[fika-wgpu] frame=1 reason=initial view=compact visible=36 layout=20us prepare=30us render=900us surface=40us encode_present=20us text_raster=0us icon_resolve=10us icon_raster=0us text_atlas_reused=0 text_deferred=0 icon_deferred=0 icon_raster_deferred=0
+EOF
+cat > "$tmpdir/evidence-item-etc-compact-zoom-scroll.log" <<'EOF'
+[fika-wgpu] frame=1 reason=initial view=compact visible=36 layout=20us prepare=30us render=900us surface=40us encode_present=20us text_raster=0us icon_resolve=10us icon_raster=0us text_atlas_reused=0 text_deferred=0 icon_deferred=0 icon_raster_deferred=0
+[fika-wgpu] autosmoke-scroll action=forward delta=64.0 changed=true old_scroll_x=0.0 new_scroll_x=0.0 old_scroll_y=0.0 new_scroll_y=64.0
+[fika-wgpu] frame=2 reason=autosmoke-scroll view=compact visible=36 layout=18us prepare=22us render=700us surface=35us encode_present=18us text_raster=0us icon_resolve=3us icon_raster=0us text_atlas_reused=12 text_deferred=0 icon_deferred=0 icon_raster_deferred=0
+EOF
+cat > "$tmpdir/evidence-item-etc-icons-zoom-scroll.log" <<'EOF'
+[fika-wgpu] frame=1 reason=initial view=icons visible=36 layout=20us prepare=30us render=900us surface=40us encode_present=20us text_raster=0us icon_resolve=10us icon_raster=0us text_atlas_reused=0 text_deferred=0 icon_deferred=0 icon_raster_deferred=0
+[fika-wgpu] autosmoke-scroll action=forward delta=64.0 changed=true old_scroll_x=0.0 new_scroll_x=0.0 old_scroll_y=0.0 new_scroll_y=64.0
+[fika-wgpu] frame=2 reason=autosmoke-scroll view=icons visible=36 layout=18us prepare=22us render=700us surface=35us encode_present=18us text_raster=0us icon_resolve=3us icon_raster=0us text_atlas_reused=12 text_deferred=0 icon_deferred=0 icon_raster_deferred=0
+EOF
+cat > "$tmpdir/evidence-item-etc-details-zoom-scroll.log" <<'EOF'
+[fika-wgpu] frame=1 reason=initial view=details visible=36 layout=20us prepare=30us render=900us surface=40us encode_present=20us text_raster=0us icon_resolve=10us icon_raster=0us text_atlas_reused=0 text_deferred=0 icon_deferred=0 icon_raster_deferred=0
+[fika-wgpu] autosmoke-scroll action=forward delta=64.0 changed=true old_scroll_x=0.0 new_scroll_x=0.0 old_scroll_y=0.0 new_scroll_y=64.0
+[fika-wgpu] frame=2 reason=autosmoke-scroll view=details visible=36 layout=18us prepare=22us render=700us surface=35us encode_present=18us text_raster=0us icon_resolve=3us icon_raster=0us text_atlas_reused=12 text_deferred=0 icon_deferred=0 icon_raster_deferred=0
+EOF
+
+bash "$evidence_runner" \
+    --items-only \
+    --analyze-only \
+    --skip-build \
+    --out-dir "$tmpdir" \
+    --prefix evidence >/dev/null
