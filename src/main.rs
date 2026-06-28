@@ -9969,6 +9969,7 @@ impl ShellScene {
         let visual_rect = pane_content_rect_to_screen(layout.visual_rect, projection);
         let icon_rect = pane_content_rect_to_screen(layout.icon_rect, projection);
         let text_rect = pane_content_rect_to_screen(layout.text_rect, projection);
+        let content_rect = visual_rect;
         let pixmap_layout = ItemPixmapLayout {
             view_mode: projection.view.view_mode,
             icon_rect,
@@ -9996,6 +9997,7 @@ impl ShellScene {
             projection.view.view_mode,
             item_rect,
             visual_rect,
+            content_rect,
             selected,
             hovered,
             current,
@@ -10045,15 +10047,10 @@ impl ShellScene {
             );
         }
         if dnd_hovered {
-            let rect = if projection.view.view_mode == ShellViewMode::Details {
-                item_rect
-            } else {
-                visual_rect
-            };
             let radius = self.scale_metric(7.0);
             push_clipped_rounded_highlight(
                 vertices,
-                rect,
+                content_rect,
                 content_clip,
                 radius,
                 [1.000, 0.953, 0.820, 0.82],
@@ -19692,7 +19689,7 @@ mod tests {
     }
 
     #[test]
-    fn details_drop_target_uses_dolphin_selection_core_rect() {
+    fn details_drop_target_uses_full_row_when_selected() {
         let mut scene = test_scene(vec![test_entry("folder", true)], ShellViewMode::Details);
         let size = PhysicalSize::new(900, 320);
         let projection = scene.pane_projection(ShellPaneId::SLOT_0, size).unwrap();
@@ -22256,6 +22253,99 @@ mod tests {
         assert_eq!(damage.rect_count, 1);
         assert!(damage.area_px > 0.0);
         assert!(damage.area_px < rect_area(full_surface_rect(size)));
+    }
+
+    #[test]
+    fn render_damage_bounds_compact_dnd_hover_pane_item_to_visual_rect() {
+        let mut scene = test_scene(
+            vec![
+                test_entry("very-long-folder-name-in-the-same-compact-column", true),
+                test_entry("src", true),
+            ],
+            ShellViewMode::Compact,
+        );
+        let size = PhysicalSize::new(900, 420);
+        let projections = ShellPaneId::ALL
+            .into_iter()
+            .filter_map(|kind| scene.pane_projection(kind, size))
+            .collect::<Vec<_>>();
+        let layout = projections[0].visible_items[1].layout;
+        let item_rect = pane_content_rect_to_screen(layout.item_rect, &projections[0]);
+        let visual_rect = pane_content_rect_to_screen(layout.visual_rect, &projections[0]);
+        assert!(visual_rect.width < item_rect.width);
+        let initial = ShellRenderDamageSnapshot::from_scene(
+            &scene,
+            size,
+            &projections,
+            ShellRenderDirtyKey::from_scene(&scene, size),
+        );
+
+        scene.dnd_hover_target = Some(ShellDropTarget::PaneItem {
+            pane: ShellPaneId::SLOT_0,
+            index: 1,
+            path: PathBuf::from("/tmp/src"),
+            is_dir: true,
+        });
+        scene.dnd_hover_changes += 1;
+        let projections = ShellPaneId::ALL
+            .into_iter()
+            .filter_map(|kind| scene.pane_projection(kind, size))
+            .collect::<Vec<_>>();
+        let hovered = ShellRenderDamageSnapshot::from_scene(
+            &scene,
+            size,
+            &projections,
+            ShellRenderDirtyKey::from_scene(&scene, size),
+        );
+
+        let damage = ShellRenderDamage::between(Some(&initial), &hovered, false);
+
+        assert_eq!(damage.kind, ShellRenderDamageKind::Bounded);
+        assert_eq!(damage.bounds, Some(visual_rect));
+    }
+
+    #[test]
+    fn render_damage_bounds_details_dnd_hover_pane_item_full_row() {
+        let mut scene = test_scene(vec![test_entry("alpha", true)], ShellViewMode::Details);
+        let size = PhysicalSize::new(900, 320);
+        let projections = ShellPaneId::ALL
+            .into_iter()
+            .filter_map(|kind| scene.pane_projection(kind, size))
+            .collect::<Vec<_>>();
+        let row_rect = pane_content_rect_to_screen(
+            projections[0].visible_items[0].layout.item_rect,
+            &projections[0],
+        );
+        let initial = ShellRenderDamageSnapshot::from_scene(
+            &scene,
+            size,
+            &projections,
+            ShellRenderDirtyKey::from_scene(&scene, size),
+        );
+
+        scene.dnd_hover_target = Some(ShellDropTarget::PaneItem {
+            pane: ShellPaneId::SLOT_0,
+            index: 0,
+            path: PathBuf::from("/tmp/alpha"),
+            is_dir: true,
+        });
+        scene.dnd_hover_changes += 1;
+        let projections = ShellPaneId::ALL
+            .into_iter()
+            .filter_map(|kind| scene.pane_projection(kind, size))
+            .collect::<Vec<_>>();
+        let hovered = ShellRenderDamageSnapshot::from_scene(
+            &scene,
+            size,
+            &projections,
+            ShellRenderDirtyKey::from_scene(&scene, size),
+        );
+
+        let damage = ShellRenderDamage::between(Some(&initial), &hovered, false);
+
+        assert_eq!(damage.kind, ShellRenderDamageKind::Bounded);
+        let bounds = damage.bounds.expect("dnd hover should produce damage");
+        assert_eq!(bounds, row_rect);
     }
 
     #[test]

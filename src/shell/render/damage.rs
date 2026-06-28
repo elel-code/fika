@@ -635,15 +635,13 @@ impl ShellRenderDamageSnapshot {
                 else {
                     continue;
                 };
+                let target = ShellPaneItemTarget {
+                    pane: projection.geometry.kind,
+                    index: entry_index,
+                };
                 let rect = pane_content_rect_to_screen(item.layout.visual_rect, projection);
                 if let Some(rect) = intersect_rect(rect, projection.geometry.content) {
-                    item_rects.push((
-                        ShellPaneItemTarget {
-                            pane: projection.geometry.kind,
-                            index: entry_index,
-                        },
-                        rect,
-                    ));
+                    item_rects.push((target, rect));
                 }
             }
         }
