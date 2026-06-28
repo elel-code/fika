@@ -2,6 +2,8 @@ use std::path::{Path, PathBuf};
 
 use crate::shell::pane::ShellPaneId;
 
+#[path = "create_rename/disk.rs"]
+pub(crate) mod disk;
 #[path = "create_rename/geometry.rs"]
 pub(crate) mod geometry;
 #[path = "create_rename/paint.rs"]

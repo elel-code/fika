@@ -98,6 +98,7 @@ use shell::context_menu::{
     ShellContextMenuIcon, ShellContextMenuItem, ShellContextSubmenu, context_menu_actions,
     context_menu_separator_before, service_menu_action_item,
 };
+use shell::create_rename::disk::{create_entry_on_disk, rename_entry_on_disk};
 #[cfg(test)]
 use shell::create_rename::geometry::{
     create_dialog_cancel_button_rect, create_dialog_commit_button_rect, create_dialog_rect,
@@ -18595,22 +18596,6 @@ fn file_clipboard_role_as_str(role: FileClipboardRole) -> &'static str {
     }
 }
 
-fn create_entry_on_disk(request: &CreateEntryRequest) -> Result<(), String> {
-    let path = request.path.clone();
-    let kind = request.kind;
-    pollster::block_on(run_operation_task(move || async move {
-        match kind {
-            CreateEntryKind::Folder => file_ops::create_folder_at_async(&path)
-                .await
-                .map_err(|error| format!("create folder {}: {error}", path.display())),
-            CreateEntryKind::File => file_ops::create_file_at_async(&path)
-                .await
-                .map_err(|error| format!("create file {}: {error}", path.display())),
-        }
-    }))
-    .map_err(|error| error.to_string())?
-}
-
 fn create_entry_on_disk_explicit(
     request: &CreateEntryRequest,
 ) -> Result<ShellPrivilegeOutcome, String> {
@@ -18629,23 +18614,6 @@ fn create_entry_on_disk_explicit(
     } else {
         create_entry_on_disk(request).map(|()| ShellPrivilegeOutcome::normal())
     }
-}
-
-fn rename_entry_on_disk(request: &RenameEntryRequest) -> Result<(), String> {
-    let source = request.source.clone();
-    let target = request.target.clone();
-    pollster::block_on(run_operation_task(move || async move {
-        file_ops::rename_path_to_async(&source, &target)
-            .await
-            .map_err(|error| {
-                format!(
-                    "rename {} to {}: {error}",
-                    source.display(),
-                    target.display()
-                )
-            })
-    }))
-    .map_err(|error| error.to_string())?
 }
 
 fn rename_entry_on_disk_explicit(
