@@ -7,7 +7,7 @@ use fika_core::{
     file_ops, is_archive_mime_or_path, is_network_path,
 };
 
-use crate::shell::open_with::ServiceMenuLaunchRequest;
+use crate::shell::service_menu::ServiceMenuLaunchRequest;
 
 #[path = "ark/extract.rs"]
 pub(crate) mod extract;

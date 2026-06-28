@@ -194,7 +194,7 @@ use shell::open_with::launch::{
     chooser_for_context_target, launch_request_for_chooser, launch_request_for_context_application,
 };
 use shell::open_with::{
-    OpenWithChooserClick, OpenWithLaunchRequest, ServiceMenuLaunchRequest, ShellOpenWithChooser,
+    OpenWithChooserClick, OpenWithLaunchRequest, ShellOpenWithChooser,
     open_with_applications_for_mime,
 };
 use shell::options::{ShellViewMode, parse_start_options};
@@ -252,6 +252,7 @@ use shell::role_worker_queue::{PriorityWorkerQueue, PriorityWorkerRequest, Worke
 use shell::selection::{
     NavigationAction, RubberBand, RubberBandMode, SelectionClick, ShellSelection,
 };
+use shell::service_menu::ServiceMenuLaunchRequest;
 use shell::shortcuts::{
     CreateCommand, FileKeyboardCommand, FilterCommand, LocationCommand, OpenWithCommand,
     PathNavigationAction, RenameCommand, SelectionCommand, ZoomAction,

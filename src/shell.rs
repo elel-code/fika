@@ -26,6 +26,7 @@ pub(crate) mod properties;
 pub(crate) mod render;
 pub(crate) mod role_worker_queue;
 pub(crate) mod selection;
+pub(crate) mod service_menu;
 pub(crate) mod shortcuts;
 pub(crate) mod tasks;
 pub(crate) mod transfer;

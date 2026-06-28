@@ -1,6 +1,6 @@
 use fika_core::file_ops;
 
-use crate::shell::open_with::ServiceMenuLaunchRequest;
+use crate::shell::service_menu::ServiceMenuLaunchRequest;
 
 pub(crate) async fn execute_ark_extract_and_trash(
     request: ServiceMenuLaunchRequest,

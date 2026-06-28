@@ -182,13 +182,6 @@ pub(crate) struct OpenWithDefaultUpdate {
     pub(crate) desktop_id: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ServiceMenuLaunchRequest {
-    pub(crate) paths: Vec<PathBuf>,
-    pub(crate) app_name: String,
-    pub(crate) plan: DesktopLaunchPlan,
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum OpenWithChooserClick {
     Outside,
