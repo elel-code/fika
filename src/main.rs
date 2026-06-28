@@ -170,6 +170,8 @@ use shell::metadata_roles::{
 };
 use shell::metrics::*;
 use shell::open_file::{OpenFileRequest, default_open_file_launch_request};
+#[cfg(test)]
+use shell::open_with::OpenWithDefaultUpdate;
 use shell::open_with::geometry::{
     open_with_chooser_click_at_point, open_with_chooser_list_rect_scaled,
     open_with_chooser_rect_scaled, open_with_chooser_scrollbar_rects_scaled,
@@ -180,9 +182,12 @@ use shell::open_with::geometry::{
     open_with_chooser_default_checkbox_rect, open_with_chooser_list_rect,
     open_with_chooser_open_button_rect, open_with_chooser_rect,
 };
+use shell::open_with::launch::{
+    chooser_for_context_target, launch_request_for_chooser, launch_request_for_context_application,
+};
 use shell::open_with::{
-    OpenWithChooserClick, OpenWithDefaultUpdate, OpenWithLaunchRequest, ServiceMenuLaunchRequest,
-    ShellOpenWithChooser, open_with_applications_for_mime,
+    OpenWithChooserClick, OpenWithLaunchRequest, ServiceMenuLaunchRequest, ShellOpenWithChooser,
+    open_with_applications_for_mime,
 };
 use shell::options::{ShellViewMode, parse_start_options};
 use shell::pane::{
@@ -6714,52 +6719,27 @@ impl ShellScene {
         &self,
         cache: &MimeApplicationCache,
     ) -> Result<ShellOpenWithChooser, String> {
-        let (path, mime_type) = match self.context_target.as_ref() {
-            Some(ShellContextTarget::Item {
-                pane,
-                index,
-                path,
-                is_dir,
-                ..
-            }) => {
-                if file_ops::is_in_trash_files_dir(path) {
-                    return Err("Open With is not available inside Trash".to_string());
-                }
-                let entry = self
-                    .pane_state(*pane)
-                    .and_then(|pane| pane.entries.get(*index))
-                    .ok_or_else(|| format!("entry index {index} is out of range"))?;
-                let mime_type = if *is_dir {
-                    entry
-                        .mime_type
-                        .clone()
-                        .or_else(|| Some(Arc::from("inode/directory")))
-                } else {
-                    entry.mime_type.clone()
-                };
-                (path.clone(), mime_type)
-            }
-            Some(ShellContextTarget::Blank { path, .. }) => {
-                if file_ops::is_trash_files_dir(path) {
-                    return Err("Open With is not available inside Trash".to_string());
-                }
-                (path.clone(), Some(Arc::from("inode/directory")))
-            }
-            _ => {
-                return Err(format!(
-                    "target={} is not a file or folder target",
-                    self.context_target
-                        .as_ref()
-                        .map(ShellContextTarget::kind)
-                        .unwrap_or("none")
-                ));
-            }
+        let target = self.context_target.as_ref().ok_or_else(|| {
+            format!(
+                "target={} is not a file or folder target",
+                self.context_target
+                    .as_ref()
+                    .map(ShellContextTarget::kind)
+                    .unwrap_or("none")
+            )
+        })?;
+        let item_mime_type = match target {
+            ShellContextTarget::Item {
+                pane, index, path, ..
+            } if !file_ops::is_in_trash_files_dir(path) => self
+                .pane_state(*pane)
+                .and_then(|pane| pane.entries.get(*index))
+                .ok_or_else(|| format!("entry index {index} is out of range"))?
+                .mime_type
+                .clone(),
+            _ => None,
         };
-        let applications = open_with_applications_for_mime(cache, mime_type.as_deref());
-        if applications.is_empty() {
-            return Err("no desktop applications found".to_string());
-        }
-        Ok(ShellOpenWithChooser::new(path, mime_type, applications))
+        chooser_for_context_target(target, item_mime_type, cache)
     }
 
     fn is_open_with_chooser_open(&self) -> bool {
@@ -6832,34 +6812,7 @@ impl ShellScene {
             .open_with_chooser
             .as_ref()
             .ok_or_else(|| "Open With chooser is not open".to_string())?;
-        let selected = chooser
-            .selected_application()
-            .ok_or_else(|| "no application is selected".to_string())?;
-        let app = cache
-            .application(&selected.id)
-            .ok_or_else(|| format!("application not found: {}", selected.id))?;
-        let plan = app
-            .launch_plan(std::slice::from_ref(&chooser.path))
-            .ok_or_else(|| format!("{} did not produce a launch command", app.name))?;
-        let default_update = if chooser.set_as_default && !selected.is_default {
-            let mime_type = chooser
-                .mime_type
-                .as_deref()
-                .ok_or_else(|| "cannot set a default application for an unknown MIME type")?
-                .to_string();
-            Some(OpenWithDefaultUpdate {
-                mime_type,
-                desktop_id: selected.id.clone(),
-            })
-        } else {
-            None
-        };
-        Ok(OpenWithLaunchRequest {
-            path: chooser.path.clone(),
-            app_name: plan.app_name.clone(),
-            default_update,
-            plan,
-        })
+        launch_request_for_chooser(chooser, cache)
     }
 
     fn open_with_launch_request_for_context_application(
@@ -6867,27 +6820,11 @@ impl ShellScene {
         cache: &MimeApplicationCache,
         desktop_id: &str,
     ) -> Result<OpenWithLaunchRequest, String> {
-        let path = match self.context_target.as_ref() {
-            Some(ShellContextTarget::Item { path, .. })
-                if !file_ops::is_in_trash_files_dir(path) =>
-            {
-                path.clone()
-            }
-            Some(ShellContextTarget::Blank { path, .. }) => path.clone(),
-            _ => return Err("Open With application requires a file or folder target".to_string()),
-        };
-        let app = cache
-            .application(desktop_id)
-            .ok_or_else(|| format!("application not found: {desktop_id}"))?;
-        let plan = app
-            .launch_plan(std::slice::from_ref(&path))
-            .ok_or_else(|| format!("{} did not produce a launch command", app.name))?;
-        Ok(OpenWithLaunchRequest {
-            path,
-            app_name: plan.app_name.clone(),
-            default_update: None,
-            plan,
-        })
+        let target = self
+            .context_target
+            .as_ref()
+            .ok_or_else(|| "Open With application requires a file or folder target".to_string())?;
+        launch_request_for_context_application(target, cache, desktop_id)
     }
 
     fn service_menu_launch_request(

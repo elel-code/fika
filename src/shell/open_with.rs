@@ -9,6 +9,8 @@ use crate::shell::shortcuts::OpenWithCommand;
 
 #[path = "open_with/geometry.rs"]
 pub(crate) mod geometry;
+#[path = "open_with/launch.rs"]
+pub(crate) mod launch;
 #[path = "open_with/paint.rs"]
 pub(crate) mod paint;
 
