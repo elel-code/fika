@@ -26,7 +26,7 @@ use fika_core::{
     OpenWithLaunchResult, OperationController, PrivilegedCommand, ServiceMenuAction,
     ServiceMenuLaunchResult, ServiceMenuPriority, ServiceMenuTarget, ThumbnailRequest,
     ThumbnailRequestPriority, ThumbnailerRegistry, TransferTaskResult, TransferUndoItem,
-    TrashViewOperation, TrashViewOperationResult, UserPlace, ViewPoint, ViewRect, ViewSize,
+    TrashViewOperation, TrashViewOperationResult, UserPlace, ViewPoint, ViewRect,
     ark_compress_launch_plan, ark_extract_and_trash_launch_plan, ark_extract_here_launch_plan,
     ark_extract_to_launch_plan, complete_location_input, decode_file_clipboard_text,
     default_app_settings_path, default_thumbnail_cache_root, default_user_places_path,
@@ -183,11 +183,10 @@ use shell::perf::{
 };
 use shell::prewarm::{
     IconRasterPrewarmStats, IconRolePrewarmStats, TextLabelPrewarmMode, TextLabelPrewarmStats,
-    default_text_raster_miss_budget, icon_raster_miss_budget_for_frame,
-    icon_role_prewarm_budget_for_frame, icon_role_read_ahead_queue_budget_for_frame,
-    text_label_prewarm_budget_for_mode, text_label_prewarm_mode_for_frame,
-    text_label_prewarm_mode_for_scene_prewarm, text_label_raster_miss_budget_for_mode,
-    visible_exact_icon_roles_enabled_for_frame,
+    default_text_raster_miss_budget, icon_role_prewarm_budget_for_frame,
+    icon_role_read_ahead_queue_budget_for_frame, text_label_prewarm_budget_for_mode,
+    text_label_prewarm_mode_for_frame, text_label_prewarm_mode_for_scene_prewarm,
+    text_label_raster_miss_budget_for_mode, visible_exact_icon_roles_enabled_for_frame,
 };
 use shell::properties::{ShellPropertiesOverlay, property_row};
 #[cfg(test)]
@@ -199,6 +198,7 @@ use shell::render::damage::{
     ShellRenderDamage, ShellRenderDamageKind, ShellRenderDamageSnapshot, ShellRenderDirtyKey,
     folder_preview_damage_rects_for_changes,
 };
+use shell::render::frame::{SceneFrame, prepare_scene_frame};
 #[cfg(test)]
 use shell::render::gpu::upload_vertex_hash_for_test;
 use shell::render::gpu::{
@@ -14405,22 +14405,6 @@ impl ShellScene {
     }
 }
 
-struct SceneFrame {
-    vertices: Vec<QuadVertex>,
-    overlay_vertices: Vec<QuadVertex>,
-    visible_items: usize,
-    thumbnail_candidates: usize,
-    folder_preview_candidates: usize,
-    quad_count: usize,
-    content_size: ViewSize,
-    content_scrollbar_visible: bool,
-    first_item_rect: Option<ViewRect>,
-    layout_us: u128,
-    text_stats: TextFrameStats,
-    icon_stats: IconFrameStats,
-    vertex_upload_stats: VertexBufferUploadStats,
-}
-
 impl TextLabelPrewarmStats {
     fn record(&mut self, outcome: LabelCacheOutcome) {
         match outcome {
@@ -18893,139 +18877,6 @@ fn text_atlas_upload_should_skip(
     let skip_upload = last_upload_keys.contains(&key);
     current_upload_keys.insert(key);
     skip_upload
-}
-
-fn prepare_scene_frame(
-    text_renderer: &mut TextRenderer,
-    overlay_text_renderer: Option<&mut TextRenderer>,
-    icon_renderer: &mut IconRenderer,
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    scene: &mut ShellScene,
-    size: PhysicalSize<u32>,
-    reason: &str,
-) -> SceneFrame {
-    text_renderer.label_cache.begin_frame();
-    text_renderer.metrics_cache.begin_frame();
-    icon_renderer.raster_cache.begin_frame();
-    icon_renderer.role_raster_cache.begin_frame();
-
-    if let Some(overlay_text_renderer) = overlay_text_renderer {
-        overlay_text_renderer.label_cache.begin_frame();
-        overlay_text_renderer.metrics_cache.begin_frame();
-        let (mut scene_frame, mut text_frame, mut overlay_text_frame, mut icon_frame) = {
-            let text_pixels = text_renderer.take_staging_pixels();
-            let overlay_text_pixels = overlay_text_renderer.take_staging_pixels();
-            let mut text_builder = TextFrameBuilder::new(
-                &mut text_renderer.font_system,
-                &mut text_renderer.swash_cache,
-                &mut text_renderer.text_buffer,
-                &mut text_renderer.label_cache,
-                &mut text_renderer.metrics_cache,
-                &mut text_renderer.atlas_cache,
-                size,
-                scene.ui_scale(),
-                text_pixels,
-            );
-            let mut overlay_text_builder = TextFrameBuilder::new(
-                &mut overlay_text_renderer.font_system,
-                &mut overlay_text_renderer.swash_cache,
-                &mut overlay_text_renderer.text_buffer,
-                &mut overlay_text_renderer.label_cache,
-                &mut overlay_text_renderer.metrics_cache,
-                &mut overlay_text_renderer.atlas_cache,
-                size,
-                scene.ui_scale(),
-                overlay_text_pixels,
-            );
-            let mut icon_builder = IconFrameBuilder::new(
-                &mut icon_renderer.resolver,
-                &mut icon_renderer.thumbnails,
-                &mut icon_renderer.icon_rasters,
-                &mut icon_renderer.raster_cache,
-                &mut icon_renderer.role_raster_cache,
-                size,
-                icon_raster_miss_budget_for_frame(reason),
-                scene.folder_preview_roles.borrow().ready_len(),
-                scene.folder_preview_roles.borrow().ready_bytes(),
-            );
-            let scene_frame = scene.build_frame(
-                size,
-                &mut text_builder,
-                &mut icon_builder,
-                Some(&mut overlay_text_builder),
-            );
-            let text_frame = text_builder.finish();
-            let overlay_text_frame = overlay_text_builder.finish();
-            let icon_frame = icon_builder.finish();
-            (scene_frame, text_frame, overlay_text_frame, icon_frame)
-        };
-
-        let mut vertex_upload_stats = VertexBufferUploadStats::default();
-        vertex_upload_stats.merge(icon_renderer.upload(device, queue, &mut icon_frame));
-        vertex_upload_stats.merge(text_renderer.upload(device, queue, &mut text_frame));
-        vertex_upload_stats.merge(overlay_text_renderer.upload(
-            device,
-            queue,
-            &mut overlay_text_frame,
-        ));
-        let (text_swash_images, text_swash_outlines, text_swash_reset) =
-            text_renderer.trim_text_engine_caches();
-        let (overlay_swash_images, overlay_swash_outlines, overlay_swash_reset) =
-            overlay_text_renderer.trim_text_engine_caches();
-        scene_frame.icon_stats = icon_frame.stats;
-        scene_frame.text_stats = text_frame.stats.merged(overlay_text_frame.stats);
-        scene_frame.text_stats.swash_image_entries = text_swash_images.max(overlay_swash_images);
-        scene_frame.text_stats.swash_outline_entries =
-            text_swash_outlines.max(overlay_swash_outlines);
-        scene_frame.text_stats.swash_resets =
-            usize::from(text_swash_reset) + usize::from(overlay_swash_reset);
-        scene_frame.vertex_upload_stats = vertex_upload_stats;
-        scene_frame
-    } else {
-        let (mut scene_frame, mut text_frame, mut icon_frame) = {
-            let text_pixels = text_renderer.take_staging_pixels();
-            let mut text_builder = TextFrameBuilder::new(
-                &mut text_renderer.font_system,
-                &mut text_renderer.swash_cache,
-                &mut text_renderer.text_buffer,
-                &mut text_renderer.label_cache,
-                &mut text_renderer.metrics_cache,
-                &mut text_renderer.atlas_cache,
-                size,
-                scene.ui_scale(),
-                text_pixels,
-            );
-            let mut icon_builder = IconFrameBuilder::new(
-                &mut icon_renderer.resolver,
-                &mut icon_renderer.thumbnails,
-                &mut icon_renderer.icon_rasters,
-                &mut icon_renderer.raster_cache,
-                &mut icon_renderer.role_raster_cache,
-                size,
-                icon_raster_miss_budget_for_frame(reason),
-                scene.folder_preview_roles.borrow().ready_len(),
-                scene.folder_preview_roles.borrow().ready_bytes(),
-            );
-            let scene_frame = scene.build_frame(size, &mut text_builder, &mut icon_builder, None);
-            let text_frame = text_builder.finish();
-            let icon_frame = icon_builder.finish();
-            (scene_frame, text_frame, icon_frame)
-        };
-
-        let mut vertex_upload_stats = VertexBufferUploadStats::default();
-        vertex_upload_stats.merge(icon_renderer.upload(device, queue, &mut icon_frame));
-        vertex_upload_stats.merge(text_renderer.upload(device, queue, &mut text_frame));
-        let (text_swash_images, text_swash_outlines, text_swash_reset) =
-            text_renderer.trim_text_engine_caches();
-        scene_frame.icon_stats = icon_frame.stats;
-        scene_frame.text_stats = text_frame.stats;
-        scene_frame.text_stats.swash_image_entries = text_swash_images;
-        scene_frame.text_stats.swash_outline_entries = text_swash_outlines;
-        scene_frame.text_stats.swash_resets = usize::from(text_swash_reset);
-        scene_frame.vertex_upload_stats = vertex_upload_stats;
-        scene_frame
-    }
 }
 
 fn text_color_to_vertex_color(color: TextColor) -> [f32; 4] {
