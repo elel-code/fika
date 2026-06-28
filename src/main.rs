@@ -194,6 +194,9 @@ use shell::prewarm::{
     text_label_prewarm_mode_for_frame, text_label_prewarm_mode_for_scene_prewarm,
     text_label_raster_miss_budget_for_mode, visible_exact_icon_roles_enabled_for_frame,
 };
+#[cfg(test)]
+use shell::properties::geometry::properties_overlay_rect;
+use shell::properties::geometry::properties_overlay_rect_scaled;
 use shell::properties::{ShellPropertiesOverlay, property_row};
 #[cfg(test)]
 use shell::render::damage::{
@@ -11504,104 +11507,13 @@ impl ShellScene {
         text: &mut TextFrameBuilder<'_>,
         size: PhysicalSize<u32>,
     ) {
-        let Some(overlay) = self.properties_overlay.as_ref() else {
-            return;
-        };
-        let screen = ViewRect {
-            x: 0.0,
-            y: 0.0,
-            width: size.width.max(1) as f32,
-            height: size.height.max(1) as f32,
-        };
-        push_rect(vertices, screen, POPUP_BACKDROP, size);
-        let scale = self.ui_scale();
-        let rect = properties_overlay_rect_scaled(overlay, size, scale);
-        let title_height = scaled_dialog_metric(PROPERTIES_TITLE_HEIGHT, scale);
-        let row_height = scaled_dialog_metric(PROPERTIES_ROW_HEIGHT, scale);
-        let margin = scaled_dialog_metric(16.0, scale);
-        push_clipped_rounded_rect(
-            vertices,
-            rect,
-            screen,
-            scaled_dialog_metric(8.0, scale),
-            POPUP_SURFACE,
-            size,
-        );
-        push_clipped_rect_outline(vertices, rect, screen, 1.0, POPUP_BORDER, size);
-        push_rect(
-            vertices,
-            ViewRect {
-                x: rect.x,
-                y: rect.y,
-                width: rect.width,
-                height: title_height,
-            },
-            POPUP_HEADER,
-            size,
-        );
-        push_rect(
-            vertices,
-            ViewRect {
-                x: rect.x,
-                y: rect.y + title_height - scaled_dialog_metric(1.0, scale).max(1.0),
-                width: rect.width,
-                height: scaled_dialog_metric(1.0, scale).max(1.0),
-            },
-            POPUP_DIVIDER,
-            size,
-        );
-        text.push_label(
-            &overlay.title,
-            ViewRect {
-                x: rect.x + margin,
-                y: rect.y + scaled_dialog_metric(12.0, scale),
-                width: (rect.width - margin * 2.0).max(1.0),
-                height: scaled_dialog_metric(18.0, scale),
-            },
-            rect,
-            popup_title_text(),
-        );
-
-        let rows_y = rect.y + title_height + scaled_dialog_metric(10.0, scale);
-        for (index, row) in overlay.rows.iter().enumerate() {
-            let y = rows_y + index as f32 * row_height;
-            if index % 2 == 1 {
-                push_clipped_rounded_rect(
-                    vertices,
-                    ViewRect {
-                        x: rect.x + margin - scaled_dialog_metric(6.0, scale),
-                        y: y - scaled_dialog_metric(3.0, scale),
-                        width: (rect.width - margin * 2.0 + scaled_dialog_metric(12.0, scale))
-                            .max(1.0),
-                        height: (row_height - scaled_dialog_metric(4.0, scale)).max(1.0),
-                    },
-                    rect,
-                    scaled_dialog_metric(5.0, scale),
-                    POPUP_ROW_ALT,
-                    size,
-                );
-            }
-            text.push_label(
-                row.label,
-                ViewRect {
-                    x: rect.x + margin,
-                    y,
-                    width: scaled_dialog_metric(92.0, scale),
-                    height: scaled_dialog_metric(18.0, scale),
-                },
-                rect,
-                popup_muted_text(),
-            );
-            text.push_label(
-                &row.value,
-                ViewRect {
-                    x: rect.x + scaled_dialog_metric(116.0, scale),
-                    y,
-                    width: (rect.width - scaled_dialog_metric(132.0, scale)).max(1.0),
-                    height: scaled_dialog_metric(18.0, scale),
-                },
-                rect,
-                popup_body_text(),
+        if let Some(overlay) = self.properties_overlay.as_ref() {
+            shell::properties::paint::push_properties_overlay(
+                overlay,
+                self.ui_scale(),
+                vertices,
+                text,
+                size,
             );
         }
     }
@@ -19067,35 +18979,6 @@ fn pane_item_text_color(view_mode: ShellViewMode, entry: &Entry, selected: bool)
         TextColor::rgb(31, 79, 191)
     } else {
         TextColor::rgb(36, 41, 47)
-    }
-}
-
-#[cfg(test)]
-fn properties_overlay_rect(overlay: &ShellPropertiesOverlay, size: PhysicalSize<u32>) -> ViewRect {
-    properties_overlay_rect_scaled(overlay, size, 1.0)
-}
-
-fn properties_overlay_rect_scaled(
-    overlay: &ShellPropertiesOverlay,
-    size: PhysicalSize<u32>,
-    scale_factor: f32,
-) -> ViewRect {
-    let width = size.width.max(1) as f32;
-    let height = size.height.max(1) as f32;
-    let margin = scaled_dialog_metric(PROPERTIES_OVERLAY_MARGIN, scale_factor);
-    let overlay_width = scaled_dialog_metric(PROPERTIES_OVERLAY_WIDTH, scale_factor)
-        .min((width - margin * 2.0).max(1.0))
-        .max(1.0);
-    let overlay_height = (scaled_dialog_metric(PROPERTIES_TITLE_HEIGHT, scale_factor)
-        + scaled_dialog_metric(22.0, scale_factor)
-        + overlay.rows.len() as f32 * scaled_dialog_metric(PROPERTIES_ROW_HEIGHT, scale_factor))
-    .min((height - margin * 2.0).max(1.0))
-    .max(1.0);
-    ViewRect {
-        x: ((width - overlay_width) / 2.0).max(margin),
-        y: ((height - overlay_height) / 2.0).max(margin),
-        width: overlay_width,
-        height: overlay_height,
     }
 }
 

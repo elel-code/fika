@@ -1,0 +1,117 @@
+use fika_core::ViewRect;
+use winit::dpi::PhysicalSize;
+
+use crate::shell::metrics::{PROPERTIES_ROW_HEIGHT, PROPERTIES_TITLE_HEIGHT, scaled_dialog_metric};
+use crate::shell::popup::style::{
+    POPUP_BACKDROP, POPUP_BORDER, POPUP_DIVIDER, POPUP_HEADER, POPUP_ROW_ALT, POPUP_SURFACE,
+    popup_body_text, popup_muted_text, popup_title_text,
+};
+use crate::shell::properties::ShellPropertiesOverlay;
+use crate::shell::properties::geometry::properties_overlay_rect_scaled;
+use crate::{
+    QuadVertex, TextFrameBuilder, push_clipped_rect_outline, push_clipped_rounded_rect, push_rect,
+};
+
+pub(crate) fn push_properties_overlay(
+    overlay: &ShellPropertiesOverlay,
+    scale: f32,
+    vertices: &mut Vec<QuadVertex>,
+    text: &mut TextFrameBuilder<'_>,
+    size: PhysicalSize<u32>,
+) {
+    let screen = ViewRect {
+        x: 0.0,
+        y: 0.0,
+        width: size.width.max(1) as f32,
+        height: size.height.max(1) as f32,
+    };
+    push_rect(vertices, screen, POPUP_BACKDROP, size);
+    let rect = properties_overlay_rect_scaled(overlay, size, scale);
+    let title_height = scaled_dialog_metric(PROPERTIES_TITLE_HEIGHT, scale);
+    let row_height = scaled_dialog_metric(PROPERTIES_ROW_HEIGHT, scale);
+    let margin = scaled_dialog_metric(16.0, scale);
+    push_clipped_rounded_rect(
+        vertices,
+        rect,
+        screen,
+        scaled_dialog_metric(8.0, scale),
+        POPUP_SURFACE,
+        size,
+    );
+    push_clipped_rect_outline(vertices, rect, screen, 1.0, POPUP_BORDER, size);
+    push_rect(
+        vertices,
+        ViewRect {
+            x: rect.x,
+            y: rect.y,
+            width: rect.width,
+            height: title_height,
+        },
+        POPUP_HEADER,
+        size,
+    );
+    push_rect(
+        vertices,
+        ViewRect {
+            x: rect.x,
+            y: rect.y + title_height - scaled_dialog_metric(1.0, scale).max(1.0),
+            width: rect.width,
+            height: scaled_dialog_metric(1.0, scale).max(1.0),
+        },
+        POPUP_DIVIDER,
+        size,
+    );
+    text.push_label(
+        &overlay.title,
+        ViewRect {
+            x: rect.x + margin,
+            y: rect.y + scaled_dialog_metric(12.0, scale),
+            width: (rect.width - margin * 2.0).max(1.0),
+            height: scaled_dialog_metric(18.0, scale),
+        },
+        rect,
+        popup_title_text(),
+    );
+
+    let rows_y = rect.y + title_height + scaled_dialog_metric(10.0, scale);
+    for (index, row) in overlay.rows.iter().enumerate() {
+        let y = rows_y + index as f32 * row_height;
+        if index % 2 == 1 {
+            push_clipped_rounded_rect(
+                vertices,
+                ViewRect {
+                    x: rect.x + margin - scaled_dialog_metric(6.0, scale),
+                    y: y - scaled_dialog_metric(3.0, scale),
+                    width: (rect.width - margin * 2.0 + scaled_dialog_metric(12.0, scale)).max(1.0),
+                    height: (row_height - scaled_dialog_metric(4.0, scale)).max(1.0),
+                },
+                rect,
+                scaled_dialog_metric(5.0, scale),
+                POPUP_ROW_ALT,
+                size,
+            );
+        }
+        text.push_label(
+            row.label,
+            ViewRect {
+                x: rect.x + margin,
+                y,
+                width: scaled_dialog_metric(92.0, scale),
+                height: scaled_dialog_metric(18.0, scale),
+            },
+            rect,
+            popup_muted_text(),
+        );
+        text.push_label(
+            &row.value,
+            ViewRect {
+                x: rect.x + scaled_dialog_metric(116.0, scale),
+                y,
+                width: (rect.width - scaled_dialog_metric(132.0, scale)).max(1.0),
+                height: scaled_dialog_metric(18.0, scale),
+            },
+            rect,
+            popup_body_text(),
+        );
+    }
+}

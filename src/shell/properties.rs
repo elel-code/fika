@@ -1,3 +1,8 @@
+#[path = "properties/geometry.rs"]
+pub(crate) mod geometry;
+#[path = "properties/paint.rs"]
+pub(crate) mod paint;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ShellPropertyRow {
     pub(crate) label: &'static str,
