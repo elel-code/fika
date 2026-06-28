@@ -39,19 +39,16 @@ pub(crate) fn dolphin_item_paint(
     scale: f32,
 ) -> DolphinItemPaint {
     let radius = BREEZE_ITEM_ROUNDNESS * scale.max(1.0);
-    let selection_rect = match view_mode {
-        ShellViewMode::Details => item_rect,
-        ShellViewMode::Compact | ShellViewMode::Icons => visual_rect,
-    };
+    let selection_rect = dolphin_selection_full_rect(view_mode, item_rect, visual_rect, scale);
     let background = match view_mode {
         ShellViewMode::Details => Some(DolphinItemFill {
-            rect: item_rect,
+            rect: selection_rect,
             radius: 0.0,
             color: details_row_background_color(selected, hovered, alternate),
         }),
         ShellViewMode::Compact | ShellViewMode::Icons => {
             (selected || hovered).then(|| DolphinItemFill {
-                rect: visual_rect,
+                rect: selection_rect,
                 radius,
                 color: item_background_color(selected, hovered),
             })
@@ -69,6 +66,27 @@ pub(crate) fn dolphin_item_paint(
     });
 
     DolphinItemPaint { background, focus }
+}
+
+pub(crate) fn dolphin_selection_full_rect(
+    view_mode: ShellViewMode,
+    item_rect: ViewRect,
+    _visual_rect: ViewRect,
+    scale: f32,
+) -> ViewRect {
+    match view_mode {
+        ShellViewMode::Details => item_rect,
+        ShellViewMode::Compact => {
+            let padding = 2.0 * scale.max(1.0);
+            ViewRect {
+                x: item_rect.x - padding,
+                y: item_rect.y,
+                width: item_rect.width + padding * 2.0,
+                height: item_rect.height,
+            }
+        }
+        ShellViewMode::Icons => item_rect,
+    }
 }
 
 pub(crate) fn dolphin_selection_core_rect(
@@ -175,7 +193,7 @@ mod tests {
         assert_eq!(
             selected.background,
             Some(DolphinItemFill {
-                rect: rect(4.0, 4.0, 112.0, 112.0),
+                rect: rect(0.0, 0.0, 120.0, 120.0),
                 radius: BREEZE_ITEM_ROUNDNESS,
                 color: [0.239, 0.502, 0.710, 0.32],
             })
@@ -183,10 +201,33 @@ mod tests {
     }
 
     #[test]
-    fn current_item_paint_uses_inset_breeze_focus_stroke() {
+    fn compact_item_paint_extends_selection_full_rect_by_padding() {
         let paint = dolphin_item_paint(
             ShellViewMode::Compact,
-            rect(0.0, 0.0, 180.0, 32.0),
+            rect(10.0, 0.0, 180.0, 32.0),
+            rect(12.0, 2.0, 176.0, 28.0),
+            true,
+            false,
+            false,
+            false,
+            1.0,
+        );
+
+        assert_eq!(
+            paint.background,
+            Some(DolphinItemFill {
+                rect: rect(8.0, 0.0, 184.0, 32.0),
+                radius: BREEZE_ITEM_ROUNDNESS,
+                color: [0.239, 0.502, 0.710, 0.32],
+            })
+        );
+    }
+
+    #[test]
+    fn current_item_paint_uses_inset_breeze_focus_stroke_on_selection_full_rect() {
+        let paint = dolphin_item_paint(
+            ShellViewMode::Compact,
+            rect(10.0, 0.0, 180.0, 32.0),
             rect(2.0, 2.0, 176.0, 28.0),
             false,
             false,
@@ -198,7 +239,7 @@ mod tests {
         assert_eq!(
             paint.focus,
             Some(DolphinItemFocus {
-                rect: rect(2.625, 2.625, 174.75, 26.75),
+                rect: rect(8.625, 0.625, 182.75, 30.75),
                 radius: 4.375,
                 color: [0.217, 0.456, 0.645, 0.8],
                 stroke_width: BREEZE_FOCUS_PEN_WIDTH,
