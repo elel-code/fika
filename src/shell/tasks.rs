@@ -40,6 +40,22 @@ impl ShellTaskStatus {
         }
     }
 
+    pub(crate) fn running_uncancellable(
+        task_id: ShellTaskId,
+        label: impl Into<String>,
+        detail: impl Into<String>,
+        privileged: bool,
+    ) -> Self {
+        Self {
+            task_id: Some(task_id),
+            label: label.into(),
+            detail: detail.into(),
+            kind: ShellTaskStatusKind::Running,
+            privileged,
+            cancellable: false,
+        }
+    }
+
     pub(crate) fn completed(
         label: impl Into<String>,
         detail: impl Into<String>,

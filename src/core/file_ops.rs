@@ -843,6 +843,49 @@ pub fn empty_trash() -> FileActionSummary {
     summary
 }
 
+pub async fn empty_trash_async() -> FileActionSummary {
+    empty_trash_in_dirs_async(trash_files_dir(), trash_info_dir(), trashrc_path()).await
+}
+
+async fn empty_trash_in_dirs_async(
+    files_dir: PathBuf,
+    info_dir: PathBuf,
+    trashrc_path: PathBuf,
+) -> FileActionSummary {
+    let mut summary = FileActionSummary::default();
+    if !path_exists_async(&files_dir).await {
+        let _ = write_trash_status_empty_at_async(&trashrc_path, true).await;
+        return summary;
+    }
+
+    let entries = match read_dir_entries_async(&files_dir).await {
+        Ok(entries) => entries,
+        Err(err) => {
+            summary
+                .failures
+                .push(format!("{}: {err}", files_dir.display()));
+            return summary;
+        }
+    };
+
+    for (entry_path, _) in entries {
+        match permanently_delete_trash_path_in_dirs_async(&entry_path, &files_dir, &info_dir).await
+        {
+            Ok(record) => summary.successes.push(record),
+            Err(err) => summary
+                .failures
+                .push(format!("{}: {err}", entry_path.display())),
+        }
+    }
+    remove_orphan_trashinfo_files_in_dir_async(&info_dir, &mut summary).await;
+    let empty = read_dir_entries_async(&files_dir)
+        .await
+        .ok()
+        .is_none_or(|entries| entries.is_empty());
+    let _ = write_trash_status_empty_at_async(&trashrc_path, empty).await;
+    summary
+}
+
 fn restore_trash_path(
     trash_path: &Path,
     conflict_policy: TrashRestoreConflictPolicy,
@@ -922,6 +965,32 @@ fn permanently_delete_trash_path(trash_path: &Path) -> Result<TrashRecord, Strin
         trash_original_path(trash_path).unwrap_or_else(|_| trash_path.to_path_buf());
     remove_path(trash_path).map_err(|err| err.to_string())?;
     let _ = remove_trashinfo(trash_path);
+
+    Ok(TrashRecord {
+        original_path,
+        trash_path: trash_path.to_path_buf(),
+    })
+}
+
+async fn permanently_delete_trash_path_in_dirs_async(
+    trash_path: &Path,
+    files_dir: &Path,
+    info_dir: &Path,
+) -> Result<TrashRecord, String> {
+    if trash_path == files_dir || !trash_path.starts_with(files_dir) {
+        return Err("item is not inside Trash".to_string());
+    }
+    if !path_exists_async(trash_path).await {
+        return Err("trash item no longer exists".to_string());
+    }
+
+    let original_path = trash_original_path_in_dir_async(trash_path, info_dir)
+        .await
+        .unwrap_or_else(|_| trash_path.to_path_buf());
+    remove_path_async(trash_path)
+        .await
+        .map_err(|err| err.to_string())?;
+    let _ = remove_trashinfo_in_dir_async(trash_path, info_dir).await;
 
     Ok(TrashRecord {
         original_path,
@@ -1456,6 +1525,11 @@ async fn read_link_async(path: &Path) -> io::Result<PathBuf> {
     compio_blocking_io(move || fs::read_link(path)).await
 }
 
+async fn read_file_to_string_async(path: &Path) -> io::Result<String> {
+    let path = path.to_path_buf();
+    compio_blocking_io(move || fs::read_to_string(path)).await
+}
+
 async fn read_dir_entries_async(path: &Path) -> io::Result<Vec<(PathBuf, OsString)>> {
     let path = path.to_path_buf();
     compio_blocking_io(move || {
@@ -1763,6 +1837,18 @@ fn remove_trashinfo(trash_path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+async fn remove_trashinfo_in_dir_async(trash_path: &Path, info_dir: &Path) -> Result<(), String> {
+    let Some(info_path) = trash_info_path_in_dir(trash_path, info_dir) else {
+        return Ok(());
+    };
+    if path_exists_async(&info_path).await {
+        compio::fs::remove_file(&info_path)
+            .await
+            .map_err(|err| err.to_string())?;
+    }
+    Ok(())
+}
+
 fn remove_orphan_trashinfo_files(summary: &mut FileActionSummary) {
     let info_dir = trash_info_dir();
     let Ok(entries) = fs::read_dir(&info_dir) else {
@@ -1785,14 +1871,54 @@ fn remove_orphan_trashinfo_files(summary: &mut FileActionSummary) {
     }
 }
 
+async fn remove_orphan_trashinfo_files_in_dir_async(
+    info_dir: &Path,
+    summary: &mut FileActionSummary,
+) {
+    let Ok(entries) = read_dir_entries_async(info_dir).await else {
+        return;
+    };
+    for (path, _) in entries {
+        if path.extension().and_then(|extension| extension.to_str()) == Some("trashinfo")
+            && let Err(err) = compio::fs::remove_file(&path).await
+        {
+            summary.failures.push(format!("{}: {err}", path.display()));
+        }
+    }
+}
+
 fn trash_original_path(trash_path: &Path) -> Result<PathBuf, String> {
     trash_metadata(trash_path).map(|metadata| metadata.original_path)
+}
+
+async fn trash_original_path_in_dir_async(
+    trash_path: &Path,
+    info_dir: &Path,
+) -> Result<PathBuf, String> {
+    trash_metadata_in_dir_async(trash_path, info_dir)
+        .await
+        .map(|metadata| metadata.original_path)
 }
 
 pub fn trash_metadata(trash_path: &Path) -> Result<TrashMetadata, String> {
     let info_path =
         trash_info_path(trash_path).ok_or_else(|| "trash item has no metadata name".to_string())?;
     let contents = fs::read_to_string(&info_path).map_err(|err| {
+        format!(
+            "failed to read trash metadata {}: {err}",
+            info_path.display()
+        )
+    })?;
+    trash_metadata_from_info(&contents)
+}
+
+async fn trash_metadata_in_dir_async(
+    trash_path: &Path,
+    info_dir: &Path,
+) -> Result<TrashMetadata, String> {
+    let info_path = trash_info_path_in_dir(trash_path, info_dir)
+        .ok_or_else(|| "trash item has no metadata name".to_string())?;
+    let contents = read_file_to_string_async(&info_path).await.map_err(|err| {
         format!(
             "failed to read trash metadata {}: {err}",
             info_path.display()
@@ -1831,8 +1957,12 @@ fn trash_metadata_from_info(contents: &str) -> Result<TrashMetadata, String> {
 }
 
 fn trash_info_path(trash_path: &Path) -> Option<PathBuf> {
+    trash_info_path_in_dir(trash_path, &trash_info_dir())
+}
+
+fn trash_info_path_in_dir(trash_path: &Path, info_dir: &Path) -> Option<PathBuf> {
     let name = trash_path.file_name()?.to_str()?;
-    Some(trash_info_dir().join(format!("{name}.trashinfo")))
+    Some(info_dir.join(format!("{name}.trashinfo")))
 }
 
 fn overwrite_backup_path(destination: &Path) -> Result<PathBuf, String> {
@@ -2824,6 +2954,45 @@ mod tests {
         assert!(!is_in_trash_files_dir(
             &trash_files.with_file_name("outside-trash")
         ));
+    }
+
+    #[test]
+    fn empty_trash_async_removes_files_metadata_and_updates_status() {
+        let temp = test_dir("empty-trash-async");
+        let files_dir = temp.join("Trash").join("files");
+        let info_dir = temp.join("Trash").join("info");
+        let trashrc = temp.join("config").join("trashrc");
+        fs::create_dir_all(&files_dir).unwrap();
+        fs::create_dir_all(&info_dir).unwrap();
+
+        let original = temp.join("original.txt");
+        let trash_path = files_dir.join("trashed.txt");
+        fs::write(&trash_path, b"trashed").unwrap();
+        fs::write(info_dir.join("trashed.txt.trashinfo"), trashinfo(&original)).unwrap();
+        fs::write(
+            info_dir.join("orphan.trashinfo"),
+            trashinfo(&temp.join("orphan.txt")),
+        )
+        .unwrap();
+        write_trash_status_empty_at(&trashrc, false).unwrap();
+
+        let summary =
+            futures_lite::future::block_on(crate::core::operation_runtime::run_operation_task({
+                let files_dir = files_dir.clone();
+                let info_dir = info_dir.clone();
+                let trashrc = trashrc.clone();
+                move || async move { empty_trash_in_dirs_async(files_dir, info_dir, trashrc).await }
+            }))
+            .unwrap();
+
+        assert_eq!(summary.successes.len(), 1);
+        assert_eq!(summary.successes[0].original_path, original);
+        assert!(summary.failures.is_empty());
+        assert!(fs::read_dir(&files_dir).unwrap().next().is_none());
+        assert!(fs::read_dir(&info_dir).unwrap().next().is_none());
+        assert!(trash_status_empty_at(&trashrc));
+
+        let _ = fs::remove_dir_all(temp);
     }
 
     #[test]

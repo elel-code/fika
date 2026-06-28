@@ -498,6 +498,14 @@ pub fn trash_view_operation_result(
         TrashViewOperation::DeletePermanently => file_ops::permanently_delete_trash_paths(&paths),
         TrashViewOperation::Empty => file_ops::empty_trash(),
     };
+    trash_view_operation_result_from_summary(pane_id, operation, summary)
+}
+
+fn trash_view_operation_result_from_summary(
+    pane_id: PaneId,
+    operation: TrashViewOperation,
+    summary: file_ops::FileActionSummary,
+) -> TrashViewOperationResult {
     let success_count = summary.successes.len();
     let failure_count = summary.failures.len();
     let restore_conflicts = summary.restore_conflicts;
@@ -532,6 +540,11 @@ pub async fn trash_view_operation_result_async(
     operation: TrashViewOperation,
     paths: Vec<PathBuf>,
 ) -> TrashViewOperationResult {
+    if operation == TrashViewOperation::Empty {
+        let summary = file_ops::empty_trash_async().await;
+        return trash_view_operation_result_from_summary(pane_id, operation, summary);
+    }
+
     run_operation_blocking(move || trash_view_operation_result(pane_id, operation, paths))
         .await
         .unwrap_or_else(|_| TrashViewOperationResult {

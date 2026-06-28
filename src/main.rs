@@ -38,7 +38,7 @@ use fika_core::{
     read_gio_devices, read_network_entry_batches_sync_cancellable, resolve_location_input,
     run_operation_task, save_app_settings, save_place_order, save_user_places,
     service_menu_target_label, set_default_mime_application, thumbnail_request_may_have_preview,
-    trash_view_operation_result,
+    trash_view_operation_result, trash_view_operation_result_async,
 };
 use winit::application::ApplicationHandler;
 use winit::cursor::{Cursor as WinitCursor, CursorIcon};
@@ -287,9 +287,10 @@ use shell::tasks::{
     ShellTaskDetailDialog, ShellTaskId, ShellTaskStatus, ShellTaskStatusKind, TaskDetailDialogClick,
 };
 use shell::transfer::{
-    ShellAsyncTaskResult, ShellAsyncTransferCompletion, ShellAsyncTransferSource, ShellPasteResult,
-    ShellTransferExecution, async_transfer_task_detail, async_transfer_task_label,
-    transfer_paths_async_with_controller, transfer_paths_with_privilege, transfer_runtime_failure,
+    ShellAsyncTaskResult, ShellAsyncTransferCompletion, ShellAsyncTransferSource,
+    ShellAsyncTrashViewCompletion, ShellPasteResult, ShellTransferExecution,
+    async_transfer_task_detail, async_transfer_task_label, transfer_paths_async_with_controller,
+    transfer_paths_with_privilege, transfer_runtime_failure,
 };
 use shell::trash_conflict::{ShellTrashConflictDialog, TrashConflictDialogClick};
 
@@ -607,6 +608,28 @@ impl FikaWgpuApp {
                         }
                     }
                 }
+                ShellAsyncTaskResult::TrashView(completion) => {
+                    self.active_task_controllers.remove(&completion.task_id);
+                    self.active_task_base_details.remove(&completion.task_id);
+                    let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
+                        continue;
+                    };
+                    match self
+                        .scene
+                        .apply_async_trash_view_completion(&completion, size)
+                    {
+                        Ok(()) => {
+                            changed = true;
+                        }
+                        Err(error) => {
+                            self.scene.finish_task_status(
+                                completion.task_id,
+                                ShellTaskStatus::failed("Task update failed", error, false),
+                            );
+                            changed = true;
+                        }
+                    }
+                }
             }
         }
         if changed {
@@ -775,6 +798,48 @@ impl FikaWgpuApp {
                 },
             ));
         });
+    }
+
+    fn start_async_trash_view_operation(
+        &mut self,
+        action: ShellContextMenuAction,
+    ) -> Result<(), String> {
+        let pane_to_reload = self
+            .scene
+            .context_target_pane()
+            .unwrap_or_else(|| self.scene.active_pane());
+        let (operation, paths) = self.scene.context_target_trash_view_operation(action)?;
+        let task_id = self.next_task_id();
+        self.active_task_controllers
+            .insert(task_id, OperationController::new());
+        self.scene
+            .record_async_trash_view_started(task_id, operation, paths.len());
+
+        let tx = self.async_task_tx.clone();
+        thread::spawn(move || {
+            let result = pollster::block_on(run_operation_task({
+                let paths = paths;
+                move || async move {
+                    trash_view_operation_result_async(WGPU_SHELL_PANE_ID, operation, paths).await
+                }
+            }))
+            .unwrap_or_else(|error| {
+                fika_log!(
+                    "[fika-wgpu] trash-view-runtime-error action={} {error}",
+                    action.as_str()
+                );
+                trash_view_operation_runtime_failure(operation)
+            });
+            let _ = tx.send(ShellAsyncTaskResult::TrashView(
+                ShellAsyncTrashViewCompletion {
+                    task_id,
+                    action,
+                    pane_to_reload,
+                    result,
+                },
+            ));
+        });
+        Ok(())
     }
 }
 
@@ -2280,6 +2345,31 @@ impl FikaWgpuApp {
         event_loop: &dyn ActiveEventLoop,
         action: ShellContextMenuAction,
     ) {
+        if action == ShellContextMenuAction::EmptyTrash {
+            match self.start_async_trash_view_operation(action) {
+                Ok(()) => {
+                    if let Some(window) = self.window.as_ref() {
+                        window.request_redraw();
+                    }
+                }
+                Err(error) => {
+                    fika_log!(
+                        "[fika-wgpu] trash-view-error action={} {error}",
+                        action.as_str()
+                    );
+                    self.scene.record_task_status(ShellTaskStatus::failed(
+                        "Empty Trash failed",
+                        error,
+                        false,
+                    ));
+                    if let Some(window) = self.window.as_ref() {
+                        window.request_redraw();
+                    }
+                }
+            }
+            return;
+        }
+
         let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
             return;
         };
@@ -6924,6 +7014,36 @@ impl ShellScene {
         self.record_task_status(ShellTaskStatus::running(task_id, label, detail, false));
     }
 
+    fn record_async_trash_view_started(
+        &mut self,
+        task_id: ShellTaskId,
+        operation: TrashViewOperation,
+        item_count: usize,
+    ) {
+        let detail = match operation {
+            TrashViewOperation::Empty => "Trash contents".to_string(),
+            _ => count_label(item_count, "item", "items"),
+        };
+        self.context_target = None;
+        self.context_menu = None;
+        self.drop_menu = None;
+        self.properties_overlay = None;
+        self.create_dialog = None;
+        self.rename_dialog = None;
+        self.rubber_band = None;
+        self.internal_drag = None;
+        self.external_drag = None;
+        self.place_press = None;
+        self.dnd_hover_target = None;
+        self.pending_drop_request = None;
+        self.record_task_status(ShellTaskStatus::running_uncancellable(
+            task_id,
+            operation.progress_label(item_count),
+            detail,
+            false,
+        ));
+    }
+
     fn update_running_task_detail(&mut self, task_id: ShellTaskId, detail: String) -> bool {
         let Some(status) = self
             .task_statuses
@@ -7021,6 +7141,20 @@ impl ShellScene {
             }
         }
         Ok(result)
+    }
+
+    fn apply_async_trash_view_completion(
+        &mut self,
+        completion: &ShellAsyncTrashViewCompletion,
+        size: PhysicalSize<u32>,
+    ) -> Result<(), String> {
+        self.apply_trash_view_result_with_task(
+            Some(completion.task_id),
+            completion.action.as_str(),
+            completion.pane_to_reload,
+            &completion.result,
+            size,
+        )
     }
 
     fn is_task_detail_dialog_open(&self) -> bool {
@@ -7802,6 +7936,17 @@ impl ShellScene {
         result: &TrashViewOperationResult,
         size: PhysicalSize<u32>,
     ) -> Result<(), String> {
+        self.apply_trash_view_result_with_task(None, action, pane_to_reload, result, size)
+    }
+
+    fn apply_trash_view_result_with_task(
+        &mut self,
+        task_id: Option<ShellTaskId>,
+        action: &str,
+        pane_to_reload: ShellPaneId,
+        result: &TrashViewOperationResult,
+        size: PhysicalSize<u32>,
+    ) -> Result<(), String> {
         let affected_dir = self
             .pane_state(pane_to_reload)
             .map(|state| state.path.clone());
@@ -7836,13 +7981,16 @@ impl ShellScene {
         } else {
             count_label(result.success_count, "item", "items")
         };
-        self.record_task_status(
-            if result.failure_count > 0 || !result.restore_conflicts.is_empty() {
-                ShellTaskStatus::failed(format!("{label} needs attention"), detail, false)
-            } else {
-                ShellTaskStatus::completed(label, detail, false)
-            },
-        );
+        let status = if result.failure_count > 0 || !result.restore_conflicts.is_empty() {
+            ShellTaskStatus::failed(format!("{label} needs attention"), detail, false)
+        } else {
+            ShellTaskStatus::completed(label, detail, false)
+        };
+        if let Some(task_id) = task_id {
+            self.finish_task_status(task_id, status);
+        } else {
+            self.record_task_status(status);
+        }
 
         if let Some(dialog) = ShellTrashConflictDialog::new(result.restore_conflicts.clone()) {
             self.trash_conflict_dialog = Some(dialog);
@@ -18278,6 +18426,17 @@ fn transfer_task_detail(
             count_label(success_count, "item", "items"),
             target_dir.display()
         )
+    }
+}
+
+fn trash_view_operation_runtime_failure(operation: TrashViewOperation) -> TrashViewOperationResult {
+    TrashViewOperationResult {
+        pane_id: WGPU_SHELL_PANE_ID,
+        operation,
+        success_count: 0,
+        failure_count: 1,
+        affected_dirs: Vec::new(),
+        restore_conflicts: Vec::new(),
     }
 }
 
@@ -29083,6 +29242,57 @@ text/plain=writer.desktop;\n",
         assert_eq!(result.failure_count, 0);
         assert!(!source.exists());
         assert!(!trash_path.exists());
+        assert_eq!(scene.trash_changes, 1);
+        assert_eq!(scene.directory_reloads, 1);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn async_empty_trash_completion_replaces_running_status_and_reloads() {
+        let root = test_dir("async-empty-trash");
+        fs::create_dir_all(&root).unwrap();
+        let size = PhysicalSize::new(420, 260);
+        let mut scene = ShellScene::load(root.clone(), ShellViewMode::Icons).unwrap();
+        scene.context_target = Some(ShellContextTarget::Blank {
+            pane: ShellPaneId::SLOT_0,
+            path: file_ops::trash_files_dir(),
+        });
+        scene.context_menu = Some(ShellContextMenu::new(
+            scene.context_target.clone().unwrap(),
+            ViewPoint { x: 8.0, y: 8.0 },
+        ));
+
+        scene.record_async_trash_view_started(77, TrashViewOperation::Empty, 0);
+
+        assert!(scene.context_target.is_none());
+        assert!(scene.context_menu.is_none());
+        assert_eq!(scene.task_statuses[0].kind, ShellTaskStatusKind::Running);
+        assert_eq!(scene.task_statuses[0].label, "Emptying Trash");
+        assert!(!scene.task_statuses[0].cancellable);
+
+        let completion = ShellAsyncTrashViewCompletion {
+            task_id: 77,
+            action: ShellContextMenuAction::EmptyTrash,
+            pane_to_reload: ShellPaneId::SLOT_0,
+            result: TrashViewOperationResult {
+                pane_id: WGPU_SHELL_PANE_ID,
+                operation: TrashViewOperation::Empty,
+                success_count: 1,
+                failure_count: 0,
+                affected_dirs: vec![root.clone()],
+                restore_conflicts: Vec::new(),
+            },
+        };
+
+        scene
+            .apply_async_trash_view_completion(&completion, size)
+            .unwrap();
+
+        assert_eq!(scene.task_statuses[0].task_id, Some(77));
+        assert_eq!(scene.task_statuses[0].kind, ShellTaskStatusKind::Completed);
+        assert_eq!(scene.task_statuses[0].label, "Empty Trash");
+        assert_eq!(scene.task_statuses[0].detail, "1 item");
         assert_eq!(scene.trash_changes, 1);
         assert_eq!(scene.directory_reloads, 1);
 

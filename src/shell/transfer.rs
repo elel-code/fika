@@ -2,10 +2,12 @@ use std::path::{Path, PathBuf};
 
 use fika_core::{
     FileTransferMode, OperationController, PrivilegedCommand, TransferTaskResult, TransferUndoItem,
-    file_ops, push_unique_path,
+    TrashViewOperationResult, file_ops, push_unique_path,
 };
 
+use crate::shell::context_menu::ShellContextMenuAction;
 use crate::shell::metrics::WGPU_SHELL_PANE_ID;
+use crate::shell::pane::ShellPaneId;
 use crate::shell::privilege::{run_privileged_command_sync, should_attempt_privileged_operation};
 use crate::shell::tasks::ShellTaskId;
 
@@ -62,8 +64,17 @@ pub(crate) struct ShellAsyncTransferCompletion {
 }
 
 #[derive(Clone, Debug)]
+pub(crate) struct ShellAsyncTrashViewCompletion {
+    pub(crate) task_id: ShellTaskId,
+    pub(crate) action: ShellContextMenuAction,
+    pub(crate) pane_to_reload: ShellPaneId,
+    pub(crate) result: TrashViewOperationResult,
+}
+
+#[derive(Clone, Debug)]
 pub(crate) enum ShellAsyncTaskResult {
     Transfer(ShellAsyncTransferCompletion),
+    TrashView(ShellAsyncTrashViewCompletion),
 }
 
 pub(crate) fn transfer_paths_with_privilege(
