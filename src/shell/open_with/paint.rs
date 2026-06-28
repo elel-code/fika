@@ -16,12 +16,15 @@ use crate::shell::open_with::geometry::{
     open_with_chooser_query_rect_scaled, open_with_chooser_rect_scaled,
     open_with_chooser_scrollbar_rects_scaled,
 };
+use crate::shell::popup::style::{
+    POPUP_BACKDROP, POPUP_BORDER, POPUP_BUTTON_PRIMARY, POPUP_BUTTON_SECONDARY, POPUP_DIVIDER,
+    POPUP_FIELD_FOCUS, POPUP_HEADER, POPUP_INPUT, POPUP_MARKER_NEUTRAL, POPUP_SURFACE,
+    popup_body_text, popup_error_text, popup_inverse_text, popup_muted_text, popup_soft_text,
+    popup_title_text,
+};
 use crate::{
-    IconDrawLayer, IconFrameBuilder, LabelAlignment, LabelWrap, POPUP_BACKDROP, POPUP_BORDER,
-    POPUP_BUTTON_PRIMARY, POPUP_BUTTON_SECONDARY, POPUP_DIVIDER, POPUP_FIELD_FOCUS, POPUP_HEADER,
-    POPUP_INPUT, POPUP_MARKER_NEUTRAL, POPUP_SURFACE, QuadVertex, TextFrameBuilder,
-    path_name_or_display, popup_body_text, popup_error_text, popup_inverse_text, popup_muted_text,
-    popup_soft_text, popup_title_text, push_clipped_rect_outline, push_clipped_rounded_highlight,
+    IconDrawLayer, IconFrameBuilder, LabelAlignment, LabelWrap, QuadVertex, TextFrameBuilder,
+    path_name_or_display, push_clipped_rect_outline, push_clipped_rounded_highlight,
     push_clipped_rounded_rect, push_rect, push_scrollbar,
 };
 
