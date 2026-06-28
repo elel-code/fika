@@ -18596,16 +18596,19 @@ fn file_clipboard_role_as_str(role: FileClipboardRole) -> &'static str {
 }
 
 fn create_entry_on_disk(request: &CreateEntryRequest) -> Result<(), String> {
-    match request.kind {
-        CreateEntryKind::Folder => fs::create_dir(&request.path)
-            .map_err(|error| format!("create folder {}: {error}", request.path.display())),
-        CreateEntryKind::File => fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&request.path)
-            .map(drop)
-            .map_err(|error| format!("create file {}: {error}", request.path.display())),
-    }
+    let path = request.path.clone();
+    let kind = request.kind;
+    pollster::block_on(run_operation_task(move || async move {
+        match kind {
+            CreateEntryKind::Folder => file_ops::create_folder_at_async(&path)
+                .await
+                .map_err(|error| format!("create folder {}: {error}", path.display())),
+            CreateEntryKind::File => file_ops::create_file_at_async(&path)
+                .await
+                .map_err(|error| format!("create file {}: {error}", path.display())),
+        }
+    }))
+    .map_err(|error| error.to_string())?
 }
 
 fn create_entry_on_disk_explicit(
@@ -18629,13 +18632,20 @@ fn create_entry_on_disk_explicit(
 }
 
 fn rename_entry_on_disk(request: &RenameEntryRequest) -> Result<(), String> {
-    fs::rename(&request.source, &request.target).map_err(|error| {
-        format!(
-            "rename {} to {}: {error}",
-            request.source.display(),
-            request.target.display()
-        )
-    })
+    let source = request.source.clone();
+    let target = request.target.clone();
+    pollster::block_on(run_operation_task(move || async move {
+        file_ops::rename_path_to_async(&source, &target)
+            .await
+            .map_err(|error| {
+                format!(
+                    "rename {} to {}: {error}",
+                    source.display(),
+                    target.display()
+                )
+            })
+    }))
+    .map_err(|error| error.to_string())?
 }
 
 fn rename_entry_on_disk_explicit(

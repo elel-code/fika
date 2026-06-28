@@ -434,6 +434,20 @@ pub fn create_folder(parent: &Path, name: &str) -> Result<PathBuf, String> {
     Ok(destination)
 }
 
+pub async fn create_folder_async(parent: &Path, name: &str) -> Result<PathBuf, String> {
+    if !metadata_async(parent)
+        .await
+        .map(|metadata| metadata.is_dir())
+        .unwrap_or(false)
+    {
+        return Err("current location is not a folder".to_string());
+    }
+    let name = sanitize_child_name(name)?;
+    let destination = unique_destination_async(parent, name.as_ref()).await;
+    create_folder_at_async(&destination).await?;
+    Ok(destination)
+}
+
 pub fn create_file(parent: &Path, name: &str) -> Result<PathBuf, String> {
     if !parent.is_dir() {
         return Err("current location is not a folder".to_string());
@@ -446,6 +460,33 @@ pub fn create_file(parent: &Path, name: &str) -> Result<PathBuf, String> {
         .open(&destination)
         .map_err(|err| err.to_string())?;
     Ok(destination)
+}
+
+pub async fn create_file_async(parent: &Path, name: &str) -> Result<PathBuf, String> {
+    if !metadata_async(parent)
+        .await
+        .map(|metadata| metadata.is_dir())
+        .unwrap_or(false)
+    {
+        return Err("current location is not a folder".to_string());
+    }
+    let name = sanitize_child_name(name)?;
+    let destination = unique_destination_async(parent, name.as_ref()).await;
+    create_file_at_async(&destination).await?;
+    Ok(destination)
+}
+
+pub async fn create_folder_at_async(path: &Path) -> Result<(), String> {
+    compio::fs::create_dir(path)
+        .await
+        .map_err(|err| err.to_string())
+}
+
+pub async fn create_file_at_async(path: &Path) -> Result<(), String> {
+    let mut options = compio::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    let file = options.open(path).await.map_err(|err| err.to_string())?;
+    file.close().await.map_err(|err| err.to_string())
 }
 
 pub fn write_unique_file(
@@ -485,6 +526,31 @@ pub fn rename_path(path: &Path, new_name: &str) -> Result<PathBuf, String> {
     }
     fs::rename(path, &destination).map_err(|err| err.to_string())?;
     Ok(destination)
+}
+
+pub async fn rename_path_async(path: &Path, new_name: &str) -> Result<PathBuf, String> {
+    if !path_exists_async(path).await {
+        return Err("item no longer exists".to_string());
+    }
+    let parent = path
+        .parent()
+        .ok_or_else(|| "item has no parent folder".to_string())?;
+    let new_name = sanitize_child_name(new_name)?;
+    let destination = parent.join(new_name);
+    if destination == path {
+        return Ok(destination);
+    }
+    if path_exists_async(&destination).await {
+        return Err("an item with that name already exists".to_string());
+    }
+    rename_path_to_async(path, &destination).await?;
+    Ok(destination)
+}
+
+pub async fn rename_path_to_async(source: &Path, destination: &Path) -> Result<(), String> {
+    compio::fs::rename(source, destination)
+        .await
+        .map_err(|err| err.to_string())
 }
 
 pub fn undo_create_folder(path: &Path) -> Result<String, String> {
@@ -2064,6 +2130,82 @@ mod tests {
         assert_eq!(progress.bytes_done, 96 * 1024);
         assert_eq!(progress.bytes_total, 96 * 1024);
         assert_eq!(controller.progress(), progress);
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn create_file_async_uses_compio_unique_destination() {
+        let temp = test_dir("create-file-async");
+        fs::create_dir_all(&temp).unwrap();
+        fs::write(temp.join("New File.txt"), b"occupied").unwrap();
+
+        let created =
+            futures_lite::future::block_on(crate::core::operation_runtime::run_operation_task({
+                let temp = temp.clone();
+                move || async move { create_file_async(&temp, "New File.txt").await }
+            }))
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(created.file_name().unwrap(), "New File copy.txt");
+        assert!(created.is_file());
+        assert_eq!(fs::read(temp.join("New File.txt")).unwrap(), b"occupied");
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn create_exact_async_helpers_use_requested_path() {
+        let temp = test_dir("create-exact-async");
+        fs::create_dir_all(&temp).unwrap();
+        let folder = temp.join("made");
+        let file = temp.join("note.txt");
+
+        futures_lite::future::block_on(crate::core::operation_runtime::run_operation_task({
+            let folder = folder.clone();
+            let file = file.clone();
+            move || async move {
+                create_folder_at_async(&folder).await?;
+                create_file_at_async(&file).await
+            }
+        }))
+        .unwrap()
+        .unwrap();
+
+        assert!(folder.is_dir());
+        assert!(file.is_file());
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn rename_path_async_uses_compio_and_rejects_conflicts() {
+        let temp = test_dir("rename-async");
+        fs::create_dir_all(&temp).unwrap();
+        let original = temp.join("old.txt");
+        let occupied = temp.join("taken.txt");
+        fs::write(&original, b"old").unwrap();
+        fs::write(&occupied, b"taken").unwrap();
+
+        let conflict =
+            futures_lite::future::block_on(crate::core::operation_runtime::run_operation_task({
+                let original = original.clone();
+                move || async move { rename_path_async(&original, "taken.txt").await }
+            }))
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(conflict, "an item with that name already exists");
+
+        let renamed =
+            futures_lite::future::block_on(crate::core::operation_runtime::run_operation_task({
+                let original = original.clone();
+                move || async move { rename_path_async(&original, "new.txt").await }
+            }))
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(renamed, temp.join("new.txt"));
+        assert!(!original.exists());
+        assert!(renamed.is_file());
+        assert_eq!(fs::read(occupied).unwrap(), b"taken");
         let _ = fs::remove_dir_all(temp);
     }
 

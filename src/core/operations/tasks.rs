@@ -150,15 +150,22 @@ pub async fn rename_item_result_async(
     original_path: PathBuf,
     new_name: String,
 ) -> RenameItemResult {
-    let fallback_path = original_path.clone();
-    run_operation_blocking(move || rename_item_result(pane_id, original_path, new_name))
-        .await
-        .unwrap_or_else(|err| RenameItemResult {
-            pane_id,
-            affected_dirs: parent_dirs([fallback_path.clone()]),
-            original_path: fallback_path,
-            result: Err(err.to_string()),
-        })
+    let mut affected_dirs = parent_dirs([original_path.clone()]);
+    let result = file_ops::rename_path_async(&original_path, &new_name).await;
+    if let Ok(renamed_path) = &result
+        && let Some(parent) = renamed_path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        push_unique_path(&mut affected_dirs, parent.to_path_buf());
+    }
+
+    RenameItemResult {
+        pane_id,
+        original_path,
+        affected_dirs,
+        result,
+    }
 }
 
 pub fn create_item_result(
@@ -187,15 +194,20 @@ pub async fn create_item_result_async(
     parent_dir: PathBuf,
     kind: CreatedItemKind,
 ) -> CreateItemResult {
-    let fallback_parent = parent_dir.clone();
-    run_operation_blocking(move || create_item_result(pane_id, parent_dir, kind))
-        .await
-        .unwrap_or_else(|err| CreateItemResult {
-            pane_id,
-            kind,
-            affected_dirs: vec![fallback_parent],
-            result: Err(err.to_string()),
-        })
+    let result = match kind {
+        CreatedItemKind::File => {
+            file_ops::create_file_async(&parent_dir, default_created_item_name(kind)).await
+        }
+        CreatedItemKind::Folder => {
+            file_ops::create_folder_async(&parent_dir, default_created_item_name(kind)).await
+        }
+    };
+    CreateItemResult {
+        pane_id,
+        kind,
+        affected_dirs: vec![parent_dir],
+        result,
+    }
 }
 
 pub fn default_created_item_name(kind: CreatedItemKind) -> &'static str {
