@@ -14,7 +14,6 @@ use std::sync::{
 use std::thread;
 use std::time::{Duration, Instant};
 
-use bytemuck::Pod;
 use cosmic_text::{
     Align, Attrs, Buffer, Color as TextColor, Cursor, Family, FontSystem, Metrics, Shaping,
     Stretch, Style, SwashCache, Weight, Wrap, fontdb,
@@ -191,10 +190,18 @@ use shell::prewarm::{
     visible_exact_icon_roles_enabled_for_frame,
 };
 use shell::properties::{ShellPropertiesOverlay, property_row};
+#[cfg(test)]
+use shell::render::gpu::upload_vertex_hash_for_test;
+use shell::render::gpu::{
+    VertexBufferUploadStats, create_icon_bind_group, create_icon_texture, create_text_bind_group,
+    create_text_texture, create_text_vertex_buffer, create_vertex_buffer, hash_bytes_with_len,
+    upload_vertex_buffer_if_dirty, vertex_pair_hash,
+};
 use shell::render::quad::{
     QuadVertex, push_clipped_rect, push_clipped_rect_outline, push_clipped_rounded_highlight,
     push_clipped_rounded_rect, push_rect,
 };
+use shell::render::shaders::{QUAD_SHADER, RETAINED_SCENE_SHADER, TEXT_SHADER, TEXTURE_SHADER};
 use shell::render::texture::{AtlasRect, TextVertex, push_textured_rect};
 use shell::role_worker_queue::{PriorityWorkerQueue, PriorityWorkerRequest, WorkerRequestPriority};
 use shell::selection::{
@@ -20869,190 +20876,6 @@ fn prepare_scene_frame(
     }
 }
 
-fn create_vertex_buffer(device: &wgpu::Device, vertex_capacity: usize) -> wgpu::Buffer {
-    device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("fika-wgpu-quad-vertices"),
-        size: (vertex_capacity.max(1) * std::mem::size_of::<QuadVertex>()) as u64,
-        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    })
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-struct VertexBufferUploadStats {
-    writes: usize,
-    skips: usize,
-}
-
-impl VertexBufferUploadStats {
-    fn merge(&mut self, other: Self) {
-        self.writes += other.writes;
-        self.skips += other.skips;
-    }
-}
-
-fn upload_vertex_buffer_if_dirty<T: Pod>(
-    queue: &wgpu::Queue,
-    vertex_buffer: &wgpu::Buffer,
-    vertices: &[T],
-    last_hash: &mut Option<u64>,
-) -> VertexBufferUploadStats {
-    let Some(hash) = vertex_slice_hash(vertices) else {
-        *last_hash = None;
-        return VertexBufferUploadStats::default();
-    };
-    if *last_hash == Some(hash) {
-        return VertexBufferUploadStats {
-            writes: 0,
-            skips: 1,
-        };
-    }
-    queue.write_buffer(vertex_buffer, 0, bytemuck::cast_slice(vertices));
-    *last_hash = Some(hash);
-    VertexBufferUploadStats {
-        writes: 1,
-        skips: 0,
-    }
-}
-
-#[cfg(test)]
-fn upload_vertex_hash_for_test<T: Pod>(
-    vertices: &[T],
-    last_hash: &mut Option<u64>,
-) -> VertexBufferUploadStats {
-    let Some(hash) = vertex_slice_hash(vertices) else {
-        *last_hash = None;
-        return VertexBufferUploadStats::default();
-    };
-    if *last_hash == Some(hash) {
-        return VertexBufferUploadStats {
-            writes: 0,
-            skips: 1,
-        };
-    }
-    *last_hash = Some(hash);
-    VertexBufferUploadStats {
-        writes: 1,
-        skips: 0,
-    }
-}
-
-fn vertex_slice_hash<T: Pod>(vertices: &[T]) -> Option<u64> {
-    if vertices.is_empty() {
-        return None;
-    }
-    Some(hash_bytes_with_len(bytemuck::cast_slice(vertices)))
-}
-
-fn vertex_pair_hash<T: Pod>(first: &[T], second: &[T]) -> Option<u64> {
-    if first.is_empty() && second.is_empty() {
-        return None;
-    }
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    first.len().hash(&mut hasher);
-    bytemuck::cast_slice::<T, u8>(first).hash(&mut hasher);
-    second.len().hash(&mut hasher);
-    bytemuck::cast_slice::<T, u8>(second).hash(&mut hasher);
-    Some(hasher.finish())
-}
-
-fn hash_bytes_with_len(bytes: &[u8]) -> u64 {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    bytes.len().hash(&mut hasher);
-    bytes.hash(&mut hasher);
-    hasher.finish()
-}
-
-fn create_text_vertex_buffer(device: &wgpu::Device, vertex_capacity: usize) -> wgpu::Buffer {
-    device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("fika-wgpu-text-vertices"),
-        size: (vertex_capacity.max(1) * std::mem::size_of::<TextVertex>()) as u64,
-        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    })
-}
-
-fn create_text_texture(device: &wgpu::Device, width: u32, height: u32) -> wgpu::Texture {
-    device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("fika-wgpu-text-atlas"),
-        size: wgpu::Extent3d {
-            width: width.max(1),
-            height: height.max(1),
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::R8Unorm,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING
-            | wgpu::TextureUsages::COPY_DST
-            | wgpu::TextureUsages::COPY_SRC
-            | wgpu::TextureUsages::RENDER_ATTACHMENT,
-        view_formats: &[],
-    })
-}
-
-fn create_text_bind_group(
-    device: &wgpu::Device,
-    layout: &wgpu::BindGroupLayout,
-    texture_view: &wgpu::TextureView,
-    sampler: &wgpu::Sampler,
-) -> wgpu::BindGroup {
-    device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("fika-wgpu-text-bind-group"),
-        layout,
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(texture_view),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: wgpu::BindingResource::Sampler(sampler),
-            },
-        ],
-    })
-}
-
-fn create_icon_texture(device: &wgpu::Device, width: u32, height: u32) -> wgpu::Texture {
-    device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("fika-wgpu-icon-atlas"),
-        size: wgpu::Extent3d {
-            width: width.max(1),
-            height: height.max(1),
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8Unorm,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-        view_formats: &[],
-    })
-}
-
-fn create_icon_bind_group(
-    device: &wgpu::Device,
-    layout: &wgpu::BindGroupLayout,
-    texture_view: &wgpu::TextureView,
-    sampler: &wgpu::Sampler,
-) -> wgpu::BindGroup {
-    device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("fika-wgpu-icon-bind-group"),
-        layout,
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(texture_view),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: wgpu::BindingResource::Sampler(sampler),
-            },
-        ],
-    })
-}
-
 fn text_color_to_vertex_color(color: TextColor) -> [f32; 4] {
     let [r, g, b, a] = color.as_rgba();
     [
@@ -36558,128 +36381,3 @@ text/plain=writer.desktop;\n",
         );
     }
 }
-
-const QUAD_SHADER: &str = r#"
-struct VertexIn {
-    @location(0) position: vec2<f32>,
-    @location(1) color: vec4<f32>,
-};
-
-struct VertexOut {
-    @builtin(position) position: vec4<f32>,
-    @location(0) color: vec4<f32>,
-};
-
-@vertex
-fn vs_main(input: VertexIn) -> VertexOut {
-    var out: VertexOut;
-    out.position = vec4<f32>(input.position, 0.0, 1.0);
-    out.color = input.color;
-    return out;
-}
-
-@fragment
-fn fs_main(input: VertexOut) -> @location(0) vec4<f32> {
-    return input.color;
-}
-"#;
-
-const TEXTURE_SHADER: &str = r#"
-@group(0) @binding(0)
-var text_atlas: texture_2d<f32>;
-
-@group(0) @binding(1)
-var text_sampler: sampler;
-
-struct VertexIn {
-    @location(0) position: vec2<f32>,
-    @location(1) uv: vec2<f32>,
-};
-
-struct VertexOut {
-    @builtin(position) position: vec4<f32>,
-    @location(0) uv: vec2<f32>,
-};
-
-@vertex
-fn vs_main(input: VertexIn) -> VertexOut {
-    var out: VertexOut;
-    out.position = vec4<f32>(input.position, 0.0, 1.0);
-    out.uv = input.uv;
-    return out;
-}
-
-@fragment
-fn fs_main(input: VertexOut) -> @location(0) vec4<f32> {
-    return textureSample(text_atlas, text_sampler, input.uv);
-}
-"#;
-
-const RETAINED_SCENE_SHADER: &str = r#"
-@group(0) @binding(0)
-var retained_scene: texture_2d<f32>;
-
-@group(0) @binding(1)
-var retained_sampler: sampler;
-
-struct VertexIn {
-    @location(0) position: vec2<f32>,
-    @location(1) uv: vec2<f32>,
-    @location(2) color: vec4<f32>,
-};
-
-struct VertexOut {
-    @builtin(position) position: vec4<f32>,
-    @location(0) uv: vec2<f32>,
-    @location(1) color: vec4<f32>,
-};
-
-@vertex
-fn vs_main(input: VertexIn) -> VertexOut {
-    var out: VertexOut;
-    out.position = vec4<f32>(input.position, 0.0, 1.0);
-    out.uv = input.uv;
-    out.color = input.color;
-    return out;
-}
-
-@fragment
-fn fs_main(input: VertexOut) -> @location(0) vec4<f32> {
-    return textureSample(retained_scene, retained_sampler, input.uv) * input.color;
-}
-"#;
-
-const TEXT_SHADER: &str = r#"
-@group(0) @binding(0)
-var text_atlas: texture_2d<f32>;
-
-@group(0) @binding(1)
-var text_sampler: sampler;
-
-struct VertexIn {
-    @location(0) position: vec2<f32>,
-    @location(1) uv: vec2<f32>,
-    @location(2) color: vec4<f32>,
-};
-
-struct VertexOut {
-    @builtin(position) position: vec4<f32>,
-    @location(0) uv: vec2<f32>,
-    @location(1) color: vec4<f32>,
-};
-
-@vertex
-fn vs_main(input: VertexIn) -> VertexOut {
-    var out: VertexOut;
-    out.position = vec4<f32>(input.position, 0.0, 1.0);
-    out.uv = input.uv;
-    out.color = input.color;
-    return out;
-}
-
-@fragment
-fn fs_main(input: VertexOut) -> @location(0) vec4<f32> {
-    let mask = textureSample(text_atlas, text_sampler, input.uv).r;
-    return vec4<f32>(input.color.rgb, input.color.a * mask);
-}
-"#;
