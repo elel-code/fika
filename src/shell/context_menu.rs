@@ -9,6 +9,9 @@ use crate::shell::create_rename::CreateEntryKind;
 use crate::shell::options::ShellViewMode;
 use crate::shell::pane::ShellPaneId;
 
+#[path = "context_menu/paint.rs"]
+pub(crate) mod paint;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ShellDevicePlace {
     pub(crate) id: String,
