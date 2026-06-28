@@ -10,6 +10,8 @@ use crate::shell::pane::ShellPaneProjection;
 pub(crate) mod item_paint;
 #[path = "dolphin/style.rs"]
 pub(crate) mod style;
+#[path = "dolphin/text.rs"]
+pub(crate) mod text;
 
 pub(crate) fn dolphin_icon_size_for_zoom_level(level: i32) -> f32 {
     match level.clamp(DOLPHIN_ZOOM_LEVEL_MIN, DOLPHIN_ZOOM_LEVEL_MAX) {

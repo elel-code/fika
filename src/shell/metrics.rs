@@ -139,3 +139,11 @@ pub(crate) const WGPU_SHELL_PANE_ID: PaneId = PaneId(1);
 pub(crate) fn scaled_dialog_metric(value: f32, scale_factor: f32) -> f32 {
     (value * scale_factor.max(1.0)).round().max(1.0)
 }
+
+pub(crate) fn normalized_scale_factor(scale_factor: f32) -> f32 {
+    if scale_factor.is_finite() {
+        scale_factor.clamp(0.5, 4.0)
+    } else {
+        1.0
+    }
+}
