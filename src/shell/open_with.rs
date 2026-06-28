@@ -9,6 +9,8 @@ use crate::shell::shortcuts::OpenWithCommand;
 
 #[path = "open_with/geometry.rs"]
 pub(crate) mod geometry;
+#[path = "open_with/paint.rs"]
+pub(crate) mod paint;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ShellOpenWithChooser {
