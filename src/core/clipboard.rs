@@ -1,6 +1,7 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use super::network::{network_uri_from_path, normalize_network_uri};
+use super::network::normalize_network_uri;
+use super::uri::{file_uri_to_path, path_uri_from_path};
 
 const FIKA_CUT_MARKER: &str = "# fika-cut";
 const GNOME_COPY_MARKER: &str = "copy";
@@ -34,7 +35,7 @@ pub fn encode_file_clipboard_text(role: FileClipboardRole, paths: &[PathBuf]) ->
     if role == FileClipboardRole::Cut {
         lines.push(FIKA_CUT_MARKER.to_string());
     }
-    lines.extend(paths.iter().map(|path| path_to_file_uri(path)));
+    lines.extend(paths.iter().map(|path| path_uri_from_path(path)));
     lines.join("\n")
 }
 
@@ -80,71 +81,13 @@ pub fn decode_file_clipboard_text(text: &str) -> Option<FileClipboardPayload> {
 }
 
 fn parse_clipboard_path_line(line: &str) -> Option<PathBuf> {
-    if let Some(rest) = line.strip_prefix("file://") {
-        return percent_decode_file_uri_path(rest).map(PathBuf::from);
+    if line.starts_with("file://") {
+        return file_uri_to_path(line);
     }
     if let Ok(uri) = normalize_network_uri(line) {
         return Some(PathBuf::from(uri));
     }
     line.starts_with('/').then(|| PathBuf::from(line))
-}
-
-fn path_to_file_uri(path: &Path) -> String {
-    if let Some(uri) = network_uri_from_path(path) {
-        return uri;
-    }
-    let raw = path.to_string_lossy();
-    let mut uri = String::with_capacity(raw.len() + "file://".len());
-    uri.push_str("file://");
-    for byte in raw.as_bytes() {
-        if file_uri_byte_is_unreserved(*byte) || *byte == b'/' {
-            uri.push(*byte as char);
-        } else {
-            uri.push('%');
-            uri.push(hex_digit(byte >> 4));
-            uri.push(hex_digit(byte & 0x0f));
-        }
-    }
-    uri
-}
-
-fn percent_decode_file_uri_path(text: &str) -> Option<String> {
-    let mut bytes = Vec::with_capacity(text.len());
-    let mut index = 0;
-    let text = text.as_bytes();
-    while index < text.len() {
-        if text[index] == b'%' {
-            let high = hex_value(*text.get(index + 1)?)?;
-            let low = hex_value(*text.get(index + 2)?)?;
-            bytes.push((high << 4) | low);
-            index += 3;
-        } else {
-            bytes.push(text[index]);
-            index += 1;
-        }
-    }
-    String::from_utf8(bytes).ok()
-}
-
-fn file_uri_byte_is_unreserved(byte: u8) -> bool {
-    byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~')
-}
-
-fn hex_digit(value: u8) -> char {
-    match value {
-        0..=9 => (b'0' + value) as char,
-        10..=15 => (b'A' + (value - 10)) as char,
-        _ => unreachable!("hex digit nibble is always 0..=15"),
-    }
-}
-
-fn hex_value(byte: u8) -> Option<u8> {
-    match byte {
-        b'0'..=b'9' => Some(byte - b'0'),
-        b'a'..=b'f' => Some(byte - b'a' + 10),
-        b'A'..=b'F' => Some(byte - b'A' + 10),
-        _ => None,
-    }
 }
 
 #[cfg(test)]

@@ -23,4 +23,5 @@ pub mod privilege;
 pub mod settings;
 pub mod thumbnails;
 pub mod trash_monitor;
+pub mod uri;
 pub mod view;

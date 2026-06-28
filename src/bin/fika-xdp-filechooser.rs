@@ -1192,35 +1192,8 @@ fn selected_choices_for_options(
     )
 }
 
-fn path_to_file_uri(path: &Path) -> String {
-    let text = path.to_string_lossy();
-    let mut uri = String::from("file://");
-    for byte in text.as_bytes() {
-        if is_uri_path_byte(*byte) {
-            uri.push(*byte as char);
-        } else {
-            uri.push('%');
-            uri.push(hex(byte >> 4));
-            uri.push(hex(byte & 0x0f));
-        }
-    }
-    uri
-}
-
 fn path_to_portal_uri(path: &Path) -> String {
-    fika_core::network_uri_from_path(path).unwrap_or_else(|| path_to_file_uri(path))
-}
-
-fn is_uri_path_byte(byte: u8) -> bool {
-    byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'-' | b'.' | b'_' | b'~')
-}
-
-fn hex(value: u8) -> char {
-    match value {
-        0..=9 => (b'0' + value) as char,
-        10..=15 => (b'A' + value - 10) as char,
-        _ => unreachable!(),
-    }
+    fika_core::path_uri_from_path(path)
 }
 
 fn print_help() {
@@ -1237,7 +1210,7 @@ mod tests {
 
     #[test]
     fn file_uri_percent_encodes_non_ascii_and_spaces() {
-        let uri = path_to_file_uri(Path::new("/tmp/Fika Test/数值.txt"));
+        let uri = fika_core::file_uri_from_path(Path::new("/tmp/Fika Test/数值.txt"));
         assert_eq!(uri, "file:///tmp/Fika%20Test/%E6%95%B0%E5%80%BC.txt");
     }
 
@@ -1254,7 +1227,7 @@ mod tests {
         std::os::unix::fs::symlink(&target, &link).unwrap();
 
         assert_eq!(
-            path_to_file_uri(&link),
+            fika_core::file_uri_from_path(&link),
             format!("file://{}", link.to_string_lossy())
         );
 

@@ -3,7 +3,8 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use super::network::{network_uri_from_path, normalize_network_uri};
+use super::network::normalize_network_uri;
+use super::uri::{file_uri_to_path, path_uri_from_path};
 
 const FIKA_DATA_DIR_NAME: &str = "fika";
 const USER_PLACES_FILE_NAME: &str = "places.xbel";
@@ -241,51 +242,12 @@ fn xml_element_text(body: &str, name: &str) -> Option<String> {
     Some(body[start..end].to_string())
 }
 
-fn path_to_file_uri(path: &Path) -> String {
-    let raw = path.to_string_lossy();
-    let mut uri = String::with_capacity(raw.len() + "file://".len());
-    uri.push_str("file://");
-    for byte in raw.as_bytes() {
-        if byte.is_ascii_alphanumeric() || matches!(*byte, b'/' | b'-' | b'.' | b'_' | b'~') {
-            uri.push(*byte as char);
-        } else {
-            uri.push('%');
-            uri.push(hex_digit(byte >> 4));
-            uri.push(hex_digit(byte & 0x0f));
-        }
-    }
-    uri
-}
-
-fn file_uri_to_path(uri: &str) -> Option<PathBuf> {
-    let path = uri.strip_prefix("file://")?;
-    percent_decode(path).map(PathBuf::from)
-}
-
 fn place_href_to_path(uri: &str) -> Option<PathBuf> {
     file_uri_to_path(uri).or_else(|| normalize_network_uri(uri).ok().map(PathBuf::from))
 }
 
 fn path_to_place_href(path: &Path) -> String {
-    network_uri_from_path(path).unwrap_or_else(|| path_to_file_uri(path))
-}
-
-fn percent_decode(text: &str) -> Option<String> {
-    let bytes = text.as_bytes();
-    let mut decoded = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] == b'%' {
-            let high = hex_value(*bytes.get(index + 1)?)?;
-            let low = hex_value(*bytes.get(index + 2)?)?;
-            decoded.push((high << 4) | low);
-            index += 3;
-        } else {
-            decoded.push(bytes[index]);
-            index += 1;
-        }
-    }
-    String::from_utf8(decoded).ok()
+    path_uri_from_path(path)
 }
 
 fn escape_xml_attr(text: &str) -> String {
@@ -327,23 +289,6 @@ fn decode_xml_text(text: &str) -> Result<String, String> {
     }
     decoded.push_str(rest);
     Ok(decoded)
-}
-
-fn hex_digit(value: u8) -> char {
-    match value {
-        0..=9 => (b'0' + value) as char,
-        10..=15 => (b'A' + (value - 10)) as char,
-        _ => unreachable!("hex digit nibble is always 0..=15"),
-    }
-}
-
-fn hex_value(byte: u8) -> Option<u8> {
-    match byte {
-        b'0'..=b'9' => Some(byte - b'0'),
-        b'a'..=b'f' => Some(byte - b'a' + 10),
-        b'A'..=b'F' => Some(byte - b'A' + 10),
-        _ => None,
-    }
 }
 
 #[cfg(test)]

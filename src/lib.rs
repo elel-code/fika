@@ -123,6 +123,7 @@ pub use core::thumbnails::{
     thumbnail_uri_for_path, write_thumbnail_metadata,
 };
 pub use core::trash_monitor::TrashEmptinessMonitor;
+pub use core::uri::{file_uri_from_path, file_uri_to_path, path_uri_from_path};
 pub use core::view::{
     CompactColumnMetrics, CompactLayout, CompactLayoutOptions, IconsLayout, IconsLayoutOptions,
     ItemLayout, RangeSelection, ViewPoint, ViewRect, ViewSize,

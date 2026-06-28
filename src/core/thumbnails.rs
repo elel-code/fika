@@ -2,6 +2,7 @@ use super::{
     entries::ItemId,
     pane::{Generation, PaneId},
     pe_icon::windows_executable_icon_png,
+    uri::file_uri_from_path,
 };
 use std::collections::{HashMap, VecDeque};
 use std::env;
@@ -12,9 +13,6 @@ use std::path::{Path, PathBuf};
 use std::process::{self, Command, ExitStatus, Stdio};
 use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
-
-#[cfg(unix)]
-use std::os::unix::ffi::OsStrExt;
 
 pub mod scheduler;
 
@@ -491,11 +489,7 @@ pub fn thumbnail_cache_root(cache_home: &Path) -> PathBuf {
 }
 
 pub fn thumbnail_uri_for_path(path: &Path) -> Option<String> {
-    path.is_absolute().then(|| {
-        let mut uri = String::from("file://");
-        uri.push_str(&percent_encode_path(path));
-        uri
-    })
+    path.is_absolute().then(|| file_uri_from_path(path))
 }
 
 pub fn thumbnail_cache_key(uri: &str) -> String {
@@ -1153,36 +1147,6 @@ fn default_cache_home() -> PathBuf {
         .map(PathBuf::from)
         .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache")))
         .unwrap_or_else(|| PathBuf::from(".cache"))
-}
-
-fn percent_encode_path(path: &Path) -> String {
-    let bytes = path_bytes(path);
-    let mut encoded = String::new();
-    for byte in bytes {
-        if uri_path_byte_is_unreserved(byte) || byte == b'/' {
-            encoded.push(byte as char);
-        } else {
-            const HEX: &[u8; 16] = b"0123456789ABCDEF";
-            encoded.push('%');
-            encoded.push(HEX[(byte >> 4) as usize] as char);
-            encoded.push(HEX[(byte & 0x0f) as usize] as char);
-        }
-    }
-    encoded
-}
-
-#[cfg(unix)]
-fn path_bytes(path: &Path) -> Vec<u8> {
-    path.as_os_str().as_bytes().to_vec()
-}
-
-#[cfg(not(unix))]
-fn path_bytes(path: &Path) -> Vec<u8> {
-    path.to_string_lossy().as_bytes().to_vec()
-}
-
-fn uri_path_byte_is_unreserved(byte: u8) -> bool {
-    byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~')
 }
 
 fn thumbnail_metadata_from_bytes(bytes: &[u8]) -> io::Result<ThumbnailMetadata> {

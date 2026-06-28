@@ -1,7 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use fika_core::{DesktopLaunchPlan, MimeApplicationCache, MimeDatabase, network_uri_from_path};
-use gio::prelude::FileExt;
+use fika_core::{DesktopLaunchPlan, MimeApplicationCache, MimeDatabase, path_uri_from_path};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct OpenFileRequest {
@@ -28,7 +27,7 @@ pub(crate) struct OpenFileLaunchRequest {
 }
 
 pub(crate) fn launch_uri_for_path(path: &Path) -> String {
-    network_uri_from_path(path).unwrap_or_else(|| gio::File::for_path(path).uri().to_string())
+    path_uri_from_path(path)
 }
 
 pub(crate) fn default_open_file_launch_request(
@@ -93,6 +92,14 @@ mod tests {
             mime_types: mime_types.iter().map(|mime| mime.to_string()).collect(),
             actions: Vec::new(),
         }
+    }
+
+    #[test]
+    fn launch_uri_for_path_percent_encodes_local_file_without_gio() {
+        assert_eq!(
+            launch_uri_for_path(Path::new("/tmp/Fika Test/value#1.txt")),
+            "file:///tmp/Fika%20Test/value%231.txt"
+        );
     }
 
     #[test]
