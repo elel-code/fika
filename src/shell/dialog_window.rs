@@ -2,9 +2,13 @@ use winit::cursor::{Cursor as WinitCursor, CursorIcon};
 use winit::dpi::PhysicalSize;
 use winit::event::{Modifiers, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
-use winit::window::{Theme, Window, WindowAttributes, WindowId};
+use winit::window::{Theme, UserAttentionType, Window, WindowAttributes, WindowId};
 
 use crate::WgpuState;
+use crate::shell::window_semantics::{
+    ShellDialogWindowRole, ShellWaylandDialogParentStatus, ShellWindowRole,
+    apply_window_platform_semantics, wayland_dialog_parent_status,
+};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum ShellDialogWindowKind {
@@ -19,6 +23,14 @@ impl ShellDialogWindowKind {
             Self::Create => "create",
             Self::OpenWith => "open-with",
             Self::Rename => "rename",
+        }
+    }
+
+    fn window_role(self) -> ShellDialogWindowRole {
+        match self {
+            Self::Create => ShellDialogWindowRole::Create,
+            Self::OpenWith => ShellDialogWindowRole::OpenWith,
+            Self::Rename => ShellDialogWindowRole::Rename,
         }
     }
 }
@@ -45,7 +57,11 @@ impl ShellDialogWindowSpec {
         }
     }
 
-    fn window_attributes(&self) -> WindowAttributes {
+    fn window_attributes(
+        &self,
+        event_loop: &dyn ActiveEventLoop,
+        kind: ShellDialogWindowKind,
+    ) -> WindowAttributes {
         let mut attrs = WindowAttributes::default()
             .with_title(self.title.clone())
             .with_surface_size(self.surface_size)
@@ -57,7 +73,11 @@ impl ShellDialogWindowSpec {
         if let Some(max_surface_size) = self.max_surface_size {
             attrs = attrs.with_max_surface_size(max_surface_size);
         }
-        attrs
+        apply_window_platform_semantics(
+            event_loop,
+            attrs,
+            ShellWindowRole::Dialog(kind.window_role()),
+        )
     }
 }
 
@@ -71,12 +91,14 @@ pub(crate) struct ShellDetachedDialogWindow {
 impl ShellDetachedDialogWindow {
     pub(crate) fn create(
         event_loop: &dyn ActiveEventLoop,
+        parent: Option<&dyn Window>,
         kind: ShellDialogWindowKind,
         spec: &ShellDialogWindowSpec,
     ) -> Result<Self, String> {
         let window = event_loop
-            .create_window(spec.window_attributes())
+            .create_window(spec.window_attributes(event_loop, kind))
             .map_err(|error| format!("{} dialog window create failed: {error}", kind.as_str()))?;
+        log_dialog_parent_status(event_loop, parent, window.as_ref(), kind);
         let renderer = WgpuState::new(window.as_ref())
             .map_err(|error| format!("{} dialog renderer init failed: {error}", kind.as_str()))?;
         Ok(Self {
@@ -133,8 +155,36 @@ impl ShellDetachedDialogWindow {
         self.window.set_cursor(WinitCursor::Icon(cursor_icon));
     }
 
+    pub(crate) fn request_attention(&self) {
+        self.window
+            .request_user_attention(Some(UserAttentionType::Informational));
+    }
+
     pub(crate) fn renderer_and_window_mut(&mut self) -> (&mut WgpuState, &dyn Window) {
         (&mut self.renderer, self.window.as_ref())
+    }
+}
+
+fn log_dialog_parent_status(
+    event_loop: &dyn ActiveEventLoop,
+    parent: Option<&dyn Window>,
+    dialog: &dyn Window,
+    kind: ShellDialogWindowKind,
+) {
+    match wayland_dialog_parent_status(event_loop, parent, dialog) {
+        ShellWaylandDialogParentStatus::NotWayland => {}
+        ShellWaylandDialogParentStatus::MissingToplevel => {
+            fika_log!(
+                "[fika-wgpu] wayland-dialog-parent-unavailable kind={} reason=missing-xdg-toplevel",
+                kind.as_str()
+            );
+        }
+        ShellWaylandDialogParentStatus::WinitParentApiUnavailable => {
+            fika_log!(
+                "[fika-wgpu] wayland-dialog-parent-unavailable kind={} reason=winit-set-parent-api-unavailable",
+                kind.as_str()
+            );
+        }
     }
 }
 
@@ -157,6 +207,25 @@ pub(crate) struct ShellDialogWindows {
 }
 
 impl ShellDialogWindows {
+    pub(crate) fn has_modal_window(&self) -> bool {
+        self.create.is_some() || self.open_with.is_some() || self.rename.is_some()
+    }
+
+    pub(crate) fn request_modal_attention(&self) -> bool {
+        [
+            self.open_with.as_ref(),
+            self.rename.as_ref(),
+            self.create.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        .next()
+        .is_some_and(|window| {
+            window.request_attention();
+            true
+        })
+    }
+
     pub(crate) fn is_open(&self, kind: ShellDialogWindowKind) -> bool {
         self.get(kind).is_some()
     }

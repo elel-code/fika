@@ -300,6 +300,7 @@ use shell::transfer::{
     transfer_paths_with_privilege, transfer_runtime_failure,
 };
 use shell::trash_conflict::{ShellTrashConflictDialog, TrashConflictDialogClick};
+use shell::window_semantics::{ShellWindowRole, apply_window_platform_semantics};
 
 fn startup_view_mode(
     requested: ShellViewMode,
@@ -591,13 +592,15 @@ impl FikaWgpuApp {
             dialog.sync(spec);
             return true;
         }
-        let dialog = match ShellDetachedDialogWindow::create(event_loop, kind, spec) {
-            Ok(dialog) => dialog,
-            Err(error) => {
-                fika_log!("[fika-wgpu] {error}");
-                return false;
-            }
-        };
+        let dialog =
+            match ShellDetachedDialogWindow::create(event_loop, self.window.as_deref(), kind, spec)
+            {
+                Ok(dialog) => dialog,
+                Err(error) => {
+                    fika_log!("[fika-wgpu] {error}");
+                    return false;
+                }
+            };
         self.dialog_windows.set(kind, dialog);
         self.sync_dialog_window(kind, spec);
         true
@@ -1493,6 +1496,7 @@ impl ApplicationHandler for FikaWgpuApp {
         let attrs = WindowAttributes::default()
             .with_title(window_title(&self.scene))
             .with_surface_size(PhysicalSize::new(1100, 720));
+        let attrs = apply_window_platform_semantics(event_loop, attrs, ShellWindowRole::Main);
 
         let window = match event_loop.create_window(attrs) {
             Ok(window) => window,
@@ -1653,6 +1657,14 @@ impl ApplicationHandler for FikaWgpuApp {
             .as_ref()
             .is_some_and(|window| window.id() != window_id)
         {
+            return;
+        }
+        if self.dialog_windows.has_modal_window()
+            && main_window_event_blocked_by_modal_dialog(&event)
+        {
+            if main_window_event_requests_modal_attention(&event) {
+                self.dialog_windows.request_modal_attention();
+            }
             return;
         }
         match event {
@@ -1843,6 +1855,45 @@ fn scroll_delta_y(delta: MouseScrollDelta, scale_factor: f32) -> f32 {
     match delta {
         MouseScrollDelta::LineDelta(_, y) => -y * SCROLL_LINE_PX * scale_factor,
         MouseScrollDelta::PixelDelta(position) => -position.y as f32,
+    }
+}
+
+fn main_window_event_blocked_by_modal_dialog(event: &WindowEvent) -> bool {
+    matches!(
+        event,
+        WindowEvent::DragEntered { .. }
+            | WindowEvent::DragMoved { .. }
+            | WindowEvent::DragDropped { .. }
+            | WindowEvent::DragLeft { .. }
+            | WindowEvent::KeyboardInput { .. }
+            | WindowEvent::Ime(_)
+            | WindowEvent::PointerMoved { .. }
+            | WindowEvent::PointerEntered { .. }
+            | WindowEvent::PointerLeft { .. }
+            | WindowEvent::MouseWheel { .. }
+            | WindowEvent::PointerButton { .. }
+            | WindowEvent::HoldGesture { .. }
+            | WindowEvent::PinchGesture { .. }
+            | WindowEvent::PanGesture { .. }
+            | WindowEvent::DoubleTapGesture { .. }
+            | WindowEvent::RotationGesture { .. }
+            | WindowEvent::TouchpadPressure { .. }
+    )
+}
+
+fn main_window_event_requests_modal_attention(event: &WindowEvent) -> bool {
+    match event {
+        WindowEvent::DragDropped { .. } => true,
+        WindowEvent::KeyboardInput {
+            event,
+            is_synthetic: false,
+            ..
+        } => event.state == ElementState::Pressed,
+        WindowEvent::PointerButton {
+            state: ElementState::Pressed,
+            ..
+        } => true,
+        _ => false,
     }
 }
 

@@ -35,3 +35,4 @@ pub(crate) mod shortcuts;
 pub(crate) mod tasks;
 pub(crate) mod transfer;
 pub(crate) mod trash_conflict;
+pub(crate) mod window_semantics;

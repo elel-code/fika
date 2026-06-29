@@ -27,6 +27,19 @@ dialog、render damage 和异步操作持续演进提供稳定边界。
   active、deadline、dirty、prune 接口。
 - Dialog window 通用事件：
   common close / resize / scale / modifiers 路径已从具体 dialog handler 中抽出。
+- Window platform semantics 边界：
+  `src/shell/window_semantics.rs` 集中设置主窗口和 detached dialog 的 Wayland app-id /
+  instance，并记录 dialog parent/transient 语义的当前状态；主窗口在 detached dialog
+  打开时会拦截键鼠、IME、拖拽和手势输入，保留 close / resize / redraw 等生命周期
+  事件，以接近 modal dialog 行为。
+- Wayland dialog parent 限制：
+  当前 winit git 版本只公开 `xdg_toplevel()` 指针和 `WindowAttributesWayland::with_name`，
+  没有公开受 winit 管理的 Wayland connection/queue，也没有安全的
+  `xdg_toplevel.set_parent` 包装；不能通过新建 `wayland_client::Connection` 去操作
+  winit 已创建的 proxy。`wayland-client` 虽可 unsafe 包装 raw `wl_display`，但会绕过
+  winit 的事件队列和生命周期所有权，当前不作为主线实现。真正的 transient parent 需要
+  等待 winit API、维护本地 winit 扩展，或把 dialog host 下沉到
+  smithay-client-toolkit / wayland-client 层。
 - Render dirty / damage 三层拆分：
   `src/shell/render/dirty_key.rs` 负责 dirty key，`damage_snapshot.rs` 负责采样
   render 可见状态，`damage_bounds.rs` 负责比较 snapshot 并生成 damage bounds；
@@ -121,6 +134,9 @@ dialog、render damage 和异步操作持续演进提供稳定边界。
   使用同一种 route/effect 边界。
 - 将更多 effect 从“立即 apply outcome”推进为“返回 outcome/request，由上层合并后
   apply”，便于 async completion、动画 timeline 和 render damage 共享同一套调度语义。
+- Detached dialog 的 Wayland transient parent：在 winit 暴露同 connection 的
+  `xdg_toplevel.set_parent` 或切换到可控 Wayland dialog host 后，把
+  `window_semantics.rs` 中的 parent status 替换为实际绑定。
 
 完成标准：
 - `ApplicationHandler::window_event` 中的业务分支减少。
