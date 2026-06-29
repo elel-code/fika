@@ -3,6 +3,7 @@ use std::time::Instant;
 use fika_core::{ViewRect, ViewSize};
 use winit::dpi::PhysicalSize;
 
+use crate::shell::pane::ShellPaneProjection;
 use crate::shell::prewarm::icon_raster_miss_budget_for_frame;
 use crate::shell::render::gpu::VertexBufferUploadStats;
 use crate::shell::render::quad::{QuadRenderer, QuadVertex};
@@ -107,7 +108,9 @@ pub(crate) fn prepare_scene_frame(
     icon_renderer: &mut IconRenderer,
     device: &wgpu::Device,
     queue: &wgpu::Queue,
-    scene: &mut ShellScene,
+    scene: &ShellScene,
+    projections: &[ShellPaneProjection<'_>],
+    projection_layout_us: u128,
     size: PhysicalSize<u32>,
     reason: &str,
 ) -> SceneFrame {
@@ -157,6 +160,8 @@ pub(crate) fn prepare_scene_frame(
             );
             let scene_frame = scene.build_frame(
                 size,
+                projections,
+                projection_layout_us,
                 &mut text_builder,
                 &mut icon_builder,
                 Some(&mut overlay_text_builder),
@@ -213,7 +218,14 @@ pub(crate) fn prepare_scene_frame(
                 scene.folder_preview_roles.borrow().ready_len(),
                 scene.folder_preview_roles.borrow().ready_bytes(),
             );
-            let scene_frame = scene.build_frame(size, &mut text_builder, &mut icon_builder, None);
+            let scene_frame = scene.build_frame(
+                size,
+                projections,
+                projection_layout_us,
+                &mut text_builder,
+                &mut icon_builder,
+                None,
+            );
             let text_frame = text_builder.finish();
             let icon_frame = icon_builder.finish();
             (scene_frame, text_frame, icon_frame)

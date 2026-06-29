@@ -184,6 +184,16 @@ dialog、render damage 和异步操作持续演进提供稳定边界。
   deferred work，主窗口 render 只消费 `SceneFrameWorkPending::any()` 来决定是否继续
   redraw；后续 visible-priority role、thumbnail read-ahead 和动画 dirty 可以共享同一个
   frame-pending 判定入口。
+- Dirty key / damage projection reuse：
+  `ShellRenderDirtyKey` 增加 `*_with_projections` 入口，主窗口 render 和 damage snapshot
+  复用本帧已经计算好的 `ShellPaneProjection`，不再为了 details 可见项 hash 和 folder
+  preview dirty hash 反复走 layout/projection；旧的 scene lookup 入口只保留给测试和局部
+  helper。
+- SceneFrame projection reuse：
+  主窗口 render / prewarm 先用一次 layout 生成 prepared projection layouts，visible slot
+  pool 直接消费其中的可见路径，随后 dirty key、damage snapshot、metadata/icon/text prewarm
+  和 `ShellScene::build_frame` 共享同一组 frame projections；`build_frame` 降为只读 scene +
+  supplied projections，不再在 paint 准备阶段再次计算布局。
 - Action Outcome / Presentation 调度边界：
   `src/app_actions/outcome.rs` 统一承载 action 执行后的 `None`、`Redraw`、`Queue`、
   `Present` 结果；除 `outcome.rs` 外的 `src/app_actions/*` 不再直接调用主窗口

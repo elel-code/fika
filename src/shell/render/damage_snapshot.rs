@@ -129,11 +129,23 @@ impl ShellRenderDamageSnapshot {
         });
         Self {
             dirty_key,
-            hoverless_dirty_key: ShellRenderDirtyKey::from_scene_ignoring_hover(scene, size),
+            hoverless_dirty_key: ShellRenderDirtyKey::from_scene_ignoring_hover_with_projections(
+                scene,
+                size,
+                projections,
+            ),
             folder_previewless_dirty_key:
-                ShellRenderDirtyKey::from_scene_ignoring_folder_preview_roles(scene, size),
+                ShellRenderDirtyKey::from_scene_ignoring_folder_preview_roles_with_projections(
+                    scene,
+                    size,
+                    projections,
+                ),
             hoverless_folder_previewless_dirty_key:
-                ShellRenderDirtyKey::from_scene_ignoring_hover_and_folder_preview_roles(scene, size),
+                ShellRenderDirtyKey::from_scene_ignoring_hover_and_folder_preview_roles_with_projections(
+                    scene,
+                    size,
+                    projections,
+                ),
             hovered_item: scene.hovered_item,
             hovered_place: scene.hovered_place,
             dnd_hover_target: scene.dnd_hover_target.clone(),

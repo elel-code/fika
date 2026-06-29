@@ -272,7 +272,7 @@ use shell::options::{ShellViewMode, parse_start_options};
 use shell::pane::{
     ShellPaneGeometry, ShellPaneId, ShellPaneProjection, ShellPaneScrollMetrics,
     ShellPaneSplitMetrics, ShellPaneState, ShellPaneStates, ShellPaneView, ShellPaneVisibleItem,
-    ShellPaneVisibleSlotPools, ShellVisibleItemSlotPool, ShellVisibleItemSlotStats,
+    ShellPaneVisibleSlotPools, ShellVisibleItemSlotStats,
 };
 use shell::pane_layout::{
     CompactLayoutCache, CompactLayoutCacheKey, CompactLayoutCacheValue, DetailsLayout,
@@ -2525,6 +2525,17 @@ impl ShellExternalDrag {
         let sources = normalized_external_drop_sources(sources);
         (!sources.is_empty()).then_some(Self { sources })
     }
+}
+
+struct ShellPreparedPaneVisibleItem {
+    layout: ItemLayout,
+    path: Option<PathBuf>,
+}
+
+struct ShellPreparedPaneProjection {
+    geometry: ShellPaneGeometry,
+    visible_items: Vec<ShellPreparedPaneVisibleItem>,
+    scroll_metrics: ShellPaneScrollMetrics,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -8460,18 +8471,24 @@ impl ShellScene {
         kind: ShellPaneId,
         size: PhysicalSize<u32>,
     ) -> Option<ShellPaneProjection<'_>> {
-        let view = self.pane_view(kind)?;
-        let geometry = self.pane_geometry(kind, size)?;
-        let slots = self.visible_slots.get(kind);
-        Some(self.pane_projection_from_geometry(view, geometry, slots))
+        let prepared = self.pane_projection_layout(kind, size)?;
+        self.pane_projection_from_prepared(prepared)
     }
 
-    fn pane_projection_from_geometry<'a>(
+    fn pane_projection_layouts(&self, size: PhysicalSize<u32>) -> Vec<ShellPreparedPaneProjection> {
+        ShellPaneId::ALL
+            .into_iter()
+            .filter_map(|kind| self.pane_projection_layout(kind, size))
+            .collect()
+    }
+
+    fn pane_projection_layout(
         &self,
-        view: ShellPaneView<'a>,
-        geometry: ShellPaneGeometry,
-        slots: &ShellVisibleItemSlotPool,
-    ) -> ShellPaneProjection<'a> {
+        kind: ShellPaneId,
+        size: PhysicalSize<u32>,
+    ) -> Option<ShellPreparedPaneProjection> {
+        let view = self.pane_view(kind)?;
+        let geometry = self.pane_geometry(kind, size)?;
         let layout = self.pane_layout_for_pane(
             geometry.kind,
             view,
@@ -8482,62 +8499,91 @@ impl ShellScene {
             .visible_items()
             .into_iter()
             .map(|layout| {
-                let slot_id = view
+                let path = view
                     .filtered_indexes
                     .get(layout.model_index)
-                    .and_then(|entry_index| self.entry_path_for_pane_view(view, *entry_index))
-                    .and_then(|path| slots.slot_for_path(&path))
-                    .unwrap_or_default();
-                ShellPaneVisibleItem { layout, slot_id }
+                    .and_then(|entry_index| self.entry_path_for_pane_view(view, *entry_index));
+                ShellPreparedPaneVisibleItem { layout, path }
             })
             .collect();
         let scroll_metrics = ShellPaneScrollMetrics::new(layout.content_size(), geometry.content);
-        ShellPaneProjection {
-            view,
+        Some(ShellPreparedPaneProjection {
             geometry,
             visible_items,
             scroll_metrics,
-        }
+        })
     }
 
-    fn visible_paths_for_pane_projection(
+    fn pane_projection_from_prepared(
         &self,
-        view: ShellPaneView<'_>,
-        geometry: ShellPaneGeometry,
-    ) -> Vec<PathBuf> {
-        let layout = self.pane_layout_for_pane(
-            geometry.kind,
-            view,
-            geometry.content.width,
-            geometry.content.height,
-        );
-        layout
-            .visible_items()
+        prepared: ShellPreparedPaneProjection,
+    ) -> Option<ShellPaneProjection<'_>> {
+        let view = self.pane_view(prepared.geometry.kind)?;
+        let slots = self.visible_slots.get(prepared.geometry.kind);
+        let visible_items = prepared
+            .visible_items
             .into_iter()
-            .filter_map(|item| {
-                view.filtered_indexes
-                    .get(item.model_index)
-                    .and_then(|entry_index| self.entry_path_for_pane_view(view, *entry_index))
+            .map(|item| {
+                let slot_id = item
+                    .path
+                    .as_deref()
+                    .and_then(|path| slots.slot_for_path(path))
+                    .unwrap_or_default();
+                ShellPaneVisibleItem {
+                    layout: item.layout,
+                    slot_id,
+                }
             })
+            .collect();
+        Some(ShellPaneProjection {
+            view,
+            geometry: prepared.geometry,
+            visible_items,
+            scroll_metrics: prepared.scroll_metrics,
+        })
+    }
+
+    fn pane_projections_from_layouts(
+        &self,
+        layouts: Vec<ShellPreparedPaneProjection>,
+    ) -> Vec<ShellPaneProjection<'_>> {
+        layouts
+            .into_iter()
+            .filter_map(|prepared| self.pane_projection_from_prepared(prepared))
             .collect()
     }
 
-    fn update_visible_slot_pools(&mut self, size: PhysicalSize<u32>) -> ShellVisibleItemSlotStats {
+    fn update_visible_slot_pools_for_projection_layouts(
+        &mut self,
+        layouts: &[ShellPreparedPaneProjection],
+    ) -> ShellVisibleItemSlotStats {
         let mut stats = ShellVisibleItemSlotStats::default();
-        for kind in ShellPaneId::ALL {
-            let pane_stats = if let Some(view) = self.pane_view(kind)
-                && let Some(geometry) = self.pane_geometry(kind, size)
-            {
-                let paths = self.visible_paths_for_pane_projection(view, geometry);
-                self.visible_slots.update_visible_items(kind, paths)
-            } else {
-                self.visible_slots.clear(kind);
-                ShellVisibleItemSlotStats::default()
-            };
+        let mut prepared_panes = [false; 2];
+        for prepared in layouts {
+            let kind = prepared.geometry.kind;
+            prepared_panes[kind.index()] = true;
+            let pane_stats = self.visible_slots.update_visible_items(
+                kind,
+                prepared
+                    .visible_items
+                    .iter()
+                    .filter_map(|item| item.path.clone()),
+            );
             stats = stats.merged(pane_stats);
+        }
+        for kind in ShellPaneId::ALL {
+            if !prepared_panes[kind.index()] {
+                self.visible_slots.clear(kind);
+            }
         }
         self.visible_slot_stats = stats;
         stats
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn update_visible_slot_pools(&mut self, size: PhysicalSize<u32>) -> ShellVisibleItemSlotStats {
+        let layouts = self.pane_projection_layouts(size);
+        self.update_visible_slot_pools_for_projection_layouts(&layouts)
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -8801,22 +8847,19 @@ impl ShellScene {
     }
 
     fn build_frame(
-        &mut self,
+        &self,
         size: PhysicalSize<u32>,
+        projections: &[ShellPaneProjection<'_>],
+        projection_layout_us: u128,
         text: &mut TextFrameBuilder<'_>,
         icons: &mut IconFrameBuilder<'_>,
         overlay_text: Option<&mut TextFrameBuilder<'_>>,
     ) -> SceneFrame {
         let layout_start = Instant::now();
-        self.update_visible_slot_pools(size);
         let mut vertices = Vec::with_capacity(64);
         let mut overlay_vertices = Vec::with_capacity(32);
         let width = size.width.max(1) as f32;
         let height = size.height.max(1) as f32;
-        let projections = ShellPaneId::ALL
-            .into_iter()
-            .filter_map(|kind| self.pane_projection(kind, size))
-            .collect::<Vec<_>>();
         let slot0_projection = projections
             .iter()
             .find(|projection| projection.geometry.kind == ShellPaneId::SLOT_0)
@@ -8859,7 +8902,7 @@ impl ShellScene {
         }
 
         let mut content_scrollbar_visible = false;
-        for projection in &projections {
+        for projection in projections {
             let scrollbar_visible =
                 self.push_pane_projection(&mut vertices, text, icons, projection, size);
             if projection.geometry.kind == ShellPaneId::SLOT_0 {
@@ -8877,7 +8920,7 @@ impl ShellScene {
         }
 
         SceneFrame {
-            layout_us: layout_start.elapsed().as_micros(),
+            layout_us: projection_layout_us + layout_start.elapsed().as_micros(),
             visible_items,
             thumbnail_candidates,
             folder_preview_candidates,
@@ -12804,57 +12847,44 @@ impl WgpuState {
         let total_start = Instant::now();
         let metadata_result_stats = scene.drain_metadata_role_results();
         let role_start = Instant::now();
-        let (
-            metadata_role_stats,
-            role_stats,
-            folder_preview_results,
-            scene_icon_raster_prewarm_stats,
-            scene_text_prewarm_stats,
-        ) = {
-            let projections = ShellPaneId::ALL
-                .into_iter()
-                .filter_map(|kind| scene.pane_projection(kind, self.size))
-                .collect::<Vec<_>>();
-            let _folder_preview_role_stats =
-                scene.update_folder_preview_roles_for_projections(&projections);
-            let folder_preview_results = scene.drain_folder_preview_role_results();
-            let metadata_stats = scene.prewarm_file_metadata_roles(&projections);
-            for projection in &projections {
-                if let Some(item) = projection.visible_items.first() {
-                    let icon_size = item
-                        .layout
-                        .icon_rect
-                        .width
-                        .max(item.layout.icon_rect.height)
-                        .clamp(16.0, 256.0);
-                    self.icon_renderer
-                        .prewarm_common_file_icon_rasters(icon_size);
-                }
-            }
-            let role_stats = scene.prewarm_visible_file_icon_roles(
-                &projections,
-                &mut self.icon_renderer.resolver,
-                reason,
-            );
-            let icon_raster_stats = if visible_exact_icon_roles_enabled_for_frame(reason) {
+        let projection_layout_start = Instant::now();
+        let projection_layouts = scene.pane_projection_layouts(self.size);
+        scene.update_visible_slot_pools_for_projection_layouts(&projection_layouts);
+        let projections = scene.pane_projections_from_layouts(projection_layouts);
+        let projection_layout_us = projection_layout_start.elapsed().as_micros();
+        let _folder_preview_role_stats =
+            scene.update_folder_preview_roles_for_projections(&projections);
+        let folder_preview_results = scene.drain_folder_preview_role_results();
+        let metadata_role_stats = scene.prewarm_file_metadata_roles(&projections);
+        for projection in &projections {
+            if let Some(item) = projection.visible_items.first() {
+                let icon_size = item
+                    .layout
+                    .icon_rect
+                    .width
+                    .max(item.layout.icon_rect.height)
+                    .clamp(16.0, 256.0);
                 self.icon_renderer
-                    .prewarm_small_directory_file_icon_rasters(&projections)
-            } else {
-                IconRasterPrewarmStats::default()
-            };
-            let text_stats = self.prewarm_text_labels(
-                scene,
-                &projections,
-                text_label_prewarm_mode_for_scene_prewarm(reason),
-            );
-            (
-                metadata_stats,
-                role_stats,
-                folder_preview_results,
-                icon_raster_stats,
-                text_stats,
-            )
+                    .prewarm_common_file_icon_rasters(icon_size);
+            }
+        }
+        let role_stats = scene.prewarm_visible_file_icon_roles(
+            &projections,
+            &mut self.icon_renderer.resolver,
+            reason,
+        );
+        let scene_icon_raster_prewarm_stats = if visible_exact_icon_roles_enabled_for_frame(reason)
+        {
+            self.icon_renderer
+                .prewarm_small_directory_file_icon_rasters(&projections)
+        } else {
+            IconRasterPrewarmStats::default()
         };
+        let scene_text_prewarm_stats = self.prewarm_text_labels(
+            scene,
+            &projections,
+            text_label_prewarm_mode_for_scene_prewarm(reason),
+        );
         self.frame_latency.observe_async_results(
             ShellFrameLatencyAsyncResults {
                 metadata_applied: metadata_result_stats.applied as u64,
@@ -12916,6 +12946,8 @@ impl WgpuState {
             &self.device,
             &self.queue,
             scene,
+            &projections,
+            projection_layout_us,
             self.size,
             reason,
         );
@@ -13134,10 +13166,11 @@ impl WgpuState {
         force_log: bool,
     ) -> ShellRenderOutcome {
         let metadata_result_stats = scene.drain_metadata_role_results();
-        let projections = ShellPaneId::ALL
-            .into_iter()
-            .filter_map(|kind| scene.pane_projection(kind, self.size))
-            .collect::<Vec<_>>();
+        let projection_layout_start = Instant::now();
+        let projection_layouts = scene.pane_projection_layouts(self.size);
+        scene.update_visible_slot_pools_for_projection_layouts(&projection_layouts);
+        let projections = scene.pane_projections_from_layouts(projection_layouts);
+        let projection_layout_us = projection_layout_start.elapsed().as_micros();
         let _folder_preview_role_stats =
             scene.update_folder_preview_roles_for_projections(&projections);
         let folder_preview_results = scene.drain_folder_preview_role_results();
@@ -13152,7 +13185,8 @@ impl WgpuState {
             &projections,
             &folder_preview_results.changes,
         );
-        let dirty_key = ShellRenderDirtyKey::from_scene(scene, self.size);
+        let dirty_key =
+            ShellRenderDirtyKey::from_scene_with_projections(scene, self.size, &projections);
         let scene_read_ahead_pending = !scene.icon_role_read_ahead.borrow().is_empty()
             || scene.folder_preview_roles.borrow().has_pending();
         let non_folder_preview_async_results_changed = metadata_result_stats.applied > 0
@@ -13284,8 +13318,6 @@ impl WgpuState {
                 prewarm_stats.over_budget as u8
             );
         }
-        drop(projections);
-
         let frame_start = Instant::now();
         let surface_acquire_start = Instant::now();
         let view_label = scene.panes[ShellPaneId::SLOT_0].view_mode.as_str();
@@ -13318,9 +13350,12 @@ impl WgpuState {
             &self.device,
             &self.queue,
             scene,
+            &projections,
+            projection_layout_us,
             self.size,
             reason,
         );
+        drop(projections);
         let prepare_us = prepare_start.elapsed().as_micros();
         let work_pending = scene_frame.work_pending(&mut self.icon_renderer, scene);
         if work_pending.any() {
@@ -20922,6 +20957,76 @@ mod tests {
         assert_eq!(next_stats.reused, next_stats.active);
         let next_projection = scene.pane_projection(ShellPaneId::SLOT_0, size).unwrap();
         assert_eq!(next_projection.visible_items[0].slot_id, retained_slot);
+    }
+
+    #[test]
+    fn prepared_pane_projections_match_direct_projection() {
+        let mut scene = test_scene(
+            (0..60)
+                .map(|index| test_entry(&format!("entry-{index:02}.txt"), index % 4 == 0))
+                .collect(),
+            ShellViewMode::Icons,
+        );
+        let size = PhysicalSize::new(700, 320);
+
+        let layouts = scene.pane_projection_layouts(size);
+        scene.update_visible_slot_pools_for_projection_layouts(&layouts);
+        let projections = scene.pane_projections_from_layouts(layouts);
+        let prepared = projections
+            .iter()
+            .find(|projection| projection.geometry.kind == ShellPaneId::SLOT_0)
+            .unwrap();
+        let direct = scene.pane_projection(ShellPaneId::SLOT_0, size).unwrap();
+
+        assert_eq!(prepared.geometry, direct.geometry);
+        assert_eq!(prepared.scroll_metrics, direct.scroll_metrics);
+        assert_eq!(prepared.visible_items, direct.visible_items);
+        assert_eq!(prepared.view.path, direct.view.path);
+        assert_eq!(prepared.view.view_mode, direct.view.view_mode);
+    }
+
+    #[test]
+    fn render_dirty_key_with_projections_matches_scene_lookup() {
+        let scene = test_scene(
+            (0..80)
+                .map(|index| test_entry(&format!("entry-{index:02}.txt"), index % 7 == 0))
+                .collect(),
+            ShellViewMode::Details,
+        );
+        let size = PhysicalSize::new(700, 320);
+        let projections = ShellPaneId::ALL
+            .into_iter()
+            .filter_map(|kind| scene.pane_projection(kind, size))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            ShellRenderDirtyKey::from_scene(&scene, size),
+            ShellRenderDirtyKey::from_scene_with_projections(&scene, size, &projections)
+        );
+        assert_eq!(
+            ShellRenderDirtyKey::from_scene_ignoring_hover(&scene, size),
+            ShellRenderDirtyKey::from_scene_ignoring_hover_with_projections(
+                &scene,
+                size,
+                &projections
+            )
+        );
+        assert_eq!(
+            ShellRenderDirtyKey::from_scene_ignoring_folder_preview_roles(&scene, size),
+            ShellRenderDirtyKey::from_scene_ignoring_folder_preview_roles_with_projections(
+                &scene,
+                size,
+                &projections
+            )
+        );
+        assert_eq!(
+            ShellRenderDirtyKey::from_scene_ignoring_hover_and_folder_preview_roles(&scene, size),
+            ShellRenderDirtyKey::from_scene_ignoring_hover_and_folder_preview_roles_with_projections(
+                &scene,
+                size,
+                &projections
+            )
+        );
     }
 
     #[test]

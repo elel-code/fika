@@ -150,6 +150,30 @@ Dolphin reference:
 - Verification: cargo check；cargo test；git diff --check。
 ```
 
+### Dirty key projection reuse
+
+```text
+Dolphin reference:
+- Source: /home/yk/Code/fika/reference/dolphin/src/kitemviews/kitemlistview.cpp
+- Symbol: KItemListView::doLayout / slotItemsChanged / m_visibleItems
+- Dolphin boundary: item view layout 维护一份 visible widget/item 集合，role 变化、paint 和局部更新复用该可见集合，而不是在每个判断点重新计算可见项。
+- Fika mapping: src/shell/render/dirty_key.rs::ShellRenderDirtyKey::*_with_projections；src/shell/render/damage_snapshot.rs::ShellRenderDamageSnapshot::from_scene；src/main.rs::WgpuState::render。
+- Divergence: Dolphin 的可见集合是长期 `m_visibleItems` widget map；Fika 当前 frame 仍以临时 `ShellPaneProjection` 表达可见项，因此本次先让 dirty key 和 damage snapshot 复用同一 frame projections，避免 details visible hash 和 folder preview dirty hash 重复触发布局。
+- Verification: cargo test render_dirty_key_with_projections_matches_scene_lookup；cargo check；cargo test；git diff --check。
+```
+
+### SceneFrame projection reuse
+
+```text
+Dolphin reference:
+- Source: /home/yk/Code/fika/reference/dolphin/src/kitemviews/kitemlistview.cpp
+- Symbol: KItemListView::doLayout / updateVisibleItems / paint
+- Dolphin boundary: layout 阶段维护的可见 item/widget 集合会被 paint、role update 和局部更新复用；paint 不再为同一帧重新计算可见集合。
+- Fika mapping: src/main.rs::ShellScene::pane_projection_layouts / update_visible_slot_pools_for_projection_layouts / WgpuState::render / prewarm_scene_caches / ShellScene::build_frame；src/shell/render/frame.rs::prepare_scene_frame。
+- Divergence: Dolphin 的可见集合是长期 widget map；Fika 仍使用每帧临时 `ShellPaneProjection`，但现在先用一次 layout 产出 prepared projection layouts，visible slot pool 直接消费这份 layout 的可见路径，随后 dirty key、damage、metadata/icon/text prewarm 和 SceneFrame paint 共用同一组 projections，避免 visible slot 更新和主帧 build 阶段分别重跑 layout/projection。
+- Verification: cargo fmt；cargo check；cargo test prepared_pane_projections_match_direct_projection；cargo test render_dirty_key_with_projections_matches_scene_lookup；cargo test；git diff --check。
+```
+
 ## Review 检查项
 
 - 变更是否包含本地 Dolphin 文件路径和 symbol？
