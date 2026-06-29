@@ -1659,10 +1659,9 @@ impl ApplicationHandler for FikaWgpuApp {
         {
             return;
         }
-        if self.dialog_windows.has_modal_window()
-            && main_window_event_blocked_by_modal_dialog(&event)
-        {
-            if main_window_event_requests_modal_attention(&event) {
+        let modal_disposition = self.dialog_windows.modal_event_disposition(&event);
+        if modal_disposition.blocks() {
+            if modal_disposition.requests_attention() {
                 self.dialog_windows.request_modal_attention();
             }
             return;
@@ -1855,45 +1854,6 @@ fn scroll_delta_y(delta: MouseScrollDelta, scale_factor: f32) -> f32 {
     match delta {
         MouseScrollDelta::LineDelta(_, y) => -y * SCROLL_LINE_PX * scale_factor,
         MouseScrollDelta::PixelDelta(position) => -position.y as f32,
-    }
-}
-
-fn main_window_event_blocked_by_modal_dialog(event: &WindowEvent) -> bool {
-    matches!(
-        event,
-        WindowEvent::DragEntered { .. }
-            | WindowEvent::DragMoved { .. }
-            | WindowEvent::DragDropped { .. }
-            | WindowEvent::DragLeft { .. }
-            | WindowEvent::KeyboardInput { .. }
-            | WindowEvent::Ime(_)
-            | WindowEvent::PointerMoved { .. }
-            | WindowEvent::PointerEntered { .. }
-            | WindowEvent::PointerLeft { .. }
-            | WindowEvent::MouseWheel { .. }
-            | WindowEvent::PointerButton { .. }
-            | WindowEvent::HoldGesture { .. }
-            | WindowEvent::PinchGesture { .. }
-            | WindowEvent::PanGesture { .. }
-            | WindowEvent::DoubleTapGesture { .. }
-            | WindowEvent::RotationGesture { .. }
-            | WindowEvent::TouchpadPressure { .. }
-    )
-}
-
-fn main_window_event_requests_modal_attention(event: &WindowEvent) -> bool {
-    match event {
-        WindowEvent::DragDropped { .. } => true,
-        WindowEvent::KeyboardInput {
-            event,
-            is_synthetic: false,
-            ..
-        } => event.state == ElementState::Pressed,
-        WindowEvent::PointerButton {
-            state: ElementState::Pressed,
-            ..
-        } => true,
-        _ => false,
     }
 }
 

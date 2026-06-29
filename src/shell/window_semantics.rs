@@ -1,3 +1,4 @@
+use winit::event::{ElementState, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
 use winit::window::{Window, WindowAttributes};
 
@@ -89,6 +90,75 @@ pub(crate) fn wayland_dialog_parent_status(
     detect_wayland_dialog_parent_status(event_loop, parent, dialog)
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ShellModalWindowEventDisposition {
+    Pass,
+    Block,
+    BlockAndRequestAttention,
+}
+
+impl ShellModalWindowEventDisposition {
+    pub(crate) fn blocks(self) -> bool {
+        matches!(self, Self::Block | Self::BlockAndRequestAttention)
+    }
+
+    pub(crate) fn requests_attention(self) -> bool {
+        matches!(self, Self::BlockAndRequestAttention)
+    }
+}
+
+pub(crate) fn modal_window_event_disposition(
+    event: &WindowEvent,
+) -> ShellModalWindowEventDisposition {
+    if !main_window_event_blocked_by_modal_dialog(event) {
+        return ShellModalWindowEventDisposition::Pass;
+    }
+    if main_window_event_requests_modal_attention(event) {
+        ShellModalWindowEventDisposition::BlockAndRequestAttention
+    } else {
+        ShellModalWindowEventDisposition::Block
+    }
+}
+
+fn main_window_event_blocked_by_modal_dialog(event: &WindowEvent) -> bool {
+    matches!(
+        event,
+        WindowEvent::DragEntered { .. }
+            | WindowEvent::DragMoved { .. }
+            | WindowEvent::DragDropped { .. }
+            | WindowEvent::DragLeft { .. }
+            | WindowEvent::KeyboardInput { .. }
+            | WindowEvent::Ime(_)
+            | WindowEvent::PointerMoved { .. }
+            | WindowEvent::PointerEntered { .. }
+            | WindowEvent::PointerLeft { .. }
+            | WindowEvent::MouseWheel { .. }
+            | WindowEvent::PointerButton { .. }
+            | WindowEvent::HoldGesture { .. }
+            | WindowEvent::PinchGesture { .. }
+            | WindowEvent::PanGesture { .. }
+            | WindowEvent::DoubleTapGesture { .. }
+            | WindowEvent::RotationGesture { .. }
+            | WindowEvent::TouchpadPressure { .. }
+    )
+}
+
+fn main_window_event_requests_modal_attention(event: &WindowEvent) -> bool {
+    match event {
+        WindowEvent::DragDropped { .. } => true,
+        WindowEvent::KeyboardInput {
+            event,
+            is_synthetic: false,
+            ..
+        } => event.state == ElementState::Pressed,
+        WindowEvent::PointerButton {
+            state: ElementState::Pressed,
+            ..
+        } => true,
+        _ => false,
+    }
+}
+
 #[cfg(target_os = "linux")]
 fn detect_wayland_dialog_parent_status(
     event_loop: &dyn ActiveEventLoop,
@@ -140,5 +210,38 @@ mod tests {
     #[test]
     fn main_window_uses_stable_wayland_instance() {
         assert_eq!(ShellWindowRole::Main.wayland_instance(), "fika-main");
+    }
+
+    #[test]
+    fn modal_event_policy_passes_window_lifecycle_events() {
+        assert_eq!(
+            modal_window_event_disposition(&WindowEvent::CloseRequested),
+            ShellModalWindowEventDisposition::Pass
+        );
+        assert_eq!(
+            modal_window_event_disposition(&WindowEvent::RedrawRequested),
+            ShellModalWindowEventDisposition::Pass
+        );
+    }
+
+    #[test]
+    fn modal_event_policy_blocks_passive_input_without_attention() {
+        assert_eq!(
+            modal_window_event_disposition(&WindowEvent::DragMoved {
+                position: (10.0, 20.0).into(),
+            }),
+            ShellModalWindowEventDisposition::Block
+        );
+    }
+
+    #[test]
+    fn modal_event_policy_requests_attention_for_commit_like_input() {
+        assert_eq!(
+            modal_window_event_disposition(&WindowEvent::DragDropped {
+                paths: vec!["/tmp/file.txt".into()],
+                position: (10.0, 20.0).into(),
+            }),
+            ShellModalWindowEventDisposition::BlockAndRequestAttention
+        );
     }
 }

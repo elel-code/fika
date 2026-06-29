@@ -6,8 +6,9 @@ use winit::window::{Theme, UserAttentionType, Window, WindowAttributes, WindowId
 
 use crate::WgpuState;
 use crate::shell::window_semantics::{
-    ShellDialogWindowRole, ShellWaylandDialogParentStatus, ShellWindowRole,
-    apply_window_platform_semantics, wayland_dialog_parent_status,
+    ShellDialogWindowRole, ShellModalWindowEventDisposition, ShellWaylandDialogParentStatus,
+    ShellWindowRole, apply_window_platform_semantics, modal_window_event_disposition,
+    wayland_dialog_parent_status,
 };
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -209,6 +210,17 @@ pub(crate) struct ShellDialogWindows {
 impl ShellDialogWindows {
     pub(crate) fn has_modal_window(&self) -> bool {
         self.create.is_some() || self.open_with.is_some() || self.rename.is_some()
+    }
+
+    pub(crate) fn modal_event_disposition(
+        &self,
+        event: &WindowEvent,
+    ) -> ShellModalWindowEventDisposition {
+        if self.has_modal_window() {
+            modal_window_event_disposition(event)
+        } else {
+            ShellModalWindowEventDisposition::Pass
+        }
     }
 
     pub(crate) fn request_modal_attention(&self) -> bool {

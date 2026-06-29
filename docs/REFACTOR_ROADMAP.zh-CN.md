@@ -31,7 +31,9 @@ dialog、render damage 和异步操作持续演进提供稳定边界。
   `src/shell/window_semantics.rs` 集中设置主窗口和 detached dialog 的 Wayland app-id /
   instance，并记录 dialog parent/transient 语义的当前状态；主窗口在 detached dialog
   打开时会拦截键鼠、IME、拖拽和手势输入，保留 close / resize / redraw 等生命周期
-  事件，以接近 modal dialog 行为。
+  事件，以接近 modal dialog 行为。modal 输入事件分类已收敛为
+  `ShellModalWindowEventDisposition`，主事件循环只消费 pass / block / attention
+  disposition。
 - Wayland dialog parent 限制：
   当前 winit git 版本只公开 `xdg_toplevel()` 指针和 `WindowAttributesWayland::with_name`，
   没有公开受 winit 管理的 Wayland connection/queue，也没有安全的
@@ -94,6 +96,10 @@ dialog、render damage 和异步操作持续演进提供稳定边界。
   route planner，`pointer.rs` 只负责从 scene 收集 snapshot 并执行 effect；planner 已
   覆盖 modal 优先级、鼠标 back/forward、右键 press/release、左键 toolbar/path-bar/
   menu/selection 以及 release 路径的 focused tests。
+- Pointer move planner 初始抽取：
+  task detail modal 对 pointer move 的输入屏蔽决策进入 `pointer_route.rs`，`pointer.rs`
+  只收集 snapshot 并执行 cursor / hover effect；后续 drag、hover damage、动画 dirty
+  可以继续挂到同一 route/effect 结构。
 - Open With query hit testing 收敛：
   search box 的 pointer hit test 进入 `src/shell/open_with/geometry.rs`，scene 的
   cursor 判断不再直接拼 query rect。

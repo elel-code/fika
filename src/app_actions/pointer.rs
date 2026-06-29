@@ -8,8 +8,9 @@ use winit::event_loop::ActiveEventLoop;
 use super::outcome::ShellActionOutcome;
 use super::pointer_route::{
     MainLeftPointerButtonIntent, MainLeftPointerButtonRoute, MainLeftPointerButtonRouteSnapshot,
-    MainPointerButtonIntent, MainPointerButtonSnapshot, main_left_pointer_button_route,
-    main_pointer_button_intent,
+    MainPointerButtonIntent, MainPointerButtonSnapshot, MainPointerMoveIntent,
+    MainPointerMoveSnapshot, main_left_pointer_button_route, main_pointer_button_intent,
+    main_pointer_move_intent,
 };
 use crate::shell::selection::SelectionClick;
 use crate::shell::tasks::TaskDetailDialogClick;
@@ -24,13 +25,9 @@ impl FikaWgpuApp {
             return;
         };
         let point = view_point_from_physical_position(position);
-        if self.scene.is_task_detail_dialog_open() {
-            self.set_window_cursor(CursorIcon::Default);
-            return;
-        }
-        let changed = self.scene.set_pointer(point, size);
-        self.update_window_cursor_for_scene(size);
-        self.apply_window_action_outcome(ShellActionOutcome::redraw_if(changed));
+        let intent = main_pointer_move_intent(self.main_pointer_move_snapshot());
+        let outcome = self.dispatch_main_pointer_move_intent(intent, point, size);
+        self.apply_window_action_outcome(outcome);
     }
 
     pub(crate) fn handle_main_pointer_left(&mut self) {
@@ -72,6 +69,31 @@ impl FikaWgpuApp {
             trash_conflict_dialog_open: self.scene.is_trash_conflict_dialog_open(),
             task_detail_dialog_open: self.scene.is_task_detail_dialog_open(),
             properties_overlay_open: self.scene.is_properties_overlay_open(),
+        }
+    }
+
+    fn main_pointer_move_snapshot(&self) -> MainPointerMoveSnapshot {
+        MainPointerMoveSnapshot {
+            task_detail_dialog_open: self.scene.is_task_detail_dialog_open(),
+        }
+    }
+
+    fn dispatch_main_pointer_move_intent(
+        &mut self,
+        intent: MainPointerMoveIntent,
+        point: crate::ViewPoint,
+        size: winit::dpi::PhysicalSize<u32>,
+    ) -> ShellActionOutcome {
+        match intent {
+            MainPointerMoveIntent::TaskDetailModal => {
+                self.set_window_cursor(CursorIcon::Default);
+                ShellActionOutcome::None
+            }
+            MainPointerMoveIntent::ScenePointer => {
+                let changed = self.scene.set_pointer(point, size);
+                self.update_window_cursor_for_scene(size);
+                ShellActionOutcome::redraw_if(changed)
+            }
         }
     }
 

@@ -4,6 +4,25 @@ use crate::shell::options::ShellViewMode;
 use crate::shell::shortcuts::{PathNavigationAction, path_navigation_action_for_mouse_button};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) struct MainPointerMoveSnapshot {
+    pub(super) task_detail_dialog_open: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum MainPointerMoveIntent {
+    TaskDetailModal,
+    ScenePointer,
+}
+
+pub(super) fn main_pointer_move_intent(snapshot: MainPointerMoveSnapshot) -> MainPointerMoveIntent {
+    if snapshot.task_detail_dialog_open {
+        MainPointerMoveIntent::TaskDetailModal
+    } else {
+        MainPointerMoveIntent::ScenePointer
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(super) struct MainPointerButtonSnapshot {
     pub(super) trash_conflict_dialog_open: bool,
     pub(super) task_detail_dialog_open: bool,
@@ -147,6 +166,22 @@ pub(super) fn main_left_pointer_button_route(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pointer_move_is_blocked_by_task_detail_modal() {
+        assert_eq!(
+            main_pointer_move_intent(MainPointerMoveSnapshot {
+                task_detail_dialog_open: true,
+            }),
+            MainPointerMoveIntent::TaskDetailModal
+        );
+        assert_eq!(
+            main_pointer_move_intent(MainPointerMoveSnapshot {
+                task_detail_dialog_open: false,
+            }),
+            MainPointerMoveIntent::ScenePointer
+        );
+    }
 
     fn left_route(
         state: ElementState,
