@@ -563,16 +563,16 @@ fn window_title(scene: &ShellScene) -> String {
     let view_mode = scene.active_view_mode();
     if let Some(split_pane) = scene.panes.get(ShellPaneId::SLOT_1) {
         format!(
-            "Fika wgpu shell [{}] - {} | {}",
-            view_mode.as_str(),
+            "{} | {} [{}]",
             scene.panes[ShellPaneId::SLOT_0].path.display(),
-            split_pane.path.display()
+            split_pane.path.display(),
+            view_mode.as_str()
         )
     } else {
         format!(
-            "Fika wgpu shell [{}] - {}",
-            view_mode.as_str(),
-            scene.panes[ShellPaneId::SLOT_0].path.display()
+            "{} [{}]",
+            scene.panes[ShellPaneId::SLOT_0].path.display(),
+            view_mode.as_str()
         )
     }
 }
@@ -8890,6 +8890,12 @@ impl ShellScene {
         (self.zoom_icon_factor() * 100.0).round() as i32
     }
 
+    fn zoom_fraction(&self) -> f32 {
+        let level = self.dolphin_zoom_level();
+        let span = (DOLPHIN_ZOOM_LEVEL_MAX - DOLPHIN_ZOOM_LEVEL_MIN).max(1) as f32;
+        ((level - DOLPHIN_ZOOM_LEVEL_MIN) as f32 / span).clamp(0.0, 1.0)
+    }
+
     fn details_row_height(&self) -> f32 {
         let padding = self.scale_metric(4.0);
         (padding * 2.0 + self.details_icon_size().max(self.text_line_height())).round()
@@ -9679,6 +9685,24 @@ impl ShellScene {
         let pane = projection.geometry.pane;
         let top_bar = projection.geometry.top_bar;
         let status_bar = projection.geometry.status_bar;
+        let screen = ViewRect {
+            x: 0.0,
+            y: 0.0,
+            width: size.width.max(1) as f32,
+            height: size.height.max(1) as f32,
+        };
+        let pane_radius = self.scale_metric(10.0);
+        push_clipped_rounded_rect(vertices, pane, screen, pane_radius, theme.divider(), size);
+        if let Some(inner) = inset_rect(pane, self.scale_metric(1.0)) {
+            push_clipped_rounded_rect(
+                vertices,
+                inner,
+                screen,
+                (pane_radius - self.scale_metric(1.0)).max(1.0),
+                theme.view_mode_content(projection.view.view_mode),
+                size,
+            );
+        }
 
         push_rect(vertices, top_bar, theme.chrome(), size);
         if let Some(path_rect) = self.pane_path_bar_rect(pane_id, size) {
@@ -9710,6 +9734,22 @@ impl ShellScene {
             size,
         );
         self.push_pane_body_border(vertices, projection, theme, size);
+        if pane_id == self.active_pane() {
+            let accent_height = self.scale_metric(3.0).max(2.0);
+            push_clipped_rounded_rect(
+                vertices,
+                ViewRect {
+                    x: pane.x + self.scale_metric(10.0),
+                    y: pane.y + self.scale_metric(1.0),
+                    width: (pane.width - self.scale_metric(20.0)).max(1.0),
+                    height: accent_height,
+                },
+                pane,
+                accent_height / 2.0,
+                theme.accent(),
+                size,
+            );
+        }
         if pane_id == ShellPaneId::SLOT_0 {
             self.push_filter_bar(vertices, text, size, theme);
         }
@@ -9736,6 +9776,14 @@ impl ShellScene {
         let content_scrollbar_visible =
             self.push_content_scrollbar_for_projection(vertices, projection, theme, size);
         self.push_pane_status_bar(vertices, text, projection, size, theme);
+        push_clipped_rect_outline(
+            vertices,
+            pane,
+            screen,
+            self.scale_metric(1.0).max(1.0),
+            theme.divider(),
+            size,
+        );
         content_scrollbar_visible
     }
 
@@ -10115,11 +10163,54 @@ impl ShellScene {
             vertices,
             ViewRect {
                 x: header.x,
+                y: header.y,
+                width: header.width,
+                height: self.scale_metric(1.0).max(1.0),
+            },
+            theme.field_separator(),
+            size,
+        );
+        push_rect(
+            vertices,
+            ViewRect {
+                x: header.x,
                 y: header.bottom() - 1.0,
                 width: header.width,
                 height: 1.0,
             },
             theme.divider(),
+            size,
+        );
+        let name_separator_x = header.x + self.details_name_width() - projection.view.scroll_x;
+        let size_separator_x = header.x + self.details_name_width() + self.details_size_width()
+            - projection.view.scroll_x;
+        for separator_x in [name_separator_x, size_separator_x] {
+            if separator_x > header.x && separator_x < header.right() {
+                push_rect(
+                    vertices,
+                    ViewRect {
+                        x: separator_x.round(),
+                        y: header.y + self.scale_metric(6.0),
+                        width: self.scale_metric(1.0).max(1.0),
+                        height: (header.height - self.scale_metric(12.0)).max(1.0),
+                    },
+                    theme.field_separator(),
+                    size,
+                );
+            }
+        }
+        let active_indicator = ViewRect {
+            x: header.x + self.scale_metric(10.0),
+            y: header.bottom() - self.scale_metric(3.0).max(2.0),
+            width: self.scale_metric(46.0),
+            height: self.scale_metric(3.0).max(2.0),
+        };
+        push_clipped_rounded_rect(
+            vertices,
+            active_indicator,
+            header,
+            active_indicator.height / 2.0,
+            theme.accent(),
             size,
         );
         for (label, x, width) in [
@@ -10172,6 +10263,8 @@ impl ShellScene {
                 rect,
                 status: &status,
                 active: projection.geometry.kind == self.active_pane(),
+                zoom_percent: self.zoom_percent(),
+                zoom_fraction: self.zoom_fraction(),
                 theme,
                 scale: self.ui_scale(),
                 line_height: self.text_line_height(),
@@ -10187,14 +10280,41 @@ impl ShellScene {
         theme: ShellTheme,
     ) {
         let toolbar = self.app_toolbar_rect(size);
+        push_rect(vertices, toolbar, theme.details_header(), size);
         push_rect(
             vertices,
-            toolbar,
-            theme.view_mode_surface(self.panes[ShellPaneId::SLOT_0].view_mode),
+            ViewRect {
+                x: toolbar.x,
+                y: toolbar.y,
+                width: toolbar.width,
+                height: self.scale_metric(2.0).max(1.0),
+            },
+            theme.accent(),
+            size,
+        );
+        push_rect(
+            vertices,
+            ViewRect {
+                x: toolbar.x,
+                y: toolbar.bottom() - self.scale_metric(1.0).max(1.0),
+                width: toolbar.width,
+                height: self.scale_metric(1.0).max(1.0),
+            },
+            theme.divider(),
             size,
         );
 
         let button = self.places_toggle_rect(size);
+        let split_button = self.split_view_button_rect(size);
+        let view_badge_width = self.scale_metric(34.0);
+        let view_badge = (split_button.x - self.scale_metric(10.0) - view_badge_width
+            > button.right() + self.scale_metric(16.0))
+        .then_some(ViewRect {
+            x: split_button.x - self.scale_metric(10.0) - view_badge_width,
+            y: toolbar.y + self.scale_metric(7.0),
+            width: view_badge_width,
+            height: (toolbar.height - self.scale_metric(14.0)).max(1.0),
+        });
         let button_colors = theme.toolbar_button(self.places_visible);
         push_clipped_rounded_rect(
             vertices,
@@ -10248,7 +10368,43 @@ impl ShellScene {
             size,
         );
 
-        let split_button = self.split_view_button_rect(size);
+        let center_line_start = button.right() + self.scale_metric(12.0);
+        let center_line_end =
+            view_badge.map(|rect| rect.x).unwrap_or(split_button.x) - self.scale_metric(12.0);
+        if center_line_end > center_line_start {
+            push_clipped_rounded_rect(
+                vertices,
+                ViewRect {
+                    x: center_line_start,
+                    y: toolbar.y + toolbar.height / 2.0 - self.scale_metric(1.0).max(1.0) / 2.0,
+                    width: center_line_end - center_line_start,
+                    height: self.scale_metric(1.0).max(1.0),
+                },
+                toolbar,
+                self.scale_metric(0.5).max(0.5),
+                theme.field_separator(),
+                size,
+            );
+        }
+        if let Some(badge) = view_badge {
+            self.push_toolbar_view_mode_badge(vertices, badge, toolbar, theme, size);
+        }
+
+        let active_dot_size = self.scale_metric(6.0).max(4.0);
+        push_clipped_rounded_rect(
+            vertices,
+            ViewRect {
+                x: center_line_start,
+                y: toolbar.y + toolbar.height / 2.0 - active_dot_size / 2.0,
+                width: active_dot_size,
+                height: active_dot_size,
+            },
+            toolbar,
+            active_dot_size / 2.0,
+            theme.accent(),
+            size,
+        );
+
         let split_open = self.panes.is_open(ShellPaneId::SLOT_1);
         let split_colors = theme.toolbar_button(split_open);
         push_clipped_rounded_rect(
@@ -10321,6 +10477,127 @@ impl ShellScene {
         }
     }
 
+    fn push_toolbar_view_mode_badge(
+        &self,
+        vertices: &mut Vec<QuadVertex>,
+        rect: ViewRect,
+        clip: ViewRect,
+        theme: ShellTheme,
+        size: PhysicalSize<u32>,
+    ) {
+        push_clipped_rounded_rect(
+            vertices,
+            rect,
+            clip,
+            self.scale_metric(7.0),
+            theme.divider(),
+            size,
+        );
+        if let Some(inner) = inset_rect(rect, self.scale_metric(1.0)) {
+            push_clipped_rounded_rect(
+                vertices,
+                inner,
+                clip,
+                self.scale_metric(6.0),
+                theme.field(),
+                size,
+            );
+        }
+        let icon_rect = ViewRect {
+            x: rect.x + (rect.width - self.scale_metric(16.0)) / 2.0,
+            y: rect.y + (rect.height - self.scale_metric(14.0)) / 2.0,
+            width: self.scale_metric(16.0),
+            height: self.scale_metric(14.0),
+        };
+        self.push_view_mode_glyph(vertices, icon_rect, rect, theme, size);
+    }
+
+    fn push_view_mode_glyph(
+        &self,
+        vertices: &mut Vec<QuadVertex>,
+        rect: ViewRect,
+        clip: ViewRect,
+        theme: ShellTheme,
+        size: PhysicalSize<u32>,
+    ) {
+        match self.active_view_mode() {
+            ShellViewMode::Icons => {
+                let dot = self.scale_metric(4.0).max(2.0);
+                let gap = self.scale_metric(3.0).max(1.0);
+                for row in 0..2 {
+                    for column in 0..2 {
+                        push_clipped_rounded_rect(
+                            vertices,
+                            ViewRect {
+                                x: rect.x + column as f32 * (dot + gap),
+                                y: rect.y + row as f32 * (dot + gap),
+                                width: dot,
+                                height: dot,
+                            },
+                            clip,
+                            dot / 2.0,
+                            theme.accent(),
+                            size,
+                        );
+                    }
+                }
+            }
+            ShellViewMode::Compact => {
+                for row in 0..3 {
+                    let y = rect.y + self.scale_metric(1.0) + row as f32 * self.scale_metric(5.0);
+                    push_clipped_rounded_rect(
+                        vertices,
+                        ViewRect {
+                            x: rect.x,
+                            y,
+                            width: self.scale_metric(5.0),
+                            height: self.scale_metric(3.0).max(2.0),
+                        },
+                        clip,
+                        self.scale_metric(1.5),
+                        theme.accent(),
+                        size,
+                    );
+                    push_clipped_rounded_rect(
+                        vertices,
+                        ViewRect {
+                            x: rect.x + self.scale_metric(8.0),
+                            y,
+                            width: self.scale_metric(8.0),
+                            height: self.scale_metric(3.0).max(2.0),
+                        },
+                        clip,
+                        self.scale_metric(1.5),
+                        theme.field_separator(),
+                        size,
+                    );
+                }
+            }
+            ShellViewMode::Details => {
+                for row in 0..3 {
+                    let y = rect.y + self.scale_metric(1.0) + row as f32 * self.scale_metric(5.0);
+                    push_clipped_rounded_rect(
+                        vertices,
+                        ViewRect {
+                            x: rect.x,
+                            y,
+                            width: rect.width,
+                            height: self.scale_metric(3.0).max(2.0),
+                        },
+                        clip,
+                        self.scale_metric(1.5),
+                        if row == 0 {
+                            theme.accent()
+                        } else {
+                            theme.field_separator()
+                        },
+                        size,
+                    );
+                }
+            }
+        }
+    }
+
     fn push_places_sidebar(
         &self,
         vertices: &mut Vec<QuadVertex>,
@@ -10381,12 +10658,26 @@ impl ShellScene {
         let text_height = self.text_line_height();
         let small_text_height = self.small_text_line_height();
         let item_palette = paint.dolphin_item;
+        let title_mark = ViewRect {
+            x: panel.x + padding_x + self.scale_metric(8.0),
+            y: panel.y + top_padding + (text_height - self.scale_metric(14.0)) / 2.0,
+            width: self.scale_metric(4.0),
+            height: self.scale_metric(14.0),
+        };
+        push_clipped_rounded_rect(
+            vertices,
+            title_mark,
+            panel,
+            title_mark.width / 2.0,
+            theme.accent(),
+            size,
+        );
         text.push_label_aligned(
             "Places",
             ViewRect {
-                x: panel.x + padding_x + self.scale_metric(8.0),
+                x: title_mark.right() + self.scale_metric(8.0),
                 y: panel.y + top_padding,
-                width: (panel.width - padding_x * 2.0 - self.scale_metric(16.0)).max(1.0),
+                width: (panel.width - padding_x * 2.0 - self.scale_metric(28.0)).max(1.0),
                 height: text_height,
             },
             panel,
@@ -10405,6 +10696,20 @@ impl ShellScene {
                     height: small_text_height,
                 };
                 if section.y < panel.bottom() && section.bottom() > panel.y {
+                    let line_height = self.scale_metric(1.0).max(1.0);
+                    push_clipped_rounded_rect(
+                        vertices,
+                        ViewRect {
+                            x: section.x,
+                            y: section.y + small_text_height + self.scale_metric(3.0),
+                            width: (section.width * 0.42).max(self.scale_metric(28.0)),
+                            height: line_height,
+                        },
+                        panel,
+                        line_height / 2.0,
+                        theme.field_separator(),
+                        size,
+                    );
                     text.push_label_aligned(
                         place.group,
                         section,
@@ -10439,6 +10744,20 @@ impl ShellScene {
                         panel,
                         self.scale_metric(BREEZE_ITEM_ROUNDNESS),
                         place_row_background_color_for_palette(active, hovered, item_palette),
+                        size,
+                    );
+                    let rail_width = self.scale_metric(3.0).max(2.0);
+                    push_clipped_rounded_rect(
+                        vertices,
+                        ViewRect {
+                            x: row.x + self.scale_metric(3.0),
+                            y: row.y + self.scale_metric(6.0),
+                            width: rail_width,
+                            height: (row.height - self.scale_metric(12.0)).max(1.0),
+                        },
+                        panel,
+                        rail_width / 2.0,
+                        theme.accent(),
                         size,
                     );
                 } else if hovered {
@@ -10605,6 +10924,30 @@ impl ShellScene {
             theme.divider(),
             size,
         );
+        let field = ViewRect {
+            x: rect.x + self.scale_metric(62.0),
+            y: rect.y + self.scale_metric(4.0),
+            width: (rect.width - self.scale_metric(74.0)).max(1.0),
+            height: (rect.height - self.scale_metric(8.0)).max(1.0),
+        };
+        push_clipped_rounded_rect(
+            vertices,
+            field,
+            rect,
+            self.scale_metric(7.0),
+            theme.field_separator(),
+            size,
+        );
+        if let Some(inner) = inset_rect(field, self.scale_metric(1.0)) {
+            push_clipped_rounded_rect(
+                vertices,
+                inner,
+                rect,
+                self.scale_metric(6.0),
+                theme.field(),
+                size,
+            );
+        }
         text.push_label(
             "Filter:",
             ViewRect {
@@ -10624,12 +10967,12 @@ impl ShellScene {
         text.push_label(
             pattern,
             ViewRect {
-                x: rect.x + self.scale_metric(66.0),
+                x: field.x + self.scale_metric(10.0),
                 y: rect.y + self.scale_metric(6.0),
-                width: (rect.width - self.scale_metric(78.0)).max(1.0),
+                width: (field.width - self.scale_metric(20.0)).max(1.0),
                 height: self.text_line_height(),
             },
-            rect,
+            field,
             theme.primary_text(),
         );
     }

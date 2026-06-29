@@ -14,6 +14,8 @@ pub(crate) struct PaneStatusBarPaint<'a> {
     pub(crate) rect: ViewRect,
     pub(crate) status: &'a ShellPaneStatus,
     pub(crate) active: bool,
+    pub(crate) zoom_percent: i32,
+    pub(crate) zoom_fraction: f32,
     pub(crate) theme: ShellTheme,
     pub(crate) scale: f32,
     pub(crate) line_height: f32,
@@ -53,11 +55,28 @@ pub(crate) fn push_pane_status_bar(
 
     let left_x = paint.rect.x + scale_metric(12.0, paint.scale);
     let qualifier = paint.status.qualifier_text();
+    let zoom_visible = paint.rect.width >= scale_metric(460.0, paint.scale);
+    let zoom_width = if zoom_visible {
+        scale_metric(132.0, paint.scale)
+    } else {
+        0.0
+    };
+    let right_edge = paint.rect.right() - scale_metric(12.0, paint.scale);
+    if zoom_visible {
+        let zoom_rect = ViewRect {
+            x: right_edge - zoom_width,
+            y: paint.rect.y + (paint.rect.height - scale_metric(18.0, paint.scale)) / 2.0,
+            width: zoom_width,
+            height: scale_metric(18.0, paint.scale),
+        };
+        push_zoom_indicator(vertices, text, &paint, zoom_rect);
+    }
     let right_width = if qualifier.is_empty() {
         0.0
     } else {
         (paint.rect.width * 0.44)
             .min(scale_metric(260.0, paint.scale))
+            .min((paint.rect.width - zoom_width - scale_metric(48.0, paint.scale)).max(0.0))
             .max(1.0)
     };
     text.push_label_aligned_no_wrap(
@@ -65,7 +84,16 @@ pub(crate) fn push_pane_status_bar(
         ViewRect {
             x: left_x,
             y: paint.rect.y + scale_metric(5.0, paint.scale),
-            width: (paint.rect.width - scale_metric(24.0, paint.scale) - right_width).max(1.0),
+            width: (paint.rect.width
+                - scale_metric(24.0, paint.scale)
+                - right_width
+                - zoom_width
+                - if zoom_visible {
+                    scale_metric(10.0, paint.scale)
+                } else {
+                    0.0
+                })
+            .max(1.0),
             height: paint.line_height,
         },
         paint.rect,
@@ -76,7 +104,14 @@ pub(crate) fn push_pane_status_bar(
         text.push_label_aligned_no_wrap(
             qualifier,
             ViewRect {
-                x: paint.rect.right() - scale_metric(12.0, paint.scale) - right_width,
+                x: right_edge
+                    - zoom_width
+                    - if zoom_visible {
+                        scale_metric(10.0, paint.scale)
+                    } else {
+                        0.0
+                    }
+                    - right_width,
                 y: paint.rect.y + scale_metric(5.0, paint.scale),
                 width: right_width,
                 height: paint.line_height,
@@ -86,6 +121,72 @@ pub(crate) fn push_pane_status_bar(
             LabelAlignment::End,
         );
     }
+}
+
+fn push_zoom_indicator(
+    vertices: &mut Vec<QuadVertex>,
+    text: &mut TextFrameBuilder<'_>,
+    paint: &PaneStatusBarPaint<'_>,
+    rect: ViewRect,
+) {
+    let label_width = scale_metric(42.0, paint.scale);
+    let gap = scale_metric(9.0, paint.scale);
+    let track_height = scale_metric(4.0, paint.scale).max(2.0);
+    let track = ViewRect {
+        x: rect.x + label_width + gap,
+        y: rect.y + (rect.height - track_height) / 2.0,
+        width: (rect.width - label_width - gap).max(1.0),
+        height: track_height,
+    };
+    let scrollbar = paint.theme.scrollbar();
+    push_clipped_rounded_rect(
+        vertices,
+        track,
+        paint.rect,
+        track_height / 2.0,
+        scrollbar.track,
+        paint.size,
+    );
+    let fraction = paint.zoom_fraction.clamp(0.0, 1.0);
+    let filled = ViewRect {
+        width: (track.width * fraction).max(track_height),
+        ..track
+    };
+    push_clipped_rounded_rect(
+        vertices,
+        filled,
+        paint.rect,
+        track_height / 2.0,
+        paint.theme.accent(),
+        paint.size,
+    );
+    let thumb_size = scale_metric(8.0, paint.scale).max(4.0);
+    let thumb_center_x = track.x + track.width * fraction;
+    push_clipped_rounded_rect(
+        vertices,
+        ViewRect {
+            x: (thumb_center_x - thumb_size / 2.0).clamp(track.x, track.right() - thumb_size),
+            y: track.y + (track.height - thumb_size) / 2.0,
+            width: thumb_size,
+            height: thumb_size,
+        },
+        paint.rect,
+        thumb_size / 2.0,
+        paint.theme.accent(),
+        paint.size,
+    );
+    text.push_label_aligned_no_wrap(
+        &format!("{}%", paint.zoom_percent),
+        ViewRect {
+            x: rect.x,
+            y: rect.y,
+            width: label_width,
+            height: paint.line_height,
+        },
+        paint.rect,
+        paint.theme.muted_text(),
+        LabelAlignment::End,
+    );
 }
 
 pub(crate) struct PlacesTaskAreaPaint<'a> {
@@ -128,14 +229,28 @@ pub(crate) fn push_places_task_area(
     text.push_label_aligned(
         "Tasks",
         ViewRect {
-            x: inner.x + padding,
+            x: inner.x + padding + scale_metric(8.0, paint.scale),
             y: inner.y + scale_metric(7.0, paint.scale),
-            width: (inner.width - padding * 2.0).max(1.0),
+            width: (inner.width - padding * 2.0 - scale_metric(8.0, paint.scale)).max(1.0),
             height: paint.small_line_height,
         },
         inner,
         paint.theme.section_text(),
         LabelAlignment::Start,
+    );
+    let mark_height = scale_metric(10.0, paint.scale);
+    push_clipped_rounded_rect(
+        vertices,
+        ViewRect {
+            x: inner.x + padding,
+            y: inner.y + scale_metric(9.0, paint.scale),
+            width: scale_metric(3.0, paint.scale).max(2.0),
+            height: mark_height,
+        },
+        inner,
+        scale_metric(1.5, paint.scale),
+        paint.theme.accent(),
+        paint.size,
     );
 
     let row_height = scale_metric(PLACES_TASK_ROW_HEIGHT, paint.scale);

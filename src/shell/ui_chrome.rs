@@ -312,8 +312,35 @@ pub(crate) fn push_fallback_file_icon(
             width: icon_rect.width * 0.84,
             height: icon_rect.height * 0.56,
         };
-        push_clipped_rect(vertices, tab, content_clip, palette.folder_tab, size);
-        push_clipped_rect(vertices, body, content_clip, palette.folder_body, size);
+        let radius = (icon_rect.width.min(icon_rect.height) * 0.08).max(1.0);
+        push_clipped_rounded_rect(
+            vertices,
+            tab,
+            content_clip,
+            radius,
+            palette.folder_tab,
+            size,
+        );
+        push_clipped_rounded_rect(
+            vertices,
+            body,
+            content_clip,
+            radius,
+            palette.folder_body,
+            size,
+        );
+        push_clipped_rect(
+            vertices,
+            ViewRect {
+                x: body.x,
+                y: body.y,
+                width: body.width,
+                height: body.height * 0.20,
+            },
+            content_clip,
+            palette.folder_highlight,
+            size,
+        );
     } else {
         let body = ViewRect {
             x: icon_rect.x + icon_rect.width * 0.18,
@@ -321,20 +348,44 @@ pub(crate) fn push_fallback_file_icon(
             width: icon_rect.width * 0.64,
             height: icon_rect.height * 0.78,
         };
-        let stripe = ViewRect {
-            x: body.x,
-            y: body.y,
-            width: body.width,
-            height: body.height * 0.22,
-        };
-        push_clipped_rect(
+        let radius = (icon_rect.width.min(icon_rect.height) * 0.06).max(1.0);
+        push_clipped_rounded_rect(
             vertices,
             body,
             content_clip,
+            radius,
             fallback_file_color(entry, palette),
             size,
         );
-        push_clipped_rect(vertices, stripe, content_clip, palette.file_stripe, size);
+        let fold = icon_rect.width.min(icon_rect.height) * 0.18;
+        push_clipped_rect(
+            vertices,
+            ViewRect {
+                x: body.right() - fold,
+                y: body.y,
+                width: fold,
+                height: fold,
+            },
+            content_clip,
+            palette.file_fold,
+            size,
+        );
+        for row in 0..3 {
+            let line_width = body.width * if row == 2 { 0.36 } else { 0.52 };
+            push_clipped_rounded_rect(
+                vertices,
+                ViewRect {
+                    x: body.x + body.width * 0.18,
+                    y: body.y + body.height * 0.42 + row as f32 * body.height * 0.14,
+                    width: line_width,
+                    height: (body.height * 0.045).max(1.0),
+                },
+                content_clip,
+                (body.height * 0.025).max(1.0),
+                palette.file_stripe,
+                size,
+            );
+        }
     }
 }
 
@@ -342,7 +393,9 @@ pub(crate) fn push_fallback_file_icon(
 pub(crate) struct FallbackIconPalette {
     folder_tab: UiColor,
     folder_body: UiColor,
+    folder_highlight: UiColor,
     file_stripe: UiColor,
+    file_fold: UiColor,
     image_file: UiColor,
     media_file: UiColor,
     text_file: UiColor,
@@ -355,7 +408,9 @@ impl FallbackIconPalette {
             Self {
                 folder_tab: [0.953, 0.612, 0.071, 1.0],
                 folder_body: [0.749, 0.435, 0.047, 1.0],
+                folder_highlight: [1.000, 0.773, 0.204, 0.48],
                 file_stripe: theme.field_separator(),
+                file_fold: [0.580, 0.639, 0.718, 0.50],
                 image_file: [0.302, 0.741, 0.514, 1.0],
                 media_file: [0.678, 0.560, 0.871, 1.0],
                 text_file: [0.376, 0.647, 0.980, 1.0],
@@ -365,7 +420,9 @@ impl FallbackIconPalette {
             Self {
                 folder_tab: [0.960, 0.700, 0.260, 1.0],
                 folder_body: [0.900, 0.580, 0.180, 1.0],
+                folder_highlight: [1.000, 0.820, 0.420, 0.50],
                 file_stripe: [0.760, 0.800, 0.860, 1.0],
+                file_fold: [0.902, 0.922, 0.945, 0.92],
                 image_file: [0.500, 0.700, 0.560, 1.0],
                 media_file: [0.690, 0.550, 0.820, 1.0],
                 text_file: [0.380, 0.600, 0.840, 1.0],
