@@ -99,7 +99,19 @@ Dolphin reference:
 - Dolphin boundary: item size hint 独立缓存，只有 item 插入、删除、移动、role 改变或显式 clear 时才重新解析。
 - Fika mapping: src/shell/pane_layout.rs IconsLayoutHeightCache；src/main.rs ShellScene::pane_icons_layout / invalidate_layout_caches。
 - Divergence: Dolphin 以 model range 精确失效；Fika 当前目录模型仍以 pane 级 reload/filter 为主，因此先按 pane + layout metric key 缓存 icons 文本高度，后续 model diff 落地后再缩小到 range 级失效。
-- Verification: cargo test icons_layout_height_cache_reuses_name_measurements_while_scrolling；cargo check。
+- Verification: cargo test icons_layout_height_cache_reuses_name_measurements_while_scrolling；cargo check；cargo test；git diff --check。
+```
+
+### Render surface acquire boundary
+
+```text
+Dolphin reference:
+- Source: /home/yk/Code/fika/reference/dolphin/src/kitemviews/kitemlistview.cpp
+- Symbol: KItemListView::paint
+- Dolphin boundary: View paint 入口只处理 view/widget 绘制，窗口系统的 backing surface 与 expose/recover 由 Qt 图形栈统一承担。
+- Fika mapping: src/main.rs WgpuState::acquire_surface_frame / render / render_detached_dialog。
+- Divergence: 无直接 Dolphin wgpu surface reference；Fika 需要显式处理 wgpu Surface lost/outdated/timeout/validation，但把 main/dialog 的 acquire/recover 合并成单一 frame surface 边界，避免 detached dialog 继续维护独立错误策略。
+- Verification: cargo test surface_frame_context_keeps_dialog_suboptimal_recovery_local；cargo check；cargo test；git diff --check。
 ```
 
 ## Review 检查项

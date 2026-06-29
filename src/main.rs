@@ -12366,6 +12366,59 @@ enum ShellRenderOutcome {
     NotReady,
 }
 
+#[derive(Clone, Copy, Debug)]
+enum ShellSurfaceFrameContext {
+    Main { view: &'static str, force_log: bool },
+    DetachedDialog { dialog_label: &'static str },
+}
+
+impl ShellSurfaceFrameContext {
+    fn reconfigure_on_suboptimal(self) -> bool {
+        matches!(self, Self::Main { .. })
+    }
+
+    fn log_retry(self, reason: &'static str) {
+        if let Self::Main {
+            view,
+            force_log: true,
+        } = self
+        {
+            fika_log!("[fika-wgpu] frame-retry reason={reason} view={view} surface=reconfigure");
+        }
+    }
+
+    fn log_reconfigure_pending(self, reason: &'static str) {
+        if let Self::Main {
+            view,
+            force_log: true,
+        } = self
+        {
+            fika_log!(
+                "[fika-wgpu] frame-skip reason={reason} view={view} surface=reconfigure-pending"
+            );
+        }
+    }
+
+    fn log_not_ready(self, reason: &'static str) {
+        if let Self::Main {
+            view,
+            force_log: true,
+        } = self
+        {
+            fika_log!("[fika-wgpu] frame-skip reason={reason} view={view} surface=not-ready");
+        }
+    }
+
+    fn log_validation(self) {
+        match self {
+            Self::Main { .. } => fika_log!("[fika-wgpu] surface validation error"),
+            Self::DetachedDialog { dialog_label } => {
+                fika_log!("[fika-wgpu] {dialog_label}-dialog surface validation error");
+            }
+        }
+    }
+}
+
 impl ShellRenderOutcome {
     fn presented(self) -> bool {
         matches!(self, Self::Presented)
@@ -12560,6 +12613,61 @@ impl WgpuState {
         );
     }
 
+    fn acquire_surface_frame(
+        &mut self,
+        window: &dyn Window,
+        reason: &'static str,
+        context: ShellSurfaceFrameContext,
+    ) -> Option<wgpu::SurfaceTexture> {
+        match self.surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(frame) => Some(frame),
+            wgpu::CurrentSurfaceTexture::Suboptimal(frame) => {
+                if context.reconfigure_on_suboptimal() {
+                    self.force_reconfigure(window.surface_size());
+                }
+                Some(frame)
+            }
+            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
+                context.log_retry(reason);
+                self.force_reconfigure(window.surface_size());
+                self.acquire_surface_frame_after_reconfigure(window, reason, context)
+            }
+            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
+                context.log_not_ready(reason);
+                None
+            }
+            wgpu::CurrentSurfaceTexture::Validation => {
+                context.log_validation();
+                None
+            }
+        }
+    }
+
+    fn acquire_surface_frame_after_reconfigure(
+        &mut self,
+        window: &dyn Window,
+        reason: &'static str,
+        context: ShellSurfaceFrameContext,
+    ) -> Option<wgpu::SurfaceTexture> {
+        match self.surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(frame)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => Some(frame),
+            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
+                context.log_reconfigure_pending(reason);
+                window.request_redraw();
+                None
+            }
+            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
+                context.log_not_ready(reason);
+                None
+            }
+            wgpu::CurrentSurfaceTexture::Validation => {
+                context.log_validation();
+                None
+            }
+        }
+    }
+
     fn prewarm_scene_caches(&mut self, scene: &mut ShellScene, reason: &'static str) {
         let total_start = Instant::now();
         let metadata_result_stats = scene.drain_metadata_role_results();
@@ -12747,35 +12855,12 @@ impl WgpuState {
             PhysicalSize<u32>,
         ),
     ) -> ShellRenderOutcome {
-        let frame = match self.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(frame)
-            | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
-            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
-                self.force_reconfigure(window.surface_size());
-                match self.surface.get_current_texture() {
-                    wgpu::CurrentSurfaceTexture::Success(frame)
-                    | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
-                    wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
-                        window.request_redraw();
-                        return ShellRenderOutcome::NotReady;
-                    }
-                    wgpu::CurrentSurfaceTexture::Timeout
-                    | wgpu::CurrentSurfaceTexture::Occluded => {
-                        return ShellRenderOutcome::NotReady;
-                    }
-                    wgpu::CurrentSurfaceTexture::Validation => {
-                        fika_log!("[fika-wgpu] {dialog_label}-dialog surface validation error");
-                        return ShellRenderOutcome::NotReady;
-                    }
-                }
-            }
-            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
-                return ShellRenderOutcome::NotReady;
-            }
-            wgpu::CurrentSurfaceTexture::Validation => {
-                fika_log!("[fika-wgpu] {dialog_label}-dialog surface validation error");
-                return ShellRenderOutcome::NotReady;
-            }
+        let Some(frame) = self.acquire_surface_frame(
+            window,
+            reason,
+            ShellSurfaceFrameContext::DetachedDialog { dialog_label },
+        ) else {
+            return ShellRenderOutcome::NotReady;
         };
 
         self.text_renderer.label_cache.begin_frame();
@@ -13170,66 +13255,16 @@ impl WgpuState {
 
         let frame_start = Instant::now();
         let surface_acquire_start = Instant::now();
-        let frame = match self.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(frame) => frame,
-            wgpu::CurrentSurfaceTexture::Suboptimal(frame) => {
-                self.force_reconfigure(window.surface_size());
-                frame
-            }
-            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
-                if force_log {
-                    fika_log!(
-                        "[fika-wgpu] frame-retry reason={} view={} surface=reconfigure",
-                        reason,
-                        scene.panes[ShellPaneId::SLOT_0].view_mode.as_str()
-                    );
-                }
-                self.force_reconfigure(window.surface_size());
-                match self.surface.get_current_texture() {
-                    wgpu::CurrentSurfaceTexture::Success(frame)
-                    | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
-                    wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
-                        if force_log {
-                            fika_log!(
-                                "[fika-wgpu] frame-skip reason={} view={} surface=reconfigure-pending",
-                                reason,
-                                scene.panes[ShellPaneId::SLOT_0].view_mode.as_str()
-                            );
-                        }
-                        window.request_redraw();
-                        return ShellRenderOutcome::NotReady;
-                    }
-                    wgpu::CurrentSurfaceTexture::Timeout
-                    | wgpu::CurrentSurfaceTexture::Occluded => {
-                        if force_log {
-                            fika_log!(
-                                "[fika-wgpu] frame-skip reason={} view={} surface=not-ready",
-                                reason,
-                                scene.panes[ShellPaneId::SLOT_0].view_mode.as_str()
-                            );
-                        }
-                        return ShellRenderOutcome::NotReady;
-                    }
-                    wgpu::CurrentSurfaceTexture::Validation => {
-                        fika_log!("[fika-wgpu] surface validation error");
-                        return ShellRenderOutcome::NotReady;
-                    }
-                }
-            }
-            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
-                if force_log {
-                    fika_log!(
-                        "[fika-wgpu] frame-skip reason={} view={} surface=not-ready",
-                        reason,
-                        scene.panes[ShellPaneId::SLOT_0].view_mode.as_str()
-                    );
-                }
-                return ShellRenderOutcome::NotReady;
-            }
-            wgpu::CurrentSurfaceTexture::Validation => {
-                fika_log!("[fika-wgpu] surface validation error");
-                return ShellRenderOutcome::NotReady;
-            }
+        let view_label = scene.panes[ShellPaneId::SLOT_0].view_mode.as_str();
+        let Some(frame) = self.acquire_surface_frame(
+            window,
+            reason,
+            ShellSurfaceFrameContext::Main {
+                view: view_label,
+                force_log,
+            },
+        ) else {
+            return ShellRenderOutcome::NotReady;
         };
         let surface_acquire_us = surface_acquire_start.elapsed().as_micros();
 
@@ -31439,6 +31474,23 @@ text/plain=writer.desktop;\n",
 
         assert_eq!(scene.icons_layout_height_cache.len(), 1);
         assert!(first_visible_after > first_visible_before);
+    }
+
+    #[test]
+    fn surface_frame_context_keeps_dialog_suboptimal_recovery_local() {
+        assert!(
+            ShellSurfaceFrameContext::Main {
+                view: "icons",
+                force_log: false,
+            }
+            .reconfigure_on_suboptimal()
+        );
+        assert!(
+            !ShellSurfaceFrameContext::DetachedDialog {
+                dialog_label: "open-with",
+            }
+            .reconfigure_on_suboptimal()
+        );
     }
 
     #[test]

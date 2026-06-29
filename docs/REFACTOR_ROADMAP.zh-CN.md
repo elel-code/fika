@@ -158,6 +158,11 @@ dialog、render damage 和异步操作持续演进提供稳定边界。
   Fika 在 `src/shell/pane_layout.rs` 增加 icons item height cache，滚动和重复 frame 不再
   为同一 pane / item count / text width 反复估算所有文件名换行高度；路径加载、reload、
   filter、zoom、scale 和 split pane 替换统一走 layout cache 失效入口。
+- Render surface acquire 收敛：
+  主窗口和 detached dialog 的 `wgpu::Surface` acquire / lost / outdated / timeout /
+  validation recovery 进入 `WgpuState::acquire_surface_frame`，保留 main frame 的
+  force-log 诊断和 detached dialog 的本地 validation 日志，后续 upload / encode /
+  present 可以继续按同一 frame surface 边界拆分。
 - Action Outcome / Presentation 调度边界：
   `src/app_actions/outcome.rs` 统一承载 action 执行后的 `None`、`Redraw`、`Queue`、
   `Present` 结果；除 `outcome.rs` 外的 `src/app_actions/*` 不再直接调用主窗口
