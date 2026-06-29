@@ -47,8 +47,16 @@ dialog、render damage 和异步操作持续演进提供稳定边界。
   默认应用更新、async completion 等尚未 request 化的应用层流程。
 - Command / Action 执行器模块化：
   `src/app_actions.rs` 收缩为 dispatcher，具体副作用分散到
-  `src/app_actions/clipboard.rs`、`device.rs`、`launch.rs`、`trash.rs`、
-  `transfer.rs`，避免新的单文件执行器继续膨胀。
+  `src/app_actions/clipboard.rs`、`device.rs`、`dialog_commit.rs`、`launch.rs`、
+  `trash.rs`、`transfer.rs`，避免新的单文件执行器继续膨胀。
+- Dialog commit 执行迁移：
+  create / rename / Open With dialog commit 的磁盘操作、默认应用更新、状态记录和
+  reload/apply 流程已迁入 `src/app_actions/dialog_commit.rs`；`main.rs` 只保留事件入口
+  和 dialog window 生命周期 helper。
+- Navigation / Places 执行迁移：
+  path navigation、reload、location commit、add network folder、add/remove place wrapper
+  已迁入 `src/app_actions/navigation.rs` 和 `src/app_actions/places.rs`；`main.rs` 中保留
+  `ShellScene` 的路径/places 状态变更 API 和事件路由。
 - Open With query hit testing 收敛：
   search box 的 pointer hit test 进入 `src/shell/open_with/geometry.rs`，scene 的
   cursor 判断不再直接拼 query rect。
@@ -166,8 +174,8 @@ operation dispatcher。
 
 ## 当前推荐顺序
 
-1. Command / Action 层后续：create/rename commit、Open With 默认应用更新、
-   external drag/drop menu 打开路径的 request 化。
+1. Command / Action 层后续：external drag/drop menu 打开路径、split/view/toolbar wrapper
+   的 request 化。
 2. Async operation dispatcher。
 3. Render surface / frame pipeline。
 4. Animation registry。

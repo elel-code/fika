@@ -1,6 +1,9 @@
 mod clipboard;
 mod device;
+mod dialog_commit;
 mod launch;
+mod navigation;
+mod places;
 mod transfer;
 mod trash;
 
