@@ -4108,8 +4108,9 @@ impl ShellScene {
         point: ViewPoint,
         size: PhysicalSize<u32>,
     ) -> Option<ShellViewMode> {
-        let _ = (point, size);
-        None
+        self.toolbar_view_mode_badge_rect(size)
+            .filter(|rect| rect.contains(point))
+            .map(|_| self.active_view_mode().next())
     }
 
     fn pane_path_bar_rect(&self, kind: ShellPaneId, size: PhysicalSize<u32>) -> Option<ViewRect> {
@@ -4190,6 +4191,21 @@ impl ShellScene {
             width: button_size,
             height: button_size,
         }
+    }
+
+    fn toolbar_view_mode_badge_rect(&self, size: PhysicalSize<u32>) -> Option<ViewRect> {
+        let toolbar = self.app_toolbar_rect(size);
+        let button = self.places_toggle_rect(size);
+        let split_button = self.split_view_button_rect(size);
+        let view_badge_width = self.scale_metric(50.0);
+        (split_button.x - self.scale_metric(10.0) - view_badge_width
+            > button.right() + self.scale_metric(16.0))
+        .then_some(ViewRect {
+            x: split_button.x - self.scale_metric(10.0) - view_badge_width,
+            y: toolbar.y + self.scale_metric(7.0),
+            width: view_badge_width,
+            height: (toolbar.height - self.scale_metric(14.0)).max(1.0),
+        })
     }
 
     fn split_view_button_at_screen_point(&self, point: ViewPoint, size: PhysicalSize<u32>) -> bool {
@@ -4288,6 +4304,14 @@ impl ShellScene {
         if self
             .places_task_area_rect(size)
             .is_some_and(|rect| rect.contains(point))
+        {
+            return CursorIcon::Pointer;
+        }
+        if self.places_toggle_contains_screen_point(point, size)
+            || self.split_view_button_at_screen_point(point, size)
+            || self
+                .toolbar_view_mode_badge_rect(size)
+                .is_some_and(|rect| rect.contains(point))
         {
             return CursorIcon::Pointer;
         }
@@ -10323,15 +10347,7 @@ impl ShellScene {
 
         let button = self.places_toggle_rect(size);
         let split_button = self.split_view_button_rect(size);
-        let view_badge_width = self.scale_metric(50.0);
-        let view_badge = (split_button.x - self.scale_metric(10.0) - view_badge_width
-            > button.right() + self.scale_metric(16.0))
-        .then_some(ViewRect {
-            x: split_button.x - self.scale_metric(10.0) - view_badge_width,
-            y: toolbar.y + self.scale_metric(7.0),
-            width: view_badge_width,
-            height: (toolbar.height - self.scale_metric(14.0)).max(1.0),
-        });
+        let view_badge = self.toolbar_view_mode_badge_rect(size);
         let places_hovered = self.pointer.is_some_and(|point| button.contains(point));
         let button_colors = theme.toolbar_button(self.places_visible || places_hovered);
         push_clipped_rounded_rect(
@@ -10506,12 +10522,14 @@ impl ShellScene {
         theme: ShellTheme,
         size: PhysicalSize<u32>,
     ) {
+        let hovered = self.pointer.is_some_and(|point| rect.contains(point));
+        let colors = theme.toolbar_button(hovered);
         push_clipped_rounded_rect(
             vertices,
             rect,
             clip,
             self.scale_metric(7.0),
-            theme.divider(),
+            colors.border,
             size,
         );
         if let Some(inner) = inset_rect(rect, self.scale_metric(1.0)) {
@@ -10520,7 +10538,7 @@ impl ShellScene {
                 inner,
                 clip,
                 self.scale_metric(6.0),
-                theme.field(),
+                colors.fill,
                 size,
             );
         }
@@ -19428,6 +19446,34 @@ mod tests {
             },
             size,
         ));
+    }
+
+    #[test]
+    fn toolbar_view_mode_badge_cycles_active_view_mode_and_uses_pointer_cursor() {
+        let mut scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
+        let size = PhysicalSize::new(700, 320);
+        let badge = scene
+            .toolbar_view_mode_badge_rect(size)
+            .expect("wide toolbar should expose a view mode badge");
+        let point = ViewPoint {
+            x: badge.x + badge.width / 2.0,
+            y: badge.y + badge.height / 2.0,
+        };
+
+        assert_eq!(
+            scene.view_mode_at_screen_point(point, size),
+            Some(scene.active_view_mode().next())
+        );
+        let _ = scene.set_pointer(point, size);
+        assert_eq!(scene.cursor_icon(size), CursorIcon::Pointer);
+
+        let next = scene.view_mode_at_screen_point(point, size).unwrap();
+        assert!(scene.set_view_mode(next, size));
+        assert_eq!(scene.active_view_mode(), next);
+        assert_eq!(
+            scene.view_mode_at_screen_point(point, size),
+            Some(next.next())
+        );
     }
 
     #[test]
