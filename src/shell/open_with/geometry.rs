@@ -32,22 +32,18 @@ pub(crate) fn open_with_chooser_rect_scaled(
 }
 
 pub(crate) fn open_with_chooser_window_size_scaled(
-    chooser: &ShellOpenWithChooser,
+    _chooser: &ShellOpenWithChooser,
     scale_factor: f32,
 ) -> PhysicalSize<u32> {
-    let content_height = open_with_chooser_content_height_scaled(chooser, scale_factor);
-    let error_height = if chooser.error.is_some() {
-        scaled_dialog_metric(26.0, scale_factor)
-    } else {
-        0.0
-    };
+    let content_height = open_with_chooser_content_height_scaled(scale_factor);
+    let status_height = scaled_dialog_metric(26.0, scale_factor);
     let dialog_height = scaled_dialog_metric(OPEN_WITH_CHOOSER_TITLE_HEIGHT, scale_factor)
         + scaled_dialog_metric(16.0, scale_factor)
         + scaled_dialog_metric(OPEN_WITH_CHOOSER_QUERY_HEIGHT, scale_factor)
         + scaled_dialog_metric(10.0, scale_factor)
         + content_height
         + scaled_dialog_metric(38.0, scale_factor)
-        + error_height
+        + status_height
         + scaled_dialog_metric(52.0, scale_factor);
     PhysicalSize::new(
         scaled_dialog_metric(OPEN_WITH_CHOOSER_WIDTH, scale_factor)
@@ -58,10 +54,8 @@ pub(crate) fn open_with_chooser_window_size_scaled(
 }
 
 pub(crate) fn open_with_chooser_visible_row_count(chooser: &ShellOpenWithChooser) -> usize {
-    chooser
-        .tree_row_count()
-        .min(OPEN_WITH_CHOOSER_MAX_ROWS)
-        .max(1)
+    let _ = chooser;
+    OPEN_WITH_CHOOSER_MAX_ROWS
 }
 
 #[cfg(test)]
@@ -112,7 +106,7 @@ pub(crate) fn open_with_chooser_list_rect(
 
 pub(crate) fn open_with_chooser_list_rect_scaled(
     dialog_rect: ViewRect,
-    chooser: &ShellOpenWithChooser,
+    _chooser: &ShellOpenWithChooser,
     scale_factor: f32,
 ) -> ViewRect {
     let margin = scaled_dialog_metric(16.0, scale_factor);
@@ -121,15 +115,12 @@ pub(crate) fn open_with_chooser_list_rect_scaled(
         x: dialog_rect.x + margin,
         y: query.bottom() + scaled_dialog_metric(10.0, scale_factor),
         width: (dialog_rect.width - margin * 2.0).max(1.0),
-        height: open_with_chooser_content_height_scaled(chooser, scale_factor),
+        height: open_with_chooser_content_height_scaled(scale_factor),
     }
 }
 
-fn open_with_chooser_content_height_scaled(
-    chooser: &ShellOpenWithChooser,
-    scale_factor: f32,
-) -> f32 {
-    open_with_chooser_visible_row_count(chooser) as f32
+fn open_with_chooser_content_height_scaled(scale_factor: f32) -> f32 {
+    OPEN_WITH_CHOOSER_MAX_ROWS as f32
         * scaled_dialog_metric(OPEN_WITH_CHOOSER_ROW_HEIGHT, scale_factor)
 }
 

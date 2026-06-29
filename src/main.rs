@@ -25942,7 +25942,56 @@ mod tests {
         assert_eq!(
             open_with_chooser_list_rect_scaled(scaled, &chooser, 1.5).height,
             scaled_dialog_metric(OPEN_WITH_CHOOSER_ROW_HEIGHT, 1.5)
-                * open_with_chooser_visible_row_count(&chooser) as f32
+                * OPEN_WITH_CHOOSER_MAX_ROWS as f32
+        );
+    }
+
+    #[test]
+    fn open_with_dialog_size_is_stable_when_search_results_change() {
+        let applications = (0..12)
+            .map(|index| MimeApplication {
+                id: format!("app{index}.desktop"),
+                desktop_file: PathBuf::from(format!("/apps/app{index}.desktop")),
+                name: if index == 3 {
+                    "Unique Paint".to_string()
+                } else {
+                    format!("Editor {index}")
+                },
+                exec: format!("app{index} %f"),
+                icon: None,
+                is_default: false,
+            })
+            .collect::<Vec<_>>();
+        let mut chooser = ShellOpenWithChooser::new(
+            PathBuf::from("/tmp/plain.txt"),
+            Some(Arc::from("text/plain")),
+            applications,
+            Vec::new(),
+        );
+        let full_size = open_with_chooser_window_size_scaled(&chooser, 1.0);
+        let full_list = open_with_chooser_list_rect_scaled(
+            open_with_chooser_rect(&chooser, full_size),
+            &chooser,
+            1.0,
+        );
+        assert!(chooser.apply_command(OpenWithCommand::Insert("Unique".to_string())));
+        assert_eq!(chooser.filtered_count(), 1);
+        assert_eq!(
+            open_with_chooser_window_size_scaled(&chooser, 1.0),
+            full_size
+        );
+        assert_eq!(
+            open_with_chooser_list_rect_scaled(
+                open_with_chooser_rect(&chooser, full_size),
+                &chooser,
+                1.0,
+            ),
+            full_list
+        );
+        chooser.error = Some("Launch failed".to_string());
+        assert_eq!(
+            open_with_chooser_window_size_scaled(&chooser, 1.0),
+            full_size
         );
     }
 
@@ -26529,7 +26578,8 @@ text/plain=writer.desktop;\n",
             }],
             Vec::new(),
         ));
-        let size = PhysicalSize::new(640, 460);
+        let size =
+            open_with_chooser_window_size_scaled(scene.open_with_chooser.as_ref().unwrap(), 1.0);
         let rect = open_with_chooser_rect(scene.open_with_chooser.as_ref().unwrap(), size);
         let checkbox = open_with_chooser_default_checkbox_rect(
             rect,
