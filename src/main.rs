@@ -360,7 +360,10 @@ use shell::transfer::{
     transfer_paths_with_privilege, transfer_runtime_failure,
 };
 use shell::trash_conflict::{ShellTrashConflictDialog, TrashConflictDialogClick};
-use shell::window_semantics::{ShellWindowRole, apply_window_platform_semantics};
+use shell::window_semantics::{
+    ShellWindowCloseRequestTarget, ShellWindowRole, apply_window_platform_semantics,
+    window_manager_close_request_exits_application,
+};
 
 fn startup_view_mode(
     requested: ShellViewMode,
@@ -851,23 +854,22 @@ impl FikaWgpuApp {
         );
     }
 
-    fn intercept_main_close_for_dialog_lifecycle(&mut self) -> bool {
-        if self.dialog_windows.has_modal_window() {
-            self.dialog_windows.request_modal_attention();
-            fika_dialog_trace!("[fika-wgpu] main-close intercept=1 reason=modal-dialog");
-            return true;
-        }
-        let Some(deadline) = self.dialog_close_main_close_guard_until else {
-            fika_dialog_trace!("[fika-wgpu] main-close intercept=0 reason=no-guard");
-            return false;
-        };
+    fn close_main_window_from_window_manager_request(
+        &mut self,
+        event_loop: &dyn ActiveEventLoop,
+        reason: &'static str,
+    ) {
+        let previous_guard = self.dialog_close_guard_trace();
+        let modal = self.dialog_windows.has_modal_window();
         self.dialog_close_main_close_guard_until = None;
-        let intercept = Instant::now() <= deadline;
         fika_dialog_trace!(
-            "[fika-wgpu] main-close intercept={} reason=dialog-close-guard",
-            intercept as u8
+            "[fika-wgpu] main-close accept=1 reason={} modal={} previous_guard={}",
+            reason,
+            modal as u8,
+            previous_guard
         );
-        intercept
+        self.drop_windows_for_exit();
+        self.exit_event_loop(event_loop, reason);
     }
 
     fn sync_dialog_window_for_kind(&mut self, kind: ShellDialogWindowKind) {
@@ -2063,6 +2065,18 @@ impl ApplicationHandler for FikaWgpuApp {
             }
         }
         if self.dialog_windows.is_recently_closed_window(window_id) {
+            if matches!(event, WindowEvent::CloseRequested)
+                && window_manager_close_request_exits_application(
+                    ShellWindowCloseRequestTarget::RecentlyClosedDialog,
+                    self.dialog_windows.has_modal_window(),
+                )
+                && self.window.is_some()
+            {
+                self.close_main_window_from_window_manager_request(
+                    event_loop,
+                    "recently-closed-dialog-close-requested",
+                );
+            }
             return;
         }
         let Some(main_window_id) = self.window.as_ref().map(|window| window.id()) else {
@@ -2080,11 +2094,15 @@ impl ApplicationHandler for FikaWgpuApp {
         }
         match event {
             WindowEvent::CloseRequested => {
-                if self.intercept_main_close_for_dialog_lifecycle() {
-                    return;
+                if window_manager_close_request_exits_application(
+                    ShellWindowCloseRequestTarget::Main,
+                    self.dialog_windows.has_modal_window(),
+                ) {
+                    self.close_main_window_from_window_manager_request(
+                        event_loop,
+                        "main-close-requested",
+                    );
                 }
-                self.drop_windows_for_exit();
-                self.exit_event_loop(event_loop, "main-close-requested");
             }
             WindowEvent::SurfaceResized(size) => {
                 if let Some(renderer) = self.renderer.as_mut() {

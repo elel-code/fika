@@ -33,9 +33,10 @@ dialog、render damage 和异步操作持续演进提供稳定边界。
   从 active modal 集合移除并隔离尾随 window event，不再误触发主窗口退出；dialog renderer
   保留实际 surface size，输入 hit-test 和内部绘制使用固定 `layout_size`，避免 compositor
   或尾随 resize 事件导致弹窗内容尺寸漂移；detached dialog surface validation 不再退出
-  主 event loop；主窗口 close request 在 modal dialog 存活期间被拦截，dialog 刚关闭后的
-  尾随主窗口 close request 也会被短暂 guard 掉，用来弥补当前缺少真正 transient parent
-  时 compositor/WM 可能投递的错误关闭序列。`FIKA_WGPU_DIALOG_TRACE=1` 会记录
+  主 event loop；来自主窗口或最近关闭 dialog id 的 WM close request 会被视为用户关闭
+  app 的明确意图并直接退出，避免 niri 等 WM 在 dialog 生命周期后需要第二次 close。
+  dialog close guard 只保留为尾随事件诊断窗口，不再吞掉主窗口 close request。
+  `FIKA_WGPU_DIALOG_TRACE=1` 会记录
   `CloseRequested` / `Destroyed` / resize / redraw 等 window event 路由、dialog
   close guard 和 event-loop exit reason；高频 pointer move 默认折叠，需要时可加
   `FIKA_WGPU_DIALOG_TRACE_VERBOSE=1`。`scripts/dialog-lifecycle-smoke.sh` 提供

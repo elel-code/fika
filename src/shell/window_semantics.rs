@@ -120,6 +120,22 @@ pub(crate) fn modal_window_event_disposition(
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ShellWindowCloseRequestTarget {
+    Main,
+    RecentlyClosedDialog,
+}
+
+pub(crate) fn window_manager_close_request_exits_application(
+    target: ShellWindowCloseRequestTarget,
+    modal_dialog_open: bool,
+) -> bool {
+    match target {
+        ShellWindowCloseRequestTarget::Main => true,
+        ShellWindowCloseRequestTarget::RecentlyClosedDialog => !modal_dialog_open,
+    }
+}
+
 fn main_window_event_blocked_by_modal_dialog(event: &WindowEvent) -> bool {
     matches!(
         event,
@@ -243,5 +259,29 @@ mod tests {
             }),
             ShellModalWindowEventDisposition::BlockAndRequestAttention
         );
+    }
+
+    #[test]
+    fn window_manager_close_request_policy_exits_main_even_with_modal() {
+        assert!(window_manager_close_request_exits_application(
+            ShellWindowCloseRequestTarget::Main,
+            true,
+        ));
+        assert!(window_manager_close_request_exits_application(
+            ShellWindowCloseRequestTarget::Main,
+            false,
+        ));
+    }
+
+    #[test]
+    fn window_manager_close_request_policy_exits_stale_dialog_only_without_modal() {
+        assert!(window_manager_close_request_exits_application(
+            ShellWindowCloseRequestTarget::RecentlyClosedDialog,
+            false,
+        ));
+        assert!(!window_manager_close_request_exits_application(
+            ShellWindowCloseRequestTarget::RecentlyClosedDialog,
+            true,
+        ));
     }
 }
