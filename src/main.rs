@@ -2532,6 +2532,7 @@ impl ShellExternalDrag {
 struct ShellPreparedPaneVisibleItem {
     layout: ItemLayout,
     path: Option<PathBuf>,
+    slot_id: u64,
 }
 
 struct ShellPreparedPaneProjection {
@@ -2543,12 +2544,6 @@ struct ShellPreparedPaneProjection {
 struct ShellPreparedFrameProjectionLayouts {
     layouts: Vec<ShellPreparedPaneProjection>,
     layout_us: u128,
-}
-
-impl ShellPreparedFrameProjectionLayouts {
-    fn layouts(&self) -> &[ShellPreparedPaneProjection] {
-        &self.layouts
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -8524,7 +8519,11 @@ impl ShellScene {
                     .filtered_indexes
                     .get(layout.model_index)
                     .and_then(|entry_index| self.entry_path_for_pane_view(view, *entry_index));
-                ShellPreparedPaneVisibleItem { layout, path }
+                ShellPreparedPaneVisibleItem {
+                    layout,
+                    path,
+                    slot_id: 0,
+                }
             })
             .collect();
         let scroll_metrics = ShellPaneScrollMetrics::new(layout.content_size(), geometry.content);
@@ -8545,11 +8544,14 @@ impl ShellScene {
             .visible_items
             .into_iter()
             .map(|item| {
-                let slot_id = item
-                    .path
-                    .as_deref()
-                    .and_then(|path| slots.slot_for_path(path))
-                    .unwrap_or_default();
+                let slot_id = if item.slot_id != 0 {
+                    item.slot_id
+                } else {
+                    item.path
+                        .as_deref()
+                        .and_then(|path| slots.slot_for_path(path))
+                        .unwrap_or_default()
+                };
                 ShellPaneVisibleItem {
                     layout: item.layout,
                     slot_id,
@@ -8578,20 +8580,27 @@ impl ShellScene {
 
     fn update_visible_slot_pools_for_projection_layouts(
         &mut self,
-        layouts: &[ShellPreparedPaneProjection],
+        layouts: &mut ShellPreparedFrameProjectionLayouts,
     ) -> ShellVisibleItemSlotStats {
         let mut stats = ShellVisibleItemSlotStats::default();
         let mut prepared_panes = [false; 2];
-        for prepared in layouts {
+        for prepared in &mut layouts.layouts {
             let kind = prepared.geometry.kind;
             prepared_panes[kind.index()] = true;
-            let pane_stats = self.visible_slots.update_visible_items(
-                kind,
+            let pool = self.visible_slots.get_mut(kind);
+            let pane_stats = pool.update_visible_items(
                 prepared
                     .visible_items
                     .iter()
-                    .filter_map(|item| item.path.clone()),
+                    .filter_map(|item| item.path.as_deref()),
             );
+            for item in &mut prepared.visible_items {
+                item.slot_id = item
+                    .path
+                    .as_deref()
+                    .and_then(|path| pool.slot_for_path(path))
+                    .unwrap_or_default();
+            }
             stats = stats.merged(pane_stats);
         }
         for kind in ShellPaneId::ALL {
@@ -8605,8 +8614,8 @@ impl ShellScene {
 
     #[cfg_attr(not(test), allow(dead_code))]
     fn update_visible_slot_pools(&mut self, size: PhysicalSize<u32>) -> ShellVisibleItemSlotStats {
-        let layouts = self.prepare_frame_projection_layouts(size);
-        self.update_visible_slot_pools_for_projection_layouts(layouts.layouts())
+        let mut layouts = self.prepare_frame_projection_layouts(size);
+        self.update_visible_slot_pools_for_projection_layouts(&mut layouts)
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -12870,8 +12879,8 @@ impl WgpuState {
         let total_start = Instant::now();
         let metadata_result_stats = scene.drain_metadata_role_results();
         let role_start = Instant::now();
-        let projection_layouts = scene.prepare_frame_projection_layouts(self.size);
-        scene.update_visible_slot_pools_for_projection_layouts(projection_layouts.layouts());
+        let mut projection_layouts = scene.prepare_frame_projection_layouts(self.size);
+        scene.update_visible_slot_pools_for_projection_layouts(&mut projection_layouts);
         let frame_projections = scene.pane_projections_from_layouts(projection_layouts);
         let _folder_preview_role_stats =
             scene.update_folder_preview_roles_for_projections(frame_projections.projections());
@@ -13187,8 +13196,8 @@ impl WgpuState {
         force_log: bool,
     ) -> ShellRenderOutcome {
         let metadata_result_stats = scene.drain_metadata_role_results();
-        let projection_layouts = scene.prepare_frame_projection_layouts(self.size);
-        scene.update_visible_slot_pools_for_projection_layouts(projection_layouts.layouts());
+        let mut projection_layouts = scene.prepare_frame_projection_layouts(self.size);
+        scene.update_visible_slot_pools_for_projection_layouts(&mut projection_layouts);
         let frame_projections = scene.pane_projections_from_layouts(projection_layouts);
         let _folder_preview_role_stats =
             scene.update_folder_preview_roles_for_projections(frame_projections.projections());
@@ -20995,8 +21004,8 @@ mod tests {
         );
         let size = PhysicalSize::new(700, 320);
 
-        let layouts = scene.prepare_frame_projection_layouts(size);
-        scene.update_visible_slot_pools_for_projection_layouts(layouts.layouts());
+        let mut layouts = scene.prepare_frame_projection_layouts(size);
+        scene.update_visible_slot_pools_for_projection_layouts(&mut layouts);
         let frame_projections = scene.pane_projections_from_layouts(layouts);
         let prepared = frame_projections
             .projections()
@@ -21008,6 +21017,7 @@ mod tests {
         assert_eq!(prepared.geometry, direct.geometry);
         assert_eq!(prepared.scroll_metrics, direct.scroll_metrics);
         assert_eq!(prepared.visible_items, direct.visible_items);
+        assert!(prepared.visible_items.iter().all(|item| item.slot_id != 0));
         assert_eq!(prepared.view.path, direct.view.path);
         assert_eq!(prepared.view.view_mode, direct.view.view_mode);
     }

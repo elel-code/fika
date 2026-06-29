@@ -278,26 +278,32 @@ pub(crate) struct ShellVisibleItemSlotPool {
 impl ShellVisibleItemSlotPool {
     const MAX_FREE_SLOTS: usize = 100;
 
-    pub(crate) fn update_visible_items(
+    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn update_visible_items<P>(
         &mut self,
-        visible_paths: impl IntoIterator<Item = PathBuf>,
-    ) -> ShellVisibleItemSlotStats {
+        visible_paths: impl IntoIterator<Item = P>,
+    ) -> ShellVisibleItemSlotStats
+    where
+        P: AsRef<Path>,
+    {
         self.visible_epoch = self.visible_epoch.wrapping_add(1).max(1);
         let visible_epoch = self.visible_epoch;
         let mut reused = 0usize;
 
         for path in visible_paths {
-            match self.slot_by_path.entry(path) {
-                std::collections::hash_map::Entry::Occupied(mut entry) => {
-                    reused += usize::from(entry.get().visible_epoch != visible_epoch);
-                    entry.get_mut().visible_epoch = visible_epoch;
-                }
-                std::collections::hash_map::Entry::Vacant(entry) => {
-                    entry.insert(ShellVisibleItemSlot {
+            let path = path.as_ref();
+            if let Some(slot) = self.slot_by_path.get_mut(path) {
+                reused += usize::from(slot.visible_epoch != visible_epoch);
+                slot.visible_epoch = visible_epoch;
+            } else {
+                self.slot_by_path.insert(
+                    path.to_path_buf(),
+                    ShellVisibleItemSlot {
                         slot_id: 0,
                         visible_epoch,
-                    });
-                }
+                    },
+                );
             }
         }
 
@@ -365,11 +371,19 @@ impl ShellPaneVisibleSlotPools {
         &self.pools[pane.index()]
     }
 
-    pub(crate) fn update_visible_items(
+    pub(crate) fn get_mut(&mut self, pane: ShellPaneId) -> &mut ShellVisibleItemSlotPool {
+        &mut self.pools[pane.index()]
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn update_visible_items<P>(
         &mut self,
         pane: ShellPaneId,
-        visible_paths: impl IntoIterator<Item = PathBuf>,
-    ) -> ShellVisibleItemSlotStats {
+        visible_paths: impl IntoIterator<Item = P>,
+    ) -> ShellVisibleItemSlotStats
+    where
+        P: AsRef<Path>,
+    {
         self.pools[pane.index()].update_visible_items(visible_paths)
     }
 
