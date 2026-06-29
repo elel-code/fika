@@ -105,8 +105,8 @@ pub use core::privilege::{
     HelperBus, PrivilegedCommand, PrivilegedOperationResult, run_dbus_service, run_via_dbus,
 };
 pub use core::settings::{
-    AppSettings, PlacesSidebarSettings, ViewSettings, app_settings_tsv, default_app_settings_path,
-    load_app_settings, parse_app_settings, save_app_settings,
+    AppSettings, AppearanceSettings, PlacesSidebarSettings, ViewSettings, app_settings_tsv,
+    default_app_settings_path, load_app_settings, parse_app_settings, save_app_settings,
 };
 pub use core::thumbnails::{
     ExternalThumbnailerCommand, ThumbnailCacheHit, ThumbnailCachePaths, ThumbnailCandidate,

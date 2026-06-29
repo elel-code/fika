@@ -1,7 +1,7 @@
 # 性能对齐原则
 
 Fika 的性能工作以 Dolphin 为第一参考。本机 Dolphin 源码位于
-`/home/yk/Code/dolphin`，它是文件管理器性能架构、行为保持型优化和回归 gate
+`/home/yk/Code/fika/reference/dolphin`，它是文件管理器性能架构、行为保持型优化和回归 gate
 的第一参考。
 
 ## 硬规则
@@ -26,7 +26,7 @@ Dolphin reference。
 
 ```text
 Dolphin reference:
-- Source: /home/yk/Code/dolphin/src/kitemviews/kfileitemmodelrolesupdater.cpp
+- Source: /home/yk/Code/fika/reference/dolphin/src/kitemviews/kfileitemmodelrolesupdater.cpp
 - Symbol: KFileItemModelRolesUpdater::setVisibleIndexRange / startUpdating
 - Dolphin boundary: 可见项优先于后台 role work。
 - Fika mapping: src/shell/... 或 src/core/...
@@ -37,35 +37,35 @@ Dolphin reference:
 ## 常用参考入口
 
 - item model、refresh、filtering、sorting 和 role storage：
-  `/home/yk/Code/dolphin/src/kitemviews/kfileitemmodel.cpp`、
-  `/home/yk/Code/dolphin/src/kitemviews/kfileitemmodel.h`、
-  `/home/yk/Code/dolphin/src/kitemviews/private/kfileitemmodelsortalgorithm.h`、
-  `/home/yk/Code/dolphin/src/kitemviews/private/kfileitemmodelfilter.cpp`。
+  `/home/yk/Code/fika/reference/dolphin/src/kitemviews/kfileitemmodel.cpp`、
+  `/home/yk/Code/fika/reference/dolphin/src/kitemviews/kfileitemmodel.h`、
+  `/home/yk/Code/fika/reference/dolphin/src/kitemviews/private/kfileitemmodelsortalgorithm.h`、
+  `/home/yk/Code/fika/reference/dolphin/src/kitemviews/private/kfileitemmodelfilter.cpp`。
 - metadata role、preview scheduling、visible index priority、异步 role 解析、
   directory size counting 和 MIME/Baloo role 更新：
-  `/home/yk/Code/dolphin/src/kitemviews/kfileitemmodelrolesupdater.cpp`、
-  `/home/yk/Code/dolphin/src/kitemviews/kfileitemmodelrolesupdater.h`、
-  `/home/yk/Code/dolphin/src/kitemviews/private/kdirectorycontentscounter.cpp`、
-  `/home/yk/Code/dolphin/src/kitemviews/private/kbaloorolesprovider.cpp`。
+  `/home/yk/Code/fika/reference/dolphin/src/kitemviews/kfileitemmodelrolesupdater.cpp`、
+  `/home/yk/Code/fika/reference/dolphin/src/kitemviews/kfileitemmodelrolesupdater.h`、
+  `/home/yk/Code/fika/reference/dolphin/src/kitemviews/private/kdirectorycontentscounter.cpp`、
+  `/home/yk/Code/fika/reference/dolphin/src/kitemviews/private/kbaloorolesprovider.cpp`。
 - 可见项 virtualization、widget reuse、scroll/layout 边界、column sizing、
   rubber-band 和 item view geometry：
-  `/home/yk/Code/dolphin/src/kitemviews/kitemlistview.cpp`、
-  `/home/yk/Code/dolphin/src/kitemviews/kitemlistview.h`、
-  `/home/yk/Code/dolphin/src/kitemviews/private/kitemlistviewlayouter.cpp`、
-  `/home/yk/Code/dolphin/src/kitemviews/private/kitemlistsizehintresolver.cpp`。
+  `/home/yk/Code/fika/reference/dolphin/src/kitemviews/kitemlistview.cpp`、
+  `/home/yk/Code/fika/reference/dolphin/src/kitemviews/kitemlistview.h`、
+  `/home/yk/Code/fika/reference/dolphin/src/kitemviews/private/kitemlistviewlayouter.cpp`、
+  `/home/yk/Code/fika/reference/dolphin/src/kitemviews/private/kitemlistsizehintresolver.cpp`。
 - item painting、icon/pixmap handling、text caching、role text layout 和
   selection/hover visuals：
-  `/home/yk/Code/dolphin/src/kitemviews/kitemlistwidget.cpp`、
-  `/home/yk/Code/dolphin/src/kitemviews/kstandarditemlistwidget.cpp`、
-  `/home/yk/Code/dolphin/src/views/dolphinfileitemlistwidget.cpp`。
+  `/home/yk/Code/fika/reference/dolphin/src/kitemviews/kitemlistwidget.cpp`、
+  `/home/yk/Code/fika/reference/dolphin/src/kitemviews/kstandarditemlistwidget.cpp`、
+  `/home/yk/Code/fika/reference/dolphin/src/views/dolphinfileitemlistwidget.cpp`。
 - Dolphin view integration 和 mode-specific behavior：
-  `/home/yk/Code/dolphin/src/views/dolphinview.cpp`、
-  `/home/yk/Code/dolphin/src/views/dolphinitemlistview.cpp`、
-  `/home/yk/Code/dolphin/src/views/viewmodecontroller.cpp`、
-  `/home/yk/Code/dolphin/src/views/viewproperties.cpp`。
+  `/home/yk/Code/fika/reference/dolphin/src/views/dolphinview.cpp`、
+  `/home/yk/Code/fika/reference/dolphin/src/views/dolphinitemlistview.cpp`、
+  `/home/yk/Code/fika/reference/dolphin/src/views/viewmodecontroller.cpp`、
+  `/home/yk/Code/fika/reference/dolphin/src/views/viewproperties.cpp`。
 - Places 行为和设备侧边栏集成：
-  `/home/yk/Code/dolphin/src/panels/places/placespanel.cpp`、
-  `/home/yk/Code/dolphin/src/dolphinplacesmodelsingleton.cpp`。
+  `/home/yk/Code/fika/reference/dolphin/src/panels/places/placespanel.cpp`、
+  `/home/yk/Code/fika/reference/dolphin/src/dolphinplacesmodelsingleton.cpp`。
 
 ## Review 检查项
 

@@ -112,12 +112,15 @@ pub(crate) enum RenameCommand {
 pub(crate) enum OpenWithCommand {
     Insert(String),
     Backspace,
+    Delete,
     Cancel,
     Commit,
     MoveUp,
     MoveDown,
-    MoveCategoryLeft,
-    MoveCategoryRight,
+    MoveLeft,
+    MoveRight,
+    MoveHome,
+    MoveEnd,
     Ignore,
 }
 
@@ -320,6 +323,34 @@ pub(crate) fn hidden_toggle_requested_for_key_parts(
         && (matches!(physical_key, PhysicalKey::Code(KeyCode::KeyH))
             || key_character_eq(logical_key, "h")
             || key_character_eq(key_without_modifiers, "h"))
+}
+
+pub(crate) fn dark_mode_toggle_requested_for_key_event(
+    event: &KeyEvent,
+    shortcut: bool,
+    shift: bool,
+) -> bool {
+    dark_mode_toggle_requested_for_key_parts(
+        shortcut,
+        shift,
+        &event.physical_key,
+        &event.logical_key,
+        &event.key_without_modifiers,
+    )
+}
+
+pub(crate) fn dark_mode_toggle_requested_for_key_parts(
+    shortcut: bool,
+    shift: bool,
+    physical_key: &PhysicalKey,
+    logical_key: &Key,
+    key_without_modifiers: &Key,
+) -> bool {
+    shortcut
+        && shift
+        && (matches!(physical_key, PhysicalKey::Code(KeyCode::KeyD))
+            || key_character_eq(logical_key, "d")
+            || key_character_eq(key_without_modifiers, "d"))
 }
 
 pub(crate) fn location_command_for_key_event(
@@ -610,19 +641,37 @@ pub(crate) fn open_with_command_for_key_parts(
         || matches!(logical_key, Key::Named(NamedKey::ArrowLeft))
         || matches!(key_without_modifiers, Key::Named(NamedKey::ArrowLeft))
     {
-        return OpenWithCommand::MoveCategoryLeft;
+        return OpenWithCommand::MoveLeft;
     }
     if matches!(physical_key, PhysicalKey::Code(KeyCode::ArrowRight))
         || matches!(logical_key, Key::Named(NamedKey::ArrowRight))
         || matches!(key_without_modifiers, Key::Named(NamedKey::ArrowRight))
     {
-        return OpenWithCommand::MoveCategoryRight;
+        return OpenWithCommand::MoveRight;
     }
     if matches!(physical_key, PhysicalKey::Code(KeyCode::Backspace))
         || matches!(logical_key, Key::Named(NamedKey::Backspace))
         || matches!(key_without_modifiers, Key::Named(NamedKey::Backspace))
     {
         return OpenWithCommand::Backspace;
+    }
+    if matches!(physical_key, PhysicalKey::Code(KeyCode::Delete))
+        || matches!(logical_key, Key::Named(NamedKey::Delete))
+        || matches!(key_without_modifiers, Key::Named(NamedKey::Delete))
+    {
+        return OpenWithCommand::Delete;
+    }
+    if matches!(physical_key, PhysicalKey::Code(KeyCode::Home))
+        || matches!(logical_key, Key::Named(NamedKey::Home))
+        || matches!(key_without_modifiers, Key::Named(NamedKey::Home))
+    {
+        return OpenWithCommand::MoveHome;
+    }
+    if matches!(physical_key, PhysicalKey::Code(KeyCode::End))
+        || matches!(logical_key, Key::Named(NamedKey::End))
+        || matches!(key_without_modifiers, Key::Named(NamedKey::End))
+    {
+        return OpenWithCommand::MoveEnd;
     }
     if shortcut {
         return OpenWithCommand::Ignore;

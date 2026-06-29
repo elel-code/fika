@@ -47,7 +47,7 @@ use winit::event::{ElementState, Modifiers, MouseButton, MouseScrollDelta, Windo
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 #[cfg(test)]
 use winit::keyboard::{Key, KeyCode, NamedKey, PhysicalKey};
-use winit::window::{Window, WindowAttributes, WindowId};
+use winit::window::{Theme, Window, WindowAttributes, WindowId};
 
 macro_rules! fika_log {
     ($($arg:tt)*) => {{
@@ -186,8 +186,9 @@ use shell::open_with::OpenWithDefaultUpdate;
 use shell::open_with::OpenWithTreeRow;
 use shell::open_with::geometry::{
     open_with_chooser_click_at_point, open_with_chooser_list_rect_scaled,
-    open_with_chooser_rect_scaled, open_with_chooser_scrollbar_rects_scaled,
-    open_with_chooser_visible_row_count, open_with_scroll_delta_rows,
+    open_with_chooser_query_rect_scaled, open_with_chooser_rect_scaled,
+    open_with_chooser_scrollbar_rects_scaled, open_with_chooser_visible_row_count,
+    open_with_chooser_window_size_scaled, open_with_scroll_delta_rows,
 };
 #[cfg(test)]
 use shell::open_with::geometry::{
@@ -217,10 +218,11 @@ use shell::perf::{
 use shell::popup::style::*;
 use shell::prewarm::{
     IconRasterPrewarmStats, IconRolePrewarmStats, TextLabelPrewarmMode, TextLabelPrewarmStats,
-    default_text_raster_miss_budget, icon_role_prewarm_budget_for_frame,
-    icon_role_read_ahead_queue_budget_for_frame, text_label_prewarm_budget_for_mode,
-    text_label_prewarm_mode_for_frame, text_label_prewarm_mode_for_scene_prewarm,
-    text_label_raster_miss_budget_for_mode, visible_exact_icon_roles_enabled_for_frame,
+    default_text_raster_miss_budget, icon_raster_miss_budget_for_frame,
+    icon_role_prewarm_budget_for_frame, icon_role_read_ahead_queue_budget_for_frame,
+    text_label_prewarm_budget_for_mode, text_label_prewarm_mode_for_frame,
+    text_label_prewarm_mode_for_scene_prewarm, text_label_raster_miss_budget_for_mode,
+    visible_exact_icon_roles_enabled_for_frame,
 };
 use shell::privilege::{run_privileged_command_sync, should_attempt_privileged_operation};
 #[cfg(test)]
@@ -261,20 +263,21 @@ use shell::service_menu::ServiceMenuLaunchRequest;
 use shell::shortcuts::{
     CreateCommand, FileKeyboardCommand, FilterCommand, LocationCommand, OpenWithCommand,
     PathNavigationAction, RenameCommand, SelectionCommand, ZoomAction,
-    create_command_for_key_event, escape_requested_for_key_event,
-    file_keyboard_command_for_key_event, filter_command_for_key_event,
-    hidden_toggle_requested_for_key_event, is_activation_key, location_command_for_key_event,
-    navigation_action_for_key, open_with_command_for_key_event, path_navigation_action_for_key,
-    path_navigation_action_for_mouse_button, reload_requested_for_key_event,
-    rename_command_for_key_event, selection_command_for_key_event, view_mode_for_key_event,
-    zoom_action_for_key_event, zoom_action_for_scroll_delta,
+    create_command_for_key_event, dark_mode_toggle_requested_for_key_event,
+    escape_requested_for_key_event, file_keyboard_command_for_key_event,
+    filter_command_for_key_event, hidden_toggle_requested_for_key_event, is_activation_key,
+    location_command_for_key_event, navigation_action_for_key, open_with_command_for_key_event,
+    path_navigation_action_for_key, path_navigation_action_for_mouse_button,
+    reload_requested_for_key_event, rename_command_for_key_event, selection_command_for_key_event,
+    view_mode_for_key_event, zoom_action_for_key_event, zoom_action_for_scroll_delta,
 };
 #[cfg(test)]
 use shell::shortcuts::{
-    create_command_for_key_parts, file_keyboard_command_for_key_parts,
-    filter_command_for_key_parts, hidden_toggle_requested_for_key_parts,
-    location_command_for_key_parts, reload_requested_for_key_parts, rename_command_for_key_parts,
-    selection_command_for_key_parts, view_mode_for_key_parts, zoom_action_for_key,
+    create_command_for_key_parts, dark_mode_toggle_requested_for_key_parts,
+    file_keyboard_command_for_key_parts, filter_command_for_key_parts,
+    hidden_toggle_requested_for_key_parts, location_command_for_key_parts,
+    reload_requested_for_key_parts, rename_command_for_key_parts, selection_command_for_key_parts,
+    view_mode_for_key_parts, zoom_action_for_key,
 };
 #[cfg(test)]
 use shell::tasks::geometry::{
@@ -311,6 +314,10 @@ fn startup_show_hidden(settings: &AppSettings) -> bool {
     settings.view.show_hidden.unwrap_or(false)
 }
 
+fn startup_dark_mode(settings: &AppSettings) -> bool {
+    settings.appearance.dark_mode.unwrap_or(false)
+}
+
 fn load_startup_app_settings(settings_path: &Path) -> AppSettings {
     match load_app_settings(settings_path) {
         Ok(settings) => settings,
@@ -336,6 +343,14 @@ fn save_show_hidden_setting(settings_path: &Path, show_hidden: bool) -> Result<(
     let mut settings = load_app_settings(settings_path)
         .map_err(|error| format!("load settings {}: {error}", settings_path.display()))?;
     settings.view.show_hidden = Some(show_hidden);
+    save_app_settings(settings_path, &settings)
+        .map_err(|error| format!("save settings {}: {error}", settings_path.display()))
+}
+
+fn save_dark_mode_setting(settings_path: &Path, dark_mode: bool) -> Result<(), String> {
+    let mut settings = load_app_settings(settings_path)
+        .map_err(|error| format!("load settings {}: {error}", settings_path.display()))?;
+    settings.appearance.dark_mode = Some(dark_mode);
     save_app_settings(settings_path, &settings)
         .map_err(|error| format!("save settings {}: {error}", settings_path.display()))
 }
@@ -371,7 +386,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let settings = load_startup_app_settings(&settings_path);
     let view_mode = startup_view_mode(options.view_mode, options.view_mode_explicit, &settings);
     let show_hidden = startup_show_hidden(&settings);
-    let scene = ShellScene::load_with_hidden_visibility(options.path, view_mode, show_hidden)?;
+    let mut scene = ShellScene::load_with_hidden_visibility(options.path, view_mode, show_hidden)?;
+    scene.dark_mode = startup_dark_mode(&settings);
 
     let event_loop = EventLoop::new()?;
     let event_loop_proxy = event_loop.create_proxy();
@@ -429,6 +445,12 @@ fn window_title(scene: &ShellScene) -> String {
     }
 }
 
+struct OpenWithDialogWindow {
+    renderer: WgpuState,
+    window: Box<dyn Window>,
+    cursor_icon: CursorIcon,
+}
+
 struct FikaWgpuApp {
     scene: ShellScene,
     mime_applications: MimeApplicationCache,
@@ -442,6 +464,7 @@ struct FikaWgpuApp {
     modifiers: Modifiers,
     // Drop order matters: renderer borrows display/window handles.
     renderer: Option<WgpuState>,
+    open_with_dialog: Option<OpenWithDialogWindow>,
     clipboard: Option<ShellClipboard>,
     window: Option<Box<dyn Window>>,
     cursor_icon: CursorIcon,
@@ -483,6 +506,7 @@ impl FikaWgpuApp {
             next_task_id: 1,
             modifiers: Modifiers::default(),
             renderer: None,
+            open_with_dialog: None,
             clipboard: None,
             window: None,
             cursor_icon: CursorIcon::Default,
@@ -511,8 +535,159 @@ impl FikaWgpuApp {
         }
     }
 
+    fn set_open_with_dialog_cursor(&mut self, cursor_icon: CursorIcon) {
+        let Some(dialog) = self.open_with_dialog.as_mut() else {
+            return;
+        };
+        if dialog.cursor_icon == cursor_icon {
+            return;
+        }
+        dialog.cursor_icon = cursor_icon;
+        dialog.window.set_cursor(WinitCursor::Icon(cursor_icon));
+    }
+
     fn update_window_cursor_for_scene(&mut self, size: PhysicalSize<u32>) {
         self.set_window_cursor(self.scene.cursor_icon(size));
+    }
+
+    fn update_open_with_dialog_cursor_for_scene(&mut self, size: PhysicalSize<u32>) {
+        self.set_open_with_dialog_cursor(self.scene.open_with_chooser_cursor_icon(size));
+    }
+
+    fn request_main_redraw(&self) {
+        if let Some(window) = self.window.as_ref() {
+            window.request_redraw();
+        }
+    }
+
+    fn request_open_with_dialog_redraw(&self) -> bool {
+        let Some(dialog) = self.open_with_dialog.as_ref() else {
+            return false;
+        };
+        dialog.window.request_redraw();
+        true
+    }
+
+    fn open_with_chooser_is_main_overlay(&self) -> bool {
+        self.scene.is_open_with_chooser_open() && self.open_with_dialog.is_none()
+    }
+
+    fn open_with_dialog_title(&self) -> String {
+        self.scene
+            .open_with_chooser
+            .as_ref()
+            .map(|chooser| format!("Open With - {}", path_name_or_display(&chooser.path)))
+            .unwrap_or_else(|| "Open With".to_string())
+    }
+
+    fn open_with_dialog_surface_size(&self) -> Option<PhysicalSize<u32>> {
+        self.scene
+            .open_with_chooser
+            .as_ref()
+            .map(|chooser| open_with_chooser_window_size_scaled(chooser, self.scene.ui_scale()))
+    }
+
+    fn open_with_window_theme(&self) -> Theme {
+        if self.scene.dark_mode {
+            Theme::Dark
+        } else {
+            Theme::Light
+        }
+    }
+
+    fn ensure_open_with_dialog_window(&mut self, event_loop: &dyn ActiveEventLoop) -> bool {
+        let Some(size) = self.open_with_dialog_surface_size() else {
+            self.close_open_with_dialog_window();
+            return false;
+        };
+        if self.open_with_dialog.is_some() {
+            self.scene.open_with_chooser_detached = true;
+            self.sync_open_with_dialog_window();
+            return true;
+        }
+
+        let title = self.open_with_dialog_title();
+        let attrs = WindowAttributes::default()
+            .with_title(title)
+            .with_surface_size(size)
+            .with_min_surface_size(size)
+            .with_max_surface_size(size)
+            .with_resizable(false)
+            .with_theme(Some(self.open_with_window_theme()));
+        let window = match event_loop.create_window(attrs) {
+            Ok(window) => window,
+            Err(error) => {
+                fika_log!("[fika-wgpu] open-with-dialog create failed: {error}");
+                self.scene.open_with_chooser_detached = false;
+                return false;
+            }
+        };
+        let renderer = match WgpuState::new(window.as_ref()) {
+            Ok(renderer) => renderer,
+            Err(error) => {
+                fika_log!("[fika-wgpu] open-with-dialog renderer init failed: {error}");
+                self.scene.open_with_chooser_detached = false;
+                return false;
+            }
+        };
+        self.scene.open_with_chooser_detached = true;
+        self.open_with_dialog = Some(OpenWithDialogWindow {
+            renderer,
+            window,
+            cursor_icon: CursorIcon::Default,
+        });
+        self.sync_open_with_dialog_window();
+        true
+    }
+
+    fn sync_open_with_dialog_window(&mut self) {
+        let Some(size) = self.open_with_dialog_surface_size() else {
+            self.close_open_with_dialog_window();
+            return;
+        };
+        let title = self.open_with_dialog_title();
+        let theme = self.open_with_window_theme();
+        let Some(dialog) = self.open_with_dialog.as_mut() else {
+            return;
+        };
+        dialog.window.set_title(&title);
+        dialog.window.set_theme(Some(theme));
+        dialog.window.set_min_surface_size(Some(size.into()));
+        dialog.window.set_max_surface_size(Some(size.into()));
+        if let Some(applied) = dialog.window.request_surface_size(size.into()) {
+            dialog.renderer.resize(applied);
+        }
+        dialog.window.request_redraw();
+    }
+
+    fn close_open_with_dialog_window(&mut self) {
+        self.open_with_dialog = None;
+        self.scene.open_with_chooser_detached = false;
+    }
+
+    fn finish_open_with_dialog_state_change(&mut self) {
+        if self.scene.is_open_with_chooser_open() {
+            if self.open_with_dialog.is_some() {
+                self.scene.open_with_chooser_detached = true;
+                self.sync_open_with_dialog_window();
+            } else {
+                self.request_main_redraw();
+            }
+        } else {
+            self.close_open_with_dialog_window();
+            self.request_main_redraw();
+        }
+    }
+
+    fn reconcile_open_with_dialog_lifecycle(&mut self) {
+        if self.open_with_dialog.is_none() {
+            return;
+        }
+        if self.scene.is_open_with_chooser_open() {
+            self.scene.open_with_chooser_detached = true;
+        } else {
+            self.close_open_with_dialog_window();
+        }
     }
 
     fn drive_directory_watchers(&mut self, event_loop: &dyn ActiveEventLoop) {
@@ -564,6 +739,17 @@ impl FikaWgpuApp {
         }
         if let Err(error) = save_show_hidden_setting(&self.settings_path, self.scene.show_hidden) {
             fika_log!("[fika-wgpu] settings-save-error {error}");
+        }
+        true
+    }
+
+    fn toggle_user_dark_mode(&mut self) -> bool {
+        self.scene.toggle_dark_mode();
+        if let Err(error) = save_dark_mode_setting(&self.settings_path, self.scene.dark_mode) {
+            fika_log!("[fika-wgpu] settings-save-error {error}");
+        }
+        if self.open_with_dialog.is_some() {
+            self.sync_open_with_dialog_window();
         }
         true
     }
@@ -843,6 +1029,174 @@ impl FikaWgpuApp {
         });
         Ok(())
     }
+
+    fn open_with_dialog_window_event(
+        &mut self,
+        event_loop: &dyn ActiveEventLoop,
+        event: WindowEvent,
+    ) {
+        match event {
+            WindowEvent::CloseRequested => {
+                let changed = self.scene.close_open_with_chooser();
+                self.close_open_with_dialog_window();
+                if changed {
+                    self.request_main_redraw();
+                }
+            }
+            WindowEvent::SurfaceResized(size) => {
+                if let Some(dialog) = self.open_with_dialog.as_mut() {
+                    dialog.renderer.resize(size);
+                    dialog.window.request_redraw();
+                }
+            }
+            WindowEvent::ScaleFactorChanged { .. } => {
+                let Some(scale_factor) = self
+                    .open_with_dialog
+                    .as_ref()
+                    .map(|dialog| dialog.window.scale_factor() as f32)
+                else {
+                    return;
+                };
+                let main_size = self
+                    .renderer
+                    .as_ref()
+                    .map(|renderer| renderer.size)
+                    .unwrap_or_else(|| {
+                        self.open_with_dialog
+                            .as_ref()
+                            .map(|dialog| dialog.renderer.size)
+                            .unwrap_or_else(|| PhysicalSize::new(1, 1))
+                    });
+                if self.scene.set_scale_factor(scale_factor, main_size) {
+                    self.request_main_redraw();
+                }
+                self.sync_open_with_dialog_window();
+            }
+            WindowEvent::ModifiersChanged(modifiers) => {
+                self.modifiers = modifiers;
+            }
+            WindowEvent::KeyboardInput {
+                event,
+                is_synthetic: false,
+                ..
+            } => {
+                if event.state != ElementState::Pressed {
+                    return;
+                }
+                let shortcut =
+                    self.modifiers.state().control_key() || self.modifiers.state().meta_key();
+                match open_with_command_for_key_event(&event, shortcut) {
+                    OpenWithCommand::Commit => self.commit_open_with_chooser(),
+                    OpenWithCommand::Ignore => {}
+                    command => {
+                        if self.scene.apply_open_with_command(command) {
+                            self.finish_open_with_dialog_state_change();
+                        }
+                    }
+                }
+            }
+            WindowEvent::PointerMoved { position, .. } => {
+                let Some(size) = self
+                    .open_with_dialog
+                    .as_ref()
+                    .map(|dialog| dialog.renderer.size)
+                else {
+                    return;
+                };
+                let point = ViewPoint {
+                    x: position.x as f32,
+                    y: position.y as f32,
+                };
+                let changed = self.scene.set_pointer(point, size);
+                self.update_open_with_dialog_cursor_for_scene(size);
+                if changed {
+                    self.request_open_with_dialog_redraw();
+                }
+            }
+            WindowEvent::PointerLeft { .. } => {
+                self.set_open_with_dialog_cursor(CursorIcon::Default);
+                if self.scene.clear_pointer() {
+                    self.request_open_with_dialog_redraw();
+                }
+            }
+            WindowEvent::PointerButton {
+                state,
+                position,
+                button,
+                ..
+            } => {
+                let Some(size) = self
+                    .open_with_dialog
+                    .as_ref()
+                    .map(|dialog| dialog.renderer.size)
+                else {
+                    return;
+                };
+                let point = ViewPoint {
+                    x: position.x as f32,
+                    y: position.y as f32,
+                };
+                let Some(mouse_button) = button.mouse_button() else {
+                    return;
+                };
+                if state == ElementState::Released && self.scene.is_scrollbar_dragging() {
+                    let changed = self.scene.end_scrollbar_drag(point, size);
+                    self.set_open_with_dialog_cursor(CursorIcon::Default);
+                    if changed {
+                        self.request_open_with_dialog_redraw();
+                    }
+                    return;
+                }
+                if state == ElementState::Pressed && mouse_button == MouseButton::Left {
+                    if let Some(changed) = self.scene.begin_open_with_scrollbar_drag(point, size) {
+                        self.set_open_with_dialog_cursor(CursorIcon::Default);
+                        if changed {
+                            self.request_open_with_dialog_redraw();
+                        }
+                        return;
+                    }
+                    match self
+                        .scene
+                        .open_with_chooser_click_at_screen_point(point, size)
+                    {
+                        OpenWithChooserClick::Outside | OpenWithChooserClick::Cancel => {
+                            if self.scene.close_open_with_chooser() {
+                                self.close_open_with_dialog_window();
+                                self.request_main_redraw();
+                            }
+                        }
+                        OpenWithChooserClick::Open => self.commit_open_with_chooser(),
+                        OpenWithChooserClick::ToggleDefault => {
+                            if self.scene.toggle_open_with_set_default() {
+                                self.finish_open_with_dialog_state_change();
+                            }
+                        }
+                        OpenWithChooserClick::Query(cursor) => {
+                            if self.scene.set_open_with_query_cursor(cursor) {
+                                self.finish_open_with_dialog_state_change();
+                            }
+                        }
+                        OpenWithChooserClick::Row(row) => {
+                            if self.scene.select_open_with_filtered_row(row) {
+                                self.finish_open_with_dialog_state_change();
+                            }
+                        }
+                        OpenWithChooserClick::Inside => {}
+                    }
+                }
+            }
+            WindowEvent::MouseWheel { delta, .. } => {
+                let delta_y = scroll_delta_y(delta, self.scene.ui_scale());
+                if self.scene.scroll_open_with_chooser_by(delta_y) {
+                    self.request_open_with_dialog_redraw();
+                }
+            }
+            WindowEvent::RedrawRequested => {
+                self.render_open_with_dialog_now(event_loop, "open-with-dialog-redraw");
+            }
+            _ => {}
+        }
+    }
 }
 
 impl ApplicationHandler for FikaWgpuApp {
@@ -922,7 +1276,10 @@ impl ApplicationHandler for FikaWgpuApp {
         self.drive_directory_watchers(event_loop);
         self.drain_async_task_results(event_loop);
         let progress_changed = self.refresh_active_task_progress();
-        if progress_changed && let Some(window) = self.window.as_ref() {
+        let item_reflow_pruned = self.scene.prune_finished_item_reflow_transitions();
+        if (progress_changed || item_reflow_pruned)
+            && let Some(window) = self.window.as_ref()
+        {
             window.request_redraw();
         }
         if self.auto_cycle_views && Instant::now() >= self.next_auto_cycle {
@@ -949,10 +1306,12 @@ impl ApplicationHandler for FikaWgpuApp {
         }
 
         let autosmoke_work_pending = self.autosmoke_work_pending();
+        let item_reflow_animation_active = self.scene.item_reflow_animation_active();
         let needs_redraw = self.renderer.as_ref().is_some_and(|renderer| {
             renderer.frame_count == 0
                 || renderer.rendered_view_switches != self.scene.view_switches
                 || self.pending_redraw_frames > 0
+                || item_reflow_animation_active
                 || (autosmoke_work_pending && renderer.frame_count > 0)
         });
         let next_autosmoke_deadline = [
@@ -965,6 +1324,7 @@ impl ApplicationHandler for FikaWgpuApp {
         let next_idle_deadline = [
             self.auto_cycle_views.then_some(self.next_auto_cycle),
             next_autosmoke_deadline,
+            item_reflow_animation_active.then_some(Instant::now() + ITEM_REFLOW_ANIMATION_FRAME),
             self.directory_watchers.next_reload_deadline(),
         ]
         .into_iter()
@@ -991,12 +1351,28 @@ impl ApplicationHandler for FikaWgpuApp {
     fn window_event(
         &mut self,
         event_loop: &dyn ActiveEventLoop,
-        _window_id: WindowId,
+        window_id: WindowId,
         event: WindowEvent,
     ) {
+        if self
+            .open_with_dialog
+            .as_ref()
+            .is_some_and(|dialog| dialog.window.id() == window_id)
+        {
+            self.open_with_dialog_window_event(event_loop, event);
+            return;
+        }
+        if self
+            .window
+            .as_ref()
+            .is_some_and(|window| window.id() != window_id)
+        {
+            return;
+        }
         match event {
             WindowEvent::CloseRequested => {
                 self.renderer = None;
+                self.open_with_dialog = None;
                 self.clipboard = None;
                 self.window = None;
                 event_loop.exit();
@@ -1036,7 +1412,7 @@ impl ApplicationHandler for FikaWgpuApp {
                 };
                 let shortcut =
                     self.modifiers.state().control_key() || self.modifiers.state().meta_key();
-                if self.scene.is_open_with_chooser_open() {
+                if self.open_with_chooser_is_main_overlay() {
                     match open_with_command_for_key_event(&event, shortcut) {
                         OpenWithCommand::Commit => self.commit_open_with_chooser(),
                         OpenWithCommand::Ignore => {}
@@ -1120,6 +1496,16 @@ impl ApplicationHandler for FikaWgpuApp {
                         && let Some(window) = self.window.as_ref()
                     {
                         window.request_redraw();
+                    }
+                    return;
+                }
+                if dark_mode_toggle_requested_for_key_event(
+                    &event,
+                    shortcut,
+                    self.modifiers.state().shift_key(),
+                ) {
+                    if self.toggle_user_dark_mode() {
+                        self.present_scene_change(event_loop, "toggle-dark-mode");
                     }
                     return;
                 }
@@ -1221,14 +1607,12 @@ impl ApplicationHandler for FikaWgpuApp {
                     x: position.x as f32,
                     y: position.y as f32,
                 };
-                if self.scene.is_open_with_chooser_open() {
-                    if self.scene.is_scrollbar_dragging() {
-                        let changed = self.scene.set_pointer(point, size);
-                        if changed && let Some(window) = self.window.as_ref() {
-                            window.request_redraw();
-                        }
+                if self.open_with_chooser_is_main_overlay() {
+                    let changed = self.scene.set_pointer(point, size);
+                    self.update_window_cursor_for_scene(size);
+                    if changed && let Some(window) = self.window.as_ref() {
+                        window.request_redraw();
                     }
-                    self.set_window_cursor(CursorIcon::Default);
                     return;
                 }
                 if self.scene.is_rename_dialog_open() {
@@ -1286,7 +1670,7 @@ impl ApplicationHandler for FikaWgpuApp {
                 let Some(mouse_button) = button.mouse_button() else {
                     return;
                 };
-                if self.scene.is_open_with_chooser_open() {
+                if self.open_with_chooser_is_main_overlay() {
                     if state == ElementState::Released && self.scene.is_scrollbar_dragging() {
                         let changed = self.scene.end_scrollbar_drag(point, size);
                         self.set_window_cursor(CursorIcon::Default);
@@ -1319,6 +1703,13 @@ impl ApplicationHandler for FikaWgpuApp {
                             OpenWithChooserClick::Open => self.commit_open_with_chooser(),
                             OpenWithChooserClick::ToggleDefault => {
                                 if self.scene.toggle_open_with_set_default()
+                                    && let Some(window) = self.window.as_ref()
+                                {
+                                    window.request_redraw();
+                                }
+                            }
+                            OpenWithChooserClick::Query(cursor) => {
+                                if self.scene.set_open_with_query_cursor(cursor)
                                     && let Some(window) = self.window.as_ref()
                                 {
                                     window.request_redraw();
@@ -1633,7 +2024,7 @@ impl ApplicationHandler for FikaWgpuApp {
                     return;
                 };
                 let delta_y = scroll_delta_y(delta, self.scene.ui_scale());
-                if self.scene.is_open_with_chooser_open() {
+                if self.open_with_chooser_is_main_overlay() {
                     if self.scene.scroll_open_with_chooser_by(delta_y)
                         && let Some(window) = self.window.as_ref()
                     {
@@ -1832,9 +2223,8 @@ impl FikaWgpuApp {
                     .scene
                     .open_open_with_chooser_from_context(&self.mime_applications)
                 {
-                    if let Some(window) = self.window.as_ref() {
-                        window.request_redraw();
-                    }
+                    self.ensure_open_with_dialog_window(event_loop);
+                    self.request_main_redraw();
                 }
             }
             ShellContextMenuAction::Refresh => self.reload_scene_path(event_loop),
@@ -2863,10 +3253,8 @@ impl FikaWgpuApp {
                     error.clone(),
                     false,
                 ));
-                if self.scene.set_open_with_chooser_error(error)
-                    && let Some(window) = self.window.as_ref()
-                {
-                    window.request_redraw();
+                if self.scene.set_open_with_chooser_error(error) {
+                    self.finish_open_with_dialog_state_change();
                 }
                 return;
             }
@@ -2892,10 +3280,8 @@ impl FikaWgpuApp {
                         error.clone(),
                         false,
                     ));
-                    if self.scene.set_open_with_chooser_error(error)
-                        && let Some(window) = self.window.as_ref()
-                    {
-                        window.request_redraw();
+                    if self.scene.set_open_with_chooser_error(error) {
+                        self.finish_open_with_dialog_state_change();
                     }
                     return;
                 }
@@ -2903,6 +3289,7 @@ impl FikaWgpuApp {
         }
 
         self.scene.close_open_with_chooser_after_success(&request);
+        self.close_open_with_dialog_window();
         let path = request.path.clone();
         let app_name = request.app_name.clone();
         self.scene.record_task_status(ShellTaskStatus::completed(
@@ -2922,9 +3309,7 @@ impl FikaWgpuApp {
             fika_log!("[fika-wgpu] open-with-finished {status}");
         });
 
-        if let Some(window) = self.window.as_ref() {
-            window.request_redraw();
-        }
+        self.request_main_redraw();
     }
 
     fn perform_path_navigation(
@@ -3127,12 +3512,35 @@ impl FikaWgpuApp {
         renderer.prewarm_scene_caches(&mut self.scene, reason);
     }
 
+    fn render_open_with_dialog_now(
+        &mut self,
+        event_loop: &dyn ActiveEventLoop,
+        reason: &'static str,
+    ) {
+        let Some(chooser) = self.scene.open_with_chooser.as_ref() else {
+            self.close_open_with_dialog_window();
+            return;
+        };
+        let scale = self.scene.ui_scale();
+        let Some(dialog) = self.open_with_dialog.as_mut() else {
+            return;
+        };
+        dialog.renderer.render_open_with_dialog(
+            dialog.window.as_ref(),
+            event_loop,
+            chooser,
+            scale,
+            reason,
+        );
+    }
+
     fn render_now(
         &mut self,
         event_loop: &dyn ActiveEventLoop,
         reason: &'static str,
         force_log: bool,
     ) {
+        self.reconcile_open_with_dialog_lifecycle();
         let rendered = {
             let Some(window) = self.window.as_ref() else {
                 return;
@@ -3184,6 +3592,7 @@ struct ShellPaneItemTarget {
 struct ShellPlace {
     group: &'static str,
     marker: &'static str,
+    icon_name: &'static str,
     label: String,
     path: PathBuf,
     device: Option<ShellDevicePlace>,
@@ -3204,9 +3613,11 @@ impl ShellPlace {
         let trash = file_ops::is_trash_files_dir(&path);
         let network = is_network_path(&path);
         let root = path == PathBuf::from("/");
+        let icon_name = shell_place_icon_name(marker, trash, network, root, editable);
         Self {
             group,
             marker,
+            icon_name,
             label: label.into(),
             path,
             device: None,
@@ -3218,8 +3629,40 @@ impl ShellPlace {
     }
 
     fn with_device(mut self, device: ShellDevicePlace) -> Self {
+        self.icon_name = "drive-removable-media";
         self.device = Some(device);
         self
+    }
+}
+
+fn shell_place_icon_name(
+    marker: &str,
+    trash: bool,
+    network: bool,
+    root: bool,
+    editable: bool,
+) -> &'static str {
+    if trash {
+        return "user-trash";
+    }
+    if network {
+        return "folder-remote";
+    }
+    if root {
+        return "drive-harddisk";
+    }
+    match marker {
+        "H" => "user-home",
+        "Desk" => "user-desktop",
+        "Doc" => "folder-documents",
+        "Down" => "folder-download",
+        "Mus" => "folder-music",
+        "Pic" => "folder-pictures",
+        "Vid" => "folder-videos",
+        "D" => "drive-removable-media",
+        "/" => "drive-harddisk",
+        _ if editable => "folder-bookmark",
+        _ => "folder",
     }
 }
 
@@ -3363,6 +3806,16 @@ struct ShellPlacePress {
     point: ViewPoint,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+struct ShellItemReflowTransition {
+    pane: ShellPaneId,
+    path: PathBuf,
+    from: ViewRect,
+    to: ViewRect,
+    started: Instant,
+    duration: Duration,
+}
+
 struct ShellScene {
     panes: ShellPaneStates,
     compact_layout_cache: CompactLayoutCache,
@@ -3372,6 +3825,7 @@ struct ShellScene {
     filter_active: bool,
     filter_pattern: String,
     show_hidden: bool,
+    dark_mode: bool,
     zoom_step: i32,
     places_visible: bool,
     places_width: f32,
@@ -3389,6 +3843,7 @@ struct ShellScene {
     create_dialog: Option<ShellCreateDialog>,
     rename_dialog: Option<ShellRenameDialog>,
     open_with_chooser: Option<ShellOpenWithChooser>,
+    open_with_chooser_detached: bool,
     trash_conflict_dialog: Option<ShellTrashConflictDialog>,
     task_detail_dialog: Option<ShellTaskDetailDialog>,
     split_pane_left_fraction: f32,
@@ -3404,6 +3859,8 @@ struct ShellScene {
     pending_drop_request: Option<ShellDropOperationRequest>,
     task_statuses: VecDeque<ShellTaskStatus>,
     rubber_band: Option<RubberBand>,
+    item_reflow_transitions: Vec<ShellItemReflowTransition>,
+    item_reflow_generation: u64,
     scale_factor: f32,
     hit_tests: u64,
     selection_changes: u64,
@@ -3484,6 +3941,7 @@ impl ShellScene {
             filter_active: false,
             filter_pattern: String::new(),
             show_hidden,
+            dark_mode: false,
             zoom_step: 0,
             places_visible: true,
             places_width: PLACES_SIDEBAR_WIDTH,
@@ -3501,6 +3959,7 @@ impl ShellScene {
             create_dialog: None,
             rename_dialog: None,
             open_with_chooser: None,
+            open_with_chooser_detached: false,
             trash_conflict_dialog: None,
             task_detail_dialog: None,
             split_pane_left_fraction: 0.5,
@@ -3516,6 +3975,8 @@ impl ShellScene {
             pending_drop_request: None,
             task_statuses: VecDeque::new(),
             rubber_band: None,
+            item_reflow_transitions: Vec::new(),
+            item_reflow_generation: 0,
             scale_factor: 1.0,
             hit_tests: 0,
             selection_changes: 0,
@@ -3624,6 +4085,7 @@ impl ShellScene {
         };
         let view_mode = current.view_mode;
         let path = current.path.clone();
+        let previous_visible_rects = self.visible_item_rects_by_path_for_pane(pane, size);
         let load_start = Instant::now();
         let entries = read_shell_entries_sync(&path)?;
         let elapsed = load_start.elapsed();
@@ -3664,8 +4126,120 @@ impl ShellScene {
         self.directory_reloads += 1;
         self.clear_transient_after_pane_content_change(pane, false);
         self.clamp_scroll(size);
+        self.start_item_reflow_transitions(pane, previous_visible_rects, size);
         self.log_reloaded_path_for_pane(pane, dir_count, &preview, elapsed, selection_changed);
         Ok(true)
+    }
+
+    fn visible_item_rects_by_path_for_pane(
+        &self,
+        pane: ShellPaneId,
+        size: PhysicalSize<u32>,
+    ) -> HashMap<PathBuf, ViewRect> {
+        let Some(projection) = self.pane_projection(pane, size) else {
+            return HashMap::new();
+        };
+        let mut rects = HashMap::with_capacity(projection.visible_items.len());
+        for item in &projection.visible_items {
+            let Some(entry_index) = projection
+                .view
+                .filtered_indexes
+                .get(item.layout.model_index)
+                .copied()
+            else {
+                continue;
+            };
+            let Some(path) = self.entry_path_for_pane_view(projection.view, entry_index) else {
+                continue;
+            };
+            rects.insert(
+                path,
+                pane_content_rect_to_screen(item.layout.visual_rect, &projection),
+            );
+        }
+        rects
+    }
+
+    fn start_item_reflow_transitions(
+        &mut self,
+        pane: ShellPaneId,
+        previous_rects: HashMap<PathBuf, ViewRect>,
+        size: PhysicalSize<u32>,
+    ) {
+        if previous_rects.is_empty() {
+            return;
+        }
+        let next_rects = self.visible_item_rects_by_path_for_pane(pane, size);
+        let started = Instant::now();
+        let mut transitions = next_rects
+            .into_iter()
+            .filter_map(|(path, to)| {
+                let from = previous_rects.get(&path).copied()?;
+                item_reflow_rect_moved(from, to).then_some(ShellItemReflowTransition {
+                    pane,
+                    path,
+                    from,
+                    to,
+                    started,
+                    duration: ITEM_REFLOW_ANIMATION_DURATION,
+                })
+            })
+            .collect::<Vec<_>>();
+        if transitions.is_empty() {
+            return;
+        }
+        self.item_reflow_transitions
+            .retain(|transition| transition.pane != pane);
+        self.item_reflow_transitions.append(&mut transitions);
+        self.item_reflow_generation = self.item_reflow_generation.wrapping_add(1);
+    }
+
+    fn item_reflow_offset_for_path(&self, pane: ShellPaneId, path: &Path) -> Option<(f32, f32)> {
+        let now = Instant::now();
+        self.item_reflow_transitions
+            .iter()
+            .find(|transition| transition.pane == pane && transition.path == path)
+            .and_then(|transition| item_reflow_offset(transition, now))
+    }
+
+    fn item_reflow_animation_active(&self) -> bool {
+        let now = Instant::now();
+        self.item_reflow_transitions
+            .iter()
+            .any(|transition| now.duration_since(transition.started) < transition.duration)
+    }
+
+    fn prune_finished_item_reflow_transitions(&mut self) -> bool {
+        if self.item_reflow_transitions.is_empty() {
+            return false;
+        }
+        let now = Instant::now();
+        let old_len = self.item_reflow_transitions.len();
+        self.item_reflow_transitions
+            .retain(|transition| now.duration_since(transition.started) < transition.duration);
+        if self.item_reflow_transitions.len() != old_len {
+            self.item_reflow_generation = self.item_reflow_generation.wrapping_add(1);
+            return true;
+        }
+        false
+    }
+
+    fn item_reflow_dirty_value(&self) -> u64 {
+        if self.item_reflow_transitions.is_empty() {
+            return self.item_reflow_generation << 32;
+        }
+        let now = Instant::now();
+        let frame_ms = ITEM_REFLOW_ANIMATION_FRAME.as_millis().max(1) as u64;
+        let frame = self
+            .item_reflow_transitions
+            .iter()
+            .filter_map(|transition| {
+                (now.duration_since(transition.started) < transition.duration)
+                    .then(|| now.duration_since(transition.started).as_millis() as u64 / frame_ms)
+            })
+            .min()
+            .unwrap_or(0);
+        (self.item_reflow_generation << 32) ^ frame
     }
 
     fn reload_panes_showing_path(
@@ -3790,6 +4364,7 @@ impl ShellScene {
             self.rename_dialog = None;
         }
         self.open_with_chooser = None;
+        self.open_with_chooser_detached = false;
         self.trash_conflict_dialog = None;
         self.internal_drag = None;
         self.external_drag = None;
@@ -4064,6 +4639,7 @@ impl ShellScene {
         self.create_dialog = None;
         self.rename_dialog = None;
         self.open_with_chooser = None;
+        self.open_with_chooser_detached = false;
         self.rubber_band = None;
         let changed = old_draft != self.location_draft;
         if changed {
@@ -4262,6 +4838,19 @@ impl ShellScene {
         true
     }
 
+    fn toggle_dark_mode(&mut self) {
+        self.dark_mode = !self.dark_mode;
+        self.view_switches += 1;
+        self.rubber_band = None;
+        self.item_reflow_transitions.clear();
+        self.item_reflow_generation = self.item_reflow_generation.wrapping_add(1);
+        fika_log!(
+            "[fika-wgpu] dark-mode enabled={} view_switches={}",
+            self.dark_mode as u8,
+            self.view_switches
+        );
+    }
+
     fn open_split_pane_from_context(&mut self, size: PhysicalSize<u32>) -> Result<bool, String> {
         let (path, source_pane) = self.context_target_split_pane_request().unwrap_or_else(|| {
             let pane = self.active_pane();
@@ -4306,6 +4895,7 @@ impl ShellScene {
         self.create_dialog = None;
         self.rename_dialog = None;
         self.open_with_chooser = None;
+        self.open_with_chooser_detached = false;
         self.trash_conflict_dialog = None;
         self.internal_drag = None;
         self.external_drag = None;
@@ -4382,6 +4972,7 @@ impl ShellScene {
         self.create_dialog = None;
         self.rename_dialog = None;
         self.open_with_chooser = None;
+        self.open_with_chooser_detached = false;
         self.trash_conflict_dialog = None;
         self.internal_drag = None;
         self.external_drag = None;
@@ -4808,6 +5399,15 @@ impl ShellScene {
         {
             return CursorIcon::Pointer;
         }
+        if !self.open_with_chooser_detached
+            && let Some(chooser) = self.open_with_chooser.as_ref()
+        {
+            let rect = open_with_chooser_rect_scaled(chooser, size, self.ui_scale());
+            if open_with_chooser_query_rect_scaled(rect, self.ui_scale()).contains(point) {
+                return CursorIcon::Text;
+            }
+            return CursorIcon::Default;
+        }
         if self
             .places_resize_handle_rect(size)
             .is_some_and(|rect| rect.contains(point))
@@ -4817,6 +5417,21 @@ impl ShellScene {
         {
             CursorIcon::ColResize
         } else if self.path_bar_contains_screen_point(point, size) {
+            CursorIcon::Text
+        } else {
+            CursorIcon::Default
+        }
+    }
+
+    fn open_with_chooser_cursor_icon(&self, size: PhysicalSize<u32>) -> CursorIcon {
+        let Some(point) = self.pointer else {
+            return CursorIcon::Default;
+        };
+        let Some(chooser) = self.open_with_chooser.as_ref() else {
+            return CursorIcon::Default;
+        };
+        let rect = open_with_chooser_rect_scaled(chooser, size, self.ui_scale());
+        if open_with_chooser_query_rect_scaled(rect, self.ui_scale()).contains(point) {
             CursorIcon::Text
         } else {
             CursorIcon::Default
@@ -5988,7 +6603,7 @@ impl ShellScene {
             || self.task_detail_dialog.is_some()
             || self.create_dialog.is_some()
             || self.rename_dialog.is_some()
-            || self.open_with_chooser.is_some()
+            || (self.open_with_chooser.is_some() && !self.open_with_chooser_detached)
             || self.trash_conflict_dialog.is_some()
     }
 
@@ -6575,6 +7190,7 @@ impl ShellScene {
         };
         let changed = self.open_with_chooser.as_ref() != Some(&chooser);
         self.open_with_chooser = Some(chooser);
+        self.open_with_chooser_detached = false;
         self.context_menu = None;
         self.drop_menu = None;
         self.properties_overlay = None;
@@ -6654,6 +7270,19 @@ impl ShellScene {
             return false;
         };
         if chooser.toggle_set_as_default() {
+            self.open_with_changes += 1;
+            self.log_open_with_chooser_state();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn set_open_with_query_cursor(&mut self, cursor: usize) -> bool {
+        let Some(chooser) = self.open_with_chooser.as_mut() else {
+            return false;
+        };
+        if chooser.set_query_cursor(cursor) {
             self.open_with_changes += 1;
             self.log_open_with_chooser_state();
             true
@@ -6756,6 +7385,7 @@ impl ShellScene {
         if self.open_with_chooser.take().is_none() {
             return false;
         }
+        self.open_with_chooser_detached = false;
         self.open_with_changes += 1;
         fika_log!(
             "[fika-wgpu] open-with open=0 changes={}",
@@ -6768,6 +7398,7 @@ impl ShellScene {
         if self.open_with_chooser.take().is_none() {
             return false;
         }
+        self.open_with_chooser_detached = false;
         self.open_with_changes += 1;
         fika_log!(
             "[fika-wgpu] open-with path={} app={:?} changes={}",
@@ -6792,7 +7423,7 @@ impl ShellScene {
     fn log_open_with_chooser_state(&self) {
         match self.open_with_chooser.as_ref() {
             Some(chooser) => fika_log!(
-                "[fika-wgpu] open-with open=1 path={} mime={} apps={} filtered={} category={} selected={} scroll={} set_default={} query={:?} error={:?} changes={}",
+                "[fika-wgpu] open-with open=1 path={} mime={} apps={} filtered={} category={} selected={} scroll={} set_default={} query={:?} cursor={} error={:?} changes={}",
                 chooser.path.display(),
                 chooser.mime_type.as_deref().unwrap_or("unknown"),
                 chooser.applications.len(),
@@ -6805,6 +7436,7 @@ impl ShellScene {
                 chooser.scroll_row,
                 chooser.set_as_default as u8,
                 chooser.query,
+                chooser.query_cursor,
                 chooser.error,
                 self.open_with_changes
             ),
@@ -7187,6 +7819,7 @@ impl ShellScene {
         self.create_dialog = None;
         self.rename_dialog = None;
         self.open_with_chooser = None;
+        self.open_with_chooser_detached = false;
         self.trash_conflict_dialog = None;
         self.rubber_band = None;
         self.internal_drag = None;
@@ -9321,16 +9954,16 @@ impl ShellScene {
                 width,
                 height,
             },
-            view_mode_surface_color(slot0_projection.view.view_mode),
+            view_mode_surface_color(slot0_projection.view.view_mode, self.dark_mode),
             size,
         );
         self.push_app_toolbar(&mut vertices, size);
-        self.push_places_sidebar(&mut vertices, text, size);
+        self.push_places_sidebar(&mut vertices, text, icons, size);
         if let Some(metrics) = self.split_pane_metrics(size) {
             push_rect(
                 &mut vertices,
                 metrics.divider,
-                [0.784, 0.808, 0.839, 1.0],
+                divider_color(self.dark_mode),
                 size,
             );
         }
@@ -9445,7 +10078,7 @@ impl ShellScene {
             label,
             text_rect,
             clip,
-            TextColor::rgb(36, 41, 47),
+            primary_text_color(self.dark_mode),
             LabelAlignment::Start,
         );
         if active && cursor.is_some() {
@@ -10012,7 +10645,8 @@ impl ShellScene {
             return LabelCacheOutcome::Skipped;
         };
         let selected = projection.view.selection.contains(entry_index);
-        let text_color = pane_item_text_color(projection.view.view_mode, entry, selected);
+        let text_color =
+            pane_item_text_color(projection.view.view_mode, entry, selected, self.dark_mode);
         match projection.view.view_mode {
             ShellViewMode::Compact => text.prewarm_label_aligned_wrapped(
                 entry.name.as_ref(),
@@ -10048,7 +10682,7 @@ impl ShellScene {
         let top_bar = projection.geometry.top_bar;
         let status_bar = projection.geometry.status_bar;
 
-        push_rect(vertices, top_bar, chrome_color(), size);
+        push_rect(vertices, top_bar, chrome_color(self.dark_mode), size);
         if let Some(path_rect) = self.pane_path_bar_rect(pane_id, size) {
             let location_active = self.location_bar_active_for_pane(pane_id);
             let path_label = self.location_label_for_pane(pane_id);
@@ -10073,7 +10707,7 @@ impl ShellScene {
                 width: pane.width,
                 height: (status_bar.y - top_bar.bottom()).max(1.0),
             },
-            view_mode_content_color(projection.view.view_mode),
+            view_mode_content_color(projection.view.view_mode, self.dark_mode),
             size,
         );
         self.push_pane_body_border(vertices, projection, size);
@@ -10118,11 +10752,32 @@ impl ShellScene {
         let Some(entry) = projection.view.entries.get(entry_index) else {
             return;
         };
+        let entry_path = self.entry_path_for_pane_view(projection.view, entry_index);
+        let (reflow_dx, reflow_dy) = entry_path
+            .as_deref()
+            .and_then(|path| self.item_reflow_offset_for_path(projection.geometry.kind, path))
+            .unwrap_or((0.0, 0.0));
         let content_clip = projection.geometry.content;
-        let item_rect = pane_content_rect_to_screen(layout.item_rect, projection);
-        let visual_rect = pane_content_rect_to_screen(layout.visual_rect, projection);
-        let icon_rect = pane_content_rect_to_screen(layout.icon_rect, projection);
-        let text_rect = pane_content_rect_to_screen(layout.text_rect, projection);
+        let item_rect = translated_rect(
+            pane_content_rect_to_screen(layout.item_rect, projection),
+            reflow_dx,
+            reflow_dy,
+        );
+        let visual_rect = translated_rect(
+            pane_content_rect_to_screen(layout.visual_rect, projection),
+            reflow_dx,
+            reflow_dy,
+        );
+        let icon_rect = translated_rect(
+            pane_content_rect_to_screen(layout.icon_rect, projection),
+            reflow_dx,
+            reflow_dy,
+        );
+        let text_rect = translated_rect(
+            pane_content_rect_to_screen(layout.text_rect, projection),
+            reflow_dx,
+            reflow_dy,
+        );
         let content_rect = visual_rect;
         let pixmap_layout = ItemPixmapLayout {
             view_mode: projection.view.view_mode,
@@ -10226,7 +10881,8 @@ impl ShellScene {
             push_fallback_icon(vertices, entry, icon_rect, content_clip, size);
         }
 
-        let text_color = pane_item_text_color(projection.view.view_mode, entry, selected);
+        let text_color =
+            pane_item_text_color(projection.view.view_mode, entry, selected, self.dark_mode);
         match projection.view.view_mode {
             ShellViewMode::Compact => {
                 text.push_label_aligned_no_wrap(
@@ -10263,13 +10919,14 @@ impl ShellScene {
                 &details_size_label(entry),
                 ViewRect {
                     x: content_clip.x + self.details_name_width() + self.scale_metric(8.0)
-                        - projection.view.scroll_x,
+                        - projection.view.scroll_x
+                        + reflow_dx,
                     y: metadata_y,
                     width: self.details_size_width() - self.scale_metric(16.0),
                     height: text_height,
                 },
                 content_clip,
-                TextColor::rgb(89, 99, 110),
+                muted_text_color(self.dark_mode),
                 LabelAlignment::Start,
             );
             text.push_label_aligned_no_wrap(
@@ -10279,13 +10936,14 @@ impl ShellScene {
                         + self.details_name_width()
                         + self.details_size_width()
                         + self.scale_metric(8.0)
-                        - projection.view.scroll_x,
+                        - projection.view.scroll_x
+                        + reflow_dx,
                     y: metadata_y,
                     width: self.details_modified_width() - self.scale_metric(16.0),
                     height: text_height,
                 },
                 content_clip,
-                TextColor::rgb(89, 99, 110),
+                muted_text_color(self.dark_mode),
                 LabelAlignment::Start,
             );
         }
@@ -10477,7 +11135,7 @@ impl ShellScene {
                     height: self.text_line_height(),
                 },
                 header,
-                TextColor::rgb(89, 99, 110),
+                muted_text_color(self.dark_mode),
                 LabelAlignment::Start,
             );
         }
@@ -10492,7 +11150,7 @@ impl ShellScene {
     ) {
         let pane = projection.view;
         let rect = projection.geometry.status_bar;
-        push_rect(vertices, rect, chrome_color(), size);
+        push_rect(vertices, rect, chrome_color(self.dark_mode), size);
         push_rect(
             vertices,
             ViewRect {
@@ -10501,7 +11159,7 @@ impl ShellScene {
                 width: rect.width,
                 height: 1.0,
             },
-            [0.784, 0.808, 0.839, 1.0],
+            divider_color(self.dark_mode),
             size,
         );
         let status = self.pane_status_text(pane, projection.visible_items.len());
@@ -10514,7 +11172,7 @@ impl ShellScene {
                 height: self.text_line_height(),
             },
             rect,
-            TextColor::rgb(89, 99, 110),
+            muted_text_color(self.dark_mode),
             LabelAlignment::Start,
         );
     }
@@ -10524,23 +11182,37 @@ impl ShellScene {
         push_rect(
             vertices,
             toolbar,
-            view_mode_surface_color(self.panes[ShellPaneId::SLOT_0].view_mode),
+            view_mode_surface_color(self.panes[ShellPaneId::SLOT_0].view_mode, self.dark_mode),
             size,
         );
 
         let button = self.places_toggle_rect(size);
         let border_color = if self.places_visible {
             [0.184, 0.435, 0.929, 1.0]
+        } else if self.dark_mode {
+            divider_color(true)
         } else {
             [0.694, 0.729, 0.776, 1.0]
         };
         let fill_color = if self.places_visible {
-            [0.918, 0.945, 1.000, 1.0]
+            if self.dark_mode {
+                [0.102, 0.173, 0.286, 1.0]
+            } else {
+                [0.918, 0.945, 1.000, 1.0]
+            }
+        } else if self.dark_mode {
+            [0.145, 0.157, 0.176, 1.0]
         } else {
             [0.984, 0.986, 0.990, 1.0]
         };
         let icon_color = if self.places_visible {
-            [0.122, 0.310, 0.749, 1.0]
+            if self.dark_mode {
+                [0.576, 0.773, 0.992, 1.0]
+            } else {
+                [0.122, 0.310, 0.749, 1.0]
+            }
+        } else if self.dark_mode {
+            [0.580, 0.639, 0.718, 1.0]
         } else {
             [0.420, 0.466, 0.545, 1.0]
         };
@@ -10600,16 +11272,30 @@ impl ShellScene {
         let split_open = self.panes.is_open(ShellPaneId::SLOT_1);
         let split_border = if split_open {
             [0.184, 0.435, 0.929, 1.0]
+        } else if self.dark_mode {
+            divider_color(true)
         } else {
             [0.694, 0.729, 0.776, 1.0]
         };
         let split_fill = if split_open {
-            [0.918, 0.945, 1.000, 1.0]
+            if self.dark_mode {
+                [0.102, 0.173, 0.286, 1.0]
+            } else {
+                [0.918, 0.945, 1.000, 1.0]
+            }
+        } else if self.dark_mode {
+            [0.145, 0.157, 0.176, 1.0]
         } else {
             [0.984, 0.986, 0.990, 1.0]
         };
         let split_icon_color = if split_open {
-            [0.122, 0.310, 0.749, 1.0]
+            if self.dark_mode {
+                [0.576, 0.773, 0.992, 1.0]
+            } else {
+                [0.122, 0.310, 0.749, 1.0]
+            }
+        } else if self.dark_mode {
+            [0.580, 0.639, 0.718, 1.0]
         } else {
             [0.420, 0.466, 0.545, 1.0]
         };
@@ -10687,6 +11373,7 @@ impl ShellScene {
         &self,
         vertices: &mut Vec<QuadVertex>,
         text: &mut TextFrameBuilder<'_>,
+        icons: &mut IconFrameBuilder<'_>,
         size: PhysicalSize<u32>,
     ) {
         let sidebar = self.places_sidebar_rect(size);
@@ -10700,7 +11387,7 @@ impl ShellScene {
             panel,
             sidebar,
             panel_radius,
-            [0.784, 0.808, 0.839, 1.0],
+            divider_color(self.dark_mode),
             size,
         );
         if let Some(inner_panel) = inset_rect(panel, self.scale_metric(1.0)) {
@@ -10709,7 +11396,7 @@ impl ShellScene {
                 inner_panel,
                 sidebar,
                 (panel_radius - self.scale_metric(1.0)).max(1.0),
-                sidebar_color(),
+                sidebar_color(self.dark_mode),
                 size,
             );
         }
@@ -10721,7 +11408,7 @@ impl ShellScene {
                 width: self.scale_metric(PLACES_SIDEBAR_SPLITTER_WIDTH),
                 height: sidebar.height,
             },
-            [0.784, 0.808, 0.839, 1.0],
+            divider_color(self.dark_mode),
             size,
         );
 
@@ -10748,7 +11435,7 @@ impl ShellScene {
                 height: text_height,
             },
             panel,
-            TextColor::rgb(36, 41, 47),
+            primary_text_color(self.dark_mode),
             LabelAlignment::Start,
         );
 
@@ -10767,7 +11454,7 @@ impl ShellScene {
                         place.group,
                         section,
                         panel,
-                        TextColor::rgb(107, 114, 128),
+                        section_text_color(self.dark_mode),
                         LabelAlignment::Start,
                     );
                 }
@@ -10827,7 +11514,21 @@ impl ShellScene {
                     width: icon_size,
                     height: icon_size,
                 };
-                push_place_icon(vertices, icon, panel, place, active, self.ui_scale(), size);
+                let trash_has_items = place.trash && file_ops::trash_has_items();
+                let icon_name = if trash_has_items {
+                    "user-trash-full"
+                } else {
+                    place.icon_name
+                };
+                if !icons.push_named_theme_icon(
+                    icon_name,
+                    NamedIconFallback::Service,
+                    icon,
+                    panel,
+                    IconDrawLayer::Content,
+                ) {
+                    push_place_icon(vertices, icon, panel, place, active, self.ui_scale(), size);
+                }
                 text.push_label_aligned(
                     &place.label,
                     ViewRect {
@@ -10838,13 +11539,13 @@ impl ShellScene {
                     },
                     panel,
                     if active {
-                        TextColor::rgb(31, 79, 191)
+                        accent_text_color(self.dark_mode)
                     } else {
-                        TextColor::rgb(36, 41, 47)
+                        primary_text_color(self.dark_mode)
                     },
                     LabelAlignment::Start,
                 );
-                if place.trash && file_ops::trash_has_items() {
+                if trash_has_items {
                     let dot_size = self.scale_metric(7.0);
                     push_clipped_rounded_rect(
                         vertices,
@@ -10919,7 +11620,7 @@ impl ShellScene {
             inner,
             sidebar,
             (radius - self.scale_metric(1.0)).max(1.0),
-            [0.973, 0.976, 0.984, 1.0],
+            sidebar_color(self.dark_mode),
             size,
         );
 
@@ -10934,7 +11635,7 @@ impl ShellScene {
                 height: title_height,
             },
             inner,
-            TextColor::rgb(71, 85, 105),
+            section_text_color(self.dark_mode),
             LabelAlignment::Start,
         );
 
@@ -10968,7 +11669,7 @@ impl ShellScene {
                     height: self.small_text_line_height(),
                 },
                 inner,
-                TextColor::rgb(36, 41, 47),
+                primary_text_color(self.dark_mode),
                 LabelAlignment::Start,
             );
             let detail = if status.privileged {
@@ -10985,7 +11686,7 @@ impl ShellScene {
                     height: self.small_text_line_height(),
                 },
                 inner,
-                TextColor::rgb(107, 114, 128),
+                section_text_color(self.dark_mode),
                 LabelAlignment::Start,
             );
             y += row_height;
@@ -11001,7 +11702,7 @@ impl ShellScene {
         let Some(rect) = self.filter_bar_rect(size) else {
             return;
         };
-        push_rect(vertices, rect, [0.973, 0.976, 0.984, 1.0], size);
+        push_rect(vertices, rect, chrome_color(self.dark_mode), size);
         push_rect(
             vertices,
             ViewRect {
@@ -11010,7 +11711,7 @@ impl ShellScene {
                 width: rect.width,
                 height: 1.0,
             },
-            [0.784, 0.808, 0.839, 1.0],
+            divider_color(self.dark_mode),
             size,
         );
         text.push_label(
@@ -11022,7 +11723,7 @@ impl ShellScene {
                 height: self.text_line_height(),
             },
             rect,
-            TextColor::rgb(89, 99, 110),
+            muted_text_color(self.dark_mode),
         );
         let pattern = if self.filter_pattern.is_empty() {
             ""
@@ -11038,7 +11739,7 @@ impl ShellScene {
                 height: self.text_line_height(),
             },
             rect,
-            TextColor::rgb(36, 41, 47),
+            primary_text_color(self.dark_mode),
         );
     }
 
@@ -11224,7 +11925,7 @@ impl ShellScene {
                 height: self.text_line_height(),
             },
             rect,
-            TextColor::rgb(36, 41, 47),
+            primary_text_color(self.dark_mode),
             LabelAlignment::Start,
         );
 
@@ -11400,7 +12101,9 @@ impl ShellScene {
         icons: &mut IconFrameBuilder<'_>,
         size: PhysicalSize<u32>,
     ) {
-        if let Some(chooser) = self.open_with_chooser.as_ref() {
+        if !self.open_with_chooser_detached
+            && let Some(chooser) = self.open_with_chooser.as_ref()
+        {
             shell::open_with::paint::push_open_with_chooser_overlay(
                 chooser,
                 self.ui_scale(),
@@ -13127,6 +13830,191 @@ impl WgpuState {
         scene.prewarm_file_item_text_labels(projections, &mut text_builder, mode)
     }
 
+    fn render_open_with_dialog(
+        &mut self,
+        window: &dyn Window,
+        event_loop: &dyn ActiveEventLoop,
+        chooser: &ShellOpenWithChooser,
+        scale: f32,
+        reason: &'static str,
+    ) -> ShellRenderOutcome {
+        let frame = match self.surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(frame)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
+            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
+                self.force_reconfigure(window.surface_size());
+                match self.surface.get_current_texture() {
+                    wgpu::CurrentSurfaceTexture::Success(frame)
+                    | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
+                    wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
+                        window.request_redraw();
+                        return ShellRenderOutcome::NotReady;
+                    }
+                    wgpu::CurrentSurfaceTexture::Timeout
+                    | wgpu::CurrentSurfaceTexture::Occluded => {
+                        return ShellRenderOutcome::NotReady;
+                    }
+                    wgpu::CurrentSurfaceTexture::Validation => {
+                        fika_log!("[fika-wgpu] open-with-dialog surface validation error");
+                        event_loop.exit();
+                        return ShellRenderOutcome::NotReady;
+                    }
+                }
+            }
+            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
+                return ShellRenderOutcome::NotReady;
+            }
+            wgpu::CurrentSurfaceTexture::Validation => {
+                fika_log!("[fika-wgpu] open-with-dialog surface validation error");
+                event_loop.exit();
+                return ShellRenderOutcome::NotReady;
+            }
+        };
+
+        self.text_renderer.label_cache.begin_frame();
+        self.text_renderer.metrics_cache.begin_frame();
+        self.icon_renderer.raster_cache.begin_frame();
+        self.icon_renderer.role_raster_cache.begin_frame();
+        let icon_resolve_results = self.icon_renderer.resolver.drain_results();
+        let icon_raster_results = self
+            .icon_renderer
+            .icon_rasters
+            .drain_results(&mut self.icon_renderer.raster_cache);
+        let _thumbnail_results = self.icon_renderer.thumbnails.drain_results();
+
+        let (vertices, mut text_frame, mut icon_frame) = {
+            let text_pixels = self.text_renderer.take_staging_pixels();
+            let mut text_builder = TextFrameBuilder::new(
+                &mut self.text_renderer.font_system,
+                &mut self.text_renderer.swash_cache,
+                &mut self.text_renderer.text_buffer,
+                &mut self.text_renderer.label_cache,
+                &mut self.text_renderer.metrics_cache,
+                &mut self.text_renderer.atlas_cache,
+                self.size,
+                scale,
+                text_pixels,
+            );
+            let mut icon_builder = IconFrameBuilder::new(
+                &mut self.icon_renderer.resolver,
+                &mut self.icon_renderer.thumbnails,
+                &mut self.icon_renderer.icon_rasters,
+                &mut self.icon_renderer.raster_cache,
+                &mut self.icon_renderer.role_raster_cache,
+                self.size,
+                icon_raster_miss_budget_for_frame(reason),
+                0,
+                0,
+            );
+            let mut vertices = Vec::with_capacity(256);
+            shell::open_with::paint::push_open_with_chooser_dialog(
+                chooser,
+                scale,
+                &mut vertices,
+                &mut text_builder,
+                &mut icon_builder,
+                self.size,
+            );
+            (vertices, text_builder.finish(), icon_builder.finish())
+        };
+
+        let text_stats = text_frame.stats;
+        let icon_stats = icon_frame.stats;
+        let text_work_pending = text_stats.deferred > 0;
+        let icon_work_pending = icon_stats.deferred > 0
+            || icon_stats.raster_deferred > 0
+            || icon_resolve_results > 0
+            || icon_raster_results > 0
+            || self.icon_renderer.resolver.has_pending()
+            || self
+                .icon_renderer
+                .icon_rasters
+                .has_pending(&mut self.icon_renderer.raster_cache);
+        if text_work_pending || icon_work_pending {
+            window.request_redraw();
+        }
+
+        let mut vertex_upload_stats =
+            self.quad_renderer
+                .upload(&self.device, &self.queue, &vertices);
+        vertex_upload_stats.merge(self.icon_renderer.upload(
+            &self.device,
+            &self.queue,
+            &mut icon_frame,
+        ));
+        vertex_upload_stats.merge(self.text_renderer.upload(
+            &self.device,
+            &self.queue,
+            &mut text_frame,
+        ));
+        let (swash_images, swash_outlines, swash_reset) =
+            self.text_renderer.trim_text_engine_caches();
+
+        let view = frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("fika-wgpu-open-with-dialog-frame"),
+            });
+        let [r, g, b, a] = POPUP_SURFACE;
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("fika-wgpu-open-with-dialog-pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: r as f64,
+                            g: g as f64,
+                            b: b as f64,
+                            a: a as f64,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            self.quad_renderer.draw(&mut pass);
+            self.icon_renderer.draw(&mut pass);
+            self.text_renderer.draw(&mut pass);
+            self.icon_renderer.draw_overlay(&mut pass);
+        }
+        self.queue.submit(Some(encoder.finish()));
+        window.pre_present_notify();
+        frame.present();
+
+        self.frame_count += 1;
+        if self.frame_count == 1 || fika_frame_log_all_enabled() {
+            fika_log!(
+                "[fika-wgpu] open-with-dialog frame={} reason={} size={}x{} scale={:.2} query_len={} icons={} icon_deferred={} text_labels={} text_deferred={} swash={}/{} reset={} vertex_uploads={}/{}",
+                self.frame_count,
+                reason,
+                self.size.width,
+                self.size.height,
+                scale,
+                chooser.query.len(),
+                icon_stats.icons,
+                icon_stats.deferred + icon_stats.raster_deferred,
+                text_stats.labels,
+                text_stats.deferred,
+                swash_images,
+                swash_outlines,
+                swash_reset as u8,
+                vertex_upload_stats.writes,
+                vertex_upload_stats.skips,
+            );
+        }
+
+        ShellRenderOutcome::Presented
+    }
+
     fn render(
         &mut self,
         window: &dyn Window,
@@ -13420,6 +14308,7 @@ impl WgpuState {
             let load = if render_damage.kind == ShellRenderDamageKind::Full {
                 wgpu::LoadOp::Clear(view_mode_clear_color(
                     scene.panes[ShellPaneId::SLOT_0].view_mode,
+                    scene.dark_mode,
                 ))
             } else {
                 wgpu::LoadOp::Load
@@ -17953,6 +18842,34 @@ fn pane_content_rect_to_screen(rect: ViewRect, projection: &ShellPaneProjection<
     }
 }
 
+fn translated_rect(rect: ViewRect, dx: f32, dy: f32) -> ViewRect {
+    ViewRect {
+        x: rect.x + dx,
+        y: rect.y + dy,
+        width: rect.width,
+        height: rect.height,
+    }
+}
+
+fn item_reflow_rect_moved(from: ViewRect, to: ViewRect) -> bool {
+    (from.x - to.x).abs() >= 0.5 || (from.y - to.y).abs() >= 0.5
+}
+
+fn item_reflow_offset(transition: &ShellItemReflowTransition, now: Instant) -> Option<(f32, f32)> {
+    let elapsed = now.duration_since(transition.started);
+    if elapsed >= transition.duration {
+        return None;
+    }
+    let duration = transition.duration.as_secs_f32().max(f32::EPSILON);
+    let t = (elapsed.as_secs_f32() / duration).clamp(0.0, 1.0);
+    let eased = 1.0 - (1.0 - t).powi(3);
+    let remaining = 1.0 - eased;
+    Some((
+        (transition.from.x - transition.to.x) * remaining,
+        (transition.from.y - transition.to.y) * remaining,
+    ))
+}
+
 fn view_point_from_physical_position(position: PhysicalPosition<f64>) -> ViewPoint {
     ViewPoint {
         x: position.x as f32,
@@ -18201,8 +19118,8 @@ fn push_place_trash_icon(
     );
 }
 
-fn view_mode_clear_color(view_mode: ShellViewMode) -> wgpu::Color {
-    let [r, g, b, a] = view_mode_surface_color(view_mode);
+fn view_mode_clear_color(view_mode: ShellViewMode, dark_mode: bool) -> wgpu::Color {
+    let [r, g, b, a] = view_mode_surface_color(view_mode, dark_mode);
     wgpu::Color {
         r: r as f64,
         g: g as f64,
@@ -18211,21 +19128,77 @@ fn view_mode_clear_color(view_mode: ShellViewMode) -> wgpu::Color {
     }
 }
 
-fn view_mode_surface_color(view_mode: ShellViewMode) -> [f32; 4] {
+fn view_mode_surface_color(view_mode: ShellViewMode, dark_mode: bool) -> [f32; 4] {
     let _ = view_mode;
-    [0.973, 0.976, 0.984, 1.0]
+    if dark_mode {
+        [0.102, 0.112, 0.126, 1.0]
+    } else {
+        [0.973, 0.976, 0.984, 1.0]
+    }
 }
 
-fn view_mode_content_color(view_mode: ShellViewMode) -> [f32; 4] {
-    view_mode_surface_color(view_mode)
+fn view_mode_content_color(view_mode: ShellViewMode, dark_mode: bool) -> [f32; 4] {
+    if dark_mode {
+        [0.078, 0.086, 0.098, 1.0]
+    } else {
+        view_mode_surface_color(view_mode, false)
+    }
 }
 
-fn chrome_color() -> [f32; 4] {
-    [0.973, 0.976, 0.984, 1.0]
+fn chrome_color(dark_mode: bool) -> [f32; 4] {
+    if dark_mode {
+        [0.125, 0.137, 0.153, 1.0]
+    } else {
+        [0.973, 0.976, 0.984, 1.0]
+    }
 }
 
-fn sidebar_color() -> [f32; 4] {
-    [0.973, 0.976, 0.984, 1.0]
+fn sidebar_color(dark_mode: bool) -> [f32; 4] {
+    if dark_mode {
+        [0.118, 0.129, 0.145, 1.0]
+    } else {
+        [0.973, 0.976, 0.984, 1.0]
+    }
+}
+
+fn divider_color(dark_mode: bool) -> [f32; 4] {
+    if dark_mode {
+        [0.255, 0.278, 0.310, 1.0]
+    } else {
+        [0.784, 0.808, 0.839, 1.0]
+    }
+}
+
+fn primary_text_color(dark_mode: bool) -> TextColor {
+    if dark_mode {
+        TextColor::rgb(226, 232, 240)
+    } else {
+        TextColor::rgb(36, 41, 47)
+    }
+}
+
+fn muted_text_color(dark_mode: bool) -> TextColor {
+    if dark_mode {
+        TextColor::rgb(148, 163, 184)
+    } else {
+        TextColor::rgb(89, 99, 110)
+    }
+}
+
+fn section_text_color(dark_mode: bool) -> TextColor {
+    if dark_mode {
+        TextColor::rgb(156, 163, 175)
+    } else {
+        TextColor::rgb(107, 114, 128)
+    }
+}
+
+fn accent_text_color(dark_mode: bool) -> TextColor {
+    if dark_mode {
+        TextColor::rgb(147, 197, 253)
+    } else {
+        TextColor::rgb(31, 79, 191)
+    }
 }
 
 fn details_size_label(entry: &Entry) -> String {
@@ -18297,13 +19270,22 @@ fn file_color(entry: &Entry) -> [f32; 4] {
     }
 }
 
-fn pane_item_text_color(view_mode: ShellViewMode, entry: &Entry, selected: bool) -> TextColor {
+fn pane_item_text_color(
+    view_mode: ShellViewMode,
+    entry: &Entry,
+    selected: bool,
+    dark_mode: bool,
+) -> TextColor {
     if selected {
-        TextColor::rgb(15, 23, 42)
+        if dark_mode {
+            TextColor::rgb(241, 245, 249)
+        } else {
+            TextColor::rgb(15, 23, 42)
+        }
     } else if view_mode != ShellViewMode::Details && entry.is_dir {
-        TextColor::rgb(31, 79, 191)
+        accent_text_color(dark_mode)
     } else {
-        TextColor::rgb(36, 41, 47)
+        primary_text_color(dark_mode)
     }
 }
 
@@ -18963,16 +19945,19 @@ mod tests {
                 visible: Some(true),
             },
             view: fika_core::ViewSettings::default(),
+            appearance: fika_core::AppearanceSettings::default(),
         };
         save_app_settings(&settings_path, &settings).unwrap();
 
         save_view_mode_setting(&settings_path, ShellViewMode::Details).unwrap();
         save_show_hidden_setting(&settings_path, true).unwrap();
+        save_dark_mode_setting(&settings_path, true).unwrap();
         let loaded = load_app_settings(&settings_path).unwrap();
         assert_eq!(loaded.places_sidebar.width, Some(288.0));
         assert_eq!(loaded.places_sidebar.visible, Some(true));
         assert_eq!(loaded.view.mode, Some(ShellViewMode::Details));
         assert_eq!(loaded.view.show_hidden, Some(true));
+        assert_eq!(loaded.appearance.dark_mode, Some(true));
         assert_eq!(
             startup_view_mode(ShellViewMode::Icons, false, &loaded),
             ShellViewMode::Details
@@ -18982,6 +19967,7 @@ mod tests {
             ShellViewMode::Compact
         );
         assert!(startup_show_hidden(&loaded));
+        assert!(startup_dark_mode(&loaded));
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -19007,6 +19993,34 @@ mod tests {
             filtered_names(&visible_only, ShellPaneId::SLOT_0),
             vec!["visible.txt"]
         );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn reload_after_delete_animates_surviving_item_reflow() {
+        let root = test_dir("delete-reflow-animation");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("alpha.txt"), b"a").unwrap();
+        fs::write(root.join("beta.txt"), b"b").unwrap();
+        fs::write(root.join("gamma.txt"), b"g").unwrap();
+
+        let mut scene = ShellScene::load(root.clone(), ShellViewMode::Icons).unwrap();
+        let size = PhysicalSize::new(720, 360);
+        fs::remove_file(root.join("beta.txt")).unwrap();
+
+        assert!(scene.reload_current_path(size).unwrap());
+        let gamma = root.join("gamma.txt");
+        let transition = scene
+            .item_reflow_transitions
+            .iter()
+            .find(|transition| transition.path == gamma)
+            .expect("surviving item after deleted entry should reflow");
+
+        assert_eq!(transition.pane, ShellPaneId::SLOT_0);
+        assert!(item_reflow_rect_moved(transition.from, transition.to));
+        assert!(scene.item_reflow_animation_active());
+        assert_ne!(scene.item_reflow_dirty_value(), 0);
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -19106,6 +20120,7 @@ mod tests {
             filter_active: false,
             filter_pattern: String::new(),
             show_hidden: false,
+            dark_mode: false,
             zoom_step: 0,
             places_visible: true,
             places_width: PLACES_SIDEBAR_WIDTH,
@@ -19123,6 +20138,7 @@ mod tests {
             create_dialog: None,
             rename_dialog: None,
             open_with_chooser: None,
+            open_with_chooser_detached: false,
             trash_conflict_dialog: None,
             task_detail_dialog: None,
             split_pane_left_fraction: 0.5,
@@ -19138,6 +20154,8 @@ mod tests {
             pending_drop_request: None,
             task_statuses: VecDeque::new(),
             rubber_band: None,
+            item_reflow_transitions: Vec::new(),
+            item_reflow_generation: 0,
             scale_factor: 1.0,
             hit_tests: 0,
             selection_changes: 0,
@@ -26613,6 +27631,71 @@ text/plain=writer.desktop;\n",
     }
 
     #[test]
+    fn open_with_chooser_query_cursor_edits_and_uses_text_cursor() {
+        let mut scene = test_scene(vec![test_entry("note.txt", false)], ShellViewMode::Icons);
+        scene.open_with_chooser = Some(ShellOpenWithChooser::new(
+            PathBuf::from("/tmp/note.txt"),
+            Some(Arc::from("text/plain")),
+            vec![MimeApplication {
+                id: "paint.desktop".to_string(),
+                desktop_file: PathBuf::from("/apps/paint.desktop"),
+                name: "Paint".to_string(),
+                exec: "paint %f".to_string(),
+                icon: None,
+                is_default: false,
+            }],
+            Vec::new(),
+        ));
+        let size = PhysicalSize::new(640, 460);
+
+        assert!(scene.apply_open_with_command(OpenWithCommand::Insert("paβnt".to_string())));
+        assert_eq!(scene.open_with_chooser.as_ref().unwrap().query, "paβnt");
+        assert_eq!(
+            scene.open_with_chooser.as_ref().unwrap().query_cursor,
+            "paβnt".len()
+        );
+
+        assert!(scene.apply_open_with_command(OpenWithCommand::MoveLeft));
+        assert!(scene.apply_open_with_command(OpenWithCommand::MoveLeft));
+        assert!(scene.apply_open_with_command(OpenWithCommand::Backspace));
+        assert_eq!(scene.open_with_chooser.as_ref().unwrap().query, "pant");
+        assert_eq!(scene.open_with_chooser.as_ref().unwrap().query_cursor, 2);
+
+        assert!(scene.apply_open_with_command(OpenWithCommand::Insert("i".to_string())));
+        assert_eq!(scene.open_with_chooser.as_ref().unwrap().query, "paint");
+        assert_eq!(scene.open_with_chooser.as_ref().unwrap().query_cursor, 3);
+
+        assert!(scene.apply_open_with_command(OpenWithCommand::MoveEnd));
+        assert!(scene.apply_open_with_command(OpenWithCommand::MoveLeft));
+        assert!(scene.apply_open_with_command(OpenWithCommand::Delete));
+        assert_eq!(scene.open_with_chooser.as_ref().unwrap().query, "pain");
+        assert_eq!(scene.open_with_chooser.as_ref().unwrap().query_cursor, 4);
+
+        let rect = open_with_chooser_rect(scene.open_with_chooser.as_ref().unwrap(), size);
+        let query = open_with_chooser_query_rect_scaled(rect, 1.0);
+        assert!(scene.set_pointer(
+            ViewPoint {
+                x: query.x + 4.0,
+                y: query.y + 4.0,
+            },
+            size,
+        ));
+        assert_eq!(scene.cursor_icon(size), CursorIcon::Text);
+        assert_eq!(
+            scene.open_with_chooser_click_at_screen_point(
+                ViewPoint {
+                    x: query.right() - 2.0,
+                    y: query.y + query.height / 2.0,
+                },
+                size,
+            ),
+            OpenWithChooserClick::Query("pain".len())
+        );
+        assert!(scene.set_open_with_query_cursor(0));
+        assert_eq!(scene.open_with_chooser.as_ref().unwrap().query_cursor, 0);
+    }
+
+    #[test]
     fn open_with_chooser_scrolls_visible_applications_without_changing_selection() {
         let mut scene = test_scene(vec![test_entry("note.txt", false)], ShellViewMode::Icons);
         let applications = (0..12)
@@ -27202,6 +28285,7 @@ text/plain=writer.desktop;\n",
         assert!(places.iter().any(|place| {
             place.group == "Devices"
                 && place.marker == "D"
+                && place.icon_name == "drive-removable-media"
                 && place.label == "USB Drive"
                 && place.path == usb
                 && place.device.as_ref().is_some_and(|device| device.mounted)
@@ -27209,6 +28293,7 @@ text/plain=writer.desktop;\n",
         assert!(places.iter().any(|place| {
             place.group == "Devices"
                 && place.marker == "D"
+                && place.icon_name == "drive-removable-media"
                 && place.label == "Unmounted"
                 && place.path == PathBuf::from("unmounted")
                 && place
@@ -27218,6 +28303,41 @@ text/plain=writer.desktop;\n",
         }));
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn shell_places_use_semantic_theme_icon_names() {
+        assert_eq!(
+            ShellPlace::new("", "H", "Home", PathBuf::from("/tmp/home"), false).icon_name,
+            "user-home"
+        );
+        assert_eq!(
+            ShellPlace::new(
+                "",
+                "Down",
+                "Downloads",
+                PathBuf::from("/tmp/Downloads"),
+                false
+            )
+            .icon_name,
+            "folder-download"
+        );
+        assert_eq!(
+            ShellPlace::new("", "Tr", "Trash", file_ops::trash_files_dir(), false).icon_name,
+            "user-trash"
+        );
+        assert_eq!(
+            ShellPlace::new("Network", "Net", "Network", network_root_path(), false).icon_name,
+            "folder-remote"
+        );
+        assert_eq!(
+            ShellPlace::new("Devices", "/", "Root", PathBuf::from("/"), false).icon_name,
+            "drive-harddisk"
+        );
+        assert_eq!(
+            ShellPlace::new("", "B", "Project", PathBuf::from("/tmp/project"), true).icon_name,
+            "folder-bookmark"
+        );
     }
 
     #[test]
@@ -29922,6 +31042,34 @@ text/plain=writer.desktop;\n",
             &PhysicalKey::Code(KeyCode::KeyH),
             &Key::Character("h".into()),
             &Key::Character("h".into()),
+        ));
+    }
+
+    #[test]
+    fn dark_mode_shortcut_requires_ctrl_shift_d() {
+        let unidentified = PhysicalKey::Unidentified(winit::keyboard::NativeKeyCode::Unidentified);
+        let no_key = Key::Unidentified(winit::keyboard::NativeKey::Unidentified);
+
+        assert!(dark_mode_toggle_requested_for_key_parts(
+            true,
+            true,
+            &PhysicalKey::Code(KeyCode::KeyD),
+            &no_key,
+            &no_key,
+        ));
+        assert!(dark_mode_toggle_requested_for_key_parts(
+            true,
+            true,
+            &unidentified,
+            &Key::Character("D".into()),
+            &no_key,
+        ));
+        assert!(!dark_mode_toggle_requested_for_key_parts(
+            true,
+            false,
+            &PhysicalKey::Code(KeyCode::KeyD),
+            &Key::Character("d".into()),
+            &Key::Character("d".into()),
         ));
     }
 

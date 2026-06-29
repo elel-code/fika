@@ -12,8 +12,8 @@ use crate::shell::metrics::{
 use crate::shell::open_with::geometry::{
     open_with_chooser_cancel_button_rect_scaled, open_with_chooser_default_checkbox_rect_scaled,
     open_with_chooser_list_rect_scaled, open_with_chooser_open_button_rect_scaled,
-    open_with_chooser_query_rect_scaled, open_with_chooser_rect_scaled,
-    open_with_chooser_scrollbar_rects_scaled,
+    open_with_chooser_query_rect_scaled, open_with_chooser_query_text_rect_scaled,
+    open_with_chooser_rect_scaled, open_with_chooser_scrollbar_rects_scaled,
 };
 use crate::shell::open_with::{OpenWithTreeRow, ShellOpenWithChooser};
 use crate::shell::popup::style::{
@@ -36,13 +36,54 @@ pub(crate) fn push_open_with_chooser_overlay(
     icons: &mut IconFrameBuilder<'_>,
     size: PhysicalSize<u32>,
 ) {
+    push_open_with_chooser_surface(
+        chooser,
+        scale,
+        vertices,
+        text,
+        icons,
+        size,
+        Some(POPUP_BACKDROP),
+    );
+}
+
+pub(crate) fn push_open_with_chooser_dialog(
+    chooser: &ShellOpenWithChooser,
+    scale: f32,
+    vertices: &mut Vec<QuadVertex>,
+    text: &mut TextFrameBuilder<'_>,
+    icons: &mut IconFrameBuilder<'_>,
+    size: PhysicalSize<u32>,
+) {
+    push_open_with_chooser_surface(
+        chooser,
+        scale,
+        vertices,
+        text,
+        icons,
+        size,
+        Some(POPUP_SURFACE),
+    );
+}
+
+fn push_open_with_chooser_surface(
+    chooser: &ShellOpenWithChooser,
+    scale: f32,
+    vertices: &mut Vec<QuadVertex>,
+    text: &mut TextFrameBuilder<'_>,
+    icons: &mut IconFrameBuilder<'_>,
+    size: PhysicalSize<u32>,
+    background: Option<[f32; 4]>,
+) {
     let screen = ViewRect {
         x: 0.0,
         y: 0.0,
         width: size.width.max(1) as f32,
         height: size.height.max(1) as f32,
     };
-    push_rect(vertices, screen, POPUP_BACKDROP, size);
+    if let Some(background) = background {
+        push_rect(vertices, screen, background, size);
+    }
     let rect = open_with_chooser_rect_scaled(chooser, size, scale);
     let title_height = scaled_dialog_metric(OPEN_WITH_CHOOSER_TITLE_HEIGHT, scale);
     let margin = scaled_dialog_metric(16.0, scale);
@@ -162,50 +203,52 @@ pub(crate) fn push_open_with_chooser_overlay(
     ) {
         push_open_with_search_icon(vertices, search_icon, query, scale, size);
     }
-    let query_text_rect = ViewRect {
-        x: search_icon.right() + scaled_dialog_metric(8.0, scale),
-        y: query.y + (query.height - scaled_dialog_metric(18.0, scale)) / 2.0,
-        width: (query.right() - search_icon.right() - scaled_dialog_metric(18.0, scale)).max(1.0),
-        height: scaled_dialog_metric(18.0, scale),
-    };
+    let query_text_rect = open_with_chooser_query_text_rect_scaled(rect, scale);
     if chooser.query.is_empty() {
-        text.push_label(
+        text.push_label_aligned_no_wrap(
             "Search applications",
             query_text_rect,
             query,
             popup_muted_text(),
+            LabelAlignment::Start,
         );
     } else {
-        let cursor_x = text.measure_label_cursor_x(
+        text.push_label_aligned_no_wrap(
             &chooser.query,
             query_text_rect,
-            chooser.query.len(),
-            LabelAlignment::Start,
-            LabelWrap::None,
-        );
-        text.push_label(&chooser.query, query_text_rect, query, popup_body_text());
-        let caret_width = scaled_dialog_metric(1.0, scale).max(1.0);
-        let caret_height = scaled_dialog_metric(17.0, scale)
-            .min(query.height - scaled_dialog_metric(10.0, scale))
-            .max(1.0);
-        let caret_x = (query_text_rect.x + cursor_x).clamp(
-            query_text_rect.x,
-            (query_text_rect.right() - caret_width).max(query_text_rect.x),
-        );
-        push_clipped_rounded_rect(
-            vertices,
-            ViewRect {
-                x: caret_x,
-                y: query.y + (query.height - caret_height) / 2.0,
-                width: caret_width,
-                height: caret_height,
-            },
             query,
-            caret_width / 2.0,
-            POPUP_FIELD_FOCUS,
-            size,
+            popup_body_text(),
+            LabelAlignment::Start,
         );
     }
+    let cursor_x = text.measure_label_cursor_x(
+        &chooser.query,
+        query_text_rect,
+        chooser.query_cursor,
+        LabelAlignment::Start,
+        LabelWrap::None,
+    );
+    let caret_width = scaled_dialog_metric(1.0, scale).max(1.0);
+    let caret_height = scaled_dialog_metric(17.0, scale)
+        .min(query.height - scaled_dialog_metric(10.0, scale))
+        .max(1.0);
+    let caret_x = (query_text_rect.x + cursor_x).clamp(
+        query_text_rect.x,
+        (query_text_rect.right() - caret_width).max(query_text_rect.x),
+    );
+    push_clipped_rounded_rect(
+        vertices,
+        ViewRect {
+            x: caret_x,
+            y: query.y + (query.height - caret_height) / 2.0,
+            width: caret_width,
+            height: caret_height,
+        },
+        query,
+        caret_width / 2.0,
+        POPUP_FIELD_FOCUS,
+        size,
+    );
 
     let list = open_with_chooser_list_rect_scaled(rect, chooser, scale);
     let scrollbar = open_with_chooser_scrollbar_rects_scaled(list, chooser, scale);

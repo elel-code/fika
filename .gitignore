@@ -1,11 +1,9 @@
 /target/
 .agents/
 .codex/
-/dolphin
-/cosmic-files
+# Local source references (Dolphin, KIO, cosmic-files) live here.
 /reference/
 REFACTOR_REPLACEMENTS.md
 STEP4_PLAN.md
-/dolphin/
 .codewhale/
 .deepseek/state/

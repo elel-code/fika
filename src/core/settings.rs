@@ -10,11 +10,13 @@ const PLACES_SIDEBAR_WIDTH_KEY: &str = "places.sidebar.width";
 const PLACES_SIDEBAR_VISIBLE_KEY: &str = "places.sidebar.visible";
 const VIEW_MODE_KEY: &str = "view.mode";
 const VIEW_SHOW_HIDDEN_KEY: &str = "view.show_hidden";
+const APPEARANCE_DARK_MODE_KEY: &str = "appearance.dark_mode";
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct AppSettings {
     pub places_sidebar: PlacesSidebarSettings,
     pub view: ViewSettings,
+    pub appearance: AppearanceSettings,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -27,6 +29,11 @@ pub struct PlacesSidebarSettings {
 pub struct ViewSettings {
     pub mode: Option<ViewMode>,
     pub show_hidden: Option<bool>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct AppearanceSettings {
+    pub dark_mode: Option<bool>,
 }
 
 pub fn default_app_settings_path() -> PathBuf {
@@ -95,6 +102,11 @@ pub fn parse_app_settings(contents: &str) -> AppSettings {
                     settings.view.show_hidden = Some(show_hidden);
                 }
             }
+            APPEARANCE_DARK_MODE_KEY => {
+                if let Some(dark_mode) = parse_bool(value) {
+                    settings.appearance.dark_mode = Some(dark_mode);
+                }
+            }
             _ => {}
         }
     }
@@ -114,6 +126,9 @@ pub fn app_settings_tsv(settings: &AppSettings) -> String {
     }
     if let Some(show_hidden) = settings.view.show_hidden {
         lines.push(format!("{VIEW_SHOW_HIDDEN_KEY}\t{show_hidden}"));
+    }
+    if let Some(dark_mode) = settings.appearance.dark_mode {
+        lines.push(format!("{APPEARANCE_DARK_MODE_KEY}\t{dark_mode}"));
     }
     if lines.is_empty() {
         String::new()
@@ -156,11 +171,13 @@ places.sidebar.width\t276.5
 places.sidebar.visible\tfalse
 view.mode\tdetails
 view.show_hidden\ttrue
+appearance.dark_mode\ttrue
 ignored.key\tvalue
 places.sidebar.width\tnan
 places.sidebar.visible\tmaybe
 view.mode\tunknown
 view.show_hidden\tmaybe
+appearance.dark_mode\tmaybe
 ",
         );
 
@@ -168,6 +185,7 @@ view.show_hidden\tmaybe
         assert_eq!(settings.places_sidebar.visible, Some(false));
         assert_eq!(settings.view.mode, Some(ViewMode::Details));
         assert_eq!(settings.view.show_hidden, Some(true));
+        assert_eq!(settings.appearance.dark_mode, Some(true));
     }
 
     #[test]
@@ -188,6 +206,9 @@ view.show_hidden\tmaybe
             view: ViewSettings {
                 mode: Some(ViewMode::Compact),
                 show_hidden: Some(true),
+            },
+            appearance: AppearanceSettings {
+                dark_mode: Some(true),
             },
         };
 

@@ -133,8 +133,10 @@ impl ShellRenderDirtyKey {
         push_bool(&mut values, scene.filter_active);
         push_hash(&mut values, &scene.filter_pattern);
         push_bool(&mut values, scene.show_hidden);
+        push_bool(&mut values, scene.dark_mode);
         push_u64(&mut values, scene.zoom_step as i64 as u64);
         push_f32(&mut values, scene.split_pane_left_fraction);
+        push_u64(&mut values, scene.item_reflow_dirty_value());
 
         for pane_id in ShellPaneId::ALL {
             match scene.panes.get(pane_id) {

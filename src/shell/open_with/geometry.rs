@@ -53,6 +53,32 @@ pub(crate) fn open_with_chooser_rect_scaled(
     }
 }
 
+pub(crate) fn open_with_chooser_window_size_scaled(
+    chooser: &ShellOpenWithChooser,
+    scale_factor: f32,
+) -> PhysicalSize<u32> {
+    let margin = scaled_dialog_metric(OPEN_WITH_CHOOSER_MARGIN, scale_factor);
+    let width = scaled_dialog_metric(OPEN_WITH_CHOOSER_WIDTH, scale_factor) + margin * 2.0;
+    let content_height = open_with_chooser_content_height_scaled(chooser, scale_factor);
+    let error_height = if chooser.error.is_some() {
+        scaled_dialog_metric(26.0, scale_factor)
+    } else {
+        0.0
+    };
+    let dialog_height = scaled_dialog_metric(OPEN_WITH_CHOOSER_TITLE_HEIGHT, scale_factor)
+        + scaled_dialog_metric(16.0, scale_factor)
+        + scaled_dialog_metric(OPEN_WITH_CHOOSER_QUERY_HEIGHT, scale_factor)
+        + scaled_dialog_metric(10.0, scale_factor)
+        + content_height
+        + scaled_dialog_metric(38.0, scale_factor)
+        + error_height
+        + scaled_dialog_metric(52.0, scale_factor);
+    PhysicalSize::new(
+        width.ceil().max(1.0) as u32,
+        (dialog_height + margin * 2.0).ceil().max(1.0) as u32,
+    )
+}
+
 pub(crate) fn open_with_chooser_visible_row_count(chooser: &ShellOpenWithChooser) -> usize {
     chooser
         .tree_row_count()
@@ -78,6 +104,23 @@ pub(crate) fn open_with_chooser_query_rect_scaled(
             + margin,
         width: (dialog_rect.width - margin * 2.0).max(1.0),
         height: scaled_dialog_metric(OPEN_WITH_CHOOSER_QUERY_HEIGHT, scale_factor),
+    }
+}
+
+pub(crate) fn open_with_chooser_query_text_rect_scaled(
+    dialog_rect: ViewRect,
+    scale_factor: f32,
+) -> ViewRect {
+    let query = open_with_chooser_query_rect_scaled(dialog_rect, scale_factor);
+    let search_icon_right = query.x
+        + scaled_dialog_metric(10.0, scale_factor)
+        + scaled_dialog_metric(14.0, scale_factor);
+    ViewRect {
+        x: search_icon_right + scaled_dialog_metric(8.0, scale_factor),
+        y: query.y + (query.height - scaled_dialog_metric(18.0, scale_factor)) / 2.0,
+        width: (query.right() - search_icon_right - scaled_dialog_metric(18.0, scale_factor))
+            .max(1.0),
+        height: scaled_dialog_metric(18.0, scale_factor),
     }
 }
 
@@ -241,6 +284,11 @@ pub(crate) fn open_with_chooser_click_at_point(
     }
     if open_with_chooser_default_checkbox_rect_scaled(rect, chooser, scale_factor).contains(point) {
         return OpenWithChooserClick::ToggleDefault;
+    }
+    if open_with_chooser_query_rect_scaled(rect, scale_factor).contains(point) {
+        let text_rect = open_with_chooser_query_text_rect_scaled(rect, scale_factor);
+        let cursor = chooser.query_cursor_for_text_offset(point.x - text_rect.x, text_rect.width);
+        return OpenWithChooserClick::Query(cursor);
     }
     let list = open_with_chooser_list_rect_scaled(rect, chooser, scale_factor);
     if list.contains(point) {

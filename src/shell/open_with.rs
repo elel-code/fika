@@ -22,6 +22,7 @@ pub(crate) struct ShellOpenWithChooser {
     pub(crate) application_categories: Vec<Vec<String>>,
     pub(crate) expanded_categories: BTreeSet<OpenWithCategoryKey>,
     pub(crate) query: String,
+    pub(crate) query_cursor: usize,
     pub(crate) selected_index: usize,
     pub(crate) scroll_row: usize,
     pub(crate) set_as_default: bool,
@@ -46,6 +47,7 @@ impl ShellOpenWithChooser {
             application_categories,
             expanded_categories: BTreeSet::new(),
             query: String::new(),
+            query_cursor: 0,
             scroll_row: 0,
             set_as_default: false,
             error: None,
@@ -131,26 +133,71 @@ impl ShellOpenWithChooser {
         let old = self.clone();
         match command {
             OpenWithCommand::Insert(value) => {
-                self.query.push_str(&value);
-                self.scroll_row = 0;
-                self.error = None;
-                self.selected_index = self.first_application_row().unwrap_or(0);
+                self.insert_query_text(&value);
             }
             OpenWithCommand::Backspace => {
-                self.query.pop();
-                self.scroll_row = 0;
-                self.error = None;
-                self.selected_index = self.first_application_row().unwrap_or(0);
+                self.backspace_query_text();
+            }
+            OpenWithCommand::Delete => {
+                self.delete_query_text();
+            }
+            OpenWithCommand::MoveLeft => {
+                if self.query.is_empty() {
+                    self.collapse_selected_category();
+                } else {
+                    self.move_query_cursor_left();
+                }
+            }
+            OpenWithCommand::MoveRight => {
+                if self.query.is_empty() {
+                    self.expand_selected_category();
+                } else {
+                    self.move_query_cursor_right();
+                }
+            }
+            OpenWithCommand::MoveHome => {
+                self.query_cursor = 0;
+            }
+            OpenWithCommand::MoveEnd => {
+                self.query_cursor = self.query.len();
             }
             OpenWithCommand::Cancel => return false,
             OpenWithCommand::MoveUp => self.move_selection(-1),
             OpenWithCommand::MoveDown => self.move_selection(1),
-            OpenWithCommand::MoveCategoryLeft => self.collapse_selected_category(),
-            OpenWithCommand::MoveCategoryRight => self.expand_selected_category(),
             OpenWithCommand::Commit | OpenWithCommand::Ignore => return false,
         }
+        self.query_cursor = normalized_open_with_query_cursor(&self.query, self.query_cursor);
         self.ensure_selected_visible();
         old != *self
+    }
+
+    pub(crate) fn query_cursor_for_text_offset(&self, offset_x: f32, text_width: f32) -> usize {
+        if self.query.is_empty() {
+            return 0;
+        }
+        let char_count = self.query.chars().count();
+        if char_count == 0 {
+            return 0;
+        }
+        if text_width <= 0.0 || offset_x <= 0.0 {
+            return 0;
+        }
+        if offset_x >= text_width {
+            return self.query.len();
+        }
+        let char_index =
+            ((offset_x / text_width).clamp(0.0, 1.0) * char_count as f32).round() as usize;
+        query_cursor_for_char_index(&self.query, char_index.min(char_count))
+    }
+
+    pub(crate) fn set_query_cursor(&mut self, cursor: usize) -> bool {
+        let cursor = normalized_open_with_query_cursor(&self.query, cursor);
+        if self.query_cursor == cursor {
+            return false;
+        }
+        self.query_cursor = cursor;
+        self.error = None;
+        true
     }
 
     pub(crate) fn select_filtered_row(&mut self, row: usize) -> bool {
@@ -211,6 +258,52 @@ impl ShellOpenWithChooser {
         } else {
             (current + delta as usize).min(count - 1)
         };
+    }
+
+    fn insert_query_text(&mut self, value: &str) {
+        self.query_cursor = normalized_open_with_query_cursor(&self.query, self.query_cursor);
+        self.query.insert_str(self.query_cursor, value);
+        self.query_cursor += value.len();
+        self.query_text_changed();
+    }
+
+    fn backspace_query_text(&mut self) {
+        let Some(previous) = previous_open_with_query_boundary(&self.query, self.query_cursor)
+        else {
+            return;
+        };
+        self.query.drain(previous..self.query_cursor);
+        self.query_cursor = previous;
+        self.query_text_changed();
+    }
+
+    fn delete_query_text(&mut self) {
+        let cursor = normalized_open_with_query_cursor(&self.query, self.query_cursor);
+        let Some(next) = next_open_with_query_boundary(&self.query, cursor) else {
+            self.query_cursor = cursor;
+            return;
+        };
+        self.query.drain(cursor..next);
+        self.query_cursor = cursor;
+        self.query_text_changed();
+    }
+
+    fn move_query_cursor_left(&mut self) {
+        if let Some(previous) = previous_open_with_query_boundary(&self.query, self.query_cursor) {
+            self.query_cursor = previous;
+        }
+    }
+
+    fn move_query_cursor_right(&mut self) {
+        if let Some(next) = next_open_with_query_boundary(&self.query, self.query_cursor) {
+            self.query_cursor = next;
+        }
+    }
+
+    fn query_text_changed(&mut self) {
+        self.scroll_row = 0;
+        self.error = None;
+        self.selected_index = self.first_application_row().unwrap_or(0);
     }
 
     fn collapse_selected_category(&mut self) {
@@ -287,6 +380,45 @@ impl ShellOpenWithChooser {
     fn category_is_expanded(&self, key: OpenWithCategoryKey) -> bool {
         !self.query.is_empty() || self.expanded_categories.contains(&key)
     }
+}
+
+fn normalized_open_with_query_cursor(value: &str, cursor: usize) -> usize {
+    let mut cursor = cursor.min(value.len());
+    while !value.is_char_boundary(cursor) {
+        cursor -= 1;
+    }
+    cursor
+}
+
+fn previous_open_with_query_boundary(value: &str, cursor: usize) -> Option<usize> {
+    let cursor = normalized_open_with_query_cursor(value, cursor);
+    value[..cursor]
+        .char_indices()
+        .last()
+        .map(|(index, _)| index)
+}
+
+fn next_open_with_query_boundary(value: &str, cursor: usize) -> Option<usize> {
+    let cursor = normalized_open_with_query_cursor(value, cursor);
+    if cursor >= value.len() {
+        return None;
+    }
+    value[cursor..]
+        .char_indices()
+        .nth(1)
+        .map(|(index, _)| cursor + index)
+        .or(Some(value.len()))
+}
+
+fn query_cursor_for_char_index(value: &str, char_index: usize) -> usize {
+    if char_index == 0 {
+        return 0;
+    }
+    value
+        .char_indices()
+        .nth(char_index)
+        .map(|(index, _)| index)
+        .unwrap_or(value.len())
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -417,6 +549,7 @@ pub(crate) enum OpenWithChooserClick {
     Cancel,
     Open,
     ToggleDefault,
+    Query(usize),
     Row(usize),
 }
 

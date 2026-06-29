@@ -853,7 +853,37 @@ async fn empty_trash_in_dirs_async(
     trashrc_path: PathBuf,
 ) -> FileActionSummary {
     let mut summary = FileActionSummary::default();
-    if !path_exists_async(&files_dir).await {
+    let Some(trash_dir) = files_dir.parent().map(Path::to_path_buf) else {
+        summary.failures.push(format!(
+            "{}: Trash files directory has no parent",
+            files_dir.display()
+        ));
+        return summary;
+    };
+
+    let files_exists = path_exists_async(&files_dir).await;
+    let info_exists = path_exists_async(&info_dir).await;
+    if !files_exists {
+        if info_exists {
+            match swap_trash_dir_for_emptying_async(&trash_dir, &info_dir, "info").await {
+                Ok(old_info_dir) => {
+                    if let Err(err) = create_dir_all_async(&info_dir).await {
+                        summary
+                            .failures
+                            .push(format!("{}: {err}", info_dir.display()));
+                        let _ = compio::fs::rename(&old_info_dir, &info_dir).await;
+                        return summary;
+                    }
+                    spawn_trash_emptying_cleanup(vec![old_info_dir]);
+                }
+                Err(err) => {
+                    summary
+                        .failures
+                        .push(format!("{}: {err}", info_dir.display()));
+                    return summary;
+                }
+            }
+        }
         let _ = write_trash_status_empty_at_async(&trashrc_path, true).await;
         return summary;
     }
@@ -868,22 +898,122 @@ async fn empty_trash_in_dirs_async(
         }
     };
 
-    for (entry_path, _) in entries {
-        match permanently_delete_trash_path_in_dirs_async(&entry_path, &files_dir, &info_dir).await
-        {
-            Ok(record) => summary.successes.push(record),
-            Err(err) => summary
-                .failures
-                .push(format!("{}: {err}", entry_path.display())),
+    let mut successes = Vec::with_capacity(entries.len());
+    for (entry_path, _) in &entries {
+        let original_path = trash_original_path_in_dir_async(entry_path, &info_dir)
+            .await
+            .unwrap_or_else(|_| entry_path.clone());
+        successes.push(TrashRecord {
+            original_path,
+            trash_path: entry_path.clone(),
+        });
+    }
+
+    let old_info_dir = if info_exists {
+        match swap_trash_dir_for_emptying_async(&trash_dir, &info_dir, "info").await {
+            Ok(path) => Some(path),
+            Err(err) => {
+                summary
+                    .failures
+                    .push(format!("{}: {err}", info_dir.display()));
+                return summary;
+            }
+        }
+    } else {
+        None
+    };
+    let old_files_dir =
+        match swap_trash_dir_for_emptying_async(&trash_dir, &files_dir, "files").await {
+            Ok(path) => path,
+            Err(err) => {
+                if let Some(old_info_dir) = old_info_dir.as_ref() {
+                    let _ = compio::fs::rename(old_info_dir, &info_dir).await;
+                }
+                summary
+                    .failures
+                    .push(format!("{}: {err}", files_dir.display()));
+                return summary;
+            }
+        };
+
+    if let Err(err) = create_dir_all_async(&files_dir).await {
+        summary
+            .failures
+            .push(format!("{}: {err}", files_dir.display()));
+        let _ = compio::fs::rename(&old_files_dir, &files_dir).await;
+        if let Some(old_info_dir) = old_info_dir.as_ref() {
+            let _ = compio::fs::rename(old_info_dir, &info_dir).await;
+        }
+        return summary;
+    }
+    if let Err(err) = create_dir_all_async(&info_dir).await {
+        summary
+            .failures
+            .push(format!("{}: {err}", info_dir.display()));
+        let _ = remove_path_if_present_async(&files_dir).await;
+        let _ = compio::fs::rename(&old_files_dir, &files_dir).await;
+        if let Some(old_info_dir) = old_info_dir.as_ref() {
+            let _ = compio::fs::rename(old_info_dir, &info_dir).await;
+        }
+        return summary;
+    }
+
+    let _ = write_trash_status_empty_at_async(&trashrc_path, true).await;
+    summary.successes = successes;
+    let mut cleanup_paths = vec![old_files_dir];
+    if let Some(old_info_dir) = old_info_dir {
+        cleanup_paths.push(old_info_dir);
+    }
+    spawn_trash_emptying_cleanup(cleanup_paths);
+    summary
+}
+
+async fn swap_trash_dir_for_emptying_async(
+    trash_dir: &Path,
+    path: &Path,
+    prefix: &str,
+) -> io::Result<PathBuf> {
+    for attempt in 0..32_u8 {
+        let destination = trash_emptying_temp_path(trash_dir, prefix, attempt);
+        if path_exists_async(&destination).await {
+            continue;
+        }
+        match compio::fs::rename(path, &destination).await {
+            Ok(()) => return Ok(destination),
+            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(err) => return Err(err),
         }
     }
-    remove_orphan_trashinfo_files_in_dir_async(&info_dir, &mut summary).await;
-    let empty = read_dir_entries_async(&files_dir)
-        .await
-        .ok()
-        .is_none_or(|entries| entries.is_empty());
-    let _ = write_trash_status_empty_at_async(&trashrc_path, empty).await;
-    summary
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "could not reserve Trash emptying directory",
+    ))
+}
+
+fn trash_emptying_temp_path(trash_dir: &Path, prefix: &str, attempt: u8) -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    trash_dir.join(format!(
+        ".fika-emptying-{prefix}-{}-{nanos}-{attempt}",
+        std::process::id()
+    ))
+}
+
+fn spawn_trash_emptying_cleanup(paths: Vec<PathBuf>) {
+    if paths.is_empty() {
+        return;
+    }
+    std::thread::spawn(move || {
+        let _ = pollster::block_on(crate::core::operation_runtime::run_operation_task(
+            move || async move {
+                for path in paths {
+                    let _ = remove_path_if_present_async(&path).await;
+                }
+            },
+        ));
+    });
 }
 
 fn restore_trash_path(
@@ -965,32 +1095,6 @@ fn permanently_delete_trash_path(trash_path: &Path) -> Result<TrashRecord, Strin
         trash_original_path(trash_path).unwrap_or_else(|_| trash_path.to_path_buf());
     remove_path(trash_path).map_err(|err| err.to_string())?;
     let _ = remove_trashinfo(trash_path);
-
-    Ok(TrashRecord {
-        original_path,
-        trash_path: trash_path.to_path_buf(),
-    })
-}
-
-async fn permanently_delete_trash_path_in_dirs_async(
-    trash_path: &Path,
-    files_dir: &Path,
-    info_dir: &Path,
-) -> Result<TrashRecord, String> {
-    if trash_path == files_dir || !trash_path.starts_with(files_dir) {
-        return Err("item is not inside Trash".to_string());
-    }
-    if !path_exists_async(trash_path).await {
-        return Err("trash item no longer exists".to_string());
-    }
-
-    let original_path = trash_original_path_in_dir_async(trash_path, info_dir)
-        .await
-        .unwrap_or_else(|_| trash_path.to_path_buf());
-    remove_path_async(trash_path)
-        .await
-        .map_err(|err| err.to_string())?;
-    let _ = remove_trashinfo_in_dir_async(trash_path, info_dir).await;
 
     Ok(TrashRecord {
         original_path,
@@ -1837,18 +1941,6 @@ fn remove_trashinfo(trash_path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-async fn remove_trashinfo_in_dir_async(trash_path: &Path, info_dir: &Path) -> Result<(), String> {
-    let Some(info_path) = trash_info_path_in_dir(trash_path, info_dir) else {
-        return Ok(());
-    };
-    if path_exists_async(&info_path).await {
-        compio::fs::remove_file(&info_path)
-            .await
-            .map_err(|err| err.to_string())?;
-    }
-    Ok(())
-}
-
 fn remove_orphan_trashinfo_files(summary: &mut FileActionSummary) {
     let info_dir = trash_info_dir();
     let Ok(entries) = fs::read_dir(&info_dir) else {
@@ -1867,22 +1959,6 @@ fn remove_orphan_trashinfo_files(summary: &mut FileActionSummary) {
             Err(err) => summary
                 .failures
                 .push(format!("trash metadata entry: {err}")),
-        }
-    }
-}
-
-async fn remove_orphan_trashinfo_files_in_dir_async(
-    info_dir: &Path,
-    summary: &mut FileActionSummary,
-) {
-    let Ok(entries) = read_dir_entries_async(info_dir).await else {
-        return;
-    };
-    for (path, _) in entries {
-        if path.extension().and_then(|extension| extension.to_str()) == Some("trashinfo")
-            && let Err(err) = compio::fs::remove_file(&path).await
-        {
-            summary.failures.push(format!("{}: {err}", path.display()));
         }
     }
 }
