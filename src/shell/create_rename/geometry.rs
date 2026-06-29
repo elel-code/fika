@@ -4,9 +4,8 @@ use winit::dpi::PhysicalSize;
 use crate::shell::create_rename::{CreateEntryKind, ShellCreateDialog, ShellRenameDialog};
 use crate::shell::metrics::{
     CREATE_DIALOG_BUTTON_GAP, CREATE_DIALOG_BUTTON_HEIGHT, CREATE_DIALOG_BUTTON_WIDTH,
-    CREATE_DIALOG_HEIGHT, CREATE_DIALOG_MARGIN, CREATE_DIALOG_TITLE_HEIGHT, CREATE_DIALOG_WIDTH,
-    RENAME_DIALOG_HEIGHT, RENAME_DIALOG_MARGIN, RENAME_DIALOG_TITLE_HEIGHT, RENAME_DIALOG_WIDTH,
-    scaled_dialog_metric,
+    CREATE_DIALOG_HEIGHT, CREATE_DIALOG_TITLE_HEIGHT, CREATE_DIALOG_WIDTH, RENAME_DIALOG_HEIGHT,
+    RENAME_DIALOG_TITLE_HEIGHT, RENAME_DIALOG_WIDTH, scaled_dialog_metric,
 };
 
 #[cfg(test)]
@@ -17,32 +16,22 @@ pub(crate) fn create_dialog_rect(dialog: &ShellCreateDialog, size: PhysicalSize<
 pub(crate) fn create_dialog_rect_scaled(
     _dialog: &ShellCreateDialog,
     size: PhysicalSize<u32>,
-    scale_factor: f32,
+    _scale_factor: f32,
 ) -> ViewRect {
-    let width = size.width.max(1) as f32;
-    let height = size.height.max(1) as f32;
-    let margin = scaled_dialog_metric(CREATE_DIALOG_MARGIN, scale_factor);
-    let dialog_width = scaled_dialog_metric(CREATE_DIALOG_WIDTH, scale_factor)
-        .min((width - margin * 2.0).max(1.0))
-        .max(1.0);
-    let dialog_height = scaled_dialog_metric(CREATE_DIALOG_HEIGHT, scale_factor)
-        .min((height - margin * 2.0).max(1.0))
-        .max(1.0);
     ViewRect {
-        x: ((width - dialog_width) / 2.0).max(margin),
-        y: ((height - dialog_height) / 2.0).max(margin),
-        width: dialog_width,
-        height: dialog_height,
+        x: 0.0,
+        y: 0.0,
+        width: size.width.max(1) as f32,
+        height: size.height.max(1) as f32,
     }
 }
 
 pub(crate) fn create_dialog_window_size_scaled(scale_factor: f32) -> PhysicalSize<u32> {
-    let margin = scaled_dialog_metric(CREATE_DIALOG_MARGIN, scale_factor);
     PhysicalSize::new(
-        (scaled_dialog_metric(CREATE_DIALOG_WIDTH, scale_factor) + margin * 2.0)
+        scaled_dialog_metric(CREATE_DIALOG_WIDTH, scale_factor)
             .ceil()
             .max(1.0) as u32,
-        (scaled_dialog_metric(CREATE_DIALOG_HEIGHT, scale_factor) + margin * 2.0)
+        scaled_dialog_metric(CREATE_DIALOG_HEIGHT, scale_factor)
             .ceil()
             .max(1.0) as u32,
     )
@@ -149,32 +138,22 @@ pub(crate) fn rename_dialog_rect(dialog: &ShellRenameDialog, size: PhysicalSize<
 pub(crate) fn rename_dialog_rect_scaled(
     _dialog: &ShellRenameDialog,
     size: PhysicalSize<u32>,
-    scale_factor: f32,
+    _scale_factor: f32,
 ) -> ViewRect {
-    let width = size.width.max(1) as f32;
-    let height = size.height.max(1) as f32;
-    let margin = scaled_dialog_metric(RENAME_DIALOG_MARGIN, scale_factor);
-    let dialog_width = scaled_dialog_metric(RENAME_DIALOG_WIDTH, scale_factor)
-        .min((width - margin * 2.0).max(1.0))
-        .max(1.0);
-    let dialog_height = scaled_dialog_metric(RENAME_DIALOG_HEIGHT, scale_factor)
-        .min((height - margin * 2.0).max(1.0))
-        .max(1.0);
     ViewRect {
-        x: ((width - dialog_width) / 2.0).max(margin),
-        y: ((height - dialog_height) / 2.0).max(margin),
-        width: dialog_width,
-        height: dialog_height,
+        x: 0.0,
+        y: 0.0,
+        width: size.width.max(1) as f32,
+        height: size.height.max(1) as f32,
     }
 }
 
 pub(crate) fn rename_dialog_window_size_scaled(scale_factor: f32) -> PhysicalSize<u32> {
-    let margin = scaled_dialog_metric(RENAME_DIALOG_MARGIN, scale_factor);
     PhysicalSize::new(
-        (scaled_dialog_metric(RENAME_DIALOG_WIDTH, scale_factor) + margin * 2.0)
+        scaled_dialog_metric(RENAME_DIALOG_WIDTH, scale_factor)
             .ceil()
             .max(1.0) as u32,
-        (scaled_dialog_metric(RENAME_DIALOG_HEIGHT, scale_factor) + margin * 2.0)
+        scaled_dialog_metric(RENAME_DIALOG_HEIGHT, scale_factor)
             .ceil()
             .max(1.0) as u32,
     )

@@ -1,8 +1,8 @@
 # 性能对齐原则
 
 Fika 的性能工作以 Dolphin 为第一参考。本机 Dolphin 源码位于
-`/home/yk/Code/fika/reference/dolphin`，它是文件管理器性能架构、行为保持型优化和回归 gate
-的第一参考。
+`/home/yk/Code/fika/reference/dolphin`，它是文件管理器性能架构、行为保持型优化和
+回归 gate 的第一参考。
 
 ## 硬规则
 
@@ -66,6 +66,27 @@ Dolphin reference:
 - Places 行为和设备侧边栏集成：
   `/home/yk/Code/fika/reference/dolphin/src/panels/places/placespanel.cpp`、
   `/home/yk/Code/fika/reference/dolphin/src/dolphinplacesmodelsingleton.cpp`。
+- Dialog 生命周期、modal parent、尺寸 hint 和 Open With 初始尺寸：
+  `/home/yk/Code/fika/reference/dolphin/src/dolphinmainwindow.cpp`、
+  `/home/yk/Code/fika/reference/dolphin/src/views/dolphinview.cpp`、
+  `/home/yk/Code/fika/reference/dolphin/src/panels/folders/folderspanel.cpp`、
+  `/home/yk/Code/fika/reference/kio/src/widgets/kopenwithdialog.cpp`、
+  `/home/yk/Code/fika/reference/kio/src/widgets/widgetsopenwithhandler.cpp`。
+
+## 可继续推进的性能方向
+
+- Model 增量变更：参考 `KFileItemModel` 的稳定 index / item identity / inserted /
+  removed range，把 delete、trash、reload 从 full reset 继续推进为 range diff。
+- 可见项优先 role 更新：参考 `KFileItemModelRolesUpdater`，将 MIME、图标、缩略图、
+  folder preview、metadata role 分成 visible priority 与 background queue。
+- View virtualization：参考 `KItemListView`、`KItemListWidget` 和 layouter，继续收缩
+  visible slot pool、scroll range、hover/selection dirty 与 widget reuse 的边界。
+- Layout / size hint cache：参考 `KItemListSizeHintResolver`，为 details / compact /
+  icons 模式缓存文本自然宽度、列宽和 item rect，减少滚动和重排时的重复 shaping。
+- 删除动画和批量 remove：参考 Dolphin model range removal，并结合 Nautilus 的连续
+  splice 思路，先保留 stable item id，再让 surviving items 只做 reflow timeline。
+- Render pipeline：将主窗口和 detached dialog 的 surface acquire、text/icon begin-frame、
+  upload、present 合并到共享 frame surface 层，为 damage 和多窗口性能日志提供统一入口。
 
 ## Review 检查项
 

@@ -3,9 +3,8 @@ use winit::dpi::PhysicalSize;
 
 use crate::shell::metrics::{
     OPEN_WITH_CHOOSER_BUTTON_GAP, OPEN_WITH_CHOOSER_BUTTON_HEIGHT, OPEN_WITH_CHOOSER_BUTTON_WIDTH,
-    OPEN_WITH_CHOOSER_MARGIN, OPEN_WITH_CHOOSER_MAX_ROWS, OPEN_WITH_CHOOSER_QUERY_HEIGHT,
-    OPEN_WITH_CHOOSER_ROW_HEIGHT, OPEN_WITH_CHOOSER_TITLE_HEIGHT, OPEN_WITH_CHOOSER_WIDTH,
-    scaled_dialog_metric,
+    OPEN_WITH_CHOOSER_MAX_ROWS, OPEN_WITH_CHOOSER_QUERY_HEIGHT, OPEN_WITH_CHOOSER_ROW_HEIGHT,
+    OPEN_WITH_CHOOSER_TITLE_HEIGHT, OPEN_WITH_CHOOSER_WIDTH, scaled_dialog_metric,
 };
 
 use super::{OpenWithChooserClick, ShellOpenWithChooser};
@@ -19,37 +18,15 @@ pub(crate) fn open_with_chooser_rect(
 }
 
 pub(crate) fn open_with_chooser_rect_scaled(
-    chooser: &ShellOpenWithChooser,
+    _chooser: &ShellOpenWithChooser,
     size: PhysicalSize<u32>,
-    scale_factor: f32,
+    _scale_factor: f32,
 ) -> ViewRect {
-    let width = size.width.max(1) as f32;
-    let height = size.height.max(1) as f32;
-    let margin = scaled_dialog_metric(OPEN_WITH_CHOOSER_MARGIN, scale_factor);
-    let dialog_width = scaled_dialog_metric(OPEN_WITH_CHOOSER_WIDTH, scale_factor)
-        .min((width - margin * 2.0).max(1.0))
-        .max(1.0);
-    let content_height = open_with_chooser_content_height_scaled(chooser, scale_factor);
-    let error_height = if chooser.error.is_some() {
-        scaled_dialog_metric(26.0, scale_factor)
-    } else {
-        0.0
-    };
-    let dialog_height = (scaled_dialog_metric(OPEN_WITH_CHOOSER_TITLE_HEIGHT, scale_factor)
-        + scaled_dialog_metric(16.0, scale_factor)
-        + scaled_dialog_metric(OPEN_WITH_CHOOSER_QUERY_HEIGHT, scale_factor)
-        + scaled_dialog_metric(10.0, scale_factor)
-        + content_height
-        + scaled_dialog_metric(38.0, scale_factor)
-        + error_height
-        + scaled_dialog_metric(52.0, scale_factor))
-    .min((height - margin * 2.0).max(1.0))
-    .max(1.0);
     ViewRect {
-        x: ((width - dialog_width) / 2.0).max(margin),
-        y: ((height - dialog_height) / 2.0).max(margin),
-        width: dialog_width,
-        height: dialog_height,
+        x: 0.0,
+        y: 0.0,
+        width: size.width.max(1) as f32,
+        height: size.height.max(1) as f32,
     }
 }
 
@@ -57,8 +34,6 @@ pub(crate) fn open_with_chooser_window_size_scaled(
     chooser: &ShellOpenWithChooser,
     scale_factor: f32,
 ) -> PhysicalSize<u32> {
-    let margin = scaled_dialog_metric(OPEN_WITH_CHOOSER_MARGIN, scale_factor);
-    let width = scaled_dialog_metric(OPEN_WITH_CHOOSER_WIDTH, scale_factor) + margin * 2.0;
     let content_height = open_with_chooser_content_height_scaled(chooser, scale_factor);
     let error_height = if chooser.error.is_some() {
         scaled_dialog_metric(26.0, scale_factor)
@@ -74,8 +49,10 @@ pub(crate) fn open_with_chooser_window_size_scaled(
         + error_height
         + scaled_dialog_metric(52.0, scale_factor);
     PhysicalSize::new(
-        width.ceil().max(1.0) as u32,
-        (dialog_height + margin * 2.0).ceil().max(1.0) as u32,
+        scaled_dialog_metric(OPEN_WITH_CHOOSER_WIDTH, scale_factor)
+            .ceil()
+            .max(1.0) as u32,
+        dialog_height.ceil().max(1.0) as u32,
     )
 }
 

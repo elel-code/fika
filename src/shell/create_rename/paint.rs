@@ -17,7 +17,7 @@ use crate::shell::popup::style::{
     POPUP_SURFACE, popup_body_text, popup_error_text, popup_inverse_text, popup_title_text,
 };
 use crate::{
-    LabelAlignment, QuadVertex, TextFrameBuilder, push_clipped_rect_outline,
+    LabelAlignment, LabelWrap, QuadVertex, TextFrameBuilder, push_clipped_rect_outline,
     push_clipped_rounded_rect, push_rect,
 };
 
@@ -134,18 +134,7 @@ fn push_create_dialog_surface(
         size,
     );
     push_clipped_rect_outline(vertices, input, rect, 1.0, POPUP_FIELD_FOCUS, size);
-    let draft = format!("{}|", dialog.name);
-    text.push_label(
-        &draft,
-        ViewRect {
-            x: input.x + scaled_dialog_metric(10.0, scale),
-            y: input.y + scaled_dialog_metric(7.0, scale),
-            width: (input.width - scaled_dialog_metric(20.0, scale)).max(1.0),
-            height: scaled_dialog_metric(18.0, scale),
-        },
-        input,
-        popup_body_text(),
-    );
+    push_dialog_input_text(vertices, text, &dialog.name, input, scale, size);
 
     if let Some(error) = dialog.error.as_ref() {
         text.push_label(
@@ -258,18 +247,7 @@ fn push_rename_dialog_surface(
         size,
     );
     push_clipped_rect_outline(vertices, input, rect, 1.0, POPUP_FIELD_FOCUS, size);
-    let draft = format!("{}|", dialog.name);
-    text.push_label(
-        &draft,
-        ViewRect {
-            x: input.x + scaled_dialog_metric(10.0, scale),
-            y: input.y + scaled_dialog_metric(7.0, scale),
-            width: (input.width - scaled_dialog_metric(20.0, scale)).max(1.0),
-            height: scaled_dialog_metric(18.0, scale),
-        },
-        input,
-        popup_body_text(),
-    );
+    push_dialog_input_text(vertices, text, &dialog.name, input, scale, size);
 
     if let Some(error) = dialog.error.as_ref() {
         text.push_label(
@@ -300,6 +278,57 @@ fn push_rename_dialog_surface(
             size,
         );
     }
+}
+
+fn push_dialog_input_text(
+    vertices: &mut Vec<QuadVertex>,
+    text: &mut TextFrameBuilder<'_>,
+    value: &str,
+    input: ViewRect,
+    scale: f32,
+    size: PhysicalSize<u32>,
+) {
+    let text_rect = ViewRect {
+        x: input.x + scaled_dialog_metric(10.0, scale),
+        y: input.y + (input.height - scaled_dialog_metric(18.0, scale)) / 2.0,
+        width: (input.width - scaled_dialog_metric(20.0, scale)).max(1.0),
+        height: scaled_dialog_metric(18.0, scale),
+    };
+    text.push_label_aligned_no_wrap(
+        value,
+        text_rect,
+        input,
+        popup_body_text(),
+        LabelAlignment::Start,
+    );
+    let cursor_x = text.measure_label_cursor_x(
+        value,
+        text_rect,
+        value.len(),
+        LabelAlignment::Start,
+        LabelWrap::None,
+    );
+    let caret_width = scaled_dialog_metric(1.0, scale).max(1.0);
+    let caret_height = scaled_dialog_metric(17.0, scale)
+        .min(input.height - scaled_dialog_metric(10.0, scale))
+        .max(1.0);
+    let caret_x = (text_rect.x + cursor_x).clamp(
+        text_rect.x,
+        (text_rect.right() - caret_width).max(text_rect.x),
+    );
+    push_clipped_rounded_rect(
+        vertices,
+        ViewRect {
+            x: caret_x,
+            y: input.y + (input.height - caret_height) / 2.0,
+            width: caret_width,
+            height: caret_height,
+        },
+        input,
+        caret_width / 2.0,
+        POPUP_FIELD_FOCUS,
+        size,
+    );
 }
 
 fn push_dialog_button(

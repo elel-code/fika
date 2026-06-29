@@ -1,3 +1,5 @@
+use std::collections::VecDeque;
+
 use winit::cursor::{Cursor as WinitCursor, CursorIcon};
 use winit::dpi::PhysicalSize;
 use winit::event::{Modifiers, WindowEvent};
@@ -86,6 +88,7 @@ pub(crate) struct ShellDetachedDialogWindow {
     kind: ShellDialogWindowKind,
     renderer: WgpuState,
     window: Box<dyn Window>,
+    layout_size: PhysicalSize<u32>,
     cursor_icon: CursorIcon,
 }
 
@@ -106,6 +109,7 @@ impl ShellDetachedDialogWindow {
             kind,
             renderer,
             window,
+            layout_size: spec.surface_size,
             cursor_icon: CursorIcon::Default,
         })
     }
@@ -122,11 +126,16 @@ impl ShellDetachedDialogWindow {
         self.renderer.size
     }
 
+    pub(crate) fn layout_size(&self) -> PhysicalSize<u32> {
+        self.layout_size
+    }
+
     pub(crate) fn scale_factor(&self) -> f32 {
         self.window.scale_factor() as f32
     }
 
     pub(crate) fn sync(&mut self, spec: &ShellDialogWindowSpec) {
+        self.layout_size = spec.surface_size;
         self.window.set_title(&spec.title);
         self.window.set_theme(spec.theme);
         self.window
@@ -205,9 +214,12 @@ pub(crate) struct ShellDialogWindows {
     create: Option<ShellDetachedDialogWindow>,
     open_with: Option<ShellDetachedDialogWindow>,
     rename: Option<ShellDetachedDialogWindow>,
+    recently_closed: VecDeque<WindowId>,
 }
 
 impl ShellDialogWindows {
+    const RECENTLY_CLOSED_LIMIT: usize = 8;
+
     pub(crate) fn has_modal_window(&self) -> bool {
         self.create.is_some() || self.open_with.is_some() || self.rename.is_some()
     }
@@ -287,8 +299,8 @@ impl ShellDialogWindows {
         })
     }
 
-    pub(crate) fn renderer_size(&self, kind: ShellDialogWindowKind) -> Option<PhysicalSize<u32>> {
-        self.get(kind).map(ShellDetachedDialogWindow::renderer_size)
+    pub(crate) fn layout_size(&self, kind: ShellDialogWindowKind) -> Option<PhysicalSize<u32>> {
+        self.get(kind).map(ShellDetachedDialogWindow::layout_size)
     }
 
     pub(crate) fn handle_window_event(
@@ -318,6 +330,7 @@ impl ShellDialogWindows {
 
     pub(crate) fn set(&mut self, kind: ShellDialogWindowKind, window: ShellDetachedDialogWindow) {
         debug_assert_eq!(window.kind(), kind);
+        self.forget_recently_closed(window.window_id());
         match kind {
             ShellDialogWindowKind::Create => self.create = Some(window),
             ShellDialogWindowKind::OpenWith => self.open_with = Some(window),
@@ -326,17 +339,27 @@ impl ShellDialogWindows {
     }
 
     pub(crate) fn close(&mut self, kind: ShellDialogWindowKind) {
-        match kind {
-            ShellDialogWindowKind::Create => self.create = None,
-            ShellDialogWindowKind::OpenWith => self.open_with = None,
-            ShellDialogWindowKind::Rename => self.rename = None,
+        let closed = match kind {
+            ShellDialogWindowKind::Create => self.create.take(),
+            ShellDialogWindowKind::OpenWith => self.open_with.take(),
+            ShellDialogWindowKind::Rename => self.rename.take(),
+        };
+        if let Some(window) = closed {
+            self.remember_recently_closed(window.window_id());
         }
     }
 
     pub(crate) fn close_all(&mut self) {
-        self.create = None;
-        self.open_with = None;
-        self.rename = None;
+        for window in [
+            self.create.take(),
+            self.open_with.take(),
+            self.rename.take(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            self.remember_recently_closed(window.window_id());
+        }
     }
 
     pub(crate) fn window_kind_for_id(&self, window_id: WindowId) -> Option<ShellDialogWindowKind> {
@@ -349,5 +372,23 @@ impl ShellDialogWindows {
         .flatten()
         .find(|window| window.window_id() == window_id)
         .map(ShellDetachedDialogWindow::kind)
+    }
+
+    pub(crate) fn is_recently_closed_window(&self, window_id: WindowId) -> bool {
+        self.recently_closed.contains(&window_id)
+    }
+
+    fn remember_recently_closed(&mut self, window_id: WindowId) {
+        if self.recently_closed.contains(&window_id) {
+            return;
+        }
+        self.recently_closed.push_back(window_id);
+        while self.recently_closed.len() > Self::RECENTLY_CLOSED_LIMIT {
+            self.recently_closed.pop_front();
+        }
+    }
+
+    fn forget_recently_closed(&mut self, window_id: WindowId) {
+        self.recently_closed.retain(|closed| *closed != window_id);
     }
 }

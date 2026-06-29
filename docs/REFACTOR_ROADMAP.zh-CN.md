@@ -27,6 +27,22 @@ dialog、render damage 和异步操作持续演进提供稳定边界。
   active、deadline、dirty、prune 接口。
 - Dialog window 通用事件：
   common close / resize / scale / modifiers 路径已从具体 dialog handler 中抽出。
+- Dialog 生命周期 / layout size 对齐：
+  参考 Dolphin `QDialog(parent)` / `setModal(true)` / `WA_DeleteOnClose` 和 KIO
+  `KOpenWithDialog` 的 `minimumSizeHint` + 初始 `resize` 模式，detached dialog 关闭后
+  只释放 dialog host 并隔离尾随 window event，不再误触发主窗口退出；dialog renderer
+  保留实际 surface size，输入 hit-test 和内部绘制使用固定 `layout_size`，避免 compositor
+  或尾随 resize 事件导致弹窗内容尺寸漂移；detached dialog surface validation 不再退出
+  主 event loop。
+- Dialog client-area 几何对齐：
+  参考 Dolphin/KIO 的 `QDialog` widget 布局语义，独立 dialog 的 client area 本身就是
+  dialog root，不再复用主窗口 overlay 时代的居中 rect + 外侧 click-away margin；
+  Open With / Create / Rename 的 window size 等同 dialog root size，空白 client area
+  click 只视为 dialog 内部点击，关闭只走窗口关闭、Cancel 或 Escape。
+- Dialog 输入框文本对齐：
+  Create / Rename 的输入框从旧的居中文本 + `|` 字符伪光标切换为 start-aligned
+  no-wrap 文本和独立 caret rect，和 Open With search box 使用同一类
+  `measure_label_cursor_x` 光标定位边界。
 - Window platform semantics 边界：
   `src/shell/window_semantics.rs` 集中设置主窗口和 detached dialog 的 Wayland app-id /
   instance，并记录 dialog parent/transient 语义的当前状态；主窗口在 detached dialog

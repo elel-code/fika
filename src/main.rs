@@ -1211,7 +1211,7 @@ impl FikaWgpuApp {
                 }
                 let size = self
                     .dialog_windows
-                    .renderer_size(ShellDialogWindowKind::Create)
+                    .layout_size(ShellDialogWindowKind::Create)
                     .unwrap_or_else(|| PhysicalSize::new(1, 1));
                 let shortcut =
                     self.modifiers.state().control_key() || self.modifiers.state().meta_key();
@@ -1246,7 +1246,7 @@ impl FikaWgpuApp {
                 }
                 let Some(size) = self
                     .dialog_windows
-                    .renderer_size(ShellDialogWindowKind::Create)
+                    .layout_size(ShellDialogWindowKind::Create)
                 else {
                     return;
                 };
@@ -1325,7 +1325,7 @@ impl FikaWgpuApp {
                 }
                 let Some(size) = self
                     .dialog_windows
-                    .renderer_size(ShellDialogWindowKind::Rename)
+                    .layout_size(ShellDialogWindowKind::Rename)
                 else {
                     return;
                 };
@@ -1382,7 +1382,7 @@ impl FikaWgpuApp {
             WindowEvent::PointerMoved { position, .. } => {
                 let Some(size) = self
                     .dialog_windows
-                    .renderer_size(ShellDialogWindowKind::OpenWith)
+                    .layout_size(ShellDialogWindowKind::OpenWith)
                 else {
                     return;
                 };
@@ -1410,7 +1410,7 @@ impl FikaWgpuApp {
             } => {
                 let Some(size) = self
                     .dialog_windows
-                    .renderer_size(ShellDialogWindowKind::OpenWith)
+                    .layout_size(ShellDialogWindowKind::OpenWith)
                 else {
                     return;
                 };
@@ -1652,6 +1652,9 @@ impl ApplicationHandler for FikaWgpuApp {
                 }
             }
         }
+        if self.dialog_windows.is_recently_closed_window(window_id) {
+            return;
+        }
         if self
             .window
             .as_ref()
@@ -1787,8 +1790,9 @@ impl FikaWgpuApp {
         let Some(dialog_window) = self.dialog_windows.get_mut(ShellDialogWindowKind::Create) else {
             return;
         };
+        let layout_size = dialog_window.layout_size();
         let (renderer, window) = dialog_window.renderer_and_window_mut();
-        renderer.render_create_dialog(window, event_loop, dialog_state, scale, reason);
+        renderer.render_create_dialog(window, event_loop, dialog_state, scale, layout_size, reason);
     }
 
     fn render_rename_dialog_now(&mut self, event_loop: &dyn ActiveEventLoop, reason: &'static str) {
@@ -1800,8 +1804,9 @@ impl FikaWgpuApp {
         let Some(dialog_window) = self.dialog_windows.get_mut(ShellDialogWindowKind::Rename) else {
             return;
         };
+        let layout_size = dialog_window.layout_size();
         let (renderer, window) = dialog_window.renderer_and_window_mut();
-        renderer.render_rename_dialog(window, event_loop, dialog_state, scale, reason);
+        renderer.render_rename_dialog(window, event_loop, dialog_state, scale, layout_size, reason);
     }
 
     fn render_open_with_dialog_now(
@@ -1817,8 +1822,9 @@ impl FikaWgpuApp {
         let Some(dialog) = self.dialog_windows.get_mut(ShellDialogWindowKind::OpenWith) else {
             return;
         };
+        let layout_size = dialog.layout_size();
         let (renderer, window) = dialog.renderer_and_window_mut();
-        renderer.render_open_with_dialog(window, event_loop, chooser, scale, reason);
+        renderer.render_open_with_dialog(window, event_loop, chooser, scale, layout_size, reason);
     }
 
     fn render_now(
@@ -12025,8 +12031,9 @@ impl WgpuState {
     fn render_detached_dialog(
         &mut self,
         window: &dyn Window,
-        event_loop: &dyn ActiveEventLoop,
+        _event_loop: &dyn ActiveEventLoop,
         scale: f32,
+        layout_size: PhysicalSize<u32>,
         reason: &'static str,
         dialog_label: &'static str,
         paint: impl FnOnce(
@@ -12054,7 +12061,6 @@ impl WgpuState {
                     }
                     wgpu::CurrentSurfaceTexture::Validation => {
                         fika_log!("[fika-wgpu] {dialog_label}-dialog surface validation error");
-                        event_loop.exit();
                         return ShellRenderOutcome::NotReady;
                     }
                 }
@@ -12064,7 +12070,6 @@ impl WgpuState {
             }
             wgpu::CurrentSurfaceTexture::Validation => {
                 fika_log!("[fika-wgpu] {dialog_label}-dialog surface validation error");
-                event_loop.exit();
                 return ShellRenderOutcome::NotReady;
             }
         };
@@ -12089,7 +12094,7 @@ impl WgpuState {
                 &mut self.text_renderer.label_cache,
                 &mut self.text_renderer.metrics_cache,
                 &mut self.text_renderer.atlas_cache,
-                self.size,
+                layout_size,
                 scale,
                 text_pixels,
             );
@@ -12099,7 +12104,7 @@ impl WgpuState {
                 &mut self.icon_renderer.icon_rasters,
                 &mut self.icon_renderer.raster_cache,
                 &mut self.icon_renderer.role_raster_cache,
-                self.size,
+                layout_size,
                 icon_raster_miss_budget_for_frame(reason),
                 0,
                 0,
@@ -12109,7 +12114,7 @@ impl WgpuState {
                 &mut vertices,
                 &mut text_builder,
                 &mut icon_builder,
-                self.size,
+                layout_size,
             );
             (vertices, text_builder.finish(), icon_builder.finish())
         };
@@ -12217,12 +12222,14 @@ impl WgpuState {
         event_loop: &dyn ActiveEventLoop,
         chooser: &ShellOpenWithChooser,
         scale: f32,
+        layout_size: PhysicalSize<u32>,
         reason: &'static str,
     ) -> ShellRenderOutcome {
         self.render_detached_dialog(
             window,
             event_loop,
             scale,
+            layout_size,
             reason,
             ShellDialogWindowKind::OpenWith.as_str(),
             |vertices, text_builder, icon_builder, size| {
@@ -12244,12 +12251,14 @@ impl WgpuState {
         event_loop: &dyn ActiveEventLoop,
         dialog: &ShellCreateDialog,
         scale: f32,
+        layout_size: PhysicalSize<u32>,
         reason: &'static str,
     ) -> ShellRenderOutcome {
         self.render_detached_dialog(
             window,
             event_loop,
             scale,
+            layout_size,
             reason,
             ShellDialogWindowKind::Create.as_str(),
             |vertices, text_builder, _icon_builder, size| {
@@ -12270,12 +12279,14 @@ impl WgpuState {
         event_loop: &dyn ActiveEventLoop,
         dialog: &ShellRenameDialog,
         scale: f32,
+        layout_size: PhysicalSize<u32>,
         reason: &'static str,
     ) -> ShellRenderOutcome {
         self.render_detached_dialog(
             window,
             event_loop,
             scale,
+            layout_size,
             reason,
             ShellDialogWindowKind::Rename.as_str(),
             |vertices, text_builder, _icon_builder, size| {
@@ -25252,9 +25263,10 @@ mod tests {
             }],
             Vec::new(),
         );
-        let size = PhysicalSize::new(1200, 900);
-        let base = open_with_chooser_rect(&chooser, size);
-        let scaled = open_with_chooser_rect_scaled(&chooser, size, 1.5);
+        let base_size = open_with_chooser_window_size_scaled(&chooser, 1.0);
+        let scaled_size = open_with_chooser_window_size_scaled(&chooser, 1.5);
+        let base = open_with_chooser_rect(&chooser, base_size);
+        let scaled = open_with_chooser_rect_scaled(&chooser, scaled_size, 1.5);
         assert_eq!(
             base.width,
             scaled_dialog_metric(OPEN_WITH_CHOOSER_WIDTH, 1.0)
@@ -25265,6 +25277,10 @@ mod tests {
         );
         assert!(scaled.width > base.width);
         assert!(scaled.height > base.height);
+        assert_eq!(base.x, 0.0);
+        assert_eq!(base.y, 0.0);
+        assert_eq!(scaled.x, 0.0);
+        assert_eq!(scaled.y, 0.0);
         assert_eq!(
             open_with_chooser_list_rect_scaled(scaled, &chooser, 1.5).height,
             scaled_dialog_metric(OPEN_WITH_CHOOSER_ROW_HEIGHT, 1.5)
@@ -25828,7 +25844,13 @@ text/plain=writer.desktop;\n",
             OpenWithChooserClick::Open
         );
         assert_eq!(
-            scene.open_with_chooser_click_at_screen_point(ViewPoint { x: 1.0, y: 1.0 }, size),
+            scene.open_with_chooser_click_at_screen_point(
+                ViewPoint {
+                    x: size.width as f32 + 1.0,
+                    y: 1.0,
+                },
+                size,
+            ),
             OpenWithChooserClick::Outside
         );
     }
@@ -25913,13 +25935,13 @@ text/plain=writer.desktop;\n",
 
         let rect = open_with_chooser_rect(scene.open_with_chooser.as_ref().unwrap(), size);
         let query = open_with_chooser_query_rect_scaled(rect, 1.0);
-        assert!(scene.set_pointer(
+        scene.set_pointer(
             ViewPoint {
                 x: query.x + 4.0,
                 y: query.y + 4.0,
             },
             size,
-        ));
+        );
         assert_eq!(scene.open_with_chooser_cursor_icon(size), CursorIcon::Text);
         assert_eq!(
             scene.open_with_chooser_click_at_screen_point(
@@ -27992,7 +28014,13 @@ text/plain=writer.desktop;\n",
         assert_eq!(dialog.kind, CreateEntryKind::File);
         assert_eq!(dialog.name, "New File");
         assert_eq!(
-            scene.create_dialog_click_at_screen_point(ViewPoint { x: 1.0, y: 1.0 }, size),
+            scene.create_dialog_click_at_screen_point(
+                ViewPoint {
+                    x: size.width as f32 + 1.0,
+                    y: 1.0,
+                },
+                size,
+            ),
             CreateDialogClick::Outside
         );
         let rect = create_dialog_rect(dialog, size);
@@ -28151,7 +28179,13 @@ text/plain=writer.desktop;\n",
             RenameDialogClick::Commit
         );
         assert_eq!(
-            scene.rename_dialog_click_at_screen_point(ViewPoint { x: 1.0, y: 1.0 }, size),
+            scene.rename_dialog_click_at_screen_point(
+                ViewPoint {
+                    x: size.width as f32 + 1.0,
+                    y: 1.0,
+                },
+                size,
+            ),
             RenameDialogClick::Outside
         );
     }
