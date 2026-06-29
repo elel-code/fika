@@ -47,6 +47,7 @@ pub(crate) struct ShellPaneGeometry {
 pub(crate) struct ShellPaneState {
     pub(crate) path: PathBuf,
     pub(crate) view_mode: ShellViewMode,
+    pub(crate) zoom_step: i32,
     pub(crate) entries: Vec<Entry>,
     pub(crate) dir_count: usize,
     pub(crate) filtered_indexes: Vec<usize>,
@@ -68,6 +69,7 @@ impl ShellPaneState {
         Self {
             path,
             view_mode,
+            zoom_step: 0,
             entries,
             dir_count,
             filtered_indexes,
@@ -100,6 +102,7 @@ impl ShellPaneState {
         Ok(Self {
             path,
             view_mode,
+            zoom_step: 0,
             entries,
             dir_count,
             filtered_indexes,
@@ -176,6 +179,7 @@ impl IndexMut<ShellPaneId> for ShellPaneStates {
 pub(crate) struct ShellPaneView<'a> {
     pub(crate) path: &'a Path,
     pub(crate) view_mode: ShellViewMode,
+    pub(crate) zoom_step: i32,
     pub(crate) entries: &'a [Entry],
     pub(crate) dir_count: usize,
     pub(crate) filtered_indexes: &'a [usize],
@@ -189,6 +193,7 @@ impl<'a> ShellPaneView<'a> {
         Self {
             path: &state.path,
             view_mode: state.view_mode,
+            zoom_step: state.zoom_step,
             entries: &state.entries,
             dir_count: state.dir_count,
             filtered_indexes: &state.filtered_indexes,

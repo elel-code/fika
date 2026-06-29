@@ -138,7 +138,6 @@ impl ShellRenderDirtyKey {
         push_hash(&mut values, &scene.filter_pattern);
         push_bool(&mut values, scene.show_hidden);
         push_bool(&mut values, scene.dark_mode);
-        push_u64(&mut values, scene.zoom_step as i64 as u64);
         push_f32(&mut values, scene.split_pane_left_fraction);
         push_u64(
             &mut values,
@@ -159,6 +158,7 @@ impl ShellRenderDirtyKey {
                     push_bool(&mut values, true);
                     push_hash(&mut values, &pane.path);
                     push_hash(&mut values, pane.view_mode.as_str());
+                    push_u64(&mut values, pane.zoom_step as i64 as u64);
                     push_u64(&mut values, pane.entries.len() as u64);
                     push_u64(&mut values, pane.dir_count as u64);
                     push_u64(&mut values, pane.filtered_indexes.len() as u64);

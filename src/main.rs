@@ -513,6 +513,26 @@ struct ScrollbarDrag {
     grab_offset: f32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ShellToolbarViewModeSegment {
+    mode: ShellViewMode,
+    rect: ViewRect,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ShellToolbarViewModeControl {
+    outer: ViewRect,
+    segments: [ShellToolbarViewModeSegment; 3],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ShellToolbarLayout {
+    toolbar: ViewRect,
+    places_toggle: ViewRect,
+    split_view: ViewRect,
+    view_mode: Option<ShellToolbarViewModeControl>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DialogLifecycleSmokeStep {
     WaitMainFrame,
@@ -2633,7 +2653,6 @@ struct ShellScene {
     filter_pattern: String,
     show_hidden: bool,
     dark_mode: bool,
-    zoom_step: i32,
     places_visible: bool,
     places_width: f32,
     places_scroll_y: f32,
@@ -2749,7 +2768,6 @@ impl ShellScene {
             filter_pattern: String::new(),
             show_hidden,
             dark_mode: false,
-            zoom_step: 0,
             places_visible: true,
             places_width: PLACES_SIDEBAR_WIDTH,
             places_scroll_y: 0.0,
@@ -2818,6 +2836,11 @@ impl ShellScene {
     fn invalidate_layout_caches(&self, pane: ShellPaneId) {
         self.compact_layout_cache.invalidate_pane(pane.index());
         self.icons_layout_height_cache.invalidate_pane(pane.index());
+    }
+
+    fn invalidate_layout_caches_for_pane(&mut self, pane: ShellPaneId) {
+        self.invalidate_layout_caches(pane);
+        self.visible_slots.clear(pane);
     }
 
     fn invalidate_all_layout_caches(&self) {
@@ -3122,6 +3145,7 @@ impl ShellScene {
             .pane_state(pane)
             .map(|state| state.view_mode)
             .unwrap_or(ShellViewMode::Icons);
+        let zoom_step = self.pane_zoom_step(pane).unwrap_or(0);
         if let Some(old_path) = self.pane_state(pane).map(|state| state.path.clone()) {
             self.folder_preview_roles
                 .borrow_mut()
@@ -3139,6 +3163,9 @@ impl ShellScene {
                 &filter_pattern,
             ),
         );
+        if let Some(state) = self.pane_state_mut(pane) {
+            state.zoom_step = zoom_step;
+        }
         self.invalidate_layout_caches(pane);
         self.visible_slots.clear(pane);
         if let Some(state) = self.pane_state_mut(pane) {
@@ -3267,16 +3294,29 @@ impl ShellScene {
     }
 
     fn zoom(&mut self, action: ZoomAction, size: PhysicalSize<u32>) -> bool {
+        self.zoom_pane(self.active_pane(), action, size)
+    }
+
+    fn zoom_pane(
+        &mut self,
+        pane_id: ShellPaneId,
+        action: ZoomAction,
+        size: PhysicalSize<u32>,
+    ) -> bool {
+        let Some(current_step) = self.pane_zoom_step(pane_id) else {
+            return false;
+        };
         let next_step = match action {
-            ZoomAction::In => self.zoom_step + 1,
-            ZoomAction::Out => self.zoom_step - 1,
+            ZoomAction::In => current_step + 1,
+            ZoomAction::Out => current_step - 1,
             ZoomAction::Reset => 0,
         };
-        self.set_zoom_step(next_step, size, true)
+        self.set_zoom_step(pane_id, next_step, size, true)
     }
 
     fn set_zoom_fraction(
         &mut self,
+        pane_id: ShellPaneId,
         fraction: f32,
         size: PhysicalSize<u32>,
         clear_scrollbar_drag: bool,
@@ -3284,6 +3324,7 @@ impl ShellScene {
         let span = (DOLPHIN_ZOOM_LEVEL_MAX - DOLPHIN_ZOOM_LEVEL_MIN).max(1) as f32;
         let level = DOLPHIN_ZOOM_LEVEL_MIN + (fraction.clamp(0.0, 1.0) * span).round() as i32;
         self.set_zoom_step(
+            pane_id,
             level - DOLPHIN_ZOOM_LEVEL_DEFAULT,
             size,
             clear_scrollbar_drag,
@@ -3292,17 +3333,23 @@ impl ShellScene {
 
     fn set_zoom_step(
         &mut self,
+        pane_id: ShellPaneId,
         next_step: i32,
         size: PhysicalSize<u32>,
         clear_scrollbar_drag: bool,
     ) -> bool {
         let next_step = next_step.clamp(ZOOM_STEP_MIN, ZOOM_STEP_MAX);
-        if next_step == self.zoom_step {
+        let Some(old_step) = self.pane_zoom_step(pane_id) else {
+            return false;
+        };
+        if next_step == old_step {
             return false;
         }
 
-        self.zoom_step = next_step;
-        self.invalidate_all_layout_caches();
+        if let Some(pane) = self.pane_state_mut(pane_id) {
+            pane.zoom_step = next_step;
+        }
+        self.invalidate_layout_caches_for_pane(pane_id);
         self.folder_preview_roles
             .borrow_mut()
             .clear_request_lifecycle();
@@ -3311,7 +3358,7 @@ impl ShellScene {
             self.scrollbar_drag = None;
         }
         self.zoom_changes += 1;
-        let active_pane = self.active_pane();
+        let active_pane = self.normalized_pane_id(pane_id);
         if let Some(index) = self
             .pane_selection(active_pane)
             .and_then(ShellSelection::focus_or_first_selected)
@@ -3321,12 +3368,13 @@ impl ShellScene {
             self.clamp_scroll(size);
         }
         fika_log!(
-            "[fika-wgpu] zoom step={} percent={} changes={} scroll_x={:.1} scroll_y={:.1}",
-            self.zoom_step,
-            self.zoom_percent(),
+            "[fika-wgpu] zoom pane={} step={} percent={} changes={} scroll_x={:.1} scroll_y={:.1}",
+            active_pane.as_str(),
+            next_step,
+            self.zoom_percent_for_pane(active_pane),
             self.zoom_changes,
-            self.panes[ShellPaneId::SLOT_0].scroll_x,
-            self.panes[ShellPaneId::SLOT_0].scroll_y
+            self.panes[active_pane].scroll_x,
+            self.panes[active_pane].scroll_y
         );
         true
     }
@@ -3778,22 +3826,26 @@ impl ShellScene {
             .pane_state(source_pane)
             .map(|pane| pane.view_mode)
             .unwrap_or_else(|| self.active_view_mode());
-        self.open_split_pane_with_view_mode(path, view_mode, size)
+        let zoom_step = self.pane_zoom_step(source_pane).unwrap_or(0);
+        self.open_split_pane_with_view_mode(path, view_mode, zoom_step, size)
     }
 
     #[cfg(test)]
     fn open_split_pane(&mut self, path: PathBuf, size: PhysicalSize<u32>) -> Result<bool, String> {
         let view_mode = self.active_view_mode();
-        self.open_split_pane_with_view_mode(path, view_mode, size)
+        let zoom_step = self.active_zoom_step();
+        self.open_split_pane_with_view_mode(path, view_mode, zoom_step, size)
     }
 
     fn open_split_pane_with_view_mode(
         &mut self,
         path: PathBuf,
         view_mode: ShellViewMode,
+        zoom_step: i32,
         size: PhysicalSize<u32>,
     ) -> Result<bool, String> {
         let mut split_pane = ShellPaneState::load(path, view_mode, self.show_hidden)?;
+        split_pane.zoom_step = zoom_step.clamp(ZOOM_STEP_MIN, ZOOM_STEP_MAX);
         split_pane.scroll_x = 0.0;
         split_pane.scroll_y = 0.0;
         self.panes.set(ShellPaneId::SLOT_1, split_pane);
@@ -3837,10 +3889,11 @@ impl ShellScene {
         };
         let current_path = state.path.clone();
         let view_mode = state.view_mode;
+        let zoom_step = state.zoom_step;
         let path = self
             .single_selected_directory_path_for_pane(pane)
             .unwrap_or(current_path);
-        self.open_split_pane_with_view_mode(path, view_mode, size)
+        self.open_split_pane_with_view_mode(path, view_mode, zoom_step, size)
     }
 
     fn toggle_split_view_from_toolbar(&mut self, size: PhysicalSize<u32>) -> Result<bool, String> {
@@ -4000,29 +4053,40 @@ impl ShellScene {
         (value * self.ui_scale()).round().max(1.0)
     }
 
-    fn dolphin_zoom_level(&self) -> i32 {
-        (self.zoom_step + DOLPHIN_ZOOM_LEVEL_DEFAULT)
+    fn pane_zoom_step(&self, pane: ShellPaneId) -> Option<i32> {
+        self.pane_state(self.normalized_pane_id(pane))
+            .map(|pane| pane.zoom_step)
+    }
+
+    #[cfg(test)]
+    fn active_zoom_step(&self) -> i32 {
+        self.pane_zoom_step(self.active_pane()).unwrap_or(0)
+    }
+
+    fn dolphin_zoom_level_for_step(&self, zoom_step: i32) -> i32 {
+        (zoom_step + DOLPHIN_ZOOM_LEVEL_DEFAULT)
             .clamp(DOLPHIN_ZOOM_LEVEL_MIN, DOLPHIN_ZOOM_LEVEL_MAX)
     }
 
-    fn dolphin_zoom_icon_size(&self) -> f32 {
-        dolphin_icon_size_for_zoom_level(self.dolphin_zoom_level())
+    fn dolphin_zoom_icon_size_for_step(&self, zoom_step: i32) -> f32 {
+        dolphin_icon_size_for_zoom_level(self.dolphin_zoom_level_for_step(zoom_step))
     }
 
-    fn zoom_icon_factor(&self) -> f32 {
-        self.dolphin_zoom_icon_size() / dolphin_icon_size_for_zoom_level(DOLPHIN_ZOOM_LEVEL_DEFAULT)
+    fn zoom_icon_factor_for_step(&self, zoom_step: i32) -> f32 {
+        self.dolphin_zoom_icon_size_for_step(zoom_step)
+            / dolphin_icon_size_for_zoom_level(DOLPHIN_ZOOM_LEVEL_DEFAULT)
     }
 
-    fn zoom_icon_metric(&self, value: f32, min: f32, max: f32) -> f32 {
+    fn zoom_icon_metric_for_step(&self, zoom_step: i32, value: f32, min: f32, max: f32) -> f32 {
         let scale = self.ui_scale();
-        (value * self.zoom_icon_factor() * scale)
+        (value * self.zoom_icon_factor_for_step(zoom_step) * scale)
             .round()
             .clamp(min * scale, max * scale)
     }
 
-    fn icons_text_width_factor(&self) -> f32 {
+    fn icons_text_width_factor_for_step(&self, zoom_step: i32) -> f32 {
         let default = (DOLPHIN_ZOOM_LEVEL_DEFAULT as f32 / 13.0).exp();
-        (self.dolphin_zoom_level() as f32 / 13.0).exp() / default
+        (self.dolphin_zoom_level_for_step(zoom_step) as f32 / 13.0).exp() / default
     }
 
     fn text_line_height(&self) -> f32 {
@@ -4137,9 +4201,8 @@ impl ShellScene {
         point: ViewPoint,
         size: PhysicalSize<u32>,
     ) -> Option<ShellViewMode> {
-        self.toolbar_view_mode_badge_rect(size)
-            .filter(|rect| rect.contains(point))
-            .map(|_| self.active_view_mode().next())
+        self.toolbar_view_mode_segment_at_screen_point(point, size)
+            .map(|segment| segment.mode)
     }
 
     fn pane_path_bar_rect(&self, kind: ShellPaneId, size: PhysicalSize<u32>) -> Option<ViewRect> {
@@ -4196,45 +4259,101 @@ impl ShellScene {
         }
     }
 
-    fn places_toggle_rect(&self, size: PhysicalSize<u32>) -> ViewRect {
-        let toolbar = self.app_toolbar_rect(size);
-        ViewRect {
-            x: self.scale_metric(8.0),
-            y: toolbar.y + self.scale_metric(8.0),
-            width: self.scale_metric(28.0),
-            height: self
-                .scale_metric(28.0)
-                .min((toolbar.height - self.scale_metric(8.0)).max(1.0)),
-        }
-    }
-
-    fn split_view_button_rect(&self, size: PhysicalSize<u32>) -> ViewRect {
+    fn app_toolbar_layout(&self, size: PhysicalSize<u32>) -> ShellToolbarLayout {
         let toolbar = self.app_toolbar_rect(size);
         let margin = self.scale_metric(8.0);
         let button_size = self
             .scale_metric(28.0)
             .min((toolbar.height - margin).max(1.0));
-        ViewRect {
+        let places_toggle = ViewRect {
+            x: margin,
+            y: toolbar.y + margin,
+            width: button_size,
+            height: button_size,
+        };
+        let split_view = ViewRect {
             x: (toolbar.right() - margin - button_size).max(toolbar.x),
             y: toolbar.y + margin,
             width: button_size,
             height: button_size,
+        };
+        let view_mode = self.toolbar_view_mode_control(toolbar, places_toggle, split_view);
+        ShellToolbarLayout {
+            toolbar,
+            places_toggle,
+            split_view,
+            view_mode,
         }
     }
 
-    fn toolbar_view_mode_badge_rect(&self, size: PhysicalSize<u32>) -> Option<ViewRect> {
-        let toolbar = self.app_toolbar_rect(size);
-        let button = self.places_toggle_rect(size);
-        let split_button = self.split_view_button_rect(size);
-        let view_badge_width = self.scale_metric(50.0);
-        (split_button.x - self.scale_metric(10.0) - view_badge_width
-            > button.right() + self.scale_metric(16.0))
-        .then_some(ViewRect {
-            x: split_button.x - self.scale_metric(10.0) - view_badge_width,
+    fn toolbar_view_mode_control(
+        &self,
+        toolbar: ViewRect,
+        places_toggle: ViewRect,
+        split_view: ViewRect,
+    ) -> Option<ShellToolbarViewModeControl> {
+        let width = self.scale_metric(96.0);
+        let gap_to_split = self.scale_metric(10.0);
+        if split_view.x - gap_to_split - width <= places_toggle.right() + self.scale_metric(16.0) {
+            return None;
+        }
+        let outer = ViewRect {
+            x: split_view.x - gap_to_split - width,
             y: toolbar.y + self.scale_metric(7.0),
-            width: view_badge_width,
+            width,
             height: (toolbar.height - self.scale_metric(14.0)).max(1.0),
-        })
+        };
+        let inner = inset_rect(outer, self.scale_metric(2.0)).unwrap_or(outer);
+        let gap = self.scale_metric(2.0).min((inner.width / 8.0).max(0.0));
+        let segment_width = ((inner.width - gap * 2.0) / 3.0).max(1.0);
+        let modes = [
+            ShellViewMode::Icons,
+            ShellViewMode::Compact,
+            ShellViewMode::Details,
+        ];
+        let segments = modes.map(|mode| {
+            let index = match mode {
+                ShellViewMode::Icons => 0,
+                ShellViewMode::Compact => 1,
+                ShellViewMode::Details => 2,
+            } as f32;
+            ShellToolbarViewModeSegment {
+                mode,
+                rect: ViewRect {
+                    x: inner.x + index * (segment_width + gap),
+                    y: inner.y,
+                    width: segment_width,
+                    height: inner.height,
+                },
+            }
+        });
+        Some(ShellToolbarViewModeControl { outer, segments })
+    }
+
+    fn places_toggle_rect(&self, size: PhysicalSize<u32>) -> ViewRect {
+        self.app_toolbar_layout(size).places_toggle
+    }
+
+    fn split_view_button_rect(&self, size: PhysicalSize<u32>) -> ViewRect {
+        self.app_toolbar_layout(size).split_view
+    }
+
+    fn toolbar_view_mode_badge_rect(&self, size: PhysicalSize<u32>) -> Option<ViewRect> {
+        self.app_toolbar_layout(size)
+            .view_mode
+            .map(|control| control.outer)
+    }
+
+    fn toolbar_view_mode_segment_at_screen_point(
+        &self,
+        point: ViewPoint,
+        size: PhysicalSize<u32>,
+    ) -> Option<ShellToolbarViewModeSegment> {
+        self.app_toolbar_layout(size)
+            .view_mode?
+            .segments
+            .into_iter()
+            .find(|segment| segment.rect.contains(point))
     }
 
     fn split_view_button_at_screen_point(&self, point: ViewPoint, size: PhysicalSize<u32>) -> bool {
@@ -8739,13 +8858,18 @@ impl ShellScene {
         let item_count = pane.filtered_entry_count();
         match pane.view_mode {
             ShellViewMode::Icons => {
-                let mut options = self.icons_options_for_viewport(content_width, viewport_height);
+                let mut options =
+                    self.icons_options_for_viewport(content_width, viewport_height, pane.zoom_step);
                 options.scroll_x = pane.scroll_x;
                 options.scroll_y = pane.scroll_y;
                 ShellLayout::Icons(self.pane_icons_layout(pane_id, pane, options))
             }
             ShellViewMode::Compact => {
-                let mut options = self.compact_options_for_viewport(content_width, viewport_height);
+                let mut options = self.compact_options_for_viewport(
+                    content_width,
+                    viewport_height,
+                    pane.zoom_step,
+                );
                 options.scroll_x = pane.scroll_x;
                 ShellLayout::Compact(self.pane_compact_layout(pane_id, pane, options))
             }
@@ -8754,8 +8878,8 @@ impl ShellScene {
                 content_width,
                 viewport_height,
                 pane.scroll_y,
-                self.details_row_height(),
-                self.details_icon_size(),
+                self.details_row_height_for_step(pane.zoom_step),
+                self.details_icon_size_for_step(pane.zoom_step),
                 self.ui_scale(),
                 self.details_name_width(),
                 self.details_size_width(),
@@ -8881,8 +9005,11 @@ impl ShellScene {
 
     #[cfg(test)]
     fn icons_options(&self, size: PhysicalSize<u32>) -> IconsLayoutOptions {
-        let mut options =
-            self.icons_options_for_viewport(self.content_width(size), self.viewport_height(size));
+        let mut options = self.icons_options_for_viewport(
+            self.content_width(size),
+            self.viewport_height(size),
+            self.panes[ShellPaneId::SLOT_0].zoom_step,
+        );
         options.scroll_x = self.panes[ShellPaneId::SLOT_0].scroll_x;
         options.scroll_y = self.panes[ShellPaneId::SLOT_0].scroll_y;
         options
@@ -8892,13 +9019,14 @@ impl ShellScene {
         &self,
         viewport_width: f32,
         viewport_height: f32,
+        zoom_step: i32,
     ) -> IconsLayoutOptions {
         let scale = self.ui_scale();
         let padding = self.scale_metric(2.0);
         let gap = self.scale_metric(12.0);
-        let icon_size = self.zoom_icon_metric(ICONS_ICON_SIZE, 16.0, 256.0);
+        let icon_size = self.zoom_icon_metric_for_step(zoom_step, ICONS_ICON_SIZE, 16.0, 256.0);
         let font_factor = scale;
-        let zoom_factor = self.icons_text_width_factor();
+        let zoom_factor = self.icons_text_width_factor_for_step(zoom_step);
         let item_width = (16.0 * scale
             + DOLPHIN_ICONS_TEXT_WIDTH_INDEX * 64.0 * font_factor * zoom_factor)
             .round()
@@ -8921,8 +9049,11 @@ impl ShellScene {
 
     #[cfg(test)]
     fn compact_options(&self, size: PhysicalSize<u32>) -> CompactLayoutOptions {
-        let mut options =
-            self.compact_options_for_viewport(self.content_width(size), self.viewport_height(size));
+        let mut options = self.compact_options_for_viewport(
+            self.content_width(size),
+            self.viewport_height(size),
+            self.panes[ShellPaneId::SLOT_0].zoom_step,
+        );
         options.scroll_x = self.panes[ShellPaneId::SLOT_0].scroll_x;
         options
     }
@@ -8931,12 +9062,13 @@ impl ShellScene {
         &self,
         viewport_width: f32,
         viewport_height: f32,
+        zoom_step: i32,
     ) -> CompactLayoutOptions {
         let padding = self.scale_metric(2.0);
         let side_padding = self.scale_metric(8.0);
         let gap = self.scale_metric(8.0);
         let text_gap = padding * 2.0;
-        let icon_size = self.zoom_icon_metric(COMPACT_ICON_SIZE, 16.0, 144.0);
+        let icon_size = self.zoom_icon_metric_for_step(zoom_step, COMPACT_ICON_SIZE, 16.0, 144.0);
         let min_text_width =
             (self.text_line_height() * 5.0).max(self.scale_metric(COMPACT_MIN_TEXT_WIDTH));
         let item_height = (padding * 2.0 + icon_size.max(self.text_line_height())).round();
@@ -8958,22 +9090,42 @@ impl ShellScene {
     }
 
     fn zoom_percent(&self) -> i32 {
-        (self.zoom_icon_factor() * 100.0).round() as i32
+        self.zoom_percent_for_pane(self.active_pane())
     }
 
-    fn zoom_fraction(&self) -> f32 {
-        let level = self.dolphin_zoom_level();
+    fn zoom_percent_for_pane(&self, pane: ShellPaneId) -> i32 {
+        self.pane_zoom_step(pane)
+            .map(|zoom_step| self.zoom_percent_for_step(zoom_step))
+            .unwrap_or(100)
+    }
+
+    fn zoom_percent_for_step(&self, zoom_step: i32) -> i32 {
+        (self.zoom_icon_factor_for_step(zoom_step) * 100.0).round() as i32
+    }
+
+    fn zoom_fraction_for_pane(&self, pane: ShellPaneId) -> f32 {
+        self.pane_zoom_step(pane)
+            .map(|zoom_step| self.zoom_fraction_for_step(zoom_step))
+            .unwrap_or_else(|| self.zoom_fraction_for_step(0))
+    }
+
+    fn zoom_fraction_for_step(&self, zoom_step: i32) -> f32 {
+        let level = self.dolphin_zoom_level_for_step(zoom_step);
         let span = (DOLPHIN_ZOOM_LEVEL_MAX - DOLPHIN_ZOOM_LEVEL_MIN).max(1) as f32;
         ((level - DOLPHIN_ZOOM_LEVEL_MIN) as f32 / span).clamp(0.0, 1.0)
     }
 
-    fn details_row_height(&self) -> f32 {
+    fn details_row_height_for_step(&self, zoom_step: i32) -> f32 {
         let padding = self.scale_metric(4.0);
-        (padding * 2.0 + self.details_icon_size().max(self.text_line_height())).round()
+        (padding * 2.0
+            + self
+                .details_icon_size_for_step(zoom_step)
+                .max(self.text_line_height()))
+        .round()
     }
 
-    fn details_icon_size(&self) -> f32 {
-        self.zoom_icon_metric(DETAILS_ICON_SIZE, 16.0, 144.0)
+    fn details_icon_size_for_step(&self, zoom_step: i32) -> f32 {
+        self.zoom_icon_metric_for_step(zoom_step, DETAILS_ICON_SIZE, 16.0, 144.0)
     }
 
     fn build_frame(
@@ -9205,8 +9357,10 @@ impl ShellScene {
     ) -> FolderPreviewRoleUpdateStats {
         let mut requests = Vec::new();
         for projection in projections {
-            let read_ahead_size_px =
-                self.folder_preview_role_size_px_for_view_mode(projection.view.view_mode);
+            let read_ahead_size_px = self.folder_preview_role_size_px_for_view_mode(
+                projection.view.view_mode,
+                projection.view.zoom_step,
+            );
             for item in &projection.visible_items {
                 let Some(entry_index) = projection
                     .view
@@ -9313,10 +9467,14 @@ impl ShellScene {
         )
     }
 
-    fn folder_preview_role_size_px_for_view_mode(&self, view_mode: ShellViewMode) -> u16 {
+    fn folder_preview_role_size_px_for_view_mode(
+        &self,
+        view_mode: ShellViewMode,
+        zoom_step: i32,
+    ) -> u16 {
         let item = match view_mode {
             ShellViewMode::Icons => {
-                let options = self.icons_options_for_viewport(1.0, 1.0);
+                let options = self.icons_options_for_viewport(1.0, 1.0, zoom_step);
                 ItemLayout {
                     model_index: 0,
                     column: 0,
@@ -9343,7 +9501,7 @@ impl ShellScene {
                 }
             }
             ShellViewMode::Compact => {
-                let options = self.compact_options_for_viewport(1.0, 1.0);
+                let options = self.compact_options_for_viewport(1.0, 1.0, zoom_step);
                 ItemLayout {
                     model_index: 0,
                     column: 0,
@@ -9374,8 +9532,8 @@ impl ShellScene {
                 }
             }
             ShellViewMode::Details => {
-                let icon_size = self.details_icon_size();
-                let row_height = self.details_row_height();
+                let icon_size = self.details_icon_size_for_step(zoom_step);
+                let row_height = self.details_row_height_for_step(zoom_step);
                 let icon_padding = self.scale_metric(8.0);
                 ItemLayout {
                     model_index: 0,
@@ -10139,7 +10297,8 @@ impl ShellScene {
         let Some(visible_range) = visible_layout_range_for_projection(projection) else {
             return;
         };
-        let size_px = self.thumbnail_read_ahead_size_px(projection.view.view_mode);
+        let size_px =
+            self.thumbnail_read_ahead_size_px(projection.view.view_mode, projection.view.zoom_step);
         if size_px < 32 {
             return;
         }
@@ -10164,11 +10323,15 @@ impl ShellScene {
         }
     }
 
-    fn thumbnail_read_ahead_size_px(&self, view_mode: ShellViewMode) -> u16 {
+    fn thumbnail_read_ahead_size_px(&self, view_mode: ShellViewMode, zoom_step: i32) -> u16 {
         let icon_size = match view_mode {
-            ShellViewMode::Icons => self.zoom_icon_metric(ICONS_ICON_SIZE, 16.0, 256.0),
-            ShellViewMode::Compact => self.zoom_icon_metric(COMPACT_ICON_SIZE, 16.0, 144.0),
-            ShellViewMode::Details => self.details_icon_size(),
+            ShellViewMode::Icons => {
+                self.zoom_icon_metric_for_step(zoom_step, ICONS_ICON_SIZE, 16.0, 256.0)
+            }
+            ShellViewMode::Compact => {
+                self.zoom_icon_metric_for_step(zoom_step, COMPACT_ICON_SIZE, 16.0, 144.0)
+            }
+            ShellViewMode::Details => self.details_icon_size_for_step(zoom_step),
         };
         icon_cache_size(icon_size)
     }
@@ -10340,8 +10503,8 @@ impl ShellScene {
                 rect,
                 status: &status,
                 active: projection.geometry.kind == self.active_pane(),
-                zoom_percent: self.zoom_percent(),
-                zoom_fraction: self.zoom_fraction(),
+                zoom_percent: self.zoom_percent_for_step(pane.zoom_step),
+                zoom_fraction: self.zoom_fraction_for_step(pane.zoom_step),
                 theme,
                 scale: self.ui_scale(),
                 line_height: self.text_line_height(),
@@ -10356,7 +10519,8 @@ impl ShellScene {
         size: PhysicalSize<u32>,
         theme: ShellTheme,
     ) {
-        let toolbar = self.app_toolbar_rect(size);
+        let layout = self.app_toolbar_layout(size);
+        let toolbar = layout.toolbar;
         push_rect(vertices, toolbar, theme.details_header(), size);
         push_rect(
             vertices,
@@ -10381,9 +10545,9 @@ impl ShellScene {
             size,
         );
 
-        let button = self.places_toggle_rect(size);
-        let split_button = self.split_view_button_rect(size);
-        let view_badge = self.toolbar_view_mode_badge_rect(size);
+        let button = layout.places_toggle;
+        let split_button = layout.split_view;
+        let view_mode = layout.view_mode;
         let places_hovered = self.pointer.is_some_and(|point| button.contains(point));
         let button_colors = theme.toolbar_button(self.places_visible || places_hovered);
         push_clipped_rounded_rect(
@@ -10439,8 +10603,10 @@ impl ShellScene {
         );
 
         let center_line_start = button.right() + self.scale_metric(12.0);
-        let center_line_end =
-            view_badge.map(|rect| rect.x).unwrap_or(split_button.x) - self.scale_metric(12.0);
+        let center_line_end = view_mode
+            .map(|control| control.outer.x)
+            .unwrap_or(split_button.x)
+            - self.scale_metric(12.0);
         if center_line_end > center_line_start {
             push_clipped_rounded_rect(
                 vertices,
@@ -10456,8 +10622,8 @@ impl ShellScene {
                 size,
             );
         }
-        if let Some(badge) = view_badge {
-            self.push_toolbar_view_mode_badge(vertices, badge, toolbar, theme, size);
+        if let Some(control) = view_mode {
+            self.push_toolbar_view_mode_control(vertices, control, toolbar, theme, size);
         }
 
         let active_dot_size = self.scale_metric(6.0).max(4.0);
@@ -10550,14 +10716,15 @@ impl ShellScene {
         }
     }
 
-    fn push_toolbar_view_mode_badge(
+    fn push_toolbar_view_mode_control(
         &self,
         vertices: &mut Vec<QuadVertex>,
-        rect: ViewRect,
+        control: ShellToolbarViewModeControl,
         clip: ViewRect,
         theme: ShellTheme,
         size: PhysicalSize<u32>,
     ) {
+        let rect = control.outer;
         let hovered = self.pointer.is_some_and(|point| rect.contains(point));
         let colors = theme.toolbar_button(hovered);
         push_clipped_rounded_rect(
@@ -10578,43 +10745,44 @@ impl ShellScene {
                 size,
             );
         }
-        let icon_rect = ViewRect {
-            x: rect.x + self.scale_metric(8.0),
-            y: rect.y + (rect.height - self.scale_metric(14.0)) / 2.0,
-            width: self.scale_metric(16.0),
-            height: self.scale_metric(14.0),
-        };
-        self.push_view_mode_glyph(vertices, icon_rect, rect, theme, size);
-        let circle_size = self
-            .scale_metric(16.0)
-            .min((rect.height - self.scale_metric(6.0)).max(1.0));
-        let circle = ViewRect {
-            x: rect.right() - self.scale_metric(6.0) - circle_size,
-            y: rect.y + (rect.height - circle_size) / 2.0,
-            width: circle_size,
-            height: circle_size,
-        };
-        push_clipped_rounded_rect(
-            vertices,
-            circle,
-            rect,
-            circle_size / 2.0,
-            theme.toolbar_button(true).fill,
-            size,
-        );
-        for step in 0..3 {
-            let width = self.scale_metric(7.0 - step as f32 * 2.0).max(1.0);
+        let segments = control.segments;
+        for segment in segments {
+            let segment_hovered = self
+                .pointer
+                .is_some_and(|point| segment.rect.contains(point));
+            let active = segment.mode == self.active_view_mode();
+            if active || segment_hovered {
+                let fill = theme.toolbar_button(active || segment_hovered).fill;
+                push_clipped_rounded_rect(
+                    vertices,
+                    segment.rect,
+                    rect,
+                    self.scale_metric(5.0),
+                    fill,
+                    size,
+                );
+            }
+            let glyph_size = self.scale_metric(15.0).min(segment.rect.height).max(1.0);
+            let icon_rect = ViewRect {
+                x: segment.rect.x + (segment.rect.width - glyph_size) / 2.0,
+                y: segment.rect.y + (segment.rect.height - glyph_size) / 2.0,
+                width: glyph_size,
+                height: glyph_size,
+            };
+            self.push_view_mode_glyph(vertices, segment.mode, icon_rect, rect, theme, size);
+        }
+        for separator in segments.into_iter().take(2) {
             push_clipped_rounded_rect(
                 vertices,
                 ViewRect {
-                    x: circle.x + (circle.width - width) / 2.0,
-                    y: circle.y + self.scale_metric(5.0 + step as f32 * 2.0),
-                    width,
-                    height: self.scale_metric(1.0).max(1.0),
+                    x: separator.rect.right(),
+                    y: rect.y + self.scale_metric(6.0),
+                    width: self.scale_metric(1.0).max(1.0),
+                    height: (rect.height - self.scale_metric(12.0)).max(1.0),
                 },
-                circle,
+                rect,
                 self.scale_metric(0.5).max(0.5),
-                theme.accent(),
+                theme.field_separator(),
                 size,
             );
         }
@@ -10623,12 +10791,19 @@ impl ShellScene {
     fn push_view_mode_glyph(
         &self,
         vertices: &mut Vec<QuadVertex>,
+        mode: ShellViewMode,
         rect: ViewRect,
         clip: ViewRect,
         theme: ShellTheme,
         size: PhysicalSize<u32>,
     ) {
-        match self.active_view_mode() {
+        let active = mode == self.active_view_mode();
+        let color = if active {
+            theme.accent()
+        } else {
+            theme.toolbar_button(false).icon
+        };
+        match mode {
             ShellViewMode::Icons => {
                 let dot = self.scale_metric(4.0).max(2.0);
                 let gap = self.scale_metric(3.0).max(1.0);
@@ -10644,7 +10819,7 @@ impl ShellScene {
                             },
                             clip,
                             dot / 2.0,
-                            theme.accent(),
+                            color,
                             size,
                         );
                     }
@@ -10663,7 +10838,7 @@ impl ShellScene {
                         },
                         clip,
                         self.scale_metric(1.5),
-                        theme.accent(),
+                        color,
                         size,
                     );
                     push_clipped_rounded_rect(
@@ -10676,7 +10851,11 @@ impl ShellScene {
                         },
                         clip,
                         self.scale_metric(1.5),
-                        theme.field_separator(),
+                        if active {
+                            theme.field_separator()
+                        } else {
+                            color
+                        },
                         size,
                     );
                 }
@@ -10694,8 +10873,8 @@ impl ShellScene {
                         },
                         clip,
                         self.scale_metric(1.5),
-                        if row == 0 {
-                            theme.accent()
+                        if row == 0 || active {
+                            color
                         } else {
                             theme.field_separator()
                         },
@@ -11821,12 +12000,13 @@ impl ShellScene {
         pane: ShellPaneId,
         size: PhysicalSize<u32>,
     ) -> Option<StatusZoomIndicatorRects> {
+        let pane = self.normalized_pane_id(pane);
         let geometry = self.pane_geometry(pane, size)?;
         pane_status_zoom_indicator_rects(
             geometry.status_bar,
             self.ui_scale(),
             self.text_line_height(),
-            self.zoom_fraction(),
+            self.zoom_fraction_for_pane(pane),
         )
     }
 
@@ -12171,7 +12351,7 @@ impl ShellScene {
         if let Some((pane, rects)) = self.status_zoom_control_rects_at_screen_point(point, size) {
             if rects.label.contains(point) {
                 self.pointer = Some(point);
-                return Some(self.set_zoom_step(0, size, true));
+                return Some(self.set_zoom_step(pane, 0, size, true));
             }
             let thumb_center_offset = if rects.thumb_outer.contains(point) {
                 point.x - (rects.thumb_outer.x + rects.thumb_outer.width / 2.0)
@@ -12283,7 +12463,7 @@ impl ShellScene {
             .open_with_chooser
             .as_ref()
             .map(|chooser| chooser.scroll_row);
-        let old_zoom_step = self.zoom_step;
+        let old_zoom_steps = ShellPaneId::ALL.map(|pane| self.pane_zoom_step(pane));
 
         match drag.target {
             ScrollbarDragTarget::OpenWith => {
@@ -12324,7 +12504,7 @@ impl ShellScene {
                     let thumb_center_x = point.x - drag.grab_offset;
                     let fraction =
                         ((thumb_center_x - rects.track.x) / rects.track.width).clamp(0.0, 1.0);
-                    self.set_zoom_fraction(fraction, size, false);
+                    self.set_zoom_fraction(pane, fraction, size, false);
                 }
             }
             ScrollbarDragTarget::Places => {
@@ -12406,7 +12586,10 @@ impl ShellScene {
                     .map(|chooser| chooser.scroll_row),
             )
             .is_some_and(|(old_scroll, new_scroll)| old_scroll != new_scroll);
-        let zoom_changed = self.zoom_step != old_zoom_step;
+        let zoom_changed = ShellPaneId::ALL
+            .into_iter()
+            .zip(old_zoom_steps)
+            .any(|(pane, old_step)| self.pane_zoom_step(pane) != old_step);
         if places_changed {
             self.places_scroll_changes += 1;
         }
@@ -19330,7 +19513,6 @@ mod tests {
             filter_pattern: String::new(),
             show_hidden: false,
             dark_mode: false,
-            zoom_step: 0,
             places_visible: true,
             places_width: PLACES_SIDEBAR_WIDTH,
             places_scroll_y: 0.0,
@@ -19414,6 +19596,7 @@ mod tests {
             ShellPaneState {
                 path,
                 view_mode,
+                zoom_step: 0,
                 dir_count,
                 filtered_indexes,
                 entries,
@@ -19569,30 +19752,50 @@ mod tests {
     }
 
     #[test]
-    fn toolbar_view_mode_badge_cycles_active_view_mode_and_uses_pointer_cursor() {
+    fn toolbar_view_mode_segments_select_specific_modes_and_use_pointer_cursor() {
         let mut scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
         let size = PhysicalSize::new(700, 320);
-        let badge = scene
-            .toolbar_view_mode_badge_rect(size)
-            .expect("wide toolbar should expose a view mode badge");
-        let point = ViewPoint {
-            x: badge.x + badge.width / 2.0,
-            y: badge.y + badge.height / 2.0,
+        let control = scene
+            .app_toolbar_layout(size)
+            .view_mode
+            .expect("wide toolbar should expose a view mode control");
+        let compact = control
+            .segments
+            .into_iter()
+            .find(|segment| segment.mode == ShellViewMode::Compact)
+            .expect("compact segment");
+        let compact_point = ViewPoint {
+            x: compact.rect.x + compact.rect.width / 2.0,
+            y: compact.rect.y + compact.rect.height / 2.0,
         };
 
         assert_eq!(
-            scene.view_mode_at_screen_point(point, size),
-            Some(scene.active_view_mode().next())
+            scene.view_mode_at_screen_point(compact_point, size),
+            Some(ShellViewMode::Compact)
         );
-        let _ = scene.set_pointer(point, size);
+        let _ = scene.set_pointer(compact_point, size);
         assert_eq!(scene.cursor_icon(size), CursorIcon::Pointer);
 
-        let next = scene.view_mode_at_screen_point(point, size).unwrap();
+        let next = scene
+            .view_mode_at_screen_point(compact_point, size)
+            .unwrap();
         assert!(scene.set_view_mode(next, size));
-        assert_eq!(scene.active_view_mode(), next);
+        assert_eq!(scene.active_view_mode(), ShellViewMode::Compact);
+        let details = scene
+            .app_toolbar_layout(size)
+            .view_mode
+            .unwrap()
+            .segments
+            .into_iter()
+            .find(|segment| segment.mode == ShellViewMode::Details)
+            .unwrap();
+        let details_point = ViewPoint {
+            x: details.rect.x + details.rect.width / 2.0,
+            y: details.rect.y + details.rect.height / 2.0,
+        };
         assert_eq!(
-            scene.view_mode_at_screen_point(point, size),
-            Some(next.next())
+            scene.view_mode_at_screen_point(details_point, size),
+            Some(ShellViewMode::Details)
         );
     }
 
@@ -19732,6 +19935,7 @@ mod tests {
             ShellPaneState {
                 path: PathBuf::from("/right-root"),
                 view_mode: ShellViewMode::Icons,
+                zoom_step: 0,
                 dir_count: 1,
                 filtered_indexes: filtered_indexes_for_entries(&split_entries, false, ""),
                 entries: split_entries,
@@ -19821,6 +20025,7 @@ mod tests {
             ShellPaneState {
                 path: PathBuf::from("/right-root"),
                 view_mode: ShellViewMode::Icons,
+                zoom_step: 0,
                 dir_count: 1,
                 filtered_indexes: filtered_indexes_for_entries(&split_entries, false, ""),
                 entries: split_entries,
@@ -20810,6 +21015,7 @@ mod tests {
             ShellPaneState {
                 path: PathBuf::from("/right-root"),
                 view_mode: ShellViewMode::Details,
+                zoom_step: 0,
                 dir_count: 1,
                 filtered_indexes: filtered_indexes_for_entries(&split_entries, false, ""),
                 entries: split_entries,
@@ -20850,6 +21056,7 @@ mod tests {
             ShellPaneState {
                 path: PathBuf::from("/right-root"),
                 view_mode: ShellViewMode::Icons,
+                zoom_step: 0,
                 dir_count: 1,
                 filtered_indexes: filtered_indexes_for_entries(&split_entries, false, ""),
                 entries: split_entries,
@@ -20883,6 +21090,7 @@ mod tests {
             ShellPaneState {
                 path: PathBuf::from("/right-root"),
                 view_mode: ShellViewMode::Icons,
+                zoom_step: 0,
                 dir_count: 1,
                 filtered_indexes: filtered_indexes_for_entries(&split_entries, false, ""),
                 entries: split_entries,
@@ -20941,6 +21149,7 @@ mod tests {
             ShellPaneState {
                 path: PathBuf::from("/right-root"),
                 view_mode: ShellViewMode::Icons,
+                zoom_step: 0,
                 dir_count: 0,
                 filtered_indexes: Vec::new(),
                 entries: Vec::new(),
@@ -20981,6 +21190,7 @@ mod tests {
             ShellPaneState {
                 path: root.join("old-split"),
                 view_mode: ShellViewMode::Icons,
+                zoom_step: 0,
                 dir_count: 0,
                 filtered_indexes: Vec::new(),
                 entries: Vec::new(),
@@ -21144,6 +21354,7 @@ mod tests {
             ShellPaneState {
                 path: PathBuf::from("/right-root"),
                 view_mode: ShellViewMode::Details,
+                zoom_step: 0,
                 dir_count: split_entries.iter().filter(|entry| entry.is_dir).count(),
                 filtered_indexes: filtered_indexes_for_entries(&split_entries, false, ""),
                 entries: split_entries,
@@ -24985,6 +25196,7 @@ mod tests {
             ShellPaneState {
                 path: PathBuf::from("/right-root"),
                 view_mode: ShellViewMode::Icons,
+                zoom_step: 0,
                 dir_count: 0,
                 filtered_indexes: filtered_indexes_for_entries(&split_entries, false, ""),
                 entries: split_entries,
@@ -25025,6 +25237,7 @@ mod tests {
             ShellPaneState {
                 path: PathBuf::from("/right-root"),
                 view_mode: ShellViewMode::Icons,
+                zoom_step: 0,
                 dir_count: 0,
                 filtered_indexes: filtered_indexes_for_entries(&split_entries, false, ""),
                 entries: split_entries,
@@ -31706,6 +31919,64 @@ text/plain=writer.desktop;\n",
     }
 
     #[test]
+    fn zooming_only_changes_active_pane_and_its_layout_metrics() {
+        let mut scene = test_scene(
+            (0..80)
+                .map(|index| test_entry(&format!("left-{index:02}.txt"), false))
+                .collect(),
+            ShellViewMode::Icons,
+        );
+        set_test_pane(
+            &mut scene,
+            ShellPaneId::SLOT_1,
+            PathBuf::from("/right-root"),
+            ShellViewMode::Icons,
+            (0..80)
+                .map(|index| test_entry(&format!("right-{index:02}.txt"), false))
+                .collect(),
+        );
+        let size = PhysicalSize::new(900, 420);
+        let left_before = scene
+            .pane_projection(ShellPaneId::SLOT_0, size)
+            .unwrap()
+            .visible_items[0]
+            .layout
+            .icon_rect
+            .width;
+        let right_before = scene
+            .pane_projection(ShellPaneId::SLOT_1, size)
+            .unwrap()
+            .visible_items[0]
+            .layout
+            .icon_rect
+            .width;
+
+        scene.active_pane = ShellPaneId::SLOT_1;
+        assert!(scene.zoom(ZoomAction::In, size));
+        assert_eq!(scene.panes[ShellPaneId::SLOT_0].zoom_step, 0);
+        assert_eq!(scene.panes[ShellPaneId::SLOT_1].zoom_step, 1);
+        assert_eq!(scene.zoom_percent_for_pane(ShellPaneId::SLOT_0), 100);
+        assert!(scene.zoom_percent_for_pane(ShellPaneId::SLOT_1) > 100);
+
+        let left_after = scene
+            .pane_projection(ShellPaneId::SLOT_0, size)
+            .unwrap()
+            .visible_items[0]
+            .layout
+            .icon_rect
+            .width;
+        let right_after = scene
+            .pane_projection(ShellPaneId::SLOT_1, size)
+            .unwrap()
+            .visible_items[0]
+            .layout
+            .icon_rect
+            .width;
+        assert_eq!(left_after, left_before);
+        assert!(right_after > right_before);
+    }
+
+    #[test]
     fn zoom_updates_layout_metrics_for_all_view_modes() {
         let mut scene = test_scene(
             (0..80)
@@ -31798,7 +32069,7 @@ text/plain=writer.desktop;\n",
             y: rects.track.y + rects.track.height / 2.0,
         };
 
-        assert_eq!(scene.zoom_step, 0);
+        assert_eq!(scene.panes[ShellPaneId::SLOT_0].zoom_step, 0);
         assert_eq!(scene.begin_scrollbar_drag(high, size), Some(true));
         assert_eq!(
             scene.scrollbar_drag.map(|drag| drag.target),
@@ -31806,7 +32077,7 @@ text/plain=writer.desktop;\n",
                 pane: ShellPaneId::SLOT_0
             })
         );
-        assert_eq!(scene.zoom_step, ZOOM_STEP_MAX);
+        assert_eq!(scene.panes[ShellPaneId::SLOT_0].zoom_step, ZOOM_STEP_MAX);
         assert_eq!(scene.cursor_icon(size), CursorIcon::Pointer);
 
         let low = ViewPoint {
@@ -31814,18 +32085,49 @@ text/plain=writer.desktop;\n",
             y: rects.track.y + rects.track.height / 2.0,
         };
         assert!(scene.set_pointer(low, size));
-        assert_eq!(scene.zoom_step, ZOOM_STEP_MIN);
+        assert_eq!(scene.panes[ShellPaneId::SLOT_0].zoom_step, ZOOM_STEP_MIN);
         let _ = scene.end_scrollbar_drag(low, size);
         assert!(scene.scrollbar_drag.is_none());
 
-        assert!(scene.set_zoom_step(ZOOM_STEP_MAX, size, true));
+        assert!(scene.set_zoom_step(ShellPaneId::SLOT_0, ZOOM_STEP_MAX, size, true));
         let label = ViewPoint {
             x: rects.label.x + rects.label.width / 2.0,
             y: rects.label.y + rects.label.height / 2.0,
         };
         assert_eq!(scene.begin_scrollbar_drag(label, size), Some(true));
-        assert_eq!(scene.zoom_step, 0);
+        assert_eq!(scene.panes[ShellPaneId::SLOT_0].zoom_step, 0);
         assert!(scene.scrollbar_drag.is_none());
+    }
+
+    #[test]
+    fn split_pane_status_zoom_targets_the_hit_pane_only() {
+        let mut scene = test_scene(vec![test_entry("left.txt", false)], ShellViewMode::Icons);
+        set_test_pane(
+            &mut scene,
+            ShellPaneId::SLOT_1,
+            PathBuf::from("/right-root"),
+            ShellViewMode::Icons,
+            vec![test_entry("right.txt", false)],
+        );
+        scene.places_visible = false;
+        let size = PhysicalSize::new(1400, 520);
+        let right_zoom = scene
+            .status_zoom_indicator_rects_for_pane(ShellPaneId::SLOT_1, size)
+            .expect("wide split pane should show right zoom indicator");
+        let high = ViewPoint {
+            x: right_zoom.track.right() - 1.0,
+            y: right_zoom.track.y + right_zoom.track.height / 2.0,
+        };
+
+        assert_eq!(scene.begin_scrollbar_drag(high, size), Some(true));
+        assert_eq!(scene.panes[ShellPaneId::SLOT_0].zoom_step, 0);
+        assert_eq!(scene.panes[ShellPaneId::SLOT_1].zoom_step, ZOOM_STEP_MAX);
+        assert_eq!(
+            scene.scrollbar_drag.map(|drag| drag.target),
+            Some(ScrollbarDragTarget::StatusZoom {
+                pane: ShellPaneId::SLOT_1
+            })
+        );
     }
 
     #[test]
