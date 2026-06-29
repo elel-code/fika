@@ -6,8 +6,12 @@ use winit::event::{ButtonSource, ElementState, MouseButton};
 use winit::event_loop::ActiveEventLoop;
 
 use super::outcome::ShellActionOutcome;
+use super::pointer_route::{
+    MainLeftPointerButtonIntent, MainLeftPointerButtonRoute, MainLeftPointerButtonRouteSnapshot,
+    MainPointerButtonIntent, MainPointerButtonSnapshot, main_left_pointer_button_route,
+    main_pointer_button_intent,
+};
 use crate::shell::selection::SelectionClick;
-use crate::shell::shortcuts::path_navigation_action_for_mouse_button;
 use crate::shell::tasks::TaskDetailDialogClick;
 use crate::shell::trash_conflict::TrashConflictDialogClick;
 use crate::{
@@ -50,38 +54,62 @@ impl FikaWgpuApp {
             return;
         };
 
-        if self.scene.is_trash_conflict_dialog_open() {
-            self.handle_trash_conflict_pointer_button(event_loop, state, mouse_button, point, size);
-            return;
+        let intent =
+            main_pointer_button_intent(state, mouse_button, self.main_pointer_button_snapshot());
+        self.apply_main_pointer_button_intent(event_loop, intent, state, mouse_button, point, size);
+    }
+
+    fn main_pointer_button_snapshot(&self) -> MainPointerButtonSnapshot {
+        MainPointerButtonSnapshot {
+            trash_conflict_dialog_open: self.scene.is_trash_conflict_dialog_open(),
+            task_detail_dialog_open: self.scene.is_task_detail_dialog_open(),
+            properties_overlay_open: self.scene.is_properties_overlay_open(),
         }
-        if self.scene.is_task_detail_dialog_open() {
-            self.handle_task_detail_pointer_button(state, mouse_button, point, size);
-            return;
-        }
-        if self.scene.is_properties_overlay_open() {
-            self.handle_properties_overlay_pointer_button(state, mouse_button, point, size);
-            return;
-        }
-        if state == ElementState::Pressed
-            && let Some(action) = path_navigation_action_for_mouse_button(mouse_button)
-        {
-            self.perform_path_navigation(event_loop, action);
-            return;
-        }
-        if mouse_button == MouseButton::Right {
-            if state == ElementState::Pressed {
+    }
+
+    fn apply_main_pointer_button_intent(
+        &mut self,
+        event_loop: &dyn ActiveEventLoop,
+        intent: MainPointerButtonIntent,
+        state: ElementState,
+        mouse_button: MouseButton,
+        point: crate::ViewPoint,
+        size: winit::dpi::PhysicalSize<u32>,
+    ) {
+        match intent {
+            MainPointerButtonIntent::TrashConflict => {
+                self.handle_trash_conflict_pointer_button(
+                    event_loop,
+                    state,
+                    mouse_button,
+                    point,
+                    size,
+                );
+            }
+            MainPointerButtonIntent::TaskDetail => {
+                self.handle_task_detail_pointer_button(state, mouse_button, point, size);
+            }
+            MainPointerButtonIntent::PropertiesOverlay => {
+                self.handle_properties_overlay_pointer_button(state, mouse_button, point, size);
+            }
+            MainPointerButtonIntent::MouseNavigation(action) => {
+                self.perform_path_navigation(event_loop, action);
+            }
+            MainPointerButtonIntent::ContextMenu => {
                 let changed =
                     self.scene
                         .open_context_menu_with_cache(point, size, &self.mime_applications);
                 self.apply_window_action_outcome(ShellActionOutcome::redraw_if(changed));
             }
-            return;
+            MainPointerButtonIntent::Left => {
+                let route = main_left_pointer_button_route(
+                    state,
+                    self.main_left_pointer_button_snapshot(point, size),
+                );
+                self.apply_main_left_pointer_button_route(event_loop, state, point, size, route);
+            }
+            MainPointerButtonIntent::Ignore => {}
         }
-        if mouse_button != MouseButton::Left {
-            return;
-        }
-
-        self.handle_main_left_pointer_button(event_loop, state, point, size);
     }
 
     fn handle_trash_conflict_pointer_button(
@@ -153,111 +181,134 @@ impl FikaWgpuApp {
         }
     }
 
-    fn handle_main_left_pointer_button(
+    fn main_left_pointer_button_snapshot(
+        &self,
+        point: crate::ViewPoint,
+        size: winit::dpi::PhysicalSize<u32>,
+    ) -> MainLeftPointerButtonRouteSnapshot {
+        MainLeftPointerButtonRouteSnapshot {
+            scrollbar_dragging: self.scene.is_scrollbar_dragging(),
+            context_menu_open: self.scene.is_context_menu_open(),
+            drop_menu_open: self.scene.is_drop_menu_open(),
+            task_detail_area_hit: self
+                .scene
+                .task_detail_area_contains_screen_point(point, size),
+            split_view_button_hit: self.scene.split_view_button_at_screen_point(point, size),
+            places_toggle_hit: self.scene.places_toggle_contains_screen_point(point, size),
+            scrollbar_drag_hit: self.scene.scrollbar_drag_hit_at_screen_point(point, size),
+            path_bar_hit: self.scene.path_bar_contains_screen_point(point, size),
+            toolbar_navigation: self
+                .scene
+                .path_navigation_action_at_screen_point(point, size),
+            view_mode: self.scene.view_mode_at_screen_point(point, size),
+            place_pointer_target_hit: self.scene.place_pointer_target_at_screen_point(point, size),
+            place_pointer_active: self.scene.place_pointer_active(),
+        }
+    }
+
+    fn apply_main_left_pointer_button_route(
         &mut self,
         event_loop: &dyn ActiveEventLoop,
         state: ElementState,
         point: crate::ViewPoint,
         size: winit::dpi::PhysicalSize<u32>,
+        route: MainLeftPointerButtonRoute,
     ) {
-        let path_bar_hit = state == ElementState::Pressed
-            && self.scene.path_bar_contains_screen_point(point, size);
-        let location_blur_changed = state == ElementState::Pressed
-            && !path_bar_hit
-            && self.scene.close_location_draft_if_outside(point, size);
+        let location_blur_changed = route
+            .should_blur_location(state)
+            .then(|| self.scene.close_location_draft_if_outside(point, size))
+            .unwrap_or(false);
 
-        if state == ElementState::Released && self.scene.is_scrollbar_dragging() {
-            let changed = self.scene.end_scrollbar_drag(point, size);
-            self.update_window_cursor_for_scene(size);
-            self.apply_window_action_outcome(ShellActionOutcome::redraw_if(changed));
-            return;
+        match route.intent {
+            MainLeftPointerButtonIntent::EndScrollbarDrag => {
+                let changed = self.scene.end_scrollbar_drag(point, size);
+                self.update_window_cursor_for_scene(size);
+                self.apply_window_action_outcome(ShellActionOutcome::redraw_if(changed));
+            }
+            MainLeftPointerButtonIntent::ContextMenu => {
+                self.activate_or_close_context_menu(event_loop, point, size);
+            }
+            MainLeftPointerButtonIntent::DropMenu => {
+                self.activate_or_close_drop_menu(event_loop, point, size);
+            }
+            MainLeftPointerButtonIntent::OpenTaskDetail => {
+                let changed = self
+                    .scene
+                    .open_task_detail_dialog_at_screen_point(point, size)
+                    .unwrap_or(false);
+                self.apply_window_action_outcome(ShellActionOutcome::redraw_if(
+                    changed || location_blur_changed,
+                ));
+            }
+            MainLeftPointerButtonIntent::ToggleSplitView => {
+                self.toggle_split_view_from_toolbar(event_loop);
+            }
+            MainLeftPointerButtonIntent::TogglePlaces => {
+                let changed = self
+                    .scene
+                    .toggle_places_at_screen_point(point, size)
+                    .unwrap_or(false);
+                self.update_window_cursor_for_scene(size);
+                self.apply_window_action_outcome(ShellActionOutcome::redraw_if(
+                    changed || location_blur_changed,
+                ));
+            }
+            MainLeftPointerButtonIntent::BeginScrollbarDrag => {
+                let changed = self
+                    .scene
+                    .begin_scrollbar_drag(point, size)
+                    .unwrap_or(false);
+                self.update_window_cursor_for_scene(size);
+                self.apply_window_action_outcome(ShellActionOutcome::redraw_if(
+                    changed || location_blur_changed,
+                ));
+            }
+            MainLeftPointerButtonIntent::PathBar => {
+                let changed = self.scene.activate_path_bar_at_screen_point(point, size);
+                self.apply_window_action_outcome(ShellActionOutcome::redraw_if(changed));
+            }
+            MainLeftPointerButtonIntent::ToolbarNavigation(action) => {
+                self.perform_path_navigation(event_loop, action);
+            }
+            MainLeftPointerButtonIntent::ViewMode(view_mode) => {
+                let changed = self.set_user_view_mode(view_mode, size);
+                self.apply_action_outcome(
+                    event_loop,
+                    ShellActionOutcome::present_if(changed, "mode-click"),
+                );
+            }
+            MainLeftPointerButtonIntent::BeginPlacePointer => {
+                let changed = self.scene.begin_place_pointer(point, size).unwrap_or(false);
+                self.apply_window_action_outcome(ShellActionOutcome::redraw_if(
+                    changed || location_blur_changed,
+                ));
+            }
+            MainLeftPointerButtonIntent::EndPlacePointer => {
+                self.end_place_pointer(event_loop, point, size, location_blur_changed);
+            }
+            MainLeftPointerButtonIntent::ItemActivationCheck => {
+                if let Some(activation) =
+                    self.scene
+                        .item_activation_for_press(point, size, Instant::now())
+                {
+                    self.perform_item_activation(event_loop, activation);
+                    return;
+                }
+                self.apply_pane_pointer(state, point, size, location_blur_changed);
+            }
+            MainLeftPointerButtonIntent::PanePointer => {
+                self.apply_pane_pointer(state, point, size, location_blur_changed);
+            }
         }
-        if state == ElementState::Pressed && self.scene.is_context_menu_open() {
-            self.activate_or_close_context_menu(event_loop, point, size);
-            return;
-        }
-        if state == ElementState::Pressed && self.scene.is_drop_menu_open() {
-            self.activate_or_close_drop_menu(event_loop, point, size);
-            return;
-        }
-        if state == ElementState::Pressed
-            && let Some(changed) = self
-                .scene
-                .open_task_detail_dialog_at_screen_point(point, size)
-        {
-            self.apply_window_action_outcome(ShellActionOutcome::redraw_if(
-                changed || location_blur_changed,
-            ));
-            return;
-        }
-        if state == ElementState::Pressed
-            && self.scene.split_view_button_at_screen_point(point, size)
-        {
-            self.toggle_split_view_from_toolbar(event_loop);
-            return;
-        }
-        if state == ElementState::Pressed
-            && let Some(changed) = self.scene.toggle_places_at_screen_point(point, size)
-        {
-            self.update_window_cursor_for_scene(size);
-            self.apply_window_action_outcome(ShellActionOutcome::redraw_if(
-                changed || location_blur_changed,
-            ));
-            return;
-        }
-        if state == ElementState::Pressed
-            && let Some(changed) = self.scene.begin_scrollbar_drag(point, size)
-        {
-            self.update_window_cursor_for_scene(size);
-            self.apply_window_action_outcome(ShellActionOutcome::redraw_if(
-                changed || location_blur_changed,
-            ));
-            return;
-        }
-        if path_bar_hit {
-            let changed = self.scene.activate_path_bar_at_screen_point(point, size);
-            self.apply_window_action_outcome(ShellActionOutcome::redraw_if(changed));
-            return;
-        }
-        if state == ElementState::Pressed
-            && let Some(action) = self
-                .scene
-                .path_navigation_action_at_screen_point(point, size)
-        {
-            self.perform_path_navigation(event_loop, action);
-            return;
-        }
-        if state == ElementState::Pressed
-            && let Some(view_mode) = self.scene.view_mode_at_screen_point(point, size)
-        {
-            let changed = self.set_user_view_mode(view_mode, size);
-            self.apply_action_outcome(
-                event_loop,
-                ShellActionOutcome::present_if(changed, "mode-click"),
-            );
-            return;
-        }
-        if state == ElementState::Pressed
-            && let Some(changed) = self.scene.begin_place_pointer(point, size)
-        {
-            self.apply_window_action_outcome(ShellActionOutcome::redraw_if(
-                changed || location_blur_changed,
-            ));
-            return;
-        }
-        if state == ElementState::Released && self.scene.place_pointer_active() {
-            self.end_place_pointer(event_loop, point, size, location_blur_changed);
-            return;
-        }
-        if state == ElementState::Pressed
-            && let Some(activation) =
-                self.scene
-                    .item_activation_for_press(point, size, Instant::now())
-        {
-            self.perform_item_activation(event_loop, activation);
-            return;
-        }
+    }
 
+    fn apply_pane_pointer(
+        &mut self,
+        state: ElementState,
+        point: crate::ViewPoint,
+        size: winit::dpi::PhysicalSize<u32>,
+        location_blur_changed: bool,
+    ) {
         let changed = match state {
             ElementState::Pressed => {
                 let selection = SelectionClick {

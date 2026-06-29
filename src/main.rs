@@ -3514,6 +3514,14 @@ impl ShellScene {
         self.split_view_button_rect(size).contains(point)
     }
 
+    fn places_toggle_contains_screen_point(
+        &self,
+        point: ViewPoint,
+        size: PhysicalSize<u32>,
+    ) -> bool {
+        self.places_toggle_rect(size).contains(point)
+    }
+
     fn toggle_places_at_screen_point(
         &mut self,
         point: ViewPoint,
@@ -3715,6 +3723,14 @@ impl ShellScene {
             false
         };
         Some(hover_changed || item_hover_changed || drag_started)
+    }
+
+    fn place_pointer_target_at_screen_point(
+        &self,
+        point: ViewPoint,
+        size: PhysicalSize<u32>,
+    ) -> bool {
+        self.place_index_at_screen_point(point, size).is_some()
     }
 
     fn place_pointer_active(&self) -> bool {
@@ -6011,6 +6027,15 @@ impl ShellScene {
         self.external_drag = None;
         self.place_press = None;
         Some(changed)
+    }
+
+    fn task_detail_area_contains_screen_point(
+        &self,
+        point: ViewPoint,
+        size: PhysicalSize<u32>,
+    ) -> bool {
+        self.places_task_area_rect(size)
+            .is_some_and(|rect| rect.contains(point))
     }
 
     fn close_task_detail_dialog(&mut self) -> bool {
@@ -10951,6 +10976,30 @@ impl ShellScene {
         }
 
         None
+    }
+
+    fn scrollbar_drag_hit_at_screen_point(
+        &self,
+        point: ViewPoint,
+        size: PhysicalSize<u32>,
+    ) -> bool {
+        if let Some((track, _thumb)) = self.places_scrollbar_rects(size)
+            && track.contains(point)
+        {
+            return true;
+        }
+        if let Some(handle) = self.places_resize_handle_rect(size)
+            && handle.contains(point)
+        {
+            return true;
+        }
+        if let Some(handle) = self.split_pane_resize_handle_rect(size)
+            && handle.contains(point)
+            && self.split_pane_metrics(size).is_some()
+        {
+            return true;
+        }
+        self.content_scrollbar_hit_at_point(point, size).is_some()
     }
 
     fn content_scrollbar_hit_at_point(
