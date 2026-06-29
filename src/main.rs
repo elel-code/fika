@@ -13322,22 +13322,11 @@ impl WgpuState {
             reason,
         );
         let prepare_us = prepare_start.elapsed().as_micros();
-        let metadata_work_pending = scene.metadata_role_work_pending();
-        let icon_work_pending = scene_frame.icon_stats.deferred > 0
-            || scene_frame.icon_stats.raster_deferred > 0
-            || scene_frame.icon_stats.thumbnail_deferred > 0
-            || self.icon_renderer.resolver.has_pending()
-            || self
-                .icon_renderer
-                .icon_rasters
-                .has_pending(&mut self.icon_renderer.raster_cache)
-            || self.icon_renderer.thumbnails.has_pending()
-            || scene.folder_preview_roles.borrow().has_pending();
-        let text_work_pending = scene_frame.text_stats.deferred > 0;
-        if metadata_work_pending || icon_work_pending || text_work_pending {
+        let work_pending = scene_frame.work_pending(&mut self.icon_renderer, scene);
+        if work_pending.any() {
             window.request_redraw();
         }
-        self.render_work_pending = metadata_work_pending || icon_work_pending || text_work_pending;
+        self.render_work_pending = work_pending.any();
         scene_frame.upload_quads(
             &mut self.quad_renderer,
             &mut self.overlay_quad_renderer,

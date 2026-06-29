@@ -138,6 +138,18 @@ Dolphin reference:
 - Verification: cargo check；cargo test surface_frame_context_keeps_dialog_suboptimal_recovery_local；cargo test；git diff --check。
 ```
 
+### SceneFrame work-pending boundary
+
+```text
+Dolphin reference:
+- Source: /home/yk/Code/fika/reference/dolphin/src/kitemviews/kfileitemmodelrolesupdater.cpp
+- Symbol: KFileItemModelRolesUpdater::setVisibleIndexRange / startUpdating / resolveNextPendingRoles
+- Dolphin boundary: expensive roles、icons 和 previews 的待处理状态集中在 roles updater，visible range 改变后统一决定继续异步更新，而不是由 paint/event handler 分散判断。
+- Fika mapping: src/shell/render/frame.rs::SceneFrame::work_pending / SceneFrameWorkPending；src/main.rs::WgpuState::render。
+- Divergence: Dolphin 的 pending work 由 Qt/KIO job 和 model updater 驱动；Fika 目前仍有 metadata role worker、icon resolver、icon raster worker、thumbnail worker、folder preview role queue 和 text atlas miss 多个队列，因此先在 SceneFrame 层合并这些“是否需要下一帧”的信号，后续再把 visible-priority queue 和动画 dirty 接入同一入口。
+- Verification: cargo check；cargo test；git diff --check。
+```
+
 ## Review 检查项
 
 - 变更是否包含本地 Dolphin 文件路径和 symbol？

@@ -179,6 +179,11 @@ dialog、render damage 和异步操作持续演进提供稳定边界。
   scene pass 和 retained present pass 进入 `WgpuState::encode_retained_scene_pass` /
   `encode_retained_present_pass`，damage scissor、full clear、overlay text draw 和 present
   copy 的边界更接近单一 frame encode 阶段。
+- SceneFrame work-pending 调度：
+  `SceneFrame::work_pending` 统一判断 metadata、icon/thumbnail/folder-preview 和 text
+  deferred work，主窗口 render 只消费 `SceneFrameWorkPending::any()` 来决定是否继续
+  redraw；后续 visible-priority role、thumbnail read-ahead 和动画 dirty 可以共享同一个
+  frame-pending 判定入口。
 - Action Outcome / Presentation 调度边界：
   `src/app_actions/outcome.rs` 统一承载 action 执行后的 `None`、`Redraw`、`Queue`、
   `Present` 结果；除 `outcome.rs` 外的 `src/app_actions/*` 不再直接调用主窗口

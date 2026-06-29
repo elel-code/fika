@@ -28,6 +28,19 @@ pub(crate) struct SceneFrame {
     pub(crate) vertex_upload_stats: VertexBufferUploadStats,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct SceneFrameWorkPending {
+    pub(crate) metadata: bool,
+    pub(crate) icon: bool,
+    pub(crate) text: bool,
+}
+
+impl SceneFrameWorkPending {
+    pub(crate) fn any(self) -> bool {
+        self.metadata || self.icon || self.text
+    }
+}
+
 impl SceneFrame {
     pub(crate) fn upload_quads(
         &mut self,
@@ -45,6 +58,29 @@ impl SceneFrame {
             &self.overlay_vertices,
         ));
         self.quad_upload_us = start.elapsed().as_micros();
+    }
+
+    pub(crate) fn work_pending(
+        &self,
+        icon_renderer: &mut IconRenderer,
+        scene: &ShellScene,
+    ) -> SceneFrameWorkPending {
+        let metadata = scene.metadata_role_work_pending();
+        let icon = self.icon_stats.deferred > 0
+            || self.icon_stats.raster_deferred > 0
+            || self.icon_stats.thumbnail_deferred > 0
+            || icon_renderer.resolver.has_pending()
+            || icon_renderer
+                .icon_rasters
+                .has_pending(&mut icon_renderer.raster_cache)
+            || icon_renderer.thumbnails.has_pending()
+            || scene.folder_preview_roles.borrow().has_pending();
+        let text = self.text_stats.deferred > 0;
+        SceneFrameWorkPending {
+            metadata,
+            icon,
+            text,
+        }
     }
 }
 
