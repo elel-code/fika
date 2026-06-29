@@ -57,6 +57,7 @@ pub(crate) const VIEW_SWITCH_REDRAW_FRAMES: u8 = 6;
 pub(crate) const ZOOM_REDRAW_FRAMES: u8 = 2;
 pub(crate) const ITEM_REFLOW_ANIMATION_DURATION: Duration = Duration::from_millis(190);
 pub(crate) const ITEM_REFLOW_ANIMATION_FRAME: Duration = Duration::from_millis(16);
+pub(crate) const TEXT_CARET_BLINK_INTERVAL: Duration = Duration::from_millis(530);
 pub(crate) const SCROLL_REDRAW_FRAMES: u8 = 1;
 pub(crate) const PLACES_SIDEBAR_WIDTH: f32 = 228.0;
 pub(crate) const PLACES_SIDEBAR_MIN_WIDTH: f32 = 128.0;

@@ -30,17 +30,19 @@ use crate::{
 pub(crate) fn push_open_with_chooser_dialog(
     chooser: &ShellOpenWithChooser,
     scale: f32,
+    caret_visible: bool,
     vertices: &mut Vec<QuadVertex>,
     text: &mut TextFrameBuilder<'_>,
     icons: &mut IconFrameBuilder<'_>,
     size: PhysicalSize<u32>,
 ) {
-    push_open_with_chooser_surface(chooser, scale, vertices, text, icons, size);
+    push_open_with_chooser_surface(chooser, scale, caret_visible, vertices, text, icons, size);
 }
 
 fn push_open_with_chooser_surface(
     chooser: &ShellOpenWithChooser,
     scale: f32,
+    caret_visible: bool,
     vertices: &mut Vec<QuadVertex>,
     text: &mut TextFrameBuilder<'_>,
     icons: &mut IconFrameBuilder<'_>,
@@ -189,34 +191,36 @@ fn push_open_with_chooser_surface(
             LabelAlignment::Start,
         );
     }
-    let cursor_x = text.measure_label_cursor_x(
-        &chooser.query,
-        query_text_rect,
-        chooser.query_cursor,
-        LabelAlignment::Start,
-        LabelWrap::None,
-    );
-    let caret_width = scaled_dialog_metric(1.0, scale).max(1.0);
-    let caret_height = scaled_dialog_metric(17.0, scale)
-        .min(query.height - scaled_dialog_metric(10.0, scale))
-        .max(1.0);
-    let caret_x = (query_text_rect.x + cursor_x).clamp(
-        query_text_rect.x,
-        (query_text_rect.right() - caret_width).max(query_text_rect.x),
-    );
-    push_clipped_rounded_rect(
-        vertices,
-        ViewRect {
-            x: caret_x,
-            y: query.y + (query.height - caret_height) / 2.0,
-            width: caret_width,
-            height: caret_height,
-        },
-        query,
-        caret_width / 2.0,
-        POPUP_FIELD_FOCUS,
-        size,
-    );
+    if caret_visible {
+        let cursor_x = text.measure_label_cursor_x(
+            &chooser.query,
+            query_text_rect,
+            chooser.query_cursor,
+            LabelAlignment::Start,
+            LabelWrap::None,
+        );
+        let caret_width = scaled_dialog_metric(1.0, scale).max(1.0);
+        let caret_height = scaled_dialog_metric(17.0, scale)
+            .min(query.height - scaled_dialog_metric(10.0, scale))
+            .max(1.0);
+        let caret_x = (query_text_rect.x + cursor_x).clamp(
+            query_text_rect.x,
+            (query_text_rect.right() - caret_width).max(query_text_rect.x),
+        );
+        push_clipped_rounded_rect(
+            vertices,
+            ViewRect {
+                x: caret_x,
+                y: query.y + (query.height - caret_height) / 2.0,
+                width: caret_width,
+                height: caret_height,
+            },
+            query,
+            caret_width / 2.0,
+            POPUP_FIELD_FOCUS,
+            size,
+        );
+    }
 
     let list = open_with_chooser_list_rect_scaled(rect, chooser, scale);
     let scrollbar = open_with_chooser_scrollbar_rects_scaled(list, chooser, scale);

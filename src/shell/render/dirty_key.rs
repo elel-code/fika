@@ -44,6 +44,7 @@ impl ShellRenderDirtyKey {
                 include_task_status_changes: false,
                 include_rubber_band: false,
                 include_folder_preview_roles: true,
+                include_text_caret_blink: false,
             },
         )
     }
@@ -85,6 +86,7 @@ impl ShellRenderDirtyKey {
                 include_task_status_changes: false,
                 include_rubber_band: false,
                 include_folder_preview_roles: false,
+                include_text_caret_blink: false,
             },
         )
     }
@@ -116,6 +118,14 @@ impl ShellRenderDirtyKey {
         push_u64(&mut values, scene.zoom_step as i64 as u64);
         push_f32(&mut values, scene.split_pane_left_fraction);
         push_u64(&mut values, scene.animation_dirty_value());
+        push_u64(
+            &mut values,
+            if options.include_text_caret_blink {
+                scene.location_text_caret_dirty_value()
+            } else {
+                0
+            },
+        );
 
         for pane_id in ShellPaneId::ALL {
             match scene.panes.get(pane_id) {
@@ -299,6 +309,7 @@ struct ShellRenderDirtyKeyOptions {
     include_task_status_changes: bool,
     include_rubber_band: bool,
     include_folder_preview_roles: bool,
+    include_text_caret_blink: bool,
 }
 
 impl Default for ShellRenderDirtyKeyOptions {
@@ -319,6 +330,7 @@ impl Default for ShellRenderDirtyKeyOptions {
             include_task_status_changes: true,
             include_rubber_band: true,
             include_folder_preview_roles: true,
+            include_text_caret_blink: true,
         }
     }
 }

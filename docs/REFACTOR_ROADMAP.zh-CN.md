@@ -259,6 +259,9 @@ upload、present、logging 管线抽成共享 render surface 层。
 的 animation registry。
 
 候选动画：
+- text caret blink：地址栏与 Open With 搜索框共用 `ShellAnimationRuntime` 的轻量
+  timeline，由主循环按 deadline 唤醒；主窗口 dirty key 只在地址栏编辑时包含 blink
+  phase，Open With 独立窗口直接按 blink deadline 请求 redraw。
 - delete fade / scale。
 - surviving item reflow。
 - hover / selection transition。

@@ -581,6 +581,8 @@ struct FikaWgpuApp {
     cursor_icon: CursorIcon,
     pending_redraw_frames: u8,
     pending_render_reason: Option<&'static str>,
+    last_location_text_caret_dirty_value: u64,
+    last_open_with_text_caret_dirty_value: u64,
     auto_cycle_views: bool,
     next_auto_cycle: Instant,
     autosmoke_zoom_actions: VecDeque<ZoomAction>,
@@ -625,6 +627,8 @@ impl FikaWgpuApp {
             cursor_icon: CursorIcon::Default,
             pending_redraw_frames: 0,
             pending_render_reason: None,
+            last_location_text_caret_dirty_value: 0,
+            last_open_with_text_caret_dirty_value: 0,
             auto_cycle_views,
             next_auto_cycle: Instant::now() + AUTO_CYCLE_INTERVAL,
             autosmoke_zoom_actions: autosmoke_zoom.actions,
@@ -1970,11 +1974,33 @@ impl ApplicationHandler for FikaWgpuApp {
 
         let autosmoke_work_pending = self.autosmoke_work_pending();
         let animation_active = self.scene.animation_active();
+        let next_text_caret_deadline = self.scene.next_text_caret_blink_deadline();
+        let location_caret_active = self.scene.location_text_caret_active();
+        let location_caret_dirty_value = self.scene.location_text_caret_dirty_value();
+        let location_caret_blink_due = location_caret_active
+            && location_caret_dirty_value != self.last_location_text_caret_dirty_value;
+        self.last_location_text_caret_dirty_value = if location_caret_active {
+            location_caret_dirty_value
+        } else {
+            0
+        };
+        let open_with_caret_active = self.scene.open_with_text_caret_active();
+        let open_with_caret_dirty_value = self.scene.open_with_text_caret_dirty_value();
+        let open_with_caret_blink_due = open_with_caret_active
+            && open_with_caret_dirty_value != self.last_open_with_text_caret_dirty_value;
+        self.last_open_with_text_caret_dirty_value = if open_with_caret_active {
+            open_with_caret_dirty_value
+        } else {
+            0
+        };
+        let dialog_redraw_requested =
+            open_with_caret_blink_due && self.request_open_with_dialog_redraw();
         let needs_redraw = self.renderer.as_ref().is_some_and(|renderer| {
             renderer.frame_count == 0
                 || renderer.rendered_view_switches != self.scene.view_switches
                 || self.pending_redraw_frames > 0
                 || animation_active
+                || location_caret_blink_due
                 || (autosmoke_work_pending && renderer.frame_count > 0)
         });
         let next_autosmoke_deadline = [
@@ -1989,6 +2015,7 @@ impl ApplicationHandler for FikaWgpuApp {
             next_autosmoke_deadline,
             self.dialog_windows.next_deferred_close_deadline(),
             self.scene.next_animation_frame_deadline(),
+            next_text_caret_deadline,
             self.directory_watchers.next_reload_deadline(),
         ]
         .into_iter()
@@ -1999,7 +2026,7 @@ impl ApplicationHandler for FikaWgpuApp {
             window.request_redraw();
         }
 
-        if needs_redraw {
+        if needs_redraw || dialog_redraw_requested {
             event_loop.set_control_flow(ControlFlow::Poll);
         } else if !self.active_task_controllers.is_empty() {
             event_loop.set_control_flow(ControlFlow::WaitUntil(
@@ -2201,12 +2228,21 @@ impl FikaWgpuApp {
             return;
         };
         let scale = self.scene.ui_scale();
+        let caret_visible = self.scene.text_caret_visible();
         let Some(dialog) = self.dialog_windows.get_mut(ShellDialogWindowKind::OpenWith) else {
             return;
         };
         let layout_size = dialog.layout_size();
         let (renderer, window) = dialog.renderer_and_window_mut();
-        renderer.render_open_with_dialog(window, event_loop, chooser, scale, layout_size, reason);
+        renderer.render_open_with_dialog(
+            window,
+            event_loop,
+            chooser,
+            scale,
+            layout_size,
+            caret_visible,
+            reason,
+        );
     }
 
     fn render_now(
@@ -2852,6 +2888,41 @@ impl ShellScene {
         self.animations.dirty_value()
     }
 
+    fn reset_text_caret_blink(&mut self) {
+        self.animations.reset_text_caret_blink();
+    }
+
+    fn text_caret_visible(&self) -> bool {
+        self.animations.text_caret_visible()
+    }
+
+    fn location_text_caret_active(&self) -> bool {
+        self.location_draft.is_some()
+    }
+
+    fn open_with_text_caret_active(&self) -> bool {
+        self.open_with_chooser.is_some()
+    }
+
+    fn text_caret_blink_active(&self) -> bool {
+        self.location_text_caret_active() || self.open_with_text_caret_active()
+    }
+
+    fn next_text_caret_blink_deadline(&self) -> Option<Instant> {
+        self.animations
+            .next_text_caret_blink_deadline(self.text_caret_blink_active())
+    }
+
+    fn location_text_caret_dirty_value(&self) -> u64 {
+        self.animations
+            .text_caret_dirty_value(self.location_text_caret_active())
+    }
+
+    fn open_with_text_caret_dirty_value(&self) -> u64 {
+        self.animations
+            .text_caret_dirty_value(self.open_with_text_caret_active())
+    }
+
     fn reload_panes_showing_path(
         &mut self,
         path: &Path,
@@ -3251,6 +3322,7 @@ impl ShellScene {
         self.rubber_band = None;
         let changed = old_draft != self.location_draft;
         if changed {
+            self.reset_text_caret_blink();
             self.location_changes += 1;
             self.clamp_scroll(size);
             fika_log!(
@@ -3288,6 +3360,18 @@ impl ShellScene {
     ) -> bool {
         let old_draft = self.location_draft.clone();
         let old_filter_active = self.filter_active;
+        let reset_caret_on_noop = matches!(
+            &command,
+            LocationCommand::Activate
+                | LocationCommand::Insert(_)
+                | LocationCommand::Backspace
+                | LocationCommand::Delete
+                | LocationCommand::MoveLeft
+                | LocationCommand::MoveRight
+                | LocationCommand::MoveHome
+                | LocationCommand::MoveEnd
+                | LocationCommand::Complete
+        );
 
         match command {
             LocationCommand::Activate => {
@@ -3364,9 +3448,14 @@ impl ShellScene {
 
         let changed = old_draft != self.location_draft || old_filter_active != self.filter_active;
         if !changed {
+            if reset_caret_on_noop && self.location_text_caret_active() {
+                self.reset_text_caret_blink();
+                return true;
+            }
             return false;
         }
 
+        self.reset_text_caret_blink();
         self.location_changes += 1;
         self.rubber_band = None;
         self.clamp_scroll(size);
@@ -5806,6 +5895,7 @@ impl ShellScene {
         self.trash_conflict_dialog = None;
         self.rubber_band = None;
         if changed {
+            self.reset_text_caret_blink();
             self.open_with_changes += 1;
             self.log_open_with_chooser_state();
         }
@@ -5847,12 +5937,26 @@ impl ShellScene {
         if command == OpenWithCommand::Cancel {
             return self.close_open_with_chooser();
         }
+        let reset_caret_on_noop = matches!(
+            &command,
+            OpenWithCommand::Insert(_)
+                | OpenWithCommand::Backspace
+                | OpenWithCommand::Delete
+                | OpenWithCommand::MoveLeft
+                | OpenWithCommand::MoveRight
+                | OpenWithCommand::MoveHome
+                | OpenWithCommand::MoveEnd
+        );
         let Some(chooser) = self.open_with_chooser.as_mut() else {
             return false;
         };
         if chooser.apply_command(command) {
+            self.reset_text_caret_blink();
             self.open_with_changes += 1;
             self.log_open_with_chooser_state();
+            true
+        } else if reset_caret_on_noop {
+            self.reset_text_caret_blink();
             true
         } else {
             false
@@ -5889,13 +5993,13 @@ impl ShellScene {
         let Some(chooser) = self.open_with_chooser.as_mut() else {
             return false;
         };
-        if chooser.set_query_cursor(cursor) {
+        let cursor_changed = chooser.set_query_cursor(cursor);
+        self.reset_text_caret_blink();
+        if cursor_changed {
             self.open_with_changes += 1;
             self.log_open_with_chooser_state();
-            true
-        } else {
-            false
         }
+        true
     }
 
     fn scroll_open_with_chooser_by(&mut self, delta_y: f32) -> bool {
@@ -8757,7 +8861,7 @@ impl ShellScene {
             primary_text_color(self.dark_mode),
             LabelAlignment::Start,
         );
-        if active && cursor.is_some() {
+        if active && cursor.is_some() && self.text_caret_visible() {
             let caret_width = self.scale_metric(1.25);
             let caret_height = self
                 .scale_metric(17.0)
@@ -12719,6 +12823,7 @@ impl WgpuState {
         chooser: &ShellOpenWithChooser,
         scale: f32,
         layout_size: PhysicalSize<u32>,
+        caret_visible: bool,
         reason: &'static str,
     ) -> ShellRenderOutcome {
         self.render_detached_dialog(
@@ -12732,6 +12837,7 @@ impl WgpuState {
                 shell::open_with::paint::push_open_with_chooser_dialog(
                     chooser,
                     scale,
+                    caret_visible,
                     vertices,
                     text_builder,
                     icon_builder,
@@ -30064,6 +30170,50 @@ text/plain=writer.desktop;\n",
         assert_eq!(scene.location_draft.as_ref().unwrap().draft.cursor, 2);
         assert!(scene.apply_location_command(LocationCommand::MoveHome, size));
         assert_eq!(scene.location_draft.as_ref().unwrap().draft.cursor, 0);
+    }
+
+    #[test]
+    fn text_caret_blink_tracks_location_and_open_with_inputs() {
+        let mut scene = test_scene(vec![test_entry("note.txt", false)], ShellViewMode::Icons);
+        scene.panes[ShellPaneId::SLOT_0].path = PathBuf::from("/tmp");
+        let size = PhysicalSize::new(640, 460);
+
+        assert!(!scene.location_text_caret_active());
+        assert!(!scene.open_with_text_caret_active());
+        assert!(scene.next_text_caret_blink_deadline().is_none());
+        assert_eq!(scene.location_text_caret_dirty_value(), 0);
+
+        assert!(scene.apply_location_command(LocationCommand::Activate, size));
+        assert!(scene.location_text_caret_active());
+        assert!(scene.text_caret_blink_active());
+        assert!(scene.text_caret_visible());
+        assert!(scene.next_text_caret_blink_deadline().is_some());
+        assert_ne!(scene.location_text_caret_dirty_value(), 0);
+        let editing_key = ShellRenderDirtyKey::from_scene(&scene, size);
+        let editing_hoverless = ShellRenderDirtyKey::from_scene_ignoring_hover(&scene, size);
+        assert_ne!(editing_key, editing_hoverless);
+
+        assert!(scene.close_location_draft(size));
+        assert!(!scene.location_text_caret_active());
+        assert_eq!(scene.location_text_caret_dirty_value(), 0);
+
+        scene.open_with_chooser = Some(ShellOpenWithChooser::new(
+            PathBuf::from("/tmp/note.txt"),
+            Some(Arc::from("text/plain")),
+            vec![MimeApplication {
+                id: "paint.desktop".to_string(),
+                desktop_file: PathBuf::from("/apps/paint.desktop"),
+                name: "Paint".to_string(),
+                exec: "paint %f".to_string(),
+                icon: None,
+                is_default: false,
+            }],
+            Vec::new(),
+        ));
+        assert!(scene.open_with_text_caret_active());
+        assert!(scene.text_caret_blink_active());
+        assert!(scene.next_text_caret_blink_deadline().is_some());
+        assert_ne!(scene.open_with_text_caret_dirty_value(), 0);
     }
 
     #[test]
