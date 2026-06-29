@@ -1,7 +1,7 @@
 use fika_core::ViewRect;
 use winit::dpi::PhysicalSize;
 
-use crate::shell::dolphin::style::{BREEZE_ITEM_ROUNDNESS, item_background_color};
+use crate::shell::dolphin::style::BREEZE_ITEM_ROUNDNESS;
 use crate::shell::icon_roles::NamedIconFallback;
 use crate::shell::metrics::{
     OPEN_WITH_CHOOSER_MAX_ROWS, OPEN_WITH_CHOOSER_ROW_HEIGHT, OPEN_WITH_CHOOSER_TITLE_HEIGHT,
@@ -15,10 +15,11 @@ use crate::shell::open_with::geometry::{
 };
 use crate::shell::open_with::{OpenWithTreeRow, ShellOpenWithChooser};
 use crate::shell::popup::style::PopupTheme;
+use crate::shell::ui_chrome::push_scrollbar;
 use crate::{
     IconDrawLayer, IconFrameBuilder, LabelAlignment, LabelWrap, QuadVertex, TextFrameBuilder,
     path_name_or_display, push_clipped_rect_outline, push_clipped_rounded_highlight,
-    push_clipped_rounded_rect, push_rect, push_scrollbar,
+    push_clipped_rounded_rect, push_rect,
 };
 
 pub(crate) fn push_open_with_chooser_dialog(
@@ -281,7 +282,7 @@ fn push_open_with_chooser_surface(
                     row_rect,
                     list,
                     row_radius,
-                    item_background_color(true, false),
+                    theme.selection_fill,
                     theme.field_focus,
                     scaled_dialog_metric(1.25, scale),
                     size,
@@ -416,7 +417,7 @@ fn push_open_with_chooser_surface(
     }
 
     if let Some((track, thumb)) = scrollbar {
-        push_scrollbar(vertices, track, thumb, list, size);
+        push_scrollbar(vertices, track, thumb, list, theme.scrollbar, size);
     }
 
     let default_row = open_with_chooser_default_checkbox_rect_scaled(rect, chooser, scale);

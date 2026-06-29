@@ -3,8 +3,9 @@ use fika_core::ViewRect;
 use crate::shell::options::ShellViewMode;
 
 use super::style::{
-    BREEZE_FOCUS_PEN_WIDTH, BREEZE_ITEM_ROUNDNESS, UiColor, details_row_background_color,
-    item_background_color, item_focus_color,
+    BREEZE_FOCUS_PEN_WIDTH, BREEZE_ITEM_ROUNDNESS, DolphinItemPalette, UiColor,
+    details_row_background_color_for_palette, item_background_color_for_palette,
+    item_focus_color_for_palette,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -29,6 +30,7 @@ pub(crate) struct DolphinItemPaint {
     pub(crate) focus: Option<DolphinItemFocus>,
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn dolphin_item_paint(
     view_mode: ShellViewMode,
     item_rect: ViewRect,
@@ -39,6 +41,32 @@ pub(crate) fn dolphin_item_paint(
     current: bool,
     alternate: bool,
     scale: f32,
+) -> DolphinItemPaint {
+    dolphin_item_paint_with_palette(
+        view_mode,
+        item_rect,
+        visual_rect,
+        content_rect,
+        selected,
+        hovered,
+        current,
+        alternate,
+        scale,
+        DolphinItemPalette::light(),
+    )
+}
+
+pub(crate) fn dolphin_item_paint_with_palette(
+    view_mode: ShellViewMode,
+    item_rect: ViewRect,
+    visual_rect: ViewRect,
+    content_rect: ViewRect,
+    selected: bool,
+    hovered: bool,
+    current: bool,
+    alternate: bool,
+    scale: f32,
+    palette: DolphinItemPalette,
 ) -> DolphinItemPaint {
     let radius = BREEZE_ITEM_ROUNDNESS * scale.max(1.0);
     let highlight_rect = match view_mode {
@@ -52,19 +80,19 @@ pub(crate) fn dolphin_item_paint(
         (view_mode == ShellViewMode::Details && alternate).then(|| DolphinItemFill {
             rect: item_rect,
             radius: 0.0,
-            color: details_row_background_color(false, false, true),
+            color: details_row_background_color_for_palette(false, false, true, palette),
         });
     let background = match view_mode {
         ShellViewMode::Details => (selected || hovered).then(|| DolphinItemFill {
             rect: highlight_rect,
             radius: 0.0,
-            color: item_background_color(selected, hovered),
+            color: item_background_color_for_palette(selected, hovered, palette),
         }),
         ShellViewMode::Compact | ShellViewMode::Icons => {
             (selected || hovered).then(|| DolphinItemFill {
                 rect: highlight_rect,
                 radius,
-                color: item_background_color(selected, hovered),
+                color: item_background_color_for_palette(selected, hovered, palette),
             })
         }
     };
@@ -74,7 +102,7 @@ pub(crate) fn dolphin_item_paint(
         DolphinItemFocus {
             rect: inset_rect(highlight_rect, stroke_width * 0.5).unwrap_or(highlight_rect),
             radius: (radius - stroke_width * 0.5).max(1.0),
-            color: item_focus_color(selected, hovered),
+            color: item_focus_color_for_palette(selected, hovered, palette),
             stroke_width,
         }
     });

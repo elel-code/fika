@@ -185,8 +185,10 @@ use shell::dialog_window::{
     ShellDialogWindowSpec, ShellDialogWindows,
 };
 use shell::directory_watch::ShellDirectoryWatcherRuntime;
-use shell::dolphin::item_paint::{dolphin_item_paint, dolphin_selection_core_rect};
-use shell::dolphin::style::{BREEZE_ITEM_ROUNDNESS, place_row_background_color};
+use shell::dolphin::item_paint::{dolphin_item_paint_with_palette, dolphin_selection_core_rect};
+use shell::dolphin::style::{
+    BREEZE_ITEM_ROUNDNESS, DolphinItemPalette, place_row_background_color_for_palette,
+};
 use shell::dolphin::text::{
     compact_entry_text_width, dolphin_elide_filename_to_width,
     dolphin_elide_wrapped_filename_to_rect, estimated_label_raster_width,
@@ -366,6 +368,7 @@ use shell::transfer::{
     transfer_paths_with_privilege, transfer_runtime_failure,
 };
 use shell::trash_conflict::{ShellTrashConflictDialog, TrashConflictDialogClick};
+use shell::ui_chrome::{push_fallback_file_icon, push_scrollbar};
 use shell::window_semantics::{
     ShellWindowCloseRequestTarget, ShellWindowRole, apply_window_platform_semantics,
     window_manager_close_request_exits_application,
@@ -8931,7 +8934,7 @@ impl ShellScene {
         }
         if let Some(overlay_text) = overlay_text {
             let popup_theme = PopupTheme::from_shell_theme(theme);
-            self.push_drag_preview_overlay(&mut overlay_vertices, overlay_text, size);
+            self.push_drag_preview_overlay(&mut overlay_vertices, overlay_text, theme, size);
             self.push_drop_menu_overlay(&mut overlay_vertices, overlay_text, theme, size);
             self.push_context_menu_overlay(&mut overlay_vertices, overlay_text, icons, theme, size);
             self.push_properties_overlay(&mut overlay_vertices, overlay_text, popup_theme, size);
@@ -9006,7 +9009,15 @@ impl ShellScene {
             width: icon_size,
             height: icon_size,
         };
-        push_location_bar_icon(vertices, icon_rect, clip, active, self.ui_scale(), size);
+        push_location_bar_icon(
+            vertices,
+            icon_rect,
+            clip,
+            active,
+            theme,
+            self.ui_scale(),
+            size,
+        );
         let separator_x = icon_rect.right() + self.scale_metric(8.0);
         push_clipped_rect(
             vertices,
@@ -9670,7 +9681,7 @@ impl ShellScene {
             theme.view_mode_content(projection.view.view_mode),
             size,
         );
-        self.push_pane_body_border(vertices, projection, size);
+        self.push_pane_body_border(vertices, projection, theme, size);
         if pane_id == ShellPaneId::SLOT_0 {
             self.push_filter_bar(vertices, text, size, theme);
         }
@@ -9678,14 +9689,24 @@ impl ShellScene {
             self.push_details_header_for_projection(vertices, text, projection, size, theme);
         }
 
+        let item_palette = DolphinItemPalette::from_shell_theme(theme);
         for item in projection.visible_items.iter().copied() {
-            self.push_pane_item(vertices, text, icons, projection, item, size, theme);
+            self.push_pane_item(
+                vertices,
+                text,
+                icons,
+                projection,
+                item,
+                item_palette,
+                size,
+                theme,
+            );
         }
         if self.rubber_band.is_some() && pane_id == self.active_pane() {
-            self.push_rubber_band_for_projection(vertices, projection, size);
+            self.push_rubber_band_for_projection(vertices, projection, theme, size);
         }
         let content_scrollbar_visible =
-            self.push_content_scrollbar_for_projection(vertices, projection, size);
+            self.push_content_scrollbar_for_projection(vertices, projection, theme, size);
         self.push_pane_status_bar(vertices, text, projection, size, theme);
         content_scrollbar_visible
     }
@@ -9697,6 +9718,7 @@ impl ShellScene {
         icons: &mut IconFrameBuilder<'_>,
         projection: &ShellPaneProjection<'_>,
         item: ShellPaneVisibleItem,
+        item_palette: DolphinItemPalette,
         size: PhysicalSize<u32>,
         theme: ShellTheme,
     ) {
@@ -9763,7 +9785,7 @@ impl ShellScene {
         );
         let current = projection.geometry.kind == self.active_pane()
             && projection.view.selection.focus == Some(entry_index);
-        let paint = dolphin_item_paint(
+        let paint = dolphin_item_paint_with_palette(
             projection.view.view_mode,
             item_rect,
             visual_rect,
@@ -9773,6 +9795,7 @@ impl ShellScene {
             current,
             entry_index % 2 == 1,
             self.ui_scale(),
+            item_palette,
         );
 
         if let Some(background) = paint.alternate_background {
@@ -9818,13 +9841,14 @@ impl ShellScene {
         }
         if dnd_hovered {
             let radius = self.scale_metric(7.0);
+            let drop_target = theme.drop_target();
             push_clipped_rounded_highlight(
                 vertices,
                 content_rect,
                 content_clip,
                 radius,
-                [1.000, 0.953, 0.820, 0.82],
-                [0.924, 0.518, 0.043, 0.98],
+                drop_target.fill,
+                drop_target.border,
                 self.scale_metric(1.0),
                 size,
             );
@@ -9839,7 +9863,7 @@ impl ShellScene {
             pixmap_layout,
             content_clip,
         ) {
-            push_fallback_icon(vertices, entry, icon_rect, content_clip, size);
+            push_fallback_file_icon(vertices, entry, icon_rect, content_clip, theme, size);
         }
 
         let text_color = pane_item_text_color(projection.view.view_mode, entry, selected, theme);
@@ -10327,6 +10351,7 @@ impl ShellScene {
         let icon_size = self.scale_metric(PLACES_ICON_SIZE);
         let text_height = self.text_line_height();
         let small_text_height = self.small_text_line_height();
+        let item_palette = DolphinItemPalette::from_shell_theme(theme);
         text.push_label_aligned(
             "Places",
             ViewRect {
@@ -10384,7 +10409,7 @@ impl ShellScene {
                         row,
                         panel,
                         self.scale_metric(BREEZE_ITEM_ROUNDNESS),
-                        place_row_background_color(active, hovered),
+                        place_row_background_color_for_palette(active, hovered, item_palette),
                         size,
                     );
                 } else if hovered {
@@ -10393,18 +10418,19 @@ impl ShellScene {
                         row,
                         panel,
                         self.scale_metric(BREEZE_ITEM_ROUNDNESS),
-                        place_row_background_color(active, hovered),
+                        place_row_background_color_for_palette(active, hovered, item_palette),
                         size,
                     );
                 }
                 if dnd_hovered {
+                    let drop_target = theme.drop_target();
                     push_clipped_rounded_highlight(
                         vertices,
                         row,
                         panel,
                         self.scale_metric(8.0),
-                        [1.000, 0.953, 0.820, 0.88],
-                        [0.924, 0.518, 0.043, 0.98],
+                        drop_target.fill,
+                        drop_target.border,
                         self.scale_metric(1.0),
                         size,
                     );
@@ -10428,7 +10454,16 @@ impl ShellScene {
                     panel,
                     IconDrawLayer::Content,
                 ) {
-                    push_place_icon(vertices, icon, panel, place, active, self.ui_scale(), size);
+                    push_place_icon(
+                        vertices,
+                        icon,
+                        panel,
+                        place,
+                        active,
+                        theme,
+                        self.ui_scale(),
+                        size,
+                    );
                 }
                 text.push_label_aligned(
                     &place.label,
@@ -10471,6 +10506,7 @@ impl ShellScene {
         if let Some(ShellDropTarget::PlacesGap { index }) = self.dnd_hover_target.as_ref()
             && let Some(gap) = self.place_gap_rect_for_index(*index, size)
         {
+            let drop_target = theme.drop_target();
             let line_height = self.scale_metric(3.0).max(2.0);
             let line = ViewRect {
                 x: gap.x + self.scale_metric(8.0),
@@ -10483,13 +10519,13 @@ impl ShellScene {
                 line,
                 panel,
                 line_height / 2.0,
-                [0.924, 0.518, 0.043, 1.0],
+                drop_target.marker,
                 size,
             );
         }
 
         if let Some((track, thumb)) = self.places_scrollbar_rects(size) {
-            push_scrollbar(vertices, track, thumb, panel, size);
+            push_scrollbar(vertices, track, thumb, panel, theme.scrollbar(), size);
         }
         self.push_places_task_area(vertices, text, size, theme);
     }
@@ -10574,6 +10610,7 @@ impl ShellScene {
         &self,
         vertices: &mut Vec<QuadVertex>,
         projection: &ShellPaneProjection<'_>,
+        theme: ShellTheme,
         size: PhysicalSize<u32>,
     ) {
         let Some(rect) = self.rubber_band.as_ref().and_then(RubberBand::active_rect) else {
@@ -10581,15 +10618,9 @@ impl ShellScene {
         };
         let content_clip = projection.geometry.content;
         let rect = pane_content_rect_to_screen(rect, projection);
-        push_clipped_rect(vertices, rect, content_clip, [0.28, 0.58, 0.92, 0.18], size);
-        push_clipped_rect_outline(
-            vertices,
-            rect,
-            content_clip,
-            1.5,
-            [0.45, 0.72, 0.98, 0.92],
-            size,
-        );
+        let rubber_band = theme.rubber_band();
+        push_clipped_rect(vertices, rect, content_clip, rubber_band.fill, size);
+        push_clipped_rect_outline(vertices, rect, content_clip, 1.5, rubber_band.border, size);
     }
 
     fn pane_status(&self, pane: ShellPaneView<'_>, visible_items: usize) -> ShellPaneStatus {
@@ -10628,6 +10659,7 @@ impl ShellScene {
         &self,
         vertices: &mut Vec<QuadVertex>,
         projection: &ShellPaneProjection<'_>,
+        theme: ShellTheme,
         size: PhysicalSize<u32>,
     ) {
         let body = ViewRect {
@@ -10645,7 +10677,7 @@ impl ShellScene {
                 width: body.width,
                 height: 1.0,
             },
-            [0.875, 0.890, 0.910, 1.0],
+            theme.divider(),
             size,
         );
     }
@@ -10654,6 +10686,7 @@ impl ShellScene {
         &self,
         vertices: &mut Vec<QuadVertex>,
         projection: &ShellPaneProjection<'_>,
+        theme: ShellTheme,
         size: PhysicalSize<u32>,
     ) -> bool {
         let Some((track, thumb)) = self.content_scrollbar_rects_for_projection(projection) else {
@@ -10665,7 +10698,7 @@ impl ShellScene {
             width: size.width.max(1) as f32,
             height: size.height.max(1) as f32,
         };
-        push_scrollbar(vertices, track, thumb, screen, size);
+        push_scrollbar(vertices, track, thumb, screen, theme.scrollbar(), size);
         true
     }
 
@@ -10673,6 +10706,7 @@ impl ShellScene {
         &self,
         vertices: &mut Vec<QuadVertex>,
         text: &mut TextFrameBuilder<'_>,
+        theme: ShellTheme,
         size: PhysicalSize<u32>,
     ) {
         let Some(drag) = self.internal_drag.as_ref().filter(|drag| drag.active) else {
@@ -10703,23 +10737,17 @@ impl ShellScene {
             .y
             .min((screen.bottom() - rect.height - self.scale_metric(8.0)).max(0.0));
 
+        let preview_colors = theme.drag_preview();
         shell::context_menu::paint::push_context_menu_shadow(vertices, rect, screen, scale, size);
         push_clipped_rounded_rect(
             vertices,
             rect,
             screen,
             self.scale_metric(7.0),
-            [1.000, 1.000, 1.000, 0.94],
+            preview_colors.surface,
             size,
         );
-        push_clipped_rect_outline(
-            vertices,
-            rect,
-            screen,
-            1.0,
-            [0.784, 0.808, 0.839, 0.96],
-            size,
-        );
+        push_clipped_rect_outline(vertices, rect, screen, 1.0, preview_colors.border, size);
 
         let icon_size = self.scale_metric(26.0);
         let icon = ViewRect {
@@ -10728,7 +10756,7 @@ impl ShellScene {
             width: icon_size,
             height: icon_size,
         };
-        self.push_drag_preview_icon(vertices, icon, screen, drag, size);
+        self.push_drag_preview_icon(vertices, icon, screen, drag, theme, size);
 
         let text_x = icon.right() + self.scale_metric(8.0);
         text.push_label_aligned(
@@ -10740,7 +10768,7 @@ impl ShellScene {
                 height: self.text_line_height(),
             },
             rect,
-            self.theme().primary_text(),
+            theme.primary_text(),
             LabelAlignment::Start,
         );
 
@@ -10757,7 +10785,7 @@ impl ShellScene {
                 badge,
                 screen,
                 badge_size / 2.0,
-                [0.114, 0.306, 0.847, 1.0],
+                preview_colors.badge,
                 size,
             );
             text.push_label_aligned(
@@ -10776,6 +10804,7 @@ impl ShellScene {
         icon: ViewRect,
         clip: ViewRect,
         drag: &ShellInternalDrag,
+        theme: ShellTheme,
         size: PhysicalSize<u32>,
     ) {
         match &drag.source {
@@ -10783,13 +10812,22 @@ impl ShellScene {
                 if let Some(view) = self.pane_view(*pane)
                     && let Some(entry) = view.entries.get(*index)
                 {
-                    push_fallback_icon(vertices, entry, icon, clip, size);
+                    push_fallback_file_icon(vertices, entry, icon, clip, theme, size);
                     return;
                 }
             }
             ShellInternalDragSource::Place { index } => {
                 if let Some(place) = self.places.get(*index) {
-                    push_place_icon(vertices, icon, clip, place, false, self.ui_scale(), size);
+                    push_place_icon(
+                        vertices,
+                        icon,
+                        clip,
+                        place,
+                        false,
+                        theme,
+                        self.ui_scale(),
+                        size,
+                    );
                     return;
                 }
             }
@@ -10799,7 +10837,7 @@ impl ShellScene {
             icon,
             clip,
             self.scale_metric(6.0),
-            [0.918, 0.945, 1.000, 1.0],
+            theme.toolbar_button(true).fill,
             size,
         );
     }
@@ -17797,51 +17835,18 @@ fn point_distance(left: ViewPoint, right: ViewPoint) -> f32 {
     ((left.x - right.x).powi(2) + (left.y - right.y).powi(2)).sqrt()
 }
 
-fn push_scrollbar(
-    vertices: &mut Vec<QuadVertex>,
-    track: ViewRect,
-    thumb: ViewRect,
-    clip: ViewRect,
-    size: PhysicalSize<u32>,
-) {
-    let track_radius = track.width.min(track.height) / 2.0;
-    let thumb_radius = thumb.width.min(thumb.height) / 2.0;
-    push_clipped_rounded_rect(
-        vertices,
-        track,
-        clip,
-        track_radius,
-        [0.902, 0.922, 0.945, 1.0],
-        size,
-    );
-    push_clipped_rounded_rect(
-        vertices,
-        thumb,
-        clip,
-        thumb_radius,
-        [0.596, 0.647, 0.714, 1.0],
-        size,
-    );
-}
-
 fn push_location_bar_icon(
     vertices: &mut Vec<QuadVertex>,
     bounds: ViewRect,
     clip: ViewRect,
     active: bool,
+    theme: ShellTheme,
     scale_factor: f32,
     size: PhysicalSize<u32>,
 ) {
-    let fg = if active {
-        [0.122, 0.310, 0.749, 1.0]
-    } else {
-        [0.294, 0.318, 0.357, 1.0]
-    };
-    let bg = if active {
-        [0.918, 0.945, 1.000, 1.0]
-    } else {
-        [0.933, 0.945, 0.961, 1.0]
-    };
+    let colors = theme.toolbar_button(active);
+    let fg = colors.icon;
+    let bg = colors.fill;
     push_clipped_rounded_rect(
         vertices,
         bounds,
@@ -17889,10 +17894,11 @@ fn push_place_icon(
     clip: ViewRect,
     place: &ShellPlace,
     active: bool,
+    theme: ShellTheme,
     scale_factor: f32,
     size: PhysicalSize<u32>,
 ) {
-    let (fg, bg) = place_icon_colors(place, active);
+    let (fg, bg) = place_icon_colors(place, active, theme);
     push_clipped_rounded_rect(
         vertices,
         rect,
@@ -17910,9 +17916,23 @@ fn push_place_icon(
     }
 }
 
-fn place_icon_colors(place: &ShellPlace, active: bool) -> ([f32; 4], [f32; 4]) {
+fn place_icon_colors(place: &ShellPlace, active: bool, theme: ShellTheme) -> ([f32; 4], [f32; 4]) {
     if active {
-        return ([0.122, 0.310, 0.749, 1.0], [0.918, 0.945, 1.000, 1.0]);
+        let colors = theme.toolbar_button(true);
+        return (colors.icon, colors.fill);
+    }
+    if theme.is_dark() {
+        return if place.trash {
+            ([0.973, 0.444, 0.444, 1.0], [0.286, 0.102, 0.102, 1.0])
+        } else if place.network {
+            (theme.accent(), theme.toolbar_button(true).fill)
+        } else if place.root {
+            ([0.580, 0.639, 0.718, 1.0], theme.field())
+        } else if place.editable {
+            ([0.188, 0.839, 0.514, 1.0], [0.063, 0.220, 0.145, 1.0])
+        } else {
+            ([0.953, 0.612, 0.071, 1.0], [0.286, 0.196, 0.102, 1.0])
+        };
     }
     if place.trash {
         ([0.690, 0.282, 0.282, 1.0], [1.000, 0.922, 0.922, 1.0])
@@ -18045,65 +18065,6 @@ fn details_size_label(entry: &Entry) -> String {
         "-".to_string()
     } else {
         format_size(entry.size_bytes)
-    }
-}
-
-fn push_fallback_icon(
-    vertices: &mut Vec<QuadVertex>,
-    entry: &Entry,
-    icon_rect: ViewRect,
-    content_clip: ViewRect,
-    size: PhysicalSize<u32>,
-) {
-    if entry.is_dir {
-        let tab = ViewRect {
-            x: icon_rect.x + icon_rect.width * 0.12,
-            y: icon_rect.y + icon_rect.height * 0.16,
-            width: icon_rect.width * 0.42,
-            height: icon_rect.height * 0.18,
-        };
-        let body = ViewRect {
-            x: icon_rect.x + icon_rect.width * 0.08,
-            y: icon_rect.y + icon_rect.height * 0.28,
-            width: icon_rect.width * 0.84,
-            height: icon_rect.height * 0.56,
-        };
-        push_clipped_rect(vertices, tab, content_clip, [0.96, 0.70, 0.26, 1.0], size);
-        push_clipped_rect(vertices, body, content_clip, [0.90, 0.58, 0.18, 1.0], size);
-    } else {
-        let body = ViewRect {
-            x: icon_rect.x + icon_rect.width * 0.18,
-            y: icon_rect.y + icon_rect.height * 0.10,
-            width: icon_rect.width * 0.64,
-            height: icon_rect.height * 0.78,
-        };
-        let stripe = ViewRect {
-            x: body.x,
-            y: body.y,
-            width: body.width,
-            height: body.height * 0.22,
-        };
-        push_clipped_rect(vertices, body, content_clip, file_color(entry), size);
-        push_clipped_rect(
-            vertices,
-            stripe,
-            content_clip,
-            [0.76, 0.80, 0.86, 1.0],
-            size,
-        );
-    }
-}
-
-fn file_color(entry: &Entry) -> [f32; 4] {
-    let mime = entry.mime_type.as_deref().unwrap_or_default();
-    if mime.starts_with("image/") {
-        [0.50, 0.70, 0.56, 1.0]
-    } else if mime.starts_with("video/") || mime.starts_with("audio/") {
-        [0.69, 0.55, 0.82, 1.0]
-    } else if mime.contains("text") || mime.contains("json") || mime.contains("xml") {
-        [0.38, 0.60, 0.84, 1.0]
-    } else {
-        [0.55, 0.60, 0.68, 1.0]
     }
 }
 
@@ -20383,7 +20344,7 @@ mod tests {
             scene.ui_scale(),
             Vec::new(),
         );
-        scene.push_drag_preview_overlay(&mut vertices, &mut text, size);
+        scene.push_drag_preview_overlay(&mut vertices, &mut text, scene.theme(), size);
         assert!(!vertices.is_empty());
 
         let valid_gap = scene.place_row_rects(size)[1].1;

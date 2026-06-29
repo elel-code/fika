@@ -1,7 +1,7 @@
 use cosmic_text::Color as TextColor;
 
 use crate::shell::tasks::ShellTaskStatusKind;
-use crate::shell::theme::{ShellTheme, UiColor};
+use crate::shell::theme::{ShellScrollbarColors, ShellTheme, UiColor};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct PopupTheme {
@@ -22,6 +22,8 @@ pub(crate) struct PopupTheme {
     pub(crate) marker_neutral: UiColor,
     pub(crate) warning_header: UiColor,
     pub(crate) warning_divider: UiColor,
+    pub(crate) selection_fill: UiColor,
+    pub(crate) scrollbar: ShellScrollbarColors,
     pub(crate) title_text: TextColor,
     pub(crate) body_text: TextColor,
     pub(crate) muted_text: TextColor,
@@ -87,6 +89,8 @@ impl PopupTheme {
             marker_neutral: [0.608, 0.674, 0.753, 1.0],
             warning_header: [1.000, 0.957, 0.890, 1.0],
             warning_divider: [0.906, 0.737, 0.490, 1.0],
+            selection_fill: [0.918, 0.945, 1.000, 1.0],
+            scrollbar: shell.scrollbar(),
             title_text: TextColor::rgb(31, 37, 45),
             body_text: TextColor::rgb(48, 56, 66),
             muted_text: TextColor::rgb(100, 113, 128),
@@ -122,6 +126,8 @@ impl PopupTheme {
             marker_neutral: [0.580, 0.639, 0.718, 1.0],
             warning_header: [0.286, 0.196, 0.102, 1.0],
             warning_divider: [0.588, 0.361, 0.090, 1.0],
+            selection_fill: [0.102, 0.173, 0.286, 1.0],
+            scrollbar: shell.scrollbar(),
             title_text: shell.primary_text(),
             body_text: shell.primary_text(),
             muted_text: shell.muted_text(),
@@ -160,7 +166,9 @@ mod tests {
             dark_shell.task_status_color(ShellTaskStatusKind::Failed)
         );
         assert_eq!(dark.border, dark_shell.divider());
+        assert_ne!(light.selection_fill, dark.selection_fill);
         assert_eq!(light.list_row_background(false), light.input);
         assert_eq!(dark.list_row_background(true), dark.row_alt);
+        assert_eq!(dark.scrollbar, dark_shell.scrollbar());
     }
 }

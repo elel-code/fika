@@ -37,4 +37,5 @@ pub(crate) mod tasks;
 pub(crate) mod theme;
 pub(crate) mod transfer;
 pub(crate) mod trash_conflict;
+pub(crate) mod ui_chrome;
 pub(crate) mod window_semantics;

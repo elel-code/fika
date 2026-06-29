@@ -228,9 +228,25 @@ Deepin reference:
 - Source: /home/yk/Code/fika/reference/dde-file-manager/src/plugins/filemanager/dfmplugin-workspace/views/baseitemdelegate.cpp；/home/yk/Code/fika/reference/dde-file-manager/src/dfm-base/widgets/dfmwindow/filemanagerwindow.cpp
 - Symbol: BaseItemDelegate uses DPalette/DPaletteHelper/DGuiApplicationHelper；FileManagerWindow connects DGuiApplicationHelper::themeTypeChanged and DPlatformTheme::iconThemeNameChanged
 - Deepin boundary: item delegate 和 window chrome 不直接散落 light/dark 常量，而从 DTK palette/theme helper 接收颜色和主题变更。
-- Fika mapping: src/shell/theme.rs::ShellTheme / ShellToolbarButtonColors；src/shell/popup/style.rs::PopupTheme；src/shell/context_menu/paint.rs::ContextMenuPaintTheme；src/shell/status/paint.rs::PaneStatusBarPaint / PlacesTaskAreaPaint；src/main.rs::ShellScene::theme / build_frame / render_*_dialog.
-- Divergence: Fika 没有 DTK/QPalette；目前先建立静态 light/dark token table。status paint、app toolbar、Places sidebar、filter bar、location bar、details header、item text color、popup/dialog paint 和 context/drop menu chrome 已直接消费 theme token 或模块 adapter，旧的 surface/chrome/divider/text helper 与 `POPUP_*` 常量被删除；main frame、text prewarm 和 detached dialog render 路径按 pass 复用同一个 theme，避免逐 item/label/dialog 重复构造 theme/text colors。action glyph 的语义色仍保留在 context menu 模块内，避免把操作含义色混入全局 palette。
-- Verification: cargo fmt；cargo check；cargo test theme_mode_selects_light_and_dark_palettes；cargo test popup_theme_follows_shell_theme_mode；cargo test context_menu_theme_follows_shell_theme_mode；cargo test pane_status_text_is_plain_pane_state；cargo test task_area_opens_detail_dialog_and_clear_keeps_running_tasks_visible；cargo test；git diff --check。
+- Fika mapping: src/shell/theme.rs::ShellTheme / ShellToolbarButtonColors；src/shell/dolphin/style.rs::DolphinItemPalette；src/shell/popup/style.rs::PopupTheme；src/shell/context_menu/paint.rs::ContextMenuPaintTheme；src/shell/status/paint.rs::PaneStatusBarPaint / PlacesTaskAreaPaint；src/shell/ui_chrome.rs::push_scrollbar / FallbackIconPalette；src/main.rs::ShellScene::theme / build_frame / render_*_dialog.
+- Divergence: Fika 没有 DTK/QPalette；目前先建立静态 light/dark token table。status paint、app toolbar、Places sidebar、filter bar、location bar、details header、item text color、item hover/selection/focus palette、scrollbar、rubber band、DnD drop target、drag preview、fallback file icon、popup/dialog paint 和 context/drop menu chrome 已直接消费 theme token 或模块 adapter，旧的 surface/chrome/divider/text helper 与 `POPUP_*` 常量被删除；main frame、text prewarm 和 detached dialog render 路径按 pass 复用同一个 theme，pane item palette 也从逐 item 构造改为每 projection/pass 构造一次后下传，避免高频 paint 路径重复派生 palette。action glyph 的语义色仍保留在 context menu 模块内，避免把操作含义色混入全局 palette。
+- Verification: cargo fmt；cargo check；cargo test theme_mode_selects_light_and_dark_palettes；cargo test dark_item_palette_uses_shell_theme_tokens；cargo test popup_theme_follows_shell_theme_mode；cargo test context_menu_theme_follows_shell_theme_mode；cargo test fallback_icon_palette_follows_shell_theme；cargo test open_with_dialog_size_is_stable_when_search_results_change；cargo test pane_status_text_is_plain_pane_state；cargo test task_area_opens_detail_dialog_and_clear_keeps_running_tasks_visible；cargo test；git diff --check。
+```
+
+### UI chrome paint palette
+
+```text
+Deepin reference:
+- Source: /home/yk/Code/fika/reference/dde-file-manager/src/plugins/filemanager/dfmplugin-workspace/views/baseitemdelegate.cpp；/home/yk/Code/fika/reference/dde-file-manager/src/plugins/filemanager/dfmplugin-workspace/utils/viewdrawhelper.cpp
+- Symbol: BaseItemDelegate::paintGroupBackground / paintGroupHeader；ViewDrawHelper::renderDragPixmap / drawDragCount / drawDragText
+- Deepin boundary: view delegate 和 drag pixmap 绘制使用 widget palette、DPaletteHelper 与局部 helper 生成视觉色和 drag badge/text，不把主题色散落在事件或 model 层。
+Dolphin reference:
+- Source: /home/yk/Code/fika/reference/dolphin/src/kitemviews/kitemlistview.cpp；/home/yk/Code/fika/reference/dolphin/src/kitemviews/kitemlistwidget.cpp
+- Symbol: KItemListView::paint；KItemListWidget::paint
+- Dolphin boundary: item view paint 入口按 view/widget 状态消费已有 palette/paint option，布局、model 和 expensive role work 不在每个 item paint 中反复派生 UI chrome 状态。
+- Fika mapping: src/shell/theme.rs::ShellScrollbarColors / ShellRubberBandColors / ShellDropTargetColors / ShellDragPreviewColors；src/shell/popup/style.rs::PopupTheme::scrollbar；src/shell/ui_chrome.rs::push_scrollbar / push_fallback_file_icon / FallbackIconPalette；src/main.rs::push_rubber_band_for_projection / push_drag_preview_overlay / ShellScene::push_pane_projection。
+- Divergence: Fika 没有 Qt/DTK painter palette，仍需要手写 quad/text/icon 绘制；因此全局 chrome 色放在 `ShellTheme`，fallback file icon 保留局部 `FallbackIconPalette`，Open With 通过 `PopupTheme` 转发 scrollbar 色。pane item palette 改为每 projection/pass 构造一次，减少滚动和重绘路径里的重复 palette 派生。
+- Verification: cargo fmt；cargo check；cargo test theme_mode_selects_light_and_dark_palettes；cargo test popup_theme_follows_shell_theme_mode；cargo test dark_item_palette_uses_shell_theme_tokens；cargo test fallback_icon_palette_follows_shell_theme；cargo test open_with_dialog_size_is_stable_when_search_results_change。
 ```
 
 ## Review 检查项

@@ -218,6 +218,14 @@ dialog、render damage 和异步操作持续演进提供稳定边界。
   `Vec<String>`。task status 的容量、finish/update/cancel/dismiss/clear 也集中到
   `ShellTaskStatusStore`，后续 async operation dispatcher 可以直接接管这个 store，
   而不是散落修改 `VecDeque + changes`。
+- UI chrome theme 边界：
+  参考 Deepin `BaseItemDelegate` / `ViewDrawHelper` 通过 palette/helper 获取绘制色的
+  组织方式，Fika 把 scrollbar、rubber band、DnD drop target、drag preview、fallback
+  file icon 等旧 light-only 常量接入 `ShellTheme` token 或 `src/shell/ui_chrome.rs`
+  的局部 paint palette；Places、pane item 和 Open With scrollbar 不再各自硬编码浅色
+  Breeze 常量。pane item 绘制也从每 item 构造 `DolphinItemPalette` 改为每
+  projection/pass 构造一次后下传，后续继续拆 item/places paint 模块时可以直接沿用
+  paint input + palette 的边界。
 - Theme token 系统：
   参考 Dolphin/Qt 通过 `KColorScheme` / `QPalette` 统一分发 view、window、text、
   highlight 等角色色的边界，并开始引入
@@ -226,9 +234,12 @@ dialog、render damage 和异步操作持续演进提供稳定边界。
   chrome/sidebar/divider、field/details header、文本角色、toolbar button 角色和
   task status 色。status paint、app toolbar、Places sidebar、filter bar、location
   bar、details header 和 item text color 已直接消费 `ShellTheme`，旧的 surface/chrome/text
-  helper 被删除，main frame 与 text prewarm 路径也改为按 pass 复用 theme。这样后续继续
-  按 Deepin delegate 的角色色边界迁移时，不需要在每个绘制函数里散落 dark/light 分支
-  和重复构造 `TextColor`。
+  helper 被删除，main frame 与 text prewarm 路径也改为按 pass 复用 theme。
+  `src/shell/dolphin/style.rs::DolphinItemPalette` 把 Dolphin item hover/selection/focus
+  语义映射到 Fika light/dark token，pane item、details alternate row、Places row 和
+  Open With selection 不再固定使用浅色 Breeze 常量。这样后续继续按 Deepin delegate
+  的角色色边界迁移时，不需要在每个绘制函数里散落 dark/light 分支和重复构造
+  `TextColor`。
 - Popup / menu theme adapters：
   `src/shell/popup/style.rs::PopupTheme` 作为 `ShellTheme` 到 dialog/popup paint 的模块
   adapter，集中承载 backdrop、surface、header、input、button、warning 和 status

@@ -50,6 +50,32 @@ pub(crate) struct ShellToolbarButtonColors {
     pub(crate) icon: UiColor,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ShellScrollbarColors {
+    pub(crate) track: UiColor,
+    pub(crate) thumb: UiColor,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ShellRubberBandColors {
+    pub(crate) fill: UiColor,
+    pub(crate) border: UiColor,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ShellDropTargetColors {
+    pub(crate) fill: UiColor,
+    pub(crate) border: UiColor,
+    pub(crate) marker: UiColor,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ShellDragPreviewColors {
+    pub(crate) surface: UiColor,
+    pub(crate) border: UiColor,
+    pub(crate) badge: UiColor,
+}
+
 impl ShellTheme {
     pub(crate) fn for_dark_mode(dark_mode: bool) -> Self {
         match ShellThemeMode::from_dark_mode(dark_mode) {
@@ -154,6 +180,62 @@ impl ShellTheme {
         }
     }
 
+    pub(crate) fn scrollbar(self) -> ShellScrollbarColors {
+        match self.mode {
+            ShellThemeMode::Light => ShellScrollbarColors {
+                track: [0.902, 0.922, 0.945, 1.0],
+                thumb: [0.596, 0.647, 0.714, 1.0],
+            },
+            ShellThemeMode::Dark => ShellScrollbarColors {
+                track: [0.145, 0.157, 0.176, 1.0],
+                thumb: [0.420, 0.466, 0.545, 1.0],
+            },
+        }
+    }
+
+    pub(crate) fn rubber_band(self) -> ShellRubberBandColors {
+        match self.mode {
+            ShellThemeMode::Light => ShellRubberBandColors {
+                fill: [0.280, 0.580, 0.920, 0.18],
+                border: [0.450, 0.720, 0.980, 0.92],
+            },
+            ShellThemeMode::Dark => ShellRubberBandColors {
+                fill: [0.184, 0.435, 0.929, 0.24],
+                border: [0.576, 0.773, 0.992, 0.88],
+            },
+        }
+    }
+
+    pub(crate) fn drop_target(self) -> ShellDropTargetColors {
+        match self.mode {
+            ShellThemeMode::Light => ShellDropTargetColors {
+                fill: [1.000, 0.953, 0.820, 0.82],
+                border: [0.924, 0.518, 0.043, 0.98],
+                marker: [0.924, 0.518, 0.043, 1.0],
+            },
+            ShellThemeMode::Dark => ShellDropTargetColors {
+                fill: [0.286, 0.196, 0.102, 0.86],
+                border: [0.953, 0.612, 0.071, 0.95],
+                marker: [0.953, 0.612, 0.071, 1.0],
+            },
+        }
+    }
+
+    pub(crate) fn drag_preview(self) -> ShellDragPreviewColors {
+        match self.mode {
+            ShellThemeMode::Light => ShellDragPreviewColors {
+                surface: [1.000, 1.000, 1.000, 0.94],
+                border: [0.784, 0.808, 0.839, 0.96],
+                badge: [0.114, 0.306, 0.847, 1.0],
+            },
+            ShellThemeMode::Dark => ShellDragPreviewColors {
+                surface: [0.145, 0.157, 0.176, 0.96],
+                border: [0.420, 0.466, 0.545, 0.96],
+                badge: self.accent,
+            },
+        }
+    }
+
     pub(crate) fn task_status_color(self, kind: ShellTaskStatusKind) -> UiColor {
         match kind {
             ShellTaskStatusKind::Running => self.task_running,
@@ -234,5 +316,10 @@ mod tests {
             [0.255, 0.278, 0.310, 1.0]
         );
         assert_eq!(light.toolbar_button(true).fill, [0.918, 0.945, 1.000, 1.0]);
+        assert_eq!(light.scrollbar().track, [0.902, 0.922, 0.945, 1.0]);
+        assert_eq!(dark.scrollbar().track, [0.145, 0.157, 0.176, 1.0]);
+        assert_eq!(light.rubber_band().fill, [0.280, 0.580, 0.920, 0.18]);
+        assert_eq!(dark.drop_target().marker, [0.953, 0.612, 0.071, 1.0]);
+        assert_eq!(dark.drag_preview().surface, [0.145, 0.157, 0.176, 0.96]);
     }
 }
