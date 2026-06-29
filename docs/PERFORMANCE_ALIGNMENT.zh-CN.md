@@ -109,8 +109,8 @@ Dolphin reference:
 - Source: /home/yk/Code/fika/reference/dolphin/src/kitemviews/kitemlistview.cpp
 - Symbol: KItemListView::paint
 - Dolphin boundary: View paint 入口只处理 view/widget 绘制，窗口系统的 backing surface 与 expose/recover 由 Qt 图形栈统一承担。
-- Fika mapping: src/main.rs WgpuState::acquire_surface_frame / render / render_detached_dialog。
-- Divergence: 无直接 Dolphin wgpu surface reference；Fika 需要显式处理 wgpu Surface lost/outdated/timeout/validation，但把 main/dialog 的 acquire/recover 合并成单一 frame surface 边界，避免 detached dialog 继续维护独立错误策略。
+- Fika mapping: src/main.rs WgpuState::acquire_surface_frame / begin_surface_frame_encoding / submit_surface_frame / render / render_detached_dialog。
+- Divergence: 无直接 Dolphin wgpu surface reference；Fika 需要显式处理 wgpu Surface lost/outdated/timeout/validation、texture view/encoder 创建和 submit/present/frame counter，但把 main/dialog 的 acquire/recover/encode setup/present 合并成单一 frame surface 边界，避免 detached dialog 继续维护独立错误策略。
 - Verification: cargo test surface_frame_context_keeps_dialog_suboptimal_recovery_local；cargo check；cargo test；git diff --check。
 ```
 

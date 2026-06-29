@@ -12668,6 +12668,33 @@ impl WgpuState {
         }
     }
 
+    fn submit_surface_frame(
+        &mut self,
+        window: &dyn Window,
+        frame: wgpu::SurfaceTexture,
+        encoder: wgpu::CommandEncoder,
+    ) -> u64 {
+        self.queue.submit(Some(encoder.finish()));
+        window.pre_present_notify();
+        frame.present();
+        self.frame_count += 1;
+        self.frame_count
+    }
+
+    fn begin_surface_frame_encoding(
+        &self,
+        frame: &wgpu::SurfaceTexture,
+        label: &'static str,
+    ) -> (wgpu::TextureView, wgpu::CommandEncoder) {
+        let view = frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some(label) });
+        (view, encoder)
+    }
+
     fn prewarm_scene_caches(&mut self, scene: &mut ShellScene, reason: &'static str) {
         let total_start = Instant::now();
         let metadata_result_stats = scene.drain_metadata_role_results();
@@ -12940,14 +12967,8 @@ impl WgpuState {
         let (swash_images, swash_outlines, swash_reset) =
             self.text_renderer.trim_text_engine_caches();
 
-        let view = frame
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("fika-wgpu-detached-dialog-frame"),
-            });
+        let (view, mut encoder) =
+            self.begin_surface_frame_encoding(&frame, "fika-wgpu-detached-dialog-frame");
         let [r, g, b, a] = POPUP_SURFACE;
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -12976,16 +12997,12 @@ impl WgpuState {
             self.text_renderer.draw(&mut pass);
             self.icon_renderer.draw_overlay(&mut pass);
         }
-        self.queue.submit(Some(encoder.finish()));
-        window.pre_present_notify();
-        frame.present();
-
-        self.frame_count += 1;
-        if self.frame_count == 1 || fika_frame_log_all_enabled() {
+        let presented_frame = self.submit_surface_frame(window, frame, encoder);
+        if presented_frame == 1 || fika_frame_log_all_enabled() {
             fika_log!(
                 "[fika-wgpu] detached-dialog kind={} frame={} reason={} size={}x{} scale={:.2} icons={} icon_deferred={} text_labels={} text_deferred={} swash={}/{} reset={} vertex_uploads={}/{}",
                 dialog_label,
-                self.frame_count,
+                presented_frame,
                 reason,
                 self.size.width,
                 self.size.height,
@@ -13320,14 +13337,7 @@ impl WgpuState {
         let quad_upload_us = quad_upload_start.elapsed().as_micros();
 
         let encode_present_start = Instant::now();
-        let view = frame
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("fika-wgpu-frame"),
-            });
+        let (view, mut encoder) = self.begin_surface_frame_encoding(&frame, "fika-wgpu-frame");
 
         if render_damage.kind != ShellRenderDamageKind::Clean {
             let load = if render_damage.kind == ShellRenderDamageKind::Full {
@@ -13392,14 +13402,11 @@ impl WgpuState {
             self.retained_scene.draw(&mut pass);
         }
 
-        self.queue.submit(Some(encoder.finish()));
-        window.pre_present_notify();
-        frame.present();
+        let presented_frame = self.submit_surface_frame(window, frame, encoder);
         let encode_present_us = encode_present_start.elapsed().as_micros();
 
         let view_switch_rendered = self.rendered_view_switches != scene.view_switches;
-        self.frame_count += 1;
-        for report in self.frame_latency.drain_presented(self.frame_count) {
+        for report in self.frame_latency.drain_presented(presented_frame) {
             fika_log!(
                 "[fika-wgpu] frame-latency event={} count={} requested_after_frame={} presented_frame={} frames={} reason={}",
                 report.event,
@@ -13410,7 +13417,7 @@ impl WgpuState {
                 reason
             );
         }
-        if self.frame_count == 1
+        if presented_frame == 1
             || view_switch_rendered
             || force_log
             || fika_frame_log_all_enabled()
