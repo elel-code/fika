@@ -1,8 +1,11 @@
+use std::path::PathBuf;
+
 use winit::dpi::PhysicalSize;
 use winit::event_loop::ActiveEventLoop;
 
 use crate::FikaWgpuApp;
 use crate::shell::location::LocationDraftPurpose;
+use crate::shell::pane::ShellPaneId;
 use crate::shell::shortcuts::PathNavigationAction;
 use crate::shell::tasks::ShellTaskStatus;
 use fika_core::default_user_places_path;
@@ -157,6 +160,27 @@ impl FikaWgpuApp {
                     window.request_redraw();
                 }
             }
+        }
+    }
+
+    pub(crate) fn load_path_into_pane(
+        &mut self,
+        event_loop: &dyn ActiveEventLoop,
+        pane: ShellPaneId,
+        path: PathBuf,
+        reason: &'static str,
+    ) {
+        let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
+            return;
+        };
+        match self.scene.load_path_for_pane(pane, path, size) {
+            Ok(true) => self.present_scene_change(event_loop, reason),
+            Ok(false) => {
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+            }
+            Err(error) => fika_log!("[fika-wgpu] navigation-error {error}"),
         }
     }
 }

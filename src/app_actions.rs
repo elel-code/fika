@@ -1,11 +1,13 @@
 mod clipboard;
 mod device;
 mod dialog_commit;
+mod drag;
 mod launch;
 mod navigation;
 mod places;
 mod transfer;
 mod trash;
+mod view;
 
 use winit::event_loop::ActiveEventLoop;
 

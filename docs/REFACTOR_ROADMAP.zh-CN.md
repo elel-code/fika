@@ -57,6 +57,11 @@ dialog、render damage 和异步操作持续演进提供稳定边界。
   path navigation、reload、location commit、add network folder、add/remove place wrapper
   已迁入 `src/app_actions/navigation.rs` 和 `src/app_actions/places.rs`；`main.rs` 中保留
   `ShellScene` 的路径/places 状态变更 API 和事件路由。
+- View / Split / Drag 执行迁移：
+  view mode、hidden visibility、split pane toolbar/context wrapper 已迁入
+  `src/app_actions/view.rs`；`load_path_into_pane` 进入 `navigation.rs`；
+  trash restore conflict wrapper 进入 `trash.rs`；external drag enter/move/drop/left wrapper
+  进入 `src/app_actions/drag.rs`。
 - Open With query hit testing 收敛：
   search box 的 pointer hit test 进入 `src/shell/open_with/geometry.rs`，scene 的
   cursor 判断不再直接拼 query rect。
@@ -174,8 +179,8 @@ operation dispatcher。
 
 ## 当前推荐顺序
 
-1. Command / Action 层后续：external drag/drop menu 打开路径、split/view/toolbar wrapper
-   的 request 化。
+1. Command / Action 层后续：进一步收敛 keyboard/mouse event 中的内联 view switching、
+   zoom/scroll scheduling 和 selection activation。
 2. Async operation dispatcher。
 3. Render surface / frame pipeline。
 4. Animation registry。

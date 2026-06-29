@@ -1,0 +1,75 @@
+use winit::dpi::PhysicalSize;
+use winit::event_loop::ActiveEventLoop;
+
+use crate::shell::options::ShellViewMode;
+use crate::{FikaWgpuApp, save_show_hidden_setting, save_view_mode_setting};
+
+impl FikaWgpuApp {
+    pub(crate) fn set_user_view_mode(
+        &mut self,
+        view_mode: ShellViewMode,
+        size: PhysicalSize<u32>,
+    ) -> bool {
+        if !self.scene.set_view_mode(view_mode, size) {
+            return false;
+        }
+        if let Err(error) = save_view_mode_setting(&self.settings_path, view_mode) {
+            fika_log!("[fika-wgpu] settings-save-error {error}");
+        }
+        true
+    }
+
+    pub(crate) fn toggle_user_hidden_visibility(&mut self, size: PhysicalSize<u32>) -> bool {
+        if !self.scene.toggle_hidden_visibility(size) {
+            return false;
+        }
+        if let Err(error) = save_show_hidden_setting(&self.settings_path, self.scene.show_hidden) {
+            fika_log!("[fika-wgpu] settings-save-error {error}");
+        }
+        true
+    }
+
+    pub(crate) fn open_context_target_in_split_pane(
+        &mut self,
+        event_loop: &dyn ActiveEventLoop,
+        reason: &'static str,
+    ) {
+        let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
+            return;
+        };
+        match self.scene.open_split_pane_from_context(size) {
+            Ok(true) => self.present_scene_change(event_loop, reason),
+            Ok(false) => {
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+            }
+            Err(error) => {
+                fika_log!("[fika-wgpu] split-pane-error {error}");
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+            }
+        }
+    }
+
+    pub(crate) fn toggle_split_view_from_toolbar(&mut self, event_loop: &dyn ActiveEventLoop) {
+        let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
+            return;
+        };
+        match self.scene.toggle_split_view_from_toolbar(size) {
+            Ok(true) => self.present_scene_change(event_loop, "toolbar-split-view"),
+            Ok(false) => {
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+            }
+            Err(error) => {
+                fika_log!("[fika-wgpu] split-pane-error {error}");
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+            }
+        }
+    }
+}

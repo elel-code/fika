@@ -93,4 +93,26 @@ impl FikaWgpuApp {
             }
         }
     }
+
+    pub(crate) fn replace_trash_restore_conflicts(&mut self, event_loop: &dyn ActiveEventLoop) {
+        let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
+            return;
+        };
+        match self.scene.replace_trash_restore_conflicts(size) {
+            Ok(result) if result.success_count > 0 => {
+                self.present_scene_change(event_loop, "replace-trash-conflicts")
+            }
+            Ok(_) => {
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+            }
+            Err(error) => {
+                fika_log!("[fika-wgpu] trash-conflict-error {error}");
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+            }
+        }
+    }
 }
