@@ -2,7 +2,7 @@ use winit::dpi::PhysicalSize;
 use winit::event::{ElementState, KeyEvent};
 use winit::event_loop::ActiveEventLoop;
 
-use super::outcome::ShellActionOutcome;
+use super::outcome::{ShellActionEffect, ShellActionOutcome};
 use crate::shell::shortcuts::{
     LocationCommand, dark_mode_toggle_requested_for_key_event, escape_requested_for_key_event,
     file_keyboard_command_for_key_event, filter_command_for_key_event,
@@ -25,8 +25,8 @@ impl FikaWgpuApp {
             return;
         };
         let shortcut = self.modifiers.state().control_key() || self.modifiers.state().meta_key();
-        let outcome = self.dispatch_main_keyboard_input(event_loop, event, size, shortcut);
-        self.apply_action_outcome(event_loop, outcome);
+        let effect = self.dispatch_main_keyboard_input(event_loop, event, size, shortcut);
+        self.apply_action_effect(event_loop, effect);
     }
 
     fn dispatch_main_keyboard_input(
@@ -35,32 +35,32 @@ impl FikaWgpuApp {
         event: &KeyEvent,
         size: PhysicalSize<u32>,
         shortcut: bool,
-    ) -> ShellActionOutcome {
+    ) -> ShellActionEffect {
         if self.scene.is_trash_conflict_dialog_open() {
             if escape_requested_for_key_event(event) {
                 let changed = self.scene.close_trash_conflict_dialog();
-                return ShellActionOutcome::redraw_if(changed);
+                return ShellActionOutcome::redraw_if(changed).into();
             }
-            return ShellActionOutcome::None;
+            return ShellActionOutcome::None.into();
         }
         if self.scene.is_task_detail_dialog_open() {
             if escape_requested_for_key_event(event) {
                 let changed = self.scene.close_task_detail_dialog();
-                return ShellActionOutcome::redraw_if(changed);
+                return ShellActionOutcome::redraw_if(changed).into();
             }
-            return ShellActionOutcome::None;
+            return ShellActionOutcome::None.into();
         }
         if self.scene.is_properties_overlay_open() && escape_requested_for_key_event(event) {
             let changed = self.scene.close_properties_overlay();
-            return ShellActionOutcome::redraw_if(changed);
+            return ShellActionOutcome::redraw_if(changed).into();
         }
         if self.scene.is_drop_menu_open() && escape_requested_for_key_event(event) {
             let changed = self.scene.close_drop_menu();
-            return ShellActionOutcome::redraw_if(changed);
+            return ShellActionOutcome::redraw_if(changed).into();
         }
         if self.scene.is_context_menu_open() && escape_requested_for_key_event(event) {
             let changed = self.scene.close_context_menu();
-            return ShellActionOutcome::redraw_if(changed);
+            return ShellActionOutcome::redraw_if(changed).into();
         }
         if dark_mode_toggle_requested_for_key_event(
             event,
@@ -68,73 +68,74 @@ impl FikaWgpuApp {
             self.modifiers.state().shift_key(),
         ) {
             let changed = self.toggle_user_dark_mode();
-            return ShellActionOutcome::present_if(changed, "toggle-dark-mode");
+            return ShellActionOutcome::present_if(changed, "toggle-dark-mode").into();
         }
         if let Some(command) =
             location_command_for_key_event(event, shortcut, self.scene.is_location_editing())
         {
             if command == LocationCommand::Commit {
                 self.commit_location_draft(event_loop);
-                return ShellActionOutcome::None;
+                return ShellActionOutcome::None.into();
             } else {
                 let changed = self.scene.apply_location_command(command, size);
-                return ShellActionOutcome::redraw_if(changed);
+                return ShellActionOutcome::redraw_if(changed).into();
             }
         }
         if let Some(command) =
             filter_command_for_key_event(event, shortcut, self.scene.filter_active)
         {
             let changed = self.scene.apply_filter_command(command, size);
-            return ShellActionOutcome::redraw_if(changed);
+            return ShellActionOutcome::redraw_if(changed).into();
         }
         if let Some(command) = file_keyboard_command_for_key_event(event, shortcut) {
             self.perform_file_keyboard_command(event_loop, command);
-            return ShellActionOutcome::None;
+            return ShellActionOutcome::None.into();
         }
         if let Some(view_mode) = view_mode_for_key_event(event, shortcut) {
             let changed = self.set_user_view_mode(view_mode, size);
-            return ShellActionOutcome::present_if(changed, "switch-immediate");
+            return ShellActionOutcome::present_if(changed, "switch-immediate").into();
         }
         if shortcut && let Some(zoom_action) = zoom_action_for_key_event(event) {
             if self.scene.zoom(zoom_action, size) {
                 return ShellActionOutcome::Queue {
                     reason: "zoom",
                     redraw_frames: ZOOM_REDRAW_FRAMES,
-                };
+                }
+                .into();
             }
-            return ShellActionOutcome::None;
+            return ShellActionOutcome::None.into();
         }
         if let Some(command) = selection_command_for_key_event(event, shortcut) {
             let changed = self.scene.apply_selection_command(command);
-            return ShellActionOutcome::redraw_if(changed);
+            return ShellActionOutcome::redraw_if(changed).into();
         }
         if reload_requested_for_key_event(event, shortcut) {
             self.reload_scene_path(event_loop);
-            return ShellActionOutcome::None;
+            return ShellActionOutcome::None.into();
         }
         if hidden_toggle_requested_for_key_event(event, shortcut) {
             let changed = self.toggle_user_hidden_visibility(size);
-            return ShellActionOutcome::present_if(changed, "toggle-hidden");
+            return ShellActionOutcome::present_if(changed, "toggle-hidden").into();
         }
         if is_activation_key(&event.logical_key) {
             if let Some((pane, path)) = self.scene.selected_directory_path() {
-                self.load_path_into_pane(event_loop, pane, path, "activate-directory");
+                return ShellActionEffect::load_path(pane, path, "activate-directory");
             } else if let Some(request) = self.scene.selected_file_open_request() {
                 self.launch_open_file_request(&request);
             }
-            return ShellActionOutcome::None;
+            return ShellActionOutcome::None.into();
         }
         if let Some(action) =
             path_navigation_action_for_key(&event.logical_key, self.modifiers.state().alt_key())
         {
             self.perform_path_navigation(event_loop, action);
-            return ShellActionOutcome::None;
+            return ShellActionOutcome::None.into();
         }
         let Some(action) = navigation_action_for_key(&event.logical_key) else {
-            return ShellActionOutcome::None;
+            return ShellActionOutcome::None.into();
         };
         let extend = self.modifiers.state().shift_key();
         let changed = self.scene.navigate(action, extend, size);
-        ShellActionOutcome::redraw_if(changed)
+        ShellActionOutcome::redraw_if(changed).into()
     }
 }

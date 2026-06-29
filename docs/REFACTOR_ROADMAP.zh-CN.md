@@ -122,13 +122,22 @@ dialog、render damage 和异步操作持续演进提供稳定边界。
 - Pointer effect outcome 返回：
   主窗口 pointer button 入口统一 apply `ShellActionOutcome`；trash conflict、task
   detail、properties、context/drop menu fallback、left-button route、pane pointer 和
-  place pointer 的纯 UI 状态变化改为返回 outcome。导航、文件打开、设备/drop action
+  place pointer 的纯 UI 状态变化改为返回 outcome。路径导航、文件打开和 drop action
   等执行型分支继续调用现有 action executor 并返回 `None`，避免重复 apply。
-- Keyboard effect outcome 返回：
-  主窗口 keyboard 入口统一 apply `ShellActionOutcome`；modal escape、location/filter
+- Pointer button effect 返回：
+  主窗口 pointer button 分发进一步升级为返回 `ShellActionEffect`；普通 redraw/present
+  通过 `Outcome` 包装，places 打开目录、item 双击目录和 device mount 跳转通过
+  `LoadPath` 统一落地，pointer route 中间层不再直接触发路径加载。
+- Device action effect 边界：
+  `perform_device_action_request` 不再直接依赖 `ActiveEventLoop` 或自行 present /
+  navigation，而是返回 `ShellActionEffect`；context menu 和 pointer place activation
+  共享同一个 device 执行结果，后续可继续接入 async operation dispatcher 或动画调度。
+- Keyboard effect 返回：
+  主窗口 keyboard 入口统一 apply `ShellActionEffect`；modal escape、location/filter
   编辑、view/hidden/dark-mode、zoom、selection 和 keyboard navigation 等纯 UI /
-  设置变化返回 outcome。commit、reload、文件命令、路径导航、打开文件等执行型分支
-  继续调用现有 action executor 并返回 `None`。
+  设置变化通过 `Outcome` 返回，选中目录激活通过 `LoadPath` 返回。commit、reload、
+  文件命令、路径导航、打开文件等执行型分支继续调用现有 action executor 并返回
+  `None`。
 
 ## 下一步队列
 

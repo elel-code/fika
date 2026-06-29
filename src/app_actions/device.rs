@@ -1,6 +1,6 @@
 use winit::event_loop::ActiveEventLoop;
 
-use super::outcome::ShellActionOutcome;
+use super::outcome::{ShellActionEffect, ShellActionOutcome};
 use crate::shell::context_menu::ShellContextMenuAction;
 use crate::shell::metrics::WGPU_SHELL_PANE_ID;
 use crate::shell::tasks::ShellTaskStatus;
@@ -26,16 +26,16 @@ impl FikaWgpuApp {
             self.apply_window_action_outcome(ShellActionOutcome::Redraw);
             return;
         };
-        self.perform_device_action_request(event_loop, request);
+        let effect = self.perform_device_action_request(request);
+        self.apply_action_effect(event_loop, effect);
     }
 
     pub(crate) fn perform_device_action_request(
         &mut self,
-        event_loop: &dyn ActiveEventLoop,
         request: DeviceActionRequest,
-    ) {
+    ) -> ShellActionEffect {
         let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
-            return;
+            return ShellActionOutcome::None.into();
         };
         fika_log!(
             "[fika-wgpu] device-action-start action={} id={:?} label={:?}",
@@ -69,12 +69,9 @@ impl FikaWgpuApp {
         {
             Ok(()) => {
                 if let Some(path) = mount_point {
-                    self.load_path_into_pane(event_loop, request.pane, path, "device-mount");
+                    ShellActionEffect::load_path(request.pane, path, "device-mount")
                 } else {
-                    self.apply_action_outcome(
-                        event_loop,
-                        ShellActionOutcome::Present("device-action"),
-                    );
+                    ShellActionOutcome::Present("device-action").into()
                 }
             }
             Err(error) => {
@@ -83,7 +80,7 @@ impl FikaWgpuApp {
                     request.action.as_str(),
                     request.id
                 );
-                self.apply_window_action_outcome(ShellActionOutcome::Redraw);
+                ShellActionOutcome::Redraw.into()
             }
         }
     }

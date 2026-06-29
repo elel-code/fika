@@ -1,6 +1,9 @@
+use std::path::PathBuf;
+
 use winit::event_loop::ActiveEventLoop;
 
 use crate::FikaWgpuApp;
+use crate::shell::pane::ShellPaneId;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ShellActionOutcome {
@@ -53,7 +56,42 @@ impl ShellActionOutcome {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum ShellActionEffect {
+    Outcome(ShellActionOutcome),
+    LoadPath {
+        pane: ShellPaneId,
+        path: PathBuf,
+        reason: &'static str,
+    },
+}
+
+impl ShellActionEffect {
+    pub(crate) fn load_path(pane: ShellPaneId, path: PathBuf, reason: &'static str) -> Self {
+        Self::LoadPath { pane, path, reason }
+    }
+}
+
+impl From<ShellActionOutcome> for ShellActionEffect {
+    fn from(outcome: ShellActionOutcome) -> Self {
+        Self::Outcome(outcome)
+    }
+}
+
 impl FikaWgpuApp {
+    pub(crate) fn apply_action_effect(
+        &mut self,
+        event_loop: &dyn ActiveEventLoop,
+        effect: ShellActionEffect,
+    ) {
+        match effect {
+            ShellActionEffect::Outcome(outcome) => self.apply_action_outcome(event_loop, outcome),
+            ShellActionEffect::LoadPath { pane, path, reason } => {
+                self.load_path_into_pane(event_loop, pane, path, reason);
+            }
+        }
+    }
+
     pub(crate) fn apply_action_outcome(
         &mut self,
         event_loop: &dyn ActiveEventLoop,
@@ -149,6 +187,14 @@ mod tests {
                 reason: "queue",
                 redraw_frames: 3,
             }
+        );
+    }
+
+    #[test]
+    fn action_effect_wraps_plain_outcomes() {
+        assert_eq!(
+            ShellActionEffect::from(ShellActionOutcome::Redraw),
+            ShellActionEffect::Outcome(ShellActionOutcome::Redraw)
         );
     }
 }
