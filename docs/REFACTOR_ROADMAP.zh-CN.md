@@ -93,6 +93,16 @@ dialog、render damage 和异步操作持续演进提供稳定边界。
   `ShellActionOutcome` 增加 `merge` / `with_redraw_if`，用明确优先级合并 `Redraw`、
   `Queue` 和 `Present`；pointer effect 已开始使用组合式 redraw，后续 async
   completion、动画 timeline 和局部 dirty 可以继续返回 outcome 而不是立即触发表现。
+- Pointer effect outcome 返回：
+  主窗口 pointer button 入口统一 apply `ShellActionOutcome`；trash conflict、task
+  detail、properties、context/drop menu fallback、left-button route、pane pointer 和
+  place pointer 的纯 UI 状态变化改为返回 outcome。导航、文件打开、设备/drop action
+  等执行型分支继续调用现有 action executor 并返回 `None`，避免重复 apply。
+- Keyboard effect outcome 返回：
+  主窗口 keyboard 入口统一 apply `ShellActionOutcome`；modal escape、location/filter
+  编辑、view/hidden/dark-mode、zoom、selection 和 keyboard navigation 等纯 UI /
+  设置变化返回 outcome。commit、reload、文件命令、路径导航、打开文件等执行型分支
+  继续调用现有 action executor 并返回 `None`。
 
 ## 下一步队列
 
