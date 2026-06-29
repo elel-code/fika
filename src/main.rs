@@ -271,6 +271,7 @@ use shell::open_with::{
     open_with_applications_for_mime,
 };
 use shell::options::{ShellViewMode, parse_start_options};
+use shell::paint::ShellPaintPalettes;
 use shell::pane::{
     ShellPaneGeometry, ShellPaneId, ShellPaneProjection, ShellPaneScrollMetrics,
     ShellPaneSplitMetrics, ShellPaneState, ShellPaneStates, ShellPaneView, ShellPaneVisibleItem,
@@ -368,7 +369,10 @@ use shell::transfer::{
     transfer_paths_with_privilege, transfer_runtime_failure,
 };
 use shell::trash_conflict::{ShellTrashConflictDialog, TrashConflictDialogClick};
-use shell::ui_chrome::{push_fallback_file_icon, push_scrollbar};
+use shell::ui_chrome::{
+    PlaceIconPaint, push_fallback_file_icon, push_location_bar_icon, push_place_icon,
+    push_scrollbar,
+};
 use shell::window_semantics::{
     ShellWindowCloseRequestTarget, ShellWindowRole, apply_window_platform_semantics,
     window_manager_close_request_exits_application,
@@ -2393,6 +2397,17 @@ impl ShellPlace {
     }
 }
 
+fn place_icon_paint(place: &ShellPlace, active: bool) -> PlaceIconPaint {
+    PlaceIconPaint::from_flags(
+        active,
+        place.trash,
+        place.network,
+        place.root,
+        place.editable,
+        place.marker == "D" || place.marker == "/",
+    )
+}
+
 fn shell_place_icon_name(
     marker: &str,
     trash: bool,
@@ -2605,6 +2620,7 @@ struct ShellScene {
     icons_layout_height_cache: IconsLayoutHeightCache,
     active_pane: ShellPaneId,
     places: Vec<ShellPlace>,
+    trash_has_items: bool,
     location_draft: Option<ShellLocationDraft>,
     filter_active: bool,
     filter_pattern: String,
@@ -2711,6 +2727,7 @@ impl ShellScene {
 
         let slot0_pane = ShellPaneState::from_entries(path, view_mode, entries, show_hidden, "");
         let places = build_shell_places();
+        let trash_has_items = file_ops::trash_has_items();
         fika_log!("[fika-wgpu] places entries={}", places.len());
 
         Ok(Self {
@@ -2719,6 +2736,7 @@ impl ShellScene {
             icons_layout_height_cache: IconsLayoutHeightCache::new(),
             active_pane: ShellPaneId::SLOT_0,
             places,
+            trash_has_items,
             location_draft: None,
             filter_active: false,
             filter_pattern: String::new(),
@@ -2798,6 +2816,15 @@ impl ShellScene {
     fn invalidate_all_layout_caches(&self) {
         self.compact_layout_cache.clear();
         self.icons_layout_height_cache.clear();
+    }
+
+    fn record_trash_content_change(&mut self) {
+        self.trash_changes += 1;
+        self.trash_has_items = file_ops::trash_has_items();
+    }
+
+    fn trash_place_has_items(&self, place: &ShellPlace) -> bool {
+        place.trash && self.trash_has_items
     }
 
     #[cfg(test)]
@@ -7253,7 +7280,7 @@ impl ShellScene {
             }
         };
         let changed = result.changed();
-        self.trash_changes += 1;
+        self.record_trash_content_change();
         fika_log!(
             "[fika-wgpu] trash paths={} success={} failure={} privileged={} changes={}",
             paths.len(),
@@ -7418,7 +7445,7 @@ impl ShellScene {
         let affected_dir = self
             .pane_state(pane_to_reload)
             .map(|state| state.path.clone());
-        self.trash_changes += 1;
+        self.record_trash_content_change();
         fika_log!(
             "[fika-wgpu] trash-view action={} success={} failure={} conflicts={} changes={}",
             action,
@@ -7525,7 +7552,7 @@ impl ShellScene {
                 return Err(error);
             }
         };
-        self.trash_changes += 1;
+        self.record_trash_content_change();
         fika_log!(
             "[fika-wgpu] trash paths={} success={} failure={} privileged={} changes={}",
             paths.len(),
@@ -8904,7 +8931,8 @@ impl ShellScene {
             .iter()
             .map(|projection| self.folder_preview_role_candidate_count_for_projection(projection))
             .sum();
-        let theme = self.theme();
+        let paint = ShellPaintPalettes::from_shell_theme(self.theme());
+        let theme = paint.shell;
 
         push_rect(
             &mut vertices,
@@ -8918,7 +8946,7 @@ impl ShellScene {
             size,
         );
         self.push_app_toolbar(&mut vertices, size, theme);
-        self.push_places_sidebar(&mut vertices, text, icons, size, theme);
+        self.push_places_sidebar(&mut vertices, text, icons, size, paint);
         if let Some(metrics) = self.split_pane_metrics(size) {
             push_rect(&mut vertices, metrics.divider, theme.divider(), size);
         }
@@ -8926,28 +8954,27 @@ impl ShellScene {
         let mut content_scrollbar_visible = false;
         for projection in projections {
             let scrollbar_visible =
-                self.push_pane_projection(&mut vertices, text, icons, projection, size, theme);
+                self.push_pane_projection(&mut vertices, text, icons, projection, size, paint);
             if projection.geometry.kind == ShellPaneId::SLOT_0 {
                 content_scrollbar_visible = scrollbar_visible;
             }
             self.queue_thumbnail_read_ahead_for_projection(projection, icons);
         }
         if let Some(overlay_text) = overlay_text {
-            let popup_theme = PopupTheme::from_shell_theme(theme);
             self.push_drag_preview_overlay(&mut overlay_vertices, overlay_text, theme, size);
             self.push_drop_menu_overlay(&mut overlay_vertices, overlay_text, theme, size);
             self.push_context_menu_overlay(&mut overlay_vertices, overlay_text, icons, theme, size);
-            self.push_properties_overlay(&mut overlay_vertices, overlay_text, popup_theme, size);
+            self.push_properties_overlay(&mut overlay_vertices, overlay_text, paint.popup, size);
             self.push_task_detail_dialog_overlay(
                 &mut overlay_vertices,
                 overlay_text,
-                popup_theme,
+                paint.popup,
                 size,
             );
             self.push_trash_conflict_dialog_overlay(
                 &mut overlay_vertices,
                 overlay_text,
-                popup_theme,
+                paint.popup,
                 size,
             );
         }
@@ -9645,8 +9672,9 @@ impl ShellScene {
         icons: &mut IconFrameBuilder<'_>,
         projection: &ShellPaneProjection<'_>,
         size: PhysicalSize<u32>,
-        theme: ShellTheme,
+        paint: ShellPaintPalettes,
     ) -> bool {
+        let theme = paint.shell;
         let pane_id = projection.geometry.kind;
         let pane = projection.geometry.pane;
         let top_bar = projection.geometry.top_bar;
@@ -9689,7 +9717,7 @@ impl ShellScene {
             self.push_details_header_for_projection(vertices, text, projection, size, theme);
         }
 
-        let item_palette = DolphinItemPalette::from_shell_theme(theme);
+        let item_palette = paint.dolphin_item;
         for item in projection.visible_items.iter().copied() {
             self.push_pane_item(
                 vertices,
@@ -10299,8 +10327,9 @@ impl ShellScene {
         text: &mut TextFrameBuilder<'_>,
         icons: &mut IconFrameBuilder<'_>,
         size: PhysicalSize<u32>,
-        theme: ShellTheme,
+        paint: ShellPaintPalettes,
     ) {
+        let theme = paint.shell;
         let sidebar = self.places_sidebar_rect(size);
         if sidebar.width <= 0.0 || sidebar.height <= 0.0 {
             return;
@@ -10351,7 +10380,7 @@ impl ShellScene {
         let icon_size = self.scale_metric(PLACES_ICON_SIZE);
         let text_height = self.text_line_height();
         let small_text_height = self.small_text_line_height();
-        let item_palette = DolphinItemPalette::from_shell_theme(theme);
+        let item_palette = paint.dolphin_item;
         text.push_label_aligned(
             "Places",
             ViewRect {
@@ -10441,7 +10470,7 @@ impl ShellScene {
                     width: icon_size,
                     height: icon_size,
                 };
-                let trash_has_items = place.trash && file_ops::trash_has_items();
+                let trash_has_items = self.trash_place_has_items(place);
                 let icon_name = if trash_has_items {
                     "user-trash-full"
                 } else {
@@ -10458,8 +10487,7 @@ impl ShellScene {
                         vertices,
                         icon,
                         panel,
-                        place,
-                        active,
+                        place_icon_paint(place, active),
                         theme,
                         self.ui_scale(),
                         size,
@@ -10822,8 +10850,7 @@ impl ShellScene {
                         vertices,
                         icon,
                         clip,
-                        place,
-                        false,
+                        place_icon_paint(place, false),
                         theme,
                         self.ui_scale(),
                         size,
@@ -17835,225 +17862,6 @@ fn point_distance(left: ViewPoint, right: ViewPoint) -> f32 {
     ((left.x - right.x).powi(2) + (left.y - right.y).powi(2)).sqrt()
 }
 
-fn push_location_bar_icon(
-    vertices: &mut Vec<QuadVertex>,
-    bounds: ViewRect,
-    clip: ViewRect,
-    active: bool,
-    theme: ShellTheme,
-    scale_factor: f32,
-    size: PhysicalSize<u32>,
-) {
-    let colors = theme.toolbar_button(active);
-    let fg = colors.icon;
-    let bg = colors.fill;
-    push_clipped_rounded_rect(
-        vertices,
-        bounds,
-        clip,
-        (5.0 * scale_factor).round().max(1.0),
-        bg,
-        size,
-    );
-    let s = |value: f32| {
-        (value * bounds.width.min(bounds.height) / 18.0)
-            .round()
-            .max(1.0)
-    };
-    push_clipped_rounded_rect(
-        vertices,
-        ViewRect {
-            x: bounds.x + s(5.0),
-            y: bounds.y + s(6.0),
-            width: s(7.0),
-            height: s(3.0),
-        },
-        clip,
-        s(1.0),
-        fg,
-        size,
-    );
-    push_clipped_rounded_rect(
-        vertices,
-        ViewRect {
-            x: bounds.x + s(4.0),
-            y: bounds.y + s(8.0),
-            width: bounds.width - s(8.0),
-            height: bounds.height - s(11.0),
-        },
-        clip,
-        s(2.0),
-        fg,
-        size,
-    );
-}
-
-fn push_place_icon(
-    vertices: &mut Vec<QuadVertex>,
-    rect: ViewRect,
-    clip: ViewRect,
-    place: &ShellPlace,
-    active: bool,
-    theme: ShellTheme,
-    scale_factor: f32,
-    size: PhysicalSize<u32>,
-) {
-    let (fg, bg) = place_icon_colors(place, active, theme);
-    push_clipped_rounded_rect(
-        vertices,
-        rect,
-        clip,
-        (6.0 * scale_factor).round().max(1.0),
-        bg,
-        size,
-    );
-    if place.trash {
-        push_place_trash_icon(vertices, rect, clip, fg, scale_factor, size);
-    } else if place.root || place.network || place.marker == "D" || place.marker == "/" {
-        push_place_drive_icon(vertices, rect, clip, fg, scale_factor, size);
-    } else {
-        push_place_folder_icon(vertices, rect, clip, fg, scale_factor, size);
-    }
-}
-
-fn place_icon_colors(place: &ShellPlace, active: bool, theme: ShellTheme) -> ([f32; 4], [f32; 4]) {
-    if active {
-        let colors = theme.toolbar_button(true);
-        return (colors.icon, colors.fill);
-    }
-    if theme.is_dark() {
-        return if place.trash {
-            ([0.973, 0.444, 0.444, 1.0], [0.286, 0.102, 0.102, 1.0])
-        } else if place.network {
-            (theme.accent(), theme.toolbar_button(true).fill)
-        } else if place.root {
-            ([0.580, 0.639, 0.718, 1.0], theme.field())
-        } else if place.editable {
-            ([0.188, 0.839, 0.514, 1.0], [0.063, 0.220, 0.145, 1.0])
-        } else {
-            ([0.953, 0.612, 0.071, 1.0], [0.286, 0.196, 0.102, 1.0])
-        };
-    }
-    if place.trash {
-        ([0.690, 0.282, 0.282, 1.0], [1.000, 0.922, 0.922, 1.0])
-    } else if place.network {
-        ([0.184, 0.435, 0.929, 1.0], [0.918, 0.945, 1.000, 1.0])
-    } else if place.root {
-        ([0.294, 0.318, 0.357, 1.0], [0.902, 0.922, 0.945, 1.0])
-    } else if place.editable {
-        ([0.192, 0.486, 0.310, 1.0], [0.910, 0.973, 0.925, 1.0])
-    } else {
-        ([0.749, 0.435, 0.047, 1.0], [1.000, 0.953, 0.855, 1.0])
-    }
-}
-
-fn place_icon_metric(value: f32, scale_factor: f32) -> f32 {
-    (value * scale_factor).round().max(1.0)
-}
-
-fn push_place_folder_icon(
-    vertices: &mut Vec<QuadVertex>,
-    bounds: ViewRect,
-    clip: ViewRect,
-    fg: [f32; 4],
-    scale_factor: f32,
-    size: PhysicalSize<u32>,
-) {
-    let s = |value| place_icon_metric(value, scale_factor);
-    push_clipped_rounded_rect(
-        vertices,
-        ViewRect {
-            x: bounds.x + s(5.0),
-            y: bounds.y + s(6.0),
-            width: s(7.0),
-            height: s(3.0),
-        },
-        clip,
-        s(1.0),
-        fg,
-        size,
-    );
-    push_clipped_rounded_rect(
-        vertices,
-        ViewRect {
-            x: bounds.x + s(4.0),
-            y: bounds.y + s(8.0),
-            width: bounds.width - s(8.0),
-            height: bounds.height - s(11.0),
-        },
-        clip,
-        s(2.0),
-        fg,
-        size,
-    );
-}
-
-fn push_place_drive_icon(
-    vertices: &mut Vec<QuadVertex>,
-    bounds: ViewRect,
-    clip: ViewRect,
-    fg: [f32; 4],
-    scale_factor: f32,
-    size: PhysicalSize<u32>,
-) {
-    let s = |value| place_icon_metric(value, scale_factor);
-    let body = ViewRect {
-        x: bounds.x + s(4.0),
-        y: bounds.y + s(5.0),
-        width: bounds.width - s(8.0),
-        height: bounds.height - s(10.0),
-    };
-    push_clipped_rounded_rect(vertices, body, clip, s(2.0), fg, size);
-    push_clipped_rect(
-        vertices,
-        ViewRect {
-            x: body.x + s(3.0),
-            y: body.bottom() - s(4.0),
-            width: body.width - s(6.0),
-            height: s(1.0),
-        },
-        clip,
-        [1.000, 1.000, 1.000, 0.75],
-        size,
-    );
-}
-
-fn push_place_trash_icon(
-    vertices: &mut Vec<QuadVertex>,
-    bounds: ViewRect,
-    clip: ViewRect,
-    fg: [f32; 4],
-    scale_factor: f32,
-    size: PhysicalSize<u32>,
-) {
-    let s = |value| place_icon_metric(value, scale_factor);
-    push_clipped_rect(
-        vertices,
-        ViewRect {
-            x: bounds.x + s(6.0),
-            y: bounds.y + s(5.0),
-            width: bounds.width - s(12.0),
-            height: s(2.0),
-        },
-        clip,
-        fg,
-        size,
-    );
-    push_clipped_rounded_rect(
-        vertices,
-        ViewRect {
-            x: bounds.x + s(5.0),
-            y: bounds.y + s(8.0),
-            width: bounds.width - s(10.0),
-            height: bounds.height - s(12.0),
-        },
-        clip,
-        s(2.0),
-        fg,
-        size,
-    );
-}
-
 fn view_mode_clear_color(view_mode: ShellViewMode, dark_mode: bool) -> wgpu::Color {
     ShellTheme::for_dark_mode(dark_mode).view_mode_clear(view_mode)
 }
@@ -18916,6 +18724,7 @@ mod tests {
                 ShellPlace::new("", "H", "Home", PathBuf::from("/tmp"), false),
                 ShellPlace::new("Devices", "/", "Root", PathBuf::from("/"), false),
             ],
+            trash_has_items: false,
             location_draft: None,
             filter_active: false,
             filter_pattern: String::new(),
@@ -27306,6 +27115,18 @@ text/plain=writer.desktop;\n",
             ShellPlace::new("", "B", "Project", PathBuf::from("/tmp/project"), true).icon_name,
             "folder-bookmark"
         );
+    }
+
+    #[test]
+    fn places_trash_full_indicator_uses_cached_state() {
+        let mut scene = test_scene(Vec::new(), ShellViewMode::Icons);
+        let trash = ShellPlace::new("", "Tr", "Trash", file_ops::trash_files_dir(), false);
+        let home = ShellPlace::new("", "H", "Home", PathBuf::from("/tmp/home"), false);
+
+        assert!(!scene.trash_place_has_items(&trash));
+        scene.trash_has_items = true;
+        assert!(scene.trash_place_has_items(&trash));
+        assert!(!scene.trash_place_has_items(&home));
     }
 
     #[test]

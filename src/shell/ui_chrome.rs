@@ -18,6 +18,278 @@ pub(crate) fn push_scrollbar(
     push_clipped_rounded_rect(vertices, thumb, clip, thumb_radius, colors.thumb, size);
 }
 
+pub(crate) fn push_location_bar_icon(
+    vertices: &mut Vec<QuadVertex>,
+    bounds: ViewRect,
+    clip: ViewRect,
+    active: bool,
+    theme: ShellTheme,
+    scale_factor: f32,
+    size: PhysicalSize<u32>,
+) {
+    let colors = theme.toolbar_button(active);
+    push_clipped_rounded_rect(
+        vertices,
+        bounds,
+        clip,
+        (5.0 * scale_factor).round().max(1.0),
+        colors.fill,
+        size,
+    );
+    let s = |value: f32| {
+        (value * bounds.width.min(bounds.height) / 18.0)
+            .round()
+            .max(1.0)
+    };
+    push_clipped_rounded_rect(
+        vertices,
+        ViewRect {
+            x: bounds.x + s(5.0),
+            y: bounds.y + s(6.0),
+            width: s(7.0),
+            height: s(3.0),
+        },
+        clip,
+        s(1.0),
+        colors.icon,
+        size,
+    );
+    push_clipped_rounded_rect(
+        vertices,
+        ViewRect {
+            x: bounds.x + s(4.0),
+            y: bounds.y + s(8.0),
+            width: bounds.width - s(8.0),
+            height: bounds.height - s(11.0),
+        },
+        clip,
+        s(2.0),
+        colors.icon,
+        size,
+    );
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PlaceIconShape {
+    Folder,
+    Drive,
+    Trash,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PlaceIconColorRole {
+    Folder,
+    Trash,
+    Network,
+    Root,
+    Editable,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlaceIconPaint {
+    pub(crate) shape: PlaceIconShape,
+    pub(crate) color_role: PlaceIconColorRole,
+    pub(crate) active: bool,
+}
+
+impl PlaceIconPaint {
+    pub(crate) fn from_flags(
+        active: bool,
+        trash: bool,
+        network: bool,
+        root: bool,
+        editable: bool,
+        drive_like: bool,
+    ) -> Self {
+        let shape = if trash {
+            PlaceIconShape::Trash
+        } else if root || network || drive_like {
+            PlaceIconShape::Drive
+        } else {
+            PlaceIconShape::Folder
+        };
+        let color_role = if trash {
+            PlaceIconColorRole::Trash
+        } else if network {
+            PlaceIconColorRole::Network
+        } else if root {
+            PlaceIconColorRole::Root
+        } else if editable {
+            PlaceIconColorRole::Editable
+        } else {
+            PlaceIconColorRole::Folder
+        };
+        Self {
+            shape,
+            color_role,
+            active,
+        }
+    }
+}
+
+pub(crate) fn push_place_icon(
+    vertices: &mut Vec<QuadVertex>,
+    rect: ViewRect,
+    clip: ViewRect,
+    paint: PlaceIconPaint,
+    theme: ShellTheme,
+    scale_factor: f32,
+    size: PhysicalSize<u32>,
+) {
+    let (fg, bg) = place_icon_colors(paint, theme);
+    push_clipped_rounded_rect(
+        vertices,
+        rect,
+        clip,
+        (6.0 * scale_factor).round().max(1.0),
+        bg,
+        size,
+    );
+    match paint.shape {
+        PlaceIconShape::Folder => {
+            push_place_folder_icon(vertices, rect, clip, fg, scale_factor, size)
+        }
+        PlaceIconShape::Drive => {
+            push_place_drive_icon(vertices, rect, clip, fg, scale_factor, size)
+        }
+        PlaceIconShape::Trash => {
+            push_place_trash_icon(vertices, rect, clip, fg, scale_factor, size)
+        }
+    }
+}
+
+fn place_icon_colors(paint: PlaceIconPaint, theme: ShellTheme) -> (UiColor, UiColor) {
+    if paint.active {
+        let colors = theme.toolbar_button(true);
+        return (colors.icon, colors.fill);
+    }
+    if theme.is_dark() {
+        return match paint.color_role {
+            PlaceIconColorRole::Trash => ([0.973, 0.444, 0.444, 1.0], [0.286, 0.102, 0.102, 1.0]),
+            PlaceIconColorRole::Network => (theme.accent(), theme.toolbar_button(true).fill),
+            PlaceIconColorRole::Root => ([0.580, 0.639, 0.718, 1.0], theme.field()),
+            PlaceIconColorRole::Editable => {
+                ([0.188, 0.839, 0.514, 1.0], [0.063, 0.220, 0.145, 1.0])
+            }
+            PlaceIconColorRole::Folder => ([0.953, 0.612, 0.071, 1.0], [0.286, 0.196, 0.102, 1.0]),
+        };
+    }
+    match paint.color_role {
+        PlaceIconColorRole::Trash => ([0.690, 0.282, 0.282, 1.0], [1.000, 0.922, 0.922, 1.0]),
+        PlaceIconColorRole::Network => ([0.184, 0.435, 0.929, 1.0], [0.918, 0.945, 1.000, 1.0]),
+        PlaceIconColorRole::Root => ([0.294, 0.318, 0.357, 1.0], [0.902, 0.922, 0.945, 1.0]),
+        PlaceIconColorRole::Editable => ([0.192, 0.486, 0.310, 1.0], [0.910, 0.973, 0.925, 1.0]),
+        PlaceIconColorRole::Folder => ([0.749, 0.435, 0.047, 1.0], [1.000, 0.953, 0.855, 1.0]),
+    }
+}
+
+fn place_icon_metric(value: f32, scale_factor: f32) -> f32 {
+    (value * scale_factor).round().max(1.0)
+}
+
+fn push_place_folder_icon(
+    vertices: &mut Vec<QuadVertex>,
+    bounds: ViewRect,
+    clip: ViewRect,
+    fg: UiColor,
+    scale_factor: f32,
+    size: PhysicalSize<u32>,
+) {
+    let s = |value| place_icon_metric(value, scale_factor);
+    push_clipped_rounded_rect(
+        vertices,
+        ViewRect {
+            x: bounds.x + s(5.0),
+            y: bounds.y + s(6.0),
+            width: s(7.0),
+            height: s(3.0),
+        },
+        clip,
+        s(1.0),
+        fg,
+        size,
+    );
+    push_clipped_rounded_rect(
+        vertices,
+        ViewRect {
+            x: bounds.x + s(4.0),
+            y: bounds.y + s(8.0),
+            width: bounds.width - s(8.0),
+            height: bounds.height - s(11.0),
+        },
+        clip,
+        s(2.0),
+        fg,
+        size,
+    );
+}
+
+fn push_place_drive_icon(
+    vertices: &mut Vec<QuadVertex>,
+    bounds: ViewRect,
+    clip: ViewRect,
+    fg: UiColor,
+    scale_factor: f32,
+    size: PhysicalSize<u32>,
+) {
+    let s = |value| place_icon_metric(value, scale_factor);
+    let body = ViewRect {
+        x: bounds.x + s(4.0),
+        y: bounds.y + s(5.0),
+        width: bounds.width - s(8.0),
+        height: bounds.height - s(10.0),
+    };
+    push_clipped_rounded_rect(vertices, body, clip, s(2.0), fg, size);
+    push_clipped_rect(
+        vertices,
+        ViewRect {
+            x: body.x + s(3.0),
+            y: body.bottom() - s(4.0),
+            width: body.width - s(6.0),
+            height: s(1.0),
+        },
+        clip,
+        [1.000, 1.000, 1.000, 0.75],
+        size,
+    );
+}
+
+fn push_place_trash_icon(
+    vertices: &mut Vec<QuadVertex>,
+    bounds: ViewRect,
+    clip: ViewRect,
+    fg: UiColor,
+    scale_factor: f32,
+    size: PhysicalSize<u32>,
+) {
+    let s = |value| place_icon_metric(value, scale_factor);
+    push_clipped_rect(
+        vertices,
+        ViewRect {
+            x: bounds.x + s(6.0),
+            y: bounds.y + s(5.0),
+            width: bounds.width - s(12.0),
+            height: s(2.0),
+        },
+        clip,
+        fg,
+        size,
+    );
+    push_clipped_rounded_rect(
+        vertices,
+        ViewRect {
+            x: bounds.x + s(5.0),
+            y: bounds.y + s(8.0),
+            width: bounds.width - s(10.0),
+            height: bounds.height - s(12.0),
+        },
+        clip,
+        s(2.0),
+        fg,
+        size,
+    );
+}
+
 pub(crate) fn push_fallback_file_icon(
     vertices: &mut Vec<QuadVertex>,
     entry: &Entry,
@@ -140,6 +412,28 @@ mod tests {
         assert_eq!(
             fallback_file_color_for_mime("video/mp4", dark),
             dark.media_file
+        );
+    }
+
+    #[test]
+    fn place_icon_paint_uses_semantic_shape_and_theme_colors() {
+        let paint = PlaceIconPaint::from_flags(false, false, true, false, false, false);
+        assert_eq!(paint.shape, PlaceIconShape::Drive);
+        assert_eq!(paint.color_role, PlaceIconColorRole::Network);
+
+        let dark = ShellTheme::for_dark_mode(true);
+        assert_eq!(
+            place_icon_colors(paint, dark),
+            (dark.accent(), dark.toolbar_button(true).fill)
+        );
+
+        let active = PlaceIconPaint::from_flags(true, false, false, false, false, false);
+        assert_eq!(
+            place_icon_colors(active, dark),
+            (
+                dark.toolbar_button(true).icon,
+                dark.toolbar_button(true).fill
+            )
         );
     }
 }

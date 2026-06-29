@@ -221,11 +221,17 @@ dialog、render damage 和异步操作持续演进提供稳定边界。
 - UI chrome theme 边界：
   参考 Deepin `BaseItemDelegate` / `ViewDrawHelper` 通过 palette/helper 获取绘制色的
   组织方式，Fika 把 scrollbar、rubber band、DnD drop target、drag preview、fallback
-  file icon 等旧 light-only 常量接入 `ShellTheme` token 或 `src/shell/ui_chrome.rs`
-  的局部 paint palette；Places、pane item 和 Open With scrollbar 不再各自硬编码浅色
-  Breeze 常量。pane item 绘制也从每 item 构造 `DolphinItemPalette` 改为每
-  projection/pass 构造一次后下传，后续继续拆 item/places paint 模块时可以直接沿用
-  paint input + palette 的边界。
+  file icon、location bar icon、Places fallback icon 等旧 light-only 常量接入
+  `ShellTheme` token 或 `src/shell/ui_chrome.rs` 的局部 paint palette；Places、pane item
+  和 Open With scrollbar 不再各自硬编码浅色 Breeze 常量。新增
+  `src/shell/paint.rs::ShellPaintPalettes` 作为 frame/pass 级 palette 汇聚边界，pane item
+  绘制也从每 item 构造 `DolphinItemPalette` 改为每 frame 构造一次后下传，后续继续拆
+  item/places paint 模块时可以直接沿用 paint input + palette 的边界。
+- Places trash 状态缓存：
+  参考 Dolphin `DolphinPlacesModel` 通过 `Trash::emptinessChanged` 更新 trash icon data
+  的 model 边界，Fika 将 Places 的 `user-trash-full` 判定从每帧 `file_ops::trash_has_items()`
+  目录扫描改为 `ShellScene::trash_has_items` 缓存；move-to-trash、trash view restore /
+  delete / empty 等内容变更入口统一刷新缓存，paint 阶段只读缓存状态。
 - Theme token 系统：
   参考 Dolphin/Qt 通过 `KColorScheme` / `QPalette` 统一分发 view、window、text、
   highlight 等角色色的边界，并开始引入
