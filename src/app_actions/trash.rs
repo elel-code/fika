@@ -1,5 +1,6 @@
 use winit::event_loop::ActiveEventLoop;
 
+use super::outcome::ShellActionOutcome;
 use crate::FikaWgpuApp;
 use crate::shell::context_menu::ShellContextMenuAction;
 use crate::shell::tasks::ShellTaskStatus;
@@ -12,11 +13,7 @@ impl FikaWgpuApp {
     ) {
         if action == ShellContextMenuAction::EmptyTrash {
             match self.start_async_trash_view_operation(action) {
-                Ok(()) => {
-                    if let Some(window) = self.window.as_ref() {
-                        window.request_redraw();
-                    }
-                }
+                Ok(()) => self.apply_window_action_outcome(ShellActionOutcome::Redraw),
                 Err(error) => {
                     fika_log!(
                         "[fika-wgpu] trash-view-error action={} {error}",
@@ -27,9 +24,7 @@ impl FikaWgpuApp {
                         error,
                         false,
                     ));
-                    if let Some(window) = self.window.as_ref() {
-                        window.request_redraw();
-                    }
+                    self.apply_window_action_outcome(ShellActionOutcome::Redraw);
                 }
             }
             return;
@@ -40,21 +35,15 @@ impl FikaWgpuApp {
         };
         match self.scene.perform_trash_view_context_action(action, size) {
             Ok(result) if result.success_count > 0 => {
-                self.present_scene_change(event_loop, action.as_str())
+                self.apply_action_outcome(event_loop, ShellActionOutcome::Present(action.as_str()));
             }
-            Ok(_) => {
-                if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
-            }
+            Ok(_) => self.apply_window_action_outcome(ShellActionOutcome::Redraw),
             Err(error) => {
                 fika_log!(
                     "[fika-wgpu] trash-view-error action={} {error}",
                     action.as_str()
                 );
-                if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
+                self.apply_window_action_outcome(ShellActionOutcome::Redraw);
             }
         }
     }
@@ -69,13 +58,9 @@ impl FikaWgpuApp {
         };
         match self.scene.move_context_target_to_trash(size, privileged) {
             Ok(result) if result.changed() => {
-                self.present_scene_change(event_loop, "move-to-trash")
+                self.apply_action_outcome(event_loop, ShellActionOutcome::Present("move-to-trash"));
             }
-            Ok(_) => {
-                if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
-            }
+            Ok(_) => self.apply_window_action_outcome(ShellActionOutcome::Redraw),
             Err(error) => {
                 fika_log!("[fika-wgpu] trash-error {error}");
                 self.scene.record_task_status(ShellTaskStatus::failed(
@@ -87,9 +72,7 @@ impl FikaWgpuApp {
                     error,
                     privileged,
                 ));
-                if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
+                self.apply_window_action_outcome(ShellActionOutcome::Redraw);
             }
         }
     }
@@ -100,18 +83,15 @@ impl FikaWgpuApp {
         };
         match self.scene.replace_trash_restore_conflicts(size) {
             Ok(result) if result.success_count > 0 => {
-                self.present_scene_change(event_loop, "replace-trash-conflicts")
+                self.apply_action_outcome(
+                    event_loop,
+                    ShellActionOutcome::Present("replace-trash-conflicts"),
+                );
             }
-            Ok(_) => {
-                if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
-            }
+            Ok(_) => self.apply_window_action_outcome(ShellActionOutcome::Redraw),
             Err(error) => {
                 fika_log!("[fika-wgpu] trash-conflict-error {error}");
-                if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
+                self.apply_window_action_outcome(ShellActionOutcome::Redraw);
             }
         }
     }

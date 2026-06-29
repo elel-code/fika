@@ -1,5 +1,6 @@
 use winit::event_loop::ActiveEventLoop;
 
+use super::outcome::ShellActionOutcome;
 use crate::FikaWgpuApp;
 use crate::shell::drop_menu::ShellDropOperationRequest;
 use crate::shell::tasks::ShellTaskStatus;
@@ -38,9 +39,7 @@ impl FikaWgpuApp {
                 "Clipboard is unavailable",
                 false,
             ));
-            if let Some(window) = self.window.as_ref() {
-                window.request_redraw();
-            }
+            self.apply_window_action_outcome(ShellActionOutcome::Redraw);
             return;
         };
         let text = match clipboard.load_text() {
@@ -52,9 +51,7 @@ impl FikaWgpuApp {
                     format!("Clipboard read failed: {error}"),
                     false,
                 ));
-                if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
+                self.apply_window_action_outcome(ShellActionOutcome::Redraw);
                 return;
             }
         };
@@ -72,9 +69,7 @@ impl FikaWgpuApp {
                     "No paste target pane",
                     false,
                 ));
-                if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
+                self.apply_window_action_outcome(ShellActionOutcome::Redraw);
                 return;
             };
             if is_network_path(&target_dir) {
@@ -83,9 +78,7 @@ impl FikaWgpuApp {
                     "Remote paste target is not available yet",
                     false,
                 ));
-                if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
+                self.apply_window_action_outcome(ShellActionOutcome::Redraw);
                 return;
             }
             if payload.paths.iter().any(|path| is_network_path(path)) {
@@ -94,9 +87,7 @@ impl FikaWgpuApp {
                     "Remote paste source is not available yet",
                     false,
                 ));
-                if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
+                self.apply_window_action_outcome(ShellActionOutcome::Redraw);
                 return;
             }
             let mode = match payload.role {
@@ -111,9 +102,7 @@ impl FikaWgpuApp {
                 "Paste",
                 payload.role == FileClipboardRole::Cut,
             );
-            if let Some(window) = self.window.as_ref() {
-                window.request_redraw();
-            }
+            self.apply_window_action_outcome(ShellActionOutcome::Redraw);
             return;
         }
         let paste_result = if use_context {
@@ -131,13 +120,9 @@ impl FikaWgpuApp {
                 {
                     fika_log!("[fika-wgpu] clipboard-clear-error error={error}");
                 }
-                self.present_scene_change(event_loop, "paste");
+                self.apply_action_outcome(event_loop, ShellActionOutcome::Present("paste"));
             }
-            Ok(_) => {
-                if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
-            }
+            Ok(_) => self.apply_window_action_outcome(ShellActionOutcome::Redraw),
             Err(error) => {
                 fika_log!("[fika-wgpu] paste-error {error}");
                 self.scene.record_task_status(ShellTaskStatus::failed(
@@ -149,9 +134,7 @@ impl FikaWgpuApp {
                     error,
                     privileged,
                 ));
-                if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
+                self.apply_window_action_outcome(ShellActionOutcome::Redraw);
             }
         }
     }
@@ -168,9 +151,7 @@ impl FikaWgpuApp {
             if let Err(error) = self.scene.validate_drop_operation_request(&request) {
                 self.scene
                     .record_task_status(ShellTaskStatus::failed("Drop failed", error, false));
-                if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
+                self.apply_window_action_outcome(ShellActionOutcome::Redraw);
                 return;
             }
             self.start_async_transfer(
@@ -181,18 +162,14 @@ impl FikaWgpuApp {
                 request.mode.label(),
                 false,
             );
-            if let Some(window) = self.window.as_ref() {
-                window.request_redraw();
-            }
+            self.apply_window_action_outcome(ShellActionOutcome::Redraw);
             return;
         }
         match self.scene.perform_drop_operation_request(&request, size) {
-            Ok(result) if result.changed() => self.present_scene_change(event_loop, "dnd-drop"),
-            Ok(_) => {
-                if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
+            Ok(result) if result.changed() => {
+                self.apply_action_outcome(event_loop, ShellActionOutcome::Present("dnd-drop"));
             }
+            Ok(_) => self.apply_window_action_outcome(ShellActionOutcome::Redraw),
             Err(error) => {
                 fika_log!("[fika-wgpu] dnd-transfer-error {error}");
                 self.scene.record_task_status(ShellTaskStatus::failed(
@@ -204,9 +181,7 @@ impl FikaWgpuApp {
                     error,
                     request.privileged,
                 ));
-                if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
+                self.apply_window_action_outcome(ShellActionOutcome::Redraw);
             }
         }
     }

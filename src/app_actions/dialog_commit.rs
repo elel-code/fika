@@ -2,6 +2,7 @@ use std::path::Path;
 
 use winit::event_loop::ActiveEventLoop;
 
+use super::outcome::ShellActionOutcome;
 use crate::shell::create_rename::disk::{
     create_entry_on_disk_explicit, rename_entry_on_disk_explicit,
 };
@@ -78,13 +79,11 @@ impl FikaWgpuApp {
             Ok(_) => {
                 self.scene
                     .select_entry_by_name_in_pane(request.pane, &request.name, size);
-                self.present_scene_change(event_loop, "rename");
+                self.apply_action_outcome(event_loop, ShellActionOutcome::Present("rename"));
             }
             Err(error) => {
                 fika_log!("[fika-wgpu] rename-reload-error {error}");
-                if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
+                self.apply_window_action_outcome(ShellActionOutcome::Redraw);
             }
         }
     }
@@ -147,13 +146,11 @@ impl FikaWgpuApp {
             Ok(_) => {
                 self.scene
                     .select_entry_by_name_in_pane(request.pane, &request.name, size);
-                self.present_scene_change(event_loop, "create-new");
+                self.apply_action_outcome(event_loop, ShellActionOutcome::Present("create-new"));
             }
             Err(error) => {
                 fika_log!("[fika-wgpu] create-new-reload-error {error}");
-                if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
+                self.apply_window_action_outcome(ShellActionOutcome::Redraw);
             }
         }
     }

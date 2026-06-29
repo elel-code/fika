@@ -1,3 +1,4 @@
+use super::outcome::ShellActionOutcome;
 use crate::shell::ark::{self, extract::execute_ark_extract_and_trash};
 use crate::shell::metrics::WGPU_SHELL_PANE_ID;
 use crate::shell::open_file::{OpenFileRequest, default_open_file_launch_request};
@@ -18,9 +19,7 @@ impl FikaWgpuApp {
                 fika_log!("[fika-wgpu] open-error {error}");
                 self.scene
                     .record_task_status(ShellTaskStatus::failed("Open failed", error, false));
-                if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
+                self.apply_window_action_outcome(ShellActionOutcome::Redraw);
                 return;
             }
         };
@@ -41,9 +40,7 @@ impl FikaWgpuApp {
                 ),
             }
         });
-        if let Some(window) = self.window.as_ref() {
-            window.request_redraw();
-        }
+        self.apply_window_action_outcome(ShellActionOutcome::Redraw);
     }
 
     pub(crate) fn run_context_service_menu_action(&mut self, action_id: String) {
@@ -60,9 +57,7 @@ impl FikaWgpuApp {
                     error,
                     false,
                 ));
-                if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
+                self.apply_window_action_outcome(ShellActionOutcome::Redraw);
                 return;
             }
         };
@@ -88,9 +83,7 @@ impl FikaWgpuApp {
             .status_message();
             fika_log!("[fika-wgpu] service-menu-finished {status}");
         });
-        if let Some(window) = self.window.as_ref() {
-            window.request_redraw();
-        }
+        self.apply_window_action_outcome(ShellActionOutcome::Redraw);
     }
 
     pub(crate) fn run_ark_extract_and_trash_action(&mut self, request: ServiceMenuLaunchRequest) {
@@ -112,9 +105,7 @@ impl FikaWgpuApp {
             .unwrap_or_else(|err| format!("Cannot run {app_name} for {target_label}: {err}"));
             fika_log!("[fika-wgpu] service-menu-finished {status}");
         });
-        if let Some(window) = self.window.as_ref() {
-            window.request_redraw();
-        }
+        self.apply_window_action_outcome(ShellActionOutcome::Redraw);
     }
 
     pub(crate) fn open_context_target_with_application(&mut self, desktop_id: String) {
@@ -130,9 +121,7 @@ impl FikaWgpuApp {
                     error,
                     false,
                 ));
-                if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
+                self.apply_window_action_outcome(ShellActionOutcome::Redraw);
                 return;
             }
         };
@@ -158,6 +147,6 @@ impl FikaWgpuApp {
             .status_message();
             fika_log!("[fika-wgpu] open-with-finished {status}");
         });
-        self.request_main_redraw();
+        self.apply_window_action_outcome(ShellActionOutcome::Redraw);
     }
 }

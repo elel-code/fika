@@ -69,6 +69,11 @@ dialog、render damage 和异步操作持续演进提供稳定边界。
 - Open With query hit testing 收敛：
   search box 的 pointer hit test 进入 `src/shell/open_with/geometry.rs`，scene 的
   cursor 判断不再直接拼 query rect。
+- Action Outcome / Presentation 调度边界：
+  `src/app_actions/outcome.rs` 统一承载 action 执行后的 `None`、`Redraw`、`Queue`、
+  `Present` 结果；除 `outcome.rs` 外的 `src/app_actions/*` 不再直接调用主窗口
+  `request_redraw`、`queue_scene_change` 或 `present_scene_change`，后续动画、
+  render damage 和性能策略可以挂到统一表现调度入口。
 
 ## 下一步队列
 
@@ -83,6 +88,8 @@ dialog、render damage 和异步操作持续演进提供稳定边界。
 - view 命令执行器：zoom、view mode、hidden、split pane、reload。
 - 剪贴板、设备操作、trash、paste、drop 等副作用进一步 request 化，并逐步接入
   async operation dispatcher。
+- 将 action outcome 从“立即应用”继续推进为可组合 request/result，便于 async
+  completion、动画 timeline 和 render damage 共享同一套调度语义。
 
 完成标准：
 - `ApplicationHandler::window_event` 中的业务分支减少。
@@ -183,11 +190,14 @@ operation dispatcher。
 
 ## 当前推荐顺序
 
-1. Command / Action 层后续：进一步收敛 main pointer button 分支中的 dialog/context/drop
-   activation、selection activation 和 toolbar/path-bar click routing。
-2. Async operation dispatcher。
-3. Render surface / frame pipeline。
-4. Animation registry。
+1. Command / Action 层后续：把 main pointer button 分支中的 dialog/context/drop
+   activation、selection activation 和 toolbar/path-bar click routing 转成 action
+   request，并通过 action outcome 统一表现调度。
+2. Async operation dispatcher：优先承接 trash / paste / drop / create / rename 等文件
+   操作，把 completion 也映射为 action outcome。
+3. Animation registry：将 delete/reflow/hover 等 timeline 挂到 outcome 的 Queue /
+   Present 调度后面。
+4. Render surface / frame pipeline。
 5. ShellScene hit testing 模块化。
 6. Test fixture builder 穿插进行。
 7. Render dirty / damage 后续收敛穿插进行。

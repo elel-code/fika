@@ -1,6 +1,7 @@
 use winit::cursor::CursorIcon;
 use winit::dpi::PhysicalPosition;
 
+use super::outcome::ShellActionOutcome;
 use crate::{FikaWgpuApp, view_point_from_physical_position};
 
 impl FikaWgpuApp {
@@ -15,17 +16,12 @@ impl FikaWgpuApp {
         }
         let changed = self.scene.set_pointer(point, size);
         self.update_window_cursor_for_scene(size);
-        if changed && let Some(window) = self.window.as_ref() {
-            window.request_redraw();
-        }
+        self.apply_window_action_outcome(ShellActionOutcome::redraw_if(changed));
     }
 
     pub(crate) fn handle_main_pointer_left(&mut self) {
         self.set_window_cursor(CursorIcon::Default);
-        if self.scene.clear_pointer()
-            && let Some(window) = self.window.as_ref()
-        {
-            window.request_redraw();
-        }
+        let changed = self.scene.clear_pointer();
+        self.apply_window_action_outcome(ShellActionOutcome::redraw_if(changed));
     }
 }

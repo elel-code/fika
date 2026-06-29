@@ -1,6 +1,7 @@
 use winit::dpi::PhysicalSize;
 use winit::event_loop::ActiveEventLoop;
 
+use super::outcome::ShellActionOutcome;
 use crate::shell::options::ShellViewMode;
 use crate::{FikaWgpuApp, save_show_hidden_setting, save_view_mode_setting};
 
@@ -38,17 +39,11 @@ impl FikaWgpuApp {
             return;
         };
         match self.scene.open_split_pane_from_context(size) {
-            Ok(true) => self.present_scene_change(event_loop, reason),
-            Ok(false) => {
-                if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
-            }
+            Ok(true) => self.apply_action_outcome(event_loop, ShellActionOutcome::Present(reason)),
+            Ok(false) => self.apply_window_action_outcome(ShellActionOutcome::Redraw),
             Err(error) => {
                 fika_log!("[fika-wgpu] split-pane-error {error}");
-                if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
+                self.apply_window_action_outcome(ShellActionOutcome::Redraw);
             }
         }
     }
@@ -58,17 +53,14 @@ impl FikaWgpuApp {
             return;
         };
         match self.scene.toggle_split_view_from_toolbar(size) {
-            Ok(true) => self.present_scene_change(event_loop, "toolbar-split-view"),
-            Ok(false) => {
-                if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
-            }
+            Ok(true) => self.apply_action_outcome(
+                event_loop,
+                ShellActionOutcome::Present("toolbar-split-view"),
+            ),
+            Ok(false) => self.apply_window_action_outcome(ShellActionOutcome::Redraw),
             Err(error) => {
                 fika_log!("[fika-wgpu] split-pane-error {error}");
-                if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
+                self.apply_window_action_outcome(ShellActionOutcome::Redraw);
             }
         }
     }

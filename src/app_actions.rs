@@ -5,6 +5,7 @@ mod drag;
 mod keyboard;
 mod launch;
 mod navigation;
+mod outcome;
 mod places;
 mod pointer;
 mod scroll;
@@ -14,6 +15,7 @@ mod view;
 
 use winit::event_loop::ActiveEventLoop;
 
+use self::outcome::ShellActionOutcome;
 use crate::shell::action::{
     ContextMenuActionDispatch, ContextMenuCommandDispatch, FileKeyboardCommandDispatch,
     context_menu_command_dispatch, file_keyboard_command_dispatch,
@@ -31,12 +33,15 @@ impl FikaWgpuApp {
     ) {
         let (action, dispatch) = match context_menu_command_dispatch(command) {
             ContextMenuCommandDispatch::SetViewMode(view_mode) => {
-                if let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size)
-                    && self.set_user_view_mode(view_mode, size)
-                    && let Some(window) = self.window.as_ref()
-                {
-                    window.request_redraw();
-                }
+                let outcome = self
+                    .renderer
+                    .as_ref()
+                    .map(|renderer| renderer.size)
+                    .map(|size| {
+                        ShellActionOutcome::redraw_if(self.set_user_view_mode(view_mode, size))
+                    })
+                    .unwrap_or(ShellActionOutcome::None);
+                self.apply_window_action_outcome(outcome);
                 return;
             }
             ContextMenuCommandDispatch::CreateEntry { kind, privileged } => {
@@ -45,7 +50,7 @@ impl FikaWgpuApp {
                     .open_create_dialog_from_context_with_kind(kind, privileged)
                 {
                     self.ensure_create_dialog_window(event_loop);
-                    self.request_main_redraw();
+                    self.apply_window_action_outcome(ShellActionOutcome::Redraw);
                 }
                 return;
             }
@@ -58,9 +63,7 @@ impl FikaWgpuApp {
                 return;
             }
             ContextMenuCommandDispatch::RedrawOnly => {
-                if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
+                self.apply_window_action_outcome(ShellActionOutcome::Redraw);
                 return;
             }
             ContextMenuCommandDispatch::Action { action, dispatch } => (action, dispatch),
@@ -72,7 +75,7 @@ impl FikaWgpuApp {
                     .open_open_with_chooser_from_context(&self.mime_applications)
                 {
                     self.ensure_open_with_dialog_window(event_loop);
-                    self.request_main_redraw();
+                    self.apply_window_action_outcome(ShellActionOutcome::Redraw);
                 }
             }
             ContextMenuActionDispatch::Refresh => self.reload_scene_path(event_loop),
@@ -90,7 +93,10 @@ impl FikaWgpuApp {
                         "Current view updated",
                         false,
                     ));
-                    self.present_scene_change(event_loop, "context-toggle-hidden");
+                    self.apply_action_outcome(
+                        event_loop,
+                        ShellActionOutcome::Present("context-toggle-hidden"),
+                    );
                 }
             }
             ContextMenuActionDispatch::OpenContextTargetInSplitPane => {
@@ -105,27 +111,22 @@ impl FikaWgpuApp {
                     self.scene.active_pane_status_summary(),
                     false,
                 ));
-                if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
+                self.apply_window_action_outcome(ShellActionOutcome::Redraw);
             }
             ContextMenuActionDispatch::Properties => {
-                if self.scene.open_properties_overlay_from_context()
-                    && let Some(window) = self.window.as_ref()
-                {
-                    window.request_redraw();
-                }
+                let changed = self.scene.open_properties_overlay_from_context();
+                self.apply_window_action_outcome(ShellActionOutcome::redraw_if(changed));
             }
             ContextMenuActionDispatch::CreateNew => {
                 if self.scene.open_create_dialog_from_context() {
                     self.ensure_create_dialog_window(event_loop);
-                    self.request_main_redraw();
+                    self.apply_window_action_outcome(ShellActionOutcome::Redraw);
                 }
             }
             ContextMenuActionDispatch::Rename { privileged } => {
                 if self.scene.open_rename_dialog_from_context(privileged) {
                     self.ensure_rename_dialog_window(event_loop);
-                    self.request_main_redraw();
+                    self.apply_window_action_outcome(ShellActionOutcome::Redraw);
                 }
             }
             ContextMenuActionDispatch::AddToPlaces => self.add_context_target_to_places(event_loop),
@@ -163,9 +164,7 @@ impl FikaWgpuApp {
                         ));
                     }
                 }
-                if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
+                self.apply_window_action_outcome(ShellActionOutcome::Redraw);
             }
             ContextMenuActionDispatch::CopyLocation => {
                 match self.scene.context_target_copy_location_request() {
@@ -206,9 +205,7 @@ impl FikaWgpuApp {
                         ));
                     }
                 }
-                if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
+                self.apply_window_action_outcome(ShellActionOutcome::Redraw);
             }
             ContextMenuActionDispatch::Device => {
                 self.perform_device_context_action(event_loop, action)
@@ -241,9 +238,7 @@ impl FikaWgpuApp {
                         file_clipboard_role_as_str(role)
                     ),
                 }
-                if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
+                self.apply_window_action_outcome(ShellActionOutcome::Redraw);
             }
             FileKeyboardCommandDispatch::Paste => {
                 self.paste_from_clipboard_into_active_pane(event_loop)
@@ -251,11 +246,16 @@ impl FikaWgpuApp {
             FileKeyboardCommandDispatch::Rename => {
                 if self.scene.open_rename_dialog_from_active_selection(false) {
                     self.ensure_rename_dialog_window(event_loop);
-                    self.request_main_redraw();
+                    self.apply_window_action_outcome(ShellActionOutcome::Redraw);
                 }
             }
             FileKeyboardCommandDispatch::Delete => match self.scene.delete_active_selection(size) {
-                Ok(true) => self.present_scene_change(event_loop, "delete-selection"),
+                Ok(true) => {
+                    self.apply_action_outcome(
+                        event_loop,
+                        ShellActionOutcome::Present("delete-selection"),
+                    );
+                }
                 Ok(false) => {}
                 Err(error) => {
                     fika_log!("[fika-wgpu] delete-error {error}");
@@ -264,9 +264,7 @@ impl FikaWgpuApp {
                         error,
                         false,
                     ));
-                    if let Some(window) = self.window.as_ref() {
-                        window.request_redraw();
-                    }
+                    self.apply_window_action_outcome(ShellActionOutcome::Redraw);
                 }
             },
         }

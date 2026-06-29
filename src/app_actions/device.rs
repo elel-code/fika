@@ -1,5 +1,6 @@
 use winit::event_loop::ActiveEventLoop;
 
+use super::outcome::ShellActionOutcome;
 use crate::shell::context_menu::ShellContextMenuAction;
 use crate::shell::metrics::WGPU_SHELL_PANE_ID;
 use crate::shell::tasks::ShellTaskStatus;
@@ -22,9 +23,7 @@ impl FikaWgpuApp {
                 "No device target",
                 false,
             ));
-            if let Some(window) = self.window.as_ref() {
-                window.request_redraw();
-            }
+            self.apply_window_action_outcome(ShellActionOutcome::Redraw);
             return;
         };
         self.perform_device_action_request(event_loop, request);
@@ -72,7 +71,10 @@ impl FikaWgpuApp {
                 if let Some(path) = mount_point {
                     self.load_path_into_pane(event_loop, request.pane, path, "device-mount");
                 } else {
-                    self.present_scene_change(event_loop, "device-action");
+                    self.apply_action_outcome(
+                        event_loop,
+                        ShellActionOutcome::Present("device-action"),
+                    );
                 }
             }
             Err(error) => {
@@ -81,9 +83,7 @@ impl FikaWgpuApp {
                     request.action.as_str(),
                     request.id
                 );
-                if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
+                self.apply_window_action_outcome(ShellActionOutcome::Redraw);
             }
         }
     }

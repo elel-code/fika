@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use winit::dpi::PhysicalSize;
 use winit::event_loop::ActiveEventLoop;
 
+use super::outcome::ShellActionOutcome;
 use crate::FikaWgpuApp;
 use crate::shell::location::LocationDraftPurpose;
 use crate::shell::pane::ShellPaneId;
@@ -25,8 +26,10 @@ impl FikaWgpuApp {
             PathNavigationAction::Parent => self.scene.go_parent_directory(size),
         };
         match result {
-            Ok(true) => self.present_scene_change(event_loop, action.reason()),
-            Ok(false) => {}
+            Ok(changed) => self.apply_action_outcome(
+                event_loop,
+                ShellActionOutcome::present_if(changed, action.reason()),
+            ),
             Err(error) => fika_log!("[fika-wgpu] navigation-error {error}"),
         }
     }
@@ -42,7 +45,10 @@ impl FikaWgpuApp {
                     self.scene.active_pane_path_label(),
                     false,
                 ));
-                self.present_scene_change(event_loop, "reload-directory");
+                self.apply_action_outcome(
+                    event_loop,
+                    ShellActionOutcome::Present("reload-directory"),
+                );
             }
             Ok(false) => {
                 self.scene.record_task_status(ShellTaskStatus::completed(
@@ -50,9 +56,7 @@ impl FikaWgpuApp {
                     self.scene.active_pane_path_label(),
                     false,
                 ));
-                if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
+                self.apply_window_action_outcome(ShellActionOutcome::Redraw);
             }
             Err(error) => {
                 fika_log!("[fika-wgpu] reload-error {error}");
@@ -61,9 +65,7 @@ impl FikaWgpuApp {
                     error,
                     false,
                 ));
-                if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
+                self.apply_window_action_outcome(ShellActionOutcome::Redraw);
             }
         }
     }
@@ -83,17 +85,16 @@ impl FikaWgpuApp {
         };
         let closed = self.scene.close_location_draft(size);
         match self.scene.load_path_for_pane(pane, path, size) {
-            Ok(true) => self.present_scene_change(event_loop, "location-commit"),
-            Ok(false) => {
-                if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
+            Ok(true) => {
+                self.apply_action_outcome(
+                    event_loop,
+                    ShellActionOutcome::Present("location-commit"),
+                );
             }
+            Ok(false) => self.apply_window_action_outcome(ShellActionOutcome::Redraw),
             Err(error) => {
                 fika_log!("[fika-wgpu] location-error input={input:?} error={error}");
-                if closed && let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
+                self.apply_window_action_outcome(ShellActionOutcome::redraw_if(closed));
             }
         }
     }
@@ -113,9 +114,7 @@ impl FikaWgpuApp {
                     error,
                     false,
                 ));
-                if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
+                self.apply_window_action_outcome(ShellActionOutcome::Redraw);
                 return;
             }
         };
@@ -131,12 +130,11 @@ impl FikaWgpuApp {
                 .scene
                 .load_path_for_pane(request.pane, request.path, size)
             {
-                Ok(true) => self.present_scene_change(event_loop, "add-network-folder"),
-                Ok(false) => {
-                    if let Some(window) = self.window.as_ref() {
-                        window.request_redraw();
-                    }
-                }
+                Ok(true) => self.apply_action_outcome(
+                    event_loop,
+                    ShellActionOutcome::Present("add-network-folder"),
+                ),
+                Ok(false) => self.apply_window_action_outcome(ShellActionOutcome::Redraw),
                 Err(error) => {
                     fika_log!("[fika-wgpu] add-network-folder-load-error {error}");
                     self.scene.record_task_status(ShellTaskStatus::failed(
@@ -144,9 +142,7 @@ impl FikaWgpuApp {
                         error,
                         false,
                     ));
-                    if let Some(window) = self.window.as_ref() {
-                        window.request_redraw();
-                    }
+                    self.apply_window_action_outcome(ShellActionOutcome::Redraw);
                 }
             },
             Err(error) => {
@@ -156,9 +152,7 @@ impl FikaWgpuApp {
                     error,
                     false,
                 ));
-                if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
+                self.apply_window_action_outcome(ShellActionOutcome::Redraw);
             }
         }
     }
@@ -174,12 +168,8 @@ impl FikaWgpuApp {
             return;
         };
         match self.scene.load_path_for_pane(pane, path, size) {
-            Ok(true) => self.present_scene_change(event_loop, reason),
-            Ok(false) => {
-                if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
-            }
+            Ok(true) => self.apply_action_outcome(event_loop, ShellActionOutcome::Present(reason)),
+            Ok(false) => self.apply_window_action_outcome(ShellActionOutcome::Redraw),
             Err(error) => fika_log!("[fika-wgpu] navigation-error {error}"),
         }
     }

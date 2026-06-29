@@ -1,5 +1,6 @@
 use winit::event_loop::ActiveEventLoop;
 
+use super::outcome::ShellActionOutcome;
 use crate::FikaWgpuApp;
 use crate::shell::tasks::ShellTaskStatus;
 use fika_core::default_user_places_path;
@@ -9,11 +10,8 @@ impl FikaWgpuApp {
         let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
             return;
         };
-        if self.scene.open_add_network_folder_location_draft(size)
-            && let Some(window) = self.window.as_ref()
-        {
-            window.request_redraw();
-        }
+        let changed = self.scene.open_add_network_folder_location_draft(size);
+        self.apply_window_action_outcome(ShellActionOutcome::redraw_if(changed));
     }
 
     pub(crate) fn add_context_target_to_places(&mut self, event_loop: &dyn ActiveEventLoop) {
@@ -24,12 +22,10 @@ impl FikaWgpuApp {
             .scene
             .add_context_target_to_places(&default_user_places_path(), size)
         {
-            Ok(true) => self.present_scene_change(event_loop, "add-place"),
-            Ok(false) => {
-                if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
+            Ok(true) => {
+                self.apply_action_outcome(event_loop, ShellActionOutcome::Present("add-place"))
             }
+            Ok(false) => self.apply_window_action_outcome(ShellActionOutcome::Redraw),
             Err(error) => {
                 fika_log!("[fika-wgpu] add-place-error {error}");
                 self.scene.record_task_status(ShellTaskStatus::failed(
@@ -37,9 +33,7 @@ impl FikaWgpuApp {
                     error,
                     false,
                 ));
-                if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
+                self.apply_window_action_outcome(ShellActionOutcome::Redraw);
             }
         }
     }
@@ -52,12 +46,10 @@ impl FikaWgpuApp {
             .scene
             .remove_context_place(&default_user_places_path(), size)
         {
-            Ok(true) => self.present_scene_change(event_loop, "remove-place"),
-            Ok(false) => {
-                if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
+            Ok(true) => {
+                self.apply_action_outcome(event_loop, ShellActionOutcome::Present("remove-place"))
             }
+            Ok(false) => self.apply_window_action_outcome(ShellActionOutcome::Redraw),
             Err(error) => {
                 fika_log!("[fika-wgpu] remove-place-error {error}");
                 self.scene.record_task_status(ShellTaskStatus::failed(
@@ -65,9 +57,7 @@ impl FikaWgpuApp {
                     error,
                     false,
                 ));
-                if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
+                self.apply_window_action_outcome(ShellActionOutcome::Redraw);
             }
         }
     }

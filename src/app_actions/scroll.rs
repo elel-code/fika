@@ -1,5 +1,6 @@
 use winit::event::MouseScrollDelta;
 
+use super::outcome::ShellActionOutcome;
 use crate::shell::shortcuts::zoom_action_for_scroll_delta;
 use crate::{FikaWgpuApp, SCROLL_REDRAW_FRAMES, ZOOM_REDRAW_FRAMES, scroll_delta_y};
 
@@ -14,12 +15,18 @@ impl FikaWgpuApp {
             if let Some(zoom_action) = zoom_action_for_scroll_delta(delta_y)
                 && self.scene.zoom(zoom_action, size)
             {
-                self.queue_scene_change("wheel-zoom", ZOOM_REDRAW_FRAMES);
+                self.apply_window_action_outcome(ShellActionOutcome::Queue {
+                    reason: "wheel-zoom",
+                    redraw_frames: ZOOM_REDRAW_FRAMES,
+                });
             }
             return;
         }
         if self.scene.scroll_by(delta_y, size) {
-            self.queue_scene_change("wheel-scroll", SCROLL_REDRAW_FRAMES);
+            self.apply_window_action_outcome(ShellActionOutcome::Queue {
+                reason: "wheel-scroll",
+                redraw_frames: SCROLL_REDRAW_FRAMES,
+            });
         }
     }
 }

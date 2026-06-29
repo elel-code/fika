@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use winit::dpi::PhysicalPosition;
 
+use super::outcome::ShellActionOutcome;
 use crate::shell::drop_menu::ShellDropTarget;
 use crate::shell::tasks::ShellTaskStatus;
 use crate::{FikaWgpuApp, view_point_from_physical_position};
@@ -30,9 +31,7 @@ impl FikaWgpuApp {
                 .map(ShellDropTarget::kind)
                 .unwrap_or("none")
         );
-        if changed && let Some(window) = self.window.as_ref() {
-            window.request_redraw();
-        }
+        self.apply_window_action_outcome(ShellActionOutcome::redraw_if(changed));
     }
 
     pub(crate) fn external_drag_moved(&mut self, position: PhysicalPosition<f64>) {
@@ -40,11 +39,8 @@ impl FikaWgpuApp {
             return;
         };
         let point = view_point_from_physical_position(position);
-        if self.scene.update_external_drag(point, size)
-            && let Some(window) = self.window.as_ref()
-        {
-            window.request_redraw();
-        }
+        let changed = self.scene.update_external_drag(point, size);
+        self.apply_window_action_outcome(ShellActionOutcome::redraw_if(changed));
     }
 
     pub(crate) fn external_drag_dropped(
@@ -72,26 +68,19 @@ impl FikaWgpuApp {
                         .map(|menu| menu.target.kind())
                         .unwrap_or("none")
                 );
-                if changed && let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
+                self.apply_window_action_outcome(ShellActionOutcome::redraw_if(changed));
             }
             Err(error) => {
                 fika_log!("[fika-wgpu] external-dnd-error {error}");
                 self.scene
                     .record_task_status(ShellTaskStatus::failed("Drop failed", error, false));
-                if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
+                self.apply_window_action_outcome(ShellActionOutcome::Redraw);
             }
         }
     }
 
     pub(crate) fn external_drag_left(&mut self) {
-        if self.scene.clear_external_drag()
-            && let Some(window) = self.window.as_ref()
-        {
-            window.request_redraw();
-        }
+        let changed = self.scene.clear_external_drag();
+        self.apply_window_action_outcome(ShellActionOutcome::redraw_if(changed));
     }
 }
