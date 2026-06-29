@@ -218,6 +218,14 @@ dialog、render damage 和异步操作持续演进提供稳定边界。
   `Vec<String>`。task status 的容量、finish/update/cancel/dismiss/clear 也集中到
   `ShellTaskStatusStore`，后续 async operation dispatcher 可以直接接管这个 store，
   而不是散落修改 `VecDeque + changes`。
+- Theme token 系统：
+  参考 Dolphin/Qt 通过 `KColorScheme` / `QPalette` 统一分发 view、window、text、
+  highlight 等角色色的边界，并开始引入
+  `/home/yk/Code/fika/reference/dde-file-manager` 作为功能和美化参考。Fika 新增
+  `src/shell/theme.rs` 承载 light/dark palette、view surface/content、
+  chrome/sidebar/divider、文本角色和 task status 色。旧的 `*_color(dark_mode)` helper
+  先保留为兼容层并委托给 `ShellTheme`，新的 status paint 已直接消费 `ShellTheme`，
+  避免绘制路径继续散落 dark/light 分支和重复构造 `TextColor`。
 - Action Outcome / Presentation 调度边界：
   `src/app_actions/outcome.rs` 统一承载 action 执行后的 `None`、`Redraw`、`Queue`、
   `Present` 结果；除 `outcome.rs` 外的 `src/app_actions/*` 不再直接调用主窗口

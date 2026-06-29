@@ -4,6 +4,12 @@ Fika 的性能工作以 Dolphin 为第一参考。本机 Dolphin 源码位于
 `/home/yk/Code/fika/reference/dolphin`，它是文件管理器性能架构、行为保持型优化和
 回归 gate 的第一参考。
 
+功能形态和视觉美化现在也可以参考 Deepin File Manager。本机源码位于
+`/home/yk/Code/fika/reference/dde-file-manager`，当前拉取自
+`https://github.com/linuxdeepin/dde-file-manager.git` 的 `38e6d616`。Deepin reference
+主要用于 UI polish、DTK theme/palette、delegate paint、窗口/侧栏动画和功能组织；涉及
+model、I/O、role scheduling、trash/empty-trash 性能时仍优先以 Dolphin/KIO 为准。
+
 ## 硬规则
 
 每一次性能优化，或任何会影响性能边界的调整，都必须在变更完成前给出明确的
@@ -72,6 +78,11 @@ Dolphin reference:
   `/home/yk/Code/fika/reference/dolphin/src/panels/folders/folderspanel.cpp`、
   `/home/yk/Code/fika/reference/kio/src/widgets/kopenwithdialog.cpp`、
   `/home/yk/Code/fika/reference/kio/src/widgets/widgetsopenwithhandler.cpp`。
+- Deepin theme、delegate paint、窗口布局和功能组织：
+  `/home/yk/Code/fika/reference/dde-file-manager/src/plugins/filemanager/dfmplugin-workspace/views/baseitemdelegate.cpp`、
+  `/home/yk/Code/fika/reference/dde-file-manager/src/plugins/filemanager/dfmplugin-workspace/utils/viewdrawhelper.cpp`、
+  `/home/yk/Code/fika/reference/dde-file-manager/src/plugins/filemanager/dfmplugin-workspace/views/fileviewstatusbar.cpp`、
+  `/home/yk/Code/fika/reference/dde-file-manager/src/dfm-base/widgets/dfmwindow/filemanagerwindow.cpp`。
 
 ## 可继续推进的性能方向
 
@@ -208,6 +219,18 @@ Dolphin reference:
 - Fika mapping: src/shell/status.rs::ShellPaneStatus / ShellTaskStatusStore；src/shell/status/paint.rs::push_pane_status_bar / push_places_task_area；src/main.rs::ShellScene::push_pane_status_bar / push_places_task_area。
 - Divergence: Dolphin 由 Qt widget/statusbar 拆分展示；Fika 需要手动向 wgpu quad/text frame 写入图元，因此保留 ShellScene 的薄 paint wrapper，但 status summary、task store 和 status/task area paint 已分层。pane qualifier 从 Vec<String> 收敛为单个 String，减少 status frame 路径的临时容器和 join。
 - Verification: cargo fmt；cargo check；cargo test task_status_store；cargo test pane_status_text_is_plain_pane_state；cargo test task_area_opens_detail_dialog_and_clear_keeps_running_tasks_visible；cargo test；git diff --check。
+```
+
+### Theme token boundary
+
+```text
+Deepin reference:
+- Source: /home/yk/Code/fika/reference/dde-file-manager/src/plugins/filemanager/dfmplugin-workspace/views/baseitemdelegate.cpp；/home/yk/Code/fika/reference/dde-file-manager/src/dfm-base/widgets/dfmwindow/filemanagerwindow.cpp
+- Symbol: BaseItemDelegate uses DPalette/DPaletteHelper/DGuiApplicationHelper；FileManagerWindow connects DGuiApplicationHelper::themeTypeChanged and DPlatformTheme::iconThemeNameChanged
+- Deepin boundary: item delegate 和 window chrome 不直接散落 light/dark 常量，而从 DTK palette/theme helper 接收颜色和主题变更。
+- Fika mapping: src/shell/theme.rs::ShellTheme；src/shell/status/paint.rs::PaneStatusBarPaint / PlacesTaskAreaPaint；src/main.rs::ShellScene::theme and legacy *_color helpers.
+- Divergence: Fika 没有 DTK/QPalette；目前先建立静态 light/dark token table，并让旧 helper 委托给 ShellTheme，逐步迁移绘制模块直接消费 theme token。status paint 已完成直接消费，主 paint 仍保留兼容 helper，避免一次性大改影响 damage/hash 测试。
+- Verification: cargo fmt；cargo check；cargo test theme_mode_selects_light_and_dark_palettes；cargo test pane_status_text_is_plain_pane_state；cargo test task_area_opens_detail_dialog_and_clear_keeps_running_tasks_visible；cargo test；git diff --check。
 ```
 
 ## Review 检查项

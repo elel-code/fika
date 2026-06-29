@@ -358,6 +358,7 @@ use shell::tasks::geometry::{
     task_detail_dialog_rect_scaled, task_detail_dismiss_button_rect_scaled,
 };
 use shell::tasks::{ShellTaskDetailDialog, ShellTaskId, ShellTaskStatus, TaskDetailDialogClick};
+use shell::theme::ShellTheme;
 use shell::transfer::{
     ShellAsyncTaskResult, ShellAsyncTransferCompletion, ShellAsyncTransferSource,
     ShellAsyncTrashViewCompletion, ShellPasteResult, ShellTransferExecution,
@@ -780,7 +781,7 @@ impl FikaWgpuApp {
     }
 
     fn open_with_window_theme(&self) -> Theme {
-        if self.scene.dark_mode {
+        if self.scene.theme().is_dark() {
             Theme::Dark
         } else {
             Theme::Light
@@ -3656,6 +3657,10 @@ impl ShellScene {
             selection_changed as u8
         );
         true
+    }
+
+    fn theme(&self) -> ShellTheme {
+        ShellTheme::for_dark_mode(self.dark_mode)
     }
 
     fn toggle_dark_mode(&mut self) {
@@ -8876,6 +8881,7 @@ impl ShellScene {
             .iter()
             .map(|projection| self.folder_preview_role_candidate_count_for_projection(projection))
             .sum();
+        let theme = self.theme();
 
         push_rect(
             &mut vertices,
@@ -8885,18 +8891,13 @@ impl ShellScene {
                 width,
                 height,
             },
-            view_mode_surface_color(slot0_projection.view.view_mode, self.dark_mode),
+            theme.view_mode_surface(slot0_projection.view.view_mode),
             size,
         );
         self.push_app_toolbar(&mut vertices, size);
         self.push_places_sidebar(&mut vertices, text, icons, size);
         if let Some(metrics) = self.split_pane_metrics(size) {
-            push_rect(
-                &mut vertices,
-                metrics.divider,
-                divider_color(self.dark_mode),
-                size,
-            );
+            push_rect(&mut vertices, metrics.divider, theme.divider(), size);
         }
 
         let mut content_scrollbar_visible = false;
@@ -10081,7 +10082,7 @@ impl ShellScene {
                 rect,
                 status: &status,
                 active: projection.geometry.kind == self.active_pane(),
-                dark_mode: self.dark_mode,
+                theme: self.theme(),
                 scale: self.ui_scale(),
                 line_height: self.text_line_height(),
                 size,
@@ -10521,7 +10522,7 @@ impl ShellScene {
                 rect,
                 sidebar: self.places_sidebar_rect(size),
                 statuses: &self.task_statuses,
-                dark_mode: self.dark_mode,
+                theme: self.theme(),
                 scale: self.ui_scale(),
                 small_line_height: self.small_text_line_height(),
                 size,
@@ -18017,86 +18018,43 @@ fn push_place_trash_icon(
 }
 
 fn view_mode_clear_color(view_mode: ShellViewMode, dark_mode: bool) -> wgpu::Color {
-    let [r, g, b, a] = view_mode_surface_color(view_mode, dark_mode);
-    wgpu::Color {
-        r: r as f64,
-        g: g as f64,
-        b: b as f64,
-        a: a as f64,
-    }
+    ShellTheme::for_dark_mode(dark_mode).view_mode_clear(view_mode)
 }
 
 fn view_mode_surface_color(view_mode: ShellViewMode, dark_mode: bool) -> [f32; 4] {
-    let _ = view_mode;
-    if dark_mode {
-        [0.102, 0.112, 0.126, 1.0]
-    } else {
-        [0.973, 0.976, 0.984, 1.0]
-    }
+    ShellTheme::for_dark_mode(dark_mode).view_mode_surface(view_mode)
 }
 
 fn view_mode_content_color(view_mode: ShellViewMode, dark_mode: bool) -> [f32; 4] {
-    if dark_mode {
-        [0.078, 0.086, 0.098, 1.0]
-    } else {
-        view_mode_surface_color(view_mode, false)
-    }
+    ShellTheme::for_dark_mode(dark_mode).view_mode_content(view_mode)
 }
 
 fn chrome_color(dark_mode: bool) -> [f32; 4] {
-    if dark_mode {
-        [0.125, 0.137, 0.153, 1.0]
-    } else {
-        [0.973, 0.976, 0.984, 1.0]
-    }
+    ShellTheme::for_dark_mode(dark_mode).chrome()
 }
 
 fn sidebar_color(dark_mode: bool) -> [f32; 4] {
-    if dark_mode {
-        [0.118, 0.129, 0.145, 1.0]
-    } else {
-        [0.973, 0.976, 0.984, 1.0]
-    }
+    ShellTheme::for_dark_mode(dark_mode).sidebar()
 }
 
 fn divider_color(dark_mode: bool) -> [f32; 4] {
-    if dark_mode {
-        [0.255, 0.278, 0.310, 1.0]
-    } else {
-        [0.784, 0.808, 0.839, 1.0]
-    }
+    ShellTheme::for_dark_mode(dark_mode).divider()
 }
 
 fn primary_text_color(dark_mode: bool) -> TextColor {
-    if dark_mode {
-        TextColor::rgb(226, 232, 240)
-    } else {
-        TextColor::rgb(36, 41, 47)
-    }
+    ShellTheme::for_dark_mode(dark_mode).primary_text()
 }
 
 fn muted_text_color(dark_mode: bool) -> TextColor {
-    if dark_mode {
-        TextColor::rgb(148, 163, 184)
-    } else {
-        TextColor::rgb(89, 99, 110)
-    }
+    ShellTheme::for_dark_mode(dark_mode).muted_text()
 }
 
 fn section_text_color(dark_mode: bool) -> TextColor {
-    if dark_mode {
-        TextColor::rgb(156, 163, 175)
-    } else {
-        TextColor::rgb(107, 114, 128)
-    }
+    ShellTheme::for_dark_mode(dark_mode).section_text()
 }
 
 fn accent_text_color(dark_mode: bool) -> TextColor {
-    if dark_mode {
-        TextColor::rgb(147, 197, 253)
-    } else {
-        TextColor::rgb(31, 79, 191)
-    }
+    ShellTheme::for_dark_mode(dark_mode).accent_text()
 }
 
 fn details_size_label(entry: &Entry) -> String {

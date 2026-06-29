@@ -34,6 +34,7 @@ pub(crate) mod service_menu;
 pub(crate) mod shortcuts;
 pub(crate) mod status;
 pub(crate) mod tasks;
+pub(crate) mod theme;
 pub(crate) mod transfer;
 pub(crate) mod trash_conflict;
 pub(crate) mod window_semantics;

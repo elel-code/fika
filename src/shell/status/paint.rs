@@ -4,18 +4,17 @@ use winit::dpi::PhysicalSize;
 
 use crate::shell::metrics::PLACES_TASK_ROW_HEIGHT;
 use crate::shell::status::{ShellPaneStatus, ShellTaskStatusStore};
-use crate::shell::tasks::{ShellTaskStatus, ShellTaskStatusKind};
+use crate::shell::tasks::ShellTaskStatus;
+use crate::shell::theme::ShellTheme;
 use crate::{
-    LabelAlignment, QuadVertex, TextFrameBuilder, chrome_color, divider_color, inset_rect,
-    muted_text_color, primary_text_color, push_clipped_rounded_rect, push_rect, section_text_color,
-    sidebar_color,
+    LabelAlignment, QuadVertex, TextFrameBuilder, inset_rect, push_clipped_rounded_rect, push_rect,
 };
 
 pub(crate) struct PaneStatusBarPaint<'a> {
     pub(crate) rect: ViewRect,
     pub(crate) status: &'a ShellPaneStatus,
     pub(crate) active: bool,
-    pub(crate) dark_mode: bool,
+    pub(crate) theme: ShellTheme,
     pub(crate) scale: f32,
     pub(crate) line_height: f32,
     pub(crate) size: PhysicalSize<u32>,
@@ -26,12 +25,7 @@ pub(crate) fn push_pane_status_bar(
     text: &mut TextFrameBuilder<'_>,
     paint: PaneStatusBarPaint<'_>,
 ) {
-    push_rect(
-        vertices,
-        paint.rect,
-        chrome_color(paint.dark_mode),
-        paint.size,
-    );
+    push_rect(vertices, paint.rect, paint.theme.chrome(), paint.size);
     push_rect(
         vertices,
         ViewRect {
@@ -40,7 +34,7 @@ pub(crate) fn push_pane_status_bar(
             width: paint.rect.width,
             height: 1.0,
         },
-        divider_color(paint.dark_mode),
+        paint.theme.divider(),
         paint.size,
     );
     if paint.active {
@@ -52,7 +46,7 @@ pub(crate) fn push_pane_status_bar(
                 width: scale_metric(3.0, paint.scale).max(1.0),
                 height: paint.rect.height,
             },
-            [0.184, 0.435, 0.929, 1.0],
+            paint.theme.accent(),
             paint.size,
         );
     }
@@ -75,7 +69,7 @@ pub(crate) fn push_pane_status_bar(
             height: paint.line_height,
         },
         paint.rect,
-        primary_text_color(paint.dark_mode),
+        paint.theme.primary_text(),
         LabelAlignment::Start,
     );
     if !qualifier.is_empty() {
@@ -88,7 +82,7 @@ pub(crate) fn push_pane_status_bar(
                 height: paint.line_height,
             },
             paint.rect,
-            muted_text_color(paint.dark_mode),
+            paint.theme.muted_text(),
             LabelAlignment::End,
         );
     }
@@ -98,7 +92,7 @@ pub(crate) struct PlacesTaskAreaPaint<'a> {
     pub(crate) rect: ViewRect,
     pub(crate) sidebar: ViewRect,
     pub(crate) statuses: &'a ShellTaskStatusStore,
-    pub(crate) dark_mode: bool,
+    pub(crate) theme: ShellTheme,
     pub(crate) scale: f32,
     pub(crate) small_line_height: f32,
     pub(crate) size: PhysicalSize<u32>,
@@ -115,7 +109,7 @@ pub(crate) fn push_places_task_area(
         paint.rect,
         paint.sidebar,
         radius,
-        divider_color(paint.dark_mode),
+        paint.theme.divider(),
         paint.size,
     );
     let Some(inner) = inset_rect(paint.rect, scale_metric(1.0, paint.scale)) else {
@@ -126,7 +120,7 @@ pub(crate) fn push_places_task_area(
         inner,
         paint.sidebar,
         (radius - scale_metric(1.0, paint.scale)).max(1.0),
-        sidebar_color(paint.dark_mode),
+        paint.theme.sidebar(),
         paint.size,
     );
 
@@ -140,7 +134,7 @@ pub(crate) fn push_places_task_area(
             height: paint.small_line_height,
         },
         inner,
-        section_text_color(paint.dark_mode),
+        paint.theme.section_text(),
         LabelAlignment::Start,
     );
 
@@ -176,7 +170,7 @@ fn push_places_task_status_row(
         dot,
         inner,
         dot_size / 2.0,
-        task_status_color(status.kind),
+        paint.theme.task_status_color(status.kind),
         paint.size,
     );
 
@@ -192,7 +186,7 @@ fn push_places_task_status_row(
             height: paint.small_line_height,
         },
         inner,
-        primary_text_color(paint.dark_mode),
+        paint.theme.primary_text(),
     );
     let detail = status.detail_label();
     push_status_label(
@@ -205,7 +199,7 @@ fn push_places_task_status_row(
             height: paint.small_line_height,
         },
         inner,
-        section_text_color(paint.dark_mode),
+        paint.theme.section_text(),
     );
 }
 
@@ -217,15 +211,6 @@ fn push_status_label(
     color: TextColor,
 ) {
     text.push_label_aligned(label, rect, clip, color, LabelAlignment::Start);
-}
-
-fn task_status_color(kind: ShellTaskStatusKind) -> [f32; 4] {
-    match kind {
-        ShellTaskStatusKind::Running => [0.184, 0.435, 0.929, 1.0],
-        ShellTaskStatusKind::Completed => [0.102, 0.514, 0.286, 1.0],
-        ShellTaskStatusKind::Failed => [0.820, 0.184, 0.184, 1.0],
-        ShellTaskStatusKind::Cancelled => [0.475, 0.514, 0.565, 1.0],
-    }
 }
 
 fn scale_metric(value: f32, scale: f32) -> f32 {
