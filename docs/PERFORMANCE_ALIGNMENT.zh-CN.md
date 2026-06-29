@@ -126,6 +126,18 @@ Dolphin reference:
 - Verification: cargo check；cargo test surface_frame_context_keeps_dialog_suboptimal_recovery_local；git diff --check。
 ```
 
+### Main SceneFrame upload and retained encode
+
+```text
+Dolphin reference:
+- Source: /home/yk/Code/fika/reference/dolphin/src/kitemviews/kitemlistview.cpp
+- Symbol: KItemListView::paint
+- Dolphin boundary: paint 阶段聚合 view/item/widget 绘制，局部 repaint 区域由 view/update 体系传入，具体 backing surface 复制和窗口 present 由 Qt 图形栈承担。
+- Fika mapping: src/shell/render/frame.rs::SceneFrame::upload_quads；src/main.rs::WgpuState::encode_retained_scene_pass / encode_retained_present_pass。
+- Divergence: 无直接 Dolphin retained wGPU reference；Fika 需要显式维护 retained texture、damage scissor、quad/text/icon GPU buffer upload 和 surface present，因此把 quad upload stats 收进 SceneFrame，把 retained scene encode 与 present-copy encode 收成两个固定阶段，后续动画 dirty 和局部 damage 可以在同一 frame encode 边界扩展。
+- Verification: cargo check；cargo test surface_frame_context_keeps_dialog_suboptimal_recovery_local；cargo test；git diff --check。
+```
+
 ## Review 检查项
 
 - 变更是否包含本地 Dolphin 文件路径和 symbol？

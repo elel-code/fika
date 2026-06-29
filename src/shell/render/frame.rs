@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use fika_core::{ViewRect, ViewSize};
 use winit::dpi::PhysicalSize;
 
@@ -20,9 +22,30 @@ pub(crate) struct SceneFrame {
     pub(crate) content_scrollbar_visible: bool,
     pub(crate) first_item_rect: Option<ViewRect>,
     pub(crate) layout_us: u128,
+    pub(crate) quad_upload_us: u128,
     pub(crate) text_stats: TextFrameStats,
     pub(crate) icon_stats: IconFrameStats,
     pub(crate) vertex_upload_stats: VertexBufferUploadStats,
+}
+
+impl SceneFrame {
+    pub(crate) fn upload_quads(
+        &mut self,
+        quad_renderer: &mut QuadRenderer,
+        overlay_quad_renderer: &mut QuadRenderer,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+    ) {
+        let start = Instant::now();
+        self.vertex_upload_stats
+            .merge(quad_renderer.upload(device, queue, &self.vertices));
+        self.vertex_upload_stats.merge(overlay_quad_renderer.upload(
+            device,
+            queue,
+            &self.overlay_vertices,
+        ));
+        self.quad_upload_us = start.elapsed().as_micros();
+    }
 }
 
 pub(crate) struct DialogFrame {

@@ -173,6 +173,12 @@ dialog、render damage 和异步操作持续演进提供稳定边界。
   只保留 surface acquire、work-pending redraw、render pass encode、present 和日志；dialog
   paint 仍通过闭包注入，后续 search result diff、列表动画和 shared frame stats 可以直接挂到
   `DialogFrame`。
+- 主窗口 SceneFrame upload / retained encode 收敛：
+  `SceneFrame::upload_quads` 统一合并 main / overlay quad vertex upload 和
+  `vertex_upload_stats`，main render 不再在 `main.rs` 手写 quad upload 计时；retained
+  scene pass 和 retained present pass 进入 `WgpuState::encode_retained_scene_pass` /
+  `encode_retained_present_pass`，damage scissor、full clear、overlay text draw 和 present
+  copy 的边界更接近单一 frame encode 阶段。
 - Action Outcome / Presentation 调度边界：
   `src/app_actions/outcome.rs` 统一承载 action 执行后的 `None`、`Redraw`、`Queue`、
   `Present` 结果；除 `outcome.rs` 外的 `src/app_actions/*` 不再直接调用主窗口

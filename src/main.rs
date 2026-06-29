@@ -298,11 +298,9 @@ use shell::properties::{ShellPropertiesOverlay, property_row};
 #[cfg(test)]
 use shell::render::damage::folder_preview_damage_rects_for_changed_keys;
 use shell::render::damage::folder_preview_damage_rects_for_changes;
+use shell::render::damage_bounds::{DamageScissorRect, ShellRenderDamage, ShellRenderDamageKind};
 #[cfg(test)]
-use shell::render::damage_bounds::{
-    DamageScissorRect, damage_scissor_rect, full_surface_rect, rect_area,
-};
-use shell::render::damage_bounds::{ShellRenderDamage, ShellRenderDamageKind};
+use shell::render::damage_bounds::{damage_scissor_rect, full_surface_rect, rect_area};
 use shell::render::damage_snapshot::ShellRenderDamageSnapshot;
 use shell::render::dirty_key::ShellRenderDirtyKey;
 use shell::render::frame::{SceneFrame, prepare_dialog_frame, prepare_scene_frame};
@@ -8889,6 +8887,7 @@ impl ShellScene {
             first_item_rect,
             vertices,
             overlay_vertices,
+            quad_upload_us: 0,
             text_stats: TextFrameStats::default(),
             icon_stats: IconFrameStats::default(),
             vertex_upload_stats: VertexBufferUploadStats::default(),
@@ -12727,6 +12726,80 @@ impl WgpuState {
         self.icon_renderer.draw_overlay(&mut pass);
     }
 
+    fn encode_retained_scene_pass(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        damage: ShellRenderDamage,
+        scissor: Option<DamageScissorRect>,
+        clear_color: wgpu::Color,
+        overlay_text_active: bool,
+    ) {
+        if damage.kind == ShellRenderDamageKind::Clean {
+            return;
+        }
+
+        let load = if damage.kind == ShellRenderDamageKind::Full {
+            wgpu::LoadOp::Clear(clear_color)
+        } else {
+            wgpu::LoadOp::Load
+        };
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("fika-wgpu-retained-scene-pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: self.retained_scene.view(),
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load,
+                    store: wgpu::StoreOp::Store,
+                },
+                depth_slice: None,
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        if damage.kind == ShellRenderDamageKind::Bounded
+            && let Some(scissor) = scissor
+        {
+            pass.set_scissor_rect(scissor.x, scissor.y, scissor.width, scissor.height);
+        }
+        self.quad_renderer.draw(&mut pass);
+        self.icon_renderer.draw(&mut pass);
+        self.text_renderer.draw(&mut pass);
+        self.overlay_quad_renderer.draw(&mut pass);
+        self.icon_renderer.draw_overlay(&mut pass);
+        if overlay_text_active
+            && let Some(overlay_text_renderer) = self.overlay_text_renderer.as_ref()
+        {
+            overlay_text_renderer.draw(&mut pass);
+        }
+    }
+
+    fn encode_retained_present_pass(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+    ) {
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("fika-wgpu-retained-present-pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+                depth_slice: None,
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        self.retained_scene.draw(&mut pass);
+    }
+
     fn prewarm_scene_caches(&mut self, scene: &mut ShellScene, reason: &'static str) {
         let total_start = Instant::now();
         let metadata_result_stats = scene.drain_metadata_role_results();
@@ -13234,7 +13307,7 @@ impl WgpuState {
             fika_log!("[fika-wgpu] overlay-text init reason={reason}");
             self.overlay_text_renderer = Some(TextRenderer::new(&self.device, self.config.format));
         }
-        let scene_frame = prepare_scene_frame(
+        let mut scene_frame = prepare_scene_frame(
             &mut self.text_renderer,
             if overlay_text_active {
                 self.overlay_text_renderer.as_mut()
@@ -13265,85 +13338,25 @@ impl WgpuState {
             window.request_redraw();
         }
         self.render_work_pending = metadata_work_pending || icon_work_pending || text_work_pending;
-        let quad_upload_start = Instant::now();
-        let mut vertex_upload_stats = scene_frame.vertex_upload_stats;
-        vertex_upload_stats.merge(self.quad_renderer.upload(
+        scene_frame.upload_quads(
+            &mut self.quad_renderer,
+            &mut self.overlay_quad_renderer,
             &self.device,
             &self.queue,
-            &scene_frame.vertices,
-        ));
-        vertex_upload_stats.merge(self.overlay_quad_renderer.upload(
-            &self.device,
-            &self.queue,
-            &scene_frame.overlay_vertices,
-        ));
-        let quad_upload_us = quad_upload_start.elapsed().as_micros();
+        );
 
         let encode_present_start = Instant::now();
         let (view, mut encoder) = self.begin_surface_frame_encoding(&frame, "fika-wgpu-frame");
 
-        if render_damage.kind != ShellRenderDamageKind::Clean {
-            let load = if render_damage.kind == ShellRenderDamageKind::Full {
-                wgpu::LoadOp::Clear(view_mode_clear_color(
-                    scene.panes[ShellPaneId::SLOT_0].view_mode,
-                    scene.dark_mode,
-                ))
-            } else {
-                wgpu::LoadOp::Load
-            };
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("fika-wgpu-retained-scene-pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: self.retained_scene.view(),
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            if render_damage.kind == ShellRenderDamageKind::Bounded
-                && let Some(scissor) = render_damage_scissor
-            {
-                pass.set_scissor_rect(scissor.x, scissor.y, scissor.width, scissor.height);
-            }
-            self.quad_renderer.draw(&mut pass);
-            self.icon_renderer.draw(&mut pass);
-            self.text_renderer.draw(&mut pass);
-            self.overlay_quad_renderer.draw(&mut pass);
-            self.icon_renderer.draw_overlay(&mut pass);
-            if overlay_text_active
-                && let Some(overlay_text_renderer) = self.overlay_text_renderer.as_ref()
-            {
-                overlay_text_renderer.draw(&mut pass);
-            }
-        }
+        self.encode_retained_scene_pass(
+            &mut encoder,
+            render_damage,
+            render_damage_scissor,
+            view_mode_clear_color(scene.panes[ShellPaneId::SLOT_0].view_mode, scene.dark_mode),
+            overlay_text_active,
+        );
         self.retained_scene.mark_valid();
-
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("fika-wgpu-retained-present-pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            self.retained_scene.draw(&mut pass);
-        }
+        self.encode_retained_present_pass(&mut encoder, &view);
 
         let presented_frame = self.submit_surface_frame(window, frame, encoder);
         let encode_present_us = encode_present_start.elapsed().as_micros();
@@ -13520,8 +13533,8 @@ impl WgpuState {
                         .filter(|_| overlay_text_active)
                         .map(TextRenderer::batch_count)
                         .unwrap_or(0),
-                vertex_upload_stats.writes,
-                vertex_upload_stats.skips,
+                scene_frame.vertex_upload_stats.writes,
+                scene_frame.vertex_upload_stats.skips,
                 render_damage.kind_label(),
                 render_damage.rect_count,
                 render_damage.area_px,
@@ -13534,7 +13547,7 @@ impl WgpuState {
                 prewarm_us,
                 surface_acquire_us,
                 prepare_us,
-                quad_upload_us,
+                scene_frame.quad_upload_us,
                 encode_present_us,
                 scene_frame.layout_us,
                 scene_frame.text_stats.raster_us,
