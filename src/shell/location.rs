@@ -94,6 +94,14 @@ impl LocationDraft {
         self.cursor = self.value.len();
     }
 
+    pub(crate) fn set_cursor(&mut self, cursor: usize) -> bool {
+        let cursor = normalized_text_cursor(&self.value, cursor);
+        let changed = self.cursor != cursor || self.replace_on_insert;
+        self.cursor = cursor;
+        self.replace_on_insert = false;
+        changed
+    }
+
     pub(crate) fn set_completed(&mut self, value: String) {
         self.value = value;
         self.cursor = self.value.len();

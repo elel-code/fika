@@ -190,7 +190,7 @@ use shell::dolphin::style::{BREEZE_ITEM_ROUNDNESS, place_row_background_color};
 use shell::dolphin::text::{
     compact_entry_text_width, dolphin_elide_filename_to_width,
     dolphin_elide_wrapped_filename_to_rect, estimated_label_raster_width,
-    icons_entry_text_line_count, required_compact_item_width,
+    estimated_text_cursor_for_offset, icons_entry_text_line_count, required_compact_item_width,
 };
 #[cfg(test)]
 use shell::dolphin::text::{
@@ -3249,6 +3249,40 @@ impl ShellScene {
             .map(|draft| draft.draft.cursor)
     }
 
+    fn location_text_rect_for_path_bar_rect(&self, rect: ViewRect) -> ViewRect {
+        let icon_size = self
+            .scale_metric(18.0)
+            .min((rect.height - self.scale_metric(8.0)).max(1.0));
+        let icon_right = rect.x + self.scale_metric(8.0) + icon_size;
+        let separator_x = icon_right + self.scale_metric(8.0);
+        let text_x = separator_x + self.scale_metric(9.0);
+        ViewRect {
+            x: text_x,
+            y: rect.y + (rect.height - self.text_line_height()) / 2.0,
+            width: (rect.right() - text_x - self.scale_metric(8.0)).max(1.0),
+            height: self.text_line_height(),
+        }
+    }
+
+    fn location_cursor_for_screen_point(
+        &self,
+        pane: ShellPaneId,
+        point: ViewPoint,
+        size: PhysicalSize<u32>,
+    ) -> Option<usize> {
+        let rect = self.pane_path_bar_rect(pane, size)?;
+        if !rect.contains(point) {
+            return None;
+        }
+        let text_rect = self.location_text_rect_for_path_bar_rect(rect);
+        let label = self.location_label_for_pane(pane);
+        Some(estimated_text_cursor_for_offset(
+            &label,
+            point.x - text_rect.x,
+            self.scale_metric(TEXT_FONT_SIZE),
+        ))
+    }
+
     fn location_bar_active_for_pane(&self, pane: ShellPaneId) -> bool {
         let pane = self.normalized_pane_id(pane);
         self.location_draft_pane() == Some(pane)
@@ -3301,10 +3335,39 @@ impl ShellScene {
         let Some(pane) = self.path_bar_pane_at_screen_point(point, size) else {
             return false;
         };
+        let pane = self.normalized_pane_id(pane);
         let old_pane = self.active_pane();
+        let old_draft = self.location_draft.clone();
+        let old_filter_active = self.filter_active;
         self.active_pane = self.normalized_pane_id(pane);
-        self.apply_location_command(LocationCommand::Activate, size)
-            || old_pane != self.active_pane()
+        if self.location_draft_pane() != Some(pane) {
+            let Some(path) = self.pane_state(pane).map(|pane| pane.path.clone()) else {
+                return old_pane != self.active_pane();
+            };
+            self.location_draft = Some(ShellLocationDraft::new(pane, path.display().to_string()));
+            self.filter_active = false;
+        }
+        if let Some(cursor) = self.location_cursor_for_screen_point(pane, point, size)
+            && let Some(draft) = self.location_draft.as_mut()
+        {
+            draft.draft.set_cursor(cursor);
+        }
+
+        let location_changed =
+            old_draft != self.location_draft || old_filter_active != self.filter_active;
+        if location_changed {
+            self.reset_text_caret_blink();
+            self.location_changes += 1;
+            self.rubber_band = None;
+            self.clamp_scroll(size);
+            fika_log!(
+                "[fika-wgpu] location active={} value={:?} changes={}",
+                self.location_draft.is_some() as u8,
+                self.location_draft_value().unwrap_or(""),
+                self.location_changes
+            );
+        }
+        location_changed || old_pane != self.active_pane()
     }
 
     fn open_add_network_folder_location_draft(&mut self, size: PhysicalSize<u32>) -> bool {
@@ -8838,13 +8901,7 @@ impl ShellScene {
             [0.835, 0.851, 0.875, 1.0],
             size,
         );
-        let text_x = separator_x + self.scale_metric(9.0);
-        let text_rect = ViewRect {
-            x: text_x,
-            y: rect.y + (rect.height - self.text_line_height()) / 2.0,
-            width: (rect.right() - text_x - self.scale_metric(8.0)).max(1.0),
-            height: self.text_line_height(),
-        };
+        let text_rect = self.location_text_rect_for_path_bar_rect(rect);
         let cursor_x = cursor.map(|cursor| {
             text.measure_label_cursor_x(
                 label,
@@ -26555,6 +26612,22 @@ text/plain=writer.desktop;\n",
             OpenWithChooserClick::Query("pain".len())
         );
         let query_text = open_with_chooser_query_text_rect_scaled(rect, 1.0);
+        let query_mid = estimated_text_cursor_x("pain", "pa".len(), TEXT_FONT_SIZE);
+        assert_eq!(
+            scene.open_with_chooser_click_at_screen_point(
+                ViewPoint {
+                    x: query_text.x + query_mid,
+                    y: query.y + query.height / 2.0,
+                },
+                size,
+            ),
+            OpenWithChooserClick::Query("pa".len())
+        );
+        assert!(scene.set_open_with_query_cursor("pa".len()));
+        assert_eq!(
+            scene.open_with_chooser.as_ref().unwrap().query_cursor,
+            "pa".len()
+        );
         let query_tail = estimated_text_cursor_x("pain", "pain".len(), TEXT_FONT_SIZE);
         assert_eq!(
             scene.open_with_chooser_click_at_screen_point(
@@ -30170,6 +30243,46 @@ text/plain=writer.desktop;\n",
         assert_eq!(scene.location_draft.as_ref().unwrap().draft.cursor, 2);
         assert!(scene.apply_location_command(LocationCommand::MoveHome, size));
         assert_eq!(scene.location_draft.as_ref().unwrap().draft.cursor, 0);
+    }
+
+    #[test]
+    fn location_bar_mouse_click_places_caret_without_resetting_draft() {
+        let mut scene = test_scene(vec![test_entry("alpha", false)], ShellViewMode::Icons);
+        scene.panes[ShellPaneId::SLOT_0].path = PathBuf::from("/tmp/alpha");
+        let size = PhysicalSize::new(640, 360);
+        let path_bar = scene.path_bar_rect(size).unwrap();
+        let text_rect = scene.location_text_rect_for_path_bar_rect(path_bar);
+        let label = scene.location_label_for_pane(ShellPaneId::SLOT_0);
+        let tmp_cursor = "/tmp".len();
+        let tmp_x = estimated_text_cursor_x(&label, tmp_cursor, scene.scale_metric(TEXT_FONT_SIZE));
+
+        assert!(scene.activate_path_bar_at_screen_point(
+            ViewPoint {
+                x: text_rect.x + tmp_x,
+                y: text_rect.y + text_rect.height / 2.0,
+            },
+            size
+        ));
+        let draft = scene.location_draft.as_ref().unwrap();
+        assert_eq!(draft.draft.cursor, tmp_cursor);
+        assert!(!draft.draft.replace_on_insert);
+
+        assert!(scene.apply_location_command(LocationCommand::Insert("X".to_string()), size));
+        assert_eq!(scene.location_draft_value(), Some("/tmpX/alpha"));
+
+        let edited = scene.location_draft_value().unwrap().to_string();
+        let tail_x =
+            estimated_text_cursor_x(&edited, edited.len(), scene.scale_metric(TEXT_FONT_SIZE));
+        assert!(scene.activate_path_bar_at_screen_point(
+            ViewPoint {
+                x: text_rect.x + tail_x + 20.0,
+                y: text_rect.y + text_rect.height / 2.0,
+            },
+            size
+        ));
+        let draft = scene.location_draft.as_ref().unwrap();
+        assert_eq!(draft.draft.value, "/tmpX/alpha");
+        assert_eq!(draft.draft.cursor, "/tmpX/alpha".len());
     }
 
     #[test]
