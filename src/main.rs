@@ -10323,7 +10323,7 @@ impl ShellScene {
 
         let button = self.places_toggle_rect(size);
         let split_button = self.split_view_button_rect(size);
-        let view_badge_width = self.scale_metric(34.0);
+        let view_badge_width = self.scale_metric(50.0);
         let view_badge = (split_button.x - self.scale_metric(10.0) - view_badge_width
             > button.right() + self.scale_metric(16.0))
         .then_some(ViewRect {
@@ -10332,7 +10332,8 @@ impl ShellScene {
             width: view_badge_width,
             height: (toolbar.height - self.scale_metric(14.0)).max(1.0),
         });
-        let button_colors = theme.toolbar_button(self.places_visible);
+        let places_hovered = self.pointer.is_some_and(|point| button.contains(point));
+        let button_colors = theme.toolbar_button(self.places_visible || places_hovered);
         push_clipped_rounded_rect(
             vertices,
             button,
@@ -10423,7 +10424,10 @@ impl ShellScene {
         );
 
         let split_open = self.panes.is_open(ShellPaneId::SLOT_1);
-        let split_colors = theme.toolbar_button(split_open);
+        let split_hovered = self
+            .pointer
+            .is_some_and(|point| split_button.contains(point));
+        let split_colors = theme.toolbar_button(split_open || split_hovered);
         push_clipped_rounded_rect(
             vertices,
             split_button,
@@ -10521,12 +10525,45 @@ impl ShellScene {
             );
         }
         let icon_rect = ViewRect {
-            x: rect.x + (rect.width - self.scale_metric(16.0)) / 2.0,
+            x: rect.x + self.scale_metric(8.0),
             y: rect.y + (rect.height - self.scale_metric(14.0)) / 2.0,
             width: self.scale_metric(16.0),
             height: self.scale_metric(14.0),
         };
         self.push_view_mode_glyph(vertices, icon_rect, rect, theme, size);
+        let circle_size = self
+            .scale_metric(16.0)
+            .min((rect.height - self.scale_metric(6.0)).max(1.0));
+        let circle = ViewRect {
+            x: rect.right() - self.scale_metric(6.0) - circle_size,
+            y: rect.y + (rect.height - circle_size) / 2.0,
+            width: circle_size,
+            height: circle_size,
+        };
+        push_clipped_rounded_rect(
+            vertices,
+            circle,
+            rect,
+            circle_size / 2.0,
+            theme.toolbar_button(true).fill,
+            size,
+        );
+        for step in 0..3 {
+            let width = self.scale_metric(7.0 - step as f32 * 2.0).max(1.0);
+            push_clipped_rounded_rect(
+                vertices,
+                ViewRect {
+                    x: circle.x + (circle.width - width) / 2.0,
+                    y: circle.y + self.scale_metric(5.0 + step as f32 * 2.0),
+                    width,
+                    height: self.scale_metric(1.0).max(1.0),
+                },
+                circle,
+                self.scale_metric(0.5).max(0.5),
+                theme.accent(),
+                size,
+            );
+        }
     }
 
     fn push_view_mode_glyph(
@@ -10675,31 +10712,40 @@ impl ShellScene {
         let text_height = self.text_line_height();
         let small_text_height = self.small_text_line_height();
         let item_palette = paint.dolphin_item;
-        let title_mark = ViewRect {
-            x: panel.x + padding_x + self.scale_metric(8.0),
-            y: panel.y + top_padding + (text_height - self.scale_metric(14.0)) / 2.0,
-            width: self.scale_metric(4.0),
-            height: self.scale_metric(14.0),
+        let header = ViewRect {
+            x: panel.x + padding_x,
+            y: panel.y + top_padding,
+            width: (panel.width - padding_x * 2.0).max(1.0),
+            height: title_height,
+        };
+        let grip_height = self.scale_metric(3.0).max(2.0);
+        let grip_width = (header.width * 0.36)
+            .min(self.scale_metric(68.0))
+            .max(self.scale_metric(28.0));
+        let grip = ViewRect {
+            x: header.x + self.scale_metric(8.0),
+            y: header.y + (header.height - grip_height) / 2.0,
+            width: grip_width,
+            height: grip_height,
         };
         push_clipped_rounded_rect(
             vertices,
-            title_mark,
+            grip,
             panel,
-            title_mark.width / 2.0,
-            theme.accent(),
+            grip_height / 2.0,
+            theme.field_separator(),
             size,
         );
-        text.push_label_aligned(
-            "Places",
+        push_clipped_rounded_rect(
+            vertices,
             ViewRect {
-                x: title_mark.right() + self.scale_metric(8.0),
-                y: panel.y + top_padding,
-                width: (panel.width - padding_x * 2.0 - self.scale_metric(28.0)).max(1.0),
-                height: text_height,
+                width: (grip.width * 0.34).max(self.scale_metric(12.0)),
+                ..grip
             },
             panel,
-            theme.primary_text(),
-            LabelAlignment::Start,
+            grip_height / 2.0,
+            theme.accent(),
+            size,
         );
 
         let mut y = panel.y + top_padding + title_height - self.places_scroll_y;
@@ -10821,6 +10867,23 @@ impl ShellScene {
                     width: icon_size,
                     height: icon_size,
                 };
+                if active || hovered {
+                    let icon_slot_size = (icon_size + self.scale_metric(8.0)).min(row.height);
+                    let slot_colors = theme.toolbar_button(active);
+                    push_clipped_rounded_rect(
+                        vertices,
+                        ViewRect {
+                            x: icon.x + (icon.width - icon_slot_size) / 2.0,
+                            y: row.y + (row.height - icon_slot_size) / 2.0,
+                            width: icon_slot_size,
+                            height: icon_slot_size,
+                        },
+                        panel,
+                        self.scale_metric(7.0),
+                        slot_colors.fill,
+                        size,
+                    );
+                }
                 let trash_has_items = self.trash_place_has_items(place);
                 let icon_name = if trash_has_items {
                     "user-trash-full"

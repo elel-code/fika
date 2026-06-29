@@ -267,35 +267,26 @@ pub(crate) fn push_places_task_area(
     );
 
     let padding = scale_metric(10.0, paint.scale);
-    text.push_label_aligned(
-        "Tasks",
-        ViewRect {
-            x: inner.x + padding + scale_metric(8.0, paint.scale),
-            y: inner.y + scale_metric(7.0, paint.scale),
-            width: (inner.width - padding * 2.0 - scale_metric(8.0, paint.scale)).max(1.0),
-            height: paint.small_line_height,
-        },
-        inner,
-        paint.theme.section_text(),
-        LabelAlignment::Start,
-    );
-    let mark_height = scale_metric(10.0, paint.scale);
+    let mark_height = scale_metric(3.0, paint.scale).max(2.0);
+    let mark_width = (inner.width * 0.34)
+        .min(scale_metric(52.0, paint.scale))
+        .max(scale_metric(20.0, paint.scale));
     push_clipped_rounded_rect(
         vertices,
         ViewRect {
             x: inner.x + padding,
             y: inner.y + scale_metric(9.0, paint.scale),
-            width: scale_metric(3.0, paint.scale).max(2.0),
+            width: mark_width,
             height: mark_height,
         },
         inner,
-        scale_metric(1.5, paint.scale),
+        mark_height / 2.0,
         paint.theme.accent(),
         paint.size,
     );
 
     let row_height = scale_metric(PLACES_TASK_ROW_HEIGHT, paint.scale);
-    let mut y = inner.y + scale_metric(26.0, paint.scale);
+    let mut y = inner.y + scale_metric(18.0, paint.scale);
     let max_rows = ((inner.bottom() - y - scale_metric(4.0, paint.scale)) / row_height)
         .floor()
         .max(0.0) as usize;
